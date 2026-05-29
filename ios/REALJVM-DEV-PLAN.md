@@ -14,7 +14,7 @@ A **self-contained native iOS app** that:
 ## Target device & install path (confirmed 2026-05-29)
 - **Dev device:** iPhone 17 Pro Max on **iOS 26.5** — overkill on performance (Rung 0 showed 45–184× headroom; horsepower is a non-issue).
 - **TrollStore is NOT available** on iOS 26.5 (CoreTrust patched since iOS 17.0.1; TrollStore tops out at 16.6.1/17.0). So the install/JIT path is **AltStore (or SideStore) + StikDebug**, not TrollStore.
-  - **JIT:** **StikDebug 3.1.2** (iOS 17.4+, with iOS 26 fixes) attaches a debugger per-launch → sets `CS_DEBUGGED` → HotSpot JIT works. StikDebug **explicitly lists PojavLauncher as supported** — a JIT JVM is already proven on this exact stack. *Per-launch* activation (vs TrollStore's automatic) is the main UX cost.
+  - **JIT:** **StikDebug 3.1.3** (released 2026-05-18; iOS 17.4+, with iOS 26 fixes) attaches a debugger per-launch → sets `CS_DEBUGGED` → HotSpot JIT works. *Per-launch* activation (vs TrollStore's automatic) is the main UX cost. **iOS-26/TXM caveat (Phase-1 review):** StikDebug lists iOS 26.0+ as supported but with **"Limited App Availability"**; SideStore's JIT doc says iOS 26 "broke JIT again" and the supported set is **specific apps (Amethyst listed), not arbitrary custom apps**, with SideStore's own enabler limited to **non-TXM** devices on 26. The iPhone 17 Pro Max is **TXM** → whether JIT is granted to *our* app (vs a listed app) is the open Claim-1 risk. **Mitigation: oracle-first** — prove JIT on Amethyst on this phone before building our target (see Phase 1).
   - **Memory cap:** replaced TrollStore's cap-lift with the **`increased-memory-limit` entitlement**, which **AltStore 2.2+ supports on a free dev account** — so we keep heap headroom for RuneLite + plugins.
   - **App expiry:** free Apple ID = **7-day resign** (AltStore auto-refreshes); **$99/yr** paid dev account = yearly + smoother. 3-app limit on free tier.
 - **iOS-version sensitivity (watch item):** iOS 26 "broke JIT again"; StikDebug's fix is recent/limited. **Validate JIT on 26.5 in Phase 1 before any big investment** (it's the Phase 1 gate).
@@ -77,28 +77,53 @@ device-only. This removes the device round-trip from the bulk of the Java work.
 ### Phase 0 — Foundations & artifacts
 **Goal:** toolchain, device, JRE, and the desktop baseline all green before real work.
 **Steps:**
-- Set up **AltStore (or SideStore) + StikDebug** on the iPhone 17 Pro Max (iOS 26.5); verify you can build+sign+install a trivial iOS app and **attach StikDebug to enable JIT** on it (smallest possible "JIT-on" proof). TrollStore is N/A on 26.5.
-- Obtain Pojav's prebuilt **`jre21-ios-aarch64`** (JDK 21 — RuneLite needs 11+, 21 is current & forward-safe).
-  Unzip; inventory `libjli.dylib`, `libjvm.dylib`, `lib/`, `modules`/`jrt-fs`, `Frameworks/` layout.
+- Set up **SideStore (or AltStore) + StikDebug 3.1.3** on the iPhone 17 Pro Max (iOS 26.5). TrollStore is N/A on 26.5.
+- **Oracle-first JIT proof (the cheapest Claim-1 settle):** install **Amethyst** (on SideStore's iOS-26 supported list), attach StikDebug, and confirm JIT engages on *this exact phone* — before building any custom target. (Custom-app JIT on a TXM device is the open risk; an app already on the supported list isolates the platform question from our signing.)
+- Obtain the prebuilt **`jre21-ios-aarch64`** (JDK 21 — RuneLite needs 11+, 21 is current & forward-safe).
+  **Source (corrected):** Amethyst's CDN, referenced from its `Makefile` (downloads `jre21-ios-aarch64.zip`) — **not** a durable Pojav GitHub release, so **pin the checksum locally**. Unzip; inventory `libjli.dylib`, `lib/server/libjvm.dylib` (verify HotSpot Tiered C1/C2, not Zero), `lib/`, `modules`/`jrt-fs`, `bin/java`, `release`. **JRE 17 is the fallback, not JDK 8.**
 - Stand up the **desktop inner loop**: run **stock RuneLite on desktop OpenJDK 21**, logged into live OSRS, as
-  the reference + dev harness. (We already have desktop OpenJDK 11; add 21.)
-**Refs:** Pojav `android-openjdk-build-multiarch` / iOS JRE releases; `Natives/LauncherPrefManageJREViewController.m`; StikDebug (iOS 17.4+ JIT).
-**Deliverable:** device runs a hello app with JIT enabled via StikDebug; desktop runs stock RuneLite in-game. **GATE:** both green.
-**Risk:** iOS 26.5 JIT regressions → confirm StikDebug 3.1.2 works on 26.5 (Pojav is listed supported); else pin to a known-good point release.
+  the reference + dev harness. ✅ already done (see FINDINGS "Stock RuneLite on desktop OpenJDK 21").
+**Refs:** Amethyst `Makefile` (JRE CDN URL), `Natives/LauncherPrefManageJREViewController.m`; StikDebug 3.1.3 (iOS 17.4+ JIT); SideStore JIT doc (supported-app set).
+**Deliverable:** Amethyst runs with JIT enabled via StikDebug on the phone (oracle GREEN); JRE 21 fetched + checksum-pinned + inventoried; desktop runs stock RuneLite in-game. **GATE:** oracle JIT green + JRE in hand.
+**Risk:** iOS 26.5 / TXM JIT limited to the supported app set → if the oracle is green but our custom app is denied JIT, that's the Phase-1 Claim-3 finding (escalate: SideJITServer, or pin a known-good config).
 
-### Phase 1 — Embed OpenJDK on device, run Java, **confirm JIT** (= Rung 1, the platform gate)
-**Goal:** prove a JIT-enabled HotSpot runs our code on the device.
-**Steps:**
-- New iOS app target; bundle the JRE in `Frameworks/`; `dlopen(libjli)` → `dlsym(JLI_Launch)` → launch with a
-  classpath + main class. (Mirror our existing `jvm_create`/`jvm_init` callsite in `mobile/c/glfmapp/main.c`.)
-- Run `Hello` + the **Rung-0 microbench** (`dev-tools/jvmbench/Bench.java`) on-device.
-- **Confirm JIT actually engages** (StikDebug attached): check `-XX:+PrintCompilation`, and compare to
-  `-Xint`. JIT requires the StikDebug debugger to be attached at launch (per-launch); document the launch ritual.
-**Refs (Amethyst):** `Natives/JavaLauncher.m` (JLI_Launch), `Natives/dyld_bypass_validation.m` (load ad-hoc
-JRE dylibs), `Natives/external/ballpa1n/HostManager.c` + `Natives/external/mach/mach_excServer.c` (JIT enable),
-`JavaApp/src/launcher/.../PojavLauncher.java` (Java-side launch glue).
-**Deliverable:** on-device microbench numbers; JIT confirmed N× miniJVM. **GATE:** **HotSpot JITs on device (StikDebug attached, iOS 26.5).**
-**Risk:** iOS 26.5 JIT regression or silent interpreter fallback → still likely ≫ miniJVM (Rung 0), but flag it; this gate de-risks the whole bleeding-edge-iOS concern early.
+### Phase 1 — **Confirm JIT on device** as a two-prong spike (= Rung 1, the platform gate)
+**Goal:** prove a JIT-enabled HotSpot runs our code on the device — *harsher and smaller than a full app target*
+(Phase-1 review). Two prongs, oracle first.
+
+**Prong A — oracle (cheapest Claim-1 settle, no custom app):** with Amethyst (supported app) + StikDebug
+attached on the iPhone 17 Pro Max, confirm JIT engages. The decisive signal is the JIT probe below; if
+Amethyst exposes JVM args, run `JitProbe`/`Bench`; otherwise its own playable-vs-crawl behavior is the coarse
+signal. **This proves the platform (phone + 26.5 + StikDebug + JRE 21 + C1/C2) before we build anything.**
+
+**Prong B — custom shell (where the Claim-3 signing/embedding risk lands):** minimal native app target; bundle
+the checksum-pinned JRE in `Frameworks/`. **Adopt the safer launch architecture:** the shell launches and
+**waits for debugger-attach / JIT-ready** (a "Start JVM" gate), *then* runs the iOS-26/TXM JIT setup → dyld
+bypass → `dlopen(libjli)` → `dlsym(JLI_Launch)` → launch with classpath + main class. **Do NOT warm the JVM
+before JIT is live.** (Mirror our existing `jvm_create`/`jvm_init` embedding callsite from the predecessor
+miniJVM spike.) Run, in order: `Hello` → **`JitProbe`** → **Rung-0 `Bench`** → **`GlyphSmoke`** (the thin
+Phase-3 rasterizer smoke; see below).
+
+**The JIT probe (exact signal — `dev-tools/jvmbench/`):**
+- Smallest log-based check: `-Xbatch -XX:+PrintCompilation -XX:CompileThreshold=100` → **pass** = compilation
+  lines for the bench methods **and** runtime ≫ `-Xint`.
+- Programmatic, no log parsing (`JitProbe.java`): `java.vm.name` = `OpenJDK 64-Bit Server VM` (HotSpot, not
+  Zero) **and** `java.vm.info` = **`mixed mode`** (JIT) vs **`interpreted mode`** (`-Xint`) **and**
+  `getCompilationMXBean().getTotalCompilationTime()` climbs > 0 during a hot loop. Run once attached, once with
+  `-Xint`, once unattached — the A/B is the proof.
+
+**Thin Phase-3 rasterizer smoke (rides Prong B, retires the CACIO caveat early):** `GlyphSmoke.java` draws text
++ a shape into a `BufferedImage` and writes a PNG — exercising the **iOS JRE's native 2D/font rasterizer**,
+which the desktop CACIO gate could not (FINDINGS "Desktop CACIO overlay gate" caveat).
+
+**Refs (Amethyst, GPLv3 — patterns only):** `Natives/JavaLauncher.m` (`JIT26*`/`dlopen`/`JLI_Launch` order),
+`Natives/dyld_bypass_validation.m` (iOS-26/TXM paths), `Natives/external/ballpa1n/HostManager.c` +
+`Natives/external/mach/mach_excServer.c` (JIT enable), `JavaApp/.../PojavLauncher.java` (Java-side launch glue).
+**Deliverable:** Prong A oracle green; on-device `JitProbe` + `Bench` numbers (JIT confirmed N× `-Xint`/miniJVM);
+`GlyphSmoke` PNG proving the iOS rasterizer works. **GATE:** **HotSpot JITs on device (StikDebug attached, iOS 26.5).**
+**Risk:** custom-app JIT denied on TXM even though the oracle is green (Claim-3) → escalate (SideJITServer, config);
+or silent interpreter fallback → still likely ≫ miniJVM (Rung 0), but flag it. This gate de-risks the whole
+bleeding-edge-iOS concern early.
 
 ### Phase 2 — Real RuneLite **headless** on desktop OpenJDK (the core fork) ‖ runs parallel to Phase 1
 **Goal:** real RuneLite + plugins + live login, rendering to an offscreen buffer, **no Swing window** — on desktop.
@@ -244,8 +269,10 @@ RuneLite + overlay-capture** proof, with device JIT run **in parallel**, not fir
 ## Definition of done
 Self-contained sideloaded iOS app: launch → Jagex login → in-game on **live OSRS**, **touch controls + Jagex-Mobile-style UI**, **RuneLite plugins** toggle/config natively with overlays composited, **playable FPS**, stable for hours, surviving a weekly game update — **no host, no desktop, no streaming.**
 
-## Immediate next steps (Phase 0 → 1, in parallel with starting Phase 2 on desktop)
-1. Set up AltStore/SideStore + StikDebug on the iPhone 17 Pro Max (iOS 26.5); build+install a hello iOS app and confirm StikDebug enables JIT on it.
-2. Fetch `jre21-ios-aarch64`; inventory its layout.
-3. Stand up stock RuneLite on desktop OpenJDK 21 (baseline + W2 dev harness).
-4. Begin Phase 1 (embed libjli → JLI_Launch → run `Bench` on device, confirm JIT) **and** Phase 2 (headless RuneLite fork on desktop) together.
+## Immediate next steps (Phase 1, two-prong; W2/Phase 2 already GREEN on desktop)
+1. **[NEEDS HANDS]** Set up SideStore/AltStore + **StikDebug 3.1.3** on the iPhone 17 Pro Max (iOS 26.5).
+2. **[NEEDS HANDS] Oracle prong:** install **Amethyst** (supported app) + attach StikDebug → confirm JIT engages on this phone (settles Claim 1 the cheapest way, isolated from our signing).
+3. **[NEEDS HANDS]** Fetch `jre21-ios-aarch64.zip` from the Amethyst CDN; **pin its checksum**; inventory its layout (verify `libjvm.dylib` is HotSpot Tiered, not Zero).
+4. **[ready now, on-device tooling staged]** Probe artifacts built in `dev-tools/jvmbench/`: `JitProbe.java` (decisive JIT-vs-interpreter signal), `Bench.java` (Rung-1 A/B), `GlyphSmoke.java` (iOS rasterizer smoke), plus the run/probe doc. These run once the JRE + a launch path exist.
+5. **Custom-shell prong:** minimal native target, wait-for-JIT → `dlopen(libjli)` → `JLI_Launch` → run `Hello`/`JitProbe`/`Bench`/`GlyphSmoke`. (Build after the oracle is green, so we don't invest in the target before the platform is proven.)
+6. **W2 follow-up (deferred, non-blocking):** capture one world-anchored overlay frame (tile indicator / NPC highlight) to close the FPS-only overlay gap (FINDINGS Gate 1c-ii "Honest gap").

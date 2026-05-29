@@ -133,14 +133,56 @@ with no OS window**. This closes Claim 2's long pole. Harness: `dev-tools/headle
   Island — irrelevant to the proof.
 - **1c-i still skipped (vacuous), as predicted.** The honest overlay proof needed a logged-in client, which
   we now have.
+- **Honest gap (Phase-1 review): FPS proves the *core* compositor, not *world-anchored* overlays.** The FPS
+  overlay is static/screen-positioned (`layer ABOVE_WIDGETS`, drawn via `OverlayRenderer.renderOverlays` whose
+  `:249` early-return is gated on `LOGGED_IN`). It proves the compositor + the LOGGED_IN overlay path, but it
+  does **not** exercise **world→screen projection** (NPC/ground-item highlight, tile indicators) — the actual
+  product value. Whether that's a real gap or already covered by the scene rendering correctly is **untested**.
+  **Cheapest add-on (deferred, not blocking Phase 1):** enable one world-anchored overlay (tile indicators or
+  NPC/ground-item highlight) and capture one in-game frame. Tracked as a W2 follow-up.
 
 ## Platform findings (OpenJDK-on-iOS) — the traps
 - **Two different "OpenJDK on iOS" worlds.** The *official* OpenJDK Mobile port is **Zero-interpreter-only (NO JIT)** on iOS-arm64 by design (Apple bans runtime codegen). The **PojavLauncher path is JIT-enabled HotSpot**, made legal via sideload + `com.apple.security.get-task-allow` + debugger-attach → kernel `CS_DEBUGGED` (suppresses the signing kill on JIT pages). **We want the Pojav path.** Picking the official port silently caps you at interpreter speed.
 - **iOS Simulator runs under macOS rules, not device AMFI** → JIT works there permissively, but a simulator app needs a `*-ios-simulator`-triple build of the JVM (nobody ships one). **Device-first** (Pojav's prebuilt JIT JRE + TrollStore) avoids this and is the chosen path.
-- **JIT enablement on device:** TrollStore auto-enables + lifts the memory cap; AltStore/SideStore/SideJITServer/StikDebug attach a debugger per-launch. iOS-version-sensitive, community-maintained.
-- **Target OpenJDK 17/21** (gamepack uses condy/invokedynamic/StringConcatFactory = JDK 11+; Pojav's old jdk8u can't load it). Artifact: `jre21-ios-aarch64`.
-- **Embedding:** `dlopen(libjli)` → `dlsym(JLI_Launch)`; libjvm/libjli in the app's `Frameworks/`. **AWT-on-iOS** via **Caciocavallo + a fake-xawt shim** (Amethyst bundles both). Amethyst reference files (GPLv3, patterns only): `Natives/JavaLauncher.m`, `awt_xawt/xawt_fake.m`, `external/ballpa1n/HostManager.c` (+ `mach_excServer.c`), `dyld_bypass_validation.m`, `SurfaceViewController.m`.
+- **JIT enablement on device:** TrollStore auto-enables + lifts the memory cap; AltStore/SideStore/SideJITServer/StikDebug attach a debugger per-launch. iOS-version-sensitive, community-maintained. **iOS-26/TXM caveat (Phase-1 review, 2026-05-29):** StikDebug 3.1.3 (released 2026-05-18) lists iOS 26.0+ as supported but with **"Limited App Availability"** + "app updates required"; SideStore's JIT doc (as of 2026-05-03) is more skeptical — iOS 26 "broke JIT again", the supported-app set is **specific apps (Amethyst is listed), not arbitrary custom apps**, and SideStore's *own* enabler only works on iOS 26 for **older non-TXM devices**. The iPhone 17 Pro Max is a **TXM** device, so whether StikDebug enables JIT for *our custom app* (vs a known-good app already on the supported list) is the **open Claim-1 risk** → **oracle-first** sequencing (prove JIT on a supported app — Amethyst — on this exact phone *before* investing in our own app target). Refs: [StikDebug README/3.1.3](https://github.com/StephenDev0/StikDebug), [SideStore JIT doc](https://github.com/SideStore/SideStore-Docs/blob/main/docs/advanced/jit.mdx).
+- **Target OpenJDK 21** (gamepack uses condy/invokedynamic/StringConcatFactory = JDK 11+; Pojav's old jdk8u can't load it). **Artifact + provenance corrected (Phase-1 review):** the durable *current* source is **Amethyst's CDN**, not a Pojav GitHub release — Amethyst's `Makefile` downloads `jre21-ios-aarch64.zip` ([Makefile L289-291](https://github.com/AngelAuraMC/Amethyst-iOS/blob/main/Makefile#L289-L291)). The reviewer downloaded + inspected it: contains `jre21-ios-arm64-20250915-release.tar.xz`, `lib/server/libjvm.dylib`, `lib/libjli.dylib`, `bin/java`; `release` says `JAVA_VERSION="21.0.8"`, `OS_ARCH="aarch64"`, `OS_NAME="Darwin"`; `vtool` reports platform **IOS** (min 12.0, SDK 26.0); `strings libjvm.dylib` shows **`OpenJDK 64-Bit Server VM`, `HotSpot 64-Bit Tiered Compilers`, `C1`, `C2`** — i.e. **JIT HotSpot, NOT Zero**. → **Use JRE 21 first, pin its checksum locally** (CDN URL is not a durable release). **JRE 17 is the fallback, not JDK 8.**
+- **Embedding (correction — the `dlopen(libjli)` story is incomplete on iOS 26):** Amethyst does **iOS-26/TXM JIT setup *before* the library-validation bypass**, *then* loads `libjli` and calls `JLI_Launch` — it is not a bare `dlopen`. Order: JIT-enable (`JIT26*` paths) → `dyld_bypass_validation` (load ad-hoc-signed JRE dylibs) → `dlopen(libjli)` → `JLI_Launch`. **What likely breaks first at launch:** either our custom app is **not in StikDebug's iOS-26 supported set** (no JIT granted), or `dlopen(libjli)` **fails on code-signing / library-validation before Java even starts**. **Safer architecture (adopt for Phase 1):** native shell launches → **waits for debugger attach / JIT-ready** → *then* `dlopen`/`JLI_Launch` (don't warm the JVM before JIT is live). **AWT-on-iOS** via **Caciocavallo + a fake-xawt shim** (Amethyst bundles both). Amethyst reference files (GPLv3, patterns only): `Natives/JavaLauncher.m` (`JIT26*`/`dlopen`/`JLI_Launch`), `Natives/dyld_bypass_validation.m` (iOS-26/TXM paths), `awt_xawt/xawt_fake.m`, `external/ballpa1n/HostManager.c` (+ `mach_excServer.c`), `SurfaceViewController.m`.
 - **The three miniJVM C patches DELETE on HotSpot** — CONSTANT_Dynamic, invokedynamic-bootstrap/MethodInfo-unwrap, StringConcatFactory are all native in HotSpot. Not a port; a deletion.
+
+## Phase-1 audit verdict — incorporated (2026-05-29)
+`AUDIT-BRIEF-phase1-device.md` was run past an external reviewer. **Verdict: Phase 1 is the right next gate,
+but make the plan harsher and smaller — do not start with a full new app target.** Per-claim:
+- **Claim 1 (StikDebug enables JIT on 26.5): UNPROVEN.** Evidence is mixed (see the iOS-26/TXM caveat above).
+  Resolve **oracle-first**.
+- **Claim 2 (JDK 21 iOS-arm64 JIT HotSpot exists): SUPPORTED, with a provenance caveat** — exists via the
+  **Amethyst CDN** `jre21-ios-aarch64.zip`, verified HotSpot Tiered (C1/C2), not Zero; pin the checksum. 17 is
+  the fallback, not 8. (Details in the artifact bullet above.)
+- **Claim 3 (embedding works under AltStore signing): UNPROVEN** — the bare `dlopen(libjli)` story skips the
+  iOS-26/TXM JIT-setup-before-library-validation-bypass step; what breaks first is supported-set exclusion or a
+  library-validation failure at `dlopen`. (Details in the embedding bullet above.)
+- **Claim 4 (JIT buys the Rung-0 win on device): UNPROVEN but likely** — no reason to expect interpreter-like
+  perf if C1/C2 really run; debug-attach overhead shouldn't erase a 10–100× gap. Thermal / code-cache /
+  iOS-26 JIT scripts unmeasured. `Bench.java` remains the right first proxy (ties to the prior miniJVM
+  bottleneck, `dev-tools/jvmbench/RESULTS.md`); **add one short Java2D `BufferedImage` glyph smoke while on
+  device** (retires part of the Phase-3 iOS-rasterizer caveat early).
+
+**The go/no-go probe (exact signal).** Smallest "JIT-on" check, attach-vs-no-attach:
+`-Xbatch -XX:+PrintCompilation -XX:CompileThreshold=100`. **Pass:** compilation log lines for the bench methods
+**and** runtime ≫ `-Xint`. **Programmatic decisive signal** (no log parsing): `java.vm.name` =
+`OpenJDK 64-Bit Server VM` (HotSpot, not Zero) **and** `java.vm.info` reports **`mixed mode`** (JIT) vs
+**`interpreted mode`** (`-Xint`), **and** `ManagementFactory.getCompilationMXBean().getTotalCompilationTime()`
+climbs above 0 during a hot loop. (`JitProbe.java` in `dev-tools/jvmbench/` emits all three.)
+
+**Sequencing — two-prong spike, plus a thin Phase-3 rasterizer smoke alongside:**
+1. **Oracle prong:** install **Amethyst** (on SideStore's iOS-26 supported list), attach StikDebug on the
+   iPhone 17 Pro Max, and confirm JIT engages — proving "this exact phone + 26.5 + StikDebug + JRE 21 + HotSpot
+   compiler threads active" *independently of our app's signing*. This retires the Claim-1 platform kill-risk
+   the cheapest way before we build anything.
+2. **Custom-shell prong:** minimal native shell, same JRE, **wait-for-JIT** → `dlopen(libjli)` → `JLI_Launch`,
+   run `Hello`, `Bench`, and the `BufferedImage` glyph smoke. This is where the Claim-3 signing/embedding risk
+   actually lands.
+The **thin Phase-3 rasterizer smoke** (`BufferedImage` glyph → PNG on the iOS JRE) rides prong 2 — cheap, and
+retires the desktop-CACIO rasterizer caveat earlier than a full Phase 3.
 
 ## Product / legal reality (decisive for scope)
 - The **official OSRS Mobile app** already provides the game + touch + mobile UI. The *only* gap we're filling is **RuneLite plugins**, which require running real RuneLite (⇒ a JVM).
