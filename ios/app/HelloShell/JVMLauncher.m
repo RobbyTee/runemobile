@@ -5,6 +5,7 @@
 #import <unistd.h>
 #import <sys/mman.h>
 #import <mach/mach.h>
+#import <libkern/OSCacheControl.h>
 
 // --- csops / CS_DEBUGGED (private; same probe Amethyst/StikDebug rely on) -----
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
@@ -55,7 +56,7 @@ typedef jli_int (*JLI_Launch_t)(int argc, char **argv,
         munmap(mem, pg);
         return -2;
     }
-    __builtin___clear_cache((char *)mem, (char *)mem + sizeof(code));
+    sys_icache_invalidate(mem, sizeof(code));   // arm64: flush I-cache for the new code
     log(@"[canary] RX page ready; calling (SIGILL/EXC_BAD_ACCESS here => naive RWX blocked)");
 
     int (*fn)(void) = (int (*)(void))mem;
