@@ -9,7 +9,16 @@ A **self-contained native iOS app** that:
 - runs **real RuneLite** (not our gamepack harness) on an **on-device JIT JVM** — so the **plugin ecosystem works unmodified**,
 - plays **live/official OSRS**,
 - looks and feels like the **official Jagex OSRS Mobile app** (touch controls, mobile chrome), and
-- needs **no host machine** (no streaming) and is sideloaded (TrollStore), App-Store-independent.
+- needs **no host machine** (no streaming) and is sideloaded (AltStore + StikDebug), App-Store-independent.
+
+## Target device & install path (confirmed 2026-05-29)
+- **Dev device:** iPhone 17 Pro Max on **iOS 26.5** — overkill on performance (Rung 0 showed 45–184× headroom; horsepower is a non-issue).
+- **TrollStore is NOT available** on iOS 26.5 (CoreTrust patched since iOS 17.0.1; TrollStore tops out at 16.6.1/17.0). So the install/JIT path is **AltStore (or SideStore) + StikDebug**, not TrollStore.
+  - **JIT:** **StikDebug 3.1.2** (iOS 17.4+, with iOS 26 fixes) attaches a debugger per-launch → sets `CS_DEBUGGED` → HotSpot JIT works. StikDebug **explicitly lists PojavLauncher as supported** — a JIT JVM is already proven on this exact stack. *Per-launch* activation (vs TrollStore's automatic) is the main UX cost.
+  - **Memory cap:** replaced TrollStore's cap-lift with the **`increased-memory-limit` entitlement**, which **AltStore 2.2+ supports on a free dev account** — so we keep heap headroom for RuneLite + plugins.
+  - **App expiry:** free Apple ID = **7-day resign** (AltStore auto-refreshes); **$99/yr** paid dev account = yearly + smoother. 3-app limit on free tier.
+- **iOS-version sensitivity (watch item):** iOS 26 "broke JIT again"; StikDebug's fix is recent/limited. **Validate JIT on 26.5 in Phase 1 before any big investment** (it's the Phase 1 gate).
+- **Device/iOS floor for the finished app** (your device is far above it): the binding floor is the JIT method (**~iOS 17.4+** for StikDebug), and iOS 26 needs **iPhone 11 / A13 (2019)+**. As far back as iPhone XS (A12) is feasible if staying on iOS 17.4–18. Performance is not the constraint; the sideload/JIT method is.
 
 ### Two corrections this plan bakes in (vs. the old spike framing)
 1. **Run real RuneLite, not the gamepack + `GamepackProbe` injection harness.** On a real JVM, RuneLite boots
@@ -43,7 +52,7 @@ fingerprints may be detectable. **Use a throwaway Jagex account; never a main.**
   └───────────────▲──────────────────────────────────────────────────────────────────────┘
                   │ runs on
   ┌───────────────┴──────────────────────────────────────────────────────────────────────┐
-  │  W1: Platform — OpenJDK 21 (JIT-enabled HotSpot) embedded on iOS, JIT via TrollStore,  │
+  │  W1: Platform — OpenJDK 21 (JIT-enabled HotSpot) embedded on iOS, JIT via StikDebug,   │
   │      AWT backend (Caciocavallo + fake-xawt) so the engine's Canvas/BufferProvider work.│
   └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -68,14 +77,14 @@ device-only. This removes the device round-trip from the bulk of the Java work.
 ### Phase 0 — Foundations & artifacts
 **Goal:** toolchain, device, JRE, and the desktop baseline all green before real work.
 **Steps:**
-- Confirm the **TrollStore device** + iOS version; verify you can build+install a trivial iOS app to it.
+- Set up **AltStore (or SideStore) + StikDebug** on the iPhone 17 Pro Max (iOS 26.5); verify you can build+sign+install a trivial iOS app and **attach StikDebug to enable JIT** on it (smallest possible "JIT-on" proof). TrollStore is N/A on 26.5.
 - Obtain Pojav's prebuilt **`jre21-ios-aarch64`** (JDK 21 — RuneLite needs 11+, 21 is current & forward-safe).
   Unzip; inventory `libjli.dylib`, `libjvm.dylib`, `lib/`, `modules`/`jrt-fs`, `Frameworks/` layout.
 - Stand up the **desktop inner loop**: run **stock RuneLite on desktop OpenJDK 21**, logged into live OSRS, as
   the reference + dev harness. (We already have desktop OpenJDK 11; add 21.)
-**Refs:** Pojav `android-openjdk-build-multiarch` / iOS JRE releases; `Natives/LauncherPrefManageJREViewController.m`.
-**Deliverable:** device runs a hello app; desktop runs stock RuneLite in-game. **GATE:** both green.
-**Risk:** device/iOS-version not TrollStore-compatible → fall back to StikDebug/SideStore (no mem-cap lift).
+**Refs:** Pojav `android-openjdk-build-multiarch` / iOS JRE releases; `Natives/LauncherPrefManageJREViewController.m`; StikDebug (iOS 17.4+ JIT).
+**Deliverable:** device runs a hello app with JIT enabled via StikDebug; desktop runs stock RuneLite in-game. **GATE:** both green.
+**Risk:** iOS 26.5 JIT regressions → confirm StikDebug 3.1.2 works on 26.5 (Pojav is listed supported); else pin to a known-good point release.
 
 ### Phase 1 — Embed OpenJDK on device, run Java, **confirm JIT** (= Rung 1, the platform gate)
 **Goal:** prove a JIT-enabled HotSpot runs our code on the device.
@@ -83,13 +92,13 @@ device-only. This removes the device round-trip from the bulk of the Java work.
 - New iOS app target; bundle the JRE in `Frameworks/`; `dlopen(libjli)` → `dlsym(JLI_Launch)` → launch with a
   classpath + main class. (Mirror our existing `jvm_create`/`jvm_init` callsite in `mobile/c/glfmapp/main.c`.)
 - Run `Hello` + the **Rung-0 microbench** (`dev-tools/jvmbench/Bench.java`) on-device.
-- **Confirm JIT actually engages** (TrollStore auto-enables): check `-XX:+PrintCompilation`, and compare to
-  `-Xint`. If TrollStore's auto-enable is insufficient, add in-app enable (mach-exception self-attach).
+- **Confirm JIT actually engages** (StikDebug attached): check `-XX:+PrintCompilation`, and compare to
+  `-Xint`. JIT requires the StikDebug debugger to be attached at launch (per-launch); document the launch ritual.
 **Refs (Amethyst):** `Natives/JavaLauncher.m` (JLI_Launch), `Natives/dyld_bypass_validation.m` (load ad-hoc
 JRE dylibs), `Natives/external/ballpa1n/HostManager.c` + `Natives/external/mach/mach_excServer.c` (JIT enable),
 `JavaApp/src/launcher/.../PojavLauncher.java` (Java-side launch glue).
-**Deliverable:** on-device microbench numbers; JIT confirmed N× miniJVM. **GATE:** **HotSpot JITs on device.**
-**Risk:** JIT silently falls back to interpreter → still likely ≫ miniJVM (Rung 0), but flag it; iterate enable path.
+**Deliverable:** on-device microbench numbers; JIT confirmed N× miniJVM. **GATE:** **HotSpot JITs on device (StikDebug attached, iOS 26.5).**
+**Risk:** iOS 26.5 JIT regression or silent interpreter fallback → still likely ≫ miniJVM (Rung 0), but flag it; this gate de-risks the whole bleeding-edge-iOS concern early.
 
 ### Phase 2 — Real RuneLite **headless** on desktop OpenJDK (the core fork) ‖ runs parallel to Phase 1
 **Goal:** real RuneLite + plugins + live login, rendering to an offscreen buffer, **no Swing window** — on desktop.
@@ -149,14 +158,14 @@ faithfully, unlike our shelved snapshot hack), or revisit. (Rung 0 makes GO the 
 
 ### Phase 7 — Stability, memory, updates
 **Goal:** stable multi-hour play; survive weekly game updates.
-**Steps:** validate **TrollStore memory-cap lift** (RuneLite + plugins heap ≫ miniJVM); GC tuning; re-evaluate the
+**Steps:** validate the **`increased-memory-limit` entitlement** (via AltStore 2.2+) gives RuneLite + plugins enough heap (≫ miniJVM); GC tuning; re-evaluate the
 old `sig:11` SIGSEGV on the new runtime; soak test. **Weekly updates:** real RuneLite **updates the gamepack
 itself** — a major maintenance win over our pinned-revision harness (no more hand-coded obfuscated names).
 **Deliverable:** stable long sessions; survives a Jagex update. **GATE:** multi-hour soak passes.
 
 ### Phase 8 — Packaging & install flow
 **Goal:** a clean sideload install for you.
-**Steps:** TrollStore IPA packaging; JIT-enable UX (TrollStore auto vs StikDebug/SideJITServer fallback);
+**Steps:** AltStore/SideStore IPA install (sign with `increased-memory-limit` + `get-task-allow`); JIT-enable UX (StikDebug per-launch attach; consider SideJITServer for auto); 7-day resign cadence (or $99/yr cert);
 first-run setup (token mint). **Deliverable:** installable IPA. (No App Store — by design.)
 
 ---
@@ -178,7 +187,7 @@ first-run setup (token mint). **Deliverable:** installable IPA. (No App Store �
 ## Risk register
 1. **ToS / account ban (live OSRS, unapproved client) — accepted.** Throwaway account only; not shippable to others.
 2. **Phase 6 (mobile UI) is the largest effort** and is product, not platform.
-3. **JIT enablement is iOS-version-sensitive** (community-maintained; Apple tightens periodically).
+3. **JIT enablement is iOS-version-sensitive** (community-maintained; Apple tightens periodically). On iOS 26.5 specifically: no TrollStore → StikDebug per-launch attach; iOS 26 has had JIT regressions, so pin a known-good StikDebug + validate at Phase 1. Per-launch JIT + 7-day resign are ongoing UX costs.
 4. **AWT/Swing-headless completeness on iOS** (Phase 3) — the deepest platform unknown after JIT.
 5. **Maintenance:** RuneLite + plugins + gamepack move weekly — mitigated because **real RuneLite self-updates the gamepack** (vs our pinned hand-coded harness).
 6. **Apple/distribution:** sideload-only forever; no App Store.
@@ -187,7 +196,7 @@ first-run setup (token mint). **Deliverable:** installable IPA. (No App Store �
 Self-contained sideloaded iOS app: launch → Jagex login → in-game on **live OSRS**, **touch controls + Jagex-Mobile-style UI**, **RuneLite plugins** toggle/config natively with overlays composited, **playable FPS**, stable for hours, surviving a weekly game update — **no host, no desktop, no streaming.**
 
 ## Immediate next steps (Phase 0 → 1, in parallel with starting Phase 2 on desktop)
-1. Confirm device iOS version + TrollStore; build+install a hello iOS app.
+1. Set up AltStore/SideStore + StikDebug on the iPhone 17 Pro Max (iOS 26.5); build+install a hello iOS app and confirm StikDebug enables JIT on it.
 2. Fetch `jre21-ios-aarch64`; inventory its layout.
 3. Stand up stock RuneLite on desktop OpenJDK 21 (baseline + W2 dev harness).
 4. Begin Phase 1 (embed libjli → JLI_Launch → run `Bench` on device, confirm JIT) **and** Phase 2 (headless RuneLite fork on desktop) together.
