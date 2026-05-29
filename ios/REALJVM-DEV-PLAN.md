@@ -214,6 +214,9 @@ RuneLite + overlay-capture** proof, with device JIT run **in parallel**, not fir
    runs on JDK 21. **Caveat:** desktop `BufferedImage`/`CFontManager` are toolkit-independent, so this settles
    **Claim 2** + overlay-code portability, **not** the iOS native font/2D rasterizer (Claim 1's iOS half → rides
    to Phase 3). See `FINDINGS.md` "Desktop CACIO overlay gate".
+- **Prereq — stock RuneLite on desktop OpenJDK 21 ✅ DONE (Phase 0 step 3).** Builds + runs to the live-OSRS
+   login screen with full plugins + GPU plugin. Reference harness `dev-tools/run-desktop-reference.sh`;
+   injected-client SNAPSHOT resolves; JDK-21 flags documented. See `FINDINGS.md` "Stock RuneLite on desktop OpenJDK 21".
 2. **Gate 1c — desktop headless RuneLite (next).** Stub `ClientUI` + real CACIO EDT + 2–3 overlay plugins;
    capture `mainBufferProvider.getImage()` to PNG. The real attack on Claim 2's long pole. = Phase 2 below.
 3. **Device HotSpot/JIT microbench** (`-XX:+PrintCompilation` vs `-Xint`) — **parallel** to 1c. = Phase 1.

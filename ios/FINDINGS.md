@@ -53,6 +53,25 @@ outline/`<col>` tags via `FontMetrics`; `OverlayUtil` `Polygon` draw+alpha-fill 
   Swing-test backend). The iOS/arm64 backend is the **PojavLauncherTeam/caciocavallo** fork (GPLv3 — patterns
   only) — that's the W1 dependency, and the one whose 2D/font natives Phase 3 must actually validate.
 
+## Stock RuneLite on desktop OpenJDK 21 — UP (Phase 0 step 3 done, 2026-05-29)
+Our fork's `runelite-client` builds and runs on OpenJDK 21 (`/opt/homebrew/opt/openjdk@21`), against
+**live OSRS**. Reference harness: `dev-tools/run-desktop-reference.sh`.
+- **Build:** `./gradlew :client:assemble` (Gradle 8.8) → `runelite-client/build/libs/client-1.12.28-SNAPSHOT-shaded.jar`
+  (29 MB). `runtimeOnly net.runelite:injected-client:1.12.28-SNAPSHOT` **resolves from `repo.runelite.net`**
+  (the SNAPSHOT injected gamepack hooks are published — no need to pin to a release).
+- **Run:** boots → loads the live gamepack (`ClientLoader - injected-client 26527618741.147`) → full plugin
+  set starts → `GpuPlugin - Using device: Apple M1` → `Showing frame ... title=RuneLite` → `LOGIN_SCREEN` +
+  `Cache is ready` → `Client initialization took ~4.8s`.
+- **Canonical JDK-21 launch flags (match the official launcher's macOS args):**
+  `--add-exports java.desktop/com.apple.eawt=ALL-UNNAMED` (else `ClientUI.init` dies with `IllegalAccessError`
+  on `OSXFullScreenAdapter` → `com.apple.eawt.FullScreenAdapter`) and
+  `--add-opens java.base/java.lang.reflect=ALL-UNNAMED` (for `ReflectUtil` annotation-cache invalidation).
+- **Benign noise (ignore):** `ExternalPluginManager 404` (no external-plugin manifest for a -SNAPSHOT version);
+  `ReflectUtil ... NoSuchFieldException: root` (RuneLite's own best-effort cache-bust, self-handled at DEBUG);
+  `[LWJGL] Unsupported JNI version` (lwjgl on newer JDK — irrelevant to us; headless uses the software renderer).
+- **Note:** the `com.apple.eawt` flag is moot for our **headless** path — Gate 1c replaces `ClientUI`, so
+  `OSXFullScreenAdapter` never runs. It only matters for this desktop *GUI* reference.
+
 ## Platform findings (OpenJDK-on-iOS) — the traps
 - **Two different "OpenJDK on iOS" worlds.** The *official* OpenJDK Mobile port is **Zero-interpreter-only (NO JIT)** on iOS-arm64 by design (Apple bans runtime codegen). The **PojavLauncher path is JIT-enabled HotSpot**, made legal via sideload + `com.apple.security.get-task-allow` + debugger-attach → kernel `CS_DEBUGGED` (suppresses the signing kill on JIT pages). **We want the Pojav path.** Picking the official port silently caps you at interpreter speed.
 - **iOS Simulator runs under macOS rules, not device AMFI** → JIT works there permissively, but a simulator app needs a `*-ios-simulator`-triple build of the JVM (nobody ships one). **Device-first** (Pojav's prebuilt JIT JRE + TrollStore) avoids this and is the chosen path.
