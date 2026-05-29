@@ -192,6 +192,16 @@ first-run setup (token mint). **Deliverable:** installable IPA. (No App Store �
 5. **Maintenance:** RuneLite + plugins + gamepack move weekly — mitigated because **real RuneLite self-updates the gamepack** (vs our pinned hand-coded harness).
 6. **Apple/distribution:** sideload-only forever; no App Store.
 
+## Open review item (pre-build)
+`ios/AUDIT-BRIEF-platform-feasibility.md` is an adversarial review brief for the three uncertain platform
+assumptions: **(1)** AWT-on-iOS via Caciocavallo actually rendering OSRS + RuneLite overlays, **(2)** RuneLite
+running headless without a deep fork, **(3)** gate sequencing. Early evidence (in the brief): RuneLite composites
+game + overlays into one offscreen `BufferedImage` (`callback/Hooks.java:168/412/477`), so there **is** a clean
+capture seam — but `ClientUI`/Swing/EDT coupling is **deeper than first assumed** (~115 `SwingUtilities.invoke*`,
+system tray, `GraphicsEnvironment`). **Likely resequencing to validate before committing:** make the *first* gate
+a **desktop CACIO + headless-RuneLite + overlay-capture proof** (zero iOS) — it tests the product premise cheapest.
+Resolve the brief before/alongside Phase 0.
+
 ## Definition of done
 Self-contained sideloaded iOS app: launch → Jagex login → in-game on **live OSRS**, **touch controls + Jagex-Mobile-style UI**, **RuneLite plugins** toggle/config natively with overlays composited, **playable FPS**, stable for hours, surviving a weekly game update — **no host, no desktop, no streaming.**
 
