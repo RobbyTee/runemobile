@@ -6,6 +6,7 @@ dev-tools/jvmbench/out/
 
 # Bundled JRE artifacts (large; fetched per-machine)
 jre*-ios-aarch64*
+dev-tools/jre/
 **/Frameworks/*.dylib
 
 # Java build artifacts

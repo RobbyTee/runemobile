@@ -79,8 +79,7 @@ device-only. This removes the device round-trip from the bulk of the Java work.
 **Steps:**
 - Set up **SideStore (or AltStore) + StikDebug 3.1.3** on the iPhone 17 Pro Max (iOS 26.5). TrollStore is N/A on 26.5.
 - **Oracle-first JIT proof (the cheapest Claim-1 settle):** install **Amethyst** (on SideStore's iOS-26 supported list), attach StikDebug, and confirm JIT engages on *this exact phone* — before building any custom target. (Custom-app JIT on a TXM device is the open risk; an app already on the supported list isolates the platform question from our signing.)
-- Obtain the prebuilt **`jre21-ios-aarch64`** (JDK 21 — RuneLite needs 11+, 21 is current & forward-safe).
-  **Source (corrected):** Amethyst's CDN, referenced from its `Makefile` (downloads `jre21-ios-aarch64.zip`) — **not** a durable Pojav GitHub release, so **pin the checksum locally**. Unzip; inventory `libjli.dylib`, `lib/server/libjvm.dylib` (verify HotSpot Tiered C1/C2, not Zero), `lib/`, `modules`/`jrt-fs`, `bin/java`, `release`. **JRE 17 is the fallback, not JDK 8.**
+- Obtain the prebuilt **`jre21-ios-aarch64`** (JDK 21 — RuneLite needs 11+, 21 is current & forward-safe). ✅ **DONE 2026-05-29** — fetched from Amethyst's CDN (`https://crystall1ne.dev/cdn/amethyst-ios/jre21-ios-aarch64.zip`), checksum-pinned, unzipped + verified HotSpot Tiered C1/C2 (not Zero), `platform IOS`, `_JLI_Launch` exported. Staged at `dev-tools/jre/` (gitignored); full record in `dev-tools/JRE21-INVENTORY.md`. **JRE 17 is the fallback, not JDK 8.**
 - Stand up the **desktop inner loop**: run **stock RuneLite on desktop OpenJDK 21**, logged into live OSRS, as
   the reference + dev harness. ✅ already done (see FINDINGS "Stock RuneLite on desktop OpenJDK 21").
 **Refs:** Amethyst `Makefile` (JRE CDN URL), `Natives/LauncherPrefManageJREViewController.m`; StikDebug 3.1.3 (iOS 17.4+ JIT); SideStore JIT doc (supported-app set).
@@ -276,7 +275,7 @@ Self-contained sideloaded iOS app: launch → Jagex login → in-game on **live 
 ## Immediate next steps (Phase 1, two-prong; W2/Phase 2 already GREEN on desktop)
 1. **[NEEDS HANDS]** Set up SideStore/AltStore + **StikDebug 3.1.3** on the iPhone 17 Pro Max (iOS 26.5).
 2. **[NEEDS HANDS] Oracle prong:** install **Amethyst** (supported app) + attach StikDebug → confirm JIT engages on this phone (settles Claim 1 the cheapest way, isolated from our signing).
-3. **[NEEDS HANDS]** Fetch `jre21-ios-aarch64.zip` from the Amethyst CDN; **pin its checksum**; inventory its layout (verify `libjvm.dylib` is HotSpot Tiered, not Zero).
-4. **[ready now, on-device tooling staged]** Probe artifacts built in `dev-tools/jvmbench/`: `JitProbe.java` (decisive JIT-vs-interpreter signal), `Bench.java` (Rung-1 A/B), `GlyphSmoke.java` (iOS rasterizer smoke), plus the run/probe doc. These run once the JRE + a launch path exist.
-5. **Custom-shell prong:** minimal native target, wait-for-JIT → `dlopen(libjli)` → `JLI_Launch` → run `Hello`/`JitProbe`/`Bench`/`GlyphSmoke`. (Build after the oracle is green, so we don't invest in the target before the platform is proven.)
+3. ✅ **DONE** — `jre21-ios-aarch64.zip` fetched from the Amethyst CDN, checksum-pinned + verified (HotSpot Tiered C1/C2, `platform IOS`, `_JLI_Launch` exported). See `dev-tools/JRE21-INVENTORY.md`.
+4. ✅ **READY** — probe artifacts built + desktop-verified in `dev-tools/jvmbench/`: `JitProbe.java` (decisive JIT-vs-interpreter signal), `Bench.java` (Rung-1 A/B), `GlyphSmoke.java` (iOS rasterizer smoke), `PHASE1-PROBE.md` (run procedure). Run once a device launch path exists.
+5. **Custom-shell prong:** minimal native target (**Free Apple ID** cert → `get-task-allow` + `increased-memory-limit`, 7-day resign, 3-app limit), wait-for-JIT → `dlopen(libjli)` → `JLI_Launch` → run `Hello`/`JitProbe`/`Bench`/`GlyphSmoke`. (Build after the oracle is green, so we don't invest in the target before the platform is proven.)
 6. **W2 follow-up (deferred, non-blocking):** capture one world-anchored overlay frame (tile indicator / NPC highlight) to close the FPS-only overlay gap (FINDINGS Gate 1c-ii "Honest gap").
