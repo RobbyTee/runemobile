@@ -100,9 +100,13 @@ signal. **This proves the platform (phone + 26.5 + StikDebug + JRE 21 + C1/C2) b
 the checksum-pinned JRE in `Frameworks/`. **Adopt the safer launch architecture:** the shell launches and
 **waits for debugger-attach / JIT-ready** (a "Start JVM" gate), *then* runs the iOS-26/TXM JIT setup → dyld
 bypass → `dlopen(libjli)` → `dlsym(JLI_Launch)` → launch with classpath + main class. **Do NOT warm the JVM
-before JIT is live.** (Mirror our existing `jvm_create`/`jvm_init` embedding callsite from the predecessor
-miniJVM spike.) Run, in order: `Hello` → **`JitProbe`** → **Rung-0 `Bench`** → **`GlyphSmoke`** (the thin
+before JIT is live.** Run, in order: `Hello` → **`JitProbe`** → **Rung-0 `Bench`** → **`GlyphSmoke`** (the thin
 Phase-3 rasterizer smoke; see below).
+- **Callsite reference (corrected):** the predecessor spike's `ios-spike/vendor/miniJVM/mobile/c/glfmapp/main.c`
+  is a **miniJVM** embedding (`jvm.h`/`jvm_init_mem_alloc` + bootclasspath/classpath assembly from C under
+  glfm) — **not** a HotSpot `JLI_Launch` callsite (miniJVM is its own VM). Reuse it only as the *pattern* for
+  "assemble classpath + boot a JVM from C on iOS"; the actual `JLI_Launch` glue comes from **Amethyst's
+  `JavaLauncher.m`**, not our predecessor.
 
 **The JIT probe (exact signal — `dev-tools/jvmbench/`):**
 - Smallest log-based check: `-Xbatch -XX:+PrintCompilation -XX:CompileThreshold=100` → **pass** = compilation
