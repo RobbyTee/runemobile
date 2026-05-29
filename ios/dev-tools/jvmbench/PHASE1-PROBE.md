@@ -64,7 +64,18 @@ These are the steps I can't do from here. Each is a gate; stop and tell me the r
 > list) is the oracle that proves it works on this TXM phone.
 
 1. Install the 3 apps above. **StikDebug 3.1.3** + **LocalDevVPN** + **Amethyst** on the iPhone 17 Pro Max
-   (iOS 26.5). TrollStore is N/A on 26.5. *(Confirm StikDebug version = 3.1.3.)*
+   (iOS 26.5). TrollStore is N/A on 26.5. *(Confirm StikDebug version = 3.1.3.)* On a free Apple ID this is
+   **exactly the 3 sideload slots** (AltStore itself is one; LocalDevVPN is App Store so it doesn't count) —
+   keep only these; later free a slot for our shell by removing Amethyst once the oracle is green.
+
+1b. **Pairing file — iOS 17+/26 uses the REMOTE-pairing format, NOT the classic lockdown record.** StikDebug
+   3.1.3 stores it as `rp_pairing_file.plist` and parses it as an `RpPairingFile` (Ed25519 `public_key` field).
+   **Pitfall (confirmed 2026-05-29):** `pymobiledevice3 lockdown save-pair-record` emits the *old lockdown*
+   format → StikDebug rejects it with **"missing field public key"**. **Use [iloader](https://github.com/nab138/iloader)**
+   (the StikDebug-guide-sanctioned tool; builds on jkcoxson's `idevice`, same as StikDebug, so the format
+   matches): download `iloader-darwin-universal.dmg` (v2.2.6+), open (Gatekeeper: right-click → Open if
+   unsigned), connect the iPhone via USB, **Manage Pairing File → Place** next to StikDebug → "placed
+   successfully". This writes the correct file directly into StikDebug — no AirDrop/import.
 
 2. **Oracle prong — prove JIT on a *supported* app first.** Install **Amethyst** (it's on SideStore's iOS-26
    JIT-supported list; an arbitrary custom app is *not*, and this is a TXM device — that's the open risk we're
@@ -74,12 +85,8 @@ These are the steps I can't do from here. Each is a gate; stop and tell me the r
    - **GATE A:** Amethyst shows JIT working on this exact phone. If NO → the platform is the blocker (not our
      code); we escalate (SideJITServer, pinned config) before building anything.
 
-3. **Fetch the JRE + pin its checksum.** Source is the **Amethyst CDN** `jre21-ios-aarch64.zip` (referenced from
-   Amethyst's `Makefile`, ~line 289) — **not** a durable Pojav GitHub release, so we pin the hash. After
-   download: `shasum -a 256 jre21-ios-aarch64.zip` and save the value; unzip and confirm
-   `lib/server/libjvm.dylib` is HotSpot (`strings ... | grep -E 'Tiered|C1|C2|Server VM'`), `release` says
-   `JAVA_VERSION="21.0.8"` / `OS_ARCH="aarch64"`, and `vtool -show lib/server/libjvm.dylib` reports platform
-   `IOS`. *(Tell me where you put the unzipped JRE and I'll wire the inventory + the launch path.)*
+3. ✅ **JRE fetched + verified** — `jre21-ios-aarch64.zip` from the Amethyst CDN, checksum-pinned, HotSpot
+   Tiered C1/C2, `platform IOS`, `_JLI_Launch` exported. See `dev-tools/JRE21-INVENTORY.md`.
 
 4. **StikDebug attach ritual (for our own shell, prong B — after GATE A is green).** Per-launch:
    launch app → app waits at a "Start JVM" gate → attach StikDebug → app proceeds (`dlopen(libjli)` →
