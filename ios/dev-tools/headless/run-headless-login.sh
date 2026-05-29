@@ -52,6 +52,10 @@ set +e
 "$JAVA" \
   -Drunelite.headless.capture.dir="$OUT" \
   -Drunelite.headless.capture.interval="${CAPTURE_INTERVAL:-50}" \
+  -Drunelite.headless.autologin="${AUTOLOGIN:-true}" \
+  -Drunelite.headless.autologin.point="${AUTOLOGIN_POINT:-382,248}" \
+  -Drunelite.headless.autologin.world="${AUTOLOGIN_WORLD:-301}" \
+  -Drunelite.headless.autologin.worldAddress="${AUTOLOGIN_WORLD_ADDRESS:-oldschool1.runescape.com}" \
   --add-exports java.desktop/com.apple.eawt=ALL-UNNAMED \
   --add-opens   java.base/java.lang.reflect=ALL-UNNAMED \
   -cp "$JAR" net.runelite.client.headless.RuneLiteHeadless --safe-mode "$@" \
@@ -65,7 +69,7 @@ set -e
 echo "== gameState progression =="
 grep -E "\[headless-capture\] gameState" "$LOG" || echo "(no state transitions logged — check $LOG)"
 echo "== headless-capture summary =="
-grep -E "\[headless\]|\[headless-capture\]|LOGGED_IN|LOGGING_IN|injected-client|Cache is ready|ERROR|Exception" "$LOG" | tail -40 || true
+grep -E "\[headless\]|\[headless-capture\]|\[headless-login\]|LOGGED_IN|LOGGING_IN|injected-client|Cache is ready|ERROR|Exception" "$LOG" | tail -40 || true
 echo "== frames written (state-tagged) =="
 ls -la "$OUT"/frame-*.png 2>/dev/null || echo "(none)"
 echo "== full log: $LOG =="

@@ -386,6 +386,11 @@ public class Hooks implements Callbacks
 			net.runelite.client.headless.HeadlessCapture.observe(
 				client.getGameState(), client.getLoginIndex(), client.getLauncherDisplayName());
 		}
+		if (net.runelite.client.headless.HeadlessLogin.isEnabled())
+		{
+			net.runelite.client.headless.HeadlessLogin.tick(
+				client, client.getGameState(), client.getLoginIndex());
+		}
 
 		if (graphics == null)
 		{

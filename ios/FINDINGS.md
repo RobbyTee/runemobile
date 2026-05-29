@@ -100,29 +100,39 @@ virtual display (no OS window). Harness: `dev-tools/headless/` (`run-headless.sh
   this gate, which just re-derives Gate 1a (overlay draw-ops→buffer, already green) — confirming the audit's
   Claim-C skepticism that 1c-i risks being vacuous. So 1c-i is **skipped**; next is 1c-ii.
 
-## Gate 1c-ii — the JX_* launcher handoff auto-AUTHENTICATES but does NOT auto-LOGIN (2026-05-29)
-Spiked headless on the throwaway account (`tokens.json` → JX_* env vars via `dev-tools/headless/`,
-`run-headless-login.sh`). **The decisive observation:** the gamepack reads the launcher handoff
-(`launcherDisplayName=MarkingEclip`, `loginIndex=10`) and renders the **authenticated** welcome screen —
-"Welcome to RuneScape / **Play Now** / MarkingEclip / World 339" — but then **sits at
-`GameState.LOGIN_SCREEN` indefinitely** (full 120 s, `nullGraphics=0`). It never advances to
-`LOGGING_IN`/`LOGGED_IN` on its own.
-- **Mapping that works:** `session_id → JX_SESSION_ID`, `chosen_account_id → JX_CHARACTER_ID`,
-  `displayName → JX_DISPLAY_NAME`. `access_token`/`refresh_token` were **empty** (Stage B skipped) and
-  initial auth still succeeded — those only feed long-session refresh; the gamepack mints its own play
-  token from `JX_SESSION_ID` + `JX_CHARACTER_ID`. So Stage A of `fetch-shield-tokens.sh` is sufficient.
-- **⇒ The fork (Phase 4 input):** crossing `LOGIN_SCREEN → LOGGED_IN` requires a **synthesized input event**
-  — a click on the "Play Now" button into the gamepack canvas. There is no programmatic shortcut:
-  `client.setGameState(LOGGED_IN)` does not drive the network login the button handler performs, and stock
-  RuneLite has no auto-login API (removed for ToS). This is the same UIKit-touch → AWT-`MouseEvent` path the
-  device needs, so it is faithfully spikeable on desktop CACIO.
-- **Consequence for sequencing:** the 1c-ii overlay-compositing proof is now **gated on a minimal slice of
-  Phase 4** (≥1 synthesized click), because `OverlayRenderer` composites nothing until `LOGGED_IN`. The
-  audit had assumed login was reachable headless; it is reachable only through input injection. **Decision
-  pending:** brief the input fork first vs. build a minimal click-injection spike to unblock 1c-ii.
-- **CACIO (no-window) run deferred:** the native run settled the login-progression question; the gamepack
-  login logic is identical under CACIO (only windowing differs), so the no-window in-game proof is held
-  until click injection exists, at which point it becomes the honest device-shaped capture.
+## Gate 1c-ii — headless live login + in-game overlay capture — GREEN (2026-05-29)
+Real RuneLite, headless, logs into **live OSRS** on the throwaway account and composites a **real RuneLite
+plugin overlay** (the FPS overlay) into the buffer we own — on the **native toolkit AND under CACIO CTC
+with no OS window**. This closes Claim 2's long pole. Harness: `dev-tools/headless/run-headless-login.sh`
+(native) / `run-headless-login-cacio.sh` (no window); auth via `dev-tools/fetch-shield-tokens.sh`.
+
+- **The JX_* handoff auto-AUTHENTICATES but does NOT auto-LOGIN.** `tokens.json` → JX_* env vars
+  (`session_id → JX_SESSION_ID`, `chosen_account_id → JX_CHARACTER_ID`, `displayName → JX_DISPLAY_NAME`;
+  `access_token`/`refresh_token` empty is fine — those only feed long-session refresh, the gamepack mints
+  its own play token from session+character, so Stage A of `fetch-shield-tokens.sh` suffices). The gamepack
+  reads the handoff (`launcherDisplayName` set, `loginIndex=10`) and renders the **authenticated welcome
+  screen** ("Welcome to RuneScape / Play Now / <name> / World N"), then **sits at `LOGIN_SCREEN`** — it
+  never advances on its own.
+- **Crossing `LOGIN_SCREEN → LOGGED_IN` needs synthesized input (the Phase-4 fork, settled minimally).**
+  `net.runelite.client.headless.HeadlessLogin` (gated by `-Drunelite.headless.autologin`) posts a
+  focus-gain + enter/move/press/release/click `MouseEvent` sequence at the Play Now button into the gamepack
+  `Canvas` via the toolkit `EventQueue`. **The window-less engine accepts it:** one synthesized click drove
+  `LOGIN_SCREEN → LOGGING_IN → LOADING → LOGGED_IN`. This is the same UIKit-touch → AWT-`MouseEvent` path the
+  device needs, so the Phase-4 input kill-risk ("does a headless engine accept synthesized events at all")
+  is answered YES on desktop CACIO. `client.setGameState(LOGGED_IN)` is NOT a shortcut (doesn't drive the
+  network login); stock RuneLite has no auto-login API.
+- **F2P world gotcha:** a throwaway **free** account is bounced ("You need a members' account to use this
+  world") if the remembered world is members. `HeadlessLogin` calls `client.changeWorld()` to an F2P world
+  (default 301 / `oldschool1.runescape.com`; world W's host is `oldschool{W-300}.runescape.com`) **before**
+  the click. With that, login completes.
+- **In-game render + overlay compositing both confirmed.** Once `LOGGED_IN` the engine keeps driving
+  `Hooks.draw` with non-null Graphics (`nullGraphics=0`, stable for thousands of draws), and
+  `OverlayRenderer` — which gated everything on `LOGGED_IN` (`OverlayRenderer.java:249`) — now composites:
+  the RuneLite **FPS overlay** (OSRS has no native FPS counter) appears top-right in the captured PNG on
+  **both** the native toolkit and CACIO (no window). The captured account is fresh, so the scene is Tutorial
+  Island — irrelevant to the proof.
+- **1c-i still skipped (vacuous), as predicted.** The honest overlay proof needed a logged-in client, which
+  we now have.
 
 ## Platform findings (OpenJDK-on-iOS) — the traps
 - **Two different "OpenJDK on iOS" worlds.** The *official* OpenJDK Mobile port is **Zero-interpreter-only (NO JIT)** on iOS-arm64 by design (Apple bans runtime codegen). The **PojavLauncher path is JIT-enabled HotSpot**, made legal via sideload + `com.apple.security.get-task-allow` + debugger-attach → kernel `CS_DEBUGGED` (suppresses the signing kill on JIT pages). **We want the Pojav path.** Picking the official port silently caps you at interpreter speed.

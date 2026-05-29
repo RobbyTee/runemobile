@@ -226,9 +226,17 @@ RuneLite + overlay-capture** proof, with device JIT run **in parallel**, not fir
    - **1c-i (mocked-client overlay smoke) — SKIPPED.** `OverlayRenderer` gates all layers on `LOGGED_IN`
      (`OverlayRenderer.java:249`), so a no-gamepack mock can't drive the real overlay path — it would just
      re-derive Gate 1a. (Confirms the audit's Claim-C "vacuous" risk.)
-   - **1c-ii (next) — live login + in-game capture.** The honest overlay-compositing proof: log in on the
-     throwaway Jagex account (`tokens.json`), capture an in-game frame with a real plugin overlay composited.
-     This closes Claim 2's long pole. = Phase 2.
+   - **1c-ii — live login + in-game capture ✅ DONE (GREEN, 2026-05-29).** Headless RuneLite logs into live
+     OSRS on the throwaway account and composites a **real RuneLite plugin overlay** (the FPS overlay) into
+     the captured buffer — on the **native toolkit AND CACIO CTC with no OS window**. Harness
+     `dev-tools/headless/run-headless-login.sh`(+`-cacio`); auth `dev-tools/fetch-shield-tokens.sh`.
+     **Key findings:** (a) the `JX_*` launcher handoff auto-*authenticates* (`loginIndex=10`, welcome screen)
+     but does NOT auto-*login* — it parks at `LOGIN_SCREEN`; (b) crossing to `LOGGED_IN` needs a **synthesized
+     Play Now click** (`HeadlessLogin` posts a focus+mouse sequence into the gamepack canvas via the toolkit
+     `EventQueue`) — the window-less engine accepts it (Phase-4 input kill-risk settled minimally, same
+     UIKit→AWT path the device needs); (c) a free account must `changeWorld` to an F2P world first
+     (default 301). Closes Claim 2's long pole. = Phase 2. **The minimal click is the only Phase-4 input
+     built — the full mobile control scheme stays later product work.**
 3. **Device HotSpot/JIT microbench** (`-XX:+PrintCompilation` vs `-Xint`) — **parallel** to 1c. = Phase 1.
 4. Merge: same headless RuneLite fork on the device JVM. = Phase 3.
 5. Soak: memory, JIT persistence, weekly gamepack update. = Phase 7.
