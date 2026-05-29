@@ -72,6 +72,34 @@ Our fork's `runelite-client` builds and runs on OpenJDK 21 (`/opt/homebrew/opt/o
 - **Note:** the `com.apple.eawt` flag is moot for our **headless** path — Gate 1c replaces `ClientUI`, so
   `OSXFullScreenAdapter` never runs. It only matters for this desktop *GUI* reference.
 
+## Gate 1c — headless RuneLite + login-screen capture — GREEN; kill-risk refuted (2026-05-29)
+Real RuneLite boots with the Swing `ClientUI` replaced by a window-less one and renders the live-OSRS login
+screen into a buffer we own, on desktop OpenJDK 21 — on the native toolkit **and** under the CACIO CTC
+virtual display (no OS window). Harness: `dev-tools/headless/` (`run-headless.sh`, `run-headless-cacio.sh`).
+- **The architecture (post-audit cut):** `HeadlessClientUI extends ClientUI` (constructor relaxed
+  `private→protected`) swaps the whole desktop chrome for **one minimal AWT `Frame` that hosts the gamepack
+  `Component` and is realized**, so the engine's `Canvas` gets a peer + a real `Graphics`. Bound via
+  `Modules.override(RuneLiteModule).with(HeadlessModule)` (rebinds `ClientUI→HeadlessClientUI`); entrypoint
+  `RuneLiteHeadless` calls `RuneLite.main` verbatim (honest client, not a rewrite). Upstream diff is tiny:
+  `ClientUI` ctor visibility + two `frame==null` guards on its private `@Subscribe` handlers, two gated
+  capture calls in `Hooks.draw`, an optional override-module seam in `RuneLite.main`. Rest is isolated.
+- **The settled kill risk (audit Claim D):** *does the engine drive `Hooks.draw` with a non-null `Graphics`
+  with no real window?* **Yes.** Both toolkits: ~42 fps of draws, **`nullGraphics=0`**, 20 PNGs each — every
+  one the real login screen (`765×503`, captured via toolkit-independent `BufferProvider.getPixels()`). No
+  `HeadlessException`, no NPEs. CACIO run confirmed `toolkit=CTCToolkit`/`CTCGraphicsEnvironment`, canvas
+  realized to an offscreen peer — the honest iOS-shaped proof (engine renders with no native display).
+  - *Why a Frame at all:* a truly frameless `ClientUI` leaves the `Canvas` unrealized → `canvas.getGraphics()`
+    is null → `Hooks.draw` early-returns at its `graphics==null` guard → nothing renders. CACIO lets the frame
+    be realized **offscreen** (no window), which is exactly what the device path needs. This front-loaded the
+    audit's "minimal CACIO-backed AWT peer host" fallback because the static read predicted it.
+- **What this does NOT prove yet — overlay compositing needs LOGGED_IN.** `Hooks.draw` →
+  `OverlayRenderer.renderOverlayLayer` → `renderOverlays` returns early unless
+  `client.getGameState()==LOGGED_IN` (`OverlayRenderer.java:249`), for **every** layer incl. `ALWAYS_ON_TOP`.
+  So no overlay composites at the login screen. The honest overlay proof is **1c-ii (live login + in-game
+  capture)** — needs the throwaway Jagex account / `tokens.json`. A mocked-client 1c-i would have to bypass
+  this gate, which just re-derives Gate 1a (overlay draw-ops→buffer, already green) — confirming the audit's
+  Claim-C skepticism that 1c-i risks being vacuous. So 1c-i is **skipped**; next is 1c-ii.
+
 ## Platform findings (OpenJDK-on-iOS) — the traps
 - **Two different "OpenJDK on iOS" worlds.** The *official* OpenJDK Mobile port is **Zero-interpreter-only (NO JIT)** on iOS-arm64 by design (Apple bans runtime codegen). The **PojavLauncher path is JIT-enabled HotSpot**, made legal via sideload + `com.apple.security.get-task-allow` + debugger-attach → kernel `CS_DEBUGGED` (suppresses the signing kill on JIT pages). **We want the Pojav path.** Picking the official port silently caps you at interpreter speed.
 - **iOS Simulator runs under macOS rules, not device AMFI** → JIT works there permissively, but a simulator app needs a `*-ios-simulator`-triple build of the JVM (nobody ships one). **Device-first** (Pojav's prebuilt JIT JRE + TrollStore) avoids this and is the chosen path.

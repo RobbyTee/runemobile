@@ -32,6 +32,8 @@ import com.google.gson.Gson;
 import com.google.inject.Guice;
 import com.google.inject.Inject;
 import com.google.inject.Injector;
+import com.google.inject.Module;
+import com.google.inject.util.Modules;
 import java.io.File;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
@@ -116,6 +118,16 @@ public class RuneLite
 
 	@Getter
 	private static Injector injector;
+
+	// Optional Guice override applied on top of RuneLiteModule. The headless entrypoint
+	// (net.runelite.client.headless.RuneLiteHeadless) uses this to rebind ClientUI -> HeadlessClientUI
+	// without forking the boot sequence. Null for the stock desktop client.
+	private static Module overrideModule;
+
+	public static void setOverrideModule(Module module)
+	{
+		overrideModule = module;
+	}
 
 	@Inject
 	private PluginManager pluginManager;
@@ -258,7 +270,7 @@ public class RuneLite
 			log.info("Java VM arguments: {}", String.join(" ", runtime.getInputArguments()));
 
 			final long start = System.currentTimeMillis();
-			injector = Guice.createInjector(new RuneLiteModule(
+			final Module baseModule = new RuneLiteModule(
 				okHttpClient,
 				clientLoader,
 				runtimeConfigLoader,
@@ -269,7 +281,10 @@ public class RuneLite
 				(String) options.valueOf("profile"),
 				options.has(insecureWriteCredentials),
 				options.has("noupdate")
-			));
+			);
+			injector = Guice.createInjector(overrideModule != null
+				? Modules.override(baseModule).with(overrideModule)
+				: baseModule);
 
 			injector.getInstance(RuneLite.class).start();
 

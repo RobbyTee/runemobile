@@ -217,8 +217,18 @@ RuneLite + overlay-capture** proof, with device JIT run **in parallel**, not fir
 - **Prereq — stock RuneLite on desktop OpenJDK 21 ✅ DONE (Phase 0 step 3).** Builds + runs to the live-OSRS
    login screen with full plugins + GPU plugin. Reference harness `dev-tools/run-desktop-reference.sh`;
    injected-client SNAPSHOT resolves; JDK-21 flags documented. See `FINDINGS.md` "Stock RuneLite on desktop OpenJDK 21".
-2. **Gate 1c — desktop headless RuneLite (next).** Stub `ClientUI` + real CACIO EDT + 2–3 overlay plugins;
-   capture `mainBufferProvider.getImage()` to PNG. The real attack on Claim 2's long pole. = Phase 2 below.
+2. **Gate 1c — desktop headless RuneLite.** Split per the 1c audit (kill-risk-first):
+   - **1c login-screen capture ✅ DONE (GREEN, 2026-05-29).** `dev-tools/headless/`: real RuneLite boots with
+     a window-less `HeadlessClientUI` (replaces the Swing `ClientUI` via a Guice override) and renders the
+     **live-OSRS login screen** into `mainBufferProvider` → PNG, on the **native toolkit** *and* under **CACIO
+     CTC with no OS window**. Settles the audit's kill risk (**Claim D**): the engine drives `Hooks.draw` with
+     a non-null `Graphics` headless (`nullGraphics=0`, ~42 fps). See `FINDINGS.md` "Gate 1c".
+   - **1c-i (mocked-client overlay smoke) — SKIPPED.** `OverlayRenderer` gates all layers on `LOGGED_IN`
+     (`OverlayRenderer.java:249`), so a no-gamepack mock can't drive the real overlay path — it would just
+     re-derive Gate 1a. (Confirms the audit's Claim-C "vacuous" risk.)
+   - **1c-ii (next) — live login + in-game capture.** The honest overlay-compositing proof: log in on the
+     throwaway Jagex account (`tokens.json`), capture an in-game frame with a real plugin overlay composited.
+     This closes Claim 2's long pole. = Phase 2.
 3. **Device HotSpot/JIT microbench** (`-XX:+PrintCompilation` vs `-Xint`) — **parallel** to 1c. = Phase 1.
 4. Merge: same headless RuneLite fork on the device JVM. = Phase 3.
 5. Soak: memory, JIT persistence, weekly gamepack update. = Phase 7.

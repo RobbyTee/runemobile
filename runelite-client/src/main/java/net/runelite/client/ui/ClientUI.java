@@ -192,7 +192,7 @@ public class ClientUI
 	}
 
 	@Inject
-	private ClientUI(
+	protected ClientUI(
 		RuneLiteConfig config,
 		MouseManager mouseManager,
 		Client client,
@@ -219,6 +219,12 @@ public class ClientUI
 	@Subscribe
 	private void onConfigChanged(ConfigChanged event)
 	{
+		if (frame == null)
+		{
+			// Headless ClientUI: no Swing frame to reconfigure
+			return;
+		}
+
 		if (!event.getGroup().equals(CONFIG_GROUP) ||
 			event.getKey().equals(CONFIG_CLIENT_MAXIMIZED) ||
 			event.getKey().equals(CONFIG_CLIENT_BOUNDS))
@@ -281,6 +287,12 @@ public class ClientUI
 	@Subscribe
 	private void onGameStateChanged(final GameStateChanged event)
 	{
+		if (frame == null)
+		{
+			// Headless ClientUI: no Swing frame title to update
+			return;
+		}
+
 		if (event.getGameState() != GameState.LOGGED_IN || !config.usernameInTitle())
 		{
 			return;

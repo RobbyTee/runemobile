@@ -380,6 +380,8 @@ public class Hooks implements Callbacks
 	@Override
 	public void draw(MainBufferProvider mainBufferProvider, Graphics graphics, int x, int y)
 	{
+		net.runelite.client.headless.HeadlessCapture.onDraw(graphics);
+
 		if (graphics == null)
 		{
 			return;
@@ -400,6 +402,9 @@ public class Hooks implements Callbacks
 
 		// Draw clientUI overlays
 		clientUi.paintOverlays(graphics2d);
+
+		// Headless capture seam: composited game + overlays now live in mainBufferProvider.getImage().
+		net.runelite.client.headless.HeadlessCapture.capture(mainBufferProvider);
 
 		if (client.isGpu())
 		{
