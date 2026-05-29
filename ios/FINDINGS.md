@@ -185,6 +185,29 @@ climbs above 0 during a hot loop. (`JitProbe.java` in `dev-tools/jvmbench/` emit
 The **thin Phase-3 rasterizer smoke** (`BufferedImage` glyph → PNG on the iOS JRE) rides prong 2 — cheap, and
 retires the desktop-CACIO rasterizer caveat earlier than a full Phase 3.
 
+## Phase 1 — Prong A (oracle) GREEN on device (2026-05-29) — the platform kill-risk is RETIRED
+Ran the Amethyst oracle on the real target: **iPhone 17 Pro Max, iOS 26.5 (TXM)**. Result: with **StikDebug
+3.1.3 JIT attached** (Connect-by-App → Amethyst), the **full Amethyst build's bundled `jre21` HotSpot ran
+Minecraft 1.21.4 fast and responsive.** The interpreter cannot do that (it's a slideshow / minutes to the
+menu), so **Claim 1 — StikDebug enables HotSpot JIT on iOS 26.5 TXM — is settled GREEN on device.**
+- **What this proves (the big one):** a JIT-enabled HotSpot **runs on this exact phone/OS** — the entire
+  "can a real JIT JVM even work on bleeding-edge iOS 26.5" premise is no longer a kill-risk. And it's the
+  **same `jre21-ios-aarch64` HotSpot we verified locally** (`dev-tools/JRE21-INVENTORY.md`) and will deploy.
+- **Claim 3 substantially de-risked too:** Amethyst is an **AltStore free-cert** (`get-task-allow`) app loading
+  **ad-hoc-signed** JRE dylibs via `dyld_bypass_validation` → `JLI_Launch`, and it works on this device. So the
+  embedding mechanics + signing path are proven viable here; our own shell just has to replicate them.
+- **Signal strength (honest):** "fast and responsive" is a **coarse** read (launcher + Minecraft menus/launch
+  with JIT attached), not a numeric A/B. The demo *world* didn't fully generate — blocked by an **Amethyst iOS
+  UI bug** (`SIGABRT` / `-[NSObject doesNotRecognizeSelector:]` on the UIKit main thread, in the Multiplayer
+  "server list" nav — **not** a JVM/JIT/memory fault; irrelevant to our build). The **definitive numeric proof**
+  (`java.vm.info` = `mixed mode` + `CompilationMXBean` climbing + `Bench` A/B vs `-Xint`) is **Prong B** with our
+  own shell + `JitProbe`/`Bench`/`GlyphSmoke`.
+- **Device-setup facts that worked (carry forward):** install apps via the dev's AltStore (free cert);
+  **LocalDevVPN** (App Store) is the loopback VPN; **pairing file via iloader** (the iOS-26 remote-pairing
+  format — pymobiledevice3's classic lockdown record is rejected with "missing field public key"); JIT is
+  **per-launch** (re-attach StikDebug each cold start). Use the **full** Amethyst IPA (the slimmed one bundles
+  no JRE); pick a **Java-21 MC version** (1.20.5–1.21.5; "latest" now needs Java 25).
+
 ## Product / legal reality (decisive for scope)
 - The **official OSRS Mobile app** already provides the game + touch + mobile UI. The *only* gap we're filling is **RuneLite plugins**, which require running real RuneLite (⇒ a JVM).
 - **Jagex's approved-client list is desktop-only** (official, RuneLite, HDOS, OSBuddy). A self-built iOS client is an **unapproved third-party client on live OSRS → ban risk** (2-week → permanent), **not shippable to others** (Jagex takedown + Apple won't carry + users banned). The build is therefore **personal / technical-achievement; throwaway account only.**
