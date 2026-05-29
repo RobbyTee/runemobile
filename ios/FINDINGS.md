@@ -208,6 +208,30 @@ menu), so **Claim 1 — StikDebug enables HotSpot JIT on iOS 26.5 TXM — is set
   **per-launch** (re-attach StikDebug each cold start). Use the **full** Amethyst IPA (the slimmed one bundles
   no JRE); pick a **Java-21 MC version** (1.20.5–1.21.5; "latest" now needs Java 25).
 
+## W1 minimal JVM shell — the TXM-JIT crux (Prong B; under review before build)
+Studied Amethyst's `Natives/JavaLauncher.m launchJVM()` (GPLv3, patterns only). **The `JLI_Launch` glue is the
+easy part; the deep unknown is the iOS-26 TXM JIT enablement.** Distilled so we don't re-clone the ephemeral ref:
+- **HotSpot needs executable memory to boot** (it generates its template interpreter at VM init) → **even
+  `Hello` can't start without working JIT** on a TXM device. So the shell's hard problem is platform JIT, not
+  the launch call.
+- **Two TXM JIT modes in Amethyst:** (1) **always-attached** — StikDebug stays attached,
+  `task_set_exception_ports(… EXC_MASK_ALL & ~EXC_MASK_BREAKPOINT …)` + dyld-bypass; (2) **JS-script** —
+  StikDebug *executes* a shipped `UniversalJIT26.js` (user "Assigns Script" per-app) + native
+  `JIT26CreateRegion…`/`DeviceHasJITFlags` glue, detach-after-first-breakpoint. **Open question (the crux):
+  does our app need the JS-script machinery, or does always-attached + `-XX:+MirrorMappedCodeCache` suffice?**
+- **`-XX:+MirrorMappedCodeCache`** is the iOS-26 code-cache flag (likely an Amethyst/Pojav HotSpot *patch* — we
+  inherit it by using their exact `jre21`). **`-XX:-UseCompressedClassPointers`** needed on **free cert** (no
+  `extended-virtual-addressing` entitlement). Plus `-XX:+UnlockExperimentalVMOptions
+  -XX:+DisablePrimordialThreadGuardPages`; reset SIG_DFL for SEGV/BUS/ILL/FPE/PIPE before `JLI_Launch`.
+- **Dylib loading:** Amethyst uses a 287-line runtime `dyld_bypass_validation` to load ad-hoc dylibs. **Our
+  hypothesis:** code-sign the bundled `jre21` dylibs with our dev cert at **build time** → avoid the bypass.
+  Unverified (Claim A in the brief).
+- **iOS JIT is via `get-task-allow` + StikDebug `CS_DEBUGGED`, NOT entitlements.** The macOS hardened-runtime
+  keys (`com.apple.security.cs.allow-jit`) the predecessor app carried are likely **no-ops on iOS device**.
+- **This architecture is under adversarial review before we build it:** `AUDIT-BRIEF-w1-jvm-shell.md` (Claims
+  A–E: re-sign vs bypass; always-attached vs JS-script; minimal JLI args; free-cert entitlements; wait-for-JIT
+  ordering). Matches the established brief→review→build rhythm.
+
 ## Product / legal reality (decisive for scope)
 - The **official OSRS Mobile app** already provides the game + touch + mobile UI. The *only* gap we're filling is **RuneLite plugins**, which require running real RuneLite (⇒ a JVM).
 - **Jagex's approved-client list is desktop-only** (official, RuneLite, HDOS, OSBuddy). A self-built iOS client is an **unapproved third-party client on live OSRS → ban risk** (2-week → permanent), **not shippable to others** (Jagex takedown + Apple won't carry + users banned). The build is therefore **personal / technical-achievement; throwaway account only.**
