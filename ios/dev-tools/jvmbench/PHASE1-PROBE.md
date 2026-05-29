@@ -52,8 +52,19 @@ StikDebug is what flips JIT on.
 
 These are the steps I can't do from here. Each is a gate; stop and tell me the result before the next.
 
-1. **SideStore (or AltStore) + StikDebug 3.1.3** installed on the iPhone 17 Pro Max (iOS 26.5).
-   TrollStore is N/A on 26.5. *(Confirm StikDebug version = 3.1.3.)*
+**App install sources (verified 2026-05-29) — install all 3 via the dev's AltStore, except the VPN (App Store):**
+| App | Role | Install source |
+|---|---|---|
+| LocalDevVPN | loopback VPN StikDebug requires | **App Store** id `6755608044` (`com.jkcoxson.LocalDevVPN`, Coxson Engineering) — no sideload, no expiry |
+| StikDebug 3.1.3 | JIT enabler (debugger-attach → `CS_DEBUGGED`) | AltStore source `https://stikdebug.xyz/index.json` (minOS 17.4) |
+| Amethyst | the oracle (Minecraft on the same `jre21-ios-aarch64`) | AltStore source `https://alt.crystall1ne.dev` (AngelAuraMC) |
+
+> **TXM reality:** SideStore's *built-in* JIT enabler is non-TXM-only on iOS 26, so it's out on the 17 Pro Max.
+> StikDebug (debugger-attach via pairing file + LocalDevVPN loopback) is the path; Amethyst (on the supported
+> list) is the oracle that proves it works on this TXM phone.
+
+1. Install the 3 apps above. **StikDebug 3.1.3** + **LocalDevVPN** + **Amethyst** on the iPhone 17 Pro Max
+   (iOS 26.5). TrollStore is N/A on 26.5. *(Confirm StikDebug version = 3.1.3.)*
 
 2. **Oracle prong — prove JIT on a *supported* app first.** Install **Amethyst** (it's on SideStore's iOS-26
    JIT-supported list; an arbitrary custom app is *not*, and this is a TXM device — that's the open risk we're
