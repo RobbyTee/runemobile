@@ -57,7 +57,7 @@ These are the steps I can't do from here. Each is a gate; stop and tell me the r
 |---|---|---|
 | LocalDevVPN | loopback VPN StikDebug requires | **App Store** id `6755608044` (`com.jkcoxson.LocalDevVPN`, Coxson Engineering) — no sideload, no expiry |
 | StikDebug 3.1.3 | JIT enabler (debugger-attach → `CS_DEBUGGED`) | AltStore source `https://stikdebug.xyz/index.json` (minOS 17.4) |
-| Amethyst | the oracle (Minecraft on the same `jre21-ios-aarch64`) | AltStore source `https://alt.crystall1ne.dev` (AngelAuraMC) |
+| Amethyst | the oracle (Minecraft on the same `jre21-ios-aarch64`) | **No AltStore source yet** (README: "available soon"; the wiki's `alt.crystall1ne.dev` is stale). Install the **CI build artifact IPA**: `gh run download <run> -R AngelAuraMC/Amethyst-iOS -n org.angelauramc.amethyst.slimmed-ios.ipa` (the slimmed `-ios.ipa`, not `.tipa`) → AirDrop → AltStore **+**. Minecraft needs a Microsoft account or **demo mode** (fine for the oracle). |
 
 > **TXM reality:** SideStore's *built-in* JIT enabler is non-TXM-only on iOS 26, so it's out on the 17 Pro Max.
 > StikDebug (debugger-attach via pairing file + LocalDevVPN loopback) is the path; Amethyst (on the supported
