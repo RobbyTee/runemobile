@@ -1,0 +1,18 @@
+# Secrets — never commit
+tokens.json
+
+# JVM benchmark build output
+dev-tools/jvmbench/out/
+
+# Bundled JRE artifacts (large; fetched per-machine)
+jre*-ios-aarch64*
+**/Frameworks/*.dylib
+
+# Java build artifacts
+*.class
+
+# Xcode / iOS build
+app/**/build/
+app/**/DerivedData/
+*.xcuserstate
+xcuserdata/
