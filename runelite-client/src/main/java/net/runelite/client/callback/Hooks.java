@@ -381,6 +381,11 @@ public class Hooks implements Callbacks
 	public void draw(MainBufferProvider mainBufferProvider, Graphics graphics, int x, int y)
 	{
 		net.runelite.client.headless.HeadlessCapture.onDraw(graphics);
+		if (net.runelite.client.headless.HeadlessCapture.isEnabled())
+		{
+			net.runelite.client.headless.HeadlessCapture.observe(
+				client.getGameState(), client.getLoginIndex(), client.getLauncherDisplayName());
+		}
 
 		if (graphics == null)
 		{

@@ -31,6 +31,7 @@ import java.io.IOException;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.imageio.ImageIO;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.GameState;
 import net.runelite.api.MainBufferProvider;
 
 /**
@@ -56,15 +57,23 @@ public final class HeadlessCapture
 	private static final String DIR_PROP = "runelite.headless.capture.dir";
 	private static final String INTERVAL_PROP = "runelite.headless.capture.interval";
 	private static final String MAX_PROP = "runelite.headless.capture.max";
+	private static final String PRELOGIN_MAX_PROP = "runelite.headless.capture.preLoginMax";
 
 	private static final File DIR;
 	private static final boolean ENABLED;
 	private static final int INTERVAL;
 	private static final int MAX_FRAMES;
+	private static final int PRELOGIN_MAX_FRAMES;
 
 	private static final AtomicInteger drawCount = new AtomicInteger();
 	private static final AtomicInteger nullGraphicsCount = new AtomicInteger();
 	private static final AtomicInteger capturedFrames = new AtomicInteger();
+	private static final AtomicInteger loggedInFrames = new AtomicInteger();
+
+	// Latest observed game state, written by observe() each draw and read by capture() to tag frames
+	// and decide which capture budget applies. Volatile because the engine's render thread and the
+	// (same) caller are the only writers, but keep memory visibility honest.
+	private static volatile GameState lastState;
 
 	static
 	{
@@ -73,11 +82,15 @@ public final class HeadlessCapture
 		DIR = ENABLED ? new File(dir) : null;
 		INTERVAL = Integer.getInteger(INTERVAL_PROP, 50);
 		MAX_FRAMES = Integer.getInteger(MAX_PROP, 20);
+		// Cap how many login-screen frames we keep, so a long pre-login wait (cache download, world
+		// hop) doesn't exhaust the budget before we ever reach an in-game frame — the whole point of 1c-ii.
+		PRELOGIN_MAX_FRAMES = Integer.getInteger(PRELOGIN_MAX_PROP, 6);
 		if (ENABLED)
 		{
 			//noinspection ResultOfMethodCallIgnored
 			DIR.mkdirs();
-			log.info("[headless-capture] ENABLED dir={} interval={} maxFrames={}", DIR, INTERVAL, MAX_FRAMES);
+			log.info("[headless-capture] ENABLED dir={} interval={} maxFrames={} preLoginMax={}",
+				DIR, INTERVAL, MAX_FRAMES, PRELOGIN_MAX_FRAMES);
 		}
 	}
 
@@ -111,8 +124,36 @@ public final class HeadlessCapture
 		// readable from the console even without inspecting the PNGs.
 		if (n == 1 || n % INTERVAL == 0)
 		{
-			log.info("[headless-capture] draw#{} nullGraphics={} capturedFrames={}",
-				n, nullGraphicsCount.get(), capturedFrames.get());
+			log.info("[headless-capture] draw#{} nullGraphics={} capturedFrames={} state={}",
+				n, nullGraphicsCount.get(), capturedFrames.get(), lastState);
+		}
+	}
+
+	/**
+	 * Called once per {@code Hooks.draw} (only when capture is enabled) with the live login state. Logs
+	 * every game-state transition so the console shows the login progression
+	 * (LOGIN_SCREEN → LOGGING_IN → LOGGED_IN) without inspecting PNGs — the decisive 1c-ii observation:
+	 * does the {@code JX_*} launcher handoff carry the client all the way to LOGGED_IN, or stall at the
+	 * authenticated login screen (which would mean a synthesized click is needed).
+	 *
+	 * @param state               the current {@code client.getGameState()}
+	 * @param loginIndex          the current {@code client.getLoginIndex()} (login form sub-state)
+	 * @param launcherDisplayName {@code client.getLauncherDisplayName()} — non-null iff the gamepack
+	 *                            picked up the Jagex-launcher env vars
+	 */
+	public static void observe(GameState state, int loginIndex, String launcherDisplayName)
+	{
+		if (!ENABLED)
+		{
+			return;
+		}
+
+		final GameState prev = lastState;
+		lastState = state;
+		if (state != prev)
+		{
+			log.info("[headless-capture] gameState {} -> {} (draw#{} loginIndex={} launcherDisplayName={})",
+				prev, state, drawCount.get(), loginIndex, launcherDisplayName);
 		}
 	}
 
@@ -133,7 +174,14 @@ public final class HeadlessCapture
 			return;
 		}
 
-		if (capturedFrames.get() >= MAX_FRAMES)
+		// Two budgets so a long login wait can't starve the in-game capture: LOGGED_IN frames get the
+		// full MAX_FRAMES; every other state shares a small PRELOGIN budget (enough to prove the login
+		// screen still renders, no more). This is what makes 1c-ii's in-game frame reliably land.
+		final GameState state = lastState;
+		final boolean loggedIn = state == GameState.LOGGED_IN;
+		final AtomicInteger budget = loggedIn ? loggedInFrames : capturedFrames;
+		final int cap = loggedIn ? MAX_FRAMES : PRELOGIN_MAX_FRAMES;
+		if (budget.get() >= cap)
 		{
 			return;
 		}
@@ -153,8 +201,9 @@ public final class HeadlessCapture
 			final BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
 			img.setRGB(0, 0, w, h, pixels, 0, w);
 
-			final int frame = capturedFrames.incrementAndGet();
-			final File out = new File(DIR, String.format("frame-%03d-draw%05d.png", frame, n));
+			final int frame = budget.incrementAndGet();
+			final String stateTag = state == null ? "NULL" : state.name();
+			final File out = new File(DIR, String.format("frame-%s-%03d-draw%05d.png", stateTag, frame, n));
 			ImageIO.write(img, "png", out);
 			log.info("[headless-capture] wrote {} ({}x{})", out.getName(), w, h);
 		}
@@ -177,5 +226,15 @@ public final class HeadlessCapture
 	public static int getCapturedFrames()
 	{
 		return capturedFrames.get();
+	}
+
+	public static int getLoggedInFrames()
+	{
+		return loggedInFrames.get();
+	}
+
+	public static GameState getLastState()
+	{
+		return lastState;
 	}
 }
