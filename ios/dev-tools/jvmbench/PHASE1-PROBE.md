@@ -57,7 +57,7 @@ These are the steps I can't do from here. Each is a gate; stop and tell me the r
 |---|---|---|
 | LocalDevVPN | loopback VPN StikDebug requires | **App Store** id `6755608044` (`com.jkcoxson.LocalDevVPN`, Coxson Engineering) — no sideload, no expiry |
 | StikDebug 3.1.3 | JIT enabler (debugger-attach → `CS_DEBUGGED`) | AltStore source `https://stikdebug.xyz/index.json` (minOS 17.4) |
-| Amethyst | the oracle (Minecraft on the same `jre21-ios-aarch64`) | **No AltStore source yet** (README: "available soon"; the wiki's `alt.crystall1ne.dev` is stale). Install the **CI build artifact IPA**: `gh run download <run> -R AngelAuraMC/Amethyst-iOS -n org.angelauramc.amethyst.slimmed-ios.ipa` (the slimmed `-ios.ipa`, not `.tipa`) → AirDrop → AltStore **+**. Minecraft needs a Microsoft account or **demo mode** (fine for the oracle). |
+| Amethyst | the oracle (Minecraft on the same `jre21-ios-aarch64`) | **No AltStore source yet** (README: "available soon"; the wiki's `alt.crystall1ne.dev` is stale). Install the **CI build artifact IPA** via `gh run download <run> -R AngelAuraMC/Amethyst-iOS`. **Use the FULL `org.angelauramc.amethyst-ios.ipa` (~141MB), NOT the `slimmed` one** — the slimmed 32MB build bundles **no JRE** (0 libjvm), so any MC version errors with "requires Java N". The full build bundles `java_runtimes/java-{8,17,21}-openjdk`. AirDrop → AltStore **+**. Then: pick a **Java-21 MC version (1.20.5–1.21.5, e.g. 1.21.4)** — "latest-release" now needs Java 25. Minecraft needs a (free) Microsoft account; demo unlocks after sign-in. |
 
 > **TXM reality:** SideStore's *built-in* JIT enabler is non-TXM-only on iOS 26, so it's out on the 17 Pro Max.
 > StikDebug (debugger-attach via pairing file + LocalDevVPN loopback) is the path; Amethyst (on the supported
