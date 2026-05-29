@@ -54,7 +54,18 @@ on both native and the iOS-shaped CACIO virtual display.
 `client.getGameState() == LOGGED_IN`** (`OverlayRenderer.java:249`) for **every** layer (including
 `ALWAYS_ON_TOP`). So no overlay — synthetic or real — composites at the login screen. The honest
 overlay-compositing proof is therefore **1c-ii: live login + in-game capture** (needs the throwaway Jagex
-account / `tokens.json`). A mocked-client 1c-i would have to bypass this gate, which just re-derives Gate 1a
-(overlay draw-ops → buffer, already green) — matching the audit's Claim-C skepticism that 1c-i risks being
-vacuous. Next step: wire live login on a throwaway account and capture an in-game frame with a real plugin
-overlay composited.
+account / `tokens.json`).
+
+## 1c-ii run (2026-05-29) — handoff auto-AUTHENTICATES, does NOT auto-LOGIN
+Run it: mint `ios/dev-tools/tokens.json` with `../fetch-shield-tokens.sh` (throwaway account), then
+`./run-headless-login.sh` (native) / `./run-headless-login-cacio.sh` (no OS window). These map
+`tokens.json` → the `JX_*` env vars the gamepack reads as the official-launcher handoff and boot
+`RuneLiteHeadless`; frames + a state-tagged log land in `out-login/`.
+
+**Result:** the gamepack reads the handoff (`launcherDisplayName=MarkingEclip`, `loginIndex=10`) and renders
+the **authenticated welcome screen** ("Welcome to RuneScape / Play Now / MarkingEclip / World 339"), but
+**stays at `GameState.LOGIN_SCREEN`** for the full run — it never advances to `LOGGED_IN`. Crossing that
+boundary needs a **synthesized click on "Play Now"** (the Phase-4 input-injection fork; same UIKit-touch →
+AWT-`MouseEvent` mechanism the device needs, spikeable on desktop CACIO). `client.setGameState(LOGGED_IN)`
+is not a shortcut — it doesn't drive the gamepack's network login. So **1c-ii's overlay proof is gated on a
+minimal slice of Phase 4.** Decision pending: brief the input fork vs. build a minimal click spike to unblock.

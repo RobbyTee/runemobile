@@ -100,6 +100,30 @@ virtual display (no OS window). Harness: `dev-tools/headless/` (`run-headless.sh
   this gate, which just re-derives Gate 1a (overlay draw-ops→buffer, already green) — confirming the audit's
   Claim-C skepticism that 1c-i risks being vacuous. So 1c-i is **skipped**; next is 1c-ii.
 
+## Gate 1c-ii — the JX_* launcher handoff auto-AUTHENTICATES but does NOT auto-LOGIN (2026-05-29)
+Spiked headless on the throwaway account (`tokens.json` → JX_* env vars via `dev-tools/headless/`,
+`run-headless-login.sh`). **The decisive observation:** the gamepack reads the launcher handoff
+(`launcherDisplayName=MarkingEclip`, `loginIndex=10`) and renders the **authenticated** welcome screen —
+"Welcome to RuneScape / **Play Now** / MarkingEclip / World 339" — but then **sits at
+`GameState.LOGIN_SCREEN` indefinitely** (full 120 s, `nullGraphics=0`). It never advances to
+`LOGGING_IN`/`LOGGED_IN` on its own.
+- **Mapping that works:** `session_id → JX_SESSION_ID`, `chosen_account_id → JX_CHARACTER_ID`,
+  `displayName → JX_DISPLAY_NAME`. `access_token`/`refresh_token` were **empty** (Stage B skipped) and
+  initial auth still succeeded — those only feed long-session refresh; the gamepack mints its own play
+  token from `JX_SESSION_ID` + `JX_CHARACTER_ID`. So Stage A of `fetch-shield-tokens.sh` is sufficient.
+- **⇒ The fork (Phase 4 input):** crossing `LOGIN_SCREEN → LOGGED_IN` requires a **synthesized input event**
+  — a click on the "Play Now" button into the gamepack canvas. There is no programmatic shortcut:
+  `client.setGameState(LOGGED_IN)` does not drive the network login the button handler performs, and stock
+  RuneLite has no auto-login API (removed for ToS). This is the same UIKit-touch → AWT-`MouseEvent` path the
+  device needs, so it is faithfully spikeable on desktop CACIO.
+- **Consequence for sequencing:** the 1c-ii overlay-compositing proof is now **gated on a minimal slice of
+  Phase 4** (≥1 synthesized click), because `OverlayRenderer` composites nothing until `LOGGED_IN`. The
+  audit had assumed login was reachable headless; it is reachable only through input injection. **Decision
+  pending:** brief the input fork first vs. build a minimal click-injection spike to unblock 1c-ii.
+- **CACIO (no-window) run deferred:** the native run settled the login-progression question; the gamepack
+  login logic is identical under CACIO (only windowing differs), so the no-window in-game proof is held
+  until click injection exists, at which point it becomes the honest device-shaped capture.
+
 ## Platform findings (OpenJDK-on-iOS) — the traps
 - **Two different "OpenJDK on iOS" worlds.** The *official* OpenJDK Mobile port is **Zero-interpreter-only (NO JIT)** on iOS-arm64 by design (Apple bans runtime codegen). The **PojavLauncher path is JIT-enabled HotSpot**, made legal via sideload + `com.apple.security.get-task-allow` + debugger-attach → kernel `CS_DEBUGGED` (suppresses the signing kill on JIT pages). **We want the Pojav path.** Picking the official port silently caps you at interpreter speed.
 - **iOS Simulator runs under macOS rules, not device AMFI** → JIT works there permissively, but a simulator app needs a `*-ios-simulator`-triple build of the JVM (nobody ships one). **Device-first** (Pojav's prebuilt JIT JRE + TrollStore) avoids this and is the chosen path.
