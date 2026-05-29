@@ -1,0 +1,48 @@
+name: HelloShell
+options:
+  bundleIdPrefix: dev.audaro
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    TARGETED_DEVICE_FAMILY: "1"          # iPhone
+    ENABLE_BITCODE: NO
+    SWIFT_VERSION: "5.0"
+    CLANG_ENABLE_OBJC_ARC: YES
+    # Let the resign-jre build phase write into the .app.
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+targets:
+  HelloShell:
+    type: application
+    platform: iOS
+    sources:
+      - path: HelloShell
+      # The verified Amethyst jre21 (gitignored, ~24MB) — copied verbatim into
+      # the .app as `jre/` (folder reference; Xcode must NOT treat it as linked
+      # frameworks). Re-signed by scripts/resign-jre.sh after this copy.
+      - path: ../dev-tools/jre
+        type: folder
+        buildPhase: resources
+      - path: jvm-resources/Hello.jar
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.audaro.helloshell
+        INFOPLIST_FILE: HelloShell/Info.plist
+        CODE_SIGN_ENTITLEMENTS: HelloShell/HelloShell.entitlements
+        CODE_SIGN_STYLE: Automatic
+        # DEVELOPMENT_TEAM: <set in Xcode to your free Apple ID team>
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        # Hello has no Obj-C/Swift dylib deps of its own; the JRE is dlopen'd at runtime.
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/Frameworks"
+    postBuildScripts:
+      - script: "\"${SRCROOT}/scripts/resign-jre.sh\""
+        name: "Re-sign embedded JRE"
+        basedOnDependencyAnalysis: false
+        # Runs after Copy Bundle Resources, before Xcode's final app signing.

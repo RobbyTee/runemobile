@@ -17,3 +17,9 @@ app/**/build/
 app/**/DerivedData/
 *.xcuserstate
 xcuserdata/
+
+# xcodegen output (regenerate with `xcodegen generate`; project.yml is source of truth)
+app/*.xcodeproj/
+
+# Java payload build dir (Hello.jar itself IS committed — small, deterministic)
+app/jvm-resources/classes/
