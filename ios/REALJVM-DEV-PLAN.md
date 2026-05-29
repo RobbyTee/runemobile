@@ -192,15 +192,33 @@ first-run setup (token mint). **Deliverable:** installable IPA. (No App Store �
 5. **Maintenance:** RuneLite + plugins + gamepack move weekly — mitigated because **real RuneLite self-updates the gamepack** (vs our pinned hand-coded harness).
 6. **Apple/distribution:** sideload-only forever; no App Store.
 
-## Open review item (pre-build)
-`ios/AUDIT-BRIEF-platform-feasibility.md` is an adversarial review brief for the three uncertain platform
-assumptions: **(1)** AWT-on-iOS via Caciocavallo actually rendering OSRS + RuneLite overlays, **(2)** RuneLite
-running headless without a deep fork, **(3)** gate sequencing. Early evidence (in the brief): RuneLite composites
-game + overlays into one offscreen `BufferedImage` (`callback/Hooks.java:168/412/477`), so there **is** a clean
-capture seam — but `ClientUI`/Swing/EDT coupling is **deeper than first assumed** (~115 `SwingUtilities.invoke*`,
-system tray, `GraphicsEnvironment`). **Likely resequencing to validate before committing:** make the *first* gate
-a **desktop CACIO + headless-RuneLite + overlay-capture proof** (zero iOS) — it tests the product premise cheapest.
-Resolve the brief before/alongside Phase 0.
+## Audit outcome & resequencing (RESOLVED 2026-05-29)
+`ios/AUDIT-BRIEF-platform-feasibility.md` was reviewed adversarially. Verdicts: **Claim 1** (AWT-on-iOS
+renders overlays) UNPROVEN; **Claim 2** (RuneLite headless) UNPROVEN and *deeper than "a few seams"* — the
+honest minimum is a **real CACIO EDT + a purpose-built `ClientUI` replacement**, not a casual mock; **Claim 3**
+(sequencing) REFUTED-as-sequenced → the first product-killing gate must be the **desktop CACIO + headless
+RuneLite + overlay-capture** proof, with device JIT run **in parallel**, not first.
+
+**Corrections baked in:**
+- **Use `java.awt.headless=false` + a CACIO toolkit, NOT `java.awt.headless=true`.** Java headless mode selects
+  the headless toolkit and throws for display-dependent APIs; CACIO needs its own toolkit active (`CTCToolkit`/
+  `CTCGraphicsEnvironment` on desktop), installed *before* AWT init. This is a "virtual display" architecture.
+- Coupling numbers (this checkout): ~**104** `SwingUtilities.invoke*` across **47** files; ~**86** plugin files
+  import Swing. **Plugins start *before* `clientUI.show()`** (correcting the brief's "after").
+- StikDebug latest is **3.1.3** (not 3.1.2); iOS 26 JIT support is **limited** per SideStore docs — keep Phase 1
+  as the parallel JIT gate.
+
+**Corrected gate order (cheapest-kills-first):**
+1. **Gate 1a/1b — desktop CACIO overlay smoke ✅ DONE (GREEN).** `dev-tools/cacio-smoke/`: RuneLite's overlay
+   draw ops render to a buffer with no window, on plain headless **and** under the live CACIO CTC toolkit; cacio
+   runs on JDK 21. **Caveat:** desktop `BufferedImage`/`CFontManager` are toolkit-independent, so this settles
+   **Claim 2** + overlay-code portability, **not** the iOS native font/2D rasterizer (Claim 1's iOS half → rides
+   to Phase 3). See `FINDINGS.md` "Desktop CACIO overlay gate".
+2. **Gate 1c — desktop headless RuneLite (next).** Stub `ClientUI` + real CACIO EDT + 2–3 overlay plugins;
+   capture `mainBufferProvider.getImage()` to PNG. The real attack on Claim 2's long pole. = Phase 2 below.
+3. **Device HotSpot/JIT microbench** (`-XX:+PrintCompilation` vs `-Xint`) — **parallel** to 1c. = Phase 1.
+4. Merge: same headless RuneLite fork on the device JVM. = Phase 3.
+5. Soak: memory, JIT persistence, weekly gamepack update. = Phase 7.
 
 ## Definition of done
 Self-contained sideloaded iOS app: launch → Jagex login → in-game on **live OSRS**, **touch controls + Jagex-Mobile-style UI**, **RuneLite plugins** toggle/config natively with overlays composited, **playable FPS**, stable for hours, surviving a weekly game update — **no host, no desktop, no streaming.**

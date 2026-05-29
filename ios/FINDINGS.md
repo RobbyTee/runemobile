@@ -29,6 +29,30 @@ Same Java-8 bytecode on both VMs, same Mac (`dev-tools/jvmbench/`):
 - The 12× floor is floatbits — a native dispatch miniJVM's JIT can't intrinsify (matches the profiling).
 ⇒ The faithful software renderer has massive headroom on a real JVM. (Full numbers: `dev-tools/jvmbench/RESULTS.md`.) Also: desktop RuneLite already runs this exact gamepack smoothly — the perf risk is low; the risk is iOS **packaging**, not speed.
 
+## Desktop CACIO overlay gate (Gate 1a/1b) — GREEN, with a load-bearing caveat (2026-05-29)
+The platform-feasibility audit's cheapest test, run in `dev-tools/cacio-smoke/`: render a representative
+slice of RuneLite's Java2D overlay surface (RuneScape TTFs via `registerFont`; `TextComponent` shadow/
+outline/`<col>` tags via `FontMetrics`; `OverlayUtil` `Polygon` draw+alpha-fill + `BasicStroke`; `fillOval`;
+`AffineTransform`; `drawImage` blit; `setClip`; `AlphaComposite`) to a PNG with **no window**.
+- **Result:** renders correctly on plain headless OpenJDK 21 **and** under the live CACIO CTC toolkit
+  (`CTCToolkit`/`CTCGraphicsEnvironment`). cacio-tta **1.18 runs on JDK 21** (built for 17). Output is
+  **pixel-identical** between the two (`maxChannelDelta=0`).
+- **The caveat (correction to the audit):** on desktop, `BufferedImage` `Graphics2D` is `SunGraphics2D`
+  over `BufferedImageGraphicsConfig` and the glyph rasterizer is `sun.font.CFontManager` — **both chosen by
+  platform, independent of the AWT toolkit.** CACIO's CTC swaps the *windowing/peer* layer, not the
+  BufferedImage rasterizer or font scaler (hence the byte-identical output). So the desktop test **settles
+  Claim 2** (RuneLite overlays render to a buffer headless; overlay code is toolkit-portable) and proves
+  cacio runs on JDK 21 + survives a swapped GraphicsEnvironment — but it **does NOT settle the iOS half of
+  Claim 1** (does the *iOS JRE's* native font/2D rasterizer render these ops). Those natives only run on
+  arm64-iOS → that risk rides to Phase 3 (device). Bounded: overlay code is plain Java2D, and the gamepack's
+  software rasterizer writes int[] directly (no font/2D).
+- **Activation gotcha:** bare `-Dawt.toolkit=...CTCToolkit` **silently falls back** to the native toolkit.
+  CACIO installs before AWT init only via `@ExtendWith(CacioExtension.class)` (byte-buddy self-attach →
+  needs `-Djdk.attach.allowAttachSelf=true` on JDK 21, plus the `--add-exports/--add-opens` set).
+- **iOS CACIO is a different artifact:** the desktop test uses `CaciocavalloSilano:cacio-tta` (headless
+  Swing-test backend). The iOS/arm64 backend is the **PojavLauncherTeam/caciocavallo** fork (GPLv3 — patterns
+  only) — that's the W1 dependency, and the one whose 2D/font natives Phase 3 must actually validate.
+
 ## Platform findings (OpenJDK-on-iOS) — the traps
 - **Two different "OpenJDK on iOS" worlds.** The *official* OpenJDK Mobile port is **Zero-interpreter-only (NO JIT)** on iOS-arm64 by design (Apple bans runtime codegen). The **PojavLauncher path is JIT-enabled HotSpot**, made legal via sideload + `com.apple.security.get-task-allow` + debugger-attach → kernel `CS_DEBUGGED` (suppresses the signing kill on JIT pages). **We want the Pojav path.** Picking the official port silently caps you at interpreter speed.
 - **iOS Simulator runs under macOS rules, not device AMFI** → JIT works there permissively, but a simulator app needs a `*-ios-simulator`-triple build of the JVM (nobody ships one). **Device-first** (Pojav's prebuilt JIT JRE + TrollStore) avoids this and is the chosen path.
