@@ -20,6 +20,16 @@ every request (the code cache grows during the run).
 It uses only StikDebug's documented builtins (`get_pid`, `send_command`, `prepare_memory_region`, `log`),
 the GDB remote protocol, and the AArch64 BRK encoding — no app-side native glue required.
 
+### Why it ALSO maps on fault (not just brk #0x69)
+On-device disassembly showed libjvm's brk path lives in `os::pd_reserve_memory(size, executable)` →
+`get_debug_jit_mapping`, gated behind `MirrorMappedCodeCache==1 && DeviceRequiresTXMWorkaround()`. That TXM
+check reads `/private/preboot/.../Ap,TrustedExecutionMonitor.img4`, which the **app sandbox can't open**, so it
+returns 0 → libjvm falls back to `mmap(PROT_READ|PROT_EXEC)`, which on TXM is **not actually executable** →
+HotSpot jumps into it and takes an instruction-abort. The first device run showed exactly this (faults at
+generated-code PCs, never a `brk #0x69`). So the script handles **both**: real `brk #0x69` requests *and*
+instruction-abort faults — on a fault it calls `prepare_memory_region` for the faulting 16 KB page and retries
+(continue without re-delivering the signal), turning the debugger into the on-demand RX mapper.
+
 ## Install + assign (on the iPhone)
 1. Get `runelite-jit.js` onto the phone and into StikDebug's scripts:
    - AirDrop the file to the iPhone, or

@@ -54,9 +54,11 @@ function brkImm(instrHex) {
 
 log(`[rl-jit] attaching to pid ${pid}`);
 send_command(`vAttach;${pid.toString(16)}`);
-log(`[rl-jit] attached; waiting for HotSpot brk #0x69 (BreakGetJITMapping) …`);
+log(`[rl-jit] attached; servicing HotSpot code-cache (brk #0x69 + map-on-fault) …`);
 
 let served = 0;
+let faulted = 0;
+const FAULT_CAP = 4000;   // generous: the interpreter+stubs touch many 16 KB pages
 while (true) {
     const stop = send_command(`c`);                 // continue; returns on next stop
     if (!stop || stop.length === 0) { continue; }
@@ -76,11 +78,22 @@ while (true) {
     const imm = brkImm(instr);
 
     if (imm !== 0x69) {
-        // Not our breakpoint — re-deliver the signal so the app sees the real event.
-        log(`[rl-jit] non-0x69 stop at pc 0x${pc.toString(16)} (instr ${instr}, brk ${imm})`);
-        const sig = /^T([0-9a-f]{2})/.exec(stop);
-        if (sig) send_command(`vCont;S${sig[1]}:${tid}`);
-        continue;
+        // Not a brk. On this jre21, libjvm's brk #0x69 path is gated behind an
+        // in-sandbox TXM check (DeviceRequiresTXMWorkaround reads /private/preboot,
+        // which the app can't), so it falls back to mmap(PROT_READ|PROT_EXEC) — a
+        // page that is NOT actually executable on TXM. HotSpot jumps into it and we
+        // get an instruction-abort here. Make that page executable and retry rather
+        // than forwarding the (fatal) signal.
+        const PAGE = 0x4000n;                        // iOS 16 KB pages
+        const base = pc & ~(PAGE - 1n);
+        const pr = prepare_memory_region(Number(base), Number(PAGE));
+        faulted++;
+        log(`[rl-jit] fault@0x${pc.toString(16)} instr=${instr} -> map RX page 0x${base.toString(16)} (prepare=${pr})`);
+        if (faulted > FAULT_CAP) {
+            log(`[rl-jit] fault cap (${FAULT_CAP}) hit — giving up to avoid a loop`);
+            break;
+        }
+        continue;                                    // loop re-issues `c` (no signal) -> retry instruction
     }
 
     const size = reg(stop, "00");                    // BreakGetJITMapping(size_t bytes): size in x0
