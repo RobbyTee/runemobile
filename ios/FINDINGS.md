@@ -232,6 +232,38 @@ easy part; the deep unknown is the iOS-26 TXM JIT enablement.** Distilled so we 
   A–E: re-sign vs bypass; always-attached vs JS-script; minimal JLI args; free-cert entitlements; wait-for-JIT
   ordering). Matches the established brief→review→build rhythm.
 
+### W1 shell — built + run on device (2026-05-29): Claim A SUPPORTED, Claim B fully REFUTED
+Built the minimal Hello shell (`ios/app/`, xcodegen; commits f9fcbfd5c + ___clear_cache→`sys_icache_invalidate`
+fix 1274d5678) and ran it on the iPhone 17 Pro Max (iOS 26.5, TXM) with StikDebug attached (`CS_DEBUGGED` set)
+AND an iOS-26 JIT script assigned to our app. Results from `Documents/hello-shell.log`:
+- **Claim A — re-sign avoids the dyld bypass: SUPPORTED (proven on device).** With the build-phase re-sign of
+  every Mach-O in the embedded `jre/` (`scripts/resign-jre.sh`, signed *Apple Development: jordansimps@me.com*,
+  team 5NZ6CPA994), a **plain `dlopen(libjli.dylib)` succeeded and `JLI_Launch` resolved** — no
+  `dyld_bypass_validation` needed. iOS library validation accepts the re-signed JRE dylibs. (Device build also
+  carries `get-task-allow=true` + `increased-memory-limit=true`, confirming Claim D.)
+- **Claim B — assigned StikDebug script alone is enough: FULLY REFUTED.** Even with the universal script assigned
+  to HelloShell, the app crashes the instant `JLI_Launch` starts VM init (last log line: "calling JLI_Launch").
+  **Cause (clean-room mechanism study of Amethyst, 2026-05-29):** the assigned `UniversalJIT26.js` is only the
+  *framework* (debugger main loop + GDB-packet parsing + StikDebug's `prepare_memory_region` stdlib). The per-app
+  handler for HotSpot's `brk #0x69` code-cache request is **injected at runtime by the APP's native glue**, which
+  our shell never did. So HotSpot's first code-cache mapping request hit an unhandled breakpoint → crash.
+- **The required app-side TXM JIT26 glue (runs BEFORE `JLI_Launch`), distilled:**
+  1. `brk #0x69` handshake → expect magic `0x690000E0` in x0 (StikDebug-present check).
+  2. Inject the **extension script** via `mov x16,#2; brk #0xf00d` (x0=script ptr, x1=len) — installs
+     `legacyCommands[0x69]` → `JIT26PrepareRegion` → StikDebug `prepare_memory_region(addr,len)`.
+  3. Set detach-after-first-break via `mov x16,#3; brk #0xf00d` (x0=flag).
+  4. `task_set_exception_ports(mach_task_self(), EXC_MASK_BAD_ACCESS, 0, EXCEPTION_DEFAULT, ...)`.
+  5. then `-XX:+MirrorMappedCodeCache` JVM launch — HotSpot writes RW / executes RX mirror; unmapped mirror → it
+     emits `brk #0x69`, StikDebug's injected handler maps the RX region and writes the addr back to x0.
+  Protocol constants: break codes `0x69` (region request) + `0xf00d` (x16-dispatched command bus); magic
+  `0x690000E0`; x16 cmds 0=detach 1=prepareRegion 2=newBreakpoints 3=setDetachAfterBr 4=prepareForPatching.
+  `prepare_memory_region` is a **StikDebug stdlib** fn (version-coupled; StikDebug 3.1.x).
+- **Licensing fork (open):** the brk stubs + protocol are interface (clean-room-able), but the JS scripts
+  (`UniversalJIT26.js` framework + `…Extension.js` handler) are Amethyst's GPLv3 IP. Need to either reimplement
+  the extension clean-room (small; the 0x69 handler) and rely on a base script StikDebug/community provides, or
+  reimplement both. **Open Q being investigated:** does StikDebug 3.1.3 ship a built-in universal JIT script (so
+  we write only our small extension), or is the whole framework an Amethyst artifact we must rewrite?
+
 ## Product / legal reality (decisive for scope)
 - The **official OSRS Mobile app** already provides the game + touch + mobile UI. The *only* gap we're filling is **RuneLite plugins**, which require running real RuneLite (⇒ a JVM).
 - **Jagex's approved-client list is desktop-only** (official, RuneLite, HDOS, OSBuddy). A self-built iOS client is an **unapproved third-party client on live OSRS → ban risk** (2-week → permanent), **not shippable to others** (Jagex takedown + Apple won't carry + users banned). The build is therefore **personal / technical-achievement; throwaway account only.**
