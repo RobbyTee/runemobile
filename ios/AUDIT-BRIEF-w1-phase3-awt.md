@@ -29,11 +29,15 @@
 >   the GE swap (`StaticOnlyProbe`: `CacioExtension.static{}` alone → CTC ACTIVE, no throw). The
 >   "schema change" exception was only the redundant 2nd `inject()` call in the agent harness.
 >
-> **NEXT:** §6.0 desktop is DONE. The only §6.0 remainder is ONE short device run of `UnsafePokeActivation` on
-> the iOS `jre21` — confirm the forced `LocalGE.<clinit>` (which runs that JRE's throwaway
-> `PlatformGraphicsInfo.createGE()` before we clobber `INSTANCE`) does not crash/hang. Then §6.1 `AwtSmoke`
-> (peer realization + fake-`libawt_xawt` + pixels/fonts) on device. (Simulator can't load the device-triple
-> `libjvm` — settled trap.)
+> **NEXT (device run DONE, 2026-05-30 — read `AUDIT-ASK-w1-phase3-device.md` + `app/PHASE3-DEVICE-STATUS.md` FIRST):**
+> §6.0 desktop is DONE. On device, JIT/signing/install work, but the recipe's forced `LocalGE.<clinit>` hits the
+> iOS jre21's `PlatformGraphicsInfo.createGE()` → `new X11GraphicsEnvironment()` → native
+> `X11GraphicsEnvironment.initDisplay(boolean)` (no X server on iOS) → `UnsatisfiedLinkError`; `AWT-ACTIVATION =
+> FAILED`. (3 fake-xawt rounds got here: libawt_xawt missing → JNI stub → `Font.initIDs` missing →
+> `libawt_xawt`=`libawt_headless` copy → now the X11GE init wall.) **OPEN ARCHITECTURAL FORK for the audit:**
+> keep the Unsafe-poke + stub the `X11GraphicsEnvironment` natives, OR pivot to Amethyst's `CTCPreloadClassLoader`
+> path that never forces the platform `createGE()`. See `AUDIT-ASK-w1-phase3-device.md`. (Simulator can't load
+> the device-triple `libjvm` — settled trap.)
 >
 > **PROCESS RULE (I broke it twice, then fixed it):** never write a GREEN/PASS/ACTIVE verdict before reading the
 > captured output. This session I committed mode (e) as SOLVED **twice** while the code was still broken (the
