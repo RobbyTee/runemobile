@@ -272,11 +272,24 @@ kills the process); real RuneLite never returns from main so it won't self-termi
   catches each instruction-abort, `prepare_memory_region(faultPage,16KB)`, and continues (NO signal re-deliver).
   Our first script wrongly forwarded the fault as a signal → killed the VM; the fix made it the on-demand RX
   mapper. (Kept the `brk #0x69` handler too, in case the gate is ever satisfied.)
-- **W1 platform crux RETIRED on our own app** (not just the Amethyst oracle): free-cert sign + re-signed ad-hoc
-  jre21 dylibs (no dyld bypass) + `get-task-allow`/`increased-memory-limit` + StikDebug `CS_DEBUGGED` +
-  map-on-fault JIT script = JIT-enabled HotSpot running our Java on iOS 26.5 TXM. Next: swap `Hello` →
-  `JitProbe`/`Bench`/`GlyphSmoke` (`dev-tools/jvmbench/`) for the definitive JIT numbers + the iOS rasterizer
-  smoke, then on to W1 Phase 3 (AWT backend) for RuneLite.
+- **Map-on-fault was the WRONG mechanism (dead-end), replaced by patched brk #0x69.** The first "green" run
+  used a map-on-fault script (make each faulting code page RX). It reached a JIT-active verdict but then
+  **looped on `brk #0x1` (HotSpot `ShouldNotReachHere`)** every ~10s until the script's fault cap → crash.
+  Hitting `ShouldNotReachHere` means map-on-fault doesn't reliably set up the RW↔RX **mirror** — it makes pages
+  executable but the mirror content/control-flow is wrong. The fix is to use HotSpot's **designed** path:
+  `os::pd_reserve_memory(exec)` → `get_debug_jit_mapping` → `BreakGetJITMapping` (`brk #0x69`), which asks the
+  debugger for ONE properly-mirrored RX region. That path is gated behind `MirrorMappedCodeCache==1 &&
+  DeviceRequiresTXMWorkaround()`; the latter reads `/private/preboot` (sandbox-blocked) → returns 0 → fallback.
+  **`dev-tools/patch-jre-txm.sh` NOPs the `DeviceRequiresTXMWorkaround` gate (`cbz w0` @ file 0x81fc8c → nop),
+  leaving the MirrorMapped flag check intact**, so the brk path engages on TXM. `runelite-jit.js` rewritten:
+  brk #0x69 = allocate RX (`_M size,rx`) + `prepare_memory_region` + return addr (primary); fetch-abort faults
+  deduped-and-mapped once (no loop); any real HotSpot brk (`#0x1`) or re-fault forwarded to the VM. App also
+  passes `-XX:ReservedCodeCacheSize=64m` to bound the reservation. **Patch is REQUIRED per-machine** after
+  fetching the JRE (see JRE21-INVENTORY).
+- **W1 platform crux essentially retired on our own app** (free-cert sign + re-signed ad-hoc jre21 dylibs, no
+  dyld bypass + `get-task-allow`/`increased-memory-limit` + StikDebug `CS_DEBUGGED` + patched-libjvm brk #0x69 +
+  JIT script). Pending the clean re-run to confirm `Hello.main` completes + clean exit, then: swap `Hello` →
+  `JitProbe`/`Bench`/`GlyphSmoke` for definitive JIT numbers + iOS rasterizer smoke, then W1 Phase 3 (AWT).
 
 ### W1 shell — earlier device run (2026-05-29): the licensing/mechanism notes that led here
 - **Licensing fork (resolved):** the brk stubs + protocol are interface (clean-room-able), but the JS scripts

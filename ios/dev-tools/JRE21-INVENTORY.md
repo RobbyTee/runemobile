@@ -18,7 +18,17 @@ cd ios/dev-tools/jre   # gitignored
 curl -fSL -o jre21-ios-aarch64.zip 'https://crystall1ne.dev/cdn/amethyst-ios/jre21-ios-aarch64.zip'
 shasum -a 256 jre21-ios-aarch64.zip   # must equal the pin above
 unzip -o jre21-ios-aarch64.zip && tar -xf jre21-ios-arm64-*-release.tar.xz
+cd ../.. && ios/dev-tools/patch-jre-txm.sh    # REQUIRED: see below
 ```
+
+## REQUIRED patch — TXM brk #0x69 gate (`patch-jre-txm.sh`)
+On a sandboxed iOS app, libjvm's `get_debug_jit_mapping` skips the debugger `brk #0x69` code-cache path because
+`DeviceRequiresTXMWorkaround()` can't read `/private/preboot/.../TrustedExecutionMonitor.img4` (sandbox) and
+returns 0 → it falls back to `mmap(PROT_READ|PROT_EXEC)`, which is **non-executable on TXM** → HotSpot crashes
+generating code. `dev-tools/patch-jre-txm.sh` NOPs that gate (`cbz w0` at file offset **0x81fc8c**, verified
+`e0 01 00 34` → `1f 20 03 d5`), leaving the `MirrorMappedCodeCache` flag check intact. The app build phase
+(`resign-jre.sh`) re-signs the patched dylib. Idempotent; verifies the original bytes before patching.
+See FINDINGS "W1 shell — GREEN on device".
 
 ## Layout (after extract)
 `bin/java` (52 KB launcher) · `conf/` · `legal/` · `lib/` with `lib/libjli.dylib` (the JLI entry) and

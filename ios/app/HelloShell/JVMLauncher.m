@@ -124,6 +124,9 @@ static void resetSignalHandlers(void) {
     [args addObject:@"-XX:+DisablePrimordialThreadGuardPages"];
     // Free cert has no extended-virtual-addressing -> shrink the heap VA reqs.
     [args addObject:@"-XX:-UseCompressedClassPointers"];
+    // Bound the code cache so the brk #0x69 RX reservation stays small (Hello needs
+    // little; the StikDebug script allocates the requested size via _M …,rx).
+    [args addObject:@"-XX:ReservedCodeCacheSize=64m"];
 
     [args addObject:[NSString stringWithFormat:@"-Djava.home=%@", javaHome]];
     [args addObject:[NSString stringWithFormat:@"-Djava.library.path=%@", frameworks]];
