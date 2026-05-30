@@ -34,9 +34,9 @@ echo "== compile Phase-1 probes (javac $JFLAGS) =="
 "$JAVAC" $JFLAGS -d "$OUT" \
   "$JVMBENCH/JitProbe.java" "$JVMBENCH/Bench.java" "$JVMBENCH/GlyphSmoke.java"
 
-echo "== compile §6.0 activation probes (javac $JFLAGS, cacio on cp) =="
+echo "== compile §6.0 activation + §6.1 smoke probes (javac $JFLAGS, cacio on cp) =="
 "$JAVAC" $JFLAGS -cp "$CACIO_CP" -d "$OUT" \
-  "$AWTSMOKE/AwtActivation.java" "$AWTSMOKE/UnsafePokeActivation.java"
+  "$AWTSMOKE/AwtActivation.java" "$AWTSMOKE/UnsafePokeActivation.java" "$AWTSMOKE/AwtSmoke.java"
 
 echo "== pack $JARFILE =="
 "$JAR" cf "$JARFILE" -C "$OUT" .

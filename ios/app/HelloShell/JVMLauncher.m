@@ -184,17 +184,17 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (rc != JNI_OK || !vm || !env) { log([NSString stringWithFormat:@"[jvm] FATAL JNI_CreateJavaVM rc=%d", rc]); return -14; }
     log(@"[jvm] JavaVM created — HotSpot is up. Running probes…");
 
-    // W1 P3 §6.0 device confirm: run UnsafePokeActivation ALONE on a pristine AWT state
-    // (faithful to the desktop run). Greppable verdict in jvm-stdio.log:
-    //   "AWT-ACTIVATION = CTC ACTIVE"  -> §6.0 de-risked on device, proceed to §6.1
-    //   "AWT-ACTIVATION = FAILED"      -> read the trace (likely LocalGE.<clinit> /
-    //                                     PlatformGraphicsInfo.createGE on the iOS jre21)
-    // Restore the Phase-1 set with:
-    //   callMain(env, "JitProbe", @[], log);
-    //   callMain(env, "Bench", @[], log);
-    //   callMain(env, "GlyphSmoke", @[glyphPng], log);
+    // W1 P3 §6.1 device smoke: AwtSmoke activates CTC via UnsafePokeActivation (§6.0, device-GREEN),
+    // then realizes a Frame+Canvas and asserts Canvas.getGraphics() non-null + CTC pixel/font readback.
+    // Greppable verdicts in jvm-stdio.log:
+    //   "AWT-ACTIVATION = CTC ACTIVE"  (§6.0 still holds)
+    //   "AWT-SMOKE = CANVAS+CTC OK"    -> §6.1 green on device, proceed to the real-RuneLite buffer smoke
+    //   "AWT-SMOKE = FAILED"           -> read the per-gate FAIL line (Canvas peer / getGraphics / fonts)
+    // The PNG (args[0]) lands in Documents for an eyeball A/B (pull via devicectl).
+    // Earlier probe sets: UnsafePokeActivation alone (§6.0); JitProbe/Bench/GlyphSmoke (Phase-1).
+    NSString *awtPng = [docs stringByAppendingPathComponent:@"awt-smoke.png"];
     (void)glyphPng;
-    callMain(env, "UnsafePokeActivation", @[], log);
+    callMain(env, "AwtSmoke", @[awtPng], log);
 
     (*vm)->DestroyJavaVM(vm);
     log(@"[jvm] DestroyJavaVM done.");
