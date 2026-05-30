@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Build probes.jar and stage it into the app bundle. Compiled `--release 8` so the device
+# JDK 21 loads them (same as the desktop A/B).
+#
+# Contents:
+#   - Phase-1 probes (jvmbench): JitProbe, Bench, GlyphSmoke
+#   - W1 P3 §6.0 activation confirm (awtsmoke): AwtActivation + UnsafePokeActivation
+#   - the CACIO cacio17 classes (cacio-tta + cacio-shared 1.18) FOLDED IN, so the device
+#     classpath stays just probes.jar (no extra jars to bundle/plumb). GPLv3 jars used as-is
+#     for a LOCAL device test only (same jars we run on desktop) — not distributed.
+#
+# Usage: ./build-probes.sh   (run from ios/app/)
+set -euo pipefail
+cd "$(dirname "$0")"
+
+JAVAC="${JAVAC:-/opt/homebrew/opt/openjdk@21/bin/javac}"
+JAR="${JAR:-/opt/homebrew/opt/openjdk@21/bin/jar}"
+JFLAGS="--release 8"
+JVMBENCH=../dev-tools/jvmbench
+AWTSMOKE=../dev-tools/awtsmoke
+CACIO_LIB=../dev-tools/cacio-smoke/lib
+CACIO_CP="$CACIO_LIB/cacio-tta-1.18.jar:$CACIO_LIB/cacio-shared-1.18.jar"
+OUT=build/probes-classes
+JARFILE=HelloShell/Resources/probes.jar
+
+rm -rf "$OUT"; mkdir -p "$OUT" "$(dirname "$JARFILE")"
+
+echo "== fold in CACIO classes =="
+( cd "$OUT" && unzip -oq "$OLDPWD/$CACIO_LIB/cacio-tta-1.18.jar" -x 'META-INF/*' \
+                      && unzip -oq "$OLDPWD/$CACIO_LIB/cacio-shared-1.18.jar" -x 'META-INF/*' )
+
+echo "== compile Phase-1 probes (javac $JFLAGS) =="
+"$JAVAC" $JFLAGS -d "$OUT" \
+  "$JVMBENCH/JitProbe.java" "$JVMBENCH/Bench.java" "$JVMBENCH/GlyphSmoke.java"
+
+echo "== compile §6.0 activation probes (javac $JFLAGS, cacio on cp) =="
+"$JAVAC" $JFLAGS -cp "$CACIO_CP" -d "$OUT" \
+  "$AWTSMOKE/AwtActivation.java" "$AWTSMOKE/UnsafePokeActivation.java"
+
+echo "== pack $JARFILE =="
+"$JAR" cf "$JARFILE" -C "$OUT" .
+
+echo "== done =="
+ls -la "$JARFILE"
+echo "classes:"; "$JAR" tf "$JARFILE" | grep -E 'UnsafePokeActivation|AwtActivation\.class|ctc/CTCToolkit' || true
