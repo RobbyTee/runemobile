@@ -6,6 +6,7 @@
 #import <sys/mman.h>
 #import <mach/mach.h>
 #import <libkern/OSCacheControl.h>
+#import "jni/jni.h"
 
 // --- csops / CS_DEBUGGED (private; same probe Amethyst/StikDebug rely on) -----
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
@@ -16,16 +17,12 @@ extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 #define CS_DEBUGGED 0x10000000
 #endif
 
-// --- JLI_Launch signature (jni-free; jboolean=u8, jint=int) -------------------
-typedef unsigned char jli_bool;
-typedef int           jli_int;
-typedef jli_int (*JLI_Launch_t)(int argc, char **argv,
-                                int jargc, const char **jargv,
-                                int appclassc, const char **appclassv,
-                                const char *fullversion, const char *dotversion,
-                                const char *pname, const char *lname,
-                                jli_bool javaargs, jli_bool cpwildcard,
-                                jli_bool javaw, jli_int ergo);
+// We embed via the JNI Invocation API (JNI_CreateJavaVM), NOT JLI_Launch. The iOS
+// JRE launcher's first-thread dance (libjli apple_main -> re-invokes our main() ->
+// UIApplicationMain -> "There can only be one UIApplication instance") makes
+// JLI_Launch unusable from inside an existing UIKit app; JNI_CreateJavaVM creates
+// the VM in-process on this thread with no launcher threading.
+typedef jint (*CreateJavaVM_t)(JavaVM **pvm, void **penv, void *args);
 
 @implementation JVMLauncher
 
@@ -88,80 +85,81 @@ static void resetSignalHandlers(void) {
     if (!javaHome) { log(@"[jvm] FATAL: embedded jre not found in bundle"); return -10; }
     log([NSString stringWithFormat:@"[jvm] JAVA_HOME = %@", javaHome]);
 
-    NSString *libjli = [javaHome stringByAppendingPathComponent:@"lib/libjli.dylib"];
     NSString *jarPath = [[NSBundle mainBundle] pathForResource:@"Hello" ofType:@"jar"];
     if (!jarPath) { log(@"[jvm] FATAL: Hello.jar not found in bundle"); return -11; }
-
-    // JAVA_HOME must be set so HotSpot finds its modules/libs.
-    setenv("JAVA_HOME", javaHome.UTF8String, 1);
-
-    // The iOS JRE launcher otherwise runs main() on a second thread and tries to own
-    // the GUI main thread by creating a UIApplication -> "There can only be one
-    // UIApplication instance" (we already have one). libjli skips that whole dance if
-    // this env var is merely present (getenv != NULL); confirmed in libjli disasm.
-    setenv("HACK_IGNORE_START_ON_FIRST_THREAD", "1", 1);
-
-    // the W1-audit Claim A is an EXPERIMENT: try the clean dlopen first. If iOS
-    // library validation rejects the re-signed (or ad-hoc) dylib, dlerror()
-    // tells us the bypass is mandatory.
-    log([NSString stringWithFormat:@"[jvm] dlopen %@", libjli]);
-    void *h = dlopen(libjli.UTF8String, RTLD_NOW | RTLD_GLOBAL);
-    if (!h) {
-        log([NSString stringWithFormat:@"[jvm] FATAL dlopen(libjli): %s", dlerror()]);
-        log(@"[jvm] -> library validation likely rejected it; dyld bypass needed (Claim A REFUTED)");
-        return -12;
-    }
-    JLI_Launch_t JLI_Launch = (JLI_Launch_t)dlsym(h, "JLI_Launch");
-    if (!JLI_Launch) {
-        log([NSString stringWithFormat:@"[jvm] FATAL dlsym(JLI_Launch): %s", dlerror()]);
-        return -13;
-    }
-    log(@"[jvm] JLI_Launch resolved");
-
     NSString *frameworks = [[NSBundle mainBundle].bundlePath stringByAppendingPathComponent:@"Frameworks"];
 
-    // argv[0] must be <javaHome>/bin/java (the W1-audit Claim C) so JLI derives paths.
-    NSMutableArray<NSString *> *args = [NSMutableArray array];
-    [args addObject:[javaHome stringByAppendingPathComponent:@"bin/java"]];
+    setenv("JAVA_HOME", javaHome.UTF8String, 1);
 
-    // iOS-26 code cache (Amethyst jre21 patch) + experimental gate.
-    [args addObject:@"-XX:+UnlockExperimentalVMOptions"];
-    [args addObject:@"-XX:+MirrorMappedCodeCache"];
-    [args addObject:@"-XX:+DisablePrimordialThreadGuardPages"];
-    // Free cert has no extended-virtual-addressing -> shrink the heap VA reqs.
-    [args addObject:@"-XX:-UseCompressedClassPointers"];
-    // Bound the code cache so the brk #0x69 RX reservation stays small (Hello needs
-    // little; the StikDebug script allocates the requested size via _M …,rx).
-    [args addObject:@"-XX:ReservedCodeCacheSize=64m"];
-
-    [args addObject:[NSString stringWithFormat:@"-Djava.home=%@", javaHome]];
-    [args addObject:[NSString stringWithFormat:@"-Djava.library.path=%@", frameworks]];
-    [args addObject:@"-cp"];
-    [args addObject:jarPath];
-    [args addObject:@"Hello"];
-
-    int argc = (int)args.count;
-    char **argv = (char **)calloc(argc + 1, sizeof(char *));
-    for (int i = 0; i < argc; i++) {
-        argv[i] = strdup(args[i].UTF8String);
-        log([NSString stringWithFormat:@"[jvm] argv[%d] = %@", i, args[i]]);
+    // dlopen libjvm directly and use the JNI Invocation API (no launcher). Claim A
+    // (re-signed ad-hoc dylibs load via plain dlopen, no dyld bypass) still holds.
+    NSString *libjvm = [javaHome stringByAppendingPathComponent:@"lib/server/libjvm.dylib"];
+    log([NSString stringWithFormat:@"[jvm] dlopen %@", libjvm]);
+    void *h = dlopen(libjvm.UTF8String, RTLD_NOW | RTLD_GLOBAL);
+    if (!h) {
+        log([NSString stringWithFormat:@"[jvm] FATAL dlopen(libjvm): %s", dlerror()]);
+        return -12;
     }
+    CreateJavaVM_t JNI_CreateJavaVM = (CreateJavaVM_t)dlsym(h, "JNI_CreateJavaVM");
+    if (!JNI_CreateJavaVM) {
+        log([NSString stringWithFormat:@"[jvm] FATAL dlsym(JNI_CreateJavaVM): %s", dlerror()]);
+        return -13;
+    }
+    log(@"[jvm] JNI_CreateJavaVM resolved");
+
+    NSArray<NSString *> *opts = @[
+        @"-XX:+UnlockExperimentalVMOptions",
+        @"-XX:+MirrorMappedCodeCache",            // iOS-26 code cache (Amethyst jre21 patch)
+        @"-XX:+DisablePrimordialThreadGuardPages",
+        @"-XX:-UseCompressedClassPointers",       // free cert: no extended-virtual-addressing
+        @"-XX:ReservedCodeCacheSize=64m",         // bound the brk #0x69 RX reservation
+        [NSString stringWithFormat:@"-Djava.home=%@", javaHome],
+        [NSString stringWithFormat:@"-Djava.library.path=%@", frameworks],
+        [NSString stringWithFormat:@"-Djava.class.path=%@", jarPath],
+    ];
+
+    JavaVMOption *vmopts = (JavaVMOption *)calloc(opts.count, sizeof(JavaVMOption));
+    for (NSUInteger i = 0; i < opts.count; i++) {
+        vmopts[i].optionString = strdup(opts[i].UTF8String);
+        vmopts[i].extraInfo = NULL;
+        log([NSString stringWithFormat:@"[jvm] opt[%lu] = %@", (unsigned long)i, opts[i]]);
+    }
+    JavaVMInitArgs vmArgs;
+    vmArgs.version = JNI_VERSION_21;
+    vmArgs.nOptions = (jint)opts.count;
+    vmArgs.options = vmopts;
+    vmArgs.ignoreUnrecognized = JNI_FALSE;
 
     resetSignalHandlers();
-    log(@"[jvm] calling JLI_Launch (HotSpot generates its template interpreter now)…");
+    log(@"[jvm] JNI_CreateJavaVM (HotSpot generates its template interpreter now)…");
 
-    int rc = JLI_Launch(argc, argv,
-                        0, NULL,
-                        0, NULL,
-                        "21.0.8", "21.0.8",
-                        "java", "openjdk",
-                        (jli_bool)0,   // javaargs
-                        (jli_bool)1,   // cpwildcard
-                        (jli_bool)0,   // javaw
-                        (jli_int)0);   // ergo
+    JavaVM *vm = NULL;
+    JNIEnv *env = NULL;
+    jint rc = JNI_CreateJavaVM(&vm, (void **)&env, &vmArgs);
+    if (rc != JNI_OK || !vm || !env) {
+        log([NSString stringWithFormat:@"[jvm] FATAL JNI_CreateJavaVM rc=%d", rc]);
+        return -14;
+    }
+    log(@"[jvm] JavaVM created — HotSpot is up. Invoking Hello.main…");
 
-    log([NSString stringWithFormat:@"[jvm] JLI_Launch returned %d", rc]);
-    return rc;
+    jclass cls = (*env)->FindClass(env, "Hello");
+    if (!cls || (*env)->ExceptionCheck(env)) { (*env)->ExceptionDescribe(env); log(@"[jvm] FATAL FindClass(Hello)"); return -15; }
+    jmethodID mid = (*env)->GetStaticMethodID(env, cls, "main", "([Ljava/lang/String;)V");
+    if (!mid || (*env)->ExceptionCheck(env)) { (*env)->ExceptionDescribe(env); log(@"[jvm] FATAL GetStaticMethodID(main)"); return -16; }
+    jclass strCls = (*env)->FindClass(env, "java/lang/String");
+    jobjectArray jargs = (*env)->NewObjectArray(env, 0, strCls, NULL);
+
+    (*env)->CallStaticVoidMethod(env, cls, mid, jargs);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);   // -> stderr -> jvm-stdio.log
+        log(@"[jvm] Hello.main threw");
+    } else {
+        log(@"[jvm] Hello.main returned cleanly");
+    }
+
+    (*vm)->DestroyJavaVM(vm);
+    log(@"[jvm] DestroyJavaVM done");
+    return 0;
 }
 
 @end
