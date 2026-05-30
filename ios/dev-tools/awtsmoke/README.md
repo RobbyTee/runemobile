@@ -44,19 +44,26 @@ without correctly seeding that holder triggered `ExceptionInInitializerError` on
 no-instrumentation field-poke is **not yet found** — `FieldPokeActivation.java` stands as the (negative)
 record of why the obvious approach doesn't work.
 
-### Device implication (honest, current)
-The only desktop recipe that works is the **byte-buddy agent** (mode c). It needs the **attach API /
-attach-self** and the byte-buddy `Instrumentation` install — capabilities a stripped mobile JRE may lack
-(note the JVMTI *redefine* itself is non-essential, since it throws yet activation succeeds; what's load-bearing
-is `Instrumentation` install + the unsafe bootstrap class injection). So the open device questions are:
-1. Does the embedded `jre21` ship `jdk.attach` + allow `ByteBuddyAgent.install()` (attach-self)? **Untested.**
-2. Can we instead find the **correct no-instrumentation field-poke** — seed `GraphicsEnvironment$LocalGE`'s
-   actual holder field + `Toolkit.toolkit` + `SurfaceManagerFactory.instance` before AWT init? (Promising,
-   not yet working — the GE holder is the missing piece.)
-3. Or reproduce Amethyst's `CTCPreloadClassLoader` (GPLv3, patterns only) — possibly the no-instrumentation
-   installer that sidesteps both.
+### Device implication — the agent path is OUT (offline finding, 2026-05-29)
+The only desktop recipe that works is the **byte-buddy agent** (mode c), which needs **attach-self**
+(`ByteBuddyAgent.install()` → `VirtualMachine.attach`). **Checked the embedded `jre21` offline — it cannot
+self-attach:**
+- `jdk.attach` is **NOT** in the JRE `release` `MODULES` list, and
+- there is **no `libattach.dylib`** in the image (the native bridge `VirtualMachine.attach` requires on Darwin).
 
-Pick this up before any device build. **Do not assume the agent ports to iOS.**
+(The modules jimage shows ~10 incidental `VirtualMachine`/`jdk/attach` string hits — references baked into
+other modules, not the linked-in module. The absent native lib is decisive regardless.) `java.instrument` IS
+present, but that only enables a `-javaagent` / `Agent_OnAttach` launched agent, not runtime self-attach.
+
+**So the agent path does NOT port to the device.** The device activation MUST be no-instrumentation:
+1. **Correct field-poke** — seed the real `java.awt.GraphicsEnvironment$LocalGE` holder + `Toolkit.toolkit` +
+   `SurfaceManagerFactory.instance` before AWT init. My first attempt (mode d) failed because there is no
+   `localEnv` field; the singleton is in the lazy `LocalGE` holder. **This is desktop-solvable, offline** —
+   the next real experiment.
+2. Or reproduce Amethyst's `CTCPreloadClassLoader` (GPLv3, patterns only).
+
+Do NOT probe the device for attach-self — it's already answered NO offline. The remaining work is a desktop
+Java puzzle (get the no-agent field-poke to activate CTC), then one short confirmation run on the device.
 
 ### Process note (kept deliberately)
 While doing this gate I wrote a confident verdict **before reading the test output four times** (all wrong:
@@ -71,6 +78,8 @@ that. Rule for this dir: **no verdict without the matching captured output line.
 - `run-activation-desktop.sh [a|b|c|d|all]` — the desktop harness.
 
 ## Next
-- Settle the device activation question (the 3 options above) **before** building §6.0-on-device.
+- **Solve the no-agent field-poke on desktop** (seed the `GraphicsEnvironment$LocalGE` holder correctly) →
+  reach `CTC ACTIVE` with no byte-buddy/attach. Offline, no device. This is the gating experiment now that the
+  agent path is ruled out for the device JRE.
 - Then §6.1 `AwtSmoke` (realize `Frame`+`Canvas`, `getGraphics()` non-null, draw + read CTC pixels, fonts;
-  the fake-`libawt_xawt` test); §6.2 RuneLite buffer smoke; §6.3 input; §6.4 bench.
+  the fake-`libawt_xawt` test); §6.2 RuneLite buffer smoke; §6.3 input; §6.4 bench — these need the device.
