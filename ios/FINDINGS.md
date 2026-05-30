@@ -49,6 +49,22 @@ outline/`<col>` tags via `FontMetrics`; `OverlayUtil` `Polygon` draw+alpha-fill 
 - **Activation gotcha:** bare `-Dawt.toolkit=...CTCToolkit` **silently falls back** to the native toolkit.
   CACIO installs before AWT init only via `@ExtendWith(CacioExtension.class)` (byte-buddy self-attach →
   needs `-Djdk.attach.allowAttachSelf=true` on JDK 21, plus the `--add-exports/--add-opens` set).
+- **W1 P3 §6.0 activation — DESKTOP PRE-CHECK done (2026-05-29, `dev-tools/awtsmoke/`). KEY NEGATIVE RESULT.**
+  Measured on OpenJDK 21.0.5 aarch64: **flags-only (property/bootclasspath) selection of CACIO's CTC toolkit
+  FAILS** — `-Dawt.toolkit`/`-Djava.awt.graphicsenv` are NOT honored on JDK 21 (toolkit/GE stay native:
+  `LWCToolkit`/`CGraphicsEnvironment`), with or without `-Xbootclasspath/a` or the JPMS `--add-exports` set.
+  (Confirms the "bare `-Dawt.toolkit` silently falls back" note below; refutes any "two-prop + bootclasspath"
+  recipe.) **The ONLY mechanism that reached `CTC ACTIVE` is the ByteBuddy instrumentation agent:**
+  `CacioExtension.injectCTCGraphicsEnvironment()` (public static — runs WITHOUT JUnit) = `ByteBuddyAgent.install()`
+  (attach-self) → **JVMTI redefine** of `GraphicsEnvironment.getLocalGraphicsEnvironment()` →
+  `ClassInjector$UsingUnsafe` into the bootstrap loader; needs `-Djdk.attach.allowAttachSelf=true` + JPMS +
+  byte-buddy{,-agent} on cp. **Device §6.0 RE-SCOPED (the real risk):** does the embedded `jre21` support
+  (1) the attach API/attach-self (`jdk.attach`, often stripped from mobile JREs) and (2) JVMTI
+  `RedefineClasses`/`RetransformClasses`? If not, the desktop path doesn't port and we need a **no-JVMTI**
+  installer — **strong hypothesis: that's what Amethyst's `CTCPreloadClassLoader` is** (exists because the
+  agent fails on iOS). Investigate before any device build. (Methodology note: I first wrote this up as "GREEN
+  flags-only" *before reading the test output* — every recipe had actually FAILED; corrected after re-running.
+  Probe-first, read-the-output-first.) See `AUDIT-BRIEF-w1-phase3-awt.md` §6/§6b.
 - **iOS CACIO is the SAME artifact lineage (correction, 2026-05-29 P3 review):** earlier notes here said the
   iOS/arm64 backend was the **PojavLauncherTeam/caciocavallo** fork — **WRONG.** That fork is the old
   `net.java.openjdk.cacio` 1.10 / Java-8 tree (only `cacio-shared`+`cacio-androidnw`), unfit for a condy/JDK21
@@ -316,7 +332,7 @@ RW=0x1178b8000, RX=0x1138b8000` → `java.vm.info = mixed mode` → `compileMs 1
      `get_debug_jit_mapping` @ `0x81fc80` + `0x81fc8c`). Confirmed working: `[JIT26] Requesting/Got mapping` +
      the RW≠RX mirror prove HotSpot took the debugger path and `vm_remap`'d a RW mirror of the StikDebug `_M`
      RX region. **map-on-fault is fully abandoned** (the `_M`/brk path gives a real mirror; faults didn't).
-- **The would-be codex questions are answered by this run:** (Q1) debugger-script-only IS sufficient — no
+- **The would-be reviewer questions are answered by this run:** (Q1) debugger-script-only IS sufficient — no
   app-side `JIT26CreateRegion`/`task_set_exception_ports` glue needed, once the gate is patched and we embed via
   JNI; (Q2) the mirror is correct (RW=0x1178b8000 / RX=0x1138b8000, HotSpot makes the RW view itself); (Q3) our
   `brk #0x69` handler (`_M size,rx` → `prepare_memory_region` → return addr) is right. `AUDIT-BRIEF-w1-txm-mirror.md`
