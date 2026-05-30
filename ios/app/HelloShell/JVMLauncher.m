@@ -95,6 +95,12 @@ static void resetSignalHandlers(void) {
     // JAVA_HOME must be set so HotSpot finds its modules/libs.
     setenv("JAVA_HOME", javaHome.UTF8String, 1);
 
+    // The iOS JRE launcher otherwise runs main() on a second thread and tries to own
+    // the GUI main thread by creating a UIApplication -> "There can only be one
+    // UIApplication instance" (we already have one). libjli skips that whole dance if
+    // this env var is merely present (getenv != NULL); confirmed in libjli disasm.
+    setenv("HACK_IGNORE_START_ON_FIRST_THREAD", "1", 1);
+
     // the W1-audit Claim A is an EXPERIMENT: try the clean dlopen first. If iOS
     // library validation rejects the re-signed (or ad-hoc) dylib, dlerror()
     // tells us the bypass is mandatory.
