@@ -34,7 +34,7 @@ targets:
         INFOPLIST_FILE: HelloShell/Info.plist
         CODE_SIGN_ENTITLEMENTS: HelloShell/HelloShell.entitlements
         CODE_SIGN_STYLE: Automatic
-        # DEVELOPMENT_TEAM: <set in Xcode to your free Apple ID team>
+        # DEVELOPMENT_TEAM: <set in Xcode — paid Apple Developer account (1yr profiles)>
         MARKETING_VERSION: "0.1"
         CURRENT_PROJECT_VERSION: "1"
         # Hello has no Obj-C/Swift dylib deps of its own; the JRE is dlopen'd at runtime.

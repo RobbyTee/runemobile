@@ -197,7 +197,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     callMain(env, "UnsafePokeActivation", @[], log);
 
     (*vm)->DestroyJavaVM(vm);
-    log([NSString stringWithFormat:@"[jvm] DestroyJavaVM done. GlyphSmoke PNG -> %@", glyphPng]);
+    log(@"[jvm] DestroyJavaVM done.");
     return 0;
 }
 

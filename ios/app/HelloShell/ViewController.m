@@ -40,7 +40,7 @@
 
     self.launchButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.launchButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.launchButton setTitle:@"Run probes (JIT/Bench/Glyph)" forState:UIControlStateNormal];
+    [self.launchButton setTitle:@"Run AWT activation (§6.0)" forState:UIControlStateNormal];
     self.launchButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
     self.launchButton.enabled = NO;
     [self.launchButton addTarget:self action:@selector(onLaunch)
