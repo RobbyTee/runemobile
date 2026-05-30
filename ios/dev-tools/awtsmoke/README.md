@@ -20,36 +20,41 @@ Greppable verdict: `AWT-ACTIVATION = CTC ACTIVE` / `= FAILED`.
 
 ### What works (and what does NOT) — measured on OpenJDK 21.0.5 aarch64 macOS
 
-| Mode | Flags | Verdict |
-|---|---|---|
-| (a) classpath | `-cp <cacio>` + 2 props + full JPMS set | **FAILED** — toolkit/GE stay native (`LWCToolkit`/`CGraphicsEnvironment`) |
-| (b) bootclasspath | `-Xbootclasspath/a:<cacio>` + 2 props | **FAILED** — same |
-| **(c) agent** | `CacioExtension.injectCTCGraphicsEnvironment()` + `-Djdk.attach.allowAttachSelf=true` + byte-buddy{,-agent} on cp + JPMS | **`CTC ACTIVE`** |
+| Mode | Flags | Toolkit | GraphicsEnvironment | Verdict |
+|---|---|---|---|---|
+| (a) classpath | `-cp <cacio>` + 2 props + full JPMS | `LWCToolkit` (native) | `CGraphicsEnvironment` (native) | **FAILED** |
+| (b) bootclasspath | `-Xbootclasspath/a:<cacio>` + 2 props | native | native | **FAILED** |
+| (c) agent | `CacioExtension.injectCTCGraphicsEnvironment()` + `-Djdk.attach.allowAttachSelf=true` + byte-buddy{,-agent} + JPMS | `LWCToolkit` (native) | **`CTCGraphicsEnvironment`** ✅ | **FAILED** (GE only; toolkit not swapped) |
 
-**The finding: property/bootclasspath selection does NOT activate CTC on JDK 21.** `-Dawt.toolkit` /
-`-Djava.awt.graphicsenv` are simply not honored for selection — the toolkit stays the platform default. (This
-*confirms* the FINDINGS "bare `-Dawt.toolkit` silently falls back" note, and refutes my earlier guess that a
-two-prop + bootclasspath recipe fixes it. It does not.)
+**No standalone mechanism reached full CTC activation.** Two findings:
 
-**The working mechanism is a ByteBuddy instrumentation agent**, and it runs **without JUnit**:
-`CacioExtension.injectCTCGraphicsEnvironment()` is `public static`. Decompiled (`javap -c`), it does:
-`ByteBuddyAgent.install()` (attach-self → `Instrumentation`) → **JVMTI `redefine`** of
-`java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()` (and a `sun.awt.*` nameStartsWith interceptor)
-via `ClassReloadingStrategy.fromInstalledAgent()` → `ClassInjector$UsingUnsafe` to inject CTC into the
-**bootstrap** classloader. Requires `-Djdk.attach.allowAttachSelf=true` + the JPMS `--add-exports/--add-opens`
-set + byte-buddy + byte-buddy-agent on the classpath.
+1. **Property/bootclasspath selection does NOTHING on JDK 21.** `-Dawt.toolkit` / `-Djava.awt.graphicsenv` are
+   not honored — toolkit AND GE stay the platform default, with or without `-Xbootclasspath/a` or JPMS exports.
+   (Confirms the FINDINGS "bare `-Dawt.toolkit` silently falls back" note; refutes my earlier guess that a
+   two-prop + bootclasspath recipe fixes it.)
+2. **The ByteBuddy agent swaps the GE but NOT the Toolkit.** `CacioExtension.injectCTCGraphicsEnvironment()` is
+   `public static` (runs without JUnit) and — decompiled (`javap -c`) — does `ByteBuddyAgent.install()`
+   (attach-self → `Instrumentation`) → **JVMTI `redefine`** of `GraphicsEnvironment.getLocalGraphicsEnvironment()`
+   → `ClassInjector$UsingUnsafe` into the bootstrap loader. Observed result: `GE = CTCGraphicsEnvironment`, but
+   `Toolkit.getDefaultToolkit()` stays `LWCToolkit` → our full-activation gate still says FAILED.
+
+**Full toolkit+GE activation was only ever observed under the `@CacioTest` JUnit harness** (the prior Gate
+1b/1c runs: `toolkit=CTCToolkit` + `graphicsenv=CTCGraphicsEnvironment`). Reducing that to a standalone,
+no-JUnit recipe is unfinished — but it doesn't change the device conclusion below, because the mechanism is
+JVMTI class-redefinition / instrumentation-attach either way.
 
 ### Why this MATTERS for the device (the real, now-sharper §6.0 risk)
-The device §6.0 no longer hinges on "thread some flags through the launcher." It hinges on whether the **iOS
-JRE supports**:
+The device §6.0 does not hinge on "thread some flags through the launcher" — flags don't work at all. It
+hinges on whether the **iOS JRE supports**:
 1. the **attach API / attach-self** (`ByteBuddyAgent.install()` needs an attach provider — stripped mobile
    JREs frequently omit `jdk.attach`), and
 2. **JVMTI `RedefineClasses`/`RetransformClasses`** (class redefinition may be disabled in the mobile build).
 
-If either is missing on the device JRE, the desktop mechanism does **not** port, and we need a **no-JVMTI**
-activation. **Strong hypothesis:** Amethyst's `CTCPreloadClassLoader` exists *precisely because* the agent
-path doesn't work on iOS — i.e. it wires CTC via a custom classloader / boot path without redefinition.
-**Investigate that next, before any device build.**
+Both are needed even for the *partial* (GE-only) activation observed in mode (c). If either is missing on the
+device JRE, the desktop mechanism does **not** port and we need a **no-JVMTI** activation. **Strong
+hypothesis:** Amethyst's `CTCPreloadClassLoader` exists *precisely because* the agent path doesn't work on
+iOS — i.e. it wires CTC via a custom classloader / boot path without redefinition. **Investigate that next,
+before any device build** (and it likely also solves the toolkit-not-swapped gap that mode (c) left open).
 
 ### Scope / honesty boundary
 This proves **selection on desktop macOS JDK only**, via the agent. It does NOT prove (a) the iOS JRE can run

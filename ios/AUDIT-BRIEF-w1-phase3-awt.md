@@ -172,7 +172,7 @@ pixel buffer — track that in the §6.4 bench, not the buffer size. We already 
 
 | # | Step | Retires | Cost |
 |---|---|---|---|
-| **0** | **Activation gate.** **DESKTOP PRE-CHECK DONE (2026-05-29, `dev-tools/awtsmoke/`) — key negative result, see §6b.** Flags-only (property/bootclasspath) selection **FAILS** on JDK 21; CTC activates **only via a ByteBuddy instrumentation agent** (JVMTI class-redefinition), which runs without JUnit. **Device §6.0 is therefore not "thread some flags" — it's "can the iOS JRE run that agent (attach-self + JVMTI RedefineClasses)?"** If not, we need Amethyst's `CTCPreloadClassLoader`-style no-JVMTI path. **Device next:** probe `jdk.attach` + JVMTI-redefine on the embedded `jre21`; in parallel read what `CTCPreloadClassLoader` does. | **Claim A** — the gate | **Desktop done; device risk re-scoped** |
+| **0** | **Activation gate.** **DESKTOP PRE-CHECK DONE (2026-05-29, `dev-tools/awtsmoke/`) — key negative result, see §6b.** Flags-only (property/bootclasspath) selection **does nothing** on JDK 21. The ByteBuddy JVMTI-redefine agent swaps the **GE only** (toolkit stays native → still FAILED); full toolkit+GE only seen under the `@CacioTest` JUnit harness. **Device §6.0 is therefore "can the iOS JRE run that agent (attach-self + JVMTI RedefineClasses)?"** If not, we need Amethyst's `CTCPreloadClassLoader`-style no-JVMTI path (likely also closes the toolkit gap). **Device next:** probe `jdk.attach` + JVMTI-redefine on the embedded `jre21`; in parallel read what `CTCPreloadClassLoader` does. | **Claim A** — the gate | **Desktop partial; device risk re-scoped** |
 | 1 | **`AwtSmoke` (device):** realize `Frame`+`Canvas`, **assert `Canvas.getGraphics()` non-null**, draw marker pixels, read CTC screen pixels back (CRC+PPM), then the full font op-set (logical + `createFont` RL TTF + shadow/outline/`<col>`). | Claims B, D | Med |
 | 2 | **RuneLite buffer smoke (device) — pulled FORWARD:** reuse the Gate-1c `HeadlessClientUI` idea on device as early as possible (real engine → real `BufferProvider.getPixels()`). The reviewer flags a synthetic `BufferProvider` as the **weaker** proxy — prefer the real one once §0–1 pass. | Claim C (real) | Med |
 | 3 | **Input smoke (device):** **UIKit touch callback** posts AWT events to the canvas on the EDT; cover `dispatchEvent`/`EventQueue.postEvent`, focus, move/click/drag, wheel, keys; listener counters + focus checks. | Claim E | Med |
@@ -187,26 +187,30 @@ rather than leaning on a synthetic `BufferProvider`.
 I expected a flags-only recipe to suffice (we control launch flags). **It does not.** Measured on OpenJDK
 21.0.5 aarch64 with `dev-tools/awtsmoke/run-activation-desktop.sh`:
 
-| Mode | Flags | Verdict |
-|---|---|---|
-| (a) classpath + 2 props + full JPMS set | `-cp <cacio>` … | **FAILED** — toolkit/GE stay native |
-| (b) `-Xbootclasspath/a:<cacio>` + 2 props | … | **FAILED** — same |
-| **(c) agent** | `CacioExtension.injectCTCGraphicsEnvironment()` + `-Djdk.attach.allowAttachSelf=true` + byte-buddy{,-agent} + JPMS | **`CTC ACTIVE`** |
+| Mode | Flags | Toolkit | GE | Verdict |
+|---|---|---|---|---|
+| (a) classpath + props + JPMS | `-cp <cacio>` … | native | native | **FAILED** |
+| (b) `-Xbootclasspath/a` + props | … | native | native | **FAILED** |
+| (c) agent | `injectCTCGraphicsEnvironment()` + `allowAttachSelf` + byte-buddy{,-agent} + JPMS | native | **CTC** ✅ | **FAILED** (GE only) |
 
-**Property/bootclasspath selection is not honored on JDK 21** — `-Dawt.toolkit`/`-Djava.awt.graphicsenv` do
-nothing; the toolkit stays the platform default. (This *confirms* the FINDINGS "bare `-Dawt.toolkit` silently
-falls back" note.) The **only** thing that worked is the ByteBuddy agent: `injectCTCGraphicsEnvironment()` is
-`public static` (no JUnit needed) and does `ByteBuddyAgent.install()` (attach-self) → **JVMTI redefine** of
-`GraphicsEnvironment.getLocalGraphicsEnvironment()` → `ClassInjector$UsingUnsafe` into the bootstrap loader.
+**No standalone mechanism reached full activation.** (1) Property/bootclasspath selection is **not honored**
+on JDK 21 — `-Dawt.toolkit`/`-Djava.awt.graphicsenv` do nothing (confirms the FINDINGS "bare `-Dawt.toolkit`
+silently falls back" note). (2) The ByteBuddy agent (`injectCTCGraphicsEnvironment()` is `public static`, no
+JUnit; `ByteBuddyAgent.install()` attach-self → **JVMTI redefine** of `getLocalGraphicsEnvironment()` →
+`ClassInjector$UsingUnsafe` into the bootstrap loader) swaps the **GE** but **leaves the Toolkit native** →
+still FAILED by the gate. Full toolkit+GE was only ever seen under the `@CacioTest` JUnit harness (Gate
+1b/1c); reducing that to a standalone recipe is unfinished.
 
-**This re-scopes the device §6.0 (and it's the honest, sharper risk):** success now depends on whether the
-embedded `jre21` supports **(1) the attach API / attach-self** (`jdk.attach`; often stripped from mobile
-JREs) and **(2) JVMTI `RedefineClasses`/`RetransformClasses`**. If either is absent, the desktop mechanism
+**This re-scopes the device §6.0 (the honest, sharper risk):** even the partial GE swap needs **(1) the
+attach API / attach-self** (`jdk.attach`; often stripped from mobile JREs) and **(2) JVMTI
+`RedefineClasses`/`RetransformClasses`**. If either is absent on the embedded `jre21`, the desktop mechanism
 does **not** port and we need a **no-JVMTI** installer — likely what Amethyst's `CTCPreloadClassLoader` is
-(strong hypothesis: it exists *because* the agent path fails on iOS). Settle that before any device build.
+(strong hypothesis: it exists *because* the agent path fails on iOS, and it probably also closes the
+toolkit-not-swapped gap). Settle before any device build.
 
-**Scope honesty:** §6.0 proved **selection on desktop, via the agent**. It does NOT prove the iOS JRE can run
-that agent (the new open question), nor peer realization / fake `libawt_xawt` (§6.1).
+**Scope honesty:** §6.0 has so far only *partially* activated CTC on desktop (GE, not toolkit) and not yet
+reduced full activation to a no-JUnit recipe. It does NOT prove the iOS JRE can run the agent at all (the new
+open question), nor peer realization / fake `libawt_xawt` (§6.1).
 
 ### 6a. What breaks first (review — order of likelihood)
 Activation/classloading, by far. Concretely, watch for: `ClassNotFoundException` for `CTCPreloadClassLoader`;

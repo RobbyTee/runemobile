@@ -54,17 +54,21 @@ outline/`<col>` tags via `FontMetrics`; `OverlayUtil` `Polygon` draw+alpha-fill 
   FAILS** — `-Dawt.toolkit`/`-Djava.awt.graphicsenv` are NOT honored on JDK 21 (toolkit/GE stay native:
   `LWCToolkit`/`CGraphicsEnvironment`), with or without `-Xbootclasspath/a` or the JPMS `--add-exports` set.
   (Confirms the "bare `-Dawt.toolkit` silently falls back" note below; refutes any "two-prop + bootclasspath"
-  recipe.) **The ONLY mechanism that reached `CTC ACTIVE` is the ByteBuddy instrumentation agent:**
-  `CacioExtension.injectCTCGraphicsEnvironment()` (public static — runs WITHOUT JUnit) = `ByteBuddyAgent.install()`
+  recipe.) **NO standalone mechanism reached FULL activation.** The ByteBuddy instrumentation agent —
+  `CacioExtension.injectCTCGraphicsEnvironment()` (public static, runs WITHOUT JUnit) = `ByteBuddyAgent.install()`
   (attach-self) → **JVMTI redefine** of `GraphicsEnvironment.getLocalGraphicsEnvironment()` →
-  `ClassInjector$UsingUnsafe` into the bootstrap loader; needs `-Djdk.attach.allowAttachSelf=true` + JPMS +
-  byte-buddy{,-agent} on cp. **Device §6.0 RE-SCOPED (the real risk):** does the embedded `jre21` support
-  (1) the attach API/attach-self (`jdk.attach`, often stripped from mobile JREs) and (2) JVMTI
-  `RedefineClasses`/`RetransformClasses`? If not, the desktop path doesn't port and we need a **no-JVMTI**
-  installer — **strong hypothesis: that's what Amethyst's `CTCPreloadClassLoader` is** (exists because the
-  agent fails on iOS). Investigate before any device build. (Methodology note: I first wrote this up as "GREEN
-  flags-only" *before reading the test output* — every recipe had actually FAILED; corrected after re-running.
-  Probe-first, read-the-output-first.) See `AUDIT-BRIEF-w1-phase3-awt.md` §6/§6b.
+  `ClassInjector$UsingUnsafe` into the bootstrap loader (needs `-Djdk.attach.allowAttachSelf=true` + JPMS +
+  byte-buddy{,-agent}) — swaps the **GE to CTCGraphicsEnvironment** but **leaves the Toolkit native**
+  (`LWCToolkit`) → still FAILED by the full gate. Full toolkit+GE was only ever observed under the
+  `@CacioTest` JUnit harness (Gate 1b/1c: `toolkit=CTCToolkit`); reducing that to a standalone no-JUnit recipe
+  is unfinished. **Device §6.0 RE-SCOPED (the real risk):** even the partial GE swap needs (1) the attach
+  API/attach-self (`jdk.attach`, often stripped from mobile JREs) and (2) JVMTI
+  `RedefineClasses`/`RetransformClasses`. If absent on the embedded `jre21`, the desktop path doesn't port and
+  we need a **no-JVMTI** installer — **strong hypothesis: Amethyst's `CTCPreloadClassLoader`** (exists because
+  the agent fails on iOS; likely also closes the toolkit gap). Investigate before any device build.
+  **(Methodology note — twice this session I wrote a "GREEN/ACTIVE" verdict BEFORE reading the test output;
+  both were false (the first run all-FAILED; the agent only does the GE half). Corrected both. Rule: read the
+  actual output before writing any verdict.)** See `AUDIT-BRIEF-w1-phase3-awt.md` §6/§6b.
 - **iOS CACIO is the SAME artifact lineage (correction, 2026-05-29 P3 review):** earlier notes here said the
   iOS/arm64 backend was the **PojavLauncherTeam/caciocavallo** fork — **WRONG.** That fork is the old
   `net.java.openjdk.cacio` 1.10 / Java-8 tree (only `cacio-shared`+`cacio-androidnw`), unfit for a condy/JDK21
