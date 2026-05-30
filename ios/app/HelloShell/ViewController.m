@@ -10,6 +10,7 @@
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) NSTimer *jitTimer;
 @property (nonatomic, strong) NSFileHandle *logFile;
+@property (nonatomic, assign) int jvmFd;   // raw fd for crash-proof libjvm stdout/stderr
 @property (nonatomic, assign) BOOL launched;
 @end
 
@@ -86,6 +87,10 @@
     NSString *path = [docs stringByAppendingPathComponent:@"hello-shell.log"];
     [[NSFileManager defaultManager] createFileAtPath:path contents:nil attributes:nil];
     self.logFile = [NSFileHandle fileHandleForWritingAtPath:path];
+    // Separate raw file for libjvm stdout/stderr, written synchronously (survives a
+    // crash) so the [JIT26] mapping trace + the Hello verdict are always retrievable.
+    NSString *jpath = [docs stringByAppendingPathComponent:@"jvm-stdio.log"];
+    self.jvmFd = open(jpath.UTF8String, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 }
 
 - (void)appendLine:(NSString *)line {
@@ -110,10 +115,14 @@
     if (pipe(fds) != 0) return;
     dup2(fds[1], STDOUT_FILENO);
     dup2(fds[1], STDERR_FILENO);
+    int jfd = self.jvmFd;
     NSFileHandle *reader = [[NSFileHandle alloc] initWithFileDescriptor:fds[0] closeOnDealloc:YES];
     reader.readabilityHandler = ^(NSFileHandle *h) {
         NSData *d = h.availableData;
         if (d.length == 0) return;
+        // Crash-proof: write raw bytes to the dedicated fd + fsync BEFORE the async UI
+        // hop, so libjvm output isn't lost if the VM aborts right after printing.
+        if (jfd >= 0) { write(jfd, d.bytes, d.length); fsync(jfd); }
         NSString *s = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
         for (NSString *l in [s componentsSeparatedByString:@"\n"]) {
             if (l.length) [self appendLine:[@"  " stringByAppendingString:l]];
