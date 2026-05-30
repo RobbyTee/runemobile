@@ -49,26 +49,25 @@ outline/`<col>` tags via `FontMetrics`; `OverlayUtil` `Polygon` draw+alpha-fill 
 - **Activation gotcha:** bare `-Dawt.toolkit=...CTCToolkit` **silently falls back** to the native toolkit.
   CACIO installs before AWT init only via `@ExtendWith(CacioExtension.class)` (byte-buddy self-attach →
   needs `-Djdk.attach.allowAttachSelf=true` on JDK 21, plus the `--add-exports/--add-opens` set).
-- **W1 P3 §6.0 activation — DESKTOP PRE-CHECK done (2026-05-29, `dev-tools/awtsmoke/`). KEY NEGATIVE RESULT.**
-  Measured on OpenJDK 21.0.5 aarch64: **flags-only (property/bootclasspath) selection of CACIO's CTC toolkit
-  FAILS** — `-Dawt.toolkit`/`-Djava.awt.graphicsenv` are NOT honored on JDK 21 (toolkit/GE stay native:
-  `LWCToolkit`/`CGraphicsEnvironment`), with or without `-Xbootclasspath/a` or the JPMS `--add-exports` set.
-  (Confirms the "bare `-Dawt.toolkit` silently falls back" note below; refutes any "two-prop + bootclasspath"
-  recipe.) **NO standalone mechanism reached FULL activation.** The ByteBuddy instrumentation agent —
-  `CacioExtension.injectCTCGraphicsEnvironment()` (public static, runs WITHOUT JUnit) = `ByteBuddyAgent.install()`
-  (attach-self) → **JVMTI redefine** of `GraphicsEnvironment.getLocalGraphicsEnvironment()` →
-  `ClassInjector$UsingUnsafe` into the bootstrap loader (needs `-Djdk.attach.allowAttachSelf=true` + JPMS +
-  byte-buddy{,-agent}) — swaps the **GE to CTCGraphicsEnvironment** but **leaves the Toolkit native**
-  (`LWCToolkit`) → still FAILED by the full gate. Full toolkit+GE was only ever observed under the
-  `@CacioTest` JUnit harness (Gate 1b/1c: `toolkit=CTCToolkit`); reducing that to a standalone no-JUnit recipe
-  is unfinished. **Device §6.0 RE-SCOPED (the real risk):** even the partial GE swap needs (1) the attach
-  API/attach-self (`jdk.attach`, often stripped from mobile JREs) and (2) JVMTI
-  `RedefineClasses`/`RetransformClasses`. If absent on the embedded `jre21`, the desktop path doesn't port and
-  we need a **no-JVMTI** installer — **strong hypothesis: Amethyst's `CTCPreloadClassLoader`** (exists because
-  the agent fails on iOS; likely also closes the toolkit gap). Investigate before any device build.
-  **(Methodology note — twice this session I wrote a "GREEN/ACTIVE" verdict BEFORE reading the test output;
-  both were false (the first run all-FAILED; the agent only does the GE half). Corrected both. Rule: read the
-  actual output before writing any verdict.)** See `AUDIT-BRIEF-w1-phase3-awt.md` §6/§6b.
+- **W1 P3 §6.0 activation — DESKTOP PRE-CHECK PARTIAL (2026-05-29, `dev-tools/awtsmoke/`).** Verbatim from
+  `run-activation-desktop.sh all` (OpenJDK 21.0.5 aarch64, exit 0): (a) classpath+props+JPMS → **FAILED**;
+  (b) `-Xbootclasspath/a`+props → **FAILED** (so `-Dawt.toolkit`/`-Djava.awt.graphicsenv` are NOT honored on
+  JDK 21); (c) **byte-buddy agent** (`CacioExtension.injectCTCGraphicsEnvironment()` + `allowAttachSelf`) →
+  **CTC ACTIVE, toolkit AND GE both CTC** — *even though its JVMTI redefine THROWS* (`class redefinition
+  failed: change the schema`), so the load-bearing part is the `Instrumentation` install + CacioExtension's
+  static-field/bootstrap injection, NOT the redefine; (d) my naive pure-reflection field-poke → **FAILED**
+  (there is NO `GraphicsEnvironment.localEnv` field — the GE singleton is in the lazy holder
+  `java.awt.GraphicsEnvironment$LocalGE`; poking it threw `ExceptionInInitializerError`). **DEVICE §6.0 is
+  OPEN, not solved.** The only working desktop recipe (the agent) needs the **attach API / attach-self**,
+  which a stripped mobile JRE may omit — UNTESTED on the iOS `jre21`. Candidate device paths (none proven):
+  (1) attach-self works on iOS → agent ports; (2) a CORRECT no-instrumentation field-poke that seeds the real
+  `LocalGE` holder; (3) Amethyst's `CTCPreloadClassLoader`. Probe the JRE's attach capability before building.
+  **(Process note — FOUR TIMES this session I wrote a GREEN/ACTIVE verdict BEFORE reading the output; all
+  wrong: all-FAILED → "agent GE-only/FAILED" → "field-poke is the recipe/ACTIVE" → reality: agent ACTIVE,
+  field-poke FAILED. Hard rule, now enforced in the awtsmoke README: no verdict without the matching captured
+  output line.)** Probes: `AwtActivation.java` (assertion), `AwtActivationAgent.java` (working agent path),
+  `FieldPokeActivation.java` (the failed field-poke, kept as the negative record). See
+  `AUDIT-BRIEF-w1-phase3-awt.md` §6/§6b.
 - **iOS CACIO is the SAME artifact lineage (correction, 2026-05-29 P3 review):** earlier notes here said the
   iOS/arm64 backend was the **PojavLauncherTeam/caciocavallo** fork — **WRONG.** That fork is the old
   `net.java.openjdk.cacio` 1.10 / Java-8 tree (only `cacio-shared`+`cacio-androidnw`), unfit for a condy/JDK21

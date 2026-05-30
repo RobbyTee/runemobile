@@ -2,15 +2,15 @@
 
 The Phase-3 analogue of `dev-tools/jvmbench/`: small, probe-first experiments that retire the
 `AUDIT-BRIEF-w1-phase3-awt.md` claims one at a time, cheapest first. `AwtActivation` is `javac --release 8`
-(bundles into the device probe jar). The agent harness needs cacio + byte-buddy on the classpath.
+(bundles into the device probe jar).
 
 The brief's reviewed verdict: *the danger in Phase 3 is not Java2D pixels (the iOS rasterizer is proven by
 `GlyphSmoke`); it is **activating the CACIO CTC toolkit + graphicsenv before AWT init** on device.* §6.0
 (activation) comes first, and it is **desktop-pre-checkable** — which is what this dir does.
 
-## §6.0 — activation gate — DESKTOP PRE-CHECK done (2026-05-29). Key negative result.
+## §6.0 — activation gate — DESKTOP PRE-CHECK (2026-05-29). Status: works only via the agent so far.
 
-`AwtActivation.java` asserts (no pixels): non-headless, `Toolkit.getDefaultToolkit()` == `CTCToolkit`,
+`AwtActivation.java` asserts (no pixels drawn): non-headless, `Toolkit.getDefaultToolkit()` == `CTCToolkit`,
 `GraphicsEnvironment.getLocalGraphicsEnvironment()` == `CTCGraphicsEnvironment`, screen device queryable.
 Greppable verdict: `AWT-ACTIVATION = CTC ACTIVE` / `= FAILED`.
 
@@ -18,58 +18,59 @@ Greppable verdict: `AWT-ACTIVATION = CTC ACTIVE` / `= FAILED`.
 ./run-activation-desktop.sh all     # OpenJDK 21 aarch64; needs ../cacio-smoke/lib jars
 ```
 
-### What works (and what does NOT) — measured on OpenJDK 21.0.5 aarch64 macOS
+### Verbatim results — OpenJDK 21.0.5 aarch64 macOS (`run-activation-desktop.sh all`, exit 0)
 
-| Mode | Flags | Toolkit | GraphicsEnvironment | Verdict |
+| Mode | How | Toolkit | GraphicsEnvironment | Verdict |
 |---|---|---|---|---|
-| (a) classpath | `-cp <cacio>` + 2 props + full JPMS | `LWCToolkit` (native) | `CGraphicsEnvironment` (native) | **FAILED** |
-| (b) bootclasspath | `-Xbootclasspath/a:<cacio>` + 2 props | native | native | **FAILED** |
-| (c) agent | `CacioExtension.injectCTCGraphicsEnvironment()` + `-Djdk.attach.allowAttachSelf=true` + byte-buddy{,-agent} + JPMS | `LWCToolkit` (native) | **`CTCGraphicsEnvironment`** ✅ | **FAILED** (GE only; toolkit not swapped) |
+| (a) classpath | `-cp <cacio>` + 2 props + full JPMS | `LWCToolkit` | `CGraphicsEnvironment` | **FAILED** |
+| (b) bootclasspath | `-Xbootclasspath/a:<cacio>` + 2 props | `LWCToolkit` | `CGraphicsEnvironment` | **FAILED** |
+| **(c) agent** | `CacioExtension.injectCTCGraphicsEnvironment()` + `-Djdk.attach.allowAttachSelf=true` + byte-buddy{,-agent} + JPMS | **`CTCToolkit`** | **`CTCGraphicsEnvironment`** | **CTC ACTIVE** |
+| (d) field-poke | pure reflection (`Toolkit.toolkit`, `GraphicsEnvironment.localEnv`, …) | `CTCToolkit` | `ExceptionInInitializerError` (LocalGE) | **FAILED** |
 
-**No standalone mechanism reached full CTC activation.** Two findings:
+Two findings, exactly as observed:
 
 1. **Property/bootclasspath selection does NOTHING on JDK 21.** `-Dawt.toolkit` / `-Djava.awt.graphicsenv` are
-   not honored — toolkit AND GE stay the platform default, with or without `-Xbootclasspath/a` or JPMS exports.
-   (Confirms the FINDINGS "bare `-Dawt.toolkit` silently falls back" note; refutes my earlier guess that a
-   two-prop + bootclasspath recipe fixes it.)
-2. **The ByteBuddy agent swaps the GE but NOT the Toolkit.** `CacioExtension.injectCTCGraphicsEnvironment()` is
-   `public static` (runs without JUnit) and — decompiled (`javap -c`) — does `ByteBuddyAgent.install()`
-   (attach-self → `Instrumentation`) → **JVMTI `redefine`** of `GraphicsEnvironment.getLocalGraphicsEnvironment()`
-   → `ClassInjector$UsingUnsafe` into the bootstrap loader. Observed result: `GE = CTCGraphicsEnvironment`, but
-   `Toolkit.getDefaultToolkit()` stays `LWCToolkit` → our full-activation gate still says FAILED.
+   not honored — toolkit AND GE stay the platform default. (Confirms the FINDINGS "bare `-Dawt.toolkit`
+   silently falls back" note; refutes the "two-prop + bootclasspath" idea.)
+2. **The ByteBuddy agent fully activates CTC (toolkit + GE), and does so even though its JVMTI redefine
+   THROWS.** Mode (c) prints `injectCTCGraphicsEnvironment() THREW: UnsupportedOperationException: class
+   redefinition failed: attempted to change the schema` — and *still* ends `CTC ACTIVE` with both toolkit and
+   GE swapped. So the activation is carried by `CacioExtension`'s static-field injection (its `<clinit>` /
+   `ClassInjector$UsingUnsafe` into the bootstrap loader), with the GE-method redefine as a non-fatal extra.
 
-**Full toolkit+GE activation was only ever observed under the `@CacioTest` JUnit harness** (the prior Gate
-1b/1c runs: `toolkit=CTCToolkit` + `graphicsenv=CTCGraphicsEnvironment`). Reducing that to a standalone,
-no-JUnit recipe is unfinished — but it doesn't change the device conclusion below, because the mechanism is
-JVMTI class-redefinition / instrumentation-attach either way.
+**My naive field-poke (d) FAILED** because the GE singleton is not a `GraphicsEnvironment.localEnv` field — it
+lives in a lazily-initialized holder class `java.awt.GraphicsEnvironment$LocalGE`. Poking `headless=false`
+without correctly seeding that holder triggered `ExceptionInInitializerError` on `LocalGE`. So a *correct*
+no-instrumentation field-poke is **not yet found** — `FieldPokeActivation.java` stands as the (negative)
+record of why the obvious approach doesn't work.
 
-### Why this MATTERS for the device (the real, now-sharper §6.0 risk)
-The device §6.0 does not hinge on "thread some flags through the launcher" — flags don't work at all. It
-hinges on whether the **iOS JRE supports**:
-1. the **attach API / attach-self** (`ByteBuddyAgent.install()` needs an attach provider — stripped mobile
-   JREs frequently omit `jdk.attach`), and
-2. **JVMTI `RedefineClasses`/`RetransformClasses`** (class redefinition may be disabled in the mobile build).
+### Device implication (honest, current)
+The only desktop recipe that works is the **byte-buddy agent** (mode c). It needs the **attach API /
+attach-self** and the byte-buddy `Instrumentation` install — capabilities a stripped mobile JRE may lack
+(note the JVMTI *redefine* itself is non-essential, since it throws yet activation succeeds; what's load-bearing
+is `Instrumentation` install + the unsafe bootstrap class injection). So the open device questions are:
+1. Does the embedded `jre21` ship `jdk.attach` + allow `ByteBuddyAgent.install()` (attach-self)? **Untested.**
+2. Can we instead find the **correct no-instrumentation field-poke** — seed `GraphicsEnvironment$LocalGE`'s
+   actual holder field + `Toolkit.toolkit` + `SurfaceManagerFactory.instance` before AWT init? (Promising,
+   not yet working — the GE holder is the missing piece.)
+3. Or reproduce Amethyst's `CTCPreloadClassLoader` (GPLv3, patterns only) — possibly the no-instrumentation
+   installer that sidesteps both.
 
-Both are needed even for the *partial* (GE-only) activation observed in mode (c). If either is missing on the
-device JRE, the desktop mechanism does **not** port and we need a **no-JVMTI** activation. **Strong
-hypothesis:** Amethyst's `CTCPreloadClassLoader` exists *precisely because* the agent path doesn't work on
-iOS — i.e. it wires CTC via a custom classloader / boot path without redefinition. **Investigate that next,
-before any device build** (and it likely also solves the toolkit-not-swapped gap that mode (c) left open).
+Pick this up before any device build. **Do not assume the agent ports to iOS.**
 
-### Scope / honesty boundary
-This proves **selection on desktop macOS JDK only**, via the agent. It does NOT prove (a) the iOS JRE can run
-that agent (the open question above), nor (b) peer realization / the fake `libawt_xawt` question (§6.1).
+### Process note (kept deliberately)
+While doing this gate I wrote a confident verdict **before reading the test output four times** (all wrong:
+"flags-only GREEN" → "agent GE-only FAILED" → "field-poke is the recipe" → reality: agent works, field-poke
+fails). The fix that finally worked: capture output to a file, grep the verdict lines, and make the docs quote
+that. Rule for this dir: **no verdict without the matching captured output line.**
 
-## Open questions to settle before §6.0-on-device
-1. Does the embedded `jre21` ship `jdk.attach` + allow attach-self? (`java -XX:+PrintFlagsFinal` / check
-   `lib/` for the attach provider; try `ByteBuddyAgent.install()` on device.)
-2. Does it allow JVMTI `RedefineClasses`? (capabilities probe.)
-3. What does Amethyst's `CTCPreloadClassLoader` actually do — is it a no-JVMTI CTC installer we can reproduce
-   clean-room? (read Amethyst, GPLv3, patterns only.)
+## Files
+- `AwtActivation.java` — the no-pixel assertion + greppable `AWT-ACTIVATION` verdict (release 8; bundles to device).
+- `AwtActivationAgent.java` — mode (c): calls `CacioExtension.injectCTCGraphicsEnvironment()` (the working path).
+- `FieldPokeActivation.java` — mode (d): the naive pure-reflection attempt that FAILS (GE-holder record).
+- `run-activation-desktop.sh [a|b|c|d|all]` — the desktop harness.
 
-## Planned next probes (per brief §6)
-- `AwtSmoke` (§6.1): once activation is solved on device — realize `Frame`+`Canvas`, assert
-  `Canvas.getGraphics()` non-null, draw markers + RL TTF text, read CTC screen pixels back (CRC+PPM).
-  Retires Claims B, D + the fake-`libawt_xawt` question.
-- RuneLite buffer smoke (§6.2): the Gate-1c idea on device (real engine → `BufferProvider.getPixels()`).
-- Input smoke (§6.3); sustained bench (§6.4).
+## Next
+- Settle the device activation question (the 3 options above) **before** building §6.0-on-device.
+- Then §6.1 `AwtSmoke` (realize `Frame`+`Canvas`, `getGraphics()` non-null, draw + read CTC pixels, fonts;
+  the fake-`libawt_xawt` test); §6.2 RuneLite buffer smoke; §6.3 input; §6.4 bench.

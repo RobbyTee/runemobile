@@ -5,25 +5,26 @@
 # We control launch flags + can call code via the HelloShell launcher on device, so
 # this finds what works on desktop, then asks whether it ports to the iOS JRE.
 #
-# OBSERVED (2026-05-29, OpenJDK 21.0.5 aarch64 macOS) — read the printed verdicts,
-# do not trust this comment over the output:
-#   (a) classpath  + props (+JPMS)      => FAILED   (toolkit=LWCToolkit, GE=CGraphicsEnvironment — both native)
-#   (b) bootclasspath + props (no JPMS) => FAILED   (same — both native)
-#   (c) AGENT: CacioExtension.injectCTCGraphicsEnvironment() + allowAttachSelf + JPMS
-#                                       => PARTIAL: GE => CTCGraphicsEnvironment, but
-#                                          Toolkit stays LWCToolkit => FAILED by the full gate.
+# OBSERVED (2026-05-29, OpenJDK 21.0.5 aarch64 macOS) — read the printed verdicts;
+# the docs quote the captured output, not the other way round:
+#   (a) classpath    + props (+JPMS)   => FAILED      (toolkit=LWCToolkit, GE=CGraphicsEnvironment — native)
+#   (b) bootclasspath + props (no JPMS)=> FAILED      (same — native; -Dawt.toolkit is NOT honored on JDK 21)
+#   (c) AGENT inject() + allowAttachSelf=> CTC ACTIVE  (toolkit AND GE both = CTC) — the JVMTI redefine THREW
+#                                          ("class redefinition failed: change the schema") yet activation
+#                                          still succeeded (carried by CacioExtension's field injection).
+#   (d) FIELD-POKE (naive reflection)  => FAILED       (GE singleton lives in lazy holder
+#                                          GraphicsEnvironment$LocalGE; there is NO `localEnv` field, so the
+#                                          poke broke GE init). A correct field-poke is NOT yet found.
 #
-# So: property/bootclasspath selection does NOTHING on JDK 21. The byte-buddy
-# instrumentation agent (attach-self + JVMTI redefine of
-# GraphicsEnvironment.getLocalGraphicsEnvironment) swaps the GE but not the Toolkit.
-# Full toolkit+GE activation was only seen under the @CacioTest JUnit harness
-# (Gate 1b/1c). Either way the mechanism is JVMTI class redefinition / instrumentation
-# attach — which is the capability that may be ABSENT on the iOS JRE.
+# THE FINDING: property/bootclasspath selection does NOTHING on JDK 21. The only path
+# that fully activates CTC here is the byte-buddy agent (mode c) — which needs the
+# attach API / Instrumentation install (NOT the JVMTI redefine; that throws and is
+# non-fatal). Whether the stripped iOS jre21 supports attach-self is UNTESTED.
 #
-# DEVICE IMPLICATION (the real, sharpened §6.0 risk): does the iOS jre21 support
-# (1) the attach API / attach-self and (2) JVMTI RedefineClasses? Stripped mobile
-# JREs often disable both. If so, we need Amethyst's CTCPreloadClassLoader-style
-# no-JVMTI installer instead (investigate before any device build).
+# DEVICE IMPLICATION (open): §6.0-on-device needs ONE of: (1) attach-self works on the
+# iOS jre21 (then mode c ports); (2) a CORRECT no-instrumentation field-poke that seeds
+# the GraphicsEnvironment$LocalGE holder; or (3) Amethyst's CTCPreloadClassLoader.
+# Settle before building. Do NOT assume the agent ports.
 set -uo pipefail
 cd "$(dirname "$0")"
 
@@ -60,6 +61,7 @@ GREP='isHeadless|getDefaultToolkit\(\) =|getLocalGraphicsEnvironment\(\) =|AWT-A
 mkdir -p out
 echo "== compile =="
 "$JAVAC" --release 8 -d out AwtActivation.java 2>/dev/null
+"$JAVAC" -cp "$CACIO_RUNTIME:out" -d out FieldPokeActivation.java 2>/dev/null
 # AwtActivationAgent references CacioExtension (implements a junit iface) -> junit on cp.
 "$JAVAC" -cp "$CACIO_AGENT:$JUNIT:out" -d out AwtActivationAgent.java || { echo "!! agent harness failed to compile"; exit 1; }
 
@@ -72,13 +74,18 @@ run_b() {
   "$JAVA" "-Xbootclasspath/a:$CACIO_RUNTIME" "${PROPS[@]}" -cp out AwtActivation 2>&1 | grep -E "$GREP"
 }
 run_c() {
-  echo; echo "########## (c) AGENT inject + allowAttachSelf + JPMS — OBSERVED: GE swaps, Toolkit does NOT => FAILED ##########"
+  echo; echo "########## (c) AGENT inject + allowAttachSelf — OBSERVED: JVMTI redefine THREW, yet CTC ACTIVE (toolkit+GE both CTC) ##########"
   "$JAVA" -Djdk.attach.allowAttachSelf=true -Djava.awt.headless=false "${JPMS[@]}" \
     -cp "out:$CACIO_AGENT:$JUNIT" AwtActivationAgent 2>&1 | grep -E "$GREP"
 }
+run_d() {
+  echo; echo "########## (d) FIELD-POKE naive reflection — OBSERVED: FAILED (no localEnv field; GE singleton is in lazy holder LocalGE) ##########"
+  "$JAVA" -Djava.awt.headless=false "${JPMS[@]}" \
+    -cp "out:$CACIO_RUNTIME" FieldPokeActivation 2>&1 | grep -E "$GREP"
+}
 
 case "$MODE" in
-  a) run_a ;; b) run_b ;; c) run_c ;;
-  all) run_a; run_b; run_c ;;
-  *) echo "usage: $0 [a|b|c|all]"; exit 2 ;;
+  a) run_a ;; b) run_b ;; c) run_c ;; d) run_d ;;
+  all) run_a; run_b; run_c; run_d ;;
+  *) echo "usage: $0 [a|b|c|d|all]"; exit 2 ;;
 esac
