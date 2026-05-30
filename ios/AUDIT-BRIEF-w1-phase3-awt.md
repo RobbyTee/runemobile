@@ -78,8 +78,12 @@ Most-used `java.awt.*` (engine + overlays; counts across the source set):
 ## 4. The locked approach (and the evidence behind it)
 
 We are **not** building AWT 2D — `Graphics2D`/`BufferedImage`/font rasterization/color management all have
-working iOS natives (`GlyphSmoke`: AA text + shapes, `font=SansSerif.bold`, headless, on device). We supply
-**only the missing windowing layer**: a Canvas peer + drawable surface + event source. That is CACIO's job.
+working iOS natives (`GlyphSmoke`: AA text + shapes, `font=SansSerif.bold`, headless, on device). The
+embedded `jre21` ships `libawt`, `libawt_headless`, `libjawt`, `libfontmanager` + `libfreetype`, `liblcms`,
+`libmlib_image`, `libjavajpeg` **and** `lib/fontconfig.properties` + `lib/fonts/` (Lucida TTFs) — so logical
+font names already resolve (that's what backed GlyphSmoke's `SansSerif`). What it does **not** ship is any
+windowing backend: **no `libawt_xawt`, no `libawt_lwawt`**. We supply **only that missing layer** — a Canvas
+peer + drawable surface + event source. That is CACIO's job.
 
 - **CACIO** = pluggable pure-Java AWT peers rendering into a backend-provided surface, selected via
   `-Dawt.toolkit` / `-Djava.awt.graphicsenv`. The **iOS/arm64 backend is the PojavLauncherTeam/caciocavallo
@@ -124,12 +128,13 @@ platform `BufferedImage` rasterizer, or its own?
 not the cacio surface — which de-risks the "does the engine page-flip?" question. *Reviewer:* any reason the
 device cacio peer would leave `getPixels()` stale/empty where desktop didn't?
 
-**Claim D — Font provisioning needs nothing beyond RL's bundled RuneScape TTFs + the iOS rasterizer.**
-*Position: LIKELY OK — partially proven.* `GlyphSmoke` resolved logical **`SansSerif.bold`** on device with
-no fontconfig bundled, so *some* physical font backs the logical names already. RL registers its own
-`runescape*.ttf` via `Font.createFont`/`registerFont` for overlay text. *Open:* does `registerFont` work on
-the **cacio** toolkit (vs the headless one), and does any RL logical-font draw hit a name `GlyphSmoke` didn't
-exercise? *Reviewer:* is there a fontconfig/physical-font dependency we're not seeing?
+**Claim D — Font provisioning needs nothing extra: the bundled `fontconfig.properties` + Lucida fonts back
+logical names, and RL's own TTFs cover overlays.** *Position: LIKELY OK — partially proven.* The `jre21`
+bundles `lib/fontconfig.properties` + `lib/fonts/Lucida*.ttf`, so logical names (Dialog/SansSerif/…) map —
+`GlyphSmoke` already rendered `SansSerif.bold` on device. RL additionally registers its `runescape*.ttf` via
+`Font.createFont`/`registerFont` for overlay text. *Open:* does `registerFont` behave on the **cacio**
+toolkit (vs the headless one), and does any RL draw hit a logical name `GlyphSmoke` didn't exercise?
+*Cheapest experiment:* the §6.1 `AwtSmoke` draws both a logical-name string and a `createFont`-loaded RL TTF.
 
 **Claim E — UIKit touch → AWT `MouseEvent`/`KeyEvent` posted to the cacio `EventQueue` reaches the engine
 Canvas listeners on device.** *Position: LIKELY — desktop-proven analogue.* Gate 1c-ii crossed
