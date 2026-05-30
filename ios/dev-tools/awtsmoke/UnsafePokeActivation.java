@@ -64,31 +64,45 @@ public class UnsafePokeActivation {
         Method mOffset = unsafeCls.getMethod("staticFieldOffset", Field.class);
         Method mPutObj = unsafeCls.getMethod("putObject", Object.class, long.class, Object.class);
 
-        // 1. CTC SurfaceManagerFactory before any sun.java2d init reads it.
-        try {
-            setStatic("sun.java2d.SurfaceManagerFactory", "instance",
-                      ctcSMF.getDeclaredConstructor().newInstance());
-            System.out.println("set SurfaceManagerFactory.instance = CTCSurfaceManagerFactory OK");
-        } catch (Throwable t) { System.out.println("SMF set FAILED: " + t); }
-
-        // 2. Non-headless flags (so createGE doesn't wrap Headless* and isHeadless()==false).
+        // 1. Non-headless flags (so createGE doesn't wrap Headless* and isHeadless()==false).
         try {
             setStatic(java.awt.GraphicsEnvironment.class, "headless", Boolean.FALSE);
             setStatic(java.awt.GraphicsEnvironment.class, "defaultHeadless", Boolean.FALSE);
             System.out.println("set GraphicsEnvironment.headless/defaultHeadless = false OK");
         } catch (Throwable t) { System.out.println("headless set FAILED: " + t); }
 
-        // 3. CTC Toolkit (Toolkit.toolkit is a plain, non-final static field).
+        // 2. CTC Toolkit (Toolkit.toolkit is a plain, non-final static field).
         try {
             setStatic(java.awt.Toolkit.class, "toolkit", ctcToolkit.getDeclaredConstructor().newInstance());
             System.out.println("set Toolkit.toolkit = CTCToolkit OK");
         } catch (Throwable t) { System.out.println("Toolkit.toolkit set FAILED: " + t); }
 
-        // 4. Overwrite the GE singleton in its lazy holder via Unsafe (static-final).
-        //    Force the holder to initialize first (its <clinit> runs the platform
-        //    createGE() once); then clobber INSTANCE with the CTC GE.
+        // 3. Force the lazy holder to initialize FIRST. Its <clinit> runs the platform
+        //    createGE() once (on mac CGraphicsEnvironment.<clinit>, which itself calls
+        //    SurfaceManagerFactory.setInstance(platform)). We must NOT pre-set the SMF here:
+        //    setInstance throws IllegalStateException if already set, which would fail
+        //    LocalGE.<clinit> (ExceptionInInitializerError -> NoClassDefFoundError). So the
+        //    platform SMF gets installed first; we overwrite it (and INSTANCE) afterwards.
         try {
-            Class<?> localGE = Class.forName("java.awt.GraphicsEnvironment$LocalGE"); // initialize=true -> <clinit>
+            Class.forName("java.awt.GraphicsEnvironment$LocalGE"); // initialize=true -> <clinit>
+            System.out.println("forced LocalGE.<clinit> (platform GE built) OK");
+        } catch (Throwable t) {
+            System.out.println("LocalGE.<clinit> FAILED: " + t);
+            t.printStackTrace(System.out);
+        }
+
+        // 4. Now that the platform SMF is set, OVERWRITE the field directly (bypasses the
+        //    setInstance guard) with the CTC factory — needed once CTC draws real pixels.
+        try {
+            setStatic("sun.java2d.SurfaceManagerFactory", "instance",
+                      ctcSMF.getDeclaredConstructor().newInstance());
+            System.out.println("overwrote SurfaceManagerFactory.instance = CTCSurfaceManagerFactory OK");
+        } catch (Throwable t) { System.out.println("SMF overwrite FAILED: " + t); }
+
+        // 5. Overwrite the GE singleton (static-final) in the now-initialized holder via
+        //    Unsafe. getLocalGraphicsEnvironment() re-reads INSTANCE each call -> returns CTC.
+        try {
+            Class<?> localGE = Class.forName("java.awt.GraphicsEnvironment$LocalGE");
             Object ctcGEInstance = ctcGE.getMethod("getInstance").invoke(null);
             Field instance = localGE.getDeclaredField("INSTANCE");
             Object base = mBase.invoke(U, instance);

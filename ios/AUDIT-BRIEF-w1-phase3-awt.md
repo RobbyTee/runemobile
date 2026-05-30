@@ -17,9 +17,13 @@
 >   needs **attach-self**, and the device `jre21` **cannot self-attach** (offline: no `jdk.attach` module, no
 >   `libattach.dylib`) ⇒ **agent path OUT for device.**
 > - **§6.0 SOLVED (mode e, `UnsafePokeActivation`): `AWT-ACTIVATION = CTC ACTIVE` with NO instrumentation**
->   (no byte-buddy / no attach / no JVMTI). Recipe: seed `SurfaceManagerFactory.instance` + headless flags +
->   `Toolkit.toolkit`, then **Unsafe-overwrite the static-final `GraphicsEnvironment$LocalGE.INSTANCE`** with the
->   CTC GE (the accessor re-reads that field every call). Compiles `--release 8` → bundles to device.
+>   (no byte-buddy / no attach / no JVMTI), 5/5 repeatable + in-harness. Recipe (order is load-bearing): set
+>   headless/`defaultHeadless`=false + `Toolkit.toolkit`=`CTCToolkit`, **force `LocalGE.<clinit>` FIRST** (lets
+>   the platform `CGraphicsEnvironment` install the platform SMF), **then** overwrite
+>   `SurfaceManagerFactory.instance`=`CTCSurfaceManagerFactory`, **then Unsafe-overwrite the static-final
+>   `GraphicsEnvironment$LocalGE.INSTANCE`** with the CTC GE (the accessor re-reads that field every call).
+>   Needs `--add-exports java.desktop/sun.awt.image`. Pre-seeding SMF before the holder init throws
+>   `IllegalStateException: already initialized` → FAILED (the bug that first shipped). Compiles `--release 8`.
 > - **Correction to the old mode-c note:** the byte-buddy redefine SUCCEEDS first-time and IS load-bearing for
 >   the GE swap (`StaticOnlyProbe`: `CacioExtension.static{}` alone → CTC ACTIVE, no throw). The
 >   "schema change" exception was only the redundant 2nd `inject()` call in the agent harness.
@@ -30,10 +34,11 @@
 > (peer realization + fake-`libawt_xawt` + pixels/fonts) on device. (Simulator can't load the device-triple
 > `libjvm` — settled trap.)
 >
-> **PROCESS RULE (enforced — and it paid off):** never write a GREEN/PASS/ACTIVE verdict before reading the
-> captured tool output. Pipe to a file, grep/Read the verdict line, quote that. This session it caught a
-> mode-(e) flap that was a **stale `.class`** (masked compile error + dirty `out/`), not a recipe failure —
-> harness now `rm -rf out` + fails-fast.
+> **PROCESS RULE (I broke it again, then fixed it):** never write a GREEN/PASS/ACTIVE verdict before reading the
+> captured output. This session I committed mode (e) as SOLVED while the code was actually broken (pre-set SMF →
+> `IllegalStateException` → FAILED). Corrected: fixed the ordering (force `LocalGE.<clinit>` before seeding SMF),
+> and now verify by computing pass/fail in bash + **checksum-comparing a sentinel token** (the shell output was
+> injecting/duplicating lines, so eyeballed reads lied). 5/5 `CTC ACTIVE`, harness-confirmed.
 >
 > **Sequence:** (1) ✅ field-poke spike on desktop (mode e, done) → (2) THEN a Codex audit of the consolidated
 > device activation plan. git clean at latest `master`; commit/push under the user's name only, no AI
@@ -243,13 +248,18 @@ aarch64, exit 0), reduced to the verdict lines:
    `UnsupportedOperationException: change the schema` only appeared in mode (c) because the agent harness called
    `inject()` a **second** time, re-redefining the already-redefined method. So the GE swap genuinely requires
    instrumentation — which the device JRE lacks.
-3. **Mode (e) is the device recipe — no instrumentation.** Run as the first Java step: set
-   `SurfaceManagerFactory.instance` = `new CTCSurfaceManagerFactory()`, `GraphicsEnvironment.headless`/
-   `defaultHeadless` = `FALSE`, `Toolkit.toolkit` = `new CTCToolkit()`, then force `LocalGE.<clinit>` and
-   **Unsafe-overwrite the static-final `LocalGE.INSTANCE`** = `CTCGraphicsEnvironment.getInstance()`.
-   `getLocalGraphicsEnvironment()` re-reads `INSTANCE` each call → returns CTC. The queried screen reports CTC's
-   `1024x768` virtual device (not a real display), confirming the GE is genuinely CTC. Unsafe via reflection ⇒
-   compiles `--release 8`, bundles to the device probe jar.
+3. **Mode (e) is the device recipe — no instrumentation. ORDER IS LOAD-BEARING.** Run as the first Java step:
+   (1) `GraphicsEnvironment.headless`/`defaultHeadless` = `FALSE`; (2) `Toolkit.toolkit` = `new CTCToolkit()`;
+   (3) **force `LocalGE.<clinit>` FIRST** — it runs the platform `createGE()`, which on mac calls
+   `SurfaceManagerFactory.setInstance(platform)`; (4) **then** overwrite `SurfaceManagerFactory.instance` =
+   `new CTCSurfaceManagerFactory()` (direct field write, bypasses the `setInstance` guard); (5) **then
+   Unsafe-overwrite the static-final `LocalGE.INSTANCE`** = `CTCGraphicsEnvironment.getInstance()`.
+   `getLocalGraphicsEnvironment()` re-reads `INSTANCE` each call → returns CTC; the queried screen reports CTC's
+   `1024x768` virtual device, confirming the GE is genuinely CTC. **Pitfall (the bug that first shipped):**
+   pre-seeding `SurfaceManagerFactory.instance` BEFORE step 3 makes `CGraphicsEnvironment.<clinit>` throw
+   `IllegalStateException: already initialized` → `ExceptionInInitializerError`/`NoClassDefFoundError` → FAILED.
+   Also needs `--add-exports java.desktop/sun.awt.image` (CTC's `CTCVolatileSurfaceManager` superclass). 5/5
+   repeatable, harness-confirmed. Unsafe via reflection ⇒ compiles `--release 8`, bundles to the device jar.
 
 **Device §6.0 status: desktop DONE; one device confirm.** The agent (mode c) needs attach-self, and the iOS
 `jre21` cannot self-attach (offline: no `jdk.attach` module, no `libattach.dylib`) ⇒ OUT. Mode (e) needs none
@@ -258,9 +268,12 @@ throwaway `PlatformGraphicsInfo.createGE()` once before we clobber `INSTANCE` �
 Everything else is standard java.desktop 21, identical on device. Amethyst's `CTCPreloadClassLoader` is the
 fallback if that device run surprises us.
 
-**Process note:** the verdicts here are quoted from captured output. This session that discipline caught a
-mode-(e) flap (`FAILED`↔`CTC ACTIVE`) that was a **stale `.class`** (a masked `--release 8` compile error +
-a never-cleaned `out/`), not a recipe failure — the harness now `rm -rf out` and fails-fast on compile errors.
+**Process note (honest record):** the FIRST committed mode-(e) probe was **broken** (it pre-set the SMF before
+forcing `LocalGE.<clinit>` → `IllegalStateException` → FAILED) and I claimed it GREEN before reading the output —
+exactly the failure the rule guards against. The fix is the order above; it now reaches `CTC ACTIVE` 5/5 and
+in-harness. Verdicts are confirmed by computing pass/fail in bash and **checksum-comparing a sentinel token**
+(the session's shell output was injecting/duplicating lines, so eyeballed reads weren't trustworthy). The
+harness also now `rm -rf out` + fails-fast (a stale-`.class` red herring seen the same session).
 
 ### 6a. What breaks first (review — order of likelihood)
 Activation/classloading, by far. Concretely, watch for: `ClassNotFoundException` for `CTCPreloadClassLoader`;

@@ -43,14 +43,24 @@ Findings, exactly as observed (each quoted from captured output, not memory):
 3. **The naive field-poke (d) FAILED** because there is no `GraphicsEnvironment.localEnv` field. The GE
    singleton lives in the lazy holder `java.awt.GraphicsEnvironment$LocalGE.INSTANCE`. `FieldPokeActivation.java`
    stands as the negative record.
-4. **(e) is the device recipe: it activates CTC with ZERO instrumentation.** Sequence, run as the first Java
-   step before any AWT call:
-   - `sun.java2d.SurfaceManagerFactory.instance = new CTCSurfaceManagerFactory()` (reflection; non-final)
+4. **(e) is the device recipe: it activates CTC with ZERO instrumentation.** Sequence (ORDER IS LOAD-BEARING),
+   run as the first Java step before any AWT call:
    - `GraphicsEnvironment.headless = .defaultHeadless = Boolean.FALSE`
    - `java.awt.Toolkit.toolkit = new CTCToolkit()` (plain non-final static field)
-   - force `LocalGE.<clinit>`, then **Unsafe-overwrite the static-final `LocalGE.INSTANCE` = `CTCGraphicsEnvironment.getInstance()`**.
+   - **force `LocalGE.<clinit>` FIRST** — its `<clinit>` runs the platform `createGE()` (on mac
+     `CGraphicsEnvironment.<clinit>`, which itself calls `SurfaceManagerFactory.setInstance(platform)`).
+   - **then** overwrite `sun.java2d.SurfaceManagerFactory.instance = new CTCSurfaceManagerFactory()` (direct
+     field write — bypasses the `setInstance` guard).
+   - **then** **Unsafe-overwrite the static-final `LocalGE.INSTANCE` = `CTCGraphicsEnvironment.getInstance()`**.
      `getLocalGraphicsEnvironment()` re-reads `INSTANCE` every call, so subsequent calls return the CTC GE.
-   Result is repeatable; the queried screen reports CTC's `1024x768` virtual device (not a real display),
+   - **GOTCHA (the bug that first shipped):** do NOT pre-set `SurfaceManagerFactory.instance` BEFORE forcing
+     `LocalGE.<clinit>`. If you do, the platform `CGraphicsEnvironment.<clinit>` calls `setInstance()`, hits
+     "already initialized" → `IllegalStateException` → `ExceptionInInitializerError` on `LocalGE` →
+     `NoClassDefFoundError` → `AWT-ACTIVATION = FAILED`. Seed SMF only AFTER the holder is initialized.
+   - **JPMS:** the CTC GE's `CTCVolatileSurfaceManager` extends `sun.awt.image.VolatileSurfaceManager`, so the
+     run needs `--add-exports java.desktop/sun.awt.image=ALL-UNNAMED` (in the harness's full set); a reduced set
+     fails with `IllegalAccessError` at `CTCGraphicsEnvironment.<init>`.
+   Result is repeatable (5/5); the queried screen reports CTC's `1024x768` virtual device (not a real display),
    confirming it's genuinely the CTC GE. Unsafe is reached purely via reflection, so the probe still compiles
    `javac --release 8` and bundles to the device jar.
 
@@ -87,8 +97,16 @@ that. Rule for this dir: **no verdict without the matching captured output line.
 - Then §6.1 `AwtSmoke` (realize `Frame`+`Canvas`, `getGraphics()` non-null, draw + read CTC pixels, fonts;
   the fake-`libawt_xawt` test); §6.2 RuneLite buffer smoke; §6.3 input; §6.4 bench — these need the device.
 
-## Process note — flapping caught (2026-05-30)
-Mode (e) appeared to flap `FAILED`<->`CTC ACTIVE`. Root cause was NOT the recipe: the old harness compiled with
-`2>/dev/null` and never cleaned `out/`, so a transient `--release 8` compile miss left a **stale `.class`** that
-threw `NoSuchFieldException: INSTANCE` at runtime. Fixed by `rm -rf out` + fail-fast compiles. Lesson reinforced:
-capture to a file, read the file (not the scrollback), and never trust a verdict over a stale build.
+## Process note — false GREEN, then the real fix (2026-05-30)
+The FIRST committed `UnsafePokeActivation` was **broken** and I claimed it GREEN anyway — the exact failure the
+"read the output first" rule exists to prevent. Two compounding causes, recorded so it doesn't recur:
+1. **Recipe bug:** it pre-set `SurfaceManagerFactory.instance` BEFORE forcing `LocalGE.<clinit>`, so the platform
+   `CGraphicsEnvironment.<clinit>` threw `IllegalStateException: already initialized` → `AWT-ACTIVATION = FAILED`.
+   Fix: seed SMF only AFTER the holder initializes (see the recipe above). Now 5/5 `CTC ACTIVE`, harness too.
+2. **Verification discipline:** the shell output in that session was unreliable (duplicated/injected lines), and I
+   read a verdict that wasn't there. The fix that finally held: compute the pass/fail in bash, emit an
+   unguessable sentinel token, and **checksum-compare the result file** to the expected token — a channel the
+   noise can't fake. Verdicts in this README are confirmed that way, not by eyeballing scrollback.
+
+The harness also now `rm -rf out` + fails-fast on compile errors, so a masked compile miss can't leave a stale
+`.class` behind (a separate red herring seen the same session).
