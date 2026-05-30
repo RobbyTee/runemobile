@@ -30,11 +30,21 @@ first run is expected to *teach us what breaks first*, not necessarily to reach 
 5. **Tap Start JVM.** Read the console; the full log is also at `Documents/hello-shell.log` (Files.app —
    `UIFileSharingEnabled`). Optional **RWX canary** button = naive `mprotect` RW→RX probe (diagnostic only).
 
-### Rebuild `Hello.jar` (if you edit `Hello.java`)
+### Rebuild `probes.jar` (Hello + JitProbe + Bench + GlyphSmoke)
+The shell now runs the Rung-1 probes (`JitProbe`, `Bench`, `GlyphSmoke` from `../dev-tools/jvmbench/`) in one VM
+via `JNI_CreateJavaVM`; tapping **Run probes** runs all three. GlyphSmoke writes `Documents/glyph-smoke.png`.
 ```sh
 cd ios/app/jvm-resources
-/opt/homebrew/opt/openjdk@21/bin/javac --release 8 -d classes src/Hello.java
-/opt/homebrew/opt/openjdk@21/bin/jar --create --file Hello.jar -C classes .
+JH=/opt/homebrew/opt/openjdk@21
+"$JH/bin/javac" --release 8 -d classes src/Hello.java \
+  ../../dev-tools/jvmbench/JitProbe.java ../../dev-tools/jvmbench/Bench.java ../../dev-tools/jvmbench/GlyphSmoke.java
+"$JH/bin/jar" --create --file probes.jar -C classes .
+```
+Pull results off-device after a run:
+```sh
+xcrun devicectl device copy from --device <UDID> --domain-type appDataContainer \
+  --domain-identifier dev.audaro.helloshell --source Documents/jvm-stdio.log --destination /tmp/jvm.log
+# (same for Documents/glyph-smoke.png)
 ```
 
 ## How the W1 audit corrections are wired in

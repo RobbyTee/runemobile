@@ -26,7 +26,7 @@ targets:
       - path: ../dev-tools/jre
         type: folder
         buildPhase: resources
-      - path: jvm-resources/Hello.jar
+      - path: jvm-resources/probes.jar
         buildPhase: resources
     settings:
       base:

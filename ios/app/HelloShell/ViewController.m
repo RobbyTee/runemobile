@@ -40,7 +40,7 @@
 
     self.launchButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.launchButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.launchButton setTitle:@"Start JVM (Hello)" forState:UIControlStateNormal];
+    [self.launchButton setTitle:@"Run probes (JIT/Bench/Glyph)" forState:UIControlStateNormal];
     self.launchButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
     self.launchButton.enabled = NO;
     [self.launchButton addTarget:self action:@selector(onLaunch)
@@ -162,7 +162,7 @@
     // Hello.main completes, so the UI stays responsive to read the log.)
     JVMLauncher *launcher = [[JVMLauncher alloc] init];
     NSThread *t = [[NSThread alloc] initWithBlock:^{
-        [launcher launchHelloWithLog:log];
+        [launcher runProbesWithLog:log];
     }];
     t.stackSize = 16 * 1024 * 1024;
     t.name = @"jvm-main";

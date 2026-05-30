@@ -80,14 +80,47 @@ static void resetSignalHandlers(void) {
     }
 }
 
-- (int)launchHelloWithLog:(JVMLogSink)log {
+// Invoke <className>.main(args) on the (already-created) VM. Clears any exception
+// so one probe's failure doesn't poison the next.
+static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *args, JVMLogSink log) {
+    jclass cls = (*env)->FindClass(env, className);
+    if (!cls || (*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env); (*env)->ExceptionClear(env);
+        log([NSString stringWithFormat:@"[jvm] FindClass(%s) failed", className]); return;
+    }
+    jmethodID mid = (*env)->GetStaticMethodID(env, cls, "main", "([Ljava/lang/String;)V");
+    if (!mid || (*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env); (*env)->ExceptionClear(env);
+        log([NSString stringWithFormat:@"[jvm] GetStaticMethodID(%s.main) failed", className]); return;
+    }
+    jclass strCls = (*env)->FindClass(env, "java/lang/String");
+    jsize n = (jsize)args.count;
+    jobjectArray jargs = (*env)->NewObjectArray(env, n, strCls, NULL);
+    for (jsize i = 0; i < n; i++) {
+        jstring s = (*env)->NewStringUTF(env, args[i].UTF8String);
+        (*env)->SetObjectArrayElement(env, jargs, i, s);
+        (*env)->DeleteLocalRef(env, s);
+    }
+    log([NSString stringWithFormat:@"[jvm] ===== %s.main =====", className]);
+    (*env)->CallStaticVoidMethod(env, cls, mid, jargs);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env); (*env)->ExceptionClear(env);
+        log([NSString stringWithFormat:@"[jvm] %s threw", className]);
+    } else {
+        log([NSString stringWithFormat:@"[jvm] %s done", className]);
+    }
+}
+
+- (int)runProbesWithLog:(JVMLogSink)log {
     NSString *javaHome = [JVMLauncher javaHome];
     if (!javaHome) { log(@"[jvm] FATAL: embedded jre not found in bundle"); return -10; }
     log([NSString stringWithFormat:@"[jvm] JAVA_HOME = %@", javaHome]);
 
-    NSString *jarPath = [[NSBundle mainBundle] pathForResource:@"Hello" ofType:@"jar"];
-    if (!jarPath) { log(@"[jvm] FATAL: Hello.jar not found in bundle"); return -11; }
+    NSString *jarPath = [[NSBundle mainBundle] pathForResource:@"probes" ofType:@"jar"];
+    if (!jarPath) { log(@"[jvm] FATAL: probes.jar not found in bundle"); return -11; }
     NSString *frameworks = [[NSBundle mainBundle].bundlePath stringByAppendingPathComponent:@"Frameworks"];
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSString *glyphPng = [docs stringByAppendingPathComponent:@"glyph-smoke.png"];
 
     setenv("JAVA_HOME", javaHome.UTF8String, 1);
 
@@ -96,15 +129,9 @@ static void resetSignalHandlers(void) {
     NSString *libjvm = [javaHome stringByAppendingPathComponent:@"lib/server/libjvm.dylib"];
     log([NSString stringWithFormat:@"[jvm] dlopen %@", libjvm]);
     void *h = dlopen(libjvm.UTF8String, RTLD_NOW | RTLD_GLOBAL);
-    if (!h) {
-        log([NSString stringWithFormat:@"[jvm] FATAL dlopen(libjvm): %s", dlerror()]);
-        return -12;
-    }
+    if (!h) { log([NSString stringWithFormat:@"[jvm] FATAL dlopen(libjvm): %s", dlerror()]); return -12; }
     CreateJavaVM_t JNI_CreateJavaVM = (CreateJavaVM_t)dlsym(h, "JNI_CreateJavaVM");
-    if (!JNI_CreateJavaVM) {
-        log([NSString stringWithFormat:@"[jvm] FATAL dlsym(JNI_CreateJavaVM): %s", dlerror()]);
-        return -13;
-    }
+    if (!JNI_CreateJavaVM) { log([NSString stringWithFormat:@"[jvm] FATAL dlsym(JNI_CreateJavaVM): %s", dlerror()]); return -13; }
     log(@"[jvm] JNI_CreateJavaVM resolved");
 
     NSArray<NSString *> *opts = @[
@@ -113,6 +140,7 @@ static void resetSignalHandlers(void) {
         @"-XX:+DisablePrimordialThreadGuardPages",
         @"-XX:-UseCompressedClassPointers",       // free cert: no extended-virtual-addressing
         @"-XX:ReservedCodeCacheSize=64m",         // bound the brk #0x69 RX reservation
+        @"-Djava.awt.headless=true",              // GlyphSmoke uses the headless 2D/font toolkit
         [NSString stringWithFormat:@"-Djava.home=%@", javaHome],
         [NSString stringWithFormat:@"-Djava.library.path=%@", frameworks],
         [NSString stringWithFormat:@"-Djava.class.path=%@", jarPath],
@@ -136,29 +164,16 @@ static void resetSignalHandlers(void) {
     JavaVM *vm = NULL;
     JNIEnv *env = NULL;
     jint rc = JNI_CreateJavaVM(&vm, (void **)&env, &vmArgs);
-    if (rc != JNI_OK || !vm || !env) {
-        log([NSString stringWithFormat:@"[jvm] FATAL JNI_CreateJavaVM rc=%d", rc]);
-        return -14;
-    }
-    log(@"[jvm] JavaVM created — HotSpot is up. Invoking Hello.main…");
+    if (rc != JNI_OK || !vm || !env) { log([NSString stringWithFormat:@"[jvm] FATAL JNI_CreateJavaVM rc=%d", rc]); return -14; }
+    log(@"[jvm] JavaVM created — HotSpot is up. Running probes…");
 
-    jclass cls = (*env)->FindClass(env, "Hello");
-    if (!cls || (*env)->ExceptionCheck(env)) { (*env)->ExceptionDescribe(env); log(@"[jvm] FATAL FindClass(Hello)"); return -15; }
-    jmethodID mid = (*env)->GetStaticMethodID(env, cls, "main", "([Ljava/lang/String;)V");
-    if (!mid || (*env)->ExceptionCheck(env)) { (*env)->ExceptionDescribe(env); log(@"[jvm] FATAL GetStaticMethodID(main)"); return -16; }
-    jclass strCls = (*env)->FindClass(env, "java/lang/String");
-    jobjectArray jargs = (*env)->NewObjectArray(env, 0, strCls, NULL);
-
-    (*env)->CallStaticVoidMethod(env, cls, mid, jargs);
-    if ((*env)->ExceptionCheck(env)) {
-        (*env)->ExceptionDescribe(env);   // -> stderr -> jvm-stdio.log
-        log(@"[jvm] Hello.main threw");
-    } else {
-        log(@"[jvm] Hello.main returned cleanly");
-    }
+    // Rung-1 numbers + the iOS rasterizer smoke, all in one VM (no probe calls System.exit).
+    callMain(env, "JitProbe", @[], log);
+    callMain(env, "Bench", @[], log);
+    callMain(env, "GlyphSmoke", @[glyphPng], log);
 
     (*vm)->DestroyJavaVM(vm);
-    log(@"[jvm] DestroyJavaVM done");
+    log([NSString stringWithFormat:@"[jvm] DestroyJavaVM done. GlyphSmoke PNG -> %@", glyphPng]);
     return 0;
 }
 

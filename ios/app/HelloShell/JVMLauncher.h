@@ -23,10 +23,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Resolve the embedded JRE home inside the .app bundle (".../jre").
 + (nullable NSString *)javaHome;
 
-/// dlopen(libjli) -> dlsym(JLI_Launch) -> run `Hello`. Blocks until the JVM
-/// exits (Hello returns) or aborts. MUST be called on a dedicated thread with
-/// JIT already live. Returns the JLI_Launch exit code (or a negative error).
-- (int)launchHelloWithLog:(JVMLogSink)log;
+/// dlopen(libjvm) -> JNI_CreateJavaVM -> run JitProbe, Bench, GlyphSmoke in one VM,
+/// then DestroyJavaVM. Blocks until done. MUST be called on a dedicated thread with
+/// JIT already live (CS_DEBUGGED + the StikDebug brk #0x69 script). Returns 0 on a
+/// clean VM lifecycle, negative on a fatal setup error.
+- (int)runProbesWithLog:(JVMLogSink)log;
 
 @end
 
