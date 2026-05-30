@@ -318,6 +318,26 @@ RW=0x1178b8000, RX=0x1138b8000` → `java.vm.info = mixed mode` → `compileMs 1
   JIT throughput numbers (Rung 1) + the iOS native 2D/font rasterizer smoke; then W1 Phase 3 (AWT backend:
   Caciocavallo + fake-xawt) toward running real RuneLite headless-core on device.
 
+### Rung-1 numbers + rasterizer smoke ON DEVICE (2026-05-29). PHASE 1 COMPLETE.
+Ran `JitProbe`+`Bench`+`GlyphSmoke` (one VM via `JNI_CreateJavaVM`, `probes.jar`) on the iPhone 17 Pro Max
+(iOS 26.5 TXM) under StikDebug. Same `[JIT26]` mirror trace; all three ran; clean.
+- **JIT works; warmed throughput is excellent (Bench):** `raster ≈ 2.57–2.64 G ops/s`, `floatbits ≈ 263–267 M
+  ops/s`, `mixed ≈ 128–130 M ops/s`. Real JIT-compiled performance on-device.
+- **GlyphSmoke: the iOS headless Java2D/font rasterizer WORKS** — wrote a legible 320×160 PNG (6290 non-blank
+  px), `font=SansSerif.bold stringWidth("RuneLite iOS")=180`, AA text + circle + rotated rect rendered correctly
+  with `-Djava.awt.headless=true` (libfontmanager/libfreetype/libawt_headless). Major Phase-3 de-risk — that's
+  the `Graphics2D` path RuneLite overlays draw through.
+- **Nuance — cold/OSR-under-debugger is slow:** `JitProbe`'s single 200 M-iter OSR loop measured only ~2.16 M
+  ops/s (92.6 s, `compileMs delta=4`) → OSR barely engaged during that cold loop under the debugger; it ran
+  ~interpreted. Verdict still `JIT ACTIVE`. Bench (which warms via repeated *method* calls → standard tiered
+  compilation) shows the true fast steady state. **Implication for the real app:** expect warmup lag, then fast
+  steady state — RuneLite's game loop calls methods repeatedly (like Bench), so standard compilation applies.
+  (If warmup proves painful later, options: `-XX:-TieredCompilation`/`-XX:TieredStopAtLevel`, tune
+  CompileThreshold, or AOT/CDS — deferred.)
+- **PHASE 1 (W1 platform: on-device JIT JVM) is DONE.** Next: W1 Phase 3 — the AWT backend (Caciocavallo +
+  fake-xawt) so RuneLite's `Canvas`/`BufferProvider` init on-device; that's the next adversarial-brief→review
+  candidate (AWT-on-iOS is the next genuine unknown). Recommend a fresh session for it.
+
 ### W1 shell — earlier device run (2026-05-29): the licensing/mechanism notes that led here
 - **Licensing fork (resolved):** the brk stubs + protocol are interface (clean-room-able), but the JS scripts
   (`UniversalJIT26.js` framework + `…Extension.js` handler) are Amethyst's GPLv3 IP. Need to either reimplement
