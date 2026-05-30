@@ -49,9 +49,16 @@ outline/`<col>` tags via `FontMetrics`; `OverlayUtil` `Polygon` draw+alpha-fill 
 - **Activation gotcha:** bare `-Dawt.toolkit=...CTCToolkit` **silently falls back** to the native toolkit.
   CACIO installs before AWT init only via `@ExtendWith(CacioExtension.class)` (byte-buddy self-attach →
   needs `-Djdk.attach.allowAttachSelf=true` on JDK 21, plus the `--add-exports/--add-opens` set).
-- **iOS CACIO is a different artifact:** the desktop test uses `CaciocavalloSilano:cacio-tta` (headless
-  Swing-test backend). The iOS/arm64 backend is the **PojavLauncherTeam/caciocavallo** fork (GPLv3 — patterns
-  only) — that's the W1 dependency, and the one whose 2D/font natives Phase 3 must actually validate.
+- **iOS CACIO is the SAME artifact lineage (correction, 2026-05-29 P3 review):** earlier notes here said the
+  iOS/arm64 backend was the **PojavLauncherTeam/caciocavallo** fork — **WRONG.** That fork is the old
+  `net.java.openjdk.cacio` 1.10 / Java-8 tree (only `cacio-shared`+`cacio-androidnw`), unfit for a condy/JDK21
+  gamepack. **Amethyst's Java-21 path uses the same `com.github.caciocavallosilano` `cacio-shared`/`cacio-tta`
+  (cacio17, source/target 17) we already run on desktop** (`dev-tools/cacio-smoke/lib`). The desktop↔device
+  delta is **activation**, not artifact: desktop installs CTC via the JUnit `CacioExtension` (byte-buddy
+  self-attach); **device uses `CTCPreloadClassLoader` + `-Xbootclasspath/a` + fake `libawt_xawt`** ahead of
+  AWT init. CTC's screen buffer is a `BufferedImage(TYPE_INT_ARGB)` → routes through the same Java2D/font
+  stack `GlyphSmoke` proved (so the 2D/font *rasterizer* is settled; the open risk is the activation path).
+  See `AUDIT-BRIEF-w1-phase3-awt.md` (Claims A/B, reviewed).
 
 ## Stock RuneLite on desktop OpenJDK 21 — UP (Phase 0 step 3 done, 2026-05-29)
 Our fork's `runelite-client` builds and runs on OpenJDK 21 (`/opt/homebrew/opt/openjdk@21`), against

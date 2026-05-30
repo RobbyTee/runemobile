@@ -8,6 +8,15 @@
 > **What we want from this review:** pressure-test the locked approach, find the cheapest experiment that
 > fails fast, and adjudicate Claims A–F (§5) with a verdict + reasoning each. Challenge "CACIO is the right
 > call on this JRE" — don't assume it.
+>
+> **REVIEW INCORPORATED (2026-05-29).** Verdict: *CACIO + fake-xawt stays the right first path, but Claim A
+> was mis-specified.* Corrections baked in below: **the target is Amethyst's Java-21 `cacio17`
+> (`com.github.caciocavallosilano` `cacio-shared`/`cacio-tta`, source/target 17) — the SAME lineage as our
+> desktop jars — NOT the old `PojavLauncherTeam/caciocavallo` 1.10 / Java-8 tree.** The danger is not Java2D
+> pixels (Claim B is now **Supported** — CTC's screen buffer is a `BufferedImage(TYPE_INT_ARGB)`, routing
+> through the exact stack `GlyphSmoke` proved); it is **activation/classloading before AWT init**
+> (`CTCPreloadClassLoader` + `-Xbootclasspath/a` + the exact JPMS flag set + a fake `libawt_xawt`). Experiment
+> order reordered (§6); "what breaks first" added (§6a).
 
 ---
 
@@ -20,12 +29,15 @@ device. W1 Phase 3 supplies the **one missing layer**: a **non-headless AWT tool
 reachable as a buffer we own and synthetic input reaching AWT listeners — all with **no native windowing
 backend** (iOS has no X11/Cocoa AWT peer).
 
-**Locked approach:** the **PojavLauncherTeam/caciocavallo** fork (CACIO) + the "fake-xawt" shim, selected as
-a non-headless toolkit, reusing the iOS native 2D/font stack we already validated. **Top risk:** CACIO
-predates JPMS; whether this fork builds + loads against our **patched 21.0.8** on device — and binds its
-offscreen surface to the *iOS* rasterizer — is unproven by us. **Scope of this phase:** stand up the backend
-and prove it with a **synthetic AWT smoke** (`AwtSmoke`, the non-headless analogue of `GlyphSmoke`), the same
-probe-first method Phase 1 used — *not* yet booting real RuneLite (that's the W2 merge, Rung 3).
+**Locked approach:** **Amethyst's Java-21 `cacio17`** (`com.github.caciocavallosilano` `cacio-shared` +
+`cacio-tta`, source/target 17 — the same artifact our desktop Gate 1a/1b/1c already ran) + the "fake-xawt"
+shim, selected as a non-headless toolkit, reusing the iOS native 2D/font stack we already validated. **Top
+risk (corrected):** not Java2D — it's **activating the CTC toolkit + graphicsenv before AWT init on device**
+without the desktop's JUnit/byte-buddy `CacioExtension` (Amethyst uses `CTCPreloadClassLoader` +
+`-Xbootclasspath/a` instead), plus satisfying the dynamic `libawt_xawt` lookup with a fake stub. **Scope of
+this phase:** stand up the backend and prove it with a **synthetic AWT smoke** (`AwtSmoke`, the non-headless
+analogue of `GlyphSmoke`), then pull the **real-RuneLite buffer smoke** forward as early as possible (the
+reviewer's nudge — a synthetic `BufferProvider` is the weaker proxy) — short of the full W2 merge (Rung 3).
 
 ---
 
@@ -85,10 +97,19 @@ font names already resolve (that's what backed GlyphSmoke's `SansSerif`). What i
 windowing backend: **no `libawt_xawt`, no `libawt_lwawt`**. We supply **only that missing layer** — a Canvas
 peer + drawable surface + event source. That is CACIO's job.
 
-- **CACIO** = pluggable pure-Java AWT peers rendering into a backend-provided surface, selected via
-  `-Dawt.toolkit` / `-Djava.awt.graphicsenv`. The **iOS/arm64 backend is the PojavLauncherTeam/caciocavallo
-  fork** (GPLv3 — **patterns only**, license-review before any copy), bundled by Amethyst for exactly this.
-- **"fake-xawt"** = the shim that satisfies the dynamic `libawt_xawt` lookups with no X11 present.
+- **CACIO** = pluggable pure-Java AWT peers rendering into a backend-provided surface. The artifact is
+  **`com.github.caciocavallosilano` `cacio-shared` + `cacio-tta` (cacio17, source/target 17)** — the **same
+  lineage we already run on desktop** (`dev-tools/cacio-smoke/lib/cacio-{tta,shared}-1.18.jar`, verified:
+  `groupId com.github.caciocavallosilano`, contains the `com.github.caciocavallosilano.cacio.ctc.*` `CTC*`
+  classes). Amethyst's Java-21 path uses this, **not** the old `PojavLauncherTeam/caciocavallo` 1.10 / Java-8
+  tree (that targets Java 8, only enables `cacio-shared`+`cacio-androidnw`, and can't host a condy/JDK21
+  gamepack). GPLv3 → **patterns/jars only**, license-review before copying source.
+- **Activation differs desktop vs device.** Desktop installs CTC pre-AWT-init via the JUnit `CacioExtension`
+  (byte-buddy self-attach → `-Djdk.attach.allowAttachSelf=true` + the JPMS set in `run-cacio.sh`). **On
+  device Amethyst uses `CTCPreloadClassLoader` + `-Xbootclasspath/a`** to get CTC ahead of AWT without the
+  test harness — that's the mechanism P3 must reproduce, and the §6.0 spike's real content.
+- **"fake-xawt"** = a stub `libawt_xawt.dylib` that satisfies AWT's dynamic windowing-backend lookup with no
+  X11 present (else `UnsatisfiedLinkError` / silent fallback to the default toolkit).
 - **Why not hand-roll a `Toolkit`/peer set:** a full `sun.awt` peer set is a known dead-end (`FINDINGS.md`);
   CACIO already abstracts the surface into a small subclassable set. A native Quartz/UIKit AWT peer does not
   exist for iOS and we will not write one.
@@ -103,70 +124,72 @@ peer + drawable surface + event source. That is CACIO's job.
 
 ---
 
-## 5. Claims for adjudication (the meat — verdict + reasoning each)
+## 5. Claims for adjudication — with the review verdict folded in (2026-05-29)
 
-**Claim A — The PojavLauncherTeam/caciocavallo fork builds + loads against our patched `jre21` (21.0.8) on
-device, with a known flag set.**
-*Our position: PLAUSIBLE but UNPROVEN — the dominant risk.* CACIO's active era is JDK 6–11; JPMS (9+)
-encapsulates the `sun.awt`/`sun.java2d`/`sun.font` internals it subclasses, and several internal signatures
-(`SunGraphicsEnvironment`, `SurfaceManagerFactory`, peer interfaces) drifted 9→21. Desktop used a *different*
-artifact (`CaciocavalloSilano:cacio-tta` 1.18, which ran on 21 with `--add-exports/--add-opens` +
-`-Djdk.attach.allowAttachSelf=true`); the iOS fork is the unknown. *Reviewer:* what JDK baseline does the
-Pojav fork target, and where is its exact flag/patch set? Does it need `--patch-module java.desktop=…`?
+**Claim A — CACIO builds + loads + *activates* against `jre21` (21.0.8) on device, with a known flag set.**
+**Verdict: PARTLY REFUTED AS ORIGINALLY WRITTEN → respecified; remains the dominant risk.** The original
+brief named the wrong artifact (`PojavLauncherTeam/caciocavallo`, the Java-8 1.10 tree). **Correct target:
+Amethyst's Java-21 `cacio17` = `com.github.caciocavallosilano` `cacio-shared`/`cacio-tta`, source/target 17**
+— the same lineage as our desktop jars (verified locally). The real risk is **not** compilation but
+**activation/classloading before AWT init**: on device Amethyst uses **`CTCPreloadClassLoader` +
+`-Xbootclasspath/a`** (not the desktop JUnit `CacioExtension`), plus a long JPMS `--add-exports/--add-opens`
+set (the one in `run-cacio.sh`) and a fake `libawt_xawt`. *Reviewer's nudge:* the §6.0 experiment must be
+**"reproduce Amethyst's cacio17 activation path,"** not "build the Pojav fork."
 
-**Claim B — CACIO's offscreen surface binds to the iOS native 2D/font path `GlyphSmoke` exercised (not a
-cacio-internal rasterizer).** *Position: LIKELY but the load-bearing unknown.* On desktop, `BufferedImage`
-`Graphics2D` (`SunGraphics2D`) + the font scaler (`CFontManager`) are **platform-chosen, independent of the
-toolkit** — which is *why* the desktop CACIO test was byte-identical and could **not** validate the iOS
-rasterizer. So whether a CACIO **Canvas** surface on device routes through the same `libawt`/`libfontmanager`
-path is genuinely untested. *Reviewer:* does the Pojav cacio Canvas peer use a `SurfaceData` backed by the
-platform `BufferedImage` rasterizer, or its own?
+**Claim B — CACIO's surface binds to the iOS native 2D/font path `GlyphSmoke` exercised (not a cacio-internal
+rasterizer).** **Verdict: SUPPORTED.** CTC's screen buffer is a `BufferedImage(TYPE_INT_ARGB)` and it draws
+via `screenBuffer.getGraphics()` then extracts the raster — so it routes through the **same Java2D/font stack
+`GlyphSmoke` already proved on device**, not a separate renderer. (Desktop byte-identical output is consistent
+with this.) Lower risk than the brief assumed.
 
-**Claim C — Buffer ownership is via `BufferProvider.getPixels()`, independent of how the engine draws
-(BufferStrategy vs offscreen `Image`).** *Position: STRONG.* Gate 1c captured the engine's pixels via
-`getPixels()` on desktop under both toolkits, so W3's blit source is the RuneLite `BufferProvider` `int[]`,
-not the cacio surface — which de-risks the "does the engine page-flip?" question. *Reviewer:* any reason the
-device cacio peer would leave `getPixels()` stale/empty where desktop didn't?
+**Claim C — Buffer ownership is via `BufferProvider.getPixels()`, independent of how the engine draws.**
+**Verdict: STRONGLY SUPPORTED.** Desktop Gate 1c/1c-ii captured real RuneLite login + in-game overlay via
+`getPixels()` under CACIO with `nullGraphics=0`, peer-independent. W3's blit source is the RuneLite `int[]`,
+not the cacio surface.
 
-**Claim D — Font provisioning needs nothing extra: the bundled `fontconfig.properties` + Lucida fonts back
-logical names, and RL's own TTFs cover overlays.** *Position: LIKELY OK — partially proven.* The `jre21`
-bundles `lib/fontconfig.properties` + `lib/fonts/Lucida*.ttf`, so logical names (Dialog/SansSerif/…) map —
-`GlyphSmoke` already rendered `SansSerif.bold` on device. RL additionally registers its `runescape*.ttf` via
-`Font.createFont`/`registerFont` for overlay text. *Open:* does `registerFont` behave on the **cacio**
-toolkit (vs the headless one), and does any RL draw hit a logical name `GlyphSmoke` didn't exercise?
-*Cheapest experiment:* the §6.1 `AwtSmoke` draws both a logical-name string and a `createFont`-loaded RL TTF.
+**Claim D — Font provisioning needs nothing extra: bundled `fontconfig.properties` + Lucida back logical
+names, RL's TTFs cover overlays.** **Verdict: SUPPORTED, but the flags are brittle.** The `jre21` bundles
+`lib/fontconfig.properties` + `lib/fonts/Lucida*.ttf` and `GlyphSmoke` rendered `SansSerif.bold` on device.
+*The smoke must exercise the brittle surface:* `X11FontManager`/`FreetypeFontScaler` (the non-mac iOS path),
+logical fonts, RL `registerFont(runescape*.ttf)`, shadow/outline/`<col>` overlay ops, and the JPMS access
+flags — i.e. the full `cacio-smoke` `OverlaySmoke` op-set, on the cacio (not headless) toolkit.
 
-**Claim E — UIKit touch → AWT `MouseEvent`/`KeyEvent` posted to the cacio `EventQueue` reaches the engine
-Canvas listeners on device.** *Position: LIKELY — desktop-proven analogue.* Gate 1c-ii crossed
-`LOGIN_SCREEN → LOGGED_IN` by posting a synthesized focus+mouse sequence into the gamepack Canvas via the
-toolkit `EventQueue` under CACIO CTC. P3 device test: post a synthetic event, confirm a listener fires on the
-**offscreen** cacio peer. *Reviewer:* focus/realization preconditions for dispatch on an offscreen peer?
+**Claim E — UIKit touch → AWT event reaches the engine Canvas listeners on device.** **Verdict: PLAUSIBLE —
+LEAST PROVEN; broaden the test.** Direct in-process event posting (what Gate 1c-ii did on desktop) does **not**
+prove *UIKit ingress*. The §6 input smoke must drive the real path: UIKit touch callback → post AWT events to
+the canvas on the EDT, and cover `dispatchEvent` + `EventQueue.postEvent`, focus, mouse move/click/drag, wheel
+(if used), and key events — with listener counters + focus assertions.
 
-**Claim F — The non-headless toolkit + buffer(s) at 765×503 fit the free-cert budget alongside the JIT code
-cache.** *Position: LIKELY.* We already run with `-XX:-UseCompressedClassPointers` (free cert),
-`-XX:+MirrorMappedCodeCache`, `-XX:ReservedCodeCacheSize=64m`, and the `increased-memory-limit` entitlement.
-765×503×4B buffers are trivial. *Reviewer:* buffer count/precision (ARGB `int[]`) and heap retune for P3.
+**Claim F — The non-headless toolkit + 765×503 buffer fit the free-cert budget.** **Verdict: LOW RISK.** A
+765×503 ARGB buffer is ~1.5 MB. The real memory cost is loading **`java.desktop` + CACIO + RuneLite**, not the
+pixel buffer — track that in the §6.4 bench, not the buffer size. We already run
+`-XX:-UseCompressedClassPointers` / `+MirrorMappedCodeCache` / `ReservedCodeCacheSize=64m` +
+`increased-memory-limit`.
 
 ---
 
-## 6. Sub-steps (fail-fast — cheapest experiments retire the biggest unknowns first)
+## 6. Sub-steps — reordered per review (cheapest correct order; activation first)
 
 | # | Step | Retires | Cost |
 |---|---|---|---|
-| **0** | **CACIO-load spike (device):** build the Pojav cacio fork against patched `jre21`; select it via `-Dawt.toolkit`/`graphicsenv`; `Toolkit.getDefaultToolkit()` returns it, `GraphicsEnvironment` non-headless, no crash. | **Claim A** — the gate | **Do first** |
-| 1 | **`AwtSmoke` (device):** realize a `Canvas` on an offscreen cacio `Frame`; `Graphics2D` draws shapes + RL TTF text; read pixels back (CRC + PPM, like `GlyphSmoke`). | Claims B, D | Med |
-| 2 | **Input smoke (device):** post a synthetic `MouseEvent`/`KeyEvent` to the cacio `EventQueue`; a listener on the Canvas fires. | Claim E | Low |
-| 3 | **Buffer-ownership smoke:** drive the draw through a `BufferProvider`-shaped surface; confirm `getPixels()` returns the rendered `int[]`. | Claim C | Low |
-| 4 | **Sustained bench at 765×503:** fill+blit loop; no GC/JIT cliff; capture numbers. | Claim F | Med |
+| **0** | **Activation gate (device):** launch with **Amethyst-style cacio17 jars + fake `libawt_xawt.dylib` + `CTCPreloadClassLoader` + `-Xbootclasspath/a` + the exact JPMS flag set**. Assert `Toolkit.getDefaultToolkit()` = `CTCToolkit`, `graphicsenv` = `CTCGraphicsEnvironment`, **not** headless, no crash, no silent fallback. | **Claim A** — the gate | **Do first** |
+| 1 | **`AwtSmoke` (device):** realize `Frame`+`Canvas`, **assert `Canvas.getGraphics()` non-null**, draw marker pixels, read CTC screen pixels back (CRC+PPM), then the full font op-set (logical + `createFont` RL TTF + shadow/outline/`<col>`). | Claims B, D | Med |
+| 2 | **RuneLite buffer smoke (device) — pulled FORWARD:** reuse the Gate-1c `HeadlessClientUI` idea on device as early as possible (real engine → real `BufferProvider.getPixels()`). The reviewer flags a synthetic `BufferProvider` as the **weaker** proxy — prefer the real one once §0–1 pass. | Claim C (real) | Med |
+| 3 | **Input smoke (device):** **UIKit touch callback** posts AWT events to the canvas on the EDT; cover `dispatchEvent`/`EventQueue.postEvent`, focus, move/click/drag, wheel, keys; listener counters + focus checks. | Claim E | Med |
+| 4 | **Sustained bench (~10 min):** draw + capture + input loop; log **GC + total footprint** (java.desktop+CACIO+RL load, not the buffer). | Claim F | Med |
 
 Probes live in `dev-tools/awtsmoke/` (built `javac --release 8`, run via the HelloShell `JNI_CreateJavaVM`
-path that already runs `probes.jar`). This mirrors Phase 1's `dev-tools/jvmbench/` exactly. **Real RuneLite is
-not loaded in P3** — that's the W2 merge (Rung 3), gated on these smokes passing.
+path that already runs `probes.jar`). This mirrors Phase 1's `dev-tools/jvmbench/`. **The full W2 merge (Rung
+3) is still out of scope** — but §6.2 deliberately pulls a *real-engine buffer* read forward (per the review)
+rather than leaning on a synthetic `BufferProvider`.
 
-**Activation gotcha to carry over (FINDINGS):** bare `-Dawt.toolkit=…` **silently falls back** to the default
-toolkit. On desktop, CACIO installed pre-AWT-init only via byte-buddy self-attach
-(`-Djdk.attach.allowAttachSelf=true` + the `--add-exports/--add-opens` set). The device install mechanism is
-part of the Claim-A spike.
+### 6a. What breaks first (review — order of likelihood)
+Activation/classloading, by far. Concretely, watch for: `ClassNotFoundException` for `CTCPreloadClassLoader`;
+`IllegalAccessError`/`InaccessibleObjectException` on `sun.*` (missing an `--add-exports/--add-opens`);
+`UnsatisfiedLinkError` for `libawt_xawt` (fake stub missing/mis-signed); **silent fallback to the native
+toolkit** (the desktop gotcha — bare `-Dawt.toolkit=…` doesn't install CTC); `HeadlessException`; or
+`SurfaceManagerFactory already initialized` (CACIO installed too late, after AWT init). The §6.0 gate asserts
+the toolkit/graphicsenv/headless state explicitly so a silent fallback fails loud.
 
 ---
 
@@ -174,13 +197,13 @@ part of the Claim-A spike.
 
 | Option | Verdict |
 |---|---|
-| **Pojav cacio fork + fake-xawt** (locked) | Precedent on our exact JRE lineage; small subclass surface. Risk = Claim A/B on device. |
-| Hand-rolled minimal `Toolkit`/peer set (only Canvas+Graphics+events) | Fallback if Claim A fails; the 2D/font natives already exist, so the scope is "windowing only." More code, full control, no JPMS fight against a 3rd-party fork. |
-| `cacio-tta` (the desktop artifact) on device | Built for headless Swing-test; not the arm64/iOS backend — likely the wrong surface model. |
+| **Amethyst cacio17 + fake-xawt activation path** (locked, post-review) | The reviewer's recommendation: reproduce Amethyst's Java-21 `cacio17` + `CTCPreloadClassLoader`/`-Xbootclasspath/a` + fake-xawt — same jar lineage we run on desktop. Risk concentrated in §6.0 activation. |
+| `PojavLauncherTeam/caciocavallo` 1.10 source tree | **Rejected** — Java-8 targets, only `cacio-shared`+`cacio-androidnw`; wrong baseline for a condy/JDK21 gamepack. (The brief's original mis-spec.) |
+| Hand-rolled minimal `Toolkit`/peer set (only Canvas+Graphics+events) | **Fallback only** if the cacio17 activation can't be made clean/licensable. 2D/font natives already exist → scope = windowing only. Reviewer: this is the fallback, *not* the first move. |
 | Stay `headless=true` + feed the engine a Canvas we fully control | The engine instantiates/uses its Canvas via the toolkit; we don't own its construction → likely infeasible without a non-headless peer. |
 
-**Reviewer:** if the Claim-A spike shows the fork needs heavy patching for 21.0.8, is the **hand-rolled
-minimal peer set** the better bet given we need only Canvas + Graphics + events and the rasterizer is done?
+**Resolved by review:** do **not** bet W1P3 on the Pojav 1.10 tree; bet it on reproducing Amethyst's Java-21
+cacio17 + fake-xawt activation. Hand-rolled peers stay the fallback.
 
 ---
 
