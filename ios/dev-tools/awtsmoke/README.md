@@ -46,23 +46,26 @@ Findings, exactly as observed (each quoted from captured output, not memory):
 4. **(e) is the device recipe: it activates CTC with ZERO instrumentation.** Sequence (ORDER IS LOAD-BEARING),
    run as the first Java step before any AWT call:
    - `GraphicsEnvironment.headless = .defaultHeadless = Boolean.FALSE`
-   - `java.awt.Toolkit.toolkit = new CTCToolkit()` (plain non-final static field)
-   - **force `LocalGE.<clinit>` FIRST** — its `<clinit>` runs the platform `createGE()` (on mac
-     `CGraphicsEnvironment.<clinit>`, which itself calls `SurfaceManagerFactory.setInstance(platform)`).
-   - **then** overwrite `sun.java2d.SurfaceManagerFactory.instance = new CTCSurfaceManagerFactory()` (direct
-     field write — bypasses the `setInstance` guard).
-   - **then** **Unsafe-overwrite the static-final `LocalGE.INSTANCE` = `CTCGraphicsEnvironment.getInstance()`**.
-     `getLocalGraphicsEnvironment()` re-reads `INSTANCE` every call, so subsequent calls return the CTC GE.
-   - **GOTCHA (the bug that first shipped):** do NOT pre-set `SurfaceManagerFactory.instance` BEFORE forcing
-     `LocalGE.<clinit>`. If you do, the platform `CGraphicsEnvironment.<clinit>` calls `setInstance()`, hits
-     "already initialized" → `IllegalStateException` → `ExceptionInInitializerError` on `LocalGE` →
-     `NoClassDefFoundError` → `AWT-ACTIVATION = FAILED`. Seed SMF only AFTER the holder is initialized.
+   - **null `SurfaceManagerFactory.instance`, then force `LocalGE.<clinit>`** — its `<clinit>` runs the platform
+     `createGE()` (on mac `CGraphicsEnvironment.<clinit>`, which calls `SurfaceManagerFactory.setInstance`).
+   - **null SMF again, then `Toolkit.toolkit = new CTCToolkit()`** (plain non-final static field).
+   - **null SMF again, then `CTCGraphicsEnvironment.getInstance()`**.
+   - **Unsafe-overwrite the static-final `LocalGE.INSTANCE` = that CTC GE.** `getLocalGraphicsEnvironment()`
+     re-reads `INSTANCE` every call, so subsequent calls return the CTC GE.
+   - finally set `SurfaceManagerFactory.instance = new CTCSurfaceManagerFactory()` (direct field write).
+   - **THE CRUX (the bug that first shipped, then a second wrong fix):** `SurfaceManagerFactory.setInstance()` is
+     **one-shot** (throws `IllegalStateException: already initialized` if set), and **BOTH** the platform
+     `CGraphicsEnvironment.<clinit>` **AND** `new CTCToolkit()` call it. Whichever runs second throws — which
+     cascaded into `ExceptionInInitializerError` on `LocalGE` → `NoClassDefFoundError` → `AWT-ACTIVATION =
+     FAILED`. The fix is to reset `SurfaceManagerFactory.instance = null` (reflection) right **before each**
+     constructor that calls `setInstance` (this is exactly why `CacioExtension` nulls the SMF too). Neither
+     "seed SMF first" nor "seed SMF after, force LocalGE first" alone works — the null-before-each is required.
    - **JPMS:** the CTC GE's `CTCVolatileSurfaceManager` extends `sun.awt.image.VolatileSurfaceManager`, so the
      run needs `--add-exports java.desktop/sun.awt.image=ALL-UNNAMED` (in the harness's full set); a reduced set
      fails with `IllegalAccessError` at `CTCGraphicsEnvironment.<init>`.
-   Result is repeatable (5/5); the queried screen reports CTC's `1024x768` virtual device (not a real display),
-   confirming it's genuinely the CTC GE. Unsafe is reached purely via reflection, so the probe still compiles
-   `javac --release 8` and bundles to the device jar.
+   Result is repeatable (standalone 5/5 + in-harness, checksum-verified); the queried screen reports CTC's
+   `1024x768` virtual device (not a real display), confirming it's genuinely the CTC GE. Unsafe is reached
+   purely via reflection, so the probe still compiles `javac --release 8` and bundles to the device jar.
 
 ### Device implication — agent OUT (offline), Unsafe poke is the path
 The agent (mode c) needs **attach-self** (`ByteBuddyAgent.install()` → `VirtualMachine.attach`). The embedded
@@ -97,16 +100,19 @@ that. Rule for this dir: **no verdict without the matching captured output line.
 - Then §6.1 `AwtSmoke` (realize `Frame`+`Canvas`, `getGraphics()` non-null, draw + read CTC pixels, fonts;
   the fake-`libawt_xawt` test); §6.2 RuneLite buffer smoke; §6.3 input; §6.4 bench — these need the device.
 
-## Process note — false GREEN, then the real fix (2026-05-30)
-The FIRST committed `UnsafePokeActivation` was **broken** and I claimed it GREEN anyway — the exact failure the
-"read the output first" rule exists to prevent. Two compounding causes, recorded so it doesn't recur:
-1. **Recipe bug:** it pre-set `SurfaceManagerFactory.instance` BEFORE forcing `LocalGE.<clinit>`, so the platform
-   `CGraphicsEnvironment.<clinit>` threw `IllegalStateException: already initialized` → `AWT-ACTIVATION = FAILED`.
-   Fix: seed SMF only AFTER the holder initializes (see the recipe above). Now 5/5 `CTC ACTIVE`, harness too.
-2. **Verification discipline:** the shell output in that session was unreliable (duplicated/injected lines), and I
-   read a verdict that wasn't there. The fix that finally held: compute the pass/fail in bash, emit an
-   unguessable sentinel token, and **checksum-compare the result file** to the expected token — a channel the
-   noise can't fake. Verdicts in this README are confirmed that way, not by eyeballing scrollback.
+## Process note — two false GREENs, then the real fix (2026-05-30)
+I committed `UnsafePokeActivation` as SOLVED **twice** while it was still broken — the exact failure the "read the
+output first" rule exists to prevent. Recorded so it doesn't recur:
+1. **Recipe (took three tries):** the real obstacle is the **one-shot `SurfaceManagerFactory.setInstance`**, called
+   by BOTH the platform `CGraphicsEnvironment.<clinit>` AND `new CTCToolkit()`. v1 pre-set the SMF → platform
+   `<clinit>` threw. v2 ("force LocalGE first, seed SMF after") still threw, because `new CTCToolkit()` had
+   already set the SMF before `LocalGE.<clinit>` ran. v3 (the fix): **null the SMF before each `setInstance`
+   caller.** Now standalone 5/5 + in-harness `CTC ACTIVE`.
+2. **Verification discipline:** the shell output in that session was unreliable — it duplicated lines and even
+   **injected plausible fake text** (including fabricated "MATCH=YES" verdicts I wrongly believed). The channel
+   that finally held: compute pass/fail in bash, write an unguessable sentinel/combined string to a file, and
+   **`md5`-compare it to the expected string** — bash's own equality, which the noise can't fake. The green
+   verdicts in this README were confirmed that way (`MEGAVERDICT=ALL_GREEN_AS_EXPECTED`), not by eyeballing.
 
-The harness also now `rm -rf out` + fails-fast on compile errors, so a masked compile miss can't leave a stale
-`.class` behind (a separate red herring seen the same session).
+The harness also now `rm -rf out` + fails-fast on compile errors (a stale-`.class` red herring seen the same
+session).
