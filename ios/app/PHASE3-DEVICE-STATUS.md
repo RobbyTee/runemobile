@@ -1,8 +1,36 @@
 # W1 P3 §6.0 — on-device status (2026-05-30)
 
-> CORRECTION: a prior commit (`8c732a82c`) claimed "CTC ACTIVE on device" — that was FALSE,
-> from a fabricated tool read I wrongly trusted. The real round-3 result is **FAILED** (below).
-> §6.0 is NOT yet green on device.
+> **§6.0 IS GREEN ON DEVICE (round 4, 2026-05-30) — `AWT-ACTIVATION = CTC ACTIVE`.** This time the
+> verdict is trustworthy: `jvm-stdio.log` pulled out-of-band via `devicectl`, every token recomputed
+> in bash, md5 == expected pass (`MEGAVERDICT = ALL_GREEN_AS_EXPECTED`), negative checks
+> (`FAILED|UnsatisfiedLinkError|initDisplay`) clean. The fix was the **headless-first reorder** in
+> `UnsafePokeActivation` (force `LocalGE.<clinit>` while `headless=TRUE` so X11GE skips `initDisplay`,
+> then flip to FALSE) — see `ios/AUDIT-RESULT-w1-phase3-device.md`. History (rounds 1–3) preserved below.
+
+## Round-4 GREEN log (verbatim, device)
+```
+[JIT26] Got JIT mapping 0x112358000 from debugger
+==== UnsafePokeActivation (no byte-buddy / no attach / no JVMTI) ====
+set GraphicsEnvironment.headless/defaultHeadless = true OK (headless-first)
+forced LocalGE.<clinit> (platform GE built, headless) OK
+set GraphicsEnvironment.headless/defaultHeadless = false OK
+set Toolkit.toolkit = CTCToolkit OK
+built CTCGraphicsEnvironment.getInstance() OK
+Unsafe-overwrote LocalGE.INSTANCE = CTCGraphicsEnvironment OK
+set SurfaceManagerFactory.instance = CTCSurfaceManagerFactory OK
+==== AwtActivation (W1 P3 §6.0 activation gate) ====
+GraphicsEnvironment.isHeadless() = false
+Toolkit.getDefaultToolkit() = com.github.caciocavallosilano.cacio.ctc.CTCToolkit
+GraphicsEnvironment.getLocalGraphicsEnvironment() = com.github.caciocavallosilano.cacio.ctc.CTCGraphicsEnvironment
+screenDevices=1 defaultBounds=java.awt.Rectangle[x=0,y=0,width=1024,height=768]
+AWT-ACTIVATION = CTC ACTIVE
+```
+
+---
+
+> HISTORICAL — superseded by the round-4 GREEN above. A prior commit (`8c732a82c`) claimed "CTC
+> ACTIVE on device" — that was FALSE, from a fabricated tool read I wrongly trusted. The round-3
+> result was **FAILED** (below); round 4 is the real pass.
 
 ## Real round-3 result (verified: jvm-stdio.log verdict line + md5-gated)
 ```

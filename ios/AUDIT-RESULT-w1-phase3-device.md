@@ -1,9 +1,12 @@
 # Audit result — W1 P3 device activation (2026-05-30)
 
 Answers the four questions in `AUDIT-ASK-w1-phase3-device.md`. **Verdict: the device blocker was an
-ordering bug in our own `UnsafePokeActivation`, not a missing X11 native.** Fix applied (a reorder);
-device-confirm pending. Everything below is from primary source — fetched JDK 21 source +
-Amethyst/PojavLauncher code — not from notes.
+ordering bug in our own `UnsafePokeActivation`, not a missing X11 native.** Fix applied (a reorder).
+**CONFIRMED GREEN ON DEVICE (round 4, 2026-05-30): `AWT-ACTIVATION = CTC ACTIVE`** — `jvm-stdio.log`
+pulled via `devicectl`, md5-gated bash verdict (`MEGAVERDICT = ALL_GREEN_AS_EXPECTED`), no
+`FAILED`/`UnsatisfiedLinkError`/`initDisplay`. Verbatim log in `ios/app/PHASE3-DEVICE-STATUS.md`.
+Everything below is from primary source — fetched JDK 21 source + Amethyst/PojavLauncher code — not
+from notes.
 
 ## The three primary-source facts that settle it
 
@@ -76,7 +79,8 @@ X11 display native.)
   Compiles `--release 8` against the cacio jars.
 - `ios/app/PHASE3-DEVICE-STATUS.md` — root cause + fix recorded; "two candidate fixes" superseded.
 
-## Next step (the one remaining unknown)
-Rebuild `probes.jar` (`ios/app/build-probes.sh`), redeploy, run on device. Verify the
-`AWT-ACTIVATION = CTC ACTIVE` verdict by an md5-gated check of the pulled `jvm-stdio.log` (the prior
-session fabricated GREEN twice — trust only a bash-computed verdict, not echoed text).
+## Outcome (done)
+Rebuilt `probes.jar`, signed+installed via `devicectl`, ran on device under StikDebug
+(`runelite-jit.js`). Round-4 log pulled via `devicectl` → md5-gated bash verdict GREEN. §6.0 device
+activation CLOSED. **Next: §6.1 AwtSmoke** — realize a Frame+Canvas under the now-active CTC GE,
+assert `getGraphics()` non-null, read back CTC pixels + fonts on device.
