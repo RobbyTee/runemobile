@@ -8,7 +8,7 @@ The brief's reviewed verdict: *the danger in Phase 3 is not Java2D pixels (the i
 `GlyphSmoke`); it is **activating the CACIO CTC toolkit + graphicsenv before AWT init** on device.* §6.0
 (activation) comes first, and it is **desktop-pre-checkable** — which is what this dir does.
 
-## §6.0 — activation gate — DESKTOP PRE-CHECK (2026-05-29). Status: works only via the agent so far.
+## §6.0 — activation gate — DESKTOP PRE-CHECK. Status: SOLVED no-instrumentation (mode e), 2026-05-30.
 
 `AwtActivation.java` asserts (no pixels drawn): non-headless, `Toolkit.getDefaultToolkit()` == `CTCToolkit`,
 `GraphicsEnvironment.getLocalGraphicsEnvironment()` == `CTCGraphicsEnvironment`, screen device queryable.
@@ -18,52 +18,53 @@ Greppable verdict: `AWT-ACTIVATION = CTC ACTIVE` / `= FAILED`.
 ./run-activation-desktop.sh all     # OpenJDK 21 aarch64; needs ../cacio-smoke/lib jars
 ```
 
-### Verbatim results — OpenJDK 21.0.5 aarch64 macOS (`run-activation-desktop.sh all`, exit 0)
+### Verbatim results — OpenJDK 21 aarch64 macOS (`run-activation-desktop.sh all`, exit 0)
 
 | Mode | How | Toolkit | GraphicsEnvironment | Verdict |
 |---|---|---|---|---|
 | (a) classpath | `-cp <cacio>` + 2 props + full JPMS | `LWCToolkit` | `CGraphicsEnvironment` | **FAILED** |
 | (b) bootclasspath | `-Xbootclasspath/a:<cacio>` + 2 props | `LWCToolkit` | `CGraphicsEnvironment` | **FAILED** |
-| **(c) agent** | `CacioExtension.injectCTCGraphicsEnvironment()` + `-Djdk.attach.allowAttachSelf=true` + byte-buddy{,-agent} + JPMS | **`CTCToolkit`** | **`CTCGraphicsEnvironment`** | **CTC ACTIVE** |
-| (d) field-poke | pure reflection (`Toolkit.toolkit`, `GraphicsEnvironment.localEnv`, …) | `CTCToolkit` | `ExceptionInInitializerError` (LocalGE) | **FAILED** |
+| (c) agent | `CacioExtension.injectCTCGraphicsEnvironment()` + byte-buddy{,-agent} (instrumentation redefine) | `CTCToolkit` | `CTCGraphicsEnvironment` | **CTC ACTIVE** |
+| (d) naive field-poke | pure reflection assuming a `GraphicsEnvironment.localEnv` field | `CTCToolkit` | `ExceptionInInitializerError` (LocalGE) | **FAILED** |
+| **(e) Unsafe field-poke** | **no byte-buddy / no attach / no JVMTI** — seed SMF + headless + `Toolkit.toolkit`, then Unsafe-overwrite `LocalGE.INSTANCE` | **`CTCToolkit`** | **`CTCGraphicsEnvironment`** | **CTC ACTIVE** |
 
-Two findings, exactly as observed:
+Findings, exactly as observed (each quoted from captured output, not memory):
 
 1. **Property/bootclasspath selection does NOTHING on JDK 21.** `-Dawt.toolkit` / `-Djava.awt.graphicsenv` are
-   not honored — toolkit AND GE stay the platform default. (Confirms the FINDINGS "bare `-Dawt.toolkit`
-   silently falls back" note; refutes the "two-prop + bootclasspath" idea.)
-2. **The ByteBuddy agent fully activates CTC (toolkit + GE), and does so even though its JVMTI redefine
-   THROWS.** Mode (c) prints `injectCTCGraphicsEnvironment() THREW: UnsupportedOperationException: class
-   redefinition failed: attempted to change the schema` — and *still* ends `CTC ACTIVE` with both toolkit and
-   GE swapped. So the activation is carried by `CacioExtension`'s static-field injection (its `<clinit>` /
-   `ClassInjector$UsingUnsafe` into the bootstrap loader), with the GE-method redefine as a non-fatal extra.
+   not honored — toolkit AND GE stay the platform default. *Why:* the GE is built by the build-time-generated
+   `sun.awt.PlatformGraphicsInfo.createGE()`, which hardcodes the platform GE and ignores the property.
+2. **The agent's byte-buddy redefine SUCCEEDS the first time and IS load-bearing — corrected.** Earlier note
+   ("the redefine throws yet activation succeeds, so field injection carries it") was a **MISREAD**.
+   `StaticOnlyProbe` loads `CacioExtension` to run its `static{}` ONCE (no 2nd `inject()`): **no stack trace,
+   `CTC ACTIVE`, both toolkit and GE swapped.** The `UnsupportedOperationException: change the schema` only
+   appeared in mode (c) because `AwtActivationAgent.main` called `inject()` a **second** time, re-redefining an
+   already-redefined method. So the GE swap fundamentally needs the redefine (instrumentation) — which is
+   exactly what the device JRE can't do.
+3. **The naive field-poke (d) FAILED** because there is no `GraphicsEnvironment.localEnv` field. The GE
+   singleton lives in the lazy holder `java.awt.GraphicsEnvironment$LocalGE.INSTANCE`. `FieldPokeActivation.java`
+   stands as the negative record.
+4. **(e) is the device recipe: it activates CTC with ZERO instrumentation.** Sequence, run as the first Java
+   step before any AWT call:
+   - `sun.java2d.SurfaceManagerFactory.instance = new CTCSurfaceManagerFactory()` (reflection; non-final)
+   - `GraphicsEnvironment.headless = .defaultHeadless = Boolean.FALSE`
+   - `java.awt.Toolkit.toolkit = new CTCToolkit()` (plain non-final static field)
+   - force `LocalGE.<clinit>`, then **Unsafe-overwrite the static-final `LocalGE.INSTANCE` = `CTCGraphicsEnvironment.getInstance()`**.
+     `getLocalGraphicsEnvironment()` re-reads `INSTANCE` every call, so subsequent calls return the CTC GE.
+   Result is repeatable; the queried screen reports CTC's `1024x768` virtual device (not a real display),
+   confirming it's genuinely the CTC GE. Unsafe is reached purely via reflection, so the probe still compiles
+   `javac --release 8` and bundles to the device jar.
 
-**My naive field-poke (d) FAILED** because the GE singleton is not a `GraphicsEnvironment.localEnv` field — it
-lives in a lazily-initialized holder class `java.awt.GraphicsEnvironment$LocalGE`. Poking `headless=false`
-without correctly seeding that holder triggered `ExceptionInInitializerError` on `LocalGE`. So a *correct*
-no-instrumentation field-poke is **not yet found** — `FieldPokeActivation.java` stands as the (negative)
-record of why the obvious approach doesn't work.
+### Device implication — agent OUT (offline), Unsafe poke is the path
+The agent (mode c) needs **attach-self** (`ByteBuddyAgent.install()` → `VirtualMachine.attach`). The embedded
+`jre21` cannot self-attach (offline check): `jdk.attach` is **not** in the JRE `release` `MODULES`, and there
+is **no `libattach.dylib`** in the image (the Darwin native bridge `VirtualMachine.attach` needs). `java.instrument`
+is present but only enables a launched `-javaagent`, not runtime self-attach. **So mode (e) is the device path.**
 
-### Device implication — the agent path is OUT (offline finding, 2026-05-29)
-The only desktop recipe that works is the **byte-buddy agent** (mode c), which needs **attach-self**
-(`ByteBuddyAgent.install()` → `VirtualMachine.attach`). **Checked the embedded `jre21` offline — it cannot
-self-attach:**
-- `jdk.attach` is **NOT** in the JRE `release` `MODULES` list, and
-- there is **no `libattach.dylib`** in the image (the native bridge `VirtualMachine.attach` requires on Darwin).
-
-(The modules jimage shows ~10 incidental `VirtualMachine`/`jdk/attach` string hits — references baked into
-other modules, not the linked-in module. The absent native lib is decisive regardless.) `java.instrument` IS
-present, but that only enables a `-javaagent` / `Agent_OnAttach` launched agent, not runtime self-attach.
-
-**So the agent path does NOT port to the device.** The device activation MUST be no-instrumentation:
-1. **Correct field-poke** — seed the real `java.awt.GraphicsEnvironment$LocalGE` holder + `Toolkit.toolkit` +
-   `SurfaceManagerFactory.instance` before AWT init. My first attempt (mode d) failed because there is no
-   `localEnv` field; the singleton is in the lazy `LocalGE` holder. **This is desktop-solvable, offline** —
-   the next real experiment.
-2. Or reproduce Amethyst's `CTCPreloadClassLoader` (GPLv3, patterns only).
-
-Do NOT probe the device for attach-self — it's already answered NO offline. The remaining work is a desktop
-Java puzzle (get the no-agent field-poke to activate CTC), then one short confirmation run on the device.
+**The ONE remaining device unknown:** mode (e) forces `GraphicsEnvironment$LocalGE.<clinit>` once, which runs
+the iOS `jre21`'s hardcoded `sun.awt.PlatformGraphicsInfo.createGE()` (building a throwaway platform GE) BEFORE
+we clobber `INSTANCE`. On desktop that builds a `CGraphicsEnvironment`; on the iOS JRE it runs that build's
+`createGE()` — must not crash/hang. That is the single short device confirm; everything else is standard
+java.desktop 21, identical on device. (Do NOT re-probe attach-self — already answered NO offline.)
 
 ### Process note (kept deliberately)
 While doing this gate I wrote a confident verdict **before reading the test output four times** (all wrong:
@@ -73,13 +74,21 @@ that. Rule for this dir: **no verdict without the matching captured output line.
 
 ## Files
 - `AwtActivation.java` — the no-pixel assertion + greppable `AWT-ACTIVATION` verdict (release 8; bundles to device).
-- `AwtActivationAgent.java` — mode (c): calls `CacioExtension.injectCTCGraphicsEnvironment()` (the working path).
-- `FieldPokeActivation.java` — mode (d): the naive pure-reflection attempt that FAILS (GE-holder record).
-- `run-activation-desktop.sh [a|b|c|d|all]` — the desktop harness.
+- `UnsafePokeActivation.java` — **mode (e): the no-instrumentation device recipe** (release 8; bundles to device). THE winner.
+- `AwtActivationAgent.java` — mode (c): calls `CacioExtension.injectCTCGraphicsEnvironment()` (works on desktop; needs attach — OUT for device).
+- `FieldPokeActivation.java` — mode (d): the naive pure-reflection attempt that FAILS (GE-holder negative record).
+- `StaticOnlyProbe.java` — proves the agent's redefine is load-bearing & succeeds first-time (corrects the old mode-c misread).
+- `run-activation-desktop.sh [a|b|c|d|e|all]` — the desktop harness (cleans `out/` + fails-fast on compile errors).
 
 ## Next
-- **Solve the no-agent field-poke on desktop** (seed the `GraphicsEnvironment$LocalGE` holder correctly) →
-  reach `CTC ACTIVE` with no byte-buddy/attach. Offline, no device. This is the gating experiment now that the
-  agent path is ruled out for the device JRE.
+- **§6.0 desktop = DONE** (mode e, `CTC ACTIVE`, no instrumentation). Remaining for §6.0: one short device run
+  of `UnsafePokeActivation` on the iOS `jre21` to confirm `LocalGE.<clinit>` (the throwaway platform
+  `createGE()`) survives there. Needs the device.
 - Then §6.1 `AwtSmoke` (realize `Frame`+`Canvas`, `getGraphics()` non-null, draw + read CTC pixels, fonts;
   the fake-`libawt_xawt` test); §6.2 RuneLite buffer smoke; §6.3 input; §6.4 bench — these need the device.
+
+## Process note — flapping caught (2026-05-30)
+Mode (e) appeared to flap `FAILED`<->`CTC ACTIVE`. Root cause was NOT the recipe: the old harness compiled with
+`2>/dev/null` and never cleaned `out/`, so a transient `--release 8` compile miss left a **stale `.class`** that
+threw `NoSuchFieldException: INSTANCE` at runtime. Fixed by `rm -rf out` + fail-fast compiles. Lesson reinforced:
+capture to a file, read the file (not the scrollback), and never trust a verdict over a stale build.
