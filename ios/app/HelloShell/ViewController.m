@@ -108,26 +108,20 @@
     });
 }
 
-// Redirect the C stdout/stderr (where HotSpot + System.out write) into the
-// console so we can read the Hello verdict and any VM abort on-device.
+// Send HotSpot's + System.out's stdout/stderr STRAIGHT to the crash-proof file fd,
+// UNBUFFERED. The earlier pipe approach lost everything on a hard crash: stdout to a
+// pipe is fully buffered, so the [JIT26] trace stayed in libc's buffer and the async
+// reader never drained before SIGBUS. Direct dup2 + _IONBF = every printf hits disk
+// immediately, so jvm-stdio.log captures the [JIT26] mapping trace and the verdict
+// even when the VM aborts. (On-screen no longer shows JVM output; it's in the file.)
 - (void)captureStdio {
-    int fds[2];
-    if (pipe(fds) != 0) return;
-    dup2(fds[1], STDOUT_FILENO);
-    dup2(fds[1], STDERR_FILENO);
-    int jfd = self.jvmFd;
-    NSFileHandle *reader = [[NSFileHandle alloc] initWithFileDescriptor:fds[0] closeOnDealloc:YES];
-    reader.readabilityHandler = ^(NSFileHandle *h) {
-        NSData *d = h.availableData;
-        if (d.length == 0) return;
-        // Crash-proof: write raw bytes to the dedicated fd + fsync BEFORE the async UI
-        // hop, so libjvm output isn't lost if the VM aborts right after printing.
-        if (jfd >= 0) { write(jfd, d.bytes, d.length); fsync(jfd); }
-        NSString *s = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
-        for (NSString *l in [s componentsSeparatedByString:@"\n"]) {
-            if (l.length) [self appendLine:[@"  " stringByAppendingString:l]];
-        }
-    };
+    if (self.jvmFd >= 0) {
+        dup2(self.jvmFd, STDOUT_FILENO);
+        dup2(self.jvmFd, STDERR_FILENO);
+    }
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+    [self appendLine:@"(JVM stdout/stderr -> Documents/jvm-stdio.log)"];
 }
 
 #pragma mark - JIT gate (the W1-audit Claim E)
