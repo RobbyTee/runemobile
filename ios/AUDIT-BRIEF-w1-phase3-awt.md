@@ -1,5 +1,38 @@
 # Audit brief — W1 Phase 3: AWT backend (Caciocavallo + fake-xawt) on device
 
+> ## ⇢ HANDOFF — START HERE (new session, 2026-05-30)
+> **State:** Phase 1 (on-device JIT JVM) COMPLETE. This is W1 Phase 3 (AWT-on-iOS). This brief was written +
+> Codex-reviewed; the review verdict is folded into §5/§6/§6b. Then I started §6.0 (activation) and several
+> facts moved — **trust §6b for the current truth, not the original §1 framing.**
+>
+> **Verified this session (read-the-output, not guesses):**
+> - Artifact = `com.github.caciocavallosilano` **cacio17** (`cacio-tta`/`cacio-shared` 1.18) — the SAME jars we
+>   run on desktop (`ios/dev-tools/cacio-smoke/lib/`). NOT the Pojav 1.10 fork (that error came from our own
+>   FINDINGS; corrected).
+> - The Java2D/font rasterizer is not the risk — `GlyphSmoke` proved it on device; CTC's screen buffer is
+>   `BufferedImage(TYPE_INT_ARGB)` → same stack. The risk is **activating CTC before AWT init**.
+> - §6.0 desktop pre-check (`ios/dev-tools/awtsmoke/`, `./run-activation-desktop.sh all`): property /
+>   `-Xbootclasspath/a` selection **FAILS** on JDK 21. The **byte-buddy agent** fully activates CTC (toolkit+GE)
+>   — but it needs **attach-self**.
+> - **The device `jre21` cannot self-attach** (offline check): no `jdk.attach` in `release` MODULES, no
+>   `libattach.dylib`. ⇒ **the agent path is OUT for the device.**
+>
+> **NEXT EXPERIMENT (do first; offline on desktop OpenJDK 21):** get a **no-instrumentation field-poke** to
+> reach `AWT-ACTIVATION = CTC ACTIVE`. My naive try (`FieldPokeActivation.java`) FAILED — there is no
+> `GraphicsEnvironment.localEnv` field; the GE singleton lives in the lazy holder
+> `java.awt.GraphicsEnvironment$LocalGE`. Seed that holder correctly (+ `Toolkit.toolkit` +
+> `sun.java2d.SurfaceManagerFactory.instance`) before any AWT call. Green on desktop → one short device confirm;
+> if unworkable → reproduce Amethyst's `CTCPreloadClassLoader` (GPLv3, patterns only). No device/simulator
+> needed here (simulator can't load the device-triple `libjvm` — settled trap).
+>
+> **PROCESS RULE (I broke this 4× last session — enforce it):** never write a GREEN/PASS/ACTIVE verdict before
+> reading the captured tool output. Pipe to a file, grep the verdict line, quote that (`awtsmoke/README.md`
+> mandates it).
+>
+> **Sequence:** (1) field-poke spike on desktop → (2) THEN a Codex audit of the consolidated device plan
+> (auditing now is premature — the plan is mid-flight). git clean at latest `master`; commit/push under the
+> user's name only, no AI attribution anywhere.
+
 > **For adversarial review before we build it** — same brief→review→build rhythm as
 > `AUDIT-BRIEF-w1-jvm-shell.md` / `AUDIT-BRIEF-w1-txm-mirror.md`. Self-contained; a reviewer need not have the
 > repo loaded. Companions: `REALJVM-DEV-PLAN.md` (Phase 3), `REALJVM-FEASIBILITY-SCOPE.md` §4 (why CACIO),
