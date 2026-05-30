@@ -22,16 +22,30 @@
 // succeeds. (This is exactly why CacioExtension nulls the SMF too.)
 //
 // Sequence (ORDER IS LOAD-BEARING):
-//   1. GraphicsEnvironment.headless / .defaultHeadless = Boolean.FALSE
-//   2. SMF.instance=null, then force LocalGE.<clinit> (platform createGE installs platform SMF)
-//   3. SMF.instance=null, then new CTCToolkit() + Toolkit.toolkit = it
-//   4. SMF.instance=null, then CTCGraphicsEnvironment.getInstance()
-//   5. Unsafe-overwrite the static-final LocalGE.INSTANCE = that CTC GE
-//   6. SMF.instance = new CTCSurfaceManagerFactory() (final state, direct field write)
+//   1. GraphicsEnvironment.headless / .defaultHeadless = Boolean.TRUE   <-- headless-FIRST
+//   2. SMF.instance=null, then force LocalGE.<clinit> (platform createGE builds the throwaway GE)
+//   3. GraphicsEnvironment.headless / .defaultHeadless = Boolean.FALSE  (CTC operates non-headless)
+//   4. SMF.instance=null, then new CTCToolkit() + Toolkit.toolkit = it
+//   5. SMF.instance=null, then CTCGraphicsEnvironment.getInstance()
+//   6. Unsafe-overwrite the static-final LocalGE.INSTANCE = that CTC GE
+//   7. SMF.instance = new CTCSurfaceManagerFactory() (final state, direct field write)
 //
-// Step 2 forces the platform createGE() once (throwaway). On desktop that builds a
-// CGraphicsEnvironment; on the iOS jre21 it runs that build's PlatformGraphicsInfo.createGE()
-// — the one DEVICE unknown this probe cannot answer offline (flagged for the device confirm).
+// WHY HEADLESS-FIRST (the device fix, 2026-05-30): step 2's forced LocalGE.<clinit> runs the
+// build-hardcoded PlatformGraphicsInfo.createGE(), which on this xawt-style iOS jre21 is
+// `new X11GraphicsEnvironment()` (verified: jdk21u unix PlatformGraphicsInfo.createGE). That
+// class's <clinit> -> initStatic() calls the native `initDisplay(boolean)` (open an X server)
+// — but ONLY inside `if (!isHeadless())` (verified: jdk21u unix X11GraphicsEnvironment.initStatic).
+// There is no X server on iOS and the backend lacks that native, so initDisplay is an
+// UnsatisfiedLinkError. The original order set headless=FALSE BEFORE step 2, so initDisplay
+// fired and LocalGE.<clinit> died (device round-3 FAILED). Initializing the holder while
+// headless=TRUE makes X11GE.<clinit> SKIP initDisplay; the throwaway GE (wrapped in
+// HeadlessGraphicsEnvironment) is discarded the instant we overwrite INSTANCE in step 6, and
+// headless is flipped back to FALSE in step 3 so CTC runs headful. This mirrors Amethyst's
+// CTCPreloadClassLoader, which force-inits LocalGE under headless=TRUE then flips it off — the
+// proven on-device ordering. NO X11 native (initDisplay/X11GraphicsDevice/...) needs stubbing:
+// the headless path never reaches them. The only loadLibrary X11GE.<clinit> does unconditionally
+// is "awt" (present in the image). DEVICE-CONFIRM PENDING — this reorder is the hypothesis the
+// round-3 trace points to, not yet a verified GREEN.
 //
 // Requires the JPMS set we control in the device JNI_CreateJavaVM args, including
 // `--add-exports java.desktop/sun.awt.image=ALL-UNNAMED` (CTC's CTCVolatileSurfaceManager
@@ -76,31 +90,42 @@ public class UnsafePokeActivation {
         Method mOffset = unsafeCls.getMethod("staticFieldOffset", Field.class);
         Method mPutObj = unsafeCls.getMethod("putObject", Object.class, long.class, Object.class);
 
-        // 1. Non-headless flags (so createGE doesn't wrap Headless* and isHeadless()==false).
+        // 1. HEADLESS-FIRST: set headless=TRUE so the forced X11GraphicsEnvironment.<clinit> in
+        //    step 2 SKIPS the native initDisplay() (it is gated on `if (!isHeadless())`). This is
+        //    the device fix — see the header note. Flipped back to FALSE in step 3.
         try {
-            setStatic(java.awt.GraphicsEnvironment.class, "headless", Boolean.FALSE);
-            setStatic(java.awt.GraphicsEnvironment.class, "defaultHeadless", Boolean.FALSE);
-            System.out.println("set GraphicsEnvironment.headless/defaultHeadless = false OK");
-        } catch (Throwable t) { System.out.println("headless set FAILED: " + t); }
+            setStatic(java.awt.GraphicsEnvironment.class, "headless", Boolean.TRUE);
+            setStatic(java.awt.GraphicsEnvironment.class, "defaultHeadless", Boolean.TRUE);
+            System.out.println("set GraphicsEnvironment.headless/defaultHeadless = true OK (headless-first)");
+        } catch (Throwable t) { System.out.println("headless(true) set FAILED: " + t); }
 
         // 2. Force the holder to init FIRST (SMF virgin -> platform setInstance succeeds).
+        //    Under headless=TRUE the throwaway X11GE.<clinit> skips initDisplay; createGE() then
+        //    wraps it in HeadlessGraphicsEnvironment. Both are discarded when step 6 overwrites INSTANCE.
         try {
             nullSMF();
             Class.forName("java.awt.GraphicsEnvironment$LocalGE"); // initialize=true -> <clinit>
-            System.out.println("forced LocalGE.<clinit> (platform GE built) OK");
+            System.out.println("forced LocalGE.<clinit> (platform GE built, headless) OK");
         } catch (Throwable t) {
             System.out.println("LocalGE.<clinit> FAILED: " + t);
             t.printStackTrace(System.out);
         }
 
-        // 3. CTC Toolkit (its construction calls SMF.setInstance -> reset first).
+        // 3. Flip headless back to FALSE so CTC runs headful (isHeadless()==false for CTC ops).
+        try {
+            setStatic(java.awt.GraphicsEnvironment.class, "headless", Boolean.FALSE);
+            setStatic(java.awt.GraphicsEnvironment.class, "defaultHeadless", Boolean.FALSE);
+            System.out.println("set GraphicsEnvironment.headless/defaultHeadless = false OK");
+        } catch (Throwable t) { System.out.println("headless(false) set FAILED: " + t); }
+
+        // 4. CTC Toolkit (its construction calls SMF.setInstance -> reset first).
         try {
             nullSMF();
             setStatic(java.awt.Toolkit.class, "toolkit", ctcToolkit.getDeclaredConstructor().newInstance());
             System.out.println("set Toolkit.toolkit = CTCToolkit OK");
         } catch (Throwable t) { System.out.println("Toolkit.toolkit set FAILED: " + t); }
 
-        // 4. Build the CTC GE (reset SMF first in case its init also installs one).
+        // 5. Build the CTC GE (reset SMF first in case its init also installs one).
         Object ctcGEInstance = null;
         try {
             nullSMF();
@@ -111,7 +136,7 @@ public class UnsafePokeActivation {
             t.printStackTrace(System.out);
         }
 
-        // 5. Unsafe-overwrite the static-final LocalGE.INSTANCE with the CTC GE.
+        // 6. Unsafe-overwrite the static-final LocalGE.INSTANCE with the CTC GE.
         try {
             Class<?> localGE = Class.forName("java.awt.GraphicsEnvironment$LocalGE");
             Field instance = localGE.getDeclaredField("INSTANCE");
@@ -124,7 +149,7 @@ public class UnsafePokeActivation {
             t.printStackTrace(System.out);
         }
 
-        // 6. Final SMF state = CTC factory (direct field write bypasses the setInstance guard).
+        // 7. Final SMF state = CTC factory (direct field write bypasses the setInstance guard).
         try {
             setStatic("sun.java2d.SurfaceManagerFactory", "instance",
                       ctcSMF.getDeclaredConstructor().newInstance());

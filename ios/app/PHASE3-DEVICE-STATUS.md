@@ -25,18 +25,32 @@ native `initDisplay(boolean)` (open an X11 display). There is no X server on iOS
 backend doesn't implement that native → `UnsatisfiedLinkError`. So `LocalGE` never initializes,
 and the subsequent Unsafe-overwrite of `INSTANCE` can't run.
 
-## Two candidate fixes (next experiments)
-1. **Stub the X11GraphicsEnvironment natives** in the fake `libawt_xawt` (at least
-   `Java_sun_awt_X11GraphicsEnvironment_initDisplay`, plus whatever else its `<clinit>` calls):
-   make `<clinit>` survive so `createGE()` returns a throwaway X11GE; we immediately overwrite
-   `INSTANCE` with the CTC GE anyway. Iterate on missing symbols. (headless copy + added X11 stubs.)
-2. **Avoid forcing the platform `createGE()` entirely** — rework the activation so we never trigger
-   `LocalGE.<clinit>` via the platform path. This is harder (the holder runs `createGE()` on first
-   init) and may need the `CTCPreloadClassLoader` approach Amethyst uses. Worth checking how
-   Amethyst's fake libawt_xawt handles `initDisplay` before hand-stubbing blindly.
+## ROOT CAUSE + FIX (2026-05-30 audit, primary-source-verified — device-confirm PENDING)
+The blocker was an **ordering bug in our own probe**, not a missing X11 native. Verified against
+OpenJDK 21 source (`jdk21u`):
+- `java.awt.GraphicsEnvironment$LocalGE.createGE()` calls `PlatformGraphicsInfo.createGE()`
+  **unconditionally**, and on this xawt-style build that is `new X11GraphicsEnvironment()`
+  (unix `PlatformGraphicsInfo.createGE` → `new X11GraphicsEnvironment()`). There is **no**
+  `java.awt.graphicsenv` property branch in JDK 21 — it was removed in the JDK 9 modularization,
+  which is exactly why CACIO needs the Unsafe-poke at all.
+- `X11GraphicsEnvironment.initStatic()` calls the native `initDisplay(boolean)` **only inside
+  `if (!isHeadless())`** (the unconditional load in that `<clinit>` is just `System.loadLibrary("awt")`,
+  which is present).
 
-JIT + embedding + signing + install are all proven on device; the remaining work is making the
-iOS jre21's GE init survivable so CTC can be slotted in.
+So our recipe died because it set `headless=FALSE` **before** forcing `LocalGE.<clinit>` → `initDisplay`
+fired → `UnsatisfiedLinkError`. Amethyst's `CTCPreloadClassLoader` (the proven on-device path) forces
+the holder while `headless=TRUE` (so X11GE's `<clinit>` skips `initDisplay`), then flips `headless=FALSE`
+and Unsafe-overwrites `INSTANCE` with the CTC GE.
+
+**Applied fix:** `UnsafePokeActivation` reordered to **headless-FIRST** (set TRUE → force `LocalGE.<clinit>`
+→ set FALSE → install CTC). Compiles `--release 8`. **No X11 native is stubbed** — the headless path
+never reaches `initDisplay` or any X11 device/config native, so the feared "discover X11 symbols
+one-device-round-at-a-time" problem does not exist. The fake `libawt_xawt = libawt_headless` copy stays
+(it supplies the `initIDs` family the `java.awt.*` classes still call). Full reasoning:
+`ios/AUDIT-RESULT-w1-phase3-device.md`.
+
+JIT + embedding + signing + install are all proven on device; this reorder is the next thing to
+device-confirm. Expected next result: `AWT-ACTIVATION = CTC ACTIVE`, or a new (non-X11) native gap.
 
 ## Facts that ARE verified
 - JIT runs HotSpot on device (mirror via `[JIT26]`).
