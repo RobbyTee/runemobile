@@ -291,6 +291,33 @@ kills the process); real RuneLite never returns from main so it won't self-termi
   JIT script). Pending the clean re-run to confirm `Hello.main` completes + clean exit, then: swap `Hello` →
   `JitProbe`/`Bench`/`GlyphSmoke` for definitive JIT numbers + iOS rasterizer smoke, then W1 Phase 3 (AWT).
 
+### W1 shell — DEFINITIVELY GREEN, clean end-to-end (2026-05-29). PRONG B COMPLETE.
+HelloShell (our own free-cert app) booted a **JIT-compiling HotSpot** on the iPhone 17 Pro Max (iOS 26.5, TXM),
+ran `Hello.main`, and shut down cleanly. From `Documents/jvm-stdio.log`:
+`[JIT26] Requesting 64 MB` → `[JIT26] Got JIT mapping 0x1138b8000 from debugger` → `[JIT26] mapping at
+RW=0x1178b8000, RX=0x1138b8000` → `java.vm.info = mixed mode` → `compileMs 10 -> 13` (C1/C2 ran) →
+`VERDICT = JIT ACTIVE` → `main() returned cleanly` → `[jvm] DestroyJavaVM done`. **No crash.**
+- **Two fixes made it work, in order:**
+  1. **Embed via `JNI_CreateJavaVM`, NOT `JLI_Launch`.** The real blocker (found via a symbolicated `crash.log`
+     from `NSSetUncaughtExceptionHandler`) was NOT the JIT: libjli's `apple_main` (the launcher's first-thread
+     dance, spawned at libjli `0xd69c`) `dlsym`s and re-invokes our executable `main()` →
+     `UIApplicationMain` → "There can only be one UIApplication instance". `HACK_IGNORE_START_ON_FIRST_THREAD`
+     did NOT prevent it on our path (Amethyst pairs it with `-XstartOnFirstThread`). Bypassing the launcher
+     entirely (dlopen `libjvm` → `JNI_CreateJavaVM` on our worker thread → `FindClass`/`CallStaticVoidMethod`)
+     removes the whole problem class. Vendored `jni.h` + a minimal arm64-Darwin `jni_md.h`.
+  2. **Patch libjvm to force the brk #0x69 path** (`dev-tools/patch-jre-txm.sh` NOPs BOTH gates in
+     `get_debug_jit_mapping` @ `0x81fc80` + `0x81fc8c`). Confirmed working: `[JIT26] Requesting/Got mapping` +
+     the RW≠RX mirror prove HotSpot took the debugger path and `vm_remap`'d a RW mirror of the StikDebug `_M`
+     RX region. **map-on-fault is fully abandoned** (the `_M`/brk path gives a real mirror; faults didn't).
+- **The would-be codex questions are answered by this run:** (Q1) debugger-script-only IS sufficient — no
+  app-side `JIT26CreateRegion`/`task_set_exception_ports` glue needed, once the gate is patched and we embed via
+  JNI; (Q2) the mirror is correct (RW=0x1178b8000 / RX=0x1138b8000, HotSpot makes the RW view itself); (Q3) our
+  `brk #0x69` handler (`_M size,rx` → `prepare_memory_region` → return addr) is right. `AUDIT-BRIEF-w1-txm-mirror.md`
+  is therefore retired (no external review needed).
+- **NEXT:** swap `Hello` → `JitProbe`/`Bench`/`GlyphSmoke` (`dev-tools/jvmbench/`) for the definitive on-device
+  JIT throughput numbers (Rung 1) + the iOS native 2D/font rasterizer smoke; then W1 Phase 3 (AWT backend:
+  Caciocavallo + fake-xawt) toward running real RuneLite headless-core on device.
+
 ### W1 shell — earlier device run (2026-05-29): the licensing/mechanism notes that led here
 - **Licensing fork (resolved):** the brk stubs + protocol are interface (clean-room-able), but the JS scripts
   (`UniversalJIT26.js` framework + `…Extension.js` handler) are Amethyst's GPLv3 IP. Need to either reimplement
