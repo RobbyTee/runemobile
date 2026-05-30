@@ -258,7 +258,28 @@ AND an iOS-26 JIT script assigned to our app. Results from `Documents/hello-shel
   Protocol constants: break codes `0x69` (region request) + `0xf00d` (x16-dispatched command bus); magic
   `0x690000E0`; x16 cmds 0=detach 1=prepareRegion 2=newBreakpoints 3=setDetachAfterBr 4=prepareForPatching.
   `prepare_memory_region` is a **StikDebug stdlib** fn (version-coupled; StikDebug 3.1.x).
-- **Licensing fork (open):** the brk stubs + protocol are interface (clean-room-able), but the JS scripts
+### W1 shell — GREEN on device (2026-05-29): HotSpot JIT runs our Java to main on our own app
+After the map-on-fault fix to `runelite-jit.js`, **HelloShell reached `Hello.main` with `VERDICT = JIT ACTIVE`
+on the iPhone 17 Pro Max (iOS 26.5, TXM)** — our own free-cert app, embedded jre21, StikDebug-attached. The
+~10s-then-terminate is the expected JVM exit (`Hello.main` returns → `JLI_Launch`/`DestroyJavaVM` → `exit()`
+kills the process); real RuneLite never returns from main so it won't self-terminate.
+- **The working mechanism (decisive):** on this jre21, libjvm's `brk #0x69` (`BreakGetJITMapping`) path is gated
+  in `os::pd_reserve_memory(size, exec)` → `get_debug_jit_mapping` behind `MirrorMappedCodeCache==1 &&
+  DeviceRequiresTXMWorkaround()`. `DeviceRequiresTXMWorkaround()` detects TXM by reading
+  `/private/preboot/.../Ap,TrustedExecutionMonitor.img4`, which the **app sandbox can't open** → returns 0 →
+  libjvm falls back to `mmap(PROT_READ|PROT_EXEC)`, **non-executable on TXM** → HotSpot jumps in →
+  instruction-abort. So `brk #0x69` never fires; the JIT enablement is **map-on-fault**: StikDebug's script
+  catches each instruction-abort, `prepare_memory_region(faultPage,16KB)`, and continues (NO signal re-deliver).
+  Our first script wrongly forwarded the fault as a signal → killed the VM; the fix made it the on-demand RX
+  mapper. (Kept the `brk #0x69` handler too, in case the gate is ever satisfied.)
+- **W1 platform crux RETIRED on our own app** (not just the Amethyst oracle): free-cert sign + re-signed ad-hoc
+  jre21 dylibs (no dyld bypass) + `get-task-allow`/`increased-memory-limit` + StikDebug `CS_DEBUGGED` +
+  map-on-fault JIT script = JIT-enabled HotSpot running our Java on iOS 26.5 TXM. Next: swap `Hello` →
+  `JitProbe`/`Bench`/`GlyphSmoke` (`dev-tools/jvmbench/`) for the definitive JIT numbers + the iOS rasterizer
+  smoke, then on to W1 Phase 3 (AWT backend) for RuneLite.
+
+### W1 shell — earlier device run (2026-05-29): the licensing/mechanism notes that led here
+- **Licensing fork (resolved):** the brk stubs + protocol are interface (clean-room-able), but the JS scripts
   (`UniversalJIT26.js` framework + `…Extension.js` handler) are Amethyst's GPLv3 IP. Need to either reimplement
   the extension clean-room (small; the 0x69 handler) and rely on a base script StikDebug/community provides, or
   reimplement both. **Open Q being investigated:** does StikDebug 3.1.3 ship a built-in universal JIT script (so
