@@ -90,13 +90,17 @@
 
 - (void)appendLine:(NSString *)line {
     NSString *out = [line stringByAppendingString:@"\n"];
+    // Serialize ALL writes (console + file) on the main queue. The stdout-capture
+    // reader runs on a background thread; writing self.logFile from two threads is a
+    // data race that silently drops output after JLI_Launch. Funnel both here.
     dispatch_async(dispatch_get_main_queue(), ^{
         self.console.text = [self.console.text stringByAppendingString:out];
         if (self.console.text.length > 0) {
             [self.console scrollRangeToVisible:NSMakeRange(self.console.text.length - 1, 1)];
         }
+        [self.logFile writeData:[out dataUsingEncoding:NSUTF8StringEncoding]];
+        @try { [self.logFile synchronizeFile]; } @catch (__unused NSException *e) {}
     });
-    [self.logFile writeData:[out dataUsingEncoding:NSUTF8StringEncoding]];
 }
 
 // Redirect the C stdout/stderr (where HotSpot + System.out write) into the
