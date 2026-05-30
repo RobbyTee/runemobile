@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Build probes.jar and stage it into the app bundle. Compiled `--release 8` so the device
-# JDK 21 loads them (same as the desktop A/B).
+# Build jvm-resources/probes.jar (the resource project.yml bundles into the app).
+# Compiled `--release 8` so the device JDK 21 loads them (same as the desktop A/B).
 #
 # Contents:
 #   - Phase-1 probes (jvmbench): JitProbe, Bench, GlyphSmoke
 #   - W1 P3 §6.0 activation confirm (awtsmoke): AwtActivation + UnsafePokeActivation
 #   - the CACIO cacio17 classes (cacio-tta + cacio-shared 1.18) FOLDED IN, so the device
-#     classpath stays just probes.jar (no extra jars to bundle/plumb). GPLv3 jars used as-is
-#     for a LOCAL device test only (same jars we run on desktop) — not distributed.
+#     classpath stays just probes.jar (JVMLauncher sets -Djava.class.path to it alone).
+#     GPLv3 jars used as-is for a LOCAL device test (same jars we run on desktop) — not distributed.
 #
 # Usage: ./build-probes.sh   (run from ios/app/)
 set -euo pipefail
@@ -21,13 +21,14 @@ AWTSMOKE=../dev-tools/awtsmoke
 CACIO_LIB=../dev-tools/cacio-smoke/lib
 CACIO_CP="$CACIO_LIB/cacio-tta-1.18.jar:$CACIO_LIB/cacio-shared-1.18.jar"
 OUT=build/probes-classes
-JARFILE=HelloShell/Resources/probes.jar
+JARFILE=jvm-resources/probes.jar
 
 rm -rf "$OUT"; mkdir -p "$OUT" "$(dirname "$JARFILE")"
+here="$(pwd)"
 
 echo "== fold in CACIO classes =="
-( cd "$OUT" && unzip -oq "$OLDPWD/$CACIO_LIB/cacio-tta-1.18.jar" -x 'META-INF/*' \
-                      && unzip -oq "$OLDPWD/$CACIO_LIB/cacio-shared-1.18.jar" -x 'META-INF/*' )
+( cd "$OUT" && unzip -oq "$here/$CACIO_LIB/cacio-tta-1.18.jar"    -x 'META-INF/*' \
+            && unzip -oq "$here/$CACIO_LIB/cacio-shared-1.18.jar" -x 'META-INF/*' )
 
 echo "== compile Phase-1 probes (javac $JFLAGS) =="
 "$JAVAC" $JFLAGS -d "$OUT" \
@@ -42,4 +43,4 @@ echo "== pack $JARFILE =="
 
 echo "== done =="
 ls -la "$JARFILE"
-echo "classes:"; "$JAR" tf "$JARFILE" | grep -E 'UnsafePokeActivation|AwtActivation\.class|ctc/CTCToolkit' || true
+echo "key classes:"; "$JAR" tf "$JARFILE" | grep -E 'UnsafePokeActivation|AwtActivation\.class|ctc/CTCToolkit\.class|ctc/CTCGraphicsEnvironment\.class' || true

@@ -140,7 +140,24 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"-XX:+DisablePrimordialThreadGuardPages",
         @"-XX:-UseCompressedClassPointers",       // free cert: no extended-virtual-addressing
         @"-XX:ReservedCodeCacheSize=64m",         // bound the brk #0x69 RX reservation
-        @"-Djava.awt.headless=true",              // GlyphSmoke uses the headless 2D/font toolkit
+        // W1 P3 §6.0 activation confirm: non-headless + the CACIO JPMS set (same flags the
+        // desktop awtsmoke harness uses). HotSpot accepts --add-exports/--add-opens directly
+        // as VM options (verified). sun.awt.image is needed by CTC's CTCVolatileSurfaceManager.
+        // For the Phase-1 probe set, restore -Djava.awt.headless=true and drop the JPMS block.
+        @"-Djava.awt.headless=false",
+        @"--add-exports=java.desktop/java.awt=ALL-UNNAMED",
+        @"--add-exports=java.desktop/java.awt.peer=ALL-UNNAMED",
+        @"--add-exports=java.desktop/sun.awt.image=ALL-UNNAMED",
+        @"--add-exports=java.desktop/sun.java2d=ALL-UNNAMED",
+        @"--add-exports=java.desktop/java.awt.dnd.peer=ALL-UNNAMED",
+        @"--add-exports=java.desktop/sun.awt=ALL-UNNAMED",
+        @"--add-exports=java.desktop/sun.awt.event=ALL-UNNAMED",
+        @"--add-exports=java.desktop/sun.awt.datatransfer=ALL-UNNAMED",
+        @"--add-exports=java.base/sun.security.action=ALL-UNNAMED",
+        @"--add-opens=java.base/java.util=ALL-UNNAMED",
+        @"--add-opens=java.desktop/java.awt=ALL-UNNAMED",
+        @"--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
+        @"--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
         [NSString stringWithFormat:@"-Djava.home=%@", javaHome],
         [NSString stringWithFormat:@"-Djava.library.path=%@", frameworks],
         [NSString stringWithFormat:@"-Djava.class.path=%@", jarPath],
@@ -167,10 +184,17 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (rc != JNI_OK || !vm || !env) { log([NSString stringWithFormat:@"[jvm] FATAL JNI_CreateJavaVM rc=%d", rc]); return -14; }
     log(@"[jvm] JavaVM created — HotSpot is up. Running probes…");
 
-    // Rung-1 numbers + the iOS rasterizer smoke, all in one VM (no probe calls System.exit).
-    callMain(env, "JitProbe", @[], log);
-    callMain(env, "Bench", @[], log);
-    callMain(env, "GlyphSmoke", @[glyphPng], log);
+    // W1 P3 §6.0 device confirm: run UnsafePokeActivation ALONE on a pristine AWT state
+    // (faithful to the desktop run). Greppable verdict in jvm-stdio.log:
+    //   "AWT-ACTIVATION = CTC ACTIVE"  -> §6.0 de-risked on device, proceed to §6.1
+    //   "AWT-ACTIVATION = FAILED"      -> read the trace (likely LocalGE.<clinit> /
+    //                                     PlatformGraphicsInfo.createGE on the iOS jre21)
+    // Restore the Phase-1 set with:
+    //   callMain(env, "JitProbe", @[], log);
+    //   callMain(env, "Bench", @[], log);
+    //   callMain(env, "GlyphSmoke", @[glyphPng], log);
+    (void)glyphPng;
+    callMain(env, "UnsafePokeActivation", @[], log);
 
     (*vm)->DestroyJavaVM(vm);
     log([NSString stringWithFormat:@"[jvm] DestroyJavaVM done. GlyphSmoke PNG -> %@", glyphPng]);
