@@ -152,6 +152,9 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         // desktop awtsmoke harness uses). HotSpot accepts --add-exports/--add-opens directly
         // as VM options (verified). sun.awt.image is needed by CTC's CTCVolatileSurfaceManager.
         // For the Phase-1 probe set, restore -Djava.awt.headless=true and drop the JPMS block.
+        // NOTE (2026-05-31): JIT cannot be disabled on this patched libjvm — both -Xint and
+        // -XX:-UseCompiler fail VM init with "Failed setting boot class path". The MirrorMappedCodeCache
+        // build requires the JIT mirror active, so the §6.2 fix must repair the mirror, not bypass it.
         @"-Djava.awt.headless=false",
         @"--add-exports=java.desktop/java.awt=ALL-UNNAMED",
         @"--add-exports=java.desktop/java.awt.peer=ALL-UNNAMED",

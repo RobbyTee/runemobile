@@ -133,10 +133,12 @@ Align with the **current** Amethyst JIT stack rather than our legacy one:
    understand `prepare_memory_region`'s contract (does it need per-committed-region calls / re-calls
    after writes?), since a single up-front `prepare` over reserved-but-uncommitted 64 MB may not keep
    later-committed pages coherent.
-3. **Cheap parallel win:** `-Xint` (no code cache) to bank "real RuneLite renders on device
-   (interpreted)" and fully isolate the bug to the JIT mirror. (Note: device RuneLite logback may not
-   reach `jvm-stdio.log`; check `Documents/rl-capture/` for frame PNGs as the real evidence — the
-   `[headless]` lines didn't appear in the device stdout even on the 90 s run.)
+3. ~~Cheap parallel win: `-Xint` (no code cache) to bank "renders interpreted".~~ **RULED OUT
+   (2026-05-31): JIT cannot be disabled on this libjvm.** Both `-Xint` and `-XX:-UseCompiler` fail VM
+   init with `Error occurred during initialization of VM / Failed setting boot class path` (the
+   MirrorMappedCodeCache build requires the JIT mirror active during init). So there is **no
+   interpreter fallback** — the §6.2 fix MUST repair the mirror, not bypass it. ⇒ option 1 (current
+   Amethyst jre21 + `brk #0xf00d` + `universal.js`) is now the path.
 
 The patch was left REVERTED (libjvm at `0x81fc80`/`0x81fc8c` = original). Since the device takes brk
 either way, reverted vs NOPed is behaviorally identical here; `patch-jre-txm.sh` is now effectively a
