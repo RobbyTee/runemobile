@@ -28,6 +28,9 @@ targets:
         buildPhase: resources
       - path: jvm-resources/probes.jar
         buildPhase: resources
+      # §6.2: the shaded RuneLite client (all deps) — gitignored build artifact, ~29 MB.
+      - path: jvm-resources/client-1.12.28-SNAPSHOT-shaded.jar
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.audaro.helloshell

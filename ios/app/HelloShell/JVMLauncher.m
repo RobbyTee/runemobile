@@ -122,6 +122,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     NSString *glyphPng = [docs stringByAppendingPathComponent:@"glyph-smoke.png"];
 
+    // §6.2: the shaded RuneLite client jar (all deps) + a writable RuneLite home for the gamepack
+    // cache, and the headless capture dir (HeadlessCapture dumps mainBufferProvider PNGs there).
+    NSString *shadedPath = [[NSBundle mainBundle] pathForResource:@"client-1.12.28-SNAPSHOT-shaded" ofType:@"jar"];
+    NSString *classpath  = shadedPath ? [NSString stringWithFormat:@"%@:%@", shadedPath, jarPath] : jarPath;
+    NSString *captureDir = [docs stringByAppendingPathComponent:@"rl-capture"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:captureDir withIntermediateDirectories:YES attributes:nil error:nil];
+    (void)glyphPng;
+
     setenv("JAVA_HOME", javaHome.UTF8String, 1);
 
     // dlopen libjvm directly and use the JNI Invocation API (no launcher). Claim A
@@ -158,9 +166,15 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"--add-opens=java.desktop/java.awt=ALL-UNNAMED",
         @"--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
         @"--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+        // §6.2: heap for the full client + a writable RuneLite home (gamepack cache) + capture dir.
+        @"-Xmx512m",                              // depends on the increased-memory-limit entitlement
+        [NSString stringWithFormat:@"-Duser.home=%@", docs],                       // -> <docs>/.runelite
+        [NSString stringWithFormat:@"-Drunelite.headless.capture.dir=%@", captureDir],
+        @"-Drunelite.headless.capture.interval=50",
+        @"-Dheadless.runSeconds=200",
         [NSString stringWithFormat:@"-Djava.home=%@", javaHome],
         [NSString stringWithFormat:@"-Djava.library.path=%@", frameworks],
-        [NSString stringWithFormat:@"-Djava.class.path=%@", jarPath],
+        [NSString stringWithFormat:@"-Djava.class.path=%@", classpath],
     ];
 
     JavaVMOption *vmopts = (JavaVMOption *)calloc(opts.count, sizeof(JavaVMOption));
@@ -192,9 +206,13 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     //   "AWT-SMOKE = FAILED"           -> read the per-gate FAIL line (Canvas peer / getGraphics / fonts)
     // The PNG (args[0]) lands in Documents for an eyeball A/B (pull via devicectl).
     // Earlier probe sets: UnsafePokeActivation alone (§6.0); JitProbe/Bench/GlyphSmoke (Phase-1).
-    NSString *awtPng = [docs stringByAppendingPathComponent:@"awt-smoke.png"];
-    (void)glyphPng;
-    callMain(env, "AwtSmoke", @[awtPng], log);
+    // W1 P3 §6.2: boot the REAL RuneLite headless client under UnsafePoke CTC, capture
+    // mainBufferProvider. Greppable verdicts in jvm-stdio.log:
+    //   "[boot] graphicsenv = …CTCGraphicsEnvironment" + "[headless] … displayable=true"
+    //   "[headless-capture] … nullGraphics=0" + "wrote frame-LOGIN_SCREEN-*.png" -> §6.2 login render OK
+    // PNGs land in Documents/rl-capture/. Earlier entrypoints: AwtSmoke (§6.1), UnsafePokeActivation
+    // (§6.0), JitProbe/Bench/GlyphSmoke (Phase-1).
+    callMain(env, "DeviceHeadlessBoot", @[], log);
 
     (*vm)->DestroyJavaVM(vm);
     log(@"[jvm] DestroyJavaVM done.");
