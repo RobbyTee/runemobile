@@ -343,3 +343,50 @@ The cheap script interims are now empirically dead. Real options:
 - **Process note:** three prior fix theories (detach, patch-revert) were wrong because I reasoned about
   libjvm internals I can't observe. From here: only act on what the hs_err / verbatim logs show, and
   prefer the path Amethyst has already proven on this hardware (Option A) over more internal theorizing.
+
+---
+
+## RESEARCH UPDATE 8 (2026-05-31) — EXC_MASK_BAD_ACCESS clear: ran, did NOTHING. Mechanism CONFIRMED.
+Two findings this round (evidence: `app/evidence/hs_err-6.2-excmask-nochange-20260531.log` +
+`jvm-stdio-6.2-excmask-nochange-20260531.log`):
+
+1. **The CDN jre21 is byte-identical to our pin** (HEAD: content-length 24072536, last-modified
+   2025-09-16 = the `2c405…` pin). So "re-pin current Amethyst jre21" (Option A) is a **no-op** — same
+   libjvm. Amethyst runs Minecraft (heavier JIT) on THIS libjvm + device with no crash ⇒ the defect is
+   **not the binary**, it's how the JIT region is set up around it.
+2. **Clearing `EXC_MASK_BAD_ACCESS` before VM bringup ran (`kr=0`) and changed nothing** — identical
+   crash, `SIGSEGV in J 947 c1 java.util.Objects.nonNull` at the same `entry_point+0x48`. So the SIGSEGV
+   is NOT HotSpot's implicit-null-check fault being stolen by the debugger. (4th app/script theory ruled
+   out.)
+
+### The mechanism is now CONFIRMED from the faulting instruction + registers (not theory)
+- `siginfo: SEGV_ACCERR si_addr=0x10000c4bc`; faulting load base **`x0=0x000000010000c400`**.
+- Real metadata in this run lives at `0x11e…/0x11f…` (`x12=0x11ed5b240` Method*, `x16=0x11ec111e8`
+  klass). A correct MethodData/oop pointer would be ~`0x11f00c400`; the executing code instead built
+  **`0x1_0000_c400` — the high (movk) bits are MISSING.**
+- `Objects.nonNull` at **tier 3** (profiled C1) increments a MethodData counter on entry; the MDO pointer
+  is an embedded 64-bit immediate built by `movz`+`movk`. In the **RX view that executes**, the `movk`
+  bits didn't take → garbage base → load from `0x10000c4bc` faults.
+- Corroboration: the hs_err's own `Instructions:(pc=0x110dcc008)` dump reads `d65f03c0 d503201f…`
+  (`ret; nop; nop`) — end-of-method padding, NOT valid mid-method code at entry+0x48. The dumped bytes
+  (one VA) disagree with what the CPU executed (the other VA). **RW and RX are not coherent.**
+
+⇒ **Definitive: the RW↔RX mirror does not reliably share physical pages for freshly-written nmethods**
+(embedded immediates land in RW but the RX view executes stale/partial bytes). i-cache flush is
+unconditional+RX-targeted (UPDATE 1) so the residual cause is **physical-page non-sharing**, in the
+libjvm `vm_remap` / StikDebug `_M`+`prepare_memory_region` region layer — exactly the original §6.2
+hypothesis, now nailed to the instruction.
+
+### Why it's deterministic on `Objects.nonNull`
+Tier-3 profiled entry is the densest source of embedded metadata immediates in the hottest tiny methods;
+`nonNull` is compiled/recompiled constantly (we saw nmethod 959 compiled twice) and is among the first
+profiled methods, so it reliably hits the corruption first. Not special — just the canary.
+
+### Next: the cheapest experiment that the confirmed mechanism MOTIVATES (not a blind theory)
+**`-XX:TieredStopAtLevel=1`** (C1 tier-1, NO profiling). Tier-1 nmethods carry **no MDO counter
+immediate at entry** and far fewer embedded 64-bit metadata constants — the exact thing whose RX-view
+corruption is crashing us. This is a **workaround probe, not a coherency fix**: if RuneLite then survives
+and writes `frame-LOGIN_SCREEN-*.png`, the §6.2 GOAL (device render path proven) is met even though the
+underlying mirror bug remains; if it crashes the same way, the corruption is general (affects oop/Klass
+immediates in plain code too) and only a real region-layer fix (or matching Amethyst's exact
+`prepare_memory_region` cadence) will do. One rebuild either way.
