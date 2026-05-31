@@ -52,5 +52,54 @@ write.
 
 ## Status
 §6.2 device build is installed (shaded jar + DeviceHeadlessBoot, commit 907e49588). The blocker is
-the mirror i-cache coherency above. Activation (§6.0), headful Canvas (§6.1), and the full
-desktop RuneLite render under UnsafePoke CTC are all proven — this is the one remaining device gap.
+the mirror coherency above. Activation (§6.0), headful Canvas (§6.1), and the full desktop RuneLite
+render under UnsafePoke CTC are all proven — this is the one remaining device gap.
+
+---
+
+## RESEARCH UPDATE (2026-05-31, primary-source-verified) — i-cache theory REFUTED; real cause = our forced brk/_M mirror
+Read the actual Pojav/AngelAuraMC OpenJDK patch (`…/patches/jre_21/ios/2_mirror_mapping.diff`) +
+disassembled our own libjvm. Corrections to the diagnosis above:
+
+- **The i-cache flush is NOT the bug.** In the patch, `ICache::invalidate_range` →
+  `sys_icache_invalidate` is **unconditional** and the call sites pass **RX** addresses (the
+  nmethod/blob `this` is constructed at RX via `mirror_x(...)`; writes route to the RW alias via
+  `mirror_w(...)`). So the RX VA *is* flushed. My "RW-flushed-but-RX-stale" theory was wrong.
+- **But the RX view really is incoherent:** the faulting entry word is `0xD5032069` — a system/MSR
+  encoding HotSpot never emits as a C1 verified-entry first instruction → the correct nmethod bytes
+  HotSpot wrote to RW did not land in RX's physical page. So the **RW↔RX mirror is not aliasing the
+  same physical memory** for that page.
+- **The divergence from Amethyst (the key finding):** `get_debug_jit_mapping(bytes)` is:
+  ```
+  if (MirrorMappedCodeCache) {
+      if (DeviceRequiresTXMWorkaround()) buf_rx = BreakGetJITMapping(bytes);   // brk #0x69 (debugger _M)
+      if (!buf_rx) buf_rx = mmap(NULL, bytes, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_ANON, -1, 0);
+  } else return NULL;
+  vm_remap(... &buf_rw, buf_rx ...); vm_protect(buf_rw, RW);
+  debug_jit_mapping_mirrored = buf_rw;  return buf_rx;   // RX = code cache, RW = write alias
+  ```
+  `DeviceRequiresTXMWorkaround()` returns **false for a sandboxed app** (can't read the TXM img4), so
+  **Amethyst takes the `mmap(R|X)` + `vm_remap` path** (relying on StikDebug CS_DEBUGGED to make
+  `mmap(R|X)` executable). Amethyst runs Minecraft's far-heavier JIT on this path with no SIGILL.
+- **We binary-patched both gates to NOP (force `brk #0x69`)** → we use the **debugger-`_M` region +
+  `vm_remap`** path instead. That mirror held for the low-volume probes but goes **incoherent under
+  RuneLite's dense compilation** — i.e., `vm_remap` of a StikDebug `_M`/`prepare_memory_region` JIT
+  region does not robustly share physical pages with the RW alias the way an `mmap`'d anonymous region
+  does. (The prior session forced brk because it found `mmap(R|X)` "not executable" — that finding
+  must be reconciled; likely the attach/JIT-enable state differed then.)
+
+### Recommended experiment (next, needs a device run)
+**Align with Amethyst's proven path:** revert the brk-forcing patch (restore `0x81fc80`=`61080054`
+`b.ne`, `0x81fc8c`=`e0010034` `cbz w0`) so `get_debug_jit_mapping` takes the `mmap(R|X)`+`vm_remap`
+path under our StikDebug attach (which sets CS_DEBUGGED via `vAttach`). The mmap fallback is intact in
+our binary (verified at `0x81fcc8`). Then re-run RuneLite:
+- If `mmap(R|X)` is now executable under our attach → coherent mirror → dense JIT should hold (Amethyst
+  parity). If it instruction-aborts immediately (the old finding), the brk/_M path is required and the
+  coherency fix must instead target the `_M`+`vm_remap` aliasing (investigate `prepare_memory_region`
+  semantics / whether the whole 64 MB must be pre-faulted/committed before `vm_remap`).
+- Keep a `runelite-jit.js` that still services any `brk #0x69` (harmless if unused) and does the
+  standard JIT-enable attach. Bisect with `-Xint` first if we want to bank "renders interpreted on
+  device" cheaply.
+
+Net: this is a W1 JIT-mechanism choice (debugger-`_M` mirror vs Amethyst's `mmap`+`vm_remap` mirror),
+not an i-cache flush bug. The cheapest path to parity is to stop forcing brk and use Amethyst's path.
