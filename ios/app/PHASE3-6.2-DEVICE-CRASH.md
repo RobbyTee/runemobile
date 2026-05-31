@@ -296,3 +296,50 @@ this before three wasted device round-trips). Added to the §6.2 debugging disci
 Expected next run (md5-gate verbatim): `[JIT26] Got JIT mapping` line 1, `[jvm] JavaVM created`,
 `[boot] graphicsenv=…CTCGraphicsEnvironment` — back to proven ground; then the genuine §6.2 dense-compile
 crash (or GREEN).
+
+---
+
+## RESEARCH UPDATE 7 (2026-05-31) — back on proven ground: the REAL §6.2 crash, full hs_err captured
+With the complete JRE, the run did what UPDATE 6 predicted. Evidence (saved verbatim:
+`ios/app/evidence/hs_err-6.2-real-crash-20260531.log` + `jvm-stdio-6.2-real-crash-20260531.log`):
+- `[JIT26] Requesting 64 MB` → `Got JIT mapping … RW=0x116fe4000, RX=0x112fe4000` (the mirror) ✓
+- `[boot] graphicsenv = …CTCGraphicsEnvironment`, `headless=false` ✓ — §6.0/§6.1 restored on device
+- `[boot] launching RuneLiteHeadless --safe-mode` ✓ — real client ran **90.98 s**, compiled **1569 nmethods**
+- **Crash: `SIGSEGV SEGV_ACCERR` in `J 959 c1 java.util.Objects.nonNull`** (tier-3 C1), pc=0x113318008
+  (inside RX bounds `[0x112fe4000, 0x1134b4000, 0x116fe4000]`). Faulting access is a **data load** from
+  `0x10000ccbc` — an address `nonNull` (a trivial `obj!=null`) must never touch ⇒ the nmethod's embedded
+  immediates are garbage ⇒ **the RX view is incoherent with the RW mirror HotSpot wrote.**
+- CodeCache `used=4870Kb free=60665Kb total_blobs=2220 nmethods=1569 full_count=0` — 7% full, no sweeping.
+  Java stack: logback date formatting (`SimpleDateFormat`→`TimeZoneNameUtility`→`Objects.nonNull`) during
+  normal `RuneLite.main` logging — ordinary code, not anything exotic.
+
+**This is exactly the original §6.2 signature** (SIGILL/SEGV on a freshly-compiled nmethod under dense
+compilation). The modules detour is fully behind us.
+
+### Decisive narrowing (what the hs_err rules in/out)
+- **Not the StikDebug script.** We get exactly ONE `brk #0x69` (the 64 MB up-front reservation); after
+  that, HotSpot writes every nmethod into the RW mirror and flushes the RX i-cache **itself** — the
+  debugger script is NOT in the per-nmethod path. This is why continuous-vs-detach never changed the §6.2
+  crash. The script layer is **exonerated**.
+- **Not a structural mirror failure.** 1569 nmethods executed correctly over 90 s before one corrupted ⇒
+  the RW↔RX mapping mostly aliases fine; the defect is **intermittent per-nmethod coherency** (a written
+  nmethod's bytes/immediates not reliably visible at the RX VA before first execution).
+- **Not code-cache pressure.** 7% full, full_count=0 ⇒ not sweeper/eviction/recommit.
+- ⇒ The defect lives in the **libjvm mirror/cache-flush layer**, which our app cannot patch from the
+  outside. Candidate micro-causes (unresolved without Apple-Silicon cache-arch certainty — do NOT guess):
+  D-cache clean targeting the RX VA while the dirty write sits under the RW VA; or a missing barrier
+  between the RW write and the RX execute on this build.
+
+### Where this leaves the decision (Option A vs cheap diagnostics)
+The cheap script interims are now empirically dead. Real options:
+- **Option A (evidence-backed): re-pin the CURRENT Amethyst jre21** — the exact libjvm Amethyst ships and
+  runs Minecraft with on THIS device (heavier JIT than RuneLite, no SIGSEGV). Our pinned build is
+  sha `2c405…` (2025-09-15); a newer Amethyst libjvm may carry the per-nmethod coherency fix. Cost:
+  re-fetch + re-verify §6.0/§6.1/§6.2 md5 gates + re-derive patch offsets.
+- **Cheap JVM-flag diagnostics first (one rebuild each):** `-XX:TieredStopAtLevel=1` (drop profiled tier-3
+  → simpler nmethods, fewer patched immediates — the crash was IN a tier-3 method), or
+  `-XX:-TieredCompilation -XX:CICompilerCount=1` (serialize compilation → tests a write/execute race).
+  These are diagnostics, not expected fixes; they tell us whether complexity/concurrency triggers it.
+- **Process note:** three prior fix theories (detach, patch-revert) were wrong because I reasoned about
+  libjvm internals I can't observe. From here: only act on what the hs_err / verbatim logs show, and
+  prefer the path Amethyst has already proven on this hardware (Option A) over more internal theorizing.
