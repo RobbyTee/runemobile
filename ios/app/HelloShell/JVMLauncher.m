@@ -193,6 +193,25 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     vmArgs.ignoreUnrecognized = JNI_FALSE;
 
     resetSignalHandlers();
+
+    // W1 P3 §6.2 — Amethyst app-side JIT parity (the proven path on THIS device).
+    // The Amethyst CDN jre21 is byte-identical to ours (size+last-modified match the pin),
+    // i.e. Amethyst runs Minecraft's heavier JIT on this SAME libjvm with no crash — so the
+    // §6.2 SIGSEGV is NOT a libjvm defect, it's our process setup. JavaLauncher.m clears the
+    // task's EXC_BAD_ACCESS Mach exception port (port 0 = default) before bringing up the VM:
+    // HotSpot deliberately faults SIGSEGV for implicit null checks / safepoint polls in compiled
+    // code and catches them in its OWN handler. With StikDebug attached, that Mach exception is
+    // instead delivered to the debugger (and our map-on-fault net can swallow it without
+    // re-delivering), so HotSpot's null-check slow path never runs → execution continues with a
+    // garbage register → the SEGV_ACCERR we saw in a fresh tier-3 nmethod (x0 = bogus oop).
+    // Clearing the bad-access port lets those faults fall through to HotSpot's sigaction handler.
+    // brk #0x69 is EXC_BREAKPOINT (a DIFFERENT mask) — left with the debugger, so the 64 MB
+    // code-cache reservation is still serviced by runelite-jit.js.
+    kern_return_t kr = task_set_exception_ports(
+        mach_task_self(), EXC_MASK_BAD_ACCESS, MACH_PORT_NULL,
+        EXCEPTION_DEFAULT, MACHINE_THREAD_STATE);
+    log([NSString stringWithFormat:@"[jvm] cleared EXC_MASK_BAD_ACCESS port (Amethyst parity) kr=%d", kr]);
+
     log(@"[jvm] JNI_CreateJavaVM (HotSpot generates its template interpreter now)…");
 
     JavaVM *vm = NULL;
