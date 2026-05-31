@@ -232,3 +232,34 @@ it's papering over faults that should never have reached the debugger.
    reinstall, re-test. (Keep the continuous script; the map-on-fault net becomes dead code once faults
    bypass the debugger.)
 3. If still crashing → escalate to Option A (re-pin current Amethyst jre21) + re-run all md5 gates.
+
+---
+
+## RESEARCH UPDATE 5 (2026-05-31) — the REAL regression: patch-jre-txm.sh was REVERTED; UPDATE 2 was wrong
+After reverting detach-after-first, a device run with the **restored continuous baseline script** (the
+exact md5 `13d29fe25fc01a39da758b59559360ca` that produced §6.0/§6.1 GREEN) STILL failed identically:
+`Failed setting boot class path`, **no `[JIT26]` line**, VM dies at init. md5-gated against the verbatim
+pulled `jvm-stdio.log`. So across the last three failing runs the **JIT script was never the variable.**
+
+**The actual regression: the libjvm gates were left REVERTED (original bytes `61080054`/`e0010034`).**
+- §6.0/§6.1 GREEN ran on the **PATCHED** libjvm (`patch-jre-txm.sh` NOPs both gates → `get_debug_jit_mapping`
+  always calls `BreakGetJITMapping` = `brk #0x69`). First log line was always `[JIT26] Got JIT mapping …
+  from debugger`.
+- The current jre had the patch **reverted**. With original gates, `get_debug_jit_mapping`'s
+  `DeviceRequiresTXMWorkaround()` returns 0 in-sandbox (can't read the TXM img4) → mirror returns NULL →
+  no `brk #0x69` → no `[JIT26]` → the MirrorMappedCodeCache template-interpreter generation at init has no
+  RX mirror → surfaces as **"Failed setting boot class path."** This is exactly the `patch-jre-txm.sh`
+  header's original rationale.
+- **RESEARCH UPDATE 2's claim that "revert is a no-op, the device takes brk regardless" is REFUTED.**
+  That observation came from the session lineage known to have committed false GREENs; the reproducible
+  current evidence (patched=boots with `[JIT26]`; reverted=init-fails with no `[JIT26]`) matches the
+  original patch rationale, not UPDATE 2. ⇒ **the patch is REQUIRED on this device.** `patch-jre-txm.sh`
+  is NOT a no-op and must stay applied.
+
+**Action taken:** re-applied `patch-jre-txm.sh` (gates now `1f2003d5`×2), rebuilt, reinstalled (verified
+the built app's embedded libjvm carries the NOPed gates). Expected next run: `[JIT26]` returns, VM boots,
+`[boot] graphicsenv = …CTCGraphicsEnvironment`, then the REAL §6.2 dense-compile crash
+(SIGILL/SIGSEGV) — i.e. back on proven ground. THEN pursue the app-side `EXC_MASK_BAD_ACCESS` fix
+(UPDATE 4). Corroborate by capturing StikDebug's own log this run: `[rl-jit] #1 brk#0x69 … -> RX` lines
+mean the script is servicing; their presence + a later (non-init) crash confirms the regression was the
+revert.
