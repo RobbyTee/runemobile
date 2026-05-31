@@ -74,7 +74,10 @@ public class UnsafePokeActivation {
         catch (Throwable t) { System.out.println("nullSMF FAILED: " + t); }
     }
 
-    public static void main(String[] args) throws Exception {
+    // Install CTC (toolkit + graphicsenv + SMF) on a pristine AWT state, no instrumentation.
+    // Extracted so non-probe callers (e.g. the device RuneLite boot) can activate without the
+    // AwtActivation verdict. main() = activate() + verdict, so §6.0/§6.1 behavior is unchanged.
+    public static void activate() throws Exception {
         System.out.println("==== UnsafePokeActivation (no byte-buddy / no attach / no JVMTI) ====");
 
         Class<?> ctcToolkit = Class.forName("com.github.caciocavallosilano.cacio.ctc.CTCToolkit");
@@ -155,7 +158,10 @@ public class UnsafePokeActivation {
                       ctcSMF.getDeclaredConstructor().newInstance());
             System.out.println("set SurfaceManagerFactory.instance = CTCSurfaceManagerFactory OK");
         } catch (Throwable t) { System.out.println("SMF set FAILED: " + t); }
+    }
 
+    public static void main(String[] args) throws Exception {
+        activate();
         AwtActivation.main(args); // the no-pixel gate + greppable AWT-ACTIVATION verdict
     }
 }

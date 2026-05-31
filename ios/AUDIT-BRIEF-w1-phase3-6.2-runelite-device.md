@@ -1,5 +1,16 @@
 # W1 P3 §6.2 brief — real RuneLite buffer on device (the W1↔W2 join)
 
+> **DESKTOP DE-RISK — PASSED (2026-05-31).** The one genuine unknown ("does real RuneLite boot under
+> `UnsafePokeActivation` instead of the byte-buddy `CacioExtension`?") is settled on desktop OpenJDK 21:
+> `DeviceHeadlessBoot` (= `UnsafePokeActivation.activate()` then `RuneLiteHeadless.main("--safe-mode")`,
+> NO agent/byte-buddy) booted the real client under CACIO CTC (no OS window), `HeadlessClientUI`
+> realized its frame (canvas 765×503 displayable=true on a `CTCGraphicsConfiguration`), the engine
+> drove `Hooks.draw` with `nullGraphics=0` for 1150+ draws, and captured **6 live-OSRS login-screen
+> PNGs** (real engine render into `mainBufferProvider`). Harness: `ios/dev-tools/headless/run-headless-unsafepoke.sh`;
+> entry class `ios/dev-tools/awtsmoke/DeviceHeadlessBoot.java`. ⇒ The device build is now reduced to
+> **packaging (bundle the 29 MB shaded jar) + memory tuning (`-Xmx`, `increased-memory-limit`)** —
+> the activation swap and the full client render path are proven on the same JVM family.
+
 Self-contained brief for the next build. §6.0 (CTC activation) and §6.1 (headful Canvas + CTC
 Graphics/fonts) are GREEN on device (see `ios/app/PHASE3-DEVICE-STATUS.md`,
 `ios/AUDIT-RESULT-w1-phase3-device.md`). §6.2 runs the **real RuneLite headless client** on the
