@@ -143,3 +143,44 @@ Align with the **current** Amethyst JIT stack rather than our legacy one:
 The patch was left REVERTED (libjvm at `0x81fc80`/`0x81fc8c` = original). Since the device takes brk
 either way, reverted vs NOPed is behaviorally identical here; `patch-jre-txm.sh` is now effectively a
 no-op on this device and should be reconsidered when the jre is updated.
+
+---
+
+## RESEARCH UPDATE 3 (2026-05-31) — audit incorporated; defect is BEHAVIORAL, not the servicing
+External audit verdict in `AUDIT-RESULT-w1-phase3-6.2-jit-mirror.md`. Key correction it forced, then
+confirmed against primary source this session:
+
+- **Our `brk #0x69` servicing was already correct.** Read the maintained StikDebug `universal.js`
+  (`JIT26PrepareRegion`, L178-207) + the Amethyst `UniversalJIT26Extension.js` legacy bridge
+  (`legacyCommands[0x69]` = `x1=x0; x0=0; JIT26PrepareRegion(brkResponse)`). For a NULL addr it does
+  `_M size,rx` → `prepare_memory_region(addr,size)` → return addr — **byte-for-byte what our
+  `runelite-jit.js` already did.** So "single up-front prepare is the bug" is REFUTED; swapping to
+  `universal.js`+ext would not have changed servicing at all.
+- **Our libjvm emits brk #0x69 exactly once, brk #0xf00d zero times** (byte-scan of
+  `dev-tools/jre/lib/server/libjvm.dylib`, sha `628ecae014da8029…`: `D4200D20`×1, `D43E01A0`×0). ⇒ the
+  code cache is reserved in a SINGLE `get_debug_jit_mapping(ReservedCodeCacheSize)` call at VM init;
+  all ~1400 nmethods are written into that one prepared RX region + RW mirror. Re-pinning to a
+  "brk #0xf00d build" is unproven to exist or help — the legacy bridge IS the supported route.
+- **The real divergence from the proven Amethyst stack is BEHAVIORAL** (`JavaLauncher.m` L107-135):
+  1. **`JIT26SetDetachAfterFirstBr`** — Amethyst DETACHES the debugger after the one reservation, so
+     the dense-compile phase runs with NO debugger attached. Our old script stayed attached across all
+     ~1400 compiles. **A persistently-attached debugger during dense JIT is the prime suspect** for the
+     mirror going incoherent (SIGILL at a fresh nmethod's first exec; SIGSEGV in `is_unloading`).
+  2. **`task_set_exception_ports(mach_task_self(), EXC_MASK_BAD_ACCESS, 0, …)`** — routes stray faults
+     to the default handler instead of the debugger.
+  3. Our old script's **map-on-fault "safety net"** is an anti-pattern absent upstream that can
+     corrupt mirror state.
+
+### Fix under test (script-only — cheapest, no jre re-pin, no native rebuild)
+Rewrote `ios/app/stikdebug/runelite-jit.js`: service the single brk #0x69 exactly as before, then
+**`D` (detach) and exit** (`DETACH_AFTER_FIRST=true`, Amethyst parity); **removed the map-on-fault
+net** (stray stops forwarded to the VM). Decision rationale + escalation ladder in
+`AUDIT-RESULT-w1-phase3-6.2-jit-mirror.md`.
+
+Interpreting the next device run (md5-gate the verdict against the verbatim pulled log):
+- **Boots + renders login un-attached** → §6.2 device GREEN; the persistent attach was the defect.
+- **A second `[rl-jit] #2 brk#0x69`, or a fault right after `detached`** → this libjvm reserves the
+  cache in >1 call → flip `DETACH_AFTER_FIRST=false` and add the app-side `EXC_MASK_BAD_ACCESS` clear
+  in HelloShell native (delta 2 above), then re-test.
+- **Still SIGILL/SIGSEGV in the code cache while un-attached** → attach wasn't the cause → escalate to
+  Option A (re-pin current Amethyst jre21) and re-run §6.0/§6.1/§6.2 md5 gates.
