@@ -263,3 +263,36 @@ the built app's embedded libjvm carries the NOPed gates). Expected next run: `[J
 (UPDATE 4). Corroborate by capturing StikDebug's own log this run: `[rl-jit] #1 brk#0x69 … -> RX` lines
 mean the script is servicing; their presence + a later (non-init) crash confirms the regression was the
 revert.
+
+---
+
+## RESEARCH UPDATE 6 (2026-05-31) — ACTUAL ROOT CAUSE: `lib/modules` was missing from the JRE
+UPDATE 5's "patch revert" theory was ALSO wrong — re-applying the patch changed nothing; the run failed
+identically (`Failed setting boot class path`, no `[JIT26]`). Stopped reasoning about libjvm internals and
+inspected the embedded JRE on disk directly:
+
+- **`dev-tools/jre/lib/modules` was ABSENT** (`stat` → No such file or directory). That file is the
+  packed runtime module image (`java.base`/`java.desktop`/… — the JVM's boot classes). Without it the VM
+  cannot set the boot class path → **"Failed setting boot class path"** at init, before any JIT/`[JIT26]`.
+  JRE on disk was only 72 MB (a complete one is ~139 MB).
+- **Why:** a JRE re-extract at 11:50 today repopulated `lib/` (libjvm, all dylibs) but silently dropped
+  the 94 MB `lib/modules`. So EVERY run since then failed at init — regardless of JIT script
+  (continuous/detach) or libjvm gate state (patched/reverted). All three prior fix theories
+  (detach-after-first, patch-revert, EXC_MASK) were chasing a JIT-stage bug that the runs never reached.
+- **This also recontextualizes earlier "JIT can't be disabled / -Xint fails 'Failed setting boot class
+  path'" notes (commit fab4531d6):** that exact string is the missing/incomplete boot modules image, NOT
+  a property of the MirrorMappedCodeCache build. Whether `-Xint` truly fails on a COMPLETE jre is now
+  unverified again (but moot — we don't need the interpreter).
+
+**Fix:** re-extracted ONLY `lib/modules` from the checksum-verified tarball (zip sha
+`2c405fcc…` matches the pin; inner `jre21-ios-arm64-20250915-release.tar.xz`); 98,311,542 bytes, jimage
+magic `0xCAFEDADA` verified. Left the patched libjvm (gates `1f2003d5`×2) and rebuilt `libawt_xawt.dylib`
+untouched. Rebuilt + reinstalled; verified `HelloShell.app/jre/lib/modules` is present in the bundle.
+
+**Process lesson:** when a device symptom is identical across N different code changes, the variable is
+not in the code — verify the artifacts/inputs first (here: a one-line `stat` on the JRE would have caught
+this before three wasted device round-trips). Added to the §6.2 debugging discipline.
+
+Expected next run (md5-gate verbatim): `[JIT26] Got JIT mapping` line 1, `[jvm] JavaVM created`,
+`[boot] graphicsenv=…CTCGraphicsEnvironment` — back to proven ground; then the genuine §6.2 dense-compile
+crash (or GREEN).
