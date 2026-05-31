@@ -184,3 +184,51 @@ Interpreting the next device run (md5-gate the verdict against the verbatim pull
   in HelloShell native (delta 2 above), then re-test.
 - **Still SIGILL/SIGSEGV in the code cache while un-attached** → attach wasn't the cause → escalate to
   Option A (re-pin current Amethyst jre21) and re-run §6.0/§6.1/§6.2 md5 gates.
+
+---
+
+## RESEARCH UPDATE 4 (2026-05-31) — DETACH-AFTER-FIRST REFUTED on device; reverted to continuous servicing
+Two device runs (md5-gated against verbatim `jvm-stdio.log` pulled via `devicectl`) with the
+detach-after-first script BOTH failed at **VM init**, identically:
+```
+Error occurred during initialization of VM
+Failed setting boot class path.
+```
+with **no `[JIT26] Got JIT mapping` line** and the launcher log stopping at `[jvm] opt[2]` (never
+`[jvm] JavaVM created`). (Run 1 also still carried a stale `-XX:-UseCompiler` in the *installed* binary
+— a red herring; run 2 was a clean rebuild WITHOUT that flag and failed the same way, isolating the
+script as the sole cause.)
+
+**Why detach-after-first is wrong (the reasoning error):** "the libjvm contains `brk #0x69` once" means
+one **call site**, not one **invocation**. HotSpot calls `BreakGetJITMapping` **repeatedly** as the code
+cache grows — including **multiple times during VM init itself** (template interpreter generation, then
+more). Detaching after the first reservation starved every subsequent request and dropped the JIT mirror
+mid-init → the same "Failed setting boot class path" the `-Xint`/`-UseCompiler` experiments produced
+(that error == "MirrorMappedCodeCache build can't bring up the mirror"). So **continuous servicing is
+mandatory even to BOOT this libjvm** — the §6.0/§6.1-GREEN baseline script proves it (it boots fine and
+crashes only LATER, in dense compile). Amethyst's `JIT26SetDetachAfterFirstBr` fits *Amethyst's* libjvm
+flow (one-shot region reservation), not ours. **Reverted `runelite-jit.js` to the continuous baseline
+(commit 40a92044d's version) verbatim.**
+
+### Corrected fix direction — app-side exception-port parity (no jre swap)
+The remaining real divergence from Amethyst's proven stack is delta 2: Amethyst calls
+`task_set_exception_ports(mach_task_self(), EXC_MASK_BAD_ACCESS, 0, EXCEPTION_DEFAULT,
+MACHINE_THREAD_STATE)` before VM bring-up. **Sharper theory than "persistent attach is noisy":** HotSpot
+relies on **SIGSEGV/EXC_BAD_ACCESS for its own machinery** — implicit null-pointer checks and safepoint
+polling deliberately fault and are caught by HotSpot's installed segv handler. With StikDebug attached,
+the debugger's Mach exception port intercepts **every** `EXC_BAD_ACCESS`, so HotSpot never sees the
+faults it expects → its implicit-exception/safepoint mechanisms misbehave under load → the SIGILL/SIGSEGV
+we see in dense compile. Amethyst clears `EXC_MASK_BAD_ACCESS` precisely so those faults bypass the
+debugger and reach HotSpot's handler while still attached. Our `brk #0x69` servicing is unaffected
+(that's `EXC_BREAKPOINT`, a different mask). This also explains why our map-on-fault net exists at all —
+it's papering over faults that should never have reached the debugger.
+
+**Plan (user-confirmed):**
+1. Re-run with the **restored continuous script** to confirm we're back to the REAL §6.2 crash (expect
+   `[JIT26]` + `[boot] graphicsenv=…CTCGraphicsEnvironment` + a LATER SIGILL/SIGSEGV, not VM-init fail).
+   Watch whether `[rl-jit] fault@… -> map RX` lines fire — if they do, that's direct evidence the
+   debugger is intercepting HotSpot's EXC_BAD_ACCESS (the theory above).
+2. Add the `EXC_MASK_BAD_ACCESS` clear in `JVMLauncher.m` immediately before `JNI_CreateJavaVM`; rebuild,
+   reinstall, re-test. (Keep the continuous script; the map-on-fault net becomes dead code once faults
+   bypass the debugger.)
+3. If still crashing → escalate to Option A (re-pin current Amethyst jre21) + re-run all md5 gates.
