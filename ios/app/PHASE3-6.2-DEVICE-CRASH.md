@@ -103,3 +103,41 @@ our binary (verified at `0x81fcc8`). Then re-run RuneLite:
 
 Net: this is a W1 JIT-mechanism choice (debugger-`_M` mirror vs Amethyst's `mmap`+`vm_remap` mirror),
 not an i-cache flush bug. The cheapest path to parity is to stop forcing brk and use Amethyst's path.
+
+---
+
+## RESEARCH UPDATE 2 (2026-05-31) — the mmap revert was a no-op; it's a LEGACY brk-protocol mismatch
+Reverted the brk-forcing patch, rebuilt, reinstalled, re-ran. New result:
+- **The log STILL shows `[JIT26] … brk #0x69`** → `DeviceRequiresTXMWorkaround()` returns **true** on
+  this iPhone 17 Pro Max / iOS 26.5 (the prior "sandbox can't read the TXM img4 → false" note is
+  WRONG for this device). So reverting did NOT switch to mmap — the libjvm takes brk regardless.
+  **Corollary: Amethyst (same device) ALSO uses brk #0x69 here** → the brk/`_M` path is proven-capable
+  (Minecraft). The defect is our *servicing* of it, not the path.
+- New crash: **`SIGSEGV SEGV_ACCERR @0x0` in `nmethod::is_unloading()` on a GC thread after ~90 s**
+  (vs SIGILL @0.5 s before) — a corrupted nmethod pointer found while G1 walks the code cache. Same
+  mirror-coherency damage, surfacing later (timing-dependent).
+- **Root insight from StikDebug `universal.js` (the maintained script):** the current JIT protocol is
+  **`brk #0xf00d` + x16 command** (`JIT26PrepareRegion`, x16=1). **`brk #0x69` is LEGACY and now
+  returns an error** (`JIT26HandleBrk0x69` → `0xE0000069`). Our pinned jre21 uses the legacy
+  `BreakGetJITMapping` (`brk #0x69`), serviced by our home-grown `runelite-jit.js`
+  (`_M size,rx` + a single `prepare_memory_region` over the 64 MB). That single-shot legacy servicing
+  holds for light JIT (Hello/probes were GREEN) but the mirror goes incoherent under RuneLite's dense
+  ~1400-method compilation.
+
+### Corrected fix direction (a real W1 detour)
+Align with the **current** Amethyst JIT stack rather than our legacy one:
+1. **Re-fetch the current Amethyst jre21** (the Phase-1 oracle used the full Amethyst IPA's jre, which
+   works with current StikDebug). Our separately-pinned jre21 (sha 2c405…) predates the `brk #0xf00d`
+   protocol. A current jre + StikDebug `universal.js` is the proven-robust combination.
+2. If staying on the pinned jre: rework `runelite-jit.js`'s legacy `0x69` servicing for coherency —
+   understand `prepare_memory_region`'s contract (does it need per-committed-region calls / re-calls
+   after writes?), since a single up-front `prepare` over reserved-but-uncommitted 64 MB may not keep
+   later-committed pages coherent.
+3. **Cheap parallel win:** `-Xint` (no code cache) to bank "real RuneLite renders on device
+   (interpreted)" and fully isolate the bug to the JIT mirror. (Note: device RuneLite logback may not
+   reach `jvm-stdio.log`; check `Documents/rl-capture/` for frame PNGs as the real evidence — the
+   `[headless]` lines didn't appear in the device stdout even on the 90 s run.)
+
+The patch was left REVERTED (libjvm at `0x81fc80`/`0x81fc8c` = original). Since the device takes brk
+either way, reverted vs NOPed is behaviorally identical here; `patch-jre-txm.sh` is now effectively a
+no-op on this device and should be reconsidered when the jre is updated.
