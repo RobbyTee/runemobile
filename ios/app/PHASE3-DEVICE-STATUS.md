@@ -1,4 +1,17 @@
-# W1 P3 §6.0 — on-device status (2026-05-30)
+# W1 P3 §6.0 + §6.1 — on-device status
+
+> **§6.1 IS GREEN ON DEVICE (2026-05-31) — `AWT-SMOKE = CANVAS+CTC OK`.** A real headful
+> `java.awt.Canvas` realizes under CACIO CTC on the iOS JIT JVM and hands out a live Graphics:
+> `Frame/Canvas.isDisplayable=true, isShowing=true`; `Canvas.getGraphics() = sun.java2d.SunGraphics2D`;
+> `Canvas GraphicsConfiguration = ctc.CTCGraphicsConfiguration`; `createCompatibleImage 765x503` →
+> `nonBlankPx=22098 textPx=1913`; `Canvas.getGraphics().drawImage(buffer) OK`. This is the exact
+> RuneLite engine seam (`Client.getCanvas()` + `BufferProvider`). Fix that unblocked it: the headful
+> `initIDs` family (Component/Container/Window/Frame/AWTEvent/…) lives in neither `libawt` nor
+> `libawt_headless`, so `Component.<clinit>` threw `UnsatisfiedLinkError: Component.initIDs`; rebuilt
+> `libawt_xawt` to **reexport `libawt_headless` (real Font initIDs) + no-op stubs for the absent
+> headful initIDs** (safe under CTC's pure-Java peers). md5-gated bash verdict
+> `MEGAVERDICT = SIX_ONE_GREEN_AS_EXPECTED`, negatives clean; device PNG byte-identical to the desktop
+> render. Verbatim §6.1 log at the bottom. NEXT: §6.2 — real-RuneLite BufferProvider buffer smoke.
 
 > **§6.0 IS GREEN ON DEVICE (round 4, 2026-05-30) — `AWT-ACTIVATION = CTC ACTIVE`.** This time the
 > verdict is trustworthy: `jvm-stdio.log` pulled out-of-band via `devicectl`, every token recomputed
@@ -24,6 +37,19 @@ Toolkit.getDefaultToolkit() = com.github.caciocavallosilano.cacio.ctc.CTCToolkit
 GraphicsEnvironment.getLocalGraphicsEnvironment() = com.github.caciocavallosilano.cacio.ctc.CTCGraphicsEnvironment
 screenDevices=1 defaultBounds=java.awt.Rectangle[x=0,y=0,width=1024,height=768]
 AWT-ACTIVATION = CTC ACTIVE
+```
+
+## §6.1 GREEN log (verbatim, device, 2026-05-31)
+```
+==== AwtSmoke (W1 P3 §6.1 — realize Canvas + CTC pixels/fonts) ====
+CacioComponentPeer::setZOrder: NOT YET IMPLEMENTED
+Frame.isDisplayable=true Canvas.isDisplayable=true Canvas.isShowing=true
+Canvas.getGraphics() = sun.java2d.SunGraphics2D[font=…Dialog…,color=…255,255,255]
+Canvas GraphicsConfiguration = com.github.caciocavallosilano.cacio.ctc.CTCGraphicsConfiguration
+createCompatibleImage = 765x503 type=2
+compatibleImage nonBlankPx=22098 textPx=1913
+Canvas.getGraphics().drawImage(buffer) OK
+AWT-SMOKE = CANVAS+CTC OK
 ```
 
 ---
