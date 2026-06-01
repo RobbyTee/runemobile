@@ -620,6 +620,55 @@ The problem is in how the debugger reserves/owns the JIT physical pages. Concret
 
 ---
 
+## RESEARCH UPDATE 15 (2026-06-01) — audit verdict incorporated; fix = Amethyst-parity lifecycle (script-only, detach-after-first)
+External audit saved verbatim: `ios/AUDIT-RESULT-w1-phase3-6.2-jit-region-corruption.md`. Key adjudication:
+
+- **Physical-page aliasing is NOT proven** (only an open hypothesis). The trusted hs_err files show the
+  heap `[0x7f0000000,0x800000000)` and the CodeCache `0x11…` band are *virtually* far apart, and the wild
+  tier-1 fault `0x3aa659bf0` is a corrupted pointer, not a heap/code address — equally explainable by
+  wrong/stale compiled code as by a literal page collision. So UPDATE 14's "confirmed physical aliasing"
+  was an overclaim. ⇒ **do NOT invest first in heap-base pinning or "dedicated-PFN" `_M` work** (rank 4–5;
+  also not even expressible with the `_M`/`prepare_memory_region` primitives StikDebug exposes).
+- **Cheapest reliable first fix = exact Amethyst lifecycle parity** (verdict Q2 rank 1). The real
+  divergence from Amethyst's proven Minecraft stack is lifecycle/exception handling, not the allocation
+  primitive (our `_M`+prepare already matches `JIT26PrepareRegion(NULL,size)` byte-for-byte).
+- **Decisive reconciliation:** UPDATE 4's "detach-after-first REFUTED" was contaminated by the missing
+  `lib/modules` bug (UPDATE 6) — those VM-init failures were the modules image, NOT the detach.
+  Detach-after-first was therefore **never cleanly tested**. The trusted logs (re-confirmed this session:
+  `jvm-stdio-6.2-isUnloading-w3shell` + `…-real-crash`) show **exactly one `[JIT26] Requesting 64 MB`**
+  per boot (one `brk #0x69`, cache ~7% used, never grown) → detach-after-first **cannot** starve a later
+  brk. The "HotSpot calls BreakGetJITMapping repeatedly" reasoning in UPDATE 4 is refuted by the verbatim
+  logs.
+
+### Fix implemented (this session) — `runelite-jit.js`, script-only, NO app rebuild
+Rewrote the StikDebug script (md5 `13d29fe25fc01a39da758b59559360ca` → **`8810404d0e4a263b4c592f1eda83b8b4`**):
+1. **Detach (`D`) immediately after servicing the single brk #0x69 64 MB reservation** — Amethyst
+   `JIT26SetDetachAfterFirstBr(true)` parity. The RX mapping + CS_DEBUGGED persist after detach (Amethyst
+   runs Minecraft for minutes detached); HotSpot writes nmethods through RW, executes RX, and flushes the
+   i-cache itself — the debugger is NOT in the per-nmethod path. A debugger holding the task's Mach
+   exception ports across ~1500 dense compiles is the leading suspect for the intermittent RW↔RX corruption.
+2. **Removed the map-on-fault safety net** — an anti-pattern absent upstream that absorbed EXC_BAD_ACCESS
+   faults HotSpot's own handler must service (those are already cleared app-side via `EXC_MASK_BAD_ACCESS`).
+   Non-brk stops are now forwarded to the VM.
+3. `EXC_MASK_BAD_ACCESS` clear stays (app-side, unchanged).
+
+This is the cheapest possible test of the verdict's #1 hypothesis: **no native rebuild** — the user just
+re-assigns the updated script in StikDebug. Adjudicate against the verbatim pulled `jvm-stdio.log` +
+`hs_err_*` (md5-gated); the crash is intermittent → retry several boots.
+
+Interpreting the next runs:
+- **Boots clean + survives the dense-compile phase across retries** → continuous attach was the defect;
+  §6.2 parity fix holds. (Watch for `[rl-jit] detached after first reservation` in the StikDebug log and a
+  single `[JIT26] Requesting 64 MB`, then a long-lived process.)
+- **VM-init fails right after the one brk (no `[boot] graphicsenv`)** → detach revokes something our libjvm
+  needs → revert to continuous servicing, keep only the net removal.
+- **Still corrupts (is_unloading / GC heap) detached** → lifecycle is exonerated → escalate to verdict Q3:
+  **build 2, the Mach VM region-identity dump** (`mach_vm_region_recurse` + `VM_REGION_EXTENDED_INFO` for
+  RX/RW/heap/metaspace/card/mark ranges right after JIT setup and after heap init) to discriminate
+  mirror/cache-coherency vs attach-lifecycle vs actual physical aliasing, then fix the libjvm mirror layer.
+
+---
+
 ## RESEARCH UPDATE 8 (2026-05-31) — [RETRACTED by UPDATE 9 — based on a STALE hs_err] EXC_MASK clear: ran, did NOTHING. Mechanism CONFIRMED.
 Two findings this round (evidence: `app/evidence/hs_err-6.2-excmask-nochange-20260531.log` +
 `jvm-stdio-6.2-excmask-nochange-20260531.log`):

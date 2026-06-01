@@ -1,28 +1,36 @@
 // runelite-ios — StikDebug JIT script for the on-device HotSpot (jre21, iOS 26 TXM)
 // ---------------------------------------------------------------------------------
-// Assign this to HelloShell in StikDebug. It services HotSpot's code-cache memory
-// requests so the JVM can generate executable code on a TXM device.
+// Assign this to HelloShell in StikDebug. It services HotSpot's one code-cache
+// reservation so the JVM can generate executable code on a TXM device, then
+// DETACHES so the dense-compile phase runs with no debugger holding the task ports.
 //
-// Primary path — brk #0x69 (BreakGetJITMapping): our jre21's libjvm requests an RX
-// code-cache region via `char* BreakGetJITMapping(size_t bytes)` == `brk #0x69; ret`
-// (size in x0, RX address returned in x0). On a stock jre21 this is gated behind an
-// in-sandbox TXM check that fails for an app; we patch libjvm (dev-tools/patch-jre-txm.sh)
-// so the brk path is used. Here we allocate an RX region of `size`, wire it up via
-// prepare_memory_region, and return its address — HotSpot then mirrors it RW to write
-// code and executes the RX view. Stays attached (the code cache can grow).
+// Lifecycle (Amethyst parity — JIT26SetDetachAfterFirstBr(true)):
+//   1. vAttach (grants CS_DEBUGGED → JIT permission, which persists after detach).
+//   2. Service the single brk #0x69 (BreakGetJITMapping): our jre21's libjvm reserves
+//      the whole ReservedCodeCacheSize (64 MB) in ONE call at VM init —
+//      `char* BreakGetJITMapping(size_t bytes)` == `brk #0x69; ret` (size in x0, RX
+//      address returned in x0). Verified against the trusted device logs: exactly one
+//      "[JIT26] Requesting 64 MB" per boot, used ~7% and never grown → no later brk.
+//      We allocate an RX region of `size`, wire it up via prepare_memory_region, and
+//      return its address — HotSpot mirrors it RW to write code and executes the RX
+//      view. (libjvm is patched, dev-tools/patch-jre-txm.sh, so the brk path is taken.)
+//   3. Detach (`D`). The RX mapping stays live; HotSpot writes nmethods through RW,
+//      executes RX, and flushes the i-cache itself — the debugger is NOT in the
+//      per-nmethod path. Staying attached across ~1500 dense compiles was the
+//      divergence from Amethyst (which detaches); a debugger holding the Mach
+//      exception ports during that phase is the leading suspect for the intermittent
+//      RW↔RX mirror corruption (§6.2). Detaching matches Amethyst's proven Minecraft run.
 //
-// Safety nets (should not fire once libjvm is patched): a not-yet-executable page that
-// faults on fetch is mapped once (deduped — never re-mapped, so no infinite loop); any
-// other stop (a real HotSpot brk like #0x1 ShouldNotReachHere, or a re-fault) is
-// forwarded to the VM so it handles/aborts instead of the debugger spinning.
+// No map-on-fault "safety net": that was an anti-pattern absent from the upstream
+// path (it papered over EXC_BAD_ACCESS faults that HotSpot's own handler must service;
+// those are now cleared app-side via task_set_exception_ports(EXC_MASK_BAD_ACCESS,…)).
+// Any non-brk stop before the reservation is forwarded to the VM, not absorbed.
 //
 // Uses only StikDebug builtins (get_pid, send_command, prepare_memory_region, log),
 // the GDB remote protocol, and the AArch64 BRK encoding.
 
 const pid = get_pid();
-const PAGE = 0x4000n;                 // iOS 16 KB pages
-const mapped = new Set();             // pages already prepared (dedup -> no fault loop)
-let served = 0, faulted = 0, forwarded = 0;
+let served = 0, forwarded = 0;
 
 // 16-hex-char little-endian register value -> BigInt
 function leHexToBig(hex) {
@@ -51,14 +59,14 @@ function brkImm(instrHex) {
 
 log(`[rl-jit] attaching to pid ${pid}`);
 send_command(`vAttach;${pid.toString(16)}`);
-log(`[rl-jit] attached; servicing HotSpot code-cache (brk #0x69 primary) …`);
+log(`[rl-jit] attached; awaiting the single brk #0x69 code-cache reservation …`);
 
 while (true) {
     const stop = send_command(`c`);
     if (!stop || stop.length === 0) continue;
     const k = stop[0];
     if (k === "W" || k === "X") {
-        log(`[rl-jit] target ended (${stop}); served ${served}, faults ${faulted}, fwd ${forwarded}`);
+        log(`[rl-jit] target ended (${stop}); served ${served}, fwd ${forwarded}`);
         break;
     }
     if (k !== "T") { log(`[rl-jit] unexpected stop: ${stop}`); continue; }
@@ -73,11 +81,12 @@ while (true) {
     const instr = send_command(`m${pc.toString(16)},4`);
     const imm = brkImm(instr);
 
-    // --- Primary: brk #0x69 = BreakGetJITMapping(size) ---------------------------
+    // --- brk #0x69 = BreakGetJITMapping(size): the one 64 MB reservation ----------
     if (imm === 0x69) {
         const size = reg(stop, "00");                          // size in x0
         send_command(`P20=${bigToLeHex(pc + 4n)};thread:${tid};`);   // step over the brk
         if (size === null || size === 0n) {
+            log(`[rl-jit] brk#0x69 with size=0 (anomalous) — returning 0, staying attached`);
             send_command(`P0=${bigToLeHex(0n)};thread:${tid};`);
             continue;
         }
@@ -92,25 +101,16 @@ while (true) {
         send_command(`P0=${bigToLeHex(addr)};thread:${tid};`);       // return RX addr in x0
         served++;
         log(`[rl-jit] #${served} brk#0x69 size=0x${size.toString(16)} -> RX 0x${addr.toString(16)} (prepare=${pr})`);
-        continue;
+
+        // Amethyst parity: detach after the single reservation. The RX mapping and
+        // CS_DEBUGGED persist; HotSpot runs the dense-compile phase debugger-free.
+        send_command(`D`);
+        log(`[rl-jit] detached after first reservation (Amethyst parity); served=${served}`);
+        break;
     }
 
-    // --- Safety net: instruction-fetch abort on a not-yet-mapped page ------------
-    if (imm < 0) {
-        const base = pc & ~(PAGE - 1n);
-        const key = base.toString(16);
-        if (!mapped.has(key)) {
-            mapped.add(key);
-            const pr = prepare_memory_region(Number(base), Number(PAGE));
-            faulted++;
-            log(`[rl-jit] fault@0x${pc.toString(16)} -> map RX 0x${key} (prepare=${pr})`);
-            continue;                                          // retry (no signal)
-        }
-        // already mapped and still faulting here -> not a perms issue; forward.
-    }
-
-    // --- Anything else (real HotSpot brk e.g. #0x1, or a re-fault): forward -------
-    // Let the VM's own handler process/abort instead of the debugger looping.
+    // --- Anything else (a real HotSpot brk, or a fault) before the reservation -----
+    // Forward to the VM's own handler — no map-on-fault absorption.
     forwarded++;
     log(`[rl-jit] forward pc=0x${pc.toString(16)} instr=${instr} brk=${imm} sig=${sig}`);
     send_command(`vCont;C${sig}:${tid}`);
