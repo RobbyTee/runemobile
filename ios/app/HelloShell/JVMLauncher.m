@@ -148,6 +148,15 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"-XX:+DisablePrimordialThreadGuardPages",
         @"-XX:-UseCompressedClassPointers",       // free cert: no extended-virtual-addressing
         @"-XX:ReservedCodeCacheSize=64m",         // bound the brk #0x69 RX reservation
+        // §6.2 mirror-coherency mitigation (UPDATE 13): the intermittent SIGSEGV is always a freshly-
+        // compiled TIER-3 (profiled) C1 nmethod corrupted under DENSE concurrent compilation (the RW
+        // write not reliably visible at the RX alias). Two flags directly target that trigger:
+        //   TieredStopAtLevel=1 → no profiled tier-3 nmethods (the ones carrying embedded MDO immediates
+        //                         that corrupt; UPDATE 8) → simpler, fewer-immediate code.
+        //   CICompilerCount=1   → serialize compilation → no concurrent RW writes racing the RX view.
+        // Workaround, not a root fix; if boots now reliably reach the login screen it's shippable.
+        @"-XX:TieredStopAtLevel=1",
+        @"-XX:CICompilerCount=1",
         // W1 P3 §6.0 activation confirm: non-headless + the CACIO JPMS set (same flags the
         // desktop awtsmoke harness uses). HotSpot accepts --add-exports/--add-opens directly
         // as VM options (verified). sun.awt.image is needed by CTC's CTCVolatileSurfaceManager.

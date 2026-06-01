@@ -513,6 +513,57 @@ iOS process alive ~1 s longer."
 
 ---
 
+## RESEARCH UPDATE 13 (2026-06-01) — W3 shell FIXED longevity; but §6.2 mirror crash is INTERMITTENT, not solved
+Built the W3 shell (background-task assertion + active CADisplayLink frame view). Device run (build
+`F4C28A81`, data `22751378`):
+- **Longevity FIXED**: process survived **~91 s** (vs ~250 ms before). JIT attached (JIT26), VM created,
+  DeviceHeadlessBoot.main ran. The `beginBackgroundTask` + active render loop kept the process alive —
+  the W3 lifecycle change worked. Screen stayed gray because no frame was ever written (see below).
+- **But it CRASHED — the §6.2 mirror SIGSEGV is back**, this time as the `is_unloading` variant:
+  ```
+  SIGSEGV SEGV_ACCERR si_addr=0x0 at IsUnloadingBehaviour::is_unloading(CompiledMethod*)+0x34
+    <- nmethod::is_unloading()+0x60   (main thread, _thread_in_vm)   t=91.4s
+  faulting/just-compiled nmethod: c1 1484  jdk.internal.jimage.BasicImageReader::verifyLocation (tier 3)
+  CodeCache: used=4700Kb free=60835Kb nmethods=1503 full_count=0   (7% full, no sweeping)
+  ```
+  Evidence: `app/evidence/hs_err-6.2-isUnloading-w3shell-20260601.log` +
+  `jvm-stdio-6.2-isUnloading-w3shell-20260601.log`. It crashed at `launching RuneLiteHeadless` —
+  EARLIER than the clean UPDATE 9/10 runs that reached `displayable=true` + `main returned`.
+
+### Honest correction: the EXC_MASK fix did NOT fully solve §6.2 — it made the crash INTERMITTENT
+- UPDATE 9/10 (EXC_MASK clear) had RuneLite boot cleanly (twice). I documented §6.2 W1-platform as
+  "MET / JIT blocker cleared." **That was over-stated.** This run, on the SAME EXC_MASK build, hit the
+  original §6.2 code-cache mirror corruption (`is_unloading` / null nmethod pointer) at 91 s — the exact
+  RW↔RX incoherence signature from UPDATE 2/7. So the EXC_MASK clear **reduced** the crash rate (boots now
+  often succeed) but did NOT eliminate the underlying mirror incoherence under dense tier-3 compilation.
+  It is **probabilistic**: some boots survive to the login screen, some corrupt a fresh nmethod mid-compile.
+- Net true state: §6.2 real-RuneLite-on-device JIT **works sometimes, crashes sometimes** — the mirror
+  coherency is not deterministically correct. The W1/W3 longevity work is solid and orthogonal; the open
+  problem is back to the **W1 JIT-mirror layer** (the audit's original target).
+
+### Why the screen was gray (consistent)
+No `frame-*.png` was ever written: the crash hit at 91 s during dense compilation, BEFORE the engine
+reached a steady login-screen render + the capture interval. So the render loop had nothing to show —
+correct behavior. (When a boot DOES survive, the eager interval=2 capture + render loop should display.)
+
+### Where this leaves §6.2 — the real remaining work is mirror coherency (not lifecycle)
+The W3 shell is the right foundation and is done. But to make §6.2 reliable we must address the
+intermittent RW↔RX mirror corruption directly. Options, in order of cost:
+1. **Reduce compilation density/pressure** (diagnostic + plausible mitigation): `-XX:CICompilerCount=1`
+   (serialize compiles — fewer concurrent RW writes racing the RX view) and/or `-XX:TieredStopAtLevel=1`
+   (no profiled tier-3 nmethods, which carry the embedded MDO immediates that corrupt — UPDATE 8's
+   instruction analysis). If either makes boots reliably reach the login screen, that's a shippable
+   workaround even if the deeper bug remains.
+2. **Per-region prepare_memory_region cadence** in `runelite-jit.js` (UPDATE 4 direction, still untested):
+   the single up-front `_M`+prepare over reserved-but-uncommitted 64 MB may not keep later-committed
+   pages coherent. Investigate servicing/flushing per committed sub-region.
+3. **Re-pin current Amethyst jre21** — but CDN is byte-identical to our pin (UPDATE 9), so this is moot
+   unless a newer build appears.
+Recommend trying (1) first — it's one rebuild, no device-protocol change, and directly targets the
+dense-tier-3 trigger the hs_err fingerprints.
+
+---
+
 ## RESEARCH UPDATE 8 (2026-05-31) — [RETRACTED by UPDATE 9 — based on a STALE hs_err] EXC_MASK clear: ran, did NOTHING. Mechanism CONFIRMED.
 Two findings this round (evidence: `app/evidence/hs_err-6.2-excmask-nochange-20260531.log` +
 `jvm-stdio-6.2-excmask-nochange-20260531.log`):
