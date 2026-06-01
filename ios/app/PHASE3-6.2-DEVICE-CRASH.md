@@ -31,8 +31,20 @@ OSRS login screen. Verbatim evidence:
    → `DAUDIO_RequestRecordPermission` touched the mic at audio init; iOS SIGABRTs without
    `NSMicrophoneUsageDescription`. Added the key → process survives.
 
+### Sustained-runtime confirmation (2026-06-01, same day) — corruption caveat closed
+Re-ran with a steady capture cadence (interval=10, preLoginMax=60, full 60s window) and the W3 frame-swap
+logging. Evidence: `app/evidence/jvm-stdio-6.2-sustained-clean-20260601.log` (md5
+`6c9026d3bcf1639054dcfd34fb0fcbf7`). The process rendered the live OSRS login **continuously to 41.5s+
+(still alive at pull)** at ~50 draws/sec — `draws=1951 nullGraphics=0 frames=60 state=LOGIN_SCREEN` — with
+**zero crash/TCC markers** and the W3 shell showing all 60 frame swaps (#1→#60, live animated login). 1950+
+clean draws is well past the old ~1500-nmethod failure envelope; the old "~90s" crash was an artifact of the
+net-thrashing slow boot (now removed), not a corruption clock. ⇒ the "corruption not yet PROVEN over a long
+run" caveat (UPDATE 17) is **closed**: §6.2 is corruption-free under sustained runtime. The "only part of it"
+on-screen note below is also resolved (60 swaps shown; final frame is the complete EULA login).
+
 ### Residual / next (off the §6.2 critical path)
-- W3 on-screen view shows the first captured frame, not the newest (cosmetic; capture itself is complete).
+- ~~W3 on-screen view shows the first captured frame, not the newest~~ RESOLVED (steady cadence + per-frame
+  logging; 60 live swaps shown).
 - The mic permission prompt appears mid-run (harmless; we never record). Could suppress Java Sound capture
   enumeration if the prompt is unwanted.
 - Sustained-runtime / interactive login (entering credentials, reaching the game world) is the next
