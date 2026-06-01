@@ -25,6 +25,11 @@
 @property (nonatomic, copy)   NSString *captureDir;
 @property (nonatomic, copy)   NSString *lastFrameName;
 @property (nonatomic, assign) int framesShown;
+// Drag-to-select right-click menu: while a long-press is held, the menu is open and the finger's
+// position tracks/highlights an entry; release selects it (or cancels, off the entries).
+@property (nonatomic, assign) BOOL menuOpen;
+@property (nonatomic, assign) int  lastMenuX;
+@property (nonatomic, assign) int  lastMenuY;
 @end
 
 @implementation ViewController
@@ -278,15 +283,53 @@
     [self appendLine:[NSString stringWithFormat:@"[shell] tap -> click(L) game %d,%d", gx, gy]];
 }
 
-// long-press -> right click (open the OSRS menu). Fire once, on .began (mid-hold), like a real
-// right-mouse-down; the subsequent tap on a menu entry is just another left click at the entry coords.
+// long-press -> drag-to-select right-click menu (the official OSRS-mobile feel). One continuous gesture
+// drives the menu's whole lifecycle:
+//   .began   -> right-click at the press point: opens the menu (right-mouse-down equivalent).
+//   .changed -> move the pointer (no button held) to the finger: the gamepack highlights the entry the
+//               finger is over, so sliding down walks the highlight through the options.
+//   .ended   -> left-click at the release point: selects the highlighted entry. Releasing OFF the entries
+//               lands a click outside the menu bounds, which the gamepack treats as a cancel/close.
 - (void)onLongPress:(UILongPressGestureRecognizer *)g {
-    if (g.state != UIGestureRecognizerStateBegan) return;
     if (![JVMLauncher bridgeReady]) return;
     int gx = 0, gy = 0;
-    if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return;
-    [JVMLauncher postClickX:gx y:gy button:3];
-    [self appendLine:[NSString stringWithFormat:@"[shell] long-press -> click(R) game %d,%d", gx, gy]];
+    BOOL inside = [self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy];
+    if (inside) { self.lastMenuX = gx; self.lastMenuY = gy; }
+
+    switch (g.state) {
+        case UIGestureRecognizerStateBegan:
+            if (!inside) return;                 // started in the letterbox — ignore
+            [JVMLauncher postClickX:gx y:gy button:3];
+            self.menuOpen = YES;
+            [self appendLine:[NSString stringWithFormat:@"[shell] long-press -> menu open(R) game %d,%d", gx, gy]];
+            break;
+
+        case UIGestureRecognizerStateChanged:
+            if (!self.menuOpen) return;
+            // Track the finger to highlight the entry under it (use the last in-frame point if the finger
+            // has slid into the letterbox, so the highlight sticks to the nearest edge entry).
+            [JVMLauncher postMoveX:self.lastMenuX y:self.lastMenuY];
+            break;
+
+        case UIGestureRecognizerStateEnded:
+            if (self.menuOpen) {
+                // Select at the release point (or the last in-frame point). On an entry -> selects; off
+                // the entries -> a click outside the menu, which the gamepack reads as cancel/close.
+                [JVMLauncher postClickX:self.lastMenuX y:self.lastMenuY button:1];
+                [self appendLine:[NSString stringWithFormat:@"[shell] menu select(L) game %d,%d",
+                                  self.lastMenuX, self.lastMenuY]];
+            }
+            self.menuOpen = NO;
+            break;
+
+        case UIGestureRecognizerStateCancelled:
+        case UIGestureRecognizerStateFailed:
+            self.menuOpen = NO;
+            break;
+
+        default:
+            break;
+    }
 }
 
 - (void)endBgTask {

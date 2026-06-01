@@ -34,7 +34,7 @@ static _Atomic(JavaVM *) gVM = NULL;  // set right after JNI_CreateJavaVM; clear
 static JNIEnv   *gMainEnv = NULL;     // the UI thread's attached env (main thread only)
 static jclass    gBridgeClass = NULL; // global ref to net.runelite.client.headless.JavaBridge
 static jmethodID gMidW = NULL, gMidH = NULL, gMidSeq = NULL, gMidPixels = NULL;
-static jmethodID gMidTouch = NULL, gMidClick = NULL;
+static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidMove = NULL;
 
 // Resolve + cache the JavaBridge facade on the calling (main) thread. Returns YES once usable.
 static BOOL ensureBridge(void) {
@@ -62,7 +62,8 @@ static BOOL ensureBridge(void) {
     gMidPixels = (*env)->GetStaticMethodID(env, global, "getFramePixels", "()[I");
     gMidTouch  = (*env)->GetStaticMethodID(env, global, "onTouch", "(IIII)V");
     gMidClick  = (*env)->GetStaticMethodID(env, global, "onClick", "(III)V");
-    if (!gMidW || !gMidH || !gMidSeq || !gMidPixels || !gMidTouch || !gMidClick) {
+    gMidMove   = (*env)->GetStaticMethodID(env, global, "onMove", "(II)V");
+    if (!gMidW || !gMidH || !gMidSeq || !gMidPixels || !gMidTouch || !gMidClick || !gMidMove) {
         (*env)->ExceptionClear(env);
         (*env)->DeleteGlobalRef(env, global);   // don't leak the class ref on the retry path
         return NO;                              // retry next tick (the class may load just after bringup)
@@ -449,6 +450,13 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidClick, (jint)x, (jint)y, (jint)button);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)postMoveX:(int)x y:(int)y {
+    if (!ensureBridge()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidMove, (jint)x, (jint)y);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 

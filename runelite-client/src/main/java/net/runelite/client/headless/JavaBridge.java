@@ -255,6 +255,25 @@ public final class JavaBridge
 	}
 
 	/**
+	 * Move the pointer to {@code (x,y)} with no button held — a plain {@code MOUSE_MOVED}. This is the
+	 * "hover" primitive: it updates the gamepack's recorded mouse position so the open right-click menu
+	 * highlights the entry under the finger as it slides. Distinct from a drag (which holds a button and
+	 * posts {@code MOUSE_DRAGGED} via {@link #onTouch}) so the menu-track gesture can't be confused for one.
+	 */
+	public static void onMove(int x, int y)
+	{
+		final Canvas canvas = liveCanvas();
+		if (canvas == null)
+		{
+			return;
+		}
+		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+		final long t = System.currentTimeMillis();
+		primeFocus(q, canvas, t, x, y);
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t + 1, 0, x, y, 0, false));
+	}
+
+	/**
 	 * One phase of a drag stream — {@link #TOUCH_DOWN}/{@link #TOUCH_MOVE}/{@link #TOUCH_UP} at
 	 * {@code (x,y)}, {@code button} 1 or 3. DOWN presses, MOVE drags (or hovers when not pressed), UP
 	 * releases — with NO synthesized click (unlike a tap, which goes through {@link #onClick}). Used by the
