@@ -428,25 +428,34 @@ NONE of the new `[boot] keep-alive tick` lines appear → the app process was ki
 `main` returning (faster than the 512m run's ~1 min — so termination timing is variable / not cleanly
 memory-monotonic; do NOT claim 256m helped). `rl-capture/` empty.
 
-**Then reproduced on DESKTOP** (`run-headless-unsafepoke.sh`, 30 s, full JDK 21, no device): identical
-shape — `HeadlessCapture ENABLED`, `[headless] init done`, `show done` (canvas displayable), then
-`Client initialization took 2014ms` and the log ENDS. **`draw#` count = 0, frames = 0.** So
-`Hooks.draw` is never driven and capture never fires **even on desktop**. ⇒ the capture gap is NOT a
-device/jetsam artifact — it's a **W2 headless render-loop wiring issue**, reproducible off-device (fast
-iteration, no phone, no StikDebug).
+**CORRECTION (same session):** the first desktop attempt printed "draws=0" but that was a FALSE result —
+macOS has no `timeout(1)`, so the harness aborted (EXIT 127) before java launched. The **proper desktop
+run (`run-headless-unsafepoke.sh`, no timeout) WORKS**: `HeadlessCapture ENABLED`, `gameState null ->
+LOGIN_SCREEN`, **1960+ draws** at steady `LOGIN_SCREEN`, and **6 PNGs written**
+(`frame-LOGIN_SCREEN-001…006-draw*.png`, 765×503 — the preLoginMax=6 budget filled). So the capture
+pipeline (engine render loop → `Hooks.draw` → `mainBufferProvider` → PNG) is **fully sound**, and the
+brief's "§6.2 GREEN on desktop" claim is CONFIRMED. Disregard the "W2 render-loop wiring bug" line above.
 
-This also CHECKS the brief's "§6.2 GREEN on desktop (renders login PNG)" claim: not reproduced in this
-30 s run (0 draws/frames). Most likely the run is too short for the engine to start its render thread /
-reach a login-screen draw (gamepack/cache warm-up), OR the GREEN was on a longer run. Unverified either
-way — needs a longer desktop run + confirming the engine actually enters its draw loop before asserting.
-
-### Net for §6.2
+### Net for §6.2 (corrected)
 - **W1 platform (the hard part): DONE** — real RuneLite JIT-runs on the device JVM without crashing
   (EXC_MASK fix, UPDATE 9/10). This was the §6.2 blocker.
-- **Capture to a PNG: open, and now a DESKTOP-side W2 task** — get the headless engine to actually drive
-  `Hooks.draw` (longer run and/or wire a render pump), verify frames land on desktop, THEN one device
-  confirm. No more blind device round-trips for this.
-- **Process longevity on device**: separate, revisit only once capture works on desktop.
+- **Capture pipeline: PROVEN on desktop** — 1960 draws, 6 login PNGs. Not a wiring bug.
+- **The ONLY device gap is process longevity.** Desktop reaches draw#1 ~1 s after init and renders
+  steadily; on device the process is terminated within ~5 s of `main` returning — before the engine's
+  render thread produces draws — so capture never gets the chance. Root cause is iOS process termination
+  (jetsam and/or StikDebug detach/backgrounding), NOT the JVM (no SIGSEGV/hs_err/OOM) and NOT capture.
+  Timing was non-monotonic across heap sizes (512m≈1 min, 256m≈5 s), so it's environmental, not a clean
+  memory ceiling.
+
+### Next (device longevity — the last mile)
+Diagnose WHY iOS kills the process seconds after `main` returns:
+1. Confirm it's jetsam vs debugger: check for a JetsamEvent report naming HelloShell at the kill time;
+   watch whether StikDebug stays attached (its detach could SIGKILL the debuggee).
+2. If jetsam: the engine + gamepack + GL-less render is the live-set; try forcing the render/capture to
+   happen on the `main` thread BEFORE returning (so frames land in the first ~2 s while still alive),
+   rather than relying on the keep-alive window. I.e. don't wait — capture eagerly during boot.
+3. The keep-alive `Thread.sleep` is the wrong shape if the process won't survive it; a "capture N frames
+   then exit cleanly" loop that finishes fast is more robust than a 200 s idle hold.
 
 ---
 
