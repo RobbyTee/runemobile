@@ -1,0 +1,88 @@
+[JIT26] Requesting 64 MB for JIT mapping
+[JIT26] Got JIT mapping 0x1153e4000 from debugger
+[JIT26] mapping at RW=0x1193e4000, RX=0x1153e4000
+==== DeviceHeadlessBoot (W1 P3 §6.2 — real RuneLite under UnsafePoke CTC) ====
+==== UnsafePokeActivation (no byte-buddy / no attach / no JVMTI) ====
+set GraphicsEnvironment.headless/defaultHeadless = true OK (headless-first)
+forced LocalGE.<clinit> (platform GE built, headless) OK
+set GraphicsEnvironment.headless/defaultHeadless = false OK
+set Toolkit.toolkit = CTCToolkit OK
+built CTCGraphicsEnvironment.getInstance() OK
+Unsafe-overwrote LocalGE.INSTANCE = CTCGraphicsEnvironment OK
+set SurfaceManagerFactory.instance = CTCSurfaceManagerFactory OK
+[boot] toolkit      = com.github.caciocavallosilano.cacio.ctc.CTCToolkit
+[boot] graphicsenv  = com.github.caciocavallosilano.cacio.ctc.CTCGraphicsEnvironment
+[boot] headless     = false
+[boot] launching RuneLiteHeadless --safe-mode
+2026-06-01 14:50:10 GMT [main] INFO  net.runelite.client.RuneLite - RuneLite 1.12.28-SNAPSHOT (launcher version unknown) starting up, args: --safe-mode
+2026-06-01 14:50:10 GMT [main] INFO  net.runelite.client.RuneLite - Java VM arguments: -XX:+UnlockExperimentalVMOptions -XX:+MirrorMappedCodeCache -XX:+DisablePrimordialThreadGuardPages -XX:-UseCompressedClassPointers -XX:ReservedCodeCacheSize=64m -Djava.awt.headless=false --add-exports=java.desktop/java.awt=ALL-UNNAMED --add-exports=java.desktop/java.awt.peer=ALL-UNNAMED --add-exports=java.desktop/sun.awt.image=ALL-UNNAMED --add-exports=java.desktop/sun.java2d=ALL-UNNAMED --add-exports=java.desktop/java.awt.dnd.peer=ALL-UNNAMED --add-exports=java.desktop/sun.awt=ALL-UNNAMED --add-exports=java.desktop/sun.awt.event=ALL-UNNAMED --add-exports=java.desktop/sun.awt.datatransfer=ALL-UNNAMED --add-exports=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.desktop/java.awt=ALL-UNNAMED --add-opens=java.desktop/sun.java2d=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED -Xmx256m -Duser.home=/var/mobile/Containers/Data/Application/022BE182-E3C5-4B8C-892A-DF531E27E059/Documents -Drunelite.headless.capture.dir=/var/mobile/Containers/Data/Application/022BE182-E3C5-4B8C-892A-DF531E27E059/Documents/rl-capture -Drunelite.headless.capture.interval=2 -Dheadless.runSeconds=60 -Dheadless.captureTargetFrames=8 -Djava.home=/private/var/containers/Bundle/Application/17AA9660-889B-4D93-A516-A11ED6EBFB95/HelloShell.app/jre -Djava.library.path=/private/var/containers/Bundle/Application/17AA9660-889B-4D93-A516-A11ED6EBFB95/HelloShell.app/Frameworks
+2026-06-01 14:50:12 GMT [Preloader] INFO  net.runelite.client.rs.ClientLoader - injected-client 26527618741.147
+2026-06-01 14:50:12 GMT [main] WARN  n.r.client.discord.DiscordService - Failed to load Discord library, Discord support will be disabled.
+2026-06-01 14:50:12 GMT [main] INFO  n.r.client.account.SessionManager - No session file exists
+2026-06-01 14:50:12 GMT [main] INFO  n.r.client.config.ConfigManager - Profile 'default' (sync: false, active: true, id: 474578747092750)
+2026-06-01 14:50:12 GMT [main] INFO  n.r.client.config.ConfigManager - Using profile: default (474578747092750)
+2026-06-01 14:50:12 GMT [main] INFO  n.r.c.plugins.kourendlibrary.Library - Library is now reset
+CacioComponentPeer::setZOrder: NOT YET IMPLEMENTED
+CacioComponentPeer::setZOrder: NOT YET IMPLEMENTED
+2026-06-01 14:50:12 GMT [main] INFO  n.r.client.ui.HeadlessClientUI - [headless] init done: frame=java.awt.Frame[frame0,0,0,773x533,hidden,layout=java.awt.BorderLayout,title=RuneLite (headless),resizable,normal] gc=com.github.caciocavallosilano.cacio.ctc.CTCGraphicsConfiguration@17e45e93 toolkit=com.github.caciocavallosilano.cacio.ctc.CTCToolkit
+2026-06-01 14:50:12 GMT [pool-4-thread-1] ERROR n.r.c.util.RunnableExceptionLogger - Uncaught exception in runnable net.runelite.client.plugins.worldhopper.WorldHopperPlugin$$Lambda/0x0000000123c3abd0@62b5902d
+java.lang.NoClassDefFoundError: Could not initialize class com.sun.jna.Native
+	at net.runelite.client.plugins.worldhopper.ping.RLLibC.<clinit>(RLLibC.java:34)
+	at net.runelite.client.plugins.worldhopper.ping.Ping.icmpPing(Ping.java:149)
+	at net.runelite.client.plugins.worldhopper.ping.Ping.ping(Ping.java:99)
+	at net.runelite.client.plugins.worldhopper.WorldHopperPlugin.ping(WorldHopperPlugin.java:965)
+	at net.runelite.client.plugins.worldhopper.WorldHopperPlugin.pingInitialWorlds(WorldHopperPlugin.java:850)
+	at net.runelite.client.util.RunnableExceptionLogger.run(RunnableExceptionLogger.java:41)
+	at java.base/java.util.concurrent.Executors$RunnableAdapter.call(Unknown Source)
+	at java.base/java.util.concurrent.FutureTask.run(Unknown Source)
+	at java.base/java.util.concurrent.ScheduledThreadPoolExecutor$ScheduledFutureTask.run(Unknown Source)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(Unknown Source)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(Unknown Source)
+	at java.base/java.lang.Thread.run(Unknown Source)
+Caused by: java.lang.ExceptionInInitializerError: Exception java.lang.UnsatisfiedLinkError: /private/var/mobile/Containers/Data/Application/022BE182-E3C5-4B8C-892A-DF531E27E059/Documents/Library/Caches/JNA/temp/jna1363014555130556462.tmp: dlopen(/private/var/mobile/Containers/Data/Application/022BE182-E3C5-4B8C-892A-DF531E27E059/Documents/Library/Caches/JNA/temp/jna1363014555130556462.tmp, 0x0001): tried: '/private/var/mobile/Containers/Data/Application/022BE182-E3C5-4B8C-892A-DF531E27E059/Documents/Library/Caches/JNA/temp/jna1363014555130556462.tmp' (mach-o file (/private/var/mobile/Containers/Data/Application/022BE182-E3C5-4B8C-892A-DF531E27E059/Documents/Library/Caches/JNA/temp/jna1363014555130556462.tmp), but incompatible platform (have 'macOS', need 'iOS')), '/private/preboot/Cryptexes/OS/private/var/mobile/Containers/Data/Application/022BE182-E3C5-4B8C-892A-DF531E27E059/Documents/Library/Caches/JNA/temp/jna1363014555130556462.tmp' (no such file), '/private/var/mobile/Containers/Data/Application/022BE182-E3C5-4B8C-892A-DF531E27E059/Documents/Library/Caches/JNA/temp/jna1363014555130556462.tmp'  [in thread "main"]
+	at java.base/jdk.internal.loader.NativeLibraries.load(Native Method)
+	at java.base/jdk.internal.loader.NativeLibraries$NativeLibraryImpl.open(Unknown Source)
+	at java.base/jdk.internal.loader.NativeLibraries.loadLibrary(Unknown Source)
+	at java.base/jdk.internal.loader.NativeLibraries.loadLibrary(Unknown Source)
+	at java.base/java.lang.ClassLoader.loadLibrary(Unknown Source)
+	at java.base/java.lang.Runtime.load0(Unknown Source)
+	at java.base/java.lang.System.load(Unknown Source)
+	at com.sun.jna.Native.loadNativeDispatchLibraryFromClasspath(Native.java:1019)
+	at com.sun.jna.Native.loadNativeDispatchLibrary(Native.java:989)
+	at com.sun.jna.Native.<clinit>(Native.java:195)
+	at net.runelite.discord.DiscordRPC.<clinit>(DiscordRPC.java:42)
+	at net.runelite.client.discord.DiscordService.<init>(DiscordService.java:85)
+	at java.base/jdk.internal.reflect.DirectConstructorHandleAccessor.newInstance(Unknown Source)
+	at java.base/java.lang.reflect.Constructor.newInstanceWithCaller(Unknown Source)
+	at java.base/java.lang.reflect.Constructor.newInstance(Unknown Source)
+	at com.google.inject.internal.DefaultConstructionProxyFactory$ReflectiveProxy.newInstance(DefaultConstructionProxyFactory.java:126)
+	at com.google.inject.internal.ConstructorInjector.provision(ConstructorInjector.java:111)
+	at com.google.inject.internal.ConstructorInjector.construct(ConstructorInjector.java:90)
+	at com.google.inject.internal.ConstructorBindingImpl$Factory.get(ConstructorBindingImpl.java:268)
+	at com.google.inject.internal.ProviderToInternalFactoryAdapter$1.call(ProviderToInternalFactoryAdapter.java:46)
+	at com.google.inject.internal.InjectorImpl.callInContext(InjectorImpl.java:1092)
+	at com.google.inject.internal.ProviderToInternalFactoryAdapter.get(ProviderToInternalFactoryAdapter.java:40)
+	at com.google.inject.internal.SingletonScope$1.get(SingletonScope.java:194)
+	at com.google.inject.internal.InternalFactoryToProviderAdapter.get(InternalFactoryToProviderAdapter.java:41)
+	at com.google.inject.internal.SingleFieldInjector.inject(SingleFieldInjector.java:54)
+	at com.google.inject.internal.MembersInjectorImpl.injectMembers(MembersInjectorImpl.java:132)
+	at com.google.inject.internal.ConstructorInjector.provision(ConstructorInjector.java:120)
+	at com.google.inject.internal.ConstructorInjector.construct(ConstructorInjector.java:90)
+	at com.google.inject.internal.ConstructorBindingImpl$Factory.get(ConstructorBindingImpl.java:268)
+	at com.google.inject.internal.ProviderToInternalFactoryAdapter$1.call(ProviderToInternalFactoryAdapter.java:46)
+	at com.google.inject.internal.InjectorImpl.callInContext(InjectorImpl.java:1092)
+	at com.google.inject.internal.ProviderToInternalFactoryAdapter.get(ProviderToInternalFactoryAdapter.java:40)
+	at com.google.inject.internal.SingletonScope$1.get(SingletonScope.java:194)
+	at com.google.inject.internal.InternalFactoryToProviderAdapter.get(InternalFactoryToProviderAdapter.java:41)
+	at com.google.inject.internal.InjectorImpl$2$1.call(InjectorImpl.java:1019)
+	at com.google.inject.internal.InjectorImpl.callInContext(InjectorImpl.java:1085)
+	at com.google.inject.internal.InjectorImpl$2.get(InjectorImpl.java:1015)
+	at com.google.inject.internal.InjectorImpl.getInstance(InjectorImpl.java:1054)
+	at net.runelite.client.RuneLite.main(RuneLite.java:289)
+	at net.runelite.client.headless.RuneLiteHeadless.main(RuneLiteHeadless.java:48)
+	at DeviceHeadlessBoot.main(DeviceHeadlessBoot.java:33)
+2026-06-01 14:50:13 GMT [main] INFO  net.runelite.client.RuneLite - Client initialization took 2722ms. Uptime: 3321ms
+[boot] RuneLite.main returned; eager-capture poll (target=8 frames, max 60s)
+2026-06-01 14:50:13 GMT [AWT-EventQueue-0] INFO  n.r.client.ui.HeadlessClientUI - [headless] show done: visible=true canvas=tb[canvas0,0,0,765x503] displayable=true
+2026-06-01 14:50:13 GMT [main] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] ENABLED dir=/var/mobile/Containers/Data/Application/022BE182-E3C5-4B8C-892A-DF531E27E059/Documents/rl-capture interval=2 maxFrames=20 preLoginMax=6
+[boot] poll 250ms  draws=0 nullGraphics=0 frames=0 state=null

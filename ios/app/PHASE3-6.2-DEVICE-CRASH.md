@@ -620,6 +620,55 @@ The problem is in how the debugger reserves/owns the JIT physical pages. Concret
 
 ---
 
+## RESEARCH UPDATE 16 (2026-06-01) — parity script device run: NO corruption (cleanest boot yet); longevity is now the gate
+First device test of the parity script (md5 `8810404d0e4a263b4c592f1eda83b8b4`) on a fresh full-tiered
+build (`17AA9660…`, full JRE, EXC_MASK cleared, Xmx256m). User ran 3–4 boots. Evidence saved verbatim:
+`app/evidence/jvm-stdio-6.2-parity-detach-cleanboot-20260601.log` (md5 `225a16f04111b03a25c63795970a7a58`)
++ `hello-shell-6.2-parity-detach-20260601.log`.
+
+### Result — the §6.2 mirror corruption did NOT occur (best boot on record)
+- One `[JIT26] Requesting 64 MB` (RW=0x1193e4000 / RX=0x1153e4000) — single reservation, as expected.
+- CTC active (`graphicsenv=…CTCGraphicsEnvironment`, headless=false); real gamepack ran
+  (`injected-client 26527618741.147`); **`Client initialization took 2722ms`**; `RuneLite.main returned`;
+  **`displayable=true`** (765×503). The boot sailed through the dense ~1500-method tier-3 compile phase —
+  the exact window UPDATE 7/13 corrupted in at ~90 s — **cleanly, in 2.7 s**, and faster than any
+  continuous-attach run.
+- **Zero crash markers** in stdio; **zero Jun-1 hs_err** across all of today's boots (every device hs_err
+  is May-31 or older, confirmed by mtime). No `is_unloading`, no GC-heap corruption, no SIGILL.
+- StikDebug log: serviced the single brk, then `detached after first reservation`. **Detach is clean** —
+  the process ran a full healthy boot AFTER detaching during init, refuting UPDATE 12's "detach kills the
+  debuggee early."
+
+⇒ Strong positive signal that the audit's #1 fix (Amethyst lifecycle parity) addresses §6.2. **Not yet
+conclusive** — see longevity below: the runs end before sustained runtime can probabilistically confirm
+the corruption is gone.
+
+### The real remaining gate: post-`main` longevity (and the "W3 solved it" claim was over-stated)
+- The process ended ~250–500 ms after `main` returned (last line `poll 250ms draws=0 frames=0 state=null`;
+  re-pull byte-identical; no process running). User-observed: "text filled the screen, ~5–10 s later it
+  crashed to the Home Screen." **No hs_err / no crash markers + a responsive UI (text was updating) ⇒ iOS
+  TERMINATED the process** (jetsam or lifecycle/watchdog), NOT a JVM crash.
+- The engine's first draw lands ~700 ms post-`main` (desktop), so it died **before drawing** → no login
+  PNG (`rl-capture` empty). Same post-`main` race as UPDATE 11/12.
+- **Correction:** UPDATE 13's "W3 shell solved longevity (91 s)" was time-to-CRASH on a *crashed* run, not
+  a clean-boot lifetime. Clean boots have only ever lived ~5 s–1 min (UPDATE 9/10/11; 256m≈5 s). So
+  clean-boot longevity was never actually established and remains open. Today's ~3.6–10 s is within that
+  band → detach did **not** clearly regress longevity (it's a pre-existing, detach-independent problem).
+
+### Decision / next step
+The parity fix stays (it's working and clean). Longevity now gates BOTH a definitive no-corruption verdict
+and the login PNG. Next, in order:
+1. **A/B to substantiate the corruption fix (cheap, script-only, no rebuild):** re-run the CONTINUOUS
+   script (old md5 `13d29fe25fc01a39da758b59559360ca`) on this same build. If it reproduces an hs_err
+   (is_unloading / GC heap) where detach did not, that isolates detach as the corruption fix on a fixed
+   binary. Also tells us if continuous attach changes longevity (debugged processes resist iOS suspension).
+2. **Determine the kill cause** (jetsam vs watchdog): pull the device JetsamEvent / crash report
+   (Analytics Data) around the kill time. Drives the longevity fix.
+3. **Fix longevity** so a detached boot survives to first draw + sustained runtime → capture the login PNG
+   AND prove no corruption over a long run.
+
+---
+
 ## RESEARCH UPDATE 15 (2026-06-01) — audit verdict incorporated; fix = Amethyst-parity lifecycle (script-only, detach-after-first)
 External audit saved verbatim: `ios/AUDIT-RESULT-w1-phase3-6.2-jit-region-corruption.md`. Key adjudication:
 
