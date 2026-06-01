@@ -71,6 +71,7 @@ set +e
   -Drunelite.headless.autologin.point="${AUTOLOGIN_POINT:-382,248}" \
   -Drunelite.headless.autologin.world="${AUTOLOGIN_WORLD:-301}" \
   -Drunelite.headless.autologin.worldAddress="${AUTOLOGIN_WORLD_ADDRESS:-oldschool1.runescape.com}" \
+  ${EXTRA_JVM_ARGS:-} \
   --add-exports=java.desktop/java.awt=ALL-UNNAMED \
   --add-exports=java.desktop/java.awt.peer=ALL-UNNAMED \
   --add-exports=java.desktop/sun.awt.image=ALL-UNNAMED \

@@ -406,6 +406,11 @@ public class Hooks implements Callbacks
 		{
 			net.runelite.client.headless.HeadlessResize.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.MobileToplevelProbe.isEnabled())
+		{
+			// W3 mobile-layout spike: one-shot, on the client thread, gated by -Drunelite.mobileui.toplevel=osm.
+			net.runelite.client.headless.MobileToplevelProbe.tick(client, client.getGameState());
+		}
 
 		if (graphics == null)
 		{
