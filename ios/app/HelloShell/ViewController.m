@@ -74,7 +74,22 @@
     self.screen.backgroundColor = [UIColor colorWithWhite:0.06 alpha:1.0];
     self.screen.contentMode = UIViewContentModeScaleAspectFit;
     self.screen.layer.magnificationFilter = kCAFilterNearest;   // crisp pixel art
+    self.screen.userInteractionEnabled = YES;                   // receive the game gestures
     [self.view addSubview:self.screen];
+
+    // Phase 5 control scheme. UIKit gesture recognizers own classification (tap vs long-press vs drag),
+    // which also resolves the touch-identity problem the raw touchesBegan/anyObject path had under
+    // multi-touch/cancel sequences. tap = left click (walk / interact / select a menu entry); long-press
+    // = right click (open the OSRS menu). A drag that is neither fires nothing → no phantom walk-here
+    // click. (Camera pan + pinch zoom land in the next increment.)
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onTap:)];
+    [self.screen addGestureRecognizer:tap];
+
+    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onLongPress:)];
+    longPress.minimumPressDuration = 0.4;   // OSRS-mobile-feel: a deliberate hold opens the menu
+    [self.screen addGestureRecognizer:longPress];
 
     self.console = [[UITextView alloc] init];
     self.console.translatesAutoresizingMaskIntoConstraints = NO;
@@ -234,11 +249,11 @@
     }
 }
 
-#pragma mark - Touch -> AWT bridge (W3 sub-goal B)
+#pragma mark - Touch -> AWT bridge (Phase 5 control scheme)
 
-// Map a touch point (in the screen image view's coordinate space) to gamepack-canvas pixels, honouring
-// the ScaleAspectFit letterbox. Returns NO if the touch is in the letterbox margin (outside the frame).
-- (BOOL)mapTouch:(UITouch *)touch toGameX:(int *)gx toGameY:(int *)gy {
+// Map a point (in the screen image view's coordinate space) to gamepack-canvas pixels, honouring the
+// ScaleAspectFit letterbox. Returns NO if the point is in the letterbox margin (outside the game frame).
+- (BOOL)mapPoint:(CGPoint)p toGameX:(int *)gx toGameY:(int *)gy {
     UIImage *img = self.screen.image;
     if (img == nil) return NO;
     CGFloat iw = img.size.width, ih = img.size.height;
@@ -247,7 +262,6 @@
     CGFloat scale = MIN(b.size.width / iw, b.size.height / ih);   // ScaleAspectFit
     CGFloat dispW = iw * scale, dispH = ih * scale;
     CGFloat ox = (b.size.width - dispW) * 0.5, oy = (b.size.height - dispH) * 0.5;
-    CGPoint p = [touch locationInView:self.screen];
     CGFloat fx = (p.x - ox) / scale, fy = (p.y - oy) / scale;
     if (fx < 0 || fy < 0 || fx >= iw || fy >= ih) return NO;   // tapped the letterbox, not the game
     *gx = (int)fx;
@@ -255,28 +269,24 @@
     return YES;
 }
 
-- (void)dispatchTouch:(UITouch *)touch type:(int)type {
+// tap -> left click (walk / interact / select a menu entry).
+- (void)onTap:(UITapGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady]) return;
     int gx = 0, gy = 0;
-    if (![self mapTouch:touch toGameX:&gx toGameY:&gy]) return;
-    [JVMLauncher postTouchType:type x:gx y:gy button:1];
-    if (type != 1) {   // log down/up (not every move) so taps are visible in the log
-        [self appendLine:[NSString stringWithFormat:@"[shell] touch %@ -> game %d,%d",
-                          type == 0 ? @"DOWN" : @"UP", gx, gy]];
-    }
+    if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return;
+    [JVMLauncher postClickX:gx y:gy button:1];
+    [self appendLine:[NSString stringWithFormat:@"[shell] tap -> click(L) game %d,%d", gx, gy]];
 }
 
-- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [self dispatchTouch:touches.anyObject type:0];   // TOUCH_DOWN
-}
-- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [self dispatchTouch:touches.anyObject type:1];   // TOUCH_MOVE
-}
-- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [self dispatchTouch:touches.anyObject type:2];   // TOUCH_UP
-}
-- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [self dispatchTouch:touches.anyObject type:2];   // treat cancel as UP so the press is released
+// long-press -> right click (open the OSRS menu). Fire once, on .began (mid-hold), like a real
+// right-mouse-down; the subsequent tap on a menu entry is just another left click at the entry coords.
+- (void)onLongPress:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    if (![JVMLauncher bridgeReady]) return;
+    int gx = 0, gy = 0;
+    if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return;
+    [JVMLauncher postClickX:gx y:gy button:3];
+    [self appendLine:[NSString stringWithFormat:@"[shell] long-press -> click(R) game %d,%d", gx, gy]];
 }
 
 - (void)endBgTask {

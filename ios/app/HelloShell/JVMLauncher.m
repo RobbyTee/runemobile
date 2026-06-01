@@ -6,6 +6,7 @@
 #import <sys/mman.h>
 #import <mach/mach.h>
 #import <libkern/OSCacheControl.h>
+#import <stdatomic.h>
 #import "jni/jni.h"
 
 // --- csops / CS_DEBUGGED (private; same probe Amethyst/StikDebug rely on) -----
@@ -24,39 +25,49 @@ extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 // the VM in-process on this thread with no launcher threading.
 typedef jint (*CreateJavaVM_t)(JavaVM **pvm, void **penv, void *args);
 
-// ---- Phase 4 (W3) sub-goal B: reverse-JNI bridge state ---------------------------------------------
-// The VM is created on the jvm-main worker thread (runProbesWithLog); the live blit + touch handlers run
-// on the main/UI thread, so they AttachCurrentThread and cache the JavaBridge class + method ids once.
-static JavaVM   *gVM = NULL;          // set right after JNI_CreateJavaVM, before callMain blocks
+// ---- Phase 4 (W3) sub-goal B / Phase 5: reverse-JNI bridge state ------------------------------------
+// The VM is created on the jvm-main worker thread (runProbesWithLog); the live blit + input handlers run
+// on the main/UI thread, so they AttachCurrentThreadAsDaemon and cache the JavaBridge class + method ids
+// once. gVM is written by the worker thread and read by the main thread, so it is published atomically
+// (a plain static is a C-level data race even where it happens to work on-device).
+static _Atomic(JavaVM *) gVM = NULL;  // set right after JNI_CreateJavaVM; cleared before DestroyJavaVM
 static JNIEnv   *gMainEnv = NULL;     // the UI thread's attached env (main thread only)
 static jclass    gBridgeClass = NULL; // global ref to net.runelite.client.headless.JavaBridge
-static jmethodID gMidW = NULL, gMidH = NULL, gMidPixels = NULL, gMidTouch = NULL;
+static jmethodID gMidW = NULL, gMidH = NULL, gMidSeq = NULL, gMidPixels = NULL;
+static jmethodID gMidTouch = NULL, gMidClick = NULL;
 
 // Resolve + cache the JavaBridge facade on the calling (main) thread. Returns YES once usable.
 static BOOL ensureBridge(void) {
     if (gBridgeClass) return YES;
-    if (!gVM) return NO;
+    JavaVM *vm = atomic_load(&gVM);
+    if (!vm) return NO;
     JNIEnv *env = NULL;
-    jint r = (*gVM)->GetEnv(gVM, (void **)&env, JNI_VERSION_21);
+    jint r = (*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_21);
     if (r == JNI_EDETACHED) {
-        if ((*gVM)->AttachCurrentThread(gVM, (void **)&env, NULL) != JNI_OK || !env) return NO;
+        // Daemon attach: the VM won't block on this (UI) thread at shutdown, so DestroyJavaVM stays clean
+        // even though we never explicitly detach the main thread (it outlives the VM teardown call).
+        if ((*vm)->AttachCurrentThreadAsDaemon(vm, (void **)&env, NULL) != JNI_OK || !env) return NO;
     } else if (r != JNI_OK || !env) {
         return NO;
     }
     gMainEnv = env;
     jclass local = (*env)->FindClass(env, "net/runelite/client/headless/JavaBridge");
     if (!local || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
-    gBridgeClass = (*env)->NewGlobalRef(env, local);
+    jclass global = (*env)->NewGlobalRef(env, local);
     (*env)->DeleteLocalRef(env, local);
-    gMidW      = (*env)->GetStaticMethodID(env, gBridgeClass, "getFrameWidth", "()I");
-    gMidH      = (*env)->GetStaticMethodID(env, gBridgeClass, "getFrameHeight", "()I");
-    gMidPixels = (*env)->GetStaticMethodID(env, gBridgeClass, "getFramePixels", "()[I");
-    gMidTouch  = (*env)->GetStaticMethodID(env, gBridgeClass, "onTouch", "(IIII)V");
-    if (!gMidW || !gMidH || !gMidPixels || !gMidTouch) {
+    if (!global) return NO;
+    gMidW      = (*env)->GetStaticMethodID(env, global, "getFrameWidth", "()I");
+    gMidH      = (*env)->GetStaticMethodID(env, global, "getFrameHeight", "()I");
+    gMidSeq    = (*env)->GetStaticMethodID(env, global, "getFrameSeq", "()I");
+    gMidPixels = (*env)->GetStaticMethodID(env, global, "getFramePixels", "()[I");
+    gMidTouch  = (*env)->GetStaticMethodID(env, global, "onTouch", "(IIII)V");
+    gMidClick  = (*env)->GetStaticMethodID(env, global, "onClick", "(III)V");
+    if (!gMidW || !gMidH || !gMidSeq || !gMidPixels || !gMidTouch || !gMidClick) {
         (*env)->ExceptionClear(env);
-        gBridgeClass = NULL;   // force a retry next tick (the class may load slightly after VM bringup)
-        return NO;
+        (*env)->DeleteGlobalRef(env, global);   // don't leak the class ref on the retry path
+        return NO;                              // retry next tick (the class may load just after bringup)
     }
+    gBridgeClass = global;   // publish only once fully resolved
     return YES;
 }
 
@@ -337,8 +348,9 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = NULL;
     jint rc = JNI_CreateJavaVM(&vm, (void **)&env, &vmArgs);
     if (rc != JNI_OK || !vm || !env) { log([NSString stringWithFormat:@"[jvm] FATAL JNI_CreateJavaVM rc=%d", rc]); return -14; }
-    // Publish the VM so the main thread's live-blit + touch bridge can AttachCurrentThread into it.
-    gVM = vm;
+    // Publish the VM so the main thread's live-blit + touch bridge can attach into it (atomic store —
+    // the main thread loads it with atomic_load in ensureBridge).
+    atomic_store(&gVM, vm);
     log(@"[jvm] JavaVM created — HotSpot is up. Running probes…");
 
     // W1 P3 §6.1 device smoke: AwtSmoke activates CTC via UnsafePokeActivation (§6.0, device-GREEN),
@@ -357,7 +369,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     // (§6.0), JitProbe/Bench/GlyphSmoke (Phase-1).
     callMain(env, "DeviceHeadlessBoot", @[], log);
 
-    gVM = NULL;   // VM going away — stop the bridge before DestroyJavaVM
+    atomic_store(&gVM, NULL);   // VM going away — stop the bridge before DestroyJavaVM
     (*vm)->DestroyJavaVM(vm);
     log(@"[jvm] DestroyJavaVM done.");
     return 0;
@@ -372,6 +384,18 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
 + (UIImage *)latestFrame {
     if (!ensureBridge()) return nil;
     JNIEnv *env = gMainEnv;
+
+    // Skip the costly readback + CGImage rebuild when the engine hasn't composited a new frame since the
+    // last tick (the display refreshes up to 120 Hz; the engine composites at ~50 fps). Return the cached
+    // UIImage so the on-screen view keeps showing the current frame at no per-tick cost.
+    static UIImage *cachedImage = nil;
+    static jint lastSeq = -1;
+    jint seq = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidSeq);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if (seq == lastSeq && cachedImage != nil) {
+        return cachedImage;
+    }
+
     jint w = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidW);
     jint h = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidH);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
@@ -409,6 +433,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     CGColorSpaceRelease(cs);
     CGDataProviderRelease(provider);
     CFRelease(data);
+    if (img) { cachedImage = img; lastSeq = seq; }   // remember for the skip-unchanged fast path above
     return img;
 }
 
@@ -417,6 +442,13 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidTouch,
                                  (jint)type, (jint)x, (jint)y, (jint)button);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)postClickX:(int)x y:(int)y button:(int)button {
+    if (!ensureBridge()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidClick, (jint)x, (jint)y, (jint)button);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 

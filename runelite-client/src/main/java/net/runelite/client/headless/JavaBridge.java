@@ -54,17 +54,30 @@ import net.runelite.api.MainBufferProvider;
  * and {@link #snapshot(MainBufferProvider)} (after the overlays composite) publishes each complete frame.
  * Entirely inert unless {@code -Drunelite.bridge=true}, so it adds nothing to the stock desktop client.
  *
- * <p>Thread model: {@code register} runs on the engine/AWT thread; the native side calls the getters and
- * {@link #onTouch} from the UI thread (JNI-attached). {@code EventQueue.postEvent} is thread-safe, and the
- * pixel array is the buffer's live backing store — reading it off-thread can momentarily tear, which is
- * acceptable for a display.
+ * <p>Thread model: {@code register} runs on the engine/AWT thread; the native side calls the getters,
+ * {@link #onTouch} and {@link #onClick} from the UI thread (JNI-attached). {@code EventQueue.postEvent}
+ * is thread-safe, and the pixel array is the buffer's live backing store — reading it off-thread can
+ * momentarily tear, which is acceptable for a display.
+ *
+ * <p><b>Input contract (Phase 5).</b> The native side owns gesture <em>recognition</em> (UIKit gesture
+ * recognizers: tap, long-press, pan, pinch) and this facade exposes only the raw AWT primitives:
+ * <ul>
+ *   <li>{@link #onClick(int, int, int)} — a discrete <em>tap</em>: the full focus-prime + move + press +
+ *       release + click sequence at one point (the proven {@code HeadlessLogin} click shape). Button 1 =
+ *       a left tap (walk/interact / menu-entry select); button 3 = a long-press (open the right-click
+ *       menu).</li>
+ *   <li>{@link #onTouch(int, int, int, int)} — a <em>drag</em> stream: press / drag / release with NO
+ *       synthesized click on release. This is the camera / scroll primitive; a release here is just a
+ *       {@code MOUSE_RELEASED}. Earlier (sub-goal B) this method auto-clicked on every UP, which produced
+ *       a phantom click at the end of every drag and long-press — removed.</li>
+ * </ul>
  */
 @Slf4j
 public final class JavaBridge
 {
 	private static final boolean ENABLED = Boolean.getBoolean("runelite.bridge");
 
-	// Touch event types — kept in lockstep with the native side (ViewController touchesBegan/Moved/Ended).
+	// Touch event types — kept in lockstep with the native side (the pan recognizer's began/changed/ended).
 	public static final int TOUCH_DOWN = 0;
 	public static final int TOUCH_MOVE = 1;
 	public static final int TOUCH_UP = 2;
@@ -75,15 +88,17 @@ public final class JavaBridge
 	// 120 Hz) but the engine composites at ~50 fps, so reading mainBufferProvider directly catches it
 	// mid-clear/mid-draw -> fast flashing. Instead we snapshot ONLY at the post-overlay-composite hook
 	// (when the frame is whole) into a double buffer, and publish via the volatile `frame` ref so the
-	// native reader always copies out a complete, stable frame.
+	// native reader always copies out a complete, stable frame. `frameSeq` lets the native side skip the
+	// (costly) CGImage rebuild when the engine hasn't composited a new frame since the last display tick.
 	private static volatile int[] frame;
 	private static volatile int frameW;
 	private static volatile int frameH;
+	private static volatile int frameSeq;
 	private static int[] bufA;
 	private static int[] bufB;
 	private static boolean useA = true;
 
-	// Input bookkeeping (only ever touched from the single native UI thread that drives onTouch).
+	// Input bookkeeping (only ever touched from the single native UI thread that drives onTouch/onClick).
 	private static boolean focused;
 	private static boolean pressed;
 	private static int pressButton = MouseEvent.BUTTON1;
@@ -144,6 +159,7 @@ public final class JavaBridge
 		frameW = w;
 		frameH = h;
 		frame = dst;        // publish (volatile)
+		frameSeq++;         // bump LAST so a native reader that sees the new seq also sees this frame
 		useA = !useA;       // next snapshot fills the OTHER buffer, so this one stays stable a full cycle
 	}
 
@@ -160,6 +176,16 @@ public final class JavaBridge
 	}
 
 	/**
+	 * Monotonically increasing counter bumped once per published frame. The native side caches the last
+	 * value it rendered and skips the {@code CGImage} rebuild when it is unchanged (the display refreshes
+	 * faster than the engine composites), so an idle login screen costs almost nothing per tick.
+	 */
+	public static int getFrameSeq()
+	{
+		return frameSeq;
+	}
+
+	/**
 	 * The latest <em>complete</em> composited frame as packed {@code 0xAARRGGBB} ints (a stable snapshot,
 	 * not the live back buffer). Returns {@code null} before the first frame.
 	 */
@@ -168,26 +194,75 @@ public final class JavaBridge
 		return frame;
 	}
 
-	// ---- Touch ingress (native maps view coords -> game coords, then calls this) -----------------------
+	// ---- Input ingress (native recognizes the gesture, then calls these with game coords) --------------
 
-	/**
-	 * Post one AWT mouse event for a touch phase. {@code type} is {@link #TOUCH_DOWN}/{@link #TOUCH_MOVE}/
-	 * {@link #TOUCH_UP}; {@code (x,y)} are gamepack-canvas pixels; {@code button} is 1 (left) or 3 (right).
-	 * The first DOWN also asserts focus + an enter/move so the gamepack samples the pointer correctly (the
-	 * same priming HeadlessLogin does), since there is no native focus owner headless.
-	 */
-	public static void onTouch(int type, int x, int y, int button)
+	/** Resolve the live gamepack canvas, or {@code null} if the bridge is off / the client isn't ready. */
+	private static Canvas liveCanvas()
 	{
 		if (!ENABLED)
 		{
-			return;
+			return null;
 		}
 		final Client c = client;
-		if (c == null)
+		return c == null ? null : c.getCanvas();
+	}
+
+	/**
+	 * Assert focus + pointer position on the very first interaction. There is no native focus owner
+	 * headless, so the gamepack ignores mouse input until it believes the canvas has focus — exactly what
+	 * {@code HeadlessLogin} primes before its scripted click.
+	 */
+	private static void primeFocus(EventQueue q, Canvas canvas, long t, int x, int y)
+	{
+		if (!focused)
+		{
+			q.postEvent(new FocusEvent(canvas, FocusEvent.FOCUS_GAINED, false, null));
+			q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_ENTERED, t, 0, x, y, 0, false));
+			focused = true;
+		}
+	}
+
+	/**
+	 * A discrete tap at {@code (x,y)} (gamepack-canvas pixels): the full focus-prime + move + press +
+	 * release + click sequence — the proven {@code HeadlessLogin.synthesizeClick} shape. {@code button} is
+	 * 1 (left tap: walk / interact / select a menu entry) or 3 (long-press: open the right-click menu).
+	 *
+	 * <p>This is the ONLY path that synthesizes {@code MOUSE_CLICKED}; the native side calls it solely for
+	 * a recognized tap or long-press, so a drag (which streams through {@link #onTouch}) never produces a
+	 * spurious click.
+	 */
+	public static void onClick(int x, int y, int button)
+	{
+		final Canvas canvas = liveCanvas();
+		if (canvas == null)
 		{
 			return;
 		}
-		final Canvas canvas = c.getCanvas();
+		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+		final long t = System.currentTimeMillis();
+		final int awtButton = button == 3 ? MouseEvent.BUTTON3 : MouseEvent.BUTTON1;
+		final int downMask = awtButton == MouseEvent.BUTTON3
+			? InputEvent.BUTTON3_DOWN_MASK : InputEvent.BUTTON1_DOWN_MASK;
+
+		primeFocus(q, canvas, t, x, y);
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t + 1, 0, x, y, 0, false));
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, t + 2,
+			downMask, x, y, 1, false, awtButton));
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t + 3,
+			0, x, y, 1, false, awtButton));
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, t + 4,
+			0, x, y, 1, false, awtButton));
+	}
+
+	/**
+	 * One phase of a drag stream — {@link #TOUCH_DOWN}/{@link #TOUCH_MOVE}/{@link #TOUCH_UP} at
+	 * {@code (x,y)}, {@code button} 1 or 3. DOWN presses, MOVE drags (or hovers when not pressed), UP
+	 * releases — with NO synthesized click (unlike a tap, which goes through {@link #onClick}). Used by the
+	 * camera / scroll gestures, where a release must not register as a walk-here click.
+	 */
+	public static void onTouch(int type, int x, int y, int button)
+	{
+		final Canvas canvas = liveCanvas();
 		if (canvas == null)
 		{
 			return;
@@ -202,13 +277,7 @@ public final class JavaBridge
 		switch (type)
 		{
 			case TOUCH_DOWN:
-				if (!focused)
-				{
-					// Prime focus + pointer position on the very first interaction (no headless focus owner).
-					q.postEvent(new FocusEvent(canvas, FocusEvent.FOCUS_GAINED, false, null));
-					q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_ENTERED, t, 0, x, y, 0, false));
-					focused = true;
-				}
+				primeFocus(q, canvas, t, x, y);
 				q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t, 0, x, y, 0, false));
 				q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, t + 1,
 					downMask, x, y, 1, false, awtButton));
@@ -230,10 +299,9 @@ public final class JavaBridge
 				break;
 
 			case TOUCH_UP:
+				// Release only — a drag is NOT a click. (The pre-Phase-5 auto-MOUSE_CLICKED here was the
+				// phantom-click bug: every camera/scroll drag ended with a stray walk-here click.)
 				q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t,
-					0, x, y, 1, false, pressed ? pressButton : awtButton));
-				// The gamepack treats a press+release at (roughly) the same spot as a click.
-				q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, t + 1,
 					0, x, y, 1, false, pressed ? pressButton : awtButton));
 				pressed = false;
 				break;

@@ -39,9 +39,15 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Returns nil before the first draw / if the VM isn't up yet. Call on the main thread.
 + (nullable UIImage *)latestFrame;
 
-/// Post a touch phase into the gamepack via JavaBridge.onTouch. `type`: 0=down, 1=move, 2=up;
-/// `x`,`y` are gamepack-canvas (765x503) pixels; `button` is 1 (left) or 3 (right). Call on the main thread.
+/// Post a DRAG phase into the gamepack via JavaBridge.onTouch. `type`: 0=down, 1=move, 2=up;
+/// `x`,`y` are gamepack-canvas (765x503) pixels; `button` is 1 (left) or 3 (right). A release does NOT
+/// synthesize a click (use postClick for a tap). Call on the main thread. Used by the camera/scroll drag.
 + (void)postTouchType:(int)type x:(int)x y:(int)y button:(int)button;
+
+/// Post a discrete TAP into the gamepack via JavaBridge.onClick (the full press+release+click at one
+/// point). `x`,`y` are gamepack-canvas (765x503) pixels; `button` is 1 (left tap / menu-entry select) or
+/// 3 (long-press: open the right-click menu). Call on the main thread.
++ (void)postClickX:(int)x y:(int)y button:(int)button;
 
 @end
 
