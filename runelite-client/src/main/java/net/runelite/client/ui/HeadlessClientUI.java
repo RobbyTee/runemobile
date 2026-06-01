@@ -47,7 +47,9 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.config.RuneLiteConfig;
 import net.runelite.client.eventbus.EventBus;
+import net.runelite.client.headless.MobileUiBridge;
 import net.runelite.client.input.MouseManager;
+import net.runelite.client.plugins.PluginManager;
 
 /**
  * Gate 1c: a window-less replacement for {@link ClientUI}.
@@ -71,6 +73,9 @@ import net.runelite.client.input.MouseManager;
 public class HeadlessClientUI extends ClientUI
 {
 	private final Client rsClient;
+	private final ConfigManager configManager;
+	private final Provider<ClientThread> clientThreadProvider;
+	private final PluginManager pluginManager;
 
 	private Frame frame;
 
@@ -82,17 +87,29 @@ public class HeadlessClientUI extends ClientUI
 		ConfigManager configManager,
 		Provider<ClientThread> clientThreadProvider,
 		EventBus eventBus,
+		PluginManager pluginManager,
 		@Named("safeMode") boolean safeMode,
 		@Named("runelite.title") String title
 	)
 	{
 		super(config, mouseManager, client, configManager, clientThreadProvider, eventBus, safeMode, title);
 		this.rsClient = client;
+		this.configManager = configManager;
+		this.clientThreadProvider = clientThreadProvider;
+		this.pluginManager = pluginManager;
 	}
 
 	@Override
 	public void init() throws Exception
 	{
+		if (MobileUiBridge.isEnabled())
+		{
+			// Wire the Phase-6 mobile-UI facade to the live singletons. Done here because this is the one
+			// component with PluginManager/ConfigManager/ClientThread injected; the facade itself stays a
+			// pure static JNI surface the native shell calls.
+			MobileUiBridge.init(pluginManager, configManager, clientThreadProvider.get(), rsClient);
+		}
+
 		SwingUtilities.invokeAndWait(() ->
 		{
 			frame = new Frame("RuneLite (headless)");

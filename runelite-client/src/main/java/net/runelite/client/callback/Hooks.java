@@ -392,6 +392,11 @@ public class Hooks implements Callbacks
 			// taken post-composite, below).
 			net.runelite.client.headless.JavaBridge.register(client);
 		}
+		if (net.runelite.client.headless.MobileUiBridge.isEnabled())
+		{
+			// Snapshot UI-state the native chrome polls (chat-input bounds / soft-input) on the client thread.
+			net.runelite.client.headless.MobileUiBridge.tick(client);
+		}
 		if (net.runelite.client.headless.HeadlessLogin.isEnabled())
 		{
 			net.runelite.client.headless.HeadlessLogin.tick(
