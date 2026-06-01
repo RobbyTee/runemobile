@@ -388,8 +388,9 @@ public class Hooks implements Callbacks
 		}
 		if (net.runelite.client.headless.JavaBridge.isEnabled())
 		{
-			// Keep the native shell's live-blit + touch bridge pointed at the current client + buffer.
-			net.runelite.client.headless.JavaBridge.register(client, mainBufferProvider);
+			// Keep the native shell's touch bridge pointed at the current client (the frame snapshot is
+			// taken post-composite, below).
+			net.runelite.client.headless.JavaBridge.register(client);
 		}
 		if (net.runelite.client.headless.HeadlessLogin.isEnabled())
 		{
@@ -420,6 +421,11 @@ public class Hooks implements Callbacks
 
 		// Headless capture seam: composited game + overlays now live in mainBufferProvider.getImage().
 		net.runelite.client.headless.HeadlessCapture.capture(mainBufferProvider);
+		// Live-blit seam: snapshot the now-complete frame for the native shell (avoids mid-composite tearing).
+		if (net.runelite.client.headless.JavaBridge.isEnabled())
+		{
+			net.runelite.client.headless.JavaBridge.snapshot(mainBufferProvider);
+		}
 
 		if (client.isGpu())
 		{

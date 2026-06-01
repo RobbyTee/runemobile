@@ -50,9 +50,9 @@ import net.runelite.api.MainBufferProvider;
  *       by real touches instead of a scripted click.</li>
  * </ul>
  *
- * <p>{@link #register(Client, MainBufferProvider)} is called from {@code Hooks.draw} every frame (two
- * volatile writes) so the bridge always points at the live client + buffer. Entirely inert unless
- * {@code -Drunelite.bridge=true}, so it adds nothing to the stock desktop client.
+ * <p>{@link #register(Client)} (top of {@code Hooks.draw}) keeps the bridge pointed at the live client,
+ * and {@link #snapshot(MainBufferProvider)} (after the overlays composite) publishes each complete frame.
+ * Entirely inert unless {@code -Drunelite.bridge=true}, so it adds nothing to the stock desktop client.
  *
  * <p>Thread model: {@code register} runs on the engine/AWT thread; the native side calls the getters and
  * {@link #onTouch} from the UI thread (JNI-attached). {@code EventQueue.postEvent} is thread-safe, and the
@@ -70,7 +70,18 @@ public final class JavaBridge
 	public static final int TOUCH_UP = 2;
 
 	private static volatile Client client;
-	private static volatile MainBufferProvider buffer;
+
+	// Published complete frames for the live blit. The native side reads at the display refresh (up to
+	// 120 Hz) but the engine composites at ~50 fps, so reading mainBufferProvider directly catches it
+	// mid-clear/mid-draw -> fast flashing. Instead we snapshot ONLY at the post-overlay-composite hook
+	// (when the frame is whole) into a double buffer, and publish via the volatile `frame` ref so the
+	// native reader always copies out a complete, stable frame.
+	private static volatile int[] frame;
+	private static volatile int frameW;
+	private static volatile int frameH;
+	private static int[] bufA;
+	private static int[] bufB;
+	private static boolean useA = true;
 
 	// Input bookkeeping (only ever touched from the single native UI thread that drives onTouch).
 	private static boolean focused;
@@ -86,35 +97,75 @@ public final class JavaBridge
 		return ENABLED;
 	}
 
-	/** Called from {@code Hooks.draw} each frame to keep the bridge pointed at the live client + buffer. */
-	public static void register(Client c, MainBufferProvider b)
+	/** Called at the top of {@code Hooks.draw} each frame to keep the bridge pointed at the live client. */
+	public static void register(Client c)
 	{
 		client = c;
-		buffer = b;
+	}
+
+	/**
+	 * Called from {@code Hooks.draw} AFTER the overlays composite (the same point {@code HeadlessCapture}
+	 * dumps PNGs) — i.e. when {@code mainBufferProvider} holds a <em>complete</em> frame. Copies it into a
+	 * double buffer and publishes it for the live blit. Snapshotting here (not at the native read) is what
+	 * eliminates the mid-composite flashing.
+	 */
+	public static void snapshot(MainBufferProvider b)
+	{
+		if (!ENABLED || b == null)
+		{
+			return;
+		}
+		final int[] px = b.getPixels();
+		final int w = b.getWidth();
+		final int h = b.getHeight();
+		if (px == null || w <= 0 || h <= 0)
+		{
+			return;
+		}
+		final int n = w * h;
+		if (px.length < n)
+		{
+			return;
+		}
+		int[] dst = useA ? bufA : bufB;
+		if (dst == null || dst.length != n)
+		{
+			dst = new int[n];
+			if (useA)
+			{
+				bufA = dst;
+			}
+			else
+			{
+				bufB = dst;
+			}
+		}
+		System.arraycopy(px, 0, dst, 0, n);
+		frameW = w;
+		frameH = h;
+		frame = dst;        // publish (volatile)
+		useA = !useA;       // next snapshot fills the OTHER buffer, so this one stays stable a full cycle
 	}
 
 	// ---- Live framebuffer blit (native pulls these each screen refresh) --------------------------------
 
 	public static int getFrameWidth()
 	{
-		final MainBufferProvider b = buffer;
-		return b == null ? 0 : b.getWidth();
+		return frameW;
 	}
 
 	public static int getFrameHeight()
 	{
-		final MainBufferProvider b = buffer;
-		return b == null ? 0 : b.getHeight();
+		return frameH;
 	}
 
 	/**
-	 * The engine's composited frame as packed {@code 0xAARRGGBB} ints (the {@code mainBufferProvider}
-	 * backing store — no copy/allocation here). Returns {@code null} before the first draw.
+	 * The latest <em>complete</em> composited frame as packed {@code 0xAARRGGBB} ints (a stable snapshot,
+	 * not the live back buffer). Returns {@code null} before the first frame.
 	 */
 	public static int[] getFramePixels()
 	{
-		final MainBufferProvider b = buffer;
-		return b == null ? null : b.getPixels();
+		return frame;
 	}
 
 	// ---- Touch ingress (native maps view coords -> game coords, then calls this) -----------------------
