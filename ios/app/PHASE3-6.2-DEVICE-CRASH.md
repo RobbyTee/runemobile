@@ -564,6 +564,62 @@ dense-tier-3 trigger the hs_err fingerprints.
 
 ---
 
+## RESEARCH UPDATE 14 (2026-06-01) — tier-1 REFUTED + reframed: root cause is HEAP corruption, not code-cache
+Ran `-XX:TieredStopAtLevel=1 -XX:CICompilerCount=1` (build `C2328E69`, data `E40DD7F8`, confirmed in VM
+args). The crash did NOT go away — it **MOVED**, which is the decisive finding. Evidence:
+`app/evidence/hs_err-6.2-GCheapcorrupt-tier1-20260601.log`.
+```
+SIGSEGV SEGV_ACCERR si_addr=0x00000003aa659bf0   ← WILD pointer, NOT in heap [0x7f0000000–0x800000000)
+Current thread: WorkerThread "GC Thread#0"
+  G1ParScanThreadState::handle_evacuation_failure_par
+  <- copy_to_survivor_space  <- G1ParCopyClosure::do_oop_work  <- evacuate_roots   t=93.1s
+[error occurred during error reporting (printing register info)] ×3  ← reporter itself SIGSEGV'd
+CodeCache: nmethods=2115 full_count=0   (still only 7% — not pressure)
+```
+
+### What this overturns
+- **Both §6.2 crash variants share ONE root, and it is NOT the code cache specifically.**
+  - UPDATE 13 (full tiered): corrupt **nmethod** → `is_unloading` SIGSEGV.
+  - This run (tier-1): corrupt **heap object** → GC `copy_to_survivor_space` follows a wild oop and dies;
+    the error reporter then faults 3× = memory is BROADLY corrupt, not one structure.
+- Removing tier-3 only changed WHICH memory got scribbled. So UPDATE 8's "tier-3 MDO immediate" theory
+  and UPDATE 13's tier-1 mitigation are **REFUTED** — flag tuning cannot fix this.
+- **The real root: the debugger-provided JIT region (`brk #0x69` → `_M`/`prepare_memory_region`, then
+  `vm_remap` to the RW alias) does NOT have physical pages exclusively reserved — they ALIAS memory the
+  JVM also uses (heap / metaspace / other nmethods).** When HotSpot writes a compiled method through the
+  RW mirror, the bytes also land on a live heap object (or vice-versa), corrupting it. This is EXACTLY
+  the original §6.2 audit's "vm_remap of a StikDebug `_M` region does not robustly share/own physical
+  pages" hypothesis — now confirmed by a heap-corruption fingerprint, not just a code fingerprint.
+
+### Reverted
+TieredStopAtLevel=1 + CICompilerCount=1 removed (JVMLauncher.m). Full tiered restored — it has the
+demonstrated CLEAN boots (UPDATE 9/10) and the crash is probabilistic regardless.
+
+### The real fix space (W1 JIT-mirror servicing — NOT flags, NOT lifecycle)
+The problem is in how the debugger reserves/owns the JIT physical pages. Concretely:
+1. **`runelite-jit.js` `_M` allocation may not reserve dedicated physical memory** — on iOS the debugger
+   `_M …,rx` allocates a region, but if `prepare_memory_region` (StikDebug's TXM wire-up) maps it onto
+   pages that the JVM's later `mmap`s (heap/metaspace) also get, they collide. Investigate: does the
+   StikDebug `_M` region need to be allocated/prepared so the kernel treats it as owned (not lazily
+   shared)? Compare to Amethyst's path (it runs Minecraft for minutes — what makes ITS code-cache region
+   non-colliding? Likely `JIT26PrepareRegion` semantics or allocation ordering).
+2. **Pre-reserve the JIT region BEFORE the JVM allocates its heap** so addresses can't overlap — or pin
+   `-Xmx`/heap base away from the `0x1_1xxx_xxxx` mirror band. (Heap is at `0x7f0000000`; the RW/RX mirror
+   this run was `0x115b5c000`/`0x111b5c000` — but the WILD si_addr `0x3aa659bf0` suggests a
+   compressed-oop/markword smashed by a stray write, not a literal address overlap, so this needs the
+   actual page-mapping checked, not just base addresses.)
+3. **This is genuinely the W1 audit's open question.** The honest status: real RuneLite JIT-executing on
+   this device is **not yet reliable** — it corrupts memory probabilistically under sustained compilation.
+   The W3 longevity shell is done and correct; the blocker is back to the JIT-mirror page ownership.
+
+### Honest overall status (corrected, no overclaim)
+- ✅ JIT attaches; VM boots; CACIO/§6.0/§6.1; capture pipeline (desktop); process longevity (W3).
+- ⚠️ **§6.2 real-RuneLite-on-device: INTERMITTENT — boots sometimes reach the login screen, sometimes
+  corrupt memory (code OR heap) within ~90 s and crash. NOT reliably GREEN.** The remaining work is the
+  JIT-region physical-page ownership in the StikDebug servicing / libjvm mirror — the audit's core item.
+
+---
+
 ## RESEARCH UPDATE 8 (2026-05-31) — [RETRACTED by UPDATE 9 — based on a STALE hs_err] EXC_MASK clear: ran, did NOTHING. Mechanism CONFIRMED.
 Two findings this round (evidence: `app/evidence/hs_err-6.2-excmask-nochange-20260531.log` +
 `jvm-stdio-6.2-excmask-nochange-20260531.log`):
