@@ -8,6 +8,10 @@
 @property (nonatomic, strong) UIButton *launchButton;
 @property (nonatomic, strong) UIButton *canaryButton;
 @property (nonatomic, strong) UIButton *keyboardButton;
+// Collapsible debug overlay: a small always-on-top toggle shows/hides a panel holding the status,
+// launch/canary buttons and the log console, so the game stays full-screen.
+@property (nonatomic, strong) UIView *debugPanel;
+@property (nonatomic, strong) UIButton *debugToggle;
 // Hidden capture field: becomes first responder to raise the soft keyboard; its change/return callbacks
 // are translated into AWT KeyEvents. It never actually holds text (a zero-width sentinel keeps backspace
 // firing, and every change returns NO).
@@ -38,7 +42,15 @@
 // Pinch-zoom: accumulate the scale change into whole wheel notches.
 @property (nonatomic, assign) CGFloat pinchPrevScale;
 @property (nonatomic, assign) CGFloat wheelAccum;
+// Contextual keyboard: previous gamepack text-input state, for edge-triggered auto raise/dismiss.
+@property (nonatomic, assign) BOOL prevInputOpen;
 @end
+
+// AWT virtual keycodes for the non-text keys we synthesize (java.awt.event.KeyEvent.VK_*).
+static const int AWT_VK_BACK_SPACE = 8;
+static const int AWT_VK_ENTER      = 10;
+// Zero-width sentinel so a backspace on an "empty" field still fires shouldChangeCharactersInRange.
+static NSString * const kKbSentinel = @"​";
 
 @implementation ViewController
 
@@ -57,37 +69,46 @@
 }
 
 - (void)buildUI {
-    CGFloat top = 60;
-    self.statusLabel = [[UILabel alloc] init];
-    self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    self.statusLabel.textColor = [UIColor systemYellowColor];
-    self.statusLabel.font = [UIFont boldSystemFontOfSize:15];
-    self.statusLabel.text = @"JIT: waiting…";
-    [self.view addSubview:self.statusLabel];
+    // (0) Game screen — the BOTTOM layer, filling the entire screen edge-to-edge (full-screen landscape).
+    self.screen = [[UIImageView alloc] init];
+    self.screen.translatesAutoresizingMaskIntoConstraints = NO;
+    self.screen.backgroundColor = [UIColor colorWithWhite:0.06 alpha:1.0];
+    self.screen.contentMode = UIViewContentModeScaleAspectFit;   // render aspect == screen aspect -> fills
+    self.screen.layer.magnificationFilter = kCAFilterLinear;     // smooth when scaled to native res
+    self.screen.userInteractionEnabled = YES;                    // receive the game gestures
+    [self.view addSubview:self.screen];
 
-    self.launchButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.launchButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.launchButton setTitle:@"Run AWT activation (§6.0)" forState:UIControlStateNormal];
-    self.launchButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
-    self.launchButton.enabled = NO;
-    [self.launchButton addTarget:self action:@selector(onLaunch)
-                forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:self.launchButton];
+    // Phase 5 control scheme on the game view. UIKit gesture recognizers own classification: tap = left
+    // click (walk/interact/menu-entry), long-press = drag-to-select menu, one-finger drag = camera rotate,
+    // pinch = zoom. Mutual-exclusivity disambiguates the one-finger trio.
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onTap:)];
+    [self.screen addGestureRecognizer:tap];
+    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onLongPress:)];
+    longPress.minimumPressDuration = 0.4;
+    [self.screen addGestureRecognizer:longPress];
+    UIPanGestureRecognizer *camPan = [[UIPanGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onCameraPan:)];
+    camPan.minimumNumberOfTouches = 1;
+    camPan.maximumNumberOfTouches = 1;
+    [self.screen addGestureRecognizer:camPan];
+    UIPinchGestureRecognizer *pinch = [[UIPinchGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onPinch:)];
+    [self.screen addGestureRecognizer:pinch];
 
-    self.canaryButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.canaryButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.canaryButton setTitle:@"RWX canary" forState:UIControlStateNormal];
-    [self.canaryButton addTarget:self action:@selector(onCanary)
-                forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:self.canaryButton];
-
+    // In-game keyboard control, bottom-left of the game's safe area (by the chat box). A button subview
+    // consumes its own taps, so it never leaks a walk-here click to the gestures beneath.
     self.keyboardButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.keyboardButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.keyboardButton setTitle:@"⌨︎" forState:UIControlStateNormal];
-    self.keyboardButton.titleLabel.font = [UIFont systemFontOfSize:20];
+    self.keyboardButton.titleLabel.font = [UIFont systemFontOfSize:22];
+    self.keyboardButton.tintColor = [UIColor whiteColor];
+    self.keyboardButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
+    self.keyboardButton.layer.cornerRadius = 8;
     [self.keyboardButton addTarget:self action:@selector(onToggleKeyboard)
                   forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:self.keyboardButton];
+    [self.screen addSubview:self.keyboardButton];
 
     // Hidden capture field — placed offscreen (not hidden, so it can still become first responder).
     self.kbField = [[UITextField alloc] initWithFrame:CGRectMake(-200, -200, 10, 10)];
@@ -102,76 +123,107 @@
     self.kbField.returnKeyType = UIReturnKeyDefault;
     [self.view addSubview:self.kbField];
 
-    // The game screen: where captured RuneLite frames are blitted live (W3 shell start).
-    self.screen = [[UIImageView alloc] init];
-    self.screen.translatesAutoresizingMaskIntoConstraints = NO;
-    self.screen.backgroundColor = [UIColor colorWithWhite:0.06 alpha:1.0];
-    self.screen.contentMode = UIViewContentModeScaleAspectFit;
-    self.screen.layer.magnificationFilter = kCAFilterNearest;   // crisp pixel art
-    self.screen.userInteractionEnabled = YES;                   // receive the game gestures
-    [self.view addSubview:self.screen];
+    // (1) Debug panel — overlay ABOVE the game (so the launch button is tappable; the old bug was the
+    // full-screen game view covering it), translucent so the game shows behind. Collapsed by the ≡ toggle.
+    self.debugPanel = [[UIView alloc] init];
+    self.debugPanel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.debugPanel.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.82];
+    self.debugPanel.layer.cornerRadius = 10;
+    self.debugPanel.clipsToBounds = YES;
+    [self.view addSubview:self.debugPanel];
 
-    // Phase 5 control scheme. UIKit gesture recognizers own classification (tap vs long-press vs drag),
-    // which also resolves the touch-identity problem the raw touchesBegan/anyObject path had under
-    // multi-touch/cancel sequences. tap = left click (walk / interact / select a menu entry); long-press
-    // = right click (open the OSRS menu). A drag that is neither fires nothing → no phantom walk-here
-    // click. (Camera pan + pinch zoom land in the next increment.)
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
-        initWithTarget:self action:@selector(onTap:)];
-    [self.screen addGestureRecognizer:tap];
+    self.statusLabel = [[UILabel alloc] init];
+    self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.statusLabel.textColor = [UIColor systemYellowColor];
+    self.statusLabel.font = [UIFont boldSystemFontOfSize:14];
+    self.statusLabel.text = @"JIT: waiting…";
+    [self.debugPanel addSubview:self.statusLabel];
 
-    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc]
-        initWithTarget:self action:@selector(onLongPress:)];
-    longPress.minimumPressDuration = 0.4;   // OSRS-mobile-feel: a deliberate hold opens the menu
-    [self.screen addGestureRecognizer:longPress];
+    self.launchButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.launchButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.launchButton setTitle:@"Run AWT activation (§6.0)" forState:UIControlStateNormal];
+    self.launchButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    self.launchButton.enabled = NO;
+    [self.launchButton addTarget:self action:@selector(onLaunch)
+                forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.launchButton];
 
-    // One-finger DRAG rotates the camera (the official OSRS-mobile feel). The three one-finger meanings —
-    // tap (walk), drag (rotate), hold (menu) — are disambiguated by UIKit's gesture mutual-exclusivity:
-    // a tap doesn't move; a drag moves before the hold timer (long-press fails -> pan wins); a still hold
-    // claims the touch first (-> menu, pan blocked). No simultaneous-recognition delegate, so exactly one
-    // of {tap, drag, long-press} wins per gesture. PINCH (two fingers) zooms and is separated by count.
-    UIPanGestureRecognizer *camPan = [[UIPanGestureRecognizer alloc]
-        initWithTarget:self action:@selector(onCameraPan:)];
-    camPan.minimumNumberOfTouches = 1;
-    camPan.maximumNumberOfTouches = 1;
-    [self.screen addGestureRecognizer:camPan];
-
-    UIPinchGestureRecognizer *pinch = [[UIPinchGestureRecognizer alloc]
-        initWithTarget:self action:@selector(onPinch:)];
-    [self.screen addGestureRecognizer:pinch];
+    self.canaryButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.canaryButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.canaryButton setTitle:@"RWX canary" forState:UIControlStateNormal];
+    [self.canaryButton addTarget:self action:@selector(onCanary)
+                forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.canaryButton];
 
     self.console = [[UITextView alloc] init];
     self.console.translatesAutoresizingMaskIntoConstraints = NO;
     self.console.editable = NO;
-    self.console.backgroundColor = [UIColor blackColor];
+    self.console.backgroundColor = [UIColor clearColor];
     self.console.textColor = [UIColor greenColor];
     self.console.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
-    [self.view addSubview:self.console];
+    [self.debugPanel addSubview:self.console];
+
+    // (2) Debug toggle — always on top (added last), top-right. Expands/collapses the debug panel so the
+    // game can stay full-screen.
+    self.debugToggle = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.debugToggle.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.debugToggle setTitle:@"≡" forState:UIControlStateNormal];
+    self.debugToggle.titleLabel.font = [UIFont boldSystemFontOfSize:22];
+    self.debugToggle.tintColor = [UIColor whiteColor];
+    self.debugToggle.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
+    self.debugToggle.layer.cornerRadius = 8;
+    [self.debugToggle addTarget:self action:@selector(onToggleDebug)
+               forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.debugToggle];
 
     UILayoutGuide *g = self.view.safeAreaLayoutGuide;
+    UILayoutGuide *sg = self.screen.safeAreaLayoutGuide;
+    UILayoutGuide *p = self.debugPanel.layoutMarginsGuide;
     [NSLayoutConstraint activateConstraints:@[
-        [self.statusLabel.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
-        [self.statusLabel.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:12],
+        // Game fills the SAFE AREA (not edge-to-edge): edge-to-edge pushed the OSRS corner UI (minimap,
+        // inventory, chat) under the rounded corners / dynamic island / home indicator. Filling the safe
+        // area keeps everything on-screen; the render aspect is computed to match it (onLaunch) so there
+        // are no internal letterbox bars either.
+        [self.screen.topAnchor constraintEqualToAnchor:g.topAnchor],
+        [self.screen.leadingAnchor constraintEqualToAnchor:g.leadingAnchor],
+        [self.screen.trailingAnchor constraintEqualToAnchor:g.trailingAnchor],
+        [self.screen.bottomAnchor constraintEqualToAnchor:g.bottomAnchor],
 
-        [self.launchButton.topAnchor constraintEqualToAnchor:self.statusLabel.bottomAnchor constant:8],
-        [self.launchButton.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:12],
+        // In-game keyboard control, bottom-left of the game's safe area.
+        [self.keyboardButton.bottomAnchor constraintEqualToAnchor:sg.bottomAnchor constant:-8],
+        [self.keyboardButton.leadingAnchor constraintEqualToAnchor:sg.leadingAnchor constant:8],
+        [self.keyboardButton.widthAnchor constraintEqualToConstant:44],
+        [self.keyboardButton.heightAnchor constraintEqualToConstant:36],
+
+        // Debug toggle, top-right safe area.
+        [self.debugToggle.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
+        [self.debugToggle.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-8],
+        [self.debugToggle.widthAnchor constraintEqualToConstant:44],
+        [self.debugToggle.heightAnchor constraintEqualToConstant:36],
+
+        // Debug panel — left ~62% of the safe area, full height, below the toggle row.
+        [self.debugPanel.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
+        [self.debugPanel.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:8],
+        [self.debugPanel.bottomAnchor constraintEqualToAnchor:g.bottomAnchor constant:-8],
+        [self.debugPanel.widthAnchor constraintEqualToAnchor:g.widthAnchor multiplier:0.62],
+
+        // Panel contents.
+        [self.statusLabel.topAnchor constraintEqualToAnchor:p.topAnchor],
+        [self.statusLabel.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
+        [self.statusLabel.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
+        [self.launchButton.topAnchor constraintEqualToAnchor:self.statusLabel.bottomAnchor constant:6],
+        [self.launchButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.canaryButton.centerYAnchor constraintEqualToAnchor:self.launchButton.centerYAnchor],
         [self.canaryButton.leadingAnchor constraintEqualToAnchor:self.launchButton.trailingAnchor constant:24],
-        [self.keyboardButton.centerYAnchor constraintEqualToAnchor:self.launchButton.centerYAnchor],
-        [self.keyboardButton.leadingAnchor constraintEqualToAnchor:self.canaryButton.trailingAnchor constant:24],
-
-        // Game screen takes the upper ~55% (765x503 aspect renders large); console below it.
-        [self.screen.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor constant:8],
-        [self.screen.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:6],
-        [self.screen.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-6],
-        [self.screen.heightAnchor constraintEqualToAnchor:g.heightAnchor multiplier:0.55],
-
-        [self.console.topAnchor constraintEqualToAnchor:self.screen.bottomAnchor constant:6],
-        [self.console.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:6],
-        [self.console.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-6],
-        [self.console.bottomAnchor constraintEqualToAnchor:g.bottomAnchor constant:-6],
+        [self.console.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor constant:6],
+        [self.console.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
+        [self.console.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
+        [self.console.bottomAnchor constraintEqualToAnchor:p.bottomAnchor],
     ]];
-    (void)top;
+}
+
+- (void)onToggleDebug {
+    self.debugPanel.hidden = !self.debugPanel.hidden;
 }
 
 #pragma mark - Logging
@@ -249,6 +301,10 @@
     [self.jitTimer invalidate];
     [self captureStdio];
 
+    // Full-screen landscape: collapse the debug panel so the game owns the whole screen. The ≡ toggle
+    // re-opens it (logs/canary), and logs still go to Documents/hello-shell.log; the ⌨ control stays.
+    self.debugPanel.hidden = YES;
+
     // (1) Background-task assertion: tell iOS this is important in-progress work so it won't
     // suspend/kill the process while the JVM runs off-main. (The device jetsam'd the idle-UI
     // process within ~250 ms before; this is the primary longevity fix.)
@@ -271,6 +327,20 @@
     [self appendLine:@"--- launching JVM on worker thread ---"];
 
     JVMLauncher *launcher = [[JVMLauncher alloc] init];
+    // Compute the render resolution to MATCH the SAFE-AREA aspect (the game view fills the safe area), so
+    // the blit fills it with no letterbox and nothing clipped under the island/corners/home-indicator.
+    // Render height ~600 (a comfortable in-game UI scale); width follows the aspect.
+    CGRect b = self.view.bounds;
+    UIEdgeInsets ins = self.view.safeAreaInsets;
+    CGFloat sw = b.size.width - ins.left - ins.right;
+    CGFloat sh = b.size.height - ins.top - ins.bottom;
+    CGFloat aspect = (sh > 0 ? sw / sh : 2.0);
+    int renderH = 600;
+    int renderW = (int)lround(renderH * aspect);
+    launcher.resizeSpec = [NSString stringWithFormat:@"%dx%d", renderW, renderH];
+    [self appendLine:[NSString stringWithFormat:@"[shell] safe-area %.0fx%.0f aspect %.3f -> render %@",
+                      sw, sh, aspect, launcher.resizeSpec]];
+
     NSThread *t = [[NSThread alloc] initWithBlock:^{
         [launcher runProbesWithLog:log];
         // VM lifecycle done; let the render loop drain a beat, then release the assertion.
@@ -297,6 +367,24 @@
     if (self.framesShown == 1 || self.framesShown % 60 == 0) {
         [self appendLine:[NSString stringWithFormat:@"[shell] live blit frame #%d (%.0fx%.0f)",
                           self.framesShown, img.size.width, img.size.height]];
+    }
+
+    // Contextual keyboard: when the gamepack opens a text field (search / PM / enter-amount), raise the
+    // soft keyboard automatically; dismiss it when the field closes. Edge-triggered (only on a change) so
+    // it never fights a keyboard the user opened manually for chat. Polled ~10 Hz to keep it cheap.
+    if (self.framesShown % 6 == 0) {
+        BOOL wants = [JVMLauncher textInputOpen];
+        if (wants != self.prevInputOpen) {
+            self.prevInputOpen = wants;
+            if (wants && ![self.kbField isFirstResponder]) {
+                self.kbField.text = kKbSentinel;
+                [self.kbField becomeFirstResponder];
+                [self appendLine:@"[shell] game opened a text field -> keyboard up"];
+            } else if (!wants && [self.kbField isFirstResponder]) {
+                [self.kbField resignFirstResponder];
+                [self appendLine:@"[shell] game closed the text field -> keyboard down"];
+            }
+        }
     }
 }
 
@@ -423,12 +511,6 @@
 }
 
 #pragma mark - Keyboard -> KeyEvent bridge (Phase 5)
-
-// AWT virtual keycodes for the non-text keys we synthesize (java.awt.event.KeyEvent.VK_*).
-static const int AWT_VK_BACK_SPACE = 8;
-static const int AWT_VK_ENTER      = 10;
-// Zero-width sentinel so a backspace on an "empty" field still fires shouldChangeCharactersInRange.
-static NSString * const kKbSentinel = @"​";
 
 - (void)onToggleKeyboard {
     if ([self.kbField isFirstResponder]) {

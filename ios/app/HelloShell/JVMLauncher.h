@@ -10,6 +10,10 @@ typedef void (^JVMLogSink)(NSString *line);
 
 @interface JVMLauncher : NSObject
 
+/// Optional "WxH" the headless client should resize its canvas to after login (full-screen landscape).
+/// Set on the main thread before -runProbesWithLog: (computed from the screen aspect). Nil = 765x503.
+@property (nonatomic, copy, nullable) NSString *resizeSpec;
+
 /// CS_DEBUGGED gate (the W1-audit Claim E): true once StikDebug has attached and the
 /// kernel marks this process debugged. Poll this BEFORE warming HotSpot.
 + (BOOL)isDebuggerAttached;
@@ -69,6 +73,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Press+release one non-text key via JavaBridge.onKeyStroke, by AWT virtual keycode (8=backspace,
 /// 10=enter, 27=escape, 9=tab, 37/38/39/40=arrows). Call on the main thread.
 + (void)postKeyStroke:(int)awtKeyCode;
+
+/// True when the gamepack has a text field open and awaiting input (search / PM / enter-amount dialog).
+/// Polled by the shell to auto-raise/dismiss the soft keyboard. Call on the main thread.
++ (BOOL)textInputOpen;
 
 @end
 

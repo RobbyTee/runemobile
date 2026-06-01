@@ -36,6 +36,7 @@ static jclass    gBridgeClass = NULL; // global ref to net.runelite.client.headl
 static jmethodID gMidW = NULL, gMidH = NULL, gMidSeq = NULL, gMidPixels = NULL;
 static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidMove = NULL;
 static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
+static jmethodID gMidInputOpen = NULL;
 
 // Resolve + cache the JavaBridge facade on the calling (main) thread. Returns YES once usable.
 static BOOL ensureBridge(void) {
@@ -68,8 +69,9 @@ static BOOL ensureBridge(void) {
     gMidCamera = (*env)->GetStaticMethodID(env, global, "onCameraDrag", "(II)V");
     gMidText   = (*env)->GetStaticMethodID(env, global, "onText", "(Ljava/lang/String;)V");
     gMidKey    = (*env)->GetStaticMethodID(env, global, "onKeyStroke", "(I)V");
+    gMidInputOpen = (*env)->GetStaticMethodID(env, global, "isTextInputOpen", "()Z");
     if (!gMidW || !gMidH || !gMidSeq || !gMidPixels || !gMidTouch || !gMidClick || !gMidMove
-        || !gMidWheel || !gMidCamera || !gMidText || !gMidKey) {
+        || !gMidWheel || !gMidCamera || !gMidText || !gMidKey || !gMidInputOpen) {
         (*env)->ExceptionClear(env);
         (*env)->DeleteGlobalRef(env, global);   // don't leak the class ref on the retry path
         return NO;                              // retry next tick (the class may load just after bringup)
@@ -299,6 +301,13 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         [NSString stringWithFormat:@"-Djava.class.path=%@", classpath],
     ] mutableCopy];
 
+    // Full-screen landscape: after login the headless client resizes its CTC canvas to this WxH (the
+    // gamepack switches to resizable layout and fills it). Login stays at 765x503 (autologin coords).
+    if (self.resizeSpec.length) {
+        [opts addObject:[NSString stringWithFormat:@"-Drunelite.headless.resize=%@", self.resizeSpec]];
+        log([NSString stringWithFormat:@"[jvm] full-screen render target = %@", self.resizeSpec]);
+    }
+
     // Phase 4 sub-goal A — interactive login, purely in-process (no native touch bridge). Map the JX_*
     // launcher handoff from Documents/tokens.json, then arm HeadlessLogin's two-stage click machine
     // (EULA Accept -> Play Now). Only arms when a usable token set is present, so a build with no
@@ -496,6 +505,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidKey, (jint)awtKeyCode);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (BOOL)textInputOpen {
+    if (!ensureBridge()) return NO;
+    JNIEnv *env = gMainEnv;
+    jboolean r = (*env)->CallStaticBooleanMethod(env, gBridgeClass, gMidInputOpen);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    return r == JNI_TRUE;
 }
 
 @end

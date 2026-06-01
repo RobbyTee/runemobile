@@ -28,6 +28,8 @@ import java.awt.Component;
 import java.awt.Container;
 import java.awt.Dimension;
 import java.awt.EventQueue;
+import java.awt.Frame;
+import java.awt.Insets;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
@@ -111,26 +113,32 @@ public final class HeadlessResize
 			{
 				try
 				{
-					// Resize every realized ancestor (Frame -> ... -> gamepack Component) so the layout
-					// doesn't snap the component back to its old preferred size on the next validate.
+					// The gamepack Component sits in the Frame's BorderLayout.CENTER, so on validate the
+					// layout stretches it to the Frame's content area (frame size minus insets) — NOT to
+					// comp.setSize(). To land the canvas EXACTLY on targetW x targetH (so its aspect matches
+					// the screen and the blit fills with no bars), size the FRAME to target + insets.
 					comp.setMinimumSize(d);
 					comp.setPreferredSize(d);
-					comp.setSize(d);
-					Container p = comp.getParent();
-					while (p != null)
+					Container top = comp.getParent();
+					while (top != null && top.getParent() != null)
 					{
-						p.setMinimumSize(d);
-						p.setPreferredSize(d);
-						p.setSize(d);
-						final Container parent = p.getParent();
-						if (parent == null)
-						{
-							p.validate();   // top (Frame) — revalidate the whole tree
-						}
-						p = parent;
+						top = top.getParent();
 					}
-					log.info("[headless-resize] requested {}x{}: component now {}x{}, canvas {}",
-						targetW, targetH, comp.getWidth(), comp.getHeight(), client.getCanvas());
+					if (top instanceof Frame)
+					{
+						final Insets ins = top.getInsets();
+						top.setSize(targetW + ins.left + ins.right, targetH + ins.top + ins.bottom);
+						top.validate();
+						log.info("[headless-resize] requested {}x{}: frame insets {},{},{},{} -> component now {}x{}, canvas {}",
+							targetW, targetH, ins.top, ins.left, ins.bottom, ins.right,
+							comp.getWidth(), comp.getHeight(), client.getCanvas());
+					}
+					else
+					{
+						comp.setSize(d);
+						log.info("[headless-resize] requested {}x{}: no Frame ancestor, comp set to {}x{}, canvas {}",
+							targetW, targetH, comp.getWidth(), comp.getHeight(), client.getCanvas());
+					}
 				}
 				catch (RuntimeException ex)
 				{
