@@ -26,6 +26,8 @@ package net.runelite.client.headless;
 
 import java.awt.Canvas;
 import java.awt.EventQueue;
+import java.awt.Rectangle;
+import java.awt.Shape;
 import java.awt.Toolkit;
 import java.awt.event.FocusEvent;
 import java.awt.event.InputEvent;
@@ -33,10 +35,13 @@ import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseWheelEvent;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.Actor;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.MainBufferProvider;
 import net.runelite.api.VarClientInt;
+import net.runelite.api.WorldView;
+import net.runelite.client.callback.ClientThread;
 
 /**
  * Phase-4 (W3) sub-goal B: the native&lt;-&gt;Java facade for a <em>real interactive</em> client on iOS.
@@ -88,6 +93,15 @@ public final class JavaBridge
 
 	private static volatile Client client;
 
+	// Touch forgiveness (snap-to-target). Wired from HeadlessClientUI.init; used to resolve a left tap onto
+	// the nearest entity ON THE CLIENT THREAD. Off by -Drunelite.touch.snap=false; radius (game px) tunable
+	// via -Drunelite.touch.snapRadius. snapCount is diagnostic (confirm snapping fired on device).
+	private static volatile ClientThread clientThread;
+	private static final boolean SNAP_ENABLED =
+		Boolean.parseBoolean(System.getProperty("runelite.touch.snap", "true"));
+	private static final int SNAP_RADIUS = Integer.getInteger("runelite.touch.snapRadius", 18);
+	private static volatile int snapCount;
+
 	// Published complete frames for the live blit. The native side reads at the display refresh (up to
 	// 120 Hz) but the engine composites at ~50 fps, so reading mainBufferProvider directly catches it
 	// mid-clear/mid-draw -> fast flashing. Instead we snapshot ONLY at the post-overlay-composite hook
@@ -129,6 +143,15 @@ public final class JavaBridge
 	public static void register(Client c)
 	{
 		client = c;
+	}
+
+	/**
+	 * Wire the {@link ClientThread} used to resolve touch-snap on the game thread. Called once from
+	 * {@code HeadlessClientUI.init}. Without it, left taps fall back to the literal point (no snap).
+	 */
+	public static void setClientThread(ClientThread ct)
+	{
+		clientThread = ct;
 	}
 
 	/**
@@ -256,6 +279,16 @@ public final class JavaBridge
 	 * <p>This is the ONLY path that synthesizes {@code MOUSE_CLICKED}; the native side calls it solely for
 	 * a recognized tap or long-press, so a drag (which streams through {@link #onTouch}) never produces a
 	 * spurious click.
+	 *
+	 * <p><b>Touch forgiveness (Phase 6).</b> A finger is far fatter than a mouse pixel, so a left tap that
+	 * lands <em>near</em> an interactable (but misses the exact clickbox) is snapped onto it — the
+	 * touch-equivalent of OSRS Mobile's enlarged interaction. We cannot change the gamepack's exact-pixel
+	 * hit test (it is the unmodified engine), but we own the {@code (x,y)} we feed it: for a left tap in-game
+	 * we resolve the nearest entity on the <em>client thread</em> (scene geometry is only safe to read there)
+	 * and then synthesize the click at the resolved point — ~1 frame later, imperceptible for a tap. If the
+	 * tap already lands on a clickbox, or nothing interactable is within {@link #snapRadius()}, the original
+	 * point is used (so a deliberate tap on empty ground still walks). Right-clicks (long-press) are left
+	 * unsnapped — that menu already has slide-to-select forgiveness.
 	 */
 	public static void onClick(int x, int y, int button)
 	{
@@ -264,9 +297,28 @@ public final class JavaBridge
 		{
 			return;
 		}
+		final ClientThread ct = clientThread;
+		final Client c = client;
+		if (SNAP_ENABLED && button == MouseEvent.BUTTON1 && ct != null
+			&& c != null && c.getGameState() == GameState.LOGGED_IN)
+		{
+			// Resolve + click on the client thread (off-thread scene reads can tear/NPE mid-update). Called
+			// from the native UI thread, so this is invokeLater: the click lands on the next game loop (~20ms).
+			ct.invoke(() ->
+			{
+				final int[] p = resolveSnap(c, x, y);
+				synthesizeClick(canvas, p[0], p[1], MouseEvent.BUTTON1);
+			});
+			return;
+		}
+		synthesizeClick(canvas, x, y, button);
+	}
+
+	/** Post the focus-prime + move + press + release + click sequence at {@code (x,y)} for {@code awtButton}. */
+	private static void synthesizeClick(Canvas canvas, int x, int y, int awtButton)
+	{
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
-		final int awtButton = button == 3 ? MouseEvent.BUTTON3 : MouseEvent.BUTTON1;
 		final int downMask = awtButton == MouseEvent.BUTTON3
 			? InputEvent.BUTTON3_DOWN_MASK : InputEvent.BUTTON1_DOWN_MASK;
 
@@ -278,6 +330,121 @@ public final class JavaBridge
 			0, x, y, 1, false, awtButton));
 		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, t + 4,
 			0, x, y, 1, false, awtButton));
+	}
+
+	/**
+	 * Touch-forgiveness resolver — MUST run on the client thread. Returns the point to click: the original
+	 * {@code (x,y)} if it already lands on an entity clickbox or nothing interactable is within
+	 * {@link #snapRadius()}, else the nearest entity's clickbox centroid. v1 considers NPCs + players (the
+	 * highest-value fat-finger targets: combat / talk / follow); ground items + scene objects are a follow-up.
+	 */
+	static int[] resolveSnap(Client c, int x, int y)
+	{
+		final int[] original = {x, y};
+		try
+		{
+			final WorldView wv = c.getTopLevelWorldView();
+			if (wv == null)
+			{
+				return original;
+			}
+			final int r = snapRadius();
+			Shape best = null;
+			double bestDist = Double.MAX_VALUE;
+			// NPCs first, then players — so on a distance tie the NPC wins (combat/quest targets).
+			for (Actor a : npcsThenPlayers(wv))
+			{
+				final Shape hull = a.getConvexHull();
+				if (hull == null)
+				{
+					continue;
+				}
+				if (hull.contains(x, y))
+				{
+					return original; // exact hit — the engine already lands inside this clickbox
+				}
+				final Rectangle b = hull.getBounds();
+				if (b.width <= 0 || b.height <= 0)
+				{
+					continue;
+				}
+				final double d = distToRect(x, y, b);
+				if (d <= r && d < bestDist)
+				{
+					bestDist = d;
+					best = hull;
+				}
+			}
+			if (best != null)
+			{
+				final int[] cen = hullCentroid(best);
+				snapCount++;
+				log.info("[bridge] tap-snap {},{} -> {},{} (dist {}px, #{} this session)",
+					x, y, cen[0], cen[1], (int) bestDist, snapCount);
+				return cen;
+			}
+		}
+		catch (RuntimeException ex)
+		{
+			// any scene-read hiccup -> fall back to the literal tap (never drop the click)
+			log.debug("[bridge] snap resolve failed, using literal point", ex);
+		}
+		return original;
+	}
+
+	private static java.util.List<Actor> npcsThenPlayers(WorldView wv)
+	{
+		final java.util.List<Actor> out = new java.util.ArrayList<>();
+		for (Actor a : wv.npcs())
+		{
+			out.add(a);
+		}
+		for (Actor a : wv.players())
+		{
+			out.add(a);
+		}
+		return out;
+	}
+
+	/** Centroid of a convex hull's vertices — guaranteed inside the (convex) shape, unlike the bbox centre. */
+	private static int[] hullCentroid(Shape hull)
+	{
+		final java.awt.geom.PathIterator it = hull.getPathIterator(null);
+		final double[] coords = new double[6];
+		double sx = 0;
+		double sy = 0;
+		int n = 0;
+		while (!it.isDone())
+		{
+			final int seg = it.currentSegment(coords);
+			if (seg == java.awt.geom.PathIterator.SEG_MOVETO || seg == java.awt.geom.PathIterator.SEG_LINETO)
+			{
+				sx += coords[0];
+				sy += coords[1];
+				n++;
+			}
+			it.next();
+		}
+		if (n == 0)
+		{
+			final Rectangle b = hull.getBounds();
+			return new int[]{(int) b.getCenterX(), (int) b.getCenterY()};
+		}
+		return new int[]{(int) (sx / n), (int) (sy / n)};
+	}
+
+	/** Euclidean distance from a point to a rectangle (0 if inside). */
+	private static double distToRect(int px, int py, Rectangle b)
+	{
+		final int dx = Math.max(Math.max(b.x - px, px - (b.x + b.width)), 0);
+		final int dy = Math.max(Math.max(b.y - py, py - (b.y + b.height)), 0);
+		return Math.sqrt((double) dx * dx + (double) dy * dy);
+	}
+
+	/** Finger radius in game-canvas pixels: how far from an entity a tap may land and still snap onto it. */
+	public static int snapRadius()
+	{
+		return SNAP_RADIUS;
 	}
 
 	/**

@@ -47,6 +47,7 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.config.RuneLiteConfig;
 import net.runelite.client.eventbus.EventBus;
+import net.runelite.client.headless.JavaBridge;
 import net.runelite.client.headless.MobileUiBridge;
 import net.runelite.client.input.MouseManager;
 import net.runelite.client.plugins.PluginManager;
@@ -108,6 +109,12 @@ public class HeadlessClientUI extends ClientUI
 			// component with PluginManager/ConfigManager/ClientThread injected; the facade itself stays a
 			// pure static JNI surface the native shell calls.
 			MobileUiBridge.init(pluginManager, configManager, clientThreadProvider.get(), rsClient);
+		}
+		if (JavaBridge.isEnabled())
+		{
+			// Give the touch bridge the client thread so left taps can snap to the nearest entity (resolved
+			// on the game thread, where scene geometry is safe to read).
+			JavaBridge.setClientThread(clientThreadProvider.get());
 		}
 
 		SwingUtilities.invokeAndWait(() ->
