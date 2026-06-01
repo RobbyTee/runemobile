@@ -36,6 +36,13 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- Java Sound (libjsound.dylib) enumerates audio devices at RuneLite audio init —
+	     DAUDIO_GetDirectAudioDeviceCount -> DAUDIO_RequestRecordPermission touches the
+	     microphone, and iOS TCC SIGABRTs the app without this usage string (the §6.2
+	     deterministic ~3.6s post-main kill, hs_err-free, confirmed via the TCC crash
+	     report). We never record; the string only satisfies TCC so the probe is allowed. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>RuneLite's audio system enumerates audio devices at startup; this app does not record.</string>
 	<!-- Expose Documents/hello-shell.log via Files.app for off-device retrieval. -->
 	<key>UIFileSharingEnabled</key>
 	<true/>

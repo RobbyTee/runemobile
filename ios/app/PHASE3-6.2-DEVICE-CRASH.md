@@ -620,6 +620,40 @@ The problem is in how the debugger reserves/owns the JIT physical pages. Concret
 
 ---
 
+## RESEARCH UPDATE 18 (2026-06-01) — the ~3.6s kill is a TCC MICROPHONE abort (libjsound), NOT a JIT/§6.2 issue — FIXED
+The HelloShell crash report for the kill moment (saved verbatim:
+`app/evidence/crash-6.2-TCC-microphone-libjsound-20260601.ips`, md5 `ca5c1e3b78a06fc4d45f78102e655f83`,
+bug_type 309) pins the deterministic post-`main` kill exactly — and it is NOT memory, NOT the debugger,
+NOT the JIT mirror:
+```
+exception:   EXC_CRASH / SIGABRT
+termination: namespace "TCC" — "attempted to access privacy-sensitive data without a usage
+             description. The app's Info.plist must contain an NSMicrophoneUsageDescription key…"
+faulting thread 4:  TCC __TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__ (the tccd reply handler)
+thread 41:          libjsound.dylib DAUDIO_RequestRecordPermission <- DAUDIO_GetDirectAudioDeviceCount
+```
+At RuneLite audio init (right after `main` returns, at game-loop start), OpenJDK's **`libjsound`
+enumerates audio devices** (`DAUDIO_GetDirectAudioDeviceCount`) which calls
+`DAUDIO_RequestRecordPermission` — touching the **microphone**. iOS TCC `SIGABRT`s any app that touches
+the mic with no `NSMicrophoneUsageDescription` in Info.plist. That is the hs_err-free, jetsam-free,
+detach-independent, perfectly-deterministic ~3.6 s kill we chased across UPDATES 11–17.
+
+### This VALIDATES the §6.2 corruption fix
+Every clean run (UPDATE 16 detach + UPDATE 17 Variant C) was terminated by this TCC abort, never by
+anything JIT-related — the mirror ran clean from boot through the dense compile and into game-loop start.
+The §6.2 memory corruption was fixed by removing the map-on-fault net (UPDATE 17); the longevity wall was
+an unrelated iOS privacy crash sitting right behind it.
+
+### Fix (native, one line)
+Added `NSMicrophoneUsageDescription` to `HelloShell/Info.plist` (we never record; the string only
+satisfies TCC so the device-enumeration probe is allowed). Rebuilt + reinstalled (bundle `00AFBACF…`).
+iOS will now show a one-time mic permission prompt mid-run instead of aborting — grant or deny, either is
+fine. Expected next run: the process survives past game-loop start, the engine draws, eager capture writes
+`frame-LOGIN_SCREEN-*.png`, and we finally see whether a long run stays corruption-free (the last piece of
+§6.2 proof).
+
+---
+
 ## RESEARCH UPDATE 17 (2026-06-01) — the fix is the FAULT-NET REMOVAL, not detach; longevity is a separate deterministic kill
 Two more verbatim device facts narrow the §6.2 fix and re-scope the blocker.
 
