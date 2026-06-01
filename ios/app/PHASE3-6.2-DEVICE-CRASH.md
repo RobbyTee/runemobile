@@ -620,6 +620,49 @@ The problem is in how the debugger reserves/owns the JIT physical pages. Concret
 
 ---
 
+## RESEARCH UPDATE 17 (2026-06-01) — the fix is the FAULT-NET REMOVAL, not detach; longevity is a separate deterministic kill
+Two more verbatim device facts narrow the §6.2 fix and re-scope the blocker.
+
+**(a) JetsamEvents RULE OUT a memory kill.** Pulled the device JetsamEvent reports bracketing the kill
+(`Downloads/JetsamEvent-2026-06-01-075034.ips` @07:50:34, 21 s after our process died, and `…-071730`).
+**HelloShell is absent from both** (scanned 493 and 645 processes); the 075034 event had **393 MB free**
+and only reaped `momentsd` (a tiny idle daemon, per-process-limit). So the ~3.6 s death is **NOT jetsam of
+our heap** — which explains the long-noted heap-independence (256m vs 512m never mattered).
+
+**(b) Variant C: stay attached, NO fault net, NO detach.** Re-ran with a script that services the single
+brk then stays attached-idle (no detach, no map-on-fault net). Evidence:
+`app/evidence/jvm-stdio-6.2-variantC-attached-noNet-20260601.log` (md5 `8c331bfd1765793aa972785920cbd21a`).
+Result: **identical to the detach run** — clean boot, `Client initialization took 2621ms`,
+`displayable=true`, `RuneLite.main returned`, **zero hs_err, zero crash markers**, then the process ended
+at the same post-`main` poll point (~250–1000 ms after `main`). No new hs_err across these runs either.
+
+### What this resolves
+- **Detach is NOT the corruption fix and NOT the longevity factor.** Attached (Variant C) and detached
+  (UPDATE 16) gave the *same* clean boot and the *same* ~3.6 s death. The earlier detach-reap hypothesis
+  (UPDATE 12) is refuted twice over.
+- **The fix is removing the map-on-fault safety net** — the one change common to both clean scripts. The
+  old net did `prepare_memory_region` + retry on every fault; that is the most likely cause of BOTH the
+  §6.2 corruption AND the old 90 s boots (UPDATE 7's slow boot vs today's 2.6 s). Net-present → slow +
+  corrupt; net-absent → fast + clean, regardless of attach/detach. ⇒ canonical script = **continuous
+  attach, no fault net** (Variant C, md5 `b2e86ed924d56032bc5f194dce61660f`) — minimal delta from the
+  known-good baseline, no detach edge cases.
+- **CAVEAT — corruption not yet PROVEN fixed:** every clean run died at ~3.6 s, BEFORE the ~90 s window
+  the corruption used to appear in. The fast clean boots are strong positive signal (they pass the dense
+  ~1500-method compile that used to corrupt), but a long-surviving run is still required to be definitive.
+
+### The real remaining blocker: a deterministic post-`main` process kill (~3.6 s)
+Not jetsam (a), not detach (b), not a JVM crash (no hs_err, ever, today). Deterministic at the instant the
+engine's game loop starts after `main` returns (`draws=0`, login buffers/scene spinning up). The W3 shell
+(`ViewController.m`: foreground `beginBackgroundTask` — largely inert while foreground — + a CADisplayLink
+dir-scan) is NOT keeping it alive past that phase. Leading candidate now: a **memory/CPU spike at
+game-loop start** tripping a kill whose report we haven't captured yet (the two JetsamEvents bracket but
+don't cover the exact ~07:50:13 death). NEXT: capture the death-moment report (newest Analytics entry
+immediately after a fresh repro, any name) to pin watchdog vs per-process-limit vs other, then target the
+longevity fix so a run survives into the game loop → confirm no corruption over a long run + land a login
+PNG.
+
+---
+
 ## RESEARCH UPDATE 16 (2026-06-01) — parity script device run: NO corruption (cleanest boot yet); longevity is now the gate
 First device test of the parity script (md5 `8810404d0e4a263b4c592f1eda83b8b4`) on a fresh full-tiered
 build (`17AA9660…`, full JRE, EXC_MASK cleared, Xmx256m). User ran 3–4 boots. Evidence saved verbatim:
