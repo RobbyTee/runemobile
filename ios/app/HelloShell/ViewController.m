@@ -226,11 +226,23 @@
     NSArray<NSString *> *files = [fm contentsOfDirectoryAtPath:self.captureDir error:nil];
     if (files.count == 0) return;
 
+    // Filenames are frame-<STATE>-<NNN>-draw<NNNNN>.png. Order by the embedded draw counter, NOT the
+    // whole name — the <STATE> prefix sorts first lexically, so a plain string max wrongly prefers
+    // "LOGIN_SCREEN" over "LOGGED_IN"/"LOADING" and pins the view to an early login frame even after the
+    // game world has loaded. Parse the integer after "draw" and keep the max.
     NSString *newest = nil;
+    long newestDraw = -1;
     for (NSString *f in files) {
         if (![f hasPrefix:@"frame-"] || ![f hasSuffix:@".png"]) continue;
-        // Filenames embed a zero-padded draw counter (…-drawNNNNN.png) so lexical max == newest.
-        if (newest == nil || [f compare:newest] == NSOrderedDescending) newest = f;
+        NSRange r = [f rangeOfString:@"draw" options:NSBackwardsSearch];
+        long draw = -1;
+        if (r.location != NSNotFound) {
+            draw = [[f substringFromIndex:r.location + r.length] longLongValue];   // "NNNNN.png" -> NNNNN
+        }
+        if (newest == nil || draw > newestDraw) {
+            newest = f;
+            newestDraw = draw;
+        }
     }
     if (newest == nil || [newest isEqualToString:self.lastFrameName]) return;
 
