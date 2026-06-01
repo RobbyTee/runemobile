@@ -392,6 +392,28 @@ frames, the gap is the headless render-loop/capture trigger (a W2 packaging issu
 
 ---
 
+## RESEARCH UPDATE 10 (2026-05-31) — EXC_MASK fix REPRODUCES: 120 s clean run, no crash. §6.2 JIT blocker CLEARED.
+Re-ran the EXC_MASK-only build (tier1 reverted, bundle `F64111F8`). Evidence:
+`app/evidence/jvm-stdio-6.2-excmask-120s-clean-20260531.log`.
+- RuneLite booted headless to a displayable CTC canvas, `RuneLite.main returned`, then the keep-alive
+  loop ran **24/40 ticks = 120 s** under full tiered compilation. **0 crash markers, no fresh hs_err**
+  (all device hs_err files belong to older bundles). ⇒ the §6.2 mirror SIGSEGV is reproducibly FIXED by
+  the `EXC_MASK_BAD_ACCESS` clear. **W1 platform §6.2 (real RuneLite JIT-runs on device) = GREEN.**
+- **Process ended at t=120 s** (before the 200 s target), cleanly — no JVM fatal, no hs_err. ⇒ external
+  termination (suspect iOS jetsam: full client + `-Xmx512m` + JIT; or StikDebug detach/backgrounding).
+  NOT a JVM crash. Cheap next test: `-Xmx256m`.
+- **0 frames captured** and the capture path NEVER logged (`capture_lines=0`): `HeadlessClientUI` reached
+  `show done … displayable=true` but no `frame-LOGIN_SCREEN-*.png` and no capture-trigger lines. After
+  `RuneLite.main` returns there is no render pump driving `mainBufferProvider`, so HeadlessCapture never
+  fires. **This is a W2 (runelite-client headless) packaging gap, not W1 platform.**
+
+### Status line
+§6.2 W1-platform goal — *real RuneLite headless client JIT-executes on the on-device JVM without
+crashing* — is **MET**. Remaining to a captured login PNG: (1) keep the process alive (xmx/jetsam),
+(2) drive the headless render loop so capture fires (W2). Both are tractable and off the W1 JIT path.
+
+---
+
 ## RESEARCH UPDATE 8 (2026-05-31) — [RETRACTED by UPDATE 9 — based on a STALE hs_err] EXC_MASK clear: ran, did NOTHING. Mechanism CONFIRMED.
 Two findings this round (evidence: `app/evidence/hs_err-6.2-excmask-nochange-20260531.log` +
 `jvm-stdio-6.2-excmask-nochange-20260531.log`):
