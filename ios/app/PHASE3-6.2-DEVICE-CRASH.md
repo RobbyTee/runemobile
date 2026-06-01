@@ -420,6 +420,36 @@ crashing* — is **MET**. Remaining to a captured login PNG: (1) keep the proces
 
 ---
 
+## RESEARCH UPDATE 11 (2026-05-31) — capture gap REPRODUCES ON DESKTOP → it's W2, not device/jetsam
+Device run (build `E92B4A61`, `-Xmx256m`, bundle data `8C1801B9`): JVM healthy again — `[JIT26]` mirror,
+CTC active, **`injected-client 26527618741.147` (real OSRS gamepack ran)**, `show done … displayable=true`,
+`Client initialization took 2505ms`, `RuneLite.main returned`. **No SIGSEGV / no hs_err / no OOM.** But:
+NONE of the new `[boot] keep-alive tick` lines appear → the app process was killed within ~5 s of
+`main` returning (faster than the 512m run's ~1 min — so termination timing is variable / not cleanly
+memory-monotonic; do NOT claim 256m helped). `rl-capture/` empty.
+
+**Then reproduced on DESKTOP** (`run-headless-unsafepoke.sh`, 30 s, full JDK 21, no device): identical
+shape — `HeadlessCapture ENABLED`, `[headless] init done`, `show done` (canvas displayable), then
+`Client initialization took 2014ms` and the log ENDS. **`draw#` count = 0, frames = 0.** So
+`Hooks.draw` is never driven and capture never fires **even on desktop**. ⇒ the capture gap is NOT a
+device/jetsam artifact — it's a **W2 headless render-loop wiring issue**, reproducible off-device (fast
+iteration, no phone, no StikDebug).
+
+This also CHECKS the brief's "§6.2 GREEN on desktop (renders login PNG)" claim: not reproduced in this
+30 s run (0 draws/frames). Most likely the run is too short for the engine to start its render thread /
+reach a login-screen draw (gamepack/cache warm-up), OR the GREEN was on a longer run. Unverified either
+way — needs a longer desktop run + confirming the engine actually enters its draw loop before asserting.
+
+### Net for §6.2
+- **W1 platform (the hard part): DONE** — real RuneLite JIT-runs on the device JVM without crashing
+  (EXC_MASK fix, UPDATE 9/10). This was the §6.2 blocker.
+- **Capture to a PNG: open, and now a DESKTOP-side W2 task** — get the headless engine to actually drive
+  `Hooks.draw` (longer run and/or wire a render pump), verify frames land on desktop, THEN one device
+  confirm. No more blind device round-trips for this.
+- **Process longevity on device**: separate, revisit only once capture works on desktop.
+
+---
+
 ## RESEARCH UPDATE 8 (2026-05-31) — [RETRACTED by UPDATE 9 — based on a STALE hs_err] EXC_MASK clear: ran, did NOTHING. Mechanism CONFIRMED.
 Two findings this round (evidence: `app/evidence/hs_err-6.2-excmask-nochange-20260531.log` +
 `jvm-stdio-6.2-excmask-nochange-20260531.log`):
