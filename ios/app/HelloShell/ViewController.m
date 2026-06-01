@@ -241,9 +241,9 @@
     self.lastFrameName = newest;
     self.screen.image = img;
     self.framesShown++;
-    if (self.framesShown == 1 || self.framesShown % 10 == 0) {
-        [self appendLine:[NSString stringWithFormat:@"[shell] showing %@ (#%d)", newest, self.framesShown]];
-    }
+    // Log every frame swap so the on-screen progression (and survival) is self-evident — the run is
+    // long-lived now, so this is a live readout of the engine drawing, not a one-shot.
+    [self appendLine:[NSString stringWithFormat:@"[shell] showing %@ (#%d)", newest, self.framesShown]];
 }
 
 - (void)endBgTask {

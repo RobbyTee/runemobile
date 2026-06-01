@@ -127,6 +127,9 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     NSString *shadedPath = [[NSBundle mainBundle] pathForResource:@"client-1.12.28-SNAPSHOT-shaded" ofType:@"jar"];
     NSString *classpath  = shadedPath ? [NSString stringWithFormat:@"%@:%@", shadedPath, jarPath] : jarPath;
     NSString *captureDir = [docs stringByAppendingPathComponent:@"rl-capture"];
+    // Clear stale frames from prior runs: the draw counter resets each launch, so an old run's
+    // higher-numbered frame would otherwise win the W3 shell's lexical-newest pick (and disk grows).
+    [[NSFileManager defaultManager] removeItemAtPath:captureDir error:nil];
     [[NSFileManager defaultManager] createDirectoryAtPath:captureDir withIntermediateDirectories:YES attributes:nil error:nil];
     (void)glyphPng;
 
@@ -181,12 +184,15 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
                                                   // increased-memory-limit entitlement)
         [NSString stringWithFormat:@"-Duser.home=%@", docs],                       // -> <docs>/.runelite
         [NSString stringWithFormat:@"-Drunelite.headless.capture.dir=%@", captureDir],
-        @"-Drunelite.headless.capture.interval=2",  // eager: grab the first login frames the instant the
-                                                    // engine starts drawing (device process is short-lived)
-        // With the W3 shell's background-task assertion + active render loop keeping the process alive,
-        // capture a fuller set and keep running so the on-screen render loop has frames to display.
-        @"-Dheadless.runSeconds=60",                // poll cap; DeviceHeadlessBoot exits early on target
-        @"-Dheadless.captureTargetFrames=8",
+        // Steady capture cadence (the §6.2 TCC fix made the process long-lived, so the old eager
+        // interval=2/preLoginMax=6/exit-at-8 burst is no longer needed): grab a fresh login frame
+        // ~every 10th draw so the W3 shell shows the LIVE, animated, complete login screen for the
+        // whole window, and keep enough budget that it never freezes mid-run.
+        @"-Drunelite.headless.capture.interval=10",
+        @"-Drunelite.headless.capture.preLoginMax=60",  // ~60 login frames over the window (live demo)
+        @"-Dheadless.runSeconds=60",                // run the full window — the clean "timeout" line is the
+                                                    // sustained-runtime proof (process survived 60s post-main)
+        @"-Dheadless.captureTargetFrames=999",      // don't early-exit at the login screen; ride the window
         [NSString stringWithFormat:@"-Djava.home=%@", javaHome],
         [NSString stringWithFormat:@"-Djava.library.path=%@", frameworks],
         [NSString stringWithFormat:@"-Djava.class.path=%@", classpath],
