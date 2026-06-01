@@ -177,8 +177,10 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         [NSString stringWithFormat:@"-Drunelite.headless.capture.dir=%@", captureDir],
         @"-Drunelite.headless.capture.interval=2",  // eager: grab the first login frames the instant the
                                                     // engine starts drawing (device process is short-lived)
-        @"-Dheadless.runSeconds=30",                // poll cap; DeviceHeadlessBoot exits early on frames
-        @"-Dheadless.captureTargetFrames=3",
+        // With the W3 shell's background-task assertion + active render loop keeping the process alive,
+        // capture a fuller set and keep running so the on-screen render loop has frames to display.
+        @"-Dheadless.runSeconds=60",                // poll cap; DeviceHeadlessBoot exits early on target
+        @"-Dheadless.captureTargetFrames=8",
         [NSString stringWithFormat:@"-Djava.home=%@", javaHome],
         [NSString stringWithFormat:@"-Djava.library.path=%@", frameworks],
         [NSString stringWithFormat:@"-Djava.class.path=%@", classpath],

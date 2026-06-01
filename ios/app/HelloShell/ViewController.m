@@ -12,6 +12,19 @@
 @property (nonatomic, strong) NSFileHandle *logFile;
 @property (nonatomic, assign) int jvmFd;   // raw fd for crash-proof libjvm stdout/stderr
 @property (nonatomic, assign) BOOL launched;
+
+// W3 native shell: keep the process alive + show frames. The JVM ran fine on device but iOS
+// jetsam'd the (idle-UI) process within ~250 ms — before the engine drew its first frame. Two
+// protections: (1) a UIBackgroundTask assertion so the OS treats the JVM run as important work and
+// won't suspend/kill it; (2) an ACTIVE CADisplayLink render loop that polls the capture dir and
+// blits the newest frame-*.png to an on-screen image view — keeping the app in the foreground
+// "actively rendering" jetsam band AND showing the live login screen (the start of the real UI).
+@property (nonatomic, strong) UIImageView *screen;
+@property (nonatomic, strong) CADisplayLink *displayLink;
+@property (nonatomic, assign) UIBackgroundTaskIdentifier bgTask;
+@property (nonatomic, copy)   NSString *captureDir;
+@property (nonatomic, copy)   NSString *lastFrameName;
+@property (nonatomic, assign) int framesShown;
 @end
 
 @implementation ViewController
@@ -19,6 +32,7 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor blackColor];
+    self.bgTask = UIBackgroundTaskInvalid;
     [self buildUI];
     [self openLogFile];
     [self appendLine:@"HelloShell — W1 minimal JVM shell"];
@@ -54,6 +68,14 @@
                 forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.canaryButton];
 
+    // The game screen: where captured RuneLite frames are blitted live (W3 shell start).
+    self.screen = [[UIImageView alloc] init];
+    self.screen.translatesAutoresizingMaskIntoConstraints = NO;
+    self.screen.backgroundColor = [UIColor colorWithWhite:0.06 alpha:1.0];
+    self.screen.contentMode = UIViewContentModeScaleAspectFit;
+    self.screen.layer.magnificationFilter = kCAFilterNearest;   // crisp pixel art
+    [self.view addSubview:self.screen];
+
     self.console = [[UITextView alloc] init];
     self.console.translatesAutoresizingMaskIntoConstraints = NO;
     self.console.editable = NO;
@@ -72,7 +94,13 @@
         [self.canaryButton.centerYAnchor constraintEqualToAnchor:self.launchButton.centerYAnchor],
         [self.canaryButton.leadingAnchor constraintEqualToAnchor:self.launchButton.trailingAnchor constant:24],
 
-        [self.console.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor constant:8],
+        // Game screen takes the upper ~55% (765x503 aspect renders large); console below it.
+        [self.screen.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor constant:8],
+        [self.screen.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:6],
+        [self.screen.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-6],
+        [self.screen.heightAnchor constraintEqualToAnchor:g.heightAnchor multiplier:0.55],
+
+        [self.console.topAnchor constraintEqualToAnchor:self.screen.bottomAnchor constant:6],
         [self.console.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:6],
         [self.console.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-6],
         [self.console.bottomAnchor constraintEqualToAnchor:g.bottomAnchor constant:-6],
@@ -155,18 +183,74 @@
     [self.jitTimer invalidate];
     [self captureStdio];
 
+    // (1) Background-task assertion: tell iOS this is important in-progress work so it won't
+    // suspend/kill the process while the JVM runs off-main. (The device jetsam'd the idle-UI
+    // process within ~250 ms before; this is the primary longevity fix.)
+    self.bgTask = [[UIApplication sharedApplication]
+        beginBackgroundTaskWithName:@"jvm-run" expirationHandler:^{
+            [self appendLine:@"[shell] background task expiring"];
+            [self endBgTask];
+        }];
+    [self appendLine:[NSString stringWithFormat:@"[shell] bgTask=%lu", (unsigned long)self.bgTask]];
+
+    // (2) Active render loop: poll the capture dir and blit the newest frame every screen refresh.
+    // Keeps the app foreground-active+rendering (top jetsam band) AND shows the login screen live.
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    self.captureDir = [docs stringByAppendingPathComponent:@"rl-capture"];
+    self.framesShown = 0;
+    self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(onDisplayTick)];
+    [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+
     JVMLogSink log = ^(NSString *line) { [self appendLine:line]; };
     [self appendLine:@"--- launching JVM on worker thread ---"];
 
-    // JLI_Launch blocks; run off the main thread. (It will not return until
-    // Hello.main completes, so the UI stays responsive to read the log.)
     JVMLauncher *launcher = [[JVMLauncher alloc] init];
     NSThread *t = [[NSThread alloc] initWithBlock:^{
         [launcher runProbesWithLog:log];
+        // VM lifecycle done; let the render loop drain a beat, then release the assertion.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self appendLine:@"[shell] JVM thread returned"];
+            [self endBgTask];
+        });
     }];
     t.stackSize = 16 * 1024 * 1024;
     t.name = @"jvm-main";
     [t start];
+}
+
+// Called every screen refresh once the JVM is running. Finds the newest frame-*.png in the
+// capture dir and shows it. Cheap when nothing new (just a dir scan); the point is twofold —
+// keep the app actively rendering (jetsam protection) and surface the live login screen.
+- (void)onDisplayTick {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSArray<NSString *> *files = [fm contentsOfDirectoryAtPath:self.captureDir error:nil];
+    if (files.count == 0) return;
+
+    NSString *newest = nil;
+    for (NSString *f in files) {
+        if (![f hasPrefix:@"frame-"] || ![f hasSuffix:@".png"]) continue;
+        // Filenames embed a zero-padded draw counter (…-drawNNNNN.png) so lexical max == newest.
+        if (newest == nil || [f compare:newest] == NSOrderedDescending) newest = f;
+    }
+    if (newest == nil || [newest isEqualToString:self.lastFrameName]) return;
+
+    NSString *path = [self.captureDir stringByAppendingPathComponent:newest];
+    UIImage *img = [UIImage imageWithContentsOfFile:path];
+    if (img == nil) return;   // mid-write; try again next tick
+
+    self.lastFrameName = newest;
+    self.screen.image = img;
+    self.framesShown++;
+    if (self.framesShown == 1 || self.framesShown % 10 == 0) {
+        [self appendLine:[NSString stringWithFormat:@"[shell] showing %@ (#%d)", newest, self.framesShown]];
+    }
+}
+
+- (void)endBgTask {
+    if (self.bgTask != UIBackgroundTaskInvalid) {
+        [[UIApplication sharedApplication] endBackgroundTask:self.bgTask];
+        self.bgTask = UIBackgroundTaskInvalid;
+    }
 }
 
 @end
