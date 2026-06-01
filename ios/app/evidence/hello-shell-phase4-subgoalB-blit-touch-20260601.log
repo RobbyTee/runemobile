@@ -1,0 +1,135 @@
+HelloShell — W1 minimal JVM shell
+jre: /private/var/containers/Bundle/Application/231D969D-562A-4DFC-9ABD-81F2B6D2422A/HelloShell.app/jre
+Waiting for StikDebug attach (CS_DEBUGGED)…
+Assign the iOS-26 JIT script to this app in StikDebug, then attach.
+StikDebug attached — CS_DEBUGGED set. Tap Start JVM.
+(JVM stdout/stderr -> Documents/jvm-stdio.log)
+[shell] bgTask=3
+--- launching JVM on worker thread ---
+[jvm] JAVA_HOME = /private/var/containers/Bundle/Application/231D969D-562A-4DFC-9ABD-81F2B6D2422A/HelloShell.app/jre
+[jvm] dlopen /private/var/containers/Bundle/Application/231D969D-562A-4DFC-9ABD-81F2B6D2422A/HelloShell.app/jre/lib/server/libjvm.dylib
+[jvm] JNI_CreateJavaVM resolved
+[jx] JX_* set: displayName='MarkingEclip' characterId=368557716 session=2Oy4x7… access=empty refresh=empty
+[jvm] autologin ARMED: EULA 302,312 (idx 12) -> Play Now 382,248, world 301/oldschool1
+[jvm] opt[0] = -XX:+UnlockExperimentalVMOptions
+[jvm] opt[1] = -XX:+MirrorMappedCodeCache
+[jvm] opt[2] = -XX:+DisablePrimordialThreadGuardPages
+[jvm] opt[3] = -XX:-UseCompressedClassPointers
+[jvm] opt[4] = -XX:ReservedCodeCacheSize=64m
+[jvm] opt[5] = -Djava.awt.headless=false
+[jvm] opt[6] = --add-exports=java.desktop/java.awt=ALL-UNNAMED
+[jvm] opt[7] = --add-exports=java.desktop/java.awt.peer=ALL-UNNAMED
+[jvm] opt[8] = --add-exports=java.desktop/sun.awt.image=ALL-UNNAMED
+[jvm] opt[9] = --add-exports=java.desktop/sun.java2d=ALL-UNNAMED
+[jvm] opt[10] = --add-exports=java.desktop/java.awt.dnd.peer=ALL-UNNAMED
+[jvm] opt[11] = --add-exports=java.desktop/sun.awt=ALL-UNNAMED
+[jvm] opt[12] = --add-exports=java.desktop/sun.awt.event=ALL-UNNAMED
+[jvm] opt[13] = --add-exports=java.desktop/sun.awt.datatransfer=ALL-UNNAMED
+[jvm] opt[14] = --add-exports=java.base/sun.security.action=ALL-UNNAMED
+[jvm] opt[15] = --add-opens=java.base/java.util=ALL-UNNAMED
+[jvm] opt[16] = --add-opens=java.desktop/java.awt=ALL-UNNAMED
+[jvm] opt[17] = --add-opens=java.desktop/sun.java2d=ALL-UNNAMED
+[jvm] opt[18] = --add-opens=java.base/java.lang.reflect=ALL-UNNAMED
+[jvm] opt[19] = -Xmx256m
+[jvm] opt[20] = -Duser.home=/var/mobile/Containers/Data/Application/81995BFB-886C-48E1-ABAB-C6E052992A2C/Documents
+[jvm] opt[21] = -Drunelite.headless.capture.dir=/var/mobile/Containers/Data/Application/81995BFB-886C-48E1-ABAB-C6E052992A2C/Documents/rl-capture
+[jvm] opt[22] = -Drunelite.bridge=true
+[jvm] opt[23] = -Drunelite.headless.capture.interval=10
+[jvm] opt[24] = -Drunelite.headless.capture.preLoginMax=40
+[jvm] opt[25] = -Dheadless.runSeconds=240
+[jvm] opt[26] = -Dheadless.captureTargetFrames=999
+[jvm] opt[27] = -Djava.home=/private/var/containers/Bundle/Application/231D969D-562A-4DFC-9ABD-81F2B6D2422A/HelloShell.app/jre
+[jvm] opt[28] = -Djava.library.path=/private/var/containers/Bundle/Application/231D969D-562A-4DFC-9ABD-81F2B6D2422A/HelloShell.app/Frameworks
+[jvm] opt[29] = -Djava.class.path=/private/var/containers/Bundle/Application/231D969D-562A-4DFC-9ABD-81F2B6D2422A/HelloShell.app/client-1.12.28-SNAPSHOT-shaded.jar:/private/var/containers/Bundle/Application/231D969D-562A-4DFC-9ABD-81F2B6D2422A/HelloShell.app/probes.jar
+[jvm] opt[30] = -Drunelite.headless.autologin=true
+[jvm] opt[31] = -Drunelite.headless.autologin.eula=true
+[jvm] opt[32] = -Drunelite.headless.autologin.eula.point=302,312
+[jvm] opt[33] = -Drunelite.headless.autologin.eula.loginIndex=12
+[jvm] opt[34] = -Drunelite.headless.autologin.point=382,248
+[jvm] opt[35] = -Drunelite.headless.autologin.world=301
+[jvm] opt[36] = -Drunelite.headless.autologin.worldAddress=oldschool1.runescape.com
+[jvm] cleared EXC_MASK_BAD_ACCESS port (Amethyst parity) kr=0
+[jvm] JNI_CreateJavaVM (HotSpot generates its template interpreter now)…
+[jvm] JavaVM created — HotSpot is up. Running probes…
+[jvm] ===== DeviceHeadlessBoot.main =====
+[shell] live blit frame #1 (765x503)
+[shell] live blit frame #60 (765x503)
+[shell] live blit frame #120 (765x503)
+[shell] live blit frame #180 (765x503)
+[shell] live blit frame #240 (765x503)
+[shell] live blit frame #300 (765x503)
+[shell] live blit frame #360 (765x503)
+[shell] live blit frame #420 (765x503)
+[shell] live blit frame #480 (765x503)
+[shell] live blit frame #540 (765x503)
+[shell] live blit frame #600 (765x503)
+[shell] touch DOWN -> game 352,234
+[shell] touch UP -> game 352,234
+[shell] live blit frame #660 (765x503)
+[shell] live blit frame #720 (765x503)
+[shell] touch DOWN -> game 172,151
+[shell] touch UP -> game 172,151
+[shell] live blit frame #780 (765x503)
+[shell] live blit frame #840 (765x503)
+[shell] live blit frame #900 (765x503)
+[shell] touch DOWN -> game 378,126
+[shell] touch UP -> game 378,126
+[shell] live blit frame #960 (765x503)
+[shell] live blit frame #1020 (765x503)
+[shell] live blit frame #1080 (765x503)
+[shell] touch DOWN -> game 416,272
+[shell] touch UP -> game 416,272
+[shell] live blit frame #1140 (765x503)
+[shell] live blit frame #1200 (765x503)
+[shell] live blit frame #1260 (765x503)
+[shell] live blit frame #1320 (765x503)
+[shell] touch DOWN -> game 79,252
+[shell] live blit frame #1380 (765x503)
+[shell] touch UP -> game 79,252
+[shell] live blit frame #1440 (765x503)
+[shell] live blit frame #1500 (765x503)
+[shell] live blit frame #1560 (765x503)
+[shell] touch DOWN -> game 178,342
+[shell] live blit frame #1620 (765x503)
+[shell] touch DOWN -> game 88,238
+[shell] live blit frame #1680 (765x503)
+[shell] live blit frame #1740 (765x503)
+[shell] live blit frame #1800 (765x503)
+[shell] live blit frame #1860 (765x503)
+[shell] live blit frame #1920 (765x503)
+[shell] live blit frame #1980 (765x503)
+[shell] live blit frame #2040 (765x503)
+[shell] live blit frame #2100 (765x503)
+[shell] touch DOWN -> game 660,111
+[shell] touch UP -> game 660,111
+[shell] live blit frame #2160 (765x503)
+[shell] live blit frame #2220 (765x503)
+[shell] live blit frame #2280 (765x503)
+[shell] live blit frame #2340 (765x503)
+[shell] live blit frame #2400 (765x503)
+[shell] live blit frame #2460 (765x503)
+[shell] live blit frame #2520 (765x503)
+[shell] live blit frame #2580 (765x503)
+[shell] live blit frame #2640 (765x503)
+[shell] live blit frame #2700 (765x503)
+[shell] live blit frame #2760 (765x503)
+[shell] live blit frame #2820 (765x503)
+[shell] live blit frame #2880 (765x503)
+[shell] live blit frame #2940 (765x503)
+[shell] live blit frame #3000 (765x503)
+[shell] live blit frame #3060 (765x503)
+[shell] live blit frame #3120 (765x503)
+[shell] live blit frame #3180 (765x503)
+[shell] live blit frame #3240 (765x503)
+[shell] live blit frame #3300 (765x503)
+[shell] live blit frame #3360 (765x503)
+[shell] touch DOWN -> game 231,246
+[shell] touch UP -> game 231,246
+[shell] live blit frame #3420 (765x503)
+[shell] live blit frame #3480 (765x503)
+[shell] live blit frame #3540 (765x503)
+[shell] live blit frame #3600 (765x503)
+[shell] live blit frame #3660 (765x503)
+[shell] live blit frame #3720 (765x503)
+[shell] live blit frame #3780 (765x503)
+[shell] live blit frame #3840 (765x503)
