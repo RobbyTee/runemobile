@@ -36,7 +36,7 @@ static jclass    gBridgeClass = NULL; // global ref to net.runelite.client.headl
 static jmethodID gMidW = NULL, gMidH = NULL, gMidSeq = NULL, gMidPixels = NULL;
 static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidMove = NULL;
 static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
-static jmethodID gMidInputOpen = NULL;
+static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
 
 // Resolve + cache the JavaBridge facade on the calling (main) thread. Returns YES once usable.
 static BOOL ensureBridge(void) {
@@ -70,8 +70,9 @@ static BOOL ensureBridge(void) {
     gMidText   = (*env)->GetStaticMethodID(env, global, "onText", "(Ljava/lang/String;)V");
     gMidKey    = (*env)->GetStaticMethodID(env, global, "onKeyStroke", "(I)V");
     gMidInputOpen = (*env)->GetStaticMethodID(env, global, "isTextInputOpen", "()Z");
+    gMidClearHover = (*env)->GetStaticMethodID(env, global, "clearHover", "()V");
     if (!gMidW || !gMidH || !gMidSeq || !gMidPixels || !gMidTouch || !gMidClick || !gMidMove
-        || !gMidWheel || !gMidCamera || !gMidText || !gMidKey || !gMidInputOpen) {
+        || !gMidWheel || !gMidCamera || !gMidText || !gMidKey || !gMidInputOpen || !gMidClearHover) {
         (*env)->ExceptionClear(env);
         (*env)->DeleteGlobalRef(env, global);   // don't leak the class ref on the retry path
         return NO;                              // retry next tick (the class may load just after bringup)
@@ -492,6 +493,13 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidCamera, (jint)dx, (jint)dy);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)postClearHover {
+    if (!ensureBridge()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidClearHover);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 

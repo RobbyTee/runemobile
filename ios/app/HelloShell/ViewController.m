@@ -487,6 +487,9 @@ static NSString * const kKbSentinel = @"​";
     if (![JVMLauncher bridgeReady] || self.menuOpen) return;
     if (g.state == UIGestureRecognizerStateBegan) {
         [g setTranslation:CGPointZero inView:self.screen];
+        // A camera drag moves the world, not the pointer — so clear any frozen hover first, otherwise
+        // scenery rotating under the stale cursor lights up and the next walk-tap mis-clicks it.
+        [JVMLauncher postClearHover];
         [self appendLine:@"[shell] camera pan begin (1-finger)"];
         return;
     }
@@ -508,6 +511,7 @@ static NSString * const kKbSentinel = @"​";
     if (g.state == UIGestureRecognizerStateBegan) {
         self.pinchPrevScale = g.scale;
         self.wheelAccum = 0;
+        [JVMLauncher postClearHover];   // zoom moves the world too; don't leave a stale hover behind
         return;
     }
     if (g.state != UIGestureRecognizerStateChanged) return;

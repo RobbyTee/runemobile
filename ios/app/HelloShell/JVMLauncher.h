@@ -66,6 +66,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// yaw/pitch targets directly (no middle-mouse). Call on the main thread.
 + (void)postCameraDx:(int)dx dy:(int)dy;
 
+/// Make the engine pointer "absent" (JavaBridge.clearHover -> MOUSE_EXITED) so nothing stays highlighted.
+/// Call when a camera/pinch gesture begins: a camera drag moves the world, not the cursor, so a frozen
+/// cursor would otherwise light up (and let you mis-click) whatever scenery rotates under it. Main thread.
++ (void)postClearHover;
+
 /// Type committed text via JavaBridge.onText (KEY_PRESSED+KEY_TYPED+KEY_RELEASED per char). From the
 /// hidden UITextField's change callback. Call on the main thread.
 + (void)postText:(NSString *)text;

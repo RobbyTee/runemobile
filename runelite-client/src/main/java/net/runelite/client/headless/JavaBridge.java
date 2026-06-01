@@ -37,8 +37,11 @@ import java.awt.event.MouseWheelEvent;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
+import net.runelite.api.GameObject;
 import net.runelite.api.GameState;
 import net.runelite.api.MainBufferProvider;
+import net.runelite.api.Scene;
+import net.runelite.api.Tile;
 import net.runelite.api.VarClientInt;
 import net.runelite.api.WorldView;
 import net.runelite.client.callback.ClientThread;
@@ -99,7 +102,8 @@ public final class JavaBridge
 	private static volatile ClientThread clientThread;
 	private static final boolean SNAP_ENABLED =
 		Boolean.parseBoolean(System.getProperty("runelite.touch.snap", "true"));
-	private static final int SNAP_RADIUS = Integer.getInteger("runelite.touch.snapRadius", 18);
+	// ~30 game px on the 1189-wide canvas ≈ ~4 mm on the device panel ≈ a fingertip contact radius.
+	private static final int SNAP_RADIUS = Integer.getInteger("runelite.touch.snapRadius", 30);
 	private static volatile int snapCount;
 
 	// Published complete frames for the live blit. The native side reads at the display refresh (up to
@@ -117,7 +121,9 @@ public final class JavaBridge
 	private static boolean useA = true;
 
 	// Input bookkeeping (only ever touched from the single native UI thread that drives onTouch/onClick).
-	private static boolean focused;
+	private static boolean focused;       // FocusEvent gained — keyboard/mouse accepted
+	private static volatile boolean entered;  // MOUSE_ENTERED posted — pointer currently "present" (volatile:
+	                                      // clearHover may run from the client thread after a snap tap)
 	private static boolean pressed;
 	private static int pressButton = MouseEvent.BUTTON1;
 
@@ -257,18 +263,44 @@ public final class JavaBridge
 	}
 
 	/**
-	 * Assert focus + pointer position on the very first pointer interaction (focus, then a
-	 * {@code MOUSE_ENTERED} so the gamepack samples the pointer) — exactly what {@code HeadlessLogin}
-	 * primes before its scripted click.
+	 * Assert focus + pointer <em>presence</em> for an interaction: focus once, then a {@code MOUSE_ENTERED}
+	 * if the pointer is currently "absent" (we exit it after taps / on camera drags so nothing stays
+	 * highlighted — see {@link #clearHover()}). Mirrors what {@code HeadlessLogin} primes before a click.
 	 */
 	private static void primeFocus(EventQueue q, Canvas canvas, long t, int x, int y)
 	{
-		final boolean wasFocused = focused;
 		ensureFocus(q, canvas);
-		if (!wasFocused)
+		if (!entered)
 		{
 			q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_ENTERED, t, 0, x, y, 0, false));
+			entered = true;
 		}
+	}
+
+	/**
+	 * Make the engine's pointer "absent" — post a {@code MOUSE_EXITED} so nothing stays hovered/highlighted.
+	 * On a touch device there is no persistent cursor: a finger is only "on" the screen during a tap. Without
+	 * this, the engine's mouse stays frozen at the last tap point, and a one-finger <em>camera</em> drag
+	 * (which moves the world, not the pointer) rotates scenery <em>under</em> that frozen point — so random
+	 * objects light up and a stale left-click action builds there, which the next walk-tap then triggers.
+	 * The native shell calls this when a camera/pinch gesture begins (and we exit after each tap), so the
+	 * highlight only ever appears at the point you are actually tapping.
+	 */
+	public static void clearHover()
+	{
+		if (!entered)
+		{
+			return;
+		}
+		final Canvas canvas = liveCanvas();
+		if (canvas == null)
+		{
+			return;
+		}
+		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+		final long t = System.currentTimeMillis();
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_EXITED, t, 0, -1, -1, 0, false));
+		entered = false;
 	}
 
 	/**
@@ -332,11 +364,20 @@ public final class JavaBridge
 			0, x, y, 1, false, awtButton));
 	}
 
+	// Mutable accumulator for the nearest snap candidate (kept off the hot path; one per resolveSnap call).
+	private static final class Nearest
+	{
+		Shape shape;
+		double dist = Double.MAX_VALUE;
+		boolean exact;  // the tap already lands inside a clickbox -> don't snap
+	}
+
 	/**
-	 * Touch-forgiveness resolver — MUST run on the client thread. Returns the point to click: the original
-	 * {@code (x,y)} if it already lands on an entity clickbox or nothing interactable is within
-	 * {@link #snapRadius()}, else the nearest entity's clickbox centroid. v1 considers NPCs + players (the
-	 * highest-value fat-finger targets: combat / talk / follow); ground items + scene objects are a follow-up.
+	 * Touch-forgiveness resolver — MUST run on the client thread (scene geometry is only safe to read there).
+	 * Returns the point to click: the original {@code (x,y)} if it already lands inside a clickbox or nothing
+	 * interactable is within {@link #snapRadius()}, else the nearest candidate's clickbox centroid. Considers
+	 * NPCs, players, and scene objects (game/wall/ground/decorative — trees, rocks, doors, banks, …) on the
+	 * current plane. Ground items are intentionally excluded (their left-click default is "Walk here" anyway).
 	 */
 	static int[] resolveSnap(Client c, int x, int y)
 	{
@@ -348,39 +389,70 @@ public final class JavaBridge
 			{
 				return original;
 			}
+			final Nearest near = new Nearest();
 			final int r = snapRadius();
-			Shape best = null;
-			double bestDist = Double.MAX_VALUE;
-			// NPCs first, then players — so on a distance tie the NPC wins (combat/quest targets).
-			for (Actor a : npcsThenPlayers(wv))
+
+			// Actors first (NPCs then players) — on a distance tie an actor outranks scenery.
+			for (Actor a : wv.npcs())
 			{
-				final Shape hull = a.getConvexHull();
-				if (hull == null)
+				if (consider(a.getConvexHull(), x, y, r, near))
 				{
-					continue;
-				}
-				if (hull.contains(x, y))
-				{
-					return original; // exact hit — the engine already lands inside this clickbox
-				}
-				final Rectangle b = hull.getBounds();
-				if (b.width <= 0 || b.height <= 0)
-				{
-					continue;
-				}
-				final double d = distToRect(x, y, b);
-				if (d <= r && d < bestDist)
-				{
-					bestDist = d;
-					best = hull;
+					return original;
 				}
 			}
-			if (best != null)
+			for (Actor a : wv.players())
 			{
-				final int[] cen = hullCentroid(best);
+				if (consider(a.getConvexHull(), x, y, r, near))
+				{
+					return original;
+				}
+			}
+
+			// Scene objects on the current plane.
+			final Scene scene = wv.getScene();
+			final int plane = wv.getPlane();
+			final Tile[][][] tiles = scene == null ? null : scene.getTiles();
+			if (tiles != null && plane >= 0 && plane < tiles.length)
+			{
+				for (Tile[] row : tiles[plane])
+				{
+					if (row == null)
+					{
+						continue;
+					}
+					for (Tile tile : row)
+					{
+						if (tile == null)
+						{
+							continue;
+						}
+						final GameObject[] gos = tile.getGameObjects();
+						if (gos != null)
+						{
+							for (GameObject go : gos)
+							{
+								if (go != null && consider(go.getClickbox(), x, y, r, near))
+								{
+									return original;
+								}
+							}
+						}
+						if (considerObj(tile.getWallObject(), x, y, r, near)
+							|| considerObj(tile.getGroundObject(), x, y, r, near)
+							|| considerObj(tile.getDecorativeObject(), x, y, r, near))
+						{
+							return original;
+						}
+					}
+				}
+			}
+
+			if (near.shape != null)
+			{
+				final int[] cen = hullCentroid(near.shape);
 				snapCount++;
 				log.info("[bridge] tap-snap {},{} -> {},{} (dist {}px, #{} this session)",
-					x, y, cen[0], cen[1], (int) bestDist, snapCount);
+					x, y, cen[0], cen[1], (int) near.dist, snapCount);
 				return cen;
 			}
 		}
@@ -392,18 +464,38 @@ public final class JavaBridge
 		return original;
 	}
 
-	private static java.util.List<Actor> npcsThenPlayers(WorldView wv)
+	/** {@link TileObject} overload of {@link #consider(Shape, int, int, int, Nearest)} (uses its clickbox). */
+	private static boolean considerObj(net.runelite.api.TileObject o, int x, int y, int r, Nearest near)
 	{
-		final java.util.List<Actor> out = new java.util.ArrayList<>();
-		for (Actor a : wv.npcs())
+		return o != null && consider(o.getClickbox(), x, y, r, near);
+	}
+
+	/**
+	 * Fold one candidate clickbox into {@code near}. Returns {@code true} iff the tap is already inside it
+	 * (an exact hit — caller should abandon snapping and use the literal point).
+	 */
+	private static boolean consider(Shape s, int x, int y, int r, Nearest near)
+	{
+		if (s == null)
 		{
-			out.add(a);
+			return false;
 		}
-		for (Actor a : wv.players())
+		if (s.contains(x, y))
 		{
-			out.add(a);
+			return true;
 		}
-		return out;
+		final Rectangle b = s.getBounds();
+		if (b.width <= 0 || b.height <= 0)
+		{
+			return false;
+		}
+		final double d = distToRect(x, y, b);
+		if (d <= r && d < near.dist)
+		{
+			near.dist = d;
+			near.shape = s;
+		}
+		return false;
 	}
 
 	/** Centroid of a convex hull's vertices — guaranteed inside the (convex) shape, unlike the bbox centre. */
