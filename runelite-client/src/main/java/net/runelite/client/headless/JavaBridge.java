@@ -102,6 +102,15 @@ public final class JavaBridge
 	private static volatile ClientThread clientThread;
 	private static final boolean SNAP_ENABLED =
 		Boolean.parseBoolean(System.getProperty("runelite.touch.snap", "true"));
+	// Gate snap resolution on the world-viewport bounds: only a tap that lands inside the 3D scene viewport
+	// may snap to a world entity. Without this, resolveSnap fires for EVERY in-game left tap regardless of
+	// where it lands — so a tap on the minimap / tabs / chat / inventory (all OUTSIDE the viewport), and in
+	// particular under the coming native edge-tab chrome, can drag a click onto a distant world entity. The
+	// literal click still routes (we never swallow it), so minimap tap-to-walk and inventory taps are
+	// unaffected; only the snap-to-entity resolution is suppressed outside the scene. A/B via the property
+	// (false = legacy snap-everywhere).
+	private static final boolean SNAP_VIEWPORT_GATE =
+		Boolean.parseBoolean(System.getProperty("runelite.touch.snapViewportGate", "true"));
 	// ~30 game px on the 1189-wide canvas ≈ ~4 mm on the device panel ≈ a fingertip contact radius.
 	private static final int SNAP_RADIUS = Integer.getInteger("runelite.touch.snapRadius", 30);
 	private static volatile int snapCount;
@@ -342,7 +351,9 @@ public final class JavaBridge
 			// walk-tap interacts with whatever the frozen cursor was over" bug. ~1 extra cycle (~20ms), unseen.
 			ct.invoke(() ->
 			{
-				final int[] p = SNAP_ENABLED ? resolveSnap(c, x, y) : new int[]{x, y};
+				// Snap only inside the world viewport (see SNAP_VIEWPORT_GATE) — a tap on the UI never snaps.
+				final boolean snap = SNAP_ENABLED && (!SNAP_VIEWPORT_GATE || inWorldViewport(c, x, y));
+				final int[] p = snap ? resolveSnap(c, x, y) : new int[]{x, y};
 				postMove(canvas, p[0], p[1]);
 				ct.invokeLater(() -> postClickButtons(canvas, p[0], p[1], MouseEvent.BUTTON1));
 			});
@@ -391,6 +402,33 @@ public final class JavaBridge
 		int considered;         // candidates with a non-null clickbox/hull
 		double nearestAny = Double.MAX_VALUE;  // closest candidate distance REGARDLESS of radius (for tuning)
 		boolean exact;          // the tap already lands inside a clickbox -> don't snap, engine hits it
+	}
+
+	/**
+	 * Is {@code (x,y)} (gamepack-canvas pixels) inside the live 3D-scene viewport? The engine reports the
+	 * viewport rect via {@code getViewportXOffset/YOffset/Width/Height}; a negative offset or non-positive
+	 * extent means the viewport is not currently drawn (e.g. a full-screen interface is up), in which case
+	 * nothing should snap. Read on the client thread (the caller already is). Used to keep snap from firing on
+	 * taps that land on the UI rather than the world.
+	 */
+	private static boolean inWorldViewport(Client c, int x, int y)
+	{
+		try
+		{
+			final int vx = c.getViewportXOffset();
+			final int vy = c.getViewportYOffset();
+			final int vw = c.getViewportWidth();
+			final int vh = c.getViewportHeight();
+			if (vx < 0 || vy < 0 || vw <= 0 || vh <= 0)
+			{
+				return false;
+			}
+			return x >= vx && x < vx + vw && y >= vy && y < vy + vh;
+		}
+		catch (RuntimeException ex)
+		{
+			return false;
+		}
 	}
 
 	/**

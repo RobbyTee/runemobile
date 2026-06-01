@@ -411,6 +411,18 @@ public class Hooks implements Callbacks
 			// W3 mobile-layout spike: one-shot, on the client thread, gated by -Drunelite.mobileui.toplevel=osm.
 			net.runelite.client.headless.MobileToplevelProbe.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.MobileChromeBridge.isEnabled())
+		{
+			// W3 hybrid-chrome read surface: snapshot desktop tab/panel/minimap/orb/chat/viewport geometry +
+			// active-tab varc on the client thread for the native chrome. Read-only — mutates nothing.
+			net.runelite.client.headless.MobileChromeBridge.tick(client);
+		}
+		if (net.runelite.client.headless.MobileChromeProbe.isEnabled())
+		{
+			// W3 hybrid-chrome de-risk: one-shot DESKTOP experiment (synth-click vs setVarcIntValue tab switch),
+			// gated by -Drunelite.mobilechrome.probe=true. Mutates — never on the device launch path.
+			net.runelite.client.headless.MobileChromeProbe.tick(client, client.getGameState());
+		}
 
 		if (graphics == null)
 		{
