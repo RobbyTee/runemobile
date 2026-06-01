@@ -8,6 +8,9 @@
 @property (nonatomic, strong) UIButton *launchButton;
 @property (nonatomic, strong) UIButton *canaryButton;
 @property (nonatomic, strong) UIButton *keyboardButton;
+// W3 hybrid-chrome device de-risk: read the MobileChromeBridge snapshot + proxy a tab switch via the proven
+// JavaBridge.onClick, logging a md5-gateable verdict. The seam proof before native rails are drawn.
+@property (nonatomic, strong) UIButton *chromeButton;
 // Collapsible debug overlay: a small always-on-top toggle shows/hides a panel holding the status,
 // launch/canary buttons and the log console, so the game stays full-screen.
 @property (nonatomic, strong) UIView *debugPanel;
@@ -169,6 +172,14 @@ static NSString * const kKbSentinel = @"​";
                 forControlEvents:UIControlEventTouchUpInside];
     [self.debugPanel addSubview:self.canaryButton];
 
+    self.chromeButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.chromeButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.chromeButton setTitle:@"Chrome test (read+switch)" forState:UIControlStateNormal];
+    self.chromeButton.titleLabel.font = [UIFont systemFontOfSize:15];
+    [self.chromeButton addTarget:self action:@selector(onChromeTest)
+                forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.chromeButton];
+
     self.console = [[UITextView alloc] init];
     self.console.translatesAutoresizingMaskIntoConstraints = NO;
     self.console.editable = NO;
@@ -229,7 +240,9 @@ static NSString * const kKbSentinel = @"​";
         [self.launchButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.canaryButton.centerYAnchor constraintEqualToAnchor:self.launchButton.centerYAnchor],
         [self.canaryButton.leadingAnchor constraintEqualToAnchor:self.launchButton.trailingAnchor constant:24],
-        [self.console.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor constant:6],
+        [self.chromeButton.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor constant:6],
+        [self.chromeButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
+        [self.console.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
         [self.console.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.console.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
         [self.console.bottomAnchor constraintEqualToAnchor:p.bottomAnchor],
@@ -305,6 +318,63 @@ static NSString * const kKbSentinel = @"​";
     [self appendLine:@"--- RWX canary ---"];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         [JVMLauncher runRwxCanary:log];
+    });
+}
+
+// W3 hybrid-chrome device de-risk: prove the native side can (a) READ the MobileChromeBridge snapshot on
+// device and (b) SWITCH the active tab by proxying a click on a live tab-stone centre through the proven
+// JavaBridge.onClick — the cover-and-proxy seam, before any native rails are drawn. Emits a single
+// bash-parseable verdict line to hello-shell.log (md5-gated off-device).
+- (void)onChromeTest {
+    if (![JVMLauncher bridgeReady]) { [self appendLine:@"[chrome-dev] bridge not ready (log in first)"]; return; }
+    NSString *snap = [JVMLauncher chromeSnapshot];
+    if (snap.length == 0) { [self appendLine:@"[chrome-dev] snapshot nil/empty"]; return; }
+    // Log a trimmed copy so the device snapshot bounds are recoverable for building the rails next.
+    NSString *trim = snap.length > 600 ? [snap substringToIndex:600] : snap;
+    [self appendLine:[NSString stringWithFormat:@"[chrome-dev] snapshot=%@", trim]];
+
+    NSError *err = nil;
+    id obj = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
+                                             options:0 error:&err];
+    if (![obj isKindOfClass:[NSDictionary class]]) {
+        [self appendLine:[NSString stringWithFormat:@"[chrome-dev] parse failed: %@", err.localizedDescription]];
+        return;
+    }
+    NSDictionary *d = (NSDictionary *)obj;
+    if (![d[@"loggedIn"] boolValue]) { [self appendLine:@"[chrome-dev] not LOGGED_IN yet — log in then retry"]; return; }
+    int activeBefore = [d[@"activeTab"] intValue];
+    NSArray *tabs = [d[@"tabs"] isKindOfClass:[NSArray class]] ? d[@"tabs"] : @[];
+
+    // Pick a target: the first present tab stone (non-null bounds) whose index != the active tab.
+    int target = -1, tcx = 0, tcy = 0, present = 0;
+    for (NSUInteger i = 0; i < tabs.count; i++) {
+        id t = tabs[i];
+        if (![t isKindOfClass:[NSArray class]] || [(NSArray *)t count] < 4) continue;
+        present++;
+        if (target < 0 && (int)i != activeBefore) {
+            NSArray *b = (NSArray *)t;
+            target = (int)i;
+            tcx = [b[0] intValue] + [b[2] intValue] / 2;
+            tcy = [b[1] intValue] + [b[3] intValue] / 2;
+        }
+    }
+    if (target < 0) { [self appendLine:[NSString stringWithFormat:@"[chrome-dev] no switchable tab (present=%d active=%d)", present, activeBefore]]; return; }
+
+    [self appendLine:[NSString stringWithFormat:@"[chrome-dev] read=ok present=%d activeBefore=%d target=%d centre=%d,%d -> proxy click",
+                      present, activeBefore, target, tcx, tcy]];
+    [JVMLauncher postClickX:tcx y:tcy button:1];
+
+    // Re-read after the engine has had a few ticks to switch + the bridge to re-snapshot, then verdict.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSString *snap2 = [JVMLauncher chromeSnapshot];
+        NSDictionary *d2 = [snap2 isKindOfClass:[NSString class]]
+            ? [NSJSONSerialization JSONObjectWithData:[snap2 dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil]
+            : nil;
+        int activeAfter = [d2 isKindOfClass:[NSDictionary class]] ? [d2[@"activeTab"] intValue] : -999;
+        BOOL switched = (activeAfter == target);
+        [self appendLine:[NSString stringWithFormat:
+            @"[chrome-dev] CHROME_DEVICE read=ok present=%d activeBefore=%d target=%d activeAfter=%d switched=%@",
+            present, activeBefore, target, activeAfter, switched ? @"yes" : @"no"]];
     });
 }
 

@@ -38,6 +38,10 @@ static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidMove = NULL;
 static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
 static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
 
+// W3 hybrid-chrome read surface — a SEPARATE facade (MobileChromeBridge) resolved lazily on the main thread.
+static jclass    gChromeClass = NULL;   // global ref to net.runelite.client.headless.MobileChromeBridge
+static jmethodID gMidChromeSnap = NULL; // getSnapshot()Ljava/lang/String;
+
 // Resolve + cache the JavaBridge facade on the calling (main) thread. Returns YES once usable.
 static BOOL ensureBridge(void) {
     if (gBridgeClass) return YES;
@@ -78,6 +82,28 @@ static BOOL ensureBridge(void) {
         return NO;                              // retry next tick (the class may load just after bringup)
     }
     gBridgeClass = global;   // publish only once fully resolved
+    return YES;
+}
+
+// Resolve + cache the MobileChromeBridge facade on the calling (main) thread. Reuses the JavaBridge attach
+// (gMainEnv), so call only after ensureBridge() has run. Returns YES once usable.
+static BOOL ensureChrome(void) {
+    if (gChromeClass) return YES;
+    if (!ensureBridge() || !gMainEnv) return NO;   // shares the main thread's attached env
+    JNIEnv *env = gMainEnv;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/MobileChromeBridge");
+    if (!local || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    jclass global = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    if (!global) return NO;
+    jmethodID snap = (*env)->GetStaticMethodID(env, global, "getSnapshot", "()Ljava/lang/String;");
+    if (!snap) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteGlobalRef(env, global);
+        return NO;
+    }
+    gMidChromeSnap = snap;
+    gChromeClass = global;   // publish only once fully resolved
     return YES;
 }
 
@@ -293,6 +319,9 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"-Drunelite.bridge=true",                   // enable the reverse-JNI live-blit + touch facade (W3 B)
         @"-Drunelite.mobileui=true",                 // Phase-6 (W3): arm the MobileUiBridge control-plane facade
                                                      // (plugin/config DTOs + chat-input tick snapshot)
+        @"-Drunelite.mobilechrome=true",             // W3 hybrid-chrome: arm the read-only MobileChromeBridge
+                                                     // snapshot (tab/panel/minimap/orb/chat/viewport bounds).
+                                                     // NOT the .probe gate — that mutates and is desktop-only.
         // Phase-6 STEP-0 device smoke confirmed GREEN (2026-06-01): lanes separate (config on client thread,
         // toggle on EDT), overlay registers headless (Ground Items 92->146), config persists across launches,
         // PluginManager EDT asserts live. To re-run the on-device self-test, re-add:
@@ -527,6 +556,18 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     jboolean r = (*env)->CallStaticBooleanMethod(env, gBridgeClass, gMidInputOpen);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
     return r == JNI_TRUE;
+}
+
++ (NSString *)chromeSnapshot {
+    if (!ensureChrome()) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gChromeClass, gMidChromeSnap);
+    if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
+    NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
+    if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
+    (*env)->DeleteLocalRef(env, js);
+    return out;
 }
 
 @end
