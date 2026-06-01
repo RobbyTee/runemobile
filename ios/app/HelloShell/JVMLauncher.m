@@ -148,13 +148,6 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"-XX:+DisablePrimordialThreadGuardPages",
         @"-XX:-UseCompressedClassPointers",       // free cert: no extended-virtual-addressing
         @"-XX:ReservedCodeCacheSize=64m",         // bound the brk #0x69 RX reservation
-        // §6.2 mirror-incoherence WORKAROUND PROBE (UPDATE 8): the SIGSEGV is a tier-3
-        // (profiled) C1 nmethod whose embedded MethodData movk immediate is corrupt in the
-        // RX view (RW↔RX not physically coherent). Tier-1 C1 has no profiling/MDO entry
-        // immediate, so far fewer embedded 64-bit metadata constants to corrupt. If RuneLite
-        // then renders the login screen, the §6.2 device render path is proven even though the
-        // underlying mirror bug remains. Not a coherency fix — a probe/workaround.
-        @"-XX:TieredStopAtLevel=1",
         // W1 P3 §6.0 activation confirm: non-headless + the CACIO JPMS set (same flags the
         // desktop awtsmoke harness uses). HotSpot accepts --add-exports/--add-opens directly
         // as VM options (verified). sun.awt.image is needed by CTC's CTCVolatileSurfaceManager.

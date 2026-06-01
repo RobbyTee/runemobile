@@ -346,7 +346,53 @@ The cheap script interims are now empirically dead. Real options:
 
 ---
 
-## RESEARCH UPDATE 8 (2026-05-31) — EXC_MASK_BAD_ACCESS clear: ran, did NOTHING. Mechanism CONFIRMED.
+## RESEARCH UPDATE 9 (2026-05-31) — CORRECTION: UPDATE 8 was wrong (stale hs_err). EXC_MASK FIX WORKED.
+**UPDATE 8 below is RETRACTED.** I analyzed `hs_err_pid20197.log` whose `java.home` is bundle
+`FE6E0F1E` = the PRE-EXC_MASK build (UPDATE 7's crash), not the EXC_MASK run. All four on-device
+hs_err files are from older builds. The actual EXC_MASK run (bundle `781757E1`) produced **no hs_err
+and no JVM fatal error.** Its verbatim `jvm-stdio` (saved: `app/evidence/jvm-stdio-6.2-excmask-BOOTED-OK-20260531.log`,
+0 crash markers, 3 boot-success markers) shows:
+```
+[boot] launching RuneLiteHeadless --safe-mode
+RuneLite 1.12.28-SNAPSHOT … starting up
+injected-client 26527618741.147
+[headless] init done … gc=CTCGraphicsConfiguration toolkit=CTCToolkit
+[headless] show done: visible=true canvas=tb[canvas0,0,0,765x503] displayable=true
+Client initialization took 2947ms
+[boot] RuneLite.main returned; keep-alive 200s for capture
+```
+⇒ **Clearing `EXC_MASK_BAD_ACCESS` before VM bringup FIXED the §6.2 SIGSEGV.** Real RuneLite boots
+headless to a displayable CTC canvas under full tiered compilation (no `-XX:TieredStopAtLevel`) and
+`RuneLite.main` returns cleanly. The mechanism in UPDATE 8's correct half stands (HotSpot's compiled
+code relies on EXC_BAD_ACCESS faults for implicit null-checks/safepoints; the attached debugger was
+stealing them) — but the DIRECTION of the result was the opposite of what the stale hs_err showed. The
+`-XX:TieredStopAtLevel=1` probe committed on that false read is REVERTED (EXC_MASK alone boots clean).
+
+**Process failure (logged):** I trusted a pid'd hs_err without checking its `java.home`/timestamp
+against the build just installed — exactly the "verify the artifact" lesson from UPDATE 6, missed again.
+Going forward: always confirm an hs_err's bundle id == the current build before analyzing it.
+
+### Remaining gaps to §6.2 GREEN (NOT crashes)
+1. **No frames captured** — `Documents/rl-capture/` is empty (no `frame-LOGIN_SCREEN-*.png`). RuneLite
+   booted and `main` returned into the 200 s keep-alive, but the headless capture (mainBufferProvider →
+   PNG every N frames) produced nothing. Either the headless client isn't pumping a render loop after
+   `main` returns, or the process ended before captures flushed.
+2. **App ended ~1 min in (user-observed)** — the JVM log ends cleanly at keep-alive with NO fatal error,
+   so this is a PROCESS termination (suspect: jetsam memory kill of a full RuneLite client + 512 MB heap
+   + JIT; or StikDebug detach), not a JVM crash. Needs confirmation (watch for a jetsam report / whether
+   `[boot]` keep-alive countdown lines appear).
+3. **Non-fatal:** worldhopper JNA `NoClassDefFoundError` (tries to dlopen a macOS `.so` for ICMP ping) —
+   caught/logged, harmless to the render path; safe to ignore or disable the plugin in safe-mode.
+
+### Next
+Rebuilt EXC_MASK-only (tier1 reverted), reinstalled. Re-run to (a) confirm the clean boot reproduces
+under full tiered compilation, and (b) diagnose capture: does it reach keep-alive, do any frames land,
+or does the process die first. If it dies ~1 min, lower `-Xmx`/check jetsam; if it survives but no
+frames, the gap is the headless render-loop/capture trigger (a W2 packaging issue, not W1 JIT).
+
+---
+
+## RESEARCH UPDATE 8 (2026-05-31) — [RETRACTED by UPDATE 9 — based on a STALE hs_err] EXC_MASK clear: ran, did NOTHING. Mechanism CONFIRMED.
 Two findings this round (evidence: `app/evidence/hs_err-6.2-excmask-nochange-20260531.log` +
 `jvm-stdio-6.2-excmask-nochange-20260531.log`):
 
