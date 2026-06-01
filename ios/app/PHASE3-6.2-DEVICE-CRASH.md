@@ -1,5 +1,46 @@
 # W1 P3 §6.2 — device crash: JIT mirror i-cache coherency (2026-05-31)
 
+> **STATUS 2026-06-01: §6.2 GREEN on device.** Real RuneLite JIT-runs on the on-device OpenJDK 21 and
+> renders the **live-OSRS login screen** (RS:OSRS banner + EULA Accept/Decline + "World 442"), captured
+> to 6 PNGs (`app/evidence/login-frames-6.2-20260601/`, `frame-LOGIN_SCREEN-001..006`) and blitted live by
+> the W3 shell. No memory corruption (zero hs_err across the run). Two root causes fixed: (1) the §6.2
+> mirror corruption was the `runelite-jit.js` map-on-fault net — removed (UPDATE 17); (2) the post-`main`
+> ~3.6 s kill was an iOS TCC microphone abort from `libjsound` — fixed with `NSMicrophoneUsageDescription`
+> (UPDATE 18). Canonical JIT script: continuous attach, no fault net (md5 `b2e86ed924d56032bc5f194dce61660f`).
+> See UPDATE 19 for the close-out; UPDATES 1–18 are the (often-corrected) trail. Remaining polish: the
+> on-screen view lags the capture (shows the first frame, not the newest) — cosmetic W3 detail.
+
+## RESEARCH UPDATE 19 (2026-06-01) — §6.2 GREEN: live-OSRS login screen rendered + captured on device
+With the TCC mic fix (UPDATE 18) installed (bundle `00AFBACF…`) and the canonical no-fault-net script
+(Variant C), real RuneLite booted, **survived past game-loop start**, and the engine rendered the live
+OSRS login screen. Verbatim evidence:
+- On-device screenshot + 6 captured PNGs `app/evidence/login-frames-6.2-20260601/frame-LOGIN_SCREEN-001..006-draw{2,4,6,8,10,12}.png`
+  (765×503). `draw00012` shows the **complete** login screen: RS:OSRS banner, the EULA Accept/Decline
+  dialog, "World 442 / Click to switch", full background art. (The earlier draws are mid-paint — what
+  showed on screen as "only part of it".)
+- Process still alive after capture (pid present); `preLoginMax=6` budget filled. **Zero hs_err** (no new
+  crash report for this bundle); zero crash/TCC markers. The JIT mirror ran clean from boot through the
+  dense compile, into the game loop, and through 12+ engine draws.
+
+### What §6.2 needed, in the end (two unrelated bugs stacked)
+1. **Mirror corruption** (the audit's target): caused by the `runelite-jit.js` map-on-fault net, which did
+   `prepare_memory_region`+retry on every fault. Removing it → fast, clean, corruption-free boots. Detach
+   was NOT required (the audit's #1 parity hypothesis pointed the right direction — lifecycle/servicing,
+   not physical aliasing — and the specific culprit was the net, isolated by the detach-vs-attach A/B).
+2. **TCC microphone abort** (the longevity wall behind it): `libjsound` `DAUDIO_GetDirectAudioDeviceCount`
+   → `DAUDIO_RequestRecordPermission` touched the mic at audio init; iOS SIGABRTs without
+   `NSMicrophoneUsageDescription`. Added the key → process survives.
+
+### Residual / next (off the §6.2 critical path)
+- W3 on-screen view shows the first captured frame, not the newest (cosmetic; capture itself is complete).
+- The mic permission prompt appears mid-run (harmless; we never record). Could suppress Java Sound capture
+  enumeration if the prompt is unwanted.
+- Sustained-runtime / interactive login (entering credentials, reaching the game world) is the next
+  milestone beyond the §6.2 login-render goal.
+
+---
+
+
 First on-device boot of the **real RuneLite headless client** (`DeviceHeadlessBoot` = UnsafePoke CTC
 activate() + `RuneLiteHeadless.main --safe-mode`, shaded client jar bundled) reached CTC activation
 and started the client, then **SIGILL'd during boot**. This is a **W1 platform** issue (the
