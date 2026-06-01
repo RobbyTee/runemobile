@@ -1,0 +1,144 @@
+HelloShell — W1 minimal JVM shell
+jre: /private/var/containers/Bundle/Application/6D9FD600-FC1C-4BBD-BBF4-FA004824B0D3/HelloShell.app/jre
+Waiting for StikDebug attach (CS_DEBUGGED)…
+Assign the iOS-26 JIT script to this app in StikDebug, then attach.
+StikDebug attached — CS_DEBUGGED set. Tap Start JVM.
+(JVM stdout/stderr -> Documents/jvm-stdio.log)
+[shell] bgTask=2
+--- launching JVM on worker thread ---
+[jvm] JAVA_HOME = /private/var/containers/Bundle/Application/6D9FD600-FC1C-4BBD-BBF4-FA004824B0D3/HelloShell.app/jre
+[jvm] dlopen /private/var/containers/Bundle/Application/6D9FD600-FC1C-4BBD-BBF4-FA004824B0D3/HelloShell.app/jre/lib/server/libjvm.dylib
+[jvm] JNI_CreateJavaVM resolved
+[jx] JX_* set: displayName='MarkingEclip' characterId=368557716 session=2Oy4x7… access=empty refresh=empty
+[jvm] autologin ARMED: EULA 302,312 (idx 12) -> Play Now 382,248, world 301/oldschool1
+[jvm] opt[0] = -XX:+UnlockExperimentalVMOptions
+[jvm] opt[1] = -XX:+MirrorMappedCodeCache
+[jvm] opt[2] = -XX:+DisablePrimordialThreadGuardPages
+[jvm] opt[3] = -XX:-UseCompressedClassPointers
+[jvm] opt[4] = -XX:ReservedCodeCacheSize=64m
+[jvm] opt[5] = -Djava.awt.headless=false
+[jvm] opt[6] = --add-exports=java.desktop/java.awt=ALL-UNNAMED
+[jvm] opt[7] = --add-exports=java.desktop/java.awt.peer=ALL-UNNAMED
+[jvm] opt[8] = --add-exports=java.desktop/sun.awt.image=ALL-UNNAMED
+[jvm] opt[9] = --add-exports=java.desktop/sun.java2d=ALL-UNNAMED
+[jvm] opt[10] = --add-exports=java.desktop/java.awt.dnd.peer=ALL-UNNAMED
+[jvm] opt[11] = --add-exports=java.desktop/sun.awt=ALL-UNNAMED
+[jvm] opt[12] = --add-exports=java.desktop/sun.awt.event=ALL-UNNAMED
+[jvm] opt[13] = --add-exports=java.desktop/sun.awt.datatransfer=ALL-UNNAMED
+[jvm] opt[14] = --add-exports=java.base/sun.security.action=ALL-UNNAMED
+[jvm] opt[15] = --add-opens=java.base/java.util=ALL-UNNAMED
+[jvm] opt[16] = --add-opens=java.desktop/java.awt=ALL-UNNAMED
+[jvm] opt[17] = --add-opens=java.desktop/sun.java2d=ALL-UNNAMED
+[jvm] opt[18] = --add-opens=java.base/java.lang.reflect=ALL-UNNAMED
+[jvm] opt[19] = -Xmx256m
+[jvm] opt[20] = -Duser.home=/var/mobile/Containers/Data/Application/6A68E9C6-4D99-42F8-A6F6-1B45DAB4A044/Documents
+[jvm] opt[21] = -Drunelite.headless.capture.dir=/var/mobile/Containers/Data/Application/6A68E9C6-4D99-42F8-A6F6-1B45DAB4A044/Documents/rl-capture
+[jvm] opt[22] = -Drunelite.bridge=true
+[jvm] opt[23] = -Drunelite.headless.capture.interval=10
+[jvm] opt[24] = -Drunelite.headless.capture.preLoginMax=40
+[jvm] opt[25] = -Dheadless.runSeconds=240
+[jvm] opt[26] = -Dheadless.captureTargetFrames=999
+[jvm] opt[27] = -Djava.home=/private/var/containers/Bundle/Application/6D9FD600-FC1C-4BBD-BBF4-FA004824B0D3/HelloShell.app/jre
+[jvm] opt[28] = -Djava.library.path=/private/var/containers/Bundle/Application/6D9FD600-FC1C-4BBD-BBF4-FA004824B0D3/HelloShell.app/Frameworks
+[jvm] opt[29] = -Djava.class.path=/private/var/containers/Bundle/Application/6D9FD600-FC1C-4BBD-BBF4-FA004824B0D3/HelloShell.app/client-1.12.28-SNAPSHOT-shaded.jar:/private/var/containers/Bundle/Application/6D9FD600-FC1C-4BBD-BBF4-FA004824B0D3/HelloShell.app/probes.jar
+[jvm] opt[30] = -Drunelite.headless.autologin=true
+[jvm] opt[31] = -Drunelite.headless.autologin.eula=true
+[jvm] opt[32] = -Drunelite.headless.autologin.eula.point=302,312
+[jvm] opt[33] = -Drunelite.headless.autologin.eula.loginIndex=12
+[jvm] opt[34] = -Drunelite.headless.autologin.point=382,248
+[jvm] opt[35] = -Drunelite.headless.autologin.world=301
+[jvm] opt[36] = -Drunelite.headless.autologin.worldAddress=oldschool1.runescape.com
+[jvm] cleared EXC_MASK_BAD_ACCESS port (Amethyst parity) kr=0
+[jvm] JNI_CreateJavaVM (HotSpot generates its template interpreter now)…
+[jvm] JavaVM created — HotSpot is up. Running probes…
+[jvm] ===== DeviceHeadlessBoot.main =====
+[shell] live blit frame #1 (765x503)
+[shell] live blit frame #60 (765x503)
+[shell] live blit frame #120 (765x503)
+[shell] live blit frame #180 (765x503)
+[shell] live blit frame #240 (765x503)
+[shell] live blit frame #300 (765x503)
+[shell] live blit frame #360 (765x503)
+[shell] live blit frame #420 (765x503)
+[shell] live blit frame #480 (765x503)
+[shell] live blit frame #540 (765x503)
+[shell] live blit frame #600 (765x503)
+[shell] live blit frame #660 (765x503)
+[shell] live blit frame #720 (765x503)
+[shell] camera pan begin (1-finger)
+[shell] live blit frame #780 (765x503)
+[shell] live blit frame #840 (765x503)
+[shell] live blit frame #900 (765x503)
+[shell] camera pan end
+[shell] live blit frame #960 (765x503)
+[shell] long-press -> menu open(R) game 252,236
+[shell] live blit frame #1020 (765x503)
+[shell] menu select(L) game 191,166
+[shell] live blit frame #1080 (765x503)
+[shell] pinch -> wheel rot=-2 at 278,163
+[shell] pinch -> wheel rot=-1 at 278,163
+[shell] pinch -> wheel rot=-1 at 280,157
+[shell] pinch -> wheel rot=-1 at 280,154
+[shell] pinch -> wheel rot=-1 at 282,152
+[shell] live blit frame #1140 (765x503)
+[shell] pinch -> wheel rot=-1 at 284,150
+[shell] pinch -> wheel rot=-1 at 285,150
+[shell] pinch -> wheel rot=-1 at 285,148
+[shell] pinch -> wheel rot=-1 at 287,148
+[shell] pinch -> wheel rot=-1 at 287,150
+[shell] pinch -> wheel rot=-1 at 285,152
+[shell] pinch -> wheel rot=2 at 280,154
+[shell] pinch -> wheel rot=1 at 277,155
+[shell] pinch -> wheel rot=1 at 273,155
+[shell] pinch -> wheel rot=1 at 273,155
+[shell] pinch -> wheel rot=1 at 271,155
+[shell] pinch -> wheel rot=1 at 269,154
+[shell] pinch -> wheel rot=1 at 269,154
+[shell] pinch -> wheel rot=1 at 269,154
+[shell] pinch -> wheel rot=1 at 269,152
+[shell] pinch -> wheel rot=1 at 269,150
+[shell] pinch -> wheel rot=1 at 273,148
+[shell] pinch -> wheel rot=1 at 273,148
+[shell] pinch -> wheel rot=1 at 271,148
+[shell] pinch -> wheel rot=1 at 269,148
+[shell] pinch -> wheel rot=1 at 269,150
+[shell] live blit frame #1200 (765x503)
+[shell] pinch -> wheel rot=1 at 248,175
+[shell] pinch -> wheel rot=1 at 246,180
+[shell] pinch -> wheel rot=1 at 250,179
+[shell] pinch -> wheel rot=1 at 255,175
+[shell] pinch -> wheel rot=1 at 257,173
+[shell] pinch -> wheel rot=1 at 255,175
+[shell] pinch -> wheel rot=1 at 252,177
+[shell] live blit frame #1260 (765x503)
+[shell] camera pan begin (1-finger)
+[shell] live blit frame #1320 (765x503)
+[shell] camera pan end
+[shell] camera pan begin (1-finger)
+[shell] camera pan end
+[shell] camera pan begin (1-finger)
+[shell] live blit frame #1380 (765x503)
+[shell] camera pan end
+[shell] live blit frame #1440 (765x503)
+[shell] tap -> click(L) game 269,140
+[shell] live blit frame #1500 (765x503)
+[shell] live blit frame #1560 (765x503)
+[shell] tap -> click(L) game 256,116
+[shell] pinch -> wheel rot=-2 at 289,157
+[shell] pinch -> wheel rot=-1 at 293,157
+[shell] pinch -> wheel rot=-2 at 298,155
+[shell] live blit frame #1620 (765x503)
+[shell] pinch -> wheel rot=-1 at 303,155
+[shell] pinch -> wheel rot=-1 at 305,154
+[shell] pinch -> wheel rot=-1 at 307,154
+[shell] pinch -> wheel rot=-1 at 307,155
+[shell] pinch -> wheel rot=-1 at 309,157
+[shell] pinch -> wheel rot=-1 at 311,159
+[shell] pinch -> wheel rot=-1 at 312,161
+[shell] pinch -> wheel rot=-1 at 316,163
+[shell] pinch -> wheel rot=-1 at 319,164
+[shell] pinch -> wheel rot=-1 at 325,166
+[shell] tap -> click(L) game 382,89
+[shell] live blit frame #1680 (765x503)
+[shell] live blit frame #1740 (765x503)
+[shell] live blit frame #1800 (765x503)

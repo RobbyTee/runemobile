@@ -30,8 +30,10 @@ import java.awt.Toolkit;
 import java.awt.event.FocusEvent;
 import java.awt.event.InputEvent;
 import java.awt.event.MouseEvent;
+import java.awt.event.MouseWheelEvent;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
+import net.runelite.api.GameState;
 import net.runelite.api.MainBufferProvider;
 
 /**
@@ -102,6 +104,15 @@ public final class JavaBridge
 	private static boolean focused;
 	private static boolean pressed;
 	private static int pressButton = MouseEvent.BUTTON1;
+
+	// Camera (two-finger pan -> direct yaw/pitch target). Sub-pixel remainders so a slow drag still turns
+	// (a small per-event pixel delta would otherwise truncate to 0 yaw units).
+	private static final float YAW_UNITS_PER_PX = 1.5f;    // ~a screen-width drag ≈ half a turn
+	private static final float PITCH_UNITS_PER_PX = 1.2f;
+	private static final int PITCH_MIN = 128;              // RS camera-pitch clamp (normal range)
+	private static final int PITCH_MAX = 383;
+	private static float yawRemainder;
+	private static float pitchRemainder;
 
 	private JavaBridge()
 	{
@@ -271,6 +282,61 @@ public final class JavaBridge
 		final long t = System.currentTimeMillis();
 		primeFocus(q, canvas, t, x, y);
 		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t + 1, 0, x, y, 0, false));
+	}
+
+	/**
+	 * Scroll the wheel by {@code rotation} notches at {@code (x,y)} — a {@link MouseWheelEvent}, which
+	 * {@code Hooks.mouseWheelMoved} routes through {@code mouseManager} exactly like a {@link MouseEvent}.
+	 * Pinch-zoom maps to this: negative {@code rotation} = wheel up = zoom in. {@code (x,y)} is the pinch
+	 * centroid so the gamepack zooms about it.
+	 */
+	public static void onWheel(int x, int y, int rotation)
+	{
+		final Canvas canvas = liveCanvas();
+		if (canvas == null || rotation == 0)
+		{
+			return;
+		}
+		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+		final long t = System.currentTimeMillis();
+		primeFocus(q, canvas, t, x, y);
+		q.postEvent(new MouseWheelEvent(canvas, MouseEvent.MOUSE_WHEEL, t + 1, 0, x, y, 0, false,
+			MouseWheelEvent.WHEEL_UNIT_SCROLL, Math.abs(rotation), rotation));
+	}
+
+	/**
+	 * Rotate the camera by a two-finger pan: apply the raw pixel delta {@code (dxPixels,dyPixels)} to the
+	 * camera yaw/pitch <em>targets</em> directly via the client API (no synthesized middle-mouse, so it is
+	 * independent of the "middle mouse moves camera" setting). Yaw wraps mod 2048; pitch clamps to the
+	 * normal RS range. Only acts in-game. The native side sends raw pixel deltas; sensitivity + sub-pixel
+	 * accumulation live here.
+	 */
+	public static void onCameraDrag(int dxPixels, int dyPixels)
+	{
+		final Client c = ENABLED ? client : null;
+		if (c == null || c.getGameState() != GameState.LOGGED_IN)
+		{
+			return;
+		}
+
+		final float yawF = dxPixels * YAW_UNITS_PER_PX + yawRemainder;
+		final int yawStep = (int) yawF;
+		yawRemainder = yawF - yawStep;
+		if (yawStep != 0)
+		{
+			c.setCameraYawTarget((c.getCameraYawTarget() + yawStep) & 2047);
+		}
+
+		final float pitchF = dyPixels * PITCH_UNITS_PER_PX + pitchRemainder;
+		final int pitchStep = (int) pitchF;
+		pitchRemainder = pitchF - pitchStep;
+		if (pitchStep != 0)
+		{
+			// Drag down -> camera tilts down (pitch decreases toward the horizon).
+			int p = c.getCameraPitchTarget() - pitchStep;
+			p = Math.max(PITCH_MIN, Math.min(PITCH_MAX, p));
+			c.setCameraPitchTarget(p);
+		}
 	}
 
 	/**

@@ -54,6 +54,14 @@ typedef void (^JVMLogSink)(NSString *line);
 /// `x`,`y` are gamepack-canvas (765x503) pixels. Call on the main thread.
 + (void)postMoveX:(int)x y:(int)y;
 
+/// Scroll the wheel via JavaBridge.onWheel (a MouseWheelEvent). `x`,`y` are gamepack-canvas pixels (the
+/// pinch centroid); `rotation` notches: negative = zoom in. Used by pinch-to-zoom. Call on the main thread.
++ (void)postWheelX:(int)x y:(int)y rotation:(int)rotation;
+
+/// Rotate the camera via JavaBridge.onCameraDrag — raw two-finger-pan pixel deltas applied to the camera
+/// yaw/pitch targets directly (no middle-mouse). Call on the main thread.
++ (void)postCameraDx:(int)dx dy:(int)dy;
+
 @end
 
 NS_ASSUME_NONNULL_END

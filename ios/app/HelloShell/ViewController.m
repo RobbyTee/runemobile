@@ -30,6 +30,9 @@
 @property (nonatomic, assign) BOOL menuOpen;
 @property (nonatomic, assign) int  lastMenuX;
 @property (nonatomic, assign) int  lastMenuY;
+// Pinch-zoom: accumulate the scale change into whole wheel notches.
+@property (nonatomic, assign) CGFloat pinchPrevScale;
+@property (nonatomic, assign) CGFloat wheelAccum;
 @end
 
 @implementation ViewController
@@ -95,6 +98,21 @@
         initWithTarget:self action:@selector(onLongPress:)];
     longPress.minimumPressDuration = 0.4;   // OSRS-mobile-feel: a deliberate hold opens the menu
     [self.screen addGestureRecognizer:longPress];
+
+    // One-finger DRAG rotates the camera (the official OSRS-mobile feel). The three one-finger meanings —
+    // tap (walk), drag (rotate), hold (menu) — are disambiguated by UIKit's gesture mutual-exclusivity:
+    // a tap doesn't move; a drag moves before the hold timer (long-press fails -> pan wins); a still hold
+    // claims the touch first (-> menu, pan blocked). No simultaneous-recognition delegate, so exactly one
+    // of {tap, drag, long-press} wins per gesture. PINCH (two fingers) zooms and is separated by count.
+    UIPanGestureRecognizer *camPan = [[UIPanGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onCameraPan:)];
+    camPan.minimumNumberOfTouches = 1;
+    camPan.maximumNumberOfTouches = 1;
+    [self.screen addGestureRecognizer:camPan];
+
+    UIPinchGestureRecognizer *pinch = [[UIPinchGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onPinch:)];
+    [self.screen addGestureRecognizer:pinch];
 
     self.console = [[UITextView alloc] init];
     self.console.translatesAutoresizingMaskIntoConstraints = NO;
@@ -330,6 +348,50 @@
         default:
             break;
     }
+}
+
+// one-finger drag -> rotate the camera. Feed incremental pixel deltas (reset the recognizer's translation
+// each step) to the bridge, which applies them to the camera yaw/pitch targets directly. The menuOpen
+// guard is belt-and-suspenders: if a long-press already claimed the touch, never also rotate.
+- (void)onCameraPan:(UIPanGestureRecognizer *)g {
+    if (![JVMLauncher bridgeReady] || self.menuOpen) return;
+    if (g.state == UIGestureRecognizerStateBegan) {
+        [g setTranslation:CGPointZero inView:self.screen];
+        [self appendLine:@"[shell] camera pan begin (1-finger)"];
+        return;
+    }
+    if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
+        [self appendLine:@"[shell] camera pan end"];
+        return;
+    }
+    if (g.state != UIGestureRecognizerStateChanged) return;
+    CGPoint d = [g translationInView:self.screen];
+    [g setTranslation:CGPointZero inView:self.screen];   // make the next delta incremental
+    if (d.x == 0 && d.y == 0) return;
+    [JVMLauncher postCameraDx:(int)lround(d.x) dy:(int)lround(d.y)];
+}
+
+// pinch -> zoom via the mouse wheel. Accumulate the scale change into whole wheel notches; pinch out
+// (scale grows) = zoom in = negative rotation. Centroid is the wheel point so the gamepack zooms about it.
+- (void)onPinch:(UIPinchGestureRecognizer *)g {
+    if (![JVMLauncher bridgeReady]) return;
+    if (g.state == UIGestureRecognizerStateBegan) {
+        self.pinchPrevScale = g.scale;
+        self.wheelAccum = 0;
+        return;
+    }
+    if (g.state != UIGestureRecognizerStateChanged) return;
+    const CGFloat WHEEL_SENS = 12.0;   // notches per unit of scale change (tune by feel)
+    CGFloat step = g.scale - self.pinchPrevScale;
+    self.pinchPrevScale = g.scale;
+    self.wheelAccum += -step * WHEEL_SENS;   // scale up -> zoom in -> negative rotation
+    int notches = (int)(self.wheelAccum > 0 ? floor(self.wheelAccum) : ceil(self.wheelAccum));
+    if (notches == 0) return;
+    self.wheelAccum -= notches;
+    int gx = 0, gy = 0;
+    if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) { gx = 382; gy = 251; }
+    [JVMLauncher postWheelX:gx y:gy rotation:notches];
+    [self appendLine:[NSString stringWithFormat:@"[shell] pinch -> wheel rot=%d at %d,%d", notches, gx, gy]];
 }
 
 - (void)endBgTask {
