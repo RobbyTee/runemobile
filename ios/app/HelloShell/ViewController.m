@@ -218,44 +218,65 @@
     [t start];
 }
 
-// Called every screen refresh once the JVM is running. Finds the newest frame-*.png in the
-// capture dir and shows it. Cheap when nothing new (just a dir scan); the point is twofold —
-// keep the app actively rendering (jetsam protection) and surface the live login screen.
+// Called every screen refresh once the JVM is running. Pulls the engine's latest composited frame
+// straight from the buffer via reverse JNI (JavaBridge.getFramePixels) and blits it — no PNG round-trip,
+// no disk, no capture budget, so it's smooth and runs for the whole session. Also keeps the app
+// foreground-active+rendering (the jetsam-protection that the §6.2 work established).
 - (void)onDisplayTick {
-    NSFileManager *fm = NSFileManager.defaultManager;
-    NSArray<NSString *> *files = [fm contentsOfDirectoryAtPath:self.captureDir error:nil];
-    if (files.count == 0) return;
-
-    // Filenames are frame-<STATE>-<NNN>-draw<NNNNN>.png. Order by the embedded draw counter, NOT the
-    // whole name — the <STATE> prefix sorts first lexically, so a plain string max wrongly prefers
-    // "LOGIN_SCREEN" over "LOGGED_IN"/"LOADING" and pins the view to an early login frame even after the
-    // game world has loaded. Parse the integer after "draw" and keep the max.
-    NSString *newest = nil;
-    long newestDraw = -1;
-    for (NSString *f in files) {
-        if (![f hasPrefix:@"frame-"] || ![f hasSuffix:@".png"]) continue;
-        NSRange r = [f rangeOfString:@"draw" options:NSBackwardsSearch];
-        long draw = -1;
-        if (r.location != NSNotFound) {
-            draw = [[f substringFromIndex:r.location + r.length] longLongValue];   // "NNNNN.png" -> NNNNN
-        }
-        if (newest == nil || draw > newestDraw) {
-            newest = f;
-            newestDraw = draw;
-        }
-    }
-    if (newest == nil || [newest isEqualToString:self.lastFrameName]) return;
-
-    NSString *path = [self.captureDir stringByAppendingPathComponent:newest];
-    UIImage *img = [UIImage imageWithContentsOfFile:path];
-    if (img == nil) return;   // mid-write; try again next tick
-
-    self.lastFrameName = newest;
+    UIImage *img = [JVMLauncher latestFrame];
+    if (img == nil) return;   // VM not up yet / no frame drawn yet
     self.screen.image = img;
     self.framesShown++;
-    // Log every frame swap so the on-screen progression (and survival) is self-evident — the run is
-    // long-lived now, so this is a live readout of the engine drawing, not a one-shot.
-    [self appendLine:[NSString stringWithFormat:@"[shell] showing %@ (#%d)", newest, self.framesShown]];
+    // Light heartbeat (~once/sec at 60 Hz) so the log shows the live blit running without flooding it.
+    if (self.framesShown == 1 || self.framesShown % 60 == 0) {
+        [self appendLine:[NSString stringWithFormat:@"[shell] live blit frame #%d (%.0fx%.0f)",
+                          self.framesShown, img.size.width, img.size.height]];
+    }
+}
+
+#pragma mark - Touch -> AWT bridge (W3 sub-goal B)
+
+// Map a touch point (in the screen image view's coordinate space) to gamepack-canvas pixels, honouring
+// the ScaleAspectFit letterbox. Returns NO if the touch is in the letterbox margin (outside the frame).
+- (BOOL)mapTouch:(UITouch *)touch toGameX:(int *)gx toGameY:(int *)gy {
+    UIImage *img = self.screen.image;
+    if (img == nil) return NO;
+    CGFloat iw = img.size.width, ih = img.size.height;
+    if (iw <= 0 || ih <= 0) return NO;
+    CGRect b = self.screen.bounds;
+    CGFloat scale = MIN(b.size.width / iw, b.size.height / ih);   // ScaleAspectFit
+    CGFloat dispW = iw * scale, dispH = ih * scale;
+    CGFloat ox = (b.size.width - dispW) * 0.5, oy = (b.size.height - dispH) * 0.5;
+    CGPoint p = [touch locationInView:self.screen];
+    CGFloat fx = (p.x - ox) / scale, fy = (p.y - oy) / scale;
+    if (fx < 0 || fy < 0 || fx >= iw || fy >= ih) return NO;   // tapped the letterbox, not the game
+    *gx = (int)fx;
+    *gy = (int)fy;
+    return YES;
+}
+
+- (void)dispatchTouch:(UITouch *)touch type:(int)type {
+    if (![JVMLauncher bridgeReady]) return;
+    int gx = 0, gy = 0;
+    if (![self mapTouch:touch toGameX:&gx toGameY:&gy]) return;
+    [JVMLauncher postTouchType:type x:gx y:gy button:1];
+    if (type != 1) {   // log down/up (not every move) so taps are visible in the log
+        [self appendLine:[NSString stringWithFormat:@"[shell] touch %@ -> game %d,%d",
+                          type == 0 ? @"DOWN" : @"UP", gx, gy]];
+    }
+}
+
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [self dispatchTouch:touches.anyObject type:0];   // TOUCH_DOWN
+}
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [self dispatchTouch:touches.anyObject type:1];   // TOUCH_MOVE
+}
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [self dispatchTouch:touches.anyObject type:2];   // TOUCH_UP
+}
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [self dispatchTouch:touches.anyObject type:2];   // treat cancel as UP so the press is released
 }
 
 - (void)endBgTask {

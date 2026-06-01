@@ -24,6 +24,42 @@ extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 // the VM in-process on this thread with no launcher threading.
 typedef jint (*CreateJavaVM_t)(JavaVM **pvm, void **penv, void *args);
 
+// ---- Phase 4 (W3) sub-goal B: reverse-JNI bridge state ---------------------------------------------
+// The VM is created on the jvm-main worker thread (runProbesWithLog); the live blit + touch handlers run
+// on the main/UI thread, so they AttachCurrentThread and cache the JavaBridge class + method ids once.
+static JavaVM   *gVM = NULL;          // set right after JNI_CreateJavaVM, before callMain blocks
+static JNIEnv   *gMainEnv = NULL;     // the UI thread's attached env (main thread only)
+static jclass    gBridgeClass = NULL; // global ref to net.runelite.client.headless.JavaBridge
+static jmethodID gMidW = NULL, gMidH = NULL, gMidPixels = NULL, gMidTouch = NULL;
+
+// Resolve + cache the JavaBridge facade on the calling (main) thread. Returns YES once usable.
+static BOOL ensureBridge(void) {
+    if (gBridgeClass) return YES;
+    if (!gVM) return NO;
+    JNIEnv *env = NULL;
+    jint r = (*gVM)->GetEnv(gVM, (void **)&env, JNI_VERSION_21);
+    if (r == JNI_EDETACHED) {
+        if ((*gVM)->AttachCurrentThread(gVM, (void **)&env, NULL) != JNI_OK || !env) return NO;
+    } else if (r != JNI_OK || !env) {
+        return NO;
+    }
+    gMainEnv = env;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/JavaBridge");
+    if (!local || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    gBridgeClass = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    gMidW      = (*env)->GetStaticMethodID(env, gBridgeClass, "getFrameWidth", "()I");
+    gMidH      = (*env)->GetStaticMethodID(env, gBridgeClass, "getFrameHeight", "()I");
+    gMidPixels = (*env)->GetStaticMethodID(env, gBridgeClass, "getFramePixels", "()[I");
+    gMidTouch  = (*env)->GetStaticMethodID(env, gBridgeClass, "onTouch", "(IIII)V");
+    if (!gMidW || !gMidH || !gMidPixels || !gMidTouch) {
+        (*env)->ExceptionClear(env);
+        gBridgeClass = NULL;   // force a retry next tick (the class may load slightly after VM bringup)
+        return NO;
+    }
+    return YES;
+}
+
 @implementation JVMLauncher
 
 + (BOOL)isDebuggerAttached {
@@ -233,6 +269,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         // interval=2/preLoginMax=6/exit-at-8 burst is no longer needed): grab a fresh login frame
         // ~every 10th draw so the W3 shell shows the LIVE, animated, complete login screen for the
         // whole window, and keep enough budget that it never freezes mid-run.
+        @"-Drunelite.bridge=true",                   // enable the reverse-JNI live-blit + touch facade (W3 B)
         @"-Drunelite.headless.capture.interval=10",
         @"-Drunelite.headless.capture.preLoginMax=40",  // login-screen/EULA frames before LOGGED_IN gets its
                                                         // own (MAX_FRAMES) budget; a long LOADING can't starve it
@@ -300,6 +337,8 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = NULL;
     jint rc = JNI_CreateJavaVM(&vm, (void **)&env, &vmArgs);
     if (rc != JNI_OK || !vm || !env) { log([NSString stringWithFormat:@"[jvm] FATAL JNI_CreateJavaVM rc=%d", rc]); return -14; }
+    // Publish the VM so the main thread's live-blit + touch bridge can AttachCurrentThread into it.
+    gVM = vm;
     log(@"[jvm] JavaVM created — HotSpot is up. Running probes…");
 
     // W1 P3 §6.1 device smoke: AwtSmoke activates CTC via UnsafePokeActivation (§6.0, device-GREEN),
@@ -318,9 +357,67 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     // (§6.0), JitProbe/Bench/GlyphSmoke (Phase-1).
     callMain(env, "DeviceHeadlessBoot", @[], log);
 
+    gVM = NULL;   // VM going away — stop the bridge before DestroyJavaVM
     (*vm)->DestroyJavaVM(vm);
     log(@"[jvm] DestroyJavaVM done.");
     return 0;
+}
+
+// ---- Phase 4 (W3) sub-goal B: reverse-JNI bridge (main-thread API) ---------------------------------
+
++ (BOOL)bridgeReady {
+    return ensureBridge();
+}
+
++ (UIImage *)latestFrame {
+    if (!ensureBridge()) return nil;
+    JNIEnv *env = gMainEnv;
+    jint w = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidW);
+    jint h = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidH);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if (w <= 0 || h <= 0) return nil;
+
+    jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, gBridgeClass, gMidPixels);
+    if (!arr || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    jsize len = (*env)->GetArrayLength(env, arr);
+    NSUInteger need = (NSUInteger)w * (NSUInteger)h;
+    if ((NSUInteger)len < need) { (*env)->DeleteLocalRef(env, arr); return nil; }
+
+    // Reusable native scratch buffer (grows monotonically); copied again into CFData so the CGImage owns
+    // stable bytes even as the engine overwrites the Java array on the next frame.
+    static uint32_t *buf = NULL;
+    static NSUInteger bufCount = 0;
+    if (bufCount < need) {
+        free(buf);
+        buf = (uint32_t *)malloc(need * sizeof(uint32_t));
+        bufCount = buf ? need : 0;
+    }
+    if (!buf) { (*env)->DeleteLocalRef(env, arr); return nil; }
+    (*env)->GetIntArrayRegion(env, arr, 0, (jsize)need, (jint *)buf);
+    (*env)->DeleteLocalRef(env, arr);
+
+    CFDataRef data = CFDataCreate(NULL, (const UInt8 *)buf, (CFIndex)(need * sizeof(uint32_t)));
+    CGDataProviderRef provider = CGDataProviderCreateWithCFData(data);
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    // The engine buffer is TYPE_INT_RGB: packed 0x00RRGGBB ints. On little-endian arm64, reading each
+    // 32-bit word native-endian with alpha-skip-first yields [skip],R,G,B — the correct opaque pixel.
+    CGBitmapInfo info = (CGBitmapInfo)(kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
+    CGImageRef cg = CGImageCreate((size_t)w, (size_t)h, 8, 32, (size_t)w * 4, cs, info,
+                                  provider, NULL, false, kCGRenderingIntentDefault);
+    UIImage *img = cg ? [UIImage imageWithCGImage:cg] : nil;
+    if (cg) CGImageRelease(cg);
+    CGColorSpaceRelease(cs);
+    CGDataProviderRelease(provider);
+    CFRelease(data);
+    return img;
+}
+
++ (void)postTouchType:(int)type x:(int)x y:(int)y button:(int)button {
+    if (!ensureBridge()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidTouch,
+                                 (jint)type, (jint)x, (jint)y, (jint)button);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 
 @end

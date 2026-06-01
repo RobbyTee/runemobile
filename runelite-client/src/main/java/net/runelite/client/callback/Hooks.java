@@ -386,6 +386,11 @@ public class Hooks implements Callbacks
 			net.runelite.client.headless.HeadlessCapture.observe(
 				client.getGameState(), client.getLoginIndex(), client.getLauncherDisplayName());
 		}
+		if (net.runelite.client.headless.JavaBridge.isEnabled())
+		{
+			// Keep the native shell's live-blit + touch bridge pointed at the current client + buffer.
+			net.runelite.client.headless.JavaBridge.register(client, mainBufferProvider);
+		}
 		if (net.runelite.client.headless.HeadlessLogin.isEnabled())
 		{
 			net.runelite.client.headless.HeadlessLogin.tick(

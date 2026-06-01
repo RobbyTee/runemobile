@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -28,6 +29,19 @@ typedef void (^JVMLogSink)(NSString *line);
 /// JIT already live (CS_DEBUGGED + the StikDebug brk #0x69 script). Returns 0 on a
 /// clean VM lifecycle, negative on a fatal setup error.
 - (int)runProbesWithLog:(JVMLogSink)log;
+
+// ---- Phase 4 (W3) sub-goal B: reverse-JNI bridge (called from the main/UI thread) ------------------
+
+/// True once the VM is up and the JavaBridge class has been resolved — i.e. live blit + touch are usable.
++ (BOOL)bridgeReady;
+
+/// Pull the engine's latest composited frame as a UIImage (reverse JNI -> JavaBridge.getFramePixels).
+/// Returns nil before the first draw / if the VM isn't up yet. Call on the main thread.
++ (nullable UIImage *)latestFrame;
+
+/// Post a touch phase into the gamepack via JavaBridge.onTouch. `type`: 0=down, 1=move, 2=up;
+/// `x`,`y` are gamepack-canvas (765x503) pixels; `button` is 1 (left) or 3 (right). Call on the main thread.
++ (void)postTouchType:(int)type x:(int)x y:(int)y button:(int)button;
 
 @end
 
