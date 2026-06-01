@@ -459,6 +459,60 @@ Diagnose WHY iOS kills the process seconds after `main` returns:
 
 ---
 
+## RESEARCH UPDATE 12 (2026-06-01) — eager capture installed; process SIGKILLed in ~250ms BEFORE first draw
+Eager-capture build (bundle `97094B38`, interval=2, targetFrames=3, poll-and-exit, Xmx256m) ran with JIT
+attached. Verbatim device `jvm-stdio.log`:
+```
+[headless] show done: visible=true canvas=…765x503 displayable=true
+Client initialization took 2977ms
+[boot] RuneLite.main returned; eager-capture poll (target=3 frames, max 30s)
+[headless-capture] ENABLED dir=…/rl-capture interval=2 …
+[boot] poll 250ms  draws=0 nullGraphics=0 frames=0 state=null      ← LAST LINE
+```
+- **JIT attached** (JIT26 ×3) — the iloader pairing-file fix worked; JIT is no longer the blocker.
+- **No JVM crash**: 0 crash markers, NO hs_err for this bundle, no OOM. Process count after = 0 (fully
+  exited/killed). The `crash.log` showing "one UIApplication" is STALE (May 29, references apple_main/
+  JLI_Launch which this JNI build doesn't use) — ignore.
+- The process was alive at 250 ms and **gone before the 500 ms poll**, with the engine render loop NOT
+  yet started (`draws=0 state=null`). On desktop the first draw lands ~700 ms after `main` returns, so
+  the device is killed FASTER than the engine produces its first frame. Eager capture is correctly wired
+  (ENABLED logged) but loses the race by a few hundred ms.
+
+### Decisive elimination: it is NOT a memory-ceiling problem
+`codesign -d --entitlements` on the signed `.app` confirms
+**`com.apple.developer.kernel.increased-memory-limit => true`** is present and signed. So the process has
+the raised jetsam ceiling and is STILL SIGKILLed in ~250 ms. Lowering Xmx (512→256) did not extend
+survival either (timing was non-monotonic). ⇒ the kill is **not** classic memory-pressure jetsam on our
+heap — it's something faster and more deterministic.
+
+### Leading hypothesis (to verify, not assume): StikDebug detach kills the debuggee
+The fast, deterministic ~250 ms kill right after the VM goes compute-heavy (post-`main`, engine threads
+spinning up) fits a **debugger-side termination**, not RAM jetsam:
+- iOS-26 StikDebug's `JIT26SetDetachAfterFirstBr`/universal flow may DETACH the debugger shortly after the
+  initial brk servicing; on iOS, when a debugger that holds the task port detaches, the **debuggee can be
+  SIGKILLed** unless detach is done cleanly (PT_DETACH/PT_KILL semantics).
+- Our `runelite-jit.js` stays attached and services brk #0x69 continuously (one 64 MB reservation, then
+  idle). If StikDebug or the script tears down the exception/task port once the JVM stops requesting
+  mappings, the process dies — which is exactly ~when the engine would start its heavy render loop.
+
+### Verification plan (cheap, on-device, before more code)
+1. **Run WITHOUT capture, longer keep-alive, watch StikDebug's own log.** Does HelloShell die at the same
+   ~250 ms regardless of capture? Does StikDebug show a "detached"/script-exit line at that moment? If the
+   StikDebug log ends exactly when jvm-stdio does → debugger teardown is the killer.
+2. **Compare against Amethyst on this device** (the oracle): Amethyst runs Minecraft for minutes under the
+   SAME StikDebug. What keeps ITS process alive that ours lacks? (Amethyst clears EXC_MASK_BAD_ACCESS AND
+   sets detach-after-first-br=false / `debug.debug_always_attached_jit`, AND its app stays foregrounded
+   with an active UIScene + GL view — our HelloShell has a near-empty UI and may be getting suspended.)
+3. **UI/foreground angle:** our app may be treated as backgrounded/idle (no active rendering UIScene) once
+   the JVM thread runs off-main — iOS suspends/kills backgrounded apps fast. Amethyst keeps a live Metal
+   view on screen. Worth testing: keep the main thread/UI visibly active during the JVM run.
+
+This is W1/W3 (process lifecycle on iOS), fully decoupled from the now-solved W1 JIT mirror and the
+desktop-proven W2 capture. The JVM + RuneLite + capture all work; the open problem is purely "keep the
+iOS process alive ~1 s longer."
+
+---
+
 ## RESEARCH UPDATE 8 (2026-05-31) — [RETRACTED by UPDATE 9 — based on a STALE hs_err] EXC_MASK clear: ran, did NOTHING. Mechanism CONFIRMED.
 Two findings this round (evidence: `app/evidence/hs_err-6.2-excmask-nochange-20260531.log` +
 `jvm-stdio-6.2-excmask-nochange-20260531.log`):
