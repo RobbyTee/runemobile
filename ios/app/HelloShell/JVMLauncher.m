@@ -71,6 +71,51 @@ typedef jint (*CreateJavaVM_t)(JavaVM **pvm, void **penv, void *args);
     return [[NSFileManager defaultManager] fileExistsAtPath:guess] ? guess : nil;
 }
 
+// Map Documents/tokens.json -> the JX_* env the OSRS gamepack reads when "launched from the Jagex
+// launcher". tokens.json is a gitignored secret (throwaway account) pushed into the app container at
+// test time (devicectl / Files.app), never bundled into the shared build. Returns YES iff a usable
+// session was found (session_id + chosen_account_id), so autologin only arms when we can authenticate.
+// Mirrors run-headless-login.sh's jq mapping. Env MUST be set before JNI_CreateJavaVM (HotSpot snapshots
+// the environment at startup). Logs redacted prefixes only — never the secret values.
+static BOOL loadJagexTokens(NSString *docs, JVMLogSink log) {
+    NSString *path = [docs stringByAppendingPathComponent:@"tokens.json"];
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (!data) {
+        log(@"[jx] no tokens.json in Documents — autologin DISABLED (login-screen render only)");
+        return NO;
+    }
+    NSError *err = nil;
+    id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:&err];
+    if (![obj isKindOfClass:[NSDictionary class]]) {
+        log([NSString stringWithFormat:@"[jx] tokens.json parse failed: %@", err.localizedDescription]);
+        return NO;
+    }
+    NSDictionary *t = (NSDictionary *)obj;
+    NSString *(^str)(NSString *) = ^NSString *(NSString *k) {
+        id v = t[k];
+        return [v isKindOfClass:[NSString class]] ? (NSString *)v : nil;
+    };
+    NSString *session   = str(@"session_id");
+    NSString *character = str(@"chosen_account_id");
+    NSString *display   = str(@"chosen_display_name");
+    NSString *access    = str(@"access_token");
+    NSString *refresh   = str(@"refresh_token");
+    if (session.length == 0 || character.length == 0) {
+        log(@"[jx] tokens.json missing session_id/chosen_account_id — autologin DISABLED");
+        return NO;
+    }
+    setenv("JX_SESSION_ID", session.UTF8String, 1);
+    setenv("JX_CHARACTER_ID", character.UTF8String, 1);
+    if (display.length)  setenv("JX_DISPLAY_NAME", display.UTF8String, 1);
+    if (access.length)   setenv("JX_ACCESS_TOKEN", access.UTF8String, 1);
+    if (refresh.length)  setenv("JX_REFRESH_TOKEN", refresh.UTF8String, 1);
+    log([NSString stringWithFormat:@"[jx] JX_* set: displayName='%@' characterId=%@ session=%@… access=%@ refresh=%@",
+        display ?: @"", character,
+        session.length >= 6 ? [session substringToIndex:6] : session,
+        access.length ? @"set" : @"empty", refresh.length ? @"set" : @"empty"]);
+    return YES;
+}
+
 // Reset the signals HotSpot manages to SIG_DFL so its own handlers install
 // cleanly (Amethyst does this immediately before JLI_Launch).
 static void resetSignalHandlers(void) {
@@ -145,7 +190,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!JNI_CreateJavaVM) { log([NSString stringWithFormat:@"[jvm] FATAL dlsym(JNI_CreateJavaVM): %s", dlerror()]); return -13; }
     log(@"[jvm] JNI_CreateJavaVM resolved");
 
-    NSArray<NSString *> *opts = @[
+    NSMutableArray<NSString *> *opts = [@[
         @"-XX:+UnlockExperimentalVMOptions",
         @"-XX:+MirrorMappedCodeCache",            // iOS-26 code cache (Amethyst jre21 patch)
         @"-XX:+DisablePrimordialThreadGuardPages",
@@ -189,14 +234,33 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         // ~every 10th draw so the W3 shell shows the LIVE, animated, complete login screen for the
         // whole window, and keep enough budget that it never freezes mid-run.
         @"-Drunelite.headless.capture.interval=10",
-        @"-Drunelite.headless.capture.preLoginMax=60",  // ~60 login frames over the window (live demo)
-        @"-Dheadless.runSeconds=60",                // run the full window — the clean "timeout" line is the
-                                                    // sustained-runtime proof (process survived 60s post-main)
-        @"-Dheadless.captureTargetFrames=999",      // don't early-exit at the login screen; ride the window
+        @"-Drunelite.headless.capture.preLoginMax=40",  // login-screen/EULA frames before LOGGED_IN gets its
+                                                        // own (MAX_FRAMES) budget; a long LOADING can't starve it
+        @"-Dheadless.runSeconds=240",               // wide window: interactive login adds EULA+Play Now clicks,
+                                                    // network login, and a first-run cache download before LOGGED_IN
+        @"-Dheadless.captureTargetFrames=999",      // don't early-exit; ride the window so the LOGGED_IN frame lands
         [NSString stringWithFormat:@"-Djava.home=%@", javaHome],
         [NSString stringWithFormat:@"-Djava.library.path=%@", frameworks],
         [NSString stringWithFormat:@"-Djava.class.path=%@", classpath],
-    ];
+    ] mutableCopy];
+
+    // Phase 4 sub-goal A — interactive login, purely in-process (no native touch bridge). Map the JX_*
+    // launcher handoff from Documents/tokens.json, then arm HeadlessLogin's two-stage click machine
+    // (EULA Accept -> Play Now). Only arms when a usable token set is present, so a build with no
+    // tokens.json pushed still does the proven §6.2 login-screen render.
+    BOOL autologin = loadJagexTokens(docs, log);
+    if (autologin) {
+        [opts addObjectsFromArray:@[
+            @"-Drunelite.headless.autologin=true",
+            @"-Drunelite.headless.autologin.eula=true",
+            @"-Drunelite.headless.autologin.eula.point=302,312",  // EULA Accept centre (765x503 device frame)
+            @"-Drunelite.headless.autologin.eula.loginIndex=12",  // observed EULA sub-state on device
+            @"-Drunelite.headless.autologin.point=382,248",       // Play Now centre (desktop-proven)
+            @"-Drunelite.headless.autologin.world=301",           // F2P world (throwaway account)
+            @"-Drunelite.headless.autologin.worldAddress=oldschool1.runescape.com",
+        ]];
+        log(@"[jvm] autologin ARMED: EULA 302,312 (idx 12) -> Play Now 382,248, world 301/oldschool1");
+    }
 
     JavaVMOption *vmopts = (JavaVMOption *)calloc(opts.count, sizeof(JavaVMOption));
     for (NSUInteger i = 0; i < opts.count; i++) {

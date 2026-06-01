@@ -39,8 +39,8 @@ import net.runelite.api.World;
 import net.runelite.api.WorldType;
 
 /**
- * Gate 1c-ii spike: the minimal slice of Phase-4 input injection needed to cross the
- * {@code LOGIN_SCREEN → LOGGED_IN} boundary headless.
+ * Gate 1c-ii / Phase-4 spike: the minimal slice of input injection needed to cross the
+ * {@code LOGIN_SCREEN → LOGGED_IN} boundary headless, in-process (no native touch bridge).
  *
  * <p>The {@code JX_*} launcher handoff auto-<em>authenticates</em> the account — the gamepack renders the
  * "Welcome to RuneScape / Play Now / &lt;name&gt;" welcome screen ({@code loginIndex == 10}) — but does
@@ -48,15 +48,25 @@ import net.runelite.api.WorldType;
  * Play Now button. There is no programmatic shortcut ({@code setGameState(LOGGED_IN)} doesn't drive the
  * gamepack's network login), so we synthesize the click.
  *
+ * <p>On a <em>fresh</em> client (e.g. the device, where {@code .runelite} is recreated each install) the
+ * gamepack first shows an <strong>EULA Accept/Decline dialog</strong> at an earlier login sub-state
+ * ({@code loginIndex == 12} as observed on device) before it will reach the welcome screen. So this is a
+ * <strong>two-stage</strong> state machine: if the EULA stage is enabled, click <em>Accept</em> first, then
+ * (once the gamepack advances to {@code loginIndex == 10}) click <em>Play Now</em>. The EULA stage is inert
+ * on a client that has already accepted (desktop), where {@code loginIndex} goes straight to 10.
+ *
  * <p>This answers a real Phase-4 kill-risk: does the window-less engine accept a synthesized AWT mouse
  * event at all (it may gate input on real focus, which has no peer headless)? We post a focus-gain plus a
  * full enter/move/press/release/click sequence to the gamepack {@link Canvas} via the toolkit
  * {@link EventQueue} — the same mechanism a UIKit-touch → AWT-{@code MouseEvent} bridge would use on iOS.
  *
- * <p>Entirely inert unless {@code -Drunelite.headless.autologin=true}. The click point defaults to the
- * Play Now button centre and is overridable with {@code -Drunelite.headless.autologin.point=x,y}. Re-arms
- * up to {@code maxAttempts} times if the state hasn't advanced, so a coordinate miss is visible (the
- * captured frames + the attempt log tell us whether the click landed).
+ * <p>Entirely inert unless {@code -Drunelite.headless.autologin=true}. The Play Now point defaults to the
+ * button centre and is overridable with {@code -Drunelite.headless.autologin.point=x,y}; the EULA stage is
+ * gated on {@code -Drunelite.headless.autologin.eula=true} with point
+ * {@code -Drunelite.headless.autologin.eula.point=x,y} and sub-state
+ * {@code -Drunelite.headless.autologin.eula.loginIndex=12}. Each stage re-arms up to {@code maxAttempts}
+ * times if the state hasn't advanced, so a coordinate miss is visible (the captured frames + the attempt
+ * log tell us whether the click landed).
  */
 @Slf4j
 public final class HeadlessLogin
@@ -70,8 +80,18 @@ public final class HeadlessLogin
 	private static final int COOLDOWN_DRAWS = Integer.getInteger("runelite.headless.autologin.cooldown", 120);
 	private static final int MAX_ATTEMPTS = Integer.getInteger("runelite.headless.autologin.maxAttempts", 5);
 
+	// Stage 1 (optional): the EULA Accept/Decline dialog a fresh client shows before the welcome screen.
+	// Inert on a client that already accepted (desktop) — loginIndex never equals EULA_LOGIN_INDEX there.
+	private static final boolean EULA_ENABLED = Boolean.getBoolean("runelite.headless.autologin.eula");
+	private static final int EULA_LOGIN_INDEX =
+		Integer.getInteger("runelite.headless.autologin.eula.loginIndex", 12);
+
+	// Stage 2: the Play Now button centre.
 	private static final int CLICK_X;
 	private static final int CLICK_Y;
+	// Stage 1: the EULA Accept button centre (765x503 fixed login; observed on device ~302,312).
+	private static final int EULA_X;
+	private static final int EULA_Y;
 
 	// Optional: switch to a specific world before clicking Play Now. A throwaway free-to-play account is
 	// rejected ("You need a members' account to use this world") if the remembered world is members, so we
@@ -80,16 +100,39 @@ public final class HeadlessLogin
 	private static final String WORLD_ADDRESS = System.getProperty("runelite.headless.autologin.worldAddress");
 
 	private static int draws;
-	private static int attempts;
-	private static int lastAttemptDraw;
+	// Per-stage attempt bookkeeping so an EULA retry budget can't starve the Play Now stage.
+	private static int eulaAttempts;
+	private static int lastEulaDraw;
+	private static boolean eulaCleared;
+	private static int playAttempts;
+	private static int lastPlayDraw;
 	private static boolean worldSelected;
 	private static boolean done;
 
 	static
 	{
-		int x = Constants.GAME_FIXED_WIDTH / 2;   // 382 — Play Now is horizontally centred
-		int y = 248;                              // ~middle of the welcome panel (765x503 fixed login)
-		final String p = System.getProperty("runelite.headless.autologin.point");
+		final int[] play = parsePoint("runelite.headless.autologin.point",
+			Constants.GAME_FIXED_WIDTH / 2 /* 382 — Play Now is horizontally centred */,
+			248 /* ~middle of the welcome panel (765x503 fixed login) */);
+		CLICK_X = play[0];
+		CLICK_Y = play[1];
+		final int[] eula = parsePoint("runelite.headless.autologin.eula.point", 302, 312);
+		EULA_X = eula[0];
+		EULA_Y = eula[1];
+		if (ENABLED)
+		{
+			log.info("[headless-login] ENABLED playPoint={},{} welcomeLoginIndex={} eula={} eulaPoint={},{} "
+					+ "eulaLoginIndex={} maxAttempts={} world={} worldAddress={}",
+				CLICK_X, CLICK_Y, WELCOME_LOGIN_INDEX, EULA_ENABLED, EULA_X, EULA_Y, EULA_LOGIN_INDEX,
+				MAX_ATTEMPTS, WORLD_ID, WORLD_ADDRESS);
+		}
+	}
+
+	private static int[] parsePoint(String prop, int defX, int defY)
+	{
+		int x = defX;
+		int y = defY;
+		final String p = System.getProperty(prop);
 		if (p != null && p.contains(","))
 		{
 			try
@@ -100,16 +143,12 @@ public final class HeadlessLogin
 			}
 			catch (NumberFormatException ex)
 			{
-				log.warn("[headless-login] bad autologin.point '{}', using default {},{}", p, x, y);
+				log.warn("[headless-login] bad {} '{}', using default {},{}", prop, p, defX, defY);
+				x = defX;
+				y = defY;
 			}
 		}
-		CLICK_X = x;
-		CLICK_Y = y;
-		if (ENABLED)
-		{
-			log.info("[headless-login] ENABLED clickPoint={},{} welcomeLoginIndex={} maxAttempts={} world={} worldAddress={}",
-				CLICK_X, CLICK_Y, WELCOME_LOGIN_INDEX, MAX_ATTEMPTS, WORLD_ID, WORLD_ADDRESS);
-		}
+		return new int[]{x, y};
 	}
 
 	private HeadlessLogin()
@@ -122,8 +161,10 @@ public final class HeadlessLogin
 	}
 
 	/**
-	 * Called once per {@code Hooks.draw} (only when enabled). Synthesizes a Play Now click when the client
-	 * is parked on the authenticated welcome screen, and re-arms until the state advances.
+	 * Called once per {@code Hooks.draw} (only when enabled). Drives the login as a two-stage machine: while
+	 * the EULA dialog is up (stage 1, optional) it synthesizes an Accept click; once the gamepack reaches the
+	 * authenticated welcome screen (stage 2) it synthesizes a Play Now click. Each stage re-arms until the
+	 * state advances.
 	 */
 	public static void tick(Client client, GameState state, int loginIndex)
 	{
@@ -136,39 +177,76 @@ public final class HeadlessLogin
 
 		if (state != GameState.LOGIN_SCREEN)
 		{
-			// Advanced past the login screen — the click (or the engine) carried us off it. Stop trying.
-			if (attempts > 0)
+			// Advanced past the login screen — a click (or the engine) carried us off it. Stop trying.
+			if (eulaAttempts > 0 || playAttempts > 0)
 			{
-				log.info("[headless-login] state now {} after {} attempt(s) — stopping injection", state, attempts);
+				log.info("[headless-login] state now {} after eula={} play={} attempt(s) — stopping injection",
+					state, eulaAttempts, playAttempts);
 			}
 			done = true;
 			return;
 		}
 
-		if (loginIndex != WELCOME_LOGIN_INDEX || draws < WARMUP_DRAWS)
-		{
-			return;
-		}
-
-		if (attempts >= MAX_ATTEMPTS)
-		{
-			if (!done)
-			{
-				log.warn("[headless-login] still LOGIN_SCREEN after {} click attempt(s) at {},{} — giving up "
-					+ "(wrong coords, or the engine rejects synthesized input headless)", attempts, CLICK_X, CLICK_Y);
-				done = true;
-			}
-			return;
-		}
-
-		// Cooldown only gates re-arms — the first click fires as soon as we're warmed up on the welcome screen.
-		if (attempts > 0 && draws - lastAttemptDraw < COOLDOWN_DRAWS)
+		if (draws < WARMUP_DRAWS)
 		{
 			return;
 		}
 
 		final Canvas canvas = client.getCanvas();
 		if (canvas == null)
+		{
+			return;
+		}
+
+		// Stage 1 — EULA Accept/Decline. Only fires on a fresh client that shows the dialog; once we observe
+		// the welcome sub-state we treat the EULA as cleared and never click it again.
+		if (loginIndex == WELCOME_LOGIN_INDEX)
+		{
+			eulaCleared = true;
+		}
+		if (EULA_ENABLED && !eulaCleared && loginIndex == EULA_LOGIN_INDEX)
+		{
+			if (eulaAttempts >= MAX_ATTEMPTS)
+			{
+				if (!done)
+				{
+					log.warn("[headless-login] still on the EULA dialog (loginIndex={}) after {} Accept attempt(s) "
+						+ "at {},{} — giving up", loginIndex, eulaAttempts, EULA_X, EULA_Y);
+					done = true;
+				}
+				return;
+			}
+			if (eulaAttempts > 0 && draws - lastEulaDraw < COOLDOWN_DRAWS)
+			{
+				return;
+			}
+			eulaAttempts++;
+			lastEulaDraw = draws;
+			log.info("[headless-login] EULA attempt {}/{}: synthesizing Accept click at {},{} (canvas {}x{} displayable={})",
+				eulaAttempts, MAX_ATTEMPTS, EULA_X, EULA_Y, canvas.getWidth(), canvas.getHeight(), canvas.isDisplayable());
+			synthesizeClick(canvas, EULA_X, EULA_Y);
+			return;
+		}
+
+		// Stage 2 — Play Now on the authenticated welcome screen.
+		if (loginIndex != WELCOME_LOGIN_INDEX)
+		{
+			return;
+		}
+
+		if (playAttempts >= MAX_ATTEMPTS)
+		{
+			if (!done)
+			{
+				log.warn("[headless-login] still LOGIN_SCREEN after {} Play Now attempt(s) at {},{} — giving up "
+					+ "(wrong coords, or the engine rejects synthesized input headless)", playAttempts, CLICK_X, CLICK_Y);
+				done = true;
+			}
+			return;
+		}
+
+		// Cooldown only gates re-arms — the first click fires as soon as we're warmed up on the welcome screen.
+		if (playAttempts > 0 && draws - lastPlayDraw < COOLDOWN_DRAWS)
 		{
 			return;
 		}
@@ -181,11 +259,11 @@ public final class HeadlessLogin
 			worldSelected = true;
 		}
 
-		attempts++;
-		lastAttemptDraw = draws;
-		log.info("[headless-login] attempt {}/{}: synthesizing Play Now click at {},{} (canvas {}x{} displayable={})",
-			attempts, MAX_ATTEMPTS, CLICK_X, CLICK_Y, canvas.getWidth(), canvas.getHeight(), canvas.isDisplayable());
-		clickPlayNow(canvas);
+		playAttempts++;
+		lastPlayDraw = draws;
+		log.info("[headless-login] Play Now attempt {}/{}: synthesizing click at {},{} (canvas {}x{} displayable={})",
+			playAttempts, MAX_ATTEMPTS, CLICK_X, CLICK_Y, canvas.getWidth(), canvas.getHeight(), canvas.isDisplayable());
+		synthesizeClick(canvas, CLICK_X, CLICK_Y);
 	}
 
 	private static void selectWorld(Client client)
@@ -208,7 +286,7 @@ public final class HeadlessLogin
 		}
 	}
 
-	private static void clickPlayNow(Canvas canvas)
+	private static void synthesizeClick(Canvas canvas, int x, int y)
 	{
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
@@ -217,16 +295,16 @@ public final class HeadlessLogin
 		// focus owner headless, so assert it explicitly before the click.
 		q.postEvent(new FocusEvent(canvas, FocusEvent.FOCUS_GAINED, false, null));
 
-		// Move the pointer onto the button first so the gamepack's recorded mouse position is over Play Now
+		// Move the pointer onto the target first so the gamepack's recorded mouse position is over the button
 		// when it samples the press on the next game tick.
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_ENTERED, t, 0, CLICK_X, CLICK_Y, 0, false));
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t + 1, 0, CLICK_X, CLICK_Y, 0, false));
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_ENTERED, t, 0, x, y, 0, false));
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t + 1, 0, x, y, 0, false));
 
 		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, t + 2,
-			InputEvent.BUTTON1_DOWN_MASK, CLICK_X, CLICK_Y, 1, false, MouseEvent.BUTTON1));
+			InputEvent.BUTTON1_DOWN_MASK, x, y, 1, false, MouseEvent.BUTTON1));
 		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t + 3,
-			0, CLICK_X, CLICK_Y, 1, false, MouseEvent.BUTTON1));
+			0, x, y, 1, false, MouseEvent.BUTTON1));
 		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, t + 4,
-			0, CLICK_X, CLICK_Y, 1, false, MouseEvent.BUTTON1));
+			0, x, y, 1, false, MouseEvent.BUTTON1));
 	}
 }

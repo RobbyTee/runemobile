@@ -74,6 +74,9 @@ public final class HeadlessCapture
 	// and decide which capture budget applies. Volatile because the engine's render thread and the
 	// (same) caller are the only writers, but keep memory visibility honest.
 	private static volatile GameState lastState;
+	// Latest observed login sub-state; logged on change so the EULA→welcome progression (e.g. 12→10) is
+	// visible even while gameState stays LOGIN_SCREEN. -2 = "never observed" (loginIndex is -1 in-game).
+	private static int lastLoginIndex = -2;
 
 	static
 	{
@@ -154,6 +157,16 @@ public final class HeadlessCapture
 		{
 			log.info("[headless-capture] gameState {} -> {} (draw#{} loginIndex={} launcherDisplayName={})",
 				prev, state, drawCount.get(), loginIndex, launcherDisplayName);
+		}
+
+		// Log loginIndex transitions too — they advance (e.g. EULA 12 → welcome 10) while gameState stays
+		// LOGIN_SCREEN, so without this the EULA-accept handoff is invisible in the log.
+		final int prevLoginIndex = lastLoginIndex;
+		lastLoginIndex = loginIndex;
+		if (loginIndex != prevLoginIndex && state == GameState.LOGIN_SCREEN)
+		{
+			log.info("[headless-capture] loginIndex {} -> {} (draw#{} state={} launcherDisplayName={})",
+				prevLoginIndex, loginIndex, drawCount.get(), state, launcherDisplayName);
 		}
 	}
 
