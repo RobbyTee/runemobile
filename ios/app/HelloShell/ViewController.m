@@ -4,6 +4,11 @@
 #import <fcntl.h>
 
 @interface ViewController () <UITextFieldDelegate>
+{
+    // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
+    // desktop stone. A C array, so it lives as an ivar rather than a property.
+    CGPoint _tabCentres[14];
+}
 @property (nonatomic, strong) UITextView *console;
 @property (nonatomic, strong) UIButton *launchButton;
 @property (nonatomic, strong) UIButton *canaryButton;
@@ -47,6 +52,12 @@
 @property (nonatomic, assign) CGFloat wheelAccum;
 // Contextual keyboard: previous gamepack text-input state, for edge-triggered auto raise/dismiss.
 @property (nonatomic, assign) BOOL prevInputOpen;
+// W3 hybrid-chrome native tab rails (cover-in-place first pass): 14 opaque native buttons drawn over the live
+// desktop tab stones (positions/active state from the MobileChromeBridge snapshot each tick); a tap proxies an
+// onClick onto the stone centre. A ▦ toggle shows/hides them for instant A/B fallback.
+@property (nonatomic, strong) NSMutableArray<UIButton *> *tabButtons;
+@property (nonatomic, strong) UIButton *chromeToggle;
+@property (nonatomic, assign) BOOL chromeVisible;
 @end
 
 // AWT virtual keycodes for the non-text keys we synthesize (java.awt.event.KeyEvent.VK_*).
@@ -112,6 +123,25 @@ static NSString * const kKbSentinel = @"​";
     [self.keyboardButton addTarget:self action:@selector(onToggleKeyboard)
                   forControlEvents:UIControlEventTouchUpInside];
     [self.screen addSubview:self.keyboardButton];
+
+    // Native tab rails: 14 frame-positioned opaque buttons (subviews of the game view, like the keyboard
+    // button — each consumes its own tap so the rest of the screen still drives the game gestures). Laid out
+    // + highlighted from the chrome snapshot each tick; hidden until present + LOGGED_IN.
+    self.tabButtons = [NSMutableArray arrayWithCapacity:14];
+    for (int i = 0; i < 14; i++) {
+        UIButton *tb = [UIButton buttonWithType:UIButtonTypeCustom];
+        tb.tag = i;
+        tb.hidden = YES;
+        tb.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+        [tb setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        [tb setTitle:[NSString stringWithFormat:@"%d", i] forState:UIControlStateNormal];
+        tb.layer.cornerRadius = 4;
+        tb.clipsToBounds = YES;
+        [tb addTarget:self action:@selector(onTabButton:) forControlEvents:UIControlEventTouchUpInside];
+        [self.screen addSubview:tb];
+        [self.tabButtons addObject:tb];
+    }
+    self.chromeVisible = YES;
 
     // Hidden capture field — placed offscreen (not hidden, so it can still become first responder).
     self.kbField = [[UITextField alloc] initWithFrame:CGRectMake(-200, -200, 10, 10)];
@@ -201,6 +231,18 @@ static NSString * const kKbSentinel = @"​";
                forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.debugToggle];
 
+    // Chrome rails toggle — always on top, left of the ≡ toggle. Shows/hides the native tab rails (A/B).
+    self.chromeToggle = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.chromeToggle.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.chromeToggle setTitle:@"▦" forState:UIControlStateNormal];
+    self.chromeToggle.titleLabel.font = [UIFont boldSystemFontOfSize:22];
+    self.chromeToggle.tintColor = [UIColor whiteColor];
+    self.chromeToggle.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
+    self.chromeToggle.layer.cornerRadius = 8;
+    [self.chromeToggle addTarget:self action:@selector(onToggleChrome)
+                forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.chromeToggle];
+
     UILayoutGuide *g = self.view.safeAreaLayoutGuide;
     UILayoutGuide *sg = self.screen.safeAreaLayoutGuide;
     UILayoutGuide *p = self.debugPanel.layoutMarginsGuide;
@@ -225,6 +267,12 @@ static NSString * const kKbSentinel = @"​";
         [self.debugToggle.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-8],
         [self.debugToggle.widthAnchor constraintEqualToConstant:44],
         [self.debugToggle.heightAnchor constraintEqualToConstant:36],
+
+        // Chrome rails toggle, just left of the ≡ toggle.
+        [self.chromeToggle.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
+        [self.chromeToggle.trailingAnchor constraintEqualToAnchor:self.debugToggle.leadingAnchor constant:-8],
+        [self.chromeToggle.widthAnchor constraintEqualToConstant:44],
+        [self.chromeToggle.heightAnchor constraintEqualToConstant:36],
 
         // Debug panel — left ~62% of the safe area, full height, below the toggle row.
         [self.debugPanel.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
@@ -319,6 +367,77 @@ static NSString * const kKbSentinel = @"​";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         [JVMLauncher runRwxCanary:log];
     });
+}
+
+#pragma mark - W3 native tab rails (cover-in-place)
+
+// Map a game-canvas rect to the screen image view's coordinate space, honouring the ScaleAspectFit letterbox
+// (the inverse of mapPoint:). self.screen.image's size IS the game canvas, so this places a native rail
+// exactly over the live desktop widget.
+- (CGRect)viewRectForGameX:(int)gx y:(int)gy w:(int)gw h:(int)gh {
+    UIImage *img = self.screen.image;
+    if (img == nil) return CGRectZero;
+    CGFloat iw = img.size.width, ih = img.size.height;
+    if (iw <= 0 || ih <= 0) return CGRectZero;
+    CGRect b = self.screen.bounds;
+    CGFloat scale = MIN(b.size.width / iw, b.size.height / ih);
+    CGFloat ox = (b.size.width - iw * scale) * 0.5;
+    CGFloat oy = (b.size.height - ih * scale) * 0.5;
+    return CGRectMake(gx * scale + ox, gy * scale + oy, gw * scale, gh * scale);
+}
+
+// Lay out + highlight the native tab rails from the read-only chrome snapshot. Cover-in-place: each present
+// tab stone gets an opaque native button at the stone's live bounds; the active tab (TOPLEVEL_PANEL) is
+// accented. Hides buttons for absent/hidden tabs and when not logged in. Mutates no game widget.
+- (void)updateChrome {
+    NSString *snap = [JVMLauncher chromeSnapshot];
+    if (snap.length == 0) return;
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
+                                                     options:0 error:nil];
+    if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) {
+        for (UIButton *btn in self.tabButtons) btn.hidden = YES;
+        return;
+    }
+    int active = [d[@"activeTab"] intValue];
+    NSArray *tabs = [d[@"tabs"] isKindOfClass:[NSArray class]] ? d[@"tabs"] : @[];
+    for (NSUInteger i = 0; i < self.tabButtons.count; i++) {
+        UIButton *btn = self.tabButtons[i];
+        id t = i < tabs.count ? tabs[i] : nil;
+        if (![t isKindOfClass:[NSArray class]] || [(NSArray *)t count] < 4) {
+            btn.hidden = YES;
+            continue;
+        }
+        NSArray *bb = (NSArray *)t;
+        int x = [bb[0] intValue], y = [bb[1] intValue], w = [bb[2] intValue], h = [bb[3] intValue];
+        _tabCentres[i] = CGPointMake(x + w / 2.0, y + h / 2.0);
+        btn.frame = [self viewRectForGameX:x y:y w:w h:h];
+        BOOL isActive = ((int)i == active);
+        btn.backgroundColor = isActive ? [UIColor colorWithRed:0.55 green:0.13 blue:0.08 alpha:1.0]
+                                       : [UIColor colorWithWhite:0.10 alpha:1.0];
+        btn.layer.borderWidth = isActive ? 2.0 : 0.0;
+        btn.layer.borderColor = [UIColor orangeColor].CGColor;
+        btn.hidden = NO;
+    }
+}
+
+// A native tab tap -> proxy a left click on the live desktop stone centre (the device-proven switch primitive,
+// JavaBridge.onClick). The button consumed the tap, so it never leaks to the game gestures beneath.
+- (void)onTabButton:(UIButton *)b {
+    if (![JVMLauncher bridgeReady]) return;
+    NSInteger i = b.tag;
+    if (i < 0 || i >= 14) return;
+    CGPoint c = _tabCentres[i];
+    [JVMLauncher postClickX:(int)lround(c.x) y:(int)lround(c.y) button:1];
+    [self appendLine:[NSString stringWithFormat:@"[chrome] tab %ld -> proxy click %d,%d",
+                      (long)i, (int)lround(c.x), (int)lround(c.y)]];
+}
+
+- (void)onToggleChrome {
+    self.chromeVisible = !self.chromeVisible;
+    if (!self.chromeVisible) {
+        for (UIButton *btn in self.tabButtons) btn.hidden = YES;
+    }
+    [self appendLine:[NSString stringWithFormat:@"[chrome] rails %@", self.chromeVisible ? @"ON" : @"OFF"]];
 }
 
 // W3 hybrid-chrome device de-risk: prove the native side can (a) READ the MobileChromeBridge snapshot on
@@ -451,6 +570,12 @@ static NSString * const kKbSentinel = @"​";
     if (self.framesShown == 1 || self.framesShown % 60 == 0) {
         [self appendLine:[NSString stringWithFormat:@"[shell] live blit frame #%d (%.0fx%.0f)",
                           self.framesShown, img.size.width, img.size.height]];
+    }
+
+    // Refresh the native tab rails from the chrome snapshot (~10 Hz — positions/active state rarely change,
+    // and the JSON read is cheap). Skipped entirely when the rails are toggled off.
+    if (self.chromeVisible && self.framesShown % 6 == 0) {
+        [self updateChrome];
     }
 
     // Contextual keyboard: when the gamepack opens a text field (search / PM / enter-amount), raise the
