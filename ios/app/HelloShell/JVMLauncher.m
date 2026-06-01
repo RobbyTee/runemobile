@@ -35,7 +35,7 @@ static JNIEnv   *gMainEnv = NULL;     // the UI thread's attached env (main thre
 static jclass    gBridgeClass = NULL; // global ref to net.runelite.client.headless.JavaBridge
 static jmethodID gMidW = NULL, gMidH = NULL, gMidSeq = NULL, gMidPixels = NULL;
 static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidMove = NULL;
-static jmethodID gMidWheel = NULL, gMidCamera = NULL;
+static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
 
 // Resolve + cache the JavaBridge facade on the calling (main) thread. Returns YES once usable.
 static BOOL ensureBridge(void) {
@@ -66,8 +66,10 @@ static BOOL ensureBridge(void) {
     gMidMove   = (*env)->GetStaticMethodID(env, global, "onMove", "(II)V");
     gMidWheel  = (*env)->GetStaticMethodID(env, global, "onWheel", "(III)V");
     gMidCamera = (*env)->GetStaticMethodID(env, global, "onCameraDrag", "(II)V");
+    gMidText   = (*env)->GetStaticMethodID(env, global, "onText", "(Ljava/lang/String;)V");
+    gMidKey    = (*env)->GetStaticMethodID(env, global, "onKeyStroke", "(I)V");
     if (!gMidW || !gMidH || !gMidSeq || !gMidPixels || !gMidTouch || !gMidClick || !gMidMove
-        || !gMidWheel || !gMidCamera) {
+        || !gMidWheel || !gMidCamera || !gMidText || !gMidKey) {
         (*env)->ExceptionClear(env);
         (*env)->DeleteGlobalRef(env, global);   // don't leak the class ref on the retry path
         return NO;                              // retry next tick (the class may load just after bringup)
@@ -475,6 +477,24 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidCamera, (jint)dx, (jint)dy);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)postText:(NSString *)text {
+    if (!ensureBridge() || text.length == 0) return;
+    JNIEnv *env = gMainEnv;
+    jstring js = (*env)->NewStringUTF(env, text.UTF8String);
+    if (js) {
+        (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidText, js);
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+        (*env)->DeleteLocalRef(env, js);
+    }
+}
+
++ (void)postKeyStroke:(int)awtKeyCode {
+    if (!ensureBridge()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidKey, (jint)awtKeyCode);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 

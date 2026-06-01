@@ -3,10 +3,15 @@
 #import <unistd.h>
 #import <fcntl.h>
 
-@interface ViewController ()
+@interface ViewController () <UITextFieldDelegate>
 @property (nonatomic, strong) UITextView *console;
 @property (nonatomic, strong) UIButton *launchButton;
 @property (nonatomic, strong) UIButton *canaryButton;
+@property (nonatomic, strong) UIButton *keyboardButton;
+// Hidden capture field: becomes first responder to raise the soft keyboard; its change/return callbacks
+// are translated into AWT KeyEvents. It never actually holds text (a zero-width sentinel keeps backspace
+// firing, and every change returns NO).
+@property (nonatomic, strong) UITextField *kbField;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) NSTimer *jitTimer;
 @property (nonatomic, strong) NSFileHandle *logFile;
@@ -76,6 +81,27 @@
                 forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.canaryButton];
 
+    self.keyboardButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.keyboardButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.keyboardButton setTitle:@"⌨︎" forState:UIControlStateNormal];
+    self.keyboardButton.titleLabel.font = [UIFont systemFontOfSize:20];
+    [self.keyboardButton addTarget:self action:@selector(onToggleKeyboard)
+                  forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.keyboardButton];
+
+    // Hidden capture field — placed offscreen (not hidden, so it can still become first responder).
+    self.kbField = [[UITextField alloc] initWithFrame:CGRectMake(-200, -200, 10, 10)];
+    self.kbField.delegate = self;
+    self.kbField.autocorrectionType = UITextAutocorrectionTypeNo;          // raw game input
+    self.kbField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    self.kbField.spellCheckingType = UITextSpellCheckingTypeNo;
+    self.kbField.smartQuotesType = UITextSmartQuotesTypeNo;
+    self.kbField.smartDashesType = UITextSmartDashesTypeNo;
+    self.kbField.smartInsertDeleteType = UITextSmartInsertDeleteTypeNo;
+    self.kbField.keyboardType = UIKeyboardTypeASCIICapable;
+    self.kbField.returnKeyType = UIReturnKeyDefault;
+    [self.view addSubview:self.kbField];
+
     // The game screen: where captured RuneLite frames are blitted live (W3 shell start).
     self.screen = [[UIImageView alloc] init];
     self.screen.translatesAutoresizingMaskIntoConstraints = NO;
@@ -131,6 +157,8 @@
         [self.launchButton.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:12],
         [self.canaryButton.centerYAnchor constraintEqualToAnchor:self.launchButton.centerYAnchor],
         [self.canaryButton.leadingAnchor constraintEqualToAnchor:self.launchButton.trailingAnchor constant:24],
+        [self.keyboardButton.centerYAnchor constraintEqualToAnchor:self.launchButton.centerYAnchor],
+        [self.keyboardButton.leadingAnchor constraintEqualToAnchor:self.canaryButton.trailingAnchor constant:24],
 
         // Game screen takes the upper ~55% (765x503 aspect renders large); console below it.
         [self.screen.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor constant:8],
@@ -392,6 +420,46 @@
     if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) { gx = 382; gy = 251; }
     [JVMLauncher postWheelX:gx y:gy rotation:notches];
     [self appendLine:[NSString stringWithFormat:@"[shell] pinch -> wheel rot=%d at %d,%d", notches, gx, gy]];
+}
+
+#pragma mark - Keyboard -> KeyEvent bridge (Phase 5)
+
+// AWT virtual keycodes for the non-text keys we synthesize (java.awt.event.KeyEvent.VK_*).
+static const int AWT_VK_BACK_SPACE = 8;
+static const int AWT_VK_ENTER      = 10;
+// Zero-width sentinel so a backspace on an "empty" field still fires shouldChangeCharactersInRange.
+static NSString * const kKbSentinel = @"​";
+
+- (void)onToggleKeyboard {
+    if ([self.kbField isFirstResponder]) {
+        [self.kbField resignFirstResponder];
+        [self appendLine:@"[shell] keyboard hidden"];
+    } else {
+        self.kbField.text = kKbSentinel;   // reset the sentinel each time it opens
+        [self.kbField becomeFirstResponder];
+        [self appendLine:@"[shell] keyboard shown (type -> game)"];
+    }
+}
+
+// Every edit is intercepted and forwarded as KeyEvents; the field itself never changes (return NO), so it
+// always holds just the sentinel.
+- (BOOL)textField:(UITextField *)tf shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString *)string {
+    if (string.length > 0) {
+        [JVMLauncher postText:string];
+        [self appendLine:[NSString stringWithFormat:@"[shell] key text '%@'", string]];
+    } else if (range.length > 0) {
+        for (NSUInteger i = 0; i < range.length; i++) {
+            [JVMLauncher postKeyStroke:AWT_VK_BACK_SPACE];
+        }
+        [self appendLine:@"[shell] key backspace"];
+    }
+    return NO;   // keep the field at the sentinel — we only capture, never store
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)tf {
+    [JVMLauncher postKeyStroke:AWT_VK_ENTER];
+    [self appendLine:@"[shell] key enter"];
+    return NO;   // keep the keyboard up for the next line
 }
 
 - (void)endBgTask {

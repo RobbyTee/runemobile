@@ -29,6 +29,7 @@ import java.awt.EventQueue;
 import java.awt.Toolkit;
 import java.awt.event.FocusEvent;
 import java.awt.event.InputEvent;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseWheelEvent;
 import lombok.extern.slf4j.Slf4j;
@@ -219,17 +220,30 @@ public final class JavaBridge
 	}
 
 	/**
-	 * Assert focus + pointer position on the very first interaction. There is no native focus owner
-	 * headless, so the gamepack ignores mouse input until it believes the canvas has focus — exactly what
-	 * {@code HeadlessLogin} primes before its scripted click.
+	 * Assert canvas focus once. There is no native focus owner headless, so the gamepack ignores mouse
+	 * <em>and</em> keyboard input until it believes the canvas has focus.
 	 */
-	private static void primeFocus(EventQueue q, Canvas canvas, long t, int x, int y)
+	private static void ensureFocus(EventQueue q, Canvas canvas)
 	{
 		if (!focused)
 		{
 			q.postEvent(new FocusEvent(canvas, FocusEvent.FOCUS_GAINED, false, null));
-			q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_ENTERED, t, 0, x, y, 0, false));
 			focused = true;
+		}
+	}
+
+	/**
+	 * Assert focus + pointer position on the very first pointer interaction (focus, then a
+	 * {@code MOUSE_ENTERED} so the gamepack samples the pointer) — exactly what {@code HeadlessLogin}
+	 * primes before its scripted click.
+	 */
+	private static void primeFocus(EventQueue q, Canvas canvas, long t, int x, int y)
+	{
+		final boolean wasFocused = focused;
+		ensureFocus(q, canvas);
+		if (!wasFocused)
+		{
+			q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_ENTERED, t, 0, x, y, 0, false));
 		}
 	}
 
@@ -337,6 +351,71 @@ public final class JavaBridge
 			p = Math.max(PITCH_MIN, Math.min(PITCH_MAX, p));
 			c.setCameraPitchTarget(p);
 		}
+	}
+
+	/**
+	 * Type committed text — for each character post {@code KEY_PRESSED} + {@code KEY_TYPED} +
+	 * {@code KEY_RELEASED}. The gamepack's text fields (chat, search, username/password) consume the
+	 * {@code KEY_TYPED} char, which carries the exact character (and case) the iOS keyboard committed.
+	 * Called from the hidden {@code UITextField}'s change callback, so autocorrect/paste arrive as one
+	 * coherent string.
+	 */
+	public static void onText(String s)
+	{
+		final Canvas canvas = liveCanvas();
+		if (canvas == null || s == null || s.isEmpty())
+		{
+			return;
+		}
+		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+		long t = System.currentTimeMillis();
+		ensureFocus(q, canvas);
+		for (int i = 0; i < s.length(); i++)
+		{
+			final char c = s.charAt(i);
+			final int vk = KeyEvent.getExtendedKeyCodeForChar(c);
+			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, vk, c));
+			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, c));
+			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, vk, c));
+			t += 3;
+		}
+	}
+
+	/**
+	 * Press + release one non-text key by its AWT virtual-keycode ({@code KeyEvent.VK_*}) — backspace,
+	 * enter, escape, tab, arrows, etc. Backspace/enter/tab also emit the matching {@code KEY_TYPED} control
+	 * char (a gamepack text field deletes/submits on those). Posted from the hidden field's delete/return
+	 * callbacks and any on-screen key.
+	 */
+	public static void onKeyStroke(int vk)
+	{
+		final Canvas canvas = liveCanvas();
+		if (canvas == null)
+		{
+			return;
+		}
+		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+		final long t = System.currentTimeMillis();
+		ensureFocus(q, canvas);
+		char kc = KeyEvent.CHAR_UNDEFINED;
+		if (vk == KeyEvent.VK_BACK_SPACE)
+		{
+			kc = '\b';
+		}
+		else if (vk == KeyEvent.VK_ENTER)
+		{
+			kc = '\n';
+		}
+		else if (vk == KeyEvent.VK_TAB)
+		{
+			kc = '\t';
+		}
+		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, vk, kc));
+		if (kc != KeyEvent.CHAR_UNDEFINED)
+		{
+			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, kc));
+		}
+		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, vk, kc));
 	}
 
 	/**

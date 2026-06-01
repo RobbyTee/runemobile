@@ -62,6 +62,14 @@ typedef void (^JVMLogSink)(NSString *line);
 /// yaw/pitch targets directly (no middle-mouse). Call on the main thread.
 + (void)postCameraDx:(int)dx dy:(int)dy;
 
+/// Type committed text via JavaBridge.onText (KEY_PRESSED+KEY_TYPED+KEY_RELEASED per char). From the
+/// hidden UITextField's change callback. Call on the main thread.
++ (void)postText:(NSString *)text;
+
+/// Press+release one non-text key via JavaBridge.onKeyStroke, by AWT virtual keycode (8=backspace,
+/// 10=enter, 27=escape, 9=tab, 37/38/39/40=arrows). Call on the main thread.
++ (void)postKeyStroke:(int)awtKeyCode;
+
 @end
 
 NS_ASSUME_NONNULL_END
