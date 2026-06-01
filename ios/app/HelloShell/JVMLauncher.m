@@ -175,8 +175,10 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
                                                   // increased-memory-limit entitlement)
         [NSString stringWithFormat:@"-Duser.home=%@", docs],                       // -> <docs>/.runelite
         [NSString stringWithFormat:@"-Drunelite.headless.capture.dir=%@", captureDir],
-        @"-Drunelite.headless.capture.interval=50",
-        @"-Dheadless.runSeconds=200",
+        @"-Drunelite.headless.capture.interval=2",  // eager: grab the first login frames the instant the
+                                                    // engine starts drawing (device process is short-lived)
+        @"-Dheadless.runSeconds=30",                // poll cap; DeviceHeadlessBoot exits early on frames
+        @"-Dheadless.captureTargetFrames=3",
         [NSString stringWithFormat:@"-Djava.home=%@", javaHome],
         [NSString stringWithFormat:@"-Djava.library.path=%@", frameworks],
         [NSString stringWithFormat:@"-Djava.class.path=%@", classpath],

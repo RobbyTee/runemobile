@@ -33,19 +33,24 @@ public class DeviceHeadlessBoot {
         net.runelite.client.headless.RuneLiteHeadless.main(new String[]{"--safe-mode"});
 
         long runSeconds = Long.getLong("headless.runSeconds", 60L);
-        System.out.println("[boot] RuneLite.main returned; keep-alive " + runSeconds + "s for capture");
+        // Minimum login-screen frames to grab before exiting cleanly. The device process is killed by iOS
+        // within seconds of boot, so we do NOT idle-wait — we POLL fast and bail the instant we have
+        // proof-of-render frames. (Desktop: with capture.interval=2, frame #1 lands at the engine's draw
+        // #2, i.e. the same instant rendering starts — so a short survival window suffices.)
+        final int targetFrames = Integer.getInteger("headless.captureTargetFrames", 3);
 
-        // Per-tick keep-alive: log elapsed seconds + whether the engine is actually rendering
-        // (HeadlessCapture.draw counter) + frames written, every 5 s. This makes the run
-        // SELF-DIAGNOSING — the next device log shows exactly how long the process survived, whether
-        // Hooks.draw was ever driven (draw#>0 ⇒ engine render loop alive), and how many PNGs landed.
-        // If the log stops mid-loop with no "[boot] DeviceHeadlessBoot done", the process was
-        // terminated externally (jetsam/detach) at the last printed tick.
-        final long tickMs = 5000L;
-        final long ticks = Math.max(1, (runSeconds * 1000L) / tickMs);
-        for (long t = 1; t <= ticks; t++)
+        System.out.println("[boot] RuneLite.main returned; eager-capture poll (target=" + targetFrames
+            + " frames, max " + runSeconds + "s)");
+
+        // Poll every 250 ms: log draws/frames so the run is self-diagnosing, and EXIT as soon as we have
+        // targetFrames PNGs (don't wait out the clock — minimise required survival time). If the log stops
+        // with no "captured"/"timeout" line, iOS killed us before even this fired.
+        final long pollMs = 250L;
+        final long polls = Math.max(1, (runSeconds * 1000L) / pollMs);
+        int lastDraws = -1, lastFrames = -1;
+        for (long p = 1; p <= polls; p++)
         {
-            Thread.sleep(tickMs);
+            Thread.sleep(pollMs);
             int draws = -1, frames = -1, nullG = -1;
             String state = "?";
             try
@@ -58,10 +63,22 @@ public class DeviceHeadlessBoot {
                 state = gs == null ? "null" : gs.toString();
             }
             catch (Throwable ignore) { /* capture class may be absent in non-§6.2 probe builds */ }
-            System.out.println("[boot] keep-alive tick " + (t * tickMs / 1000L) + "s/"
-                + runSeconds + "s  draws=" + draws + " nullGraphics=" + nullG
-                + " frames=" + frames + " state=" + state);
+
+            if (draws != lastDraws || frames != lastFrames || p % 4 == 0)
+            {
+                System.out.println("[boot] poll " + (p * pollMs) + "ms  draws=" + draws
+                    + " nullGraphics=" + nullG + " frames=" + frames + " state=" + state);
+                lastDraws = draws;
+                lastFrames = frames;
+            }
+            if (frames >= targetFrames)
+            {
+                System.out.println("[boot] DeviceHeadlessBoot done: captured " + frames
+                    + " frames at " + (p * pollMs) + "ms (target " + targetFrames + " met)");
+                return;
+            }
         }
-        System.out.println("[boot] DeviceHeadlessBoot done (reached keep-alive end, NOT externally killed)");
+        System.out.println("[boot] DeviceHeadlessBoot done: timeout after " + runSeconds
+            + "s with " + lastFrames + " frames (engine drew " + lastDraws + ")");
     }
 }
