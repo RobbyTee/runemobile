@@ -292,11 +292,10 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"-Drunelite.bridge=true",                   // enable the reverse-JNI live-blit + touch facade (W3 B)
         @"-Drunelite.mobileui=true",                 // Phase-6 (W3): arm the MobileUiBridge control-plane facade
                                                      // (plugin/config DTOs + chat-input tick snapshot)
-        // --- Phase-6 STEP-0 device confirm (REMOVE these two after the device smoke is GREEN) ---
-        @"-Drunelite.mobileui.smoke=true",           // arm MobileUiSmokeRunner's daemon (logs MUI_* to stdio)
-        @"-ea:net.runelite.client.plugins.PluginManager",  // make the startPlugin/stopPlugin EDT asserts LIVE
-                                                           // on device (else they are silent no-ops; audit risk #2)
-        // ----------------------------------------------------------------------------------------
+        // Phase-6 STEP-0 device smoke confirmed GREEN (2026-06-01): lanes separate (config on client thread,
+        // toggle on EDT), overlay registers headless (Ground Items 92->146), config persists across launches,
+        // PluginManager EDT asserts live. To re-run the on-device self-test, re-add:
+        //   @"-Drunelite.mobileui.smoke=true", @"-ea:net.runelite.client.plugins.PluginManager",
         @"-Drunelite.headless.capture.interval=10",
         @"-Drunelite.headless.capture.preLoginMax=40",  // login-screen/EULA frames before LOGGED_IN gets its
                                                         // own (MAX_FRAMES) budget; a long LOADING can't starve it

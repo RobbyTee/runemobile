@@ -92,10 +92,10 @@ public final class MobileUiSmokeRunner
 		try
 		{
 			out("MUI_PHASE=device");
-			// (1) positive control: is -ea actually on? Otherwise the EDT asserts are no-ops.
-			boolean ea = false;
-			// noinspection AssertWithSideEffects,ConstantConditions
-			assert (ea = true);
+			// (1) positive control: are the PluginManager start/stop EDT asserts actually LIVE? Probe the
+			// EXACT class whose assertions matter — not a generic -ea check in this package, which the device's
+			// surgical "-ea:net.runelite.client.plugins.PluginManager" would (correctly) leave disabled here.
+			final boolean ea = net.runelite.client.plugins.PluginManager.class.desiredAssertionStatus();
 			out("MUI_EA=" + ea);
 
 			if (!await("injector", 90_000, () -> RuneLite.getInjector() != null))
