@@ -301,6 +301,7 @@ public final class JavaBridge
 		final long t = System.currentTimeMillis();
 		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_EXITED, t, 0, -1, -1, 0, false));
 		entered = false;
+		log.info("[snap] clearHover (camera/pinch begin) -> MOUSE_EXITED");
 	}
 
 	/**
@@ -331,45 +332,65 @@ public final class JavaBridge
 		}
 		final ClientThread ct = clientThread;
 		final Client c = client;
-		if (SNAP_ENABLED && button == MouseEvent.BUTTON1 && ct != null
+		if (button == MouseEvent.BUTTON1 && ct != null
 			&& c != null && c.getGameState() == GameState.LOGGED_IN)
 		{
-			// Resolve + click on the client thread (off-thread scene reads can tear/NPE mid-update). Called
-			// from the native UI thread, so this is invokeLater: the click lands on the next game loop (~20ms).
+			// In-game left tap, on the client thread (scene reads are only safe there). Two engine cycles:
+			// cycle 1 moves the pointer to the (snapped) point so the engine recomputes the left-click action
+			// FOR THAT POINT; cycle 2 actually clicks. Posting move+click in one batch let the click fire the
+			// action computed for the PREVIOUS cursor position — which is exactly the "rotate camera, then a
+			// walk-tap interacts with whatever the frozen cursor was over" bug. ~1 extra cycle (~20ms), unseen.
 			ct.invoke(() ->
 			{
-				final int[] p = resolveSnap(c, x, y);
-				synthesizeClick(canvas, p[0], p[1], MouseEvent.BUTTON1);
+				final int[] p = SNAP_ENABLED ? resolveSnap(c, x, y) : new int[]{x, y};
+				postMove(canvas, p[0], p[1]);
+				ct.invokeLater(() -> postClickButtons(canvas, p[0], p[1], MouseEvent.BUTTON1));
 			});
 			return;
 		}
 		synthesizeClick(canvas, x, y, button);
 	}
 
-	/** Post the focus-prime + move + press + release + click sequence at {@code (x,y)} for {@code awtButton}. */
+	/** Post the focus-prime + move + press + release + click sequence at {@code (x,y)} in one batch. */
 	private static void synthesizeClick(Canvas canvas, int x, int y, int awtButton)
+	{
+		postMove(canvas, x, y);
+		postClickButtons(canvas, x, y, awtButton);
+	}
+
+	/** Prime focus/presence and move the pointer to {@code (x,y)} (no buttons) — lets the engine re-target. */
+	private static void postMove(Canvas canvas, int x, int y)
+	{
+		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+		final long t = System.currentTimeMillis();
+		primeFocus(q, canvas, t, x, y);
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t + 1, 0, x, y, 0, false));
+	}
+
+	/** Post press + release + click at {@code (x,y)} for {@code awtButton} (no preceding move). */
+	private static void postClickButtons(Canvas canvas, int x, int y, int awtButton)
 	{
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
 		final int downMask = awtButton == MouseEvent.BUTTON3
 			? InputEvent.BUTTON3_DOWN_MASK : InputEvent.BUTTON1_DOWN_MASK;
-
-		primeFocus(q, canvas, t, x, y);
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t + 1, 0, x, y, 0, false));
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, t + 2,
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, t,
 			downMask, x, y, 1, false, awtButton));
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t + 3,
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t + 1,
 			0, x, y, 1, false, awtButton));
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, t + 4,
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, t + 2,
 			0, x, y, 1, false, awtButton));
 	}
 
 	// Mutable accumulator for the nearest snap candidate (kept off the hot path; one per resolveSnap call).
+	// Also carries diagnostics so a single device run explains every tap (why it did / didn't snap).
 	private static final class Nearest
 	{
-		Shape shape;
+		Shape shape;            // best candidate within radius
 		double dist = Double.MAX_VALUE;
-		boolean exact;  // the tap already lands inside a clickbox -> don't snap
+		int considered;         // candidates with a non-null clickbox/hull
+		double nearestAny = Double.MAX_VALUE;  // closest candidate distance REGARDLESS of radius (for tuning)
+		boolean exact;          // the tap already lands inside a clickbox -> don't snap, engine hits it
 	}
 
 	/**
@@ -395,17 +416,11 @@ public final class JavaBridge
 			// Actors first (NPCs then players) — on a distance tie an actor outranks scenery.
 			for (Actor a : wv.npcs())
 			{
-				if (consider(a.getConvexHull(), x, y, r, near))
-				{
-					return original;
-				}
+				consider(a.getConvexHull(), x, y, r, near);
 			}
 			for (Actor a : wv.players())
 			{
-				if (consider(a.getConvexHull(), x, y, r, near))
-				{
-					return original;
-				}
+				consider(a.getConvexHull(), x, y, r, near);
 			}
 
 			// Scene objects on the current plane.
@@ -431,30 +446,38 @@ public final class JavaBridge
 						{
 							for (GameObject go : gos)
 							{
-								if (go != null && consider(go.getClickbox(), x, y, r, near))
+								if (go != null)
 								{
-									return original;
+									consider(go.getClickbox(), x, y, r, near);
 								}
 							}
 						}
-						if (considerObj(tile.getWallObject(), x, y, r, near)
-							|| considerObj(tile.getGroundObject(), x, y, r, near)
-							|| considerObj(tile.getDecorativeObject(), x, y, r, near))
-						{
-							return original;
-						}
+						considerObj(tile.getWallObject(), x, y, r, near);
+						considerObj(tile.getGroundObject(), x, y, r, near);
+						considerObj(tile.getDecorativeObject(), x, y, r, near);
 					}
 				}
 			}
 
+			if (near.exact)
+			{
+				log.info("[snap] tap {},{} -> exact-hit, no snap (considered={})", x, y, near.considered);
+				return original;
+			}
 			if (near.shape != null)
 			{
 				final int[] cen = hullCentroid(near.shape);
 				snapCount++;
-				log.info("[bridge] tap-snap {},{} -> {},{} (dist {}px, #{} this session)",
-					x, y, cen[0], cen[1], (int) near.dist, snapCount);
+				log.info("[snap] tap {},{} -> SNAP {},{} dist={}px (considered={} nearestAny={}px radius={} #{})",
+					x, y, cen[0], cen[1], (int) near.dist, near.considered,
+					(int) (near.nearestAny == Double.MAX_VALUE ? -1 : near.nearestAny), snapRadius(), snapCount);
 				return cen;
 			}
+			// No snap: log WHY (how many clickboxes existed, and how far the nearest one was) so the radius
+			// can be tuned to real touch data instead of guessed.
+			log.info("[snap] tap {},{} -> none (considered={} nearestAny={}px radius={})",
+				x, y, near.considered,
+				(int) (near.nearestAny == Double.MAX_VALUE ? -1 : near.nearestAny), snapRadius());
 		}
 		catch (RuntimeException ex)
 		{
@@ -465,37 +488,42 @@ public final class JavaBridge
 	}
 
 	/** {@link TileObject} overload of {@link #consider(Shape, int, int, int, Nearest)} (uses its clickbox). */
-	private static boolean considerObj(net.runelite.api.TileObject o, int x, int y, int r, Nearest near)
+	private static void considerObj(net.runelite.api.TileObject o, int x, int y, int r, Nearest near)
 	{
-		return o != null && consider(o.getClickbox(), x, y, r, near);
+		if (o != null)
+		{
+			consider(o.getClickbox(), x, y, r, near);
+		}
 	}
 
-	/**
-	 * Fold one candidate clickbox into {@code near}. Returns {@code true} iff the tap is already inside it
-	 * (an exact hit — caller should abandon snapping and use the literal point).
-	 */
-	private static boolean consider(Shape s, int x, int y, int r, Nearest near)
+	/** Fold one candidate clickbox into {@code near} (tracks exact-hit, nearest-within-radius, diagnostics). */
+	private static void consider(Shape s, int x, int y, int r, Nearest near)
 	{
 		if (s == null)
 		{
-			return false;
+			return;
 		}
 		if (s.contains(x, y))
 		{
-			return true;
+			near.exact = true;
+			return;
 		}
 		final Rectangle b = s.getBounds();
 		if (b.width <= 0 || b.height <= 0)
 		{
-			return false;
+			return;
 		}
 		final double d = distToRect(x, y, b);
+		near.considered++;
+		if (d < near.nearestAny)
+		{
+			near.nearestAny = d;
+		}
 		if (d <= r && d < near.dist)
 		{
 			near.dist = d;
 			near.shape = s;
 		}
-		return false;
 	}
 
 	/** Centroid of a convex hull's vertices — guaranteed inside the (convex) shape, unlike the bbox centre. */
