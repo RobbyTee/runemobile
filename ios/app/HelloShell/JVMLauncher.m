@@ -170,7 +170,9 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
         @"--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
         // §6.2: heap for the full client + a writable RuneLite home (gamepack cache) + capture dir.
-        @"-Xmx512m",                              // depends on the increased-memory-limit entitlement
+        @"-Xmx256m",                              // jetsam hedge: 512m+JIT+native risked an early kill;
+                                                  // 256m is ample for the login screen (depends on the
+                                                  // increased-memory-limit entitlement)
         [NSString stringWithFormat:@"-Duser.home=%@", docs],                       // -> <docs>/.runelite
         [NSString stringWithFormat:@"-Drunelite.headless.capture.dir=%@", captureDir],
         @"-Drunelite.headless.capture.interval=50",

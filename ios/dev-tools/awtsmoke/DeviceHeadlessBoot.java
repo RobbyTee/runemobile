@@ -34,7 +34,34 @@ public class DeviceHeadlessBoot {
 
         long runSeconds = Long.getLong("headless.runSeconds", 60L);
         System.out.println("[boot] RuneLite.main returned; keep-alive " + runSeconds + "s for capture");
-        Thread.sleep(runSeconds * 1000L);
-        System.out.println("[boot] DeviceHeadlessBoot done");
+
+        // Per-tick keep-alive: log elapsed seconds + whether the engine is actually rendering
+        // (HeadlessCapture.draw counter) + frames written, every 5 s. This makes the run
+        // SELF-DIAGNOSING — the next device log shows exactly how long the process survived, whether
+        // Hooks.draw was ever driven (draw#>0 ⇒ engine render loop alive), and how many PNGs landed.
+        // If the log stops mid-loop with no "[boot] DeviceHeadlessBoot done", the process was
+        // terminated externally (jetsam/detach) at the last printed tick.
+        final long tickMs = 5000L;
+        final long ticks = Math.max(1, (runSeconds * 1000L) / tickMs);
+        for (long t = 1; t <= ticks; t++)
+        {
+            Thread.sleep(tickMs);
+            int draws = -1, frames = -1, nullG = -1;
+            String state = "?";
+            try
+            {
+                draws = net.runelite.client.headless.HeadlessCapture.getDrawCount();
+                frames = net.runelite.client.headless.HeadlessCapture.getCapturedFrames()
+                       + net.runelite.client.headless.HeadlessCapture.getLoggedInFrames();
+                nullG = net.runelite.client.headless.HeadlessCapture.getNullGraphicsCount();
+                java.lang.Object gs = net.runelite.client.headless.HeadlessCapture.getLastState();
+                state = gs == null ? "null" : gs.toString();
+            }
+            catch (Throwable ignore) { /* capture class may be absent in non-§6.2 probe builds */ }
+            System.out.println("[boot] keep-alive tick " + (t * tickMs / 1000L) + "s/"
+                + runSeconds + "s  draws=" + draws + " nullGraphics=" + nullG
+                + " frames=" + frames + " state=" + state);
+        }
+        System.out.println("[boot] DeviceHeadlessBoot done (reached keep-alive end, NOT externally killed)");
     }
 }
