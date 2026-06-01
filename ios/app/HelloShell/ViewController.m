@@ -56,6 +56,7 @@
 // desktop tab stones (positions/active state from the MobileChromeBridge snapshot each tick); a tap proxies an
 // onClick onto the stone centre. A ▦ toggle shows/hides them for instant A/B fallback.
 @property (nonatomic, strong) NSMutableArray<UIButton *> *tabButtons;
+@property (nonatomic, strong) UIView *tabRailBg;   // opaque rail behind the edge-split icon grid
 @property (nonatomic, strong) UIButton *chromeToggle;
 @property (nonatomic, assign) BOOL chromeVisible;
 @end
@@ -124,18 +125,25 @@ static NSString * const kKbSentinel = @"​";
                   forControlEvents:UIControlEventTouchUpInside];
     [self.screen addSubview:self.keyboardButton];
 
-    // Native tab rails: 14 frame-positioned opaque buttons (subviews of the game view, like the keyboard
-    // button — each consumes its own tap so the rest of the screen still drives the game gestures). Laid out
-    // + highlighted from the chrome snapshot each tick; hidden until present + LOGGED_IN.
+    // Native tab rails (edge-split, mobile arrangement): a 2-column icon grid pinned to the right edge of the
+    // game view. The opaque rail background sits behind the icon buttons; each icon is blitted from the live
+    // desktop stone's sprite region, and a tap proxies a click onto the real stone centre (so the native
+    // position is decoupled from the proxy target — no widget is moved/hidden). Subviews of the game view
+    // (keyboard-button pattern: each consumes its own tap, the rest drives the game gestures).
+    self.tabRailBg = [[UIView alloc] init];
+    self.tabRailBg.hidden = YES;
+    self.tabRailBg.backgroundColor = [UIColor colorWithWhite:0.04 alpha:0.92];
+    self.tabRailBg.layer.cornerRadius = 10;
+    self.tabRailBg.userInteractionEnabled = NO;   // never eats taps; the buttons on top do
+    [self.screen addSubview:self.tabRailBg];
+
     self.tabButtons = [NSMutableArray arrayWithCapacity:14];
     for (int i = 0; i < 14; i++) {
         UIButton *tb = [UIButton buttonWithType:UIButtonTypeCustom];
         tb.tag = i;
         tb.hidden = YES;
-        tb.titleLabel.font = [UIFont boldSystemFontOfSize:11];
-        [tb setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        [tb setTitle:[NSString stringWithFormat:@"%d", i] forState:UIControlStateNormal];
-        tb.layer.cornerRadius = 4;
+        tb.imageView.contentMode = UIViewContentModeScaleAspectFit;
+        tb.layer.cornerRadius = 6;
         tb.clipsToBounds = YES;
         [tb addTarget:self action:@selector(onTabButton:) forControlEvents:UIControlEventTouchUpInside];
         [self.screen addSubview:tb];
@@ -386,9 +394,30 @@ static NSString * const kKbSentinel = @"​";
     return CGRectMake(gx * scale + ox, gy * scale + oy, gw * scale, gh * scale);
 }
 
-// Lay out + highlight the native tab rails from the read-only chrome snapshot. Cover-in-place: each present
-// tab stone gets an opaque native button at the stone's live bounds; the active tab (TOPLEVEL_PANEL) is
-// accented. Hides buttons for absent/hidden tabs and when not logged in. Mutates no game widget.
+// Crop a tab stone's sprite from the live game frame (self.screen.image is at game-canvas resolution, so the
+// crop rect is the stone's game bounds directly). Inset to drop the stone border and keep the icon glyph. The
+// crop reads the GAME render only (native UIKit buttons are composited on top, not in the image), so there is
+// no feedback loop even when the native rail overlaps the stone.
+- (UIImage *)cropIconX:(int)x y:(int)y w:(int)w h:(int)h {
+    UIImage *img = self.screen.image;
+    if (img == nil || img.CGImage == NULL) return nil;
+    const CGFloat inset = 5.0;
+    CGRect r = CGRectMake(x + inset, y + inset, MAX(1.0, w - 2 * inset), MAX(1.0, h - 2 * inset));
+    CGRect bounds = CGRectMake(0, 0, img.size.width, img.size.height);
+    r = CGRectIntersection(r, bounds);
+    if (CGRectIsEmpty(r)) return nil;
+    CGImageRef cg = CGImageCreateWithImageInRect(img.CGImage, r);
+    if (!cg) return nil;
+    UIImage *out = [UIImage imageWithCGImage:cg];
+    CGImageRelease(cg);
+    return out;
+}
+
+// Lay out the native tab rails from the read-only chrome snapshot — EDGE-SPLIT (mobile) arrangement: the
+// present tab stones are gathered into a 2-column icon grid pinned to the right edge of the game view, each
+// icon blitted from the live desktop stone, the active tab (TOPLEVEL_PANEL) accented. A tap proxies a click
+// onto the REAL stone centre (stored in _tabCentres), so the native rail's position is independent of where
+// the desktop stone is — no game widget is moved or hidden. Hides everything when not logged in / no tabs.
 - (void)updateChrome {
     NSString *snap = [JVMLauncher chromeSnapshot];
     if (snap.length == 0) return;
@@ -396,24 +425,59 @@ static NSString * const kKbSentinel = @"​";
                                                      options:0 error:nil];
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) {
         for (UIButton *btn in self.tabButtons) btn.hidden = YES;
+        self.tabRailBg.hidden = YES;
         return;
     }
     int active = [d[@"activeTab"] intValue];
     NSArray *tabs = [d[@"tabs"] isKindOfClass:[NSArray class]] ? d[@"tabs"] : @[];
+
+    // Collect present tab indices (and refresh their proxy-target centres) in tab-index order.
+    NSMutableArray<NSNumber *> *present = [NSMutableArray array];
     for (NSUInteger i = 0; i < self.tabButtons.count; i++) {
-        UIButton *btn = self.tabButtons[i];
         id t = i < tabs.count ? tabs[i] : nil;
         if (![t isKindOfClass:[NSArray class]] || [(NSArray *)t count] < 4) {
-            btn.hidden = YES;
+            self.tabButtons[i].hidden = YES;
             continue;
         }
         NSArray *bb = (NSArray *)t;
         int x = [bb[0] intValue], y = [bb[1] intValue], w = [bb[2] intValue], h = [bb[3] intValue];
         _tabCentres[i] = CGPointMake(x + w / 2.0, y + h / 2.0);
-        btn.frame = [self viewRectForGameX:x y:y w:w h:h];
+        [present addObject:@(i)];
+    }
+
+    NSUInteger n = present.count;
+    if (n == 0) {
+        self.tabRailBg.hidden = YES;
+        return;
+    }
+
+    // 2-column grid pinned to the right edge of the game view, vertically centred.
+    const CGFloat cell = 46.0, pad = 6.0, cols = 2.0, edge = 10.0;
+    NSUInteger rows = (n + 1) / 2;   // ceil(n/2)
+    CGFloat gridW = cols * cell + (cols - 1) * pad;
+    CGFloat gridH = rows * cell + (rows - 1) * pad;
+    CGRect sb = self.screen.bounds;
+    CGFloat gx0 = sb.size.width - gridW - edge;
+    CGFloat gy0 = MAX(edge, (sb.size.height - gridH) * 0.5);
+
+    self.tabRailBg.frame = CGRectInset(CGRectMake(gx0, gy0, gridW, gridH), -7, -7);
+    self.tabRailBg.hidden = NO;
+
+    for (NSUInteger k = 0; k < n; k++) {
+        NSUInteger i = present[k].unsignedIntegerValue;
+        UIButton *btn = self.tabButtons[i];
+        NSArray *bb = tabs[i];
+        int x = [bb[0] intValue], y = [bb[1] intValue], w = [bb[2] intValue], h = [bb[3] intValue];
+
+        NSUInteger col = k % 2, row = k / 2;
+        btn.frame = CGRectMake(gx0 + col * (cell + pad), gy0 + row * (cell + pad), cell, cell);
+
+        UIImage *icon = [self cropIconX:x y:y w:w h:h];
+        [btn setImage:icon forState:UIControlStateNormal];
+
         BOOL isActive = ((int)i == active);
-        btn.backgroundColor = isActive ? [UIColor colorWithRed:0.55 green:0.13 blue:0.08 alpha:1.0]
-                                       : [UIColor colorWithWhite:0.10 alpha:1.0];
+        btn.backgroundColor = isActive ? [UIColor colorWithRed:0.45 green:0.11 blue:0.06 alpha:1.0]
+                                       : [UIColor colorWithWhite:0.16 alpha:1.0];
         btn.layer.borderWidth = isActive ? 2.0 : 0.0;
         btn.layer.borderColor = [UIColor orangeColor].CGColor;
         btn.hidden = NO;
@@ -436,6 +500,7 @@ static NSString * const kKbSentinel = @"​";
     self.chromeVisible = !self.chromeVisible;
     if (!self.chromeVisible) {
         for (UIButton *btn in self.tabButtons) btn.hidden = YES;
+        self.tabRailBg.hidden = YES;
     }
     [self appendLine:[NSString stringWithFormat:@"[chrome] rails %@", self.chromeVisible ? @"ON" : @"OFF"]];
 }
