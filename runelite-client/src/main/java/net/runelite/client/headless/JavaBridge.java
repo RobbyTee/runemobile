@@ -301,7 +301,7 @@ public final class JavaBridge
 		final long t = System.currentTimeMillis();
 		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_EXITED, t, 0, -1, -1, 0, false));
 		entered = false;
-		log.info("[snap] clearHover (camera/pinch begin) -> MOUSE_EXITED");
+		log.debug("[snap] clearHover (camera/pinch begin) -> MOUSE_EXITED");
 	}
 
 	/**
@@ -461,21 +461,22 @@ public final class JavaBridge
 
 			if (near.exact)
 			{
-				log.info("[snap] tap {},{} -> exact-hit, no snap (considered={})", x, y, near.considered);
+				log.debug("[snap] tap {},{} -> exact-hit, no snap (considered={})", x, y, near.considered);
 				return original;
 			}
 			if (near.shape != null)
 			{
 				final int[] cen = hullCentroid(near.shape);
 				snapCount++;
-				log.info("[snap] tap {},{} -> SNAP {},{} dist={}px (considered={} nearestAny={}px radius={} #{})",
+				log.debug("[snap] tap {},{} -> SNAP {},{} dist={}px (considered={} nearestAny={}px radius={} #{})",
 					x, y, cen[0], cen[1], (int) near.dist, near.considered,
 					(int) (near.nearestAny == Double.MAX_VALUE ? -1 : near.nearestAny), snapRadius(), snapCount);
 				return cen;
 			}
-			// No snap: log WHY (how many clickboxes existed, and how far the nearest one was) so the radius
-			// can be tuned to real touch data instead of guessed.
-			log.info("[snap] tap {},{} -> none (considered={} nearestAny={}px radius={})",
+			// No snap: at debug only (the device-tuning round is done; the scene is clickbox-saturated so
+			// "nearestAny" is ~always 0 and snap-to-nearest is near-redundant — priority, not radius, is the
+			// real lever if we revisit forgiveness).
+			log.debug("[snap] tap {},{} -> none (considered={} nearestAny={}px radius={})",
 				x, y, near.considered,
 				(int) (near.nearestAny == Double.MAX_VALUE ? -1 : near.nearestAny), snapRadius());
 		}
