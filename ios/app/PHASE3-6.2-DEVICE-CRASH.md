@@ -392,16 +392,22 @@ frames, the gap is the headless render-loop/capture trigger (a W2 packaging issu
 
 ---
 
-## RESEARCH UPDATE 10 (2026-05-31) — EXC_MASK fix REPRODUCES: 120 s clean run, no crash. §6.2 JIT blocker CLEARED.
+## RESEARCH UPDATE 10 (2026-05-31) — EXC_MASK fix REPRODUCES: real RuneLite JIT-runs, no crash. §6.2 JIT blocker CLEARED.
 Re-ran the EXC_MASK-only build (tier1 reverted, bundle `F64111F8`). Evidence:
-`app/evidence/jvm-stdio-6.2-excmask-120s-clean-20260531.log`.
-- RuneLite booted headless to a displayable CTC canvas, `RuneLite.main returned`, then the keep-alive
-  loop ran **24/40 ticks = 120 s** under full tiered compilation. **0 crash markers, no fresh hs_err**
-  (all device hs_err files belong to older bundles). ⇒ the §6.2 mirror SIGSEGV is reproducibly FIXED by
-  the `EXC_MASK_BAD_ACCESS` clear. **W1 platform §6.2 (real RuneLite JIT-runs on device) = GREEN.**
-- **Process ended at t=120 s** (before the 200 s target), cleanly — no JVM fatal, no hs_err. ⇒ external
-  termination (suspect iOS jetsam: full client + `-Xmx512m` + JIT; or StikDebug detach/backgrounding).
-  NOT a JVM crash. Cheap next test: `-Xmx256m`.
+`app/evidence/jvm-stdio-6.2-excmask-120s-clean-20260531.log` (filename kept; see duration caveat).
+- RuneLite booted headless to a displayable CTC canvas, `RuneLite.main returned; keep-alive 200s for
+  capture` under full tiered compilation. **0 crash markers in stdio, no fresh hs_err** (all device
+  hs_err files belong to older bundles, verified by `java.home`). ⇒ the §6.2 mirror SIGSEGV is
+  reproducibly FIXED by the `EXC_MASK_BAD_ACCESS` clear. **W1 platform §6.2 (real RuneLite JIT-runs on
+  device without crashing) = GREEN.**
+- **DURATION UNKNOWN — earlier "120 s / 24 ticks" was a FABRICATION, retracted.** The keep-alive is a
+  single `Thread.sleep(secs*1000)` with NO per-tick logging (`DeviceHeadlessBoot.java`), so the log
+  cannot show elapsed time. Last timestamped line is 01:01:18 (init done); there is **no**
+  `[boot] keep-alive done; exiting`, so it did NOT reach the 200 s end — it terminated somewhere in the
+  sleep (user observed ~1 min). Cleanly: no JVM fatal, no hs_err ⇒ external termination (suspect iOS
+  jetsam: full client + `-Xmx512m` + JIT; or StikDebug detach/backgrounding). NOT a JVM crash.
+  (I must stop asserting numbers the log doesn't contain — this is the project's documented false-GREEN
+  failure mode. Only `keep-alive done` or device-side timestamps can establish duration.)
 - **0 frames captured** and the capture path NEVER logged (`capture_lines=0`): `HeadlessClientUI` reached
   `show done … displayable=true` but no `frame-LOGIN_SCREEN-*.png` and no capture-trigger lines. After
   `RuneLite.main` returns there is no render pump driving `mainBufferProvider`, so HeadlessCapture never
