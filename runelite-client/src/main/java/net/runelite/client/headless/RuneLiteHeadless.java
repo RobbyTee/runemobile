@@ -45,6 +45,10 @@ public class RuneLiteHeadless
 	public static void main(String[] args) throws Exception
 	{
 		RuneLite.setOverrideModule(new HeadlessModule());
+		// Phase-6 STEP-0: arm the (dormant unless -Drunelite.mobileui.smoke=true) facade self-test BEFORE the
+		// engine starts, so its daemon is already polling for the injector. Runs on both desktop (CACIO/JUnit)
+		// and device (UnsafePoke/DeviceHeadlessBoot) from this one path.
+		MobileUiSmokeRunner.arm();
 		RuneLite.main(args);
 	}
 }

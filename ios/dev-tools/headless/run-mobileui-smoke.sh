@@ -2,17 +2,15 @@
 # Phase-6 (W3) STEP-0 de-risk: prove the MobileUiBridge facade's thread semantics + type/config serialization
 # on desktop OpenJDK 21 BEFORE building any native UI (the W2 develop-first rule). Boots real RuneLite headless
 # under the CACIO CTC toolkit (no OS window — the honest iOS proxy) with:
-#   -ea                         so the startPlugin/stopPlugin EDT asserts are LIVE (a no-op -ea would hide a
-#                               wrong-thread bug — see the design audit's risk #2)
-#   -Drunelite.mobileui=true    arms the facade + its tick() snapshot
+#   -ea                          so the startPlugin/stopPlugin EDT asserts are LIVE (a no-op -ea would hide a
+#                                wrong-thread bug — see the design audit's risk #2)
+#   -Drunelite.mobileui=true     arms the facade + its tick() snapshot
+#   -Drunelite.mobileui.smoke=true  arms the MobileUiSmokeRunner daemon (the SAME checks that run on device)
 #
-# Runs MobileUiSmoke twice: phase "write" (drive the facade, flush a sentinel config), then phase "read"
-# (a fresh JVM confirms the sentinel survived to disk). The GREEN/RED verdict is computed HERE in bash from
-# the grepped MUI_* markers and md5-gated against the verbatim log — never trusting a success string the JVM
-# printed (the documented false-GREEN guard).
-#
-# Login is OPTIONAL: if ios/dev-tools/tokens.json exists it is mapped to JX_* + autologin (enables the
-# chat-bounds check); otherwise the core thread/config/persistence proofs run without secrets.
+# The checks live in net.runelite.client.headless.MobileUiSmokeRunner (in the jar) so desktop and device run
+# IDENTICAL bytes; here MobileUiSmoke.java is just the CACIO/JUnit activation wrapper. Runs TWICE so the second
+# launch reads the first launch's config sentinel back off disk (cross-launch persistence). The GREEN/RED
+# verdict is computed by mobileui-verdict.sh (bash, md5-gated) — never a JVM-printed success string.
 set -euo pipefail
 cd "$(dirname "$0")"
 REPO="../../.."
@@ -26,10 +24,10 @@ CACIOLIB="../cacio-smoke/lib"
 CACIO="$CACIOLIB/cacio-tta-1.18.jar:$CACIOLIB/cacio-shared-1.18.jar:$CACIOLIB/byte-buddy-1.14.11.jar:$CACIOLIB/byte-buddy-agent-1.14.11.jar"
 JUNIT="$CACIOLIB/junit-platform-console-standalone-1.10.2.jar"
 OUT="out-mobileui"
-RUN_SECONDS="${RUN_SECONDS:-90}"
+RUN_SECONDS="${RUN_SECONDS:-55}"
 
 if [ ! -f "$JAR" ]; then
-  echo "== building shaded client on JDK 21 (picks up MobileUiBridge) =="
+  echo "== building shaded client on JDK 21 (picks up MobileUiBridge + MobileUiSmokeRunner) =="
   (cd "$REPO" && ./gradlew :client:assemble --console=plain)
 fi
 if [ ! -f "$CACIOLIB/cacio-tta-1.18.jar" ] || [ ! -f "$JUNIT" ]; then
@@ -59,22 +57,19 @@ else
 fi
 
 mkdir -p "$OUT"
-echo "== compile MobileUiSmoke =="
+echo "== compile MobileUiSmoke (thin CACIO wrapper) =="
 "$JAVAC" -cp "$CACIO:$JUNIT:$JAR" -d "$OUT" MobileUiSmoke.java
 
-run_phase() # $1=phase  $2=logfile  $3.. extra props
+run_launch() # $1=logfile
 {
-  local phase="$1"; shift
-  local log="$1"; shift
-  echo "== phase '$phase' -> $log =="
+  local log="$1"
   set +e
   "$JAVA" \
     -ea \
     -Drunelite.mobileui=true \
-    -Dmui.phase="$phase" \
+    -Drunelite.mobileui.smoke=true \
     -Djdk.attach.allowAttachSelf=true \
     -Dheadless.runSeconds="$RUN_SECONDS" \
-    "$@" \
     ${LOGIN_PROPS[@]+"${LOGIN_PROPS[@]}"} \
     --add-exports=java.desktop/java.awt=ALL-UNNAMED \
     --add-exports=java.desktop/java.awt.peer=ALL-UNNAMED \
@@ -101,58 +96,10 @@ run_phase() # $1=phase  $2=logfile  $3.. extra props
   set -e
 }
 
-WLOG="$OUT/write.log"
-RLOG="$OUT/read.log"
+L1="$OUT/launch1.log"
+L2="$OUT/launch2.log"
+echo "== launch 1/2 -> $L1 =="; run_launch "$L1"
+echo "== launch 2/2 (reads launch-1 sentinel back off disk) -> $L2 =="; run_launch "$L2"
 
-run_phase write "$WLOG"
-
-# Pull the sentinel the write phase chose, then re-launch read-only to prove it persisted to disk.
-SENTINEL="$(grep -m1 '^MUI_SENTINEL=' "$WLOG" | cut -d= -f2- || true)"
-run_phase read "$RLOG" -Dmui.sentinel="$SENTINEL"
-
-# ---- bash-computed, md5-gated verdict (NEVER trust a JVM-printed success string) ----
-mk() { grep -m1 "^$1=" "$2" 2>/dev/null | cut -d= -f2- || true; }
-
-EA="$(mk MUI_EA "$WLOG")"
-LIST_OK="$(mk MUI_LIST_OK "$WLOG")"
-CFG_FIRED="$(mk MUI_CONFIG_FIRED "$WLOG")"
-CFG_VAL_OK="$(mk MUI_CONFIG_VALUE_OK "$WLOG")"
-CFG_CLIENT="$(mk MUI_CONFIG_ON_CLIENT_THREAD "$WLOG")"
-TOGGLE_OK="$(mk MUI_TOGGLE_OK "$WLOG")"
-TOGGLE_EDT="$(mk MUI_TOGGLE_ON_EDT "$WLOG")"
-OVERLAY_GREW="$(mk MUI_OVERLAY_GREW "$WLOG")"
-PERSIST_OK="$(mk MUI_PERSIST_OK "$RLOG")"
-LOGGED_IN="$(mk MUI_LOGGED_IN "$WLOG")"
-CHAT_OK="$(mk MUI_CHAT_OK "$WLOG")"
-
-echo
-echo "================ MobileUiBridge STEP-0 SMOKE ================"
-printf '  %-26s %s\n' "ea-live"            "$EA"
-printf '  %-26s %s\n' "listPlugins"        "$LIST_OK"
-printf '  %-26s %s\n' "config fired"       "$CFG_FIRED"
-printf '  %-26s %s\n' "config value match" "$CFG_VAL_OK"
-printf '  %-26s %s\n' "config on CLIENT"   "$CFG_CLIENT"
-printf '  %-26s %s\n' "toggle ok (EDT)"    "$TOGGLE_OK"
-printf '  %-26s %s\n' "overlay grew"       "$OVERLAY_GREW"
-printf '  %-26s %s\n' "persisted to disk"  "$PERSIST_OK"
-printf '  %-26s %s\n' "logged in"          "$LOGGED_IN"
-printf '  %-26s %s\n' "chat bounds ok"     "$CHAT_OK"
-
-# Core gates (login/chat is informational; overlay-grew is informational since not all plugins draw one).
-PASS=1
-for v in "$EA" "$LIST_OK" "$CFG_FIRED" "$CFG_VAL_OK" "$CFG_CLIENT" "$TOGGLE_OK" "$PERSIST_OK"; do
-  [ "$v" = "true" ] || PASS=0
-done
-
-# md5 over the exact grepped tuple — the gate. A faked stdout banner cannot move this hash.
-TUPLE="ea=$EA;list=$LIST_OK;cfgfired=$CFG_FIRED;cfgval=$CFG_VAL_OK;cfgclient=$CFG_CLIENT;toggle=$TOGGLE_OK;persist=$PERSIST_OK"
-MD5="$(printf '%s' "$TUPLE" | md5 -q 2>/dev/null || printf '%s' "$TUPLE" | md5sum | cut -d' ' -f1)"
-echo "  tuple: $TUPLE"
-echo "  md5:   $MD5"
-if [ "$PASS" = "1" ]; then
-  echo "  VERDICT: GREEN"
-else
-  echo "  VERDICT: RED"
-fi
-echo "============================================================"
-echo "logs: ios/dev-tools/headless/$WLOG , $RLOG"
+./mobileui-verdict.sh "$L1" "$L2"
+echo "logs: ios/dev-tools/headless/$L1 , $L2"

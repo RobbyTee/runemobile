@@ -290,6 +290,13 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         // ~every 10th draw so the W3 shell shows the LIVE, animated, complete login screen for the
         // whole window, and keep enough budget that it never freezes mid-run.
         @"-Drunelite.bridge=true",                   // enable the reverse-JNI live-blit + touch facade (W3 B)
+        @"-Drunelite.mobileui=true",                 // Phase-6 (W3): arm the MobileUiBridge control-plane facade
+                                                     // (plugin/config DTOs + chat-input tick snapshot)
+        // --- Phase-6 STEP-0 device confirm (REMOVE these two after the device smoke is GREEN) ---
+        @"-Drunelite.mobileui.smoke=true",           // arm MobileUiSmokeRunner's daemon (logs MUI_* to stdio)
+        @"-ea:net.runelite.client.plugins.PluginManager",  // make the startPlugin/stopPlugin EDT asserts LIVE
+                                                           // on device (else they are silent no-ops; audit risk #2)
+        // ----------------------------------------------------------------------------------------
         @"-Drunelite.headless.capture.interval=10",
         @"-Drunelite.headless.capture.preLoginMax=40",  // login-screen/EULA frames before LOGGED_IN gets its
                                                         // own (MAX_FRAMES) budget; a long LOADING can't starve it
