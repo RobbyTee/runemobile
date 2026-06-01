@@ -143,7 +143,8 @@ static NSString * const kKbSentinel = @"​";
         tb.tag = i;
         tb.hidden = YES;
         tb.imageView.contentMode = UIViewContentModeScaleAspectFit;
-        tb.layer.cornerRadius = 6;
+        tb.contentEdgeInsets = UIEdgeInsetsMake(7, 7, 7, 7);   // pad the glyph inside the cell (mobile look)
+        tb.layer.cornerRadius = 9;
         tb.clipsToBounds = YES;
         [tb addTarget:self action:@selector(onTabButton:) forControlEvents:UIControlEventTouchUpInside];
         [self.screen addSubview:tb];
@@ -401,7 +402,7 @@ static NSString * const kKbSentinel = @"​";
 - (UIImage *)cropIconX:(int)x y:(int)y w:(int)w h:(int)h {
     UIImage *img = self.screen.image;
     if (img == nil || img.CGImage == NULL) return nil;
-    const CGFloat inset = 5.0;
+    const CGFloat inset = 7.0;   // crop inside the stone bevel so mostly the icon glyph survives
     CGRect r = CGRectMake(x + inset, y + inset, MAX(1.0, w - 2 * inset), MAX(1.0, h - 2 * inset));
     CGRect bounds = CGRectMake(0, 0, img.size.width, img.size.height);
     r = CGRectIntersection(r, bounds);
@@ -413,26 +414,30 @@ static NSString * const kKbSentinel = @"​";
     return out;
 }
 
-// Lay out the native tab rails from the read-only chrome snapshot — EDGE-SPLIT (mobile) arrangement: the
-// present tab stones are gathered into a 2-column icon grid pinned to the right edge of the game view, each
-// icon blitted from the live desktop stone, the active tab (TOPLEVEL_PANEL) accented. A tap proxies a click
-// onto the REAL stone centre (stored in _tabCentres), so the native rail's position is independent of where
-// the desktop stone is — no game widget is moved or hidden. Hides everything when not logged in / no tabs.
+// Lay out the native tab rails from the read-only chrome snapshot — EDGE-SPLIT (mobile) arrangement, matching
+// the official OSRS-Mobile app: two SINGLE-column vertical rails, one on each screen edge (tab indices 0–6 on
+// the left, 7–13 on the right — the desktop's own STONE grouping). Each cell is an individual semi-transparent
+// rounded square with the icon blitted from the live desktop stone; the active tab (TOPLEVEL_PANEL) is
+// accented. A tap proxies a click onto the REAL stone centre (stored in _tabCentres), so the native rail's
+// position is independent of the desktop stone — no game widget is moved or hidden. Hides everything when not
+// logged in / no tabs.
 - (void)updateChrome {
     NSString *snap = [JVMLauncher chromeSnapshot];
     if (snap.length == 0) return;
     NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
                                                      options:0 error:nil];
+    self.tabRailBg.hidden = YES;   // mobile cells are individually styled; no solid rail strip behind them
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) {
         for (UIButton *btn in self.tabButtons) btn.hidden = YES;
-        self.tabRailBg.hidden = YES;
         return;
     }
     int active = [d[@"activeTab"] intValue];
     NSArray *tabs = [d[@"tabs"] isKindOfClass:[NSArray class]] ? d[@"tabs"] : @[];
 
-    // Collect present tab indices (and refresh their proxy-target centres) in tab-index order.
-    NSMutableArray<NSNumber *> *present = [NSMutableArray array];
+    // Split present tabs into a left column (idx 0–6) and a right column (idx 7–13), in tab-index order, and
+    // refresh each present tab's proxy-target centre.
+    NSMutableArray<NSNumber *> *left = [NSMutableArray array];
+    NSMutableArray<NSNumber *> *right = [NSMutableArray array];
     for (NSUInteger i = 0; i < self.tabButtons.count; i++) {
         id t = i < tabs.count ? tabs[i] : nil;
         if (![t isKindOfClass:[NSArray class]] || [(NSArray *)t count] < 4) {
@@ -442,44 +447,34 @@ static NSString * const kKbSentinel = @"​";
         NSArray *bb = (NSArray *)t;
         int x = [bb[0] intValue], y = [bb[1] intValue], w = [bb[2] intValue], h = [bb[3] intValue];
         _tabCentres[i] = CGPointMake(x + w / 2.0, y + h / 2.0);
-        [present addObject:@(i)];
+        [(i <= 6 ? left : right) addObject:@(i)];
     }
 
-    NSUInteger n = present.count;
-    if (n == 0) {
-        self.tabRailBg.hidden = YES;
-        return;
-    }
-
-    // 2-column grid pinned to the right edge of the game view, vertically centred.
-    const CGFloat cell = 46.0, pad = 6.0, cols = 2.0, edge = 10.0;
-    NSUInteger rows = (n + 1) / 2;   // ceil(n/2)
-    CGFloat gridW = cols * cell + (cols - 1) * pad;
-    CGFloat gridH = rows * cell + (rows - 1) * pad;
+    const CGFloat cell = 44.0, gap = 5.0, edge = 6.0;
     CGRect sb = self.screen.bounds;
-    CGFloat gx0 = sb.size.width - gridW - edge;
-    CGFloat gy0 = MAX(edge, (sb.size.height - gridH) * 0.5);
+    [self layoutColumn:left x:edge cell:cell gap:gap tabs:tabs active:active inBounds:sb];
+    [self layoutColumn:right x:(sb.size.width - cell - edge) cell:cell gap:gap tabs:tabs active:active inBounds:sb];
+}
 
-    self.tabRailBg.frame = CGRectInset(CGRectMake(gx0, gy0, gridW, gridH), -7, -7);
-    self.tabRailBg.hidden = NO;
-
+// Place one edge column of tab cells, vertically centred in the game view.
+- (void)layoutColumn:(NSArray<NSNumber *> *)col x:(CGFloat)x cell:(CGFloat)cell gap:(CGFloat)gap
+                tabs:(NSArray *)tabs active:(int)active inBounds:(CGRect)sb {
+    NSUInteger n = col.count;
+    if (n == 0) return;
+    CGFloat totalH = n * cell + (n - 1) * gap;
+    CGFloat y0 = MAX(6.0, (sb.size.height - totalH) * 0.5);
     for (NSUInteger k = 0; k < n; k++) {
-        NSUInteger i = present[k].unsignedIntegerValue;
+        NSUInteger i = col[k].unsignedIntegerValue;
         UIButton *btn = self.tabButtons[i];
         NSArray *bb = tabs[i];
-        int x = [bb[0] intValue], y = [bb[1] intValue], w = [bb[2] intValue], h = [bb[3] intValue];
-
-        NSUInteger col = k % 2, row = k / 2;
-        btn.frame = CGRectMake(gx0 + col * (cell + pad), gy0 + row * (cell + pad), cell, cell);
-
-        UIImage *icon = [self cropIconX:x y:y w:w h:h];
-        [btn setImage:icon forState:UIControlStateNormal];
-
+        int bx = [bb[0] intValue], by = [bb[1] intValue], bw = [bb[2] intValue], bh = [bb[3] intValue];
+        btn.frame = CGRectMake(x, y0 + k * (cell + gap), cell, cell);
+        [btn setImage:[self cropIconX:bx y:by w:bw h:bh] forState:UIControlStateNormal];
         BOOL isActive = ((int)i == active);
-        btn.backgroundColor = isActive ? [UIColor colorWithRed:0.45 green:0.11 blue:0.06 alpha:1.0]
-                                       : [UIColor colorWithWhite:0.16 alpha:1.0];
-        btn.layer.borderWidth = isActive ? 2.0 : 0.0;
-        btn.layer.borderColor = [UIColor orangeColor].CGColor;
+        btn.backgroundColor = isActive ? [UIColor colorWithRed:0.80 green:0.45 blue:0.10 alpha:0.85]
+                                       : [UIColor colorWithWhite:0.0 alpha:0.55];
+        btn.layer.borderWidth = isActive ? 1.5 : 0.0;
+        btn.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.9].CGColor;
         btn.hidden = NO;
     }
 }
