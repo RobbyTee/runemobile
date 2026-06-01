@@ -121,6 +121,20 @@ static NSString * const kKbSentinel = @"​";
     self.kbField.smartInsertDeleteType = UITextSmartInsertDeleteTypeNo;
     self.kbField.keyboardType = UIKeyboardTypeASCIICapable;
     self.kbField.returnKeyType = UIReturnKeyDefault;
+    // Accessory bar — sits ABOVE the soft keyboard (which covers the bottom-left ⌨ button), so there is
+    // always a reachable way to send a chat line and to dismiss the keyboard.
+    UIToolbar *bar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)];
+    bar.barStyle = UIBarStyleBlack;
+    bar.translucent = YES;
+    UIBarButtonItem *flex = [[UIBarButtonItem alloc]
+        initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+    UIBarButtonItem *send = [[UIBarButtonItem alloc]
+        initWithTitle:@"Send ⏎" style:UIBarButtonItemStylePlain target:self action:@selector(onKbSend)];
+    UIBarButtonItem *hide = [[UIBarButtonItem alloc]
+        initWithTitle:@"Hide ⌨︎" style:UIBarButtonItemStyleDone target:self action:@selector(onKbHide)];
+    bar.items = @[flex, send, hide];
+    [bar sizeToFit];
+    self.kbField.inputAccessoryView = bar;
     [self.view addSubview:self.kbField];
 
     // (1) Debug panel — overlay ABOVE the game (so the launch button is tappable; the old bug was the
@@ -511,6 +525,16 @@ static NSString * const kKbSentinel = @"​";
 }
 
 #pragma mark - Keyboard -> KeyEvent bridge (Phase 5)
+
+- (void)onKbSend {
+    [JVMLauncher postKeyStroke:AWT_VK_ENTER];
+    [self appendLine:@"[shell] key enter (bar)"];
+}
+
+- (void)onKbHide {
+    [self.kbField resignFirstResponder];
+    [self appendLine:@"[shell] keyboard hidden (bar)"];
+}
 
 - (void)onToggleKeyboard {
     if ([self.kbField isFirstResponder]) {

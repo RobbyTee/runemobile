@@ -36,6 +36,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.MainBufferProvider;
+import net.runelite.api.VarClientInt;
 
 /**
  * Phase-4 (W3) sub-goal B: the native&lt;-&gt;Java facade for a <em>real interactive</em> client on iOS.
@@ -378,6 +379,29 @@ public final class JavaBridge
 			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, c));
 			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, vk, c));
 			t += 3;
+		}
+	}
+
+	/**
+	 * Whether the gamepack currently has a text field open and awaiting input — a search box (bank/GE/world
+	 * map), a private-message recipient, an "enter amount/name" dialog, etc. ({@code VarClientInt.INPUT_TYPE}
+	 * is non-zero). The native shell polls this to auto-raise the soft keyboard when the game asks for text
+	 * and dismiss it when the field closes, so typing is summoned from inside the game, not a chrome button.
+	 */
+	public static boolean isTextInputOpen()
+	{
+		final Client c = ENABLED ? client : null;
+		if (c == null)
+		{
+			return false;
+		}
+		try
+		{
+			return c.getVarcIntValue(VarClientInt.INPUT_TYPE) != 0;
+		}
+		catch (RuntimeException ex)
+		{
+			return false;
 		}
 	}
 
