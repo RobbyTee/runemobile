@@ -423,6 +423,13 @@ public class Hooks implements Callbacks
 			// gated by -Drunelite.mobilechrome.probe=true. Mutates — never on the device launch path.
 			net.runelite.client.headless.MobileChromeProbe.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.MobileChromeReposProbe.isEnabled())
+		{
+			// W3 authentic mobile layout: reposition the real desktop tab stones into vertical edge columns
+			// (engine draws them — feathered, no native crop). Mutates widget positions; gated
+			// -Drunelite.mobilechrome.repos=true. Desktop de-risk first.
+			net.runelite.client.headless.MobileChromeReposProbe.tick(client, client.getGameState());
+		}
 
 		if (graphics == null)
 		{
