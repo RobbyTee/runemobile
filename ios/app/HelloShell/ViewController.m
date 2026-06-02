@@ -71,6 +71,10 @@ static const int AWT_VK_BACK_SPACE = 8;
 static const int AWT_VK_ENTER      = 10;
 // Zero-width sentinel so a backspace on an "empty" field still fires shouldChangeCharactersInRange.
 static NSString * const kKbSentinel = @"​";
+// Width (points) of the native tab-rail strip reserved at each side edge. The game view is inset by this on
+// both sides, so the docked side panel (at the game-canvas edge) ends INBOARD of the screen edge and the
+// native tabs fill the strips flush against it — the official mobile arrangement, with no widget moving.
+static const CGFloat kTabStrip = 46.0;
 
 @implementation ViewController
 
@@ -152,7 +156,7 @@ static NSString * const kKbSentinel = @"​";
         tb.contentEdgeInsets = UIEdgeInsetsZero;
         tb.clipsToBounds = NO;
         [tb addTarget:self action:@selector(onTabButton:) forControlEvents:UIControlEventTouchUpInside];
-        [self.screen addSubview:tb];
+        [self.view addSubview:tb];   // in the side strips, outside the (inset) game view
         [self.tabButtons addObject:tb];
     }
     [self buildTabAssets];
@@ -267,8 +271,8 @@ static NSString * const kKbSentinel = @"​";
         // area keeps everything on-screen; the render aspect is computed to match it (onLaunch) so there
         // are no internal letterbox bars either.
         [self.screen.topAnchor constraintEqualToAnchor:g.topAnchor],
-        [self.screen.leadingAnchor constraintEqualToAnchor:g.leadingAnchor],
-        [self.screen.trailingAnchor constraintEqualToAnchor:g.trailingAnchor],
+        [self.screen.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:kTabStrip],
+        [self.screen.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-kTabStrip],
         [self.screen.bottomAnchor constraintEqualToAnchor:g.bottomAnchor],
 
         // In-game keyboard control, bottom-left of the game's safe area.
@@ -478,24 +482,16 @@ static NSString * const kKbSentinel = @"​";
         [(i <= 6 ? left : right) addObject:@(i)];
     }
 
-    const CGFloat cell = 40.0, gap = 5.0;
-    CGRect sb = self.screen.bounds;
-
-    // Left column flush against the left edge (over the world).
-    [self layoutColumn:left x:0.0 cell:cell gap:gap tabs:tabs active:active inBounds:sb];
-
-    // Right column flush against the LEFT edge of the open side panel, so the panel sits flush against the
-    // tabs and the tabs never cover it (the desktop panel is docked at the screen edge and resists moving, so
-    // we move the tabs to it instead). Falls back to the screen edge when no panel is shown.
-    CGFloat rightX = sb.size.width - cell;
-    id sc = [d[@"sideContainer"] isKindOfClass:[NSArray class]] ? d[@"sideContainer"]
-          : ([d[@"sidePanel"] isKindOfClass:[NSArray class]] ? d[@"sidePanel"] : nil);
-    if ([sc isKindOfClass:[NSArray class]] && [(NSArray *)sc count] >= 4) {
-        NSArray *p = (NSArray *)sc;
-        CGRect pv = [self viewRectForGameX:[p[0] intValue] y:[p[1] intValue] w:[p[2] intValue] h:[p[3] intValue]];
-        if (pv.size.width > 0) rightX = pv.origin.x - cell - gap;
-    }
-    [self layoutColumn:right x:rightX cell:cell gap:gap tabs:tabs active:active inBounds:sb];
+    const CGFloat cell = 38.0, gap = 5.0;
+    // The columns live in the side strips (self.view coords), flanking the inset game view. The game canvas's
+    // docked side panel ends at the game view's right edge — i.e. flush against the right strip — so the menu
+    // sits flush against the tabs with no overlap.
+    CGRect gf = self.screen.frame;   // inset game view, in self.view coords
+    CGRect strip = CGRectMake(0, gf.origin.y, gf.origin.x, gf.size.height);   // left strip extent (for y span)
+    CGFloat leftX  = gf.origin.x - kTabStrip + (kTabStrip - cell) / 2.0;
+    CGFloat rightX = gf.origin.x + gf.size.width + (kTabStrip - cell) / 2.0;
+    [self layoutColumn:left  x:leftX  cell:cell gap:gap tabs:tabs active:active inBounds:strip];
+    [self layoutColumn:right x:rightX cell:cell gap:gap tabs:tabs active:active inBounds:strip];
 }
 
 // Place one edge column of tab cells, vertically centred in the game view.
@@ -504,7 +500,8 @@ static NSString * const kKbSentinel = @"​";
     NSUInteger n = col.count;
     if (n == 0) return;
     CGFloat totalH = n * cell + (n - 1) * gap;
-    CGFloat y0 = MAX(6.0, (sb.size.height - totalH) * 0.5);
+    // Centre the column within the strip's actual vertical extent (origin.y..origin.y+height).
+    CGFloat y0 = sb.origin.y + MAX(0.0, (sb.size.height - totalH) * 0.5);
     for (NSUInteger k = 0; k < n; k++) {
         NSUInteger i = col[k].unsignedIntegerValue;
         UIButton *btn = self.tabButtons[i];
@@ -640,13 +637,15 @@ static NSString * const kKbSentinel = @"​";
     // Render height ~600 (a comfortable in-game UI scale); width follows the aspect.
     CGRect b = self.view.bounds;
     UIEdgeInsets ins = self.view.safeAreaInsets;
-    CGFloat sw = b.size.width - ins.left - ins.right;
+    // The game view is inset by kTabStrip on each side (native tab rails fill the strips), so the render
+    // aspect must match the INSET width to avoid internal letterbox bars.
+    CGFloat sw = b.size.width - ins.left - ins.right - 2 * kTabStrip;
     CGFloat sh = b.size.height - ins.top - ins.bottom;
     CGFloat aspect = (sh > 0 ? sw / sh : 2.0);
     int renderH = 600;
     int renderW = (int)lround(renderH * aspect);
     launcher.resizeSpec = [NSString stringWithFormat:@"%dx%d", renderW, renderH];
-    [self appendLine:[NSString stringWithFormat:@"[shell] safe-area %.0fx%.0f aspect %.3f -> render %@",
+    [self appendLine:[NSString stringWithFormat:@"[shell] inset-area %.0fx%.0f aspect %.3f -> render %@",
                       sw, sh, aspect, launcher.resizeSpec]];
 
     NSThread *t = [[NSThread alloc] initWithBlock:^{
