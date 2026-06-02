@@ -8,6 +8,15 @@ NS_ASSUME_NONNULL_BEGIN
 /// a scroll view (mobilePanelImage). Taps map back to panel coords and dispatch as Swing clicks
 /// (mobilePanelClick) — the embedded-Swing surface, sibling to the game blit.
 @interface PluginPanelsViewController : UIViewController
+/// When YES (and not docked), present as a right-edge tool drawer over the dimmed, still-running game. When NO,
+/// the legacy centered-fullscreen layout (A/B fallback). Ignored when `docked`. Defaults to the drawer.
+@property (nonatomic, assign) BOOL drawerMode;
+
+/// When YES, run as a PERSISTENT dock hosted as a child on the game screen (not a modal): an always-visible
+/// plugin-icon rail on the right edge + an always-visible icon strip across the bottom, with the rendered
+/// panel opening inline over the live (still-usable) game. The host adds this as a child view controller and
+/// pins its (passthrough) view over the game. Takes precedence over `drawerMode`.
+@property (nonatomic, assign) BOOL docked;
 @end
 
 NS_ASSUME_NONNULL_END

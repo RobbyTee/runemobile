@@ -316,16 +316,46 @@ public final class MobileUiBridge
 		return out;
 	}
 
-	/** Toolbar list for the native shell: {@code [{index,tooltip}]} (panels only, Configuration excluded). */
+	/**
+	 * Toolbar list for the native shell: {@code [{index,tooltip,iconPng?}]} (panels only, Configuration
+	 * excluded). {@code iconPng} is the nav button's icon as a base64 PNG so the native drawer can show the
+	 * plugin's own icon in its title bar (the same icon RuneLite paints on the desktop sidebar toolbar).
+	 */
 	public static String listPanels()
 	{
 		final Json out = new Json().arr();
 		final java.util.List<NavigationButton> navs = panelNavs();
 		for (int i = 0; i < navs.size(); i++)
 		{
-			out.obj().ki("index", i).kv("tooltip", navs.get(i).getTooltip()).end();
+			final NavigationButton b = navs.get(i);
+			out.obj().ki("index", i).kv("tooltip", b.getTooltip());
+			final String icon = iconPngBase64(b.getIcon());
+			if (icon != null)
+			{
+				out.kv("iconPng", icon);
+			}
+			out.end();
 		}
 		return out.end().toString();
+	}
+
+	/** A nav button's icon as a base64 PNG (or null). ImageIO PNG encode works headless under CACIO. */
+	private static String iconPngBase64(BufferedImage icon)
+	{
+		if (icon == null)
+		{
+			return null;
+		}
+		try
+		{
+			final java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream(512);
+			javax.imageio.ImageIO.write(icon, "png", baos);
+			return java.util.Base64.getEncoder().encodeToString(baos.toByteArray());
+		}
+		catch (Throwable ex)
+		{
+			return null;
+		}
 	}
 
 	// ---- Active plugin panel: realized off-screen under CACIO, painted to a buffer the native shell blits ----
@@ -339,12 +369,18 @@ public final class MobileUiBridge
 	// resolution 1:1 (crisp, no upscale blur) at a comfortable size. 4x of 242 = 968px ≈ 323pt at 3x density.
 	// Clicks come back in buffer px and are divided by this to recover logical coords for Swing hit-testing.
 	private static final int RENDER_SCALE = 4;
+	// Memory budget for the panel buffer (pixels). ~3M px ARGB ≈ 12 MB — the cap below which the supersample
+	// scale is allowed; tall panels step down from 4x so the buffer never OOMs the game-shared heap.
+	private static final long MAX_BUFFER_PX = 3_000_000L;
 	private static volatile PluginPanel activePanel;
 	private static volatile JPanel activeWrapped;
 	private static volatile JWindow activeWindow;
 	private static volatile int[] panelPixels;
 	private static volatile int panelW;
 	private static volatile int panelH;
+	// The supersample scale actually used for the active panel's buffer (see renderActiveOnEdt — it is reduced
+	// from RENDER_SCALE for tall panels to keep the buffer within a memory budget). panelClick divides by it.
+	private static volatile int activeRenderScale = RENDER_SCALE;
 	private static final AtomicInteger panelSeq = new AtomicInteger();
 	private static volatile boolean panelRepainterRunning;
 
@@ -432,16 +468,27 @@ public final class MobileUiBridge
 		}
 		wrapped.validate();
 		final int logicalH = Math.max(1, Math.min(PANEL_MAX_H, pp.getPreferredSize().height + 12));
-		final int bw = PANEL_W * RENDER_SCALE;
-		final int bh = logicalH * RENDER_SCALE;
+		// Pick the largest supersample scale whose buffer fits a memory budget. A tall panel (World Switcher,
+		// Quest Helper) at full 4x is ~38 MB of ARGB on the 256 MB heap shared with the running game — that
+		// OOMs and the panel renders blank. Short panels (XP Tracker) still get the full 4x and stay crisp.
+		int scale = RENDER_SCALE;
+		while (scale > 1 && (long) PANEL_W * scale * logicalH * scale > MAX_BUFFER_PX)
+		{
+			scale--;
+		}
+		activeRenderScale = scale;
+		final int bw = PANEL_W * scale;
+		final int bh = logicalH * scale;
 		final BufferedImage img = new BufferedImage(bw, bh, BufferedImage.TYPE_INT_ARGB);
 		final Graphics2D g = img.createGraphics();
-		g.scale(RENDER_SCALE, RENDER_SCALE); // supersample: layout stays 242-logical, pixels are denser → crisp
+		g.scale(scale, scale); // supersample: layout stays 242-logical, pixels are denser → crisp
 		wrapped.printAll(g); // wrapped is PANEL_W x PANEL_MAX_H showing the content from the top
 		g.dispose();
-		panelPixels = ((DataBufferInt) img.getRaster().getDataBuffer()).getData();
+		// Publish the backing array directly (no copy). w/h are set BEFORE pixels; the native pull validates
+		// w*h == pixels.length and skips the rare torn frame, so we avoid a multi-MB copy every repaint.
 		panelW = bw;
 		panelH = bh;
+		panelPixels = ((DataBufferInt) img.getRaster().getDataBuffer()).getData();
 		panelSeq.incrementAndGet();
 	}
 
@@ -517,8 +564,10 @@ public final class MobileUiBridge
 				return;
 			}
 			// Incoming coords are buffer pixels; recover the 242-logical coords the Swing tree is laid out in.
-			final int lx = x / RENDER_SCALE;
-			final int ly = y / RENDER_SCALE;
+			// Divide by the scale ACTUALLY used for this panel's buffer (adaptive — see renderActiveOnEdt).
+			final int s = Math.max(1, activeRenderScale);
+			final int lx = x / s;
+			final int ly = y / s;
 			final Component target = SwingUtilities.getDeepestComponentAt(wrapped, lx, ly);
 			if (target == null)
 			{

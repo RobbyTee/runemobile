@@ -40,6 +40,7 @@
 // blits the newest frame-*.png to an on-screen image view — keeping the app in the foreground
 // "actively rendering" jetsam band AND showing the live login screen (the start of the real UI).
 @property (nonatomic, strong) UIImageView *screen;
+@property (nonatomic, strong) PluginPanelsViewController *panelDock; // persistent always-on panel dock
 @property (nonatomic, strong) CADisplayLink *displayLink;
 @property (nonatomic, assign) UIBackgroundTaskIdentifier bgTask;
 @property (nonatomic, copy)   NSString *captureDir;
@@ -115,6 +116,17 @@ static const CGFloat kTabStrip = 46.0;
     [self appendLine:@"Waiting for StikDebug attach (CS_DEBUGGED)…"];
     [self appendLine:@"Assign the iOS-26 JIT script to this app in StikDebug, then attach."];
     [self startJitPolling];
+
+    // Persistent plugin-panel dock: an always-on icon rail (right) + icon strip (bottom) over the live game,
+    // panels open inline without going through the settings menu. Passthrough overlay (game stays usable); it
+    // self-populates once RuneLite registers its panels and tracks plugin toggles.
+    self.panelDock = [[PluginPanelsViewController alloc] init];
+    self.panelDock.docked = YES;
+    [self addChildViewController:self.panelDock];
+    self.panelDock.view.frame = self.view.bounds;
+    self.panelDock.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:self.panelDock.view];
+    [self.panelDock didMoveToParentViewController:self];
 }
 
 - (void)buildUI {
@@ -426,6 +438,9 @@ static const CGFloat kTabStrip = 46.0;
     panels.titleLabel.font = [UIFont boldSystemFontOfSize:15];
     panels.tintColor = [UIColor colorWithRed:0.70 green:0.85 blue:0.55 alpha:1.0];
     [panels addTarget:self action:@selector(onOpenPanels) forControlEvents:UIControlEventTouchUpInside];
+    // Long-press = the legacy centered-fullscreen panel surface (instant A/B fallback against the new drawer).
+    UILongPressGestureRecognizer *panelsLegacy = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(onOpenPanelsLegacy:)];
+    [panels addGestureRecognizer:panelsLegacy];
     [card addSubview:panels];
 
     self.pluginTable = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
@@ -486,7 +501,21 @@ static const CGFloat kTabStrip = 46.0;
 }
 
 - (void)onOpenPanels {
+    // Drawer mode: present over the dimmed, still-running game. Close the plugins-management overlay first so
+    // what shows behind the dim is the live game (not the opaque plugins card).
+    [self onClosePluginPanel];
     PluginPanelsViewController *panelsVC = [[PluginPanelsViewController alloc] init];
+    panelsVC.drawerMode = YES;
+    panelsVC.modalPresentationStyle = UIModalPresentationOverFullScreen; // keep the game visible behind
+    panelsVC.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+    [self presentViewController:panelsVC animated:YES completion:nil];
+}
+
+- (void)onOpenPanelsLegacy:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    PluginPanelsViewController *panelsVC = [[PluginPanelsViewController alloc] init];
+    panelsVC.drawerMode = NO;
+    panelsVC.modalPresentationStyle = UIModalPresentationFullScreen;
     [self presentViewController:panelsVC animated:YES completion:nil];
 }
 

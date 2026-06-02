@@ -863,6 +863,8 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!arr || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
     jsize len = (*env)->GetArrayLength(env, arr);
     NSUInteger need = (NSUInteger)w * (NSUInteger)h;
+    // Validate against a torn read: the EDT repaint publishes w/h then pixels (Java side), so a frame caught
+    // mid-swap can have a pixel array that doesn't match w*h — skip it (the next tick is consistent).
     if ((NSUInteger)len < need) { (*env)->DeleteLocalRef(env, arr); return nil; }
     uint32_t *buf = (uint32_t *)malloc(need * sizeof(uint32_t));
     if (!buf) { (*env)->DeleteLocalRef(env, arr); return nil; }
