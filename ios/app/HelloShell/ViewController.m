@@ -169,7 +169,8 @@ static const CGFloat kTabStrip = 46.0;
         UIView *cv = [[UIView alloc] init];
         cv.hidden = YES;
         cv.userInteractionEnabled = NO;
-        cv.backgroundColor = [UIColor blackColor];
+        // OSRS dark-UI tone (not stark black) so the covered stones read as game chrome rather than a void.
+        cv.backgroundColor = [UIColor colorWithRed:0.12 green:0.105 blue:0.085 alpha:1.0];
         [self.screen addSubview:cv];
         [self.stoneCovers addObject:cv];
     }
