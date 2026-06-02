@@ -483,11 +483,11 @@ public class Hooks implements Callbacks
 		// Draw clientUI overlays
 		clientUi.paintOverlays(graphics2d);
 
-		// W3 touch-targeting: draw the tap selection feedback (tight entity outline + walk destination tile)
-		// into the frame, on top of the scene/overlays, just before it's captured/blitted.
+		// W3 touch-targeting: draw the tap selection feedback (tight entity model outline) into the frame, on
+		// top of the scene/overlays, just before it's captured/blitted.
 		if (net.runelite.client.headless.JavaBridge.isEnabled())
 		{
-			net.runelite.client.headless.JavaBridge.drawSelection(graphics2d, client);
+			net.runelite.client.headless.JavaBridge.drawSelection(client);
 		}
 
 		// Headless capture seam: composited game + overlays now live in mainBufferProvider.getImage().

@@ -25,15 +25,11 @@
 package net.runelite.client.headless;
 
 import com.google.inject.Injector;
-import java.awt.BasicStroke;
 import java.awt.Canvas;
 import java.awt.Color;
 import java.awt.EventQueue;
-import java.awt.Graphics2D;
-import java.awt.Polygon;
 import java.awt.Rectangle;
 import java.awt.Shape;
-import java.awt.Stroke;
 import java.awt.Toolkit;
 import java.awt.event.FocusEvent;
 import java.awt.event.InputEvent;
@@ -46,14 +42,11 @@ import net.runelite.api.Client;
 import net.runelite.api.GameObject;
 import net.runelite.api.GameState;
 import net.runelite.api.MainBufferProvider;
-import net.runelite.api.Perspective;
-import net.runelite.api.Player;
 import net.runelite.api.Scene;
 import net.runelite.api.Tile;
 import net.runelite.api.TileObject;
 import net.runelite.api.VarClientInt;
 import net.runelite.api.WorldView;
-import net.runelite.api.coords.LocalPoint;
 import net.runelite.client.RuneLite;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.ui.overlay.outline.ModelOutlineRenderer;
@@ -129,14 +122,13 @@ public final class JavaBridge
 
 	// Selection feedback, drawn in Java straight into the game frame (so it's tight + tracks the entity, unlike
 	// a native polygon of the loose convex hull). A left tap that resolves onto an NPC/object flashes a tight
-	// MODEL OUTLINE on it for SEL_FLASH_MS; a tap that resolves to walk shows a destination TILE marker that
-	// persists until the player arrives (driven by the engine's live localDestination). All set on the client
-	// thread (the tap resolution) and consumed on the client thread ({@link #drawSelection}).
+	// MODEL OUTLINE on it for SEL_FLASH_MS. (Walk destination is left to RuneLite's own Tile Indicators
+	// plugin — "Highlight destination tile" — rather than drawing our own marker.) Set + consumed on the
+	// client thread (the tap resolution and {@link #drawSelection}).
 	private static final long SEL_FLASH_MS = Long.getLong("runelite.touch.selFlashMs", 1500L);
 	private static Actor selActor;            // selected NPC/player to outline (null = none)
 	private static TileObject selObject;      // selected scene object to outline (null = none)
 	private static long selUntil;             // outline fades after this timestamp
-	private static boolean showDestTile;      // draw the walk-destination tile marker (until arrival)
 	private static ModelOutlineRenderer outliner;   // lazily resolved from the injector (tight model outline)
 	// Smart snap (priority-aware): instead of blindly nudging a left tap onto the nearest clickbox (the scene is
 	// clickbox-saturated, so "nearest" is near-arbitrary), let the ENGINE decide. Move to the literal tap and
@@ -415,8 +407,11 @@ public final class JavaBridge
 					x, y, t.literal ? "hit" : "SNAP", cx, cy, t.actor != null ? "actor" : "object");
 				return;
 			}
-			// Nothing interactable within reach -> a deliberate walk; show a destination-tile marker instead.
-			armDestTile();
+			// Nothing interactable within reach -> a deliberate walk. Clear any lingering outline; the walk
+			// destination is shown by RuneLite's Tile Indicators plugin, not us.
+			selActor = null;
+			selObject = null;
+			selUntil = 0;
 			postMove(canvas, x, y);
 			ct.invokeLater(() -> postClickButtons(canvas, x, y, MouseEvent.BUTTON1));
 			log.debug("[snap] smart: tap {},{} -> walk (no entity within {}px)", x, y, snapRadius());
@@ -427,22 +422,12 @@ public final class JavaBridge
 		ct.invokeLater(() -> postClickButtons(canvas, p[0], p[1], MouseEvent.BUTTON1));
 	}
 
-	/** Arm a tight outline flash on the selected entity (clears any destination-tile marker). */
+	/** Arm a tight outline flash on the selected entity. */
 	private static void armEntityOutline(Actor actor, TileObject object)
 	{
 		selActor = actor;
 		selObject = object;
 		selUntil = System.currentTimeMillis() + SEL_FLASH_MS;
-		showDestTile = false;
-	}
-
-	/** Arm the walk destination-tile marker (clears any entity outline). */
-	private static void armDestTile()
-	{
-		selActor = null;
-		selObject = null;
-		selUntil = 0;
-		showDestTile = true;
 	}
 
 	/** The chosen tap target: the entity refs to outline, the {@code point} to click, and how it was hit. */
@@ -622,51 +607,23 @@ public final class JavaBridge
 		return outliner;
 	}
 
-	// Selection-feedback colours.
-	private static final Color SEL_OUTLINE = new Color(255, 243, 77, 235);   // tight entity outline (yellow)
-	private static final Color TILE_STROKE = new Color(0, 200, 255, 200);    // walk destination tile (cyan)
-	private static final Color TILE_FILL = new Color(0, 200, 255, 45);
-	private static final Stroke TILE_PEN = new BasicStroke(2f);
+	// Tight entity outline colour (yellow), matching the OSRS-Mobile selection feel.
+	private static final Color SEL_OUTLINE = new Color(255, 243, 77, 235);
 
 	/**
 	 * Draw the selection feedback INTO the game frame (client thread, from {@code Hooks.draw} after the overlays
-	 * composite, before the blit snapshot): a tight model outline on the just-selected entity for a beat, and a
-	 * walk destination-tile marker that persists until the player reaches it. Tighter than a native polygon of
-	 * the convex hull and it tracks the moving entity, since it's the engine's own model silhouette.
+	 * composite, before the blit snapshot): a tight model outline on the just-selected entity for a beat.
+	 * Tighter than a native polygon of the convex hull and it tracks the moving entity, since it's the engine's
+	 * own model silhouette. (The walk destination tile is left to RuneLite's Tile Indicators plugin.)
 	 */
-	public static void drawSelection(Graphics2D g, Client c)
+	public static void drawSelection(Client c)
 	{
-		if (!ENABLED || g == null || c == null)
+		if (!ENABLED || c == null)
 		{
 			return;
 		}
 		try
 		{
-			// Destination-tile marker — driven by the engine's live walk target, so it follows path changes and
-			// clears itself on arrival (localDestination goes null).
-			if (showDestTile)
-			{
-				final LocalPoint dest = c.getLocalDestinationLocation();
-				final Player me = c.getLocalPlayer();
-				if (dest == null || (me != null && dest.equals(me.getLocalLocation())))
-				{
-					showDestTile = false;
-				}
-				else
-				{
-					final Polygon poly = Perspective.getCanvasTilePoly(c, dest);
-					if (poly != null)
-					{
-						g.setColor(TILE_FILL);
-						g.fill(poly);
-						g.setStroke(TILE_PEN);
-						g.setColor(TILE_STROKE);
-						g.draw(poly);
-					}
-				}
-			}
-
-			// Tight entity outline flash.
 			if (System.currentTimeMillis() < selUntil)
 			{
 				final ModelOutlineRenderer o = outliner();
