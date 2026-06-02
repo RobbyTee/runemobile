@@ -56,6 +56,21 @@
 @property (nonatomic, assign) CGFloat wheelAccum;
 // Contextual keyboard: previous gamepack text-input state, for edge-triggered auto raise/dismiss.
 @property (nonatomic, assign) BOOL prevInputOpen;
+// W3 press-and-peek: a long-press shows an OFFSET reticle (so the finger doesn't occlude the target) + a live
+// chip naming the engine's current top (left-click) action read from MenuPeekBridge; releasing commits that
+// action via a real precise click at the reticle point (correct by construction — the click fires the engine's
+// top there). Holding still escalates to the existing engine right-click menu for non-top actions. Gated by
+// peekEnabled (◎ toggle) for instant A/B against the legacy long-press-opens-menu behavior.
+@property (nonatomic, assign) BOOL peekEnabled;       // gate (default ON)
+@property (nonatomic, assign) BOOL peekActive;        // a press-and-peek is in progress
+@property (nonatomic, assign) BOOL peekMenuOpen;      // escalated: the engine right-click menu is now open
+@property (nonatomic, assign) CGPoint peekAimView;    // reticle centre, in self.screen coords
+@property (nonatomic, assign) int peekGx;             // reticle point in game-canvas pixels (the commit point)
+@property (nonatomic, assign) int peekGy;
+@property (nonatomic, strong) UIView *peekReticle;    // crosshair ring at the (offset) aim point
+@property (nonatomic, strong) UILabel *peekChip;      // floating "Attack Rat" / "Talk-to Hans" action label
+@property (nonatomic, strong) NSTimer *peekEscalateTimer;
+@property (nonatomic, strong) UIButton *peekToggle;
 // W3 hybrid-chrome native tab rails (cover-in-place first pass): 14 opaque native buttons drawn over the live
 // desktop tab stones (positions/active state from the MobileChromeBridge snapshot each tick); a tap proxies an
 // onClick onto the stone centre. A ▦ toggle shows/hides them for instant A/B fallback.
@@ -98,6 +113,14 @@ static NSString * const kKbSentinel = @"​";
 // both sides, so the docked side panel (at the game-canvas edge) ends INBOARD of the screen edge and the
 // native tabs fill the strips flush against it — the official mobile arrangement, with no widget moving.
 static const CGFloat kTabStrip = 46.0;
+
+// Press-and-peek tuning. The aim point sits this far ABOVE the fingertip so the finger never covers the
+// target (the anti-occlusion offset reticle). Holding still for kPeekEscalateSecs opens the engine menu;
+// movement over kPeekMoveResetPt resets that timer (sliding = still aiming, not asking for the menu).
+static const CGFloat kPeekReticleOffset = 56.0;   // points, fingertip -> aim point (up)
+static const CGFloat kPeekReticleSize   = 44.0;   // crosshair ring diameter (points)
+static const NSTimeInterval kPeekEscalateSecs = 0.6;
+static const CGFloat kPeekMoveResetPt   = 9.0;
 
 @implementation ViewController
 
@@ -157,6 +180,35 @@ static const CGFloat kTabStrip = 46.0;
     UIPinchGestureRecognizer *pinch = [[UIPinchGestureRecognizer alloc]
         initWithTarget:self action:@selector(onPinch:)];
     [self.screen addGestureRecognizer:pinch];
+
+    // Press-and-peek overlay: an offset crosshair reticle + a floating action chip. Non-interactive (never
+    // eat touches) and hidden until a long-press begins. Subviews of the game view, above the blit.
+    self.peekEnabled = YES;
+    self.peekReticle = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kPeekReticleSize, kPeekReticleSize)];
+    self.peekReticle.userInteractionEnabled = NO;
+    self.peekReticle.hidden = YES;
+    self.peekReticle.backgroundColor = [UIColor clearColor];
+    self.peekReticle.layer.cornerRadius = kPeekReticleSize / 2.0;
+    self.peekReticle.layer.borderWidth = 2.0;
+    self.peekReticle.layer.borderColor = [UIColor colorWithRed:1.0 green:0.95 blue:0.30 alpha:0.95].CGColor;
+    UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(kPeekReticleSize / 2.0 - 2.5,
+                                                           kPeekReticleSize / 2.0 - 2.5, 5, 5)];
+    dot.backgroundColor = [UIColor colorWithRed:1.0 green:0.95 blue:0.30 alpha:0.95];
+    dot.layer.cornerRadius = 2.5;
+    dot.userInteractionEnabled = NO;
+    [self.peekReticle addSubview:dot];
+    [self.screen addSubview:self.peekReticle];
+
+    self.peekChip = [[UILabel alloc] init];
+    self.peekChip.userInteractionEnabled = NO;
+    self.peekChip.hidden = YES;
+    self.peekChip.font = [UIFont boldSystemFontOfSize:15];
+    self.peekChip.textColor = [UIColor whiteColor];
+    self.peekChip.textAlignment = NSTextAlignmentCenter;
+    self.peekChip.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.78];
+    self.peekChip.layer.cornerRadius = 7;
+    self.peekChip.clipsToBounds = YES;
+    [self.screen addSubview:self.peekChip];
 
     // In-game keyboard control, bottom-left of the game's safe area (by the chat box). A button subview
     // consumes its own taps, so it never leaks a walk-here click to the gestures beneath.
@@ -323,6 +375,18 @@ static const CGFloat kTabStrip = 46.0;
                 forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.pluginButton];
 
+    // Press-and-peek A/B toggle (◎), left of the ⚙ gear. ON = offset reticle + chip + release-commit;
+    // OFF = legacy long-press-opens-menu. Green tint when ON.
+    self.peekToggle = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.peekToggle.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.peekToggle setTitle:@"◎" forState:UIControlStateNormal];
+    self.peekToggle.titleLabel.font = [UIFont boldSystemFontOfSize:22];
+    self.peekToggle.tintColor = [UIColor systemGreenColor];
+    self.peekToggle.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
+    self.peekToggle.layer.cornerRadius = 8;
+    [self.peekToggle addTarget:self action:@selector(onTogglePeek) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.peekToggle];
+
     UILayoutGuide *g = self.view.safeAreaLayoutGuide;
     UILayoutGuide *sg = self.screen.safeAreaLayoutGuide;
     UILayoutGuide *p = self.debugPanel.layoutMarginsGuide;
@@ -359,6 +423,12 @@ static const CGFloat kTabStrip = 46.0;
         [self.pluginButton.trailingAnchor constraintEqualToAnchor:self.chromeToggle.leadingAnchor constant:-8],
         [self.pluginButton.widthAnchor constraintEqualToConstant:44],
         [self.pluginButton.heightAnchor constraintEqualToConstant:36],
+
+        // Press-and-peek toggle (◎), just left of the ⚙ gear.
+        [self.peekToggle.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
+        [self.peekToggle.trailingAnchor constraintEqualToAnchor:self.pluginButton.leadingAnchor constant:-8],
+        [self.peekToggle.widthAnchor constraintEqualToConstant:44],
+        [self.peekToggle.heightAnchor constraintEqualToConstant:36],
 
         // Debug panel — left ~62% of the safe area, full height, below the toggle row.
         [self.debugPanel.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
@@ -1019,6 +1089,13 @@ static const CGFloat kTabStrip = 46.0;
         [self updateChrome];
     }
 
+    // Press-and-peek: while peeking (not yet escalated to the engine menu), refresh the action chip from the
+    // MenuPeekBridge snapshot a few times a second (the engine top action can change even with a still finger
+    // as NPCs walk into range). Only the chip TEXT updates here; the reticle position follows the finger.
+    if (self.peekActive && !self.peekMenuOpen && self.framesShown % 3 == 0) {
+        [self updatePeekChip];
+    }
+
     // Plugin panel: while open, re-read the list when the bridge's event sequence advances (a toggle's
     // PluginChanged, or a conflict disabling another plugin) so enabled/active state stays truthful. Cheap:
     // a single long read + a string compare ~10 Hz, only while the modal is up.
@@ -1091,6 +1168,15 @@ static const CGFloat kTabStrip = 46.0;
 //               lands a click outside the menu bounds, which the gamepack treats as a cancel/close.
 - (void)onLongPress:(UILongPressGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady]) return;
+    if (self.peekEnabled) {
+        [self handlePeek:g];
+    } else {
+        [self handleLongPressMenu:g];
+    }
+}
+
+// Legacy behavior (peek toggle OFF): a long-press opens the engine right-click menu and drag-selects it.
+- (void)handleLongPressMenu:(UILongPressGestureRecognizer *)g {
     int gx = 0, gy = 0;
     BOOL inside = [self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy];
     if (inside) { self.lastMenuX = gx; self.lastMenuY = gy; }
@@ -1131,11 +1217,184 @@ static const CGFloat kTabStrip = 46.0;
     }
 }
 
+#pragma mark - W3 press-and-peek
+
+// Press-and-peek lifecycle (peek toggle ON). began/changed: hover an OFFSET aim point (above the finger) and
+// show the reticle + a live chip naming the engine's top action; release commits that action with a precise
+// click AT the aim point (correct by construction — the click fires the engine's current top there). Holding
+// still escalates to the engine right-click menu (the legacy drag-select) for non-top actions.
+- (void)handlePeek:(UILongPressGestureRecognizer *)g {
+    CGPoint fv = [g locationInView:self.screen];
+    switch (g.state) {
+        case UIGestureRecognizerStateBegan: {
+            CGPoint aim; int gx = 0, gy = 0;
+            if (![self peekResolveFinger:fv aimView:&aim gx:&gx gy:&gy]) return;  // letterbox — ignore
+            self.peekActive = YES; self.peekMenuOpen = NO; self.menuOpen = NO;
+            self.peekAimView = aim; self.peekGx = gx; self.peekGy = gy;
+            self.lastMenuX = gx; self.lastMenuY = gy;
+            [JVMLauncher postMoveX:gx y:gy];        // hover -> engine computes its top action for this point
+            self.peekChip.text = @"…";
+            [self layoutPeekOverlay];
+            self.peekReticle.hidden = NO; self.peekChip.hidden = NO;
+            [self schedulePeekEscalate];
+            [self appendLine:[NSString stringWithFormat:@"[peek] begin aim game %d,%d", gx, gy]];
+            break;
+        }
+        case UIGestureRecognizerStateChanged: {
+            if (!self.peekActive) return;
+            if (self.peekMenuOpen) {
+                // Escalated: track the finger DIRECTLY over the engine menu (no offset) to highlight entries.
+                int gx = 0, gy = 0;
+                if ([self mapPoint:fv toGameX:&gx toGameY:&gy]) {
+                    self.lastMenuX = gx; self.lastMenuY = gy;
+                    [JVMLauncher postMoveX:gx y:gy];
+                }
+                return;
+            }
+            CGPoint aim; int gx = 0, gy = 0;
+            if (![self peekResolveFinger:fv aimView:&aim gx:&gx gy:&gy]) return;
+            // Active sliding = still aiming -> push back the escalate-to-menu timer.
+            if (hypot(aim.x - self.peekAimView.x, aim.y - self.peekAimView.y) > kPeekMoveResetPt) {
+                [self schedulePeekEscalate];
+            }
+            self.peekAimView = aim; self.peekGx = gx; self.peekGy = gy;
+            self.lastMenuX = gx; self.lastMenuY = gy;
+            [JVMLauncher postMoveX:gx y:gy];
+            [self layoutPeekOverlay];
+            break;
+        }
+        case UIGestureRecognizerStateEnded:
+            [self endPeek:YES];
+            break;
+        case UIGestureRecognizerStateCancelled:
+        case UIGestureRecognizerStateFailed:
+            [self endPeek:NO];
+            break;
+        default:
+            break;
+    }
+}
+
+// The aim point: kPeekReticleOffset above the fingertip (anti-occlusion), clamped into the game view.
+- (CGPoint)peekAimForFinger:(CGPoint)fv {
+    CGRect b = self.screen.bounds;
+    CGFloat minY = kPeekReticleSize / 2.0 + 2.0;
+    CGFloat y = MAX(fv.y - kPeekReticleOffset, minY);
+    CGFloat x = MIN(MAX(fv.x, kPeekReticleSize / 2.0), b.size.width - kPeekReticleSize / 2.0);
+    return CGPointMake(x, y);
+}
+
+// Resolve the finger to an aim view-point + game pixel. Prefers the offset aim; falls back to the finger
+// itself near the top edge; returns NO only if neither maps into the game frame (true letterbox).
+- (BOOL)peekResolveFinger:(CGPoint)fv aimView:(CGPoint *)outAim gx:(int *)gx gy:(int *)gy {
+    CGPoint aim = [self peekAimForFinger:fv];
+    if ([self mapPoint:aim toGameX:gx toGameY:gy]) { *outAim = aim; return YES; }
+    if ([self mapPoint:fv toGameX:gx toGameY:gy]) { *outAim = fv; return YES; }
+    return NO;
+}
+
+// Position the reticle at the aim point and the chip just above it, clamped within the game view.
+- (void)layoutPeekOverlay {
+    self.peekReticle.center = self.peekAimView;
+    [self.peekChip sizeToFit];
+    CGRect b = self.screen.bounds;
+    CGFloat w = MIN(MAX(self.peekChip.bounds.size.width + 22.0, 56.0), b.size.width - 12.0);
+    CGFloat h = 26.0;
+    CGFloat cx = MIN(MAX(self.peekAimView.x, w / 2.0 + 6.0), b.size.width - w / 2.0 - 6.0);
+    CGFloat cy = MAX(self.peekAimView.y - kPeekReticleSize / 2.0 - 6.0 - h / 2.0, h / 2.0 + 6.0);
+    self.peekChip.bounds = CGRectMake(0, 0, w, h);
+    self.peekChip.center = CGPointMake(cx, cy);
+    [self.screen bringSubviewToFront:self.peekReticle];
+    [self.screen bringSubviewToFront:self.peekChip];
+}
+
+- (void)schedulePeekEscalate {
+    [self.peekEscalateTimer invalidate];
+    self.peekEscalateTimer = [NSTimer scheduledTimerWithTimeInterval:kPeekEscalateSecs
+                                                             target:self selector:@selector(onPeekEscalate)
+                                                           userInfo:nil repeats:NO];
+}
+
+// Held still long enough -> open the engine right-click menu at the aim point for non-top actions. The peek
+// reticle/chip give way to the engine menu (the legacy drag-select then drives selection on release).
+- (void)onPeekEscalate {
+    if (!self.peekActive || self.peekMenuOpen) return;
+    self.peekMenuOpen = YES;
+    self.menuOpen = YES;                 // reuse the guard so the camera pan never also fires
+    self.peekReticle.hidden = YES;
+    self.peekChip.hidden = YES;
+    [JVMLauncher postClickX:self.peekGx y:self.peekGy button:3];
+    [self appendLine:[NSString stringWithFormat:@"[peek] escalate -> menu open(R) game %d,%d",
+                      self.peekGx, self.peekGy]];
+}
+
+- (void)endPeek:(BOOL)commit {
+    [self.peekEscalateTimer invalidate];
+    self.peekEscalateTimer = nil;
+    if (self.peekMenuOpen) {
+        if (commit) {
+            // Select the highlighted entry (or, off the menu, a cancel/close) — the legacy menu commit.
+            [JVMLauncher postClickX:self.lastMenuX y:self.lastMenuY button:1];
+            [self appendLine:[NSString stringWithFormat:@"[peek] menu select(L) game %d,%d",
+                              self.lastMenuX, self.lastMenuY]];
+        }
+    } else if (self.peekActive) {
+        if (commit) {
+            // Commit the engine's top action at the aim point. PRECISE (no snap): the reticle already IS the
+            // target, and the click fires whatever the engine ranks top there — the fresh, revalidated action.
+            [JVMLauncher postClickPreciseX:self.peekGx y:self.peekGy button:1];
+            [self appendLine:[NSString stringWithFormat:@"[peek] commit(L) game %d,%d : %@",
+                              self.peekGx, self.peekGy, self.peekChip.text]];
+        } else {
+            [JVMLauncher postClearHover];   // cancelled — don't leave a stale highlight
+        }
+    }
+    self.peekActive = NO;
+    self.peekMenuOpen = NO;
+    self.menuOpen = NO;
+    self.peekReticle.hidden = YES;
+    self.peekChip.hidden = YES;
+}
+
+// Refresh the chip from the live MenuPeekBridge snapshot (entries[0] = the top/left-click action).
+- (void)updatePeekChip {
+    NSString *json = [JVMLauncher menuPeekSnapshot];
+    if (json.length == 0) return;
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding]
+                                                     options:0 error:nil];
+    if (![d isKindOfClass:[NSDictionary class]]) return;
+    NSArray *entries = d[@"entries"];
+    NSString *text = @"Walk here";
+    if ([entries isKindOfClass:[NSArray class]] && entries.count > 0
+        && [entries[0] isKindOfClass:[NSDictionary class]]) {
+        NSDictionary *top = entries[0];
+        NSString *opt = [top[@"opt"] isKindOfClass:[NSString class]] ? top[@"opt"] : @"";
+        NSString *tgt = [top[@"tgt"] isKindOfClass:[NSString class]] ? top[@"tgt"] : @"";
+        text = tgt.length ? [NSString stringWithFormat:@"%@ %@", opt, tgt] : opt;
+    }
+    if (text.length == 0) text = @"Walk here";
+    if (![text isEqualToString:self.peekChip.text]) {
+        self.peekChip.text = text;
+        [self layoutPeekOverlay];
+    }
+}
+
+- (void)onTogglePeek {
+    self.peekEnabled = !self.peekEnabled;
+    self.peekToggle.tintColor = self.peekEnabled
+        ? [UIColor systemGreenColor] : [UIColor colorWithWhite:0.6 alpha:1.0];
+    if (!self.peekEnabled && self.peekActive) {
+        [self endPeek:NO];
+    }
+    [self appendLine:[NSString stringWithFormat:@"[peek] %@",
+                      self.peekEnabled ? @"ON (reticle+chip)" : @"OFF (legacy menu)"]];
+}
+
 // one-finger drag -> rotate the camera. Feed incremental pixel deltas (reset the recognizer's translation
 // each step) to the bridge, which applies them to the camera yaw/pitch targets directly. The menuOpen
 // guard is belt-and-suspenders: if a long-press already claimed the touch, never also rotate.
 - (void)onCameraPan:(UIPanGestureRecognizer *)g {
-    if (![JVMLauncher bridgeReady] || self.menuOpen) return;
+    if (![JVMLauncher bridgeReady] || self.menuOpen || self.peekActive) return;
     if (g.state == UIGestureRecognizerStateBegan) {
         [g setTranslation:CGPointZero inView:self.screen];
         // A camera drag moves the world, not the pointer — so clear any frozen hover first, otherwise

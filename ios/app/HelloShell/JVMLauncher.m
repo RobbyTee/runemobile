@@ -528,6 +528,8 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"-Drunelite.mobilechrome=true",             // W3 hybrid-chrome: arm the read-only MobileChromeBridge
                                                      // snapshot (tab/panel/minimap/orb/chat/viewport bounds).
                                                      // NOT the .probe gate — that mutates and is desktop-only.
+        @"-Drunelite.menupeek=true",                 // W3 touch-targeting: arm the read-only MenuPeekBridge
+                                                     // (press-and-peek reticle/chip). NOT .probe (desktop-only).
         @"-Drunelite.hub=true",                      // plugin hub: drop --safe-mode so external plugins load
                                                      // (device-de-risked 2026-06-02). Also disables the
                                                      // headless-irrelevant GPU plugin.
