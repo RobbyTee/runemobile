@@ -178,6 +178,17 @@ typedef void (^JVMLogSink)(NSString *line);
 + (void)questStart:(NSString *)name;
 + (void)questStop;
 
+// ---- Native World Switcher reflow (WorldSwitcherBridge) --------------------------------------------
+
+/// Whether the native World Switcher screen can be offered (WorldService has a world list).
++ (BOOL)worldAvailable;
+/// Tell the bridge the native World Switcher screen is open/closed (gates the client-thread snapshot refresh).
++ (void)worldSetUiOpen:(BOOL)open;
+/// World list JSON: {available, current, worlds:[{id,players,location,members,pvp,highRisk,activity,types}]}.
++ (nullable NSString *)worldListJson;
+/// Hop to a world by number (queued onto the client thread; requires being logged in).
++ (void)worldHop:(int)worldId;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -185,6 +185,7 @@ public final class MobileUiBridge
 			listenerRegistered = true;
 		}
 		QuestHelperBridge.init(pm, ct); // native Quest Helper reflow shares this wiring + the client-thread tick
+		WorldSwitcherBridge.init(c, ct, pm); // native World Switcher reflow (direct WorldService reads)
 		log.info("[mobileui] facade wired: plugins={} config={} clientThread={} eventBus={}",
 			pm != null, cm != null, ct != null, eb != null);
 	}
@@ -1014,6 +1015,7 @@ public final class MobileUiBridge
 			return;
 		}
 		QuestHelperBridge.tick(c); // refresh the native Quest Helper snapshots (no-op unless its screen is open)
+		WorldSwitcherBridge.tick(c); // refresh the native World Switcher snapshot (no-op unless its screen is open)
 		// The "click here to talk" affordance is the right target — NOT the scroll/message area or the tabs.
 		// INPUT_CLICKAREA is the entry hit-region; fall back to the input line (CHATBOX_INPUT) if absent.
 		Widget w = c.getWidget(InterfaceID.Chatbox.INPUT_CLICKAREA);

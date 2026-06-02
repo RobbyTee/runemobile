@@ -26,8 +26,10 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 }
 @end
 
-// Native, reflowed Quest Helper screen (data via QuestHelperBridge). Defined at the bottom of this file.
+// Native, reflowed plugin screens (data via the bridges). Defined at the bottom of this file.
 @interface QuestHelperViewController : UIViewController
+@end
+@interface WorldSwitcherViewController : UIViewController
 @end
 
 @interface PluginPanelsViewController () <UIScrollViewDelegate>
@@ -495,6 +497,13 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
                 [self presentViewController:qh animated:YES completion:nil];
                 return;
             }
+            if ([tip isEqualToString:@"World Switcher"] && [JVMLauncher worldAvailable]) {
+                WorldSwitcherViewController *ws = [[WorldSwitcherViewController alloc] init];
+                ws.modalPresentationStyle = UIModalPresentationOverFullScreen;
+                ws.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+                [self presentViewController:ws animated:YES completion:nil];
+                return;
+            }
         }
         if (b.tag == self.currentIndex) {
             [self collapsePanel];              // tapping the active icon closes the panel
@@ -894,6 +903,205 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     [JVMLauncher questStart:name];
     self.modeSeg.selectedSegmentIndex = 1;
     [self onModeChanged];
+}
+
+#pragma mark UISearchBar
+
+- (void)searchBar:(UISearchBar *)sb textDidChange:(NSString *)text { [self applyFilter]; }
+- (void)searchBarSearchButtonClicked:(UISearchBar *)sb { [sb resignFirstResponder]; }
+
+@end
+
+#pragma mark - Native World Switcher (reflowed)
+
+// Native World Switcher: a live, filterable world list (members/F2P/PVP, player counts, current-world
+// highlight) driven by WorldService via WorldSwitcherBridge; tapping a world hops to it (client thread).
+@interface WorldSwitcherViewController () <UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate>
+@property (nonatomic, strong) UIView *drawer;
+@property (nonatomic, strong) UISearchBar *search;
+@property (nonatomic, strong) UISegmentedControl *filterSeg;   // All | Members | Free | PVP
+@property (nonatomic, strong) UITableView *table;
+@property (nonatomic, strong) NSArray<NSDictionary *> *allWorlds;
+@property (nonatomic, strong) NSArray<NSDictionary *> *filtered;
+@property (nonatomic, assign) NSInteger current;
+@property (nonatomic, strong) NSTimer *timer;
+@end
+
+@implementation WorldSwitcherViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor clearColor];
+    [JVMLauncher worldSetUiOpen:YES];
+
+    UIView *dim = [[UIView alloc] initWithFrame:self.view.bounds];
+    dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    [self.view addSubview:dim];
+    [dim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onDone)]];
+
+    self.drawer = [[UIView alloc] init];
+    self.drawer.translatesAutoresizingMaskIntoConstraints = NO;
+    self.drawer.backgroundColor = [UIColor colorWithRed:0.10 green:0.09 blue:0.07 alpha:1.0];
+    [self.view addSubview:self.drawer];
+
+    UILabel *title = [[UILabel alloc] init];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.text = @"World Switcher";
+    title.font = [UIFont boldSystemFontOfSize:18];
+    title.textColor = [UIColor whiteColor];
+    [self.drawer addSubview:title];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    close.translatesAutoresizingMaskIntoConstraints = NO;
+    [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.titleLabel.font = [UIFont boldSystemFontOfSize:20];
+    close.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
+    [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
+    [self.drawer addSubview:close];
+
+    self.search = [[UISearchBar alloc] init];
+    self.search.translatesAutoresizingMaskIntoConstraints = NO;
+    self.search.placeholder = @"World number or activity";
+    self.search.delegate = self;
+    self.search.searchBarStyle = UISearchBarStyleMinimal;
+    self.search.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
+    [self.drawer addSubview:self.search];
+
+    self.filterSeg = [[UISegmentedControl alloc] initWithItems:@[@"All", @"Members", @"Free", @"PVP"]];
+    self.filterSeg.translatesAutoresizingMaskIntoConstraints = NO;
+    self.filterSeg.selectedSegmentIndex = 0;
+    [self.filterSeg addTarget:self action:@selector(applyFilter) forControlEvents:UIControlEventValueChanged];
+    [self.drawer addSubview:self.filterSeg];
+
+    self.table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+    self.table.translatesAutoresizingMaskIntoConstraints = NO;
+    self.table.backgroundColor = [UIColor clearColor];
+    self.table.dataSource = self;
+    self.table.delegate = self;
+    self.table.rowHeight = 52;
+    [self.drawer addSubview:self.table];
+
+    UILayoutGuide *dg = self.drawer.safeAreaLayoutGuide;
+    CGFloat drawerW = MIN(440.0, self.view.bounds.size.width * 0.52);
+    [NSLayoutConstraint activateConstraints:@[
+        [self.drawer.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [self.drawer.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [self.drawer.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.drawer.widthAnchor constraintEqualToConstant:drawerW],
+
+        [title.leadingAnchor constraintEqualToAnchor:dg.leadingAnchor constant:16],
+        [title.topAnchor constraintEqualToAnchor:dg.topAnchor constant:12],
+        [close.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
+        [close.trailingAnchor constraintEqualToAnchor:dg.trailingAnchor constant:-16],
+
+        [self.search.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:8],
+        [self.search.leadingAnchor constraintEqualToAnchor:dg.leadingAnchor constant:6],
+        [self.search.trailingAnchor constraintEqualToAnchor:dg.trailingAnchor constant:-6],
+        [self.filterSeg.topAnchor constraintEqualToAnchor:self.search.bottomAnchor constant:4],
+        [self.filterSeg.leadingAnchor constraintEqualToAnchor:dg.leadingAnchor constant:14],
+        [self.filterSeg.trailingAnchor constraintEqualToAnchor:dg.trailingAnchor constant:-14],
+        [self.table.topAnchor constraintEqualToAnchor:self.filterSeg.bottomAnchor constant:8],
+        [self.table.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor],
+        [self.table.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor],
+        [self.table.bottomAnchor constraintEqualToAnchor:dg.bottomAnchor],
+    ]];
+
+    [self refresh];
+    self.timer = [NSTimer scheduledTimerWithTimeInterval:1.5 target:self selector:@selector(refresh) userInfo:nil repeats:YES];
+}
+
+- (void)refresh {
+    NSString *json = [JVMLauncher worldListJson] ?: @"{}";
+    id o = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSDictionary *d = [o isKindOfClass:[NSDictionary class]] ? o : @{};
+    self.current = [d[@"current"] integerValue];
+    id worlds = d[@"worlds"];
+    self.allWorlds = [worlds isKindOfClass:[NSArray class]] ? worlds : @[];
+    [self applyFilter];
+}
+
+- (void)applyFilter {
+    NSString *q = self.search.text;
+    NSInteger seg = self.filterSeg.selectedSegmentIndex;
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSDictionary *w in self.allWorlds) {
+        BOOL members = [w[@"members"] boolValue];
+        BOOL pvp = [w[@"pvp"] boolValue];
+        if (seg == 1 && !members) continue;
+        if (seg == 2 && members) continue;
+        if (seg == 3 && !pvp) continue;
+        if (q.length) {
+            NSString *idStr = [NSString stringWithFormat:@"%@", w[@"id"]];
+            NSString *act = [[w[@"activity"] description] lowercaseString];
+            if ([idStr rangeOfString:q].location == NSNotFound &&
+                [act rangeOfString:q.lowercaseString].location == NSNotFound) continue;
+        }
+        [out addObject:w];
+    }
+    self.filtered = out;
+    [self.table reloadData];
+}
+
+- (NSString *)locationLabel:(NSInteger)loc {
+    switch (loc) {
+        case 0: return @"US";
+        case 1: return @"UK";
+        case 3: return @"AUS";
+        case 7: return @"GER";
+        default: return @"";
+    }
+}
+
+- (void)onDone {
+    [self.timer invalidate];
+    self.timer = nil;
+    [JVMLauncher worldSetUiOpen:NO];
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+#pragma mark UITableView
+
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return self.filtered.count; }
+
+- (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
+    UITableViewCell *cell = [tv dequeueReusableCellWithIdentifier:@"w"];
+    if (!cell) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"w"];
+        cell.backgroundColor = [UIColor clearColor];
+    }
+    NSDictionary *w = self.filtered[ip.row];
+    NSInteger wid = [w[@"id"] integerValue];
+    BOOL isCurrent = (wid == self.current);
+    NSString *act = [w[@"activity"] description];
+    cell.textLabel.text = [NSString stringWithFormat:@"World %ld%@", (long)wid, isCurrent ? @"  • current" : @""];
+    cell.textLabel.textColor = isCurrent ? [UIColor colorWithRed:0.45 green:0.85 blue:0.45 alpha:1.0] : [UIColor whiteColor];
+
+    NSMutableArray *tags = [NSMutableArray array];
+    [tags addObject:[w[@"members"] boolValue] ? @"Members" : @"Free"];
+    NSString *locL = [self locationLabel:[w[@"location"] integerValue]];
+    if (locL.length) [tags addObject:locL];
+    if ([w[@"pvp"] boolValue]) [tags addObject:@"PVP"];
+    if ([w[@"highRisk"] boolValue]) [tags addObject:@"High risk"];
+    NSString *sub = [tags componentsJoinedByString:@" · "];
+    if (act.length) sub = [NSString stringWithFormat:@"%@ — %@", sub, act];
+    cell.detailTextLabel.text = sub;
+    cell.detailTextLabel.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
+
+    NSInteger players = [w[@"players"] integerValue];
+    UILabel *pc = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 56, 20)];
+    pc.font = [UIFont systemFontOfSize:13];
+    pc.textAlignment = NSTextAlignmentRight;
+    pc.textColor = [UIColor colorWithWhite:0.75 alpha:1.0];
+    pc.text = players >= 0 ? [NSString stringWithFormat:@"%ld", (long)players] : @"—";
+    cell.accessoryView = pc;
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
+    [tv deselectRowAtIndexPath:ip animated:YES];
+    NSInteger wid = [self.filtered[ip.row][@"id"] integerValue];
+    [JVMLauncher worldHop:(int)wid];
 }
 
 #pragma mark UISearchBar

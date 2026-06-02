@@ -74,6 +74,13 @@ static jmethodID gQhStart = NULL;       // startQuest(Ljava/lang/String;)V
 static jmethodID gQhStop = NULL;        // stopQuest()V
 static jmethodID gQhSetOpen = NULL;     // setUiOpen(Z)V
 
+// Native World Switcher reflow — the WorldSwitcherBridge facade (direct WorldService reads, reflected hop).
+static jclass    gWsClass = NULL;       // global ref to net.runelite.client.headless.WorldSwitcherBridge
+static jmethodID gWsAvailable = NULL;   // isAvailable()Z
+static jmethodID gWsList = NULL;        // getWorldListJson()Ljava/lang/String;
+static jmethodID gWsHop = NULL;         // hop(I)V
+static jmethodID gWsSetOpen = NULL;     // setUiOpen(Z)V
+
 // ---- W3 plugin-config de-risk (verdict #7, NATIVE-ORIGIN leg) — STRIP AFTER DEVICE CONFIRM ----------
 // Proves the half the desktop smoke can't: that the OBJC side builds the correct signed decimal of
 // Color.getRGB(). The trap — an opaque color's getRGB() is a NEGATIVE int (top alpha bit set), and
@@ -245,6 +252,28 @@ static BOOL ensureQuest(void) {
         return NO;
     }
     gQhClass = global;
+    return YES;
+}
+
+static BOOL ensureWorld(void) {
+    if (gWsClass) return YES;
+    if (!ensureBridge() || !gMainEnv) return NO;
+    JNIEnv *env = gMainEnv;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/WorldSwitcherBridge");
+    if (!local || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    jclass global = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    if (!global) return NO;
+    gWsAvailable = (*env)->GetStaticMethodID(env, global, "isAvailable", "()Z");
+    gWsList      = (*env)->GetStaticMethodID(env, global, "getWorldListJson", "()Ljava/lang/String;");
+    gWsHop       = (*env)->GetStaticMethodID(env, global, "hop", "(I)V");
+    gWsSetOpen   = (*env)->GetStaticMethodID(env, global, "setUiOpen", "(Z)V");
+    if (!gWsAvailable || !gWsList || !gWsHop || !gWsSetOpen) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteGlobalRef(env, global);
+        return NO;
+    }
+    gWsClass = global;
     return YES;
 }
 
@@ -960,6 +989,36 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureQuest()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gQhClass, gQhSetOpen, (jboolean)(open ? 1 : 0));
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+}
+
+// ---- Native World Switcher reflow (WorldSwitcherBridge) --------------------------------------------
+
++ (BOOL)worldAvailable {
+    if (!ensureWorld()) return NO;
+    JNIEnv *env = gMainEnv;
+    jboolean v = (*env)->CallStaticBooleanMethod(env, gWsClass, gWsAvailable);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    return v ? YES : NO;
+}
+
++ (NSString *)worldListJson {
+    if (!ensureWorld()) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gWsClass, gWsList));
+}
+
++ (void)worldHop:(int)worldId {
+    if (!ensureWorld()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gWsClass, gWsHop, (jint)worldId);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+}
+
++ (void)worldSetUiOpen:(BOOL)open {
+    if (!ensureWorld()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gWsClass, gWsSetOpen, (jboolean)(open ? 1 : 0));
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
 }
 
