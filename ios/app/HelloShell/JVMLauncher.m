@@ -42,6 +42,47 @@ static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
 static jclass    gChromeClass = NULL;   // global ref to net.runelite.client.headless.MobileChromeBridge
 static jmethodID gMidChromeSnap = NULL; // getSnapshot()Ljava/lang/String;
 
+// ---- W3 plugin-config de-risk (verdict #7, NATIVE-ORIGIN leg) — STRIP AFTER DEVICE CONFIRM ----------
+// Proves the half the desktop smoke can't: that the OBJC side builds the correct signed decimal of
+// Color.getRGB(). The trap — an opaque color's getRGB() is a NEGATIVE int (top alpha bit set), and
+// ColorUtil.fromString uses Integer.decode, which REJECTS 0xFFxxxxxx hex — so the control must send the
+// signed decimal, not hex. We write the agreed opaque color 0xFF123456 to the throwaway sentinel group;
+// MobileUiSmokeRunner reads it back through the typed proxy path and emits MUI_RT_NATIVE_COLOR_OK.
+// Gated like the smoke flags below — flip to YES (+ re-add the 3 smoke opts) to re-run the device confirm.
+// Device confirm md5-GREEN 2026-06-01 (MUI_RT_NATIVE_COLOR_OK=true): ObjC signed-decimal getRGB round-trips.
+static const BOOL kMuiNativeColorProbe = NO;
+
+static void runMuiNativeColorProbe(JVMLogSink log) {
+    // 0xFF123456 == new Color(0x12,0x34,0x56,255).getRGB() — agreed with MobileUiSmokeRunner.nativeColorReadback.
+    int32_t argb = (int32_t)(((uint32_t)0xFFu << 24) | ((uint32_t)0x12u << 16) | ((uint32_t)0x34u << 8) | (uint32_t)0x56u);
+    NSString *decimal = [NSString stringWithFormat:@"%d", (int)argb];   // the signed decimal the control must send
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        JavaVM *vm = atomic_load(&gVM);
+        if (!vm) return;
+        JNIEnv *e = NULL;   // own daemon attach — the worker thread is blocked in callMain(DeviceHeadlessBoot)
+        if ((*vm)->AttachCurrentThreadAsDaemon(vm, (void **)&e, NULL) != JNI_OK || !e) return;
+        jclass cls = (*e)->FindClass(e, "net/runelite/client/headless/MobileUiBridge"); // on the system classpath
+        if (!cls || (*e)->ExceptionCheck(e)) { (*e)->ExceptionClear(e); return; }
+        jmethodID set = (*e)->GetStaticMethodID(e, cls, "setConfig",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+        if (!set) { (*e)->ExceptionClear(e); return; }
+        jstring jg = (*e)->NewStringUTF(e, "mobileuismoke");
+        jstring jk = (*e)->NewStringUTF(e, "nativecolor");
+        jstring jv = (*e)->NewStringUTF(e, decimal.UTF8String);
+        BOOL logged = NO;
+        // Retry until the facade is wired (config/clientThread non-null) so the write lands; same value each
+        // time, so post-landing writes are harmless no-ops. Stops at ~60s or when the VM goes away.
+        for (int i = 0; i < 30 && atomic_load(&gVM); i++) {
+            jobject r = (*e)->CallStaticObjectMethod(e, cls, set, jg, jk, jv);
+            if ((*e)->ExceptionCheck(e)) { (*e)->ExceptionClear(e); }
+            if (r) (*e)->DeleteLocalRef(e, r);
+            if (!logged) { log([NSString stringWithFormat:@"[mui] NATIVE_RT_COLOR_WRITE=%@", decimal]); logged = YES; }
+            usleep(2000 * 1000);   // 2s
+        }
+        (*e)->DeleteLocalRef(e, jg); (*e)->DeleteLocalRef(e, jk); (*e)->DeleteLocalRef(e, jv);
+    });
+}
+
 // Resolve + cache the JavaBridge facade on the calling (main) thread. Returns YES once usable.
 static BOOL ensureBridge(void) {
     if (gBridgeClass) return YES;
@@ -329,6 +370,10 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         // toggle on EDT), overlay registers headless (Ground Items 92->146), config persists across launches,
         // PluginManager EDT asserts live. To re-run the on-device self-test, re-add:
         //   @"-Drunelite.mobileui.smoke=true", @"-ea:net.runelite.client.plugins.PluginManager",
+        // W3 plugin-config typed round-trip device confirm (verdict #7) — md5-GREEN 2026-06-01, flags stripped.
+        // To re-run, set kMuiNativeColorProbe=YES above and re-add these 3:
+        //   @"-Drunelite.mobileui.smoke=true", @"-ea:net.runelite.client.plugins.PluginManager",
+        //   @"-Drunelite.mobileui.nativeprobe=true",
         @"-Drunelite.headless.capture.interval=10",
         @"-Drunelite.headless.capture.preLoginMax=40",  // login-screen/EULA frames before LOGGED_IN gets its
                                                         // own (MAX_FRAMES) budget; a long LOADING can't starve it
@@ -407,6 +452,8 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     // the main thread loads it with atomic_load in ensureBridge).
     atomic_store(&gVM, vm);
     log(@"[jvm] JavaVM created — HotSpot is up. Running probes…");
+
+    if (kMuiNativeColorProbe) { runMuiNativeColorProbe(log); }  // STRIP AFTER DEVICE CONFIRM
 
     // W1 P3 §6.1 device smoke: AwtSmoke activates CTC via UnsafePokeActivation (§6.0, device-GREEN),
     // then realizes a Frame+Canvas and asserts Canvas.getGraphics() non-null + CTC pixel/font readback.

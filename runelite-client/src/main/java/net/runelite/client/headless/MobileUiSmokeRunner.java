@@ -311,6 +311,38 @@ public final class MobileUiSmokeRunner
 		boolean doubleOk = roundTripDouble(cm, doubleGroup, doubleItem);
 		boolean enumOk = roundTripEnum(cm, enumGroup, enumItem);
 		out("MUI_RT_OK=" + (colorOk && intOk && doubleOk && enumOk));
+
+		// Native-origin leg (device only, gated): the iOS shell computes a signed-decimal opaque color in
+		// ObjC and writes it via MobileUiBridge.setConfig to the throwaway sentinel group. This is the half
+		// the desktop run can't cover — it proves the OBJC string-building (the signed-decimal getRGB trap),
+		// not just the Java serialization. Inert on desktop (flag absent).
+		nativeColorReadback(cm);
+	}
+
+	private static final boolean NATIVE_PROBE = Boolean.getBoolean("runelite.mobileui.nativeprobe");
+	private static final String NATIVE_COLOR_KEY = "nativecolor";
+
+	/**
+	 * On device, await the color the native shell writes (group {@link #SENTINEL_GROUP}, key
+	 * {@code nativecolor}) and assert it deserializes to the agreed opaque color {@code 0xFF123456} — i.e.
+	 * the ObjC side produced the correct signed decimal of {@code Color.getRGB()}. The sentinel group is
+	 * throwaway (same group the persistence check uses), so nothing real is touched and no restore is needed.
+	 */
+	private static void nativeColorReadback(ConfigManager cm) throws InterruptedException
+	{
+		if (!NATIVE_PROBE)
+		{
+			return;
+		}
+		final boolean appeared = await("native-color", 60_000,
+			() -> cm.getConfiguration(SENTINEL_GROUP, NATIVE_COLOR_KEY) != null);
+		final String raw = cm.getConfiguration(SENTINEL_GROUP, NATIVE_COLOR_KEY);
+		out("MUI_RT_NATIVE_COLOR_RAW=" + raw);
+		final Color got = cm.getConfiguration(SENTINEL_GROUP, NATIVE_COLOR_KEY, Color.class);
+		final int expect = new Color(0x12, 0x34, 0x56, 0xFF).getRGB(); // agreed with JVMLauncher.m
+		final boolean ok = appeared && got != null && got.getRGB() == expect;
+		out("MUI_RT_NATIVE_COLOR_READBACK=" + (got == null ? "null" : got.toString()));
+		out("MUI_RT_NATIVE_COLOR_OK=" + ok);
 	}
 
 	private static boolean roundTripColor(ConfigManager cm, String group, ConfigItemDescriptor item)

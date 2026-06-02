@@ -37,6 +37,8 @@ RT_COLOR="$(mk MUI_RT_COLOR_OK "$LOG1")"
 RT_INT="$(mk MUI_RT_INT_OK "$LOG1")"
 RT_DOUBLE="$(mk MUI_RT_DOUBLE_OK "$LOG1")"
 RT_ENUM="$(mk MUI_RT_ENUM_OK "$LOG1")"
+# Native-origin color leg: present ONLY on device (the ObjC shell writes it). Empty on desktop -> not gated.
+RT_NATIVE="$(mk MUI_RT_NATIVE_COLOR_OK "$LOG1")"
 
 # Cross-launch persistence (only when a second log is supplied).
 XLAUNCH="n/a"
@@ -66,6 +68,7 @@ printf '  %-26s %s\n' "round-trip color"        "$RT_COLOR  (target: $(mk MUI_RT
 printf '  %-26s %s\n' "round-trip int"          "$RT_INT  (target: $(mk MUI_RT_INT_TARGET "$LOG1"))"
 printf '  %-26s %s\n' "round-trip double"       "$RT_DOUBLE  (target: $(mk MUI_RT_DOUBLE_TARGET "$LOG1"))"
 printf '  %-26s %s\n' "round-trip enum"         "$RT_ENUM  (target: $(mk MUI_RT_ENUM_TARGET "$LOG1"))"
+printf '  %-26s %s\n' "round-trip native color" "${RT_NATIVE:-(desktop: n/a)}"
 
 # Core gates. config-must-NOT-be-on-EDT and toggle-MUST-be-on-EDT together prove the two lanes separate.
 # overlay-grew / chat / x-launch are informational unless their inputs are present.
@@ -75,12 +78,16 @@ for v in "$EA" "$LIST_OK" "$CFG_FIRED" "$CFG_VAL_OK" "$CFG_CLIENT" "$TOGGLE_OK" 
   [ "$v" = "true" ] || PASS=0
 done
 [ "$CFG_EDT" = "false" ] || PASS=0
+# Native-origin color leg is a hard gate only when present (device runs); absent on desktop = skipped.
+if [ -n "$RT_NATIVE" ]; then
+  [ "$RT_NATIVE" = "true" ] || PASS=0
+fi
 # If two logs were given, cross-launch persistence becomes a hard gate.
 if [ -n "$LOG2" ]; then
   [ "$XLAUNCH" = "true" ] || PASS=0
 fi
 
-TUPLE="ea=$EA;list=$LIST_OK;cfgfired=$CFG_FIRED;cfgval=$CFG_VAL_OK;cfgclient=$CFG_CLIENT;cfgnotedt=$([ "$CFG_EDT" = false ] && echo 1 || echo 0);toggle=$TOGGLE_OK;toggleedt=$TOGGLE_EDT;rtcolor=$RT_COLOR;rtint=$RT_INT;rtdouble=$RT_DOUBLE;rtenum=$RT_ENUM;xlaunch=$XLAUNCH"
+TUPLE="ea=$EA;list=$LIST_OK;cfgfired=$CFG_FIRED;cfgval=$CFG_VAL_OK;cfgclient=$CFG_CLIENT;cfgnotedt=$([ "$CFG_EDT" = false ] && echo 1 || echo 0);toggle=$TOGGLE_OK;toggleedt=$TOGGLE_EDT;rtcolor=$RT_COLOR;rtint=$RT_INT;rtdouble=$RT_DOUBLE;rtenum=$RT_ENUM;rtnative=${RT_NATIVE:-na};xlaunch=$XLAUNCH"
 MD5="$(printf '%s' "$TUPLE" | md5of)"
 echo "  tuple: $TUPLE"
 echo "  md5:   $MD5"
