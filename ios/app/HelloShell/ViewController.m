@@ -449,6 +449,13 @@ static const CGFloat kTabStrip = 46.0;
     self.pluginTable.dataSource = self;
     self.pluginTable.delegate = self;
     self.pluginTable.rowHeight = 56;
+    // The on/off switches are UIControls inside this scroll view; by default the table delays touches to its
+    // content and cancels a control's tracking the instant the finger drifts — which made most switch taps a
+    // no-op (confirmed via touch probe: taps landed ON the switch but didn't toggle). Hand touches straight to
+    // the controls and never cancel them, so a switch flips even with an imperfect tap. (Scrolling the list by
+    // dragging the row body still works; only a drag that starts on a switch won't scroll.)
+    self.pluginTable.delaysContentTouches = NO;
+    self.pluginTable.canCancelContentTouches = NO;
     [card addSubview:self.pluginTable];
 
     [self.view addSubview:self.pluginPanel];

@@ -47,6 +47,10 @@
     self.table.backgroundColor = [UIColor clearColor];
     self.table.dataSource = self;
     self.table.delegate = self;
+    // Hand touches straight to the switches/controls in the cells and never let the scroll cancel a control's
+    // tracking on a slight drift, so toggles flip reliably (same fix as the plugin list).
+    self.table.delaysContentTouches = NO;
+    self.table.canCancelContentTouches = NO;
     [self.view addSubview:self.table];
 
     UILayoutGuide *sg = self.view.safeAreaLayoutGuide;
