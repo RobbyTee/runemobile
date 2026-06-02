@@ -103,6 +103,14 @@ typedef void (^JVMLogSink)(NSString *line);
 /// facade is off (-Drunelite.menupeek). Read-only — it never invokes; commit via postClickPrecise. Main thread.
 + (nullable NSString *)menuPeekSnapshot;
 
+/// Selection-border seq (reverse JNI -> JavaBridge.getSnapBorderSeq), bumped each time a left tap resolves
+/// onto an entity. The shell polls this and, on change, reads +snapBorderPoints to flash the outline. Main thread.
++ (int)snapBorderSeq;
+
+/// The last tap-selected entity's outline as flat [x0,y0,x1,y1,…] game-canvas pixels (reverse JNI ->
+/// JavaBridge.getSnapBorder), as NSNumbers. nil if none / unavailable. Map to view + stroke. Main thread.
++ (nullable NSArray<NSNumber *> *)snapBorderPoints;
+
 // ---- Phase 6 (W3): native plugin-management + config panel (reverse JNI -> MobileUiBridge) -----------
 // All call the Java-owned control-plane facade (gated -Drunelite.mobileui). Reads return JSON snapshots
 // to parse once per panel open; writes are fire-and-forget onto the correct Java thread (EDT for plugin

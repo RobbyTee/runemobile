@@ -34,6 +34,8 @@ static _Atomic(JavaVM *) gVM = NULL;  // set right after JNI_CreateJavaVM; clear
 static JNIEnv   *gMainEnv = NULL;     // the UI thread's attached env (main thread only)
 static jclass    gBridgeClass = NULL; // global ref to net.runelite.client.headless.JavaBridge
 static jmethodID gMidW = NULL, gMidH = NULL, gMidSeq = NULL, gMidPixels = NULL;
+// W3 touch-targeting selection border: getSnapBorder()[I + getSnapBorderSeq()I (optional — tolerated absent).
+static jmethodID gMidSnapBorder = NULL, gMidSnapBorderSeq = NULL;
 static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidClickPrecise = NULL, gMidMove = NULL;
 static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
 static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
@@ -161,6 +163,10 @@ static BOOL ensureBridge(void) {
     gMidKey    = (*env)->GetStaticMethodID(env, global, "onKeyStroke", "(I)V");
     gMidInputOpen = (*env)->GetStaticMethodID(env, global, "isTextInputOpen", "()Z");
     gMidClearHover = (*env)->GetStaticMethodID(env, global, "clearHover", "()V");
+    // Optional (newer jar) — resolve but do NOT gate bringup on them; tolerate an older jar without them.
+    gMidSnapBorder    = (*env)->GetStaticMethodID(env, global, "getSnapBorder", "()[I");
+    gMidSnapBorderSeq = (*env)->GetStaticMethodID(env, global, "getSnapBorderSeq", "()I");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
     if (!gMidW || !gMidH || !gMidSeq || !gMidPixels || !gMidTouch || !gMidClick || !gMidClickPrecise || !gMidMove
         || !gMidWheel || !gMidCamera || !gMidText || !gMidKey || !gMidInputOpen || !gMidClearHover) {
         (*env)->ExceptionClear(env);
@@ -814,6 +820,29 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
     if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
     (*env)->DeleteLocalRef(env, js);
+    return out;
+}
+
++ (int)snapBorderSeq {
+    if (!ensureBridge() || !gMidSnapBorderSeq) return 0;
+    JNIEnv *env = gMainEnv;
+    return (int)(*env)->CallStaticIntMethod(env, gBridgeClass, gMidSnapBorderSeq);
+}
+
++ (NSArray<NSNumber *> *)snapBorderPoints {
+    if (!ensureBridge() || !gMidSnapBorder) return nil;
+    JNIEnv *env = gMainEnv;
+    jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, gBridgeClass, gMidSnapBorder);
+    if (!arr || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    jsize len = (*env)->GetArrayLength(env, arr);
+    if (len < 6 || (len & 1)) { (*env)->DeleteLocalRef(env, arr); return nil; }   // need >=3 (x,y) pairs
+    jint *tmp = (jint *)malloc(sizeof(jint) * (size_t)len);
+    if (!tmp) { (*env)->DeleteLocalRef(env, arr); return nil; }
+    (*env)->GetIntArrayRegion(env, arr, 0, len, tmp);
+    (*env)->DeleteLocalRef(env, arr);
+    NSMutableArray<NSNumber *> *out = [NSMutableArray arrayWithCapacity:(NSUInteger)len];
+    for (jsize i = 0; i < len; i++) [out addObject:@(tmp[i])];
+    free(tmp);
     return out;
 }
 

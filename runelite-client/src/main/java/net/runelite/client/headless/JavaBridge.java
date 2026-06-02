@@ -40,8 +40,6 @@ import net.runelite.api.Client;
 import net.runelite.api.GameObject;
 import net.runelite.api.GameState;
 import net.runelite.api.MainBufferProvider;
-import net.runelite.api.MenuAction;
-import net.runelite.api.MenuEntry;
 import net.runelite.api.Scene;
 import net.runelite.api.Tile;
 import net.runelite.api.VarClientInt;
@@ -116,6 +114,13 @@ public final class JavaBridge
 	// ~30 game px on the 1189-wide canvas ≈ ~4 mm on the device panel ≈ a fingertip contact radius.
 	private static final int SNAP_RADIUS = Integer.getInteger("runelite.touch.snapRadius", 30);
 	private static volatile int snapCount;
+
+	// Selection border (OSRS-Mobile feel): when a left tap resolves onto an entity, we publish that entity's
+	// convex hull / clickbox as a flat [x0,y0,x1,y1,…] canvas-pixel polygon + bump a seq. The native shell
+	// polls the seq and flashes the outline so a tap anywhere within it visibly selects the thing. Read
+	// lock-free off the JNI thread; written on the client thread when a tap is resolved.
+	private static volatile int[] snapBorder;
+	private static volatile int snapBorderSeq;
 	// Smart snap (priority-aware): instead of blindly nudging a left tap onto the nearest clickbox (the scene is
 	// clickbox-saturated, so "nearest" is near-arbitrary), let the ENGINE decide. Move to the literal tap and
 	// read its top menu action: if it's already a real interact, click there (never hijack a direct hit). Only
@@ -367,17 +372,36 @@ public final class JavaBridge
 	 * fires the action for the PREVIOUS cursor position, the old "rotate then walk-tap mis-clicks" bug).
 	 *
 	 * <p>Snapping only applies inside the world viewport ({@link #SNAP_VIEWPORT_GATE}) — a tap on the UI never
-	 * snaps. With {@link #SMART_SNAP} the nudge is priority-aware (see {@link #smartDecide}); otherwise it is
-	 * the legacy proactive geometric nudge.
+	 * snaps. With {@link #SMART_SNAP} the resolution is <b>entity-aware</b> ({@link #resolveSnapTarget}):
+	 * strongly prefer actors over the carpet of ground/object clickboxes, click the entity's own (live) hull,
+	 * and publish its outline so the native shell can flash a selection border (the OSRS-Mobile feel — a tap
+	 * anywhere within the border selects the thing). Otherwise the legacy proactive geometric nudge is used.
 	 */
 	private static void startLeftTap(Canvas canvas, ClientThread ct, Client c, int x, int y)
 	{
 		final boolean snap = SNAP_ENABLED && (!SNAP_VIEWPORT_GATE || inWorldViewport(c, x, y));
 		if (SMART_SNAP && snap)
 		{
-			// Move to the LITERAL tap first; decide next cycle once the engine's menu reflects that point.
+			final SnapTarget t = resolveSnapTarget(c, x, y);
+			if (t != null)
+			{
+				publishBorder(t.hull);                 // flash the selection outline natively
+				final int cx = t.point[0];
+				final int cy = t.point[1];
+				if (!t.literal)
+				{
+					snapCount++;
+				}
+				postMove(canvas, cx, cy);
+				ct.invokeLater(() -> postClickButtons(canvas, cx, cy, MouseEvent.BUTTON1));
+				log.debug("[snap] smart: tap {},{} -> {} {},{} ({})",
+					x, y, t.literal ? "hit" : "SNAP", cx, cy, t.actor ? "actor" : "object");
+				return;
+			}
+			// Nothing interactable within reach -> a deliberate walk at the literal point.
 			postMove(canvas, x, y);
-			ct.invokeLater(() -> smartDecide(canvas, ct, c, x, y));
+			ct.invokeLater(() -> postClickButtons(canvas, x, y, MouseEvent.BUTTON1));
+			log.debug("[snap] smart: tap {},{} -> walk (no entity within {}px)", x, y, snapRadius());
 			return;
 		}
 		final int[] p = snap ? resolveSnap(c, x, y) : new int[]{x, y};
@@ -385,67 +409,211 @@ public final class JavaBridge
 		ct.invokeLater(() -> postClickButtons(canvas, p[0], p[1], MouseEvent.BUTTON1));
 	}
 
-	/**
-	 * Priority-aware snap decision, one cycle after moving to the literal tap (so {@link Client#getMenuEntries()}
-	 * reflects it). If the literal point's top action is already a real interact, click it — never hijack a
-	 * direct hit. Otherwise (the tap would just "Walk here") nudge to the nearest entity, but only commit the
-	 * nudge after re-reading confirms IT yields an interact; else walk the literal point. Worst case ~3 cycles.
-	 */
-	private static void smartDecide(Canvas canvas, ClientThread ct, Client c, int x, int y)
+	/** The chosen tap target: its outline {@code hull}, the {@code point} to click, and what it is. */
+	private static final class SnapTarget
 	{
-		if (isInteractTop(c))
+		final Shape hull;       // outline to flash as the selection border
+		final int[] point;      // click point: the literal tap (a direct hit) or the entity's hull centroid
+		final boolean literal;  // true = tapped inside the hull (click the literal point, engine hits it)
+		final boolean actor;    // true = NPC/player (else a scene object) — for the log
+
+		SnapTarget(Shape hull, int[] point, boolean literal, boolean actor)
 		{
-			postClickButtons(canvas, x, y, MouseEvent.BUTTON1);
-			log.debug("[snap] smart: literal {},{} already interact -> click literal", x, y);
-			return;
+			this.hull = hull;
+			this.point = point;
+			this.literal = literal;
+			this.actor = actor;
 		}
-		final int[] cand = resolveSnap(c, x, y);
-		if (cand[0] == x && cand[1] == y)
+	}
+
+	/** Accumulates, per category, the shape the tap is inside (if any) and the nearest shape within radius. */
+	private static final class ShapePick
+	{
+		Shape contain;
+		Shape nearest;
+		double nearestD = Double.MAX_VALUE;
+
+		void consider(Shape s, int x, int y, int r)
 		{
-			postClickButtons(canvas, x, y, MouseEvent.BUTTON1);
-			log.debug("[snap] smart: literal {},{} walk + no candidate -> walk", x, y);
-			return;
+			if (s == null)
+			{
+				return;
+			}
+			if (s.contains(x, y))
+			{
+				if (contain == null)
+				{
+					contain = s;
+				}
+				return;
+			}
+			final Rectangle b = s.getBounds();
+			if (b.width <= 0 || b.height <= 0)
+			{
+				return;
+			}
+			final double d = distToRect(x, y, b);
+			if (d <= r && d < nearestD)
+			{
+				nearestD = d;
+				nearest = s;
+			}
 		}
-		// Validate the nudge target actually yields an interact before committing it.
-		postMove(canvas, cand[0], cand[1]);
-		ct.invokeLater(() ->
-		{
-			if (isInteractTop(c))
-			{
-				snapCount++;
-				postClickButtons(canvas, cand[0], cand[1], MouseEvent.BUTTON1);
-				log.debug("[snap] smart: walk@{},{} -> SNAP {},{} interact (#{})", x, y, cand[0], cand[1], snapCount);
-			}
-			else
-			{
-				postClickButtons(canvas, x, y, MouseEvent.BUTTON1);
-				log.debug("[snap] smart: candidate {},{} not interact -> walk literal {},{}", cand[0], cand[1], x, y);
-			}
-		});
 	}
 
 	/**
-	 * Whether the engine's current top (left-click) menu entry is a real interaction worth snapping to — i.e.
-	 * not a bare {@code Walk here}, {@code Cancel}, or {@code Examine}. Read on the client thread.
+	 * Entity-aware tap resolution (client thread). Considers actors (NPCs/players, by convex hull) and scene
+	 * objects (by clickbox) separately, and resolves with a <b>strong actor preference</b>: a containing actor
+	 * beats a containing object, and the nearest actor within radius beats the nearest object. This is the fix
+	 * for "snapping works but not for NPCs" — in a busy scene the ground/wall/decorative clickboxes blanket the
+	 * floor, so a plain nearest-shape search almost always snapped to an object and walked past the NPC. Clicks
+	 * the entity's own hull centroid (so a near-miss lands ON the moving NPC, not a stale pixel). Returns
+	 * {@code null} if nothing interactable is within {@link #snapRadius()} (a deliberate walk).
 	 */
-	private static boolean isInteractTop(Client c)
+	static SnapTarget resolveSnapTarget(Client c, int x, int y)
 	{
 		try
 		{
-			final MenuEntry[] e = c.getMenuEntries();
-			if (e == null || e.length == 0)
+			final WorldView wv = c.getTopLevelWorldView();
+			if (wv == null)
 			{
-				return false;
+				return null;
 			}
-			final MenuAction a = e[e.length - 1].getType();   // display top = array tail = left-click action
-			return a != MenuAction.WALK && a != MenuAction.CANCEL
-				&& a != MenuAction.EXAMINE_NPC && a != MenuAction.EXAMINE_OBJECT
-				&& a != MenuAction.EXAMINE_ITEM && a != MenuAction.EXAMINE_ITEM_GROUND;
+			final int r = snapRadius();
+			final ShapePick actors = new ShapePick();
+			final ShapePick objects = new ShapePick();
+
+			for (Actor a : wv.npcs())
+			{
+				actors.consider(a.getConvexHull(), x, y, r);
+			}
+			for (Actor a : wv.players())
+			{
+				actors.consider(a.getConvexHull(), x, y, r);
+			}
+
+			final Scene scene = wv.getScene();
+			final int plane = wv.getPlane();
+			final Tile[][][] tiles = scene == null ? null : scene.getTiles();
+			if (tiles != null && plane >= 0 && plane < tiles.length)
+			{
+				for (Tile[] row : tiles[plane])
+				{
+					if (row == null)
+					{
+						continue;
+					}
+					for (Tile tile : row)
+					{
+						if (tile == null)
+						{
+							continue;
+						}
+						final GameObject[] gos = tile.getGameObjects();
+						if (gos != null)
+						{
+							for (GameObject go : gos)
+							{
+								if (go != null)
+								{
+									objects.consider(go.getClickbox(), x, y, r);
+								}
+							}
+						}
+						considerObjPick(objects, tile.getWallObject(), x, y, r);
+						considerObjPick(objects, tile.getGroundObject(), x, y, r);
+						considerObjPick(objects, tile.getDecorativeObject(), x, y, r);
+					}
+				}
+			}
+
+			// Actor preference: containing actor > containing object > nearest actor > nearest object.
+			if (actors.contain != null)
+			{
+				return new SnapTarget(actors.contain, new int[]{x, y}, true, true);
+			}
+			if (objects.contain != null)
+			{
+				return new SnapTarget(objects.contain, new int[]{x, y}, true, false);
+			}
+			if (actors.nearest != null)
+			{
+				return new SnapTarget(actors.nearest, hullCentroid(actors.nearest), false, true);
+			}
+			if (objects.nearest != null)
+			{
+				return new SnapTarget(objects.nearest, hullCentroid(objects.nearest), false, false);
+			}
+			return null;
 		}
 		catch (RuntimeException ex)
 		{
-			return false;
+			log.debug("[snap] resolveSnapTarget failed", ex);
+			return null;
 		}
+	}
+
+	private static void considerObjPick(ShapePick p, net.runelite.api.TileObject o, int x, int y, int r)
+	{
+		if (o != null)
+		{
+			p.consider(o.getClickbox(), x, y, r);
+		}
+	}
+
+	/** Publish an entity's outline (flat {@code [x0,y0,x1,y1,…]} canvas px) for the native selection border. */
+	private static void publishBorder(Shape hull)
+	{
+		final int[] pts = polygon(hull);
+		if (pts != null)
+		{
+			snapBorder = pts;
+			snapBorderSeq++;
+		}
+	}
+
+	/** The last selected entity's outline as a flat {@code [x0,y0,x1,y1,…]} canvas-pixel polygon (or null). */
+	public static int[] getSnapBorder()
+	{
+		return snapBorder;
+	}
+
+	/** Bumped once per published selection border — the native shell polls this to flash a new outline. */
+	public static int getSnapBorderSeq()
+	{
+		return snapBorderSeq;
+	}
+
+	/** Flatten a shape's vertices to {@code [x0,y0,x1,y1,…]} (canvas px), or null if it has too few. */
+	private static int[] polygon(Shape s)
+	{
+		if (s == null)
+		{
+			return null;
+		}
+		final java.awt.geom.PathIterator it = s.getPathIterator(null);
+		final double[] co = new double[6];
+		final java.util.ArrayList<Integer> pts = new java.util.ArrayList<>(32);
+		while (!it.isDone())
+		{
+			final int seg = it.currentSegment(co);
+			if (seg == java.awt.geom.PathIterator.SEG_MOVETO || seg == java.awt.geom.PathIterator.SEG_LINETO)
+			{
+				pts.add((int) co[0]);
+				pts.add((int) co[1]);
+			}
+			it.next();
+		}
+		if (pts.size() < 6)
+		{
+			return null;
+		}
+		final int[] out = new int[pts.size()];
+		for (int i = 0; i < out.length; i++)
+		{
+			out[i] = pts.get(i);
+		}
+		return out;
 	}
 
 	/**
