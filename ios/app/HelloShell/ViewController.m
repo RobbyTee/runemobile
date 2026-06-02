@@ -57,10 +57,11 @@
 // onClick onto the stone centre. A ▦ toggle shows/hides them for instant A/B fallback.
 @property (nonatomic, strong) NSMutableArray<UIButton *> *tabButtons;
 @property (nonatomic, strong) UIView *tabRailBg;   // opaque rail behind the edge-split icon grid
-// Per-tab cached stone crop, captured while the tab is INACTIVE (a clean stone). When a tab is active its
-// widget bounds shift to the open panel header (which carries text), so we reuse the cached clean stone
-// instead of cropping the panel header live.
-@property (nonatomic, strong) NSMutableDictionary<NSNumber *, UIImage *> *tabIconCache;
+// Pre-composited tab images (stone background + centred icon) built once from the bundled OSRS sprite assets
+// (stone-inactive/active + icon-0..13). Index = tab index; active/inactive variants. Authentic, crisp, no
+// crop fragility.
+@property (nonatomic, strong) NSMutableArray<UIImage *> *tabImgInactive;
+@property (nonatomic, strong) NSMutableArray<UIImage *> *tabImgActive;
 @property (nonatomic, strong) UIButton *chromeToggle;
 @property (nonatomic, assign) BOOL chromeVisible;
 @end
@@ -147,13 +148,14 @@ static NSString * const kKbSentinel = @"​";
         tb.tag = i;
         tb.hidden = YES;
         tb.imageView.contentMode = UIViewContentModeScaleAspectFit;
-        tb.contentEdgeInsets = UIEdgeInsetsZero;   // the stone fills the cell; its own rounded shape shows
+        tb.imageView.layer.magnificationFilter = kCAFilterNearest;   // crisp pixel-art upscale
+        tb.contentEdgeInsets = UIEdgeInsetsZero;
         tb.clipsToBounds = NO;
         [tb addTarget:self action:@selector(onTabButton:) forControlEvents:UIControlEventTouchUpInside];
         [self.screen addSubview:tb];
         [self.tabButtons addObject:tb];
     }
-    self.tabIconCache = [NSMutableDictionary dictionary];
+    [self buildTabAssets];
     self.chromeVisible = YES;
 
     // Hidden capture field — placed offscreen (not hidden, so it can still become first responder).
@@ -399,23 +401,45 @@ static NSString * const kKbSentinel = @"​";
     return CGRectMake(gx * scale + ox, gy * scale + oy, gw * scale, gh * scale);
 }
 
-// Crop a tab stone's sprite from the live game frame (self.screen.image is at game-canvas resolution, so the
-// crop rect is the stone's game bounds directly). Inset to drop the stone border and keep the icon glyph. The
-// crop reads the GAME render only (native UIKit buttons are composited on top, not in the image), so there is
-// no feedback loop even when the native rail overlaps the stone.
-- (UIImage *)cropIconX:(int)x y:(int)y w:(int)w h:(int)h {
-    UIImage *img = self.screen.image;
-    if (img == nil || img.CGImage == NULL) return nil;
-    const CGFloat inset = 0.0;   // FULL stone (rounded background + icon) — it reads as the real tab
-    CGRect r = CGRectMake(x + inset, y + inset, MAX(1.0, w - 2 * inset), MAX(1.0, h - 2 * inset));
-    CGRect bounds = CGRectMake(0, 0, img.size.width, img.size.height);
-    r = CGRectIntersection(r, bounds);
-    if (CGRectIsEmpty(r)) return nil;
-    CGImageRef cg = CGImageCreateWithImageInRect(img.CGImage, r);
-    if (!cg) return nil;
-    UIImage *out = [UIImage imageWithCGImage:cg];
-    CGImageRelease(cg);
-    return out;
+// Load a bundled tab sprite asset at native (1x) scale.
+- (UIImage *)loadAsset:(NSString *)name {
+    NSString *p = [[NSBundle mainBundle] pathForResource:name ofType:@"png"];
+    return p ? [UIImage imageWithContentsOfFile:p] : nil;
+}
+
+// Composite an icon centred on a stone background into one tab image (nearest-neighbour, native px).
+- (UIImage *)compositeStone:(UIImage *)stone icon:(UIImage *)icon {
+    if (stone == nil) return icon;
+    CGSize sz = stone.size;
+    UIGraphicsImageRendererFormat *fmt = [UIGraphicsImageRendererFormat preferredFormat];
+    fmt.opaque = NO;
+    fmt.scale = 1.0;
+    UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:sz format:fmt];
+    return [r imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+        CGContextSetInterpolationQuality(ctx.CGContext, kCGInterpolationNone);
+        [stone drawInRect:CGRectMake(0, 0, sz.width, sz.height)];
+        if (icon) {
+            CGFloat ix = floor((sz.width - icon.size.width) / 2.0);
+            CGFloat iy = floor((sz.height - icon.size.height) / 2.0);
+            [icon drawInRect:CGRectMake(ix, iy, icon.size.width, icon.size.height)];
+        }
+    }];
+}
+
+// Build the 14 active + 14 inactive tab images once from the bundled OSRS sprites (stone-inactive/active +
+// icon-0..13). Authentic feathered stones with the real tab glyph — no crop-from-frame fragility.
+- (void)buildTabAssets {
+    UIImage *stoneI = [self loadAsset:@"stone-inactive"];
+    UIImage *stoneA = [self loadAsset:@"stone-active"];
+    self.tabImgInactive = [NSMutableArray arrayWithCapacity:14];
+    self.tabImgActive = [NSMutableArray arrayWithCapacity:14];
+    for (int i = 0; i < 14; i++) {
+        UIImage *icon = [self loadAsset:[NSString stringWithFormat:@"icon-%d", i]];
+        self.tabImgInactive[i] = [self compositeStone:stoneI icon:icon] ?: [NSNull null];
+        self.tabImgActive[i]   = [self compositeStone:stoneA icon:icon] ?: [NSNull null];
+    }
+    [self appendLine:[NSString stringWithFormat:@"[chrome] tab assets built (stones %@/%@)",
+                      stoneI ? @"ok" : @"MISSING", stoneA ? @"ok" : @"MISSING"]];
 }
 
 // Lay out the native tab rails from the read-only chrome snapshot — EDGE-SPLIT (mobile) arrangement, matching
@@ -473,23 +497,16 @@ static NSString * const kKbSentinel = @"​";
         UIButton *btn = self.tabButtons[i];
         NSArray *bb = tabs[i];
         int bx = [bb[0] intValue], by = [bb[1] intValue], bw = [bb[2] intValue], bh = [bb[3] intValue];
+        (void)bx; (void)by; (void)bw; (void)bh;   // bounds drive the proxy centre (set above), not the icon
         btn.frame = CGRectMake(x, y0 + k * (cell + gap), cell, cell);
         BOOL isActive = ((int)i == active);
-        // Crop the stone raw (no cell background, no square clip — its own rounded shape shows). Cache the
-        // crop while the tab is INACTIVE (a clean stone); when active, reuse the cached stone so we never show
-        // the panel-header text the active tab's bounds briefly point at.
-        UIImage *icon;
-        if (!isActive) {
-            icon = [self cropIconX:bx y:by w:bw h:bh];
-            if (icon) self.tabIconCache[@(i)] = icon;
-        } else {
-            icon = self.tabIconCache[@(i)] ?: [self cropIconX:bx y:by w:bw h:bh];
-        }
-        [btn setImage:icon forState:UIControlStateNormal];
+        // Authentic composited tab image (bundled OSRS stone + icon). Active = red stone, inactive = grey.
+        NSArray<UIImage *> *imgs = isActive ? self.tabImgActive : self.tabImgInactive;
+        UIImage *img = (i < (int)imgs.count && [imgs[i] isKindOfClass:[UIImage class]]) ? imgs[i] : nil;
+        [btn setImage:img forState:UIControlStateNormal];
         btn.backgroundColor = [UIColor clearColor];
-        btn.layer.borderWidth = 0.0;            // no border — the user disliked it
-        // Active vs inactive shown by brightness alone (mobile feel): active full, inactive dimmed.
-        btn.alpha = isActive ? 1.0 : 0.55;
+        btn.layer.borderWidth = 0.0;
+        btn.alpha = 1.0;   // active vs inactive carried by the red/grey stone itself
         btn.hidden = NO;
     }
 }

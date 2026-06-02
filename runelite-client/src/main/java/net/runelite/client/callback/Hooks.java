@@ -430,6 +430,12 @@ public class Hooks implements Callbacks
 			// -Drunelite.mobilechrome.repos=true. Desktop de-risk first.
 			net.runelite.client.headless.MobileChromeReposProbe.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.MobileChromeSpriteDump.isEnabled())
+		{
+			// W3 clean-native-chrome: one-shot DESKTOP extractor for the tab sprite assets (stones 1180/1181 +
+			// icons 774-787) -> PNG, to bundle + composite natively. Gated -Drunelite.mobilechrome.spritedump=true.
+			net.runelite.client.headless.MobileChromeSpriteDump.tick(client, client.getGameState());
+		}
 
 		if (graphics == null)
 		{
