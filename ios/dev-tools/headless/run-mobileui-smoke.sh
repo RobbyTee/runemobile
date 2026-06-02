@@ -68,6 +68,7 @@ run_launch() # $1=logfile
     -ea \
     -Drunelite.mobileui=true \
     -Drunelite.mobileui.smoke=true \
+    ${HUBPROBE:+-Drunelite.mobileui.hubprobe=true -Drunelite.hub=true -Drunelite.pluginhub.version=${HUBVER:-1.12.27}} \
     -Djdk.attach.allowAttachSelf=true \
     -Dheadless.runSeconds="$RUN_SECONDS" \
     ${LOGIN_PROPS[@]+"${LOGIN_PROPS[@]}"} \

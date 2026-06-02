@@ -22,7 +22,10 @@ public class MobileUiSmoke
 	public void smoke() throws Exception
 	{
 		System.out.println("[smoke] toolkit=" + java.awt.Toolkit.getDefaultToolkit().getClass().getName());
-		net.runelite.client.headless.RuneLiteHeadless.main(new String[]{"--safe-mode"});
+		// Drop safe-mode for the plugin-hub probe so ExternalPluginManager can load hub plugins (mirrors the
+		// device boot's -Drunelite.hub gate). Default keeps safe-mode, matching the device's normal boot.
+		final String[] rlArgs = Boolean.getBoolean("runelite.hub") ? new String[0] : new String[]{"--safe-mode"};
+		net.runelite.client.headless.RuneLiteHeadless.main(rlArgs);
 
 		// Hold the run open long enough for the daemon to finish its checks (it prints MUI_DONE=1).
 		final long runSeconds = Long.getLong("headless.runSeconds", 60L);

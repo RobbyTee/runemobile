@@ -29,8 +29,13 @@ public class DeviceHeadlessBoot {
 
         // 2. Boot the real client, window-less (HeadlessClientUI), GPU off. HeadlessCapture dumps
         //    mainBufferProvider to -Drunelite.headless.capture.dir when set.
-        System.out.println("[boot] launching RuneLiteHeadless --safe-mode");
-        net.runelite.client.headless.RuneLiteHeadless.main(new String[]{"--safe-mode"});
+        //    safe-mode disables external (plugin-hub) plugins AND the GPU plugin; the GPU plugin is
+        //    irrelevant headless, so we keep safe-mode by default but drop it for the plugin-hub path
+        //    (-Drunelite.hub=true) so ExternalPluginManager can download/classload hub plugins.
+        final boolean hub = Boolean.getBoolean("runelite.hub");
+        final String[] rlArgs = hub ? new String[0] : new String[]{"--safe-mode"};
+        System.out.println("[boot] launching RuneLiteHeadless" + (hub ? " (hub: safe-mode OFF)" : " --safe-mode"));
+        net.runelite.client.headless.RuneLiteHeadless.main(rlArgs);
 
         long runSeconds = Long.getLong("headless.runSeconds", 60L);
         // Minimum login-screen frames to grab before exiting cleanly. The device process is killed by iOS

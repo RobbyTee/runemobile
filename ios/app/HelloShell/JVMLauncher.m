@@ -426,6 +426,12 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         //   reset-default), both via the MobileUiSmokeRunner bytes. To re-run the self-test, re-add:
         //   @"-Drunelite.mobileui.smoke=true", @"-ea:net.runelite.client.plugins.PluginManager",
         //   (and -Drunelite.mobileui.nativeprobe + kMuiNativeColorProbe=YES for the native-origin color leg)
+        // PLUGIN-HUB device de-risk — md5-GREEN 2026-06-02 (manifest=1700, nail-beast-sfx downloaded +
+        // classloaded + JIT-ran + started under the mirror + showed in the panel, clean uninstall). Flags
+        // stripped; to re-run the probe re-add:
+        //   @"-Drunelite.mobileui.smoke=true", @"-ea:net.runelite.client.plugins.PluginManager",
+        //   @"-Drunelite.mobileui.hubprobe=true", @"-Drunelite.hub=true", @"-Drunelite.pluginhub.version=1.12.27",
+        // NOTE: -Drunelite.hub also drops safe-mode (enables external plugins) — the real hub UI will pass it.
         @"-Drunelite.headless.capture.interval=10",
         @"-Drunelite.headless.capture.preLoginMax=40",  // login-screen/EULA frames before LOGGED_IN gets its
                                                         // own (MAX_FRAMES) budget; a long LOADING can't starve it

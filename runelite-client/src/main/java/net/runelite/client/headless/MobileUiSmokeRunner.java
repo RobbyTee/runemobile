@@ -30,8 +30,12 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import net.runelite.client.externalplugins.ExternalPluginClient;
+import net.runelite.client.externalplugins.ExternalPluginManager;
+import net.runelite.client.externalplugins.PluginHubManifest;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
@@ -119,6 +123,7 @@ public final class MobileUiSmokeRunner
 			await("facade-wired", 60_000, () -> !"[]".equals(MobileUiBridge.listPlugins()));
 
 			runChecks(eventBus, pluginManager, overlayManager, configManager, client);
+			runHubProbe(injector, pluginManager);
 		}
 		catch (Throwable ex)
 		{
@@ -247,6 +252,115 @@ public final class MobileUiSmokeRunner
 		runTypedRoundTrip(pluginManager, configManager);
 
 		out("MUI_DONE=1");
+	}
+
+	// ---- plugin-hub de-risk (own phase) ---------------------------------------------------------------
+
+	private static final boolean HUB_PROBE = Boolean.getBoolean("runelite.mobileui.hubprobe");
+
+	/**
+	 * Plugin-hub feasibility de-risk (device). Proves the whole external-plugin chain works on the on-device
+	 * JIT JVM: download + verify the signed manifest (network), download a real hub jar, classload it through
+	 * {@code PluginHubClassLoader} (a URLClassLoader), JIT-run + start it on the CACIO EDT, and confirm it
+	 * shows up in {@link MobileUiBridge#listPlugins()}. Tries the smallest few jars (a singleton install can
+	 * fail if a plugin has hub dependencies). Cleans up after (uninstall + flush) so a normal boot is unchanged.
+	 * Requires safe-mode OFF (-Drunelite.hub) — otherwise ExternalPluginManager refuses to load anything.
+	 */
+	private static void runHubProbe(Injector injector, PluginManager pm)
+	{
+		if (!HUB_PROBE)
+		{
+			return;
+		}
+		try
+		{
+			out("MUI_HUB_PHASE=start");
+			final ExternalPluginManager epm = injector.getInstance(ExternalPluginManager.class);
+			final ExternalPluginClient client = injector.getInstance(ExternalPluginClient.class);
+
+			final PluginHubManifest.ManifestLite manifest = client.downloadManifestLite();
+			final List<PluginHubManifest.JarData> jars = new ArrayList<>(manifest.getJars());
+			out("MUI_HUB_MANIFEST=" + jars.size()); // network + signature verify worked on device
+			if (jars.isEmpty())
+			{
+				out("MUI_HUB_LOADED=false");
+				out("MUI_HUB_DONE=1");
+				return;
+			}
+			jars.sort(Comparator.comparingInt(PluginHubManifest.JarData::getJarSize));
+
+			boolean loaded = false;
+			boolean active = false;
+			boolean inPanel = false;
+			String chosen = "(none)";
+			String loadedClass = "(none)";
+			int attempts = 0;
+			for (PluginHubManifest.JarData jd : jars)
+			{
+				if (loaded || attempts >= 3)
+				{
+					break;
+				}
+				attempts++;
+				chosen = jd.getInternalName();
+				out("MUI_HUB_TRY=" + chosen + " size=" + jd.getJarSize());
+				epm.install(chosen);
+				final long deadline = System.currentTimeMillis() + 60_000;
+				Plugin hub = null;
+				while (System.currentTimeMillis() < deadline && hub == null)
+				{
+					hub = findHubPlugin(pm);
+					if (hub == null)
+					{
+						Thread.sleep(500);
+					}
+				}
+				if (hub != null)
+				{
+					loaded = true;
+					loadedClass = hub.getClass().getName();
+					active = pm.isPluginActive(hub);
+					inPanel = MobileUiBridge.listPlugins().contains(loadedClass);
+				}
+				else
+				{
+					epm.remove(chosen); // failed attempt — unlist it before trying the next
+					Thread.sleep(1500);
+				}
+			}
+			out("MUI_HUB_CHOSEN=" + chosen);
+			out("MUI_HUB_LOADED=" + loaded);
+			out("MUI_HUB_PLUGIN=" + loadedClass);
+			out("MUI_HUB_ACTIVE=" + active);
+			out("MUI_HUB_IN_PANEL=" + inPanel);
+
+			// Clean up: uninstall the probe plugin + flush so a normal (non-hub) boot stays as before.
+			if (loaded)
+			{
+				epm.remove(chosen);
+				Thread.sleep(1000);
+			}
+			MobileUiBridge.flushConfig();
+			out("MUI_HUB_DONE=1");
+		}
+		catch (Throwable t)
+		{
+			out("MUI_HUB_FATAL=" + t.getClass().getSimpleName() + ":" + t.getMessage());
+		}
+	}
+
+	/** A loaded plugin whose class came from the hub URLClassLoader (matched by simple name, cross-package). */
+	private static Plugin findHubPlugin(PluginManager pm)
+	{
+		for (Plugin p : pm.getPlugins())
+		{
+			final ClassLoader cl = p.getClass().getClassLoader();
+			if (cl != null && "PluginHubClassLoader".equals(cl.getClass().getSimpleName()))
+			{
+				return p;
+			}
+		}
+		return null;
 	}
 
 	// ---- typed config round-trip (verdict #7) ---------------------------------------------------------
