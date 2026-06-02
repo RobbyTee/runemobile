@@ -449,14 +449,17 @@ static const CGFloat kTabStrip = 46.0;
     self.pluginTable.dataSource = self;
     self.pluginTable.delegate = self;
     self.pluginTable.rowHeight = 56;
-    // The on/off switches are UIControls inside this scroll view; by default the table delays touches to its
-    // content and cancels a control's tracking the instant the finger drifts — which made most switch taps a
-    // no-op (confirmed via touch probe: taps landed ON the switch but didn't toggle). Hand touches straight to
-    // the controls and never cancel them, so a switch flips even with an imperfect tap. (Scrolling the list by
-    // dragging the row body still works; only a drag that starts on a switch won't scroll.)
+    // The tiny iOS-26 switch was unreliable to tap inside a scroll view (the scroll kept stealing the touch).
+    // Instead the WHOLE ROW toggles the plugin (a big, reliable target) and the switch is a pure indicator;
+    // delaysContentTouches=NO just makes that row tap feel immediate. Scrolling is back to normal (we no longer
+    // force canCancelContentTouches, which had disabled scroll entirely).
     self.pluginTable.delaysContentTouches = NO;
-    self.pluginTable.canCancelContentTouches = NO;
     [card addSubview:self.pluginTable];
+
+    // Long-press a row to open that plugin's config (tap = toggle, so config moves to long-press).
+    UILongPressGestureRecognizer *cfgLp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onPluginRowLongPress:)];
+    [self.pluginTable addGestureRecognizer:cfgLp];
 
     [self.view addSubview:self.pluginPanel];
 
@@ -574,20 +577,10 @@ static const CGFloat kTabStrip = 46.0;
     return (NSInteger)self.pluginList.count;
 }
 
-// Tap a plugin with config -> open its native config screen (the typed controls). Plugins without a config
-// group just deselect.
+// Tap a plugin row -> toggle it on/off (the reliable big-target action). Long-press opens config.
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.row < 0 || indexPath.row >= (NSInteger)self.pluginList.count) return;
-    NSDictionary *p = self.pluginList[(NSUInteger)indexPath.row];
-    BOOL hasConfig = [p[@"hasConfig"] boolValue];
-    NSString *group = [p[@"configGroup"] isKindOfClass:[NSString class]] ? p[@"configGroup"] : nil;
-    if (!hasConfig || group.length == 0) {
-        return; // toggle-only plugin
-    }
-    PluginConfigViewController *cfg = [[PluginConfigViewController alloc] initWithGroup:group
-                                                                            pluginName:[p[@"name"] description]];
-    [self presentViewController:cfg animated:YES completion:nil];
+    [self togglePluginAtRow:indexPath.row];
 }
 
 
@@ -599,7 +592,7 @@ static const CGFloat kTabStrip = 46.0;
         cell.backgroundColor = [UIColor clearColor];
         cell.textLabel.textColor = [UIColor whiteColor];
         UISwitch *sw = [[UISwitch alloc] init];
-        [sw addTarget:self action:@selector(onPluginSwitch:) forControlEvents:UIControlEventValueChanged];
+        sw.userInteractionEnabled = NO;   // pure indicator — the row tap toggles (reliable big target)
         cell.accessoryView = sw;
     }
     NSDictionary *p = self.pluginList[(NSUInteger)indexPath.row];
@@ -626,30 +619,49 @@ static const CGFloat kTabStrip = 46.0;
     } else {
         status = @"○ disabled"; statusColor = [UIColor colorWithWhite:0.6 alpha:1.0];
     }
-    cell.detailTextLabel.text = hasConfig ? [status stringByAppendingString:@"   ›  configure"] : status;
+    cell.detailTextLabel.text = hasConfig ? [status stringByAppendingString:@"   ·  hold to configure"] : status;
     cell.detailTextLabel.textColor = statusColor;
-    cell.selectionStyle = hasConfig ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
+    cell.selectionStyle = UITableViewCellSelectionStyleDefault;   // every row taps to toggle
     UISwitch *sw = (UISwitch *)cell.accessoryView;
     sw.tag = indexPath.row;
     [sw setOn:enabled animated:NO];
     return cell;
 }
 
-// Toggle a plugin: drive MobileUiBridge.setPluginEnabled (EDT lane). The resulting PluginChanged bumps the
-// event sequence, so onDisplayTick re-reads the list and the running/stopped indicator settles.
-- (void)onPluginSwitch:(UISwitch *)sender {
-    NSInteger row = sender.tag;
+// Toggle a plugin by row: drive MobileUiBridge.setPluginEnabled (EDT lane). The resulting PluginChanged bumps
+// the event sequence, so onDisplayTick re-reads the list and the running/stopped indicator settles.
+- (void)togglePluginAtRow:(NSInteger)row {
     if (row < 0 || row >= (NSInteger)self.pluginList.count) return;
     NSDictionary *p = self.pluginList[(NSUInteger)row];
     NSString *className = [p[@"className"] description];
-    NSString *ack = [JVMLauncher mobileSetPluginEnabled:className enabled:sender.isOn];
+    BOOL newOn = ![p[@"enabled"] boolValue];
+    NSString *ack = [JVMLauncher mobileSetPluginEnabled:className enabled:newOn];
     // Start/clear the grace timer from the user action (before the next refresh observes it).
     if (className) {
-        if (sender.isOn) self.pluginEnabledSince[className] = @(CFAbsoluteTimeGetCurrent());
+        if (newOn) self.pluginEnabledSince[className] = @(CFAbsoluteTimeGetCurrent());
         else [self.pluginEnabledSince removeObjectForKey:className];
     }
+    // Optimistic visual: flip this row's switch now; the next refresh reconciles with the real state.
+    UITableViewCell *cell = [self.pluginTable cellForRowAtIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
+    if ([cell.accessoryView isKindOfClass:[UISwitch class]]) {
+        [(UISwitch *)cell.accessoryView setOn:newOn animated:YES];
+    }
     [self appendLine:[NSString stringWithFormat:@"[plugins] %@ -> %@ : %@",
-                      p[@"name"], sender.isOn ? @"enable" : @"disable", ack ?: @"(nil)"]];
+                      p[@"name"], newOn ? @"enable" : @"disable", ack ?: @"(nil)"]];
+}
+
+// Long-press a plugin row -> open its config screen (if it has one). Tap toggles; hold configures.
+- (void)onPluginRowLongPress:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    NSIndexPath *ip = [self.pluginTable indexPathForRowAtPoint:[g locationInView:self.pluginTable]];
+    if (!ip || ip.row < 0 || ip.row >= (NSInteger)self.pluginList.count) return;
+    NSDictionary *p = self.pluginList[(NSUInteger)ip.row];
+    BOOL hasConfig = [p[@"hasConfig"] boolValue];
+    NSString *group = [p[@"configGroup"] isKindOfClass:[NSString class]] ? p[@"configGroup"] : nil;
+    if (!hasConfig || group.length == 0) return;
+    PluginConfigViewController *cfg = [[PluginConfigViewController alloc] initWithGroup:group
+                                                                            pluginName:[p[@"name"] description]];
+    [self presentViewController:cfg animated:YES completion:nil];
 }
 
 #pragma mark - Logging
