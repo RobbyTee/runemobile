@@ -31,6 +31,13 @@ LOGGED_IN="$(mk MUI_LOGGED_IN "$LOG1")"
 CHAT_OK="$(mk MUI_CHAT_OK "$LOG1")"
 WRITTEN1="$(mk MUI_PERSIST_WRITTEN "$LOG1")"
 
+# Typed config round-trip (verdict #7: native-shaped write -> ConfigManager serialization -> typed read-back
+# through the exact proxy path the live plugin reads). The single biggest de-risk before native controls.
+RT_COLOR="$(mk MUI_RT_COLOR_OK "$LOG1")"
+RT_INT="$(mk MUI_RT_INT_OK "$LOG1")"
+RT_DOUBLE="$(mk MUI_RT_DOUBLE_OK "$LOG1")"
+RT_ENUM="$(mk MUI_RT_ENUM_OK "$LOG1")"
+
 # Cross-launch persistence (only when a second log is supplied).
 XLAUNCH="n/a"
 if [ -n "$LOG2" ]; then
@@ -55,11 +62,16 @@ printf '  %-26s %s\n' "overlay grew (headless)" "$OVERLAY_GREW"
 printf '  %-26s %s\n' "logged in"               "$LOGGED_IN"
 printf '  %-26s %s\n' "chat bounds ok"          "$CHAT_OK"
 printf '  %-26s %s\n' "persist x-launch"        "$XLAUNCH"
+printf '  %-26s %s\n' "round-trip color"        "$RT_COLOR  (target: $(mk MUI_RT_COLOR_TARGET "$LOG1"))"
+printf '  %-26s %s\n' "round-trip int"          "$RT_INT  (target: $(mk MUI_RT_INT_TARGET "$LOG1"))"
+printf '  %-26s %s\n' "round-trip double"       "$RT_DOUBLE  (target: $(mk MUI_RT_DOUBLE_TARGET "$LOG1"))"
+printf '  %-26s %s\n' "round-trip enum"         "$RT_ENUM  (target: $(mk MUI_RT_ENUM_TARGET "$LOG1"))"
 
 # Core gates. config-must-NOT-be-on-EDT and toggle-MUST-be-on-EDT together prove the two lanes separate.
 # overlay-grew / chat / x-launch are informational unless their inputs are present.
 PASS=1
-for v in "$EA" "$LIST_OK" "$CFG_FIRED" "$CFG_VAL_OK" "$CFG_CLIENT" "$TOGGLE_OK" "$TOGGLE_EDT"; do
+for v in "$EA" "$LIST_OK" "$CFG_FIRED" "$CFG_VAL_OK" "$CFG_CLIENT" "$TOGGLE_OK" "$TOGGLE_EDT" \
+         "$RT_COLOR" "$RT_INT" "$RT_DOUBLE" "$RT_ENUM"; do
   [ "$v" = "true" ] || PASS=0
 done
 [ "$CFG_EDT" = "false" ] || PASS=0
@@ -68,7 +80,7 @@ if [ -n "$LOG2" ]; then
   [ "$XLAUNCH" = "true" ] || PASS=0
 fi
 
-TUPLE="ea=$EA;list=$LIST_OK;cfgfired=$CFG_FIRED;cfgval=$CFG_VAL_OK;cfgclient=$CFG_CLIENT;cfgnotedt=$([ "$CFG_EDT" = false ] && echo 1 || echo 0);toggle=$TOGGLE_OK;toggleedt=$TOGGLE_EDT;xlaunch=$XLAUNCH"
+TUPLE="ea=$EA;list=$LIST_OK;cfgfired=$CFG_FIRED;cfgval=$CFG_VAL_OK;cfgclient=$CFG_CLIENT;cfgnotedt=$([ "$CFG_EDT" = false ] && echo 1 || echo 0);toggle=$TOGGLE_OK;toggleedt=$TOGGLE_EDT;rtcolor=$RT_COLOR;rtint=$RT_INT;rtdouble=$RT_DOUBLE;rtenum=$RT_ENUM;xlaunch=$XLAUNCH"
 MD5="$(printf '%s' "$TUPLE" | md5of)"
 echo "  tuple: $TUPLE"
 echo "  md5:   $MD5"

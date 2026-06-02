@@ -25,14 +25,20 @@
 package net.runelite.client.headless;
 
 import com.google.inject.Injector;
+import java.awt.Color;
 import java.lang.reflect.Field;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.client.RuneLite;
+import net.runelite.client.config.Config;
+import net.runelite.client.config.ConfigDescriptor;
+import net.runelite.client.config.ConfigItemDescriptor;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
@@ -220,7 +226,230 @@ public final class MobileUiSmokeRunner
 			out("MUI_CHAT_OK=" + (vis && b[2] > 0 && b[3] > 0));
 		}
 
+		// (7) TYPED CONFIG ROUND-TRIP — the verdict's "single biggest de-risk". Write a real typed value
+		// (color/int/double/enum) THROUGH the same MobileUiBridge.setConfig the native panel uses, with the
+		// EXACT string serialization the native control must produce, then read it back through the typed
+		// proxy path the live plugin reads from. Catches malformed serialization (esp. the signed-decimal
+		// color trap: getRGB() is negative for opaque colors, ColorUtil.fromString uses Integer.decode which
+		// rejects 0xFFxxxxxx hex) that would silently null out real config. Restores every value it touches.
+		runTypedRoundTrip(pluginManager, configManager);
+
 		out("MUI_DONE=1");
+	}
+
+	// ---- typed config round-trip (verdict #7) ---------------------------------------------------------
+
+	/**
+	 * Find one real, editable config item of each typed kind and prove a native-shaped write round-trips
+	 * through {@code ConfigManager}'s serialization into the value the live plugin's typed getter reads.
+	 * Non-fatal: each type is independent and self-restoring; a missing type is reported absent, not failed.
+	 */
+	private static void runTypedRoundTrip(PluginManager pm, ConfigManager cm) throws InterruptedException
+	{
+		ConfigItemDescriptor colorItem = null, intItem = null, doubleItem = null, enumItem = null;
+		String colorGroup = null, intGroup = null, doubleGroup = null, enumGroup = null;
+
+		for (Plugin p : pm.getPlugins())
+		{
+			final PluginDescriptor pd = p.getClass().getAnnotation(PluginDescriptor.class);
+			if (pd == null || pd.hidden() || pd.developerPlugin())
+			{
+				continue;
+			}
+			final ConfigDescriptor cd;
+			try
+			{
+				final Config proxy = pm.getPluginConfigProxy(p);
+				if (proxy == null)
+				{
+					continue;
+				}
+				cd = cm.getConfigDescriptor(proxy);
+			}
+			catch (RuntimeException ex)
+			{
+				continue;
+			}
+			final String group = cd.getGroup().value();
+			for (ConfigItemDescriptor item : cd.getItems())
+			{
+				if (item.getItem().hidden() || item.getItem().secret())
+				{
+					continue;
+				}
+				final Type t = item.getType();
+				if (!(t instanceof Class))
+				{
+					continue;
+				}
+				final Class<?> c = (Class<?>) t;
+				if (colorItem == null && c == Color.class)
+				{
+					colorItem = item;
+					colorGroup = group;
+				}
+				else if (intItem == null && (c == int.class || c == Integer.class))
+				{
+					intItem = item;
+					intGroup = group;
+				}
+				else if (doubleItem == null && (c == double.class || c == Double.class))
+				{
+					doubleItem = item;
+					doubleGroup = group;
+				}
+				else if (enumItem == null && c.isEnum() && ((Class<?>) c).getEnumConstants().length >= 2)
+				{
+					enumItem = item;
+					enumGroup = group;
+				}
+			}
+		}
+
+		boolean colorOk = roundTripColor(cm, colorGroup, colorItem);
+		boolean intOk = roundTripInt(cm, intGroup, intItem);
+		boolean doubleOk = roundTripDouble(cm, doubleGroup, doubleItem);
+		boolean enumOk = roundTripEnum(cm, enumGroup, enumItem);
+		out("MUI_RT_OK=" + (colorOk && intOk && doubleOk && enumOk));
+	}
+
+	private static boolean roundTripColor(ConfigManager cm, String group, ConfigItemDescriptor item)
+		throws InterruptedException
+	{
+		if (item == null)
+		{
+			out("MUI_RT_COLOR_TARGET=(none)");
+			out("MUI_RT_COLOR_OK=false");
+			return false;
+		}
+		final String key = item.key();
+		final Color cur = cm.getConfiguration(group, key, Color.class);
+		// An OPAQUE target so getRGB() is negative — the signed-decimal trap the native control must honor.
+		Color target = new Color(0x12, 0x34, 0x56, 0xFF);
+		if (cur != null && cur.getRGB() == target.getRGB())
+		{
+			target = new Color(0xAB, 0xCD, 0xEF, 0xFF);
+		}
+		final String serialized = String.valueOf(target.getRGB()); // == ConfigManager.objectToString(Color)
+		final Color expect = target;
+		return roundTrip(cm, "COLOR", group, key, Color.class, serialized,
+			got -> got instanceof Color && ((Color) got).getRGB() == expect.getRGB());
+	}
+
+	private static boolean roundTripInt(ConfigManager cm, String group, ConfigItemDescriptor item)
+		throws InterruptedException
+	{
+		if (item == null)
+		{
+			out("MUI_RT_INT_TARGET=(none)");
+			out("MUI_RT_INT_OK=false");
+			return false;
+		}
+		final String key = item.key();
+		// honor the declared range when present; otherwise just perturb the current value
+		final int min = item.getRange() != null ? item.getRange().min() : Integer.MIN_VALUE;
+		final int max = item.getRange() != null ? item.getRange().max() : Integer.MAX_VALUE;
+		final Integer cur = cm.getConfiguration(group, key, int.class);
+		final int base = cur != null ? cur : min;
+		// pick an in-range value that differs from the current one
+		int target = base < max ? base + 1 : base - 1;
+		if (target < min)
+		{
+			target = min;
+		}
+		if (target > max)
+		{
+			target = max;
+		}
+		final String serialized = Integer.toString(target);
+		final int expect = target;
+		return roundTrip(cm, "INT", group, key, int.class, serialized,
+			got -> got instanceof Integer && (Integer) got == expect);
+	}
+
+	private static boolean roundTripDouble(ConfigManager cm, String group, ConfigItemDescriptor item)
+		throws InterruptedException
+	{
+		if (item == null)
+		{
+			out("MUI_RT_DOUBLE_TARGET=(none)");
+			out("MUI_RT_DOUBLE_OK=false");
+			return false;
+		}
+		final String key = item.key();
+		final Double cur = cm.getConfiguration(group, key, double.class);
+		double target = (cur != null && cur == 1.5) ? 2.5 : 1.5;
+		final String serialized = Double.toString(target);
+		final double expect = target;
+		return roundTrip(cm, "DOUBLE", group, key, double.class, serialized,
+			got -> got instanceof Double && Math.abs((Double) got - expect) < 1e-9);
+	}
+
+	private static boolean roundTripEnum(ConfigManager cm, String group, ConfigItemDescriptor item)
+		throws InterruptedException
+	{
+		if (item == null)
+		{
+			out("MUI_RT_ENUM_TARGET=(none)");
+			out("MUI_RT_ENUM_OK=false");
+			return false;
+		}
+		final String key = item.key();
+		final Class<?> type = (Class<?>) item.getType();
+		final Object[] constants = type.getEnumConstants();
+		final Object curRaw = cm.getConfiguration(group, key, type);
+		Object target = constants[0];
+		if (curRaw == target)
+		{
+			target = constants[1];
+		}
+		final Enum<?> targetEnum = (Enum<?>) target;
+		final String serialized = targetEnum.name(); // == ConfigManager.objectToString(Enum)
+		final String expectName = targetEnum.name();
+		return roundTrip(cm, "ENUM", group, key, type, serialized,
+			got -> got instanceof Enum && ((Enum<?>) got).name().equals(expectName));
+	}
+
+	private interface TypedCheck
+	{
+		boolean ok(Object readBack);
+	}
+
+	/**
+	 * Shared write→await→typed-read-back→restore skeleton. Writes {@code serialized} via the SAME
+	 * {@link MobileUiBridge#setConfig} the native panel calls, waits for it to land, then reads it back
+	 * through {@code getConfiguration(group,key,type)} — the exact path the plugin's config proxy uses, so a
+	 * pass means the live plugin would consume the value. Restores the original (unset if it was unset).
+	 */
+	private static boolean roundTrip(ConfigManager cm, String tag, String group, String key, Type type,
+		String serialized, TypedCheck check) throws InterruptedException
+	{
+		final String orig = cm.getConfiguration(group, key); // raw string (may be null = unset) to restore
+		out("MUI_RT_" + tag + "_TARGET=" + group + "." + key);
+		out("MUI_RT_" + tag + "_WRITE=" + serialized);
+		try
+		{
+			MobileUiBridge.setConfig(group, key, serialized);
+			final boolean landed = await("rt-" + tag, 10_000, () -> serialized.equals(cm.getConfiguration(group, key)));
+			final Object got = cm.getConfiguration(group, key, type); // typed path the plugin reads from
+			out("MUI_RT_" + tag + "_RAW=" + cm.getConfiguration(group, key));
+			out("MUI_RT_" + tag + "_READBACK=" + (got == null ? "null" : got.toString()));
+			final boolean ok = landed && check.ok(got);
+			out("MUI_RT_" + tag + "_OK=" + ok);
+			return ok;
+		}
+		finally
+		{
+			if (orig == null)
+			{
+				MobileUiBridge.resetConfig(group, key);
+			}
+			else
+			{
+				MobileUiBridge.setConfig(group, key, orig);
+			}
+			await("rt-restore-" + tag, 5_000, () -> Objects.equals(orig, cm.getConfiguration(group, key)));
+		}
 	}
 
 	// ---- event probe ----------------------------------------------------------------------------------
