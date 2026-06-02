@@ -238,6 +238,24 @@ public final class MobileUiBridge
 	}
 
 	/**
+	 * Flush pending config to disk now ({@code ConfigManager.sendConfig}, which writes only the dirty delta).
+	 * On desktop this happens on a 5-minute timer + a clean shutdown; on iOS the app is closed/killed without
+	 * running either, so the native shell calls this at explicit checkpoints (config/panel close, app
+	 * background) to make plugin toggles and config edits survive a relaunch. Safe to call off-thread (the
+	 * desktop flush runs on a scheduled executor too).
+	 */
+	public static String flushConfig()
+	{
+		final ConfigManager cm = configManager;
+		if (!ENABLED || cm == null)
+		{
+			return "{\"ok\":false,\"reason\":\"facade-off\"}";
+		}
+		cm.sendConfig();
+		return "{\"ok\":true}";
+	}
+
+	/**
 	 * Queue {@code r} on the client thread and return its write id. The runnable records the id as processed
 	 * when it finishes (even if it was a no-op that emitted no {@code ConfigChanged}), so the panel can poll
 	 * {@link #getProcessedWriteId()} for an ack. Caller must pass a non-null {@code ct}.

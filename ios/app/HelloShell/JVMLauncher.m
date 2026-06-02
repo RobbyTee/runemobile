@@ -52,6 +52,7 @@ static jmethodID gMuiResetCfg = NULL;   // resetConfig(2x String)Ljava/lang/Stri
 static jmethodID gMuiSeq = NULL;        // getMobileUiSeq()J
 static jmethodID gMuiPoll = NULL;       // pollMobileUiEvents(J)Ljava/lang/String;
 static jmethodID gMuiProcessed = NULL;  // getProcessedWriteId()J
+static jmethodID gMuiFlush = NULL;      // flushConfig()Ljava/lang/String;
 
 // ---- W3 plugin-config de-risk (verdict #7, NATIVE-ORIGIN leg) — STRIP AFTER DEVICE CONFIRM ----------
 // Proves the half the desktop smoke can't: that the OBJC side builds the correct signed decimal of
@@ -178,8 +179,9 @@ static BOOL ensureMui(void) {
     gMuiSeq        = (*env)->GetStaticMethodID(env, global, "getMobileUiSeq", "()J");
     gMuiPoll       = (*env)->GetStaticMethodID(env, global, "pollMobileUiEvents", "(J)Ljava/lang/String;");
     gMuiProcessed  = (*env)->GetStaticMethodID(env, global, "getProcessedWriteId", "()J");
+    gMuiFlush      = (*env)->GetStaticMethodID(env, global, "flushConfig", "()Ljava/lang/String;");
     if (!gMuiList || !gMuiGetCfg || !gMuiSetEnabled || !gMuiSetCfg || !gMuiResetCfg
-        || !gMuiSeq || !gMuiPoll || !gMuiProcessed) {
+        || !gMuiSeq || !gMuiPoll || !gMuiProcessed || !gMuiFlush) {
         (*env)->ExceptionClear(env);
         (*env)->DeleteGlobalRef(env, global);
         return NO;
@@ -745,6 +747,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     jlong v = (*env)->CallStaticLongMethod(env, gMuiClass, gMuiProcessed);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0; }
     return (long long)v;
+}
+
++ (void)mobileFlushConfig {
+    if (!ensureMui()) return;
+    JNIEnv *env = gMainEnv;
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiFlush);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return; }
+    if (js) (*env)->DeleteLocalRef(env, js);
 }
 
 @end

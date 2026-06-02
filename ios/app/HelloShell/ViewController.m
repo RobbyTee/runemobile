@@ -1,5 +1,6 @@
 #import "ViewController.h"
 #import "JVMLauncher.h"
+#import "PluginConfigViewController.h"
 #import <unistd.h>
 #import <fcntl.h>
 
@@ -96,6 +97,9 @@ static const CGFloat kTabStrip = 46.0;
     self.bgTask = UIBackgroundTaskInvalid;
     [self buildUI];
     [self openLogFile];
+    // Flush RuneLite config to disk when the app backgrounds (iOS skips RuneLite's own shutdown flush).
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onEnterBackground)
+                                                 name:UIApplicationDidEnterBackgroundNotification object:nil];
     [self appendLine:@"HelloShell — W1 minimal JVM shell"];
     [self appendLine:[NSString stringWithFormat:@"jre: %@",
                       [JVMLauncher javaHome] ?: @"(MISSING from bundle!)"]];
@@ -440,6 +444,15 @@ static const CGFloat kTabStrip = 46.0;
 - (void)onClosePluginPanel {
     self.pluginPanel.hidden = YES;
     self.pluginPanelOpen = NO;
+    // Persist any plugin toggles now — iOS won't run RuneLite's shutdown/periodic flush on close.
+    [JVMLauncher mobileFlushConfig];
+}
+
+// App going to background (user swiped home / to the switcher, before any termination): flush config so
+// every edit/toggle made this session survives a relaunch. The one lifecycle hook iOS reliably delivers.
+- (void)onEnterBackground {
+    [JVMLauncher mobileFlushConfig];
+    [self appendLine:@"[shell] backgrounded -> flushed config"];
 }
 
 // Read listPlugins() once, parse the JSON array, sort by name, reload the table.
@@ -470,6 +483,23 @@ static const CGFloat kTabStrip = 46.0;
     return (NSInteger)self.pluginList.count;
 }
 
+// Tap a plugin with config -> open its native config screen (the typed controls). Plugins without a config
+// group just deselect.
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row < 0 || indexPath.row >= (NSInteger)self.pluginList.count) return;
+    NSDictionary *p = self.pluginList[(NSUInteger)indexPath.row];
+    BOOL hasConfig = [p[@"hasConfig"] boolValue];
+    NSString *group = [p[@"configGroup"] isKindOfClass:[NSString class]] ? p[@"configGroup"] : nil;
+    if (!hasConfig || group.length == 0) {
+        return; // toggle-only plugin
+    }
+    PluginConfigViewController *cfg = [[PluginConfigViewController alloc] initWithGroup:group
+                                                                            pluginName:[p[@"name"] description]];
+    [self presentViewController:cfg animated:YES completion:nil];
+}
+
+
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     static NSString *cid = @"pluginCell";
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:cid];
@@ -484,17 +514,21 @@ static const CGFloat kTabStrip = 46.0;
     NSDictionary *p = self.pluginList[(NSUInteger)indexPath.row];
     BOOL enabled = [p[@"enabled"] boolValue];
     BOOL active  = [p[@"active"] boolValue];
+    BOOL hasConfig = [p[@"hasConfig"] boolValue]
+        && [p[@"configGroup"] isKindOfClass:[NSString class]] && [p[@"configGroup"] length] > 0;
     cell.textLabel.text = [p[@"name"] description];
+    NSString *status;
+    UIColor *statusColor;
     if (enabled && active) {
-        cell.detailTextLabel.text = @"● running";
-        cell.detailTextLabel.textColor = [UIColor colorWithRed:0.45 green:0.85 blue:0.40 alpha:1.0];
+        status = @"● running"; statusColor = [UIColor colorWithRed:0.45 green:0.85 blue:0.40 alpha:1.0];
     } else if (enabled && !active) {
-        cell.detailTextLabel.text = @"○ enabled (starting…)";
-        cell.detailTextLabel.textColor = [UIColor colorWithRed:0.95 green:0.80 blue:0.30 alpha:1.0];
+        status = @"○ enabled (starting…)"; statusColor = [UIColor colorWithRed:0.95 green:0.80 blue:0.30 alpha:1.0];
     } else {
-        cell.detailTextLabel.text = @"○ disabled";
-        cell.detailTextLabel.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
+        status = @"○ disabled"; statusColor = [UIColor colorWithWhite:0.6 alpha:1.0];
     }
+    cell.detailTextLabel.text = hasConfig ? [status stringByAppendingString:@"   ›  configure"] : status;
+    cell.detailTextLabel.textColor = statusColor;
+    cell.selectionStyle = hasConfig ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
     UISwitch *sw = (UISwitch *)cell.accessoryView;
     sw.tag = indexPath.row;
     [sw setOn:enabled animated:NO];
