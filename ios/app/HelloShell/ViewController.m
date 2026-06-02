@@ -57,6 +57,10 @@
 // onClick onto the stone centre. A ▦ toggle shows/hides them for instant A/B fallback.
 @property (nonatomic, strong) NSMutableArray<UIButton *> *tabButtons;
 @property (nonatomic, strong) UIView *tabRailBg;   // opaque rail behind the edge-split icon grid
+// Per-tab cached stone crop, captured while the tab is INACTIVE (a clean stone). When a tab is active its
+// widget bounds shift to the open panel header (which carries text), so we reuse the cached clean stone
+// instead of cropping the panel header live.
+@property (nonatomic, strong) NSMutableDictionary<NSNumber *, UIImage *> *tabIconCache;
 @property (nonatomic, strong) UIButton *chromeToggle;
 @property (nonatomic, assign) BOOL chromeVisible;
 @end
@@ -149,6 +153,7 @@ static NSString * const kKbSentinel = @"​";
         [self.screen addSubview:tb];
         [self.tabButtons addObject:tb];
     }
+    self.tabIconCache = [NSMutableDictionary dictionary];
     self.chromeVisible = YES;
 
     // Hidden capture field — placed offscreen (not hidden, so it can still become first responder).
@@ -449,7 +454,8 @@ static NSString * const kKbSentinel = @"​";
         [(i <= 6 ? left : right) addObject:@(i)];
     }
 
-    const CGFloat cell = 44.0, gap = 5.0, edge = 6.0;
+    // Flush against the screen edges (edge=0): left column at x=0, right column hard against the right edge.
+    const CGFloat cell = 40.0, gap = 5.0, edge = 0.0;
     CGRect sb = self.screen.bounds;
     [self layoutColumn:left x:edge cell:cell gap:gap tabs:tabs active:active inBounds:sb];
     [self layoutColumn:right x:(sb.size.width - cell - edge) cell:cell gap:gap tabs:tabs active:active inBounds:sb];
@@ -468,15 +474,22 @@ static NSString * const kKbSentinel = @"​";
         NSArray *bb = tabs[i];
         int bx = [bb[0] intValue], by = [bb[1] intValue], bw = [bb[2] intValue], bh = [bb[3] intValue];
         btn.frame = CGRectMake(x, y0 + k * (cell + gap), cell, cell);
-        [btn setImage:[self cropIconX:bx y:by w:bw h:bh] forState:UIControlStateNormal];
-        // No cell background and no square clip: draw the cropped stone raw so its own rounded shape shows.
-        // The engine already renders the active tab's stone RED (vs grey inactive), so the crop carries the
-        // active state — no separate highlight is needed beyond a faint outline for clarity.
-        btn.backgroundColor = [UIColor clearColor];
         BOOL isActive = ((int)i == active);
-        btn.layer.borderWidth = isActive ? 1.5 : 0.0;
-        btn.layer.cornerRadius = isActive ? 8.0 : 0.0;
-        btn.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.85].CGColor;
+        // Crop the stone raw (no cell background, no square clip — its own rounded shape shows). Cache the
+        // crop while the tab is INACTIVE (a clean stone); when active, reuse the cached stone so we never show
+        // the panel-header text the active tab's bounds briefly point at.
+        UIImage *icon;
+        if (!isActive) {
+            icon = [self cropIconX:bx y:by w:bw h:bh];
+            if (icon) self.tabIconCache[@(i)] = icon;
+        } else {
+            icon = self.tabIconCache[@(i)] ?: [self cropIconX:bx y:by w:bw h:bh];
+        }
+        [btn setImage:icon forState:UIControlStateNormal];
+        btn.backgroundColor = [UIColor clearColor];
+        btn.layer.borderWidth = 0.0;            // no border — the user disliked it
+        // Active vs inactive shown by brightness alone (mobile feel): active full, inactive dimmed.
+        btn.alpha = isActive ? 1.0 : 0.55;
         btn.hidden = NO;
     }
 }
