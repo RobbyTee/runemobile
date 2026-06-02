@@ -436,6 +436,11 @@ public class Hooks implements Callbacks
 			// icons 774-787) -> PNG, to bundle + composite natively. Gated -Drunelite.mobilechrome.spritedump=true.
 			net.runelite.client.headless.MobileChromeSpriteDump.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.MobileChromePanelProbe.isEnabled())
+		{
+			// W3 diagnostic: can the docked side panel be moved? Gated -Drunelite.mobilechrome.panelprobe=true.
+			net.runelite.client.headless.MobileChromePanelProbe.tick(client, client.getGameState());
+		}
 
 		if (graphics == null)
 		{
