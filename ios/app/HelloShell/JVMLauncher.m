@@ -42,6 +42,11 @@ static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
 static jclass    gChromeClass = NULL;   // global ref to net.runelite.client.headless.MobileChromeBridge
 static jmethodID gMidChromeSnap = NULL; // getSnapshot()Ljava/lang/String;
 
+// W3 touch-targeting read surface — the MenuPeekBridge facade, resolved lazily on the main thread. The native
+// press-and-peek UI polls getSnapshot() (the menu the engine computed for the finger streamed via onMove).
+static jclass    gMenuPeekClass = NULL; // global ref to net.runelite.client.headless.MenuPeekBridge
+static jmethodID gMidMenuPeekSnap = NULL; // getSnapshot()Ljava/lang/String;
+
 // Phase-6 plugin/config control plane — the MobileUiBridge facade, resolved lazily on the main thread.
 static jclass    gMuiClass = NULL;      // global ref to net.runelite.client.headless.MobileUiBridge
 static jmethodID gMuiList = NULL;       // listPlugins()Ljava/lang/String;
@@ -185,6 +190,27 @@ static BOOL ensureChrome(void) {
     }
     gMidChromeSnap = snap;
     gChromeClass = global;   // publish only once fully resolved
+    return YES;
+}
+
+// Resolve + cache the MenuPeekBridge facade on the calling (main) thread. Shares the JavaBridge attach.
+static BOOL ensureMenuPeek(void) {
+    if (gMenuPeekClass) return YES;
+    if (!ensureBridge() || !gMainEnv) return NO;   // shares the main thread's attached env
+    JNIEnv *env = gMainEnv;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/MenuPeekBridge");
+    if (!local || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    jclass global = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    if (!global) return NO;
+    jmethodID snap = (*env)->GetStaticMethodID(env, global, "getSnapshot", "()Ljava/lang/String;");
+    if (!snap) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteGlobalRef(env, global);
+        return NO;
+    }
+    gMidMenuPeekSnap = snap;
+    gMenuPeekClass = global;   // publish only once fully resolved
     return YES;
 }
 
@@ -769,6 +795,18 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureChrome()) return nil;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gChromeClass, gMidChromeSnap);
+    if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
+    NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
+    if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
+    (*env)->DeleteLocalRef(env, js);
+    return out;
+}
+
++ (NSString *)menuPeekSnapshot {
+    if (!ensureMenuPeek()) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMenuPeekClass, gMidMenuPeekSnap);
     if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
     const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
     NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;

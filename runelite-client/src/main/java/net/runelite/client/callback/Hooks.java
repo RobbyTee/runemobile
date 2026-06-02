@@ -447,11 +447,18 @@ public class Hooks implements Callbacks
 			// Gated -Drunelite.mobilechrome.hidetest=true.
 			net.runelite.client.headless.MobileChromeHideTest.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.MenuPeekBridge.isEnabled())
+		{
+			// W3 touch-targeting: publish the read-only menu-peek snapshot the native press-and-peek UI polls
+			// (the menu the engine computed for the finger the native side streamed via JavaBridge.onMove).
+			// Read-only; gated -Drunelite.menupeek=true. Runs BEFORE the probe so the probe can cross-check it.
+			net.runelite.client.headless.MenuPeekBridge.tick(client);
+		}
 		if (net.runelite.client.headless.MenuPeek.isEnabled())
 		{
-			// Touch-targeting de-risk: prove the press-and-peek menu-peek primitive (synth MOUSE_MOVED ->
-			// read getMenuEntries() a cycle later) on the client thread. Read-only (no press/click/menuAction);
-			// one-shot; gated -Drunelite.menupeek=true. Desktop develop-first before any native touch UI.
+			// Touch-targeting de-risk PROBE: prove the press-and-peek primitive (synth MOUSE_MOVED -> read
+			// getMenuEntries() a cycle later) + cross-check MenuPeekBridge's published top. Read-only; one-shot;
+			// gated -Drunelite.menupeek.probe=true. Desktop-only diagnostic (never the device path).
 			net.runelite.client.headless.MenuPeek.tick(client, client.getGameState());
 		}
 

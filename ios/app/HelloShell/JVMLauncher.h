@@ -95,6 +95,14 @@ typedef void (^JVMLogSink)(NSString *line);
 /// rails and to find a tab stone's centre to proxy a tap into. Call on the main thread.
 + (nullable NSString *)chromeSnapshot;
 
+/// Read the W3 touch-targeting menu-peek snapshot (reverse JNI -> MenuPeekBridge.getSnapshot) as a JSON
+/// string: {active,loggedIn,seq,mouseX,mouseY,menuOpen,menuScrollable,menuX/Y/W/H,count,entries:[{opt,tgt,
+/// type,id,p0,p1,item,wv,deprio,force}]} in display order (entries[0] = top = left-click action). The native
+/// press-and-peek UI polls this while streaming the finger via postMoveX:y: to drive the offset reticle/chip
+/// and to release-revalidate the top action before committing. nil before the VM/bridge is up or if the
+/// facade is off (-Drunelite.menupeek). Read-only — it never invokes; commit via postClickPrecise. Main thread.
++ (nullable NSString *)menuPeekSnapshot;
+
 // ---- Phase 6 (W3): native plugin-management + config panel (reverse JNI -> MobileUiBridge) -----------
 // All call the Java-owned control-plane facade (gated -Drunelite.mobileui). Reads return JSON snapshots
 // to parse once per panel open; writes are fire-and-forget onto the correct Java thread (EDT for plugin

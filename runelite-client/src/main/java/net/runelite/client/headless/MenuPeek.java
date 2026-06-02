@@ -75,7 +75,7 @@ import net.runelite.api.widgets.Widget;
 @Slf4j
 public final class MenuPeek
 {
-	private static final boolean ENABLED = Boolean.getBoolean("runelite.menupeek");
+	private static final boolean ENABLED = Boolean.getBoolean("runelite.menupeek.probe");
 
 	// LOGGED_IN frames to wait before acting (the welcome screen is up immediately, so this is short).
 	private static final int WARMUP_FRAMES = Integer.getInteger("runelite.menupeek.warmup", 60);
@@ -123,6 +123,10 @@ public final class MenuPeek
 	private static int tailMatchStat; // stationary named cands whose TAIL targeted the entity (the core gate)
 	private static int movedNamed;    // named actors that changed scene location during the peek
 	private static int offscreenNamed;// named actors that had walked off-viewport by hover time
+	// Cross-check of the production MenuPeekBridge: per peek, does its published top fingerprint (same frame)
+	// equal our ground-truth getMenuEntries() tail? Proves the bridge serializes the right entry.
+	private static int bridgeChecks;
+	private static int bridgeMatch;
 	private static int maxTicks;
 	private static int sumTicks;
 	private static int tickSamples;
@@ -508,6 +512,17 @@ public final class MenuPeek
 			moved = now == null || now.getX() != c.locX || now.getY() != c.locY;
 		}
 
+		// Cross-check the production bridge: it ran earlier THIS frame (Hooks.draw order) and published the top
+		// fingerprint for the same getMenuEntries() we read here, so they must be identical.
+		final String ourFp = fingerprint(tail);
+		final String bridgeFp = MenuPeekBridge.getTopFingerprint();
+		bridgeChecks++;
+		final boolean bridgeOk = bridgeFp != null && bridgeFp.equals(ourFp);
+		if (bridgeOk)
+		{
+			bridgeMatch++;
+		}
+
 		final String tailTarget = stripTags(tail == null ? "" : tail.getTarget());
 		boolean tMatch = false;
 		boolean aMatch = false;
@@ -564,7 +579,8 @@ public final class MenuPeek
 			+ " tailTarget=" + esc(tailTarget)
 			+ " tailType=" + (tail == null ? "-" : String.valueOf(tail.getType()))
 			+ " tailMatch=" + tMatch
-			+ " anyMatch=" + aMatch);
+			+ " anyMatch=" + aMatch
+			+ " bridgeOk=" + bridgeOk);
 
 		// Dump the top entries (tail-first = display order) for the first 3 named candidates AND every GRID
 		// point, so the "tail is the top/left-click entry" ordering — and whatever covers a grid point (a
@@ -621,6 +637,8 @@ public final class MenuPeek
 			+ " tailMatch=" + tailMatch
 			+ " anyMatch=" + anyMatch
 			+ " emptyMenus=" + emptyMenus
+			+ " bridgeChecks=" + bridgeChecks
+			+ " bridgeMatch=" + bridgeMatch
 			+ " maxTicks=" + maxTicks
 			+ " avgTicks=" + avg
 			+ " menuOpenDuringPeek=" + (menuOpenDuringPeek ? 1 : 0));

@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Touch-targeting de-risk (W3): prove the PRESS-AND-PEEK menu-peek primitive on desktop OpenJDK 21 + CACIO
-# BEFORE building any native touch UI (the W2 develop-first rule). Boots real RuneLite headless under the
-# CACIO CTC toolkit (no OS window — the honest iOS proxy), logs in to a throwaway account, and runs the
-# read-only MenuPeek probe (net.runelite.client.headless.MenuPeek, in the jar — same bytes that would run on
-# device): synth MOUSE_MOVED onto each visible NPC/player's hull centroid, then read getMenuEntries() a cycle
-# later and assert the TAIL entry targets that named entity. Measures stabilization latency; confirms peek
-# never opens a menu. Read-only (no press/click/menuAction) so it cannot fire a real in-game action.
+# Touch-targeting de-risk (W3): prove the PRESS-AND-PEEK menu-peek primitive + the production MenuPeekBridge
+# on desktop OpenJDK 21 + CACIO before building the native touch UI (the W2 develop-first rule). Boots real
+# RuneLite headless under the CACIO CTC toolkit (no OS window — the honest iOS proxy), logs in to a throwaway
+# account, and enables:
+#   -Drunelite.menupeek=true        the production MenuPeekBridge read surface (ships to device — the native
+#                                   reticle/chip polls its JSON snapshot; read-only, never invokes)
+#   -Drunelite.menupeek.probe=true  the desktop-only MenuPeek diagnostic: synth MOUSE_MOVED onto each visible
+#                                   NPC's clickbox, read getMenuEntries() a cycle later, assert the TAIL entry
+#                                   targets that named entity, AND cross-check MenuPeekBridge published the
+#                                   same top this frame. Measures latency; confirms peek never opens a menu.
+# Read-only (no press/click/menuAction beyond the one welcome-screen click to enter the world).
 #
 # The GREEN/RED verdict is computed by menupeek-verdict.sh (bash, md5-gated) — never a JVM-printed string.
 set -euo pipefail
@@ -64,6 +68,7 @@ set +e
 "$JAVA" \
   -ea \
   -Drunelite.menupeek=true \
+  -Drunelite.menupeek.probe=true \
   ${MENUPEEK_OPTS:-} \
   -Djdk.attach.allowAttachSelf=true \
   -Dheadless.runSeconds="$RUN_SECONDS" \
