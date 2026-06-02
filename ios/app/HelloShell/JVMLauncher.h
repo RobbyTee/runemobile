@@ -141,6 +141,24 @@ typedef void (^JVMLogSink)(NSString *line);
 /// (MobileUiBridge.hubInstall/hubUninstall — client-thread + flush). Returns the ack JSON.
 + (nullable NSString *)mobileHubInstall:(NSString *)internalName uninstall:(BOOL)uninstall;
 
+// ---- Plugin side-panels (MobileUiBridge: toolbar + embedded-Swing panel surface) -------------------
+
+/// Toolbar list JSON (MobileUiBridge.listPanels): [{index,tooltip}] for plugins that provide a side panel.
++ (nullable NSString *)mobileListPanels;
+
+/// Open/realize + activate the panel at toolbar `index` (starts its repaint loop); close the active panel.
++ (void)mobileOpenPanel:(int)index;
++ (void)mobileClosePanel;
+
+/// Frame sequence of the active panel's rendered buffer — poll to know when to re-pull the image.
++ (int)mobilePanelFrameSeq;
+
+/// The active panel's full rendered image (natural width PluginPanel.PANEL_WIDTH; native scales + scrolls).
++ (nullable UIImage *)mobilePanelImage;
+
+/// Dispatch a click at panel-space (x,y) into the active panel's Swing tree (buttons/checkboxes/etc.).
++ (void)mobilePanelClickX:(int)x y:(int)y;
+
 @end
 
 NS_ASSUME_NONNULL_END

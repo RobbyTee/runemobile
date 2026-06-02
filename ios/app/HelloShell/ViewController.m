@@ -2,6 +2,7 @@
 #import "JVMLauncher.h"
 #import "PluginConfigViewController.h"
 #import "PluginHubViewController.h"
+#import "PluginPanelsViewController.h"
 #import <unistd.h>
 #import <fcntl.h>
 
@@ -418,6 +419,15 @@ static const CGFloat kTabStrip = 46.0;
     [hub addTarget:self action:@selector(onOpenHub) forControlEvents:UIControlEventTouchUpInside];
     [card addSubview:hub];
 
+    // Plugin side-panels opener (XP tracker, GE, notes…) — presents PluginPanelsViewController.
+    UIButton *panels = [UIButton buttonWithType:UIButtonTypeSystem];
+    panels.translatesAutoresizingMaskIntoConstraints = NO;
+    [panels setTitle:@"▣ Panels" forState:UIControlStateNormal];
+    panels.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+    panels.tintColor = [UIColor colorWithRed:0.70 green:0.85 blue:0.55 alpha:1.0];
+    [panels addTarget:self action:@selector(onOpenPanels) forControlEvents:UIControlEventTouchUpInside];
+    [card addSubview:panels];
+
     self.pluginTable = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     self.pluginTable.translatesAutoresizingMaskIntoConstraints = NO;
     self.pluginTable.backgroundColor = [UIColor clearColor];
@@ -441,6 +451,8 @@ static const CGFloat kTabStrip = 46.0;
         [close.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
         [hub.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
         [hub.trailingAnchor constraintEqualToAnchor:close.leadingAnchor constant:-18],
+        [panels.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
+        [panels.trailingAnchor constraintEqualToAnchor:hub.leadingAnchor constant:-18],
 
         [self.pluginTable.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:10],
         [self.pluginTable.leadingAnchor constraintEqualToAnchor:card.leadingAnchor],
@@ -471,6 +483,11 @@ static const CGFloat kTabStrip = 46.0;
 - (void)onOpenHub {
     PluginHubViewController *hubVC = [[PluginHubViewController alloc] init];
     [self presentViewController:hubVC animated:YES completion:nil];
+}
+
+- (void)onOpenPanels {
+    PluginPanelsViewController *panelsVC = [[PluginPanelsViewController alloc] init];
+    [self presentViewController:panelsVC animated:YES completion:nil];
 }
 
 // App going to background (user swiped home / to the switcher, before any termination): flush config so

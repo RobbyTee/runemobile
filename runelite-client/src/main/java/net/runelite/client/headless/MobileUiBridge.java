@@ -24,7 +24,13 @@
  */
 package net.runelite.client.headless;
 
+import java.awt.Component;
 import java.awt.EventQueue;
+import java.awt.Graphics2D;
+import java.awt.Point;
+import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferInt;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayDeque;
@@ -32,7 +38,12 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import javax.swing.JPanel;
+import javax.swing.JWindow;
+import javax.swing.SwingUtilities;
+import net.runelite.client.ui.PluginPanel;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.gameval.InterfaceID;
@@ -288,6 +299,240 @@ public final class MobileUiBridge
 		list.sort(java.util.Comparator.comparingInt(NavigationButton::getPriority)
 			.thenComparing(NavigationButton::getTooltip));
 		return list;
+	}
+
+	// The nav buttons the native panel UI offers: those with a real PluginPanel, minus RuneLite's own
+	// "Configuration" sidebar (we have a native config panel). Stable order = the toolbar index space.
+	private static java.util.List<NavigationButton> panelNavs()
+	{
+		final java.util.List<NavigationButton> out = new java.util.ArrayList<>();
+		for (NavigationButton b : navButtonsSorted())
+		{
+			if (b.getPanel() != null && !"Configuration".equals(b.getTooltip()))
+			{
+				out.add(b);
+			}
+		}
+		return out;
+	}
+
+	/** Toolbar list for the native shell: {@code [{index,tooltip}]} (panels only, Configuration excluded). */
+	public static String listPanels()
+	{
+		final Json out = new Json().arr();
+		final java.util.List<NavigationButton> navs = panelNavs();
+		for (int i = 0; i < navs.size(); i++)
+		{
+			out.obj().ki("index", i).kv("tooltip", navs.get(i).getTooltip()).end();
+		}
+		return out.end().toString();
+	}
+
+	// ---- Active plugin panel: realized off-screen under CACIO, painted to a buffer the native shell blits ----
+	// Mirrors the game blit: the panel's full Swing tree is laid out at its natural width (PANEL_WIDTH) and full
+	// content height in a SHOWING JWindow, painted to an ARGB int[] published for the native side to pull; the
+	// native side scales to its view width and scrolls vertically. Touches map back to panel coords and dispatch
+	// as MouseEvents on the EDT. A daemon repaints the active panel periodically so live updates (XP, etc.) show.
+	private static final int PANEL_W = PluginPanel.PANEL_WIDTH + PluginPanel.SCROLLBAR_WIDTH;
+	private static final int PANEL_MAX_H = 2500;
+	// Supersample the 242-logical panel into a higher-res buffer so the native side can display it at device
+	// resolution 1:1 (crisp, no upscale blur) at a comfortable size. 4x of 242 = 968px ≈ 323pt at 3x density.
+	// Clicks come back in buffer px and are divided by this to recover logical coords for Swing hit-testing.
+	private static final int RENDER_SCALE = 4;
+	private static volatile PluginPanel activePanel;
+	private static volatile JPanel activeWrapped;
+	private static volatile JWindow activeWindow;
+	private static volatile int[] panelPixels;
+	private static volatile int panelW;
+	private static volatile int panelH;
+	private static final AtomicInteger panelSeq = new AtomicInteger();
+	private static volatile boolean panelRepainterRunning;
+
+	/** Open (realize + activate) the panel at the toolbar {@code index}; starts the repaint loop. */
+	public static String openPanel(int index)
+	{
+		if (!ENABLED)
+		{
+			return "{\"ok\":false,\"reason\":\"facade-off\"}";
+		}
+		final java.util.List<NavigationButton> navs = panelNavs();
+		if (index < 0 || index >= navs.size())
+		{
+			return "{\"ok\":false,\"reason\":\"bad-index\"}";
+		}
+		final PluginPanel pp = navs.get(index).getPanel();
+		EventQueue.invokeLater(() ->
+		{
+			try
+			{
+				closeActiveOnEdt();
+				final JPanel wrapped = pp.getWrappedPanel();
+				final JWindow win = new JWindow();
+				win.getContentPane().add(wrapped);
+				win.setSize(PANEL_W, PANEL_MAX_H);
+				win.setVisible(true); // showing → children lay out + paint (no real screen under CACIO)
+				win.validate();
+				pp.onActivate();
+				win.validate();
+				activePanel = pp;
+				activeWrapped = wrapped;
+				activeWindow = win;
+				renderActiveOnEdt();
+			}
+			catch (Throwable ex)
+			{
+				log.warn("[mobileui] openPanel {} failed", index, ex);
+			}
+		});
+		startPanelRepainter();
+		return "{\"ok\":true}";
+	}
+
+	/** Close the active panel (deactivate + dispose). */
+	public static String closePanel()
+	{
+		EventQueue.invokeLater(MobileUiBridge::closeActiveOnEdt);
+		panelPixels = null;
+		panelSeq.incrementAndGet();
+		return "{\"ok\":true}";
+	}
+
+	private static void closeActiveOnEdt()
+	{
+		final PluginPanel pp = activePanel;
+		final JWindow win = activeWindow;
+		if (pp != null)
+		{
+			try
+			{
+				pp.onDeactivate();
+			}
+			catch (Throwable ignore)
+			{
+			}
+		}
+		if (win != null)
+		{
+			win.setVisible(false);
+			win.dispose();
+		}
+		activePanel = null;
+		activeWrapped = null;
+		activeWindow = null;
+	}
+
+	// Lay out the active panel at full content height and paint it to a fresh ARGB buffer (EDT only).
+	private static void renderActiveOnEdt()
+	{
+		final JPanel wrapped = activeWrapped;
+		final PluginPanel pp = activePanel;
+		if (wrapped == null || pp == null)
+		{
+			return;
+		}
+		wrapped.validate();
+		final int logicalH = Math.max(1, Math.min(PANEL_MAX_H, pp.getPreferredSize().height + 12));
+		final int bw = PANEL_W * RENDER_SCALE;
+		final int bh = logicalH * RENDER_SCALE;
+		final BufferedImage img = new BufferedImage(bw, bh, BufferedImage.TYPE_INT_ARGB);
+		final Graphics2D g = img.createGraphics();
+		g.scale(RENDER_SCALE, RENDER_SCALE); // supersample: layout stays 242-logical, pixels are denser → crisp
+		wrapped.printAll(g); // wrapped is PANEL_W x PANEL_MAX_H showing the content from the top
+		g.dispose();
+		panelPixels = ((DataBufferInt) img.getRaster().getDataBuffer()).getData();
+		panelW = bw;
+		panelH = bh;
+		panelSeq.incrementAndGet();
+	}
+
+	private static void startPanelRepainter()
+	{
+		if (panelRepainterRunning)
+		{
+			return;
+		}
+		panelRepainterRunning = true;
+		final Thread t = new Thread(() ->
+		{
+			try
+			{
+				while (activePanel != null)
+				{
+					Thread.sleep(500);
+					if (activePanel != null)
+					{
+						EventQueue.invokeLater(MobileUiBridge::renderActiveOnEdt);
+					}
+				}
+			}
+			catch (InterruptedException ignore)
+			{
+			}
+			finally
+			{
+				panelRepainterRunning = false;
+			}
+		}, "mobileui-panel-repaint");
+		t.setDaemon(true);
+		t.start();
+	}
+
+	public static int getPanelWidth()
+	{
+		return panelW;
+	}
+
+	public static int getPanelHeight()
+	{
+		return panelH;
+	}
+
+	public static int getPanelFrameSeq()
+	{
+		return panelSeq.get();
+	}
+
+	/** The active panel's full ARGB image (PANEL_W x panelH), or empty if none. */
+	public static int[] getPanelPixels()
+	{
+		final int[] px = panelPixels;
+		return px != null ? px : new int[0];
+	}
+
+	/**
+	 * Dispatch a click at panel-space ({@code x},{@code y}) into the active panel's Swing tree (EDT). Drives
+	 * buttons/checkboxes/combo arrows; a synthetic press+release+click on the deepest component at that point.
+	 */
+	public static String panelClick(int x, int y)
+	{
+		if (!ENABLED || activeWrapped == null)
+		{
+			return "{\"ok\":false}";
+		}
+		EventQueue.invokeLater(() ->
+		{
+			final JPanel wrapped = activeWrapped;
+			if (wrapped == null)
+			{
+				return;
+			}
+			// Incoming coords are buffer pixels; recover the 242-logical coords the Swing tree is laid out in.
+			final int lx = x / RENDER_SCALE;
+			final int ly = y / RENDER_SCALE;
+			final Component target = SwingUtilities.getDeepestComponentAt(wrapped, lx, ly);
+			if (target == null)
+			{
+				return;
+			}
+			final Point p = SwingUtilities.convertPoint(wrapped, lx, ly, target);
+			final long when = panelSeq.get(); // monotonic, fine for event timestamps off the game clock
+			final int mods = MouseEvent.BUTTON1_DOWN_MASK;
+			target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_PRESSED, when, mods, p.x, p.y, 1, false, MouseEvent.BUTTON1));
+			target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_RELEASED, when + 1, 0, p.x, p.y, 1, false, MouseEvent.BUTTON1));
+			target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_CLICKED, when + 2, 0, p.x, p.y, 1, false, MouseEvent.BUTTON1));
+			renderActiveOnEdt(); // reflect any state change immediately
+		});
+		return "{\"ok\":true}";
 	}
 
 	// ---- Plugin hub (browse / install) -----------------------------------------------------------------

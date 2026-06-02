@@ -56,6 +56,14 @@ static jmethodID gMuiFlush = NULL;      // flushConfig()Ljava/lang/String;
 static jmethodID gMuiHubManifest = NULL;  // hubManifest()Ljava/lang/String;
 static jmethodID gMuiHubInstall = NULL;   // hubInstall(Ljava/lang/String;)Ljava/lang/String;
 static jmethodID gMuiHubUninstall = NULL; // hubUninstall(Ljava/lang/String;)Ljava/lang/String;
+static jmethodID gMuiListPanels = NULL;   // listPanels()Ljava/lang/String;
+static jmethodID gMuiOpenPanel = NULL;    // openPanel(I)Ljava/lang/String;
+static jmethodID gMuiClosePanel = NULL;   // closePanel()Ljava/lang/String;
+static jmethodID gMuiPanelW = NULL;       // getPanelWidth()I
+static jmethodID gMuiPanelH = NULL;       // getPanelHeight()I
+static jmethodID gMuiPanelSeq = NULL;     // getPanelFrameSeq()I
+static jmethodID gMuiPanelPixels = NULL;  // getPanelPixels()[I
+static jmethodID gMuiPanelClick = NULL;   // panelClick(II)Ljava/lang/String;
 
 // ---- W3 plugin-config de-risk (verdict #7, NATIVE-ORIGIN leg) — STRIP AFTER DEVICE CONFIRM ----------
 // Proves the half the desktop smoke can't: that the OBJC side builds the correct signed decimal of
@@ -186,9 +194,19 @@ static BOOL ensureMui(void) {
     gMuiHubManifest  = (*env)->GetStaticMethodID(env, global, "hubManifest", "()Ljava/lang/String;");
     gMuiHubInstall   = (*env)->GetStaticMethodID(env, global, "hubInstall", "(Ljava/lang/String;)Ljava/lang/String;");
     gMuiHubUninstall = (*env)->GetStaticMethodID(env, global, "hubUninstall", "(Ljava/lang/String;)Ljava/lang/String;");
+    gMuiListPanels   = (*env)->GetStaticMethodID(env, global, "listPanels", "()Ljava/lang/String;");
+    gMuiOpenPanel    = (*env)->GetStaticMethodID(env, global, "openPanel", "(I)Ljava/lang/String;");
+    gMuiClosePanel   = (*env)->GetStaticMethodID(env, global, "closePanel", "()Ljava/lang/String;");
+    gMuiPanelW       = (*env)->GetStaticMethodID(env, global, "getPanelWidth", "()I");
+    gMuiPanelH       = (*env)->GetStaticMethodID(env, global, "getPanelHeight", "()I");
+    gMuiPanelSeq     = (*env)->GetStaticMethodID(env, global, "getPanelFrameSeq", "()I");
+    gMuiPanelPixels  = (*env)->GetStaticMethodID(env, global, "getPanelPixels", "()[I");
+    gMuiPanelClick   = (*env)->GetStaticMethodID(env, global, "panelClick", "(II)Ljava/lang/String;");
     if (!gMuiList || !gMuiGetCfg || !gMuiSetEnabled || !gMuiSetCfg || !gMuiResetCfg
         || !gMuiSeq || !gMuiPoll || !gMuiProcessed || !gMuiFlush
-        || !gMuiHubManifest || !gMuiHubInstall || !gMuiHubUninstall) {
+        || !gMuiHubManifest || !gMuiHubInstall || !gMuiHubUninstall
+        || !gMuiListPanels || !gMuiOpenPanel || !gMuiClosePanel || !gMuiPanelW || !gMuiPanelH
+        || !gMuiPanelSeq || !gMuiPanelPixels || !gMuiPanelClick) {
         (*env)->ExceptionClear(env);
         (*env)->DeleteGlobalRef(env, global);
         return NO;
@@ -790,6 +808,79 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     NSString *out = jstringToNS(env, js);
     (*env)->DeleteLocalRef(env, jn);
     return out;
+}
+
+// ---- Plugin side-panels (toolbar + embedded-Swing panel surface) -----------------------------------
+
++ (NSString *)mobileListPanels {
+    if (!ensureMui()) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiListPanels));
+}
+
++ (void)mobileOpenPanel:(int)index {
+    if (!ensureMui()) return;
+    JNIEnv *env = gMainEnv;
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiOpenPanel, (jint)index);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return; }
+    if (js) (*env)->DeleteLocalRef(env, js);
+}
+
++ (void)mobileClosePanel {
+    if (!ensureMui()) return;
+    JNIEnv *env = gMainEnv;
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiClosePanel);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return; }
+    if (js) (*env)->DeleteLocalRef(env, js);
+}
+
++ (int)mobilePanelFrameSeq {
+    if (!ensureMui()) return 0;
+    JNIEnv *env = gMainEnv;
+    jint v = (*env)->CallStaticIntMethod(env, gMuiClass, gMuiPanelSeq);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0; }
+    return (int)v;
+}
+
++ (void)mobilePanelClickX:(int)x y:(int)y {
+    if (!ensureMui()) return;
+    JNIEnv *env = gMainEnv;
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiPanelClick, (jint)x, (jint)y);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return; }
+    if (js) (*env)->DeleteLocalRef(env, js);
+}
+
+// Pull the active panel's full ARGB image (PANEL_W x panelH). Opaque dark-theme pixels, so the same
+// alpha-skip/little-endian setup as latestFrame works.
++ (UIImage *)mobilePanelImage {
+    if (!ensureMui()) return nil;
+    JNIEnv *env = gMainEnv;
+    jint w = (*env)->CallStaticIntMethod(env, gMuiClass, gMuiPanelW);
+    jint h = (*env)->CallStaticIntMethod(env, gMuiClass, gMuiPanelH);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if (w <= 0 || h <= 0) return nil;
+    jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiPanelPixels);
+    if (!arr || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    jsize len = (*env)->GetArrayLength(env, arr);
+    NSUInteger need = (NSUInteger)w * (NSUInteger)h;
+    if ((NSUInteger)len < need) { (*env)->DeleteLocalRef(env, arr); return nil; }
+    uint32_t *buf = (uint32_t *)malloc(need * sizeof(uint32_t));
+    if (!buf) { (*env)->DeleteLocalRef(env, arr); return nil; }
+    (*env)->GetIntArrayRegion(env, arr, 0, (jsize)need, (jint *)buf);
+    (*env)->DeleteLocalRef(env, arr);
+    CFDataRef data = CFDataCreate(NULL, (const UInt8 *)buf, (CFIndex)(need * sizeof(uint32_t)));
+    free(buf);
+    CGDataProviderRef provider = CGDataProviderCreateWithCFData(data);
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGBitmapInfo info = (CGBitmapInfo)(kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
+    CGImageRef cg = CGImageCreate((size_t)w, (size_t)h, 8, 32, (size_t)w * 4, cs, info,
+                                  provider, NULL, false, kCGRenderingIntentDefault);
+    UIImage *img = cg ? [UIImage imageWithCGImage:cg] : nil;
+    if (cg) CGImageRelease(cg);
+    CGColorSpaceRelease(cs);
+    CGDataProviderRelease(provider);
+    CFRelease(data);
+    return img;
 }
 
 @end
