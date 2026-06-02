@@ -62,6 +62,9 @@
 // crop fragility.
 @property (nonatomic, strong) NSMutableArray<UIImage *> *tabImgInactive;
 @property (nonatomic, strong) NSMutableArray<UIImage *> *tabImgActive;
+// Opaque covers over the desktop tab stones (the bottom double-UI). The stones stay clickable underneath (the
+// proxy click reaches them), the cover just hides them — hiding the widget would kill the proxy target.
+@property (nonatomic, strong) NSMutableArray<UIView *> *stoneCovers;
 @property (nonatomic, strong) UIButton *chromeToggle;
 @property (nonatomic, assign) BOOL chromeVisible;
 @end
@@ -158,6 +161,17 @@ static const CGFloat kTabStrip = 46.0;
         [tb addTarget:self action:@selector(onTabButton:) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:tb];   // in the side strips, outside the (inset) game view
         [self.tabButtons addObject:tb];
+    }
+    // Opaque covers over the desktop stones (subviews of the game view, above the blit; non-interactive so the
+    // Java proxy click still reaches the real stone beneath).
+    self.stoneCovers = [NSMutableArray arrayWithCapacity:14];
+    for (int i = 0; i < 14; i++) {
+        UIView *cv = [[UIView alloc] init];
+        cv.hidden = YES;
+        cv.userInteractionEnabled = NO;
+        cv.backgroundColor = [UIColor blackColor];
+        [self.screen addSubview:cv];
+        [self.stoneCovers addObject:cv];
     }
     [self buildTabAssets];
     self.chromeVisible = YES;
@@ -461,6 +475,7 @@ static const CGFloat kTabStrip = 46.0;
     self.tabRailBg.hidden = YES;   // mobile cells are individually styled; no solid rail strip behind them
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) {
         for (UIButton *btn in self.tabButtons) btn.hidden = YES;
+        for (UIView *cv in self.stoneCovers) cv.hidden = YES;
         return;
     }
     int active = [d[@"activeTab"] intValue];
@@ -474,11 +489,17 @@ static const CGFloat kTabStrip = 46.0;
         id t = i < tabs.count ? tabs[i] : nil;
         if (![t isKindOfClass:[NSArray class]] || [(NSArray *)t count] < 4) {
             self.tabButtons[i].hidden = YES;
+            self.stoneCovers[i].hidden = YES;
             continue;
         }
         NSArray *bb = (NSArray *)t;
         int x = [bb[0] intValue], y = [bb[1] intValue], w = [bb[2] intValue], h = [bb[3] intValue];
         _tabCentres[i] = CGPointMake(x + w / 2.0, y + h / 2.0);
+        // Cover the desktop stone at its live position (mapped game->view), so the bottom double-UI is hidden
+        // while the stone stays clickable underneath for the proxy. Inset out by 1px to cover the edges.
+        CGRect cv = [self viewRectForGameX:x y:y w:w h:h];
+        self.stoneCovers[i].frame = CGRectInset(cv, -1, -1);
+        self.stoneCovers[i].hidden = NO;
         // Columns flipped: the gameplay tabs (idx 0–6: combat/stats/inventory/...) go to the RIGHT strip
         // (flush against the side panel they open), the social/system tabs (idx 7–13) to the LEFT.
         [(i <= 6 ? right : left) addObject:@(i)];
@@ -541,6 +562,7 @@ static const CGFloat kTabStrip = 46.0;
     self.chromeVisible = !self.chromeVisible;
     if (!self.chromeVisible) {
         for (UIButton *btn in self.tabButtons) btn.hidden = YES;
+        for (UIView *cv in self.stoneCovers) cv.hidden = YES;   // reveal the real stones in the fallback view
         self.tabRailBg.hidden = YES;
     }
     [self appendLine:[NSString stringWithFormat:@"[chrome] rails %@", self.chromeVisible ? @"ON" : @"OFF"]];
