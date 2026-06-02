@@ -58,6 +58,7 @@ import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.PluginInstantiationException;
 import net.runelite.client.plugins.PluginManager;
+import net.runelite.client.ui.NavigationButton;
 
 /**
  * Phase-6 (W3): the second reverse-JNI facade — the <em>Java-owned</em> mobile-UI control plane, sibling to
@@ -259,6 +260,34 @@ public final class MobileUiBridge
 		}
 		cm.sendConfig();
 		return "{\"ok\":true}";
+	}
+
+	// ---- Plugin side-panels (NavigationButton/PluginPanel) ---------------------------------------------
+	// HeadlessClientUI.addNavigation/removeNavigation forward here (the desktop sidebar/toolbar doesn't exist
+	// headless). We keep the registered nav buttons so the native shell can show a toolbar and render the
+	// selected plugin's Swing PluginPanel to a buffer (an embedded-Swing surface, like the game blit).
+	private static final java.util.List<NavigationButton> navButtons = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+	public static void registerNav(NavigationButton b)
+	{
+		if (b != null && !navButtons.contains(b))
+		{
+			navButtons.add(b);
+		}
+	}
+
+	public static void unregisterNav(NavigationButton b)
+	{
+		navButtons.remove(b);
+	}
+
+	/** Package-private view for the in-jar render probe / future panel renderer. Sorted like the desktop toolbar. */
+	static java.util.List<NavigationButton> navButtonsSorted()
+	{
+		final java.util.List<NavigationButton> list = new java.util.ArrayList<>(navButtons);
+		list.sort(java.util.Comparator.comparingInt(NavigationButton::getPriority)
+			.thenComparing(NavigationButton::getTooltip));
+		return list;
 	}
 
 	// ---- Plugin hub (browse / install) -----------------------------------------------------------------

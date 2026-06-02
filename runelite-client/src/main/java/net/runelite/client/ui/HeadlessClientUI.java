@@ -251,15 +251,24 @@ public class HeadlessClientUI extends ClientUI
 	{
 	}
 
-	// --- Navigation / sidebar: no toolbar or sidebar exists headless. ---
+	// --- Navigation / sidebar: no desktop toolbar/sidebar exists headless, so forward the registered nav
+	// buttons to the mobile facade, which lets the native shell show a toolbar + render the plugin panels. ---
 	@Override
 	void addNavigation(NavigationButton navBtn)
 	{
+		if (MobileUiBridge.isEnabled())
+		{
+			MobileUiBridge.registerNav(navBtn);
+		}
 	}
 
 	@Override
 	void removeNavigation(NavigationButton navBtn)
 	{
+		if (MobileUiBridge.isEnabled())
+		{
+			MobileUiBridge.unregisterNav(navBtn);
+		}
 	}
 
 	@Override

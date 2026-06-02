@@ -26,6 +26,10 @@ package net.runelite.client.headless;
 
 import com.google.inject.Injector;
 import java.awt.Color;
+import java.awt.EventQueue;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
+import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
@@ -33,6 +37,11 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import javax.imageio.ImageIO;
+import javax.swing.JPanel;
+import javax.swing.JWindow;
+import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.externalplugins.ExternalPluginClient;
 import net.runelite.client.externalplugins.ExternalPluginManager;
 import net.runelite.client.externalplugins.PluginHubManifest;
@@ -124,6 +133,7 @@ public final class MobileUiSmokeRunner
 
 			runChecks(eventBus, pluginManager, overlayManager, configManager, client);
 			runHubProbe(injector, pluginManager);
+			runPanelProbe();
 		}
 		catch (Throwable ex)
 		{
@@ -252,6 +262,153 @@ public final class MobileUiSmokeRunner
 		runTypedRoundTrip(pluginManager, configManager);
 
 		out("MUI_DONE=1");
+	}
+
+	// ---- plugin side-panel render de-risk (own phase) -------------------------------------------------
+
+	private static final boolean PANEL_PROBE = Boolean.getBoolean("runelite.mobileui.panelprobe");
+
+	/**
+	 * Plugin side-panel feasibility de-risk: prove a real plugin's Swing {@link PluginPanel} can be realized
+	 * off-screen under CACIO and painted to a buffer (the core unknown for showing plugin panels on mobile —
+	 * an embedded-Swing surface like the game blit). Captures the registered nav buttons, picks the first with
+	 * a panel, realizes its wrapped Swing tree in a {@link JWindow}, calls {@code onActivate}, lays it out, and
+	 * paints it to a {@link BufferedImage}; reports the non-blank pixel count and writes a PNG for an eyeball.
+	 */
+	private static void runPanelProbe() throws Exception
+	{
+		if (!PANEL_PROBE)
+		{
+			return;
+		}
+		final List<NavigationButton> navs = MobileUiBridge.navButtonsSorted();
+		// Prefer real plugin panels; "Configuration" is RuneLite's own sidebar and is empty standalone.
+		final List<NavigationButton> candidates = new ArrayList<>();
+		int withPanel = 0;
+		for (NavigationButton b : navs)
+		{
+			if (b.getPanel() != null)
+			{
+				withPanel++;
+				if (!"Configuration".equals(b.getTooltip()))
+				{
+					candidates.add(b);
+				}
+			}
+		}
+		out("MUI_PANEL_NAV_COUNT=" + navs.size());
+		out("MUI_PANEL_WITH_PANEL=" + withPanel);
+
+		final int w = PluginPanel.PANEL_WIDTH + PluginPanel.SCROLLBAR_WIDTH;
+		final int h = 600;
+		String okName = null;
+		int okNonBlank = 0;
+		BufferedImage okImg = null;
+		int tried = 0;
+		for (NavigationButton nav : candidates)
+		{
+			if (tried >= 6 || okName != null)
+			{
+				break;
+			}
+			tried++;
+			final BufferedImage img = renderPanel(nav, w, h);
+			final int nb = img == null ? -1 : nonBlankCount(img, w, h);
+			out("MUI_PANEL_TRY=" + nav.getTooltip() + " nonBlank=" + nb);
+			if (nb > 200)
+			{
+				okName = nav.getTooltip();
+				okNonBlank = nb;
+				okImg = img;
+			}
+		}
+		out("MUI_PANEL_NAME=" + (okName == null ? "(none)" : okName));
+		out("MUI_PANEL_NONBLANK=" + okNonBlank);
+		out("MUI_PANEL_OK=" + (okName != null));
+
+		final String dir = System.getProperty("runelite.headless.capture.dir");
+		if (okImg != null && dir != null)
+		{
+			try
+			{
+				final File f = new File(dir, "plugin-panel-probe.png");
+				ImageIO.write(okImg, "png", f);
+				out("MUI_PANEL_PNG=" + f.getAbsolutePath());
+			}
+			catch (Throwable ex)
+			{
+				out("MUI_PANEL_PNG_ERR=" + ex.getClass().getSimpleName());
+			}
+		}
+	}
+
+	/** Realize a plugin panel's wrapped Swing tree in a showing off-screen window and paint it to a buffer. */
+	private static BufferedImage renderPanel(NavigationButton nav, int w, int h) throws Exception
+	{
+		final BufferedImage[] ref = new BufferedImage[1];
+		EventQueue.invokeAndWait(() ->
+		{
+			try
+			{
+				final PluginPanel pp = nav.getPanel();
+				final JPanel wrapped = pp.getWrappedPanel();
+				final JWindow win = new JWindow();
+				win.getContentPane().add(wrapped);
+				win.setSize(w, h);
+				win.setVisible(true);  // showing → children lay out + paint (no real screen under CACIO)
+				win.validate();
+				pp.onActivate();
+				win.validate();
+			}
+			catch (Throwable ex)
+			{
+				out("MUI_PANEL_FATAL=activate:" + ex.getClass().getSimpleName() + ":" + ex.getMessage());
+			}
+		});
+		Thread.sleep(1200); // let async populate (invokeLater in onActivate) settle
+		EventQueue.invokeAndWait(() ->
+		{
+			try
+			{
+				final JPanel wrapped = nav.getPanel().getWrappedPanel();
+				wrapped.setSize(w, h);
+				wrapped.validate();
+				final BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+				final Graphics2D g = img.createGraphics();
+				wrapped.printAll(g);
+				g.dispose();
+				ref[0] = img;
+				try
+				{
+					nav.getPanel().onDeactivate();
+				}
+				catch (Throwable ignore)
+				{
+				}
+			}
+			catch (Throwable ex)
+			{
+				out("MUI_PANEL_FATAL=paint:" + ex.getClass().getSimpleName() + ":" + ex.getMessage());
+			}
+		});
+		return ref[0];
+	}
+
+	private static int nonBlankCount(BufferedImage img, int w, int h)
+	{
+		final int bg = img.getRGB(0, 0);
+		int n = 0;
+		for (int y = 0; y < h; y++)
+		{
+			for (int x = 0; x < w; x++)
+			{
+				if (img.getRGB(x, y) != bg)
+				{
+					n++;
+				}
+			}
+		}
+		return n;
 	}
 
 	// ---- plugin-hub de-risk (own phase) ---------------------------------------------------------------
