@@ -25,8 +25,12 @@
 package net.runelite.client.headless;
 
 import java.awt.EventQueue;
+import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.util.ArrayDeque;
 import java.util.Collection;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.gameval.InterfaceID;
@@ -35,10 +39,15 @@ import net.runelite.api.widgets.WidgetInfo;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigDescriptor;
+import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigItemDescriptor;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.config.Range;
 import net.runelite.client.config.Units;
+import net.runelite.client.eventbus.EventBus;
+import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.PluginChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.PluginInstantiationException;
@@ -92,6 +101,37 @@ public final class MobileUiBridge
 	private static volatile ConfigManager configManager;
 	private static volatile ClientThread clientThread;
 	private static volatile Client client;
+	private static volatile EventBus eventBus;
+	private static volatile boolean listenerRegistered;
+
+	// ---- Event/ack surface (the panel's refresh + write-confirm signal) --------------------------------
+	// A monotonic sequence over ConfigChanged/PluginChanged so the panel can poll for changes (incl. ones it
+	// did NOT make) and re-read only when something moved — never bind live at frame rate. Separately, every
+	// queued write gets an id and the client thread records the highest id it has PROCESSED, so the panel
+	// gets an ack even for a no-op write (which emits no ConfigChanged: ConfigManager early-returns when the
+	// value is unchanged). Bounded ring of recent events for delta polling.
+	private static final AtomicLong eventSeq = new AtomicLong();
+	private static final AtomicLong writeSeq = new AtomicLong();
+	private static volatile long processedWriteId;
+	private static final int MAX_EVENTS = 256;
+	private static final Object eventsLock = new Object();
+	private static final ArrayDeque<Evt> events = new ArrayDeque<>();
+
+	private static final class Evt
+	{
+		final long seq;
+		final String kind; // "config" | "plugin"
+		final String group; // config group, or plugin className
+		final String key;   // config key, or "loaded"/"unloaded"
+
+		Evt(long seq, String kind, String group, String key)
+		{
+			this.seq = seq;
+			this.kind = kind;
+			this.group = group;
+			this.key = key;
+		}
+	}
 
 	// Live UI-state snapshot (written on the client thread in tick(), read lock-free from the native thread).
 	private static volatile boolean chatInputVisible;
@@ -114,13 +154,110 @@ public final class MobileUiBridge
 	 * component that already has {@link PluginManager}/{@link ConfigManager}/{@link ClientThread} injected —
 	 * so this class stays a pure static JNI facade (the native side cannot hold a Guice-built instance).
 	 */
-	public static void init(PluginManager pm, ConfigManager cm, ClientThread ct, Client c)
+	public static void init(PluginManager pm, ConfigManager cm, ClientThread ct, Client c, EventBus eb)
 	{
 		pluginManager = pm;
 		configManager = cm;
 		clientThread = ct;
 		client = c;
-		log.info("[mobileui] facade wired: plugins={} config={} clientThread={}", pm != null, cm != null, ct != null);
+		eventBus = eb;
+		if (eb != null && !listenerRegistered)
+		{
+			eb.register(new Listener());
+			listenerRegistered = true;
+		}
+		log.info("[mobileui] facade wired: plugins={} config={} clientThread={} eventBus={}",
+			pm != null, cm != null, ct != null, eb != null);
+	}
+
+	/**
+	 * The EventBus subscriber that feeds the panel's revision surface. Public, non-static, {@code on<Event>}
+	 * names — the shape {@code EventBus.register} requires. Runs on whatever thread posts the event (config
+	 * on the client thread, plugin on the EDT); {@link #recordEvent} is the only mutation and it is guarded.
+	 */
+	public static final class Listener
+	{
+		@Subscribe
+		public void onConfigChanged(ConfigChanged e)
+		{
+			recordEvent("config", e.getGroup(), e.getKey());
+		}
+
+		@Subscribe
+		public void onPluginChanged(PluginChanged e)
+		{
+			recordEvent("plugin", e.getPlugin().getClass().getName(), e.isLoaded() ? "loaded" : "unloaded");
+		}
+	}
+
+	private static void recordEvent(String kind, String group, String key)
+	{
+		final long s = eventSeq.incrementAndGet();
+		synchronized (eventsLock)
+		{
+			events.addLast(new Evt(s, kind, group, key));
+			while (events.size() > MAX_EVENTS)
+			{
+				events.removeFirst();
+			}
+		}
+	}
+
+	/** Latest event sequence number. The panel stores this and polls {@link #pollMobileUiEvents(long)} from it. */
+	public static long getMobileUiSeq()
+	{
+		return eventSeq.get();
+	}
+
+	/**
+	 * Events with {@code seq > sinceSeq}, as {@code {seq, events:[{seq,kind,group,key}]}}. The panel diffs:
+	 * any {@code config} event for a group it shows → re-read that group; any {@code plugin} event → re-read
+	 * the plugin list (a toggle can disable conflicting plugins). Returns the latest {@code seq} so the panel
+	 * advances its cursor even when no event matched.
+	 */
+	public static String pollMobileUiEvents(long sinceSeq)
+	{
+		final Json out = new Json().obj().kl("seq", eventSeq.get()).key("events").arr();
+		synchronized (eventsLock)
+		{
+			for (Evt e : events)
+			{
+				if (e.seq > sinceSeq)
+				{
+					out.obj().kl("seq", e.seq).kv("kind", e.kind).kv("group", e.group).kvNullable("key", e.key).end();
+				}
+			}
+		}
+		return out.end().end().toString();
+	}
+
+	/** Highest write id whose client-thread runnable has finished — the fire-and-forget write ack. */
+	public static long getProcessedWriteId()
+	{
+		return processedWriteId;
+	}
+
+	/**
+	 * Queue {@code r} on the client thread and return its write id. The runnable records the id as processed
+	 * when it finishes (even if it was a no-op that emitted no {@code ConfigChanged}), so the panel can poll
+	 * {@link #getProcessedWriteId()} for an ack. Caller must pass a non-null {@code ct}.
+	 */
+	private static long enqueueClientWrite(ClientThread ct, Runnable r)
+	{
+		final long id = writeSeq.incrementAndGet();
+		ct.invokeLater(() ->
+		{
+			try
+			{
+				r.run();
+			}
+			finally
+			{
+				// invokeLater is FIFO and single-threaded, so ids complete monotonically.
+				processedWriteId = id;
+			}
+		});
+		return id;
 	}
 
 	// ---- The two dispatch lanes (the whole point of this class) ----------------------------------------
@@ -222,18 +359,32 @@ public final class MobileUiBridge
 		final Json out = new Json().obj().kv("group", group).key("items").arr();
 		for (ConfigItemDescriptor item : cd.getItems())
 		{
+			final ConfigItem ci = item.getItem();
+			if (ci.hidden())
+			{
+				// Desktop ConfigPanel skips hidden() items; match that so the native panel never shows them.
+				continue;
+			}
 			final String key = item.key();
 			final Type type = item.getType();
+			final boolean secret = ci.secret();
 			out.obj()
 				.kv("key", key)
 				.kv("name", item.name())
-				.kv("description", item.getItem().description())
-				.kv("section", item.getItem().section())
+				.kv("description", ci.description())
+				.kv("section", ci.section())
 				.ki("position", item.position())
-				.kb("secret", item.getItem().secret())
-				.kv("type", typeName(type))
-				.kvNullable("value", cm.getConfiguration(group, key));
+				.kb("secret", secret)
+				.kv("type", typeName(type));
+			// Secret values (passwords/tokens) are NOT round-tripped through the native side or its logs: emit
+			// null. The native control renders a secure field and only sends a value when the user edits it.
+			out.kvNullable("value", secret ? null : cm.getConfiguration(group, key));
 
+			final String warning = ci.warning();
+			if (warning != null && !warning.isEmpty())
+			{
+				out.kv("warning", warning);
+			}
 			final Range range = item.getRange();
 			if (range != null)
 			{
@@ -244,6 +395,11 @@ public final class MobileUiBridge
 			{
 				out.kv("units", units.value());
 			}
+			if (item.getAlpha() != null)
+			{
+				// Color picker should expose the alpha channel (desktop uses colorToAlphaHexCode when present).
+				out.kb("alpha", true);
+			}
 			if (type instanceof Class && ((Class<?>) type).isEnum())
 			{
 				out.key("choices").arr();
@@ -252,6 +408,20 @@ public final class MobileUiBridge
 					out.val(((Enum<?>) c).name());
 				}
 				out.end();
+			}
+			else
+			{
+				// Set<Enum> multi-select: emit the element enum's constants so the panel can render checkboxes.
+				final Class<?> el = setElementEnum(type);
+				if (el != null)
+				{
+					out.key("choices").arr();
+					for (Object c : el.getEnumConstants())
+					{
+						out.val(((Enum<?>) c).name());
+					}
+					out.end();
+				}
 			}
 			out.end();
 		}
@@ -312,20 +482,43 @@ public final class MobileUiBridge
 		{
 			return "{\"ok\":false,\"reason\":\"facade-off\"}";
 		}
-		onClientThread(() -> cm.setConfiguration(group, key, value));
-		return "{\"ok\":true,\"queued\":\"client\"}";
+		final ClientThread ct = clientThread;
+		if (ct == null)
+		{
+			// Don't ack a write we can't actually queue (the old code returned ok:true and dropped it).
+			return "{\"ok\":false,\"reason\":\"not-ready\"}";
+		}
+		final long id = enqueueClientWrite(ct, () -> cm.setConfiguration(group, key, value));
+		return "{\"ok\":true,\"writeId\":" + id + "}";
 	}
 
-	/** Reset one config item to its default (unset), on the client thread. */
+	/**
+	 * Reset one config item to its default, matching the desktop: unset it, then reapply group defaults so
+	 * the item is restored to its declared default value (not merely left unset). Returns a write id to poll.
+	 */
 	public static String resetConfig(String group, String key)
 	{
 		final ConfigManager cm = configManager;
-		if (!ENABLED || cm == null || group == null || key == null)
+		final PluginManager pm = pluginManager;
+		if (!ENABLED || cm == null || pm == null || group == null || key == null)
 		{
 			return "{\"ok\":false,\"reason\":\"facade-off\"}";
 		}
-		onClientThread(() -> cm.unsetConfiguration(group, key));
-		return "{\"ok\":true,\"queued\":\"client\"}";
+		final ClientThread ct = clientThread;
+		if (ct == null)
+		{
+			return "{\"ok\":false,\"reason\":\"not-ready\"}";
+		}
+		final Config proxy = proxyForGroup(group);
+		final long id = enqueueClientWrite(ct, () ->
+		{
+			cm.unsetConfiguration(group, key);
+			if (proxy != null)
+			{
+				cm.setDefaultConfiguration(proxy, false);
+			}
+		});
+		return "{\"ok\":true,\"writeId\":" + id + "}";
 	}
 
 	// ---- Live UI-state snapshot (client thread writes, native thread reads) ----------------------------
@@ -426,6 +619,54 @@ public final class MobileUiBridge
 			{
 				// keep scanning
 			}
+		}
+		return null;
+	}
+
+	/** The {@link Config} proxy backing a group — needed to reapply defaults on reset (desktop's path). */
+	private static Config proxyForGroup(String group)
+	{
+		final PluginManager pm = pluginManager;
+		final ConfigManager cm = configManager;
+		if (pm == null || cm == null)
+		{
+			return null;
+		}
+		for (Plugin p : pm.getPlugins())
+		{
+			try
+			{
+				final Config proxy = pm.getPluginConfigProxy(p);
+				if (proxy != null && group.equals(cm.getConfigDescriptor(proxy).getGroup().value()))
+				{
+					return proxy;
+				}
+			}
+			catch (RuntimeException ignored)
+			{
+				// keep scanning
+			}
+		}
+		return null;
+	}
+
+	/** If {@code type} is a {@code Set<E extends Enum>}, the element enum class; else null. */
+	private static Class<?> setElementEnum(Type type)
+	{
+		if (!(type instanceof ParameterizedType))
+		{
+			return null;
+		}
+		final ParameterizedType pt = (ParameterizedType) type;
+		final Type raw = pt.getRawType();
+		if (!(raw instanceof Class) || !Set.class.isAssignableFrom((Class<?>) raw))
+		{
+			return null;
+		}
+		final Type[] args = pt.getActualTypeArguments();
+		if (args.length == 1 && args[0] instanceof Class && ((Class<?>) args[0]).isEnum())
+		{
+			return (Class<?>) args[0];
 		}
 		return null;
 	}
@@ -576,6 +817,14 @@ public final class MobileUiBridge
 		}
 
 		Json ki(String k, int v)
+		{
+			key(k);
+			sb.append(v);
+			needComma = true;
+			return this;
+		}
+
+		Json kl(String k, long v)
 		{
 			key(k);
 			sb.append(v);

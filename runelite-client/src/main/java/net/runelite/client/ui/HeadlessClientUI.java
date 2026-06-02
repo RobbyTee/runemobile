@@ -77,6 +77,7 @@ public class HeadlessClientUI extends ClientUI
 	private final ConfigManager configManager;
 	private final Provider<ClientThread> clientThreadProvider;
 	private final PluginManager pluginManager;
+	private final EventBus eventBus;
 
 	private Frame frame;
 
@@ -98,6 +99,7 @@ public class HeadlessClientUI extends ClientUI
 		this.configManager = configManager;
 		this.clientThreadProvider = clientThreadProvider;
 		this.pluginManager = pluginManager;
+		this.eventBus = eventBus;
 	}
 
 	@Override
@@ -108,7 +110,7 @@ public class HeadlessClientUI extends ClientUI
 			// Wire the Phase-6 mobile-UI facade to the live singletons. Done here because this is the one
 			// component with PluginManager/ConfigManager/ClientThread injected; the facade itself stays a
 			// pure static JNI surface the native shell calls.
-			MobileUiBridge.init(pluginManager, configManager, clientThreadProvider.get(), rsClient);
+			MobileUiBridge.init(pluginManager, configManager, clientThreadProvider.get(), rsClient, eventBus);
 		}
 		if (JavaBridge.isEnabled())
 		{

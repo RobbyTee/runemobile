@@ -151,13 +151,25 @@ public final class MobileUiSmokeRunner
 		// (3) config write -> CLIENT thread (not EDT)
 		final String sentinel = "v" + Integer.toHexString(System.identityHashCode(probe)) + pluginCount
 			+ "x" + (preload == null ? "0" : Integer.toHexString(preload.hashCode()));
-		MobileUiBridge.setConfig(SENTINEL_GROUP, SENTINEL_KEY, sentinel);
+		final long seqBefore = MobileUiBridge.getMobileUiSeq();
+		final long writeId = parseWriteId(MobileUiBridge.setConfig(SENTINEL_GROUP, SENTINEL_KEY, sentinel));
 		await("config-event", 10_000, () -> probe.lastConfig != null);
 		final boolean configFired = probe.lastConfig != null;
 		out("MUI_CONFIG_FIRED=" + configFired);
 		out("MUI_CONFIG_VALUE_OK=" + (configFired && sentinel.equals(probe.lastConfig.getNewValue())));
 		out("MUI_CONFIG_ON_CLIENT_THREAD=" + probe.configOnClientThread);
 		out("MUI_CONFIG_ON_EDT=" + probe.configOnEdt);
+
+		// (3b) event/ack surface: the write returns an id whose completion the panel polls; the bumped event
+		// sequence + delta poll let the panel learn the change (even one it didn't make) without frame-binding.
+		out("MUI_ACK_WRITEID=" + writeId);
+		final boolean ackOk = writeId > 0
+			&& await("write-ack", 10_000, () -> MobileUiBridge.getProcessedWriteId() >= writeId);
+		out("MUI_ACK_OK=" + ackOk);
+		out("MUI_EVT_SEQ_ADVANCED=" + (MobileUiBridge.getMobileUiSeq() > seqBefore));
+		final String poll = MobileUiBridge.pollMobileUiEvents(seqBefore);
+		out("MUI_EVT_POLL_OK=" + (poll.contains("\"group\":\"" + SENTINEL_GROUP + "\"")
+			&& poll.contains("\"key\":\"" + SENTINEL_KEY + "\"")));
 
 		// (4) plugin toggle -> EDT (+ becomes active + overlay registers headless). SEARCH for a plugin
 		// whose enable grows the OverlayManager set, so we exercise the headless-overlay path, not a no-op.
@@ -312,11 +324,235 @@ public final class MobileUiSmokeRunner
 		boolean enumOk = roundTripEnum(cm, enumGroup, enumItem);
 		out("MUI_RT_OK=" + (colorOk && intOk && doubleOk && enumOk));
 
+		// getPluginConfig completeness: hidden items omitted, secret values masked, set choices / alpha /
+		// warning emitted when present (the verdict's JSON-completeness fixes).
+		configMetadataCheck(pm, cm);
+
+		// reset-to-default: an int item with a range + a non-null current value has a concrete numeric default,
+		// so after write+reset the stored value must be reapplied (non-null) and differ from what we wrote —
+		// proves resetConfig now reapplies the default instead of merely unsetting (the verdict's fix).
+		resetDefaultCheck(pm, cm);
+
 		// Native-origin leg (device only, gated): the iOS shell computes a signed-decimal opaque color in
 		// ObjC and writes it via MobileUiBridge.setConfig to the throwaway sentinel group. This is the half
 		// the desktop run can't cover — it proves the OBJC string-building (the signed-decimal getRGB trap),
 		// not just the Java serialization. Inert on desktop (flag absent).
 		nativeColorReadback(cm);
+	}
+
+	/** Pull the {@code writeId} out of {@code {"ok":true,"writeId":N}}; -1 if absent (e.g. not-ready). */
+	private static long parseWriteId(String ack)
+	{
+		final String needle = "\"writeId\":";
+		final int i = ack == null ? -1 : ack.indexOf(needle);
+		if (i < 0)
+		{
+			return -1;
+		}
+		int j = i + needle.length();
+		final StringBuilder n = new StringBuilder();
+		while (j < ack.length() && (Character.isDigit(ack.charAt(j)) || (n.length() == 0 && ack.charAt(j) == '-')))
+		{
+			n.append(ack.charAt(j++));
+		}
+		try
+		{
+			return Long.parseLong(n.toString());
+		}
+		catch (NumberFormatException ex)
+		{
+			return -1;
+		}
+	}
+
+	/**
+	 * Verify {@link MobileUiBridge#getPluginConfig(String)} hides {@code hidden()} items, masks {@code secret}
+	 * values, and emits set choices / alpha / warning when such items exist. Each leg is gated on a real item
+	 * being found in the loaded plugins (PRESENT=false → OK=true, not a failure) so the run isn't flaky.
+	 */
+	private static void configMetadataCheck(PluginManager pm, ConfigManager cm)
+	{
+		ConfigItemDescriptor hidden = null, secret = null, setItem = null, alpha = null, warn = null;
+		String hiddenG = null, secretG = null, setG = null, alphaG = null, warnG = null;
+		for (Plugin p : pm.getPlugins())
+		{
+			final ConfigDescriptor cd;
+			try
+			{
+				final net.runelite.client.config.Config proxy = pm.getPluginConfigProxy(p);
+				if (proxy == null)
+				{
+					continue;
+				}
+				cd = cm.getConfigDescriptor(proxy);
+			}
+			catch (RuntimeException ex)
+			{
+				continue;
+			}
+			final String group = cd.getGroup().value();
+			for (ConfigItemDescriptor item : cd.getItems())
+			{
+				if (hidden == null && item.getItem().hidden())
+				{
+					hidden = item;
+					hiddenG = group;
+				}
+				if (secret == null && item.getItem().secret())
+				{
+					secret = item;
+					secretG = group;
+				}
+				if (alpha == null && item.getAlpha() != null)
+				{
+					alpha = item;
+					alphaG = group;
+				}
+				if (warn == null && !item.getItem().warning().isEmpty())
+				{
+					warn = item;
+					warnG = group;
+				}
+				if (setItem == null && isSetOfEnum(item.getType()))
+				{
+					setItem = item;
+					setG = group;
+				}
+			}
+		}
+
+		// hidden: the key must NOT appear in the group's JSON.
+		out("MUI_CFG_HIDDEN_PRESENT=" + (hidden != null));
+		out("MUI_CFG_HIDDEN_OK=" + (hidden == null
+			|| !MobileUiBridge.getPluginConfig(hiddenG).contains("\"key\":\"" + hidden.key() + "\"")));
+
+		// secret: write a sentinel into the secret item, assert it does NOT leak into the JSON, restore.
+		boolean secretOk = true;
+		if (secret != null)
+		{
+			final String secKey = secret.key();
+			final String orig = cm.getConfiguration(secretG, secKey);
+			final String mask = "SECRETSENTINEL_DONOTLEAK";
+			cm.setConfiguration(secretG, secKey, mask);
+			secretOk = !MobileUiBridge.getPluginConfig(secretG).contains(mask);
+			if (orig == null)
+			{
+				cm.unsetConfiguration(secretG, secKey);
+			}
+			else
+			{
+				cm.setConfiguration(secretG, secKey, orig);
+			}
+		}
+		out("MUI_CFG_SECRET_PRESENT=" + (secret != null));
+		out("MUI_CFG_SECRET_OK=" + secretOk);
+
+		out("MUI_CFG_SET_PRESENT=" + (setItem != null));
+		out("MUI_CFG_SET_OK=" + (setItem == null
+			|| MobileUiBridge.getPluginConfig(setG).contains("\"choices\":")));
+		out("MUI_CFG_ALPHA_PRESENT=" + (alpha != null));
+		out("MUI_CFG_ALPHA_OK=" + (alpha == null
+			|| MobileUiBridge.getPluginConfig(alphaG).contains("\"alpha\":true")));
+		out("MUI_CFG_WARNING_PRESENT=" + (warn != null));
+		out("MUI_CFG_WARNING_OK=" + (warn == null
+			|| MobileUiBridge.getPluginConfig(warnG).contains("\"warning\":")));
+	}
+
+	private static boolean isSetOfEnum(java.lang.reflect.Type type)
+	{
+		if (!(type instanceof java.lang.reflect.ParameterizedType))
+		{
+			return false;
+		}
+		final java.lang.reflect.ParameterizedType pt = (java.lang.reflect.ParameterizedType) type;
+		final java.lang.reflect.Type raw = pt.getRawType();
+		if (!(raw instanceof Class) || !java.util.Set.class.isAssignableFrom((Class<?>) raw))
+		{
+			return false;
+		}
+		final java.lang.reflect.Type[] args = pt.getActualTypeArguments();
+		return args.length == 1 && args[0] instanceof Class && ((Class<?>) args[0]).isEnum();
+	}
+
+	/**
+	 * Prove {@link MobileUiBridge#resetConfig} reapplies the default (not just unset): write a non-default
+	 * in-range value, reset, and assert the stored value comes back non-null and different from what we wrote.
+	 * Restores the original. Inert if no ranged int item was found.
+	 */
+	private static void resetDefaultCheck(PluginManager pm, ConfigManager cm) throws InterruptedException
+	{
+		// Find a ranged int whose current stored value is non-null (i.e. it has a concrete default to reapply).
+		String group = null;
+		ConfigItemDescriptor item = null;
+		outer:
+		for (Plugin p : pm.getPlugins())
+		{
+			final ConfigDescriptor cd;
+			try
+			{
+				final net.runelite.client.config.Config proxy = pm.getPluginConfigProxy(p);
+				if (proxy == null)
+				{
+					continue;
+				}
+				cd = cm.getConfigDescriptor(proxy);
+			}
+			catch (RuntimeException ex)
+			{
+				continue;
+			}
+			final String g = cd.getGroup().value();
+			for (ConfigItemDescriptor it : cd.getItems())
+			{
+				final java.lang.reflect.Type t = it.getType();
+				final boolean isInt = t == int.class || t == Integer.class;
+				if (isInt && it.getRange() != null && cm.getConfiguration(g, it.key()) != null)
+				{
+					group = g;
+					item = it;
+					break outer;
+				}
+			}
+		}
+		if (item == null)
+		{
+			out("MUI_RESET_DEFAULT_PRESENT=false");
+			out("MUI_RESET_DEFAULT_OK=true");
+			return;
+		}
+		out("MUI_RESET_DEFAULT_PRESENT=true");
+		out("MUI_RESET_DEFAULT_TARGET=" + group + "." + item.key());
+		final String g = group;        // effectively-final alias for the await lambdas
+		final String key = item.key();
+		final String orig = cm.getConfiguration(g, key);
+		final int min = item.getRange().min();
+		final int max = item.getRange().max();
+		final Integer cur = cm.getConfiguration(g, key, int.class);
+		int v = (cur != null && cur == min) ? Math.min(min + 1, max) : min;
+		final String written = Integer.toString(v);
+		try
+		{
+			MobileUiBridge.setConfig(g, key, written);
+			await("reset-write", 8_000, () -> written.equals(cm.getConfiguration(g, key)));
+			MobileUiBridge.resetConfig(g, key);
+			// after reset the value should change away from what we wrote and be reapplied (non-null)
+			await("reset-applied", 8_000, () -> !written.equals(cm.getConfiguration(g, key)));
+			final String after = cm.getConfiguration(g, key);
+			out("MUI_RESET_AFTER=" + after);
+			out("MUI_RESET_DEFAULT_OK=" + (after != null && !written.equals(after)));
+		}
+		finally
+		{
+			if (orig == null)
+			{
+				cm.unsetConfiguration(g, key); // truly restore unset (resetConfig would reapply the default)
+			}
+			else
+			{
+				MobileUiBridge.setConfig(g, key, orig);
+			}
+			await("reset-restore", 5_000, () -> Objects.equals(orig, cm.getConfiguration(g, key)));
+		}
 	}
 
 	private static final boolean NATIVE_PROBE = Boolean.getBoolean("runelite.mobileui.nativeprobe");

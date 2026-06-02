@@ -40,6 +40,18 @@ RT_ENUM="$(mk MUI_RT_ENUM_OK "$LOG1")"
 # Native-origin color leg: present ONLY on device (the ObjC shell writes it). Empty on desktop -> not gated.
 RT_NATIVE="$(mk MUI_RT_NATIVE_COLOR_OK "$LOG1")"
 
+# Bridge fixes: event/ack surface + getPluginConfig completeness + reset-reapplies-default. Each *_OK is
+# designed to be true even when no representative item exists, so they're always-on hard gates.
+ACK_OK="$(mk MUI_ACK_OK "$LOG1")"
+EVT_SEQ="$(mk MUI_EVT_SEQ_ADVANCED "$LOG1")"
+EVT_POLL="$(mk MUI_EVT_POLL_OK "$LOG1")"
+CFG_HIDDEN="$(mk MUI_CFG_HIDDEN_OK "$LOG1")"
+CFG_SECRET="$(mk MUI_CFG_SECRET_OK "$LOG1")"
+CFG_SET="$(mk MUI_CFG_SET_OK "$LOG1")"
+CFG_ALPHA="$(mk MUI_CFG_ALPHA_OK "$LOG1")"
+CFG_WARN="$(mk MUI_CFG_WARNING_OK "$LOG1")"
+RESET_OK="$(mk MUI_RESET_DEFAULT_OK "$LOG1")"
+
 # Cross-launch persistence (only when a second log is supplied).
 XLAUNCH="n/a"
 if [ -n "$LOG2" ]; then
@@ -69,12 +81,22 @@ printf '  %-26s %s\n' "round-trip int"          "$RT_INT  (target: $(mk MUI_RT_I
 printf '  %-26s %s\n' "round-trip double"       "$RT_DOUBLE  (target: $(mk MUI_RT_DOUBLE_TARGET "$LOG1"))"
 printf '  %-26s %s\n' "round-trip enum"         "$RT_ENUM  (target: $(mk MUI_RT_ENUM_TARGET "$LOG1"))"
 printf '  %-26s %s\n' "round-trip native color" "${RT_NATIVE:-(desktop: n/a)}"
+printf '  %-26s %s\n' "write ack (writeId)"     "$ACK_OK"
+printf '  %-26s %s\n' "event seq advanced"      "$EVT_SEQ"
+printf '  %-26s %s\n' "event poll delta"        "$EVT_POLL"
+printf '  %-26s %s\n' "hidden masked"           "$CFG_HIDDEN  (present: $(mk MUI_CFG_HIDDEN_PRESENT "$LOG1"))"
+printf '  %-26s %s\n' "secret masked"           "$CFG_SECRET  (present: $(mk MUI_CFG_SECRET_PRESENT "$LOG1"))"
+printf '  %-26s %s\n' "set choices emitted"     "$CFG_SET  (present: $(mk MUI_CFG_SET_PRESENT "$LOG1"))"
+printf '  %-26s %s\n' "alpha emitted"           "$CFG_ALPHA  (present: $(mk MUI_CFG_ALPHA_PRESENT "$LOG1"))"
+printf '  %-26s %s\n' "warning emitted"         "$CFG_WARN  (present: $(mk MUI_CFG_WARNING_PRESENT "$LOG1"))"
+printf '  %-26s %s\n' "reset reapplies default" "$RESET_OK  (present: $(mk MUI_RESET_DEFAULT_PRESENT "$LOG1"))"
 
 # Core gates. config-must-NOT-be-on-EDT and toggle-MUST-be-on-EDT together prove the two lanes separate.
 # overlay-grew / chat / x-launch are informational unless their inputs are present.
 PASS=1
 for v in "$EA" "$LIST_OK" "$CFG_FIRED" "$CFG_VAL_OK" "$CFG_CLIENT" "$TOGGLE_OK" "$TOGGLE_EDT" \
-         "$RT_COLOR" "$RT_INT" "$RT_DOUBLE" "$RT_ENUM"; do
+         "$RT_COLOR" "$RT_INT" "$RT_DOUBLE" "$RT_ENUM" \
+         "$ACK_OK" "$EVT_SEQ" "$EVT_POLL" "$CFG_HIDDEN" "$CFG_SECRET" "$CFG_SET" "$CFG_ALPHA" "$CFG_WARN" "$RESET_OK"; do
   [ "$v" = "true" ] || PASS=0
 done
 [ "$CFG_EDT" = "false" ] || PASS=0
@@ -87,7 +109,7 @@ if [ -n "$LOG2" ]; then
   [ "$XLAUNCH" = "true" ] || PASS=0
 fi
 
-TUPLE="ea=$EA;list=$LIST_OK;cfgfired=$CFG_FIRED;cfgval=$CFG_VAL_OK;cfgclient=$CFG_CLIENT;cfgnotedt=$([ "$CFG_EDT" = false ] && echo 1 || echo 0);toggle=$TOGGLE_OK;toggleedt=$TOGGLE_EDT;rtcolor=$RT_COLOR;rtint=$RT_INT;rtdouble=$RT_DOUBLE;rtenum=$RT_ENUM;rtnative=${RT_NATIVE:-na};xlaunch=$XLAUNCH"
+TUPLE="ea=$EA;list=$LIST_OK;cfgfired=$CFG_FIRED;cfgval=$CFG_VAL_OK;cfgclient=$CFG_CLIENT;cfgnotedt=$([ "$CFG_EDT" = false ] && echo 1 || echo 0);toggle=$TOGGLE_OK;toggleedt=$TOGGLE_EDT;rtcolor=$RT_COLOR;rtint=$RT_INT;rtdouble=$RT_DOUBLE;rtenum=$RT_ENUM;rtnative=${RT_NATIVE:-na};ack=$ACK_OK;evtseq=$EVT_SEQ;evtpoll=$EVT_POLL;hidden=$CFG_HIDDEN;secret=$CFG_SECRET;set=$CFG_SET;alpha=$CFG_ALPHA;warn=$CFG_WARN;reset=$RESET_OK;xlaunch=$XLAUNCH"
 MD5="$(printf '%s' "$TUPLE" | md5of)"
 echo "  tuple: $TUPLE"
 echo "  md5:   $MD5"
