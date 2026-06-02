@@ -29,6 +29,8 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayDeque;
 import java.util.Collection;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
@@ -36,7 +38,11 @@ import net.runelite.api.Client;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.widgets.WidgetInfo;
+import net.runelite.client.RuneLite;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.externalplugins.ExternalPluginClient;
+import net.runelite.client.externalplugins.ExternalPluginManager;
+import net.runelite.client.externalplugins.PluginHubManifest;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigDescriptor;
 import net.runelite.client.config.ConfigItem;
@@ -253,6 +259,136 @@ public final class MobileUiBridge
 		}
 		cm.sendConfig();
 		return "{\"ok\":true}";
+	}
+
+	// ---- Plugin hub (browse / install) -----------------------------------------------------------------
+	// Resolved lazily from the injector (not part of init()'s wiring). The manifest is downloaded ONCE on a
+	// background daemon (network must not touch the JNI/client thread) and cached; hubManifest() returns
+	// {status:loading} until ready, then the full plugin list with live installed flags. install/uninstall
+	// route onto the client thread (config write) and flush so the installed list survives a relaunch.
+
+	private static volatile ExternalPluginManager extPluginManager;
+	private static volatile ExternalPluginClient extPluginClient;
+	private static volatile List<PluginHubManifest.DisplayData> hubDisplay;
+	private static volatile String hubStatus = "idle";
+	private static volatile boolean hubLoading;
+
+	private static void ensureHubInjected()
+	{
+		if (extPluginManager != null && extPluginClient != null)
+		{
+			return;
+		}
+		final com.google.inject.Injector inj = RuneLite.getInjector();
+		if (inj != null)
+		{
+			extPluginManager = inj.getInstance(ExternalPluginManager.class);
+			extPluginClient = inj.getInstance(ExternalPluginClient.class);
+		}
+	}
+
+	/**
+	 * Plugin-hub catalog as JSON. First call kicks off a one-time background manifest download and returns
+	 * {@code {"status":"loading"}}; the native side polls until {@code status} is {@code ok} (or
+	 * {@code error:*}). When ready: {@code {status:ok, plugins:[{internalName,displayName,author,description,
+	 * version,unavailable,installed}]}} with {@code installed} recomputed live each call.
+	 */
+	public static String hubManifest()
+	{
+		if (!ENABLED)
+		{
+			return "{\"status\":\"off\"}";
+		}
+		ensureHubInjected();
+		if (extPluginClient == null || extPluginManager == null)
+		{
+			return "{\"status\":\"not-ready\"}";
+		}
+		final List<PluginHubManifest.DisplayData> display = hubDisplay;
+		if (display == null)
+		{
+			if (!hubLoading)
+			{
+				hubLoading = true;
+				hubStatus = "loading";
+				final Thread t = new Thread(() ->
+				{
+					try
+					{
+						hubDisplay = extPluginClient.downloadManifestFull().getDisplay();
+						hubStatus = "ok";
+					}
+					catch (Throwable ex)
+					{
+						hubStatus = "error:" + ex.getClass().getSimpleName();
+						log.warn("[mobileui] hub manifest download failed", ex);
+					}
+					finally
+					{
+						hubLoading = false;
+					}
+				}, "mobileui-hub-manifest");
+				t.setDaemon(true);
+				t.start();
+			}
+			return "{\"status\":\"" + hubStatus + "\"}";
+		}
+		final Set<String> installed = new HashSet<>(extPluginManager.getInstalledExternalPlugins());
+		final Json out = new Json().obj().kv("status", "ok").key("plugins").arr();
+		for (PluginHubManifest.DisplayData d : display)
+		{
+			out.obj()
+				.kv("internalName", d.getInternalName())
+				.kv("displayName", d.getDisplayName())
+				.kvNullable("author", d.getAuthor())
+				.kvNullable("description", d.getDescription())
+				.kvNullable("version", d.getVersion())
+				.kvNullable("unavailable", d.getUnavailableReason())
+				.kb("installed", installed.contains(d.getInternalName()))
+				.end();
+		}
+		return out.end().end().toString();
+	}
+
+	/** Install a hub plugin by internal name (config write + flush so it persists; load happens async). */
+	public static String hubInstall(String internalName)
+	{
+		return hubInstallOrRemove(internalName, true);
+	}
+
+	/** Uninstall a hub plugin by internal name. */
+	public static String hubUninstall(String internalName)
+	{
+		return hubInstallOrRemove(internalName, false);
+	}
+
+	private static String hubInstallOrRemove(String internalName, boolean install)
+	{
+		if (!ENABLED || internalName == null)
+		{
+			return "{\"ok\":false,\"reason\":\"facade-off\"}";
+		}
+		ensureHubInjected();
+		final ExternalPluginManager epm = extPluginManager;
+		final ConfigManager cm = configManager;
+		final ClientThread ct = clientThread;
+		if (epm == null || cm == null || ct == null)
+		{
+			return "{\"ok\":false,\"reason\":\"not-ready\"}";
+		}
+		final long id = enqueueClientWrite(ct, () ->
+		{
+			if (install)
+			{
+				epm.install(internalName);
+			}
+			else
+			{
+				epm.remove(internalName);
+			}
+			cm.sendConfig(); // persist the installed list immediately
+		});
+		return "{\"ok\":true,\"writeId\":" + id + "}";
 	}
 
 	/**

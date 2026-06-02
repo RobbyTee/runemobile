@@ -334,6 +334,19 @@ public final class MobileUiSmokeRunner
 			out("MUI_HUB_ACTIVE=" + active);
 			out("MUI_HUB_IN_PANEL=" + inPanel);
 
+			// Also exercise the browse manifest (downloadManifestFull -> JSON) the native hub UI consumes.
+			String hm = "{}";
+			for (int i = 0; i < 60; i++)
+			{
+				hm = MobileUiBridge.hubManifest();
+				if (hm.contains("\"status\":\"ok\"") || hm.contains("error"))
+				{
+					break;
+				}
+				Thread.sleep(1000);
+			}
+			out("MUI_HUB_FULL=" + countOccurrences(hm, "\"internalName\":"));
+
 			// Clean up: uninstall the probe plugin + flush so a normal (non-hub) boot stays as before.
 			if (loaded)
 			{

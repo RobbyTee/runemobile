@@ -53,6 +53,9 @@ static jmethodID gMuiSeq = NULL;        // getMobileUiSeq()J
 static jmethodID gMuiPoll = NULL;       // pollMobileUiEvents(J)Ljava/lang/String;
 static jmethodID gMuiProcessed = NULL;  // getProcessedWriteId()J
 static jmethodID gMuiFlush = NULL;      // flushConfig()Ljava/lang/String;
+static jmethodID gMuiHubManifest = NULL;  // hubManifest()Ljava/lang/String;
+static jmethodID gMuiHubInstall = NULL;   // hubInstall(Ljava/lang/String;)Ljava/lang/String;
+static jmethodID gMuiHubUninstall = NULL; // hubUninstall(Ljava/lang/String;)Ljava/lang/String;
 
 // ---- W3 plugin-config de-risk (verdict #7, NATIVE-ORIGIN leg) — STRIP AFTER DEVICE CONFIRM ----------
 // Proves the half the desktop smoke can't: that the OBJC side builds the correct signed decimal of
@@ -180,8 +183,12 @@ static BOOL ensureMui(void) {
     gMuiPoll       = (*env)->GetStaticMethodID(env, global, "pollMobileUiEvents", "(J)Ljava/lang/String;");
     gMuiProcessed  = (*env)->GetStaticMethodID(env, global, "getProcessedWriteId", "()J");
     gMuiFlush      = (*env)->GetStaticMethodID(env, global, "flushConfig", "()Ljava/lang/String;");
+    gMuiHubManifest  = (*env)->GetStaticMethodID(env, global, "hubManifest", "()Ljava/lang/String;");
+    gMuiHubInstall   = (*env)->GetStaticMethodID(env, global, "hubInstall", "(Ljava/lang/String;)Ljava/lang/String;");
+    gMuiHubUninstall = (*env)->GetStaticMethodID(env, global, "hubUninstall", "(Ljava/lang/String;)Ljava/lang/String;");
     if (!gMuiList || !gMuiGetCfg || !gMuiSetEnabled || !gMuiSetCfg || !gMuiResetCfg
-        || !gMuiSeq || !gMuiPoll || !gMuiProcessed || !gMuiFlush) {
+        || !gMuiSeq || !gMuiPoll || !gMuiProcessed || !gMuiFlush
+        || !gMuiHubManifest || !gMuiHubInstall || !gMuiHubUninstall) {
         (*env)->ExceptionClear(env);
         (*env)->DeleteGlobalRef(env, global);
         return NO;
@@ -415,6 +422,11 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"-Drunelite.mobilechrome=true",             // W3 hybrid-chrome: arm the read-only MobileChromeBridge
                                                      // snapshot (tab/panel/minimap/orb/chat/viewport bounds).
                                                      // NOT the .probe gate — that mutates and is desktop-only.
+        @"-Drunelite.hub=true",                      // plugin hub: drop --safe-mode so external plugins load
+                                                     // (device-de-risked 2026-06-02). Also disables the
+                                                     // headless-irrelevant GPU plugin.
+        @"-Drunelite.pluginhub.version=1.12.27",     // our 1.12.28-SNAPSHOT has no hub manifest (404); 1.12.27
+                                                     // is the adjacent released API the hub serves plugins for.
         // NOTE: -Drunelite.mobilechrome.repos was tried and REVERTED — repositioned stones over the world are
         // occluded by the 3D viewport (only the mobile 601 toplevel draws tabs above it). Native rails it is.
         // Phase-6 STEP-0 device smoke confirmed GREEN (2026-06-01): lanes separate (config on client thread,
@@ -761,6 +773,23 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiFlush);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return; }
     if (js) (*env)->DeleteLocalRef(env, js);
+}
+
++ (NSString *)mobileHubManifest {
+    if (!ensureMui()) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiHubManifest));
+}
+
++ (NSString *)mobileHubInstall:(NSString *)internalName uninstall:(BOOL)uninstall {
+    if (!ensureMui() || internalName == nil) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring jn = (*env)->NewStringUTF(env, internalName.UTF8String);
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass,
+                                                         uninstall ? gMuiHubUninstall : gMuiHubInstall, jn);
+    NSString *out = jstringToNS(env, js);
+    (*env)->DeleteLocalRef(env, jn);
+    return out;
 }
 
 @end

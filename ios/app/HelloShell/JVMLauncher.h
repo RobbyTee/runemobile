@@ -133,6 +133,14 @@ typedef void (^JVMLogSink)(NSString *line);
 /// plugin toggles and config edits survive a relaunch.
 + (void)mobileFlushConfig;
 
+/// Plugin-hub catalog JSON (MobileUiBridge.hubManifest). First call returns {"status":"loading"} while the
+/// signed manifest downloads on a background thread; poll until status is "ok" (plugins[]) or "error:*".
++ (nullable NSString *)mobileHubManifest;
+
+/// Install (uninstall=NO) or uninstall (uninstall=YES) a hub plugin by internal name
+/// (MobileUiBridge.hubInstall/hubUninstall — client-thread + flush). Returns the ack JSON.
++ (nullable NSString *)mobileHubInstall:(NSString *)internalName uninstall:(BOOL)uninstall;
+
 @end
 
 NS_ASSUME_NONNULL_END

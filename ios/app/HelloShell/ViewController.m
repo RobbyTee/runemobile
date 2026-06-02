@@ -1,6 +1,7 @@
 #import "ViewController.h"
 #import "JVMLauncher.h"
 #import "PluginConfigViewController.h"
+#import "PluginHubViewController.h"
 #import <unistd.h>
 #import <fcntl.h>
 
@@ -401,6 +402,15 @@ static const CGFloat kTabStrip = 46.0;
     [close addTarget:self action:@selector(onClosePluginPanel) forControlEvents:UIControlEventTouchUpInside];
     [card addSubview:close];
 
+    // Plugin Hub opener — browse/install external plugins (presents PluginHubViewController over the panel).
+    UIButton *hub = [UIButton buttonWithType:UIButtonTypeSystem];
+    hub.translatesAutoresizingMaskIntoConstraints = NO;
+    [hub setTitle:@"＋ Hub" forState:UIControlStateNormal];
+    hub.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+    hub.tintColor = [UIColor colorWithRed:0.55 green:0.80 blue:1.0 alpha:1.0];
+    [hub addTarget:self action:@selector(onOpenHub) forControlEvents:UIControlEventTouchUpInside];
+    [card addSubview:hub];
+
     self.pluginTable = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     self.pluginTable.translatesAutoresizingMaskIntoConstraints = NO;
     self.pluginTable.backgroundColor = [UIColor clearColor];
@@ -422,6 +432,8 @@ static const CGFloat kTabStrip = 46.0;
         [title.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
         [close.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
         [close.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
+        [hub.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
+        [hub.trailingAnchor constraintEqualToAnchor:close.leadingAnchor constant:-18],
 
         [self.pluginTable.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:10],
         [self.pluginTable.leadingAnchor constraintEqualToAnchor:card.leadingAnchor],
@@ -446,6 +458,11 @@ static const CGFloat kTabStrip = 46.0;
     self.pluginPanelOpen = NO;
     // Persist any plugin toggles now — iOS won't run RuneLite's shutdown/periodic flush on close.
     [JVMLauncher mobileFlushConfig];
+}
+
+- (void)onOpenHub {
+    PluginHubViewController *hubVC = [[PluginHubViewController alloc] init];
+    [self presentViewController:hubVC animated:YES completion:nil];
 }
 
 // App going to background (user swiped home / to the switcher, before any termination): flush config so
