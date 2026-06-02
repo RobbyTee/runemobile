@@ -40,6 +40,8 @@ import net.runelite.api.Client;
 import net.runelite.api.GameObject;
 import net.runelite.api.GameState;
 import net.runelite.api.MainBufferProvider;
+import net.runelite.api.MenuAction;
+import net.runelite.api.MenuEntry;
 import net.runelite.api.Scene;
 import net.runelite.api.Tile;
 import net.runelite.api.VarClientInt;
@@ -114,6 +116,14 @@ public final class JavaBridge
 	// ~30 game px on the 1189-wide canvas ≈ ~4 mm on the device panel ≈ a fingertip contact radius.
 	private static final int SNAP_RADIUS = Integer.getInteger("runelite.touch.snapRadius", 30);
 	private static volatile int snapCount;
+	// Smart snap (priority-aware): instead of blindly nudging a left tap onto the nearest clickbox (the scene is
+	// clickbox-saturated, so "nearest" is near-arbitrary), let the ENGINE decide. Move to the literal tap and
+	// read its top menu action: if it's already a real interact, click there (never hijack a direct hit). Only
+	// if the tap would merely "Walk here" (you missed) do we nudge to the nearest entity — and we VALIDATE the
+	// nudge yields an interact before committing, else fall back to walking the literal point. Off by
+	// -Drunelite.touch.snapSmart=false (legacy proactive geometric snap).
+	private static final boolean SMART_SNAP =
+		Boolean.parseBoolean(System.getProperty("runelite.touch.snapSmart", "true"));
 
 	// Published complete frames for the live blit. The native side reads at the display refresh (up to
 	// 120 Hz) but the engine composites at ~50 fps, so reading mainBufferProvider directly catches it
@@ -344,22 +354,98 @@ public final class JavaBridge
 		if (button == MouseEvent.BUTTON1 && ct != null
 			&& c != null && c.getGameState() == GameState.LOGGED_IN)
 		{
-			// In-game left tap, on the client thread (scene reads are only safe there). Two engine cycles:
-			// cycle 1 moves the pointer to the (snapped) point so the engine recomputes the left-click action
-			// FOR THAT POINT; cycle 2 actually clicks. Posting move+click in one batch let the click fire the
-			// action computed for the PREVIOUS cursor position — which is exactly the "rotate camera, then a
-			// walk-tap interacts with whatever the frozen cursor was over" bug. ~1 extra cycle (~20ms), unseen.
-			ct.invoke(() ->
-			{
-				// Snap only inside the world viewport (see SNAP_VIEWPORT_GATE) — a tap on the UI never snaps.
-				final boolean snap = SNAP_ENABLED && (!SNAP_VIEWPORT_GATE || inWorldViewport(c, x, y));
-				final int[] p = snap ? resolveSnap(c, x, y) : new int[]{x, y};
-				postMove(canvas, p[0], p[1]);
-				ct.invokeLater(() -> postClickButtons(canvas, p[0], p[1], MouseEvent.BUTTON1));
-			});
+			// In-game left tap, resolved on the client thread (scene/menu reads are only safe there).
+			ct.invoke(() -> startLeftTap(canvas, ct, c, x, y));
 			return;
 		}
 		synthesizeClick(canvas, x, y, button);
+	}
+
+	/**
+	 * In-game left-tap resolution (client thread). Always moves the pointer to the target a cycle before the
+	 * click (so the engine recomputes the left-click action FOR that point — posting move+click in one batch
+	 * fires the action for the PREVIOUS cursor position, the old "rotate then walk-tap mis-clicks" bug).
+	 *
+	 * <p>Snapping only applies inside the world viewport ({@link #SNAP_VIEWPORT_GATE}) — a tap on the UI never
+	 * snaps. With {@link #SMART_SNAP} the nudge is priority-aware (see {@link #smartDecide}); otherwise it is
+	 * the legacy proactive geometric nudge.
+	 */
+	private static void startLeftTap(Canvas canvas, ClientThread ct, Client c, int x, int y)
+	{
+		final boolean snap = SNAP_ENABLED && (!SNAP_VIEWPORT_GATE || inWorldViewport(c, x, y));
+		if (SMART_SNAP && snap)
+		{
+			// Move to the LITERAL tap first; decide next cycle once the engine's menu reflects that point.
+			postMove(canvas, x, y);
+			ct.invokeLater(() -> smartDecide(canvas, ct, c, x, y));
+			return;
+		}
+		final int[] p = snap ? resolveSnap(c, x, y) : new int[]{x, y};
+		postMove(canvas, p[0], p[1]);
+		ct.invokeLater(() -> postClickButtons(canvas, p[0], p[1], MouseEvent.BUTTON1));
+	}
+
+	/**
+	 * Priority-aware snap decision, one cycle after moving to the literal tap (so {@link Client#getMenuEntries()}
+	 * reflects it). If the literal point's top action is already a real interact, click it — never hijack a
+	 * direct hit. Otherwise (the tap would just "Walk here") nudge to the nearest entity, but only commit the
+	 * nudge after re-reading confirms IT yields an interact; else walk the literal point. Worst case ~3 cycles.
+	 */
+	private static void smartDecide(Canvas canvas, ClientThread ct, Client c, int x, int y)
+	{
+		if (isInteractTop(c))
+		{
+			postClickButtons(canvas, x, y, MouseEvent.BUTTON1);
+			log.debug("[snap] smart: literal {},{} already interact -> click literal", x, y);
+			return;
+		}
+		final int[] cand = resolveSnap(c, x, y);
+		if (cand[0] == x && cand[1] == y)
+		{
+			postClickButtons(canvas, x, y, MouseEvent.BUTTON1);
+			log.debug("[snap] smart: literal {},{} walk + no candidate -> walk", x, y);
+			return;
+		}
+		// Validate the nudge target actually yields an interact before committing it.
+		postMove(canvas, cand[0], cand[1]);
+		ct.invokeLater(() ->
+		{
+			if (isInteractTop(c))
+			{
+				snapCount++;
+				postClickButtons(canvas, cand[0], cand[1], MouseEvent.BUTTON1);
+				log.debug("[snap] smart: walk@{},{} -> SNAP {},{} interact (#{})", x, y, cand[0], cand[1], snapCount);
+			}
+			else
+			{
+				postClickButtons(canvas, x, y, MouseEvent.BUTTON1);
+				log.debug("[snap] smart: candidate {},{} not interact -> walk literal {},{}", cand[0], cand[1], x, y);
+			}
+		});
+	}
+
+	/**
+	 * Whether the engine's current top (left-click) menu entry is a real interaction worth snapping to — i.e.
+	 * not a bare {@code Walk here}, {@code Cancel}, or {@code Examine}. Read on the client thread.
+	 */
+	private static boolean isInteractTop(Client c)
+	{
+		try
+		{
+			final MenuEntry[] e = c.getMenuEntries();
+			if (e == null || e.length == 0)
+			{
+				return false;
+			}
+			final MenuAction a = e[e.length - 1].getType();   // display top = array tail = left-click action
+			return a != MenuAction.WALK && a != MenuAction.CANCEL
+				&& a != MenuAction.EXAMINE_NPC && a != MenuAction.EXAMINE_OBJECT
+				&& a != MenuAction.EXAMINE_ITEM && a != MenuAction.EXAMINE_ITEM_GROUND;
+		}
+		catch (RuntimeException ex)
+		{
+			return false;
+		}
 	}
 
 	/**
