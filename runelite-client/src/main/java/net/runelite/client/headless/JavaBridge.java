@@ -362,6 +362,36 @@ public final class JavaBridge
 		synthesizeClick(canvas, x, y, button);
 	}
 
+	/**
+	 * A <em>precise</em> left/right click at exactly {@code (x,y)} — same proven move+click shape as
+	 * {@link #onClick}, but with <b>no snap-to-entity resolution</b>. This is for deliberate UI proxies (the
+	 * native chrome tapping a tab stone / orb / widget), where the coordinate is already the exact target and
+	 * touch-forgiveness must NOT redirect it: with a full-screen world viewport, snap would otherwise pull a
+	 * tab-stone click onto a nearby world entity. Keeps the two-cycle move→click (so the engine re-targets the
+	 * widget before the click) but feeds the literal point.
+	 */
+	public static void onClickPrecise(int x, int y, int button)
+	{
+		final Canvas canvas = liveCanvas();
+		if (canvas == null)
+		{
+			return;
+		}
+		final ClientThread ct = clientThread;
+		final Client c = client;
+		if (button == MouseEvent.BUTTON1 && ct != null
+			&& c != null && c.getGameState() == GameState.LOGGED_IN)
+		{
+			ct.invoke(() ->
+			{
+				postMove(canvas, x, y);
+				ct.invokeLater(() -> postClickButtons(canvas, x, y, MouseEvent.BUTTON1));
+			});
+			return;
+		}
+		synthesizeClick(canvas, x, y, button);
+	}
+
 	/** Post the focus-prime + move + press + release + click sequence at {@code (x,y)} in one batch. */
 	private static void synthesizeClick(Canvas canvas, int x, int y, int awtButton)
 	{

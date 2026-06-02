@@ -34,7 +34,7 @@ static _Atomic(JavaVM *) gVM = NULL;  // set right after JNI_CreateJavaVM; clear
 static JNIEnv   *gMainEnv = NULL;     // the UI thread's attached env (main thread only)
 static jclass    gBridgeClass = NULL; // global ref to net.runelite.client.headless.JavaBridge
 static jmethodID gMidW = NULL, gMidH = NULL, gMidSeq = NULL, gMidPixels = NULL;
-static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidMove = NULL;
+static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidClickPrecise = NULL, gMidMove = NULL;
 static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
 static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
 
@@ -68,6 +68,7 @@ static BOOL ensureBridge(void) {
     gMidPixels = (*env)->GetStaticMethodID(env, global, "getFramePixels", "()[I");
     gMidTouch  = (*env)->GetStaticMethodID(env, global, "onTouch", "(IIII)V");
     gMidClick  = (*env)->GetStaticMethodID(env, global, "onClick", "(III)V");
+    gMidClickPrecise = (*env)->GetStaticMethodID(env, global, "onClickPrecise", "(III)V");
     gMidMove   = (*env)->GetStaticMethodID(env, global, "onMove", "(II)V");
     gMidWheel  = (*env)->GetStaticMethodID(env, global, "onWheel", "(III)V");
     gMidCamera = (*env)->GetStaticMethodID(env, global, "onCameraDrag", "(II)V");
@@ -75,7 +76,7 @@ static BOOL ensureBridge(void) {
     gMidKey    = (*env)->GetStaticMethodID(env, global, "onKeyStroke", "(I)V");
     gMidInputOpen = (*env)->GetStaticMethodID(env, global, "isTextInputOpen", "()Z");
     gMidClearHover = (*env)->GetStaticMethodID(env, global, "clearHover", "()V");
-    if (!gMidW || !gMidH || !gMidSeq || !gMidPixels || !gMidTouch || !gMidClick || !gMidMove
+    if (!gMidW || !gMidH || !gMidSeq || !gMidPixels || !gMidTouch || !gMidClick || !gMidClickPrecise || !gMidMove
         || !gMidWheel || !gMidCamera || !gMidText || !gMidKey || !gMidInputOpen || !gMidClearHover) {
         (*env)->ExceptionClear(env);
         (*env)->DeleteGlobalRef(env, global);   // don't leak the class ref on the retry path
@@ -503,6 +504,13 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidClick, (jint)x, (jint)y, (jint)button);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)postClickPreciseX:(int)x y:(int)y button:(int)button {
+    if (!ensureBridge()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidClickPrecise, (jint)x, (jint)y, (jint)button);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 

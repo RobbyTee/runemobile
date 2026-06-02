@@ -528,7 +528,9 @@ static const CGFloat kTabStrip = 46.0;
     NSInteger i = b.tag;
     if (i < 0 || i >= 14) return;
     CGPoint c = _tabCentres[i];
-    [JVMLauncher postClickX:(int)lround(c.x) y:(int)lround(c.y) button:1];
+    // PRECISE click (no snap): the world viewport is full-screen, so a normal onClick would snap a tab-stone
+    // click onto a nearby world entity instead of hitting the stone.
+    [JVMLauncher postClickPreciseX:(int)lround(c.x) y:(int)lround(c.y) button:1];
     [self appendLine:[NSString stringWithFormat:@"[chrome] tab %ld -> proxy click %d,%d",
                       (long)i, (int)lround(c.x), (int)lround(c.y)]];
 }

@@ -53,6 +53,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// 3 (long-press: open the right-click menu). Call on the main thread.
 + (void)postClickX:(int)x y:(int)y button:(int)button;
 
+/// Post a PRECISE tap (JavaBridge.onClickPrecise) at exactly (x,y) with NO snap-to-entity resolution — for
+/// deliberate UI proxies (native chrome tapping a tab stone / widget) where touch-forgiveness must not pull
+/// the click onto a nearby world entity. Call on the main thread.
++ (void)postClickPreciseX:(int)x y:(int)y button:(int)button;
+
 /// Move the pointer (no button held) into the gamepack via JavaBridge.onMove — a plain MOUSE_MOVED.
 /// Used to highlight the entry under the finger while drag-selecting an open right-click menu.
 /// `x`,`y` are gamepack-canvas (765x503) pixels. Call on the main thread.
