@@ -24,10 +24,16 @@
  */
 package net.runelite.client.headless;
 
+import com.google.inject.Injector;
+import java.awt.BasicStroke;
 import java.awt.Canvas;
+import java.awt.Color;
 import java.awt.EventQueue;
+import java.awt.Graphics2D;
+import java.awt.Polygon;
 import java.awt.Rectangle;
 import java.awt.Shape;
+import java.awt.Stroke;
 import java.awt.Toolkit;
 import java.awt.event.FocusEvent;
 import java.awt.event.InputEvent;
@@ -40,11 +46,17 @@ import net.runelite.api.Client;
 import net.runelite.api.GameObject;
 import net.runelite.api.GameState;
 import net.runelite.api.MainBufferProvider;
+import net.runelite.api.Perspective;
+import net.runelite.api.Player;
 import net.runelite.api.Scene;
 import net.runelite.api.Tile;
+import net.runelite.api.TileObject;
 import net.runelite.api.VarClientInt;
 import net.runelite.api.WorldView;
+import net.runelite.api.coords.LocalPoint;
+import net.runelite.client.RuneLite;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.ui.overlay.outline.ModelOutlineRenderer;
 
 /**
  * Phase-4 (W3) sub-goal B: the native&lt;-&gt;Java facade for a <em>real interactive</em> client on iOS.
@@ -115,12 +127,17 @@ public final class JavaBridge
 	private static final int SNAP_RADIUS = Integer.getInteger("runelite.touch.snapRadius", 30);
 	private static volatile int snapCount;
 
-	// Selection border (OSRS-Mobile feel): when a left tap resolves onto an entity, we publish that entity's
-	// convex hull / clickbox as a flat [x0,y0,x1,y1,…] canvas-pixel polygon + bump a seq. The native shell
-	// polls the seq and flashes the outline so a tap anywhere within it visibly selects the thing. Read
-	// lock-free off the JNI thread; written on the client thread when a tap is resolved.
-	private static volatile int[] snapBorder;
-	private static volatile int snapBorderSeq;
+	// Selection feedback, drawn in Java straight into the game frame (so it's tight + tracks the entity, unlike
+	// a native polygon of the loose convex hull). A left tap that resolves onto an NPC/object flashes a tight
+	// MODEL OUTLINE on it for SEL_FLASH_MS; a tap that resolves to walk shows a destination TILE marker that
+	// persists until the player arrives (driven by the engine's live localDestination). All set on the client
+	// thread (the tap resolution) and consumed on the client thread ({@link #drawSelection}).
+	private static final long SEL_FLASH_MS = Long.getLong("runelite.touch.selFlashMs", 1500L);
+	private static Actor selActor;            // selected NPC/player to outline (null = none)
+	private static TileObject selObject;      // selected scene object to outline (null = none)
+	private static long selUntil;             // outline fades after this timestamp
+	private static boolean showDestTile;      // draw the walk-destination tile marker (until arrival)
+	private static ModelOutlineRenderer outliner;   // lazily resolved from the injector (tight model outline)
 	// Smart snap (priority-aware): instead of blindly nudging a left tap onto the nearest clickbox (the scene is
 	// clickbox-saturated, so "nearest" is near-arbitrary), let the ENGINE decide. Move to the literal tap and
 	// read its top menu action: if it's already a real interact, click there (never hijack a direct hit). Only
@@ -374,8 +391,8 @@ public final class JavaBridge
 	 * <p>Snapping only applies inside the world viewport ({@link #SNAP_VIEWPORT_GATE}) — a tap on the UI never
 	 * snaps. With {@link #SMART_SNAP} the resolution is <b>entity-aware</b> ({@link #resolveSnapTarget}):
 	 * strongly prefer actors over the carpet of ground/object clickboxes, click the entity's own (live) hull,
-	 * and publish its outline so the native shell can flash a selection border (the OSRS-Mobile feel — a tap
-	 * anywhere within the border selects the thing). Otherwise the legacy proactive geometric nudge is used.
+	 * and arm a tight model-outline flash on it ({@link #drawSelection}). A tap that resolves to walk arms the
+	 * destination-tile marker instead. Otherwise the legacy proactive geometric nudge is used.
 	 */
 	private static void startLeftTap(Canvas canvas, ClientThread ct, Client c, int x, int y)
 	{
@@ -385,7 +402,7 @@ public final class JavaBridge
 			final SnapTarget t = resolveSnapTarget(c, x, y);
 			if (t != null)
 			{
-				publishBorder(t.hull);                 // flash the selection outline natively
+				armEntityOutline(t.actor, t.object);   // tight model outline, drawn in-frame
 				final int cx = t.point[0];
 				final int cy = t.point[1];
 				if (!t.literal)
@@ -395,10 +412,11 @@ public final class JavaBridge
 				postMove(canvas, cx, cy);
 				ct.invokeLater(() -> postClickButtons(canvas, cx, cy, MouseEvent.BUTTON1));
 				log.debug("[snap] smart: tap {},{} -> {} {},{} ({})",
-					x, y, t.literal ? "hit" : "SNAP", cx, cy, t.actor ? "actor" : "object");
+					x, y, t.literal ? "hit" : "SNAP", cx, cy, t.actor != null ? "actor" : "object");
 				return;
 			}
-			// Nothing interactable within reach -> a deliberate walk at the literal point.
+			// Nothing interactable within reach -> a deliberate walk; show a destination-tile marker instead.
+			armDestTile();
 			postMove(canvas, x, y);
 			ct.invokeLater(() -> postClickButtons(canvas, x, y, MouseEvent.BUTTON1));
 			log.debug("[snap] smart: tap {},{} -> walk (no entity within {}px)", x, y, snapRadius());
@@ -409,31 +427,51 @@ public final class JavaBridge
 		ct.invokeLater(() -> postClickButtons(canvas, p[0], p[1], MouseEvent.BUTTON1));
 	}
 
-	/** The chosen tap target: its outline {@code hull}, the {@code point} to click, and what it is. */
+	/** Arm a tight outline flash on the selected entity (clears any destination-tile marker). */
+	private static void armEntityOutline(Actor actor, TileObject object)
+	{
+		selActor = actor;
+		selObject = object;
+		selUntil = System.currentTimeMillis() + SEL_FLASH_MS;
+		showDestTile = false;
+	}
+
+	/** Arm the walk destination-tile marker (clears any entity outline). */
+	private static void armDestTile()
+	{
+		selActor = null;
+		selObject = null;
+		selUntil = 0;
+		showDestTile = true;
+	}
+
+	/** The chosen tap target: the entity refs to outline, the {@code point} to click, and how it was hit. */
 	private static final class SnapTarget
 	{
-		final Shape hull;       // outline to flash as the selection border
+		final Actor actor;      // the selected NPC/player (null if an object)
+		final TileObject object;// the selected scene object (null if an actor)
 		final int[] point;      // click point: the literal tap (a direct hit) or the entity's hull centroid
 		final boolean literal;  // true = tapped inside the hull (click the literal point, engine hits it)
-		final boolean actor;    // true = NPC/player (else a scene object) — for the log
 
-		SnapTarget(Shape hull, int[] point, boolean literal, boolean actor)
+		SnapTarget(Actor actor, TileObject object, int[] point, boolean literal)
 		{
-			this.hull = hull;
+			this.actor = actor;
+			this.object = object;
 			this.point = point;
 			this.literal = literal;
-			this.actor = actor;
 		}
 	}
 
-	/** Accumulates, per category, the shape the tap is inside (if any) and the nearest shape within radius. */
-	private static final class ShapePick
+	/** Accumulates, per category, the entity the tap is inside (if any) and the nearest entity within radius. */
+	private static final class Pick
 	{
-		Shape contain;
-		Shape nearest;
+		Object contain;          // owner (Actor/TileObject) whose shape contains the tap
+		Shape containShape;
+		Object nearest;          // owner of the nearest shape within radius
+		Shape nearestShape;
 		double nearestD = Double.MAX_VALUE;
 
-		void consider(Shape s, int x, int y, int r)
+		void consider(Object owner, Shape s, int x, int y, int r)
 		{
 			if (s == null)
 			{
@@ -443,7 +481,8 @@ public final class JavaBridge
 			{
 				if (contain == null)
 				{
-					contain = s;
+					contain = owner;
+					containShape = s;
 				}
 				return;
 			}
@@ -456,7 +495,8 @@ public final class JavaBridge
 			if (d <= r && d < nearestD)
 			{
 				nearestD = d;
-				nearest = s;
+				nearest = owner;
+				nearestShape = s;
 			}
 		}
 	}
@@ -480,16 +520,16 @@ public final class JavaBridge
 				return null;
 			}
 			final int r = snapRadius();
-			final ShapePick actors = new ShapePick();
-			final ShapePick objects = new ShapePick();
+			final Pick actors = new Pick();
+			final Pick objects = new Pick();
 
 			for (Actor a : wv.npcs())
 			{
-				actors.consider(a.getConvexHull(), x, y, r);
+				actors.consider(a, a.getConvexHull(), x, y, r);
 			}
 			for (Actor a : wv.players())
 			{
-				actors.consider(a.getConvexHull(), x, y, r);
+				actors.consider(a, a.getConvexHull(), x, y, r);
 			}
 
 			final Scene scene = wv.getScene();
@@ -516,7 +556,7 @@ public final class JavaBridge
 							{
 								if (go != null)
 								{
-									objects.consider(go.getClickbox(), x, y, r);
+									objects.consider(go, go.getClickbox(), x, y, r);
 								}
 							}
 						}
@@ -530,19 +570,19 @@ public final class JavaBridge
 			// Actor preference: containing actor > containing object > nearest actor > nearest object.
 			if (actors.contain != null)
 			{
-				return new SnapTarget(actors.contain, new int[]{x, y}, true, true);
+				return new SnapTarget((Actor) actors.contain, null, new int[]{x, y}, true);
 			}
 			if (objects.contain != null)
 			{
-				return new SnapTarget(objects.contain, new int[]{x, y}, true, false);
+				return new SnapTarget(null, (TileObject) objects.contain, new int[]{x, y}, true);
 			}
 			if (actors.nearest != null)
 			{
-				return new SnapTarget(actors.nearest, hullCentroid(actors.nearest), false, true);
+				return new SnapTarget((Actor) actors.nearest, null, hullCentroid(actors.nearestShape), false);
 			}
 			if (objects.nearest != null)
 			{
-				return new SnapTarget(objects.nearest, hullCentroid(objects.nearest), false, false);
+				return new SnapTarget(null, (TileObject) objects.nearest, hullCentroid(objects.nearestShape), false);
 			}
 			return null;
 		}
@@ -553,67 +593,105 @@ public final class JavaBridge
 		}
 	}
 
-	private static void considerObjPick(ShapePick p, net.runelite.api.TileObject o, int x, int y, int r)
+	private static void considerObjPick(Pick p, TileObject o, int x, int y, int r)
 	{
 		if (o != null)
 		{
-			p.consider(o.getClickbox(), x, y, r);
+			p.consider(o, o.getClickbox(), x, y, r);
 		}
 	}
 
-	/** Publish an entity's outline (flat {@code [x0,y0,x1,y1,…]} canvas px) for the native selection border. */
-	private static void publishBorder(Shape hull)
+	/** Lazily resolve the model-outline renderer (the tight silhouette RuneLite's NPC outline mode uses). */
+	private static ModelOutlineRenderer outliner()
 	{
-		final int[] pts = polygon(hull);
-		if (pts != null)
+		if (outliner == null)
 		{
-			snapBorder = pts;
-			snapBorderSeq++;
-		}
-	}
-
-	/** The last selected entity's outline as a flat {@code [x0,y0,x1,y1,…]} canvas-pixel polygon (or null). */
-	public static int[] getSnapBorder()
-	{
-		return snapBorder;
-	}
-
-	/** Bumped once per published selection border — the native shell polls this to flash a new outline. */
-	public static int getSnapBorderSeq()
-	{
-		return snapBorderSeq;
-	}
-
-	/** Flatten a shape's vertices to {@code [x0,y0,x1,y1,…]} (canvas px), or null if it has too few. */
-	private static int[] polygon(Shape s)
-	{
-		if (s == null)
-		{
-			return null;
-		}
-		final java.awt.geom.PathIterator it = s.getPathIterator(null);
-		final double[] co = new double[6];
-		final java.util.ArrayList<Integer> pts = new java.util.ArrayList<>(32);
-		while (!it.isDone())
-		{
-			final int seg = it.currentSegment(co);
-			if (seg == java.awt.geom.PathIterator.SEG_MOVETO || seg == java.awt.geom.PathIterator.SEG_LINETO)
+			final Injector inj = RuneLite.getInjector();
+			if (inj != null)
 			{
-				pts.add((int) co[0]);
-				pts.add((int) co[1]);
+				try
+				{
+					outliner = inj.getInstance(ModelOutlineRenderer.class);
+				}
+				catch (RuntimeException ex)
+				{
+					log.debug("[snap] no ModelOutlineRenderer", ex);
+				}
 			}
-			it.next();
 		}
-		if (pts.size() < 6)
+		return outliner;
+	}
+
+	// Selection-feedback colours.
+	private static final Color SEL_OUTLINE = new Color(255, 243, 77, 235);   // tight entity outline (yellow)
+	private static final Color TILE_STROKE = new Color(0, 200, 255, 200);    // walk destination tile (cyan)
+	private static final Color TILE_FILL = new Color(0, 200, 255, 45);
+	private static final Stroke TILE_PEN = new BasicStroke(2f);
+
+	/**
+	 * Draw the selection feedback INTO the game frame (client thread, from {@code Hooks.draw} after the overlays
+	 * composite, before the blit snapshot): a tight model outline on the just-selected entity for a beat, and a
+	 * walk destination-tile marker that persists until the player reaches it. Tighter than a native polygon of
+	 * the convex hull and it tracks the moving entity, since it's the engine's own model silhouette.
+	 */
+	public static void drawSelection(Graphics2D g, Client c)
+	{
+		if (!ENABLED || g == null || c == null)
 		{
-			return null;
+			return;
 		}
-		final int[] out = new int[pts.size()];
-		for (int i = 0; i < out.length; i++)
+		try
 		{
-			out[i] = pts.get(i);
+			// Destination-tile marker — driven by the engine's live walk target, so it follows path changes and
+			// clears itself on arrival (localDestination goes null).
+			if (showDestTile)
+			{
+				final LocalPoint dest = c.getLocalDestinationLocation();
+				final Player me = c.getLocalPlayer();
+				if (dest == null || (me != null && dest.equals(me.getLocalLocation())))
+				{
+					showDestTile = false;
+				}
+				else
+				{
+					final Polygon poly = Perspective.getCanvasTilePoly(c, dest);
+					if (poly != null)
+					{
+						g.setColor(TILE_FILL);
+						g.fill(poly);
+						g.setStroke(TILE_PEN);
+						g.setColor(TILE_STROKE);
+						g.draw(poly);
+					}
+				}
+			}
+
+			// Tight entity outline flash.
+			if (System.currentTimeMillis() < selUntil)
+			{
+				final ModelOutlineRenderer o = outliner();
+				if (o != null)
+				{
+					if (selActor != null)
+					{
+						o.drawOutline(selActor, 2, SEL_OUTLINE, 4);
+					}
+					else if (selObject != null)
+					{
+						o.drawOutline(selObject, 2, SEL_OUTLINE, 4);
+					}
+				}
+			}
+			else
+			{
+				selActor = null;
+				selObject = null;
+			}
 		}
-		return out;
+		catch (RuntimeException ex)
+		{
+			log.debug("[snap] drawSelection failed", ex);
+		}
 	}
 
 	/**

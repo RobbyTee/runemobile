@@ -56,11 +56,6 @@
 @property (nonatomic, assign) CGFloat wheelAccum;
 // Contextual keyboard: previous gamepack text-input state, for edge-triggered auto raise/dismiss.
 @property (nonatomic, assign) BOOL prevInputOpen;
-// Selection border (OSRS-Mobile feel): a yellow outline flashed around the entity a left tap resolved onto,
-// so a tap anywhere within it visibly selects the thing. The hull comes from JavaBridge.getSnapBorder (the
-// entity the smart snap chose); we poll its seq each display tick and fade the stroke out after a beat.
-@property (nonatomic, strong) CAShapeLayer *selectBorder;
-@property (nonatomic, assign) int lastSnapBorderSeq;
 // W3 hybrid-chrome native tab rails (cover-in-place first pass): 14 opaque native buttons drawn over the live
 // desktop tab stones (positions/active state from the MobileChromeBridge snapshot each tick); a tap proxies an
 // onClick onto the stone centre. A ▦ toggle shows/hides them for instant A/B fallback.
@@ -143,16 +138,6 @@ static const CGFloat kTabStrip = 46.0;
     self.screen.layer.magnificationFilter = kCAFilterLinear;     // smooth when scaled to native res
     self.screen.userInteractionEnabled = YES;                    // receive the game gestures
     [self.view addSubview:self.screen];
-
-    // Selection-border layer over the game blit (above the image, below the native chrome subviews). Stroked
-    // yellow, no fill, transparent until a tap resolves onto an entity, then flashed + faded by onDisplayTick.
-    self.selectBorder = [CAShapeLayer layer];
-    self.selectBorder.fillColor = [UIColor clearColor].CGColor;
-    self.selectBorder.strokeColor = [UIColor colorWithRed:1.0 green:0.95 blue:0.30 alpha:0.95].CGColor;
-    self.selectBorder.lineWidth = 2.0;
-    self.selectBorder.lineJoin = kCALineJoinRound;
-    self.selectBorder.opacity = 0.0;
-    [self.screen.layer addSublayer:self.selectBorder];
 
     // Phase 5 control scheme on the game view. UIKit gesture recognizers own classification: tap = left
     // click (walk/interact/menu-entry), long-press = drag-to-select menu, one-finger drag = camera rotate,
@@ -745,45 +730,6 @@ static const CGFloat kTabStrip = 46.0;
     return CGRectMake(gx * scale + ox, gy * scale + oy, gw * scale, gh * scale);
 }
 
-// Map a single game-canvas point to the screen image view's coordinate space (ScaleAspectFit) — the point
-// form of viewRectForGameX, used to plot the selection-border polygon.
-- (CGPoint)viewPointForGameX:(CGFloat)gx y:(CGFloat)gy {
-    UIImage *img = self.screen.image;
-    if (img == nil) return CGPointZero;
-    CGFloat iw = img.size.width, ih = img.size.height;
-    if (iw <= 0 || ih <= 0) return CGPointZero;
-    CGRect b = self.screen.bounds;
-    CGFloat scale = MIN(b.size.width / iw, b.size.height / ih);
-    CGFloat ox = (b.size.width - iw * scale) * 0.5;
-    CGFloat oy = (b.size.height - ih * scale) * 0.5;
-    return CGPointMake(gx * scale + ox, gy * scale + oy);
-}
-
-// Flash the selection outline: build the entity hull polygon (game px -> view), set it on the border layer,
-// and fade the stroke from full to zero so it reads as a brief "this is what you selected" highlight.
-- (void)flashSelectBorder:(NSArray<NSNumber *> *)pts {
-    if (pts.count < 6) return;
-    UIBezierPath *path = [UIBezierPath bezierPath];
-    for (NSUInteger i = 0; i + 1 < pts.count; i += 2) {
-        CGPoint v = [self viewPointForGameX:pts[i].doubleValue y:pts[i + 1].doubleValue];
-        if (i == 0) [path moveToPoint:v]; else [path addLineToPoint:v];
-    }
-    [path closePath];
-    // The layer sits in self.screen's coordinate space; suppress implicit animation of the path swap.
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    self.selectBorder.path = path.CGPath;
-    [CATransaction commit];
-    [self.selectBorder removeAnimationForKey:@"fade"];
-    self.selectBorder.opacity = 0.0;
-    CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
-    fade.fromValue = @1.0;
-    fade.toValue = @0.0;
-    fade.duration = 0.5;
-    fade.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
-    [self.selectBorder addAnimation:fade forKey:@"fade"];
-}
-
 // Load a bundled tab sprite asset at native (1x) scale.
 - (UIImage *)loadAsset:(NSString *)name {
     NSString *p = [[NSBundle mainBundle] pathForResource:name ofType:@"png"];
@@ -1065,15 +1011,6 @@ static const CGFloat kTabStrip = 46.0;
     if (self.framesShown == 1 || self.framesShown % 60 == 0) {
         [self appendLine:[NSString stringWithFormat:@"[shell] live blit frame #%d (%.0fx%.0f)",
                           self.framesShown, img.size.width, img.size.height]];
-    }
-
-    // Selection border: a tap that resolved onto an entity bumped JavaBridge.getSnapBorderSeq; flash its
-    // outline. Cheap (one int JNI call per tick); only reads the polygon when the seq actually changed.
-    int sbSeq = [JVMLauncher snapBorderSeq];
-    if (sbSeq != self.lastSnapBorderSeq) {
-        self.lastSnapBorderSeq = sbSeq;
-        NSArray<NSNumber *> *pts = [JVMLauncher snapBorderPoints];
-        if (pts.count >= 6) [self flashSelectBorder:pts];
     }
 
     // Refresh the native tab rails from the chrome snapshot (~10 Hz — positions/active state rarely change,
