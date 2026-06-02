@@ -441,6 +441,12 @@ public class Hooks implements Callbacks
 			// W3 diagnostic: can the docked side panel be moved? Gated -Drunelite.mobilechrome.panelprobe=true.
 			net.runelite.client.headless.MobileChromePanelProbe.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.MobileChromeHideTest.isEnabled())
+		{
+			// W3 diagnostic: do the stones hide cleanly + does setVarc switch the panel?
+			// Gated -Drunelite.mobilechrome.hidetest=true.
+			net.runelite.client.headless.MobileChromeHideTest.tick(client, client.getGameState());
+		}
 
 		if (graphics == null)
 		{
