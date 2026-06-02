@@ -26,7 +26,12 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 }
 @end
 
-@interface PluginPanelsViewController ()
+// Native, reflowed Quest Helper screen (data via QuestHelperBridge). Defined at the bottom of this file.
+@interface QuestHelperViewController : UIViewController
+@end
+
+@interface PluginPanelsViewController () <UIScrollViewDelegate>
+@property (nonatomic, assign) CGSize lastPanelImgSize;     // re-layout only on size change (preserve zoom)
 @property (nonatomic, strong) UIScrollView *toolbar;       // legacy: horizontal text-pill strip
 @property (nonatomic, strong) UIScrollView *rail;          // vertical plugin-icon rail (right edge)
 @property (nonatomic, strong) NSLayoutConstraint *railHeight; // sized to content, clamped to the clear band
@@ -457,8 +462,18 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     self.panelView.contentMode = UIViewContentModeScaleToFill;
     self.panelView.layer.magnificationFilter = kCAFilterTrilinear;
     [scroll addSubview:self.panelView];
+    // Pinch-to-zoom + pan: the rendered desktop panel is dense, so let the user zoom in to read any part. The
+    // buffer is supersampled, so zooming in stays crisp. viewForZooming returns panelView (its only subview).
+    scroll.delegate = self;
+    scroll.minimumZoomScale = 1.0;
+    scroll.maximumZoomScale = 4.0;
+    scroll.bouncesZoom = YES;
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onPanelTap:)];
     [self.panelView addGestureRecognizer:tap];
+}
+
+- (UIView *)viewForZoomingInScrollView:(UIScrollView *)scrollView {
+    return self.panelView;
 }
 
 - (nullable UIImage *)decodeIcon:(id)base64 {
@@ -468,17 +483,32 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 }
 
 - (void)onSelectorButton:(UIButton *)b {
-    if (self.docked && b.tag == self.currentIndex) {
-        [self collapsePanel];                  // tapping the active icon closes the panel
-    } else {
-        [self selectIndex:b.tag];
+    if (self.docked) {
+        // Quest Helper gets a genuinely native, reflowed screen instead of the rendered image — when the
+        // reflection bridge can reach the (external) plugin. Otherwise fall through to the generic surface.
+        if (b.tag >= 0 && b.tag < (NSInteger)self.panels.count) {
+            NSString *tip = [self.panels[b.tag][@"tooltip"] description];
+            if ([tip isEqualToString:@"Quest Helper"] && [JVMLauncher questAvailable]) {
+                QuestHelperViewController *qh = [[QuestHelperViewController alloc] init];
+                qh.modalPresentationStyle = UIModalPresentationOverFullScreen;
+                qh.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+                [self presentViewController:qh animated:YES completion:nil];
+                return;
+            }
+        }
+        if (b.tag == self.currentIndex) {
+            [self collapsePanel];              // tapping the active icon closes the panel
+            return;
+        }
     }
+    [self selectIndex:b.tag];
 }
 
 - (void)selectIndex:(NSInteger)index {
     if (index < 0 || index >= (NSInteger)self.panels.count) return;
     self.currentIndex = index;
     self.lastSeq = -1;                         // force a re-pull
+    self.lastPanelImgSize = CGSizeZero;        // re-layout + reset zoom for the newly selected panel
     if (self.emptyLabel) self.emptyLabel.text = @"";
     self.titleLabel.text = [self.panels[index][@"tooltip"] description];
     if (self.docked) {
@@ -516,16 +546,26 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     if (!img || img.size.width < 1) return;
     self.lastSeq = seq;
     self.panelNativeW = img.size.width;
-    self.panelView.image = img;
+    self.panelView.image = img;                 // refresh content every frame (live updates)
+    // Only (re)compute the base layout when the buffer SIZE changes — re-laying out every repaint would reset
+    // the user's pinch-zoom/scroll. Same panel keeps the same buffer dimensions across repaints.
+    if (CGSizeEqualToSize(img.size, self.lastPanelImgSize)) return;
+    self.lastPanelImgSize = img.size;
     CGFloat vw = self.panelScroll.bounds.size.width;
-    if (vw < 1) return;
+    if (vw < 1) { self.lastPanelImgSize = CGSizeZero; return; }
     CGFloat oneToOne = img.size.width / UIScreen.mainScreen.scale;
-    CGFloat dispW = MIN(vw, oneToOne);
+    // Dock: fill the panel column at a consistent width regardless of the buffer's supersample scale (so a
+    // tall panel rendered at a lower scale doesn't display tiny). Legacy fullscreen: cap at 1:1 to avoid
+    // blowing a 242-wide panel across the whole screen. Either way, pinch-zoom reads the detail.
+    CGFloat dispW = self.docked ? vw : MIN(vw, oneToOne);
     CGFloat scale = dispW / img.size.width;
     CGFloat dispH = img.size.height * scale;
-    CGFloat originX = floor((vw - dispW) / 2.0);
-    self.panelView.frame = CGRectMake(originX, 0, dispW, dispH);
-    self.panelScroll.contentSize = CGSizeMake(vw, dispH);
+    self.panelScroll.zoomScale = 1.0;           // new panel/size → reset zoom
+    self.panelView.frame = CGRectMake(0, 0, dispW, dispH);
+    self.panelScroll.contentSize = CGSizeMake(dispW, dispH);
+    // Centre horizontally when the panel is narrower than the viewport (legacy fullscreen); 0 in the dock.
+    CGFloat sideInset = MAX(0.0, floor((vw - dispW) / 2.0));
+    self.panelScroll.contentInset = UIEdgeInsetsMake(0, sideInset, 0, sideInset);
 }
 
 - (void)onPanelTap:(UITapGestureRecognizer *)tap {
@@ -544,5 +584,321 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     [JVMLauncher mobileFlushConfig];
     [self dismissViewControllerAnimated:YES completion:nil];
 }
+
+@end
+
+#pragma mark - Native Quest Helper (reflowed)
+
+// A genuinely native, reflowed Quest Helper: a searchable/filterable quest list (status pills) that starts a
+// helper on tap, plus a "Current quest" view showing the active quest's current-step text and requirement
+// checklist. Data comes from QuestHelperBridge (reflection into the external plugin) via JVMLauncher; the
+// in-world step arrows still come from the plugin's own overlays on the game canvas.
+@interface QuestHelperViewController () <UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate>
+@property (nonatomic, strong) UIView *drawer;
+@property (nonatomic, strong) UISegmentedControl *modeSeg;     // Browse | Current
+@property (nonatomic, strong) UIView *browseView;
+@property (nonatomic, strong) UIView *currentView;
+@property (nonatomic, strong) UISearchBar *search;
+@property (nonatomic, strong) UISegmentedControl *statusSeg;   // All | In progress | Not started | Done
+@property (nonatomic, strong) UITableView *table;
+@property (nonatomic, strong) UILabel *currentNameLabel;
+@property (nonatomic, strong) UITextView *detailText;
+@property (nonatomic, strong) UIButton *stopButton;
+@property (nonatomic, strong) NSArray<NSDictionary *> *allQuests;
+@property (nonatomic, strong) NSArray<NSDictionary *> *filtered;
+@property (nonatomic, copy)   NSString *lastListSig;
+@property (nonatomic, strong) NSDictionary *activeDict;
+@property (nonatomic, strong) NSTimer *timer;
+@property (nonatomic, assign) BOOL didInitialMode;
+@end
+
+@implementation QuestHelperViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor clearColor];
+    [JVMLauncher questSetUiOpen:YES];
+
+    UIView *dim = [[UIView alloc] initWithFrame:self.view.bounds];
+    dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    [self.view addSubview:dim];
+    [dim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onDone)]];
+
+    self.drawer = [[UIView alloc] init];
+    self.drawer.translatesAutoresizingMaskIntoConstraints = NO;
+    self.drawer.backgroundColor = [UIColor colorWithRed:0.10 green:0.09 blue:0.07 alpha:1.0];
+    [self.view addSubview:self.drawer];
+
+    UILabel *title = [[UILabel alloc] init];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.text = @"Quest Helper";
+    title.font = [UIFont boldSystemFontOfSize:18];
+    title.textColor = [UIColor whiteColor];
+    [self.drawer addSubview:title];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    close.translatesAutoresizingMaskIntoConstraints = NO;
+    [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.titleLabel.font = [UIFont boldSystemFontOfSize:20];
+    close.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
+    [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
+    [self.drawer addSubview:close];
+
+    self.modeSeg = [[UISegmentedControl alloc] initWithItems:@[@"Browse", @"Current quest"]];
+    self.modeSeg.translatesAutoresizingMaskIntoConstraints = NO;
+    self.modeSeg.selectedSegmentIndex = 0;
+    [self.modeSeg addTarget:self action:@selector(onModeChanged) forControlEvents:UIControlEventValueChanged];
+    [self.drawer addSubview:self.modeSeg];
+
+    // ---- Browse view ----
+    self.browseView = [[UIView alloc] init];
+    self.browseView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.drawer addSubview:self.browseView];
+
+    self.search = [[UISearchBar alloc] init];
+    self.search.translatesAutoresizingMaskIntoConstraints = NO;
+    self.search.placeholder = @"Search quests";
+    self.search.delegate = self;
+    self.search.barStyle = UIBarStyleBlack;
+    self.search.searchBarStyle = UISearchBarStyleMinimal;
+    [self.browseView addSubview:self.search];
+
+    self.statusSeg = [[UISegmentedControl alloc] initWithItems:@[@"All", @"In progress", @"Not started", @"Done"]];
+    self.statusSeg.translatesAutoresizingMaskIntoConstraints = NO;
+    self.statusSeg.selectedSegmentIndex = 0;
+    [self.statusSeg addTarget:self action:@selector(applyFilter) forControlEvents:UIControlEventValueChanged];
+    [self.browseView addSubview:self.statusSeg];
+
+    self.table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+    self.table.translatesAutoresizingMaskIntoConstraints = NO;
+    self.table.backgroundColor = [UIColor clearColor];
+    self.table.dataSource = self;
+    self.table.delegate = self;
+    self.table.rowHeight = 56;
+    [self.browseView addSubview:self.table];
+
+    // ---- Current view ----
+    self.currentView = [[UIView alloc] init];
+    self.currentView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.currentView.hidden = YES;
+    [self.drawer addSubview:self.currentView];
+
+    self.currentNameLabel = [[UILabel alloc] init];
+    self.currentNameLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.currentNameLabel.font = [UIFont boldSystemFontOfSize:17];
+    self.currentNameLabel.textColor = [UIColor colorWithRed:1.0 green:0.82 blue:0.40 alpha:1.0];
+    self.currentNameLabel.numberOfLines = 0;
+    [self.currentView addSubview:self.currentNameLabel];
+
+    self.detailText = [[UITextView alloc] init];
+    self.detailText.translatesAutoresizingMaskIntoConstraints = NO;
+    self.detailText.editable = NO;
+    self.detailText.backgroundColor = [UIColor clearColor];
+    self.detailText.textColor = [UIColor colorWithWhite:0.92 alpha:1.0];
+    self.detailText.font = [UIFont systemFontOfSize:15];
+    [self.currentView addSubview:self.detailText];
+
+    self.stopButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.stopButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.stopButton setTitle:@"Stop helper" forState:UIControlStateNormal];
+    self.stopButton.tintColor = [UIColor colorWithRed:1.0 green:0.5 blue:0.45 alpha:1.0];
+    self.stopButton.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+    [self.stopButton addTarget:self action:@selector(onStop) forControlEvents:UIControlEventTouchUpInside];
+    [self.currentView addSubview:self.stopButton];
+
+    UILayoutGuide *dg = self.drawer.safeAreaLayoutGuide;
+    CGFloat drawerW = MIN(460.0, self.view.bounds.size.width * 0.55);
+    [NSLayoutConstraint activateConstraints:@[
+        [self.drawer.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [self.drawer.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [self.drawer.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.drawer.widthAnchor constraintEqualToConstant:drawerW],
+
+        [title.leadingAnchor constraintEqualToAnchor:dg.leadingAnchor constant:16],
+        [title.topAnchor constraintEqualToAnchor:dg.topAnchor constant:12],
+        [close.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
+        [close.trailingAnchor constraintEqualToAnchor:dg.trailingAnchor constant:-16],
+
+        [self.modeSeg.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:12],
+        [self.modeSeg.leadingAnchor constraintEqualToAnchor:dg.leadingAnchor constant:14],
+        [self.modeSeg.trailingAnchor constraintEqualToAnchor:dg.trailingAnchor constant:-14],
+
+        [self.browseView.topAnchor constraintEqualToAnchor:self.modeSeg.bottomAnchor constant:8],
+        [self.browseView.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor],
+        [self.browseView.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor],
+        [self.browseView.bottomAnchor constraintEqualToAnchor:self.drawer.bottomAnchor],
+
+        [self.search.topAnchor constraintEqualToAnchor:self.browseView.topAnchor],
+        [self.search.leadingAnchor constraintEqualToAnchor:self.browseView.leadingAnchor constant:8],
+        [self.search.trailingAnchor constraintEqualToAnchor:self.browseView.trailingAnchor constant:-8],
+        [self.statusSeg.topAnchor constraintEqualToAnchor:self.search.bottomAnchor constant:4],
+        [self.statusSeg.leadingAnchor constraintEqualToAnchor:self.browseView.leadingAnchor constant:14],
+        [self.statusSeg.trailingAnchor constraintEqualToAnchor:self.browseView.trailingAnchor constant:-14],
+        [self.table.topAnchor constraintEqualToAnchor:self.statusSeg.bottomAnchor constant:8],
+        [self.table.leadingAnchor constraintEqualToAnchor:self.browseView.leadingAnchor],
+        [self.table.trailingAnchor constraintEqualToAnchor:self.browseView.trailingAnchor],
+        [self.table.bottomAnchor constraintEqualToAnchor:self.browseView.safeAreaLayoutGuide.bottomAnchor],
+
+        [self.currentView.topAnchor constraintEqualToAnchor:self.modeSeg.bottomAnchor constant:12],
+        [self.currentView.leadingAnchor constraintEqualToAnchor:dg.leadingAnchor constant:16],
+        [self.currentView.trailingAnchor constraintEqualToAnchor:dg.trailingAnchor constant:-16],
+        [self.currentView.bottomAnchor constraintEqualToAnchor:dg.bottomAnchor constant:-12],
+
+        [self.currentNameLabel.topAnchor constraintEqualToAnchor:self.currentView.topAnchor],
+        [self.currentNameLabel.leadingAnchor constraintEqualToAnchor:self.currentView.leadingAnchor],
+        [self.currentNameLabel.trailingAnchor constraintEqualToAnchor:self.currentView.trailingAnchor],
+        [self.detailText.topAnchor constraintEqualToAnchor:self.currentNameLabel.bottomAnchor constant:8],
+        [self.detailText.leadingAnchor constraintEqualToAnchor:self.currentView.leadingAnchor],
+        [self.detailText.trailingAnchor constraintEqualToAnchor:self.currentView.trailingAnchor],
+        [self.detailText.bottomAnchor constraintEqualToAnchor:self.stopButton.topAnchor constant:-8],
+        [self.stopButton.leadingAnchor constraintEqualToAnchor:self.currentView.leadingAnchor],
+        [self.stopButton.bottomAnchor constraintEqualToAnchor:self.currentView.bottomAnchor],
+    ]];
+
+    [self refresh];
+    self.timer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(refresh) userInfo:nil repeats:YES];
+}
+
+- (void)onModeChanged {
+    BOOL browse = (self.modeSeg.selectedSegmentIndex == 0);
+    self.browseView.hidden = !browse;
+    self.currentView.hidden = browse;
+}
+
+- (void)refresh {
+    // Quest list (reload table only when the snapshot actually changed, to avoid clobbering scroll/typing).
+    NSString *lj = [JVMLauncher questListJson] ?: @"{}";
+    if (![lj isEqualToString:self.lastListSig]) {
+        self.lastListSig = lj;
+        NSDictionary *d = [self parseObj:lj];
+        id quests = d[@"quests"];
+        self.allQuests = [quests isKindOfClass:[NSArray class]] ? quests : @[];
+        [self applyFilter];
+    }
+    // Active quest.
+    self.activeDict = [self parseObj:[JVMLauncher questActiveJson] ?: @"{}"];
+    [self updateCurrent];
+    if (!self.didInitialMode) {
+        self.didInitialMode = YES;
+        if ([self.activeDict[@"active"] boolValue]) {
+            self.modeSeg.selectedSegmentIndex = 1;
+            [self onModeChanged];
+        }
+    }
+}
+
+- (NSDictionary *)parseObj:(NSString *)json {
+    id o = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    return [o isKindOfClass:[NSDictionary class]] ? o : @{};
+}
+
+- (void)applyFilter {
+    NSString *q = self.search.text.lowercaseString;
+    NSInteger seg = self.statusSeg.selectedSegmentIndex;
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSDictionary *quest in self.allQuests) {
+        NSString *name = [quest[@"name"] description];
+        if (q.length && [name.lowercaseString rangeOfString:q].location == NSNotFound) continue;
+        NSString *state = [quest[@"state"] description];
+        BOOL ok = YES;
+        if (seg == 1) ok = [state isEqualToString:@"IN_PROGRESS"];
+        else if (seg == 2) ok = [state isEqualToString:@"NOT_STARTED"];
+        else if (seg == 3) ok = [state isEqualToString:@"FINISHED"];
+        if (ok) [out addObject:quest];
+    }
+    self.filtered = out;
+    [self.table reloadData];
+}
+
+- (void)updateCurrent {
+    BOOL active = [self.activeDict[@"active"] boolValue];
+    if (!active) {
+        self.currentNameLabel.text = @"No quest selected";
+        self.detailText.text = @"Pick a quest in Browse and tap it to start the helper. In-world step arrows still show on the game screen.";
+        self.stopButton.hidden = YES;
+        return;
+    }
+    self.stopButton.hidden = NO;
+    self.currentNameLabel.text = [self.activeDict[@"name"] description];
+    NSMutableString *s = [NSMutableString string];
+    for (id line in (self.activeDict[@"steps"] ?: @[])) {
+        if (s.length) [s appendString:@"\n\n"];
+        [s appendString:[line description]];
+    }
+    NSArray *items = self.activeDict[@"items"];
+    if ([items isKindOfClass:[NSArray class]] && items.count) {
+        [s appendString:@"\n\n— Items —"];
+        for (id it in items) [s appendFormat:@"\n• %@", [it description]];
+    }
+    NSArray *gen = self.activeDict[@"general"];
+    if ([gen isKindOfClass:[NSArray class]] && gen.count) {
+        [s appendString:@"\n\n— Requirements —"];
+        for (id g in gen) [s appendFormat:@"\n• %@", [g description]];
+    }
+    if (s.length == 0) [s appendString:@"(no current step text)"];
+    self.detailText.text = s;
+}
+
+- (void)onStop {
+    [JVMLauncher questStop];
+}
+
+- (void)onDone {
+    [self.timer invalidate];
+    self.timer = nil;
+    [JVMLauncher questSetUiOpen:NO];
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+#pragma mark UITableView
+
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
+    return self.filtered.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
+    UITableViewCell *cell = [tv dequeueReusableCellWithIdentifier:@"q"];
+    if (!cell) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"q"];
+        cell.backgroundColor = [UIColor clearColor];
+    }
+    NSDictionary *quest = self.filtered[ip.row];
+    cell.textLabel.text = [quest[@"name"] description];
+    cell.textLabel.textColor = [UIColor whiteColor];
+    NSString *diff = [[quest[@"difficulty"] description] stringByReplacingOccurrencesOfString:@"_" withString:@" "];
+    cell.detailTextLabel.text = diff.capitalizedString;
+    cell.detailTextLabel.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
+
+    NSString *state = [quest[@"state"] description];
+    UILabel *pill = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 96, 22)];
+    pill.font = [UIFont boldSystemFontOfSize:11];
+    pill.textAlignment = NSTextAlignmentCenter;
+    pill.layer.cornerRadius = 11;
+    pill.clipsToBounds = YES;
+    pill.textColor = [UIColor blackColor];
+    if ([state isEqualToString:@"FINISHED"]) {
+        pill.text = @"Done"; pill.backgroundColor = [UIColor colorWithRed:0.45 green:0.78 blue:0.45 alpha:1.0];
+    } else if ([state isEqualToString:@"IN_PROGRESS"]) {
+        pill.text = @"In progress"; pill.backgroundColor = [UIColor colorWithRed:0.95 green:0.80 blue:0.35 alpha:1.0];
+    } else {
+        pill.text = @"Not started"; pill.backgroundColor = [UIColor colorWithWhite:0.55 alpha:1.0];
+    }
+    cell.accessoryView = pill;
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
+    [tv deselectRowAtIndexPath:ip animated:YES];
+    NSString *name = [self.filtered[ip.row][@"name"] description];
+    [JVMLauncher questStart:name];
+    self.modeSeg.selectedSegmentIndex = 1;
+    [self onModeChanged];
+}
+
+#pragma mark UISearchBar
+
+- (void)searchBar:(UISearchBar *)sb textDidChange:(NSString *)text { [self applyFilter]; }
+- (void)searchBarSearchButtonClicked:(UISearchBar *)sb { [sb resignFirstResponder]; }
 
 @end

@@ -65,6 +65,15 @@ static jmethodID gMuiPanelSeq = NULL;     // getPanelFrameSeq()I
 static jmethodID gMuiPanelPixels = NULL;  // getPanelPixels()[I
 static jmethodID gMuiPanelClick = NULL;   // panelClick(II)Ljava/lang/String;
 
+// Native Quest Helper reflow — the QuestHelperBridge facade (reflection into the external plugin).
+static jclass    gQhClass = NULL;       // global ref to net.runelite.client.headless.QuestHelperBridge
+static jmethodID gQhAvailable = NULL;   // isAvailable()Z
+static jmethodID gQhList = NULL;        // getQuestListJson()Ljava/lang/String;
+static jmethodID gQhActive = NULL;      // getQuestActiveJson()Ljava/lang/String;
+static jmethodID gQhStart = NULL;       // startQuest(Ljava/lang/String;)V
+static jmethodID gQhStop = NULL;        // stopQuest()V
+static jmethodID gQhSetOpen = NULL;     // setUiOpen(Z)V
+
 // ---- W3 plugin-config de-risk (verdict #7, NATIVE-ORIGIN leg) — STRIP AFTER DEVICE CONFIRM ----------
 // Proves the half the desktop smoke can't: that the OBJC side builds the correct signed decimal of
 // Color.getRGB(). The trap — an opaque color's getRGB() is a NEGATIVE int (top alpha bit set), and
@@ -212,6 +221,30 @@ static BOOL ensureMui(void) {
         return NO;
     }
     gMuiClass = global;   // publish only once fully resolved
+    return YES;
+}
+
+static BOOL ensureQuest(void) {
+    if (gQhClass) return YES;
+    if (!ensureBridge() || !gMainEnv) return NO;
+    JNIEnv *env = gMainEnv;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/QuestHelperBridge");
+    if (!local || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    jclass global = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    if (!global) return NO;
+    gQhAvailable = (*env)->GetStaticMethodID(env, global, "isAvailable", "()Z");
+    gQhList      = (*env)->GetStaticMethodID(env, global, "getQuestListJson", "()Ljava/lang/String;");
+    gQhActive    = (*env)->GetStaticMethodID(env, global, "getQuestActiveJson", "()Ljava/lang/String;");
+    gQhStart     = (*env)->GetStaticMethodID(env, global, "startQuest", "(Ljava/lang/String;)V");
+    gQhStop      = (*env)->GetStaticMethodID(env, global, "stopQuest", "()V");
+    gQhSetOpen   = (*env)->GetStaticMethodID(env, global, "setUiOpen", "(Z)V");
+    if (!gQhAvailable || !gQhList || !gQhActive || !gQhStart || !gQhStop || !gQhSetOpen) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteGlobalRef(env, global);
+        return NO;
+    }
+    gQhClass = global;
     return YES;
 }
 
@@ -883,6 +916,51 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     CGDataProviderRelease(provider);
     CFRelease(data);
     return img;
+}
+
+// ---- Native Quest Helper reflow (QuestHelperBridge) ------------------------------------------------
+
++ (BOOL)questAvailable {
+    if (!ensureQuest()) return NO;
+    JNIEnv *env = gMainEnv;
+    jboolean v = (*env)->CallStaticBooleanMethod(env, gQhClass, gQhAvailable);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    return v ? YES : NO;
+}
+
++ (NSString *)questListJson {
+    if (!ensureQuest()) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gQhClass, gQhList));
+}
+
++ (NSString *)questActiveJson {
+    if (!ensureQuest()) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gQhClass, gQhActive));
+}
+
++ (void)questStart:(NSString *)name {
+    if (!ensureQuest() || name == nil) return;
+    JNIEnv *env = gMainEnv;
+    jstring js = (*env)->NewStringUTF(env, name.UTF8String);
+    (*env)->CallStaticVoidMethod(env, gQhClass, gQhStart, js);
+    if (js) (*env)->DeleteLocalRef(env, js);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+}
+
++ (void)questStop {
+    if (!ensureQuest()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gQhClass, gQhStop);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+}
+
++ (void)questSetUiOpen:(BOOL)open {
+    if (!ensureQuest()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gQhClass, gQhSetOpen, (jboolean)(open ? 1 : 0));
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
 }
 
 @end

@@ -159,6 +159,25 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Dispatch a click at panel-space (x,y) into the active panel's Swing tree (buttons/checkboxes/etc.).
 + (void)mobilePanelClickX:(int)x y:(int)y;
 
+// ---- Native Quest Helper reflow (QuestHelperBridge: reflection into the external quest-helper plugin) ----
+
+/// Whether the native Quest Helper screen can be offered (plugin installed + reflectable). When NO, the dock
+/// falls back to the generic rendered-image panel.
++ (BOOL)questAvailable;
+
+/// Tell the bridge the native Quest Helper screen is open/closed (gates its client-thread snapshot refresh).
++ (void)questSetUiOpen:(BOOL)open;
+
+/// Quest catalog JSON: {available, quests:[{name,difficulty,type,state}]}. Snapshotted on the client thread.
++ (nullable NSString *)questListJson;
+
+/// Active quest JSON: {available, active, name, steps:[..], items:[..], general:[..]} or {active:false}.
++ (nullable NSString *)questActiveJson;
+
+/// Start / stop a quest helper by quest name (queued onto the client thread).
++ (void)questStart:(NSString *)name;
++ (void)questStop;
+
 @end
 
 NS_ASSUME_NONNULL_END
