@@ -42,6 +42,17 @@ static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
 static jclass    gChromeClass = NULL;   // global ref to net.runelite.client.headless.MobileChromeBridge
 static jmethodID gMidChromeSnap = NULL; // getSnapshot()Ljava/lang/String;
 
+// Phase-6 plugin/config control plane — the MobileUiBridge facade, resolved lazily on the main thread.
+static jclass    gMuiClass = NULL;      // global ref to net.runelite.client.headless.MobileUiBridge
+static jmethodID gMuiList = NULL;       // listPlugins()Ljava/lang/String;
+static jmethodID gMuiGetCfg = NULL;     // getPluginConfig(Ljava/lang/String;)Ljava/lang/String;
+static jmethodID gMuiSetEnabled = NULL; // setPluginEnabled(Ljava/lang/String;Z)Ljava/lang/String;
+static jmethodID gMuiSetCfg = NULL;     // setConfig(3x String)Ljava/lang/String;
+static jmethodID gMuiResetCfg = NULL;   // resetConfig(2x String)Ljava/lang/String;
+static jmethodID gMuiSeq = NULL;        // getMobileUiSeq()J
+static jmethodID gMuiPoll = NULL;       // pollMobileUiEvents(J)Ljava/lang/String;
+static jmethodID gMuiProcessed = NULL;  // getProcessedWriteId()J
+
 // ---- W3 plugin-config de-risk (verdict #7, NATIVE-ORIGIN leg) — STRIP AFTER DEVICE CONFIRM ----------
 // Proves the half the desktop smoke can't: that the OBJC side builds the correct signed decimal of
 // Color.getRGB(). The trap — an opaque color's getRGB() is a NEGATIVE int (top alpha bit set), and
@@ -147,6 +158,44 @@ static BOOL ensureChrome(void) {
     gMidChromeSnap = snap;
     gChromeClass = global;   // publish only once fully resolved
     return YES;
+}
+
+// Resolve + cache the MobileUiBridge facade on the calling (main) thread. Shares the JavaBridge attach.
+static BOOL ensureMui(void) {
+    if (gMuiClass) return YES;
+    if (!ensureBridge() || !gMainEnv) return NO;
+    JNIEnv *env = gMainEnv;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/MobileUiBridge");
+    if (!local || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    jclass global = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    if (!global) return NO;
+    gMuiList       = (*env)->GetStaticMethodID(env, global, "listPlugins", "()Ljava/lang/String;");
+    gMuiGetCfg     = (*env)->GetStaticMethodID(env, global, "getPluginConfig", "(Ljava/lang/String;)Ljava/lang/String;");
+    gMuiSetEnabled = (*env)->GetStaticMethodID(env, global, "setPluginEnabled", "(Ljava/lang/String;Z)Ljava/lang/String;");
+    gMuiSetCfg     = (*env)->GetStaticMethodID(env, global, "setConfig", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    gMuiResetCfg   = (*env)->GetStaticMethodID(env, global, "resetConfig", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    gMuiSeq        = (*env)->GetStaticMethodID(env, global, "getMobileUiSeq", "()J");
+    gMuiPoll       = (*env)->GetStaticMethodID(env, global, "pollMobileUiEvents", "(J)Ljava/lang/String;");
+    gMuiProcessed  = (*env)->GetStaticMethodID(env, global, "getProcessedWriteId", "()J");
+    if (!gMuiList || !gMuiGetCfg || !gMuiSetEnabled || !gMuiSetCfg || !gMuiResetCfg
+        || !gMuiSeq || !gMuiPoll || !gMuiProcessed) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteGlobalRef(env, global);
+        return NO;
+    }
+    gMuiClass = global;   // publish only once fully resolved
+    return YES;
+}
+
+// Pull a Java String return into an NSString (and free the local ref). Returns nil on null/exception.
+static NSString *jstringToNS(JNIEnv *env, jstring js) {
+    if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
+    NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
+    if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
+    (*env)->DeleteLocalRef(env, js);
+    return out;
 }
 
 @implementation JVMLauncher
@@ -370,10 +419,11 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         // toggle on EDT), overlay registers headless (Ground Items 92->146), config persists across launches,
         // PluginManager EDT asserts live. To re-run the on-device self-test, re-add:
         //   @"-Drunelite.mobileui.smoke=true", @"-ea:net.runelite.client.plugins.PluginManager",
-        // W3 plugin-config typed round-trip device confirm (verdict #7) — md5-GREEN 2026-06-01, flags stripped.
-        // To re-run, set kMuiNativeColorProbe=YES above and re-add these 3:
+        // W3 plugin-config device confirms — all md5-GREEN 2026-06-01, flags stripped:
+        //   typed round-trip (verdict #7) + bridge hardening (event/ack + getPluginConfig completeness +
+        //   reset-default), both via the MobileUiSmokeRunner bytes. To re-run the self-test, re-add:
         //   @"-Drunelite.mobileui.smoke=true", @"-ea:net.runelite.client.plugins.PluginManager",
-        //   @"-Drunelite.mobileui.nativeprobe=true",
+        //   (and -Drunelite.mobileui.nativeprobe + kMuiNativeColorProbe=YES for the native-origin color leg)
         @"-Drunelite.headless.capture.interval=10",
         @"-Drunelite.headless.capture.preLoginMax=40",  // login-screen/EULA frames before LOGGED_IN gets its
                                                         // own (MAX_FRAMES) budget; a long LOADING can't starve it
@@ -625,6 +675,76 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
     (*env)->DeleteLocalRef(env, js);
     return out;
+}
+
+// ---- Phase 6 (W3): plugin-management + config panel facade wrappers --------------------------------
+
++ (NSString *)mobilePlugins {
+    if (!ensureMui()) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiList));
+}
+
++ (NSString *)mobilePluginConfig:(NSString *)group {
+    if (!ensureMui() || group == nil) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring jg = (*env)->NewStringUTF(env, group.UTF8String);
+    NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiGetCfg, jg));
+    (*env)->DeleteLocalRef(env, jg);
+    return out;
+}
+
++ (NSString *)mobileSetPluginEnabled:(NSString *)className enabled:(BOOL)enabled {
+    if (!ensureMui() || className == nil) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring jc = (*env)->NewStringUTF(env, className.UTF8String);
+    NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiSetEnabled,
+                                                                             jc, (jboolean)(enabled ? JNI_TRUE : JNI_FALSE)));
+    (*env)->DeleteLocalRef(env, jc);
+    return out;
+}
+
++ (NSString *)mobileSetConfigGroup:(NSString *)group key:(NSString *)key value:(NSString *)value {
+    if (!ensureMui() || group == nil || key == nil || value == nil) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring jg = (*env)->NewStringUTF(env, group.UTF8String);
+    jstring jk = (*env)->NewStringUTF(env, key.UTF8String);
+    jstring jv = (*env)->NewStringUTF(env, value.UTF8String);
+    NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiSetCfg, jg, jk, jv));
+    (*env)->DeleteLocalRef(env, jg); (*env)->DeleteLocalRef(env, jk); (*env)->DeleteLocalRef(env, jv);
+    return out;
+}
+
++ (NSString *)mobileResetConfigGroup:(NSString *)group key:(NSString *)key {
+    if (!ensureMui() || group == nil || key == nil) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring jg = (*env)->NewStringUTF(env, group.UTF8String);
+    jstring jk = (*env)->NewStringUTF(env, key.UTF8String);
+    NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiResetCfg, jg, jk));
+    (*env)->DeleteLocalRef(env, jg); (*env)->DeleteLocalRef(env, jk);
+    return out;
+}
+
++ (long long)mobileUiSeq {
+    if (!ensureMui()) return 0;
+    JNIEnv *env = gMainEnv;
+    jlong v = (*env)->CallStaticLongMethod(env, gMuiClass, gMuiSeq);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0; }
+    return (long long)v;
+}
+
++ (NSString *)mobilePollEventsSince:(long long)sinceSeq {
+    if (!ensureMui()) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiPoll, (jlong)sinceSeq));
+}
+
++ (long long)mobileProcessedWriteId {
+    if (!ensureMui()) return 0;
+    JNIEnv *env = gMainEnv;
+    jlong v = (*env)->CallStaticLongMethod(env, gMuiClass, gMuiProcessed);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0; }
+    return (long long)v;
 }
 
 @end

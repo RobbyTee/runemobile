@@ -95,6 +95,39 @@ typedef void (^JVMLogSink)(NSString *line);
 /// rails and to find a tab stone's centre to proxy a tap into. Call on the main thread.
 + (nullable NSString *)chromeSnapshot;
 
+// ---- Phase 6 (W3): native plugin-management + config panel (reverse JNI -> MobileUiBridge) -----------
+// All call the Java-owned control-plane facade (gated -Drunelite.mobileui). Reads return JSON snapshots
+// to parse once per panel open; writes are fire-and-forget onto the correct Java thread (EDT for plugin
+// lifecycle, client thread for config) and return an ack JSON. Call on the main thread.
+
+/// Plugin list snapshot (MobileUiBridge.listPlugins): array of {className,name,description,enabled,active,
+/// hasConfig,developer,configGroup}. nil before the VM/facade is up.
++ (nullable NSString *)mobilePlugins;
+
+/// Config descriptor for one group (MobileUiBridge.getPluginConfig): {group,items:[{key,name,type,value,
+/// secret,…}]} with hidden items omitted and secret values masked. nil if unavailable.
++ (nullable NSString *)mobilePluginConfig:(NSString *)group;
+
+/// Enable/disable a plugin by class name (MobileUiBridge.setPluginEnabled — EDT lane). Returns the ack JSON.
++ (nullable NSString *)mobileSetPluginEnabled:(NSString *)className enabled:(BOOL)enabled;
+
+/// Write one already-serialized config value (MobileUiBridge.setConfig — client-thread lane). Ack JSON
+/// carries {ok,writeId}; poll +mobileProcessedWriteId for completion.
++ (nullable NSString *)mobileSetConfigGroup:(NSString *)group key:(NSString *)key value:(NSString *)value;
+
+/// Reset one config item to its default (MobileUiBridge.resetConfig — client-thread lane). Ack JSON.
++ (nullable NSString *)mobileResetConfigGroup:(NSString *)group key:(NSString *)key;
+
+/// Latest event sequence (MobileUiBridge.getMobileUiSeq) — the panel stores this and polls for a bump to
+/// know when to re-read (config/plugin changed, including changes it didn't make).
++ (long long)mobileUiSeq;
+
+/// Events since `sinceSeq` as JSON (MobileUiBridge.pollMobileUiEvents): {seq, events:[{seq,kind,group,key}]}.
++ (nullable NSString *)mobilePollEventsSince:(long long)sinceSeq;
+
+/// Highest processed write id (MobileUiBridge.getProcessedWriteId) — the fire-and-forget write ack.
++ (long long)mobileProcessedWriteId;
+
 @end
 
 NS_ASSUME_NONNULL_END

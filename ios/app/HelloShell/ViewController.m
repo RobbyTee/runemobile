@@ -3,7 +3,7 @@
 #import <unistd.h>
 #import <fcntl.h>
 
-@interface ViewController () <UITextFieldDelegate>
+@interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate>
 {
     // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
     // desktop stone. A C array, so it lives as an ivar rather than a property.
@@ -67,6 +67,15 @@
 @property (nonatomic, strong) NSMutableArray<UIView *> *stoneCovers;
 @property (nonatomic, strong) UIButton *chromeToggle;
 @property (nonatomic, assign) BOOL chromeVisible;
+// Phase-6 native plugin panel: a ⚙ button opens a full-screen modal sheet (scrim eats all touches so nothing
+// falls through to the game) listing the plugins (MobileUiBridge.listPlugins) with an enable/disable switch
+// and a running/stopped indicator. Refreshed when the bridge's event sequence advances (toggles, conflicts).
+@property (nonatomic, strong) UIButton *pluginButton;
+@property (nonatomic, strong) UIView *pluginPanel;
+@property (nonatomic, strong) UITableView *pluginTable;
+@property (nonatomic, strong) NSArray<NSDictionary *> *pluginList;
+@property (nonatomic, assign) long long pluginSeq;     // last MobileUiBridge event seq the panel has seen
+@property (nonatomic, assign) BOOL pluginPanelOpen;
 @end
 
 // AWT virtual keycodes for the non-text keys we synthesize (java.awt.event.KeyEvent.VK_*).
@@ -277,6 +286,18 @@ static const CGFloat kTabStrip = 46.0;
                 forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.chromeToggle];
 
+    // Plugin/config panel opener — a ⚙ gear, left of the ▦ chrome toggle. Separate from the ≡ debug panel.
+    self.pluginButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.pluginButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.pluginButton setTitle:@"⚙" forState:UIControlStateNormal];
+    self.pluginButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
+    self.pluginButton.tintColor = [UIColor whiteColor];
+    self.pluginButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
+    self.pluginButton.layer.cornerRadius = 8;
+    [self.pluginButton addTarget:self action:@selector(onOpenPluginPanel)
+                forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.pluginButton];
+
     UILayoutGuide *g = self.view.safeAreaLayoutGuide;
     UILayoutGuide *sg = self.screen.safeAreaLayoutGuide;
     UILayoutGuide *p = self.debugPanel.layoutMarginsGuide;
@@ -308,6 +329,12 @@ static const CGFloat kTabStrip = 46.0;
         [self.chromeToggle.widthAnchor constraintEqualToConstant:44],
         [self.chromeToggle.heightAnchor constraintEqualToConstant:36],
 
+        // Plugin panel opener (⚙), just left of the ▦ chrome toggle.
+        [self.pluginButton.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
+        [self.pluginButton.trailingAnchor constraintEqualToAnchor:self.chromeToggle.leadingAnchor constant:-8],
+        [self.pluginButton.widthAnchor constraintEqualToConstant:44],
+        [self.pluginButton.heightAnchor constraintEqualToConstant:36],
+
         // Debug panel — left ~62% of the safe area, full height, below the toggle row.
         [self.debugPanel.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
         [self.debugPanel.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:8],
@@ -333,6 +360,157 @@ static const CGFloat kTabStrip = 46.0;
 
 - (void)onToggleDebug {
     self.debugPanel.hidden = !self.debugPanel.hidden;
+}
+
+#pragma mark - Plugin/config panel (Phase 6)
+
+// Build the modal sheet once: a full-screen scrim (eats every touch so nothing reaches the game) holding a
+// titled card with a close button and the plugin table. Added on top of all chrome.
+- (void)buildPluginPanel {
+    if (self.pluginPanel) return;
+
+    self.pluginPanel = [[UIView alloc] initWithFrame:self.view.bounds];
+    self.pluginPanel.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.pluginPanel.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.55]; // scrim
+    self.pluginPanel.userInteractionEnabled = YES;                              // consume all touches
+    self.pluginPanel.hidden = YES;
+
+    UIView *card = [[UIView alloc] init];
+    card.translatesAutoresizingMaskIntoConstraints = NO;
+    card.backgroundColor = [UIColor colorWithRed:0.10 green:0.09 blue:0.07 alpha:0.98]; // dark OSRS tone
+    card.layer.cornerRadius = 12;
+    card.clipsToBounds = YES;
+    [self.pluginPanel addSubview:card];
+
+    UILabel *title = [[UILabel alloc] init];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.text = @"Plugins";
+    title.font = [UIFont boldSystemFontOfSize:18];
+    title.textColor = [UIColor whiteColor];
+    [card addSubview:title];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    close.translatesAutoresizingMaskIntoConstraints = NO;
+    [close setTitle:@"Done" forState:UIControlStateNormal];
+    close.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    close.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
+    [close addTarget:self action:@selector(onClosePluginPanel) forControlEvents:UIControlEventTouchUpInside];
+    [card addSubview:close];
+
+    self.pluginTable = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+    self.pluginTable.translatesAutoresizingMaskIntoConstraints = NO;
+    self.pluginTable.backgroundColor = [UIColor clearColor];
+    self.pluginTable.dataSource = self;
+    self.pluginTable.delegate = self;
+    self.pluginTable.rowHeight = 56;
+    [card addSubview:self.pluginTable];
+
+    [self.view addSubview:self.pluginPanel];
+
+    UILayoutGuide *sg = self.view.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [card.topAnchor constraintEqualToAnchor:sg.topAnchor constant:10],
+        [card.bottomAnchor constraintEqualToAnchor:sg.bottomAnchor constant:-10],
+        [card.leadingAnchor constraintEqualToAnchor:sg.leadingAnchor constant:24],
+        [card.trailingAnchor constraintEqualToAnchor:sg.trailingAnchor constant:-24],
+
+        [title.topAnchor constraintEqualToAnchor:card.topAnchor constant:14],
+        [title.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
+        [close.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
+        [close.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
+
+        [self.pluginTable.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:10],
+        [self.pluginTable.leadingAnchor constraintEqualToAnchor:card.leadingAnchor],
+        [self.pluginTable.trailingAnchor constraintEqualToAnchor:card.trailingAnchor],
+        [self.pluginTable.bottomAnchor constraintEqualToAnchor:card.bottomAnchor],
+    ]];
+}
+
+- (void)onOpenPluginPanel {
+    [self buildPluginPanel];
+    [self refreshPluginList];
+    self.pluginSeq = [JVMLauncher mobileUiSeq];
+    [self.view bringSubviewToFront:self.pluginPanel];
+    self.pluginPanel.hidden = NO;
+    self.pluginPanelOpen = YES;
+    [self appendLine:[NSString stringWithFormat:@"[plugins] panel open (%lu plugins, seq=%lld)",
+                      (unsigned long)self.pluginList.count, self.pluginSeq]];
+}
+
+- (void)onClosePluginPanel {
+    self.pluginPanel.hidden = YES;
+    self.pluginPanelOpen = NO;
+}
+
+// Read listPlugins() once, parse the JSON array, sort by name, reload the table.
+- (void)refreshPluginList {
+    NSString *json = [JVMLauncher mobilePlugins];
+    NSArray *arr = nil;
+    if (json.length) {
+        NSError *err = nil;
+        id parsed = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding]
+                                                    options:0 error:&err];
+        if ([parsed isKindOfClass:[NSArray class]]) arr = parsed;
+    }
+    if (arr) {
+        self.pluginList = [arr sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+            NSString *na = [a[@"name"] description] ?: @"";
+            NSString *nb = [b[@"name"] description] ?: @"";
+            return [na caseInsensitiveCompare:nb];
+        }];
+    } else {
+        self.pluginList = @[];
+    }
+    [self.pluginTable reloadData];
+}
+
+#pragma mark UITableView
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    return (NSInteger)self.pluginList.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *cid = @"pluginCell";
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:cid];
+    if (!cell) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:cid];
+        cell.backgroundColor = [UIColor clearColor];
+        cell.textLabel.textColor = [UIColor whiteColor];
+        UISwitch *sw = [[UISwitch alloc] init];
+        [sw addTarget:self action:@selector(onPluginSwitch:) forControlEvents:UIControlEventValueChanged];
+        cell.accessoryView = sw;
+    }
+    NSDictionary *p = self.pluginList[(NSUInteger)indexPath.row];
+    BOOL enabled = [p[@"enabled"] boolValue];
+    BOOL active  = [p[@"active"] boolValue];
+    cell.textLabel.text = [p[@"name"] description];
+    if (enabled && active) {
+        cell.detailTextLabel.text = @"● running";
+        cell.detailTextLabel.textColor = [UIColor colorWithRed:0.45 green:0.85 blue:0.40 alpha:1.0];
+    } else if (enabled && !active) {
+        cell.detailTextLabel.text = @"○ enabled (starting…)";
+        cell.detailTextLabel.textColor = [UIColor colorWithRed:0.95 green:0.80 blue:0.30 alpha:1.0];
+    } else {
+        cell.detailTextLabel.text = @"○ disabled";
+        cell.detailTextLabel.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
+    }
+    UISwitch *sw = (UISwitch *)cell.accessoryView;
+    sw.tag = indexPath.row;
+    [sw setOn:enabled animated:NO];
+    return cell;
+}
+
+// Toggle a plugin: drive MobileUiBridge.setPluginEnabled (EDT lane). The resulting PluginChanged bumps the
+// event sequence, so onDisplayTick re-reads the list and the running/stopped indicator settles.
+- (void)onPluginSwitch:(UISwitch *)sender {
+    NSInteger row = sender.tag;
+    if (row < 0 || row >= (NSInteger)self.pluginList.count) return;
+    NSDictionary *p = self.pluginList[(NSUInteger)row];
+    NSString *className = [p[@"className"] description];
+    NSString *ack = [JVMLauncher mobileSetPluginEnabled:className enabled:sender.isOn];
+    [self appendLine:[NSString stringWithFormat:@"[plugins] %@ -> %@ : %@",
+                      p[@"name"], sender.isOn ? @"enable" : @"disable", ack ?: @"(nil)"]];
 }
 
 #pragma mark - Logging
@@ -707,6 +885,17 @@ static const CGFloat kTabStrip = 46.0;
     // and the JSON read is cheap). Skipped entirely when the rails are toggled off.
     if (self.chromeVisible && self.framesShown % 6 == 0) {
         [self updateChrome];
+    }
+
+    // Plugin panel: while open, re-read the list when the bridge's event sequence advances (a toggle's
+    // PluginChanged, or a conflict disabling another plugin) so enabled/active state stays truthful. Cheap:
+    // a single long read + a string compare ~10 Hz, only while the modal is up.
+    if (self.pluginPanelOpen && self.framesShown % 6 == 0) {
+        long long seq = [JVMLauncher mobileUiSeq];
+        if (seq != self.pluginSeq) {
+            self.pluginSeq = seq;
+            [self refreshPluginList];
+        }
     }
 
     // Contextual keyboard: when the gamepack opens a text field (search / PM / enter-amount), raise the
