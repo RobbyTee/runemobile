@@ -322,6 +322,8 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"-Drunelite.mobilechrome=true",             // W3 hybrid-chrome: arm the read-only MobileChromeBridge
                                                      // snapshot (tab/panel/minimap/orb/chat/viewport bounds).
                                                      // NOT the .probe gate — that mutates and is desktop-only.
+        // NOTE: -Drunelite.mobilechrome.repos was tried and REVERTED — repositioned stones over the world are
+        // occluded by the 3D viewport (only the mobile 601 toplevel draws tabs above it). Native rails it is.
         // Phase-6 STEP-0 device smoke confirmed GREEN (2026-06-01): lanes separate (config on client thread,
         // toggle on EDT), overlay registers headless (Ground Items 92->146), config persists across launches,
         // PluginManager EDT asserts live. To re-run the on-device self-test, re-add:

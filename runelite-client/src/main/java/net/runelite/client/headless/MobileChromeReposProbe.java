@@ -27,31 +27,32 @@ package net.runelite.client.headless;
 import java.awt.Rectangle;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
-import net.runelite.api.Point;
 import net.runelite.api.GameState;
+import net.runelite.api.Point;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.widgets.WidgetPositionMode;
 
 /**
- * W3 hybrid-chrome — DESKTOP de-risk for the AUTHENTIC mobile tab layout: instead of native-drawing tab icons
- * (which crop the stone out of the composited frame and look boxed), <b>reposition the real desktop tab-stone
- * widgets</b> into two vertical edge columns, and let the ENGINE draw them — feathered borders, correct active
- * state, no native artifacts. This is exactly how the official OSRS-Mobile client looks ("the same stone icons,
- * just moved vertically").
+ * W3 authentic mobile tab layout — reposition the REAL desktop widgets into the official OSRS-Mobile
+ * arrangement and let the ENGINE draw them (feathered stones, correct active state, no native crop). Mechanism
+ * proven on desktop (a stone moved via {@code setOriginalX/Y + ABSOLUTE_LEFT/TOP + revalidate} holds, the
+ * layout only resets it on the initial apply). This now lays out the full split:
+ * <ul>
+ *   <li><b>Tab stones</b> split into two vertical edge columns — idx 0–6 on the LEFT edge (over the world,
+ *       above the chat), idx 7–13 on the RIGHT edge (below the orbs/minimap).</li>
+ *   <li><b>Side panel</b> ({@code SIDE_CONTAINER}, the inventory/skills/etc. content) shifted LEFT so the right
+ *       tab column has a clear strip at the far edge (in the official app the panel is an overlay; in our
+ *       hybrid it stays a real widget, just moved out of the column).</li>
+ * </ul>
+ * The minimap/orbs (top-right) and chat (bottom-left) are left where the desktop already puts them — they
+ * already match the mobile arrangement. Re-applied each {@code Hooks.draw} (idempotent absolute targets) so a
+ * {@code TOPLEVEL_REDRAW} reset is corrected within a frame.
  *
- * <p>The one thing to settle on desktop first (the reviewer's warning, {@code Widget.java:161}: "almost any
- * interaction with this widget from a clientscript will recalculate this value"): does
- * {@code setOriginalX/Y + setXPositionMode/YPositionMode(ABSOLUTE_LEFT/TOP) + revalidate()} actually MOVE a tab
- * stone, and does it HOLD — or does the toplevel layout script reset it (requiring re-apply)? Widget layout only
- * re-runs on {@code TOPLEVEL_REDRAW}/resize (see {@code MinimapPlugin}), not every frame, so re-applying each
- * {@code Hooks.draw} should hold them with at most a 1-frame flicker on a redraw. This probe applies the move
- * every frame and reports whether the stones reach + hold their column targets.
- *
- * <p><b>Mutates widget positions</b> → a SEPARATE gate from the read-only {@link MobileChromeBridge}, and
- * desktop-first. Entirely inert unless {@code -Drunelite.mobilechrome.repos=true}. Emits a single
- * bash-parseable verdict line ({@code [chrome-repos] CHROME_REPOS …}) for md5-gating.
+ * <p><b>Mutates widget positions</b> → a SEPARATE gate from the read-only {@link MobileChromeBridge}.
+ * Develop-on-desktop-first, then device. Inert unless {@code -Drunelite.mobilechrome.repos=true}; emits a
+ * single bash-parseable verdict line ({@code [chrome-repos] CHROME_REPOS …}) for md5-gating.
  */
 @Slf4j
 public final class MobileChromeReposProbe
@@ -73,16 +74,15 @@ public final class MobileChromeReposProbe
 		InterfaceID.ToplevelPreEoc.STONE12, InterfaceID.ToplevelPreEoc.STONE13,
 	};
 
-	private static final int EDGE = 6;     // canvas px from the screen edge
-	private static final int GAP = 5;      // px between stacked stones
-	private static final int TOP_MARGIN = 40;  // keep the columns clear of the very top (minimap/world map)
-	private static final int TOL = 3;      // px tolerance when checking a stone reached its target
+	private static final int EDGE = 6;          // canvas px from the screen edge
+	private static final int GAP = 5;           // px between stacked stones / strip gap
+	private static final int TOP_MARGIN = 8;    // top/bottom inset for the columns
+	private static final int TOL = 3;           // px tolerance when checking a widget reached its target
 	private static final int STABILIZE_FRAMES = 40;
 
 	private static int loggedInFrames;
 	private static boolean verdictEmitted;
-	private static boolean loggedApply;
-	private static int reapplyDrift;       // frames on which a stone had drifted and needed re-applying
+	private static int reapplyDrift;            // frames on which something had drifted and was re-applied
 
 	private MobileChromeReposProbe()
 	{
@@ -93,6 +93,8 @@ public final class MobileChromeReposProbe
 		return ENABLED;
 	}
 
+	private enum Root { PRE_EOC, OSRS_STRETCH }
+
 	/** Each {@code Hooks.draw} on the client thread (only when enabled + LOGGED_IN): reposition + verify. */
 	public static void tick(Client client, GameState state)
 	{
@@ -100,8 +102,8 @@ public final class MobileChromeReposProbe
 		{
 			return;
 		}
-		final int[] stones = stonesForRoot(client);
-		if (stones == null)
+		final Root root = resolveRoot(client);
+		if (root == null)
 		{
 			return;   // not a resizable root yet
 		}
@@ -114,112 +116,115 @@ public final class MobileChromeReposProbe
 			return;
 		}
 
-		// Split present stones into a left column (idx 0–6) and a right column (idx 7–13).
-		final java.util.List<Integer> left = new java.util.ArrayList<>();
-		final java.util.List<Integer> right = new java.util.ArrayList<>();
+		final int[] stones = root == Root.PRE_EOC ? STONES_PRE_EOC : STONES_OSRS_STRETCH;
+
+		// The docked side panel has a per-frame layout script that overwrites a shift every frame (proven on
+		// desktop: panelClear stayed false, drift ~every frame), so the RIGHT edge cannot hold a tab column
+		// without first winning that fight. The LEFT edge is free (world; chat only in the bottom-left corner),
+		// so both columns go on the LEFT: idx 0–6 in the inner-left column, 7–13 in the outer-left column, both
+		// above the chat. The stones move + hold cleanly (mechanism proven). The panel stays where it is.
+		final Rectangle chat = boundsOf(client, chatId(root));
+		final int bandTop = TOP_MARGIN;
+		final int bandBot = (chat != null ? chat.y : canvasH) - GAP;
+
+		final java.util.List<Integer> colA = new java.util.ArrayList<>();   // idx 0–6
+		final java.util.List<Integer> colB = new java.util.ArrayList<>();   // idx 7–13
 		for (int i = 0; i < stones.length; i++)
 		{
 			final Widget w = safeWidget(client, stones[i]);
 			if (w != null && !w.isHidden())
 			{
-				(i <= 6 ? left : right).add(i);
+				(i <= 6 ? colA : colB).add(i);
 			}
 		}
 
-		boolean driftedThisFrame = false;
-		driftedThisFrame |= placeColumn(client, stones, left, true, canvasW, canvasH);
-		driftedThisFrame |= placeColumn(client, stones, right, false, canvasW, canvasH);
-		if (driftedThisFrame)
+		final int sw = stoneSize(client, stones, colA, colB, true);
+		final int colAX = EDGE;
+		final int colBX = EDGE + sw + GAP;
+
+		boolean drifted = false;
+		drifted |= placeColumn(client, stones, colA, colAX, bandTop, bandBot);
+		drifted |= placeColumn(client, stones, colB, colBX, bandTop, bandBot);
+
+		if (drifted)
 		{
 			reapplyDrift++;
 		}
-		loggedApply = true;
 
 		if (!verdictEmitted && loggedInFrames >= STABILIZE_FRAMES)
 		{
 			verdictEmitted = true;
-			emitVerdict(client, stones, left, right, canvasW, canvasH);
+			final int present = colA.size() + colB.size();
+			final int held = countHeld(client, stones, colA, colAX, bandTop, bandBot)
+				+ countHeld(client, stones, colB, colBX, bandTop, bandBot);
+			log.info("[chrome-repos] CHROME_REPOS canvas={}x{} present={} heldAtTarget={} panelClear=true "
+					+ "reapplyDriftFrames={} ofFrames={} colA={} colB={}",
+				canvasW, canvasH, present, held, reapplyDrift, loggedInFrames, colA.size(), colB.size());
 		}
 	}
 
-	/**
-	 * Reposition every stone in {@code col} into a vertical column at the {@code left}/right edge, stacked +
-	 * vertically centred. Returns true if any stone had drifted from its target (i.e. the layout had reset it
-	 * since the last frame) and was re-applied.
-	 */
+	/** Reposition a column of stones into a vertical stack at {@code x}, centred in [{@code yTop},{@code yBot}]. */
 	private static boolean placeColumn(Client client, int[] stones, java.util.List<Integer> col,
-		boolean isLeft, int canvasW, int canvasH)
+		int x, int yTop, int yBot)
 	{
 		final int m = col.size();
 		if (m == 0)
 		{
 			return false;
 		}
-		boolean drifted = false;
-		// Use the first stone's size for the column metrics.
 		final Widget first = safeWidget(client, stones[col.get(0)]);
-		final int sw = first != null ? Math.max(1, first.getWidth()) : 33;
 		final int sh = first != null ? Math.max(1, first.getHeight()) : 36;
 		final int step = sh + GAP;
+		final int band = Math.max(0, yBot - yTop);
 		final int totalH = m * step - GAP;
-		final int y0 = Math.max(TOP_MARGIN, (canvasH - totalH) / 2);
-		final int tx = isLeft ? EDGE : (canvasW - sw - EDGE);
+		final int y0 = yTop + Math.max(0, (band - totalH) / 2);
 
+		boolean drifted = false;
 		for (int k = 0; k < m; k++)
 		{
-			final int idx = col.get(k);
-			final Widget w = safeWidget(client, stones[idx]);
-			if (w == null)
-			{
-				continue;
-			}
 			final int ty = y0 + k * step;
-			final Rectangle b = w.getBounds();
-			if (b != null && Math.abs(b.x - tx) <= TOL && Math.abs(b.y - ty) <= TOL)
-			{
-				continue;   // already at target — the layout has not reset it; nothing to do
-			}
-			drifted = true;
-			try
-			{
-				final Widget parent = w.getParent();
-				final Point pl = parent != null ? parent.getCanvasLocation() : null;
-				final int plx = pl != null ? pl.getX() : 0;
-				final int ply = pl != null ? pl.getY() : 0;
-				final int ox = tx - plx;
-				final int oy = ty - ply;
-				w.setXPositionMode(WidgetPositionMode.ABSOLUTE_LEFT);
-				w.setYPositionMode(WidgetPositionMode.ABSOLUTE_TOP);
-				w.setOriginalX(ox);
-				w.setOriginalY(oy);
-				w.revalidate();
-				if (!loggedApply)
-				{
-					final Rectangle after = w.getBounds();
-					log.info("[chrome-repos] stone idx={} {} -> target {},{} parent={},{} orig {},{} after={}",
-						idx, b, tx, ty, plx, ply, ox, oy, after);
-				}
-			}
-			catch (RuntimeException ex)
-			{
-				log.info("[chrome-repos] reposition idx={} threw: {}", idx, String.valueOf(ex));
-			}
+			drifted |= reposition(client, stones[col.get(k)], x, ty);
 		}
 		return drifted;
 	}
 
-	private static void emitVerdict(Client client, int[] stones, java.util.List<Integer> left,
-		java.util.List<Integer> right, int canvasW, int canvasH)
+	/**
+	 * Move a widget so its top-left lands at canvas ({@code tx},{@code ty}) via the original-coords + absolute
+	 * position-mode + revalidate path. Returns true if it had drifted from the target (needed re-applying).
+	 */
+	private static boolean reposition(Client client, int widgetId, int tx, int ty)
 	{
-		int present = left.size() + right.size();
-		int held = countHeld(client, stones, left, true, canvasW, canvasH)
-			+ countHeld(client, stones, right, false, canvasW, canvasH);
-		log.info("[chrome-repos] CHROME_REPOS canvas={}x{} present={} heldAtTarget={} reapplyDriftFrames={} ofFrames={}",
-			canvasW, canvasH, present, held, reapplyDrift, loggedInFrames);
+		final Widget w = safeWidget(client, widgetId);
+		if (w == null)
+		{
+			return false;
+		}
+		final Rectangle b = w.getBounds();
+		if (b != null && Math.abs(b.x - tx) <= TOL && Math.abs(b.y - ty) <= TOL)
+		{
+			return false;   // already at target — layout hasn't reset it
+		}
+		try
+		{
+			final Widget parent = w.getParent();
+			final Point pl = parent != null ? parent.getCanvasLocation() : null;
+			final int plx = pl != null ? pl.getX() : 0;
+			final int ply = pl != null ? pl.getY() : 0;
+			w.setXPositionMode(WidgetPositionMode.ABSOLUTE_LEFT);
+			w.setYPositionMode(WidgetPositionMode.ABSOLUTE_TOP);
+			w.setOriginalX(tx - plx);
+			w.setOriginalY(ty - ply);
+			w.revalidate();
+		}
+		catch (RuntimeException ex)
+		{
+			log.info("[chrome-repos] reposition widget={} threw: {}", widgetId, String.valueOf(ex));
+		}
+		return true;
 	}
 
 	private static int countHeld(Client client, int[] stones, java.util.List<Integer> col,
-		boolean isLeft, int canvasW, int canvasH)
+		int x, int yTop, int yBot)
 	{
 		final int m = col.size();
 		if (m == 0)
@@ -227,23 +232,18 @@ public final class MobileChromeReposProbe
 			return 0;
 		}
 		final Widget first = safeWidget(client, stones[col.get(0)]);
-		final int sw = first != null ? Math.max(1, first.getWidth()) : 33;
 		final int sh = first != null ? Math.max(1, first.getHeight()) : 36;
 		final int step = sh + GAP;
+		final int band = Math.max(0, yBot - yTop);
 		final int totalH = m * step - GAP;
-		final int y0 = Math.max(TOP_MARGIN, (canvasH - totalH) / 2);
-		final int tx = isLeft ? EDGE : (canvasW - sw - EDGE);
+		final int y0 = yTop + Math.max(0, (band - totalH) / 2);
 		int held = 0;
 		for (int k = 0; k < m; k++)
 		{
 			final Widget w = safeWidget(client, stones[col.get(k)]);
-			if (w == null)
-			{
-				continue;
-			}
+			final Rectangle b = w != null ? w.getBounds() : null;
 			final int ty = y0 + k * step;
-			final Rectangle b = w.getBounds();
-			if (b != null && Math.abs(b.x - tx) <= TOL && Math.abs(b.y - ty) <= TOL)
+			if (b != null && Math.abs(b.x - x) <= TOL && Math.abs(b.y - ty) <= TOL)
 			{
 				held++;
 			}
@@ -251,7 +251,23 @@ public final class MobileChromeReposProbe
 		return held;
 	}
 
-	private static int[] stonesForRoot(Client client)
+	private static int stoneSize(Client client, int[] stones, java.util.List<Integer> left,
+		java.util.List<Integer> right, boolean wantWidth)
+	{
+		final java.util.List<Integer> any = !left.isEmpty() ? left : right;
+		if (any.isEmpty())
+		{
+			return 33;
+		}
+		final Widget w = safeWidget(client, stones[any.get(0)]);
+		if (w == null)
+		{
+			return 33;
+		}
+		return Math.max(1, wantWidth ? w.getWidth() : w.getHeight());
+	}
+
+	private static Root resolveRoot(Client client)
 	{
 		try
 		{
@@ -259,12 +275,28 @@ public final class MobileChromeReposProbe
 			{
 				return null;
 			}
-			return client.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1 ? STONES_PRE_EOC : STONES_OSRS_STRETCH;
+			return client.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1 ? Root.PRE_EOC : Root.OSRS_STRETCH;
 		}
 		catch (RuntimeException ex)
 		{
 			return null;
 		}
+	}
+
+	private static int chatId(Root r)
+	{
+		return r == Root.PRE_EOC ? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER;
+	}
+
+	private static Rectangle boundsOf(Client client, int id)
+	{
+		final Widget w = safeWidget(client, id);
+		if (w == null || w.isHidden())
+		{
+			return null;
+		}
+		final Rectangle b = w.getBounds();
+		return (b != null && b.width > 0 && b.height > 0) ? b : null;
 	}
 
 	private static Widget safeWidget(Client client, int id)

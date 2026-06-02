@@ -34,16 +34,18 @@ echo
 echo "== md5-gated verdict =="
 VLINE="$(grep -E '\[chrome-repos\] CHROME_REPOS ' "$LOG" | tail -1 || true)"
 field() { printf '%s\n' "$1" | grep -oE "$2=[0-9x]+" | head -1 | cut -d= -f2 || true; }
+fieldb() { printf '%s\n' "$1" | grep -oE "$2=(true|false)" | head -1 | cut -d= -f2 || true; }
 PRESENT="$(field "$VLINE" present)"
 HELD="$(field "$VLINE" heldAtTarget)"
 DRIFT="$(field "$VLINE" reapplyDriftFrames)"
 CANVAS="$(field "$VLINE" canvas)"
+PANELCLEAR="$(fieldb "$VLINE" panelClear)"
 
 REPOS_OK=no
-if [ -n "$VLINE" ] && [ -n "$PRESENT" ] && [ "$PRESENT" -ge 1 ] && [ "$HELD" = "$PRESENT" ]; then
+if [ -n "$VLINE" ] && [ -n "$PRESENT" ] && [ "$PRESENT" -ge 1 ] && [ "$HELD" = "$PRESENT" ] && [ "$PANELCLEAR" = "true" ]; then
   REPOS_OK=yes
 fi
-COMBINED="REPOS_OK=${REPOS_OK};PRESENT=${PRESENT};HELD=${HELD};DRIFT=${DRIFT};CANVAS=${CANVAS}"
+COMBINED="REPOS_OK=${REPOS_OK};PRESENT=${PRESENT};HELD=${HELD};PANELCLEAR=${PANELCLEAR};DRIFT=${DRIFT};CANVAS=${CANVAS}"
 echo "COMBINED=$COMBINED"
 MD5="$(printf '%s' "$COMBINED" | md5 -q 2>/dev/null || printf '%s' "$COMBINED" | md5sum | cut -d' ' -f1)"
 echo "MD5=$MD5"
