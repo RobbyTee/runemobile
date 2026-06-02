@@ -479,7 +479,9 @@ static const CGFloat kTabStrip = 46.0;
         NSArray *bb = (NSArray *)t;
         int x = [bb[0] intValue], y = [bb[1] intValue], w = [bb[2] intValue], h = [bb[3] intValue];
         _tabCentres[i] = CGPointMake(x + w / 2.0, y + h / 2.0);
-        [(i <= 6 ? left : right) addObject:@(i)];
+        // Columns flipped: the gameplay tabs (idx 0–6: combat/stats/inventory/...) go to the RIGHT strip
+        // (flush against the side panel they open), the social/system tabs (idx 7–13) to the LEFT.
+        [(i <= 6 ? right : left) addObject:@(i)];
     }
 
     const CGFloat cell = 38.0, gap = 5.0;
