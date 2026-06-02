@@ -447,6 +447,13 @@ public class Hooks implements Callbacks
 			// Gated -Drunelite.mobilechrome.hidetest=true.
 			net.runelite.client.headless.MobileChromeHideTest.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.MenuPeek.isEnabled())
+		{
+			// Touch-targeting de-risk: prove the press-and-peek menu-peek primitive (synth MOUSE_MOVED ->
+			// read getMenuEntries() a cycle later) on the client thread. Read-only (no press/click/menuAction);
+			// one-shot; gated -Drunelite.menupeek=true. Desktop develop-first before any native touch UI.
+			net.runelite.client.headless.MenuPeek.tick(client, client.getGameState());
+		}
 
 		if (graphics == null)
 		{
