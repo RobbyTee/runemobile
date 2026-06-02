@@ -478,11 +478,24 @@ static NSString * const kKbSentinel = @"​";
         [(i <= 6 ? left : right) addObject:@(i)];
     }
 
-    // Flush against the screen edges (edge=0): left column at x=0, right column hard against the right edge.
-    const CGFloat cell = 40.0, gap = 5.0, edge = 0.0;
+    const CGFloat cell = 40.0, gap = 5.0;
     CGRect sb = self.screen.bounds;
-    [self layoutColumn:left x:edge cell:cell gap:gap tabs:tabs active:active inBounds:sb];
-    [self layoutColumn:right x:(sb.size.width - cell - edge) cell:cell gap:gap tabs:tabs active:active inBounds:sb];
+
+    // Left column flush against the left edge (over the world).
+    [self layoutColumn:left x:0.0 cell:cell gap:gap tabs:tabs active:active inBounds:sb];
+
+    // Right column flush against the LEFT edge of the open side panel, so the panel sits flush against the
+    // tabs and the tabs never cover it (the desktop panel is docked at the screen edge and resists moving, so
+    // we move the tabs to it instead). Falls back to the screen edge when no panel is shown.
+    CGFloat rightX = sb.size.width - cell;
+    id sc = [d[@"sideContainer"] isKindOfClass:[NSArray class]] ? d[@"sideContainer"]
+          : ([d[@"sidePanel"] isKindOfClass:[NSArray class]] ? d[@"sidePanel"] : nil);
+    if ([sc isKindOfClass:[NSArray class]] && [(NSArray *)sc count] >= 4) {
+        NSArray *p = (NSArray *)sc;
+        CGRect pv = [self viewRectForGameX:[p[0] intValue] y:[p[1] intValue] w:[p[2] intValue] h:[p[3] intValue]];
+        if (pv.size.width > 0) rightX = pv.origin.x - cell - gap;
+    }
+    [self layoutColumn:right x:rightX cell:cell gap:gap tabs:tabs active:active inBounds:sb];
 }
 
 // Place one edge column of tab cells, vertically centred in the game view.
