@@ -449,16 +449,22 @@ static const CGFloat kTabStrip = 46.0;
     self.pluginTable.dataSource = self;
     self.pluginTable.delegate = self;
     self.pluginTable.rowHeight = 56;
-    // The tiny iOS-26 switch was unreliable to tap inside a scroll view (the scroll kept stealing the touch).
-    // Instead the WHOLE ROW toggles the plugin (a big, reliable target) and the switch is a pure indicator;
-    // delaysContentTouches=NO just makes that row tap feel immediate. Scrolling is back to normal (we no longer
-    // force canCancelContentTouches, which had disabled scroll entirely).
+    // Drive row interaction with our OWN gesture recognizers, not the table's selection — the table's built-in
+    // tap-to-select arbitrates with the scroll view's pan and fired only intermittently. allowsSelection=NO so
+    // nothing competes: a tap recognizer (forgiving slop) toggles, a long-press opens config, drags still
+    // scroll. cancelsTouchesInView=NO so they never swallow a scroll/other touch.
     self.pluginTable.delaysContentTouches = NO;
+    self.pluginTable.allowsSelection = NO;
     [card addSubview:self.pluginTable];
 
-    // Long-press a row to open that plugin's config (tap = toggle, so config moves to long-press).
+    UITapGestureRecognizer *rowTap = [[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onPluginRowTap:)];
+    rowTap.cancelsTouchesInView = NO;
+    [self.pluginTable addGestureRecognizer:rowTap];
+
     UILongPressGestureRecognizer *cfgLp = [[UILongPressGestureRecognizer alloc]
         initWithTarget:self action:@selector(onPluginRowLongPress:)];
+    cfgLp.cancelsTouchesInView = NO;
     [self.pluginTable addGestureRecognizer:cfgLp];
 
     [self.view addSubview:self.pluginPanel];
@@ -577,10 +583,11 @@ static const CGFloat kTabStrip = 46.0;
     return (NSInteger)self.pluginList.count;
 }
 
-// Tap a plugin row -> toggle it on/off (the reliable big-target action). Long-press opens config.
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    [self togglePluginAtRow:indexPath.row];
+// Tap a plugin row -> toggle it on/off (a forgiving tap recognizer, not the table's flaky selection).
+- (void)onPluginRowTap:(UITapGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateEnded) return;
+    NSIndexPath *ip = [self.pluginTable indexPathForRowAtPoint:[g locationInView:self.pluginTable]];
+    if (ip) [self togglePluginAtRow:ip.row];
 }
 
 
