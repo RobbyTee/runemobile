@@ -78,7 +78,14 @@
 @property (nonatomic, strong) NSArray<NSDictionary *> *pluginList;
 @property (nonatomic, assign) long long pluginSeq;     // last MobileUiBridge event seq the panel has seen
 @property (nonatomic, assign) BOOL pluginPanelOpen;
+// className -> CFAbsoluteTime when we first saw it enabled-but-not-active, so a plugin that never reaches
+// running (e.g. a native-lib/GPU plugin whose macOS .dylib can't load on iOS) flips from "enabling…" to
+// "couldn't start" after a grace period instead of spinning forever.
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *pluginEnabledSince;
 @end
+
+// Grace period before an enabled-but-not-active plugin is reported as failed to start.
+static const NSTimeInterval kPluginStartGrace = 4.0;
 
 // AWT virtual keycodes for the non-text keys we synthesize (java.awt.event.KeyEvent.VK_*).
 static const int AWT_VK_BACK_SPACE = 8;
@@ -444,6 +451,7 @@ static const CGFloat kTabStrip = 46.0;
 
 - (void)onOpenPluginPanel {
     [self buildPluginPanel];
+    if (!self.pluginEnabledSince) self.pluginEnabledSince = [NSMutableDictionary dictionary];
     [self refreshPluginList];
     self.pluginSeq = [JVMLauncher mobileUiSeq];
     [self.view bringSubviewToFront:self.pluginPanel];
@@ -490,6 +498,19 @@ static const CGFloat kTabStrip = 46.0;
         }];
     } else {
         self.pluginList = @[];
+    }
+    // Maintain the enabled-but-not-active timers: start one when a plugin is first seen pending, clear it
+    // once it's running or disabled.
+    const CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    for (NSDictionary *p in self.pluginList) {
+        NSString *cls = [p[@"className"] description];
+        if (!cls) continue;
+        BOOL pending = [p[@"enabled"] boolValue] && ![p[@"active"] boolValue];
+        if (pending) {
+            if (!self.pluginEnabledSince[cls]) self.pluginEnabledSince[cls] = @(now);
+        } else {
+            [self.pluginEnabledSince removeObjectForKey:cls];
+        }
     }
     [self.pluginTable reloadData];
 }
@@ -539,7 +560,16 @@ static const CGFloat kTabStrip = 46.0;
     if (enabled && active) {
         status = @"● running"; statusColor = [UIColor colorWithRed:0.45 green:0.85 blue:0.40 alpha:1.0];
     } else if (enabled && !active) {
-        status = @"○ enabled (starting…)"; statusColor = [UIColor colorWithRed:0.95 green:0.80 blue:0.30 alpha:1.0];
+        // Pending until the grace period elapses; after that, treat as failed to start (native-lib/GPU plugins
+        // whose macOS .dylib can't load on iOS never reach running).
+        NSNumber *since = self.pluginEnabledSince[[p[@"className"] description] ?: @""];
+        BOOL graceElapsed = since && (CFAbsoluteTimeGetCurrent() - since.doubleValue) > kPluginStartGrace;
+        if (graceElapsed) {
+            status = @"✕ couldn't start (incompatible)";
+            statusColor = [UIColor colorWithRed:0.95 green:0.45 blue:0.40 alpha:1.0];
+        } else {
+            status = @"○ enabling…"; statusColor = [UIColor colorWithRed:0.95 green:0.80 blue:0.30 alpha:1.0];
+        }
     } else {
         status = @"○ disabled"; statusColor = [UIColor colorWithWhite:0.6 alpha:1.0];
     }
@@ -560,6 +590,11 @@ static const CGFloat kTabStrip = 46.0;
     NSDictionary *p = self.pluginList[(NSUInteger)row];
     NSString *className = [p[@"className"] description];
     NSString *ack = [JVMLauncher mobileSetPluginEnabled:className enabled:sender.isOn];
+    // Start/clear the grace timer from the user action (before the next refresh observes it).
+    if (className) {
+        if (sender.isOn) self.pluginEnabledSince[className] = @(CFAbsoluteTimeGetCurrent());
+        else [self.pluginEnabledSince removeObjectForKey:className];
+    }
     [self appendLine:[NSString stringWithFormat:@"[plugins] %@ -> %@ : %@",
                       p[@"name"], sender.isOn ? @"enable" : @"disable", ack ?: @"(nil)"]];
 }
@@ -946,6 +981,10 @@ static const CGFloat kTabStrip = 46.0;
         if (seq != self.pluginSeq) {
             self.pluginSeq = seq;
             [self refreshPluginList];
+        } else {
+            // No event, but re-render so a pending plugin's "enabling…" flips to "couldn't start" once the
+            // time-based grace elapses (the native-lib start failure is async and may emit no event).
+            [self.pluginTable reloadData];
         }
     }
 

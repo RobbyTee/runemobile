@@ -60,8 +60,11 @@
     self.table.backgroundColor = [UIColor clearColor];
     self.table.dataSource = self;
     self.table.delegate = self;
-    self.table.rowHeight = UITableViewAutomaticDimension;
-    self.table.estimatedRowHeight = 72;
+    // Fixed row height (NOT UITableViewAutomaticDimension): with ~1700 rows the estimated-height path
+    // mis-sizes the content and rows drift out from under the finger (taps hit the wrong plugin). A fixed
+    // height keeps hit-testing aligned. The 2-line description truncates.
+    self.table.rowHeight = 68;
+    self.table.estimatedRowHeight = 0;
     self.table.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
     [self.view addSubview:self.table];
 
