@@ -143,9 +143,8 @@ static NSString * const kKbSentinel = @"​";
         tb.tag = i;
         tb.hidden = YES;
         tb.imageView.contentMode = UIViewContentModeScaleAspectFit;
-        tb.contentEdgeInsets = UIEdgeInsetsMake(7, 7, 7, 7);   // pad the glyph inside the cell (mobile look)
-        tb.layer.cornerRadius = 9;
-        tb.clipsToBounds = YES;
+        tb.contentEdgeInsets = UIEdgeInsetsZero;   // the stone fills the cell; its own rounded shape shows
+        tb.clipsToBounds = NO;
         [tb addTarget:self action:@selector(onTabButton:) forControlEvents:UIControlEventTouchUpInside];
         [self.screen addSubview:tb];
         [self.tabButtons addObject:tb];
@@ -402,7 +401,7 @@ static NSString * const kKbSentinel = @"​";
 - (UIImage *)cropIconX:(int)x y:(int)y w:(int)w h:(int)h {
     UIImage *img = self.screen.image;
     if (img == nil || img.CGImage == NULL) return nil;
-    const CGFloat inset = 7.0;   // crop inside the stone bevel so mostly the icon glyph survives
+    const CGFloat inset = 0.0;   // FULL stone (rounded background + icon) — it reads as the real tab
     CGRect r = CGRectMake(x + inset, y + inset, MAX(1.0, w - 2 * inset), MAX(1.0, h - 2 * inset));
     CGRect bounds = CGRectMake(0, 0, img.size.width, img.size.height);
     r = CGRectIntersection(r, bounds);
@@ -470,11 +469,14 @@ static NSString * const kKbSentinel = @"​";
         int bx = [bb[0] intValue], by = [bb[1] intValue], bw = [bb[2] intValue], bh = [bb[3] intValue];
         btn.frame = CGRectMake(x, y0 + k * (cell + gap), cell, cell);
         [btn setImage:[self cropIconX:bx y:by w:bw h:bh] forState:UIControlStateNormal];
+        // No cell background and no square clip: draw the cropped stone raw so its own rounded shape shows.
+        // The engine already renders the active tab's stone RED (vs grey inactive), so the crop carries the
+        // active state — no separate highlight is needed beyond a faint outline for clarity.
+        btn.backgroundColor = [UIColor clearColor];
         BOOL isActive = ((int)i == active);
-        btn.backgroundColor = isActive ? [UIColor colorWithRed:0.80 green:0.45 blue:0.10 alpha:0.85]
-                                       : [UIColor colorWithWhite:0.0 alpha:0.55];
         btn.layer.borderWidth = isActive ? 1.5 : 0.0;
-        btn.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.9].CGColor;
+        btn.layer.cornerRadius = isActive ? 8.0 : 0.0;
+        btn.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.85].CGColor;
         btn.hidden = NO;
     }
 }
