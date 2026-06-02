@@ -506,7 +506,6 @@ public final class JavaBridge
 			}
 			final int r = snapRadius();
 			final Pick actors = new Pick();
-			final Pick objects = new Pick();
 
 			for (Actor a : wv.npcs())
 			{
@@ -517,57 +516,18 @@ public final class JavaBridge
 				actors.consider(a, a.getConvexHull(), x, y, r);
 			}
 
-			final Scene scene = wv.getScene();
-			final int plane = wv.getPlane();
-			final Tile[][][] tiles = scene == null ? null : scene.getTiles();
-			if (tiles != null && plane >= 0 && plane < tiles.length)
-			{
-				for (Tile[] row : tiles[plane])
-				{
-					if (row == null)
-					{
-						continue;
-					}
-					for (Tile tile : row)
-					{
-						if (tile == null)
-						{
-							continue;
-						}
-						final GameObject[] gos = tile.getGameObjects();
-						if (gos != null)
-						{
-							for (GameObject go : gos)
-							{
-								if (go != null)
-								{
-									objects.consider(go, go.getClickbox(), x, y, r);
-								}
-							}
-						}
-						considerObjPick(objects, tile.getWallObject(), x, y, r);
-						considerObjPick(objects, tile.getGroundObject(), x, y, r);
-						considerObjPick(objects, tile.getDecorativeObject(), x, y, r);
-					}
-				}
-			}
-
-			// Actor preference: containing actor > containing object > nearest actor > nearest object.
+			// Snap + outline ACTORS only. Scene objects are intentionally excluded: in a busy scene their
+			// clickboxes blanket the ground and most are non-interactive clutter (decorations/ground objects),
+			// so snapping to the nearest one wrapped a yellow outline around things you don't interact with on a
+			// plain walk. Tapping directly ON an interactive object still works via the engine's exact-pixel hit
+			// (the literal click below), and the walk destination is shown by RuneLite's Tile Indicators plugin.
 			if (actors.contain != null)
 			{
 				return new SnapTarget((Actor) actors.contain, null, new int[]{x, y}, true);
 			}
-			if (objects.contain != null)
-			{
-				return new SnapTarget(null, (TileObject) objects.contain, new int[]{x, y}, true);
-			}
 			if (actors.nearest != null)
 			{
 				return new SnapTarget((Actor) actors.nearest, null, hullCentroid(actors.nearestShape), false);
-			}
-			if (objects.nearest != null)
-			{
-				return new SnapTarget(null, (TileObject) objects.nearest, hullCentroid(objects.nearestShape), false);
 			}
 			return null;
 		}
@@ -575,14 +535,6 @@ public final class JavaBridge
 		{
 			log.debug("[snap] resolveSnapTarget failed", ex);
 			return null;
-		}
-	}
-
-	private static void considerObjPick(Pick p, TileObject o, int x, int y, int r)
-	{
-		if (o != null)
-		{
-			p.consider(o, o.getClickbox(), x, y, r);
 		}
 	}
 
