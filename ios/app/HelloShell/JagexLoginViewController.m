@@ -1,4 +1,4 @@
-#import "JagexLoginSpikeViewController.h"
+#import "JagexLoginViewController.h"
 #import <WebKit/WebKit.h>
 
 // ── Jagex OAuth constants — verbatim from ios/dev-tools/fetch-shield-tokens.sh (Stage A consent flow) ──
@@ -16,7 +16,7 @@ static NSString *const kLauncherUA =
     @"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
     @"JagexLauncher/2.4.4 Chrome/120.0.0.0 Safari/537.36";
 
-@interface JagexLoginSpikeViewController () <WKNavigationDelegate>
+@interface JagexLoginViewController () <WKNavigationDelegate>
 @property (nonatomic, strong) WKWebView *web;
 @property (nonatomic, strong) UITextView *logView;
 @property (nonatomic, copy)   NSString *nonce;
@@ -24,7 +24,7 @@ static NSString *const kLauncherUA =
 @property (nonatomic, assign) BOOL captured;   // handle the redirect exactly once
 @end
 
-@implementation JagexLoginSpikeViewController
+@implementation JagexLoginViewController
 
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -40,7 +40,7 @@ static NSString *const kLauncherUA =
 
     UILabel *title = [UILabel new];
     title.translatesAutoresizingMaskIntoConstraints = NO;
-    title.text = @"Jagex login (spike)";
+    title.text = @"Log in with Jagex";
     title.textColor = [UIColor whiteColor];
     title.font = [UIFont boldSystemFontOfSize:15];
     [bar addSubview:title];
@@ -51,14 +51,18 @@ static NSString *const kLauncherUA =
     [close addTarget:self action:@selector(onClose) forControlEvents:UIControlEventTouchUpInside];
     [bar addSubview:close];
 
-    // Embedded login web view.
+    // Embedded login web view. Use an EPHEMERAL data store so each login starts with NO Jagex cookies —
+    // otherwise the IdP auto-authenticates the last account from a warm SSO cookie and you can't switch
+    // accounts. Staying logged in between launches is carried by tokens.json (the game session), not by
+    // persisted web cookies, so a clean web session here costs nothing.
     WKWebViewConfiguration *cfg = [WKWebViewConfiguration new];
+    cfg.websiteDataStore = [WKWebsiteDataStore nonPersistentDataStore];
     self.web = [[WKWebView alloc] initWithFrame:CGRectZero configuration:cfg];
     self.web.translatesAutoresizingMaskIntoConstraints = NO;
     self.web.navigationDelegate = self;
     [self.view addSubview:self.web];
 
-    // Verdict / progress strip.
+    // Progress / verdict strip.
     self.logView = [UITextView new];
     self.logView.translatesAutoresizingMaskIntoConstraints = NO;
     self.logView.editable = NO;
@@ -86,10 +90,10 @@ static NSString *const kLauncherUA =
         [self.logView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.logView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [self.logView.bottomAnchor constraintEqualToAnchor:g.bottomAnchor],
-        [self.logView.heightAnchor constraintEqualToConstant:150],
+        [self.logView.heightAnchor constraintEqualToConstant:96],
     ]];
 
-    [self log:@"Stage A — loading Jagex consent login…"];
+    [self log:@"Loading Jagex login…"];
     [self loadConsent];
 }
 
@@ -129,19 +133,26 @@ static NSString *const kLauncherUA =
 - (void)webView:(WKWebView *)webView
     didFailProvisionalNavigation:(WKNavigation *)navigation
                        withError:(NSError *)error {
-    if (error.code == NSURLErrorCancelled) return;   // our own cancel of the localhost nav
+    if ([self isBenignCancel:error]) return;   // our own cancel of the localhost redirect
     [self log:[NSString stringWithFormat:@"nav error: %@", error.localizedDescription]];
 }
 
+// The cancel we issue for the localhost redirect surfaces as NSURLErrorCancelled (-999) or
+// WebKitErrorDomain 102 ("Frame load interrupted") — both expected, not a real failure.
+- (BOOL)isBenignCancel:(NSError *)error {
+    if (error.code == NSURLErrorCancelled) return YES;
+    if ([error.domain isEqualToString:@"WebKitErrorDomain"] && error.code == 102) return YES;
+    return NO;
+}
+
 - (void)handleConsentRedirect:(NSURL *)url {
-    [self log:@"✓ caught redirect to localhost"];
     NSString *frag = url.fragment ?: @"";
     NSString *idToken = [self valueFor:@"id_token" in:frag];
     if (idToken.length == 0) {
-        [self log:[NSString stringWithFormat:@"✗ no id_token in fragment (frag len=%lu)", (unsigned long)frag.length]];
+        [self log:[NSString stringWithFormat:@"✗ no id_token in redirect (frag len=%lu)", (unsigned long)frag.length]];
         return;
     }
-    [self log:[NSString stringWithFormat:@"✓ id_token captured (len=%lu)", (unsigned long)idToken.length]];
+    [self log:@"✓ authenticated — minting game session…"];
     self.web.hidden = YES;
     [self fetchSessionWithIdToken:idToken];
 }
@@ -149,7 +160,6 @@ static NSString *const kLauncherUA =
 #pragma mark - Game-session API (native URLSession)
 
 - (void)fetchSessionWithIdToken:(NSString *)idToken {
-    [self log:@"POST /game-session/v1/sessions …"];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:kSessionsURL]];
     req.HTTPMethod = @"POST";
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
@@ -159,7 +169,7 @@ static NSString *const kLauncherUA =
 
     [[NSURLSession.sharedSession dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (error) { [self log:[NSString stringWithFormat:@"✗ sessions error: %@", error.localizedDescription]]; return; }
+            if (error) { [self log:[NSString stringWithFormat:@"✗ session error: %@", error.localizedDescription]]; return; }
             NSInteger code = [(NSHTTPURLResponse *)resp statusCode];
             id obj = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
             NSString *sessionId = [obj isKindOfClass:NSDictionary.class] ? obj[@"sessionId"] : nil;
@@ -167,14 +177,12 @@ static NSString *const kLauncherUA =
                 [self log:[NSString stringWithFormat:@"✗ no sessionId (HTTP %ld): %@", (long)code, [self snippet:data]]];
                 return;
             }
-            [self log:[NSString stringWithFormat:@"✓ sessionId (len=%lu, HTTP %ld)", (unsigned long)sessionId.length, (long)code]];
             [self fetchAccountsWithSession:sessionId];
         });
     }] resume];
 }
 
 - (void)fetchAccountsWithSession:(NSString *)sessionId {
-    [self log:@"GET /game-session/v2/accounts …"];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:kAccountsURL]];
     [req setValue:[NSString stringWithFormat:@"Bearer %@", sessionId] forHTTPHeaderField:@"Authorization"];
     [req setValue:@"application/json" forHTTPHeaderField:@"Accept"];
@@ -185,21 +193,52 @@ static NSString *const kLauncherUA =
             if (error) { [self log:[NSString stringWithFormat:@"✗ accounts error: %@", error.localizedDescription]]; return; }
             NSInteger code = [(NSHTTPURLResponse *)resp statusCode];
             id arr = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-            if (![arr isKindOfClass:NSArray.class]) {
-                [self log:[NSString stringWithFormat:@"✗ accounts not an array (HTTP %ld): %@", (long)code, [self snippet:data]]];
+            if (![arr isKindOfClass:NSArray.class] || [arr count] == 0) {
+                [self log:[NSString stringWithFormat:@"✗ no characters (HTTP %ld): %@", (long)code, [self snippet:data]]];
                 return;
             }
-            [self log:[NSString stringWithFormat:@"✓ %lu character(s) (HTTP %ld):", (unsigned long)[arr count], (long)code]];
-            for (NSDictionary *a in arr) {
-                if (![a isKindOfClass:NSDictionary.class]) continue;
-                NSString *name = a[@"displayName"] ?: @"<no displayName>";
-                NSString *acc  = a[@"accountId"]   ?: @"?";
-                [self log:[NSString stringWithFormat:@"   • %@   (accountId=%@)", name, acc]];
-            }
-            [self log:@""];
-            [self log:@"VERDICT: LOGIN-SPIKE GREEN — the phone minted a session + character list."];
+            [self log:[NSString stringWithFormat:@"✓ %lu character(s) — choose one:", (unsigned long)[arr count]]];
+            [self presentPickerForAccounts:arr session:sessionId];
         });
     }] resume];
+}
+
+#pragma mark - Character picker
+
+- (void)presentPickerForAccounts:(NSArray *)accounts session:(NSString *)sessionId {
+    if (accounts.count == 1) {           // single character — no need to ask
+        [self finishWithSession:sessionId account:accounts[0] accounts:accounts];
+        return;
+    }
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Choose character"
+                                                                  message:nil
+                                                           preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSDictionary *a in accounts) {
+        if (![a isKindOfClass:NSDictionary.class]) continue;
+        [sheet addAction:[UIAlertAction actionWithTitle:[self labelForAccount:a]
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *x) {
+            [self finishWithSession:sessionId account:a accounts:accounts];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    // iPhone-only target → action sheet presents without a popover anchor.
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (NSString *)labelForAccount:(NSDictionary *)a {
+    NSString *name = a[@"displayName"];
+    if (name.length) return name;
+    NSString *acc = a[@"accountId"] ?: @"";
+    return [NSString stringWithFormat:@"Unnamed character (…%@)",
+            acc.length > 4 ? [acc substringFromIndex:acc.length - 4] : acc];
+}
+
+- (void)finishWithSession:(NSString *)sessionId account:(NSDictionary *)a accounts:(NSArray *)accounts {
+    NSString *accId = a[@"accountId"] ?: @"";
+    NSString *name  = a[@"displayName"] ?: @"";
+    [self log:[NSString stringWithFormat:@"✓ selected %@", name.length ? name : @"(unnamed)"]];
+    if (self.onComplete) self.onComplete(sessionId, accId, name, accounts);
 }
 
 #pragma mark - helpers
@@ -233,20 +272,13 @@ static NSString *const kLauncherUA =
     return s.length > 300 ? [[s substringToIndex:300] stringByAppendingString:@"…"] : s;
 }
 
-// Only ever receives redacted lines (lengths / display names / verdicts) — never a raw token.
+// Only ever receives redacted lines (status / display names / verdicts) — never a raw token.
 - (void)log:(NSString *)line {
-    NSLog(@"[login-spike] %@", line);
+    NSLog(@"[login] %@", line);
     if (self.onLog) self.onLog(line);
     self.logView.text = self.logView.text.length
         ? [NSString stringWithFormat:@"%@\n%@", self.logView.text, line] : line;
     [self.logView scrollRangeToVisible:NSMakeRange(self.logView.text.length, 0)];
-
-    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    NSString *path = [docs stringByAppendingPathComponent:@"login-spike.log"];
-    NSString *entry = [line stringByAppendingString:@"\n"];
-    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
-    if (!fh) { [entry writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]; }
-    else     { [fh seekToEndOfFile]; [fh writeData:[entry dataUsingEncoding:NSUTF8StringEncoding]]; [fh closeFile]; }
 }
 
 - (void)onClose {

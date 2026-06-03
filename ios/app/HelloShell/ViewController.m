@@ -3,7 +3,8 @@
 #import "PluginConfigViewController.h"
 #import "PluginHubViewController.h"
 #import "PluginPanelsViewController.h"
-#import "JagexLoginSpikeViewController.h"
+#import "JagexLoginViewController.h"
+#import <WebKit/WebKit.h>
 #import <unistd.h>
 #import <fcntl.h>
 
@@ -20,9 +21,12 @@
 // W3 hybrid-chrome device de-risk: read the MobileChromeBridge snapshot + proxy a tab switch via the proven
 // JavaBridge.onClick, logging a md5-gateable verdict. The seam proof before native rails are drawn.
 @property (nonatomic, strong) UIButton *chromeButton;
-// Login-UX spike: opens an embedded Jagex OAuth login (WKWebView) to mint a session on-device. Needs no
-// JVM/JIT, so it's enabled from launch (not gated on StikDebug attach).
-@property (nonatomic, strong) UIButton *loginSpikeButton;
+// On-device Jagex login: opens an embedded OAuth login (WKWebView), mints a session, writes tokens.json.
+// Pure native (no JVM/JIT) so it's enabled from launch, not gated on StikDebug attach.
+@property (nonatomic, strong) UIButton *loginButton;
+// Log out: clears tokens.json (disarms autologin) + purges any persisted Jagex web cookies. Shown only
+// when a session is saved.
+@property (nonatomic, strong) UIButton *logoutButton;
 // Collapsible debug overlay: a small always-on-top toggle shows/hides a panel holding the status,
 // launch/canary buttons and the log console, so the game stays full-screen.
 @property (nonatomic, strong) UIView *debugPanel;
@@ -282,13 +286,23 @@ static const CGFloat kTabStrip = 46.0;
                 forControlEvents:UIControlEventTouchUpInside];
     [self.debugPanel addSubview:self.chromeButton];
 
-    self.loginSpikeButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.loginSpikeButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.loginSpikeButton setTitle:@"Jagex login (spike)" forState:UIControlStateNormal];
-    self.loginSpikeButton.titleLabel.font = [UIFont systemFontOfSize:15];
-    [self.loginSpikeButton addTarget:self action:@selector(onLoginSpike)
-                    forControlEvents:UIControlEventTouchUpInside];
-    [self.debugPanel addSubview:self.loginSpikeButton];
+    self.loginButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.loginButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.loginButton setTitle:@"Log in with Jagex" forState:UIControlStateNormal];
+    self.loginButton.titleLabel.font = [UIFont systemFontOfSize:15];
+    [self.loginButton addTarget:self action:@selector(onLoginWithJagex)
+               forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.loginButton];
+
+    self.logoutButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.logoutButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.logoutButton setTitle:@"Log out" forState:UIControlStateNormal];
+    self.logoutButton.titleLabel.font = [UIFont systemFontOfSize:15];
+    self.logoutButton.tintColor = [UIColor systemRedColor];
+    self.logoutButton.hidden = YES;   // refreshLoginButton reveals it when a session is saved
+    [self.logoutButton addTarget:self action:@selector(onLogout)
+                forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.logoutButton];
 
     self.console = [[UITextView alloc] init];
     self.console.translatesAutoresizingMaskIntoConstraints = NO;
@@ -388,26 +402,109 @@ static const CGFloat kTabStrip = 46.0;
         [self.canaryButton.leadingAnchor constraintEqualToAnchor:self.launchButton.trailingAnchor constant:24],
         [self.chromeButton.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor constant:6],
         [self.chromeButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
-        [self.loginSpikeButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
-        [self.loginSpikeButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
-        [self.console.topAnchor constraintEqualToAnchor:self.loginSpikeButton.bottomAnchor constant:6],
+        [self.loginButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
+        [self.loginButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
+        [self.logoutButton.centerYAnchor constraintEqualToAnchor:self.loginButton.centerYAnchor],
+        [self.logoutButton.leadingAnchor constraintEqualToAnchor:self.loginButton.trailingAnchor constant:16],
+        [self.console.topAnchor constraintEqualToAnchor:self.loginButton.bottomAnchor constant:6],
         [self.console.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.console.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
         [self.console.bottomAnchor constraintEqualToAnchor:p.bottomAnchor],
     ]];
+
+    [self refreshLoginButton];   // reflect any already-saved session on the button title
 }
 
 - (void)onToggleDebug {
     self.debugPanel.hidden = !self.debugPanel.hidden;
 }
 
-// Login-UX spike: present the embedded Jagex OAuth login. Pure native (no JVM) — provable without StikDebug.
-- (void)onLoginSpike {
-    JagexLoginSpikeViewController *vc = [[JagexLoginSpikeViewController alloc] init];
+// On-device Jagex login: present the embedded OAuth login, and on success persist the chosen character to
+// tokens.json — exactly the file loadJagexTokens (JVMLauncher) reads to arm autologin. Pure native (no
+// JVM), so this works before any StikDebug attach: log in here, then attach + Start JVM to play.
+- (void)onLoginWithJagex {
+    JagexLoginViewController *vc = [JagexLoginViewController new];
     vc.modalPresentationStyle = UIModalPresentationFullScreen;
     __weak typeof(self) ws = self;
     vc.onLog = ^(NSString *line) { [ws appendLine:[@"[login] " stringByAppendingString:line]]; };
+    vc.onComplete = ^(NSString *sessionId, NSString *accountId, NSString *displayName, NSArray *accounts) {
+        [ws persistTokensSession:sessionId account:accountId display:displayName accounts:accounts];
+        [ws refreshLoginButton];
+        [vc dismissViewControllerAnimated:YES completion:nil];
+    };
     [self presentViewController:vc animated:YES completion:nil];
+}
+
+// Write Documents/tokens.json in the shape loadJagexTokens reads. Stage A only → access/refresh empty
+// (the gamepack mints its own play token from session_id + chosen_account_id). File-protected at rest;
+// never bundled or committed (it's the per-device secret).
+- (void)persistTokensSession:(NSString *)sessionId account:(NSString *)accountId
+                     display:(NSString *)display accounts:(NSArray *)accounts {
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSString *path = [docs stringByAppendingPathComponent:@"tokens.json"];
+    NSDictionary *t = @{
+        @"session_id":          sessionId  ?: @"",
+        @"chosen_account_id":   accountId  ?: @"",
+        @"chosen_display_name": display    ?: @"",
+        @"accounts":            accounts   ?: @[],
+        @"access_token":  @"",
+        @"refresh_token": @"",
+        @"notes": @"Minted on-device by JagexLoginViewController (Stage A). access/refresh empty; the "
+                  @"gamepack mints its own play token from session_id + chosen_account_id.",
+    };
+    NSError *err = nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:t options:NSJSONWritingPrettyPrinted error:&err];
+    if (!data) {
+        [self appendLine:[@"[login] tokens.json encode failed: " stringByAppendingString:err.localizedDescription ?: @"?"]];
+        return;
+    }
+    BOOL ok = [data writeToFile:path
+                        options:(NSDataWritingAtomic | NSDataWritingFileProtectionComplete)
+                          error:&err];
+    [self appendLine:ok
+        ? [NSString stringWithFormat:@"[login] tokens.json written — logged in as %@. Attach StikDebug, then Start JVM.",
+           display.length ? display : @"(unnamed)"]
+        : [NSString stringWithFormat:@"[login] tokens.json write FAILED: %@", err.localizedDescription ?: @"?"]];
+}
+
+// Reflect the saved login on the button title so the user can see they're signed in (and re-login if needed).
+- (void)refreshLoginButton {
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSData *data = [NSData dataWithContentsOfFile:[docs stringByAppendingPathComponent:@"tokens.json"]];
+    id o = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    NSDictionary *t = [o isKindOfClass:[NSDictionary class]] ? o : nil;
+    NSString *sid  = [t[@"session_id"] isKindOfClass:[NSString class]] ? t[@"session_id"] : nil;
+    NSString *name = [t[@"chosen_display_name"] isKindOfClass:[NSString class]] ? t[@"chosen_display_name"] : nil;
+    NSString *title = sid.length
+        ? (name.length ? [NSString stringWithFormat:@"Logged in: %@  ·  re-login", name] : @"Logged in  ·  re-login")
+        : @"Log in with Jagex";
+    [self.loginButton setTitle:title forState:UIControlStateNormal];
+    self.logoutButton.hidden = (sid.length == 0);
+}
+
+// Log out: delete the saved game session (so autologin won't fire) and purge any persisted Jagex web
+// cookies from older builds (the login webview itself is now ephemeral, so it leaves none going forward).
+- (void)onLogout {
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSString *path = [docs stringByAppendingPathComponent:@"tokens.json"];
+    BOOL existed = [[NSFileManager defaultManager] fileExistsAtPath:path];
+    if (existed) [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+
+    NSSet *types = [NSSet setWithObjects:WKWebsiteDataTypeCookies, WKWebsiteDataTypeLocalStorage,
+                    WKWebsiteDataTypeSessionStorage, WKWebsiteDataTypeIndexedDBDatabases, nil];
+    WKWebsiteDataStore *ds = [WKWebsiteDataStore defaultDataStore];
+    [ds fetchDataRecordsOfTypes:types completionHandler:^(NSArray<WKWebsiteDataRecord *> *records) {
+        NSMutableArray *kill = [NSMutableArray array];
+        for (WKWebsiteDataRecord *r in records) {
+            NSString *n = r.displayName.lowercaseString ?: @"";
+            if ([n containsString:@"jagex"] || [n containsString:@"runescape"]) [kill addObject:r];
+        }
+        if (kill.count) [ds removeDataOfTypes:types forDataRecords:kill completionHandler:^{}];
+    }];
+
+    [self refreshLoginButton];
+    [self appendLine:existed ? @"[login] logged out — tokens.json cleared; autologin disarmed."
+                             : @"[login] already logged out (no tokens.json)."];
 }
 
 #pragma mark - Plugin/config panel (Phase 6)
