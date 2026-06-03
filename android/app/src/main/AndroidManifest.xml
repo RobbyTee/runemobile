@@ -6,6 +6,7 @@
 
     <application
         android:allowBackup="false"
+        android:allowNativeHeapPointerTagging="false"
         android:label="HelloShell"
         android:supportsRtl="true"
         android:extractNativeLibs="true"

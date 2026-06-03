@@ -45,8 +45,17 @@ exactly this as its `jre21` runtime) and split it as above. This is the one arti
 Milestone-A smoke.
 
 ## Milestones
-- **A — JVM Hello on the emulator:** `JvmLauncher.startJvm(mainClass="Hello")` boots HotSpot and runs
+- **A — JVM Hello on the emulator (DONE):** `JvmLauncher.startJvm(mainClass="Hello")` boots HotSpot and runs
   `Hello.main`, printing `VERDICT = JIT ACTIVE` (logcat). De-risks `JNI_CreateJavaVM` + JIT on ART.
-- **B — headless RuneLite + Surface render:** swap the classpath to the shaded client jar + CACIO, run
-  `DeviceHeadlessBoot.main`, and blit `JavaBridge.getFramePixels()` (TYPE_INT_RGB) to a `SurfaceView`
-  via `ANativeWindow`; feed touches back through the bridge's `onTouch/onClick` facade.
+- **B — headless RuneLite + Surface render + touch (GREEN, arm64 emulator):** swap the classpath to the
+  shaded client jar + CACIO, run `DeviceHeadlessBoot.main`, and blit `JavaBridge.getFramePixels()`
+  (TYPE_INT_RGB) to a `SurfaceView` via `ANativeWindow`; feed touches back through the bridge's
+  `onTouch/onClick` facade. Verified: real RuneLite boots headless to `LOGIN_SCREEN`, renders the OSRS login
+  to the SurfaceView with correct colors, and an on-screen tap drives the gamepack (tap on "Existing User"
+  advances `loginIndex 0 -> 2`, the username/password form).
+  - Android-specific gotchas this needed (all in `MainActivity`/manifest/`jvm_bootstrap.cpp`):
+    `android:allowNativeHeapPointerTagging="false"` (HotSpot's VM thread trips bionic's tag-truncation
+    SIGABRT); `-Djava.io.tmpdir=<filesDir>/tmp` (default `/tmp` is absent in the sandbox, poisoning
+    `FontManager`); a real `libawt_xawt.so` (no-op headful `initIDs` stubs + `DT_NEEDED libawt_headless.so`,
+    see `dev-tools/fake-xawt/`) since this xawt-style image ships neither the lib nor the headful initIDs;
+    activate CACIO CTC (`UnsafePokeActivation`) before any AWT/bridge class loads.

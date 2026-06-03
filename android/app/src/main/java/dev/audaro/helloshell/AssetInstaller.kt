@@ -15,7 +15,7 @@ import java.io.File
 object AssetInstaller {
 
     private const val TAG = "AssetInstaller"
-    private const val STAMP = ".installed-v1"
+    private const val STAMP = ".installed-v4"   // bump when staged jars/JRE change so old installs re-unpack
 
     /** Returns the JAVA_HOME path (filesDir/jvm/jre). */
     fun ensureInstalled(ctx: Context): File {
