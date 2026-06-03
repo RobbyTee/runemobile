@@ -22,6 +22,7 @@ static NSString *const kLauncherUA =
 @property (nonatomic, copy)   NSString *nonce;
 @property (nonatomic, copy)   NSString *oauthState;
 @property (nonatomic, assign) BOOL captured;   // handle the redirect exactly once
+- (void)teardownWeb;
 @end
 
 @implementation JagexLoginViewController
@@ -238,6 +239,11 @@ static NSString *const kLauncherUA =
     NSString *accId = a[@"accountId"] ?: @"";
     NSString *name  = a[@"displayName"] ?: @"";
     [self log:[NSString stringWithFormat:@"✓ selected %@", name.length ? name : @"(unnamed)"]];
+    // Release WebKit BEFORE the JVM is launched: tearing the web view down lets its WebContent/Networking
+    // helper processes (and the memory + any fault handlers they carry) go away, so the subsequent
+    // Start JVM runs as if from a clean launch. Lingering WebKit state is the leading suspect for the
+    // same-session JVM crash — this is the in-app equivalent of the force-quit workaround.
+    [self teardownWeb];
     if (self.onComplete) self.onComplete(sessionId, accId, name, accounts);
 }
 
@@ -282,7 +288,22 @@ static NSString *const kLauncherUA =
 }
 
 - (void)onClose {
+    [self teardownWeb];
     [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+// Promptly release the web view (and with it WebKit's out-of-process WebContent/Networking helpers) so the
+// JVM launch later this session isn't fighting WebKit for memory or fault handlers. Idempotent.
+- (void)teardownWeb {
+    if (!self.web) return;
+    [self.web stopLoading];
+    self.web.navigationDelegate = nil;
+    [self.web removeFromSuperview];
+    self.web = nil;
+}
+
+- (void)dealloc {
+    [self teardownWeb];
 }
 
 @end

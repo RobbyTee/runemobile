@@ -5,6 +5,7 @@
 #import <unistd.h>
 #import <sys/mman.h>
 #import <mach/mach.h>
+#import <os/proc.h>            // os_proc_available_memory() — jetsam headroom (login-crash diagnostics)
 #import <libkern/OSCacheControl.h>
 #import <stdatomic.h>
 #import "jni/jni.h"
@@ -414,6 +415,82 @@ static void resetSignalHandlers(void) {
     }
 }
 
+// ───────────────────── Same-session login-crash diagnostics (Phase 6) — STRIP AFTER DIAGNOSIS ─────────────────────
+// Symptom: opening the Jagex login WKWebView earlier in the SAME app session crashes the JVM natively
+// right after RuneLite init; a force-quit + relaunch before Start JVM reaches the game cleanly. The two
+// obvious causes are ALREADY defended (resetSignalHandlers() wipes WebKit's POSIX SIGSEGV/SIGBUS handlers;
+// the §6.2 clear drops the task EXC_BAD_ACCESS Mach port), so this dumps the *actual* runtime state to the
+// crash-safe stderr fd (Documents/jvm-stdio.log — dup2'd UNBUFFERED, so it survives even a silent jetsam
+// kill). Run twice and diff: (A) fresh launch → Start JVM (clean baseline) vs (B) fresh launch → Log in →
+// Start JVM (the crash case). What differs pins the cause:
+//   • a non-null BAD_ACCESS port (task or thread) in B → WebKit's JavaScriptCore is stealing HotSpot's
+//     null-check/safepoint faults (exception-port path) → the thread-level clear below should fix it;
+//   • a "custom" SIGSEGV handler surviving into B → a POSIX-handler shadow we're not resetting;
+//   • avail-memory collapsing toward 0 (memwatch) before B dies with no SIGSEGV → jetsam (WebKit helper
+//     processes) → the web-view teardown (login VC) is the lever, not the ports.
+static void dumpFaultState(const char *when) {
+    exception_mask_t      masks[EXC_TYPES_COUNT];
+    mach_port_t           ports[EXC_TYPES_COUNT];
+    exception_behavior_t  behs[EXC_TYPES_COUNT];
+    thread_state_flavor_t flav[EXC_TYPES_COUNT];
+    mach_msg_type_number_t n = 0;
+
+    kern_return_t kr = task_get_exception_ports(mach_task_self(), EXC_MASK_BAD_ACCESS,
+                                                masks, &n, ports, behs, flav);
+    fprintf(stderr, "[faultdiag:%s] task BAD_ACCESS kr=%d n=%u", when, kr, n);
+    for (mach_msg_type_number_t i = 0; i < n; i++) {
+        fprintf(stderr, " {mask=0x%x port=0x%x beh=0x%x flav=%d}", masks[i], ports[i], behs[i], flav[i]);
+        if (ports[i] != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), ports[i]);
+    }
+    fprintf(stderr, "\n");
+
+    thread_t th = mach_thread_self();
+    n = 0;
+    kr = thread_get_exception_ports(th, EXC_MASK_BAD_ACCESS, masks, &n, ports, behs, flav);
+    fprintf(stderr, "[faultdiag:%s] thread BAD_ACCESS kr=%d n=%u", when, kr, n);
+    for (mach_msg_type_number_t i = 0; i < n; i++) {
+        fprintf(stderr, " {mask=0x%x port=0x%x beh=0x%x flav=%d}", masks[i], ports[i], behs[i], flav[i]);
+        if (ports[i] != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), ports[i]);
+    }
+    fprintf(stderr, "\n");
+    mach_port_deallocate(mach_task_self(), th);
+
+    int sg[] = { SIGSEGV, SIGBUS, SIGILL, SIGTRAP };
+    const char *nm[] = { "SIGSEGV", "SIGBUS", "SIGILL", "SIGTRAP" };
+    for (size_t i = 0; i < sizeof(sg) / sizeof(sg[0]); i++) {
+        struct sigaction sa; memset(&sa, 0, sizeof(sa));
+        if (sigaction(sg[i], NULL, &sa) != 0) continue;
+        void *h = (sa.sa_flags & SA_SIGINFO) ? (void *)sa.sa_sigaction : (void *)sa.sa_handler;
+        const char *tag = h == (void *)SIG_DFL ? "DFL" : h == (void *)SIG_IGN ? "IGN" : "custom";
+        fprintf(stderr, "[faultdiag:%s] %s=%p(%s) flags=0x%x onstack=%d\n",
+                when, nm[i], h, tag, sa.sa_flags, (sa.sa_flags & SA_ONSTACK) ? 1 : 0);
+    }
+
+    size_t avail = os_proc_available_memory();
+    task_vm_info_data_t vmi; mach_msg_type_number_t c = TASK_VM_INFO_COUNT; uint64_t fp = 0;
+    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vmi, &c) == KERN_SUCCESS) fp = vmi.phys_footprint;
+    fprintf(stderr, "[faultdiag:%s] mem avail=%.1fMB footprint=%.1fMB\n", when, avail / 1048576.0, fp / 1048576.0);
+}
+
+// Sample jetsam headroom every 500 ms across RuneLite init (the crash window), to the crash-safe fd. If a
+// post-login launch is OOM/jetsam-killed, the last line shows avail collapsing toward 0 right before death
+// — the signature that separates a memory kill from a SIGSEGV (exception-port/handler) kill.
+static void *memWatchdog(void *unused) {
+    (void)unused;
+    pthread_setname_np("mem-watchdog");
+    for (int i = 0; i < 60; i++) {
+        size_t avail = os_proc_available_memory();
+        task_vm_info_data_t vmi; mach_msg_type_number_t c = TASK_VM_INFO_COUNT; uint64_t fp = 0;
+        if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vmi, &c) == KERN_SUCCESS) fp = vmi.phys_footprint;
+        fprintf(stderr, "[memwatch t=%4.1fs] avail=%.1fMB footprint=%.1fMB\n", i * 0.5, avail / 1048576.0, fp / 1048576.0);
+        usleep(500000);
+    }
+    return NULL;
+}
+static void startMemWatchdog(void) {
+    pthread_t t; if (pthread_create(&t, NULL, memWatchdog, NULL) == 0) pthread_detach(t);
+}
+
 // Invoke <className>.main(args) on the (already-created) VM. Clears any exception
 // so one probe's failure doesn't poison the next.
 static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *args, JVMLogSink log) {
@@ -601,6 +678,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     vmArgs.ignoreUnrecognized = JNI_FALSE;
 
     resetSignalHandlers();
+    dumpFaultState("pre-clear");   // STRIP AFTER DIAGNOSIS — state inherited from this (maybe WebKit-poisoned) session
 
     // W1 P3 §6.2 — Amethyst app-side JIT parity (the proven path on THIS device).
     // The Amethyst CDN jre21 is byte-identical to ours (size+last-modified match the pin),
@@ -620,6 +698,18 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         EXCEPTION_DEFAULT, MACHINE_THREAD_STATE);
     log([NSString stringWithFormat:@"[jvm] cleared EXC_MASK_BAD_ACCESS port (Amethyst parity) kr=%d", kr]);
 
+    // Belt-and-braces for the post-login case: a task-level clear leaves THREAD-level handlers intact, so
+    // also drop any bad-access port on this jvm-main thread. No-op on a clean launch; the fix if the
+    // diagnostics show WebKit's JavaScriptCore left a thread-level port. (STRIP/keep per diagnosis.)
+    thread_t jvmThread = mach_thread_self();
+    kern_return_t krt = thread_set_exception_ports(jvmThread, EXC_MASK_BAD_ACCESS, MACH_PORT_NULL,
+                                                   EXCEPTION_DEFAULT, MACHINE_THREAD_STATE);
+    mach_port_deallocate(mach_task_self(), jvmThread);
+    log([NSString stringWithFormat:@"[jvm] cleared thread EXC_MASK_BAD_ACCESS port krt=%d", krt]);
+
+    dumpFaultState("post-clear");   // STRIP AFTER DIAGNOSIS — did the clears stick?
+    startMemWatchdog();             // STRIP AFTER DIAGNOSIS — sample jetsam headroom across RuneLite init
+
     log(@"[jvm] JNI_CreateJavaVM (HotSpot generates its template interpreter now)…");
 
     JavaVM *vm = NULL;
@@ -630,6 +720,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     // the main thread loads it with atomic_load in ensureBridge).
     atomic_store(&gVM, vm);
     log(@"[jvm] JavaVM created — HotSpot is up. Running probes…");
+    dumpFaultState("post-createvm");   // STRIP AFTER DIAGNOSIS — HotSpot's own SIGSEGV handler is installed now
 
     if (kMuiNativeColorProbe) { runMuiNativeColorProbe(log); }  // STRIP AFTER DEVICE CONFIRM
 
