@@ -3,6 +3,7 @@
 #import "PluginConfigViewController.h"
 #import "PluginHubViewController.h"
 #import "PluginPanelsViewController.h"
+#import "JagexLoginSpikeViewController.h"
 #import <unistd.h>
 #import <fcntl.h>
 
@@ -19,6 +20,9 @@
 // W3 hybrid-chrome device de-risk: read the MobileChromeBridge snapshot + proxy a tab switch via the proven
 // JavaBridge.onClick, logging a md5-gateable verdict. The seam proof before native rails are drawn.
 @property (nonatomic, strong) UIButton *chromeButton;
+// Login-UX spike: opens an embedded Jagex OAuth login (WKWebView) to mint a session on-device. Needs no
+// JVM/JIT, so it's enabled from launch (not gated on StikDebug attach).
+@property (nonatomic, strong) UIButton *loginSpikeButton;
 // Collapsible debug overlay: a small always-on-top toggle shows/hides a panel holding the status,
 // launch/canary buttons and the log console, so the game stays full-screen.
 @property (nonatomic, strong) UIView *debugPanel;
@@ -278,6 +282,14 @@ static const CGFloat kTabStrip = 46.0;
                 forControlEvents:UIControlEventTouchUpInside];
     [self.debugPanel addSubview:self.chromeButton];
 
+    self.loginSpikeButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.loginSpikeButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.loginSpikeButton setTitle:@"Jagex login (spike)" forState:UIControlStateNormal];
+    self.loginSpikeButton.titleLabel.font = [UIFont systemFontOfSize:15];
+    [self.loginSpikeButton addTarget:self action:@selector(onLoginSpike)
+                    forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.loginSpikeButton];
+
     self.console = [[UITextView alloc] init];
     self.console.translatesAutoresizingMaskIntoConstraints = NO;
     self.console.editable = NO;
@@ -376,7 +388,9 @@ static const CGFloat kTabStrip = 46.0;
         [self.canaryButton.leadingAnchor constraintEqualToAnchor:self.launchButton.trailingAnchor constant:24],
         [self.chromeButton.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor constant:6],
         [self.chromeButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
-        [self.console.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
+        [self.loginSpikeButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
+        [self.loginSpikeButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
+        [self.console.topAnchor constraintEqualToAnchor:self.loginSpikeButton.bottomAnchor constant:6],
         [self.console.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.console.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
         [self.console.bottomAnchor constraintEqualToAnchor:p.bottomAnchor],
@@ -385,6 +399,15 @@ static const CGFloat kTabStrip = 46.0;
 
 - (void)onToggleDebug {
     self.debugPanel.hidden = !self.debugPanel.hidden;
+}
+
+// Login-UX spike: present the embedded Jagex OAuth login. Pure native (no JVM) — provable without StikDebug.
+- (void)onLoginSpike {
+    JagexLoginSpikeViewController *vc = [[JagexLoginSpikeViewController alloc] init];
+    vc.modalPresentationStyle = UIModalPresentationFullScreen;
+    __weak typeof(self) ws = self;
+    vc.onLog = ^(NSString *line) { [ws appendLine:[@"[login] " stringByAppendingString:line]]; };
+    [self presentViewController:vc animated:YES completion:nil];
 }
 
 #pragma mark - Plugin/config panel (Phase 6)
