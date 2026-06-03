@@ -1,0 +1,23 @@
+# Build outputs
+.gradle/
+build/
+app/build/
+app/build-jvm/
+app/.cxx/
+local.properties
+
+# Large / gitignored runtime assets (mirror ios/dev-tools) — staged into the APK, never committed:
+#   the embedded Android arm64 JRE (.so libs go in jniLibs, the rest in assets/jvm/jre)
+app/src/main/jniLibs/
+app/src/main/assets/jvm/jre/
+#   the shaded RuneLite client jar + probes + CACIO jars
+app/src/main/assets/jvm/client-*.jar
+app/src/main/assets/jvm/probes.jar
+app/src/main/assets/jvm/cacio/
+
+# Keep the small Milestone-A smoke jar tracked (hello.jar is built from jvm-src/Hello.java)
+!app/src/main/assets/jvm/hello.jar
+
+# IDE
+.idea/
+*.iml
