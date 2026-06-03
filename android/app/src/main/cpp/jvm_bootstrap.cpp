@@ -22,6 +22,7 @@
 #include <deque>
 #include <mutex>
 #include <condition_variable>
+#include <atomic>
 #include <algorithm>
 #include <unistd.h>
 #include <pthread.h>
@@ -56,8 +57,11 @@ static pthread_t       g_renderThread;
 static bool            g_renderStarted = false;
 static volatile bool   g_renderRun = false;
 // Last frame dims the render thread saw — read by the UI thread to map touch coords to game space.
-static volatile int    g_lastFrameW = 0;
-static volatile int    g_lastFrameH = 0;
+// std::atomic (not plain volatile): cross-thread publication needs real atomics under the C++ memory
+// model. Two separate atomics suffice — the login canvas dims are fixed, so a torn {w,h} pair (which
+// would only matter mid-resize) can't arise in this scope.
+static std::atomic<int> g_lastFrameW{0};
+static std::atomic<int> g_lastFrameH{0};
 
 // ---- Input queue (UI thread enqueues; render thread drains and dispatches into the bridge) -----------
 enum InputKind { IN_CLICK = 0, IN_TOUCH = 1, IN_CAMERA = 2, IN_CLEARHOVER = 3 };
@@ -104,8 +108,17 @@ static void redirectStdioToLogcat() {
     if (done) return;
     int pipefd[2];
     if (pipe(pipefd) != 0) { LOGE("stdio: pipe failed errno=%d", errno); return; }
+    // Save the originals so fd 1/2 can be restored if setup fails partway: a reader-less pipe left on
+    // stdout/err would raise SIGPIPE on the next write and can take the process down.
+    int oldOut = dup(STDOUT_FILENO);
+    int oldErr = dup(STDERR_FILENO);
+    auto restoreStdio = [&] {
+        if (oldOut >= 0) { dup2(oldOut, STDOUT_FILENO); close(oldOut); oldOut = -1; }
+        if (oldErr >= 0) { dup2(oldErr, STDERR_FILENO); close(oldErr); oldErr = -1; }
+    };
     if (dup2(pipefd[1], STDOUT_FILENO) < 0 || dup2(pipefd[1], STDERR_FILENO) < 0) {
         LOGE("stdio: dup2 failed errno=%d", errno);
+        restoreStdio();
         close(pipefd[0]); close(pipefd[1]);
         return;
     }
@@ -116,10 +129,13 @@ static void redirectStdioToLogcat() {
     pthread_t t;
     if (pthread_create(&t, nullptr, pumpStdio, nullptr) != 0) {
         LOGE("stdio: pthread_create failed errno=%d", errno);
+        restoreStdio();               // point fd 1/2 back at the originals so writes don't hit a dead pipe
         close(g_stdioReadFd); g_stdioReadFd = -1;
-        return;                       // leave stdout/err pointing at a closed pipe (EPIPE) rather than block
+        return;
     }
     pthread_detach(t);
+    if (oldOut >= 0) close(oldOut);   // success: the saved originals are no longer needed
+    if (oldErr >= 0) close(oldErr);
     done = true;
 }
 
@@ -221,7 +237,11 @@ static bool callStaticVoidNoArg(JNIEnv *env, const char *cls, const char *method
     jclass c = env->FindClass(cls);
     if (!c || env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); LOGE("call: FindClass %s failed", cls); return false; }
     jmethodID m = env->GetStaticMethodID(c, method, "()V");
-    if (!m || env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); LOGE("call: no %s.%s()V", cls, method); return false; }
+    if (!m || env->ExceptionCheck()) {
+        env->ExceptionDescribe(); env->ExceptionClear(); LOGE("call: no %s.%s()V", cls, method);
+        env->DeleteLocalRef(c);
+        return false;
+    }
     env->CallStaticVoidMethod(c, m);
     bool ok = !env->ExceptionCheck();
     if (!ok) { env->ExceptionDescribe(); env->ExceptionClear(); LOGE("call: %s.%s threw", cls, method); }
@@ -279,13 +299,15 @@ static void *renderLoop(void *) {
             int w = env->CallStaticIntMethod(g_bridgeCls, g_midW);
             int h = env->CallStaticIntMethod(g_bridgeCls, g_midH);
             if (env->ExceptionCheck()) { env->ExceptionClear(); w = h = 0; }
-            if (w > 0 && h > 0) {
-                g_lastFrameW = w; g_lastFrameH = h;
+            if (w > 0 && h > 0 && w <= 16384 && h <= 16384) {
+                g_lastFrameW.store(w, std::memory_order_relaxed);
+                g_lastFrameH.store(h, std::memory_order_relaxed);
                 jintArray arr = (jintArray) env->CallStaticObjectMethod(g_bridgeCls, g_midPixels);
                 if (env->ExceptionCheck()) { env->ExceptionClear(); arr = nullptr; }
                 if (arr) {
                     jsize len = env->GetArrayLength(arr);
-                    if (len >= w * h) {
+                    const int64_t needed = (int64_t) w * h;   // w,h capped above, so this can't overflow
+                    if ((int64_t) len >= needed) {
                         if (w != geomW || h != geomH) {
                             ANativeWindow_setBuffersGeometry(win, w, h, WINDOW_FORMAT_RGBA_8888);
                             geomW = w; geomH = h;
@@ -392,7 +414,10 @@ static void *jvmThreadMain(void *argp) {
     }
     LOGI("CACIO CTC active; publishing bridge + starting render");
 
-    publishBridge(env);          // best-effort: JavaBridge loads here; render thread tolerates a null bridge
+    if (!publishBridge(env)) {   // JavaBridge is essential for Milestone B — a null bridge is a dead render
+        LOGE("bridge publish failed; aborting boot (render + input would be inert)");
+        return fail(-14);
+    }
     startRenderThreadOnce();
 
     // Signal startJvm that bringup is complete (VM is up). The worker now continues into the boot main.
@@ -418,6 +443,9 @@ static void *jvmThreadMain(void *argp) {
         LOGE("%s.main threw", a->mainClass.c_str()); env->ExceptionDescribe(); env->ExceptionClear();
     }
     LOGI("%s.main returned; VM stays alive (engine threads own the run)", a->mainClass.c_str());
+    env->DeleteLocalRef(args);   // this thread parks forever below; drop its locals so they don't pin
+    env->DeleteLocalRef(strCls);
+    env->DeleteLocalRef(cls);
     delete a;
     // Do NOT exit cleanly in a way that detaches the VM main thread: park forever so HotSpot stays up.
     while (true) pause();
@@ -445,6 +473,11 @@ Java_dev_audaro_helloshell_JvmLauncher_startJvm(
         a->extraOpts.push_back(jstr(artEnv, s));
         artEnv->DeleteLocalRef(s);
     }
+
+    // Reset the bringup latch so the wait below reflects THIS attempt, not a previous failed boot's
+    // result (g_bootDone is process-global). startJvm is single-call by construction, but this keeps a
+    // retry-after-failure honest instead of immediately returning a stale rc.
+    { std::lock_guard<std::mutex> lk(g_bootLock); g_bootDone = false; g_bootRc = -100; }
 
     pthread_t t;
     if (pthread_create(&t, nullptr, jvmThreadMain, a) != 0) {
@@ -501,6 +534,6 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeClearHover(JNIEnv *, jobject) {
 
 // Last frame dimensions (so the UI thread can map a screen touch to game-canvas coords). 0 before render.
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeFrameWidth(JNIEnv *, jobject) { return g_lastFrameW; }
+Java_dev_audaro_helloshell_JvmLauncher_nativeFrameWidth(JNIEnv *, jobject) { return g_lastFrameW.load(std::memory_order_relaxed); }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeFrameHeight(JNIEnv *, jobject) { return g_lastFrameH; }
+Java_dev_audaro_helloshell_JvmLauncher_nativeFrameHeight(JNIEnv *, jobject) { return g_lastFrameH.load(std::memory_order_relaxed); }

@@ -30,6 +30,7 @@ class MainActivity : AppCompatActivity() {
         private val booted = AtomicBoolean(false)
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -48,6 +49,16 @@ class MainActivity : AppCompatActivity() {
         })
 
         gestures = GestureDetector(this, GestureListener())
+        // Drive gestures from the SurfaceView itself so event coords are view-local: the screen->game
+        // mapping is then correct wherever the view sits in the window (status-bar inset, display cutout,
+        // multi-window), not only the full-bleed emulator case.
+        surfaceView.setOnTouchListener { _, event ->
+            gestures.onTouchEvent(event)
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                cameraGestureActive = false
+            }
+            true
+        }
 
         // Boot the VM once per process, off the UI thread and on the application context.
         if (booted.compareAndSet(false, true)) {
@@ -56,27 +67,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    @SuppressLint("ClickableViewAccessibility")
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        gestures.onTouchEvent(event)
-        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-            cameraGestureActive = false
-        }
-        return true
-    }
-
-    /** Map a screen (view) coordinate to game-canvas pixels using the current frame size. */
-    private fun toGameX(screenX: Float): Int {
+    /** Map a SurfaceView-local coordinate to game-canvas pixels, clamped to the current frame. */
+    private fun toGameX(viewX: Float): Int {
         val fw = JvmLauncher.frameWidth()
         val vw = surfaceView.width
-        if (fw <= 0 || vw <= 0) return screenX.toInt()
-        return (screenX * fw / vw).toInt()
+        if (fw <= 0 || vw <= 0) return viewX.toInt()
+        return (viewX * fw / vw).toInt().coerceIn(0, fw - 1)
     }
-    private fun toGameY(screenY: Float): Int {
+    private fun toGameY(viewY: Float): Int {
         val fh = JvmLauncher.frameHeight()
         val vh = surfaceView.height
-        if (fh <= 0 || vh <= 0) return screenY.toInt()
-        return (screenY * fh / vh).toInt()
+        if (fh <= 0 || vh <= 0) return viewY.toInt()
+        return (viewY * fh / vh).toInt().coerceIn(0, fh - 1)
     }
     private fun scaleX(px: Float): Int {
         val fw = JvmLauncher.frameWidth(); val vw = surfaceView.width
@@ -117,6 +119,7 @@ class MainActivity : AppCompatActivity() {
         val libjvm = File(javaHome, "lib/server/libjvm.so")
         if (!libjvm.exists()) {
             Log.e(TAG, "embedded JRE not installed; expected $libjvm")
+            booted.set(false)   // not booted yet — let a later launch retry the asset unpack
             return
         }
 
