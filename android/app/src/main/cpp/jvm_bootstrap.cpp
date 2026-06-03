@@ -7,8 +7,11 @@
 
 #include <jni.h>
 #include <dlfcn.h>
+#include <dirent.h>
 #include <string>
 #include <vector>
+#include <unistd.h>
+#include <pthread.h>
 #include <android/log.h>
 
 #ifndef JNI_VERSION_21
@@ -20,6 +23,69 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 typedef jint (*CreateJavaVM_t)(JavaVM **, void **, void *);
+
+// The embedded VM writes System.out/err to fd 1/2, which Android drops. Pipe both into logcat so RuneLite
+// (and the Milestone-A Hello) output is visible.
+static int g_stdioReadFd = -1;
+
+static void *pumpStdio(void *) {
+    char buf[1024];
+    ssize_t n;
+    while ((n = read(g_stdioReadFd, buf, sizeof(buf) - 1)) > 0) {
+        buf[n] = '\0';
+        __android_log_print(ANDROID_LOG_INFO, "jvm-stdout", "%s", buf);
+    }
+    return nullptr;
+}
+
+static void redirectStdioToLogcat() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return;
+    g_stdioReadFd = pipefd[0];
+    dup2(pipefd[1], STDOUT_FILENO);
+    dup2(pipefd[1], STDERR_FILENO);
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    pthread_t t;
+    pthread_create(&t, nullptr, pumpStdio, nullptr);
+    pthread_detach(t);
+}
+
+// HotSpot dlopens lib/*.so by absolute path (the data dir is on the linker's permitted_path), but the
+// linker resolves each .so's DT_NEEDED siblings (libnio.so NEEDs libnet.so, etc.) via the namespace's
+// search paths — which DON'T include the JRE lib dir. Preload every lib/*.so with RTLD_GLOBAL up front so
+// those transitive NEEDED libs resolve by soname. Multi-pass to absorb arbitrary intra-dir ordering.
+static void preloadJreLibs(const std::string &libDir) {
+    std::vector<std::string> pending;
+    DIR *d = opendir(libDir.c_str());
+    if (!d) { LOGE("preload: opendir %s failed", libDir.c_str()); return; }
+    struct dirent * e;
+    while ((e = readdir(d)) != nullptr) {
+        std::string name = e->d_name;
+        if (name.size() < 4 || name.compare(name.size() - 3, 3, ".so") != 0) continue;
+        // libjvm.so lives under lib/server and is dlopen'd explicitly; skip any stray top-level copy.
+        if (name == "libjvm.so") continue;
+        pending.push_back(libDir + "/" + name);
+    }
+    closedir(d);
+
+    for (int pass = 0; pass < 4 && !pending.empty(); pass++) {
+        std::vector<std::string> still;
+        for (const std::string &path : pending) {
+            if (dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL)) continue;
+            still.push_back(path);
+        }
+        if (still.size() == pending.size()) break; // no progress this pass
+        pending.swap(still);
+    }
+    if (!pending.empty()) {
+        for (const std::string &path : pending)
+            LOGI("preload: deferred %s (%s)", path.c_str(), dlerror());
+    }
+}
 
 static std::string jstr(JNIEnv *env, jstring s) {
     if (s == nullptr) return {};
@@ -41,6 +107,8 @@ Java_dev_audaro_helloshell_JvmLauncher_startJvm(
         jstring jJavaHome, jstring jClasspath, jstring jLibraryPath,
         jstring jMainClass, jobjectArray jExtraOpts) {
 
+    redirectStdioToLogcat();
+
     const std::string javaHome    = jstr(artEnv, jJavaHome);
     const std::string classpath   = jstr(artEnv, jClasspath);
     const std::string libraryPath = jstr(artEnv, jLibraryPath);
@@ -53,6 +121,9 @@ Java_dev_audaro_helloshell_JvmLauncher_startJvm(
 
     auto JNI_CreateJavaVM = (CreateJavaVM_t) dlsym(h, "JNI_CreateJavaVM");
     if (!JNI_CreateJavaVM) { LOGE("dlsym JNI_CreateJavaVM failed: %s", dlerror()); return -11; }
+
+    // Resolve sibling NEEDED libs (libnet.so ← libnio.so, etc.) before any JRE .so is lazy-loaded.
+    preloadJreLibs(libraryPath);
 
     std::vector<std::string> opts;
     opts.push_back("-Djava.class.path=" + classpath);

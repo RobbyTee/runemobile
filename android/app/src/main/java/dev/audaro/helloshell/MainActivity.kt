@@ -36,7 +36,8 @@ class MainActivity : AppCompatActivity() {
         // Milestone A: only a couple of jars are needed; the full client classpath comes in Milestone B.
         val classpath = listOf("hello.jar")
             .joinToString(":") { File(File(filesDir, "jvm"), it).absolutePath }
-        val libraryPath = applicationInfo.nativeLibraryDir
+        // The embedded JRE's own .so libs (libawt, libfontmanager, …) live under java.home/lib.
+        val libraryPath = File(javaHome, "lib").absolutePath
 
         post("Embedded JRE found.\nStarting HotSpot…")
         val rc = JvmLauncher.startJvm(
