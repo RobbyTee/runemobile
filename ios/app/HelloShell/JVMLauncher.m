@@ -40,6 +40,7 @@ static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidClickPrecise = NULL, gM
 static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
 static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
 static jmethodID gMidMenuSelect = NULL;  // selectMenuPoint(II)V — menu row select + hover-clear (optional)
+static jmethodID gMidRequestResize = NULL;  // requestResize(II)V — full-screen live canvas resize (optional)
 
 // W3 hybrid-chrome read surface — a SEPARATE facade (MobileChromeBridge) resolved lazily on the main thread.
 static jclass    gChromeClass = NULL;   // global ref to net.runelite.client.headless.MobileChromeBridge
@@ -175,6 +176,8 @@ static BOOL ensureBridge(void) {
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidInteractSeq = NULL; }
     gMidMenuSelect = (*env)->GetStaticMethodID(env, global, "selectMenuPoint", "(II)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidMenuSelect = NULL; }
+    gMidRequestResize = (*env)->GetStaticMethodID(env, global, "requestResize", "(II)V");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidRequestResize = NULL; }
     gBridgeClass = global;   // publish only once fully resolved
     return YES;
 }
@@ -847,16 +850,19 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         return cachedImage;
     }
 
-    jint w = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidW);
-    jint h = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidH);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
-    if (w <= 0 || h <= 0) return nil;
-
+    // Atomic frame read: getFramePixels() returns ONE array packed [w, h, ...pixels], so the dimensions and
+    // the pixels come from the same snapshot — they can't tear apart mid-resize (the full-screen toggle). The
+    // BLIT sizes itself from this header; getFrameWidth/Height (still resolved) are for the resize-ACK poll.
     jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, gBridgeClass, gMidPixels);
     if (!arr || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
     jsize len = (*env)->GetArrayLength(env, arr);
+    if (len < 3) { (*env)->DeleteLocalRef(env, arr); return nil; }   // need at least [w, h, 1 px]
+    jint hdr[2] = {0, 0};
+    (*env)->GetIntArrayRegion(env, arr, 0, 2, hdr);
+    jint w = hdr[0], h = hdr[1];
+    if (w <= 0 || h <= 0) { (*env)->DeleteLocalRef(env, arr); return nil; }
     NSUInteger need = (NSUInteger)w * (NSUInteger)h;
-    if ((NSUInteger)len < need) { (*env)->DeleteLocalRef(env, arr); return nil; }
+    if ((NSUInteger)len < need + 2) { (*env)->DeleteLocalRef(env, arr); return nil; }   // header/pixels mismatch
 
     // Reusable native scratch buffer (grows monotonically); copied again into CFData so the CGImage owns
     // stable bytes even as the engine overwrites the Java array on the next frame.
@@ -868,7 +874,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         bufCount = buf ? need : 0;
     }
     if (!buf) { (*env)->DeleteLocalRef(env, arr); return nil; }
-    (*env)->GetIntArrayRegion(env, arr, 0, (jsize)need, (jint *)buf);
+    (*env)->GetIntArrayRegion(env, arr, 2, (jsize)need, (jint *)buf);   // pixels start after the [w,h] header
     (*env)->DeleteLocalRef(env, arr);
 
     CFDataRef data = CFDataCreate(NULL, (const UInt8 *)buf, (CFIndex)(need * sizeof(uint32_t)));
@@ -907,6 +913,16 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidClickPrecise, (jint)x, (jint)y, (jint)button);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
+// Full-screen live canvas resize: hand the new render WxH to JavaBridge.requestResize, which marshals to the
+// EDT and drives the gamepack to re-render at the new aspect. Tolerant of an older jar (no-op if absent). The
+// caller then polls the blitted frame size (latestFrame) until it reaches the target as the resize ACK.
++ (void)requestResizeW:(int)w h:(int)h {
+    if (!ensureBridge() || !gMidRequestResize) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidRequestResize, (jint)w, (jint)h);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 

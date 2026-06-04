@@ -71,6 +71,11 @@ public final class ResizeSoakProbe
 	private static final int HOLD = Integer.getInteger("runelite.headless.resizeSoak.hold", 8);
 	private static final int MAX_WAIT = Integer.getInteger("runelite.headless.resizeSoak.maxWait", 90);
 	private static final int SETTLE = Integer.getInteger("runelite.headless.resizeSoak.settle", 30);
+	// Drive the resize through JavaBridge.requestResize (the EXACT device path) instead of applyResize
+	// directly. Requires -Drunelite.bridge=true (else JavaBridge has no client and the request no-ops). When
+	// the bridge is on we also assert the packed live-blit snapshot is self-consistent ([w,h,...w*h pixels]),
+	// validating the Phase-2 atomic frame format under a live resize.
+	private static final boolean VIA_BRIDGE = Boolean.getBoolean("runelite.headless.resizeSoak.viaBridge");
 
 	// State machine (all touched only from the client thread in tick()).
 	private static int loginFrames;     // frames at LOGGED_IN before we begin (lets the initial layout settle)
@@ -85,6 +90,7 @@ public final class ResizeSoakProbe
 
 	// Diagnostics.
 	private static int acks, misses, exceptions;
+	private static int shapeOk, shapeBad;   // packed live-blit snapshot self-consistency (VIA_BRIDGE only)
 	private static int framesToAckSum;
 	private static long heapStart, heapPeak;
 
@@ -210,6 +216,10 @@ public final class ResizeSoakProbe
 				log.info("[resizeSoak] cycle {}/{} -> {}x{} canvas={}x{} viewport={}x{} framesToSettle={} heapMB={}",
 					cycle + 1, CYCLES, tw, th, cw, ch,
 					client.getViewportWidth(), client.getViewportHeight(), waited, h / 1048576);
+				if (VIA_BRIDGE && JavaBridge.isEnabled())
+				{
+					checkSnapshotShape();
+				}
 			}
 			if (++held <= HOLD)
 			{
@@ -239,17 +249,52 @@ public final class ResizeSoakProbe
 		acked = false;
 		waited = 0;
 		held = 0;
-		HeadlessResize.applyResize(client, target == 0 ? aW : bW, target == 0 ? aH : bH);
+		final int w = target == 0 ? aW : bW;
+		final int h = target == 0 ? aH : bH;
+		if (VIA_BRIDGE)
+		{
+			// The exact device path: native -> JavaBridge.requestResize -> applyResize (needs -Drunelite.bridge).
+			JavaBridge.requestResize(w, h);
+		}
+		else
+		{
+			HeadlessResize.applyResize(client, w, h);
+		}
+	}
+
+	/** Assert the packed live-blit frame is self-consistent: {@code [w, h, ...exactly w*h pixels]}. */
+	private static void checkSnapshotShape()
+	{
+		final int[] f = JavaBridge.getFramePixels();
+		if (f == null || f.length < 2)
+		{
+			return;   // no frame published yet — not a failure
+		}
+		final long expect = 2L + (long) f[0] * (long) f[1];
+		if (f[0] > 0 && f[1] > 0 && f.length == expect)
+		{
+			shapeOk++;
+		}
+		else
+		{
+			shapeBad++;
+			if (shapeBad <= 5)
+			{
+				log.warn("[resizeSoak] BAD snapshot shape: len={} header={}x{} (expect len {})",
+					f.length, f[0], f[1], expect);
+			}
+		}
 	}
 
 	private static void verdict()
 	{
 		done = true;
 		final long heapEnd = usedHeap();
-		final boolean green = misses == 0 && exceptions == 0 && acks >= CYCLES;
-		log.info("[resizeSoak] RESIZE_SOAK cycles={} acks={} misses={} exceptions={} avgFramesToSettle={} "
-				+ "heapStartMB={} heapPeakMB={} heapEndMB={} -> {}",
-			CYCLES, acks, misses, exceptions, acks > 0 ? framesToAckSum / acks : -1,
+		final boolean green = misses == 0 && exceptions == 0 && acks >= CYCLES && shapeBad == 0;
+		log.info("[resizeSoak] RESIZE_SOAK cycles={} acks={} misses={} exceptions={} shapeOk={} shapeBad={} "
+				+ "avgFramesToSettle={} heapStartMB={} heapPeakMB={} heapEndMB={} -> {}",
+			CYCLES, acks, misses, exceptions, shapeOk, shapeBad,
+			acks > 0 ? framesToAckSum / acks : -1,
 			heapStart / 1048576, heapPeak / 1048576, heapEnd / 1048576,
 			green ? "RESIZE_SOAK_GREEN" : "RESIZE_SOAK_RED");
 	}
