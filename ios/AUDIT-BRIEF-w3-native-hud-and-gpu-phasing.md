@@ -118,9 +118,13 @@ else.
     `int[]`. The resize plumbing is recoverable from git.
   - *GPU path* (if B lands): export `fboScene` (already scene-only) to the native blit and **skip `drawUi`**.
   - This is a **thin** seam (where the scene-only frame comes from), small relative to A's whole surface.
-- **Feature A simplifies a future Feature B.** With a native HUD, base `gpu` bring-up only has to get the **scene
-  FBO** to the native blit; it can skip the entire GPU UI-compositing half (`prepareInterfaceTexture` / `drawUi` /
-  `interfaceTexture`). That removes roughly half the base-`gpu` integration surface.
+- **Feature A lightens — but does NOT eliminate — a future Feature B's UI compositing.** `interfaceTexture` is
+  not just the engine HUD: `Hooks.draw` renders RuneLite plugin overlays + client-UI + our selection drawing into
+  the buffer *before* the GPU return (`Hooks.java:470`), and `prepareInterfaceTexture` uploads that whole buffer
+  (`GpuPlugin.java:1377`) for `drawUi` to composite (`:1442`). Suppressing the engine HUD (A's `setDraw2DMask`)
+  leaves an **overlay-only** buffer, so B2 still needs `drawUi`/`interfaceTexture` — just carrying a lighter,
+  overlay-only texture, not the full HUD. **B2 is therefore an overlay-only composite path, not a pure scene-FBO
+  publish.** (See revised claim S3.)
 - **They are complementary, not antagonistic.** Native HUD (crisp UIKit text) over a GPU scene (crisp 3D) is the
   *full* sharpness win — A fixes HUD crispness, B fixes scene crispness. The only antagonism is the working-tree /
   publish-seam contention if both big builds run at once.
@@ -136,14 +140,24 @@ strictly gated and never concurrent with Track A's seam work.**
 > against verbatim devicectl-pulled logs (the project's discipline against fabricated GREENs).
 
 **A0 — Scene-isolation de-risk (desktop; cheap; GATES the whole native-HUD approach).**
-- Goal: prove a clean **scene-only, HUD-suppressed, viewport-filled** render is obtainable at all.
+- Goal: prove a clean **scene-only, HUD-suppressed, viewport-filled** render is obtainable **AND that route-back
+  still works** under whichever suppression mode we pick.
 - Work: in the headless desktop harness, after LOGGED_IN call `setDraw2DMask(DRAW_2D_NONE)` on the client thread;
   in resizable mode assert `getViewport*` ≈ full canvas and the baked HUD (minimap/chat/orbs/tabs) is gone;
   capture PNG. Also smoke the **fallback**: per-widget `setHidden` on `MAP_MINIMAP`/`ORBS`/`CHAT_CONTAINER`/
-  `STONE0..13` (MinimapPlugin recipe, re-applied on `TOPLEVEL_REDRAW`).
-- Exit: a scene-only HUD-free PNG + a recorded verdict on which lever works (mask vs setHidden). **RED here
-  reopens Feature A's whole premise** — if neither lever yields a clean scene-only frame, native HUD over
-  edge-to-edge is not reachable on the desktop gamepack.
+  `STONE0..13` (MinimapPlugin recipe, `MinimapPlugin.java:169`, re-applied on `TOPLEVEL_REDRAW`).
+- **Route-back interaction test (added per review — visual-HUD-free is NOT sufficient):** after EACH suppression
+  mode, precise-click the chat-tab / orb / minimap **original centres** and assert the game state changes (tab
+  switch / run toggle / quick-prayer / spec / walk-to). This catches the **suppression↔route-back conflict**:
+  **`setHidden` widgets are not clickable** — the project already learned this (`MobileChromeHideTest.java:42`:
+  hidden stones aren't clickable, fell back to varc probing) — so the A3/A5 "click the engine widget" route-back
+  would be **dead** under the `setHidden` fallback. `setDraw2DMask` (rendering-only suppression, widgets stay
+  live) is therefore the **strongly preferred** lever precisely because it preserves click-through; the
+  `setHidden` fallback additionally requires per-action alternative invoke paths (varc/clientscript), expanding
+  scope.
+- Exit: a scene-only HUD-free PNG **+ all route-back interactions confirmed** + a recorded verdict on which lever
+  works. **RED here reopens Feature A's whole premise** — if neither lever yields a clean scene-only frame *with
+  working route-back*, native HUD over edge-to-edge is not reachable on the desktop gamepack.
 
 **A1 — Edge-to-edge scene-only publish (the shared seam; desktop soak → device).**
 - Goal: get the HUD-free scene to the native layer, full-bleed, without re-introducing the revert's clipping.
@@ -163,13 +177,24 @@ strictly gated and never concurrent with Track A's seam work.**
   `menuPeekSnapshot` pattern); native reads via reverse-JNI.
 - Exit: native logs faithful chat/minimap/orb snapshots that track live game state on device. md5-gated.
 
+**A2.5 — Crude fidelity spike (added per review; native + device).**
+- Goal: expose chat/minimap **fidelity cost** before committing to polished A3/A4 (S2 is path-agnostic but **not
+  effort-agnostic** — chat formatting is tied to script callbacks, `ChatMessageManager.java:99`, not a clean
+  "call this helper" API; the minimap is sprites + positions, not a composited bitmap).
+- Work: throwaway native chat list (plain rows, resolved colour) + native minimap (player dot + a few NPC dots +
+  compass), fed by A2. No tabs/scrollback/input/terrain yet — just enough to measure how far the raw data is from
+  faithful. **Run the A-ALT kill-test here too** (relocate `CHAT_CONTAINER` to the top, see if it's occluded).
+- Exit: a go/no-go read on native-reproduction effort + the A-ALT kill-test verdict, *before* any A3 polish.
+
 **A3 — Native chat veneer (the single biggest piece; native + device-iterated).**
 - Goal: a native OSRS chat box, **repositionable to the top**, with tabs / colours / scrollback / input.
 - Work: UIKit/Metal chat view fed by A2 — tabs (All/Game/Public/Private/Clan/Trade), per-message colour,
   scrollback, the input line; **chat-tap → keyboard** using the real chat-input model (closes the long-deferred
-  chat-tap→keyboard item, now native). Route back: text via the existing `onText` path; tab switch via the
-  engine's chat-tab clientscript/varbit or a synthesised click on the (hidden) engine tab — **parity-safe, no
-  `menuAction`** (the project's standing rule: click through to engine widgets, never synthesise `menuAction`).
+  chat-tap→keyboard item, now native). Route back (**depends on A0's verdict**): text via the existing `onText`
+  path; tab switch via a click-through on the **live** (rendering-suppressed, not hidden) engine tab if
+  `setDraw2DMask` is the lever, else via the chat-tab clientscript/varc — **parity-safe, no `menuAction`**
+  (standing rule: click through to engine widgets, never synthesise `menuAction`). **If A0 forced `setHidden`, the
+  click-through is dead and this needs the clientscript/varc invoke path.**
 - Exit: user-confirmed native chat at the top — readable, scrollable, typeable, tab-switchable.
 
 **A4 — Native minimap veneer (native + device).**
@@ -182,8 +207,9 @@ strictly gated and never concurrent with Track A's seam work.**
 **A5 — Native orbs veneer (native + device).**
 - Goal: native HP / prayer / run / spec orbs with actions.
 - Work: draw the four orbs from A2 (+ poison/venom/disease/stamina/quick-prayer state colouring per
-  `StatusBarsOverlay`'s model); orb taps → toggle run / open/quick-prayer / activate spec via synthesised clicks
-  on the hidden engine orb widgets (parity-safe).
+  `StatusBarsOverlay`'s model); orb taps → toggle run / open/quick-prayer / activate spec via click-through on the
+  **live** engine orb widgets (parity-safe) **iff A0's lever kept them clickable** — under the `setHidden`
+  fallback, orbs are not clickable and need per-action varc/clientscript invoke paths instead.
 - Exit: user-confirmed orbs, tappable.
 
 **A6 — Input + chrome integration (device).**
@@ -229,15 +255,21 @@ UI compositing** (the native HUD replaces it). This is the only Track-B phase th
 ## Claims to validate / refute (the adversarial surface)
 
 **Sequencing claims (the core of this brief):**
-- **S1 — A and B share exactly one mutable seam** (the native publish path, `Hooks.draw`→`JavaBridge`) and are
-  otherwise disjoint. *Cheapest refute:* find a second shared mutable point — e.g. both must rewrite
-  `HeadlessResize`, both must set `DrawCallbacks`, or A's data bridge depends on GPU state.
+- **S1 (REFINED per review) — A and B share one mutable *publish* seam** (`Hooks.draw`→`JavaBridge`) **plus a
+  shared frame-geometry contract.** A1 changes canvas size (`HeadlessResize.java:97`) and native touch-mapping
+  keys off the blitted image size (`ViewController.m:1306`); B2 sizes/blits FBOs to the canvas (`GpuPlugin.java:898`).
+  So both also touch canvas-size / frame-size / viewport / native-view-bounds / point-round-trip. *Gate:* log the
+  full frame-geometry contract (canvas, frame, viewport, native bounds, point round-trip) in **both** CPU and GPU
+  modes and prove it matches. *Refute:* find a *third* shared mutable point beyond publish + geometry.
 - **S2 — Building A on the CPU path wastes no work if B later lands;** only the thin scene-publish seam re-targets
   `fboScene`; A2–A5 (data bridge + native rendering) are path-agnostic. *Refute:* show a hard dependency from
   A2–A5 on the CPU `int[]` specifically (not just on `Client`/world-view APIs).
-- **S3 — A native HUD lets B2 skip GPU UI compositing** (`prepareInterfaceTexture`/`drawUi`/`interfaceTexture`).
-  *Refute:* show base `gpu` cannot publish the scene FBO without also driving its UI path (a coupling in the
-  `DrawCallbacks.draw(overlayColor)` ordering that forces UI compositing before the scene is presentable).
+- **S3 (REVISED per review — was false as written) — A native HUD lets B2 skip *engine-HUD* compositing only, NOT
+  all UI compositing.** `interfaceTexture` also carries RuneLite plugin overlays + post-scene Java drawing
+  (selection outlines), which `Hooks.draw` renders before the GPU return (`Hooks.java:470`). So B2 keeps
+  `drawUi`/`interfaceTexture` as an **overlay-only** texture path (engine HUD masked off via `setDraw2DMask`), not
+  a pure scene-FBO publish. *Confirm:* enable a visible RuneLite overlay, skip `drawUi`, prove it disappears —
+  demonstrating the overlay path must remain.
 
 **Native-HUD claims (Feature A, not previously reviewed):**
 - **A-1 — `setDraw2DMask(DRAW_2D_NONE)` cleanly suppresses the baked HUD on the injected gamepack** while keeping
@@ -254,23 +286,28 @@ UI compositing** (the native HUD replaces it). This is the only Track-B phase th
   *Refute:* show tab-switch or chat-send has no parity-safe synth path on the desktop gamepack.
 
 **The cheaper alternative the reviewer should explicitly weigh (open question, not yet decided):**
-- **A-ALT — Relocate the engine widgets instead of reproducing them natively.** The investigation found
-  `setForcedPosition` / `setOriginalX/Y` + `revalidate()` (used by the stock `interfacestyles` plugin to reposition
-  tab stones/containers). If the engine chat/minimap/orb widgets can be **moved** (chat→top) rather than
-  **redrawn**, Feature A collapses dramatically — no native chat reproduction, no A2–A5 long tail. **BUT** the
-  project's standing note says the HUD "can't be moved on the desktop gamepack" (corner-anchored; the relocatable
-  mobile `ToplevelOsm`/601 layout is unbuildable), and `interfacestyles` only nudges offsets, not wholesale
-  relocation, and the engine re-anchors on `TOPLEVEL_REDRAW`. **We chose native reproduction because relocation is
-  believed to fight the engine layout — the reviewer should challenge whether that belief is correct, because if
-  relocation actually holds, it is a 5×-cheaper Feature A.** Cheapest test: on desktop, `setForcedPosition` the
-  chatbox container to the top, drive a `TOPLEVEL_REDRAW`, and see whether it sticks and stays interactive.
+- **A-ALT (review verdict: likely DEAD, one kill-test left) — Relocate the engine widgets instead of reproducing
+  them natively.** `setForcedPosition` / `setOriginalX/Y` + `revalidate()` (stock `interfacestyles` plugin
+  repositions tab stones/containers). If the engine chat/minimap/orb widgets could be **moved** (chat→top) rather
+  than **redrawn**, Feature A would collapse (~5× cheaper). **Review surfaced strong evidence against it:** the
+  launcher already tried repositioned stones over the world and **reverted them because the 3D viewport occluded
+  them** (`JVMLauncher.m:679`) — engine z-order draws the scene *over* relocated 2D widgets, fatal for "chat at the
+  top over a full-bleed scene" even if `setForcedPosition` holds. This is exactly why **native veneers are immune**
+  — they draw in a UIKit layer *above* the blitted scene, outside the engine's z-order. Kept as a single kill-test
+  inside the A2.5 spike before any A3 commitment: move `CHAT_CONTAINER` to the top, force `TOPLEVEL_REDRAW`,
+  capture, verify it is **visible above the 3D viewport AND live for input**. If it renders behind the scene
+  (expected), A-ALT is dead and native chat is confirmed.
 
 ## What breaks first (predictions to confirm)
 
-- **A0:** the injected gamepack ignores `setDraw2DMask` (it's an unused flag) → fall to `setHidden`, which adds
-  `TOPLEVEL_REDRAW` re-application complexity.
+- **A0:** the injected gamepack ignores `setDraw2DMask` (unused flag) → fall to `setHidden`, which not only adds
+  `TOPLEVEL_REDRAW` re-application complexity but **kills click-through route-back** (hidden widgets aren't
+  clickable, `MobileChromeHideTest.java:42`) → A3/A5 then need varc/clientscript invoke paths.
 - **A1:** suppression is *incomplete* — a single un-hidden widget re-introduces the exact revert clipping under
   the notch. The exit gate ("nothing under the corners") must be visually strict.
+- **A1↔B2 geometry:** canvas/frame/viewport/native-bounds drift between CPU and GPU modes → touches mis-map
+  (`ViewController.m:1306` keys off the blitted image size). The frame-geometry-contract gate (S1) must pass in
+  both modes before B2 lands.
 - **A2:** chat colour resolution wants `ChatMessageManager`, which may not be cleanly reusable from the
   client-thread snapshot context; per-frame snapshot cost on the client thread.
 - **A3:** chat alone is a multi-week sub-project (tabs/colours/scrollback/input/word-wrap/icons) — the single
@@ -302,6 +339,26 @@ The reviewer's highest-value calls: (a) is recon-first + A-as-deliverable right,
 GPU gate to avoid re-targeting A1's seam once? (b) is A-ALT (relocate, don't redraw) being too quickly dismissed?
 (c) is S2 ("no wasted work") actually true, or is there hidden CPU-buffer coupling in A2–A5?
 
+## Review outcome (folded into this revision)
+
+External review verdict: **the sequencing is right** — run **B0 first**, make **A0→A7 the mainline**, and do not
+block the CPU-viable deliverable on B1/B2. Three revisions were called out and are all reflected above:
+1. **S3 weakened** — a native HUD skips *engine-HUD* compositing only; B2 still needs an **overlay-only**
+   `drawUi`/`interfaceTexture` path for RuneLite plugin overlays + post-scene selection drawing
+   (`Hooks.java:470`), not a pure scene-FBO publish.
+2. **A0 gains route-back interaction tests** — visual HUD-free is insufficient; each suppression mode must prove
+   chat-tab/orb/minimap click-through still drives game state. `setDraw2DMask` is strongly preferred over
+   `setHidden` because hidden widgets aren't clickable (`MobileChromeHideTest.java:42`), which would break A3/A5
+   route-back.
+3. **A-ALT demoted to a single kill-test** run inside the A2.5 spike before any A3 commitment — the 3D viewport
+   occludes relocated 2D widgets (`JVMLauncher.m:679`), which is likely fatal; native veneers are immune (they
+   draw above the blit).
+
+Also adopted: **S1 refined** to "publish seam + frame-geometry contract" with a both-modes geometry gate;
+**A2.5 fidelity spike** added to expose chat/minimap reproduction cost early. B2 still waits on A1, and when it
+starts it is an **overlay-only composite path**. S2 ("no wasted work") stands — A2–A5 read `Client`/world-view
+APIs, not the CPU buffer; the only path-specific piece is A1's publish seam.
+
 ## Key files / pointers
 
 - Publish seam: `runelite-client/src/main/java/net/runelite/client/callback/Hooks.java:498` (snapshot) / `:501`
@@ -312,8 +369,14 @@ GPU gate to avoid re-targeting A1's seam once? (b) is A-ALT (relocate, don't red
   `prepareInterfaceTexture` `1365-1401`, `drawUi` `1481-1532`.
 - HUD suppression: `runelite-api/src/main/java/net/runelite/api/Client.java:2093-2123` (`setDraw2DMask`);
   `runelite-api/src/main/java/net/runelite/api/widgets/Widget.java:396-411` (`setHidden`), `553-611`
-  (`setOriginalX/Y`/relocate); `net/runelite/client/plugins/minimap/MinimapPlugin.java:160-184` (hide recipe);
-  `net/runelite/client/plugins/interfacestyles/WidgetOffset.java` (relocate prior art).
+  (`setOriginalX/Y`/relocate); `net/runelite/client/plugins/minimap/MinimapPlugin.java:160-184` (hide recipe,
+  `:169`); `net/runelite/client/plugins/interfacestyles/WidgetOffset.java` (relocate prior art).
+- Suppression↔route-back evidence: `runelite-client/src/main/java/net/runelite/client/headless/MobileChromeHideTest.java:42`
+  (hidden stones aren't clickable → varc-probe fallback); `ios/app/HelloShell/JVMLauncher.m:679` (relocated stones
+  occluded by the 3D viewport → A-ALT evidence).
+- Frame-geometry contract (S1 gate): `runelite-client/src/main/java/net/runelite/client/headless/HeadlessResize.java:97`
+  (canvas size), `ios/app/HelloShell/ViewController.m:1306` (touch→game mapping off image size), `GpuPlugin.java:898`
+  (FBO sizing).
 - HUD data: `Client.java` chat `945`/`952`, minimap `1021`/`1014`/`1037`/`695`/`2050`, orbs `547`/`918`;
   `net/runelite/client/plugins/statusbars/StatusBarsOverlay.java:113-221` (orb reads reference);
   `net/runelite/client/chat/ChatMessageManager.java` (chat colour resolution).
