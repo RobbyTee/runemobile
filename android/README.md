@@ -21,16 +21,23 @@ android/
       jniLibs/arm64-v8a/            # the JRE's .so libs (gitignored) — see "Why jniLibs" below
 ```
 
-## Why the JRE is split (jniLibs vs assets)
-Since Android 10 (API 29) an app **cannot `dlopen` a `.so` from writable storage** (filesDir). So the
-embedded JRE is split:
-- **Native libs** (`libjvm.so`, `libjava.so`, `libnet.so`, `libawt*.so`, …) go in
-  `app/src/main/jniLibs/arm64-v8a/`. Gradle installs them into the APK's native-lib dir
-  (`/data/app/.../lib/arm64/`), which **is** an allowed dlopen path. `java.library.path` points here.
-- **Everything else** (the `lib/modules` image, `lib/*.jar`, `conf/`, `fontconfig`, `lib/server/` layout)
-  goes in `assets/jvm/jre/` and is unpacked to `filesDir/jvm/jre` on first launch (`AssetInstaller`).
-  `JAVA_HOME` points there. `lib/server/libjvm.so` must ALSO exist under JAVA_HOME for the bootstrap's
-  dlopen path — install it in both places (or symlink at unpack time).
+## The JRE goes in assets ONLY — do NOT mirror the .so into jniLibs
+The **entire** embedded JRE (the `lib/modules` image, `conf/`, `fontconfig`, **and every `lib/*.so` +
+`lib/server/libjvm.so`**) ships in `assets/jvm/jre/` and is unpacked to `filesDir/jvm/jre` on first launch
+(`AssetInstaller`). `JAVA_HOME` = `filesDir/jvm/jre`; `java.library.path` = `filesDir/jvm/jre/lib`. The native
+bootstrap (`libhelloshell.so`, itself loaded from the app's legit native-lib dir) `dlopen`s
+`filesDir/jvm/jre/lib/server/libjvm.so` by absolute path and preloads the rest of `lib/*.so` the same way —
+**this works** (verified 2026-06-04: real RuneLite boots to `LOGIN_SCREEN` on the arm64 emulator). The old
+"API 29 forbids dlopen from filesDir, so split the .so into jniLibs" rule does **not** apply to a
+native-initiated absolute-path dlopen of the app's own data here.
+
+> **DO NOT also place the JRE's `.so` in `app/src/main/jniLibs/arm64-v8a/`.** Mirroring them there makes the
+> linker resolve `libawt.so` **by soname** from `/data/app/.../lib/arm64/`, so `libawt`'s `JNI_OnLoad` gets a
+> non-absolute `dli_fname`; its `realpath()` then fails, the toolkit-path `malloc` is handed a garbage length,
+> and the VM aborts **`FATAL ERROR in native method: Could not allocate library name`** during
+> `java.awt.Toolkit.<clinit>` — before CACIO can take over. Symptom looked JRE-specific but reproduced
+> identically across two independent bionic jre21 builds; the cure is filesDir-only. `jniLibs/` should hold
+> only the CMake-built `libhelloshell.so` (which Gradle places there automatically — not staged by hand).
 
 ## Prerequisites already set up on this Mac
 - SDK at `~/Library/Android/sdk` (platform-35, build-tools 35, platform-tools, emulator, arm64 system image).
@@ -40,9 +47,17 @@ embedded JRE is split:
 Create `android/local.properties` with `sdk.dir=/Users/<you>/Library/Android/sdk` (gitignored).
 
 ## The blocking input: an Android arm64 (bionic) OpenJDK 21
-The iOS JRE is Mach-O — unusable here. Source a **bionic arm64 OpenJDK 21** runtime (PojavLauncher ships
-exactly this as its `jre21` runtime) and split it as above. This is the one artifact that gates even the
-Milestone-A smoke.
+The iOS JRE is Mach-O — unusable here. Need a **bionic arm64 OpenJDK 21** (interpreter `/system/bin/linker64`,
+NEEDS the unversioned `libc.so`/`libm.so`/`libdl.so` — *not* glibc's `libc.so.6`). Verified-working source:
+`AngelAuraMC/angelauramc-openjdk-build` release `download_jre21` asset **`jre21-android-arm64.tar.xz`** (same
+Amethyst/PojavLauncher lineage as our iOS JRE). Stage it:
+1. Unzip the whole tree → `app/src/main/assets/jvm/jre/` (assets ONLY — see the jniLibs warning above).
+2. Build the missing `libawt_xawt.so`: `ANDROID_SDK_ROOT=~/Library/Android/sdk dev-tools/fake-xawt/build-libawt_xawt.sh`
+   (the JRE ships `libawt_headless.so` but no headful xawt; the fake provides the `initIDs` stubs).
+3. `tools/stage-mobile-runtime.sh` stages the shared `client`/`probes` jars.
+
+This is the one artifact that gates even the Milestone-A smoke. (The QuestCraftPlusPlus fork's `JRE-21.zip`
+also boots HotSpot but is otherwise interchangeable — both hit the jniLibs/`libawt` trap identically.)
 
 ## Milestones
 - **A — JVM Hello on the emulator (DONE):** `JvmLauncher.startJvm(mainClass="Hello")` boots HotSpot and runs
