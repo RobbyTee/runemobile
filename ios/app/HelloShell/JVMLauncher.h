@@ -39,6 +39,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// True once the VM is up and the JavaBridge class has been resolved — i.e. live blit + touch are usable.
 + (BOOL)bridgeReady;
 
+/// Monotonic counter that advances when an in-game left tap resolved to an interactable (not a bare walk).
+/// The shell polls this and fires a light haptic on change. Returns 0 if the bundled jar predates it.
++ (int)interactTapSeq;
+
 /// Pull the engine's latest composited frame as a UIImage (reverse JNI -> JavaBridge.getFramePixels).
 /// Returns nil before the first draw / if the VM isn't up yet. Call on the main thread.
 + (nullable UIImage *)latestFrame;
@@ -57,6 +61,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// deliberate UI proxies (native chrome tapping a tab stone / widget) where touch-forgiveness must not pull
 /// the click onto a nearby world entity. Call on the main thread.
 + (void)postClickPreciseX:(int)x y:(int)y button:(int)button;
+
+/// Select an open right-click menu row at (x,y), then clear the parked hover so the engine doesn't leave the
+/// cursor stuck on the selected target (the "stays on the stairs" bug). Use for the native menu commit/cancel.
++ (void)postMenuSelectX:(int)x y:(int)y;
 
 /// Move the pointer (no button held) into the gamepack via JavaBridge.onMove — a plain MOUSE_MOVED.
 /// Used to highlight the entry under the finger while drag-selecting an open right-click menu.

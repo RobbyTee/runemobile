@@ -58,11 +58,34 @@
 @property (nonatomic, copy)   NSString *captureDir;
 @property (nonatomic, copy)   NSString *lastFrameName;
 @property (nonatomic, assign) int framesShown;
-// Drag-to-select right-click menu: while a long-press is held, the menu is open and the finger's
-// position tracks/highlights an entry; release selects it (or cancels, off the entries).
+// Native mobile right-click menu: a long-press opens the engine menu (right-click), then once that menu is
+// reflected in the MenuPeekBridge snapshot we build a big-row native OSRS-styled overlay over it and the
+// user taps a row to pick (click-through to the engine row). menuOpen guards camera-pan while it's up.
 @property (nonatomic, assign) BOOL menuOpen;
 @property (nonatomic, assign) int  lastMenuX;
 @property (nonatomic, assign) int  lastMenuY;
+@property (nonatomic, assign) BOOL menuBuilding;          // right-clicked; polling for the engine menu snapshot
+@property (nonatomic, assign) BOOL menuTouchActive;       // the long-press finger is still down (drag in progress)
+@property (nonatomic, assign) NSTimeInterval menuOpenAt;  // when the right-click fired (build timeout)
+@property (nonatomic, strong) UIView *menuContainer;      // the native OSRS-styled menu box
+@property (nonatomic, strong) NSMutableArray<UIView *> *menuRows; // the row views (index 0 = top = default)
+@property (nonatomic, assign) int  menuHighlight;         // currently locked-on display row (-1 = none/header)
+@property (nonatomic, assign) CGPoint menuAnchor;         // press point in self.view coords (menu origin)
+@property (nonatomic, assign) BOOL menuHandRight;         // pressed on the right half -> open the menu leftward
+@property (nonatomic, strong) UISelectionFeedbackGenerator *menuHaptic; // light tick when the highlight moves
+// Interactable-tap feedback: a light haptic when a tap grabs a real interactable (polled via JavaBridge
+// interactTapSeq), and a yellow fading click-ring drawn at every tap point (the Jagex-Mobile click marker).
+@property (nonatomic, assign) int lastInteractTapSeq;
+@property (nonatomic, strong) UIImpactFeedbackGenerator *tapHaptic;
+// The click ring is deferred one beat so it can pick the official colour: RED if the tap resolved to an
+// interactable (the engine bumped interactTapSeq), YELLOW for a plain walk (no bump within the grace window).
+@property (nonatomic, assign) BOOL pendingClick;
+@property (nonatomic, assign) CGPoint pendingClickPoint;
+@property (nonatomic, assign) NSTimeInterval pendingClickAt;
+@property (nonatomic, assign) int emX;                    // live engine-menu geometry (for click-through)
+@property (nonatomic, assign) int emY;
+@property (nonatomic, assign) int emW;
+@property (nonatomic, assign) int emCount;
 // Pinch-zoom: accumulate the scale change into whole wheel notches.
 @property (nonatomic, assign) CGFloat pinchPrevScale;
 @property (nonatomic, assign) CGFloat wheelAccum;
@@ -110,6 +133,19 @@ static NSString * const kKbSentinel = @"​";
 // both sides, so the docked side panel (at the game-canvas edge) ends INBOARD of the screen edge and the
 // native tabs fill the strips flush against it — the official mobile arrangement, with no widget moving.
 static const CGFloat kTabStrip = 46.0;
+
+// OSRS right-click menu geometry, straight from RuneLite's own hit-test (InteractHighlightOverlay
+// .hoveredMenuEntry): the "Choose Option" title strip is 19px, each entry row is 15px. These are fixed
+// pixel sizes in the gamepack render space (independent of canvas resolution), so a native row index k maps
+// to the engine row centre at (menuX + menuW/2, menuY + 19 + k*15 + 7) for click-through. Display order
+// matches MenuPeekBridge: row 0 (top) = the left-click default; the bottom row (index count-1) = "Cancel".
+static const int kMenuHeaderPx = 19;
+static const int kMenuRowPx    = 15;
+
+// Native overlay sizing (compact — much smaller than the first pass): row height, header strip, box width.
+static const CGFloat kMenuRowViewH    = 32.0;
+static const CGFloat kMenuHeaderViewH = 22.0;
+static const CGFloat kMenuWidth       = 210.0;
 
 @implementation ViewController
 
@@ -1160,7 +1196,11 @@ static const CGFloat kTabStrip = 46.0;
     CGFloat sw = b.size.width - ins.left - ins.right - 2 * kTabStrip;
     CGFloat sh = b.size.height - ins.top - ins.bottom;
     CGFloat aspect = (sh > 0 ? sw / sh : 2.0);
-    int renderH = 600;
+    // Render height is the sharpness<->FPS dial: the engine SOFTWARE-renders at renderW×renderH every frame
+    // (no GPU on iOS), so cost scales with pixel count. 600 looked soft; 900 was crisp but cut FPS noticeably
+    // (+125% pixels); 720 is the balance — clearly sharper than 600 (~+44% pixels) while staying smooth. Bump
+    // toward 800 if there's FPS headroom, drop toward 640 if not.
+    int renderH = 720;
     int renderW = (int)lround(renderH * aspect);
     launcher.resizeSpec = [NSString stringWithFormat:@"%dx%d", renderW, renderH];
     [self appendLine:[NSString stringWithFormat:@"[shell] inset-area %.0fx%.0f aspect %.3f -> render %@",
@@ -1232,6 +1272,31 @@ static const CGFloat kTabStrip = 46.0;
             }
         }
     }
+
+    // Native right-click menu: once the engine menu a long-press opened lands in the peek snapshot, build the
+    // big-row overlay over it (then tap-to-pick). Polled every tick while pending — settles within ~1-2 frames.
+    if (self.menuBuilding) {
+        [self tryBuildNativeMenu];
+    }
+
+    // Interactable-tap feedback: when the engine resolved a tap to a real interactable it bumps the counter —
+    // give a light buzz (the "you grabbed something" feel) and draw a RED click ring. A plain walk doesn't bump,
+    // so after a short grace window we draw a YELLOW ring instead (and stay silent). Matches the official app.
+    int its = [JVMLauncher interactTapSeq];
+    if (its != self.lastInteractTapSeq) {
+        self.lastInteractTapSeq = its;
+        if (!self.tapHaptic) { self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight]; }
+        [self.tapHaptic impactOccurred];
+        [self.tapHaptic prepare];
+        if (self.pendingClick) {
+            [self flashClickRingAt:self.pendingClickPoint color:[UIColor colorWithRed:1.0 green:0.2 blue:0.15 alpha:1.0]];
+            self.pendingClick = NO;
+        }
+    }
+    if (self.pendingClick && CACurrentMediaTime() - self.pendingClickAt > 0.10) {
+        [self flashClickRingAt:self.pendingClickPoint color:[UIColor colorWithRed:1.0 green:0.84 blue:0.0 alpha:1.0]];
+        self.pendingClick = NO;
+    }
 }
 
 #pragma mark - Touch -> AWT bridge (Phase 5 control scheme)
@@ -1257,59 +1322,271 @@ static const CGFloat kTabStrip = 46.0;
 // tap -> left click (walk / interact / select a menu entry).
 - (void)onTap:(UITapGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady]) return;
+    CGPoint vp = [g locationInView:self.view];
     int gx = 0, gy = 0;
     if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return;
+    // Defer the ring one beat: onDisplayTick draws it red (interactable) or yellow (walk) once the engine has
+    // resolved the tap. Pump the haptic generator so the buzz is low-latency if it turns out to be an interact.
+    self.pendingClick = YES;
+    self.pendingClickPoint = vp;
+    self.pendingClickAt = CACurrentMediaTime();
+    if (!self.tapHaptic) { self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight]; }
+    [self.tapHaptic prepare];
     [JVMLauncher postClickX:gx y:gy button:1];
     [self appendLine:[NSString stringWithFormat:@"[shell] tap -> click(L) game %d,%d", gx, gy]];
 }
 
-// long-press -> drag-to-select right-click menu (the official OSRS-mobile feel). One continuous gesture
-// drives the menu's whole lifecycle:
-//   .began   -> right-click at the press point: opens the menu (right-mouse-down equivalent).
-//   .changed -> move the pointer (no button held) to the finger: the gamepack highlights the entry the
-//               finger is over, so sliding down walks the highlight through the options.
-//   .ended   -> left-click at the release point: selects the highlighted entry. Releasing OFF the entries
-//               lands a click outside the menu bounds, which the gamepack treats as a cancel/close.
+// Draw the official-style click marker: a ring (red = interactable, yellow = walk) that expands and fades out
+// over ~0.45s at the tap point, then removes itself. Pure native (CAShapeLayer) — no game involvement.
+- (void)flashClickRingAt:(CGPoint)p color:(UIColor *)color {
+    const CGFloat r0 = 9.0;   // starting radius
+    CAShapeLayer *ring = [CAShapeLayer layer];
+    ring.frame = CGRectMake(p.x - r0, p.y - r0, r0 * 2, r0 * 2);
+    ring.path = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(0, 0, r0 * 2, r0 * 2)].CGPath;
+    ring.fillColor = [UIColor clearColor].CGColor;
+    ring.strokeColor = color.CGColor;
+    ring.lineWidth = 2.5;
+    [self.view.layer addSublayer:ring];
+
+    CABasicAnimation *scale = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
+    scale.fromValue = @0.5; scale.toValue = @2.2;
+    CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue = @1.0; fade.toValue = @0.0;
+    CAAnimationGroup *grp = [CAAnimationGroup animation];
+    grp.animations = @[scale, fade];
+    grp.duration = 0.45;
+    grp.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+    grp.removedOnCompletion = YES;
+    [CATransaction begin];
+    [CATransaction setCompletionBlock:^{ [ring removeFromSuperlayer]; }];
+    [ring addAnimation:grp forKey:@"clickRing"];
+    ring.opacity = 0.0;   // end state (the animation drives the visible fade)
+    [CATransaction commit];
+}
+
+// long-press -> hold-drag-release native menu (the OSRS-mobile feel). One continuous gesture:
+//   .began   -> right-click at the press point to open the engine menu; record the press point + which hand
+//               (left/right half of the screen) so the native overlay opens to the side away from the hand.
+//   .changed -> as the finger slides, lock the highlight onto the row under it (a light haptic tick each time
+//               it moves to a new option).
+//   .ended   -> release commits the locked-on row via click-through; releasing off the rows cancels.
+// The native rows are non-interactive labels — selection is driven entirely by this drag, so there is no
+// race with the rows' own touch handling. The overlay is built a frame or two after .began (it waits for the
+// engine menu to land in the MenuPeekBridge snapshot), so updateMenuHighlight no-ops until it exists.
 - (void)onLongPress:(UILongPressGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady]) return;
-    int gx = 0, gy = 0;
-    BOOL inside = [self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy];
-    if (inside) { self.lastMenuX = gx; self.lastMenuY = gy; }
+    CGPoint loc = [g locationInView:self.view];
 
     switch (g.state) {
-        case UIGestureRecognizerStateBegan:
-            if (!inside) return;                 // started in the letterbox — ignore
-            [JVMLauncher postClickX:gx y:gy button:3];
+        case UIGestureRecognizerStateBegan: {
+            int gx = 0, gy = 0;
+            if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return; // letterbox
+            if (self.menuOpen) [self teardownMenuViews];   // re-press: drop a stale menu, open fresh
+            self.lastMenuX = gx; self.lastMenuY = gy;
+            self.menuAnchor = loc;
+            self.menuHandRight = (loc.x > self.view.bounds.size.width * 0.5);  // right half -> right hand
+            [JVMLauncher postClickX:gx y:gy button:3];      // open the engine right-click menu at the finger
             self.menuOpen = YES;
-            [self appendLine:[NSString stringWithFormat:@"[shell] long-press -> menu open(R) game %d,%d", gx, gy]];
+            self.menuBuilding = YES;
+            self.menuTouchActive = YES;
+            self.menuHighlight = -1;
+            self.menuOpenAt = CACurrentMediaTime();
+            self.menuHaptic = [UISelectionFeedbackGenerator new];
+            [self.menuHaptic prepare];
+            [self appendLine:[NSString stringWithFormat:@"[shell] long-press -> menu open(R) game %d,%d hand=%@",
+                              gx, gy, self.menuHandRight ? @"R" : @"L"]];
             break;
-
+        }
         case UIGestureRecognizerStateChanged:
-            if (!self.menuOpen) return;
-            // Track the finger to highlight the entry under it (use the last in-frame point if the finger
-            // has slid into the letterbox, so the highlight sticks to the nearest edge entry).
-            [JVMLauncher postMoveX:self.lastMenuX y:self.lastMenuY];
+            if (self.menuContainer) [self updateMenuHighlightForPoint:loc];
             break;
 
         case UIGestureRecognizerStateEnded:
-            if (self.menuOpen) {
-                // Select at the release point (or the last in-frame point). On an entry -> selects; off
-                // the entries -> a click outside the menu, which the gamepack reads as cancel/close.
-                [JVMLauncher postClickX:self.lastMenuX y:self.lastMenuY button:1];
-                [self appendLine:[NSString stringWithFormat:@"[shell] menu select(L) game %d,%d",
-                                  self.lastMenuX, self.lastMenuY]];
-            }
-            self.menuOpen = NO;
+            self.menuTouchActive = NO;
+            if (self.menuContainer) [self commitMenuSelection];   // pick the locked-on row (or cancel if none)
+            // If the menu hasn't built yet (very quick release), tryBuildNativeMenu sees menuTouchActive==NO
+            // and cancels it cleanly once it does build.
             break;
 
         case UIGestureRecognizerStateCancelled:
         case UIGestureRecognizerStateFailed:
-            self.menuOpen = NO;
+            self.menuTouchActive = NO;
+            if (self.menuContainer) [self cancelMenu];
             break;
 
         default:
             break;
     }
+}
+
+#pragma mark - Native mobile right-click menu
+
+// Poll the MenuPeekBridge snapshot (from onDisplayTick while menuBuilding) until the engine menu the
+// long-press opened is reflected, then present the native overlay. Times out if the right-click produced no
+// menu (nothing under the finger). Reads only — never invokes.
+- (void)tryBuildNativeMenu {
+    NSString *snap = [JVMLauncher menuPeekSnapshot];
+    NSDictionary *d = snap.length
+        ? [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil]
+        : nil;
+    BOOL ready = [d isKindOfClass:[NSDictionary class]]
+        && [d[@"loggedIn"] boolValue] && [d[@"menuOpen"] boolValue]
+        && [d[@"count"] intValue] > 0
+        && [d[@"entries"] isKindOfClass:[NSArray class]] && [(NSArray *)d[@"entries"] count] > 0;
+    if (ready) {
+        self.menuBuilding = NO;
+        [self presentNativeMenu:d];
+        if (!self.menuTouchActive) {
+            [self cancelMenu];   // finger lifted before the menu built — close the engine menu, show nothing
+        }
+        return;
+    }
+    if (CACurrentMediaTime() - self.menuOpenAt > 1.0) {
+        self.menuBuilding = NO;
+        self.menuOpen = NO;
+        [self appendLine:@"[shell] native menu: no engine menu within 1s — aborting"];
+    }
+}
+
+// Build the compact native menu from the snapshot. Header sits at the finger; the body extends DOWN and
+// toward the side AWAY from the holding hand (so the hand doesn't cover the rows). Each row's click-through
+// targets the engine row centre via the OSRS 19/15 geometry, so plugin onClick consumers + Menu Entry Swapper
+// reordering are honoured (no menuAction). The bottom entry is the engine's own "Cancel" (no synthetic row).
+- (void)presentNativeMenu:(NSDictionary *)d {
+    [self teardownMenuViews];
+
+    self.emX = [d[@"menuX"] intValue];
+    self.emY = [d[@"menuY"] intValue];
+    self.emW = [d[@"menuW"] intValue];
+    self.emCount = [d[@"count"] intValue];
+    NSArray *entries = [d[@"entries"] isKindOfClass:[NSArray class]] ? d[@"entries"] : @[];
+    NSUInteger n = MIN(entries.count, (NSUInteger)14);
+    if (n == 0) { [self cancelMenu]; return; }
+
+    CGFloat totalH = kMenuHeaderViewH + n * kMenuRowViewH;
+
+    // Header at the finger; body offset to the opposite side of the hand (finger near the near top corner).
+    CGFloat ox = self.menuHandRight ? (self.menuAnchor.x - (kMenuWidth - 26.0)) : (self.menuAnchor.x - 26.0);
+    CGFloat oy = self.menuAnchor.y - kMenuHeaderViewH * 0.5;
+    ox = MAX(6, MIN(ox, self.view.bounds.size.width - kMenuWidth - 6));
+    oy = MAX(6, MIN(oy, self.view.bounds.size.height - totalH - 6));
+
+    self.menuContainer = [[UIView alloc] initWithFrame:CGRectMake(ox, oy, kMenuWidth, totalH)];
+    self.menuContainer.backgroundColor = [UIColor colorWithRed:0.13 green:0.11 blue:0.09 alpha:0.93];
+    self.menuContainer.layer.borderColor = [UIColor colorWithRed:0.55 green:0.50 blue:0.40 alpha:1.0].CGColor;
+    self.menuContainer.layer.borderWidth = 1.0;
+    self.menuContainer.layer.cornerRadius = 3.0;
+    self.menuContainer.clipsToBounds = YES;
+    self.menuContainer.userInteractionEnabled = NO;   // selection is driven by the long-press drag, not taps
+
+    UILabel *hdr = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, kMenuWidth - 20, kMenuHeaderViewH)];
+    hdr.text = @"Choose Option";
+    hdr.font = [UIFont boldSystemFontOfSize:12];
+    hdr.textColor = [UIColor whiteColor];   // classic Jagex-Mobile "Choose Option" (white on dark)
+    [self.menuContainer addSubview:hdr];
+
+    self.menuRows = [NSMutableArray arrayWithCapacity:n];
+    CGFloat y = kMenuHeaderViewH;
+    for (NSUInteger k = 0; k < n; k++) {
+        UILabel *row = [self menuRowLabelForEntry:entries[k] top:(k == 0)
+                                            frame:CGRectMake(0, y, kMenuWidth, kMenuRowViewH)];
+        [self.menuContainer addSubview:row];
+        self.menuRows[k] = row;
+        y += kMenuRowViewH;
+    }
+    [self.view addSubview:self.menuContainer];
+    if (self.menuTouchActive) [self updateMenuHighlightForPoint:self.menuAnchor];
+    [self appendLine:[NSString stringWithFormat:@"[shell] native menu: %d entries at game %d,%d w=%d",
+                      self.emCount, self.emX, self.emY, self.emW]];
+}
+
+// One row label (non-interactive). Option in white (yellow for the top/default = left-click), target in OSRS
+// blue, left-indented via a paragraph head-indent so a full-width highlight can span the row.
+- (UILabel *)menuRowLabelForEntry:(NSDictionary *)e top:(BOOL)top frame:(CGRect)f {
+    UILabel *l = [[UILabel alloc] initWithFrame:f];
+    l.backgroundColor = [UIColor clearColor];
+    (void)top;
+    NSString *opt = [e[@"opt"] isKindOfClass:[NSString class]] ? e[@"opt"] : @"";
+    NSString *tgt = [e[@"tgt"] isKindOfClass:[NSString class]] ? e[@"tgt"] : @"";
+    UIColor *optColor = [UIColor whiteColor];   // classic menu: option verb white, target tinted (below)
+    UIFont *font = [UIFont boldSystemFontOfSize:15];
+    NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new];
+    ps.firstLineHeadIndent = 10; ps.headIndent = 10; ps.lineBreakMode = NSLineBreakByTruncatingTail;
+    NSMutableAttributedString *s = [[NSMutableAttributedString alloc] initWithString:opt
+        attributes:@{NSForegroundColorAttributeName: optColor, NSFontAttributeName: font,
+                     NSParagraphStyleAttributeName: ps}];
+    if (tgt.length) {
+        [s appendAttributedString:[[NSAttributedString alloc]
+            initWithString:[@" " stringByAppendingString:tgt]
+            attributes:@{NSForegroundColorAttributeName: [UIColor colorWithRed:0.55 green:0.85 blue:1.0 alpha:1.0],
+                         NSFontAttributeName: font, NSParagraphStyleAttributeName: ps}]];
+    }
+    l.attributedText = s;
+    return l;
+}
+
+// Lock the highlight onto the row under the finger (view coords). Returns nothing; updates menuHighlight and
+// fires a light haptic tick when it changes. -1 = on the header / off to the side -> cancel zone.
+- (void)updateMenuHighlightForPoint:(CGPoint)p {
+    int row = [self menuRowIndexForPoint:p];
+    if (row == self.menuHighlight) return;
+    self.menuHighlight = row;
+    for (NSUInteger i = 0; i < self.menuRows.count; i++) {
+        self.menuRows[i].backgroundColor = ((int)i == row)
+            ? [UIColor colorWithWhite:1.0 alpha:0.22]   // classic locked-on row wash
+            : [UIColor clearColor];
+    }
+    [self.menuHaptic selectionChanged];
+    [self.menuHaptic prepare];
+}
+
+// Map a view-space point to a display row index, or -1 for the header/cancel zone. Selection is Y-driven (the
+// body may be offset from the finger), with a horizontal tolerance band so a straight slide down still tracks.
+- (int)menuRowIndexForPoint:(CGPoint)p {
+    if (!self.menuContainer || self.menuRows.count == 0) return -1;
+    CGRect fr = self.menuContainer.frame;
+    const CGFloat xTol = 40.0;
+    if (p.x < fr.origin.x - xTol || p.x > CGRectGetMaxX(fr) + xTol) return -1;  // off to the side
+    CGFloat ry = p.y - (fr.origin.y + kMenuHeaderViewH);
+    if (ry < 0) return -1;                                                      // on the header / above
+    int row = (int)(ry / kMenuRowViewH);
+    int maxRow = (int)self.menuRows.count - 1;
+    return MIN(row, maxRow);                                                    // overshoot below -> last row
+}
+
+// Release commits the locked-on row via click-through to the engine row centre (OSRS 19/15 geometry).
+// onClickPrecise moves-then-clicks on the client thread, so the engine highlights then selects that exact row.
+- (void)commitMenuSelection {
+    int k = self.menuHighlight;
+    if (k < 0 || k >= (int)self.menuRows.count) { [self cancelMenu]; return; }
+    int gx = self.emX + self.emW / 2;
+    int gy = self.emY + kMenuHeaderPx + k * kMenuRowPx + kMenuRowPx / 2;
+    [JVMLauncher postMenuSelectX:gx y:gy];   // select + clear the parked hover (no "stuck on target" cursor)
+    [self appendLine:[NSString stringWithFormat:@"[shell] menu select row %d -> click-through game %d,%d", k, gx, gy]];
+    [self teardownMenuViews];
+    self.menuOpen = NO;
+}
+
+// Close the engine menu through its OWN bottom "Cancel" entry (display index count-1 = array[0]) so there is
+// no stray world click, then tear down the overlay.
+- (void)cancelMenu {
+    if (self.emCount > 0) {
+        int k = self.emCount - 1;
+        int gx = self.emX + self.emW / 2;
+        int gy = self.emY + kMenuHeaderPx + k * kMenuRowPx + kMenuRowPx / 2;
+        [JVMLauncher postMenuSelectX:gx y:gy];   // click the engine Cancel row + clear the parked hover
+    }
+    [self appendLine:@"[shell] native menu cancelled"];
+    [self teardownMenuViews];
+    self.menuOpen = NO;
+}
+
+- (void)teardownMenuViews {
+    [self.menuContainer removeFromSuperview];
+    self.menuContainer = nil;
+    self.menuRows = nil;
+    self.menuHighlight = -1;
+    self.menuBuilding = NO;
 }
 
 // one-finger drag -> rotate the camera. Feed incremental pixel deltas (reset the recognizer's translation
@@ -1333,7 +1610,9 @@ static const CGFloat kTabStrip = 46.0;
     CGPoint d = [g translationInView:self.screen];
     [g setTranslation:CGPointZero inView:self.screen];   // make the next delta incremental
     if (d.x == 0 && d.y == 0) return;
-    [JVMLauncher postCameraDx:(int)lround(d.x) dy:(int)lround(d.y)];
+    // Inverted both axes (user preference): swipe direction now drags the world the opposite way (like
+    // grabbing the scene), matching the feel they want vs. the previous "push the camera" direction.
+    [JVMLauncher postCameraDx:(int)lround(-d.x) dy:(int)lround(-d.y)];
 }
 
 // pinch -> zoom via the mouse wheel. Accumulate the scale change into whole wheel notches; pinch out

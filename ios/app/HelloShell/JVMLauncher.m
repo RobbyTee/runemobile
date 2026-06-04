@@ -35,9 +35,11 @@ static _Atomic(JavaVM *) gVM = NULL;  // set right after JNI_CreateJavaVM; clear
 static JNIEnv   *gMainEnv = NULL;     // the UI thread's attached env (main thread only)
 static jclass    gBridgeClass = NULL; // global ref to net.runelite.client.headless.JavaBridge
 static jmethodID gMidW = NULL, gMidH = NULL, gMidSeq = NULL, gMidPixels = NULL;
+static jmethodID gMidInteractSeq = NULL;  // getInteractTapSeq()I — native haptic cue (optional; tolerate older jar)
 static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidClickPrecise = NULL, gMidMove = NULL;
 static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
 static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
+static jmethodID gMidMenuSelect = NULL;  // selectMenuPoint(II)V — menu row select + hover-clear (optional)
 
 // W3 hybrid-chrome read surface — a SEPARATE facade (MobileChromeBridge) resolved lazily on the main thread.
 static jclass    gChromeClass = NULL;   // global ref to net.runelite.client.headless.MobileChromeBridge
@@ -168,6 +170,11 @@ static BOOL ensureBridge(void) {
         (*env)->DeleteGlobalRef(env, global);   // don't leak the class ref on the retry path
         return NO;                              // retry next tick (the class may load just after bringup)
     }
+    // Optional (not in the mandatory set above, so an older jar without it still boots the bridge).
+    gMidInteractSeq = (*env)->GetStaticMethodID(env, global, "getInteractTapSeq", "()I");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidInteractSeq = NULL; }
+    gMidMenuSelect = (*env)->GetStaticMethodID(env, global, "selectMenuPoint", "(II)V");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidMenuSelect = NULL; }
     gBridgeClass = global;   // publish only once fully resolved
     return YES;
 }
@@ -662,7 +669,8 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
                                                      // snapshot (tab/panel/minimap/orb/chat/viewport bounds).
                                                      // NOT the .probe gate — that mutates and is desktop-only.
         @"-Drunelite.menupeek=true",                 // W3 touch-targeting: arm the read-only MenuPeekBridge
-                                                     // (press-and-peek reticle/chip). NOT .probe (desktop-only).
+                                                     // (native right-click menu data source). NOT .probe (desktop-only).
+        @"-Drunelite.menupeek.maxEntries=14",        // publish enough display rows for the native menu (default 10)
         @"-Drunelite.hub=true",                      // plugin hub: drop --safe-mode so external plugins load
                                                      // (device-de-risked 2026-06-02). Also disables the
                                                      // headless-irrelevant GPU plugin.
@@ -814,6 +822,16 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     return ensureBridge();
 }
 
+// Monotonic counter that advances each time an in-game left tap resolved to an interactable (hit or snap),
+// not a bare walk. The shell polls this and fires a light haptic when it changes. 0 if the jar predates it.
++ (int)interactTapSeq {
+    if (!ensureBridge() || !gMidInteractSeq) return 0;
+    JNIEnv *env = gMainEnv;
+    jint v = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidInteractSeq);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0; }
+    return (int)v;
+}
+
 + (UIImage *)latestFrame {
     if (!ensureBridge()) return nil;
     JNIEnv *env = gMainEnv;
@@ -889,6 +907,19 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidClickPrecise, (jint)x, (jint)y, (jint)button);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
+// Select an open-menu row at (x,y) AND clear the parked hover afterwards (avoids the "cursor stuck on the
+// stairs" bug). Falls back to a plain precise click if the jar predates selectMenuPoint.
++ (void)postMenuSelectX:(int)x y:(int)y {
+    if (!ensureBridge()) return;
+    JNIEnv *env = gMainEnv;
+    if (gMidMenuSelect) {
+        (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidMenuSelect, (jint)x, (jint)y);
+    } else {
+        (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidClickPrecise, (jint)x, (jint)y, (jint)1);
+    }
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 
