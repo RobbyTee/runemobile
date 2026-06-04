@@ -459,6 +459,12 @@ public class Hooks implements Callbacks
 			// click-through, on the client thread. Mutates widget state; gated -Drunelite.hudisolation=true.
 			net.runelite.client.headless.HudIsolationTest.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.EdgeToEdgeProbe.isEnabled())
+		{
+			// W3 Feature-A phase A1 (desktop): hide the WHOLE engine 2D HUD at a wide aspect + prove the scene
+			// fills the canvas edge-to-edge. Mutates widget state; gated -Drunelite.edge2edge=true.
+			net.runelite.client.headless.EdgeToEdgeProbe.tick(client, client.getGameState());
+		}
 		if (net.runelite.client.headless.MenuPeekBridge.isEnabled())
 		{
 			// W3 touch-targeting: publish the read-only menu-peek snapshot the native press-and-peek UI polls

@@ -1,0 +1,3 @@
+2026-06-04 04:32:10 PDT [Client] INFO  n.r.client.headless.EdgeToEdgeProbe - [edge2edge] in-world root=PreEoc hudTargets=20 canvas=1560x720
+2026-06-04 04:32:11 PDT [Client] INFO  n.r.client.headless.EdgeToEdgeProbe - [edge2edge] captured edge2edge-scene-1560x720.png (1560x720)
+2026-06-04 04:32:11 PDT [Client] INFO  n.r.client.headless.EdgeToEdgeProbe - [edge2edge] EDGE2EDGE root=PreEoc canvas=1560x720 viewport=1560x720@0,0 viewportFillsCanvas=true hudTotal=20 hudHidden=20

@@ -189,6 +189,18 @@ strictly gated and never concurrent with Track A's seam work.**
 - De-risk: re-run `ResizeSoakProbe` with suppression active (the 200-cycle soak already passed without it).
 - Exit: device shows a full-bleed, HUD-free scene with **nothing** bleeding under the corners/notch (the exact
   thing the reverted full-screen could not do). md5-gated.
+- **A1 RESULT (desktop half) — DONE, md5-gated GREEN (`EDGE2EDGE_GREEN_AS_EXPECTED`), 2026-06-04.** Probe
+  `EdgeToEdgeProbe` (`-Drunelite.edge2edge=true`), harness `run-edge2edge.sh` + `edge2edge-verdict.sh`; evidence
+  `ios/app/evidence/a1-edge2edge-scene-1560x720-20260604.png`. At the device wide full-bleed aspect **1560×720
+  (~19.5:9)** with the full engine 2D HUD `setHidden` (20 targets: minimap/mapContainer/orbs/chat/sidePanels/
+  sideContainer + 14 tab stones): **the resizable 3D viewport fills the wide canvas edge-to-edge** (viewport
+  `1560×720@0,0` == canvas — settles the new unknown: no letterbox at 19.5:9) and all 20 targets hide; the PNG
+  shows a clean wide scene with the major HUD gone. **Completeness note (the brief's predicted "incomplete
+  suppression"):** a few PERIPHERAL widgets outside the 20-target set remain (top-right logout/world-map/store
+  buttons + a bottom-right icon row) — enumerate + add to the hide set in A6. The runtime-resize TOGGLE (reverted
+  with full-screen) was NOT needed — edge-to-edge is the default, so the launch-time resize sets the aspect once.
+  **Device half pending** (native ViewController pins full-bleed + the atomic `[w,h,px]` snapshot, recoverable
+  from git `348dd55e4..75e5253cf`).
 
 **A2 — HUD data bridge (read-only; desktop → device).**
 - Goal: publish chat / minimap / orb data to native each frame.
