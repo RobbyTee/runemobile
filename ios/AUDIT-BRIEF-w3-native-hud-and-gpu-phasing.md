@@ -198,8 +198,16 @@ strictly gated and never concurrent with Track A's seam work.**
   /stamina state). Publish as escaped-JSON snapshots + seq (mirrors the existing `chromeSnapshot`/
   `menuPeekSnapshot` pattern); native reads via reverse-JNI.
 - Exit: native logs faithful chat/minimap/orb snapshots that track live game state on device. md5-gated.
-
-**A2.5 — Crude fidelity spike (added per review; native + device).**
+- **A2 RESULT (desktop half) — DONE, md5-gated GREEN (`HUD_DATA_GREEN_AS_EXPECTED`), 2026-06-04.** `HudDataBridge`
+  (`-Drunelite.huddata=true`, ticked read-only in `Hooks.draw`), harness `run-hud-data.sh` + `hud-data-verdict.sh`;
+  evidence `ios/app/evidence/a2-hud-data-trail-20260604.log`. Publishes a per-frame escaped-JSON snapshot
+  (`getSnapshot()`/`getSeq()`, native reads via reverse-JNI) carrying **chat** (per-line type/name/value/ts — e.g.
+  `{"type":"WELCOME","value":"Welcome to Old School RuneScape."}`, raw `<col>` tags preserved for A3), **orbs**
+  (hp 12/12, prayer 1/1, energy, spec, run-enabled, poison, stamina), **minimap** (local player world pos
+  3214,3222 plane 0, compass angle, nearby-actor dots as tile offsets — 10 players + 21 npcs, 24 dots). md5-gate
+  confirmed **faithful** (login welcome line present, orb values plausible, local player resolved) + **live**
+  (fingerprint folds in dot positions + chat size → moved over ~2.4s). Read-only, **rendering-path-agnostic**
+  (confirms S2 — reads `Client`/world-view APIs, not the framebuffer). **Device confirm pending** (user-driven).
 - Goal: expose chat/minimap **fidelity cost** before committing to polished A3/A4 (S2 is path-agnostic but **not
   effort-agnostic** — chat formatting is tied to script callbacks, `ChatMessageManager.java:99`, not a clean
   "call this helper" API; the minimap is sprites + positions, not a composited bitmap).

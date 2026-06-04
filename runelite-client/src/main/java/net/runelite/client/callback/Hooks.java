@@ -417,6 +417,12 @@ public class Hooks implements Callbacks
 			// active-tab varc on the client thread for the native chrome. Read-only — mutates nothing.
 			net.runelite.client.headless.MobileChromeBridge.tick(client);
 		}
+		if (net.runelite.client.headless.HudDataBridge.isEnabled())
+		{
+			// W3 Feature-A phase A2: read-only HUD DATA snapshot (chat lines / orb values / minimap positions)
+			// the native HUD veneers reproduce. Client thread; mutates nothing. Gated -Drunelite.huddata=true.
+			net.runelite.client.headless.HudDataBridge.tick(client);
+		}
 		if (net.runelite.client.headless.MobileChromeProbe.isEnabled())
 		{
 			// W3 hybrid-chrome de-risk: one-shot DESKTOP experiment (synth-click vs setVarcIntValue tab switch),
