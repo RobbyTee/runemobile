@@ -107,44 +107,7 @@ public final class HeadlessResize
 				return;
 			}
 			applied = true;
-			final Component comp = (Component) client;
-			final Dimension d = new Dimension(targetW, targetH);
-			EventQueue.invokeLater(() ->
-			{
-				try
-				{
-					// The gamepack Component sits in the Frame's BorderLayout.CENTER, so on validate the
-					// layout stretches it to the Frame's content area (frame size minus insets) — NOT to
-					// comp.setSize(). To land the canvas EXACTLY on targetW x targetH (so its aspect matches
-					// the screen and the blit fills with no bars), size the FRAME to target + insets.
-					comp.setMinimumSize(d);
-					comp.setPreferredSize(d);
-					Container top = comp.getParent();
-					while (top != null && top.getParent() != null)
-					{
-						top = top.getParent();
-					}
-					if (top instanceof Frame)
-					{
-						final Insets ins = top.getInsets();
-						top.setSize(targetW + ins.left + ins.right, targetH + ins.top + ins.bottom);
-						top.validate();
-						log.info("[headless-resize] requested {}x{}: frame insets {},{},{},{} -> component now {}x{}, canvas {}",
-							targetW, targetH, ins.top, ins.left, ins.bottom, ins.right,
-							comp.getWidth(), comp.getHeight(), client.getCanvas());
-					}
-					else
-					{
-						comp.setSize(d);
-						log.info("[headless-resize] requested {}x{}: no Frame ancestor, comp set to {}x{}, canvas {}",
-							targetW, targetH, comp.getWidth(), comp.getHeight(), client.getCanvas());
-					}
-				}
-				catch (RuntimeException ex)
-				{
-					log.warn("[headless-resize] resize failed", ex);
-				}
-			});
+			applyResize(client, targetW, targetH);
 		}
 		else if (logFrames < 8)
 		{
@@ -154,5 +117,59 @@ public final class HeadlessResize
 				client.getCanvas() != null ? client.getCanvas().getHeight() : -1,
 				client.getViewportWidth(), client.getViewportHeight());
 		}
+	}
+
+	/**
+	 * Resize the headless gamepack canvas to {@code w x h} at <em>runtime</em> — the shared mechanism behind
+	 * both the one-shot launch sizing ({@link #tick}) and the native full-screen toggle
+	 * ({@code JavaBridge.requestResize}).
+	 *
+	 * <p>AWT layout must mutate on the EDT (never the client / JNI thread), so this marshals via
+	 * {@link EventQueue#invokeLater}. The gamepack {@code Component} sits in the hosting {@code Frame}'s
+	 * {@code BorderLayout.CENTER}, so on {@code validate()} the layout stretches it to the frame's content
+	 * area (frame size minus insets), NOT to {@code comp.setSize()}. To land the canvas EXACTLY on
+	 * {@code w x h} (so its aspect matches the screen and the blit fills with no bars) we size the FRAME to
+	 * target + insets. Safe to call repeatedly: the gamepack reallocates {@code MainBufferProvider} and
+	 * recomputes the viewport to the new canvas size on the following frames.
+	 */
+	public static void applyResize(Client client, int w, int h)
+	{
+		if (client == null || w <= 0 || h <= 0)
+		{
+			return;
+		}
+		final Component comp = (Component) client;
+		final Dimension d = new Dimension(w, h);
+		EventQueue.invokeLater(() ->
+		{
+			try
+			{
+				comp.setMinimumSize(d);
+				comp.setPreferredSize(d);
+				Container top = comp.getParent();
+				while (top != null && top.getParent() != null)
+				{
+					top = top.getParent();
+				}
+				if (top instanceof Frame)
+				{
+					final Insets ins = top.getInsets();
+					top.setSize(w + ins.left + ins.right, h + ins.top + ins.bottom);
+					top.validate();
+					log.info("[headless-resize] applied {}x{}: frame insets {},{},{},{} -> component now {}x{}",
+						w, h, ins.top, ins.left, ins.bottom, ins.right, comp.getWidth(), comp.getHeight());
+				}
+				else
+				{
+					comp.setSize(d);
+					log.info("[headless-resize] applied {}x{}: no Frame ancestor, comp set to {}x{}",
+						w, h, comp.getWidth(), comp.getHeight());
+				}
+			}
+			catch (RuntimeException ex)
+			{
+				log.warn("[headless-resize] applyResize failed", ex);
+			}
+		});
 	}
 }

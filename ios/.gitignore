@@ -4,6 +4,9 @@ tokens.json
 # JVM benchmark build output
 dev-tools/jvmbench/out/
 
+# Headless harness run output (logs + captured frames)
+dev-tools/headless/out-*/
+
 # Bundled JRE artifacts (large; fetched per-machine)
 jre*-ios-aarch64*
 dev-tools/jre/
