@@ -119,6 +119,11 @@
 @property (nonatomic, assign) int  fsTargetH;
 @property (nonatomic, assign) int  fsAckCount;
 @property (nonatomic, assign) NSTimeInterval fsResizeStart;
+// Phase 4: a frozen snapshot of the frame shown over everything DURING the transition, so the whole switch
+// animates one stable image (no live-blit jitter, no mid-resize resolution pop). It grows/shrinks with the
+// game view, then crossfades out once the resized frame lands — revealing the new-resolution blit + the
+// chrome repositioned for the new mode together.
+@property (nonatomic, strong) UIImageView *fsFreeze;
 // The game view's edge constraints, as two swappable sets: windowed = pinned to the SAFE AREA minus the
 // kTabStrip side strips; full = pinned to the ENTIRE view (edge-to-edge, under the island/home-indicator —
 // no black borders). The toggle deactivates one set and activates the other.
@@ -1182,7 +1187,8 @@ static const CGFloat kMenuWidth       = 210.0;
 // This is a TRANSACTIONAL mode switch, not just a visual toggle: the gamepack must re-render at the wider
 // aspect (so it fills with no pillarbox), and the blit stays at the OLD resolution until that resized frame
 // arrives — so input + chrome are paused until the resize is ACKed (onDisplayTick watches the blit reach the
-// target). Phase 3 snaps the layout instantly; Phase 4 will animate the grow + crossfade the resolution change.
+// target). The grow + the resolution change are animated: a frozen overlay covers the switch and crossfades
+// out to the settled new-resolution frame (installFreezeOverlay / endFullScreenTransition).
 - (void)onToggleFullScreen {
     if (![JVMLauncher bridgeReady]) { [self appendLine:@"[fs] bridge not ready (log in first)"]; return; }
     if (self.fsResizing) return;   // ignore taps while a transition is in flight
@@ -1190,20 +1196,47 @@ static const CGFloat kMenuWidth       = 210.0;
     int tw = 0, th = 0;
     [self renderTargetFullScreen:toFull outW:&tw outH:&th];
 
+    [self installFreezeOverlay];                                       // freeze BEFORE hiding chrome / resizing
     [self beginFullScreenTransitionTo:toFull targetW:tw targetH:th];   // pause input, tear down transient UI
     [JVMLauncher requestResizeW:tw h:th];                              // drive the live canvas resize
 
-    // Swap the game-view edge constraints now: full = the entire view (edge-to-edge, no black borders),
-    // windowed = safe area minus the side strips. The blit is still the old resolution, so the view briefly
-    // shows it scaled until the resized frame lands — input is paused until then so the (now-mismatched) touch
-    // mapping is never used.
+    // Swap the game-view edge constraints: full = the entire view (edge-to-edge, no black borders), windowed =
+    // safe area minus the side strips. The blit is still the old resolution, so input is paused until the
+    // resized frame lands (the now-mismatched touch mapping is never used); the freeze hides the change.
     [NSLayoutConstraint deactivateConstraints:toFull ? self.screenWindowed : self.screenFull];
     [NSLayoutConstraint activateConstraints:toFull ? self.screenFull : self.screenWindowed];
-    [self.view layoutIfNeeded];
-
     self.fullScreen = toFull;
-    [self appendLine:[NSString stringWithFormat:@"[fs] -> %@ target %dx%d (input paused; awaiting resize ack)",
+
+    // Animate the game view (and the freeze overlay covering it) growing/shrinking to the new bounds. The blit
+    // underneath keeps updating (old res until the resize acks, then new res); the freeze masks that until the
+    // crossfade in endFullScreenTransition reveals the settled new-resolution frame + repositioned chrome.
+    [UIView animateWithDuration:0.30 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
+        [self.view layoutIfNeeded];
+        self.fsFreeze.frame = self.screen.frame;
+    } completion:nil];
+
+    [self appendLine:[NSString stringWithFormat:@"[fs] -> %@ target %dx%d (animating; input paused; awaiting ack)",
                       toFull ? @"FULL" : @"windowed", tw, th]];
+}
+
+// Freeze the current frame into a full-cover overlay so the WHOLE transition animates one stable image. It
+// starts over the current game rect and grows/shrinks with it (ScaleAspectFill so there are no bars during the
+// grow), sitting above the game + all chrome; endFullScreenTransition crossfades it out once the resized frame
+// lands, revealing the new-resolution blit and the repositioned rails/dock together. No frame yet (pre-first
+// blit) -> no freeze, and the toggle just snaps (only happens if toggled before the game has drawn).
+- (void)installFreezeOverlay {
+    UIImage *frozen = self.screen.image;
+    if (!frozen) { self.fsFreeze = nil; return; }
+    if (!self.fsFreeze) {
+        self.fsFreeze = [[UIImageView alloc] init];
+        self.fsFreeze.contentMode = UIViewContentModeScaleAspectFill;
+        self.fsFreeze.clipsToBounds = YES;
+        self.fsFreeze.userInteractionEnabled = NO;
+    }
+    self.fsFreeze.image = frozen;
+    self.fsFreeze.frame = self.screen.frame;
+    self.fsFreeze.alpha = 1.0;
+    [self.view addSubview:self.fsFreeze];   // top of the stack — covers game + chrome through the transition
 }
 
 // Enter the transition: pause input/chrome, tear down anything whose geometry is about to change (the open
@@ -1235,7 +1268,16 @@ static const CGFloat kMenuWidth       = 210.0;
     self.fsResizing = NO;
     self.fsAckCount = 0;
     self.panelDock.view.hidden = self.fullScreen;   // dock shown windowed, hidden full-screen
-    // updateChrome (each tick, windowed only) re-places the tab rails + stone covers; nothing to do here.
+    // Crossfade the frozen overlay out, revealing the settled new-resolution blit underneath plus the chrome
+    // that updateChrome repositions for the new mode (rails at the new edges, stone covers, dock) within the
+    // next tick — so the game and the rails fade in together, in their new places.
+    if (self.fsFreeze) {
+        UIImageView *freeze = self.fsFreeze;
+        self.fsFreeze = nil;
+        [UIView animateWithDuration:0.22 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+            freeze.alpha = 0.0;
+        } completion:^(BOOL done) { [freeze removeFromSuperview]; }];
+    }
     [self appendLine:[NSString stringWithFormat:@"[fs] resize %@ -> blit %.0fx%.0f (%@); input resumed",
                       acked ? @"ACK" : @"TIMEOUT(forced)",
                       self.screen.image.size.width, self.screen.image.size.height,
