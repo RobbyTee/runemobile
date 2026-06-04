@@ -447,6 +447,12 @@ public class Hooks implements Callbacks
 			// Gated -Drunelite.mobilechrome.hidetest=true.
 			net.runelite.client.headless.MobileChromeHideTest.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.HudIsolationTest.isEnabled())
+		{
+			// W3 Feature-A phase A0: de-risk HUD suppression (mask vs setHidden vs transparent) AND route-back
+			// click-through, on the client thread. Mutates widget state; gated -Drunelite.hudisolation=true.
+			net.runelite.client.headless.HudIsolationTest.tick(client, client.getGameState());
+		}
 		if (net.runelite.client.headless.MenuPeekBridge.isEnabled())
 		{
 			// W3 touch-targeting: publish the read-only menu-peek snapshot the native press-and-peek UI polls

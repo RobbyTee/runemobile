@@ -158,6 +158,28 @@ strictly gated and never concurrent with Track A's seam work.**
 - Exit: a scene-only HUD-free PNG **+ all route-back interactions confirmed** + a recorded verdict on which lever
   works. **RED here reopens Feature A's whole premise** — if neither lever yields a clean scene-only frame *with
   working route-back*, native HUD over edge-to-edge is not reachable on the desktop gamepack.
+- **A0 RESULT — DONE, md5-gated GREEN (`HUD_ISO_GREEN_AS_EXPECTED`), desktop OpenJDK 21 + CACIO, live OSRS,
+  2026-06-04.** Probe `HudIsolationTest` (`-Drunelite.hudisolation=true`), harness `run-hud-isolation.sh` +
+  `hud-isolation-verdict.sh`; evidence `ios/app/evidence/a0-hud-iso-{baseline,mask,hidden,transparent}-20260604.png`.
+  Three levers measured for BOTH removal (judged by `isHidden` + the PNGs — NOT a pixel-diff; the live minimap
+  fools that, which produced and then corrected a false positive) and route-back (does a synth-click at the run
+  orb flip `OPTION_RUN`):
+  - `setDraw2DMask(DRAW_2D_NONE)` → does **NOT** remove the interface HUD (governs world-space 2D extras;
+    minimap region delta 2%, HUD intact). **Refutes claim A-1's first option** — the brief's "preferred lever"
+    is the wrong tool.
+  - `setHidden(true)` → **clean removal** (minimap/chat/orbs gone, region delta 99%) but the orb is then **not
+    clickable** (`OPTION_RUN` doesn't flip) — reconfirms the suppression↔route-back conflict.
+  - `setOpacity(255)` (transparent) → **stays clickable** (orb flips; "Toggle Run" tooltip live) but does **NOT**
+    remove the HUD (only rectangle fills go; the minimap/orbs/text still render).
+  - **=> resolver=none.** No single lever both removes the HUD and stays clickable. A0's primary goal — *a clean
+    scene-only HUD-free frame IS obtainable* (via `setHidden`, PNG-confirmed) — is GREEN, but click-through
+    route-back is dead under the clean remover.
+  - **Plan consequence:** native-HUD route-back must **decouple** removal from invocation — *cover-in-place* for
+    elements kept in position (engine widget stays live + clickable under the native draw), or *hide +
+    direct-invoke* for repositioned ones. Headline win: **native chat (chat-at-top) needs no problematic
+    route-back** — input already works via `onText`; tabs/scrollback are native operations over `getMessages()`.
+    The genuinely hard case is **minimap-walk** (walk-to-arbitrary-world-point with the engine minimap hidden) —
+    the next route-back item to de-risk (fold into A2/A4).
 
 **A1 — Edge-to-edge scene-only publish (the shared seam; desktop soak → device).**
 - Goal: get the HUD-free scene to the native layer, full-bleed, without re-introducing the revert's clipping.
@@ -190,11 +212,9 @@ strictly gated and never concurrent with Track A's seam work.**
 - Goal: a native OSRS chat box, **repositionable to the top**, with tabs / colours / scrollback / input.
 - Work: UIKit/Metal chat view fed by A2 — tabs (All/Game/Public/Private/Clan/Trade), per-message colour,
   scrollback, the input line; **chat-tap → keyboard** using the real chat-input model (closes the long-deferred
-  chat-tap→keyboard item, now native). Route back (**depends on A0's verdict**): text via the existing `onText`
-  path; tab switch via a click-through on the **live** (rendering-suppressed, not hidden) engine tab if
-  `setDraw2DMask` is the lever, else via the chat-tab clientscript/varc — **parity-safe, no `menuAction`**
-  (standing rule: click through to engine widgets, never synthesise `menuAction`). **If A0 forced `setHidden`, the
-  click-through is dead and this needs the clientscript/varc invoke path.**
+  chat-tap→keyboard item, now native). Route back (**A0-settled**): the engine chat is **hidden** (`setHidden`),
+  so tabs + scrollback are **native operations over `getMessages()`** (no engine round-trip) and text goes via the
+  existing `onText` path — chat needs **no** click-through route-back, the easy case.
 - Exit: user-confirmed native chat at the top — readable, scrollable, typeable, tab-switchable.
 
 **A4 — Native minimap veneer (native + device).**
@@ -207,9 +227,10 @@ strictly gated and never concurrent with Track A's seam work.**
 **A5 — Native orbs veneer (native + device).**
 - Goal: native HP / prayer / run / spec orbs with actions.
 - Work: draw the four orbs from A2 (+ poison/venom/disease/stamina/quick-prayer state colouring per
-  `StatusBarsOverlay`'s model); orb taps → toggle run / open/quick-prayer / activate spec via click-through on the
-  **live** engine orb widgets (parity-safe) **iff A0's lever kept them clickable** — under the `setHidden`
-  fallback, orbs are not clickable and need per-action varc/clientscript invoke paths instead.
+  `StatusBarsOverlay`'s model). Route back (**A0-settled — hidden orbs aren't clickable**): either keep the engine
+  orbs in position and **cover-in-place** (native orbs drawn over the still-live engine orbs → tap = click-through,
+  parity-safe), or **hide + direct-invoke** per action (run/quick-prayer/spec via clientscript/varc). Cover-in-place
+  is preferred where the orbs stay near their original spot.
 - Exit: user-confirmed orbs, tappable.
 
 **A6 — Input + chrome integration (device).**
@@ -272,10 +293,12 @@ UI compositing** (the native HUD replaces it). This is the only Track-B phase th
   demonstrating the overlay path must remain.
 
 **Native-HUD claims (Feature A, not previously reviewed):**
-- **A-1 — `setDraw2DMask(DRAW_2D_NONE)` cleanly suppresses the baked HUD on the injected gamepack** while keeping
-  the 3D scene + viewport fill. *Refute:* the flag is unused in `runelite-client` → the closed-source injected
-  client may ignore it, or suppress more/less than wanted. *Fallback already scoped:* per-widget `setHidden`
-  (MinimapPlugin recipe) — but that re-applies on `TOPLEVEL_REDRAW` and is more moving parts.
+- **A-1 — [SETTLED by A0, 2026-06-04] `setDraw2DMask` does NOT suppress the interface HUD** (it governs
+  world-space 2D extras — overhead text/hitsplats). **`setHidden` is the only clean remover** (PNG-confirmed) and
+  it makes the widget **un-clickable**, so route-back can't be click-through under it. **`setOpacity(255)`** stays
+  clickable but does **not** remove the HUD. No single lever does both → route-back must decouple (cover-in-place
+  vs hide + direct-invoke). See **A0 RESULT** above. The `setHidden` re-apply on `TOPLEVEL_REDRAW` (MinimapPlugin
+  recipe) still applies.
 - **A-2 — RuneLite data APIs are sufficient to reproduce OSRS chat/minimap/orbs faithfully.** *Refute:* identify
   the worst long-tail item — chat jagex-tag/icon/emoji rendering + word-wrap, or minimap-from-positions missing
   terrain/POI nuance — that makes "native reproduction" a multi-week tail rather than a phase.
