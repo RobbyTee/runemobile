@@ -95,6 +95,29 @@ datum would be the StikDebug-side `[rl-jit]` console log, to see whether the scr
 |---|---|---|---|---|---|---|
 | 2026-06-03 | iter1 | B: logout→login→Start JVM | NO | SIGTRAP @ brk#0x69 (CodeCache init) | 6113 MB | WebKit resident → JIT-mirror brk unserviced |
 | 2026-06-03 | iter2 | StikDebug script UPDATE 18 (scan all threads for brk#0x69) | NO | identical: SIGTRAP @ brk#0x69, same 16 log lines | 6116 MB | NOT a wrong-thread mishandle — brk isn't reaching the script at all |
+| 2026-06-03 | iter3 | app-side restore BREAKPOINT port to debugger | NO | identical SIGTRAP @ brk#0x69, 20 lines | 6113 MB | NOT port theft — StikDebug owns ALL masks; the debugger gets the brk but doesn't service it |
+
+### iter3 finding — the port-theft theory is DEAD (and a Mach gotcha)
+pre-clear: `BAD_ACCESS=0x1d803`, `BREAKPOINT=0x1d80f`, `BAD_INSTRUCTION=0x1d81b`, all `beh=0x80000001`
+(MACH_EXCEPTION_CODES) `flav=5`. These are all the **StikDebug debugger** (it claims EXC_MASK_ALL on one
+handler). The differing port *names* per mask, and the fact that they change every read (post-clear
+`BREAKPOINT=0x1d833`), are because `task_get_exception_ports` allocates a **fresh send-right name** each
+call — so comparing names across masks/calls is meaningless (the iter3 restore was a no-op chasing a ghost).
+Conclusion: WebKit does NOT steal any exception port. The brk #0x69 IS routed to StikDebug; it simply is
+not serviced when WebKit is resident — a debugserver/script-level wall, not an app-side port-routing bug.
+Three targeted fixes (thread-level BAD_ACCESS clear + web-view teardown; script all-thread scan; BREAKPOINT
+restore) all failed to move it. Further progress would require seeing StikDebug's `[rl-jit]` console
+(UI-only, not capturable here) and likely changing StikDebug/debugserver itself.
+
+## VERDICT: in-process seamless is blocked; ship the relaunch
+The reliable fix is **process separation** — relaunch into a fresh (WebKit-free) process after login, before
+Start JVM. It is the force-quit the user already confirmed works, productized into one reopen tap; only on
+fresh login/account-switch (tokens.json persists). Build entirely app-side, no device debugging.
+Speculative future seamless idea (not attempted): **JVM-first** — boot the VM to RuneLite's own login screen
+BEFORE any WebKit, then open the login web view (the one brk #0x69 is already serviced; the debugger has
+detached), and inject the minted session into the running client via a JavaBridge call instead of
+tokens.json-at-startup. Needs re-clearing EXC_BAD_ACCESS after the web view loads + a runtime login-injection
+path in the Java layer — a larger W2 change, uncertain.
 
 ### iter2 finding → iter3 hypothesis (the BREAKPOINT port)
 - StikDebug **is** attached: pre-clear `task BAD_ACCESS port=0x1da13 beh=0x80000001 flav=5` (the debugger's

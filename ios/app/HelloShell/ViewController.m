@@ -27,6 +27,10 @@
 // Log out: clears tokens.json (disarms autologin) + purges any persisted Jagex web cookies. Shown only
 // when a session is saved.
 @property (nonatomic, strong) UIButton *logoutButton;
+// Set once the login WKWebView has been shown this session. WebKit then stays permanently resident in the
+// process and breaks the JVM's JIT-mirror brk #0x69 (it crashes at code-cache init), so the JVM must be
+// launched in a fresh process. Gates onLaunch → a one-tap restart.
+@property (nonatomic, assign) BOOL webKitUsedThisSession;
 // Collapsible debug overlay: a small always-on-top toggle shows/hides a panel holding the status,
 // launch/canary buttons and the log console, so the game stays full-screen.
 @property (nonatomic, strong) UIView *debugPanel;
@@ -425,12 +429,15 @@ static const CGFloat kTabStrip = 46.0;
 - (void)onLoginWithJagex {
     JagexLoginViewController *vc = [JagexLoginViewController new];
     vc.modalPresentationStyle = UIModalPresentationFullScreen;
+    self.webKitUsedThisSession = YES;   // the login web view loads WebKit, which can't be unloaded in-process
     __weak typeof(self) ws = self;
     vc.onLog = ^(NSString *line) { [ws appendLine:[@"[login] " stringByAppendingString:line]]; };
     vc.onComplete = ^(NSString *sessionId, NSString *accountId, NSString *displayName, NSArray *accounts) {
         [ws persistTokensSession:sessionId account:accountId display:displayName accounts:accounts];
         [ws refreshLoginButton];
-        [vc dismissViewControllerAnimated:YES completion:nil];
+        // WebKit is now resident → the JVM can't start cleanly in this process. Prompt a one-tap restart
+        // into a fresh process; the saved tokens.json means the relaunch goes straight to play, no web view.
+        [vc dismissViewControllerAnimated:YES completion:^{ [ws promptRestartToPlay]; }];
     };
     [self presentViewController:vc animated:YES completion:nil];
 }
@@ -505,6 +512,31 @@ static const CGFloat kTabStrip = 46.0;
     [self refreshLoginButton];
     [self appendLine:existed ? @"[login] logged out — tokens.json cleared; autologin disarmed."
                              : @"[login] already logged out (no tokens.json)."];
+}
+
+// After an on-device login the WKWebView leaves WebKit permanently resident in this process, which stops
+// StikDebug from servicing HotSpot's JIT-mirror brk #0x69 → the JVM crashes at code-cache init. A fresh
+// process has never loaded WebKit, so the reliable path is to restart. iOS can't relaunch an app itself, so
+// quit cleanly here; the saved tokens.json means the next launch goes straight to play with no web view
+// (no WebKit) and the brk is serviced normally. Only reached after an actual login (fresh login / switch).
+- (void)promptRestartToPlay {
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSData *data = [NSData dataWithContentsOfFile:[docs stringByAppendingPathComponent:@"tokens.json"]];
+    id o = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    NSString *name = [o isKindOfClass:[NSDictionary class]] ? o[@"chosen_display_name"] : nil;
+    NSString *who = name.length ? name : @"your account";
+    UIAlertController *a = [UIAlertController
+        alertControllerWithTitle:@"Logged in ✓"
+                         message:[NSString stringWithFormat:
+                            @"Signed in as %@.\n\nRuneLite needs to restart once before you can play. Tap "
+                            @"Restart, then reopen RuneLite from your Home Screen — you won't have to log in "
+                            @"again.", who]
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"Restart now" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+        exit(0);   // tokens.json is already written atomically; the relaunch reads it and goes straight to play
+    }]];
+    [a addAction:[UIAlertAction actionWithTitle:@"Not now" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:a animated:YES completion:nil];
 }
 
 #pragma mark - Plugin/config panel (Phase 6)
@@ -1084,6 +1116,9 @@ static const CGFloat kTabStrip = 46.0;
 
 - (void)onLaunch {
     if (self.launched) return;
+    // If the login web view ran this session, WebKit is resident and the JVM would crash at code-cache
+    // init (the JIT brk can't be serviced). Require a fresh process first — restart instead of launching.
+    if (self.webKitUsedThisSession) { [self promptRestartToPlay]; return; }
     self.launched = YES;
     self.launchButton.enabled = NO;
     [self.jitTimer invalidate];
