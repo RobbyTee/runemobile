@@ -15,19 +15,35 @@ import java.io.File
 object AssetInstaller {
 
     private const val TAG = "AssetInstaller"
-    private const val STAMP = ".installed-v4"   // bump when staged jars/JRE change so old installs re-unpack
+
+    // Re-unpack key = "<BASE>-<runtime.tag>". BASE covers the embedded JRE / native libs (bump by hand
+    // when those change — rare). The runtime.tag suffix is the staged-jar content hash that
+    // tools/stage-mobile-runtime.sh writes into the bundle, so a jar update invalidates old installs
+    // automatically — no hand-typed bump for the common case.
+    private const val BASE = "v5"
 
     /** Returns the JAVA_HOME path (filesDir/jvm/jre). */
     fun ensureInstalled(ctx: Context): File {
         val root = File(ctx.filesDir, "jvm")
-        val stamp = File(root, STAMP)
-        if (!stamp.exists()) {
-            Log.i(TAG, "first run: unpacking embedded JVM assets to $root")
+        val want = "$BASE-${bundledTag(ctx)}"
+        val marker = File(root, ".installed-tag")
+        val have = if (marker.exists()) marker.readText().trim() else null
+        if (have != want) {
+            Log.i(TAG, "runtime changed ($have -> $want): re-unpacking embedded JVM assets to $root")
+            root.deleteRecursively()   // wipe the stale tree so old and new jars never mix
             copyAssetDir(ctx, "jvm", root)
-            stamp.writeText(System.currentTimeMillis().toString())
+            marker.writeText(want)
         }
         return File(root, "jre")
     }
+
+    /** The staged content tag shipped in the bundle (jvm/runtime.tag); "untagged" if staging didn't write it. */
+    private fun bundledTag(ctx: Context): String =
+        runCatching { ctx.assets.open("jvm/runtime.tag").bufferedReader().use { it.readText().trim() } }
+            .getOrElse {
+                Log.w(TAG, "jvm/runtime.tag missing from bundle — run tools/stage-mobile-runtime.sh")
+                "untagged"
+            }
 
     private fun copyAssetDir(ctx: Context, assetPath: String, dest: File) {
         val children = ctx.assets.list(assetPath) ?: emptyArray()

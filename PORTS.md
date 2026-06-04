@@ -43,10 +43,12 @@ It builds the shaded jar, then `probes.jar` (which folds in CACIO and needs the 
 both into `ios/app/jvm-resources/` and `android/app/src/main/assets/jvm/`, and writes a SHA/version manifest
 (`tools/last-stage.manifest`, gitignored) with a short **content-tag**.
 
-> **Stale-asset trap:** Android unpacks its staged jars to `filesDir` once, gated by a manual `STAMP`
-> (`.installed-vN`) in [`AssetInstaller.kt`](android/app/src/main/java/dev/audaro/helloshell/AssetInstaller.kt).
-> When the staging content-tag changes, bump that `STAMP` or old installs keep running the old jars. iOS has
-> no such cache — Xcode re-bundles `jvm-resources/` every build.
+> **Stale assets can't happen:** Android unpacks its staged jars to `filesDir` once. The script writes the
+> content-tag into the bundle as `jvm/runtime.tag`, and
+> [`AssetInstaller.kt`](android/app/src/main/java/dev/audaro/helloshell/AssetInstaller.kt) re-unpacks whenever
+> that tag changes — so a jar update invalidates old installs with no hand-typed version bump. The `BASE`
+> constant there only needs bumping when the embedded JRE / native libs change (rare). iOS has no such cache —
+> Xcode re-bundles `jvm-resources/` every build.
 
 Both staged trees are gitignored (large, generated): `ios/app/jvm-resources/*.jar` and
 `android/app/src/main/assets/jvm/{client-*.jar,probes.jar}`.

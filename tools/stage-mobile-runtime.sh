@@ -104,9 +104,15 @@ echo "== stage shared runtime (version $VERSION) =="
 [ "$STAGE_ANDROID" = 1 ] && stage_one "Android" "$ANDROID_DEST"
 
 # --- manifest -----------------------------------------------------------------
-# Short content tag = first 12 hex of sha256(shaded+probes). Bump the Android
-# AssetInstaller STAMP (.installed-vN) whenever this changes, so old installs re-unpack.
+# Short content tag = first 12 hex of sha256(shaded+probes). Android's AssetInstaller
+# reads this from the bundle (jvm/runtime.tag) and re-unpacks when it changes, so jar
+# updates can't go stale without a hand-typed version bump. (iOS needs no tag — Xcode
+# re-bundles jvm-resources/ every build.)
 STAMP_TAG="$(printf '%s%s' "$SHADED_SHA" "$PROBES_SHA" | shasum -a 256 | cut -c1-12)"
+if [ "$STAGE_ANDROID" = 1 ]; then
+  printf '%s\n' "$STAMP_TAG" > "$ANDROID_DEST/runtime.tag"
+  echo "  wrote $ANDROID_DEST/runtime.tag ($STAMP_TAG)"
+fi
 {
   echo "# mobile runtime stage manifest — DO NOT COMMIT (generated)"
   echo "version       $VERSION"
@@ -121,4 +127,5 @@ echo
 cat "$MANIFEST"
 echo
 echo "== done. Both ports now embed identical runtime jars (content-tag $STAMP_TAG)."
-echo "   If content-tag changed, bump STAMP in android AssetInstaller.kt so installs re-unpack."
+echo "   Android re-unpacks automatically via jvm/runtime.tag; bump BASE in AssetInstaller.kt"
+echo "   only when the embedded JRE / native libs change (jars are tracked by the tag)."
