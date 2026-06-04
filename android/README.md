@@ -48,13 +48,13 @@ Create `android/local.properties` with `sdk.dir=/Users/<you>/Library/Android/sdk
 
 ## The blocking input: an Android arm64 (bionic) OpenJDK 21
 The iOS JRE is Mach-O — unusable here. Need a **bionic arm64 OpenJDK 21** (interpreter `/system/bin/linker64`,
-NEEDS the unversioned `libc.so`/`libm.so`/`libdl.so` — *not* glibc's `libc.so.6`). Verified-working source:
-`AngelAuraMC/angelauramc-openjdk-build` release `download_jre21` asset **`jre21-android-arm64.tar.xz`** (same
-Amethyst/PojavLauncher lineage as our iOS JRE). Stage it:
-1. Unzip the whole tree → `app/src/main/assets/jvm/jre/` (assets ONLY — see the jniLibs warning above).
-2. Build the missing `libawt_xawt.so`: `ANDROID_SDK_ROOT=~/Library/Android/sdk dev-tools/fake-xawt/build-libawt_xawt.sh`
-   (the JRE ships `libawt_headless.so` but no headful xawt; the fake provides the `initIDs` stubs).
-3. `tools/stage-mobile-runtime.sh` stages the shared `client`/`probes` jars.
+NEEDS the unversioned `libc.so`/`libm.so`/`libdl.so` — *not* glibc's `libc.so.6`).
+
+**One command does it all** — `tools/stage-android-jre.sh` (from the repo root): downloads the verified
+(SHA-pinned) `AngelAuraMC/angelauramc-openjdk-build` `jre21-android-arm64.tar.xz`, checks it's bionic aarch64,
+stages the whole tree into `app/src/main/assets/jvm/jre/` (assets ONLY), builds the missing `libawt_xawt.so`,
+and removes any stray JRE `.so` from `jniLibs` (the trap above). Then `tools/stage-mobile-runtime.sh` stages
+the shared `client`/`probes` jars.
 
 This is the one artifact that gates even the Milestone-A smoke. (The QuestCraftPlusPlus fork's `JRE-21.zip`
 also boots HotSpot but is otherwise interchangeable — both hit the jniLibs/`libawt` trap identically.)

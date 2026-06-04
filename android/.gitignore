@@ -22,3 +22,6 @@ app/src/main/assets/jvm/runtime.tag
 # IDE
 .idea/
 *.iml
+
+# JRE download cache (tools/stage-android-jre.sh)
+dev-tools/.jre-cache/
