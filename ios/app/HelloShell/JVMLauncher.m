@@ -248,6 +248,29 @@ static BOOL ensureHud(void) {
     return YES;
 }
 
+// Resolve + cache the HudVeneerBridge facade (W3 A3 engine-HUD suppression). Shares the JavaBridge attach.
+static jclass    gVeneerClass = NULL;
+static jmethodID gMidSetChatHidden = NULL;   // setChatHidden(Z)V
+static BOOL ensureVeneer(void) {
+    if (gVeneerClass) return YES;
+    if (!ensureBridge() || !gMainEnv) return NO;
+    JNIEnv *env = gMainEnv;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/HudVeneerBridge");
+    if (!local || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    jclass global = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    if (!global) return NO;
+    jmethodID m = (*env)->GetStaticMethodID(env, global, "setChatHidden", "(Z)V");
+    if (!m) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteGlobalRef(env, global);
+        return NO;
+    }
+    gMidSetChatHidden = m;
+    gVeneerClass = global;
+    return YES;
+}
+
 // Resolve + cache the MobileUiBridge facade on the calling (main) thread. Shares the JavaBridge attach.
 static BOOL ensureMui(void) {
     if (gMuiClass) return YES;
@@ -699,6 +722,8 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"-Drunelite.menupeek.maxEntries=14",        // publish enough display rows for the native menu (default 10)
         @"-Drunelite.huddata=true",                  // W3 Feature-A: arm the read-only HudDataBridge snapshot
                                                      // (chat lines / orb values / minimap positions for the veneers)
+        @"-Drunelite.hudveneer=true",                // W3 Feature-A A3: arm the HudVeneerBridge (engine-HUD
+                                                     // suppression; native sets which elements to hide, e.g. chat)
         @"-Drunelite.hub=true",                      // plugin hub: drop --safe-mode so external plugins load
                                                      // (device-de-risked 2026-06-02). Also disables the
                                                      // headless-irrelevant GPU plugin.
@@ -1047,6 +1072,13 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     jint s = (*env)->CallStaticIntMethod(env, gHudClass, gMidHudSeq);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0; }
     return (int)s;
+}
+
++ (void)setEngineChatHidden:(BOOL)hidden {
+    if (!ensureVeneer()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetChatHidden, (jboolean)(hidden ? JNI_TRUE : JNI_FALSE));
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 
 // ---- Phase 6 (W3): plugin-management + config panel facade wrappers --------------------------------

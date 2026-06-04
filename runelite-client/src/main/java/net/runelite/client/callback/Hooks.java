@@ -423,6 +423,12 @@ public class Hooks implements Callbacks
 			// the native HUD veneers reproduce. Client thread; mutates nothing. Gated -Drunelite.huddata=true.
 			net.runelite.client.headless.HudDataBridge.tick(client);
 		}
+		if (net.runelite.client.headless.HudVeneerBridge.isEnabled())
+		{
+			// W3 Feature-A phase A3: suppress the engine HUD elements the native veneers replace (chatbox),
+			// re-applied each frame. State set from native via setChatHidden. Gated -Drunelite.hudveneer=true.
+			net.runelite.client.headless.HudVeneerBridge.tick(client);
+		}
 		if (net.runelite.client.headless.MobileChromeProbe.isEnabled())
 		{
 			// W3 hybrid-chrome de-risk: one-shot DESKTOP experiment (synth-click vs setVarcIntValue tab switch),

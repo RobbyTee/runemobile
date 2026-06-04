@@ -120,6 +120,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Monotonic publish counter for the HUD snapshot (HudDataBridge.getSeq) — skip re-parse when unchanged.
 + (int)hudSeq;
 
+/// W3 A3: ask the engine to hide (YES) or show (NO) its chatbox, so the native chat-at-top veneer replaces it
+/// without a duplicate. Re-applied each frame by HudVeneerBridge (the engine rebuilds the toplevel). Main thread.
++ (void)setEngineChatHidden:(BOOL)hidden;
+
 // ---- Phase 6 (W3): native plugin-management + config panel (reverse JNI -> MobileUiBridge) -----------
 // All call the Java-owned control-plane facade (gated -Drunelite.mobileui). Reads return JSON snapshots
 // to parse once per panel open; writes are fire-and-forget onto the correct Java thread (EDT for plugin
