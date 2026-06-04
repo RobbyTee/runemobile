@@ -444,6 +444,25 @@ static void dumpFaultState(const char *when) {
     }
     fprintf(stderr, "\n");
 
+    // BREAKPOINT is the mask that matters for HotSpot's JIT-mirror brk #0x69 — if WebKit displaced the
+    // StikDebug debugger here, the brk is never serviced. BAD_INSTRUCTION for completeness (JSC claims it).
+    n = 0;
+    kr = task_get_exception_ports(mach_task_self(), EXC_MASK_BREAKPOINT, masks, &n, ports, behs, flav);
+    fprintf(stderr, "[faultdiag:%s] task BREAKPOINT kr=%d n=%u", when, kr, n);
+    for (mach_msg_type_number_t i = 0; i < n; i++) {
+        fprintf(stderr, " {mask=0x%x port=0x%x beh=0x%x flav=%d}", masks[i], ports[i], behs[i], flav[i]);
+        if (ports[i] != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), ports[i]);
+    }
+    fprintf(stderr, "\n");
+    n = 0;
+    kr = task_get_exception_ports(mach_task_self(), EXC_MASK_BAD_INSTRUCTION, masks, &n, ports, behs, flav);
+    fprintf(stderr, "[faultdiag:%s] task BAD_INSTRUCTION kr=%d n=%u", when, kr, n);
+    for (mach_msg_type_number_t i = 0; i < n; i++) {
+        fprintf(stderr, " {mask=0x%x port=0x%x beh=0x%x flav=%d}", masks[i], ports[i], behs[i], flav[i]);
+        if (ports[i] != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), ports[i]);
+    }
+    fprintf(stderr, "\n");
+
     thread_t th = mach_thread_self();
     n = 0;
     kr = thread_get_exception_ports(th, EXC_MASK_BAD_ACCESS, masks, &n, ports, behs, flav);
@@ -489,6 +508,43 @@ static void *memWatchdog(void *unused) {
 }
 static void startMemWatchdog(void) {
     pthread_t t; if (pthread_create(&t, NULL, memWatchdog, NULL) == 0) pthread_detach(t);
+}
+
+// Same-session login fix: if WebKit (resident from the login web view) displaced the StikDebug debugger on
+// the task EXC_BREAKPOINT port, HotSpot's JIT-mirror brk #0x69 is delivered to WebKit instead of the
+// debugger → never serviced → fatal SIGTRAP in CodeCache::initialize. The debugger still holds the
+// EXC_BAD_ACCESS port (it claims EXC_MASK_ALL on one handler), so copy that handler back onto
+// EXC_BREAKPOINT. Call BEFORE the §6.2 BAD_ACCESS clear (which needs the debugger's port still in place).
+// No-op on a clean launch — the debugger owns both already.
+static void restoreBreakpointPortToDebugger(JVMLogSink log) {
+    exception_mask_t      m[EXC_TYPES_COUNT];
+    mach_port_t           p[EXC_TYPES_COUNT];
+    exception_behavior_t  b[EXC_TYPES_COUNT];
+    thread_state_flavor_t f[EXC_TYPES_COUNT];
+    mach_msg_type_number_t n = 0;
+    if (task_get_exception_ports(mach_task_self(), EXC_MASK_BAD_ACCESS, m, &n, p, b, f) != KERN_SUCCESS || n == 0) {
+        log(@"[jvm] bp-restore: no BAD_ACCESS handler (debugger not attached?) — skipping");
+        return;
+    }
+    mach_port_t dbg = p[0]; exception_behavior_t dbgBeh = b[0]; thread_state_flavor_t dbgFlav = f[0];
+
+    mach_msg_type_number_t nb = 0;
+    exception_mask_t      bm[EXC_TYPES_COUNT];
+    mach_port_t           bp[EXC_TYPES_COUNT];
+    exception_behavior_t  bb[EXC_TYPES_COUNT];
+    thread_state_flavor_t bf[EXC_TYPES_COUNT];
+    task_get_exception_ports(mach_task_self(), EXC_MASK_BREAKPOINT, bm, &nb, bp, bb, bf);
+    mach_port_t cur = nb ? bp[0] : MACH_PORT_NULL;
+
+    if (cur != dbg) {
+        kern_return_t kr = task_set_exception_ports(mach_task_self(), EXC_MASK_BREAKPOINT, dbg, dbgBeh, dbgFlav);
+        log([NSString stringWithFormat:@"[jvm] bp-restore: BREAKPOINT 0x%x != debugger 0x%x -> repointed kr=%d (beh=0x%x flav=%d)",
+             cur, dbg, kr, dbgBeh, dbgFlav]);
+    } else {
+        log([NSString stringWithFormat:@"[jvm] bp-restore: BREAKPOINT already debugger's (0x%x) — no-op", dbg]);
+    }
+    for (mach_msg_type_number_t i = 0; i < n;  i++) if (p[i])  mach_port_deallocate(mach_task_self(), p[i]);
+    for (mach_msg_type_number_t i = 0; i < nb; i++) if (bp[i]) mach_port_deallocate(mach_task_self(), bp[i]);
 }
 
 // Invoke <className>.main(args) on the (already-created) VM. Clears any exception
@@ -693,6 +749,12 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     // Clearing the bad-access port lets those faults fall through to HotSpot's sigaction handler.
     // brk #0x69 is EXC_BREAKPOINT (a DIFFERENT mask) — left with the debugger, so the 64 MB
     // code-cache reservation is still serviced by runelite-jit.js.
+    //
+    // SAME-SESSION LOGIN FIX: when the login WKWebView is resident, WebKit displaces the debugger on the
+    // task BREAKPOINT port → the brk #0x69 is never serviced → SIGTRAP in CodeCache::initialize. Re-point
+    // BREAKPOINT back at the debugger (which still owns BAD_ACCESS) BEFORE we clear BAD_ACCESS below.
+    restoreBreakpointPortToDebugger(log);
+
     kern_return_t kr = task_set_exception_ports(
         mach_task_self(), EXC_MASK_BAD_ACCESS, MACH_PORT_NULL,
         EXCEPTION_DEFAULT, MACHINE_THREAD_STATE);

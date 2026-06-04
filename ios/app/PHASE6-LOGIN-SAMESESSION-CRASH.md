@@ -67,10 +67,44 @@ Also grab the iOS crash/jetsam report (Settings → Privacy → Analytics & Impr
 | a **`custom`** SIGSEGV/SIGBUS handler present at `post-clear`/`post-createvm` in B | **H3 handler** | reset that signal again post-WebKit; identify the installer |
 | run B now reaches the game (fix worked) | teardown and/or thread-clear sufficient | keep the lever that changed, strip diagnostics |
 
-## Results log
-_(fill per device run)_
+## CONFIRMED CAUSE (iter-1, 2026-06-03) — NOT jetsam, NOT BAD_ACCESS
+Crash report `HelloShell-2026-06-03-131148.ips` + on-device `jvm-stdio.log`:
+- Triggered thread `jvm-main`: `EXC_BREAKPOINT` / `SIGTRAP` at `brk #0x69` inside `BreakGetJITMapping` →
+  `os::pd_reserve_memory` → `ReservedCodeSpace` → `CodeCache::initialize()` → `Threads::create_vm` →
+  `JNI_CreateJavaVM`. The JIT-mirror breakpoint StikDebug services on a clean launch went **unserviced** →
+  fatal SIGTRAP. `jvm-stdio.log` ends at exactly `[JIT26] Requesting 64 MB for JIT mapping`.
+- **Not jetsam:** `avail=6113.6MB footprint=30.4MB` at post-clear AND memwatch t=0. 6 GB headroom.
+- **Not BAD_ACCESS:** pre-clear task port = `0x18003` (StikDebug, beh=MACH_EXCEPTION_CODES, flav=5);
+  post-clear = null. Our task+thread clears worked but are irrelevant — this is the BREAKPOINT mask, which
+  §6.2 deliberately leaves with the debugger so the brk can be serviced. The iter-1 thread-level BAD_ACCESS
+  clear + web-view teardown did NOT help (expected, given the real mask).
+- **WebKit still fully resident:** the crash caught the main thread in
+  `WebKit::WebProcessPool::backlightLevelDidChangeCallback` (a CFNotification observer) — `WebProcessPool`
+  is alive despite nil'ing the `WKWebView`. WebKit can't be unloaded in-process, and its residency is what
+  stops StikDebug from servicing HotSpot's JIT-mirror brk.
 
-| Date | Build | Run | Reached game? | avail@post-clear | footprint@post-clear | BAD_ACCESS port | SIGSEGV handler | Death signal | Notes |
-|---|---|---|---|---|---|---|---|---|---|
-| | iter1 | A clean | | | | | | | |
-| | iter1 | B login | | | | | | | |
+→ Force-quit works because a fresh process never loaded WebKit. **Robust fix = process separation**: after
+on-phone login, relaunch into a clean (WebKit-free) process before Start JVM (productize the force-quit into
+a one-tap reopen; only needed on fresh login/account-switch since `tokens.json` persists). A fully-seamless
+in-process fix would need to defeat WebKit's interference with the debugger brk path — uncertain; the next
+datum would be the StikDebug-side `[rl-jit]` console log, to see whether the script even receives the brk
+(if not → exception-routing, likely unfixable in-process; if yes but `_M`/forward → script-side, fixable).
+
+## Iteration log
+| Date | Build | Run | Reached game? | Death | avail | Cause |
+|---|---|---|---|---|---|---|
+| 2026-06-03 | iter1 | B: logout→login→Start JVM | NO | SIGTRAP @ brk#0x69 (CodeCache init) | 6113 MB | WebKit resident → JIT-mirror brk unserviced |
+| 2026-06-03 | iter2 | StikDebug script UPDATE 18 (scan all threads for brk#0x69) | NO | identical: SIGTRAP @ brk#0x69, same 16 log lines | 6116 MB | NOT a wrong-thread mishandle — brk isn't reaching the script at all |
+
+### iter2 finding → iter3 hypothesis (the BREAKPOINT port)
+- StikDebug **is** attached: pre-clear `task BAD_ACCESS port=0x1da13 beh=0x80000001 flav=5` (the debugger's
+  handler). Updated script confirmed on device (UPDATE-18 marker present). Yet the scan changed nothing →
+  the brk #0x69 never produces a stop for the script.
+- The diagnostics only ever dumped **BAD_ACCESS**, never **BREAKPOINT** — the mask the brk actually uses.
+  New hypothesis: WebKit displaced the debugger on the task **EXC_BREAKPOINT** port specifically (it left
+  BAD_ACCESS with StikDebug), so the brk is delivered to WebKit, not debugserver → never serviced.
+- **iter3 fix (app-side, JVMLauncher.m):** dump BREAKPOINT + BAD_INSTRUCTION owners, and
+  `restoreBreakpointPortToDebugger()` re-points the task BREAKPOINT port at the handler StikDebug still
+  holds for BAD_ACCESS, right before the §6.2 BAD_ACCESS clear. No-op on a clean launch. If the brk then
+  services, `jvm-stdio.log` sails past `[JIT26] Requesting 64 MB`. If BREAKPOINT already == the debugger's
+  port, the hypothesis is wrong and the brk-routing wall is real → pivot to relaunch.
