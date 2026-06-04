@@ -1201,11 +1201,12 @@ static const CGFloat kMenuWidth       = 210.0;
     CGFloat sw = b.size.width - ins.left - ins.right - 2 * kTabStrip;
     CGFloat sh = b.size.height - ins.top - ins.bottom;
     CGFloat aspect = (sh > 0 ? sw / sh : 2.0);
-    // Render height is the sharpness<->FPS dial: the engine SOFTWARE-renders at renderW×renderH every frame
-    // (no GPU on iOS), so cost scales with pixel count. 600 looked soft; 900 was crisp but cut FPS noticeably
-    // (+125% pixels); 720 is the balance — clearly sharper than 600 (~+44% pixels) while staying smooth. Bump
-    // toward 800 if there's FPS headroom, drop toward 640 if not.
-    int renderH = 720;
+    // Render height is the sharpness<->FPS<->UI-SIZE dial: the engine SOFTWARE-renders at renderW×renderH every
+    // frame (no GPU on iOS), so a LOWER renderH = bigger UI on screen (fewer rendered px stretched to fill) +
+    // higher FPS, at the cost of a softer 3D scene. 720 was the sharp desktop-ish balance; 360 (≈2× bigger UI)
+    // makes the fixed-size OSRS chat/tabs phone-readable the way mobile clients do. The chat is a fixed 519px
+    // wide, so going much below ~300 (≈2.4×) overflows it — ~300–400 is the usable bigger-UI band.
+    int renderH = 360;
     int renderW = (int)lround(renderH * aspect);
     launcher.resizeSpec = [NSString stringWithFormat:@"%dx%d", renderW, renderH];
     [self appendLine:[NSString stringWithFormat:@"[shell] inset-area %.0fx%.0f aspect %.3f -> render %@",
