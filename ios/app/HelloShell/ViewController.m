@@ -106,31 +106,6 @@
 @property (nonatomic, strong) NSMutableArray<UIView *> *stoneCovers;
 @property (nonatomic, strong) UIButton *chromeToggle;
 @property (nonatomic, assign) BOOL chromeVisible;
-// Full-screen mode (Phase 3): a ⛶ toggle grows the game to fill the whole safe area (drops the kTabStrip side
-// insets) AND drives a live canvas resize to the wider aspect so it fills with no pillarbox. The transition is
-// transactional: fsResizing pauses ALL game input + chrome updates while the resize is in flight, because the
-// blit is still the OLD resolution until the resized frame arrives (mapPoint keys off the blitted image size,
-// so it would mismap mid-transition). fsTargetW/H is the requested render size; the ACK is the blitted frame
-// reaching it (watched in onDisplayTick). The game-view edges swap between the screenWindowed/screenFull
-// constraint sets (safe-area-minus-strips <-> entire view, edge-to-edge).
-@property (nonatomic, assign) BOOL fullScreen;
-@property (nonatomic, assign) BOOL fsResizing;
-@property (nonatomic, assign) int  fsTargetW;
-@property (nonatomic, assign) int  fsTargetH;
-@property (nonatomic, assign) int  fsAckCount;
-@property (nonatomic, assign) NSTimeInterval fsResizeStart;
-// Phase 4: a frozen snapshot of the frame shown over everything DURING the transition, so the whole switch
-// animates one stable image (no live-blit jitter, no mid-resize resolution pop). It grows/shrinks with the
-// game view, then crossfades out once the resized frame lands — revealing the new-resolution blit + the
-// chrome repositioned for the new mode together.
-@property (nonatomic, strong) UIImageView *fsFreeze;
-// The game view's edge constraints, as two swappable sets — BOTH inside the safe area so the OSRS corner UI is
-// never clipped: windowed = safe area minus the wider kTabStrip side strips; full = safe area minus the slimmer
-// kFsLane lanes (a cleaner, slightly larger view, dock/dev-chrome hidden). The toggle deactivates one set and
-// activates the other.
-@property (nonatomic, strong) NSArray<NSLayoutConstraint *> *screenWindowed;
-@property (nonatomic, strong) NSArray<NSLayoutConstraint *> *screenFull;
-@property (nonatomic, strong) UIButton *fullScreenButton;
 // Phase-6 native plugin panel: a ⚙ button opens a full-screen modal sheet (scrim eats all touches so nothing
 // falls through to the game) listing the plugins (MobileUiBridge.listPlugins) with an enable/disable switch
 // and a running/stopped indicator. Refreshed when the bridge's event sequence advances (toggles, conflicts).
@@ -158,13 +133,6 @@ static NSString * const kKbSentinel = @"​";
 // both sides, so the docked side panel (at the game-canvas edge) ends INBOARD of the screen edge and the
 // native tabs fill the strips flush against it — the official mobile arrangement, with no widget moving.
 static const CGFloat kTabStrip = 46.0;
-
-// Full-screen side lane. The game canvas is inset by this on each side (and to the safe area top/bottom) so
-// the OSRS minimap (canvas top-right) and chat (canvas bottom-left) land INSIDE the safe area — clear of the
-// island / home-indicator / rounded corners — and the native tab rails sit in the lane OUTBOARD of them,
-// never overlapping. (True edge-to-edge clipped + covered that corner UI; see the A/B. The fully-immersive
-// fill with repositioned UI is the native-HUD-veneer roadmap item.) Slightly slimmer than kTabStrip.
-static const CGFloat kFsLane = 44.0;
 
 // OSRS right-click menu geometry, straight from RuneLite's own hit-test (InteractHighlightOverlay
 // .hoveredMenuEntry): the "Choose Option" title strip is 19px, each entry row is 15px. These are fixed
@@ -421,41 +389,19 @@ static const CGFloat kMenuWidth       = 210.0;
                 forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.pluginButton];
 
-    // Full-screen toggle (⛶) — grows the game to fill the screen; left of the ⚙ plugin button.
-    self.fullScreenButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.fullScreenButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.fullScreenButton setTitle:@"⛶" forState:UIControlStateNormal];
-    self.fullScreenButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
-    self.fullScreenButton.tintColor = [UIColor whiteColor];
-    self.fullScreenButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
-    self.fullScreenButton.layer.cornerRadius = 8;
-    [self.fullScreenButton addTarget:self action:@selector(onToggleFullScreen)
-                    forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:self.fullScreenButton];
-
     UILayoutGuide *g = self.view.safeAreaLayoutGuide;
     UILayoutGuide *sg = self.screen.safeAreaLayoutGuide;
     UILayoutGuide *p = self.debugPanel.layoutMarginsGuide;
-    // Two swappable edge-constraint sets (see the property comment). BOTH keep the canvas inside the safe area
-    // (top/bottom to the safe-area guide, sides inset by a lane) so the OSRS corner UI (minimap/chat/orbs) is
-    // never clipped by the island/home-indicator/rounded corners and the rails get a lane to live in. Windowed
-    // uses the wider kTabStrip strips (+ the plugin dock shows); full-screen uses the slimmer kFsLane lanes (+
-    // the dock/dev chrome hide) for a cleaner, slightly larger view. The render aspect is computed to match
-    // each mode (renderTargetFullScreen:) so the blit fills with no internal letterbox.
-    self.screenWindowed = @[
+    [NSLayoutConstraint activateConstraints:@[
+        // Game fills the SAFE AREA (not edge-to-edge): edge-to-edge pushed the OSRS corner UI (minimap,
+        // inventory, chat) under the rounded corners / dynamic island / home indicator. Filling the safe
+        // area keeps everything on-screen; the render aspect is computed to match it (onLaunch) so there
+        // are no internal letterbox bars either.
         [self.screen.topAnchor constraintEqualToAnchor:g.topAnchor],
-        [self.screen.bottomAnchor constraintEqualToAnchor:g.bottomAnchor],
         [self.screen.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:kTabStrip],
         [self.screen.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-kTabStrip],
-    ];
-    self.screenFull = @[
-        [self.screen.topAnchor constraintEqualToAnchor:g.topAnchor],
         [self.screen.bottomAnchor constraintEqualToAnchor:g.bottomAnchor],
-        [self.screen.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:kFsLane],
-        [self.screen.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-kFsLane],
-    ];
-    [NSLayoutConstraint activateConstraints:self.screenWindowed];   // start windowed
-    [NSLayoutConstraint activateConstraints:@[
+
         // In-game keyboard control, bottom-left of the game's safe area.
         [self.keyboardButton.bottomAnchor constraintEqualToAnchor:sg.bottomAnchor constant:-8],
         [self.keyboardButton.leadingAnchor constraintEqualToAnchor:sg.leadingAnchor constant:8],
@@ -479,12 +425,6 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.pluginButton.trailingAnchor constraintEqualToAnchor:self.chromeToggle.leadingAnchor constant:-8],
         [self.pluginButton.widthAnchor constraintEqualToConstant:44],
         [self.pluginButton.heightAnchor constraintEqualToConstant:36],
-
-        // Full-screen toggle (⛶), just left of the ⚙ plugin button.
-        [self.fullScreenButton.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
-        [self.fullScreenButton.trailingAnchor constraintEqualToAnchor:self.pluginButton.leadingAnchor constant:-8],
-        [self.fullScreenButton.widthAnchor constraintEqualToConstant:44],
-        [self.fullScreenButton.heightAnchor constraintEqualToConstant:36],
 
         // Debug panel — left ~62% of the safe area, full height, below the toggle row.
         [self.debugPanel.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
@@ -1091,17 +1031,15 @@ static const CGFloat kMenuWidth       = 210.0;
     }
 
     const CGFloat cell = 38.0, gap = 5.0;
-    // Both modes: the two columns live in the side lanes flanking the inset game view (self.view coords), so
-    // they sit OUTBOARD of the OSRS corner UI (minimap/chat) — never over it. The lane is kFsLane in full-screen,
-    // the wider kTabStrip in windowed; the game canvas is inset to match, and its docked side panel ends at the
-    // game view's right edge, flush against the right lane.
-    CGFloat lane = self.fullScreen ? kFsLane : kTabStrip;
-    CGRect gf = self.screen.frame;
-    CGFloat leftX  = gf.origin.x - lane + (lane - cell) / 2.0;
-    CGFloat rightX = gf.origin.x + gf.size.width + (lane - cell) / 2.0;
-    CGRect span = CGRectMake(0, gf.origin.y, gf.origin.x, gf.size.height);
-    [self layoutColumn:left  x:leftX  cell:cell gap:gap tabs:tabs active:active inBounds:span];
-    [self layoutColumn:right x:rightX cell:cell gap:gap tabs:tabs active:active inBounds:span];
+    // The columns live in the side strips (self.view coords), flanking the inset game view. The game canvas's
+    // docked side panel ends at the game view's right edge — i.e. flush against the right strip — so the menu
+    // sits flush against the tabs with no overlap.
+    CGRect gf = self.screen.frame;   // inset game view, in self.view coords
+    CGRect strip = CGRectMake(0, gf.origin.y, gf.origin.x, gf.size.height);   // left strip extent (for y span)
+    CGFloat leftX  = gf.origin.x - kTabStrip + (kTabStrip - cell) / 2.0;
+    CGFloat rightX = gf.origin.x + gf.size.width + (kTabStrip - cell) / 2.0;
+    [self layoutColumn:left  x:leftX  cell:cell gap:gap tabs:tabs active:active inBounds:strip];
+    [self layoutColumn:right x:rightX cell:cell gap:gap tabs:tabs active:active inBounds:strip];
 }
 
 // Place one edge column of tab cells, vertically centred in the game view.
@@ -1134,7 +1072,7 @@ static const CGFloat kMenuWidth       = 210.0;
 // A native tab tap -> proxy a left click on the live desktop stone centre (the device-proven switch primitive,
 // JavaBridge.onClick). The button consumed the tap, so it never leaks to the game gestures beneath.
 - (void)onTabButton:(UIButton *)b {
-    if (![JVMLauncher bridgeReady] || self.fsResizing) return;
+    if (![JVMLauncher bridgeReady]) return;
     NSInteger i = b.tag;
     if (i < 0 || i >= 14) return;
     CGPoint c = _tabCentres[i];
@@ -1153,129 +1091,6 @@ static const CGFloat kMenuWidth       = 210.0;
         self.tabRailBg.hidden = YES;
     }
     [self appendLine:[NSString stringWithFormat:@"[chrome] rails %@", self.chromeVisible ? @"ON" : @"OFF"]];
-}
-
-#pragma mark - Full-screen mode (Phase 3)
-
-// Compute the gamepack render resolution (canvas WxH) for windowed or full-screen. The game view fills the
-// safe area minus the side strips (kTabStrip each side in windowed; 0 in full-screen), so matching the render
-// aspect to the view means the blit fills with no internal letterbox. renderH is the sharpness<->FPS dial: the
-// engine SOFTWARE-renders at renderW×renderH every frame (no GPU on iOS), so cost scales with pixel count. 720
-// is the balance proven windowed; full-screen is ~12% wider (more pixels) — Phase 6 tunes renderH if needed.
-- (void)renderTargetFullScreen:(BOOL)fs outW:(int *)ow outH:(int *)oh {
-    // Both modes render the SAFE AREA minus a side lane (so the corner UI is never clipped); full-screen just
-    // uses the slimmer kFsLane lanes vs windowed's kTabStrip strips. Matching the render aspect to the on-screen
-    // game rect means the blit fills it with no internal letterbox.
-    CGRect b = self.view.bounds;
-    UIEdgeInsets ins = self.view.safeAreaInsets;
-    CGFloat lane = fs ? kFsLane : kTabStrip;
-    CGFloat sw = b.size.width - ins.left - ins.right - 2 * lane;
-    CGFloat sh = b.size.height - ins.top - ins.bottom;
-    CGFloat aspect = (sh > 0 ? sw / sh : 2.0);
-    int renderH = 720;
-    *oh = renderH;
-    *ow = (int)lround(renderH * aspect);
-}
-
-// ⛶ toggle: grow the game to fill the screen (or shrink back), driving a LIVE canvas resize to the new aspect.
-// This is a TRANSACTIONAL mode switch, not just a visual toggle: the gamepack must re-render at the wider
-// aspect (so it fills with no pillarbox), and the blit stays at the OLD resolution until that resized frame
-// arrives — so input + chrome are paused until the resize is ACKed (onDisplayTick watches the blit reach the
-// target). The grow + the resolution change are animated: a frozen overlay covers the switch and crossfades
-// out to the settled new-resolution frame (installFreezeOverlay / endFullScreenTransition).
-- (void)onToggleFullScreen {
-    if (![JVMLauncher bridgeReady]) { [self appendLine:@"[fs] bridge not ready (log in first)"]; return; }
-    if (self.fsResizing) return;   // ignore taps while a transition is in flight
-    BOOL toFull = !self.fullScreen;
-    int tw = 0, th = 0;
-    [self renderTargetFullScreen:toFull outW:&tw outH:&th];
-
-    [self installFreezeOverlay];                                       // freeze BEFORE hiding chrome / resizing
-    [self beginFullScreenTransitionTo:toFull targetW:tw targetH:th];   // pause input, tear down transient UI
-    [JVMLauncher requestResizeW:tw h:th];                              // drive the live canvas resize
-
-    // Swap the game-view edge constraints: full = the entire view (edge-to-edge, no black borders), windowed =
-    // safe area minus the side strips. The blit is still the old resolution, so input is paused until the
-    // resized frame lands (the now-mismatched touch mapping is never used); the freeze hides the change.
-    [NSLayoutConstraint deactivateConstraints:toFull ? self.screenWindowed : self.screenFull];
-    [NSLayoutConstraint activateConstraints:toFull ? self.screenFull : self.screenWindowed];
-    self.fullScreen = toFull;
-
-    // Animate the game view (and the freeze overlay covering it) growing/shrinking to the new bounds. The blit
-    // underneath keeps updating (old res until the resize acks, then new res); the freeze masks that until the
-    // crossfade in endFullScreenTransition reveals the settled new-resolution frame + repositioned chrome.
-    [UIView animateWithDuration:0.30 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
-        [self.view layoutIfNeeded];
-        self.fsFreeze.frame = self.screen.frame;
-    } completion:nil];
-
-    [self appendLine:[NSString stringWithFormat:@"[fs] -> %@ target %dx%d (animating; input paused; awaiting ack)",
-                      toFull ? @"FULL" : @"windowed", tw, th]];
-}
-
-// Freeze the current frame into a full-cover overlay so the WHOLE transition animates one stable image. It
-// starts over the current game rect and grows/shrinks with it (ScaleAspectFill so there are no bars during the
-// grow), sitting above the game + all chrome; endFullScreenTransition crossfades it out once the resized frame
-// lands, revealing the new-resolution blit and the repositioned rails/dock together. No frame yet (pre-first
-// blit) -> no freeze, and the toggle just snaps (only happens if toggled before the game has drawn).
-- (void)installFreezeOverlay {
-    UIImage *frozen = self.screen.image;
-    if (!frozen) { self.fsFreeze = nil; return; }
-    if (!self.fsFreeze) {
-        self.fsFreeze = [[UIImageView alloc] init];
-        self.fsFreeze.contentMode = UIViewContentModeScaleAspectFill;
-        self.fsFreeze.clipsToBounds = YES;
-        self.fsFreeze.userInteractionEnabled = NO;
-    }
-    self.fsFreeze.image = frozen;
-    self.fsFreeze.frame = self.screen.frame;
-    self.fsFreeze.alpha = 1.0;
-    [self.view addSubview:self.fsFreeze];   // top of the stack — covers game + chrome through the transition
-}
-
-// Enter the transition: pause input/chrome, tear down anything whose geometry is about to change (the open
-// right-click menu, the click ring, the engine hover), hide the mode-specific chrome (the tab rails + stone
-// covers live in the strips that are collapsing; the plugin dock + debug panel hide in full-screen).
-- (void)beginFullScreenTransitionTo:(BOOL)toFull targetW:(int)tw targetH:(int)th {
-    self.fsResizing = YES;
-    self.fsTargetW = tw;
-    self.fsTargetH = th;
-    self.fsAckCount = 0;
-    self.fsResizeStart = CACurrentMediaTime();
-
-    if (self.menuOpen || self.menuContainer) { [self teardownMenuViews]; self.menuOpen = NO; }
-    self.menuBuilding = NO;
-    self.menuTouchActive = NO;
-    self.pendingClick = NO;
-    [JVMLauncher postClearHover];   // no parked cursor across the resize
-
-    for (UIButton *btn in self.tabButtons) btn.hidden = YES;
-    for (UIView *cv in self.stoneCovers) cv.hidden = YES;
-    self.tabRailBg.hidden = YES;
-    self.panelDock.view.hidden = toFull;     // hide the always-on plugin dock in full-screen
-    if (toFull) self.debugPanel.hidden = YES;
-}
-
-// Leave the transition: re-enable input + chrome. Called from onDisplayTick when the blit reaches the target
-// (acked == YES) or after a safety timeout (acked == NO) so a misbehaving resize never soft-locks input.
-- (void)endFullScreenTransition:(BOOL)acked {
-    self.fsResizing = NO;
-    self.fsAckCount = 0;
-    self.panelDock.view.hidden = self.fullScreen;   // dock shown windowed, hidden full-screen
-    // Crossfade the frozen overlay out, revealing the settled new-resolution blit underneath plus the chrome
-    // that updateChrome repositions for the new mode (rails at the new edges, stone covers, dock) within the
-    // next tick — so the game and the rails fade in together, in their new places.
-    if (self.fsFreeze) {
-        UIImageView *freeze = self.fsFreeze;
-        self.fsFreeze = nil;
-        [UIView animateWithDuration:0.22 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
-            freeze.alpha = 0.0;
-        } completion:^(BOOL done) { [freeze removeFromSuperview]; }];
-    }
-    [self appendLine:[NSString stringWithFormat:@"[fs] resize %@ -> blit %.0fx%.0f (%@); input resumed",
-                      acked ? @"ACK" : @"TIMEOUT(forced)",
-                      self.screen.image.size.width, self.screen.image.size.height,
-                      self.fullScreen ? @"FULL" : @"windowed"]];
 }
 
 // W3 hybrid-chrome device de-risk: prove the native side can (a) READ the MobileChromeBridge snapshot on
@@ -1371,12 +1186,25 @@ static const CGFloat kMenuWidth       = 210.0;
     [self appendLine:@"--- launching JVM on worker thread ---"];
 
     JVMLauncher *launcher = [[JVMLauncher alloc] init];
-    // Initial (windowed) render resolution: matches the inset-area aspect so the blit fills with no letterbox.
-    // The full-screen toggle later drives a LIVE resize to the wider full-screen aspect (renderTargetFullScreen:).
-    int renderW = 0, renderH = 0;
-    [self renderTargetFullScreen:NO outW:&renderW outH:&renderH];
+    // Compute the render resolution to MATCH the SAFE-AREA aspect (the game view fills the safe area), so
+    // the blit fills it with no letterbox and nothing clipped under the island/corners/home-indicator.
+    // Render height ~600 (a comfortable in-game UI scale); width follows the aspect.
+    CGRect b = self.view.bounds;
+    UIEdgeInsets ins = self.view.safeAreaInsets;
+    // The game view is inset by kTabStrip on each side (native tab rails fill the strips), so the render
+    // aspect must match the INSET width to avoid internal letterbox bars.
+    CGFloat sw = b.size.width - ins.left - ins.right - 2 * kTabStrip;
+    CGFloat sh = b.size.height - ins.top - ins.bottom;
+    CGFloat aspect = (sh > 0 ? sw / sh : 2.0);
+    // Render height is the sharpness<->FPS dial: the engine SOFTWARE-renders at renderW×renderH every frame
+    // (no GPU on iOS), so cost scales with pixel count. 600 looked soft; 900 was crisp but cut FPS noticeably
+    // (+125% pixels); 720 is the balance — clearly sharper than 600 (~+44% pixels) while staying smooth. Bump
+    // toward 800 if there's FPS headroom, drop toward 640 if not.
+    int renderH = 720;
+    int renderW = (int)lround(renderH * aspect);
     launcher.resizeSpec = [NSString stringWithFormat:@"%dx%d", renderW, renderH];
-    [self appendLine:[NSString stringWithFormat:@"[shell] windowed render %@", launcher.resizeSpec]];
+    [self appendLine:[NSString stringWithFormat:@"[shell] inset-area %.0fx%.0f aspect %.3f -> render %@",
+                      sw, sh, aspect, launcher.resizeSpec]];
 
     NSThread *t = [[NSThread alloc] initWithBlock:^{
         [launcher runProbesWithLog:log];
@@ -1406,24 +1234,9 @@ static const CGFloat kMenuWidth       = 210.0;
                           self.framesShown, img.size.width, img.size.height]];
     }
 
-    // Full-screen resize transition: the ACK is the blitted frame reaching the requested render target (the
-    // gamepack reallocated its buffer to the new aspect). Require 2 consecutive ticks at target (the engine may
-    // emit one intermediate-size frame mid-resize), then re-enable input + chrome. Time out after ~2.5s so a
-    // resize that never lands can't soft-lock input.
-    if (self.fsResizing) {
-        if ((int)lround(img.size.width) == self.fsTargetW && (int)lround(img.size.height) == self.fsTargetH) {
-            if (++self.fsAckCount >= 2) { [self endFullScreenTransition:YES]; }
-        } else {
-            self.fsAckCount = 0;
-            if (CACurrentMediaTime() - self.fsResizeStart > 2.5) { [self endFullScreenTransition:NO]; }
-        }
-    }
-
     // Refresh the native tab rails from the chrome snapshot (~10 Hz — positions/active state rarely change,
-    // and the JSON read is cheap). Runs in BOTH windowed and full-screen (the rails float at the physical
-    // edges over the full-bleed game in full-screen); skipped only when toggled off or mid-resize (the blit
-    // geometry is in flux then).
-    if (self.chromeVisible && !self.fsResizing && self.framesShown % 6 == 0) {
+    // and the JSON read is cheap). Skipped entirely when the rails are toggled off.
+    if (self.chromeVisible && self.framesShown % 6 == 0) {
         [self updateChrome];
     }
 
@@ -1508,7 +1321,7 @@ static const CGFloat kMenuWidth       = 210.0;
 
 // tap -> left click (walk / interact / select a menu entry).
 - (void)onTap:(UITapGestureRecognizer *)g {
-    if (![JVMLauncher bridgeReady] || self.fsResizing) return;
+    if (![JVMLauncher bridgeReady]) return;
     CGPoint vp = [g locationInView:self.view];
     int gx = 0, gy = 0;
     if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return;
@@ -1561,7 +1374,7 @@ static const CGFloat kMenuWidth       = 210.0;
 // race with the rows' own touch handling. The overlay is built a frame or two after .began (it waits for the
 // engine menu to land in the MenuPeekBridge snapshot), so updateMenuHighlight no-ops until it exists.
 - (void)onLongPress:(UILongPressGestureRecognizer *)g {
-    if (![JVMLauncher bridgeReady] || self.fsResizing) return;
+    if (![JVMLauncher bridgeReady]) return;
     CGPoint loc = [g locationInView:self.view];
 
     switch (g.state) {
@@ -1780,7 +1593,7 @@ static const CGFloat kMenuWidth       = 210.0;
 // each step) to the bridge, which applies them to the camera yaw/pitch targets directly. The menuOpen
 // guard is belt-and-suspenders: if a long-press already claimed the touch, never also rotate.
 - (void)onCameraPan:(UIPanGestureRecognizer *)g {
-    if (![JVMLauncher bridgeReady] || self.menuOpen || self.fsResizing) return;
+    if (![JVMLauncher bridgeReady] || self.menuOpen) return;
     if (g.state == UIGestureRecognizerStateBegan) {
         [g setTranslation:CGPointZero inView:self.screen];
         // A camera drag moves the world, not the pointer — so clear any frozen hover first, otherwise
@@ -1805,7 +1618,7 @@ static const CGFloat kMenuWidth       = 210.0;
 // pinch -> zoom via the mouse wheel. Accumulate the scale change into whole wheel notches; pinch out
 // (scale grows) = zoom in = negative rotation. Centroid is the wheel point so the gamepack zooms about it.
 - (void)onPinch:(UIPinchGestureRecognizer *)g {
-    if (![JVMLauncher bridgeReady] || self.fsResizing) return;
+    if (![JVMLauncher bridgeReady]) return;
     if (g.state == UIGestureRecognizerStateBegan) {
         self.pinchPrevScale = g.scale;
         self.wheelAccum = 0;

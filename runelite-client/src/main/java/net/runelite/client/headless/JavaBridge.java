@@ -148,14 +148,11 @@ public final class JavaBridge
 	// 120 Hz) but the engine composites at ~50 fps, so reading mainBufferProvider directly catches it
 	// mid-clear/mid-draw -> fast flashing. Instead we snapshot ONLY at the post-overlay-composite hook
 	// (when the frame is whole) into a double buffer, and publish via the volatile `frame` ref so the
-	// native reader always copies out a complete, stable frame.
-	//
-	// The frame is packed as [w, h, ...0xAARRGGBB pixels] in ONE array, so the native side reads the
-	// dimensions AND the pixels from a single volatile reference — they cannot tear apart across a live
-	// canvas resize (the full-screen toggle), where w/h and the backing array change together. `frameSeq`
-	// is only a change hint (skip the costly CGImage rebuild when the engine hasn't composited since the
-	// last tick); it is never used for sizing, so a stale read of it is harmless.
-	private static volatile int[] frame;   // [w, h, ...pixels]; null before the first frame
+	// native reader always copies out a complete, stable frame. `frameSeq` lets the native side skip the
+	// (costly) CGImage rebuild when the engine hasn't composited a new frame since the last display tick.
+	private static volatile int[] frame;
+	private static volatile int frameW;
+	private static volatile int frameH;
 	private static volatile int frameSeq;
 	private static int[] bufA;
 	private static int[] bufB;
@@ -225,13 +222,10 @@ public final class JavaBridge
 		{
 			return;
 		}
-		// Pack [w, h, ...pixels] so the dims travel WITH the pixels in one volatile publish (atomic across a
-		// live resize). The double buffer (bufA/bufB) keeps the just-published frame stable for a full cycle.
-		final int total = n + 2;
 		int[] dst = useA ? bufA : bufB;
-		if (dst == null || dst.length != total)
+		if (dst == null || dst.length != n)
 		{
-			dst = new int[total];
+			dst = new int[n];
 			if (useA)
 			{
 				bufA = dst;
@@ -241,10 +235,10 @@ public final class JavaBridge
 				bufB = dst;
 			}
 		}
-		dst[0] = w;
-		dst[1] = h;
-		System.arraycopy(px, 0, dst, 2, n);
-		frame = dst;        // publish (volatile) — single write carries w, h and pixels together
+		System.arraycopy(px, 0, dst, 0, n);
+		frameW = w;
+		frameH = h;
+		frame = dst;        // publish (volatile)
 		frameSeq++;         // bump LAST so a native reader that sees the new seq also sees this frame
 		useA = !useA;       // next snapshot fills the OTHER buffer, so this one stays stable a full cycle
 	}
@@ -253,14 +247,12 @@ public final class JavaBridge
 
 	public static int getFrameWidth()
 	{
-		final int[] f = frame;
-		return f == null ? 0 : f[0];
+		return frameW;
 	}
 
 	public static int getFrameHeight()
 	{
-		final int[] f = frame;
-		return f == null ? 0 : f[1];
+		return frameH;
 	}
 
 	/**
@@ -274,46 +266,12 @@ public final class JavaBridge
 	}
 
 	/**
-	 * The latest <em>complete</em> composited frame, packed as {@code [w, h, ...0xAARRGGBB pixels]} (a stable
-	 * snapshot, not the live back buffer). The leading two ints are the frame dimensions, so the native side
-	 * gets the size and the pixels from this single array — they can't tear apart across a live resize.
-	 * Returns {@code null} before the first frame.
+	 * The latest <em>complete</em> composited frame as packed {@code 0xAARRGGBB} ints (a stable snapshot,
+	 * not the live back buffer). Returns {@code null} before the first frame.
 	 */
 	public static int[] getFramePixels()
 	{
 		return frame;
-	}
-
-	// ---- Full-screen live resize (native toggle requests a new canvas aspect) ---------------------------
-
-	// Monotonic counter bumped on each resize request — a diagnostic/correlation handle for the native side
-	// (the actual "did it land" ACK is the published frame dims reaching the target, watched via the blit).
-	private static volatile int resizeGen;
-
-	/**
-	 * Drive a LIVE canvas resize to {@code w x h} (gamepack-render pixels) — the full-screen toggle. The
-	 * gamepack re-renders at the new aspect so the wider full-screen view fills with no pillarbox. Delegates
-	 * to {@link HeadlessResize#applyResize}, which marshals to the EDT (AWT layout must mutate there, not this
-	 * JNI/UI thread). Proven safe to call repeatedly (the desktop {@code ResizeSoakProbe} ran 200 toggles
-	 * clean under the device {@code -Xmx256m}). The native side, after calling this, polls the published frame
-	 * dimensions ({@link #getFrameWidth()}/{@link #getFrameHeight()}) until they reach the target — that is the
-	 * ACK that the buffer actually grew — before it re-maps touch geometry and re-enables input.
-	 */
-	public static void requestResize(int w, int h)
-	{
-		final Client c = ENABLED ? client : null;
-		if (c == null || w <= 0 || h <= 0)
-		{
-			return;
-		}
-		resizeGen++;
-		HeadlessResize.applyResize(c, w, h);
-	}
-
-	/** Monotonic resize-request counter (diagnostic; the dims ACK is the real completion signal). */
-	public static int getResizeGen()
-	{
-		return resizeGen;
 	}
 
 	// ---- Input ingress (native recognizes the gesture, then calls these with game coords) --------------

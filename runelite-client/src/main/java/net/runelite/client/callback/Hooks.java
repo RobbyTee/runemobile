@@ -406,13 +406,6 @@ public class Hooks implements Callbacks
 		{
 			net.runelite.client.headless.HeadlessResize.tick(client, client.getGameState());
 		}
-		if (net.runelite.client.headless.ResizeSoakProbe.isEnabled())
-		{
-			// W3 full-screen de-risk: DESKTOP-only soak that toggles the canvas between two aspects 100+
-			// times to prove the live repeated CTC resize the full-screen toggle needs. Gated
-			// -Drunelite.headless.resizeSoak; never on the device launch path.
-			net.runelite.client.headless.ResizeSoakProbe.tick(client, client.getGameState());
-		}
 		if (net.runelite.client.headless.MobileToplevelProbe.isEnabled())
 		{
 			// W3 mobile-layout spike: one-shot, on the client thread, gated by -Drunelite.mobileui.toplevel=osm.

@@ -62,12 +62,6 @@ typedef void (^JVMLogSink)(NSString *line);
 /// the click onto a nearby world entity. Call on the main thread.
 + (void)postClickPreciseX:(int)x y:(int)y button:(int)button;
 
-/// Request a LIVE canvas resize to (w,h) gamepack-render pixels (JavaBridge.requestResize) — the full-screen
-/// toggle. The gamepack re-renders at the new aspect so the wider view fills with no pillarbox; poll the
-/// blitted +latestFrame size until it reaches the target as the resize ACK before re-mapping touch +
-/// re-enabling input. Tolerant of an older jar (no-op if absent). Call on the main thread.
-+ (void)requestResizeW:(int)w h:(int)h;
-
 /// Select an open right-click menu row at (x,y), then clear the parked hover so the engine doesn't leave the
 /// cursor stuck on the selected target (the "stays on the stairs" bug). Use for the native menu commit/cancel.
 + (void)postMenuSelectX:(int)x y:(int)y;
