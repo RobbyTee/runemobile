@@ -139,6 +139,13 @@ static NSString * const kKbSentinel = @"​";
 // native tabs fill the strips flush against it — the official mobile arrangement, with no widget moving.
 static const CGFloat kTabStrip = 46.0;
 
+// W3 A3: the relocated engine chat lives at this fixed canvas rect (HudVeneerBridge.relocateChat 8,6); the
+// flipped tab row is the top kChatTabRowH px. Used to treat tab-row taps as UI (precise click, no walk ring).
+static const int kChatX = 8;
+static const int kChatY = 6;
+static const int kChatW = 519;
+static const int kChatTabRowH = 23;
+
 // OSRS right-click menu geometry, straight from RuneLite's own hit-test (InteractHighlightOverlay
 // .hoveredMenuEntry): the "Choose Option" title strip is 19px, each entry row is 15px. These are fixed
 // pixel sizes in the gamepack render space (independent of canvas resolution), so a native row index k maps
@@ -1353,6 +1360,14 @@ static const CGFloat kMenuWidth       = 210.0;
     CGPoint vp = [g locationInView:self.view];
     int gx = 0, gy = 0;
     if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return;
+    // W3 A3: the relocated chat tab-row (canvas [8,6,519x23]) is UI, not the world. Send a PRECISE click straight
+    // to the engine (no world-snap pulling it to a tile/entity) and DON'T draw the walk ring — taps there toggle a
+    // chat filter, they don't walk.
+    if (gx >= kChatX && gx <= kChatX + kChatW && gy >= kChatY && gy <= kChatY + kChatTabRowH) {
+        [JVMLauncher postClickPreciseX:gx y:gy button:1];
+        [self appendLine:[NSString stringWithFormat:@"[shell] chat-tab tap %d,%d (precise, no ring)", gx, gy]];
+        return;
+    }
     // Defer the ring one beat: onDisplayTick draws it red (interactable) or yellow (walk) once the engine has
     // resolved the tap. Pump the haptic generator so the buzz is low-latency if it turns out to be an interact.
     self.pendingClick = YES;
