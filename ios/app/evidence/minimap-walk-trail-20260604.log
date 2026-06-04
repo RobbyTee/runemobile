@@ -1,0 +1,6 @@
+2026-06-04 05:23:22 PDT [Client] INFO  n.r.client.headless.MinimapWalkProbe - [minimapwalk] in-world root=PreEoc minimapBounds=[1058,0,211,179] centre=1163,89
+2026-06-04 05:23:22 PDT [Client] INFO  n.r.client.headless.MinimapWalkProbe - [minimapwalk] VISIBLE attempt 0 click 1163,77 (centre 1163,89)
+2026-06-04 05:23:23 PDT [Client] INFO  n.r.client.headless.MinimapWalkProbe - [minimapwalk] VISIBLE walked=true dest=(6208,7232)
+2026-06-04 05:23:26 PDT [Client] INFO  n.r.client.headless.MinimapWalkProbe - [minimapwalk] HIDDEN click 1163,77 (minimap hidden)
+2026-06-04 05:23:26 PDT [Client] INFO  n.r.client.headless.MinimapWalkProbe - [minimapwalk] HIDDEN walked=false
+2026-06-04 05:23:26 PDT [Client] INFO  n.r.client.headless.MinimapWalkProbe - [minimapwalk] MINIMAPWALK root=PreEoc minimapBounds=[1058,0,211,179] centre=1163,89 clickPt=1163,77 visibleWalked=true hiddenWalked=false destScene=(6208,7232) conclusion=live-minimap-clickthrough

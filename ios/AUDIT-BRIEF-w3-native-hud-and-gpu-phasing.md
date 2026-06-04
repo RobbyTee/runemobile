@@ -179,7 +179,8 @@ strictly gated and never concurrent with Track A's seam work.**
     direct-invoke* for repositioned ones. Headline win: **native chat (chat-at-top) needs no problematic
     route-back** — input already works via `onText`; tabs/scrollback are native operations over `getMessages()`.
     The genuinely hard case is **minimap-walk** (walk-to-arbitrary-world-point with the engine minimap hidden) —
-    the next route-back item to de-risk (fold into A2/A4).
+    **now SETTLED, see A4 ROUTE-BACK RESULT: cover-in-place (keep the engine minimap live + covered, proxy the
+    walk-click); it cannot be hidden.**
 
 **A1 — Edge-to-edge scene-only publish (the shared seam; desktop soak → device).**
 - Goal: get the HUD-free scene to the native layer, full-bleed, without re-introducing the revert's clipping.
@@ -242,6 +243,16 @@ strictly gated and never concurrent with Track A's seam work.**
 - Work: render terrain (`getMapScene`), dots (`getMapDots` sprites at actor world→minimap positions), icons
   (`getMapIcons`), compass (`getMapAngle`); **minimap tap → walk** (world point → walk action). Consider
   `setMinimapTileDrawer` only if a finer hook is needed.
+- **ROUTE-BACK RESULT — DONE, md5-gated GREEN (`MINIMAPWALK_GREEN_AS_EXPECTED`), 2026-06-04.** Probe
+  `MinimapWalkProbe` (`-Drunelite.minimapwalk=true`), harness `run-minimap-walk.sh` + `minimap-walk-verdict.sh`;
+  evidence `ios/app/evidence/minimap-walk-trail-20260604.log`. The one hard route-back A0 surfaced is settled:
+  clicking the **live** engine minimap 12px off-centre issued a walk (`getLocalDestinationLocation()` → non-null,
+  `dest=(6208,7232)`); the **same pixel with the minimap `setHidden` did NOT walk**. So a native minimap routes
+  walks by **cover-in-place** — keep the engine minimap LIVE + covered by the native draw, translate native-minimap
+  taps → engine-minimap pixels (centre + scale + `mapAngle`) → synth-click. The minimap CANNOT be hidden (kills the
+  walk), so it differs from chat (fully native + freely repositionable): the native minimap can move visually, but
+  the live engine minimap stays at top-right (invisibly covered) to receive the proxied walk-clicks. No
+  walk-to-WorldPoint API exists, so this is the route.
 - Exit: user-confirmed minimap that tracks the player and is tappable to walk.
 
 **A5 — Native orbs veneer (native + device).**

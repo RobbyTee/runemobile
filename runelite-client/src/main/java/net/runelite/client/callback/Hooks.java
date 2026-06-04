@@ -465,6 +465,12 @@ public class Hooks implements Callbacks
 			// fills the canvas edge-to-edge. Mutates widget state; gated -Drunelite.edge2edge=true.
 			net.runelite.client.headless.EdgeToEdgeProbe.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.MinimapWalkProbe.isEnabled())
+		{
+			// W3 Feature-A: the hard route-back — does clicking the LIVE engine minimap walk (so a native minimap
+			// covers it) vs hidden (dead)? Mutates (clicks/hides); gated -Drunelite.minimapwalk=true.
+			net.runelite.client.headless.MinimapWalkProbe.tick(client, client.getGameState());
+		}
 		if (net.runelite.client.headless.MenuPeekBridge.isEnabled())
 		{
 			// W3 touch-targeting: publish the read-only menu-peek snapshot the native press-and-peek UI polls
