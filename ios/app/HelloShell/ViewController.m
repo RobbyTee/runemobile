@@ -1206,7 +1206,7 @@ static const CGFloat kMenuWidth       = 210.0;
     // higher FPS, at the cost of a softer 3D scene. 720 was the sharp desktop-ish balance; 360 (≈2× bigger UI)
     // makes the fixed-size OSRS chat/tabs phone-readable the way mobile clients do. The chat is a fixed 519px
     // wide, so going much below ~300 (≈2.4×) overflows it — ~300–400 is the usable bigger-UI band.
-    int renderH = 360;
+    int renderH = 480;
     int renderW = (int)lround(renderH * aspect);
     launcher.resizeSpec = [NSString stringWithFormat:@"%dx%d", renderW, renderH];
     [self appendLine:[NSString stringWithFormat:@"[shell] inset-area %.0fx%.0f aspect %.3f -> render %@",
