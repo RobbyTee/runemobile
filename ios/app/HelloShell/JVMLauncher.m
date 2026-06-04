@@ -222,6 +222,32 @@ static BOOL ensureMenuPeek(void) {
     return YES;
 }
 
+// Resolve + cache the HudDataBridge facade (W3 Feature-A native HUD data). Shares the JavaBridge attach.
+static jclass    gHudClass = NULL;
+static jmethodID gMidHudSnap = NULL;   // getSnapshot()Ljava/lang/String;
+static jmethodID gMidHudSeq = NULL;    // getSeq()I
+static BOOL ensureHud(void) {
+    if (gHudClass) return YES;
+    if (!ensureBridge() || !gMainEnv) return NO;   // shares the main thread's attached env
+    JNIEnv *env = gMainEnv;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/HudDataBridge");
+    if (!local || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    jclass global = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    if (!global) return NO;
+    jmethodID snap = (*env)->GetStaticMethodID(env, global, "getSnapshot", "()Ljava/lang/String;");
+    jmethodID sq = (*env)->GetStaticMethodID(env, global, "getSeq", "()I");
+    if (!snap || !sq) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteGlobalRef(env, global);
+        return NO;
+    }
+    gMidHudSnap = snap;
+    gMidHudSeq = sq;
+    gHudClass = global;   // publish only once fully resolved
+    return YES;
+}
+
 // Resolve + cache the MobileUiBridge facade on the calling (main) thread. Shares the JavaBridge attach.
 static BOOL ensureMui(void) {
     if (gMuiClass) return YES;
@@ -671,6 +697,8 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"-Drunelite.menupeek=true",                 // W3 touch-targeting: arm the read-only MenuPeekBridge
                                                      // (native right-click menu data source). NOT .probe (desktop-only).
         @"-Drunelite.menupeek.maxEntries=14",        // publish enough display rows for the native menu (default 10)
+        @"-Drunelite.huddata=true",                  // W3 Feature-A: arm the read-only HudDataBridge snapshot
+                                                     // (chat lines / orb values / minimap positions for the veneers)
         @"-Drunelite.hub=true",                      // plugin hub: drop --safe-mode so external plugins load
                                                      // (device-de-risked 2026-06-02). Also disables the
                                                      // headless-irrelevant GPU plugin.
@@ -999,6 +1027,26 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
     (*env)->DeleteLocalRef(env, js);
     return out;
+}
+
++ (NSString *)hudSnapshot {
+    if (!ensureHud()) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gHudClass, gMidHudSnap);
+    if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
+    NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
+    if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
+    (*env)->DeleteLocalRef(env, js);
+    return out;
+}
+
++ (int)hudSeq {
+    if (!ensureHud()) return 0;
+    JNIEnv *env = gMainEnv;
+    jint s = (*env)->CallStaticIntMethod(env, gHudClass, gMidHudSeq);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0; }
+    return (int)s;
 }
 
 // ---- Phase 6 (W3): plugin-management + config panel facade wrappers --------------------------------

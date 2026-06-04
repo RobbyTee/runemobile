@@ -96,6 +96,10 @@
 // onClick onto the stone centre. A ▦ toggle shows/hides them for instant A/B fallback.
 @property (nonatomic, strong) NSMutableArray<UIButton *> *tabButtons;
 @property (nonatomic, strong) UIView *tabRailBg;   // opaque rail behind the edge-split icon grid
+
+// W3 Feature-A (A2.5/A3): crude native chat-at-top overlay, fed by HudDataBridge.getSnapshot via reverse JNI.
+// Touch-transparent (passes taps to the game). Verifies the device data-flow before the full tabbed chat.
+@property (nonatomic, strong) UITextView *hudChatView;
 // Pre-composited tab images (stone background + centred icon) built once from the bundled OSRS sprite assets
 // (stone-inactive/active + icon-0..13). Index = tab index; active/inactive variants. Authentic, crisp, no
 // crop fragility.
@@ -1219,6 +1223,72 @@ static const CGFloat kMenuWidth       = 210.0;
     [t start];
 }
 
+// W3 Feature-A (A2.5/A3): crude native chat-at-top + HUD-status overlay, fed by HudDataBridge.getSnapshot
+// (reverse JNI). A first, device-verifiable increment toward the native chat veneer: it proves the chat/orb/
+// minimap data flows to native and renders at the top, before the full tabbed/coloured/scrollback chat. The
+// overlay is touch-transparent, so taps fall through to the game underneath.
+- (void)updateHudChat {
+    NSString *snap = [JVMLauncher hudSnapshot];
+    if (snap.length == 0) return;
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
+                                                      options:0 error:nil];
+    if (![d isKindOfClass:[NSDictionary class]]) return;
+
+    NSMutableString *text = [NSMutableString string];
+    if (![d[@"loggedIn"] boolValue]) {
+        [text appendString:@"[hud] waiting for login…"];
+    } else {
+        NSDictionary *o = d[@"orbs"], *m = d[@"minimap"];
+        if ([o isKindOfClass:[NSDictionary class]] && [m isKindOfClass:[NSDictionary class]]) {
+            [text appendFormat:@"HP %@/%@  Pray %@/%@  Run %@%%  Spec %@%%   @(%@,%@) p%@  players:%@ npcs:%@\n",
+                o[@"hp"], o[@"hpMax"], o[@"pray"], o[@"prayMax"], o[@"energy"], o[@"spec"],
+                m[@"px"], m[@"py"], m[@"plane"], m[@"players"], m[@"npcs"]];
+        }
+        NSArray *chat = d[@"chat"];
+        if ([chat isKindOfClass:[NSArray class]]) {
+            NSInteger start = MAX(0, (NSInteger)chat.count - 10);
+            for (NSInteger i = start; i < (NSInteger)chat.count; i++) {
+                NSDictionary *line = chat[i];
+                if (![line isKindOfClass:[NSDictionary class]]) continue;
+                NSString *name = line[@"name"];
+                NSString *v = [self stripOsrsTags:(line[@"value"] ?: @"")];
+                if (name.length > 0) [text appendFormat:@"%@: %@\n", name, v];
+                else [text appendFormat:@"%@\n", v];
+            }
+        }
+    }
+
+    if (!self.hudChatView) {
+        CGRect b = self.view.bounds;
+        UIEdgeInsets ins = self.view.safeAreaInsets;
+        CGFloat x = ins.left + kTabStrip;
+        CGFloat w = b.size.width - ins.left - ins.right - 2 * kTabStrip;
+        UITextView *tv = [[UITextView alloc] initWithFrame:CGRectMake(x, ins.top + 4, w, 168)];
+        tv.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
+        tv.textColor = [UIColor whiteColor];
+        tv.font = [UIFont fontWithName:@"Menlo" size:11] ?: [UIFont systemFontOfSize:11];
+        tv.editable = NO;
+        tv.selectable = NO;
+        tv.userInteractionEnabled = NO;   // taps fall through to the game
+        tv.layer.cornerRadius = 6.0;
+        tv.textContainerInset = UIEdgeInsetsMake(6, 8, 6, 8);
+        self.hudChatView = tv;
+        [self.view addSubview:tv];
+    }
+    self.hudChatView.text = text;
+}
+
+// Crude OSRS rich-text strip (<col=..>, <br>, <img=..>) for the readable preview. Full tag handling is A3.
+- (NSString *)stripOsrsTags:(NSString *)s {
+    static NSRegularExpression *re;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        re = [NSRegularExpression regularExpressionWithPattern:@"<[^>]*>" options:0 error:nil];
+    });
+    if (!re || s.length == 0) return s;
+    return [re stringByReplacingMatchesInString:s options:0 range:NSMakeRange(0, s.length) withTemplate:@""];
+}
+
 // Called every screen refresh once the JVM is running. Pulls the engine's latest composited frame
 // straight from the buffer via reverse JNI (JavaBridge.getFramePixels) and blits it — no PNG round-trip,
 // no disk, no capture budget, so it's smooth and runs for the whole session. Also keeps the app
@@ -1238,6 +1308,12 @@ static const CGFloat kMenuWidth       = 210.0;
     // and the JSON read is cheap). Skipped entirely when the rails are toggled off.
     if (self.chromeVisible && self.framesShown % 6 == 0) {
         [self updateChrome];
+    }
+
+    // W3 Feature-A (A2.5): refresh the crude native chat-at-top + HUD-status overlay from the HudDataBridge
+    // snapshot (~10 Hz). Verifies the device data-flow before the full native chat veneer.
+    if (self.framesShown % 6 == 0) {
+        [self updateHudChat];
     }
 
     // Plugin panel: while open, re-read the list when the bridge's event sequence advances (a toggle's

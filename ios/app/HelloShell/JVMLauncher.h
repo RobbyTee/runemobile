@@ -111,6 +111,15 @@ typedef void (^JVMLogSink)(NSString *line);
 /// facade is off (-Drunelite.menupeek). Read-only — it never invokes; commit via postClickPrecise. Main thread.
 + (nullable NSString *)menuPeekSnapshot;
 
+/// Read the W3 Feature-A HUD-data snapshot (reverse JNI -> HudDataBridge.getSnapshot) as a JSON string:
+/// {enabled,loggedIn,seq,orbs:{hp,hpMax,pray,prayMax,energy,spec,run,specEnabled,poison,stamina},
+/// minimap:{plane,px,py,mapAngle,players,npcs,dots:[[type,dx,dy]...]},chat:[{type,name,value,ts}...]}. The
+/// native HUD veneers (chat-at-top / minimap / orbs) read this each display tick. nil before the VM/bridge is
+/// up or if the facade is off (-Drunelite.huddata). Read-only. Call on the main thread.
++ (nullable NSString *)hudSnapshot;
+/// Monotonic publish counter for the HUD snapshot (HudDataBridge.getSeq) — skip re-parse when unchanged.
++ (int)hudSeq;
+
 // ---- Phase 6 (W3): native plugin-management + config panel (reverse JNI -> MobileUiBridge) -----------
 // All call the Java-owned control-plane facade (gated -Drunelite.mobileui). Reads return JSON snapshots
 // to parse once per panel open; writes are fire-and-forget onto the correct Java thread (EDT for plugin
