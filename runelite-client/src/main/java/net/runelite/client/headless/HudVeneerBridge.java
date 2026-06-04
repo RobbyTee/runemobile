@@ -48,6 +48,8 @@ public final class HudVeneerBridge
 {
 	private static final boolean ENABLED = Boolean.getBoolean("runelite.hudveneer");
 
+	private static final int CONTROLS_H = 23;   // the chat tab-row (CONTROLS) height, from the layout dump
+
 	// Desired state, set from native, applied on the client thread. chatX < 0 = not relocating.
 	private static volatile int chatX = -1;
 	private static volatile int chatY = -1;
@@ -102,6 +104,11 @@ public final class HudVeneerBridge
 					w.setForcedPosition(chatX, chatY);
 					w.revalidate();
 				}
+				// OSRS-Mobile tabs-on-top: the desktop chat stacks the tab row (CONTROLS, 23px) UNDER the message
+				// area (CHATAREA, 142px). Flip it — force the tab row to the chat's top and push the messages down
+				// by the tab height — so the layout reads tabs -> messages -> input like the mobile reference.
+				forcePos(c, InterfaceID.Chatbox.CONTROLS, chatX, chatY);
+				forcePos(c, InterfaceID.Chatbox.CHATAREA, chatX, chatY + CONTROLS_H);
 				if (transparentChat)
 				{
 					// Deterministic transparency: hide the brown chatbox background sprites directly (the
@@ -139,6 +146,22 @@ public final class HudVeneerBridge
 			if (w != null && !w.isHidden())
 			{
 				w.setHidden(true);
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	private static void forcePos(Client c, int id, int x, int y)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			if (w != null)
+			{
+				w.setForcedPosition(x, y);
+				w.revalidate();
 			}
 		}
 		catch (RuntimeException ignore)
