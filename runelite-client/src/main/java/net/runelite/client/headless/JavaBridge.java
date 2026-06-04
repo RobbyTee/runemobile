@@ -440,7 +440,7 @@ public final class JavaBridge
 				}
 				postMove(canvas, cx, cy);
 				ct.invokeLater(() -> postLeftTapThenClear(canvas, ct, cx, cy));
-				log.info("[snap] smart: tap {},{} -> {} {},{} ({})",
+				log.debug("[snap] smart: tap {},{} -> {} {},{} ({})",
 					x, y, t.literal ? "hit" : "SNAP", cx, cy, t.actor != null ? "actor" : "object");
 				return;
 			}
@@ -451,7 +451,7 @@ public final class JavaBridge
 			selUntil = 0;
 			postMove(canvas, x, y);
 			ct.invokeLater(() -> postLeftTapThenClear(canvas, ct, x, y));
-			log.info("[snap] smart: tap {},{} -> walk (no entity within {}px)", x, y, snapRadius());
+			log.debug("[snap] smart: tap {},{} -> walk (no entity within {}px)", x, y, snapRadius());
 			return;
 		}
 		final int[] p = snap ? resolveSnap(c, x, y) : new int[]{x, y};
