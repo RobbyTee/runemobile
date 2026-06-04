@@ -124,9 +124,10 @@
 // game view, then crossfades out once the resized frame lands — revealing the new-resolution blit + the
 // chrome repositioned for the new mode together.
 @property (nonatomic, strong) UIImageView *fsFreeze;
-// The game view's edge constraints, as two swappable sets: windowed = pinned to the SAFE AREA minus the
-// kTabStrip side strips; full = pinned to the ENTIRE view (edge-to-edge, under the island/home-indicator —
-// no black borders). The toggle deactivates one set and activates the other.
+// The game view's edge constraints, as two swappable sets — BOTH inside the safe area so the OSRS corner UI is
+// never clipped: windowed = safe area minus the wider kTabStrip side strips; full = safe area minus the slimmer
+// kFsLane lanes (a cleaner, slightly larger view, dock/dev-chrome hidden). The toggle deactivates one set and
+// activates the other.
 @property (nonatomic, strong) NSArray<NSLayoutConstraint *> *screenWindowed;
 @property (nonatomic, strong) NSArray<NSLayoutConstraint *> *screenFull;
 @property (nonatomic, strong) UIButton *fullScreenButton;
@@ -157,6 +158,13 @@ static NSString * const kKbSentinel = @"​";
 // both sides, so the docked side panel (at the game-canvas edge) ends INBOARD of the screen edge and the
 // native tabs fill the strips flush against it — the official mobile arrangement, with no widget moving.
 static const CGFloat kTabStrip = 46.0;
+
+// Full-screen side lane. The game canvas is inset by this on each side (and to the safe area top/bottom) so
+// the OSRS minimap (canvas top-right) and chat (canvas bottom-left) land INSIDE the safe area — clear of the
+// island / home-indicator / rounded corners — and the native tab rails sit in the lane OUTBOARD of them,
+// never overlapping. (True edge-to-edge clipped + covered that corner UI; see the A/B. The fully-immersive
+// fill with repositioned UI is the native-HUD-veneer roadmap item.) Slightly slimmer than kTabStrip.
+static const CGFloat kFsLane = 44.0;
 
 // OSRS right-click menu geometry, straight from RuneLite's own hit-test (InteractHighlightOverlay
 // .hoveredMenuEntry): the "Choose Option" title strip is 19px, each entry row is 15px. These are fixed
@@ -428,10 +436,12 @@ static const CGFloat kMenuWidth       = 210.0;
     UILayoutGuide *g = self.view.safeAreaLayoutGuide;
     UILayoutGuide *sg = self.screen.safeAreaLayoutGuide;
     UILayoutGuide *p = self.debugPanel.layoutMarginsGuide;
-    // Two swappable edge-constraint sets (see the property comment). Windowed = safe area minus the kTabStrip
-    // side strips; full = the ENTIRE view (edge-to-edge, no black borders — the OSRS corner UI rides under the
-    // island/home-indicator, which is the official-app full-bleed look the user asked for). The render aspect
-    // is computed to match each mode (renderTargetFullScreen:) so the blit fills with no internal letterbox.
+    // Two swappable edge-constraint sets (see the property comment). BOTH keep the canvas inside the safe area
+    // (top/bottom to the safe-area guide, sides inset by a lane) so the OSRS corner UI (minimap/chat/orbs) is
+    // never clipped by the island/home-indicator/rounded corners and the rails get a lane to live in. Windowed
+    // uses the wider kTabStrip strips (+ the plugin dock shows); full-screen uses the slimmer kFsLane lanes (+
+    // the dock/dev chrome hide) for a cleaner, slightly larger view. The render aspect is computed to match
+    // each mode (renderTargetFullScreen:) so the blit fills with no internal letterbox.
     self.screenWindowed = @[
         [self.screen.topAnchor constraintEqualToAnchor:g.topAnchor],
         [self.screen.bottomAnchor constraintEqualToAnchor:g.bottomAnchor],
@@ -439,10 +449,10 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.screen.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-kTabStrip],
     ];
     self.screenFull = @[
-        [self.screen.topAnchor constraintEqualToAnchor:self.view.topAnchor],
-        [self.screen.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-        [self.screen.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
-        [self.screen.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.screen.topAnchor constraintEqualToAnchor:g.topAnchor],
+        [self.screen.bottomAnchor constraintEqualToAnchor:g.bottomAnchor],
+        [self.screen.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:kFsLane],
+        [self.screen.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-kFsLane],
     ];
     [NSLayoutConstraint activateConstraints:self.screenWindowed];   // start windowed
     [NSLayoutConstraint activateConstraints:@[
@@ -1081,26 +1091,15 @@ static const CGFloat kMenuWidth       = 210.0;
     }
 
     const CGFloat cell = 38.0, gap = 5.0;
-    CGFloat leftX, rightX;
-    CGRect span;   // vertical extent the columns centre within (and the x of the left strip in windowed)
-    if (self.fullScreen) {
-        // Full-screen: the game is edge-to-edge, so the columns FLOAT over its left/right edges as overlays
-        // (the official-app look). Keep them inside the safe area so they're tappable, not under the island /
-        // home-indicator. Vertical span = the safe-area height.
-        UIEdgeInsets ins = self.view.safeAreaInsets;
-        const CGFloat margin = 4.0;
-        CGFloat vw = self.view.bounds.size.width, vh = self.view.bounds.size.height;
-        leftX  = ins.left + margin;
-        rightX = vw - ins.right - cell - margin;
-        span = CGRectMake(0, ins.top, 0, vh - ins.top - ins.bottom);
-    } else {
-        // Windowed: the columns live in the kTabStrip side strips flanking the inset game view (self.view
-        // coords). The docked side panel ends at the game view's right edge — flush against the right strip.
-        CGRect gf = self.screen.frame;
-        leftX  = gf.origin.x - kTabStrip + (kTabStrip - cell) / 2.0;
-        rightX = gf.origin.x + gf.size.width + (kTabStrip - cell) / 2.0;
-        span = CGRectMake(0, gf.origin.y, gf.origin.x, gf.size.height);
-    }
+    // Both modes: the two columns live in the side lanes flanking the inset game view (self.view coords), so
+    // they sit OUTBOARD of the OSRS corner UI (minimap/chat) — never over it. The lane is kFsLane in full-screen,
+    // the wider kTabStrip in windowed; the game canvas is inset to match, and its docked side panel ends at the
+    // game view's right edge, flush against the right lane.
+    CGFloat lane = self.fullScreen ? kFsLane : kTabStrip;
+    CGRect gf = self.screen.frame;
+    CGFloat leftX  = gf.origin.x - lane + (lane - cell) / 2.0;
+    CGFloat rightX = gf.origin.x + gf.size.width + (lane - cell) / 2.0;
+    CGRect span = CGRectMake(0, gf.origin.y, gf.origin.x, gf.size.height);
     [self layoutColumn:left  x:leftX  cell:cell gap:gap tabs:tabs active:active inBounds:span];
     [self layoutColumn:right x:rightX cell:cell gap:gap tabs:tabs active:active inBounds:span];
 }
@@ -1164,19 +1163,14 @@ static const CGFloat kMenuWidth       = 210.0;
 // engine SOFTWARE-renders at renderW×renderH every frame (no GPU on iOS), so cost scales with pixel count. 720
 // is the balance proven windowed; full-screen is ~12% wider (more pixels) — Phase 6 tunes renderH if needed.
 - (void)renderTargetFullScreen:(BOOL)fs outW:(int *)ow outH:(int *)oh {
+    // Both modes render the SAFE AREA minus a side lane (so the corner UI is never clipped); full-screen just
+    // uses the slimmer kFsLane lanes vs windowed's kTabStrip strips. Matching the render aspect to the on-screen
+    // game rect means the blit fills it with no internal letterbox.
     CGRect b = self.view.bounds;
-    CGFloat sw, sh;
-    if (fs) {
-        // Edge-to-edge: render the FULL view aspect (ignore the safe area) so the blit fills the whole screen
-        // with no black borders. The OSRS corner UI rides under the island/home-indicator (accepted).
-        sw = b.size.width;
-        sh = b.size.height;
-    } else {
-        // Windowed: the safe area minus the kTabStrip native-rail strips on each side.
-        UIEdgeInsets ins = self.view.safeAreaInsets;
-        sw = b.size.width - ins.left - ins.right - 2 * kTabStrip;
-        sh = b.size.height - ins.top - ins.bottom;
-    }
+    UIEdgeInsets ins = self.view.safeAreaInsets;
+    CGFloat lane = fs ? kFsLane : kTabStrip;
+    CGFloat sw = b.size.width - ins.left - ins.right - 2 * lane;
+    CGFloat sh = b.size.height - ins.top - ins.bottom;
     CGFloat aspect = (sh > 0 ? sw / sh : 2.0);
     int renderH = 720;
     *oh = renderH;
