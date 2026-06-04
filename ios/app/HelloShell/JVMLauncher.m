@@ -248,9 +248,10 @@ static BOOL ensureHud(void) {
     return YES;
 }
 
-// Resolve + cache the HudVeneerBridge facade (W3 A3 engine-HUD suppression). Shares the JavaBridge attach.
+// Resolve + cache the HudVeneerBridge facade (W3 A3 chatbox control). Shares the JavaBridge attach.
 static jclass    gVeneerClass = NULL;
 static jmethodID gMidSetChatHidden = NULL;   // setChatHidden(Z)V
+static jmethodID gMidRelocateChat = NULL;    // relocateChat(IIZ)V
 static BOOL ensureVeneer(void) {
     if (gVeneerClass) return YES;
     if (!ensureBridge() || !gMainEnv) return NO;
@@ -261,12 +262,14 @@ static BOOL ensureVeneer(void) {
     (*env)->DeleteLocalRef(env, local);
     if (!global) return NO;
     jmethodID m = (*env)->GetStaticMethodID(env, global, "setChatHidden", "(Z)V");
-    if (!m) {
+    jmethodID r = (*env)->GetStaticMethodID(env, global, "relocateChat", "(IIZ)V");
+    if (!m || !r) {
         (*env)->ExceptionClear(env);
         (*env)->DeleteGlobalRef(env, global);
         return NO;
     }
     gMidSetChatHidden = m;
+    gMidRelocateChat = r;
     gVeneerClass = global;
     return YES;
 }
@@ -1078,6 +1081,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureVeneer()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetChatHidden, (jboolean)(hidden ? JNI_TRUE : JNI_FALSE));
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)relocateEngineChatX:(int)x y:(int)y transparent:(BOOL)transparent {
+    if (!ensureVeneer()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidRelocateChat,
+                                 (jint)x, (jint)y, (jboolean)(transparent ? JNI_TRUE : JNI_FALSE));
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 

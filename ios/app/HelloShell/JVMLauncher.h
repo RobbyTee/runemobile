@@ -124,6 +124,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// without a duplicate. Re-applied each frame by HudVeneerBridge (the engine rebuilds the toplevel). Main thread.
 + (void)setEngineChatHidden:(BOOL)hidden;
 
+/// W3 A3: relocate the engine's OWN chatbox to the top-left (x,y) and optionally flip it to OSRS transparent-chat
+/// mode — the chat-at-top is then the engine's pixel-perfect chat (tabs/scrollback/input stay live), re-applied
+/// each frame by HudVeneerBridge. Main thread.
++ (void)relocateEngineChatX:(int)x y:(int)y transparent:(BOOL)transparent;
+
 // ---- Phase 6 (W3): native plugin-management + config panel (reverse JNI -> MobileUiBridge) -----------
 // All call the Java-owned control-plane facade (gated -Drunelite.mobileui). Reads return JSON snapshots
 // to parse once per panel open; writes are fire-and-forget onto the correct Java thread (EDT for plugin

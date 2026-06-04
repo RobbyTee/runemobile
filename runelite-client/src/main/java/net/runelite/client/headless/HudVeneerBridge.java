@@ -32,25 +32,26 @@ import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
 
 /**
- * W3 Feature-A — the mutating sibling of the read-only {@link HudDataBridge}: it SUPPRESSES the engine HUD
- * elements that the native veneers replace. A0 proved {@code setHidden} is the only clean remover but must be
- * re-applied (the engine rebuilds the toplevel on {@code TOPLEVEL_REDRAW}); this re-applies the requested hides
- * each frame on the client thread.
+ * W3 Feature-A (A3) — controls the engine chatbox so the chat-at-top look matches the OSRS Mobile reference.
+ * A desktop probe ({@code ChatRelocateProbe}) proved the engine's own chatbox can be {@code setForcedPosition}'d
+ * to the top and STILL renders there (not occluded by the 3D viewport — unlike tab stones). So instead of
+ * reproducing the chat natively, we relocate the engine's pixel-perfect chat (tabs / scrollback / colours /
+ * input all stay live, since it IS the real chat) and flip it to OSRS transparent-chat mode.
  *
- * <p>For A3 the only element hidden is the <b>chatbox</b> (the native chat-at-top veneer replaces it, fully
- * native — chat needs no engine route-back). The minimap and orbs are NOT hidden: A0/minimap-walk showed they
- * are cover-in-place (kept live + covered + proxied), so they stay rendered. The desired state is set from the
- * native shell via {@link #setChatHidden(boolean)}.
- *
- * <p>Inert unless {@code -Drunelite.hudveneer=true}. Mutates only the requested containers; never reads back to
- * native.
+ * <p>The desired state is set from the native shell (reverse JNI) and re-applied each frame on the client thread
+ * (the engine rebuilds the toplevel on {@code TOPLEVEL_REDRAW}). Two modes: {@link #relocateChat} (move the
+ * chatbox + optional transparency) or {@link #setChatHidden} (hide it outright). Inert unless
+ * {@code -Drunelite.hudveneer=true}.
  */
 @Slf4j
 public final class HudVeneerBridge
 {
 	private static final boolean ENABLED = Boolean.getBoolean("runelite.hudveneer");
 
-	// Desired suppression state, set from the native shell (reverse JNI), applied on the client thread.
+	// Desired state, set from native, applied on the client thread. chatX < 0 = not relocating.
+	private static volatile int chatX = -1;
+	private static volatile int chatY = -1;
+	private static volatile boolean transparentChat;
 	private static volatile boolean hideChat;
 
 	private HudVeneerBridge()
@@ -62,25 +63,25 @@ public final class HudVeneerBridge
 		return ENABLED;
 	}
 
-	/** Native shell requests the engine chatbox be hidden (the native chat veneer is up) or shown. */
+	/** Native: move the engine chatbox to {@code (x,y)} (top-left of the screen) and optionally flip it to OSRS
+	 *  transparent-chat mode. {@code x < 0} stops relocating. */
+	public static void relocateChat(int x, int y, boolean transparent)
+	{
+		chatX = x;
+		chatY = y;
+		transparentChat = transparent;
+	}
+
+	/** Native: hide the engine chatbox outright (used when the native veneer fully replaces it). */
 	public static void setChatHidden(boolean hidden)
 	{
 		hideChat = hidden;
 	}
 
-	public static boolean isChatHidden()
-	{
-		return hideChat;
-	}
-
-	/** Re-apply the requested hides each frame (the engine un-hides on toplevel rebuild). Client thread. */
+	/** Re-apply the requested chatbox state each frame. Client thread. */
 	public static void tick(Client c)
 	{
 		if (!ENABLED || c == null || c.getGameState() != GameState.LOGGED_IN)
-		{
-			return;
-		}
-		if (!hideChat)
 		{
 			return;
 		}
@@ -88,14 +89,33 @@ public final class HudVeneerBridge
 		{
 			if (!c.isResized())
 			{
-				return;   // native veneers target resizable mode
+				return;   // native veneers + transparent chat are resizable-mode only
 			}
 			final boolean preEoc = c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
-			final int id = preEoc ? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER;
-			final Widget w = c.getWidget(id);
-			if (w != null && !w.isHidden())
+			final int chatId = preEoc ? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER;
+
+			if (chatX >= 0)
 			{
-				w.setHidden(true);
+				final Widget w = c.getWidget(chatId);
+				if (w != null)
+				{
+					w.setForcedPosition(chatX, chatY);
+					w.revalidate();
+				}
+				// OSRS transparent-chat mode (renders the chat without the opaque brown box) to match the
+				// mobile reference. Set only when it differs so we don't spam varbit-changed each frame.
+				if (transparentChat && c.getVarbitValue(VarbitID.CHATBOX_TRANSPARENCY) != 1)
+				{
+					c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, 1);
+				}
+			}
+			else if (hideChat)
+			{
+				final Widget w = c.getWidget(chatId);
+				if (w != null && !w.isHidden())
+				{
+					w.setHidden(true);
+				}
 			}
 		}
 		catch (RuntimeException ignore)

@@ -97,11 +97,10 @@
 @property (nonatomic, strong) NSMutableArray<UIButton *> *tabButtons;
 @property (nonatomic, strong) UIView *tabRailBg;   // opaque rail behind the edge-split icon grid
 
-// W3 Feature-A (A3): native chat-at-top veneer, fed by HudDataBridge.getSnapshot via reverse JNI. Per-type
-// coloured, positioned clear of the engine minimap; the engine chatbox is hidden (HudVeneerBridge) so there's
-// no duplicate. Tabs + tap-to-type are the next A3 step. Touch-transparent for now (taps fall to the game).
-@property (nonatomic, strong) UITextView *hudChatView;
-@property (nonatomic, assign) BOOL engineChatHidden;   // we asked the engine to hide its chatbox (once, post-login)
+// W3 Feature-A (A3): chat-at-top = the engine's OWN chatbox relocated to the top + flipped transparent
+// (ChatRelocateProbe proved it renders there, not occluded). Tabs/scrollback/colors/input stay live since it IS
+// the real chat — no native reproduction needed.
+@property (nonatomic, assign) BOOL engineChatRelocated;   // one-shot: asked the engine to move its chat up
 // Pre-composited tab images (stone background + centred icon) built once from the bundled OSRS sprite assets
 // (stone-inactive/active + icon-0..13). Index = tab index; active/inactive variants. Authentic, crisp, no
 // crop fragility.
@@ -1225,94 +1224,20 @@ static const CGFloat kMenuWidth       = 210.0;
     [t start];
 }
 
-// W3 Feature-A (A3): the native chat-at-top veneer. Reads HudDataBridge.getSnapshot (reverse JNI), renders the
-// last ~12 chat lines per-type-coloured in a transparent box positioned clear of the engine minimap, and hides
-// the engine chatbox (HudVeneerBridge) so there's no duplicate. Tabs + tap-to-type are the next A3 step.
+// W3 Feature-A (A3): drive the chat-at-top. Rather than reproduce the chat natively, we relocate the engine's
+// OWN chatbox to the top-left and flip it to OSRS transparent-chat mode (ChatRelocateProbe proved it renders
+// there, not occluded). One-shot once we're logged in (HudVeneerBridge re-applies it each frame). The relocated
+// chat is the real thing, so its tabs / scrollback / colours / input all keep working.
 - (void)updateHudChat {
+    if (self.engineChatRelocated) return;
     NSString *snap = [JVMLauncher hudSnapshot];
-    if (snap.length == 0) return;
+    if (snap.length == 0) return;   // bridge / VM not up yet — retry next tick
     NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
                                                       options:0 error:nil];
-    if (![d isKindOfClass:[NSDictionary class]]) return;
-    if (![d[@"loggedIn"] boolValue]) return;   // nothing to show until in the world
-
-    // Hide the engine chatbox once (the native veneer replaces it). Re-applied engine-side each frame.
-    if (!self.engineChatHidden) {
-        self.engineChatHidden = YES;
-        [JVMLauncher setEngineChatHidden:YES];
-        [self appendLine:@"[hud] native chat-at-top up -> hiding engine chatbox"];
-    }
-
-    NSArray *chat = d[@"chat"];
-    if (![chat isKindOfClass:[NSArray class]]) return;
-
-    UIFont *font = [UIFont fontWithName:@"Menlo" size:13] ?: [UIFont systemFontOfSize:13];
-    NSMutableAttributedString *body = [[NSMutableAttributedString alloc] init];
-    NSInteger startIdx = MAX(0, (NSInteger)chat.count - 12);
-    for (NSInteger i = startIdx; i < (NSInteger)chat.count; i++) {
-        NSDictionary *line = chat[i];
-        if (![line isKindOfClass:[NSDictionary class]]) continue;
-        NSString *type = line[@"type"] ?: @"";
-        NSString *name = line[@"name"];
-        NSString *value = [self stripOsrsTags:(line[@"value"] ?: @"")];
-        NSString *text = (name.length > 0) ? [NSString stringWithFormat:@"%@: %@\n", name, value]
-                                           : [NSString stringWithFormat:@"%@\n", value];
-        NSDictionary *attrs = @{ NSFontAttributeName: font,
-                                 NSForegroundColorAttributeName: [self colorForChatType:type] };
-        [body appendAttributedString:[[NSAttributedString alloc] initWithString:text attributes:attrs]];
-    }
-
-    if (!self.hudChatView) {
-        CGRect b = self.view.bounds;
-        UIEdgeInsets ins = self.view.safeAreaInsets;
-        CGFloat x = ins.left + kTabStrip + 4;
-        CGFloat avail = b.size.width - ins.left - ins.right - 2 * kTabStrip;
-        CGFloat w = avail * 0.66;   // leave the top-right ~third for the engine minimap/orbs (A4/A5 later)
-        CGFloat h = MIN(220.0, b.size.height * 0.42);
-        UITextView *tv = [[UITextView alloc] initWithFrame:CGRectMake(x, ins.top + 4, w, h)];
-        tv.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.40];   // OSRS transparent-chat feel
-        tv.editable = NO;
-        tv.selectable = NO;
-        tv.userInteractionEnabled = NO;   // taps fall to the game (tap-to-type is the next A3 step)
-        tv.layer.cornerRadius = 6.0;
-        tv.textContainerInset = UIEdgeInsetsMake(6, 10, 6, 10);
-        tv.showsVerticalScrollIndicator = NO;
-        self.hudChatView = tv;
-        [self.view addSubview:tv];
-    }
-    self.hudChatView.attributedText = body;
-    if (body.length > 0) {
-        [self.hudChatView scrollRangeToVisible:NSMakeRange(body.length - 1, 1)];   // keep newest visible
-    }
-}
-
-// OSRS-flavoured per-type chat colours (transparent-chat style). Tunable; full per-player colour resolution
-// (the configured chat-colour varps) is a later A3 refinement.
-- (UIColor *)colorForChatType:(NSString *)type {
-    if ([type hasPrefix:@"PUBLIC"] || [type isEqualToString:@"MODCHAT"] || [type isEqualToString:@"AUTOTYPER"]) {
-        return [UIColor whiteColor];
-    }
-    if ([type hasPrefix:@"PRIVATE"] || [type isEqualToString:@"LOGINLOGOUTNOTIFICATION"]) {
-        return [UIColor colorWithRed:0.40 green:0.85 blue:1.00 alpha:1.0];   // cyan-ish (private)
-    }
-    if ([type hasPrefix:@"CLAN"] || [type hasPrefix:@"FRIENDSCHAT"]) {
-        return [UIColor colorWithRed:0.66 green:0.66 blue:1.00 alpha:1.0];   // light blue/purple (clan)
-    }
-    if ([type hasPrefix:@"TRADE"]) {
-        return [UIColor colorWithRed:1.00 green:0.70 blue:0.25 alpha:1.0];   // orange (trade)
-    }
-    return [UIColor colorWithRed:1.00 green:0.97 blue:0.70 alpha:1.0];       // pale yellow (game/system)
-}
-
-// Crude OSRS rich-text strip (<col=..>, <br>, <img=..>) for the readable preview. Full tag handling is A3.
-- (NSString *)stripOsrsTags:(NSString *)s {
-    static NSRegularExpression *re;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        re = [NSRegularExpression regularExpressionWithPattern:@"<[^>]*>" options:0 error:nil];
-    });
-    if (!re || s.length == 0) return s;
-    return [re stringByReplacingMatchesInString:s options:0 range:NSMakeRange(0, s.length) withTemplate:@""];
+    if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) return;
+    self.engineChatRelocated = YES;
+    [JVMLauncher relocateEngineChatX:8 y:6 transparent:YES];
+    [self appendLine:@"[hud] engine chat -> top-left + transparent (relocate)"];
 }
 
 // Called every screen refresh once the JVM is running. Pulls the engine's latest composited frame
