@@ -1,0 +1,3 @@
+2026-06-04 07:48:46 PDT [Client] INFO  n.r.c.headless.ChatRelocateProbe - [chatreloc] in-world root=PreEoc chatOrigBounds=[0,555,519,165] -> forcing to 8,6
+2026-06-04 07:48:47 PDT [Client] INFO  n.r.c.headless.ChatRelocateProbe - [chatreloc] captured chatreloc-chat-top-1560x720.png (1560x720)
+2026-06-04 07:48:48 PDT [Client] INFO  n.r.c.headless.ChatRelocateProbe - [chatreloc] CHATRELOC root=PreEoc origBounds=[0,555,519,165] nowBounds=[8,6,519,165] movedToTop=true (PNG = whether it renders there)

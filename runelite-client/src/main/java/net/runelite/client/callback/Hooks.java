@@ -477,6 +477,12 @@ public class Hooks implements Callbacks
 			// covers it) vs hidden (dead)? Mutates (clicks/hides); gated -Drunelite.minimapwalk=true.
 			net.runelite.client.headless.MinimapWalkProbe.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.ChatRelocateProbe.isEnabled())
+		{
+			// W3 Feature-A (A3): can the engine chatbox be RELOCATED to the top (exact OSRS skin) vs occluded?
+			// Mutates widget position; gated -Drunelite.chatreloc=true. Desktop de-risk only.
+			net.runelite.client.headless.ChatRelocateProbe.tick(client, client.getGameState());
+		}
 		if (net.runelite.client.headless.MenuPeekBridge.isEnabled())
 		{
 			// W3 touch-targeting: publish the read-only menu-peek snapshot the native press-and-peek UI polls
