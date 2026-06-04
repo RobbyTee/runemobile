@@ -102,12 +102,20 @@ public final class HudVeneerBridge
 					w.setForcedPosition(chatX, chatY);
 					w.revalidate();
 				}
-				// OSRS transparent-chat mode (renders the chat without the opaque brown box) to match the
-				// mobile reference. Set only when it differs so we don't spam varbit-changed each frame.
-				if (transparentChat && c.getVarbitValue(VarbitID.CHATBOX_TRANSPARENCY) != 1)
+				if (transparentChat)
 				{
-					c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, 1);
+					// Deterministic transparency: hide the brown chatbox background sprites directly (the
+					// CHATBOX_TRANSPARENCY varbit alone doesn't re-render an already-built chat). Re-applied each
+					// frame. The text + tab buttons stay; only the opaque box behind them goes.
+					hide(c, InterfaceID.Chatbox.CHAT_BACKGROUND);
+					hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
+					hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
+					if (c.getVarbitValue(VarbitID.CHATBOX_TRANSPARENCY) != 1)
+					{
+						c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, 1);
+					}
 				}
+				dumpChatLayoutOnce(c);
 			}
 			else if (hideChat)
 			{
@@ -120,6 +128,63 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+		}
+	}
+
+	private static void hide(Client c, int id)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			if (w != null && !w.isHidden())
+			{
+				w.setHidden(true);
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	// One-time dump of the chatbox sub-widget layout, so the native side can plan moving the tab row (CONTROLS)
+	// above the message area (CHATAREA/CHATDISPLAY) to match the OSRS-Mobile tabs-on-top layout.
+	private static boolean dumped;
+
+	private static void dumpChatLayoutOnce(Client c)
+	{
+		if (dumped)
+		{
+			return;
+		}
+		dumped = true;
+		dumpOne(c, "CONTROLS", InterfaceID.Chatbox.CONTROLS);
+		dumpOne(c, "CHATAREA", InterfaceID.Chatbox.CHATAREA);
+		dumpOne(c, "CHATDISPLAY", InterfaceID.Chatbox.CHATDISPLAY);
+		dumpOne(c, "CHAT_BACKGROUND", InterfaceID.Chatbox.CHAT_BACKGROUND);
+		dumpOne(c, "INPUT_CLICKAREA", InterfaceID.Chatbox.INPUT_CLICKAREA);
+		dumpOne(c, "MES_LAYER", InterfaceID.Chatbox.MES_LAYER);
+		dumpOne(c, "SCROLLAREA", InterfaceID.Chatbox.SCROLLAREA);
+		dumpOne(c, "CHAT_ALL", InterfaceID.Chatbox.CHAT_ALL);
+	}
+
+	private static void dumpOne(Client c, String name, int id)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			if (w == null)
+			{
+				log.info("[veneer] chat-layout {} = null", name);
+				return;
+			}
+			final java.awt.Rectangle b = w.getBounds();
+			log.info("[veneer] chat-layout {} bounds={} orig=({},{},{}x{}) relX={} relY={} hidden={}",
+				name, b, w.getOriginalX(), w.getOriginalY(), w.getOriginalWidth(), w.getOriginalHeight(),
+				w.getRelativeX(), w.getRelativeY(), w.isHidden());
+		}
+		catch (RuntimeException ex)
+		{
+			log.info("[veneer] chat-layout {} threw {}", name, String.valueOf(ex));
 		}
 	}
 }
