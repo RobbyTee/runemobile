@@ -888,13 +888,15 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     // PNGs land in Documents/rl-capture/. Earlier entrypoints: AwtSmoke (§6.1), UnsafePokeActivation
     // (§6.0), JitProbe/Bench/GlyphSmoke (Phase-1).
     // W3 GPU Route C: register the JNI GL bridge natives onto the facade classes (GLALL / AWTContext / GL)
-    // BEFORE the probe/plugin runs. Only in Route C mode — the facade classes aren't on the normal classpath,
-    // so a normal boot would FindClass-fail (harmless, but we skip it). Non-fatal: log + clear any pending
-    // exception so the VM keeps a clean state.
-    if (self.routecL1Mode) {
+    // BEFORE the probe/plugin runs. In L1 mode the facade lives in routec-l1.jar; in GPU mode it's the iOS
+    // staged shaded jar (facade-backed gpu, LWJGL stripped). A plain CPU boot does NOT register — the gpu
+    // plugin then UnsatisfiedLinkErrors at startUp and RuneLite falls back to the software blit (same as the
+    // librlawt-dlopen failure today). Non-fatal: log + clear any pending exception so the VM stays clean.
+    if (self.routecL1Mode || self.routecGpuMode) {
         jint rr = RouteC_registerGLNatives(env);
         if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
-        log([NSString stringWithFormat:@"[jvm] RouteC_registerGLNatives rc=%d (%@)", rr, rr == 0 ? @"OK" : @"ERR — facade classes not found"]);
+        log([NSString stringWithFormat:@"[jvm] RouteC_registerGLNatives rc=%d (%@) mode=%@", rr,
+            rr == 0 ? @"OK" : @"ERR — facade classes not found", self.routecGpuMode ? @"GPU" : @"L1"]);
     }
 
     if (self.routecL1Mode) {

@@ -20,6 +20,12 @@ typedef void (^JVMLogSink)(NSString *line);
 /// EAGL ES3 context — the cheapest device gate for Route C. Set on the main thread before -runProbesWithLog:.
 @property (nonatomic, assign) BOOL routecL1Mode;
 
+/// W3 GPU Route C — when YES, the FULL RuneLite boots (DeviceHeadlessBoot) with the JNI GL bridge natives
+/// registered after VM create, so the unmodified gpu plugin renders the scene on the device GPU through the
+/// facade (EAGL ES3 FBO) and the swapBuffers shim publishes each composited frame to JavaBridge. The bundle
+/// must carry the iOS staged shaded jar (stage-ios-gpu-jar.sh). Set on the main thread before -runProbesWithLog:.
+@property (nonatomic, assign) BOOL routecGpuMode;
+
 /// CS_DEBUGGED gate (the W1-audit Claim E): true once StikDebug has attached and the
 /// kernel marks this process debugged. Poll this BEFORE warming HotSpot.
 + (BOOL)isDebuggerAttached;
