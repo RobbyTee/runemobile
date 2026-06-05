@@ -69,6 +69,13 @@ public final class HudVeneerBridge
 	private static volatile int sideX = -1;
 	private static volatile int sideY = -1;
 
+	// Tab stones. The native 2-col tab grid replaces them, so we HIDE all 14 engine stones (removes the gray cover
+	// patch the old proxy approach needed) and switch tabs by REPLAYING the stone's own op script — which works
+	// even with the stone hidden (TabScriptProbe: replay + worksHidden GREEN). pendingOpenTab is a one-shot action
+	// applied on the client thread (where runScript is legal).
+	private static volatile boolean hideStones;
+	private static volatile int pendingOpenTab = -1;
+
 	private HudVeneerBridge()
 	{
 	}
@@ -109,6 +116,21 @@ public final class HudVeneerBridge
 	{
 		sideX = x;
 		sideY = y;
+	}
+
+	/** Native: hide (or show) all 14 engine tab stones. With the native 2-col tab grid driving tabs via
+	 *  {@link #openTab}, the real stones are hidden so there is no leftover stone row / cover patch. Re-applied
+	 *  each frame (the engine rebuilds the toplevel on TOPLEVEL_REDRAW). */
+	public static void setStonesHidden(boolean hidden)
+	{
+		hideStones = hidden;
+	}
+
+	/** Native: open the side-panel tab with the given index (0..13) by replaying that stone's op script — works
+	 *  even while the stones are hidden. One-shot; applied on the client thread in {@link #tick}. */
+	public static void openTab(int tabIndex)
+	{
+		pendingOpenTab = tabIndex;
 	}
 
 	/** Re-apply the requested chatbox state each frame. Client thread. */
@@ -190,6 +212,95 @@ public final class HudVeneerBridge
 					w.revalidate();
 				}
 			}
+
+			// Hide the engine tab-stone bottom row by hiding the stones' PARENT containers — NOT the stones
+			// themselves. The engine re-pins the stone widgets to the bottom every frame (setHidden/relocate on a
+			// stone is overridden — confirmed on device), but the parent containers are normal widgets whose hidden
+			// state STICKS (StoneSuppressProbe steady-state PNG). The stones still resolve under the hidden parent,
+			// so openTab (replaying a stone's op script) still switches tabs. STONE0's parent holds the left half of
+			// the row, STONE7's parent the right half. Re-applied each frame (survive TOPLEVEL_REDRAW).
+			if (hideStones)
+			{
+				final int[] ids = stoneIds(preEoc);
+				hideParentOf(c, ids[0]);
+				hideParentOf(c, ids[7]);
+			}
+
+			// One-shot: open a tab by replaying its stone's op script (works even with the stone hidden).
+			final int openIdx = pendingOpenTab;
+			if (openIdx >= 0)
+			{
+				pendingOpenTab = -1;
+				openTabNow(c, preEoc, openIdx);
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	/** Hide the parent container of a stone (the stone-row half). The engine re-pins the stones but not their
+	 *  parents, so the parent's hidden state sticks and the row disappears; the stones still resolve underneath
+	 *  for {@link #openTabNow}. */
+	private static void hideParentOf(Client c, int stoneId)
+	{
+		try
+		{
+			final Widget s = c.getWidget(stoneId);
+			if (s == null)
+			{
+				return;
+			}
+			final Widget p = s.getParent();
+			if (p != null && !p.isHidden())
+			{
+				p.setHidden(true);
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	private static int[] stoneIds(boolean preEoc)
+	{
+		return preEoc ? new int[]{
+			InterfaceID.ToplevelPreEoc.STONE0, InterfaceID.ToplevelPreEoc.STONE1, InterfaceID.ToplevelPreEoc.STONE2,
+			InterfaceID.ToplevelPreEoc.STONE3, InterfaceID.ToplevelPreEoc.STONE4, InterfaceID.ToplevelPreEoc.STONE5,
+			InterfaceID.ToplevelPreEoc.STONE6, InterfaceID.ToplevelPreEoc.STONE7, InterfaceID.ToplevelPreEoc.STONE8,
+			InterfaceID.ToplevelPreEoc.STONE9, InterfaceID.ToplevelPreEoc.STONE10, InterfaceID.ToplevelPreEoc.STONE11,
+			InterfaceID.ToplevelPreEoc.STONE12, InterfaceID.ToplevelPreEoc.STONE13,
+		} : new int[]{
+			InterfaceID.ToplevelOsrsStretch.STONE0, InterfaceID.ToplevelOsrsStretch.STONE1, InterfaceID.ToplevelOsrsStretch.STONE2,
+			InterfaceID.ToplevelOsrsStretch.STONE3, InterfaceID.ToplevelOsrsStretch.STONE4, InterfaceID.ToplevelOsrsStretch.STONE5,
+			InterfaceID.ToplevelOsrsStretch.STONE6, InterfaceID.ToplevelOsrsStretch.STONE7, InterfaceID.ToplevelOsrsStretch.STONE8,
+			InterfaceID.ToplevelOsrsStretch.STONE9, InterfaceID.ToplevelOsrsStretch.STONE10, InterfaceID.ToplevelOsrsStretch.STONE11,
+			InterfaceID.ToplevelOsrsStretch.STONE12, InterfaceID.ToplevelOsrsStretch.STONE13,
+		};
+	}
+
+	/** Open a tab by replaying its stone's op script with the stone as source + op 1 (RuneLite's standard
+	 *  widget-op replay). Works while the stone is hidden — confirmed by TabScriptProbe. Client thread. */
+	private static void openTabNow(Client c, boolean preEoc, int idx)
+	{
+		try
+		{
+			final int[] ids = stoneIds(preEoc);
+			if (idx < 0 || idx >= ids.length)
+			{
+				return;
+			}
+			final Widget w = c.getWidget(ids[idx]);
+			if (w == null)
+			{
+				return;
+			}
+			final Object[] op = w.getOnOpListener();
+			if (op == null)
+			{
+				return;
+			}
+			c.createScriptEventBuilder(op).setSource(w).setOp(1).build().run();
 		}
 		catch (RuntimeException ignore)
 		{

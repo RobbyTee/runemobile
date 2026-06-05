@@ -138,6 +138,14 @@ typedef void (^JVMLogSink)(NSString *line);
 /// doesn't clip under the notch at full-bleed. No-op until a tab is open. x < 0 stops. Main thread.
 + (void)relocateEngineSidePanelX:(int)x y:(int)y;
 
+/// W3 A4: open the side-panel tab with the given index (0..13) by replaying that stone's op script — works even
+/// while the stones are hidden, so the native 2-col grid drives tabs with no cover patch. Main thread.
++ (void)openEngineTab:(int)tabIndex;
+
+/// W3 A4: hide (YES) or show (NO) all 14 engine tab stones, so the native 2-col grid replaces them with no gray
+/// cover patch. Re-applied each frame by HudVeneerBridge. Main thread.
++ (void)setEngineStonesHidden:(BOOL)hidden;
+
 // ---- Phase 6 (W3): native plugin-management + config panel (reverse JNI -> MobileUiBridge) -----------
 // All call the Java-owned control-plane facade (gated -Drunelite.mobileui). Reads return JSON snapshots
 // to parse once per panel open; writes are fire-and-forget onto the correct Java thread (EDT for plugin

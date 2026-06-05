@@ -502,6 +502,12 @@ public class Hooks implements Callbacks
 			// Mutates positions/hidden; gated -Drunelite.stonehide=true. Desktop de-risk only.
 			net.runelite.client.headless.StoneHideProbe.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.StoneSuppressProbe.isEnabled())
+		{
+			// W3 Feature-A (A4): steady-state test of parent/grandparent hide+relocate to remove the re-pinned tab
+			// row. Mutates widget state; gated -Drunelite.stonesuppress=true. Desktop de-risk only.
+			net.runelite.client.headless.StoneSuppressProbe.tick(client, client.getGameState());
+		}
 		if (net.runelite.client.headless.MenuPeekBridge.isEnabled())
 		{
 			// W3 touch-targeting: publish the read-only menu-peek snapshot the native press-and-peek UI polls
