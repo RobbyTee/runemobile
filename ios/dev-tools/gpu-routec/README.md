@@ -180,3 +180,31 @@ for the reviewed full-wiring design (the next step: classpath swap + the correct
 the facade (step 1) and the device native facade (3b); shaders downport + render on GLES 3.00 (B1); EAGL context +
 depth + reverse-Z + shims work (step 2); the whole GL surface exists on iOS GLES 3.0 (3a); the JNI bridge compiles
 for iOS arm64 (3b). What's left is JVM-coupled — the on-device wiring above.
+
+### Full wiring — IMPLEMENTED + host-verified, device run pending (2026-06-05)
+
+All of the "Wiring it on the device" steps above + the reviewed brief
+(`ios/AUDIT-BRIEF-w3-gpu-routec-3b-device-wiring.md`) are now built and verified host-side:
+
+- **2A classpath swap:** `stage-ios-gpu-jar.sh` (md5-gated) post-processes the pristine desktop shaded jar into
+  the iOS variant in the bundle (`client-1.12.29-SNAPSHOT-shaded.jar`) — org/lwjgl + rlawt + the gpu package
+  stripped, the unmodified gpu tree recompiled against `facade-native`, exactly one facade provider per namespace.
+- **2C/2D/2E** live in `gen/routec_jni_gen.py` (regen with `python3 gen/routec_jni_gen.py`): glShaderSource
+  downports GLSL 330→ES 3.00 (vtx/frag-aware via GL_SHADER_TYPE, the 5 B1 edits); swapBuffers reads the FBO back
+  (GL_RGBA + vertical flip + R↔B swizzle) and publishes via `JavaBridge.gpuFrameBackBuffer`/`gpuPublish` (the sole
+  frameSeq publisher — `Hooks` gates the CPU snapshot off when `isGpu`); getFramebuffer re-binds the EAGL context
+  each draw and recreates the FBO on canvas resize. New `RouteCBridge` methods: makeCurrent, fbWidth/fbHeight,
+  ensureSize, readbackInto, downportShaderSource.
+- **Shell:** `JVMLauncher.routecGpuMode` registers the bridge after `JNI_CreateJavaVM` then boots the full
+  RuneLite. **Trigger: two-finger long-press the launch button** (one-finger = L1, plain tap = CPU).
+- **Host gates GREEN:** `routec-device-compile-check.sh` (bridge compiles iOS arm64, 0 err); client jar rebuilt
+  (`./gradlew :client:shadowJar`); `xcodebuild -destination generic/platform=iOS` BUILD SUCCEEDED.
+
+**The device round (primary machine):** `cd ios/dev-tools/gpu-routec && ./stage-ios-gpu-jar.sh` (after a fresh
+`./gradlew :client:shadowJar`), `cd ios/dev-tools/gpu-routec/l1 && ./build-l1-probe.sh`, `cd ios/app && xcodegen
+generate`, then `xcodebuild -project ios/app/HelloShell.xcodeproj -scheme HelloShell -destination "id=$DEV"
+-derivedDataPath build/dd-gpu -allowProvisioningUpdates build` + install + StikDebug-attach. Two-finger long-press
+the launch button; confirm the gpu plugin `startUp` succeeds through the bridge (no UnsatisfiedLinkError), shaders
+compile/link, and the composited GPU frame displays; md5-gate `jvm-stdio.log` + a captured frame. Residual device
+risks to watch: C3 thread identity (log `pthread_self()` in createGLContext vs first swapBuffers — expect equal),
+C4 color/flip correctness, and the `TODO(device)` NIO buffer sizes.
