@@ -69,20 +69,6 @@ public final class HudVeneerBridge
 	private static volatile int sideX = -1;
 	private static volatile int sideY = -1;
 
-	// Tab stones. The native 2-col tab grid replaces them, so we HIDE all 14 engine stones (removes the gray cover
-	// patch the old proxy approach needed) and switch tabs by REPLAYING the stone's own op script — which works
-	// even with the stone hidden (TabScriptProbe: replay + worksHidden GREEN). pendingOpenTab is a one-shot action
-	// applied on the client thread (where runScript is legal).
-	private static volatile boolean hideStones;
-	private static volatile int pendingOpenTab = -1;
-
-	// One-shot device diagnostic for the stone-hide (why the bottom row won't disappear on the device account):
-	// capture each stone's bounds pre-relocate, then log post-relocate bounds + parent + op-listener + hidden.
-	private static int diagFrame;
-	private static boolean diagDone;
-	private static final int[] preX = new int[14];
-	private static final int[] preY = new int[14];
-
 	private HudVeneerBridge()
 	{
 	}
@@ -123,21 +109,6 @@ public final class HudVeneerBridge
 	{
 		sideX = x;
 		sideY = y;
-	}
-
-	/** Native: hide (or show) all 14 engine tab stones. With the native 2-col tab grid driving tabs via
-	 *  {@link #openTab}, the real stones are hidden so there is no leftover stone row / cover patch. Re-applied
-	 *  each frame (the engine rebuilds the toplevel on TOPLEVEL_REDRAW). */
-	public static void setStonesHidden(boolean hidden)
-	{
-		hideStones = hidden;
-	}
-
-	/** Native: open the side-panel tab with the given index (0..13) by replaying that stone's op script — works
-	 *  even while the stones are hidden. One-shot; applied on the client thread in {@link #tick}. */
-	public static void openTab(int tabIndex)
-	{
-		pendingOpenTab = tabIndex;
 	}
 
 	/** Re-apply the requested chatbox state each frame. Client thread. */
@@ -219,158 +190,6 @@ public final class HudVeneerBridge
 					w.revalidate();
 				}
 			}
-
-			// "Hide" the engine tab stones by RELOCATING them off-screen (setHidden does NOT stick for the stones —
-			// they are re-shown each frame; StoneHideProbe confirmed off-screen forced-position is the only thing
-			// that removes them). The native 2-col grid replaces them and openTab works regardless of stone position.
-			if (hideStones)
-			{
-				final int ox = c.getCanvasWidth() + 200, oy = c.getCanvasHeight() + 200;
-				final int[] ids = stoneIds(preEoc);
-				if (!diagDone && diagFrame == 0)
-				{
-					for (int i = 0; i < 14; i++)
-					{
-						final java.awt.Rectangle b = rawBounds(c, ids[i]);
-						preX[i] = b == null ? -9999 : b.x;
-						preY[i] = b == null ? -9999 : b.y;
-					}
-					log.info("[veneer-diag] root={} stoneArrVarbit={} canvas={}x{} offTarget={},{}",
-						preEoc ? "PreEoc" : "OsrsStretch", c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT),
-						c.getCanvasWidth(), c.getCanvasHeight(), ox, oy);
-				}
-				for (final int id : ids)
-				{
-					relocateOff(c, id, ox, oy);
-				}
-				if (!diagDone && ++diagFrame >= 12)
-				{
-					diagDone = true;
-					for (int i = 0; i < 14; i++)
-					{
-						final Widget w = safeWidget(c, ids[i]);
-						final java.awt.Rectangle b = w == null ? null : w.getBounds();
-						final Widget p = w == null ? null : w.getParent();
-						final net.runelite.api.Point pl = p == null ? null : p.getCanvasLocation();
-						final Object[] op = w == null ? null : w.getOnOpListener();
-						log.info("[veneer-diag] STONE{} pre={},{} post={} parentLoc={} hidden={} onOp={}",
-							i, preX[i], preY[i],
-							b == null ? "null" : (b.x + "," + b.y + "," + b.width + "x" + b.height),
-							pl == null ? "null" : (pl.getX() + "," + pl.getY()),
-							w == null ? "?" : String.valueOf(w.isHidden()),
-							op == null ? "null" : java.util.Arrays.toString(op));
-					}
-				}
-			}
-
-			// One-shot: open a tab by replaying its stone's op script (works even with the stone hidden).
-			final int openIdx = pendingOpenTab;
-			if (openIdx >= 0)
-			{
-				pendingOpenTab = -1;
-				openTabNow(c, preEoc, openIdx);
-			}
-		}
-		catch (RuntimeException ignore)
-		{
-		}
-	}
-
-	private static Widget safeWidget(Client c, int id)
-	{
-		try
-		{
-			return c.getWidget(id);
-		}
-		catch (RuntimeException ex)
-		{
-			return null;
-		}
-	}
-
-	/** getBounds regardless of hidden state (diagnostic). */
-	private static java.awt.Rectangle rawBounds(Client c, int id)
-	{
-		try
-		{
-			final Widget w = c.getWidget(id);
-			return w == null ? null : w.getBounds();
-		}
-		catch (RuntimeException ex)
-		{
-			return null;
-		}
-	}
-
-	/** Force a widget to an absolute canvas position (setForcedPosition is parent-relative, so subtract the
-	 *  parent's live canvas location). Used to push the tab stones off-screen. */
-	private static void relocateOff(Client c, int id, int ax, int ay)
-	{
-		try
-		{
-			final Widget w = c.getWidget(id);
-			if (w == null)
-			{
-				return;
-			}
-			int px = 0, py = 0;
-			final Widget p = w.getParent();
-			if (p != null)
-			{
-				final net.runelite.api.Point pl = p.getCanvasLocation();
-				if (pl != null)
-				{
-					px = pl.getX();
-					py = pl.getY();
-				}
-			}
-			w.setForcedPosition(ax - px, ay - py);
-			w.revalidate();
-		}
-		catch (RuntimeException ignore)
-		{
-		}
-	}
-
-	private static int[] stoneIds(boolean preEoc)
-	{
-		return preEoc ? new int[]{
-			InterfaceID.ToplevelPreEoc.STONE0, InterfaceID.ToplevelPreEoc.STONE1, InterfaceID.ToplevelPreEoc.STONE2,
-			InterfaceID.ToplevelPreEoc.STONE3, InterfaceID.ToplevelPreEoc.STONE4, InterfaceID.ToplevelPreEoc.STONE5,
-			InterfaceID.ToplevelPreEoc.STONE6, InterfaceID.ToplevelPreEoc.STONE7, InterfaceID.ToplevelPreEoc.STONE8,
-			InterfaceID.ToplevelPreEoc.STONE9, InterfaceID.ToplevelPreEoc.STONE10, InterfaceID.ToplevelPreEoc.STONE11,
-			InterfaceID.ToplevelPreEoc.STONE12, InterfaceID.ToplevelPreEoc.STONE13,
-		} : new int[]{
-			InterfaceID.ToplevelOsrsStretch.STONE0, InterfaceID.ToplevelOsrsStretch.STONE1, InterfaceID.ToplevelOsrsStretch.STONE2,
-			InterfaceID.ToplevelOsrsStretch.STONE3, InterfaceID.ToplevelOsrsStretch.STONE4, InterfaceID.ToplevelOsrsStretch.STONE5,
-			InterfaceID.ToplevelOsrsStretch.STONE6, InterfaceID.ToplevelOsrsStretch.STONE7, InterfaceID.ToplevelOsrsStretch.STONE8,
-			InterfaceID.ToplevelOsrsStretch.STONE9, InterfaceID.ToplevelOsrsStretch.STONE10, InterfaceID.ToplevelOsrsStretch.STONE11,
-			InterfaceID.ToplevelOsrsStretch.STONE12, InterfaceID.ToplevelOsrsStretch.STONE13,
-		};
-	}
-
-	/** Open a tab by replaying its stone's op script with the stone as source + op 1 (RuneLite's standard
-	 *  widget-op replay). Works while the stone is hidden — confirmed by TabScriptProbe. Client thread. */
-	private static void openTabNow(Client c, boolean preEoc, int idx)
-	{
-		try
-		{
-			final int[] ids = stoneIds(preEoc);
-			if (idx < 0 || idx >= ids.length)
-			{
-				return;
-			}
-			final Widget w = c.getWidget(ids[idx]);
-			if (w == null)
-			{
-				return;
-			}
-			final Object[] op = w.getOnOpListener();
-			if (op == null)
-			{
-				return;
-			}
-			c.createScriptEventBuilder(op).setSource(w).setOp(1).build().run();
 		}
 		catch (RuntimeException ignore)
 		{

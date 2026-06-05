@@ -1016,12 +1016,32 @@ static const CGFloat kMenuWidth       = 210.0;
         return;
     }
     int active = [d[@"activeTab"] intValue];
+    NSArray *tabs = [d[@"tabs"] isKindOfClass:[NSArray class]] ? d[@"tabs"] : @[];
 
-    // All 14 tabs in ONE 2-column grid at the BOTTOM-RIGHT — the official OSRS-mobile arrangement. The engine
-    // stones are HIDDEN (setEngineStonesHidden), so these native buttons ARE the tabs; a tap replays the stone's
-    // op script to open the tab (onTabButton) — no cover patch / gray box. TAB_GRID_ORDER maps grid slot ->
-    // engine tab index, row-major (slot 0 = top-left, 1 = top-right, …). Tweak it to match the official order.
-    // Cells auto-fit the bottom ~56% of the safe height so the grid never collides with the minimap (top-right).
+    // Refresh each present tab's proxy-target centre + cover the live engine stone (the cover hides the engine's
+    // bottom double-UI; the stone stays clickable underneath so the proxy click still lands). present[] = which
+    // engine tabs resolved this frame; the native grid icon is decoupled from where the engine stone lives.
+    BOOL present[14] = { NO };
+    for (NSUInteger i = 0; i < self.tabButtons.count && i < 14; i++) {
+        id t = i < tabs.count ? tabs[i] : nil;
+        if (![t isKindOfClass:[NSArray class]] || [(NSArray *)t count] < 4) {
+            self.tabButtons[i].hidden = YES;
+            self.stoneCovers[i].hidden = YES;
+            continue;
+        }
+        NSArray *bb = (NSArray *)t;
+        int x = [bb[0] intValue], y = [bb[1] intValue], w = [bb[2] intValue], h = [bb[3] intValue];
+        _tabCentres[i] = CGPointMake(x + w / 2.0, y + h / 2.0);
+        CGRect cv = [self viewRectForGameX:x y:y w:w h:h];
+        self.stoneCovers[i].frame = CGRectInset(cv, -1, -1);
+        self.stoneCovers[i].hidden = NO;
+        present[i] = YES;
+    }
+
+    // All 14 tabs in ONE 2-column grid at the BOTTOM-RIGHT — the official OSRS-mobile arrangement (no more
+    // split left/right edges). TAB_GRID_ORDER maps grid slot -> engine tab index, row-major (slot 0 = top-left,
+    // 1 = top-right, 2 = row2-left, …). Tweak this array to match the official order exactly. Cells auto-fit the
+    // bottom ~56% of the safe height so the grid never collides with the minimap (top-right).
     static const int TAB_GRID_ORDER[14] = { 3, 1,  4, 2,  5, 13,  6, 7,  0, 12,  8, 9,  10, 11 };
     UIEdgeInsets ins = self.view.safeAreaInsets;
     CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height;
@@ -1034,6 +1054,7 @@ static const CGFloat kMenuWidth       = 210.0;
     for (int slot = 0; slot < 14; slot++) {
         int i = TAB_GRID_ORDER[slot];
         UIButton *btn = self.tabButtons[i];
+        if (!present[i]) { btn.hidden = YES; continue; }
         int col = slot % 2, row = slot / 2;
         btn.frame = CGRectMake(gx0 + col * (cell + gap), gy0 + row * (cell + gap), cell, cell);
         BOOL isActive = (i == active);
@@ -1052,12 +1073,14 @@ static const CGFloat kMenuWidth       = 210.0;
     // (canvasPx = pt * renderW/W); the side panel width comes from the chrome snapshot (fixed engine px).
     if (self.renderW > 0 && W > 0) {
         CGFloat k = (CGFloat)self.renderW / W;
-        int sideW = 204;   // fallback until the panel is open and reports its real width
+        int sideW = 204, sideH = 275;   // fallback until the panel is open and reports its real size
         NSArray *sc = [d[@"sideContainer"] isKindOfClass:[NSArray class]] ? d[@"sideContainer"] : nil;
-        if (sc.count >= 4 && [sc[2] intValue] > 0) sideW = [sc[2] intValue];
-        int sideX = (int)lround(gx0 * k) - sideW;   // right edge flush against the grid's left edge
-        // The stones are hidden, so there is no bottom row to avoid — align the panel's top with the grid top.
-        int sideY = (int)lround(gy0 * k);
+        if (sc.count >= 4) { if ([sc[2] intValue] > 0) sideW = [sc[2] intValue]; if ([sc[3] intValue] > 0) sideH = [sc[3] intValue]; }
+        int sideX = (int)lround(gx0 * k) - sideW;     // right edge flush against the grid's left edge
+        // Sit the panel ABOVE the bottom stone row (the engine tab stones are pinned to the canvas bottom, ~36px
+        // tall). The tab proxy-clicks land on those stones, so the panel must NOT cover them or the clicks die —
+        // which was the bug where tabs stopped switching once a panel was open.
+        int sideY = (self.renderH - 36) - sideH;
         if (sideX < 0) sideX = 0;
         if (sideY < 0) sideY = 0;
         [JVMLauncher relocateEngineSidePanelX:sideX y:sideY];
@@ -1070,10 +1093,12 @@ static const CGFloat kMenuWidth       = 210.0;
     if (![JVMLauncher bridgeReady]) return;
     NSInteger i = b.tag;
     if (i < 0 || i >= 14) return;
-    // Open the tab by replaying the engine stone's op script (works while the stones are hidden) — no proxy-click
-    // on a live stone, so no cover patch / gray box is needed. The button tag is the engine tab index.
-    [JVMLauncher openEngineTab:(int)i];
-    [self appendLine:[NSString stringWithFormat:@"[chrome] tab %ld -> openTab", (long)i]];
+    CGPoint c = _tabCentres[i];
+    // PRECISE click (no snap): the world viewport is full-screen, so a normal onClick would snap a tab-stone
+    // click onto a nearby world entity instead of hitting the stone.
+    [JVMLauncher postClickPreciseX:(int)lround(c.x) y:(int)lround(c.y) button:1];
+    [self appendLine:[NSString stringWithFormat:@"[chrome] tab %ld -> proxy click %d,%d",
+                      (long)i, (int)lround(c.x), (int)lround(c.y)]];
 }
 
 - (void)onToggleChrome {
@@ -1244,7 +1269,6 @@ static const CGFloat kMenuWidth       = 210.0;
 
     [JVMLauncher relocateEngineChatX:chatX y:chatY transparent:YES];
     [JVMLauncher relocateEngineMinimapX:mmX y:mmY];
-    [JVMLauncher setEngineStonesHidden:YES];   // the native 2-col grid replaces them (no cover patch / gray box)
     self.chatHitCanvas = CGRectMake(chatX, chatY, kChatW, kChatTabRowH);
     [self appendLine:[NSString stringWithFormat:@"[hud] relocate chat->%d,%d minimap->%d,%d (insets L%d T%d R%d k%.2f)",
                       chatX, chatY, mmX, mmY, leftC, topC, rightC, k]];
