@@ -142,3 +142,76 @@ The reviewer's highest-value call: **is the LWJGL native port (Route A/B) worth 
 - The `int[]` publish contract B2 routes into: `net.runelite.client.headless.JavaBridge`
   (`snapshot`/`getFramePixels`/`frameSeq`); GPU early-return `Hooks.java:501`.
 - iOS shell (device step): `ios/app/HelloShell/JVMLauncher.m` (VM bringup, dylib load), `GLRecon.m` (EAGL recon).
+
+---
+
+## Review outcome (folded in 2026-06-05) — Route A RED, go Route C
+
+External review verdict: **Route A leans RED**; the fatal blocker is not shaders but
+**`GL.createCapabilities()` producing a `GLCapabilities` the unmodified plugin accepts as `OpenGL33`**. All
+citations verified against current source. Corrections, with the wrong original text struck:
+
+1. **L1 pass bar was too weak (was `OpenGL30`).** The plugin gates on **`if (!glCapabilities.OpenGL33)`**
+   (`GpuPlugin.java:317`) immediately after `GL.createCapabilities()` (`:312`) and **aborts** otherwise. LWJGL's
+   `OpenGL33` flag requires the context to report **≥ 3.3 AND** all desktop 3.3 core functions present. A native
+   **GLES 3.0** context reports `GL_MAJOR_VERSION=3, GL_MINOR_VERSION=0` → `OpenGL33 = false` → plugin aborts.
+   Forcing it true needs *both* lying about the version *and* shimming every desktop-only function — i.e. **Route C
+   plus a fragile compatibility lie**, strictly worse than Route C. ⇒ **Route A red.** Revised L1 (if run at all):
+   assert **`GL.createCapabilities().OpenGL33`** (not `OpenGL30`), capture LWJGL missing-function reports, then
+   execute the plugin's real startup calls (`glClearDepth`, `glMapBuffer`, `glMultiDrawArrays`,
+   `glClipControl(GL_ZERO_TO_ONE)`). This is the formal kill-test, best run **on the device** (the Simulator can't
+   load our iOS-triple JVM, and LWJGL needs a JVM + a real GLES context together).
+
+2. **~~`glClipControl(NEGATIVE_ONE_TO_ONE)` → no-op~~ — WRONG.** The plugin calls
+   **`glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE)`** (`GpuPlugin.java:358`) with **reverse-Z** state:
+   `glDepthFunc(GL_GREATER)` (`:973`), `glClearDepth(0d)` (`:987`/`:993`). GLES NDC-z is fixed `[-1,1]` with no
+   `glClipControl` analogue, so reverse-Z `[0,1]` is **a real depth/projection port + render test**, not a no-op
+   (**L5 partially false**). This is a Route-C design item, not a free shim.
+
+3. **Route A FunctionProvider needs wrapper symbols, not raw `dlsym(OpenGLES.framework)`.** Apple's OpenGLES SDK
+   exports `glClearDepthf` (float), **not** desktop `glClearDepth` (double); and lacks `glClipControl`,
+   `glMultiDrawArrays`, `glDebugMessageControl`. Aliasing `glClearDepth`→`glClearDepthf` is an ABI/signature
+   mismatch — every desktop-only symbol needs a typed wrapper, which is Route C work anyway.
+
+4. **~~Route C is "~40 calls"~~ — UNDERCOUNT.** Verified census: **86 distinct `gl*` methods** in the plugin
+   package (one, `glDpiAwareViewport`, is a RuneLite helper → **85 GL calls**) + a tiny buffer surface
+   (`BufferUtils.createIntBuffer` ×3, direct `ByteBuffer`/`IntBuffer`/`FloatBuffer`, `Configuration`,
+   `GLUtil.setupDebugMessageCallback`). Still bounded and **still cheaper than an iOS LWJGL core port + a desktop-GL
+   lie.** Only **5 of the 85 are not GLES 3.0 core**; the other ~80 map 1:1:
+
+   | desktop-only call | GLES 3.0 disposition |
+   | --- | --- |
+   | `glClearDepth` (double) | → `glClearDepthf` (float) — signature shim |
+   | `glMapBuffer` | → `glMapBufferRange` (full range) — ES 3.0 is range-map only (plugin already uses `glMapBufferRange`/`glFlushMappedBufferRange`/`glUnmapBuffer`) |
+   | `glMultiDrawArrays` | → loop of `glDrawArrays` (per-draw `first[]/count[]`; verify no inter-draw state assumption) |
+   | `glDebugMessageControl` + `GLUtil.setupDebugMessageCallback` | → no-op (KHR_debug optional) |
+   | `glClipControl(GL_ZERO_TO_ONE)` + reverse-Z | **render decision** (item 2) — port depth/projection to ES `[-1,1]`, render-test |
+
+5. **L4 — `AWTContext`/`ClientUI` surface is more than create/current/swap** (verified): `getFramebuffer(false)`
+   (×4: `:766/:870/:1028/:1460`, the default-FBO the offscreen shim must supply), `getBufferMode` (`:1543`,
+   `glReadBuffer` target), `setSwapInterval` (`:542`), `swapBuffers` (`:1430`), and **`clientUI.getGraphicsConfiguration()`**
+   DPI transforms (×5: `:728/:1037/:1493/:1535/:2070`, feeding `glDpiAwareViewport`). The iOS offscreen shim must
+   answer all of these (framebuffer 0 = our FBO; swap = no-op or `glReadPixels`→blit; DPI = our render scale).
+
+### Decision
+
+**Kill Route A. Proceed Route C** — a thin iOS-arm64 JNI GL bridge over the 85-call surface behind **local facade
+classes** standing in for the plugin's `org.lwjgl.opengl` imports (so "unmodified plugin" = unmodified *plugin
+source*, satisfied by our `org.lwjgl.opengl.GL33C`/`GL`/`GLCapabilities`/`AWTContext` facades on the iOS classpath).
+This avoids the LWJGL core port (no `liblwjgl`/dyncall/libffi-on-iOS), avoids the desktop-GL version lie, and lets
+us own the 5 shims + the reverse-Z decision at the bridge. **L2 (build `liblwjgl` for iOS) is dropped** unless a
+revised on-device L1 unexpectedly shows `OpenGL33` satisfiable.
+
+### Revised next experiments (Route C)
+
+1. **Facade-compile smoke (desktop, cheap):** create local `org.lwjgl.opengl.GL33C`/`GL`/`GLCapabilities` +
+   `net.runelite.rlawt.AWTContext` facade stubs on an iOS-only source set; confirm `GpuPlugin`/`Shader` compile
+   unmodified against them (sizes the facade, finds any missed symbol).
+2. **iOS JNI GL bridge (device):** implement the 85 calls over `OpenGLES.framework` (the 5 shims as above), an
+   offscreen `AWTContext` analogue (EAGL ES3 context + our FBO as "framebuffer 0"), feed the **already-proven**
+   downported shaders through `Shader.compile`, render the plugin's real scene pass → `glReadPixels` → the existing
+   `int[]` blit. Resolve the reverse-Z/depth decision here with a render test.
+3. **Formal Route-A kill-test (optional, device):** the revised L1 asserting `OpenGL33` — only if we want the
+   empirical refutation on record before committing to Route C.
+
+External reference (review): Khronos OpenGL ES Registry (https://registry.khronos.org/OpenGL/index_es.php).
