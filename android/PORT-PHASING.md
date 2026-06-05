@@ -11,8 +11,13 @@
 > render/input seam, and *every* host-facing facade (`net.runelite.client.headless.*`) — is **already
 > compiled into the same shaded jar both ports embed**. iOS proved and uses ~50 bridge methods; Android wires
 > 8. So reaching parity is **a Kotlin/native-host + Android-UI effort against an existing, desktop-and-iOS-proven
-> seam** — *almost no new Java is required*. Each phase below is mostly "turn on a `-D` gate that already
-> exists + write the Android host/UI that calls bridge methods that already exist."
+> seam** — *almost no new **shared Java** is required*. Each phase below is mostly "turn on a `-D` gate that
+> already exists + write the Android host/UI that calls bridge methods that already exist."
+>
+> **Honest scoping caveat (reviewer-corrected):** "almost no new Java" means no new *shared/`net.runelite`*
+> Java — it does **not** mean the work is small. Each phase still adds a real, non-trivial **Android host
+> surface**: new JNI externs in `jvm_bootstrap.cpp` + `JvmLauncher.kt` (today only 8 methods are bridged) and
+> the Android UI itself. The Java seam being done removes the *engine-risk*, not the host/UI labour.
 
 ---
 
@@ -41,7 +46,7 @@ three gestures, no Jagex-Mobile shell.
 
 ### 0.2 The gap (this whole document)
 Android calls **8 of ~50** bridge methods iOS uses. Its UI is **one `SurfaceView` + a `GestureDetector`**
-(~370 LOC Kotlin) versus iOS's **~5,000 LOC** across 6 view controllers + a 1,340-LOC `JVMLauncher.m`.
+(313 LOC Kotlin, verified `wc -l`) versus iOS's **~5,000 LOC** across 6 view controllers + a 1,340-LOC `JVMLauncher.m`.
 **All the Java bridges that close this gap already ship in the embedded jar** (`MobileUiBridge`,
 `MenuPeekBridge`, `MobileChromeBridge`, `HudDataBridge`, `HudVeneerBridge`, `QuestHelperBridge`,
 `WorldSwitcherBridge`, plus the unused `JavaBridge` input methods). Each is gated behind a `-D` flag Android
@@ -101,7 +106,7 @@ current status**. Maturity reflects iOS. "Bridge" names the static facade in
 |---|---|---|---|
 | Plugin list + enable/disable | Proven | `MobileUiBridge.{listPlugins,setPluginEnabled,getMobileUiSeq,pollMobileUiEvents}` | ❌ (gate `runelite.mobileui`) |
 | Native typed per-plugin config | Proven | `MobileUiBridge.{getPluginConfig,setConfig,resetConfig,getProcessedWriteId}` | ❌ |
-| Plugin Hub browse/install | Proven | `MobileUiBridge.{hubManifest,hubInstall,hubUninstall}` (gate `runelite.hub`, pin `pluginhub.version`) | ❌ |
+| Plugin Hub browse/install | Proven | `MobileUiBridge.{hubManifest,hubInstall,hubUninstall}` (gate `runelite.hub`, pin `runelite.pluginhub.version` — iOS pins `1.12.27`; our `1.12.28-SNAPSHOT` has no hub manifest → 404) | ❌ |
 | Explicit config flush (no clean shutdown) | Proven | `MobileUiBridge.flushConfig()` on close/background | ❌ |
 
 ### 1.6 Plugin side-panels — *absent on Android*
@@ -134,7 +139,10 @@ The iOS port's discipline is itself load-bearing (it has a documented "false-GRE
    methods. When a phase *does* need Java, call it out explicitly (rare).
 2. **md5-gated GREEN, never eyeballed.** Each phase defines a pass/fail sentinel computed in bash and
    md5-compared against **verbatim `adb logcat` / `adb exec-out screencap`** output (the Android analog of the
-   iOS `devicectl`-pulled-log rule). No GREEN without the captured line.
+   iOS `devicectl`-pulled-log rule). No GREEN without the captured line. **No Android harness exists yet** —
+   building the first md5-gate script is part of A-1/A0. **Caveat (reviewer):** raw `logcat` md5s are brittle
+   (timestamps/pids/thread ids vary) → **md5 a normalized, grepped sentinel line**, not the raw stream; and
+   screencap md5s need controlled orientation + a fixed crop (status bar/cutout stripped) to be stable.
 3. **Emulator-first, then one real-device confirm.** Android's `rl_arm64` emulator is the desktop-inner-loop
    analog (fast, debuggable). Promote to a real Android device at A0 and re-confirm the platform there once;
    thereafter most phases are emulator-verified with a device spot-check at milestones.
@@ -150,8 +158,28 @@ The iOS port's discipline is itself load-bearing (it has a documented "false-GRE
 
 ## 3. The phases
 
-Nine phases, **A0–A8**. Each: **Goal · iOS parallel · Scope (features + exact bridges) · Android-specific work
-· GREEN criteria · Depends on · Risk**. Ordering rationale in §6.
+Ten phases, **A-1 + A0–A8**. Each: **Goal · iOS parallel · Scope (features + exact bridges) · Android-specific
+work · GREEN criteria · Depends on · Risk**. Ordering rationale in §6.
+
+---
+
+### Phase A-1 — Bridge/flag census harness (cheapest de-risk; added per review)
+**Goal:** before building any UI, *prove from the running Android VM* that every bridge method and `-D` gate
+the A0–A8 mainline depends on actually resolves and behaves — turning the plan's central "the Java is already
+there" claim into a captured, md5-gated fact rather than a source-tree inference.
+**iOS parallel:** the bridge-surface this mirrors is `JVMLauncher.h` (the proven host↔game contract).
+**Scope:** a probe that, under each relevant `-D` flag set, JNI-resolves *every* method named in §1 (the iOS
+contract surface) on its facade class and logs pass/fail per method; plus a flag-census that confirms each gate
+(`runelite.mobileui` / `mobilechrome` / `menupeek` / `huddata` / `hudveneer` / `hub` / `headless.autologin.*`)
+flips the bridge from inert to active. This also lays down the **first md5-gate script** (per §2.2) that every
+later phase reuses.
+**Android-specific work:** a small native or `JvmLauncher` probe entry + a bash harness that diffs the resolved
+method set against the iOS `JVMLauncher.h` surface and md5s a normalized sentinel.
+**GREEN:** md5-gated `ANDROID_BRIDGE_CENSUS_GREEN` — logcat lists every required bridge method as RESOLVED and
+every gate as honored; any unresolved method is the *real, scoped* surprise the plan should know about up front.
+**Depends on:** nothing (current state).
+**Risk:** very low — it only reads. High value: it converts every downstream "no new Java needed" assumption
+into evidence and front-loads any nasty surprise.
 
 ---
 
@@ -165,10 +193,12 @@ Nine phases, **A0–A8**. Each: **Goal · iOS parallel · Scope (features + exac
 **Android-specific work:**
 - Add JX_* env + autologin opts in `jvm_bootstrap.cpp`/`MainActivity.kt` (iOS `loadJagexTokens` is the
   template; `setenv` semantics identical on bionic).
-- **Fix `AndroidManifest.xml` orientation:** it is **portrait-locked** (`:15-24`); the game is landscape (iOS
-  is landscape-only). Decide + switch to landscape (or sensor-landscape).
-- **Fix the stale `AssetInstaller.kt:9-13` doc-comment** (it still claims the abandoned "jniLibs split" model,
-  contradicting the assets-only reality — a trap for future contributors).
+- **Fix `AndroidManifest.xml` orientation:** it is **portrait-locked** (`:19`, `screenOrientation="portrait"`);
+  the game is landscape (iOS is landscape-only). Switch to **`sensor-landscape`** (reviewer-recommended; see §5 Q5).
+- **Fix the stale `AssetInstaller.kt:9-14` doc-comment** (it still claims the abandoned "jniLibs split" model —
+  but `MainActivity.kt:119` dlopens libjvm from staged `filesDir/jvm/jre/lib/server`, contradicting the
+  assets-only reality. A trap for future contributors; see §5 Q11 on whether that dlopen path is even
+  real-device-safe).
 - Stand up a real Android device (USB debugging) + an `installDebug`/run wrapper; re-confirm boot→LOGGED_IN.
 - Optional: a minimal logcat-backed on-screen status line (the iOS debug-HUD analog) for field debugging.
 **GREEN:** `adb logcat` shows `gameState` reach `LOGGED_IN` from a pushed `tokens.json` with no manual taps,
@@ -245,7 +275,7 @@ on iOS as a reference.
 **Scope / bridges:** gate `-Drunelite.mobileui=true` (+ `runelite.hub=true`, `pluginhub.version` pin).
 `MobileUiBridge.{listPlugins,setPluginEnabled,getMobileUiSeq,pollMobileUiEvents}` (enable/disable);
 `{getPluginConfig,setConfig,resetConfig,getProcessedWriteId}` (typed config); `{hubManifest,hubInstall,
-hubUninstall}` (hub); `flushConfig()` on close/background. **Bridge owns its own EDT/client-thread lanes** — the
+hubUninstall}` (hub, with `-Drunelite.pluginhub.version=1.12.27` — SNAPSHOT 404s); `flushConfig()` on close/background. **Bridge owns its own EDT/client-thread lanes** — the
 host calls the static methods from any thread; no Android threading care needed beyond not blocking the UI.
 **Android-specific work:** real Android UI screens — a plugin list (switches + status), a typed config screen
 (bool→Switch, int/double→numeric field+clamp, enum→picker, color→color-picker, string→text), a hub
@@ -360,7 +390,12 @@ RuneLite's GPU stack. Target order (117HD builds on the same context/native infr
 - **B1 (native LWJGL):** iOS needs an immature iOS-arm64 LWJGL rebuild. **Android: the PojavLauncher/Amethyst
   lineage our bionic JRE already comes from ships a bionic-arm64 LWJGL + GL-translation stack
   (gl4es / holy-gl4es / LTW / ANGLE) built precisely to run LWJGL desktop-GL Minecraft on Android.** The
-  hardest binary blocker is largely pre-solved in our own ecosystem.
+  hardest binary blocker is largely pre-solved in our own ecosystem. **⚠ Reviewer caveat (do not over-claim):**
+  there is **no bionic/Android LWJGL classifier in *this repo* today** — `build.gradle.kts:84-95` ships
+  `natives-{linux,linux-arm64,macos,macos-arm64,windows*}` only, **no `natives-android`**. The Pojav stack must
+  be *imported and proven*, not assumed present. And that stack targets a **GLFW/GLFM-windowed** Minecraft, not
+  a **headless AWT** engine — whether its translation path even initializes with no GLFW window is itself an
+  AG1 open question, not a given.
 - **B2 (no desktop GL):** iOS has only GLES(deprecated)+Metal → needs ANGLE→Metal. **Android exposes native
   GLES 3.1+ (with compute) and Vulkan** → 117HD's compute pipeline is *directly reachable*; the same
   translation libs handle desktop-GL→GLES.
@@ -370,10 +405,20 @@ RuneLite's GPU stack. Target order (117HD builds on the same context/native infr
 - **iOS Claim D (GL driver vs the JIT mirror / exception-port setup):** a **non-issue** on Android — free JIT,
   no code-cache mirror, no Mach-port surgery.
 
+**What kills AG2/AG3 first (reviewer-sharpened ordering of the risk):**
+- **AG2 most likely dies on `AWTContext`/LWJGL/`OpenGL33`-on-bionic before any shader work.** `GpuPlugin`
+  hard-requires `AWTContext.loadNatives()` + `new AWTContext(client.getCanvas())` (`GpuPlugin.java:288,299`),
+  then `GL.createCapabilities()` and a hard `if (!glCapabilities.OpenGL33) return false` (`GpuPlugin.java:311,316`).
+  GLES 3.1 + compute does **not** automatically satisfy a desktop-`OpenGL33`/`OpenGL45` capability probe — the
+  translation layer (gl4es/ANGLE) must convincingly *report* those caps to LWJGL, or `gpu` refuses to start.
+- **AG3 most likely dies on compute + desktop-GL semantics + external plugin loading** (117HD's compute
+  pipeline, `glClipControl` Z-range, UBO layout, texture-array `glTexStorage3D`).
+
 **Shared blockers that remain (same as iOS):**
 - `librlawt`/`AWTContext` binds GL to the AWT Canvas's native peer; the headless CTC has none → must be
   **replaced by an offscreen/Surface EGL-context shim**, *without touching the unmodified plugin Java* (iOS
-  Claim F). This is the one real native/Java-adjacent piece.
+  Claim F). This is the one real native/Java-adjacent piece — and it is **load-bearing**, since `GpuPlugin`
+  constructs `AWTContext` directly from the canvas peer.
 - **Desktop-GL→GLES semantic down-port** (UBO layout, `glClipControl` Z-range, `glMultiDrawElements`,
   texture-array `glTexStorage3D`, compute) — via the translation layer or a shader port; some 117HD features
   may not survive cleanly.
@@ -452,17 +497,28 @@ on screen-close and `onPause`/`onStop`, or plugin toggles + config edits silentl
    a custom View hierarchy closer to the UIKit structure?
 2. **Phase ordering:** is A3 (on-device login) correctly placed *after* A1/A2, or should it precede them so the
    app is self-contained sooner? (It's independent of A1/A2; pushed `tokens.json` unblocks all emulator dev.)
+   **Reviewer recommendation:** move A3 to right after A0 (or parallel with A1) — self-contained login is
+   foundational, not polish. *(Sequencing recommendation; final order is the maintainer's call.)*
 3. **A7 scope realism:** the native HUD veneer is unfinished on iOS. Should Android attempt it at all in v1, or
    ship parity-minus-veneers (keep the engine HUD in-frame, as Android does today) and treat A7 as post-v1?
+   **Reviewer recommendation:** defer A7 from v1 — even iOS hasn't finished native HUD veneers. *(Plan already
+   leans this way; reviewer concurs.)*
 4. **Real-device target:** which Android device/OS is the v1 target? (Affects A0's GPU/blit confirm, A7's notch
-   handling, and whether `armeabi-v7a`/`x86_64` ABIs are ever needed.)
+   handling, and whether `armeabi-v7a`/`x86_64` ABIs are ever needed.) **Reviewer recommendation:** one modern
+   arm64 device first (Pixel 8/9-class, GLES 3.1+), then one midrange sanity device; **do not** support
+   `armeabi-v7a`/`x86_64` for v1.
 5. **Landscape vs portrait:** confirm the app should be landscape-locked like iOS (the manifest is currently
-   portrait — A0 fixes this, but confirm the product intent).
+   portrait — A0 fixes this, but confirm the product intent). **Reviewer recommendation + plan decision:** lock
+   **`sensor-landscape`** (folded into A0).
 6. **Parallelism:** A4 (plugin control) and A3 (login) are independent of the input phases — worth running in
    parallel if effort allows? Or keep strictly serial for the brief→review→GREEN cadence?
-7. **Any Java changes at all?** This plan asserts ~zero new Java *for the A0–A8 mainline*. Is there a phase the
-   reviewer believes needs a Java-side change (e.g. an Android-specific bridge method) that we've missed?
-   (Track G is the explicit exception — `librlawt` replacement + the render-path shim are real native/Java work.)
+7. **Any Java changes at all?** This plan asserts ~zero new *shared* Java *for the A0–A8 mainline*. Is there a
+   phase the reviewer believes needs a Java-side change (e.g. an Android-specific bridge method) that we've
+   missed? (Track G is the explicit exception — `librlawt` replacement + the render-path shim are real
+   native/Java work.) **Reviewer answer:** expect no shared-Java changes for A1–A6 — but expect *plenty* of
+   Android JNI/Kotlin host surface (today only 8 bridge methods are wired). A-1's census is the cheap way to
+   confirm this empirically before committing UI effort. **A7 + Track G** are the likely places a shared/
+   Java-adjacent change does surface.
 8. **Is a working 117HD a v1 requirement (gating) or post-core-parity?** (§3G) — the product ask is "the user can
    enable 117HD." Does v1 ship the *playable CPU shell* (A0–A8, 117HD appears-but-incompatible) with Track G as a
    fast-follow, or is GPU rendering a v1 blocker? This is the biggest scope call in the plan.
@@ -471,13 +527,20 @@ on screen-close and `onPause`/`onStop`, or plugin toggles + config edits silentl
    A7). Which for the first cut?
 10. **GPU stack: lean on the PojavLauncher/Amethyst GL-translation libs (gl4es/LTW/ANGLE + bionic LWJGL) the way
    our JRE's lineage already does, or hand-port `gpu` to native GLES?** And confirm the AG0 target-device GLES
-   tier (compute support) before committing.
-
----
+   tier (compute support) before committing. **Reviewer caution:** treat the Pojav GL-translation path as a
+   *probe, not a plan* — it was built for a **GLFW-windowed** Minecraft, not a **headless AWT** engine. If AG1
+   can't make it expose desktop `OpenGL33` caps to LWJGL **headlessly**, stop before AG2.
+11. **Native-lib dlopen path (reviewer-missed risk).** The native libs are currently dlopen'd from writable
+   `filesDir` (`MainActivity.kt:119` libjvm; `jvm_bootstrap.cpp` preloads `lib/*.so` from `java.library.path`).
+   Android nominally **forbids dlopen of libraries from writable app storage for API 29+ targets** — this works
+   on the emulator but is **untested on a hardened real device** and may need a packaging change (e.g. shipping
+   the JRE `.so` set under the APK's `jniLibs`/native-lib dir, or a lower `targetSdk`). Settle in A0/A8.
 
 ## 6. Sequencing rationale & quick reference
 
-**Why this order:** A0 first (cheapest — solidify + reach in-game + real-device gate, mostly host plumbing).
+**Why this order:** A-1 first (a read-only bridge/flag census harness — front-loads any "the Java isn't
+actually there" surprise and lays the first md5-gate; added per review). A0 next (cheapest real work — solidify
++ reach in-game + real-device gate, mostly host plumbing).
 A1 next (highest play-value-per-effort: full input is pure host wiring against proven bridges → the app
 becomes *playable*). A2 builds on A1's input for the signature menu UX. A3 (login) is independent and can slot
 anywhere after A0 — placed here so core play is proven first. A4→A5 (plugin control → panels) are the bulk of
@@ -487,6 +550,7 @@ highest risk, lowest confidence. A8 stabilizes/ships.
 
 | Phase | Deliverable | Primary gate(s) | New bridges wired | iOS parallel | Risk |
 |---|---|---|---|---|---|
+| **A-1** | Bridge/flag census + first md5-gate | all (probe) | — (resolve-only census) | `JVMLauncher.h` surface | Very low |
 | **A0** | In-game (LOGGED_IN) + real device | `autologin.*` (+ JX_* env) | — (JavaBridge already wired) | P1 + P4-A | Low |
 | **A1** | Playable: pinch/keyboard/precise/hover/haptic | `bridge` (existing) | `JavaBridge` input methods | P5 | Low |
 | **A2** | Press-and-peek native menu | `menupeek` | `MenuPeekBridge` + `selectMenuPoint` | P5 | Med |
