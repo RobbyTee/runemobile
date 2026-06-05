@@ -213,17 +213,18 @@ public final class HudVeneerBridge
 				}
 			}
 
-			// Hide the engine tab-stone bottom row by hiding the stones' PARENT containers — NOT the stones
-			// themselves. The engine re-pins the stone widgets to the bottom every frame (setHidden/relocate on a
-			// stone is overridden — confirmed on device), but the parent containers are normal widgets whose hidden
-			// state STICKS (StoneSuppressProbe steady-state PNG). The stones still resolve under the hidden parent,
-			// so openTab (replaying a stone's op script) still switches tabs. STONE0's parent holds the left half of
-			// the row, STONE7's parent the right half. Re-applied each frame (survive TOPLEVEL_REDRAW).
+			// Hide the engine tab-stone bottom row by hiding the stones' GRANDPARENT containers — NOT the stones
+			// themselves. The engine re-pins the stone widgets every frame (setHidden/relocate on a stone is
+			// overridden — confirmed on device), but the ancestor containers are normal widgets whose hidden state
+			// STICKS. The PARENT holds only the stone icons (hiding it leaves the empty stone backgrounds); the
+			// GRANDPARENT holds the whole row (icons + backgrounds), so hiding it clears the row completely
+			// (StoneSuppressProbe steady-state PNG + device). Stones still resolve under the hidden ancestor, so
+			// openTab (replaying a stone's op script) still switches tabs. STONE0 = left half, STONE7 = right half.
 			if (hideStones)
 			{
 				final int[] ids = stoneIds(preEoc);
-				hideParentOf(c, ids[0]);
-				hideParentOf(c, ids[7]);
+				hideRowOf(c, ids[0]);
+				hideRowOf(c, ids[7]);
 			}
 
 			// One-shot: open a tab by replaying its stone's op script (works even with the stone hidden).
@@ -239,10 +240,10 @@ public final class HudVeneerBridge
 		}
 	}
 
-	/** Hide the parent container of a stone (the stone-row half). The engine re-pins the stones but not their
-	 *  parents, so the parent's hidden state sticks and the row disappears; the stones still resolve underneath
-	 *  for {@link #openTabNow}. */
-	private static void hideParentOf(Client c, int stoneId)
+	/** Hide the GRANDPARENT container of a stone (the whole stone-row half — icons + backgrounds). The engine
+	 *  re-pins the stones but not their ancestor containers, so the grandparent's hidden state sticks and the row
+	 *  disappears; the stones still resolve underneath for {@link #openTabNow}. */
+	private static void hideRowOf(Client c, int stoneId)
 	{
 		try
 		{
@@ -252,9 +253,10 @@ public final class HudVeneerBridge
 				return;
 			}
 			final Widget p = s.getParent();
-			if (p != null && !p.isHidden())
+			final Widget gp = p == null ? null : p.getParent();
+			if (gp != null && !gp.isHidden())
 			{
-				p.setHidden(true);
+				gp.setHidden(true);
 			}
 		}
 		catch (RuntimeException ignore)

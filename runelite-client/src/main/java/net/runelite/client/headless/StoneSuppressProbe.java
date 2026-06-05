@@ -187,6 +187,31 @@ public final class StoneSuppressProbe
 
 			case GP_HIDE:
 				setGrandparentsHidden(c, true);
+				if (phaseFrame == HOLD - 5)
+				{
+					// Confirm openTab still works with the GRANDPARENT hidden: open a tab that is NOT currently
+					// active (combat=0 unless already active, else magic=6) and check activeTab follows.
+					final int before = safeVarc(c);
+					final int target = (before == 0) ? 6 : 0;
+					final Widget s = safeWidget(c, stoneN(c, target));
+					final Object[] op = s == null ? null : safeOnOp(s);
+					if (s != null && op != null)
+					{
+						try
+						{
+							c.createScriptEventBuilder(op).setSource(s).setOp(1).build().run();
+						}
+						catch (RuntimeException ignore)
+						{
+						}
+					}
+					log.info("[stonesuppress] grandparentHidden openTab check: stoneResolves={} onOpPresent={} before={} target={}",
+						s != null, op != null, before, target);
+				}
+				if (phaseFrame == HOLD - 2)
+				{
+					log.info("[stonesuppress] grandparentHidden openTab result: activeAfter={} (should equal target)", safeVarc(c));
+				}
 				if (phaseFrame >= HOLD)
 				{
 					capture(c, "3-grandparentHidden");
@@ -316,6 +341,7 @@ public final class StoneSuppressProbe
 		final boolean preEoc = rootName.equals("PreEoc");
 		switch (n)
 		{
+			case 6:  return preEoc ? InterfaceID.ToplevelPreEoc.STONE6 : InterfaceID.ToplevelOsrsStretch.STONE6;
 			case 3:  return preEoc ? InterfaceID.ToplevelPreEoc.STONE3 : InterfaceID.ToplevelOsrsStretch.STONE3;
 			default: return preEoc ? InterfaceID.ToplevelPreEoc.STONE0 : InterfaceID.ToplevelOsrsStretch.STONE0;
 		}
