@@ -176,8 +176,15 @@ flips the bridge from inert to active. This also lays down the **first md5-gate 
 later phase reuses.
 **Android-specific work:** a small native or `JvmLauncher` probe entry + a bash harness that diffs the resolved
 method set against the iOS `JVMLauncher.h` surface and md5s a normalized sentinel.
-**GREEN:** md5-gated `ANDROID_BRIDGE_CENSUS_GREEN` — logcat lists every required bridge method as RESOLVED and
-every gate as honored; any unresolved method is the *real, scoped* surprise the plan should know about up front.
+**GREEN:** md5-gated `ANDROID_BRIDGE_CENSUS_GREEN` — every required bridge method RESOLVED and every gate
+honored; any unresolved method is the *real, scoped* surprise the plan should know about up front.
+**Status:**
+- **A-1a static method census — DONE / GREEN (desktop, no device).** `android/dev-tools/bridge-census/`
+  verifies all **79** public-static methods across all **8** bridges resolve in the embedded shaded jar
+  (`verdict=GREEN resolved=79 missing=0`, `census_md5=fd2c599160bfe1da1323709f02378286`). The "shared Java is
+  already there" claim is now captured evidence.
+- **A-1b runtime gate-flip census — TODO (emulator).** Confirm each `-D` gate flips its bridge inert→active at
+  runtime under a booted `DeviceHeadlessBoot`. (All six gates already confirmed present in source.)
 **Depends on:** nothing (current state).
 **Risk:** very low — it only reads. High value: it converts every downstream "no new Java needed" assumption
 into evidence and front-loads any nasty surprise.
