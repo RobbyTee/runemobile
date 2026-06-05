@@ -4,3 +4,5 @@ plugin_out/
 deps/
 gen/out/
 err.txt
+GpuRouteC.xcodeproj/
+build/

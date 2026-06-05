@@ -1,9 +1,16 @@
-# GPU Route C — step 1: facade-compile smoke (GREEN)
+# GPU Route C — bringing the base `gpu` plugin to iOS via a thin JNI GL bridge
 
 > Branch `gpu`. Route C (chosen after the B1-part-2 review killed Route A) = bring the base `gpu` plugin to iOS
 > via a **thin JNI GL bridge** behind **local `org.lwjgl.opengl` / `net.runelite.rlawt` facade classes**, so the
-> plugin's *source* stays unmodified. This step proves the facade approach compiles and **emits the exact bridge
-> spec**. See `ios/AUDIT-BRIEF-w3-gpu-b1-lwjgl-ios.md` (verdict) and `ios/dev-tools/gpu-b1/` (B1 shader gate).
+> plugin's *source* stays unmodified. See `ios/AUDIT-BRIEF-w3-gpu-b1-lwjgl-ios.md` (verdict) and
+> `ios/dev-tools/gpu-b1/` (B1 shader gate).
+>
+> - **Step 1 — facade-compile smoke: GREEN** (`routec-facade-verdict.sh`). Plugin compiles unmodified against the
+>   facade; `GLALL.java` = the bridge spec. (Below.)
+> - **Step 2 — native bridge core: GREEN** (`routec-step2-verdict.sh`, Simulator). EAGL ES3 offscreen depth-FBO
+>   `AWTContext` analogue + the 5 shims; **reverse-Z works on GLES 3.0 without `glClipControl`**. (See "Step 2".)
+
+# Step 1: facade-compile smoke (GREEN)
 
 ## Verdict
 
@@ -78,10 +85,40 @@ JAVA_HOME=.../openjdk@21 java -cp gen/out:<lwjgl-opengl.jar>:<lwjgl.jar>:<native
 JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./routec-facade-verdict.sh 1a95cf8697e3aac7da387c044766c390
 ```
 
-## Next (Route C step 2 — the iOS JNI GL bridge, on device)
+# Step 2: native bridge core + reverse-Z (GREEN, Simulator)
 
-Implement the GLALL surface over `OpenGLES.framework` (the 5 shims as above; mirror the predecessor's `jni_gl.c`
-auto-stub pattern), with the `AWTContext` EAGL-ES3 offscreen analogue. Then: feed the **already-proven downported
-shaders** (B1) through the plugin's real `Shader.compile`, drive the real `DrawCallbacks` scene pass →
-`glReadPixels` → the existing `int[]` blit (`JavaBridge`). Resolve reverse-Z with a render test. Device run,
-md5-gated.
+`ROUTEC_STEP2_GREEN_AS_EXPECTED` (`routec-step2-verdict.sh`; log
+`evidence/routec-step2-sim-verdict-20260605.log`, md5 `801addb63184729fe40baa24f42e86df`). Built the **native half
+of the bridge** (`app/RouteCBridge.{h,m}`) — the code the JNI natives will call — and exercised it on a real GLES
+3.0 driver (`OpenGL ES 3.0 APPLE-23.1.1`) via an ObjC harness (`app/RouteCProbe.m`; no JVM, since the Simulator
+can't load our iOS-triple JVM — the JVM↔JNI plumbing is the proven `JavaBridge` reverse-JNI pattern, wired on
+device):
+
+- **`AWTContext` analogue** (librlawt replacement): `createGLContext` makes an **EAGL ES3** context current and
+  builds an **offscreen COLOR(RGBA8)+DEPTH(24) FBO**; `getFramebuffer(false)` returns it = the plugin's
+  "framebuffer 0"; `swapBuffers` no-op. FBO **complete**.
+- **The one open render decision — SETTLED.** The plugin uses **reverse-Z** (`glClipControl(LOWER_LEFT,
+  ZERO_TO_ONE)` + reverse-Z projection + `glClearDepth(0)` + `glDepthFunc(GL_GREATER)`), and iOS GLES has **no
+  `glClipControl`**. Proven equivalent: with `glClipControl` a no-op and the depth handled by the projection
+  (`clip.z = 2·near`, `w = viewZ` → `NDC.z = 2N/viewZ`) + `GL_GEQUAL` + `glClearDepthf(0)`, two full-screen
+  triangles drawn **near-first then far** yield the **near** colour with depth ON (the later far fragment is
+  rejected) and the **far** colour with depth OFF (paint order). So **reverse-Z ordering survives on GLES 3.0
+  without `glClipControl`** (only depth *precision* differs, NDC-z `[-1,1]` vs `[0,1]`). Matches the predecessor's
+  finding (`Mat4` reverse-Z, `GL_GEQUAL` for coplanar ties).
+- **Shims exercised:** `glClearDepth(double)`→`glClearDepthf(float)`, `glMultiDrawArrays`→`glDrawArrays` loop,
+  `glMapBuffer`→`glMapBufferRange`, `glClipControl`/`glDebugMessageControl`→no-op. All OK.
+
+Files: `app/RouteCBridge.{h,m}` (the reusable bridge core), `app/RouteCProbe.{h,m}` + `app/main.m` (Simulator
+harness), `project.yml` (xcodegen `GpuRouteC`, links `OpenGLES.framework`). Run via the same
+`simctl install/launch` + container-pull as gpu-b1; verify with `./routec-step2-verdict.sh`.
+
+## Next (Route C step 3 — wire JNI + integrate on device)
+
+1. **JNI glue (mechanical):** make the facade methods `native`; generate the ~85 `JNICALL` stubs (the ~80 core
+   calls forward straight to `glXxx`; the 5 route to `RouteCBridge` shims). Mirror the predecessor's auto-stub
+   pattern (`jni_gl.c`).
+2. **On device:** load the bridge in the shell, point `AWTContext` at the EAGL analogue, feed the **B1-proven
+   downported shaders** through the plugin's real `Shader.compile`, drive the real `DrawCallbacks` scene pass →
+   `glReadPixels` → the existing `int[]` blit (`JavaBridge`). Add the MSAA FBO path
+   (`glRenderbufferStorageMultisample` + `glBlitFramebuffer`, both ES3 core) if the plugin's AA is enabled.
+   md5-gated device run on the primary machine.
