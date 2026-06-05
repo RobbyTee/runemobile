@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Cross-port guard: flag commits that touch the shared iOS/Android jar surface, and block when the host-facing
+# contract (bridge/boot API + -D gate flags) drifts without being acknowledged cross-port.
+#
+# Install once per clone:  git config core.hooksPath tools/git-hooks   (or run tools/git-hooks/install.sh)
+# Emergency bypass:        git commit --no-verify
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+staged="$(git diff --cached --name-only)"
+
+# Tier 1 — any staged change that lands in the jars BOTH ports embed?
+shared="$(printf '%s\n' "$staged" | grep -E '^(runelite-client/|ios/dev-tools/awtsmoke/|tools/stage-.*\.sh)' || true)"
+[ -z "$shared" ] && exit 0
+
+echo "──────────────────────────────────────────────────────────────────────"
+echo "⚠  SHARED CHANGE — these staged files feed the jars BOTH iOS & Android embed:"
+printf '%s\n' "$shared" | sed 's/^/     /'
+echo "──────────────────────────────────────────────────────────────────────"
+
+# Tier 2 — did the host-facing CONTRACT (bridge/boot API + gate flags) change?
+set +e
+report="$("$ROOT/tools/shared-contract/check-contract.sh" 2>&1)"
+rc=$?
+set -e
+echo "$report"
+
+if [ "$rc" -eq 0 ]; then
+	echo "Contract unchanged — shared engine/impl change only; both ports build the same surface. OK to commit."
+	exit 0
+fi
+
+# Contract changed. Allow only if the refreshed baseline is staged in this same commit (= acknowledged).
+if printf '%s\n' "$staged" | grep -qx 'tools/shared-contract/baseline.txt'; then
+	echo
+	echo "✅ baseline.txt is staged → change acknowledged. Confirm you verified the OTHER port:"
+	echo "     Android:  ./android/dev-tools/bridge-census/run-census-desktop.sh   (expect GREEN)"
+	echo "     iOS:      rebuild the client jar + run the iOS bridge checks"
+	exit 0
+fi
+
+echo
+echo "✋ BLOCKED: the shared contract changed but tools/shared-contract/baseline.txt is NOT staged."
+[ "$rc" -eq 2 ] && echo "   REMOVED/CHANGED entries above are a real risk of breaking the OTHER port."
+echo "   Resolve, then re-commit:"
+echo "     1) Verify the other port still works against the new contract:"
+echo "          Android:  ./android/dev-tools/bridge-census/run-census-desktop.sh"
+echo "          iOS:      rebuild the client jar + run the iOS bridge checks"
+echo "     2) Acknowledge by refreshing + staging the baseline:"
+echo "          ./tools/shared-contract/check-contract.sh --update && git add tools/shared-contract/baseline.txt"
+echo "   (Emergency bypass: git commit --no-verify)"
+exit 1
