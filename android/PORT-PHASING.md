@@ -217,7 +217,11 @@ into evidence and front-loads any nasty surprise.
   (`jvm_bootstrap.cpp` + `JvmLauncher.kt`); `JagexTokens.kt` ports iOS `loadJagexTokens` (locate `tokens.json` →
   set `JX_*` before `JNI_CreateJavaVM` → arm autologin opts in `MainActivity`); manifest portrait→`sensorLandscape`;
   stale `AssetInstaller` comment fixed.
-- **Emulator boot→LOGGED_IN with a pushed `tokens.json` — TODO** (push to the app files dir, watch logcat).
+- **Emulator boot→LOGGED_IN with a pushed `tokens.json` — DONE / GREEN.** Recycled the iOS
+  `ios/dev-tools/tokens.json` (same key mapping); hands-free `gameState null → LOGIN_SCREEN → LOGGING_IN →
+  LOADING → LOGGED_IN`. md5-gated: `ANDROID_LOGGEDIN_GREEN md5=8aa7314f8d7b70116a5a3ad2e05b7d69`
+  (`android/dev-tools/a0-login/`). Emulator also logged `avc: granted { execute }` for `libjvm.so` under
+  `files/` — promising (emulator-only) evidence on Q11.
 - **Real-device confirm + the `filesDir` dlopen question (Q11) — TODO (cloud device, §4.5).**
 **Depends on:** nothing (current state).
 **Risk:** low. Real-device GPU/driver differences in the SurfaceView blit + the API29 `filesDir`-dlopen question
