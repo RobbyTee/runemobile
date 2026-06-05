@@ -254,6 +254,8 @@ static jmethodID gMidSetChatHidden = NULL;   // setChatHidden(Z)V
 static jmethodID gMidRelocateChat = NULL;    // relocateChat(IIZ)V
 static jmethodID gMidRelocateMinimap = NULL; // relocateMinimap(II)V  (A4 — minimap+orbs cluster)
 static jmethodID gMidRelocateSide = NULL;    // relocateSidePanel(II)V (A4/A6 — inventory side panel)
+static jmethodID gMidOpenTab = NULL;         // openTab(I)V  (A4 — open a tab by replaying its stone op script)
+static jmethodID gMidSetStonesHidden = NULL; // setStonesHidden(Z)V  (A4 — hide the engine tab stones)
 static BOOL ensureVeneer(void) {
     if (gVeneerClass) return YES;
     if (!ensureBridge() || !gMainEnv) return NO;
@@ -267,7 +269,9 @@ static BOOL ensureVeneer(void) {
     jmethodID r = (*env)->GetStaticMethodID(env, global, "relocateChat", "(IIZ)V");
     jmethodID mm = (*env)->GetStaticMethodID(env, global, "relocateMinimap", "(II)V");
     jmethodID sp = (*env)->GetStaticMethodID(env, global, "relocateSidePanel", "(II)V");
-    if (!m || !r || !mm || !sp) {
+    jmethodID ot = (*env)->GetStaticMethodID(env, global, "openTab", "(I)V");
+    jmethodID sh = (*env)->GetStaticMethodID(env, global, "setStonesHidden", "(Z)V");
+    if (!m || !r || !mm || !sp || !ot || !sh) {
         (*env)->ExceptionClear(env);
         (*env)->DeleteGlobalRef(env, global);
         return NO;
@@ -276,6 +280,8 @@ static BOOL ensureVeneer(void) {
     gMidRelocateChat = r;
     gMidRelocateMinimap = mm;
     gMidRelocateSide = sp;
+    gMidOpenTab = ot;
+    gMidSetStonesHidden = sh;
     gVeneerClass = global;
     return YES;
 }
@@ -1109,6 +1115,20 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureVeneer()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidRelocateSide, (jint)x, (jint)y);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)openEngineTab:(int)tabIndex {
+    if (!ensureVeneer()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidOpenTab, (jint)tabIndex);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)setEngineStonesHidden:(BOOL)hidden {
+    if (!ensureVeneer()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetStonesHidden, (jboolean)(hidden ? JNI_TRUE : JNI_FALSE));
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 
