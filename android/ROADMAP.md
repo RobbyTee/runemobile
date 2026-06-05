@@ -29,12 +29,14 @@ not proof.
 
 ## Backlog (ranked by value)
 
-### 1. Re-verify the latest host hardening on a fresh boot
-Commit `082422360` (atomic frame dims, abort-boot-on-bridge-publish-fail, overflow-safe blit, stdio fd
-restore, JNI ref cleanup, SurfaceView-local touch + clamp) is build+install verified only. Force-stop,
-launch fresh, confirm the login renders and a tap advances `loginIndex 0 -> 2`.
-**Accept:** a screenshot of the rendered login plus a logcat line showing the loginIndex transition,
-both from a freshly-booted pid.
+### 1. Re-verify the latest host hardening on a fresh boot — ✅ DONE (2026-06-05)
+Commit `082422360` plus the **Review-2 hardening** (commits `438621b2c`/`743f1d506`: atomic `g_vm`,
+boot-fail `booted` reset, `g_surfaceGen` geometry-on-recreate, `MenuPeekBridge` JNI exception clear) are
+now **emulator-verified GREEN** on `emulator-5554` (API 35) from a fresh pid: CACIO active → both
+JavaBridge + MenuPeekBridge facades published → render thread → `LOGIN_SCREEN` → `LOGGED_IN`, clean color
+render to the SurfaceView, zero crash markers; and a background→foreground cycle (`surface cleared`→`set`,
+the `g_surfaceGen` path) resumed the live render with no crash/black-screen. (Negative-path fixes #2/#3
+verified by build + code review — can't induce on the happy path.)
 
 ### 2. Boot & lifecycle hardening
 Surface destroy/recreate across background/foreground; robustness to GPU/buffer-format differences;
