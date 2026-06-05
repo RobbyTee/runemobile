@@ -1018,11 +1018,11 @@ static const CGFloat kMenuWidth       = 210.0;
     int active = [d[@"activeTab"] intValue];
     NSArray *tabs = [d[@"tabs"] isKindOfClass:[NSArray class]] ? d[@"tabs"] : @[];
 
-    // Split present tabs into a left column (idx 0–6) and a right column (idx 7–13), in tab-index order, and
-    // refresh each present tab's proxy-target centre.
-    NSMutableArray<NSNumber *> *left = [NSMutableArray array];
-    NSMutableArray<NSNumber *> *right = [NSMutableArray array];
-    for (NSUInteger i = 0; i < self.tabButtons.count; i++) {
+    // Refresh each present tab's proxy-target centre + cover the live engine stone (the cover hides the engine's
+    // bottom double-UI; the stone stays clickable underneath so the proxy click still lands). present[] = which
+    // engine tabs resolved this frame; the native grid icon is decoupled from where the engine stone lives.
+    BOOL present[14] = { NO };
+    for (NSUInteger i = 0; i < self.tabButtons.count && i < 14; i++) {
         id t = i < tabs.count ? tabs[i] : nil;
         if (![t isKindOfClass:[NSArray class]] || [(NSArray *)t count] < 4) {
             self.tabButtons[i].hidden = YES;
@@ -1032,47 +1032,32 @@ static const CGFloat kMenuWidth       = 210.0;
         NSArray *bb = (NSArray *)t;
         int x = [bb[0] intValue], y = [bb[1] intValue], w = [bb[2] intValue], h = [bb[3] intValue];
         _tabCentres[i] = CGPointMake(x + w / 2.0, y + h / 2.0);
-        // Cover the desktop stone at its live position (mapped game->view), so the bottom double-UI is hidden
-        // while the stone stays clickable underneath for the proxy. Inset out by 1px to cover the edges.
         CGRect cv = [self viewRectForGameX:x y:y w:w h:h];
         self.stoneCovers[i].frame = CGRectInset(cv, -1, -1);
         self.stoneCovers[i].hidden = NO;
-        // Columns flipped: the gameplay tabs (idx 0–6: combat/stats/inventory/...) go to the RIGHT strip
-        // (flush against the side panel they open), the social/system tabs (idx 7–13) to the LEFT.
-        [(i <= 6 ? right : left) addObject:@(i)];
+        present[i] = YES;
     }
 
-    const CGFloat cell = 38.0, gap = 5.0;
-    // Edge-to-edge: the side strips are gone (the scene is full-bleed), so the columns FLOAT over the scene's
-    // left/right edges, inside the safe area, vertically centred. Gameplay tabs (right) sit over the covered
-    // engine stones; social/system tabs (left) over the left edge. The proxy-click target stays the live stone
-    // centre (set above) regardless of where the native icon floats, so the decoupling still holds.
+    // All 14 tabs in ONE 2-column grid at the BOTTOM-RIGHT — the official OSRS-mobile arrangement (no more
+    // split left/right edges). TAB_GRID_ORDER maps grid slot -> engine tab index, row-major (slot 0 = top-left,
+    // 1 = top-right, 2 = row2-left, …). Tweak this array to match the official order exactly. Cells auto-fit the
+    // bottom ~56% of the safe height so the grid never collides with the minimap (top-right).
+    static const int TAB_GRID_ORDER[14] = { 3, 1,  4, 2,  5, 13,  6, 7,  0, 12,  8, 9,  10, 11 };
     UIEdgeInsets ins = self.view.safeAreaInsets;
     CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height;
-    CGFloat railTop = ins.top + 4, railBot = H - ins.bottom - 4;
-    CGRect strip = CGRectMake(0, railTop, 0, railBot - railTop);   // vertical extent for centring the columns
-    CGFloat leftX  = ins.left + 4;
-    CGFloat rightX = W - ins.right - cell - 4;
-    [self layoutColumn:left  x:leftX  cell:cell gap:gap tabs:tabs active:active inBounds:strip];
-    [self layoutColumn:right x:rightX cell:cell gap:gap tabs:tabs active:active inBounds:strip];
-}
-
-// Place one edge column of tab cells, vertically centred in the game view.
-- (void)layoutColumn:(NSArray<NSNumber *> *)col x:(CGFloat)x cell:(CGFloat)cell gap:(CGFloat)gap
-                tabs:(NSArray *)tabs active:(int)active inBounds:(CGRect)sb {
-    NSUInteger n = col.count;
-    if (n == 0) return;
-    CGFloat totalH = n * cell + (n - 1) * gap;
-    // Centre the column within the strip's actual vertical extent (origin.y..origin.y+height).
-    CGFloat y0 = sb.origin.y + MAX(0.0, (sb.size.height - totalH) * 0.5);
-    for (NSUInteger k = 0; k < n; k++) {
-        NSUInteger i = col[k].unsignedIntegerValue;
+    const CGFloat gap = 3.0, margin = 6.0;
+    CGFloat availH = (H - ins.top - ins.bottom) * 0.56;
+    CGFloat cell = MIN(46.0, (availH - 6 * gap) / 7.0);
+    CGFloat gridW = 2 * cell + gap, gridH = 7 * cell + 6 * gap;
+    CGFloat gx0 = W - ins.right - margin - gridW;
+    CGFloat gy0 = H - ins.bottom - margin - gridH;
+    for (int slot = 0; slot < 14; slot++) {
+        int i = TAB_GRID_ORDER[slot];
         UIButton *btn = self.tabButtons[i];
-        NSArray *bb = tabs[i];
-        int bx = [bb[0] intValue], by = [bb[1] intValue], bw = [bb[2] intValue], bh = [bb[3] intValue];
-        (void)bx; (void)by; (void)bw; (void)bh;   // bounds drive the proxy centre (set above), not the icon
-        btn.frame = CGRectMake(x, y0 + k * (cell + gap), cell, cell);
-        BOOL isActive = ((int)i == active);
+        if (!present[i]) { btn.hidden = YES; continue; }
+        int col = slot % 2, row = slot / 2;
+        btn.frame = CGRectMake(gx0 + col * (cell + gap), gy0 + row * (cell + gap), cell, cell);
+        BOOL isActive = (i == active);
         // Authentic composited tab image (bundled OSRS stone + icon). Active = red stone, inactive = grey.
         NSArray<UIImage *> *imgs = isActive ? self.tabImgActive : self.tabImgInactive;
         UIImage *img = (i < (int)imgs.count && [imgs[i] isKindOfClass:[UIImage class]]) ? imgs[i] : nil;
