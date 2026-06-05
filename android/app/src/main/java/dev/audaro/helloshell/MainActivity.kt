@@ -1,12 +1,25 @@
 package dev.audaro.helloshell
 
 import android.annotation.SuppressLint
+import android.content.Context
+import android.os.Build
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.util.Log
+import android.view.Choreographer
 import android.view.GestureDetector
+import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
+import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
+import android.widget.FrameLayout
 import androidx.appcompat.app.AppCompatActivity
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -23,19 +36,50 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var surfaceView: SurfaceView
     private lateinit var gestures: GestureDetector
+    private lateinit var scaleGestures: ScaleGestureDetector
+    private lateinit var keyboardView: GameInputView
     private var cameraGestureActive = false
+    private var pinchActive = false
+    private var scaleAccum = 1f
+
+    // A1 per-frame poll state (driven by Choreographer).
+    private var vibrator: Vibrator? = null
+    private var lastTapSeq = 0
+    private var keyboardShown = false
+    private var frameCallback: Choreographer.FrameCallback? = null
 
     companion object {
         private const val TAG = "MainActivity"
         private val booted = AtomicBoolean(false)
+
+        // AWT virtual-key codes (java.awt.event.KeyEvent) the engine's onKeyStroke expects.
+        private const val VK_BACK_SPACE = 8
+        private const val VK_ENTER = 10
+        private const val VK_LEFT = 37
+        private const val VK_UP = 38
+        private const val VK_RIGHT = 39
+        private const val VK_DOWN = 40
+
+        // Pinch-to-wheel: geometric step a scale ratio must cross to emit one wheel notch.
+        private const val PINCH_STEP = 1.08f
     }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+
+        // SurfaceView for the live game frame; a tiny hidden input view to host the soft keyboard's
+        // InputConnection (the SurfaceView itself can't be a text editor). FrameLayout stacks them.
         surfaceView = SurfaceView(this)
-        setContentView(surfaceView)
+        keyboardView = GameInputView(this)
+        val root = FrameLayout(this).apply {
+            val mp = FrameLayout.LayoutParams.MATCH_PARENT
+            addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
+            addView(keyboardView, FrameLayout.LayoutParams(1, 1))
+        }
+        setContentView(root)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 JvmLauncher.setSurface(holder.surface)
@@ -49,16 +93,24 @@ class MainActivity : AppCompatActivity() {
         })
 
         gestures = GestureDetector(this, GestureListener())
+        scaleGestures = ScaleGestureDetector(this, ScaleListener())
         // Drive gestures from the SurfaceView itself so event coords are view-local: the screen->game
         // mapping is then correct wherever the view sits in the window (status-bar inset, display cutout,
         // multi-window), not only the full-bleed emulator case.
         surfaceView.setOnTouchListener { _, event ->
+            scaleGestures.onTouchEvent(event)   // pinch-zoom first; it sets the isInProgress flag onScroll reads
             gestures.onTouchEvent(event)
+            // Pre-hover: move the engine pointer to a fresh single-finger touch so tooltips/menus track it.
+            if (event.actionMasked == MotionEvent.ACTION_DOWN && event.pointerCount == 1) {
+                JvmLauncher.move(toGameX(event.x), toGameY(event.y))
+            }
             if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
                 cameraGestureActive = false
             }
             true
         }
+
+        startInputPolling()
 
         // Boot the VM once per process, off the UI thread and on the application context.
         if (booted.compareAndSet(false, true)) {
@@ -104,6 +156,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
+            // One finger = camera rotate; two fingers / an active pinch = zoom (handled by ScaleListener).
+            if (pinchActive || scaleGestures.isInProgress || e2.pointerCount > 1) {
+                return false
+            }
             if (!cameraGestureActive) {
                 cameraGestureActive = true
                 JvmLauncher.clearHover()
@@ -112,6 +168,134 @@ class MainActivity : AppCompatActivity() {
             JvmLauncher.camera(-scaleX(distanceX).toInt(), -scaleY(distanceY).toInt())
             return true
         }
+    }
+
+    /** Pinch-to-zoom: convert the scale ratio into discrete mouse-wheel notches at the pinch centroid. */
+    private inner class ScaleListener : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScaleBegin(d: ScaleGestureDetector): Boolean {
+            pinchActive = true
+            scaleAccum = 1f
+            JvmLauncher.clearHover()
+            return true
+        }
+
+        override fun onScale(d: ScaleGestureDetector): Boolean {
+            scaleAccum *= d.scaleFactor
+            val gx = toGameX(d.focusX)
+            val gy = toGameY(d.focusY)
+            // Fingers spreading (scaleAccum grows) = zoom in = wheel up = negative rotation.
+            while (scaleAccum >= PINCH_STEP) {
+                JvmLauncher.wheel(gx, gy, -1)
+                scaleAccum /= PINCH_STEP
+            }
+            while (scaleAccum <= 1f / PINCH_STEP) {
+                JvmLauncher.wheel(gx, gy, 1)
+                scaleAccum *= PINCH_STEP
+            }
+            return true
+        }
+
+        override fun onScaleEnd(d: ScaleGestureDetector) {
+            pinchActive = false
+        }
+    }
+
+    /**
+     * A tiny invisible text editor that hosts the soft keyboard. Its InputConnection forwards committed text
+     * to the engine via onText and special keys via onKeyStroke (AWT virtual-key codes). NO_SUGGESTIONS keeps
+     * most IMEs on commitText rather than composing, which keeps the mapping 1:1.
+     */
+    private inner class GameInputView(context: Context) : View(context) {
+        init {
+            isFocusable = true
+            isFocusableInTouchMode = true
+        }
+
+        override fun onCheckIsTextEditor(): Boolean = true
+
+        override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+            outAttrs.inputType = EditorInfo.TYPE_CLASS_TEXT or EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or
+                EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_DONE
+            return object : BaseInputConnection(this, false) {
+                override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                    val s = text?.toString().orEmpty()
+                    if (s.isNotEmpty()) {
+                        JvmLauncher.text(s)
+                    }
+                    return true
+                }
+
+                override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                    repeat(beforeLength.coerceAtLeast(0)) { JvmLauncher.keyStroke(VK_BACK_SPACE) }
+                    return true
+                }
+
+                override fun sendKeyEvent(event: KeyEvent): Boolean {
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        when (event.keyCode) {
+                            KeyEvent.KEYCODE_DEL -> JvmLauncher.keyStroke(VK_BACK_SPACE)
+                            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> JvmLauncher.keyStroke(VK_ENTER)
+                            KeyEvent.KEYCODE_DPAD_LEFT -> JvmLauncher.keyStroke(VK_LEFT)
+                            KeyEvent.KEYCODE_DPAD_RIGHT -> JvmLauncher.keyStroke(VK_RIGHT)
+                            KeyEvent.KEYCODE_DPAD_UP -> JvmLauncher.keyStroke(VK_UP)
+                            KeyEvent.KEYCODE_DPAD_DOWN -> JvmLauncher.keyStroke(VK_DOWN)
+                            else -> {
+                                val u = event.unicodeChar
+                                if (u != 0) JvmLauncher.text(u.toChar().toString())
+                            }
+                        }
+                    }
+                    return true
+                }
+            }
+        }
+    }
+
+    /**
+     * Per-frame poll of the engine read-surface: auto-raise/dismiss the soft keyboard when a text field gains/
+     * loses focus, and fire a haptic tick when the interact-tap counter advances. Driven by Choreographer so it
+     * tracks the display refresh without a dedicated thread.
+     */
+    private fun startInputPolling() {
+        val cb = object : Choreographer.FrameCallback {
+            override fun doFrame(frameTimeNanos: Long) {
+                val want = JvmLauncher.isTextInputOpen()
+                if (want != keyboardShown) {
+                    keyboardShown = want
+                    Log.i(TAG, "a1: textInputOpen=$want -> ${if (want) "raise" else "dismiss"} soft keyboard")
+                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                    if (want) {
+                        keyboardView.requestFocus()
+                        imm.showSoftInput(keyboardView, InputMethodManager.SHOW_IMPLICIT)
+                    } else {
+                        imm.hideSoftInputFromWindow(keyboardView.windowToken, 0)
+                    }
+                }
+                val seq = JvmLauncher.interactTapSeq()
+                if (seq != lastTapSeq) {
+                    lastTapSeq = seq
+                    Log.i(TAG, "a1: interactTapSeq -> $seq (haptic)")
+                    vibrateTick()
+                }
+                Choreographer.getInstance().postFrameCallback(this)
+            }
+        }
+        frameCallback = cb
+        Choreographer.getInstance().postFrameCallback(cb)
+    }
+
+    private fun vibrateTick() {
+        val v = vibrator ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            v.vibrate(VibrationEffect.createOneShot(18, VibrationEffect.DEFAULT_AMPLITUDE))
+        }
+    }
+
+    override fun onDestroy() {
+        frameCallback?.let { Choreographer.getInstance().removeFrameCallback(it) }
+        frameCallback = null
+        super.onDestroy()
     }
 
     private fun bootJvm(app: android.content.Context) {

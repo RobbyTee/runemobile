@@ -62,6 +62,31 @@ object JvmLauncher {
     /** Make the engine pointer "absent" (call when a camera/pan gesture begins). */
     external fun nativeClearHover()
 
+    // ---- A1 input parity ----------------------------------------------------------------------------
+    /** Mouse-wheel notch at game-canvas (x,y); rotation <0 = up/zoom-in, >0 = down/zoom-out (pinch). */
+    external fun nativeWheel(x: Int, y: Int, rotation: Int)
+
+    /** Precise tap at game-canvas (x,y) with NO world snap — for UI/widget hits and chrome proxying. */
+    external fun nativeClickPrecise(x: Int, y: Int, button: Int)
+
+    /** Move the engine pointer to game-canvas (x,y) without a click (hover / menu-track). */
+    external fun nativeMove(x: Int, y: Int)
+
+    /** Commit a string of text to the focused engine field (soft-keyboard input). */
+    external fun nativeText(s: String)
+
+    /** A special key by AWT virtual-key code (backspace, enter, arrows, …). */
+    external fun nativeKeyStroke(vk: Int)
+
+    /** Does the engine currently have a text field focused? Poll to auto-raise/dismiss the soft keyboard. */
+    external fun nativeIsTextInputOpen(): Boolean
+
+    /** Monotonic counter the engine bumps on each committed interact-tap — advance => fire a haptic. */
+    external fun nativeInteractTapSeq(): Int
+
+    /** Finger snap radius (game px) the touch-forgiveness uses. */
+    external fun nativeSnapRadius(): Int
+
     /** Latest composited frame dimensions (game-canvas pixels), or 0 before the first frame. */
     external fun nativeFrameWidth(): Int
     external fun nativeFrameHeight(): Int
@@ -73,6 +98,14 @@ object JvmLauncher {
     fun touch(type: Int, x: Int, y: Int, button: Int) = nativeTouch(type, x, y, button)
     fun camera(dx: Int, dy: Int) = nativeCamera(dx, dy)
     fun clearHover() = nativeClearHover()
+    fun wheel(x: Int, y: Int, rotation: Int) = nativeWheel(x, y, rotation)
+    fun clickPrecise(x: Int, y: Int, button: Int) = nativeClickPrecise(x, y, button)
+    fun move(x: Int, y: Int) = nativeMove(x, y)
+    fun text(s: String) = nativeText(s)
+    fun keyStroke(vk: Int) = nativeKeyStroke(vk)
+    fun isTextInputOpen() = nativeIsTextInputOpen()
+    fun interactTapSeq() = nativeInteractTapSeq()
+    fun snapRadius() = nativeSnapRadius()
     fun frameWidth() = nativeFrameWidth()
     fun frameHeight() = nativeFrameHeight()
 }

@@ -50,6 +50,11 @@ static JavaVM *g_vm = nullptr;
 static jclass    g_bridgeCls = nullptr;
 static jmethodID g_midSeq = nullptr, g_midW = nullptr, g_midH = nullptr, g_midPixels = nullptr;
 static jmethodID g_midTouch = nullptr, g_midClick = nullptr, g_midCamera = nullptr, g_midClearHover = nullptr;
+// A1 input-parity methods: pinch-wheel, precise (no-snap) click, hover-move, text + special keys.
+static jmethodID g_midWheel = nullptr, g_midClickPrecise = nullptr, g_midMove = nullptr;
+static jmethodID g_midText = nullptr, g_midKeyStroke = nullptr;
+// A1 polled read-surface: keyboard auto-raise, interact-tap haptic seq, finger snap radius.
+static jmethodID g_midTextInputOpen = nullptr, g_midInteractTapSeq = nullptr, g_midSnapRadius = nullptr;
 
 // ---- Surface / render --------------------------------------------------------------------------------
 static std::mutex      g_winLock;
@@ -64,9 +69,19 @@ static volatile bool   g_renderRun = false;
 static std::atomic<int> g_lastFrameW{0};
 static std::atomic<int> g_lastFrameH{0};
 
+// A1 read-surface published by the render thread (the only HotSpot-attached caller) for the UI thread to read
+// without ever attaching to HotSpot — same pattern as the frame dims above.
+static std::atomic<int> g_textInputOpen{0};   // isTextInputOpen() -> raise/dismiss the soft keyboard
+static std::atomic<int> g_interactTapSeq{0};  // getInteractTapSeq() -> fire a haptic when it advances
+static std::atomic<int> g_snapRadius{0};      // snapRadius() -> finger snap radius (game px)
+
 // ---- Input queue (UI thread enqueues; render thread drains and dispatches into the bridge) -----------
-enum InputKind { IN_CLICK = 0, IN_TOUCH = 1, IN_CAMERA = 2, IN_CLEARHOVER = 3 };
-struct InputEvent { int kind, a, b, c, d; };
+enum InputKind {
+    IN_CLICK = 0, IN_TOUCH = 1, IN_CAMERA = 2, IN_CLEARHOVER = 3,
+    IN_WHEEL = 4, IN_CLICKPRECISE = 5, IN_MOVE = 6, IN_KEYSTROKE = 7, IN_TEXT = 8
+};
+// s carries the IN_TEXT payload; empty for the int-only kinds (aggregate-inits to "").
+struct InputEvent { int kind, a, b, c, d; std::string s; };
 static std::mutex             g_inLock;
 static std::deque<InputEvent> g_inQueue;
 
@@ -221,8 +236,19 @@ static bool publishBridge(JNIEnv *env) {
     g_midClick      = env->GetStaticMethodID(global, "onClick", "(III)V");
     g_midCamera     = env->GetStaticMethodID(global, "onCameraDrag", "(II)V");
     g_midClearHover = env->GetStaticMethodID(global, "clearHover", "()V");
+    // A1 input-parity surface (all confirmed present by the A-1 bridge census).
+    g_midWheel          = env->GetStaticMethodID(global, "onWheel", "(III)V");
+    g_midClickPrecise   = env->GetStaticMethodID(global, "onClickPrecise", "(III)V");
+    g_midMove           = env->GetStaticMethodID(global, "onMove", "(II)V");
+    g_midText           = env->GetStaticMethodID(global, "onText", "(Ljava/lang/String;)V");
+    g_midKeyStroke      = env->GetStaticMethodID(global, "onKeyStroke", "(I)V");
+    g_midTextInputOpen  = env->GetStaticMethodID(global, "isTextInputOpen", "()Z");
+    g_midInteractTapSeq = env->GetStaticMethodID(global, "getInteractTapSeq", "()I");
+    g_midSnapRadius     = env->GetStaticMethodID(global, "snapRadius", "()I");
     if (!g_midSeq || !g_midW || !g_midH || !g_midPixels || !g_midTouch || !g_midClick
-        || !g_midCamera || !g_midClearHover) {
+        || !g_midCamera || !g_midClearHover
+        || !g_midWheel || !g_midClickPrecise || !g_midMove || !g_midText || !g_midKeyStroke
+        || !g_midTextInputOpen || !g_midInteractTapSeq || !g_midSnapRadius) {
         env->ExceptionClear();
         env->DeleteGlobalRef(global);
         LOGE("bridge: a JavaBridge method id failed to resolve");
@@ -260,10 +286,20 @@ static void drainInput(JNIEnv *env) {
     }
     for (const InputEvent &ev : batch) {
         switch (ev.kind) {
-            case IN_CLICK:      env->CallStaticVoidMethod(g_bridgeCls, g_midClick, ev.a, ev.b, ev.c); break;
-            case IN_TOUCH:      env->CallStaticVoidMethod(g_bridgeCls, g_midTouch, ev.a, ev.b, ev.c, ev.d); break;
-            case IN_CAMERA:     env->CallStaticVoidMethod(g_bridgeCls, g_midCamera, ev.a, ev.b); break;
-            case IN_CLEARHOVER: env->CallStaticVoidMethod(g_bridgeCls, g_midClearHover); break;
+            case IN_CLICK:        env->CallStaticVoidMethod(g_bridgeCls, g_midClick, ev.a, ev.b, ev.c); break;
+            case IN_TOUCH:        env->CallStaticVoidMethod(g_bridgeCls, g_midTouch, ev.a, ev.b, ev.c, ev.d); break;
+            case IN_CAMERA:       env->CallStaticVoidMethod(g_bridgeCls, g_midCamera, ev.a, ev.b); break;
+            case IN_CLEARHOVER:   env->CallStaticVoidMethod(g_bridgeCls, g_midClearHover); break;
+            case IN_WHEEL:        env->CallStaticVoidMethod(g_bridgeCls, g_midWheel, ev.a, ev.b, ev.c); break;
+            case IN_CLICKPRECISE: env->CallStaticVoidMethod(g_bridgeCls, g_midClickPrecise, ev.a, ev.b, ev.c); break;
+            case IN_MOVE:         env->CallStaticVoidMethod(g_bridgeCls, g_midMove, ev.a, ev.b); break;
+            case IN_KEYSTROKE:    env->CallStaticVoidMethod(g_bridgeCls, g_midKeyStroke, ev.a); break;
+            case IN_TEXT: {
+                jstring js = env->NewStringUTF(ev.s.c_str());
+                env->CallStaticVoidMethod(g_bridgeCls, g_midText, js);
+                if (js) env->DeleteLocalRef(js);
+                break;
+            }
             default: break;
         }
         if (env->ExceptionCheck()) {
@@ -284,7 +320,20 @@ static void *renderLoop(void *) {
     }
     int lastSeq = -1, geomW = -1, geomH = -1;
     while (g_renderRun) {
-        if (g_bridgeCls) drainInput(env);
+        if (g_bridgeCls) {
+            drainInput(env);
+            // Poll the A1 read-surface and publish to atomics for the UI thread (keeps it off HotSpot). Cheap
+            // static calls; done every tick so keyboard/haptic state tracks even on an idle (seq-stable) frame.
+            jboolean tio = env->CallStaticBooleanMethod(g_bridgeCls, g_midTextInputOpen);
+            if (env->ExceptionCheck()) { env->ExceptionClear(); }
+            else { g_textInputOpen.store(tio ? 1 : 0, std::memory_order_relaxed); }
+            int its = env->CallStaticIntMethod(g_bridgeCls, g_midInteractTapSeq);
+            if (env->ExceptionCheck()) { env->ExceptionClear(); }
+            else { g_interactTapSeq.store(its, std::memory_order_relaxed); }
+            int sr = env->CallStaticIntMethod(g_bridgeCls, g_midSnapRadius);
+            if (env->ExceptionCheck()) { env->ExceptionClear(); }
+            else { g_snapRadius.store(sr, std::memory_order_relaxed); }
+        }
 
         ANativeWindow *win = nullptr;
         {
@@ -545,6 +594,44 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeCamera(JNIEnv *, jobject, jint dx, 
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeClearHover(JNIEnv *, jobject) {
     enqueue({IN_CLEARHOVER, 0, 0, 0, 0});
+}
+
+// ---- A1 input ingress (UI thread enqueues; render thread drains into the bridge) ---------------------
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeWheel(JNIEnv *, jobject, jint x, jint y, jint rotation) {
+    enqueue({IN_WHEEL, x, y, rotation, 0});
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeClickPrecise(JNIEnv *, jobject, jint x, jint y, jint button) {
+    enqueue({IN_CLICKPRECISE, x, y, button, 0});
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeMove(JNIEnv *, jobject, jint x, jint y) {
+    enqueue({IN_MOVE, x, y, 0, 0});
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeKeyStroke(JNIEnv *, jobject, jint vk) {
+    enqueue({IN_KEYSTROKE, vk, 0, 0, 0});
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeText(JNIEnv *env, jobject, jstring js) {
+    InputEvent ev{IN_TEXT, 0, 0, 0, 0};
+    ev.s = jstr(env, js);
+    enqueue(std::move(ev));
+}
+
+// ---- A1 read-surface (UI thread reads the render-thread-published atomics; never attaches to HotSpot) -
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeIsTextInputOpen(JNIEnv *, jobject) {
+    return g_textInputOpen.load(std::memory_order_relaxed) ? JNI_TRUE : JNI_FALSE;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeInteractTapSeq(JNIEnv *, jobject) {
+    return g_interactTapSeq.load(std::memory_order_relaxed);
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSnapRadius(JNIEnv *, jobject) {
+    return g_snapRadius.load(std::memory_order_relaxed);
 }
 
 // Last frame dimensions (so the UI thread can map a screen touch to game-canvas coords). 0 before render.

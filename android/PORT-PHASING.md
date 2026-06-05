@@ -245,6 +245,19 @@ into evidence and front-loads any nasty surprise.
 - `VibrationEffect` (HapticFeedback) on `getInteractTapSeq()` advance; red/yellow tap ring drawn natively.
 **GREEN:** on-device md5-gated `ANDROID_CONTROLS_GREEN` — logcat confirms wheel/text/keystroke events reach
 the engine (e.g. a typed search opens the bank search; pinch changes zoom varp); screencap evidence.
+**Status:**
+- **Plumbing — DONE / build-GREEN.** All 8 A1 `JavaBridge` methods wired native+Kotlin (`jvm_bootstrap.cpp`
+  `onWheel/onClickPrecise/onMove/onText/onKeyStroke` + the `isTextInputOpen/getInteractTapSeq/snapRadius`
+  read-surface polled by the render thread into atomics) and the `MainActivity` input UI (pinch
+  `ScaleGestureDetector`→wheel, hidden `GameInputView` IME→text/keys, Choreographer poll→keyboard raise +
+  haptic). `:app:assembleDebug` clean.
+- **Read-surface — runtime GREEN (emulator).** Tap an interactable in-world → per-frame poll sees
+  `interactTapSeq` advance → haptic. md5-gated `ANDROID_A1_READSURFACE_GREEN md5=61b01f11fe972d7f6e338dc131ebc561`
+  (`android/dev-tools/a1-input/`). Same poll loop drives the keyboard auto-raise.
+- **No regression:** autologin→LOGGED_IN gate md5 unchanged.
+- **Pinch-zoom + keyboard text — manual/device confirm (TODO).** `adb` can't inject a multitouch pinch or an
+  IME into an in-game text field; the write-path plumbing is identical to the proven `onClick`/`onCameraDrag`
+  path, but the gesture/IME behaviour is confirmed by hand (see `a1-input/README.md`).
 **Depends on:** A0.
 **Risk:** low — every bridge method is iOS-proven; this is mechanical host wiring + standard Android input.
 
