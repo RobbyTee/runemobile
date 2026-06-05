@@ -1045,9 +1045,9 @@ static const CGFloat kMenuWidth       = 210.0;
     static const int TAB_GRID_ORDER[14] = { 3, 1,  4, 2,  5, 13,  6, 7,  0, 12,  8, 9,  10, 11 };
     UIEdgeInsets ins = self.view.safeAreaInsets;
     CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height;
-    const CGFloat gap = 3.0, margin = 6.0;
+    const CGFloat gap = 0.0, margin = 6.0;   // NO gap — the stones tile flush, like the official app
     CGFloat availH = (H - ins.top - ins.bottom) * 0.56;
-    CGFloat cell = MIN(46.0, (availH - 6 * gap) / 7.0);
+    CGFloat cell = MIN(46.0, availH / 7.0);
     CGFloat gridW = 2 * cell + gap, gridH = 7 * cell + 6 * gap;
     CGFloat gx0 = W - ins.right - margin - gridW;
     CGFloat gy0 = H - ins.bottom - margin - gridH;
@@ -1066,6 +1066,20 @@ static const CGFloat kMenuWidth       = 210.0;
         btn.layer.borderWidth = 0.0;
         btn.alpha = 1.0;   // active vs inactive carried by the red/grey stone itself
         btn.hidden = NO;
+    }
+
+    // Relocate the engine side panel (the open inventory/skills/etc. "menu") to sit flush LEFT of the tab grid,
+    // top-aligned — the official OSRS-mobile arrangement. Convert the grid's screen-point edge to canvas px
+    // (canvasPx = pt * renderW/W); the side panel width comes from the chrome snapshot (fixed engine px).
+    if (self.renderW > 0 && W > 0) {
+        CGFloat k = (CGFloat)self.renderW / W;
+        int sideW = 190;   // fallback until the panel is open and reports its real width
+        NSArray *sc = [d[@"sideContainer"] isKindOfClass:[NSArray class]] ? d[@"sideContainer"] : nil;
+        if (sc.count >= 4 && [sc[2] intValue] > 0) sideW = [sc[2] intValue];
+        int sideX = (int)lround(gx0 * k) - sideW;   // right edge flush against the grid's left edge
+        int sideY = (int)lround(gy0 * k);           // top aligned with the grid top
+        if (sideX < 0) sideX = 0;
+        [JVMLauncher relocateEngineSidePanelX:sideX y:sideY];
     }
 }
 
