@@ -157,6 +157,25 @@ The JNI glue is **pre-written and compile-verified for iOS arm64** so the device
    (`glRenderbufferStorageMultisample` + `glBlitFramebuffer`, both ES3 core, in the verified 81) if AA is on.
    md5-gate the device run.
 
+### L1 kill-test — GREEN ON DEVICE (2026-06-05)
+
+The optional cheapest-first gate is **GREEN on the iPhone 17 Pro Max (A19 Pro GPU)**. `RouteCL1Probe` (`l1/`,
+built by `l1/build-l1-probe.sh` into `routec-l1.jar` = facade-native + the probe, no LWJGL) runs on the device JVM
+with the bridge registered, and asserts the plugin's hard gate through the facade on a live EAGL ES3 context.
+Verdict (md5-gated `jvm-stdio.log` `e8912b24c6d82f1e30dda012d29eec65`, `evidence/routec-l1-device-verdict-20260605.log`):
+
+```
+ROUTEC_L1 OpenGL33=true createProgram=1 fbo=1 bufMode=36064 glErrAfterProg=0 glErrAfterShims=0
+          texStorage3D=1 aniso=true GL_VERSION=OpenGL ES 3.0 Metal - 104.1 GL_RENDERER=Apple A19 Pro GPU
+ROUTEC_L1 VERDICT=PASS
+```
+
+So on real hardware: the facade classes load, `RegisterNatives` binds (createProgram=1 ⇒ the natives resolved),
+the EAGL ES3 offscreen FBO stands up (fbo=1, COLOR_ATTACHMENT0), and **`GL.createCapabilities().OpenGL33==true`** —
+the exact claim that killed Route A is satisfiable through the bridge. The 5 shims don't fault (glErr=0). Wired via
+`JVMLauncher.routecL1Mode` (long-press the launch button); see `ios/AUDIT-BRIEF-w3-gpu-routec-3b-device-wiring.md`
+for the reviewed full-wiring design (the next step: classpath swap + the corrected B2 publish seam).
+
 **Route C is de-risked to the limit of what's verifiable without the device:** plugin compiles unmodified against
 the facade (step 1) and the device native facade (3b); shaders downport + render on GLES 3.00 (B1); EAGL context +
 depth + reverse-Z + shims work (step 2); the whole GL surface exists on iOS GLES 3.0 (3a); the JNI bridge compiles
