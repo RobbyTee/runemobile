@@ -212,9 +212,16 @@ into evidence and front-loads any nasty surprise.
 - Optional: a minimal logcat-backed on-screen status line (the iOS debug-HUD analog) for field debugging.
 **GREEN:** `adb logcat` shows `gameState` reach `LOGGED_IN` from a pushed `tokens.json` with no manual taps,
 **on a real device**; md5-gated sentinel (e.g. `ANDROID_LOGGEDIN_GREEN`). Screencap shows the in-game scene.
+**Status:**
+- **Host plumbing — DONE / builds clean (`:app:assembleDebug`, NDK arm64 + Kotlin).** `nativeSetEnv` JNI bridge
+  (`jvm_bootstrap.cpp` + `JvmLauncher.kt`); `JagexTokens.kt` ports iOS `loadJagexTokens` (locate `tokens.json` →
+  set `JX_*` before `JNI_CreateJavaVM` → arm autologin opts in `MainActivity`); manifest portrait→`sensorLandscape`;
+  stale `AssetInstaller` comment fixed.
+- **Emulator boot→LOGGED_IN with a pushed `tokens.json` — TODO** (push to the app files dir, watch logcat).
+- **Real-device confirm + the `filesDir` dlopen question (Q11) — TODO (cloud device, §4.5).**
 **Depends on:** nothing (current state).
-**Risk:** low. Real-device GPU/driver differences in the SurfaceView blit are the only unknown; emulator uses
-swiftshader.
+**Risk:** low. Real-device GPU/driver differences in the SurfaceView blit + the API29 `filesDir`-dlopen question
+(Q11) are the unknowns; emulator uses swiftshader.
 
 ---
 
