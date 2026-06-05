@@ -21,6 +21,46 @@
 
 ---
 
+## Review 2 outcome (A0–A2 implementation + forward plan, folded in 2026-06-05)
+
+Second external review — this time of the **built A0–A2 host** (not just the plan). Findings verified against
+current code; the **four high-severity host bugs are FIXED** (build-GREEN; emulator re-verify pending per the
+ROADMAP definition-of-done):
+1. **`g_vm` data race** — was a plain global written by the worker thread and read by the ART UI thread
+   (`startJvm` re-entry) + render thread. Now `std::atomic<JavaVM*>` with acquire/release (mirrors the iOS
+   atomic VM pointer). `jvm_bootstrap.cpp`.
+2. **`booted` left `true` on VM-create failure** — `MainActivity.bootJvm` only reset on a missing libjvm, so a
+   failed `startJvm` wedged the process VM-less with no retry. Now resets `booted` on `rc != 0`.
+3. **Geometry not re-applied on surface recreate** — the render loop cached `geomW/H`; a destroy→recreate with
+   the same dims never re-ran `setBuffersGeometry` on the new window. Added a `g_surfaceGen` counter bumped in
+   `nativeSetSurface`; the render thread forces geometry on a generation change.
+4. **`MenuPeekBridge` optional resolution left a pending JNI exception** — a failed `GetStaticMethodID` wasn't
+   cleared, so the next (essential `JavaBridge`) call could trip the pending-exception assertion. Now cleared.
+
+**Architectural decisions that shape A3+ (reviewer-recommended; adopt unless overridden):**
+- **A3 login is NOT independent of boot lifecycle.** JX_* env is snapshotted at `JNI_CreateJavaVM`, so an
+  in-app login that writes `tokens.json` *after* boot misses it. **A3 must be a login-first boot gate (or force
+  a clean process restart after login/account switch)** — same lesson as the iOS "relaunch into a clean process"
+  fix. (Re-sequence: A3 boot/login gate → then the rest.)
+- **A4/A5 need a bridge request/response architecture, not fire-and-forget.** The current model (render thread is
+  the sole HotSpot caller; ART UI never attaches) works for input, but A4/A5's **synchronous** JSON reads
+  (`MobileUiBridge.listPlugins/getPluginConfig`, ~`:100`) need a dedicated HotSpot bridge thread or a
+  render-thread request/response queue. **Decide + build this before A4.**
+- **Q1 (UI framework): classic Views/Fragments around the `SurfaceView`** (Compose later for data-heavy A4/A5
+  config screens, not as the game-surface root).
+- **Q8: 117HD is a post-core-parity fast-follow, NOT a v1 gate.** Ship the playable CPU shell (A0–A8) first.
+- **Q9: `glReadPixels`→`int[]` is AG1/AG2 bring-up instrumentation only;** production wants a direct
+  EGL-to-Surface (or a new GPU publish seam) — intersects A7, so settle the publish seam there.
+
+**Other confirmed gaps (tracked, not yet fixed):** coordinate mapping is a pure view→frame stretch
+(`MainActivity.toGameX/Y`), not letterbox-aware like iOS — fine while the blit also full-stretches, but revisit
+for A7 edge-to-edge; the input queue silently drops at 512 deep incl. possible `UP`/terminal events (coalesce +
+prioritize releases); token handling reads external app storage + logs display/session prefixes + pipes
+`System.out/err` to logcat (tighten to internal-only / redact / filter in release builds). Stale plan citations
+corrected in §0.1/§0.2/A0.
+
+---
+
 ## 0. Where Android stands today (the baseline)
 
 **Done and verified (emulator, 2026-06-04):** real unmodified RuneLite JIT-runs in a second in-process
@@ -37,7 +77,7 @@ three gestures, no Jagex-Mobile shell.
 |---|---|
 | Embedded bionic arm64 OpenJDK 21 + free JIT | ✅ (no StikDebug/patching needed — see 0.3) |
 | `JNI_CreateJavaVM` host, VM kept alive for process | ✅ `jvm_bootstrap.cpp` |
-| CACIO JPMS opts + `UnsafePokeActivation` (eager, pre-bridge) | ✅ `MainActivity.kt:142-166`, `jvm_bootstrap.cpp:411` |
+| CACIO JPMS opts + `UnsafePokeActivation` (eager, pre-bridge) | ✅ `MainActivity.kt` (`bootJvm` opts), `jvm_bootstrap.cpp` (`UnsafePokeActivation.activate`, before `publishBridge`) |
 | fake-xawt `libawt_xawt.so` | ✅ `android/dev-tools/fake-xawt/` |
 | `DeviceHeadlessBoot.main` → `RuneLiteHeadless` → `HeadlessClientUI` | ✅ shared jar |
 | Frame blit: `getFrameSeq/Width/Height/Pixels` → SurfaceView (R↔B swap, seq-skip) | ✅ `jvm_bootstrap.cpp:279` |
@@ -45,6 +85,11 @@ three gestures, no Jagex-Mobile shell.
 | JRE staging + shared-jar staging scripts | ✅ `tools/stage-android-jre.sh`, `tools/stage-mobile-runtime.sh` |
 
 ### 0.2 The gap (this whole document)
+> **Post-A1/A2 update (2026-06-05):** this section was written at the pre-A1/A2 baseline. Android now calls
+> **~18** bridge methods (full touch parity + press-and-peek menu via `MenuPeekBridge`), and the host is
+> ~830 LOC Kotlin (`MainActivity` 522 + `MenuOverlayView` 133 + `JagexTokens`/`AssetInstaller`) + 716 LOC C++.
+> The remaining gap is the W3 control-plane / chrome / HUD phases (A4–A7), not core input.
+
 Android calls **8 of ~50** bridge methods iOS uses. Its UI is **one `SurfaceView` + a `GestureDetector`**
 (313 LOC Kotlin, verified `wc -l`) versus iOS's **~5,000 LOC** across 6 view controllers + a 1,340-LOC `JVMLauncher.m`.
 **All the Java bridges that close this gap already ship in the embedded jar** (`MobileUiBridge`,
@@ -201,8 +246,9 @@ into evidence and front-loads any nasty surprise.
 **Android-specific work:**
 - Add JX_* env + autologin opts in `jvm_bootstrap.cpp`/`MainActivity.kt` (iOS `loadJagexTokens` is the
   template; `setenv` semantics identical on bionic).
-- **Fix `AndroidManifest.xml` orientation:** it is **portrait-locked** (`:19`, `screenOrientation="portrait"`);
-  the game is landscape (iOS is landscape-only). Switch to **`sensor-landscape`** (reviewer-recommended; see §5 Q5).
+- **~~Fix `AndroidManifest.xml` orientation~~ DONE (A0):** the manifest is `screenOrientation="sensorLandscape"`
+  with `configChanges="orientation|screenSize|keyboardHidden"` (`AndroidManifest.xml:18-19`). (The earlier
+  "portrait-locked" claim was stale — corrected per Review 2.)
 - **Fix the stale `AssetInstaller.kt:9-14` doc-comment** (it still claims the abandoned "jniLibs split" model —
   but `MainActivity.kt:119` dlopens libjvm from staged `filesDir/jvm/jre/lib/server`, contradicting the
   assets-only reality. A trap for future contributors; see §5 Q11 on whether that dlopen path is even
