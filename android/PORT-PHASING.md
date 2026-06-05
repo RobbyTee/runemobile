@@ -143,9 +143,10 @@ The iOS port's discipline is itself load-bearing (it has a documented "false-GRE
    building the first md5-gate script is part of A-1/A0. **Caveat (reviewer):** raw `logcat` md5s are brittle
    (timestamps/pids/thread ids vary) → **md5 a normalized, grepped sentinel line**, not the raw stream; and
    screencap md5s need controlled orientation + a fixed crop (status bar/cutout stripped) to be stable.
-3. **Emulator-first, then one real-device confirm.** Android's `rl_arm64` emulator is the desktop-inner-loop
-   analog (fast, debuggable). Promote to a real Android device at A0 and re-confirm the platform there once;
-   thereafter most phases are emulator-verified with a device spot-check at milestones.
+3. **Emulator-first, then one real-device confirm — via the cloud, no owned hardware required.** Android's
+   `rl_arm64` emulator is the desktop-inner-loop analog (fast, debuggable). The "real-device" gates use a
+   **cloud device farm** (see §4.5), not owned hardware: emulator for the build loop, a cloud real device for
+   the A0/A8 confirmations and the AG0/AG1 GPU recon. Owned hardware is deferred to a green AG1 (§4.5).
 4. **One brief → adversarial review → build → GREEN per phase**, mirroring `ios/AUDIT-BRIEF-*.md`.
    This doc is the umbrella; each phase warrants its own short brief if non-trivial.
 5. **iOS UIKit shell is the spec, not a redesign.** Match the proven UX (tap/long-press/camera/pinch, the
@@ -199,7 +200,8 @@ into evidence and front-loads any nasty surprise.
   but `MainActivity.kt:119` dlopens libjvm from staged `filesDir/jvm/jre/lib/server`, contradicting the
   assets-only reality. A trap for future contributors; see §5 Q11 on whether that dlopen path is even
   real-device-safe).
-- Stand up a real Android device (USB debugging) + an `installDebug`/run wrapper; re-confirm boot→LOGGED_IN.
+- Re-confirm boot→LOGGED_IN on a **cloud real device** (§4.5; no owned hardware) + an `installDebug`/run
+  wrapper. This is also where the `filesDir` dlopen question (§5 Q11) gets retired on real hardware.
 - Optional: a minimal logcat-backed on-screen status line (the iOS debug-HUD analog) for field debugging.
 **GREEN:** `adb logcat` shows `gameState` reach `LOGGED_IN` from a pushed `tokens.json` with no manual taps,
 **on a real device**; md5-gated sentinel (e.g. `ANDROID_LOGGEDIN_GREEN`). Screencap shows the in-game scene.
@@ -360,8 +362,8 @@ notch handling). Treat as research, not mechanical.
 (mitigated free by RuneLite self-updating the gamepack); a clean signed APK + first-run UX (JRE staged via
 `AssetInstaller`; no JIT-attach UX needed — Android's huge simplification); optional multi-ABI
 (`armeabi-v7a`/`x86_64`) if a non-arm64 target ever matters (today: arm64 only).
-**GREEN:** N-hour in-game soak with stable memory + FPS on a real device; clean install→login→play from a
-fresh APK. md5-gated soak summary.
+**GREEN:** N-hour in-game soak with stable memory + FPS on a real device (cloud or owned, §4.5); clean
+install→login→play from a fresh APK. md5-gated soak summary.
 **Depends on:** the feature phases it stabilizes.
 **Risk:** low-medium — mostly verification + packaging.
 
@@ -528,6 +530,27 @@ Settle the View-side overlay scaffolding before A2 (the first overlay).
 ### 4.4 Config-flush discipline
 Like iOS, Android never runs RuneLite's shutdown/periodic flush — **must** call `MobileUiBridge.flushConfig()`
 on screen-close and `onPause`/`onStop`, or plugin toggles + config edits silently don't persist (A4).
+
+### 4.5 Device access strategy (no owned Android hardware)
+This port is developed **without owning an Android device.** Two tiers cover everything v1 needs; owned hardware
+is deferred to a green AG1.
+- **Tier 1 — local emulator (`rl_arm64`), the inner loop.** Runs the arm64 system image natively on the
+  Apple-Silicon dev Mac; already boots the port to the login screen. Everything that is *logic, not hardware* is
+  built and md5-GREEN'd here: A-1 census, A1 input/keyboard, A2 menu-peek, A3 login flow, A4 config/hub, A5
+  panels, A6 chrome. The pure "do the bridge methods exist in the jar" half of A-1 needs **no device at all** —
+  it runs on desktop OpenJDK against the same shaded jar (the W2 desktop-dev discipline).
+- **Tier 2 — cloud real-device farm, the gates.** For the A0/A8 real-device confirmations and the AG0/AG1 GPU
+  recon: **Samsung Remote Test Lab** (free, real Galaxy phones, interactive sideload — good for AG0 + hands-on),
+  **Firebase Test Lab** (free daily quota, runs an APK and returns logcat/video/screencap — the md5-gated GREEN
+  harness for "real device" gates), or **AWS Device Farm / BrowserStack** (paid, specific targets incl. Pixels).
+  A cloud device is a *real* device, so it retires the `filesDir` dlopen question (§5 Q11) and reports a real
+  GLES driver tier (unlike the emulator's SwiftShader/host-translated GL, which AG0 explicitly distrusts).
+- **The emulator is NOT a valid proxy for the GPU track.** Its GL is software/host-translated → AG0/AG1 must run
+  on Tier 2.
+- **Owned-hardware decision is gated on a green AG1.** AG0+AG1 are cloud-runnable; if AG1 is red, no device was
+  ever needed and the CPU shell is the product. If AG1 is green and the GPU build (AG2+) is funded, *then* a
+  ~$150 used Pixel-class device is worth it for the months-long iterative GPU work (cloud round-trips are too
+  slow/metered for that phase). Decision deferred to the exact moment the information justifies it.
 
 ---
 
