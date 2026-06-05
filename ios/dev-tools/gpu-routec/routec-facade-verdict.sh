@@ -10,7 +10,7 @@ cd "$(dirname "$0")"
 
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 JAVAC="$JAVA_HOME/bin/javac"
-SHADED="${SHADED:-../../app/jvm-resources/client-1.12.28-SNAPSHOT-shaded.jar}"
+SHADED="${SHADED:-../../app/jvm-resources/client-1.12.29-SNAPSHOT-shaded.jar}"
 DL="${DL:-../../../runelite-client/build/generated/sources/delombok/java/main/net/runelite/client/plugins/gpu}"
 EXPECT_GLALL_MD5="${1:-}"
 

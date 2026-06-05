@@ -554,7 +554,10 @@ public class Hooks implements Callbacks
 		// Headless capture seam: composited game + overlays now live in mainBufferProvider.getImage().
 		net.runelite.client.headless.HeadlessCapture.capture(mainBufferProvider);
 		// Live-blit seam: snapshot the now-complete frame for the native shell (avoids mid-composite tearing).
-		if (net.runelite.client.headless.JavaBridge.isEnabled())
+		// In GPU mode (Route C) mainBufferProvider holds only the UI layer; the authoritative composited frame
+		// is published later by the gpu plugin's swapBuffers shim, which is then the SOLE frameSeq publisher.
+		// Gating the CPU snapshot off here prevents the UI-only frame from flashing between GPU frames.
+		if (net.runelite.client.headless.JavaBridge.isEnabled() && !client.isGpu())
 		{
 			net.runelite.client.headless.JavaBridge.snapshot(mainBufferProvider);
 		}

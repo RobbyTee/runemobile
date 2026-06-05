@@ -663,7 +663,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
 
     // §6.2: the shaded RuneLite client jar (all deps) + a writable RuneLite home for the gamepack
     // cache, and the headless capture dir (HeadlessCapture dumps mainBufferProvider PNGs there).
-    NSString *shadedPath = [[NSBundle mainBundle] pathForResource:@"client-1.12.28-SNAPSHOT-shaded" ofType:@"jar"];
+    NSString *shadedPath = [[NSBundle mainBundle] pathForResource:@"client-1.12.29-SNAPSHOT-shaded" ofType:@"jar"];
     NSString *classpath;
     if (self.routecL1Mode) {
         // L1 kill-test: routec-l1.jar (facade-native + RouteCL1Probe) ALONE — no shaded jar, no LWJGL, so the

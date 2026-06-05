@@ -41,7 +41,7 @@ echo "== compile §6.0 activation + §6.1 smoke probes (javac $JFLAGS, cacio on 
 # §6.2: DeviceHeadlessBoot references net.runelite.client.headless.RuneLiteHeadless (in the shaded
 # client jar), so it only compiles when the shaded jar is present. Folded into probes.jar; the device
 # classpath is shaded.jar:probes.jar, so RuneLiteHeadless resolves from shaded at runtime.
-SHADED="${SHADED:-../../runelite-client/build/libs/client-1.12.28-SNAPSHOT-shaded.jar}"
+SHADED="${SHADED:-../../runelite-client/build/libs/client-1.12.29-SNAPSHOT-shaded.jar}"
 if [ -f "$SHADED" ]; then
   echo "== compile §6.2 DeviceHeadlessBoot (javac $JFLAGS, prior classes+cacio+shaded on cp) =="
   "$JAVAC" $JFLAGS -cp "$OUT:$CACIO_CP:$SHADED" -d "$OUT" "$AWTSMOKE/DeviceHeadlessBoot.java"

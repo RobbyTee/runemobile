@@ -21,11 +21,30 @@
 
 // ---- AWTContext analogue (librlawt replacement): EAGL ES3 offscreen context + a COLOR+DEPTH FBO ----
 // createGLContext(): make an EAGL ES3 context current + build the offscreen FBO. getFramebuffer(false) returns
-// this FBO id — it is "framebuffer 0" for the unmodified plugin. swapBuffers() is a no-op (we glReadPixels into
-// the int[] blit). Returns YES on success.
+// this FBO id — it is "framebuffer 0" for the unmodified plugin. swapBuffers() reads the FBO back and publishes
+// it (see RouteCBridge.m / the JNI swapBuffers shim). Returns YES on success.
 + (BOOL)awtCreateGLContextWidth:(int)w height:(int)h;
 + (GLuint)awtGetFramebuffer;
 + (void)awtDestroy;
+
+// ---- per-frame upkeep (Route C 2C: thread-affine EAGL context + canvas-resize) ----
+// makeCurrent: re-bind sCtx on the calling thread — cheap (no-op when already current) and removes the
+// "draw runs off the createGLContext thread" risk entirely. fbWidth/fbHeight: the live FBO size. ensureSize:
+// recreate the FBO when the engine canvas changes (rare on device — the canvas is fixed at the resizeSpec).
++ (void)makeCurrent;
++ (int)fbWidth;
++ (int)fbHeight;
++ (void)ensureSizeWidth:(int)w height:(int)h;
+
+// ---- the GPU publish readback (Route C 2D) ----
+// glReadPixels the color FBO (GL_RGBA — the only ES3-core readback format) into `dst` as packed 0x00RRGGBB,
+// vertically flipped (GL origin is bottom-left; the display is top-left) and R<->B swizzled, in one row pass.
++ (void)readbackInto:(uint32_t *)dst width:(int)w height:(int)h;
+
+// ---- shader downport (Route C 2E) ----
+// Rewrite desktop GLSL 330 -> GLSL ES 3.00 (the 5 B1 edits) before glShaderSource. Vertex shaders need the
+// explicit int->float casts ES forbids implicitly; fragment shaders need precision qualifiers.
++ (NSString *)downportShaderSource:(NSString *)src fragment:(BOOL)fragment;
 
 // ---- the 5 non-GLES-3.0-core shims (everything else is 1:1 with the EAGL driver) ----
 + (void)glClearDepthShim:(double)depth;                  // -> glClearDepthf((float)depth)

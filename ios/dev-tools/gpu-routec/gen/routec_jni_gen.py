@@ -23,6 +23,62 @@ USED = sys.argv[1] if len(sys.argv) > 1 else "used-descriptors.txt"
 OUT_JNI = sys.argv[2] if len(sys.argv) > 2 else "jni/routec_gl_jni.m"
 OUT_FACADE = sys.argv[3] if len(sys.argv) > 3 else "facade-native/org/lwjgl/opengl/GLALL.java"
 
+# ---- per-frame upkeep + GPU publish helpers (Route C 2C/2D), emitted into the preamble ----------------------
+RC_HELPERS = r'''// Cached JavaBridge handles for the per-frame GPU publish (resolved once, lazily, after registration).
+static jclass    s_jb  = NULL;
+static jmethodID s_bb  = NULL;  // gpuFrameBackBuffer(II)[I
+static jmethodID s_pub = NULL;  // gpuPublish(II)V
+static jmethodID s_cw  = NULL;  // canvasWidth()I
+static jmethodID s_ch  = NULL;  // canvasHeight()I
+static void rc_jb_cache(JNIEnv *env)
+{
+    if (s_jb) return;
+    jclass c = (*env)->FindClass(env, "net/runelite/client/headless/JavaBridge");
+    if (!c) { (*env)->ExceptionClear(env); return; }
+    s_jb  = (*env)->NewGlobalRef(env, c);
+    s_bb  = (*env)->GetStaticMethodID(env, s_jb, "gpuFrameBackBuffer", "(II)[I");
+    s_pub = (*env)->GetStaticMethodID(env, s_jb, "gpuPublish", "(II)V");
+    s_cw  = (*env)->GetStaticMethodID(env, s_jb, "canvasWidth", "()I");
+    s_ch  = (*env)->GetStaticMethodID(env, s_jb, "canvasHeight", "()I");
+    (*env)->ExceptionClear(env);
+}
+
+// Per-frame upkeep (called from getFramebuffer, early in each draw): re-bind the thread-affine EAGL context and
+// recreate the FBO if the engine canvas resized. setCurrentContext is a no-op on the same thread (the expected
+// case) but removes the off-thread-draw risk entirely.
+static void rc_per_frame(JNIEnv *env)
+{
+    [RouteCBridge makeCurrent];
+    rc_jb_cache(env);
+    if (s_cw && s_ch) {
+        jint w = (*env)->CallStaticIntMethod(env, s_jb, s_cw);
+        jint h = (*env)->CallStaticIntMethod(env, s_jb, s_ch);
+        if (w > 0 && h > 0) [RouteCBridge ensureSizeWidth:(int)w height:(int)h];
+    }
+}
+
+// swapBuffers: read the composited FBO back and publish it as the SOLE frame (Hooks gates the CPU snapshot off
+// when isGpu). glReadPixels straight into the JavaBridge back buffer via GetPrimitiveArrayCritical — no JNI calls
+// inside the critical section (glReadPixels is a GL call; the flip/swizzle is pure C).
+static void rc_swap_publish(JNIEnv *env)
+{
+    [RouteCBridge makeCurrent];
+    int w = [RouteCBridge fbWidth], h = [RouteCBridge fbHeight];
+    if (w <= 0 || h <= 0) return;
+    rc_jb_cache(env);
+    if (!s_bb || !s_pub) return;
+    jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, s_jb, s_bb, (jint)w, (jint)h);
+    if (!arr) return;
+    void *dst = (*env)->GetPrimitiveArrayCritical(env, arr, NULL);
+    if (dst) {
+        [RouteCBridge readbackInto:(uint32_t *)dst width:w height:h];
+        (*env)->ReleasePrimitiveArrayCritical(env, arr, dst, 0);
+    }
+    (*env)->CallStaticVoidMethod(env, s_jb, s_pub, (jint)w, (jint)h);
+    (*env)->DeleteLocalRef(env, arr);
+}
+'''
+
 # ---- JNI descriptor parsing -------------------------------------------------
 def parse_params(p):
     out, i = [], 0
@@ -98,8 +154,14 @@ def body_gl(name, params, ret):
                 f"    jint r = (jint){g}((GLuint)a0, nm);\n"
                 "    (*env)->ReleaseStringUTFChars(env, a1, nm); return r;")
     if name == 'glShaderSource':
+        # Downport desktop GLSL 330 -> GLSL ES 3.00 (the 5 B1 edits) before upload. Query GL_SHADER_TYPE so the
+        # vertex-only int->float casts / fragment-only precision qualifiers are applied to the right stage.
         return ("const char *src = (*env)->GetStringUTFChars(env, a1, NULL);\n"
-                "    glShaderSource((GLuint)a0, 1, &src, NULL);\n"
+                "    GLint stype = 0; glGetShaderiv((GLuint)a0, GL_SHADER_TYPE, &stype);\n"
+                "    NSString *down = [RouteCBridge downportShaderSource:[NSString stringWithUTF8String:src]\n"
+                "        fragment:(stype == GL_FRAGMENT_SHADER)];\n"
+                "    const char *dsrc = [down UTF8String];\n"
+                "    glShaderSource((GLuint)a0, 1, &dsrc, NULL);\n"
                 "    (*env)->ReleaseStringUTFChars(env, a1, src);")
     # --- float[] arrays ---
     if name == 'glUniform2fv':
@@ -159,10 +221,10 @@ def body_awt(name, params, ret):
         'loadNatives': "/* no-op (re-signed dylibs already loaded) */",
         'configurePixelFormat': "/* no-op (FBO format fixed in awtCreateGLContext) */",
         'createGLContext': "rc_awt_create_context(env); /* EAGL ES3 context + FBO, current on THIS (client) thread */",
-        'getFramebuffer': "return (jint)[RouteCBridge awtGetFramebuffer];",
+        'getFramebuffer': "rc_per_frame(env); /* re-bind context + resize-if-changed, early each draw */\n    return (jint)[RouteCBridge awtGetFramebuffer];",
         'getBufferMode': "return (jint)GL_COLOR_ATTACHMENT0;",
         'setSwapInterval': "return a0;",
-        'swapBuffers': "/* no-op: the shell glReadPixels-blits the FBO into the int[] each frame */",
+        'swapBuffers': "rc_swap_publish(env); /* glReadPixels the FBO -> JavaBridge back buffer -> publish (sole frameSeq publisher) */",
         'destroy': "[RouteCBridge awtDestroy];",
     }
     return m.get(name, "/* TODO(device) */")
@@ -220,6 +282,7 @@ def gen():
     L.append("    [RouteCBridge awtCreateGLContextWidth:w height:h];")
     L.append("}")
     L.append("")
+    L.append(RC_HELPERS)
 
     def emit(funcs, owner_kind):
         tbl = []

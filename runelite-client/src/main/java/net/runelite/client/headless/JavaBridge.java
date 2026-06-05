@@ -243,6 +243,56 @@ public final class JavaBridge
 		useA = !useA;       // next snapshot fills the OTHER buffer, so this one stays stable a full cycle
 	}
 
+	// ---- GPU (Route C) publish seam ---------------------------------------------------------------------
+	// In GPU mode the composited frame lives in the EAGL FBO, not mainBufferProvider. The native swapBuffers
+	// shim glReadPixels-es the FBO straight into one of the SAME double buffers and publishes it, becoming the
+	// SOLE frameSeq publisher (Hooks gates the CPU snapshot off when isGpu). The two calls run back-to-back on
+	// the client thread (no useA flip between them), so the buffer gpuFrameBackBuffer hands out is exactly the
+	// one gpuPublish then publishes.
+
+	/** The next back buffer (w*h ints), allocated/resized as needed, for the native shim to write into. */
+	public static int[] gpuFrameBackBuffer(int w, int h)
+	{
+		final int n = w * h;
+		int[] dst = useA ? bufA : bufB;
+		if (dst == null || dst.length != n)
+		{
+			dst = new int[n];
+			if (useA)
+			{
+				bufA = dst;
+			}
+			else
+			{
+				bufB = dst;
+			}
+		}
+		return dst;
+	}
+
+	/** Publish the back buffer the native shim just filled (vertical-flipped, R/B-swizzled 0x00RRGGBB). */
+	public static void gpuPublish(int w, int h)
+	{
+		frameW = w;
+		frameH = h;
+		frame = useA ? bufA : bufB;
+		frameSeq++;
+		useA = !useA;
+	}
+
+	/** Canvas dimensions for sizing the EAGL FBO (queried by the native createGLContext). 0 if no client yet. */
+	public static int canvasWidth()
+	{
+		final Client c = client;
+		return c == null ? 0 : c.getCanvasWidth();
+	}
+
+	public static int canvasHeight()
+	{
+		final Client c = client;
+		return c == null ? 0 : c.getCanvasHeight();
+	}
+
 	// ---- Live framebuffer blit (native pulls these each screen refresh) --------------------------------
 
 	public static int getFrameWidth()
