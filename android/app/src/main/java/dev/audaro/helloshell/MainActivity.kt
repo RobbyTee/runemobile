@@ -509,6 +509,14 @@ class MainActivity : AppCompatActivity() {
             mainClass = "DeviceHeadlessBoot",
             extraOpts = opts.toTypedArray(),
         )
+        if (rc != 0) {
+            // VM creation failed (JNI_OK == 0). Clear the boot latch so a later launch into this same process
+            // retries instead of being wedged VM-less with booted==true. (A VM that came up but whose main
+            // class later threw is still rc==0 and stays booted — that's the engine's own run, not a boot fail.)
+            Log.e(TAG, "startJvm rc=$rc — VM bringup FAILED; clearing booted so a relaunch can retry")
+            booted.set(false)
+            return
+        }
         Log.i(TAG, "startJvm rc=$rc (VM up; watch logcat tags jvm-boot/jvm-stdout)")
     }
 }

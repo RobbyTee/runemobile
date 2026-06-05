@@ -42,9 +42,11 @@
 typedef jint (*CreateJavaVM_t)(JavaVM **, void **, void *);
 
 // ---- Process-global VM + bridge state ----------------------------------------------------------------
-// g_vm is the single in-process HotSpot VM, published once JNI_CreateJavaVM succeeds. A JNIEnv* is NEVER
+// g_vm is the single in-process HotSpot VM, published once JNI_CreateJavaVM succeeds. ATOMIC: the worker
+// thread stores it while the ART UI thread reads it (the startJvm re-entry guard) and the render thread reads
+// it to attach — a plain global would be a data race (mirrors the iOS atomic VM pointer). A JNIEnv* is NEVER
 // shared across threads; every thread that needs one daemon-attaches itself (see bridgeEnvAttach).
-static JavaVM *g_vm = nullptr;
+static std::atomic<JavaVM *> g_vm{nullptr};
 
 // JavaBridge facade, cached as HotSpot global refs at boot (never FindClass on the hot path).
 static jclass    g_bridgeCls = nullptr;
@@ -63,6 +65,10 @@ static jmethodID g_midMenuSnapshot = nullptr, g_midMenuPublishSeq = nullptr;
 // ---- Surface / render --------------------------------------------------------------------------------
 static std::mutex      g_winLock;
 static ANativeWindow  *g_window = nullptr;     // SurfaceView's window (acquired); guarded by g_winLock
+// Bumped every time the window pointer changes (surface destroy/recreate). The render thread re-applies
+// ANativeWindow_setBuffersGeometry on a generation change — without this, a recreated surface with the SAME
+// frame dims keeps the render loop's cached geomW/geomH, so the new window never gets its format/geometry set.
+static std::atomic<uint64_t> g_surfaceGen{0};
 static pthread_t       g_renderThread;
 static bool            g_renderStarted = false;
 static volatile bool   g_renderRun = false;
@@ -222,11 +228,12 @@ static std::string toInternal(std::string name) {
 // GetEnv-or-daemon-attach for the calling thread. Daemon attach means we never need to detach (the VM
 // won't block on these threads at shutdown, and the process owns teardown). Returns nullptr on failure.
 static JNIEnv *bridgeEnvAttach() {
-    if (!g_vm) return nullptr;
+    JavaVM *vm = g_vm.load(std::memory_order_acquire);
+    if (!vm) return nullptr;
     JNIEnv *env = nullptr;
-    jint r = g_vm->GetEnv((void **)&env, JNI_VERSION_21);
+    jint r = vm->GetEnv((void **)&env, JNI_VERSION_21);
     if (r == JNI_OK && env) return env;
-    if (r == JNI_EDETACHED && g_vm->AttachCurrentThreadAsDaemon(&env, nullptr) == JNI_OK) return env;
+    if (r == JNI_EDETACHED && vm->AttachCurrentThreadAsDaemon(&env, nullptr) == JNI_OK) return env;
     return nullptr;
 }
 
@@ -280,6 +287,9 @@ static bool publishBridge(JNIEnv *env) {
             g_menuPeekCls = mpg; g_midMenuSnapshot = snap; g_midMenuPublishSeq = pseq;
             LOGI("bridge: MenuPeekBridge facade published");
         } else {
+            // A failed GetStaticMethodID leaves a NoSuchMethodError pending — clear it so the next JNI call
+            // (the essential JavaBridge path) doesn't trip the pending-exception assertion.
+            env->ExceptionClear();
             if (mpg) env->DeleteGlobalRef(mpg);
             LOGE("bridge: MenuPeekBridge method id failed to resolve (menu-peek disabled)");
         }
@@ -346,12 +356,17 @@ static void drainInput(JNIEnv *env) {
 // swapping R<->B into RGBA_8888 (the only widely-available ANativeWindow format). Skips the copy when the
 // engine hasn't composited a new frame since the last tick.
 static void *renderLoop(void *) {
+    JavaVM *vm = g_vm.load(std::memory_order_acquire);
     JNIEnv *env = nullptr;
-    if (g_vm->AttachCurrentThreadAsDaemon(&env, nullptr) != JNI_OK || !env) {
+    if (!vm || vm->AttachCurrentThreadAsDaemon(&env, nullptr) != JNI_OK || !env) {
         LOGE("render: attach failed"); return nullptr;
     }
     int lastSeq = -1, geomW = -1, geomH = -1;
+    uint64_t lastGen = 0;
     while (g_renderRun) {
+        // A surface destroy/recreate invalidates the cached geometry — force re-apply on the next blit.
+        uint64_t gen = g_surfaceGen.load(std::memory_order_acquire);
+        if (gen != lastGen) { geomW = geomH = -1; lastGen = gen; }
         if (g_bridgeCls) {
             drainInput(env);
             // Poll the A1 read-surface and publish to atomics for the UI thread (keeps it off HotSpot). Cheap
@@ -502,7 +517,7 @@ static void *jvmThreadMain(void *argp) {
     LOGI("JNI_CreateJavaVM…");
     jint rc = JNI_CreateJavaVM(&vm, (void **) &env, &vmArgs);
     if (rc != JNI_OK || !vm || !env) { LOGE("JNI_CreateJavaVM rc=%d", rc); return fail(rc ? rc : -12); }
-    g_vm = vm;
+    g_vm.store(vm, std::memory_order_release);
     LOGI("HotSpot VM up; activating CACIO CTC before any AWT/bridge class loads");
 
     // CRITICAL ordering: install CACIO's CTC toolkit BEFORE anything touches java.awt.* — otherwise
@@ -561,7 +576,7 @@ Java_dev_audaro_helloshell_JvmLauncher_startJvm(
         jstring jJavaHome, jstring jLibjvmPath, jstring jLibraryPath,
         jstring jClasspath, jstring jMainClass, jobjectArray jExtraOpts) {
 
-    if (g_vm) { LOGI("startJvm: VM already up (ignoring re-entry)"); return JNI_OK; }
+    if (g_vm.load(std::memory_order_acquire)) { LOGI("startJvm: VM already up (ignoring re-entry)"); return JNI_OK; }
     redirectStdioToLogcat();
 
     auto *a = new BootArgs();
@@ -622,6 +637,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeSetSurface(JNIEnv *env, jobject, jo
         g_window = win;   // takes the fromSurface reference
     }
     if (old) ANativeWindow_release(old);
+    g_surfaceGen.fetch_add(1, std::memory_order_release);   // force the render thread to re-apply geometry
     LOGI("surface %s", win ? "set" : "cleared");
 }
 
