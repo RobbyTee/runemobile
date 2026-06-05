@@ -483,6 +483,13 @@ public class Hooks implements Callbacks
 			// Mutates widget position; gated -Drunelite.chatreloc=true. Desktop de-risk only.
 			net.runelite.client.headless.ChatRelocateProbe.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.MinimapRelocateProbe.isEnabled())
+		{
+			// W3 Feature-A (A4): can the engine minimap be RELOCATED (inset) and still render + click-to-walk (the
+			// cheap A3-style path) vs cover-in-place native redraw? Mutates position + clicks; gated
+			// -Drunelite.minimapreloc=true. Desktop de-risk only.
+			net.runelite.client.headless.MinimapRelocateProbe.tick(client, client.getGameState());
+		}
 		if (net.runelite.client.headless.MenuPeekBridge.isEnabled())
 		{
 			// W3 touch-targeting: publish the read-only menu-peek snapshot the native press-and-peek UI polls

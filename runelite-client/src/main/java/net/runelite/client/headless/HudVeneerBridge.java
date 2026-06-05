@@ -56,6 +56,13 @@ public final class HudVeneerBridge
 	private static volatile boolean transparentChat;
 	private static volatile boolean hideChat;
 
+	// Minimap+orbs cluster (MAP_CONTAINER) relocate. minimapX < 0 = not relocating. Proven by MinimapRelocateProbe:
+	// MAP_CONTAINER is root-anchored (setForcedPosition is ~canvas-absolute) and holds both the minimap globe and
+	// the orbs as children, so one relocate moves the whole cluster — it renders at the new spot (not occluded) and
+	// stays click-to-walk + orb-clickable (it IS the live engine HUD). This is A4 (minimap) + A5 (orbs) in one move.
+	private static volatile int minimapX = -1;
+	private static volatile int minimapY = -1;
+
 	private HudVeneerBridge()
 	{
 	}
@@ -78,6 +85,15 @@ public final class HudVeneerBridge
 	public static void setChatHidden(boolean hidden)
 	{
 		hideChat = hidden;
+	}
+
+	/** Native: relocate the engine minimap+orbs cluster ({@code MAP_CONTAINER}) to canvas {@code (x,y)}.
+	 *  {@code x < 0} stops relocating. The cluster stays the live engine HUD — minimap clicks still walk and orb
+	 *  clicks still fire (A4 + A5 in one relocate; MinimapRelocateProbe confirmed render + click-to-walk). */
+	public static void relocateMinimap(int x, int y)
+	{
+		minimapX = x;
+		minimapY = y;
 	}
 
 	/** Re-apply the requested chatbox state each frame. Client thread. */
@@ -130,6 +146,20 @@ public final class HudVeneerBridge
 				if (w != null && !w.isHidden())
 				{
 					w.setHidden(true);
+				}
+			}
+
+			// Minimap+orbs cluster relocate (independent of chat). Force MAP_CONTAINER each frame so it survives
+			// TOPLEVEL_REDRAW; revalidate cascades to the globe + orb children.
+			if (minimapX >= 0)
+			{
+				final int containerId = preEoc
+					? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER;
+				final Widget w = c.getWidget(containerId);
+				if (w != null)
+				{
+					w.setForcedPosition(minimapX, minimapY);
+					w.revalidate();
 				}
 			}
 		}
