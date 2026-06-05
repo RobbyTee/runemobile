@@ -100,7 +100,13 @@
 // W3 Feature-A (A3): chat-at-top = the engine's OWN chatbox relocated to the top + flipped transparent
 // (ChatRelocateProbe proved it renders there, not occluded). Tabs/scrollback/colors/input stay live since it IS
 // the real chat — no native reproduction needed.
-@property (nonatomic, assign) BOOL engineChatRelocated;   // one-shot: asked the engine to move its chat up
+@property (nonatomic, assign) BOOL engineChatRelocated;   // one-shot: asked the engine to relocate the HUD (A4)
+// Edge-to-edge (A1+A4): the scene fills the whole screen; the engine HUD (chat/minimap/orbs) is relocated INTO
+// the safe area so nothing clips under the island/corners/home-indicator. renderW/H = the canvas the engine
+// draws (set at launch); chatHitCanvas = the relocated chat tab-row rect in canvas px (onTap treats it as UI).
+@property (nonatomic, assign) int renderW;
+@property (nonatomic, assign) int renderH;
+@property (nonatomic, assign) CGRect chatHitCanvas;
 // Pre-composited tab images (stone background + centred icon) built once from the bundled OSRS sprite assets
 // (stone-inactive/active + icon-0..13). Index = tab index; active/inactive variants. Authentic, crisp, no
 // crop fragility.
@@ -134,15 +140,10 @@ static const int AWT_VK_BACK_SPACE = 8;
 static const int AWT_VK_ENTER      = 10;
 // Zero-width sentinel so a backspace on an "empty" field still fires shouldChangeCharactersInRange.
 static NSString * const kKbSentinel = @"​";
-// Width (points) of the native tab-rail strip reserved at each side edge. The game view is inset by this on
-// both sides, so the docked side panel (at the game-canvas edge) ends INBOARD of the screen edge and the
-// native tabs fill the strips flush against it — the official mobile arrangement, with no widget moving.
-static const CGFloat kTabStrip = 46.0;
 
-// W3 A3: the relocated engine chat lives at this fixed canvas rect (HudVeneerBridge.relocateChat 8,6); the
-// flipped tab row is the top kChatTabRowH px. Used to treat tab-row taps as UI (precise click, no walk ring).
-static const int kChatX = 8;
-static const int kChatY = 6;
+// W3 A3/A4: the relocated engine chat's tab row is the top kChatTabRowH px of a kChatW-wide box. Its canvas
+// origin moves with the safe-area relocate (self.chatHitCanvas, set in updateHudLayout); these are the fixed
+// engine-px dimensions used to treat tab-row taps as UI (precise click, no walk ring).
 static const int kChatW = 519;
 static const int kChatTabRowH = 23;
 
@@ -405,36 +406,35 @@ static const CGFloat kMenuWidth       = 210.0;
     UILayoutGuide *sg = self.screen.safeAreaLayoutGuide;
     UILayoutGuide *p = self.debugPanel.layoutMarginsGuide;
     [NSLayoutConstraint activateConstraints:@[
-        // Game fills the SAFE AREA (not edge-to-edge): edge-to-edge pushed the OSRS corner UI (minimap,
-        // inventory, chat) under the rounded corners / dynamic island / home indicator. Filling the safe
-        // area keeps everything on-screen; the render aspect is computed to match it (onLaunch) so there
-        // are no internal letterbox bars either.
-        [self.screen.topAnchor constraintEqualToAnchor:g.topAnchor],
-        [self.screen.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:kTabStrip],
-        [self.screen.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-kTabStrip],
-        [self.screen.bottomAnchor constraintEqualToAnchor:g.bottomAnchor],
+        // Game fills the WHOLE screen EDGE-TO-EDGE (A1). The OSRS corner HUD (chat/minimap/orbs) used to clip
+        // under the island/corners/home-indicator here — that is now fixed by RELOCATING the engine HUD into the
+        // safe area (updateHudLayout), so the scene can own every pixel. Render aspect is computed from the full
+        // bounds (onLaunch) so there is no internal letterbox.
+        [self.screen.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [self.screen.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [self.screen.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.screen.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
 
-        // In-game keyboard control, bottom-left of the game's safe area.
-        [self.keyboardButton.bottomAnchor constraintEqualToAnchor:sg.bottomAnchor constant:-8],
-        [self.keyboardButton.leadingAnchor constraintEqualToAnchor:sg.leadingAnchor constant:8],
+        // In-game keyboard control, bottom-left of the safe area.
+        [self.keyboardButton.bottomAnchor constraintEqualToAnchor:g.bottomAnchor constant:-8],
+        [self.keyboardButton.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:8],
         [self.keyboardButton.widthAnchor constraintEqualToConstant:44],
         [self.keyboardButton.heightAnchor constraintEqualToConstant:36],
 
-        // Debug toggle, top-right safe area.
+        // Control trio (⚙ ▦ ≡) — TOP-CENTRE, in the gap between the relocated chat (top-left) and minimap
+        // (top-right), clear of both corners now that the HUD owns them.
         [self.debugToggle.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
-        [self.debugToggle.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-8],
+        [self.debugToggle.centerXAnchor constraintEqualToAnchor:g.centerXAnchor constant:52],
         [self.debugToggle.widthAnchor constraintEqualToConstant:44],
         [self.debugToggle.heightAnchor constraintEqualToConstant:36],
 
-        // Chrome rails toggle, just left of the ≡ toggle.
         [self.chromeToggle.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
-        [self.chromeToggle.trailingAnchor constraintEqualToAnchor:self.debugToggle.leadingAnchor constant:-8],
+        [self.chromeToggle.centerXAnchor constraintEqualToAnchor:g.centerXAnchor constant:0],
         [self.chromeToggle.widthAnchor constraintEqualToConstant:44],
         [self.chromeToggle.heightAnchor constraintEqualToConstant:36],
 
-        // Plugin panel opener (⚙), just left of the ▦ chrome toggle.
         [self.pluginButton.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
-        [self.pluginButton.trailingAnchor constraintEqualToAnchor:self.chromeToggle.leadingAnchor constant:-8],
+        [self.pluginButton.centerXAnchor constraintEqualToAnchor:g.centerXAnchor constant:-52],
         [self.pluginButton.widthAnchor constraintEqualToConstant:44],
         [self.pluginButton.heightAnchor constraintEqualToConstant:36],
 
@@ -1043,13 +1043,16 @@ static const CGFloat kMenuWidth       = 210.0;
     }
 
     const CGFloat cell = 38.0, gap = 5.0;
-    // The columns live in the side strips (self.view coords), flanking the inset game view. The game canvas's
-    // docked side panel ends at the game view's right edge — i.e. flush against the right strip — so the menu
-    // sits flush against the tabs with no overlap.
-    CGRect gf = self.screen.frame;   // inset game view, in self.view coords
-    CGRect strip = CGRectMake(0, gf.origin.y, gf.origin.x, gf.size.height);   // left strip extent (for y span)
-    CGFloat leftX  = gf.origin.x - kTabStrip + (kTabStrip - cell) / 2.0;
-    CGFloat rightX = gf.origin.x + gf.size.width + (kTabStrip - cell) / 2.0;
+    // Edge-to-edge: the side strips are gone (the scene is full-bleed), so the columns FLOAT over the scene's
+    // left/right edges, inside the safe area, vertically centred. Gameplay tabs (right) sit over the covered
+    // engine stones; social/system tabs (left) over the left edge. The proxy-click target stays the live stone
+    // centre (set above) regardless of where the native icon floats, so the decoupling still holds.
+    UIEdgeInsets ins = self.view.safeAreaInsets;
+    CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height;
+    CGFloat railTop = ins.top + 4, railBot = H - ins.bottom - 4;
+    CGRect strip = CGRectMake(0, railTop, 0, railBot - railTop);   // vertical extent for centring the columns
+    CGFloat leftX  = ins.left + 4;
+    CGFloat rightX = W - ins.right - cell - 4;
     [self layoutColumn:left  x:leftX  cell:cell gap:gap tabs:tabs active:active inBounds:strip];
     [self layoutColumn:right x:rightX cell:cell gap:gap tabs:tabs active:active inBounds:strip];
 }
@@ -1198,25 +1201,23 @@ static const CGFloat kMenuWidth       = 210.0;
     [self appendLine:@"--- launching JVM on worker thread ---"];
 
     JVMLauncher *launcher = [[JVMLauncher alloc] init];
-    // Compute the render resolution to MATCH the SAFE-AREA aspect (the game view fills the safe area), so
-    // the blit fills it with no letterbox and nothing clipped under the island/corners/home-indicator.
-    // Render height ~600 (a comfortable in-game UI scale); width follows the aspect.
+    // Edge-to-edge (A1): render aspect MATCHES THE FULL SCREEN (the game view fills the whole bounds), so the
+    // blit fills it with no letterbox. The HUD no longer clips at the edges because it is relocated INTO the
+    // safe area (updateHudLayout), not kept at the canvas corners.
     CGRect b = self.view.bounds;
-    UIEdgeInsets ins = self.view.safeAreaInsets;
-    // The game view is inset by kTabStrip on each side (native tab rails fill the strips), so the render
-    // aspect must match the INSET width to avoid internal letterbox bars.
-    CGFloat sw = b.size.width - ins.left - ins.right - 2 * kTabStrip;
-    CGFloat sh = b.size.height - ins.top - ins.bottom;
+    CGFloat sw = b.size.width;
+    CGFloat sh = b.size.height;
     CGFloat aspect = (sh > 0 ? sw / sh : 2.0);
     // Render height is the sharpness<->FPS<->UI-SIZE dial: the engine SOFTWARE-renders at renderW×renderH every
     // frame (no GPU on iOS), so a LOWER renderH = bigger UI on screen (fewer rendered px stretched to fill) +
-    // higher FPS, at the cost of a softer 3D scene. 720 was the sharp desktop-ish balance; 360 (≈2× bigger UI)
-    // makes the fixed-size OSRS chat/tabs phone-readable the way mobile clients do. The chat is a fixed 519px
-    // wide, so going much below ~300 (≈2.4×) overflows it — ~300–400 is the usable bigger-UI band.
+    // higher FPS, at the cost of a softer 3D scene. The chat is a fixed 519px wide, so going much below ~300
+    // (≈2.4×) overflows it — ~300–480 is the usable bigger-UI band.
     int renderH = 480;
     int renderW = (int)lround(renderH * aspect);
+    self.renderW = renderW;
+    self.renderH = renderH;
     launcher.resizeSpec = [NSString stringWithFormat:@"%dx%d", renderW, renderH];
-    [self appendLine:[NSString stringWithFormat:@"[shell] inset-area %.0fx%.0f aspect %.3f -> render %@",
+    [self appendLine:[NSString stringWithFormat:@"[shell] full-screen %.0fx%.0f aspect %.3f -> render %@",
                       sw, sh, aspect, launcher.resizeSpec]];
 
     NSThread *t = [[NSThread alloc] initWithBlock:^{
@@ -1232,20 +1233,42 @@ static const CGFloat kMenuWidth       = 210.0;
     [t start];
 }
 
-// W3 Feature-A (A3): drive the chat-at-top. Rather than reproduce the chat natively, we relocate the engine's
-// OWN chatbox to the top-left and flip it to OSRS transparent-chat mode (ChatRelocateProbe proved it renders
-// there, not occluded). One-shot once we're logged in (HudVeneerBridge re-applies it each frame). The relocated
-// chat is the real thing, so its tabs / scrollback / colours / input all keep working.
-- (void)updateHudChat {
+// W3 Feature-A (A1+A3+A4): drive the edge-to-edge HUD. Rather than reproduce the HUD natively, we RELOCATE the
+// engine's own pixel-perfect widgets into the safe area while the scene fills the screen edge-to-edge: the chatbox
+// to the top-left (transparent OSRS-mobile mode), and the minimap+orbs cluster to the top-right. Both stay the
+// real, live engine HUD (chat tabs/scrollback/input + minimap click-to-walk + orb clicks all keep working).
+// One-shot once we're logged in; HudVeneerBridge re-applies each frame (survives TOPLEVEL_REDRAW).
+- (void)updateHudLayout {
     if (self.engineChatRelocated) return;
     NSString *snap = [JVMLauncher hudSnapshot];
     if (snap.length == 0) return;   // bridge / VM not up yet — retry next tick
     NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
                                                       options:0 error:nil];
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) return;
+    if (self.renderW <= 0) return;
     self.engineChatRelocated = YES;
-    [JVMLauncher relocateEngineChatX:8 y:6 transparent:YES];
-    [self appendLine:@"[hud] engine chat -> top-left + transparent (relocate)"];
+
+    // Safe-area insets are in screen points; convert to canvas px (the engine draws at renderW×renderH, blitted
+    // full-screen, so canvasPx = points * renderW/screenW). Keep the relocated HUD inside the safe rect.
+    UIEdgeInsets ins = self.view.safeAreaInsets;
+    CGFloat sw = self.view.bounds.size.width;
+    CGFloat k = (sw > 0) ? (CGFloat)self.renderW / sw : 1.0;
+    int topC   = (int)lround(ins.top * k);
+    int leftC  = (int)lround(ins.left * k);
+    int rightC = (int)lround(ins.right * k);
+    const int m = 8;                          // canvas-px margin from the safe edge
+    const int MM_W = 211;                     // minimap+orbs cluster width (fixed engine px, from the de-risk)
+
+    int chatX = leftC + m;
+    int chatY = topC + m;
+    int mmX = self.renderW - MM_W - rightC - m;
+    int mmY = topC + m;
+
+    [JVMLauncher relocateEngineChatX:chatX y:chatY transparent:YES];
+    [JVMLauncher relocateEngineMinimapX:mmX y:mmY];
+    self.chatHitCanvas = CGRectMake(chatX, chatY, kChatW, kChatTabRowH);
+    [self appendLine:[NSString stringWithFormat:@"[hud] relocate chat->%d,%d minimap->%d,%d (insets L%d T%d R%d k%.2f)",
+                      chatX, chatY, mmX, mmY, leftC, topC, rightC, k]];
 }
 
 // Called every screen refresh once the JVM is running. Pulls the engine's latest composited frame
@@ -1272,7 +1295,7 @@ static const CGFloat kMenuWidth       = 210.0;
     // W3 Feature-A (A2.5): refresh the crude native chat-at-top + HUD-status overlay from the HudDataBridge
     // snapshot (~10 Hz). Verifies the device data-flow before the full native chat veneer.
     if (self.framesShown % 6 == 0) {
-        [self updateHudChat];
+        [self updateHudLayout];
     }
 
     // Plugin panel: while open, re-read the list when the bridge's event sequence advances (a toggle's
@@ -1360,10 +1383,12 @@ static const CGFloat kMenuWidth       = 210.0;
     CGPoint vp = [g locationInView:self.view];
     int gx = 0, gy = 0;
     if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return;
-    // W3 A3: the relocated chat tab-row (canvas [8,6,519x23]) is UI, not the world. Send a PRECISE click straight
-    // to the engine (no world-snap pulling it to a tile/entity) and DON'T draw the walk ring — taps there toggle a
-    // chat filter, they don't walk.
-    if (gx >= kChatX && gx <= kChatX + kChatW && gy >= kChatY && gy <= kChatY + kChatTabRowH) {
+    // W3 A3: the relocated chat tab-row is UI, not the world. Send a PRECISE click straight to the engine (no
+    // world-snap pulling it to a tile/entity) and DON'T draw the walk ring — taps there toggle a chat filter, they
+    // don't walk. The rect moves with the safe-area relocate (chatHitCanvas, set in updateHudLayout).
+    CGRect ch = self.chatHitCanvas;
+    if (ch.size.width > 0 && gx >= ch.origin.x && gx <= ch.origin.x + ch.size.width
+            && gy >= ch.origin.y && gy <= ch.origin.y + ch.size.height) {
         [JVMLauncher postClickPreciseX:gx y:gy button:1];
         [self appendLine:[NSString stringWithFormat:@"[shell] chat-tab tap %d,%d (precise, no ring)", gx, gy]];
         return;

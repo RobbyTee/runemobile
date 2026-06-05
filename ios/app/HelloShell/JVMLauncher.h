@@ -129,6 +129,15 @@ typedef void (^JVMLogSink)(NSString *line);
 /// each frame by HudVeneerBridge. Main thread.
 + (void)relocateEngineChatX:(int)x y:(int)y transparent:(BOOL)transparent;
 
+/// W3 A4: relocate the engine minimap+orbs cluster (MAP_CONTAINER) to canvas (x,y) — for edge-to-edge it moves
+/// into the safe area while the scene fills the screen. The cluster stays the live engine HUD, so minimap clicks
+/// still walk and orb clicks still fire. x < 0 stops. Re-applied each frame by HudVeneerBridge. Main thread.
++ (void)relocateEngineMinimapX:(int)x y:(int)y;
+
+/// W3 A4/A6: relocate the engine side panel (SIDE_CONTAINER — inventory/equipment/etc.) to canvas (x,y) so it
+/// doesn't clip under the notch at full-bleed. No-op until a tab is open. x < 0 stops. Main thread.
++ (void)relocateEngineSidePanelX:(int)x y:(int)y;
+
 // ---- Phase 6 (W3): native plugin-management + config panel (reverse JNI -> MobileUiBridge) -----------
 // All call the Java-owned control-plane facade (gated -Drunelite.mobileui). Reads return JSON snapshots
 // to parse once per panel open; writes are fire-and-forget onto the correct Java thread (EDT for plugin

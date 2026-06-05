@@ -63,6 +63,12 @@ public final class HudVeneerBridge
 	private static volatile int minimapX = -1;
 	private static volatile int minimapY = -1;
 
+	// Side panel (SIDE_CONTAINER = the inventory / equipment / spellbook / etc. panel) relocate. sideX < 0 = off.
+	// Same root-anchored relocate as the minimap; edge-to-edge needs it pulled inward so it doesn't clip under the
+	// notch. Best-effort (only shows when a tab is open); independently toggleable so a misbehave can be isolated.
+	private static volatile int sideX = -1;
+	private static volatile int sideY = -1;
+
 	private HudVeneerBridge()
 	{
 	}
@@ -94,6 +100,15 @@ public final class HudVeneerBridge
 	{
 		minimapX = x;
 		minimapY = y;
+	}
+
+	/** Native: relocate the engine side panel ({@code SIDE_CONTAINER}) to canvas {@code (x,y)}. {@code x < 0} stops.
+	 *  Same root-anchored relocate as the minimap; pulls the inventory/equipment panel inward for edge-to-edge so it
+	 *  doesn't clip under the notch. The panel only exists while a tab is open, so this is a no-op until then. */
+	public static void relocateSidePanel(int x, int y)
+	{
+		sideX = x;
+		sideY = y;
 	}
 
 	/** Re-apply the requested chatbox state each frame. Client thread. */
@@ -159,6 +174,19 @@ public final class HudVeneerBridge
 				if (w != null)
 				{
 					w.setForcedPosition(minimapX, minimapY);
+					w.revalidate();
+				}
+			}
+
+			// Side panel relocate (independent). No-op until a tab is open (SIDE_CONTAINER then becomes non-null).
+			if (sideX >= 0)
+			{
+				final int sideId = preEoc
+					? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER;
+				final Widget w = c.getWidget(sideId);
+				if (w != null)
+				{
+					w.setForcedPosition(sideX, sideY);
 					w.revalidate();
 				}
 			}

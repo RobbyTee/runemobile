@@ -252,6 +252,8 @@ static BOOL ensureHud(void) {
 static jclass    gVeneerClass = NULL;
 static jmethodID gMidSetChatHidden = NULL;   // setChatHidden(Z)V
 static jmethodID gMidRelocateChat = NULL;    // relocateChat(IIZ)V
+static jmethodID gMidRelocateMinimap = NULL; // relocateMinimap(II)V  (A4 — minimap+orbs cluster)
+static jmethodID gMidRelocateSide = NULL;    // relocateSidePanel(II)V (A4/A6 — inventory side panel)
 static BOOL ensureVeneer(void) {
     if (gVeneerClass) return YES;
     if (!ensureBridge() || !gMainEnv) return NO;
@@ -263,13 +265,17 @@ static BOOL ensureVeneer(void) {
     if (!global) return NO;
     jmethodID m = (*env)->GetStaticMethodID(env, global, "setChatHidden", "(Z)V");
     jmethodID r = (*env)->GetStaticMethodID(env, global, "relocateChat", "(IIZ)V");
-    if (!m || !r) {
+    jmethodID mm = (*env)->GetStaticMethodID(env, global, "relocateMinimap", "(II)V");
+    jmethodID sp = (*env)->GetStaticMethodID(env, global, "relocateSidePanel", "(II)V");
+    if (!m || !r || !mm || !sp) {
         (*env)->ExceptionClear(env);
         (*env)->DeleteGlobalRef(env, global);
         return NO;
     }
     gMidSetChatHidden = m;
     gMidRelocateChat = r;
+    gMidRelocateMinimap = mm;
+    gMidRelocateSide = sp;
     gVeneerClass = global;
     return YES;
 }
@@ -1089,6 +1095,20 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidRelocateChat,
                                  (jint)x, (jint)y, (jboolean)(transparent ? JNI_TRUE : JNI_FALSE));
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)relocateEngineMinimapX:(int)x y:(int)y {
+    if (!ensureVeneer()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidRelocateMinimap, (jint)x, (jint)y);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)relocateEngineSidePanelX:(int)x y:(int)y {
+    if (!ensureVeneer()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidRelocateSide, (jint)x, (jint)y);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 
