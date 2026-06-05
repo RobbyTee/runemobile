@@ -1,0 +1,526 @@
+[faultdiag:pre-clear] task BAD_ACCESS kr=0 n=1 {mask=0x2 port=0x8f03 beh=0x80000001 flav=5}
+[faultdiag:pre-clear] task BREAKPOINT kr=0 n=1 {mask=0x40 port=0x8f13 beh=0x80000001 flav=5}
+[faultdiag:pre-clear] task BAD_INSTRUCTION kr=0 n=1 {mask=0x4 port=0x8f23 beh=0x80000001 flav=5}
+[faultdiag:pre-clear] thread BAD_ACCESS kr=0 n=0
+[faultdiag:pre-clear] SIGSEGV=0x0(DFL) flags=0x2 onstack=0
+[faultdiag:pre-clear] SIGBUS=0x0(DFL) flags=0x2 onstack=0
+[faultdiag:pre-clear] SIGILL=0x0(DFL) flags=0x2 onstack=0
+[faultdiag:pre-clear] SIGTRAP=0x0(DFL) flags=0x2 onstack=0
+[faultdiag:pre-clear] mem avail=6129.8MB footprint=14.2MB
+[faultdiag:post-clear] task BAD_ACCESS kr=0 n=1 {mask=0x2 port=0x0 beh=0x1 flav=1}
+[faultdiag:post-clear] task BREAKPOINT kr=0 n=1 {mask=0x40 port=0x8f43 beh=0x80000001 flav=5}
+[faultdiag:post-clear] task BAD_INSTRUCTION kr=0 n=1 {mask=0x4 port=0x8f53 beh=0x80000001 flav=5}
+[faultdiag:post-clear] thread BAD_ACCESS kr=0 n=1 {mask=0x2 port=0x0 beh=0x1 flav=1}
+[faultdiag:post-clear] SIGSEGV=0x0(DFL) flags=0x2 onstack=0
+[faultdiag:post-clear] SIGBUS=0x0(DFL) flags=0x2 onstack=0
+[faultdiag:post-clear] SIGILL=0x0(DFL) flags=0x2 onstack=0
+[faultdiag:post-clear] SIGTRAP=0x0(DFL) flags=0x2 onstack=0
+[faultdiag:post-clear] mem avail=6129.8MB footprint=14.2MB
+[memwatch t= 0.0s] avail=6129.8MB footprint=14.2MB
+[JIT26] Requesting 64 MB for JIT mapping
+[JIT26] Got JIT mapping 0x11b0dc000 from debugger
+[JIT26] mapping at RW=0x11f0dc000, RX=0x11b0dc000
+[faultdiag:post-createvm] task BAD_ACCESS kr=0 n=1 {mask=0x2 port=0x0 beh=0x0 flav=0}
+[faultdiag:post-createvm] task BREAKPOINT kr=0 n=1 {mask=0x40 port=0x0 beh=0x0 flav=0}
+[faultdiag:post-createvm] task BAD_INSTRUCTION kr=0 n=1 {mask=0x4 port=0x0 beh=0x0 flav=0}
+[faultdiag:post-createvm] thread BAD_ACCESS kr=0 n=1 {mask=0x2 port=0x0 beh=0x1 flav=1}
+[faultdiag:post-createvm] SIGSEGV=0x114ac15f8(custom) flags=0x43 onstack=1
+[faultdiag:post-createvm] SIGBUS=0x114ac15f8(custom) flags=0x42 onstack=0
+[faultdiag:post-createvm] SIGILL=0x114ac15f8(custom) flags=0x42 onstack=0
+[faultdiag:post-createvm] SIGTRAP=0x0(DFL) flags=0x2 onstack=0
+[faultdiag:post-createvm] mem avail=6047.4MB footprint=96.6MB
+==== DeviceHeadlessBoot (W1 P3 §6.2 — real RuneLite under UnsafePoke CTC) ====
+==== UnsafePokeActivation (no byte-buddy / no attach / no JVMTI) ====
+set GraphicsEnvironment.headless/defaultHeadless = true OK (headless-first)
+forced LocalGE.<clinit> (platform GE built, headless) OK
+set GraphicsEnvironment.headless/defaultHeadless = false OK
+set Toolkit.toolkit = CTCToolkit OK
+built CTCGraphicsEnvironment.getInstance() OK
+Unsafe-overwrote LocalGE.INSTANCE = CTCGraphicsEnvironment OK
+set SurfaceManagerFactory.instance = CTCSurfaceManagerFactory OK
+[boot] toolkit      = com.github.caciocavallosilano.cacio.ctc.CTCToolkit
+[boot] graphicsenv  = com.github.caciocavallosilano.cacio.ctc.CTCGraphicsEnvironment
+[boot] headless     = false
+[boot] launching RuneLiteHeadless --safe-mode
+[memwatch t= 0.5s] avail=5992.6MB footprint=151.4MB
+2026-06-05 06:36:18 GMT [main] INFO  net.runelite.client.RuneLite - RuneLite 1.12.28-SNAPSHOT (launcher version unknown) starting up, args: --safe-mode
+2026-06-05 06:36:18 GMT [main] INFO  net.runelite.client.RuneLite - Java VM arguments: -XX:+UnlockExperimentalVMOptions -XX:+MirrorMappedCodeCache -XX:+DisablePrimordialThreadGuardPages -XX:-UseCompressedClassPointers -XX:ReservedCodeCacheSize=64m -Djava.awt.headless=false --add-exports=java.desktop/java.awt=ALL-UNNAMED --add-exports=java.desktop/java.awt.peer=ALL-UNNAMED --add-exports=java.desktop/sun.awt.image=ALL-UNNAMED --add-exports=java.desktop/sun.java2d=ALL-UNNAMED --add-exports=java.desktop/java.awt.dnd.peer=ALL-UNNAMED --add-exports=java.desktop/sun.awt=ALL-UNNAMED --add-exports=java.desktop/sun.awt.event=ALL-UNNAMED --add-exports=java.desktop/sun.awt.datatransfer=ALL-UNNAMED --add-exports=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.desktop/java.awt=ALL-UNNAMED --add-opens=java.desktop/sun.java2d=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED -Xmx256m -Duser.home=/var/mobile/Containers/Data/Application/DD1CC8E5-7D80-4C8F-9D9E-778A292C8F2D/Documents -Drunelite.headless.capture.dir=/var/mobile/Containers/Data/Application/DD1CC8E5-7D80-4C8F-9D9E-778A292C8F2D/Documents/rl-capture -Drunelite.bridge=true -Drunelite.mobileui=true -Drunelite.mobilechrome=true -Drunelite.menupeek=true -Drunelite.menupeek.maxEntries=14 -Drunelite.huddata=true -Drunelite.hudveneer=true -Drunelite.hub=true -Drunelite.pluginhub.version=1.12.27 -Drunelite.headless.capture.interval=10 -Drunelite.headless.capture.preLoginMax=40 -Dheadless.runSeconds=240 -Dheadless.captureTargetFrames=999 -Djava.home=/private/var/containers/Bundle/Application/0F6FE002-FDBC-4C09-9FDA-377546B2ECA8/HelloShell.app/jre -Djava.library.path=/private/var/containers/Bundle/Application/0F6FE002-FDBC-4C09-9FDA-377546B2ECA8/HelloShell.app/Frameworks -Drunelite.headless.resize=1304x600 -Drunelite.headless.autologin=true -Drunelite.headless.autologin.eula=true -Drunelite.headless.autologin.eula.point=302,312 -Drunelite.headless.autologin.eula.loginIndex=12 -Drunelite.headless.autologin.point=382,248 -Drunelite.headless.autologin.world=301 -Drunelite.headless.autologin.worldAddress=oldschool1.runescape.com
+[memwatch t= 1.0s] avail=5951.3MB footprint=192.7MB
+[memwatch t= 1.5s] avail=5951.2MB footprint=192.8MB
+[memwatch t= 2.0s] avail=5952.5MB footprint=191.5MB
+[memwatch t= 2.5s] avail=5957.0MB footprint=187.0MB
+2026-06-05 06:36:20 GMT [Preloader] INFO  net.runelite.client.rs.ClientLoader - injected-client 26877616667.154
+2026-06-05 06:36:20 GMT [main] WARN  n.r.client.discord.DiscordService - Failed to load Discord library, Discord support will be disabled.
+2026-06-05 06:36:20 GMT [main] INFO  n.r.client.account.SessionManager - No session file exists
+2026-06-05 06:36:20 GMT [main] INFO  n.r.client.config.ConfigManager - Profile 'default' (sync: false, active: true, id: 474578747092750)
+2026-06-05 06:36:20 GMT [main] INFO  n.r.client.config.ConfigManager - Using profile: default (474578747092750)
+2026-06-05 06:36:20 GMT [main] INFO  n.r.c.plugins.kourendlibrary.Library - Library is now reset
+[memwatch t= 3.0s] avail=5901.4MB footprint=242.6MB
+2026-06-05 06:36:20 GMT [main] INFO  n.r.client.headless.MobileUiBridge - [mobileui] facade wired: plugins=true config=true clientThread=true eventBus=true
+CacioComponentPeer::setZOrder: NOT YET IMPLEMENTED
+CacioComponentPeer::setZOrder: NOT YET IMPLEMENTED
+2026-06-05 06:36:20 GMT [main] INFO  n.r.client.ui.HeadlessClientUI - [headless] init done: frame=java.awt.Frame[frame0,0,0,773x533,hidden,layout=java.awt.BorderLayout,title=RuneLite (headless),resizable,normal] gc=com.github.caciocavallosilano.cacio.ctc.CTCGraphicsConfiguration@7d6cd71d toolkit=com.github.caciocavallosilano.cacio.ctc.CTCToolkit
+2026-06-05 06:36:21 GMT [pool-4-thread-1] ERROR n.r.c.util.RunnableExceptionLogger - Uncaught exception in runnable net.runelite.client.plugins.worldhopper.WorldHopperPlugin$$Lambda/0x0000000129d49bf8@44e6e7a8
+java.lang.NoClassDefFoundError: Could not initialize class com.sun.jna.Native
+	at net.runelite.client.plugins.worldhopper.ping.RLLibC.<clinit>(RLLibC.java:34)
+	at net.runelite.client.plugins.worldhopper.ping.Ping.icmpPing(Ping.java:149)
+	at net.runelite.client.plugins.worldhopper.ping.Ping.ping(Ping.java:99)
+	at net.runelite.client.plugins.worldhopper.WorldHopperPlugin.ping(WorldHopperPlugin.java:965)
+	at net.runelite.client.plugins.worldhopper.WorldHopperPlugin.pingInitialWorlds(WorldHopperPlugin.java:850)
+	at net.runelite.client.util.RunnableExceptionLogger.run(RunnableExceptionLogger.java:41)
+	at java.base/java.util.concurrent.Executors$RunnableAdapter.call(Unknown Source)
+	at java.base/java.util.concurrent.FutureTask.run(Unknown Source)
+	at java.base/java.util.concurrent.ScheduledThreadPoolExecutor$ScheduledFutureTask.run(Unknown Source)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(Unknown Source)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(Unknown Source)
+	at java.base/java.lang.Thread.run(Unknown Source)
+Caused by: java.lang.ExceptionInInitializerError: Exception java.lang.UnsatisfiedLinkError: /private/var/mobile/Containers/Data/Application/DD1CC8E5-7D80-4C8F-9D9E-778A292C8F2D/Documents/Library/Caches/JNA/temp/jna7625630646866900477.tmp: dlopen(/private/var/mobile/Containers/Data/Application/DD1CC8E5-7D80-4C8F-9D9E-778A292C8F2D/Documents/Library/Caches/JNA/temp/jna7625630646866900477.tmp, 0x0001): tried: '/private/var/mobile/Containers/Data/Application/DD1CC8E5-7D80-4C8F-9D9E-778A292C8F2D/Documents/Library/Caches/JNA/temp/jna7625630646866900477.tmp' (mach-o file (/private/var/mobile/Containers/Data/Application/DD1CC8E5-7D80-4C8F-9D9E-778A292C8F2D/Documents/Library/Caches/JNA/temp/jna7625630646866900477.tmp), but incompatible platform (have 'macOS', need 'iOS')), '/private/preboot/Cryptexes/OS/private/var/mobile/Containers/Data/Application/DD1CC8E5-7D80-4C8F-9D9E-778A292C8F2D/Documents/Library/Caches/JNA/temp/jna7625630646866900477.tmp' (no such file), '/private/var/mobile/Containers/Data/Application/DD1CC8E5-7D80-4C8F-9D9E-778A292C8F2D/Documents/Library/Caches/JNA/temp/jna7625630646866900477.tmp'  [in thread "main"]
+	at java.base/jdk.internal.loader.NativeLibraries.load(Native Method)
+	at java.base/jdk.internal.loader.NativeLibraries$NativeLibraryImpl.open(Unknown Source)
+	at java.base/jdk.internal.loader.NativeLibraries.loadLibrary(Unknown Source)
+	at java.base/jdk.internal.loader.NativeLibraries.loadLibrary(Unknown Source)
+	at java.base/java.lang.ClassLoader.loadLibrary(Unknown Source)
+	at java.base/java.lang.Runtime.load0(Unknown Source)
+	at java.base/java.lang.System.load(Unknown Source)
+	at com.sun.jna.Native.loadNativeDispatchLibraryFromClasspath(Native.java:1019)
+	at com.sun.jna.Native.loadNativeDispatchLibrary(Native.java:989)
+	at com.sun.jna.Native.<clinit>(Native.java:195)
+	at net.runelite.discord.DiscordRPC.<clinit>(DiscordRPC.java:42)
+	at net.runelite.client.discord.DiscordService.<init>(DiscordService.java:85)
+	at java.base/jdk.internal.reflect.DirectConstructorHandleAccessor.newInstance(Unknown Source)
+	at java.base/java.lang.reflect.Constructor.newInstanceWithCaller(Unknown Source)
+	at java.base/java.lang.reflect.Constructor.newInstance(Unknown Source)
+	at com.google.inject.internal.DefaultConstructionProxyFactory$ReflectiveProxy.newInstance(DefaultConstructionProxyFactory.java:126)
+	at com.google.inject.internal.ConstructorInjector.provision(ConstructorInjector.java:111)
+	at com.google.inject.internal.ConstructorInjector.construct(ConstructorInjector.java:90)
+	at com.google.inject.internal.ConstructorBindingImpl$Factory.get(ConstructorBindingImpl.java:268)
+	at com.google.inject.internal.ProviderToInternalFactoryAdapter$1.call(ProviderToInternalFactoryAdapter.java:46)
+	at com.google.inject.internal.InjectorImpl.callInContext(InjectorImpl.java:1092)
+	at com.google.inject.internal.ProviderToInternalFactoryAdapter.get(ProviderToInternalFactoryAdapter.java:40)
+	at com.google.inject.internal.SingletonScope$1.get(SingletonScope.java:194)
+	at com.google.inject.internal.InternalFactoryToProviderAdapter.get(InternalFactoryToProviderAdapter.java:41)
+	at com.google.inject.internal.SingleFieldInjector.inject(SingleFieldInjector.java:54)
+	at com.google.inject.internal.MembersInjectorImpl.injectMembers(MembersInjectorImpl.java:132)
+	at com.google.inject.internal.ConstructorInjector.provision(ConstructorInjector.java:120)
+	at com.google.inject.internal.ConstructorInjector.construct(ConstructorInjector.java:90)
+	at com.google.inject.internal.ConstructorBindingImpl$Factory.get(ConstructorBindingImpl.java:268)
+	at com.google.inject.internal.ProviderToInternalFactoryAdapter$1.call(ProviderToInternalFactoryAdapter.java:46)
+	at com.google.inject.internal.InjectorImpl.callInContext(InjectorImpl.java:1092)
+	at com.google.inject.internal.ProviderToInternalFactoryAdapter.get(ProviderToInternalFactoryAdapter.java:40)
+	at com.google.inject.internal.SingletonScope$1.get(SingletonScope.java:194)
+	at com.google.inject.internal.InternalFactoryToProviderAdapter.get(InternalFactoryToProviderAdapter.java:41)
+	at com.google.inject.internal.InjectorImpl$2$1.call(InjectorImpl.java:1019)
+	at com.google.inject.internal.InjectorImpl.callInContext(InjectorImpl.java:1085)
+	at com.google.inject.internal.InjectorImpl$2.get(InjectorImpl.java:1015)
+	at com.google.inject.internal.InjectorImpl.getInstance(InjectorImpl.java:1054)
+	at net.runelite.client.RuneLite.main(RuneLite.java:289)
+	at net.runelite.client.headless.RuneLiteHeadless.main(RuneLiteHeadless.java:52)
+	at DeviceHeadlessBoot.main(DeviceHeadlessBoot.java:33)
+2026-06-05 06:36:21 GMT [AWT-EventQueue-0] INFO  n.r.client.ui.HeadlessClientUI - [headless] show done: visible=true canvas=tb[canvas0,0,0,765x503] displayable=true
+2026-06-05 06:36:21 GMT [main] INFO  net.runelite.client.RuneLite - Client initialization took 2856ms. Uptime: 3455ms
+[boot] RuneLite.main returned; keep-alive 240s for capture
+[memwatch t= 3.5s] avail=5863.8MB footprint=280.2MB
+[memwatch t= 4.0s] avail=5862.2MB footprint=281.8MB
+[memwatch t= 4.5s] avail=5854.5MB footprint=289.5MB
+2026-06-05 06:36:22 GMT [Client] ERROR injected-client - Error initializing sound engine. Audio will be unavailable.
+aak: 
+	at wk.ag(wk.java:47380)
+	at so.al(so.java:39)
+	at cf.aa(cf.java:926)
+	at client.il(client.java:9470)
+	at tf.ahj(tf.java:442)
+	at tf.bh(tf.java)
+	at tf.run(tf.java:2522)
+	at java.base/java.lang.Thread.run(Unknown Source)
+Caused by: java.lang.IllegalArgumentException: No line matching interface SourceDataLine supporting format PCM_SIGNED 22050.0 Hz, 16 bit, stereo, 4 bytes/frame, little-endian, and buffers of 16384 to 16384 bytes is supported.
+	at java.desktop/javax.sound.sampled.AudioSystem.getLine(Unknown Source)
+	at so.al(so.java:26)
+	... 6 common frames omitted
+[memwatch t= 5.0s] avail=5719.0MB footprint=425.0MB
+2026-06-05 06:36:23 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] ENABLED dir=/var/mobile/Containers/Data/Application/DD1CC8E5-7D80-4C8F-9D9E-778A292C8F2D/Documents/rl-capture interval=10 maxFrames=20 preLoginMax=40
+2026-06-05 06:36:23 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1 nullGraphics=0 capturedFrames=0 state=null
+2026-06-05 06:36:23 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] gameState null -> LOGIN_SCREEN (draw#1 loginIndex=10 launcherDisplayName=GittirDunnn)
+2026-06-05 06:36:23 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] loginIndex -2 -> 10 (draw#1 state=LOGIN_SCREEN launcherDisplayName=GittirDunnn)
+2026-06-05 06:36:23 GMT [Client] INFO  n.r.client.headless.HeadlessLogin - [headless-login] ENABLED playPoint=382,248 welcomeLoginIndex=10 eula=true eulaPoint=302,312 eulaLoginIndex=12 maxAttempts=5 world=301 worldAddress=oldschool1.runescape.com
+2026-06-05 06:36:23 GMT [Client] INFO  n.r.client.headless.HeadlessResize - [headless-resize] ENABLED target=1304x600
+[memwatch t= 5.5s] avail=5697.8MB footprint=446.2MB
+2026-06-05 06:36:23 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#10 nullGraphics=0 capturedFrames=0 state=LOGIN_SCREEN
+2026-06-05 06:36:23 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGIN_SCREEN-001-draw00010.png (765x503)
+[memwatch t= 6.0s] avail=5692.0MB footprint=452.0MB
+2026-06-05 06:36:23 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#20 nullGraphics=0 capturedFrames=1 state=LOGIN_SCREEN
+2026-06-05 06:36:23 GMT [Client] INFO  n.r.client.headless.HeadlessLogin - [headless-login] changeWorld -> 301 (oldschool1.runescape.com)
+2026-06-05 06:36:23 GMT [Client] INFO  n.r.client.headless.HeadlessLogin - [headless-login] Play Now attempt 1/5: synthesizing click at 382,248 (canvas 765x503 displayable=true)
+2026-06-05 06:36:23 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGIN_SCREEN-002-draw00020.png (765x503)
+2026-06-05 06:36:23 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] gameState LOGIN_SCREEN -> LOGGING_IN (draw#21 loginIndex=10 launcherDisplayName=GittirDunnn)
+2026-06-05 06:36:23 GMT [Client] INFO  n.r.client.headless.HeadlessLogin - [headless-login] state now LOGGING_IN after eula=0 play=1 attempt(s) — stopping injection
+2026-06-05 06:36:24 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#30 nullGraphics=0 capturedFrames=2 state=LOGGING_IN
+2026-06-05 06:36:24 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-003-draw00030.png (765x503)
+2026-06-05 06:36:24 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#40 nullGraphics=0 capturedFrames=3 state=LOGGING_IN
+[memwatch t= 6.5s] avail=5688.6MB footprint=455.4MB
+2026-06-05 06:36:24 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-004-draw00040.png (765x503)
+2026-06-05 06:36:24 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#50 nullGraphics=0 capturedFrames=4 state=LOGGING_IN
+2026-06-05 06:36:24 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-005-draw00050.png (765x503)
+2026-06-05 06:36:24 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#60 nullGraphics=0 capturedFrames=5 state=LOGGING_IN
+2026-06-05 06:36:24 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-006-draw00060.png (765x503)
+[memwatch t= 7.0s] avail=5687.6MB footprint=456.4MB
+2026-06-05 06:36:24 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#70 nullGraphics=0 capturedFrames=6 state=LOGGING_IN
+2026-06-05 06:36:24 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-007-draw00070.png (765x503)
+2026-06-05 06:36:25 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#80 nullGraphics=0 capturedFrames=7 state=LOGGING_IN
+2026-06-05 06:36:25 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-008-draw00080.png (765x503)
+[memwatch t= 7.5s] avail=5686.9MB footprint=457.1MB
+2026-06-05 06:36:25 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#90 nullGraphics=0 capturedFrames=8 state=LOGGING_IN
+2026-06-05 06:36:25 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-009-draw00090.png (765x503)
+2026-06-05 06:36:25 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#100 nullGraphics=0 capturedFrames=9 state=LOGGING_IN
+2026-06-05 06:36:25 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-010-draw00100.png (765x503)
+[memwatch t= 8.0s] avail=5685.9MB footprint=458.1MB
+2026-06-05 06:36:25 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#110 nullGraphics=0 capturedFrames=10 state=LOGGING_IN
+2026-06-05 06:36:25 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-011-draw00110.png (765x503)
+2026-06-05 06:36:26 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#120 nullGraphics=0 capturedFrames=11 state=LOGGING_IN
+2026-06-05 06:36:26 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-012-draw00120.png (765x503)
+2026-06-05 06:36:26 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#130 nullGraphics=0 capturedFrames=12 state=LOGGING_IN
+2026-06-05 06:36:26 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-013-draw00130.png (765x503)
+[memwatch t= 8.5s] avail=5685.0MB footprint=459.0MB
+2026-06-05 06:36:26 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#140 nullGraphics=0 capturedFrames=13 state=LOGGING_IN
+2026-06-05 06:36:26 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-014-draw00140.png (765x503)
+2026-06-05 06:36:26 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#150 nullGraphics=0 capturedFrames=14 state=LOGGING_IN
+2026-06-05 06:36:26 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-015-draw00150.png (765x503)
+[memwatch t= 9.0s] avail=5684.1MB footprint=459.9MB
+2026-06-05 06:36:26 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#160 nullGraphics=0 capturedFrames=15 state=LOGGING_IN
+2026-06-05 06:36:26 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-016-draw00160.png (765x503)
+2026-06-05 06:36:27 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#170 nullGraphics=0 capturedFrames=16 state=LOGGING_IN
+2026-06-05 06:36:27 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-017-draw00170.png (765x503)
+[memwatch t= 9.5s] avail=5686.3MB footprint=457.7MB
+2026-06-05 06:36:27 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#180 nullGraphics=0 capturedFrames=17 state=LOGGING_IN
+2026-06-05 06:36:27 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-018-draw00180.png (765x503)
+2026-06-05 06:36:27 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#190 nullGraphics=0 capturedFrames=18 state=LOGGING_IN
+2026-06-05 06:36:27 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-019-draw00190.png (765x503)
+2026-06-05 06:36:27 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#200 nullGraphics=0 capturedFrames=19 state=LOGGING_IN
+2026-06-05 06:36:27 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-020-draw00200.png (765x503)
+[memwatch t=10.0s] avail=5685.4MB footprint=458.6MB
+2026-06-05 06:36:27 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#210 nullGraphics=0 capturedFrames=20 state=LOGGING_IN
+2026-06-05 06:36:28 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-021-draw00210.png (765x503)
+2026-06-05 06:36:28 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#220 nullGraphics=0 capturedFrames=21 state=LOGGING_IN
+2026-06-05 06:36:28 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-022-draw00220.png (765x503)
+[memwatch t=10.5s] avail=5684.5MB footprint=459.5MB
+2026-06-05 06:36:28 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#230 nullGraphics=0 capturedFrames=22 state=LOGGING_IN
+2026-06-05 06:36:28 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-023-draw00230.png (765x503)
+2026-06-05 06:36:28 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#240 nullGraphics=0 capturedFrames=23 state=LOGGING_IN
+2026-06-05 06:36:28 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGING_IN-024-draw00240.png (765x503)
+[memwatch t=11.0s] avail=5683.0MB footprint=461.0MB
+2026-06-05 06:36:28 GMT [pool-2-thread-1] WARN  n.r.client.ClientSessionManager - Unable to ping session service
+java.io.IOException: Unsuccessful ping
+	at net.runelite.client.SessionClient.ping(SessionClient.java:66)
+	at net.runelite.client.ClientSessionManager.ping(ClientSessionManager.java:85)
+	at net.runelite.client.util.RunnableExceptionLogger.run(RunnableExceptionLogger.java:41)
+	at net.runelite.client.util.RunnableExceptionLogger.run(RunnableExceptionLogger.java:41)
+	at java.base/java.util.concurrent.Executors$RunnableAdapter.call(Unknown Source)
+	at java.base/java.util.concurrent.FutureTask.runAndReset(Unknown Source)
+	at java.base/java.util.concurrent.ScheduledThreadPoolExecutor$ScheduledFutureTask.run(Unknown Source)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(Unknown Source)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(Unknown Source)
+	at java.base/java.lang.Thread.run(Unknown Source)
+2026-06-05 06:36:28 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] gameState LOGGING_IN -> LOADING (draw#247 loginIndex=10 launcherDisplayName=GittirDunnn)
+2026-06-05 06:36:29 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#250 nullGraphics=0 capturedFrames=24 state=LOADING
+2026-06-05 06:36:29 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOADING-025-draw00250.png (765x503)
+[memwatch t=11.5s] avail=5637.7MB footprint=506.3MB
+2026-06-05 06:36:29 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#260 nullGraphics=0 capturedFrames=25 state=LOADING
+2026-06-05 06:36:29 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] gameState LOADING -> LOGGED_IN (draw#260 loginIndex=10 launcherDisplayName=GittirDunnn)
+2026-06-05 06:36:29 GMT [AWT-EventQueue-0] INFO  n.r.client.headless.HeadlessResize - [headless-resize] requested 1304x600: frame insets 26,4,4,4 -> component now 1304x600, canvas tb[canvas0,0,0,765x503]
+2026-06-05 06:36:29 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-001-draw00260.png (765x503)
+[memwatch t=12.0s] avail=5580.0MB footprint=564.0MB
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessResize - [headless-resize] post-resize frame 1: canvas=1304x600 viewport=0x0
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer] chat-layout CONTROLS bounds=java.awt.Rectangle[x=0,y=142,width=519,height=23] orig=(0,0,519x23) relX=93 relY=8 hidden=false
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer] chat-layout CHATAREA bounds=java.awt.Rectangle[x=-1,y=-1,width=519,height=142] orig=(0,0,519x23) relX=93 relY=31 hidden=true
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer] chat-layout CHATDISPLAY bounds=java.awt.Rectangle[x=-1,y=-1,width=505,height=130] orig=(0,0,14x12) relX=7 relY=6 hidden=true
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer] chat-layout CHAT_BACKGROUND bounds=java.awt.Rectangle[x=-1,y=-1,width=519,height=142] orig=(0,0,0x0) relX=0 relY=0 hidden=true
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer] chat-layout INPUT_CLICKAREA bounds=java.awt.Rectangle[x=-1,y=-1,width=519,height=30] orig=(0,0,0x30) relX=0 relY=112 hidden=true
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer] chat-layout MES_LAYER bounds=java.awt.Rectangle[x=-1,y=-1,width=505,height=128] orig=(0,0,14x14) relX=7 relY=7 hidden=true
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer] chat-layout SCROLLAREA bounds=java.awt.Rectangle[x=-1,y=-1,width=489,height=114] orig=(0,0,16x16) relX=0 relY=0 hidden=true
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer] chat-layout CHAT_ALL bounds=java.awt.Rectangle[x=3,y=-22,width=56,height=23] orig=(458,0,56x0) relX=5 relY=0 hidden=false
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer-diag] root=PreEoc stoneArrVarbit=1 canvas=1304x600 offTarget=1504,800
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessResize - [headless-resize] post-resize frame 2: canvas=1304x600 viewport=0x0
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessResize - [headless-resize] post-resize frame 3: canvas=1304x600 viewport=0x0
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessResize - [headless-resize] post-resize frame 4: canvas=1304x600 viewport=0x0
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessResize - [headless-resize] post-resize frame 5: canvas=1304x600 viewport=0x0
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessResize - [headless-resize] post-resize frame 6: canvas=1304x600 viewport=0x0
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessResize - [headless-resize] post-resize frame 7: canvas=1304x600 viewport=0x0
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessResize - [headless-resize] post-resize frame 8: canvas=1304x600 viewport=0x0
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#270 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-002-draw00270.png (1304x600)
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer-diag] STONE0 pre=-9999,-9999 post=null parentLoc=null hidden=? onOp=null
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer-diag] STONE1 pre=-9999,-9999 post=null parentLoc=null hidden=? onOp=null
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer-diag] STONE2 pre=-9999,-9999 post=null parentLoc=null hidden=? onOp=null
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer-diag] STONE3 pre=-9999,-9999 post=null parentLoc=null hidden=? onOp=null
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer-diag] STONE4 pre=-9999,-9999 post=null parentLoc=null hidden=? onOp=null
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer-diag] STONE5 pre=-9999,-9999 post=null parentLoc=null hidden=? onOp=null
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer-diag] STONE6 pre=-9999,-9999 post=null parentLoc=null hidden=? onOp=null
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer-diag] STONE7 pre=-9999,-9999 post=null parentLoc=null hidden=? onOp=null
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer-diag] STONE8 pre=-9999,-9999 post=null parentLoc=null hidden=? onOp=null
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer-diag] STONE9 pre=-9999,-9999 post=null parentLoc=null hidden=? onOp=null
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer-diag] STONE10 pre=-9999,-9999 post=null parentLoc=null hidden=? onOp=null
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer-diag] STONE11 pre=-9999,-9999 post=null parentLoc=null hidden=? onOp=null
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer-diag] STONE12 pre=-9999,-9999 post=null parentLoc=null hidden=? onOp=null
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HudVeneerBridge - [veneer-diag] STONE13 pre=-9999,-9999 post=null parentLoc=null hidden=? onOp=null
+[memwatch t=12.5s] avail=5573.7MB footprint=570.3MB
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#280 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-003-draw00280.png (1304x600)
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#290 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-004-draw00290.png (1304x600)
+[memwatch t=13.0s] avail=5572.8MB footprint=571.2MB
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#300 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:30 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-005-draw00300.png (1304x600)
+2026-06-05 06:36:31 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#310 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:31 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-006-draw00310.png (1304x600)
+2026-06-05 06:36:31 GMT [Client] INFO  n.r.c.headless.MobileChromeBridge - [chrome] CHROME_READ rootKind=PRE_EOC topLevel=165 resized=true activeTab=-1 tabsTotal=14 tabsPresent=0 tabsHidden=0 tabsAbsent=14 tabsZeroSize=0 sidePanel=0 minimap=0 orbs=0 chat=0 viewport=0
+[memwatch t=13.5s] avail=5582.6MB footprint=561.4MB
+2026-06-05 06:36:31 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#320 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:31 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-007-draw00320.png (1304x600)
+2026-06-05 06:36:31 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#330 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:31 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-008-draw00330.png (1304x600)
+2026-06-05 06:36:31 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#340 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:31 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-009-draw00340.png (1304x600)
+[memwatch t=14.0s] avail=5582.4MB footprint=561.6MB
+2026-06-05 06:36:31 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#350 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:32 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-010-draw00350.png (1304x600)
+2026-06-05 06:36:32 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#360 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:32 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-011-draw00360.png (1304x600)
+[memwatch t=14.5s] avail=5589.2MB footprint=554.8MB
+2026-06-05 06:36:32 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#370 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:32 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-012-draw00370.png (1304x600)
+2026-06-05 06:36:32 GMT [Client] INFO  n.r.client.headless.HudDataBridge - [huddata] HUDDATA_READ chatN=2 welcomeMsg=1 hp=12 hpMax=12 pray=1 prayMax=1 energy=100 spec=100 run=1 specEnabled=0 plane=0 px=3252 py=3259 mapAngle=0 players=10 npcs=26 dots=24 live=1
+2026-06-05 06:36:32 GMT [Client] INFO  n.r.client.headless.HudDataBridge - [huddata] SNAPSHOT {"enabled":true,"loggedIn":true,"seq":120,"orbs":{"hp":12,"hpMax":12,"pray":1,"prayMax":1,"energy":100,"spec":100,"run":1,"specEnabled":0,"poison":0,"stamina":0},"minimap":{"plane":0,"px":3252,"py":3259,"mapAngle":0,"players":10,"npcs":26,"dots":[[2,2,4],[2,9,4],[2,10,14],[2,-13,-8],[2,-5,6],[2,-13,-8],[2,-12,3],[2,-8,-8],[2,-13,-7],[2,4,-1],[1,-13,-11],[1,-10,-7],[1,-3,-11],[1,-6,-13],[1,-5,-11],[1,-10,-13],[1,-2,1],[1,-7,-11],[1,-9,-15],[1,-6,-14],[1,-8,-11],[1,1,12],[1,1,5],[1,5,-14]]},"chat":[{"type":"WELCOME","name":"","value":"Welcome to Old School RuneScape.","ts":1780641389},{"type":"DIDYOUKNOW","name":"","value":"Did you know? There is a setting in the Bank settings and on the Bank Deposit interface that lets you lock slots in your inventory so their content doesn't get deposited.</col>","ts":1780641389}]}
+2026-06-05 06:36:32 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#380 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:32 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-013-draw00380.png (1304x600)
+[memwatch t=15.0s] avail=5588.8MB footprint=555.2MB
+2026-06-05 06:36:32 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#390 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:32 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-014-draw00390.png (1304x600)
+2026-06-05 06:36:33 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#400 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:33 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-015-draw00400.png (1304x600)
+2026-06-05 06:36:33 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#410 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:33 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-016-draw00410.png (1304x600)
+[memwatch t=15.5s] avail=5589.0MB footprint=555.0MB
+2026-06-05 06:36:33 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#420 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:33 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-017-draw00420.png (1304x600)
+2026-06-05 06:36:33 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#430 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:33 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-018-draw00430.png (1304x600)
+[memwatch t=16.0s] avail=5589.2MB footprint=554.8MB
+2026-06-05 06:36:33 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#440 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:33 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-019-draw00440.png (1304x600)
+2026-06-05 06:36:34 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#450 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:34 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] wrote frame-LOGGED_IN-020-draw00450.png (1304x600)
+[memwatch t=16.5s] avail=5587.4MB footprint=556.6MB
+2026-06-05 06:36:34 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#460 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:34 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#470 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:34 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#480 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=17.0s] avail=5587.8MB footprint=556.2MB
+2026-06-05 06:36:34 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#490 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:35 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#500 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=17.5s] avail=5592.7MB footprint=551.3MB
+2026-06-05 06:36:35 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#510 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=18.0s] avail=5586.1MB footprint=557.9MB
+2026-06-05 06:36:35 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#520 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:36 GMT [pool-4-thread-1] ERROR n.r.c.util.RunnableExceptionLogger - Uncaught exception in runnable net.runelite.client.plugins.worldhopper.WorldHopperPlugin$$Lambda/0x0000000129d4a1e8@169af8de
+java.lang.NoClassDefFoundError: Could not initialize class net.runelite.client.plugins.worldhopper.ping.RLLibC
+	at net.runelite.client.plugins.worldhopper.ping.Ping.icmpPing(Ping.java:149)
+	at net.runelite.client.plugins.worldhopper.ping.Ping.ping(Ping.java:99)
+	at net.runelite.client.plugins.worldhopper.WorldHopperPlugin.ping(WorldHopperPlugin.java:965)
+	at net.runelite.client.plugins.worldhopper.WorldHopperPlugin.pingNextWorld(WorldHopperPlugin.java:891)
+	at net.runelite.client.util.RunnableExceptionLogger.run(RunnableExceptionLogger.java:41)
+	at java.base/java.util.concurrent.Executors$RunnableAdapter.call(Unknown Source)
+	at java.base/java.util.concurrent.FutureTask.runAndReset(Unknown Source)
+	at java.base/java.util.concurrent.ScheduledThreadPoolExecutor$ScheduledFutureTask.run(Unknown Source)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(Unknown Source)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(Unknown Source)
+	at java.base/java.lang.Thread.run(Unknown Source)
+Caused by: java.lang.ExceptionInInitializerError: Exception java.lang.NoClassDefFoundError: Could not initialize class com.sun.jna.Native [in thread "pool-4-thread-1"]
+	at net.runelite.client.plugins.worldhopper.ping.RLLibC.<clinit>(RLLibC.java:34)
+	at net.runelite.client.plugins.worldhopper.ping.Ping.icmpPing(Ping.java:149)
+	at net.runelite.client.plugins.worldhopper.ping.Ping.ping(Ping.java:99)
+	at net.runelite.client.plugins.worldhopper.WorldHopperPlugin.ping(WorldHopperPlugin.java:965)
+	at net.runelite.client.plugins.worldhopper.WorldHopperPlugin.pingInitialWorlds(WorldHopperPlugin.java:850)
+	at net.runelite.client.util.RunnableExceptionLogger.run(RunnableExceptionLogger.java:41)
+	at java.base/java.util.concurrent.Executors$RunnableAdapter.call(Unknown Source)
+	at java.base/java.util.concurrent.FutureTask.run(Unknown Source)
+	... 4 common frames omitted
+2026-06-05 06:36:36 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#530 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=18.5s] avail=5584.5MB footprint=559.5MB
+2026-06-05 06:36:36 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#540 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:36 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#550 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:36 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#560 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=19.0s] avail=5584.8MB footprint=559.2MB
+2026-06-05 06:36:36 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#570 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:37 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#580 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=19.5s] avail=5583.5MB footprint=560.5MB
+2026-06-05 06:36:37 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#590 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:37 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#600 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:37 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#610 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=20.0s] avail=5583.7MB footprint=560.3MB
+2026-06-05 06:36:37 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#620 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:38 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#630 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:38 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#640 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=20.5s] avail=5582.2MB footprint=561.8MB
+2026-06-05 06:36:38 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#650 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:38 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#660 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=21.0s] avail=5582.3MB footprint=561.7MB
+2026-06-05 06:36:38 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#670 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:39 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#680 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:39 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#690 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=21.5s] avail=5587.9MB footprint=556.1MB
+2026-06-05 06:36:39 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#700 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:39 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#710 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=22.0s] avail=5587.2MB footprint=556.8MB
+2026-06-05 06:36:39 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#720 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:40 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#730 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:40 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#740 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=22.5s] avail=5583.0MB footprint=561.0MB
+2026-06-05 06:36:40 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#750 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:40 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#760 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=23.0s] avail=5583.0MB footprint=561.0MB
+2026-06-05 06:36:40 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#770 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:41 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#780 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:41 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#790 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=23.5s] avail=5584.7MB footprint=559.3MB
+2026-06-05 06:36:41 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#800 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:41 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#810 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=24.0s] avail=5584.9MB footprint=559.1MB
+2026-06-05 06:36:41 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#820 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:42 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#830 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:42 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#840 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=24.5s] avail=5583.5MB footprint=560.5MB
+2026-06-05 06:36:42 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#850 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:42 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#860 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=25.0s] avail=5583.5MB footprint=560.5MB
+2026-06-05 06:36:42 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#870 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:43 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#880 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:43 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#890 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=25.5s] avail=5581.9MB footprint=562.1MB
+2026-06-05 06:36:43 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#900 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:43 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#910 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=26.0s] avail=5582.0MB footprint=562.0MB
+2026-06-05 06:36:43 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#920 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:44 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#930 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:44 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#940 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=26.5s] avail=5585.0MB footprint=559.0MB
+2026-06-05 06:36:44 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#950 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:44 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#960 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=27.0s] avail=5584.8MB footprint=559.2MB
+2026-06-05 06:36:44 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#970 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:45 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#980 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:45 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#990 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=27.5s] avail=5527.0MB footprint=617.0MB
+2026-06-05 06:36:45 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1000 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:45 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1010 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=28.0s] avail=5526.6MB footprint=617.4MB
+2026-06-05 06:36:45 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1020 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:46 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1030 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:46 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1040 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=28.5s] avail=5525.1MB footprint=618.9MB
+2026-06-05 06:36:46 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1050 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:46 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1060 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=29.0s] avail=5525.1MB footprint=618.9MB
+2026-06-05 06:36:46 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1070 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:47 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1080 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:47 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1090 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+[memwatch t=29.5s] avail=5523.6MB footprint=620.4MB
+2026-06-05 06:36:47 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1100 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:47 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1110 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:47 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1120 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:48 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1130 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:48 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1140 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:48 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1150 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:48 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1160 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:48 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1170 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:49 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1180 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:49 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1190 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:49 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1200 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:49 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1210 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:49 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1220 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:50 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1230 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:50 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1240 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:50 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1250 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:50 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1260 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:50 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1270 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:51 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1280 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:51 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1290 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:51 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1300 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:51 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1310 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:51 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1320 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:52 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1330 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:52 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1340 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:52 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1350 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:52 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1360 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:52 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1370 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:53 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1380 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:53 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1390 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:53 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1400 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:53 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1410 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:53 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1420 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:54 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1430 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:54 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1440 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:54 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1450 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:54 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1460 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:54 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1470 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:55 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1480 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:55 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1490 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:55 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1500 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:55 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1510 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:55 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1520 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:56 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1530 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:56 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1540 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:56 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1550 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:56 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1560 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:56 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1570 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:57 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1580 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:57 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1590 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:57 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1600 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:57 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1610 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:57 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1620 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:58 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1630 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:58 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1640 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:58 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1650 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:58 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1660 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:58 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1670 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:59 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1680 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:59 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1690 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:59 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1700 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:59 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1710 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:36:59 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1720 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:00 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1730 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:00 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1740 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:00 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1750 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:00 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1760 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:00 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1770 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:01 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1780 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:01 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1790 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:01 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1800 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:01 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1810 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:01 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1820 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:02 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1830 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:02 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1840 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:02 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1850 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:02 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1860 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:02 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1870 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:03 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1880 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:03 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1890 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:03 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1900 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:03 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1910 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:03 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1920 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:04 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1930 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:04 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1940 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:04 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1950 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:04 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1960 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:04 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1970 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:05 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1980 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:05 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1990 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:05 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#2000 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:05 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#2010 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:05 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#2020 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:06 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#2030 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:06 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#2040 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:06 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#2050 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:06 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#2060 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:06 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#2070 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:07 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#2080 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:07 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#2090 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:07 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#2100 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
+2026-06-05 06:37:07 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#2110 nullGraphics=0 capturedFrames=25 state=LOGGED_IN
