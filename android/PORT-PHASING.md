@@ -367,11 +367,25 @@ fresh APK. md5-gated soak summary.
 
 ---
 
-## 3G. Track G — GPU rendering (the prerequisite for a *working* 117HD)
+## 3G. Track G — GPU rendering (base `gpu` first; 117HD best-effort on top)
 
-**This is a parallel high-risk track, the Android counterpart to iOS "Track B" — and the single biggest scope
-decision in this document.** It exists because of an explicit product requirement: *the user must be able to
-enable the 117HD plugin and have it actually render HD.*
+**This is a parallel high-risk track, the Android counterpart to iOS "Track B."** It exists because of a
+product desire for HD visuals — but **"117HD" is three different decisions wearing one name, and conflating
+them is the trap** (over-invest, or over-promise):
+1. **Do we want HD *visuals* / a real-client look?** — the actual emotional ask.
+2. **Do we want the base `gpu` plugin** (GPU rasterization: sharper, higher FPS, AA, draw distance)?
+3. **Do we want the *117HD plugin specifically*** (compute-shader lighting/shadows/water on top of `gpu`)?
+
+**Strategic reframe (decided): the target is "GPU rendering, with 117HD best-effort," not "117HD works."**
+Base `gpu` is the real prize and the legitimate first target — it is ~80% of the "looks like a real client"
+win and the foundation 117HD requires anyway. 117HD's shadows/water/post are the last 20% *and* the riskiest
+20%. **Do not promise the user "enable 117HD → HD"** — that may be unkeepable. Promise "GPU rendering: sharper
++ faster"; frame full 117HD as best-effort that may land partially.
+
+**Honest odds (my estimate, to set expectations):** AG0 green ~90% · AG1 green ~50% (the real coin-flip) ·
+base `gpu` ships if AG1 green ~60% · *full* 117HD ~20% (partial ~60%). **Expected outcome: base GPU rendering
+probably yes, full 117HD probably no, partial 117HD plausible.** This is exactly *why* Q8 keeps it off the v1
+gate.
 
 **Why this is a track, not a toggle.** Both ports render the 3D scene on the **CPU** (CACIO software
 rasterizer) and hand the host an `int[]` framebuffer (`JavaBridge.snapshot`/`getFramePixels`). 117HD — and the
@@ -418,20 +432,31 @@ RuneLite's GPU stack. Target order (117HD builds on the same context/native infr
 - `librlawt`/`AWTContext` binds GL to the AWT Canvas's native peer; the headless CTC has none → must be
   **replaced by an offscreen/Surface EGL-context shim**, *without touching the unmodified plugin Java* (iOS
   Claim F). This is the one real native/Java-adjacent piece — and it is **load-bearing**, since `GpuPlugin`
-  constructs `AWTContext` directly from the canvas peer.
+  constructs `AWTContext` directly from the canvas peer (`new AWTContext(client.getCanvas())`, can't be avoided
+  without editing the plugin). **Resolution (the constraint IS satisfiable):** `AWTContext` is only the JNI face
+  of `librlawt.so`. **Reimplement `librlawt.so` for Android** — same JNI contract, but it ignores the (peerless)
+  canvas handle and creates an EGL context against a pbuffer / the `SurfaceView` Surface. `AWTContext.java` and
+  `GpuPlugin.java` stay byte-for-byte unmodified. So the "no plugin Java change" rule holds — **the work is a
+  native drop-in, not a Java fork.** (Same shaded jar both ports embed; only the native `.so` differs by ABI.)
 - **Desktop-GL→GLES semantic down-port** (UBO layout, `glClipControl` Z-range, `glMultiDrawElements`,
   texture-array `glTexStorage3D`, compute) — via the translation layer or a shader port; some 117HD features
   may not survive cleanly.
 
 **Sub-phases (cheapest-correct first, strict go/no-go gates — mirrors the iOS B0→B3 ladder):**
 
-- **AG0 — GLES recon (a day, HARD GATE).** On the **real target device** (not swiftshader, which under-reports),
-  query `glGetString(GL_VERSION/RENDERER/SHADING_LANGUAGE_VERSION)` + `GL_MAX_COMPUTE_*`. Confirms base `gpu`
-  (≥ GLES 3.0 / 3.3-core-equiv) and/or 117HD (≥ GLES 3.1 + compute) are even reachable. md5-gated tier readout.
-- **AG1 — offscreen/Surface GLES context + bionic-LWJGL probe (weeks).** From the on-device JVM, load the
-  PojavLauncher-lineage bionic LWJGL, create an EGL context (pbuffer or on the SurfaceView Surface), compile a
-  trivial vertex+fragment shader, render a triangle → FBO → read back / present. Settles the B1/B3/Claim-E/F
-  minima before any plugin port.
+- **AG0 — GLES recon (a day, HARD GATE — run NOW, standalone).** Do this *immediately*, decoupled from the
+  A-track and even from A1 — it's information-cheap and decision-rich. On the **real target device** (not
+  swiftshader, which under-reports), query `glGetString(GL_VERSION/RENDERER/SHADING_LANGUAGE_VERSION)` +
+  `GL_MAX_COMPUTE_*`. Confirms base `gpu` (≥ GLES 3.0 / 3.3-core-equiv) and/or 117HD (≥ GLES 3.1 + compute) are
+  even reachable. md5-gated tier readout. (Expected green — any modern arm64 device is GLES 3.1+ compute.)
+- **AG1 — THE go/no-go for the entire track. Define it ruthlessly; make it fail FAST (weeks).** From the
+  on-process HotSpot, load the PojavLauncher-lineage bionic LWJGL, create an EGL context (pbuffer or on the
+  SurfaceView Surface) with **no GLFW window**, and — the crux — get **`GL.createCapabilities()` to report
+  `OpenGL33 == true`**, then compile a trivial shader, draw a triangle → read back / present. **This single
+  result gates everything downstream.** The likely death is here, not in shaders: a real GLES context reports
+  *GLES*, not desktop GL 3.3, so the translation layer (gl4es/ANGLE) must present a desktop-GL face that LWJGL
+  binds **headlessly** — exactly the thing Pojav does only *through* GLFW. Design AG1 to die cheaply at that
+  binding step. **Green → base `gpu` is genuinely reachable and worth funding AG2. Red → STOP before AG2.**
 - **AG2 — base `gpu` plugin bring-up (weeks–months; THE render-path decision).** Replace `librlawt` with the
   EGL shim; down-port `gpu`'s GL/GLSL to the available GLES tier (or run it through gl4es/ANGLE); route output.
   **Render-path decision (DECIDED — staged, see §5 Q9):** use `glReadPixels`→`JavaBridge` int[] through the
@@ -439,9 +464,12 @@ RuneLite's GPU stack. Target order (117HD builds on the same context/native infr
   then move to **direct EGL-to-Surface for production** once the pipeline is proven (readback's GPU→CPU→GPU
   round-trip throttles FPS). **Resolves the HD↔FPS tension on its own** and is the legitimate high-value first
   GPU target. Milestone: the live scene renders on GPU, FPS + sharpness both up.
-- **AG3 — 117HD/RLHD (largest; partial success expected).** The compute pipeline + heavy shaders on the proven
-  base. GLES 3.1 compute makes it more reachable than on iOS, but expect some features (shadows/water/post) to
-  need porting or to be dropped. **This is the phase that makes "enable 117HD" actually deliver HD.**
+- **AG3 — 117HD/RLHD (largest; partial success the realistic target, not full).** The compute pipeline + heavy
+  shaders on the proven base. GLES 3.1 compute makes it more reachable than on iOS, but the desktop-GL→GLES
+  down-port (UBO layout, `glClipControl` Z-range, SSBOs, the lighting/shadow/water/post passes) is large and
+  some features genuinely won't survive. **Honest target: HD lighting/textures plausibly; shadows/water/post
+  best-effort.** Only attempt after AG2 ships and there's appetite for the long tail. Don't let "enable 117HD"
+  become a promise of *full* 117HD.
 
 **Dependencies & intersections:**
 - **Plugin enable-ability:** needs **A4/A5** (plugin hub) so 117HD appears and can be toggled.
@@ -455,6 +483,15 @@ RuneLite's GPU stack. Target order (117HD builds on the same context/native infr
 as a hard go/no-go before committing to AG2. **But** the base `gpu` plugin is a legitimate, high-value,
 *Android-favoured* first target that on its own transforms the visuals — and unlike iOS, the foundation
 (bionic LWJGL + GLES compute + EGL-on-Surface + free JIT) is already largely under us.
+
+**Calendar guidance (pull the recon forward, even though the track is post-v1).** Track G does not *gate*
+anything (Q8), but **GPU-on-Android is the one axis where this port can genuinely beat iOS** — iOS Track B is
+stuck on an iOS-arm64 LWJGL rebuild + ANGLE→Metal, while Android has native GLES compute + the Pojav lineage.
+The information that tells you whether that upside is real (AG0 now; AG1 as a funded spike once the playable
+shell A0–A2 exists) is *cheap relative to the upside*. So: don't sequence AG0/AG1 dead-last just because the
+track is a fast-follow — buy the cheap, high-leverage information early; commit the expensive AG2/AG3 build only
+on a green AG1. If AG1 is red, the honest answer is "117HD/GPU is not happening on this stack" and the CPU shell
+*is* the product — which is fine, because v1 never depended on it.
 
 ---
 
@@ -565,10 +602,10 @@ highest risk, lowest confidence. A8 stabilizes/ships.
 | **A6** | Native tab-rails + chat-at-top | `mobilechrome`, `hudveneer` | `MobileChromeBridge`,`HudVeneerBridge` | P6 chrome | Med |
 | **A7** | Native HUD veneers + edge-to-edge | `huddata` (+`resize`) | `HudDataBridge` | W3 Track A | **High** |
 | **A8** | Soak + signed APK + install UX | — | — | P7–P8 | Low-Med |
-| **AG0** | GLES tier recon (hard gate) | — | — (recon) | Track B step 0 | **High** |
-| **AG1** | Offscreen/Surface GLES ctx + bionic LWJGL probe | — | LWJGL/EGL shim | Track B step 1 | **High** |
-| **AG2** | Base `gpu` plugin (GPU scene; fixes HD↔FPS) | (gpu plugin enabled) | `librlawt` shim + render path | Track B step 2 | **High** |
-| **AG3** | 117HD/RLHD (compute shaders; HD) | (117HD enabled via hub) | GPU stack | Track B step 3 | **Highest** |
+| **AG0** | GLES tier recon (hard gate; **run NOW**) | — | — (recon) | Track B step 0 | **High** |
+| **AG1** | EGL ctx + bionic LWJGL → `OpenGL33` (**THE go/no-go**) | — | LWJGL/EGL shim | Track B step 1 | **High** |
+| **AG2** | Base `gpu` plugin (GPU scene; fixes HD↔FPS) | (gpu plugin enabled) | native `librlawt` reimpl + render path | Track B step 2 | **High** |
+| **AG3** | 117HD/RLHD (compute shaders; **partial HD best-effort**) | (117HD enabled via hub) | GPU stack | Track B step 3 | **Highest** |
 
 **Track G runs as a parallel high-risk track** (Android counterpart to iOS Track A/B): the A0–A8 mainline
 delivers the *playable CPU-rendered shell*; Track G adds GPU rendering and is what makes 117HD actually work.
