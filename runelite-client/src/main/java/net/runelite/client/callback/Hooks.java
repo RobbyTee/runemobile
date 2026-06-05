@@ -490,6 +490,12 @@ public class Hooks implements Callbacks
 			// -Drunelite.minimapreloc=true. Desktop de-risk only.
 			net.runelite.client.headless.MinimapRelocateProbe.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.TabScriptProbe.isEnabled())
+		{
+			// W3 Feature-A (A4): can a tab be opened by REPLAYING the stone's op script (so the stones can be
+			// hidden + the gray cover removed)? Mutates tab state + hides stones; gated -Drunelite.tabscript=true.
+			net.runelite.client.headless.TabScriptProbe.tick(client, client.getGameState());
+		}
 		if (net.runelite.client.headless.MenuPeekBridge.isEnabled())
 		{
 			// W3 touch-targeting: publish the read-only menu-peek snapshot the native press-and-peek UI polls
