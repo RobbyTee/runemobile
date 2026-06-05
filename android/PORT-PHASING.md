@@ -337,6 +337,81 @@ fresh APK. md5-gated soak summary.
 
 ---
 
+## 3G. Track G — GPU rendering (the prerequisite for a *working* 117HD)
+
+**This is a parallel high-risk track, the Android counterpart to iOS "Track B" — and the single biggest scope
+decision in this document.** It exists because of an explicit product requirement: *the user must be able to
+enable the 117HD plugin and have it actually render HD.*
+
+**Why this is a track, not a toggle.** Both ports render the 3D scene on the **CPU** (CACIO software
+rasterizer) and hand the host an `int[]` framebuffer (`JavaBridge.snapshot`/`getFramePixels`). 117HD — and the
+base RuneLite `gpu` plugin it builds on — **replace that rasterizer with a GPU pipeline**: `org.lwjgl.opengl.
+GL33/GL45` (verified: 38 `glGet*` calls in `runelite-client/.../plugins/gpu/`), the `net.runelite.rlawt.
+AWTContext` native lib (`librlawt`, binds a GL context to the AWT Canvas peer), desktop GLSL, and — for 117HD —
+a **compute-shader** pipeline (GL 4.3 / GL ES 3.1 compute) plus heavy lighting/shadow/water shaders. The LWJGL
+natives in our build ship **desktop-only** (`build.gradle.kts:93` `classifier("natives-$platform")`). So
+enabling 117HD with no GPU track = it appears in the hub (A5) and **fails to start** (no GL context) — exactly
+how the iOS plugin panel marks GPU plugins "couldn't start (incompatible)". Making it *work* requires porting
+RuneLite's GPU stack. Target order (117HD builds on the same context/native infra): **base `gpu` first**, then
+117HD.
+
+**Why Android is a much better GPU target than iOS** (this is the strategic point — the iOS GPU brief
+`ios/AUDIT-BRIEF-w3-gpu-renderer.md` blockers B1/B2/B3 + Claim D largely dissolve here):
+- **B1 (native LWJGL):** iOS needs an immature iOS-arm64 LWJGL rebuild. **Android: the PojavLauncher/Amethyst
+  lineage our bionic JRE already comes from ships a bionic-arm64 LWJGL + GL-translation stack
+  (gl4es / holy-gl4es / LTW / ANGLE) built precisely to run LWJGL desktop-GL Minecraft on Android.** The
+  hardest binary blocker is largely pre-solved in our own ecosystem.
+- **B2 (no desktop GL):** iOS has only GLES(deprecated)+Metal → needs ANGLE→Metal. **Android exposes native
+  GLES 3.1+ (with compute) and Vulkan** → 117HD's compute pipeline is *directly reachable*; the same
+  translation libs handle desktop-GL→GLES.
+- **B3 (headless/no window):** iOS needs an EAGL/Metal-backed FBO. **Android: a `SurfaceView` natively hosts an
+  EGL/GLES context** — render the engine's GL straight onto the Surface (the "bigger win" restructure the iOS
+  brief describes is the *natural* Android path), or `glReadPixels`→`int[]` for a first cut.
+- **iOS Claim D (GL driver vs the JIT mirror / exception-port setup):** a **non-issue** on Android — free JIT,
+  no code-cache mirror, no Mach-port surgery.
+
+**Shared blockers that remain (same as iOS):**
+- `librlawt`/`AWTContext` binds GL to the AWT Canvas's native peer; the headless CTC has none → must be
+  **replaced by an offscreen/Surface EGL-context shim**, *without touching the unmodified plugin Java* (iOS
+  Claim F). This is the one real native/Java-adjacent piece.
+- **Desktop-GL→GLES semantic down-port** (UBO layout, `glClipControl` Z-range, `glMultiDrawElements`,
+  texture-array `glTexStorage3D`, compute) — via the translation layer or a shader port; some 117HD features
+  may not survive cleanly.
+
+**Sub-phases (cheapest-correct first, strict go/no-go gates — mirrors the iOS B0→B3 ladder):**
+
+- **AG0 — GLES recon (a day, HARD GATE).** On the **real target device** (not swiftshader, which under-reports),
+  query `glGetString(GL_VERSION/RENDERER/SHADING_LANGUAGE_VERSION)` + `GL_MAX_COMPUTE_*`. Confirms base `gpu`
+  (≥ GLES 3.0 / 3.3-core-equiv) and/or 117HD (≥ GLES 3.1 + compute) are even reachable. md5-gated tier readout.
+- **AG1 — offscreen/Surface GLES context + bionic-LWJGL probe (weeks).** From the on-device JVM, load the
+  PojavLauncher-lineage bionic LWJGL, create an EGL context (pbuffer or on the SurfaceView Surface), compile a
+  trivial vertex+fragment shader, render a triangle → FBO → read back / present. Settles the B1/B3/Claim-E/F
+  minima before any plugin port.
+- **AG2 — base `gpu` plugin bring-up (weeks–months; THE render-path decision).** Replace `librlawt` with the
+  EGL shim; down-port `gpu`'s GL/GLSL to the available GLES tier (or run it through gl4es/ANGLE); route output
+  **either** via `glReadPixels`→`JavaBridge` int[] (keep the current SurfaceView blit — simple first cut)
+  **or** directly onto the SurfaceView EGL surface (bypass the CPU blit — the bigger win + the right Android
+  architecture). **Resolves the HD↔FPS tension on its own** and is the legitimate high-value first GPU target.
+  Milestone: the live scene renders on GPU, FPS + sharpness both up.
+- **AG3 — 117HD/RLHD (largest; partial success expected).** The compute pipeline + heavy shaders on the proven
+  base. GLES 3.1 compute makes it more reachable than on iOS, but expect some features (shadows/water/post) to
+  need porting or to be dropped. **This is the phase that makes "enable 117HD" actually deliver HD.**
+
+**Dependencies & intersections:**
+- **Plugin enable-ability:** needs **A4/A5** (plugin hub) so 117HD appears and can be toggled.
+- **Render path:** AG2's "glReadPixels vs direct-to-Surface" choice **changes the core blit** the rest of the
+  app is built on — it intersects **A7** (edge-to-edge) and the **2D-UI compositing** (the `gpu` plugin's
+  `drawUi` uploads the 2D framebuffer as a GL texture; the more of the HUD that A7 makes native, the less must
+  be composited). Track G and A7 **meet at the same render seam** (`JavaBridge.snapshot` / the blit) — exactly
+  as iOS Track A and Track B do. Coordinate them.
+
+**Risk: HIGHEST in the project** (multi-week-to-months, real chance of only partial 117HD success). Run AG0+AG1
+as a hard go/no-go before committing to AG2. **But** the base `gpu` plugin is a legitimate, high-value,
+*Android-favoured* first target that on its own transforms the visuals — and unlike iOS, the foundation
+(bionic LWJGL + GLES compute + EGL-on-Surface + free JIT) is already largely under us.
+
+---
+
 ## 4. Cross-cutting Android workstreams
 
 ### 4.1 The host↔bridge wiring pattern (repeated every phase)
@@ -385,8 +460,18 @@ on screen-close and `onPause`/`onStop`, or plugin toggles + config edits silentl
    portrait — A0 fixes this, but confirm the product intent).
 6. **Parallelism:** A4 (plugin control) and A3 (login) are independent of the input phases — worth running in
    parallel if effort allows? Or keep strictly serial for the brief→review→GREEN cadence?
-7. **Any Java changes at all?** This plan asserts ~zero new Java. Is there a phase the reviewer believes needs
-   a Java-side change (e.g. an Android-specific bridge method) that we've missed?
+7. **Any Java changes at all?** This plan asserts ~zero new Java *for the A0–A8 mainline*. Is there a phase the
+   reviewer believes needs a Java-side change (e.g. an Android-specific bridge method) that we've missed?
+   (Track G is the explicit exception — `librlawt` replacement + the render-path shim are real native/Java work.)
+8. **Is a working 117HD a v1 requirement (gating) or post-core-parity?** (§3G) — the product ask is "the user can
+   enable 117HD." Does v1 ship the *playable CPU shell* (A0–A8, 117HD appears-but-incompatible) with Track G as a
+   fast-follow, or is GPU rendering a v1 blocker? This is the biggest scope call in the plan.
+9. **AG2 render path: `glReadPixels`→int[] (keep the current blit) vs render-GL-directly-to-the-SurfaceView?**
+   The latter is faster and the right Android architecture but restructures the core render seam (and intersects
+   A7). Which for the first cut?
+10. **GPU stack: lean on the PojavLauncher/Amethyst GL-translation libs (gl4es/LTW/ANGLE + bionic LWJGL) the way
+   our JRE's lineage already does, or hand-port `gpu` to native GLES?** And confirm the AG0 target-device GLES
+   tier (compute support) before committing.
 
 ---
 
@@ -411,11 +496,20 @@ highest risk, lowest confidence. A8 stabilizes/ships.
 | **A6** | Native tab-rails + chat-at-top | `mobilechrome`, `hudveneer` | `MobileChromeBridge`,`HudVeneerBridge` | P6 chrome | Med |
 | **A7** | Native HUD veneers + edge-to-edge | `huddata` (+`resize`) | `HudDataBridge` | W3 Track A | **High** |
 | **A8** | Soak + signed APK + install UX | — | — | P7–P8 | Low-Med |
+| **AG0** | GLES tier recon (hard gate) | — | — (recon) | Track B step 0 | **High** |
+| **AG1** | Offscreen/Surface GLES ctx + bionic LWJGL probe | — | LWJGL/EGL shim | Track B step 1 | **High** |
+| **AG2** | Base `gpu` plugin (GPU scene; fixes HD↔FPS) | (gpu plugin enabled) | `librlawt` shim + render path | Track B step 2 | **High** |
+| **AG3** | 117HD/RLHD (compute shaders; HD) | (117HD enabled via hub) | GPU stack | Track B step 3 | **Highest** |
+
+**Track G runs as a parallel high-risk track** (Android counterpart to iOS Track A/B): the A0–A8 mainline
+delivers the *playable CPU-rendered shell*; Track G adds GPU rendering and is what makes 117HD actually work.
+Whether it gates v1 or is a fast-follow is open question #8. AG0+AG1 are a strict go/no-go before AG2.
 
 **Definition of done (Android):** a self-contained sideloaded/installed Android app — launch → on-device Jagex
 login → in-game on live OSRS, full touch + Jagex-Mobile-style UI, RuneLite plugins toggle/config natively with
 overlays composited, playable FPS, stable for hours — **no host, no desktop, no streaming, and (unlike iOS) no
-per-launch JIT-attach ceremony.**
+per-launch JIT-attach ceremony.** *117HD/GPU rendering (Track G) is a separate, Android-favoured workstream;
+whether it is in the v1 definition of done is a product decision (open question #8).*
 
 ---
 
