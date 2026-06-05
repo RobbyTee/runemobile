@@ -213,12 +213,15 @@ public final class HudVeneerBridge
 				}
 			}
 
-			// Hide the engine tab stones (the native 2-col grid replaces them) — re-applied each frame.
+			// "Hide" the engine tab stones by RELOCATING them off-screen (setHidden does NOT stick for the stones —
+			// they are re-shown each frame; StoneHideProbe confirmed off-screen forced-position is the only thing
+			// that removes them). The native 2-col grid replaces them and openTab works regardless of stone position.
 			if (hideStones)
 			{
+				final int ox = c.getCanvasWidth() + 200, oy = c.getCanvasHeight() + 200;
 				for (final int id : stoneIds(preEoc))
 				{
-					hide(c, id);
+					relocateOff(c, id, ox, oy);
 				}
 			}
 
@@ -229,6 +232,36 @@ public final class HudVeneerBridge
 				pendingOpenTab = -1;
 				openTabNow(c, preEoc, openIdx);
 			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	/** Force a widget to an absolute canvas position (setForcedPosition is parent-relative, so subtract the
+	 *  parent's live canvas location). Used to push the tab stones off-screen. */
+	private static void relocateOff(Client c, int id, int ax, int ay)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			if (w == null)
+			{
+				return;
+			}
+			int px = 0, py = 0;
+			final Widget p = w.getParent();
+			if (p != null)
+			{
+				final net.runelite.api.Point pl = p.getCanvasLocation();
+				if (pl != null)
+				{
+					px = pl.getX();
+					py = pl.getY();
+				}
+			}
+			w.setForcedPosition(ax - px, ay - py);
+			w.revalidate();
 		}
 		catch (RuntimeException ignore)
 		{

@@ -496,6 +496,12 @@ public class Hooks implements Callbacks
 			// hidden + the gray cover removed)? Mutates tab state + hides stones; gated -Drunelite.tabscript=true.
 			net.runelite.client.headless.TabScriptProbe.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.StoneHideProbe.isEnabled())
+		{
+			// W3 Feature-A (A4): setHidden vs off-screen forced-position — which actually removes the tab stones?
+			// Mutates positions/hidden; gated -Drunelite.stonehide=true. Desktop de-risk only.
+			net.runelite.client.headless.StoneHideProbe.tick(client, client.getGameState());
+		}
 		if (net.runelite.client.headless.MenuPeekBridge.isEnabled())
 		{
 			// W3 touch-targeting: publish the read-only menu-peek snapshot the native press-and-peek UI polls
