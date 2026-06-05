@@ -9,6 +9,7 @@
 #import <libkern/OSCacheControl.h>
 #import <stdatomic.h>
 #import "jni/jni.h"
+#import "routec_gl_jni.h"   // W3 GPU Route C: RouteC_registerGLNatives(env) — the JNI GL bridge registration
 
 // --- csops / CS_DEBUGGED (private; same probe Amethyst/StikDebug rely on) -----
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
@@ -663,7 +664,17 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     // §6.2: the shaded RuneLite client jar (all deps) + a writable RuneLite home for the gamepack
     // cache, and the headless capture dir (HeadlessCapture dumps mainBufferProvider PNGs there).
     NSString *shadedPath = [[NSBundle mainBundle] pathForResource:@"client-1.12.28-SNAPSHOT-shaded" ofType:@"jar"];
-    NSString *classpath  = shadedPath ? [NSString stringWithFormat:@"%@:%@", shadedPath, jarPath] : jarPath;
+    NSString *classpath;
+    if (self.routecL1Mode) {
+        // L1 kill-test: routec-l1.jar (facade-native + RouteCL1Probe) ALONE — no shaded jar, no LWJGL, so the
+        // facade is provably the only provider and the probe isolates the JNI bridge.
+        NSString *l1jar = [[NSBundle mainBundle] pathForResource:@"routec-l1" ofType:@"jar"];
+        if (!l1jar) { log(@"[jvm] FATAL: routec-l1.jar not found in bundle"); return -11; }
+        classpath = l1jar;
+        log([NSString stringWithFormat:@"[jvm] ROUTEC L1 mode — classpath = %@", classpath]);
+    } else {
+        classpath = shadedPath ? [NSString stringWithFormat:@"%@:%@", shadedPath, jarPath] : jarPath;
+    }
     NSString *captureDir = [docs stringByAppendingPathComponent:@"rl-capture"];
     // Clear stale frames from prior runs: the draw counter resets each launch, so an old run's
     // higher-numbered frame would otherwise win the W3 shell's lexical-newest pick (and disk grows).
@@ -876,7 +887,21 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     //   "[headless-capture] … nullGraphics=0" + "wrote frame-LOGIN_SCREEN-*.png" -> §6.2 login render OK
     // PNGs land in Documents/rl-capture/. Earlier entrypoints: AwtSmoke (§6.1), UnsafePokeActivation
     // (§6.0), JitProbe/Bench/GlyphSmoke (Phase-1).
-    callMain(env, "DeviceHeadlessBoot", @[], log);
+    // W3 GPU Route C: register the JNI GL bridge natives onto the facade classes (GLALL / AWTContext / GL)
+    // BEFORE the probe/plugin runs. Only in Route C mode — the facade classes aren't on the normal classpath,
+    // so a normal boot would FindClass-fail (harmless, but we skip it). Non-fatal: log + clear any pending
+    // exception so the VM keeps a clean state.
+    if (self.routecL1Mode) {
+        jint rr = RouteC_registerGLNatives(env);
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+        log([NSString stringWithFormat:@"[jvm] RouteC_registerGLNatives rc=%d (%@)", rr, rr == 0 ? @"OK" : @"ERR — facade classes not found"]);
+    }
+
+    if (self.routecL1Mode) {
+        callMain(env, "RouteCL1Probe", @[], log);   // GPU Route C L1 kill-test (verdict -> jvm-stdio.log)
+    } else {
+        callMain(env, "DeviceHeadlessBoot", @[], log);
+    }
 
     atomic_store(&gVM, NULL);   // VM going away — stop the bridge before DestroyJavaVM
     (*vm)->DestroyJavaVM(vm);

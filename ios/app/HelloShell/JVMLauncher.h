@@ -14,6 +14,12 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Set on the main thread before -runProbesWithLog: (computed from the screen aspect). Nil = 765x503.
 @property (nonatomic, copy, nullable) NSString *resizeSpec;
 
+/// W3 GPU Route C — when YES, -runProbesWithLog: boots the L1 kill-test (routec-l1.jar ALONE on the classpath,
+/// RouteC_registerGLNatives after VM create, callMain RouteCL1Probe) instead of the full RuneLite boot. The
+/// probe asserts GL.createCapabilities().OpenGL33 + real core GL calls work through the JNI bridge on a live
+/// EAGL ES3 context — the cheapest device gate for Route C. Set on the main thread before -runProbesWithLog:.
+@property (nonatomic, assign) BOOL routecL1Mode;
+
 /// CS_DEBUGGED gate (the W1-audit Claim E): true once StikDebug has attached and the
 /// kernel marks this process debugged. Poll this BEFORE warming HotSpot.
 + (BOOL)isDebuggerAttached;

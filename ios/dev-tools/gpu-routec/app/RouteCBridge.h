@@ -6,6 +6,7 @@
  * the conditions of the BSD 2-clause license are met.
  */
 #import <Foundation/Foundation.h>
+#define GLES_SILENCE_DEPRECATION 1   // OpenGLES is deprecated-since-iOS-12 but works on iOS 26 (no Metal-GL bridge)
 #import <OpenGLES/ES3/gl.h>
 
 /*

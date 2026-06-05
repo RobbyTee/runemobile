@@ -45,6 +45,7 @@
 @property (nonatomic, strong) NSFileHandle *logFile;
 @property (nonatomic, assign) int jvmFd;   // raw fd for crash-proof libjvm stdout/stderr
 @property (nonatomic, assign) BOOL launched;
+@property (nonatomic, assign) BOOL pendingRouteCL1;   // GPU Route C: long-press Start -> boot the L1 kill-test
 
 // W3 native shell: keep the process alive + show frames. The JVM ran fine on device but iOS
 // jetsam'd the (idle-UI) process within ~250 ms — before the engine drew its first frame. Two
@@ -327,6 +328,11 @@ static const CGFloat kMenuWidth       = 210.0;
     self.launchButton.enabled = NO;
     [self.launchButton addTarget:self action:@selector(onLaunch)
                 forControlEvents:UIControlEventTouchUpInside];
+    // GPU Route C dev affordance: LONG-PRESS the launch button to boot the L1 GPU kill-test (routec-l1.jar +
+    // RouteC_registerGLNatives + RouteCL1Probe) instead of the full RuneLite boot. A plain tap is unchanged.
+    UILongPressGestureRecognizer *l1lp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onLaunchRouteCL1Gesture:)];
+    [self.launchButton addGestureRecognizer:l1lp];
     [self.debugPanel addSubview:self.launchButton];
 
     self.canaryButton = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -1148,6 +1154,14 @@ static const CGFloat kMenuWidth       = 210.0;
     });
 }
 
+// GPU Route C — long-press the launch button to route into the L1 kill-test (single fire on press-began).
+- (void)onLaunchRouteCL1Gesture:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    if (self.launched) return;
+    self.pendingRouteCL1 = YES;
+    [self onLaunch];
+}
+
 - (void)onLaunch {
     if (self.launched) return;
     // If the login web view ran this session, WebKit is resident and the JVM would crash at code-cache
@@ -1184,6 +1198,10 @@ static const CGFloat kMenuWidth       = 210.0;
     [self appendLine:@"--- launching JVM on worker thread ---"];
 
     JVMLauncher *launcher = [[JVMLauncher alloc] init];
+    launcher.routecL1Mode = self.pendingRouteCL1;   // GPU Route C L1 kill-test (set by the long-press gesture)
+    if (self.pendingRouteCL1) {
+        [self appendLine:@"[shell] *** GPU Route C L1 kill-test — booting RouteCL1Probe (not full RuneLite) ***"];
+    }
     // Edge-to-edge (A1): render aspect MATCHES THE FULL SCREEN (the game view fills the whole bounds), so the
     // blit fills it with no letterbox. The HUD no longer clips at the edges because it is relocated INTO the
     // safe area (updateHudLayout), not kept at the canvas corners.
