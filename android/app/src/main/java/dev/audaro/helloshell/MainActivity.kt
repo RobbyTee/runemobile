@@ -21,6 +21,7 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import androidx.appcompat.app.AppCompatActivity
+import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
@@ -48,6 +49,23 @@ class MainActivity : AppCompatActivity() {
     private var keyboardShown = false
     private var frameCallback: Choreographer.FrameCallback? = null
 
+    // A2 press-and-peek menu state.
+    private lateinit var menuOverlay: MenuOverlayView
+    private var menuActive = false      // the long-press has claimed this gesture
+    private var menuBuilding = false    // waiting for the engine menu to land in the snapshot
+    private var menuTouchActive = false // finger still down
+    private var menuAnchorX = 0f
+    private var menuAnchorY = 0f
+    private var menuCurX = 0f
+    private var menuCurY = 0f
+    private var menuHandRight = false
+    private var menuOpenAtNanos = 0L
+    private var menuHighlight = -1
+    private var emX = 0    // engine menu box (game-canvas coords) from the snapshot
+    private var emY = 0
+    private var emW = 0
+    private var emCount = 0
+
     companion object {
         private const val TAG = "MainActivity"
         private val booted = AtomicBoolean(false)
@@ -62,6 +80,11 @@ class MainActivity : AppCompatActivity() {
 
         // Pinch-to-wheel: geometric step a scale ratio must cross to emit one wheel notch.
         private const val PINCH_STEP = 1.08f
+
+        // OSRS engine menu geometry: 19px "Choose Option" header, 15px per row. A native row k commits to the
+        // engine row centre (menuX + menuW/2, menuY + 19 + k*15 + 7) so plugin onClick/Menu-Entry-Swapper hold.
+        private const val MENU_HEADER_PX = 19
+        private const val MENU_ROW_PX = 15
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -74,10 +97,12 @@ class MainActivity : AppCompatActivity() {
         // InputConnection (the SurfaceView itself can't be a text editor). FrameLayout stacks them.
         surfaceView = SurfaceView(this)
         keyboardView = GameInputView(this)
+        menuOverlay = MenuOverlayView(this)
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
             addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
             addView(keyboardView, FrameLayout.LayoutParams(1, 1))
+            addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame
         }
         setContentView(root)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
@@ -98,6 +123,18 @@ class MainActivity : AppCompatActivity() {
         // mapping is then correct wherever the view sits in the window (status-bar inset, display cutout,
         // multi-window), not only the full-bleed emulator case.
         surfaceView.setOnTouchListener { _, event ->
+            // Once a long-press has opened the menu, this gesture belongs to menu-peek: track the finger for the
+            // row highlight and commit on release — do NOT feed the tap/camera/pinch detectors.
+            if (menuActive) {
+                menuCurX = event.x
+                menuCurY = event.y
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_MOVE -> updateMenuHighlight(event.x, event.y)
+                    MotionEvent.ACTION_UP -> { menuTouchActive = false; if (menuOverlay.isActive) commitMenuSelection() }
+                    MotionEvent.ACTION_CANCEL -> { menuTouchActive = false; cancelMenu() }
+                }
+                return@setOnTouchListener true
+            }
             scaleGestures.onTouchEvent(event)   // pinch-zoom first; it sets the isInProgress flag onScroll reads
             gestures.onTouchEvent(event)
             // Pre-hover: move the engine pointer to a fresh single-finger touch so tooltips/menus track it.
@@ -152,7 +189,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onLongPress(e: MotionEvent) {
-            JvmLauncher.click(toGameX(e.x), toGameY(e.y), 3)   // right-click menu
+            beginMenuPeek(e.x, e.y)
         }
 
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
@@ -278,6 +315,9 @@ class MainActivity : AppCompatActivity() {
                     Log.i(TAG, "a1: interactTapSeq -> $seq (haptic)")
                     vibrateTick()
                 }
+                if (menuBuilding) {
+                    tryBuildNativeMenu()
+                }
                 Choreographer.getInstance().postFrameCallback(this)
             }
         }
@@ -290,6 +330,106 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             v.vibrate(VibrationEffect.createOneShot(18, VibrationEffect.DEFAULT_AMPLITUDE))
         }
+    }
+
+    // ---- A2 press-and-peek menu state machine -------------------------------------------------------
+
+    /** Long-press: open the engine right-click menu at the finger and start polling for it to land. */
+    private fun beginMenuPeek(viewX: Float, viewY: Float) {
+        if (menuActive) return
+        val gx = toGameX(viewX)
+        val gy = toGameY(viewY)
+        menuAnchorX = viewX; menuAnchorY = viewY
+        menuCurX = viewX; menuCurY = viewY
+        menuHandRight = viewX > surfaceView.width * 0.5f
+        menuActive = true
+        menuBuilding = true
+        menuTouchActive = true
+        menuHighlight = -1
+        menuOpenAtNanos = System.nanoTime()
+        JvmLauncher.click(gx, gy, 3)   // open the engine right-click menu at the finger
+        Log.i(TAG, "a2: long-press -> menu open game=($gx,$gy) hand=${if (menuHandRight) "R" else "L"}")
+    }
+
+    /** Poll the snapshot (each frame, while building) until the engine menu the long-press opened is reflected. */
+    private fun tryBuildNativeMenu() {
+        val d = try { JSONObject(JvmLauncher.menuSnapshot()) } catch (e: Exception) { null }
+        val entries = d?.optJSONArray("entries")
+        val ready = d != null && d.optBoolean("loggedIn", false) && d.optBoolean("menuOpen", false) &&
+            d.optInt("count", 0) > 0 && entries != null && entries.length() > 0
+        if (ready) {
+            menuBuilding = false
+            presentNativeMenu(d!!)
+            if (!menuTouchActive) cancelMenu()   // finger lifted before the menu built
+            return
+        }
+        if (System.nanoTime() - menuOpenAtNanos > 1_000_000_000L) {
+            Log.i(TAG, "a2: no engine menu within 1s — aborting")
+            teardownMenu()
+        }
+    }
+
+    /** Build the native overlay from the snapshot (game-space engine box + display-order entries). */
+    private fun presentNativeMenu(d: JSONObject) {
+        emX = d.optInt("menuX", -1)
+        emY = d.optInt("menuY", -1)
+        emW = d.optInt("menuW", 0)
+        emCount = d.optInt("count", 0)
+        val arr = d.optJSONArray("entries") ?: return
+        val n = minOf(arr.length(), 14)
+        if (n == 0 || emW <= 0) { cancelMenu(); return }
+        val items = ArrayList<MenuOverlayView.Entry>(n)
+        for (k in 0 until n) {
+            val o = arr.optJSONObject(k) ?: continue
+            items.add(MenuOverlayView.Entry(o.optString("opt", ""), o.optString("tgt", "")))
+        }
+        menuOverlay.show(items, menuAnchorX, menuAnchorY, menuHandRight)
+        Log.i(TAG, "a2: native menu $emCount entries at game=($emX,$emY) w=$emW")
+        if (menuTouchActive) updateMenuHighlight(menuCurX, menuCurY)
+    }
+
+    /** Lock the highlight onto the row under the finger; haptic tick on change. */
+    private fun updateMenuHighlight(x: Float, y: Float) {
+        if (!menuOverlay.isActive) return
+        val row = menuOverlay.rowAt(x, y)
+        if (menuOverlay.setHighlight(row)) {
+            menuHighlight = row
+            vibrateTick()
+        }
+    }
+
+    /** Release on a row: click through to the engine row centre (19/15 geometry). Off-row -> cancel. */
+    private fun commitMenuSelection() {
+        val k = menuHighlight
+        if (k in 0 until emCount) {
+            val gx = emX + emW / 2
+            val gy = emY + MENU_HEADER_PX + k * MENU_ROW_PX + MENU_ROW_PX / 2
+            JvmLauncher.selectMenuPoint(gx, gy)
+            Log.i(TAG, "a2: select row $k -> game=($gx,$gy)")
+            teardownMenu()
+        } else {
+            cancelMenu()
+        }
+    }
+
+    /** Close the engine menu via its own bottom Cancel row (no stray world click), then tear down. */
+    private fun cancelMenu() {
+        if (emCount > 0 && emW > 0) {
+            val k = emCount - 1
+            val gx = emX + emW / 2
+            val gy = emY + MENU_HEADER_PX + k * MENU_ROW_PX + MENU_ROW_PX / 2
+            JvmLauncher.selectMenuPoint(gx, gy)
+        }
+        Log.i(TAG, "a2: menu cancelled")
+        teardownMenu()
+    }
+
+    private fun teardownMenu() {
+        menuOverlay.hide()
+        menuActive = false
+        menuBuilding = false
+        menuTouchActive = false
+        menuHighlight = -1
     }
 
     override fun onDestroy() {
@@ -352,6 +492,8 @@ class MainActivity : AppCompatActivity() {
             "-Drunelite.headless.capture.preLoginMax=40",
             "-Dheadless.runSeconds=86400",          // keep the boot thread alive/logging for the whole session
             "-Dheadless.captureTargetFrames=999999", // never early-exit; ride the window
+            "-Drunelite.menupeek=true",             // A2: publish the menu-peek snapshot each client tick
+            "-Drunelite.menupeek.maxEntries=14",
         )
         if (autologinArmed) {
             opts.addAll(JagexTokens.autologinOpts)

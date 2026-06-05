@@ -87,6 +87,16 @@ object JvmLauncher {
     /** Finger snap radius (game px) the touch-forgiveness uses. */
     external fun nativeSnapRadius(): Int
 
+    // ---- A2 press-and-peek menu ---------------------------------------------------------------------
+    /** Commit a menu choice by clicking the engine row centre (game-canvas x,y) — honours plugin onClick. */
+    external fun nativeSelectMenuPoint(x: Int, y: Int)
+
+    /** Latest MenuPeekBridge snapshot JSON (escaped), published by the render thread. */
+    external fun nativeMenuSnapshot(): String
+
+    /** Monotonic publish counter for the menu snapshot (freshness check). */
+    external fun nativeMenuPublishSeq(): Long
+
     /** Latest composited frame dimensions (game-canvas pixels), or 0 before the first frame. */
     external fun nativeFrameWidth(): Int
     external fun nativeFrameHeight(): Int
@@ -106,6 +116,9 @@ object JvmLauncher {
     fun isTextInputOpen() = nativeIsTextInputOpen()
     fun interactTapSeq() = nativeInteractTapSeq()
     fun snapRadius() = nativeSnapRadius()
+    fun selectMenuPoint(x: Int, y: Int) = nativeSelectMenuPoint(x, y)
+    fun menuSnapshot() = nativeMenuSnapshot()
+    fun menuPublishSeq() = nativeMenuPublishSeq()
     fun frameWidth() = nativeFrameWidth()
     fun frameHeight() = nativeFrameHeight()
 }

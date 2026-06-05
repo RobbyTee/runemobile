@@ -277,6 +277,18 @@ geometry, haptic tick per row change. Port the iOS state machine (`onLongPress:`
 `presentNativeMenu`/`commitMenuSelection`) to Android gestures + a Compose/View overlay.
 **GREEN:** on-device — long-press an NPC, the native menu lists the engine entries, release on "Attack"
 attacks (logcat shows the menu action); md5-gated `ANDROID_MENUPEEK_GREEN`.
+**Status:**
+- **DONE — primary risk (overlay-over-SurfaceView compositing) RETIRED.** `MenuOverlayView` renders the native
+  "Choose Option" menu (white verbs + blue targets) over the live frame; full pipeline gate→`MenuPeekBridge`→
+  render-thread publish→UI parse→overlay. State machine ported from iOS (`beginMenuPeek`/`tryBuildNativeMenu`/
+  `presentNativeMenu`/`updateMenuHighlight`/`commitMenuSelection`/`cancelMenu`).
+- **Open + commit — runtime GREEN (emulator).** Long-press opens; release fires `JavaBridge.selectMenuPoint`
+  (cancel clicks the engine Cancel row — same commit path). md5-gated `ANDROID_A2_MENUPEEK_GREEN
+  md5=dc56e6b9e25cd46d2ef66ae7b7300152` (`android/dev-tools/a2-menupeek/`).
+- **Slide-to-highlight a non-cancel row + commit it — manual/device confirm.** Needs a continuous
+  hold→drag→release; not adb-injectable on this emulator (split `motionevent` drops the linked MOVE/UP; raw
+  `sendevent` isn't routed to the app). The highlight + row→engine-coord math mirror iOS; commit uses the proven
+  `selectMenuPoint` click path.
 **Depends on:** A1 (uses `onMove`/precise click).
 **Risk:** medium — first overlay-over-SurfaceView compositing; the Java targeting is already proven, the risk
 is purely Android overlay/gesture timing.

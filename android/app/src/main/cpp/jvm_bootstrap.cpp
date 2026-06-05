@@ -55,6 +55,10 @@ static jmethodID g_midWheel = nullptr, g_midClickPrecise = nullptr, g_midMove = 
 static jmethodID g_midText = nullptr, g_midKeyStroke = nullptr;
 // A1 polled read-surface: keyboard auto-raise, interact-tap haptic seq, finger snap radius.
 static jmethodID g_midTextInputOpen = nullptr, g_midInteractTapSeq = nullptr, g_midSnapRadius = nullptr;
+// A2 press-and-peek: JavaBridge.selectMenuPoint commit + the separate MenuPeekBridge read-surface.
+static jmethodID g_midSelectMenuPoint = nullptr;
+static jclass    g_menuPeekCls = nullptr;
+static jmethodID g_midMenuSnapshot = nullptr, g_midMenuPublishSeq = nullptr;
 
 // ---- Surface / render --------------------------------------------------------------------------------
 static std::mutex      g_winLock;
@@ -75,10 +79,16 @@ static std::atomic<int> g_textInputOpen{0};   // isTextInputOpen() -> raise/dism
 static std::atomic<int> g_interactTapSeq{0};  // getInteractTapSeq() -> fire a haptic when it advances
 static std::atomic<int> g_snapRadius{0};      // snapRadius() -> finger snap radius (game px)
 
+// A2 menu-peek snapshot, published by the render thread (only on seq change) for the UI thread to read.
+static std::mutex            g_menuLock;
+static std::string           g_menuSnapshot = "{\"active\":false}";
+static std::atomic<long long> g_menuPublishSeq{-1};
+
 // ---- Input queue (UI thread enqueues; render thread drains and dispatches into the bridge) -----------
 enum InputKind {
     IN_CLICK = 0, IN_TOUCH = 1, IN_CAMERA = 2, IN_CLEARHOVER = 3,
-    IN_WHEEL = 4, IN_CLICKPRECISE = 5, IN_MOVE = 6, IN_KEYSTROKE = 7, IN_TEXT = 8
+    IN_WHEEL = 4, IN_CLICKPRECISE = 5, IN_MOVE = 6, IN_KEYSTROKE = 7, IN_TEXT = 8,
+    IN_SELECTMENU = 9
 };
 // s carries the IN_TEXT payload; empty for the int-only kinds (aggregate-inits to "").
 struct InputEvent { int kind, a, b, c, d; std::string s; };
@@ -245,10 +255,11 @@ static bool publishBridge(JNIEnv *env) {
     g_midTextInputOpen  = env->GetStaticMethodID(global, "isTextInputOpen", "()Z");
     g_midInteractTapSeq = env->GetStaticMethodID(global, "getInteractTapSeq", "()I");
     g_midSnapRadius     = env->GetStaticMethodID(global, "snapRadius", "()I");
+    g_midSelectMenuPoint = env->GetStaticMethodID(global, "selectMenuPoint", "(II)V");   // A2 commit
     if (!g_midSeq || !g_midW || !g_midH || !g_midPixels || !g_midTouch || !g_midClick
         || !g_midCamera || !g_midClearHover
         || !g_midWheel || !g_midClickPrecise || !g_midMove || !g_midText || !g_midKeyStroke
-        || !g_midTextInputOpen || !g_midInteractTapSeq || !g_midSnapRadius) {
+        || !g_midTextInputOpen || !g_midInteractTapSeq || !g_midSnapRadius || !g_midSelectMenuPoint) {
         env->ExceptionClear();
         env->DeleteGlobalRef(global);
         LOGE("bridge: a JavaBridge method id failed to resolve");
@@ -256,6 +267,26 @@ static bool publishBridge(JNIEnv *env) {
     }
     g_bridgeCls = global;   // publish only once fully resolved
     LOGI("bridge: JavaBridge facade published");
+
+    // A2: MenuPeekBridge is a SEPARATE facade — resolve best-effort so a missing/old one only disables menu-peek
+    // (never blocks the render path). It is inert unless -Drunelite.menupeek=true, but the class is always present.
+    jclass mp = env->FindClass("net/runelite/client/headless/MenuPeekBridge");
+    if (mp && !env->ExceptionCheck()) {
+        jclass mpg = (jclass) env->NewGlobalRef(mp);
+        env->DeleteLocalRef(mp);
+        jmethodID snap = env->GetStaticMethodID(mpg, "getSnapshot", "()Ljava/lang/String;");
+        jmethodID pseq = env->GetStaticMethodID(mpg, "getPublishSeq", "()J");
+        if (mpg && snap && pseq) {
+            g_menuPeekCls = mpg; g_midMenuSnapshot = snap; g_midMenuPublishSeq = pseq;
+            LOGI("bridge: MenuPeekBridge facade published");
+        } else {
+            if (mpg) env->DeleteGlobalRef(mpg);
+            LOGE("bridge: MenuPeekBridge method id failed to resolve (menu-peek disabled)");
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass MenuPeekBridge failed (menu-peek disabled)");
+    }
     return true;
 }
 
@@ -294,6 +325,7 @@ static void drainInput(JNIEnv *env) {
             case IN_CLICKPRECISE: env->CallStaticVoidMethod(g_bridgeCls, g_midClickPrecise, ev.a, ev.b, ev.c); break;
             case IN_MOVE:         env->CallStaticVoidMethod(g_bridgeCls, g_midMove, ev.a, ev.b); break;
             case IN_KEYSTROKE:    env->CallStaticVoidMethod(g_bridgeCls, g_midKeyStroke, ev.a); break;
+            case IN_SELECTMENU:   env->CallStaticVoidMethod(g_bridgeCls, g_midSelectMenuPoint, ev.a, ev.b); break;
             case IN_TEXT: {
                 jstring js = env->NewStringUTF(ev.s.c_str());
                 env->CallStaticVoidMethod(g_bridgeCls, g_midText, js);
@@ -333,6 +365,27 @@ static void *renderLoop(void *) {
             int sr = env->CallStaticIntMethod(g_bridgeCls, g_midSnapRadius);
             if (env->ExceptionCheck()) { env->ExceptionClear(); }
             else { g_snapRadius.store(sr, std::memory_order_relaxed); }
+
+            // A2: republish the menu-peek snapshot only when its publish-seq advanced (avoids a per-frame
+            // String copy on the idle path). The UI thread reads g_menuSnapshot via nativeMenuSnapshot().
+            if (g_menuPeekCls) {
+                long long sq = env->CallStaticLongMethod(g_menuPeekCls, g_midMenuPublishSeq);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); }
+                else if (sq != g_menuPublishSeq.load(std::memory_order_relaxed)) {
+                    jstring js = (jstring) env->CallStaticObjectMethod(g_menuPeekCls, g_midMenuSnapshot);
+                    if (env->ExceptionCheck()) { env->ExceptionClear(); }
+                    else if (js) {
+                        const char *c = env->GetStringUTFChars(js, nullptr);
+                        if (c) {
+                            std::lock_guard<std::mutex> lk(g_menuLock);
+                            g_menuSnapshot.assign(c);
+                            env->ReleaseStringUTFChars(js, c);
+                        }
+                        env->DeleteLocalRef(js);
+                    }
+                    g_menuPublishSeq.store(sq, std::memory_order_relaxed);
+                }
+            }
         }
 
         ANativeWindow *win = nullptr;
@@ -618,6 +671,21 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeText(JNIEnv *env, jobject, jstring 
     InputEvent ev{IN_TEXT, 0, 0, 0, 0};
     ev.s = jstr(env, js);
     enqueue(std::move(ev));
+}
+
+// ---- A2 press-and-peek menu (commit + read-surface) -------------------------------------------------
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSelectMenuPoint(JNIEnv *, jobject, jint x, jint y) {
+    enqueue({IN_SELECTMENU, x, y, 0, 0});
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeMenuSnapshot(JNIEnv *env, jobject) {
+    std::lock_guard<std::mutex> lk(g_menuLock);
+    return env->NewStringUTF(g_menuSnapshot.c_str());
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeMenuPublishSeq(JNIEnv *, jobject) {
+    return (jlong) g_menuPublishSeq.load(std::memory_order_relaxed);
 }
 
 // ---- A1 read-surface (UI thread reads the render-thread-published atomics; never attaches to HotSpot) -
