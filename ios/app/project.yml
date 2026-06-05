@@ -34,6 +34,9 @@ targets:
     dependencies:
       # WKWebView for the on-device Jagex login (JagexLoginSpikeViewController).
       - sdk: WebKit.framework
+      # W3 GPU track B0 recon (GLRecon): native GPU/GL capability query.
+      - sdk: Metal.framework
+      - sdk: OpenGLES.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.audaro.helloshell

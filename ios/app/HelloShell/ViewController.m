@@ -4,6 +4,7 @@
 #import "PluginHubViewController.h"
 #import "PluginPanelsViewController.h"
 #import "JagexLoginViewController.h"
+#import "GLRecon.h"
 #import <WebKit/WebKit.h>
 #import <unistd.h>
 #import <fcntl.h>
@@ -177,6 +178,10 @@ static const CGFloat kMenuWidth       = 210.0;
     [self appendLine:@"Waiting for StikDebug attach (CS_DEBUGGED)…"];
     [self appendLine:@"Assign the iOS-26 JIT script to this app in StikDebug, then attach."];
     [self startJitPolling];
+
+    // W3 GPU track — B0 GL-tier recon (pure native, no JVM/JIT). Runs once on launch and logs the device's
+    // GPU/GL capabilities to the console + hello-shell.log (the go/no-go gate for the GPU renderer effort).
+    [GLRecon runWithLog:^(NSString *l) { [self appendLine:l]; }];
 
     // Persistent plugin-panel dock: an always-on icon rail (right) + icon strip (bottom) over the live game,
     // panels open inline without going through the settings menu. Passthrough overlay (game stays usable); it
