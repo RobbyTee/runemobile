@@ -433,11 +433,12 @@ RuneLite's GPU stack. Target order (117HD builds on the same context/native infr
   trivial vertex+fragment shader, render a triangle → FBO → read back / present. Settles the B1/B3/Claim-E/F
   minima before any plugin port.
 - **AG2 — base `gpu` plugin bring-up (weeks–months; THE render-path decision).** Replace `librlawt` with the
-  EGL shim; down-port `gpu`'s GL/GLSL to the available GLES tier (or run it through gl4es/ANGLE); route output
-  **either** via `glReadPixels`→`JavaBridge` int[] (keep the current SurfaceView blit — simple first cut)
-  **or** directly onto the SurfaceView EGL surface (bypass the CPU blit — the bigger win + the right Android
-  architecture). **Resolves the HD↔FPS tension on its own** and is the legitimate high-value first GPU target.
-  Milestone: the live scene renders on GPU, FPS + sharpness both up.
+  EGL shim; down-port `gpu`'s GL/GLSL to the available GLES tier (or run it through gl4es/ANGLE); route output.
+  **Render-path decision (DECIDED — staged, see §5 Q9):** use `glReadPixels`→`JavaBridge` int[] through the
+  existing SurfaceView blit for *bring-up* (isolates "did GL come up" from restructuring the render seam / A7),
+  then move to **direct EGL-to-Surface for production** once the pipeline is proven (readback's GPU→CPU→GPU
+  round-trip throttles FPS). **Resolves the HD↔FPS tension on its own** and is the legitimate high-value first
+  GPU target. Milestone: the live scene renders on GPU, FPS + sharpness both up.
 - **AG3 — 117HD/RLHD (largest; partial success expected).** The compute pipeline + heavy shaders on the proven
   base. GLES 3.1 compute makes it more reachable than on iOS, but expect some features (shadows/water/post) to
   need porting or to be dropped. **This is the phase that makes "enable 117HD" actually deliver HD.**
@@ -468,13 +469,16 @@ internally, so the host may call from any thread; the hot `JavaBridge` input met
 EventQueue and are already called from Android's render-thread drain. Mirror the iOS `JVMLauncher.h` method
 surface — it *is* the portable contract.
 
-### 4.2 Android UI architecture — **decision needed (see §5)**
+### 4.2 Android UI architecture — **DECIDED: hybrid**
 iOS is UIKit view controllers compositing over a `UIImageView`. Android must composite native chrome/menus/
-panels over a live `SurfaceView`. Candidates: **(a) Jetpack Compose** over an `AndroidView(SurfaceView)`
-(modern, fast to build overlays/panels, good for the data-driven screens) vs **(b) classic Views/Fragments**
-(closer 1:1 with the UIKit structure). Recommendation leans Compose for the panels/config/menus with the
-SurfaceView as an interop layer — but this is the single biggest Android-specific architectural choice and
-should be settled before A2 (the first overlay). **Flagged for the reviewer.**
+panels over a live `SurfaceView`. **Decision (maintainer + reviewer): a hybrid split, not one paradigm.**
+- **Classic Views / `Canvas` for the live, per-frame overlays** drawn over the `SurfaceView` — A2 press-and-peek
+  menu, A6 chrome tab-rails, A7 HUD veneers. These track engine geometry *every frame* and are z-order- and
+  latency-sensitive; Compose recomposition-per-frame is wasteful and the SurfaceView/Compose interop z-ordering
+  has known sharp edges on exactly this path.
+- **Jetpack Compose for the data-driven screens** — A4 plugin list/config/hub, A5 panels + Quest Helper / World
+  Switcher. List/form/picker UI is Compose's sweet spot and these aren't on the frame-critical path.
+Settle the View-side overlay scaffolding before A2 (the first overlay).
 
 ### 4.3 Threading, coordinate mapping, render scaling
 - Input: keep the UI-thread-enqueue → render-thread-drain model (`jvm_bootstrap.cpp`); the ART UI thread must
@@ -492,9 +496,9 @@ on screen-close and `onPause`/`onStop`, or plugin toggles + config edits silentl
 
 ## 5. Open questions / risks for the reviewer
 
-1. **UI framework: Compose vs Views/Fragments?** (§4.2) — the biggest architectural fork; affects every UI
-   phase. Is Compose-over-SurfaceView the right call, or does the overlay-heavy, per-frame-tracked chrome favour
-   a custom View hierarchy closer to the UIKit structure?
+1. **UI framework: Compose vs Views/Fragments?** (§4.2) — **DECIDED: hybrid.** Classic Views/`Canvas` for the
+   live per-frame overlays (A2 menu, A6 chrome, A7 HUD); Jetpack Compose for the data-driven screens (A4
+   config/hub, A5 panels, quest/world). See §4.2.
 2. **Phase ordering:** is A3 (on-device login) correctly placed *after* A1/A2, or should it precede them so the
    app is self-contained sooner? (It's independent of A1/A2; pushed `tokens.json` unblocks all emulator dev.)
    **Reviewer recommendation:** move A3 to right after A0 (or parallel with A1) — self-contained login is
@@ -519,12 +523,13 @@ on screen-close and `onPause`/`onStop`, or plugin toggles + config edits silentl
    Android JNI/Kotlin host surface (today only 8 bridge methods are wired). A-1's census is the cheap way to
    confirm this empirically before committing UI effort. **A7 + Track G** are the likely places a shared/
    Java-adjacent change does surface.
-8. **Is a working 117HD a v1 requirement (gating) or post-core-parity?** (§3G) — the product ask is "the user can
-   enable 117HD." Does v1 ship the *playable CPU shell* (A0–A8, 117HD appears-but-incompatible) with Track G as a
-   fast-follow, or is GPU rendering a v1 blocker? This is the biggest scope call in the plan.
+8. **Is a working 117HD a v1 requirement (gating) or post-core-parity?** (§3G) — **DECIDED: fast-follow.** v1
+   ships the *playable CPU shell* (A0–A8); 117HD appears-but-incompatible (as on iOS). Track G is a post-v1
+   workstream; run AG0+AG1 as a cheap parallel go/no-go but **do not block release on it**.
 9. **AG2 render path: `glReadPixels`→int[] (keep the current blit) vs render-GL-directly-to-the-SurfaceView?**
-   The latter is faster and the right Android architecture but restructures the core render seam (and intersects
-   A7). Which for the first cut?
+   **DECIDED: staged.** `glReadPixels`→int[] through the existing SurfaceView blit for AG2 *bring-up* (isolates
+   "did the GL pipeline come up" from restructuring the render seam / A7), then move to **direct EGL-to-Surface
+   for production** once the pipeline is proven (readback's GPU→CPU→GPU round-trip throttles FPS).
 10. **GPU stack: lean on the PojavLauncher/Amethyst GL-translation libs (gl4es/LTW/ANGLE + bionic LWJGL) the way
    our JRE's lineage already does, or hand-port `gpu` to native GLES?** And confirm the AG0 target-device GLES
    tier (compute support) before committing. **Reviewer caution:** treat the Pojav GL-translation path as a
@@ -567,13 +572,14 @@ highest risk, lowest confidence. A8 stabilizes/ships.
 
 **Track G runs as a parallel high-risk track** (Android counterpart to iOS Track A/B): the A0–A8 mainline
 delivers the *playable CPU-rendered shell*; Track G adds GPU rendering and is what makes 117HD actually work.
-Whether it gates v1 or is a fast-follow is open question #8. AG0+AG1 are a strict go/no-go before AG2.
+**DECIDED (Q8): Track G is a post-v1 fast-follow, not a release gate** — v1 ships the CPU shell with 117HD
+appears-but-incompatible. AG0+AG1 run as a cheap parallel go/no-go before AG2.
 
 **Definition of done (Android):** a self-contained sideloaded/installed Android app — launch → on-device Jagex
 login → in-game on live OSRS, full touch + Jagex-Mobile-style UI, RuneLite plugins toggle/config natively with
 overlays composited, playable FPS, stable for hours — **no host, no desktop, no streaming, and (unlike iOS) no
-per-launch JIT-attach ceremony.** *117HD/GPU rendering (Track G) is a separate, Android-favoured workstream;
-whether it is in the v1 definition of done is a product decision (open question #8).*
+per-launch JIT-attach ceremony.** *117HD/GPU rendering (Track G) is a separate, Android-favoured workstream and
+is **explicitly NOT in the v1 definition of done** (decided, Q8) — it is a post-v1 fast-follow.*
 
 ---
 
