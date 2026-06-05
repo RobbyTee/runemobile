@@ -112,13 +112,28 @@ Files: `app/RouteCBridge.{h,m}` (the reusable bridge core), `app/RouteCProbe.{h,
 harness), `project.yml` (xcodegen `GpuRouteC`, links `OpenGLES.framework`). Run via the same
 `simctl install/launch` + container-pull as gpu-b1; verify with `./routec-step2-verdict.sh`.
 
-## Next (Route C step 3 — wire JNI + integrate on device)
+# Step 3a: GL surface existence + bridge manifest (GREEN)
 
-1. **JNI glue (mechanical):** make the facade methods `native`; generate the ~85 `JNICALL` stubs (the ~80 core
-   calls forward straight to `glXxx`; the 5 route to `RouteCBridge` shims). Mirror the predecessor's auto-stub
-   pattern (`jni_gl.c`).
-2. **On device:** load the bridge in the shell, point `AWTContext` at the EAGL analogue, feed the **B1-proven
-   downported shaders** through the plugin's real `Shader.compile`, drive the real `DrawCallbacks` scene pass →
-   `glReadPixels` → the existing `int[]` blit (`JavaBridge`). Add the MSAA FBO path
-   (`glRenderbufferStorageMultisample` + `glBlitFramebuffer`, both ES3 core) if the plugin's AA is enabled.
-   md5-gated device run on the primary machine.
+`ROUTEC_GLSURFACE_GREEN_AS_EXPECTED` (`check/routec-glsurface-verdict.sh`). Extracted the **exact 100 facade calls**
+the plugin makes from the compiled plugin bytecode (`used-descriptors.txt`: 87 GL overloads + 13 support), mapped
+the LWJGL convenience/desktop names to their GLES symbols, and **compiled + linked all 81 distinct GLES-3.0 target
+symbols against `OpenGLES.framework` for iOS arm64** (`check/gl_surface_check.c` → an `arm64` Mach-O dylib with all
+81 `_gl` symbols resolved as framework imports). This retires the last *static* unknown: **the entire core GL
+surface the base `gpu` plugin needs exists and is reachable on iOS GLES 3.0** (the 5 census shims are represented by
+their GLES targets). `bridge-manifest.md` is the device-JNI spec — the 100 calls grouped into ~8 small marshalling
+categories so the JNI impl is a fill-in.
+
+## Next (Route C step 3b — wire JNI + integrate, on device)
+
+The remaining work is **mechanical JNI marshalling**, and it is **device-only testable** (no JVM on the Simulator),
+so it is deferred to the primary machine. Per `bridge-manifest.md`: make the facade methods `native`, generate the
+forwarders + the `RegisterNatives` table (~80 forward straight to `glXxx`; the 5 to the proven `RouteCBridge`
+shims; `AWTContext` → the EAGL analogue; `GL.createCapabilities` → a `GLCapabilities` with `OpenGL33=true`). Then:
+`dlopen` the bridge in the shell, feed the **B1-proven downported shaders** through the plugin's real
+`Shader.compile`, drive the real `DrawCallbacks` scene pass → `glReadPixels` → the `int[]` blit (`JavaBridge`); add
+the MSAA FBO path (`glRenderbufferStorageMultisample` + `glBlitFramebuffer`, both ES3 core) if AA is on. md5-gated
+device run.
+
+**Route C is now de-risked to the limit of what's verifiable without the device:** plugin compiles unmodified
+against the facade (step 1), shaders downport + render on GLES 3.00 (B1), the EAGL context + depth + reverse-Z +
+shims work (step 2), and the whole GL surface exists on iOS GLES 3.0 (step 3a). What's left is JVM-coupled.

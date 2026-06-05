@@ -6,3 +6,8 @@ gen/out/
 err.txt
 GpuRouteC.xcodeproj/
 build/
+check/*.o
+check/*.dylib
+check/cc.err
+check/ld.err
+check/*.o.tmp
