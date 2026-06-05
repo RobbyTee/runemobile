@@ -123,17 +123,41 @@ surface the base `gpu` plugin needs exists and is reachable on iOS GLES 3.0** (t
 their GLES targets). `bridge-manifest.md` is the device-JNI spec — the 100 calls grouped into ~8 small marshalling
 categories so the JNI impl is a fill-in.
 
-## Next (Route C step 3b — wire JNI + integrate, on device)
+# Step 3b: JNI bridge generated + compiles for iOS arm64 (device wiring pre-built)
 
-The remaining work is **mechanical JNI marshalling**, and it is **device-only testable** (no JVM on the Simulator),
-so it is deferred to the primary machine. Per `bridge-manifest.md`: make the facade methods `native`, generate the
-forwarders + the `RegisterNatives` table (~80 forward straight to `glXxx`; the 5 to the proven `RouteCBridge`
-shims; `AWTContext` → the EAGL analogue; `GL.createCapabilities` → a `GLCapabilities` with `OpenGL33=true`). Then:
-`dlopen` the bridge in the shell, feed the **B1-proven downported shaders** through the plugin's real
-`Shader.compile`, drive the real `DrawCallbacks` scene pass → `glReadPixels` → the `int[]` blit (`JavaBridge`); add
-the MSAA FBO path (`glRenderbufferStorageMultisample` + `glBlitFramebuffer`, both ES3 core) if AA is on. md5-gated
-device run.
+The JNI glue is **pre-written and compile-verified for iOS arm64** so the device work is wiring, not authoring.
+`gen/routec_jni_gen.py` reads `used-descriptors.txt` and emits:
+- **`jni/routec_gl_jni.m`** — 97 JNI forwarders (87 GL + 8 `AWTContext` + 2 `GL.createCapabilities/getCapabilities`)
+  + the `RegisterNatives` tables + **`jint RouteC_registerGLNatives(JNIEnv *)`**. **Compiles clean for iOS arm64**
+  (0 errors/warnings) against `jni.h` + `OpenGLES` + `RouteCBridge.h`. The ~80 core calls forward straight to
+  `glXxx`; the 5 shims + `AWTContext` route to `RouteCBridge` (step-2 proven); `GL.createCapabilities` builds a
+  `GLCapabilities` with `OpenGL33=true`.
+- **`facade-native/`** — the device facade (the step-1 facade with GL/`AWTContext`/`GL` methods turned `native`).
+  The **unmodified plugin still compiles against it** (22 classes, 0 errors), verified here.
 
-**Route C is now de-risked to the limit of what's verifiable without the device:** plugin compiles unmodified
-against the facade (step 1), shaders downport + render on GLES 3.00 (B1), the EAGL context + depth + reverse-Z +
-shims work (step 2), and the whole GL surface exists on iOS GLES 3.0 (step 3a). What's left is JVM-coupled.
+> **DEVICE-ONLY caveat:** this is compile-checked, NOT runtime-tested (no JVM on the Simulator). A few NIO-size
+> marshallings carry `TODO(device)` comments (LWJGL sizes by `buffer.remaining()`; the cleanest device refinement
+> is to compute address/size in the Java facade and pass primitives, removing all NIO JNI). Refine + verify these
+> on the device.
+
+## Wiring it on the device (primary machine)
+
+1. **Build the client jar with the device facade** instead of LWJGL: put `facade-native/` (+ the unchanged
+   `facade/` support classes: `GLCapabilities`, `Callback`, `Configuration`, `BufferUtils`, `PointerBuffer`,
+   `EXTTextureFilterAnisotropic`, `GLUtil`, `GL33C/42C/43C/45C`) on the gpu plugin's compile/runtime path in place
+   of the `org.lwjgl:lwjgl-opengl` dependency; drop `librlawt`.
+2. **Compile the bridge into the shell:** add `app/RouteCBridge.m` + `jni/routec_gl_jni.m` to the HelloShell
+   target (links `OpenGLES.framework`).
+3. **Register after VM create:** call `RouteC_registerGLNatives(env)` once after `JNI_CreateJavaVM`, before the
+   gpu plugin starts. Drive `RouteCBridge awtCreateGLContextWidth:height:` at the render resolution before the
+   plugin's `AWTContext.createGLContext()`.
+4. **Run + verify:** enable the gpu plugin; it boots through `Shader.compile` (downport the GLSL ES at
+   `glShaderSource` time — reuse `gpu-b1/app/B1Downport`), renders the real `DrawCallbacks` scene into the EAGL FBO;
+   the shell `glReadPixels` → publishes the `int[]` to `JavaBridge` (replaces the CPU blit). Add the MSAA FBO path
+   (`glRenderbufferStorageMultisample` + `glBlitFramebuffer`, both ES3 core, in the verified 81) if AA is on.
+   md5-gate the device run.
+
+**Route C is de-risked to the limit of what's verifiable without the device:** plugin compiles unmodified against
+the facade (step 1) and the device native facade (3b); shaders downport + render on GLES 3.00 (B1); EAGL context +
+depth + reverse-Z + shims work (step 2); the whole GL surface exists on iOS GLES 3.0 (3a); the JNI bridge compiles
+for iOS arm64 (3b). What's left is JVM-coupled — the on-device wiring above.

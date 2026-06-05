@@ -11,3 +11,8 @@ check/*.dylib
 check/cc.err
 check/ld.err
 check/*.o.tmp
+facade-native_out/
+plugin_out_dev/
+dev.err
+jni/cc.err
+app/cc.err
