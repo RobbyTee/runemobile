@@ -1073,12 +1073,16 @@ static const CGFloat kMenuWidth       = 210.0;
     // (canvasPx = pt * renderW/W); the side panel width comes from the chrome snapshot (fixed engine px).
     if (self.renderW > 0 && W > 0) {
         CGFloat k = (CGFloat)self.renderW / W;
-        int sideW = 190;   // fallback until the panel is open and reports its real width
+        int sideW = 204, sideH = 275;   // fallback until the panel is open and reports its real size
         NSArray *sc = [d[@"sideContainer"] isKindOfClass:[NSArray class]] ? d[@"sideContainer"] : nil;
-        if (sc.count >= 4 && [sc[2] intValue] > 0) sideW = [sc[2] intValue];
-        int sideX = (int)lround(gx0 * k) - sideW;   // right edge flush against the grid's left edge
-        int sideY = (int)lround(gy0 * k);           // top aligned with the grid top
+        if (sc.count >= 4) { if ([sc[2] intValue] > 0) sideW = [sc[2] intValue]; if ([sc[3] intValue] > 0) sideH = [sc[3] intValue]; }
+        int sideX = (int)lround(gx0 * k) - sideW;     // right edge flush against the grid's left edge
+        // Sit the panel ABOVE the bottom stone row (the engine tab stones are pinned to the canvas bottom, ~36px
+        // tall). The tab proxy-clicks land on those stones, so the panel must NOT cover them or the clicks die —
+        // which was the bug where tabs stopped switching once a panel was open.
+        int sideY = (self.renderH - 36) - sideH;
         if (sideX < 0) sideX = 0;
+        if (sideY < 0) sideY = 0;
         [JVMLauncher relocateEngineSidePanelX:sideX y:sideY];
     }
 }
@@ -1208,10 +1212,10 @@ static const CGFloat kMenuWidth       = 210.0;
     CGFloat sh = b.size.height;
     CGFloat aspect = (sh > 0 ? sw / sh : 2.0);
     // Render height is the sharpness<->FPS<->UI-SIZE dial: the engine SOFTWARE-renders at renderW×renderH every
-    // frame (no GPU on iOS), so a LOWER renderH = bigger UI on screen (fewer rendered px stretched to fill) +
-    // higher FPS, at the cost of a softer 3D scene. The chat is a fixed 519px wide, so going much below ~300
-    // (≈2.4×) overflows it — ~300–480 is the usable bigger-UI band.
-    int renderH = 480;
+    // frame (no GPU on iOS), so a LOWER renderH = bigger UI on screen. 600 sizes the engine HUD (minimap/orbs/
+    // chat/side panel) to the official OSRS-mobile proportions and leaves room for the minimap (top) + side panel
+    // + the bottom tab-stone row to stack on the right without overlapping (480 was too big — they collided).
+    int renderH = 600;
     int renderW = (int)lround(renderH * aspect);
     self.renderW = renderW;
     self.renderH = renderH;
