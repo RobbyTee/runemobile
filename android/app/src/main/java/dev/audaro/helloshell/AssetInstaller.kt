@@ -7,10 +7,13 @@ import java.io.File
 /**
  * Unpacks the embedded JRE tree + jars from APK assets to filesDir on first launch.
  *
- * Native .so libraries (libjvm.so and friends) are NOT here — Android forbids dlopen of libraries from
- * writable app storage (since API 29). Those live in jniLibs/arm64-v8a/ so the installer puts them in the
- * APK's native-lib dir, which is an allowed dlopen path. Only the JRE's non-native files (the modules
- * image, the lib jars, conf, fontconfig) and the client/probe/cacio jars are staged here.
+ * Staging is ASSETS-ONLY: the whole bionic JRE — including its native libs under jre/lib/ (libjvm.so and its
+ * siblings) — plus the client/probe jars ship as APK assets and are unpacked here. The native host then
+ * dlopens libjvm.so by absolute path out of this filesDir tree (see MainActivity.bootJvm and
+ * jvm_bootstrap.cpp's preloadJreLibs). Only our own JNI lib (libhelloshell.so) lives in jniLibs and is loaded
+ * via System.loadLibrary. NB: dlopen from writable app storage is nominally restricted for API 29+ targets —
+ * it works on the emulator; this must be confirmed on a real device (PORT-PHASING §5 Q11), moving the JRE .so
+ * set into a native-lib dir if a hardened device rejects it.
  */
 object AssetInstaller {
 

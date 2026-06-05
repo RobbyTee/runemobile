@@ -136,10 +136,15 @@ class MainActivity : AppCompatActivity() {
         // it at a writable dir so the gamepack fonts load.
         val tmpDir = File(app.filesDir, "tmp").apply { mkdirs() }.absolutePath
 
+        // JX_* launcher handoff: if a tokens.json is present, set the JX_* env (before startJvm) and arm
+        // HeadlessLogin's EULA->Play Now click machine. No tokens.json -> login-screen render only. The setenv
+        // must happen here, before JvmLauncher.startJvm creates the VM (HotSpot snapshots env at startup).
+        val autologinArmed = JagexTokens.loadAndArm(app)
+
         // iOS's headless/CACIO opt set, minus the iOS-JIT workarounds (Android grants JIT for free):
         // dropped -XX:+MirrorMappedCodeCache / DisablePrimordialThreadGuardPages / -UseCompressedClassPointers /
         // ReservedCodeCacheSize. Kept: the CACIO JPMS exports/opens, headless render + bridge props.
-        val opts = arrayOf(
+        val opts = mutableListOf(
             "-Djava.awt.headless=false",
             "--add-exports=java.desktop/java.awt=ALL-UNNAMED",
             "--add-exports=java.desktop/java.awt.peer=ALL-UNNAMED",
@@ -164,6 +169,10 @@ class MainActivity : AppCompatActivity() {
             "-Dheadless.runSeconds=86400",          // keep the boot thread alive/logging for the whole session
             "-Dheadless.captureTargetFrames=999999", // never early-exit; ride the window
         )
+        if (autologinArmed) {
+            opts.addAll(JagexTokens.autologinOpts)
+            Log.i(TAG, "autologin ARMED (tokens.json present): EULA 302,312 -> Play Now 382,248, world 301")
+        }
 
         Log.i(TAG, "starting HotSpot: DeviceHeadlessBoot, cp=$classpath")
         val rc = JvmLauncher.startJvm(
@@ -172,7 +181,7 @@ class MainActivity : AppCompatActivity() {
             libraryPath = libraryPath,
             classpath = classpath,
             mainClass = "DeviceHeadlessBoot",
-            extraOpts = opts,
+            extraOpts = opts.toTypedArray(),
         )
         Log.i(TAG, "startJvm rc=$rc (VM up; watch logcat tags jvm-boot/jvm-stdout)")
     }

@@ -41,6 +41,12 @@ object JvmLauncher {
         extraOpts: Array<String>,
     ): Int
 
+    /**
+     * Set a process environment variable. MUST be called before [startJvm] — HotSpot snapshots the
+     * environment at VM startup, and the OSRS gamepack reads the JX_* launcher handoff from it.
+     */
+    external fun nativeSetEnv(key: String, value: String)
+
     /** Hand the SurfaceView's surface (or null to clear) to the native render thread for blitting. */
     external fun nativeSetSurface(surface: Surface?)
 
@@ -61,6 +67,7 @@ object JvmLauncher {
     external fun nativeFrameHeight(): Int
 
     // Kotlin-friendly aliases.
+    fun setEnv(key: String, value: String) = nativeSetEnv(key, value)
     fun setSurface(surface: Surface?) = nativeSetSurface(surface)
     fun click(x: Int, y: Int, button: Int) = nativeClick(x, y, button)
     fun touch(type: Int, x: Int, y: Int, button: Int) = nativeTouch(type, x, y, button)

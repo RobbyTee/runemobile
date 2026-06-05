@@ -17,6 +17,7 @@
 #include <jni.h>
 #include <dlfcn.h>
 #include <dirent.h>
+#include <stdlib.h>
 #include <string>
 #include <vector>
 #include <deque>
@@ -491,6 +492,20 @@ Java_dev_audaro_helloshell_JvmLauncher_startJvm(
     std::unique_lock<std::mutex> lk(g_bootLock);
     g_bootCv.wait(lk, [] { return g_bootDone; });
     return g_bootRc;
+}
+
+// ---- Process environment (called from the boot thread BEFORE startJvm) --------------------------------
+// The OSRS gamepack reads the JX_* launcher handoff from the process environment (System.getenv), which
+// HotSpot snapshots at VM startup — so these MUST be set before JNI_CreateJavaVM. setenv mutates the global
+// environ; the boot thread sets them, then startJvm spawns the worker that creates the VM (a happens-before via
+// pthread_create), so the worker sees them. Mirrors the iOS loadJagexTokens setenv path (JVMLauncher.m).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetEnv(JNIEnv *env, jobject, jstring jKey, jstring jVal) {
+    std::string k = jstr(env, jKey);
+    std::string v = jstr(env, jVal);
+    if (!k.empty()) {
+        setenv(k.c_str(), v.c_str(), 1);
+    }
 }
 
 // ---- Surface lifecycle (called from the ART UI thread) -----------------------------------------------
