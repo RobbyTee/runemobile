@@ -812,8 +812,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
             @"-Drunelite.headless.autologin.point=382,248",       // Play Now centre (desktop-proven)
             @"-Drunelite.headless.autologin.world=301",           // F2P world (throwaway account)
             @"-Drunelite.headless.autologin.worldAddress=oldschool1.runescape.com",
+            // Play Now only crosses LOGIN_SCREEN -> LOGGED_IN; the gamepack then PARKS on the post-login
+            // "Welcome to Gielinor / Click here to play" screen with the world NOT yet per-frame-rendered
+            // (viewport 0x0, topLevelIf 165). WelcomePlayProbe clicks the real WelcomeScreen.PLAY widget bounds
+            // to enter the world — WITHOUT it the engine never drives the scene render (the black-3D-scene
+            // blocker; reproduced + resolved on desktop, see ios/dev-tools/gpu-routec/BLACK-SCENE-DIAGNOSIS.md).
+            @"-Drunelite.headless.welcomeplay=true",
         ]];
-        log(@"[jvm] autologin ARMED: EULA 302,312 (idx 12) -> Play Now 382,248, world 301/oldschool1");
+        log(@"[jvm] autologin ARMED: EULA 302,312 (idx 12) -> Play Now 382,248 -> WelcomePlay (enter world), world 301/oldschool1");
     }
 
     JavaVMOption *vmopts = (JavaVMOption *)calloc(opts.count, sizeof(JavaVMOption));

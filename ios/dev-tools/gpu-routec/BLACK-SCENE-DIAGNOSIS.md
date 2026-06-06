@@ -1,5 +1,47 @@
 # GPU Route C — black-3D-scene blocker: diagnosis
 
+> ## ✅ RESOLVED 2026-06-05 — it was the undismissed post-login welcome screen (NOT a GPU/bridge gate)
+>
+> **Reproduced AND resolved on desktop, no device round.** A desktop harness (`ios/dev-tools/headless/
+> run-gpu-handshake.sh`) boots real RuneLite under the same CACIO CTC as the device and arms `GpuHandshakeProbe`,
+> which replays `GpuPlugin.startUp`'s engine handshake (`setGpuFlags(GPU|ZBUF)` + a **no-GL** counting
+> `DrawCallbacks`) so `isGpu()==true` with **no GL context at all**. It reproduced the device signature exactly:
+> `drawScene=0`, `viewport=0x0`, `topLevelIf=165`, `loadScene/swapScene=1`, `draw1` climbing, every per-frame
+> zone callback `0` — **on desktop, with no iOS bridge, no EAGL, no GL surface.** That alone **falsifies the
+> "offscreen-FBO-not-tied-to-canvas / iOS-bridge-specific" leading hypothesis below.**
+>
+> Then the real cause: the captured frame at that state is the **"Welcome to Gielinor / Click here to play"**
+> screen — `LOGGED_IN` but *not in the world*. `HeadlessLogin` only clicks "Play Now" on the `LOGIN_SCREEN`,
+> then stops; **nothing dismissed the post-login welcome screen.** Clicking the real `WelcomeScreen.PLAY` widget
+> (`InterfaceID` 378) flips it instantly, in BOTH modes:
+> ```
+> BEFORE (welcome up):  viewport=0x0    topLevelIf=165  drawScene=0     preSceneDraw=0
+> AFTER  (in world):    viewport=765x503 topLevelIf=164  drawScene≈50/s  preSceneDraw/drawZoneOpaque/drawZoneAlpha/
+>                                                                        drawPass/postSceneDraw all firing ~50/s
+> ```
+> CPU mode then renders the full 3D world; GPU mode fires **every** gpu-plugin scene callback (the no-GL desktop
+> handshake leaves the viewport black because the composite is a no-op — on the device's real EAGL bridge those
+> same callbacks render the scene). Evidence: `evidence/desktop-welcome-screen-resolution-20260605.log`,
+> `evidence/desktop-repro-cpu-inworld-20260605.png` (full world), `evidence/desktop-repro-gpu-inworld-
+> blackviewport-20260605.png` (in-world HUD, callbacks firing, no-GL black viewport).
+>
+> **So `viewport=0x0` / `topLevelIf=165` was the welcome-screen state, NOT a red herring and NOT GPU-intrinsic.**
+> The device's black-scene run reported that *identical* `viewport=0x0 / topLevelIf=165`, so the device was on the
+> welcome screen too. The multi-round "GPU-mode-intrinsic render-gap / opaque-dispatch gate" conclusion in the
+> rest of this doc was a **misdiagnosis** — it assumed (never tested) that the client had entered the world and
+> that CPU mode rendered the scene here; both are false in this harness until the welcome screen is dismissed.
+> The runtime stack (now captured) shows the scene render IS reached normally once in-world:
+> `tf.run → tf.ahu → client.ia → client.jz → gc.ak(scene) → … → ev.dk → preSceneDraw/drawScene`.
+>
+> **FIX (shipped this branch):** `WelcomePlayProbe` (`runelite-client/.../headless/WelcomePlayProbe.java`, gated
+> `-Drunelite.headless.welcomeplay=true`) clicks `WelcomeScreen.PLAY`'s real bounds until the welcome screen is
+> gone; armed on the device autologin path in `JVMLauncher.m`. **Device round: rebuild + run GPU — the gpu plugin
+> should now drive the real EAGL bridge to render the 3D world.** If the scene is *still* black on device once the
+> callbacks fire, that is a NEW, downstream bridge-render issue — but the per-frame dispatch blocker is solved.
+>
+> ---
+> *Everything below is the original (now-superseded) diagnosis, kept for the investigation trail.*
+
 Branch `gpu`. The JNI GL bridge works end-to-end (registration, EAGL ES3 context, OpenGL33=true, shaders
 compile/link, UI renders + composites correctly, readback/color/flip correct, C3 thread identity confirmed).
 The 3D scene is black. This doc records the device-verified diagnosis so the work isn't re-tread.

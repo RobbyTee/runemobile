@@ -62,6 +62,9 @@ import net.runelite.api.hooks.DrawCallbacks;
 public final class GpuSceneDiag
 {
 	private static final boolean ENABLED = Boolean.getBoolean("runelite.gpudiag");
+	/** One-shot: dump the live caller chain the first time the engine dispatches its per-frame scene render. */
+	private static final boolean DUMP_STACK = Boolean.getBoolean("runelite.gpudiag.stack");
+	private static volatile boolean stackDumped;
 
 	private static volatile long sceneDraws;
 	private static volatile long drawTicks;
@@ -85,6 +88,22 @@ public final class GpuSceneDiag
 	 */
 	public static void onDrawScene()
 	{
+		if (DUMP_STACK && !stackDumped)
+		{
+			stackDumped = true;
+			// ONE-SHOT: the engine just dispatched its per-frame 3D scene render (Callbacks.drawScene), so this
+			// stack trace is the LIVE caller chain from the frame loop down to the scene render — the exact
+			// opaque/computed-dispatch path static decompile could not resolve (the diagnosis's dead end). Capture
+			// it in a mode where the scene DOES render (CPU/software headless), then diff against GPU mode (where
+			// drawScene is never called) to localise the branch that suppresses the dispatch. Gated
+			// -Drunelite.gpudiag.stack=true.
+			final StringBuilder sb = new StringBuilder("[gpudiag] FIRST drawScene dispatch — caller chain:\n");
+			for (StackTraceElement e : Thread.currentThread().getStackTrace())
+			{
+				sb.append("    at ").append(e).append('\n');
+			}
+			log.info(sb.toString());
+		}
 		sceneDraws++;
 		maybeLog(null);
 	}

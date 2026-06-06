@@ -402,9 +402,25 @@ public class Hooks implements Callbacks
 			net.runelite.client.headless.HeadlessLogin.tick(
 				client, client.getGameState(), client.getLoginIndex());
 		}
+		if (net.runelite.client.headless.WelcomePlayProbe.isEnabled())
+		{
+			// GPU Route C: dismiss the post-login "Welcome to Gielinor / Click here to play" screen so the engine
+			// actually enters the world render (without this, headless parks on the welcome screen and no scene
+			// renders — in CPU or GPU mode). Gated -Drunelite.headless.welcomeplay=true.
+			net.runelite.client.headless.WelcomePlayProbe.tick(client, client.getGameState());
+		}
 		if (net.runelite.client.headless.HeadlessResize.isEnabled())
 		{
 			net.runelite.client.headless.HeadlessResize.tick(client, client.getGameState());
+		}
+		if (net.runelite.client.headless.GpuHandshakeProbe.isEnabled())
+		{
+			// GPU Route C DESKTOP reproduction: replay GpuPlugin.startUp's engine handshake (setGpuFlags(GPU|ZBUF)
+			// + a no-GL counting DrawCallbacks) with NO GL context, so a desktop CACIO run can test whether the
+			// engine dispatches the per-frame GPU scene render headless (the device black-scene blocker). Mutates
+			// client state — DESKTOP ONLY, never the device path. Runs before GpuSceneDiag so the diag sees it.
+			// Gated -Drunelite.gpuhandshake=true.
+			net.runelite.client.headless.GpuHandshakeProbe.tick(client);
 		}
 		if (net.runelite.client.headless.GpuSceneDiag.isEnabled())
 		{
