@@ -105,10 +105,6 @@ static void rc_awt_create_context(JNIEnv *env)
     [RouteCBridge awtCreateGLContextWidth:w height:h];
 }
 
-// Location of the scene program's "worldProj" uniform, sniffed from glGetUniformLocation, for the reverse-Z
-// clip-z remap in glUniformMatrix4fv (iOS GLES has no glClipControl). -1 = not yet seen.
-static GLint s_worldProjLoc = -1;
-
 // Cached JavaBridge handles for the per-frame GPU publish (resolved once, lazily, after registration).
 static jclass    s_jb  = NULL;
 static jmethodID s_bb  = NULL;  // gpuFrameBackBuffer(II)[I
@@ -475,10 +471,6 @@ static JNIEXPORT jint JNICALL rc_GL_glGetUniformLocation_0(JNIEnv *env, jclass c
 {
     const char *nm = (*env)->GetStringUTFChars(env, a1, NULL);
         jint r = (jint)glGetUniformLocation((GLuint)a0, nm);
-        if (nm && strcmp(nm, "worldProj") == 0) {
-            s_worldProjLoc = (GLint)r;   // arm the reverse-Z clip-z remap for this uniform
-            rc_trace([NSString stringWithFormat:@"[routec] worldProj uniform loc=%d (reverse-Z clip-z remap armed)", (int)r]);
-        }
         (*env)->ReleaseStringUTFChars(env, a1, nm); return r;
 }
 
@@ -629,23 +621,7 @@ static JNIEXPORT void JNICALL rc_GL_glUniformMatrix4fv_0(JNIEnv *env, jclass cls
 {
     jfloat *p = (*env)->GetFloatArrayElements(env, a2, NULL);
         jsize n = (*env)->GetArrayLength(env, a2);
-        // Reverse-Z clip-z remap for the scene's worldProj. iOS GLES has no glClipControl(LOWER_LEFT, ZERO_TO_ONE),
-        // so the plugin's reverse-Z projection (NDC.z = 2*near/viewZ, intended for the [0,1] clip-z convention)
-        // only fills depth [0.5,1] on GLES's [-1,1] convention -> half the range, lost float precision -> z-fighting
-        // (flickering black on water, grass banding). Left-multiply worldProj by Z (row2' = 2*row2 - row3) so the
-        // final NDC.z maps to the FULL [-1,1] clip range -> window depth (0,1] = 2*near/viewZ with proper reverse-Z
-        // float precision, and the same effective near-plane clip. Column-major (transpose=false), single mat4.
-        if (p && a0 == s_worldProjLoc && s_worldProjLoc >= 0 && a1 == JNI_FALSE && n == 16) {
-            jfloat m[16];
-            memcpy(m, p, sizeof(m));
-            m[2]  = 2.0f * m[2]  - m[3];
-            m[6]  = 2.0f * m[6]  - m[7];
-            m[10] = 2.0f * m[10] - m[11];
-            m[14] = 2.0f * m[14] - m[15];
-            glUniformMatrix4fv((GLint)a0, 1, GL_FALSE, m);
-        } else {
-            glUniformMatrix4fv((GLint)a0, n / 16, (GLboolean)a1, p);
-        }
+        glUniformMatrix4fv((GLint)a0, n / 16, (GLboolean)a1, p);
         (*env)->ReleaseFloatArrayElements(env, a2, p, JNI_ABORT);
 }
 
