@@ -40,9 +40,15 @@ rm -rf "$WORK"; mkdir -p "$WORK/facade_out" "$WORK/gpu_out" "$WORK/jar"
 "$JAVAC" -d "$WORK/facade_out" $(find facade-native -name '*.java')
 FACADE_LWJGL_CLASSES=$(cd "$WORK/facade_out" && find org/lwjgl -name '*.class' | wc -l | tr -d ' ')
 
-# 2) explode the pristine jar; strip lwjgl + rlawt + the gpu package (the only LWJGL/rlawt users in the tree).
+# 2) explode the pristine jar; strip lwjgl + rlawt + the gpu package's CLASSES (the only LWJGL/rlawt users in
+#    the tree). For the gpu package we delete ONLY the real-build .class files (recompiled below) and KEEP its
+#    non-class RESOURCES — regions/regions.txt (read by RegionManager's ctor) and the GLSL shaders
+#    (vert/frag/vertui/fragui/hsl_to_rgb/colorblind + scale/*.glsl, loaded via getResourceAsStream at runtime,
+#    then downported 330->ES300 at glShaderSource time). A blanket `rm -rf` of the package would drop them and
+#    the plugin would NPE on the null resource stream before startUp ever runs.
 (cd "$WORK/jar" && unzip -q "$SRC")
-rm -rf "$WORK/jar/org/lwjgl" "$WORK/jar/net/runelite/rlawt" "$WORK/jar/net/runelite/client/plugins/gpu"
+rm -rf "$WORK/jar/org/lwjgl" "$WORK/jar/net/runelite/rlawt"
+find "$WORK/jar/net/runelite/client/plugins/gpu" -name '*.class' -delete
 
 # 3) recompile the unmodified delombok'd gpu sources against [facade-native : stripped-jar]. Recompiling (not
 #    reusing the real-build bytecode) guarantees every reference resolves against facade classes we control.
@@ -61,6 +67,10 @@ SURV=$(cd "$WORK/jar" && find org/lwjgl -name '*.class' 2>/dev/null | wc -l | tr
 RLAWT_SURV=$(find "$WORK/jar/net/runelite/rlawt" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
 GPU_CLASSES=$(cd "$WORK/jar" && find net/runelite/client/plugins/gpu -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
 SVC_LEAK=$( { grep -rIlE 'org\.lwjgl|net\.runelite\.rlawt' "$WORK/jar/META-INF/services" 2>/dev/null || true; } | wc -l | tr -d ' ')
+# gpu-package resources the plugin loads at runtime MUST survive the class strip: regions.txt + the 6 base GLSL
+# shaders (vert/frag/vertui/fragui/hsl_to_rgb/colorblind). A missing regions.txt NPEs RegionManager before startUp.
+GPU_GLSL=$(cd "$WORK/jar" && find net/runelite/client/plugins/gpu -maxdepth 1 -name '*.glsl' 2>/dev/null | wc -l | tr -d ' ')
+GPU_REGIONS=$([ -f "$WORK/jar/net/runelite/client/plugins/gpu/regions/regions.txt" ] && echo 1 || echo 0)
 
 # 6) rezip (keep the on-disk MANIFEST; -M = don't synthesize one).
 NEW="$WORK/staged.jar"
@@ -71,6 +81,8 @@ echo "facade lwjgl classes : $FACADE_LWJGL_CLASSES"
 echo "org/lwjgl survivors  : $SURV   (must == facade lwjgl classes; all bridge-backed)"
 echo "rlawt survivors      : $RLAWT_SURV   (facade AWTContext only)"
 echo "gpu classes          : $GPU_CLASSES   (recompiled against facade-native; 21 sources + inner)"
+echo "gpu base glsl shaders: $GPU_GLSL   (must be >=6: vert/frag/vertui/fragui/hsl_to_rgb/colorblind)"
+echo "gpu regions.txt      : $GPU_REGIONS   (must be 1; RegionManager ctor reads it)"
 echo "stale svc providers  : $SVC_LEAK   (must be 0)"
 echo "staged class md5     : $STAGED_MD5${EXPECT_MD5:+  (expected $EXPECT_MD5)}"
 
@@ -78,6 +90,8 @@ OK=yes
 [ "$SURV" = "$FACADE_LWJGL_CLASSES" ] || OK=no
 [ "$RLAWT_SURV" -ge 1 ] || OK=no
 [ "$GPU_CLASSES" -ge 21 ] || OK=no
+[ "$GPU_GLSL" -ge 6 ] || OK=no
+[ "$GPU_REGIONS" = 1 ] || OK=no
 [ "$SVC_LEAK" = 0 ] || OK=no
 if [ -n "$EXPECT_MD5" ] && [ "$STAGED_MD5" != "$EXPECT_MD5" ]; then OK=no; fi
 

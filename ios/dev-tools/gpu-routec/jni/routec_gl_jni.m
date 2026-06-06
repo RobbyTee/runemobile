@@ -7,6 +7,24 @@
 #import "RouteCBridge.h"
 #include <jni.h>
 #include <stdint.h>
+#include <pthread.h>
+
+// DEVICE-DIAGNOSTIC (temporary): append a one-shot trace line to Documents/routec-trace.log so we can pinpoint
+// how far the gpu plugin's startUp gets through the bridge (loadNatives -> createGLContext -> createCapabilities
+// -> first getFramebuffer -> first swapBuffers). Low-frequency one-shots only; open/append/close per call is fine.
+// STRIP after the GPU device round is green.
+static void rc_trace(NSString *msg)
+{
+    static NSString *path = nil;
+    if (!path) {
+        NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+        path = [[docs stringByAppendingPathComponent:@"routec-trace.log"] copy];
+        FILE *t = fopen(path.UTF8String, "w");  // truncate once per PROCESS so each launch's trace stands alone
+        if (t) { fputs("==== GPU RUN START (one launch) ====\n", t); fclose(t); }
+    }
+    FILE *f = fopen(path.UTF8String, "a");
+    if (f) { fprintf(f, "%s\n", msg.UTF8String); fclose(f); }
+}
 
 static void rc_awt_create_context(JNIEnv *env)
 {
@@ -131,6 +149,8 @@ static JNIEXPORT void JNICALL rc_GL_glBlendFuncSeparate_0(JNIEnv *env, jclass cl
 
 static JNIEXPORT void JNICALL rc_GL_glBlitFramebuffer_0(JNIEnv *env, jclass cls, jint a0, jint a1, jint a2, jint a3, jint a4, jint a5, jint a6, jint a7, jint a8, jint a9)
 {
+    static int t = 0; if (t < 4) { t++;
+        rc_trace([NSString stringWithFormat:@"[routec] glBlitFramebuffer src(%d,%d,%d,%d)->dst(%d,%d,%d,%d) (scene FBO -> default)", a0,a1,a2,a3, a4,a5,a6,a7]); }
     glBlitFramebuffer(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9);
 }
 
@@ -155,7 +175,11 @@ static JNIEXPORT void JNICALL rc_GL_glBufferData_2(JNIEnv *env, jclass cls, jint
 
 static JNIEXPORT jint JNICALL rc_GL_glCheckFramebufferStatus_0(JNIEnv *env, jclass cls, jint a0)
 {
-    return (jint)glCheckFramebufferStatus(a0);
+    GLenum st = glCheckFramebufferStatus(a0);
+    static int n = 0; if (n < 6) { n++;
+        rc_trace([NSString stringWithFormat:@"[routec] glCheckFramebufferStatus -> 0x%x (%@)", st,
+            st == GL_FRAMEBUFFER_COMPLETE ? @"COMPLETE" : @"INCOMPLETE"]); }
+    return (jint)st;
 }
 
 static JNIEXPORT void JNICALL rc_GL_glClear_0(JNIEnv *env, jclass cls, jint a0)
@@ -250,6 +274,8 @@ static JNIEXPORT void JNICALL rc_GL_glDisable_0(JNIEnv *env, jclass cls, jint a0
 
 static JNIEXPORT void JNICALL rc_GL_glDrawArrays_0(JNIEnv *env, jclass cls, jint a0, jint a1, jint a2)
 {
+    static int n = 0; if (n < 12) { n++;
+        rc_trace([NSString stringWithFormat:@"[routec] glDrawArrays mode=0x%x first=%d count=%d", a0, a1, a2]); }
     glDrawArrays(a0, a1, a2);
 }
 
@@ -371,8 +397,14 @@ static JNIEXPORT void JNICALL rc_GL_glLinkProgram_0(JNIEnv *env, jclass cls, jin
 
 static JNIEXPORT jobject JNICALL rc_GL_glMapBuffer_0(JNIEnv *env, jclass cls, jint a0, jint a1)
 {
-    void *p = [RouteCBridge glMapBufferShim:(GLenum)a0 access:(GLenum)a1 size:0];
-        return p ? (*env)->NewDirectByteBuffer(env, p, 0) : NULL; /* TODO(device): size from the bound buffer's GL_BUFFER_SIZE */
+    /* LWJGL's glMapBuffer(target, access) maps the WHOLE buffer and returns a ByteBuffer sized to it. ES 3.0 has
+       only glMapBufferRange, which needs an explicit length — so query the bound buffer's GL_BUFFER_SIZE and wrap
+       the mapped pointer with exactly that capacity (a 0-capacity buffer overflows the plugin's interfacePbo put). */
+    GLint bufSize = 0;
+    glGetBufferParameteriv((GLenum)a0, GL_BUFFER_SIZE, &bufSize);
+    if (bufSize <= 0) return NULL;
+    void *p = [RouteCBridge glMapBufferShim:(GLenum)a0 access:(GLenum)a1 size:(GLsizeiptr)bufSize];
+        return p ? (*env)->NewDirectByteBuffer(env, p, (jlong)bufSize) : NULL;
 }
 
 static JNIEXPORT jobject JNICALL rc_GL_glMapBufferRange_0(JNIEnv *env, jclass cls, jint a0, jlong a1, jlong a2, jint a3, jobject a4)
@@ -386,6 +418,10 @@ static JNIEXPORT void JNICALL rc_GL_glMultiDrawArrays_0(JNIEnv *env, jclass cls,
     const GLint *first = (const GLint *)(*env)->GetDirectBufferAddress(env, a1);
         const GLsizei *count = (const GLsizei *)(*env)->GetDirectBufferAddress(env, a2);
         GLsizei n = (GLsizei)((*env)->GetDirectBufferCapacity(env, a1));
+        static int t = 0; if (t < 8) { t++;
+            long total = 0; for (GLsizei i = 0; i < n && count; i++) total += count[i];
+            rc_trace([NSString stringWithFormat:@"[routec] glMultiDrawArrays mode=0x%x draws=%d totalVerts=%ld first0=%d (SCENE geometry)",
+                a0, (int)n, total, (first && n>0) ? first[0] : -1]); }
         [RouteCBridge glMultiDrawArraysShim:(GLenum)a0 first:first count:count drawcount:n];
 }
 
@@ -401,7 +437,15 @@ static JNIEXPORT void JNICALL rc_GL_glReadPixels_0(JNIEnv *env, jclass cls, jint
 
 static JNIEXPORT void JNICALL rc_GL_glRenderbufferStorageMultisample_0(JNIEnv *env, jclass cls, jint a0, jint a1, jint a2, jint a3, jint a4)
 {
-    glRenderbufferStorageMultisample(a0, a1, a2, a3, a4);
+    // ES 3.0 renderbuffers require a SIZED internal format; the plugin passes GL_RGBA (unsized, desktop-legal).
+    // Translate to GL_RGBA8 so the multisampled color renderbuffer gets valid storage (else FBO-incomplete / black).
+    GLenum ifmt = (GLenum)a2;
+    if (ifmt == GL_RGBA) ifmt = GL_RGBA8;
+    while (glGetError() != GL_NO_ERROR) {} /* drain */
+    glRenderbufferStorageMultisample(a0, a1, ifmt, a3, a4);
+    static int n = 0; if (n < 4) { n++;
+        rc_trace([NSString stringWithFormat:@"[routec] glRenderbufferStorageMultisample samples=%d ifmt=0x%x(orig 0x%x) %dx%d glErr=0x%x",
+            a1, ifmt, (GLenum)a2, a3, a4, glGetError()]); }
 }
 
 static JNIEXPORT void JNICALL rc_GL_glShaderSource_0(JNIEnv *env, jclass cls, jint a0, jstring a1)
@@ -523,6 +567,8 @@ static JNIEXPORT void JNICALL rc_GL_glVertexAttribPointer_0(JNIEnv *env, jclass 
 
 static JNIEXPORT void JNICALL rc_GL_glViewport_0(JNIEnv *env, jclass cls, jint a0, jint a1, jint a2, jint a3)
 {
+    static int n = 0; if (n < 10) { n++;
+        rc_trace([NSString stringWithFormat:@"[routec] glViewport(%d,%d,%d,%d)", a0, a1, a2, a3]); }
     glViewport(a0, a1, a2, a3);
 }
 
@@ -548,7 +594,9 @@ static JNIEXPORT void JNICALL rc_AWT_configurePixelFormat_0(JNIEnv *env, jobject
 
 static JNIEXPORT void JNICALL rc_AWT_createGLContext_0(JNIEnv *env, jobject self)
 {
+    rc_trace([NSString stringWithFormat:@"[routec] createGLContext ENTER thread=%p", (void *)pthread_self()]);
     rc_awt_create_context(env); /* EAGL ES3 context + FBO, current on THIS (client) thread */
+    rc_trace([NSString stringWithFormat:@"[routec] createGLContext DONE fb=%dx%d", [RouteCBridge fbWidth], [RouteCBridge fbHeight]]);
 }
 
 static JNIEXPORT void JNICALL rc_AWT_destroy_0(JNIEnv *env, jobject self)
@@ -563,12 +611,17 @@ static JNIEXPORT jint JNICALL rc_AWT_getBufferMode_0(JNIEnv *env, jobject self)
 
 static JNIEXPORT jint JNICALL rc_AWT_getFramebuffer_0(JNIEnv *env, jobject self, jboolean a0)
 {
+    static int once = 0; if (!once) { once = 1; rc_trace(@"[routec] first getFramebuffer (plugin is drawing through the bridge)"); }
     rc_per_frame(env); /* re-bind context + resize-if-changed, early each draw */
         return (jint)[RouteCBridge awtGetFramebuffer];
 }
 
 static JNIEXPORT void JNICALL rc_AWT_loadNatives_0(JNIEnv *env, jobject self)
 {
+    // Fires once per client tick that startUp's lambda runs. If we see MANY of these but no createGLContext,
+    // the lambda is stuck on its `if (!canvas.isValid()) return false;` retry. Cap to avoid unbounded spam.
+    static int n = 0; if (n < 10) { n++;
+        rc_trace([NSString stringWithFormat:@"[routec] AWTContext.loadNatives #%d (startUp lambda entered)", n]); }
     /* no-op (re-signed dylibs already loaded) */
 }
 
@@ -579,6 +632,9 @@ static JNIEXPORT jint JNICALL rc_AWT_setSwapInterval_0(JNIEnv *env, jobject self
 
 static JNIEXPORT void JNICALL rc_AWT_swapBuffers_0(JNIEnv *env, jobject self)
 {
+    static int once = 0; if (!once) { once = 1;
+        rc_trace([NSString stringWithFormat:@"[routec] first swapBuffers thread=%p readbackFBO=%dx%d (C3 check; readback size) — GPU frame publishing",
+            (void *)pthread_self(), [RouteCBridge fbWidth], [RouteCBridge fbHeight]]); }
     rc_swap_publish(env); /* glReadPixels the FBO -> JavaBridge back buffer -> publish (sole frameSeq publisher) */
 }
 
@@ -596,7 +652,7 @@ static jobject rc_make_caps(JNIEnv *env)
     (*env)->SetBooleanField(env, o, (*env)->GetFieldID(env, c, "GL_EXT_texture_filter_anisotropic", "Z"), aniso);
     return o;
 }
-static JNIEXPORT jobject JNICALL rc_GL_createCapabilities_0(JNIEnv *env, jclass cls) { return rc_make_caps(env); }
+static JNIEXPORT jobject JNICALL rc_GL_createCapabilities_0(JNIEnv *env, jclass cls) { rc_trace(@"[routec] GL.createCapabilities (past createGLContext; OpenGL33=true returned)"); return rc_make_caps(env); }
 static JNIEXPORT jobject JNICALL rc_GL_getCapabilities_0(JNIEnv *env, jclass cls) { return rc_make_caps(env); }
 
 static const JNINativeMethod kGLALL[] = {
@@ -706,12 +762,15 @@ static const JNINativeMethod kGL[] = {
 // Call once after JNI_CreateJavaVM, before the gpu plugin starts.
 jint RouteC_registerGLNatives(JNIEnv *env)
 {
+    rc_trace(@"[routec] RouteC_registerGLNatives ENTER");   // banner + per-launch truncation happens here
     jclass glall = (*env)->FindClass(env, "org/lwjgl/opengl/GLALL");
     jclass awt = (*env)->FindClass(env, "net/runelite/rlawt/AWTContext");
     jclass gl = (*env)->FindClass(env, "org/lwjgl/opengl/GL");
-    if (!glall || !awt || !gl) return JNI_ERR;
-    if ((*env)->RegisterNatives(env, glall, kGLALL, (jint)(sizeof(kGLALL)/sizeof(kGLALL[0]))) < 0) return JNI_ERR;
-    if ((*env)->RegisterNatives(env, awt, kAWT, (jint)(sizeof(kAWT)/sizeof(kAWT[0]))) < 0) return JNI_ERR;
-    if ((*env)->RegisterNatives(env, gl, kGL, (jint)(sizeof(kGL)/sizeof(kGL[0]))) < 0) return JNI_ERR;
+    if (!glall || !awt || !gl) { rc_trace([NSString stringWithFormat:@"[routec] FindClass FAIL glall=%p awt=%p gl=%p", glall, awt, gl]); return JNI_ERR; }
+    jint rg = (*env)->RegisterNatives(env, glall, kGLALL, (jint)(sizeof(kGLALL)/sizeof(kGLALL[0])));
+    jint ra = (*env)->RegisterNatives(env, awt, kAWT, (jint)(sizeof(kAWT)/sizeof(kAWT[0])));
+    jint rl = (*env)->RegisterNatives(env, gl, kGL, (jint)(sizeof(kGL)/sizeof(kGL[0])));
+    rc_trace([NSString stringWithFormat:@"[routec] RegisterNatives glall=%d awt=%d gl=%d (0=OK) awtClass=%p", rg, ra, rl, awt]);
+    if (rg < 0 || ra < 0 || rl < 0) return JNI_ERR;
     return JNI_OK;
 }

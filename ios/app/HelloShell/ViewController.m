@@ -17,6 +17,7 @@
 }
 @property (nonatomic, strong) UITextView *console;
 @property (nonatomic, strong) UIButton *launchButton;
+@property (nonatomic, strong) UIButton *gpuButton;   // GPU Route C: dedicated one-tap button to boot full RuneLite on GPU
 @property (nonatomic, strong) UIButton *canaryButton;
 @property (nonatomic, strong) UIButton *keyboardButton;
 // W3 hybrid-chrome device de-risk: read the MobileChromeBridge snapshot + proxy a tab switch via the proven
@@ -357,6 +358,18 @@ static const CGFloat kMenuWidth       = 210.0;
                 forControlEvents:UIControlEventTouchUpInside];
     [self.debugPanel addSubview:self.chromeButton];
 
+    // GPU Route C: dedicated one-tap button to boot full RuneLite on the device GPU (equivalent to the
+    // two-finger long-press on the launch button, but unambiguous). Enabled together with the launch button
+    // once the JIT debugger is attached.
+    self.gpuButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.gpuButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.gpuButton setTitle:@"▶ Run GPU (Route C)" forState:UIControlStateNormal];
+    self.gpuButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    self.gpuButton.enabled = NO;
+    [self.gpuButton addTarget:self action:@selector(onLaunchGpu)
+             forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.gpuButton];
+
     self.loginButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.loginButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.loginButton setTitle:@"Log in with Jagex" forState:UIControlStateNormal];
@@ -472,6 +485,8 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.canaryButton.leadingAnchor constraintEqualToAnchor:self.launchButton.trailingAnchor constant:24],
         [self.chromeButton.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor constant:6],
         [self.chromeButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
+        [self.gpuButton.centerYAnchor constraintEqualToAnchor:self.chromeButton.centerYAnchor],
+        [self.gpuButton.leadingAnchor constraintEqualToAnchor:self.chromeButton.trailingAnchor constant:24],
         [self.loginButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
         [self.loginButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.logoutButton.centerYAnchor constraintEqualToAnchor:self.loginButton.centerYAnchor],
@@ -942,6 +957,7 @@ static const CGFloat kMenuWidth       = 210.0;
         self.statusLabel.textColor = attached ? [UIColor systemGreenColor] : [UIColor systemYellowColor];
         if (attached && !self.launchButton.enabled && !self.launched) {
             self.launchButton.enabled = YES;
+            self.gpuButton.enabled = YES;
             [self appendLine:@"StikDebug attached — CS_DEBUGGED set. Tap Start JVM."];
         }
     }];
@@ -1176,6 +1192,13 @@ static const CGFloat kMenuWidth       = 210.0;
     [self onLaunch];
 }
 
+// GPU Route C — dedicated one-tap button (same effect as the two-finger long-press, but unambiguous).
+- (void)onLaunchGpu {
+    if (self.launched) return;
+    self.pendingRouteCGpu = YES;
+    [self onLaunch];
+}
+
 - (void)onLaunch {
     if (self.launched) return;
     // If the login web view ran this session, WebKit is resident and the JVM would crash at code-cache
@@ -1183,6 +1206,7 @@ static const CGFloat kMenuWidth       = 210.0;
     if (self.webKitUsedThisSession) { [self promptRestartToPlay]; return; }
     self.launched = YES;
     self.launchButton.enabled = NO;
+    self.gpuButton.enabled = NO;
     [self.jitTimer invalidate];
     [self captureStdio];
 
