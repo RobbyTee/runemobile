@@ -790,6 +790,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         log([NSString stringWithFormat:@"[jvm] full-screen render target = %@", self.resizeSpec]);
     }
 
+    // GPU Route C scene-render diagnostic: read-only per-frame log (isGpu / registered DrawCallbacks +
+    // classloader / viewport / drawScene count) -> .runelite/logs/client.log, to localise the black-3D-scene
+    // blocker (zone callbacks never firing) ABOVE the GL bridge. Inert in CPU/L1 mode.
+    if (self.routecGpuMode) {
+        [opts addObject:@"-Drunelite.gpudiag=true"];
+        log(@"[jvm] GPU Route C scene-render diagnostic ARMED (-Drunelite.gpudiag=true)");
+    }
+
     // Phase 4 sub-goal A — interactive login, purely in-process (no native touch bridge). Map the JX_*
     // launcher handoff from Documents/tokens.json, then arm HeadlessLogin's two-stage click machine
     // (EULA Accept -> Play Now). Only arms when a usable token set is present, so a build with no

@@ -406,6 +406,13 @@ public class Hooks implements Callbacks
 		{
 			net.runelite.client.headless.HeadlessResize.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.GpuSceneDiag.isEnabled())
+		{
+			// GPU Route C: read-only per-frame snapshot (isGpu / registered DrawCallbacks + classloader /
+			// viewport / drawScene count) to localise the black-3D-scene blocker above the GL bridge. Runs
+			// before the isGpu early-return below so it ticks in GPU mode. Gated -Drunelite.gpudiag=true.
+			net.runelite.client.headless.GpuSceneDiag.tick(client);
+		}
 		if (net.runelite.client.headless.MobileToplevelProbe.isEnabled())
 		{
 			// W3 mobile-layout spike: one-shot, on the client thread, gated by -Drunelite.mobileui.toplevel=osm.
@@ -661,6 +668,14 @@ public class Hooks implements Callbacks
 	@Override
 	public void drawScene()
 	{
+		if (net.runelite.client.headless.GpuSceneDiag.isEnabled())
+		{
+			// GPU Route C: count the per-frame scene-render callback (fires at the end of the injected scene
+			// render `ev.dk`, both zone and legacy branches) to tell whether the engine drives the 3D scene
+			// at all in GPU mode. Read-only; gated -Drunelite.gpudiag=true.
+			net.runelite.client.headless.GpuSceneDiag.onDrawScene();
+		}
+
 		MainBufferProvider bufferProvider = (MainBufferProvider) client.getBufferProvider();
 		Graphics2D graphics2d = getGraphics(bufferProvider);
 
