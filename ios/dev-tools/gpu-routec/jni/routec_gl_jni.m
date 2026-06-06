@@ -57,6 +57,30 @@ static void rc_dump_gl_state(const char *whenLabel)
         blend, bsrc, bdst, cull, atex, texArr]);
 }
 
+// (*env)->NewDirectByteBuffer returns a ByteBuffer whose byte order defaults to BIG_ENDIAN (JNI/Java spec).
+// But LWJGL hands the plugin mapped buffers in NATIVE order (little-endian on iOS arm64), and the plugin writes
+// all vertex + interface-pixel data through buffer.asIntBuffer() (VBO.java:79, GpuPlugin.prepareInterfaceTexture)
+// WITHOUT setting an order — so it assumes native. Left big-endian, every int/short is byte-swapped before the
+// little-endian GPU reads it -> corrupt vertex positions/colors (huge stretched garbage triangles) + wrong
+// interface texels. Reconfigure the returned buffer to native order: bb.order(ByteOrder.nativeOrder()).
+static jobject rc_native_order(JNIEnv *env, jobject bb)
+{
+    if (!bb) return bb;
+    jclass boCls = (*env)->FindClass(env, "java/nio/ByteOrder");
+    jclass bbCls = (*env)->FindClass(env, "java/nio/ByteBuffer");
+    if (boCls && bbCls) {
+        jmethodID nativeOrder = (*env)->GetStaticMethodID(env, boCls, "nativeOrder", "()Ljava/nio/ByteOrder;");
+        jmethodID order = (*env)->GetMethodID(env, bbCls, "order", "(Ljava/nio/ByteOrder;)Ljava/nio/ByteBuffer;");
+        if (nativeOrder && order) {
+            jobject no = (*env)->CallStaticObjectMethod(env, boCls, nativeOrder);
+            jobject ret = (*env)->CallObjectMethod(env, bb, order, no); // returns `this`, reconfigured
+            if (ret) bb = ret;
+        }
+    }
+    (*env)->ExceptionClear(env);
+    return bb;
+}
+
 static void rc_awt_create_context(JNIEnv *env)
 {
     int w = 512, h = 512; /* default for the L1 probe (no engine canvas) */
@@ -435,13 +459,13 @@ static JNIEXPORT jobject JNICALL rc_GL_glMapBuffer_0(JNIEnv *env, jclass cls, ji
     glGetBufferParameteriv((GLenum)a0, GL_BUFFER_SIZE, &bufSize);
     if (bufSize <= 0) return NULL;
     void *p = [RouteCBridge glMapBufferShim:(GLenum)a0 access:(GLenum)a1 size:(GLsizeiptr)bufSize];
-        return p ? (*env)->NewDirectByteBuffer(env, p, (jlong)bufSize) : NULL;
+        return p ? rc_native_order(env, (*env)->NewDirectByteBuffer(env, p, (jlong)bufSize)) : NULL;
 }
 
 static JNIEXPORT jobject JNICALL rc_GL_glMapBufferRange_0(JNIEnv *env, jclass cls, jint a0, jlong a1, jlong a2, jint a3, jobject a4)
 {
     void *p = glMapBufferRange((GLenum)a0,(GLintptr)a1,(GLsizeiptr)a2,(GLbitfield)a3);
-        return p ? (*env)->NewDirectByteBuffer(env, p, a2) : NULL;
+        return p ? rc_native_order(env, (*env)->NewDirectByteBuffer(env, p, a2)) : NULL;
 }
 
 static JNIEXPORT void JNICALL rc_GL_glMultiDrawArrays_0(JNIEnv *env, jclass cls, jint a0, jobject a1, jobject a2)
