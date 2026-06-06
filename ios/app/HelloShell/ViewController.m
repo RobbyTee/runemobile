@@ -48,6 +48,7 @@
 @property (nonatomic, assign) BOOL launched;
 @property (nonatomic, assign) BOOL pendingRouteCL1;   // GPU Route C: long-press Start -> boot the L1 kill-test
 @property (nonatomic, assign) BOOL pendingRouteCGpu;  // GPU Route C: two-finger long-press -> full RuneLite on GPU
+@property (nonatomic, assign) BOOL pendingRouteCGpuNoResize;  // GPU Route C bisection: skip headless.resize (fixed 765x503)
 
 // W3 native shell: keep the process alive + show frames. The JVM ran fine on device but iOS
 // jetsam'd the (idle-UI) process within ~250 ms — before the engine drew its first frame. Two
@@ -1188,7 +1189,12 @@ static const CGFloat kMenuWidth       = 210.0;
 - (void)onLaunchRouteCGpuGesture:(UILongPressGestureRecognizer *)g {
     if (g.state != UIGestureRecognizerStateBegan) return;
     if (self.launched) return;
+    // GPU Route C black-scene bisection: two-finger long-press = GPU in FIXED mode (NO headless.resize, stays
+    // 765x503). The CPU path renders the scene fine at the resizable 1304x600 + viewport=0x0 state, while GPU
+    // resizable never dispatches the scene render (drawScene=0). Fixed mode isolates whether the resizable
+    // viewport/scene-dispatch path is the GPU-broken one. The ▶ Run GPU button stays GPU + resize.
     self.pendingRouteCGpu = YES;
+    self.pendingRouteCGpuNoResize = YES;
     [self onLaunch];
 }
 
@@ -1258,9 +1264,16 @@ static const CGFloat kMenuWidth       = 210.0;
     int renderW = (int)lround(renderH * aspect);
     self.renderW = renderW;
     self.renderH = renderH;
-    launcher.resizeSpec = [NSString stringWithFormat:@"%dx%d", renderW, renderH];
-    [self appendLine:[NSString stringWithFormat:@"[shell] full-screen %.0fx%.0f aspect %.3f -> render %@",
-                      sw, sh, aspect, launcher.resizeSpec]];
+    if (self.pendingRouteCGpuNoResize) {
+        // GPU Route C bisection: leave the canvas at the classic fixed 765x503 (no resizable switch) so we can
+        // tell whether the scene render is suppressed by GPU mode itself or only by the resizable-layout path.
+        launcher.resizeSpec = nil;
+        [self appendLine:@"[shell] *** GPU Route C — FIXED mode (no headless.resize, 765x503 bisection) ***"];
+    } else {
+        launcher.resizeSpec = [NSString stringWithFormat:@"%dx%d", renderW, renderH];
+        [self appendLine:[NSString stringWithFormat:@"[shell] full-screen %.0fx%.0f aspect %.3f -> render %@",
+                          sw, sh, aspect, launcher.resizeSpec]];
+    }
 
     NSThread *t = [[NSThread alloc] initWithBlock:^{
         [launcher runProbesWithLog:log];
