@@ -89,11 +89,29 @@ public final class GpuSceneDiag
 		maybeLog(null);
 	}
 
-	/** Per {@code Hooks.draw} — drives the throttled snapshot from a hook that runs every frame. */
+	/** Per {@code Hooks.draw} — installs the tracing wrapper (once, early) + drives the throttled snapshot. */
 	public static void tick(Client client)
 	{
 		drawTicks++;
+		installTracerIfNeeded(client);
 		maybeLog(client);
+	}
+
+	/**
+	 * Wrap the gpu plugin's {@link DrawCallbacks} in {@link TracingDrawCallbacks} the moment it registers —
+	 * during LOGGING_IN, before the login scene-load constructs the engine's scene-loader (which captures the
+	 * current callbacks ref). Wrapping before that point keeps the loader's captured ref equal to {@code client}'s
+	 * callbacks, so {@code loadScene}/{@code swapScene} dispatch stays intact. Idempotent (skips once wrapped).
+	 */
+	private static void installTracerIfNeeded(Client client)
+	{
+		final DrawCallbacks cb = client.getDrawCallbacks();
+		if (cb != null && !(cb instanceof TracingDrawCallbacks)
+			&& cb.getClass().getName().contains(".gpu.GpuPlugin"))
+		{
+			client.setDrawCallbacks(new TracingDrawCallbacks(cb));
+			log.info("[gpudiag] installed TracingDrawCallbacks around {}", cb.getClass().getName());
+		}
 	}
 
 	private static synchronized void maybeLog(Client client)
@@ -136,12 +154,13 @@ public final class GpuSceneDiag
 		}
 
 		log.info("[gpudiag] state={} isGpu={} drawCallbacks={} drawScene(total={} +{}) drawTick(total={} +{}) "
-				+ "viewport={}x{} canvas={}x{} sceneNonNull={} gameCycle={} {}",
+				+ "viewport={}x{} canvas={}x{} sceneNonNull={} gameCycle={} {} || callbacks[{}]",
 			client.getGameState(), client.isGpu(), cbClass,
 			sd, sd - lastSceneDraws, dt, dt - lastDrawTicks,
 			client.getViewportWidth(), client.getViewportHeight(),
 			client.getCanvasWidth(), client.getCanvasHeight(),
-			client.getScene() != null, client.getGameCycle(), layout);
+			client.getScene() != null, client.getGameCycle(), layout,
+			TracingDrawCallbacks.summary());
 
 		lastSceneDraws = sd;
 		lastDrawTicks = dt;
