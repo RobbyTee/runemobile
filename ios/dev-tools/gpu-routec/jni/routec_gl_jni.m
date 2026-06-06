@@ -154,28 +154,34 @@ static void rc_swap_publish(JNIEnv *env)
     if (!s_bb || !s_pub) return;
     jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, s_jb, s_bb, (jint)w, (jint)h);
     if (!arr) return;
-    double tReadback = 0;
+    // PERF SPLIT (temporary): time the GPU render wait (glFinish) SEPARATELY from the readback copy. glReadPixels
+    // implicitly waits for the GPU, so the old "readback" number conflated GPU-render-time + copy-time. Splitting
+    // them decides the CAEAGLLayer question: if gpuFinish dominates -> GPU-bound (direct present caps near 1/gpuMs,
+    // also need to cut GPU load); if copy dominates -> direct present (no readback) is the big win.
+    double tGpu = 0, tCopy = 0;
+    double g0 = CACurrentMediaTime();
+    glFinish();                              // block until the GPU has finished rendering THIS frame
+    tGpu = CACurrentMediaTime() - g0;        // = GPU render time/frame
     void *dst = (*env)->GetPrimitiveArrayCritical(env, arr, NULL);
     if (dst) {
         double r0 = CACurrentMediaTime();
-        [RouteCBridge readbackInto:(uint32_t *)dst width:w height:h];
-        tReadback = CACurrentMediaTime() - r0;
+        [RouteCBridge readbackInto:(uint32_t *)dst width:w height:h];  // GPU already done -> pure CPU copy+flip
+        tCopy = CACurrentMediaTime() - r0;
         (*env)->ReleasePrimitiveArrayCritical(env, arr, dst, 0);
     }
     (*env)->CallStaticVoidMethod(env, s_jb, s_pub, (jint)w, (jint)h);
     (*env)->DeleteLocalRef(env, arr);
 
-    // PERF (temporary, STRIP after tuning): engine composite FPS = rc_swap_publish (swapBuffers) rate; readback =
-    // the glReadPixels + flip/swizzle cost (the suspected GPU->CPU sync bottleneck). One line/sec -> routec-trace.log.
-    static int frames = 0; static double accReadback = 0, lastLog = 0;
+    // PERF (temporary, STRIP after tuning): engine composite FPS + the GPU-vs-copy split. One line/sec.
+    static int frames = 0; static double accGpu = 0, accCopy = 0, lastLog = 0;
     double now = CACurrentMediaTime();
-    frames++; accReadback += tReadback;
+    frames++; accGpu += tGpu; accCopy += tCopy;
     if (lastLog == 0) lastLog = now;
     double span = now - lastLog;
     if (span >= 1.0) {
-        rc_trace([NSString stringWithFormat:@"[perf] engine=%.1f fps  readback=%.2f ms/frame  (%d frames, %dx%d)",
-            frames / span, (accReadback / frames) * 1000.0, frames, w, h]);
-        frames = 0; accReadback = 0; lastLog = now;
+        rc_trace([NSString stringWithFormat:@"[perf] engine=%.1f fps  gpuFinish=%.2f ms  copy=%.2f ms  (%d frames, %dx%d)",
+            frames / span, (accGpu / frames) * 1000.0, (accCopy / frames) * 1000.0, frames, w, h]);
+        frames = 0; accGpu = 0; accCopy = 0; lastLog = now;
     }
 }
 
