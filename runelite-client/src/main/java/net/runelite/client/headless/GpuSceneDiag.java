@@ -112,27 +112,36 @@ public final class GpuSceneDiag
 		final long sd = sceneDraws;
 		final long dt = drawTicks;
 		final DrawCallbacks cb = client.getDrawCallbacks();
-		final String cbClass;
-		final String cbLoader;
-		if (cb == null)
+		final String cbClass = cb == null ? "null" : cb.getClass().getName();
+
+		// Layout state: device round 1 proved the scene render (ev.dk / drawScene) is never dispatched and the
+		// viewport setter (od, which clamps to >=1) is never called (viewport stuck 0x0) — so the engine never
+		// draws the game-viewport interface in GPU mode. These reads localise WHY: is a toplevel interface even
+		// loaded, is the client in resizable mode, what does the engine think its real size is, are widget roots
+		// present. Defensive — some throw before the world is built.
+		String layout;
+		try
 		{
-			cbClass = "null";
-			cbLoader = "null";
+			final java.awt.Dimension real = client.getRealDimensions();
+			final net.runelite.api.widgets.Widget[] roots = client.getWidgetRoots();
+			layout = String.format("resized=%s topLevelIf=%d real=%dx%d widgetRoots=%d vpOff=%d,%d",
+				client.isResized(), client.getTopLevelInterfaceId(),
+				real == null ? -1 : real.width, real == null ? -1 : real.height,
+				roots == null ? -1 : roots.length,
+				client.getViewportXOffset(), client.getViewportYOffset());
 		}
-		else
+		catch (Throwable t)
 		{
-			cbClass = cb.getClass().getName();
-			final ClassLoader cl = cb.getClass().getClassLoader();
-			cbLoader = cl == null ? "boot" : cl.toString();
+			layout = "layout-read-failed:" + t;
 		}
 
-		log.info("[gpudiag] state={} isGpu={} drawCallbacks={} loader={} drawScene(total={} +{}) drawTick(total={} +{}) "
-				+ "viewport={}x{} canvas={}x{} sceneNonNull={}",
-			client.getGameState(), client.isGpu(), cbClass, cbLoader,
+		log.info("[gpudiag] state={} isGpu={} drawCallbacks={} drawScene(total={} +{}) drawTick(total={} +{}) "
+				+ "viewport={}x{} canvas={}x{} sceneNonNull={} gameCycle={} {}",
+			client.getGameState(), client.isGpu(), cbClass,
 			sd, sd - lastSceneDraws, dt, dt - lastDrawTicks,
 			client.getViewportWidth(), client.getViewportHeight(),
 			client.getCanvasWidth(), client.getCanvasHeight(),
-			client.getScene() != null);
+			client.getScene() != null, client.getGameCycle(), layout);
 
 		lastSceneDraws = sd;
 		lastDrawTicks = dt;
