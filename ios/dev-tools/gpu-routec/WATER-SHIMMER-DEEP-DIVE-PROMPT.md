@@ -1,6 +1,6 @@
 # Deep-dive prompt — GPU Route C water/flat-surface shimmer
 
-> Paste everything inside the fenced block below into a fresh Opus 4.8 (max-effort) session, run from the repo
+> Paste everything inside the fenced block below into a fresh max-effort session, run from the repo
 > root `/Users/jordansimpson/runelite-ios` on the branch `gpu`. It is self-contained.
 
 ```
@@ -28,9 +28,9 @@ ORIENT FIRST (read, in order)
 ================================================================================
 - ios/dev-tools/gpu-routec/BLACK-SCENE-DIAGNOSIS.md      (the prior, now-resolved black-scene saga; context)
 - ios/dev-tools/gpu-routec/README.md                     (Route C architecture: facade + JNI bridge)
-- CLAUDE.md                                              (project + STRICT commit/attribution rules)
-- the cross-session memory: ~/.claude/projects/-Users-jordansimpson-runelite-ios/memory/project_ios_gpu_track.md
-  (read the whole DEVICE ROUND section onward — it's the running log of this GPU work)
+- the project working notes / commit + attribution conventions (auto-loaded as project instructions)
+- the project's running cross-session notes for this GPU work (the project_ios_gpu_track note; auto-loaded) —
+  read the whole DEVICE ROUND section onward
 - the GL bridge: ios/dev-tools/gpu-routec/app/RouteCBridge.{h,m} and ios/dev-tools/gpu-routec/jni/routec_gl_jni.m
 - the plugin: runelite-client/src/main/java/net/runelite/client/plugins/gpu/{GpuPlugin.java, Mat4.java,
   Zone.java, VBO.java, VAO.java}
@@ -199,9 +199,10 @@ CONSTRAINTS
 - Do NOT modify the base gpu plugin source (runelite-client/.../plugins/gpu/*) or its shader .glsl resources.
   Route C keeps the plugin SOURCE unmodified; all fixes go in the bridge (RouteCBridge / routec_gl_jni / the
   glShaderSource-time downport), the W2 headless layer, or boot/config.
-- Commit + push under the user's name ONLY (Jordan Simpson <sayhijordy@gmail.com>). NO AI/tool attribution
-  anywhere — no Co-Authored-By, no "generated with", no mention of Claude/Codex/Anthropic in commits, comments,
-  or any committed doc. Scrub staged content before committing. Auto-commit + push at logical checkpoints.
+- Commit + push under the user's name ONLY (Jordan Simpson <sayhijordy@gmail.com>). NO AI/tool attribution of
+  any kind anywhere — no Co-Authored-By trailer, no "generated with", and no tool/model/assistant names — in
+  commits, code comments, or any committed doc. Scrub staged content before committing. Auto-commit + push at
+  logical checkpoints.
 - Be honest about uncertainty; verify on device; don't declare a fix until a screen recording shows clean water.
 
 ================================================================================
@@ -212,5 +213,6 @@ DELIVERABLE
 2. A fix in the bridge/downport/config layer, verified clean on device (the user confirms via a screen
    recording / screenshot showing the river without the shimmer), with no regression elsewhere (check grazing
    angles + entity depth sorting).
-3. Update ios/dev-tools/gpu-routec/BLACK-SCENE-DIAGNOSIS.md (or a new doc) and the memory file with the result.
+3. Update ios/dev-tools/gpu-routec/BLACK-SCENE-DIAGNOSIS.md (or a new doc) and the project's cross-session
+   notes with the result.
 ```
