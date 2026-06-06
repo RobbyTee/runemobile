@@ -338,11 +338,6 @@ static JNIEXPORT void JNICALL rc_GL_glDeleteVertexArrays_0(JNIEnv *env, jclass c
 
 static JNIEXPORT void JNICALL rc_GL_glDepthFunc_0(JNIEnv *env, jclass cls, jint a0)
 {
-    // Reverse-Z coplanar fix: the plugin uses GL_GREATER (strict), which REJECTS coplanar surfaces (equal depth) ->
-    // water sitting on the riverbed at equal depth is dropped, showing black, flickering as the camera nudges the
-    // tie. GL_GEQUAL draws coplanar ties (last-drawn wins, deterministic) — the predecessor's reverse-Z work flagged
-    // GEQUAL as better than GREATER for exactly this. Map GREATER->GEQUAL.
-    if (a0 == GL_GREATER) a0 = GL_GEQUAL;
     glDepthFunc((GLenum)a0);
 }
 

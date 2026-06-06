@@ -272,29 +272,6 @@ static BOOL rcBuildFbo(int w, int h)
 		}
 	}
 
-	// 6) WATER/GRASS Z-FIGHTING FIX — true reverse-Z depth in the SCENE shaders. iOS GLES has no glClipControl, so
-	//    the plugin's reverse-Z projection (NDC.z = clip.z/clip.w, near=1 far=0) only fills window depth [0.5,1] via
-	//    the fixed (z+1)/2 transform, losing the float-near-0 precision reverse-Z relies on -> z-fighting on far flat
-	//    surfaces (water/ground). Write the depth directly: pass clip.z (with the per-vertex bias) as a varying and
-	//    set gl_FragDepth = clip.z * gl_FragCoord.w (= clip.z/clip.w = NDC.z) at full float precision. (Disables
-	//    early-z, but the GPU has huge headroom here.) Scene vertex detected by "gl_Position = screenPos;", scene
-	//    fragment by "fTextureId" (the UI shaders have neither, so they're untouched).
-	if (!fragment && [s rangeOfString:@"gl_Position = screenPos;"].location != NSNotFound)
-	{
-		[s replaceOccurrencesOfString:@"void main() {"
-			withString:@"out highp float vClipZ;\nvoid main() {"
-			options:0 range:NSMakeRange(0, s.length)];
-		[s replaceOccurrencesOfString:@"gl_Position = screenPos;"
-			withString:@"gl_Position = screenPos;\n  vClipZ = screenPos.z;"
-			options:0 range:NSMakeRange(0, s.length)];
-	}
-	else if (fragment && [s rangeOfString:@"fTextureId"].location != NSNotFound)
-	{
-		[s replaceOccurrencesOfString:@"void main() {"
-			withString:@"in highp float vClipZ;\nvoid main() {\n  gl_FragDepth = vClipZ * gl_FragCoord.w;"
-			options:0 range:NSMakeRange(0, s.length)];
-	}
-
 	// WHITE-FLASH DIAGNOSTIC (one-shot per shader): dump the INPUT (330) + OUTPUT (ES 3.00) shader to
 	// Documents/routec-shaders/ so a corrupted scene-shader downport (the top Route-C-specific suspect) is
 	// visible off-device. Small text files; pull with devicectl. STRIP after the white-flash bug is fixed.
