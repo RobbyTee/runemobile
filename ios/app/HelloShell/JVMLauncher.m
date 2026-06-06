@@ -795,7 +795,10 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     // blocker (zone callbacks never firing) ABOVE the GL bridge. Inert in CPU/L1 mode.
     if (self.routecGpuMode) {
         [opts addObject:@"-Drunelite.gpudiag=true"];
-        log(@"[jvm] GPU Route C scene-render diagnostic ARMED (-Drunelite.gpudiag=true)");
+        // WHITE-FLASH DIAGNOSTIC: dump ~8 in-world composited GPU frames to Documents/routec-frames/*.png so the
+        // render bug can be seen off-device (the live frame can't be pulled). STRIP after the bug is fixed.
+        [opts addObject:@"-Drunelite.gpuframedump=true"];
+        log(@"[jvm] GPU Route C scene-render diagnostic ARMED (-Drunelite.gpudiag=true, gpuframedump=true)");
     }
 
     // Phase 4 sub-goal A — interactive login, purely in-process (no native touch bridge). Map the JX_*

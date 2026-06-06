@@ -26,6 +26,37 @@ static void rc_trace(NSString *msg)
     if (f) { fprintf(f, "%s\n", msg.UTF8String); fclose(f); }
 }
 
+// WHITE-FLASH DIAGNOSTIC (one-shot): dump the GL state at the first scene draw so a wrong depth/blend/texture/
+// program/writemask setup is visible. STRIP after the white-flash bug is fixed.
+static void rc_dump_gl_state(const char *whenLabel)
+{
+    GLenum errBefore = glGetError();
+    GLint prog = 0;       glGetIntegerv(GL_CURRENT_PROGRAM, &prog);
+    GLint dfunc = 0;      glGetIntegerv(GL_DEPTH_FUNC, &dfunc);
+    GLboolean dtest = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean dmask = 0;  glGetBooleanv(GL_DEPTH_WRITEMASK, &dmask);
+    GLfloat drange[2] = {0,0}; glGetFloatv(GL_DEPTH_RANGE, drange);
+    GLfloat dclear = 0;  glGetFloatv(GL_DEPTH_CLEAR_VALUE, &dclear);
+    GLfloat cclear[4] = {0,0,0,0}; glGetFloatv(GL_COLOR_CLEAR_VALUE, cclear);
+    GLboolean blend = glIsEnabled(GL_BLEND);
+    GLint bsrc = 0, bdst = 0; glGetIntegerv(GL_BLEND_SRC_RGB, &bsrc); glGetIntegerv(GL_BLEND_DST_RGB, &bdst);
+    GLboolean cull = glIsEnabled(GL_CULL_FACE);
+    GLboolean cmask[4] = {0,0,0,0}; glGetBooleanv(GL_COLOR_WRITEMASK, cmask);
+    GLint atex = 0; glGetIntegerv(GL_ACTIVE_TEXTURE, &atex);
+    GLint texArr = 0; glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &texArr);
+    GLint fbo = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
+    GLint vp[4] = {0,0,0,0}; glGetIntegerv(GL_VIEWPORT, vp);
+    GLenum errAfter = glGetError();
+    rc_trace([NSString stringWithFormat:
+        @"[routec] GLSTATE @%s err(before=0x%x after=0x%x) prog=%d fbo=%d viewport=%d,%d,%d,%d\n"
+        @"         depth[test=%d func=0x%x mask=%d range=%.3f..%.3f clear=%.3f]  color[clear=%.3f,%.3f,%.3f,%.3f writemask=%d%d%d%d]\n"
+        @"         blend[on=%d src=0x%x dst=0x%x] cull=%d activeTex=0x%x texBinding2DArray=%d",
+        whenLabel, errBefore, errAfter, prog, fbo, vp[0],vp[1],vp[2],vp[3],
+        dtest, dfunc, dmask, drange[0], drange[1], dclear,
+        cclear[0],cclear[1],cclear[2],cclear[3], cmask[0],cmask[1],cmask[2],cmask[3],
+        blend, bsrc, bdst, cull, atex, texArr]);
+}
+
 static void rc_awt_create_context(JNIEnv *env)
 {
     int w = 512, h = 512; /* default for the L1 probe (no engine canvas) */
@@ -421,7 +452,8 @@ static JNIEXPORT void JNICALL rc_GL_glMultiDrawArrays_0(JNIEnv *env, jclass cls,
         static int t = 0; if (t < 8) { t++;
             long total = 0; for (GLsizei i = 0; i < n && count; i++) total += count[i];
             rc_trace([NSString stringWithFormat:@"[routec] glMultiDrawArrays mode=0x%x draws=%d totalVerts=%ld first0=%d (SCENE geometry)",
-                a0, (int)n, total, (first && n>0) ? first[0] : -1]); }
+                a0, (int)n, total, (first && n>0) ? first[0] : -1]);
+            if (t == 1) { rc_dump_gl_state("first-scene-draw"); } }
         [RouteCBridge glMultiDrawArraysShim:(GLenum)a0 first:first count:count drawcount:n];
 }
 

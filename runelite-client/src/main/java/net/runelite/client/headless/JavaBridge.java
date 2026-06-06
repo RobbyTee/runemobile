@@ -158,6 +158,12 @@ public final class JavaBridge
 	private static int[] bufB;
 	private static boolean useA = true;
 
+	// GPU Route C white-flash diagnostic (one-shot): dump a handful of in-world composited GPU frames to PNG so
+	// the render bug can be seen off-device (the live frame can't be pulled). Gated -Drunelite.gpuframedump=true.
+	private static final boolean FRAME_DUMP = Boolean.getBoolean("runelite.gpuframedump");
+	private static int frameDumpCount;
+	private static int lastFrameDumpSeq;
+
 	// Input bookkeeping (only ever touched from the single native UI thread that drives onTouch/onClick).
 	private static boolean focused;       // FocusEvent gained — keyboard/mouse accepted
 	private static volatile boolean entered;  // MOUSE_ENTERED posted — pointer currently "present" (volatile:
@@ -278,6 +284,49 @@ public final class JavaBridge
 		frame = useA ? bufA : bufB;
 		frameSeq++;
 		useA = !useA;
+		if (FRAME_DUMP)
+		{
+			maybeDumpFrame(w, h);
+		}
+	}
+
+	// One-shot: save ~8 in-world GPU frames (spaced ~1s) to <user.home>/routec-frames/*.png. The published int[]
+	// is 0x00RRGGBB (RouteCBridge.readbackInto already flipped + swizzled). Runs on the client thread — a few PNG
+	// encodes is fine for a temporary diagnostic. STRIP after the white-flash bug is fixed.
+	private static void maybeDumpFrame(int w, int h)
+	{
+		if (frameDumpCount >= 8 || frameSeq < 150)   // warmup: skip startup/welcome frames so we catch in-world
+		{
+			return;
+		}
+		if (lastFrameDumpSeq != 0 && frameSeq - lastFrameDumpSeq < 50)
+		{
+			return;
+		}
+		final int[] src = frame;
+		if (src == null || src.length < w * h)
+		{
+			return;
+		}
+		lastFrameDumpSeq = frameSeq;
+		try
+		{
+			final int[] copy = java.util.Arrays.copyOf(src, w * h);
+			final java.awt.image.BufferedImage img =
+				new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_RGB);
+			img.setRGB(0, 0, w, h, copy, 0, w);
+			final java.io.File dir = new java.io.File(System.getProperty("user.home", "."), "routec-frames");
+			dir.mkdirs();
+			final java.io.File out = new java.io.File(dir,
+				String.format("gpuframe-%02d-seq%d-%dx%d.png", frameDumpCount, frameSeq, w, h));
+			javax.imageio.ImageIO.write(img, "png", out);
+			frameDumpCount++;
+			log.info("[gpuframedump] wrote {} ({}x{})", out.getName(), w, h);
+		}
+		catch (Throwable t)
+		{
+			log.warn("[gpuframedump] frame dump failed", t);
+		}
 	}
 
 	/** Canvas dimensions for sizing the EAGL FBO (queried by the native createGLContext). 0 if no client yet. */

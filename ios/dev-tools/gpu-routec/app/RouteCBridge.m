@@ -231,6 +231,22 @@ static BOOL rcBuildFbo(int w, int h)
 		}
 	}
 
+	// WHITE-FLASH DIAGNOSTIC (one-shot per shader): dump the INPUT (330) + OUTPUT (ES 3.00) shader to
+	// Documents/routec-shaders/ so a corrupted scene-shader downport (the top Route-C-specific suspect) is
+	// visible off-device. Small text files; pull with devicectl. STRIP after the white-flash bug is fixed.
+	{
+		static int n = 0;
+		NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+		NSString *dir = [docs stringByAppendingPathComponent:@"routec-shaders"];
+		[[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+		NSString *tag = fragment ? @"frag" : @"vert";
+		NSString *base = [NSString stringWithFormat:@"shader-%02d-%@", n++, tag];
+		[src writeToFile:[dir stringByAppendingPathComponent:[base stringByAppendingString:@".in.glsl"]]
+			atomically:YES encoding:NSUTF8StringEncoding error:nil];
+		[s writeToFile:[dir stringByAppendingPathComponent:[base stringByAppendingString:@".out.glsl"]]
+			atomically:YES encoding:NSUTF8StringEncoding error:nil];
+	}
+
 	return [s copy];
 }
 
