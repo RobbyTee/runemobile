@@ -47,7 +47,13 @@ static void rc_dump_gl_state(const char *whenLabel)
     GLint texArr = 0; glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &texArr);
     GLint fbo = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
     GLint vp[4] = {0,0,0,0}; glGetIntegerv(GL_VIEWPORT, vp);
+    // Depth-fix recon: does iOS GLES expose clip_control (exact desktop reverse-Z, full depth precision) or a
+    // depth-clamp ext? If yes -> implement glClipControl for real; if no -> fix via a projection clip-z remap.
+    const char *exts = (const char *)glGetString(GL_EXTENSIONS);
+    BOOL hasClipControl = exts && (strstr(exts, "clip_control") != NULL);
+    BOOL hasDepthClamp  = exts && (strstr(exts, "depth_clamp") != NULL);
     GLenum errAfter = glGetError();
+    rc_trace([NSString stringWithFormat:@"[routec] EXT clip_control=%d depth_clamp=%d", hasClipControl, hasDepthClamp]);
     rc_trace([NSString stringWithFormat:
         @"[routec] GLSTATE @%s err(before=0x%x after=0x%x) prog=%d fbo=%d viewport=%d,%d,%d,%d\n"
         @"         depth[test=%d func=0x%x mask=%d range=%.3f..%.3f clear=%.3f]  color[clear=%.3f,%.3f,%.3f,%.3f writemask=%d%d%d%d]\n"
