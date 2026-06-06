@@ -155,18 +155,14 @@ static void rc_swap_publish(JNIEnv *env)
     jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, s_jb, s_bb, (jint)w, (jint)h);
     if (!arr) return;
     double tReadback = 0;
-    BOOL filled = NO;
     void *dst = (*env)->GetPrimitiveArrayCritical(env, arr, NULL);
     if (dst) {
         double r0 = CACurrentMediaTime();
-        // Async PBO readback: no ~16ms glReadPixels stall on the render thread (publishes the prev frame, +1 latency).
-        filled = [RouteCBridge readbackAsyncInto:(uint32_t *)dst width:w height:h];
+        [RouteCBridge readbackInto:(uint32_t *)dst width:w height:h];
         tReadback = CACurrentMediaTime() - r0;
         (*env)->ReleasePrimitiveArrayCritical(env, arr, dst, 0);
     }
-    if (filled) {   // skip the very first frame (PBO not primed yet -> dst has no valid pixels)
-        (*env)->CallStaticVoidMethod(env, s_jb, s_pub, (jint)w, (jint)h);
-    }
+    (*env)->CallStaticVoidMethod(env, s_jb, s_pub, (jint)w, (jint)h);
     (*env)->DeleteLocalRef(env, arr);
 
     // PERF (temporary, STRIP after tuning): engine composite FPS = rc_swap_publish (swapBuffers) rate; readback =

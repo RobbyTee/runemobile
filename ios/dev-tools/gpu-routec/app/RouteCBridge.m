@@ -16,12 +16,6 @@ static GLuint sFbo = 0, sColorRbo = 0, sDepthRbo = 0;
 static int sFboW = 0, sFboH = 0;
 static uint32_t *sReadback = NULL;   // reusable glReadPixels scratch (sized to sFboW*sFboH)
 
-// Async readback: two pixel-pack buffers ping-ponged so glReadPixels never stalls the render thread.
-static GLuint sPbo[2] = {0, 0};
-static int sPboCur = 0;
-static BOOL sPboPrimed = NO;
-static int sPboW = 0, sPboH = 0;
-
 // Build (or rebuild) the offscreen FBO at w*h on the current context. COLOR (RGBA8) + DEPTH24 — the plugin
 // renders the scene with depth testing, so the AWTContext analogue must supply a depth attachment like
 // librlawt's window FBO. This FBO is what the unmodified plugin sees as "framebuffer 0" via getFramebuffer(false).
@@ -120,72 +114,8 @@ static BOOL rcBuildFbo(int w, int h)
 	}
 }
 
-+ (BOOL)readbackAsyncInto:(uint32_t *)dst width:(int)w height:(int)h
-{
-	if (!dst || w <= 0 || h <= 0)
-	{
-		return NO;
-	}
-	const size_t bytes = (size_t)w * (size_t)h * 4;
-
-	// (Re)create the two pixel-pack buffers on first use or canvas resize.
-	if (sPbo[0] == 0 || w != sPboW || h != sPboH)
-	{
-		if (sPbo[0])
-		{
-			glDeleteBuffers(2, sPbo);
-			sPbo[0] = sPbo[1] = 0;
-		}
-		glGenBuffers(2, sPbo);
-		for (int i = 0; i < 2; i++)
-		{
-			glBindBuffer(GL_PIXEL_PACK_BUFFER, sPbo[i]);
-			glBufferData(GL_PIXEL_PACK_BUFFER, bytes, NULL, GL_STREAM_READ);
-		}
-		glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-		sPboW = w; sPboH = h; sPboCur = 0; sPboPrimed = NO;
-	}
-
-	// Kick an ASYNCHRONOUS readback of THIS frame into the current PBO — with a PBO bound, glReadPixels returns
-	// immediately (the GPU DMAs into the buffer later) instead of stalling the render thread ~16ms.
-	glBindBuffer(GL_PIXEL_PACK_BUFFER, sPbo[sPboCur]);
-	glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, 0);
-
-	BOOL filled = NO;
-	const int prev = sPboCur ^ 1;
-	if (sPboPrimed)
-	{
-		// Map the PREVIOUS frame's PBO; the GPU finished that readback a frame ago, so the map does not wait.
-		glBindBuffer(GL_PIXEL_PACK_BUFFER, sPbo[prev]);
-		const uint32_t *src = (const uint32_t *)glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, bytes, GL_MAP_READ_BIT);
-		if (src)
-		{
-			for (int y = 0; y < h; y++)
-			{
-				const uint32_t *srow = src + (size_t)(h - 1 - y) * w;   // GL bottom-left -> display top-left
-				uint32_t *drow = dst + (size_t)y * w;
-				for (int x = 0; x < w; x++)
-				{
-					uint32_t p = srow[x];                                // 0xAABBGGRR (GL_RGBA, little-endian)
-					uint32_t r = p & 0xFF, g = (p >> 8) & 0xFF, b = (p >> 16) & 0xFF;
-					drow[x] = (r << 16) | (g << 8) | b;                  // -> 0x00RRGGBB
-				}
-			}
-			glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-			filled = YES;
-		}
-	}
-	glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-
-	sPboCur = prev;     // next frame reads into the buffer we just consumed
-	sPboPrimed = YES;
-	return filled;
-}
-
 + (void)awtDestroy
 {
-	if (sPbo[0]) glDeleteBuffers(2, sPbo), sPbo[0] = sPbo[1] = 0;
-	sPboW = sPboH = 0; sPboPrimed = NO; sPboCur = 0;
 	if (sDepthRbo) glDeleteRenderbuffers(1, &sDepthRbo), sDepthRbo = 0;
 	if (sColorRbo) glDeleteRenderbuffers(1, &sColorRbo), sColorRbo = 0;
 	if (sFbo) glDeleteFramebuffers(1, &sFbo), sFbo = 0;

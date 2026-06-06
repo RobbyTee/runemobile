@@ -41,12 +41,6 @@
 // vertically flipped (GL origin is bottom-left; the display is top-left) and R<->B swizzled, in one row pass.
 + (void)readbackInto:(uint32_t *)dst width:(int)w height:(int)h;
 
-// Async double-buffered PBO readback: glReadPixels into a pixel-pack buffer (returns immediately, no GPU stall),
-// then map the PREVIOUS frame's PBO (the GPU finished it a frame ago -> no wait) and flip/swizzle into dst. Removes
-// the ~16ms synchronous glReadPixels stall from the render thread, at the cost of 1 frame of latency. Returns NO on
-// the very first frame (no prior frame to publish yet).
-+ (BOOL)readbackAsyncInto:(uint32_t *)dst width:(int)w height:(int)h;
-
 // ---- shader downport (Route C 2E) ----
 // Rewrite desktop GLSL 330 -> GLSL ES 3.00 (the 5 B1 edits) before glShaderSource. Vertex shaders need the
 // explicit int->float casts ES forbids implicitly; fragment shaders need precision qualifiers.
