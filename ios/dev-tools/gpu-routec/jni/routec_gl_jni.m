@@ -742,9 +742,27 @@ static JNIEXPORT jint JNICALL rc_AWT_setSwapInterval_0(JNIEnv *env, jobject self
 static JNIEXPORT void JNICALL rc_AWT_swapBuffers_0(JNIEnv *env, jobject self)
 {
     static int once = 0; if (!once) { once = 1;
-        rc_trace([NSString stringWithFormat:@"[routec] first swapBuffers thread=%p readbackFBO=%dx%d (C3 check; readback size) — GPU frame publishing",
-            (void *)pthread_self(), [RouteCBridge fbWidth], [RouteCBridge fbHeight]]); }
-    rc_swap_publish(env); /* glReadPixels the FBO -> JavaBridge back buffer -> publish (sole frameSeq publisher) */
+        rc_trace([NSString stringWithFormat:@"[routec] first swapBuffers thread=%p fbo=%dx%d present=%d",
+            (void *)pthread_self(), [RouteCBridge fbWidth], [RouteCBridge fbHeight], (int)[RouteCBridge isPresenting]]); }
+
+    if ([RouteCBridge isPresenting]) {
+        // Direct present: scan the drawable out to the CAEAGLLayer — no glReadPixels, no int[] blit, no CGImage.
+        double p0 = CACurrentMediaTime();
+        [RouteCBridge present];
+        double tPresent = CACurrentMediaTime() - p0;
+        static int frames = 0; static double accPresent = 0, lastLog = 0;
+        double now = CACurrentMediaTime();
+        frames++; accPresent += tPresent;
+        if (lastLog == 0) lastLog = now;
+        double span = now - lastLog;
+        if (span >= 1.0) {
+            rc_trace([NSString stringWithFormat:@"[perf] engine=%.1f fps  present=%.2f ms  (%d frames, %dx%d)",
+                frames / span, (accPresent / frames) * 1000.0, frames, [RouteCBridge fbWidth], [RouteCBridge fbHeight]]);
+            frames = 0; accPresent = 0; lastLog = now;
+        }
+    } else {
+        rc_swap_publish(env); /* readback fallback (L1 probe / CPU): glReadPixels FBO -> JavaBridge -> publish */
+    }
 }
 
 static jobject rc_make_caps(JNIEnv *env)

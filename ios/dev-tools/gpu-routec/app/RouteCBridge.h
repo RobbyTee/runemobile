@@ -27,6 +27,15 @@
 + (GLuint)awtGetFramebuffer;
 + (void)awtDestroy;
 
+// ---- direct present (kills the readback) ----
+// When a CAEAGLLayer is set (on the main thread, before the GPU launch), the default-FBO COLOR attachment is the
+// layer's drawable (via renderbufferStorage:fromDrawable:) instead of an offscreen RBO, and swapBuffers presents
+// it straight to the screen (presentRenderbuffer) — no glReadPixels, no int[] blit, no CGImage. `id` to avoid a
+// QuartzCore import in this header; it is a CAEAGLLayer.
++ (void)setPresentLayer:(id)caEaglLayer;
++ (BOOL)isPresenting;     // YES once a present layer is set (swapBuffers should present, not read back)
++ (void)present;          // bind the drawable color RBO + [ctx presentRenderbuffer:GL_RENDERBUFFER]
+
 // ---- per-frame upkeep (Route C 2C: thread-affine EAGL context + canvas-resize) ----
 // makeCurrent: re-bind sCtx on the calling thread — cheap (no-op when already current) and removes the
 // "draw runs off the createGLContext thread" risk entirely. fbWidth/fbHeight: the live FBO size. ensureSize:

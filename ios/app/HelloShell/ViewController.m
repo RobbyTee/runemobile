@@ -5,6 +5,9 @@
 #import "PluginPanelsViewController.h"
 #import "JagexLoginViewController.h"
 #import "GLRecon.h"
+#import "RouteCBridge.h"            // GPU Route C: CAEAGLLayer direct present (kills the readback)
+#import <QuartzCore/QuartzCore.h>
+#import <OpenGLES/EAGLDrawable.h>   // kEAGLDrawableProperty*
 #import <WebKit/WebKit.h>
 #import <unistd.h>
 #import <fcntl.h>
@@ -111,6 +114,10 @@
 // draws (set at launch); chatHitCanvas = the relocated chat tab-row rect in canvas px (onTap treats it as UI).
 @property (nonatomic, assign) int renderW;
 @property (nonatomic, assign) int renderH;
+
+// GPU Route C direct present: a CAEAGLLayer the engine renders straight into (no readback). nil in CPU/L1 mode.
+@property (nonatomic, strong) CAEAGLLayer *glLayer;
+@property (nonatomic, assign) BOOL gpuPresent;
 @property (nonatomic, assign) CGRect chatHitCanvas;
 // Pre-composited tab images (stone background + centred icon) built once from the bundled OSRS sprite assets
 // (stone-inactive/active + icon-0..13). Index = tab index; active/inactive variants. Authentic, crisp, no
@@ -981,8 +988,8 @@ static const CGFloat kMenuWidth       = 210.0;
 // exactly over the live desktop widget.
 - (CGRect)viewRectForGameX:(int)gx y:(int)gy w:(int)gw h:(int)gh {
     UIImage *img = self.screen.image;
-    if (img == nil) return CGRectZero;
-    CGFloat iw = img.size.width, ih = img.size.height;
+    CGFloat iw = img ? img.size.width : 0, ih = img ? img.size.height : 0;
+    if ((iw <= 0 || ih <= 0) && self.renderW > 0) { iw = self.renderW; ih = self.renderH; }  // GPU present: no UIImage
     if (iw <= 0 || ih <= 0) return CGRectZero;
     CGRect b = self.screen.bounds;
     CGFloat scale = MIN(b.size.width / iw, b.size.height / ih);
@@ -1275,6 +1282,29 @@ static const CGFloat kMenuWidth       = 210.0;
                           sw, sh, aspect, launcher.resizeSpec]];
     }
 
+    // GPU Route C DIRECT PRESENT: render straight into a CAEAGLLayer drawable (no glReadPixels readback — the
+    // measured ~16ms/frame bottleneck). A sublayer of the game view, inserted below the chrome subviews, so the
+    // existing gestures + native HUD veneers keep working on top. Only for the normal resizable GPU path (the
+    // no-resize bisection stays on the readback path). Must be created + sized on main BEFORE the JVM thread starts
+    // (the bridge reads this layer from the JVM thread in awtCreateGLContext via renderbufferStorage:fromDrawable:).
+    if (self.pendingRouteCGpu && !self.pendingRouteCGpuNoResize) {
+        [self.view layoutIfNeeded];
+        CAEAGLLayer *gl = [CAEAGLLayer layer];
+        gl.frame = self.screen.bounds;
+        gl.opaque = YES;
+        gl.contentsScale = (sh > 0 ? (CGFloat)renderH / sh : 1.0);   // drawable = renderW x renderH (== engine canvas)
+        gl.drawableProperties = @{ kEAGLDrawablePropertyRetainedBacking : @NO,
+                                   kEAGLDrawablePropertyColorFormat : kEAGLColorFormatRGBA8 };
+        [self.screen.layer insertSublayer:gl atIndex:0];
+        self.glLayer = gl;
+        self.gpuPresent = YES;
+        self.screen.image = nil;                       // GL presents directly; the UIImageView is just a gesture host
+        self.screen.backgroundColor = [UIColor blackColor];
+        [RouteCBridge setPresentLayer:gl];
+        [self appendLine:[NSString stringWithFormat:@"[shell] GPU direct-present: CAEAGLLayer %.0fx%.0f @%.3f -> drawable %dx%d (no readback)",
+                          gl.bounds.size.width, gl.bounds.size.height, gl.contentsScale, renderW, renderH]];
+    }
+
     NSThread *t = [[NSThread alloc] initWithBlock:^{
         [launcher runProbesWithLog:log];
         // VM lifecycle done; let the render loop drain a beat, then release the assertion.
@@ -1332,14 +1362,20 @@ static const CGFloat kMenuWidth       = 210.0;
 // no disk, no capture budget, so it's smooth and runs for the whole session. Also keeps the app
 // foreground-active+rendering (the jetsam-protection that the §6.2 work established).
 - (void)onDisplayTick {
-    UIImage *img = [JVMLauncher latestFrame];
-    if (img == nil) return;   // VM not up yet / no frame drawn yet
-    self.screen.image = img;
-    self.framesShown++;
-    // Light heartbeat (~once/sec at 60 Hz) so the log shows the live blit running without flooding it.
-    if (self.framesShown == 1 || self.framesShown % 60 == 0) {
-        [self appendLine:[NSString stringWithFormat:@"[shell] live blit frame #%d (%.0fx%.0f)",
-                          self.framesShown, img.size.width, img.size.height]];
+    if (self.gpuPresent) {
+        // GPU direct-present: the engine renders straight into the CAEAGLLayer and presents on its own thread, so
+        // there is no per-tick blit here. Keep the tick alive for the heartbeat + native HUD/chrome refresh below.
+        self.framesShown++;
+    } else {
+        UIImage *img = [JVMLauncher latestFrame];
+        if (img == nil) return;   // VM not up yet / no frame drawn yet
+        self.screen.image = img;
+        self.framesShown++;
+        // Light heartbeat (~once/sec at 60 Hz) so the log shows the live blit running without flooding it.
+        if (self.framesShown == 1 || self.framesShown % 60 == 0) {
+            [self appendLine:[NSString stringWithFormat:@"[shell] live blit frame #%d (%.0fx%.0f)",
+                              self.framesShown, img.size.width, img.size.height]];
+        }
     }
 
     // Refresh the native tab rails from the chrome snapshot (~10 Hz — positions/active state rarely change,
@@ -1419,8 +1455,8 @@ static const CGFloat kMenuWidth       = 210.0;
 // ScaleAspectFit letterbox. Returns NO if the point is in the letterbox margin (outside the game frame).
 - (BOOL)mapPoint:(CGPoint)p toGameX:(int *)gx toGameY:(int *)gy {
     UIImage *img = self.screen.image;
-    if (img == nil) return NO;
-    CGFloat iw = img.size.width, ih = img.size.height;
+    CGFloat iw = img ? img.size.width : 0, ih = img ? img.size.height : 0;
+    if ((iw <= 0 || ih <= 0) && self.renderW > 0) { iw = self.renderW; ih = self.renderH; }  // GPU present: no UIImage
     if (iw <= 0 || ih <= 0) return NO;
     CGRect b = self.screen.bounds;
     CGFloat scale = MIN(b.size.width / iw, b.size.height / ih);   // ScaleAspectFit

@@ -8,6 +8,7 @@
 #import "RouteCBridge.h"
 #import <OpenGLES/EAGL.h>
 #import <OpenGLES/ES3/glext.h>
+#import <QuartzCore/QuartzCore.h>   // CAEAGLLayer (direct present)
 
 @implementation RouteCBridge
 
@@ -15,6 +16,10 @@ static EAGLContext *sCtx = nil;
 static GLuint sFbo = 0, sColorRbo = 0, sDepthRbo = 0;
 static int sFboW = 0, sFboH = 0;
 static uint32_t *sReadback = NULL;   // reusable glReadPixels scratch (sized to sFboW*sFboH)
+
+// Direct present: when set, the default-FBO color attachment is this layer's drawable and swapBuffers presents it
+// (no readback). nil = the offscreen-RBO + glReadPixels path (L1 probe / CPU fallback).
+static CAEAGLLayer *sPresentLayer = nil;
 
 // Build (or rebuild) the offscreen FBO at w*h on the current context. COLOR (RGBA8) + DEPTH24 — the plugin
 // renders the scene with depth testing, so the AWTContext analogue must supply a depth attachment like
@@ -30,7 +35,19 @@ static BOOL rcBuildFbo(int w, int h)
 
 	glGenRenderbuffers(1, &sColorRbo);
 	glBindRenderbuffer(GL_RENDERBUFFER, sColorRbo);
-	glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
+	if (sPresentLayer)
+	{
+		// Direct present: the color RBO IS the CAEAGLLayer drawable. presentRenderbuffer scans it out -> no readback.
+		[sCtx renderbufferStorage:GL_RENDERBUFFER fromDrawable:sPresentLayer];
+		GLint dw = 0, dh = 0;
+		glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &dw);
+		glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &dh);
+		if (dw > 0 && dh > 0) { w = dw; h = dh; }   // the drawable's actual pixel size is authoritative
+	}
+	else
+	{
+		glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
+	}
 	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, sColorRbo);
 
 	glGenRenderbuffers(1, &sDepthRbo);
@@ -76,11 +93,34 @@ static BOOL rcBuildFbo(int w, int h)
 
 + (void)ensureSizeWidth:(int)w height:(int)h
 {
+	// When presenting, the drawable size is fixed by the CAEAGLLayer (set once on main); don't rebuild it from the
+	// engine canvas (the login screen is briefly smaller than the in-world canvas — that's a cosmetic corner only).
+	if (sPresentLayer) return;
 	if (w > 0 && h > 0 && (w != sFboW || h != sFboH) && sCtx)
 	{
 		[EAGLContext setCurrentContext:sCtx];
 		rcBuildFbo(w, h);
 	}
+}
+
++ (void)setPresentLayer:(id)caEaglLayer
+{
+	sPresentLayer = (CAEAGLLayer *)caEaglLayer;
+}
+
++ (BOOL)isPresenting
+{
+	return sPresentLayer != nil;
+}
+
++ (void)present
+{
+	if (!sCtx || !sColorRbo)
+	{
+		return;
+	}
+	glBindRenderbuffer(GL_RENDERBUFFER, sColorRbo);
+	[sCtx presentRenderbuffer:GL_RENDERBUFFER];
 }
 
 + (void)readbackInto:(uint32_t *)dst width:(int)w height:(int)h
@@ -121,6 +161,7 @@ static BOOL rcBuildFbo(int w, int h)
 	if (sFbo) glDeleteFramebuffers(1, &sFbo), sFbo = 0;
 	free(sReadback); sReadback = NULL;
 	sFboW = sFboH = 0;
+	sPresentLayer = nil;
 	[EAGLContext setCurrentContext:nil];
 	sCtx = nil;
 }
