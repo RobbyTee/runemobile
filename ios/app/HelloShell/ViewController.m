@@ -1243,6 +1243,11 @@ static const CGFloat kMenuWidth       = 210.0;
     self.captureDir = [docs stringByAppendingPathComponent:@"rl-capture"];
     self.framesShown = 0;
     self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(onDisplayTick)];
+    // ProMotion: drive the display at up to 120Hz so the GPU direct-present (synced to vsync) isn't capped at 60.
+    // The GPU renders in ~3ms, so there's headroom for 120. (Needs CADisableMinimumFrameDurationOnPhone in Info.plist.)
+    if (@available(iOS 15.0, *)) {
+        self.displayLink.preferredFrameRateRange = CAFrameRateRangeMake(60.0f, 120.0f, 120.0f);
+    }
     [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
 
     JVMLogSink log = ^(NSString *line) { [self appendLine:line]; };
