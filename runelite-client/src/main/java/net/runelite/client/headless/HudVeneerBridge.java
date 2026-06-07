@@ -31,6 +31,7 @@ import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
+import net.runelite.api.widgets.WidgetPositionMode;
 import net.runelite.api.widgets.WidgetSizeMode;
 
 /**
@@ -242,6 +243,21 @@ public final class HudVeneerBridge
 					{
 						c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, 1);
 					}
+				}
+				else
+				{
+					// OPAQUE mode (debug aid: makes the chat box dimensions visible). Keep the brown background
+					// shown and widen it to the native row width so the visible box matches the message area.
+					if (c.getVarbitValue(VarbitID.CHATBOX_TRANSPARENCY) != 0)
+					{
+						c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, 0);
+					}
+					final Widget bg = c.getWidget(InterfaceID.Chatbox.CHAT_BACKGROUND);
+					if (bg != null && bg.isHidden())
+					{
+						bg.setHidden(false);
+					}
+					forceWidth(c, InterfaceID.Chatbox.CHAT_BACKGROUND, rowW, 0);
 				}
 				buildChatSnapshot(c);
 				dumpChatLayoutOnce(c, chatId);
@@ -608,11 +624,13 @@ public final class HudVeneerBridge
 				// The message display + scroll widgets size off a 519-wide ancestor (confirmed on device:
 				// CHATDISPLAY stayed 505 while CHATAREA hit 649), and a parent revalidate does NOT cascade to them.
 				// Pin them to ABSOLUTE widths derived from the new row width, keeping their left margins (CHATDISPLAY/
-				// MES_LAYER are inset 7px each side = -14; SCROLLAREA reserves a 16px scrollbar on top of that = -30).
-				// New chat lines then wrap to the wider display. Only on a size change, so scroll isn't disturbed.
-				forceWidth(c, InterfaceID.Chatbox.CHATDISPLAY, rowW - 14);
-				forceWidth(c, InterfaceID.Chatbox.MES_LAYER, rowW - 14);
-				forceWidth(c, InterfaceID.Chatbox.SCROLLAREA, rowW - 30);
+				// MES_LAYER are inset 7px = -14; SCROLLAREA reserves a 16px scrollbar = -30). They use CENTERED
+				// x-positioning, so a width wider than their parent would push their left edge negative (clipping the
+				// first character) — also LEFT-ANCHOR them at their inset. New chat lines then wrap to the wider
+				// display. Only on a size change, so scroll isn't disturbed.
+				forceWidth(c, InterfaceID.Chatbox.CHATDISPLAY, rowW - 14, 7);
+				forceWidth(c, InterfaceID.Chatbox.MES_LAYER, rowW - 14, 7);
+				forceWidth(c, InterfaceID.Chatbox.SCROLLAREA, rowW - 30, 0);
 			}
 			else
 			{
@@ -624,17 +642,25 @@ public final class HudVeneerBridge
 		}
 	}
 
-	/** Force a chat sub-widget to an ABSOLUTE width and revalidate — used for the display/scroll widgets that don't
-	 *  inherit the widened CHATAREA via their own size modes. */
-	private static void forceWidth(Client c, int id, int w)
+	/** Force a chat sub-widget to an ABSOLUTE width, LEFT-anchored at {@code leftX} (these widgets centre by
+	 *  default, so a width wider than their parent would shift their left edge off-screen), then revalidate. Used
+	 *  for the display/scroll widgets that don't inherit the widened CHATAREA via their own size modes. */
+	private static void forceWidth(Client c, int id, int w, int leftX)
 	{
 		try
 		{
 			final Widget wd = c.getWidget(id);
-			if (wd != null && (wd.getWidthMode() != WidgetSizeMode.ABSOLUTE || wd.getOriginalWidth() != w))
+			if (wd == null)
+			{
+				return;
+			}
+			if (wd.getWidthMode() != WidgetSizeMode.ABSOLUTE || wd.getOriginalWidth() != w
+				|| wd.getXPositionMode() != WidgetPositionMode.ABSOLUTE_LEFT || wd.getOriginalX() != leftX)
 			{
 				wd.setWidthMode(WidgetSizeMode.ABSOLUTE);
 				wd.setOriginalWidth(w);
+				wd.setXPositionMode(WidgetPositionMode.ABSOLUTE_LEFT);
+				wd.setOriginalX(leftX);
 				wd.revalidate();
 			}
 		}

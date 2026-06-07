@@ -1551,7 +1551,8 @@ static int chatRowCanvasH(void) {
     int mmX = self.renderW - MM_W - rightC - m;
     int mmY = topC + m;
 
-    [JVMLauncher relocateEngineChatX:chatX y:chatY transparent:YES];
+    // transparent:NO = opaque chat box (temporary debug aid so the chat dimensions are visible against the scene).
+    [JVMLauncher relocateEngineChatX:chatX y:chatY transparent:NO];
     // W3 A3: the native veneer recreates the tab row BIGGER (engine push-down applied per-tick in updateChatTabs).
     [JVMLauncher relocateEngineMinimapX:mmX y:mmY];
     [JVMLauncher setEngineStonesHidden:YES];   // the native 2-col grid replaces them (no cover patch / gray box)
