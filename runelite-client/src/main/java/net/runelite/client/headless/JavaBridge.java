@@ -117,8 +117,13 @@ public final class JavaBridge
 	// (false = legacy snap-everywhere).
 	private static final boolean SNAP_VIEWPORT_GATE =
 		Boolean.parseBoolean(System.getProperty("runelite.touch.snapViewportGate", "true"));
-	// ~30 game px on the 1189-wide canvas ≈ ~4 mm on the device panel ≈ a fingertip contact radius.
-	private static final int SNAP_RADIUS = Integer.getInteger("runelite.touch.snapRadius", 30);
+	// Snap radius = the distance HALO around an entity's silhouette within which a near-miss tap still grabs it.
+	// Default 0 to MATCH the official OSRS mobile app: there the entire model silhouette is the clickbox and you
+	// must tap ON it (no distance forgiveness). Our resolveSnapTarget already treats the full convex hull (NPCs) /
+	// clickbox (objects) as the hit shape via its `contain` test, so radius 0 leaves exactly "tap on the model ->
+	// interact, tap off -> walk" and removes the old 30px halo that grabbed entities you tapped NEAR but not on.
+	// Still tunable via -Drunelite.touch.snapRadius if a small fingertip forgiveness is ever wanted.
+	private static final int SNAP_RADIUS = Integer.getInteger("runelite.touch.snapRadius", 0);
 	private static volatile int snapCount;
 
 	// Selection feedback, drawn in Java straight into the game frame (so it's tight + tracks the entity, unlike
