@@ -221,12 +221,15 @@ public final class HudVeneerBridge
 				// the native veneer enlarges the tabs it reports its taller row height; push CHATAREA past THAT so
 				// the scrollback clears the bigger buttons (the engine's own 23px CONTROLS stays put underneath,
 				// covered by the native row, so a native tab tap can still proxy a precise click onto it).
-				forcePos(c, InterfaceID.Chatbox.CONTROLS, chatX, chatY);
+				// setForcedPosition is RELATIVE TO THE PARENT, and the chat container is already at (chatX,chatY),
+				// so position the children at (0, …) — using (chatX,chatY) double-offsets them right+down (the
+				// misalignment + bottom clip). CONTROLS at the container's top-left.
+				forcePos(c, InterfaceID.Chatbox.CONTROLS, 0, 0);
 				// Resize + reposition the message area so it ALIGNS with the bigger native row (width = rowW) and
 				// FITS below it without clipping the newest line. Deterministic: read the chat container's real
 				// height, then pin CHATAREA to ABSOLUTE width=rowW and height=(containerH - rowH - margin) at
-				// (chatX, chatY+rowH). The display/scroll/line children re-flow via their own parent-relative modes.
-				sizeChatArea(c, chatId, chatX, chatY, rowW, rowH);
+				// container-relative (0, rowH). The display/scroll children are revalidated so they widen too.
+				sizeChatArea(c, chatId, rowW, rowH);
 				if (transparentChat)
 				{
 					// Deterministic transparency: hide the brown chatbox background sprites directly (the
@@ -580,7 +583,7 @@ public final class HudVeneerBridge
 	 *  avoids depending on the engine's size-mode arithmetic for the area itself; its display/scroll/line children
 	 *  still re-flow via THEIR parent-relative modes on revalidate. Size/mode are re-applied only when they drift
 	 *  (engine reset / first apply) so the scroll position isn't disturbed every frame; position every tick. */
-	private static void sizeChatArea(Client c, int containerId, int chatX, int chatY, int rowW, int rowH)
+	private static void sizeChatArea(Client c, int containerId, int rowW, int rowH)
 	{
 		try
 		{
@@ -593,7 +596,7 @@ public final class HudVeneerBridge
 			final int containerH = (cont != null && cont.getHeight() > 0) ? cont.getHeight() : 165;
 			final int targetW = rowW;
 			final int targetH = Math.max(40, containerH - rowH - CHAT_BOTTOM_MARGIN);
-			area.setForcedPosition(chatX, chatY + rowH);
+			area.setForcedPosition(0, rowH);   // RELATIVE to the container (already at chatX,chatY): below the tab row
 			if (area.getWidthMode() != WidgetSizeMode.ABSOLUTE || area.getHeightMode() != WidgetSizeMode.ABSOLUTE
 				|| area.getOriginalWidth() != targetW || area.getOriginalHeight() != targetH)
 			{
@@ -601,8 +604,34 @@ public final class HudVeneerBridge
 				area.setHeightMode(WidgetSizeMode.ABSOLUTE);
 				area.setOriginalWidth(targetW);
 				area.setOriginalHeight(targetH);
+				area.revalidate();
+				// CHATDISPLAY / MES_LAYER / SCROLLAREA size off CHATAREA via MINUS modes, but revalidating CHATAREA
+				// does NOT cascade to them (confirmed on device: CHATDISPLAY stayed 505 while CHATAREA hit 649) —
+				// revalidate each so it widens to the new CHATAREA width. Only on a size change (not every frame),
+				// so the scroll position isn't disturbed.
+				revalidateChild(c, InterfaceID.Chatbox.CHATDISPLAY);
+				revalidateChild(c, InterfaceID.Chatbox.MES_LAYER);
+				revalidateChild(c, InterfaceID.Chatbox.SCROLLAREA);
 			}
-			area.revalidate();
+			else
+			{
+				area.revalidate();
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	private static void revalidateChild(Client c, int id)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			if (w != null)
+			{
+				w.revalidate();
+			}
 		}
 		catch (RuntimeException ignore)
 		{
