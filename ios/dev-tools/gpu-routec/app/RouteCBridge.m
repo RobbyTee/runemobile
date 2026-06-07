@@ -48,6 +48,28 @@
 	return [[self waterDiagMode] isEqualToString:@"fix2x"];
 }
 
++ (float)alphaOffsetUnits
+{
+	NSString *m = [self waterDiagMode];
+	if ([m isEqualToString:@"offsetalpha8"])
+	{
+		return 8.0f;
+	}
+	if ([m isEqualToString:@"offsetalpha128"])
+	{
+		return 128.0f;
+	}
+	if ([m isEqualToString:@"offsetalpha-32"])
+	{
+		return -32.0f;
+	}
+	if ([m isEqualToString:@"offsetalpha"] || [m isEqualToString:@"offsetalpha32"])
+	{
+		return 32.0f;
+	}
+	return 0.0f;
+}
+
 static EAGLContext *sCtx = nil;
 static GLuint sFbo = 0, sColorRbo = 0, sDepthRbo = 0;
 static int sFboW = 0, sFboH = 0;

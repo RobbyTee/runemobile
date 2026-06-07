@@ -59,8 +59,11 @@ genuinely-dark distance). Frames extracted with ffmpeg; per-band stats fold scre
 - **`depthalways` (force `glDepthFunc(GL_ALWAYS)`):** the river black band does **not** vanish — with the depth
   test off, the **dark surface takes over** (big black bands). → the band IS depth-test-driven z-fighting against a
   dark coplanar surface (Artifact B). Same toggle removed the distant-terrain flicker too (earlier round).
-- **`fragdepth` (the depth fix, below):** tested on the *birdseye horizon* = inconclusive (that view's dominant
-  issue is sliver aliasing, not z-fight). **NOT YET tested on the river band** — this is the next decisive step.
+- **`fragdepth` (the depth fix, below):** **rejected**. On the river-band view the black band remains, and the first
+  screenshot shows broad white/grey depth-ordering planes across the whole scene, not a localized water improvement.
+  The pulled trace/shader dump confirm the mode was active, the shader compiled with `gl_FragDepth =
+  vClipDepth * gl_FragCoord.w`, and the scene depth attachment was still 32F. So the flat-varying `gl_FragDepth`
+  route is not shippable on this driver/content path.
 - **2× supersample (`fix2x`):** scene FBO rendered at 2608×1200 single-sample, downsampled `GL_LINEAR` to
   1304×600 (confirmed in trace; 120fps — perf is a non-issue). It **reduces the sub-pixel aliasing** of thin far
   geometry, but **does NOT fix the z-fighting** (depth problem, not spatial) — the LINEAR downsample even turns the
@@ -90,23 +93,21 @@ Measured effect: grazing river flicker `0.351 → 0.061` (the trilinear half) an
 
 ## Artifact B — depth z-fighting (OPEN). Candidate fixes, in order
 
-1. **`gl_FragDepth` reverse-Z (gated `fragdepth`; the leading candidate, test pending on the water band).**
+1. **`gl_FragDepth` reverse-Z (gated `fragdepth`) — REJECTED.**
    Scene vertex carries `clip.z` as a **flat** varying `vClipDepth = screenPos.z`; scene fragment writes
    `gl_FragDepth = vClipDepth * gl_FragCoord.w` (= `clip.z/clip.w = 100/viewZ`). This puts `window_z = 100/viewZ`
    **exactly equal to desktop's `glClipControl` values, with the same 32F precision** → it *should* fix B if the
    surfaces are at distinct depths. `clip.z` is carried `flat` (it is ~constant per face) specifically to avoid the
    deep-dive's earlier `gl_FragDepth` failure, which passed `clip.z` as a *perspective* varying and diverged at
    grazing. Math: with constant `clip.z = C`, `C*gl_FragCoord.w = C*screenLinearInterp(1/w) = screenLinearInterp
-   (NDC.z)` = the correct planar window depth at all angles. **Open question:** the earlier on-device `fragdepth`
-   run (birdseye) was "no better" + showed severe fans — but that view is aliasing-dominated and the water band was
-   never checked. The decisive test (mode already set on device) is: does it clear the **river band**?
-   - If yes → combine `fragdepth` + the texture fix as the ship.
-   - If no → either the depth-write isn't honoured on this driver, or the fighting surfaces are pixel-exactly
-     coplanar (then go to #2).
-2. **Polygon offset** for the coplanar water-vs-riverbed / terrain-vs-overlay specifically. Only works if the two
-   coplanar surfaces are in **different draws** (so one can be pushed) — needs to identify which scene draws carry
-   water vs riverbed vs overlays (SceneUploader / the opaque-vs-alpha split). `GpuPlugin.drawZoneOpaque` /
-   `drawZoneAlpha` / `Zone.renderOpaque/renderAlpha` (alpha pass uses `glDepthMask(false)`).
+   (NDC.z)` = the correct planar window depth at all angles. In practice it globally corrupts scene ordering on the
+   river test, so leave it gated for diagnosis only and do not combine it with the texture fix.
+2. **Polygon offset** for the coplanar water-vs-riverbed / terrain-vs-overlay specifically. Active test:
+   `offsetalpha` keeps the texture fix on, leaves `fragdepth` off, and applies `glPolygonOffset(1, +32)` only while
+   the plugin's alpha pass has depth writes disabled (`glDepthMask(false)`). If this clears the river band without
+   global scene damage, water/overlays are indeed separate alpha draws losing to the opaque riverbed/terrain in the
+   squeezed reverse-Z depth range. If it fails, try the already-wired strengths/sign check: `offsetalpha8`,
+   `offsetalpha128`, `offsetalpha-32`.
 3. **Forward-Z projection** (deep-dive candidate i) — intercept `worldProj`'s z-row + flip `glDepthFunc`/
    `glClearDepth`. NOTE: pure matrix remaps (`row2' = 2*row2 - row3`, tried historically) hit **catastrophic
    cancellation** for far geometry (small `100/viewZ` minus 1) — that's why a *value* fix (`gl_FragDepth`) is
@@ -130,19 +131,22 @@ Measured effect: grazing river flicker `0.351 → 0.061` (the trilinear half) an
 
 All experiments are gated by the file `Documents/routec-water-mode.txt` (push with `devicectl device copy to …
 --domain-identifier dev.audaro.helloshell --destination Documents/routec-water-mode.txt`; read once per launch).
-`RouteCBridge.waterDiagMode` returns the trimmed string; `waterFixActive` / `depthFixActive` / `superSampleActive`
-derive from it. Modes:
+`RouteCBridge.waterDiagMode` returns the trimmed string; `waterFixActive` / `depthFixActive` / `superSampleActive` /
+`alphaOffsetUnits` derive from it. Modes:
 
-| mode | texture fix | depth fix | 2× SS | purpose |
-|------|:--:|:--:|:--:|---------|
-| `baseline` | – | – | – | raw plugin (reproduce the artifact) |
-| `stripes` | – | – | – | 4-band scene-fragment A/B (LOD0/discard/fog) |
-| `solidtex` | – | – | – | flat-colour the textured faces (isolate texture-colour) |
-| `depthalways` | – | – | – | force `glDepthFunc(GL_ALWAYS)` (isolate depth) |
-| `fragdepth` | – | ✓ | – | the `gl_FragDepth` reverse-Z depth fix ALONE |
-| `fix` | ✓ | – | – | shipping texture fix |
-| `fix2x` | ✓ | – | ✓ | texture fix + 2× scene supersample |
-| absent / other | ✓ | – | – | default = the texture fix |
+| mode | texture fix | frag depth | alpha offset | 2× SS | purpose |
+|------|:--:|:--:|:--:|:--:|---------|
+| `baseline` | – | – | – | – | raw plugin (reproduce the artifact) |
+| `stripes` | – | – | – | – | 4-band scene-fragment A/B (LOD0/discard/fog) |
+| `solidtex` | – | – | – | – | flat-colour the textured faces (isolate texture-colour) |
+| `depthalways` | – | – | – | – | force `glDepthFunc(GL_ALWAYS)` (isolate depth) |
+| `fragdepth` | – | ✓ | – | – | rejected `gl_FragDepth` reverse-Z test alone |
+| `offsetalpha` | ✓ | – | +32 | – | texture fix + alpha-pass polygon-offset test |
+| `offsetalpha8` / `offsetalpha128` | ✓ | – | +8 / +128 | – | offset strength checks |
+| `offsetalpha-32` | ✓ | – | -32 | – | offset sign check |
+| `fix` | ✓ | – | – | – | shipping texture fix |
+| `fix2x` | ✓ | – | – | ✓ | texture fix + 2× scene supersample |
+| absent / other | ✓ | – | – | – | default = the texture fix |
 
 Diagnostics in the trace (`Documents/routec-trace.log`): first-scene `GLSTATE` dump, the depth-attachment probe
 (`DEPTH attach … depthBits=… intFmt=…`), the mip-content probe (`mipprobe layer …`), `glViewport`/`glBlit` traces,
@@ -161,5 +165,6 @@ supersample experiments if they don't ship).
   dump won't see the GPU frame). To find flicker frames: extract at fps, compute the per-pixel temporal min/range.
 
 ## Next step
-Run `fragdepth` on the **river band** (mode already set on device; needs reconnection only for new builds). That
-single screenshot decides between candidate #1 (`gl_FragDepth`) and #2 (polygon offset) for Artifact B.
+Run `offsetalpha` on the **river band** (mode already set on device; needs StikDebug attach + app launch). If the
+band clears, tune the offset and keep the fix scoped to alpha draws. If it does not, try `offsetalpha8`,
+`offsetalpha128`, then `offsetalpha-32` to separate wrong strength from wrong mechanism.

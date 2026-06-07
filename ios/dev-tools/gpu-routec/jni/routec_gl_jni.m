@@ -421,6 +421,22 @@ static JNIEXPORT void JNICALL rc_GL_glDepthFunc_0(JNIEnv *env, jclass cls, jint 
 
 static JNIEXPORT void JNICALL rc_GL_glDepthMask_0(JNIEnv *env, jclass cls, jboolean a0)
 {
+    float alphaOffset = [RouteCBridge alphaOffsetUnits];
+    if (alphaOffset != 0.0f)
+    {
+        if (!a0)
+        {
+            static int once = 0; if (!once) { once = 1;
+                rc_trace([NSString stringWithFormat:@"[routec] DEPTH-DIAG: alpha polygon offset factor=1 units=%.1f", alphaOffset]); }
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(1.0f, alphaOffset);
+        }
+        else
+        {
+            glPolygonOffset(0.0f, 0.0f);
+            glDisable(GL_POLYGON_OFFSET_FILL);
+        }
+    }
     glDepthMask(a0);
 }
 

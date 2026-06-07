@@ -64,6 +64,9 @@
 // YES in the "fix2x" mode: render the 3D scene FBO at 2x and downsample on the composite blit (supersampling
 // AA for the thin far-geometry / grazing-water aliasing the on-pixel-grid render can't resolve). UI stays 1x.
 + (BOOL)superSampleActive;
+// Nonzero in "offsetalpha*" modes: apply a reverse-Z polygon offset during depth-mask-off alpha draws. This is a
+// narrow A/B for water/overlay z-fighting without the global gl_FragDepth experiment.
++ (float)alphaOffsetUnits;
 
 // ---- shader downport (Route C 2E) ----
 // Rewrite desktop GLSL 330 -> GLSL ES 3.00 (the 5 B1 edits) before glShaderSource. Vertex shaders need the
