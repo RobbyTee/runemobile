@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 LOG="${1:-evidence/gpu-present-device-verdict.log}"
-EXPECT_MD5="${2:-PASTE_AFTER_FIRST_DEVICE_RUN}"
+EXPECT_MD5="${2:-36cc83dd4472501c67fd6ff4c620cf78}"
 [ -f "$LOG" ] || { echo "!! log not found: $LOG" >&2; exit 1; }
 
 ACTUAL_MD5="$(md5 -q "$LOG" 2>/dev/null || md5sum "$LOG" | awk '{print $1}')"
