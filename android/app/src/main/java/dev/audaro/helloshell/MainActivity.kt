@@ -448,7 +448,16 @@ class MainActivity : AppCompatActivity() {
         }
 
         val jvmDir = File(app.filesDir, "jvm")
-        val classpath = listOf("client-1.12.28-SNAPSHOT-shaded.jar", "probes.jar")
+        // The client jar carries the project version (e.g. client-1.12.29-SNAPSHOT-shaded.jar); glob for it so
+        // a version bump needs no code edit (staged by tools/stage-mobile-runtime.sh; AssetInstaller unpacks it).
+        val clientJar = jvmDir.list { _, name -> name.startsWith("client-") && name.endsWith("-shaded.jar") }
+            ?.firstOrNull()
+        if (clientJar == null) {
+            Log.e(TAG, "no client-*-shaded.jar staged in $jvmDir")
+            booted.set(false)
+            return
+        }
+        val classpath = listOf(clientJar, "probes.jar")
             .joinToString(":") { File(jvmDir, it).absolutePath }
         val libraryPath = File(javaHome, "lib").absolutePath
 

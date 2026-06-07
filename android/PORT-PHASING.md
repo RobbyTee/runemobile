@@ -232,7 +232,7 @@ honored; any unresolved method is the *real, scoped* surprise the plan should kn
   verifies all **79** public-static methods across all **8** bridges resolve in the embedded shaded jar
   (`verdict=GREEN resolved=79 missing=0`, `census_md5=fd2c599160bfe1da1323709f02378286`). The "shared Java is
   already there" claim is now captured evidence **at the static-resolution level** — A-1b below proves runtime
-  gate activation. (Census jar baseline is `1.12.28`; restage to `1.12.29` and re-run before A3 — see `BLUEPRINT.md` §G.)
+  gate activation. (Restaged to `1.12.29` 2026-06-07; census md5 **unchanged** — the bridge surface is stable across the bump.)
 - **A-1b runtime gate-flip census — TODO (emulator).** Confirm each `-D` gate flips its bridge inert→active at
   runtime under a booted `DeviceHeadlessBoot`. (All six gates already confirmed present in source.)
 **Depends on:** nothing (current state).

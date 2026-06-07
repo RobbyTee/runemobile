@@ -14,7 +14,15 @@ ROOT="$(cd "$HERE/../../.." && pwd)"
 
 JAVAC="${JAVAC:-/opt/homebrew/opt/openjdk@21/bin/javac}"
 JAVA="${JAVA:-/opt/homebrew/opt/openjdk@21/bin/java}"
-JAR="${1:-$ROOT/android/app/src/main/assets/jvm/client-1.12.28-SNAPSHOT-shaded.jar}"
+# Default to the staged Android client jar, globbing the version so a bump needs no edit here.
+if [ -n "${1:-}" ]; then
+  JAR="$1"
+else
+  shopt -s nullglob
+  cands=("$ROOT"/android/app/src/main/assets/jvm/client-*-shaded.jar)
+  shopt -u nullglob
+  JAR="${cands[0]:-}"
+fi
 
 [ -x "$JAVAC" ] || { echo "javac not found at $JAVAC (set JAVAC=...)" >&2; exit 2; }
 [ -f "$JAR" ]   || { echo "shaded jar not found at $JAR" >&2; exit 2; }

@@ -19,7 +19,7 @@ Run on desktop OpenJDK 21 against the Android-staged jar:
 ./run-census-desktop.sh /path/to.jar    # or check any staged copy
 ```
 
-**GREEN baseline (jar `client-1.12.28-SNAPSHOT-shaded`):**
+**GREEN baseline (jar `client-1.12.29-SNAPSHOT-shaded`):**
 
 ```
 BRIDGE_CENSUS verdict=GREEN resolved=79 missing=0 total=79
@@ -27,9 +27,9 @@ census_md5=fd2c599160bfe1da1323709f02378286
 ```
 
 The sentinel md5 is over the sorted `RESOLVED/MISSING` block, so a jar update that changes the bridge surface
-flips the md5 — re-run and reconcile. (The staged Android jar is currently `1.12.28-SNAPSHOT` while the
-source tree is `1.12.29-SNAPSHOT`; restaging to 1.12.29 and re-running this census is the first action item
-in `BLUEPRINT.md` §G.) If the contract array in `BridgeCensus.java` falls behind the bridges,
+flips the md5 — re-run and reconcile. (Restaged 1.12.28→**1.12.29** on 2026-06-07; the md5 is **unchanged**,
+confirming the bridge surface is identical across that bump. The runner globs `client-*-shaded.jar`, so it
+follows the staged version automatically.) If the contract array in `BridgeCensus.java` falls behind the bridges,
 the census under-reports; keep it in sync with `runelite-client/.../headless/*` (the source of truth).
 
 ## A-1b — runtime gate-flip census (emulator; TODO)
