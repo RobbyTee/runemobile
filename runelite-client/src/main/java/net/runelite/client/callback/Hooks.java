@@ -429,6 +429,14 @@ public class Hooks implements Callbacks
 			// before the isGpu early-return below so it ticks in GPU mode. Gated -Drunelite.gpudiag=true.
 			net.runelite.client.headless.GpuSceneDiag.tick(client);
 		}
+		if (net.runelite.client.headless.RouteCGpuStarter.isEnabled())
+		{
+			// GPU Route C: force-enable + start the gpu plugin once in-world (canvas valid), overriding a persisted
+			// gpuplugin=false and the startUp-too-early canvas race so the plugin reliably creates its GL context
+			// instead of silently falling back to the CPU renderer. Runs before the isGpu early-return.
+			// Gated -Drunelite.routecgpu=true.
+			net.runelite.client.headless.RouteCGpuStarter.tick(client);
+		}
 		if (net.runelite.client.headless.MobileToplevelProbe.isEnabled())
 		{
 			// W3 mobile-layout spike: one-shot, on the client thread, gated by -Drunelite.mobileui.toplevel=osm.

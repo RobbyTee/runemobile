@@ -798,7 +798,12 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         // WHITE-FLASH DIAGNOSTIC: dump ~8 in-world composited GPU frames to Documents/routec-frames/*.png so the
         // render bug can be seen off-device (the live frame can't be pulled). STRIP after the bug is fixed.
         [opts addObject:@"-Drunelite.gpuframedump=true"];
-        log(@"[jvm] GPU Route C scene-render diagnostic ARMED (-Drunelite.gpudiag=true, gpuframedump=true)");
+        // Force-enable + start the gpu plugin once the client is in-world (canvas laid out), overriding any persisted
+        // runelite.gpuplugin=false and sidestepping the startUp-runs-too-early canvas.isValid() race. Without this the
+        // GPU plugin intermittently never initialises (createGLContext never runs) and the engine silently falls back
+        // to the CPU renderer. See RouteCGpuStarter.
+        [opts addObject:@"-Drunelite.routecgpu=true"];
+        log(@"[jvm] GPU Route C scene-render diagnostic ARMED (-Drunelite.gpudiag=true, gpuframedump=true, routecgpu=true)");
     }
 
     // Phase 4 sub-goal A — interactive login, purely in-process (no native touch bridge). Map the JX_*
