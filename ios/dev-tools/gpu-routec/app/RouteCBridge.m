@@ -6,9 +6,7 @@
  * the conditions of the BSD 2-clause license are met.
  */
 #import "RouteCBridge.h"
-#import <OpenGLES/EAGL.h>
-#import <OpenGLES/ES3/glext.h>
-#import <QuartzCore/QuartzCore.h>   // CAEAGLLayer (direct present)
+#import "routec_gl_compat.h"   // selects EAGL vs MetalANGLE/EGL at build time (RC_BACKEND_ANGLE) + the GL/EGL headers
 
 @implementation RouteCBridge
 
@@ -36,11 +34,13 @@
 
 + (BOOL)depthFixActive
 {
-	// gl_FragDepth reverse-Z fix is GATED TO THE "fragdepth" A/B ONLY — NOT in the shipping fix. The device
-	// depth probe showed the scene buffer is genuine DEPTH_COMPONENT32F, so far z-fighting is NOT buffer-
-	// precision-limited; the gl_FragDepth remap didn't help (and looked worse). The distant streaking is
-	// sub-pixel aliasing of thin far geometry, which MSAA (anti-aliasing) is the right lever for, not depth.
-	return [[self waterDiagMode] isEqualToString:@"fragdepth"];
+	// gl_FragDepth reverse-Z fix. "fragdepth" = whole-screen fix (the shipping candidate); "depthsplit" = a
+	// single-frame A/B (alternating baseline vs fix vertical bands) to prove it on identical river geometry in one
+	// screenshot. Off-device controlled validation (ios/dev-tools/gpu-depthsim, md5-gated GREEN) showed the fix is
+	// honored, carries 64x finer far-plane float32 depth (device buffer is a confirmed 32F), cuts a real z-fight
+	// ~15x, and preserves the coplanar bias layering — re-opening the earlier confounded-birdseye rejection.
+	NSString *m = [self waterDiagMode];
+	return [m isEqualToString:@"fragdepth"] || [m isEqualToString:@"depthsplit"];
 }
 
 + (BOOL)superSampleActive
@@ -70,18 +70,187 @@
 	return 0.0f;
 }
 
+// ---- shared state (backend-agnostic) ----
+static int sFboW = 0, sFboH = 0;
+static uint32_t *sReadback = NULL;   // reusable glReadPixels scratch (sized to sFboW*sFboH), offscreen mode only
+
+// On-screen present layer (set on main before the GPU launch). nil/NULL => the offscreen-FBO + glReadPixels path
+// (the safe Phase A1 default + L1/CPU fallback). Non-nil => direct present (EAGL: CAEAGLLayer; ANGLE: CAMetalLayer
+// EGL window surface). Stored opaquely so this TU needs no QuartzCore import in the ANGLE build.
+static void *sPresentLayer = NULL;
+
+#if defined(RC_BACKEND_ANGLE)
+// ================================================================================================================
+// MetalANGLE / EGL backend (Phase A1). EGL display+context+surface over ANGLE-on-Metal. Two present modes:
+//   - OFFSCREEN (no present layer): a pbuffer surface makes the context current; the plugin renders into sFbo
+//     (RGBA8 + DEPTH24), which getFramebuffer returns as "framebuffer 0"; swapBuffers reads it back (glReadPixels).
+//   - WINDOW    (present layer set): an EGL window surface from the CAMetalLayer; getFramebuffer returns 0 (the
+//     window default framebuffer IS the drawable, no custom FBO); swapBuffers = eglSwapBuffers (no readback).
+// EXT_clip_control is wired for real in the clip-control shim -> reverse-Z at full depth precision (the z-fight fix).
+// ================================================================================================================
+static EGLDisplay sDpy  = EGL_NO_DISPLAY;
+static EGLContext sCtx  = EGL_NO_CONTEXT;
+static EGLSurface sSurf = EGL_NO_SURFACE;
+static EGLConfig  sCfg  = NULL;
+static GLuint sFbo = 0, sColorRbo = 0, sDepthRbo = 0;   // offscreen mode only
+static BOOL sWindowMode = NO;                            // YES once a window surface is created
+
+static BOOL rcEglBringUp(int w, int h)
+{
+	PFNEGLGETPLATFORMDISPLAYEXTPROC getPlatformDisplay =
+		(PFNEGLGETPLATFORMDISPLAYEXTPROC) eglGetProcAddress("eglGetPlatformDisplayEXT");
+	if (getPlatformDisplay)
+	{
+		EGLint da[] = { EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE, EGL_NONE };
+		sDpy = getPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE, (void *) EGL_DEFAULT_DISPLAY, da);
+	}
+	if (sDpy == EGL_NO_DISPLAY) sDpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+	if (sDpy == EGL_NO_DISPLAY) return NO;
+	EGLint vmaj = 0, vmin = 0;
+	if (!eglInitialize(sDpy, &vmaj, &vmin)) return NO;
+	eglBindAPI(EGL_OPENGL_ES_API);
+
+	sWindowMode = (sPresentLayer != NULL);
+	EGLint cfgAttr[] = {
+		EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
+		EGL_SURFACE_TYPE, sWindowMode ? EGL_WINDOW_BIT : EGL_PBUFFER_BIT,
+		EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_DEPTH_SIZE, 24, EGL_NONE };
+	EGLint nc = 0;
+	if (!eglChooseConfig(sDpy, cfgAttr, &sCfg, 1, &nc) || nc < 1) return NO;
+
+	if (sWindowMode)
+	{
+		sSurf = eglCreateWindowSurface(sDpy, sCfg, (EGLNativeWindowType) sPresentLayer, NULL);
+	}
+	else
+	{
+		EGLint pb[] = { EGL_WIDTH, (w > 0 ? w : 16), EGL_HEIGHT, (h > 0 ? h : 16), EGL_NONE };
+		sSurf = eglCreatePbufferSurface(sDpy, sCfg, pb);
+	}
+	if (sSurf == EGL_NO_SURFACE) return NO;
+
+	EGLint ctxAttr[] = { EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 0, EGL_NONE };
+	sCtx = eglCreateContext(sDpy, sCfg, EGL_NO_CONTEXT, ctxAttr);
+	if (sCtx == EGL_NO_CONTEXT) return NO;
+	if (!eglMakeCurrent(sDpy, sSurf, sSurf, sCtx)) return NO;
+	return YES;
+}
+
+// Offscreen FBO (RGBA8 COLOR + DEPTH24) — the plugin renders the scene with depth testing, so the AWTContext
+// analogue supplies a depth attachment like librlawt's window FBO. Returned to the plugin as "framebuffer 0".
+// Window mode has no custom FBO (the window default framebuffer is the drawable).
+static BOOL rcBuildFbo(int w, int h)
+{
+	if (sWindowMode)
+	{
+		EGLint qw = 0, qh = 0;
+		eglQuerySurface(sDpy, sSurf, EGL_WIDTH, &qw); eglQuerySurface(sDpy, sSurf, EGL_HEIGHT, &qh);
+		if (qw > 0 && qh > 0) { w = qw; h = qh; }
+		sFboW = w; sFboH = h;
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		glViewport(0, 0, w, h);
+		return YES;
+	}
+	if (sDepthRbo) { glDeleteRenderbuffers(1, &sDepthRbo); sDepthRbo = 0; }
+	if (sColorRbo) { glDeleteRenderbuffers(1, &sColorRbo); sColorRbo = 0; }
+	if (sFbo)      { glDeleteFramebuffers(1, &sFbo); sFbo = 0; }
+
+	glGenFramebuffers(1, &sFbo);
+	glBindFramebuffer(GL_FRAMEBUFFER, sFbo);
+	glGenRenderbuffers(1, &sColorRbo);
+	glBindRenderbuffer(GL_RENDERBUFFER, sColorRbo);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, sColorRbo);
+	glGenRenderbuffers(1, &sDepthRbo);
+	glBindRenderbuffer(GL_RENDERBUFFER, sDepthRbo);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, sDepthRbo);
+
+	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	glViewport(0, 0, w, h);
+	sFboW = w; sFboH = h;
+	free(sReadback); sReadback = NULL;   // re-alloc lazily at the new size in readbackInto:
+	return status == GL_FRAMEBUFFER_COMPLETE;
+}
+
++ (BOOL)awtCreateGLContextWidth:(int)w height:(int)h
+{
+	if (!rcEglBringUp(w, h)) { return NO; }
+	return rcBuildFbo(w, h);
+}
+
++ (unsigned int)awtGetFramebuffer
+{
+	return sWindowMode ? 0u : sFbo;   // window mode: the EGL default framebuffer IS the drawable
+}
+
++ (void)makeCurrent
+{
+	// Thread-affine context: re-bind on the calling (client/draw) thread each frame. Cheap when already current.
+	if (sDpy != EGL_NO_DISPLAY && sCtx != EGL_NO_CONTEXT && eglGetCurrentContext() != sCtx)
+	{
+		eglMakeCurrent(sDpy, sSurf, sSurf, sCtx);
+	}
+}
+
++ (int)fbWidth  { return sFboW; }
++ (int)fbHeight { return sFboH; }
+
++ (void)ensureSizeWidth:(int)w height:(int)h
+{
+	// Window mode: the drawable size is fixed by the CAMetalLayer (set once on main); don't rebuild from the engine
+	// canvas. Offscreen mode: rebuild the FBO if the engine canvas changed.
+	if (sWindowMode) return;
+	if (w > 0 && h > 0 && (w != sFboW || h != sFboH) && sCtx != EGL_NO_CONTEXT)
+	{
+		eglMakeCurrent(sDpy, sSurf, sSurf, sCtx);
+		rcBuildFbo(w, h);
+	}
+}
+
++ (void)setPresentLayer:(id)layer
+{
+	sPresentLayer = (__bridge void *) layer;   // a CAMetalLayer (passed before createGLContext)
+}
+
++ (BOOL)isPresenting
+{
+	return sWindowMode;   // window surface present (eglSwapBuffers) vs offscreen readback
+}
+
++ (void)present
+{
+	if (sDpy != EGL_NO_DISPLAY && sSurf != EGL_NO_SURFACE) eglSwapBuffers(sDpy, sSurf);
+}
+
++ (void)awtDestroy
+{
+	if (sDpy != EGL_NO_DISPLAY)
+	{
+		eglMakeCurrent(sDpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+		if (sDepthRbo) { glDeleteRenderbuffers(1, &sDepthRbo); sDepthRbo = 0; }
+		if (sColorRbo) { glDeleteRenderbuffers(1, &sColorRbo); sColorRbo = 0; }
+		if (sFbo)      { glDeleteFramebuffers(1, &sFbo); sFbo = 0; }
+		if (sCtx  != EGL_NO_CONTEXT) { eglDestroyContext(sDpy, sCtx); sCtx = EGL_NO_CONTEXT; }
+		if (sSurf != EGL_NO_SURFACE) { eglDestroySurface(sDpy, sSurf); sSurf = EGL_NO_SURFACE; }
+		eglTerminate(sDpy);
+		sDpy = EGL_NO_DISPLAY;
+	}
+	free(sReadback); sReadback = NULL;
+	sFboW = sFboH = 0;
+	sPresentLayer = NULL;
+	sWindowMode = NO;
+}
+
+#else
+// ================================================================================================================
+// Native EAGL ES3 backend (prior / A-B baseline / §12 fallback).
+// ================================================================================================================
 static EAGLContext *sCtx = nil;
 static GLuint sFbo = 0, sColorRbo = 0, sDepthRbo = 0;
-static int sFboW = 0, sFboH = 0;
-static uint32_t *sReadback = NULL;   // reusable glReadPixels scratch (sized to sFboW*sFboH)
 
-// Direct present: when set, the default-FBO color attachment is this layer's drawable and swapBuffers presents it
-// (no readback). nil = the offscreen-RBO + glReadPixels path (L1 probe / CPU fallback).
-static CAEAGLLayer *sPresentLayer = nil;
-
-// Build (or rebuild) the offscreen FBO at w*h on the current context. COLOR (RGBA8) + DEPTH24 — the plugin
-// renders the scene with depth testing, so the AWTContext analogue must supply a depth attachment like
-// librlawt's window FBO. This FBO is what the unmodified plugin sees as "framebuffer 0" via getFramebuffer(false).
+// Build (or rebuild) the offscreen FBO at w*h on the current context. COLOR (RGBA8) + DEPTH24. With a present layer
+// the color RBO IS the CAEAGLLayer drawable (presentRenderbuffer scans it out -> no readback).
 static BOOL rcBuildFbo(int w, int h)
 {
 	if (sDepthRbo) { glDeleteRenderbuffers(1, &sDepthRbo); sDepthRbo = 0; }
@@ -95,12 +264,11 @@ static BOOL rcBuildFbo(int w, int h)
 	glBindRenderbuffer(GL_RENDERBUFFER, sColorRbo);
 	if (sPresentLayer)
 	{
-		// Direct present: the color RBO IS the CAEAGLLayer drawable. presentRenderbuffer scans it out -> no readback.
-		[sCtx renderbufferStorage:GL_RENDERBUFFER fromDrawable:sPresentLayer];
+		[sCtx renderbufferStorage:GL_RENDERBUFFER fromDrawable:(__bridge CAEAGLLayer *) sPresentLayer];
 		GLint dw = 0, dh = 0;
 		glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &dw);
 		glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &dh);
-		if (dw > 0 && dh > 0) { w = dw; h = dh; }   // the drawable's actual pixel size is authoritative
+		if (dw > 0 && dh > 0) { w = dw; h = dh; }
 	}
 	else
 	{
@@ -116,34 +284,23 @@ static BOOL rcBuildFbo(int w, int h)
 	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 	glViewport(0, 0, w, h);
 	sFboW = w; sFboH = h;
-	free(sReadback); sReadback = NULL;   // re-alloc lazily at the new size in readbackInto:
+	free(sReadback); sReadback = NULL;
 	return status == GL_FRAMEBUFFER_COMPLETE;
 }
 
 + (BOOL)awtCreateGLContextWidth:(int)w height:(int)h
 {
 	sCtx = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES3];
-	if (!sCtx)
-	{
-		return NO;
-	}
+	if (!sCtx) return NO;
 	[EAGLContext setCurrentContext:sCtx];
 	return rcBuildFbo(w, h);
 }
 
-+ (GLuint)awtGetFramebuffer
-{
-	return sFbo; // the plugin's "framebuffer 0"
-}
++ (unsigned int)awtGetFramebuffer { return sFbo; }
 
 + (void)makeCurrent
 {
-	// Thread-affine EAGL context: re-bind on the calling (client/draw) thread each frame. A no-op when already
-	// current (the expected same-thread case), but removes the "draw runs off the createGLContext thread" risk.
-	if (sCtx && [EAGLContext currentContext] != sCtx)
-	{
-		[EAGLContext setCurrentContext:sCtx];
-	}
+	if (sCtx && [EAGLContext currentContext] != sCtx) [EAGLContext setCurrentContext:sCtx];
 }
 
 + (int)fbWidth  { return sFboW; }
@@ -151,8 +308,6 @@ static BOOL rcBuildFbo(int w, int h)
 
 + (void)ensureSizeWidth:(int)w height:(int)h
 {
-	// When presenting, the drawable size is fixed by the CAEAGLLayer (set once on main); don't rebuild it from the
-	// engine canvas (the login screen is briefly smaller than the in-world canvas — that's a cosmetic corner only).
 	if (sPresentLayer) return;
 	if (w > 0 && h > 0 && (w != sFboW || h != sFboH) && sCtx)
 	{
@@ -161,26 +316,32 @@ static BOOL rcBuildFbo(int w, int h)
 	}
 }
 
-+ (void)setPresentLayer:(id)caEaglLayer
-{
-	sPresentLayer = (CAEAGLLayer *)caEaglLayer;
-}
++ (void)setPresentLayer:(id)caEaglLayer { sPresentLayer = (__bridge void *) caEaglLayer; }
 
-+ (BOOL)isPresenting
-{
-	return sPresentLayer != nil;
-}
++ (BOOL)isPresenting { return sPresentLayer != NULL; }
 
 + (void)present
 {
-	if (!sCtx || !sColorRbo)
-	{
-		return;
-	}
+	if (!sCtx || !sColorRbo) return;
 	glBindRenderbuffer(GL_RENDERBUFFER, sColorRbo);
 	[sCtx presentRenderbuffer:GL_RENDERBUFFER];
 }
 
++ (void)awtDestroy
+{
+	if (sDepthRbo) glDeleteRenderbuffers(1, &sDepthRbo), sDepthRbo = 0;
+	if (sColorRbo) glDeleteRenderbuffers(1, &sColorRbo), sColorRbo = 0;
+	if (sFbo) glDeleteFramebuffers(1, &sFbo), sFbo = 0;
+	free(sReadback); sReadback = NULL;
+	sFboW = sFboH = 0;
+	sPresentLayer = NULL;
+	[EAGLContext setCurrentContext:nil];
+	sCtx = nil;
+}
+
+#endif  /* RC_BACKEND_ANGLE */
+
+// ---- readback (offscreen present path; backend-agnostic — glReadPixels is core) ----
 + (void)readbackInto:(uint32_t *)dst width:(int)w height:(int)h
 {
 	if (!dst || w <= 0 || h <= 0)
@@ -212,18 +373,6 @@ static BOOL rcBuildFbo(int w, int h)
 	}
 }
 
-+ (void)awtDestroy
-{
-	if (sDepthRbo) glDeleteRenderbuffers(1, &sDepthRbo), sDepthRbo = 0;
-	if (sColorRbo) glDeleteRenderbuffers(1, &sColorRbo), sColorRbo = 0;
-	if (sFbo) glDeleteFramebuffers(1, &sFbo), sFbo = 0;
-	free(sReadback); sReadback = NULL;
-	sFboW = sFboH = 0;
-	sPresentLayer = nil;
-	[EAGLContext setCurrentContext:nil];
-	sCtx = nil;
-}
-
 // ---- shims ----
 
 + (void)glClearDepthShim:(double)depth
@@ -247,12 +396,17 @@ static BOOL rcBuildFbo(int w, int h)
 
 + (void)glClipControlShim:(GLenum)origin depth:(GLenum)depth
 {
-	// No glClipControl on GLES. The plugin pairs glClipControl(LOWER_LEFT, ZERO_TO_ONE) with a reverse-Z
-	// projection (clip.z = 2*near constant) + glClearDepth(0) + glDepthFunc(GL_GREATER/GEQUAL). On GLES the NDC-z
-	// range is fixed [-1,1]; the SAME reverse-Z ordering is preserved by the projection + depth state (only depth
-	// PRECISION differs, not ordering). So this shim is intentionally a no-op — correctness lives in the matrix +
-	// depth func, which this probe verifies.
+#if defined(RC_BACKEND_ANGLE)
+	// MetalANGLE exposes a REAL EXT_clip_control (gpu-angle probe: far window_z 0.508 -> 0.0167). The plugin pairs
+	// glClipControl(LOWER_LEFT, ZERO_TO_ONE) with a reverse-Z projection + glClearDepth(0) + GL_GEQUAL; honouring it
+	// maps the far plane to window_z 0 at full float precision -> fixes the distant depth z-fight at the root
+	// (this is the whole point of the Phase A1 backend swap).
+	glClipControlEXT(origin, depth);
+#else
+	// No glClipControl on native EAGL GLES. The reverse-Z ordering is preserved by the projection + depth state
+	// (only depth PRECISION is squeezed, not ordering), so on EAGL this shim is intentionally a no-op.
 	(void) origin; (void) depth;
+#endif
 }
 
 + (void)glDebugMessageControlShim
@@ -391,8 +545,18 @@ static BOOL rcBuildFbo(int w, int h)
 			[s replaceOccurrencesOfString:@"in float fFogAmount;"
 				withString:@"in float fFogAmount;\nflat in float vClipDepth;"
 				options:0 range:NSMakeRange(0, s.length)];
+			// "depthsplit": SINGLE-FRAME A/B. Alternate 200px vertical bands — baseline (gl_FragCoord.z, the
+			// (NDC.z+1)/2 window depth, written back as a no-op) vs the fix (NDC.z = clip.z/clip.w). The band is a
+			// function of gl_FragCoord.x ONLY, so every pixel keeps one convention across all draws and the depth
+			// test stays self-consistent per pixel; the river z-fight then shows in baseline bands and (if the fix
+			// works) is clean in fix bands, on IDENTICAL geometry, in one screenshot. Both branches write
+			// gl_FragDepth (defined depth everywhere). Strip with the rest of the diagnostics.
+			// depthsplit fix bands are marked with a 10px MAGENTA left-edge tick (zero ambiguity about which is which).
+			NSString *depthWrite = [[RouteCBridge waterDiagMode] isEqualToString:@"depthsplit"]
+				? @"bool rcFix = mod(floor(gl_FragCoord.x / 200.0), 2.0) >= 0.5;\n  FragColor = (rcFix && mod(gl_FragCoord.x, 200.0) < 10.0) ? vec4(1.0, 0.0, 1.0, 1.0) : vec4(mixedColor, c.a);\n  gl_FragDepth = rcFix ? (vClipDepth * gl_FragCoord.w) : gl_FragCoord.z;"
+				: @"FragColor = vec4(mixedColor, c.a);\n  gl_FragDepth = vClipDepth * gl_FragCoord.w;";
 			[s replaceOccurrencesOfString:@"FragColor = vec4(mixedColor, c.a);"
-				withString:@"FragColor = vec4(mixedColor, c.a);\n  gl_FragDepth = vClipDepth * gl_FragCoord.w;"
+				withString:depthWrite
 				options:0 range:NSMakeRange(0, s.length)];
 		}
 	}

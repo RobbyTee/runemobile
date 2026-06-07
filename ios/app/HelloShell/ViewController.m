@@ -5,9 +5,11 @@
 #import "PluginPanelsViewController.h"
 #import "JagexLoginViewController.h"
 #import "GLRecon.h"
-#import "RouteCBridge.h"            // GPU Route C: CAEAGLLayer direct present (kills the readback)
+#import "RouteCBridge.h"            // GPU Route C bridge (backend selected by RC_BACKEND_ANGLE in the build)
 #import <QuartzCore/QuartzCore.h>
-#import <OpenGLES/EAGLDrawable.h>   // kEAGLDrawableProperty*
+#if !defined(RC_BACKEND_ANGLE)
+#import <OpenGLES/EAGLDrawable.h>   // kEAGLDrawableProperty* (EAGL direct present; not linked in the ANGLE build)
+#endif
 #import <WebKit/WebKit.h>
 #import <unistd.h>
 #import <fcntl.h>
@@ -1287,7 +1289,8 @@ static const CGFloat kMenuWidth       = 210.0;
                           sw, sh, aspect, launcher.resizeSpec]];
     }
 
-    // GPU Route C DIRECT PRESENT: render straight into a CAEAGLLayer drawable (no glReadPixels readback — the
+#if !defined(RC_BACKEND_ANGLE)
+    // GPU Route C DIRECT PRESENT (EAGL): render straight into a CAEAGLLayer drawable (no glReadPixels readback — the
     // measured ~16ms/frame bottleneck). A sublayer of the game view, inserted below the chrome subviews, so the
     // existing gestures + native HUD veneers keep working on top. Only for the normal resizable GPU path (the
     // no-resize bisection stays on the readback path). Must be created + sized on main BEFORE the JVM thread starts
@@ -1309,6 +1312,16 @@ static const CGFloat kMenuWidth       = 210.0;
         [self appendLine:[NSString stringWithFormat:@"[shell] GPU direct-present: CAEAGLLayer %.0fx%.0f @%.3f -> drawable %dx%d (no readback)",
                           gl.bounds.size.width, gl.bounds.size.height, gl.contentsScale, renderW, renderH]];
     }
+#else
+    // Phase A1 (MetalANGLE): default to the OFFSCREEN FBO + glReadPixels readback present — backend-independent and
+    // proven, so the depth-fix (clip_control) + MSAA are validated without depending on the EGL window-surface path
+    // (de-risked separately by the gpu-present probe). No present layer is set -> RouteCBridge runs offscreen and
+    // onDisplayTick blits JavaBridge.latestFrame, exactly like the readback path. (Window-surface direct present is
+    // the next step once gpu-present is green: create a CAMetalLayer + [RouteCBridge setPresentLayer:].)
+    if (self.pendingRouteCGpu) {
+        [self appendLine:@"[shell] GPU (MetalANGLE) — offscreen FBO + readback present (Phase A1 safe default)"];
+    }
+#endif
 
     NSThread *t = [[NSThread alloc] initWithBlock:^{
         [launcher runProbesWithLog:log];

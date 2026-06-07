@@ -11,11 +11,17 @@ settings:
     ENABLE_BITCODE: NO
     SWIFT_VERSION: "5.0"
     CLANG_ENABLE_OBJC_ARC: YES
-    # OpenGLES is deprecated-since-iOS-12 (Apple pushes Metal) but works on iOS 26 — the GPU Route C bridge +
-    # GLRecon use it deliberately. Silence the ~100 deprecation warnings target-wide so real warnings stay visible.
+    # OpenGLES is deprecated-since-iOS-12 (Apple pushes Metal) but works on iOS 26. Silence the deprecation
+    # warnings target-wide so real warnings stay visible (used by the EAGL fallback backend + the GLRecon recon).
+    # RC_BACKEND_ANGLE=1 selects the Phase A1 MetalANGLE/EGL backend in Route C (clip_control depth fix + MSAA);
+    # the EAGL fallback is the #else path. Apple's OpenGLES.framework and ANGLE's libGLESv2 BOTH export glXxx and
+    # cannot be linked together, so the active backend = this macro + the linked frameworks below MUST agree:
+    #   ANGLE (default): RC_BACKEND_ANGLE=1   + link libEGL/libGLESv2 (NOT OpenGLES.framework)
+    #   EAGL  (A/B base): drop RC_BACKEND_ANGLE + link OpenGLES.framework (NOT the ANGLE frameworks)
     GCC_PREPROCESSOR_DEFINITIONS:
       - "$(inherited)"
       - "GLES_SILENCE_DEPRECATION=1"
+      - "RC_BACKEND_ANGLE=1"
     # Let the resign-jre build phase write into the .app.
     ENABLE_USER_SCRIPT_SANDBOXING: NO
 
@@ -46,9 +52,18 @@ targets:
     dependencies:
       # WKWebView for the on-device Jagex login (JagexLoginSpikeViewController).
       - sdk: WebKit.framework
-      # W3 GPU track B0 recon (GLRecon): native GPU/GL capability query.
       - sdk: Metal.framework
-      - sdk: OpenGLES.framework
+      # Phase A1 GPU backend = MetalANGLE (libEGL + libGLESv2, Metal backend) — reuse the gpu-angle vendored copy
+      # (gitignored; regenerate via dev-tools/gpu-angle/README). Embedded + codesigned so the app dlopens them on
+      # device. MUST pair with RC_BACKEND_ANGLE=1 above. Provides EXT_clip_control (depth fix) + GL_MAX_SAMPLES=8.
+      - framework: ../dev-tools/gpu-angle/angle/libEGL.framework
+        embed: true
+        codeSign: true
+      - framework: ../dev-tools/gpu-angle/angle/libGLESv2.framework
+        embed: true
+        codeSign: true
+      # EAGL A/B baseline / §12 fallback (mutually exclusive with the ANGLE frameworks + RC_BACKEND_ANGLE):
+      # - sdk: OpenGLES.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.audaro.helloshell
@@ -69,6 +84,12 @@ targets:
           - "$(SRCROOT)/../dev-tools/gpu-routec/app"
           - "$(SRCROOT)/../dev-tools/gpu-routec/jni"
           - "$(SRCROOT)/HelloShell/jni"
+          # Khronos EGL/GLES3 headers for the MetalANGLE backend (gitignored; regenerate via gpu-angle/README).
+          - "$(SRCROOT)/../dev-tools/gpu-angle/include"
+        # ANGLE frameworks (libEGL/libGLESv2) live here for the linker + embed step.
+        FRAMEWORK_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(SRCROOT)/../dev-tools/gpu-angle/angle"
     postBuildScripts:
       - script: "\"${SRCROOT}/scripts/resign-jre.sh\""
         name: "Re-sign embedded JRE"

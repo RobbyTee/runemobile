@@ -6,16 +6,17 @@
  * the conditions of the BSD 2-clause license are met.
  */
 #import <Foundation/Foundation.h>
-#define GLES_SILENCE_DEPRECATION 1   // OpenGLES is deprecated-since-iOS-12 but works on iOS 26 (no Metal-GL bridge)
-#import <OpenGLES/ES3/gl.h>
+// Foundation ONLY — NO GL headers here. This header is imported by UIKit translation units (ViewController), and in
+// the ANGLE build the GLES3 headers type-conflict with Apple's OpenGLES module (pulled by UIKit). So the public API
+// uses plain C widths (the GL typedefs they alias to are noted inline); the .m includes routec_gl_compat.h for the
+// real GL/EGL headers. The on-screen layer is passed as an opaque id (CAEAGLLayer for EAGL, CAMetalLayer for ANGLE).
 
 /*
  * GPU Route C — native GL bridge core (the iOS half of the thin JNI GL bridge). This is the code the JNI natives
  * backing the `org.lwjgl.opengl` / `net.runelite.rlawt.AWTContext` facade will call. The ~80 GLES-3.0-core calls
- * the base `gpu` plugin makes are 1:1 with the EAGL driver and need NO wrapper (the JNI stub calls glXxx directly).
- * Only the AWTContext offscreen-context analogue and the 5 non-core shims live here. Validated Simulator-first via
- * an ObjC harness (no JVM on the Simulator); the JVM↔JNI plumbing is identical to the proven JavaBridge reverse-JNI
- * and is wired on device.
+ * the base `gpu` plugin makes are 1:1 with the GL driver and need NO wrapper (the JNI stub calls glXxx directly).
+ * Only the AWTContext offscreen-context analogue and the 5 non-core shims live here. Backend is selected at build
+ * time by RC_BACKEND_ANGLE (see routec_gl_compat.h): MetalANGLE EGL (Phase A1) or native EAGL ES3 (prior/fallback).
  */
 @interface RouteCBridge : NSObject
 
@@ -24,7 +25,7 @@
 // this FBO id — it is "framebuffer 0" for the unmodified plugin. swapBuffers() reads the FBO back and publishes
 // it (see RouteCBridge.m / the JNI swapBuffers shim). Returns YES on success.
 + (BOOL)awtCreateGLContextWidth:(int)w height:(int)h;
-+ (GLuint)awtGetFramebuffer;
++ (unsigned int)awtGetFramebuffer;   // GLuint — the FBO the plugin treats as "framebuffer 0" (0 in ANGLE window mode)
 + (void)awtDestroy;
 
 // ---- direct present (kills the readback) ----
@@ -73,11 +74,12 @@
 // explicit int->float casts ES forbids implicitly; fragment shaders need precision qualifiers.
 + (NSString *)downportShaderSource:(NSString *)src fragment:(BOOL)fragment;
 
-// ---- the 5 non-GLES-3.0-core shims (everything else is 1:1 with the EAGL driver) ----
+// ---- the 5 non-GLES-3.0-core shims (everything else is 1:1 with the GL driver). Types are plain C aliases of the
+//      GL typedefs (GLenum=unsigned int, GLint/GLsizei=int, GLsizeiptr=long) so this header stays GL-header-free. ----
 + (void)glClearDepthShim:(double)depth;                  // -> glClearDepthf((float)depth)
-+ (void)glMultiDrawArraysShim:(GLenum)mode first:(const GLint *)first count:(const GLsizei *)count drawcount:(GLsizei)n; // -> loop glDrawArrays
-+ (void)glClipControlShim:(GLenum)origin depth:(GLenum)depth; // no-op: reverse-Z is handled by the projection matrix + depth state (no glClipControl on GLES)
-+ (void)glDebugMessageControlShim;                        // no-op: KHR_debug absent on iOS GLES
-+ (void *)glMapBufferShim:(GLenum)target access:(GLenum)access size:(GLsizeiptr)size; // -> glMapBufferRange (ES has range-map only)
++ (void)glMultiDrawArraysShim:(unsigned int)mode first:(const int *)first count:(const int *)count drawcount:(int)n; // -> loop glDrawArrays
++ (void)glClipControlShim:(unsigned int)origin depth:(unsigned int)depth; // EAGL: no-op (reverse-Z via matrix+depth state); ANGLE: real glClipControlEXT
++ (void)glDebugMessageControlShim;                        // no-op: KHR_debug absent on iOS GLES / this ANGLE build
++ (void *)glMapBufferShim:(unsigned int)target access:(unsigned int)access size:(long)size; // -> glMapBufferRange (ES has range-map only)
 
 @end
