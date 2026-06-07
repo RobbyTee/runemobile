@@ -399,6 +399,12 @@ static BOOL rcBuildFbo(int w, int h)
 	{
 		return;
 	}
+	// Read from OUR offscreen FBO explicitly. After the plugin composites + swapBuffers the READ_FRAMEBUFFER binding
+	// is not guaranteed (the plugin's last bind may differ on ANGLE), and glReadPixels reads whatever READ target is
+	// bound — so bind sFbo + select COLOR_ATTACHMENT0. Without this the readback can sample an empty default
+	// framebuffer (black) even though the scene composited into sFbo.
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, sFbo);
+	glReadBuffer(GL_COLOR_ATTACHMENT0);
 	// GL_RGBA is the only ES3-core readback format. Each little-endian word is 0xAABBGGRR.
 	glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, sReadback);
 	// One pass: vertical flip (GL bottom-left -> display top-left) + R<->B swizzle -> packed 0x00RRGGBB.

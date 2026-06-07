@@ -659,6 +659,19 @@ static JNIEXPORT void JNICALL rc_GL_glShaderSource_0(JNIEnv *env, jclass cls, ji
 
 static JNIEXPORT void JNICALL rc_GL_glTexImage2D_0(JNIEnv *env, jclass cls, jint a0, jint a1, jint a2, jint a3, jint a4, jint a5, jint a6, jint a7, jlong a8)
 {
+#if defined(RC_BACKEND_ANGLE)
+    // The interface texture is allocated GL_BGRA on EAGL; ANGLE has no BGRA external format. Translate to GL_RGBA
+    // (internalformat a2 is already GL_RGBA) and set a per-texture R<->B swizzle so the BGRA-ordered pixel data the
+    // plugin uploads samples back as correct RGB (the channel order, not alpha — so the scene shows through).
+    if ((GLenum)a6 == GL_BGRA)
+    {
+        a6 = GL_RGBA;
+        glTexImage2D((GLenum)a0,(GLint)a1,(GLint)a2,(GLsizei)a3,(GLsizei)a4,(GLint)a5,(GLenum)a6,(GLenum)a7,(const void *)(intptr_t)a8);
+        glTexParameteri((GLenum)a0, GL_TEXTURE_SWIZZLE_R, GL_BLUE);
+        glTexParameteri((GLenum)a0, GL_TEXTURE_SWIZZLE_B, GL_RED);
+        return;
+    }
+#endif
     glTexImage2D((GLenum)a0,(GLint)a1,(GLint)a2,(GLsizei)a3,(GLsizei)a4,(GLint)a5,(GLenum)a6,(GLenum)a7,(const void *)(intptr_t)a8);
 }
 
@@ -704,6 +717,12 @@ static JNIEXPORT void JNICALL rc_GL_glTexParameteri_0(JNIEnv *env, jclass cls, j
 
 static JNIEXPORT void JNICALL rc_GL_glTexSubImage2D_0(JNIEnv *env, jclass cls, jint a0, jint a1, jint a2, jint a3, jint a4, jint a5, jint a6, jint a7, jlong a8)
 {
+#if defined(RC_BACKEND_ANGLE)
+    // Interface texture upload: GL_BGRA + GL_UNSIGNED_INT_8_8_8_8_REV (EAGL) -> GL_RGBA + GL_UNSIGNED_BYTE (ANGLE
+    // ES3). The R<->B swizzle set in glTexImage2D corrects the channel order; alpha is unchanged either way.
+    if ((GLenum)a6 == GL_BGRA) a6 = GL_RGBA;
+    if ((GLenum)a7 == GL_UNSIGNED_INT_8_8_8_8_REV) a7 = GL_UNSIGNED_BYTE;
+#endif
     glTexSubImage2D((GLenum)a0,(GLint)a1,(GLint)a2,(GLint)a3,(GLsizei)a4,(GLsizei)a5,(GLenum)a6,(GLenum)a7,(const void *)(intptr_t)a8);
 }
 

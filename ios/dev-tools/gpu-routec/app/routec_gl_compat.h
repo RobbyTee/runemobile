@@ -77,6 +77,17 @@ extern void glClipControlEXT(GLenum origin, GLenum depth);
 #define GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT 0x84FF
 #endif
 
+// The base gpu plugin uploads the interface texture as GL_BGRA + GL_UNSIGNED_INT_8_8_8_8_REV (desktop/EAGL formats).
+// Neither is ES-3.0 core, so ANGLE rejects them (GL_INVALID_OPERATION) and the UI texture upload silently fails ->
+// the UI quad paints opaque over the scene (black screen). The texture shims translate these to GL_RGBA +
+// GL_UNSIGNED_BYTE for ANGLE; these are the incoming LWJGL constant VALUES the plugin passes.
+#ifndef GL_BGRA
+#define GL_BGRA 0x80E1
+#endif
+#ifndef GL_UNSIGNED_INT_8_8_8_8_REV
+#define GL_UNSIGNED_INT_8_8_8_8_REV 0x8367
+#endif
+
 #else  /* EAGL */
 
 #define GLES_SILENCE_DEPRECATION 1   // OpenGLES is deprecated-since-iOS-12 but works on iOS 26 (no Metal-GL bridge)
