@@ -31,6 +31,7 @@ import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
+import net.runelite.api.widgets.WidgetSizeMode;
 
 /**
  * W3 Feature-A (A3) — controls the engine chatbox so the chat-at-top look matches the OSRS Mobile reference.
@@ -102,6 +103,7 @@ public final class HudVeneerBridge
 	private static volatile String chatSnapshotJson = "{\"loggedIn\":false}";
 
 	private static final int CHAT_DEFAULT_W = 519;   // the engine's native chatbox width (from the layout dump)
+	private static final int CHAT_BOTTOM_MARGIN = 4; // px of breathing room so the newest line isn't clipped
 
 	private HudVeneerBridge()
 	{
@@ -221,13 +223,10 @@ public final class HudVeneerBridge
 				// covered by the native row, so a native tab tap can still proxy a precise click onto it).
 				forcePos(c, InterfaceID.Chatbox.CONTROLS, chatX, chatY);
 				// Resize + reposition the message area so it ALIGNS with the bigger native row (width = rowW) and
-				// FITS below it without clipping the newest line: CHATAREA's height comes from a MINUS size-mode
-				// (height = container - originalHeight), where originalHeight is the "tab row" reserve. The engine
-				// reserves 23 (its CONTROLS row); reserve rowH instead so the area shrinks to fit under the taller
-				// native row instead of overflowing the container. Width is ABSOLUTE → set originalWidth = rowW.
-				// Re-applied only when the engine has reset the originals (TOPLEVEL_REDRAW), so the scroll position
-				// isn't disturbed every frame; the per-tick forcePos keeps it positioned.
-				sizeChatArea(c, chatX, chatY + rowH, rowW, rowH);
+				// FITS below it without clipping the newest line. Deterministic: read the chat container's real
+				// height, then pin CHATAREA to ABSOLUTE width=rowW and height=(containerH - rowH - margin) at
+				// (chatX, chatY+rowH). The display/scroll/line children re-flow via their own parent-relative modes.
+				sizeChatArea(c, chatId, chatX, chatY, rowW, rowH);
 				if (transparentChat)
 				{
 					// Deterministic transparency: hide the brown chatbox background sprites directly (the
@@ -242,7 +241,7 @@ public final class HudVeneerBridge
 					}
 				}
 				buildChatSnapshot(c);
-				dumpChatLayoutOnce(c);
+				dumpChatLayoutOnce(c, chatId);
 			}
 			else if (hideChat)
 			{
@@ -576,12 +575,12 @@ public final class HudVeneerBridge
 	}
 
 	/** Position + size the chatbox message area ({@code CHATAREA}) so it aligns with + fits under the enlarged
-	 *  native tab row. {@code w} = the native row width (CHATAREA width is ABSOLUTE → set originalWidth); the area's
-	 *  height comes from a MINUS size-mode (= container − originalHeight), so setting originalHeight = the tab-row
-	 *  height makes it shrink to fit below the taller row instead of overflowing (the bottom-line clip). Width/size
-	 *  are only re-applied when the engine reset them (avoids per-frame scroll churn); position every tick.
-	 *  CHATDISPLAY + the scroll/line children re-flow on revalidate via their parent-relative size modes. */
-	private static void sizeChatArea(Client c, int x, int y, int w, int tabRowH)
+	 *  native tab row. Deterministic: pin CHATAREA to ABSOLUTE width = the native row width and ABSOLUTE height =
+	 *  (chat-container height − tab-row height − a small margin), positioned at {@code (chatX, chatY+rowH)}. This
+	 *  avoids depending on the engine's size-mode arithmetic for the area itself; its display/scroll/line children
+	 *  still re-flow via THEIR parent-relative modes on revalidate. Size/mode are re-applied only when they drift
+	 *  (engine reset / first apply) so the scroll position isn't disturbed every frame; position every tick. */
+	private static void sizeChatArea(Client c, int containerId, int chatX, int chatY, int rowW, int rowH)
 	{
 		try
 		{
@@ -590,11 +589,18 @@ public final class HudVeneerBridge
 			{
 				return;
 			}
-			area.setForcedPosition(x, y);
-			if (area.getOriginalWidth() != w || area.getOriginalHeight() != tabRowH)
+			final Widget cont = c.getWidget(containerId);
+			final int containerH = (cont != null && cont.getHeight() > 0) ? cont.getHeight() : 165;
+			final int targetW = rowW;
+			final int targetH = Math.max(40, containerH - rowH - CHAT_BOTTOM_MARGIN);
+			area.setForcedPosition(chatX, chatY + rowH);
+			if (area.getWidthMode() != WidgetSizeMode.ABSOLUTE || area.getHeightMode() != WidgetSizeMode.ABSOLUTE
+				|| area.getOriginalWidth() != targetW || area.getOriginalHeight() != targetH)
 			{
-				area.setOriginalWidth(w);
-				area.setOriginalHeight(tabRowH);
+				area.setWidthMode(WidgetSizeMode.ABSOLUTE);
+				area.setHeightMode(WidgetSizeMode.ABSOLUTE);
+				area.setOriginalWidth(targetW);
+				area.setOriginalHeight(targetH);
 			}
 			area.revalidate();
 		}
@@ -603,25 +609,30 @@ public final class HudVeneerBridge
 		}
 	}
 
-	// One-time dump of the chatbox sub-widget layout, so the native side can plan moving the tab row (CONTROLS)
-	// above the message area (CHATAREA/CHATDISPLAY) to match the OSRS-Mobile tabs-on-top layout.
-	private static boolean dumped;
+	// Dump the chatbox sub-widget layout for diagnosing the native chat-tab veneer. Fires a few times at STEADY
+	// STATE (after the native side has applied the row width — chatAreaW>0 — so the dump reflects the resized
+	// chat, not the first pre-native frame), spaced out, then stops.
+	private static int dumpTick;
+	private static int dumpsDone;
 
-	private static void dumpChatLayoutOnce(Client c)
+	private static void dumpChatLayoutOnce(Client c, int containerId)
 	{
-		if (dumped)
+		if (dumpsDone >= 3 || chatAreaW <= 0)
 		{
-			return;
+			return;   // wait until native has applied the width; cap the number of dumps
 		}
-		dumped = true;
+		if (dumpTick++ % 120 != 0)
+		{
+			return;   // ~every 2.4s
+		}
+		dumpsDone++;
+		dumpOne(c, "CHAT_CONTAINER", containerId);
 		dumpOne(c, "CONTROLS", InterfaceID.Chatbox.CONTROLS);
 		dumpOne(c, "CHATAREA", InterfaceID.Chatbox.CHATAREA);
 		dumpOne(c, "CHATDISPLAY", InterfaceID.Chatbox.CHATDISPLAY);
-		dumpOne(c, "CHAT_BACKGROUND", InterfaceID.Chatbox.CHAT_BACKGROUND);
-		dumpOne(c, "INPUT_CLICKAREA", InterfaceID.Chatbox.INPUT_CLICKAREA);
 		dumpOne(c, "MES_LAYER", InterfaceID.Chatbox.MES_LAYER);
 		dumpOne(c, "SCROLLAREA", InterfaceID.Chatbox.SCROLLAREA);
-		dumpOne(c, "CHAT_ALL", InterfaceID.Chatbox.CHAT_ALL);
+		dumpOne(c, "INPUT_CLICKAREA", InterfaceID.Chatbox.INPUT_CLICKAREA);
 	}
 
 	private static void dumpOne(Client c, String name, int id)

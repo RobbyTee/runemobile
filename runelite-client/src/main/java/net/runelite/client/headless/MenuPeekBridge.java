@@ -172,7 +172,7 @@ public final class MenuPeekBridge
 
 	private static void appendEntry(StringBuilder sb, MenuEntry e)
 	{
-		sb.append("{\"opt\":\"").append(jsonEsc(e.getOption()))
+		sb.append("{\"opt\":\"").append(jsonEsc(stripTags(e.getOption())))
 			.append("\",\"tgt\":\"").append(jsonEsc(stripTags(e.getTarget())))
 			.append("\",\"type\":\"").append(jsonEsc(String.valueOf(e.getType())))
 			.append("\",\"id\":").append(e.getIdentifier())
