@@ -59,11 +59,15 @@ genuinely-dark distance). Frames extracted with ffmpeg; per-band stats fold scre
 - **`depthalways` (force `glDepthFunc(GL_ALWAYS)`):** the river black band does **not** vanish — with the depth
   test off, the **dark surface takes over** (big black bands). → the band IS depth-test-driven z-fighting against a
   dark coplanar surface (Artifact B). Same toggle removed the distant-terrain flicker too (earlier round).
-- **`fragdepth` (the depth fix, below):** **rejected**. On the river-band view the black band remains, and the first
-  screenshot shows broad white/grey depth-ordering planes across the whole scene, not a localized water improvement.
-  The pulled trace/shader dump confirm the mode was active, the shader compiled with `gl_FragDepth =
-  vClipDepth * gl_FragCoord.w`, and the scene depth attachment was still 32F. So the flat-varying `gl_FragDepth`
-  route is not shippable on this driver/content path.
+- **`fragdepth` (the depth fix, below):** **re-opened — Simulator-validated, pending a clean device re-test.** The
+  first on-device run was inconclusive (it looked at the birdseye horizon, which is dominated by a *different*
+  problem — sub-pixel aliasing of thin far geometry that `gl_FragDepth` does not address — and reported broad
+  white/grey depth-ordering planes; the clean river-band z-fight was never isolated). A controlled off-device repro
+  (`../gpu-depthsim/`, md5-gated GREEN) shows Apple's GLES **honors** `gl_FragDepth`, that it carries **64×** finer
+  float32 depth at the far plane (the device buffer is a confirmed 32F, so this applies on-device), that it cuts a
+  real `DEPTH_COMPONENT32F` z-fight ~15×, and that it **preserves** the coplanar bias layering. So the route is
+  *not* dead — re-test it on the river band specifically. Caveat: the Simulator GLES is a *software* renderer, so the
+  device confirmation still matters. See [`../gpu-depthsim/DEPTHSIM-RESULT.md`](../gpu-depthsim/DEPTHSIM-RESULT.md).
 - **2× supersample (`fix2x`):** scene FBO rendered at 2608×1200 single-sample, downsampled `GL_LINEAR` to
   1304×600 (confirmed in trace; 120fps — perf is a non-issue). It **reduces the sub-pixel aliasing** of thin far
   geometry, but **does NOT fix the z-fighting** (depth problem, not spatial) — the LINEAR downsample even turns the
@@ -93,15 +97,18 @@ Measured effect: grazing river flicker `0.351 → 0.061` (the trilinear half) an
 
 ## Artifact B — depth z-fighting (OPEN). Candidate fixes, in order
 
-1. **`gl_FragDepth` reverse-Z (gated `fragdepth`) — REJECTED.**
+1. **`gl_FragDepth` reverse-Z (gated `fragdepth`) — LEADING CANDIDATE (Simulator-validated; device re-test pending).**
    Scene vertex carries `clip.z` as a **flat** varying `vClipDepth = screenPos.z`; scene fragment writes
    `gl_FragDepth = vClipDepth * gl_FragCoord.w` (= `clip.z/clip.w = 100/viewZ`). This puts `window_z = 100/viewZ`
-   **exactly equal to desktop's `glClipControl` values, with the same 32F precision** → it *should* fix B if the
+   **exactly equal to desktop's `glClipControl` values, with the same 32F precision** → it fixes B if the
    surfaces are at distinct depths. `clip.z` is carried `flat` (it is ~constant per face) specifically to avoid the
    deep-dive's earlier `gl_FragDepth` failure, which passed `clip.z` as a *perspective* varying and diverged at
    grazing. Math: with constant `clip.z = C`, `C*gl_FragCoord.w = C*screenLinearInterp(1/w) = screenLinearInterp
-   (NDC.z)` = the correct planar window depth at all angles. In practice it globally corrupts scene ordering on the
-   river test, so leave it gated for diagnosis only and do not combine it with the texture fix.
+   (NDC.z)` = the correct planar window depth at all angles. The off-device controlled repro (`../gpu-depthsim/`,
+   md5-gated GREEN) confirms all of this: gl_FragDepth honored, 64× finer far-plane float32 precision, ~15× less
+   z-fight, coplanar bias layering preserved. The earlier on-device "global scene corruption" was on the confounded
+   birdseye view, not a clean z-fight — re-test on the river band before shipping. On-device watch item: the
+   per-vertex bias under the `flat` varying (if global ordering breaks on-device while the band clears).
 2. **Polygon offset** for the coplanar water-vs-riverbed / terrain-vs-overlay specifically. Active test:
    `offsetalpha` keeps the texture fix on, leaves `fragdepth` off, and applies `glPolygonOffset(1, +32)` only while
    the plugin's alpha pass has depth writes disabled (`glDepthMask(false)`). If this clears the river band without
