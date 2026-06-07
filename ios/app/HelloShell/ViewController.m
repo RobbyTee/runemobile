@@ -1081,6 +1081,11 @@ static const CGFloat kMenuWidth       = 210.0;
         // the enlarged button reads smooth (the official mobile chat scales these the same way).
         b.layer.magnificationFilter = kCAFilterLinear;
         [b addTarget:self action:@selector(onChatTabButton:) forControlEvents:UIControlEventTouchUpInside];
+        // Long-press a tab -> the engine's filter menu (On/Filter/Off/Hide …) via the native big-row overlay.
+        UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc]
+            initWithTarget:self action:@selector(onChatTabLongPress:)];
+        lp.minimumPressDuration = 0.4;
+        [b addGestureRecognizer:lp];
         [self.screen addSubview:b];
         [self.chatTabButtons addObject:b];
     }
@@ -1144,9 +1149,10 @@ static int chatRowCanvasH(void) {
     CGFloat tabW = kChatTabSpriteW * unit;
     CGFloat reportW = kChatReportSpriteW * unit;
     CGFloat rowH = kChatSpriteH * unit;
-    // Push the engine's message area down past the (now correctly-proportioned) native row. Re-applied each tick so
-    // the chat row height tracks the scale even if it changes.
+    // Push the engine's message area down past the (now correctly-proportioned) native row AND widen it to the row
+    // width so the scrollback aligns with the bigger buttons. Re-applied each tick so it tracks the scale.
     [JVMLauncher setEngineChatTabRowHeight:chatRowCanvasH()];
+    [JVMLauncher setEngineChatAreaWidth:(int)lround(kChatW * kChatRowScale)];
     // Short wide buttons: the label fills most of the height, so a larger font ratio than a tall button.
     CGFloat fontSize = floor(rowH * 0.62);
     UIFont *labelFont = [UIFont fontWithName:@"RuneScape" size:fontSize] ?: [UIFont boldSystemFontOfSize:fontSize];
@@ -1181,33 +1187,76 @@ static int chatRowCanvasH(void) {
 
 - (void)hideChatTabs {
     for (UIButton *b in self.chatTabButtons) b.hidden = YES;
-    // Restore the engine's own (small) chat tab row whenever the native tabs aren't shown (toggled off / not
-    // logged in / unsupported layout): drop the message-area push-down so CHATAREA returns to the engine's 23px
-    // offset and its real CONTROLS row renders + works.
+    // Restore the engine's own (small) chat tab row + native width whenever the native tabs aren't shown (toggled
+    // off / not logged in / unsupported layout): drop the push-down + widen so CHATAREA returns to the engine's
+    // 23px offset / 519 width and its real CONTROLS row renders + works.
     [JVMLauncher setEngineChatTabRowHeight:0];
+    [JVMLauncher setEngineChatAreaWidth:0];
 }
 
-// A native chat-tab tap -> proxy a PRECISE left click onto the live engine button centre (from the snapshot
-// bounds). The engine's CONTROLS row stays shown underneath (covered by the bigger native row), so the click
-// switches the chat filter / opens Report exactly as a tap on the real button would. The button consumed the
-// tap, so it never leaks a walk-here click to the game gestures beneath.
-- (void)onChatTabButton:(UIButton *)b {
-    if (![JVMLauncher bridgeReady]) return;
+// Resolve the live engine chat-button centre (canvas px) for native button tag i, from the chat snapshot bounds.
+// Returns NO if the engine button isn't built/visible this frame.
+- (BOOL)engineChatButtonCenterForTag:(NSInteger)i x:(int *)cx y:(int *)cy {
     NSString *snap = [JVMLauncher chatSnapshot];
-    if (snap.length == 0) return;
+    if (snap.length == 0) return NO;
     NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
                                                       options:0 error:nil];
     NSArray *tabs = [d isKindOfClass:[NSDictionary class]] ? d[@"tabs"] : nil;
-    NSInteger i = b.tag;
-    if (![tabs isKindOfClass:[NSArray class]] || i < 0 || i >= (NSInteger)tabs.count) return;
+    if (![tabs isKindOfClass:[NSArray class]] || i < 0 || i >= (NSInteger)tabs.count) return NO;
     NSDictionary *t = [tabs[i] isKindOfClass:[NSDictionary class]] ? tabs[i] : nil;
-    if (!t) return;
+    if (!t) return NO;
     int bx = [t[@"x"] intValue], by = [t[@"y"] intValue], bw = [t[@"w"] intValue], bh = [t[@"h"] intValue];
-    if (bw <= 0 || bh <= 0 || bx < 0 || by < 0) return;   // engine button not built / not visible this frame
-    int cx = bx + bw / 2, cy = by + bh / 2;
+    if (bw <= 0 || bh <= 0 || bx < 0 || by < 0) return NO;   // engine button not built / not visible this frame
+    *cx = bx + bw / 2; *cy = by + bh / 2;
+    return YES;
+}
+
+// A native chat-tab tap -> proxy a PRECISE left click onto the live engine button centre. The engine's CONTROLS
+// row stays shown underneath (covered by the bigger native row), so the click switches the chat filter / opens
+// Report exactly as a tap on the real button would. Clear the parked hover afterwards so the engine doesn't leave
+// the "Switch tab" action tooltip stuck under the button (and at the top-left action text).
+- (void)onChatTabButton:(UIButton *)b {
+    if (![JVMLauncher bridgeReady]) return;
+    int cx = 0, cy = 0;
+    if (![self engineChatButtonCenterForTag:b.tag x:&cx y:&cy]) return;
     [JVMLauncher postClickPreciseX:cx y:cy button:1];
+    [JVMLauncher postClearHover];   // no parked hover -> no "Switch tab" tooltip left showing
     [self appendLine:[NSString stringWithFormat:@"[chat] tab %ld (%@) -> precise click %d,%d",
-                      (long)i, kChatTabNames[i], cx, cy]];
+                      (long)b.tag, kChatTabNames[b.tag], cx, cy]];
+}
+
+// A native chat-tab LONG-PRESS -> right-click the live engine button so the engine opens its filter menu
+// (On / Filter / Off / Hide …), then drive the same native big-row menu overlay used for world right-clicks
+// (presentNativeMenu reads the engine menu via MenuPeek; the overlay appears at the finger, the row click-through
+// targets the engine menu rows). Drag to a row + release to pick.
+- (void)onChatTabLongPress:(UILongPressGestureRecognizer *)g {
+    if (![JVMLauncher bridgeReady]) return;
+    UIButton *b = (UIButton *)g.view;
+    CGPoint loc = [g locationInView:self.view];
+    switch (g.state) {
+        case UIGestureRecognizerStateBegan: {
+            int cx = 0, cy = 0;
+            if (![self engineChatButtonCenterForTag:b.tag x:&cx y:&cy]) return;
+            [self openEngineMenuAtGameX:cx gameY:cy anchor:loc];
+            [self appendLine:[NSString stringWithFormat:@"[chat] tab %ld (%@) long-press -> filter menu @%d,%d",
+                              (long)b.tag, kChatTabNames[b.tag], cx, cy]];
+            break;
+        }
+        case UIGestureRecognizerStateChanged:
+            if (self.menuContainer) [self updateMenuHighlightForPoint:loc];
+            break;
+        case UIGestureRecognizerStateEnded:
+            self.menuTouchActive = NO;
+            if (self.menuContainer) [self commitMenuSelection];
+            break;
+        case UIGestureRecognizerStateCancelled:
+        case UIGestureRecognizerStateFailed:
+            self.menuTouchActive = NO;
+            if (self.menuContainer) [self cancelMenu];
+            break;
+        default:
+            break;
+    }
 }
 
 // Lay out the native tab rails from the read-only chrome snapshot — EDGE-SPLIT (mobile) arrangement, matching
@@ -1667,6 +1716,23 @@ static int chatRowCanvasH(void) {
 // The native rows are non-interactive labels — selection is driven entirely by this drag, so there is no
 // race with the rows' own touch handling. The overlay is built a frame or two after .began (it waits for the
 // engine menu to land in the MenuPeekBridge snapshot), so updateMenuHighlight no-ops until it exists.
+// Open the engine right-click menu at game (gx,gy) and arm the native big-row overlay anchored at the finger
+// (loc, view coords). Shared by the world long-press (onLongPress) and the chat-tab long-press (filter menu).
+- (void)openEngineMenuAtGameX:(int)gx gameY:(int)gy anchor:(CGPoint)loc {
+    if (self.menuOpen) [self teardownMenuViews];   // re-press: drop a stale menu, open fresh
+    self.lastMenuX = gx; self.lastMenuY = gy;
+    self.menuAnchor = loc;
+    self.menuHandRight = (loc.x > self.view.bounds.size.width * 0.5);  // right half -> right hand
+    [JVMLauncher postClickX:gx y:gy button:3];      // open the engine right-click menu at the target
+    self.menuOpen = YES;
+    self.menuBuilding = YES;
+    self.menuTouchActive = YES;
+    self.menuHighlight = -1;
+    self.menuOpenAt = CACurrentMediaTime();
+    self.menuHaptic = [UISelectionFeedbackGenerator new];
+    [self.menuHaptic prepare];
+}
+
 - (void)onLongPress:(UILongPressGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady]) return;
     CGPoint loc = [g locationInView:self.view];
@@ -1675,18 +1741,7 @@ static int chatRowCanvasH(void) {
         case UIGestureRecognizerStateBegan: {
             int gx = 0, gy = 0;
             if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return; // letterbox
-            if (self.menuOpen) [self teardownMenuViews];   // re-press: drop a stale menu, open fresh
-            self.lastMenuX = gx; self.lastMenuY = gy;
-            self.menuAnchor = loc;
-            self.menuHandRight = (loc.x > self.view.bounds.size.width * 0.5);  // right half -> right hand
-            [JVMLauncher postClickX:gx y:gy button:3];      // open the engine right-click menu at the finger
-            self.menuOpen = YES;
-            self.menuBuilding = YES;
-            self.menuTouchActive = YES;
-            self.menuHighlight = -1;
-            self.menuOpenAt = CACurrentMediaTime();
-            self.menuHaptic = [UISelectionFeedbackGenerator new];
-            [self.menuHaptic prepare];
+            [self openEngineMenuAtGameX:gx gameY:gy anchor:loc];
             [self appendLine:[NSString stringWithFormat:@"[shell] long-press -> menu open(R) game %d,%d hand=%@",
                               gx, gy, self.menuHandRight ? @"R" : @"L"]];
             break;

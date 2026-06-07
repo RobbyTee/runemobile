@@ -150,6 +150,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// the message area (CHATAREA) down past the taller native buttons. 0 restores the default 23px row. Main thread.
 + (void)setEngineChatTabRowHeight:(int)canvasPx;
 
+/// W3 A3 (bigger chat tabs): the canvas-px width the enlarged native row spans, so the engine widens the message
+/// area to ALIGN with the bigger buttons. 0 restores the engine's default 519 width. Main thread.
++ (void)setEngineChatAreaWidth:(int)canvasPx;
+
 /// W3 A3 (bigger chat tabs): live per-tab chat geometry/state (escaped JSON) the native enlarged tab veneer reads
 /// each tick — per-tab canvas bounds, selected/new-message flags, and the filter sub-label text + colour. Returns
 /// nil until the chat is relocated + logged in. Main thread.

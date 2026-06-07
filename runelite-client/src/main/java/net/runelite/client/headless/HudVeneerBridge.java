@@ -94,9 +94,14 @@ public final class HudVeneerBridge
 
 	// Native chat-tab veneer (A3 bigger buttons). chatTabRowH = the canvas-px height the native (enlarged) tab row
 	// occupies; the message area (CHATAREA) is pushed down past it instead of the engine's 23px CONTROLS row. 0 =
-	// fall back to CONTROLS_H. chatSnapshotJson = the per-frame chat-tab geometry/state the native side reads.
+	// fall back to CONTROLS_H. chatAreaW = the canvas-px width the native row spans, so the message area is widened
+	// to ALIGN with the bigger buttons (0 = the engine default 519). chatSnapshotJson = the per-frame chat-tab
+	// geometry/state the native side reads.
 	private static volatile int chatTabRowH;
+	private static volatile int chatAreaW;
 	private static volatile String chatSnapshotJson = "{\"loggedIn\":false}";
+
+	private static final int CHAT_DEFAULT_W = 519;   // the engine's native chatbox width (from the layout dump)
 
 	private HudVeneerBridge()
 	{
@@ -162,6 +167,13 @@ public final class HudVeneerBridge
 		chatTabRowH = canvasPx;
 	}
 
+	/** Native: the canvas-px width the enlarged native chat-tab row spans, so the message area is widened to ALIGN
+	 *  with the bigger buttons (the engine chatbox is fixed at 519). {@code 0} restores the default 519 width. */
+	public static void setChatAreaWidth(int canvasPx)
+	{
+		chatAreaW = canvasPx;
+	}
+
 	/** Native: the live chat-tab geometry/state snapshot (escaped JSON) for the enlarged native tab veneer —
 	 *  per-tab canvas bounds, selected/new-message state, and the live filter sub-label + colour. Read lock-free
 	 *  on the JNI thread; published on the client thread in {@link #tick}. */
@@ -188,10 +200,17 @@ public final class HudVeneerBridge
 
 			if (chatX >= 0)
 			{
+				final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
+				final int rowW = chatAreaW > 0 ? chatAreaW : CHAT_DEFAULT_W;
 				final Widget w = c.getWidget(chatId);
 				if (w != null)
 				{
 					w.setForcedPosition(chatX, chatY);
+					// Widen the chat CONTAINER to the native row width so its children (the message area) can fill it.
+					if (w.getOriginalWidth() != rowW)
+					{
+						w.setOriginalWidth(rowW);
+					}
 					w.revalidate();
 				}
 				// OSRS-Mobile tabs-on-top: the desktop chat stacks the tab row (CONTROLS, 23px) UNDER the message
@@ -200,9 +219,15 @@ public final class HudVeneerBridge
 				// the native veneer enlarges the tabs it reports its taller row height; push CHATAREA past THAT so
 				// the scrollback clears the bigger buttons (the engine's own 23px CONTROLS stays put underneath,
 				// covered by the native row, so a native tab tap can still proxy a precise click onto it).
-				final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
 				forcePos(c, InterfaceID.Chatbox.CONTROLS, chatX, chatY);
-				forcePos(c, InterfaceID.Chatbox.CHATAREA, chatX, chatY + rowH);
+				// Resize + reposition the message area so it ALIGNS with the bigger native row (width = rowW) and
+				// FITS below it without clipping the newest line: CHATAREA's height comes from a MINUS size-mode
+				// (height = container - originalHeight), where originalHeight is the "tab row" reserve. The engine
+				// reserves 23 (its CONTROLS row); reserve rowH instead so the area shrinks to fit under the taller
+				// native row instead of overflowing the container. Width is ABSOLUTE → set originalWidth = rowW.
+				// Re-applied only when the engine has reset the originals (TOPLEVEL_REDRAW), so the scroll position
+				// isn't disturbed every frame; the per-tick forcePos keeps it positioned.
+				sizeChatArea(c, chatX, chatY + rowH, rowW, rowH);
 				if (transparentChat)
 				{
 					// Deterministic transparency: hide the brown chatbox background sprites directly (the
@@ -544,6 +569,34 @@ public final class HudVeneerBridge
 				w.setForcedPosition(x, y);
 				w.revalidate();
 			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	/** Position + size the chatbox message area ({@code CHATAREA}) so it aligns with + fits under the enlarged
+	 *  native tab row. {@code w} = the native row width (CHATAREA width is ABSOLUTE → set originalWidth); the area's
+	 *  height comes from a MINUS size-mode (= container − originalHeight), so setting originalHeight = the tab-row
+	 *  height makes it shrink to fit below the taller row instead of overflowing (the bottom-line clip). Width/size
+	 *  are only re-applied when the engine reset them (avoids per-frame scroll churn); position every tick.
+	 *  CHATDISPLAY + the scroll/line children re-flow on revalidate via their parent-relative size modes. */
+	private static void sizeChatArea(Client c, int x, int y, int w, int tabRowH)
+	{
+		try
+		{
+			final Widget area = c.getWidget(InterfaceID.Chatbox.CHATAREA);
+			if (area == null)
+			{
+				return;
+			}
+			area.setForcedPosition(x, y);
+			if (area.getOriginalWidth() != w || area.getOriginalHeight() != tabRowH)
+			{
+				area.setOriginalWidth(w);
+				area.setOriginalHeight(tabRowH);
+			}
+			area.revalidate();
 		}
 		catch (RuntimeException ignore)
 		{
