@@ -28,6 +28,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
 
@@ -49,6 +50,21 @@ public final class HudVeneerBridge
 	private static final boolean ENABLED = Boolean.getBoolean("runelite.hudveneer");
 
 	private static final int CONTROLS_H = 23;   // the chat tab-row (CONTROLS) height, from the layout dump
+
+	// W3 A3 (native chat tabs): the 7 chat tab buttons of the CONTROLS row in display order. The gamepack lays
+	// each button out as a parent widget whose children are GRAPHIC = id+1 (the tab-background sprite), TEXT =
+	// id+2 (the channel label) and FILTER = id+3 (the live "On"/"Off"/"Filter"/"Hide" sub-label) — except CHAT_ALL
+	// which has no filter. The native veneer recreates these BIGGER (the engine has no per-widget scale and the
+	// sprites are fixed-size), so this bridge publishes their live canvas geometry + state each frame and the
+	// native side draws scaled UIKit buttons over them, proxying a precise click onto the live engine button.
+	private static final int[] CHAT_TAB_IDS = {
+		InterfaceID.Chatbox.CHAT_ALL, InterfaceID.Chatbox.CHAT_GAME, InterfaceID.Chatbox.CHAT_PUBLIC,
+		InterfaceID.Chatbox.CHAT_PRIVATE, InterfaceID.Chatbox.CHAT_FRIENDSCHAT, InterfaceID.Chatbox.CHAT_CLAN,
+		InterfaceID.Chatbox.CHAT_TRADE, InterfaceID.Chatbox.REPORTABUSE,
+	};
+	private static final String[] CHAT_TAB_NAMES = { "All", "Game", "Public", "Private", "Channel", "Clan", "Trade", "Report" };
+	private static final int SPR_CHATBTN_SELECTED = 3053;   // SpriteID.CHATBOX_BUTTON_SELECTED — active tab
+	private static final int SPR_CHATBTN_NEW = 3055;        // SpriteID.CHATBOX_BUTTON_NEW_MESSAGES — unread tab
 
 	// Desired state, set from native, applied on the client thread. chatX < 0 = not relocating.
 	private static volatile int chatX = -1;
@@ -75,6 +91,12 @@ public final class HudVeneerBridge
 	// applied on the client thread (where runScript is legal).
 	private static volatile boolean hideStones;
 	private static volatile int pendingOpenTab = -1;
+
+	// Native chat-tab veneer (A3 bigger buttons). chatTabRowH = the canvas-px height the native (enlarged) tab row
+	// occupies; the message area (CHATAREA) is pushed down past it instead of the engine's 23px CONTROLS row. 0 =
+	// fall back to CONTROLS_H. chatSnapshotJson = the per-frame chat-tab geometry/state the native side reads.
+	private static volatile int chatTabRowH;
+	private static volatile String chatSnapshotJson = "{\"loggedIn\":false}";
 
 	private HudVeneerBridge()
 	{
@@ -133,6 +155,21 @@ public final class HudVeneerBridge
 		pendingOpenTab = tabIndex;
 	}
 
+	/** Native: the canvas-px height the enlarged native chat-tab row occupies, so the message area is pushed down
+	 *  past it (the engine's own CONTROLS row is only 23px). {@code 0} restores the default 23px offset. */
+	public static void setChatTabRowHeight(int canvasPx)
+	{
+		chatTabRowH = canvasPx;
+	}
+
+	/** Native: the live chat-tab geometry/state snapshot (escaped JSON) for the enlarged native tab veneer —
+	 *  per-tab canvas bounds, selected/new-message state, and the live filter sub-label + colour. Read lock-free
+	 *  on the JNI thread; published on the client thread in {@link #tick}. */
+	public static String getChatSnapshot()
+	{
+		return chatSnapshotJson;
+	}
+
 	/** Re-apply the requested chatbox state each frame. Client thread. */
 	public static void tick(Client c)
 	{
@@ -159,9 +196,13 @@ public final class HudVeneerBridge
 				}
 				// OSRS-Mobile tabs-on-top: the desktop chat stacks the tab row (CONTROLS, 23px) UNDER the message
 				// area (CHATAREA, 142px). Flip it — force the tab row to the chat's top and push the messages down
-				// by the tab height — so the layout reads tabs -> messages -> input like the mobile reference.
+				// by the tab height — so the layout reads tabs -> messages -> input like the mobile reference. When
+				// the native veneer enlarges the tabs it reports its taller row height; push CHATAREA past THAT so
+				// the scrollback clears the bigger buttons (the engine's own 23px CONTROLS stays put underneath,
+				// covered by the native row, so a native tab tap can still proxy a precise click onto it).
+				final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
 				forcePos(c, InterfaceID.Chatbox.CONTROLS, chatX, chatY);
-				forcePos(c, InterfaceID.Chatbox.CHATAREA, chatX, chatY + CONTROLS_H);
+				forcePos(c, InterfaceID.Chatbox.CHATAREA, chatX, chatY + rowH);
 				if (transparentChat)
 				{
 					// Deterministic transparency: hide the brown chatbox background sprites directly (the
@@ -175,6 +216,7 @@ public final class HudVeneerBridge
 						c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, 1);
 					}
 				}
+				buildChatSnapshot(c);
 				dumpChatLayoutOnce(c);
 			}
 			else if (hideChat)
@@ -307,6 +349,174 @@ public final class HudVeneerBridge
 		catch (RuntimeException ignore)
 		{
 		}
+	}
+
+	/** Build the per-frame chat-tab snapshot the native veneer reads to draw + state its enlarged buttons. Runs on
+	 *  the client thread (inside {@link #tick}) right after the chatbox widgets are force-positioned, so the button
+	 *  bounds are fresh. Reports each of the 7 tabs' canvas bounds (for the proxy-click target + native layout),
+	 *  selected/new-message state (from the GRAPHIC sprite id), and the live filter sub-label text + colour. */
+	private static void buildChatSnapshot(Client c)
+	{
+		try
+		{
+			final StringBuilder sb = new StringBuilder(640);
+			sb.append("{\"loggedIn\":true")
+				.append(",\"chatX\":").append(chatX)
+				.append(",\"chatY\":").append(chatY)
+				.append(",\"rowH\":").append(chatTabRowH > 0 ? chatTabRowH : CONTROLS_H);
+			int view = -1;
+			try
+			{
+				view = c.getVarcIntValue(VarClientID.CHAT_VIEW);
+			}
+			catch (RuntimeException ignore)
+			{
+			}
+			int topLevel = -1;
+			try
+			{
+				topLevel = c.getTopLevelInterfaceId();
+			}
+			catch (RuntimeException ignore)
+			{
+			}
+			sb.append(",\"view\":").append(view)
+				.append(",\"topLevelId\":").append(topLevel)
+				.append(",\"tabs\":[");
+			final int last = CHAT_TAB_IDS.length - 1;
+			for (int i = 0; i < CHAT_TAB_IDS.length; i++)
+			{
+				if (i > 0)
+				{
+					sb.append(',');
+				}
+				// ALL (index 0) and Report (last) have no filter sub-label.
+				appendTab(c, sb, CHAT_TAB_IDS[i], CHAT_TAB_NAMES[i], i != 0 && i != last);
+			}
+			sb.append("]}");
+			chatSnapshotJson = sb.toString();
+		}
+		catch (RuntimeException ignore)
+		{
+			// keep the previous snapshot
+		}
+	}
+
+	/** Append one chat tab's geometry/state object. {@code base} = the tab parent widget; GRAPHIC=base+1,
+	 *  TEXT=base+2, FILTER=base+3. */
+	private static void appendTab(Client c, StringBuilder sb, int base, String name, boolean hasFilter)
+	{
+		final Widget btn = safeWidget(c, base);
+		final Widget gfx = safeWidget(c, base + 1);
+		final Widget txt = safeWidget(c, base + 2);
+		final Widget flt = hasFilter ? safeWidget(c, base + 3) : null;
+		final int[] b = canvasBounds(btn);
+		final int spr = gfx == null ? -1 : safeSpriteId(gfx);
+		sb.append("{\"name\":\"").append(name).append('"')
+			.append(",\"x\":").append(b == null ? -1 : b[0])
+			.append(",\"y\":").append(b == null ? -1 : b[1])
+			.append(",\"w\":").append(b == null ? 0 : b[2])
+			.append(",\"h\":").append(b == null ? 0 : b[3])
+			.append(",\"sprite\":").append(spr)
+			.append(",\"selected\":").append(spr == SPR_CHATBTN_SELECTED)
+			.append(",\"new\":").append(spr == SPR_CHATBTN_NEW)
+			.append(",\"labelColor\":").append(txt == null ? -1 : safeTextColor(txt))
+			.append(",\"filter\":\"").append(flt == null ? "" : jsonEsc(stripTags(flt.getText())))
+			.append('"')
+			.append(",\"filterColor\":").append(flt == null ? -1 : safeTextColor(flt))
+			.append('}');
+	}
+
+	private static Widget safeWidget(Client c, int id)
+	{
+		try
+		{
+			return c.getWidget(id);
+		}
+		catch (RuntimeException ex)
+		{
+			return null;
+		}
+	}
+
+	/** {@code [x,y,w,h]} canvas bounds of a widget, or {@code null} if absent/zero-size. Hidden is fine — the
+	 *  engine CONTROLS row stays shown (covered by the native row), so its buttons keep real bounds. */
+	private static int[] canvasBounds(Widget w)
+	{
+		if (w == null)
+		{
+			return null;
+		}
+		try
+		{
+			final java.awt.Rectangle r = w.getBounds();
+			if (r == null || r.width <= 0 || r.height <= 0)
+			{
+				return null;
+			}
+			return new int[]{r.x, r.y, r.width, r.height};
+		}
+		catch (RuntimeException ex)
+		{
+			return null;
+		}
+	}
+
+	private static int safeSpriteId(Widget w)
+	{
+		try
+		{
+			return w.getSpriteId();
+		}
+		catch (RuntimeException ex)
+		{
+			return -1;
+		}
+	}
+
+	private static int safeTextColor(Widget w)
+	{
+		try
+		{
+			return w.getTextColor();
+		}
+		catch (RuntimeException ex)
+		{
+			return -1;
+		}
+	}
+
+	/** Strip RuneLite/cs2 colour-and-format tags ({@code <col=..>}, {@code </col>}, {@code <br>}) from a label. */
+	private static String stripTags(String s)
+	{
+		if (s == null || s.isEmpty())
+		{
+			return "";
+		}
+		return s.replaceAll("<[^>]*>", "");
+	}
+
+	/** Minimal JSON string escaping (the only risky chars in chat sub-labels are quotes / backslashes). */
+	private static String jsonEsc(String s)
+	{
+		if (s == null || s.isEmpty())
+		{
+			return "";
+		}
+		final StringBuilder out = new StringBuilder(s.length() + 8);
+		for (int i = 0; i < s.length(); i++)
+		{
+			final char ch = s.charAt(i);
+			if (ch == '"' || ch == '\\')
+			{
+				out.append('\\').append(ch);
+			}
+			else if (ch >= 0x20)
+			{
+				out.append(ch);
+			}
+		}
+		return out.toString();
 	}
 
 	private static void hide(Client c, int id)

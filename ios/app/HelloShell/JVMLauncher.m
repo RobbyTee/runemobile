@@ -256,6 +256,8 @@ static jmethodID gMidRelocateMinimap = NULL; // relocateMinimap(II)V  (A4 — mi
 static jmethodID gMidRelocateSide = NULL;    // relocateSidePanel(II)V (A4/A6 — inventory side panel)
 static jmethodID gMidOpenTab = NULL;         // openTab(I)V  (A4 — open a tab by replaying its stone op script)
 static jmethodID gMidSetStonesHidden = NULL; // setStonesHidden(Z)V  (A4 — hide the engine tab stones)
+static jmethodID gMidSetChatRowH = NULL;     // setChatTabRowHeight(I)V  (A3 — bigger native chat tabs)
+static jmethodID gMidGetChatSnap = NULL;     // getChatSnapshot()Ljava/lang/String;  (A3)
 static BOOL ensureVeneer(void) {
     if (gVeneerClass) return YES;
     if (!ensureBridge() || !gMainEnv) return NO;
@@ -276,6 +278,11 @@ static BOOL ensureVeneer(void) {
         (*env)->DeleteGlobalRef(env, global);
         return NO;
     }
+    // A3 bigger-chat-tabs methods — OPTIONAL so an older bundled jar still loads the veneer (clear any pending
+    // NoSuchMethod and leave the ids NULL; the wrappers below no-op when absent).
+    gMidSetChatRowH = (*env)->GetStaticMethodID(env, global, "setChatTabRowHeight", "(I)V");
+    gMidGetChatSnap = (*env)->GetStaticMethodID(env, global, "getChatSnapshot", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
     gMidSetChatHidden = m;
     gMidRelocateChat = r;
     gMidRelocateMinimap = mm;
@@ -1130,6 +1137,25 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetStonesHidden, (jboolean)(hidden ? JNI_TRUE : JNI_FALSE));
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)setEngineChatTabRowHeight:(int)canvasPx {
+    if (!ensureVeneer() || !gMidSetChatRowH) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetChatRowH, (jint)canvasPx);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (NSString *)chatSnapshot {
+    if (!ensureVeneer() || !gMidGetChatSnap) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gVeneerClass, gMidGetChatSnap);
+    if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
+    NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
+    if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
+    (*env)->DeleteLocalRef(env, js);
+    return out;
 }
 
 // ---- Phase 6 (W3): plugin-management + config panel facade wrappers --------------------------------

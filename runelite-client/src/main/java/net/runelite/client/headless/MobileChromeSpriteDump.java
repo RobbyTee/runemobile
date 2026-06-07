@@ -24,6 +24,7 @@
  */
 package net.runelite.client.headless;
 
+import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import javax.imageio.ImageIO;
@@ -31,6 +32,8 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.SpritePixels;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.widgets.Widget;
 
 /**
  * W3 clean-native-chrome asset extractor — one-shot, DESKTOP-only. Pulls the exact tab sprite set RuneLite
@@ -61,6 +64,23 @@ public final class MobileChromeSpriteDump
 		"clan", "friends", "ignores", "logout", "options", "emotes", "music",
 	};
 	private static final int ICON_BASE = 774;   // 774 + tabIndex
+
+	// Chat tab-button backgrounds (the CONTROLS row sprites). The native chat-tab veneer scales these up so the
+	// recreated buttons match the official mobile chat buttons exactly. {spriteId, name}.
+	private static final int[][] CHAT_SPRITES = {
+		{3051, 0}, // CHATBOX_BUTTON               — normal (idle) tab background
+		{3052, 1}, // CHATBOX_BUTTON_HOVERED       — (mouse-over; unused on touch but kept for completeness)
+		{3053, 2}, // CHATBOX_BUTTON_SELECTED      — active/selected tab background
+		{3054, 3}, // CHATBOX_BUTTON_SELECTED_HOVERED
+		{3055, 4}, // CHATBOX_BUTTON_NEW_MESSAGES  — tab with unread messages
+		{3057, 5}, // CHATBOX_REPORT_BUTTON        — the far-right Report button
+		{3058, 6}, // CHATBOX_REPORT_BUTTON_HOVERED
+		{1018, 7}, // CHATBOX_BUTTONS_BACKGROUND_STONES — the row backing strip
+	};
+	private static final String[] CHAT_SPRITE_NAMES = {
+		"chatbtn", "chatbtn-hover", "chatbtn-selected", "chatbtn-selected-hover",
+		"chatbtn-new", "chatreport", "chatreport-hover", "chatrow-bg",
+	};
 
 	private static boolean done;
 
@@ -93,7 +113,99 @@ public final class MobileChromeSpriteDump
 		{
 			ok += dump(client, dir, ICON_BASE + i, "icon-" + i + "-" + ICON_NAMES[i]);
 		}
-		log.info("[sprite-dump] SPRITE_DUMP wrote={} of={}", ok, ICON_NAMES.length + 2);
+		int chatOk = 0;
+		for (int i = 0; i < CHAT_SPRITES.length; i++)
+		{
+			chatOk += dump(client, dir, CHAT_SPRITES[i][0], CHAT_SPRITE_NAMES[CHAT_SPRITES[i][1]]);
+		}
+		log.info("[sprite-dump] SPRITE_DUMP wrote={} of={} chatWrote={} of={}",
+			ok, ICON_NAMES.length + 2, chatOk, CHAT_SPRITES.length);
+		logChatLayout(client);
+	}
+
+	// One-shot desktop census of the 7 chat tab buttons (+ Report) and their children: canvas bounds, the
+	// GRAPHIC sprite id (3051 idle / 3053 selected / 3055 new-messages), the TEXT label, and the FILTER
+	// sub-label text + colour. This is the ground truth the native chat-tab veneer is laid out + coloured from.
+	private static final int[] CHAT_TABS = {
+		InterfaceID.Chatbox.CHAT_ALL, InterfaceID.Chatbox.CHAT_GAME, InterfaceID.Chatbox.CHAT_PUBLIC,
+		InterfaceID.Chatbox.CHAT_PRIVATE, InterfaceID.Chatbox.CHAT_FRIENDSCHAT, InterfaceID.Chatbox.CHAT_CLAN,
+		InterfaceID.Chatbox.CHAT_TRADE, InterfaceID.Chatbox.REPORTABUSE,
+	};
+	private static final String[] CHAT_TAB_LABELS = {
+		"All", "Game", "Public", "Private", "Channel", "Clan", "Trade", "Report",
+	};
+
+	private static void logChatLayout(Client client)
+	{
+		for (int i = 0; i < CHAT_TABS.length; i++)
+		{
+			final boolean hasFilter = i != 0 && i != CHAT_TABS.length - 1;   // ALL + Report have no filter
+			final int base = CHAT_TABS[i];
+			final String b = bounds(client, base);
+			final int gfxSpr = spriteId(client, base + 1);
+			final String txt = text(client, base + 2);
+			final String flt = hasFilter ? text(client, base + 3) : "(none)";
+			final int fltCol = hasFilter ? textColor(client, base + 3) : -1;
+			log.info("[sprite-dump] CHAT_LAYOUT {} btn={} gfxSpr={} text='{}' filter='{}' filterColor={}",
+				CHAT_TAB_LABELS[i], b, gfxSpr, txt, flt, fltCol);
+		}
+	}
+
+	private static String bounds(Client c, int id)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			if (w == null)
+			{
+				return "null";
+			}
+			final Rectangle r = w.getBounds();
+			return r == null ? "noBounds" : ("[" + r.x + "," + r.y + "," + r.width + "x" + r.height + " hidden=" + w.isHidden() + "]");
+		}
+		catch (RuntimeException ex)
+		{
+			return "err";
+		}
+	}
+
+	private static int spriteId(Client c, int id)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			return w == null ? -1 : w.getSpriteId();
+		}
+		catch (RuntimeException ex)
+		{
+			return -2;
+		}
+	}
+
+	private static String text(Client c, int id)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			return w == null ? "null" : String.valueOf(w.getText());
+		}
+		catch (RuntimeException ex)
+		{
+			return "err";
+		}
+	}
+
+	private static int textColor(Client c, int id)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			return w == null ? -1 : w.getTextColor();
+		}
+		catch (RuntimeException ex)
+		{
+			return -2;
+		}
 	}
 
 	private static int dump(Client client, String dir, int spriteId, String label)

@@ -146,6 +146,15 @@ typedef void (^JVMLogSink)(NSString *line);
 /// cover patch. Re-applied each frame by HudVeneerBridge. Main thread.
 + (void)setEngineStonesHidden:(BOOL)hidden;
 
+/// W3 A3 (bigger chat tabs): the canvas-px height the enlarged native chat-tab row occupies, so the engine pushes
+/// the message area (CHATAREA) down past the taller native buttons. 0 restores the default 23px row. Main thread.
++ (void)setEngineChatTabRowHeight:(int)canvasPx;
+
+/// W3 A3 (bigger chat tabs): live per-tab chat geometry/state (escaped JSON) the native enlarged tab veneer reads
+/// each tick — per-tab canvas bounds, selected/new-message flags, and the filter sub-label text + colour. Returns
+/// nil until the chat is relocated + logged in. Main thread.
++ (nullable NSString *)chatSnapshot;
+
 // ---- Phase 6 (W3): native plugin-management + config panel (reverse JNI -> MobileUiBridge) -----------
 // All call the Java-owned control-plane facade (gated -Drunelite.mobileui). Reads return JSON snapshots
 // to parse once per panel open; writes are fire-and-forget onto the correct Java thread (EDT for plugin

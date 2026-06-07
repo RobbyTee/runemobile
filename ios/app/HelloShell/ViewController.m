@@ -6,10 +6,11 @@
 #import "JagexLoginViewController.h"
 #import "GLRecon.h"
 #import <WebKit/WebKit.h>
+#import <CoreText/CoreText.h>
 #import <unistd.h>
 #import <fcntl.h>
 
-@interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate>
+@interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate>
 {
     // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
     // desktop stone. A C array, so it lives as an ivar rather than a property.
@@ -118,6 +119,20 @@
 @property (nonatomic, strong) NSMutableArray<UIView *> *stoneCovers;
 @property (nonatomic, strong) UIButton *chromeToggle;
 @property (nonatomic, assign) BOOL chromeVisible;
+
+// W3 A3 (bigger chat tabs): native UIKit recreation of the engine's chat tab buttons (All/Game/Public/Private/
+// Channel/Clan/Trade + Report) drawn LARGER over the relocated engine chat. The engine has no per-widget scale
+// and the tab sprites are fixed-size, so we redraw them: each button is backed by the extracted gamepack sprite
+// (CHATBOX_BUTTON 3051 / SELECTED 3053 / NEW 3055 / REPORT 3057) with a RuneScape-font label, and a tap proxies
+// a precise click onto the live engine button (CONTROLS stays shown underneath, covered by the native row). The
+// engine pushes its message area down past the taller row (setEngineChatTabRowHeight). State + click targets
+// come from JVMLauncher.chatSnapshot each tick; re-applied so the engine's TOPLEVEL_REDRAW can't undo it.
+@property (nonatomic, strong) NSMutableArray<UIButton *> *chatTabButtons;
+@property (nonatomic, strong) UIImage *chatBtnImg;      // 3051 — idle tab background
+@property (nonatomic, strong) UIImage *chatBtnSelImg;   // 3053 — selected (active) tab
+@property (nonatomic, strong) UIImage *chatBtnNewImg;   // 3055 — tab with unread messages
+@property (nonatomic, strong) UIImage *chatReportImg;   // 3057 — the Report button
+@property (nonatomic, assign) BOOL chatTabsBuilt;
 // Phase-6 native plugin panel: a ⚙ button opens a full-screen modal sheet (scrim eats all touches so nothing
 // falls through to the game) listing the plugins (MobileUiBridge.listPlugins) with an enable/disable switch
 // and a running/stopped indicator. Refreshed when the bridge's event sequence advances (toggles, conflicts).
@@ -147,6 +162,19 @@ static NSString * const kKbSentinel = @"​";
 // engine-px dimensions used to treat tab-row taps as UI (precise click, no walk ring).
 static const int kChatW = 519;
 static const int kChatTabRowH = 23;
+
+// W3 A3 (bigger chat tabs): the enlarged native chat-tab row height, in ENGINE-CANVAS px (so it converts cleanly
+// to the engine's CHATAREA push-down via setEngineChatTabRowHeight). ~2.3x the engine's 23px CONTROLS row. The
+// row WIDTH stays the chat-panel width (kChatW = 519 canvas px) so the bigger tabs still sit flush atop the live
+// scrollback like the OSRS-mobile reference. Tunable to the reference look.
+static const int kChatTabRowCanvasH = 52;
+// 8 native chat buttons: the 7 chat tabs + Report. Labels + natural gamepack sprite widths (tab=56, report=79),
+// used to apportion the row so each native button keeps the official width ratio while the row fills kChatW.
+static NSString * const kChatTabNames[8] = { @"All", @"Game", @"Public", @"Private", @"Channel", @"Clan", @"Trade", @"Report" };
+static const CGFloat kChatTabNatW[8] = { 56, 56, 56, 56, 56, 56, 56, 79 };
+// Whether to recreate the Report button too (vs. letting the 7 tabs fill the whole row). Recreated keeps parity
+// with desktop + covers the engine's own small Report button cleanly.
+static const BOOL kChatShowReport = YES;
 
 // OSRS right-click menu geometry, straight from RuneLite's own hit-test (InteractHighlightOverlay
 // .hoveredMenuEntry): the "Choose Option" title strip is 19px, each entry row is 15px. These are fixed
@@ -210,10 +238,12 @@ static const CGFloat kMenuWidth       = 210.0;
     // pinch = zoom. Mutual-exclusivity disambiguates the one-finger trio.
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
         initWithTarget:self action:@selector(onTap:)];
+    tap.delegate = self;   // never fire a game tap when the touch lands on a native control (chat tab / keyboard)
     [self.screen addGestureRecognizer:tap];
     UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc]
         initWithTarget:self action:@selector(onLongPress:)];
     longPress.minimumPressDuration = 0.4;
+    longPress.delegate = self;
     [self.screen addGestureRecognizer:longPress];
     UIPanGestureRecognizer *camPan = [[UIPanGestureRecognizer alloc]
         initWithTarget:self action:@selector(onCameraPan:)];
@@ -275,6 +305,8 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.stoneCovers addObject:cv];
     }
     [self buildTabAssets];
+    [self registerChatFonts];
+    [self buildChatTabs];
     self.chromeVisible = YES;
 
     // Hidden capture field — placed offscreen (not hidden, so it can still become first responder).
@@ -1002,6 +1034,158 @@ static const CGFloat kMenuWidth       = 210.0;
                       stoneI ? @"ok" : @"MISSING", stoneA ? @"ok" : @"MISSING"]];
 }
 
+#pragma mark - W3 A3: enlarged native chat tab buttons
+
+// Register the bundled RuneScape TTFs (the same faithful in-game font RuneLite uses for overlays) so the native
+// chat-tab labels render in the authentic OSRS font instead of the system font. Runtime registration — no
+// Info.plist UIAppFonts entry needed. PostScript names: "RuneScape", "RuneScapeBold", "RuneScape-Small".
+- (void)registerChatFonts {
+    for (NSString *n in @[@"runescape", @"runescape_bold", @"runescape_small"]) {
+        NSString *p = [[NSBundle mainBundle] pathForResource:n ofType:@"ttf"];
+        if (!p) { [self appendLine:[NSString stringWithFormat:@"[chat] font %@ MISSING", n]]; continue; }
+        NSData *d = [NSData dataWithContentsOfFile:p];
+        if (d.length == 0) continue;
+        CGDataProviderRef prov = CGDataProviderCreateWithCFData((__bridge CFDataRef)d);
+        if (!prov) continue;
+        CGFontRef f = CGFontCreateWithDataProvider(prov);
+        if (f) {
+            CTFontManagerRegisterGraphicsFont(f, NULL);   // dup-register on relaunch is a harmless no-op
+            CGFontRelease(f);
+        }
+        CGDataProviderRelease(prov);
+    }
+}
+
+// Build the 8 native chat buttons (7 tabs + Report) once, as subviews of the game view (above the blit, like the
+// keyboard button) so each consumes its own tap. Sprite-backed, RuneScape-font labels; hidden until the chat is
+// relocated + logged in. updateChatTabs lays them out + states them each tick from the chat snapshot.
+- (void)buildChatTabs {
+    self.chatBtnImg    = [self loadAsset:@"chatbtn"];
+    self.chatBtnSelImg = [self loadAsset:@"chatbtn-selected"];
+    self.chatBtnNewImg = [self loadAsset:@"chatbtn-new"];
+    self.chatReportImg = [self loadAsset:@"chatreport"];
+    self.chatTabButtons = [NSMutableArray arrayWithCapacity:8];
+    for (int i = 0; i < 8; i++) {
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+        b.tag = i;
+        b.hidden = YES;
+        b.adjustsImageWhenHighlighted = NO;
+        b.titleLabel.textAlignment = NSTextAlignmentCenter;
+        b.titleLabel.adjustsFontSizeToFitWidth = YES;
+        b.titleLabel.minimumScaleFactor = 0.5;
+        b.titleLabel.lineBreakMode = NSLineBreakByClipping;
+        // The background sprite is pixel-art with rounded ends + a vertical gradient; stretch it with bilinear so
+        // the enlarged button reads smooth (the official mobile chat scales these the same way).
+        b.layer.magnificationFilter = kCAFilterLinear;
+        [b addTarget:self action:@selector(onChatTabButton:) forControlEvents:UIControlEventTouchUpInside];
+        [self.screen addSubview:b];
+        [self.chatTabButtons addObject:b];
+    }
+    self.chatTabsBuilt = YES;
+    [self appendLine:[NSString stringWithFormat:@"[chat] tab buttons built (sprites %@/%@/%@/%@)",
+                      self.chatBtnImg ? @"ok" : @"X", self.chatBtnSelImg ? @"ok" : @"X",
+                      self.chatBtnNewImg ? @"ok" : @"X", self.chatReportImg ? @"ok" : @"X"]];
+}
+
+// Convert a packed 0xRRGGBB int (the engine widget text colour) to a UIColor; nil for < 0 (unknown).
+static UIColor *rgbColor(int rgb) {
+    if (rgb < 0) return nil;
+    return [UIColor colorWithRed:((rgb >> 16) & 0xFF) / 255.0
+                           green:((rgb >> 8) & 0xFF) / 255.0
+                            blue:(rgb & 0xFF) / 255.0
+                           alpha:1.0];
+}
+
+// Lay out + state the enlarged native chat tabs from the chat snapshot each tick. Mirrors updateChrome: hides
+// everything (revealing the engine's own chat) when the native chrome is toggled off or the layout is unsupported
+// (not Classic/164). The row spans the chat-panel width at the relocated chat origin; each button is bigger than
+// the engine's, sprite-backed with the live selected/new state and the engine's exact label colour. A tap proxies
+// a precise click onto the live engine button centre (from the snapshot bounds).
+- (void)updateChatTabs {
+    if (!self.chatTabsBuilt) return;
+    if (!self.chromeVisible || self.renderW <= 0) { [self hideChatTabs]; return; }
+    NSString *snap = [JVMLauncher chatSnapshot];
+    if (snap.length == 0) { [self hideChatTabs]; return; }
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
+                                                      options:0 error:nil];
+    if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) { [self hideChatTabs]; return; }
+    // LAYOUT GUARD (same as updateChrome): the native HUD only works in the Classic resizable layout (164). In any
+    // other layout, hide the native tabs so the engine's own chat row renders + works.
+    if ([d[@"topLevelId"] intValue] != 164) { [self hideChatTabs]; return; }
+    NSArray *tabs = [d[@"tabs"] isKindOfClass:[NSArray class]] ? d[@"tabs"] : nil;
+    if (tabs.count == 0) { [self hideChatTabs]; return; }
+
+    CGFloat W = self.view.bounds.size.width;
+    CGFloat s = W / (CGFloat)self.renderW;           // canvas px -> screen pt (uniform: render aspect == screen)
+    CGFloat rowX = [d[@"chatX"] intValue] * s;
+    CGFloat rowY = [d[@"chatY"] intValue] * s;
+    CGFloat rowW = kChatW * s;
+    CGFloat rowH = kChatTabRowCanvasH * s;
+    const int n = kChatShowReport ? 8 : 7;
+    // No gap: the native row tiles flush so it fully covers the engine's own (still-shown, hittable) CONTROLS row
+    // underneath — no sliver of the small engine buttons peeks through. The rounded sprite ends abut like the
+    // desktop chat tabs. (A peek-free row matters more than inter-tab spacing; revisit against the reference.)
+    const CGFloat gap = 0.0;
+    CGFloat natTotal = 0; for (int i = 0; i < n; i++) natTotal += kChatTabNatW[i];
+    CGFloat usableW = rowW - gap * (n - 1);
+    CGFloat fontSize = floor(rowH * 0.40);
+    UIFont *labelFont = [UIFont fontWithName:@"RuneScape" size:fontSize] ?: [UIFont boldSystemFontOfSize:fontSize];
+
+    CGFloat x = rowX;
+    for (int i = 0; i < 8; i++) {
+        UIButton *b = self.chatTabButtons[i];
+        if (i >= n) { b.hidden = YES; continue; }     // report suppressed -> 7 tabs only
+        CGFloat bw = usableW * (kChatTabNatW[i] / natTotal);
+        b.frame = CGRectMake(floor(x), floor(rowY), ceil(bw), ceil(rowH));
+        x += bw + gap;
+
+        NSDictionary *t = (i < (int)tabs.count && [tabs[i] isKindOfClass:[NSDictionary class]]) ? tabs[i] : nil;
+        BOOL selected = [t[@"selected"] boolValue];
+        BOOL hasNew = [t[@"new"] boolValue];
+        UIImage *bg = self.chatBtnImg;
+        if (i == 7) bg = self.chatReportImg;          // Report = its own dark-red sprite (no selected/new variant)
+        else if (selected) bg = self.chatBtnSelImg;
+        else if (hasNew) bg = self.chatBtnNewImg;
+        [b setBackgroundImage:bg forState:UIControlStateNormal];
+
+        [b setTitle:kChatTabNames[i] forState:UIControlStateNormal];
+        b.titleLabel.font = labelFont;
+        // Engine's exact per-state label colour; fall back to OSRS off-white / selected-yellow if unknown.
+        UIColor *lc = rgbColor(t ? [t[@"labelColor"] intValue] : -1);
+        if (!lc) lc = selected ? [UIColor colorWithRed:1.0 green:0.94 blue:0.0 alpha:1.0]
+                               : [UIColor colorWithRed:1.0 green:0.97 blue:0.85 alpha:1.0];
+        [b setTitleColor:lc forState:UIControlStateNormal];
+        b.hidden = NO;
+    }
+}
+
+- (void)hideChatTabs {
+    for (UIButton *b in self.chatTabButtons) b.hidden = YES;
+}
+
+// A native chat-tab tap -> proxy a PRECISE left click onto the live engine button centre (from the snapshot
+// bounds). The engine's CONTROLS row stays shown underneath (covered by the bigger native row), so the click
+// switches the chat filter / opens Report exactly as a tap on the real button would. The button consumed the
+// tap, so it never leaks a walk-here click to the game gestures beneath.
+- (void)onChatTabButton:(UIButton *)b {
+    if (![JVMLauncher bridgeReady]) return;
+    NSString *snap = [JVMLauncher chatSnapshot];
+    if (snap.length == 0) return;
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
+                                                      options:0 error:nil];
+    NSArray *tabs = [d isKindOfClass:[NSDictionary class]] ? d[@"tabs"] : nil;
+    NSInteger i = b.tag;
+    if (![tabs isKindOfClass:[NSArray class]] || i < 0 || i >= (NSInteger)tabs.count) return;
+    NSDictionary *t = [tabs[i] isKindOfClass:[NSDictionary class]] ? tabs[i] : nil;
+    if (!t) return;
+    int bx = [t[@"x"] intValue], by = [t[@"y"] intValue], bw = [t[@"w"] intValue], bh = [t[@"h"] intValue];
+    if (bw <= 0 || bh <= 0 || bx < 0 || by < 0) return;   // engine button not built / not visible this frame
+    int cx = bx + bw / 2, cy = by + bh / 2;
+    [JVMLauncher postClickPreciseX:cx y:cy button:1];
+    [self appendLine:[NSString stringWithFormat:@"[chat] tab %ld (%@) -> precise click %d,%d",
+                      (long)i, kChatTabNames[i], cx, cy]];
+}
+
 // Lay out the native tab rails from the read-only chrome snapshot — EDGE-SPLIT (mobile) arrangement, matching
 // the official OSRS-Mobile app: two SINGLE-column vertical rails, one on each screen edge (tab indices 0–6 on
 // the left, 7–13 on the right — the desktop's own STONE grouping). Each cell is an individual semi-transparent
@@ -1103,6 +1287,12 @@ static const CGFloat kMenuWidth       = 210.0;
         for (UIButton *btn in self.tabButtons) btn.hidden = YES;
         for (UIView *cv in self.stoneCovers) cv.hidden = YES;   // reveal the real stones in the fallback view
         self.tabRailBg.hidden = YES;
+        [self hideChatTabs];
+        // Restore the engine's own (small) chat tab row in the A/B fallback: drop the message-area push-down so
+        // CHATAREA returns to the engine's 23px offset and its real CONTROLS row is visible again.
+        [JVMLauncher setEngineChatTabRowHeight:0];
+    } else {
+        [JVMLauncher setEngineChatTabRowHeight:kChatTabRowCanvasH];   // re-enable the bigger native row
     }
     [self appendLine:[NSString stringWithFormat:@"[chrome] rails %@", self.chromeVisible ? @"ON" : @"OFF"]];
 }
@@ -1264,9 +1454,14 @@ static const CGFloat kMenuWidth       = 210.0;
     int mmY = topC + m;
 
     [JVMLauncher relocateEngineChatX:chatX y:chatY transparent:YES];
+    // W3 A3: the native veneer recreates the tab row BIGGER, so tell the engine to push its message area down past
+    // the taller native row (the engine's own 23px CONTROLS stays put underneath, covered by the native buttons).
+    [JVMLauncher setEngineChatTabRowHeight:kChatTabRowCanvasH];
     [JVMLauncher relocateEngineMinimapX:mmX y:mmY];
     [JVMLauncher setEngineStonesHidden:YES];   // the native 2-col grid replaces them (no cover patch / gray box)
-    self.chatHitCanvas = CGRectMake(chatX, chatY, kChatW, kChatTabRowH);
+    // The whole enlarged tab row is UI: a stray tap in it (between native buttons) should be a precise click, not
+    // a walk. The native buttons own their taps; this rect just keeps any leak from drawing a walk ring.
+    self.chatHitCanvas = CGRectMake(chatX, chatY, kChatW, kChatTabRowCanvasH);
     [self appendLine:[NSString stringWithFormat:@"[hud] relocate chat->%d,%d minimap->%d,%d (insets L%d T%d R%d k%.2f)",
                       chatX, chatY, mmX, mmY, leftC, topC, rightC, k]];
 }
@@ -1296,6 +1491,12 @@ static const CGFloat kMenuWidth       = 210.0;
     // snapshot (~10 Hz). Verifies the device data-flow before the full native chat veneer.
     if (self.framesShown % 6 == 0) {
         [self updateHudLayout];
+    }
+
+    // W3 A3: refresh the enlarged native chat tab buttons (~10 Hz). Self-gates on chrome toggle + layout; runs
+    // every tick (not only when chromeVisible) so it hides itself promptly when the chrome is toggled off.
+    if (self.framesShown % 6 == 0) {
+        [self updateChatTabs];
     }
 
     // Plugin panel: while open, re-read the list when the bridge's event sequence advances (a toggle's
@@ -1375,6 +1576,13 @@ static const CGFloat kMenuWidth       = 210.0;
     *gx = (int)fx;
     *gy = (int)fy;
     return YES;
+}
+
+// Keep the game-tap / long-press recognizers from firing when the touch lands on a native control over the game
+// (the enlarged chat tab buttons, the keyboard button, the side-tab grid). The control handles its own tap, so it
+// must not ALSO register as a walk-here click underneath. Touches on the bare game view (self.screen) pass through.
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gr shouldReceiveTouch:(UITouch *)touch {
+    return ![touch.view isKindOfClass:[UIControl class]];
 }
 
 // tap -> left click (walk / interact / select a menu entry).
