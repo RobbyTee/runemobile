@@ -621,16 +621,17 @@ public final class HudVeneerBridge
 				area.setOriginalWidth(targetW);
 				area.setOriginalHeight(targetH);
 				area.revalidate();
-				// The message display + scroll widgets size off a 519-wide ancestor (confirmed on device:
-				// CHATDISPLAY stayed 505 while CHATAREA hit 649), and a parent revalidate does NOT cascade to them.
-				// Pin them to ABSOLUTE widths derived from the new row width, keeping their left margins (CHATDISPLAY/
-				// MES_LAYER are inset 7px = -14; SCROLLAREA reserves a 16px scrollbar = -30). They use CENTERED
-				// x-positioning, so a width wider than their parent would push their left edge negative (clipping the
-				// first character) — also LEFT-ANCHOR them at their inset. New chat lines then wrap to the wider
-				// display. Only on a size change, so scroll isn't disturbed.
-				forceWidth(c, InterfaceID.Chatbox.CHATDISPLAY, rowW - 14, 7);
-				forceWidth(c, InterfaceID.Chatbox.MES_LAYER, rowW - 14, 7);
-				forceWidth(c, InterfaceID.Chatbox.SCROLLAREA, rowW - 30, 0);
+				// The message display + scroll widgets size off the original 142-tall / 519-wide chat and do NOT
+				// inherit the resized CHATAREA via revalidate (confirmed on device: CHATDISPLAY stayed 505x130 while
+				// CHATAREA changed). So pin each to an ABSOLUTE size derived from the new area: width keeps their left
+				// margins (CHATDISPLAY/MES_LAYER inset 7px = -14; SCROLLAREA reserves a 16px scrollbar = -30), and
+				// HEIGHT keeps their vertical insets off the area height (CHATDISPLAY -12, MES_LAYER -14, SCROLLAREA
+				// -28) — without this CHATDISPLAY's 130px height overflows the shorter area and clips the newest line.
+				// LEFT-ANCHOR too (they centre by default, so a wider-than-parent width would push the first char off
+				// the left edge). Only on a size change, so scroll isn't disturbed; new lines wrap to the wider display.
+				forceSize(c, InterfaceID.Chatbox.CHATDISPLAY, rowW - 14, targetH - 12, 7);
+				forceSize(c, InterfaceID.Chatbox.MES_LAYER, rowW - 14, targetH - 14, 7);
+				forceSize(c, InterfaceID.Chatbox.SCROLLAREA, rowW - 30, targetH - 28, 0);
 			}
 			else
 			{
@@ -669,6 +670,37 @@ public final class HudVeneerBridge
 		}
 	}
 
+	/** Force a chat sub-widget to an ABSOLUTE width AND height, LEFT-anchored at {@code leftX}, then revalidate.
+	 *  Like {@link #forceWidth} but also pins the height so the display/scroll widgets shrink to fit the resized
+	 *  CHATAREA (they don't cascade) — otherwise their original height overflows the shorter area + clips the
+	 *  newest message line. */
+	private static void forceSize(Client c, int id, int w, int h, int leftX)
+	{
+		try
+		{
+			final Widget wd = c.getWidget(id);
+			if (wd == null)
+			{
+				return;
+			}
+			if (wd.getWidthMode() != WidgetSizeMode.ABSOLUTE || wd.getOriginalWidth() != w
+				|| wd.getHeightMode() != WidgetSizeMode.ABSOLUTE || wd.getOriginalHeight() != h
+				|| wd.getXPositionMode() != WidgetPositionMode.ABSOLUTE_LEFT || wd.getOriginalX() != leftX)
+			{
+				wd.setWidthMode(WidgetSizeMode.ABSOLUTE);
+				wd.setOriginalWidth(w);
+				wd.setHeightMode(WidgetSizeMode.ABSOLUTE);
+				wd.setOriginalHeight(h);
+				wd.setXPositionMode(WidgetPositionMode.ABSOLUTE_LEFT);
+				wd.setOriginalX(leftX);
+				wd.revalidate();
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
 	// Dump the chatbox sub-widget layout for diagnosing the native chat-tab veneer. Fires a few times at STEADY
 	// STATE (after the native side has applied the row width — chatAreaW>0 — so the dump reflects the resized
 	// chat, not the first pre-native frame), spaced out, then stops.
@@ -677,9 +709,9 @@ public final class HudVeneerBridge
 
 	private static void dumpChatLayoutOnce(Client c, int containerId)
 	{
-		if (dumpsDone >= 3 || chatAreaW <= 0)
+		if (dumpsDone >= 3)
 		{
-			return;   // wait until native has applied the width; cap the number of dumps
+			return;   // cap the number of dumps (fires a few times at steady state)
 		}
 		if (dumpTick++ % 120 != 0)
 		{

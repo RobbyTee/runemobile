@@ -172,7 +172,7 @@ static const int kChatTabRowH = 23;
 // live filter state ("On"/"Off"/"Filter"/"Hide") below it in the engine's state colour. The 7 tabs span the chat
 // width (kChatW), so each is kChatW/7 wide; the row is taller than the bare sprite to fit the two text lines.
 static const int kChatTabCount = 7;
-static const int kChatTabRowCanvasH = 37;   // 2-line tab height (name + state) in engine-canvas px, ~official
+static const int kChatTabRowCanvasH = 32;   // 2-line tab height (name + state) in engine-canvas px, ~official
 static NSString * const kChatTabNames[7] = { @"All", @"Game", @"Public", @"Private", @"Channel", @"Clan", @"Trade" };
 
 // OSRS right-click menu geometry, straight from RuneLite's own hit-test (InteractHighlightOverlay
@@ -1231,8 +1231,11 @@ static int chatRowCanvasH(void) {
     if (![JVMLauncher bridgeReady]) return;
     int cx = 0, cy = 0;
     if (![self engineChatButtonCenterForTag:b.tag x:&cx y:&cy]) return;
-    [JVMLauncher postClickPreciseX:cx y:cy button:1];
-    [JVMLauncher postClearHover];   // no parked hover -> no "Switch tab" tooltip left showing
+    // postMenuSelect = precise left click THEN clear the hover one cycle AFTER (the ordered chain in
+    // selectMenuPoint). A plain precise-click-then-clearHover doesn't work: onClickPrecise clicks across two
+    // cycles, so an immediate clearHover runs before the click and the click re-hovers the tab — leaving the
+    // "Switch tab" action label/tooltip parked. This switches the tab AND leaves no parked tooltip.
+    [JVMLauncher postMenuSelectX:cx y:cy];
     // Instant highlight: the tapped tab is now the active view; show it selected immediately (the engine's own tab
     // sprite, which the snapshot reads, only updates on a redraw). Report (tag 7) doesn't change the selection.
     if (b.tag < 7) {
