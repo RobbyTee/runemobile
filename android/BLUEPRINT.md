@@ -357,6 +357,17 @@ caps at ES 3.0. That forced an apparatus iOS needed and **Android can skip:**
 
 ## G. Suggested execution order
 
+> **Decisions locked (2026-06-07):** ① run **AG0/AG1 early, in parallel** with Track A — cheap, and they
+> de-risk the project's biggest unknown. ② Cloud-device path = **BrowserStack real devices** for AG0 +
+> A0-device + the AG1 spike: a real physical device means a **real GPU driver**, so it is valid for Track G
+> (the local `rl_arm64` emulator's SwiftShader GL is **not**), and — because Android grants JIT for free — a
+> plain debug APK runs the second JVM with no attach ceremony. It also faithfully tests the API-29 `filesDir`
+> dlopen (Q11), since BrowserStack enforces the same `targetSdk` W^X rules an owned device would. Free Samsung
+> RTL / Firebase Test Lab remain fallbacks; an **owned** device is still deferred to a green AG1 (cloud
+> round-trips are too slow/metered for the months-long AG2/AG3 iteration). ③ AG0 should be a **minimal
+> standalone GL-recon APK** — query `glGetString` + `GL_MAX_COMPUTE_*` only, no login / no full RuneLite boot
+> — so a single BrowserStack session settles it.
+
 1. **Restage 1.12.29 + reconcile the hardcoded jar name + re-run the census** (`tools/stage-mobile-runtime.sh`;
    fix `MainActivity.kt:451` to glob `client-*-shaded.jar`; record the new `census_md5`). Unblocks everything.
 2. **A‑1b** (cheap confidence) ∥ **AG0 real-device recon** (cheap; settles the GPU advantage).
