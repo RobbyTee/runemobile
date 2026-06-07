@@ -83,9 +83,9 @@ CONSTRAINTS
 - Do NOT modify the base gpu plugin SOURCE (runelite-client/.../plugins/gpu/*). All backend work lives in the
   bridge (RouteCBridge / routec_gl_jni / facade) or the app. Route C = unmodified plugin.
 - Commit + push under Jordan Simpson <sayhijordy@gmail.com> ONLY. NO automated-tooling attribution of any kind
-  anywhere — no authorship trailers, no machine-authored notices, no tool/model names, no "generated with", no
-  co-authored-by — in commits, code comments, or committed docs. Scrub staged content before committing.
-  Auto-commit + push at logical checkpoints (standing authorization).
+  anywhere — no authorship trailers, no machine-authored notices, no tool/model names — in commits, code comments,
+  or committed docs. Scrub staged content before committing. Auto-commit + push at logical checkpoints (standing
+  authorization).
 - Be efficient and honest: de-risk the present path before the full integration; md5-gate every device verdict;
   state uncertainty plainly.
 
