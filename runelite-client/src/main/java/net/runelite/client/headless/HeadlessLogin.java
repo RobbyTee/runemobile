@@ -177,13 +177,23 @@ public final class HeadlessLogin
 
 		if (state != GameState.LOGIN_SCREEN)
 		{
-			// Advanced past the login screen — a click (or the engine) carried us off it. Stop trying.
-			if (eulaAttempts > 0 || playAttempts > 0)
+			// Past the login screen. OSRS may show an in-world "Welcome to RuneScape" news overlay (WelcomeScreen)
+			// once LOGGED_IN that needs a click to enter the world — dismiss it before declaring done, so headless
+			// harnesses actually reach the scene (not just the authenticated lobby). Keep waiting through
+			// LOGGING_IN/LOADING; only finish once LOGGED_IN with no welcome overlay.
+			if (state == GameState.LOGGED_IN)
 			{
-				log.info("[headless-login] state now {} after eula={} play={} attempt(s) — stopping injection",
-					state, eulaAttempts, playAttempts);
+				if (tryDismissWelcome(client))
+				{
+					return;   // welcome overlay shown -> clicked it this tick, keep going until it's gone
+				}
+				if (eulaAttempts > 0 || playAttempts > 0)
+				{
+					log.info("[headless-login] state now {} after eula={} play={} attempt(s) — stopping injection",
+						state, eulaAttempts, playAttempts);
+				}
+				done = true;
 			}
-			done = true;
 			return;
 		}
 
@@ -264,6 +274,63 @@ public final class HeadlessLogin
 		log.info("[headless-login] Play Now attempt {}/{}: synthesizing click at {},{} (canvas {}x{} displayable={})",
 			playAttempts, MAX_ATTEMPTS, CLICK_X, CLICK_Y, canvas.getWidth(), canvas.getHeight(), canvas.isDisplayable());
 		synthesizeClick(canvas, CLICK_X, CLICK_Y);
+	}
+
+	private static int welcomeAttempts;
+	private static int lastWelcomeDraw;
+	private static boolean welcomeDone;
+	// The "CLICK HERE TO PLAY" news welcome screen renders at the fixed 765x503 login canvas anchored top-left; the
+	// red play button sits near (390,95) there. Configurable in case it moves.
+	private static final int WELCOME_X = Integer.getInteger("runelite.headless.autologin.welcomeX", 390);
+	private static final int WELCOME_Y = Integer.getInteger("runelite.headless.autologin.welcomeY", 95);
+
+	/**
+	 * Dismiss the post-login "CLICK HERE TO PLAY" news welcome screen so the harness reaches the live scene instead
+	 * of stalling on the lobby. Detected by {@code getLocalPlayer() == null} while LOGGED_IN (not spawned yet);
+	 * synthesizes a click at the play button. Returns {@code true} while still pre-spawn (caller keeps waiting),
+	 * {@code false} once the player has spawned (in-world) or we gave up.
+	 */
+	private static boolean tryDismissWelcome(Client client)
+	{
+		if (welcomeDone)
+		{
+			return false;
+		}
+		try
+		{
+			// In-world once the 3D viewport is allocated (it's 0x0 while the post-login news screen is up).
+			if (client.getViewportWidth() > 0)
+			{
+				welcomeDone = true;
+				return false;
+			}
+			if (welcomeAttempts >= MAX_ATTEMPTS)
+			{
+				log.warn("[headless-login] still pre-spawn after {} welcome click(s) at {},{} — giving up",
+					welcomeAttempts, WELCOME_X, WELCOME_Y);
+				welcomeDone = true;
+				return false;
+			}
+			if (welcomeAttempts > 0 && draws - lastWelcomeDraw < COOLDOWN_DRAWS)
+			{
+				return true;   // waiting out the cooldown between clicks
+			}
+			final Canvas canvas = client.getCanvas();
+			if (canvas == null)
+			{
+				return true;
+			}
+			welcomeAttempts++;
+			lastWelcomeDraw = draws;
+			log.info("[headless-login] welcome 'Click here to play': synthesizing click at {},{} (attempt {}/{})",
+				WELCOME_X, WELCOME_Y, welcomeAttempts, MAX_ATTEMPTS);
+			synthesizeClick(canvas, WELCOME_X, WELCOME_Y);
+			return true;
+		}
+		catch (RuntimeException ex)
+		{
+			return false;
+		}
 	}
 
 	private static void selectWorld(Client client)

@@ -106,6 +106,13 @@ public final class HudVeneerBridge
 	private static final int CHAT_DEFAULT_W = 519;   // the engine's native chatbox width (from the layout dump)
 	private static final int CHAT_BOTTOM_MARGIN = 4; // px of breathing room so the newest line isn't clipped
 
+	// Desktop off-device test harness: when -Drunelite.hudveneer.test=true, auto-apply the same chat veneer the
+	// native shell drives (relocate + enlarged-tab geometry) once logged in, so the headless capture renders the
+	// real chatbox geometry to PNG on the Mac (no device / StikDebug). Values default to the device's (render
+	// 1304x600 → chat at 93,8, 32px tab row, natural width); overridable via -Drunelite.hudveneer.test.* props.
+	private static final boolean TEST_APPLY = Boolean.getBoolean("runelite.hudveneer.test");
+	private static boolean testApplied;
+
 	private HudVeneerBridge()
 	{
 	}
@@ -197,6 +204,17 @@ public final class HudVeneerBridge
 			if (!c.isResized())
 			{
 				return;   // native veneers + transparent chat are resizable-mode only
+			}
+			if (TEST_APPLY && !testApplied)
+			{
+				// Off-device capture: drive the chat veneer ourselves (the native shell would on device). The
+				// in-world "Welcome to RuneScape" news overlay is dismissed by HeadlessLogin so the chat is visible.
+				testApplied = true;
+				relocateChat(Integer.getInteger("runelite.hudveneer.test.chatX", 93),
+					Integer.getInteger("runelite.hudveneer.test.chatY", 8),
+					!"false".equals(System.getProperty("runelite.hudveneer.test.transparent")));
+				setChatTabRowHeight(Integer.getInteger("runelite.hudveneer.test.rowH", 32));
+				setChatAreaWidth(Integer.getInteger("runelite.hudveneer.test.areaW", 0));
 			}
 			final boolean preEoc = c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
 			final int chatId = preEoc ? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER;
