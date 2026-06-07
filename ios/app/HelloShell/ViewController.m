@@ -172,7 +172,7 @@ static const int kChatTabRowH = 23;
 // live filter state ("On"/"Off"/"Filter"/"Hide") below it in the engine's state colour. The 7 tabs span the chat
 // width (kChatW), so each is kChatW/7 wide; the row is taller than the bare sprite to fit the two text lines.
 static const int kChatTabCount = 7;
-static const int kChatTabRowCanvasH = 42;   // 2-line tab height (name + state) in engine-canvas px, ~official
+static const int kChatTabRowCanvasH = 37;   // 2-line tab height (name + state) in engine-canvas px, ~official
 static NSString * const kChatTabNames[7] = { @"All", @"Game", @"Public", @"Private", @"Channel", @"Clan", @"Trade" };
 
 // OSRS right-click menu geometry, straight from RuneLite's own hit-test (InteractHighlightOverlay
@@ -1143,8 +1143,10 @@ static int chatRowCanvasH(void) {
     UIFont *nameFont = [UIFont fontWithName:@"RuneScape" size:nameSize] ?: [UIFont boldSystemFontOfSize:nameSize];
     UIFont *stateFont = [UIFont fontWithName:@"RuneScape" size:stateSize] ?: [UIFont systemFontOfSize:stateSize];
 
-    // Which tab the snapshot reports selected (sprite==SELECTED), then reconcile with the optimistic highlight:
-    // hold the just-tapped tab selected until the engine's sprite catches up (snapshot agrees) or a short timeout.
+    // Which tab the snapshot reports selected (sprite==SELECTED), then reconcile with the optimistic highlight.
+    // The engine's tab sprite only updates on a redraw (which may not happen until a later game interaction), so
+    // HOLD the just-tapped tab selected until the snapshot actually agrees — NO timeout (a timeout would revert the
+    // highlight to the engine's stale sprite after a few seconds, then it'd flip back on the next game click).
     int snapSel = -1;
     for (int j = 0; j < (int)tabs.count && j < kChatTabCount; j++) {
         NSDictionary *tj = [tabs[j] isKindOfClass:[NSDictionary class]] ? tabs[j] : nil;
@@ -1152,10 +1154,10 @@ static int chatRowCanvasH(void) {
     }
     int effSel = snapSel;
     if (self.optimisticChatTab >= 0) {
-        if (snapSel == self.optimisticChatTab || CACurrentMediaTime() - self.optimisticChatAt > 1.5) {
-            self.optimisticChatTab = -1;   // engine caught up (or timed out) -> trust the snapshot
+        if (snapSel == self.optimisticChatTab) {
+            self.optimisticChatTab = -1;   // engine sprite caught up -> trust the snapshot from here
         } else {
-            effSel = (int)self.optimisticChatTab;   // hold the instant highlight
+            effSel = (int)self.optimisticChatTab;   // hold the instant highlight until it does
         }
     }
 
