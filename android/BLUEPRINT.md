@@ -367,6 +367,18 @@ caps at ES 3.0. That forced an apparatus iOS needed and **Android can skip:**
 > round-trips are too slow/metered for the months-long AG2/AG3 iteration). ③ AG0 should be a **minimal
 > standalone GL-recon APK** — query `glGetString` + `GL_MAX_COMPUTE_*` only, no login / no full RuneLite boot
 > — so a single BrowserStack session settles it.
+>
+> ④ **Emulator-first for ALL development.** The local `rl_arm64` emulator is ANGLE→Vulkan(SwiftShader)
+> advertising **GLES 3.1 + compute** (verified `ro.opengles.version`=0x30001), so it is a real (if slow) GL
+> implementation: **build and debug *everything* on it first** — the entire Track A playable shell
+> (A‑1b/A3/A3.5/A4/A5/A6, and A7 with an AVD-simulated cutout), **and** the GPU-track *plumbing* (AG1 facade +
+> EGL shim → `OpenGL33`, AG2 base-gpu rendering, even AG3 compute bring-up to functional correctness). Reserve
+> **BrowserStack** for only what real hardware can answer: the **AG0 tier truth** (the emulator's caps are
+> SwiftShader's, not the device's), **real-driver confirmation** of what was built, the single **A0-device /
+> Q11** `filesDir`-dlopen confirm, and — the decisive one — **performance** (the emulator gives *zero* FPS
+> signal, and FPS is the entire point of the GPU track). So: emulator de-risks *functional feasibility* cheaply;
+> a real device decides *viability*. Net effect — the GPU real-device gate becomes a **confirmation + measure**
+> pass, not a from-scratch bring-up, which slashes BrowserStack usage.
 
 1. **Restage 1.12.29 + reconcile the hardcoded jar name + re-run the census** (`tools/stage-mobile-runtime.sh`;
    fix `MainActivity.kt:451` to glob `client-*-shaded.jar`; record the new `census_md5`). Unblocks everything.

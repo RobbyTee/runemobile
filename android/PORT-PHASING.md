@@ -642,8 +642,14 @@ is deferred to a green AG1.
   harness for "real device" gates), or **AWS Device Farm / BrowserStack** (paid, specific targets incl. Pixels).
   A cloud device is a *real* device, so it retires the `filesDir` dlopen question (§5 Q11) and reports a real
   GLES driver tier (unlike the emulator's SwiftShader/host-translated GL, which AG0 explicitly distrusts).
-- **The emulator is NOT a valid proxy for the GPU track.** Its GL is software/host-translated → AG0/AG1 must run
-  on Tier 2.
+- **The emulator is a usable *development/functional* rig for the GPU track, but NOT a valid *oracle*.** It is
+  ANGLE → Vulkan(SwiftShader), advertising **GLES 3.1** with the compute API present (verified 2026-06-07:
+  `ro.opengles.version`=0x30001, renderer `OpenGL ES 3.1 (ANGLE 2.1.1 … SwiftShader)`). So the GL pipeline,
+  the facade/`OpenGL33` binding, the `librlawt` EGL shim, and shaders (incl. 117HD's compute path) can be
+  brought up and debugged on it **for free**. But its caps/extensions (e.g. `EXT_clip_control`) and especially
+  its **performance are software-translated and non-authoritative** → the **AG0 tier readout, real-driver
+  confirmation, and all perf/thermal numbers must run on Tier 2 (real hardware).** Emulator-green ≠ device-green
+  (an emulator-only failure may be an ANGLE/SwiftShader quirk, not a real blocker — cross-check on hardware).
 - **Owned-hardware decision is gated on a green AG1.** AG0+AG1 are cloud-runnable; if AG1 is red, no device was
   ever needed and the CPU shell is the product. If AG1 is green and the GPU build (AG2+) is funded, *then* a
   ~$150 used Pixel-class device is worth it for the months-long iterative GPU work (cloud round-trips are too
