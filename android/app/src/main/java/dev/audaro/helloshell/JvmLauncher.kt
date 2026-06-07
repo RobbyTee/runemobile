@@ -7,7 +7,9 @@ import android.view.Surface
  *
  * The app process is hosted by ART, but the game runs on a *second*, in-process HotSpot VM that the
  * native layer brings up with JNI_CreateJavaVM (dlopen of the embedded JRE's libjvm.so). This mirrors
- * the proven iOS bootstrap (JVMLauncher.m) minus every iOS-JIT workaround — Android grants JIT for free.
+ * the proven iOS CPU/headless bootstrap (JVMLauncher.m) minus every iOS-JIT workaround — Android grants JIT
+ * for free. (Mirrors the iOS CPU path; the iOS Route-C GPU host has no Android counterpart yet —
+ * see android/BLUEPRINT.md Track G.)
  *
  * The HotSpot VM lives for the whole process: [startJvm] creates it on a dedicated, never-exiting native
  * thread and returns once it is up (it does NOT block on the game). Frames are pulled from the

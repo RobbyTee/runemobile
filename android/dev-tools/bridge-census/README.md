@@ -2,7 +2,8 @@
 
 The first Android phase (see `android/PORT-PHASING.md` §3 Phase A-1). Proves, before any UI is built, that the
 shared Java seam the A0–A8 mainline rides on is actually present and callable — so "almost no new *shared* Java"
-is evidence, not assumption.
+is evidence, not assumption. **Scope: A-1a (below) proves *static resolution* only; A-1b (runtime gate-flip)
+is still TODO — until it's GREEN this shows the methods *exist*, not that each `-D` gate activates its bridge.**
 
 Two halves:
 
@@ -26,7 +27,9 @@ census_md5=fd2c599160bfe1da1323709f02378286
 ```
 
 The sentinel md5 is over the sorted `RESOLVED/MISSING` block, so a jar update that changes the bridge surface
-flips the md5 — re-run and reconcile. If the contract array in `BridgeCensus.java` falls behind the bridges,
+flips the md5 — re-run and reconcile. (The staged Android jar is currently `1.12.28-SNAPSHOT` while the
+source tree is `1.12.29-SNAPSHOT`; restaging to 1.12.29 and re-running this census is the first action item
+in `BLUEPRINT.md` §G.) If the contract array in `BridgeCensus.java` falls behind the bridges,
 the census under-reports; keep it in sync with `runelite-client/.../headless/*` (the source of truth).
 
 ## A-1b — runtime gate-flip census (emulator; TODO)

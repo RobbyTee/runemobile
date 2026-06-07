@@ -1,9 +1,11 @@
 # Android port — roadmap & working standards
 
 The Android app runs real RuneLite on a second, in-process HotSpot VM (see `README.md`). Current
-state: **Milestone B** — headless RuneLite renders the OSRS login to the SurfaceView and on-screen
-taps drive the gamepack on the arm64 emulator. This file tracks what's next and the bar each change
-must clear.
+state: **A0–A2 GREEN (arm64 emulator)** — headless RuneLite boots to **LOGGED_IN** via autologin, full
+touch input plumbing + the press-and-peek native menu are wired and md5-gated on the `rl_arm64` emulator.
+**Caveat: emulator-only — no step is real-hardware-confirmed yet, and the API-29 `filesDir` dlopen of
+`libjvm.so` (PORT-PHASING Q11) is still open.** This file tracks the working bar; the phase roadmap is
+[`PORT-PHASING.md`](PORT-PHASING.md) and the goal-oriented plan is [`BLUEPRINT.md`](BLUEPRINT.md).
 
 ## Working standards (definition of done)
 
@@ -44,7 +46,7 @@ clean behavior on repeated launches.
 **Accept:** background then foreground the app (and trigger a config change), and confirm the render
 resumes with no crash or leak in logcat across several cycles.
 
-### 3. Input parity with iOS (port the touch model)
+### 3. Input parity with iOS (port the touch model) — ✅ plumbing DONE (A1 + A2 menu); pinch/IME/slide-commit need device confirm
 iOS has long-press right-click menus, an on-screen keyboard, pinch-zoom, one-finger camera, and smart
 tap-snap (see the iOS touch-targeting notes in memory). Wire these into the Android host:
 - Long-press -> right-click menu (read `MenuPeekBridge` for the menu-peek seam iOS uses).
@@ -53,7 +55,7 @@ tap-snap (see the iOS touch-targeting notes in memory). Wire these into the Andr
 - Pinch-zoom and refinement of the camera/pan gesture.
 **Accept:** each gesture produces the intended on-screen result, screenshotted, from a fresh boot.
 
-### 4. Login UX plumbing
+### 4. Login UX plumbing — ⚙ JX_*/autologin DONE (A0); on-device WebView login UI is A3 (pending)
 Port iOS's on-device login (OAuth web flow -> character select -> write `tokens.json` -> autologin; see
 the iOS login notes + `JagexLoginViewController`). Mind the iOS same-session crash lesson (relaunch into
 a clean process after the web flow). Completing an actual login needs credentials (see Login scope) —

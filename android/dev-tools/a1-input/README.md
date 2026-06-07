@@ -2,6 +2,8 @@
 
 Brings Android up to the iOS Phase-5 control scheme (minus the native menu, which is A2). All bridge methods are
 the existing `JavaBridge` surface proven present by the A-1 census; A1 is host wiring + Android input UI.
+(The baseline `onClick`/`onTouch`/`onCameraDrag`/`clearHover` core input landed earlier — Milestone B / A0;
+the table below is the A1 *additions*.)
 
 ## What's implemented
 Native (`jvm_bootstrap.cpp`) + Kotlin (`JvmLauncher.kt`) bridge extension and the `MainActivity` input UI:

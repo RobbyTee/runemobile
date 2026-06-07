@@ -1,5 +1,9 @@
 # Android Port — Phasing Plan
 
+> **See also [`BLUEPRINT.md`](BLUEPRINT.md)** — the goal-oriented execution plan toward "117HD + all plugins
+> on Android" (Track A → playable v1; Track G → GPU/117HD). This doc is the detailed per-phase tracker that
+> blueprint sequences.
+>
 > The Android counterpart to `ios/REALJVM-DEV-PLAN.md`. This is a **followable roadmap** to bring the
 > Android port (`android/`) from its current state (real RuneLite rendering the OSRS login on the emulator)
 > to **parity with the mature iOS shell** (`ios/app/HelloShell/`). It is written to be self-contained for an
@@ -10,7 +14,7 @@
 > **The single load-bearing fact for everything below:** the entire Java game layer — headless boot, the
 > render/input seam, and *every* host-facing facade (`net.runelite.client.headless.*`) — is **already
 > compiled into the same shaded jar both ports embed**. iOS proved and uses ~50 bridge methods; Android wires
-> 8. So reaching parity is **a Kotlin/native-host + Android-UI effort against an existing, desktop-and-iOS-proven
+> ~18 (as of A2). So reaching parity is **a Kotlin/native-host + Android-UI effort against an existing, desktop-and-iOS-proven
 > seam** — *almost no new **shared Java** is required*. Each phase below is mostly "turn on a `-D` gate that
 > already exists + write the Android host/UI that calls bridge methods that already exist."
 >
@@ -80,18 +84,18 @@ three gestures, no Jagex-Mobile shell.
 | CACIO JPMS opts + `UnsafePokeActivation` (eager, pre-bridge) | ✅ `MainActivity.kt` (`bootJvm` opts), `jvm_bootstrap.cpp` (`UnsafePokeActivation.activate`, before `publishBridge`) |
 | fake-xawt `libawt_xawt.so` | ✅ `android/dev-tools/fake-xawt/` |
 | `DeviceHeadlessBoot.main` → `RuneLiteHeadless` → `HeadlessClientUI` | ✅ shared jar |
-| Frame blit: `getFrameSeq/Width/Height/Pixels` → SurfaceView (R↔B swap, seq-skip) | ✅ `jvm_bootstrap.cpp:279` |
-| Core input: `onClick`, `onTouch`, `onCameraDrag`, `clearHover` | ✅ `jvm_bootstrap.cpp:215-222` |
+| Frame blit: `getFrameSeq/Width/Height/Pixels` → SurfaceView (R↔B swap, seq-skip) | ✅ `jvm_bootstrap.cpp:251` (blit @ :434) |
+| Core input: `onClick`, `onTouch`, `onCameraDrag`, `clearHover` | ✅ `jvm_bootstrap.cpp:252-255` |
 | JRE staging + shared-jar staging scripts | ✅ `tools/stage-android-jre.sh`, `tools/stage-mobile-runtime.sh` |
 
 ### 0.2 The gap (this whole document)
 > **Post-A1/A2 update (2026-06-05):** this section was written at the pre-A1/A2 baseline. Android now calls
 > **~18** bridge methods (full touch parity + press-and-peek menu via `MenuPeekBridge`), and the host is
-> ~830 LOC Kotlin (`MainActivity` 522 + `MenuOverlayView` 133 + `JagexTokens`/`AssetInstaller`) + 716 LOC C++.
+> ~931 LOC Kotlin (`MainActivity` 522 + `MenuOverlayView` 133 + `JvmLauncher` 124 + `JagexTokens` 86 + `AssetInstaller` 66) + ~716 LOC C++.
 > The remaining gap is the W3 control-plane / chrome / HUD phases (A4–A7), not core input.
 
-Android calls **8 of ~50** bridge methods iOS uses. Its UI is **one `SurfaceView` + a `GestureDetector`**
-(313 LOC Kotlin, verified `wc -l`) versus iOS's **~5,000 LOC** across 6 view controllers + a 1,340-LOC `JVMLauncher.m`.
+**At the pre-A1/A2 baseline,** Android called **8 of ~50** bridge methods iOS uses, with a UI of **one `SurfaceView` + a `GestureDetector`**
+(313 LOC Kotlin) versus iOS's **~5,000 LOC** across 6 view controllers + a 1,340-LOC `JVMLauncher.m`. (Now ~18 methods / ~931 LOC — see the update note above.)
 **All the Java bridges that close this gap already ship in the embedded jar** (`MobileUiBridge`,
 `MenuPeekBridge`, `MobileChromeBridge`, `HudDataBridge`, `HudVeneerBridge`, `QuestHelperBridge`,
 `WorldSwitcherBridge`, plus the unused `JavaBridge` input methods). Each is gated behind a `-D` flag Android
@@ -151,7 +155,7 @@ current status**. Maturity reflects iOS. "Bridge" names the static facade in
 |---|---|---|---|
 | Plugin list + enable/disable | Proven | `MobileUiBridge.{listPlugins,setPluginEnabled,getMobileUiSeq,pollMobileUiEvents}` | ❌ (gate `runelite.mobileui`) |
 | Native typed per-plugin config | Proven | `MobileUiBridge.{getPluginConfig,setConfig,resetConfig,getProcessedWriteId}` | ❌ |
-| Plugin Hub browse/install | Proven | `MobileUiBridge.{hubManifest,hubInstall,hubUninstall}` (gate `runelite.hub`, pin `runelite.pluginhub.version` — iOS pins `1.12.27`; our `1.12.28-SNAPSHOT` has no hub manifest → 404) | ❌ |
+| Plugin Hub browse/install | Proven | `MobileUiBridge.{hubManifest,hubInstall,hubUninstall}` (gate `runelite.hub`, pin `runelite.pluginhub.version` — iOS pins `1.12.27`; our `1.12.29-SNAPSHOT` has no hub manifest → 404) | ❌ |
 | Explicit config flush (no clean shutdown) | Proven | `MobileUiBridge.flushConfig()` on close/background | ❌ |
 
 ### 1.6 Plugin side-panels — *absent on Android*
@@ -227,7 +231,8 @@ honored; any unresolved method is the *real, scoped* surprise the plan should kn
 - **A-1a static method census — DONE / GREEN (desktop, no device).** `android/dev-tools/bridge-census/`
   verifies all **79** public-static methods across all **8** bridges resolve in the embedded shaded jar
   (`verdict=GREEN resolved=79 missing=0`, `census_md5=fd2c599160bfe1da1323709f02378286`). The "shared Java is
-  already there" claim is now captured evidence.
+  already there" claim is now captured evidence **at the static-resolution level** — A-1b below proves runtime
+  gate activation. (Census jar baseline is `1.12.28`; restage to `1.12.29` and re-run before A3 — see `BLUEPRINT.md` §G.)
 - **A-1b runtime gate-flip census — TODO (emulator).** Confirm each `-D` gate flips its bridge inert→active at
   runtime under a booted `DeviceHeadlessBoot`. (All six gates already confirmed present in source.)
 **Depends on:** nothing (current state).
@@ -512,8 +517,9 @@ RuneLite's GPU stack. Target order (117HD builds on the same context/native infr
 
 **What kills AG2/AG3 first (reviewer-sharpened ordering of the risk):**
 - **AG2 most likely dies on `AWTContext`/LWJGL/`OpenGL33`-on-bionic before any shader work.** `GpuPlugin`
-  hard-requires `AWTContext.loadNatives()` + `new AWTContext(client.getCanvas())` (`GpuPlugin.java:288,299`),
-  then `GL.createCapabilities()` and a hard `if (!glCapabilities.OpenGL33) return false` (`GpuPlugin.java:311,316`).
+  hard-requires `AWTContext.loadNatives()` + `new AWTContext(client.getCanvas())` (`GpuPlugin.java:289,300`),
+  then `GL.createCapabilities()` and a hard `if (!glCapabilities.OpenGL33) return false` (`GpuPlugin.java:312,317`;
+  the optional `glClipControl` is gated on `OpenGL45` at `:356`).
   GLES 3.1 + compute does **not** automatically satisfy a desktop-`OpenGL33`/`OpenGL45` capability probe — the
   translation layer (gl4es/ANGLE) must convincingly *report* those caps to LWJGL, or `gpu` refuses to start.
 - **AG3 most likely dies on compute + desktop-GL semantics + external plugin loading** (117HD's compute
@@ -540,6 +546,8 @@ RuneLite's GPU stack. Target order (117HD builds on the same context/native infr
   swiftshader, which under-reports), query `glGetString(GL_VERSION/RENDERER/SHADING_LANGUAGE_VERSION)` +
   `GL_MAX_COMPUTE_*`. Confirms base `gpu` (≥ GLES 3.0 / 3.3-core-equiv) and/or 117HD (≥ GLES 3.1 + compute) are
   even reachable. md5-gated tier readout. (Expected green — any modern arm64 device is GLES 3.1+ compute.)
+  **Stop-condition:** if `GL_MAX_COMPUTE_*` errors or ES < 3.1 on the target device, the clean 117HD compute
+  path is off (base `gpu` only needs `OpenGL33`-equivalent) — escalate device selection before funding AG3.
 - **AG1 — THE go/no-go for the entire track. Define it ruthlessly; make it fail FAST (weeks).** From the
   on-process HotSpot, load the PojavLauncher-lineage bionic LWJGL, create an EGL context (pbuffer or on the
   SurfaceView Surface) with **no GLFW window**, and — the crux — get **`GL.createCapabilities()` to report

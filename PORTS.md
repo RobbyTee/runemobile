@@ -36,7 +36,7 @@ Do **not** hand-copy jars per port (that's how they drift). Run:
 
 ```sh
 tools/stage-mobile-runtime.sh            # build :client:shadowJar + probes.jar, stage iOS + Android
-tools/stage-mobile-runtime.sh --check    # verify both ports hold identical, current jars (no build)
+tools/stage-mobile-runtime.sh --check    # verify both ports' staged jars match the last-built source jars (no build; stage first if source changed)
 ```
 
 It builds the shaded jar, then `probes.jar` (which folds in CACIO and needs the shaded jar present), copies

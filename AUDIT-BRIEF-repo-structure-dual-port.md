@@ -7,6 +7,14 @@
 > once, now, while Android is two milestones old and cheap to move, than re-org after it has sprawled to
 > match iOS. Recommend the *cheapest* change that prevents the two ports from rotting into divergence.
 
+> **STATUS — HISTORICAL (2026-06-07):** the light-touch path this brief converges on was **adopted** — see
+> [`PORTS.md`](PORTS.md) (the repo map) and `tools/stage-mobile-runtime.sh` (the single staging front-door,
+> with `--check`). The deeper restructures it weighs (a shared Gradle module, umbrella `includeBuild`) were
+> **not** taken. Concrete figures below are a 2026-05 snapshot and have since moved: the shared jar is now
+> `1.12.29-SNAPSHOT` (was 1.12.28), the `net.runelite.client.headless.*` package is now **29** classes (was
+> 26), and `android/` now has a full doc set (PORT-PHASING / BLUEPRINT / ROADMAP / dev-tool READMEs), not
+> "the only Android doc." Read this brief for rationale, not current state.
+
 ## 0. What this project is (context the reviewer needs)
 
 A private fork of `runelite/runelite`. The goal: run **real, unmodified RuneLite + its plugin ecosystem** on
