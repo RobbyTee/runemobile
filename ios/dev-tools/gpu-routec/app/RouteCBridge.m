@@ -208,7 +208,15 @@ static BOOL rcBuildFbo(int w, int h)
 		if (!rcEglPrepareSurface(NO, w, h)) { return NO; }   // offscreen pbuffer
 	}
 	if (!rcEglCreateContextCurrent()) { return NO; }
-	return rcBuildFbo(w, h);
+	BOOL ok = rcBuildFbo(w, h);
+	// Force reverse-Z clip control ON. The base plugin only calls glClipControl when glCapabilities.OpenGL45 is true
+	// (GpuPlugin.java:356), and our bridge reports OpenGL45=false — so without this the plugin runs with the squeezed
+	// window-z [0.5,1] depth (NDC.z+1)/2, exactly like native EAGL, and the far/river depth z-fight persists. The
+	// gpu-present probe proved ANGLE honours this (far window_z 0.508 -> 0.0167 = full precision). The plugin's
+	// reverse-Z projection + clearDepth(0) + GL_GEQUAL are applied regardless of OpenGL45, so wiring clip_control
+	// here completes the desktop-equivalent reverse-Z. This is blueprint P0.2 ("clip_control is ours to wire").
+	glClipControlEXT(GL_LOWER_LEFT_EXT, GL_ZERO_TO_ONE_EXT);
+	return ok;
 }
 
 + (unsigned int)awtGetFramebuffer
