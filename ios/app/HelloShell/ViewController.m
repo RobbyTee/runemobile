@@ -163,15 +163,16 @@ static NSString * const kKbSentinel = @"​";
 static const int kChatW = 519;
 static const int kChatTabRowH = 23;
 
-// W3 A3 (bigger chat tabs): the enlarged native chat-tab row height, in ENGINE-CANVAS px (so it converts cleanly
-// to the engine's CHATAREA push-down via setEngineChatTabRowHeight). ~2.3x the engine's 23px CONTROLS row. The
-// row WIDTH stays the chat-panel width (kChatW = 519 canvas px) so the bigger tabs still sit flush atop the live
-// scrollback like the OSRS-mobile reference. Tunable to the reference look.
-static const int kChatTabRowCanvasH = 52;
-// 8 native chat buttons: the 7 chat tabs + Report. Labels + natural gamepack sprite widths (tab=56, report=79),
-// used to apportion the row so each native button keeps the official width ratio while the row fills kChatW.
+// W3 A3 (bigger chat tabs): the native row keeps the OFFICIAL sprite aspect (tab 56:22, report 79:22 — i.e.
+// wide-and-short, NOT the square look of the first pass). Layout: the row width = the chat-panel width (kChatW)
+// scaled by kChatRowScale, and the per-button widths + the row HEIGHT all derive from that single scale so the
+// aspect is exact. kChatRowScale = 1.25 ⇒ "25% bigger" than the panel-width fit. Tunable to the reference look.
+static const CGFloat kChatRowScale = 1.25;
+static const CGFloat kChatSpriteH = 22.0;    // official chat-button sprite height (px) — sets the wide-short aspect
+static const CGFloat kChatTabSpriteW = 56.0; // official tab sprite width (px)
+static const CGFloat kChatReportSpriteW = 79.0; // official Report sprite width (px)
+// 8 native chat buttons: the 7 chat tabs + Report.
 static NSString * const kChatTabNames[8] = { @"All", @"Game", @"Public", @"Private", @"Channel", @"Clan", @"Trade", @"Report" };
-static const CGFloat kChatTabNatW[8] = { 56, 56, 56, 56, 56, 56, 56, 79 };
 // Whether to recreate the Report button too (vs. letting the 7 tabs fill the whole row). Recreated keeps parity
 // with desktop + covers the engine's own small Report button cleanly.
 static const BOOL kChatShowReport = YES;
@@ -458,20 +459,22 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.keyboardButton.widthAnchor constraintEqualToConstant:44],
         [self.keyboardButton.heightAnchor constraintEqualToConstant:36],
 
-        // Control trio (⚙ ▦ ≡) — TOP-CENTRE, in the gap between the relocated chat (top-left) and minimap
-        // (top-right), clear of both corners now that the HUD owns them.
+        // Control trio (⚙ ▦ ≡) — TOP-RIGHT, in the gap between the now-wider chat tab row (top-left) and the
+        // relocated minimap (top-right). The enlarged chat row reaches further toward centre than the old
+        // panel-width row, so the trio is anchored to the right safe edge (just left of the minimap cluster)
+        // instead of centred, to stay clear of the tabs. Right-to-left chain: ≡ rightmost, then ▦, then ⚙.
         [self.debugToggle.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
-        [self.debugToggle.centerXAnchor constraintEqualToAnchor:g.centerXAnchor constant:52],
+        [self.debugToggle.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-180],
         [self.debugToggle.widthAnchor constraintEqualToConstant:44],
         [self.debugToggle.heightAnchor constraintEqualToConstant:36],
 
         [self.chromeToggle.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
-        [self.chromeToggle.centerXAnchor constraintEqualToAnchor:g.centerXAnchor constant:0],
+        [self.chromeToggle.trailingAnchor constraintEqualToAnchor:self.debugToggle.leadingAnchor constant:-8],
         [self.chromeToggle.widthAnchor constraintEqualToConstant:44],
         [self.chromeToggle.heightAnchor constraintEqualToConstant:36],
 
         [self.pluginButton.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
-        [self.pluginButton.centerXAnchor constraintEqualToAnchor:g.centerXAnchor constant:-52],
+        [self.pluginButton.trailingAnchor constraintEqualToAnchor:self.chromeToggle.leadingAnchor constant:-8],
         [self.pluginButton.widthAnchor constraintEqualToConstant:44],
         [self.pluginButton.heightAnchor constraintEqualToConstant:36],
 
@@ -1096,6 +1099,20 @@ static UIColor *rgbColor(int rgb) {
                            alpha:1.0];
 }
 
+// Total official-sprite width units across the native chat row (7 tabs + optional Report), for apportioning the
+// scaled row while keeping each button's official width ratio.
+static CGFloat chatRowNatW(void) {
+    return 7 * kChatTabSpriteW + (kChatShowReport ? kChatReportSpriteW : 0);
+}
+
+// The enlarged native chat row's height in ENGINE-CANVAS px (screen-scale independent), so it converts cleanly to
+// the engine's CHATAREA push-down. The row spans (kChatW * kChatRowScale) canvas px across chatRowNatW() sprite
+// units; height = the official sprite height (22) in those units → the exact official wide-short aspect.
+static int chatRowCanvasH(void) {
+    CGFloat unit = (kChatW * kChatRowScale) / chatRowNatW();
+    return (int)lround(kChatSpriteH * unit);
+}
+
 // Lay out + state the enlarged native chat tabs from the chat snapshot each tick. Mirrors updateChrome: hides
 // everything (revealing the engine's own chat) when the native chrome is toggled off or the layout is unsupported
 // (not Classic/164). The row spans the chat-panel width at the relocated chat origin; each button is bigger than
@@ -1119,25 +1136,28 @@ static UIColor *rgbColor(int rgb) {
     CGFloat s = W / (CGFloat)self.renderW;           // canvas px -> screen pt (uniform: render aspect == screen)
     CGFloat rowX = [d[@"chatX"] intValue] * s;
     CGFloat rowY = [d[@"chatY"] intValue] * s;
-    CGFloat rowW = kChatW * s;
-    CGFloat rowH = kChatTabRowCanvasH * s;
+    // Aspect-true layout: the row spans (kChatW * kChatRowScale) canvas px across chatRowNatW() sprite-width units;
+    // each button keeps the official 56:22 / 79:22 ratio, so the buttons are wide-and-short like the real ones (not
+    // the square first pass). unit = screen pt per official-sprite px.
     const int n = kChatShowReport ? 8 : 7;
-    // No gap: the native row tiles flush so it fully covers the engine's own (still-shown, hittable) CONTROLS row
-    // underneath — no sliver of the small engine buttons peeks through. The rounded sprite ends abut like the
-    // desktop chat tabs. (A peek-free row matters more than inter-tab spacing; revisit against the reference.)
-    const CGFloat gap = 0.0;
-    CGFloat natTotal = 0; for (int i = 0; i < n; i++) natTotal += kChatTabNatW[i];
-    CGFloat usableW = rowW - gap * (n - 1);
-    CGFloat fontSize = floor(rowH * 0.40);
+    CGFloat unit = (kChatW * kChatRowScale * s) / chatRowNatW();
+    CGFloat tabW = kChatTabSpriteW * unit;
+    CGFloat reportW = kChatReportSpriteW * unit;
+    CGFloat rowH = kChatSpriteH * unit;
+    // Push the engine's message area down past the (now correctly-proportioned) native row. Re-applied each tick so
+    // the chat row height tracks the scale even if it changes.
+    [JVMLauncher setEngineChatTabRowHeight:chatRowCanvasH()];
+    // Short wide buttons: the label fills most of the height, so a larger font ratio than a tall button.
+    CGFloat fontSize = floor(rowH * 0.62);
     UIFont *labelFont = [UIFont fontWithName:@"RuneScape" size:fontSize] ?: [UIFont boldSystemFontOfSize:fontSize];
 
     CGFloat x = rowX;
     for (int i = 0; i < 8; i++) {
         UIButton *b = self.chatTabButtons[i];
         if (i >= n) { b.hidden = YES; continue; }     // report suppressed -> 7 tabs only
-        CGFloat bw = usableW * (kChatTabNatW[i] / natTotal);
+        CGFloat bw = (i == 7) ? reportW : tabW;        // tiled flush (no gap) so it fully covers the engine row
         b.frame = CGRectMake(floor(x), floor(rowY), ceil(bw), ceil(rowH));
-        x += bw + gap;
+        x += bw;
 
         NSDictionary *t = (i < (int)tabs.count && [tabs[i] isKindOfClass:[NSDictionary class]]) ? tabs[i] : nil;
         BOOL selected = [t[@"selected"] boolValue];
@@ -1161,6 +1181,10 @@ static UIColor *rgbColor(int rgb) {
 
 - (void)hideChatTabs {
     for (UIButton *b in self.chatTabButtons) b.hidden = YES;
+    // Restore the engine's own (small) chat tab row whenever the native tabs aren't shown (toggled off / not
+    // logged in / unsupported layout): drop the message-area push-down so CHATAREA returns to the engine's 23px
+    // offset and its real CONTROLS row renders + works.
+    [JVMLauncher setEngineChatTabRowHeight:0];
 }
 
 // A native chat-tab tap -> proxy a PRECISE left click onto the live engine button centre (from the snapshot
@@ -1287,13 +1311,9 @@ static UIColor *rgbColor(int rgb) {
         for (UIButton *btn in self.tabButtons) btn.hidden = YES;
         for (UIView *cv in self.stoneCovers) cv.hidden = YES;   // reveal the real stones in the fallback view
         self.tabRailBg.hidden = YES;
-        [self hideChatTabs];
-        // Restore the engine's own (small) chat tab row in the A/B fallback: drop the message-area push-down so
-        // CHATAREA returns to the engine's 23px offset and its real CONTROLS row is visible again.
-        [JVMLauncher setEngineChatTabRowHeight:0];
-    } else {
-        [JVMLauncher setEngineChatTabRowHeight:kChatTabRowCanvasH];   // re-enable the bigger native row
+        [self hideChatTabs];   // also restores the engine's own chat row (setEngineChatTabRowHeight:0)
     }
+    // (When toggled back ON, updateChatTabs re-applies the enlarged row height each tick.)
     [self appendLine:[NSString stringWithFormat:@"[chrome] rails %@", self.chromeVisible ? @"ON" : @"OFF"]];
 }
 
@@ -1454,14 +1474,12 @@ static UIColor *rgbColor(int rgb) {
     int mmY = topC + m;
 
     [JVMLauncher relocateEngineChatX:chatX y:chatY transparent:YES];
-    // W3 A3: the native veneer recreates the tab row BIGGER, so tell the engine to push its message area down past
-    // the taller native row (the engine's own 23px CONTROLS stays put underneath, covered by the native buttons).
-    [JVMLauncher setEngineChatTabRowHeight:kChatTabRowCanvasH];
+    // W3 A3: the native veneer recreates the tab row BIGGER (engine push-down applied per-tick in updateChatTabs).
     [JVMLauncher relocateEngineMinimapX:mmX y:mmY];
     [JVMLauncher setEngineStonesHidden:YES];   // the native 2-col grid replaces them (no cover patch / gray box)
     // The whole enlarged tab row is UI: a stray tap in it (between native buttons) should be a precise click, not
     // a walk. The native buttons own their taps; this rect just keeps any leak from drawing a walk ring.
-    self.chatHitCanvas = CGRectMake(chatX, chatY, kChatW, kChatTabRowCanvasH);
+    self.chatHitCanvas = CGRectMake(chatX, chatY, (int)lround(kChatW * kChatRowScale), chatRowCanvasH());
     [self appendLine:[NSString stringWithFormat:@"[hud] relocate chat->%d,%d minimap->%d,%d (insets L%d T%d R%d k%.2f)",
                       chatX, chatY, mmX, mmY, leftC, topC, rightC, k]];
 }
