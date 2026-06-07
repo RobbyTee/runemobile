@@ -1315,33 +1315,27 @@ static const CGFloat kMenuWidth       = 210.0;
         [self appendLine:[NSString stringWithFormat:@"[shell] GPU direct-present: CAEAGLLayer %.0fx%.0f @%.3f -> drawable %dx%d (no readback)",
                           gl.bounds.size.width, gl.bounds.size.height, gl.contentsScale, renderW, renderH]];
     }
-#else
-    // Phase A1 (MetalANGLE) DIRECT PRESENT: render into an EGL window surface from a CAMetalLayer (no glReadPixels
-    // readback — the ~16ms/frame cap that held the readback path at ~50fps). De-risked + md5-sealed by the
-    // gpu-present probe (window_present/fb_readback/clip_control/msaa all GREEN on device). The CAMetalLayer is
-    // created + sized on main and its EGL WINDOW surface is brought up HERE on main (eglCreateWindowSurface on the
-    // layer's own thread — the proven path) BEFORE the JVM render thread's createGLContext; that thread then only
-    // creates + binds the context. Falls back to the offscreen+readback path if surface bring-up fails. The
-    // no-resize bisection stays on readback.
+#elif defined(RC_ANGLE_WINDOW_PRESENT)
+    // Phase A1 (MetalANGLE) WINDOW-SURFACE DIRECT PRESENT (60fps, present=0.07ms). The GPU renders the scene with
+    // ZERO GL errors and eglSwapBuffers presents at 62fps, but on device the CAMetalLayer did not scan out to the
+    // display (black screen) — the window-surface present is NOT yet visually confirmed (the gpu-present probe
+    // sealed on a glReadPixels self-check, not a screenshot). So this path is GATED OFF by default until the
+    // present is debugged; the default ANGLE build uses the proven offscreen+readback path below.
     if (self.pendingRouteCGpu && !self.pendingRouteCGpuNoResize) {
         [self.view layoutIfNeeded];
         CAMetalLayer *ml = [CAMetalLayer layer];
         ml.frame = self.screen.bounds;
         ml.opaque = YES;
-        ml.framebufferOnly = NO;                              // match the proven probe config
-        ml.drawableSize = CGSizeMake(renderW, renderH);       // engine canvas px; CA scales to the full-screen frame
+        ml.framebufferOnly = NO;
+        ml.drawableSize = CGSizeMake(renderW, renderH);
         ml.contentsScale = (sh > 0 ? (CGFloat)renderH / sh : 1.0);
-        [self.screen.layer insertSublayer:ml atIndex:0];      // below the UIImageView content + chrome subviews
+        [self.screen.layer insertSublayer:ml atIndex:0];
         self.metalLayer = ml;
         [RouteCBridge setPresentLayer:ml];
         if ([RouteCBridge prepareWindowSurfaceOnMain]) {
-            // ARM direct present, but DON'T switch yet: keep blitting CPU frames (boot/login) until the GPU plugin
-            // actually presents its first frame. onDisplayTick flips to direct present once hasPresentedFrame == YES.
-            // This keeps a parked/slow startup showing the login screen instead of a black CAMetalLayer.
-            self.gpuPresentArmed = YES;
-            [self appendLine:[NSString stringWithFormat:@"[shell] GPU (MetalANGLE) direct present ARMED: CAMetalLayer drawable %dx%d (switches in on first GPU frame)", renderW, renderH]];
+            self.gpuPresentArmed = YES;   // onDisplayTick flips to direct present once the first GPU frame presents
+            [self appendLine:[NSString stringWithFormat:@"[shell] GPU (MetalANGLE) direct present ARMED: drawable %dx%d", renderW, renderH]];
         } else {
-            // window surface bring-up failed -> tear the layer back down and use offscreen + readback.
             [RouteCBridge setPresentLayer:nil];
             [ml removeFromSuperlayer];
             self.metalLayer = nil;
@@ -1349,6 +1343,15 @@ static const CGFloat kMenuWidth       = 210.0;
         }
     } else if (self.pendingRouteCGpu) {
         [self appendLine:@"[shell] GPU (MetalANGLE) — offscreen FBO + readback present (no-resize bisection)"];
+    }
+#else
+    // Phase A1 default: OFFSCREEN FBO + glReadPixels readback present — the PROVEN-DISPLAY path. The GPU-rendered
+    // scene is published via JavaBridge.gpuPublish -> latestFrame -> onDisplayTick blit (the exact path that
+    // displays the CPU frames), so it is guaranteed to scan out. The readback copy caps it at ~50fps; the 60fps
+    // CAMetalLayer window present is gated behind RC_ANGLE_WINDOW_PRESENT until its display is confirmed. No present
+    // layer is set -> the bridge runs offscreen + readback.
+    if (self.pendingRouteCGpu) {
+        [self appendLine:@"[shell] GPU (MetalANGLE) — offscreen FBO + readback present (proven-display path)"];
     }
 #endif
 
