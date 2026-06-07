@@ -605,13 +605,14 @@ public final class HudVeneerBridge
 				area.setOriginalWidth(targetW);
 				area.setOriginalHeight(targetH);
 				area.revalidate();
-				// CHATDISPLAY / MES_LAYER / SCROLLAREA size off CHATAREA via MINUS modes, but revalidating CHATAREA
-				// does NOT cascade to them (confirmed on device: CHATDISPLAY stayed 505 while CHATAREA hit 649) —
-				// revalidate each so it widens to the new CHATAREA width. Only on a size change (not every frame),
-				// so the scroll position isn't disturbed.
-				revalidateChild(c, InterfaceID.Chatbox.CHATDISPLAY);
-				revalidateChild(c, InterfaceID.Chatbox.MES_LAYER);
-				revalidateChild(c, InterfaceID.Chatbox.SCROLLAREA);
+				// The message display + scroll widgets size off a 519-wide ancestor (confirmed on device:
+				// CHATDISPLAY stayed 505 while CHATAREA hit 649), and a parent revalidate does NOT cascade to them.
+				// Pin them to ABSOLUTE widths derived from the new row width, keeping their left margins (CHATDISPLAY/
+				// MES_LAYER are inset 7px each side = -14; SCROLLAREA reserves a 16px scrollbar on top of that = -30).
+				// New chat lines then wrap to the wider display. Only on a size change, so scroll isn't disturbed.
+				forceWidth(c, InterfaceID.Chatbox.CHATDISPLAY, rowW - 14);
+				forceWidth(c, InterfaceID.Chatbox.MES_LAYER, rowW - 14);
+				forceWidth(c, InterfaceID.Chatbox.SCROLLAREA, rowW - 30);
 			}
 			else
 			{
@@ -623,14 +624,18 @@ public final class HudVeneerBridge
 		}
 	}
 
-	private static void revalidateChild(Client c, int id)
+	/** Force a chat sub-widget to an ABSOLUTE width and revalidate — used for the display/scroll widgets that don't
+	 *  inherit the widened CHATAREA via their own size modes. */
+	private static void forceWidth(Client c, int id, int w)
 	{
 		try
 		{
-			final Widget w = c.getWidget(id);
-			if (w != null)
+			final Widget wd = c.getWidget(id);
+			if (wd != null && (wd.getWidthMode() != WidgetSizeMode.ABSOLUTE || wd.getOriginalWidth() != w))
 			{
-				w.revalidate();
+				wd.setWidthMode(WidgetSizeMode.ABSOLUTE);
+				wd.setOriginalWidth(w);
+				wd.revalidate();
 			}
 		}
 		catch (RuntimeException ignore)

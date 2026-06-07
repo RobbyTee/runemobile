@@ -133,6 +133,11 @@
 @property (nonatomic, strong) UIImage *chatBtnNewImg;   // 3055 — tab with unread messages
 @property (nonatomic, strong) UIImage *chatReportImg;   // 3057 — the Report button
 @property (nonatomic, assign) BOOL chatTabsBuilt;
+// Instant selected-highlight after a tap: the engine's tab GRAPHIC sprite (which the snapshot reads for the
+// selected state) only updates on a redraw, so the highlight lagged until the next game interaction. Optimistically
+// mark the tapped tab selected and hold it until the snapshot agrees (or a short timeout). -1 = none.
+@property (nonatomic, assign) NSInteger optimisticChatTab;
+@property (nonatomic, assign) CFTimeInterval optimisticChatAt;
 // Phase-6 native plugin panel: a ⚙ button opens a full-screen modal sheet (scrim eats all touches so nothing
 // falls through to the game) listing the plugins (MobileUiBridge.listPlugins) with an enable/disable switch
 // and a running/stopped indicator. Refreshed when the bridge's event sequence advances (toggles, conflicts).
@@ -1090,6 +1095,7 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.chatTabButtons addObject:b];
     }
     self.chatTabsBuilt = YES;
+    self.optimisticChatTab = -1;
     [self appendLine:[NSString stringWithFormat:@"[chat] tab buttons built (sprites %@/%@/%@/%@)",
                       self.chatBtnImg ? @"ok" : @"X", self.chatBtnSelImg ? @"ok" : @"X",
                       self.chatBtnNewImg ? @"ok" : @"X", self.chatReportImg ? @"ok" : @"X"]];
@@ -1157,6 +1163,22 @@ static int chatRowCanvasH(void) {
     CGFloat fontSize = floor(rowH * 0.62);
     UIFont *labelFont = [UIFont fontWithName:@"RuneScape" size:fontSize] ?: [UIFont boldSystemFontOfSize:fontSize];
 
+    // Which tab the snapshot reports selected (sprite==SELECTED), then reconcile with the optimistic highlight:
+    // hold the just-tapped tab selected until the engine's sprite catches up (snapshot agrees) or a short timeout.
+    int snapSel = -1;
+    for (int j = 0; j < (int)tabs.count && j < 7; j++) {
+        NSDictionary *tj = [tabs[j] isKindOfClass:[NSDictionary class]] ? tabs[j] : nil;
+        if ([tj[@"selected"] boolValue]) { snapSel = j; break; }
+    }
+    int effSel = snapSel;
+    if (self.optimisticChatTab >= 0) {
+        if (snapSel == self.optimisticChatTab || CACurrentMediaTime() - self.optimisticChatAt > 1.5) {
+            self.optimisticChatTab = -1;   // engine caught up (or timed out) -> trust the snapshot
+        } else {
+            effSel = (int)self.optimisticChatTab;   // hold the instant highlight
+        }
+    }
+
     CGFloat x = rowX;
     for (int i = 0; i < 8; i++) {
         UIButton *b = self.chatTabButtons[i];
@@ -1166,7 +1188,7 @@ static int chatRowCanvasH(void) {
         x += bw;
 
         NSDictionary *t = (i < (int)tabs.count && [tabs[i] isKindOfClass:[NSDictionary class]]) ? tabs[i] : nil;
-        BOOL selected = [t[@"selected"] boolValue];
+        BOOL selected = (i == effSel);
         BOOL hasNew = [t[@"new"] boolValue];
         UIImage *bg = self.chatBtnImg;
         if (i == 7) bg = self.chatReportImg;          // Report = its own dark-red sprite (no selected/new variant)
@@ -1221,6 +1243,13 @@ static int chatRowCanvasH(void) {
     if (![self engineChatButtonCenterForTag:b.tag x:&cx y:&cy]) return;
     [JVMLauncher postClickPreciseX:cx y:cy button:1];
     [JVMLauncher postClearHover];   // no parked hover -> no "Switch tab" tooltip left showing
+    // Instant highlight: the tapped tab is now the active view; show it selected immediately (the engine's own tab
+    // sprite, which the snapshot reads, only updates on a redraw). Report (tag 7) doesn't change the selection.
+    if (b.tag < 7) {
+        self.optimisticChatTab = b.tag;
+        self.optimisticChatAt = CACurrentMediaTime();
+        [self updateChatTabs];   // reflect the new selection this frame, don't wait for the next 10Hz tick
+    }
     [self appendLine:[NSString stringWithFormat:@"[chat] tab %ld (%@) -> precise click %d,%d",
                       (long)b.tag, kChatTabNames[b.tag], cx, cy]];
 }
