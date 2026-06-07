@@ -62,6 +62,62 @@ static void rc_dump_gl_state(const char *whenLabel)
         dtest, dfunc, dmask, drange[0], drange[1], dclear,
         cclear[0],cclear[1],cclear[2],cclear[3], cmask[0],cmask[1],cmask[2],cmask[3],
         blend, bsrc, bdst, cull, atex, texArr]);
+
+    // DEPTH-PRECISION PROBE: the scene FBO's actual depth attachment bit size + format + samples. Desktop gets
+    // full far precision from glClipControl(ZERO_TO_ONE); iOS lacks it. If this depth renderbuffer is < 32 bits
+    // (e.g. the driver downgraded the requested DEPTH_COMPONENT32F for MSAA), the far z-fighting is BUFFER-limited
+    // and no projection / gl_FragDepth remap can fix it -> the fix must restore real depth precision. STRIP after.
+    {
+        GLint dType = 0, dName = 0;
+        glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &dType);
+        glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &dName);
+        GLint dSize = -1, dSamp = -1, dFmt = 0;
+        if (dType == GL_RENDERBUFFER && dName) {
+            GLint prevRb = 0; glGetIntegerv(GL_RENDERBUFFER_BINDING, &prevRb);
+            glBindRenderbuffer(GL_RENDERBUFFER, dName);
+            glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_DEPTH_SIZE, &dSize);
+            glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &dSamp);
+            glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT, &dFmt);
+            glBindRenderbuffer(GL_RENDERBUFFER, prevRb);
+        }
+        rc_trace([NSString stringWithFormat:@"[routec] DEPTH attach type=0x%x name=%d depthBits=%d samples=%d intFmt=0x%x (want 32F=0x8cac)",
+            dType, dName, dSize, dSamp, dFmt]);
+    }
+}
+
+// WATER-SHIMMER MECHANISM PROBE (one-shot): read back the bound scene texture-array's mip levels to confirm
+// whether glGenerateMipmap(GL_TEXTURE_2D_ARRAY) actually populated them on this iOS GLES driver. If level >= 1
+// reads ~black while level 0 has content, the array mips are broken -> a GL_*_MIPMAP_* min filter samples black
+// at grazing/distance (the water shimmer). Reads a small centre block of a few layers at levels 0..3 via an FBO
+// layer attachment; saves/restores GL state. STRIP after the fix is locked.
+static void rc_probe_mips(void)
+{
+    GLint texArr = 0; glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &texArr);
+    if (texArr <= 0) { rc_trace(@"[routec] mipprobe: no 2D_ARRAY bound"); return; }
+    GLint prevFbo = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+    GLuint fbo = 0; glGenFramebuffers(1, &fbo); glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    const int layers[] = {0, 1, 2, 4, 8, 16, 24, 40};
+    for (int li = 0; li < 8; li++) {
+        int L = layers[li];
+        char line[256]; int p = 0;
+        p += snprintf(line + p, sizeof(line) - p, "[routec] mipprobe layer %2d:", L);
+        for (int lvl = 0; lvl < 4; lvl++) {
+            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texArr, lvl, L);
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+                p += snprintf(line + p, sizeof(line) - p, " L%d=incmpl", lvl); continue;
+            }
+            int sz = 128 >> lvl; if (sz < 1) sz = 1;
+            int b = sz < 16 ? sz : 16; int o = (sz - b) / 2;   // centre b x b block
+            uint8_t px[16 * 16 * 4];
+            glReadPixels(o, o, b, b, GL_RGBA, GL_UNSIGNED_BYTE, px);
+            long rgb = 0, a = 0; int nn = b * b;
+            for (int i = 0; i < nn; i++) { rgb += px[i*4] + px[i*4+1] + px[i*4+2]; a += px[i*4+3]; }
+            p += snprintf(line + p, sizeof(line) - p, " L%d[rgb=%ld a=%ld]", lvl, rgb / (nn * 3), a / nn);
+        }
+        rc_trace([NSString stringWithUTF8String:line]);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, prevFbo);
+    glDeleteFramebuffers(1, &fbo);
 }
 
 // (*env)->NewDirectByteBuffer returns a ByteBuffer whose byte order defaults to BIG_ENDIAN (JNI/Java spec).
@@ -181,6 +237,15 @@ static void rc_swap_publish(JNIEnv *env)
     }
 }
 
+// 2x SCENE SUPERSAMPLING (gated, mode "fix2x"): the base plugin renders the 3D scene into its own MSAA FBO at
+// the canvas size, then blits it onto the composite (present) FBO under the UI. To supersample we (1) make that
+// scene FBO's colour+depth renderbuffers 2x and single-sample, (2) scale the SCENE viewport 2x (only when the
+// bound DRAW FBO is the scene FBO, NOT the present FBO that holds the UI), and (3) downsample the scene->present
+// blit 2x->1x with GL_LINEAR — which IS the anti-aliasing (and unlike MSAA it also resolves the texture/shading
+// aliasing that drives the water shimmer). The UI/HUD present FBO is untouched, so HUD size/touch are unchanged.
+#define RC_SS 2
+static GLint sCurDrawFbo = 0;   // tracked from glBindFramebuffer to tell the scene FBO from the present FBO
+
 static JNIEXPORT void JNICALL rc_GL_glActiveTexture_0(JNIEnv *env, jclass cls, jint a0)
 {
     glActiveTexture(a0);
@@ -203,6 +268,7 @@ static JNIEXPORT void JNICALL rc_GL_glBindBufferBase_0(JNIEnv *env, jclass cls, 
 
 static JNIEXPORT void JNICALL rc_GL_glBindFramebuffer_0(JNIEnv *env, jclass cls, jint a0, jint a1)
 {
+    if (a0 == GL_FRAMEBUFFER || a0 == GL_DRAW_FRAMEBUFFER) sCurDrawFbo = a1;   // track the DRAW target (for 2x SS)
     glBindFramebuffer(a0, a1);
 }
 
@@ -233,8 +299,11 @@ static JNIEXPORT void JNICALL rc_GL_glBlendFuncSeparate_0(JNIEnv *env, jclass cl
 
 static JNIEXPORT void JNICALL rc_GL_glBlitFramebuffer_0(JNIEnv *env, jclass cls, jint a0, jint a1, jint a2, jint a3, jint a4, jint a5, jint a6, jint a7, jint a8, jint a9)
 {
+    // 2x SS: the only blit the plugin makes is the scene FBO -> present FBO composite. The scene FBO is now 2x,
+    // so read the full 2x src rect and downsample into the unchanged 1x dst with GL_LINEAR (= the supersample AA).
+    if ([RouteCBridge superSampleActive]) { a2 *= RC_SS; a3 *= RC_SS; a9 = GL_LINEAR; }
     static int t = 0; if (t < 4) { t++;
-        rc_trace([NSString stringWithFormat:@"[routec] glBlitFramebuffer src(%d,%d,%d,%d)->dst(%d,%d,%d,%d) (scene FBO -> default)", a0,a1,a2,a3, a4,a5,a6,a7]); }
+        rc_trace([NSString stringWithFormat:@"[routec] glBlitFramebuffer src(%d,%d,%d,%d)->dst(%d,%d,%d,%d) filter=0x%x (scene FBO -> default)", a0,a1,a2,a3, a4,a5,a6,a7, a9]); }
     glBlitFramebuffer(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9);
 }
 
@@ -338,6 +407,15 @@ static JNIEXPORT void JNICALL rc_GL_glDeleteVertexArrays_0(JNIEnv *env, jclass c
 
 static JNIEXPORT void JNICALL rc_GL_glDepthFunc_0(JNIEnv *env, jclass cls, jint a0)
 {
+    // WATER-SHIMMER ISOLATION (gated): force GL_ALWAYS so the depth test never rejects. If the grazing-river
+    // flicker VANISHES -> it is depth (z-fight / coplanar water-vs-riverbed / reverse-Z precision); if it
+    // REMAINS -> depth is exonerated and the cause is texture undersampling. The scene occlusion looks wrong
+    // in this mode (expected) — we only judge whether the WATER flicker stops. STRIP after diagnosis.
+    if ([[RouteCBridge waterDiagMode] isEqualToString:@"depthalways"])
+    {
+        static int once = 0; if (!once) { once = 1; rc_trace(@"[routec] WATER-DIAG: glDepthFunc forced GL_ALWAYS"); }
+        a0 = GL_ALWAYS;
+    }
     glDepthFunc((GLenum)a0);
 }
 
@@ -507,6 +585,10 @@ static JNIEXPORT void JNICALL rc_GL_glMultiDrawArrays_0(JNIEnv *env, jclass cls,
             rc_trace([NSString stringWithFormat:@"[routec] glMultiDrawArrays mode=0x%x draws=%d totalVerts=%ld first0=%d (SCENE geometry)",
                 a0, (int)n, total, (first && n>0) ? first[0] : -1]);
             if (t == 1) { rc_dump_gl_state("first-scene-draw"); } }
+        // One-shot mip-content probe: fires the first scene draw at which the texture array is actually bound
+        // (it's lazily created after textures load, so not on frame 1). Confirms whether the array mips are black.
+        { static int mipProbed = 0; if (!mipProbed) { GLint ta = 0; glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &ta);
+            if (ta > 0) { rc_probe_mips(); mipProbed = 1; } } }
         [RouteCBridge glMultiDrawArraysShim:(GLenum)a0 first:first count:count drawcount:n];
 }
 
@@ -526,6 +608,10 @@ static JNIEXPORT void JNICALL rc_GL_glRenderbufferStorageMultisample_0(JNIEnv *e
     // Translate to GL_RGBA8 so the multisampled color renderbuffer gets valid storage (else FBO-incomplete / black).
     GLenum ifmt = (GLenum)a2;
     if (ifmt == GL_RGBA) ifmt = GL_RGBA8;
+    // 2x SS: this is the SCENE FBO's colour+depth renderbuffer storage. Render at 2x and drop MSAA — the 2x->1x
+    // downsample on the blit is the AA (an MSAA-resolve blit must keep the SAME size, so it can't downsample;
+    // 2x single-sample supersampling avoids that and also AAs the texture/shading, not just edges).
+    if ([RouteCBridge superSampleActive]) { a1 = 0; a3 *= RC_SS; a4 *= RC_SS; }
     while (glGetError() != GL_NO_ERROR) {} /* drain */
     glRenderbufferStorageMultisample(a0, a1, ifmt, a3, a4);
     static int n = 0; if (n < 4) { n++;
@@ -556,11 +642,36 @@ static JNIEXPORT void JNICALL rc_GL_glTexImage3D_0(JNIEnv *env, jclass cls, jint
 
 static JNIEXPORT void JNICALL rc_GL_glTexParameterf_0(JNIEnv *env, jclass cls, jint a0, jint a1, jfloat a2)
 {
+    // WATER-SHIMMER FIX (anisotropy half): keep the trilinear-minified grazing water SHARP, not just stable.
+    // The base plugin sets GL_TEXTURE_MAX_ANISOTROPY_EXT to 1.0 (= off) at aniso level 1; raise it so the
+    // anisotropic footprint at grazing angles is sampled along its long axis. The driver clamps to its max.
+    if (a0 == GL_TEXTURE_2D_ARRAY && a1 == GL_TEXTURE_MAX_ANISOTROPY_EXT && a2 < 16.0f && [RouteCBridge waterFixActive])
+    {
+        static int once = 0; if (!once) { once = 1;
+            rc_trace([NSString stringWithFormat:@"[routec] WATER-FIX: 2D_ARRAY max anisotropy %.1f -> 16.0", a2]); }
+        a2 = 16.0f;
+    }
     glTexParameterf(a0, a1, a2);
 }
 
 static JNIEXPORT void JNICALL rc_GL_glTexParameteri_0(JNIEnv *env, jclass cls, jint a0, jint a1, jint a2)
 {
+    // WATER-SHIMMER FIX. Root cause isolated on device by gated A/B experiments: replacing the texture COLOUR
+    // sample with a flat colour (solidtex) dropped the grazing-river flicker from ~35% to ~2%, while forcing
+    // LOD0, dropping the discard, disabling fog — and (separately) confirming the array mip levels are POPULATED,
+    // not black — all failed to fix it. So the flicker is the base plugin's GL_NEAREST (point) minification of
+    // the ANIMATED water texture: at grazing/distance on the low 1304x600 iOS render the scrolling UVs make the
+    // point-sampled texel pop between light and dark stipples every frame -> flickering black. Fix = give the
+    // scene texture ARRAY a smooth minification filter (trilinear) so the animated texels blend instead of pop.
+    // MAG stays as the plugin set it (NEAREST -> crisp close-up pixels); the base plugin SOURCE is unchanged.
+    // Gated off for the raw-diagnostic modes so the A/B experiments still see the real plugin state.
+    if (a0 == GL_TEXTURE_2D_ARRAY && a1 == GL_TEXTURE_MIN_FILTER && a2 != GL_LINEAR_MIPMAP_LINEAR
+        && [RouteCBridge waterFixActive])
+    {
+        static int once = 0; if (!once) { once = 1;
+            rc_trace([NSString stringWithFormat:@"[routec] WATER-FIX: 2D_ARRAY min filter 0x%x -> GL_LINEAR_MIPMAP_LINEAR (trilinear)", a2]); }
+        a2 = GL_LINEAR_MIPMAP_LINEAR;
+    }
     glTexParameteri(a0, a1, a2);
 }
 
@@ -652,8 +763,12 @@ static JNIEXPORT void JNICALL rc_GL_glVertexAttribPointer_0(JNIEnv *env, jclass 
 
 static JNIEXPORT void JNICALL rc_GL_glViewport_0(JNIEnv *env, jclass cls, jint a0, jint a1, jint a2, jint a3)
 {
+    // 2x SS: scale the SCENE viewport only (DRAW FBO is the scene FBO, i.e. not the present FBO and not 0).
+    if ([RouteCBridge superSampleActive] && sCurDrawFbo != 0 && sCurDrawFbo != (GLint)[RouteCBridge awtGetFramebuffer]) {
+        a0 *= RC_SS; a1 *= RC_SS; a2 *= RC_SS; a3 *= RC_SS;
+    }
     static int n = 0; if (n < 10) { n++;
-        rc_trace([NSString stringWithFormat:@"[routec] glViewport(%d,%d,%d,%d)", a0, a1, a2, a3]); }
+        rc_trace([NSString stringWithFormat:@"[routec] glViewport(%d,%d,%d,%d) drawFbo=%d", a0, a1, a2, a3, sCurDrawFbo]); }
     glViewport(a0, a1, a2, a3);
 }
 

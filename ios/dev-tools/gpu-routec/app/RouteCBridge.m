@@ -12,6 +12,42 @@
 
 @implementation RouteCBridge
 
++ (NSString *)waterDiagMode
+{
+	static NSString *mode = nil; static BOOL read = NO;
+	if (!read)
+	{
+		read = YES;
+		NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+		NSString *raw = [NSString stringWithContentsOfFile:[docs stringByAppendingPathComponent:@"routec-water-mode.txt"]
+			encoding:NSUTF8StringEncoding error:nil];
+		mode = [[raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
+	}
+	return mode;
+}
+
++ (BOOL)waterFixActive
+{
+	NSString *m = [self waterDiagMode];
+	return !([m isEqualToString:@"stripes"] || [m isEqualToString:@"baseline"]
+		|| [m isEqualToString:@"solidtex"] || [m isEqualToString:@"depthalways"]
+		|| [m isEqualToString:@"fragdepth"]);
+}
+
++ (BOOL)depthFixActive
+{
+	// gl_FragDepth reverse-Z fix is GATED TO THE "fragdepth" A/B ONLY — NOT in the shipping fix. The device
+	// depth probe showed the scene buffer is genuine DEPTH_COMPONENT32F, so far z-fighting is NOT buffer-
+	// precision-limited; the gl_FragDepth remap didn't help (and looked worse). The distant streaking is
+	// sub-pixel aliasing of thin far geometry, which MSAA (anti-aliasing) is the right lever for, not depth.
+	return [[self waterDiagMode] isEqualToString:@"fragdepth"];
+}
+
++ (BOOL)superSampleActive
+{
+	return [[self waterDiagMode] isEqualToString:@"fix2x"];
+}
+
 static EAGLContext *sCtx = nil;
 static GLuint sFbo = 0, sColorRbo = 0, sDepthRbo = 0;
 static int sFboW = 0, sFboH = 0;
@@ -270,6 +306,84 @@ static BOOL rcBuildFbo(int w, int h)
 			[s replaceOccurrencesOfString:from withString:casts[from]
 				options:0 range:NSMakeRange(0, s.length)];
 		}
+	}
+
+	// WATER-SHIMMER ISOLATION DIAGNOSTIC (gated; STRIP once the cause is found). When the file
+	// Documents/routec-water-mode.txt contains "stripes", split the SCENE fragment into 4 vertical 88px
+	// bands by gl_FragCoord.x so ONE device frame A/Bs the top suspects against a control — texture() is
+	// kept in uniform control flow (no GLSL-ES undefined-derivative confound; only the colour SOURCE/branch
+	// is selected). Bands, left edge first: 0=baseline  1=force LOD0 colour (mips off)  2=no discard
+	// 3=no fog. Absent / != "stripes" -> NO edits, so the default build stays byte-identical to baseline.
+	if (fragment && [s containsString:@"fFogAmount"])   // scene fragment only (the UI fragment has no fFogAmount)
+	{
+		if ([[RouteCBridge waterDiagMode] isEqualToString:@"stripes"])
+		{
+			// rcBand declared at the head of main() (just before the first statement `vec4 c;`).
+			[s replaceOccurrencesOfString:@"vec4 c;"
+				withString:@"int rcBand = int(mod(floor(gl_FragCoord.x / 88.0), 4.0));\n  vec4 c;"
+				options:0 range:NSMakeRange(0, s.length)];
+			// band 1: colour from LOD0 (textureColor0 is already sampled in uniform flow) instead of the mip chain.
+			[s replaceOccurrencesOfString:@"textureColor = vec4(textureColor.rgb, 1.);"
+				withString:@"textureColor = vec4((rcBand == 1 ? textureColor0.rgb : textureColor.rgb), 1.);"
+				options:0 range:NSMakeRange(0, s.length)];
+			// band 2: keep the alpha test everywhere except band 2 (single non-overlapping replace; not re-scanned).
+			[s replaceOccurrencesOfString:@"discard;"
+				withString:@"{ if (rcBand != 2) discard; }"
+				options:0 range:NSMakeRange(0, s.length)];
+			// band 3: skip the fog mix (fog is already ~off at fogDepth=0; this is the control for a NaN-fog path).
+			[s replaceOccurrencesOfString:@"vec3 mixedColor = mix(c.rgb, fogColor.rgb, fFogAmount);"
+				withString:@"vec3 mixedColor = (rcBand == 3 ? c.rgb : mix(c.rgb, fogColor.rgb, fFogAmount));"
+				options:0 range:NSMakeRange(0, s.length)];
+		}
+		// "solidtex": ignore the texture COLOUR sample entirely on textured faces (keep discard + lighting).
+		// If the grazing-river flicker VANISHES -> it is the texture colour sampling; if it REMAINS -> the
+		// texture path is fully exonerated (the frame-to-frame change is camera micro-motion on a depth/
+		// geometry artifact, not the animated UVs). STRIP after diagnosis.
+		else if ([[RouteCBridge waterDiagMode] isEqualToString:@"solidtex"])
+		{
+			[s replaceOccurrencesOfString:@"textureColor = vec4(textureColor.rgb, 1.);"
+				withString:@"textureColor = vec4(0.20, 0.42, 0.66, 1.);"
+				options:0 range:NSMakeRange(0, s.length)];
+		}
+		else if ([RouteCBridge waterFixActive])
+		{
+			// WATER-SHIMMER FIX (shader half). The scene colour sample uses implicit-LOD texture(), whose
+			// derivatives are corrupted by the scrolling-alpha discard later in main() -> the mip LOD flickers
+			// at the water's alpha/geometry edges (the thin shoreline shimmer the trilinear GL-state fix alone
+			// can't remove). Sample with textureGrad + explicit gradients computed before the discard so the LOD
+			// is stable. Only the COLOUR sample changes; the discard's textureLod(...,0) is left as-is.
+			[s replaceOccurrencesOfString:@"texture(textures, vec3(fUv, float(textureIdx)))"
+				withString:@"textureGrad(textures, vec3(fUv, float(textureIdx)), dFdx(fUv), dFdy(fUv))"
+				options:0 range:NSMakeRange(0, s.length)];
+		}
+		// DEPTH-PRECISION FIX (fragment half) — applies for the shipping fix AND the "fragdepth" A/B.
+		// Long-distance terrain z-fights because iOS GLES has no glClipControl, so the plugin's reverse-Z
+		// (clip.z = 2*near constant, NDC.z = 100/viewZ) is squeezed into window-z [0.5,~0.55] at distance =
+		// almost no precision. Write the depth directly: gl_FragDepth = clip.z/clip.w, putting the far plane at
+		// window-z 0 (full 32F precision, like desktop's glClipControl). clip.z is carried as a FLAT varying
+		// (it is ~constant per face — the per-vertex bias is a coplanar hack), so clip.z*gl_FragCoord.w equals
+		// the screen-linear depth at ALL angles (the prior gl_FragDepth attempt used a perspective varying ->
+		// wrong at grazing). Depth func stays GL_GREATER + clearDepth 0 (near=1, far=0). Base SOURCE unchanged.
+		if ([RouteCBridge depthFixActive])
+		{
+			[s replaceOccurrencesOfString:@"in float fFogAmount;"
+				withString:@"in float fFogAmount;\nflat in float vClipDepth;"
+				options:0 range:NSMakeRange(0, s.length)];
+			[s replaceOccurrencesOfString:@"FragColor = vec4(mixedColor, c.a);"
+				withString:@"FragColor = vec4(mixedColor, c.a);\n  gl_FragDepth = vClipDepth * gl_FragCoord.w;"
+				options:0 range:NSMakeRange(0, s.length)];
+		}
+	}
+	// DEPTH-PRECISION FIX (scene-vertex half): carry clip.z (= screenPos.z, the reverse-Z 2*near + bias) to
+	// the fragment as a flat varying so it can write gl_FragDepth. Scene vertex only (has gl_Position=screenPos).
+	if (!fragment && [s containsString:@"gl_Position = screenPos;"] && [RouteCBridge depthFixActive])
+	{
+		[s replaceOccurrencesOfString:@"out float fFogAmount;"
+			withString:@"out float fFogAmount;\nflat out float vClipDepth;"
+			options:0 range:NSMakeRange(0, s.length)];
+		[s replaceOccurrencesOfString:@"gl_Position = screenPos;"
+			withString:@"gl_Position = screenPos;\n  vClipDepth = screenPos.z;"
+			options:0 range:NSMakeRange(0, s.length)];
 	}
 
 	// WHITE-FLASH DIAGNOSTIC (one-shot per shader): dump the INPUT (330) + OUTPUT (ES 3.00) shader to

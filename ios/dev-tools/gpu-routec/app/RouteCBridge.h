@@ -50,6 +50,21 @@
 // vertically flipped (GL origin is bottom-left; the display is top-left) and R<->B swizzled, in one row pass.
 + (void)readbackInto:(uint32_t *)dst width:(int)w height:(int)h;
 
+// ---- water-shimmer diagnostic/fix mode (gated by Documents/routec-water-mode.txt; cached once) ----
+// "stripes" = 4-band scene-fragment A/B (fix override OFF so band 0 keeps mips); "baseline" = raw unmodified
+// (fix OFF, mips on); anything else / absent = the shipping fix (drop the broken array mip filter). STRIP
+// with the rest of the water diagnostics once the fix is locked.
++ (NSString *)waterDiagMode;
+// YES unless a raw-diagnostic mode (stripes/baseline/solidtex/depthalways/fragdepth) is selected, i.e. the
+// shipping water-shimmer TEXTURE fix (trilinear minification + anisotropy + textureGrad) should be applied.
++ (BOOL)waterFixActive;
+// YES for the shipping fix AND for the "fragdepth" depth-only A/B: apply the reverse-Z gl_FragDepth depth-
+// precision fix (far-distance z-fighting). Separate from waterFixActive so "fragdepth" isolates depth alone.
++ (BOOL)depthFixActive;
+// YES in the "fix2x" mode: render the 3D scene FBO at 2x and downsample on the composite blit (supersampling
+// AA for the thin far-geometry / grazing-water aliasing the on-pixel-grid render can't resolve). UI stays 1x.
++ (BOOL)superSampleActive;
+
 // ---- shader downport (Route C 2E) ----
 // Rewrite desktop GLSL 330 -> GLSL ES 3.00 (the 5 B1 edits) before glShaderSource. Vertex shaders need the
 // explicit int->float casts ES forbids implicitly; fragment shaders need precision qualifiers.
