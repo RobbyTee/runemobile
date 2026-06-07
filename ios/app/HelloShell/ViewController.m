@@ -131,7 +131,6 @@
 @property (nonatomic, strong) UIImage *chatBtnImg;      // 3051 — idle tab background
 @property (nonatomic, strong) UIImage *chatBtnSelImg;   // 3053 — selected (active) tab
 @property (nonatomic, strong) UIImage *chatBtnNewImg;   // 3055 — tab with unread messages
-@property (nonatomic, strong) UIImage *chatReportImg;   // 3057 — the Report button
 @property (nonatomic, assign) BOOL chatTabsBuilt;
 // Instant selected-highlight after a tap: the engine's tab GRAPHIC sprite (which the snapshot reads for the
 // selected state) only updates on a redraw, so the highlight lagged until the next game interaction. Optimistically
@@ -168,19 +167,13 @@ static NSString * const kKbSentinel = @"​";
 static const int kChatW = 519;
 static const int kChatTabRowH = 23;
 
-// W3 A3 (bigger chat tabs): the native row keeps the OFFICIAL sprite aspect (tab 56:22, report 79:22 — i.e.
-// wide-and-short, NOT the square look of the first pass). Layout: the row width = the chat-panel width (kChatW)
-// scaled by kChatRowScale, and the per-button widths + the row HEIGHT all derive from that single scale so the
-// aspect is exact. kChatRowScale = 1.25 ⇒ "25% bigger" than the panel-width fit. Tunable to the reference look.
-static const CGFloat kChatRowScale = 1.25;
-static const CGFloat kChatSpriteH = 22.0;    // official chat-button sprite height (px) — sets the wide-short aspect
-static const CGFloat kChatTabSpriteW = 56.0; // official tab sprite width (px)
-static const CGFloat kChatReportSpriteW = 79.0; // official Report sprite width (px)
-// 8 native chat buttons: the 7 chat tabs + Report.
-static NSString * const kChatTabNames[8] = { @"All", @"Game", @"Public", @"Private", @"Channel", @"Clan", @"Trade", @"Report" };
-// Whether to recreate the Report button too (vs. letting the 7 tabs fill the whole row). Recreated keeps parity
-// with desktop + covers the engine's own small Report button cleanly.
-static const BOOL kChatShowReport = YES;
+// W3 A3 (native chat tabs, matching the official OSRS-mobile app): 7 tabs (NO Report — the official app doesn't
+// show it in the tab row), each a stone button with the channel name on top and, for the filterable channels, the
+// live filter state ("On"/"Off"/"Filter"/"Hide") below it in the engine's state colour. The 7 tabs span the chat
+// width (kChatW), so each is kChatW/7 wide; the row is taller than the bare sprite to fit the two text lines.
+static const int kChatTabCount = 7;
+static const int kChatTabRowCanvasH = 42;   // 2-line tab height (name + state) in engine-canvas px, ~official
+static NSString * const kChatTabNames[7] = { @"All", @"Game", @"Public", @"Private", @"Channel", @"Clan", @"Trade" };
 
 // OSRS right-click menu geometry, straight from RuneLite's own hit-test (InteractHighlightOverlay
 // .hoveredMenuEntry): the "Choose Option" title strip is 19px, each entry row is 15px. These are fixed
@@ -1064,23 +1057,21 @@ static const CGFloat kMenuWidth       = 210.0;
     }
 }
 
-// Build the 8 native chat buttons (7 tabs + Report) once, as subviews of the game view (above the blit, like the
-// keyboard button) so each consumes its own tap. Sprite-backed, RuneScape-font labels; hidden until the chat is
-// relocated + logged in. updateChatTabs lays them out + states them each tick from the chat snapshot.
+// Build the 7 native chat tab buttons once, as subviews of the game view (above the blit, like the keyboard
+// button) so each consumes its own tap. Sprite-backed, two-line RuneScape-font labels (name + filter state) like
+// the official app; hidden until the chat is relocated + logged in. updateChatTabs lays them out + states them.
 - (void)buildChatTabs {
     self.chatBtnImg    = [self loadAsset:@"chatbtn"];
     self.chatBtnSelImg = [self loadAsset:@"chatbtn-selected"];
     self.chatBtnNewImg = [self loadAsset:@"chatbtn-new"];
-    self.chatReportImg = [self loadAsset:@"chatreport"];
-    self.chatTabButtons = [NSMutableArray arrayWithCapacity:8];
-    for (int i = 0; i < 8; i++) {
+    self.chatTabButtons = [NSMutableArray arrayWithCapacity:kChatTabCount];
+    for (int i = 0; i < kChatTabCount; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
         b.tag = i;
         b.hidden = YES;
         b.adjustsImageWhenHighlighted = NO;
         b.titleLabel.textAlignment = NSTextAlignmentCenter;
-        b.titleLabel.adjustsFontSizeToFitWidth = YES;
-        b.titleLabel.minimumScaleFactor = 0.5;
+        b.titleLabel.numberOfLines = 2;   // channel name + filter state, like the official app
         b.titleLabel.lineBreakMode = NSLineBreakByClipping;
         // The background sprite is pixel-art with rounded ends + a vertical gradient; stretch it with bilinear so
         // the enlarged button reads smooth (the official mobile chat scales these the same way).
@@ -1096,9 +1087,9 @@ static const CGFloat kMenuWidth       = 210.0;
     }
     self.chatTabsBuilt = YES;
     self.optimisticChatTab = -1;
-    [self appendLine:[NSString stringWithFormat:@"[chat] tab buttons built (sprites %@/%@/%@/%@)",
+    [self appendLine:[NSString stringWithFormat:@"[chat] tab buttons built (sprites %@/%@/%@)",
                       self.chatBtnImg ? @"ok" : @"X", self.chatBtnSelImg ? @"ok" : @"X",
-                      self.chatBtnNewImg ? @"ok" : @"X", self.chatReportImg ? @"ok" : @"X"]];
+                      self.chatBtnNewImg ? @"ok" : @"X"]];
 }
 
 // Convert a packed 0xRRGGBB int (the engine widget text colour) to a UIColor; nil for < 0 (unknown).
@@ -1110,18 +1101,10 @@ static UIColor *rgbColor(int rgb) {
                            alpha:1.0];
 }
 
-// Total official-sprite width units across the native chat row (7 tabs + optional Report), for apportioning the
-// scaled row while keeping each button's official width ratio.
-static CGFloat chatRowNatW(void) {
-    return 7 * kChatTabSpriteW + (kChatShowReport ? kChatReportSpriteW : 0);
-}
-
-// The enlarged native chat row's height in ENGINE-CANVAS px (screen-scale independent), so it converts cleanly to
-// the engine's CHATAREA push-down. The row spans (kChatW * kChatRowScale) canvas px across chatRowNatW() sprite
-// units; height = the official sprite height (22) in those units → the exact official wide-short aspect.
+// The native chat tab row height in ENGINE-CANVAS px (screen-scale independent), so it converts cleanly to the
+// engine's CHATAREA push-down. Tall enough for the two text lines (name + filter state).
 static int chatRowCanvasH(void) {
-    CGFloat unit = (kChatW * kChatRowScale) / chatRowNatW();
-    return (int)lround(kChatSpriteH * unit);
+    return kChatTabRowCanvasH;
 }
 
 // Lay out + state the enlarged native chat tabs from the chat snapshot each tick. Mirrors updateChrome: hides
@@ -1147,26 +1130,23 @@ static int chatRowCanvasH(void) {
     CGFloat s = W / (CGFloat)self.renderW;           // canvas px -> screen pt (uniform: render aspect == screen)
     CGFloat rowX = [d[@"chatX"] intValue] * s;
     CGFloat rowY = [d[@"chatY"] intValue] * s;
-    // Aspect-true layout: the row spans (kChatW * kChatRowScale) canvas px across chatRowNatW() sprite-width units;
-    // each button keeps the official 56:22 / 79:22 ratio, so the buttons are wide-and-short like the real ones (not
-    // the square first pass). unit = screen pt per official-sprite px.
-    const int n = kChatShowReport ? 8 : 7;
-    CGFloat unit = (kChatW * kChatRowScale * s) / chatRowNatW();
-    CGFloat tabW = kChatTabSpriteW * unit;
-    CGFloat reportW = kChatReportSpriteW * unit;
-    CGFloat rowH = kChatSpriteH * unit;
-    // Push the engine's message area down past the (now correctly-proportioned) native row AND widen it to the row
-    // width so the scrollback aligns with the bigger buttons. Re-applied each tick so it tracks the scale.
-    [JVMLauncher setEngineChatTabRowHeight:chatRowCanvasH()];
-    [JVMLauncher setEngineChatAreaWidth:(int)lround(kChatW * kChatRowScale)];
-    // Short wide buttons: the label fills most of the height, so a larger font ratio than a tall button.
-    CGFloat fontSize = floor(rowH * 0.62);
-    UIFont *labelFont = [UIFont fontWithName:@"RuneScape" size:fontSize] ?: [UIFont boldSystemFontOfSize:fontSize];
+    // Official-mobile layout: 7 equal-width tabs spanning the chat width (kChatW), two-line content. No over-widening
+    // — the row IS the chat width, so the message area below stays its natural width and aligns.
+    CGFloat rowW = kChatW * s;
+    CGFloat rowH = kChatTabRowCanvasH * s;
+    CGFloat tabW = rowW / kChatTabCount;
+    [JVMLauncher setEngineChatTabRowHeight:kChatTabRowCanvasH];   // push messages below the taller tab row
+    [JVMLauncher setEngineChatAreaWidth:0];                        // chat keeps its natural 519 width
+    // Two text lines: channel name (top) + filter state (bottom). Size both to the row height.
+    CGFloat nameSize = floor(rowH * 0.40);
+    CGFloat stateSize = floor(rowH * 0.34);
+    UIFont *nameFont = [UIFont fontWithName:@"RuneScape" size:nameSize] ?: [UIFont boldSystemFontOfSize:nameSize];
+    UIFont *stateFont = [UIFont fontWithName:@"RuneScape" size:stateSize] ?: [UIFont systemFontOfSize:stateSize];
 
     // Which tab the snapshot reports selected (sprite==SELECTED), then reconcile with the optimistic highlight:
     // hold the just-tapped tab selected until the engine's sprite catches up (snapshot agrees) or a short timeout.
     int snapSel = -1;
-    for (int j = 0; j < (int)tabs.count && j < 7; j++) {
+    for (int j = 0; j < (int)tabs.count && j < kChatTabCount; j++) {
         NSDictionary *tj = [tabs[j] isKindOfClass:[NSDictionary class]] ? tabs[j] : nil;
         if ([tj[@"selected"] boolValue]) { snapSel = j; break; }
     }
@@ -1179,30 +1159,38 @@ static int chatRowCanvasH(void) {
         }
     }
 
-    CGFloat x = rowX;
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < kChatTabCount; i++) {
         UIButton *b = self.chatTabButtons[i];
-        if (i >= n) { b.hidden = YES; continue; }     // report suppressed -> 7 tabs only
-        CGFloat bw = (i == 7) ? reportW : tabW;        // tiled flush (no gap) so it fully covers the engine row
-        b.frame = CGRectMake(floor(x), floor(rowY), ceil(bw), ceil(rowH));
-        x += bw;
+        b.frame = CGRectMake(floor(rowX + i * tabW), floor(rowY), ceil(tabW), ceil(rowH));
 
         NSDictionary *t = (i < (int)tabs.count && [tabs[i] isKindOfClass:[NSDictionary class]]) ? tabs[i] : nil;
         BOOL selected = (i == effSel);
         BOOL hasNew = [t[@"new"] boolValue];
         UIImage *bg = self.chatBtnImg;
-        if (i == 7) bg = self.chatReportImg;          // Report = its own dark-red sprite (no selected/new variant)
-        else if (selected) bg = self.chatBtnSelImg;
+        if (selected) bg = self.chatBtnSelImg;
         else if (hasNew) bg = self.chatBtnNewImg;
         [b setBackgroundImage:bg forState:UIControlStateNormal];
 
-        [b setTitle:kChatTabNames[i] forState:UIControlStateNormal];
-        b.titleLabel.font = labelFont;
-        // Engine's exact per-state label colour; fall back to OSRS off-white / selected-yellow if unknown.
-        UIColor *lc = rgbColor(t ? [t[@"labelColor"] intValue] : -1);
-        if (!lc) lc = selected ? [UIColor colorWithRed:1.0 green:0.94 blue:0.0 alpha:1.0]
-                               : [UIColor colorWithRed:1.0 green:0.97 blue:0.85 alpha:1.0];
-        [b setTitleColor:lc forState:UIControlStateNormal];
+        // Two-line label like the official app: channel name (off-white) on top, filter state ("On"/"Off"/…) below
+        // in the engine's state colour (green for On, etc.). "All" has no filter state -> single line.
+        NSString *name = kChatTabNames[i];
+        NSString *filter = [t[@"filter"] isKindOfClass:[NSString class]] ? t[@"filter"] : @"";
+        UIColor *nameColor = rgbColor(t ? [t[@"labelColor"] intValue] : -1)
+            ?: [UIColor colorWithRed:1.0 green:0.97 blue:0.85 alpha:1.0];
+        NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new];
+        ps.alignment = NSTextAlignmentCenter;
+        ps.lineBreakMode = NSLineBreakByClipping;
+        NSMutableAttributedString *title = [[NSMutableAttributedString alloc] initWithString:name
+            attributes:@{NSFontAttributeName: nameFont, NSForegroundColorAttributeName: nameColor,
+                         NSParagraphStyleAttributeName: ps}];
+        if (filter.length) {
+            UIColor *fc = rgbColor([t[@"filterColor"] intValue]) ?: [UIColor colorWithRed:0.0 green:0.9 blue:0.0 alpha:1.0];
+            [title appendAttributedString:[[NSAttributedString alloc]
+                initWithString:[@"\n" stringByAppendingString:filter]
+                attributes:@{NSFontAttributeName: stateFont, NSForegroundColorAttributeName: fc,
+                             NSParagraphStyleAttributeName: ps}]];
+        }
+        [b setAttributedTitle:title forState:UIControlStateNormal];
         b.hidden = NO;
     }
 }
@@ -1551,14 +1539,14 @@ static int chatRowCanvasH(void) {
     int mmX = self.renderW - MM_W - rightC - m;
     int mmY = topC + m;
 
-    // transparent:NO = opaque chat box (temporary debug aid so the chat dimensions are visible against the scene).
-    [JVMLauncher relocateEngineChatX:chatX y:chatY transparent:NO];
+    // transparent:YES = OSRS-mobile translucent chat (text over the scene, no opaque box) — the official look.
+    [JVMLauncher relocateEngineChatX:chatX y:chatY transparent:YES];
     // W3 A3: the native veneer recreates the tab row BIGGER (engine push-down applied per-tick in updateChatTabs).
     [JVMLauncher relocateEngineMinimapX:mmX y:mmY];
     [JVMLauncher setEngineStonesHidden:YES];   // the native 2-col grid replaces them (no cover patch / gray box)
     // The whole enlarged tab row is UI: a stray tap in it (between native buttons) should be a precise click, not
     // a walk. The native buttons own their taps; this rect just keeps any leak from drawing a walk ring.
-    self.chatHitCanvas = CGRectMake(chatX, chatY, (int)lround(kChatW * kChatRowScale), chatRowCanvasH());
+    self.chatHitCanvas = CGRectMake(chatX, chatY, kChatW, chatRowCanvasH());
     [self appendLine:[NSString stringWithFormat:@"[hud] relocate chat->%d,%d minimap->%d,%d (insets L%d T%d R%d k%.2f)",
                       chatX, chatY, mmX, mmY, leftC, topC, rightC, k]];
 }
