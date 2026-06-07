@@ -1020,6 +1020,22 @@ static const CGFloat kMenuWidth       = 210.0;
         for (UIView *cv in self.stoneCovers) cv.hidden = YES;
         return;
     }
+    // LAYOUT GUARD: the native HUD overlay only works in the Classic resizable layout (PRE_EOC = toplevel 164). If
+    // the in-game OSRS "resizable layout" setting is switched to Modern (OSRS_STRETCH = 165) or anything else, our
+    // tab grid targets widgets that don't exist, so the tab buttons open nothing. Rather than soft-lock the user,
+    // hide the native overlay and un-hide the engine's OWN tab stones so the real game HUD renders + is tappable
+    // (the user can then switch the layout back). Re-engages automatically once back in toplevel 164.
+    int topLevelId = [d[@"topLevelId"] intValue];
+    if (topLevelId != 164) {
+        for (UIButton *btn in self.tabButtons) btn.hidden = YES;
+        for (UIView *cv in self.stoneCovers) cv.hidden = YES;
+        [JVMLauncher setEngineStonesHidden:NO];
+        if (self.framesShown % 120 == 0) {
+            [self appendLine:[NSString stringWithFormat:@"[chrome] unsupported layout topLevel=%d (not 164/Classic) -> native HUD off, engine HUD shown", topLevelId]];
+        }
+        return;
+    }
+    [JVMLauncher setEngineStonesHidden:YES];   // supported Classic layout: the native grid replaces the engine stones
     int active = [d[@"activeTab"] intValue];
 
     // All 14 tabs in ONE 2-column grid at the BOTTOM-RIGHT — the official OSRS-mobile arrangement. The engine
