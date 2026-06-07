@@ -121,7 +121,8 @@
 // readback). nil in CPU/L1 mode. Kept strong so the layer outlives the EGL/EAGL surface that references it.
 @property (nonatomic, strong) CAEAGLLayer *glLayer;
 @property (nonatomic, strong) CAMetalLayer *metalLayer;
-@property (nonatomic, assign) BOOL gpuPresent;
+@property (nonatomic, assign) BOOL gpuPresent;        // direct-present active (skip the CPU-frame blit)
+@property (nonatomic, assign) BOOL gpuPresentArmed;   // ANGLE: window surface ready; flip gpuPresent on first GPU frame
 @property (nonatomic, assign) CGRect chatHitCanvas;
 // Pre-composited tab images (stone background + centred icon) built once from the bundled OSRS sprite assets
 // (stone-inactive/active + icon-0..13). Index = tab index; active/inactive variants. Authentic, crisp, no
@@ -1330,14 +1331,15 @@ static const CGFloat kMenuWidth       = 210.0;
         ml.framebufferOnly = NO;                              // match the proven probe config
         ml.drawableSize = CGSizeMake(renderW, renderH);       // engine canvas px; CA scales to the full-screen frame
         ml.contentsScale = (sh > 0 ? (CGFloat)renderH / sh : 1.0);
-        [self.screen.layer insertSublayer:ml atIndex:0];      // below the chrome subviews (gestures + HUD stay on top)
+        [self.screen.layer insertSublayer:ml atIndex:0];      // below the UIImageView content + chrome subviews
         self.metalLayer = ml;
         [RouteCBridge setPresentLayer:ml];
         if ([RouteCBridge prepareWindowSurfaceOnMain]) {
-            self.gpuPresent = YES;
-            self.screen.image = nil;                          // GL presents directly; UIImageView is just a gesture host
-            self.screen.backgroundColor = [UIColor blackColor];
-            [self appendLine:[NSString stringWithFormat:@"[shell] GPU (MetalANGLE) direct present: CAMetalLayer drawable %dx%d (no readback)", renderW, renderH]];
+            // ARM direct present, but DON'T switch yet: keep blitting CPU frames (boot/login) until the GPU plugin
+            // actually presents its first frame. onDisplayTick flips to direct present once hasPresentedFrame == YES.
+            // This keeps a parked/slow startup showing the login screen instead of a black CAMetalLayer.
+            self.gpuPresentArmed = YES;
+            [self appendLine:[NSString stringWithFormat:@"[shell] GPU (MetalANGLE) direct present ARMED: CAMetalLayer drawable %dx%d (switches in on first GPU frame)", renderW, renderH]];
         } else {
             // window surface bring-up failed -> tear the layer back down and use offscreen + readback.
             [RouteCBridge setPresentLayer:nil];
@@ -1407,6 +1409,15 @@ static const CGFloat kMenuWidth       = 210.0;
 // no disk, no capture budget, so it's smooth and runs for the whole session. Also keeps the app
 // foreground-active+rendering (the jetsam-protection that the §6.2 work established).
 - (void)onDisplayTick {
+    // Lazy switch to direct present: once the GPU plugin has presented its first frame, stop blitting CPU frames and
+    // let the CAMetalLayer (now live) show through. Until then we keep blitting (boot/login/CPU frames stay visible,
+    // and a parked startup shows the login screen rather than a black layer).
+    if (self.gpuPresentArmed && !self.gpuPresent && [RouteCBridge hasPresentedFrame]) {
+        self.gpuPresent = YES;
+        self.screen.image = nil;                     // GL presents directly; UIImageView is just a gesture host
+        self.screen.backgroundColor = [UIColor blackColor];
+        [self appendLine:@"[shell] GPU (MetalANGLE) direct present LIVE (first GPU frame presented)"];
+    }
     if (self.gpuPresent) {
         // GPU direct-present: the engine renders straight into the CAEAGLLayer and presents on its own thread, so
         // there is no per-tick blit here. Keep the tick alive for the heartbeat + native HUD/chrome refresh below.

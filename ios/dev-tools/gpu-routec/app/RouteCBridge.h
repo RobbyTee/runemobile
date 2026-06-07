@@ -35,6 +35,7 @@
 // QuartzCore import in this header; it is a CAEAGLLayer.
 + (void)setPresentLayer:(id)caEaglLayer;
 + (BOOL)isPresenting;     // YES once a present layer is set (swapBuffers should present, not read back)
++ (BOOL)hasPresentedFrame;// YES once >=1 frame has been presented — UI switches CPU-blit -> direct present lazily
 + (void)present;          // EAGL: presentRenderbuffer; ANGLE: eglSwapBuffers
 // ANGLE only: create the EGL display + WINDOW surface from the present layer ON MAIN (the CAMetalLayer's thread),
 // before the render thread's createGLContext. No-op/NO on EAGL or with no present layer. Returns NO -> use readback.

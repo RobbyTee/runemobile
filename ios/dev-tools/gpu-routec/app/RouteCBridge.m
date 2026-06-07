@@ -79,6 +79,11 @@ static uint32_t *sReadback = NULL;   // reusable glReadPixels scratch (sized to 
 // EGL window surface). Stored opaquely so this TU needs no QuartzCore import in the ANGLE build.
 static void *sPresentLayer = NULL;
 
+// Count of frames actually presented to the screen (eglSwapBuffers / presentRenderbuffer). Lets the UI switch from
+// the CPU-frame blit to direct-present LAZILY — only once the GPU plugin has presented a real frame — so a parked/
+// slow startup (or the boot/login phase before the plugin runs) still shows the CPU frames instead of black.
+static long sPresentedFrames = 0;
+
 #if defined(RC_BACKEND_ANGLE)
 // ================================================================================================================
 // MetalANGLE / EGL backend (Phase A1). EGL display+context+surface over ANGLE-on-Metal. Two present modes:
@@ -247,7 +252,7 @@ static BOOL rcBuildFbo(int w, int h)
 
 + (void)present
 {
-	if (sDpy != EGL_NO_DISPLAY && sSurf != EGL_NO_SURFACE) eglSwapBuffers(sDpy, sSurf);
+	if (sDpy != EGL_NO_DISPLAY && sSurf != EGL_NO_SURFACE) { eglSwapBuffers(sDpy, sSurf); sPresentedFrames++; }
 }
 
 + (void)awtDestroy
@@ -267,6 +272,7 @@ static BOOL rcBuildFbo(int w, int h)
 	sFboW = sFboH = 0;
 	sPresentLayer = NULL;
 	sWindowMode = NO;
+	sPresentedFrames = 0;
 }
 
 #else
@@ -354,6 +360,7 @@ static BOOL rcBuildFbo(int w, int h)
 	if (!sCtx || !sColorRbo) return;
 	glBindRenderbuffer(GL_RENDERBUFFER, sColorRbo);
 	[sCtx presentRenderbuffer:GL_RENDERBUFFER];
+	sPresentedFrames++;
 }
 
 + (void)awtDestroy
@@ -364,11 +371,17 @@ static BOOL rcBuildFbo(int w, int h)
 	free(sReadback); sReadback = NULL;
 	sFboW = sFboH = 0;
 	sPresentLayer = NULL;
+	sPresentedFrames = 0;
 	[EAGLContext setCurrentContext:nil];
 	sCtx = nil;
 }
 
 #endif  /* RC_BACKEND_ANGLE */
+
+// ---- present-state (backend-agnostic) ----
+// YES once the GPU plugin has presented at least one frame to the screen. The UI uses this to switch from the
+// CPU-frame blit to direct present LAZILY, so boot/login (and a parked startup) show CPU frames, not black.
++ (BOOL)hasPresentedFrame { return sPresentedFrames > 0; }
 
 // ---- readback (offscreen present path; backend-agnostic — glReadPixels is core) ----
 + (void)readbackInto:(uint32_t *)dst width:(int)w height:(int)h
