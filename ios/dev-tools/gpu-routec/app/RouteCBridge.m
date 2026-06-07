@@ -95,31 +95,36 @@ static EGLConfig  sCfg  = NULL;
 static GLuint sFbo = 0, sColorRbo = 0, sDepthRbo = 0;   // offscreen mode only
 static BOOL sWindowMode = NO;                            // YES once a window surface is created
 
-static BOOL rcEglBringUp(int w, int h)
+// Display + config + surface. Split from context creation so the WINDOW surface can be made on the MAIN thread
+// (where the CAMetalLayer lives + where the de-risk probe proved it works), while the context is created + made
+// current on the render (JVM) thread. `window`=YES uses sPresentLayer (a CAMetalLayer); NO makes a pbuffer.
+static BOOL rcEglPrepareSurface(BOOL window, int w, int h)
 {
-	PFNEGLGETPLATFORMDISPLAYEXTPROC getPlatformDisplay =
-		(PFNEGLGETPLATFORMDISPLAYEXTPROC) eglGetProcAddress("eglGetPlatformDisplayEXT");
-	if (getPlatformDisplay)
+	if (sDpy == EGL_NO_DISPLAY)
 	{
-		EGLint da[] = { EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE, EGL_NONE };
-		sDpy = getPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE, (void *) EGL_DEFAULT_DISPLAY, da);
+		PFNEGLGETPLATFORMDISPLAYEXTPROC getPlatformDisplay =
+			(PFNEGLGETPLATFORMDISPLAYEXTPROC) eglGetProcAddress("eglGetPlatformDisplayEXT");
+		if (getPlatformDisplay)
+		{
+			EGLint da[] = { EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE, EGL_NONE };
+			sDpy = getPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE, (void *) EGL_DEFAULT_DISPLAY, da);
+		}
+		if (sDpy == EGL_NO_DISPLAY) sDpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+		if (sDpy == EGL_NO_DISPLAY) return NO;
+		EGLint vmaj = 0, vmin = 0;
+		if (!eglInitialize(sDpy, &vmaj, &vmin)) return NO;
 	}
-	if (sDpy == EGL_NO_DISPLAY) sDpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-	if (sDpy == EGL_NO_DISPLAY) return NO;
-	EGLint vmaj = 0, vmin = 0;
-	if (!eglInitialize(sDpy, &vmaj, &vmin)) return NO;
-	eglBindAPI(EGL_OPENGL_ES_API);
-
-	sWindowMode = (sPresentLayer != NULL);
+	sWindowMode = window;
 	EGLint cfgAttr[] = {
 		EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
-		EGL_SURFACE_TYPE, sWindowMode ? EGL_WINDOW_BIT : EGL_PBUFFER_BIT,
+		EGL_SURFACE_TYPE, window ? EGL_WINDOW_BIT : EGL_PBUFFER_BIT,
 		EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_DEPTH_SIZE, 24, EGL_NONE };
 	EGLint nc = 0;
 	if (!eglChooseConfig(sDpy, cfgAttr, &sCfg, 1, &nc) || nc < 1) return NO;
 
-	if (sWindowMode)
+	if (window)
 	{
+		if (!sPresentLayer) return NO;
 		sSurf = eglCreateWindowSurface(sDpy, sCfg, (EGLNativeWindowType) sPresentLayer, NULL);
 	}
 	else
@@ -127,13 +132,29 @@ static BOOL rcEglBringUp(int w, int h)
 		EGLint pb[] = { EGL_WIDTH, (w > 0 ? w : 16), EGL_HEIGHT, (h > 0 ? h : 16), EGL_NONE };
 		sSurf = eglCreatePbufferSurface(sDpy, sCfg, pb);
 	}
-	if (sSurf == EGL_NO_SURFACE) return NO;
+	return sSurf != EGL_NO_SURFACE;
+}
 
+// Create the ES3 context + make it current — on the RENDER (JVM) thread (eglBindAPI is per-thread; the context
+// becomes current on the thread that will issue the GL calls).
+static BOOL rcEglCreateContextCurrent(void)
+{
+	eglBindAPI(EGL_OPENGL_ES_API);
 	EGLint ctxAttr[] = { EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 0, EGL_NONE };
 	sCtx = eglCreateContext(sDpy, sCfg, EGL_NO_CONTEXT, ctxAttr);
 	if (sCtx == EGL_NO_CONTEXT) return NO;
-	if (!eglMakeCurrent(sDpy, sSurf, sSurf, sCtx)) return NO;
-	return YES;
+	return eglMakeCurrent(sDpy, sSurf, sSurf, sCtx) ? YES : NO;
+}
+
+// Called on the MAIN thread (from ViewController, before the JVM render thread starts) when a CAMetalLayer present
+// layer is set: bring up the display + window surface NOW so eglCreateWindowSurface runs on main (the proven path).
+// awtCreateGLContext (render thread) then only creates + binds the context. Returns NO -> caller falls back to the
+// offscreen readback path. Safe to call once.
++ (BOOL)prepareWindowSurfaceOnMain
+{
+	if (!sPresentLayer) return NO;
+	if (sSurf != EGL_NO_SURFACE) return YES;   // already prepared
+	return rcEglPrepareSurface(YES, 0, 0);
 }
 
 // Offscreen FBO (RGBA8 COLOR + DEPTH24) — the plugin renders the scene with depth testing, so the AWTContext
@@ -175,7 +196,13 @@ static BOOL rcBuildFbo(int w, int h)
 
 + (BOOL)awtCreateGLContextWidth:(int)w height:(int)h
 {
-	if (!rcEglBringUp(w, h)) { return NO; }
+	// Window mode: the surface was already created on main (prepareWindowSurfaceOnMain). Offscreen mode: make a
+	// pbuffer here on the render thread. Either way, create + bind the context on THIS (render) thread.
+	if (sSurf == EGL_NO_SURFACE)
+	{
+		if (!rcEglPrepareSurface(NO, w, h)) { return NO; }   // offscreen pbuffer
+	}
+	if (!rcEglCreateContextCurrent()) { return NO; }
 	return rcBuildFbo(w, h);
 }
 
@@ -317,6 +344,8 @@ static BOOL rcBuildFbo(int w, int h)
 }
 
 + (void)setPresentLayer:(id)caEaglLayer { sPresentLayer = (__bridge void *) caEaglLayer; }
+
++ (BOOL)prepareWindowSurfaceOnMain { return NO; }   // ANGLE-only; EAGL builds its drawable RBO in rcBuildFbo
 
 + (BOOL)isPresenting { return sPresentLayer != NULL; }
 

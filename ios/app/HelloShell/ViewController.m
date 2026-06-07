@@ -117,8 +117,10 @@
 @property (nonatomic, assign) int renderW;
 @property (nonatomic, assign) int renderH;
 
-// GPU Route C direct present: a CAEAGLLayer the engine renders straight into (no readback). nil in CPU/L1 mode.
+// GPU Route C direct present: a CAEAGLLayer (EAGL) / CAMetalLayer (ANGLE) the engine renders straight into (no
+// readback). nil in CPU/L1 mode. Kept strong so the layer outlives the EGL/EAGL surface that references it.
 @property (nonatomic, strong) CAEAGLLayer *glLayer;
+@property (nonatomic, strong) CAMetalLayer *metalLayer;
 @property (nonatomic, assign) BOOL gpuPresent;
 @property (nonatomic, assign) CGRect chatHitCanvas;
 // Pre-composited tab images (stone background + centred icon) built once from the bundled OSRS sprite assets
@@ -1313,13 +1315,38 @@ static const CGFloat kMenuWidth       = 210.0;
                           gl.bounds.size.width, gl.bounds.size.height, gl.contentsScale, renderW, renderH]];
     }
 #else
-    // Phase A1 (MetalANGLE): default to the OFFSCREEN FBO + glReadPixels readback present — backend-independent and
-    // proven, so the depth-fix (clip_control) + MSAA are validated without depending on the EGL window-surface path
-    // (de-risked separately by the gpu-present probe). No present layer is set -> RouteCBridge runs offscreen and
-    // onDisplayTick blits JavaBridge.latestFrame, exactly like the readback path. (Window-surface direct present is
-    // the next step once gpu-present is green: create a CAMetalLayer + [RouteCBridge setPresentLayer:].)
-    if (self.pendingRouteCGpu) {
-        [self appendLine:@"[shell] GPU (MetalANGLE) — offscreen FBO + readback present (Phase A1 safe default)"];
+    // Phase A1 (MetalANGLE) DIRECT PRESENT: render into an EGL window surface from a CAMetalLayer (no glReadPixels
+    // readback — the ~16ms/frame cap that held the readback path at ~50fps). De-risked + md5-sealed by the
+    // gpu-present probe (window_present/fb_readback/clip_control/msaa all GREEN on device). The CAMetalLayer is
+    // created + sized on main and its EGL WINDOW surface is brought up HERE on main (eglCreateWindowSurface on the
+    // layer's own thread — the proven path) BEFORE the JVM render thread's createGLContext; that thread then only
+    // creates + binds the context. Falls back to the offscreen+readback path if surface bring-up fails. The
+    // no-resize bisection stays on readback.
+    if (self.pendingRouteCGpu && !self.pendingRouteCGpuNoResize) {
+        [self.view layoutIfNeeded];
+        CAMetalLayer *ml = [CAMetalLayer layer];
+        ml.frame = self.screen.bounds;
+        ml.opaque = YES;
+        ml.framebufferOnly = NO;                              // match the proven probe config
+        ml.drawableSize = CGSizeMake(renderW, renderH);       // engine canvas px; CA scales to the full-screen frame
+        ml.contentsScale = (sh > 0 ? (CGFloat)renderH / sh : 1.0);
+        [self.screen.layer insertSublayer:ml atIndex:0];      // below the chrome subviews (gestures + HUD stay on top)
+        self.metalLayer = ml;
+        [RouteCBridge setPresentLayer:ml];
+        if ([RouteCBridge prepareWindowSurfaceOnMain]) {
+            self.gpuPresent = YES;
+            self.screen.image = nil;                          // GL presents directly; UIImageView is just a gesture host
+            self.screen.backgroundColor = [UIColor blackColor];
+            [self appendLine:[NSString stringWithFormat:@"[shell] GPU (MetalANGLE) direct present: CAMetalLayer drawable %dx%d (no readback)", renderW, renderH]];
+        } else {
+            // window surface bring-up failed -> tear the layer back down and use offscreen + readback.
+            [RouteCBridge setPresentLayer:nil];
+            [ml removeFromSuperlayer];
+            self.metalLayer = nil;
+            [self appendLine:@"[shell] GPU (MetalANGLE) window surface FAILED -> offscreen FBO + readback present"];
+        }
+    } else if (self.pendingRouteCGpu) {
+        [self appendLine:@"[shell] GPU (MetalANGLE) — offscreen FBO + readback present (no-resize bisection)"];
     }
 #endif
 
