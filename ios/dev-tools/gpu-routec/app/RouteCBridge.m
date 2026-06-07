@@ -475,21 +475,20 @@ static BOOL rcBuildFbo(int w, int h)
 	NSMutableString *s = [src mutableCopy];
 	NSError *err = nil;
 
-	// 1) version: `#version 330[ core]` -> `#version 300 es`.
-	NSRegularExpression *ver = [NSRegularExpression regularExpressionWithPattern:@"#version\\s+330(\\s+core)?"
+	// 1+2) version + precision. ANGLE's GLSL-ES compiler requires `#version` to be the VERY FIRST line of the
+	//    shader (nothing before it — not even a comment). The base plugin's shaders carry a ~24-line BSD license
+	//    comment BEFORE `#version 330`, which native EAGL GLES tolerated but ANGLE rejects ("#version directive must
+	//    occur on the first line"), cascading into a `layout` syntax error (no version -> ES 1.00). So STRIP any
+	//    `#version` line wherever it sits and PREPEND `#version 300 es` + the precision qualifiers as the absolute
+	//    first bytes (ES fragment shaders have no default float/int/sampler precision; declare before first use).
+	//    The displaced license comment becomes a normal comment after #version, which is legal. Safe for EAGL too.
+	NSRegularExpression *ver = [NSRegularExpression regularExpressionWithPattern:@"(?m)^[ \\t]*#version[^\\n]*\\n?"
 		options:0 error:&err];
-	[ver replaceMatchesInString:s options:0 range:NSMakeRange(0, s.length) withTemplate:@"#version 300 es"];
-
-	// 2) inject precision qualifiers right after the #version line (ES fragment shaders have NO default float/int
-	//    precision; they must be declared before first use).
-	NSString *prec = fragment
-		? @"\nprecision highp float;\nprecision highp int;\nprecision highp sampler2DArray;\nprecision highp sampler2D;\n"
-		: @"\nprecision highp float;\nprecision highp int;\n";
-	NSRange verLine = [s rangeOfString:@"#version 300 es"];
-	if (verLine.location != NSNotFound)
-	{
-		[s insertString:prec atIndex:verLine.location + verLine.length];
-	}
+	[ver replaceMatchesInString:s options:0 range:NSMakeRange(0, s.length) withTemplate:@""];
+	NSString *header = fragment
+		? @"#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2DArray;\nprecision highp sampler2D;\n"
+		: @"#version 300 es\nprecision highp float;\nprecision highp int;\n";
+	[s insertString:header atIndex:0];
 
 	// 3) drop `noperspective` (not in ES).
 	NSRegularExpression *nop = [NSRegularExpression regularExpressionWithPattern:@"\\bnoperspective\\s+"
