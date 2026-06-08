@@ -559,11 +559,59 @@ class MainActivity : AppCompatActivity() {
                 Thread.sleep(1000)
             }
             val seq = try { JvmLauncher.mobileUiSeq() } catch (t: Throwable) { -1L }
-            if (plugins.length > 2) {
-                Log.i(TAG, "ANDROID_A4_SEAM_GREEN listPluginsLen=${plugins.length} mobileUiSeq=$seq")
-            } else {
+            if (plugins.length <= 2) {
                 Log.e(TAG, "ANDROID_A4_SEAM_RED listPlugins empty after 90s (mobileui gate / boot?)")
+                return@onBridge
+            }
+            Log.i(TAG, "ANDROID_A4_SEAM_GREEN listPluginsLen=${plugins.length} mobileUiSeq=$seq")
+
+            // A4 write path: toggle a currently-enabled plugin off->on (restoring it) and confirm the
+            // round-trip. setPluginEnabled queues the start/stop on the EDT, so poll until the flag flips.
+            try {
+                val arr = org.json.JSONArray(plugins)
+                var className: String? = null
+                var was = true
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    if (o.optBoolean("enabled")) { className = o.getString("className"); was = true; break }
+                }
+                if (className == null && arr.length() > 0) {      // fallback: none enabled -> first plugin
+                    className = arr.getJSONObject(0).getString("className")
+                    was = arr.getJSONObject(0).optBoolean("enabled")
+                }
+                if (className == null) { Log.e(TAG, "ANDROID_A4_TOGGLE_RED no plugins to toggle"); return@onBridge }
+                val seq0 = JvmLauncher.mobileUiSeq()
+                val ack = JvmLauncher.setPluginEnabled(className, !was)
+                val flipped = pollEnabled(className, !was, 8)
+                val seq1 = JvmLauncher.mobileUiSeq()
+                JvmLauncher.setPluginEnabled(className, was)       // restore original state
+                val restored = pollEnabled(className, was, 8)
+                if (flipped && restored) {
+                    Log.i(TAG, "ANDROID_A4_TOGGLE_GREEN plugin=$className $was->${!was}->$was seq=$seq0->$seq1 ack=$ack")
+                } else {
+                    Log.e(TAG, "ANDROID_A4_TOGGLE_RED plugin=$className flipped=$flipped restored=$restored ack=$ack")
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "ANDROID_A4_TOGGLE_RED parse/toggle threw: $t")
             }
         }
+    }
+
+    /** Poll listPlugins() until [className]'s enabled flag == [want] (the toggle applies async on the EDT). */
+    private fun pollEnabled(className: String, want: Boolean, secs: Int): Boolean {
+        for (i in 0 until secs * 2) {
+            try {
+                val list = org.json.JSONArray(JvmLauncher.listPlugins())
+                for (j in 0 until list.length()) {
+                    val o = list.getJSONObject(j)
+                    if (o.getString("className") == className) {
+                        if (o.optBoolean("enabled") == want) return true
+                        break
+                    }
+                }
+            } catch (t: Throwable) { /* transient parse/read — retry */ }
+            Thread.sleep(500)
+        }
+        return false
     }
 }

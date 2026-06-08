@@ -20,11 +20,13 @@ else
 	RAW="$(adb logcat -d 2>/dev/null)"
 fi
 
-LINE="$(printf '%s\n' "$RAW" | grep -oE 'ANDROID_A4_SEAM_(GREEN|RED).*' | tail -1 || true)"
-echo "$LINE"
-if printf '%s' "$LINE" | grep -q 'ANDROID_A4_SEAM_GREEN'; then
-	echo "(host pulled the live plugin list across the VM boundary on the rl-bridge thread)"
+SEAM="$(printf '%s\n' "$RAW" | grep -oE 'ANDROID_A4_SEAM_(GREEN|RED).*' | tail -1 || true)"
+TOGGLE="$(printf '%s\n' "$RAW" | grep -oE 'ANDROID_A4_TOGGLE_(GREEN|RED).*' | tail -1 || true)"
+echo "$SEAM"
+echo "$TOGGLE"
+if printf '%s' "$SEAM" | grep -q 'ANDROID_A4_SEAM_GREEN' && printf '%s' "$TOGGLE" | grep -q 'ANDROID_A4_TOGGLE_GREEN'; then
+	echo "A4 control seam GREEN — host READS the plugin list and TOGGLES a plugin (round-trip, restored) across the VM boundary."
 	exit 0
 else
-	echo "ANDROID_A4_SEAM_RED (no GREEN sentinel — check the mobileui gate / boot)"; exit 1
+	echo "A4 seam not fully GREEN (read + toggle round-trip both required)"; exit 1
 fi
