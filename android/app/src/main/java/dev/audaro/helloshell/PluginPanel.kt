@@ -55,7 +55,18 @@ fun PluginPanel(onClose: () -> Unit) {
     var loading by remember { mutableStateOf(true) }
     var filter by remember { mutableStateOf("") }
     var configFor by remember { mutableStateOf<Pair<String, String>?>(null) }   // (configGroup, pluginName)
+    var panelListOpen by remember { mutableStateOf(false) }
+    var panelOpen by remember { mutableStateOf<Pair<Int, String>?>(null) }       // (panelIndex, tooltip)
 
+    val po = panelOpen
+    if (po != null) {
+        PanelView(po.first, po.second, onBack = { panelOpen = null })
+        return
+    }
+    if (panelListOpen) {
+        PanelList(onOpen = { i, t -> panelOpen = i to t }, onBack = { panelListOpen = false })
+        return
+    }
     val cf = configFor
     if (cf != null) {
         ConfigScreen(cf.first, cf.second, onBack = { configFor = null })
@@ -78,6 +89,7 @@ fun PluginPanel(onClose: () -> Unit) {
                     color = Color.White, fontSize = 20.sp, modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.titleLarge,
                 )
+                TextButton(onClick = { panelListOpen = true }) { Text("Panels") }
                 TextButton(onClick = onClose) { Text("Close") }
             }
             OutlinedTextField(
