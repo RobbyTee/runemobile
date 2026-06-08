@@ -29,15 +29,15 @@ adb shell am start -n dev.audaro.helloshell/.MainActivity --ez census true
 ```
 ANDROID_A4_SEAM_GREEN   listPluginsLen=~32300 mobileUiSeq=<n>
 ANDROID_A4_TOGGLE_GREEN plugin=<className> true->false->true seq=<s0>-><s1> ack={"ok":true,"queued":"edt"}
+ANDROID_A4_CONFIG_GREEN group=<group> configLen=<n> writeId=<w>
 ```
-A list length matching the in-VM A-1b figure (~32230) confirms the full list crossed ART↔HotSpot intact; the
-toggle line confirms the **write** path (host flips a plugin's enabled flag, sees it via the flag + the event
-seq advancing, and restores it). Read + toggle both verified.
+Read list + toggle (write, restored) + config-schema read, all across ART↔HotSpot on the rl-bridge thread —
+the complete A4 data plane. (List length ≈ the in-VM A-1b 32230 confirms the full list crossed intact; the
+toggle confirms a write round-trip via the flag + the event seq; the config line confirms the typed schema the
+config UI renders.)
 
 ## Next (this phase, not yet built)
-- **Config write path:** `setConfig`/`resetConfig` + `getPluginConfig`, with `getProcessedWriteId`/
-  `pollMobileUiEvents` acks (`setPluginEnabled` toggle is done above; config is the same pattern).
-- **UI:** a Jetpack Compose plugin list (switches) + a typed config screen (bool→Switch, int/double→field,
+- **UI:** a Jetpack Compose plugin list (switches, calling `setPluginEnabled`) + a typed config screen (bool→Switch, int/double→field,
   enum→picker, color→picker, string→text), parsing the bridge JSON. Plugin Hub (`-Drunelite.hub`, pin
   `runelite.pluginhub.version` to a published rev — the `1.12.29-SNAPSHOT` has none → 404).
 - `flushConfig()` on `onPause`/screen-close (config doesn't persist otherwise).

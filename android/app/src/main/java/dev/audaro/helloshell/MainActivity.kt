@@ -594,6 +594,27 @@ class MainActivity : AppCompatActivity() {
             } catch (t: Throwable) {
                 Log.e(TAG, "ANDROID_A4_TOGGLE_RED parse/toggle threw: $t")
             }
+
+            // A4 config READ surface: pull one plugin's typed config schema across the boundary — this is what
+            // the config UI renders. (setConfig is wired and follows the same EDT write path as the toggle.)
+            try {
+                val arr2 = org.json.JSONArray(JvmLauncher.listPlugins())
+                var group: String? = null
+                for (i in 0 until arr2.length()) {
+                    val o = arr2.getJSONObject(i)
+                    if (o.optBoolean("hasConfig") && !o.isNull("configGroup")) { group = o.getString("configGroup"); break }
+                }
+                if (group != null) {
+                    val cfg = JvmLauncher.getPluginConfig(group)
+                    val wid = JvmLauncher.processedWriteId()
+                    if (cfg.length > 2) Log.i(TAG, "ANDROID_A4_CONFIG_GREEN group=$group configLen=${cfg.length} writeId=$wid")
+                    else Log.e(TAG, "ANDROID_A4_CONFIG_RED group=$group empty schema")
+                } else {
+                    Log.e(TAG, "ANDROID_A4_CONFIG_RED no plugin advertises a config group")
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "ANDROID_A4_CONFIG_RED getPluginConfig threw: $t")
+            }
         }
     }
 

@@ -67,6 +67,7 @@ static jmethodID g_midMenuSnapshot = nullptr, g_midMenuPublishSeq = nullptr;
 // HotSpot via bridgeEnvAttach() — never the ART UI thread (ANR risk). Strings cross the VM boundary as UTF-8.
 static jclass    g_mobileUiCls = nullptr;
 static jmethodID g_midListPlugins = nullptr, g_midMobileUiSeq = nullptr, g_midPollEvents = nullptr, g_midSetPluginEnabled = nullptr;
+static jmethodID g_midGetPluginConfig = nullptr, g_midSetConfig = nullptr, g_midProcessedWriteId = nullptr;
 
 // ---- Surface / render --------------------------------------------------------------------------------
 static std::mutex      g_winLock;
@@ -315,6 +316,14 @@ static bool publishBridge(JNIEnv *env) {
         jmethodID se = env->GetStaticMethodID(mug, "setPluginEnabled", "(Ljava/lang/String;Z)Ljava/lang/String;");
         if (mug && lp && sq && pe && se) {
             g_mobileUiCls = mug; g_midListPlugins = lp; g_midMobileUiSeq = sq; g_midPollEvents = pe; g_midSetPluginEnabled = se;
+            // Config surface (best-effort; a null here disables config read/write only — NOT list/toggle).
+            g_midGetPluginConfig  = env->GetStaticMethodID(mug, "getPluginConfig", "(Ljava/lang/String;)Ljava/lang/String;");
+            g_midSetConfig        = env->GetStaticMethodID(mug, "setConfig", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+            g_midProcessedWriteId = env->GetStaticMethodID(mug, "getProcessedWriteId", "()J");
+            if (!g_midGetPluginConfig || !g_midSetConfig || !g_midProcessedWriteId) {
+                env->ExceptionClear();
+                LOGE("bridge: MobileUiBridge config methods partial (plugin config read/write disabled)");
+            }
             LOGI("bridge: MobileUiBridge facade published");
         } else {
             env->ExceptionClear();
@@ -795,4 +804,38 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeSetPluginEnabled(JNIEnv *artEnv, jo
     if (hid) hs->DeleteLocalRef(hid);
     if (r) hs->DeleteLocalRef(r);
     return artEnv->NewStringUTF(out.c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeGetPluginConfig(JNIEnv *artEnv, jobject, jstring jGroup) {
+    std::string group = jstr(artEnv, jGroup);
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midGetPluginConfig) return artEnv->NewStringUTF("");
+    jstring hg = hs->NewStringUTF(group.c_str());
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midGetPluginConfig, hg);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (hg) hs->DeleteLocalRef(hg);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetConfig(JNIEnv *artEnv, jobject, jstring jGroup, jstring jKey, jstring jValue) {
+    std::string group = jstr(artEnv, jGroup), key = jstr(artEnv, jKey), value = jstr(artEnv, jValue);
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midSetConfig) return artEnv->NewStringUTF("");
+    jstring hg = hs->NewStringUTF(group.c_str()), hk = hs->NewStringUTF(key.c_str()), hv = hs->NewStringUTF(value.c_str());
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midSetConfig, hg, hk, hv);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (hg) hs->DeleteLocalRef(hg);
+    if (hk) hs->DeleteLocalRef(hk);
+    if (hv) hs->DeleteLocalRef(hv);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeProcessedWriteId(JNIEnv *, jobject) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midProcessedWriteId) return -1;
+    jlong v = hs->CallStaticLongMethod(g_mobileUiCls, g_midProcessedWriteId);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); return -1; }
+    return v;
 }

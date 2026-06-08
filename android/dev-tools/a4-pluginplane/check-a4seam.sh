@@ -22,11 +22,15 @@ fi
 
 SEAM="$(printf '%s\n' "$RAW" | grep -oE 'ANDROID_A4_SEAM_(GREEN|RED).*' | tail -1 || true)"
 TOGGLE="$(printf '%s\n' "$RAW" | grep -oE 'ANDROID_A4_TOGGLE_(GREEN|RED).*' | tail -1 || true)"
+CONFIG="$(printf '%s\n' "$RAW" | grep -oE 'ANDROID_A4_CONFIG_(GREEN|RED).*' | tail -1 || true)"
 echo "$SEAM"
 echo "$TOGGLE"
-if printf '%s' "$SEAM" | grep -q 'ANDROID_A4_SEAM_GREEN' && printf '%s' "$TOGGLE" | grep -q 'ANDROID_A4_TOGGLE_GREEN'; then
-	echo "A4 control seam GREEN — host READS the plugin list and TOGGLES a plugin (round-trip, restored) across the VM boundary."
+echo "$CONFIG"
+if printf '%s' "$SEAM" | grep -q 'ANDROID_A4_SEAM_GREEN' \
+	&& printf '%s' "$TOGGLE" | grep -q 'ANDROID_A4_TOGGLE_GREEN' \
+	&& printf '%s' "$CONFIG" | grep -q 'ANDROID_A4_CONFIG_GREEN'; then
+	echo "A4 control seam GREEN — host READS the plugin list, TOGGLES a plugin (round-trip, restored), and READS a plugin's typed config schema, all across the VM boundary."
 	exit 0
 else
-	echo "A4 seam not fully GREEN (read + toggle round-trip both required)"; exit 1
+	echo "A4 seam not fully GREEN (list + toggle + config all required)"; exit 1
 fi
