@@ -120,6 +120,12 @@ public final class HudVeneerBridge
 	// One-shot, applied on the client thread in tick(). -1 = nothing pending.
 	private static volatile int pendingChatTab = -1;
 
+	// Frames left to force a chatbox rebuild after reopening from collapsed. The tab op-replay's own BUILD_CHATBOX
+	// runs before sizeChatArea has laid out the just-un-hidden message area, so the first reopen built the messages
+	// into stale geometry (empty box). Re-run BUILD_CHATBOX a couple of frames AFTER sizing so the lines populate
+	// without needing a second tap. Decremented each open-branch frame.
+	private static volatile int chatReopenRebuild = 0;
+
 	// Chat COLLAPSE: when the user taps the already-active tab, the chat box hides (mobile behaviour); a tap on any
 	// tab reopens it. Driven from native (setChatCollapsed). While collapsed the engine CHAT_CONTAINER is hidden.
 	private static volatile boolean chatCollapsed;
@@ -303,6 +309,7 @@ public final class HudVeneerBridge
 					if (w.isHidden())
 					{
 						w.setHidden(false);   // un-collapse: the box was hidden, bring it back
+						chatReopenRebuild = 2; // re-render the channel's messages once the area is re-laid-out (below)
 					}
 					w.setForcedPosition(chatX, chatY);
 					// Widen the chat CONTAINER to the native row width so its children (the message area) can fill it.
@@ -340,6 +347,19 @@ public final class HudVeneerBridge
 				// height, then pin CHATAREA to ABSOLUTE width=rowW and height=(containerH - rowH - margin) at
 				// container-relative (0, rowH). The display/scroll children are revalidated so they widen too.
 				sizeChatArea(c, chatId, rowW, rowH);
+				// Reopen fix: now that the message area is sized for this frame, force the chat lines to (re)build so a
+				// box reopened from collapsed shows its history on the FIRST tap, not the second.
+				if (chatReopenRebuild > 0)
+				{
+					chatReopenRebuild--;
+					try
+					{
+						c.runScript(ScriptID.BUILD_CHATBOX);
+					}
+					catch (RuntimeException ignore)
+					{
+					}
+				}
 				if (transparentChat)
 				{
 					// Deterministic transparency: hide the brown chatbox background sprites directly (the
