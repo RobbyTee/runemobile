@@ -1556,7 +1556,7 @@ static int chatRowCanvasH(void) {
     // The globe is right-anchored, so it grows left+down within the cluster — the right edge stays at MM_W, so the
     // cluster still aligns to the right safe edge; only the orbs/compass spread further left/down (into the gap
     // between the top-left chat and the top-right minimap). 0/100 = natural size.
-    const int kMinimapScalePct = 130;
+    const int kMinimapScalePct = 100;   // 100 = natural (the engine pins the orbs, so a bigger globe can't be wrapped cleanly)
 
     int chatX = leftC + m;
     int chatY = topC + m;
