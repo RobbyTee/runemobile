@@ -27,11 +27,13 @@ If the verify step says the project isn't "Firebase-enabled", add Firebase to it
 
 ## Run
 ```sh
-# build the APK first (or pass a path as the 2nd arg)
+# login (A0-device): build the main app, then run it on a real device.
 ( cd ../../.. && cd android && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew :app:assembleDebug )
-
 ./fb-gate.sh login     # A0-device — pushed tokens.json -> autologin -> LOGGED_IN, gated by check-loggedin.sh
-./fb-gate.sh recon     # AG0       — GLES tier readout (needs the recon APK; AG0 not built yet)
+
+# recon (AG0, Track G): build the standalone GLES-recon app, then run it on a real device.
+( cd ../../.. && cd android && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew :recon:assembleDebug )
+./fb-gate.sh recon     # AG0 — real GLES tier/extensions/compute readout -> ANDROID_AG0 VERDICT
 ```
 A GREEN run prints the same `ANDROID_LOGGEDIN_GREEN md5=…` sentinel as the emulator — real device, identical gate.
 
