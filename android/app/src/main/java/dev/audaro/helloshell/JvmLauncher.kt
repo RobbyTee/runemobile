@@ -118,6 +118,17 @@ object JvmLauncher {
     external fun nativeSetConfig(group: String, key: String, value: String): String
     external fun nativeProcessedWriteId(): Long
 
+    // A5 Tier-1 plugin panels: a plugin's Swing side-panel rendered off-screen to an ARGB int[] (like the
+    // game blit), pulled here and shown in a zoom/pan view; taps map back via panelClick. Off the UI thread.
+    external fun nativeListPanels(): String
+    external fun nativeOpenPanel(index: Int): String
+    external fun nativeClosePanel(): String
+    external fun nativePanelWidth(): Int
+    external fun nativePanelHeight(): Int
+    external fun nativePanelFrameSeq(): Int
+    external fun nativePanelPixels(): IntArray?
+    external fun nativePanelClick(x: Int, y: Int): String
+
     // Kotlin-friendly aliases.
     fun setEnv(key: String, value: String) = nativeSetEnv(key, value)
     fun setSurface(surface: Surface?) = nativeSetSurface(surface)
@@ -156,4 +167,13 @@ object JvmLauncher {
     fun getPluginConfig(group: String) = nativeGetPluginConfig(group)
     fun setConfig(group: String, key: String, value: String) = nativeSetConfig(group, key, value)
     fun processedWriteId() = nativeProcessedWriteId()
+
+    fun listPanels() = nativeListPanels()
+    fun openPanel(index: Int) = nativeOpenPanel(index)
+    fun closePanel() = nativeClosePanel()
+    fun panelWidth() = nativePanelWidth()
+    fun panelHeight() = nativePanelHeight()
+    fun panelFrameSeq() = nativePanelFrameSeq()
+    fun panelPixels(): IntArray? = nativePanelPixels()
+    fun panelClick(x: Int, y: Int) = nativePanelClick(x, y)
 }

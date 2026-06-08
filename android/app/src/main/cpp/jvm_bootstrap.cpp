@@ -68,6 +68,10 @@ static jmethodID g_midMenuSnapshot = nullptr, g_midMenuPublishSeq = nullptr;
 static jclass    g_mobileUiCls = nullptr;
 static jmethodID g_midListPlugins = nullptr, g_midMobileUiSeq = nullptr, g_midPollEvents = nullptr, g_midSetPluginEnabled = nullptr;
 static jmethodID g_midGetPluginConfig = nullptr, g_midSetConfig = nullptr, g_midProcessedWriteId = nullptr;
+// A5 Tier-1 plugin panels (rendered off-screen under CACIO; the ARGB int[] image is marshalled cross-VM).
+static jmethodID g_midListPanels = nullptr, g_midOpenPanel = nullptr, g_midClosePanel = nullptr,
+                 g_midPanelW = nullptr, g_midPanelH = nullptr, g_midPanelSeq = nullptr,
+                 g_midPanelPixels = nullptr, g_midPanelClick = nullptr;
 
 // ---- Surface / render --------------------------------------------------------------------------------
 static std::mutex      g_winLock;
@@ -323,6 +327,19 @@ static bool publishBridge(JNIEnv *env) {
             if (!g_midGetPluginConfig || !g_midSetConfig || !g_midProcessedWriteId) {
                 env->ExceptionClear();
                 LOGE("bridge: MobileUiBridge config methods partial (plugin config read/write disabled)");
+            }
+            // A5 Tier-1 panel surface (best-effort; a null here disables the rendered-panel fallback only).
+            g_midListPanels  = env->GetStaticMethodID(mug, "listPanels", "()Ljava/lang/String;");
+            g_midOpenPanel   = env->GetStaticMethodID(mug, "openPanel", "(I)Ljava/lang/String;");
+            g_midClosePanel  = env->GetStaticMethodID(mug, "closePanel", "()Ljava/lang/String;");
+            g_midPanelW      = env->GetStaticMethodID(mug, "getPanelWidth", "()I");
+            g_midPanelH      = env->GetStaticMethodID(mug, "getPanelHeight", "()I");
+            g_midPanelSeq    = env->GetStaticMethodID(mug, "getPanelFrameSeq", "()I");
+            g_midPanelPixels = env->GetStaticMethodID(mug, "getPanelPixels", "()[I");
+            g_midPanelClick  = env->GetStaticMethodID(mug, "panelClick", "(II)Ljava/lang/String;");
+            if (!g_midListPanels || !g_midOpenPanel || !g_midPanelPixels) {
+                env->ExceptionClear();
+                LOGE("bridge: MobileUiBridge panel methods partial (Tier-1 panels disabled)");
             }
             LOGI("bridge: MobileUiBridge facade published");
         } else {
@@ -838,4 +855,65 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeProcessedWriteId(JNIEnv *, jobject)
     jlong v = hs->CallStaticLongMethod(g_mobileUiCls, g_midProcessedWriteId);
     if (hs->ExceptionCheck()) { hs->ExceptionClear(); return -1; }
     return v;
+}
+
+// ---- A5 Tier-1 plugin panels (rendered off-screen; the ARGB int[] image is marshalled cross-VM) -------
+// Small helper: call a no-arg String bridge method on g_mobileUiCls and return an ART string.
+static jstring mobileUiStr(JNIEnv *artEnv, jmethodID m) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !m) return artEnv->NewStringUTF("");
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, m);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+static jint mobileUiInt(jmethodID m) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !m) return 0;
+    jint v = hs->CallStaticIntMethod(g_mobileUiCls, m);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); return 0; }
+    return v;
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeListPanels(JNIEnv *artEnv, jobject) { return mobileUiStr(artEnv, g_midListPanels); }
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeClosePanel(JNIEnv *artEnv, jobject) { return mobileUiStr(artEnv, g_midClosePanel); }
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelWidth(JNIEnv *, jobject) { return mobileUiInt(g_midPanelW); }
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelHeight(JNIEnv *, jobject) { return mobileUiInt(g_midPanelH); }
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelFrameSeq(JNIEnv *, jobject) { return mobileUiInt(g_midPanelSeq); }
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOpenPanel(JNIEnv *artEnv, jobject, jint index) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midOpenPanel) return artEnv->NewStringUTF("");
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midOpenPanel, index);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelClick(JNIEnv *artEnv, jobject, jint x, jint y) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midPanelClick) return artEnv->NewStringUTF("");
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midPanelClick, x, y);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+extern "C" JNIEXPORT jintArray JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelPixels(JNIEnv *artEnv, jobject) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midPanelPixels) return nullptr;
+    jintArray src = (jintArray) hs->CallStaticObjectMethod(g_mobileUiCls, g_midPanelPixels);
+    if (hs->ExceptionCheck() || !src) { hs->ExceptionClear(); if (src) hs->DeleteLocalRef(src); return nullptr; }
+    jsize n = hs->GetArrayLength(src);
+    jintArray dst = artEnv->NewIntArray(n);
+    if (dst && n > 0) {
+        jint *buf = hs->GetIntArrayElements(src, nullptr);
+        if (buf) { artEnv->SetIntArrayRegion(dst, 0, n, buf); hs->ReleaseIntArrayElements(src, buf, JNI_ABORT); }
+    }
+    hs->DeleteLocalRef(src);
+    return dst;
 }

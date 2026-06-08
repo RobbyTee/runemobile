@@ -636,6 +636,37 @@ class MainActivity : AppCompatActivity() {
             } catch (t: Throwable) {
                 Log.e(TAG, "ANDROID_A4_CONFIG_RED getPluginConfig threw: $t")
             }
+
+            // A5 Tier-1 panel seam: open a plugin's Swing side-panel off-screen (CACIO) and pull its rendered
+            // ARGB image across the VM boundary — the rendered-image fallback that works for any plugin panel.
+            try {
+                val parr = org.json.JSONArray(JvmLauncher.listPanels())
+                if (parr.length() == 0) {
+                    Log.e(TAG, "ANDROID_A5_SEAM_RED no panels listed (mobileui gate / safe-mode?)")
+                } else {
+                    val p0 = parr.getJSONObject(0)
+                    val idx = p0.optInt("index", 0)
+                    val tip = p0.optString("tooltip", "?")
+                    JvmLauncher.openPanel(idx)
+                    var px: IntArray? = null
+                    var w = 0
+                    var h = 0
+                    for (i in 0 until 30) {
+                        Thread.sleep(500)
+                        w = JvmLauncher.panelWidth(); h = JvmLauncher.panelHeight(); px = JvmLauncher.panelPixels()
+                        if (w > 0 && h > 0 && (px?.size ?: 0) >= w * h) break
+                    }
+                    val n = px?.size ?: 0
+                    if (n > 0 && w > 0 && h > 0) {
+                        Log.i(TAG, "ANDROID_A5_SEAM_GREEN panels=${parr.length()} panel='$tip' ${w}x${h} px=$n seq=${JvmLauncher.panelFrameSeq()}")
+                    } else {
+                        Log.e(TAG, "ANDROID_A5_SEAM_RED panels=${parr.length()} panel='$tip' ${w}x${h} px=$n")
+                    }
+                    JvmLauncher.closePanel()
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "ANDROID_A5_SEAM_RED panel seam threw: $t")
+            }
         }
     }
 
