@@ -76,6 +76,11 @@
 @property (nonatomic, assign) CGFloat menuHapticY;        // last finger Y a snap-haptic fired at (per-row tick)
 @property (nonatomic, assign) CGPoint menuAnchor;         // press point in self.view coords (menu origin)
 @property (nonatomic, assign) BOOL menuHandRight;         // pressed on the right half -> open the menu leftward
+@property (nonatomic, assign) BOOL   menuGeomValid;       // engine menu rect (below) is live this drag
+@property (nonatomic, assign) CGRect menuGeomGame;        // live engine menu bounds, gamepack (765x503) coords
+@property (nonatomic, assign) int    menuSelX;            // where commit clicks on release (game coords)
+@property (nonatomic, assign) int    menuSelY;
+@property (nonatomic, assign) BOOL   menuFingerOnMenu;    // finger over the menu (with grace) -> select; else cancel
 @property (nonatomic, strong) UISelectionFeedbackGenerator *menuHaptic; // light tick when the highlight moves
 // Interactable-tap feedback: a light haptic when a tap grabs a real interactable (polled via JavaBridge
 // interactTapSeq), and a yellow fading click-ring drawn at every tap point (the Jagex-Mobile click marker).
@@ -200,6 +205,12 @@ static NSString * const kChatTabNames[7] = { @"All", @"Game", @"Public", @"Priva
 // matches MenuPeekBridge: row 0 (top) = the left-click default; the bottom row (index count-1) = "Cancel".
 static const int kMenuHeaderPx = 19;
 static const int kMenuRowPx    = 15;
+
+// Press-and-hold drag tolerance (gamepack px). Dragging off the menu's SIDE still selects the row at the
+// finger's height (generous horizontal grace); lifting clearly ABOVE/BELOW the menu reads as cancel (small
+// vertical grace). The cursor is clamped strictly inside the rect regardless, so the menu never auto-closes.
+static const CGFloat kMenuGraceX = 60.0;
+static const CGFloat kMenuGraceY = 6.0;
 
 // Native overlay sizing (compact — much smaller than the first pass): row height, header strip, box width.
 static const CGFloat kMenuRowViewH    = 32.0;
@@ -1782,6 +1793,10 @@ static int chatRowCanvasH(void) {
     [JVMLauncher postClickX:gx y:gy button:3];      // open the engine's OWN right-click menu at the target
     self.menuOpen = YES;
     self.menuOpenAt = CACurrentMediaTime();
+    self.menuGeomValid = NO;                        // no live rect yet; refreshed once the engine builds the menu
+    self.menuFingerOnMenu = YES;                    // release-without-moving picks the row at the press point
+    self.menuSelX = gx; self.menuSelY = gy;
+    self.lastMenuX = gx; self.lastMenuY = gy;
     self.menuHapticY = loc.y;
     self.menuHaptic = [UISelectionFeedbackGenerator new];
     [self.menuHaptic prepare];
@@ -1819,15 +1834,55 @@ static int chatRowCanvasH(void) {
 
 #pragma mark - Right-click menu (drives the engine's own menu)
 
+// Pull the live engine right-click menu bounds from the MenuPeekBridge snapshot (gamepack 765x503 coords).
+// Sets menuGeomValid + menuGeomGame while the engine reports an open menu; clears valid during the brief build
+// window before the menu exists, so the caller falls back to the raw finger point.
+- (void)refreshMenuGeometry {
+    NSString *snap = [JVMLauncher menuPeekSnapshot];
+    if (snap.length == 0) { self.menuGeomValid = NO; return; }
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
+                                                     options:0 error:nil];
+    if (![d isKindOfClass:[NSDictionary class]] || ![d[@"menuOpen"] boolValue]) { self.menuGeomValid = NO; return; }
+    int mw = [d[@"menuW"] intValue], mh = [d[@"menuH"] intValue];
+    if (mw <= 0 || mh <= 0) { self.menuGeomValid = NO; return; }
+    self.menuGeomGame = CGRectMake([d[@"menuX"] intValue], [d[@"menuY"] intValue], mw, mh);
+    self.menuGeomValid = YES;
+}
+
 // Drive the ENGINE menu's highlight: move the engine pointer to the finger so the engine highlights whichever of
-// its OWN rows is under the finger (exactly like a real mouse). A coarse haptic ticks roughly per row of travel.
+// its OWN rows is under it (exactly like a real mouse). CRUCIAL: the OSRS client auto-closes its right-click menu
+// the instant the cursor leaves the menu bounds, so we CLAMP the reported cursor strictly inside the live menu
+// rect — the engine never sees it leave, and the menu stays open until the finger lifts. We separately track the
+// REAL finger spot so commit can tell select (over the menu) from cancel (dragged off). Haptic ticks per row.
 - (void)updateMenuHighlightForPoint:(CGPoint)p {
     if (!self.menuOpen) return;
     int gx = 0, gy = 0;
-    if ([self mapPoint:p toGameX:&gx toGameY:&gy]) {
-        self.lastMenuX = gx; self.lastMenuY = gy;
-        [JVMLauncher postMoveX:gx y:gy];   // engine highlights the row under its pointer
+    if (![self mapPoint:p toGameX:&gx toGameY:&gy]) return;   // letterbox: keep the menu, ignore this move
+
+    [self refreshMenuGeometry];
+
+    int sx = gx, sy = gy;          // where we park the engine cursor (clamped inside the menu)
+    BOOL onMenu = YES;             // does the finger want a row (select) or has it left the menu (cancel)?
+    if (self.menuGeomValid) {
+        CGRect r = self.menuGeomGame;
+        sx = (int)lround(fmin(fmax((CGFloat)gx, CGRectGetMinX(r) + 1), CGRectGetMaxX(r) - 2));
+        sy = (int)lround(fmin(fmax((CGFloat)gy, CGRectGetMinY(r) + 1), CGRectGetMaxY(r) - 2));
+        onMenu = CGRectContainsPoint(CGRectInset(r, -kMenuGraceX, -kMenuGraceY), CGPointMake(gx, gy));
     }
+
+    self.menuFingerOnMenu = onMenu;
+    self.lastMenuX = sx; self.lastMenuY = sy;   // clamped click-through highlight target
+    if (onMenu) {
+        self.menuSelX = sx; self.menuSelY = sy;                       // release here -> select the row under the finger
+    } else if (self.menuGeomValid) {
+        CGRect r = self.menuGeomGame;                                 // dragged off -> release clicks the title strip:
+        self.menuSelX = (int)lround(CGRectGetMidX(r));                // closes the menu with NO action (clean cancel,
+        self.menuSelY = (int)lround(CGRectGetMinY(r)) + 2;            // never a stray world click)
+    } else {
+        self.menuSelX = gx; self.menuSelY = gy;                       // no geometry yet: fall back to the raw point
+    }
+
+    [JVMLauncher postMoveX:sx y:sy];   // engine highlights the row under its (clamped) pointer
     if (fabs(p.y - self.menuHapticY) >= 14.0) {
         self.menuHapticY = p.y;
         [self.menuHaptic selectionChanged];
@@ -1835,20 +1890,27 @@ static int chatRowCanvasH(void) {
     }
 }
 
-// Release: click where the finger is. The engine processes it as a normal menu click — selects the row under the
-// finger, or (off the menu) just closes it. Either way the menu closes, so the camera/world input frees up.
+// Release: click the resolved target. Over the menu -> the row under the finger (select); dragged off -> the menu's
+// title strip (closes with no action = cancel). Either way the menu closes, so camera/world input frees up.
 - (void)commitMenuSelection {
     if (!self.menuOpen) { [self teardownMenuViews]; return; }
-    [JVMLauncher postMenuSelectX:self.lastMenuX y:self.lastMenuY];
-    [self appendLine:[NSString stringWithFormat:@"[shell] menu select @game %d,%d", self.lastMenuX, self.lastMenuY]];
+    [JVMLauncher postMenuSelectX:self.menuSelX y:self.menuSelY];
+    [self appendLine:[NSString stringWithFormat:@"[shell] menu %@ @game %d,%d",
+                      self.menuFingerOnMenu ? @"select" : @"cancel", self.menuSelX, self.menuSelY]];
     self.menuOpen = NO;
     [self teardownMenuViews];
 }
 
-// Gesture interrupted: a click anywhere closes the open engine menu so nothing stays stuck.
+// Gesture interrupted (system took the touch): close the menu with no action so nothing stays stuck — click the
+// title strip if we know the menu rect, else fall back to the last clamped point.
 - (void)cancelMenu {
     if (self.menuOpen) {
-        [JVMLauncher postMenuSelectX:self.lastMenuX y:self.lastMenuY];
+        if (self.menuGeomValid) {
+            CGRect r = self.menuGeomGame;
+            [JVMLauncher postMenuSelectX:(int)lround(CGRectGetMidX(r)) y:(int)lround(CGRectGetMinY(r)) + 2];
+        } else {
+            [JVMLauncher postMenuSelectX:self.lastMenuX y:self.lastMenuY];
+        }
         [self appendLine:@"[shell] right-click menu closed"];
     }
     self.menuOpen = NO;
