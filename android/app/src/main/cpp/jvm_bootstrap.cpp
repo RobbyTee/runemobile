@@ -81,6 +81,19 @@ static jmethodID g_midListPanels = nullptr, g_midOpenPanel = nullptr, g_midClose
 static std::atomic<bool> g_mobileUiReady{false};
 static std::atomic<bool> g_panelReady{false};
 
+// A5 Tier-2 native reflow facades — QuestHelperBridge / WorldSwitcherBridge. Separate classes (like
+// MenuPeekBridge), already init()'d + tick()'d by MobileUiBridge, so live whenever -Drunelite.mobileui=true.
+// Read on the rl-bridge thread, so each gets a release/acquire publication latch like MobileUiBridge (all-or-
+// nothing). NOTE: Quest's isAvailable() is false unless the Quest Helper hub plugin is installed (the native
+// screen then falls back to the Tier-1 rendered panel); the seam still resolves either way.
+static jclass    g_questCls = nullptr;
+static jmethodID g_midQuestAvail = nullptr, g_midQuestSetUiOpen = nullptr, g_midQuestList = nullptr,
+                 g_midQuestActive = nullptr, g_midQuestStart = nullptr, g_midQuestStop = nullptr;
+static jclass    g_worldCls = nullptr;
+static jmethodID g_midWorldAvail = nullptr, g_midWorldSetUiOpen = nullptr, g_midWorldList = nullptr, g_midWorldHop = nullptr;
+static std::atomic<bool> g_questReady{false};
+static std::atomic<bool> g_worldReady{false};
+
 // ---- Surface / render --------------------------------------------------------------------------------
 static std::mutex      g_winLock;
 static ANativeWindow  *g_window = nullptr;     // SurfaceView's window (acquired); guarded by g_winLock
@@ -265,6 +278,8 @@ static JNIEnv *bridgeEnvAttach() {
 // facade isn't published yet (or that sub-surface is incomplete) and the extern returns its empty sentinel.
 static inline bool mobileUiReady() { return g_mobileUiReady.load(std::memory_order_acquire); }
 static inline bool panelReady()    { return g_panelReady.load(std::memory_order_acquire); }
+static inline bool questReady()    { return g_questReady.load(std::memory_order_acquire); }
+static inline bool worldReady()    { return g_worldReady.load(std::memory_order_acquire); }
 
 // Resolve an OPTIONAL static method id, clearing the NoSuchMethodError a miss leaves pending — so a failed
 // lookup can't trip the NEXT JNI call on this thread (the Review-2 MenuPeekBridge pending-exception bug class).
@@ -382,6 +397,63 @@ static bool publishBridge(JNIEnv *env) {
     } else {
         env->ExceptionClear();
         LOGE("bridge: FindClass MobileUiBridge failed (plugin control disabled)");
+    }
+
+    // A5 Tier-2: QuestHelperBridge — separate facade, all-or-nothing, rl-bridge-thread read (release latch).
+    jclass qh = env->FindClass("net/runelite/client/headless/QuestHelperBridge");
+    if (qh && !env->ExceptionCheck()) {
+        jclass qhg = (jclass) env->NewGlobalRef(qh);
+        env->DeleteLocalRef(qh);
+        if (!qhg) {
+            LOGE("bridge: QuestHelperBridge NewGlobalRef failed (Quest Helper reflow disabled)");
+        } else {
+            g_midQuestAvail     = midOpt(env, qhg, "isAvailable", "()Z");
+            g_midQuestSetUiOpen = midOpt(env, qhg, "setUiOpen", "(Z)V");
+            g_midQuestList      = midOpt(env, qhg, "getQuestListJson", "()Ljava/lang/String;");
+            g_midQuestActive    = midOpt(env, qhg, "getQuestActiveJson", "()Ljava/lang/String;");
+            g_midQuestStart     = midOpt(env, qhg, "startQuest", "(Ljava/lang/String;)V");
+            g_midQuestStop      = midOpt(env, qhg, "stopQuest", "()V");
+            bool questOk = g_midQuestAvail && g_midQuestSetUiOpen && g_midQuestList
+                        && g_midQuestActive && g_midQuestStart && g_midQuestStop;
+            if (questOk) {
+                g_questCls = qhg;                                       // before the release-store below
+                g_questReady.store(true, std::memory_order_release);
+                LOGI("bridge: QuestHelperBridge facade published");
+            } else {
+                env->DeleteGlobalRef(qhg);
+                LOGE("bridge: QuestHelperBridge method id failed (Quest Helper reflow disabled)");
+            }
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass QuestHelperBridge failed (Quest Helper reflow disabled)");
+    }
+
+    // A5 Tier-2: WorldSwitcherBridge — separate facade, all-or-nothing, rl-bridge-thread read (release latch).
+    jclass wsb = env->FindClass("net/runelite/client/headless/WorldSwitcherBridge");
+    if (wsb && !env->ExceptionCheck()) {
+        jclass wsg = (jclass) env->NewGlobalRef(wsb);
+        env->DeleteLocalRef(wsb);
+        if (!wsg) {
+            LOGE("bridge: WorldSwitcherBridge NewGlobalRef failed (World Switcher reflow disabled)");
+        } else {
+            g_midWorldAvail     = midOpt(env, wsg, "isAvailable", "()Z");
+            g_midWorldSetUiOpen = midOpt(env, wsg, "setUiOpen", "(Z)V");
+            g_midWorldList      = midOpt(env, wsg, "getWorldListJson", "()Ljava/lang/String;");
+            g_midWorldHop       = midOpt(env, wsg, "hop", "(I)V");
+            bool worldOk = g_midWorldAvail && g_midWorldSetUiOpen && g_midWorldList && g_midWorldHop;
+            if (worldOk) {
+                g_worldCls = wsg;
+                g_worldReady.store(true, std::memory_order_release);
+                LOGI("bridge: WorldSwitcherBridge facade published");
+            } else {
+                env->DeleteGlobalRef(wsg);
+                LOGE("bridge: WorldSwitcherBridge method id failed (World Switcher reflow disabled)");
+            }
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass WorldSwitcherBridge failed (World Switcher reflow disabled)");
     }
     return true;
 }
@@ -980,4 +1052,99 @@ Java_dev_audaro_helloshell_JvmLauncher_nativePanelPixels(JNIEnv *artEnv, jobject
     }
     hs->DeleteLocalRef(src);
     return dst;
+}
+
+// ---- A5 Tier-2 native reflow (QuestHelperBridge / WorldSwitcherBridge) -------------------------------
+// Run on the rl-bridge thread (NOT the UI thread); each gates on its facade's acquire latch, then calls the
+// cached static method on the HotSpot env and marshals the result back into the ART env. Generic by (cls, m)
+// since both facades share the same no-arg String / bool / void(bool) / void(int) call shapes.
+static jstring facadeStr(JNIEnv *artEnv, jclass cls, jmethodID m) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m) return artEnv->NewStringUTF("");
+    jstring r = (jstring) hs->CallStaticObjectMethod(cls, m);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+static jboolean facadeBool(jclass cls, jmethodID m) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m) return JNI_FALSE;
+    jboolean v = hs->CallStaticBooleanMethod(cls, m);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); return JNI_FALSE; }
+    return v;
+}
+static void facadeVoidBool(jclass cls, jmethodID m, jboolean b) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m) return;
+    hs->CallStaticVoidMethod(cls, m, b);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+}
+static void facadeVoidInt(jclass cls, jmethodID m, jint i) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m) return;
+    hs->CallStaticVoidMethod(cls, m, i);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+}
+
+// Quest Helper
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeQuestAvailable(JNIEnv *, jobject) {
+    if (!questReady()) return JNI_FALSE;
+    return facadeBool(g_questCls, g_midQuestAvail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeQuestSetUiOpen(JNIEnv *, jobject, jboolean open) {
+    if (!questReady()) return;
+    facadeVoidBool(g_questCls, g_midQuestSetUiOpen, open);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeQuestListJson(JNIEnv *artEnv, jobject) {
+    if (!questReady()) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_questCls, g_midQuestList);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeQuestActiveJson(JNIEnv *artEnv, jobject) {
+    if (!questReady()) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_questCls, g_midQuestActive);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeQuestStart(JNIEnv *artEnv, jobject, jstring jName) {
+    if (!questReady()) return;
+    std::string name = jstr(artEnv, jName);
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_questCls || !g_midQuestStart) return;
+    jstring hn = hs->NewStringUTF(name.c_str());
+    hs->CallStaticVoidMethod(g_questCls, g_midQuestStart, hn);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+    if (hn) hs->DeleteLocalRef(hn);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeQuestStop(JNIEnv *, jobject) {
+    if (!questReady()) return;
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_questCls || !g_midQuestStop) return;
+    hs->CallStaticVoidMethod(g_questCls, g_midQuestStop);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+}
+
+// World Switcher
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeWorldAvailable(JNIEnv *, jobject) {
+    if (!worldReady()) return JNI_FALSE;
+    return facadeBool(g_worldCls, g_midWorldAvail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeWorldSetUiOpen(JNIEnv *, jobject, jboolean open) {
+    if (!worldReady()) return;
+    facadeVoidBool(g_worldCls, g_midWorldSetUiOpen, open);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeWorldListJson(JNIEnv *artEnv, jobject) {
+    if (!worldReady()) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_worldCls, g_midWorldList);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeWorldHop(JNIEnv *, jobject, jint worldId) {
+    if (!worldReady()) return;
+    facadeVoidInt(g_worldCls, g_midWorldHop, worldId);
 }

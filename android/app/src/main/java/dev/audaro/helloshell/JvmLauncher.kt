@@ -129,6 +129,20 @@ object JvmLauncher {
     external fun nativePanelPixels(): IntArray?
     external fun nativePanelClick(x: Int, y: Int): String
 
+    // A5 Tier-2 native reflow: curated native screens for Quest Helper + World Switcher (QuestHelperBridge /
+    // WorldSwitcherBridge). isAvailable() gates native-vs-Tier-1: Quest is false unless the hub plugin is
+    // installed (→ fall back to the rendered panel); World Switcher is built-in. Off the UI thread (onBridge).
+    external fun nativeQuestAvailable(): Boolean
+    external fun nativeQuestSetUiOpen(open: Boolean)
+    external fun nativeQuestListJson(): String
+    external fun nativeQuestActiveJson(): String
+    external fun nativeQuestStart(questName: String)
+    external fun nativeQuestStop()
+    external fun nativeWorldAvailable(): Boolean
+    external fun nativeWorldSetUiOpen(open: Boolean)
+    external fun nativeWorldListJson(): String
+    external fun nativeWorldHop(worldId: Int)
+
     // Kotlin-friendly aliases.
     fun setEnv(key: String, value: String) = nativeSetEnv(key, value)
     fun setSurface(surface: Surface?) = nativeSetSurface(surface)
@@ -176,4 +190,15 @@ object JvmLauncher {
     fun panelFrameSeq() = nativePanelFrameSeq()
     fun panelPixels(): IntArray? = nativePanelPixels()
     fun panelClick(x: Int, y: Int) = nativePanelClick(x, y)
+
+    fun questAvailable() = nativeQuestAvailable()
+    fun questSetUiOpen(open: Boolean) = nativeQuestSetUiOpen(open)
+    fun questListJson() = nativeQuestListJson()
+    fun questActiveJson() = nativeQuestActiveJson()
+    fun questStart(questName: String) = nativeQuestStart(questName)
+    fun questStop() = nativeQuestStop()
+    fun worldAvailable() = nativeWorldAvailable()
+    fun worldSetUiOpen(open: Boolean) = nativeWorldSetUiOpen(open)
+    fun worldListJson() = nativeWorldListJson()
+    fun worldHop(worldId: Int) = nativeWorldHop(worldId)
 }

@@ -667,6 +667,53 @@ class MainActivity : AppCompatActivity() {
             } catch (t: Throwable) {
                 Log.e(TAG, "ANDROID_A5_SEAM_RED panel seam threw: $t")
             }
+
+            // A5 Tier-2 Quest Helper seam (QuestHelperBridge). isAvailable() is false unless the Quest Helper
+            // hub plugin is installed — BOTH outcomes prove the seam (the native screen falls back to Tier-1
+            // when false). GREEN = the host reached the bridge and got parseable JSON across the boundary.
+            try {
+                val qAvail = JvmLauncher.questAvailable()
+                JvmLauncher.questSetUiOpen(true)
+                var qlist = "{}"
+                for (i in 0 until 20) {
+                    qlist = JvmLauncher.questListJson()
+                    if (qlist.length > 2 && (!qAvail || qlist.contains("\"quests\""))) break
+                    Thread.sleep(500)
+                }
+                val qobj = org.json.JSONObject(qlist)
+                val qListAvail = qobj.optBoolean("available")
+                val qn = qobj.optJSONArray("quests")?.length() ?: 0
+                org.json.JSONObject(JvmLauncher.questActiveJson())   // parse-check the active surface too
+                JvmLauncher.questSetUiOpen(false)
+                Log.i(TAG, "ANDROID_A5_TIER2_QUEST_GREEN available=$qListAvail quests=$qn isAvailable=$qAvail")
+            } catch (t: Throwable) {
+                Log.e(TAG, "ANDROID_A5_TIER2_QUEST_RED quest seam threw: $t")
+            }
+
+            // A5 Tier-2 World Switcher seam (WorldSwitcherBridge). World Switcher is BUILT-IN and we're
+            // LOGGED_IN, so expect available=true with a populated world list (setUiOpen triggers an async
+            // WorldService refresh — poll until it lands). GREEN requires available=true && worlds>0.
+            try {
+                val wFlag = JvmLauncher.worldAvailable()
+                JvmLauncher.worldSetUiOpen(true)
+                var wAvail = false; var wn = 0; var wcur = -1
+                for (i in 0 until 30) {
+                    Thread.sleep(500)
+                    val o = org.json.JSONObject(JvmLauncher.worldListJson())
+                    wAvail = o.optBoolean("available")
+                    wn = o.optJSONArray("worlds")?.length() ?: 0
+                    wcur = o.optInt("current", -1)
+                    if (wAvail && wn > 0) break
+                }
+                JvmLauncher.worldSetUiOpen(false)
+                if (wAvail && wn > 0) {
+                    Log.i(TAG, "ANDROID_A5_TIER2_WORLD_GREEN available=true worlds=$wn current=$wcur")
+                } else {
+                    Log.e(TAG, "ANDROID_A5_TIER2_WORLD_RED available=$wAvail worlds=$wn isAvailable=$wFlag")
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "ANDROID_A5_TIER2_WORLD_RED world seam threw: $t")
+            }
         }
     }
 
