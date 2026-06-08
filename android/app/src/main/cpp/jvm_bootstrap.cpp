@@ -177,6 +177,9 @@ struct BootArgs {
 // The embedded VM writes System.out/err to fd 1/2, which Android drops. Pipe both into logcat so RuneLite
 // (and the Milestone-A Hello) output is visible. Robust against partial setup: closes the spare write fd
 // after dup2 and bails cleanly (no reader-less pipe that could block writers) if anything fails.
+// A8: gated to DEBUG builds (set from Kotlin before startJvm) — a release build must NOT leak the engine's
+// stdout/err (incl. any account/network chatter) to logcat. Defaults true so a missed set keeps dev visibility.
+static std::atomic<bool> g_stdioRedirect{true};
 static int g_stdioReadFd = -1;
 static void *pumpStdio(void *) {
     char buf[1024];
@@ -863,7 +866,7 @@ Java_dev_audaro_helloshell_JvmLauncher_startJvm(
         jstring jClasspath, jstring jMainClass, jobjectArray jExtraOpts) {
 
     if (g_vm.load(std::memory_order_acquire)) { LOGI("startJvm: VM already up (ignoring re-entry)"); return JNI_OK; }
-    redirectStdioToLogcat();
+    if (g_stdioRedirect.load(std::memory_order_acquire)) redirectStdioToLogcat();   // A8: DEBUG builds only
 
     auto *a = new BootArgs();
     a->javaHome    = jstr(artEnv, jJavaHome);
@@ -902,6 +905,12 @@ Java_dev_audaro_helloshell_JvmLauncher_startJvm(
 // HotSpot snapshots at VM startup — so these MUST be set before JNI_CreateJavaVM. setenv mutates the global
 // environ; the boot thread sets them, then startJvm spawns the worker that creates the VM (a happens-before via
 // pthread_create), so the worker sees them. Mirrors the iOS loadJagexTokens setenv path (JVMLauncher.m).
+// A8: DEBUG-only stdout/err->logcat pipe. Set from Kotlin (BuildConfig.DEBUG) BEFORE startJvm.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetStdioRedirect(JNIEnv *, jobject, jboolean enabled) {
+    g_stdioRedirect.store(enabled == JNI_TRUE, std::memory_order_release);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeSetEnv(JNIEnv *env, jobject, jstring jKey, jstring jVal) {
     std::string k = jstr(env, jKey);

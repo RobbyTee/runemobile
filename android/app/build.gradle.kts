@@ -59,6 +59,7 @@ android {
     // PORT-PHASING.md §4.2 hybrid decision).
     buildFeatures {
         compose = true
+        buildConfig = true   // A8: BuildConfig.DEBUG gates dev-only logging (stdio pipe, token PII, ext storage)
     }
 }
 

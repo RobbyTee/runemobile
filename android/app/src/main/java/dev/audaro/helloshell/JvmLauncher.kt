@@ -52,6 +52,10 @@ object JvmLauncher {
      */
     external fun nativeSetEnv(key: String, value: String)
 
+    /** A8: enable/disable piping the embedded VM's stdout/err to logcat. Call BEFORE [startJvm] with
+     *  BuildConfig.DEBUG so a release build never leaks the engine's output (incl. account/network chatter). */
+    external fun nativeSetStdioRedirect(enabled: Boolean)
+
     /** Hand the SurfaceView's surface (or null to clear) to the native render thread for blitting. */
     external fun nativeSetSurface(surface: Surface?)
 
@@ -180,6 +184,7 @@ object JvmLauncher {
 
     // Kotlin-friendly aliases.
     fun setEnv(key: String, value: String) = nativeSetEnv(key, value)
+    fun setStdioRedirect(enabled: Boolean) = nativeSetStdioRedirect(enabled)
     fun setSurface(surface: Surface?) = nativeSetSurface(surface)
     fun click(x: Int, y: Int, button: Int) = nativeClick(x, y, button)
     fun touch(type: Int, x: Int, y: Int, button: Int) = nativeTouch(type, x, y, button)

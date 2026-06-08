@@ -862,6 +862,10 @@ class MainActivity : AppCompatActivity() {
             Log.i(TAG, "A-1b census mode: +huddata + gatecensus (mobileui/mobilechrome/hudveneer/resize always-on)")
         }
 
+        // A8: only pipe the embedded VM's stdout/err to logcat in DEBUG builds — a release build must not leak
+        // the engine's output (account/network chatter). Must be set before startJvm (it redirects fd 1/2 there).
+        JvmLauncher.setStdioRedirect(BuildConfig.DEBUG)
+
         Log.i(TAG, "starting HotSpot: DeviceHeadlessBoot, cp=$classpath")
         val rc = JvmLauncher.startJvm(
             javaHome = javaHome.absolutePath,
