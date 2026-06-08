@@ -164,6 +164,14 @@ object JvmLauncher {
     // the UI thread (via [onBridge]); re-applied by the engine tick.
     external fun nativeRelocateChat(x: Int, y: Int, transparent: Boolean)
 
+    // A3 enlarged native chat-tab veneer. The per-frame chat-tab geometry/state snapshot (escaped JSON: each of
+    // the 7 tabs' canvas bounds + selected/new/filter state) is PUBLISHED by the render thread — read lock-free
+    // from the Choreographer tick (no HotSpot attach). The two setters (off the UI thread) tell the engine to
+    // push the message area below the taller native row (rowH canvas px) / keep its natural width (0).
+    external fun nativeChatSnapshotPub(): String
+    external fun nativeSetChatTabRowHeight(canvasPx: Int)
+    external fun nativeSetChatAreaWidth(canvasPx: Int)
+
     // Kotlin-friendly aliases.
     fun setEnv(key: String, value: String) = nativeSetEnv(key, value)
     fun setSurface(surface: Surface?) = nativeSetSurface(surface)
@@ -228,4 +236,7 @@ object JvmLauncher {
     fun openTab(tabIndex: Int) = nativeOpenTab(tabIndex)
     fun relocateSidePanel(x: Int, y: Int) = nativeRelocateSidePanel(x, y)
     fun relocateChat(x: Int, y: Int, transparent: Boolean) = nativeRelocateChat(x, y, transparent)
+    fun chatSnapshotPub() = nativeChatSnapshotPub()
+    fun setChatTabRowHeight(canvasPx: Int) = nativeSetChatTabRowHeight(canvasPx)
+    fun setChatAreaWidth(canvasPx: Int) = nativeSetChatAreaWidth(canvasPx)
 }

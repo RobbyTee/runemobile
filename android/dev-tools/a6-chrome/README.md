@@ -89,6 +89,15 @@ authoritative (the tab switch is the stone's own op script — no widget moved o
 transparent-chat mode (`relocateChat`, insets→canvas px): the chat tab row (All/Game/Public/… + the report
 timer) sits at the top and the scrollback renders as translucent text over the scene — no opaque box
 (`evidence-chat-top.png`). It is the live engine chat (tabs / scrollback / colours / input all work); the engine
-tick re-applies it so a TOPLEVEL_REDRAW can't undo it. (The enlarged native chat-tab veneer — bigger touch
-targets — is a later A3 refinement; this increment is the relocate + transparency primitive.)
+tick re-applies it so a TOPLEVEL_REDRAW can't undo it.
+
+**Enlarged chat-tab veneer (A3, bigger touch targets).** `ChatTabOverlayView` draws 7 sprite-backed buttons
+(bundled `tabassets/chatbtn*.png`) over the relocated chat's tiny tab row — equal-width, spanning the chat
+width, with two-line RuneScape-font labels (channel name + live filter state, the engine's own colours) read
+from `HudVeneerBridge.getChatSnapshot` each frame (render-thread-published, lock-free). The engine is told
+(`setChatTabRowHeight`) to push its message area below the taller row. A tap proxies a precise click onto the
+LIVE engine button centre (from the snapshot bounds) via `selectMenuPoint` (click + deferred hover-clear, so no
+"Switch tab" tooltip stays parked); an optimistic highlight shows the tapped tab selected instantly until the
+engine sprite catches up (`evidence-chattabs.png`). Emulator GREEN: `ANDROID_A3_CHATTABS_GREEN ... (7 tabs)`; a
+Game-tab tap fired `selectMenuPoint` and the tab flipped to the selected sprite.
 

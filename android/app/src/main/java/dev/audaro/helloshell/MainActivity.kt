@@ -68,6 +68,11 @@ class MainActivity : AppCompatActivity() {
     private var lastChatX = Int.MIN_VALUE           // last chat-at-top relocation sent (send only on change)
     private var lastChatY = Int.MIN_VALUE
 
+    // A3 enlarged native chat-tab veneer (bigger touch targets over the relocated engine chat row).
+    private lateinit var chatTabOverlay: ChatTabOverlayView
+    private var chatTabsLogged = false
+    private var lastChatRowH = Int.MIN_VALUE        // last setChatTabRowHeight sent (send only on change)
+
     // A2 press-and-peek menu state.
     private lateinit var menuOverlay: MenuOverlayView
     private var menuActive = false      // the long-press has claimed this gesture
@@ -126,6 +131,14 @@ class MainActivity : AppCompatActivity() {
             Log.i(TAG, "a6: native tab $idx tap -> openTab")
             JvmLauncher.onBridge { JvmLauncher.openTab(idx) }   // off the UI thread (daemon-attaches to HotSpot)
         }
+        // A3 enlarged native chat-tab veneer: bigger sprite-backed buttons over the relocated engine chat row. A
+        // tap proxies a precise click onto the live engine button centre (selectMenuPoint = click + deferred
+        // hover-clear, so no "Switch tab" tooltip stays parked) — the engine's own chat switching stays live.
+        chatTabOverlay = ChatTabOverlayView(this)
+        chatTabOverlay.onChatTab = { idx, ecx, ecy ->
+            Log.i(TAG, "a3: chat tab $idx tap -> selectMenuPoint($ecx,$ecy)")
+            JvmLauncher.onBridge { JvmLauncher.selectMenuPoint(ecx, ecy) }
+        }
         // A4 plugin UI: a full-screen Compose panel (GONE until opened) + a small launcher button. The panel
         // is a data screen (Compose); the live game overlays above stay classic Views (hybrid, §4.2).
         val pluginPanel = ComposeView(this).apply { visibility = View.GONE }
@@ -169,6 +182,7 @@ class MainActivity : AppCompatActivity() {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
             addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
             addView(chromeOverlay, FrameLayout.LayoutParams(mp, mp))  // native 2-col tab grid (stones hidden)
+            addView(chatTabOverlay, FrameLayout.LayoutParams(mp, mp)) // enlarged native chat-tab row (top-left)
             addView(keyboardView, FrameLayout.LayoutParams(1, 1))
             addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame + chrome
             addView(pluginPanel, FrameLayout.LayoutParams(mp, mp))   // Compose plugin list (GONE until opened)
@@ -457,6 +471,7 @@ class MainActivity : AppCompatActivity() {
 
         val gridOn = supported && chromeOverlay.railsShown
         applyStonesHidden(gridOn)
+        applyChatTabs(gridOn)
         if (gridOn) {
             applySidePanel(o)
             applyChatAtTop()
@@ -467,6 +482,26 @@ class MainActivity : AppCompatActivity() {
         } else {
             releaseSidePanel()
             releaseChat()
+        }
+    }
+
+    /** Drive the enlarged native chat-tab veneer: feed it the published chat snapshot + game→view scale each
+     *  frame, and tell the engine to push its message area below the taller native row ([on]) or restore the 23px
+     *  default ([!on]). The row-height write is sent only on change (off the UI thread). */
+    private fun applyChatTabs(on: Boolean) {
+        val fw = JvmLauncher.frameWidth(); val fh = JvmLauncher.frameHeight()
+        val vw = surfaceView.width; val vh = surfaceView.height
+        val sx = if (fw > 0 && vw > 0) vw.toFloat() / fw else 1f
+        val sy = if (fh > 0 && vh > 0) vh.toFloat() / fh else 1f
+        val n = chatTabOverlay.update(if (on) JvmLauncher.chatSnapshotPub() else "", sx, sy, on)
+        if (on && n > 0 && !chatTabsLogged) {
+            chatTabsLogged = true
+            Log.i(TAG, "ANDROID_A3_CHATTABS_GREEN enlarged native chat-tab row drawn ($n tabs) sx=$sx sy=$sy")
+        }
+        val wantRowH = if (on) ChatTabOverlayView.ROW_H_CANVAS else 0
+        if (wantRowH != lastChatRowH) {
+            lastChatRowH = wantRowH
+            JvmLauncher.onBridge { JvmLauncher.setChatTabRowHeight(wantRowH); JvmLauncher.setChatAreaWidth(0) }
         }
     }
 

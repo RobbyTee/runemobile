@@ -106,6 +106,9 @@ static std::atomic<bool> g_chromeReady{false};
 static jclass    g_hudCls = nullptr;
 static jmethodID g_midSetStonesHidden = nullptr, g_midOpenTab = nullptr, g_midRelocateSidePanel = nullptr;
 static jmethodID g_midRelocateChat = nullptr;
+// A3 enlarged native chat-tab veneer: getChatSnapshot (per-frame tab geometry/state the bigger native buttons
+// read) + setChatTabRowHeight / setChatAreaWidth (tell the engine to push the message area below the taller row).
+static jmethodID g_midChatSnapshot = nullptr, g_midSetChatRowH = nullptr, g_midSetChatAreaW = nullptr;
 static std::atomic<bool> g_hudReady{false};
 
 // ---- Surface / render --------------------------------------------------------------------------------
@@ -141,6 +144,11 @@ static std::atomic<long long> g_menuPublishSeq{-1};
 // pattern as the A2 menu snapshot. MobileChromeBridge has no publish-seq; the JSON is small + rebuilt each tick.
 static std::mutex            g_chromeLock;
 static std::string           g_chromeSnapshotPub = "{\"enabled\":false}";
+
+// A3 chat-tab veneer snapshot, republished every frame by the render thread (HudVeneerBridge.getChatSnapshot)
+// for the UI thread's enlarged native chat-tab overlay to read lock-free without attaching to HotSpot.
+static std::mutex            g_chatLock;
+static std::string           g_chatSnapshotPub = "{\"loggedIn\":false}";
 
 // ---- Input queue (UI thread enqueues; render thread drains and dispatches into the bridge) -----------
 enum InputKind {
@@ -514,7 +522,11 @@ static bool publishBridge(JNIEnv *env) {
             g_midOpenTab           = midOpt(env, hvg, "openTab", "(I)V");
             g_midRelocateSidePanel = midOpt(env, hvg, "relocateSidePanel", "(II)V");
             g_midRelocateChat      = midOpt(env, hvg, "relocateChat", "(IIZ)V");
-            bool hudOk = g_midSetStonesHidden && g_midOpenTab && g_midRelocateSidePanel && g_midRelocateChat;
+            g_midChatSnapshot      = midOpt(env, hvg, "getChatSnapshot", "()Ljava/lang/String;");
+            g_midSetChatRowH       = midOpt(env, hvg, "setChatTabRowHeight", "(I)V");
+            g_midSetChatAreaW      = midOpt(env, hvg, "setChatAreaWidth", "(I)V");
+            bool hudOk = g_midSetStonesHidden && g_midOpenTab && g_midRelocateSidePanel && g_midRelocateChat
+                      && g_midChatSnapshot && g_midSetChatRowH && g_midSetChatAreaW;
             if (hudOk) {
                 g_hudCls = hvg;                                         // before the release-store below
                 g_hudReady.store(true, std::memory_order_release);
@@ -649,6 +661,25 @@ static void *renderLoop(void *) {
                         env->ReleaseStringUTFChars(js, c);
                     } else if (env->ExceptionCheck()) {
                         env->ExceptionClear();   // OOM: don't leave it pending for the next bridge call
+                    }
+                    env->DeleteLocalRef(js);
+                }
+            }
+
+            // A3: republish the chat-tab snapshot each frame (HudVeneerBridge.getChatSnapshot) so the enlarged
+            // native chat-tab overlay reads fresh tab geometry/state lock-free. Small JSON, only populated once
+            // the chat is relocated; cheap per-frame copy. UI reads it via nativeChatSnapshotPub() — no attach.
+            if (g_hudReady.load(std::memory_order_acquire) && g_hudCls && g_midChatSnapshot) {
+                jstring js = (jstring) env->CallStaticObjectMethod(g_hudCls, g_midChatSnapshot);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); }
+                else if (js) {
+                    const char *c = env->GetStringUTFChars(js, nullptr);
+                    if (c) {
+                        std::lock_guard<std::mutex> lk(g_chatLock);
+                        g_chatSnapshotPub.assign(c);
+                        env->ReleaseStringUTFChars(js, c);
+                    } else if (env->ExceptionCheck()) {
+                        env->ExceptionClear();
                     }
                     env->DeleteLocalRef(js);
                 }
@@ -1290,4 +1321,21 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeRelocateChat(JNIEnv *, jobject, jint x, jint y, jboolean transparent) {
     if (!hudReady()) return;
     facadeVoidIntIntBool(g_hudCls, g_midRelocateChat, x, y, transparent);
+}
+// A3 chat-tab veneer: the render-thread-published HudVeneerBridge.getChatSnapshot (UI reads lock-free, no attach)
+// + the two row-size setters (rl-bridge thread) that push the engine message area below the taller native row.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeChatSnapshotPub(JNIEnv *env, jobject) {
+    std::lock_guard<std::mutex> lk(g_chatLock);
+    return env->NewStringUTF(g_chatSnapshotPub.c_str());
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetChatTabRowHeight(JNIEnv *, jobject, jint canvasPx) {
+    if (!hudReady()) return;
+    facadeVoidInt(g_hudCls, g_midSetChatRowH, canvasPx);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetChatAreaWidth(JNIEnv *, jobject, jint canvasPx) {
+    if (!hudReady()) return;
+    facadeVoidInt(g_hudCls, g_midSetChatAreaW, canvasPx);
 }
