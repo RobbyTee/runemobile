@@ -62,7 +62,7 @@ gcloud firebase test android run \
   --device "model=${FB_DEVICE:-shiba},version=${FB_VERSION:-34},locale=en,orientation=portrait" \
   --timeout "${FB_TIMEOUT:-180s}" \
   --results-dir "$RESULTS_DIR" \
-  "${OTHER[@]}" 2>&1 | tee "$GLOG" || true
+  "${OTHER[@]+"${OTHER[@]}"}" 2>&1 | tee "$GLOG" || true   # +-expansion: safe for an empty array under set -u (bash 3.2)
 
 # Find the results path gcloud reported, then pull the device logcat from it. gcloud prints an https CONSOLE
 # url (…/storage/browser/<bucket>/<dir>/), not a gs:// path, so reconstruct gs:// from it if needed.
