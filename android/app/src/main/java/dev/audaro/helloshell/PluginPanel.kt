@@ -1,6 +1,7 @@
 package dev.audaro.helloshell
 
 import android.util.Log
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +40,7 @@ data class PluginRow(
     val name: String,
     val enabled: Boolean,
     val hasConfig: Boolean,
+    val configGroup: String?,
 )
 
 /**
@@ -52,6 +54,13 @@ fun PluginPanel(onClose: () -> Unit) {
     var rows by remember { mutableStateOf<List<PluginRow>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var filter by remember { mutableStateOf("") }
+    var configFor by remember { mutableStateOf<Pair<String, String>?>(null) }   // (configGroup, pluginName)
+
+    val cf = configFor
+    if (cf != null) {
+        ConfigScreen(cf.first, cf.second, onBack = { configFor = null })
+        return
+    }
 
     LaunchedEffect(Unit) {
         // listPlugins() must run off the UI thread + on a HotSpot-attached thread -> the rl-bridge executor.
@@ -82,10 +91,16 @@ fun PluginPanel(onClose: () -> Unit) {
                 val shown = rows.filter { it.name.contains(filter, ignoreCase = true) }
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(shown, key = { it.className }) { p ->
-                        PluginRowItem(p) { checked ->
-                            rows = rows.map { if (it.className == p.className) it.copy(enabled = checked) else it }
-                            JvmLauncher.onBridge { JvmLauncher.setPluginEnabled(p.className, checked) }
-                        }
+                        PluginRowItem(
+                            p,
+                            onToggle = { checked ->
+                                rows = rows.map { if (it.className == p.className) it.copy(enabled = checked) else it }
+                                JvmLauncher.onBridge { JvmLauncher.setPluginEnabled(p.className, checked) }
+                            },
+                            onOpenConfig = if (p.hasConfig && p.configGroup != null) {
+                                { configFor = p.configGroup!! to p.name }
+                            } else null,
+                        )
                         HorizontalDivider(color = Color(0x22FFFFFF))
                     }
                 }
@@ -95,13 +110,17 @@ fun PluginPanel(onClose: () -> Unit) {
 }
 
 @Composable
-private fun PluginRowItem(p: PluginRow, onToggle: (Boolean) -> Unit) {
+private fun PluginRowItem(p: PluginRow, onToggle: (Boolean) -> Unit, onOpenConfig: (() -> Unit)?) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text(p.name, color = Color.White, modifier = Modifier.weight(1f))
+        val nameMod = if (onOpenConfig != null) Modifier.weight(1f).clickable { onOpenConfig() } else Modifier.weight(1f)
+        Row(nameMod, verticalAlignment = Alignment.CenterVertically) {
+            Text(p.name, color = Color.White)
+            if (onOpenConfig != null) Text("  ⚙", color = Color(0xFF9E9E9E))   // tap the name to configure
+        }
         Switch(checked = p.enabled, onCheckedChange = onToggle)
     }
 }
@@ -115,6 +134,7 @@ private fun parsePlugins(json: String): List<PluginRow> = try {
             name = o.optString("name", o.getString("className")),
             enabled = o.optBoolean("enabled"),
             hasConfig = o.optBoolean("hasConfig"),
+            configGroup = if (o.isNull("configGroup")) null else o.optString("configGroup", null),
         )
     }.sortedBy { it.name.lowercase() }
 } catch (t: Throwable) {
