@@ -23,8 +23,13 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.view.Gravity
+import android.view.WindowManager
 import android.widget.Button
+import android.widget.LinearLayout
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.platform.ComposeView
 import org.json.JSONObject
 import java.io.File
@@ -62,6 +67,11 @@ class MainActivity : AppCompatActivity() {
     private var lastSideY = Int.MIN_VALUE
     private var lastChatX = Int.MIN_VALUE           // last chat-at-top relocation sent (send only on change)
     private var lastChatY = Int.MIN_VALUE
+
+    // A3 enlarged native chat-tab veneer (bigger touch targets over the relocated engine chat row).
+    private lateinit var chatTabOverlay: ChatTabOverlayView
+    private var chatTabsLogged = false
+    private var lastChatRowH = Int.MIN_VALUE        // last setChatTabRowHeight sent (send only on change)
 
     // A2 press-and-peek menu state.
     private lateinit var menuOverlay: MenuOverlayView
@@ -121,10 +131,39 @@ class MainActivity : AppCompatActivity() {
             Log.i(TAG, "a6: native tab $idx tap -> openTab")
             JvmLauncher.onBridge { JvmLauncher.openTab(idx) }   // off the UI thread (daemon-attaches to HotSpot)
         }
+        // A3 enlarged native chat-tab veneer: bigger sprite-backed buttons over the relocated engine chat row. A
+        // tap proxies a precise click onto the live engine button centre (selectMenuPoint = click + deferred
+        // hover-clear, so no "Switch tab" tooltip stays parked) — the engine's own chat switching stays live.
+        chatTabOverlay = ChatTabOverlayView(this)
+        chatTabOverlay.onChatTab = { idx, ecx, ecy ->
+            Log.i(TAG, "a3: chat tab $idx tap -> selectMenuPoint($ecx,$ecy)")
+            JvmLauncher.onBridge { JvmLauncher.selectMenuPoint(ecx, ecy) }
+        }
+        // Long-press a chat tab -> the engine's filter menu (On/Filter/Off/Hide), via the shared press-and-peek
+        // overlay. The overlay owns this gesture, so it forwards drag/release here to drive the highlight + commit.
+        chatTabOverlay.onChatTabLongPressBegin = { _, ecx, ecy, vx, vy -> beginChatFilterMenu(ecx, ecy, vx, vy) }
+        chatTabOverlay.onChatTabLongPressMove = { vx, vy ->
+            menuCurX = vx; menuCurY = vy
+            if (menuActive && menuOverlay.isActive) updateMenuHighlight(vx, vy)
+        }
+        chatTabOverlay.onChatTabLongPressEnd = { cancelled ->
+            menuTouchActive = false
+            if (cancelled) { if (menuActive) cancelMenu() }
+            else if (menuOverlay.isActive) commitMenuSelection()
+        }
         // A4 plugin UI: a full-screen Compose panel (GONE until opened) + a small launcher button. The panel
         // is a data screen (Compose); the live game overlays above stay classic Views (hybrid, §4.2).
         val pluginPanel = ComposeView(this).apply { visibility = View.GONE }
-        val pluginButton = Button(this).apply { text = "⚙" }   // gear
+        // Compact, low-profile dev affordances (single-glyph): kill the Material 88dp min width + slim padding so
+        // the three sit in a small bottom-left cluster instead of three chunky buttons across the HUD.
+        fun devButton(glyph: String) = Button(this).apply {
+            text = glyph
+            minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
+            val px = (10 * resources.displayMetrics.density).toInt()
+            setPadding(px, px / 2, px, px / 2)
+            alpha = 0.7f
+        }
+        val pluginButton = devButton("⚙")   // gear
         pluginButton.setOnClickListener {
             pluginPanel.setContent {
                 PluginPanel(onClose = {
@@ -137,32 +176,45 @@ class MainActivity : AppCompatActivity() {
         }
         // A6 A/B: toggle the native grid on/off (▦ = native tab grid + hidden stones; ▤ = raw engine stones).
         // updateChrome re-applies setStonesHidden to match, so flipping this reveals/hides the real stone row.
-        val chromeButton = Button(this).apply { text = "▦" }
+        val chromeButton = devButton("▦")
         chromeButton.setOnClickListener {
             chromeOverlay.setShown(!chromeOverlay.railsShown)
             chromeButton.text = if (chromeOverlay.railsShown) "▦" else "▤"
         }
         // A3: on-device Jagex login / switch account — runs the WebView OAuth, writes tokens.json, restarts.
-        val signInButton = Button(this).apply { text = "⎆" }
+        val signInButton = devButton("⎆")
         signInButton.setOnClickListener { startActivity(Intent(this, LoginActivity::class.java)) }
+        // Group the dev affordances into one discreet cluster pinned to the BOTTOM-LEFT — clear of the relocated
+        // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
+        val devBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(pluginButton); addView(chromeButton); addView(signInButton)
+        }
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
             addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
             addView(chromeOverlay, FrameLayout.LayoutParams(mp, mp))  // native 2-col tab grid (stones hidden)
+            addView(chatTabOverlay, FrameLayout.LayoutParams(mp, mp)) // enlarged native chat-tab row (top-left)
             addView(keyboardView, FrameLayout.LayoutParams(1, 1))
             addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame + chrome
             addView(pluginPanel, FrameLayout.LayoutParams(mp, mp))   // Compose plugin list (GONE until opened)
-            addView(pluginButton, FrameLayout.LayoutParams(
+            addView(devBar, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.END))
-            addView(chromeButton, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.START))
-            addView(signInButton, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+                Gravity.BOTTOM or Gravity.START).apply {
+                    val m = (8 * resources.displayMetrics.density).toInt()
+                    leftMargin = m; bottomMargin = m
+                })
         }
         setContentView(root)
+        // Edge-to-edge + fullscreen immersive: draw under (and hide) the status + nav bars so the game frame fills
+        // the whole screen with no Android time/battery/wifi chrome. Re-asserted in onWindowFocusChanged (a dialog
+        // or the soft keyboard can transiently reveal the bars). Cutout = shortEdges so a landscape notch is drawn
+        // under (safe-area insets still report it, so the chat/grid placement clears it).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        enterImmersive()
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 JvmLauncher.setSurface(holder.surface)
@@ -358,6 +410,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Hide the Android status + navigation bars (sticky immersive) so the game frame is edge-to-edge with no
+     *  system chrome. Transient bars come back on a swipe from the edge, then auto-hide. */
+    private fun enterImmersive() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) enterImmersive()   // re-assert after a dialog / keyboard transiently revealed the bars
+    }
+
     /**
      * Per-frame poll of the engine read-surface: auto-raise/dismiss the soft keyboard when a text field gains/
      * loses focus, and fire a haptic tick when the interact-tap counter advances. Driven by Choreographer so it
@@ -416,6 +483,7 @@ class MainActivity : AppCompatActivity() {
 
         val gridOn = supported && chromeOverlay.railsShown
         applyStonesHidden(gridOn)
+        applyChatTabs(gridOn)
         if (gridOn) {
             applySidePanel(o)
             applyChatAtTop()
@@ -426,6 +494,26 @@ class MainActivity : AppCompatActivity() {
         } else {
             releaseSidePanel()
             releaseChat()
+        }
+    }
+
+    /** Drive the enlarged native chat-tab veneer: feed it the published chat snapshot + game→view scale each
+     *  frame, and tell the engine to push its message area below the taller native row ([on]) or restore the 23px
+     *  default ([!on]). The row-height write is sent only on change (off the UI thread). */
+    private fun applyChatTabs(on: Boolean) {
+        val fw = JvmLauncher.frameWidth(); val fh = JvmLauncher.frameHeight()
+        val vw = surfaceView.width; val vh = surfaceView.height
+        val sx = if (fw > 0 && vw > 0) vw.toFloat() / fw else 1f
+        val sy = if (fh > 0 && vh > 0) vh.toFloat() / fh else 1f
+        val n = chatTabOverlay.update(if (on) JvmLauncher.chatSnapshotPub() else "", sx, sy, on)
+        if (on && n > 0 && !chatTabsLogged) {
+            chatTabsLogged = true
+            Log.i(TAG, "ANDROID_A3_CHATTABS_GREEN enlarged native chat-tab row drawn ($n tabs) sx=$sx sy=$sy")
+        }
+        val wantRowH = if (on) ChatTabOverlayView.ROW_H_CANVAS else 0
+        if (wantRowH != lastChatRowH) {
+            lastChatRowH = wantRowH
+            JvmLauncher.onBridge { JvmLauncher.setChatTabRowHeight(wantRowH); JvmLauncher.setChatAreaWidth(0) }
         }
     }
 
@@ -494,8 +582,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun vibrateTick() {
         val v = vibrator ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            v.vibrate(VibrationEffect.createOneShot(18, VibrationEffect.DEFAULT_AMPLITUDE))
+        // Guard the vibrate: it needs the VIBRATE permission and some devices restrict the vibrator outright — a
+        // SecurityException here must never take down the UI thread (it once did, on the menu-highlight haptic).
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                v.vibrate(VibrationEffect.createOneShot(18, VibrationEffect.DEFAULT_AMPLITUDE))
+            }
+        } catch (e: Exception) {
+            // haptics are best-effort; ignore
         }
     }
 
@@ -516,6 +610,21 @@ class MainActivity : AppCompatActivity() {
         menuOpenAtNanos = System.nanoTime()
         JvmLauncher.click(gx, gy, 3)   // open the engine right-click menu at the finger
         Log.i(TAG, "a2: long-press -> menu open game=($gx,$gy) hand=${if (menuHandRight) "R" else "L"}")
+    }
+
+    /** A3: a native chat-tab long-press opens the engine's filter menu by right-clicking the LIVE engine chat
+     *  button (engine canvas px, from the snapshot) and anchoring the native press-and-peek overlay at the finger
+     *  (view px). Reuses the A2 menu machinery (tryBuildNativeMenu / updateMenuHighlight / commitMenuSelection),
+     *  driven by the chat overlay's long-press callbacks (it owns the gesture). Mirrors the iOS onChatTabLongPress. */
+    private fun beginChatFilterMenu(engineCx: Int, engineCy: Int, viewX: Float, viewY: Float) {
+        if (menuActive) return
+        menuAnchorX = viewX; menuAnchorY = viewY
+        menuCurX = viewX; menuCurY = viewY
+        menuHandRight = viewX > surfaceView.width * 0.5f
+        menuActive = true; menuBuilding = true; menuTouchActive = true; menuHighlight = -1
+        menuOpenAtNanos = System.nanoTime()
+        JvmLauncher.click(engineCx, engineCy, 3)   // right-click the live engine chat button -> its filter menu
+        Log.i(TAG, "a3: chat tab long-press -> filter menu game=($engineCx,$engineCy)")
     }
 
     /** Poll the snapshot (each frame, while building) until the engine menu the long-press opened is reflected. */
