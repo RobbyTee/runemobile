@@ -260,6 +260,8 @@ static jmethodID gMidSetStonesHidden = NULL; // setStonesHidden(Z)V  (A4 — hid
 static jmethodID gMidSetChatRowH = NULL;     // setChatTabRowHeight(I)V  (A3 — bigger native chat tabs)
 static jmethodID gMidSetChatAreaW = NULL;    // setChatAreaWidth(I)V  (A3 — widen message area to align)
 static jmethodID gMidScrollChat = NULL;      // scrollChat(I)V  (A3 — finger-scroll the chat, no wheel/zoom)
+static jmethodID gMidSwitchChatTab = NULL;   // switchChatTab(I)V  (A3 — switch tab via op-replay, hidden tabs)
+static jmethodID gMidSetChatCollapsed = NULL; // setChatCollapsed(Z)V  (A3 — tap active tab hides the chat box)
 static jmethodID gMidGetChatSnap = NULL;     // getChatSnapshot()Ljava/lang/String;  (A3)
 static BOOL ensureVeneer(void) {
     if (gVeneerClass) return YES;
@@ -288,6 +290,8 @@ static BOOL ensureVeneer(void) {
     gMidScrollChat = (*env)->GetStaticMethodID(env, global, "scrollChat", "(I)V");
     gMidGetChatSnap = (*env)->GetStaticMethodID(env, global, "getChatSnapshot", "()Ljava/lang/String;");
     gMidSetMinimapScale = (*env)->GetStaticMethodID(env, global, "setMinimapScale", "(I)V");
+    gMidSwitchChatTab = (*env)->GetStaticMethodID(env, global, "switchChatTab", "(I)V");
+    gMidSetChatCollapsed = (*env)->GetStaticMethodID(env, global, "setChatCollapsed", "(Z)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
     gMidSetChatHidden = m;
     gMidRelocateChat = r;
@@ -1170,6 +1174,20 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureVeneer() || !gMidScrollChat) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidScrollChat, (jint)deltaCanvasPx);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)switchEngineChatTab:(int)index {
+    if (!ensureVeneer() || !gMidSwitchChatTab) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSwitchChatTab, (jint)index);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)setEngineChatCollapsed:(BOOL)collapsed {
+    if (!ensureVeneer() || !gMidSetChatCollapsed) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetChatCollapsed, (jboolean)(collapsed ? JNI_TRUE : JNI_FALSE));
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 

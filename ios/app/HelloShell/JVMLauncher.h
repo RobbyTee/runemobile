@@ -163,6 +163,14 @@ typedef void (^JVMLogSink)(NSString *line);
 /// scroll layer — NOT a mouse wheel (a wheel over the transparent chat also zooms the camera). Main thread.
 + (void)scrollEngineChat:(int)deltaCanvasPx;
 
+/// W3 A3: switch the chat to tab `index` by replaying its op-script (works while the engine tab sprite is hidden,
+/// so the native tab row can fully replace the engine's). No-op on an older jar. Main thread.
++ (void)switchEngineChatTab:(int)index;
+
+/// W3 A3: collapse (hide) or expand the engine chat box — tapping the active native tab collapses it (OSRS-mobile
+/// behaviour), tapping any tab reopens it. The native tab row stays visible either way. Main thread.
++ (void)setEngineChatCollapsed:(BOOL)collapsed;
+
 /// W3 A3 (bigger chat tabs): live per-tab chat geometry/state (escaped JSON) the native enlarged tab veneer reads
 /// each tick — per-tab canvas bounds, selected/new-message flags, and the filter sub-label text + colour. Returns
 /// nil until the chat is relocated + logged in. Main thread.

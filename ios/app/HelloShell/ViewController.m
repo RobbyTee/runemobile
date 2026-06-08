@@ -71,7 +71,9 @@
 @property (nonatomic, assign) NSTimeInterval menuOpenAt;  // when the right-click fired (build timeout)
 @property (nonatomic, strong) UIView *menuContainer;      // the native OSRS-styled menu box
 @property (nonatomic, strong) NSMutableArray<UIView *> *menuRows; // the row views (index 0 = top = default)
+@property (nonatomic, strong) NSArray *menuRowEntries;    // the entry dicts, for re-rendering a row on hover
 @property (nonatomic, assign) int  menuHighlight;         // currently locked-on display row (-1 = none/header)
+@property (nonatomic, assign) CGFloat menuHapticY;        // last finger Y a snap-haptic fired at (per-row tick)
 @property (nonatomic, assign) CGPoint menuAnchor;         // press point in self.view coords (menu origin)
 @property (nonatomic, assign) BOOL menuHandRight;         // pressed on the right half -> open the menu leftward
 @property (nonatomic, strong) UISelectionFeedbackGenerator *menuHaptic; // light tick when the highlight moves
@@ -144,6 +146,10 @@
 // mark the tapped tab selected and hold it until the snapshot agrees (or a short timeout). -1 = none.
 @property (nonatomic, assign) NSInteger optimisticChatTab;
 @property (nonatomic, assign) CFTimeInterval optimisticChatAt;
+// Chat collapse (mobile): the currently-shown selected tab (-1 = none/collapsed), and whether the chat box is
+// collapsed. Tapping the active tab collapses the box; tapping any tab reopens it.
+@property (nonatomic, assign) NSInteger chatActiveTab;
+@property (nonatomic, assign) BOOL chatCollapsed;
 // Phase-6 native plugin panel: a ⚙ button opens a full-screen modal sheet (scrim eats all touches so nothing
 // falls through to the game) listing the plugins (MobileUiBridge.listPlugins) with an enable/disable switch
 // and a running/stopped indicator. Refreshed when the bridge's event sequence advances (toggles, conflicts).
@@ -1099,6 +1105,7 @@ static const CGFloat kMenuWidth       = 210.0;
     }
     self.chatTabsBuilt = YES;
     self.optimisticChatTab = -1;
+    self.chatActiveTab = -1;
     [self appendLine:[NSString stringWithFormat:@"[chat] tab buttons built (sprites %@/%@/%@)",
                       self.chatBtnImg ? @"ok" : @"X", self.chatBtnSelImg ? @"ok" : @"X",
                       self.chatBtnNewImg ? @"ok" : @"X"]];
@@ -1137,7 +1144,7 @@ static int chatRowCanvasH(void) {
     if ([d[@"topLevelId"] intValue] != 164) { [self hideChatTabs]; return; }
     NSArray *tabs = [d[@"tabs"] isKindOfClass:[NSArray class]] ? d[@"tabs"] : nil;
     if (tabs.count == 0) { [self hideChatTabs]; return; }
-    self.chatScrollable = YES;   // chat is open + supported -> finger-scroll allowed
+    self.chatScrollable = !self.chatCollapsed;   // chat open + supported -> finger-scroll (off while collapsed)
 
     CGFloat W = self.view.bounds.size.width;
     CGFloat s = W / (CGFloat)self.renderW;           // canvas px -> screen pt (uniform: render aspect == screen)
@@ -1173,6 +1180,8 @@ static int chatRowCanvasH(void) {
             effSel = (int)self.optimisticChatTab;   // hold the instant highlight until it does
         }
     }
+    if (self.chatCollapsed) { effSel = -1; }   // collapsed -> no tab highlighted (box is hidden)
+    self.chatActiveTab = effSel;               // remember it: a tap on this tab collapses the box
 
     for (int i = 0; i < kChatTabCount; i++) {
         UIButton *b = self.chatTabButtons[i];
@@ -1237,28 +1246,36 @@ static int chatRowCanvasH(void) {
     return YES;
 }
 
-// A native chat-tab tap -> proxy a PRECISE left click onto the live engine button centre. The engine's CONTROLS
-// row stays shown underneath (covered by the bigger native row), so the click switches the chat filter / opens
-// Report exactly as a tap on the real button would. Clear the parked hover afterwards so the engine doesn't leave
-// the "Switch tab" action tooltip stuck under the button (and at the top-left action text).
+// A native chat-tab tap -> switch the chat to that tab. The engine tab sprites are HIDDEN (so they don't peek under
+// this bigger native row), which makes them unclickable, so we REPLAY the tab's op-script (works on hidden widgets)
+// the same way the bottom tab-grid drives the hidden tab stones — NOT a proxy click (a click leaks through to the
+// chat/scene behind the hidden tab).
 - (void)onChatTabButton:(UIButton *)b {
     if (![JVMLauncher bridgeReady]) return;
-    int cx = 0, cy = 0;
-    if (![self engineChatButtonCenterForTag:b.tag x:&cx y:&cy]) return;
-    // postMenuSelect = precise left click THEN clear the hover one cycle AFTER (the ordered chain in
-    // selectMenuPoint). A plain precise-click-then-clearHover doesn't work: onClickPrecise clicks across two
-    // cycles, so an immediate clearHover runs before the click and the click re-hovers the tab — leaving the
-    // "Switch tab" action label/tooltip parked. This switches the tab AND leaves no parked tooltip.
-    [JVMLauncher postMenuSelectX:cx y:cy];
+    if (!self.chatCollapsed && b.tag == self.chatActiveTab && b.tag < 7) {
+        // Tapping the already-active tab COLLAPSES the chat box (OSRS-mobile behaviour) — the native tab row stays
+        // so a tap reopens it. No op-replay (that would re-render the box the engine still has shown).
+        self.chatCollapsed = YES;
+        [JVMLauncher setEngineChatCollapsed:YES];
+        [self updateChatTabs];
+        [self appendLine:[NSString stringWithFormat:@"[chat] tab %ld (%@) -> collapse", (long)b.tag, kChatTabNames[b.tag]]];
+        return;
+    }
+    // Switch to the tapped tab (reopening the box if it was collapsed) by replaying its op-script.
+    if (self.chatCollapsed) {
+        self.chatCollapsed = NO;
+        [JVMLauncher setEngineChatCollapsed:NO];
+    }
+    [JVMLauncher switchEngineChatTab:(int)b.tag];
     // Instant highlight: the tapped tab is now the active view; show it selected immediately (the engine's own tab
     // sprite, which the snapshot reads, only updates on a redraw). Report (tag 7) doesn't change the selection.
     if (b.tag < 7) {
         self.optimisticChatTab = b.tag;
         self.optimisticChatAt = CACurrentMediaTime();
-        [self updateChatTabs];   // reflect the new selection this frame, don't wait for the next 10Hz tick
     }
-    [self appendLine:[NSString stringWithFormat:@"[chat] tab %ld (%@) -> precise click %d,%d",
-                      (long)b.tag, kChatTabNames[b.tag], cx, cy]];
+    [self updateChatTabs];   // reflect the new selection this frame, don't wait for the next 10Hz tick
+    [self appendLine:[NSString stringWithFormat:@"[chat] tab %ld (%@) -> op-replay switch",
+                      (long)b.tag, kChatTabNames[b.tag]]];
 }
 
 // A native chat-tab LONG-PRESS -> right-click the live engine button so the engine opens its filter menu
@@ -1279,16 +1296,14 @@ static int chatRowCanvasH(void) {
             break;
         }
         case UIGestureRecognizerStateChanged:
-            if (self.menuContainer) [self updateMenuHighlightForPoint:loc];
+            [self updateMenuHighlightForPoint:[g locationInView:self.screen]];
             break;
         case UIGestureRecognizerStateEnded:
-            self.menuTouchActive = NO;
-            if (self.menuContainer) [self commitMenuSelection];
+            [self commitMenuSelection];
             break;
         case UIGestureRecognizerStateCancelled:
         case UIGestureRecognizerStateFailed:
-            self.menuTouchActive = NO;
-            if (self.menuContainer) [self cancelMenu];
+            [self cancelMenu];
             break;
         default:
             break;
@@ -1646,11 +1661,6 @@ static int chatRowCanvasH(void) {
         }
     }
 
-    // Native right-click menu: once the engine menu a long-press opened lands in the peek snapshot, build the
-    // big-row overlay over it (then tap-to-pick). Polled every tick while pending — settles within ~1-2 frames.
-    if (self.menuBuilding) {
-        [self tryBuildNativeMenu];
-    }
 
     // Interactable-tap feedback: when the engine resolved a tap to a real interactable it bumps the counter —
     // give a light buzz (the "you grabbed something" feel) and draw a RED click ring. A plain walk doesn't bump,
@@ -1769,45 +1779,37 @@ static int chatRowCanvasH(void) {
     if (self.menuOpen) [self teardownMenuViews];   // re-press: drop a stale menu, open fresh
     self.lastMenuX = gx; self.lastMenuY = gy;
     self.menuAnchor = loc;
-    self.menuHandRight = (loc.x > self.view.bounds.size.width * 0.5);  // right half -> right hand
-    [JVMLauncher postClickX:gx y:gy button:3];      // open the engine right-click menu at the target
+    [JVMLauncher postClickX:gx y:gy button:3];      // open the engine's OWN right-click menu at the target
     self.menuOpen = YES;
-    self.menuBuilding = YES;
-    self.menuTouchActive = YES;
-    self.menuHighlight = -1;
     self.menuOpenAt = CACurrentMediaTime();
+    self.menuHapticY = loc.y;
     self.menuHaptic = [UISelectionFeedbackGenerator new];
     [self.menuHaptic prepare];
 }
 
 - (void)onLongPress:(UILongPressGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady]) return;
-    CGPoint loc = [g locationInView:self.view];
+    CGPoint loc = [g locationInView:self.screen];
 
     switch (g.state) {
         case UIGestureRecognizerStateBegan: {
             int gx = 0, gy = 0;
-            if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return; // letterbox
+            if (![self mapPoint:loc toGameX:&gx toGameY:&gy]) return; // letterbox
             [self openEngineMenuAtGameX:gx gameY:gy anchor:loc];
-            [self appendLine:[NSString stringWithFormat:@"[shell] long-press -> menu open(R) game %d,%d hand=%@",
-                              gx, gy, self.menuHandRight ? @"R" : @"L"]];
+            [self appendLine:[NSString stringWithFormat:@"[shell] long-press -> engine menu @game %d,%d", gx, gy]];
             break;
         }
         case UIGestureRecognizerStateChanged:
-            if (self.menuContainer) [self updateMenuHighlightForPoint:loc];
+            [self updateMenuHighlightForPoint:loc];   // move the engine pointer to the finger -> highlight
             break;
 
         case UIGestureRecognizerStateEnded:
-            self.menuTouchActive = NO;
-            if (self.menuContainer) [self commitMenuSelection];   // pick the locked-on row (or cancel if none)
-            // If the menu hasn't built yet (very quick release), tryBuildNativeMenu sees menuTouchActive==NO
-            // and cancels it cleanly once it does build.
+            [self commitMenuSelection];               // click under the finger -> select (or close if off-menu)
             break;
 
         case UIGestureRecognizerStateCancelled:
         case UIGestureRecognizerStateFailed:
-            self.menuTouchActive = NO;
-            if (self.menuContainer) [self cancelMenu];
+            [self cancelMenu];                        // any click closes the open engine menu (camera recovers)
             break;
 
         default:
@@ -1815,172 +1817,49 @@ static int chatRowCanvasH(void) {
     }
 }
 
-#pragma mark - Native mobile right-click menu
+#pragma mark - Right-click menu (drives the engine's own menu)
 
-// Poll the MenuPeekBridge snapshot (from onDisplayTick while menuBuilding) until the engine menu the
-// long-press opened is reflected, then present the native overlay. Times out if the right-click produced no
-// menu (nothing under the finger). Reads only — never invokes.
-- (void)tryBuildNativeMenu {
-    NSString *snap = [JVMLauncher menuPeekSnapshot];
-    NSDictionary *d = snap.length
-        ? [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil]
-        : nil;
-    BOOL ready = [d isKindOfClass:[NSDictionary class]]
-        && [d[@"loggedIn"] boolValue] && [d[@"menuOpen"] boolValue]
-        && [d[@"count"] intValue] > 0
-        && [d[@"entries"] isKindOfClass:[NSArray class]] && [(NSArray *)d[@"entries"] count] > 0;
-    if (ready) {
-        self.menuBuilding = NO;
-        [self presentNativeMenu:d];
-        if (!self.menuTouchActive) {
-            [self cancelMenu];   // finger lifted before the menu built — close the engine menu, show nothing
-        }
-        return;
-    }
-    if (CACurrentMediaTime() - self.menuOpenAt > 1.0) {
-        self.menuBuilding = NO;
-        self.menuOpen = NO;
-        [self appendLine:@"[shell] native menu: no engine menu within 1s — aborting"];
-    }
-}
-
-// Build the compact native menu from the snapshot. Header sits at the finger; the body extends DOWN and
-// toward the side AWAY from the holding hand (so the hand doesn't cover the rows). Each row's click-through
-// targets the engine row centre via the OSRS 19/15 geometry, so plugin onClick consumers + Menu Entry Swapper
-// reordering are honoured (no menuAction). The bottom entry is the engine's own "Cancel" (no synthetic row).
-- (void)presentNativeMenu:(NSDictionary *)d {
-    [self teardownMenuViews];
-
-    self.emX = [d[@"menuX"] intValue];
-    self.emY = [d[@"menuY"] intValue];
-    self.emW = [d[@"menuW"] intValue];
-    self.emCount = [d[@"count"] intValue];
-    NSArray *entries = [d[@"entries"] isKindOfClass:[NSArray class]] ? d[@"entries"] : @[];
-    NSUInteger n = MIN(entries.count, (NSUInteger)14);
-    if (n == 0) { [self cancelMenu]; return; }
-
-    CGFloat totalH = kMenuHeaderViewH + n * kMenuRowViewH;
-
-    // Header at the finger; body offset to the opposite side of the hand (finger near the near top corner).
-    CGFloat ox = self.menuHandRight ? (self.menuAnchor.x - (kMenuWidth - 26.0)) : (self.menuAnchor.x - 26.0);
-    CGFloat oy = self.menuAnchor.y - kMenuHeaderViewH * 0.5;
-    ox = MAX(6, MIN(ox, self.view.bounds.size.width - kMenuWidth - 6));
-    oy = MAX(6, MIN(oy, self.view.bounds.size.height - totalH - 6));
-
-    self.menuContainer = [[UIView alloc] initWithFrame:CGRectMake(ox, oy, kMenuWidth, totalH)];
-    self.menuContainer.backgroundColor = [UIColor colorWithRed:0.13 green:0.11 blue:0.09 alpha:0.93];
-    self.menuContainer.layer.borderColor = [UIColor colorWithRed:0.55 green:0.50 blue:0.40 alpha:1.0].CGColor;
-    self.menuContainer.layer.borderWidth = 1.0;
-    self.menuContainer.layer.cornerRadius = 3.0;
-    self.menuContainer.clipsToBounds = YES;
-    self.menuContainer.userInteractionEnabled = NO;   // selection is driven by the long-press drag, not taps
-
-    UILabel *hdr = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, kMenuWidth - 20, kMenuHeaderViewH)];
-    hdr.text = @"Choose Option";
-    hdr.font = [UIFont boldSystemFontOfSize:12];
-    hdr.textColor = [UIColor whiteColor];   // classic Jagex-Mobile "Choose Option" (white on dark)
-    [self.menuContainer addSubview:hdr];
-
-    self.menuRows = [NSMutableArray arrayWithCapacity:n];
-    CGFloat y = kMenuHeaderViewH;
-    for (NSUInteger k = 0; k < n; k++) {
-        UILabel *row = [self menuRowLabelForEntry:entries[k] top:(k == 0)
-                                            frame:CGRectMake(0, y, kMenuWidth, kMenuRowViewH)];
-        [self.menuContainer addSubview:row];
-        self.menuRows[k] = row;
-        y += kMenuRowViewH;
-    }
-    [self.view addSubview:self.menuContainer];
-    if (self.menuTouchActive) [self updateMenuHighlightForPoint:self.menuAnchor];
-    [self appendLine:[NSString stringWithFormat:@"[shell] native menu: %d entries at game %d,%d w=%d",
-                      self.emCount, self.emX, self.emY, self.emW]];
-}
-
-// One row label (non-interactive). Option in white (yellow for the top/default = left-click), target in OSRS
-// blue, left-indented via a paragraph head-indent so a full-width highlight can span the row.
-- (UILabel *)menuRowLabelForEntry:(NSDictionary *)e top:(BOOL)top frame:(CGRect)f {
-    UILabel *l = [[UILabel alloc] initWithFrame:f];
-    l.backgroundColor = [UIColor clearColor];
-    (void)top;
-    NSString *opt = [e[@"opt"] isKindOfClass:[NSString class]] ? e[@"opt"] : @"";
-    NSString *tgt = [e[@"tgt"] isKindOfClass:[NSString class]] ? e[@"tgt"] : @"";
-    UIColor *optColor = [UIColor whiteColor];   // classic menu: option verb white, target tinted (below)
-    UIFont *font = [UIFont boldSystemFontOfSize:15];
-    NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new];
-    ps.firstLineHeadIndent = 10; ps.headIndent = 10; ps.lineBreakMode = NSLineBreakByTruncatingTail;
-    NSMutableAttributedString *s = [[NSMutableAttributedString alloc] initWithString:opt
-        attributes:@{NSForegroundColorAttributeName: optColor, NSFontAttributeName: font,
-                     NSParagraphStyleAttributeName: ps}];
-    if (tgt.length) {
-        [s appendAttributedString:[[NSAttributedString alloc]
-            initWithString:[@" " stringByAppendingString:tgt]
-            attributes:@{NSForegroundColorAttributeName: [UIColor colorWithRed:0.55 green:0.85 blue:1.0 alpha:1.0],
-                         NSFontAttributeName: font, NSParagraphStyleAttributeName: ps}]];
-    }
-    l.attributedText = s;
-    return l;
-}
-
-// Lock the highlight onto the row under the finger (view coords). Returns nothing; updates menuHighlight and
-// fires a light haptic tick when it changes. -1 = on the header / off to the side -> cancel zone.
+// Drive the ENGINE menu's highlight: move the engine pointer to the finger so the engine highlights whichever of
+// its OWN rows is under the finger (exactly like a real mouse). A coarse haptic ticks roughly per row of travel.
 - (void)updateMenuHighlightForPoint:(CGPoint)p {
-    int row = [self menuRowIndexForPoint:p];
-    if (row == self.menuHighlight) return;
-    self.menuHighlight = row;
-    for (NSUInteger i = 0; i < self.menuRows.count; i++) {
-        self.menuRows[i].backgroundColor = ((int)i == row)
-            ? [UIColor colorWithWhite:1.0 alpha:0.22]   // classic locked-on row wash
-            : [UIColor clearColor];
+    if (!self.menuOpen) return;
+    int gx = 0, gy = 0;
+    if ([self mapPoint:p toGameX:&gx toGameY:&gy]) {
+        self.lastMenuX = gx; self.lastMenuY = gy;
+        [JVMLauncher postMoveX:gx y:gy];   // engine highlights the row under its pointer
     }
-    [self.menuHaptic selectionChanged];
-    [self.menuHaptic prepare];
+    if (fabs(p.y - self.menuHapticY) >= 14.0) {
+        self.menuHapticY = p.y;
+        [self.menuHaptic selectionChanged];
+        [self.menuHaptic prepare];
+    }
 }
 
-// Map a view-space point to a display row index, or -1 for the header/cancel zone. Selection is Y-driven (the
-// body may be offset from the finger), with a horizontal tolerance band so a straight slide down still tracks.
-- (int)menuRowIndexForPoint:(CGPoint)p {
-    if (!self.menuContainer || self.menuRows.count == 0) return -1;
-    CGRect fr = self.menuContainer.frame;
-    const CGFloat xTol = 40.0;
-    if (p.x < fr.origin.x - xTol || p.x > CGRectGetMaxX(fr) + xTol) return -1;  // off to the side
-    CGFloat ry = p.y - (fr.origin.y + kMenuHeaderViewH);
-    if (ry < 0) return -1;                                                      // on the header / above
-    int row = (int)(ry / kMenuRowViewH);
-    int maxRow = (int)self.menuRows.count - 1;
-    return MIN(row, maxRow);                                                    // overshoot below -> last row
-}
-
-// Release commits the locked-on row via click-through to the engine row centre (OSRS 19/15 geometry).
-// onClickPrecise moves-then-clicks on the client thread, so the engine highlights then selects that exact row.
+// Release: click where the finger is. The engine processes it as a normal menu click — selects the row under the
+// finger, or (off the menu) just closes it. Either way the menu closes, so the camera/world input frees up.
 - (void)commitMenuSelection {
-    int k = self.menuHighlight;
-    if (k < 0 || k >= (int)self.menuRows.count) { [self cancelMenu]; return; }
-    int gx = self.emX + self.emW / 2;
-    int gy = self.emY + kMenuHeaderPx + k * kMenuRowPx + kMenuRowPx / 2;
-    [JVMLauncher postMenuSelectX:gx y:gy];   // select + clear the parked hover (no "stuck on target" cursor)
-    [self appendLine:[NSString stringWithFormat:@"[shell] menu select row %d -> click-through game %d,%d", k, gx, gy]];
-    [self teardownMenuViews];
+    if (!self.menuOpen) { [self teardownMenuViews]; return; }
+    [JVMLauncher postMenuSelectX:self.lastMenuX y:self.lastMenuY];
+    [self appendLine:[NSString stringWithFormat:@"[shell] menu select @game %d,%d", self.lastMenuX, self.lastMenuY]];
     self.menuOpen = NO;
+    [self teardownMenuViews];
 }
 
-// Close the engine menu through its OWN bottom "Cancel" entry (display index count-1 = array[0]) so there is
-// no stray world click, then tear down the overlay.
+// Gesture interrupted: a click anywhere closes the open engine menu so nothing stays stuck.
 - (void)cancelMenu {
-    if (self.emCount > 0) {
-        int k = self.emCount - 1;
-        int gx = self.emX + self.emW / 2;
-        int gy = self.emY + kMenuHeaderPx + k * kMenuRowPx + kMenuRowPx / 2;
-        [JVMLauncher postMenuSelectX:gx y:gy];   // click the engine Cancel row + clear the parked hover
+    if (self.menuOpen) {
+        [JVMLauncher postMenuSelectX:self.lastMenuX y:self.lastMenuY];
+        [self appendLine:@"[shell] right-click menu closed"];
     }
-    [self appendLine:@"[shell] native menu cancelled"];
-    [self teardownMenuViews];
     self.menuOpen = NO;
+    [self teardownMenuViews];
 }
 
 - (void)teardownMenuViews {
     [self.menuContainer removeFromSuperview];
     self.menuContainer = nil;
     self.menuRows = nil;
+    self.menuRowEntries = nil;
     self.menuHighlight = -1;
     self.menuBuilding = NO;
 }

@@ -114,6 +114,16 @@ public final class HudVeneerBridge
 	private static volatile int chatAreaW;
 	private static volatile String chatSnapshotJson = "{\"loggedIn\":false}";
 
+	// Native chat-tab SWITCH: which tab (0..7 index into CHAT_TAB_IDS) the native veneer asked to open. The engine
+	// tab sprites are hidden (so they don't peek under the native row), which makes them unclickable — so switching
+	// REPLAYS the tab's op-script instead of clicking, the same way the bottom tab-grid drives the hidden stones.
+	// One-shot, applied on the client thread in tick(). -1 = nothing pending.
+	private static volatile int pendingChatTab = -1;
+
+	// Chat COLLAPSE: when the user taps the already-active tab, the chat box hides (mobile behaviour); a tap on any
+	// tab reopens it. Driven from native (setChatCollapsed). While collapsed the engine CHAT_CONTAINER is hidden.
+	private static volatile boolean chatCollapsed;
+
 	// Finger-scroll: accumulated chat scroll delta (canvas px) requested from native, applied on the client thread
 	// in tick() via the chatbox's own scroll layer/scrollbar — NOT via a mouse wheel (the wheel also zooms the
 	// camera because the transparent chat sits over the viewport). +delta = toward newer (bottom).
@@ -224,6 +234,19 @@ public final class HudVeneerBridge
 		pendingChatScroll.addAndGet(deltaCanvasPx);
 	}
 
+	/** Native: switch the chat to tab {@code index} (0..7 into the 7 native tabs + Report) by REPLAYING that tab's
+	 *  op-script on the client thread — works even though the engine tab is hidden (a click wouldn't). One-shot. */
+	public static void switchChatTab(int index)
+	{
+		pendingChatTab = index;
+	}
+
+	/** Native: collapse (hide) or expand the chat box. Tapping the active tab collapses; tapping any tab expands. */
+	public static void setChatCollapsed(boolean collapsed)
+	{
+		chatCollapsed = collapsed;
+	}
+
 	/** Re-apply the requested chatbox state each frame. Client thread. */
 	public static void tick(Client c)
 	{
@@ -251,13 +274,29 @@ public final class HudVeneerBridge
 			final boolean preEoc = c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
 			final int chatId = preEoc ? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER;
 
-			if (chatX >= 0)
+			if (chatX >= 0 && chatCollapsed)
+			{
+				// Collapsed (the user tapped the active tab): hide the whole engine chat box so it disappears. The
+				// native tab row stays (it's drawn from chatX, not the engine widget) so a tap reopens it; still
+				// publish the snapshot so the tabs keep rendering + stating.
+				final Widget w = c.getWidget(chatId);
+				if (w != null && !w.isHidden())
+				{
+					w.setHidden(true);
+				}
+				buildChatSnapshot(c);
+			}
+			else if (chatX >= 0)
 			{
 				final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
 				final int rowW = chatAreaW > 0 ? chatAreaW : CHAT_DEFAULT_W;
 				final Widget w = c.getWidget(chatId);
 				if (w != null)
 				{
+					if (w.isHidden())
+					{
+						w.setHidden(false);   // un-collapse: the box was hidden, bring it back
+					}
 					w.setForcedPosition(chatX, chatY);
 					// Widen the chat CONTAINER to the native row width so its children (the message area) can fill it.
 					if (w.getOriginalWidth() != rowW)
@@ -276,6 +315,19 @@ public final class HudVeneerBridge
 				// so position the children at (0, …) — using (chatX,chatY) double-offsets them right+down (the
 				// misalignment + bottom clip). CONTROLS at the container's top-left.
 				forcePos(c, InterfaceID.Chatbox.CONTROLS, 0, 0);
+				// Hide the engine's own tab sprites so they don't peek under the native 7-tab row (the engine lays 8
+				// tabs, incl. Report, across the same width, so they don't line up). Switching is NOT a proxy-click any
+				// more (the sprite IS the click target, and a hidden widget isn't clickable) — instead the native tap
+				// REPLAYS the tab's op-script ({@link #switchChatTab}), the same trick the bottom tab-grid uses for the
+				// hidden tab stones (the widget still RESOLVES + its script runs while hidden). Gated on the native row
+				// being active; un-hides when the native chrome is toggled off so the engine row shows.
+				setEngineChatTabsHidden(c, chatTabRowH > 0);
+				final int switchTab = pendingChatTab;
+				if (switchTab >= 0)
+				{
+					pendingChatTab = -1;
+					switchChatTabNow(c, switchTab);
+				}
 				// Resize + reposition the message area so it ALIGNS with the bigger native row (width = rowW) and
 				// FITS below it without clipping the newest line. Deterministic: read the chat container's real
 				// height, then pin CHATAREA to ABSOLUTE width=rowW and height=(containerH - rowH - margin) at
@@ -462,6 +514,56 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+		}
+	}
+
+	/** Switch the chat to tab {@code idx} by replaying that tab's op-script with op 1 (the left-click action) — the
+	 *  same replay the tab stones use, so it works while the engine tab sprite is hidden. The op listener may sit on
+	 *  the tab button (base) or its graphic child (base+1), so try both. Client thread. */
+	private static void switchChatTabNow(Client c, int idx)
+	{
+		if (idx < 0 || idx >= CHAT_TAB_IDS.length)
+		{
+			return;
+		}
+		final int base = CHAT_TAB_IDS[idx];
+		if (!replayOp(c, base, 1))
+		{
+			replayOp(c, base + 1, 1);   // the op listener may sit on the graphic child instead of the button
+		}
+		// The op-replay sets CHAT_VIEW but doesn't re-render the message list (the engine does that as part of the
+		// real click). Force the chatbox to rebuild so the newly-selected channel's messages actually show.
+		try
+		{
+			c.runScript(ScriptID.BUILD_CHATBOX);
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	/** Replay a widget's op-script with the given op. Returns {@code true} if the widget has an op listener (so the
+	 *  replay ran). Works on hidden widgets — {@code getWidget} resolves them and the script runs regardless. */
+	private static boolean replayOp(Client c, int id, int op)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			if (w == null)
+			{
+				return false;
+			}
+			final Object[] l = w.getOnOpListener();
+			if (l == null)
+			{
+				return false;
+			}
+			c.createScriptEventBuilder(l).setSource(w).setOp(op).build().run();
+			return true;
+		}
+		catch (RuntimeException ex)
+		{
+			return false;
 		}
 	}
 
@@ -850,6 +952,34 @@ public final class HudVeneerBridge
 		}
 	}
 
+	/** Hide (or show) the engine chat-tab buttons' VISUALS — the per-tab sprite (base+1), channel name (base+2) and
+	 *  filter sub-label (base+3) — while leaving the base button widget shown so it stays a valid proxy-click target.
+	 *  Used to stop the engine's 8 tabs peeking out from under the native 7-tab veneer. */
+	private static void setEngineChatTabsHidden(Client c, boolean hidden)
+	{
+		for (final int base : CHAT_TAB_IDS)
+		{
+			setHidden(c, base + 1, hidden);   // GRAPHIC — the tab-background sprite
+			setHidden(c, base + 2, hidden);   // TEXT — the channel name
+			setHidden(c, base + 3, hidden);   // FILTER — the live "On"/"Off"/… sub-label (absent on some tabs)
+		}
+	}
+
+	private static void setHidden(Client c, int id, boolean hidden)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			if (w != null && w.isHidden() != hidden)
+			{
+				w.setHidden(hidden);
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
 	private static void forcePos(Client c, int id, int x, int y)
 	{
 		try
@@ -882,6 +1012,13 @@ public final class HudVeneerBridge
 			{
 				return;
 			}
+			// A chatbox rebuild (e.g. triggered by switching the chat tab via op-replay) can leave the message
+			// widgets HIDDEN, so the chat goes blank. Force them shown each frame — for the always-visible chat-at-top
+			// they should never be hidden.
+			setHidden(c, InterfaceID.Chatbox.CHATAREA, false);
+			setHidden(c, InterfaceID.Chatbox.CHATDISPLAY, false);
+			setHidden(c, InterfaceID.Chatbox.MES_LAYER, false);
+			setHidden(c, InterfaceID.Chatbox.SCROLLAREA, false);
 			// Grow the container so the full-height content sits BELOW the taller native tab row instead of being
 			// squeezed into the original 165px box. +2 breathing room so the bottom input line never edge-clips.
 			final Widget cont = c.getWidget(containerId);
