@@ -1552,6 +1552,11 @@ static int chatRowCanvasH(void) {
     int rightC = (int)lround(ins.right * k);
     const int m = 8;                          // canvas-px margin from the safe edge
     const int MM_W = 211;                     // minimap+orbs cluster width (fixed engine px, from the de-risk)
+    // Make the minimap BIGGER: enlarge the engine globe + reposition its chrome (HudVeneerBridge.setMinimapScale).
+    // The globe is right-anchored, so it grows left+down within the cluster — the right edge stays at MM_W, so the
+    // cluster still aligns to the right safe edge; only the orbs/compass spread further left/down (into the gap
+    // between the top-left chat and the top-right minimap). 0/100 = natural size.
+    const int kMinimapScalePct = 130;
 
     int chatX = leftC + m;
     int chatY = topC + m;
@@ -1562,6 +1567,7 @@ static int chatRowCanvasH(void) {
     [JVMLauncher relocateEngineChatX:chatX y:chatY transparent:YES];
     // W3 A3: the native veneer recreates the tab row BIGGER (engine push-down applied per-tick in updateChatTabs).
     [JVMLauncher relocateEngineMinimapX:mmX y:mmY];
+    [JVMLauncher setEngineMinimapScale:kMinimapScalePct];   // enlarge the globe + reposition its chrome to hug it
     [JVMLauncher setEngineStonesHidden:YES];   // the native 2-col grid replaces them (no cover patch / gray box)
     // The whole enlarged tab row is UI: a stray tap in it (between native buttons) should be a precise click, not
     // a walk. The native buttons own their taps; this rect just keeps any leak from drawing a walk ring.

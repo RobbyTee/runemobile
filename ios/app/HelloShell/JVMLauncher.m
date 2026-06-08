@@ -253,6 +253,7 @@ static jclass    gVeneerClass = NULL;
 static jmethodID gMidSetChatHidden = NULL;   // setChatHidden(Z)V
 static jmethodID gMidRelocateChat = NULL;    // relocateChat(IIZ)V
 static jmethodID gMidRelocateMinimap = NULL; // relocateMinimap(II)V  (A4 — minimap+orbs cluster)
+static jmethodID gMidSetMinimapScale = NULL; // setMinimapScale(I)V  (bigger minimap)
 static jmethodID gMidRelocateSide = NULL;    // relocateSidePanel(II)V (A4/A6 — inventory side panel)
 static jmethodID gMidOpenTab = NULL;         // openTab(I)V  (A4 — open a tab by replaying its stone op script)
 static jmethodID gMidSetStonesHidden = NULL; // setStonesHidden(Z)V  (A4 — hide the engine tab stones)
@@ -286,6 +287,7 @@ static BOOL ensureVeneer(void) {
     gMidSetChatAreaW = (*env)->GetStaticMethodID(env, global, "setChatAreaWidth", "(I)V");
     gMidScrollChat = (*env)->GetStaticMethodID(env, global, "scrollChat", "(I)V");
     gMidGetChatSnap = (*env)->GetStaticMethodID(env, global, "getChatSnapshot", "()Ljava/lang/String;");
+    gMidSetMinimapScale = (*env)->GetStaticMethodID(env, global, "setMinimapScale", "(I)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
     gMidSetChatHidden = m;
     gMidRelocateChat = r;
@@ -1119,6 +1121,13 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureVeneer()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidRelocateMinimap, (jint)x, (jint)y);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)setEngineMinimapScale:(int)scalePct {
+    if (!ensureVeneer() || !gMidSetMinimapScale) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetMinimapScale, (jint)scalePct);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 

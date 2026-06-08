@@ -134,6 +134,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// still walk and orb clicks still fire. x < 0 stops. Re-applied each frame by HudVeneerBridge. Main thread.
 + (void)relocateEngineMinimapX:(int)x y:(int)y;
 
+/// Make the top-right minimap BIGGER: enlarge the engine minimap globe to scalePct% of its natural size and
+/// reposition its chrome (compass / orbs / world-map / wiki / store) to keep hugging it. 0/100 = natural. The
+/// cluster stays the live engine HUD, so click-to-walk + orb clicks keep working. No-op on an older jar. Main thread.
++ (void)setEngineMinimapScale:(int)scalePct;
+
 /// W3 A4/A6: relocate the engine side panel (SIDE_CONTAINER — inventory/equipment/etc.) to canvas (x,y) so it
 /// doesn't clip under the notch at full-bleed. No-op until a tab is open. x < 0 stops. Main thread.
 + (void)relocateEngineSidePanelX:(int)x y:(int)y;

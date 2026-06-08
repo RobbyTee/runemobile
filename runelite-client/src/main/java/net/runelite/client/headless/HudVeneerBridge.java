@@ -89,6 +89,15 @@ public final class HudVeneerBridge
 	private static volatile int sideX = -1;
 	private static volatile int sideY = -1;
 
+	// Minimap ENLARGE (make the top-right globe bigger). 0 = natural size. Resizing the draw-area widget (MINIMAP)
+	// makes the engine render a bigger globe (terrain + dots scale, click-to-walk follows for free since
+	// Perspective.localToMinimap reads that widget's centre/size). The globe is RIGHT+TOP anchored so it grows
+	// left+down about its fixed top-right corner; the surrounding chrome (compass / orbs / world-map / wiki / store)
+	// are separate fixed widgets that DON'T scale, so we reposition them about that same corner to keep them hugging
+	// the bigger globe, and hide the now-mismatched frame ring. Driven from native (setMinimapScale) or, off-device,
+	// the -Drunelite.hudveneer.test.minimapScalePct prop.
+	private static volatile int minimapScalePct;
+
 	// Tab stones. The native 2-col tab grid replaces them, so we HIDE all 14 engine stones (removes the gray cover
 	// patch the old proxy approach needed) and switch tabs by REPLAYING the stone's own op script — which works
 	// even with the stone hidden (TabScriptProbe: replay + worksHidden GREEN). pendingOpenTab is a one-shot action
@@ -151,6 +160,14 @@ public final class HudVeneerBridge
 	{
 		minimapX = x;
 		minimapY = y;
+	}
+
+	/** Native: enlarge the engine minimap to {@code scalePct}% of its natural size (e.g. 130 = 30% bigger).
+	 *  {@code 0} (or 100) = natural size. The globe + its chrome are re-laid each frame in {@link #tick}; the cluster
+	 *  stays the live engine HUD, so click-to-walk + orb clicks keep working. */
+	public static void setMinimapScale(int scalePct)
+	{
+		minimapScalePct = scalePct <= 0 ? 0 : scalePct;
 	}
 
 	/** Native: relocate the engine side panel ({@code SIDE_CONTAINER}) to canvas {@code (x,y)}. {@code x < 0} stops.
@@ -324,16 +341,19 @@ public final class HudVeneerBridge
 				}
 			}
 
-			// RESEARCH PROBE (off-device only, -Drunelite.hudveneer.test=true): resize the minimap DRAW-AREA widget
-			// (MINIMAP) to verify the engine renders a BIGGER globe when its widget grows (and that localToMinimap-
-			// based click-to-walk follows). Logs the before/after MINIMAP bounds so a desktop capture can confirm.
+			// Minimap ENLARGE: resize the globe + reposition its chrome so the whole cluster reads as a bigger
+			// minimap. Off-device the scale comes from the test prop; on device it's driven by native setMinimapScale.
 			if (TEST_APPLY)
 			{
-				final int scalePct = Integer.getInteger("runelite.hudveneer.test.minimapScalePct", 0);
-				if (scalePct > 0)
+				final int p = Integer.getInteger("runelite.hudveneer.test.minimapScalePct", 0);
+				if (p > 0)
 				{
-					minimapResizeProbe(c, preEoc, scalePct);
+					minimapScalePct = p;
 				}
+			}
+			if (minimapScalePct > 0)
+			{
+				applyMinimapScale(c, preEoc, minimapScalePct);
 			}
 
 			// Side panel relocate (independent). No-op until a tab is open (SIDE_CONTAINER then becomes non-null).
@@ -445,45 +465,231 @@ public final class HudVeneerBridge
 		}
 	}
 
-	// RESEARCH PROBE state: the natural (pre-resize) minimap draw-area size, cached once so the scale is stable.
-	private static int origMinimapW = -1;
-	private static int origMinimapH = -1;
-	private static boolean minimapProbeLogged;
+	// Minimap-enlarge geometry (cluster-local px, from the off-device widget dump — fixed gamepack layout, so these
+	// are canvas-independent because the cluster is right-anchored and its internal layout is fixed px). The globe is
+	// RIGHT+TOP anchored, so growing its draw-area widget keeps its top-right corner fixed and grows it left+down.
+	// IMPORTANT: the rendered terrain DISC does not fill the widget box and grows slower than it (off-device measure:
+	// at 130% the disc is centre ~(120,100) r~87, not the box's (106,107) r~99), and it drifts down-left. So we hug
+	// the MEASURED disc, linearly fit between the natural layout and the 130% capture, NOT the widget box.
+	private static final int MM_NAT_SIZE = 152;   // natural globe draw-area width/height
+	private static final double MM_NAT_CX = 129;  // natural terrain-disc centre (cluster-local) …
+	private static final double MM_NAT_CY = 84;
+	private static final double MM_NAT_R = 76;     // … and radius (natural globe box 152 inscribed)
+	// Per-scale disc fit: centre/radius as linear functions of the scale s (slopes from the natural + 130% measures).
+	private static final double MM_CX_SLOPE = -30.0;  // disc centre drifts left as it grows
+	private static final double MM_CY_SLOPE = 53.3;   // … and down
+	private static final double MM_R_SLOPE = 36.7;    // disc radius grows ~0.48x the box
+	private static boolean minimapTreeDumped;
+	private static boolean minimapScaleLogged;
 
-	/** Resize the minimap draw-area widget to {@code scalePct}% of its natural size (ABSOLUTE) + revalidate, to test
-	 *  whether the engine renders a larger globe. Off-device research only. */
-	private static void minimapResizeProbe(Client c, boolean preEoc, int scalePct)
+	/** One-time recursive dump of the minimap cluster (MAP_CONTAINER tree) + the named chrome widgets, so a fresh
+	 *  session can see the exact child layout (bounds / relative / size modes / sprite / type) before designing the
+	 *  enlarge-and-reposition. Off-device research only. */
+	private static void dumpMinimapTree(Client c, boolean preEoc)
+	{
+		final int[] ids = {
+			InterfaceID.ToplevelPreEoc.MAP_CONTAINER, InterfaceID.ToplevelPreEoc.MAP_MINIMAP,
+			InterfaceID.ToplevelPreEoc.MINIMAP, InterfaceID.ToplevelPreEoc.COMPASSCLICK,
+			InterfaceID.ToplevelPreEoc.MAP_MINIMAP_GRAPHIC6, InterfaceID.ToplevelPreEoc.MAP_MINIMAP_GRAPHIC9,
+			InterfaceID.ToplevelPreEoc.ORBS,
+			InterfaceID.ToplevelPreEoc.MAP_NOCLICK_0, InterfaceID.ToplevelPreEoc.MAP_NOCLICK_1,
+			InterfaceID.ToplevelPreEoc.MAP_NOCLICK_2, InterfaceID.ToplevelPreEoc.MAP_NOCLICK_3,
+			InterfaceID.ToplevelPreEoc.MAP_NOCLICK_4, InterfaceID.ToplevelPreEoc.MAP_NOCLICK_5,
+		};
+		final String[] names = {
+			"MAP_CONTAINER", "MAP_MINIMAP", "MINIMAP", "COMPASSCLICK", "GRAPHIC6", "GRAPHIC9", "ORBS",
+			"NOCLICK0", "NOCLICK1", "NOCLICK2", "NOCLICK3", "NOCLICK4", "NOCLICK5",
+		};
+		for (int i = 0; i < ids.length; i++)
+		{
+			dumpWidget(c, names[i], ids[i], false);
+		}
+		// The individual orbs live in the Orbs sub-interface (group 0xa0) hosted in the ORBS layer — dump them by id
+		// so we get the HP/prayer/run/spec orb + world-map/wiki/store icon + XP-button canvas positions.
+		final int[] orbIds = {
+			InterfaceID.Orbs.XP_DROPS, InterfaceID.Orbs.CR_BACKING, InterfaceID.Orbs.ORB_HEALTH,
+			InterfaceID.Orbs.ORB_PRAYER, InterfaceID.Orbs.ORB_RUNENERGY, InterfaceID.Orbs.ORB_SPECENERGY,
+			InterfaceID.Orbs.ORB_STORE, InterfaceID.Orbs.ORB_WORLDMAP, InterfaceID.Orbs.WIKI,
+		};
+		final String[] orbNames = {
+			"XP_DROPS", "CR_BACKING", "ORB_HEALTH", "ORB_PRAYER", "ORB_RUNENERGY", "ORB_SPECENERGY",
+			"ORB_STORE", "ORB_WORLDMAP", "WIKI",
+		};
+		for (int i = 0; i < orbIds.length; i++)
+		{
+			dumpWidget(c, orbNames[i], orbIds[i], false);
+		}
+	}
+
+	private static void dumpWidget(Client c, String name, int id, boolean unused)
 	{
 		try
 		{
-			final int mmId = preEoc ? InterfaceID.ToplevelPreEoc.MINIMAP : InterfaceID.ToplevelOsrsStretch.MINIMAP;
-			final Widget mm = c.getWidget(mmId);
-			if (mm == null)
+			final Widget w = c.getWidget(id);
+			if (w == null)
 			{
+				log.info("[veneer] mm-tree {} id={} = null", name, Integer.toHexString(id));
 				return;
 			}
-			if (origMinimapW < 0)
+			dumpWidgetObj(name + " id=" + Integer.toHexString(id), w);
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	private static void dumpWidgetObj(String label, Widget w)
+	{
+		try
+		{
+			final java.awt.Rectangle b = w.getBounds();
+			log.info("[veneer] mm-tree {} type={} bounds={} rel=({},{}) orig=({},{},{}x{}) posMode=({},{}) sizeMode=({},{}) sprite={} model={} item={} hidden={} text='{}'",
+				label, w.getType(), b, w.getRelativeX(), w.getRelativeY(),
+				w.getOriginalX(), w.getOriginalY(), w.getOriginalWidth(), w.getOriginalHeight(),
+				w.getXPositionMode(), w.getYPositionMode(), w.getWidthMode(), w.getHeightMode(),
+				safeSpriteId(w), safeModelId(w), safeItemId(w), w.isHidden(), shortText(w));
+		}
+		catch (RuntimeException ex)
+		{
+			log.info("[veneer] mm-tree {} threw {}", label, String.valueOf(ex));
+		}
+	}
+
+	private static int safeModelId(Widget w)
+	{
+		try
+		{
+			return w.getModelId();
+		}
+		catch (RuntimeException ex)
+		{
+			return -1;
+		}
+	}
+
+	private static int safeItemId(Widget w)
+	{
+		try
+		{
+			return w.getItemId();
+		}
+		catch (RuntimeException ex)
+		{
+			return -1;
+		}
+	}
+
+	private static String shortText(Widget w)
+	{
+		try
+		{
+			final String t = stripTags(w.getText());
+			return t.length() > 16 ? t.substring(0, 16) : t;
+		}
+		catch (RuntimeException ex)
+		{
+			return "";
+		}
+	}
+
+	/** Make the top-right minimap bigger: resize the globe DRAW-AREA widget (the engine then renders a bigger globe,
+	 *  and click-to-walk follows for free since {@code Perspective.localToMinimap} reads this widget's centre/size),
+	 *  hide the now-mismatched frame ring, and reposition the surrounding chrome (compass / orbs / world-map / wiki /
+	 *  store / activity-adviser) so they keep hugging the bigger globe. The globe is RIGHT+TOP anchored, so growing
+	 *  its absolute width/height grows it left+down; each chrome piece is then placed to keep its natural CLEARANCE
+	 *  from the enlarged terrain disc edge at its natural ANGLE ({@link #placeHug}), which keeps the whole arrangement
+	 *  consistent. Native-HUD layout is Classic (PreEoc 164) only. Re-applied each frame (client thread). */
+	private static void applyMinimapScale(Client c, boolean preEoc, int scalePct)
+	{
+		if (!preEoc)
+		{
+			return;   // the native HUD veneer only supports the Classic resizable layout
+		}
+		try
+		{
+			final Widget mm = c.getWidget(InterfaceID.ToplevelPreEoc.MINIMAP);
+			if (mm == null)
 			{
-				origMinimapW = mm.getWidth();
-				origMinimapH = mm.getHeight();
+				return;   // cluster not built yet (welcome screen etc.)
 			}
-			final int tw = origMinimapW * scalePct / 100;
-			final int th = origMinimapH * scalePct / 100;
-			if (mm.getWidthMode() != WidgetSizeMode.ABSOLUTE || mm.getOriginalWidth() != tw
-				|| mm.getHeightMode() != WidgetSizeMode.ABSOLUTE || mm.getOriginalHeight() != th)
+			if (TEST_APPLY && !minimapTreeDumped)
+			{
+				minimapTreeDumped = true;   // off-device record of the natural layout, before this frame's resize
+				dumpMinimapTree(c, preEoc);
+			}
+			final double s = scalePct / 100.0;
+			// 1. Resize the globe draw-area (keep its right+top anchor → grows left+down about P0).
+			final int gs = (int) Math.round(MM_NAT_SIZE * s);
+			if (mm.getWidthMode() != WidgetSizeMode.ABSOLUTE || mm.getOriginalWidth() != gs
+				|| mm.getHeightMode() != WidgetSizeMode.ABSOLUTE || mm.getOriginalHeight() != gs)
 			{
 				mm.setWidthMode(WidgetSizeMode.ABSOLUTE);
 				mm.setHeightMode(WidgetSizeMode.ABSOLUTE);
-				mm.setOriginalWidth(tw);
-				mm.setOriginalHeight(th);
+				mm.setOriginalWidth(gs);
+				mm.setOriginalHeight(gs);
 				mm.revalidate();
 			}
-			if (!minimapProbeLogged)
+			// 2. Hide the decorative frame ring / surround sprite — at the old radius it no longer matches the bigger
+			//    globe. The globe still renders clipped to its own circular draw area, so a frameless circle reads clean.
+			hide(c, InterfaceID.ToplevelPreEoc.MAP_MINIMAP_GRAPHIC9);
+			// 3. Reposition the chrome to hug the bigger terrain disc. The disc centre/radius at this scale come from
+			//    the linear fit; each piece keeps its natural CLEARANCE from the disc edge at its natural ANGLE (so the
+			//    whole arrangement stays consistent — orbs on the left, compass top, world-map/wiki/store lower-right).
+			//    Natural box CENTRES + sizes are cluster-local (from the dump). Compass parent = MAP_MINIMAP (origin
+			//    0,0); the orbs' parent = the ORBS layer (origin 0,10).
+			final double gcx = MM_NAT_CX + MM_CX_SLOPE * (s - 1.0);
+			final double gcy = MM_NAT_CY + MM_CY_SLOPE * (s - 1.0);
+			final double gr = MM_NAT_R + MM_R_SLOPE * (s - 1.0);
+			placeHug(c, InterfaceID.ToplevelPreEoc.MAP_MINIMAP_GRAPHIC6, 51.5, 22.5, 35, 35, 0, 0, gcx, gcy, gr);
+			placeHug(c, InterfaceID.ToplevelPreEoc.COMPASSCLICK, 50, 21, 36, 36, 0, 0, gcx, gcy, gr);
+			placeHug(c, InterfaceID.Orbs.XP_DROPS, 13.5, 40.5, 27, 27, 0, 10, gcx, gcy, gr);
+			placeHug(c, InterfaceID.Orbs.ORB_HEALTH, 28.5, 64, 57, 34, 0, 10, gcx, gcy, gr);
+			placeHug(c, InterfaceID.Orbs.ORB_PRAYER, 28.5, 98, 57, 34, 0, 10, gcx, gcy, gr);
+			placeHug(c, InterfaceID.Orbs.ORB_RUNENERGY, 38.5, 130, 57, 34, 0, 10, gcx, gcy, gr);
+			placeHug(c, InterfaceID.Orbs.ORB_SPECENERGY, 60.5, 155, 57, 34, 0, 10, gcx, gcy, gr);
+			placeHug(c, InterfaceID.Orbs.ORB_STORE, 102, 170, 34, 34, 0, 10, gcx, gcy, gr);
+			placeHug(c, InterfaceID.Orbs.ORB_WORLDMAP, 192, 140, 30, 30, 0, 10, gcx, gcy, gr);
+			placeHug(c, InterfaceID.Orbs.WIKI, 187, 162, 40, 34, 0, 10, gcx, gcy, gr);
+			placeHug(c, InterfaceID.Orbs.CR_BACKING, 72, 189, 34, 34, 0, 10, gcx, gcy, gr);
+			if (!minimapScaleLogged)
 			{
-				minimapProbeLogged = true;
-				final java.awt.Rectangle b = mm.getBounds();
-				log.info("[veneer] MINIMAP_PROBE scalePct={} natural={}x{} forced={}x{} bounds={}",
-					scalePct, origMinimapW, origMinimapH, tw, th, b);
+				minimapScaleLogged = true;
+				log.info("[veneer] MINIMAP_SCALE scalePct={} globe={}px (natural {})", scalePct, gs, MM_NAT_SIZE);
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	/** Reposition one minimap-chrome widget so it keeps its natural CLEARANCE from the (enlarged) terrain disc edge at
+	 *  its natural ANGLE. {@code (natCx,natCy)} = the widget's natural box centre (cluster-local); {@code (w,h)} = its
+	 *  size (kept). {@code (gcx,gcy,gr)} = the enlarged disc centre + radius. {@code setForcedPosition} is parent-
+	 *  relative, so we subtract the parent's cluster-local origin {@code (parentX,parentY)}. Guarded so it only
+	 *  re-applies when the engine has moved it (cheap once the position sticks). */
+	private static void placeHug(Client c, int id, double natCx, double natCy, int w, int h,
+		int parentX, int parentY, double gcx, double gcy, double gr)
+	{
+		try
+		{
+			final Widget wd = c.getWidget(id);
+			if (wd == null)
+			{
+				return;
+			}
+			final double dx = natCx - MM_NAT_CX;
+			final double dy = natCy - MM_NAT_CY;
+			final double d = Math.hypot(dx, dy);
+			final double clearance = d - MM_NAT_R;          // natural distance outside the natural disc edge
+			final double nd = gr + clearance;               // same clearance outside the enlarged disc
+			final double cx = d == 0 ? gcx : gcx + dx / d * nd;
+			final double cy = d == 0 ? gcy : gcy + dy / d * nd;
+			final int fx = (int) Math.round(cx - w / 2.0) - parentX;
+			final int fy = (int) Math.round(cy - h / 2.0) - parentY;
+			if (wd.getRelativeX() != fx || wd.getRelativeY() != fy)
+			{
+				wd.setForcedPosition(fx, fy);
+				wd.revalidate();
 			}
 		}
 		catch (RuntimeException ignore)
