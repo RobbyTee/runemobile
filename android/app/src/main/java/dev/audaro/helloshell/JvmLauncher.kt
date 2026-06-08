@@ -164,6 +164,10 @@ object JvmLauncher {
     // the UI thread (via [onBridge]); re-applied by the engine tick.
     external fun nativeRelocateChat(x: Int, y: Int, transparent: Boolean)
 
+    // A7 edge-to-edge: pull the engine minimap+orbs cluster (MAP_CONTAINER) into the top-right safe area. It
+    // stays the live engine HUD (minimap click-to-walk + orb clicks keep working). x<0 stops. Off the UI thread.
+    external fun nativeRelocateMinimap(x: Int, y: Int)
+
     // A3 enlarged native chat-tab veneer. The per-frame chat-tab geometry/state snapshot (escaped JSON: each of
     // the 7 tabs' canvas bounds + selected/new/filter state) is PUBLISHED by the render thread — read lock-free
     // from the Choreographer tick (no HotSpot attach). The two setters (off the UI thread) tell the engine to
@@ -236,6 +240,7 @@ object JvmLauncher {
     fun openTab(tabIndex: Int) = nativeOpenTab(tabIndex)
     fun relocateSidePanel(x: Int, y: Int) = nativeRelocateSidePanel(x, y)
     fun relocateChat(x: Int, y: Int, transparent: Boolean) = nativeRelocateChat(x, y, transparent)
+    fun relocateMinimap(x: Int, y: Int) = nativeRelocateMinimap(x, y)
     fun chatSnapshotPub() = nativeChatSnapshotPub()
     fun setChatTabRowHeight(canvasPx: Int) = nativeSetChatTabRowHeight(canvasPx)
     fun setChatAreaWidth(canvasPx: Int) = nativeSetChatAreaWidth(canvasPx)

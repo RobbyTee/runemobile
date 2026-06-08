@@ -105,7 +105,7 @@ static std::atomic<bool> g_chromeReady{false};
 // engine unless -Drunelite.hudveneer=true. ALL-OR-NOTHING: published only if every method id resolves.
 static jclass    g_hudCls = nullptr;
 static jmethodID g_midSetStonesHidden = nullptr, g_midOpenTab = nullptr, g_midRelocateSidePanel = nullptr;
-static jmethodID g_midRelocateChat = nullptr;
+static jmethodID g_midRelocateChat = nullptr, g_midRelocateMinimap = nullptr;
 // A3 enlarged native chat-tab veneer: getChatSnapshot (per-frame tab geometry/state the bigger native buttons
 // read) + setChatTabRowHeight / setChatAreaWidth (tell the engine to push the message area below the taller row).
 static jmethodID g_midChatSnapshot = nullptr, g_midSetChatRowH = nullptr, g_midSetChatAreaW = nullptr;
@@ -522,11 +522,12 @@ static bool publishBridge(JNIEnv *env) {
             g_midOpenTab           = midOpt(env, hvg, "openTab", "(I)V");
             g_midRelocateSidePanel = midOpt(env, hvg, "relocateSidePanel", "(II)V");
             g_midRelocateChat      = midOpt(env, hvg, "relocateChat", "(IIZ)V");
+            g_midRelocateMinimap   = midOpt(env, hvg, "relocateMinimap", "(II)V");
             g_midChatSnapshot      = midOpt(env, hvg, "getChatSnapshot", "()Ljava/lang/String;");
             g_midSetChatRowH       = midOpt(env, hvg, "setChatTabRowHeight", "(I)V");
             g_midSetChatAreaW      = midOpt(env, hvg, "setChatAreaWidth", "(I)V");
             bool hudOk = g_midSetStonesHidden && g_midOpenTab && g_midRelocateSidePanel && g_midRelocateChat
-                      && g_midChatSnapshot && g_midSetChatRowH && g_midSetChatAreaW;
+                      && g_midRelocateMinimap && g_midChatSnapshot && g_midSetChatRowH && g_midSetChatAreaW;
             if (hudOk) {
                 g_hudCls = hvg;                                         // before the release-store below
                 g_hudReady.store(true, std::memory_order_release);
@@ -1321,6 +1322,11 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeRelocateChat(JNIEnv *, jobject, jint x, jint y, jboolean transparent) {
     if (!hudReady()) return;
     facadeVoidIntIntBool(g_hudCls, g_midRelocateChat, x, y, transparent);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeRelocateMinimap(JNIEnv *, jobject, jint x, jint y) {
+    if (!hudReady()) return;
+    facadeVoidIntInt(g_hudCls, g_midRelocateMinimap, x, y);
 }
 // A3 chat-tab veneer: the render-thread-published HudVeneerBridge.getChatSnapshot (UI reads lock-free, no attach)
 // + the two row-size setters (rl-bridge thread) that push the engine message area below the taller native row.

@@ -72,6 +72,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var chatTabOverlay: ChatTabOverlayView
     private var chatTabsLogged = false
     private var lastChatRowH = Int.MIN_VALUE        // last setChatTabRowHeight sent (send only on change)
+    private var lastMmX = Int.MIN_VALUE             // last minimap relocation sent (send only on change)
+    private var lastMmY = Int.MIN_VALUE
 
     // A2 press-and-peek menu state.
     private lateinit var menuOverlay: MenuOverlayView
@@ -487,6 +489,7 @@ class MainActivity : AppCompatActivity() {
         if (gridOn) {
             applySidePanel(o)
             applyChatAtTop()
+            applyMinimap(o)
             if (!chromeUiLogged && chromeOverlay.gridLeftPx > 0f) {
                 chromeUiLogged = true
                 Log.i(TAG, "ANDROID_A6_UI_GREEN native 2-col tab grid drawn (engine stones hidden) topLevel=$topLevel activeTab=$active view=${surfaceView.width}x${surfaceView.height}")
@@ -494,6 +497,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             releaseSidePanel()
             releaseChat()
+            releaseMinimap()
         }
     }
 
@@ -553,21 +557,14 @@ class MainActivity : AppCompatActivity() {
      *  mode — the mobile look. It stays the live engine chat (tabs / scrollback / colours / input all work); the
      *  engine tick re-applies it. Insets are in view px → canvas px (k = frameW/viewW); sent only when changed. */
     private fun applyChatAtTop() {
-        val fw = JvmLauncher.frameWidth(); val vw = surfaceView.width
-        if (fw <= 0 || vw <= 0) return
-        val k = fw.toFloat() / vw.toFloat()
-        var leftPx = 0; var topPx = 0
-        surfaceView.rootWindowInsets?.let { wi ->
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                val i = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-                leftPx = i.left; topPx = i.top
-            } else {
-                @Suppress("DEPRECATION") run { leftPx = wi.stableInsetLeft; topPx = wi.stableInsetTop }
-            }
-        }
+        val fw = JvmLauncher.frameWidth(); val fh = JvmLauncher.frameHeight()
+        val vw = surfaceView.width; val vh = surfaceView.height
+        if (fw <= 0 || fh <= 0 || vw <= 0 || vh <= 0) return
+        val kx = fw.toFloat() / vw; val ky = fh.toFloat() / vh
+        val ins = safeInsetsLTR()
         val margin = 8                                    // canvas-px breathing room from the safe edge
-        val chatX = Math.round(leftPx * k) + margin
-        val chatY = Math.round(topPx * k) + margin
+        val chatX = Math.round(ins[0] * kx) + margin
+        val chatY = Math.round(ins[1] * ky) + margin
         if (chatX == lastChatX && chatY == lastChatY) return
         lastChatX = chatX; lastChatY = chatY
         JvmLauncher.onBridge { JvmLauncher.relocateChat(chatX, chatY, true) }
@@ -578,6 +575,45 @@ class MainActivity : AppCompatActivity() {
         if (lastChatX == -1 && lastChatY == -1) return
         lastChatX = -1; lastChatY = -1
         JvmLauncher.onBridge { JvmLauncher.relocateChat(-1, -1, false) }
+    }
+
+    /** [left, top, right] safe-area insets in VIEW px (display cutout + system bars), so the relocated HUD clears
+     *  a landscape notch / nav bar. 0 on the full-bleed emulator. */
+    private fun safeInsetsLTR(): IntArray {
+        val wi = surfaceView.rootWindowInsets ?: return intArrayOf(0, 0, 0)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val i = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+            intArrayOf(i.left, i.top, i.right)
+        } else {
+            @Suppress("DEPRECATION") intArrayOf(wi.stableInsetLeft, wi.stableInsetTop, wi.stableInsetRight)
+        }
+    }
+
+    /** A7 edge-to-edge: pull the engine minimap+orbs cluster (MAP_CONTAINER) into the top-right safe area — flush
+     *  to the right edge, top-aligned, clear of a notch. It stays the live HUD (minimap click-to-walk + orb clicks
+     *  keep working — the iOS relocateEngineMinimap move). The cluster width comes from the snapshot. On change. */
+    private fun applyMinimap(o: JSONObject?) {
+        val fw = JvmLauncher.frameWidth(); val fh = JvmLauncher.frameHeight()
+        val vw = surfaceView.width; val vh = surfaceView.height
+        if (fw <= 0 || fh <= 0 || vw <= 0 || vh <= 0) return
+        val kx = fw.toFloat() / vw; val ky = fh.toFloat() / vh
+        val ins = safeInsetsLTR()
+        val margin = 8
+        var mapW = 211                                    // fallback cluster width until the snapshot reports it
+        val mc = o?.optJSONArray("mapContainer")
+        if (mc != null && mc.length() >= 4 && mc.optInt(2) > 0) mapW = mc.getInt(2)
+        val mmX = maxOf(0, fw - mapW - Math.round(ins[2] * kx) - margin)
+        val mmY = Math.round(ins[1] * ky) + margin
+        if (mmX == lastMmX && mmY == lastMmY) return
+        lastMmX = mmX; lastMmY = mmY
+        JvmLauncher.onBridge { JvmLauncher.relocateMinimap(mmX, mmY) }
+    }
+
+    /** Stop relocating the minimap (let it return to its native position) when the chrome disengages. */
+    private fun releaseMinimap() {
+        if (lastMmX == -1 && lastMmY == -1) return
+        lastMmX = -1; lastMmY = -1
+        JvmLauncher.onBridge { JvmLauncher.relocateMinimap(-1, -1) }
     }
 
     private fun vibrateTick() {

@@ -11,9 +11,11 @@ relocated to the top**. Like A4/A5, it rides shared bridges already in the jar �
 - **`HudVeneerBridge`** (gate `-Drunelite.hudveneer=true`) — the chrome **write** surface:
   `setStonesHidden(true)` hides all 14 engine tab stones (the native grid replaces them), `openTab(i)` opens a
   tab by replaying its stone op script (works while hidden — no widget moved or covered), and
-  `relocateSidePanel(x,y)` pulls the open inventory/skills/etc. panel flush-left of the grid, and
+  `relocateSidePanel(x,y)` pulls the open inventory/skills/etc. panel flush-left of the grid,
   `relocateChat(x,y,transparent)` moves the engine's own chatbox to the top-left in OSRS transparent-chat mode
-  (the tabs / scrollback / colours / input all stay live — it IS the real chat).
+  (the tabs / scrollback / colours / input all stay live — it IS the real chat), and `relocateMinimap(x,y)` pulls
+  the minimap+orbs cluster into the top-right safe area (it stays the live HUD — minimap click-to-walk + orb
+  clicks keep working). Together with the safe-area inset math, these are the A7 edge-to-edge HUD relocation.
 
 The native grid mirrors the proven iOS shell (`ViewController.updateChrome`): all 14 tabs in a 2-col × 7-row
 grid at the bottom-right via `TAB_GRID_ORDER = {3,1,4,2,5,13,6,7,0,12,8,9,10,11}` (grid slot → engine stone
