@@ -744,6 +744,16 @@ class MainActivity : AppCompatActivity() {
         menuHighlight = -1
     }
 
+    override fun onStop() {
+        // A8: the app is backgrounded (and may be killed) — persist any pending plugin-config writes now so a
+        // toggle/setting isn't lost. Off the UI thread (it dispatches to the client thread); fire-and-forget.
+        if (booted.get()) JvmLauncher.onBridge {
+            val ack = JvmLauncher.flushConfig()
+            Log.i(TAG, "a8: flushConfig on background -> $ack")
+        }
+        super.onStop()
+    }
+
     override fun onDestroy() {
         frameCallback?.let { Choreographer.getInstance().removeFrameCallback(it) }
         frameCallback = null

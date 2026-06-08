@@ -68,6 +68,7 @@ static jmethodID g_midMenuSnapshot = nullptr, g_midMenuPublishSeq = nullptr;
 static jclass    g_mobileUiCls = nullptr;
 static jmethodID g_midListPlugins = nullptr, g_midMobileUiSeq = nullptr, g_midPollEvents = nullptr, g_midSetPluginEnabled = nullptr;
 static jmethodID g_midGetPluginConfig = nullptr, g_midSetConfig = nullptr, g_midProcessedWriteId = nullptr;
+static jmethodID g_midFlushConfig = nullptr;   // A8: persist pending config writes when the app backgrounds
 // A5 Tier-1 plugin panels (rendered off-screen under CACIO; the ARGB int[] image is marshalled cross-VM).
 static jmethodID g_midListPanels = nullptr, g_midOpenPanel = nullptr, g_midClosePanel = nullptr,
                  g_midPanelW = nullptr, g_midPanelH = nullptr, g_midPanelSeq = nullptr,
@@ -399,6 +400,7 @@ static bool publishBridge(JNIEnv *env) {
             g_midGetPluginConfig  = midOpt(env, mug, "getPluginConfig", "(Ljava/lang/String;)Ljava/lang/String;");
             g_midSetConfig        = midOpt(env, mug, "setConfig", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
             g_midProcessedWriteId = midOpt(env, mug, "getProcessedWriteId", "()J");
+            g_midFlushConfig      = midOpt(env, mug, "flushConfig", "()Ljava/lang/String;");   // A8 background flush
             if (!g_midGetPluginConfig || !g_midSetConfig || !g_midProcessedWriteId)
                 LOGE("bridge: MobileUiBridge config methods partial (plugin config read/write disabled)");
             // A5 Tier-1 panel surface (best-effort, ALL-OR-NOTHING: every method the viewer uses must resolve.
@@ -927,9 +929,36 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeSetSurface(JNIEnv *env, jobject, jo
 
 // ---- Input ingress (called from the ART UI thread; pushes onto the queue, never attaches to HotSpot) --
 
+// A position-only event safe to coalesce/drop under flood: a camera-drag delta, a hover move, or a touch-move
+// (drag phase 1). Terminal/important events — taps, precise clicks, touch DOWN/UP, wheel, keys, text, menu
+// commits, clear-hover — are NEVER coalesced or dropped (dropping a touch-UP would wedge the engine's drag).
+static bool isCoalescible(const InputEvent &ev) {
+    return ev.kind == IN_CAMERA || ev.kind == IN_MOVE || (ev.kind == IN_TOUCH && ev.a == 1);
+}
+
 static void enqueue(InputEvent ev) {
     std::lock_guard<std::mutex> lk(g_inLock);
-    if (g_inQueue.size() < 512) g_inQueue.push_back(ev);   // bound the queue; drop if a stall backs it up
+    // 1) Coalesce a high-frequency position stream into the queue tail so a fast camera/drag/hover can't flood
+    //    the queue and push terminal events past the cap. Camera deltas SUM; move/touch-move keep the LATEST
+    //    position (one update per drain frame is all the engine needs). Down/up break the chain (different a).
+    if (!g_inQueue.empty()) {
+        InputEvent &tail = g_inQueue.back();
+        if (ev.kind == IN_CAMERA && tail.kind == IN_CAMERA) { tail.a += ev.a; tail.b += ev.b; return; }
+        if (ev.kind == IN_MOVE && tail.kind == IN_MOVE) { tail.a = ev.a; tail.b = ev.b; return; }
+        if (ev.kind == IN_TOUCH && ev.a == 1 && tail.kind == IN_TOUCH && tail.a == 1 && tail.d == ev.d) {
+            tail.b = ev.b; tail.c = ev.c; return;   // latest drag-move position (same button)
+        }
+    }
+    if (g_inQueue.size() < 512) { g_inQueue.push_back(ev); return; }
+    // 2) Queue at the cap. A coalescible position event can be safely dropped; a terminal event must survive —
+    //    evict the OLDEST coalescible (position) event to make room, then keep the terminal. If the whole queue
+    //    is terminals (no position event to evict — not realistic at human input rates), keep it anyway: a few
+    //    over 512 is far better than dropping a release/commit and wedging input.
+    if (isCoalescible(ev)) return;
+    for (auto it = g_inQueue.begin(); it != g_inQueue.end(); ++it) {
+        if (isCoalescible(*it)) { g_inQueue.erase(it); break; }
+    }
+    g_inQueue.push_back(ev);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -1117,6 +1146,13 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeListPanels(JNIEnv *artEnv, jobject) {
     if (!panelReady()) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midListPanels);
+}
+// A8: persist pending plugin-config writes (call when the app backgrounds, off the UI thread). Gated by the
+// MobileUiBridge publication latch; a no-op if flushConfig didn't resolve. Returns the bridge's JSON ack.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeFlushConfig(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midFlushConfig) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midFlushConfig);
 }
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeClosePanel(JNIEnv *artEnv, jobject) {

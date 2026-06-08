@@ -117,6 +117,8 @@ object JvmLauncher {
     external fun nativeGetPluginConfig(group: String): String
     external fun nativeSetConfig(group: String, key: String, value: String): String
     external fun nativeProcessedWriteId(): Long
+    // A8: persist pending plugin-config writes (call when the app backgrounds). Off the UI thread (onBridge).
+    external fun nativeFlushConfig(): String
 
     // A5 Tier-1 plugin panels: a plugin's Swing side-panel rendered off-screen to an ARGB int[] (like the
     // game blit), pulled here and shown in a zoom/pan view; taps map back via panelClick. Off the UI thread.
@@ -214,6 +216,7 @@ object JvmLauncher {
     fun getPluginConfig(group: String) = nativeGetPluginConfig(group)
     fun setConfig(group: String, key: String, value: String) = nativeSetConfig(group, key, value)
     fun processedWriteId() = nativeProcessedWriteId()
+    fun flushConfig() = nativeFlushConfig()
 
     fun listPanels() = nativeListPanels()
     fun openPanel(index: Int) = nativeOpenPanel(index)
