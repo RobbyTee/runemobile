@@ -20,7 +20,10 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
+import android.view.Gravity
+import android.widget.Button
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.ui.platform.ComposeView
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -98,11 +101,29 @@ class MainActivity : AppCompatActivity() {
         surfaceView = SurfaceView(this)
         keyboardView = GameInputView(this)
         menuOverlay = MenuOverlayView(this)
+        // A4 plugin UI: a full-screen Compose panel (GONE until opened) + a small launcher button. The panel
+        // is a data screen (Compose); the live game overlays above stay classic Views (hybrid, §4.2).
+        val pluginPanel = ComposeView(this).apply { visibility = View.GONE }
+        val pluginButton = Button(this).apply { text = "⚙" }   // gear
+        pluginButton.setOnClickListener {
+            pluginPanel.setContent {
+                PluginPanel(onClose = {
+                    pluginPanel.visibility = View.GONE
+                    pluginButton.visibility = View.VISIBLE
+                })
+            }
+            pluginPanel.visibility = View.VISIBLE
+            pluginButton.visibility = View.GONE
+        }
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
             addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
             addView(keyboardView, FrameLayout.LayoutParams(1, 1))
             addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame
+            addView(pluginPanel, FrameLayout.LayoutParams(mp, mp))   // Compose plugin list (GONE until opened)
+            addView(pluginButton, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.END))
         }
         setContentView(root)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
@@ -505,6 +526,7 @@ class MainActivity : AppCompatActivity() {
             "-Dheadless.captureTargetFrames=999999", // never early-exit; ride the window
             "-Drunelite.menupeek=true",             // A2: publish the menu-peek snapshot each client tick
             "-Drunelite.menupeek.maxEntries=14",
+            "-Drunelite.mobileui=true",             // A4: plugin control plane (list/toggle/config from the host)
         )
         if (autologinArmed) {
             opts.addAll(JagexTokens.autologinOpts)
@@ -515,7 +537,6 @@ class MainActivity : AppCompatActivity() {
             // are already on above) and arm the one-shot GateCensus probe in DeviceHeadlessBoot.
             opts.addAll(listOf(
                 "-Drunelite.gatecensus=true",
-                "-Drunelite.mobileui=true",
                 "-Drunelite.mobilechrome=true",
                 "-Drunelite.huddata=true",
                 "-Drunelite.hudveneer=true",
