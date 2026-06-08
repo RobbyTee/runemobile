@@ -304,11 +304,13 @@ public final class HudVeneerBridge
 				final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
 				final int rowW = chatAreaW > 0 ? chatAreaW : CHAT_DEFAULT_W;
 				final Widget w = c.getWidget(chatId);
+				boolean justReopened = false;
 				if (w != null)
 				{
 					if (w.isHidden())
 					{
 						w.setHidden(false);   // un-collapse: the box was hidden, bring it back
+						justReopened = true;   // defer the tab op-replay one frame so the reopened interface settles
 						chatReopenRebuild = 2; // re-render the channel's messages once the area is re-laid-out (below)
 					}
 					w.setForcedPosition(chatX, chatY);
@@ -336,8 +338,12 @@ public final class HudVeneerBridge
 				// hidden tab stones (the widget still RESOLVES + its script runs while hidden). Gated on the native row
 				// being active; un-hides when the native chrome is toggled off so the engine row shows.
 				setEngineChatTabsHidden(c, chatTabRowH > 0);
+				// Apply a pending tab switch — but NOT on the frame we just un-hid the box. The reopened chatbox
+				// interface needs a frame to settle before its tab op-listener fires + BUILD_CHATBOX has real geometry;
+				// switching on the un-hide frame is the no-op that left the first tap showing an empty box (the user had
+				// to tap again). Leaving pendingChatTab set rides it to the next frame, which lands.
 				final int switchTab = pendingChatTab;
-				if (switchTab >= 0)
+				if (switchTab >= 0 && !justReopened)
 				{
 					pendingChatTab = -1;
 					switchChatTabNow(c, switchTab);
