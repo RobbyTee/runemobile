@@ -62,12 +62,12 @@ ok "project: $PROJECT"
 
 # ---- 4. enable the (free) Cloud Testing APIs ---------------------------------------------------------------
 step "Enabling the Cloud Testing APIs (free, no billing for the Spark tier)"
-if gcloud services enable cloudtesting.googleapis.com toolresults.googleapis.com --project "$PROJECT" 2>/tmp/fb-enable-err; then
+if gcloud services enable testing.googleapis.com toolresults.googleapis.com --project "$PROJECT" 2>/tmp/fb-enable-err; then
   ok "APIs enabled"
 else
   warn "Could not enable the testing APIs automatically:"; cat /tmp/fb-enable-err >&2
   warn "These two APIs are free (no billing needed). Enable them once in the console, then re-run:"
-  warn "  https://console.cloud.google.com/apis/library/cloudtesting.googleapis.com?project=$PROJECT"
+  warn "  https://console.cloud.google.com/apis/library/testing.googleapis.com?project=$PROJECT"
   warn "  https://console.cloud.google.com/apis/library/toolresults.googleapis.com?project=$PROJECT"
 fi
 
