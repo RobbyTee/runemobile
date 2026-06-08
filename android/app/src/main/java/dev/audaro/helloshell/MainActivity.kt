@@ -2,6 +2,7 @@ package dev.audaro.helloshell
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
@@ -133,6 +134,9 @@ class MainActivity : AppCompatActivity() {
             chromeOverlay.setShown(!chromeOverlay.railsShown)
             chromeButton.text = if (chromeOverlay.railsShown) "▦" else "▤"
         }
+        // A3: on-device Jagex login / switch account — runs the WebView OAuth, writes tokens.json, restarts.
+        val signInButton = Button(this).apply { text = "⎆" }
+        signInButton.setOnClickListener { startActivity(Intent(this, LoginActivity::class.java)) }
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
             addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
@@ -146,6 +150,9 @@ class MainActivity : AppCompatActivity() {
             addView(chromeButton, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP or Gravity.START))
+            addView(signInButton, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL))
         }
         setContentView(root)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
@@ -195,6 +202,15 @@ class MainActivity : AppCompatActivity() {
         // Boot the VM once per process, off the UI thread and on the application context.
         // `adb ... --ez census true` arms the A-1b runtime gate-flip census (extra gates + the census probe).
         val censusMode = intent?.getBooleanExtra("census", false) ?: false
+        // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
+        // BEFORE boot. With none (and not census, which uses pushed tokens), run the on-device Jagex login first;
+        // it writes tokens.json then restarts the process for a clean boot (Review-2: login-first or restart).
+        if (!censusMode && !JagexTokens.hasTokens(applicationContext)) {
+            Log.i(TAG, "a3: no tokens.json — launching on-device Jagex login before boot")
+            startActivity(Intent(this, LoginActivity::class.java))
+            finish()
+            return
+        }
         if (booted.compareAndSet(false, true)) {
             val app = applicationContext
             thread(name = "jvm-boot") { bootJvm(app, censusMode) }
