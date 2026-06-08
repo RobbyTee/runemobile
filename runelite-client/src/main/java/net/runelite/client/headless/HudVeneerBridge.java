@@ -284,6 +284,13 @@ public final class HudVeneerBridge
 				{
 					w.setHidden(true);
 				}
+				// Hiding the toplevel container drops the text/CHATAREA, but the brown chatbox FRAME lives in the
+				// separate Chatbox interface and is normally kept invisible by the per-frame transparency pass in the
+				// open branch below — which DOESN'T run while collapsed, so the engine pops the box back (empty box,
+				// no text). Keep hiding the background sprites here so the whole box stays gone until reopened.
+				hide(c, InterfaceID.Chatbox.CHAT_BACKGROUND);
+				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
+				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
 				buildChatSnapshot(c);
 			}
 			else if (chatX >= 0)
