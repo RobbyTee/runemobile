@@ -93,6 +93,12 @@ static jclass    g_worldCls = nullptr;
 static jmethodID g_midWorldAvail = nullptr, g_midWorldSetUiOpen = nullptr, g_midWorldList = nullptr, g_midWorldHop = nullptr;
 static std::atomic<bool> g_questReady{false};
 static std::atomic<bool> g_worldReady{false};
+// A6 chrome: MobileChromeBridge read-only snapshot facade (tab/panel/minimap/orb/chat/viewport canvas bounds
+// the native edge-rails cover-and-proxy reads each display tick). Separate facade; rl-bridge-thread read
+// behind a release/acquire latch. Single method (getSnapshot) — populated only under -Drunelite.mobilechrome.
+static jclass    g_chromeCls = nullptr;
+static jmethodID g_midChromeSnap = nullptr;
+static std::atomic<bool> g_chromeReady{false};
 
 // ---- Surface / render --------------------------------------------------------------------------------
 static std::mutex      g_winLock;
@@ -280,6 +286,7 @@ static inline bool mobileUiReady() { return g_mobileUiReady.load(std::memory_ord
 static inline bool panelReady()    { return g_panelReady.load(std::memory_order_acquire); }
 static inline bool questReady()    { return g_questReady.load(std::memory_order_acquire); }
 static inline bool worldReady()    { return g_worldReady.load(std::memory_order_acquire); }
+static inline bool chromeReady()    { return g_chromeReady.load(std::memory_order_acquire); }
 
 // Resolve an OPTIONAL static method id, clearing the NoSuchMethodError a miss leaves pending — so a failed
 // lookup can't trip the NEXT JNI call on this thread (the Review-2 MenuPeekBridge pending-exception bug class).
@@ -454,6 +461,29 @@ static bool publishBridge(JNIEnv *env) {
     } else {
         env->ExceptionClear();
         LOGE("bridge: FindClass WorldSwitcherBridge failed (World Switcher reflow disabled)");
+    }
+
+    // A6 chrome: MobileChromeBridge — read-only snapshot facade, single method, rl-bridge-thread read.
+    jclass mc = env->FindClass("net/runelite/client/headless/MobileChromeBridge");
+    if (mc && !env->ExceptionCheck()) {
+        jclass mcg = (jclass) env->NewGlobalRef(mc);
+        env->DeleteLocalRef(mc);
+        if (!mcg) {
+            LOGE("bridge: MobileChromeBridge NewGlobalRef failed (chrome read surface disabled)");
+        } else {
+            g_midChromeSnap = midOpt(env, mcg, "getSnapshot", "()Ljava/lang/String;");
+            if (g_midChromeSnap) {
+                g_chromeCls = mcg;                                      // before the release-store below
+                g_chromeReady.store(true, std::memory_order_release);
+                LOGI("bridge: MobileChromeBridge facade published");
+            } else {
+                env->DeleteGlobalRef(mcg);
+                LOGE("bridge: MobileChromeBridge method id failed (chrome read surface disabled)");
+            }
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass MobileChromeBridge failed (chrome read surface disabled)");
     }
     return true;
 }
@@ -1147,4 +1177,12 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeWorldHop(JNIEnv *, jobject, jint worldId) {
     if (!worldReady()) return;
     facadeVoidInt(g_worldCls, g_midWorldHop, worldId);
+}
+
+// A6 chrome read surface: MobileChromeBridge.getSnapshot — the per-frame tab/panel/minimap/orb/chat/viewport
+// canvas bounds the native edge-rails cover-and-proxy reads. Escaped JSON; populated under -Drunelite.mobilechrome.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeChromeSnapshot(JNIEnv *artEnv, jobject) {
+    if (!chromeReady()) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_chromeCls, g_midChromeSnap);
 }

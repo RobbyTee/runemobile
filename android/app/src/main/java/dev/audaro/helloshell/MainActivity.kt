@@ -562,7 +562,55 @@ class MainActivity : AppCompatActivity() {
             return
         }
         Log.i(TAG, "startJvm rc=$rc (VM up; watch logcat tags jvm-boot/jvm-stdout)")
-        if (census) runA4SeamSelfTest()
+        if (census) {
+            runA4SeamSelfTest()
+            runA6SeamSelfTest()
+        }
+    }
+
+    /**
+     * A6 chrome-seam probe (census mode): does the FIXED-mode MobileChromeBridge read surface resolve real
+     * geometry once the world fully loads? The bridge's own one-shot CHROME_READ verdict fires ~60 LOGGED_IN
+     * frames in — possibly before the scene builds — so this polls the LIVE getSnapshot() for ~40s after login
+     * and reports the most-resolved snapshot. GREEN = the read surface ever resolved a viewport OR a tab stone
+     * (=> A6 cover-and-proxy is viable in FIXED mode; the resizable look is a separate, deferrable concern).
+     * RED = logged in but the surface stayed empty (=> the resizable-canvas resize is a hard prerequisite).
+     * Runs on the rl-bridge thread (queued after the A4 test), by which point the world is fully loaded.
+     */
+    private fun runA6SeamSelfTest() {
+        JvmLauncher.onBridge {
+            var loggedIn = false
+            var everResolved = false   // viewport OR any tab stone resolved => cover-and-proxy viable in fixed mode
+            var best = "(no loggedIn snapshot)"
+            for (i in 0 until 40) {     // ~40s @ 1s — chrome only ticks once mobilechrome gate + LOGGED_IN
+                val snap = try { JvmLauncher.chromeSnapshot() } catch (t: Throwable) { "" }
+                if (snap.length > 2) {
+                    try {
+                        val o = org.json.JSONObject(snap)
+                        if (o.optBoolean("loggedIn")) {
+                            loggedIn = true
+                            val vp = !o.isNull("viewport")
+                            val tabs = o.optJSONArray("tabs")
+                            var tabsNonNull = 0
+                            if (tabs != null) for (j in 0 until tabs.length()) if (!tabs.isNull(j)) tabsNonNull++
+                            val resolved = vp || tabsNonNull > 0
+                            if (resolved) everResolved = true
+                            best = "rootKind=${o.optString("rootKind", "?")} resized=${o.optBoolean("resized")} " +
+                                "topLevel=${o.optInt("topLevelId", -1)} activeTab=${o.optInt("activeTab", -1)} " +
+                                "viewport=$vp tabsNonNull=$tabsNonNull/14 sidePanel=${!o.isNull("sidePanel")} " +
+                                "minimap=${!o.isNull("minimap")} orbs=${!o.isNull("orbs")} chat=${!o.isNull("chat")}"
+                            if (resolved) break
+                        }
+                    } catch (t: Throwable) { /* transient parse — retry */ }
+                }
+                Thread.sleep(1000)
+            }
+            when {
+                everResolved -> Log.i(TAG, "ANDROID_A6_SEAM_GREEN fixed-mode chrome read resolved: $best")
+                loggedIn -> Log.e(TAG, "ANDROID_A6_SEAM_RED loggedIn but read surface empty: $best — resizable-canvas fix required")
+                else -> Log.e(TAG, "ANDROID_A6_SEAM_RED chrome snapshot never reached loggedIn (gate/login/boot?)")
+            }
+        }
     }
 
     /**

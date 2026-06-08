@@ -143,6 +143,10 @@ object JvmLauncher {
     external fun nativeWorldListJson(): String
     external fun nativeWorldHop(worldId: Int)
 
+    // A6 chrome: the per-frame MobileChromeBridge read-only snapshot (escaped JSON: tab/panel/minimap/orb/chat/
+    // viewport canvas bounds the native edge-rails read). Gated by -Drunelite.mobilechrome. Off the UI thread.
+    external fun nativeChromeSnapshot(): String
+
     // Kotlin-friendly aliases.
     fun setEnv(key: String, value: String) = nativeSetEnv(key, value)
     fun setSurface(surface: Surface?) = nativeSetSurface(surface)
@@ -201,4 +205,5 @@ object JvmLauncher {
     fun worldSetUiOpen(open: Boolean) = nativeWorldSetUiOpen(open)
     fun worldListJson() = nativeWorldListJson()
     fun worldHop(worldId: Int) = nativeWorldHop(worldId)
+    fun chromeSnapshot() = nativeChromeSnapshot()
 }
