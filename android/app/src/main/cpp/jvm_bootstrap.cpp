@@ -62,6 +62,44 @@ static jmethodID g_midSelectMenuPoint = nullptr;
 static jclass    g_menuPeekCls = nullptr;
 static jmethodID g_midMenuSnapshot = nullptr, g_midMenuPublishSeq = nullptr;
 
+// A4 plugin control plane (MobileUiBridge) — resolved best-effort; inert unless -Drunelite.mobileui=true.
+// Called from a dedicated ART background thread (the Kotlin "rl-bridge" executor), which daemon-attaches to
+// HotSpot via bridgeEnvAttach() — never the ART UI thread (ANR risk). Strings cross the VM boundary as UTF-8.
+static jclass    g_mobileUiCls = nullptr;
+static jmethodID g_midListPlugins = nullptr, g_midMobileUiSeq = nullptr, g_midPollEvents = nullptr, g_midSetPluginEnabled = nullptr;
+static jmethodID g_midGetPluginConfig = nullptr, g_midSetConfig = nullptr, g_midProcessedWriteId = nullptr;
+// A5 Tier-1 plugin panels (rendered off-screen under CACIO; the ARGB int[] image is marshalled cross-VM).
+static jmethodID g_midListPanels = nullptr, g_midOpenPanel = nullptr, g_midClosePanel = nullptr,
+                 g_midPanelW = nullptr, g_midPanelH = nullptr, g_midPanelSeq = nullptr,
+                 g_midPanelPixels = nullptr, g_midPanelClick = nullptr;
+// Publication latches for the MobileUiBridge facade. The method-id globals above are plain (non-atomic),
+// written once on the VM boot thread (publishBridge); the A4/A5 externs run on the SEPARATE rl-bridge thread
+// and a UI tap can submit a bridge call before startJvm even returns. These release/acquire flags give the
+// happens-before so an extern NEVER reads a half-published facade. g_panelReady is ALL-OR-NOTHING: true only
+// if EVERY panel method the viewer uses resolved (incl. closePanel — without it, viewer dispose would
+// silently leak the open engine-side panel).
+static std::atomic<bool> g_mobileUiReady{false};
+static std::atomic<bool> g_panelReady{false};
+
+// A5 Tier-2 native reflow facades — QuestHelperBridge / WorldSwitcherBridge. Separate classes (like
+// MenuPeekBridge), already init()'d + tick()'d by MobileUiBridge, so live whenever -Drunelite.mobileui=true.
+// Read on the rl-bridge thread, so each gets a release/acquire publication latch like MobileUiBridge (all-or-
+// nothing). NOTE: Quest's isAvailable() is false unless the Quest Helper hub plugin is installed (the native
+// screen then falls back to the Tier-1 rendered panel); the seam still resolves either way.
+static jclass    g_questCls = nullptr;
+static jmethodID g_midQuestAvail = nullptr, g_midQuestSetUiOpen = nullptr, g_midQuestList = nullptr,
+                 g_midQuestActive = nullptr, g_midQuestStart = nullptr, g_midQuestStop = nullptr;
+static jclass    g_worldCls = nullptr;
+static jmethodID g_midWorldAvail = nullptr, g_midWorldSetUiOpen = nullptr, g_midWorldList = nullptr, g_midWorldHop = nullptr;
+static std::atomic<bool> g_questReady{false};
+static std::atomic<bool> g_worldReady{false};
+// A6 chrome: MobileChromeBridge read-only snapshot facade (tab/panel/minimap/orb/chat/viewport canvas bounds
+// the native edge-rails cover-and-proxy reads each display tick). Separate facade; rl-bridge-thread read
+// behind a release/acquire latch. Single method (getSnapshot) — populated only under -Drunelite.mobilechrome.
+static jclass    g_chromeCls = nullptr;
+static jmethodID g_midChromeSnap = nullptr;
+static std::atomic<bool> g_chromeReady{false};
+
 // ---- Surface / render --------------------------------------------------------------------------------
 static std::mutex      g_winLock;
 static ANativeWindow  *g_window = nullptr;     // SurfaceView's window (acquired); guarded by g_winLock
@@ -89,6 +127,12 @@ static std::atomic<int> g_snapRadius{0};      // snapRadius() -> finger snap rad
 static std::mutex            g_menuLock;
 static std::string           g_menuSnapshot = "{\"active\":false}";
 static std::atomic<long long> g_menuPublishSeq{-1};
+
+// A6 chrome snapshot, republished every frame by the render thread (the only HotSpot-attached caller) for the
+// UI thread's cover-and-proxy tab-rail overlay to read lock-free without ever attaching to HotSpot — same
+// pattern as the A2 menu snapshot. MobileChromeBridge has no publish-seq; the JSON is small + rebuilt each tick.
+static std::mutex            g_chromeLock;
+static std::string           g_chromeSnapshotPub = "{\"enabled\":false}";
 
 // ---- Input queue (UI thread enqueues; render thread drains and dispatches into the bridge) -----------
 enum InputKind {
@@ -216,8 +260,12 @@ static void preloadJreLibs(const std::string &libraryPath) {
 static std::string jstr(JNIEnv *env, jstring s) {
     if (s == nullptr) return {};
     const char *c = env->GetStringUTFChars(s, nullptr);
-    std::string out = c ? c : "";
-    if (c) env->ReleaseStringUTFChars(s, c);
+    if (c == nullptr) {                            // OOM: GetStringUTFChars leaves a pending exception
+        if (env->ExceptionCheck()) env->ExceptionClear();   // clear so it can't trip the next JNI call
+        return {};
+    }
+    std::string out = c;
+    env->ReleaseStringUTFChars(s, c);
     return out;
 }
 static std::string toInternal(std::string name) {
@@ -237,6 +285,23 @@ static JNIEnv *bridgeEnvAttach() {
     return nullptr;
 }
 
+// Acquire-load the MobileUiBridge publication latches (see g_mobileUiReady/g_panelReady). An extern that
+// sees these true is guaranteed (happens-before) to read fully-resolved method-id globals; false => the
+// facade isn't published yet (or that sub-surface is incomplete) and the extern returns its empty sentinel.
+static inline bool mobileUiReady() { return g_mobileUiReady.load(std::memory_order_acquire); }
+static inline bool panelReady()    { return g_panelReady.load(std::memory_order_acquire); }
+static inline bool questReady()    { return g_questReady.load(std::memory_order_acquire); }
+static inline bool worldReady()    { return g_worldReady.load(std::memory_order_acquire); }
+static inline bool chromeReady()    { return g_chromeReady.load(std::memory_order_acquire); }
+
+// Resolve an OPTIONAL static method id, clearing the NoSuchMethodError a miss leaves pending — so a failed
+// lookup can't trip the NEXT JNI call on this thread (the Review-2 MenuPeekBridge pending-exception bug class).
+static jmethodID midOpt(JNIEnv *env, jclass c, const char *name, const char *sig) {
+    jmethodID m = env->GetStaticMethodID(c, name, sig);
+    if (!m && env->ExceptionCheck()) env->ExceptionClear();
+    return m;
+}
+
 // Resolve + cache the JavaBridge facade as HotSpot global refs. Called once, on the VM's main thread, at
 // boot. Returns true once every method id resolved.
 static bool publishBridge(JNIEnv *env) {
@@ -245,30 +310,29 @@ static bool publishBridge(JNIEnv *env) {
     jclass global = (jclass) env->NewGlobalRef(local);
     env->DeleteLocalRef(local);
     if (!global) return false;
-    g_midSeq        = env->GetStaticMethodID(global, "getFrameSeq", "()I");
-    g_midW          = env->GetStaticMethodID(global, "getFrameWidth", "()I");
-    g_midH          = env->GetStaticMethodID(global, "getFrameHeight", "()I");
-    g_midPixels     = env->GetStaticMethodID(global, "getFramePixels", "()[I");
-    g_midTouch      = env->GetStaticMethodID(global, "onTouch", "(IIII)V");
-    g_midClick      = env->GetStaticMethodID(global, "onClick", "(III)V");
-    g_midCamera     = env->GetStaticMethodID(global, "onCameraDrag", "(II)V");
-    g_midClearHover = env->GetStaticMethodID(global, "clearHover", "()V");
+    g_midSeq        = midOpt(env, global, "getFrameSeq", "()I");
+    g_midW          = midOpt(env, global, "getFrameWidth", "()I");
+    g_midH          = midOpt(env, global, "getFrameHeight", "()I");
+    g_midPixels     = midOpt(env, global, "getFramePixels", "()[I");
+    g_midTouch      = midOpt(env, global, "onTouch", "(IIII)V");
+    g_midClick      = midOpt(env, global, "onClick", "(III)V");
+    g_midCamera     = midOpt(env, global, "onCameraDrag", "(II)V");
+    g_midClearHover = midOpt(env, global, "clearHover", "()V");
     // A1 input-parity surface (all confirmed present by the A-1 bridge census).
-    g_midWheel          = env->GetStaticMethodID(global, "onWheel", "(III)V");
-    g_midClickPrecise   = env->GetStaticMethodID(global, "onClickPrecise", "(III)V");
-    g_midMove           = env->GetStaticMethodID(global, "onMove", "(II)V");
-    g_midText           = env->GetStaticMethodID(global, "onText", "(Ljava/lang/String;)V");
-    g_midKeyStroke      = env->GetStaticMethodID(global, "onKeyStroke", "(I)V");
-    g_midTextInputOpen  = env->GetStaticMethodID(global, "isTextInputOpen", "()Z");
-    g_midInteractTapSeq = env->GetStaticMethodID(global, "getInteractTapSeq", "()I");
-    g_midSnapRadius     = env->GetStaticMethodID(global, "snapRadius", "()I");
-    g_midSelectMenuPoint = env->GetStaticMethodID(global, "selectMenuPoint", "(II)V");   // A2 commit
+    g_midWheel          = midOpt(env, global, "onWheel", "(III)V");
+    g_midClickPrecise   = midOpt(env, global, "onClickPrecise", "(III)V");
+    g_midMove           = midOpt(env, global, "onMove", "(II)V");
+    g_midText           = midOpt(env, global, "onText", "(Ljava/lang/String;)V");
+    g_midKeyStroke      = midOpt(env, global, "onKeyStroke", "(I)V");
+    g_midTextInputOpen  = midOpt(env, global, "isTextInputOpen", "()Z");
+    g_midInteractTapSeq = midOpt(env, global, "getInteractTapSeq", "()I");
+    g_midSnapRadius     = midOpt(env, global, "snapRadius", "()I");
+    g_midSelectMenuPoint = midOpt(env, global, "selectMenuPoint", "(II)V");   // A2 commit
     if (!g_midSeq || !g_midW || !g_midH || !g_midPixels || !g_midTouch || !g_midClick
         || !g_midCamera || !g_midClearHover
         || !g_midWheel || !g_midClickPrecise || !g_midMove || !g_midText || !g_midKeyStroke
         || !g_midTextInputOpen || !g_midInteractTapSeq || !g_midSnapRadius || !g_midSelectMenuPoint) {
-        env->ExceptionClear();
-        env->DeleteGlobalRef(global);
+        env->DeleteGlobalRef(global);   // midOpt already cleared any pending NoSuchMethodError
         LOGE("bridge: a JavaBridge method id failed to resolve");
         return false;
     }
@@ -281,21 +345,151 @@ static bool publishBridge(JNIEnv *env) {
     if (mp && !env->ExceptionCheck()) {
         jclass mpg = (jclass) env->NewGlobalRef(mp);
         env->DeleteLocalRef(mp);
-        jmethodID snap = env->GetStaticMethodID(mpg, "getSnapshot", "()Ljava/lang/String;");
-        jmethodID pseq = env->GetStaticMethodID(mpg, "getPublishSeq", "()J");
-        if (mpg && snap && pseq) {
-            g_menuPeekCls = mpg; g_midMenuSnapshot = snap; g_midMenuPublishSeq = pseq;
-            LOGI("bridge: MenuPeekBridge facade published");
+        if (!mpg) {                       // OOM creating the global ref — never resolve methods against null
+            LOGE("bridge: MenuPeekBridge NewGlobalRef failed (menu-peek disabled)");
         } else {
-            // A failed GetStaticMethodID leaves a NoSuchMethodError pending — clear it so the next JNI call
-            // (the essential JavaBridge path) doesn't trip the pending-exception assertion.
-            env->ExceptionClear();
-            if (mpg) env->DeleteGlobalRef(mpg);
-            LOGE("bridge: MenuPeekBridge method id failed to resolve (menu-peek disabled)");
+            jmethodID snap = midOpt(env, mpg, "getSnapshot", "()Ljava/lang/String;");
+            jmethodID pseq = midOpt(env, mpg, "getPublishSeq", "()J");
+            if (snap && pseq) {
+                g_menuPeekCls = mpg; g_midMenuSnapshot = snap; g_midMenuPublishSeq = pseq;
+                LOGI("bridge: MenuPeekBridge facade published");
+            } else {
+                env->DeleteGlobalRef(mpg);   // midOpt already cleared any pending NoSuchMethodError
+                LOGE("bridge: MenuPeekBridge method id failed to resolve (menu-peek disabled)");
+            }
         }
     } else {
         env->ExceptionClear();
         LOGE("bridge: FindClass MenuPeekBridge failed (menu-peek disabled)");
+    }
+
+    // A4: MobileUiBridge is the plugin control plane — resolve best-effort (inert unless -Drunelite.mobileui=true).
+    jclass mu = env->FindClass("net/runelite/client/headless/MobileUiBridge");
+    if (mu && !env->ExceptionCheck()) {
+        jclass mug = (jclass) env->NewGlobalRef(mu);
+        env->DeleteLocalRef(mu);
+        if (!mug) {                       // OOM creating the global ref — never resolve methods against null
+            LOGE("bridge: MobileUiBridge NewGlobalRef failed (plugin control disabled)");
+            return true;
+        }
+        jmethodID lp = midOpt(env, mug, "listPlugins", "()Ljava/lang/String;");
+        jmethodID sq = midOpt(env, mug, "getMobileUiSeq", "()J");
+        jmethodID pe = midOpt(env, mug, "pollMobileUiEvents", "(J)Ljava/lang/String;");
+        jmethodID se = midOpt(env, mug, "setPluginEnabled", "(Ljava/lang/String;Z)Ljava/lang/String;");
+        if (lp && sq && pe && se) {
+            g_mobileUiCls = mug; g_midListPlugins = lp; g_midMobileUiSeq = sq; g_midPollEvents = pe; g_midSetPluginEnabled = se;
+            // Config surface (best-effort; a null here disables config read/write only — NOT list/toggle).
+            g_midGetPluginConfig  = midOpt(env, mug, "getPluginConfig", "(Ljava/lang/String;)Ljava/lang/String;");
+            g_midSetConfig        = midOpt(env, mug, "setConfig", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+            g_midProcessedWriteId = midOpt(env, mug, "getProcessedWriteId", "()J");
+            if (!g_midGetPluginConfig || !g_midSetConfig || !g_midProcessedWriteId)
+                LOGE("bridge: MobileUiBridge config methods partial (plugin config read/write disabled)");
+            // A5 Tier-1 panel surface (best-effort, ALL-OR-NOTHING: every method the viewer uses must resolve.
+            // closePanel in particular — without it, PanelView dispose can't close the open engine-side panel,
+            // so a partial set disables panels entirely rather than opening one it can never close.)
+            g_midListPanels  = midOpt(env, mug, "listPanels", "()Ljava/lang/String;");
+            g_midOpenPanel   = midOpt(env, mug, "openPanel", "(I)Ljava/lang/String;");
+            g_midClosePanel  = midOpt(env, mug, "closePanel", "()Ljava/lang/String;");
+            g_midPanelW      = midOpt(env, mug, "getPanelWidth", "()I");
+            g_midPanelH      = midOpt(env, mug, "getPanelHeight", "()I");
+            g_midPanelSeq    = midOpt(env, mug, "getPanelFrameSeq", "()I");
+            g_midPanelPixels = midOpt(env, mug, "getPanelPixels", "()[I");
+            g_midPanelClick  = midOpt(env, mug, "panelClick", "(II)Ljava/lang/String;");
+            bool panelOk = g_midListPanels && g_midOpenPanel && g_midClosePanel && g_midPanelW
+                        && g_midPanelH && g_midPanelSeq && g_midPanelPixels && g_midPanelClick;
+            if (!panelOk) LOGE("bridge: MobileUiBridge panel methods incomplete (Tier-1 panels disabled)");
+            // Publish via release-store so the rl-bridge thread's acquire-load sees a fully-resolved facade
+            // (panels first, then the umbrella latch — both happen-after every method-id write above).
+            g_panelReady.store(panelOk, std::memory_order_release);
+            g_mobileUiReady.store(true, std::memory_order_release);
+            LOGI("bridge: MobileUiBridge facade published (panels=%s)", panelOk ? "on" : "off");
+        } else {
+            env->DeleteGlobalRef(mug);   // midOpt already cleared any pending NoSuchMethodError
+            LOGE("bridge: MobileUiBridge method id failed (plugin control disabled)");
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass MobileUiBridge failed (plugin control disabled)");
+    }
+
+    // A5 Tier-2: QuestHelperBridge — separate facade, all-or-nothing, rl-bridge-thread read (release latch).
+    jclass qh = env->FindClass("net/runelite/client/headless/QuestHelperBridge");
+    if (qh && !env->ExceptionCheck()) {
+        jclass qhg = (jclass) env->NewGlobalRef(qh);
+        env->DeleteLocalRef(qh);
+        if (!qhg) {
+            LOGE("bridge: QuestHelperBridge NewGlobalRef failed (Quest Helper reflow disabled)");
+        } else {
+            g_midQuestAvail     = midOpt(env, qhg, "isAvailable", "()Z");
+            g_midQuestSetUiOpen = midOpt(env, qhg, "setUiOpen", "(Z)V");
+            g_midQuestList      = midOpt(env, qhg, "getQuestListJson", "()Ljava/lang/String;");
+            g_midQuestActive    = midOpt(env, qhg, "getQuestActiveJson", "()Ljava/lang/String;");
+            g_midQuestStart     = midOpt(env, qhg, "startQuest", "(Ljava/lang/String;)V");
+            g_midQuestStop      = midOpt(env, qhg, "stopQuest", "()V");
+            bool questOk = g_midQuestAvail && g_midQuestSetUiOpen && g_midQuestList
+                        && g_midQuestActive && g_midQuestStart && g_midQuestStop;
+            if (questOk) {
+                g_questCls = qhg;                                       // before the release-store below
+                g_questReady.store(true, std::memory_order_release);
+                LOGI("bridge: QuestHelperBridge facade published");
+            } else {
+                env->DeleteGlobalRef(qhg);
+                LOGE("bridge: QuestHelperBridge method id failed (Quest Helper reflow disabled)");
+            }
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass QuestHelperBridge failed (Quest Helper reflow disabled)");
+    }
+
+    // A5 Tier-2: WorldSwitcherBridge — separate facade, all-or-nothing, rl-bridge-thread read (release latch).
+    jclass wsb = env->FindClass("net/runelite/client/headless/WorldSwitcherBridge");
+    if (wsb && !env->ExceptionCheck()) {
+        jclass wsg = (jclass) env->NewGlobalRef(wsb);
+        env->DeleteLocalRef(wsb);
+        if (!wsg) {
+            LOGE("bridge: WorldSwitcherBridge NewGlobalRef failed (World Switcher reflow disabled)");
+        } else {
+            g_midWorldAvail     = midOpt(env, wsg, "isAvailable", "()Z");
+            g_midWorldSetUiOpen = midOpt(env, wsg, "setUiOpen", "(Z)V");
+            g_midWorldList      = midOpt(env, wsg, "getWorldListJson", "()Ljava/lang/String;");
+            g_midWorldHop       = midOpt(env, wsg, "hop", "(I)V");
+            bool worldOk = g_midWorldAvail && g_midWorldSetUiOpen && g_midWorldList && g_midWorldHop;
+            if (worldOk) {
+                g_worldCls = wsg;
+                g_worldReady.store(true, std::memory_order_release);
+                LOGI("bridge: WorldSwitcherBridge facade published");
+            } else {
+                env->DeleteGlobalRef(wsg);
+                LOGE("bridge: WorldSwitcherBridge method id failed (World Switcher reflow disabled)");
+            }
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass WorldSwitcherBridge failed (World Switcher reflow disabled)");
+    }
+
+    // A6 chrome: MobileChromeBridge — read-only snapshot facade, single method, rl-bridge-thread read.
+    jclass mc = env->FindClass("net/runelite/client/headless/MobileChromeBridge");
+    if (mc && !env->ExceptionCheck()) {
+        jclass mcg = (jclass) env->NewGlobalRef(mc);
+        env->DeleteLocalRef(mc);
+        if (!mcg) {
+            LOGE("bridge: MobileChromeBridge NewGlobalRef failed (chrome read surface disabled)");
+        } else {
+            g_midChromeSnap = midOpt(env, mcg, "getSnapshot", "()Ljava/lang/String;");
+            if (g_midChromeSnap) {
+                g_chromeCls = mcg;                                      // before the release-store below
+                g_chromeReady.store(true, std::memory_order_release);
+                LOGI("bridge: MobileChromeBridge facade published");
+            } else {
+                env->DeleteGlobalRef(mcg);
+                LOGE("bridge: MobileChromeBridge method id failed (chrome read surface disabled)");
+            }
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass MobileChromeBridge failed (chrome read surface disabled)");
     }
     return true;
 }
@@ -395,10 +589,31 @@ static void *renderLoop(void *) {
                             std::lock_guard<std::mutex> lk(g_menuLock);
                             g_menuSnapshot.assign(c);
                             env->ReleaseStringUTFChars(js, c);
+                        } else if (env->ExceptionCheck()) {
+                            env->ExceptionClear();   // OOM: don't leave it pending for the next bridge call
                         }
                         env->DeleteLocalRef(js);
                     }
                     g_menuPublishSeq.store(sq, std::memory_order_relaxed);
+                }
+            }
+
+            // A6: republish the chrome snapshot each frame (the cover-and-proxy rails need fresh stone bounds;
+            // it's a small JSON rebuilt each client tick, and only meaningful in-world, so a per-frame copy is
+            // cheap). The UI thread reads g_chromeSnapshotPub via nativeChromeSnapshotPub() — no HotSpot attach.
+            if (g_chromeReady.load(std::memory_order_acquire) && g_chromeCls) {
+                jstring js = (jstring) env->CallStaticObjectMethod(g_chromeCls, g_midChromeSnap);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); }
+                else if (js) {
+                    const char *c = env->GetStringUTFChars(js, nullptr);
+                    if (c) {
+                        std::lock_guard<std::mutex> lk(g_chromeLock);
+                        g_chromeSnapshotPub.assign(c);
+                        env->ReleaseStringUTFChars(js, c);
+                    } else if (env->ExceptionCheck()) {
+                        env->ExceptionClear();   // OOM: don't leave it pending for the next bridge call
+                    }
+                    env->DeleteLocalRef(js);
                 }
             }
         }
@@ -723,3 +938,283 @@ extern "C" JNIEXPORT jint JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeFrameWidth(JNIEnv *, jobject) { return g_lastFrameW.load(std::memory_order_relaxed); }
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeFrameHeight(JNIEnv *, jobject) { return g_lastFrameH.load(std::memory_order_relaxed); }
+
+// ---- A4 plugin control plane (MobileUiBridge) --------------------------------------------------------
+// These run on the Kotlin "rl-bridge" executor thread (NOT the ART UI thread). They daemon-attach that OS
+// thread to the embedded HotSpot VM (bridgeEnvAttach) and marshal strings across the VM boundary as UTF-8:
+// the ART JNIEnv* (param) makes the ART return value; the HotSpot env makes the bridge call.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeListPlugins(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady()) return artEnv->NewStringUTF("");   // acquire: facade not published yet
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midListPlugins) return artEnv->NewStringUTF("");
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midListPlugins);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); if (r) hs->DeleteLocalRef(r); return artEnv->NewStringUTF(""); }
+    std::string s = jstr(hs, r);            // GetStringUTFChars on the HotSpot env
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(s.c_str()); // re-create the string in the ART VM
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeMobileUiSeq(JNIEnv *, jobject) {
+    if (!mobileUiReady()) return -1;
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midMobileUiSeq) return -1;
+    jlong v = hs->CallStaticLongMethod(g_mobileUiCls, g_midMobileUiSeq);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); return -1; }
+    return v;
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePollMobileUiEvents(JNIEnv *artEnv, jobject, jlong sinceSeq) {
+    if (!mobileUiReady()) return artEnv->NewStringUTF("");
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midPollEvents) return artEnv->NewStringUTF("");
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midPollEvents, sinceSeq);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); if (r) hs->DeleteLocalRef(r); return artEnv->NewStringUTF(""); }
+    std::string s = jstr(hs, r);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(s.c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetPluginEnabled(JNIEnv *artEnv, jobject, jstring jId, jboolean enabled) {
+    if (!mobileUiReady()) return artEnv->NewStringUTF("");
+    std::string id = jstr(artEnv, jId);     // ART string -> std::string
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midSetPluginEnabled) return artEnv->NewStringUTF("");
+    jstring hid = hs->NewStringUTF(id.c_str());
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midSetPluginEnabled, hid, enabled);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (hid) hs->DeleteLocalRef(hid);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeGetPluginConfig(JNIEnv *artEnv, jobject, jstring jGroup) {
+    if (!mobileUiReady()) return artEnv->NewStringUTF("");
+    std::string group = jstr(artEnv, jGroup);
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midGetPluginConfig) return artEnv->NewStringUTF("");
+    jstring hg = hs->NewStringUTF(group.c_str());
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midGetPluginConfig, hg);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (hg) hs->DeleteLocalRef(hg);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetConfig(JNIEnv *artEnv, jobject, jstring jGroup, jstring jKey, jstring jValue) {
+    if (!mobileUiReady()) return artEnv->NewStringUTF("");
+    std::string group = jstr(artEnv, jGroup), key = jstr(artEnv, jKey), value = jstr(artEnv, jValue);
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midSetConfig) return artEnv->NewStringUTF("");
+    jstring hg = hs->NewStringUTF(group.c_str()), hk = hs->NewStringUTF(key.c_str()), hv = hs->NewStringUTF(value.c_str());
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midSetConfig, hg, hk, hv);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (hg) hs->DeleteLocalRef(hg);
+    if (hk) hs->DeleteLocalRef(hk);
+    if (hv) hs->DeleteLocalRef(hv);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeProcessedWriteId(JNIEnv *, jobject) {
+    if (!mobileUiReady()) return -1;
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midProcessedWriteId) return -1;
+    jlong v = hs->CallStaticLongMethod(g_mobileUiCls, g_midProcessedWriteId);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); return -1; }
+    return v;
+}
+
+// ---- A5 Tier-1 plugin panels (rendered off-screen; the ARGB int[] image is marshalled cross-VM) -------
+// Small helper: call a no-arg String bridge method on g_mobileUiCls and return an ART string.
+static jstring mobileUiStr(JNIEnv *artEnv, jmethodID m) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !m) return artEnv->NewStringUTF("");
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, m);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+static jint mobileUiInt(jmethodID m) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !m) return 0;
+    jint v = hs->CallStaticIntMethod(g_mobileUiCls, m);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); return 0; }
+    return v;
+}
+// panelReady() gates the whole Tier-1 surface (acquire for publication + all-or-nothing: false if ANY panel
+// method, e.g. closePanel, didn't resolve — so the viewer never opens a panel it could never close).
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeListPanels(JNIEnv *artEnv, jobject) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midListPanels);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeClosePanel(JNIEnv *artEnv, jobject) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midClosePanel);
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelWidth(JNIEnv *, jobject) { return panelReady() ? mobileUiInt(g_midPanelW) : 0; }
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelHeight(JNIEnv *, jobject) { return panelReady() ? mobileUiInt(g_midPanelH) : 0; }
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelFrameSeq(JNIEnv *, jobject) { return panelReady() ? mobileUiInt(g_midPanelSeq) : 0; }
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOpenPanel(JNIEnv *artEnv, jobject, jint index) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midOpenPanel) return artEnv->NewStringUTF("");
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midOpenPanel, index);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelClick(JNIEnv *artEnv, jobject, jint x, jint y) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midPanelClick) return artEnv->NewStringUTF("");
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midPanelClick, x, y);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+extern "C" JNIEXPORT jintArray JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelPixels(JNIEnv *artEnv, jobject) {
+    if (!panelReady()) return nullptr;
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midPanelPixels) return nullptr;
+    jintArray src = (jintArray) hs->CallStaticObjectMethod(g_mobileUiCls, g_midPanelPixels);
+    if (hs->ExceptionCheck() || !src) { hs->ExceptionClear(); if (src) hs->DeleteLocalRef(src); return nullptr; }
+    jsize n = hs->GetArrayLength(src);
+    jintArray dst = artEnv->NewIntArray(n);
+    if (!dst) {                              // ART OOM: clear its pending exc, drop the HotSpot ref, signal null
+        if (artEnv->ExceptionCheck()) artEnv->ExceptionClear();
+        hs->DeleteLocalRef(src);
+        return nullptr;
+    }
+    if (n > 0) {
+        jint *buf = hs->GetIntArrayElements(src, nullptr);
+        if (buf) {
+            artEnv->SetIntArrayRegion(dst, 0, n, buf);
+            hs->ReleaseIntArrayElements(src, buf, JNI_ABORT);
+        } else {                             // HotSpot OOM pinning the array: clear so it can't trip the next
+            if (hs->ExceptionCheck()) hs->ExceptionClear();   // bridge call; return null (dst is GC'd)
+            hs->DeleteLocalRef(src);
+            return nullptr;
+        }
+    }
+    hs->DeleteLocalRef(src);
+    return dst;
+}
+
+// ---- A5 Tier-2 native reflow (QuestHelperBridge / WorldSwitcherBridge) -------------------------------
+// Run on the rl-bridge thread (NOT the UI thread); each gates on its facade's acquire latch, then calls the
+// cached static method on the HotSpot env and marshals the result back into the ART env. Generic by (cls, m)
+// since both facades share the same no-arg String / bool / void(bool) / void(int) call shapes.
+static jstring facadeStr(JNIEnv *artEnv, jclass cls, jmethodID m) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m) return artEnv->NewStringUTF("");
+    jstring r = (jstring) hs->CallStaticObjectMethod(cls, m);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+static jboolean facadeBool(jclass cls, jmethodID m) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m) return JNI_FALSE;
+    jboolean v = hs->CallStaticBooleanMethod(cls, m);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); return JNI_FALSE; }
+    return v;
+}
+static void facadeVoidBool(jclass cls, jmethodID m, jboolean b) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m) return;
+    hs->CallStaticVoidMethod(cls, m, b);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+}
+static void facadeVoidInt(jclass cls, jmethodID m, jint i) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m) return;
+    hs->CallStaticVoidMethod(cls, m, i);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+}
+
+// Quest Helper
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeQuestAvailable(JNIEnv *, jobject) {
+    if (!questReady()) return JNI_FALSE;
+    return facadeBool(g_questCls, g_midQuestAvail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeQuestSetUiOpen(JNIEnv *, jobject, jboolean open) {
+    if (!questReady()) return;
+    facadeVoidBool(g_questCls, g_midQuestSetUiOpen, open);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeQuestListJson(JNIEnv *artEnv, jobject) {
+    if (!questReady()) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_questCls, g_midQuestList);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeQuestActiveJson(JNIEnv *artEnv, jobject) {
+    if (!questReady()) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_questCls, g_midQuestActive);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeQuestStart(JNIEnv *artEnv, jobject, jstring jName) {
+    if (!questReady()) return;
+    std::string name = jstr(artEnv, jName);
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_questCls || !g_midQuestStart) return;
+    jstring hn = hs->NewStringUTF(name.c_str());
+    hs->CallStaticVoidMethod(g_questCls, g_midQuestStart, hn);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+    if (hn) hs->DeleteLocalRef(hn);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeQuestStop(JNIEnv *, jobject) {
+    if (!questReady()) return;
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_questCls || !g_midQuestStop) return;
+    hs->CallStaticVoidMethod(g_questCls, g_midQuestStop);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+}
+
+// World Switcher
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeWorldAvailable(JNIEnv *, jobject) {
+    if (!worldReady()) return JNI_FALSE;
+    return facadeBool(g_worldCls, g_midWorldAvail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeWorldSetUiOpen(JNIEnv *, jobject, jboolean open) {
+    if (!worldReady()) return;
+    facadeVoidBool(g_worldCls, g_midWorldSetUiOpen, open);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeWorldListJson(JNIEnv *artEnv, jobject) {
+    if (!worldReady()) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_worldCls, g_midWorldList);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeWorldHop(JNIEnv *, jobject, jint worldId) {
+    if (!worldReady()) return;
+    facadeVoidInt(g_worldCls, g_midWorldHop, worldId);
+}
+
+// A6 chrome read surface: MobileChromeBridge.getSnapshot — the per-frame tab/panel/minimap/orb/chat/viewport
+// canvas bounds the native edge-rails cover-and-proxy reads. Escaped JSON; populated under -Drunelite.mobilechrome.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeChromeSnapshot(JNIEnv *artEnv, jobject) {
+    if (!chromeReady()) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_chromeCls, g_midChromeSnap);
+}
+// A6 overlay read-surface: the render-thread-published chrome snapshot (UI reads lock-free, NO HotSpot attach —
+// safe to call from the Choreographer tick each frame). Distinct from nativeChromeSnapshot (rl-bridge, one-shot).
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeChromeSnapshotPub(JNIEnv *env, jobject) {
+    std::lock_guard<std::mutex> lk(g_chromeLock);
+    return env->NewStringUTF(g_chromeSnapshotPub.c_str());
+}

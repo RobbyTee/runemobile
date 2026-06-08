@@ -2,6 +2,7 @@ package dev.audaro.helloshell
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
@@ -20,7 +21,10 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
+import android.view.Gravity
+import android.widget.Button
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.ui.platform.ComposeView
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -48,6 +52,11 @@ class MainActivity : AppCompatActivity() {
     private var lastTapSeq = 0
     private var keyboardShown = false
     private var frameCallback: Choreographer.FrameCallback? = null
+
+    // A6 native chrome (cover-and-proxy tab rails over the live stones).
+    private lateinit var chromeOverlay: ChromeOverlayView
+    private var chromeUiLogged = false
+    private var lastChromeJson = ""
 
     // A2 press-and-peek menu state.
     private lateinit var menuOverlay: MenuOverlayView
@@ -98,11 +107,52 @@ class MainActivity : AppCompatActivity() {
         surfaceView = SurfaceView(this)
         keyboardView = GameInputView(this)
         menuOverlay = MenuOverlayView(this)
+        // A6 native chrome: cover-and-proxy tab-rails drawn over the live stones. A native tab tap proxies a
+        // precise click onto the live engine stone centre (the engine + plugins stay authoritative).
+        chromeOverlay = ChromeOverlayView(this)
+        chromeOverlay.onTabTap = { idx, gcx, gcy ->
+            Log.i(TAG, "a6: native tab $idx tap -> onClickPrecise($gcx,$gcy)")
+            JvmLauncher.clickPrecise(gcx, gcy, 1)
+        }
+        // A4 plugin UI: a full-screen Compose panel (GONE until opened) + a small launcher button. The panel
+        // is a data screen (Compose); the live game overlays above stay classic Views (hybrid, §4.2).
+        val pluginPanel = ComposeView(this).apply { visibility = View.GONE }
+        val pluginButton = Button(this).apply { text = "⚙" }   // gear
+        pluginButton.setOnClickListener {
+            pluginPanel.setContent {
+                PluginPanel(onClose = {
+                    pluginPanel.visibility = View.GONE
+                    pluginButton.visibility = View.VISIBLE
+                })
+            }
+            pluginPanel.visibility = View.VISIBLE
+            pluginButton.visibility = View.GONE
+        }
+        // A6 A/B: toggle the native rails on/off (▦ = native chrome shown; ▤ = raw engine stones).
+        val chromeButton = Button(this).apply { text = "▦" }
+        chromeButton.setOnClickListener {
+            chromeOverlay.setShown(!chromeOverlay.railsShown)
+            chromeButton.text = if (chromeOverlay.railsShown) "▦" else "▤"
+        }
+        // A3: on-device Jagex login / switch account — runs the WebView OAuth, writes tokens.json, restarts.
+        val signInButton = Button(this).apply { text = "⎆" }
+        signInButton.setOnClickListener { startActivity(Intent(this, LoginActivity::class.java)) }
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
             addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
+            addView(chromeOverlay, FrameLayout.LayoutParams(mp, mp))  // native rails over the live stones
             addView(keyboardView, FrameLayout.LayoutParams(1, 1))
-            addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame
+            addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame + chrome
+            addView(pluginPanel, FrameLayout.LayoutParams(mp, mp))   // Compose plugin list (GONE until opened)
+            addView(pluginButton, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.END))
+            addView(chromeButton, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.START))
+            addView(signInButton, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL))
         }
         setContentView(root)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
@@ -150,9 +200,20 @@ class MainActivity : AppCompatActivity() {
         startInputPolling()
 
         // Boot the VM once per process, off the UI thread and on the application context.
+        // `adb ... --ez census true` arms the A-1b runtime gate-flip census (extra gates + the census probe).
+        val censusMode = intent?.getBooleanExtra("census", false) ?: false
+        // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
+        // BEFORE boot. With none (and not census, which uses pushed tokens), run the on-device Jagex login first;
+        // it writes tokens.json then restarts the process for a clean boot (Review-2: login-first or restart).
+        if (!censusMode && !JagexTokens.hasTokens(applicationContext)) {
+            Log.i(TAG, "a3: no tokens.json — launching on-device Jagex login before boot")
+            startActivity(Intent(this, LoginActivity::class.java))
+            finish()
+            return
+        }
         if (booted.compareAndSet(false, true)) {
             val app = applicationContext
-            thread(name = "jvm-boot") { bootJvm(app) }
+            thread(name = "jvm-boot") { bootJvm(app, censusMode) }
         }
     }
 
@@ -318,11 +379,43 @@ class MainActivity : AppCompatActivity() {
                 if (menuBuilding) {
                     tryBuildNativeMenu()
                 }
+                updateChrome()
                 Choreographer.getInstance().postFrameCallback(this)
             }
         }
         frameCallback = cb
         Choreographer.getInstance().postFrameCallback(cb)
+    }
+
+    /**
+     * A6: feed the cover-and-proxy tab-rails the latest chrome geometry each frame. Reads the render-thread-
+     * published MobileChromeBridge snapshot (lock-free, no HotSpot attach), parses the 14 stone bounds, and
+     * maps them game-canvas -> view via the blit full-stretch (same scale as toGameX/Y, inverted). Skips the
+     * parse when the published JSON is unchanged (e.g. the constant login-screen snapshot).
+     */
+    private fun updateChrome() {
+        if (!::chromeOverlay.isInitialized || !chromeOverlay.railsShown) return
+        val json = JvmLauncher.chromeSnapshotPub()
+        if (json == lastChromeJson) return
+        lastChromeJson = json
+        val fw = JvmLauncher.frameWidth(); val fh = JvmLauncher.frameHeight()
+        val vw = surfaceView.width; val vh = surfaceView.height
+        if (fw <= 0 || fh <= 0 || vw <= 0 || vh <= 0) return
+        val o = try { JSONObject(json) } catch (e: Exception) { return }
+        if (!o.optBoolean("loggedIn")) { chromeOverlay.setStones(emptyList(), -1, 1f, 1f); return }
+        val tabsArr = o.optJSONArray("tabs") ?: return
+        val tabs = ArrayList<IntArray?>(tabsArr.length())
+        for (i in 0 until tabsArr.length()) {
+            if (tabsArr.isNull(i)) { tabs.add(null); continue }
+            val a = tabsArr.optJSONArray(i)
+            tabs.add(if (a != null && a.length() >= 4) intArrayOf(a.getInt(0), a.getInt(1), a.getInt(2), a.getInt(3)) else null)
+        }
+        val active = o.optInt("activeTab", -1)
+        val n = chromeOverlay.setStones(tabs, active, vw.toFloat() / fw, vh.toFloat() / fh)
+        if (n > 0 && !chromeUiLogged) {
+            chromeUiLogged = true
+            Log.i(TAG, "ANDROID_A6_UI_GREEN tabsDrawn=$n activeTab=$active frame=${fw}x${fh} view=${vw}x${vh}")
+        }
     }
 
     private fun vibrateTick() {
@@ -438,7 +531,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    private fun bootJvm(app: android.content.Context) {
+    private fun bootJvm(app: android.content.Context, census: Boolean = false) {
         val javaHome = AssetInstaller.ensureInstalled(app)
         val libjvm = File(javaHome, "lib/server/libjvm.so")
         if (!libjvm.exists()) {
@@ -503,10 +596,36 @@ class MainActivity : AppCompatActivity() {
             "-Dheadless.captureTargetFrames=999999", // never early-exit; ride the window
             "-Drunelite.menupeek=true",             // A2: publish the menu-peek snapshot each client tick
             "-Drunelite.menupeek.maxEntries=14",
+            "-Drunelite.mobileui=true",             // A4: plugin control plane (list/toggle/config from the host)
+            "-Drunelite.mobilechrome=true",         // A6: publish the read-only chrome snapshot (tab-rail bounds)
         )
+        // A7 resizable: render at the screen's landscape aspect — HeadlessResize grows the gamepack Component on
+        // login (stock, inset-aware, the same mechanism iOS device-proved). With the OSRS account in RESIZABLE
+        // display mode the gamepack fills it (resizable toplevel 164 → chat-at-top + resizable chrome unblock);
+        // a FIXED account harmlessly keeps the 765x503 viewport (gamepack pillarboxes, canvas stays 765x503, so
+        // the blit + touch + A6 rails are unchanged — no regression). The account's display mode is the switch.
+        run {
+            val dm = app.resources.displayMetrics
+            val longEdge = maxOf(dm.widthPixels, dm.heightPixels)
+            val shortEdge = maxOf(1, minOf(dm.widthPixels, dm.heightPixels))
+            val renderH = 720
+            val renderW = (renderH.toLong() * longEdge / shortEdge).toInt()
+            opts.add("-Drunelite.headless.resize=${renderW}x${renderH}")
+            Log.i(TAG, "A7 resize armed: ${renderW}x${renderH} (screen ${longEdge}x${shortEdge}; resizable iff account in resizable display mode)")
+        }
         if (autologinArmed) {
             opts.addAll(JagexTokens.autologinOpts)
             Log.i(TAG, "autologin ARMED (tokens.json present): EULA 302,312 -> Play Now 382,248, world 301")
+        }
+        if (census) {
+            // A-1b runtime gate-flip census: turn on the remaining read-surface gates (menupeek + autologin
+            // are already on above) and arm the one-shot GateCensus probe in DeviceHeadlessBoot.
+            opts.addAll(listOf(
+                "-Drunelite.gatecensus=true",
+                "-Drunelite.huddata=true",
+                "-Drunelite.hudveneer=true",
+            ))
+            Log.i(TAG, "A-1b census mode: +huddata/hudveneer + gatecensus (mobileui/mobilechrome/resize always-on)")
         }
 
         Log.i(TAG, "starting HotSpot: DeviceHeadlessBoot, cp=$classpath")
@@ -527,5 +646,224 @@ class MainActivity : AppCompatActivity() {
             return
         }
         Log.i(TAG, "startJvm rc=$rc (VM up; watch logcat tags jvm-boot/jvm-stdout)")
+        if (census) {
+            runA4SeamSelfTest()
+            runA6SeamSelfTest()
+        }
+    }
+
+    /**
+     * A6 chrome-seam probe (census mode): does the FIXED-mode MobileChromeBridge read surface resolve real
+     * geometry once the world fully loads? The bridge's own one-shot CHROME_READ verdict fires ~60 LOGGED_IN
+     * frames in — possibly before the scene builds — so this polls the LIVE getSnapshot() for ~40s after login
+     * and reports the most-resolved snapshot. GREEN = the read surface ever resolved a viewport OR a tab stone
+     * (=> A6 cover-and-proxy is viable in FIXED mode; the resizable look is a separate, deferrable concern).
+     * RED = logged in but the surface stayed empty (=> the resizable-canvas resize is a hard prerequisite).
+     * Runs on the rl-bridge thread (queued after the A4 test), by which point the world is fully loaded.
+     */
+    private fun runA6SeamSelfTest() {
+        JvmLauncher.onBridge {
+            var loggedIn = false
+            var everResolved = false   // viewport OR any tab stone resolved => cover-and-proxy viable in fixed mode
+            var best = "(no loggedIn snapshot)"
+            for (i in 0 until 40) {     // ~40s @ 1s — chrome only ticks once mobilechrome gate + LOGGED_IN
+                val snap = try { JvmLauncher.chromeSnapshot() } catch (t: Throwable) { "" }
+                if (snap.length > 2) {
+                    try {
+                        val o = org.json.JSONObject(snap)
+                        if (o.optBoolean("loggedIn")) {
+                            loggedIn = true
+                            val vp = !o.isNull("viewport")
+                            val tabs = o.optJSONArray("tabs")
+                            var tabsNonNull = 0
+                            if (tabs != null) for (j in 0 until tabs.length()) if (!tabs.isNull(j)) tabsNonNull++
+                            val resolved = vp || tabsNonNull > 0
+                            if (resolved) everResolved = true
+                            best = "rootKind=${o.optString("rootKind", "?")} resized=${o.optBoolean("resized")} " +
+                                "topLevel=${o.optInt("topLevelId", -1)} activeTab=${o.optInt("activeTab", -1)} " +
+                                "viewport=$vp tabsNonNull=$tabsNonNull/14 sidePanel=${!o.isNull("sidePanel")} " +
+                                "minimap=${!o.isNull("minimap")} orbs=${!o.isNull("orbs")} chat=${!o.isNull("chat")}"
+                            if (resolved) break
+                        }
+                    } catch (t: Throwable) { /* transient parse — retry */ }
+                }
+                Thread.sleep(1000)
+            }
+            when {
+                everResolved -> Log.i(TAG, "ANDROID_A6_SEAM_GREEN fixed-mode chrome read resolved: $best")
+                loggedIn -> Log.e(TAG, "ANDROID_A6_SEAM_RED loggedIn but read surface empty: $best — resizable-canvas fix required")
+                else -> Log.e(TAG, "ANDROID_A6_SEAM_RED chrome snapshot never reached loggedIn (gate/login/boot?)")
+            }
+        }
+    }
+
+    /**
+     * A4 host-seam self-test (census mode): prove the Android host can reach the plugin control plane
+     * (MobileUiBridge) ACROSS the VM boundary on the rl-bridge thread — the path A4's UI will use (A-1b proved
+     * the same call in-VM). Read-only: poll listPlugins() until the engine has booted and the -Drunelite.mobileui
+     * gate has wired it, then log the received length + the event seq. (Write/toggle + the Compose UI are next.)
+     */
+    private fun runA4SeamSelfTest() {
+        JvmLauncher.onBridge {
+            var plugins = ""
+            for (i in 0 until 90) {
+                plugins = try { JvmLauncher.listPlugins() } catch (t: Throwable) { "" }
+                if (plugins.length > 2) break
+                Thread.sleep(1000)
+            }
+            val seq = try { JvmLauncher.mobileUiSeq() } catch (t: Throwable) { -1L }
+            if (plugins.length <= 2) {
+                Log.e(TAG, "ANDROID_A4_SEAM_RED listPlugins empty after 90s (mobileui gate / boot?)")
+                return@onBridge
+            }
+            Log.i(TAG, "ANDROID_A4_SEAM_GREEN listPluginsLen=${plugins.length} mobileUiSeq=$seq")
+
+            // A4 write path: toggle a currently-enabled plugin off->on (restoring it) and confirm the
+            // round-trip. setPluginEnabled queues the start/stop on the EDT, so poll until the flag flips.
+            try {
+                val arr = org.json.JSONArray(plugins)
+                var className: String? = null
+                var was = true
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    if (o.optBoolean("enabled")) { className = o.getString("className"); was = true; break }
+                }
+                if (className == null && arr.length() > 0) {      // fallback: none enabled -> first plugin
+                    className = arr.getJSONObject(0).getString("className")
+                    was = arr.getJSONObject(0).optBoolean("enabled")
+                }
+                if (className == null) { Log.e(TAG, "ANDROID_A4_TOGGLE_RED no plugins to toggle"); return@onBridge }
+                val seq0 = JvmLauncher.mobileUiSeq()
+                val ack = JvmLauncher.setPluginEnabled(className, !was)
+                val flipped = pollEnabled(className, !was, 8)
+                val seq1 = JvmLauncher.mobileUiSeq()
+                JvmLauncher.setPluginEnabled(className, was)       // restore original state
+                val restored = pollEnabled(className, was, 8)
+                if (flipped && restored) {
+                    Log.i(TAG, "ANDROID_A4_TOGGLE_GREEN plugin=$className $was->${!was}->$was seq=$seq0->$seq1 ack=$ack")
+                } else {
+                    Log.e(TAG, "ANDROID_A4_TOGGLE_RED plugin=$className flipped=$flipped restored=$restored ack=$ack")
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "ANDROID_A4_TOGGLE_RED parse/toggle threw: $t")
+            }
+
+            // A4 config READ surface: pull one plugin's typed config schema across the boundary — this is what
+            // the config UI renders. (setConfig is wired and follows the same EDT write path as the toggle.)
+            try {
+                val arr2 = org.json.JSONArray(JvmLauncher.listPlugins())
+                var group: String? = null
+                for (i in 0 until arr2.length()) {
+                    val o = arr2.getJSONObject(i)
+                    if (o.optBoolean("hasConfig") && !o.isNull("configGroup")) { group = o.getString("configGroup"); break }
+                }
+                if (group != null) {
+                    val cfg = JvmLauncher.getPluginConfig(group)
+                    val wid = JvmLauncher.processedWriteId()
+                    if (cfg.length > 2) Log.i(TAG, "ANDROID_A4_CONFIG_GREEN group=$group configLen=${cfg.length} writeId=$wid")
+                    else Log.e(TAG, "ANDROID_A4_CONFIG_RED group=$group empty schema")
+                } else {
+                    Log.e(TAG, "ANDROID_A4_CONFIG_RED no plugin advertises a config group")
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "ANDROID_A4_CONFIG_RED getPluginConfig threw: $t")
+            }
+
+            // A5 Tier-1 panel seam: open a plugin's Swing side-panel off-screen (CACIO) and pull its rendered
+            // ARGB image across the VM boundary — the rendered-image fallback that works for any plugin panel.
+            try {
+                val parr = org.json.JSONArray(JvmLauncher.listPanels())
+                if (parr.length() == 0) {
+                    Log.e(TAG, "ANDROID_A5_SEAM_RED no panels listed (mobileui gate / safe-mode?)")
+                } else {
+                    val p0 = parr.getJSONObject(0)
+                    val idx = p0.optInt("index", 0)
+                    val tip = p0.optString("tooltip", "?")
+                    JvmLauncher.openPanel(idx)
+                    var px: IntArray? = null
+                    var w = 0
+                    var h = 0
+                    for (i in 0 until 30) {
+                        Thread.sleep(500)
+                        w = JvmLauncher.panelWidth(); h = JvmLauncher.panelHeight(); px = JvmLauncher.panelPixels()
+                        if (w > 0 && h > 0 && (px?.size ?: 0) >= w * h) break
+                    }
+                    val n = px?.size ?: 0
+                    if (n > 0 && w > 0 && h > 0) {
+                        Log.i(TAG, "ANDROID_A5_SEAM_GREEN panels=${parr.length()} panel='$tip' ${w}x${h} px=$n seq=${JvmLauncher.panelFrameSeq()}")
+                    } else {
+                        Log.e(TAG, "ANDROID_A5_SEAM_RED panels=${parr.length()} panel='$tip' ${w}x${h} px=$n")
+                    }
+                    JvmLauncher.closePanel()
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "ANDROID_A5_SEAM_RED panel seam threw: $t")
+            }
+
+            // A5 Tier-2 Quest Helper seam (QuestHelperBridge). isAvailable() is false unless the Quest Helper
+            // hub plugin is installed — BOTH outcomes prove the seam (the native screen falls back to Tier-1
+            // when false). GREEN = the host reached the bridge and got parseable JSON across the boundary.
+            try {
+                val qAvail = JvmLauncher.questAvailable()
+                JvmLauncher.questSetUiOpen(true)
+                var qlist = "{}"
+                for (i in 0 until 20) {
+                    qlist = JvmLauncher.questListJson()
+                    if (qlist.length > 2 && (!qAvail || qlist.contains("\"quests\""))) break
+                    Thread.sleep(500)
+                }
+                val qobj = org.json.JSONObject(qlist)
+                val qListAvail = qobj.optBoolean("available")
+                val qn = qobj.optJSONArray("quests")?.length() ?: 0
+                org.json.JSONObject(JvmLauncher.questActiveJson())   // parse-check the active surface too
+                JvmLauncher.questSetUiOpen(false)
+                Log.i(TAG, "ANDROID_A5_TIER2_QUEST_GREEN available=$qListAvail quests=$qn isAvailable=$qAvail")
+            } catch (t: Throwable) {
+                Log.e(TAG, "ANDROID_A5_TIER2_QUEST_RED quest seam threw: $t")
+            }
+
+            // A5 Tier-2 World Switcher seam (WorldSwitcherBridge). World Switcher is BUILT-IN and we're
+            // LOGGED_IN, so expect available=true with a populated world list (setUiOpen triggers an async
+            // WorldService refresh — poll until it lands). GREEN requires available=true && worlds>0.
+            try {
+                val wFlag = JvmLauncher.worldAvailable()
+                JvmLauncher.worldSetUiOpen(true)
+                var wAvail = false; var wn = 0; var wcur = -1
+                for (i in 0 until 30) {
+                    Thread.sleep(500)
+                    val o = org.json.JSONObject(JvmLauncher.worldListJson())
+                    wAvail = o.optBoolean("available")
+                    wn = o.optJSONArray("worlds")?.length() ?: 0
+                    wcur = o.optInt("current", -1)
+                    if (wAvail && wn > 0) break
+                }
+                JvmLauncher.worldSetUiOpen(false)
+                if (wAvail && wn > 0) {
+                    Log.i(TAG, "ANDROID_A5_TIER2_WORLD_GREEN available=true worlds=$wn current=$wcur")
+                } else {
+                    Log.e(TAG, "ANDROID_A5_TIER2_WORLD_RED available=$wAvail worlds=$wn isAvailable=$wFlag")
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "ANDROID_A5_TIER2_WORLD_RED world seam threw: $t")
+            }
+        }
+    }
+
+    /** Poll listPlugins() until [className]'s enabled flag == [want] (the toggle applies async on the EDT). */
+    private fun pollEnabled(className: String, want: Boolean, secs: Int): Boolean {
+        for (i in 0 until secs * 2) {
+            try {
+                val list = org.json.JSONArray(JvmLauncher.listPlugins())
+                for (j in 0 until list.length()) {
+                    val o = list.getJSONObject(j)
+                    if (o.getString("className") == className) {
+                        if (o.optBoolean("enabled") == want) return true
+                        break
+                    }
+                }
+            } catch (t: Throwable) { /* transient parse/read — retry */ }
+            Thread.sleep(500)
+        }
+        return false
     }
 }

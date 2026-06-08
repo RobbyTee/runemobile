@@ -233,8 +233,10 @@ honored; any unresolved method is the *real, scoped* surprise the plan should kn
   (`verdict=GREEN resolved=79 missing=0`, `census_md5=fd2c599160bfe1da1323709f02378286`). The "shared Java is
   already there" claim is now captured evidence **at the static-resolution level** — A-1b below proves runtime
   gate activation. (Restaged to `1.12.29` 2026-06-07; census md5 **unchanged** — the bridge surface is stable across the bump.)
-- **A-1b runtime gate-flip census — TODO (emulator).** Confirm each `-D` gate flips its bridge inert→active at
-  runtime under a booted `DeviceHeadlessBoot`. (All six gates already confirmed present in source.)
+- **A-1b runtime gate-flip census — DONE / GREEN (emulator, 2026-06-07).** All six gates flip inert→active at
+  runtime under a booted `DeviceHeadlessBoot` (the `GateCensus` probe): `ANDROID_GATE_CENSUS verdict=GREEN
+  active=6/6 md5=be9883679f9cd8f542a6076fbcf807ff` (`android/dev-tools/a1b-gatecensus/`); `mobileui.listPlugins`
+  returns the full ~32 KB plugin list. (`runelite.hub` deferred to A4; Quest/World `isAvailable` to A5.)
 **Depends on:** nothing (current state).
 **Risk:** very low — it only reads. High value: it converts every downstream "no new Java needed" assumption
 into evidence and front-loads any nasty surprise.
@@ -402,6 +404,24 @@ native World Switcher, hop worlds. md5-gated per panel.
 **Depends on:** A4 (`MobileUiBridge` wired) for Tier-1; A4's gate also enables panels.
 **Risk:** medium — Tier-1 panel rendering shares the frame-blit pattern; the curated screens are straight
 JSON→UI.
+**Status:**
+- **Tier-1 DONE / emulator-GREEN** — seam + rendered-image viewer (`PanelView`/`PanelList`); gate
+  `android/dev-tools/a5-panels/`. (See the blueprint memory for the full A5 Tier-1 record.)
+- **Tier-2 DONE / emulator-GREEN (2026-06-08).** Both curated bridges resolved as **separate facades** (the
+  `MenuPeekBridge` pattern) behind their own release/acquire latches — **zero new shared Java** (both are
+  already `init()`/`tick()`-wired by `MobileUiBridge`; contract guard UNCHANGED). Native externs + Kotlin
+  (`quest*`/`world*` in `jvm_bootstrap.cpp` + `JvmLauncher.kt`); native screens `QuestWorldScreens.kt`
+  (`WorldSwitcherScreen` filterable list+hop; `QuestHelperScreen` state-filtered list + active step/req card +
+  start/stop), routed from `PanelList` (a "Native screens" row per **available** bridge; else the rendered
+  Swing panel is the Tier-1 fallback). Gate `android/dev-tools/a5-tier2/` (`check-a5-tier2.sh` + screencap
+  evidence): seam `ANDROID_A5_TIER2_WORLD_GREEN available=true worlds=404` + `…_QUEST_GREEN available=false`
+  (Quest Helper is a **hub plugin**, absent on the emulator → native row hidden, Tier-1 fallback; native Quest
+  screen exercisable only with the hub plugin installed — deferred per the hub deferral). UI screencap-verified:
+  the native World Switcher renders the live world list (current highlighted, F2P/P2P, activities) →
+  `ANDROID_A5_TIER2_WORLD_UI_GREEN worlds=404 current=301`; back disposes cleanly. A4 + A5 Tier-1 gates still
+  GREEN. **Robustness pass first:** the A3.5/A4/A5 native cross-VM bridge was externally audited and 4 confirmed
+  issues fixed (publication race, JNI exception/array OOM hygiene, all-or-nothing panels, NewGlobalRef check) —
+  `android/AUDIT-BRIEF-mobileui-native-bridge.md` §6.
 
 ---
 

@@ -31,6 +31,17 @@ object JagexTokens {
         return candidates.firstOrNull { it.exists() && it.length() > 0 }
     }
 
+    /** True iff a usable tokens.json (session_id + chosen_account_id) exists — the A3 login-first boot gate. */
+    fun hasTokens(ctx: Context): Boolean {
+        val f = locate(ctx) ?: return false
+        return try {
+            val t = JSONObject(f.readText())
+            t.optString("session_id", "").isNotEmpty() && t.optString("chosen_account_id", "").isNotEmpty()
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     /** Parse tokens.json and set JX_* env. Returns true iff autologin was armed. */
     fun loadAndArm(ctx: Context): Boolean {
         val file = locate(ctx)

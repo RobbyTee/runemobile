@@ -1,6 +1,9 @@
 package dev.audaro.helloshell
 
 import android.view.Surface
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 
 /**
  * Thin Kotlin facade over the native JNI Invocation-API bootstrap + render/input host.
@@ -103,6 +106,51 @@ object JvmLauncher {
     external fun nativeFrameWidth(): Int
     external fun nativeFrameHeight(): Int
 
+    // ---- A4 plugin control plane (MobileUiBridge; gated by -Drunelite.mobileui) ----------------------
+    // CALL THESE OFF THE UI THREAD ONLY (via [onBridge]) — they daemon-attach the calling thread to the
+    // embedded HotSpot VM and may block (config writes dispatch to the client thread). ART<->HotSpot strings
+    // are marshalled as UTF-8 in the native layer.
+    external fun nativeListPlugins(): String
+    external fun nativeMobileUiSeq(): Long
+    external fun nativePollMobileUiEvents(sinceSeq: Long): String
+    external fun nativeSetPluginEnabled(className: String, enabled: Boolean): String
+    external fun nativeGetPluginConfig(group: String): String
+    external fun nativeSetConfig(group: String, key: String, value: String): String
+    external fun nativeProcessedWriteId(): Long
+
+    // A5 Tier-1 plugin panels: a plugin's Swing side-panel rendered off-screen to an ARGB int[] (like the
+    // game blit), pulled here and shown in a zoom/pan view; taps map back via panelClick. Off the UI thread.
+    external fun nativeListPanels(): String
+    external fun nativeOpenPanel(index: Int): String
+    external fun nativeClosePanel(): String
+    external fun nativePanelWidth(): Int
+    external fun nativePanelHeight(): Int
+    external fun nativePanelFrameSeq(): Int
+    external fun nativePanelPixels(): IntArray?
+    external fun nativePanelClick(x: Int, y: Int): String
+
+    // A5 Tier-2 native reflow: curated native screens for Quest Helper + World Switcher (QuestHelperBridge /
+    // WorldSwitcherBridge). isAvailable() gates native-vs-Tier-1: Quest is false unless the hub plugin is
+    // installed (→ fall back to the rendered panel); World Switcher is built-in. Off the UI thread (onBridge).
+    external fun nativeQuestAvailable(): Boolean
+    external fun nativeQuestSetUiOpen(open: Boolean)
+    external fun nativeQuestListJson(): String
+    external fun nativeQuestActiveJson(): String
+    external fun nativeQuestStart(questName: String)
+    external fun nativeQuestStop()
+    external fun nativeWorldAvailable(): Boolean
+    external fun nativeWorldSetUiOpen(open: Boolean)
+    external fun nativeWorldListJson(): String
+    external fun nativeWorldHop(worldId: Int)
+
+    // A6 chrome: the per-frame MobileChromeBridge read-only snapshot (escaped JSON: tab/panel/minimap/orb/chat/
+    // viewport canvas bounds the native edge-rails read). Gated by -Drunelite.mobilechrome. Off the UI thread.
+    external fun nativeChromeSnapshot(): String
+
+    // A6 overlay: the render-thread-PUBLISHED chrome snapshot — lock-free, no HotSpot attach, safe to read each
+    // frame from the Choreographer tick (UI thread). Drives the cover-and-proxy tab-rail overlay.
+    external fun nativeChromeSnapshotPub(): String
+
     // Kotlin-friendly aliases.
     fun setEnv(key: String, value: String) = nativeSetEnv(key, value)
     fun setSurface(surface: Surface?) = nativeSetSurface(surface)
@@ -123,4 +171,44 @@ object JvmLauncher {
     fun menuPublishSeq() = nativeMenuPublishSeq()
     fun frameWidth() = nativeFrameWidth()
     fun frameHeight() = nativeFrameHeight()
+
+    // ---- A3.5 bridge request/response thread --------------------------------------------------------
+    // A single dedicated background thread the UI posts plugin-plane requests to, so the ART UI thread NEVER
+    // attaches to HotSpot (ANR risk) and HotSpot only ever sees one caller from the ART side. The thread
+    // daemon-attaches to HotSpot on its first bridge call (native layer) and stays attached for the process.
+    private val bridgeExec: ExecutorService =
+        Executors.newSingleThreadExecutor { r -> Thread(r, "rl-bridge").apply { isDaemon = true } }
+
+    /** Run [block] on the rl-bridge thread; returns a Future (do NOT .get() it on the UI thread). */
+    fun <T> onBridge(block: () -> T): Future<T> = bridgeExec.submit(block)
+
+    fun listPlugins() = nativeListPlugins()
+    fun mobileUiSeq() = nativeMobileUiSeq()
+    fun pollMobileUiEvents(sinceSeq: Long) = nativePollMobileUiEvents(sinceSeq)
+    fun setPluginEnabled(className: String, enabled: Boolean) = nativeSetPluginEnabled(className, enabled)
+    fun getPluginConfig(group: String) = nativeGetPluginConfig(group)
+    fun setConfig(group: String, key: String, value: String) = nativeSetConfig(group, key, value)
+    fun processedWriteId() = nativeProcessedWriteId()
+
+    fun listPanels() = nativeListPanels()
+    fun openPanel(index: Int) = nativeOpenPanel(index)
+    fun closePanel() = nativeClosePanel()
+    fun panelWidth() = nativePanelWidth()
+    fun panelHeight() = nativePanelHeight()
+    fun panelFrameSeq() = nativePanelFrameSeq()
+    fun panelPixels(): IntArray? = nativePanelPixels()
+    fun panelClick(x: Int, y: Int) = nativePanelClick(x, y)
+
+    fun questAvailable() = nativeQuestAvailable()
+    fun questSetUiOpen(open: Boolean) = nativeQuestSetUiOpen(open)
+    fun questListJson() = nativeQuestListJson()
+    fun questActiveJson() = nativeQuestActiveJson()
+    fun questStart(questName: String) = nativeQuestStart(questName)
+    fun questStop() = nativeQuestStop()
+    fun worldAvailable() = nativeWorldAvailable()
+    fun worldSetUiOpen(open: Boolean) = nativeWorldSetUiOpen(open)
+    fun worldListJson() = nativeWorldListJson()
+    fun worldHop(worldId: Int) = nativeWorldHop(worldId)
+    fun chromeSnapshot() = nativeChromeSnapshot()
+    fun chromeSnapshotPub() = nativeChromeSnapshotPub()
 }
