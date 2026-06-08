@@ -258,6 +258,7 @@ static jmethodID gMidOpenTab = NULL;         // openTab(I)V  (A4 — open a tab 
 static jmethodID gMidSetStonesHidden = NULL; // setStonesHidden(Z)V  (A4 — hide the engine tab stones)
 static jmethodID gMidSetChatRowH = NULL;     // setChatTabRowHeight(I)V  (A3 — bigger native chat tabs)
 static jmethodID gMidSetChatAreaW = NULL;    // setChatAreaWidth(I)V  (A3 — widen message area to align)
+static jmethodID gMidScrollChat = NULL;      // scrollChat(I)V  (A3 — finger-scroll the chat, no wheel/zoom)
 static jmethodID gMidGetChatSnap = NULL;     // getChatSnapshot()Ljava/lang/String;  (A3)
 static BOOL ensureVeneer(void) {
     if (gVeneerClass) return YES;
@@ -283,6 +284,7 @@ static BOOL ensureVeneer(void) {
     // NoSuchMethod and leave the ids NULL; the wrappers below no-op when absent).
     gMidSetChatRowH = (*env)->GetStaticMethodID(env, global, "setChatTabRowHeight", "(I)V");
     gMidSetChatAreaW = (*env)->GetStaticMethodID(env, global, "setChatAreaWidth", "(I)V");
+    gMidScrollChat = (*env)->GetStaticMethodID(env, global, "scrollChat", "(I)V");
     gMidGetChatSnap = (*env)->GetStaticMethodID(env, global, "getChatSnapshot", "()Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
     gMidSetChatHidden = m;
@@ -1152,6 +1154,13 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureVeneer() || !gMidSetChatAreaW) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetChatAreaW, (jint)canvasPx);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)scrollEngineChat:(int)deltaCanvasPx {
+    if (!ensureVeneer() || !gMidScrollChat) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidScrollChat, (jint)deltaCanvasPx);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 

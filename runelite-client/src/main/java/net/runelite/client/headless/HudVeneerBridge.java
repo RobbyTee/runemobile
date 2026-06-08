@@ -24,9 +24,11 @@
  */
 package net.runelite.client.headless;
 
+import java.util.concurrent.atomic.AtomicInteger;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.ScriptID;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.gameval.VarbitID;
@@ -102,6 +104,11 @@ public final class HudVeneerBridge
 	private static volatile int chatTabRowH;
 	private static volatile int chatAreaW;
 	private static volatile String chatSnapshotJson = "{\"loggedIn\":false}";
+
+	// Finger-scroll: accumulated chat scroll delta (canvas px) requested from native, applied on the client thread
+	// in tick() via the chatbox's own scroll layer/scrollbar — NOT via a mouse wheel (the wheel also zooms the
+	// camera because the transparent chat sits over the viewport). +delta = toward newer (bottom).
+	private static final AtomicInteger pendingChatScroll = new AtomicInteger(0);
 
 	private static final int CHAT_DEFAULT_W = 519;       // the engine's native chatbox width (from the layout dump)
 	private static final int ORIG_CHAT_CONTENT_H = 142;  // the natural message-area height (container 165 − CONTROLS 23)
@@ -192,6 +199,14 @@ public final class HudVeneerBridge
 		return chatSnapshotJson;
 	}
 
+	/** Native: scroll the chat by {@code deltaCanvasPx} (positive = toward newer/bottom). Accumulated and applied
+	 *  on the client thread in {@link #tick} via the chatbox scroll layer — no mouse wheel, so the camera doesn't
+	 *  zoom (the transparent chat overlays the viewport, where a wheel would zoom). */
+	public static void scrollChat(int deltaCanvasPx)
+	{
+		pendingChatScroll.addAndGet(deltaCanvasPx);
+	}
+
 	/** Re-apply the requested chatbox state each frame. Client thread. */
 	public static void tick(Client c)
 	{
@@ -278,6 +293,12 @@ public final class HudVeneerBridge
 					forceWidth(c, InterfaceID.Chatbox.CHAT_BACKGROUND, rowW, 0);
 				}
 				buildChatSnapshot(c);
+				// Apply any finger-scroll requested from native (client thread — runScript is legal here).
+				final int scrollDelta = pendingChatScroll.getAndSet(0);
+				if (scrollDelta != 0)
+				{
+					applyChatScroll(c, scrollDelta);
+				}
 				dumpChatLayoutOnce(c, chatId);
 			}
 			else if (hideChat)
@@ -406,6 +427,32 @@ public final class HudVeneerBridge
 				return;
 			}
 			c.createScriptEventBuilder(op).setSource(w).setOp(1).build().run();
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	/** Scroll the chat message layer by {@code delta} canvas px (clamped), driving the chatbox's own scroll layer
+	 *  ({@code SCROLLAREA}, the parent of the message lines) + scrollbar ({@code CHATSCROLLBAR}) via the engine's
+	 *  {@code UPDATE_SCROLLBAR} script — the same path the scrollbar arrows use. No mouse-wheel event, so the camera
+	 *  doesn't also zoom. Client thread. */
+	private static void applyChatScroll(Client c, int delta)
+	{
+		try
+		{
+			final Widget area = c.getWidget(InterfaceID.Chatbox.SCROLLAREA);
+			if (area == null)
+			{
+				return;
+			}
+			final int max = Math.max(0, area.getScrollHeight() - area.getHeight());
+			final int cur = area.getScrollY();
+			final int next = Math.max(0, Math.min(max, cur + delta));
+			if (next != cur)
+			{
+				c.runScript(ScriptID.UPDATE_SCROLLBAR, InterfaceID.Chatbox.CHATSCROLLBAR, InterfaceID.Chatbox.SCROLLAREA, next);
+			}
 		}
 		catch (RuntimeException ignore)
 		{

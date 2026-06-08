@@ -154,6 +154,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// area to ALIGN with the bigger buttons. 0 restores the engine's default 519 width. Main thread.
 + (void)setEngineChatAreaWidth:(int)canvasPx;
 
+/// W3 A3 (finger-scroll): scroll the chat by deltaCanvasPx (positive = toward newer/bottom) via the chatbox's own
+/// scroll layer — NOT a mouse wheel (a wheel over the transparent chat also zooms the camera). Main thread.
++ (void)scrollEngineChat:(int)deltaCanvasPx;
+
 /// W3 A3 (bigger chat tabs): live per-tab chat geometry/state (escaped JSON) the native enlarged tab veneer reads
 /// each tick — per-tab canvas bounds, selected/new-message flags, and the filter sub-label text + colour. Returns
 /// nil until the chat is relocated + logged in. Main thread.

@@ -181,10 +181,10 @@ static const int kChatTabRowH = 23;
 static const int kChatTabCount = 7;
 static const int kChatTabRowCanvasH = 32;   // 2-line tab height (name + state) in engine-canvas px, ~official
 static const int kChatContentCanvasH = 142; // the chat message-area height (engine-canvas px) below the tab row
-// Finger-scroll: emit one mouse-wheel notch to the engine per this many points of vertical drag. +1 = drag-down
-// scrolls toward OLDER messages (content follows the finger); flip the sign if the direction feels inverted.
-static const CGFloat kChatScrollPtsPerNotch = 14.0;
-static const int kChatScrollWheelSign = 1;
+// Finger-scroll direction: -1 = drag-down scrolls toward OLDER messages (content follows the finger). The drag is
+// converted to canvas px and applied to the chat's own scroll layer (no mouse wheel -> no camera zoom). Flip to +1
+// if the direction feels inverted.
+static const int kChatScrollDir = -1;
 static NSString * const kChatTabNames[7] = { @"All", @"Game", @"Public", @"Private", @"Channel", @"Clan", @"Trade" };
 
 // OSRS right-click menu geometry, straight from RuneLite's own hit-test (InteractHighlightOverlay
@@ -2024,17 +2024,18 @@ static int chatRowCanvasH(void) {
     [JVMLauncher postCameraDx:(int)lround(-d.x) dy:(int)lround(-d.y)];
 }
 
-// Convert a vertical drag delta (screen pt) into engine mouse-wheel notches over the chat message area, so the
-// chat scrolls under the finger. The content follows the finger (drag down -> older messages) via the wheel sign.
+// Convert a vertical drag delta (screen pt) into a chat scroll, applied to the chat's OWN scroll layer (not a
+// mouse wheel — a wheel over the transparent chat also zooms the camera). The drag is scaled to engine-canvas px
+// (1:1 with the finger) and accumulated so sub-pixel drags aren't lost; content follows the finger via kChatScrollDir.
 - (void)scrollChatByDragDeltaY:(CGFloat)dy {
-    self.chatScrollAccum += dy;
-    int notches = (int)(self.chatScrollAccum / kChatScrollPtsPerNotch);
-    if (notches == 0) return;
-    self.chatScrollAccum -= notches * kChatScrollPtsPerNotch;
-    CGRect r = self.chatScrollCanvas;
-    int cx = (int)(r.origin.x + r.size.width / 2.0);
-    int cy = (int)(r.origin.y + r.size.height / 2.0);
-    [JVMLauncher postWheelX:cx y:cy rotation:(notches * kChatScrollWheelSign)];
+    CGFloat W = self.view.bounds.size.width;
+    if (self.renderW <= 0 || W <= 0) return;
+    CGFloat canvasPerPt = (CGFloat)self.renderW / W;   // screen pt -> engine-canvas px
+    self.chatScrollAccum += dy * canvasPerPt;
+    int whole = (int)(self.chatScrollAccum < 0 ? ceil(self.chatScrollAccum) : floor(self.chatScrollAccum));
+    if (whole == 0) return;
+    self.chatScrollAccum -= whole;
+    [JVMLauncher scrollEngineChat:(whole * kChatScrollDir)];
 }
 
 // pinch -> zoom via the mouse wheel. Accumulate the scale change into whole wheel notches; pinch out
