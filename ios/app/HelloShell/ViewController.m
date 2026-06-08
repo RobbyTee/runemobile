@@ -1503,10 +1503,12 @@ static int chatRowCanvasH(void) {
     CGFloat sh = b.size.height;
     CGFloat aspect = (sh > 0 ? sw / sh : 2.0);
     // Render height is the sharpness<->FPS<->UI-SIZE dial: the engine SOFTWARE-renders at renderW×renderH every
-    // frame (no GPU on iOS), so a LOWER renderH = bigger UI on screen. 600 sizes the engine HUD (minimap/orbs/
-    // chat/side panel) to the official OSRS-mobile proportions and leaves room for the minimap (top) + side panel
-    // + the bottom tab-stone row to stack on the right without overlapping (480 was too big — they collided).
-    int renderH = 600;
+    // frame (no GPU on iOS), so a LOWER renderH = bigger UI on screen. The minimap can't be enlarged on its own
+    // (the engine pins its orbs + breaks the terrain raster if the globe is repositioned — see HudVeneerBridge),
+    // so we scale the WHOLE HUD up via renderH to make the minimap bigger. 600 was the prior "official-sized"
+    // value; 540 enlarges the HUD ~11% (bigger minimap/chat/orbs). Watch the right column (minimap top + native
+    // tab grid bottom) for overlap as this drops (480 collided historically) — tune here.
+    int renderH = 540;
     int renderW = (int)lround(renderH * aspect);
     self.renderW = renderW;
     self.renderH = renderH;
