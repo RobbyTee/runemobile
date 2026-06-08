@@ -69,6 +69,12 @@ public class DeviceHeadlessBoot {
             }
             catch (Throwable ignore) { /* capture class may be absent in non-§6.2 probe builds */ }
 
+            // A-1b: once LOGGED_IN, run the runtime gate-flip census once (gated; no-op without -Drunelite.gatecensus).
+            if (Boolean.getBoolean("runelite.gatecensus") && state.contains("LOGGED_IN"))
+            {
+                GateCensus.runOnce(true);
+            }
+
             if (draws != lastDraws || frames != lastFrames || p % 4 == 0)
             {
                 System.out.println("[boot] poll " + (p * pollMs) + "ms  draws=" + draws

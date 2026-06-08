@@ -233,8 +233,10 @@ honored; any unresolved method is the *real, scoped* surprise the plan should kn
   (`verdict=GREEN resolved=79 missing=0`, `census_md5=fd2c599160bfe1da1323709f02378286`). The "shared Java is
   already there" claim is now captured evidence **at the static-resolution level** — A-1b below proves runtime
   gate activation. (Restaged to `1.12.29` 2026-06-07; census md5 **unchanged** — the bridge surface is stable across the bump.)
-- **A-1b runtime gate-flip census — TODO (emulator).** Confirm each `-D` gate flips its bridge inert→active at
-  runtime under a booted `DeviceHeadlessBoot`. (All six gates already confirmed present in source.)
+- **A-1b runtime gate-flip census — DONE / GREEN (emulator, 2026-06-07).** All six gates flip inert→active at
+  runtime under a booted `DeviceHeadlessBoot` (the `GateCensus` probe): `ANDROID_GATE_CENSUS verdict=GREEN
+  active=6/6 md5=be9883679f9cd8f542a6076fbcf807ff` (`android/dev-tools/a1b-gatecensus/`); `mobileui.listPlugins`
+  returns the full ~32 KB plugin list. (`runelite.hub` deferred to A4; Quest/World `isAvailable` to A5.)
 **Depends on:** nothing (current state).
 **Risk:** very low — it only reads. High value: it converts every downstream "no new Java needed" assumption
 into evidence and front-loads any nasty surprise.

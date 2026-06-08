@@ -150,9 +150,11 @@ class MainActivity : AppCompatActivity() {
         startInputPolling()
 
         // Boot the VM once per process, off the UI thread and on the application context.
+        // `adb ... --ez census true` arms the A-1b runtime gate-flip census (extra gates + the census probe).
+        val censusMode = intent?.getBooleanExtra("census", false) ?: false
         if (booted.compareAndSet(false, true)) {
             val app = applicationContext
-            thread(name = "jvm-boot") { bootJvm(app) }
+            thread(name = "jvm-boot") { bootJvm(app, censusMode) }
         }
     }
 
@@ -438,7 +440,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    private fun bootJvm(app: android.content.Context) {
+    private fun bootJvm(app: android.content.Context, census: Boolean = false) {
         val javaHome = AssetInstaller.ensureInstalled(app)
         val libjvm = File(javaHome, "lib/server/libjvm.so")
         if (!libjvm.exists()) {
@@ -507,6 +509,18 @@ class MainActivity : AppCompatActivity() {
         if (autologinArmed) {
             opts.addAll(JagexTokens.autologinOpts)
             Log.i(TAG, "autologin ARMED (tokens.json present): EULA 302,312 -> Play Now 382,248, world 301")
+        }
+        if (census) {
+            // A-1b runtime gate-flip census: turn on the remaining read-surface gates (menupeek + autologin
+            // are already on above) and arm the one-shot GateCensus probe in DeviceHeadlessBoot.
+            opts.addAll(listOf(
+                "-Drunelite.gatecensus=true",
+                "-Drunelite.mobileui=true",
+                "-Drunelite.mobilechrome=true",
+                "-Drunelite.huddata=true",
+                "-Drunelite.hudveneer=true",
+            ))
+            Log.i(TAG, "A-1b census mode: +mobileui/mobilechrome/huddata/hudveneer + gatecensus")
         }
 
         Log.i(TAG, "starting HotSpot: DeviceHeadlessBoot, cp=$classpath")
