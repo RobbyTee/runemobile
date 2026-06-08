@@ -114,3 +114,26 @@ For each item in §2: **CONFIRMED bug / NOT A BUG / UNCERTAIN**, with the file:l
 the cheapest fix or the cheapest experiment that would settle it. Then any leak/race/edge case §2 missed. Rank
 by severity (crash/leak/race > correctness > style). The native bridge (`jvm_bootstrap.cpp`) is the priority —
 spend the budget there.
+
+---
+
+## 6. Review outcome (folded in 2026-06-08)
+
+The review returned **four CONFIRMED issues** (none caught by the emulator gates — all latent under
+load / OOM / on a stricter device) plus a missed edge case. All fixed in `jvm_bootstrap.cpp`; the A4/A5
+emulator gates re-ran **GREEN with no regression** (`check-a4seam.sh` + `check-a5.sh`, exit=0; boot log now
+shows `MobileUiBridge facade published (panels=on)`). Verdicts:
+
+| # | Item | Verdict | Fix landed |
+|---|---|---|---|
+| 4 | Global publication / memory-ordering | **CONFIRMED** | `g_mobileUiReady`/`g_panelReady` release-store at end of `publishBridge`; every A4/A5 extern acquire-gates (`mobileUiReady()`/`panelReady()`) before reading the plain method-id globals — gives the happens-before so a UI tap before boot-complete can't read a half-published facade. |
+| 2 | Pending-exception hygiene | **CONFIRMED** | `jstr()` clears a `GetStringUTFChars` OOM; `nativePanelPixels` clears a failed `GetIntArrayElements`/`NewIntArray`; the render-thread menu-snapshot read clears its OOM; all optional method-id lookups go through `midOpt()` (per-lookup clear). |
+| 5 | Partial facade (panels) | **CONFIRMED** | Tier-1 panels are now all-or-nothing — `g_panelReady` true only when *every* panel method (incl. `closePanel`) resolves, so the viewer never opens a panel it can't close (no more silent dispose no-op → leaked engine-side panel). |
+| — | `NewGlobalRef` unchecked before `GetStaticMethodID` | **CONFIRMED (missed edge)** | Null-checked after `NewGlobalRef` on both the MobileUi and MenuPeek facades before resolving any method. |
+| 1 | Local-ref leak | NOT A BUG | Locals already deleted on all paths; left as-is. |
+| 6 | Threading / ANR | NOT A BUG | `.get()` only off the UI thread (Dispatchers.IO); writes are fire-and-forget. |
+| 8 | Tap mapping | NOT A BUG | Java divides by `activeRenderScale`; no double-scale. |
+| 3 | `int[]` marshalling perf | UNCERTAIN (deferred) | OOM paths hardened (see #2). The ~12 MB-per-poll copy is bring-up-only; emulator gives no perf signal — revisit with a real-device soak / a seq-gated fetch when AG/perf work starts. |
+| 7 | Compose state / dispose | UNCERTAIN (deferred) | State writes resume safely post-`withContext`; close is submitted not awaited. Revisit under a rapid open/back/rotation stress on a real device. |
+
+Commit: `cf459bd53` (`android` branch).
