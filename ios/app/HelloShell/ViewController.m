@@ -132,6 +132,13 @@
 @property (nonatomic, strong) UIImage *chatBtnSelImg;   // 3053 — selected (active) tab
 @property (nonatomic, strong) UIImage *chatBtnNewImg;   // 3055 — tab with unread messages
 @property (nonatomic, assign) BOOL chatTabsBuilt;
+// Finger-scroll the chat: a 1-finger drag that BEGINS inside the chat box scrolls the messages (via synthesized
+// mouse-wheel notches to the engine) instead of rotating the camera — only while the chat is open (logged in +
+// supported layout). chatScrollCanvas = the chat box rect in engine-canvas px; chatScrollable gates it.
+@property (nonatomic, assign) CGRect chatScrollCanvas;
+@property (nonatomic, assign) BOOL chatScrollable;
+@property (nonatomic, assign) BOOL chatScrolling;       // the current pan gesture is scrolling the chat
+@property (nonatomic, assign) CGFloat chatScrollAccum;  // accumulated drag (pt) toward the next wheel notch
 // Instant selected-highlight after a tap: the engine's tab GRAPHIC sprite (which the snapshot reads for the
 // selected state) only updates on a redraw, so the highlight lagged until the next game interaction. Optimistically
 // mark the tapped tab selected and hold it until the snapshot agrees (or a short timeout). -1 = none.
@@ -173,6 +180,11 @@ static const int kChatTabRowH = 23;
 // width (kChatW), so each is kChatW/7 wide; the row is taller than the bare sprite to fit the two text lines.
 static const int kChatTabCount = 7;
 static const int kChatTabRowCanvasH = 32;   // 2-line tab height (name + state) in engine-canvas px, ~official
+static const int kChatContentCanvasH = 142; // the chat message-area height (engine-canvas px) below the tab row
+// Finger-scroll: emit one mouse-wheel notch to the engine per this many points of vertical drag. +1 = drag-down
+// scrolls toward OLDER messages (content follows the finger); flip the sign if the direction feels inverted.
+static const CGFloat kChatScrollPtsPerNotch = 14.0;
+static const int kChatScrollWheelSign = 1;
 static NSString * const kChatTabNames[7] = { @"All", @"Game", @"Public", @"Private", @"Channel", @"Clan", @"Trade" };
 
 // OSRS right-click menu geometry, straight from RuneLite's own hit-test (InteractHighlightOverlay
@@ -1125,6 +1137,7 @@ static int chatRowCanvasH(void) {
     if ([d[@"topLevelId"] intValue] != 164) { [self hideChatTabs]; return; }
     NSArray *tabs = [d[@"tabs"] isKindOfClass:[NSArray class]] ? d[@"tabs"] : nil;
     if (tabs.count == 0) { [self hideChatTabs]; return; }
+    self.chatScrollable = YES;   // chat is open + supported -> finger-scroll allowed
 
     CGFloat W = self.view.bounds.size.width;
     CGFloat s = W / (CGFloat)self.renderW;           // canvas px -> screen pt (uniform: render aspect == screen)
@@ -1198,6 +1211,7 @@ static int chatRowCanvasH(void) {
 }
 
 - (void)hideChatTabs {
+    self.chatScrollable = NO;   // chat not open -> drags fall through to the camera
     for (UIButton *b in self.chatTabButtons) b.hidden = YES;
     // Restore the engine's own (small) chat tab row + native width whenever the native tabs aren't shown (toggled
     // off / not logged in / unsupported layout): drop the push-down + widen so CHATAREA returns to the engine's
@@ -1552,6 +1566,8 @@ static int chatRowCanvasH(void) {
     // The whole enlarged tab row is UI: a stray tap in it (between native buttons) should be a precise click, not
     // a walk. The native buttons own their taps; this rect just keeps any leak from drawing a walk ring.
     self.chatHitCanvas = CGRectMake(chatX, chatY, kChatW, chatRowCanvasH());
+    // The whole chat box (tab row + message area), for finger-scroll capture.
+    self.chatScrollCanvas = CGRectMake(chatX, chatY, kChatW, chatRowCanvasH() + kChatContentCanvasH);
     [self appendLine:[NSString stringWithFormat:@"[hud] relocate chat->%d,%d minimap->%d,%d (insets L%d T%d R%d k%.2f)",
                       chatX, chatY, mmX, mmY, leftC, topC, rightC, k]];
 }
@@ -1968,6 +1984,18 @@ static int chatRowCanvasH(void) {
     if (![JVMLauncher bridgeReady] || self.menuOpen) return;
     if (g.state == UIGestureRecognizerStateBegan) {
         [g setTranslation:CGPointZero inView:self.screen];
+        // A drag that STARTS inside the open chat box scrolls the chat (finger-scroll) instead of rotating the
+        // camera. Only when the chat is open (chatScrollable); otherwise it's a normal camera drag.
+        int gx = 0, gy = 0;
+        if (self.chatScrollable && self.chatScrollCanvas.size.width > 0
+                && [self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]
+                && CGRectContainsPoint(self.chatScrollCanvas, CGPointMake(gx, gy))) {
+            self.chatScrolling = YES;
+            self.chatScrollAccum = 0;
+            [self appendLine:@"[shell] chat scroll begin"];
+            return;
+        }
+        self.chatScrolling = NO;
         // A camera drag moves the world, not the pointer — so clear any frozen hover first, otherwise
         // scenery rotating under the stale cursor lights up and the next walk-tap mis-clicks it.
         [JVMLauncher postClearHover];
@@ -1975,6 +2003,11 @@ static int chatRowCanvasH(void) {
         return;
     }
     if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
+        if (self.chatScrolling) {
+            self.chatScrolling = NO;
+            [JVMLauncher postClearHover];   // drop the cursor the wheel parked over the chat
+            return;
+        }
         [self appendLine:@"[shell] camera pan end"];
         return;
     }
@@ -1982,9 +2015,26 @@ static int chatRowCanvasH(void) {
     CGPoint d = [g translationInView:self.screen];
     [g setTranslation:CGPointZero inView:self.screen];   // make the next delta incremental
     if (d.x == 0 && d.y == 0) return;
+    if (self.chatScrolling) {
+        [self scrollChatByDragDeltaY:d.y];
+        return;
+    }
     // Inverted both axes (user preference): swipe direction now drags the world the opposite way (like
     // grabbing the scene), matching the feel they want vs. the previous "push the camera" direction.
     [JVMLauncher postCameraDx:(int)lround(-d.x) dy:(int)lround(-d.y)];
+}
+
+// Convert a vertical drag delta (screen pt) into engine mouse-wheel notches over the chat message area, so the
+// chat scrolls under the finger. The content follows the finger (drag down -> older messages) via the wheel sign.
+- (void)scrollChatByDragDeltaY:(CGFloat)dy {
+    self.chatScrollAccum += dy;
+    int notches = (int)(self.chatScrollAccum / kChatScrollPtsPerNotch);
+    if (notches == 0) return;
+    self.chatScrollAccum -= notches * kChatScrollPtsPerNotch;
+    CGRect r = self.chatScrollCanvas;
+    int cx = (int)(r.origin.x + r.size.width / 2.0);
+    int cy = (int)(r.origin.y + r.size.height / 2.0);
+    [JVMLauncher postWheelX:cx y:cy rotation:(notches * kChatScrollWheelSign)];
 }
 
 // pinch -> zoom via the mouse wheel. Accumulate the scale change into whole wheel notches; pinch out
