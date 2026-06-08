@@ -66,13 +66,15 @@ gcloud firebase test android run \
 
 # Find the results path gcloud reported, then pull the device logcat from it. gcloud prints an https CONSOLE
 # url (…/storage/browser/<bucket>/<dir>/), not a gs:// path, so reconstruct gs:// from it if needed.
-GCS="$(grep -oE 'gs://[^] )"]+' "$GLOG" | head -1)"
+# NOTE: each command-substitution below ends in `|| true` — a grep/gsutil that finds nothing returns non-zero,
+# which under `set -eo pipefail` would otherwise abort the script before the fallback / the friendly error.
+GCS="$(grep -oE 'gs://[^] )"]+' "$GLOG" | head -1 || true)"
 if [ -z "$GCS" ]; then
-  GCS="$(grep -oE 'storage/browser/[^] )"]+' "$GLOG" | head -1 | sed -E 's#.*storage/browser/#gs://#')"
+  GCS="$(grep -oE 'storage/browser/[^] )"]+' "$GLOG" | head -1 | sed -E 's#.*storage/browser/#gs://#' || true)"
 fi
 [ -n "$GCS" ] || { echo "could not find the results path (gs:// or console /storage/browser/) in gcloud output" >&2; exit 2; }
 echo "== pull logcat from $GCS =="
-LOGCAT_OBJ="$(gsutil ls "${GCS%/}/**/logcat" 2>/dev/null | head -1)"
+LOGCAT_OBJ="$(gsutil ls "${GCS%/}/**/logcat" 2>/dev/null | head -1 || true)"
 [ -n "$LOGCAT_OBJ" ] || { echo "no logcat object under $GCS (confirm the results layout on first run)" >&2; exit 2; }
 gsutil cp "$LOGCAT_OBJ" "$OUT"
 
