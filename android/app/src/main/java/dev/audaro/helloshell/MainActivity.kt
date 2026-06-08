@@ -562,6 +562,11 @@ class MainActivity : AppCompatActivity() {
         // it at a writable dir so the gamepack fonts load.
         val tmpDir = File(app.filesDir, "tmp").apply { mkdirs() }.absolutePath
 
+        // A7 resizable (full-screen): force the gamepack into RESIZABLE display mode so HeadlessResize's wider
+        // canvas FILLS instead of pillarboxing. The mode is a single byte (byte[3]: 1=fixed, 2=resizable) in the
+        // OSRS legacy prefs blob, which the gamepack reads at startup and persists. Patch/seed it before startJvm.
+        ensureResizableDisplayMode(File(app.filesDir, ".runelite/jagexcache/oldschool/LIVE/preferences.dat"))
+
         // JX_* launcher handoff: if a tokens.json is present, set the JX_* env (before startJvm) and arm
         // HeadlessLogin's EULA->Play Now click machine. No tokens.json -> login-screen render only. The setenv
         // must happen here, before JvmLauncher.startJvm creates the VM (HotSpot snapshots env at startup).
@@ -649,6 +654,38 @@ class MainActivity : AppCompatActivity() {
         if (census) {
             runA4SeamSelfTest()
             runA6SeamSelfTest()
+        }
+    }
+
+    /**
+     * A7 resizable: force the OSRS gamepack into RESIZABLE display mode by setting the window-mode byte in its
+     * legacy prefs blob (preferences.dat byte[3]: 1=fixed, 2=resizable — verified by byte-diffing a fixed vs an
+     * iOS-resizable file). The gamepack reads this at startup and keeps it (it normalizes other bytes but honors
+     * byte[3]). Patch it if the file exists; seed a minimal resizable one if not (fresh install). Idempotent;
+     * runs before startJvm. With this + HeadlessResize's wider canvas, the scene fills the screen (PRE_EOC modern)
+     * instead of pillarboxing 765x503 — no per-account/server setting needed (the mode is client-side per install).
+     */
+    private fun ensureResizableDisplayMode(f: File) {
+        try {
+            if (f.exists() && f.length() >= 4) {
+                val b = f.readBytes()
+                if (b[3] != 0x02.toByte()) {
+                    b[3] = 0x02
+                    f.writeBytes(b)
+                    Log.i(TAG, "a7: preferences.dat patched fixed->resizable (byte3=2)")
+                } else {
+                    Log.i(TAG, "a7: preferences.dat already resizable")
+                }
+            } else {
+                f.parentFile?.mkdirs()
+                // Minimal valid OSRS preferences.dat with window mode = resizable (byte[3]=02).
+                f.writeBytes(byteArrayOf(
+                    0x0c, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x32,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x19, 0x00))
+                Log.i(TAG, "a7: seeded resizable preferences.dat (fresh)")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "a7: ensureResizableDisplayMode failed: ${e.message}")
         }
     }
 
