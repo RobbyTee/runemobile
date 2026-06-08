@@ -72,6 +72,14 @@ static jmethodID g_midGetPluginConfig = nullptr, g_midSetConfig = nullptr, g_mid
 static jmethodID g_midListPanels = nullptr, g_midOpenPanel = nullptr, g_midClosePanel = nullptr,
                  g_midPanelW = nullptr, g_midPanelH = nullptr, g_midPanelSeq = nullptr,
                  g_midPanelPixels = nullptr, g_midPanelClick = nullptr;
+// Publication latches for the MobileUiBridge facade. The method-id globals above are plain (non-atomic),
+// written once on the VM boot thread (publishBridge); the A4/A5 externs run on the SEPARATE rl-bridge thread
+// and a UI tap can submit a bridge call before startJvm even returns. These release/acquire flags give the
+// happens-before so an extern NEVER reads a half-published facade. g_panelReady is ALL-OR-NOTHING: true only
+// if EVERY panel method the viewer uses resolved (incl. closePanel — without it, viewer dispose would
+// silently leak the open engine-side panel).
+static std::atomic<bool> g_mobileUiReady{false};
+static std::atomic<bool> g_panelReady{false};
 
 // ---- Surface / render --------------------------------------------------------------------------------
 static std::mutex      g_winLock;
@@ -227,8 +235,12 @@ static void preloadJreLibs(const std::string &libraryPath) {
 static std::string jstr(JNIEnv *env, jstring s) {
     if (s == nullptr) return {};
     const char *c = env->GetStringUTFChars(s, nullptr);
-    std::string out = c ? c : "";
-    if (c) env->ReleaseStringUTFChars(s, c);
+    if (c == nullptr) {                            // OOM: GetStringUTFChars leaves a pending exception
+        if (env->ExceptionCheck()) env->ExceptionClear();   // clear so it can't trip the next JNI call
+        return {};
+    }
+    std::string out = c;
+    env->ReleaseStringUTFChars(s, c);
     return out;
 }
 static std::string toInternal(std::string name) {
@@ -248,6 +260,20 @@ static JNIEnv *bridgeEnvAttach() {
     return nullptr;
 }
 
+// Acquire-load the MobileUiBridge publication latches (see g_mobileUiReady/g_panelReady). An extern that
+// sees these true is guaranteed (happens-before) to read fully-resolved method-id globals; false => the
+// facade isn't published yet (or that sub-surface is incomplete) and the extern returns its empty sentinel.
+static inline bool mobileUiReady() { return g_mobileUiReady.load(std::memory_order_acquire); }
+static inline bool panelReady()    { return g_panelReady.load(std::memory_order_acquire); }
+
+// Resolve an OPTIONAL static method id, clearing the NoSuchMethodError a miss leaves pending — so a failed
+// lookup can't trip the NEXT JNI call on this thread (the Review-2 MenuPeekBridge pending-exception bug class).
+static jmethodID midOpt(JNIEnv *env, jclass c, const char *name, const char *sig) {
+    jmethodID m = env->GetStaticMethodID(c, name, sig);
+    if (!m && env->ExceptionCheck()) env->ExceptionClear();
+    return m;
+}
+
 // Resolve + cache the JavaBridge facade as HotSpot global refs. Called once, on the VM's main thread, at
 // boot. Returns true once every method id resolved.
 static bool publishBridge(JNIEnv *env) {
@@ -256,30 +282,29 @@ static bool publishBridge(JNIEnv *env) {
     jclass global = (jclass) env->NewGlobalRef(local);
     env->DeleteLocalRef(local);
     if (!global) return false;
-    g_midSeq        = env->GetStaticMethodID(global, "getFrameSeq", "()I");
-    g_midW          = env->GetStaticMethodID(global, "getFrameWidth", "()I");
-    g_midH          = env->GetStaticMethodID(global, "getFrameHeight", "()I");
-    g_midPixels     = env->GetStaticMethodID(global, "getFramePixels", "()[I");
-    g_midTouch      = env->GetStaticMethodID(global, "onTouch", "(IIII)V");
-    g_midClick      = env->GetStaticMethodID(global, "onClick", "(III)V");
-    g_midCamera     = env->GetStaticMethodID(global, "onCameraDrag", "(II)V");
-    g_midClearHover = env->GetStaticMethodID(global, "clearHover", "()V");
+    g_midSeq        = midOpt(env, global, "getFrameSeq", "()I");
+    g_midW          = midOpt(env, global, "getFrameWidth", "()I");
+    g_midH          = midOpt(env, global, "getFrameHeight", "()I");
+    g_midPixels     = midOpt(env, global, "getFramePixels", "()[I");
+    g_midTouch      = midOpt(env, global, "onTouch", "(IIII)V");
+    g_midClick      = midOpt(env, global, "onClick", "(III)V");
+    g_midCamera     = midOpt(env, global, "onCameraDrag", "(II)V");
+    g_midClearHover = midOpt(env, global, "clearHover", "()V");
     // A1 input-parity surface (all confirmed present by the A-1 bridge census).
-    g_midWheel          = env->GetStaticMethodID(global, "onWheel", "(III)V");
-    g_midClickPrecise   = env->GetStaticMethodID(global, "onClickPrecise", "(III)V");
-    g_midMove           = env->GetStaticMethodID(global, "onMove", "(II)V");
-    g_midText           = env->GetStaticMethodID(global, "onText", "(Ljava/lang/String;)V");
-    g_midKeyStroke      = env->GetStaticMethodID(global, "onKeyStroke", "(I)V");
-    g_midTextInputOpen  = env->GetStaticMethodID(global, "isTextInputOpen", "()Z");
-    g_midInteractTapSeq = env->GetStaticMethodID(global, "getInteractTapSeq", "()I");
-    g_midSnapRadius     = env->GetStaticMethodID(global, "snapRadius", "()I");
-    g_midSelectMenuPoint = env->GetStaticMethodID(global, "selectMenuPoint", "(II)V");   // A2 commit
+    g_midWheel          = midOpt(env, global, "onWheel", "(III)V");
+    g_midClickPrecise   = midOpt(env, global, "onClickPrecise", "(III)V");
+    g_midMove           = midOpt(env, global, "onMove", "(II)V");
+    g_midText           = midOpt(env, global, "onText", "(Ljava/lang/String;)V");
+    g_midKeyStroke      = midOpt(env, global, "onKeyStroke", "(I)V");
+    g_midTextInputOpen  = midOpt(env, global, "isTextInputOpen", "()Z");
+    g_midInteractTapSeq = midOpt(env, global, "getInteractTapSeq", "()I");
+    g_midSnapRadius     = midOpt(env, global, "snapRadius", "()I");
+    g_midSelectMenuPoint = midOpt(env, global, "selectMenuPoint", "(II)V");   // A2 commit
     if (!g_midSeq || !g_midW || !g_midH || !g_midPixels || !g_midTouch || !g_midClick
         || !g_midCamera || !g_midClearHover
         || !g_midWheel || !g_midClickPrecise || !g_midMove || !g_midText || !g_midKeyStroke
         || !g_midTextInputOpen || !g_midInteractTapSeq || !g_midSnapRadius || !g_midSelectMenuPoint) {
-        env->ExceptionClear();
-        env->DeleteGlobalRef(global);
+        env->DeleteGlobalRef(global);   // midOpt already cleared any pending NoSuchMethodError
         LOGE("bridge: a JavaBridge method id failed to resolve");
         return false;
     }
@@ -292,17 +317,18 @@ static bool publishBridge(JNIEnv *env) {
     if (mp && !env->ExceptionCheck()) {
         jclass mpg = (jclass) env->NewGlobalRef(mp);
         env->DeleteLocalRef(mp);
-        jmethodID snap = env->GetStaticMethodID(mpg, "getSnapshot", "()Ljava/lang/String;");
-        jmethodID pseq = env->GetStaticMethodID(mpg, "getPublishSeq", "()J");
-        if (mpg && snap && pseq) {
-            g_menuPeekCls = mpg; g_midMenuSnapshot = snap; g_midMenuPublishSeq = pseq;
-            LOGI("bridge: MenuPeekBridge facade published");
+        if (!mpg) {                       // OOM creating the global ref — never resolve methods against null
+            LOGE("bridge: MenuPeekBridge NewGlobalRef failed (menu-peek disabled)");
         } else {
-            // A failed GetStaticMethodID leaves a NoSuchMethodError pending — clear it so the next JNI call
-            // (the essential JavaBridge path) doesn't trip the pending-exception assertion.
-            env->ExceptionClear();
-            if (mpg) env->DeleteGlobalRef(mpg);
-            LOGE("bridge: MenuPeekBridge method id failed to resolve (menu-peek disabled)");
+            jmethodID snap = midOpt(env, mpg, "getSnapshot", "()Ljava/lang/String;");
+            jmethodID pseq = midOpt(env, mpg, "getPublishSeq", "()J");
+            if (snap && pseq) {
+                g_menuPeekCls = mpg; g_midMenuSnapshot = snap; g_midMenuPublishSeq = pseq;
+                LOGI("bridge: MenuPeekBridge facade published");
+            } else {
+                env->DeleteGlobalRef(mpg);   // midOpt already cleared any pending NoSuchMethodError
+                LOGE("bridge: MenuPeekBridge method id failed to resolve (menu-peek disabled)");
+            }
         }
     } else {
         env->ExceptionClear();
@@ -314,37 +340,43 @@ static bool publishBridge(JNIEnv *env) {
     if (mu && !env->ExceptionCheck()) {
         jclass mug = (jclass) env->NewGlobalRef(mu);
         env->DeleteLocalRef(mu);
-        jmethodID lp = env->GetStaticMethodID(mug, "listPlugins", "()Ljava/lang/String;");
-        jmethodID sq = env->GetStaticMethodID(mug, "getMobileUiSeq", "()J");
-        jmethodID pe = env->GetStaticMethodID(mug, "pollMobileUiEvents", "(J)Ljava/lang/String;");
-        jmethodID se = env->GetStaticMethodID(mug, "setPluginEnabled", "(Ljava/lang/String;Z)Ljava/lang/String;");
-        if (mug && lp && sq && pe && se) {
+        if (!mug) {                       // OOM creating the global ref — never resolve methods against null
+            LOGE("bridge: MobileUiBridge NewGlobalRef failed (plugin control disabled)");
+            return true;
+        }
+        jmethodID lp = midOpt(env, mug, "listPlugins", "()Ljava/lang/String;");
+        jmethodID sq = midOpt(env, mug, "getMobileUiSeq", "()J");
+        jmethodID pe = midOpt(env, mug, "pollMobileUiEvents", "(J)Ljava/lang/String;");
+        jmethodID se = midOpt(env, mug, "setPluginEnabled", "(Ljava/lang/String;Z)Ljava/lang/String;");
+        if (lp && sq && pe && se) {
             g_mobileUiCls = mug; g_midListPlugins = lp; g_midMobileUiSeq = sq; g_midPollEvents = pe; g_midSetPluginEnabled = se;
             // Config surface (best-effort; a null here disables config read/write only — NOT list/toggle).
-            g_midGetPluginConfig  = env->GetStaticMethodID(mug, "getPluginConfig", "(Ljava/lang/String;)Ljava/lang/String;");
-            g_midSetConfig        = env->GetStaticMethodID(mug, "setConfig", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
-            g_midProcessedWriteId = env->GetStaticMethodID(mug, "getProcessedWriteId", "()J");
-            if (!g_midGetPluginConfig || !g_midSetConfig || !g_midProcessedWriteId) {
-                env->ExceptionClear();
+            g_midGetPluginConfig  = midOpt(env, mug, "getPluginConfig", "(Ljava/lang/String;)Ljava/lang/String;");
+            g_midSetConfig        = midOpt(env, mug, "setConfig", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+            g_midProcessedWriteId = midOpt(env, mug, "getProcessedWriteId", "()J");
+            if (!g_midGetPluginConfig || !g_midSetConfig || !g_midProcessedWriteId)
                 LOGE("bridge: MobileUiBridge config methods partial (plugin config read/write disabled)");
-            }
-            // A5 Tier-1 panel surface (best-effort; a null here disables the rendered-panel fallback only).
-            g_midListPanels  = env->GetStaticMethodID(mug, "listPanels", "()Ljava/lang/String;");
-            g_midOpenPanel   = env->GetStaticMethodID(mug, "openPanel", "(I)Ljava/lang/String;");
-            g_midClosePanel  = env->GetStaticMethodID(mug, "closePanel", "()Ljava/lang/String;");
-            g_midPanelW      = env->GetStaticMethodID(mug, "getPanelWidth", "()I");
-            g_midPanelH      = env->GetStaticMethodID(mug, "getPanelHeight", "()I");
-            g_midPanelSeq    = env->GetStaticMethodID(mug, "getPanelFrameSeq", "()I");
-            g_midPanelPixels = env->GetStaticMethodID(mug, "getPanelPixels", "()[I");
-            g_midPanelClick  = env->GetStaticMethodID(mug, "panelClick", "(II)Ljava/lang/String;");
-            if (!g_midListPanels || !g_midOpenPanel || !g_midPanelPixels) {
-                env->ExceptionClear();
-                LOGE("bridge: MobileUiBridge panel methods partial (Tier-1 panels disabled)");
-            }
-            LOGI("bridge: MobileUiBridge facade published");
+            // A5 Tier-1 panel surface (best-effort, ALL-OR-NOTHING: every method the viewer uses must resolve.
+            // closePanel in particular — without it, PanelView dispose can't close the open engine-side panel,
+            // so a partial set disables panels entirely rather than opening one it can never close.)
+            g_midListPanels  = midOpt(env, mug, "listPanels", "()Ljava/lang/String;");
+            g_midOpenPanel   = midOpt(env, mug, "openPanel", "(I)Ljava/lang/String;");
+            g_midClosePanel  = midOpt(env, mug, "closePanel", "()Ljava/lang/String;");
+            g_midPanelW      = midOpt(env, mug, "getPanelWidth", "()I");
+            g_midPanelH      = midOpt(env, mug, "getPanelHeight", "()I");
+            g_midPanelSeq    = midOpt(env, mug, "getPanelFrameSeq", "()I");
+            g_midPanelPixels = midOpt(env, mug, "getPanelPixels", "()[I");
+            g_midPanelClick  = midOpt(env, mug, "panelClick", "(II)Ljava/lang/String;");
+            bool panelOk = g_midListPanels && g_midOpenPanel && g_midClosePanel && g_midPanelW
+                        && g_midPanelH && g_midPanelSeq && g_midPanelPixels && g_midPanelClick;
+            if (!panelOk) LOGE("bridge: MobileUiBridge panel methods incomplete (Tier-1 panels disabled)");
+            // Publish via release-store so the rl-bridge thread's acquire-load sees a fully-resolved facade
+            // (panels first, then the umbrella latch — both happen-after every method-id write above).
+            g_panelReady.store(panelOk, std::memory_order_release);
+            g_mobileUiReady.store(true, std::memory_order_release);
+            LOGI("bridge: MobileUiBridge facade published (panels=%s)", panelOk ? "on" : "off");
         } else {
-            env->ExceptionClear();
-            if (mug) env->DeleteGlobalRef(mug);
+            env->DeleteGlobalRef(mug);   // midOpt already cleared any pending NoSuchMethodError
             LOGE("bridge: MobileUiBridge method id failed (plugin control disabled)");
         }
     } else {
@@ -449,6 +481,8 @@ static void *renderLoop(void *) {
                             std::lock_guard<std::mutex> lk(g_menuLock);
                             g_menuSnapshot.assign(c);
                             env->ReleaseStringUTFChars(js, c);
+                        } else if (env->ExceptionCheck()) {
+                            env->ExceptionClear();   // OOM: don't leave it pending for the next bridge call
                         }
                         env->DeleteLocalRef(js);
                     }
@@ -784,6 +818,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeFrameHeight(JNIEnv *, jobject) { re
 // the ART JNIEnv* (param) makes the ART return value; the HotSpot env makes the bridge call.
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeListPlugins(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady()) return artEnv->NewStringUTF("");   // acquire: facade not published yet
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midListPlugins) return artEnv->NewStringUTF("");
     jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midListPlugins);
@@ -794,6 +829,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeListPlugins(JNIEnv *artEnv, jobject
 }
 extern "C" JNIEXPORT jlong JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeMobileUiSeq(JNIEnv *, jobject) {
+    if (!mobileUiReady()) return -1;
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midMobileUiSeq) return -1;
     jlong v = hs->CallStaticLongMethod(g_mobileUiCls, g_midMobileUiSeq);
@@ -802,6 +838,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeMobileUiSeq(JNIEnv *, jobject) {
 }
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativePollMobileUiEvents(JNIEnv *artEnv, jobject, jlong sinceSeq) {
+    if (!mobileUiReady()) return artEnv->NewStringUTF("");
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midPollEvents) return artEnv->NewStringUTF("");
     jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midPollEvents, sinceSeq);
@@ -812,6 +849,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativePollMobileUiEvents(JNIEnv *artEnv, 
 }
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeSetPluginEnabled(JNIEnv *artEnv, jobject, jstring jId, jboolean enabled) {
+    if (!mobileUiReady()) return artEnv->NewStringUTF("");
     std::string id = jstr(artEnv, jId);     // ART string -> std::string
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midSetPluginEnabled) return artEnv->NewStringUTF("");
@@ -824,6 +862,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeSetPluginEnabled(JNIEnv *artEnv, jo
 }
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeGetPluginConfig(JNIEnv *artEnv, jobject, jstring jGroup) {
+    if (!mobileUiReady()) return artEnv->NewStringUTF("");
     std::string group = jstr(artEnv, jGroup);
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midGetPluginConfig) return artEnv->NewStringUTF("");
@@ -836,6 +875,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeGetPluginConfig(JNIEnv *artEnv, job
 }
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeSetConfig(JNIEnv *artEnv, jobject, jstring jGroup, jstring jKey, jstring jValue) {
+    if (!mobileUiReady()) return artEnv->NewStringUTF("");
     std::string group = jstr(artEnv, jGroup), key = jstr(artEnv, jKey), value = jstr(artEnv, jValue);
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midSetConfig) return artEnv->NewStringUTF("");
@@ -850,6 +890,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeSetConfig(JNIEnv *artEnv, jobject, 
 }
 extern "C" JNIEXPORT jlong JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeProcessedWriteId(JNIEnv *, jobject) {
+    if (!mobileUiReady()) return -1;
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midProcessedWriteId) return -1;
     jlong v = hs->CallStaticLongMethod(g_mobileUiCls, g_midProcessedWriteId);
@@ -874,18 +915,27 @@ static jint mobileUiInt(jmethodID m) {
     if (hs->ExceptionCheck()) { hs->ExceptionClear(); return 0; }
     return v;
 }
+// panelReady() gates the whole Tier-1 surface (acquire for publication + all-or-nothing: false if ANY panel
+// method, e.g. closePanel, didn't resolve — so the viewer never opens a panel it could never close).
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeListPanels(JNIEnv *artEnv, jobject) { return mobileUiStr(artEnv, g_midListPanels); }
+Java_dev_audaro_helloshell_JvmLauncher_nativeListPanels(JNIEnv *artEnv, jobject) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midListPanels);
+}
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeClosePanel(JNIEnv *artEnv, jobject) { return mobileUiStr(artEnv, g_midClosePanel); }
+Java_dev_audaro_helloshell_JvmLauncher_nativeClosePanel(JNIEnv *artEnv, jobject) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midClosePanel);
+}
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePanelWidth(JNIEnv *, jobject) { return mobileUiInt(g_midPanelW); }
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelWidth(JNIEnv *, jobject) { return panelReady() ? mobileUiInt(g_midPanelW) : 0; }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePanelHeight(JNIEnv *, jobject) { return mobileUiInt(g_midPanelH); }
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelHeight(JNIEnv *, jobject) { return panelReady() ? mobileUiInt(g_midPanelH) : 0; }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePanelFrameSeq(JNIEnv *, jobject) { return mobileUiInt(g_midPanelSeq); }
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelFrameSeq(JNIEnv *, jobject) { return panelReady() ? mobileUiInt(g_midPanelSeq) : 0; }
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeOpenPanel(JNIEnv *artEnv, jobject, jint index) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midOpenPanel) return artEnv->NewStringUTF("");
     jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midOpenPanel, index);
@@ -895,6 +945,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeOpenPanel(JNIEnv *artEnv, jobject, 
 }
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativePanelClick(JNIEnv *artEnv, jobject, jint x, jint y) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midPanelClick) return artEnv->NewStringUTF("");
     jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midPanelClick, x, y);
@@ -904,15 +955,28 @@ Java_dev_audaro_helloshell_JvmLauncher_nativePanelClick(JNIEnv *artEnv, jobject,
 }
 extern "C" JNIEXPORT jintArray JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativePanelPixels(JNIEnv *artEnv, jobject) {
+    if (!panelReady()) return nullptr;
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midPanelPixels) return nullptr;
     jintArray src = (jintArray) hs->CallStaticObjectMethod(g_mobileUiCls, g_midPanelPixels);
     if (hs->ExceptionCheck() || !src) { hs->ExceptionClear(); if (src) hs->DeleteLocalRef(src); return nullptr; }
     jsize n = hs->GetArrayLength(src);
     jintArray dst = artEnv->NewIntArray(n);
-    if (dst && n > 0) {
+    if (!dst) {                              // ART OOM: clear its pending exc, drop the HotSpot ref, signal null
+        if (artEnv->ExceptionCheck()) artEnv->ExceptionClear();
+        hs->DeleteLocalRef(src);
+        return nullptr;
+    }
+    if (n > 0) {
         jint *buf = hs->GetIntArrayElements(src, nullptr);
-        if (buf) { artEnv->SetIntArrayRegion(dst, 0, n, buf); hs->ReleaseIntArrayElements(src, buf, JNI_ABORT); }
+        if (buf) {
+            artEnv->SetIntArrayRegion(dst, 0, n, buf);
+            hs->ReleaseIntArrayElements(src, buf, JNI_ABORT);
+        } else {                             // HotSpot OOM pinning the array: clear so it can't trip the next
+            if (hs->ExceptionCheck()) hs->ExceptionClear();   // bridge call; return null (dst is GC'd)
+            hs->DeleteLocalRef(src);
+            return nullptr;
+        }
     }
     hs->DeleteLocalRef(src);
     return dst;
