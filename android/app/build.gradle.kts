@@ -53,6 +53,18 @@ android {
         debug {
             isMinifyEnabled = false
         }
+        release {
+            // R8/minify stays OFF on purpose: the embedded RuneLite engine + our headless bridges are resolved
+            // by NAME via JNI FindClass (net.runelite.client.headless.*, DeviceHeadlessBoot, UnsafePokeActivation)
+            // and RuneLite leans heavily on reflection internally — shrinking/renaming would break the engine. The
+            // APK size is dominated by the unshrinkable native JRE + jars anyway, so R8 would save little.
+            isMinifyEnabled = false
+            isShrinkResources = false
+            // Personal/technical sideload (never shipped to others): sign release with the debug
+            // key so `assembleRelease` yields an installable, signed APK with no secret keystore to manage. Swap in
+            // a dedicated release keystore here if this ever needs real distribution.
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
 
     // A4: Jetpack Compose for the data-driven plugin UI (the live overlays stay classic Views — see
