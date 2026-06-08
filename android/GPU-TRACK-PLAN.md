@@ -4,6 +4,14 @@
 > `BLUEPRINT.md` §D or `PORT-PHASING.md` §3G (e.g. the stale blit-seam line citations, the
 > A7-vs-AG2 "contention", the "jar prerequisite"), THIS doc is correct. Honest headline: base GPU
 > rendering is *plausible, not probable* (~35–40% to a real frame); the whole track gates on AG1.
+>
+> **STATUS — AG1a GREEN on the emulator (2026-06-08, commit `5bfe36c45`).** The facade-bind EGL smoke
+> passes: `ANDROID_AG1A OpenGL33=true createProgram=1 fbo=1 glErr*=0` on a live EGL 1.4 / ES 3.1 context,
+> headless. The librlawt EGL replacement (`app/src/main/cpp/librlawt.cpp`), the ported Java facade, and the
+> host smoke launch all work — see `dev-tools/gpu/`. This closes the *easy ~75%* (AG1a). **It is NOT
+> AG1-GREEN** — the emulator is ANGLE→SwiftShader; the coin-flip AG1b (real shaders + `glValidateProgram`
+> on a real Adreno/Mali driver, under the real HotSpot render thread + CACIO canvas) is device-only and
+> still open. NEXT: AG0 recon APK + AG1b on a real device (BrowserStack).
 
 # Android GPU Rendering + 117HD: Final Plan (post-review)
 
