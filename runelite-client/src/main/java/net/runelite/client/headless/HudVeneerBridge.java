@@ -324,6 +324,18 @@ public final class HudVeneerBridge
 				}
 			}
 
+			// RESEARCH PROBE (off-device only, -Drunelite.hudveneer.test=true): resize the minimap DRAW-AREA widget
+			// (MINIMAP) to verify the engine renders a BIGGER globe when its widget grows (and that localToMinimap-
+			// based click-to-walk follows). Logs the before/after MINIMAP bounds so a desktop capture can confirm.
+			if (TEST_APPLY)
+			{
+				final int scalePct = Integer.getInteger("runelite.hudveneer.test.minimapScalePct", 0);
+				if (scalePct > 0)
+				{
+					minimapResizeProbe(c, preEoc, scalePct);
+				}
+			}
+
 			// Side panel relocate (independent). No-op until a tab is open (SIDE_CONTAINER then becomes non-null).
 			if (sideX >= 0)
 			{
@@ -427,6 +439,52 @@ public final class HudVeneerBridge
 				return;
 			}
 			c.createScriptEventBuilder(op).setSource(w).setOp(1).build().run();
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	// RESEARCH PROBE state: the natural (pre-resize) minimap draw-area size, cached once so the scale is stable.
+	private static int origMinimapW = -1;
+	private static int origMinimapH = -1;
+	private static boolean minimapProbeLogged;
+
+	/** Resize the minimap draw-area widget to {@code scalePct}% of its natural size (ABSOLUTE) + revalidate, to test
+	 *  whether the engine renders a larger globe. Off-device research only. */
+	private static void minimapResizeProbe(Client c, boolean preEoc, int scalePct)
+	{
+		try
+		{
+			final int mmId = preEoc ? InterfaceID.ToplevelPreEoc.MINIMAP : InterfaceID.ToplevelOsrsStretch.MINIMAP;
+			final Widget mm = c.getWidget(mmId);
+			if (mm == null)
+			{
+				return;
+			}
+			if (origMinimapW < 0)
+			{
+				origMinimapW = mm.getWidth();
+				origMinimapH = mm.getHeight();
+			}
+			final int tw = origMinimapW * scalePct / 100;
+			final int th = origMinimapH * scalePct / 100;
+			if (mm.getWidthMode() != WidgetSizeMode.ABSOLUTE || mm.getOriginalWidth() != tw
+				|| mm.getHeightMode() != WidgetSizeMode.ABSOLUTE || mm.getOriginalHeight() != th)
+			{
+				mm.setWidthMode(WidgetSizeMode.ABSOLUTE);
+				mm.setHeightMode(WidgetSizeMode.ABSOLUTE);
+				mm.setOriginalWidth(tw);
+				mm.setOriginalHeight(th);
+				mm.revalidate();
+			}
+			if (!minimapProbeLogged)
+			{
+				minimapProbeLogged = true;
+				final java.awt.Rectangle b = mm.getBounds();
+				log.info("[veneer] MINIMAP_PROBE scalePct={} natural={}x{} forced={}x{} bounds={}",
+					scalePct, origMinimapW, origMinimapH, tw, th, b);
+			}
 		}
 		catch (RuntimeException ignore)
 		{
