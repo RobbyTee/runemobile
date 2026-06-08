@@ -9,6 +9,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.util.Log
+import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
 import org.json.JSONObject
@@ -38,6 +39,26 @@ class ChatTabOverlayView(context: Context) : View(context) {
     /** Host callback: the user tapped native chat tab [index]; proxy a precise click on the live engine button
      *  centre (engine canvas px). */
     var onChatTab: ((index: Int, engineCx: Int, engineCy: Int) -> Unit)? = null
+
+    // Long-press a tab -> the engine's chat filter menu (On / Filter / Off / Hide …), driven through the shared
+    // press-and-peek menu overlay. Begin right-clicks the live engine button (engine px) + anchors the menu at the
+    // finger (view px); Move drags the row highlight; End commits (or cancels). Mirrors the iOS onChatTabLongPress.
+    var onChatTabLongPressBegin: ((index: Int, engineCx: Int, engineCy: Int, viewX: Float, viewY: Float) -> Unit)? = null
+    var onChatTabLongPressMove: ((viewX: Float, viewY: Float) -> Unit)? = null
+    var onChatTabLongPressEnd: ((cancelled: Boolean) -> Unit)? = null
+
+    private var downTab = -1
+    private var longPressActive = false
+    private val gesture = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onLongPress(e: MotionEvent) {
+            val i = downTab
+            if (i < 0 || i >= tabs.size) return
+            val t = tabs[i]
+            if (t.ew <= 0 || t.eh <= 0 || t.ex < 0 || t.ey < 0) return   // engine button not built this frame
+            longPressActive = true
+            onChatTabLongPressBegin?.invoke(i, t.ex + t.ew / 2, t.ey + t.eh / 2, e.x, e.y)
+        }
+    })
 
     private var shown = true
     private var enabled = false
@@ -152,21 +173,47 @@ class ChatTabOverlayView(context: Context) : View(context) {
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!enabled || !shown || tabs.isEmpty() || tabW <= 0f) return false
         when (event.actionMasked) {
-            // Consume only if the gesture STARTS on a tab, so taps below the row fall through to the game.
-            MotionEvent.ACTION_DOWN -> return tabAt(event.x, event.y) >= 0
-            MotionEvent.ACTION_UP -> {
+            MotionEvent.ACTION_DOWN -> {
+                // Consume only if the gesture STARTS on a tab, so taps below the row fall through to the game.
                 val i = tabAt(event.x, event.y)
                 if (i < 0) return false
-                val t = tabs[i]
-                if (t.ew > 0 && t.eh > 0 && t.ex >= 0 && t.ey >= 0) {
-                    onChatTab?.invoke(i, t.ex + t.ew / 2, t.ey + t.eh / 2)
-                    optimisticTab = i   // instant highlight until the engine sprite + snapshot agree
-                    invalidate()
+                downTab = i; longPressActive = false
+                gesture.onTouchEvent(event)   // arm the long-press timer
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                gesture.onTouchEvent(event)
+                if (longPressActive) onChatTabLongPressMove?.invoke(event.x, event.y)
+                return true
+            }
+            MotionEvent.ACTION_UP -> {
+                gesture.onTouchEvent(event)
+                if (longPressActive) {
+                    onChatTabLongPressEnd?.invoke(false)   // release on a row -> commit the filter choice
+                } else {
+                    val i = tabAt(event.x, event.y)
+                    if (i >= 0 && i == downTab) commitTap(i)   // a plain tap -> switch to that chat tab
                 }
+                longPressActive = false; downTab = -1
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                gesture.onTouchEvent(event)
+                if (longPressActive) onChatTabLongPressEnd?.invoke(true)
+                longPressActive = false; downTab = -1
                 return true
             }
         }
         return false
+    }
+
+    private fun commitTap(i: Int) {
+        val t = tabs[i]
+        if (t.ew > 0 && t.eh > 0 && t.ex >= 0 && t.ey >= 0) {
+            onChatTab?.invoke(i, t.ex + t.ew / 2, t.ey + t.eh / 2)
+            optimisticTab = i   // instant highlight until the engine sprite + snapshot agree
+            invalidate()
+        }
     }
 
     private fun tabAt(x: Float, y: Float): Int {

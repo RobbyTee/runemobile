@@ -101,3 +101,11 @@ LIVE engine button centre (from the snapshot bounds) via `selectMenuPoint` (clic
 engine sprite catches up (`evidence-chattabs.png`). Emulator GREEN: `ANDROID_A3_CHATTABS_GREEN ... (7 tabs)`; a
 Game-tab tap fired `selectMenuPoint` and the tab flipped to the selected sprite.
 
+A **long-press** on a chat tab opens the engine's filter menu (Show: autochat/standard/friends/none, Hide,
+Clear history, Filter, Setup autochat) through the shared press-and-peek overlay: the overlay owns the gesture,
+so it forwards begin/drag/release to right-click the live engine button (`onClick` button 3) and drive the A2
+`updateMenuHighlight` / `commitMenuSelection` machinery — drag to a row, release to pick
+(`evidence-chattab-filtermenu.png`). Emulator GREEN: `a2: select row 1 -> game=(165,60)`, app stable. (Fixed in
+passing: the menu-highlight haptic crashed the UI thread because the `VIBRATE` permission was missing from the
+manifest — added it + wrapped the vibrate in a try/catch.)
+

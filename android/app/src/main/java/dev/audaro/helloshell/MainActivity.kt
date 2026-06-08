@@ -139,6 +139,18 @@ class MainActivity : AppCompatActivity() {
             Log.i(TAG, "a3: chat tab $idx tap -> selectMenuPoint($ecx,$ecy)")
             JvmLauncher.onBridge { JvmLauncher.selectMenuPoint(ecx, ecy) }
         }
+        // Long-press a chat tab -> the engine's filter menu (On/Filter/Off/Hide), via the shared press-and-peek
+        // overlay. The overlay owns this gesture, so it forwards drag/release here to drive the highlight + commit.
+        chatTabOverlay.onChatTabLongPressBegin = { _, ecx, ecy, vx, vy -> beginChatFilterMenu(ecx, ecy, vx, vy) }
+        chatTabOverlay.onChatTabLongPressMove = { vx, vy ->
+            menuCurX = vx; menuCurY = vy
+            if (menuActive && menuOverlay.isActive) updateMenuHighlight(vx, vy)
+        }
+        chatTabOverlay.onChatTabLongPressEnd = { cancelled ->
+            menuTouchActive = false
+            if (cancelled) { if (menuActive) cancelMenu() }
+            else if (menuOverlay.isActive) commitMenuSelection()
+        }
         // A4 plugin UI: a full-screen Compose panel (GONE until opened) + a small launcher button. The panel
         // is a data screen (Compose); the live game overlays above stay classic Views (hybrid, §4.2).
         val pluginPanel = ComposeView(this).apply { visibility = View.GONE }
@@ -570,8 +582,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun vibrateTick() {
         val v = vibrator ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            v.vibrate(VibrationEffect.createOneShot(18, VibrationEffect.DEFAULT_AMPLITUDE))
+        // Guard the vibrate: it needs the VIBRATE permission and some devices restrict the vibrator outright — a
+        // SecurityException here must never take down the UI thread (it once did, on the menu-highlight haptic).
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                v.vibrate(VibrationEffect.createOneShot(18, VibrationEffect.DEFAULT_AMPLITUDE))
+            }
+        } catch (e: Exception) {
+            // haptics are best-effort; ignore
         }
     }
 
@@ -592,6 +610,21 @@ class MainActivity : AppCompatActivity() {
         menuOpenAtNanos = System.nanoTime()
         JvmLauncher.click(gx, gy, 3)   // open the engine right-click menu at the finger
         Log.i(TAG, "a2: long-press -> menu open game=($gx,$gy) hand=${if (menuHandRight) "R" else "L"}")
+    }
+
+    /** A3: a native chat-tab long-press opens the engine's filter menu by right-clicking the LIVE engine chat
+     *  button (engine canvas px, from the snapshot) and anchoring the native press-and-peek overlay at the finger
+     *  (view px). Reuses the A2 menu machinery (tryBuildNativeMenu / updateMenuHighlight / commitMenuSelection),
+     *  driven by the chat overlay's long-press callbacks (it owns the gesture). Mirrors the iOS onChatTabLongPress. */
+    private fun beginChatFilterMenu(engineCx: Int, engineCy: Int, viewX: Float, viewY: Float) {
+        if (menuActive) return
+        menuAnchorX = viewX; menuAnchorY = viewY
+        menuCurX = viewX; menuCurY = viewY
+        menuHandRight = viewX > surfaceView.width * 0.5f
+        menuActive = true; menuBuilding = true; menuTouchActive = true; menuHighlight = -1
+        menuOpenAtNanos = System.nanoTime()
+        JvmLauncher.click(engineCx, engineCy, 3)   // right-click the live engine chat button -> its filter menu
+        Log.i(TAG, "a3: chat tab long-press -> filter menu game=($engineCx,$engineCy)")
     }
 
     /** Poll the snapshot (each frame, while building) until the engine menu the long-press opened is reflected. */
