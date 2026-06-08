@@ -42,3 +42,32 @@ resizable layout is a separate, deferrable concern.** (`-Drunelite.headless.resi
 component but the gamepack canvas stays 765×503 and the viewport collapses — that resizable-canvas gap is a
 shared/headless-Java item parked for the edge-to-edge work, NOT a blocker for the cover-and-proxy rails.)
 `minimap=false` is expected: the bridge returns null for the fixed-root minimap (the orbs cluster resolved).
+
+## UI gate (`check-a6ui.sh`) — cover-and-proxy tab rails
+
+`ChromeOverlayView` is a full-screen interactive View stacked over the SurfaceView (below the menu overlay). A
+Choreographer tick reads the **render-thread-published** snapshot (`JvmLauncher.chromeSnapshotPub()` — lock-free,
+no HotSpot attach), parses the 14 tab-stone bounds, maps them game-canvas → view via the blit full-stretch, and
+draws a native stone over each (active tab highlighted gold). A tap that **starts on a rail** is consumed and
+proxied to `JavaBridge.onClickPrecise` on the live engine stone centre; a tap elsewhere returns false and falls
+through to the game. `-Drunelite.mobilechrome` is now **always-on** (it publishes the read-only snapshot); a `▦`
+button toggles the native rails (A/B vs the raw engine stones).
+
+```
+adb shell am start -n dev.audaro.helloshell/.MainActivity   # autologin in-world; rails draw once stones resolve
+android/dev-tools/a6-chrome/check-a6ui.sh
+```
+
+### Baseline GREEN (emulator `rl_arm64`, 2026-06-08)
+
+```
+ANDROID_A6_UI_GREEN tabsDrawn=14 activeTab=3 frame=765x503 view=1920x1080      # 14/14 rails drawn over the stones
+a6: native tab 6 tap -> onClickPrecise(744,186)                                # a rail tap proxied to the live stone
+```
+
+Proxy verified end-to-end: a synthesized tap on the native **magic** rail switched the live side panel to the
+spellbook (`evidence-rails-magictab.png`); `evidence-rails.png` is the inventory-tab baseline. The view-space
+tap hit the correct native rail, which computed the right game-canvas stone centre (e.g. 744,186 = the magic
+stone) and proxied `onClickPrecise` — so the rails are correctly positioned, interactive, and the engine +
+plugins stay authoritative (no widget moved/hidden).
+

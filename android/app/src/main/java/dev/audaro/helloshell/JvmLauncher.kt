@@ -147,6 +147,10 @@ object JvmLauncher {
     // viewport canvas bounds the native edge-rails read). Gated by -Drunelite.mobilechrome. Off the UI thread.
     external fun nativeChromeSnapshot(): String
 
+    // A6 overlay: the render-thread-PUBLISHED chrome snapshot — lock-free, no HotSpot attach, safe to read each
+    // frame from the Choreographer tick (UI thread). Drives the cover-and-proxy tab-rail overlay.
+    external fun nativeChromeSnapshotPub(): String
+
     // Kotlin-friendly aliases.
     fun setEnv(key: String, value: String) = nativeSetEnv(key, value)
     fun setSurface(surface: Surface?) = nativeSetSurface(surface)
@@ -206,4 +210,5 @@ object JvmLauncher {
     fun worldListJson() = nativeWorldListJson()
     fun worldHop(worldId: Int) = nativeWorldHop(worldId)
     fun chromeSnapshot() = nativeChromeSnapshot()
+    fun chromeSnapshotPub() = nativeChromeSnapshotPub()
 }

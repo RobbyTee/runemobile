@@ -52,6 +52,11 @@ class MainActivity : AppCompatActivity() {
     private var keyboardShown = false
     private var frameCallback: Choreographer.FrameCallback? = null
 
+    // A6 native chrome (cover-and-proxy tab rails over the live stones).
+    private lateinit var chromeOverlay: ChromeOverlayView
+    private var chromeUiLogged = false
+    private var lastChromeJson = ""
+
     // A2 press-and-peek menu state.
     private lateinit var menuOverlay: MenuOverlayView
     private var menuActive = false      // the long-press has claimed this gesture
@@ -101,6 +106,13 @@ class MainActivity : AppCompatActivity() {
         surfaceView = SurfaceView(this)
         keyboardView = GameInputView(this)
         menuOverlay = MenuOverlayView(this)
+        // A6 native chrome: cover-and-proxy tab-rails drawn over the live stones. A native tab tap proxies a
+        // precise click onto the live engine stone centre (the engine + plugins stay authoritative).
+        chromeOverlay = ChromeOverlayView(this)
+        chromeOverlay.onTabTap = { idx, gcx, gcy ->
+            Log.i(TAG, "a6: native tab $idx tap -> onClickPrecise($gcx,$gcy)")
+            JvmLauncher.clickPrecise(gcx, gcy, 1)
+        }
         // A4 plugin UI: a full-screen Compose panel (GONE until opened) + a small launcher button. The panel
         // is a data screen (Compose); the live game overlays above stay classic Views (hybrid, §4.2).
         val pluginPanel = ComposeView(this).apply { visibility = View.GONE }
@@ -115,15 +127,25 @@ class MainActivity : AppCompatActivity() {
             pluginPanel.visibility = View.VISIBLE
             pluginButton.visibility = View.GONE
         }
+        // A6 A/B: toggle the native rails on/off (▦ = native chrome shown; ▤ = raw engine stones).
+        val chromeButton = Button(this).apply { text = "▦" }
+        chromeButton.setOnClickListener {
+            chromeOverlay.setShown(!chromeOverlay.railsShown)
+            chromeButton.text = if (chromeOverlay.railsShown) "▦" else "▤"
+        }
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
             addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
+            addView(chromeOverlay, FrameLayout.LayoutParams(mp, mp))  // native rails over the live stones
             addView(keyboardView, FrameLayout.LayoutParams(1, 1))
-            addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame
+            addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame + chrome
             addView(pluginPanel, FrameLayout.LayoutParams(mp, mp))   // Compose plugin list (GONE until opened)
             addView(pluginButton, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP or Gravity.END))
+            addView(chromeButton, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.START))
         }
         setContentView(root)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
@@ -341,11 +363,43 @@ class MainActivity : AppCompatActivity() {
                 if (menuBuilding) {
                     tryBuildNativeMenu()
                 }
+                updateChrome()
                 Choreographer.getInstance().postFrameCallback(this)
             }
         }
         frameCallback = cb
         Choreographer.getInstance().postFrameCallback(cb)
+    }
+
+    /**
+     * A6: feed the cover-and-proxy tab-rails the latest chrome geometry each frame. Reads the render-thread-
+     * published MobileChromeBridge snapshot (lock-free, no HotSpot attach), parses the 14 stone bounds, and
+     * maps them game-canvas -> view via the blit full-stretch (same scale as toGameX/Y, inverted). Skips the
+     * parse when the published JSON is unchanged (e.g. the constant login-screen snapshot).
+     */
+    private fun updateChrome() {
+        if (!::chromeOverlay.isInitialized || !chromeOverlay.railsShown) return
+        val json = JvmLauncher.chromeSnapshotPub()
+        if (json == lastChromeJson) return
+        lastChromeJson = json
+        val fw = JvmLauncher.frameWidth(); val fh = JvmLauncher.frameHeight()
+        val vw = surfaceView.width; val vh = surfaceView.height
+        if (fw <= 0 || fh <= 0 || vw <= 0 || vh <= 0) return
+        val o = try { JSONObject(json) } catch (e: Exception) { return }
+        if (!o.optBoolean("loggedIn")) { chromeOverlay.setStones(emptyList(), -1, 1f, 1f); return }
+        val tabsArr = o.optJSONArray("tabs") ?: return
+        val tabs = ArrayList<IntArray?>(tabsArr.length())
+        for (i in 0 until tabsArr.length()) {
+            if (tabsArr.isNull(i)) { tabs.add(null); continue }
+            val a = tabsArr.optJSONArray(i)
+            tabs.add(if (a != null && a.length() >= 4) intArrayOf(a.getInt(0), a.getInt(1), a.getInt(2), a.getInt(3)) else null)
+        }
+        val active = o.optInt("activeTab", -1)
+        val n = chromeOverlay.setStones(tabs, active, vw.toFloat() / fw, vh.toFloat() / fh)
+        if (n > 0 && !chromeUiLogged) {
+            chromeUiLogged = true
+            Log.i(TAG, "ANDROID_A6_UI_GREEN tabsDrawn=$n activeTab=$active frame=${fw}x${fh} view=${vw}x${vh}")
+        }
     }
 
     private fun vibrateTick() {
@@ -527,6 +581,7 @@ class MainActivity : AppCompatActivity() {
             "-Drunelite.menupeek=true",             // A2: publish the menu-peek snapshot each client tick
             "-Drunelite.menupeek.maxEntries=14",
             "-Drunelite.mobileui=true",             // A4: plugin control plane (list/toggle/config from the host)
+            "-Drunelite.mobilechrome=true",         // A6: publish the read-only chrome snapshot (tab-rail bounds)
         )
         if (autologinArmed) {
             opts.addAll(JagexTokens.autologinOpts)
@@ -537,11 +592,10 @@ class MainActivity : AppCompatActivity() {
             // are already on above) and arm the one-shot GateCensus probe in DeviceHeadlessBoot.
             opts.addAll(listOf(
                 "-Drunelite.gatecensus=true",
-                "-Drunelite.mobilechrome=true",
                 "-Drunelite.huddata=true",
                 "-Drunelite.hudveneer=true",
             ))
-            Log.i(TAG, "A-1b census mode: +mobileui/mobilechrome/huddata/hudveneer + gatecensus")
+            Log.i(TAG, "A-1b census mode: +huddata/hudveneer + gatecensus (mobileui/mobilechrome always-on)")
         }
 
         Log.i(TAG, "starting HotSpot: DeviceHeadlessBoot, cp=$classpath")

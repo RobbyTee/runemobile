@@ -128,6 +128,12 @@ static std::mutex            g_menuLock;
 static std::string           g_menuSnapshot = "{\"active\":false}";
 static std::atomic<long long> g_menuPublishSeq{-1};
 
+// A6 chrome snapshot, republished every frame by the render thread (the only HotSpot-attached caller) for the
+// UI thread's cover-and-proxy tab-rail overlay to read lock-free without ever attaching to HotSpot — same
+// pattern as the A2 menu snapshot. MobileChromeBridge has no publish-seq; the JSON is small + rebuilt each tick.
+static std::mutex            g_chromeLock;
+static std::string           g_chromeSnapshotPub = "{\"enabled\":false}";
+
 // ---- Input queue (UI thread enqueues; render thread drains and dispatches into the bridge) -----------
 enum InputKind {
     IN_CLICK = 0, IN_TOUCH = 1, IN_CAMERA = 2, IN_CLEARHOVER = 3,
@@ -589,6 +595,25 @@ static void *renderLoop(void *) {
                         env->DeleteLocalRef(js);
                     }
                     g_menuPublishSeq.store(sq, std::memory_order_relaxed);
+                }
+            }
+
+            // A6: republish the chrome snapshot each frame (the cover-and-proxy rails need fresh stone bounds;
+            // it's a small JSON rebuilt each client tick, and only meaningful in-world, so a per-frame copy is
+            // cheap). The UI thread reads g_chromeSnapshotPub via nativeChromeSnapshotPub() — no HotSpot attach.
+            if (g_chromeReady.load(std::memory_order_acquire) && g_chromeCls) {
+                jstring js = (jstring) env->CallStaticObjectMethod(g_chromeCls, g_midChromeSnap);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); }
+                else if (js) {
+                    const char *c = env->GetStringUTFChars(js, nullptr);
+                    if (c) {
+                        std::lock_guard<std::mutex> lk(g_chromeLock);
+                        g_chromeSnapshotPub.assign(c);
+                        env->ReleaseStringUTFChars(js, c);
+                    } else if (env->ExceptionCheck()) {
+                        env->ExceptionClear();   // OOM: don't leave it pending for the next bridge call
+                    }
+                    env->DeleteLocalRef(js);
                 }
             }
         }
@@ -1185,4 +1210,11 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeChromeSnapshot(JNIEnv *artEnv, jobject) {
     if (!chromeReady()) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_chromeCls, g_midChromeSnap);
+}
+// A6 overlay read-surface: the render-thread-published chrome snapshot (UI reads lock-free, NO HotSpot attach —
+// safe to call from the Choreographer tick each frame). Distinct from nativeChromeSnapshot (rl-bridge, one-shot).
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeChromeSnapshotPub(JNIEnv *env, jobject) {
+    std::lock_guard<std::mutex> lk(g_chromeLock);
+    return env->NewStringUTF(g_chromeSnapshotPub.c_str());
 }
