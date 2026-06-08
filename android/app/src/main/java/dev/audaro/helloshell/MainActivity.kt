@@ -599,6 +599,20 @@ class MainActivity : AppCompatActivity() {
             "-Drunelite.mobileui=true",             // A4: plugin control plane (list/toggle/config from the host)
             "-Drunelite.mobilechrome=true",         // A6: publish the read-only chrome snapshot (tab-rail bounds)
         )
+        // A7 resizable: render at the screen's landscape aspect — HeadlessResize grows the gamepack Component on
+        // login (stock, inset-aware, the same mechanism iOS device-proved). With the OSRS account in RESIZABLE
+        // display mode the gamepack fills it (resizable toplevel 164 → chat-at-top + resizable chrome unblock);
+        // a FIXED account harmlessly keeps the 765x503 viewport (gamepack pillarboxes, canvas stays 765x503, so
+        // the blit + touch + A6 rails are unchanged — no regression). The account's display mode is the switch.
+        run {
+            val dm = app.resources.displayMetrics
+            val longEdge = maxOf(dm.widthPixels, dm.heightPixels)
+            val shortEdge = maxOf(1, minOf(dm.widthPixels, dm.heightPixels))
+            val renderH = 720
+            val renderW = (renderH.toLong() * longEdge / shortEdge).toInt()
+            opts.add("-Drunelite.headless.resize=${renderW}x${renderH}")
+            Log.i(TAG, "A7 resize armed: ${renderW}x${renderH} (screen ${longEdge}x${shortEdge}; resizable iff account in resizable display mode)")
+        }
         if (autologinArmed) {
             opts.addAll(JagexTokens.autologinOpts)
             Log.i(TAG, "autologin ARMED (tokens.json present): EULA 302,312 -> Play Now 382,248, world 301")
@@ -611,7 +625,7 @@ class MainActivity : AppCompatActivity() {
                 "-Drunelite.huddata=true",
                 "-Drunelite.hudveneer=true",
             ))
-            Log.i(TAG, "A-1b census mode: +huddata/hudveneer + gatecensus (mobileui/mobilechrome always-on)")
+            Log.i(TAG, "A-1b census mode: +huddata/hudveneer + gatecensus (mobileui/mobilechrome/resize always-on)")
         }
 
         Log.i(TAG, "starting HotSpot: DeviceHeadlessBoot, cp=$classpath")
