@@ -57,14 +57,23 @@ fun PluginPanel(onClose: () -> Unit) {
     var configFor by remember { mutableStateOf<Pair<String, String>?>(null) }   // (configGroup, pluginName)
     var panelListOpen by remember { mutableStateOf(false) }
     var panelOpen by remember { mutableStateOf<Pair<Int, String>?>(null) }       // (panelIndex, tooltip)
+    var questOpen by remember { mutableStateOf(false) }                          // A5 Tier-2 native screens
+    var worldOpen by remember { mutableStateOf(false) }
 
+    if (questOpen) { QuestHelperScreen(onBack = { questOpen = false }); return }
+    if (worldOpen) { WorldSwitcherScreen(onBack = { worldOpen = false }); return }
     val po = panelOpen
     if (po != null) {
         PanelView(po.first, po.second, onBack = { panelOpen = null })
         return
     }
     if (panelListOpen) {
-        PanelList(onOpen = { i, t -> panelOpen = i to t }, onBack = { panelListOpen = false })
+        PanelList(
+            onOpen = { i, t -> panelOpen = i to t },
+            onOpenQuest = { questOpen = true },
+            onOpenWorld = { worldOpen = true },
+            onBack = { panelListOpen = false },
+        )
         return
     }
     val cf = configFor

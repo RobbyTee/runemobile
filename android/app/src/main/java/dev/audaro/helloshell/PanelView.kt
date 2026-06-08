@@ -53,16 +53,28 @@ data class PanelEntry(val index: Int, val tooltip: String, val icon: Bitmap?)
 
 private class PanelSnap(val w: Int, val h: Int, val seq: Int, val px: IntArray?)
 
-/** A5 Tier-1: the list of plugin side-panels (icon + tooltip). Tap one to open the rendered-image viewer. */
+/**
+ * A5 Tier-1 panel list (icon + tooltip) — tap a panel to open the rendered-image viewer. ALSO the entry into
+ * the A5 Tier-2 native screens: when a curated bridge's isAvailable() is true, a highlighted "native" row is
+ * surfaced at the top (Quest Helper / World Switcher) that opens the data-driven native screen instead of the
+ * rendered image. When unavailable, the row is hidden and the plugin's rendered panel in the list is the
+ * Tier-1 fallback (so no capability is lost).
+ */
 @Composable
-fun PanelList(onOpen: (Int, String) -> Unit, onBack: () -> Unit) {
+fun PanelList(onOpen: (Int, String) -> Unit, onOpenQuest: () -> Unit, onOpenWorld: () -> Unit, onBack: () -> Unit) {
     var panels by remember { mutableStateOf<List<PanelEntry>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
+    var questAvail by remember { mutableStateOf(false) }
+    var worldAvail by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         val json = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.listPanels() }.get() }
         panels = parsePanels(json)
+        val avail = withContext(Dispatchers.IO) {
+            JvmLauncher.onBridge { JvmLauncher.questAvailable() to JvmLauncher.worldAvailable() }.get()
+        }
+        questAvail = avail.first; worldAvail = avail.second
         loading = false
-        Log.i("MainActivity", "ANDROID_A5_PANELLIST count=${panels.size}")
+        Log.i("MainActivity", "ANDROID_A5_PANELLIST count=${panels.size} questNative=$questAvail worldNative=$worldAvail")
     }
     Surface(color = Color(0xF2121212), modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(12.dp)) {
@@ -73,6 +85,12 @@ fun PanelList(onOpen: (Int, String) -> Unit, onBack: () -> Unit) {
             if (loading) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             } else {
+                if (questAvail || worldAvail) {
+                    Text("Native screens", color = Color(0xFF80CBC4), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                    if (worldAvail) NativeRow("World Switcher", onOpenWorld)
+                    if (questAvail) NativeRow("Quest Helper", onOpenQuest)
+                    HorizontalDivider(color = Color(0x33FFFFFF), modifier = Modifier.padding(vertical = 4.dp))
+                }
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(panels, key = { it.index }) { p ->
                         Row(
@@ -87,6 +105,17 @@ fun PanelList(onOpen: (Int, String) -> Unit, onBack: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun NativeRow(label: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = Color.White, modifier = Modifier.weight(1f))
+        Text("native ›", color = Color(0xFF80CBC4), fontSize = 12.sp)
     }
 }
 
