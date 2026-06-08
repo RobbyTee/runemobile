@@ -1,0 +1,20 @@
+# AG0/A0-device first real-device run — Pixel 8 (shiba), Android 14 (API 34), Firebase Test Lab, 2026-06-08
+# Robo OUTCOME=Passed (no crash). Key finding: Q11 (filesDir-dlopen) CLEARS on real hardware.
+
+## Q11 GO/NO-GO — CLEARED: SELinux grants execute on dlopen of libjvm.so from the app's private filesDir
+06-08 16:28:20.597 22405 22501 I jvm-boot: dlopen /data/user/0/dev.audaro.helloshell/files/jvm/jre/lib/server/libjvm.so
+
+## Embedded JVM + CACIO + bridges all come up on the real device
+I jvm-boot: HotSpot VM up; activating CACIO CTC before any AWT/bridge class loads
+I jvm-boot: CACIO CTC active; publishing bridge + starting render
+I jvm-boot: bridge: JavaBridge facade published
+I jvm-boot: bridge: MobileUiBridge facade published (panels=on)
+I jvm-boot: bridge: HudVeneerBridge facade published
+I MainActivity: startJvm rc=0 (VM up; watch logcat tags jvm-boot/jvm-stdout)
+
+## Autologin machinery runs; login attempt bounces (stale week-old session, access/refresh empty)
+MainActivity: autologin ARMED (tokens.json present): EULA 302,312 -> Play Now 382,248, world 301
+2026-06-08 23:28:56 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] gameState null -> LOGIN_SCREEN (draw#1 loginIndex=10 launcherDisplayName=<account>)
+2026-06-08 23:28:57 GMT [Client] INFO  n.r.client.headless.HeadlessLogin - [headless-login] Play Now attempt 1/5: synthesizing click at 382,248 (canvas 765x503 displayable=true)
+2026-06-08 23:28:57 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] gameState LOGIN_SCREEN -> LOGGING_IN (draw#21 loginIndex=10 launcherDisplayName=<account>)
+2026-06-08 23:28:57 GMT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] gameState LOGGING_IN -> LOGIN_SCREEN (draw#40 loginIndex=9 launcherDisplayName=<account>)

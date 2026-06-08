@@ -11,7 +11,19 @@
 > host smoke launch all work — see `dev-tools/gpu/`. This closes the *easy ~75%* (AG1a). **It is NOT
 > AG1-GREEN** — the emulator is ANGLE→SwiftShader; the coin-flip AG1b (real shaders + `glValidateProgram`
 > on a real Adreno/Mali driver, under the real HotSpot render thread + CACIO canvas) is device-only and
-> still open. NEXT: AG0 recon APK + AG1b on a real device (BrowserStack).
+> still open.
+>
+> **STATUS — AG0 GREEN on a REAL device (2026-06-08, Firebase Test Lab, Pixel 8 / Mali-G715).** Best-case:
+> `ANDROID_AG0 esTier=32 compute=true(512) clipControl=true bgra8888=true maxSamples=4 rgba16uiArrayRenderable=true
+> depth32f=true → VERDICT=PASS`. GLES **3.2 + compute + EXT_clip_control + 32F depth + RGBA16UI array** are all
+> present — so base `gpu` AND the *clean* 117HD compute path are both supported, and the iOS ES-3.0/GEQUAL
+> workarounds are unnecessary here. Evidence: `dev-tools/firebase/evidence/ag0-pixel8-20260608.log`. Also GREEN
+> on real HW: **A0-device/Q11** (the embedded JVM `dlopen`s libjvm from `filesDir`; SELinux grants execute).
+>
+> **NEXT (the remaining go/no-go): AG1b** — run the real base-`gpu` shaders (compile/link/`glValidateProgram`)
+> on this real Mali driver, under the real HotSpot render thread + CACIO canvas. The AG1a smoke uses the
+> `--ez gpuSmoke` intent extra, which Firebase Robo can't pass — so AG1b needs either a standalone
+> default-activity smoke variant (like the AG0 recon APK) or BrowserStack/an owned device.
 
 # Android GPU Rendering + 117HD: Final Plan (post-review)
 

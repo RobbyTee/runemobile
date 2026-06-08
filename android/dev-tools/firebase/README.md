@@ -13,24 +13,27 @@ verify it by REUSING the emulator md5 gates (`../a0-login/check-loggedin.sh`). J
   (needs the `--ez census true` intent extra; Robo only launches the default activity). Census is already
   GREEN on the emulator, so this is rarely needed.
 
-## One-time setup (free)
+## One-time setup — ONE command, ONE browser sign-in
 ```sh
-# 1. Create a Firebase project on the Spark (free) plan — no billing:
-#    https://console.firebase.google.com
-# 2. Install the Google Cloud SDK (gcloud + gsutil), then:
-gcloud auth login
-gcloud config set project <YOUR_PROJECT_ID>
+android/dev-tools/firebase/fb-setup.sh
 ```
-Auth lives in gcloud's own config — **no key file in this repo** to gitignore (unlike BrowserStack's access
-key). The first run enables the Cloud Testing / Tool Results APIs.
+That's it. `fb-setup.sh` installs the Google Cloud SDK (if missing), opens your browser **once** to sign in
+with your Google account (the only manual step), creates/picks a **free Spark-plan project (no billing)**,
+enables the Cloud Testing APIs, and verifies a real device is reachable. Idempotent — re-run any time. Auth
+lives in gcloud's own config — **no key file in this repo** to manage (unlike BrowserStack's access key).
+
+If the verify step says the project isn't "Firebase-enabled", add Firebase to it (free, 2 clicks):
+<https://console.firebase.google.com> → Add project → pick the existing project → skip Analytics → re-run.
 
 ## Run
 ```sh
-# build the APK first (or pass a path as the 2nd arg)
+# login (A0-device): build the main app, then run it on a real device.
 ( cd ../../.. && cd android && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew :app:assembleDebug )
-
 ./fb-gate.sh login     # A0-device — pushed tokens.json -> autologin -> LOGGED_IN, gated by check-loggedin.sh
-./fb-gate.sh recon     # AG0       — GLES tier readout (needs the recon APK; AG0 not built yet)
+
+# recon (AG0, Track G): build the standalone GLES-recon app, then run it on a real device.
+( cd ../../.. && cd android && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew :recon:assembleDebug )
+./fb-gate.sh recon     # AG0 — real GLES tier/extensions/compute readout -> ANDROID_AG0 VERDICT
 ```
 A GREEN run prints the same `ANDROID_LOGGEDIN_GREEN md5=…` sentinel as the emulator — real device, identical gate.
 
@@ -38,6 +41,7 @@ Pick a device id with `gcloud firebase test android models list` (default here: 
 a GLES 3.1+ arm64 target).
 
 ## Files
+- `fb-setup.sh` — the one-shot setup (install gcloud → sign in → project → enable APIs → verify a device).
 - `fb-gate.sh` — `gcloud firebase test android run --type robo` (push tokens via `--other-files`) → pull
   logcat from the results bucket (`gsutil`) → reuse the emulator md5 gate.
 
