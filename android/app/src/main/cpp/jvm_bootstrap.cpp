@@ -105,6 +105,7 @@ static std::atomic<bool> g_chromeReady{false};
 // engine unless -Drunelite.hudveneer=true. ALL-OR-NOTHING: published only if every method id resolves.
 static jclass    g_hudCls = nullptr;
 static jmethodID g_midSetStonesHidden = nullptr, g_midOpenTab = nullptr, g_midRelocateSidePanel = nullptr;
+static jmethodID g_midRelocateChat = nullptr;
 static std::atomic<bool> g_hudReady{false};
 
 // ---- Surface / render --------------------------------------------------------------------------------
@@ -512,7 +513,8 @@ static bool publishBridge(JNIEnv *env) {
             g_midSetStonesHidden   = midOpt(env, hvg, "setStonesHidden", "(Z)V");
             g_midOpenTab           = midOpt(env, hvg, "openTab", "(I)V");
             g_midRelocateSidePanel = midOpt(env, hvg, "relocateSidePanel", "(II)V");
-            bool hudOk = g_midSetStonesHidden && g_midOpenTab && g_midRelocateSidePanel;
+            g_midRelocateChat      = midOpt(env, hvg, "relocateChat", "(IIZ)V");
+            bool hudOk = g_midSetStonesHidden && g_midOpenTab && g_midRelocateSidePanel && g_midRelocateChat;
             if (hudOk) {
                 g_hudCls = hvg;                                         // before the release-store below
                 g_hudReady.store(true, std::memory_order_release);
@@ -1181,6 +1183,12 @@ static void facadeVoidIntInt(jclass cls, jmethodID m, jint a, jint b) {
     hs->CallStaticVoidMethod(cls, m, a, b);
     if (hs->ExceptionCheck()) hs->ExceptionClear();
 }
+static void facadeVoidIntIntBool(jclass cls, jmethodID m, jint a, jint b, jboolean c) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m) return;
+    hs->CallStaticVoidMethod(cls, m, a, b, c);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+}
 
 // Quest Helper
 extern "C" JNIEXPORT jboolean JNICALL
@@ -1277,4 +1285,9 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeRelocateSidePanel(JNIEnv *, jobject, jint x, jint y) {
     if (!hudReady()) return;
     facadeVoidIntInt(g_hudCls, g_midRelocateSidePanel, x, y);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeRelocateChat(JNIEnv *, jobject, jint x, jint y, jboolean transparent) {
+    if (!hudReady()) return;
+    facadeVoidIntIntBool(g_hudCls, g_midRelocateChat, x, y, transparent);
 }

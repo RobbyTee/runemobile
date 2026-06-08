@@ -16,6 +16,7 @@ import android.view.ScaleGestureDetector
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
+import android.view.WindowInsets
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -59,6 +60,8 @@ class MainActivity : AppCompatActivity() {
     private var lastStonesHidden: Boolean? = null   // desired HudVeneer hide-stones state (send only on change)
     private var lastSideX = Int.MIN_VALUE           // last side-panel relocation sent (send only on change)
     private var lastSideY = Int.MIN_VALUE
+    private var lastChatX = Int.MIN_VALUE           // last chat-at-top relocation sent (send only on change)
+    private var lastChatY = Int.MIN_VALUE
 
     // A2 press-and-peek menu state.
     private lateinit var menuOverlay: MenuOverlayView
@@ -415,12 +418,14 @@ class MainActivity : AppCompatActivity() {
         applyStonesHidden(gridOn)
         if (gridOn) {
             applySidePanel(o)
+            applyChatAtTop()
             if (!chromeUiLogged && chromeOverlay.gridLeftPx > 0f) {
                 chromeUiLogged = true
                 Log.i(TAG, "ANDROID_A6_UI_GREEN native 2-col tab grid drawn (engine stones hidden) topLevel=$topLevel activeTab=$active view=${surfaceView.width}x${surfaceView.height}")
             }
         } else {
             releaseSidePanel()
+            releaseChat()
         }
     }
 
@@ -454,6 +459,37 @@ class MainActivity : AppCompatActivity() {
         if (lastSideX == -1 && lastSideY == -1) return
         lastSideX = -1; lastSideY = -1
         JvmLauncher.onBridge { JvmLauncher.relocateSidePanel(-1, -1) }
+    }
+
+    /** Move the engine's own chatbox to the top-left (inside the safe area) and flip it to OSRS transparent-chat
+     *  mode — the mobile look. It stays the live engine chat (tabs / scrollback / colours / input all work); the
+     *  engine tick re-applies it. Insets are in view px → canvas px (k = frameW/viewW); sent only when changed. */
+    private fun applyChatAtTop() {
+        val fw = JvmLauncher.frameWidth(); val vw = surfaceView.width
+        if (fw <= 0 || vw <= 0) return
+        val k = fw.toFloat() / vw.toFloat()
+        var leftPx = 0; var topPx = 0
+        surfaceView.rootWindowInsets?.let { wi ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val i = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                leftPx = i.left; topPx = i.top
+            } else {
+                @Suppress("DEPRECATION") run { leftPx = wi.stableInsetLeft; topPx = wi.stableInsetTop }
+            }
+        }
+        val margin = 8                                    // canvas-px breathing room from the safe edge
+        val chatX = Math.round(leftPx * k) + margin
+        val chatY = Math.round(topPx * k) + margin
+        if (chatX == lastChatX && chatY == lastChatY) return
+        lastChatX = chatX; lastChatY = chatY
+        JvmLauncher.onBridge { JvmLauncher.relocateChat(chatX, chatY, true) }
+    }
+
+    /** Stop relocating the chat (let it return to its native bottom position) when the chrome disengages. */
+    private fun releaseChat() {
+        if (lastChatX == -1 && lastChatY == -1) return
+        lastChatX = -1; lastChatY = -1
+        JvmLauncher.onBridge { JvmLauncher.relocateChat(-1, -1, false) }
     }
 
     private fun vibrateTick() {

@@ -11,8 +11,9 @@ relocated to the top**. Like A4/A5, it rides shared bridges already in the jar �
 - **`HudVeneerBridge`** (gate `-Drunelite.hudveneer=true`) — the chrome **write** surface:
   `setStonesHidden(true)` hides all 14 engine tab stones (the native grid replaces them), `openTab(i)` opens a
   tab by replaying its stone op script (works while hidden — no widget moved or covered), and
-  `relocateSidePanel(x,y)` pulls the open inventory/skills/etc. panel flush-left of the grid.
-  `relocateChat(x,y,transparent)` (chat-at-top) is wired in a later increment.
+  `relocateSidePanel(x,y)` pulls the open inventory/skills/etc. panel flush-left of the grid, and
+  `relocateChat(x,y,transparent)` moves the engine's own chatbox to the top-left in OSRS transparent-chat mode
+  (the tabs / scrollback / colours / input all stay live — it IS the real chat).
 
 The native grid mirrors the proven iOS shell (`ViewController.updateChrome`): all 14 tabs in a 2-col × 7-row
 grid at the bottom-right via `TAB_GRID_ORDER = {3,1,4,2,5,13,6,7,0,12,8,9,10,11}` (grid slot → engine stone
@@ -83,4 +84,11 @@ stone row (`evidence-grid-idle.png`). A synthesized tap on the inventory cell fi
 panel opened **flush-left of the grid** and the inventory cell highlighted **red** (active), the rest grey
 (`evidence-grid-inventory.png`). So the grid is correctly positioned, interactive, and the engine + plugins stay
 authoritative (the tab switch is the stone's own op script — no widget moved or covered).
+
+**Chat-at-top.** When the chrome engages it also relocates the engine's own chatbox to the top-left in OSRS
+transparent-chat mode (`relocateChat`, insets→canvas px): the chat tab row (All/Game/Public/… + the report
+timer) sits at the top and the scrollback renders as translucent text over the scene — no opaque box
+(`evidence-chat-top.png`). It is the live engine chat (tabs / scrollback / colours / input all work); the engine
+tick re-applies it so a TOPLEVEL_REDRAW can't undo it. (The enlarged native chat-tab veneer — bigger touch
+targets — is a later A3 refinement; this increment is the relocate + transparency primitive.)
 

@@ -159,6 +159,11 @@ object JvmLauncher {
     external fun nativeOpenTab(tabIndex: Int)
     external fun nativeRelocateSidePanel(x: Int, y: Int)
 
+    // A6 chat-at-top: move the engine's own chatbox to (x,y) canvas px and flip it to OSRS transparent-chat mode
+    // (the tabs / scrollback / colours / input all stay live — it IS the real chat). x<0 stops relocating. Off
+    // the UI thread (via [onBridge]); re-applied by the engine tick.
+    external fun nativeRelocateChat(x: Int, y: Int, transparent: Boolean)
+
     // Kotlin-friendly aliases.
     fun setEnv(key: String, value: String) = nativeSetEnv(key, value)
     fun setSurface(surface: Surface?) = nativeSetSurface(surface)
@@ -222,4 +227,5 @@ object JvmLauncher {
     fun setStonesHidden(hidden: Boolean) = nativeSetStonesHidden(hidden)
     fun openTab(tabIndex: Int) = nativeOpenTab(tabIndex)
     fun relocateSidePanel(x: Int, y: Int) = nativeRelocateSidePanel(x, y)
+    fun relocateChat(x: Int, y: Int, transparent: Boolean) = nativeRelocateChat(x, y, transparent)
 }
