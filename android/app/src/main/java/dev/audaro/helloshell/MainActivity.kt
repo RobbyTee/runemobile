@@ -23,8 +23,13 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.view.Gravity
+import android.view.WindowManager
 import android.widget.Button
+import android.widget.LinearLayout
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.platform.ComposeView
 import org.json.JSONObject
 import java.io.File
@@ -124,7 +129,16 @@ class MainActivity : AppCompatActivity() {
         // A4 plugin UI: a full-screen Compose panel (GONE until opened) + a small launcher button. The panel
         // is a data screen (Compose); the live game overlays above stay classic Views (hybrid, §4.2).
         val pluginPanel = ComposeView(this).apply { visibility = View.GONE }
-        val pluginButton = Button(this).apply { text = "⚙" }   // gear
+        // Compact, low-profile dev affordances (single-glyph): kill the Material 88dp min width + slim padding so
+        // the three sit in a small bottom-left cluster instead of three chunky buttons across the HUD.
+        fun devButton(glyph: String) = Button(this).apply {
+            text = glyph
+            minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
+            val px = (10 * resources.displayMetrics.density).toInt()
+            setPadding(px, px / 2, px, px / 2)
+            alpha = 0.7f
+        }
+        val pluginButton = devButton("⚙")   // gear
         pluginButton.setOnClickListener {
             pluginPanel.setContent {
                 PluginPanel(onClose = {
@@ -137,14 +151,20 @@ class MainActivity : AppCompatActivity() {
         }
         // A6 A/B: toggle the native grid on/off (▦ = native tab grid + hidden stones; ▤ = raw engine stones).
         // updateChrome re-applies setStonesHidden to match, so flipping this reveals/hides the real stone row.
-        val chromeButton = Button(this).apply { text = "▦" }
+        val chromeButton = devButton("▦")
         chromeButton.setOnClickListener {
             chromeOverlay.setShown(!chromeOverlay.railsShown)
             chromeButton.text = if (chromeOverlay.railsShown) "▦" else "▤"
         }
         // A3: on-device Jagex login / switch account — runs the WebView OAuth, writes tokens.json, restarts.
-        val signInButton = Button(this).apply { text = "⎆" }
+        val signInButton = devButton("⎆")
         signInButton.setOnClickListener { startActivity(Intent(this, LoginActivity::class.java)) }
+        // Group the dev affordances into one discreet cluster pinned to the BOTTOM-LEFT — clear of the relocated
+        // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
+        val devBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(pluginButton); addView(chromeButton); addView(signInButton)
+        }
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
             addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
@@ -152,17 +172,23 @@ class MainActivity : AppCompatActivity() {
             addView(keyboardView, FrameLayout.LayoutParams(1, 1))
             addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame + chrome
             addView(pluginPanel, FrameLayout.LayoutParams(mp, mp))   // Compose plugin list (GONE until opened)
-            addView(pluginButton, FrameLayout.LayoutParams(
+            addView(devBar, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.END))
-            addView(chromeButton, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.START))
-            addView(signInButton, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+                Gravity.BOTTOM or Gravity.START).apply {
+                    val m = (8 * resources.displayMetrics.density).toInt()
+                    leftMargin = m; bottomMargin = m
+                })
         }
         setContentView(root)
+        // Edge-to-edge + fullscreen immersive: draw under (and hide) the status + nav bars so the game frame fills
+        // the whole screen with no Android time/battery/wifi chrome. Re-asserted in onWindowFocusChanged (a dialog
+        // or the soft keyboard can transiently reveal the bars). Cutout = shortEdges so a landscape notch is drawn
+        // under (safe-area insets still report it, so the chat/grid placement clears it).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        enterImmersive()
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 JvmLauncher.setSurface(holder.surface)
@@ -356,6 +382,21 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /** Hide the Android status + navigation bars (sticky immersive) so the game frame is edge-to-edge with no
+     *  system chrome. Transient bars come back on a swipe from the edge, then auto-hide. */
+    private fun enterImmersive() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) enterImmersive()   // re-assert after a dialog / keyboard transiently revealed the bars
     }
 
     /**
