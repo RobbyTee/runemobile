@@ -1,95 +1,196 @@
 package dev.audaro.helloshell
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
+import android.os.Build
+import android.util.Log
 import android.view.MotionEvent
 import android.view.View
+import android.view.WindowInsets
 
 /**
- * A6 native Jagex-Mobile chrome — cover-and-proxy tab-rails. A full-screen overlay over the live SurfaceView
- * that draws a native tab stone over each of the engine's 14 tab stones (their canvas bounds come from
- * MobileChromeBridge.getSnapshot each frame), highlights the active tab, and proxies a tap on a native stone to
- * a precise click on the live engine stone centre (JavaBridge.onClickPrecise) — so the engine + every plugin's
- * tab behaviour stays authoritative and no widget is moved or hidden (the proven iOS cover-and-proxy primitive;
- * the engine-side "flip to mobile toplevel 601" path is RED, and mobilechrome.repos was reverted on iOS).
+ * A6 native Jagex-Mobile chrome — the OSRS-mobile tab dock. A full-screen overlay over the live SurfaceView that
+ * draws all 14 side-panel tabs as a 2-column × 7-row grid at the BOTTOM-RIGHT (the official mobile arrangement),
+ * using the bundled OSRS stone sprites + tab glyphs. The engine's own 14 tab stones are HIDDEN
+ * (HudVeneerBridge.setStonesHidden) so these native cells ARE the tabs; a tap opens the tab by replaying the
+ * engine stone's op script (HudVeneerBridge.openTab) — no widget is moved or covered, the engine + every plugin
+ * stay authoritative. This mirrors the proven iOS layout (ViewController.updateChrome / TAB_GRID_ORDER).
  *
- * Stone bounds arrive in GAME-CANVAS px; the host supplies the game->view scale (the blit full-stretches the
- * frame to this view) via [setStones]. The view is interactive ONLY on the stones — a touch that doesn't start
- * on a stone returns false so it falls through to the game SurfaceView below.
+ * The grid is laid out in this view's pixels (the live frame blits full-stretch under it). The host drives the
+ * active-tab highlight + enable state from the MobileChromeBridge snapshot each frame ([setActiveTab] /
+ * [setGridEnabled]); a tap reports the engine tab index via [onTabTap]. Cells auto-fit the bottom ~56% of the
+ * safe height so the grid never collides with the minimap (top-right).
  */
 class ChromeOverlayView(context: Context) : View(context) {
 
-    /** One tab stone: native-view-space rect + the game-canvas centre to proxy a click onto. */
-    private class Stone(val rect: RectF, val gameCx: Int, val gameCy: Int, val index: Int)
+    /** Host callback: the user tapped the tab whose engine stone index is [engineIndex] — replay its op script. */
+    var onTabTap: ((engineIndex: Int) -> Unit)? = null
 
-    private var stones: List<Stone> = emptyList()
-    private var activeTab = -1
-    private var shown = true
+    private var active = -1          // engine tab index of the open tab (red stone), -1 = none
+    private var gridEnabled = false  // true only in the supported Classic/PRE_EOC layout (toplevel 164), logged in
+    private var shown = true         // A/B debug toggle (▦ native grid vs ▤ raw engine stones)
 
-    /** Host callback: the user tapped native tab [index]; proxy onClickPrecise on its live stone centre. */
-    var onTabTap: ((index: Int, gameCx: Int, gameCy: Int) -> Unit)? = null
+    // Composited tab images: stone background + centred glyph, built once. [0] inactive (grey), [1] active (red).
+    private val tabInactive = arrayOfNulls<Bitmap>(14)
+    private val tabActive = arrayOfNulls<Bitmap>(14)
+    private var assetsBuilt = false
 
-    private val stonePaint = Paint().apply { color = Color.argb(235, 60, 50, 38); isAntiAlias = true }
-    private val activePaint = Paint().apply { color = Color.argb(245, 104, 86, 62); isAntiAlias = true }
-    private val borderPaint = Paint().apply {
-        color = Color.argb(255, 140, 128, 102); style = Paint.Style.STROKE; strokeWidth = dp(1.5f); isAntiAlias = true
-    }
-    private val activeBorderPaint = Paint().apply {
-        color = Color.argb(255, 255, 214, 130); style = Paint.Style.STROKE; strokeWidth = dp(2f); isAntiAlias = true
-    }
+    // Last computed layout (view px), so onTouchEvent + the host's side-panel relocation read the same geometry.
+    private var lay = Layout(0f, 0f, 0f)
+    private class Layout(val gx0: Float, val gy0: Float, val cell: Float)
+
+    private val bmpPaint = Paint().apply { isAntiAlias = true; isFilterBitmap = true; isDither = true }
+    private val fallbackPaint = Paint().apply { color = Color.argb(235, 60, 50, 38); isAntiAlias = true }
+    private val fallbackActivePaint = Paint().apply { color = Color.argb(245, 150, 60, 50); isAntiAlias = true }
+    private val srcRect = Rect()
+    private val dstRect = RectF()
 
     private fun dp(v: Float) = v * resources.displayMetrics.density
 
-    /**
-     * Feed the latest chrome geometry. [tabs] is 14 entries of game-canvas [x,y,w,h] (null where a stone isn't
-     * built); [sx]/[sy] map game-canvas px -> this view's px (the blit full-stretch). Returns the count of
-     * stones laid out (for the GREEN gate / logging).
-     */
-    fun setStones(tabs: List<IntArray?>, activeTab: Int, sx: Float, sy: Float): Int {
-        val list = ArrayList<Stone>(tabs.size)
-        for (i in tabs.indices) {
-            val b = tabs[i] ?: continue
-            if (b.size < 4 || b[2] <= 0 || b[3] <= 0) continue
-            val l = b[0] * sx; val t = b[1] * sy
-            val r = (b[0] + b[2]) * sx; val btm = (b[1] + b[3]) * sy
-            list.add(Stone(RectF(l, t, r, btm), b[0] + b[2] / 2, b[1] + b[3] / 2, i))
+    init {
+        buildTabAssets()
+    }
+
+    /** TAB_GRID_ORDER[slot] = engine tab (stone) index, row-major (slot 0 = top-left, 1 = top-right, …). The
+     *  official OSRS-mobile arrangement; identical to the iOS shell so the bundled icon-N.png glyphs line up. */
+    private val order = intArrayOf(3, 1, 4, 2, 5, 13, 6, 7, 0, 12, 8, 9, 10, 11)
+
+    /** Build the 14 active + 14 inactive tab images from the bundled OSRS sprites (stone-active/inactive +
+     *  icon-0..13), composited stone-then-centred-glyph at the stone's native size. Done once. */
+    private fun buildTabAssets() {
+        val stoneInactive = loadAsset("tabassets/stone-inactive.png")
+        val stoneActive = loadAsset("tabassets/stone-active.png")
+        for (i in 0 until 14) {
+            val icon = loadAsset("tabassets/icon-$i.png")
+            tabInactive[i] = composite(stoneInactive, icon)
+            tabActive[i] = composite(stoneActive, icon)
         }
-        stones = list
-        this.activeTab = activeTab
-        invalidate()
-        return list.size
+        assetsBuilt = stoneInactive != null && stoneActive != null
+        Log.i("ChromeOverlay", "a6: tab assets built (stones ${if (stoneInactive != null) "ok" else "MISSING"}/${if (stoneActive != null) "ok" else "MISSING"})")
+    }
+
+    private fun loadAsset(path: String): Bitmap? = try {
+        context.assets.open(path).use { BitmapFactory.decodeStream(it) }
+    } catch (e: Exception) {
+        null
+    }
+
+    /** Composite a stone background with a centred glyph at the stone's native size (no scaling), like the iOS
+     *  compositeStone:icon:. Returns the stone alone if there's no icon, or the icon alone if there's no stone. */
+    private fun composite(stone: Bitmap?, icon: Bitmap?): Bitmap? {
+        if (stone == null) return icon
+        val out = Bitmap.createBitmap(stone.width, stone.height, Bitmap.Config.ARGB_8888)
+        val c = Canvas(out)
+        c.drawBitmap(stone, 0f, 0f, null)
+        if (icon != null) {
+            val ix = ((stone.width - icon.width) / 2f)
+            val iy = ((stone.height - icon.height) / 2f)
+            c.drawBitmap(icon, ix, iy, null)
+        }
+        return out
+    }
+
+    /** Host: the engine's currently-open tab (stone index), for the red/grey highlight. -1 = none. */
+    fun setActiveTab(activeTab: Int) {
+        if (active != activeTab) { active = activeTab; invalidate() }
+    }
+
+    /** Host: enable the native grid only in the supported layout (logged in + Classic/PRE_EOC toplevel 164).
+     *  When disabled the grid draws nothing and consumes no touches (the engine stones are shown instead). */
+    fun setGridEnabled(on: Boolean) {
+        if (gridEnabled != on) { gridEnabled = on; invalidate() }
     }
 
     fun setShown(on: Boolean) { if (shown != on) { shown = on; invalidate() } }
     val railsShown: Boolean get() = shown
-    fun stoneCount(): Int = stones.size
+    val isGridActive: Boolean get() = shown && gridEnabled
+
+    // The grid's left/top edge in view px (for the host's side-panel relocation). Valid after a draw/layout pass.
+    val gridLeftPx: Float get() = lay.gx0
+    val gridTopPx: Float get() = lay.gy0
+
+    /** [top, right, bottom] safe-area insets (display cutout + system bars), so the grid clears a landscape
+     *  notch / nav bar. Defaults to 0 (the full-bleed emulator case). */
+    private fun safeInsets(): IntArray {
+        val wi = rootWindowInsets ?: return intArrayOf(0, 0, 0)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val i = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+            intArrayOf(i.top, i.right, i.bottom)
+        } else {
+            @Suppress("DEPRECATION")
+            intArrayOf(wi.stableInsetTop, wi.stableInsetRight, wi.stableInsetBottom)
+        }
+    }
+
+    /** Recompute + cache the grid geometry from the current view size + insets (matches iOS updateChrome). */
+    private fun computeLayout(): Layout {
+        val ins = safeInsets()
+        val cap = dp(46f)
+        val margin = dp(6f)
+        val availH = (height - ins[0] - ins[2]) * 0.56f
+        val cell = minOf(cap, if (availH > 0f) availH / 7f else cap)
+        val gridW = 2 * cell
+        val gridH = 7 * cell
+        val gx0 = width - ins[1] - margin - gridW
+        val gy0 = height - ins[2] - margin - gridH
+        lay = Layout(gx0, gy0, cell)
+        return lay
+    }
 
     override fun onDraw(canvas: Canvas) {
-        if (!shown) return
-        val rad = dp(4f)
-        for (s in stones) {
-            val active = s.index == activeTab
-            canvas.drawRoundRect(s.rect, rad, rad, if (active) activePaint else stonePaint)
-            canvas.drawRoundRect(s.rect, rad, rad, if (active) activeBorderPaint else borderPaint)
+        if (!shown || !gridEnabled) return
+        val l = computeLayout()
+        if (l.cell <= 0f) return
+        for (slot in 0 until 14) {
+            val i = order[slot]
+            val col = slot % 2
+            val row = slot / 2
+            val left = l.gx0 + col * l.cell
+            val top = l.gy0 + row * l.cell
+            dstRect.set(left, top, left + l.cell, top + l.cell)
+            val bmp = if (i == active) tabActive[i] else tabInactive[i]
+            if (bmp != null) {
+                srcRect.set(0, 0, bmp.width, bmp.height)
+                canvas.drawBitmap(bmp, srcRect, dstRect, bmpPaint)
+            } else {
+                // Asset missing — draw a stone-toned cell so the tab still reads + stays tappable.
+                canvas.drawRoundRect(dstRect, dp(4f), dp(4f), if (i == active) fallbackActivePaint else fallbackPaint)
+            }
         }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (!shown || stones.isEmpty()) return false
+        if (!shown || !gridEnabled) return false
+        val l = lay
+        if (l.cell <= 0f) return false
         when (event.actionMasked) {
-            // Consume only if the gesture STARTS on a stone, so non-stone taps fall through to the game below.
-            MotionEvent.ACTION_DOWN -> return stoneAt(event.x, event.y) != null
+            // Consume only if the gesture STARTS inside the grid, so non-grid taps fall through to the game below.
+            MotionEvent.ACTION_DOWN -> return slotAt(event.x, event.y) >= 0
             MotionEvent.ACTION_UP -> {
-                val s = stoneAt(event.x, event.y) ?: return false
-                onTabTap?.invoke(s.index, s.gameCx, s.gameCy)
+                val i = slotAt(event.x, event.y)
+                if (i < 0) return false
+                onTabTap?.invoke(i)
                 return true
             }
         }
         return false
     }
 
-    private fun stoneAt(x: Float, y: Float): Stone? = stones.firstOrNull { it.rect.contains(x, y) }
+    /** Engine tab (stone) index under view-px (x,y), or -1 if outside the grid. */
+    private fun slotAt(x: Float, y: Float): Int {
+        val l = lay
+        if (l.cell <= 0f) return -1
+        val col = ((x - l.gx0) / l.cell).toInt()
+        val row = ((y - l.gy0) / l.cell).toInt()
+        if (col < 0 || col > 1 || row < 0 || row > 6) return -1
+        val slot = row * 2 + col
+        if (slot < 0 || slot >= order.size) return -1
+        return order[slot]
+    }
 }

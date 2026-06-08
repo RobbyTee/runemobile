@@ -148,8 +148,21 @@ object JvmLauncher {
     external fun nativeChromeSnapshot(): String
 
     // A6 overlay: the render-thread-PUBLISHED chrome snapshot — lock-free, no HotSpot attach, safe to read each
-    // frame from the Choreographer tick (UI thread). Drives the cover-and-proxy tab-rail overlay.
+    // frame from the Choreographer tick (UI thread). Drives the native 2-col tab-grid overlay.
     external fun nativeChromeSnapshotPub(): String
+
+    // A6 chrome write surface (HudVeneerBridge; gated -Drunelite.hudveneer): hide the 14 engine tab stones (the
+    // native 2-col grid replaces them), open a tab by replaying its stone op-script (works while hidden), and
+    // relocate the engine side panel flush-left of the grid. Off the UI thread ONLY (via [onBridge]) — they
+    // daemon-attach the calling thread to HotSpot. Cheap fire-and-forget setters re-applied by the engine tick.
+    external fun nativeSetStonesHidden(hidden: Boolean)
+    external fun nativeOpenTab(tabIndex: Int)
+    external fun nativeRelocateSidePanel(x: Int, y: Int)
+
+    // A6 chat-at-top: move the engine's own chatbox to (x,y) canvas px and flip it to OSRS transparent-chat mode
+    // (the tabs / scrollback / colours / input all stay live — it IS the real chat). x<0 stops relocating. Off
+    // the UI thread (via [onBridge]); re-applied by the engine tick.
+    external fun nativeRelocateChat(x: Int, y: Int, transparent: Boolean)
 
     // Kotlin-friendly aliases.
     fun setEnv(key: String, value: String) = nativeSetEnv(key, value)
@@ -211,4 +224,8 @@ object JvmLauncher {
     fun worldHop(worldId: Int) = nativeWorldHop(worldId)
     fun chromeSnapshot() = nativeChromeSnapshot()
     fun chromeSnapshotPub() = nativeChromeSnapshotPub()
+    fun setStonesHidden(hidden: Boolean) = nativeSetStonesHidden(hidden)
+    fun openTab(tabIndex: Int) = nativeOpenTab(tabIndex)
+    fun relocateSidePanel(x: Int, y: Int) = nativeRelocateSidePanel(x, y)
+    fun relocateChat(x: Int, y: Int, transparent: Boolean) = nativeRelocateChat(x, y, transparent)
 }
