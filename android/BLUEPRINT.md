@@ -358,15 +358,18 @@ caps at ES 3.0. That forced an apparatus iOS needed and **Android can skip:**
 ## G. Suggested execution order
 
 > **Decisions locked (2026-06-07):** ① run **AG0/AG1 early, in parallel** with Track A — cheap, and they
-> de-risk the project's biggest unknown. ② Cloud-device path = **BrowserStack real devices** for AG0 +
-> A0-device + the AG1 spike: a real physical device means a **real GPU driver**, so it is valid for Track G
-> (the local `rl_arm64` emulator's SwiftShader GL is **not**), and — because Android grants JIT for free — a
-> plain debug APK runs the second JVM with no attach ceremony. It also faithfully tests the API-29 `filesDir`
-> dlopen (Q11), since BrowserStack enforces the same `targetSdk` W^X rules an owned device would. Free Samsung
-> RTL / Firebase Test Lab remain fallbacks; an **owned** device is still deferred to a green AG1 (cloud
-> round-trips are too slow/metered for the months-long AG2/AG3 iteration). ③ AG0 should be a **minimal
-> standalone GL-recon APK** — query `glGetString` + `GL_MAX_COMPUTE_*` only, no login / no full RuneLite boot
-> — so a single BrowserStack session settles it.
+> de-risk the project's biggest unknown. ② **Real-device tooling is built + cost-tiered** (harnesses in
+> `android/dev-tools/{firebase,browserstack}/`, both reusing the emulator md5 gates on the fetched logcat —
+> "real device" is just a different target for the identical GREEN check). A real device = a **real GPU
+> driver** (valid for Track G; the local `rl_arm64` SwiftShader GL is **not**) and faithfully tests the
+> API-29 `filesDir` dlopen (Q11). **Default = Firebase Test Lab Spark — FREE, 5 runs/day, no expiry**
+> (`fb-gate.sh`, gcloud Robo) for **A0-device** (login→LOGGED_IN) and **AG0** (GLES recon). **BrowserStack
+> App Automate** (`bs-gate.sh`, Appium; 100-min free trial, then ~$199–249/mo) is the paid fallback for what
+> Robo can't drive — the **A-1b census** (needs the `--ez census true` intent extra; already GREEN on the
+> emulator) and iterative AG1 work. **Near-term cost ≈ $0**; the only real spend is a one-time **~$150 owned
+> arm64 device**, still **deferred to a green AG1** (cloud round-trips are too slow/metered for the
+> months-long AG2/AG3 iteration). ③ AG0 should be a **minimal standalone GL-recon APK** — query
+> `glGetString` + `GL_MAX_COMPUTE_*` only, no login / no full RuneLite boot — so one free Firebase run settles it.
 >
 > ④ **Emulator-first for ALL development.** The local `rl_arm64` emulator is ANGLE→Vulkan(SwiftShader)
 > advertising **GLES 3.1 + compute** (verified `ro.opengles.version`=0x30001), so it is a real (if slow) GL
