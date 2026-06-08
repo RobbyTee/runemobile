@@ -120,11 +120,6 @@ public final class HudVeneerBridge
 	// One-shot, applied on the client thread in tick(). -1 = nothing pending.
 	private static volatile int pendingChatTab = -1;
 
-	// Frames left to force a chatbox rebuild after reopening from collapsed. The tab op-replay's own BUILD_CHATBOX
-	// runs before sizeChatArea has laid out the just-un-hidden message area, so the first reopen built the messages
-	// into stale geometry (empty box). Re-run BUILD_CHATBOX a couple of frames AFTER sizing so the lines populate
-	// without needing a second tap. Decremented each open-branch frame.
-	private static volatile int chatReopenRebuild = 0;
 
 	// Chat COLLAPSE: when the user taps the already-active tab, the chat box hides (mobile behaviour); a tap on any
 	// tab reopens it. Driven from native (setChatCollapsed). While collapsed the engine CHAT_CONTAINER is hidden.
@@ -136,6 +131,9 @@ public final class HudVeneerBridge
 	private static final AtomicInteger pendingChatScroll = new AtomicInteger(0);
 
 	private static final int CHAT_DEFAULT_W = 519;       // the engine's native chatbox width (from the layout dump)
+	// Collapse = shove the live chatbox this far below its anchor (off-canvas) instead of hiding it, so its
+	// history + selected channel survive and reopening is instant. Far enough to clear any stretched canvas.
+	private static final int CHAT_COLLAPSE_OFFSCREEN_DY = 3000;
 	private static final int ORIG_CHAT_CONTENT_H = 142;  // the natural message-area height (container 165 − CONTROLS 23)
 
 	// Desktop off-device test harness: when -Drunelite.hudveneer.test=true, auto-apply the same chat veneer the
@@ -280,40 +278,24 @@ public final class HudVeneerBridge
 			final boolean preEoc = c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
 			final int chatId = preEoc ? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER;
 
-			if (chatX >= 0 && chatCollapsed)
-			{
-				// Collapsed (the user tapped the active tab): hide the whole engine chat box so it disappears. The
-				// native tab row stays (it's drawn from chatX, not the engine widget) so a tap reopens it; still
-				// publish the snapshot so the tabs keep rendering + stating.
-				final Widget w = c.getWidget(chatId);
-				if (w != null && !w.isHidden())
-				{
-					w.setHidden(true);
-				}
-				// Hiding the toplevel container drops the text/CHATAREA, but the brown chatbox FRAME lives in the
-				// separate Chatbox interface and is normally kept invisible by the per-frame transparency pass in the
-				// open branch below — which DOESN'T run while collapsed, so the engine pops the box back (empty box,
-				// no text). Keep hiding the background sprites here so the whole box stays gone until reopened.
-				hide(c, InterfaceID.Chatbox.CHAT_BACKGROUND);
-				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
-				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
-				buildChatSnapshot(c);
-			}
-			else if (chatX >= 0)
+			// Chat box: keep the engine chatbox FULLY ALIVE at all times (never hidden). To "collapse" (the user
+			// tapped the active tab) we shove the live widget far off-screen; reopening just moves it back — instant
+			// and full, with NO interface teardown, tab-selection loss, or rebuild. (Hiding the container tore the
+			// chat down, so reopen showed an empty box until a second tap.) The native tab row stays put because
+			// buildChatSnapshot reports the configured chatX/chatY, not the widget's moved position.
+			if (chatX >= 0)
 			{
 				final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
 				final int rowW = chatAreaW > 0 ? chatAreaW : CHAT_DEFAULT_W;
+				final int drawY = chatCollapsed ? chatY + CHAT_COLLAPSE_OFFSCREEN_DY : chatY;
 				final Widget w = c.getWidget(chatId);
-				boolean justReopened = false;
 				if (w != null)
 				{
 					if (w.isHidden())
 					{
-						w.setHidden(false);   // un-collapse: the box was hidden, bring it back
-						justReopened = true;   // defer the tab op-replay one frame so the reopened interface settles
-						chatReopenRebuild = 2; // re-render the channel's messages once the area is re-laid-out (below)
+						w.setHidden(false);   // safety: we never hide it now, but restore if something else did
 					}
-					w.setForcedPosition(chatX, chatY);
+					w.setForcedPosition(chatX, drawY);
 					// Widen the chat CONTAINER to the native row width so its children (the message area) can fill it.
 					if (w.getOriginalWidth() != rowW)
 					{
@@ -338,12 +320,9 @@ public final class HudVeneerBridge
 				// hidden tab stones (the widget still RESOLVES + its script runs while hidden). Gated on the native row
 				// being active; un-hides when the native chrome is toggled off so the engine row shows.
 				setEngineChatTabsHidden(c, chatTabRowH > 0);
-				// Apply a pending tab switch — but NOT on the frame we just un-hid the box. The reopened chatbox
-				// interface needs a frame to settle before its tab op-listener fires + BUILD_CHATBOX has real geometry;
-				// switching on the un-hide frame is the no-op that left the first tap showing an empty box (the user had
-				// to tap again). Leaving pendingChatTab set rides it to the next frame, which lands.
+				// Apply a pending tab switch (op-replay sets the channel; switchChatTabNow rebuilds the lines).
 				final int switchTab = pendingChatTab;
-				if (switchTab >= 0 && !justReopened)
+				if (switchTab >= 0)
 				{
 					pendingChatTab = -1;
 					switchChatTabNow(c, switchTab);
@@ -353,19 +332,6 @@ public final class HudVeneerBridge
 				// height, then pin CHATAREA to ABSOLUTE width=rowW and height=(containerH - rowH - margin) at
 				// container-relative (0, rowH). The display/scroll children are revalidated so they widen too.
 				sizeChatArea(c, chatId, rowW, rowH);
-				// Reopen fix: now that the message area is sized for this frame, force the chat lines to (re)build so a
-				// box reopened from collapsed shows its history on the FIRST tap, not the second.
-				if (chatReopenRebuild > 0)
-				{
-					chatReopenRebuild--;
-					try
-					{
-						c.runScript(ScriptID.BUILD_CHATBOX);
-					}
-					catch (RuntimeException ignore)
-					{
-					}
-				}
 				if (transparentChat)
 				{
 					// Deterministic transparency: hide the brown chatbox background sprites directly (the
