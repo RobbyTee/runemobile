@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Phase A6 (chrome UI) GREEN gate — the native cover-and-proxy tab-rails draw over the live engine stones and a
-# rail tap proxies onto the live stone.
+# Phase A6 (chrome UI) GREEN gate — the native OSRS-mobile 2-col tab grid draws at the bottom-right with the
+# engine's own tab stones hidden, and a cell tap opens that tab.
 #
 # The overlay (ChromeOverlayView) reads the render-thread-published MobileChromeBridge snapshot each frame
-# (lock-free, no HotSpot attach), maps the 14 tab-stone bounds game-canvas -> view via the blit full-stretch,
-# and draws a native stone over each — highlighting the active tab. A tap on a native stone proxies
-# JavaBridge.onClickPrecise onto the live engine stone centre (the engine + plugins stay authoritative).
+# (lock-free, no HotSpot attach) for the active tab + supported layout (toplevel 164), hides the 14 engine
+# stones (HudVeneerBridge.setStonesHidden) and draws all 14 tabs as a 2-col x 7-row grid using the bundled OSRS
+# stone sprites + glyphs. A cell tap opens the tab by replaying its engine stone op script (openTab) — works
+# while hidden, so the engine + plugins stay authoritative and no widget is moved or covered.
 #
-#   DRAW  : ANDROID_A6_UI_GREEN tabsDrawn=N ...   (the overlay parsed the snapshot + laid out N rails)
-#   PROXY : a6: native tab <i> tap -> onClickPrecise(x,y)   (a rail tap proxied to the live stone) — optional,
-#           only present if a tap was injected this run; the gate passes on DRAW alone (proxy is verified by a
-#           synthesized tap when run interactively — see README).
+#   DRAW : ANDROID_A6_UI_GREEN native 2-col tab grid drawn ...   (the grid laid out, engine stones hidden)
+#   TAP  : a6: native tab <i> tap -> openTab   (a cell tap opened that tab) — optional, only present if a tap
+#          was injected this run; the gate passes on DRAW alone (tap is verified interactively — see README).
 #
 # Usage: check-a6ui.sh [logcat-file]
 set -euo pipefail

@@ -53,10 +53,12 @@ class MainActivity : AppCompatActivity() {
     private var keyboardShown = false
     private var frameCallback: Choreographer.FrameCallback? = null
 
-    // A6 native chrome (cover-and-proxy tab rails over the live stones).
+    // A6 native chrome (OSRS-mobile 2-col tab grid; the engine stones are hidden and this grid replaces them).
     private lateinit var chromeOverlay: ChromeOverlayView
     private var chromeUiLogged = false
-    private var lastChromeJson = ""
+    private var lastStonesHidden: Boolean? = null   // desired HudVeneer hide-stones state (send only on change)
+    private var lastSideX = Int.MIN_VALUE           // last side-panel relocation sent (send only on change)
+    private var lastSideY = Int.MIN_VALUE
 
     // A2 press-and-peek menu state.
     private lateinit var menuOverlay: MenuOverlayView
@@ -107,12 +109,14 @@ class MainActivity : AppCompatActivity() {
         surfaceView = SurfaceView(this)
         keyboardView = GameInputView(this)
         menuOverlay = MenuOverlayView(this)
-        // A6 native chrome: cover-and-proxy tab-rails drawn over the live stones. A native tab tap proxies a
-        // precise click onto the live engine stone centre (the engine + plugins stay authoritative).
+        // A6 native chrome: the OSRS-mobile 2-col tab grid at the bottom-right. The engine's own 14 tab stones
+        // are HIDDEN (HudVeneerBridge.setStonesHidden, driven from updateChrome) so these native cells ARE the
+        // tabs; a tap opens the tab by replaying the engine stone's op script (openTab) — works while hidden, so
+        // the engine + plugins stay authoritative and no widget is moved or covered (the proven iOS layout).
         chromeOverlay = ChromeOverlayView(this)
-        chromeOverlay.onTabTap = { idx, gcx, gcy ->
-            Log.i(TAG, "a6: native tab $idx tap -> onClickPrecise($gcx,$gcy)")
-            JvmLauncher.clickPrecise(gcx, gcy, 1)
+        chromeOverlay.onTabTap = { idx ->
+            Log.i(TAG, "a6: native tab $idx tap -> openTab")
+            JvmLauncher.onBridge { JvmLauncher.openTab(idx) }   // off the UI thread (daemon-attaches to HotSpot)
         }
         // A4 plugin UI: a full-screen Compose panel (GONE until opened) + a small launcher button. The panel
         // is a data screen (Compose); the live game overlays above stay classic Views (hybrid, §4.2).
@@ -128,7 +132,8 @@ class MainActivity : AppCompatActivity() {
             pluginPanel.visibility = View.VISIBLE
             pluginButton.visibility = View.GONE
         }
-        // A6 A/B: toggle the native rails on/off (▦ = native chrome shown; ▤ = raw engine stones).
+        // A6 A/B: toggle the native grid on/off (▦ = native tab grid + hidden stones; ▤ = raw engine stones).
+        // updateChrome re-applies setStonesHidden to match, so flipping this reveals/hides the real stone row.
         val chromeButton = Button(this).apply { text = "▦" }
         chromeButton.setOnClickListener {
             chromeOverlay.setShown(!chromeOverlay.railsShown)
@@ -140,7 +145,7 @@ class MainActivity : AppCompatActivity() {
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
             addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
-            addView(chromeOverlay, FrameLayout.LayoutParams(mp, mp))  // native rails over the live stones
+            addView(chromeOverlay, FrameLayout.LayoutParams(mp, mp))  // native 2-col tab grid (stones hidden)
             addView(keyboardView, FrameLayout.LayoutParams(1, 1))
             addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame + chrome
             addView(pluginPanel, FrameLayout.LayoutParams(mp, mp))   // Compose plugin list (GONE until opened)
@@ -388,34 +393,67 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * A6: feed the cover-and-proxy tab-rails the latest chrome geometry each frame. Reads the render-thread-
-     * published MobileChromeBridge snapshot (lock-free, no HotSpot attach), parses the 14 stone bounds, and
-     * maps them game-canvas -> view via the blit full-stretch (same scale as toGameX/Y, inverted). Skips the
-     * parse when the published JSON is unchanged (e.g. the constant login-screen snapshot).
+     * A6: drive the native 2-col tab grid each frame from the render-thread-published MobileChromeBridge snapshot
+     * (lock-free, no HotSpot attach). The grid only engages in the supported Classic/PRE_EOC layout (logged in +
+     * toplevel 164); there it hides the engine stones (HudVeneerBridge.setStonesHidden) so the native cells ARE
+     * the tabs, highlights the open tab, and relocates the engine side panel flush-left of the grid. In any other
+     * layout it disengages — un-hides the engine stones + releases the side panel — so the real HUD renders (the
+     * iOS LAYOUT GUARD). All bridge writes go through onBridge (off the UI thread) and fire only on state change.
      */
     private fun updateChrome() {
-        if (!::chromeOverlay.isInitialized || !chromeOverlay.railsShown) return
+        if (!::chromeOverlay.isInitialized) return
         val json = JvmLauncher.chromeSnapshotPub()
-        if (json == lastChromeJson) return
-        lastChromeJson = json
-        val fw = JvmLauncher.frameWidth(); val fh = JvmLauncher.frameHeight()
-        val vw = surfaceView.width; val vh = surfaceView.height
-        if (fw <= 0 || fh <= 0 || vw <= 0 || vh <= 0) return
-        val o = try { JSONObject(json) } catch (e: Exception) { return }
-        if (!o.optBoolean("loggedIn")) { chromeOverlay.setStones(emptyList(), -1, 1f, 1f); return }
-        val tabsArr = o.optJSONArray("tabs") ?: return
-        val tabs = ArrayList<IntArray?>(tabsArr.length())
-        for (i in 0 until tabsArr.length()) {
-            if (tabsArr.isNull(i)) { tabs.add(null); continue }
-            val a = tabsArr.optJSONArray(i)
-            tabs.add(if (a != null && a.length() >= 4) intArrayOf(a.getInt(0), a.getInt(1), a.getInt(2), a.getInt(3)) else null)
+        val o = try { JSONObject(json) } catch (e: Exception) { null }
+        val loggedIn = o?.optBoolean("loggedIn") == true
+        val topLevel = o?.optInt("topLevelId", -1) ?: -1
+        val active = o?.optInt("activeTab", -1) ?: -1
+        val supported = loggedIn && topLevel == 164      // Classic/PRE_EOC: the native grid's tabs map to real stones
+        chromeOverlay.setGridEnabled(supported)
+        chromeOverlay.setActiveTab(active)
+
+        val gridOn = supported && chromeOverlay.railsShown
+        applyStonesHidden(gridOn)
+        if (gridOn) {
+            applySidePanel(o)
+            if (!chromeUiLogged && chromeOverlay.gridLeftPx > 0f) {
+                chromeUiLogged = true
+                Log.i(TAG, "ANDROID_A6_UI_GREEN native 2-col tab grid drawn (engine stones hidden) topLevel=$topLevel activeTab=$active view=${surfaceView.width}x${surfaceView.height}")
+            }
+        } else {
+            releaseSidePanel()
         }
-        val active = o.optInt("activeTab", -1)
-        val n = chromeOverlay.setStones(tabs, active, vw.toFloat() / fw, vh.toFloat() / fh)
-        if (n > 0 && !chromeUiLogged) {
-            chromeUiLogged = true
-            Log.i(TAG, "ANDROID_A6_UI_GREEN tabsDrawn=$n activeTab=$active frame=${fw}x${fh} view=${vw}x${vh}")
-        }
+    }
+
+    /** Send the desired engine-stone hide state to HudVeneerBridge, only when it changes (off the UI thread). */
+    private fun applyStonesHidden(hide: Boolean) {
+        if (lastStonesHidden == hide) return
+        lastStonesHidden = hide
+        JvmLauncher.onBridge { JvmLauncher.setStonesHidden(hide) }
+    }
+
+    /** Relocate the engine side panel flush-left of the native grid (the iOS arrangement). The grid's left/top
+     *  edge is in view px; convert to game-canvas px (k = frameW/viewW) and subtract the panel width. Sent only
+     *  when it changes. No-op until the grid has laid out (gridLeftPx>0) and a frame size is known. */
+    private fun applySidePanel(o: JSONObject?) {
+        val fw = JvmLauncher.frameWidth(); val vw = surfaceView.width
+        val gx0 = chromeOverlay.gridLeftPx; val gy0 = chromeOverlay.gridTopPx
+        if (fw <= 0 || vw <= 0 || gx0 <= 0f) return
+        val k = fw.toFloat() / vw.toFloat()
+        var sideW = 204                                  // fallback until the panel is open + reports its width
+        val sc = o?.optJSONArray("sideContainer")
+        if (sc != null && sc.length() >= 4 && sc.optInt(2) > 0) sideW = sc.getInt(2)
+        val sideX = maxOf(0, Math.round(gx0 * k) - sideW)   // right edge flush against the grid's left edge
+        val sideY = maxOf(0, Math.round(gy0 * k))           // stones hidden, so top-align with the grid
+        if (sideX == lastSideX && sideY == lastSideY) return
+        lastSideX = sideX; lastSideY = sideY
+        JvmLauncher.onBridge { JvmLauncher.relocateSidePanel(sideX, sideY) }
+    }
+
+    /** Stop relocating the engine side panel (let it return to its native position) when the grid disengages. */
+    private fun releaseSidePanel() {
+        if (lastSideX == -1 && lastSideY == -1) return
+        lastSideX = -1; lastSideY = -1
+        JvmLauncher.onBridge { JvmLauncher.relocateSidePanel(-1, -1) }
     }
 
     private fun vibrateTick() {
@@ -602,7 +640,8 @@ class MainActivity : AppCompatActivity() {
             "-Drunelite.menupeek=true",             // A2: publish the menu-peek snapshot each client tick
             "-Drunelite.menupeek.maxEntries=14",
             "-Drunelite.mobileui=true",             // A4: plugin control plane (list/toggle/config from the host)
-            "-Drunelite.mobilechrome=true",         // A6: publish the read-only chrome snapshot (tab-rail bounds)
+            "-Drunelite.mobilechrome=true",         // A6: publish the read-only chrome snapshot (tab-stone bounds)
+            "-Drunelite.hudveneer=true",            // A6: the chrome write surface (hide stones / openTab / relocate)
         )
         // A7 resizable: render at the screen's landscape aspect — HeadlessResize grows the gamepack Component on
         // login (stock, inset-aware, the same mechanism iOS device-proved). With the OSRS account in RESIZABLE
@@ -628,9 +667,8 @@ class MainActivity : AppCompatActivity() {
             opts.addAll(listOf(
                 "-Drunelite.gatecensus=true",
                 "-Drunelite.huddata=true",
-                "-Drunelite.hudveneer=true",
             ))
-            Log.i(TAG, "A-1b census mode: +huddata/hudveneer + gatecensus (mobileui/mobilechrome/resize always-on)")
+            Log.i(TAG, "A-1b census mode: +huddata + gatecensus (mobileui/mobilechrome/hudveneer/resize always-on)")
         }
 
         Log.i(TAG, "starting HotSpot: DeviceHeadlessBoot, cp=$classpath")

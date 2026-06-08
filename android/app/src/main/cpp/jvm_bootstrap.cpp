@@ -99,6 +99,13 @@ static std::atomic<bool> g_worldReady{false};
 static jclass    g_chromeCls = nullptr;
 static jmethodID g_midChromeSnap = nullptr;
 static std::atomic<bool> g_chromeReady{false};
+// A6 chrome write surface: HudVeneerBridge — hides the 14 engine tab stones (the native 2-col grid replaces
+// them), opens a tab by replaying its stone op-script (works while hidden), and relocates the engine side panel
+// flush-left of the grid. Separate facade; rl-bridge-thread write behind a release/acquire latch. Inert in the
+// engine unless -Drunelite.hudveneer=true. ALL-OR-NOTHING: published only if every method id resolves.
+static jclass    g_hudCls = nullptr;
+static jmethodID g_midSetStonesHidden = nullptr, g_midOpenTab = nullptr, g_midRelocateSidePanel = nullptr;
+static std::atomic<bool> g_hudReady{false};
 
 // ---- Surface / render --------------------------------------------------------------------------------
 static std::mutex      g_winLock;
@@ -293,6 +300,7 @@ static inline bool panelReady()    { return g_panelReady.load(std::memory_order_
 static inline bool questReady()    { return g_questReady.load(std::memory_order_acquire); }
 static inline bool worldReady()    { return g_worldReady.load(std::memory_order_acquire); }
 static inline bool chromeReady()    { return g_chromeReady.load(std::memory_order_acquire); }
+static inline bool hudReady()       { return g_hudReady.load(std::memory_order_acquire); }
 
 // Resolve an OPTIONAL static method id, clearing the NoSuchMethodError a miss leaves pending — so a failed
 // lookup can't trip the NEXT JNI call on this thread (the Review-2 MenuPeekBridge pending-exception bug class).
@@ -490,6 +498,33 @@ static bool publishBridge(JNIEnv *env) {
     } else {
         env->ExceptionClear();
         LOGE("bridge: FindClass MobileChromeBridge failed (chrome read surface disabled)");
+    }
+
+    // A6 chrome write surface: HudVeneerBridge — hide engine stones / open tab / relocate side panel for the
+    // native 2-col tab grid. Separate facade, all-or-nothing, rl-bridge-thread write (release latch).
+    jclass hv = env->FindClass("net/runelite/client/headless/HudVeneerBridge");
+    if (hv && !env->ExceptionCheck()) {
+        jclass hvg = (jclass) env->NewGlobalRef(hv);
+        env->DeleteLocalRef(hv);
+        if (!hvg) {
+            LOGE("bridge: HudVeneerBridge NewGlobalRef failed (native chrome write surface disabled)");
+        } else {
+            g_midSetStonesHidden   = midOpt(env, hvg, "setStonesHidden", "(Z)V");
+            g_midOpenTab           = midOpt(env, hvg, "openTab", "(I)V");
+            g_midRelocateSidePanel = midOpt(env, hvg, "relocateSidePanel", "(II)V");
+            bool hudOk = g_midSetStonesHidden && g_midOpenTab && g_midRelocateSidePanel;
+            if (hudOk) {
+                g_hudCls = hvg;                                         // before the release-store below
+                g_hudReady.store(true, std::memory_order_release);
+                LOGI("bridge: HudVeneerBridge facade published");
+            } else {
+                env->DeleteGlobalRef(hvg);
+                LOGE("bridge: HudVeneerBridge method id failed (native chrome write surface disabled)");
+            }
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass HudVeneerBridge failed (native chrome write surface disabled)");
     }
     return true;
 }
@@ -1140,6 +1175,12 @@ static void facadeVoidInt(jclass cls, jmethodID m, jint i) {
     hs->CallStaticVoidMethod(cls, m, i);
     if (hs->ExceptionCheck()) hs->ExceptionClear();
 }
+static void facadeVoidIntInt(jclass cls, jmethodID m, jint a, jint b) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m) return;
+    hs->CallStaticVoidMethod(cls, m, a, b);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+}
 
 // Quest Helper
 extern "C" JNIEXPORT jboolean JNICALL
@@ -1217,4 +1258,23 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeChromeSnapshotPub(JNIEnv *env, jobject) {
     std::lock_guard<std::mutex> lk(g_chromeLock);
     return env->NewStringUTF(g_chromeSnapshotPub.c_str());
+}
+
+// A6 chrome write surface (HudVeneerBridge) — hide the engine tab stones, open a tab by op-script replay, and
+// relocate the engine side panel for the native 2-col grid. Run on the rl-bridge thread (NOT the UI thread):
+// each gates on the facade's acquire latch, then writes the desired state (re-applied by the engine tick).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetStonesHidden(JNIEnv *, jobject, jboolean hidden) {
+    if (!hudReady()) return;
+    facadeVoidBool(g_hudCls, g_midSetStonesHidden, hidden);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOpenTab(JNIEnv *, jobject, jint tabIndex) {
+    if (!hudReady()) return;
+    facadeVoidInt(g_hudCls, g_midOpenTab, tabIndex);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeRelocateSidePanel(JNIEnv *, jobject, jint x, jint y) {
+    if (!hudReady()) return;
+    facadeVoidIntInt(g_hudCls, g_midRelocateSidePanel, x, y);
 }
