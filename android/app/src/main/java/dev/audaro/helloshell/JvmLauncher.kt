@@ -52,6 +52,10 @@ object JvmLauncher {
      */
     external fun nativeSetEnv(key: String, value: String)
 
+    /** A8: enable/disable piping the embedded VM's stdout/err to logcat. Call BEFORE [startJvm] with
+     *  BuildConfig.DEBUG so a release build never leaks the engine's output (incl. account/network chatter). */
+    external fun nativeSetStdioRedirect(enabled: Boolean)
+
     /** Hand the SurfaceView's surface (or null to clear) to the native render thread for blitting. */
     external fun nativeSetSurface(surface: Surface?)
 
@@ -117,6 +121,8 @@ object JvmLauncher {
     external fun nativeGetPluginConfig(group: String): String
     external fun nativeSetConfig(group: String, key: String, value: String): String
     external fun nativeProcessedWriteId(): Long
+    // A8: persist pending plugin-config writes (call when the app backgrounds). Off the UI thread (onBridge).
+    external fun nativeFlushConfig(): String
 
     // A5 Tier-1 plugin panels: a plugin's Swing side-panel rendered off-screen to an ARGB int[] (like the
     // game blit), pulled here and shown in a zoom/pan view; taps map back via panelClick. Off the UI thread.
@@ -164,6 +170,10 @@ object JvmLauncher {
     // the UI thread (via [onBridge]); re-applied by the engine tick.
     external fun nativeRelocateChat(x: Int, y: Int, transparent: Boolean)
 
+    // A7 edge-to-edge: pull the engine minimap+orbs cluster (MAP_CONTAINER) into the top-right safe area. It
+    // stays the live engine HUD (minimap click-to-walk + orb clicks keep working). x<0 stops. Off the UI thread.
+    external fun nativeRelocateMinimap(x: Int, y: Int)
+
     // A3 enlarged native chat-tab veneer. The per-frame chat-tab geometry/state snapshot (escaped JSON: each of
     // the 7 tabs' canvas bounds + selected/new/filter state) is PUBLISHED by the render thread — read lock-free
     // from the Choreographer tick (no HotSpot attach). The two setters (off the UI thread) tell the engine to
@@ -174,6 +184,7 @@ object JvmLauncher {
 
     // Kotlin-friendly aliases.
     fun setEnv(key: String, value: String) = nativeSetEnv(key, value)
+    fun setStdioRedirect(enabled: Boolean) = nativeSetStdioRedirect(enabled)
     fun setSurface(surface: Surface?) = nativeSetSurface(surface)
     fun click(x: Int, y: Int, button: Int) = nativeClick(x, y, button)
     fun touch(type: Int, x: Int, y: Int, button: Int) = nativeTouch(type, x, y, button)
@@ -210,6 +221,7 @@ object JvmLauncher {
     fun getPluginConfig(group: String) = nativeGetPluginConfig(group)
     fun setConfig(group: String, key: String, value: String) = nativeSetConfig(group, key, value)
     fun processedWriteId() = nativeProcessedWriteId()
+    fun flushConfig() = nativeFlushConfig()
 
     fun listPanels() = nativeListPanels()
     fun openPanel(index: Int) = nativeOpenPanel(index)
@@ -236,6 +248,7 @@ object JvmLauncher {
     fun openTab(tabIndex: Int) = nativeOpenTab(tabIndex)
     fun relocateSidePanel(x: Int, y: Int) = nativeRelocateSidePanel(x, y)
     fun relocateChat(x: Int, y: Int, transparent: Boolean) = nativeRelocateChat(x, y, transparent)
+    fun relocateMinimap(x: Int, y: Int) = nativeRelocateMinimap(x, y)
     fun chatSnapshotPub() = nativeChatSnapshotPub()
     fun setChatTabRowHeight(canvasPx: Int) = nativeSetChatTabRowHeight(canvasPx)
     fun setChatAreaWidth(canvasPx: Int) = nativeSetChatAreaWidth(canvasPx)

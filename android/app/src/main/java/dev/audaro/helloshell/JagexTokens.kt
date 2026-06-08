@@ -22,11 +22,12 @@ object JagexTokens {
 
     private const val TAG = "JagexTokens"
 
-    /** Locate tokens.json: internal filesDir first (where the JRE lives), then the adb-pushable external dir. */
+    /** Locate tokens.json: internal filesDir always; the adb-pushable external dir ONLY in DEBUG builds (A8 — a
+     *  release build keeps the secret internal-only, while dev keeps the `adb push …/files/tokens.json` flow). */
     private fun locate(ctx: Context): File? {
         val candidates = listOfNotNull(
             File(ctx.filesDir, "tokens.json"),
-            ctx.getExternalFilesDir(null)?.let { File(it, "tokens.json") },
+            if (BuildConfig.DEBUG) ctx.getExternalFilesDir(null)?.let { File(it, "tokens.json") } else null,
         )
         return candidates.firstOrNull { it.exists() && it.length() > 0 }
     }
@@ -71,12 +72,18 @@ object JagexTokens {
         if (access.isNotEmpty()) JvmLauncher.setEnv("JX_ACCESS_TOKEN", access)
         if (refresh.isNotEmpty()) JvmLauncher.setEnv("JX_REFRESH_TOKEN", refresh)
 
-        val sessionPrefix = if (session.length >= 6) session.substring(0, 6) else session
-        Log.i(
-            TAG,
-            "JX_* set from ${file.parent}: displayName='$display' characterId=$character session=$sessionPrefix… " +
-                "access=${if (access.isNotEmpty()) "set" else "empty"} refresh=${if (refresh.isNotEmpty()) "set" else "empty"}",
-        )
+        // A8: log account PII (display name / character id / session prefix) ONLY in DEBUG builds; a release
+        // build logs a minimal armed line with no identifying data.
+        if (BuildConfig.DEBUG) {
+            val sessionPrefix = if (session.length >= 6) session.substring(0, 6) else session
+            Log.i(
+                TAG,
+                "JX_* set from ${file.parent}: displayName='$display' characterId=$character session=$sessionPrefix… " +
+                    "access=${if (access.isNotEmpty()) "set" else "empty"} refresh=${if (refresh.isNotEmpty()) "set" else "empty"}",
+            )
+        } else {
+            Log.i(TAG, "JX_* set — autologin ARMED")
+        }
         return true
     }
 
