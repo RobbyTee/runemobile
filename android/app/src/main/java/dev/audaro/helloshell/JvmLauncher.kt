@@ -1,6 +1,9 @@
 package dev.audaro.helloshell
 
 import android.view.Surface
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 
 /**
  * Thin Kotlin facade over the native JNI Invocation-API bootstrap + render/input host.
@@ -103,6 +106,15 @@ object JvmLauncher {
     external fun nativeFrameWidth(): Int
     external fun nativeFrameHeight(): Int
 
+    // ---- A4 plugin control plane (MobileUiBridge; gated by -Drunelite.mobileui) ----------------------
+    // CALL THESE OFF THE UI THREAD ONLY (via [onBridge]) — they daemon-attach the calling thread to the
+    // embedded HotSpot VM and may block (config writes dispatch to the client thread). ART<->HotSpot strings
+    // are marshalled as UTF-8 in the native layer.
+    external fun nativeListPlugins(): String
+    external fun nativeMobileUiSeq(): Long
+    external fun nativePollMobileUiEvents(sinceSeq: Long): String
+    external fun nativeSetPluginEnabled(className: String, enabled: Boolean): String
+
     // Kotlin-friendly aliases.
     fun setEnv(key: String, value: String) = nativeSetEnv(key, value)
     fun setSurface(surface: Surface?) = nativeSetSurface(surface)
@@ -123,4 +135,19 @@ object JvmLauncher {
     fun menuPublishSeq() = nativeMenuPublishSeq()
     fun frameWidth() = nativeFrameWidth()
     fun frameHeight() = nativeFrameHeight()
+
+    // ---- A3.5 bridge request/response thread --------------------------------------------------------
+    // A single dedicated background thread the UI posts plugin-plane requests to, so the ART UI thread NEVER
+    // attaches to HotSpot (ANR risk) and HotSpot only ever sees one caller from the ART side. The thread
+    // daemon-attaches to HotSpot on its first bridge call (native layer) and stays attached for the process.
+    private val bridgeExec: ExecutorService =
+        Executors.newSingleThreadExecutor { r -> Thread(r, "rl-bridge").apply { isDaemon = true } }
+
+    /** Run [block] on the rl-bridge thread; returns a Future (do NOT .get() it on the UI thread). */
+    fun <T> onBridge(block: () -> T): Future<T> = bridgeExec.submit(block)
+
+    fun listPlugins() = nativeListPlugins()
+    fun mobileUiSeq() = nativeMobileUiSeq()
+    fun pollMobileUiEvents(sinceSeq: Long) = nativePollMobileUiEvents(sinceSeq)
+    fun setPluginEnabled(className: String, enabled: Boolean) = nativeSetPluginEnabled(className, enabled)
 }

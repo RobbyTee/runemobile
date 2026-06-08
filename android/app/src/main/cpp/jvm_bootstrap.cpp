@@ -62,6 +62,12 @@ static jmethodID g_midSelectMenuPoint = nullptr;
 static jclass    g_menuPeekCls = nullptr;
 static jmethodID g_midMenuSnapshot = nullptr, g_midMenuPublishSeq = nullptr;
 
+// A4 plugin control plane (MobileUiBridge) — resolved best-effort; inert unless -Drunelite.mobileui=true.
+// Called from a dedicated ART background thread (the Kotlin "rl-bridge" executor), which daemon-attaches to
+// HotSpot via bridgeEnvAttach() — never the ART UI thread (ANR risk). Strings cross the VM boundary as UTF-8.
+static jclass    g_mobileUiCls = nullptr;
+static jmethodID g_midListPlugins = nullptr, g_midMobileUiSeq = nullptr, g_midPollEvents = nullptr, g_midSetPluginEnabled = nullptr;
+
 // ---- Surface / render --------------------------------------------------------------------------------
 static std::mutex      g_winLock;
 static ANativeWindow  *g_window = nullptr;     // SurfaceView's window (acquired); guarded by g_winLock
@@ -296,6 +302,28 @@ static bool publishBridge(JNIEnv *env) {
     } else {
         env->ExceptionClear();
         LOGE("bridge: FindClass MenuPeekBridge failed (menu-peek disabled)");
+    }
+
+    // A4: MobileUiBridge is the plugin control plane — resolve best-effort (inert unless -Drunelite.mobileui=true).
+    jclass mu = env->FindClass("net/runelite/client/headless/MobileUiBridge");
+    if (mu && !env->ExceptionCheck()) {
+        jclass mug = (jclass) env->NewGlobalRef(mu);
+        env->DeleteLocalRef(mu);
+        jmethodID lp = env->GetStaticMethodID(mug, "listPlugins", "()Ljava/lang/String;");
+        jmethodID sq = env->GetStaticMethodID(mug, "getMobileUiSeq", "()J");
+        jmethodID pe = env->GetStaticMethodID(mug, "pollMobileUiEvents", "(J)Ljava/lang/String;");
+        jmethodID se = env->GetStaticMethodID(mug, "setPluginEnabled", "(Ljava/lang/String;Z)Ljava/lang/String;");
+        if (mug && lp && sq && pe && se) {
+            g_mobileUiCls = mug; g_midListPlugins = lp; g_midMobileUiSeq = sq; g_midPollEvents = pe; g_midSetPluginEnabled = se;
+            LOGI("bridge: MobileUiBridge facade published");
+        } else {
+            env->ExceptionClear();
+            if (mug) env->DeleteGlobalRef(mug);
+            LOGE("bridge: MobileUiBridge method id failed (plugin control disabled)");
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass MobileUiBridge failed (plugin control disabled)");
     }
     return true;
 }
@@ -723,3 +751,48 @@ extern "C" JNIEXPORT jint JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeFrameWidth(JNIEnv *, jobject) { return g_lastFrameW.load(std::memory_order_relaxed); }
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeFrameHeight(JNIEnv *, jobject) { return g_lastFrameH.load(std::memory_order_relaxed); }
+
+// ---- A4 plugin control plane (MobileUiBridge) --------------------------------------------------------
+// These run on the Kotlin "rl-bridge" executor thread (NOT the ART UI thread). They daemon-attach that OS
+// thread to the embedded HotSpot VM (bridgeEnvAttach) and marshal strings across the VM boundary as UTF-8:
+// the ART JNIEnv* (param) makes the ART return value; the HotSpot env makes the bridge call.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeListPlugins(JNIEnv *artEnv, jobject) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midListPlugins) return artEnv->NewStringUTF("");
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midListPlugins);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); if (r) hs->DeleteLocalRef(r); return artEnv->NewStringUTF(""); }
+    std::string s = jstr(hs, r);            // GetStringUTFChars on the HotSpot env
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(s.c_str()); // re-create the string in the ART VM
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeMobileUiSeq(JNIEnv *, jobject) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midMobileUiSeq) return -1;
+    jlong v = hs->CallStaticLongMethod(g_mobileUiCls, g_midMobileUiSeq);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); return -1; }
+    return v;
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePollMobileUiEvents(JNIEnv *artEnv, jobject, jlong sinceSeq) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midPollEvents) return artEnv->NewStringUTF("");
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midPollEvents, sinceSeq);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); if (r) hs->DeleteLocalRef(r); return artEnv->NewStringUTF(""); }
+    std::string s = jstr(hs, r);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(s.c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetPluginEnabled(JNIEnv *artEnv, jobject, jstring jId, jboolean enabled) {
+    std::string id = jstr(artEnv, jId);     // ART string -> std::string
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midSetPluginEnabled) return artEnv->NewStringUTF("");
+    jstring hid = hs->NewStringUTF(id.c_str());
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midSetPluginEnabled, hid, enabled);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (hid) hs->DeleteLocalRef(hid);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}

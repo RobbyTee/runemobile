@@ -541,5 +541,29 @@ class MainActivity : AppCompatActivity() {
             return
         }
         Log.i(TAG, "startJvm rc=$rc (VM up; watch logcat tags jvm-boot/jvm-stdout)")
+        if (census) runA4SeamSelfTest()
+    }
+
+    /**
+     * A4 host-seam self-test (census mode): prove the Android host can reach the plugin control plane
+     * (MobileUiBridge) ACROSS the VM boundary on the rl-bridge thread — the path A4's UI will use (A-1b proved
+     * the same call in-VM). Read-only: poll listPlugins() until the engine has booted and the -Drunelite.mobileui
+     * gate has wired it, then log the received length + the event seq. (Write/toggle + the Compose UI are next.)
+     */
+    private fun runA4SeamSelfTest() {
+        JvmLauncher.onBridge {
+            var plugins = ""
+            for (i in 0 until 90) {
+                plugins = try { JvmLauncher.listPlugins() } catch (t: Throwable) { "" }
+                if (plugins.length > 2) break
+                Thread.sleep(1000)
+            }
+            val seq = try { JvmLauncher.mobileUiSeq() } catch (t: Throwable) { -1L }
+            if (plugins.length > 2) {
+                Log.i(TAG, "ANDROID_A4_SEAM_GREEN listPluginsLen=${plugins.length} mobileUiSeq=$seq")
+            } else {
+                Log.e(TAG, "ANDROID_A4_SEAM_RED listPlugins empty after 90s (mobileui gate / boot?)")
+            }
+        }
     }
 }
