@@ -264,6 +264,15 @@ class MainActivity : AppCompatActivity() {
         // Boot the VM once per process, off the UI thread and on the application context.
         // `adb ... --ez census true` arms the A-1b runtime gate-flip census (extra gates + the census probe).
         val censusMode = intent?.getBooleanExtra("census", false) ?: false
+        // Track G AG1a: `adb ... --ez gpuSmoke true` boots the facade-only EGL smoke (no engine/tokens/login) to
+        // probe GL.createCapabilities().OpenGL33==true through the facade on a live Android EGL context.
+        if (intent?.getBooleanExtra("gpuSmoke", false) == true) {
+            if (booted.compareAndSet(false, true)) {
+                val app = applicationContext
+                thread(name = "jvm-boot") { bootGpuSmoke(app) }
+            }
+            return
+        }
         // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
         // BEFORE boot. With none (and not census, which uses pushed tokens), run the on-device Jagex login first;
         // it writes tokens.json then restarts the process for a clean boot (Review-2: login-first or restart).
@@ -758,6 +767,45 @@ class MainActivity : AppCompatActivity() {
         frameCallback?.let { Choreographer.getInstance().removeFrameCallback(it) }
         frameCallback = null
         super.onDestroy()
+    }
+
+    /**
+     * Track G AG1a — boot the embedded VM with the facade-only `gpu-smoke.jar` ALONE on the classpath +
+     * mainClass `RouteCSmoke` (`-Drunelite.routec.smoke`). The host (jvm_bootstrap) skips CACIO/engine, dlopen's
+     * the librlawt EGL bridge + RegisterNatives the org.lwjgl.opengl/AWTContext facade, then runs the probe →
+     * `ANDROID_AG1A` verdict (logcat jvm-stdout in debug). emulator-GREEN != AG1-GREEN (SwiftShader is lenient).
+     */
+    private fun bootGpuSmoke(app: android.content.Context) {
+        val javaHome = AssetInstaller.ensureInstalled(app)
+        val libjvm = File(javaHome, "lib/server/libjvm.so")
+        val jvmDir = File(app.filesDir, "jvm")
+        val smokeJar = File(jvmDir, "gpu-smoke.jar")
+        // AssetInstaller only re-unpacks assets/jvm on a runtime.tag change, so a re-install without a tag bump
+        // won't refresh the smoke jar. Copy it from assets if absent so the smoke is launchable on any install.
+        if (!smokeJar.exists()) {
+            runCatching {
+                jvmDir.mkdirs()
+                app.assets.open("jvm/gpu-smoke.jar").use { i -> smokeJar.outputStream().use { o -> i.copyTo(o) } }
+            }.onFailure { Log.w(TAG, "AG1a: copy gpu-smoke.jar from assets failed: ${it.message}") }
+        }
+        if (!libjvm.exists() || !smokeJar.exists()) {
+            Log.e(TAG, "AG1a: missing libjvm ($libjvm) or gpu-smoke.jar ($smokeJar — run android/dev-tools/gpu/build-smoke-jar.sh)")
+            booted.set(false)
+            return
+        }
+        val tmpDir = File(app.filesDir, "tmp").apply { mkdirs() }.absolutePath
+        JvmLauncher.setStdioRedirect(BuildConfig.DEBUG)   // the probe prints ANDROID_AG1A to stdout -> logcat
+        val opts = arrayOf("-Djava.io.tmpdir=$tmpDir", "-Drunelite.routec.smoke=true")
+        Log.i(TAG, "AG1a: booting RouteCSmoke on the facade-only jar $smokeJar")
+        val rc = JvmLauncher.startJvm(
+            javaHome = javaHome.absolutePath,
+            libjvmPath = libjvm.absolutePath,
+            libraryPath = File(javaHome, "lib").absolutePath,
+            classpath = smokeJar.absolutePath,
+            mainClass = "RouteCSmoke",
+            extraOpts = opts,
+        )
+        Log.i(TAG, "AG1a: startJvm rc=$rc (watch logcat: ANDROID_AG1A / librlawt / routec)")
     }
 
     private fun bootJvm(app: android.content.Context, census: Boolean = false) {

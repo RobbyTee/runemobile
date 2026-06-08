@@ -807,29 +807,49 @@ static void *jvmThreadMain(void *argp) {
     jint rc = JNI_CreateJavaVM(&vm, (void **) &env, &vmArgs);
     if (rc != JNI_OK || !vm || !env) { LOGE("JNI_CreateJavaVM rc=%d", rc); return fail(rc ? rc : -12); }
     g_vm.store(vm, std::memory_order_release);
-    LOGI("HotSpot VM up; activating CACIO CTC before any AWT/bridge class loads");
+    // Track G AG1a smoke (`-Drunelite.routec.smoke=true`): a facade-only GL-bridge boot — no engine, no AWT, no
+    // CACIO, no JavaBridge/render. dlopen the librlawt EGL bridge + RegisterNatives the org.lwjgl.opengl/AWTContext
+    // facade, then invoke the smoke main below. Detected from the VM opts so the normal boot path is untouched.
+    bool routecSmoke = false;
+    for (const std::string &o : a->extraOpts) if (o == "-Drunelite.routec.smoke=true") routecSmoke = true;
 
-    // CRITICAL ordering: install CACIO's CTC toolkit BEFORE anything touches java.awt.* — otherwise
-    // JavaBridge.<clinit> (it builds a java.awt.Color) drags in java.awt.Toolkit.<clinit>, which on this
-    // bionic JRE tries to dlopen the default xawt backend (libawt_xawt.so, absent) and dies. iOS dodges
-    // this by running activate() at the very top of DeviceHeadlessBoot.main and resolving the bridge late;
-    // we mirror that here so the eager publishBridge below is safe. (DeviceHeadlessBoot.main re-activates —
-    // activate() is idempotent.)
-    if (!callStaticVoidNoArg(env, "UnsafePokeActivation", "activate")) {
-        LOGE("CACIO activation failed; aborting boot (AWT would crash on xawt)");
-        return fail(-13);
+    if (routecSmoke) {
+        LOGI("HotSpot VM up; routec.smoke mode (facade-only GL bridge — no CACIO/engine/render)");
+        void *rh = dlopen("librlawt.so", RTLD_NOW | RTLD_GLOBAL);
+        if (!rh) {
+            LOGE("routec: dlopen librlawt.so failed: %s", dlerror());
+        } else {
+            auto reg = (jint (*)(JNIEnv *)) dlsym(rh, "RouteC_registerGLNatives");
+            if (!reg) LOGE("routec: dlsym RouteC_registerGLNatives failed: %s", dlerror());
+            else { jint rr = reg(env); LOGI("routec: RouteC_registerGLNatives rc=%d", rr); }
+        }
+        { std::lock_guard<std::mutex> lk(g_bootLock); g_bootDone = true; g_bootRc = JNI_OK; }
+        g_bootCv.notify_all();
+    } else {
+        LOGI("HotSpot VM up; activating CACIO CTC before any AWT/bridge class loads");
+
+        // CRITICAL ordering: install CACIO's CTC toolkit BEFORE anything touches java.awt.* — otherwise
+        // JavaBridge.<clinit> (it builds a java.awt.Color) drags in java.awt.Toolkit.<clinit>, which on this
+        // bionic JRE tries to dlopen the default xawt backend (libawt_xawt.so, absent) and dies. iOS dodges
+        // this by running activate() at the very top of DeviceHeadlessBoot.main and resolving the bridge late;
+        // we mirror that here so the eager publishBridge below is safe. (DeviceHeadlessBoot.main re-activates —
+        // activate() is idempotent.)
+        if (!callStaticVoidNoArg(env, "UnsafePokeActivation", "activate")) {
+            LOGE("CACIO activation failed; aborting boot (AWT would crash on xawt)");
+            return fail(-13);
+        }
+        LOGI("CACIO CTC active; publishing bridge + starting render");
+
+        if (!publishBridge(env)) {   // JavaBridge is essential for Milestone B — a null bridge is a dead render
+            LOGE("bridge publish failed; aborting boot (render + input would be inert)");
+            return fail(-14);
+        }
+        startRenderThreadOnce();
+
+        // Signal startJvm that bringup is complete (VM is up). The worker now continues into the boot main.
+        { std::lock_guard<std::mutex> lk(g_bootLock); g_bootDone = true; g_bootRc = JNI_OK; }
+        g_bootCv.notify_all();
     }
-    LOGI("CACIO CTC active; publishing bridge + starting render");
-
-    if (!publishBridge(env)) {   // JavaBridge is essential for Milestone B — a null bridge is a dead render
-        LOGE("bridge publish failed; aborting boot (render + input would be inert)");
-        return fail(-14);
-    }
-    startRenderThreadOnce();
-
-    // Signal startJvm that bringup is complete (VM is up). The worker now continues into the boot main.
-    { std::lock_guard<std::mutex> lk(g_bootLock); g_bootDone = true; g_bootRc = JNI_OK; }
-    g_bootCv.notify_all();
 
     const std::string internal = toInternal(a->mainClass);
     jclass cls = env->FindClass(internal.c_str());
