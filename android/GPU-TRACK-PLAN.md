@@ -172,6 +172,21 @@
 > `dev-tools/gpu/evidence/ag3b-startup-emulator-20260608.log`. So the whole plumbing (plugin lifecycle + facade +
 > librlawt delta + loaders) is proven end-to-end up to shaders; the remaining gap is the shaders themselves.
 >
+> **STATUS — AG3-c: the SCENE FRAGMENT shader fully ports to GLSL-ES; emulator wall hit at TBO (2026-06-09).**
+> 11 Zone shader files ported via the overlay (color_utils, misc, normals, shadows, displacement, lights, water,
+> color_filters, fog + scene_frag) — every int-literal / int-vector-mix / int-uniform / int-function-arg in a float
+> context made explicit. **`scene_frag` (the big fragment shader + ALL its lighting/water/shadow/normals/displacement/
+> fog/color includes) now COMPILES CLEAN** on the emulator. Also fixed a downport bug: the float-suffix regex
+> `(\d+\.\d*)[fF]` matched `1.f` across a struct access, corrupting `material1.flowMap`→`material1.lowMap` (fixed with
+> a `(?![A-Za-z0-9_])` lookahead). **Emulator wall (definitive): `GL caps: texture_buffer=0 (EXT=0 OES=0) io_blocks=0
+> geom=0`** — ANGLE/SwiftShader (ES 3.1) has NO texture-buffer, so `scene_vert`'s `isamplerBuffer textureFaces` (TBO
+> per-face data, fundamental to Zone) can't compile here. These are GLES 3.2 CORE on the real Pixel 8/Mali-G715 (AG0
+> `esTier=32`). So the int→float port is PROVEN for everything the emulator can compile; **`scene_vert` + `scene_geom`
+> + the shadow programs + the first HD frame are the device-only remainder** (run `routecrlhd` on the Pixel 8: there
+> `#version 320 es` makes TBO/IO-blocks/geometry core, no `#extension` needed; `scene_geom`/`shadow_vert`/`shadow_frag`
+> still need their own int→float overlay pass, doable blind then verified on-device). Overlay dev aids in librlawt:
+> `#line`-strip (error lines map to the flat source), toggleable numbered shader dump (`touch files/rlhd_shaderdump`),
+> one-time GL-caps log. ─── (original foundation note follows) ───
 > **STATUS — AG3-c IN PROGRESS (foundation GREEN, 2026-06-08): shader-overlay mechanism + first file ported.**
 > RLHD's `#version 330` shaders use int literals in float contexts that strict GLSL-ES rejects (`1 / 2.4`,
 > `float H = 0;`, `C > 0`, `mod(x, 6)`, `vec2 * 2`, `... * SHADOW_COMBINED_MAX`) — pervasive (~100+ sites across
