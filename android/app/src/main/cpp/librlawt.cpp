@@ -19,6 +19,7 @@
 #include <GLES3/gl32.h>
 #include <android/log.h>
 #include <pthread.h>
+#include <unistd.h>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -128,6 +129,7 @@ static std::string rc_downport(const std::string &src) {
     std::string body = (v != std::string::npos) ? src.substr(v) : src;
     size_t nl = body.find('\n');                                   // drop the original #version line
     body = (nl != std::string::npos) ? body.substr(nl + 1) : std::string();
+    body = std::regex_replace(body, std::regex("#line[^\\n]*\\n"), "");                // strip RLHD #line directives (ES error lines then map to the flat source; our error path doesn't parse them)
     body = std::regex_replace(body, std::regex("\\bnoperspective\\b"), "");           // (3) reserved in ES
     body = std::regex_replace(body, std::regex("(\\d*\\.\\d+|\\d+\\.\\d*)[fF]"), "$1"); // (4) no float `f` suffix
     for (auto &c : kSceneVertexCasts) rc_replace_all(body, c[0], c[1]);                // (5) explicit casts
@@ -315,6 +317,16 @@ GLF rc_glShaderSource(JNIEnv* e, jclass, jint a0, jstring a1){
     const char* s=e->GetStringUTFChars(a1,nullptr);
     std::string down = rc_downport(s ? s : "");         // 330 -> GLES (the AG1b-validated recipe)
     e->ReleaseStringUTFChars(a1,s);
+    // AG3-c shader-port aid: numbered dump of the downported source so a driver "shader N line M" error maps to
+    // an exact source line (the #line strip above makes M index this flat source). Toggle by `adb shell run-as
+    // <pkg> touch files/rlhd_shaderdump` — off by default so it doesn't flood logcat in normal runs.
+    if (access("/data/data/dev.audaro.helloshell/files/rlhd_shaderdump", F_OK) == 0) {
+        static int sdidx=0; int idx=sdidx++; int ln=1; size_t p=0;
+        while (p<down.size()){ size_t nl=down.find('\n',p);
+            std::string line = down.substr(p, nl==std::string::npos ? std::string::npos : nl-p);
+            LOGI("SHDR[%d]%3d|%s", idx, ln, line.c_str()); ln++;
+            if (nl==std::string::npos) break; p=nl+1; }
+    }
     const char* ds = down.c_str();
     glShaderSource((GLuint)a0,1,&ds,nullptr);
 }
