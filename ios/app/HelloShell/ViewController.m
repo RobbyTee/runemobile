@@ -20,6 +20,8 @@
 @property (nonatomic, strong) UIButton *launchButton;
 @property (nonatomic, strong) UIButton *canaryButton;
 @property (nonatomic, strong) UIButton *keyboardButton;
+@property (nonatomic, strong) UIButton *shiftButton;     // sticky-Shift toggle (holds VK_SHIFT for shift-click)
+@property (nonatomic, assign) BOOL shiftHeld;
 // W3 hybrid-chrome device de-risk: read the MobileChromeBridge snapshot + proxy a tab switch via the proven
 // JavaBridge.onClick, logging a md5-gateable verdict. The seam proof before native rails are drawn.
 @property (nonatomic, strong) UIButton *chromeButton;
@@ -295,6 +297,20 @@ static const CGFloat kMenuWidth       = 210.0;
                   forControlEvents:UIControlEventTouchUpInside];
     [self.screen addSubview:self.keyboardButton];
 
+    // Sticky-Shift toggle, next to the keyboard button. Holds VK_SHIFT down via the bridge so the engine's
+    // isKeyPressed(KC_SHIFT) path reads true — re-enabling shift-click menu swaps, Shift+right-click marking,
+    // and overlay "Configure" on touch (no hardware key). Tap to latch on (highlighted), tap again to release.
+    self.shiftButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.shiftButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.shiftButton setTitle:@"⇧" forState:UIControlStateNormal];
+    self.shiftButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
+    self.shiftButton.tintColor = [UIColor whiteColor];
+    self.shiftButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
+    self.shiftButton.layer.cornerRadius = 8;
+    [self.shiftButton addTarget:self action:@selector(onToggleShift)
+               forControlEvents:UIControlEventTouchUpInside];
+    [self.screen addSubview:self.shiftButton];
+
     // Native tab rails (edge-split, mobile arrangement): a 2-column icon grid pinned to the right edge of the
     // game view. The opaque rail background sits behind the icon buttons; each icon is blitted from the live
     // desktop stone's sprite region, and a tap proxies a click onto the real stone centre (so the native
@@ -485,6 +501,12 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.keyboardButton.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:8],
         [self.keyboardButton.widthAnchor constraintEqualToConstant:44],
         [self.keyboardButton.heightAnchor constraintEqualToConstant:36],
+
+        // Sticky-Shift toggle — same row, just right of the keyboard button.
+        [self.shiftButton.bottomAnchor constraintEqualToAnchor:self.keyboardButton.bottomAnchor],
+        [self.shiftButton.leadingAnchor constraintEqualToAnchor:self.keyboardButton.trailingAnchor constant:8],
+        [self.shiftButton.widthAnchor constraintEqualToConstant:44],
+        [self.shiftButton.heightAnchor constraintEqualToConstant:36],
 
         // Utility trio (⚙ ▦ ≡) — moved OUT of the top-right, where it overlapped the engine XP counter + minimap
         // orbs (the XP button lives in the left part of the relocated MAP_CONTAINER cluster, and XP-drop numbers
@@ -1561,6 +1583,14 @@ static int chatRowCanvasH(void) {
 // to the top-left (transparent OSRS-mobile mode), and the minimap+orbs cluster to the top-right. Both stay the
 // real, live engine HUD (chat tabs/scrollback/input + minimap click-to-walk + orb clicks all keep working).
 // One-shot once we're logged in; HudVeneerBridge re-applies each frame (survives TOPLEVEL_REDRAW).
+// Safe-area insets changed (landscape-left<->right rotation, notch-side flip) — clear the one-shot relocate
+// guard so the next updateHudLayout tick (~10Hz) re-anchors chat/minimap to the new safe rect instead of
+// leaving them pinned to stale insets.
+- (void)viewSafeAreaInsetsDidChange {
+    [super viewSafeAreaInsetsDidChange];
+    self.engineChatRelocated = NO;
+}
+
 - (void)updateHudLayout {
     if (self.engineChatRelocated) return;
     NSString *snap = [JVMLauncher hudSnapshot];
@@ -2033,6 +2063,18 @@ static int chatRowCanvasH(void) {
         [self.kbField becomeFirstResponder];
         [self appendLine:@"[shell] keyboard shown (type -> game)"];
     }
+}
+
+// Sticky-Shift: latch SHIFT down/up via the bridge so subsequent taps/long-presses are seen by the engine as
+// shift-held (shift-click swaps, Shift+right-click marking, overlay "Configure"). Highlighted while latched.
+- (void)onToggleShift {
+    self.shiftHeld = !self.shiftHeld;
+    [JVMLauncher postShiftHeld:self.shiftHeld];
+    self.shiftButton.backgroundColor = self.shiftHeld
+        ? [UIColor colorWithRed:0.95 green:0.62 blue:0.11 alpha:0.92]   // RuneLite amber = latched on
+        : [UIColor colorWithWhite:0.0 alpha:0.45];
+    self.shiftButton.tintColor = self.shiftHeld ? [UIColor blackColor] : [UIColor whiteColor];
+    [self appendLine:self.shiftHeld ? @"[shell] Shift latched ON" : @"[shell] Shift released"];
 }
 
 // Every edit is intercepted and forwarded as KeyEvents; the field itself never changes (return NO), so it
