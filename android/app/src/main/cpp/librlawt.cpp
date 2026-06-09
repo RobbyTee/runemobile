@@ -138,6 +138,11 @@ static std::string rc_downport(const std::string &src) {
     std::string precision =
         "precision highp float;\nprecision highp int;\n"
         "precision highp sampler2DArray;\nprecision highp usampler2DArray;\nprecision highp sampler2D;\n";
+    // GLSL ES needs a default precision for EVERY sampler type used. RLHD's Zone vertex/shadow shaders use a
+    // texture-buffer sampler (isamplerBuffer textureFaces) — add its precision, but only when the shader actually
+    // uses one (the buffer-sampler types are unknown on a driver without texture_buffer, so don't emit it otherwise).
+    if (body.find("samplerBuffer") != std::string::npos)
+        precision += "precision highp isamplerBuffer;\nprecision highp usamplerBuffer;\nprecision highp samplerBuffer;\n";
     // 117HD Zone shaders use interface (IO) blocks + texture-buffer samplers (isamplerBuffer). These are CORE in
     // GLSL ES 3.2 (#version 320 es, the real Pixel 8/Mali tier — no directives needed) but on an ES 3.1 context
     // (the emulator's ANGLE) they require EXT directives. Geometry shaders (shadow pass) likewise. Emit them only
