@@ -172,6 +172,18 @@
 > `dev-tools/gpu/evidence/ag3b-startup-emulator-20260608.log`. So the whole plumbing (plugin lifecycle + facade +
 > librlawt delta + loaders) is proven end-to-end up to shaders; the remaining gap is the shaders themselves.
 >
+> **STATUS — AG3-c GREEN on REAL MALI (2026-06-09, Firebase Game Loop, Pixel 8): `117 HD started successfully!` +
+> isGpu=true.** The whole 117HD Zone shader set — scene_vert/frag/geom + both shadow programs + ui_vert/frag — COMPILES
+> on the real Mali-G715 driver (`GL caps: texture_buffer=1 (EXT=1 OES=1) io_blocks=1 geom=1`), `HdPlugin.startUp`
+> completes, RLHDStarter reports `GPU renderer active (isGpu=true) — 117HD up`. The XL shader port is DONE. Getting
+> there on real silicon (Firebase Game Loop, since Robo crawls + the emulator's SwiftShader has no TBO) took, in order:
+> (1) `glTexSubImage3D(IntBuffer)` overload + BGRA swizzle; (2) the int→float overlay port of ~16 shader files;
+> (3) the downport `flowMap`→`lowMap` regex bug; (4) `isamplerBuffer` default precision (real-driver only); (5) boot
+> PRE-LOGIN (no autologin) so the datacenter device settles at LOGIN_SCREEN instead of churning in UNKNOWN; (6)
+> `bicubic` `textureSize` ivec2→vec2; (7) the gamma-calibration dev-overlay `smoothstep(0,..)` (caught/non-fatal,
+> fixed — verification + a pulled 117HD frame deferred: Firebase free quota = ~5 runs/day, hit on 2026-06-09). The
+> pulled frame will be the LOGIN SCREEN rendered by 117HD (real Mali can't log in — datacenter WAF), proving the
+> pipeline; HD SCENERY still needs in-world = a real device on a residential network. ───────────
 > **STATUS — AG3-c: the SCENE FRAGMENT shader fully ports to GLSL-ES; emulator wall hit at TBO (2026-06-09).**
 > 11 Zone shader files ported via the overlay (color_utils, misc, normals, shadows, displacement, lights, water,
 > color_filters, fog + scene_frag) — every int-literal / int-vector-mix / int-uniform / int-function-arg in a float
