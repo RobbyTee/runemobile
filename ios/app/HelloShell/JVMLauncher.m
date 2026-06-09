@@ -40,6 +40,7 @@ static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidClickPrecise = NULL, gM
 static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
 static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
 static jmethodID gMidMenuSelect = NULL;  // selectMenuPoint(II)V — menu row select + hover-clear (optional)
+static jmethodID gMidShiftHeld = NULL;   // setShiftHeld(Z)V — sticky-Shift modifier (optional; tolerate older jar)
 
 // W3 hybrid-chrome read surface — a SEPARATE facade (MobileChromeBridge) resolved lazily on the main thread.
 static jclass    gChromeClass = NULL;   // global ref to net.runelite.client.headless.MobileChromeBridge
@@ -72,6 +73,10 @@ static jmethodID gMuiPanelH = NULL;       // getPanelHeight()I
 static jmethodID gMuiPanelSeq = NULL;     // getPanelFrameSeq()I
 static jmethodID gMuiPanelPixels = NULL;  // getPanelPixels()[I
 static jmethodID gMuiPanelClick = NULL;   // panelClick(II)Ljava/lang/String;
+static jmethodID gMuiNextNotif = NULL;    // nextNotification()Ljava/lang/String; (optional)
+static jmethodID gMuiNextLink = NULL;     // nextLink()Ljava/lang/String; (optional)
+static jmethodID gMuiSetPinned = NULL;    // setPinned(Ljava/lang/String;Z)Ljava/lang/String; (optional)
+static jmethodID gMuiHubState = NULL;     // hubState()Ljava/lang/String; (optional)
 
 // Native Quest Helper reflow — the QuestHelperBridge facade (reflection into the external plugin).
 static jclass    gQhClass = NULL;       // global ref to net.runelite.client.headless.QuestHelperBridge
@@ -175,6 +180,8 @@ static BOOL ensureBridge(void) {
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidInteractSeq = NULL; }
     gMidMenuSelect = (*env)->GetStaticMethodID(env, global, "selectMenuPoint", "(II)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidMenuSelect = NULL; }
+    gMidShiftHeld = (*env)->GetStaticMethodID(env, global, "setShiftHeld", "(Z)V");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidShiftHeld = NULL; }
     gBridgeClass = global;   // publish only once fully resolved
     return YES;
 }
@@ -342,6 +349,16 @@ static BOOL ensureMui(void) {
         (*env)->DeleteGlobalRef(env, global);
         return NO;
     }
+    // Optional (not in the mandatory set above, so an older staged jar still boots the facade). Each wrapper
+    // null-guards its own id, so a missing method only disables that one feature.
+    gMuiNextNotif = (*env)->GetStaticMethodID(env, global, "nextNotification", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiNextNotif = NULL; }
+    gMuiNextLink = (*env)->GetStaticMethodID(env, global, "nextLink", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiNextLink = NULL; }
+    gMuiSetPinned = (*env)->GetStaticMethodID(env, global, "setPinned", "(Ljava/lang/String;Z)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiSetPinned = NULL; }
+    gMuiHubState = (*env)->GetStaticMethodID(env, global, "hubState", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiHubState = NULL; }
     gMuiClass = global;   // publish only once fully resolved
     return YES;
 }
@@ -1057,6 +1074,13 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 
++ (void)postShiftHeld:(BOOL)held {
+    if (!ensureBridge() || !gMidShiftHeld) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidShiftHeld, (jboolean)(held ? JNI_TRUE : JNI_FALSE));
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
 + (BOOL)textInputOpen {
     if (!ensureBridge()) return NO;
     JNIEnv *env = gMainEnv;
@@ -1260,6 +1284,34 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     jlong v = (*env)->CallStaticLongMethod(env, gMuiClass, gMuiSeq);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0; }
     return (long long)v;
+}
+
++ (NSString *)mobileNextNotification {
+    if (!ensureMui() || !gMuiNextNotif) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiNextNotif));
+}
+
++ (NSString *)mobileNextLink {
+    if (!ensureMui() || !gMuiNextLink) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiNextLink));
+}
+
++ (NSString *)mobileSetPinned:(NSString *)pluginName pinned:(BOOL)pinned {
+    if (!ensureMui() || !gMuiSetPinned || pluginName == nil) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring jn = (*env)->NewStringUTF(env, pluginName.UTF8String);
+    NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiSetPinned,
+                                                                             jn, (jboolean)(pinned ? JNI_TRUE : JNI_FALSE)));
+    (*env)->DeleteLocalRef(env, jn);
+    return out;
+}
+
++ (NSString *)mobileHubState {
+    if (!ensureMui() || !gMuiHubState) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiHubState));
 }
 
 + (NSString *)mobilePollEventsSince:(long long)sinceSeq {

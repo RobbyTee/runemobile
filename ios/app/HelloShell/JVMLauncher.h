@@ -92,6 +92,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// 10=enter, 27=escape, 9=tab, 37/38/39/40=arrows). Call on the main thread.
 + (void)postKeyStroke:(int)awtKeyCode;
 
+/// Sticky-Shift: hold (held=YES) or release (held=NO) the SHIFT modifier via JavaBridge.setShiftHeld so the
+/// engine's isKeyPressed(KC_SHIFT) path reads true on touch (shift-click swaps / Shift+right-click marking /
+/// overlay "Configure"). Transition-gated on the Java side. Call on the main thread.
++ (void)postShiftHeld:(BOOL)held;
+
 /// True when the gamepack has a text field open and awaiting input (search / PM / enter-amount dialog).
 /// Polled by the shell to auto-raise/dismiss the soft keyboard. Call on the main thread.
 + (BOOL)textInputOpen;
@@ -202,6 +207,22 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Latest event sequence (MobileUiBridge.getMobileUiSeq) — the panel stores this and polls for a bump to
 /// know when to re-read (config/plugin changed, including changes it didn't make).
 + (long long)mobileUiSeq;
+
+/// Drain the oldest pending OS notification ("titlebody"), or nil if none (MobileUiBridge.nextNotification).
+/// The shell polls this and raises a UNUserNotificationCenter notification. Main thread.
++ (nullable NSString *)mobileNextNotification;
+
+/// Drain the oldest pending outbound URL, or nil if none (MobileUiBridge.nextLink). The shell polls this and
+/// opens it in an SFSafariViewController. Main thread.
++ (nullable NSString *)mobileNextLink;
+
+/// Pin/unpin a plugin by display name (MobileUiBridge.setPinned) — persisted as the shared pinnedPlugins CSV.
+/// Returns the ack JSON. Main thread.
++ (nullable NSString *)mobileSetPinned:(NSString *)pluginName pinned:(BOOL)pinned;
+
+/// Hub install/remove progress ({refreshing,seq}) (MobileUiBridge.hubState). The hub screen polls this to show
+/// a spinner and re-fetch the manifest when seq bumps. Main thread.
++ (nullable NSString *)mobileHubState;
 
 /// Events since `sinceSeq` as JSON (MobileUiBridge.pollMobileUiEvents): {seq, events:[{seq,kind,group,key}]}.
 + (nullable NSString *)mobilePollEventsSince:(long long)sinceSeq;
