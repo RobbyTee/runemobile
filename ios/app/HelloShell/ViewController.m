@@ -981,6 +981,7 @@ static const CGFloat kMenuWidth       = 210.0;
     if (g.state != UIGestureRecognizerStateBegan) return;
     NSIndexPath *ip = [self.pluginTable indexPathForRowAtPoint:[g locationInView:self.pluginTable]];
     if (!ip || ip.row < 0 || ip.row >= (NSInteger)self.pluginList.count) return;
+    if (self.presentedViewController) return;   // don't stack/re-present (also guards a re-fired gesture)
     NSDictionary *p = self.pluginList[(NSUInteger)ip.row];
     NSString *name = [p[@"name"] description] ?: @"";
     BOOL hasConfig = [p[@"hasConfig"] boolValue];
@@ -988,9 +989,10 @@ static const CGFloat kMenuWidth       = 210.0;
     BOOL pinned = [p[@"pinned"] boolValue];
 
     // Long-press menu: pin/unpin (always) + configure (if the plugin has config). Pin floats it to the top of
-    // the list and persists via the shared pinnedPlugins CSV.
+    // the list and persists via the shared pinnedPlugins CSV. Centered Alert (not an action sheet) so it stays
+    // put — an action sheet anchors to the bottom safe-area inset, which the 60fps HUD tick churns landscape.
     UIAlertController *sheet = [UIAlertController alertControllerWithTitle:name message:nil
-                                                          preferredStyle:UIAlertControllerStyleActionSheet];
+                                                          preferredStyle:UIAlertControllerStyleAlert];
     [sheet addAction:[UIAlertAction actionWithTitle:(pinned ? @"Unpin" : @"Pin to top")
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction *a) {
@@ -1006,10 +1008,6 @@ static const CGFloat kMenuWidth       = 210.0;
         }]];
     }
     [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    UITableViewCell *cell = [self.pluginTable cellForRowAtIndexPath:ip];
-    UIView *anchor = cell ?: self.pluginTable;
-    sheet.popoverPresentationController.sourceView = anchor;
-    sheet.popoverPresentationController.sourceRect = anchor.bounds;
     [self presentViewController:sheet animated:YES completion:nil];
 }
 
