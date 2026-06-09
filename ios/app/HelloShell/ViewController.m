@@ -7,10 +7,13 @@
 #import "GLRecon.h"
 #import <WebKit/WebKit.h>
 #import <CoreText/CoreText.h>
+#import <SafariServices/SafariServices.h>
+#import <UserNotifications/UserNotifications.h>
+#import <Photos/Photos.h>
 #import <unistd.h>
 #import <fcntl.h>
 
-@interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate>
+@interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate>
 {
     // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
     // desktop stone. A C array, so it lives as an ivar rather than a property.
@@ -22,6 +25,9 @@
 @property (nonatomic, strong) UIButton *keyboardButton;
 @property (nonatomic, strong) UIButton *shiftButton;     // sticky-Shift toggle (holds VK_SHIFT for shift-click)
 @property (nonatomic, assign) BOOL shiftHeld;
+@property (nonatomic, assign) BOOL notifAuthRequested;   // UNUserNotificationCenter authorization asked once
+@property (nonatomic, assign) BOOL safariOpen;           // an SFSafariViewController is currently presented
+@property (nonatomic, strong) UIButton *screenshotButton; // 📷 save the live frame to Photos
 // W3 hybrid-chrome device de-risk: read the MobileChromeBridge snapshot + proxy a tab switch via the proven
 // JavaBridge.onClick, logging a md5-gateable verdict. The seam proof before native rails are drawn.
 @property (nonatomic, strong) UIButton *chromeButton;
@@ -311,6 +317,18 @@ static const CGFloat kMenuWidth       = 210.0;
                forControlEvents:UIControlEventTouchUpInside];
     [self.screen addSubview:self.shiftButton];
 
+    // Screenshot: save the live composited frame to Photos (the engine's auto-screenshots land in the sandbox
+    // dir, unreachable; this is the manual, reachable path — native already has the frame via latestFrame).
+    self.screenshotButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.screenshotButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.screenshotButton setTitle:@"📷" forState:UIControlStateNormal];
+    self.screenshotButton.titleLabel.font = [UIFont systemFontOfSize:20];
+    self.screenshotButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
+    self.screenshotButton.layer.cornerRadius = 8;
+    [self.screenshotButton addTarget:self action:@selector(onScreenshot)
+                    forControlEvents:UIControlEventTouchUpInside];
+    [self.screen addSubview:self.screenshotButton];
+
     // Native tab rails (edge-split, mobile arrangement): a 2-column icon grid pinned to the right edge of the
     // game view. The opaque rail background sits behind the icon buttons; each icon is blitted from the live
     // desktop stone's sprite region, and a tap proxies a click onto the real stone centre (so the native
@@ -507,6 +525,12 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.shiftButton.leadingAnchor constraintEqualToAnchor:self.keyboardButton.trailingAnchor constant:8],
         [self.shiftButton.widthAnchor constraintEqualToConstant:44],
         [self.shiftButton.heightAnchor constraintEqualToConstant:36],
+
+        // Screenshot button — same row, right of the shift button.
+        [self.screenshotButton.bottomAnchor constraintEqualToAnchor:self.keyboardButton.bottomAnchor],
+        [self.screenshotButton.leadingAnchor constraintEqualToAnchor:self.shiftButton.trailingAnchor constant:8],
+        [self.screenshotButton.widthAnchor constraintEqualToConstant:44],
+        [self.screenshotButton.heightAnchor constraintEqualToConstant:36],
 
         // Utility trio (⚙ ▦ ≡) — moved OUT of the top-right, where it overlapped the engine XP counter + minimap
         // orbs (the XP button lives in the left part of the relocated MAP_CONTAINER cluster, and XP-drop numbers
@@ -844,6 +868,8 @@ static const CGFloat kMenuWidth       = 210.0;
     }
     if (arr) {
         self.pluginList = [arr sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+            BOOL pa = [a[@"pinned"] boolValue], pb = [b[@"pinned"] boolValue];
+            if (pa != pb) return pa ? NSOrderedAscending : NSOrderedDescending;   // pinned float to the top
             NSString *na = [a[@"name"] description] ?: @"";
             NSString *nb = [b[@"name"] description] ?: @"";
             return [na caseInsensitiveCompare:nb];
@@ -898,6 +924,9 @@ static const CGFloat kMenuWidth       = 210.0;
     BOOL hasConfig = [p[@"hasConfig"] boolValue]
         && [p[@"configGroup"] isKindOfClass:[NSString class]] && [p[@"configGroup"] length] > 0;
     cell.textLabel.text = [p[@"name"] description];
+    BOOL pinned = [p[@"pinned"] boolValue];
+    cell.imageView.image = pinned ? [UIImage systemImageNamed:@"star.fill"] : nil;
+    cell.imageView.tintColor = [UIColor colorWithRed:0.95 green:0.78 blue:0.30 alpha:1.0];
     NSString *status;
     UIColor *statusColor;
     if (enabled && active) {
@@ -953,12 +982,35 @@ static const CGFloat kMenuWidth       = 210.0;
     NSIndexPath *ip = [self.pluginTable indexPathForRowAtPoint:[g locationInView:self.pluginTable]];
     if (!ip || ip.row < 0 || ip.row >= (NSInteger)self.pluginList.count) return;
     NSDictionary *p = self.pluginList[(NSUInteger)ip.row];
+    NSString *name = [p[@"name"] description] ?: @"";
     BOOL hasConfig = [p[@"hasConfig"] boolValue];
     NSString *group = [p[@"configGroup"] isKindOfClass:[NSString class]] ? p[@"configGroup"] : nil;
-    if (!hasConfig || group.length == 0) return;
-    PluginConfigViewController *cfg = [[PluginConfigViewController alloc] initWithGroup:group
-                                                                            pluginName:[p[@"name"] description]];
-    [self presentViewController:cfg animated:YES completion:nil];
+    BOOL pinned = [p[@"pinned"] boolValue];
+
+    // Long-press menu: pin/unpin (always) + configure (if the plugin has config). Pin floats it to the top of
+    // the list and persists via the shared pinnedPlugins CSV.
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:name message:nil
+                                                          preferredStyle:UIAlertControllerStyleActionSheet];
+    [sheet addAction:[UIAlertAction actionWithTitle:(pinned ? @"Unpin" : @"Pin to top")
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *a) {
+        [JVMLauncher mobileSetPinned:name pinned:!pinned];
+        [self refreshPluginList];
+    }]];
+    if (hasConfig && group.length > 0) {
+        [sheet addAction:[UIAlertAction actionWithTitle:@"Configure" style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *a) {
+            PluginConfigViewController *cfg = [[PluginConfigViewController alloc] initWithGroup:group
+                                                                                    pluginName:name];
+            [self presentViewController:cfg animated:YES completion:nil];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    UITableViewCell *cell = [self.pluginTable cellForRowAtIndexPath:ip];
+    UIView *anchor = cell ?: self.pluginTable;
+    sheet.popoverPresentationController.sourceView = anchor;
+    sheet.popoverPresentationController.sourceRect = anchor.bounds;
+    [self presentViewController:sheet animated:YES completion:nil];
 }
 
 #pragma mark - Logging
@@ -1664,6 +1716,13 @@ static int chatRowCanvasH(void) {
         [self updateHudLayout];
     }
 
+    // Drain the shared-core notification + outbound-link queues (~2 Hz). Both no-op until something is queued;
+    // a fired plugin notification becomes a real OS notification, a plugin "open page" link opens in-app.
+    if (self.framesShown % 30 == 0) {
+        [self drainNotifications];
+        [self drainLinks];
+    }
+
     // W3 A3: refresh the enlarged native chat tab buttons (~10 Hz). Self-gates on chrome toggle + layout; runs
     // every tick (not only when chromeVisible) so it hides itself promptly when the chrome is toggled off.
     if (self.framesShown % 6 == 0) {
@@ -2075,6 +2134,72 @@ static int chatRowCanvasH(void) {
         : [UIColor colorWithWhite:0.0 alpha:0.45];
     self.shiftButton.tintColor = self.shiftHeld ? [UIColor blackColor] : [UIColor whiteColor];
     [self appendLine:self.shiftHeld ? @"[shell] Shift latched ON" : @"[shell] Shift released"];
+}
+
+// Drain the shared-core notification queue -> real OS notifications. Idle/Chat notifications, random events, etc.
+// fire here because the sandbox has no tray/taskbar/shell-out. Auth is requested lazily on the first one.
+- (void)drainNotifications {
+    NSString *n = [JVMLauncher mobileNextNotification];
+    if (n.length == 0) return;
+    if (!self.notifAuthRequested) {
+        self.notifAuthRequested = YES;
+        [[UNUserNotificationCenter currentNotificationCenter]
+            requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
+            completionHandler:^(BOOL granted, NSError *err) {}];
+    }
+    unichar sepCh = 1;   // the "titlebody" separator the bridge uses (control char, not a literal)
+    NSString *sepStr = [NSString stringWithCharacters:&sepCh length:1];
+    while (n.length > 0) {   // drain the whole backlog this tick so a burst doesn't trickle out
+        NSRange sep = [n rangeOfString:sepStr];
+        NSString *title = sep.location == NSNotFound ? @"RuneLite" : [n substringToIndex:sep.location];
+        NSString *body  = sep.location == NSNotFound ? n : [n substringFromIndex:sep.location + 1];
+        if (title.length == 0) title = @"RuneLite";
+        UNMutableNotificationContent *c = [[UNMutableNotificationContent alloc] init];
+        c.title = title;
+        c.body = body;
+        c.sound = [UNNotificationSound defaultSound];
+        UNNotificationRequest *req = [UNNotificationRequest requestWithIdentifier:[[NSUUID UUID] UUIDString]
+                                                                         content:c trigger:nil];
+        [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:req withCompletionHandler:nil];
+        n = [JVMLauncher mobileNextNotification];
+    }
+}
+
+// Drain the shared-core outbound-link queue -> in-app SFSafariViewController. Wiki/HiScore/"open page" links land
+// here (the sandbox has no system browser). One at a time; only http(s) is opened.
+- (void)drainLinks {
+    if (self.safariOpen) return;   // present one; the rest stay queued until it closes
+    NSString *urlStr = [JVMLauncher mobileNextLink];
+    if (urlStr.length == 0) return;
+    NSURL *url = [NSURL URLWithString:urlStr];
+    if (url == nil || !([url.scheme isEqualToString:@"https"] || [url.scheme isEqualToString:@"http"])) {
+        [self appendLine:[NSString stringWithFormat:@"[shell] skipped non-web link: %@", urlStr]];
+        return;
+    }
+    SFSafariViewController *sf = [[SFSafariViewController alloc] initWithURL:url];
+    sf.delegate = self;
+    sf.modalPresentationStyle = UIModalPresentationPageSheet;
+    self.safariOpen = YES;
+    [self presentViewController:sf animated:YES completion:nil];
+    [self appendLine:[NSString stringWithFormat:@"[shell] open link: %@", url.absoluteString]];
+}
+
+- (void)safariViewControllerDidFinish:(SFSafariViewController *)controller {
+    self.safariOpen = NO;
+}
+
+// Save the live composited frame to Photos. The engine's auto-screenshots write to the sandbox dir (unreachable
+// on a phone); this is the manual reachable path — native already holds the frame via latestFrame.
+- (void)onScreenshot {
+    UIImage *img = [JVMLauncher latestFrame];
+    if (img == nil) { [self appendLine:@"[shell] screenshot: no frame yet"]; return; }
+    UIImageWriteToSavedPhotosAlbum(img, self, @selector(image:didFinishSavingWithError:contextInfo:), NULL);
+}
+
+- (void)image:(UIImage *)image didFinishSavingWithError:(NSError *)error contextInfo:(void *)ctx {
+    [self appendLine:error
+        ? [NSString stringWithFormat:@"[shell] screenshot save failed: %@", error.localizedDescription]
+        : @"[shell] screenshot saved to Photos"];
 }
 
 // Every edit is intercepted and forwarded as KeyEvents; the field itself never changes (return NO), so it
