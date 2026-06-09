@@ -93,7 +93,7 @@ if [ "$MODE" = "rlhd" ]; then
   # Also seed the shader-dump marker (librlawt logs the numbered downported source so a driver "0:N" error maps to
   # a source line). Set FB_NO_SHADERDUMP=1 to skip once the Zone shaders compile clean.
   if [ -z "${FB_NO_SHADERDUMP:-}" ]; then OTHER=(--other-files "$DEV_RLHD=$MARKER,$DEV_FILES/rlhd_shaderdump=$MARKER"); else OTHER=(--other-files "$DEV_RLHD=$MARKER"); fi
-  PULL=(--directories-to-pull "$DEV_FRAMES")
+  PULL=(--directories-to-pull "$DEV_FRAMES,$DEV_FILES/rl-capture")   # rl-capture = the 117HD-rendered frames
   : "${FB_TIMEOUT:=420s}"   # plugin load + the full Zone shader compile + startUp + a frame dump
   # Robo (the default) force-stops + relaunches the app every few seconds and crawls the UI (it reached
   # LoginActivity before startUp ran). Game Loop launches the app ONCE via the TEST_LOOP intent and lets it run
@@ -163,7 +163,7 @@ case "$MODE" in
           echo "--- shader/compile failures (want NONE) ---"
           grep -E "ShaderException|isamplerBuffer|Illegal use of reserved word|Error while starting 117|EGL bring-up FAILED" "$OUT" | head -8 || echo "  (none)"
           FRAMEDIR="$HERE/fb-rlhd-frames"; rm -rf "$FRAMEDIR"; mkdir -p "$FRAMEDIR"
-          PNGS="$(gsutil ls "${GCS%/}/**/routec-frames/*.png" 2>/dev/null || true)"
+          PNGS="$(gsutil ls "${GCS%/}/**/routec-frames/*.png" "${GCS%/}/**/rl-capture/*.png" 2>/dev/null || true)"
           if [ -n "$PNGS" ]; then echo "$PNGS" | while read -r p; do [ -n "$p" ] && gsutil cp "$p" "$FRAMEDIR/" 2>/dev/null; done; fi
           N="$(ls "$FRAMEDIR"/*.png 2>/dev/null | wc -l | tr -d ' ')"
           STARTED="$(grep -c "117 HD started successfully" "$OUT" || true)"

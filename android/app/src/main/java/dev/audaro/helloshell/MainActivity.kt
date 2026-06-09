@@ -979,7 +979,10 @@ class MainActivity : AppCompatActivity() {
 
         // A writable RuneLite home + headless capture dir (the gamepack cache + PNG fallback evidence).
         val home = app.filesDir.absolutePath
-        val captureDir = File(app.filesDir, "rl-capture").apply { mkdirs() }.absolutePath
+        // AG3-c: in rlhd mode put the capture dir on EXTERNAL storage so Firebase --directories-to-pull can fetch the
+        // 117HD-rendered frames (the composited output, written by HeadlessCapture once isGpu=true).
+        val captureBase = if (rlhd) (app.getExternalFilesDir(null) ?: app.filesDir) else app.filesDir
+        val captureDir = File(captureBase, "rl-capture").apply { mkdirs() }.absolutePath
         // Android's default java.io.tmpdir is /tmp (absent in the app sandbox); Font.createFont stages a
         // temp file there and fails with "Problem reading font data", poisoning FontManager.<clinit>. Point
         // it at a writable dir so the gamepack fonts load.
