@@ -94,7 +94,7 @@ float d(vec2 pt1, vec2 pt2)
 // Samples a texture using a 4x4 kernel.
 vec4 textureCubic(sampler2D sampler, vec2 texCoords)
 {
-    vec2 texSize = textureSize(sampler, 0);
+    vec2 texSize = vec2(textureSize(sampler, 0));   // AG3-c: textureSize returns ivec2; strict ES needs explicit vec2()
     vec2 texelSize = 1.0 / texSize;
     vec2 texelFCoords = texCoords * texSize;
     texelFCoords -= 0.5;
