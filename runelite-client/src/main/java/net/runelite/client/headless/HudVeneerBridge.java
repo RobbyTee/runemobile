@@ -392,6 +392,17 @@ public final class HudVeneerBridge
 				}
 			}
 
+			// One-shot orb/wiki diagnostic: once the minimap cluster is built, dump MAP_CONTAINER + each orb's real
+			// canvas bounds + hidden state so the missing-orbs regression can be root-caused from the device log.
+			// Read-only; runs once per session. Grep the log for "[orbdiag]" / "mm-tree".
+			if (!orbDiagDumped && preEoc && c.getWidget(InterfaceID.ToplevelPreEoc.MINIMAP) != null)
+			{
+				orbDiagDumped = true;
+				log.info("[orbdiag] canvas={}x{} minimapReloc=({},{}) hideStones={} scalePct={}",
+					c.getCanvasWidth(), c.getCanvasHeight(), minimapX, minimapY, hideStones, minimapScalePct);
+				dumpMinimapTree(c, preEoc);
+			}
+
 			// Minimap ENLARGE: resize the globe + reposition its chrome so the whole cluster reads as a bigger
 			// minimap. Off-device the scale comes from the test prop; on device it's driven by native setMinimapScale.
 			if (TEST_APPLY)
@@ -573,6 +584,7 @@ public final class HudVeneerBridge
 	private static final int MM_NAT_SIZE = 152;   // natural globe draw-area width/height
 	private static boolean minimapTreeDumped;
 	private static boolean minimapScaleLogged;
+	private static boolean orbDiagDumped;   // one-shot device diagnostic for the missing-orbs regression
 
 	/** One-time recursive dump of the minimap cluster (MAP_CONTAINER tree) + the named chrome widgets, so a fresh
 	 *  session can see the exact child layout (bounds / relative / size modes / sprite / type) before designing the
