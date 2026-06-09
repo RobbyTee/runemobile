@@ -20,10 +20,23 @@
 > workarounds are unnecessary here. Evidence: `dev-tools/firebase/evidence/ag0-pixel8-20260608.log`. Also GREEN
 > on real HW: **A0-device/Q11** (the embedded JVM `dlopen`s libjvm from `filesDir`; SELinux grants execute).
 >
-> **NEXT (the remaining go/no-go): AG1b** — run the real base-`gpu` shaders (compile/link/`glValidateProgram`)
-> on this real Mali driver, under the real HotSpot render thread + CACIO canvas. The AG1a smoke uses the
-> `--ez gpuSmoke` intent extra, which Firebase Robo can't pass — so AG1b needs either a standalone
-> default-activity smoke variant (like the AG0 recon APK) or BrowserStack/an owned device.
+> **STATUS — AG1b GREEN on the REAL Mali driver (2026-06-08, Pixel 8 / Mali-G715, GLES 3.2). THE PROJECT-WIDE
+> GPU COIN-FLIP CLEARED.** `ANDROID_AG1B esVer=320 es sceneVert=true sceneFrag=true uiVert=true uiFrag=true
+> sceneLink+Validate=true uiLink+Validate=true → VERDICT=PASS`: all four real base-`gpu` shaders compile, both
+> programs link, and **`glValidateProgram` passes** on real mobile silicon — the exact step `Shader.java` treats
+> as fatal, the one the iOS proof never ran on a real GLES driver. The downport that got there is the proven iOS
+> "5 B1 edits" ported to Kotlin (drop pre-`#version` + re-version + precision; strip `noperspective`; strip float
+> `f` suffix; 9 explicit int→float casts), each rediscovered live by iterating real compiles. Harness:
+> `:recon` app (it runs AG0 then AG1b in one launch); gate `fb-gate.sh recon`; evidence
+> `dev-tools/firebase/evidence/ag1b-pixel8-20260608.log`. NOTE: this validates the SHADER path (the load-bearing
+> unknown). The AG1a facade/EGL `OpenGL33` path is separately GREEN on the emulator; the CACIO-canvas +
+> HotSpot-render-thread sub-risks (run the unmodified `GpuPlugin.startUp` end-to-end) remain for AG2.
+>
+> **NEXT: AG2** — wire the full GL surface so the unmodified base `gpu` plugin renders the real scene: facade-back
+> the client jar (strip lwjgl, substitute the facade), port the gpu-branch `Hooks.java:559` snapshot gate + add
+> `gpuPublish`/`gpuFrameBackBuffer` to JavaBridge, move the 330→ES downport into the `glShaderSource` shim,
+> `glReadPixels`→`int[]`→existing blit (Phase 1). The base-gpu odds are now materially up — the shader go/no-go
+> is retired; AG2 is wiring + colour/depth correctness, not an open question of viability.
 
 # Android GPU Rendering + 117HD: Final Plan (post-review)
 

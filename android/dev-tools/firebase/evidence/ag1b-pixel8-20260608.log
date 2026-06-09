@@ -1,0 +1,13 @@
+# Track G AG1b — real base-gpu shader compile/link/glValidateProgram on a REAL device.
+# Pixel 8 (shiba) / ARM Mali-G715 / GLES 3.2, Firebase Test Lab, 2026-06-08. VERDICT=PASS.
+# The project-wide GPU coin-flip: all 4 base-gpu shaders compile+link+VALIDATE on the real Mali driver
+# after the 330->ES downport (the iOS 5 B1 edits). The thing the iOS proof never ran on a real GLES driver.
+
+ANDROID_AG1B esVer=320 es sceneVert=true sceneFrag=true uiVert=true uiFrag=true sceneLink+Validate=true uiLink+Validate=true
+ANDROID_AG1B VERDICT=PASS
+ANDROID_AG0 esTier=32(reqMinor=2) GL_VERSION="OpenGL ES 3.2 v1.r47p0-01eac0.32bf74397e5661efd860483910b1a861" GLSL="OpenGL ES GLSL ES 3.20" vendor="ARM" renderer="Mali-G715"
+ANDROID_AG0 compute=true maxComputeInvocations=512 maxComputeGroupsX=65535 computeShader=true
+ANDROID_AG0 clipControl=true bgra8888=true anisotropic=true maxSamples=4
+ANDROID_AG0 readback=true rgba16uiArrayRenderable=true depth24=true depth32f=true
+ANDROID_AG0 baseGpuOk=true hd117CleanComputePath=true
+ANDROID_AG0 VERDICT=PASS
