@@ -51,6 +51,7 @@ public final class RLHDStarter
 	private static final int MAX_ATTEMPTS = 40;     // RLHD's own startUp retry needs the game cache; allow ~a minute
 
 	private static boolean done;
+	private static boolean configForced;
 	private static boolean loadIssued;
 	private static int attempts;
 	private static long lastActionMs;
@@ -92,6 +93,22 @@ public final class RLHDStarter
 			return;
 		}
 		lastActionMs = now;
+
+		// Phase 0: BEFORE loading the plugin, force the simplest GLSL-ES paths so HdPlugin.startUp's shader compile
+		// uses them: uiScalingMode=LINEAR (else HYBRID/xBR pull in the int-heavy scale/*.glsl) and tiledLighting=false
+		// (else the tiled-lighting program + image-store path compile). Config writes are queued on the client thread;
+		// returning here lets them commit before the load on the next tick. (Group "hd" per HdPluginConfig.)
+		if (!configForced)
+		{
+			final String a = MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");
+			final String b = MobileUiBridge.setConfig("hd", "tiledLighting", "false");
+			if (a.contains("\"ok\":true") && b.contains("\"ok\":true"))
+			{
+				configForced = true;
+				log.info("[routecrlhd] forced hd.uiScalingMode=LINEAR + tiledLighting=false");
+			}
+			return;
+		}
 
 		final Canvas canvas = client.getCanvas();
 		final boolean valid = canvas != null && canvas.isValid();
