@@ -759,6 +759,9 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"-Drunelite.hub=true",                      // plugin hub: drop --safe-mode so external plugins load
                                                      // (device-de-risked 2026-06-02). Also disables the
                                                      // headless-irrelevant GPU plugin.
+        @"-Drunelite.nosplash=true",                 // no desktop Swing splash (its JFrame creation under CACIO
+                                                     // aborted ExternalPluginManager.refreshPlugins -> hub plugins
+                                                     // were recorded in config but never downloaded/loaded).
         @"-Drunelite.pluginhub.version=1.12.27",     // our 1.12.28-SNAPSHOT has no hub manifest (404); 1.12.27
                                                      // is the adjacent released API the hub serves plugins for.
         // NOTE: -Drunelite.mobilechrome.repos was tried and REVERTED — repositioned stones over the world are
