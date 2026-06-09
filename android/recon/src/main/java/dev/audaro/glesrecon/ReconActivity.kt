@@ -120,6 +120,11 @@ class ReconActivity : Activity() {
             Log.i(tag, "ANDROID_AG0 readback=$readbackOk rgba16uiArrayRenderable=$rgba16uiArray depth24=$depth24 depth32f=$depth32f")
             Log.i(tag, "ANDROID_AG0 baseGpuOk=$baseGpuOk hd117CleanComputePath=$hd117Clean")
             Log.i(tag, "ANDROID_AG0 VERDICT=$verdict")
+
+            // AG1b — the real coin-flip: do the unmodified base `gpu` shaders compile/link/glValidateProgram on
+            // THIS real driver (after the 330->ES downport)? The load-bearing GPU go/no-go (Shader.java treats a
+            // validate failure as fatal; the iOS proof never ran this on a real GLES driver). Same EGL context.
+            validateBaseGpuShaders(esTier)
         } catch (t: Throwable) {
             Log.e(tag, "ANDROID_AG0 EXCEPTION $t", t)
             Log.i(tag, "ANDROID_AG0 VERDICT=FAIL")
@@ -178,5 +183,104 @@ class ReconActivity : Activity() {
             GLES30.glDeleteRenderbuffers(1, rbo, 0)
             ok
         } catch (e: Exception) { false }
+    }
+
+    // ===== AG1b — real base-gpu shader compile/link/validate on the live driver ==============================
+    // Reproduces RuneLite's Template (recursive #include + the 3 macro #defines from GpuPlugin.createTemplate)
+    // on the bundled shader source, applies the 330->ES downport (strip the pre-#version license, re-version,
+    // add precision), then compiles vert+frag (scene PROGRAM) and vertui+fragui (UI_PROGRAM), links, and
+    // glValidateProgram's each — exactly the gate GpuPlugin.initProgram drives. Logs ANDROID_AG1B + the driver's
+    // info log on any failure (which is the diagnostic for what a Mali/Adreno downport still needs).
+    private fun validateBaseGpuShaders(esTier: Int) {
+        val esVer = when { esTier >= 32 -> "320 es"; esTier >= 31 -> "310 es"; else -> "300 es" }
+        // GpuPlugin.createTemplate's macro includes (default config: TEXTURE_COUNT=256, LINEAR scaling, no colorblind).
+        val macros = mapOf(
+            "texture_config" to "#define TEXTURE_COUNT 256\n",
+            "sampling_mode" to "#define SAMPLING_MODE 1\n",
+            "colorblind_mode" to "#define COLORBLIND_MODE 0\n")
+        try {
+            // A VAO must be bound for glValidateProgram (GpuPlugin.initProgram notes this) — bind one.
+            val vao = IntArray(1); GLES30.glGenVertexArrays(1, vao, 0); GLES30.glBindVertexArray(vao[0])
+            val sceneVs = compileStage(GLES30.GL_VERTEX_SHADER, "vert.glsl", macros, esVer, "scene.vert")
+            val sceneFs = compileStage(GLES30.GL_FRAGMENT_SHADER, "frag.glsl", macros, esVer, "scene.frag")
+            val uiVs = compileStage(GLES30.GL_VERTEX_SHADER, "vertui.glsl", macros, esVer, "ui.vert")
+            val uiFs = compileStage(GLES30.GL_FRAGMENT_SHADER, "fragui.glsl", macros, esVer, "ui.frag")
+            val sceneProg = if (sceneVs.second && sceneFs.second) linkValidate(sceneVs.first, sceneFs.first, "scene") else false
+            val uiProg = if (uiVs.second && uiFs.second) linkValidate(uiVs.first, uiFs.first, "ui") else false
+            val pass = sceneVs.second && sceneFs.second && uiVs.second && uiFs.second && sceneProg && uiProg
+            Log.i(tag, "ANDROID_AG1B esVer=$esVer sceneVert=${sceneVs.second} sceneFrag=${sceneFs.second} uiVert=${uiVs.second} uiFrag=${uiFs.second} sceneLink+Validate=$sceneProg uiLink+Validate=$uiProg")
+            Log.i(tag, "ANDROID_AG1B VERDICT=${if (pass) "PASS" else "FAIL"}")
+        } catch (t: Throwable) {
+            Log.e(tag, "ANDROID_AG1B EXCEPTION $t", t)
+            Log.i(tag, "ANDROID_AG1B VERDICT=FAIL")
+        }
+    }
+
+    /** RuneLite Template.process: recursive #include (file from assets, or a macro #define), passthrough else. */
+    private fun loadTemplate(filename: String, macros: Map<String, String>): String {
+        val sb = StringBuilder()
+        val raw = assets.open("gpu-shaders/$filename").bufferedReader().use { it.readText() }
+        for (line in raw.split(Regex("\r?\n"))) {
+            if (line.startsWith("#include ")) {
+                var res = line.substring(9).trim()
+                if (res.startsWith("\"") && res.endsWith("\"")) res = res.substring(1, res.length - 1)
+                val macro = macros[res]
+                if (macro != null) sb.append(macro) else sb.append(loadTemplate(res, macros))
+            } else sb.append(line).append('\n')
+        }
+        return sb.toString()
+    }
+
+    /** 330 -> ES downport — RuneLite base-gpu shaders to GLSL ES. The proven "5 B1 edits" (ported from the iOS
+     *  Route-C downportShaderSource, gpu branch), since GLSL ES does NO implicit numeric conversion and reserves
+     *  some desktop qualifiers: (1+2) drop the pre-#version license + re-version + precision; (3) strip
+     *  `noperspective`; (4) strip the float-literal `f` suffix; (5) explicit int->float / ivec->vec casts at the
+     *  exact scene-vertex sites that mix integer engine uniforms/attributes with floats (vertex-only strings, so
+     *  applying to both stages is a no-op on the fragment shader). */
+    private val SCENE_VERTEX_CASTS = mapOf(
+        "vec4(vertf + base, 1)" to "vec4(vertf + vec3(base), 1)",
+        "hsl += ((entityTint.xyz - hsl) * entityTint.w) / 128;" to
+            "hsl += ((vec3(entityTint.xyz) - hsl) * float(entityTint.w)) / 128.0;",
+        "((-expandedMapLoadingChunks * 8 + 1) * TILE_SIZE)" to "(float(-expandedMapLoadingChunks * 8 + 1) * TILE_SIZE)",
+        "((104 + expandedMapLoadingChunks * 8 - 1) * TILE_SIZE)" to "(float(104 + expandedMapLoadingChunks * 8 - 1) * TILE_SIZE)",
+        "cameraX - drawDistance" to "cameraX - float(drawDistance)",
+        "cameraX + drawDistance" to "cameraX + float(drawDistance)",
+        "cameraZ - drawDistance" to "cameraZ - float(drawDistance)",
+        "cameraZ + drawDistance" to "cameraZ + float(drawDistance)",
+        "fogDepth * TILE_SIZE) * useFog" to "float(fogDepth) * TILE_SIZE) * float(useFog)")
+
+    private fun downport(src: String, esVer: String): String {
+        val idx = src.indexOf("#version")
+        var body = if (idx >= 0) src.substring(idx) else src
+        body = body.substringAfter('\n', "")                                // drop the original #version line
+        body = Regex("\\bnoperspective\\b").replace(body, "")               // (3) reserved word in ES
+        body = Regex("(\\d*\\.\\d+|\\d+\\.\\d*)[fF]").replace(body, "$1")    // (4) ES forbids the float `f` suffix
+        for ((from, to) in SCENE_VERTEX_CASTS) body = body.replace(from, to) // (5) explicit int->float casts
+        val precision = "precision highp float;\nprecision highp int;\n" +
+            "precision highp sampler2DArray;\nprecision highp usampler2DArray;\nprecision highp sampler2D;\n"
+        return "#version $esVer\n$precision$body"
+    }
+
+    private fun compileStage(type: Int, file: String, macros: Map<String, String>, esVer: String, label: String): Pair<Int, Boolean> {
+        val src = downport(loadTemplate(file, macros), esVer)
+        val id = GLES30.glCreateShader(type)
+        GLES30.glShaderSource(id, src)
+        GLES30.glCompileShader(id)
+        val st = IntArray(1); GLES30.glGetShaderiv(id, GLES30.GL_COMPILE_STATUS, st, 0)
+        val ok = st[0] != 0
+        if (!ok) Log.e(tag, "ANDROID_AG1B compile FAIL $label: ${GLES30.glGetShaderInfoLog(id).take(500)}")
+        return Pair(id, ok)
+    }
+
+    private fun linkValidate(vs: Int, fs: Int, label: String): Boolean {
+        val p = GLES30.glCreateProgram()
+        GLES30.glAttachShader(p, vs); GLES30.glAttachShader(p, fs)
+        GLES30.glLinkProgram(p)
+        val ls = IntArray(1); GLES30.glGetProgramiv(p, GLES30.GL_LINK_STATUS, ls, 0)
+        if (ls[0] == 0) { Log.e(tag, "ANDROID_AG1B link FAIL $label: ${GLES30.glGetProgramInfoLog(p).take(500)}"); return false }
+        GLES30.glValidateProgram(p)
+        val vsRes = IntArray(1); GLES30.glGetProgramiv(p, GLES30.GL_VALIDATE_STATUS, vsRes, 0)
+        if (vsRes[0] == 0) { Log.e(tag, "ANDROID_AG1B validate FAIL $label: ${GLES30.glGetProgramInfoLog(p).take(500)}"); return false }
+        return true
     }
 }
