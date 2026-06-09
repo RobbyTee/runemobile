@@ -181,10 +181,16 @@
 > a `(?![A-Za-z0-9_])` lookahead). **Emulator wall (definitive): `GL caps: texture_buffer=0 (EXT=0 OES=0) io_blocks=0
 > geom=0`** — ANGLE/SwiftShader (ES 3.1) has NO texture-buffer, so `scene_vert`'s `isamplerBuffer textureFaces` (TBO
 > per-face data, fundamental to Zone) can't compile here. These are GLES 3.2 CORE on the real Pixel 8/Mali-G715 (AG0
-> `esTier=32`). So the int→float port is PROVEN for everything the emulator can compile; **`scene_vert` + `scene_geom`
-> + the shadow programs + the first HD frame are the device-only remainder** (run `routecrlhd` on the Pixel 8: there
-> `#version 320 es` makes TBO/IO-blocks/geometry core, no `#extension` needed; `scene_geom`/`shadow_vert`/`shadow_frag`
-> still need their own int→float overlay pass, doable blind then verified on-device). Overlay dev aids in librlawt:
+> `esTier=32`). So the int→float port is PROVEN for everything the emulator can compile. **UPDATE (2026-06-09):
+> `scene_vert`/`scene_geom`/`shadow_vert`/`shadow_frag` + `scaling/bicubic.glsl` are now BLIND-PORTED too**
+> (copy-of-original + targeted int→float; staged GREEN, emulator still walls only at scene_vert's TBO — no new
+> errors), and **`RLHDStarter` now forces `uiScalingMode=LINEAR` + `tiledLighting=false`** before load (RLHD defaults
+> HYBRID + tiled, which pull in the int-heavy `scale/*.glsl` + the tiled-lighting program/image-store; LINEAR +
+> non-tiled use the simple, already-ported paths). **So the ONLY device-only remainder is running `routecrlhd` on a
+> real ES-3.2 device** (Pixel 8: TBO/IO-blocks/geometry are `#version 320 es` core, no `#extension`): scene+shadow
+> programs compile → loaders 712-718 run → "117 HD started successfully!" → first HD frame (`adb exec-out screencap`).
+> Any residual int→float site the blind pass missed surfaces there (toggle `files/rlhd_shaderdump` to map it).
+> Overlay dev aids in librlawt:
 > `#line`-strip (error lines map to the flat source), toggleable numbered shader dump (`touch files/rlhd_shaderdump`),
 > one-time GL-caps log. ─── (original foundation note follows) ───
 > **STATUS — AG3-c IN PROGRESS (foundation GREEN, 2026-06-08): shader-overlay mechanism + first file ported.**
