@@ -401,6 +401,9 @@ public final class HudVeneerBridge
 				log.info("[orbdiag] canvas={}x{} minimapReloc=({},{}) hideStones={} scalePct={}",
 					c.getCanvasWidth(), c.getCanvasHeight(), minimapX, minimapY, hideStones, minimapScalePct);
 				dumpMinimapTree(c, preEoc);
+				// Recursively dump the MAP_CONTAINER subtree so we see what's actually loaded inside the (visible
+				// but apparently empty) ORBS layer — the orbs interface may be nested under different ids.
+				dumpTree("MC", c.getWidget(InterfaceID.ToplevelPreEoc.MAP_CONTAINER), 0);
 			}
 
 			// Minimap ENLARGE: resize the globe + reposition its chrome so the whole cluster reads as a bigger
@@ -574,6 +577,36 @@ public final class HudVeneerBridge
 		catch (RuntimeException ex)
 		{
 			return false;
+		}
+	}
+
+	/** Diagnostic: recursively dump a widget's static/dynamic/nested children (id, bounds, hidden, sprite) so we can
+	 *  see what's actually loaded inside a layer (e.g. the orbs interface nested into the ORBS layer). Depth/count
+	 *  capped to keep the log sane. */
+	private static void dumpTree(String path, Widget w, int depth)
+	{
+		if (w == null || depth > 3)
+		{
+			return;
+		}
+		dumpWidgetObj(path, w);
+		final Widget[][] groups = { w.getStaticChildren(), w.getDynamicChildren(), w.getNestedChildren() };
+		final String[] gn = { "s", "d", "n" };
+		for (int gi = 0; gi < groups.length; gi++)
+		{
+			final Widget[] kids = groups[gi];
+			if (kids == null)
+			{
+				continue;
+			}
+			final int n = Math.min(kids.length, 40);
+			for (int i = 0; i < n; i++)
+			{
+				if (kids[i] != null)
+				{
+					dumpTree(path + "/" + gn[gi] + i, kids[i], depth + 1);
+				}
+			}
 		}
 	}
 
