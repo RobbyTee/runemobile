@@ -82,16 +82,6 @@ public final class HudVeneerBridge
 	// stays click-to-walk + orb-clickable (it IS the live engine HUD). This is A4 (minimap) + A5 (orbs) in one move.
 	private static volatile int minimapX = -1;
 	private static volatile int minimapY = -1;
-	// A/B: relocating MAP_CONTAINER (setForcedPosition+revalidate) tears down the engine's nested orbs interface
-	// (HP/prayer/run/spec/wiki), so the orbs vanish. Disable the cluster relocate to confirm + restore the orbs
-	// (the cluster then renders at its natural top-right, which on this landscape canvas is ~the same spot).
-	private static final boolean MINIMAP_RELOCATE = false;
-	// A/B: hiding the tab-stones' grandparent container is the suspected cause of the orbs interface never loading
-	// (desktop with hideStones=false loads the orbs; device with hideStones=true never does). Disable to confirm.
-	private static final boolean HIDE_STONES_ENABLED = false;
-	// A/B: side-panel relocate + op-script tab-open are the only veneer ops active on the device but NOT in the
-	// passing desktop run (which has orbs). Disable to test whether they suppress the orbs interface load.
-	private static final boolean SIDE_AND_TAB_ENABLED = false;
 
 	// Side panel (SIDE_CONTAINER = the inventory / equipment / spellbook / etc. panel) relocate. sideX < 0 = off.
 	// Same root-anchored relocate as the minimap; edge-to-edge needs it pulled inward so it doesn't clip under the
@@ -390,37 +380,16 @@ public final class HudVeneerBridge
 
 			// Minimap+orbs cluster relocate (independent of chat). Force MAP_CONTAINER each frame so it survives
 			// TOPLEVEL_REDRAW; revalidate cascades to the globe + orb children.
-			if (MINIMAP_RELOCATE && minimapX >= 0)
+			if (minimapX >= 0)
 			{
 				final int containerId = preEoc
 					? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER;
 				final Widget w = c.getWidget(containerId);
-				// Only relocate once the engine has loaded the orbs interface into the cluster. Relocating
-				// (setForcedPosition + per-frame revalidate) BEFORE the orbs open disrupts the open and the orbs
-				// (HP/prayer/run/spec/wiki) never appear — device readback: orbs absent when relocated from frame 1,
-				// present when not relocated. Once loaded they are nested children of MAP_CONTAINER and move with it.
-				if (w != null && c.getWidget(InterfaceID.Orbs.ORB_HEALTH) != null)
+				if (w != null)
 				{
 					w.setForcedPosition(minimapX, minimapY);
 					w.revalidate();
 				}
-			}
-
-			// Timeline orb/wiki diagnostic: log orb presence + ORBS-layer child count + every veneer flag once a
-			// second for ~48s, so the missing-orbs regression shows exactly WHEN the orbs vanish and WHICH veneer
-			// op correlates. Grep the device log for "[orbtl]".
-			if (preEoc && orbDiagFrames < 2400)
-			{
-				if (orbDiagFrames % 50 == 0)
-				{
-					final boolean orbH = c.getWidget(InterfaceID.Orbs.ORB_HEALTH) != null;
-					log.info("[orbtl] f={} canvas={}x{} orbH={} orbsKids={} chat=({},{}) hideChat={} chatCollapsed={} "
-							+ "tabRowH={} chatAreaW={} minimapReloc={} relocOn={} sideX={} hideStones={} scalePct={}",
-						orbDiagFrames, c.getCanvasWidth(), c.getCanvasHeight(), orbH, orbsChildCount(c, preEoc),
-						chatX, chatY, hideChat, chatCollapsed, chatTabRowH, chatAreaW, minimapX, MINIMAP_RELOCATE,
-						sideX, hideStones, minimapScalePct);
-				}
-				orbDiagFrames++;
 			}
 
 			// Minimap ENLARGE: resize the globe + reposition its chrome so the whole cluster reads as a bigger
@@ -439,7 +408,7 @@ public final class HudVeneerBridge
 			}
 
 			// Side panel relocate (independent). No-op until a tab is open (SIDE_CONTAINER then becomes non-null).
-			if (SIDE_AND_TAB_ENABLED && sideX >= 0)
+			if (sideX >= 0)
 			{
 				final int sideId = preEoc
 					? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER;
@@ -458,7 +427,7 @@ public final class HudVeneerBridge
 			// GRANDPARENT holds the whole row (icons + backgrounds), so hiding it clears the row completely
 			// (StoneSuppressProbe steady-state PNG + device). Stones still resolve under the hidden ancestor, so
 			// openTab (replaying a stone's op script) still switches tabs. STONE0 = left half, STONE7 = right half.
-			if (HIDE_STONES_ENABLED && hideStones)
+			if (hideStones)
 			{
 				final int[] ids = stoneIds(preEoc);
 				hideRowOf(c, ids[0]);
@@ -467,7 +436,7 @@ public final class HudVeneerBridge
 
 			// One-shot: open a tab by replaying its stone's op script (works even with the stone hidden).
 			final int openIdx = pendingOpenTab;
-			if (SIDE_AND_TAB_ENABLED && openIdx >= 0)
+			if (openIdx >= 0)
 			{
 				pendingOpenTab = -1;
 				openTabNow(c, preEoc, openIdx);
@@ -597,65 +566,6 @@ public final class HudVeneerBridge
 		}
 	}
 
-	/** Diagnostic: how many children (static+dynamic+nested) the ORBS layer currently has — the orbs interface, when
-	 *  loaded, appears here. 0 = empty (orbs not loaded), -1 = layer missing, -2 = error. */
-	private static int orbsChildCount(Client c, boolean preEoc)
-	{
-		try
-		{
-			final Widget orbs = c.getWidget(preEoc
-				? InterfaceID.ToplevelPreEoc.ORBS : InterfaceID.ToplevelOsrsStretch.ORBS);
-			if (orbs == null)
-			{
-				return -1;
-			}
-			int n = 0;
-			final Widget[][] groups = { orbs.getStaticChildren(), orbs.getDynamicChildren(), orbs.getNestedChildren() };
-			for (Widget[] g : groups)
-			{
-				if (g != null)
-				{
-					n += g.length;
-				}
-			}
-			return n;
-		}
-		catch (RuntimeException ex)
-		{
-			return -2;
-		}
-	}
-
-	/** Diagnostic: recursively dump a widget's static/dynamic/nested children (id, bounds, hidden, sprite) so we can
-	 *  see what's actually loaded inside a layer (e.g. the orbs interface nested into the ORBS layer). Depth/count
-	 *  capped to keep the log sane. */
-	private static void dumpTree(String path, Widget w, int depth)
-	{
-		if (w == null || depth > 3)
-		{
-			return;
-		}
-		dumpWidgetObj(path, w);
-		final Widget[][] groups = { w.getStaticChildren(), w.getDynamicChildren(), w.getNestedChildren() };
-		final String[] gn = { "s", "d", "n" };
-		for (int gi = 0; gi < groups.length; gi++)
-		{
-			final Widget[] kids = groups[gi];
-			if (kids == null)
-			{
-				continue;
-			}
-			final int n = Math.min(kids.length, 40);
-			for (int i = 0; i < n; i++)
-			{
-				if (kids[i] != null)
-				{
-					dumpTree(path + "/" + gn[gi] + i, kids[i], depth + 1);
-				}
-			}
-		}
-	}
-
 	// Minimap-enlarge geometry. The globe draw-area widget is RIGHT+TOP anchored, so growing its absolute size keeps
 	// its top-right corner fixed and grows it left+down; at 130% the rendered terrain disc is centre ~(120,100)
 	// radius ~87 (cluster-local). The chrome is then placed at explicit cluster-local targets (see applyMinimapScale)
@@ -663,7 +573,6 @@ public final class HudVeneerBridge
 	private static final int MM_NAT_SIZE = 152;   // natural globe draw-area width/height
 	private static boolean minimapTreeDumped;
 	private static boolean minimapScaleLogged;
-	private static int orbDiagFrames;   // timeline diagnostic for the missing-orbs regression
 
 	/** One-time recursive dump of the minimap cluster (MAP_CONTAINER tree) + the named chrome widgets, so a fresh
 	 *  session can see the exact child layout (bounds / relative / size modes / sprite / type) before designing the
