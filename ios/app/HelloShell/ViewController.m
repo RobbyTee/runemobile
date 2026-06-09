@@ -13,7 +13,7 @@
 #import <unistd.h>
 #import <fcntl.h>
 
-@interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate>
+@interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate, UNUserNotificationCenterDelegate>
 {
     // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
     // desktop stone. A C array, so it lives as an ivar rather than a property.
@@ -2143,8 +2143,9 @@ static int chatRowCanvasH(void) {
     if (n.length == 0) return;
     if (!self.notifAuthRequested) {
         self.notifAuthRequested = YES;
-        [[UNUserNotificationCenter currentNotificationCenter]
-            requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
+        UNUserNotificationCenter *unc = [UNUserNotificationCenter currentNotificationCenter];
+        unc.delegate = self;   // so banners show even while foregrounded (the JVM suspends in background)
+        [unc requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
             completionHandler:^(BOOL granted, NSError *err) {}];
     }
     unichar sepCh = 1;   // the "titlebody" separator the bridge uses (control char, not a literal)
@@ -2186,6 +2187,15 @@ static int chatRowCanvasH(void) {
 
 - (void)safariViewControllerDidFinish:(SFSafariViewController *)controller {
     self.safariOpen = NO;
+}
+
+// Show notification banners even while the app is foregrounded — the JVM suspends in the background, so a
+// fired notification almost always lands while the game is on screen.
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+       willPresentNotification:(UNNotification *)notification
+         withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
+    completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionSound
+                      | UNNotificationPresentationOptionList);
 }
 
 // Save the live composited frame to Photos. The engine's auto-screenshots write to the sandbox dir (unreachable
