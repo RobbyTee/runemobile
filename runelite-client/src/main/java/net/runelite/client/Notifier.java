@@ -172,6 +172,13 @@ public class Notifier
 		log.debug("{}", message);
 		eventBus.post(new NotificationFired(notification, message, notification.getTrayIconType()));
 
+		// Mobile delivery channel: hand every fired (enabled) notification to the native shell BEFORE the desktop
+		// focus gate below — HeadlessClientUI.isFocused() is always true, so that gate (which suppresses
+		// sendWhenFocused=false notifications while the window is focused) would otherwise drop nearly every
+		// notification on a phone, where "focused" is meaningless (the app is the whole screen). Additive + gated:
+		// a no-op unless the mobile UI is active. The native shell raises the real OS notification.
+		net.runelite.client.headless.MobileUiBridge.publishNotification(buildTitle(), message);
+
 		if (!notification.isSendWhenFocused() && clientUI.isFocused())
 		{
 			return;
@@ -189,12 +196,6 @@ public class Notifier
 				clientUI.forceFocus();
 				break;
 		}
-
-		// Mobile delivery channel: hand every fired (enabled, focus-passing) notification to the native shell —
-		// an app sandbox has no tray / taskbar / shell-out, so the desktop OS-notification paths below are inert
-		// there. Additive + gated: a no-op unless the mobile UI is active. The native shell raises the real OS
-		// notification. The in-canvas flash + in-chat game-message channels below still render through the engine.
-		net.runelite.client.headless.MobileUiBridge.publishNotification(buildTitle(), message);
 
 		if (notification.isTray())
 		{

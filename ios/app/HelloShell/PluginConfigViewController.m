@@ -154,9 +154,21 @@
         NSString *units = [it[@"units"] isKindOfClass:[NSString class]] ? it[@"units"] : @"";
         cell.detailTextLabel.text = value ? [value stringByAppendingString:units] : @"(default)";
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    } else if ([type isEqualToString:@"notification"]) {
+        // Notification config is a compound object; surface its primary control — enabled — as a toggle (the
+        // engine checks the per-item enabled before falling back to defaults, so flipping it cleanly turns this
+        // notification on/off). Sound/flash/etc. are a future sub-screen; on mobile the banner is delivered
+        // regardless of the desktop sound/flash fields.
+        UISwitch *sw = [[UISwitch alloc] init];
+        sw.on = [self notificationEnabled:value];
+        sw.tag = (indexPath.section << 16) | indexPath.row;
+        [sw addTarget:self action:@selector(onNotificationSwitch:) forControlEvents:UIControlEventValueChanged];
+        cell.accessoryView = sw;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
     } else {
-        // set / keybind / notification / dimension / unknown → read-only for v1.
-        cell.detailTextLabel.text = value ?: @"(not editable yet)";
+        // set / keybind / dimension / unknown → read-only for v1. Don't dump raw serialized blobs as the value.
+        BOOL looksSerialized = [value hasPrefix:@"{"] || [value hasPrefix:@"["];
+        cell.detailTextLabel.text = (value && !looksSerialized) ? value : @"(not editable yet)";
         cell.detailTextLabel.textColor = [UIColor colorWithWhite:0.5 alpha:1.0];
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
     }
@@ -202,6 +214,35 @@
     NSIndexPath *ip = [NSIndexPath indexPathForRow:(sw.tag & 0xFFFF) inSection:(sw.tag >> 16)];
     NSMutableDictionary *it = [self itemAt:ip];
     [self writeKey:it[@"key"] value:(sw.isOn ? @"true" : @"false") item:it];
+}
+
+// The "enabled" field of a serialized Notification config value (default YES when absent/unparseable).
+- (BOOL)notificationEnabled:(NSString *)json {
+    if (![json isKindOfClass:[NSString class]] || json.length == 0) return YES;
+    id obj = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if (![obj isKindOfClass:[NSDictionary class]]) return YES;
+    id e = ((NSDictionary *)obj)[@"enabled"];
+    return e ? [e boolValue] : YES;
+}
+
+// Toggle a Notification config item on/off by flipping ONLY its "enabled" field (preserving every other field),
+// then writing the re-serialized object back. The engine checks per-item enabled first, so this turns the
+// notification on/off without overriding the user's other notification settings.
+- (void)onNotificationSwitch:(UISwitch *)sw {
+    NSIndexPath *ip = [NSIndexPath indexPathForRow:(sw.tag & 0xFFFF) inSection:(sw.tag >> 16)];
+    NSMutableDictionary *it = [self itemAt:ip];
+    NSString *cur = [it[@"value"] isKindOfClass:[NSString class]] ? it[@"value"] : @"";
+    NSMutableDictionary *obj = nil;
+    if (cur.length) {
+        id parsed = [NSJSONSerialization JSONObjectWithData:[cur dataUsingEncoding:NSUTF8StringEncoding]
+                                                    options:NSJSONReadingMutableContainers error:nil];
+        if ([parsed isKindOfClass:[NSDictionary class]]) obj = parsed;
+    }
+    if (!obj) obj = [NSMutableDictionary dictionary];
+    obj[@"enabled"] = @(sw.isOn);
+    NSData *out = [NSJSONSerialization dataWithJSONObject:obj options:0 error:nil];
+    NSString *json = out ? [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding] : nil;
+    if (json) [self writeKey:it[@"key"] value:json item:it];
 }
 
 - (void)editEnum:(NSMutableDictionary *)it at:(NSIndexPath *)ip {
