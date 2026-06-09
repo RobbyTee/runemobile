@@ -66,6 +66,16 @@ fi
 #    (facade is in the base-gpu jar). Keep the resource tree exactly as RLHD loads it via getResourceAsStream.
 cp -R "$WORK/rlhd_out/." "$WORK/jar/"
 [ -d "$RLHD/src/main/resources" ] && cp -R "$RLHD/src/main/resources/." "$WORK/jar/"
+# AG3-c shader overlay: our GLSL-ES ports of the Zone shaders (RLHD's #version 330 shaders use int literals in
+# float contexts that strict GLSL ES rejects). The overlay holds full fixed copies that replace the pristine
+# rlhd-src ones — committed + reproducible, keeping rlhd-src untouched. (rc_downport still handles version/
+# precision/noperspective at load; the overlay handles the int->float typing the downport can't do safely.)
+OVERLAY="$(pwd)/shader-overlay"
+if [ -d "$OVERLAY" ]; then
+	cp -R "$OVERLAY/." "$WORK/jar/"
+	OVR=$(cd "$OVERLAY" && find . -name '*.glsl' | wc -l | tr -d ' ')
+	echo "shader overlay applied : $OVR file(s)"
+fi
 
 # 5) asserts.
 RLHD_CLASSES=$(cd "$WORK/jar" && { find rs117 -name '*.class' 2>/dev/null || true; } | wc -l | tr -d ' ')

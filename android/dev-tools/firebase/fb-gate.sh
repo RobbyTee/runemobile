@@ -14,6 +14,9 @@
 # Usage:
 #   ./fb-gate.sh login  [apk]   # A0-device: pushed tokens.json -> autologin -> LOGGED_IN (Robo plain launch)
 #   ./fb-gate.sh recon  [apk]   # AG0: GLES tier readout (needs the recon APK; AG0 not built yet)
+#   ./fb-gate.sh rlhd   [apk]   # AG3-c: 117HD (RLHD Zone) shaders compile + HdPlugin.startUp on the REAL Mali
+#                               # driver (pre-login, so the datacenter login block is irrelevant). Pushes an
+#                               # rlhd.mode marker + tokens, pulls frames, gates for ZoneRenderer/started/no-ShaderException.
 #   ./fb-gate.sh gpu    [apk]   # AG2-P5: base gpu plugin renders on the REAL driver. Pushes tokens + a gpu.mode
 #                               # marker (Robo can't pass --ez routecgpu), pulls the dumped frames, gates the log
 #                               # for isGpu/createGLContext/gpuPublish + NO ShaderException, and reports the PNGs.
@@ -41,6 +44,7 @@ PKG="dev.audaro.helloshell"
 DEV_FILES="/sdcard/Android/data/$PKG/files"
 DEV_TOKENS="$DEV_FILES/tokens.json"
 DEV_MARKER="$DEV_FILES/gpu.mode"
+DEV_RLHD="$DEV_FILES/rlhd.mode"
 DEV_NETPROBE="$DEV_FILES/netprobe.mode"
 DEV_FRAMES="$DEV_FILES/routec-frames"
 
@@ -77,17 +81,39 @@ if [ "$MODE" = "gpu" ]; then
   PULL=(--directories-to-pull "$DEV_FRAMES")
   : "${FB_TIMEOUT:=300s}"   # GPU boot + login + a few frame dumps needs longer than the 180s default
 fi
+if [ "$MODE" = "rlhd" ]; then
+  # AG3-c: 117HD (RLHD Zone) on the REAL Mali driver. Seed an rlhd.mode marker (MainActivity boots routecrlhd when it
+  # exists) + push tokens. The Zone shader compile + HdPlugin.startUp happen at the LOGIN SCREEN (pre-login: startUp
+  # gates on vanillaTexturesAvailable, not LOGGED_IN), so the datacenter login block is IRRELEVANT here — we only need
+  # the real ES-3.2 GPU (Pixel 8/Mali = TBO/IO-blocks/geometry core, which the SwiftShader emulator lacks).
+  MARKER="$(mktemp)"; printf 'routecrlhd\n' > "$MARKER"
+  # NO tokens: the Zone shader compile is pre-login, and pushing tokens arms the gamepack's launcher login, which on
+  # a datacenter device churns in state=UNKNOWN (world connect WAF-blocked) and never settles at LOGIN_SCREEN — so
+  # RLHDStarter never fires. Marker only -> boots without login -> clean LOGIN_SCREEN -> 117HD loads + compiles.
+  # Also seed the shader-dump marker (librlawt logs the numbered downported source so a driver "0:N" error maps to
+  # a source line). Set FB_NO_SHADERDUMP=1 to skip once the Zone shaders compile clean.
+  if [ -z "${FB_NO_SHADERDUMP:-}" ]; then OTHER=(--other-files "$DEV_RLHD=$MARKER,$DEV_FILES/rlhd_shaderdump=$MARKER"); else OTHER=(--other-files "$DEV_RLHD=$MARKER"); fi
+  PULL=(--directories-to-pull "$DEV_FRAMES,$DEV_FILES/rl-capture")   # rl-capture = the 117HD-rendered frames
+  : "${FB_TIMEOUT:=420s}"   # plugin load + the full Zone shader compile + startUp + a frame dump
+  # Robo (the default) force-stops + relaunches the app every few seconds and crawls the UI (it reached
+  # LoginActivity before startUp ran). Game Loop launches the app ONCE via the TEST_LOOP intent and lets it run
+  # uninterrupted for the timeout — exactly what the long 117HD boot needs. (MainActivity boots routecrlhd on the
+  # TEST_LOOP action; the rlhd.mode marker is a harmless fallback.)
+  TYPE="game-loop"
+  TYPE_ARGS=(--scenario-numbers 1)
+fi
 
 echo "== Firebase Test Lab Robo run (device=${FB_DEVICE:-shiba}, api=${FB_VERSION:-34}, mode=$MODE) =="
 echo "   (pick a device id with: gcloud firebase test android models list)"
 GLOG="$(mktemp)"
 # Robo returns non-zero if it detects a crash; we still want the logcat, so don't let set -e abort here.
 gcloud firebase test android run \
-  --type robo \
+  --type "${TYPE:-robo}" \
   --app "$APK" \
   --device "model=${FB_DEVICE:-shiba},version=${FB_VERSION:-34},locale=en,orientation=portrait" \
   --timeout "${FB_TIMEOUT:-180s}" \
   --results-dir "$RESULTS_DIR" \
+  "${TYPE_ARGS[@]+"${TYPE_ARGS[@]}"}" \
   "${OTHER[@]+"${OTHER[@]}"}" \
   "${PULL[@]+"${PULL[@]}"}" 2>&1 | tee "$GLOG" || true   # +-expansion: safe for an empty array under set -u (bash 3.2)
 
@@ -132,6 +158,20 @@ case "$MODE" in
           [ "$SHADERR" -gt 0 ] && echo ">> NOTE: $SHADERR transient HYBRID ShaderException(s) before LINEAR recovery"
           echo ">> isGpu-active=$ACTIVE  createGLContext=$CTX  ShaderException=$SHADERR  frames=$N"
           if [ "$ACTIVE" -ge 1 ] && [ "$N" -ge 1 ]; then echo ">> VERDICT=AG2_DEVICE_PASS (base gpu renders on the real driver)"; else echo ">> VERDICT=AG2_DEVICE_NOT_GREEN (see logcat $OUT)" >&2; exit 1; fi ;;
+  rlhd)   echo "--- AG3-c: 117HD (RLHD Zone) shader compile + startUp on the real Mali driver ---"
+          grep -E "GL caps:|Renderer: *ZoneRenderer|loadAndStartPlugin .* loaded|117 HD started successfully|Using device:" "$OUT" | head -12 || true
+          echo "--- shader/compile failures (want NONE) ---"
+          grep -E "ShaderException|isamplerBuffer|Illegal use of reserved word|Error while starting 117|EGL bring-up FAILED" "$OUT" | head -8 || echo "  (none)"
+          FRAMEDIR="$HERE/fb-rlhd-frames"; rm -rf "$FRAMEDIR"; mkdir -p "$FRAMEDIR"
+          PNGS="$(gsutil ls "${GCS%/}/**/routec-frames/*.png" "${GCS%/}/**/rl-capture/*.png" 2>/dev/null || true)"
+          if [ -n "$PNGS" ]; then echo "$PNGS" | while read -r p; do [ -n "$p" ] && gsutil cp "$p" "$FRAMEDIR/" 2>/dev/null; done; fi
+          N="$(ls "$FRAMEDIR"/*.png 2>/dev/null | wc -l | tr -d ' ')"
+          STARTED="$(grep -c "117 HD started successfully" "$OUT" || true)"
+          SHADERR="$(grep -c "ShaderException\|Illegal use of reserved word" "$OUT" || true)"
+          TB="$(grep -oE "texture_buffer=[01]" "$OUT" | head -1 || true)"
+          echo "== pulled $N frame PNG(s) -> $FRAMEDIR =="
+          echo ">> 117HD-started=$STARTED  shaderErrors=$SHADERR  $TB"
+          if [ "$STARTED" -ge 1 ] && [ "$SHADERR" = 0 ]; then echo ">> VERDICT=AG3C_DEVICE_PASS (117HD Zone shaders compile + startUp on real Mali)"; else echo ">> VERDICT=AG3C_DEVICE_NOT_GREEN (see logcat $OUT)" >&2; exit 1; fi ;;
   netprobe) echo "--- NETPROBE: does the home-minted session authenticate from the Firebase (datacenter) IP? ---"
           grep -E "NETPROBE" "$OUT" || { echo "no NETPROBE lines — is the netprobe build installed?" >&2; exit 1; }
           echo "--- read: control 204 = egress OK; jagex accounts HTTP 200 = session accepted from this IP (so login fails elsewhere);"

@@ -147,11 +147,79 @@
 >   its <clinit>), **loaderJson parsed=9/9** (the bundled loader data is present + well-formed on-device). Evidence
 >   `dev-tools/gpu/evidence/ag25b-rlhdprobe-emulator-20260608.log`.
 >
-> **NEXT (AG3 — Zone bring-up):** wire RLHD into the runtime plugin lifecycle and run `HdPlugin.startUp` end-to-end so
-> the loaders' typed Gson data-load + the renderer/VAO/UBO/shader init actually execute against a live EGL/GLES context
-> (this is where the librlawt GL-delta forwarders + MemoryUtil native backing get exercised; the AG2.5-b probe proves
-> class-load/data-presence, NOT the full GL startUp). Then the Zone shaders (330, same downport family as base-gpu) +
-> first HD frame.
+> **STATUS — AG3-a GREEN on the emulator (2026-06-08).** The `librlawt` GL-delta forwarders + `MemoryUtil` natives are
+> built and register cleanly. `app/src/main/cpp/librlawt.cpp` gained ~58 Zone-delta forwarders to GLESv3 (gl32.h core:
+> glTexBuffer / glVertexAttribDivisor / glFramebufferTexture(2D/Layer) / glBindImageTexture / glCopyBufferSubData /
+> fence-sync / queries / glGetProgramBinary / compute+indirect / glBufferSubData / the int[]·Buffer glUniform*v+glGet*v
+> overloads; desktop/EXT-only ones gated off or dev-overlay-only are no-op'd) + a `kMEM` table (nmemAllocChecked/nmemFree/
+> memAddress0/nNewBuffer → malloc/free/GetDirectBufferAddress/NewDirectByteBuffer) + `GLCapabilities` now reports
+> OpenGL31/40/43 + the 4 ARB fast-path flags FALSE (→ GLES-core fallbacks). Verified: librlawt compiles arm64
+> (`buildCMakeDebug` GREEN) and gpuSmoke logs `RegisterNatives glall=0 awt=0 gl=0 mem=0 (0=OK)` — every delta signature
+> matches `GLALL.java`/`MemoryUtil.java` exactly, NO base-gpu regression (`ANDROID_AG1A VERDICT=PASS`). Evidence
+> `dev-tools/gpu/evidence/ag3a-librlawt-delta-register-emulator-20260608.log`. The forwarders' GL *behaviour* is proven
+> in AG3-b (the delta isn't exercised until `HdPlugin.startUp` actually calls these).
+>
+> **STATUS — AG3-b GREEN on the emulator (2026-06-08): 117HD loads + `HdPlugin.startUp` runs to shader compile.**
+> `RLHDStarter` (shared headless, additive; armed by `-Drunelite.routecrlhd=true`, ticks off `Hooks.draw`) loads
+> `HdPlugin` via `MobileUiBridge.loadAndStartPlugin` → the public `PluginManager.loadPlugins(List<Class>)` (RLHD is
+> `rs117.hd.*`, outside the core scan) + `startPlugin` (its `conflicts="GPU"` auto-disables the base gpu plugin;
+> `@PluginDependency(EntityHiderPlugin)` resolves from the loaded core set; `HdPluginConfig` self-binds via HdPlugin's
+> `@Provides`). A `routecrlhd` boot mode (MainActivity, classpath gpu jar + rlhd jar, login-gated; jvm_bootstrap
+> registers librlawt on the shared GL-bridge path). Verified on emulator-5554: `loaded 1 plugin(s)` → `Starting 117 HD
+> / Renderer: ZoneRenderer / LWJGL Version: 3.3.x-facade (Android EGL bridge)`; the texture/material/watertype/gameval
+> loaders RAN (texture array uploaded — fixed a missing `glTexSubImage3D(IntBuffer)` overload + the BGRA→RGBA swizzle),
+> `renderer.initialize` completed, reaching `ZoneRenderer.initializeShaders`. Evidence
+> `dev-tools/gpu/evidence/ag3b-startup-emulator-20260608.log`. So the whole plumbing (plugin lifecycle + facade +
+> librlawt delta + loaders) is proven end-to-end up to shaders; the remaining gap is the shaders themselves.
+>
+> **STATUS — AG3-c GREEN on REAL MALI (2026-06-09, Firebase Game Loop, Pixel 8): `117 HD started successfully!` +
+> isGpu=true.** The whole 117HD Zone shader set — scene_vert/frag/geom + both shadow programs + ui_vert/frag — COMPILES
+> on the real Mali-G715 driver (`GL caps: texture_buffer=1 (EXT=1 OES=1) io_blocks=1 geom=1`), `HdPlugin.startUp`
+> completes, RLHDStarter reports `GPU renderer active (isGpu=true) — 117HD up`. The XL shader port is DONE. Getting
+> there on real silicon (Firebase Game Loop, since Robo crawls + the emulator's SwiftShader has no TBO) took, in order:
+> (1) `glTexSubImage3D(IntBuffer)` overload + BGRA swizzle; (2) the int→float overlay port of ~16 shader files;
+> (3) the downport `flowMap`→`lowMap` regex bug; (4) `isamplerBuffer` default precision (real-driver only); (5) boot
+> PRE-LOGIN (no autologin) so the datacenter device settles at LOGIN_SCREEN instead of churning in UNKNOWN; (6)
+> `bicubic` `textureSize` ivec2→vec2; (7) the gamma-calibration dev-overlay `smoothstep(0,..)` (caught/non-fatal,
+> fixed — verification + a pulled 117HD frame deferred: Firebase free quota = ~5 runs/day, hit on 2026-06-09). The
+> pulled frame will be the LOGIN SCREEN rendered by 117HD (real Mali can't log in — datacenter WAF), proving the
+> pipeline; HD SCENERY still needs in-world = a real device on a residential network. ───────────
+> **STATUS — AG3-c: the SCENE FRAGMENT shader fully ports to GLSL-ES; emulator wall hit at TBO (2026-06-09).**
+> 11 Zone shader files ported via the overlay (color_utils, misc, normals, shadows, displacement, lights, water,
+> color_filters, fog + scene_frag) — every int-literal / int-vector-mix / int-uniform / int-function-arg in a float
+> context made explicit. **`scene_frag` (the big fragment shader + ALL its lighting/water/shadow/normals/displacement/
+> fog/color includes) now COMPILES CLEAN** on the emulator. Also fixed a downport bug: the float-suffix regex
+> `(\d+\.\d*)[fF]` matched `1.f` across a struct access, corrupting `material1.flowMap`→`material1.lowMap` (fixed with
+> a `(?![A-Za-z0-9_])` lookahead). **Emulator wall (definitive): `GL caps: texture_buffer=0 (EXT=0 OES=0) io_blocks=0
+> geom=0`** — ANGLE/SwiftShader (ES 3.1) has NO texture-buffer, so `scene_vert`'s `isamplerBuffer textureFaces` (TBO
+> per-face data, fundamental to Zone) can't compile here. These are GLES 3.2 CORE on the real Pixel 8/Mali-G715 (AG0
+> `esTier=32`). So the int→float port is PROVEN for everything the emulator can compile. **UPDATE (2026-06-09):
+> `scene_vert`/`scene_geom`/`shadow_vert`/`shadow_frag` + `scaling/bicubic.glsl` are now BLIND-PORTED too**
+> (copy-of-original + targeted int→float; staged GREEN, emulator still walls only at scene_vert's TBO — no new
+> errors), and **`RLHDStarter` now forces `uiScalingMode=LINEAR` + `tiledLighting=false`** before load (RLHD defaults
+> HYBRID + tiled, which pull in the int-heavy `scale/*.glsl` + the tiled-lighting program/image-store; LINEAR +
+> non-tiled use the simple, already-ported paths). **So the ONLY device-only remainder is running `routecrlhd` on a
+> real ES-3.2 device** (Pixel 8: TBO/IO-blocks/geometry are `#version 320 es` core, no `#extension`): scene+shadow
+> programs compile → loaders 712-718 run → "117 HD started successfully!" → first HD frame (`adb exec-out screencap`).
+> Any residual int→float site the blind pass missed surfaces there (toggle `files/rlhd_shaderdump` to map it).
+> Overlay dev aids in librlawt:
+> `#line`-strip (error lines map to the flat source), toggleable numbered shader dump (`touch files/rlhd_shaderdump`),
+> one-time GL-caps log. ─── (original foundation note follows) ───
+> **STATUS — AG3-c IN PROGRESS (foundation GREEN, 2026-06-08): shader-overlay mechanism + first file ported.**
+> RLHD's `#version 330` shaders use int literals in float contexts that strict GLSL-ES rejects (`1 / 2.4`,
+> `float H = 0;`, `C > 0`, `mod(x, 6)`, `vec2 * 2`, `... * SHADOW_COMBINED_MAX`) — pervasive (~100+ sites across
+> ~10 files), so the port is done as full fixed copies in a committed **overlay** (`dev-tools/gpu/shader-overlay/**`),
+> applied over pristine rlhd-src by `stage-rlhd-zone-jar.sh` (reproducible; rlhd-src untouched). Diagnostics:
+> `rc_downport` strips RLHD's `#line` directives so a driver `0:M` error maps directly to the flat downported source,
+> + a toggleable numbered shader dump (`touch files/rlhd_shaderdump`). **Done:** `utils/color_utils.glsl` (~20 sites)
+> — verified its errors clear and the scene-shader compile advances. **REMAINING (mechanical int→float, same pass):**
+> `utils/{misc,displacement,normals,shadows}.glsl` + `scene_frag.glsl` + `scene_geom.glsl`, then `fastShadow`/
+> `detailedShadow` programs + the UI program. Iterate: `touch files/rlhd_shaderdump` → run routecrlhd → map each
+> `ERROR: 0:M` to the flat dump → copy that .glsl into the overlay + fix → re-stage rlhd jar + push → repeat until
+> `sceneProgram`/shadow compile+link+validate → loaders 712-718 run → "117 HD started successfully!" → first HD frame
+> (`adb exec-out screencap`, like AG2's in-world 3D). NOTE: emulator ANGLE parses `samplerBuffer` past the
+> `GL_EXT_texture_buffer`-not-supported warning (so it's likely viable for the compile), but it's NOT colour/perf-
+> authoritative; the real Pixel 8/Mali (AG0 `esTier=32`, TBO + IO-blocks core, no `#extension` needed) is the gate.
 
 # Android GPU Rendering + 117HD: Final Plan (post-review)
 

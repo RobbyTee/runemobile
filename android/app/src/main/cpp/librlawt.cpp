@@ -19,6 +19,7 @@
 #include <GLES3/gl32.h>
 #include <android/log.h>
 #include <pthread.h>
+#include <unistd.h>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -128,13 +129,35 @@ static std::string rc_downport(const std::string &src) {
     std::string body = (v != std::string::npos) ? src.substr(v) : src;
     size_t nl = body.find('\n');                                   // drop the original #version line
     body = (nl != std::string::npos) ? body.substr(nl + 1) : std::string();
+    body = std::regex_replace(body, std::regex("#line[^\\n]*\\n"), "");                // strip RLHD #line directives (ES error lines then map to the flat source; our error path doesn't parse them)
     body = std::regex_replace(body, std::regex("\\bnoperspective\\b"), "");           // (3) reserved in ES
-    body = std::regex_replace(body, std::regex("(\\d*\\.\\d+|\\d+\\.\\d*)[fF]"), "$1"); // (4) no float `f` suffix
+    // (4) strip the float `f` suffix — but ONLY a real suffix: require a non-identifier char after the f, else
+    //     `\d+\.\d*[fF]` wrongly eats the `f` in `material1.flowMap` (matches "1.f") -> "material1.lowMap".
+    body = std::regex_replace(body, std::regex("(\\d*\\.\\d+|\\d+\\.\\d*)[fF](?![a-zA-Z0-9_])"), "$1");
     for (auto &c : kSceneVertexCasts) rc_replace_all(body, c[0], c[1]);                // (5) explicit casts
     std::string precision =
         "precision highp float;\nprecision highp int;\n"
         "precision highp sampler2DArray;\nprecision highp usampler2DArray;\nprecision highp sampler2D;\n";
-    return std::string("#version ") + sEsVer + "\n" + precision + body;
+    // GLSL ES needs a default precision for EVERY sampler type used. RLHD's Zone vertex/shadow shaders use a
+    // texture-buffer sampler (isamplerBuffer textureFaces) — add its precision, but only when the shader actually
+    // uses one (the buffer-sampler types are unknown on a driver without texture_buffer, so don't emit it otherwise).
+    if (body.find("samplerBuffer") != std::string::npos)
+        precision += "precision highp isamplerBuffer;\nprecision highp usamplerBuffer;\nprecision highp samplerBuffer;\n";
+    // 117HD Zone shaders use interface (IO) blocks + texture-buffer samplers (isamplerBuffer). These are CORE in
+    // GLSL ES 3.2 (#version 320 es, the real Pixel 8/Mali tier — no directives needed) but on an ES 3.1 context
+    // (the emulator's ANGLE) they require EXT directives. Geometry shaders (shadow pass) likewise. Emit them only
+    // for 310 es; `enable` (not `require`) keeps shaders that don't use a feature compiling even if the ext is absent.
+    std::string extns;
+    if (std::string(sEsVer) == "310 es") {
+        extns =
+            "#extension GL_EXT_shader_io_blocks : enable\n"
+            "#extension GL_OES_shader_io_blocks : enable\n"
+            "#extension GL_EXT_texture_buffer : enable\n"
+            "#extension GL_OES_texture_buffer : enable\n"
+            "#extension GL_EXT_geometry_shader : enable\n"
+            "#extension GL_OES_geometry_shader : enable\n";
+    }
+    return std::string("#version ") + sEsVer + "\n" + extns + precision + body;
 }
 
 static bool rcEglPrepareSurface(int w, int h) {
@@ -304,6 +327,17 @@ GLF rc_glShaderSource(JNIEnv* e, jclass, jint a0, jstring a1){
     const char* s=e->GetStringUTFChars(a1,nullptr);
     std::string down = rc_downport(s ? s : "");         // 330 -> GLES (the AG1b-validated recipe)
     e->ReleaseStringUTFChars(a1,s);
+    // AG3-c shader-port aid: numbered dump of the downported source so a driver "shader N line M" error maps to
+    // an exact source line (the #line strip above makes M index this flat source). Toggle by `adb shell run-as
+    // <pkg> touch files/rlhd_shaderdump` — off by default so it doesn't flood logcat in normal runs.
+    if (access("/data/data/dev.audaro.helloshell/files/rlhd_shaderdump", F_OK) == 0 ||
+        access("/sdcard/Android/data/dev.audaro.helloshell/files/rlhd_shaderdump", F_OK) == 0) {   // external = Firebase --other-files
+        static int sdidx=0; int idx=sdidx++; int ln=1; size_t p=0;
+        while (p<down.size()){ size_t nl=down.find('\n',p);
+            std::string line = down.substr(p, nl==std::string::npos ? std::string::npos : nl-p);
+            LOGI("SHDR[%d]%3d|%s", idx, ln, line.c_str()); ln++;
+            if (nl==std::string::npos) break; p=nl+1; }
+    }
     const char* ds = down.c_str();
     glShaderSource((GLuint)a0,1,&ds,nullptr);
 }
@@ -343,6 +377,101 @@ GLF rc_glClipControl(JNIEnv*, jclass, jint a0, jint a1){
     if (pglClipControlEXT) pglClipControlEXT((GLenum)a0, (GLenum)a1);   // reverse-Z if EXT_clip_control; else GEQUAL fallback (AG2)
 }
 
+// =============================================================================================================
+// AG3 — 117HD (RLHD) Zone GL-delta forwards. All GLES 3.1/3.2 core (gl32.h) and forwarded straight to GLESv3,
+// EXCEPT a few desktop/EXT entry points the Zone path either gates off (GLCapabilities reports the ARB flags
+// false -> RLHD takes the GLES-core fallback) or uses only in the dev perf overlay; those are no-op'd / shimmed
+// so they resolve but never corrupt state. Compute/indirect/storage entries are registered (gl32.h core) but
+// gated OFF on Zone — present so the class graph is fully bound.
+// =============================================================================================================
+GLF rc_glCullFace(JNIEnv*, jclass, jint a0){ glCullFace((GLenum)a0); }
+GLF rc_glFinish(JNIEnv*, jclass){ glFinish(); }
+GLF rc_glFlush(JNIEnv*, jclass){ glFlush(); }
+GLF rc_glDrawBuffer(JNIEnv*, jclass, jint a0){ GLenum b=(GLenum)a0; glDrawBuffers(1,&b); }   // GLES has glDrawBuffers only
+GLF rc_glTexBuffer(JNIEnv*, jclass, jint a0, jint a1, jint a2){ glTexBuffer((GLenum)a0,(GLenum)a1,(GLuint)a2); }
+GLF rc_glVertexAttribDivisor(JNIEnv*, jclass, jint a0, jint a1){ glVertexAttribDivisor((GLuint)a0,(GLuint)a1); }
+GLF rc_glFramebufferTexture(JNIEnv*, jclass, jint a0, jint a1, jint a2, jint a3){ glFramebufferTexture((GLenum)a0,(GLenum)a1,(GLuint)a2,a3); }
+GLF rc_glFramebufferTexture2D(JNIEnv*, jclass, jint a0, jint a1, jint a2, jint a3, jint a4){ glFramebufferTexture2D((GLenum)a0,(GLenum)a1,(GLenum)a2,(GLuint)a3,a4); }
+GLF rc_glFramebufferTextureLayer(JNIEnv*, jclass, jint a0, jint a1, jint a2, jint a3, jint a4){ glFramebufferTextureLayer((GLenum)a0,(GLenum)a1,(GLuint)a2,a3,a4); }
+GLF rc_glBindImageTexture(JNIEnv*, jclass, jint a0, jint a1, jint a2, jboolean a3, jint a4, jint a5, jint a6){ glBindImageTexture((GLuint)a0,(GLuint)a1,a2,a3,a4,(GLenum)a5,(GLenum)a6); }
+GLF rc_glCopyBufferSubData(JNIEnv*, jclass, jint a0, jint a1, jlong a2, jlong a3, jlong a4){ glCopyBufferSubData((GLenum)a0,(GLenum)a1,(GLintptr)a2,(GLintptr)a3,(GLsizeiptr)a4); }
+GLF rc_glInvalidateBufferData(JNIEnv*, jclass, jint){ /* desktop GL hint; GLES has no equivalent -> no-op */ }
+static jlong JNICALL rc_glGetBufferParameteri64(JNIEnv*, jclass, jint a0, jint a1){ GLint64 v=0; glGetBufferParameteri64v((GLenum)a0,(GLenum)a1,&v); return (jlong)v; }
+static jint JNICALL rc_glGetFramebufferAttachmentParameteri(JNIEnv*, jclass, jint a0, jint a1, jint a2){ GLint v=0; glGetFramebufferAttachmentParameteriv((GLenum)a0,(GLenum)a1,(GLenum)a2,&v); return (jint)v; }
+GLF rc_glGetIntegerv_A(JNIEnv* e, jclass, jint a0, jintArray a1){ jint* p=e->GetIntArrayElements(a1,nullptr); glGetIntegerv((GLenum)a0,(GLint*)p); e->ReleaseIntArrayElements(a1,p,0); }
+GLF rc_glGetIntegerv_B(JNIEnv* e, jclass, jint a0, jobject a1){ glGetIntegerv((GLenum)a0,(GLint*)e->GetDirectBufferAddress(a1)); }
+GLF rc_glGetProgramiv_A(JNIEnv* e, jclass, jint a0, jint a1, jintArray a2){ jint* p=e->GetIntArrayElements(a2,nullptr); glGetProgramiv((GLuint)a0,(GLenum)a1,(GLint*)p); e->ReleaseIntArrayElements(a2,p,0); }
+GLF rc_glGetProgramiv_B(JNIEnv* e, jclass, jint a0, jint a1, jobject a2){ glGetProgramiv((GLuint)a0,(GLenum)a1,(GLint*)e->GetDirectBufferAddress(a2)); }
+GLF rc_glTexParameterfv_A(JNIEnv* e, jclass, jint a0, jint a1, jfloatArray a2){ jfloat* p=e->GetFloatArrayElements(a2,nullptr); glTexParameterfv((GLenum)a0,(GLenum)a1,p); e->ReleaseFloatArrayElements(a2,p,JNI_ABORT); }
+GLF rc_glTexParameterfv_B(JNIEnv* e, jclass, jint a0, jint a1, jobject a2){ glTexParameterfv((GLenum)a0,(GLenum)a1,(const GLfloat*)e->GetDirectBufferAddress(a2)); }
+GLF rc_glUniform2f(JNIEnv*, jclass, jint a0, jfloat a1, jfloat a2){ glUniform2f(a0,a1,a2); }
+GLF rc_glUniform3f(JNIEnv*, jclass, jint a0, jfloat a1, jfloat a2, jfloat a3){ glUniform3f(a0,a1,a2,a3); }
+GLF rc_glUniform2iv_A(JNIEnv* e, jclass, jint a0, jintArray a1){ jint* p=e->GetIntArrayElements(a1,nullptr); jsize n=e->GetArrayLength(a1); glUniform2iv(a0,n/2,(const GLint*)p); e->ReleaseIntArrayElements(a1,p,JNI_ABORT); }
+GLF rc_glUniform2iv_B(JNIEnv* e, jclass, jint a0, jobject a1){ glUniform2iv(a0,(GLsizei)(e->GetDirectBufferCapacity(a1)/2),(const GLint*)e->GetDirectBufferAddress(a1)); }
+GLF rc_glUniform3iv_A(JNIEnv* e, jclass, jint a0, jintArray a1){ jint* p=e->GetIntArrayElements(a1,nullptr); jsize n=e->GetArrayLength(a1); glUniform3iv(a0,n/3,(const GLint*)p); e->ReleaseIntArrayElements(a1,p,JNI_ABORT); }
+GLF rc_glUniform3iv_B(JNIEnv* e, jclass, jint a0, jobject a1){ glUniform3iv(a0,(GLsizei)(e->GetDirectBufferCapacity(a1)/3),(const GLint*)e->GetDirectBufferAddress(a1)); }
+GLF rc_glUniform4iv_A(JNIEnv* e, jclass, jint a0, jintArray a1){ jint* p=e->GetIntArrayElements(a1,nullptr); jsize n=e->GetArrayLength(a1); glUniform4iv(a0,n/4,(const GLint*)p); e->ReleaseIntArrayElements(a1,p,JNI_ABORT); }
+GLF rc_glUniform4iv_B(JNIEnv* e, jclass, jint a0, jobject a1){ glUniform4iv(a0,(GLsizei)(e->GetDirectBufferCapacity(a1)/4),(const GLint*)e->GetDirectBufferAddress(a1)); }
+GLF rc_glUniform3fv_A(JNIEnv* e, jclass, jint a0, jfloatArray a1){ jfloat* p=e->GetFloatArrayElements(a1,nullptr); jsize n=e->GetArrayLength(a1); glUniform3fv(a0,n/3,p); e->ReleaseFloatArrayElements(a1,p,JNI_ABORT); }
+GLF rc_glUniform3fv_B(JNIEnv* e, jclass, jint a0, jobject a1){ glUniform3fv(a0,(GLsizei)(e->GetDirectBufferCapacity(a1)/3),(const GLfloat*)e->GetDirectBufferAddress(a1)); }
+GLF rc_glUniform4fv_A(JNIEnv* e, jclass, jint a0, jfloatArray a1){ jfloat* p=e->GetFloatArrayElements(a1,nullptr); jsize n=e->GetArrayLength(a1); glUniform4fv(a0,n/4,p); e->ReleaseFloatArrayElements(a1,p,JNI_ABORT); }
+GLF rc_glUniform4fv_B(JNIEnv* e, jclass, jint a0, jobject a1){ glUniform4fv(a0,(GLsizei)(e->GetDirectBufferCapacity(a1)/4),(const GLfloat*)e->GetDirectBufferAddress(a1)); }
+// fence/sync (GLES 3.0 core) — GLsync is a pointer; carry it as a jlong handle.
+static jlong JNICALL rc_glFenceSync(JNIEnv*, jclass, jint a0, jint a1){ return (jlong)(intptr_t)glFenceSync((GLenum)a0,(GLbitfield)a1); }
+static jint JNICALL rc_glClientWaitSync(JNIEnv*, jclass, jlong a0, jint a1, jlong a2){ return (jint)glClientWaitSync((GLsync)(intptr_t)a0,(GLbitfield)a1,(GLuint64)a2); }
+GLF rc_glDeleteSync(JNIEnv*, jclass, jlong a0){ glDeleteSync((GLsync)(intptr_t)a0); }
+// queries: glGen/DeleteQueries are GLES 3.0 core; timer-query (QueryCounter/GetQueryObjectui64) is EXT, dev-overlay only.
+static jint JNICALL rc_glGenQueries0(JNIEnv*, jclass){ GLuint q=0; glGenQueries(1,&q); return (jint)q; }
+GLF rc_glGenQueries_A(JNIEnv* e, jclass, jintArray a0){ jsize n=e->GetArrayLength(a0); jint* p=e->GetIntArrayElements(a0,nullptr); glGenQueries(n,(GLuint*)p); e->ReleaseIntArrayElements(a0,p,0); }
+GLF rc_glDeleteQueries1(JNIEnv*, jclass, jint a0){ GLuint q=(GLuint)a0; glDeleteQueries(1,&q); }
+GLF rc_glDeleteQueries_A(JNIEnv* e, jclass, jintArray a0){ jsize n=e->GetArrayLength(a0); jint* p=e->GetIntArrayElements(a0,nullptr); glDeleteQueries(n,(GLuint*)p); e->ReleaseIntArrayElements(a0,p,JNI_ABORT); }
+GLF rc_glQueryCounter(JNIEnv*, jclass, jint, jint){ /* EXT_disjoint_timer_query (dev perf overlay) -> no-op */ }
+GLF rc_glGetQueryObjectiv(JNIEnv* e, jclass, jint a0, jint a1, jintArray a2){ jint* p=e->GetIntArrayElements(a2,nullptr); GLuint v=0; glGetQueryObjectuiv((GLuint)a0,(GLenum)a1,&v); if(p)p[0]=(jint)v; e->ReleaseIntArrayElements(a2,p,0); }
+static jlong JNICALL rc_glGetQueryObjectui64(JNIEnv*, jclass, jint, jint){ return 0; }   // timer-query EXT -> dev overlay only
+// debug groups (KHR_debug, optional) — no-op.
+GLF rc_glObjectLabel(JNIEnv*, jclass, jint, jint, jobject){ }
+GLF rc_glPushDebugGroup(JNIEnv*, jclass, jint, jint, jobject){ }
+GLF rc_glPopDebugGroup(JNIEnv*, jclass){ }
+// program-binary cache (GLES 3.0 core).
+GLF rc_glGetProgramBinary_BB(JNIEnv* e, jclass, jint a0, jobject a1, jobject a2, jobject a3){
+    GLsizei len=0; GLenum fmt=0; void* bin=e->GetDirectBufferAddress(a3); jlong cap=e->GetDirectBufferCapacity(a3);
+    glGetProgramBinary((GLuint)a0,(GLsizei)cap,&len,&fmt,bin);
+    if (a1){ GLint* lp=(GLint*)e->GetDirectBufferAddress(a1); if(lp)lp[0]=len; }
+    if (a2){ GLint* fp=(GLint*)e->GetDirectBufferAddress(a2); if(fp)fp[0]=(GLint)fmt; }
+}
+GLF rc_glGetProgramBinary_AA(JNIEnv* e, jclass, jint a0, jintArray a1, jintArray a2, jobject a3){
+    GLsizei len=0; GLenum fmt=0; void* bin=e->GetDirectBufferAddress(a3); jlong cap=e->GetDirectBufferCapacity(a3);
+    glGetProgramBinary((GLuint)a0,(GLsizei)cap,&len,&fmt,bin);
+    if (a1){ jint v=(jint)len; e->SetIntArrayRegion(a1,0,1,&v); }
+    if (a2){ jint v=(jint)fmt; e->SetIntArrayRegion(a2,0,1,&v); }
+}
+// compute / indirect (GLES 3.1 core) — registered for full binding; gated OFF on Zone (never invoked).
+GLF rc_glDispatchCompute(JNIEnv*, jclass, jint a0, jint a1, jint a2){ glDispatchCompute((GLuint)a0,(GLuint)a1,(GLuint)a2); }
+GLF rc_glMemoryBarrier(JNIEnv*, jclass, jint a0){ glMemoryBarrier((GLbitfield)a0); }
+GLF rc_glDrawArraysIndirect(JNIEnv*, jclass, jint a0, jlong a1){ glDrawArraysIndirect((GLenum)a0,(const void*)(intptr_t)a1); }
+GLF rc_glDrawElementsIndirect(JNIEnv*, jclass, jint a0, jint a1, jlong a2){ glDrawElementsIndirect((GLenum)a0,(GLenum)a1,(const void*)(intptr_t)a2); }
+GLF rc_glMultiDrawArraysIndirect(JNIEnv*, jclass, jint, jlong, jint, jint){ /* EXT_multi_draw_indirect; gated off -> no-op */ }
+GLF rc_glBufferStorage_J(JNIEnv*, jclass, jint, jlong, jint){ /* EXT_buffer_storage; GL_ARB_buffer_storage reported false -> never called */ }
+GLF rc_glBufferStorage_BB(JNIEnv*, jclass, jint, jobject, jint){ /* ditto */ }
+GLF rc_glBufferSubData_BB(JNIEnv* e, jclass, jint a0, jlong a1, jobject a2){ glBufferSubData((GLenum)a0,(GLintptr)a1,(GLsizeiptr)e->GetDirectBufferCapacity(a2),e->GetDirectBufferAddress(a2)); }
+GLF rc_glBufferSubData_IB(JNIEnv* e, jclass, jint a0, jlong a1, jobject a2){ glBufferSubData((GLenum)a0,(GLintptr)a1,(GLsizeiptr)(e->GetDirectBufferCapacity(a2)*4),e->GetDirectBufferAddress(a2)); }
+GLF rc_glBufferSubData_FB(JNIEnv* e, jclass, jint a0, jlong a1, jobject a2){ glBufferSubData((GLenum)a0,(GLintptr)a1,(GLsizeiptr)(e->GetDirectBufferCapacity(a2)*4),e->GetDirectBufferAddress(a2)); }
+// glTexSubImage3D from a direct Buffer (RLHD's TextureManager uploads the texture-array layers from an IntBuffer
+// as GL_BGRA / GL_UNSIGNED_INT_8_8_8_8_REV — GLES has neither, so rewrite to RGBA/UNSIGNED_BYTE + set the per-array
+// swizzle R<->B, the same recipe the base-gpu UI texture uses).
+GLF rc_glTexSubImage3D_buf(JNIEnv* e, jclass, jint a0, jint a1, jint a2, jint a3, jint a4, jint a5, jint a6, jint a7, jint a8, jint a9, jobject a10){
+    GLenum fmt=(GLenum)a8, typ=(GLenum)a9; bool bgra=(fmt==GL_BGRA);
+    if (bgra){ fmt=GL_RGBA; if (typ==GL_UNSIGNED_INT_8_8_8_8_REV) typ=GL_UNSIGNED_BYTE; }
+    glTexSubImage3D((GLenum)a0,a1,a2,a3,a4,a5,a6,a7,fmt,typ,e->GetDirectBufferAddress(a10));
+    if (bgra){ glTexParameteri((GLenum)a0, GL_TEXTURE_SWIZZLE_R, GL_BLUE); glTexParameteri((GLenum)a0, GL_TEXTURE_SWIZZLE_B, GL_RED); }
+}
+
+// ---- MemoryUtil raw-pointer natives (org.lwjgl.system.MemoryUtil) — render-path off-heap arena (ModelCache). ---
+static jlong JNICALL rc_mem_nmemAllocChecked(JNIEnv*, jclass, jlong sz){ return (jlong)(intptr_t)malloc((size_t)sz); }
+static void  JNICALL rc_mem_nmemFree(JNIEnv*, jclass, jlong p){ free((void*)(intptr_t)p); }
+static jlong JNICALL rc_mem_memAddress0(JNIEnv* e, jclass, jobject b){ return (jlong)(intptr_t)e->GetDirectBufferAddress(b); }
+static jobject JNICALL rc_mem_nNewBuffer(JNIEnv* e, jclass, jlong addr, jint cap){ return rc_native_order(e, e->NewDirectByteBuffer((void*)(intptr_t)addr, cap)); }
+
 // ---- AWTContext (kAWT) ---------------------------------------------------------------------------------------
 static void JNICALL rc_AWT_configurePixelFormat(JNIEnv*, jobject, jint, jint, jint){ /* FBO format fixed in createGLContext */ }
 static void JNICALL rc_AWT_createGLContext(JNIEnv* env, jobject){
@@ -358,6 +487,11 @@ static void JNICALL rc_AWT_createGLContext(JNIEnv* env, jobject){
     }
     bool fboOk = rcBuildFbo(w, h);
     LOGI("createGLContext DONE fbo=%u %dx%d complete=%d es=%s GL_VERSION=%s", sFbo, sFboW, sFboH, fboOk, sEsVer, (const char*)glGetString(GL_VERSION));
+    { const char *ext = (const char*)glGetString(GL_EXTENSIONS);
+      bool tb = ext && (strstr(ext,"texture_buffer")!=nullptr);
+      LOGI("GL caps: texture_buffer=%d (EXT=%d OES=%d) io_blocks=%d geom=%d", tb,
+          ext && strstr(ext,"GL_EXT_texture_buffer")!=nullptr, ext && strstr(ext,"GL_OES_texture_buffer")!=nullptr,
+          ext && strstr(ext,"shader_io_blocks")!=nullptr, ext && strstr(ext,"geometry_shader")!=nullptr); }
 }
 static void JNICALL rc_AWT_destroy(JNIEnv*, jobject){
     if (sDpy != EGL_NO_DISPLAY) {
@@ -422,12 +556,22 @@ static jobject rc_make_caps(JNIEnv* env){
     if (!c) return nullptr;
     jmethodID ctor = env->GetMethodID(c, "<init>", "()V");
     jobject o = env->NewObject(c, ctor);
-    env->SetBooleanField(o, env->GetFieldID(c, "OpenGL33", "Z"), JNI_TRUE);   // REQUIRED or GpuPlugin aborts at :317
+    env->SetBooleanField(o, env->GetFieldID(c, "OpenGL33", "Z"), JNI_TRUE);   // REQUIRED or GpuPlugin/ZoneRenderer aborts
     env->SetBooleanField(o, env->GetFieldID(c, "OpenGL45", "Z"), JNI_FALSE);
     env->SetLongField(o, env->GetFieldID(c, "glTexStorage3D", "J"), 1);
     env->SetLongField(o, env->GetFieldID(c, "glDebugMessageControl", "J"), 0);
     jboolean aniso = rc_gl_has_ext("GL_EXT_texture_filter_anisotropic") ? JNI_TRUE : JNI_FALSE;
     env->SetBooleanField(o, env->GetFieldID(c, "GL_EXT_texture_filter_anisotropic", "Z"), aniso);
+    // AG3 (117HD): report the higher-GL / ARB fast-path flags FALSE so RLHD's Zone path takes the GLES-core
+    // fallbacks our forwarders implement (glBufferData/glBufferSubData, no persistent storage, no image-load/store,
+    // no indirect/multidraw). OpenGL33 alone gates the Zone renderer; these only pick fast vs portable paths.
+    env->SetBooleanField(o, env->GetFieldID(c, "OpenGL31", "Z"), JNI_FALSE);
+    env->SetBooleanField(o, env->GetFieldID(c, "OpenGL40", "Z"), JNI_FALSE);
+    env->SetBooleanField(o, env->GetFieldID(c, "OpenGL43", "Z"), JNI_FALSE);
+    env->SetBooleanField(o, env->GetFieldID(c, "GL_ARB_buffer_storage", "Z"), JNI_FALSE);
+    env->SetBooleanField(o, env->GetFieldID(c, "GL_ARB_copy_buffer", "Z"), JNI_FALSE);
+    env->SetBooleanField(o, env->GetFieldID(c, "GL_ARB_map_buffer_range", "Z"), JNI_FALSE);
+    env->SetBooleanField(o, env->GetFieldID(c, "GL_ARB_shader_image_load_store", "Z"), JNI_FALSE);
     return o;
 }
 static jobject JNICALL rc_GL_createCapabilities(JNIEnv* env, jclass){ return rc_make_caps(env); }
@@ -522,6 +666,71 @@ static const JNINativeMethod kGLALL[] = {
     {"glTexStorage3D","(IIIIII)V",(void*)rc_glTexStorage3D},
     {"glDebugMessageControl","(IIIIZ)V",(void*)rc_glDebugMessageControl},
     {"glClipControl","(II)V",(void*)rc_glClipControl},
+    // --- AG3 117HD (RLHD) Zone GL-delta (signatures match GLALL.java exactly) ---
+    {"glCullFace","(I)V",(void*)rc_glCullFace},
+    {"glFinish","()V",(void*)rc_glFinish},
+    {"glFlush","()V",(void*)rc_glFlush},
+    {"glDrawBuffer","(I)V",(void*)rc_glDrawBuffer},
+    {"glTexBuffer","(III)V",(void*)rc_glTexBuffer},
+    {"glVertexAttribDivisor","(II)V",(void*)rc_glVertexAttribDivisor},
+    {"glFramebufferTexture","(IIII)V",(void*)rc_glFramebufferTexture},
+    {"glFramebufferTexture2D","(IIIII)V",(void*)rc_glFramebufferTexture2D},
+    {"glFramebufferTextureLayer","(IIIII)V",(void*)rc_glFramebufferTextureLayer},
+    {"glBindImageTexture","(IIIZIII)V",(void*)rc_glBindImageTexture},
+    {"glCopyBufferSubData","(IIJJJ)V",(void*)rc_glCopyBufferSubData},
+    {"glInvalidateBufferData","(I)V",(void*)rc_glInvalidateBufferData},
+    {"glGetBufferParameteri64","(II)J",(void*)rc_glGetBufferParameteri64},
+    {"glGetFramebufferAttachmentParameteri","(III)I",(void*)rc_glGetFramebufferAttachmentParameteri},
+    {"glGetIntegerv","(I[I)V",(void*)rc_glGetIntegerv_A},
+    {"glGetIntegerv","(ILjava/nio/IntBuffer;)V",(void*)rc_glGetIntegerv_B},
+    {"glGetProgramiv","(II[I)V",(void*)rc_glGetProgramiv_A},
+    {"glGetProgramiv","(IILjava/nio/IntBuffer;)V",(void*)rc_glGetProgramiv_B},
+    {"glTexParameterfv","(II[F)V",(void*)rc_glTexParameterfv_A},
+    {"glTexParameterfv","(IILjava/nio/FloatBuffer;)V",(void*)rc_glTexParameterfv_B},
+    {"glUniform2f","(IFF)V",(void*)rc_glUniform2f},
+    {"glUniform3f","(IFFF)V",(void*)rc_glUniform3f},
+    {"glUniform2iv","(I[I)V",(void*)rc_glUniform2iv_A},
+    {"glUniform2iv","(ILjava/nio/IntBuffer;)V",(void*)rc_glUniform2iv_B},
+    {"glUniform3iv","(I[I)V",(void*)rc_glUniform3iv_A},
+    {"glUniform3iv","(ILjava/nio/IntBuffer;)V",(void*)rc_glUniform3iv_B},
+    {"glUniform4iv","(I[I)V",(void*)rc_glUniform4iv_A},
+    {"glUniform4iv","(ILjava/nio/IntBuffer;)V",(void*)rc_glUniform4iv_B},
+    {"glUniform3fv","(I[F)V",(void*)rc_glUniform3fv_A},
+    {"glUniform3fv","(ILjava/nio/FloatBuffer;)V",(void*)rc_glUniform3fv_B},
+    {"glUniform4fv","(I[F)V",(void*)rc_glUniform4fv_A},
+    {"glUniform4fv","(ILjava/nio/FloatBuffer;)V",(void*)rc_glUniform4fv_B},
+    {"glFenceSync","(II)J",(void*)rc_glFenceSync},
+    {"glClientWaitSync","(JIJ)I",(void*)rc_glClientWaitSync},
+    {"glDeleteSync","(J)V",(void*)rc_glDeleteSync},
+    {"glGenQueries","()I",(void*)rc_glGenQueries0},
+    {"glGenQueries","([I)V",(void*)rc_glGenQueries_A},
+    {"glDeleteQueries","(I)V",(void*)rc_glDeleteQueries1},
+    {"glDeleteQueries","([I)V",(void*)rc_glDeleteQueries_A},
+    {"glQueryCounter","(II)V",(void*)rc_glQueryCounter},
+    {"glGetQueryObjectiv","(II[I)V",(void*)rc_glGetQueryObjectiv},
+    {"glGetQueryObjectui64","(II)J",(void*)rc_glGetQueryObjectui64},
+    {"glObjectLabel","(IILjava/lang/CharSequence;)V",(void*)rc_glObjectLabel},
+    {"glPushDebugGroup","(IILjava/lang/CharSequence;)V",(void*)rc_glPushDebugGroup},
+    {"glPopDebugGroup","()V",(void*)rc_glPopDebugGroup},
+    {"glGetProgramBinary","(ILjava/nio/IntBuffer;Ljava/nio/IntBuffer;Ljava/nio/ByteBuffer;)V",(void*)rc_glGetProgramBinary_BB},
+    {"glGetProgramBinary","(I[I[ILjava/nio/ByteBuffer;)V",(void*)rc_glGetProgramBinary_AA},
+    {"glDispatchCompute","(III)V",(void*)rc_glDispatchCompute},
+    {"glMemoryBarrier","(I)V",(void*)rc_glMemoryBarrier},
+    {"glDrawArraysIndirect","(IJ)V",(void*)rc_glDrawArraysIndirect},
+    {"glDrawElementsIndirect","(IIJ)V",(void*)rc_glDrawElementsIndirect},
+    {"glMultiDrawArraysIndirect","(IJII)V",(void*)rc_glMultiDrawArraysIndirect},
+    {"glBufferStorage","(IJI)V",(void*)rc_glBufferStorage_J},
+    {"glBufferStorage","(ILjava/nio/ByteBuffer;I)V",(void*)rc_glBufferStorage_BB},
+    {"glBufferSubData","(IJLjava/nio/ByteBuffer;)V",(void*)rc_glBufferSubData_BB},
+    {"glBufferSubData","(IJLjava/nio/IntBuffer;)V",(void*)rc_glBufferSubData_IB},
+    {"glBufferSubData","(IJLjava/nio/FloatBuffer;)V",(void*)rc_glBufferSubData_FB},
+    {"glTexSubImage3D","(IIIIIIIIIILjava/nio/IntBuffer;)V",(void*)rc_glTexSubImage3D_buf},
+};
+static const JNINativeMethod kMEM[] = {
+    {"nmemAllocChecked","(J)J",(void*)rc_mem_nmemAllocChecked},
+    {"nmemFree","(J)V",(void*)rc_mem_nmemFree},
+    {"memAddress0","(Ljava/nio/Buffer;)J",(void*)rc_mem_memAddress0},
+    {"nNewBuffer","(JI)Ljava/nio/ByteBuffer;",(void*)rc_mem_nNewBuffer},
 };
 static const JNINativeMethod kAWT[] = {
     {"configurePixelFormat","(III)V",(void*)rc_AWT_configurePixelFormat},
@@ -548,7 +757,13 @@ extern "C" jint RouteC_registerGLNatives(JNIEnv *env) {
     jint rg = env->RegisterNatives(glall, kGLALL, (jint)(sizeof(kGLALL)/sizeof(kGLALL[0])));
     jint ra = env->RegisterNatives(awt, kAWT, (jint)(sizeof(kAWT)/sizeof(kAWT[0])));
     jint rl = env->RegisterNatives(gl, kGL, (jint)(sizeof(kGL)/sizeof(kGL[0])));
-    LOGI("RegisterNatives glall=%d awt=%d gl=%d (0=OK)", rg, ra, rl);
+    // AG3: MemoryUtil raw-pointer natives (render path). Best-effort — a facade jar predating AG2.5-b lacks the
+    // class; skip gracefully then (the base-gpu smoke doesn't use it). When present it must bind cleanly.
+    jint rm = 0;
+    jclass mem = env->FindClass("org/lwjgl/system/MemoryUtil");
+    if (mem) rm = env->RegisterNatives(mem, kMEM, (jint)(sizeof(kMEM)/sizeof(kMEM[0])));
+    else if (env->ExceptionCheck()) env->ExceptionClear();
+    LOGI("RegisterNatives glall=%d awt=%d gl=%d mem=%d (0=OK)", rg, ra, rl, rm);
     if (env->ExceptionCheck()) env->ExceptionClear();
-    return (rg < 0 || ra < 0 || rl < 0) ? JNI_ERR : JNI_OK;
+    return (rg < 0 || ra < 0 || rl < 0 || rm < 0) ? JNI_ERR : JNI_OK;
 }

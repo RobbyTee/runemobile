@@ -1228,6 +1228,57 @@ public final class MobileUiBridge
 	}
 
 	/**
+	 * Track G AG3-b — load a plugin that is NOT in the {@code net.runelite.client.plugins} core scan (e.g. RLHD's
+	 * {@code rs117.hd.HdPlugin}, which ships in the staged rlhd jar on the classpath) and start it. Mirrors
+	 * {@code PluginListPanel}'s lifecycle but adds the {@code PluginManager.loadPlugins(List<Class>)} step the core
+	 * scan would normally do. Idempotent: if the class is already loaded it just (re-)enables it. Runs the whole
+	 * load+enable+start sequence on the EDT ({@code loadPlugins}/{@code startPlugin} touch plugin state + assert it).
+	 * {@code loadPlugins} resolves the plugin's {@code @PluginDependency} from the already-loaded core set.
+	 */
+	public static String loadAndStartPlugin(String className)
+	{
+		final PluginManager pm = pluginManager;
+		if (!ENABLED || pm == null || className == null)
+		{
+			return "{\"ok\":false,\"reason\":\"facade-off\"}";
+		}
+		if (pluginByClassName(className) != null)
+		{
+			// Already loaded (a repeat call) — just ensure it is enabled + started.
+			return setPluginEnabled(className, true);
+		}
+		final Class<?> cls;
+		try
+		{
+			cls = Class.forName(className, false, MobileUiBridge.class.getClassLoader());
+		}
+		catch (Throwable t)
+		{
+			log.warn("[mobileui] loadAndStartPlugin {} classload failed", className, t);
+			return "{\"ok\":false,\"reason\":\"classload\"}";
+		}
+		onEdt(() ->
+		{
+			try
+			{
+				final java.util.List<Plugin> loaded = pm.loadPlugins(java.util.Collections.singletonList(cls), null);
+				pm.loadDefaultPluginConfiguration(loaded);
+				for (Plugin p : loaded)
+				{
+					pm.setPluginEnabled(p, true);
+					pm.startPlugin(p);
+				}
+				log.info("[mobileui] loadAndStartPlugin {} -> loaded {} plugin(s)", className, loaded.size());
+			}
+			catch (Throwable t)
+			{
+				log.warn("[mobileui] loadAndStartPlugin {} FAILED", className, t);
+			}
+		});
+		return "{\"ok\":true,\"queued\":\"edt\"}";
+	}
+
+	/**
 	 * Write one config value (already serialized to its string form by the native control), queued onto the
 	 * client thread — the desktop fires {@code ConfigChanged} synchronously, so this guarantees subscribers
 	 * run where game-touching ones expect to be. The resulting {@code ConfigChanged} is the confirmation.

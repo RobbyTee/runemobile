@@ -812,14 +812,16 @@ static void *jvmThreadMain(void *argp) {
     // facade, then invoke the smoke main below. Detected from the VM opts so the normal boot path is untouched.
     bool routecSmoke = false;
     bool routecGpu = false;
-    bool routecRlhd = false;
+    bool rlhdProbe = false;
+    bool routecRlhdFull = false;
     for (const std::string &o : a->extraOpts) {
         if (o == "-Drunelite.routec.smoke=true") routecSmoke = true;
         if (o == "-Drunelite.routecgpu=true") routecGpu = true;
-        if (o == "-Drunelite.rlhdprobe=true") routecRlhd = true;
+        if (o == "-Drunelite.rlhdprobe=true") rlhdProbe = true;
+        if (o == "-Drunelite.routecrlhd=true") routecRlhdFull = true;   // AG3-b full 117HD boot
     }
 
-    if (routecRlhd) {
+    if (rlhdProbe) {
         // Track G AG2.5-b (`-Drunelite.rlhdprobe=true`): activate CACIO (RLHD class-init touches java.awt) then
         // hand off to RLHDProbe.main below — a headless 117HD class-load + loader-data test. No bridge, no render,
         // no engine, no librlawt (class-load never calls a GL native).
@@ -868,14 +870,18 @@ static void *jvmThreadMain(void *argp) {
         // main starts the engine, so the gpu plugin's AWTContext.createGLContext resolves to our EGL backing.
         // The facade classes live in the GPU-variant jar on this run's classpath. swapBuffers then glReadPixels-es
         // the FBO into JavaBridge's double buffer and the existing render thread blits it (no seam change).
-        if (routecGpu) {
+        // AG3-b shares this path: -Drunelite.routecrlhd=true is a FULL boot that also needs the GL bridge (RLHD's
+        // AWTContext.createGLContext + the Zone GL-delta forwarders resolve through librlawt); RLHDStarter then
+        // loads + starts the 117HD plugin in-world.
+        if (routecGpu || routecRlhdFull) {
+            const char *mode = routecRlhdFull ? "routecrlhd" : "routecgpu";
             void *rh = dlopen("librlawt.so", RTLD_NOW | RTLD_GLOBAL);
             if (!rh) {
-                LOGE("routecgpu: dlopen librlawt.so failed: %s", dlerror());
+                LOGE("%s: dlopen librlawt.so failed: %s", mode, dlerror());
             } else {
                 auto reg = (jint (*)(JNIEnv *)) dlsym(rh, "RouteC_registerGLNatives");
-                if (!reg) LOGE("routecgpu: dlsym RouteC_registerGLNatives failed: %s", dlerror());
-                else { jint rr = reg(env); LOGI("routecgpu: RouteC_registerGLNatives rc=%d (0=OK)", rr); }
+                if (!reg) LOGE("%s: dlsym RouteC_registerGLNatives failed: %s", mode, dlerror());
+                else { jint rr = reg(env); LOGI("%s: RouteC_registerGLNatives rc=%d (0=OK)", mode, rr); }
             }
         }
 
