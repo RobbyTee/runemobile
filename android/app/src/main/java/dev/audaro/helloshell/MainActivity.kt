@@ -302,6 +302,10 @@ class MainActivity : AppCompatActivity() {
         // and can't pass an intent extra, but it CAN seed a file via --other-files. Falls through the login gate.
         val gpuMode = (intent?.getBooleanExtra("routecgpu", false) ?: false) ||
             File(getExternalFilesDir(null), "gpu.mode").exists()
+        // Track G AG3-b: `--ez routecrlhd true` (or a pushed rlhd.mode marker) boots the FULL client on the gpu jar
+        // + the rlhd jar with the 117HD (Zone) plugin loaded + started in-world (RLHDStarter). Needs login (tokens).
+        val rlhdMode = (intent?.getBooleanExtra("routecrlhd", false) ?: false) ||
+            File(getExternalFilesDir(null), "rlhd.mode").exists()
         // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
         // BEFORE boot. With none (and not census, which uses pushed tokens), run the on-device Jagex login first;
         // it writes tokens.json then restarts the process for a clean boot (Review-2: login-first or restart).
@@ -313,7 +317,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (booted.compareAndSet(false, true)) {
             val app = applicationContext
-            thread(name = "jvm-boot") { bootJvm(app, censusMode, gpu = gpuMode) }
+            thread(name = "jvm-boot") { bootJvm(app, censusMode, gpu = gpuMode && !rlhdMode, rlhd = rlhdMode) }
         }
     }
 
@@ -918,7 +922,7 @@ class MainActivity : AppCompatActivity() {
         Log.i(TAG, "rlhdprobe: startJvm rc=$rc (watch logcat: ANDROID_RLHD_PROBE / MEGAVERDICT)")
     }
 
-    private fun bootJvm(app: android.content.Context, census: Boolean = false, gpu: Boolean = false) {
+    private fun bootJvm(app: android.content.Context, census: Boolean = false, gpu: Boolean = false, rlhd: Boolean = false) {
         val javaHome = AssetInstaller.ensureInstalled(app)
         val libjvm = File(javaHome, "lib/server/libjvm.so")
         if (!libjvm.exists()) {
@@ -928,30 +932,43 @@ class MainActivity : AppCompatActivity() {
         }
 
         val jvmDir = File(app.filesDir, "jvm")
-        // GPU mode boots the jar-surgery variant (client-<ver>-gpu.jar: lwjgl/rlawt/gpu stripped + facade); the
-        // CPU boot uses the pristine client-<ver>-shaded.jar. The two carry the project version, so glob by suffix
-        // (a version bump needs no code edit). AssetInstaller only unpacks assets/jvm on a runtime.tag change, so
-        // the GPU jar may be absent on an install that didn't bump the tag — copy it from assets if so.
-        val jarSuffix = if (gpu) "-gpu.jar" else "-shaded.jar"
-        if (gpu) {
-            val assetGpu = runCatching { app.assets.list("jvm") }.getOrNull()
-                ?.firstOrNull { it.startsWith("client-") && it.endsWith("-gpu.jar") }
-            if (assetGpu != null && !File(jvmDir, assetGpu).exists()) {
-                runCatching {
-                    jvmDir.mkdirs()
-                    app.assets.open("jvm/$assetGpu").use { i -> File(jvmDir, assetGpu).outputStream().use { o -> i.copyTo(o) } }
-                }.onFailure { Log.w(TAG, "routecgpu: copy $assetGpu from assets failed: ${it.message}") }
+        // GPU + 117HD modes boot the facade-backed jar (client-<ver>-gpu.jar: lwjgl/rlawt/gpu stripped + facade); the
+        // CPU boot uses the pristine client-<ver>-shaded.jar. 117HD ALSO needs client-<ver>-rlhd.jar (rs117.* + the
+        // shaders/JSON) appended to the classpath. The jars carry the project version, so glob by suffix (a version
+        // bump needs no code edit). AssetInstaller only unpacks assets/jvm on a runtime.tag change, so a jar may be
+        // absent on an install that didn't bump the tag — copy each from assets if so.
+        val useGpuJar = gpu || rlhd
+        val jarSuffix = if (useGpuJar) "-gpu.jar" else "-shaded.jar"
+        run {
+            val wanted = mutableListOf<String>()
+            if (useGpuJar) wanted.add("-gpu.jar")
+            if (rlhd) wanted.add("-rlhd.jar")
+            for (suffix in wanted) {
+                val asset = runCatching { app.assets.list("jvm") }.getOrNull()
+                    ?.firstOrNull { it.startsWith("client-") && it.endsWith(suffix) }
+                if (asset != null && !File(jvmDir, asset).exists()) {
+                    runCatching {
+                        jvmDir.mkdirs()
+                        app.assets.open("jvm/$asset").use { i -> File(jvmDir, asset).outputStream().use { o -> i.copyTo(o) } }
+                    }.onFailure { Log.w(TAG, "boot: copy $asset from assets failed: ${it.message}") }
+                }
             }
         }
         val clientJar = jvmDir.list { _, name -> name.startsWith("client-") && name.endsWith(jarSuffix) }
             ?.firstOrNull()
         if (clientJar == null) {
             Log.e(TAG, "no client-*$jarSuffix staged in $jvmDir" +
-                if (gpu) " (run android/dev-tools/gpu/stage-android-gpu-jar.sh)" else "")
+                if (useGpuJar) " (run android/dev-tools/gpu/stage-android-gpu-jar.sh)" else "")
             booted.set(false)
             return
         }
-        val classpath = listOf(clientJar, "probes.jar")
+        val rlhdJar = if (rlhd) jvmDir.list { _, name -> name.startsWith("client-") && name.endsWith("-rlhd.jar") }?.firstOrNull() else null
+        if (rlhd && rlhdJar == null) {
+            Log.e(TAG, "no client-*-rlhd.jar staged in $jvmDir (run android/dev-tools/gpu/stage-rlhd-zone-jar.sh)")
+            booted.set(false)
+            return
+        }
+        val classpath = (listOf(clientJar) + listOfNotNull(rlhdJar) + listOf("probes.jar"))
             .joinToString(":") { File(jvmDir, it).absolutePath }
         val libraryPath = File(javaHome, "lib").absolutePath
 
@@ -1046,6 +1063,18 @@ class MainActivity : AppCompatActivity() {
                 "-Drunelite.gpuframedump.dir=$dumpDir",
             ))
             Log.i(TAG, "AG2 GPU mode: gpu jar $clientJar, routecgpu + frame-dump armed (dir=$dumpDir/routec-frames)")
+        }
+        if (rlhd) {
+            // AG3-b: arm RLHDStarter (load + start the 117HD Zone plugin once in-world; it disables the base gpu
+            // plugin via its conflicts="GPU"). librlawt is registered natively (jvm_bootstrap sees routecrlhd). Frame
+            // dump to app-EXTERNAL storage so the HD frame is pullable (Firebase --directories-to-pull / adb pull).
+            val dumpDir = (app.getExternalFilesDir(null) ?: app.filesDir).absolutePath
+            opts.addAll(listOf(
+                "-Drunelite.routecrlhd=true",
+                "-Drunelite.gpuframedump=true",
+                "-Drunelite.gpuframedump.dir=$dumpDir",
+            ))
+            Log.i(TAG, "AG3-b 117HD mode: gpu jar $clientJar + rlhd jar $rlhdJar, routecrlhd + frame-dump armed (dir=$dumpDir/routec-frames)")
         }
 
         // A8: only pipe the embedded VM's stdout/err to logcat in DEBUG builds — a release build must not leak

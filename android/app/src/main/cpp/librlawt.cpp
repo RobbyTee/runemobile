@@ -134,7 +134,18 @@ static std::string rc_downport(const std::string &src) {
     std::string precision =
         "precision highp float;\nprecision highp int;\n"
         "precision highp sampler2DArray;\nprecision highp usampler2DArray;\nprecision highp sampler2D;\n";
-    return std::string("#version ") + sEsVer + "\n" + precision + body;
+    // 117HD Zone shaders use interface (IO) blocks + texture-buffer samplers (isamplerBuffer). These are CORE in
+    // GLSL ES 3.2 (#version 320 es, the real Pixel 8/Mali tier — no directives needed) but on an ES 3.1 context
+    // (the emulator's ANGLE) they require EXT directives. Geometry shaders (shadow pass) likewise. Emit them only
+    // for 310 es; `enable` (not `require`) keeps shaders that don't use a feature compiling even if the ext is absent.
+    std::string extns;
+    if (std::string(sEsVer) == "310 es") {
+        extns =
+            "#extension GL_EXT_shader_io_blocks : enable\n"
+            "#extension GL_EXT_texture_buffer : enable\n"
+            "#extension GL_EXT_geometry_shader : enable\n";
+    }
+    return std::string("#version ") + sEsVer + "\n" + extns + precision + body;
 }
 
 static bool rcEglPrepareSurface(int w, int h) {
@@ -422,6 +433,15 @@ GLF rc_glBufferStorage_BB(JNIEnv*, jclass, jint, jobject, jint){ /* ditto */ }
 GLF rc_glBufferSubData_BB(JNIEnv* e, jclass, jint a0, jlong a1, jobject a2){ glBufferSubData((GLenum)a0,(GLintptr)a1,(GLsizeiptr)e->GetDirectBufferCapacity(a2),e->GetDirectBufferAddress(a2)); }
 GLF rc_glBufferSubData_IB(JNIEnv* e, jclass, jint a0, jlong a1, jobject a2){ glBufferSubData((GLenum)a0,(GLintptr)a1,(GLsizeiptr)(e->GetDirectBufferCapacity(a2)*4),e->GetDirectBufferAddress(a2)); }
 GLF rc_glBufferSubData_FB(JNIEnv* e, jclass, jint a0, jlong a1, jobject a2){ glBufferSubData((GLenum)a0,(GLintptr)a1,(GLsizeiptr)(e->GetDirectBufferCapacity(a2)*4),e->GetDirectBufferAddress(a2)); }
+// glTexSubImage3D from a direct Buffer (RLHD's TextureManager uploads the texture-array layers from an IntBuffer
+// as GL_BGRA / GL_UNSIGNED_INT_8_8_8_8_REV — GLES has neither, so rewrite to RGBA/UNSIGNED_BYTE + set the per-array
+// swizzle R<->B, the same recipe the base-gpu UI texture uses).
+GLF rc_glTexSubImage3D_buf(JNIEnv* e, jclass, jint a0, jint a1, jint a2, jint a3, jint a4, jint a5, jint a6, jint a7, jint a8, jint a9, jobject a10){
+    GLenum fmt=(GLenum)a8, typ=(GLenum)a9; bool bgra=(fmt==GL_BGRA);
+    if (bgra){ fmt=GL_RGBA; if (typ==GL_UNSIGNED_INT_8_8_8_8_REV) typ=GL_UNSIGNED_BYTE; }
+    glTexSubImage3D((GLenum)a0,a1,a2,a3,a4,a5,a6,a7,fmt,typ,e->GetDirectBufferAddress(a10));
+    if (bgra){ glTexParameteri((GLenum)a0, GL_TEXTURE_SWIZZLE_R, GL_BLUE); glTexParameteri((GLenum)a0, GL_TEXTURE_SWIZZLE_B, GL_RED); }
+}
 
 // ---- MemoryUtil raw-pointer natives (org.lwjgl.system.MemoryUtil) — render-path off-heap arena (ModelCache). ---
 static jlong JNICALL rc_mem_nmemAllocChecked(JNIEnv*, jclass, jlong sz){ return (jlong)(intptr_t)malloc((size_t)sz); }
@@ -676,6 +696,7 @@ static const JNINativeMethod kGLALL[] = {
     {"glBufferSubData","(IJLjava/nio/ByteBuffer;)V",(void*)rc_glBufferSubData_BB},
     {"glBufferSubData","(IJLjava/nio/IntBuffer;)V",(void*)rc_glBufferSubData_IB},
     {"glBufferSubData","(IJLjava/nio/FloatBuffer;)V",(void*)rc_glBufferSubData_FB},
+    {"glTexSubImage3D","(IIIIIIIIIILjava/nio/IntBuffer;)V",(void*)rc_glTexSubImage3D_buf},
 };
 static const JNINativeMethod kMEM[] = {
     {"nmemAllocChecked","(J)J",(void*)rc_mem_nmemAllocChecked},

@@ -552,6 +552,13 @@ public class Hooks implements Callbacks
 			net.runelite.client.headless.RouteCGpuStarter.tick(client);
 		}
 
+		// Track G AG3-b: load + start the 117HD (RLHD) plugin (Zone) once in-world, overriding the base gpu plugin
+		// (HdPlugin declares conflicts="GPU", so startPlugin disables it). Inert unless -Drunelite.routecrlhd=true.
+		if (net.runelite.client.headless.RLHDStarter.isEnabled())
+		{
+			net.runelite.client.headless.RLHDStarter.tick(client);
+		}
+
 		// W3 touch-targeting: draw the tap selection feedback (tight entity model outline) into the frame, on
 		// top of the scene/overlays, just before it's captured/blitted.
 		if (net.runelite.client.headless.JavaBridge.isEnabled())
