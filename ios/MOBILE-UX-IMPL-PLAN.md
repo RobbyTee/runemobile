@@ -37,7 +37,7 @@
 - [x] #12 Per-panel data bridges — all 4: `LootTrackerBridge` (getLootJson), `XpTrackerBridge` (getXpJson), `GrandExchangeBridge` (getGeJson), `TimeTrackingBridge` (getTimeTrackingJson). Each = QuestHelperBridge pattern (init/isAvailable/setUiOpen/get*Json/tick), wired into MobileUiBridge.init+tick, added to the shared-contract file list. Mostly reflection (most panel/record/snapshot types are package-private even though the plugins are core). Build-green; data shapes documented in each file. Native reflow screens = Batch C.
 - [ ] #15 Engine touch-drag→widget-drag routing — NO new bridge code (existing `JavaBridge.onTouch` streams PRESS→DRAG→RELEASE); needs a desktop spike + native wiring. Deferred.
 - [x] #9  `JavaBridge.setShiftHeld(boolean)` — transition-gated held VK_SHIFT (mirrors the proven spike). Cleared by Batch A.
-- [ ] Re-stage + contract check + desktop headless smoke + dual-port census + commit
+- [x] Batch-B closeout: mobileui live-login smoke **GREEN** (md5-gated; facade wired, default-profile applies on EDT, LOGGED_IN, zero new-bridge exceptions); re-staged both ports (content-tag 5396887b185f); contract baseline current (184 entries). #15 touch-drag still deferred (own spike).
 
 ## Batch C — Native UIKit consuming Batch B (one device test pass)
 P0 polish:
