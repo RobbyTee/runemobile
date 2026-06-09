@@ -90,6 +90,12 @@ if [ "$MODE" = "rlhd" ]; then
   if [ -f "$TOKENS" ]; then OTHER=(--other-files "$DEV_TOKENS=$TOKENS,$DEV_RLHD=$MARKER"); else OTHER=(--other-files "$DEV_RLHD=$MARKER"); fi
   PULL=(--directories-to-pull "$DEV_FRAMES")
   : "${FB_TIMEOUT:=420s}"   # plugin load + the full Zone shader compile + startUp + a frame dump
+  # Robo (the default) force-stops + relaunches the app every few seconds and crawls the UI (it reached
+  # LoginActivity before startUp ran). Game Loop launches the app ONCE via the TEST_LOOP intent and lets it run
+  # uninterrupted for the timeout — exactly what the long 117HD boot needs. (MainActivity boots routecrlhd on the
+  # TEST_LOOP action; the rlhd.mode marker is a harmless fallback.)
+  TYPE="game-loop"
+  TYPE_ARGS=(--scenario-numbers 1)
 fi
 
 echo "== Firebase Test Lab Robo run (device=${FB_DEVICE:-shiba}, api=${FB_VERSION:-34}, mode=$MODE) =="
@@ -97,11 +103,12 @@ echo "   (pick a device id with: gcloud firebase test android models list)"
 GLOG="$(mktemp)"
 # Robo returns non-zero if it detects a crash; we still want the logcat, so don't let set -e abort here.
 gcloud firebase test android run \
-  --type robo \
+  --type "${TYPE:-robo}" \
   --app "$APK" \
   --device "model=${FB_DEVICE:-shiba},version=${FB_VERSION:-34},locale=en,orientation=portrait" \
   --timeout "${FB_TIMEOUT:-180s}" \
   --results-dir "$RESULTS_DIR" \
+  "${TYPE_ARGS[@]+"${TYPE_ARGS[@]}"}" \
   "${OTHER[@]+"${OTHER[@]}"}" \
   "${PULL[@]+"${PULL[@]}"}" 2>&1 | tee "$GLOG" || true   # +-expansion: safe for an empty array under set -u (bash 3.2)
 

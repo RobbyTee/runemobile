@@ -304,8 +304,12 @@ class MainActivity : AppCompatActivity() {
             File(getExternalFilesDir(null), "gpu.mode").exists()
         // Track G AG3-b: `--ez routecrlhd true` (or a pushed rlhd.mode marker) boots the FULL client on the gpu jar
         // + the rlhd jar with the 117HD (Zone) plugin loaded + started in-world (RLHDStarter). Needs login (tokens).
+        // AG3-c: a Firebase Game Loop launch (action TEST_LOOP) also boots routecrlhd — Game Loop runs the app
+        // UNINTERRUPTED (no Robo crawl/relaunch), giving the long startUp + Zone shader compile its minute on real Mali.
+        val gameLoop = intent?.action == "com.google.intent.action.TEST_LOOP"
         val rlhdMode = (intent?.getBooleanExtra("routecrlhd", false) ?: false) ||
-            File(getExternalFilesDir(null), "rlhd.mode").exists()
+            File(getExternalFilesDir(null), "rlhd.mode").exists() || gameLoop
+        if (gameLoop) Log.i(TAG, "AG3-c: Game Loop launch -> routecrlhd (uninterrupted run for the Zone shader compile)")
         // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
         // BEFORE boot. With none (and not census, which uses pushed tokens), run the on-device Jagex login first;
         // it writes tokens.json then restarts the process for a clean boot (Review-2: login-first or restart).

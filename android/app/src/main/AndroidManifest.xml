@@ -22,6 +22,12 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Firebase Test Lab Game Loop: launches the app uninterrupted (no Robo crawl/relaunch), so the long
+                 117HD boot -> login-screen -> startUp -> Zone shader compile gets its ~minute on real Mali. -->
+            <intent-filter>
+                <action android:name="com.google.intent.action.TEST_LOOP" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <!-- A3 on-device Jagex login (WebView OAuth). Not exported; landscape to match the shell. -->
