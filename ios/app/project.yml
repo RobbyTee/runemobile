@@ -21,7 +21,10 @@ settings:
     GCC_PREPROCESSOR_DEFINITIONS:
       - "$(inherited)"
       - "GLES_SILENCE_DEPRECATION=1"
-      - "RC_BACKEND_ANGLE=1"
+      # BACKEND TOGGLE — EAGL is ACTIVE (the device-kit gl_FragDepth A/B path; also needs no vendored ANGLE
+      # frameworks, so it builds on a fresh Mac). For the MetalANGLE backend: uncomment RC_BACKEND_ANGLE=1 here
+      # AND the libEGL/libGLESv2 frameworks below, AND re-comment OpenGLES.framework (macro + frameworks MUST agree).
+      # - "RC_BACKEND_ANGLE=1"
     # Let the resign-jre build phase write into the .app.
     ENABLE_USER_SCRIPT_SANDBOXING: NO
 
@@ -53,17 +56,17 @@ targets:
       # WKWebView for the on-device Jagex login (JagexLoginSpikeViewController).
       - sdk: WebKit.framework
       - sdk: Metal.framework
-      # Phase A1 GPU backend = MetalANGLE (libEGL + libGLESv2, Metal backend) — reuse the gpu-angle vendored copy
-      # (gitignored; regenerate via dev-tools/gpu-angle/README). Embedded + codesigned so the app dlopens them on
-      # device. MUST pair with RC_BACKEND_ANGLE=1 above. Provides EXT_clip_control (depth fix) + GL_MAX_SAMPLES=8.
-      - framework: ../dev-tools/gpu-angle/angle/libEGL.framework
-        embed: true
-        codeSign: true
-      - framework: ../dev-tools/gpu-angle/angle/libGLESv2.framework
-        embed: true
-        codeSign: true
-      # EAGL A/B baseline / §12 fallback (mutually exclusive with the ANGLE frameworks + RC_BACKEND_ANGLE):
-      # - sdk: OpenGLES.framework
+      # MetalANGLE GPU backend (INACTIVE — pair with RC_BACKEND_ANGLE=1 above to enable). Vendored libEGL/libGLESv2,
+      # gitignored (regenerate via dev-tools/gpu-angle/README); embedded + codesigned so the app dlopens them on
+      # device. Provides EXT_clip_control (depth fix) + GL_MAX_SAMPLES=8.
+      # - framework: ../dev-tools/gpu-angle/angle/libEGL.framework
+      #   embed: true
+      #   codeSign: true
+      # - framework: ../dev-tools/gpu-angle/angle/libGLESv2.framework
+      #   embed: true
+      #   codeSign: true
+      # EAGL GPU backend (ACTIVE — mutually exclusive with the ANGLE frameworks + RC_BACKEND_ANGLE):
+      - sdk: OpenGLES.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.audaro.helloshell

@@ -25,8 +25,11 @@ xcrun devicectl device install app --device "$DEV" \
   build/dd-gpu/Build/Products/Debug-iphoneos/HelloShell.app    # "No provider was found" is non-fatal
 ```
 
-(EAGL is the default backend. The RGB32I probe + perf tagging are backend-agnostic, so an ANGLE build measures the
-same way if you ever want the ANGLE-side number.)
+EAGL is the **active** backend on this branch (`ios/app/project.yml`: `RC_BACKEND_ANGLE` commented +
+`OpenGLES.framework` linked — so it also builds on a fresh Mac with no vendored ANGLE frameworks). To switch to
+MetalANGLE later: uncomment `RC_BACKEND_ANGLE=1` and the `libEGL`/`libGLESv2` frameworks in `project.yml`, re-comment
+`OpenGLES.framework`, then `cd ios/app && xcodegen generate`. The RGB32I probe + perf tagging are backend-agnostic,
+so an ANGLE build measures the same way if you want the ANGLE-side number.
 
 ## Run — the two-launch A/B
 
