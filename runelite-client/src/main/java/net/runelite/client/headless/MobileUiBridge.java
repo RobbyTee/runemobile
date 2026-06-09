@@ -264,6 +264,8 @@ public final class MobileUiBridge
 		XpTrackerBridge.init(pm, ct);     // native XP Tracker reflow
 		GrandExchangeBridge.init(pm, ct); // native Grand Exchange reflow
 		TimeTrackingBridge.init(pm, ct);  // native Time Tracking reflow
+		OverlayBridge.init(pm, ct);       // native overlay edit-mode (reposition/snap/reset)
+		InfoBoxBridge.init(pm, ct);       // native infobox long-press menu
 		log.info("[mobileui] facade wired: plugins={} config={} clientThread={} eventBus={}",
 			pm != null, cm != null, ct != null, eb != null);
 	}
@@ -1301,6 +1303,8 @@ public final class MobileUiBridge
 		XpTrackerBridge.tick(c);     // refresh the native XP Tracker snapshot (no-op unless its screen is open)
 		GrandExchangeBridge.tick(c); // refresh the native Grand Exchange snapshot (no-op unless its screen is open)
 		TimeTrackingBridge.tick(c);  // refresh the native Time Tracking snapshot (no-op unless its screen is open)
+		OverlayBridge.tick(c);       // refresh the native overlay edit-mode snapshot (no-op unless open)
+		InfoBoxBridge.tick(c);       // refresh the native infobox menu snapshot (no-op unless open)
 		// The "click here to talk" affordance is the right target — NOT the scroll/message area or the tabs.
 		// INPUT_CLICKAREA is the entry hit-region; fall back to the input line (CHATBOX_INPUT) if absent.
 		Widget w = c.getWidget(InterfaceID.Chatbox.INPUT_CLICKAREA);
