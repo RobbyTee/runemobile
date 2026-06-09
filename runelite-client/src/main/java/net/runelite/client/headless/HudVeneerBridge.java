@@ -82,6 +82,10 @@ public final class HudVeneerBridge
 	// stays click-to-walk + orb-clickable (it IS the live engine HUD). This is A4 (minimap) + A5 (orbs) in one move.
 	private static volatile int minimapX = -1;
 	private static volatile int minimapY = -1;
+	// A/B: relocating MAP_CONTAINER (setForcedPosition+revalidate) tears down the engine's nested orbs interface
+	// (HP/prayer/run/spec/wiki), so the orbs vanish. Disable the cluster relocate to confirm + restore the orbs
+	// (the cluster then renders at its natural top-right, which on this landscape canvas is ~the same spot).
+	private static final boolean MINIMAP_RELOCATE = false;
 
 	// Side panel (SIDE_CONTAINER = the inventory / equipment / spellbook / etc. panel) relocate. sideX < 0 = off.
 	// Same root-anchored relocate as the minimap; edge-to-edge needs it pulled inward so it doesn't clip under the
@@ -380,7 +384,7 @@ public final class HudVeneerBridge
 
 			// Minimap+orbs cluster relocate (independent of chat). Force MAP_CONTAINER each frame so it survives
 			// TOPLEVEL_REDRAW; revalidate cascades to the globe + orb children.
-			if (minimapX >= 0)
+			if (MINIMAP_RELOCATE && minimapX >= 0)
 			{
 				final int containerId = preEoc
 					? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER;
