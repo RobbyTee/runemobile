@@ -67,6 +67,7 @@ import net.runelite.client.util.Text;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.ExternalPluginsChanged;
 import net.runelite.client.events.PluginChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -259,6 +260,10 @@ public final class MobileUiBridge
 		}
 		QuestHelperBridge.init(pm, ct); // native Quest Helper reflow shares this wiring + the client-thread tick
 		WorldSwitcherBridge.init(c, ct, pm); // native World Switcher reflow (direct WorldService reads)
+		LootTrackerBridge.init(pm, ct);   // native Loot Tracker reflow
+		XpTrackerBridge.init(pm, ct);     // native XP Tracker reflow
+		GrandExchangeBridge.init(pm, ct); // native Grand Exchange reflow
+		TimeTrackingBridge.init(pm, ct);  // native Time Tracking reflow
 		log.info("[mobileui] facade wired: plugins={} config={} clientThread={} eventBus={}",
 			pm != null, cm != null, ct != null, eb != null);
 	}
@@ -280,6 +285,16 @@ public final class MobileUiBridge
 		public void onPluginChanged(PluginChanged e)
 		{
 			recordEvent("plugin", e.getPlugin().getClass().getName(), e.isLoaded() ? "loaded" : "unloaded");
+		}
+
+		@Subscribe
+		public void onExternalPluginsChanged(ExternalPluginsChanged e)
+		{
+			// A hub install/remove finished downloading + (un)loading. Clear the spinner and bump the seq so the
+			// native hub screen re-fetches hubManifest() and sees the updated installed set.
+			hubRefreshing = false;
+			hubChangeSeq.incrementAndGet();
+			recordEvent("hub", "external", "changed");
 		}
 	}
 
@@ -670,6 +685,11 @@ public final class MobileUiBridge
 	private static volatile List<PluginHubManifest.DisplayData> hubDisplay;
 	private static volatile String hubStatus = "idle";
 	private static volatile boolean hubLoading;
+	// Hub install/remove progress: install()/remove() register synchronously but download+load the plugin async on
+	// the ExternalPluginManager executor, signalling completion with ExternalPluginsChanged. refreshing flips true
+	// on our install/remove and false when that event lands; the seq bumps so native can re-fetch hubManifest.
+	private static volatile boolean hubRefreshing;
+	private static final AtomicLong hubChangeSeq = new AtomicLong();
 
 	private static void ensureHubInjected()
 	{
@@ -754,6 +774,17 @@ public final class MobileUiBridge
 		return hubInstallOrRemove(internalName, true);
 	}
 
+	/**
+	 * Hub install/remove progress. {@link #hubInstall}/{@code hubUninstall} only register synchronously; the jar
+	 * download + plugin load happen async, completing with {@code ExternalPluginsChanged}. The native hub screen
+	 * polls this: while {@code refreshing} is true it shows a spinner; when {@code seq} bumps (refresh finished)
+	 * it re-fetches {@link #hubManifest()} to pick up the new installed set.
+	 */
+	public static String hubState()
+	{
+		return "{\"refreshing\":" + hubRefreshing + ",\"seq\":" + hubChangeSeq.get() + "}";
+	}
+
 	/** Uninstall a hub plugin by internal name. */
 	public static String hubUninstall(String internalName)
 	{
@@ -774,6 +805,7 @@ public final class MobileUiBridge
 		{
 			return "{\"ok\":false,\"reason\":\"not-ready\"}";
 		}
+		hubRefreshing = true; // cleared by onExternalPluginsChanged once the async download+load completes
 		final long id = enqueueClientWrite(ct, () ->
 		{
 			if (install)
@@ -1253,6 +1285,10 @@ public final class MobileUiBridge
 		}
 		QuestHelperBridge.tick(c); // refresh the native Quest Helper snapshots (no-op unless its screen is open)
 		WorldSwitcherBridge.tick(c); // refresh the native World Switcher snapshot (no-op unless its screen is open)
+		LootTrackerBridge.tick(c);   // refresh the native Loot Tracker snapshot (no-op unless its screen is open)
+		XpTrackerBridge.tick(c);     // refresh the native XP Tracker snapshot (no-op unless its screen is open)
+		GrandExchangeBridge.tick(c); // refresh the native Grand Exchange snapshot (no-op unless its screen is open)
+		TimeTrackingBridge.tick(c);  // refresh the native Time Tracking snapshot (no-op unless its screen is open)
 		// The "click here to talk" affordance is the right target — NOT the scroll/message area or the tabs.
 		// INPUT_CLICKAREA is the entry hit-region; fall back to the input line (CHATBOX_INPUT) if absent.
 		Widget w = c.getWidget(InterfaceID.Chatbox.INPUT_CLICKAREA);

@@ -21,6 +21,7 @@ AWT = os.path.join(ROOT, 'ios/dev-tools/awtsmoke')
 FILES = [os.path.join(HEADLESS, f) for f in (
     'JavaBridge.java', 'MobileUiBridge.java', 'MenuPeekBridge.java', 'MobileChromeBridge.java',
     'HudDataBridge.java', 'HudVeneerBridge.java', 'QuestHelperBridge.java', 'WorldSwitcherBridge.java',
+    'LootTrackerBridge.java', 'XpTrackerBridge.java', 'GrandExchangeBridge.java', 'TimeTrackingBridge.java',
     'HeadlessLogin.java', 'HeadlessResize.java',
 )] + [os.path.join(AWT, f) for f in (
     'DeviceHeadlessBoot.java', 'UnsafePokeActivation.java',

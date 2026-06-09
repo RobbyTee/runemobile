@@ -31,10 +31,10 @@
 - [ ] #5  Config schema: dimension/set/notification value-encoding
 - [x] #7  Mobile default-profile — COLLAPSED to one flip: Low Detail ON (only-if-unset, applied once on first tick via the proven setPluginEnabled path). The rest (cursor/key/stretched/styles/antidrag) are ALL already `enabledByDefault=false` (audit's "Custom Cursor on" was wrong) → nothing to flip; keeping them out of reach = native hide (Batch C).
 - [x] #27 `LinkBrowser.browse/open` intercept → `MobileUiBridge.publishLink`/`nextLink` (bounded, gated); native opens SFSafariViewController. `open()` no-ops on mobile (no file manager / Swing dialog).
-- [ ] #17 Hub install-progress getter
+- [x] #17 Hub install-progress: `hubState()` ({refreshing,seq}) + `ExternalPluginsChanged` listener latch in MobileUiBridge (install/remove download+load is async; native shows spinner until the event bumps seq, then re-fetches hubManifest).
 - [ ] #11 Overlay position/persist driver + snap-math wrapper (`OverlayManager.saveOverlay`)
 - [ ] #20 Infobox-action-by-point bridge
-- [ ] #12 Per-panel data bridges (Loot/XP/GE/Time)
+- [x] #12 Per-panel data bridges — all 4: `LootTrackerBridge` (getLootJson), `XpTrackerBridge` (getXpJson), `GrandExchangeBridge` (getGeJson), `TimeTrackingBridge` (getTimeTrackingJson). Each = QuestHelperBridge pattern (init/isAvailable/setUiOpen/get*Json/tick), wired into MobileUiBridge.init+tick, added to the shared-contract file list. Mostly reflection (most panel/record/snapshot types are package-private even though the plugins are core). Build-green; data shapes documented in each file. Native reflow screens = Batch C.
 - [ ] #15 Engine touch-drag→widget-drag routing — NO new bridge code (existing `JavaBridge.onTouch` streams PRESS→DRAG→RELEASE); needs a desktop spike + native wiring. Deferred.
 - [x] #9  `JavaBridge.setShiftHeld(boolean)` — transition-gated held VK_SHIFT (mirrors the proven spike). Cleared by Batch A.
 - [ ] Re-stage + contract check + desktop headless smoke + dual-port census + commit
