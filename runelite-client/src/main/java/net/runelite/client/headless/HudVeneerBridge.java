@@ -385,7 +385,11 @@ public final class HudVeneerBridge
 				final int containerId = preEoc
 					? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER;
 				final Widget w = c.getWidget(containerId);
-				if (w != null)
+				// Only relocate once the engine has loaded the orbs interface into the cluster. Relocating
+				// (setForcedPosition + per-frame revalidate) BEFORE the orbs open disrupts the open and the orbs
+				// (HP/prayer/run/spec/wiki) never appear — device readback: orbs absent when relocated from frame 1,
+				// present when not relocated. Once loaded they are nested children of MAP_CONTAINER and move with it.
+				if (w != null && c.getWidget(InterfaceID.Orbs.ORB_HEALTH) != null)
 				{
 					w.setForcedPosition(minimapX, minimapY);
 					w.revalidate();
