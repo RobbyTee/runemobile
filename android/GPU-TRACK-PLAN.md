@@ -123,8 +123,35 @@
 >   managers): all bundled-classpath JSON/texture FILE-I/O, NO network, NO headless-unsafe (no Frame/ClientUI). Low
 >   risk under our headless boot.
 >
-> **NEXT (AG2.5-b):** build the `org/lwjgl/opencl/*` stub + add `Configuration.OPENCL_EXPLICIT_INIT`; expand the GL
-> facade by the Zone delta; prove RLHD's loaders init under the headless boot (emulator). Then AG3 (Zone bring-up).
+> **STATUS — AG2.5-b GREEN on the emulator (2026-06-08).** The OpenCL stub + 117HD Zone facade delta are built and
+> the UNMODIFIED RLHD source (304 classes) compiles AND class-loads against our pure-Java `org.lwjgl` facade.
+> - **Build (host, deterministic):** `dev-tools/gpu/stage-rlhd-zone-jar.sh` compiles RLHD against [facade-src :
+>   **lwjgl-stripped** client jar] — the facade is the SOLE LWJGL provider, so a missing GL/CL/system symbol is a
+>   `javac` error, not a runtime `NoClassDefFound`. lombok runs as an annotation processor (no separate delombok).
+>   `MEGAVERDICT=ANDROID_RLHD_STAGE_GREEN`: 304 classes, 0 lwjgl leak, 47 glsl, 9 loader json, ZoneRenderer +
+>   OpenCLManager present → `client-<ver>-rlhd.jar` (gitignored). The facade ships in the base-gpu
+>   `client-<ver>-gpu.jar`, so the gpu jar MUST be re-staged from the same facade-src (it is shared).
+> - **Facade delta:** `org/lwjgl/opencl/*` symbols-only stub (CL/CL10/CL10GL/CL12/CLCapabilities/CLContextCallback/
+>   CLImageFormat/APPLEGLSharing/KHRGLSharing + ~60 CL_* + ~25 cl*, all throwing — Zone never creates a CL context);
+>   `Configuration.OPENCL_EXPLICIT_INIT` (the only thing OpenCLManager.<clinit> touches); GLALL grows by the Zone GL
+>   surface (glTexBuffer/indirect/fence-sync/glVertexAttribDivisor/glFramebufferTexture(Layer)/glBindImageTexture/
+>   program-binary, GLES 3.1/3.2 core) + GL40/41C/43/44/ARBTextureStorage/ARBShaderImageLoadStore shims;
+>   GLCapabilities reports ARB buffer-storage/image-load-store/indirect FALSE so RLHD takes the GLES-core fallbacks;
+>   functional MemoryStack/MemoryUtil/PointerBuffer/Platform/Version (MemoryUtil raw-pointer ops are native → librlawt,
+>   render path only). The whole facade is ADDITIVE — the base gpu plugin still recompiles GREEN against it.
+> - **Runtime gate (device JVM, emulator-authoritative — it's class-load/verify/JSON, NO GL execution):**
+>   `dev-tools/gpu/check-rlhdprobe.sh` boots `RLHDProbe` (mode `--ez rlhdprobe`, host does CACIO activation then a
+>   headless class-load test — no engine/bridge/render/login) on [gpu jar + rlhd jar]. `MEGAVERDICT=ANDROID_RLHD_PROBE_GREEN`:
+>   **linkSweep linked=304/304 failures=0** (every rs117.* class load+links+verifies against the facade — no
+>   NoClassDefFound/VerifyError), **openclGraph init=true OPENCL_EXPLICIT_INIT=true** (the OpenCL class-load graph runs
+>   its <clinit>), **loaderJson parsed=9/9** (the bundled loader data is present + well-formed on-device). Evidence
+>   `dev-tools/gpu/evidence/ag25b-rlhdprobe-emulator-20260608.log`.
+>
+> **NEXT (AG3 — Zone bring-up):** wire RLHD into the runtime plugin lifecycle and run `HdPlugin.startUp` end-to-end so
+> the loaders' typed Gson data-load + the renderer/VAO/UBO/shader init actually execute against a live EGL/GLES context
+> (this is where the librlawt GL-delta forwarders + MemoryUtil native backing get exercised; the AG2.5-b probe proves
+> class-load/data-presence, NOT the full GL startUp). Then the Zone shaders (330, same downport family as base-gpu) +
+> first HD frame.
 
 # Android GPU Rendering + 117HD: Final Plan (post-review)
 
