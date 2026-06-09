@@ -44,16 +44,17 @@
 P0 polish:
 - [ ] #1  "Tap to play" front screen gated on `isDebuggerAttached`; hide debug panel
 - [x] #2  Reset `engineChatRelocated` in `viewSafeAreaInsetsDidChange` (re-anchor on rotation/notch-flip)
-- [x] #9 consumer: sticky-Shift HUD button (amber-latched) → `postShiftHeld`. *(The marquee de-risked feature.)*
+- [x] #9 consumer: sticky-Shift HUD button (amber-latched) → `postShiftHeld`. *(The marquee de-risked feature.)* **✅ DEVICE-CONFIRMED GREEN 2026-06-08 (iPhone 17 Pro Max): latch on → Shift+long-press shows "Mark" entries → mark works → un-latch hides them. Multi-second latch holds with NO per-frame re-assert. Full native→bridge→engine path validated; remaining C1 consumers de-risked (shared JNI pattern).**
 - [ ] Dynamic-Island top-center occlusion audit (landscape)
 - [ ] #24 Verify chatbox-input auto-raise across Music/Quest List/Wiki/GE/Bank/Fairy Rings
 P1 menu + targeting:
 - [ ] #8  Native big-row menu overlay from `MenuPeekBridge.getSnapshot()` (44pt rows, hand-bias)
 - [ ] #3 long-press region routing (world→menu; chat→filter; overlay→edit) — OQ3
 P2 bridge-amortized:
-- [ ] #3  Screenshot → Photos button
-- [ ] #4  Notifications via `UNUserNotificationCenter` (foreground-only; AFK value near-zero)
-- [ ] #6  Pin/star UI + sort; #25 incompatible-plugin hide
+- [x] #3  Screenshot → Photos button (📷, saves live frame; NSPhotoLibraryAddUsageDescription added)
+- [x] #4  Notifications → `UNUserNotificationCenter` (drains nextNotification ~2Hz, lazy auth)
+- [x] #27 Links → `SFSafariViewController` (drains nextLink ~2Hz, http(s) only) — *(P1-listed, done here)*
+- [x] #6  Pin/star: sort pinned-first + ★ + long-press Pin/Unpin/Configure sheet → setPinned. #25 incompatible-hide already present on iOS (grace status).
 - [ ] #5  Config dimension/set/notification controls + native notification sub-screen
 - [ ] #17 Hub install progress UI
 - [ ] #27 `LinkBrowser` → SFSafariViewController
