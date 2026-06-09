@@ -486,24 +486,25 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.keyboardButton.widthAnchor constraintEqualToConstant:44],
         [self.keyboardButton.heightAnchor constraintEqualToConstant:36],
 
-        // Control trio (⚙ ▦ ≡) — TOP-RIGHT, in the gap between the now-wider chat tab row (top-left) and the
-        // relocated minimap (top-right). The enlarged chat row reaches further toward centre than the old
-        // panel-width row, so the trio is anchored to the right safe edge (just left of the minimap cluster)
-        // instead of centred, to stay clear of the tabs. Right-to-left chain: ≡ rightmost, then ▦, then ⚙.
-        [self.debugToggle.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
-        [self.debugToggle.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-180],
-        [self.debugToggle.widthAnchor constraintEqualToConstant:44],
-        [self.debugToggle.heightAnchor constraintEqualToConstant:36],
+        // Utility trio (⚙ ▦ ≡) — moved OUT of the top-right, where it overlapped the engine XP counter + minimap
+        // orbs (the XP button lives in the left part of the relocated MAP_CONTAINER cluster, and XP-drop numbers
+        // expand left into the trio). Now a vertical stack in the BOTTOM-LEFT above the keyboard button, over the
+        // scene and clear of every relocated HUD element (chat top-left, minimap/orbs/XP top-right, inventory
+        // bottom-right). Bottom-up order: keyboard, then ⚙, ▦, ≡.
+        [self.pluginButton.bottomAnchor constraintEqualToAnchor:self.keyboardButton.topAnchor constant:-8],
+        [self.pluginButton.leadingAnchor constraintEqualToAnchor:self.keyboardButton.leadingAnchor],
+        [self.pluginButton.widthAnchor constraintEqualToConstant:44],
+        [self.pluginButton.heightAnchor constraintEqualToConstant:36],
 
-        [self.chromeToggle.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
-        [self.chromeToggle.trailingAnchor constraintEqualToAnchor:self.debugToggle.leadingAnchor constant:-8],
+        [self.chromeToggle.bottomAnchor constraintEqualToAnchor:self.pluginButton.topAnchor constant:-8],
+        [self.chromeToggle.leadingAnchor constraintEqualToAnchor:self.keyboardButton.leadingAnchor],
         [self.chromeToggle.widthAnchor constraintEqualToConstant:44],
         [self.chromeToggle.heightAnchor constraintEqualToConstant:36],
 
-        [self.pluginButton.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
-        [self.pluginButton.trailingAnchor constraintEqualToAnchor:self.chromeToggle.leadingAnchor constant:-8],
-        [self.pluginButton.widthAnchor constraintEqualToConstant:44],
-        [self.pluginButton.heightAnchor constraintEqualToConstant:36],
+        [self.debugToggle.bottomAnchor constraintEqualToAnchor:self.chromeToggle.topAnchor constant:-8],
+        [self.debugToggle.leadingAnchor constraintEqualToAnchor:self.keyboardButton.leadingAnchor],
+        [self.debugToggle.widthAnchor constraintEqualToConstant:44],
+        [self.debugToggle.heightAnchor constraintEqualToConstant:36],
 
         // Debug panel — left ~62% of the safe area, full height, below the toggle row.
         [self.debugPanel.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
