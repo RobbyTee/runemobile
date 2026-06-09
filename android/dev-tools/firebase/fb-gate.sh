@@ -41,6 +41,7 @@ PKG="dev.audaro.helloshell"
 DEV_FILES="/sdcard/Android/data/$PKG/files"
 DEV_TOKENS="$DEV_FILES/tokens.json"
 DEV_MARKER="$DEV_FILES/gpu.mode"
+DEV_NETPROBE="$DEV_FILES/netprobe.mode"
 DEV_FRAMES="$DEV_FILES/routec-frames"
 
 command -v gcloud >/dev/null || { echo "gcloud not found — install the Google Cloud SDK + run 'gcloud auth login'" >&2; exit 2; }
@@ -58,6 +59,14 @@ if [ "$MODE" != "recon" ] && [ -f "$TOKENS" ]; then
   # CONFIRM on first run: the dir exists at push time on a fresh Test Lab device (Android creates it on
   # install); if the push is rejected, fall back to /sdcard/Download and widen JagexTokens' search path.
   OTHER=(--other-files "$DEV_TOKENS=$TOKENS")
+fi
+if [ "$MODE" = "netprobe" ]; then
+  # AG2 login diagnosis: push tokens + a netprobe.mode marker; the app runs NetProbe (no JVM boot) and logs whether
+  # the home-minted session authenticates from the Firebase device's IP.
+  [ -f "$TOKENS" ] || { echo "netprobe needs a tokens.json (the session to test): $TOKENS" >&2; exit 2; }
+  MARKER="$(mktemp)"; printf 'go\n' > "$MARKER"
+  OTHER=(--other-files "$DEV_TOKENS=$TOKENS,$DEV_NETPROBE=$MARKER")
+  : "${FB_TIMEOUT:=120s}"
 fi
 if [ "$MODE" = "gpu" ]; then
   # Seed the gpu.mode marker (Robo can't pass --ez routecgpu); MainActivity boots GPU Route-C when it exists.
@@ -123,5 +132,9 @@ case "$MODE" in
           [ "$SHADERR" -gt 0 ] && echo ">> NOTE: $SHADERR transient HYBRID ShaderException(s) before LINEAR recovery"
           echo ">> isGpu-active=$ACTIVE  createGLContext=$CTX  ShaderException=$SHADERR  frames=$N"
           if [ "$ACTIVE" -ge 1 ] && [ "$N" -ge 1 ]; then echo ">> VERDICT=AG2_DEVICE_PASS (base gpu renders on the real driver)"; else echo ">> VERDICT=AG2_DEVICE_NOT_GREEN (see logcat $OUT)" >&2; exit 1; fi ;;
+  netprobe) echo "--- NETPROBE: does the home-minted session authenticate from the Firebase (datacenter) IP? ---"
+          grep -E "NETPROBE" "$OUT" || { echo "no NETPROBE lines — is the netprobe build installed?" >&2; exit 1; }
+          echo "--- read: control 204 = egress OK; jagex accounts HTTP 200 = session accepted from this IP (so login fails elsewhere);"
+          echo "    401/403 = session rejected (IP-binding or datacenter block); TCP FAIL on 43594 = game-world egress blocked ---" ;;
   *) echo "unsupported mode for Firebase: $MODE (census is emulator/BrowserStack only)" >&2; exit 2 ;;
 esac

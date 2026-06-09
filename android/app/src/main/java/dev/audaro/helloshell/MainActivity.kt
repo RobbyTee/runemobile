@@ -269,6 +269,14 @@ class MainActivity : AppCompatActivity() {
         val censusMode = intent?.getBooleanExtra("census", false) ?: false
         // Track G AG1a: `adb ... --ez gpuSmoke true` boots the facade-only EGL smoke (no engine/tokens/login) to
         // probe GL.createCapabilities().OpenGL33==true through the facade on a live Android EGL context.
+        // AG2 login diagnosis: a pushed `netprobe.mode` marker (--other-files) runs the network probe ONLY — does
+        // the home-minted Jagex session authenticate from THIS device's IP? — then logs NETPROBE… and stops (no
+        // JVM boot). Lets the Firebase device answer "can we mint/login from the datacenter?" before we build for it.
+        if (File(getExternalFilesDir(null), "netprobe.mode").exists()) {
+            val app = applicationContext
+            thread(name = "netprobe") { NetProbe.run(app) }
+            return
+        }
         if (intent?.getBooleanExtra("gpuSmoke", false) == true) {
             if (booted.compareAndSet(false, true)) {
                 val app = applicationContext

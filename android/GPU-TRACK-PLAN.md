@@ -80,14 +80,18 @@
 > is non-authoritative for PERF, but the shader + render MECHANICS are already real-Mali-proven (AG1b validate +
 > AG2 device render), so this functionally closes the 3D `drawScene` path (geometry/depth/flip).
 >
-> **WHY FIREBASE CAN'T LOG IN (mechanism, settled):** at login the gamepack makes LIVE network calls from the
-> device's IP — it mints its own play/OTL token via `auth.runescape.com/game-session/v1/tokens` (Bearer = the
-> session), then connects to the game world. The `session_id` is minted from the user's HOME network
-> (`fetch-shield-tokens.sh` runs on their Mac) and Jagex binds/validates it against that origin, so from Firebase's
-> Google-datacenter IP the calls are rejected (`LOGGING_IN → LOGIN_SCREEN`). Confirmed: the token reuses across the
-> user's two Macs (same home IP) with no remint; ONLY Firebase fails. **There is no Firebase fix** (no VPN/proxy on
-> a Test Lab device; can't pick datacenter region). Auth-gated OSRS gates run on the home network: the emulator
-> (home mini) or a physical Android device on home wifi driven via adb.
+> **WHY FIREBASE CAN'T LOG IN — PROVEN by a direct network probe (`NetProbe.kt`, run `fb-gate.sh netprobe`).** At
+> login the gamepack hits `auth.runescape.com/game-session/*` (mint a play/OTL token with Bearer=session, then the
+> game world). From the Firebase device (egress IP `108.177.18.240`, Google datacenter; IPv6 `2001:4860:…`) that
+> API returns **HTTP 403 with a `<title>Security | Jagex</title>` page** — a WAF / anti-bot block on the datacenter
+> IP, returned BEFORE the session is even evaluated. Control (`google/generate_204`→204) and `account.jagex.com`
+> (→200) work, so it is not general egress — it is Jagex's security layer specifically blocking the game-session
+> API from cloud/datacenter IPs. From the home network the SAME probe returns **HTTP 200 + the account list**.
+> Evidence: `dev-tools/gpu/evidence/ag2-firebase-netprobe-waf403-20260608.log`. **This kills the "mint the token on
+> the Firebase device" idea: minting uses the SAME game-session API, so it is 403-blocked identically — the block
+> is on the IP/network, not the token/session. There is NO token trick** (a residential-proxy/SOCKS tunnel for ALL
+> Jagex + the 43594 game socket would be the only path, and is over-engineering). Auth-gated OSRS gates run on a
+> RESIDENTIAL network: the emulator (home mini) or a physical Android device on home wifi, adb-driven.
 >
 > **NEXT: in-world 3D on real MALI (perf-authoritative)** — needs a physical Android device on the home network
 > (the emulator already proves the render functionally; AG1b/AG2 prove the Mali mechanics). Then AG2.5 (RLHD
