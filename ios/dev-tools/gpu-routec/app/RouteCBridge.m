@@ -216,6 +216,7 @@ static BOOL rcBuildFbo(int w, int h)
 	// reverse-Z projection + clearDepth(0) + GL_GEQUAL are applied regardless of OpenGL45, so wiring clip_control
 	// here completes the desktop-equivalent reverse-Z. This is blueprint P0.2 ("clip_control is ours to wire").
 	glClipControlEXT(GL_LOWER_LEFT_EXT, GL_ZERO_TO_ONE_EXT);
+	if (ok) [RouteCBridge runDeviceProbesOnce];   // device kit: one-shot RGB32I sampleability confirm
 	return ok;
 }
 
@@ -334,7 +335,9 @@ static BOOL rcBuildFbo(int w, int h)
 	sCtx = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES3];
 	if (!sCtx) return NO;
 	[EAGLContext setCurrentContext:sCtx];
-	return rcBuildFbo(w, h);
+	BOOL ok = rcBuildFbo(w, h);
+	if (ok) [RouteCBridge runDeviceProbesOnce];   // device kit: one-shot RGB32I sampleability confirm
+	return ok;
 }
 
 + (unsigned int)awtGetFramebuffer { return sFbo; }
@@ -644,6 +647,114 @@ static BOOL rcBuildFbo(int w, int h)
 	}
 
 	return [s copy];
+}
+
+// ===== DEVICE KIT (temporary, STRIP after the EAGL-vs-ANGLE decision) =====
+// Measures the two device-only unknowns the Simulator can't: (1) the gl_FragDepth EARLY-Z perf cost — via the
+// per-second gpuFinish counter in routec_gl_jni.m, tagged by perfModeTag (A/B mode=baseline vs mode=fragdepth across
+// two launches), and (2) GL_RGB32I 2D sampleability on the real Metal GPU (runDeviceProbesOnce). Both append to a
+// pullable Documents/routec-perf.log. Run steps: ios/dev-tools/gpu-routec/DEVICE-KIT.md.
+
++ (NSString *)perfModeTag
+{
+	NSString *m = [self waterDiagMode];
+	if (!m.length) m = @"default";
+	return [NSString stringWithFormat:@"%@/%@", m,
+		[self depthFixActive] ? @"earlyZ-OFF(fragdepth)" : @"earlyZ-ON(no-fragdepth)"];
+}
+
++ (void)appendPerfLine:(NSString *)line
+{
+	NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+	NSString *path = [docs stringByAppendingPathComponent:@"routec-perf.log"];
+	NSString *stamped = [NSString stringWithFormat:@"%@  %@\n", [NSDate date], line];
+	NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+	if (!fh) { [stamped writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]; return; }
+	[fh seekToEndOfFile];
+	[fh writeData:[stamped dataUsingEncoding:NSUTF8StringEncoding]];
+	[fh closeFile];
+}
+
+static GLuint rcDevCompile(GLenum type, const char *src)
+{
+	GLuint sh = glCreateShader(type);
+	glShaderSource(sh, 1, &src, NULL); glCompileShader(sh);
+	GLint ok = 0; glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+	if (!ok) { char b[1024] = {0}; glGetShaderInfoLog(sh, sizeof(b), NULL, b);
+		[RouteCBridge appendPerfLine:[NSString stringWithFormat:@"[probe] shader compile FAIL: %s", b]];
+		glDeleteShader(sh); return 0; }
+	return sh;
+}
+static GLuint rcDevLink(const char *vs, const char *fs)
+{
+	GLuint v = rcDevCompile(GL_VERTEX_SHADER, vs), f = rcDevCompile(GL_FRAGMENT_SHADER, fs);
+	if (!v || !f) return 0;
+	GLuint p = glCreateProgram(); glAttachShader(p, v); glAttachShader(p, f); glLinkProgram(p);
+	glDeleteShader(v); glDeleteShader(f);
+	GLint ok = 0; glGetProgramiv(p, GL_LINK_STATUS, &ok);
+	if (!ok) { glDeleteProgram(p); return 0; }
+	return p;
+}
+// YES iff a 2D integer texture in the given format (rgba=NO -> RGB32I, RLHD's real format; YES -> RGBA32I fallback)
+// uploads + samples EXACTLY via texelFetch on the live device GPU context. Mirrors gpu-tbo2d PHASE A on real Metal.
+static BOOL rcDevFormatSampleable(BOOL rgba)
+{
+	const int comp = rgba ? 4 : 3;
+	int32_t data[8 * 4] = {0};
+	for (int t = 0; t < 8; t++) { data[t*comp+0] = t*7+1; data[t*comp+1] = (t ^ 0x5a5a) & 0x7fffffff; data[t*comp+2] = -(t*3+1); }
+	GLuint tex = 0; glGenTextures(1, &tex); glBindTexture(GL_TEXTURE_2D, tex);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexImage2D(GL_TEXTURE_2D, 0, rgba ? GL_RGBA32I : GL_RGB32I, 8, 1, 0,
+		rgba ? GL_RGBA_INTEGER : GL_RGB_INTEGER, GL_INT, data);
+	if (glGetError() != GL_NO_ERROR) { glDeleteTextures(1, &tex); return NO; }
+	const char *vs = "#version 300 es\nprecision highp float;\n"
+		"void main(){ gl_Position = vec4(0.,0.,0.,1.); gl_PointSize = 1.0; }\n";
+	const char *fs = "#version 300 es\nprecision highp float; precision highp int; precision highp isampler2D;\n"
+		"uniform highp isampler2D uTex; out vec4 o;\n"
+		"ivec3 expected(int t){ return ivec3(t*7+1, (t ^ 0x5a5a)&0x7fffffff, -(t*3+1)); }\n"
+		"void main(){ ivec3 g = texelFetch(uTex, ivec2(5,0), 0).xyz; o = (g==expected(5)) ? vec4(0.,1.,0.,1.) : vec4(1.,0.,0.,1.); }\n";
+	GLuint prog = rcDevLink(vs, fs);
+	BOOL ok = NO;
+	if (prog) {
+		GLuint col = 0, fbo = 0; glGenTextures(1, &col); glBindTexture(GL_TEXTURE_2D, col);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glGenFramebuffers(1, &fbo); glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, col, 0);
+		if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+			glViewport(0, 0, 1, 1); glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
+			glUseProgram(prog); glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, tex);
+			glUniform1i(glGetUniformLocation(prog, "uTex"), 0);
+			GLuint vao = 0; glGenVertexArrays(1, &vao); glBindVertexArray(vao);
+			glDrawArrays(GL_POINTS, 0, 1);
+			unsigned char px[4] = {0}; glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+			ok = (px[1] > 200 && px[0] < 80);
+			glBindVertexArray(0); glDeleteVertexArrays(1, &vao);
+		}
+		glUseProgram(0);
+		glDeleteFramebuffers(1, &fbo); glDeleteTextures(1, &col); glDeleteProgram(prog);
+	}
+	glDeleteTextures(1, &tex);
+	return ok;
+}
+
++ (void)runDeviceProbesOnce
+{
+	static BOOL ran = NO; if (ran) return; ran = YES;
+	// Save state — called right after createGLContext; restore so the plugin's first frame is unaffected.
+	GLint prevFbo = 0, vp[4] = {0, 0, 0, 0};
+	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+	glGetIntegerv(GL_VIEWPORT, vp);
+	const char *rend = (const char *) glGetString(GL_RENDERER);
+	GLint maxTex = 0; glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
+	BOOL rgb = rcDevFormatSampleable(NO), rgba = rcDevFormatSampleable(YES);
+	[RouteCBridge appendPerfLine:[NSString stringWithFormat:
+		@"[probe] RGB32I_DEVICE_SAMPLEABLE=%@ RGBA32I=%@ GL_RENDERER=%s GL_MAX_TEXTURE_SIZE=%d  (117HD blocker#1 device confirm)",
+		rgb ? @"YES" : @"NO", rgba ? @"YES" : @"NO", rend ? rend : "?", (int)maxTex]];
+	glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
+	glViewport(vp[0], vp[1], vp[2], vp[3]);
 }
 
 @end

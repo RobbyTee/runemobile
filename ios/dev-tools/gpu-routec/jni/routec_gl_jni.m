@@ -235,16 +235,31 @@ static void rc_swap_publish(JNIEnv *env)
     (*env)->CallStaticVoidMethod(env, s_jb, s_pub, (jint)w, (jint)h);
     (*env)->DeleteLocalRef(env, arr);
 
-    // PERF (temporary, STRIP after tuning): engine composite FPS + the GPU-vs-copy split. One line/sec.
+    // PERF (DEVICE KIT — gl_FragDepth early-Z A/B): engine FPS + GPU render time/frame (gpuFinish, where the early-Z
+    // cost shows) with avg + p95, tagged by the active depth mode, appended to Documents/routec-perf.log once/sec. The
+    // A/B is two launches: routec-water-mode.txt = "baseline" (early-Z ON, no gl_FragDepth) vs "fragdepth" (early-Z
+    // OFF). STRIP with the rest of the device kit after the EAGL-vs-ANGLE decision.
     static int frames = 0; static double accGpu = 0, accCopy = 0, lastLog = 0;
+    static double gpuWin[1024]; static int nWin = 0;
     double now = rc_now_seconds();
     frames++; accGpu += tGpu; accCopy += tCopy;
+    if (nWin < 1024) gpuWin[nWin++] = tGpu * 1000.0;
     if (lastLog == 0) lastLog = now;
     double span = now - lastLog;
     if (span >= 1.0) {
-        rc_trace([NSString stringWithFormat:@"[perf] engine=%.1f fps  gpuFinish=%.2f ms  copy=%.2f ms  (%d frames, %dx%d)",
-            frames / span, (accGpu / frames) * 1000.0, (accCopy / frames) * 1000.0, frames, w, h]);
-        frames = 0; accGpu = 0; accCopy = 0; lastLog = now;
+        for (int i = 1; i < nWin; i++) {           // insertion sort the window (small) for the p95
+            double k = gpuWin[i]; int j = i - 1;
+            while (j >= 0 && gpuWin[j] > k) { gpuWin[j + 1] = gpuWin[j]; j--; }
+            gpuWin[j + 1] = k;
+        }
+        double p95 = nWin ? gpuWin[(int)((nWin - 1) * 0.95)] : 0.0;
+        NSString *line = [NSString stringWithFormat:
+            @"[perf] mode=%@ engine=%.1f fps  gpuFinish avg=%.2f p95=%.2f ms  copy=%.2f ms  (%d frames, %dx%d)",
+            [RouteCBridge perfModeTag], frames / span, (accGpu / frames) * 1000.0, p95,
+            (accCopy / frames) * 1000.0, frames, w, h];
+        rc_trace(line);
+        [RouteCBridge appendPerfLine:line];
+        frames = 0; accGpu = 0; accCopy = 0; lastLog = now; nWin = 0;
     }
 }
 
