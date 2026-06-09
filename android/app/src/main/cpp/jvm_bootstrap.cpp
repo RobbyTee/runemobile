@@ -811,7 +811,11 @@ static void *jvmThreadMain(void *argp) {
     // CACIO, no JavaBridge/render. dlopen the librlawt EGL bridge + RegisterNatives the org.lwjgl.opengl/AWTContext
     // facade, then invoke the smoke main below. Detected from the VM opts so the normal boot path is untouched.
     bool routecSmoke = false;
-    for (const std::string &o : a->extraOpts) if (o == "-Drunelite.routec.smoke=true") routecSmoke = true;
+    bool routecGpu = false;
+    for (const std::string &o : a->extraOpts) {
+        if (o == "-Drunelite.routec.smoke=true") routecSmoke = true;
+        if (o == "-Drunelite.routecgpu=true") routecGpu = true;
+    }
 
     if (routecSmoke) {
         LOGI("HotSpot VM up; routec.smoke mode (facade-only GL bridge — no CACIO/engine/render)");
@@ -845,6 +849,22 @@ static void *jvmThreadMain(void *argp) {
             return fail(-14);
         }
         startRenderThreadOnce();
+
+        // Track G AG2 (`-Drunelite.routecgpu=true`): FULL RuneLite boot (CACIO + engine + render) PLUS the GL
+        // bridge — dlopen librlawt + RegisterNatives the org.lwjgl.opengl/AWTContext facade NOW, before the boot
+        // main starts the engine, so the gpu plugin's AWTContext.createGLContext resolves to our EGL backing.
+        // The facade classes live in the GPU-variant jar on this run's classpath. swapBuffers then glReadPixels-es
+        // the FBO into JavaBridge's double buffer and the existing render thread blits it (no seam change).
+        if (routecGpu) {
+            void *rh = dlopen("librlawt.so", RTLD_NOW | RTLD_GLOBAL);
+            if (!rh) {
+                LOGE("routecgpu: dlopen librlawt.so failed: %s", dlerror());
+            } else {
+                auto reg = (jint (*)(JNIEnv *)) dlsym(rh, "RouteC_registerGLNatives");
+                if (!reg) LOGE("routecgpu: dlsym RouteC_registerGLNatives failed: %s", dlerror());
+                else { jint rr = reg(env); LOGI("routecgpu: RouteC_registerGLNatives rc=%d (0=OK)", rr); }
+            }
+        }
 
         // Signal startJvm that bringup is complete (VM is up). The worker now continues into the boot main.
         { std::lock_guard<std::mutex> lk(g_bootLock); g_bootDone = true; g_bootRc = JNI_OK; }

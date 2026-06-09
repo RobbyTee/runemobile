@@ -186,11 +186,14 @@ class MainActivity : AppCompatActivity() {
         // A3: on-device Jagex login / switch account — runs the WebView OAuth, writes tokens.json, restarts.
         val signInButton = devButton("⎆")
         signInButton.setOnClickListener { startActivity(Intent(this, LoginActivity::class.java)) }
+        // Track G AG2: restart into GPU Route-C mode (force-enable the base gpu plugin, render the scene on GLES).
+        val gpuButton = devButton("◆")
+        gpuButton.setOnClickListener { restartIntoGpu() }
         // Group the dev affordances into one discreet cluster pinned to the BOTTOM-LEFT — clear of the relocated
         // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
         val devBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(pluginButton); addView(chromeButton); addView(signInButton)
+            addView(pluginButton); addView(chromeButton); addView(signInButton); addView(gpuButton)
         }
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
@@ -273,6 +276,11 @@ class MainActivity : AppCompatActivity() {
             }
             return
         }
+        // Track G AG2: `adb ... --ez routecgpu true` (or the dev "GPU" button, which restarts the process into
+        // this) boots the FULL client on the GPU-variant jar with the gpu plugin force-enabled in-world. Needs
+        // tokens like the normal boot (it must reach LOGGED_IN for the canvas to validate), so it falls through
+        // the same login-first gate below.
+        val gpuMode = intent?.getBooleanExtra("routecgpu", false) ?: false
         // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
         // BEFORE boot. With none (and not census, which uses pushed tokens), run the on-device Jagex login first;
         // it writes tokens.json then restarts the process for a clean boot (Review-2: login-first or restart).
@@ -284,8 +292,19 @@ class MainActivity : AppCompatActivity() {
         }
         if (booted.compareAndSet(false, true)) {
             val app = applicationContext
-            thread(name = "jvm-boot") { bootJvm(app, censusMode) }
+            thread(name = "jvm-boot") { bootJvm(app, censusMode, gpu = gpuMode) }
         }
+    }
+
+    /** Dev "GPU" button: restart the process into GPU Route-C mode (the embedded VM is one-per-process, so
+     *  switching from the CPU jar to the GPU jar needs a clean boot — same mechanism as the login restart). */
+    private fun restartIntoGpu() {
+        val i = packageManager.getLaunchIntentForPackage(packageName)
+        i?.putExtra("routecgpu", true)
+        i?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        startActivity(i)
+        finishAffinity()
+        Runtime.getRuntime().exit(0)
     }
 
     /** Map a SurfaceView-local coordinate to game-canvas pixels, clamped to the current frame. */
@@ -808,7 +827,7 @@ class MainActivity : AppCompatActivity() {
         Log.i(TAG, "AG1a: startJvm rc=$rc (watch logcat: ANDROID_AG1A / librlawt / routec)")
     }
 
-    private fun bootJvm(app: android.content.Context, census: Boolean = false) {
+    private fun bootJvm(app: android.content.Context, census: Boolean = false, gpu: Boolean = false) {
         val javaHome = AssetInstaller.ensureInstalled(app)
         val libjvm = File(javaHome, "lib/server/libjvm.so")
         if (!libjvm.exists()) {
@@ -818,12 +837,26 @@ class MainActivity : AppCompatActivity() {
         }
 
         val jvmDir = File(app.filesDir, "jvm")
-        // The client jar carries the project version (e.g. client-1.12.29-SNAPSHOT-shaded.jar); glob for it so
-        // a version bump needs no code edit (staged by tools/stage-mobile-runtime.sh; AssetInstaller unpacks it).
-        val clientJar = jvmDir.list { _, name -> name.startsWith("client-") && name.endsWith("-shaded.jar") }
+        // GPU mode boots the jar-surgery variant (client-<ver>-gpu.jar: lwjgl/rlawt/gpu stripped + facade); the
+        // CPU boot uses the pristine client-<ver>-shaded.jar. The two carry the project version, so glob by suffix
+        // (a version bump needs no code edit). AssetInstaller only unpacks assets/jvm on a runtime.tag change, so
+        // the GPU jar may be absent on an install that didn't bump the tag — copy it from assets if so.
+        val jarSuffix = if (gpu) "-gpu.jar" else "-shaded.jar"
+        if (gpu) {
+            val assetGpu = runCatching { app.assets.list("jvm") }.getOrNull()
+                ?.firstOrNull { it.startsWith("client-") && it.endsWith("-gpu.jar") }
+            if (assetGpu != null && !File(jvmDir, assetGpu).exists()) {
+                runCatching {
+                    jvmDir.mkdirs()
+                    app.assets.open("jvm/$assetGpu").use { i -> File(jvmDir, assetGpu).outputStream().use { o -> i.copyTo(o) } }
+                }.onFailure { Log.w(TAG, "routecgpu: copy $assetGpu from assets failed: ${it.message}") }
+            }
+        }
+        val clientJar = jvmDir.list { _, name -> name.startsWith("client-") && name.endsWith(jarSuffix) }
             ?.firstOrNull()
         if (clientJar == null) {
-            Log.e(TAG, "no client-*-shaded.jar staged in $jvmDir")
+            Log.e(TAG, "no client-*$jarSuffix staged in $jvmDir" +
+                if (gpu) " (run android/dev-tools/gpu/stage-android-gpu-jar.sh)" else "")
             booted.set(false)
             return
         }
@@ -908,6 +941,18 @@ class MainActivity : AppCompatActivity() {
                 "-Drunelite.huddata=true",
             ))
             Log.i(TAG, "A-1b census mode: +huddata + gatecensus (mobileui/mobilechrome/hudveneer/resize always-on)")
+        }
+        if (gpu) {
+            // Arm RouteCGpuStarter (force-enable + start the gpu plugin once in-world) and the frame-dump
+            // diagnostic so the AG2 device gate gets pullable colour/flip evidence. The bridge itself is
+            // registered natively (jvm_bootstrap sees -Drunelite.routecgpu and dlopen's librlawt after VM create).
+            val dumpDir = app.filesDir.absolutePath   // JavaBridge.maybeDumpFrame appends "routec-frames/"
+            opts.addAll(listOf(
+                "-Drunelite.routecgpu=true",
+                "-Drunelite.gpuframedump=true",
+                "-Drunelite.gpuframedump.dir=$dumpDir",
+            ))
+            Log.i(TAG, "AG2 GPU mode: gpu jar $clientJar, routecgpu + frame-dump armed (dir=$dumpDir/routec-frames)")
         }
 
         // A8: only pipe the embedded VM's stdout/err to logcat in DEBUG builds — a release build must not leak

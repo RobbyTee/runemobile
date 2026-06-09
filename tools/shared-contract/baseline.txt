@@ -1,7 +1,10 @@
 FLAG headless.captureTargetFrames
 FLAG headless.runSeconds
+FLAG java.io.tmpdir
 FLAG runelite.bridge
 FLAG runelite.gatecensus
+FLAG runelite.gpuframedump
+FLAG runelite.gpuframedump.dir
 FLAG runelite.headless.autologin
 FLAG runelite.headless.autologin.cooldown
 FLAG runelite.headless.autologin.eula
@@ -27,6 +30,7 @@ FLAG runelite.menupeek
 FLAG runelite.menupeek.maxEntries
 FLAG runelite.mobilechrome
 FLAG runelite.mobileui
+FLAG runelite.routecgpu
 FLAG runelite.touch.selFlashMs
 FLAG runelite.touch.snap
 FLAG runelite.touch.snapRadius
@@ -52,6 +56,8 @@ METHOD HudVeneerBridge#setChatHidden(boolean)
 METHOD HudVeneerBridge#setChatTabRowHeight(int)
 METHOD HudVeneerBridge#setStonesHidden(boolean)
 METHOD HudVeneerBridge#tick(Client)
+METHOD JavaBridge#canvasHeight()
+METHOD JavaBridge#canvasWidth()
 METHOD JavaBridge#clearHover()
 METHOD JavaBridge#drawSelection(Client)
 METHOD JavaBridge#getFrameHeight()
@@ -59,6 +65,8 @@ METHOD JavaBridge#getFramePixels()
 METHOD JavaBridge#getFrameSeq()
 METHOD JavaBridge#getFrameWidth()
 METHOD JavaBridge#getInteractTapSeq()
+METHOD JavaBridge#gpuFrameBackBuffer(int,int)
+METHOD JavaBridge#gpuPublish(int,int)
 METHOD JavaBridge#isEnabled()
 METHOD JavaBridge#isTextInputOpen()
 METHOD JavaBridge#onCameraDrag(int,int)
@@ -102,6 +110,7 @@ METHOD MobileUiBridge#listPanels()
 METHOD MobileUiBridge#listPlugins()
 METHOD MobileUiBridge#openPanel(int)
 METHOD MobileUiBridge#panelClick(int,int)
+METHOD MobileUiBridge#pluginDiag(String)
 METHOD MobileUiBridge#pollMobileUiEvents(long)
 METHOD MobileUiBridge#registerNav(NavigationButton)
 METHOD MobileUiBridge#resetConfig(String,String)

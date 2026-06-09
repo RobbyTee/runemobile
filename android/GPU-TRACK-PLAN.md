@@ -32,11 +32,29 @@
 > unknown). The AG1a facade/EGL `OpenGL33` path is separately GREEN on the emulator; the CACIO-canvas +
 > HotSpot-render-thread sub-risks (run the unmodified `GpuPlugin.startUp` end-to-end) remain for AG2.
 >
-> **NEXT: AG2** — wire the full GL surface so the unmodified base `gpu` plugin renders the real scene: facade-back
-> the client jar (strip lwjgl, substitute the facade), port the gpu-branch `Hooks.java:559` snapshot gate + add
-> `gpuPublish`/`gpuFrameBackBuffer` to JavaBridge, move the 330→ES downport into the `glShaderSource` shim,
-> `glReadPixels`→`int[]`→existing blit (Phase 1). The base-gpu odds are now materially up — the shader go/no-go
-> is retired; AG2 is wiring + colour/depth correctness, not an open question of viability.
+> **STATUS — AG2 wiring COMPLETE + emulator END-TO-END GREEN (2026-06-08, commits `c08490a7e`/`0a681a488`/
+> `8ffc44dfa`/`0eba3bc26`).** The unmodified base `gpu` plugin renders through our facade + native EGL bridge,
+> on the embedded HotSpot VM, on the live-OSRS client. Proven on the emulator (ANGLE→SwiftShader, ES 3.1):
+> `isGpu=true`, `createGLContext` brings up the EGL ctx + canvas-sized FBO through `librlawt`, scene+UI shaders
+> compile (the 320/310/300-es downport now lives in the `glShaderSource` shim), `swapBuffers`→`glReadPixels`→
+> `gpuPublish`→the existing SurfaceView blit, and the dumped frame is a correct OSRS render — **right-side-up
+> (vertical flip OK) with correct colours (BGRA + readback R↔B swizzle OK)**. The pieces:
+> - **P1** `JavaBridge.gpuFrameBackBuffer/gpuPublish/canvasWidth/Height` + Hooks `!isGpu` CPU-snapshot gate.
+> - **P2** `librlawt` AG2 shims: highest-ES context (3.2→3.0), `glShaderSource` downport, `swapBuffers` readback
+>   publish, per-frame `getFramebuffer` FBO resize.
+> - **P3** `dev-tools/gpu/stage-android-gpu-jar.sh` jar surgery (strip lwjgl/rlawt/gpu classes, facade-back,
+>   recompile the plugin) → `client-<ver>-gpu.jar`.
+> - **P4** `-Drunelite.routecgpu=true` full boot (registers the bridge after VM-create), `DeviceHeadlessBoot`
+>   drops `--safe-mode` (which disables the gpu plugin — the one `loadInSafeMode=false` plugin), `RouteCGpuStarter`
+>   force-enables the plugin in-world and forces `uiScalingMode=LINEAR` (the default HYBRID/xBR scale shaders use
+>   `sourceDimensions` int↔float math strict GLSL-ES rejects; LINEAR is scale-free and is what AG1b validated),
+>   `MainActivity` GPU launch path + dev `◆` button + `--ez routecgpu true`.
+>
+> **NEXT: AG2-P5 (device pixel gate)** — the emulator is ANGLE/SwiftShader (NOT authoritative). The remaining
+> gate is a real-device run on the user's Pixel 8 (real Mali, AG1b-proven shaders): install → fresh tokens →
+> login → `◆` GPU button, then pull `files/routec-frames/*.png` and confirm an **in-world 3D scene** with correct
+> colour/depth/flip (the emulator only captured the post-login UI/welcome layer — the 3D `drawScene` path is the
+> same FBO readback but unconfirmed visually). After P5: AG2.5 (RLHD loaders + OpenCL facade) → AG3 (117HD).
 
 # Android GPU Rendering + 117HD: Final Plan (post-review)
 

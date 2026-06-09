@@ -30,11 +30,15 @@ public class DeviceHeadlessBoot {
         // 2. Boot the real client, window-less (HeadlessClientUI), GPU off. HeadlessCapture dumps
         //    mainBufferProvider to -Drunelite.headless.capture.dir when set.
         //    safe-mode disables external (plugin-hub) plugins AND the GPU plugin; the GPU plugin is
-        //    irrelevant headless, so we keep safe-mode by default but drop it for the plugin-hub path
-        //    (-Drunelite.hub=true) so ExternalPluginManager can download/classload hub plugins.
+        //    irrelevant headless on the CPU path, so we keep safe-mode by default but drop it for the
+        //    plugin-hub path (-Drunelite.hub=true) AND for GPU Route-C (-Drunelite.routecgpu=true), where the
+        //    base gpu plugin IS the renderer (it is the one plugin in the tree with loadInSafeMode=false).
         final boolean hub = Boolean.getBoolean("runelite.hub");
-        final String[] rlArgs = hub ? new String[0] : new String[]{"--safe-mode"};
-        System.out.println("[boot] launching RuneLiteHeadless" + (hub ? " (hub: safe-mode OFF)" : " --safe-mode"));
+        final boolean routecGpu = Boolean.getBoolean("runelite.routecgpu");
+        final boolean safeModeOff = hub || routecGpu;
+        final String[] rlArgs = safeModeOff ? new String[0] : new String[]{"--safe-mode"};
+        System.out.println("[boot] launching RuneLiteHeadless" + (safeModeOff
+            ? " (safe-mode OFF: " + (routecGpu ? "routecgpu" : "hub") + ")" : " --safe-mode"));
         net.runelite.client.headless.RuneLiteHeadless.main(rlArgs);
 
         long runSeconds = Long.getLong("headless.runSeconds", 60L);

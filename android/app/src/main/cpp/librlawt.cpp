@@ -21,6 +21,8 @@
 #include <pthread.h>
 #include <cstdlib>
 #include <cstring>
+#include <string>
+#include <regex>
 
 #define LOG_TAG "librlawt"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -51,6 +53,89 @@ static EGLSurface sSurf = EGL_NO_SURFACE;
 static EGLConfig  sCfg  = nullptr;
 static GLuint sFbo = 0, sColorRbo = 0, sDepthRbo = 0;
 static int sFboW = 0, sFboH = 0;
+// GLSL ES target for the runtime downport — set from the real GL_VERSION once the context is current
+// ("320 es" on ES 3.2, "310 es" on 3.1, "300 es" on 3.0). AG1b validated the base shaders at "320 es" on Mali.
+static char sEsVer[16] = "320 es";
+// glReadPixels scratch (read straight, then flip + swizzle into the Java array) — grown on demand.
+static uint32_t *sReadback = nullptr;
+static size_t sReadbackN = 0;
+
+// JavaBridge GPU seam (resolved lazily once the GPU jar's class is on the classpath).
+static jclass sJbCls = nullptr;
+static jmethodID sJbBackBuf = nullptr;   // gpuFrameBackBuffer(II)[I
+static jmethodID sJbPublish = nullptr;   // gpuPublish(II)V
+static jmethodID sJbCanvasW = nullptr;   // canvasWidth()I
+static jmethodID sJbCanvasH = nullptr;   // canvasHeight()I
+
+static bool rc_jb_cache(JNIEnv *env) {
+    if (sJbCls) return sJbBackBuf && sJbPublish;
+    jclass c = env->FindClass("net/runelite/client/headless/JavaBridge");
+    if (!c) { if (env->ExceptionCheck()) env->ExceptionClear(); return false; }
+    sJbCls = (jclass) env->NewGlobalRef(c);
+    sJbBackBuf = env->GetStaticMethodID(sJbCls, "gpuFrameBackBuffer", "(II)[I");
+    sJbPublish = env->GetStaticMethodID(sJbCls, "gpuPublish", "(II)V");
+    sJbCanvasW = env->GetStaticMethodID(sJbCls, "canvasWidth", "()I");
+    sJbCanvasH = env->GetStaticMethodID(sJbCls, "canvasHeight", "()I");
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    LOGI("JavaBridge cache: backBuf=%p publish=%p canvasW=%p canvasH=%p", sJbBackBuf, sJbPublish, sJbCanvasW, sJbCanvasH);
+    return sJbBackBuf && sJbPublish;
+}
+
+// Re-bind the thread-affine EGL context on the calling (client/draw) thread. Cheap when already current.
+static void rc_make_current() {
+    if (sDpy != EGL_NO_DISPLAY && sCtx != EGL_NO_CONTEXT && eglGetCurrentContext() != sCtx) {
+        eglMakeCurrent(sDpy, sSurf, sSurf, sCtx);
+    }
+}
+
+// Map the live GL_VERSION ("OpenGL ES X.Y …") to the GLSL ES target string the downport prepends.
+static void rc_set_es_target() {
+    const char *v = (const char *) glGetString(GL_VERSION);
+    int maj = 3, min = 0;
+    if (v) sscanf(v, "OpenGL ES %d.%d", &maj, &min);
+    int tier = maj * 10 + min;
+    const char *es = (tier >= 32) ? "320 es" : (tier >= 31) ? "310 es" : "300 es";
+    strncpy(sEsVer, es, sizeof(sEsVer) - 1);
+    sEsVer[sizeof(sEsVer) - 1] = 0;
+}
+
+// ---- GLSL 330 -> GLES downport (the AG1b-validated recipe; see ReconActivity.downport) ----------------------
+// (1+2) drop the pre-#version license + original #version line, prepend `#version <esVer>` + precision; (3) strip
+// the ES-reserved `noperspective`; (4) strip the float-literal `f` suffix; (5) explicit int->float / ivec->vec
+// casts at the exact scene-vertex sites that mix integer engine uniforms with floats (vertex-only strings, so
+// applying to both stages is a no-op on the fragment shader). Validated PASS on Mali-G715 (AG1b).
+static const char *kSceneVertexCasts[][2] = {
+    {"vec4(vertf + base, 1)", "vec4(vertf + vec3(base), 1)"},
+    {"hsl += ((entityTint.xyz - hsl) * entityTint.w) / 128;",
+     "hsl += ((vec3(entityTint.xyz) - hsl) * float(entityTint.w)) / 128.0;"},
+    {"((-expandedMapLoadingChunks * 8 + 1) * TILE_SIZE)", "(float(-expandedMapLoadingChunks * 8 + 1) * TILE_SIZE)"},
+    {"((104 + expandedMapLoadingChunks * 8 - 1) * TILE_SIZE)", "(float(104 + expandedMapLoadingChunks * 8 - 1) * TILE_SIZE)"},
+    {"cameraX - drawDistance", "cameraX - float(drawDistance)"},
+    {"cameraX + drawDistance", "cameraX + float(drawDistance)"},
+    {"cameraZ - drawDistance", "cameraZ - float(drawDistance)"},
+    {"cameraZ + drawDistance", "cameraZ + float(drawDistance)"},
+    {"fogDepth * TILE_SIZE) * useFog", "float(fogDepth) * TILE_SIZE) * float(useFog)"},
+};
+
+static void rc_replace_all(std::string &s, const std::string &from, const std::string &to) {
+    if (from.empty()) return;
+    size_t pos = 0;
+    while ((pos = s.find(from, pos)) != std::string::npos) { s.replace(pos, from.size(), to); pos += to.size(); }
+}
+
+static std::string rc_downport(const std::string &src) {
+    size_t v = src.find("#version");
+    std::string body = (v != std::string::npos) ? src.substr(v) : src;
+    size_t nl = body.find('\n');                                   // drop the original #version line
+    body = (nl != std::string::npos) ? body.substr(nl + 1) : std::string();
+    body = std::regex_replace(body, std::regex("\\bnoperspective\\b"), "");           // (3) reserved in ES
+    body = std::regex_replace(body, std::regex("(\\d*\\.\\d+|\\d+\\.\\d*)[fF]"), "$1"); // (4) no float `f` suffix
+    for (auto &c : kSceneVertexCasts) rc_replace_all(body, c[0], c[1]);                // (5) explicit casts
+    std::string precision =
+        "precision highp float;\nprecision highp int;\n"
+        "precision highp sampler2DArray;\nprecision highp usampler2DArray;\nprecision highp sampler2D;\n";
+    return std::string("#version ") + sEsVer + "\n" + precision + body;
+}
 
 static bool rcEglPrepareSurface(int w, int h) {
     if (sDpy == EGL_NO_DISPLAY) {
@@ -75,9 +160,13 @@ static bool rcEglPrepareSurface(int w, int h) {
 
 static bool rcEglCreateContextCurrent() {
     eglBindAPI(EGL_OPENGL_ES_API);
-    const EGLint ctxAttr[] = { EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 0, EGL_NONE };
-    sCtx = eglCreateContext(sDpy, sCfg, EGL_NO_CONTEXT, ctxAttr);
-    if (sCtx == EGL_NO_CONTEXT) { LOGE("eglCreateContext failed 0x%x", eglGetError()); return false; }
+    // Request the HIGHEST ES the driver gives (3.2 -> 3.1 -> 3.0); the base shaders downport to the matching
+    // GLSL ES (320/310/300 es). AG1b validated 320 es on a 3.2 context — a 3.0-only context would reject them.
+    for (int mn = 2; mn >= 0 && sCtx == EGL_NO_CONTEXT; mn--) {
+        const EGLint ctxAttr[] = { EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, mn, EGL_NONE };
+        sCtx = eglCreateContext(sDpy, sCfg, EGL_NO_CONTEXT, ctxAttr);
+    }
+    if (sCtx == EGL_NO_CONTEXT) { LOGE("eglCreateContext failed for ES 3.x 0x%x", eglGetError()); return false; }
     if (!eglMakeCurrent(sDpy, sSurf, sSurf, sCtx)) { LOGE("eglMakeCurrent failed 0x%x", eglGetError()); return false; }
     return true;
 }
@@ -211,7 +300,13 @@ GLF rc_glRenderbufferStorageMultisample(JNIEnv*, jclass, jint a0, jint a1, jint 
     GLenum ifmt=(GLenum)a2; if (ifmt==GL_RGBA) ifmt=GL_RGBA8;   // ES needs a SIZED internalformat
     glRenderbufferStorageMultisample(a0,a1,ifmt,a3,a4);
 }
-GLF rc_glShaderSource(JNIEnv* e, jclass, jint a0, jstring a1){ const char* s=e->GetStringUTFChars(a1,nullptr); glShaderSource((GLuint)a0,1,&s,nullptr); e->ReleaseStringUTFChars(a1,s); }  // AG2: GLSL 330->ES downport goes here
+GLF rc_glShaderSource(JNIEnv* e, jclass, jint a0, jstring a1){
+    const char* s=e->GetStringUTFChars(a1,nullptr);
+    std::string down = rc_downport(s ? s : "");         // 330 -> GLES (the AG1b-validated recipe)
+    e->ReleaseStringUTFChars(a1,s);
+    const char* ds = down.c_str();
+    glShaderSource((GLuint)a0,1,&ds,nullptr);
+}
 GLF rc_glTexImage2D(JNIEnv*, jclass, jint a0, jint a1, jint a2, jint a3, jint a4, jint a5, jint a6, jint a7, jlong a8){
     if ((GLenum)a6==GL_BGRA){ a6=GL_RGBA; glTexImage2D((GLenum)a0,a1,a2,a3,a4,a5,(GLenum)a6,(GLenum)a7,(const void*)(intptr_t)a8);
         glTexParameteri((GLenum)a0, GL_TEXTURE_SWIZZLE_R, GL_BLUE); glTexParameteri((GLenum)a0, GL_TEXTURE_SWIZZLE_B, GL_RED); return; }
@@ -250,12 +345,19 @@ GLF rc_glClipControl(JNIEnv*, jclass, jint a0, jint a1){
 
 // ---- AWTContext (kAWT) ---------------------------------------------------------------------------------------
 static void JNICALL rc_AWT_configurePixelFormat(JNIEnv*, jobject, jint, jint, jint){ /* FBO format fixed in createGLContext */ }
-static void JNICALL rc_AWT_createGLContext(JNIEnv*, jobject){
-    int w = 512, h = 512;   // L1 default (no engine canvas); AG2 queries JavaBridge.canvasWidth/Height
+static void JNICALL rc_AWT_createGLContext(JNIEnv* env, jobject){
+    int w = 512, h = 512;   // fallback; prefer the live engine canvas (the gpu plugin renders at canvas size)
     LOGI("createGLContext ENTER thread=%p", (void*)pthread_self());
     if (!rcEglPrepareSurface(w, h) || !rcEglCreateContextCurrent()) { LOGE("createGLContext: EGL bring-up FAILED"); return; }
+    rc_set_es_target();
+    if (rc_jb_cache(env) && sJbCanvasW && sJbCanvasH) {
+        jint cw = env->CallStaticIntMethod(sJbCls, sJbCanvasW);
+        jint ch = env->CallStaticIntMethod(sJbCls, sJbCanvasH);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (cw > 0 && ch > 0) { w = cw; h = ch; }
+    }
     bool fboOk = rcBuildFbo(w, h);
-    LOGI("createGLContext DONE fbo=%u %dx%d complete=%d GL_VERSION=%s", sFbo, sFboW, sFboH, fboOk, (const char*)glGetString(GL_VERSION));
+    LOGI("createGLContext DONE fbo=%u %dx%d complete=%d es=%s GL_VERSION=%s", sFbo, sFboW, sFboH, fboOk, sEsVer, (const char*)glGetString(GL_VERSION));
 }
 static void JNICALL rc_AWT_destroy(JNIEnv*, jobject){
     if (sDpy != EGL_NO_DISPLAY) {
@@ -265,10 +367,54 @@ static void JNICALL rc_AWT_destroy(JNIEnv*, jobject){
     }
 }
 static jint JNICALL rc_AWT_getBufferMode(JNIEnv*, jobject){ return (jint)GL_COLOR_ATTACHMENT0; }
-static jint JNICALL rc_AWT_getFramebuffer(JNIEnv*, jobject, jboolean){ return (jint)sFbo; }
+// Per-frame (the gpu plugin calls getFramebuffer early each draw): re-bind the thread-affine context and rebuild
+// the offscreen FBO if the engine canvas resized, so glReadPixels reads exactly the composited canvas region.
+static jint JNICALL rc_AWT_getFramebuffer(JNIEnv* env, jobject, jboolean){
+    rc_make_current();
+    if (rc_jb_cache(env) && sJbCanvasW && sJbCanvasH) {
+        jint cw = env->CallStaticIntMethod(sJbCls, sJbCanvasW);
+        jint ch = env->CallStaticIntMethod(sJbCls, sJbCanvasH);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (cw > 0 && ch > 0 && (cw != sFboW || ch != sFboH)) rcBuildFbo(cw, ch);
+    }
+    return (jint)sFbo;
+}
 static void JNICALL rc_AWT_loadNatives(JNIEnv*, jobject){ /* no-op (the .so is already loaded + registered) */ }
 static jint JNICALL rc_AWT_setSwapInterval(JNIEnv*, jobject, jint a0){ return a0; }
-static void JNICALL rc_AWT_swapBuffers(JNIEnv*, jobject){ /* AG2: glReadPixels -> JavaBridge publish (offscreen) */ }
+// swapBuffers (offscreen, Phase 1): glReadPixels the FBO into one of JavaBridge's double buffers, vertical-flip +
+// R<->B swizzle to 0x00RRGGBB (the format the existing SurfaceView blit consumes), then publish. The gpu plugin
+// becomes the SOLE frameSeq publisher (Hooks gates the CPU snapshot off in GPU mode).
+static void JNICALL rc_AWT_swapBuffers(JNIEnv* env, jobject){
+    rc_make_current();
+    int w = sFboW, h = sFboH;
+    if (w <= 0 || h <= 0 || !rc_jb_cache(env)) return;
+    jintArray arr = (jintArray) env->CallStaticObjectMethod(sJbCls, sJbBackBuf, (jint)w, (jint)h);
+    if (!arr) { if (env->ExceptionCheck()) env->ExceptionClear(); return; }
+    const size_t n = (size_t)w * (size_t)h;
+    if (!sReadback || sReadbackN < n) { free(sReadback); sReadback = (uint32_t*)malloc(n * sizeof(uint32_t)); sReadbackN = sReadback ? n : 0; }
+    glFinish();
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, sFbo);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    if (sReadback) {
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, sReadback);   // little-endian word = 0xAABBGGRR
+        void* dst = env->GetPrimitiveArrayCritical(arr, nullptr);
+        if (dst) {
+            uint32_t* d = (uint32_t*)dst;
+            for (int y = 0; y < h; y++) {
+                const uint32_t* srow = sReadback + (size_t)(h - 1 - y) * w;   // flip: GL bottom-left -> top-left
+                uint32_t* drow = d + (size_t)y * w;
+                for (int x = 0; x < w; x++) {
+                    uint32_t p = srow[x];                                     // 0xAABBGGRR
+                    drow[x] = ((p & 0xFFu) << 16) | (p & 0xFF00u) | ((p >> 16) & 0xFFu);   // -> 0x00RRGGBB
+                }
+            }
+            env->ReleasePrimitiveArrayCritical(arr, dst, 0);
+        }
+    }
+    env->CallStaticVoidMethod(sJbCls, sJbPublish, (jint)w, (jint)h);
+    env->DeleteLocalRef(arr);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+}
 
 // ---- GL.createCapabilities (kGL) -----------------------------------------------------------------------------
 static jobject rc_make_caps(JNIEnv* env){
