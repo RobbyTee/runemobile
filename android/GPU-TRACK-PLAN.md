@@ -62,9 +62,19 @@
 > once LINEAR persists. (2) The render proven here is the **OSRS LOGIN screen** — the Jagex session token had
 > expired (login failed), so the relaxed `LOGIN_SCREEN` gate is what salvaged the real-Mali frame.
 >
-> **NEXT: in-world 3D scene** (the one remaining AG2 piece) — needs FRESH tokens (interactive `fetch-shield-tokens.sh`
-> mint, user-only) → re-run `fb-gate.sh gpu` (or the `◆` button on an owned device) to confirm the 3D `drawScene`
-> path (depth/reverse-Z) renders. Then AG2.5 (RLHD loaders + OpenCL facade) → AG3 (117HD).
+> **FIREBASE IS LOGIN-SCREEN-ONLY (settled 2026-06-08).** OSRS login FAILS on Firebase Test Lab even with a
+> freshly-minted token ("Failed to login. Please try again." — evidence `ag2-firebase-login-blocked-freshtoken-
+> 20260608.png`). The token is NOT the problem (it reuses across the user's Mac mini + MacBook with no remint —
+> both log in from the home IP); Firebase runs in a Google datacenter, so the login originates from an unexpected
+> IP/region and Jagex's OSRS login-location check rejects it (and/or the device's game-server egress is
+> restricted). There is no Firebase knob to fix this (you can pick device model/API but not datacenter region).
+> **So every auth-gated OSRS gate (in-world render, soak, login flows) must run on an OWNED physical device on a
+> normal network — Firebase stays valid only for pre-login gates (AG0/AG1b recon, the base-gpu LOGIN-screen render).**
+>
+> **NEXT: in-world 3D scene** (the one remaining AG2 piece) — on the user's **physical Pixel 8 on home wifi**:
+> install the APK → token in place → `◆` GPU button (or seed `getExternalFilesDir()/gpu.mode`) → pull
+> `Android/data/<pkg>/files/routec-frames/*.png` and confirm the 3D `drawScene` path (depth/reverse-Z). Then AG2.5
+> (RLHD loaders + OpenCL facade — does NOT need login, so Firebase-testable) → AG3 (117HD).
 
 # Android GPU Rendering + 117HD: Final Plan (post-review)
 
