@@ -96,6 +96,35 @@
 > **NEXT: in-world 3D on real MALI (perf-authoritative)** — needs a physical Android device on the home network
 > (the emulator already proves the render functionally; AG1b/AG2 prove the Mali mechanics). Then AG2.5 (RLHD
 > loaders + OpenCL facade — does NOT need login, Firebase-testable) → AG3 (117HD).
+>
+> **STATUS — AG2.5-a AUDIT DONE (2026-06-08).** RLHD vendored at `dev-tools/gpu/rlhd-src/` (rev `7dded59`, targets
+> RuneLite `1.12.+` ✓; gitignored). Findings:
+> - **Renderer split:** `ZoneRenderer` (DEFAULT, `legacyRenderer()`=false) gates on **`OpenGL33` only** — pure
+>   graphics pipeline, NO compute/OpenCL. `LegacyRenderer` (opt-in) gates `OpenGL43` (GL compute) or `OpenGL31`
+>   (OpenCL, forced only on `HdPlugin.APPLE`). **Ship Zone; LegacyRenderer is out.**
+> - **OpenCL decision = STUB (option a), CONFIRMED REQUIRED.** Even on the Zone path the class-load graph reaches
+>   `org.lwjgl.opencl`: `HdPlugin → UBOCompute (uses CL_MEM_READ_ONLY) → UniformBuffer → SharedGLBuffer (field
+>   `OpenCLManager.context`) → OpenCLManager`, and `ZoneRenderer → UniformBuffer` too. BUT every `cl*` CALL is
+>   guarded by `OpenCLManager.context != 0` (always 0 in Zone — `OpenCLManager.startUp`/`CL.create()` only run in
+>   Legacy/Apple), and `OpenCLManager.<clinit>` only does `Configuration.OPENCL_EXPLICIT_INIT.set(true)` (org.lwjgl.
+>   **system**, already in our facade — just add the field). So the stub only needs the SYMBOLS to exist for
+>   class-load/verify; methods are never invoked (can throw). Surface ≈ 60 `CL_*` constants (any value) + ~25 `cl*`
+>   methods + classes `CL, CL10, CL10GL, CL12, CLCapabilities, CLContextCallback, CLImageFormat, APPLEGLSharing,
+>   KHRGLSharing`. (AG3 jar-surgery recompiles these RLHD files against the stub, same pattern as base-gpu.)
+> - **GL call-delta (Zone vs base-gpu ~81):** adds `glTexBuffer` (TBO, GLES3.2 core), `glDrawArraysIndirect`/
+>   `glDrawElementsIndirect` (GLES3.1), `glTexStorage3D` (have it), `glFramebufferTexture`/`glBindImageTexture`
+>   (GLES3.1/3.2, tiled-lighting, OPTIONAL w/ fallback), `glVertexAttribDivisor`, fence/sync, `glGetProgramBinary`
+>   (optional cache). **All map to GLES 3.1/3.2 core** (AG0 = 3.2) — no compute needed for Zone. `glDispatchCompute`/
+>   `glMemoryBarrier` are Legacy-only (out).
+> - **Shaders:** Zone graphics shaders are `#version 330` (SAME downport as base-gpu, already proven on Mali); use
+>   `isamplerBuffer` TBO + `sampler2DArray`/`usampler2DArray` + 8 `std140` UBOs — all GLES 3.2 core. The 2 compute
+>   shaders (`#version 420/430`) are Legacy-only. 47 .glsl, ~4 Zone programs (UI/Scene/Shadow/TiledLighting).
+> - **Loaders** (Texture/Material/WaterType/Gameval/Area/GroundMaterial/TileOverride/ModelOverride/Light/Environment
+>   managers): all bundled-classpath JSON/texture FILE-I/O, NO network, NO headless-unsafe (no Frame/ClientUI). Low
+>   risk under our headless boot.
+>
+> **NEXT (AG2.5-b):** build the `org/lwjgl/opencl/*` stub + add `Configuration.OPENCL_EXPLICIT_INIT`; expand the GL
+> facade by the Zone delta; prove RLHD's loaders init under the headless boot (emulator). Then AG3 (Zone bring-up).
 
 # Android GPU Rendering + 117HD: Final Plan (post-review)
 
