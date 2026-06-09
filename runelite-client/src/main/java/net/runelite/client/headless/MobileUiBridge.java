@@ -770,6 +770,43 @@ public final class MobileUiBridge
 	 * null). The native list renders straight from this. {@code className} is the stable handle the write
 	 * methods take.
 	 */
+	/** AG2 diagnostic: loaded-plugin count + any whose class name contains {@code needle}. For the routecgpu
+	 *  starter to log why the gpu plugin is/ isn't in the loaded set. */
+	public static String pluginDiag(String needle)
+	{
+		final PluginManager pm = pluginManager;
+		if (pm == null)
+		{
+			return "pm=null";
+		}
+		int total = 0;
+		final StringBuilder hits = new StringBuilder();
+		for (Plugin p : pm.getPlugins())
+		{
+			total++;
+			final String n = p.getClass().getName();
+			if (needle != null && n.toLowerCase().contains(needle.toLowerCase()))
+			{
+				hits.append(n).append(' ');
+			}
+		}
+		// Why is gpu not in the loaded set? Try to load the class + introspect its descriptor in this VM.
+		String clazzDiag;
+		try
+		{
+			final Class<?> gc = Class.forName("net.runelite.client.plugins.gpu.GpuPlugin", false, MobileUiBridge.class.getClassLoader());
+			final PluginDescriptor d = gc.getAnnotation(PluginDescriptor.class);
+			clazzDiag = "class=OK super=" + gc.getSuperclass().getSimpleName()
+				+ " descriptor=" + (d == null ? "NULL" : ("present(dev=" + d.developerPlugin() + ",hidden=" + d.hidden() + ")"));
+		}
+		catch (Throwable t)
+		{
+			clazzDiag = "classLoad=" + t.getClass().getSimpleName() + ":" + t.getMessage();
+		}
+		return "loaded=" + total + " matching[" + needle + "]=" + (hits.length() == 0 ? "(none)" : hits.toString().trim())
+			+ " | gpuClass: " + clazzDiag;
+	}
+
 	public static String listPlugins()
 	{
 		final PluginManager pm = pluginManager;

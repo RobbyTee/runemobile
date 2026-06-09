@@ -30,6 +30,7 @@ FLAG runelite.menupeek
 FLAG runelite.menupeek.maxEntries
 FLAG runelite.mobilechrome
 FLAG runelite.mobileui
+FLAG runelite.routecgpu
 FLAG runelite.touch.selFlashMs
 FLAG runelite.touch.snap
 FLAG runelite.touch.snapRadius
@@ -109,6 +110,7 @@ METHOD MobileUiBridge#listPanels()
 METHOD MobileUiBridge#listPlugins()
 METHOD MobileUiBridge#openPanel(int)
 METHOD MobileUiBridge#panelClick(int,int)
+METHOD MobileUiBridge#pluginDiag(String)
 METHOD MobileUiBridge#pollMobileUiEvents(long)
 METHOD MobileUiBridge#registerNav(NavigationButton)
 METHOD MobileUiBridge#resetConfig(String,String)

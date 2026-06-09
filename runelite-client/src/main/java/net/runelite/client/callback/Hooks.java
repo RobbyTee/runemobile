@@ -544,6 +544,14 @@ public class Hooks implements Callbacks
 		// Draw clientUI overlays
 		clientUi.paintOverlays(graphics2d);
 
+		// GPU Route C (AG2): force-enable + start the base gpu plugin once in-world, overriding a persisted
+		// gpuplugin=false and forcing the canvas valid so startUp's createGLContext fires. Inert (no-op) unless
+		// -Drunelite.routecgpu=true; runs before the isGpu early-return because it is what flips isGpu on.
+		if (net.runelite.client.headless.RouteCGpuStarter.isEnabled())
+		{
+			net.runelite.client.headless.RouteCGpuStarter.tick(client);
+		}
+
 		// W3 touch-targeting: draw the tap selection feedback (tight entity model outline) into the frame, on
 		// top of the scene/overlays, just before it's captured/blitted.
 		if (net.runelite.client.headless.JavaBridge.isEnabled())
