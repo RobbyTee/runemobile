@@ -147,11 +147,31 @@
 >   its <clinit>), **loaderJson parsed=9/9** (the bundled loader data is present + well-formed on-device). Evidence
 >   `dev-tools/gpu/evidence/ag25b-rlhdprobe-emulator-20260608.log`.
 >
-> **NEXT (AG3 — Zone bring-up):** wire RLHD into the runtime plugin lifecycle and run `HdPlugin.startUp` end-to-end so
-> the loaders' typed Gson data-load + the renderer/VAO/UBO/shader init actually execute against a live EGL/GLES context
-> (this is where the librlawt GL-delta forwarders + MemoryUtil native backing get exercised; the AG2.5-b probe proves
-> class-load/data-presence, NOT the full GL startUp). Then the Zone shaders (330, same downport family as base-gpu) +
-> first HD frame.
+> **STATUS — AG3-a GREEN on the emulator (2026-06-08).** The `librlawt` GL-delta forwarders + `MemoryUtil` natives are
+> built and register cleanly. `app/src/main/cpp/librlawt.cpp` gained ~58 Zone-delta forwarders to GLESv3 (gl32.h core:
+> glTexBuffer / glVertexAttribDivisor / glFramebufferTexture(2D/Layer) / glBindImageTexture / glCopyBufferSubData /
+> fence-sync / queries / glGetProgramBinary / compute+indirect / glBufferSubData / the int[]·Buffer glUniform*v+glGet*v
+> overloads; desktop/EXT-only ones gated off or dev-overlay-only are no-op'd) + a `kMEM` table (nmemAllocChecked/nmemFree/
+> memAddress0/nNewBuffer → malloc/free/GetDirectBufferAddress/NewDirectByteBuffer) + `GLCapabilities` now reports
+> OpenGL31/40/43 + the 4 ARB fast-path flags FALSE (→ GLES-core fallbacks). Verified: librlawt compiles arm64
+> (`buildCMakeDebug` GREEN) and gpuSmoke logs `RegisterNatives glall=0 awt=0 gl=0 mem=0 (0=OK)` — every delta signature
+> matches `GLALL.java`/`MemoryUtil.java` exactly, NO base-gpu regression (`ANDROID_AG1A VERDICT=PASS`). Evidence
+> `dev-tools/gpu/evidence/ag3a-librlawt-delta-register-emulator-20260608.log`. The forwarders' GL *behaviour* is proven
+> in AG3-b (the delta isn't exercised until `HdPlugin.startUp` actually calls these).
+>
+> **NEXT (AG3-b — HdPlugin.startUp end-to-end, XL, run-driven, login-gated → emulator):** the scoped entry point is
+> `PluginManager.loadPlugins(java.util.List.of(Class.forName("rs117.hd.HdPlugin")), null)` then `startPlugin(...)` —
+> RLHD is `rs117.hd.*`, OUTSIDE the `net.runelite.client.plugins` package `loadCorePlugins()` scans, so it is NOT
+> auto-discovered, but the PUBLIC `loadPlugins(List<Class>)` (PluginManager.java:312) instantiates it via Guice.
+> A new `RLHDStarter` (shared `net.runelite.client.headless.*`, additive — mirror `RouteCGpuStarter`, armed off a
+> `Hooks.draw` tick) must: (1) force-DISABLE the base gpu plugin (both are `DrawCallbacks` renderers — they conflict),
+> (2) `loadPlugins([HdPlugin.class])` + `startPlugin`, (3) force `uiScalingMode`/Zone config like RouteCGpuStarter does
+> for gpu. Needs a `routecrlhd=full` boot mode (classpath gpu jar + rlhd jar, librlawt registered, tokens/login →
+> LOGGED_IN; `HdPlugin.startUp` early-returns until `textureManager.vanillaTexturesAvailable()`). Then iterate the
+> startUp GL path live (VAOs/UBOs/`renderer.initialize`/`initializeShaders` — Zone shaders are `#version 330`, same
+> downport family the `glShaderSource` shim already handles for base-gpu) until the loaders run + "117 HD started
+> successfully!" + first HD frame. Emulator is functional-authoritative (like AG2's in-world 3D); real-Mali perf is the
+> later device gate.
 
 # Android GPU Rendering + 117HD: Final Plan (post-review)
 
