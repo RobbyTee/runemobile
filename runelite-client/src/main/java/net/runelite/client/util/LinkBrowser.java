@@ -52,6 +52,17 @@ public class LinkBrowser
 	 */
 	public static void browse(final String url)
 	{
+		// On mobile there is no system browser / xdg-open / Desktop#browse — hand the URL to the native shell,
+		// which opens it in-app (SFSafariViewController / Custom Tabs). Skip the doomed desktop thread + Swing
+		// fallback dialog. Additive + gated: a no-op off-device.
+		if (net.runelite.client.headless.MobileUiBridge.isEnabled())
+		{
+			if (!Strings.isNullOrEmpty(url))
+			{
+				net.runelite.client.headless.MobileUiBridge.publishLink(url);
+			}
+			return;
+		}
 		new Thread(() ->
 		{
 			if (Strings.isNullOrEmpty(url))
@@ -83,6 +94,12 @@ public class LinkBrowser
 	 */
 	public static void open(final String directory)
 	{
+		// No OS file manager in the sandbox, and a directory path isn't a useful link. Don't spawn a desktop
+		// thread or a Swing message-box (there is no Swing window). Screenshots are surfaced natively instead.
+		if (net.runelite.client.headless.MobileUiBridge.isEnabled())
+		{
+			return;
+		}
 		new Thread(() ->
 		{
 			if (Strings.isNullOrEmpty(directory))

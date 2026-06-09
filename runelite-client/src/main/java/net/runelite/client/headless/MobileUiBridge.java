@@ -160,9 +160,18 @@ public final class MobileUiBridge
 	private static final ConcurrentLinkedQueue<String> notifications = new ConcurrentLinkedQueue<>();
 	private static final int MAX_NOTIFICATIONS = 64;
 
+	// Outbound links. LinkBrowser funnels every browse(url) here (no system browser / xdg-open / Desktop#browse
+	// in the sandbox); the native shell drains it and opens an in-app SFSafariViewController / CustomTabs.
+	private static final ConcurrentLinkedQueue<String> links = new ConcurrentLinkedQueue<>();
+	private static final int MAX_LINKS = 32;
+
 	// Favourite plugins: the same shared "pinnedPlugins" CSV the desktop ConfigPanel persists (RuneLite group),
 	// so a pin set on either port (or desktop) round-trips. Names stored comma-stripped (desktop format).
 	private static final String PINNED_KEY = "pinnedPlugins";
+
+	// Mobile default-profile: applied once on the first tick (client thread), only for config keys the user
+	// hasn't set, so it never fights a user choice.
+	private static boolean defaultsApplied;
 
 	// Live UI-state snapshot (written on the client thread in tick(), read lock-free from the native thread).
 	private static volatile boolean chatInputVisible;
@@ -205,6 +214,30 @@ public final class MobileUiBridge
 	public static String nextNotification()
 	{
 		return notifications.poll();
+	}
+
+	/**
+	 * Outbound-link channel. {@link net.runelite.client.util.LinkBrowser#browse} forwards every URL here (Wiki,
+	 * HiScore, plugin "open page" links, etc.) because the sandbox has no system browser. The native shell drains
+	 * {@link #nextLink()} each frame and opens it in-app (SFSafariViewController / Custom Tabs). Bounded; gated.
+	 */
+	public static void publishLink(String url)
+	{
+		if (!ENABLED || url == null || url.isEmpty())
+		{
+			return;
+		}
+		while (links.size() >= MAX_LINKS)
+		{
+			links.poll();
+		}
+		links.add(url);
+	}
+
+	/** Drain the oldest pending outbound URL, or {@code null} if none. Native polls this. */
+	public static String nextLink()
+	{
+		return links.poll();
 	}
 
 	/**
@@ -1080,6 +1113,75 @@ public final class MobileUiBridge
 	}
 
 	/**
+	 * Mobile default-profile: seed the handful of plugin defaults that are wrong for a touch / memory-capped
+	 * phone — currently just Low Detail ON (stock OFF, but it cuts engine memory + fill-rate, which matters on
+	 * the CPU-rendered, heap-capped mobile path). Applied once on the first {@link #tick}. The cursor / key-remap
+	 * / stretched-mode / interface-styles / anti-drag plugins flagged as touch-hostile are already stock-OFF, so
+	 * there is nothing to flip; keeping them OUT OF REACH is a native "hide incompatible" concern, not a default.
+	 * Must be a config/default policy, never a plugin edit.
+	 */
+	private static void applyMobileDefaults()
+	{
+		enableByDefaultIfUnset("LowMemoryPlugin", true);
+	}
+
+	/**
+	 * Set a plugin's enabled state to {@code desired} ONLY if the user hasn't already chosen (its enabled-config
+	 * key is unset) — so a re-seed never overrides an explicit user setting. Derives the key exactly like
+	 * {@code PluginManager} (configName or class simple name, lower-cased) and toggles on the EDT like
+	 * {@link #setPluginEnabled}.
+	 */
+	private static void enableByDefaultIfUnset(String simpleName, boolean desired)
+	{
+		final PluginManager pm = pluginManager;
+		final ConfigManager cm = configManager;
+		if (pm == null || cm == null)
+		{
+			return;
+		}
+		Plugin target = null;
+		for (Plugin p : pm.getPlugins())
+		{
+			if (p.getClass().getSimpleName().equals(simpleName))
+			{
+				target = p;
+				break;
+			}
+		}
+		if (target == null)
+		{
+			return;
+		}
+		final PluginDescriptor d = target.getClass().getAnnotation(PluginDescriptor.class);
+		final String keyName = (d != null && !d.configName().isEmpty() ? d.configName() : simpleName).toLowerCase();
+		if (cm.getConfiguration(RuneLiteConfig.GROUP_NAME, keyName) != null)
+		{
+			return; // user (or a prior seed) already chose — leave it alone
+		}
+		final Plugin plugin = target;
+		onEdt(() ->
+		{
+			try
+			{
+				pm.setPluginEnabled(plugin, desired);
+				if (desired)
+				{
+					pm.startPlugin(plugin);
+				}
+				else
+				{
+					pm.stopPlugin(plugin);
+				}
+				log.info("[mobileui] default-profile: {} -> {}", simpleName, desired);
+			}
+			catch (PluginInstantiationException ex)
+			{
+				log.warn("[mobileui] default-profile {} -> {} failed", simpleName, desired, ex);
+			}
+		});
+	}
+
+	/**
 	 * Write one config value (already serialized to its string form by the native control), queued onto the
 	 * client thread — the desktop fires {@code ConfigChanged} synchronously, so this guarantees subscribers
 	 * run where game-touching ones expect to be. The resulting {@code ConfigChanged} is the confirmation.
@@ -1143,6 +1245,11 @@ public final class MobileUiBridge
 		if (!ENABLED || c == null)
 		{
 			return;
+		}
+		if (!defaultsApplied)
+		{
+			defaultsApplied = true;
+			applyMobileDefaults();
 		}
 		QuestHelperBridge.tick(c); // refresh the native Quest Helper snapshots (no-op unless its screen is open)
 		WorldSwitcherBridge.tick(c); // refresh the native World Switcher snapshot (no-op unless its screen is open)

@@ -29,8 +29,8 @@
 - [x] #4  `Notifier` publish hook ({title,body}) → `MobileUiBridge.publishNotification`/`nextNotification` (bounded queue, gated). Funnel in `Notifier.notify` after the focus-gate. Native drains + raises OS notification.
 - [x] #6 `pinnedPlugins` read (`pinned` in listPlugins) + `setPinned(name,bool)` write — shared desktop CSV (RuneLite group), client-thread RMW. #25 incompatible flag = NOT shared (listPlugins already exposes enabled+active; native infers incompatible = enabled&&!active after grace, as iOS does) → native-Android (Batch C).
 - [ ] #5  Config schema: dimension/set/notification value-encoding
-- [ ] #7  Mobile default-profile boot policy (Low Detail on; cursor/key/stretched/styles/devtools off)
-- [ ] #27 `LinkBrowser` central interception → publish URL
+- [x] #7  Mobile default-profile — COLLAPSED to one flip: Low Detail ON (only-if-unset, applied once on first tick via the proven setPluginEnabled path). The rest (cursor/key/stretched/styles/antidrag) are ALL already `enabledByDefault=false` (audit's "Custom Cursor on" was wrong) → nothing to flip; keeping them out of reach = native hide (Batch C).
+- [x] #27 `LinkBrowser.browse/open` intercept → `MobileUiBridge.publishLink`/`nextLink` (bounded, gated); native opens SFSafariViewController. `open()` no-ops on mobile (no file manager / Swing dialog).
 - [ ] #17 Hub install-progress getter
 - [ ] #11 Overlay position/persist driver + snap-math wrapper (`OverlayManager.saveOverlay`)
 - [ ] #20 Infobox-action-by-point bridge
