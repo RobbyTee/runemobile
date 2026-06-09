@@ -61,7 +61,9 @@ import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigItemDescriptor;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.config.Range;
+import net.runelite.client.config.RuneLiteConfig;
 import net.runelite.client.config.Units;
+import net.runelite.client.util.Text;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
@@ -157,6 +159,10 @@ public final class MobileUiBridge
 	// Bounded so a backlog can't grow unbounded before a drainer exists (desktop dev / pre-poll startup).
 	private static final ConcurrentLinkedQueue<String> notifications = new ConcurrentLinkedQueue<>();
 	private static final int MAX_NOTIFICATIONS = 64;
+
+	// Favourite plugins: the same shared "pinnedPlugins" CSV the desktop ConfigPanel persists (RuneLite group),
+	// so a pin set on either port (or desktop) round-trips. Names stored comma-stripped (desktop format).
+	private static final String PINNED_KEY = "pinnedPlugins";
 
 	// Live UI-state snapshot (written on the client thread in tick(), read lock-free from the native thread).
 	private static volatile boolean chatInputVisible;
@@ -848,6 +854,7 @@ public final class MobileUiBridge
 		{
 			return "[]";
 		}
+		final Set<String> pinned = pinnedNames();
 		final Json out = new Json().arr();
 		for (Plugin p : pm.getPlugins())
 		{
@@ -880,10 +887,62 @@ public final class MobileUiBridge
 				.kb("active", pm.isPluginActive(p))
 				.kb("hasConfig", hasConfig)
 				.kb("developer", d.developerPlugin())
+				.kb("pinned", pinned.contains(d.name().replace(",", "")))
 				.kvNullable("configGroup", group)
 				.end();
 		}
 		return out.end().toString();
+	}
+
+	/** The set of pinned (favourite) plugin display names, comma-stripped — the shared desktop {@code pinnedPlugins} CSV. */
+	private static Set<String> pinnedNames()
+	{
+		final ConfigManager cm = configManager;
+		if (cm == null)
+		{
+			return java.util.Collections.emptySet();
+		}
+		final String csv = cm.getConfiguration(RuneLiteConfig.GROUP_NAME, PINNED_KEY);
+		if (csv == null || csv.isEmpty())
+		{
+			return java.util.Collections.emptySet();
+		}
+		return new HashSet<>(Text.fromCSV(csv));
+	}
+
+	/**
+	 * Pin/unpin a plugin (the desktop star) by display name. Persisted as the shared {@code pinnedPlugins} CSV
+	 * the desktop {@code ConfigPanel} uses (RuneLite config group), so a pin set on either port — or on desktop —
+	 * round-trips. The native list shows a star and sorts pinned-first. The read-modify-write runs on the client
+	 * thread (like {@link #setConfig}) to avoid a lost update, and returns a {@code writeId} the native side polls
+	 * for the ack. Names are stored comma-stripped to match the desktop format.
+	 */
+	public static String setPinned(String pluginName, boolean pinned)
+	{
+		final ConfigManager cm = configManager;
+		if (!ENABLED || cm == null || pluginName == null)
+		{
+			return "{\"ok\":false,\"reason\":\"facade-off\"}";
+		}
+		final ClientThread ct = clientThread;
+		if (ct == null)
+		{
+			return "{\"ok\":false,\"reason\":\"not-ready\"}";
+		}
+		final String name = pluginName.replace(",", "");
+		final long id = enqueueClientWrite(ct, () ->
+		{
+			final String csv = cm.getConfiguration(RuneLiteConfig.GROUP_NAME, PINNED_KEY);
+			final java.util.List<String> names = new java.util.ArrayList<>(
+				csv == null || csv.isEmpty() ? java.util.Collections.emptyList() : Text.fromCSV(csv));
+			names.remove(name);
+			if (pinned)
+			{
+				names.add(name);
+			}
+			cm.setConfiguration(RuneLiteConfig.GROUP_NAME, PINNED_KEY, String.join(",", names));
+		});
+		return "{\"ok\":true,\"writeId\":" + id + "}";
 	}
 
 	/**
