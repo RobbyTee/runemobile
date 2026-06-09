@@ -15,6 +15,7 @@
 @property (nonatomic, strong) NSTimer *hubProgressTimer;
 @property (nonatomic, strong) NSMutableSet<NSString *> *inflight;   // internalNames currently installing/removing
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
+@property (nonatomic, strong) NSDate *progressStartedAt;           // deadline anchor so the spinner can't hang
 @end
 
 @implementation PluginHubViewController
@@ -240,6 +241,7 @@
     self.statusLabel.text = installed ? [NSString stringWithFormat:@"Removing %@…", [p[@"displayName"] description]]
                                       : [NSString stringWithFormat:@"Installing %@…", [p[@"displayName"] description]];
     [self.spinner startAnimating];
+    self.progressStartedAt = [NSDate date];   // (re)anchor the deadline on every tap
     [self startHubProgressPolling];
     NSLog(@"[hub] %@ %@ : %@", installed ? @"remove" : @"install", name, ack ?: @"(nil)");
 }
@@ -253,16 +255,28 @@
 }
 
 - (void)pollHubProgress {
+    NSTimeInterval elapsed = self.progressStartedAt ? -[self.progressStartedAt timeIntervalSinceNow] : 0;
     NSString *json = [JVMLauncher mobileHubState];
-    if (!json.length) return;
-    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding]
-                                                      options:0 error:nil];
-    if (![d isKindOfClass:[NSDictionary class]]) return;
-    if ([d[@"refreshing"] boolValue]) return;   // still downloading/loading — keep the spinner up
+    NSDictionary *d = json.length
+        ? [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil]
+        : nil;
+    BOOL haveState = [d isKindOfClass:[NSDictionary class]];
+    BOOL refreshing = haveState && [d[@"refreshing"] boolValue];
 
-    // Settled (refreshing flipped false). hubInstall sets refreshing=true synchronously, so a false here means
-    // the async refresh finished. Reconcile the real installed flags (a failed install reverts the optimistic
-    // flip), clear the in-flight rows, and stop.
+    // Clean completion: hubInstall sets refreshing=true synchronously, so a readable false means the async
+    // download+load finished (ExternalPluginsChanged cleared it).
+    if (haveState && !refreshing) { [self settleHubProgress]; return; }
+
+    // Otherwise still refreshing, OR the bridge can't report state at all (mobileHubState nil — older jar /
+    // unresolved method). Never hang: cap the wait. Genuine refresh gets a generous window; an unreadable
+    // state settles quickly (fire-and-forget, then reconcile against the manifest = the source of truth).
+    NSTimeInterval deadline = haveState ? 25.0 : 2.5;
+    if (elapsed >= deadline) { [self settleHubProgress]; }
+}
+
+// Reconcile the real installed flags from the manifest (corrects a silent failure), clear the in-flight rows,
+// and stop the spinner. Idempotent — safe whether we reached it by completion or by deadline.
+- (void)settleHubProgress {
     if (self.inflight.count > 0) {
         [self reconcileInstalledState];
         [self.inflight removeAllObjects];
