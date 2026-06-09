@@ -40,9 +40,11 @@
 - [x] Batch-B closeout: mobileui live-login smoke **GREEN** (md5-gated; facade wired, default-profile applies on EDT, LOGGED_IN, zero new-bridge exceptions); re-staged both ports (content-tag 5396887b185f); contract baseline current (184 entries). #15 touch-drag still deferred (own spike).
 
 ## Batch C — Native UIKit consuming Batch B (one device test pass)
+- [x] **C1 JNI foundation** — `JVMLauncher` wrappers: postShiftHeld, mobileNextNotification, mobileNextLink, mobileSetPinned, mobileHubState (optional-resolved + null-guarded). Compiles generic/iOS.
 P0 polish:
 - [ ] #1  "Tap to play" front screen gated on `isDebuggerAttached`; hide debug panel
-- [ ] #2  Reset `engineChatRelocated` on safe-area/trait change
+- [x] #2  Reset `engineChatRelocated` in `viewSafeAreaInsetsDidChange` (re-anchor on rotation/notch-flip)
+- [x] #9 consumer: sticky-Shift HUD button (amber-latched) → `postShiftHeld`. *(The marquee de-risked feature.)*
 - [ ] Dynamic-Island top-center occlusion audit (landscape)
 - [ ] #24 Verify chatbox-input auto-raise across Music/Quest List/Wiki/GE/Bank/Fairy Rings
 P1 menu + targeting:
