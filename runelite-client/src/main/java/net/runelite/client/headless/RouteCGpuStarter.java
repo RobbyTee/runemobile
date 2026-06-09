@@ -82,20 +82,30 @@ public final class RouteCGpuStarter
 			log.info("[routecgpu] GPU active (isGpu=true) — done after {} attempt(s)", attempts);
 			return;
 		}
-		if (client.getGameState() != GameState.LOGGED_IN)
-		{
-			return;   // wait for in-world: the canvas is only laid out (valid) once the world is entered
-		}
 
-		// (0) FIRST in-world tick: force a scale-shader-free UI scaling mode (LINEAR) BEFORE the plugin starts.
-		//     The default (HYBRID/xBR) pulls in scale/*.glsl whose sourceDimensions/targetDimensions int↔float
-		//     math is rejected by strict GLSL-ES compilers (ANGLE/Adreno); LINEAR includes no scale shader and is
-		//     exactly the config AG1b validated. Done one tick before enabling so the write commits first.
+		// (0) Force a scale-shader-free UI scaling mode (LINEAR) AS EARLY AS POSSIBLE — on the first draw, BEFORE
+		//     the game-state gate, retrying until the write commits. The base gpu plugin is enabledByDefault, so it
+		//     AUTO-starts with the default HYBRID/xBR config, which `#include`s scale/*.glsl whose sourceDimensions
+		//     int↔float math STRICT GLSL-ES (Mali/Adreno/ANGLE) rejects — a transient ShaderException before this
+		//     lands. Committing LINEAR first makes the auto-start compile the scale-free program (what AG1b
+		//     validated). It still recovers if it loses the race (re-enable below recompiles), but this avoids it.
 		if (!uiModeForced)
 		{
-			uiModeForced = true;
 			final String cr = MobileUiBridge.setConfig("gpu", "uiScalingMode", "LINEAR");
-			log.info("[routecgpu] forced gpu.uiScalingMode=LINEAR (scale-shader-free) -> {}", cr);
+			if (cr.contains("\"ok\":true"))
+			{
+				uiModeForced = true;
+				log.info("[routecgpu] forced gpu.uiScalingMode=LINEAR (scale-shader-free) -> {}", cr);
+			}
+			return;   // let the write commit before enabling / before the auto-start reads it
+		}
+
+		// Engage once there is a drawing canvas — LOGGED_IN (the 3D world) OR the OSRS LOGIN_SCREEN. The login
+		// screen is itself engine-rendered, so the gpu plugin can come up + composite it there; this lets the
+		// device gate produce a real-driver GPU frame even before/without a successful session login.
+		final GameState gs = client.getGameState();
+		if (gs != GameState.LOGGED_IN && gs != GameState.LOGIN_SCREEN)
+		{
 			return;
 		}
 
@@ -110,8 +120,8 @@ public final class RouteCGpuStarter
 		final Canvas canvas = client.getCanvas();
 		final boolean valid = canvas != null && canvas.isValid();
 		attempts++;
-		log.info("[routecgpu] in-world, GPU not yet active (attempt {}/{}): canvas={} valid={}",
-			attempts, MAX_ATTEMPTS, canvas == null ? "null" : "present", valid);
+		log.info("[routecgpu] {} GPU not yet active (attempt {}/{}): canvas={} valid={}",
+			gs, attempts, MAX_ATTEMPTS, canvas == null ? "null" : "present", valid);
 
 		// (1) Force the canvas valid so the gpu plugin's startUp canvas.isValid() retry can pass. validate() runs on
 		//     the EDT under the same tree lock the plugin synchronizes on.

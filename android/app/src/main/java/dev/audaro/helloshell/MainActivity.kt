@@ -277,10 +277,11 @@ class MainActivity : AppCompatActivity() {
             return
         }
         // Track G AG2: `adb ... --ez routecgpu true` (or the dev "GPU" button, which restarts the process into
-        // this) boots the FULL client on the GPU-variant jar with the gpu plugin force-enabled in-world. Needs
-        // tokens like the normal boot (it must reach LOGGED_IN for the canvas to validate), so it falls through
-        // the same login-first gate below.
-        val gpuMode = intent?.getBooleanExtra("routecgpu", false) ?: false
+        // this) boots the FULL client on the GPU-variant jar with the gpu plugin force-enabled. Also trigger on a
+        // pushed marker file (getExternalFilesDir/gpu.mode): Firebase Test Lab Robo launches the default activity
+        // and can't pass an intent extra, but it CAN seed a file via --other-files. Falls through the login gate.
+        val gpuMode = (intent?.getBooleanExtra("routecgpu", false) ?: false) ||
+            File(getExternalFilesDir(null), "gpu.mode").exists()
         // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
         // BEFORE boot. With none (and not census, which uses pushed tokens), run the on-device Jagex login first;
         // it writes tokens.json then restarts the process for a clean boot (Review-2: login-first or restart).
@@ -946,7 +947,9 @@ class MainActivity : AppCompatActivity() {
             // Arm RouteCGpuStarter (force-enable + start the gpu plugin once in-world) and the frame-dump
             // diagnostic so the AG2 device gate gets pullable colour/flip evidence. The bridge itself is
             // registered natively (jvm_bootstrap sees -Drunelite.routecgpu and dlopen's librlawt after VM create).
-            val dumpDir = app.filesDir.absolutePath   // JavaBridge.maybeDumpFrame appends "routec-frames/"
+            // Dump to app-private EXTERNAL storage so Firebase Test Lab's --directories-to-pull (and adb pull)
+            // can fetch the frames; fall back to internal filesDir if external is unavailable.
+            val dumpDir = (app.getExternalFilesDir(null) ?: app.filesDir).absolutePath   // +"/routec-frames/"
             opts.addAll(listOf(
                 "-Drunelite.routecgpu=true",
                 "-Drunelite.gpuframedump=true",
