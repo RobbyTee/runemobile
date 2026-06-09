@@ -90,7 +90,9 @@ if [ "$MODE" = "rlhd" ]; then
   # NO tokens: the Zone shader compile is pre-login, and pushing tokens arms the gamepack's launcher login, which on
   # a datacenter device churns in state=UNKNOWN (world connect WAF-blocked) and never settles at LOGIN_SCREEN — so
   # RLHDStarter never fires. Marker only -> boots without login -> clean LOGIN_SCREEN -> 117HD loads + compiles.
-  OTHER=(--other-files "$DEV_RLHD=$MARKER")
+  # Also seed the shader-dump marker (librlawt logs the numbered downported source so a driver "0:N" error maps to
+  # a source line). Set FB_NO_SHADERDUMP=1 to skip once the Zone shaders compile clean.
+  if [ -z "${FB_NO_SHADERDUMP:-}" ]; then OTHER=(--other-files "$DEV_RLHD=$MARKER,$DEV_FILES/rlhd_shaderdump=$MARKER"); else OTHER=(--other-files "$DEV_RLHD=$MARKER"); fi
   PULL=(--directories-to-pull "$DEV_FRAMES")
   : "${FB_TIMEOUT:=420s}"   # plugin load + the full Zone shader compile + startUp + a frame dump
   # Robo (the default) force-stops + relaunches the app every few seconds and crawls the UI (it reached

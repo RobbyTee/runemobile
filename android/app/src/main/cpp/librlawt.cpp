@@ -330,7 +330,8 @@ GLF rc_glShaderSource(JNIEnv* e, jclass, jint a0, jstring a1){
     // AG3-c shader-port aid: numbered dump of the downported source so a driver "shader N line M" error maps to
     // an exact source line (the #line strip above makes M index this flat source). Toggle by `adb shell run-as
     // <pkg> touch files/rlhd_shaderdump` — off by default so it doesn't flood logcat in normal runs.
-    if (access("/data/data/dev.audaro.helloshell/files/rlhd_shaderdump", F_OK) == 0) {
+    if (access("/data/data/dev.audaro.helloshell/files/rlhd_shaderdump", F_OK) == 0 ||
+        access("/sdcard/Android/data/dev.audaro.helloshell/files/rlhd_shaderdump", F_OK) == 0) {   // external = Firebase --other-files
         static int sdidx=0; int idx=sdidx++; int ln=1; size_t p=0;
         while (p<down.size()){ size_t nl=down.find('\n',p);
             std::string line = down.substr(p, nl==std::string::npos ? std::string::npos : nl-p);
