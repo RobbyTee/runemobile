@@ -159,19 +159,28 @@
 > `dev-tools/gpu/evidence/ag3a-librlawt-delta-register-emulator-20260608.log`. The forwarders' GL *behaviour* is proven
 > in AG3-b (the delta isn't exercised until `HdPlugin.startUp` actually calls these).
 >
-> **NEXT (AG3-b — HdPlugin.startUp end-to-end, XL, run-driven, login-gated → emulator):** the scoped entry point is
-> `PluginManager.loadPlugins(java.util.List.of(Class.forName("rs117.hd.HdPlugin")), null)` then `startPlugin(...)` —
-> RLHD is `rs117.hd.*`, OUTSIDE the `net.runelite.client.plugins` package `loadCorePlugins()` scans, so it is NOT
-> auto-discovered, but the PUBLIC `loadPlugins(List<Class>)` (PluginManager.java:312) instantiates it via Guice.
-> A new `RLHDStarter` (shared `net.runelite.client.headless.*`, additive — mirror `RouteCGpuStarter`, armed off a
-> `Hooks.draw` tick) must: (1) force-DISABLE the base gpu plugin (both are `DrawCallbacks` renderers — they conflict),
-> (2) `loadPlugins([HdPlugin.class])` + `startPlugin`, (3) force `uiScalingMode`/Zone config like RouteCGpuStarter does
-> for gpu. Needs a `routecrlhd=full` boot mode (classpath gpu jar + rlhd jar, librlawt registered, tokens/login →
-> LOGGED_IN; `HdPlugin.startUp` early-returns until `textureManager.vanillaTexturesAvailable()`). Then iterate the
-> startUp GL path live (VAOs/UBOs/`renderer.initialize`/`initializeShaders` — Zone shaders are `#version 330`, same
-> downport family the `glShaderSource` shim already handles for base-gpu) until the loaders run + "117 HD started
-> successfully!" + first HD frame. Emulator is functional-authoritative (like AG2's in-world 3D); real-Mali perf is the
-> later device gate.
+> **STATUS — AG3-b GREEN on the emulator (2026-06-08): 117HD loads + `HdPlugin.startUp` runs to shader compile.**
+> `RLHDStarter` (shared headless, additive; armed by `-Drunelite.routecrlhd=true`, ticks off `Hooks.draw`) loads
+> `HdPlugin` via `MobileUiBridge.loadAndStartPlugin` → the public `PluginManager.loadPlugins(List<Class>)` (RLHD is
+> `rs117.hd.*`, outside the core scan) + `startPlugin` (its `conflicts="GPU"` auto-disables the base gpu plugin;
+> `@PluginDependency(EntityHiderPlugin)` resolves from the loaded core set; `HdPluginConfig` self-binds via HdPlugin's
+> `@Provides`). A `routecrlhd` boot mode (MainActivity, classpath gpu jar + rlhd jar, login-gated; jvm_bootstrap
+> registers librlawt on the shared GL-bridge path). Verified on emulator-5554: `loaded 1 plugin(s)` → `Starting 117 HD
+> / Renderer: ZoneRenderer / LWJGL Version: 3.3.x-facade (Android EGL bridge)`; the texture/material/watertype/gameval
+> loaders RAN (texture array uploaded — fixed a missing `glTexSubImage3D(IntBuffer)` overload + the BGRA→RGBA swizzle),
+> `renderer.initialize` completed, reaching `ZoneRenderer.initializeShaders`. Evidence
+> `dev-tools/gpu/evidence/ag3b-startup-emulator-20260608.log`. So the whole plumbing (plugin lifecycle + facade +
+> librlawt delta + loaders) is proven end-to-end up to shaders; the remaining gap is the shaders themselves.
+>
+> **NEXT (AG3-c — Zone shader GLSL-ES port, the XL iterative sub-phase):** `scene_vert/scene_frag/scene_geom` +
+> `shadow` programs fail strict GLSL-ES on int/float operand typing (e.g. `'const int' * 'float'`, `'vec2' / 'const
+> int'` at `scene_vert`) — the AG1b "explicit cast" recipe but RLHD's far larger set (5 Zone shaders + includes vs
+> base-gpu's 2). ANGLE parses the `samplerBuffer` TBO past the `GL_EXT_texture_buffer`-not-supported *warning* (it
+> reached a later cast error), so the emulator is **likely** viable for the port — iterate the casts into
+> `rc_downport` (or per-shader) until `sceneProgram`/shadow programs compile + link + validate, then the loaders
+> 712-718 run + "117 HD started successfully!" + the first HD frame (`adb exec-out screencap`, like AG2's in-world 3D).
+> IO blocks + TBO are ES 3.2 core, so the real Pixel 8/Mali (AG0 `esTier=32`) is the colour/perf-authoritative gate
+> and needs no `#extension` directives there.
 
 # Android GPU Rendering + 117HD: Final Plan (post-review)
 
