@@ -284,6 +284,18 @@ class MainActivity : AppCompatActivity() {
             }
             return
         }
+        // Track G AG2.5-b: `adb ... --ez rlhdprobe true` (or a pushed rlhdprobe.mode marker, so Firebase Robo can
+        // trigger it without an intent extra) boots the embedded VM on [client-*-gpu.jar + client-*-rlhd.jar],
+        // mainClass=RLHDProbe — a headless 117HD class-load + loader-data probe (no engine/bridge/render/login).
+        // Proves the OpenCL stub + Zone facade delta resolve at class-load and the loader JSON parses on-device.
+        if (intent?.getBooleanExtra("rlhdprobe", false) == true ||
+            File(getExternalFilesDir(null), "rlhdprobe.mode").exists()) {
+            if (booted.compareAndSet(false, true)) {
+                val app = applicationContext
+                thread(name = "jvm-boot") { bootRlhdProbe(app) }
+            }
+            return
+        }
         // Track G AG2: `adb ... --ez routecgpu true` (or the dev "GPU" button, which restarts the process into
         // this) boots the FULL client on the GPU-variant jar with the gpu plugin force-enabled. Also trigger on a
         // pushed marker file (getExternalFilesDir/gpu.mode): Firebase Test Lab Robo launches the default activity
@@ -834,6 +846,76 @@ class MainActivity : AppCompatActivity() {
             extraOpts = opts,
         )
         Log.i(TAG, "AG1a: startJvm rc=$rc (watch logcat: ANDROID_AG1A / librlawt / routec)")
+    }
+
+    /**
+     * Track G AG2.5-b — boot the embedded VM on [client-*-gpu.jar (the facade-backed client) + client-*-rlhd.jar]
+     * with mainClass RLHDProbe (`-Drunelite.rlhdprobe=true`). The host (jvm_bootstrap) does CACIO activation
+     * (RLHD touches java.awt at class-init) but SKIPS the bridge/render — this is a headless class-load + loader-
+     * data test, no GL context, no tokens, no login. RLHDProbe link/verifies every rs117.* class against the
+     * facade, runs the OpenCL class-load graph, and parses the 9 bundled loader JSON files. Watch logcat for
+     * ANDROID_RLHD_PROBE / MEGAVERDICT.
+     */
+    private fun bootRlhdProbe(app: android.content.Context) {
+        val javaHome = AssetInstaller.ensureInstalled(app)
+        val libjvm = File(javaHome, "lib/server/libjvm.so")
+        if (!libjvm.exists()) { Log.e(TAG, "rlhdprobe: embedded JRE not installed ($libjvm)"); booted.set(false); return }
+        val jvmDir = File(app.filesDir, "jvm")
+        // The GPU + RLHD jars are added to assets without bumping runtime.tag, so AssetInstaller may not have
+        // unpacked them — copy each from assets when absent (a fresh install copies them fine).
+        for (suffix in listOf("-gpu.jar", "-rlhd.jar")) {
+            val asset = runCatching { app.assets.list("jvm") }.getOrNull()
+                ?.firstOrNull { it.startsWith("client-") && it.endsWith(suffix) }
+            if (asset != null && !File(jvmDir, asset).exists()) {
+                runCatching {
+                    jvmDir.mkdirs()
+                    app.assets.open("jvm/$asset").use { i -> File(jvmDir, asset).outputStream().use { o -> i.copyTo(o) } }
+                }.onFailure { Log.w(TAG, "rlhdprobe: copy $asset from assets failed: ${it.message}") }
+            }
+        }
+        val gpuJar = jvmDir.list { _, n -> n.startsWith("client-") && n.endsWith("-gpu.jar") }?.firstOrNull()
+        val rlhdJar = jvmDir.list { _, n -> n.startsWith("client-") && n.endsWith("-rlhd.jar") }?.firstOrNull()
+        if (gpuJar == null || rlhdJar == null) {
+            Log.e(TAG, "rlhdprobe: missing jar(s) gpu=$gpuJar rlhd=$rlhdJar in $jvmDir " +
+                "(run android/dev-tools/gpu/stage-android-gpu-jar.sh + stage-rlhd-zone-jar.sh)")
+            booted.set(false); return
+        }
+        val classpath = listOf(gpuJar, rlhdJar, "probes.jar").joinToString(":") { File(jvmDir, it).absolutePath }
+        val libraryPath = File(javaHome, "lib").absolutePath
+        val home = app.filesDir.absolutePath
+        val tmpDir = File(app.filesDir, "tmp").apply { mkdirs() }.absolutePath
+        val opts = arrayOf(
+            "-Djava.awt.headless=false",
+            "--add-exports=java.desktop/java.awt=ALL-UNNAMED",
+            "--add-exports=java.desktop/java.awt.peer=ALL-UNNAMED",
+            "--add-exports=java.desktop/sun.awt.image=ALL-UNNAMED",
+            "--add-exports=java.desktop/sun.java2d=ALL-UNNAMED",
+            "--add-exports=java.desktop/java.awt.dnd.peer=ALL-UNNAMED",
+            "--add-exports=java.desktop/sun.awt=ALL-UNNAMED",
+            "--add-exports=java.desktop/sun.awt.event=ALL-UNNAMED",
+            "--add-exports=java.desktop/sun.awt.datatransfer=ALL-UNNAMED",
+            "--add-exports=java.base/sun.security.action=ALL-UNNAMED",
+            "--add-opens=java.base/java.util=ALL-UNNAMED",
+            "--add-opens=java.desktop/java.awt=ALL-UNNAMED",
+            "--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
+            "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+            "-Xmx512m",
+            "-Duser.home=$home",
+            "-Djava.io.tmpdir=$tmpDir",
+            "-Drunelite.rlhdprobe=true",
+        )
+        JvmLauncher.setStdioRedirect(true)   // probe prints its verdict to stdout -> logcat
+        Log.i(TAG, "rlhdprobe: starting HotSpot RLHDProbe, cp=$classpath")
+        val rc = JvmLauncher.startJvm(
+            javaHome = javaHome.absolutePath,
+            libjvmPath = libjvm.absolutePath,
+            libraryPath = libraryPath,
+            classpath = classpath,
+            mainClass = "RLHDProbe",
+            extraOpts = opts,
+        )
+        if (rc != 0) booted.set(false)
+        Log.i(TAG, "rlhdprobe: startJvm rc=$rc (watch logcat: ANDROID_RLHD_PROBE / MEGAVERDICT)")
     }
 
     private fun bootJvm(app: android.content.Context, census: Boolean = false, gpu: Boolean = false) {

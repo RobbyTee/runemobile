@@ -1,0 +1,8 @@
+06-08 21:47:49.094 28813 28837 I jvm-boot: HotSpot VM up; rlhdprobe mode (CACIO + 117HD class-load probe — no bridge/render)
+06-08 21:47:49.817 28813 28837 I jvm-boot: invoking RLHDProbe.main
+06-08 21:47:49.818 28813 28834 I MainActivity: rlhdprobe: startJvm rc=0 (watch logcat: ANDROID_RLHD_PROBE / MEGAVERDICT)
+06-08 21:47:50.085 28813 28836 I jvm-stdout: ANDROID_RLHD_PROBE linkSweep linked=304/304 failures=0
+06-08 21:47:50.500 28813 28836 I jvm-stdout: ANDROID_RLHD_PROBE openclGraph init=true OPENCL_EXPLICIT_INIT=true
+06-08 21:47:50.988 28813 28836 I jvm-stdout: ANDROID_RLHD_PROBE loaderJson parsed=9/9
+06-08 21:47:50.988 28813 28836 I jvm-stdout: MEGAVERDICT = ANDROID_RLHD_PROBE_GREEN
+06-08 21:47:50.988 28813 28837 I jvm-boot: RLHDProbe.main returned; VM stays alive (engine threads own the run)

@@ -812,12 +812,25 @@ static void *jvmThreadMain(void *argp) {
     // facade, then invoke the smoke main below. Detected from the VM opts so the normal boot path is untouched.
     bool routecSmoke = false;
     bool routecGpu = false;
+    bool routecRlhd = false;
     for (const std::string &o : a->extraOpts) {
         if (o == "-Drunelite.routec.smoke=true") routecSmoke = true;
         if (o == "-Drunelite.routecgpu=true") routecGpu = true;
+        if (o == "-Drunelite.rlhdprobe=true") routecRlhd = true;
     }
 
-    if (routecSmoke) {
+    if (routecRlhd) {
+        // Track G AG2.5-b (`-Drunelite.rlhdprobe=true`): activate CACIO (RLHD class-init touches java.awt) then
+        // hand off to RLHDProbe.main below — a headless 117HD class-load + loader-data test. No bridge, no render,
+        // no engine, no librlawt (class-load never calls a GL native).
+        LOGI("HotSpot VM up; rlhdprobe mode (CACIO + 117HD class-load probe — no bridge/render)");
+        if (!callStaticVoidNoArg(env, "UnsafePokeActivation", "activate")) {
+            LOGE("CACIO activation failed; aborting boot (RLHD class-init touches AWT)");
+            return fail(-13);
+        }
+        { std::lock_guard<std::mutex> lk(g_bootLock); g_bootDone = true; g_bootRc = JNI_OK; }
+        g_bootCv.notify_all();
+    } else if (routecSmoke) {
         LOGI("HotSpot VM up; routec.smoke mode (facade-only GL bridge — no CACIO/engine/render)");
         void *rh = dlopen("librlawt.so", RTLD_NOW | RTLD_GLOBAL);
         if (!rh) {

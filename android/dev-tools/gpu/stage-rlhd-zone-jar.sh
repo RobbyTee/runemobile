@@ -56,8 +56,14 @@ RC=$?
 set -e
 if [ "$RC" != 0 ]; then echo "!! RLHD recompile FAILED ($(grep -c 'error:' "$WORK/err.txt") errors):" >&2; grep 'error:' "$WORK/err.txt" >&2; exit 2; fi
 
-# 4) package: rs117/** classes + ALL RLHD resources (shaders/JSON/textures). NO org.lwjgl/rlawt (facade is in the
-#    base-gpu jar). Keep the resource tree exactly as RLHD loads it via getResourceAsStream.
+# 3b) compile the AG2.5-b class-load + loader-data probe (RLHDProbe) against [facade : stripped-client] (it needs
+#     only Gson + the facade Configuration; it reaches the RLHD classes via Class.forName at runtime).
+if [ -f "$(pwd)/RLHDProbe.java" ]; then
+	"$JAVAC" -nowarn -cp "$WORK/facade_out:$WORK/cp" -d "$WORK/rlhd_out" "$(pwd)/RLHDProbe.java"
+fi
+
+# 4) package: rs117/** classes + RLHDProbe + ALL RLHD resources (shaders/JSON/textures). NO org.lwjgl/rlawt
+#    (facade is in the base-gpu jar). Keep the resource tree exactly as RLHD loads it via getResourceAsStream.
 cp -R "$WORK/rlhd_out/." "$WORK/jar/"
 [ -d "$RLHD/src/main/resources" ] && cp -R "$RLHD/src/main/resources/." "$WORK/jar/"
 
