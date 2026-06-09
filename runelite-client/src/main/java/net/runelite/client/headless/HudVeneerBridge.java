@@ -86,6 +86,9 @@ public final class HudVeneerBridge
 	// (HP/prayer/run/spec/wiki), so the orbs vanish. Disable the cluster relocate to confirm + restore the orbs
 	// (the cluster then renders at its natural top-right, which on this landscape canvas is ~the same spot).
 	private static final boolean MINIMAP_RELOCATE = false;
+	// A/B: hiding the tab-stones' grandparent container is the suspected cause of the orbs interface never loading
+	// (desktop with hideStones=false loads the orbs; device with hideStones=true never does). Disable to confirm.
+	private static final boolean HIDE_STONES_ENABLED = false;
 
 	// Side panel (SIDE_CONTAINER = the inventory / equipment / spellbook / etc. panel) relocate. sideX < 0 = off.
 	// Same root-anchored relocate as the minimap; edge-to-edge needs it pulled inward so it doesn't clip under the
@@ -452,7 +455,7 @@ public final class HudVeneerBridge
 			// GRANDPARENT holds the whole row (icons + backgrounds), so hiding it clears the row completely
 			// (StoneSuppressProbe steady-state PNG + device). Stones still resolve under the hidden ancestor, so
 			// openTab (replaying a stone's op script) still switches tabs. STONE0 = left half, STONE7 = right half.
-			if (hideStones)
+			if (HIDE_STONES_ENABLED && hideStones)
 			{
 				final int[] ids = stoneIds(preEoc);
 				hideRowOf(c, ids[0]);
