@@ -163,6 +163,12 @@ public final class JavaBridge
 	private static int[] bufB;
 	private static boolean useA = true;
 
+	// GPU (Route C) frame-dump diagnostic — off unless -Drunelite.gpuframedump=true. Saves a handful of in-world
+	// GPU frames to disk so the AG2 device gate has pullable colour/flip evidence.
+	private static final boolean FRAME_DUMP = Boolean.getBoolean("runelite.gpuframedump");
+	private static int frameDumpCount;
+	private static int lastFrameDumpSeq;
+
 	// Input bookkeeping (only ever touched from the single native UI thread that drives onTouch/onClick).
 	private static boolean focused;       // FocusEvent gained — keyboard/mouse accepted
 	private static volatile boolean entered;  // MOUSE_ENTERED posted — pointer currently "present" (volatile:
@@ -246,6 +252,101 @@ public final class JavaBridge
 		frame = dst;        // publish (volatile)
 		frameSeq++;         // bump LAST so a native reader that sees the new seq also sees this frame
 		useA = !useA;       // next snapshot fills the OTHER buffer, so this one stays stable a full cycle
+	}
+
+	// ---- GPU (Route C) publish seam ---------------------------------------------------------------------
+	// In GPU mode the composited frame lives in the EGL FBO, not mainBufferProvider. The native swapBuffers
+	// shim glReadPixels-es the FBO straight into one of the SAME double buffers and publishes it, becoming the
+	// SOLE frameSeq publisher (Hooks gates the CPU snapshot off when isGpu). The two calls run back-to-back on
+	// the client thread (no useA flip between them), so the buffer gpuFrameBackBuffer hands out is exactly the
+	// one gpuPublish then publishes.
+
+	/** The next back buffer (w*h ints), allocated/resized as needed, for the native shim to write into. */
+	public static int[] gpuFrameBackBuffer(int w, int h)
+	{
+		final int n = w * h;
+		int[] dst = useA ? bufA : bufB;
+		if (dst == null || dst.length != n)
+		{
+			dst = new int[n];
+			if (useA)
+			{
+				bufA = dst;
+			}
+			else
+			{
+				bufB = dst;
+			}
+		}
+		return dst;
+	}
+
+	/** Publish the back buffer the native shim just filled (vertical-flipped, R/B-swizzled 0x00RRGGBB). */
+	public static void gpuPublish(int w, int h)
+	{
+		frameW = w;
+		frameH = h;
+		frame = useA ? bufA : bufB;
+		frameSeq++;
+		useA = !useA;
+		if (FRAME_DUMP)
+		{
+			maybeDumpFrame(w, h);
+		}
+	}
+
+	// One-shot: save ~8 in-world GPU frames (spaced ~50 seq apart) under -Drunelite.gpuframedump.dir (default
+	// java.io.tmpdir, so it is adb-pullable). The published int[] is 0x00RRGGBB (the native readback already
+	// flipped + swizzled). Runs on the client thread — a few PNG encodes is fine for a temporary diagnostic.
+	private static void maybeDumpFrame(int w, int h)
+	{
+		if (frameDumpCount >= 8 || frameSeq < 150)   // warmup: skip startup/welcome frames so we catch in-world
+		{
+			return;
+		}
+		if (lastFrameDumpSeq != 0 && frameSeq - lastFrameDumpSeq < 50)
+		{
+			return;
+		}
+		final int[] src = frame;
+		if (src == null || src.length < w * h)
+		{
+			return;
+		}
+		lastFrameDumpSeq = frameSeq;
+		try
+		{
+			final int[] copy = java.util.Arrays.copyOf(src, w * h);
+			final java.awt.image.BufferedImage img =
+				new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_RGB);
+			img.setRGB(0, 0, w, h, copy, 0, w);
+			final String base = System.getProperty("runelite.gpuframedump.dir",
+				System.getProperty("java.io.tmpdir", "."));
+			final java.io.File dir = new java.io.File(base, "routec-frames");
+			dir.mkdirs();
+			final java.io.File out = new java.io.File(dir,
+				String.format("gpuframe-%02d-seq%d-%dx%d.png", frameDumpCount, frameSeq, w, h));
+			javax.imageio.ImageIO.write(img, "png", out);
+			frameDumpCount++;
+			log.info("[gpuframedump] wrote {} ({}x{})", out.getName(), w, h);
+		}
+		catch (Throwable t)
+		{
+			log.warn("[gpuframedump] frame dump failed", t);
+		}
+	}
+
+	/** Canvas dimensions for sizing the offscreen GL FBO (queried by the native getFramebuffer). 0 if no client. */
+	public static int canvasWidth()
+	{
+		final Client c = client;
+		return c == null ? 0 : c.getCanvasWidth();
+	}
+
+	public static int canvasHeight()
+	{
+		final Client c = client;
+		return c == null ? 0 : c.getCanvasHeight();
 	}
 
 	// ---- Live framebuffer blit (native pulls these each screen refresh) --------------------------------
