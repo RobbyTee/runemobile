@@ -50,11 +50,14 @@ P0 polish:
 P1 menu + targeting:
 - [ ] #8  Native big-row menu overlay from `MenuPeekBridge.getSnapshot()` (44pt rows, hand-bias)
 - [ ] #3 long-press region routing (world→menu; chat→filter; overlay→edit) — OQ3
-P2 bridge-amortized:
+P2 bridge-amortized — **✅ DEVICE-CONFIRMED GREEN 2026-06-08** (notification config toggle + delivery verified on device; sticky-Shift earlier):
 - [x] #3  Screenshot → Photos button (📷, saves live frame; NSPhotoLibraryAddUsageDescription added)
-- [x] #4  Notifications → `UNUserNotificationCenter` (drains nextNotification ~2Hz, lazy auth)
-- [x] #27 Links → `SFSafariViewController` (drains nextLink ~2Hz, http(s) only) — *(P1-listed, done here)*
-- [x] #6  Pin/star: sort pinned-first + ★ + long-press Pin/Unpin/Configure sheet → setPinned. #25 incompatible-hide already present on iOS (grace status).
+- [x] #4  Notifications → `UNUserNotificationCenter`. **Device fix:** publish BEFORE the desktop focus gate (HeadlessClientUI.isFocused()==true was dropping all notifications) + UNUserNotificationCenterDelegate so banners show foregrounded.
+- [x] #27 Links → `SFSafariViewController` (drains nextLink ~2Hz, http(s) only)
+- [x] #6  Pin/star: pinned-first + ★ + long-press **centered alert** (Pin/Unpin/Configure) → setPinned. (Action-sheet bounced on the 60fps landscape HUD; centered alert fixed it.)
+- [x] #5 (partial) notification config items render an **enabled toggle** (flip per-item enabled) instead of raw JSON; compound types no longer dump blobs. Dimension/Set native controls still TODO.
+
+KNOWN ISSUE (Feature-A, separate): minimap **orbs (HP/prayer/run/spec) + wiki button missing** on device. Not C1, not the minimap-enlarge revert (clean) or relocate (unchanged since A5). Engine hard-pins orbs (Jun-7 finding) contradicts the earlier "A5 orbs move with relocate" claim → orbs likely render at a pinned position pushed off-screen by edge-to-edge/chat tuning. Needs on-device orb-coordinate diagnostic to root-cause.
 - [ ] #5  Config dimension/set/notification controls + native notification sub-screen
 - [ ] #17 Hub install progress UI
 - [ ] #27 `LinkBrowser` → SFSafariViewController
