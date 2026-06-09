@@ -71,10 +71,27 @@
 > **So every auth-gated OSRS gate (in-world render, soak, login flows) must run on an OWNED physical device on a
 > normal network — Firebase stays valid only for pre-login gates (AG0/AG1b recon, the base-gpu LOGIN-screen render).**
 >
-> **NEXT: in-world 3D scene** (the one remaining AG2 piece) — on the user's **physical Pixel 8 on home wifi**:
-> install the APK → token in place → `◆` GPU button (or seed `getExternalFilesDir()/gpu.mode`) → pull
-> `Android/data/<pkg>/files/routec-frames/*.png` and confirm the 3D `drawScene` path (depth/reverse-Z). Then AG2.5
-> (RLHD loaders + OpenCL facade — does NOT need login, so Firebase-testable) → AG3 (117HD).
+> **STATUS — IN-WORLD 3D SCENE renders via the GPU pipeline (2026-06-08, emulator, evidence
+> `ag2-inworld-3dscene-gpu-emulator-20260608.png`).** The emulator logs in fine (it runs on the home network, the
+> network the Jagex `session_id` was minted from — see the Firebase diagnosis below), so booting GPU mode there
+> reaches LOGGED_IN and the unmodified base `gpu` plugin renders the **full live OSRS 3D world** through our
+> facade + EGL bridge: terrain/trees/player models with correct **depth-sort (reverse-Z works)**, correct colour,
+> right-side-up, native A6/A7 chrome composited on top. `isGpu=true`, `createGLContext` via librlawt. SwiftShader
+> is non-authoritative for PERF, but the shader + render MECHANICS are already real-Mali-proven (AG1b validate +
+> AG2 device render), so this functionally closes the 3D `drawScene` path (geometry/depth/flip).
+>
+> **WHY FIREBASE CAN'T LOG IN (mechanism, settled):** at login the gamepack makes LIVE network calls from the
+> device's IP — it mints its own play/OTL token via `auth.runescape.com/game-session/v1/tokens` (Bearer = the
+> session), then connects to the game world. The `session_id` is minted from the user's HOME network
+> (`fetch-shield-tokens.sh` runs on their Mac) and Jagex binds/validates it against that origin, so from Firebase's
+> Google-datacenter IP the calls are rejected (`LOGGING_IN → LOGIN_SCREEN`). Confirmed: the token reuses across the
+> user's two Macs (same home IP) with no remint; ONLY Firebase fails. **There is no Firebase fix** (no VPN/proxy on
+> a Test Lab device; can't pick datacenter region). Auth-gated OSRS gates run on the home network: the emulator
+> (home mini) or a physical Android device on home wifi driven via adb.
+>
+> **NEXT: in-world 3D on real MALI (perf-authoritative)** — needs a physical Android device on the home network
+> (the emulator already proves the render functionally; AG1b/AG2 prove the Mali mechanics). Then AG2.5 (RLHD
+> loaders + OpenCL facade — does NOT need login, Firebase-testable) → AG3 (117HD).
 
 # Android GPU Rendering + 117HD: Final Plan (post-review)
 
