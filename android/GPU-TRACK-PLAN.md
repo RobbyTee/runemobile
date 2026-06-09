@@ -172,15 +172,21 @@
 > `dev-tools/gpu/evidence/ag3b-startup-emulator-20260608.log`. So the whole plumbing (plugin lifecycle + facade +
 > librlawt delta + loaders) is proven end-to-end up to shaders; the remaining gap is the shaders themselves.
 >
-> **NEXT (AG3-c — Zone shader GLSL-ES port, the XL iterative sub-phase):** `scene_vert/scene_frag/scene_geom` +
-> `shadow` programs fail strict GLSL-ES on int/float operand typing (e.g. `'const int' * 'float'`, `'vec2' / 'const
-> int'` at `scene_vert`) — the AG1b "explicit cast" recipe but RLHD's far larger set (5 Zone shaders + includes vs
-> base-gpu's 2). ANGLE parses the `samplerBuffer` TBO past the `GL_EXT_texture_buffer`-not-supported *warning* (it
-> reached a later cast error), so the emulator is **likely** viable for the port — iterate the casts into
-> `rc_downport` (or per-shader) until `sceneProgram`/shadow programs compile + link + validate, then the loaders
-> 712-718 run + "117 HD started successfully!" + the first HD frame (`adb exec-out screencap`, like AG2's in-world 3D).
-> IO blocks + TBO are ES 3.2 core, so the real Pixel 8/Mali (AG0 `esTier=32`) is the colour/perf-authoritative gate
-> and needs no `#extension` directives there.
+> **STATUS — AG3-c IN PROGRESS (foundation GREEN, 2026-06-08): shader-overlay mechanism + first file ported.**
+> RLHD's `#version 330` shaders use int literals in float contexts that strict GLSL-ES rejects (`1 / 2.4`,
+> `float H = 0;`, `C > 0`, `mod(x, 6)`, `vec2 * 2`, `... * SHADOW_COMBINED_MAX`) — pervasive (~100+ sites across
+> ~10 files), so the port is done as full fixed copies in a committed **overlay** (`dev-tools/gpu/shader-overlay/**`),
+> applied over pristine rlhd-src by `stage-rlhd-zone-jar.sh` (reproducible; rlhd-src untouched). Diagnostics:
+> `rc_downport` strips RLHD's `#line` directives so a driver `0:M` error maps directly to the flat downported source,
+> + a toggleable numbered shader dump (`touch files/rlhd_shaderdump`). **Done:** `utils/color_utils.glsl` (~20 sites)
+> — verified its errors clear and the scene-shader compile advances. **REMAINING (mechanical int→float, same pass):**
+> `utils/{misc,displacement,normals,shadows}.glsl` + `scene_frag.glsl` + `scene_geom.glsl`, then `fastShadow`/
+> `detailedShadow` programs + the UI program. Iterate: `touch files/rlhd_shaderdump` → run routecrlhd → map each
+> `ERROR: 0:M` to the flat dump → copy that .glsl into the overlay + fix → re-stage rlhd jar + push → repeat until
+> `sceneProgram`/shadow compile+link+validate → loaders 712-718 run → "117 HD started successfully!" → first HD frame
+> (`adb exec-out screencap`, like AG2's in-world 3D). NOTE: emulator ANGLE parses `samplerBuffer` past the
+> `GL_EXT_texture_buffer`-not-supported warning (so it's likely viable for the compile), but it's NOT colour/perf-
+> authoritative; the real Pixel 8/Mali (AG0 `esTier=32`, TBO + IO-blocks core, no `#extension` needed) is the gate.
 
 # Android GPU Rendering + 117HD: Final Plan (post-review)
 
