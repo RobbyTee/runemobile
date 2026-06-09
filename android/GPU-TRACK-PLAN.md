@@ -50,11 +50,21 @@
 >   `sourceDimensions` int↔float math strict GLSL-ES rejects; LINEAR is scale-free and is what AG1b validated),
 >   `MainActivity` GPU launch path + dev `◆` button + `--ez routecgpu true`.
 >
-> **NEXT: AG2-P5 (device pixel gate)** — the emulator is ANGLE/SwiftShader (NOT authoritative). The remaining
-> gate is a real-device run on the user's Pixel 8 (real Mali, AG1b-proven shaders): install → fresh tokens →
-> login → `◆` GPU button, then pull `files/routec-frames/*.png` and confirm an **in-world 3D scene** with correct
-> colour/depth/flip (the emulator only captured the post-login UI/welcome layer — the 3D `drawScene` path is the
-> same FBO readback but unconfirmed visually). After P5: AG2.5 (RLHD loaders + OpenCL facade) → AG3 (117HD).
+> **STATUS — AG2-P5 DEVICE PASS on a real Pixel 8 / Mali-G715 (2026-06-08, Firebase Test Lab, commit
+> `18a4f0686`).** `VERDICT=AG2_DEVICE_PASS`: the unmodified base `gpu` plugin is the active renderer on real Mali
+> (`isGpu=true` ×6), `createGLContext` brings up the EGL ctx + FBO through `librlawt` (`es=320 es`, OpenGL ES 3.2,
+> `Using device: Mali-G715`), and the pulled frame is a correct OSRS render (right-side-up, correct colour) on real
+> silicon. Evidence: `dev-tools/gpu/evidence/ag2-p5-pixel8-mali-{loginscreen.png,20260608.log}`. Harness:
+> `fb-gate.sh gpu` (Robo can't pass `--ez routecgpu`, so it pushes a `gpu.mode` marker via `--other-files` +
+> `--directories-to-pull` the frames). **Two findings:** (1) **Mali is strict, NOT lenient** — the default
+> HYBRID/xBR UI scale shader (`sourceDimensions` int↔float) throws a transient `ShaderException` on the
+> `enabledByDefault` auto-start before `RouteCGpuStarter` forces LINEAR; it recovers (isGpu→true) and self-heals
+> once LINEAR persists. (2) The render proven here is the **OSRS LOGIN screen** — the Jagex session token had
+> expired (login failed), so the relaxed `LOGIN_SCREEN` gate is what salvaged the real-Mali frame.
+>
+> **NEXT: in-world 3D scene** (the one remaining AG2 piece) — needs FRESH tokens (interactive `fetch-shield-tokens.sh`
+> mint, user-only) → re-run `fb-gate.sh gpu` (or the `◆` button on an owned device) to confirm the 3D `drawScene`
+> path (depth/reverse-Z) renders. Then AG2.5 (RLHD loaders + OpenCL facade) → AG3 (117HD).
 
 # Android GPU Rendering + 117HD: Final Plan (post-review)
 
