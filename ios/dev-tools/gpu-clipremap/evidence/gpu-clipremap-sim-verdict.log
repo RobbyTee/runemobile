@@ -1,0 +1,47 @@
+[cr] ===== gpu-clipremap: baseline vs fragdepth vs clipremap reverse-Z depth, on iOS Simulator GLES =====
+[cr] GL_VERSION = OpenGL ES 3.0 APPLE-23.1.1
+[cr] GL_SLVERSION = OpenGL ES GLSL ES 3.00
+[cr] GL_RENDERER = Apple Software Renderer
+[cr] EXT_color_buffer_float = NO
+[cr] NOTE: Simulator GLES is a SOFTWARE renderer (not a TBDR Metal GPU). It validates depth MECHANISM +
+[cr]       PRECISION + layering, but CANNOT measure the early-Z/HSR perf cost of fragdepth (device-only),
+[cr]       and Phase 2 magnitudes are indicative, not device-exact. Phase 1 (float32) is the precision proof.
+[cr] PROGRAM P_BASELINE = OK
+[cr] PROGRAM P_FRAGDEPTH = OK
+[cr] PROGRAM P_CLIPREMAP = OK
+[cr] ===== PHASE 1: float32 depth precision at distance (CPU; models the device's confirmed-32F buffer) =====
+[cr]   (software renderer has no EXT_color_buffer_float; precision is pure float32 arithmetic, computed here.)
+[cr]   viewZ=   200  baseline=0.75  fragdepth=0.5  clipremap=0.5
+[cr]   viewZ=  1000  baseline=0.550000012  fragdepth=0.100000001  clipremap=0.099999994
+[cr]   viewZ=  2000  baseline=0.524999976  fragdepth=0.0500000007  clipremap=0.0500000119
+[cr]   viewZ=  6000  baseline=0.508333325  fragdepth=0.0166666675  clipremap=0.0166666806
+[cr]   viewZ=  9000  baseline=0.50555557  fragdepth=0.0111111114  clipremap=0.0111111104
+[cr] PHASE 1 over 48.83 viewZ units at Zfar=6000 (100000 float32 samples):
+[cr]   baseline  distinct depths = 1129
+[cr]   fragdepth distinct depths = 72231  (64.0x baseline)
+[cr]   clipremap distinct depths = 4516  (4.0x baseline)
+[cr] P1_CLIPREMAP_RECOVERS_PRECISION = NO  (clipremap=4516 vs fragdepth=72231 vs baseline=1129)
+[cr] P1_FRAGDEPTH_FINER = YES
+[cr] ===== PHASE 2: real z-fight on DEPTH_COMPONENT32F (two near-coplanar intersecting planes) =====
+[cr] PHASE 2 fbo status=0x8cd5 depth_attach_bits=32 (requested DEPTH_COMPONENT32F)
+[cr]   cfg=baseline NEAR Zfar=600 contamination=11776 (bottomBlue=11776 topRed=0 of 262144)
+[cr]   cfg=baseline FAR Zfar=6000 contamination=131072 (bottomBlue=0 topRed=131072 of 262144)
+[cr]   cfg=baseline VERYFAR Zfar=9000 contamination=131072 (bottomBlue=0 topRed=131072 of 262144)
+[cr]   cfg=fragdepth NEAR Zfar=600 contamination=1024 (bottomBlue=1024 topRed=0 of 262144)
+[cr]   cfg=fragdepth FAR Zfar=6000 contamination=8704 (bottomBlue=8704 topRed=0 of 262144)
+[cr]   cfg=fragdepth VERYFAR Zfar=9000 contamination=13312 (bottomBlue=0 topRed=13312 of 262144)
+[cr]   cfg=clipremap NEAR Zfar=600 contamination=1536 (bottomBlue=0 topRed=1536 of 262144)
+[cr]   cfg=clipremap FAR Zfar=6000 contamination=5632 (bottomBlue=5632 topRed=0 of 262144)
+[cr]   cfg=clipremap VERYFAR Zfar=9000 contamination=16384 (bottomBlue=16384 topRed=0 of 262144)
+[cr] PHASE 2 FAR contamination: baseline=131072 fragdepth=8704 clipremap=5632
+[cr] ===== PHASE 3: coplanar bias layering via a PER-VERTEX bias attribute (decorations-on-floors) =====
+[cr]   cfg=baseline bias=4/128 Zfar=6000 floor_bleed=0 of 262144 (0 = layering intact)
+[cr]   cfg=fragdepth bias=4/128 Zfar=6000 floor_bleed=0 of 262144 (0 = layering intact)
+[cr]   cfg=clipremap bias=4/128 Zfar=6000 floor_bleed=0 of 262144 (0 = layering intact)
+[cr] RESULT P1_FRAGDEPTH_FINER = YES
+[cr] RESULT P1_CLIPREMAP_RECOVERS = NO
+[cr] RESULT P2_FRAGDEPTH_CLEANER = YES
+[cr] RESULT P2_CLIPREMAP_CLEANER = YES
+[cr] RESULT P3_LAYERING_ALL = YES
+[cr] CONCLUSION = FRAGDEPTH_ONLY  (only the fragment-depth write fixes the z-fight; its device-only early-Z perf cost must be measured, else use ANGLE clip_control)
+[cr] ===== gpu-clipremap done =====
