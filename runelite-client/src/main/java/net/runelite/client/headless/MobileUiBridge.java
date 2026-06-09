@@ -1050,6 +1050,18 @@ public final class MobileUiBridge
 				.ki("position", item.position())
 				.kb("secret", secret)
 				.kv("type", typeName(type));
+			// Self-describe the wire format for the compound types so the native control knows exactly what string
+			// to send back via setConfig (ConfigManager deserializes by declared type): a Dimension round-trips as
+			// "WIDTHxHEIGHT", a Set as a gson JSON array of element names. Primitives/enum/color need no hint.
+			final String tn = typeName(type);
+			if ("dimension".equals(tn))
+			{
+				out.kv("encoding", "WxH");
+			}
+			else if ("set".equals(tn))
+			{
+				out.kv("encoding", "json-array");
+			}
 			// Secret values (passwords/tokens) are NOT round-tripped through the native side or its logs: emit
 			// null. The native control renders a secure field and only sends a value when the user edits it.
 			out.kvNullable("value", secret ? null : cm.getConfiguration(group, key));
