@@ -131,7 +131,9 @@ static std::string rc_downport(const std::string &src) {
     body = (nl != std::string::npos) ? body.substr(nl + 1) : std::string();
     body = std::regex_replace(body, std::regex("#line[^\\n]*\\n"), "");                // strip RLHD #line directives (ES error lines then map to the flat source; our error path doesn't parse them)
     body = std::regex_replace(body, std::regex("\\bnoperspective\\b"), "");           // (3) reserved in ES
-    body = std::regex_replace(body, std::regex("(\\d*\\.\\d+|\\d+\\.\\d*)[fF]"), "$1"); // (4) no float `f` suffix
+    // (4) strip the float `f` suffix — but ONLY a real suffix: require a non-identifier char after the f, else
+    //     `\d+\.\d*[fF]` wrongly eats the `f` in `material1.flowMap` (matches "1.f") -> "material1.lowMap".
+    body = std::regex_replace(body, std::regex("(\\d*\\.\\d+|\\d+\\.\\d*)[fF](?![a-zA-Z0-9_])"), "$1");
     for (auto &c : kSceneVertexCasts) rc_replace_all(body, c[0], c[1]);                // (5) explicit casts
     std::string precision =
         "precision highp float;\nprecision highp int;\n"
@@ -144,8 +146,11 @@ static std::string rc_downport(const std::string &src) {
     if (std::string(sEsVer) == "310 es") {
         extns =
             "#extension GL_EXT_shader_io_blocks : enable\n"
+            "#extension GL_OES_shader_io_blocks : enable\n"
             "#extension GL_EXT_texture_buffer : enable\n"
-            "#extension GL_EXT_geometry_shader : enable\n";
+            "#extension GL_OES_texture_buffer : enable\n"
+            "#extension GL_EXT_geometry_shader : enable\n"
+            "#extension GL_OES_geometry_shader : enable\n";
     }
     return std::string("#version ") + sEsVer + "\n" + extns + precision + body;
 }
@@ -476,6 +481,11 @@ static void JNICALL rc_AWT_createGLContext(JNIEnv* env, jobject){
     }
     bool fboOk = rcBuildFbo(w, h);
     LOGI("createGLContext DONE fbo=%u %dx%d complete=%d es=%s GL_VERSION=%s", sFbo, sFboW, sFboH, fboOk, sEsVer, (const char*)glGetString(GL_VERSION));
+    { const char *ext = (const char*)glGetString(GL_EXTENSIONS);
+      bool tb = ext && (strstr(ext,"texture_buffer")!=nullptr);
+      LOGI("GL caps: texture_buffer=%d (EXT=%d OES=%d) io_blocks=%d geom=%d", tb,
+          ext && strstr(ext,"GL_EXT_texture_buffer")!=nullptr, ext && strstr(ext,"GL_OES_texture_buffer")!=nullptr,
+          ext && strstr(ext,"shader_io_blocks")!=nullptr, ext && strstr(ext,"geometry_shader")!=nullptr); }
 }
 static void JNICALL rc_AWT_destroy(JNIEnv*, jobject){
     if (sDpy != EGL_NO_DISPLAY) {

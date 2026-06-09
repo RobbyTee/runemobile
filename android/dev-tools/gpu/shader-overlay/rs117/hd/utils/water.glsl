@@ -138,7 +138,7 @@ vec4 sampleWater(int waterTypeIndex, vec3 viewDir) {
     float foamDistance = 0.7;
     vec3 foamColor = waterType.foamColor;
     foamColor = foamColor * foamMask * compositeLight;
-    foamAmount = clamp(pow(1.0 - ((1.0 - foamAmount) / foamDistance), 3.0), 0.0, 1.0) * waterType.hasFoam;
+    foamAmount = clamp(pow(1.0 - ((1.0 - foamAmount) / foamDistance), 3.0), 0.0, 1.0) * float(waterType.hasFoam);
     foamAmount *= foamColor.r;
     baseColor = mix(baseColor, foamColor, foamAmount);
     vec3 specularComposite = mix(lightSpecularOut, vec3(0.0), foamAmount);
