@@ -400,18 +400,21 @@ public final class HudVeneerBridge
 				}
 			}
 
-			// One-shot orb/wiki diagnostic: once the minimap cluster is built, dump MAP_CONTAINER + each orb's real
-			// canvas bounds + hidden state so the missing-orbs regression can be root-caused from the device log.
-			// Read-only; runs once per session. Grep the log for "[orbdiag]" / "mm-tree".
-			if (!orbDiagDumped && preEoc && c.getWidget(InterfaceID.ToplevelPreEoc.MINIMAP) != null)
+			// Timeline orb/wiki diagnostic: log orb presence + ORBS-layer child count + every veneer flag once a
+			// second for ~48s, so the missing-orbs regression shows exactly WHEN the orbs vanish and WHICH veneer
+			// op correlates. Grep the device log for "[orbtl]".
+			if (preEoc && orbDiagFrames < 2400)
 			{
-				orbDiagDumped = true;
-				log.info("[orbdiag] canvas={}x{} minimapReloc=({},{}) hideStones={} scalePct={}",
-					c.getCanvasWidth(), c.getCanvasHeight(), minimapX, minimapY, hideStones, minimapScalePct);
-				dumpMinimapTree(c, preEoc);
-				// Recursively dump the MAP_CONTAINER subtree so we see what's actually loaded inside the (visible
-				// but apparently empty) ORBS layer — the orbs interface may be nested under different ids.
-				dumpTree("MC", c.getWidget(InterfaceID.ToplevelPreEoc.MAP_CONTAINER), 0);
+				if (orbDiagFrames % 50 == 0)
+				{
+					final boolean orbH = c.getWidget(InterfaceID.Orbs.ORB_HEALTH) != null;
+					log.info("[orbtl] f={} canvas={}x{} orbH={} orbsKids={} chat=({},{}) hideChat={} chatCollapsed={} "
+							+ "tabRowH={} chatAreaW={} minimapReloc={} relocOn={} sideX={} hideStones={} scalePct={}",
+						orbDiagFrames, c.getCanvasWidth(), c.getCanvasHeight(), orbH, orbsChildCount(c, preEoc),
+						chatX, chatY, hideChat, chatCollapsed, chatTabRowH, chatAreaW, minimapX, MINIMAP_RELOCATE,
+						sideX, hideStones, minimapScalePct);
+				}
+				orbDiagFrames++;
 			}
 
 			// Minimap ENLARGE: resize the globe + reposition its chrome so the whole cluster reads as a bigger
@@ -588,6 +591,35 @@ public final class HudVeneerBridge
 		}
 	}
 
+	/** Diagnostic: how many children (static+dynamic+nested) the ORBS layer currently has — the orbs interface, when
+	 *  loaded, appears here. 0 = empty (orbs not loaded), -1 = layer missing, -2 = error. */
+	private static int orbsChildCount(Client c, boolean preEoc)
+	{
+		try
+		{
+			final Widget orbs = c.getWidget(preEoc
+				? InterfaceID.ToplevelPreEoc.ORBS : InterfaceID.ToplevelOsrsStretch.ORBS);
+			if (orbs == null)
+			{
+				return -1;
+			}
+			int n = 0;
+			final Widget[][] groups = { orbs.getStaticChildren(), orbs.getDynamicChildren(), orbs.getNestedChildren() };
+			for (Widget[] g : groups)
+			{
+				if (g != null)
+				{
+					n += g.length;
+				}
+			}
+			return n;
+		}
+		catch (RuntimeException ex)
+		{
+			return -2;
+		}
+	}
+
 	/** Diagnostic: recursively dump a widget's static/dynamic/nested children (id, bounds, hidden, sprite) so we can
 	 *  see what's actually loaded inside a layer (e.g. the orbs interface nested into the ORBS layer). Depth/count
 	 *  capped to keep the log sane. */
@@ -625,7 +657,7 @@ public final class HudVeneerBridge
 	private static final int MM_NAT_SIZE = 152;   // natural globe draw-area width/height
 	private static boolean minimapTreeDumped;
 	private static boolean minimapScaleLogged;
-	private static boolean orbDiagDumped;   // one-shot device diagnostic for the missing-orbs regression
+	private static int orbDiagFrames;   // timeline diagnostic for the missing-orbs regression
 
 	/** One-time recursive dump of the minimap cluster (MAP_CONTAINER tree) + the named chrome widgets, so a fresh
 	 *  session can see the exact child layout (bounds / relative / size modes / sprite / type) before designing the
