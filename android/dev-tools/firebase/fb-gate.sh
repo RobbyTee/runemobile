@@ -81,9 +81,10 @@ gsutil cp "$LOGCAT_OBJ" "$OUT"
 echo "== md5-gate the fetched logcat (reusing the emulator gate) =="
 case "$MODE" in
   login)  "$ROOT/android/dev-tools/a0-login/check-loggedin.sh" "$OUT" ;;
-  recon)  grep -E "ANDROID_AG0" "$OUT" || { echo "no ANDROID_AG0 recon lines in logcat — is the recon APK built (./gradlew :recon:assembleDebug)?" >&2; exit 1; }
-          grep -qE "ANDROID_AG0 VERDICT=(PASS|PASS_BASE_GPU_ONLY)" "$OUT" \
-            && echo "AG0 device recon OK (real GLES tier/extensions captured above)" \
-            || { echo "AG0 recon did not reach a PASS verdict" >&2; exit 1; } ;;
+  recon)  echo "--- AG0 (GLES tier/extensions) ---"; grep -E "ANDROID_AG0" "$OUT" || { echo "no ANDROID_AG0 lines — is the recon APK built (./gradlew :recon:assembleDebug)?" >&2; exit 1; }
+          echo "--- AG1b (real base-gpu shaders compile/link/validate on this driver) ---"; grep -E "ANDROID_AG1B" "$OUT" || true
+          A0="$(grep -oE 'ANDROID_AG0 VERDICT=[A-Z_]+' "$OUT" | tail -1)"; A1="$(grep -oE 'ANDROID_AG1B VERDICT=[A-Z_]+' "$OUT" | tail -1)"
+          echo ">> $A0    >> $A1"
+          printf '%s' "$A0" | grep -qE 'VERDICT=(PASS|PASS_BASE_GPU_ONLY)' || { echo "AG0 did not PASS" >&2; exit 1; } ;;
   *) echo "unsupported mode for Firebase: $MODE (census is emulator/BrowserStack only)" >&2; exit 2 ;;
 esac
