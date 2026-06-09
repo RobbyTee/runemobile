@@ -1,0 +1,16 @@
+[tbo] ===== gpu-tbo2d: texture-buffer -> 2D integer-texture repack (117HD blocker #1) on iOS GLES =====
+[tbo] GL_VERSION = OpenGL ES 3.0 APPLE-23.1.1
+[tbo] GL_SLVERSION = OpenGL ES GLSL ES 3.00
+[tbo] GL_RENDERER = Apple Software Renderer
+[tbo] GL_MAX_TEXTURE_SIZE=4096  GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS=16 (must be >=1 for the vertex fetch)
+[tbo] faceCount=50000 packed into W=2048 -> 25 rows (a 1D layout would need width 50000 <= GL_MAX_TEXTURE_SIZE=4096? NO -> 2D required)
+[tbo] NOTE: software renderer, but integer-2D-texture + texelFetch + vertex texture fetch are ES 3.0 CORE -> high device confidence.
+[tbo] PHASE A: RGBA32I 2048x25 (50000 faces, 25 rows) upload glErr=NONE
+[tbo] PROGRAM P_FRAG = OK
+[tbo] PHASE B (fragment own-pixel): green=50000 (want 50000) red=0 (want 0) blue/pad=1200 (want 1200)
+[tbo] B_FRAG_EXACT = YES
+[tbo] PROGRAM P_VERT = OK
+[tbo] PHASE C (vertex wrap, gl_VertexID): green=50000 (want 50000) red=0 (want 0) black/undrawn=1200 (want 1200)
+[tbo] C_VERT_WRAP_EXACT = YES
+[tbo] VERDICT tbo2d_repack_exact = YES  (frag=YES vert=YES)
+[tbo] ===== gpu-tbo2d done =====
