@@ -1920,6 +1920,17 @@ static int chatRowCanvasH(void) {
     }
 
 
+    // #8: native big-row menu — once the long-press right-click lands in the MenuPeekBridge snapshot (a frame
+    // or two later), build the OSRS-styled overlay over the engine's tiny menu. Times out to the engine-menu
+    // clamp fallback if the snapshot never arrives.
+    if (self.menuOpen && self.menuBuilding && self.menuContainer == nil) {
+        if ([self tryBuildNativeMenu]) {
+            self.menuBuilding = NO;
+        } else if (CACurrentMediaTime() - self.menuOpenAt > 0.6) {
+            self.menuBuilding = NO;   // give up; the engine menu + clamp path (updateMenuHighlight) still works
+        }
+    }
+
     // Interactable-tap feedback: when the engine resolved a tap to a real interactable it bumps the counter —
     // give a light buzz (the "you grabbed something" feel) and draw a RED click ring. A plain walk doesn't bump,
     // so after a short grace window we draw a YELLOW ring instead (and stay silent). Matches the official app.
@@ -2044,9 +2055,153 @@ static int chatRowCanvasH(void) {
     self.menuFingerOnMenu = YES;                    // release-without-moving picks the row at the press point
     self.menuSelX = gx; self.menuSelY = gy;
     self.lastMenuX = gx; self.lastMenuY = gy;
+    self.menuBuilding = YES;                         // #8: poll the snapshot in onDisplayTick, then build native rows
+    self.menuHighlight = -1;
+    self.menuHandRight = (loc.x > self.screen.bounds.size.width * 0.5); // pressed on the right -> open leftward
     self.menuHapticY = loc.y;
     self.menuHaptic = [UISelectionFeedbackGenerator new];
     [self.menuHaptic prepare];
+}
+
+#pragma mark - #8 Native big-row menu (over the engine menu; commits via the engine row)
+
+// Poll the MenuPeekBridge snapshot; once the engine menu exists, capture its game-space rect + entries and
+// build the native overlay. Returns YES when built (caller clears menuBuilding).
+- (BOOL)tryBuildNativeMenu {
+    NSString *snap = [JVMLauncher menuPeekSnapshot];
+    if (snap.length == 0) return NO;
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
+                                                      options:0 error:nil];
+    if (![d isKindOfClass:[NSDictionary class]] || ![d[@"menuOpen"] boolValue]) return NO;
+    NSArray *entries = d[@"entries"];
+    if (![entries isKindOfClass:[NSArray class]] || entries.count == 0) return NO;
+    int mw = [d[@"menuW"] intValue], mh = [d[@"menuH"] intValue];
+    if (mw <= 0 || mh <= 0) return NO;
+    self.menuGeomGame = CGRectMake([d[@"menuX"] intValue], [d[@"menuY"] intValue], mw, mh);
+    self.menuGeomValid = YES;
+    [self buildNativeMenuWithEntries:entries];
+    return YES;
+}
+
+// Build the opaque OSRS-styled native menu: a "Choose Option" header + one 32pt row per entry (display order,
+// index 0 = top = left-click default). The box is sized + positioned to fully COVER the engine's own tiny
+// rendered menu so there's no double-menu. Selection is driven by the long-press drag (rows are inert).
+- (void)buildNativeMenuWithEntries:(NSArray *)entries {
+    [self.menuContainer removeFromSuperview];
+    self.menuRowEntries = entries;
+    NSInteger count = entries.count;
+
+    // The engine menu rect in view coords — what we must cover.
+    CGRect er = [self viewRectForGameX:(int)CGRectGetMinX(self.menuGeomGame)
+                                     y:(int)CGRectGetMinY(self.menuGeomGame)
+                                     w:(int)CGRectGetWidth(self.menuGeomGame)
+                                     h:(int)CGRectGetHeight(self.menuGeomGame)];
+
+    CGFloat boxW = MAX(kMenuWidth, CGRectGetWidth(er) + 16.0);
+    CGFloat boxH = kMenuHeaderViewH + count * kMenuRowViewH;
+
+    // Anchor over the engine rect; hand-bias the box away from the pressing thumb, then clamp into the safe area.
+    CGFloat ox = CGRectGetMinX(er) - 8.0;
+    if (self.menuHandRight) ox = CGRectGetMaxX(er) + 8.0 - boxW;   // right thumb -> open leftward
+    CGFloat oy = CGRectGetMinY(er) - 4.0;
+    UIEdgeInsets ins = self.view.safeAreaInsets;
+    CGFloat minX = ins.left + 6.0;
+    CGFloat maxX = self.view.bounds.size.width - ins.right - 6.0 - boxW;
+    CGFloat minY = ins.top + 6.0;
+    CGFloat maxY = self.view.bounds.size.height - ins.bottom - 6.0 - boxH;
+    ox = fmin(fmax(ox, minX), fmax(minX, maxX));
+    oy = fmin(fmax(oy, minY), fmax(minY, maxY));
+
+    UIView *box = [[UIView alloc] initWithFrame:CGRectMake(ox, oy, boxW, boxH)];
+    box.backgroundColor = [UIColor colorWithRed:0.36 green:0.33 blue:0.27 alpha:1.0]; // OSRS menu body (tan-grey)
+    box.layer.borderColor = [UIColor blackColor].CGColor;
+    box.layer.borderWidth = 1.0;
+    box.userInteractionEnabled = NO;   // the drag drives selection; the rows never handle their own touches
+    box.layer.shadowColor = [UIColor blackColor].CGColor;
+    box.layer.shadowOpacity = 0.5;
+    box.layer.shadowRadius = 6.0;
+    box.layer.shadowOffset = CGSizeMake(0, 2);
+
+    UILabel *header = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, boxW, kMenuHeaderViewH)];
+    header.backgroundColor = [UIColor colorWithRed:0.24 green:0.21 blue:0.16 alpha:1.0]; // darker title strip
+    header.text = @"  Choose Option";
+    header.font = [UIFont boldSystemFontOfSize:14];
+    header.textColor = [UIColor whiteColor];
+    [box addSubview:header];
+
+    self.menuRows = [NSMutableArray arrayWithCapacity:count];
+    for (NSInteger k = 0; k < count; k++) {
+        NSDictionary *e = [entries[k] isKindOfClass:[NSDictionary class]] ? entries[k] : @{};
+        UILabel *row = [[UILabel alloc] initWithFrame:
+                        CGRectMake(0, kMenuHeaderViewH + k * kMenuRowViewH, boxW, kMenuRowViewH)];
+        row.backgroundColor = [UIColor clearColor];
+        row.attributedText = [self menuRowTextForOption:e[@"opt"] target:e[@"tgt"]];
+        [box addSubview:row];
+        self.menuRows[k] = row;
+    }
+
+    [self.view addSubview:box];
+    self.menuContainer = box;
+    self.menuHighlight = -1;
+    // Seed the highlight + commit target from the press point so a lift-without-drag picks the row under it.
+    [self updateNativeMenuHighlight:self.menuAnchor];
+}
+
+// "option target" — option white, target OSRS yellow (tags are already stripped in the snapshot).
+- (NSAttributedString *)menuRowTextForOption:(NSString *)opt target:(NSString *)tgt {
+    opt = [opt isKindOfClass:[NSString class]] ? opt : @"";
+    tgt = [tgt isKindOfClass:[NSString class]] ? tgt : @"";
+    UIFont *f = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
+    NSMutableAttributedString *s = [[NSMutableAttributedString alloc] initWithString:[@"  " stringByAppendingString:opt]
+        attributes:@{NSFontAttributeName: f, NSForegroundColorAttributeName: [UIColor whiteColor]}];
+    if (tgt.length) {
+        [s appendAttributedString:[[NSAttributedString alloc] initWithString:[@" " stringByAppendingString:tgt]
+            attributes:@{NSFontAttributeName: f,
+                         NSForegroundColorAttributeName: [UIColor colorWithRed:1.0 green:0.92 blue:0.35 alpha:1.0]}]];
+    }
+    return s;
+}
+
+// Drive the native menu from the drag: highlight the row under the finger, keep the (hidden) engine menu open
+// by parking its clamped cursor on the matching engine row, and set the commit target to that row's engine
+// centre. Off the rows -> cancel (commit clicks the title strip = close with no action).
+- (void)updateNativeMenuHighlight:(CGPoint)pScreen {
+    if (!self.menuContainer) return;
+    CGPoint c = [self.screen convertPoint:pScreen toView:self.menuContainer];
+    CGFloat graceX = 90.0, graceY = 12.0;
+    BOOL inX = (c.x > -graceX && c.x < self.menuContainer.bounds.size.width + graceX);
+    NSInteger hit = -1;
+    for (NSInteger k = 0; k < (NSInteger)self.menuRows.count; k++) {
+        CGRect rf = self.menuRows[k].frame;
+        CGFloat top = rf.origin.y - (k == 0 ? graceY : 0);
+        CGFloat bot = CGRectGetMaxY(rf) + (k == (NSInteger)self.menuRows.count - 1 ? graceY : 0);
+        if (inX && c.y >= top && c.y < bot) { hit = k; break; }
+    }
+
+    if (hit != self.menuHighlight) {
+        for (NSInteger k = 0; k < (NSInteger)self.menuRows.count; k++) {
+            self.menuRows[k].backgroundColor = (k == hit)
+                ? [UIColor colorWithRed:1.0 green:1.0 blue:1.0 alpha:0.22]   // hovered row highlight
+                : [UIColor clearColor];
+        }
+        if (hit >= 0) { [self.menuHaptic selectionChanged]; [self.menuHaptic prepare]; }
+        self.menuHighlight = (int)hit;
+    }
+
+    CGRect r = self.menuGeomGame;
+    int ex = (int)lround(CGRectGetMidX(r));
+    if (hit >= 0) {
+        // engine row centre for display index `hit` (fixed gamepack geometry; clamp inside the rect)
+        int ey = (int)CGRectGetMinY(r) + kMenuHeaderPx + (int)hit * kMenuRowPx + kMenuRowPx / 2;
+        ey = (int)fmin(fmax((CGFloat)ey, CGRectGetMinY(r) + 1), CGRectGetMaxY(r) - 2);
+        self.menuFingerOnMenu = YES;
+        self.menuSelX = ex; self.menuSelY = ey;
+        [JVMLauncher postMoveX:ex y:ey];   // keep the engine highlight in lock-step (menu stays open)
+    } else {
+        self.menuFingerOnMenu = NO;
+        self.menuSelX = ex; self.menuSelY = (int)CGRectGetMinY(r) + 2;   // title strip = clean cancel
+        [JVMLauncher postMoveX:self.menuSelX y:self.menuSelY];
+    }
 }
 
 - (void)onLongPress:(UILongPressGestureRecognizer *)g {
@@ -2103,6 +2258,7 @@ static int chatRowCanvasH(void) {
 // REAL finger spot so commit can tell select (over the menu) from cancel (dragged off). Haptic ticks per row.
 - (void)updateMenuHighlightForPoint:(CGPoint)p {
     if (!self.menuOpen) return;
+    if (self.menuContainer) { [self updateNativeMenuHighlight:p]; return; }   // #8: native rows drive selection
     int gx = 0, gy = 0;
     if (![self mapPoint:p toGameX:&gx toGameY:&gy]) return;   // letterbox: keep the menu, ignore this move
 
