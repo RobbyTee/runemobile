@@ -79,6 +79,73 @@ public class GLALL {
 	public static final int GL_WRITE_ONLY = 35001;
 	public static final int GL_ZERO_TO_ONE = 37727;
 
+	// --- Zone (117HD) delta constants (real GL enum values; GLES 3.1/3.2 core or EXT) ---
+	public static final int GL_VENDOR = 7936;
+	public static final int GL_BACK = 1029;
+	public static final int GL_BACK_LEFT = 1026;
+	public static final int GL_NONE = 0;
+	public static final int GL_ZERO = 0;
+	public static final int GL_RGB = 6407;
+	public static final int GL_RGB8 = 32849;
+	public static final int GL_RGB32I = 36227;
+	public static final int GL_RGBA16UI = 36214;
+	public static final int GL_RGBA_INTEGER = 36249;
+	public static final int GL_RED_INTEGER = 36244;
+	public static final int GL_R16I = 33331;
+	public static final int GL_SRGB8 = 35905;
+	public static final int GL_SRGB8_ALPHA8 = 35907;
+	public static final int GL_HALF_FLOAT = 5131;
+	public static final int GL_UNSIGNED_SHORT = 5123;
+	public static final int GL_DEPTH_COMPONENT = 6402;
+	public static final int GL_DEPTH_COMPONENT24 = 33190;
+	public static final int GL_REPEAT = 10497;
+	public static final int GL_CLAMP_TO_BORDER = 33069;
+	public static final int GL_LINEAR_MIPMAP_LINEAR = 9987;
+	public static final int GL_TEXTURE_3D = 32879;
+	public static final int GL_TEXTURE_BUFFER = 35882;
+	public static final int GL_TEXTURE_BORDER_COLOR = 4100;
+	public static final int GL_GEQUAL = 518;
+	public static final int GL_LEQUAL = 515;
+	public static final int GL_GEOMETRY_SHADER = 36313;
+	public static final int GL_COMPUTE_SHADER = 37305;
+	public static final int GL_SHADER_STORAGE_BUFFER = 37074;
+	public static final int GL_SHADER_STORAGE_BARRIER_BIT = 8192;
+	public static final int GL_DRAW_INDIRECT_BUFFER = 36671;
+	public static final int GL_COPY_READ_BUFFER = 36662;
+	public static final int GL_COPY_WRITE_BUFFER = 36663;
+	public static final int GL_MAP_READ_BIT = 1;
+	public static final int GL_MAP_INVALIDATE_RANGE_BIT = 4;
+	public static final int GL_MAP_UNSYNCHRONIZED_BIT = 32;
+	public static final int GL_MAP_PERSISTENT_BIT = 64;
+	public static final int GL_CLIENT_STORAGE_BIT = 512;
+	public static final int GL_DYNAMIC_STORAGE_BIT = 256;
+	public static final int GL_STREAM_COPY = 35042;
+	public static final int GL_READ_ONLY = 35000;
+	public static final int GL_READ_WRITE = 35002;
+	public static final int GL_CURRENT_PROGRAM = 35725;
+	public static final int GL_MAX_TEXTURE_IMAGE_UNITS = 34930;
+	public static final int GL_MAX_TEXTURE_SIZE = 3379;
+	public static final int GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS = 37099;
+	public static final int GL_MAX_IMAGE_UNITS = 36664;
+	public static final int GL_FRAMEBUFFER_SRGB = 36281;
+	public static final int GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE = 33301;
+	public static final int GL_DEBUG_SOURCE_APPLICATION = 33354;
+	public static final int GL_DEBUG_TYPE_PUSH_GROUP = 33385;
+	public static final int GL_DEBUG_TYPE_POP_GROUP = 33386;
+	public static final int GL_DEBUG_SEVERITY_NOTIFICATION = 33387;
+	public static final int GL_QUERY_RESULT = 34918;
+	public static final int GL_QUERY_RESULT_AVAILABLE = 34919;
+	public static final int GL_TIMESTAMP = 36392;
+	public static final long GL_TIMEOUT_IGNORED = -1L;
+	public static final int GL_SYNC_FLUSH_COMMANDS_BIT = 1;
+	public static final int GL_NUM_PROGRAM_BINARY_FORMATS = 34814;
+	public static final int GL_PROGRAM_BINARY_LENGTH = 34625;
+	public static final int GL_STACK_OVERFLOW = 1283;
+	public static final int GL_STACK_UNDERFLOW = 1284;
+	public static final int GL_BUFFER = 33504;
+	public static final int GL_BUFFER_SIZE = 34660;
+	public static final int GL_ARRAY_BUFFER_ARB = 34962;
+
 	public static native void glActiveTexture(int a0);
 	public static native void glAttachShader(int a0, int a1);
 	public static native void glBindBuffer(int a0, int a1);
@@ -268,4 +335,70 @@ public class GLALL {
 	public static native void glVertexAttribPointer(int a0, int a1, int a2, boolean a3, int a4, java.nio.ShortBuffer a5);
 	public static native void glVertexAttribPointer(int a0, int a1, int a2, boolean a3, int a4, java.nio.ByteBuffer a5);
 	public static native void glViewport(int a0, int a1, int a2, int a3);
+
+	// --- Zone (117HD) delta methods (GLES 3.1/3.2 core; forwarded to GLESv3 in librlawt). Compute / indirect /
+	//     persistent-storage / image-store entries are gated OFF via GLCapabilities so they compile + class-load
+	//     but are never invoked on the Zone path. ---
+	public static native void glCullFace(int a0);
+	public static native void glFinish();
+	public static native void glFlush();
+	public static native void glDrawBuffer(int a0);
+	public static native void glTexBuffer(int a0, int a1, int a2);
+	public static native void glVertexAttribDivisor(int a0, int a1);
+	public static native void glFramebufferTexture(int a0, int a1, int a2, int a3);
+	public static native void glFramebufferTexture2D(int a0, int a1, int a2, int a3, int a4);
+	public static native void glFramebufferTextureLayer(int a0, int a1, int a2, int a3, int a4);
+	public static native void glBindImageTexture(int a0, int a1, int a2, boolean a3, int a4, int a5, int a6);
+	public static native void glCopyBufferSubData(int a0, int a1, long a2, long a3, long a4);
+	public static native void glInvalidateBufferData(int a0);
+	public static native long glGetBufferParameteri64(int a0, int a1);
+	public static native int glGetFramebufferAttachmentParameteri(int a0, int a1, int a2);
+	public static native void glGetIntegerv(int a0, int[] a1);
+	public static native void glGetIntegerv(int a0, java.nio.IntBuffer a1);
+	public static native void glGetProgramiv(int a0, int a1, int[] a2);
+	public static native void glGetProgramiv(int a0, int a1, java.nio.IntBuffer a2);
+	public static native void glTexParameterfv(int a0, int a1, float[] a2);
+	public static native void glTexParameterfv(int a0, int a1, java.nio.FloatBuffer a2);
+	public static native void glUniform2f(int a0, float a1, float a2);
+	public static native void glUniform3f(int a0, float a1, float a2, float a3);
+	public static native void glUniform2iv(int a0, int[] a1);
+	public static native void glUniform2iv(int a0, java.nio.IntBuffer a1);
+	public static native void glUniform3iv(int a0, int[] a1);
+	public static native void glUniform3iv(int a0, java.nio.IntBuffer a1);
+	public static native void glUniform4iv(int a0, int[] a1);
+	public static native void glUniform4iv(int a0, java.nio.IntBuffer a1);
+	public static native void glUniform3fv(int a0, float[] a1);
+	public static native void glUniform3fv(int a0, java.nio.FloatBuffer a1);
+	public static native void glUniform4fv(int a0, float[] a1);
+	public static native void glUniform4fv(int a0, java.nio.FloatBuffer a1);
+	// fence/sync (GLES 3.0 core)
+	public static native long glFenceSync(int a0, int a1);
+	public static native int glClientWaitSync(long a0, int a1, long a2);
+	public static native void glDeleteSync(long a0);
+	// queries (GLES 3.0 core; timer queries via EXT_disjoint_timer_query)
+	public static native int glGenQueries();
+	public static native void glGenQueries(int[] a0);
+	public static native void glDeleteQueries(int a0);
+	public static native void glDeleteQueries(int[] a0);
+	public static native void glQueryCounter(int a0, int a1);
+	public static native void glGetQueryObjectiv(int a0, int a1, int[] a2);
+	public static native long glGetQueryObjectui64(int a0, int a1);
+	// debug groups (KHR_debug; no-op forwarded if absent)
+	public static native void glObjectLabel(int a0, int a1, java.lang.CharSequence a2);
+	public static native void glPushDebugGroup(int a0, int a1, java.lang.CharSequence a2);
+	public static native void glPopDebugGroup();
+	// program binary cache (optional)
+	public static native void glGetProgramBinary(int a0, java.nio.IntBuffer a1, java.nio.IntBuffer a2, java.nio.ByteBuffer a3);
+	public static native void glGetProgramBinary(int a0, int[] a1, int[] a2, java.nio.ByteBuffer a3);
+	// --- Legacy/compute-only entries (declared so RLHD compiles; gated OFF, never invoked on Zone) ---
+	public static native void glDispatchCompute(int a0, int a1, int a2);
+	public static native void glMemoryBarrier(int a0);
+	public static native void glDrawArraysIndirect(int a0, long a1);
+	public static native void glDrawElementsIndirect(int a0, int a1, long a2);
+	public static native void glMultiDrawArraysIndirect(int a0, long a1, int a2, int a3);
+	public static native void glBufferStorage(int a0, long a1, int a2);
+	public static native void glBufferStorage(int a0, java.nio.ByteBuffer a1, int a2);
+	public static native void glBufferSubData(int a0, long a1, java.nio.ByteBuffer a2);
+	public static native void glBufferSubData(int a0, long a1, java.nio.IntBuffer a2);
+	public static native void glBufferSubData(int a0, long a1, java.nio.FloatBuffer a2);
 }

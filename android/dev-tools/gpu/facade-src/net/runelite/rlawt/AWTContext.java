@@ -11,4 +11,10 @@ public class AWTContext {
 	public native int getFramebuffer(boolean read);
 	public native int getBufferMode();
 	public native void swapBuffers();
+	// Platform GL/CL-interop handles — read only by RLHD's OpenCLManager (Legacy/Apple compute path), which never
+	// runs on the Android Zone path (no CL context). Present so RLHD compiles; return 0 (unused).
+	public long getGLContext() { return 0L; }
+	public long getWGLHDC() { return 0L; }
+	public long getGLXDisplay() { return 0L; }
+	public long getCGLShareGroup() { return 0L; }
 }
