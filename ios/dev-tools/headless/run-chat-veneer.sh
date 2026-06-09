@@ -70,6 +70,7 @@ set +e
   -Drunelite.headless.autologin.world=301 \
   -Drunelite.headless.autologin.worldAddress="oldschool1.runescape.com" \
   -Drunelite.hudveneer=true \
+  ${MUI:+-Drunelite.mobileui=true} \
   -Drunelite.hudveneer.test=true \
   -Drunelite.hudveneer.test.transparent="${TRANSPARENT}" \
   -Drunelite.hudveneer.test.rowH="${ROWH}" \

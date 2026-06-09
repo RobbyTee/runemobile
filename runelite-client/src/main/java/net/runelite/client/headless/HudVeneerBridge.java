@@ -89,6 +89,9 @@ public final class HudVeneerBridge
 	// A/B: hiding the tab-stones' grandparent container is the suspected cause of the orbs interface never loading
 	// (desktop with hideStones=false loads the orbs; device with hideStones=true never does). Disable to confirm.
 	private static final boolean HIDE_STONES_ENABLED = false;
+	// A/B: side-panel relocate + op-script tab-open are the only veneer ops active on the device but NOT in the
+	// passing desktop run (which has orbs). Disable to test whether they suppress the orbs interface load.
+	private static final boolean SIDE_AND_TAB_ENABLED = false;
 
 	// Side panel (SIDE_CONTAINER = the inventory / equipment / spellbook / etc. panel) relocate. sideX < 0 = off.
 	// Same root-anchored relocate as the minimap; edge-to-edge needs it pulled inward so it doesn't clip under the
@@ -436,7 +439,7 @@ public final class HudVeneerBridge
 			}
 
 			// Side panel relocate (independent). No-op until a tab is open (SIDE_CONTAINER then becomes non-null).
-			if (sideX >= 0)
+			if (SIDE_AND_TAB_ENABLED && sideX >= 0)
 			{
 				final int sideId = preEoc
 					? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER;
@@ -464,7 +467,7 @@ public final class HudVeneerBridge
 
 			// One-shot: open a tab by replaying its stone's op script (works even with the stone hidden).
 			final int openIdx = pendingOpenTab;
-			if (openIdx >= 0)
+			if (SIDE_AND_TAB_ENABLED && openIdx >= 0)
 			{
 				pendingOpenTab = -1;
 				openTabNow(c, preEoc, openIdx);
