@@ -313,7 +313,8 @@ class MainActivity : AppCompatActivity() {
         // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
         // BEFORE boot. With none (and not census, which uses pushed tokens), run the on-device Jagex login first;
         // it writes tokens.json then restarts the process for a clean boot (Review-2: login-first or restart).
-        if (!censusMode && !JagexTokens.hasTokens(applicationContext)) {
+        if (!censusMode && !rlhdMode && !JagexTokens.hasTokens(applicationContext)) {
+            // AG3-c rlhd boots without tokens (the Zone shader compile is pre-login) — don't divert to LoginActivity.
             Log.i(TAG, "a3: no tokens.json — launching on-device Jagex login before boot")
             startActivity(Intent(this, LoginActivity::class.java))
             finish()
@@ -1041,9 +1042,15 @@ class MainActivity : AppCompatActivity() {
             opts.add("-Drunelite.headless.resize=${renderW}x${renderH}")
             Log.i(TAG, "A7 resize armed: ${renderW}x${renderH} (screen ${longEdge}x${shortEdge}; resizable iff account in resizable display mode)")
         }
-        if (autologinArmed) {
+        if (autologinArmed && !rlhd) {
             opts.addAll(JagexTokens.autologinOpts)
             Log.i(TAG, "autologin ARMED (tokens.json present): EULA 302,312 -> Play Now 382,248, world 301")
+        } else if (rlhd) {
+            // AG3-c is pre-login (the Zone shader compile + startUp only need the cache + login screen). Do NOT
+            // autologin: on a datacenter device (Firebase) the world connect is WAF-blocked, and the client then
+            // churns in state=UNKNOWN forever instead of settling at LOGIN_SCREEN — so RLHDStarter (which engages at
+            // LOGIN_SCREEN/LOGGED_IN) never fires. No autologin -> clean LOGIN_SCREEN -> RLHDStarter loads 117HD.
+            Log.i(TAG, "routecrlhd: autologin SKIPPED (shader compile is pre-login; settle at LOGIN_SCREEN)")
         }
         if (census) {
             // A-1b runtime gate-flip census: turn on the remaining read-surface gates (menupeek + autologin

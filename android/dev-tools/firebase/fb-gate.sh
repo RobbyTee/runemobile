@@ -87,7 +87,10 @@ if [ "$MODE" = "rlhd" ]; then
   # gates on vanillaTexturesAvailable, not LOGGED_IN), so the datacenter login block is IRRELEVANT here — we only need
   # the real ES-3.2 GPU (Pixel 8/Mali = TBO/IO-blocks/geometry core, which the SwiftShader emulator lacks).
   MARKER="$(mktemp)"; printf 'routecrlhd\n' > "$MARKER"
-  if [ -f "$TOKENS" ]; then OTHER=(--other-files "$DEV_TOKENS=$TOKENS,$DEV_RLHD=$MARKER"); else OTHER=(--other-files "$DEV_RLHD=$MARKER"); fi
+  # NO tokens: the Zone shader compile is pre-login, and pushing tokens arms the gamepack's launcher login, which on
+  # a datacenter device churns in state=UNKNOWN (world connect WAF-blocked) and never settles at LOGIN_SCREEN — so
+  # RLHDStarter never fires. Marker only -> boots without login -> clean LOGIN_SCREEN -> 117HD loads + compiles.
+  OTHER=(--other-files "$DEV_RLHD=$MARKER")
   PULL=(--directories-to-pull "$DEV_FRAMES")
   : "${FB_TIMEOUT:=420s}"   # plugin load + the full Zone shader compile + startUp + a frame dump
   # Robo (the default) force-stops + relaunches the app every few seconds and crawls the UI (it reached
