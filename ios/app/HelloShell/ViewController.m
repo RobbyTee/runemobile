@@ -55,6 +55,15 @@
 @property (nonatomic, assign) int jvmFd;   // raw fd for crash-proof libjvm stdout/stderr
 @property (nonatomic, assign) BOOL launched;
 
+// #1 "Tap to Play" front screen: a polished Jagex-Mobile-style cover shown at cold start INSTEAD of the
+// W1 debug panel (which now starts hidden behind the ≡ toggle). The big play button waits on the StikDebug
+// attach (isDebuggerAttached / CS_DEBUGGED) — the per-launch attach is immovable, so the screen only
+// polishes the post-attach moment. Tap → onLaunch → dismiss. A login row reflects the saved session.
+@property (nonatomic, strong) UIView *launchScreen;
+@property (nonatomic, strong) UIButton *playButton;
+@property (nonatomic, strong) UILabel *playStatusLabel;
+@property (nonatomic, strong) UIButton *playLoginButton;
+
 // W3 native shell: keep the process alive + show frames. The JVM ran fine on device but iOS
 // jetsam'd the (idle-UI) process within ~250 ms — before the engine drew its first frame. Two
 // protections: (1) a UIBackgroundTask assertion so the OS treats the JVM run as important work and
@@ -257,6 +266,142 @@ static const CGFloat kMenuWidth       = 210.0;
     self.panelDock.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:self.panelDock.view];
     [self.panelDock didMoveToParentViewController:self];
+
+    // #1: the "Tap to Play" cover sits ABOVE everything (game, HUD veneers, panel dock, debug panel) so the
+    // cold-start experience is the polished play screen, not the W1 scaffolding. Dismissed on launch.
+    [self buildLaunchScreen];
+}
+
+#pragma mark - #1 Tap-to-Play front screen
+
+- (void)buildLaunchScreen {
+    UIView *cover = [[UIView alloc] initWithFrame:self.view.bounds];
+    cover.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    cover.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.05 alpha:1.0]; // opaque OSRS-mobile tone
+    cover.userInteractionEnabled = YES;   // swallow every touch so nothing reaches the game/HUD beneath
+    self.launchScreen = cover;
+
+    // Title — the app identity, top-centred like the Jagex Mobile splash.
+    UILabel *title = [[UILabel alloc] init];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.text = @"RuneLite";
+    title.font = [UIFont systemFontOfSize:44 weight:UIFontWeightHeavy];
+    title.textColor = [UIColor colorWithRed:0.93 green:0.78 blue:0.36 alpha:1.0]; // OSRS gold
+    title.textAlignment = NSTextAlignmentCenter;
+    [cover addSubview:title];
+
+    UILabel *subtitle = [[UILabel alloc] init];
+    subtitle.translatesAutoresizingMaskIntoConstraints = NO;
+    subtitle.text = @"Old School RuneScape";
+    subtitle.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+    subtitle.textColor = [UIColor colorWithWhite:0.7 alpha:1.0];
+    subtitle.textAlignment = NSTextAlignmentCenter;
+    [cover addSubview:subtitle];
+
+    // Primary play button — disabled (dimmed) until the StikDebug attach flips CS_DEBUGGED. The JIT poller
+    // (startJitPolling) enables it; the attach is per-launch and immovable, so this is the gate we polish around.
+    UIButton *play = [UIButton buttonWithType:UIButtonTypeSystem];
+    play.translatesAutoresizingMaskIntoConstraints = NO;
+    [play setTitle:@"Tap to Play" forState:UIControlStateNormal];
+    play.titleLabel.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold];
+    [play setTitleColor:[UIColor colorWithRed:0.10 green:0.09 blue:0.05 alpha:1.0] forState:UIControlStateNormal];
+    [play setTitleColor:[UIColor colorWithWhite:0.45 alpha:1.0] forState:UIControlStateDisabled];
+    play.backgroundColor = [UIColor colorWithRed:0.85 green:0.68 blue:0.26 alpha:1.0];
+    play.layer.cornerRadius = 12;
+    play.enabled = NO;
+    play.alpha = 0.5;
+    [play addTarget:self action:@selector(onPlayTapped) forControlEvents:UIControlEventTouchUpInside];
+    [cover addSubview:play];
+    self.playButton = play;
+
+    // Gated status line under the button: "Attach StikDebug to play…" (amber) → "Ready to play" (green).
+    UILabel *status = [[UILabel alloc] init];
+    status.translatesAutoresizingMaskIntoConstraints = NO;
+    status.text = @"Attach StikDebug to play…";
+    status.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+    status.textColor = [UIColor systemYellowColor];
+    status.textAlignment = NSTextAlignmentCenter;
+    status.numberOfLines = 2;
+    [cover addSubview:status];
+    self.playStatusLabel = status;
+
+    // Login row — reflects the saved session (refreshLaunchLogin keeps the title current). Pure native, so
+    // it works before any attach: log in here, then attach + play.
+    UIButton *login = [UIButton buttonWithType:UIButtonTypeSystem];
+    login.translatesAutoresizingMaskIntoConstraints = NO;
+    login.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightRegular];
+    [login setTitleColor:[UIColor colorWithWhite:0.78 alpha:1.0] forState:UIControlStateNormal];
+    [login addTarget:self action:@selector(onLoginWithJagex) forControlEvents:UIControlEventTouchUpInside];
+    [cover addSubview:login];
+    self.playLoginButton = login;
+
+    // Hidden affordance: a triple-tap on the cover drops to the W1 debug panel (canary / AWT-activation /
+    // logs) without launching — the dev escape hatch the audit asked to gate behind a hidden gesture.
+    UITapGestureRecognizer *devTap = [[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onRevealDebug)];
+    devTap.numberOfTapsRequired = 3;
+    [cover addGestureRecognizer:devTap];
+
+    [self.view addSubview:cover];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [title.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor],
+        [title.bottomAnchor constraintEqualToAnchor:cover.centerYAnchor constant:-40],
+        [subtitle.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor],
+        [subtitle.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:2],
+
+        [play.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor],
+        [play.topAnchor constraintEqualToAnchor:cover.centerYAnchor constant:24],
+        [play.widthAnchor constraintEqualToConstant:240],
+        [play.heightAnchor constraintEqualToConstant:56],
+
+        [status.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor],
+        [status.topAnchor constraintEqualToAnchor:play.bottomAnchor constant:14],
+        [status.leadingAnchor constraintGreaterThanOrEqualToAnchor:cover.leadingAnchor constant:20],
+        [status.trailingAnchor constraintLessThanOrEqualToAnchor:cover.trailingAnchor constant:-20],
+
+        [login.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor],
+        [login.bottomAnchor constraintEqualToAnchor:cover.safeAreaLayoutGuide.bottomAnchor constant:-24],
+    ]];
+
+    [self refreshLaunchLogin];
+}
+
+// Mirror the saved tokens.json onto the launch-screen login button (same source as refreshLoginButton).
+- (void)refreshLaunchLogin {
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSData *data = [NSData dataWithContentsOfFile:[docs stringByAppendingPathComponent:@"tokens.json"]];
+    id o = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    NSDictionary *t = [o isKindOfClass:[NSDictionary class]] ? o : nil;
+    NSString *sid  = [t[@"session_id"] isKindOfClass:[NSString class]] ? t[@"session_id"] : nil;
+    NSString *name = [t[@"chosen_display_name"] isKindOfClass:[NSString class]] ? t[@"chosen_display_name"] : nil;
+    NSString *title = sid.length
+        ? (name.length ? [NSString stringWithFormat:@"Logged in: %@  ·  switch account", name]
+                       : @"Logged in  ·  switch account")
+        : @"Log in with Jagex";
+    [self.playLoginButton setTitle:title forState:UIControlStateNormal];
+}
+
+// Hidden dev affordance: dismiss the cover to expose the W1 debug panel (does NOT launch the JVM).
+- (void)onRevealDebug {
+    self.debugPanel.hidden = NO;
+    self.launchScreen.hidden = YES;
+    [self.launchScreen removeFromSuperview];
+}
+
+- (void)onPlayTapped {
+    // If the login web view ran this session, WebKit is resident and the JVM can't start cleanly — onLaunch
+    // will prompt a restart instead. Keep the cover up in that case so the user lands back here post-restart.
+    if (self.webKitUsedThisSession) { [self onLaunch]; return; }
+    if (!self.launchScreen.hidden) {
+        // Fade the cover out, then hand off to the existing JVM launch path.
+        [UIView animateWithDuration:0.25 animations:^{ self.launchScreen.alpha = 0.0; }
+                         completion:^(BOOL done) {
+            self.launchScreen.hidden = YES;
+            [self.launchScreen removeFromSuperview];
+        }];
+    }
+    [self onLaunch];
 }
 
 - (void)buildUI {
@@ -405,6 +550,7 @@ static const CGFloat kMenuWidth       = 210.0;
     self.debugPanel.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.82];
     self.debugPanel.layer.cornerRadius = 10;
     self.debugPanel.clipsToBounds = YES;
+    self.debugPanel.hidden = YES;   // #1: hidden by default — the ≡ toggle reveals the W1 scaffolding on demand
     [self.view addSubview:self.debugPanel];
 
     self.statusLabel = [[UILabel alloc] init];
@@ -649,6 +795,7 @@ static const CGFloat kMenuWidth       = 210.0;
         : @"Log in with Jagex";
     [self.loginButton setTitle:title forState:UIControlStateNormal];
     self.logoutButton.hidden = (sid.length == 0);
+    [self refreshLaunchLogin];   // #1: keep the Tap-to-Play login row in sync
 }
 
 // Log out: delete the saved game session (so autologin won't fire) and purge any persisted Jagex web
@@ -1062,6 +1209,18 @@ static const CGFloat kMenuWidth       = 210.0;
         BOOL attached = [JVMLauncher isDebuggerAttached];
         self.statusLabel.text = attached ? @"JIT: CS_DEBUGGED ✓ (ready)" : @"JIT: waiting…";
         self.statusLabel.textColor = attached ? [UIColor systemGreenColor] : [UIColor systemYellowColor];
+        // #1: drive the Tap-to-Play cover. Enable the big play button on attach; reflect the gate in its status.
+        if (attached) {
+            self.playStatusLabel.text = @"Ready to play";
+            self.playStatusLabel.textColor = [UIColor systemGreenColor];
+            if (!self.playButton.enabled) {
+                self.playButton.enabled = YES;
+                [UIView animateWithDuration:0.2 animations:^{ self.playButton.alpha = 1.0; }];
+            }
+        } else {
+            self.playStatusLabel.text = @"Attach StikDebug to play…";
+            self.playStatusLabel.textColor = [UIColor systemYellowColor];
+        }
         if (attached && !self.launchButton.enabled && !self.launched) {
             self.launchButton.enabled = YES;
             [self appendLine:@"StikDebug attached — CS_DEBUGGED set. Tap Start JVM."];
