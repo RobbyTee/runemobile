@@ -25,8 +25,8 @@
 - [x] Scope decisions locked (above).
 
 ## Batch B — Shared-core Java bridge (desktop OpenJDK 21; one re-stage at end)
-- [ ] #3  Screenshot PNG getter on `DrawManager`/bridge
-- [ ] #4  `Notifier.sendNotification` publish hook ({title, body})
+- [x] #3  ~~Screenshot PNG getter~~ — RECLASSIFIED native-only (Batch C): native already has the composited frame via `JavaBridge.getFramePixels()`, so the manual screenshot is pure native (encode pixels → Photos); no shared-core getter needed. Auto-capture rerouting = native reads the sandbox screenshot dir.
+- [x] #4  `Notifier` publish hook ({title,body}) → `MobileUiBridge.publishNotification`/`nextNotification` (bounded queue, gated). Funnel in `Notifier.notify` after the focus-gate. Native drains + raises OS notification.
 - [ ] #6/#25 `pinnedPlugins` read + `setPinned` write + incompatible-platform flag in `MobileUiBridge.listPlugins`
 - [ ] #5  Config schema: dimension/set/notification value-encoding
 - [ ] #7  Mobile default-profile boot policy (Low Detail on; cursor/key/stretched/styles/devtools off)
@@ -35,8 +35,8 @@
 - [ ] #11 Overlay position/persist driver + snap-math wrapper (`OverlayManager.saveOverlay`)
 - [ ] #20 Infobox-action-by-point bridge
 - [ ] #12 Per-panel data bridges (Loot/XP/GE/Time)
-- [ ] #15 Engine touch-drag→widget-drag routing (gated on spike)
-- [ ] #9  `setShiftHeld` (GREEN — confirmed buildable, see Batch A)
+- [ ] #15 Engine touch-drag→widget-drag routing — NO new bridge code (existing `JavaBridge.onTouch` streams PRESS→DRAG→RELEASE); needs a desktop spike + native wiring. Deferred.
+- [x] #9  `JavaBridge.setShiftHeld(boolean)` — transition-gated held VK_SHIFT (mirrors the proven spike). Cleared by Batch A.
 - [ ] Re-stage + contract check + desktop headless smoke + dual-port census + commit
 
 ## Batch C — Native UIKit consuming Batch B (one device test pass)

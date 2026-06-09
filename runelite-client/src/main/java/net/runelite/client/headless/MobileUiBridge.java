@@ -38,6 +38,7 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import javax.swing.JPanel;
@@ -151,6 +152,12 @@ public final class MobileUiBridge
 		}
 	}
 
+	// Mobile notification delivery queue. Notifier funnels every fired notification here (an app sandbox has no
+	// tray / taskbar / shell-out); the native shell drains it each frame and raises a real OS notification.
+	// Bounded so a backlog can't grow unbounded before a drainer exists (desktop dev / pre-poll startup).
+	private static final ConcurrentLinkedQueue<String> notifications = new ConcurrentLinkedQueue<>();
+	private static final int MAX_NOTIFICATIONS = 64;
+
 	// Live UI-state snapshot (written on the client thread in tick(), read lock-free from the native thread).
 	private static volatile boolean chatInputVisible;
 	private static volatile int chatInputX;
@@ -165,6 +172,33 @@ public final class MobileUiBridge
 	public static boolean isEnabled()
 	{
 		return ENABLED;
+	}
+
+	/**
+	 * Mobile notification delivery channel. {@link net.runelite.client.Notifier} forwards every fired (enabled,
+	 * focus-passing) notification here because an app sandbox has no tray / taskbar / shell-out. The native shell
+	 * drains {@link #nextNotification()} each frame and raises a real OS notification (UNUserNotificationCenter on
+	 * iOS / NotificationManager on Android). The in-canvas flash + in-chat game-message channels are unaffected
+	 * (they render through the engine). Encoded {@code "title\u0001body"}; bounded; no-op unless the mobile UI is
+	 * active so desktop dev doesn't accumulate an undrained backlog.
+	 */
+	public static void publishNotification(String title, String body)
+	{
+		if (!ENABLED)
+		{
+			return;
+		}
+		while (notifications.size() >= MAX_NOTIFICATIONS)
+		{
+			notifications.poll();
+		}
+		notifications.add((title == null ? "" : title) + '\u0001' + (body == null ? "" : body));
+	}
+
+	/** Drain the oldest pending notification ({@code "title\u0001body"}), or {@code null} if none. Native polls this. */
+	public static String nextNotification()
+	{
+		return notifications.poll();
 	}
 
 	/**

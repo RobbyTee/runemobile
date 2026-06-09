@@ -24,6 +24,7 @@ FLAG runelite.hudveneer.test
 FLAG runelite.hudveneer.test.areaW
 FLAG runelite.hudveneer.test.chatX
 FLAG runelite.hudveneer.test.chatY
+FLAG runelite.hudveneer.test.minimapScalePct
 FLAG runelite.hudveneer.test.rowH
 FLAG runelite.hudveneer.test.transparent
 FLAG runelite.menupeek
@@ -51,10 +52,14 @@ METHOD HudVeneerBridge#openTab(int)
 METHOD HudVeneerBridge#relocateChat(int,int,boolean)
 METHOD HudVeneerBridge#relocateMinimap(int,int)
 METHOD HudVeneerBridge#relocateSidePanel(int,int)
+METHOD HudVeneerBridge#scrollChat(int)
 METHOD HudVeneerBridge#setChatAreaWidth(int)
+METHOD HudVeneerBridge#setChatCollapsed(boolean)
 METHOD HudVeneerBridge#setChatHidden(boolean)
 METHOD HudVeneerBridge#setChatTabRowHeight(int)
+METHOD HudVeneerBridge#setMinimapScale(int)
 METHOD HudVeneerBridge#setStonesHidden(boolean)
+METHOD HudVeneerBridge#switchChatTab(int)
 METHOD HudVeneerBridge#tick(Client)
 METHOD JavaBridge#canvasHeight()
 METHOD JavaBridge#canvasWidth()
@@ -80,6 +85,7 @@ METHOD JavaBridge#onWheel(int,int,int)
 METHOD JavaBridge#register(Client)
 METHOD JavaBridge#selectMenuPoint(int,int)
 METHOD JavaBridge#setClientThread(ClientThread)
+METHOD JavaBridge#setShiftHeld(boolean)
 METHOD JavaBridge#snapRadius()
 METHOD JavaBridge#snapshot(MainBufferProvider)
 METHOD MenuPeekBridge#getPublishSeq()
@@ -108,10 +114,12 @@ METHOD MobileUiBridge#isChatInputVisible()
 METHOD MobileUiBridge#isEnabled()
 METHOD MobileUiBridge#listPanels()
 METHOD MobileUiBridge#listPlugins()
+METHOD MobileUiBridge#nextNotification()
 METHOD MobileUiBridge#openPanel(int)
 METHOD MobileUiBridge#panelClick(int,int)
 METHOD MobileUiBridge#pluginDiag(String)
 METHOD MobileUiBridge#pollMobileUiEvents(long)
+METHOD MobileUiBridge#publishNotification(String,String)
 METHOD MobileUiBridge#registerNav(NavigationButton)
 METHOD MobileUiBridge#resetConfig(String,String)
 METHOD MobileUiBridge#setConfig(String,String,String)

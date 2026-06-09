@@ -190,6 +190,12 @@ public class Notifier
 				break;
 		}
 
+		// Mobile delivery channel: hand every fired (enabled, focus-passing) notification to the native shell —
+		// an app sandbox has no tray / taskbar / shell-out, so the desktop OS-notification paths below are inert
+		// there. Additive + gated: a no-op unless the mobile UI is active. The native shell raises the real OS
+		// notification. The in-canvas flash + in-chat game-message channels below still render through the engine.
+		net.runelite.client.headless.MobileUiBridge.publishNotification(buildTitle(), message);
+
 		if (notification.isTray())
 		{
 			sendNotification(notification, buildTitle(), message);
