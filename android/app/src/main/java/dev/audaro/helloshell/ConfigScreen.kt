@@ -14,12 +14,14 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -140,7 +142,9 @@ private fun ConfigItemControl(item: ConfigItem, onChange: (String) -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
             )
             "color" -> ColorConfigControl(item, onChange)
-            "set", "unknown" -> OutlinedTextField(   // read-only first cut (avoid corrupting complex types)
+            "dimension" -> DimensionConfigControl(item, onChange)
+            "set" -> SetConfigControl(item, onChange)
+            "unknown" -> OutlinedTextField(   // genuinely opaque types stay read-only (no safe round-trip)
                 value = item.value ?: "", onValueChange = {}, readOnly = true, singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -205,6 +209,101 @@ private fun ColorConfigControl(item: ConfigItem, onChange: (String) -> Unit) {
         )
     }
 }
+
+// ---- AP-2b Finding 10: dimension (WxH) + set (multi-select) controls --------------------------------------
+//
+// dimension round-trips as "WIDTHxHEIGHT" (ConfigManager splits on 'x'); set as a gson JSON array of the
+// element names (the schema's `choices`, in enum order). Both encodings are self-described by getPluginConfig.
+
+/** Two numeric fields (W × H) writing back "WxH" only once both parse as ints (no partial corruption). */
+@Composable
+private fun DimensionConfigControl(item: ConfigItem, onChange: (String) -> Unit) {
+    val parts = (item.value ?: "").split("x")
+    var w by remember(item.key) { mutableStateOf(parts.getOrNull(0)?.trim() ?: "") }
+    var h by remember(item.key) { mutableStateOf(parts.getOrNull(1)?.trim() ?: "") }
+    fun commit() {
+        val wi = w.trim().toIntOrNull(); val hi = h.trim().toIntOrNull()
+        if (wi != null && hi != null) onChange("${wi}x${hi}")
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = w, onValueChange = { w = it; commit() }, singleLine = true, label = { Text("W") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f),
+        )
+        Text("  ×  ", color = Color.White)
+        OutlinedTextField(
+            value = h, onValueChange = { h = it; commit() }, singleLine = true, label = { Text("H") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/** A summary row + a checklist dialog of `choices`; writes back a JSON array of selected names (choices order). */
+@Composable
+private fun SetConfigControl(item: ConfigItem, onChange: (String) -> Unit) {
+    val choices = item.choices ?: emptyList()
+    val selected = remember(item.value) { parseStringArray(item.value).toMutableSet() }
+    var editing by remember { mutableStateOf(false) }
+    val summary = when {
+        choices.isEmpty() -> "(no options)"
+        selected.isEmpty() -> "None"
+        selected.size == choices.size -> "All (${choices.size})"
+        else -> selected.filter { it in choices }.joinToString(", ").ifEmpty { "${selected.size} selected" }
+    }
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).clickableNoRipple { if (choices.isNotEmpty()) editing = true },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(summary, color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        if (choices.isNotEmpty()) TextButton(onClick = { editing = true }) { Text("Edit") }
+    }
+    if (editing) {
+        // Local working copy (immutable Set in state → reassign to recompose) so Cancel discards.
+        var working by remember { mutableStateOf(selected.toSet()) }
+        Dialog(onDismissRequest = { editing = false }) {
+            Surface(color = Color(0xFF1B1B1B), shape = RoundedCornerShape(14.dp)) {
+                Column(Modifier.padding(16.dp).fillMaxWidth()) {
+                    Text(item.name.ifEmpty { item.key }, color = Color.White, fontSize = 16.sp)
+                    Spacer(Modifier.size(8.dp))
+                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 260.dp)) {
+                        items(choices, key = { it }) { c ->
+                            val on = c in working
+                            Row(
+                                Modifier.fillMaxWidth().clickableNoRipple {
+                                    working = if (on) working - c else working + c
+                                },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(checked = on, onCheckedChange = { working = if (it) working + c else working - c })
+                                Text(c, color = Color.White, modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                    Spacer(Modifier.size(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { editing = false }) { Text("Cancel") }
+                        TextButton(onClick = {
+                            editing = false
+                            onChange(jsonStringArray(choices.filter { it in working }))   // choices/enum order
+                        }) { Text("Select") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Parse a gson/json string array (e.g. ["A","B"]) into element names; tolerant of empty/garbage. */
+private fun parseStringArray(s: String?): List<String> = try {
+    val a = JSONArray(s ?: "[]")
+    (0 until a.length()).map { a.getString(it) }
+} catch (t: Throwable) {
+    emptyList()
+}
+
+/** Serialize element names to a JSON array string the engine's gson.fromJson accepts. */
+private fun jsonStringArray(names: List<String>): String =
+    JSONArray().apply { names.forEach { put(it) } }.toString()
 
 @Composable
 private fun ColorPickerDialog(initialArgb: Int, showAlpha: Boolean, onDismiss: () -> Unit, onPick: (Int) -> Unit) {
