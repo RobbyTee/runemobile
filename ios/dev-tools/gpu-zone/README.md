@@ -38,24 +38,31 @@ Superset of the base-gpu B1 downporter. Per the blueprint §5 blocker list:
 
 ## Status — done / in progress / remaining
 
-**Done:** vendored RLHD source; the downporter (`ZoneDownport`); the EAGL compile-loop probe + verdict script; the
-xcodegen project; **the assemble step (`assemble/ZoneShaderAssemble.java`) — a dependency-free host-JVM replica of
-RLHD's `ShaderIncludes.parse()` that resolves all `#include`/`#define` from the fixed minimal-config define map and
-emits `assembled/<name>.<stage>.assembled.glsl`.** All **6/6** zone targets (scene/shadow/ui × vert/frag) assemble
-clean. The `MAX_SIMULTANEOUS_WORLD_VIEWS`/`WORLD_VIEW_GETTER` overrides that `ZoneRenderer.addShaderIncludes()` does
-(not vendored) are replicated in the assembler config.
+**Done:** vendored RLHD source; the **assemble step (`assemble/ZoneShaderAssemble.java`)** — a dependency-free
+host-JVM replica of RLHD's `ShaderIncludes.parse()` that resolves all `#include`/`#define` from the fixed
+minimal-config define map AND applies the **GLSL 330→ES 3.00 downport** (the single source of truth for the rules;
+`app/ZoneDownport.m` is now superseded for the gate — the probe compiles the pre-downported `assembled/` shaders
+as-is). The `MAX_SIMULTANEOUS_WORLD_VIEWS`/`WORLD_VIEW_GETTER` overrides `ZoneRenderer.addShaderIncludes()` does and
+the `MATERIAL_CONSTANTS` named-material defines are replicated in the config. **`ios-overrides/`** shadow-dir
+(resolved before `rlhd-src/`) holds hand-maintained ES3 copies of pervasively cast-heavy files
+(`utils/color_utils.glsl`). **`glslang-check.sh`** = an offline fast-filter (glslang at `#version 310 es` to suppress
+its interface-block false-positives) that reports many #13 sites per pass — works for shadow/ui, but **not scene**
+(glslang bails at scene's in/out interface blocks, which Apple's EAGL accepts).
 
-**Gate run (Simulator ES 3.0, latest):** `ui.vert` **COMPILES** ✅. The other 5 fail on a **single remaining error
-class: int↔float implicit-conversion strictness** (blueprint blocker **#13** — `+`/`<`/`/`/`*`/`!=` between int and
-float). The `#version`, precision (incl. `usampler2DArray`/`sampler2DShadow`), and zero-sized-array classes are all
-cleared. So Z0 is down to the #13 cast grind.
+**Gate run (Apple Simulator ES 3.0 = the authority): 5/6 COMPILE** — `scene.vert`, `shadow.vert`, `shadow.frag`,
+`ui.vert`, `ui.frag`. The `#version`-first, precision, zero-array, MAT_*-constant, and most #13 classes are cleared.
 
-**Remaining — the #13 cast pass (strategy choice).** The failing sites are mostly in shared util GLSL
-(`utils/color_utils.glsl` color-temperature math, `scaling/bicubic.glsl` `t < 1`/`t < 2`, etc.) — int literals in
-float context. Two options (blueprint prefers the second for cast-heavy files): (a) targeted `ZoneDownport` rule-#6
-string replacements; (b) **hand-maintained iOS shader variants** of the cast-heavy includes. Each Sim compile surfaces
-one error per shader, so this is iterative (assemble is unaffected — it's purely the ES3 compile step). Once all six
-compile: **device confirm** (Sim compiler ≠ A19), then seal the md5 in `gpu-zone-z0-verdict.sh`.
+**Remaining — `scene.frag` only (2253 lines).** Its tail of #13 sites lives in the water/uvs/lighting includes
+(`worldUvs(int)`, `/128`, `/255`, `/127`, `N * waterType.duration`, …) — many sites. Because glslang can't pre-scan
+scene (interface blocks), this is an **Apple-sim one-error-per-round grind**; `utils/water.glsl` + `utils/uvs.glsl`
+are good **ios-override** candidates (like `color_utils`) to clear clusters at once. Once `scene.frag` compiles:
+extend the probe to **link** the vert+frag programs (not just compile), **device confirm** (Sim compiler ≠ A19), then
+seal the md5 in `gpu-zone-z0-verdict.sh`.
+
+**Iterate loop:** edit `assemble/ZoneShaderAssemble.java` (CAST rules) or add an `ios-overrides/` file →
+`cd assemble && javac ZoneShaderAssemble.java && java ZoneShaderAssemble` → for shadow/ui: `./glslang-check.sh`
+(fast); for scene: `xcodegen generate && xcodebuild -sdk iphonesimulator … && simctl install/launch
+dev.audaro.gpuzone` → pull `Documents/gpu-zone-z0-verdict.log`.
 
 ---
 
