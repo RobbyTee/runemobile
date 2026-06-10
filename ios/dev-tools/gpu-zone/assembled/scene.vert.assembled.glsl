@@ -69,7 +69,7 @@ precision highp usampler2DArray;
 #define MATERIAL_FLAG_VANILLA_UVS 1
 #define MATERIAL_FLAG_IS_OVERLAY 0
 
-#define SHADOW_MODE 1
+#define SHADOW_MODE 2
 #define SHADOW_MODE_OFF 0
 #define SHADOW_MODE_FAST 1
 #define SHADOW_MODE_DETAILED 2
@@ -89,7 +89,7 @@ precision highp usampler2DArray;
 #define SHADOW_FILTERING_DITHER 1
 #define SHADOW_FILTERING_AVERAGE 2
 
-#define SHADOW_TRANSPARENCY 0
+#define SHADOW_TRANSPARENCY 1
 #if SHADOW_TRANSPARENCY
     #define SHADOW_DEFAULT_OPACITY_THRESHOLD 0.01 // Remove shadows from clickboxes
 #else

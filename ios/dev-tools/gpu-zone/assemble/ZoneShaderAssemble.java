@@ -78,12 +78,13 @@ public class ZoneShaderAssemble {
 		define("MAX_LIGHT_COUNT", 50);
 		define("NORMAL_MAPPING", true); // B1: normal mapping ON — swaps sampleNormalMap stub for the real normals.glsl body
 		define("PARALLAX_OCCLUSION_MAPPING", false);
-		// B1 shadows: SHADOW_MODE_FAST=1 (was 0/OFF at Z0). Enabling it pulls the real utils/shadows.glsl into
-		// scene_frag (ios-overrides/utils/shadows.glsl = the ES3 port). SHADOW_FILTERING_PCF=0; transparency off for
-		// the first port (depth-only shadow FBO -> the simple depth-compare path). SHADOW_RESOLUTION is the quality
-		// ORDINAL the bias #if reads (>=4 branch here), NOT the pixel count.
-		define("SHADOW_MODE", 1);
-		define("SHADOW_TRANSPARENCY", false);
+		// B1 shadows: SHADOW_MODE_DETAILED=2 (FAST=1, OFF=0). DETAILED samples the caster's texture alpha in
+		// shadow_frag so foliage casts DAPPLED shadows (light through leaf gaps); transparency packs depth+alpha
+		// (16+8=24 bits) into gl_FragDepth so the shadow FBO stays depth-only (DEPTH_COMPONENT24). The scene shader
+		// only cares SHADOW_MODE!=OFF + SHADOW_TRANSPARENCY; shadow_frag's DETAILED+TRANSPARENCY paths were ES3-ported
+		// in the round-2 shadow_frag override. SHADOW_FILTERING_PCF=0. SHADOW_RESOLUTION is the bias ORDINAL (>=4).
+		define("SHADOW_MODE", 2);
+		define("SHADOW_TRANSPARENCY", true);
 		define("SHADOW_FILTERING", 0);
 		define("SHADOW_RESOLUTION", 2048);
 		define("VANILLA_COLOR_BANDING", false);

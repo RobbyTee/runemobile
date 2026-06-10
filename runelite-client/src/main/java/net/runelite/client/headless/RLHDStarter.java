@@ -120,16 +120,19 @@ public final class RLHDStarter
 			// compiled (the stub used it). Simulator EAGL gate GREEN with NORMAL_MAPPING=1.
 			MobileUiBridge.setConfig("hd", "normalMapping", "true");                   // NORMAL_MAPPING on
 			MobileUiBridge.setConfig("hd", "parallaxOcclusionMappingToggle", "false"); // PARALLAX_OCCLUSION_MAPPING off
-			// B1 SHADOWS (first ported feature): SHADOW_MODE_FAST pulls the real utils/shadows.glsl shadow-map
-			// sampling into scene_frag; the ES3 port (ios-overrides/utils/shadows.glsl) compiles+links on device
-			// (Simulator EAGL gate GREEN at this exact config). Lock the validated sub-config: SMOOTH filtering
-			// (= the SHADOW_FILTERING_PCF=0 path) and transparency OFF (the shadow FBO is depth-only on iOS, so the
-			// simple depth-compare path is used; keyName is enableShadowTransparency, not shadowTransparency). The
-			// shadow-map FBO's GL_CLAMP_TO_BORDER + GL_TEXTURE_BORDER_COLOR (ES3.2-only) are remapped/no-op'd in the
-			// bridge (texelFetch ignores wrap state). DETAILED/transparency/other filtering are future sub-ports.
-			MobileUiBridge.setConfig("hd", "shadowMode", "FAST");                      // SHADOW_MODE 1 (was OFF)
+			// B1 SHADOWS: scene_frag pulls the real utils/shadows.glsl shadow-map sampling (ES3 port in
+			// ios-overrides/utils/shadows.glsl); the shadow-map FBO's GL_CLAMP_TO_BORDER + GL_TEXTURE_BORDER_COLOR
+			// (ES3.2-only) are remapped/no-op'd in the bridge (texelFetch ignores wrap state) and DEPTH_COMPONENT24
+			// is forced to UNSIGNED_INT (strict ES3). SMOOTH filtering = the SHADOW_FILTERING_PCF=0 path.
+			// Upgraded FAST -> DETAILED + transparency: DETAILED samples the caster's texture alpha so
+			// foliage casts DAPPLED shadows (light through leaf gaps) instead of solid blobs; transparency packs
+			// depth+alpha (16+8=24 bits) into gl_FragDepth (shadow FBO stays depth-only, DEPTH_COMPONENT24). The
+			// shadow pass already runs on device (FAST), and detailedShadowProgram + the DETAILED/TRANSPARENCY
+			// shader paths were ES3-ported (round-2 shadow_frag + B1 shadows.glsl); Simulator EAGL gate GREEN at
+			// SHADOW_MODE=2/SHADOW_TRANSPARENCY=true. SMOOTH (PCF) filtering unchanged.
+			MobileUiBridge.setConfig("hd", "shadowMode", "DETAILED");                  // SHADOW_MODE 2 (was FAST)
 			MobileUiBridge.setConfig("hd", "shadowFiltering", "SMOOTH");               // SHADOW_FILTERING_PCF (0)
-			MobileUiBridge.setConfig("hd", "enableShadowTransparency", "false");       // SHADOW_TRANSPARENCY off
+			MobileUiBridge.setConfig("hd", "enableShadowTransparency", "true");        // SHADOW_TRANSPARENCY on
 			MobileUiBridge.setConfig("hd", "windDisplacement", "false");               // WIND_DISPLACEMENT off
 			MobileUiBridge.setConfig("hd", "characterDisplacement", "false");          // CHARACTER_DISPLACEMENT off
 			// Single-threaded model processing: RLHD's multithreadedModelProcessing (keyName asyncModelProcessing)
@@ -158,7 +161,7 @@ public final class RLHDStarter
 			if (last.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced iOS config (uiScaling=LINEAR; tiled/POM/wind/char-disp/MSAA/asyncModelProcessing OFF; shadows=FAST/SMOOTH/no-transparency; normalMapping=ON; dynamicLights=SOME; sceneResolutionScale=200 LINEAR = 2x SSAA)");
+				log.info("[routecrlhd] forced iOS config (uiScaling=LINEAR; tiled/POM/wind/char-disp/MSAA/asyncModelProcessing OFF; shadows=DETAILED/SMOOTH/transparency; normalMapping=ON; dynamicLights=SOME; sceneResolutionScale=200 LINEAR = 2x SSAA)");
 			}
 			return;
 		}
