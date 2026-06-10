@@ -5,7 +5,7 @@
 
 ---
 
-## ★★★ B0 GATE MET (2026-06-10) — 117HD RENDERS THE LIVE OSRS SCENE ON THE iPHONE. Dynamic-model fix staged + installed, awaiting device confirm.
+## ★★★ B0 GATE FULLY MET (2026-06-10) — 117HD RENDERS THE LIVE OSRS SCENE *AND* TEXTURED PLAYERS/NPCs ON THE iPHONE.
 
 **Read this first; it supersedes the older sections below.** Over one long device session the full ZoneRenderer
 pipeline was brought up on the iPhone 17 Pro Max (A19 Pro). The **static HD world renders correctly** (device
@@ -29,8 +29,10 @@ commit, see `git log`):
    GL_UNSIGNED_INT_8_8_8_8_REV` (invalid on iOS GLES 3.0 → black textures); `z_glTexSubImage3D` now swaps R↔B and
    uploads `GL_RGBA + GL_UNSIGNED_BYTE`. This made the STATIC SCENE render in full HD.
 
-**ANIMATED MODELS — DIAGNOSED + FIXED (`fbbe40945`, awaiting device confirm).** The player + NPCs rendered as
-BLACK silhouettes (geometry correct, per-face colour zero) while the static scene was perfectly textured. Lead (d)
+**ANIMATED MODELS — FIXED + ★ CONFIRMED ON DEVICE (`fbbe40945`).** A packed Lumbridge bridge now renders every
+player + NPC as a fully textured HD model (device screenshot) — the static scene AND dynamic entities are correct.
+The player + NPCs previously rendered as BLACK silhouettes (geometry correct, per-face colour zero) while the
+static scene was perfectly textured. Lead (d)
 above was right: it's the per-face `tbo` (VAO::TBO `GLTextureBuffer`) repack, NOT persistent mapping. The earlier
 `7fe1563c3` (force `z_glMapBufferRange`→NULL for `GL_MAP_PERSISTENT_BIT`) was **inert**: on iOS `SUPPORTS_STORAGE_
 BUFFERS=false` (`GL_ARB_buffer_storage` false; `rc_make_caps` only sets `OpenGL33`), so `isStorageBuffer()` is false
@@ -54,9 +56,11 @@ filled buffer (`buffer == mappedBuffer.getOwner()`, `buffer.mappedBuffer == this
 `GLMappedBuffer`, plus the repack; for the plain VBO/EBO writers there's no `unmap` override so it's identical to
 before). Inert on desktop. `DynamicModelVAO.unmap()` runs on the render/GL thread (`ZoneRenderer` PASS_ALPHA), so
 the repack lands on the EAGL context thread like the static path. Staged GREEN (jar md5 `ec35374e`, class md5
-`ff2d464a`); app built + installed on device. **NEXT: user attaches StikDebug + taps `▶ 117HD (Zone)` → expect
-textured player/NPCs = FULL render. If still black, pull the LAST session's `client.log` (cumulative) — suspect
-repack thread/binding or whether `DynamicModelVAO` uses a path that doesn't funnel through this writer's flush.**
+`ff2d464a`); app built + installed; **CONFIRMED rendering textured players/NPCs on device.**
+
+**B0 is DONE.** The full 117HD pipeline renders correct static *and* animated geometry on the iPhone 17 Pro Max.
+Remaining work is the deferred non-blocking cleanup below + the B1+ feature phases (shadows / tiled lighting /
+dynamic lights / POM, each turned on in `RLHDStarter`'s minimal config will surface its own shader cast sites).
 
 **Cleanup still owed (deferred, non-blocking):** the JavaBridge continuous frame-dump diagnostic was reverted (tree
 clean) but the gpu-zone shaders + diagnostics around it are fine; `ShaderOverlay` (a dev debug overlay) fails its
