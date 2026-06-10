@@ -37,7 +37,12 @@ public class ZoneShaderAssemble {
 	// GL shader-type constants (for the SHADER_TYPE define block, mirroring ShaderTemplate).
 	static final int GL_VERTEX_SHADER = 35633, GL_FRAGMENT_SHADER = 35632, GL_GEOMETRY_SHADER = 36313, GL_COMPUTE_SHADER = 37305;
 
-	// The zone-path program entry shaders to assemble: name -> (file, glStage). geometry/compute are NOT ported.
+	// The zone-path program entry shaders to assemble: name -> (file, glStage[, TILED_LIGHTING_LAYER]). geometry/
+	// compute are NOT ported. The optional 4th column is the per-program TILED_LIGHTING_LAYER value for the tiled-
+	// lighting culling pass (set into the include map before assembling that target; ignored otherwise). HdPlugin
+	// compiles DynamicLights.MAX_LAYERS_PER_TILE (12) of these, one per layer; layer 0 takes the `#if
+	// TILED_LIGHTING_LAYER > 0` FALSE branch (no array read) and layers >0 the TRUE branch (read prior layers), so
+	// the gate validates BOTH (layer 0 + layer 1) — layers 2..11 are structurally identical to layer 1.
 	static final String[][] TARGETS = {
 		{ "scene",  "scene_vert.glsl",  "V" },
 		{ "scene",  "scene_frag.glsl",  "F" },
@@ -45,6 +50,10 @@ public class ZoneShaderAssemble {
 		{ "shadow", "shadow_frag.glsl", "F" },
 		{ "ui",     "ui_vert.glsl",     "V" },
 		{ "ui",     "ui_frag.glsl",     "F" },
+		{ "tiled_l0", "tiled_lighting_vert.glsl", "V", "0" },
+		{ "tiled_l0", "tiled_lighting_frag.glsl", "F", "0" },
+		{ "tiled_l1", "tiled_lighting_vert.glsl", "V", "1" },
+		{ "tiled_l1", "tiled_lighting_frag.glsl", "F", "1" },
 	};
 
 	final Map<String, String> includeMap = new HashMap<>();   // identifier -> replacement text
@@ -68,14 +77,19 @@ public class ZoneShaderAssemble {
 		// the override absent, 595 reproduces the device link failure (negative control for the gate).
 		define("MATERIAL_COUNT", 595);
 		define("WATER_TYPE_COUNT", 1);
-		// B1 dynamic lights: DYNAMIC_LIGHTS on, TILED off (tiled = the 1000-light/64KB-UBO path that needs the
-		// texture-backed store; dynamic non-tiled caps at getMaxSceneLights()=50 for SOME -> ~2.4KB UBOs, fits the
-		// 16KB cap). MAX_LIGHT_COUNT=50 matches dynamicLights=SOME. ios-overrides/utils/lights.glsl = the ES3 port.
+		// B1 dynamic lights + TILED lighting: DYNAMIC_LIGHTS on, TILED on. Tiled lets the WHOLE scene light up (vs the
+		// ~50 nearest non-tiled lights): a per-tile culling pass writes the active light indices into the
+		// tiledLightingArray (RGBA16UI 2D array, one layer per culling pass), and scene_frag's calculateLighting reads
+		// the tile's indices instead of looping all lights. When TILED is on, HdPlugin sizes MAX_LIGHT_COUNT =
+		// UBOLights.MAX_LIGHTS (java-override = 480): UBOLights 480*32=15360 B + UBOLightsCulling 480*16=7680 B, both
+		// under Apple's 16384 B uniform-block cap, so NO texture-backed store is needed (unlike UBOMaterials). 480 =
+		// ~10x the non-tiled 50, covers all but pathologically dense scenes. TILED_LIGHTING_LAYER_COUNT = dynamicLights
+		// SOME.getTiledLightingLayers() = 8. ios-overrides: tiled_lighting_{vert,frag}.glsl + utils/lights.glsl TILED branch.
 		define("DYNAMIC_LIGHTS", true);
-		define("TILED_LIGHTING", false);
-		define("TILED_LIGHTING_LAYER_COUNT", 0);
+		define("TILED_LIGHTING", true);
+		define("TILED_LIGHTING_LAYER_COUNT", 8);
 		define("TILED_LIGHTING_TILE_SIZE", 16);
-		define("MAX_LIGHT_COUNT", 50);
+		define("MAX_LIGHT_COUNT", 480);
 		define("NORMAL_MAPPING", true); // B1: normal mapping ON — swaps sampleNormalMap stub for the real normals.glsl body
 		define("PARALLAX_OCCLUSION_MAPPING", false);
 		// B1 shadows: SHADOW_MODE_DETAILED=2 (FAST=1, OFF=0). DETAILED samples the caster's texture alpha in
@@ -330,6 +344,14 @@ public class ZoneShaderAssemble {
 			pragmaOnce.clear(); fileStack.clear();
 			missing.clear();
 			includeMap.put("SHADER_TYPE", shaderTypeBlock(vert ? GL_VERTEX_SHADER : GL_FRAGMENT_SHADER));
+			// Tiled-lighting targets carry a TILED_LIGHTING_LAYER (4th column) consumed by tiled_lighting_frag's
+			// `#include TILED_LIGHTING_LAYER` / `#include TILED_IMAGE_STORE` directives. TILED_IMAGE_STORE is always 0
+			// on iOS (GLES 3.0 has no image load/store -> the per-layer `out uvec4 TiledData` path). The other targets
+			// don't reference these identifiers, so the entries are harmless when set.
+			if (tgt.length > 3) {
+				includeMap.put("TILED_LIGHTING_LAYER", "#define TILED_LIGHTING_LAYER " + tgt[3]);
+				includeMap.put("TILED_IMAGE_STORE", "#define TILED_IMAGE_STORE 0");
+			}
 			// Top-level target file resolves from ios-overrides first (same as `<...>` includes), so a
 			// hand-ported ES3 copy of a top-level shader (e.g. shadow_frag.glsl) is picked up by the gate.
 			Path ovTop = OVERRIDE_ROOT.resolve(file).normalize();

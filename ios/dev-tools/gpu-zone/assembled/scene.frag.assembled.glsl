@@ -115,9 +115,9 @@ precision highp sampler2DShadow;
 #define WIND_DISPLACEMENT_NOISE_RESOLUTION 128
 #define CHARACTER_DISPLACEMENT 0
 #define DYNAMIC_LIGHTS 1
-#define MAX_LIGHT_COUNT 50
-#define TILED_LIGHTING 0
-#define TILED_LIGHTING_LAYER_COUNT 0
+#define MAX_LIGHT_COUNT 480
+#define TILED_LIGHTING 1
+#define TILED_LIGHTING_LAYER_COUNT 8
 #define TILED_LIGHTING_TILE_SIZE 16
 #define TILED_LIGHTING_MAX_TILE_LIGHT_COUNT (TILED_LIGHTING_LAYER_COUNT * 4 * 2)
 #define WINDOWS_HDR_CORRECTION 0
@@ -1330,8 +1330,10 @@ float sampleShadowMap(vec3 fragPos, vec2 distortion, float lightDotNormals) {
  *   line 19: 1 - sqrt(...)            -> 1.0 - sqrt(...)
  *   line 25: max(dot(...), 0)         -> max(dot(...), 0.0)
  * The UBO blocks (uniforms/lights.glsl) are sized at MAX_LIGHT_COUNT (<=100 for dynamic, NOT the 1000 tiled cap),
- * so they fit Apple's 16 KB uniform-block limit -> no texture-backed store needed (unlike UBOMaterials). The
- * TILED_LIGHTING branch stays #if'd out on iOS. Logic identical. RE-MERGE on RLHD rev bumps.
+ * so they fit Apple's 16 KB uniform-block limit -> no texture-backed store needed (unlike UBOMaterials); the tiled
+ * path caps lights at MAX_LIGHTS=480 (java-overrides/UBOLights.java) so the 480-entry UBO stays under the cap. B1
+ * tiled lighting also ports the TILED_LIGHTING branch's tileXY (sceneResolution/tiledLightingResolution are ivec2
+ * -> vec2()). Logic identical. RE-MERGE on RLHD rev bumps.
  * ===========================================================================================================
  */
 // #pragma once: first include
@@ -1431,7 +1433,8 @@ void calculateLighting(
     inout vec3 pointLightsOut, inout vec3 pointLightsSpecularOut
 ) {
     #if TILED_LIGHTING
-        ivec2 tileXY = ivec2(gl_FragCoord.xy / sceneResolution * tiledLightingResolution);
+        // iOS: sceneResolution / tiledLightingResolution are ivec2 (global UBO) -> vec2() before the float math.
+        ivec2 tileXY = ivec2(gl_FragCoord.xy / vec2(sceneResolution) * vec2(tiledLightingResolution));
 
         for (int tileLayer = 0; tileLayer < TILED_LIGHTING_LAYER_COUNT; tileLayer++) {
             uvec4 tileLayerData = texelFetch(tiledLightingArray, ivec3(tileXY, tileLayer), 0);
@@ -1854,8 +1857,10 @@ float wireframeMask() {
  *   line 19: 1 - sqrt(...)            -> 1.0 - sqrt(...)
  *   line 25: max(dot(...), 0)         -> max(dot(...), 0.0)
  * The UBO blocks (uniforms/lights.glsl) are sized at MAX_LIGHT_COUNT (<=100 for dynamic, NOT the 1000 tiled cap),
- * so they fit Apple's 16 KB uniform-block limit -> no texture-backed store needed (unlike UBOMaterials). The
- * TILED_LIGHTING branch stays #if'd out on iOS. Logic identical. RE-MERGE on RLHD rev bumps.
+ * so they fit Apple's 16 KB uniform-block limit -> no texture-backed store needed (unlike UBOMaterials); the tiled
+ * path caps lights at MAX_LIGHTS=480 (java-overrides/UBOLights.java) so the 480-entry UBO stays under the cap. B1
+ * tiled lighting also ports the TILED_LIGHTING branch's tileXY (sceneResolution/tiledLightingResolution are ivec2
+ * -> vec2()). Logic identical. RE-MERGE on RLHD rev bumps.
  * ===========================================================================================================
  */
 // #pragma once: already included

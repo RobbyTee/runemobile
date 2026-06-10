@@ -105,7 +105,18 @@ public final class RLHDStarter
 		if (!configForced)
 		{
 			MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");                 // else HYBRID/xBR pull in scale/*.glsl
-			MobileUiBridge.setConfig("hd", "tiledLighting", "false");                  // else the tiled-lighting program compiles
+			// B1 TILED LIGHTING (heaviest portable feature): lets the WHOLE scene light up (vs the ~50 nearest lights of
+			// non-tiled dynamic lighting). A per-tile culling pass (tiled_lighting_{vert,frag}.glsl, ios-overrides ES3
+			// ports) writes each screen tile's active light indices into tiledLightingArray (RGBA16UI 2D array, one layer
+			// per culling pass, ES3.0-core color-renderable), and scene_frag's calculateLighting (utils/lights.glsl TILED
+			// branch) reads the tile's indices instead of looping all lights. With tiled ON, HdPlugin sizes
+			// MAX_LIGHT_COUNT = UBOLights.MAX_LIGHTS; the java-override caps that 1000->480 so UBOLights (480*32=15360 B)
+			// + UBOLightsCulling (480*16=7680 B) both fit Apple's 16384 B uniform-block cap -> no texture-backed store
+			// needed (unlike UBOMaterials). The ES3.2-only layered FBO attach (glFramebufferTexture) is emulated in the
+			// bridge by attaching layer 0 (the per-layer pass re-attaches each layer via glFramebufferTextureLayer);
+			// image-load-store is caps-gated off (GL_ARB_shader_image_load_store=false on iOS) so the per-layer path is
+			// taken. Simulator EAGL gate GREEN: scene + tiled (layer 0 + layer >0) compile + link at TILED_LIGHTING=1.
+			MobileUiBridge.setConfig("hd", "tiledLighting", "true");                   // TILED_LIGHTING on (whole-scene lighting)
 			// B1 DYNAMIC LIGHTS (third ported feature): torches/fires/spells cast coloured point light. DYNAMIC_LIGHTS
 			// on pulls utils/lights.glsl (ios-overrides ES3 port, 2 casts) into scene_frag's lighting. SOME =
 			// getMaxSceneLights()=50 -> UBOLights+UBOLightsCulling shader blocks ~2.4KB, under Apple's 16KB cap (so no
@@ -164,7 +175,7 @@ public final class RLHDStarter
 			if (last.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced iOS config (uiScaling=LINEAR; tiled/POM/wind/char-disp/asyncModelProcessing OFF; shadows=DETAILED/SMOOTH/transparency; normalMapping=ON; dynamicLights=SOME; MSAA_4; sceneResolutionScale=200 LINEAR = 2x SSAA)");
+				log.info("[routecrlhd] forced iOS config (uiScaling=LINEAR; POM/wind/char-disp/asyncModelProcessing OFF; shadows=DETAILED/SMOOTH/transparency; normalMapping=ON; dynamicLights=SOME; tiledLighting=ON; MSAA_4; sceneResolutionScale=200 LINEAR = 2x SSAA)");
 			}
 			return;
 		}
