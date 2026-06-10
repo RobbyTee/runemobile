@@ -36,14 +36,37 @@ proven portable. **Next is Phase B0: actually bring up the RLHD ZoneRenderer.**
   RouteCBridge.h. Mirrors base step 3b (device-only at runtime). See `jni/README.md` for the device wiring +
   TODO(device) list.
 
-**What's left for B0 (device-coupled, JVM-only-testable):**
-1. Re-stage the **base gpu jar** with the grown `facade/` superset (single in-jar facade covers base + RLHD).
-2. Compile `routec_zone_jni.m` into the app; in zone mode call `RouteC_registerGLNatives` then
-   `RouteC_registerZoneNatives` after `JNI_CreateJavaVM`; the `glTexBuffer` companion `glBindTexture(GL_TEXTURE_BUFFER)`
-   →2D remap in the base bridge.
-3. B0.4/B0.5: minimal UBO + stub material/water plumbing; `gl_FragDepth` on RLHD scene_*/shadow_* (net-new vs Z0's
-   compile-only proof); boot RuneLite with RLHD.
-First device tap is still the **base-gpu render re-confirm** (handoff step 1, StikDebug). Needs the device attached.
+### B0.5 DEVICE ROUND — RLHD boots + scene shaders compile on device; one blocker left (2026-06-09)
+
+Wired + ran the full zone boot on the iPhone 17 Pro Max. **Base-gpu render re-confirm GREEN** (stripped build still
+renders the live 3D world). Then booted RuneLite with RLHD (`▶ 117HD (Zone)` button → `routecZoneMode`):
+`RouteC_registerZoneNatives rc=0`, RLHD loads from the staged jar (`RLHDStarter` + `loadAndStartPlugin`),
+`HdPlugin.startUp` runs through full GPU detection (`Indirect draw: false`, `Storage buffers: false` — the
+caps-gated GLES-core path, as B0.4 predicted), and **`scene_vert`+`scene_frag` COMPILE to ES 3.00** via the runtime
+downport. Fixes landed this round (each one peeled off by reading the device ShaderException):
+- **Wiring** (`1226374f6`): `RLHDStarter.java` (+Hooks tick) + `MobileUiBridge.loadAndStartPlugin` +
+  `JVMLauncher.routecZoneMode` + `routec_zone_jni.m` compiled in + `stage-ios-gpu-jar.sh FACADE_SRC` superset.
+- **Reliable trigger + hub fix** (`765d0fe41`): dedicated one-tap `▶ 117HD (Zone)` button (3-finger gesture was
+  unreliable → fell through to L1); zone mode drops `-Drunelite.hub` so the plugin HUB doesn't auto-load its OWN
+  cached 117hd (URLClassLoader without our facade → `ClassNotFoundException org.lwjgl.system.Platform` + collision).
+- **Shader downport** (`3974015c1`): ported the full Z0 transform into the runtime `RouteCBridge downportShaderSource`
+  (full sampler-precision set, the 65 #13 casts, textureFaces TBO→2D); ios-overrides shipped as a jar overlay
+  (`rs117/hd/utils/{color_utils,water,fog}.glsl`).
+- **Z0 minimal config** (`2bff79a02`): `RLHDStarter` forces dynamicLights=NONE/normalMapping=false/POM=false/
+  shadowMode=OFF/wind+char-disp=false (else POM etc. shader branches bring un-ported cast sites).
+- **f-suffix bug** (`7772eb6b6`): runtime regex ate `.flowMap`→`.lowMap`; added the `(?![A-Za-z0-9_])` boundary.
+
+**THE ONE BLOCKER LEFT — material UBO too big for iOS:** link fails
+`Uniform interface block UBOMaterials too large (57120 exceeds max 16384)`. Apple's GLES-on-Metal caps a uniform
+block at **16 KB**; the real `MaterialManager` loads ~476 materials × ~120 B = 57 KB (Mali/desktop allow 64 KB, so
+Android never hit it). No clean quick cap: material indices ARE array positions (shrinking the count breaks
+face→material refs), and the struct can't shrink 3.5× without dropping fields water/lighting still read. **This is
+the materials-subsystem boundary (blueprint B1).** Options for the next session: (a) **texture-back the material
+data** (an `isampler2D`/`sampler2D` material store like the textureFaces TBO→2D path — the real iOS solution, also
+unblocks other large UBOs); (b) a material **cap + face-index remap** (flat-scene B0 frame, more invasive than it
+looks); (c) shrink the struct to the B0-used fields + matching shader struct (likely still > 16 KB at 476). Recommend
+(a). The whole pipeline ABOVE this is proven on device — shaders compile + downport correctly; only the material
+look-data feed needs the iOS-shaped storage.
 
 ## Read first
 - `ios/HD-ZONE-B0-SCOPE.md` — the step-by-step B0 plan (this is the spec to execute).
