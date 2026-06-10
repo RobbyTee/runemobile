@@ -77,7 +77,7 @@ precision highp sampler2DShadow;
 #define MATERIAL_FLAG_VANILLA_UVS 1
 #define MATERIAL_FLAG_IS_OVERLAY 0
 
-#define SHADOW_MODE 0
+#define SHADOW_MODE 1
 #define SHADOW_MODE_OFF 0
 #define SHADOW_MODE_FAST 1
 #define SHADOW_MODE_DETAILED 2
@@ -1124,25 +1124,20 @@ void sampleDisplacementMap(
  * Copyright (c) 2024, Hooder <ahooder@protonmail.com>
  * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that
+ * the conditions of the BSD 2-clause license are met.
  *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * ===========================================================================================================
+ * iOS ES-3.0 OVERRIDE (gpu-zone B1, shadows). Verbatim copy of rs117/hd/utils/shadows.glsl @ RLHD 7dded59
+ * EXCEPT every int-in-float-context is made explicit (blueprint #13) so the SCENE program compiles on GLES 3.00
+ * when SHADOW_MODE != OFF — this whole file is #if'd out (stub macro) at SHADOW_MODE_OFF, so Z0 never compiled it.
+ * Changes are purely numeric-type explicitness; logic identical:
+ *   - int literals in float context -> float literals (0->0.0, 1->1.0, 2->2.0)
+ *   - SHADOW_* / POISSON_DISK_LENGTH (#define ints) cast to float at each float use
+ *   - shadowPos.xy *= vec2(shadowRes)  (shadowRes is ivec2 from textureSize; vec2 *= ivec2 is illegal in ES)
+ *   - clamp/max int args -> float; kernelSize/2 int wrapped float() before the vec2 subtraction
+ * RE-MERGE on RLHD rev bumps.
+ * ===========================================================================================================
  */
 // #pragma once: already included
 
@@ -1195,60 +1190,60 @@ void sampleDisplacementMap(
 #if SHADOW_MODE != SHADOW_MODE_OFF
 float fetchShadowTexel(ivec2 pixelCoord, float fragDepth, vec3 fragPos, int i) {
     #if SHADOW_FILTERING == SHADOW_FILTERING_DITHER
-        int index = int(hash(vec4(floor(fragPos.xyz), i)) * POISSON_DISK_LENGTH) % POISSON_DISK_LENGTH;
+        int index = int(hash(vec4(floor(fragPos.xyz), i)) * float(POISSON_DISK_LENGTH)) % POISSON_DISK_LENGTH;
         pixelCoord += ivec2(getPoissonDisk(index) * 1.25);
     #endif
 
     #if SHADOW_TRANSPARENCY
-        int alphaDepth = int(texelFetch(shadowMap, pixelCoord, 0).r * SHADOW_COMBINED_MAX);
-        float depth = float(alphaDepth & SHADOW_DEPTH_MAX) / SHADOW_DEPTH_MAX;
-        float alpha = 1 - float(alphaDepth >> SHADOW_DEPTH_BITS) / SHADOW_ALPHA_MAX;
-        return depth < fragDepth ? alpha : 0.;
+        int alphaDepth = int(texelFetch(shadowMap, pixelCoord, 0).r * float(SHADOW_COMBINED_MAX));
+        float depth = float(alphaDepth & SHADOW_DEPTH_MAX) / float(SHADOW_DEPTH_MAX);
+        float alpha = 1.0 - float(alphaDepth >> SHADOW_DEPTH_BITS) / float(SHADOW_ALPHA_MAX);
+        return depth < fragDepth ? alpha : 0.0;
     #else
-        return texelFetch(shadowMap, pixelCoord, 0).r < fragDepth ? 1. : 0.;
+        return texelFetch(shadowMap, pixelCoord, 0).r < fragDepth ? 1.0 : 0.0;
     #endif
 }
 
 float sampleShadowMap(vec3 fragPos, vec2 distortion, float lightDotNormals) {
-    if (lightStrength <= 0)
-        return 0.;
+    if (lightStrength <= 0.0)
+        return 0.0;
 
-    vec4 shadowPos = lightProjectionMatrix * vec4(fragPos, 1);
+    vec4 shadowPos = lightProjectionMatrix * vec4(fragPos, 1.0);
     shadowPos.xyz /= shadowPos.w;
 
     // Fade out shadows near the shadow map edges
     #if ZONE_RENDERER
         // TODO: Make this configurable if we make the Shadow Distance Variable
-        const float fadeStart = 55.0 * TILE_SIZE;
-        const float fadeEnd   = 65.0 * TILE_SIZE;
+        const float fadeStart = 55.0 * float(TILE_SIZE);
+        const float fadeEnd   = 65.0 * float(TILE_SIZE);
         float fadeOut = smoothstep(fadeStart, fadeEnd, length(fragPos - cameraPos));
     #else
         float fadeOut = smoothstep(.75, 1., dot(shadowPos.xy, shadowPos.xy));
     #endif
-    if (fadeOut >= 1)
-        return 0.;
+    if (fadeOut >= 1.0)
+        return 0.0;
 
     // NDC to texture space
     ivec2 shadowRes = textureSize(shadowMap, 0);
-    shadowPos.xyz += 1;
-    shadowPos.xyz /= 2;
+    shadowPos.xyz += 1.0;
+    shadowPos.xyz /= 2.0;
     shadowPos.xy += distortion;
-    shadowPos.xy = clamp(shadowPos.xy, 0, 1);
-    shadowPos.xy *= shadowRes;
+    shadowPos.xy = clamp(shadowPos.xy, 0.0, 1.0);
+    shadowPos.xy *= vec2(shadowRes);
     shadowPos.xy += .5; // Shift to texel center
 
-    float shadowBias = MIN_SHADOW_BIAS * max(1, 1.0 - lightDotNormals);
+    float shadowBias = MIN_SHADOW_BIAS * max(1.0, 1.0 - lightDotNormals);
     float fragDepth = shadowPos.z + shadowBias;
 
     const int kernelSize = 3;
-    ivec2 kernelOffset = ivec2(shadowPos.xy - kernelSize / 2);
+    ivec2 kernelOffset = ivec2(shadowPos.xy - float(kernelSize / 2));
     #if SHADOW_FILTERING == SHADOW_FILTERING_AVERAGE
-        const float kernelAreaReciprocal = 1. / (kernelSize * kernelSize);
+        const float kernelAreaReciprocal = 1.0 / float(kernelSize * kernelSize);
     #else
         const float kernelAreaReciprocal = .25; // This is effectively a 2x2 kernel
         vec2 lerp = fract(shadowPos.xy);
-        vec3 lerpX = vec3(1 - lerp.x, 1, lerp.x);
-        vec3 lerpY = vec3(1 - lerp.y, 1, lerp.y);
+        vec3 lerpX = vec3(1.0 - lerp.x, 1.0, lerp.x);
+        vec3 lerpY = vec3(1.0 - lerp.y, 1.0, lerp.y);
     #endif
 
     // Sample 4 corners first
@@ -1292,7 +1287,7 @@ float sampleShadowMap(vec3 fragPos, vec2 distortion, float lightDotNormals) {
         shadow *= kernelAreaReciprocal;
     }
 
-    return shadow * (1 - fadeOut);
+    return shadow * (1.0 - fadeOut);
 }
 #else
 #define sampleShadowMap(fragPos, distortion, lightDotNormals) 0.0

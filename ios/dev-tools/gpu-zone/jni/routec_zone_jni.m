@@ -220,6 +220,10 @@ static void JNICALL z_glTexSubImage3D(JNIEnv *e, jclass c, jint t, jint lvl, jin
     glTexSubImage3D((GLenum)t, lvl, xo, yo, zo, w, h, d, (GLenum)fmt, (GLenum)type, p);
 }
 static void JNICALL z_glTexParameterfv(JNIEnv *e, jclass c, jint t, jint pname, jfloatArray arr) {
+    // GL_TEXTURE_BORDER_COLOR (0x1004) is desktop/ES3.2-only -> GL_INVALID_ENUM on iOS GLES 3.0. RLHD sets it on
+    // the shadow-map texture to pair with GL_CLAMP_TO_BORDER (remapped to CLAMP_TO_EDGE in the base bridge); since
+    // shadows.glsl samples via texelFetch (wrap/border state ignored), the border colour is unused -> no-op it.
+    if (pname == 0x1004) return;
     jfloat *p = (*e)->GetFloatArrayElements(e, arr, NULL);
     glTexParameterfv((GLenum)t, (GLenum)pname, p); (*e)->ReleaseFloatArrayElements(e, arr, p, JNI_ABORT);
 }

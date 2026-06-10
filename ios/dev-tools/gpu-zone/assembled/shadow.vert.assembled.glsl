@@ -69,7 +69,7 @@ precision highp usampler2DArray;
 #define MATERIAL_FLAG_VANILLA_UVS 1
 #define MATERIAL_FLAG_IS_OVERLAY 0
 
-#define SHADOW_MODE 0
+#define SHADOW_MODE 1
 #define SHADOW_MODE_OFF 0
 #define SHADOW_MODE_FAST 1
 #define SHADOW_MODE_DETAILED 2

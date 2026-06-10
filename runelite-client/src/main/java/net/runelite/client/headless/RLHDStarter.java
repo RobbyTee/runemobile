@@ -109,7 +109,16 @@ public final class RLHDStarter
 			MobileUiBridge.setConfig("hd", "dynamicLights", "NONE");                   // DYNAMIC_LIGHTS off
 			MobileUiBridge.setConfig("hd", "normalMapping", "false");                  // NORMAL_MAPPING off
 			MobileUiBridge.setConfig("hd", "parallaxOcclusionMappingToggle", "false"); // PARALLAX_OCCLUSION_MAPPING off
-			MobileUiBridge.setConfig("hd", "shadowMode", "OFF");                       // SHADOW_MODE 0
+			// B1 SHADOWS (first ported feature): SHADOW_MODE_FAST pulls the real utils/shadows.glsl shadow-map
+			// sampling into scene_frag; the ES3 port (ios-overrides/utils/shadows.glsl) compiles+links on device
+			// (Simulator EAGL gate GREEN at this exact config). Lock the validated sub-config: SMOOTH filtering
+			// (= the SHADOW_FILTERING_PCF=0 path) and transparency OFF (the shadow FBO is depth-only on iOS, so the
+			// simple depth-compare path is used; keyName is enableShadowTransparency, not shadowTransparency). The
+			// shadow-map FBO's GL_CLAMP_TO_BORDER + GL_TEXTURE_BORDER_COLOR (ES3.2-only) are remapped/no-op'd in the
+			// bridge (texelFetch ignores wrap state). DETAILED/transparency/other filtering are future sub-ports.
+			MobileUiBridge.setConfig("hd", "shadowMode", "FAST");                      // SHADOW_MODE 1 (was OFF)
+			MobileUiBridge.setConfig("hd", "shadowFiltering", "SMOOTH");               // SHADOW_FILTERING_PCF (0)
+			MobileUiBridge.setConfig("hd", "enableShadowTransparency", "false");       // SHADOW_TRANSPARENCY off
 			MobileUiBridge.setConfig("hd", "windDisplacement", "false");               // WIND_DISPLACEMENT off
 			MobileUiBridge.setConfig("hd", "characterDisplacement", "false");          // CHARACTER_DISPLACEMENT off
 			// Single-threaded model processing: RLHD's multithreadedModelProcessing (keyName asyncModelProcessing)
@@ -138,7 +147,7 @@ public final class RLHDStarter
 			if (last.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced Z0 minimal config (uiScaling=LINEAR; tiled/dynamic/normal/POM/shadow/wind/char-disp/MSAA/asyncModelProcessing OFF; sceneResolutionScale=200 LINEAR = 2x SSAA)");
+				log.info("[routecrlhd] forced iOS config (uiScaling=LINEAR; tiled/dynamic/normal/POM/wind/char-disp/MSAA/asyncModelProcessing OFF; shadows=FAST/SMOOTH/no-transparency; sceneResolutionScale=200 LINEAR = 2x SSAA)");
 			}
 			return;
 		}

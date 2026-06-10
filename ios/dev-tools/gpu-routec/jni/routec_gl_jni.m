@@ -714,6 +714,13 @@ static JNIEXPORT void JNICALL rc_GL_glTexParameteri_0(JNIEnv *env, jclass cls, j
             rc_trace([NSString stringWithFormat:@"[routec] WATER-FIX: 2D_ARRAY min filter 0x%x -> GL_LINEAR_MIPMAP_LINEAR (trilinear)", a2]); }
         a2 = GL_LINEAR_MIPMAP_LINEAR;
     }
+    // GL_CLAMP_TO_BORDER (0x812D) is desktop/ES3.2-only -> GL_INVALID_ENUM on iOS GLES 3.0. RLHD's shadow-map FBO
+    // sets it as the WRAP mode (with a white border so off-map fragments read "lit"), but shadows.glsl samples via
+    // texelFetch, which ignores wrap state entirely -> the wrap mode is functionally irrelevant. Remap to
+    // GL_CLAMP_TO_EDGE (0x812F, core ES) so the call succeeds and the texture stays complete. (The companion
+    // glTexParameterfv(GL_TEXTURE_BORDER_COLOR) is no-op'd in the zone bridge.)
+    if ((a1 == GL_TEXTURE_WRAP_S || a1 == GL_TEXTURE_WRAP_T || a1 == GL_TEXTURE_WRAP_R) && a2 == 0x812D)
+        a2 = GL_CLAMP_TO_EDGE;
     glTexParameteri(a0, a1, a2);
 }
 

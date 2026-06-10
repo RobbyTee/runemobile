@@ -75,7 +75,11 @@ public class ZoneShaderAssemble {
 		define("MAX_LIGHT_COUNT", 1);
 		define("NORMAL_MAPPING", false);
 		define("PARALLAX_OCCLUSION_MAPPING", false);
-		define("SHADOW_MODE", 0);
+		// B1 shadows: SHADOW_MODE_FAST=1 (was 0/OFF at Z0). Enabling it pulls the real utils/shadows.glsl into
+		// scene_frag (ios-overrides/utils/shadows.glsl = the ES3 port). SHADOW_FILTERING_PCF=0; transparency off for
+		// the first port (depth-only shadow FBO -> the simple depth-compare path). SHADOW_RESOLUTION is the quality
+		// ORDINAL the bias #if reads (>=4 branch here), NOT the pixel count.
+		define("SHADOW_MODE", 1);
 		define("SHADOW_TRANSPARENCY", false);
 		define("SHADOW_FILTERING", 0);
 		define("SHADOW_RESOLUTION", 2048);
