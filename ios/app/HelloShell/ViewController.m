@@ -53,6 +53,7 @@
 @property (nonatomic, assign) BOOL launched;
 @property (nonatomic, assign) BOOL pendingRouteCL1;   // GPU Route C: long-press Start -> boot the L1 kill-test
 @property (nonatomic, assign) BOOL pendingRouteCGpu;  // GPU Route C: two-finger long-press -> full RuneLite on GPU
+@property (nonatomic, assign) BOOL pendingRouteCZone; // GPU Zone: three-finger long-press -> full RuneLite on 117HD
 @property (nonatomic, assign) BOOL pendingRouteCGpuNoResize;  // GPU Route C bisection: skip headless.resize (fixed 765x503)
 
 // W3 native shell: keep the process alive + show frames. The JVM ran fine on device but iOS
@@ -354,6 +355,13 @@ static const CGFloat kMenuWidth       = 210.0;
         initWithTarget:self action:@selector(onLaunchRouteCGpuGesture:)];
     gpulp.numberOfTouchesRequired = 2;
     [self.launchButton addGestureRecognizer:gpulp];
+    // THREE-FINGER long-press the launch button to boot the FULL RuneLite in GPU Zone (117HD/RLHD) mode: the
+    // staged rlhd jar joins the classpath, the zone facade-delta natives register, and RLHDStarter loads +
+    // starts rs117.hd.HdPlugin (the Zone renderer). Distinct from one-finger L1 / two-finger base-GPU.
+    UILongPressGestureRecognizer *zonelp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onLaunchRouteCZoneGesture:)];
+    zonelp.numberOfTouchesRequired = 3;
+    [self.launchButton addGestureRecognizer:zonelp];
     [self.debugPanel addSubview:self.launchButton];
 
     self.canaryButton = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -1210,6 +1218,17 @@ static const CGFloat kMenuWidth       = 210.0;
     [self onLaunch];
 }
 
+// THREE-FINGER long-press: boot the FULL RuneLite in GPU Zone (117HD/RLHD) mode. Like the base-GPU gesture but
+// arms routecZoneMode (rlhd jar + zone natives + RLHDStarter). Fixed 765x503 (no headless.resize) for the first
+// bring-up, same bisection rationale as the base-GPU gesture — full-screen resize comes after the scene paints.
+- (void)onLaunchRouteCZoneGesture:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    if (self.launched) return;
+    self.pendingRouteCZone = YES;
+    self.pendingRouteCGpuNoResize = YES;
+    [self onLaunch];
+}
+
 // GPU Route C — dedicated one-tap button (same effect as the two-finger long-press, but unambiguous).
 - (void)onLaunchGpu {
     if (self.launched) return;
@@ -1261,8 +1280,11 @@ static const CGFloat kMenuWidth       = 210.0;
     JVMLauncher *launcher = [[JVMLauncher alloc] init];
     launcher.routecL1Mode = self.pendingRouteCL1;   // GPU Route C L1 kill-test (set by the long-press gesture)
     launcher.routecGpuMode = self.pendingRouteCGpu;  // GPU Route C full path (two-finger long-press)
+    launcher.routecZoneMode = self.pendingRouteCZone; // GPU Zone 117HD path (three-finger long-press)
     if (self.pendingRouteCL1) {
         [self appendLine:@"[shell] *** GPU Route C L1 kill-test — booting RouteCL1Probe (not full RuneLite) ***"];
+    } else if (self.pendingRouteCZone) {
+        [self appendLine:@"[shell] *** GPU Zone (117HD) — booting full RuneLite with RLHD on the GL bridge (device GPU) ***"];
     } else if (self.pendingRouteCGpu) {
         [self appendLine:@"[shell] *** GPU Route C — booting full RuneLite with the GL bridge (device GPU) ***"];
     }

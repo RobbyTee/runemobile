@@ -33,6 +33,11 @@
 #ifndef GL_READ_WRITE
 #define GL_READ_WRITE 0x88BA
 #endif
+// The desktop/ES3.2 texture-buffer target RLHD binds `textureFaces` to (absent on iOS GLES 3.0). We remap it to
+// GL_TEXTURE_2D everywhere (glBindTexture override + the glTexBuffer 2D repack) so the TBO becomes an isampler2D.
+#ifndef GL_TEXTURE_BUFFER
+#define GL_TEXTURE_BUFFER 0x8C2A
+#endif
 
 // ============================================================================================================
 //  Bucket A — GLES-3.0-core forwarders (run on the flat-scene path). All target symbols exist in iOS GLES 3.0.
@@ -186,6 +191,14 @@ static void JNICALL z_glDrawBuffer(JNIEnv *e, jclass c, jint buf) {
     GLenum b = (GLenum)buf; glDrawBuffers(1, &b);
 }
 
+// #1 companion — OVERRIDE the base glBindTexture(II)V: remap GL_TEXTURE_BUFFER -> GL_TEXTURE_2D so RLHD's
+// `textureFaces` texture object is created/bound consistently as 2D (the target it samples via isampler2D after
+// the glTexBuffer 2D repack). Registered AFTER the base table (later RegisterNatives wins), so base mode is
+// unaffected (it never binds GL_TEXTURE_BUFFER); all other targets pass straight through.
+static void JNICALL z_glBindTexture(JNIEnv *e, jclass c, jint target, jint tex) {
+    glBindTexture((GLenum)target == GL_TEXTURE_BUFFER ? GL_TEXTURE_2D : (GLenum)target, (GLuint)tex);
+}
+
 // #1 — glTexBuffer(GL_TEXTURE_BUFFER, internalformat, buffer) has no ES3 equivalent. Repack the buffer object's
 // bytes as a 2D texture (proven byte-exact in gpu-tbo2d) so the shader's `isampler2D textureFaces` +
 // texelFetch(ivec2(idx%W, idx/W)) (already emitted by the Z0 downport) reads identical data. RGB32I = 12 B/texel.
@@ -204,8 +217,14 @@ static void JNICALL z_glTexBuffer(JNIEnv *e, jclass c, jint target, jint interna
         GLint maxW = 4096; glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxW);
         GLint w = n < maxW ? n : maxW; if (w < 1) w = 1;
         GLint h = (n + w - 1) / w;
-        // Uploads to the currently-bound GL_TEXTURE_2D on the active unit (see the companion-bind TODO above).
+        // Uploads to the currently-bound GL_TEXTURE_2D on the active unit (bound via the z_glBindTexture remap).
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32I, w, h, 0, GL_RGB_INTEGER, GL_INT, src);
+        // Integer 2D textures are incomplete unless sampled with GL_NEAREST + no mipmaps (GL_LINEAR is invalid for
+        // integer formats); RLHD set no params on the TBO. Make it complete so the isampler2D fetch returns data.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glUnmapBuffer(GL_COPY_READ_BUFFER);
     }
     glBindBuffer(GL_COPY_READ_BUFFER, 0);
@@ -290,6 +309,8 @@ static const JNINativeMethod kGLALLZone[] = {
     // #11 / #1 shims
     {"glDrawBuffer",                       "(I)V",                                    (void *)z_glDrawBuffer},
     {"glTexBuffer",                        "(III)V",                                  (void *)z_glTexBuffer},
+    // #1 companion — OVERRIDE base glBindTexture to remap GL_TEXTURE_BUFFER -> GL_TEXTURE_2D (later-wins).
+    {"glBindTexture",                      "(II)V",                                   (void *)z_glBindTexture},
     // bucket B — no-op stubs (caps-gated off)
     {"glDispatchCompute",                  "(III)V",                                  (void *)z_noop_III},
     {"glMemoryBarrier",                    "(I)V",                                    (void *)z_noop_I},

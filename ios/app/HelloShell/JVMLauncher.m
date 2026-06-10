@@ -10,6 +10,7 @@
 #import <stdatomic.h>
 #import "jni/jni.h"
 #import "routec_gl_jni.h"   // W3 GPU Route C: RouteC_registerGLNatives(env) — the JNI GL bridge registration
+#import "routec_zone_jni.h" // W3 GPU Zone B0.5: RouteC_registerZoneNatives(env) — the RLHD facade-delta natives
 
 // --- csops / CS_DEBUGGED (private; same probe Amethyst/StikDebug rely on) -----
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
@@ -674,6 +675,17 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         log([NSString stringWithFormat:@"[jvm] ROUTEC L1 mode — classpath = %@", classpath]);
     } else {
         classpath = shadedPath ? [NSString stringWithFormat:@"%@:%@", shadedPath, jarPath] : jarPath;
+        // W3 GPU Zone B0.5: append the staged 117HD (RLHD) jar so rs117.hd.* class-loads. It carries no lwjgl —
+        // the facade ships in the shaded jar (staged with the grown superset). RLHDStarter loads HdPlugin by name.
+        if (self.routecZoneMode) {
+            NSString *rlhdPath = [[NSBundle mainBundle] pathForResource:@"client-1.12.29-SNAPSHOT-rlhd" ofType:@"jar"];
+            if (rlhdPath) {
+                classpath = [NSString stringWithFormat:@"%@:%@", classpath, rlhdPath];
+                log([NSString stringWithFormat:@"[jvm] ROUTEC ZONE mode — rlhd jar on classpath = %@", rlhdPath]);
+            } else {
+                log(@"[jvm] WARN: routecZoneMode but client-*-rlhd.jar not in bundle — RLHD will not load");
+            }
+        }
     }
     NSString *captureDir = [docs stringByAppendingPathComponent:@"rl-capture"];
     // Clear stale frames from prior runs: the draw counter resets each launch, so an old run's
@@ -806,6 +818,17 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         log(@"[jvm] GPU Route C scene-render diagnostic ARMED (-Drunelite.gpudiag=true, gpuframedump=true, routecgpu=true)");
     }
 
+    // W3 GPU Zone B0.5: arm RLHDStarter to load + start the external 117HD plugin once in-world. Same read-only
+    // per-frame diagnostics + frame dump as GPU mode, but NOT routecgpu (HdPlugin conflicts=GPU and replaces the
+    // base gpu plugin — force-starting base would race it). RLHDStarter forces hd.uiScalingMode=LINEAR +
+    // tiledLighting=false before load (the simplest GLSL-ES paths) then loadAndStartPlugin(rs117.hd.HdPlugin).
+    if (self.routecZoneMode) {
+        [opts addObject:@"-Drunelite.gpudiag=true"];
+        [opts addObject:@"-Drunelite.gpuframedump=true"];
+        [opts addObject:@"-Drunelite.routecrlhd=true"];
+        log(@"[jvm] GPU Zone (117HD) ARMED (-Drunelite.gpudiag=true, gpuframedump=true, routecrlhd=true)");
+    }
+
     // Phase 4 sub-goal A — interactive login, purely in-process (no native touch bridge). Map the JX_*
     // launcher handoff from Documents/tokens.json, then arm HeadlessLogin's two-stage click machine
     // (EULA Accept -> Play Now). Only arms when a usable token set is present, so a build with no
@@ -914,11 +937,20 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     // staged shaded jar (facade-backed gpu, LWJGL stripped). A plain CPU boot does NOT register — the gpu
     // plugin then UnsatisfiedLinkErrors at startUp and RuneLite falls back to the software blit (same as the
     // librlawt-dlopen failure today). Non-fatal: log + clear any pending exception so the VM stays clean.
-    if (self.routecL1Mode || self.routecGpuMode) {
+    if (self.routecL1Mode || self.routecGpuMode || self.routecZoneMode) {
         jint rr = RouteC_registerGLNatives(env);
         if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+        NSString *mode = self.routecZoneMode ? @"ZONE" : (self.routecGpuMode ? @"GPU" : @"L1");
         log([NSString stringWithFormat:@"[jvm] RouteC_registerGLNatives rc=%d (%@) mode=%@", rr,
-            rr == 0 ? @"OK" : @"ERR — facade classes not found", self.routecGpuMode ? @"GPU" : @"L1"]);
+            rr == 0 ? @"OK" : @"ERR — facade classes not found", mode]);
+        // W3 GPU Zone B0.5: register the RLHD facade-delta natives on TOP of the base bridge (disjoint method
+        // sets on the same GLALL class + MemoryUtil). The base 85 must register first (above).
+        if (self.routecZoneMode) {
+            jint zr = RouteC_registerZoneNatives(env);
+            if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+            log([NSString stringWithFormat:@"[jvm] RouteC_registerZoneNatives rc=%d (%@)", zr,
+                zr == 0 ? @"OK" : @"ERR — GLALL/MemoryUtil facade not found"]);
+        }
     }
 
     if (self.routecL1Mode) {

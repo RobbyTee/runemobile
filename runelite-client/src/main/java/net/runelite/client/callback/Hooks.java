@@ -437,6 +437,14 @@ public class Hooks implements Callbacks
 			// Gated -Drunelite.routecgpu=true.
 			net.runelite.client.headless.RouteCGpuStarter.tick(client);
 		}
+		if (net.runelite.client.headless.RLHDStarter.isEnabled())
+		{
+			// W3 GPU Zone B0.5: load + start the EXTERNAL 117HD plugin (rs117.hd.HdPlugin, in the staged rlhd jar)
+			// once there's a drawing canvas, then force the canvas valid until it activates. HdPlugin conflicts=GPU
+			// so it auto-disables the base gpu plugin (do NOT also arm RouteCGpuStarter in this mode).
+			// Gated -Drunelite.routecrlhd=true.
+			net.runelite.client.headless.RLHDStarter.tick(client);
+		}
 		if (net.runelite.client.headless.MobileToplevelProbe.isEnabled())
 		{
 			// W3 mobile-layout spike: one-shot, on the client thread, gated by -Drunelite.mobileui.toplevel=osm.

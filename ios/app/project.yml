@@ -49,8 +49,15 @@ targets:
       # the shell. RouteCProbe.m / main.m in the same dir are the Simulator harness — NOT added here.
       - path: ../dev-tools/gpu-routec/app/RouteCBridge.m
       - path: ../dev-tools/gpu-routec/jni/routec_gl_jni.m
+      # W3 GPU Zone B0.5: the RLHD (117HD) facade-delta JNI forwarders, registered on top of the base bridge by
+      # RouteC_registerZoneNatives. Compiled into the shell; inert unless routecZoneMode registers it.
+      - path: ../dev-tools/gpu-zone/jni/routec_zone_jni.m
       # W3 GPU Route C — L1 kill-test jar (facade-native + RouteCL1Probe only; gitignored build artifact).
       - path: jvm-resources/routec-l1.jar
+        buildPhase: resources
+      # W3 GPU Zone B0.5: the staged 117HD (RLHD) jar — rs117/** + RLHD shader/JSON resources, no lwjgl (facade
+      # ships in the shaded jar). gitignored build artifact (regen: dev-tools/gpu-zone/stage-ios-zone-jar.sh).
+      - path: jvm-resources/client-1.12.29-SNAPSHOT-rlhd.jar
         buildPhase: resources
     dependencies:
       # WKWebView for the on-device Jagex login (JagexLoginSpikeViewController).
@@ -86,6 +93,7 @@ targets:
           - "$(inherited)"
           - "$(SRCROOT)/../dev-tools/gpu-routec/app"
           - "$(SRCROOT)/../dev-tools/gpu-routec/jni"
+          - "$(SRCROOT)/../dev-tools/gpu-zone/jni"
           - "$(SRCROOT)/HelloShell/jni"
           # Khronos EGL/GLES3 headers for the MetalANGLE backend (gitignored; regenerate via gpu-angle/README).
           - "$(SRCROOT)/../dev-tools/gpu-angle/include"

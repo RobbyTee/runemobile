@@ -26,6 +26,13 @@ typedef void (^JVMLogSink)(NSString *line);
 /// must carry the iOS staged shaded jar (stage-ios-gpu-jar.sh). Set on the main thread before -runProbesWithLog:.
 @property (nonatomic, assign) BOOL routecGpuMode;
 
+/// W3 GPU Zone B0.5 — when YES, the FULL RuneLite boots with the staged 117HD (RLHD) jar on the classpath and the
+/// zone facade-delta natives registered (RouteC_registerZoneNatives, on top of the base bridge). RLHDStarter
+/// (-Drunelite.routecrlhd=true) loads + starts rs117.hd.HdPlugin (the Zone renderer) once in-world; HdPlugin
+/// conflicts=GPU so it replaces the base gpu plugin. The bundle must carry client-<ver>-rlhd.jar + the shaded jar
+/// staged with the grown facade superset. Set on the main thread before -runProbesWithLog:.
+@property (nonatomic, assign) BOOL routecZoneMode;
+
 /// CS_DEBUGGED gate (the W1-audit Claim E): true once StikDebug has attached and the
 /// kernel marks this process debugged. Poll this BEFORE warming HotSpot.
 + (BOOL)isDebuggerAttached;

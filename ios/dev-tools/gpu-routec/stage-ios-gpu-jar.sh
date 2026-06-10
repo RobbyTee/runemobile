@@ -36,9 +36,14 @@ SRC_LWJGL=$(unzip -l "$SRC" | grep -c 'org/lwjgl/.*[.]class' || true)
 WORK="$(pwd)/stage-work"
 rm -rf "$WORK"; mkdir -p "$WORK/facade_out" "$WORK/gpu_out" "$WORK/jar"
 
-# 1) facade-native compiles (the GL/AWTContext surface the plugin references, methods `native`).
-"$JAVAC" -d "$WORK/facade_out" $(find facade-native -name '*.java')
+# 1) facade compiles (the GL/AWTContext surface the plugin references, methods `native`). Default = the base-gpu
+#    facade-native; FACADE_SRC=../gpu-zone/facade stages the GROWN RLHD superset so the single in-jar facade covers
+#    both base + RLHD (the base plugin compiles fine against the superset — host-verified). README in gpu-zone/facade.
+FACADE_SRC="${FACADE_SRC:-facade-native}"
+[ -d "$FACADE_SRC" ] || { echo "!! FACADE_SRC dir missing: $FACADE_SRC" >&2; exit 1; }
+"$JAVAC" -d "$WORK/facade_out" $(find "$FACADE_SRC" -name '*.java')
 FACADE_LWJGL_CLASSES=$(cd "$WORK/facade_out" && find org/lwjgl -name '*.class' | wc -l | tr -d ' ')
+echo "facade source dir    : $FACADE_SRC"
 
 # 2) explode the pristine jar; strip lwjgl + rlawt + the gpu package's CLASSES (the only LWJGL/rlawt users in
 #    the tree). For the gpu package we delete ONLY the real-build .class files (recompiled below) and KEEP its
