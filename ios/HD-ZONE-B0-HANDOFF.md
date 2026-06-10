@@ -5,7 +5,7 @@
 
 ---
 
-## ★★★ B0 GATE MET (2026-06-10) — 117HD RENDERS THE LIVE OSRS SCENE ON THE iPHONE. One issue left: dynamic models.
+## ★★★ B0 GATE MET (2026-06-10) — 117HD RENDERS THE LIVE OSRS SCENE ON THE iPHONE. Dynamic-model fix staged + installed, awaiting device confirm.
 
 **Read this first; it supersedes the older sections below.** Over one long device session the full ZoneRenderer
 pipeline was brought up on the iPhone 17 Pro Max (A19 Pro). The **static HD world renders correctly** (device
@@ -29,25 +29,34 @@ commit, see `git log`):
    GL_UNSIGNED_INT_8_8_8_8_REV` (invalid on iOS GLES 3.0 → black textures); `z_glTexSubImage3D` now swaps R↔B and
    uploads `GL_RGBA + GL_UNSIGNED_BYTE`. This made the STATIC SCENE render in full HD.
 
-**THE ONE ISSUE LEFT — animated models (player, NPCs) render as BLACK silhouettes** while the static scene is
-perfectly textured. Attempted fix `7fe1563c3` (NOT sufficient — still black on device): `DynamicModelVAO` streams
-model geometry + per-face data through **persistent-mapped storage buffers** (`STORAGE_PERSISTENT|IMMUTABLE|
-WRITE`, `DynamicModelVAO.java:66-84`), and iOS GLES 3.0 has neither `glBufferStorage` (no-op stub `z_noop_IJI`) nor
-`GL_MAP_PERSISTENT_BIT`. RLHD has a built-in fallback (`GLBuffer.ensureCapacity:470-489` → recreate as
-`STORAGE_NONE` non-persistent map/unmap when the persistent `glMapBufferRange` returns null). `7fe1563c3` made
-`z_glMapBufferRange` return NULL for `GL_MAP_PERSISTENT_BIT` to TRIGGER that fallback — but models are STILL black,
-so the fallback path itself isn't producing correct model data on iOS. **Next-session leads:** (a) confirm the
-fallback actually fires (does RLHD reach `ensureCapacity`'s null-branch, or is the persistent map requested via a
-different facade method / a different code path? add a one-shot log); (b) the fallback `glDeleteBuffers(id);
-id = glGenBuffers()` RECREATES the buffer object — the VAO vertex-attrib bindings + the `tbo` texture attach
-(`glTexBuffer`) point at the OLD id and may need re-binding after the recreate (the static `GLTextureBuffer`
-re-attaches in `ensureCapacity` on id-change, but the DynamicModelVAO `vboRender`/`vboStaging` VAO bindings might
-not); (c) `DynamicModelVAO` has a `useStagingBuffer && SUPPORTS_STORAGE_BUFFERS` split (`:66`) — `SUPPORTS_STORAGE_
-BUFFERS` is false on iOS, so the `:75-83` single-buffer branch is used; trace its map()/unmap()/render() (`:144`+)
-and whether `vboRender==vboStaging` survives the STORAGE_NONE recreate; (d) the model COLOUR comes from the
-per-face `tbo` (VAO::TBO, a GLTextureBuffer) — same TBO→2D repack as the (working) static scene, so if positions
-are right but colour is black, suspect the dynamic tbo's repack timing/binding specifically. The static-scene win
-stands on its own; the dynamic models are a contained next task.
+**ANIMATED MODELS — DIAGNOSED + FIXED (`fbbe40945`, awaiting device confirm).** The player + NPCs rendered as
+BLACK silhouettes (geometry correct, per-face colour zero) while the static scene was perfectly textured. Lead (d)
+above was right: it's the per-face `tbo` (VAO::TBO `GLTextureBuffer`) repack, NOT persistent mapping. The earlier
+`7fe1563c3` (force `z_glMapBufferRange`→NULL for `GL_MAP_PERSISTENT_BIT`) was **inert**: on iOS `SUPPORTS_STORAGE_
+BUFFERS=false` (`GL_ARB_buffer_storage` false; `rc_make_caps` only sets `OpenGL33`), so `isStorageBuffer()` is false
+for every buffer → `ensureCapacity`'s persistent block (`GLBuffer.java:451-489`) is **never entered** and
+`GL_ARB_map_buffer_range` is false so the writer maps via `z_glMapBuffer` (range fn unused on this path). Both the
+dynamic VBO and TBO go through the plain `glBufferData` + `glMapBuffer` path — same as the static scene (hence the
+silhouettes upload).
+
+**Root cause:** iOS can't put the textureFaces buffer on a real `GL_TEXTURE_BUFFER` (ES 3.2), so `GLTextureBuffer`
+(iOS override) backs it on `GL_COPY_WRITE_BUFFER` and the bridge *copies* the bytes into a 2D RGB32I texture at
+`glTexBuffer` time — a snapshot, not a desktop aliasing view, so it must be re-run AFTER the data is written.
+`GLTextureBuffer.unmap()` does that (`super.unmap()` + `attachTextureBuffer()`); the **static** scene gets it
+because `Zone.unmap()` calls `tboF.unmap()`. But the **dynamic** models stream per-face data through
+`GLMappedBufferIntWriter`, whose `flush()` unmapped via `mappedBuffer.unmap()` (the `GLMappedBuffer` directly) —
+bypassing the `GLTextureBuffer` override → the 2D colour texture kept the empty `initialize()` snapshot → every
+model sampled zero colour → black.
+
+**Fix:** new `java-overrides/.../GLMappedBufferIntWriter.java` — `flush()` unmaps through `buffer.unmap()` (the
+owning `GLBuffer`) instead of `mappedBuffer.unmap()`, so the `GLTextureBuffer` override re-runs the repack with the
+filled buffer (`buffer == mappedBuffer.getOwner()`, `buffer.mappedBuffer == this.mappedBuffer` → same
+`GLMappedBuffer`, plus the repack; for the plain VBO/EBO writers there's no `unmap` override so it's identical to
+before). Inert on desktop. `DynamicModelVAO.unmap()` runs on the render/GL thread (`ZoneRenderer` PASS_ALPHA), so
+the repack lands on the EAGL context thread like the static path. Staged GREEN (jar md5 `ec35374e`, class md5
+`ff2d464a`); app built + installed on device. **NEXT: user attaches StikDebug + taps `▶ 117HD (Zone)` → expect
+textured player/NPCs = FULL render. If still black, pull the LAST session's `client.log` (cumulative) — suspect
+repack thread/binding or whether `DynamicModelVAO` uses a path that doesn't funnel through this writer's flush.**
 
 **Cleanup still owed (deferred, non-blocking):** the JavaBridge continuous frame-dump diagnostic was reverted (tree
 clean) but the gpu-zone shaders + diagnostics around it are fine; `ShaderOverlay` (a dev debug overlay) fails its
