@@ -1071,15 +1071,17 @@ class MainActivity : AppCompatActivity() {
             opts.add("-Drunelite.headless.resize=${renderW}x${renderH}")
             Log.i(TAG, "A7 resize armed: ${renderW}x${renderH} (screen ${longEdge}x${shortEdge}; resizable iff account in resizable display mode)")
         }
-        if (autologinArmed && !rlhd) {
+        // 117HD auto-login: on a real home-network device login works, so autologin straight in-world (RLHDStarter
+        // engages at LOGGED_IN too) — the desired turnkey launch. SKIP it only for the Firebase DATACENTER pre-login
+        // case (an explicit rlhd_prelogin.mode marker): there the world connect is WAF-blocked and autologin would
+        // churn at state=UNKNOWN forever instead of settling at LOGIN_SCREEN, so the Zone shader-compile proof needs
+        // the clean login screen. Default (no marker) = autologin, including in routecrlhd.
+        val rlhdPreLogin = rlhd && File(app.getExternalFilesDir(null), "rlhd_prelogin.mode").exists()
+        if (autologinArmed && !rlhdPreLogin) {
             opts.addAll(JagexTokens.autologinOpts)
-            Log.i(TAG, "autologin ARMED (tokens.json present): EULA 302,312 -> Play Now 382,248, world 301")
+            Log.i(TAG, "autologin ARMED (tokens.json present)${if (rlhd) " [routecrlhd -> RLHDStarter loads 117HD at LOGGED_IN]" else ""}: EULA 302,312 -> Play Now 382,248, world 301")
         } else if (rlhd) {
-            // AG3-c is pre-login (the Zone shader compile + startUp only need the cache + login screen). Do NOT
-            // autologin: on a datacenter device (Firebase) the world connect is WAF-blocked, and the client then
-            // churns in state=UNKNOWN forever instead of settling at LOGIN_SCREEN — so RLHDStarter (which engages at
-            // LOGIN_SCREEN/LOGGED_IN) never fires. No autologin -> clean LOGIN_SCREEN -> RLHDStarter loads 117HD.
-            Log.i(TAG, "routecrlhd: autologin SKIPPED (shader compile is pre-login; settle at LOGIN_SCREEN)")
+            Log.i(TAG, "routecrlhd: autologin SKIPPED (rlhd_prelogin marker -> settle at LOGIN_SCREEN for the datacenter shader compile)")
         }
         if (census) {
             // A-1b runtime gate-flip census: turn on the remaining read-surface gates (menupeek + autologin

@@ -87,12 +87,14 @@ if [ "$MODE" = "rlhd" ]; then
   # gates on vanillaTexturesAvailable, not LOGGED_IN), so the datacenter login block is IRRELEVANT here — we only need
   # the real ES-3.2 GPU (Pixel 8/Mali = TBO/IO-blocks/geometry core, which the SwiftShader emulator lacks).
   MARKER="$(mktemp)"; printf 'routecrlhd\n' > "$MARKER"
-  # NO tokens: the Zone shader compile is pre-login, and pushing tokens arms the gamepack's launcher login, which on
-  # a datacenter device churns in state=UNKNOWN (world connect WAF-blocked) and never settles at LOGIN_SCREEN — so
-  # RLHDStarter never fires. Marker only -> boots without login -> clean LOGIN_SCREEN -> 117HD loads + compiles.
+  # Pre-login: the Zone shader compile happens at the LOGIN SCREEN. Tokens are now baked into the APK asset, so
+  # autologin would arm and churn at state=UNKNOWN on this datacenter device (world connect WAF-blocked) and never
+  # settle at LOGIN_SCREEN — so seed an rlhd_prelogin.mode marker (MainActivity skips autologin when present) to
+  # keep the clean LOGIN_SCREEN -> RLHDStarter -> 117HD compile path. (On a real home device, no marker = autologin.)
   # Also seed the shader-dump marker (librlawt logs the numbered downported source so a driver "0:N" error maps to
   # a source line). Set FB_NO_SHADERDUMP=1 to skip once the Zone shaders compile clean.
-  if [ -z "${FB_NO_SHADERDUMP:-}" ]; then OTHER=(--other-files "$DEV_RLHD=$MARKER,$DEV_FILES/rlhd_shaderdump=$MARKER"); else OTHER=(--other-files "$DEV_RLHD=$MARKER"); fi
+  PRELOGIN="$DEV_FILES/rlhd_prelogin.mode=$MARKER"
+  if [ -z "${FB_NO_SHADERDUMP:-}" ]; then OTHER=(--other-files "$DEV_RLHD=$MARKER,$PRELOGIN,$DEV_FILES/rlhd_shaderdump=$MARKER"); else OTHER=(--other-files "$DEV_RLHD=$MARKER,$PRELOGIN"); fi
   PULL=(--directories-to-pull "$DEV_FRAMES,$DEV_FILES/rl-capture")   # rl-capture = the 117HD-rendered frames
   : "${FB_TIMEOUT:=420s}"   # plugin load + the full Zone shader compile + startUp + a frame dump
   # Robo (the default) force-stops + relaunches the app every few seconds and crawls the UI (it reached
