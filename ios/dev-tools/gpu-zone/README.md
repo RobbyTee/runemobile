@@ -49,19 +49,35 @@ the `MATERIAL_CONSTANTS` named-material defines are replicated in the config. **
 its interface-block false-positives) that reports many #13 sites per pass — works for shadow/ui, but **not scene**
 (glslang bails at scene's in/out interface blocks, which Apple's EAGL accepts).
 
-**Gate run (Apple Simulator ES 3.0 = the authority): 6/6 COMPILE + 3/3 LINK ✅ — `Z0_ZONE_SHADER_GATE_GREEN`**
-(sealed, `evidence/gpu-zone-z0-sim-GREEN.log`, md5 `f61963a506ef288f32ca13a16b22a0ee`; `./gpu-zone-z0-verdict.sh`
-reproduces). All of scene/shadow/ui × vert/frag compile to ES 3.00, AND all three programs **link** (so the vertex-out
-interface blocks match the fragment-in blocks — no varying mismatch). Cleared: `#version`-first, precision,
-zero-array, MAT_*-constants, the shadows-off `sampleShadowMap` int-`0` stub macro, and the full #13 int↔float pass.
-ios-overrides: `utils/color_utils.glsl`, `utils/water.glsl`, `utils/fog.glsl` (pervasively cast-heavy); everything
-else via targeted CAST rules in the assembler. Also fixed a real downport bug (the `f`-suffix strip corrupting
-`material1.flowMap`→`lowMap`).
+**Z0 COMPLETE — GREEN ON THE REAL DEVICE ✅** (iPhone 17 Pro Max, A19 Pro, `GL_VERSION = OpenGL ES 3.0 Metal -
+104.1`): **6/6 compile + 3/3 link → `Z0_ZONE_SHADER_GATE_GREEN`**, sealed `evidence/gpu-zone-z0-DEVICE-GREEN.log`
+(md5 `6690f2b89cb5c4f183e9147926afa4c2`; `./gpu-zone-z0-verdict.sh` reproduces). The Sim run is kept too
+(`evidence/gpu-zone-z0-sim-GREEN.log`) — Sim and device agree, retiring the "Sim compiler ≠ A19" caveat. All of
+scene/shadow/ui × vert/frag compile to ES 3.00 AND all three programs link (vertex-out interface blocks match the
+fragment-in blocks — no varying mismatch). **GpuZone has no JVM/JIT** (pure EAGL shader-compile probe), so the device
+run is just `devicectl install` + `process launch` — no StikDebug. Cleared: `#version`-first, precision, zero-array,
+MAT_*-constants, the shadows-off `sampleShadowMap` int-`0` stub macro, the full #13 int↔float pass. ios-overrides:
+`utils/color_utils.glsl`, `utils/water.glsl`, `utils/fog.glsl`; everything else via targeted CAST rules. Also fixed a
+real downport bug (the `f`-suffix strip corrupting `material1.flowMap`→`lowMap`).
 
-**Remaining for Z0 → sealed-on-device:** a **device confirm** (the Simulator GLES compiler ≠ A19, the standing B1
-caveat) — run the GpuZone app on the iPhone via StikDebug, pull `Documents/gpu-zone-z0-verdict.log`, re-seal the md5
-from the device log. Then **Phase B0** renderer bring-up (HD-ZONE-B0-SCOPE.md: stage the RLHD jar, facade
-`glTexBuffer`→2D `glTexImage2D` upload, facade-delta scan, Java conformance fixes, boot).
+**Next: Phase B0** renderer bring-up (`ios/HD-ZONE-B0-SCOPE.md`): stage the RLHD jar (`stage-ios-zone-jar.sh`
+analogue), facade `glTexBuffer`→2D `glTexImage2D` RGB32I upload (blocker #1), facade-delta scan + impl, Java
+conformance fixes (#2/#11/#14), boot the ZoneRenderer. (Z0 used the minimal flat-scene config — shadows/tiled/
+dynamic-lights/displacement/POM OFF; enabling those in B1+ surfaces their shader code's own #13 sites, which the
+assembler config + CAST map grow to cover.)
+
+### Device run (reproduce)
+```sh
+cd ios/dev-tools/gpu-zone && xcodegen generate
+xcodebuild -project GpuZone.xcodeproj -scheme GpuZone -destination 'generic/platform=iOS' \
+  -derivedDataPath build-ios -allowProvisioningUpdates build
+DEV=<iphone-uuid>   # xcrun devicectl list devices
+xcrun devicectl device install app --device "$DEV" build-ios/Build/Products/Debug-iphoneos/GpuZone.app
+xcrun devicectl device process launch --device "$DEV" dev.audaro.gpuzone   # no StikDebug needed
+xcrun devicectl device copy from --device "$DEV" --domain-type appDataContainer \
+  --domain-identifier dev.audaro.gpuzone --source Documents/gpu-zone-z0-verdict.log --destination ./z0-device.log
+./gpu-zone-z0-verdict.sh ./z0-device.log <md5>
+```
 
 **Iterate loop:** edit `assemble/ZoneShaderAssemble.java` (CAST rules) or add an `ios-overrides/` file →
 `cd assemble && javac ZoneShaderAssemble.java && java ZoneShaderAssemble` → for shadow/ui: `./glslang-check.sh`

@@ -3,3 +3,4 @@
 build/
 # host-JVM assembler class files (regenerate with javac)
 *.class
+build-ios/

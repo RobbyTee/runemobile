@@ -10,8 +10,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-LOG="${1:-evidence/gpu-zone-z0-sim-GREEN.log}"
-EXPECT_MD5="${2:-f61963a506ef288f32ca13a16b22a0ee}"   # sealed Simulator GREEN (6/6 zone shaders compile ES 3.00)
+LOG="${1:-evidence/gpu-zone-z0-DEVICE-GREEN.log}"
+EXPECT_MD5="${2:-6690f2b89cb5c4f183e9147926afa4c2}"   # sealed DEVICE GREEN (A19 Pro, real EAGL ES3): 6/6 compile + 3/3 link
 [ -n "$LOG" ] && [ -f "$LOG" ] || { echo "!! usage: gpu-zone-z0-verdict.sh <log> [expected_md5]   (log not found)" >&2; exit 1; }
 
 ACTUAL_MD5="$(md5 -q "$LOG" 2>/dev/null || md5sum "$LOG" | awk '{print $1}')"
