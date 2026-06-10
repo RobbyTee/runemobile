@@ -175,6 +175,7 @@ public final class JavaBridge
 	                                      // clearHover may run from the client thread after a snap tap)
 	private static boolean pressed;
 	private static int pressButton = MouseEvent.BUTTON1;
+	private static boolean shiftHeld;     // sticky-Shift: a held VK_SHIFT KEY_PRESSED with no release (see setShiftHeld)
 
 	// Camera (two-finger pan -> direct yaw/pitch target). Sub-pixel remainders so a slow drag still turns
 	// (a small per-event pixel delta would otherwise truncate to 0 yaw units).
@@ -1347,6 +1348,46 @@ public final class JavaBridge
 			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, kc));
 		}
 		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, vk, kc));
+	}
+
+	/**
+	 * Sticky-Shift: hold (or release) the SHIFT modifier so the engine's {@code client.isKeyPressed(KC_SHIFT)}
+	 * path reads true without a hardware key. On touch there is no physical shift, yet a large QoL surface gates
+	 * on it — Menu Entry Swapper shift-to-customize, shift deposit/withdraw/shop-quantity swaps, Ground/Object/NPC
+	 * "Shift + right-click to mark", overlay SHIFT+right-click "Configure". A native sticky-"Shift" toggle calls
+	 * this; the gamepack's own {@code Canvas} KeyListener (which feeds its pressed-key array) receives the posted
+	 * event, exactly as our text injection does. {@code held=true} posts ONE {@code KEY_PRESSED VK_SHIFT} (no
+	 * release); {@code held=false} posts the matching {@code KEY_RELEASED}. Transition-gated so a held toggle
+	 * isn't re-posted every frame. (Proven on the live engine by {@code ShiftFeedSpike}: a single held press
+	 * flips {@code isKeyPressed(KC_SHIFT)} true and a release clears it; if a long hold is ever observed to clear
+	 * — e.g. on a focus change — a per-frame re-assert from {@code register} is the fix.) No {@code KEY_TYPED}: a
+	 * modifier produces none.
+	 */
+	public static void setShiftHeld(boolean held)
+	{
+		if (held == shiftHeld)
+		{
+			return;
+		}
+		final Canvas canvas = liveCanvas();
+		if (canvas == null)
+		{
+			return;
+		}
+		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+		final long t = System.currentTimeMillis();
+		if (held)
+		{
+			ensureFocus(q, canvas);
+			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, InputEvent.SHIFT_DOWN_MASK,
+				KeyEvent.VK_SHIFT, KeyEvent.CHAR_UNDEFINED, KeyEvent.KEY_LOCATION_LEFT));
+		}
+		else
+		{
+			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t, 0,
+				KeyEvent.VK_SHIFT, KeyEvent.CHAR_UNDEFINED, KeyEvent.KEY_LOCATION_LEFT));
+		}
+		shiftHeld = held;
 	}
 
 	/**

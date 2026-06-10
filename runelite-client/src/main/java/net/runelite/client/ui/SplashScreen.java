@@ -158,6 +158,14 @@ public class SplashScreen extends JFrame implements ActionListener
 
 	public static void init()
 	{
+		// Mobile/embedded (iOS/Android) has its own native launch UI and no desktop window system — creating this
+		// Swing JFrame splash under CACIO aborts whatever path opened it. Notably ExternalPluginManager.refreshPlugins
+		// calls init() before downloading, so a throw here means hub plugins are recorded in config but never
+		// downloaded/loaded (they show "installed" in the hub yet never appear in My Plugins). Skip the splash.
+		if (Boolean.getBoolean("runelite.nosplash"))
+		{
+			return;
+		}
 		try
 		{
 			SwingUtilities.invokeAndWait(() ->

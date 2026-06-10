@@ -24,9 +24,11 @@
  */
 package net.runelite.client.headless;
 
+import java.util.concurrent.atomic.AtomicInteger;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.ScriptID;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.gameval.VarbitID;
@@ -87,6 +89,15 @@ public final class HudVeneerBridge
 	private static volatile int sideX = -1;
 	private static volatile int sideY = -1;
 
+	// Minimap ENLARGE (make the top-right globe bigger). 0 = natural size. Resizing the draw-area widget (MINIMAP)
+	// makes the engine render a bigger globe (terrain + dots scale, click-to-walk follows for free since
+	// Perspective.localToMinimap reads that widget's centre/size). The globe is RIGHT+TOP anchored so it grows
+	// left+down about its fixed top-right corner; the surrounding chrome (compass / orbs / world-map / wiki / store)
+	// are separate fixed widgets that DON'T scale, so we reposition them about that same corner to keep them hugging
+	// the bigger globe, and hide the now-mismatched frame ring. Driven from native (setMinimapScale) or, off-device,
+	// the -Drunelite.hudveneer.test.minimapScalePct prop.
+	private static volatile int minimapScalePct;
+
 	// Tab stones. The native 2-col tab grid replaces them, so we HIDE all 14 engine stones (removes the gray cover
 	// patch the old proxy approach needed) and switch tabs by REPLAYING the stone's own op script — which works
 	// even with the stone hidden (TabScriptProbe: replay + worksHidden GREEN). pendingOpenTab is a one-shot action
@@ -103,8 +114,27 @@ public final class HudVeneerBridge
 	private static volatile int chatAreaW;
 	private static volatile String chatSnapshotJson = "{\"loggedIn\":false}";
 
-	private static final int CHAT_DEFAULT_W = 519;   // the engine's native chatbox width (from the layout dump)
-	private static final int CHAT_BOTTOM_MARGIN = 4; // px of breathing room so the newest line isn't clipped
+	// Native chat-tab SWITCH: which tab (0..7 index into CHAT_TAB_IDS) the native veneer asked to open. The engine
+	// tab sprites are hidden (so they don't peek under the native row), which makes them unclickable — so switching
+	// REPLAYS the tab's op-script instead of clicking, the same way the bottom tab-grid drives the hidden stones.
+	// One-shot, applied on the client thread in tick(). -1 = nothing pending.
+	private static volatile int pendingChatTab = -1;
+
+
+	// Chat COLLAPSE: when the user taps the already-active tab, the chat box hides (mobile behaviour); a tap on any
+	// tab reopens it. Driven from native (setChatCollapsed). While collapsed the engine CHAT_CONTAINER is hidden.
+	private static volatile boolean chatCollapsed;
+
+	// Finger-scroll: accumulated chat scroll delta (canvas px) requested from native, applied on the client thread
+	// in tick() via the chatbox's own scroll layer/scrollbar — NOT via a mouse wheel (the wheel also zooms the
+	// camera because the transparent chat sits over the viewport). +delta = toward newer (bottom).
+	private static final AtomicInteger pendingChatScroll = new AtomicInteger(0);
+
+	private static final int CHAT_DEFAULT_W = 519;       // the engine's native chatbox width (from the layout dump)
+	// Collapse = shove the live chatbox this far below its anchor (off-canvas) instead of hiding it, so its
+	// history + selected channel survive and reopening is instant. Far enough to clear any stretched canvas.
+	private static final int CHAT_COLLAPSE_OFFSCREEN_DY = 3000;
+	private static final int ORIG_CHAT_CONTENT_H = 142;  // the natural message-area height (container 165 − CONTROLS 23)
 
 	// Desktop off-device test harness: when -Drunelite.hudveneer.test=true, auto-apply the same chat veneer the
 	// native shell drives (relocate + enlarged-tab geometry) once logged in, so the headless capture renders the
@@ -144,6 +174,14 @@ public final class HudVeneerBridge
 	{
 		minimapX = x;
 		minimapY = y;
+	}
+
+	/** Native: enlarge the engine minimap to {@code scalePct}% of its natural size (e.g. 130 = 30% bigger).
+	 *  {@code 0} (or 100) = natural size. The globe + its chrome are re-laid each frame in {@link #tick}; the cluster
+	 *  stays the live engine HUD, so click-to-walk + orb clicks keep working. */
+	public static void setMinimapScale(int scalePct)
+	{
+		minimapScalePct = scalePct <= 0 ? 0 : scalePct;
 	}
 
 	/** Native: relocate the engine side panel ({@code SIDE_CONTAINER}) to canvas {@code (x,y)}. {@code x < 0} stops.
@@ -192,6 +230,27 @@ public final class HudVeneerBridge
 		return chatSnapshotJson;
 	}
 
+	/** Native: scroll the chat by {@code deltaCanvasPx} (positive = toward newer/bottom). Accumulated and applied
+	 *  on the client thread in {@link #tick} via the chatbox scroll layer — no mouse wheel, so the camera doesn't
+	 *  zoom (the transparent chat overlays the viewport, where a wheel would zoom). */
+	public static void scrollChat(int deltaCanvasPx)
+	{
+		pendingChatScroll.addAndGet(deltaCanvasPx);
+	}
+
+	/** Native: switch the chat to tab {@code index} (0..7 into the 7 native tabs + Report) by REPLAYING that tab's
+	 *  op-script on the client thread — works even though the engine tab is hidden (a click wouldn't). One-shot. */
+	public static void switchChatTab(int index)
+	{
+		pendingChatTab = index;
+	}
+
+	/** Native: collapse (hide) or expand the chat box. Tapping the active tab collapses; tapping any tab expands. */
+	public static void setChatCollapsed(boolean collapsed)
+	{
+		chatCollapsed = collapsed;
+	}
+
 	/** Re-apply the requested chatbox state each frame. Client thread. */
 	public static void tick(Client c)
 	{
@@ -219,14 +278,24 @@ public final class HudVeneerBridge
 			final boolean preEoc = c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
 			final int chatId = preEoc ? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER;
 
+			// Chat box: keep the engine chatbox FULLY ALIVE at all times (never hidden). To "collapse" (the user
+			// tapped the active tab) we shove the live widget far off-screen; reopening just moves it back — instant
+			// and full, with NO interface teardown, tab-selection loss, or rebuild. (Hiding the container tore the
+			// chat down, so reopen showed an empty box until a second tap.) The native tab row stays put because
+			// buildChatSnapshot reports the configured chatX/chatY, not the widget's moved position.
 			if (chatX >= 0)
 			{
 				final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
 				final int rowW = chatAreaW > 0 ? chatAreaW : CHAT_DEFAULT_W;
+				final int drawY = chatCollapsed ? chatY + CHAT_COLLAPSE_OFFSCREEN_DY : chatY;
 				final Widget w = c.getWidget(chatId);
 				if (w != null)
 				{
-					w.setForcedPosition(chatX, chatY);
+					if (w.isHidden())
+					{
+						w.setHidden(false);   // safety: we never hide it now, but restore if something else did
+					}
+					w.setForcedPosition(chatX, drawY);
 					// Widen the chat CONTAINER to the native row width so its children (the message area) can fill it.
 					if (w.getOriginalWidth() != rowW)
 					{
@@ -244,6 +313,20 @@ public final class HudVeneerBridge
 				// so position the children at (0, …) — using (chatX,chatY) double-offsets them right+down (the
 				// misalignment + bottom clip). CONTROLS at the container's top-left.
 				forcePos(c, InterfaceID.Chatbox.CONTROLS, 0, 0);
+				// Hide the engine's own tab sprites so they don't peek under the native 7-tab row (the engine lays 8
+				// tabs, incl. Report, across the same width, so they don't line up). Switching is NOT a proxy-click any
+				// more (the sprite IS the click target, and a hidden widget isn't clickable) — instead the native tap
+				// REPLAYS the tab's op-script ({@link #switchChatTab}), the same trick the bottom tab-grid uses for the
+				// hidden tab stones (the widget still RESOLVES + its script runs while hidden). Gated on the native row
+				// being active; un-hides when the native chrome is toggled off so the engine row shows.
+				setEngineChatTabsHidden(c, chatTabRowH > 0);
+				// Apply a pending tab switch (op-replay sets the channel; switchChatTabNow rebuilds the lines).
+				final int switchTab = pendingChatTab;
+				if (switchTab >= 0)
+				{
+					pendingChatTab = -1;
+					switchChatTabNow(c, switchTab);
+				}
 				// Resize + reposition the message area so it ALIGNS with the bigger native row (width = rowW) and
 				// FITS below it without clipping the newest line. Deterministic: read the chat container's real
 				// height, then pin CHATAREA to ABSOLUTE width=rowW and height=(containerH - rowH - margin) at
@@ -278,6 +361,12 @@ public final class HudVeneerBridge
 					forceWidth(c, InterfaceID.Chatbox.CHAT_BACKGROUND, rowW, 0);
 				}
 				buildChatSnapshot(c);
+				// Apply any finger-scroll requested from native (client thread — runScript is legal here).
+				final int scrollDelta = pendingChatScroll.getAndSet(0);
+				if (scrollDelta != 0)
+				{
+					applyChatScroll(c, scrollDelta);
+				}
 				dumpChatLayoutOnce(c, chatId);
 			}
 			else if (hideChat)
@@ -301,6 +390,21 @@ public final class HudVeneerBridge
 					w.setForcedPosition(minimapX, minimapY);
 					w.revalidate();
 				}
+			}
+
+			// Minimap ENLARGE: resize the globe + reposition its chrome so the whole cluster reads as a bigger
+			// minimap. Off-device the scale comes from the test prop; on device it's driven by native setMinimapScale.
+			if (TEST_APPLY)
+			{
+				final int p = Integer.getInteger("runelite.hudveneer.test.minimapScalePct", 0);
+				if (p > 0)
+				{
+					minimapScalePct = p;
+				}
+			}
+			if (minimapScalePct > 0)
+			{
+				applyMinimapScale(c, preEoc, minimapScalePct);
 			}
 
 			// Side panel relocate (independent). No-op until a tab is open (SIDE_CONTAINER then becomes non-null).
@@ -406,6 +510,258 @@ public final class HudVeneerBridge
 				return;
 			}
 			c.createScriptEventBuilder(op).setSource(w).setOp(1).build().run();
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	/** Switch the chat to tab {@code idx} by replaying that tab's op-script with op 1 (the left-click action) — the
+	 *  same replay the tab stones use, so it works while the engine tab sprite is hidden. The op listener may sit on
+	 *  the tab button (base) or its graphic child (base+1), so try both. Client thread. */
+	private static void switchChatTabNow(Client c, int idx)
+	{
+		if (idx < 0 || idx >= CHAT_TAB_IDS.length)
+		{
+			return;
+		}
+		final int base = CHAT_TAB_IDS[idx];
+		if (!replayOp(c, base, 1))
+		{
+			replayOp(c, base + 1, 1);   // the op listener may sit on the graphic child instead of the button
+		}
+		// The op-replay sets CHAT_VIEW but doesn't re-render the message list (the engine does that as part of the
+		// real click). Force the chatbox to rebuild so the newly-selected channel's messages actually show.
+		try
+		{
+			c.runScript(ScriptID.BUILD_CHATBOX);
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	/** Replay a widget's op-script with the given op. Returns {@code true} if the widget has an op listener (so the
+	 *  replay ran). Works on hidden widgets — {@code getWidget} resolves them and the script runs regardless. */
+	private static boolean replayOp(Client c, int id, int op)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			if (w == null)
+			{
+				return false;
+			}
+			final Object[] l = w.getOnOpListener();
+			if (l == null)
+			{
+				return false;
+			}
+			c.createScriptEventBuilder(l).setSource(w).setOp(op).build().run();
+			return true;
+		}
+		catch (RuntimeException ex)
+		{
+			return false;
+		}
+	}
+
+	// Minimap-enlarge geometry. The globe draw-area widget is RIGHT+TOP anchored, so growing its absolute size keeps
+	// its top-right corner fixed and grows it left+down; at 130% the rendered terrain disc is centre ~(120,100)
+	// radius ~87 (cluster-local). The chrome is then placed at explicit cluster-local targets (see applyMinimapScale)
+	// tuned to match the official OSRS-Mobile layout for that disc.
+	private static final int MM_NAT_SIZE = 152;   // natural globe draw-area width/height
+	private static boolean minimapTreeDumped;
+	private static boolean minimapScaleLogged;
+
+	/** One-time recursive dump of the minimap cluster (MAP_CONTAINER tree) + the named chrome widgets, so a fresh
+	 *  session can see the exact child layout (bounds / relative / size modes / sprite / type) before designing the
+	 *  enlarge-and-reposition. Off-device research only. */
+	private static void dumpMinimapTree(Client c, boolean preEoc)
+	{
+		final int[] ids = {
+			InterfaceID.ToplevelPreEoc.MAP_CONTAINER, InterfaceID.ToplevelPreEoc.MAP_MINIMAP,
+			InterfaceID.ToplevelPreEoc.MINIMAP, InterfaceID.ToplevelPreEoc.COMPASSCLICK,
+			InterfaceID.ToplevelPreEoc.MAP_MINIMAP_GRAPHIC6, InterfaceID.ToplevelPreEoc.MAP_MINIMAP_GRAPHIC9,
+			InterfaceID.ToplevelPreEoc.ORBS,
+			InterfaceID.ToplevelPreEoc.MAP_NOCLICK_0, InterfaceID.ToplevelPreEoc.MAP_NOCLICK_1,
+			InterfaceID.ToplevelPreEoc.MAP_NOCLICK_2, InterfaceID.ToplevelPreEoc.MAP_NOCLICK_3,
+			InterfaceID.ToplevelPreEoc.MAP_NOCLICK_4, InterfaceID.ToplevelPreEoc.MAP_NOCLICK_5,
+		};
+		final String[] names = {
+			"MAP_CONTAINER", "MAP_MINIMAP", "MINIMAP", "COMPASSCLICK", "GRAPHIC6", "GRAPHIC9", "ORBS",
+			"NOCLICK0", "NOCLICK1", "NOCLICK2", "NOCLICK3", "NOCLICK4", "NOCLICK5",
+		};
+		for (int i = 0; i < ids.length; i++)
+		{
+			dumpWidget(c, names[i], ids[i], false);
+		}
+		// The individual orbs live in the Orbs sub-interface (group 0xa0) hosted in the ORBS layer — dump them by id
+		// so we get the HP/prayer/run/spec orb + world-map/wiki/store icon + XP-button canvas positions.
+		final int[] orbIds = {
+			InterfaceID.Orbs.XP_DROPS, InterfaceID.Orbs.CR_BACKING, InterfaceID.Orbs.ORB_HEALTH,
+			InterfaceID.Orbs.ORB_PRAYER, InterfaceID.Orbs.ORB_RUNENERGY, InterfaceID.Orbs.ORB_SPECENERGY,
+			InterfaceID.Orbs.ORB_STORE, InterfaceID.Orbs.ORB_WORLDMAP, InterfaceID.Orbs.WIKI,
+		};
+		final String[] orbNames = {
+			"XP_DROPS", "CR_BACKING", "ORB_HEALTH", "ORB_PRAYER", "ORB_RUNENERGY", "ORB_SPECENERGY",
+			"ORB_STORE", "ORB_WORLDMAP", "WIKI",
+		};
+		for (int i = 0; i < orbIds.length; i++)
+		{
+			dumpWidget(c, orbNames[i], orbIds[i], false);
+		}
+	}
+
+	private static void dumpWidget(Client c, String name, int id, boolean unused)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			if (w == null)
+			{
+				log.info("[veneer] mm-tree {} id={} = null", name, Integer.toHexString(id));
+				return;
+			}
+			dumpWidgetObj(name + " id=" + Integer.toHexString(id), w);
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	private static void dumpWidgetObj(String label, Widget w)
+	{
+		try
+		{
+			final java.awt.Rectangle b = w.getBounds();
+			log.info("[veneer] mm-tree {} type={} bounds={} rel=({},{}) orig=({},{},{}x{}) posMode=({},{}) sizeMode=({},{}) sprite={} model={} item={} hidden={} text='{}'",
+				label, w.getType(), b, w.getRelativeX(), w.getRelativeY(),
+				w.getOriginalX(), w.getOriginalY(), w.getOriginalWidth(), w.getOriginalHeight(),
+				w.getXPositionMode(), w.getYPositionMode(), w.getWidthMode(), w.getHeightMode(),
+				safeSpriteId(w), safeModelId(w), safeItemId(w), w.isHidden(), shortText(w));
+		}
+		catch (RuntimeException ex)
+		{
+			log.info("[veneer] mm-tree {} threw {}", label, String.valueOf(ex));
+		}
+	}
+
+	private static int safeModelId(Widget w)
+	{
+		try
+		{
+			return w.getModelId();
+		}
+		catch (RuntimeException ex)
+		{
+			return -1;
+		}
+	}
+
+	private static int safeItemId(Widget w)
+	{
+		try
+		{
+			return w.getItemId();
+		}
+		catch (RuntimeException ex)
+		{
+			return -1;
+		}
+	}
+
+	private static String shortText(Widget w)
+	{
+		try
+		{
+			final String t = stripTags(w.getText());
+			return t.length() > 16 ? t.substring(0, 16) : t;
+		}
+		catch (RuntimeException ex)
+		{
+			return "";
+		}
+	}
+
+	/** Minimap-enlarge hook (currently DISABLED by default — {@code scalePct <= 100} no-ops). A clean bigger minimap
+	 *  is not achievable by editing the engine widgets: the engine hard-pins every orb/icon each frame (so they can't
+	 *  be rearranged to wrap a bigger globe) and the globe draw-area can only be resized, not repositioned (re-anchoring
+	 *  it desyncs the minimap raster and the terrain stops drawing), so resizing alone grows the globe into the fixed
+	 *  orbs. The size-only path is kept here for reference. Native-HUD layout is Classic (PreEoc 164) only. */
+	private static void applyMinimapScale(Client c, boolean preEoc, int scalePct)
+	{
+		if (!preEoc)
+		{
+			return;   // the native HUD veneer only supports the Classic resizable layout
+		}
+		try
+		{
+			final Widget mm = c.getWidget(InterfaceID.ToplevelPreEoc.MINIMAP);
+			if (mm == null)
+			{
+				return;   // cluster not built yet (welcome screen etc.)
+			}
+			if (TEST_APPLY && !minimapTreeDumped)
+			{
+				minimapTreeDumped = true;   // off-device record of the natural layout, before this frame's resize
+				dumpMinimapTree(c, preEoc);
+			}
+			if (scalePct <= 100)
+			{
+				return;   // disabled → leave the natural minimap untouched (its layout IS the official-mobile layout)
+			}
+			// LIMITATION (confirmed off-device, 2026-06-07): a clean BIGGER minimap is not achievable by editing the
+			// engine widgets. The engine hard-pins every minimap orb/icon to a fixed position each frame
+			// (setForcedPosition updates the getter but is ignored at render — readback-confirmed), so the orbs can't
+			// be rearranged to wrap a bigger globe; and the globe draw-area can only be RESIZED — repositioning or
+			// re-anchoring it (to grow away from the orbs) desyncs the engine's minimap raster and the terrain stops
+			// drawing. So resizing alone grows the globe left+down INTO the fixed orbs (they overlap). This size-only
+			// path is kept (off by default) for reference; a genuinely bigger minimap needs a native scaled blit of
+			// the whole MAP_CONTAINER region (uniform but soft + re-do hit-testing), not this.
+			final double s = scalePct / 100.0;
+			final int gs = (int) Math.round(MM_NAT_SIZE * s);
+			if (mm.getWidthMode() != WidgetSizeMode.ABSOLUTE || mm.getOriginalWidth() != gs
+				|| mm.getHeightMode() != WidgetSizeMode.ABSOLUTE || mm.getOriginalHeight() != gs)
+			{
+				mm.setWidthMode(WidgetSizeMode.ABSOLUTE);
+				mm.setHeightMode(WidgetSizeMode.ABSOLUTE);
+				mm.setOriginalWidth(gs);
+				mm.setOriginalHeight(gs);
+				mm.revalidate();
+			}
+			hide(c, InterfaceID.ToplevelPreEoc.MAP_MINIMAP_GRAPHIC9);   // frame ring no longer matches the bigger globe
+			if (!minimapScaleLogged)
+			{
+				minimapScaleLogged = true;
+				log.info("[veneer] MINIMAP_SCALE scalePct={} globe={}px (natural {})", scalePct, gs, MM_NAT_SIZE);
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	/** Scroll the chat message layer by {@code delta} canvas px (clamped), driving the chatbox's own scroll layer
+	 *  ({@code SCROLLAREA}, the parent of the message lines) + scrollbar ({@code CHATSCROLLBAR}) via the engine's
+	 *  {@code UPDATE_SCROLLBAR} script — the same path the scrollbar arrows use. No mouse-wheel event, so the camera
+	 *  doesn't also zoom. Client thread. */
+	private static void applyChatScroll(Client c, int delta)
+	{
+		try
+		{
+			final Widget area = c.getWidget(InterfaceID.Chatbox.SCROLLAREA);
+			if (area == null)
+			{
+				return;
+			}
+			final int max = Math.max(0, area.getScrollHeight() - area.getHeight());
+			final int cur = area.getScrollY();
+			final int next = Math.max(0, Math.min(max, cur + delta));
+			if (next != cur)
+			{
+				c.runScript(ScriptID.UPDATE_SCROLLBAR, InterfaceID.Chatbox.CHATSCROLLBAR, InterfaceID.Chatbox.SCROLLAREA, next);
+			}
 		}
 		catch (RuntimeException ignore)
 		{
@@ -595,6 +951,34 @@ public final class HudVeneerBridge
 		}
 	}
 
+	/** Hide (or show) the engine chat-tab buttons' VISUALS — the per-tab sprite (base+1), channel name (base+2) and
+	 *  filter sub-label (base+3) — while leaving the base button widget shown so it stays a valid proxy-click target.
+	 *  Used to stop the engine's 8 tabs peeking out from under the native 7-tab veneer. */
+	private static void setEngineChatTabsHidden(Client c, boolean hidden)
+	{
+		for (final int base : CHAT_TAB_IDS)
+		{
+			setHidden(c, base + 1, hidden);   // GRAPHIC — the tab-background sprite
+			setHidden(c, base + 2, hidden);   // TEXT — the channel name
+			setHidden(c, base + 3, hidden);   // FILTER — the live "On"/"Off"/… sub-label (absent on some tabs)
+		}
+	}
+
+	private static void setHidden(Client c, int id, boolean hidden)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			if (w != null && w.isHidden() != hidden)
+			{
+				w.setHidden(hidden);
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
 	private static void forcePos(Client c, int id, int x, int y)
 	{
 		try
@@ -612,11 +996,12 @@ public final class HudVeneerBridge
 	}
 
 	/** Position + size the chatbox message area ({@code CHATAREA}) so it aligns with + fits under the enlarged
-	 *  native tab row. Deterministic: pin CHATAREA to ABSOLUTE width = the native row width and ABSOLUTE height =
-	 *  (chat-container height − tab-row height − a small margin), positioned at {@code (chatX, chatY+rowH)}. This
-	 *  avoids depending on the engine's size-mode arithmetic for the area itself; its display/scroll/line children
-	 *  still re-flow via THEIR parent-relative modes on revalidate. Size/mode are re-applied only when they drift
-	 *  (engine reset / first apply) so the scroll position isn't disturbed every frame; position every tick. */
+	 *  native tab row. Key: the chat CONTENT (the message display + the bottom input prompt) is fixed-height and
+	 *  does NOT shrink to a smaller area — shrinking CHATAREA clips the input line (the "username cut off until I
+	 *  send a message" report). So instead of shrinking the content, GROW the chat container by the extra tab-row
+	 *  height and keep CHATAREA at its full natural content height ({@code ORIG_CHAT_CONTENT_H}) below the tab row.
+	 *  The display/input/line children then keep their natural sizes and fit. Width is the native row width (the
+	 *  display children only need explicit widening when widened beyond the engine's default 519). */
 	private static void sizeChatArea(Client c, int containerId, int rowW, int rowH)
 	{
 		try
@@ -626,30 +1011,42 @@ public final class HudVeneerBridge
 			{
 				return;
 			}
+			// A chatbox rebuild (e.g. triggered by switching the chat tab via op-replay) can leave the message
+			// widgets HIDDEN, so the chat goes blank. Force them shown each frame — for the always-visible chat-at-top
+			// they should never be hidden.
+			setHidden(c, InterfaceID.Chatbox.CHATAREA, false);
+			setHidden(c, InterfaceID.Chatbox.CHATDISPLAY, false);
+			setHidden(c, InterfaceID.Chatbox.MES_LAYER, false);
+			setHidden(c, InterfaceID.Chatbox.SCROLLAREA, false);
+			// Grow the container so the full-height content sits BELOW the taller native tab row instead of being
+			// squeezed into the original 165px box. +2 breathing room so the bottom input line never edge-clips.
 			final Widget cont = c.getWidget(containerId);
-			final int containerH = (cont != null && cont.getHeight() > 0) ? cont.getHeight() : 165;
-			final int targetW = rowW;
-			final int targetH = Math.max(40, containerH - rowH - CHAT_BOTTOM_MARGIN);
-			area.setForcedPosition(0, rowH);   // RELATIVE to the container (already at chatX,chatY): below the tab row
-			if (area.getWidthMode() != WidgetSizeMode.ABSOLUTE || area.getHeightMode() != WidgetSizeMode.ABSOLUTE
-				|| area.getOriginalWidth() != targetW || area.getOriginalHeight() != targetH)
+			final int wantContainerH = rowH + ORIG_CHAT_CONTENT_H + 2;
+			if (cont != null && (cont.getHeightMode() != WidgetSizeMode.ABSOLUTE || cont.getOriginalHeight() != wantContainerH))
+			{
+				cont.setHeightMode(WidgetSizeMode.ABSOLUTE);
+				cont.setOriginalHeight(wantContainerH);
+				cont.revalidate();
+			}
+			// Message area: full natural content height, at the native row width, positioned below the tab row.
+			area.setForcedPosition(0, rowH);
+			if (area.getWidthMode() != WidgetSizeMode.ABSOLUTE || area.getOriginalWidth() != rowW
+				|| area.getHeightMode() != WidgetSizeMode.ABSOLUTE || area.getOriginalHeight() != ORIG_CHAT_CONTENT_H)
 			{
 				area.setWidthMode(WidgetSizeMode.ABSOLUTE);
+				area.setOriginalWidth(rowW);
 				area.setHeightMode(WidgetSizeMode.ABSOLUTE);
-				area.setOriginalWidth(targetW);
-				area.setOriginalHeight(targetH);
+				area.setOriginalHeight(ORIG_CHAT_CONTENT_H);
 				area.revalidate();
-				// The message display + scroll widgets size off the original 142-tall / 519-wide chat and do NOT
-				// inherit the resized CHATAREA via revalidate (confirmed on device: CHATDISPLAY stayed 505x130 while
-				// CHATAREA changed). So pin each to an ABSOLUTE size derived from the new area: width keeps their left
-				// margins (CHATDISPLAY/MES_LAYER inset 7px = -14; SCROLLAREA reserves a 16px scrollbar = -30), and
-				// HEIGHT keeps their vertical insets off the area height (CHATDISPLAY -12, MES_LAYER -14, SCROLLAREA
-				// -28) — without this CHATDISPLAY's 130px height overflows the shorter area and clips the newest line.
-				// LEFT-ANCHOR too (they centre by default, so a wider-than-parent width would push the first char off
-				// the left edge). Only on a size change, so scroll isn't disturbed; new lines wrap to the wider display.
-				forceSize(c, InterfaceID.Chatbox.CHATDISPLAY, rowW - 14, targetH - 12, 7);
-				forceSize(c, InterfaceID.Chatbox.MES_LAYER, rowW - 14, targetH - 14, 7);
-				forceSize(c, InterfaceID.Chatbox.SCROLLAREA, rowW - 30, targetH - 28, 0);
+				// Only when the row is WIDER than the engine default do the display/scroll children need explicit
+				// widening (they don't cascade); at the default 519 width they keep their natural, already-aligned
+				// size + position, and their natural height fits the full-height area — so leave them untouched.
+				if (rowW > CHAT_DEFAULT_W)
+				{
+					forceWidth(c, InterfaceID.Chatbox.CHATDISPLAY, rowW - 14, 7);
+					forceWidth(c, InterfaceID.Chatbox.MES_LAYER, rowW - 14, 7);
+					forceWidth(c, InterfaceID.Chatbox.SCROLLAREA, rowW - 30, 0);
+				}
 			}
 			else
 			{
@@ -688,36 +1085,6 @@ public final class HudVeneerBridge
 		}
 	}
 
-	/** Force a chat sub-widget to an ABSOLUTE width AND height, LEFT-anchored at {@code leftX}, then revalidate.
-	 *  Like {@link #forceWidth} but also pins the height so the display/scroll widgets shrink to fit the resized
-	 *  CHATAREA (they don't cascade) — otherwise their original height overflows the shorter area + clips the
-	 *  newest message line. */
-	private static void forceSize(Client c, int id, int w, int h, int leftX)
-	{
-		try
-		{
-			final Widget wd = c.getWidget(id);
-			if (wd == null)
-			{
-				return;
-			}
-			if (wd.getWidthMode() != WidgetSizeMode.ABSOLUTE || wd.getOriginalWidth() != w
-				|| wd.getHeightMode() != WidgetSizeMode.ABSOLUTE || wd.getOriginalHeight() != h
-				|| wd.getXPositionMode() != WidgetPositionMode.ABSOLUTE_LEFT || wd.getOriginalX() != leftX)
-			{
-				wd.setWidthMode(WidgetSizeMode.ABSOLUTE);
-				wd.setOriginalWidth(w);
-				wd.setHeightMode(WidgetSizeMode.ABSOLUTE);
-				wd.setOriginalHeight(h);
-				wd.setXPositionMode(WidgetPositionMode.ABSOLUTE_LEFT);
-				wd.setOriginalX(leftX);
-				wd.revalidate();
-			}
-		}
-		catch (RuntimeException ignore)
-		{
-		}
-	}
 
 	// Dump the chatbox sub-widget layout for diagnosing the native chat-tab veneer. Fires a few times at STEADY
 	// STATE (after the native side has applied the row width — chatAreaW>0 — so the dump reflects the resized
@@ -743,6 +1110,7 @@ public final class HudVeneerBridge
 		dumpOne(c, "MES_LAYER", InterfaceID.Chatbox.MES_LAYER);
 		dumpOne(c, "SCROLLAREA", InterfaceID.Chatbox.SCROLLAREA);
 		dumpOne(c, "INPUT_CLICKAREA", InterfaceID.Chatbox.INPUT_CLICKAREA);
+		dumpOne(c, "INPUT", InterfaceID.Chatbox.INPUT);
 	}
 
 	private static void dumpOne(Client c, String name, int id)

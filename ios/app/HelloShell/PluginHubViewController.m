@@ -9,6 +9,13 @@
 @property (nonatomic, strong) NSArray<NSMutableDictionary *> *shown;   // filtered view
 @property (nonatomic, copy)   NSString *filter;
 @property (nonatomic, strong) NSTimer *pollTimer;
+// #17 install progress: while a hub install/remove is in-flight (jar download + plugin load happen async,
+// completing with ExternalPluginsChanged) we poll MobileUiBridge.hubState ({refreshing,seq}) and surface a
+// spinner + per-row "…" until it settles, then reconcile the real installed flags (catches silent failures).
+@property (nonatomic, strong) NSTimer *hubProgressTimer;
+@property (nonatomic, strong) NSMutableSet<NSString *> *inflight;   // internalNames currently installing/removing
+@property (nonatomic, strong) UIActivityIndicatorView *spinner;
+@property (nonatomic, strong) NSDate *progressStartedAt;           // deadline anchor so the spinner can't hang
 @end
 
 @implementation PluginHubViewController
@@ -17,6 +24,7 @@
     if ((self = [super init])) {
         self.modalPresentationStyle = UIModalPresentationFullScreen;
         _all = @[]; _shown = @[]; _filter = @"";
+        _inflight = [NSMutableSet set];
     }
     return self;
 }
@@ -55,6 +63,12 @@
     self.statusLabel.text = @"Loading manifest…";
     [self.view addSubview:self.statusLabel];
 
+    self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+    self.spinner.translatesAutoresizingMaskIntoConstraints = NO;
+    self.spinner.color = [UIColor colorWithWhite:0.7 alpha:1.0];
+    self.spinner.hidesWhenStopped = YES;
+    [self.view addSubview:self.spinner];
+
     self.table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     self.table.translatesAutoresizingMaskIntoConstraints = NO;
     self.table.backgroundColor = [UIColor clearColor];
@@ -79,6 +93,8 @@
         [self.search.trailingAnchor constraintEqualToAnchor:sg.trailingAnchor constant:-8],
         [self.statusLabel.topAnchor constraintEqualToAnchor:self.search.bottomAnchor constant:4],
         [self.statusLabel.leadingAnchor constraintEqualToAnchor:sg.leadingAnchor constant:20],
+        [self.spinner.centerYAnchor constraintEqualToAnchor:self.statusLabel.centerYAnchor],
+        [self.spinner.leadingAnchor constraintEqualToAnchor:self.statusLabel.trailingAnchor constant:8],
         [self.table.topAnchor constraintEqualToAnchor:self.statusLabel.bottomAnchor constant:6],
         [self.table.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.table.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
@@ -94,6 +110,7 @@
 - (void)onDone {
     [self.pollTimer invalidate];
     self.pollTimer = nil;
+    [self stopHubProgress];
     [JVMLauncher mobileFlushConfig];   // persist the installed-plugins list
     [self dismissViewControllerAnimated:YES completion:nil];
 }
@@ -185,7 +202,14 @@
     btn.tag = indexPath.row;
     BOOL unavailable = [p[@"unavailable"] isKindOfClass:[NSString class]] && [p[@"unavailable"] length] > 0;
     BOOL installed = [p[@"installed"] boolValue];
-    if (unavailable) {
+    BOOL installing = [p[@"installing"] boolValue];
+    if (installing) {
+        // In-flight: the row shows progress (the global spinner carries the verb); button is inert until settle.
+        [btn setTitle:@"…" forState:UIControlStateNormal];
+        btn.enabled = NO;
+        btn.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+        btn.tintColor = [UIColor whiteColor];
+    } else if (unavailable) {
         [btn setTitle:@"N/A" forState:UIControlStateNormal];
         btn.enabled = NO;
         btn.backgroundColor = [UIColor clearColor];
@@ -206,12 +230,91 @@
     NSMutableDictionary *p = self.shown[(NSUInteger)row];
     BOOL installed = [p[@"installed"] boolValue];
     NSString *name = [p[@"internalName"] description];
+    if (name.length == 0) return;
     NSString *ack = [JVMLauncher mobileHubInstall:name uninstall:installed];
-    // optimistic flip; the actual load/unload happens async and shows in the main plugin panel
+    // Optimistic flip + mark in-flight; #17 polls hubState until the async download+load settles.
     p[@"installed"] = @(!installed);
+    p[@"installing"] = @YES;
+    [self.inflight addObject:name];
     [self.table reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:row inSection:0]]
                       withRowAnimation:UITableViewRowAnimationNone];
+    self.statusLabel.text = installed ? [NSString stringWithFormat:@"Removing %@…", [p[@"displayName"] description]]
+                                      : [NSString stringWithFormat:@"Installing %@…", [p[@"displayName"] description]];
+    [self.spinner startAnimating];
+    self.progressStartedAt = [NSDate date];   // (re)anchor the deadline on every tap
+    [self startHubProgressPolling];
     NSLog(@"[hub] %@ %@ : %@", installed ? @"remove" : @"install", name, ack ?: @"(nil)");
+}
+
+#pragma mark - #17 install progress
+
+- (void)startHubProgressPolling {
+    if (self.hubProgressTimer) return;   // one shared poller for any concurrent installs
+    self.hubProgressTimer = [NSTimer scheduledTimerWithTimeInterval:0.4 target:self
+                                                          selector:@selector(pollHubProgress) userInfo:nil repeats:YES];
+}
+
+- (void)pollHubProgress {
+    NSTimeInterval elapsed = self.progressStartedAt ? -[self.progressStartedAt timeIntervalSinceNow] : 0;
+    NSString *json = [JVMLauncher mobileHubState];
+    NSDictionary *d = json.length
+        ? [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil]
+        : nil;
+    BOOL haveState = [d isKindOfClass:[NSDictionary class]];
+    BOOL refreshing = haveState && [d[@"refreshing"] boolValue];
+
+    // Clean completion: hubInstall sets refreshing=true synchronously, so a readable false means the async
+    // download+load finished (ExternalPluginsChanged cleared it).
+    if (haveState && !refreshing) { [self settleHubProgress]; return; }
+
+    // Otherwise still refreshing, OR the bridge can't report state at all (mobileHubState nil — older jar /
+    // unresolved method). Never hang: cap the wait. Genuine refresh gets a generous window; an unreadable
+    // state settles quickly (fire-and-forget, then reconcile against the manifest = the source of truth).
+    NSTimeInterval deadline = haveState ? 25.0 : 2.5;
+    if (elapsed >= deadline) { [self settleHubProgress]; }
+}
+
+// Reconcile the real installed flags from the manifest (corrects a silent failure), clear the in-flight rows,
+// and stop the spinner. Idempotent — safe whether we reached it by completion or by deadline.
+- (void)settleHubProgress {
+    if (self.inflight.count > 0) {
+        [self reconcileInstalledState];
+        [self.inflight removeAllObjects];
+    }
+    [self stopHubProgress];
+}
+
+// Re-read the manifest (cached in Java) and trust its installed flags for the rows that were in-flight, so a
+// silent install/remove failure is corrected rather than left showing the optimistic state.
+- (void)reconcileInstalledState {
+    NSString *json = [JVMLauncher mobileHubManifest];
+    NSDictionary *parsed = json.length
+        ? [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil]
+        : nil;
+    NSArray *plugins = [parsed isKindOfClass:[NSDictionary class]] ? parsed[@"plugins"] : nil;
+    NSMutableDictionary<NSString *, NSNumber *> *installedMap = [NSMutableDictionary dictionary];
+    if ([plugins isKindOfClass:[NSArray class]]) {
+        for (NSDictionary *pp in plugins) {
+            NSString *n = [pp[@"internalName"] description];
+            if (n.length) installedMap[n] = @([pp[@"installed"] boolValue]);
+        }
+    }
+    for (NSMutableDictionary *p in self.all) {
+        NSString *n = [p[@"internalName"] description];
+        if (n.length && [self.inflight containsObject:n]) {
+            NSNumber *truth = installedMap[n];
+            if (truth) p[@"installed"] = truth;   // correct the optimistic flip if the refresh disagreed
+            [p removeObjectForKey:@"installing"];
+        }
+    }
+    [self applyFilter];
+    self.statusLabel.text = [NSString stringWithFormat:@"%lu plugins", (unsigned long)self.all.count];
+}
+
+- (void)stopHubProgress {
+    [self.hubProgressTimer invalidate];
+    self.hubProgressTimer = nil;
+    [self.spinner stopAnimating];
 }
 
 @end

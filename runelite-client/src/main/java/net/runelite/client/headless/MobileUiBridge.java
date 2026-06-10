@@ -38,6 +38,7 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import javax.swing.JPanel;
@@ -60,10 +61,13 @@ import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigItemDescriptor;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.config.Range;
+import net.runelite.client.config.RuneLiteConfig;
 import net.runelite.client.config.Units;
+import net.runelite.client.util.Text;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.ExternalPluginsChanged;
 import net.runelite.client.events.PluginChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -151,6 +155,25 @@ public final class MobileUiBridge
 		}
 	}
 
+	// Mobile notification delivery queue. Notifier funnels every fired notification here (an app sandbox has no
+	// tray / taskbar / shell-out); the native shell drains it each frame and raises a real OS notification.
+	// Bounded so a backlog can't grow unbounded before a drainer exists (desktop dev / pre-poll startup).
+	private static final ConcurrentLinkedQueue<String> notifications = new ConcurrentLinkedQueue<>();
+	private static final int MAX_NOTIFICATIONS = 64;
+
+	// Outbound links. LinkBrowser funnels every browse(url) here (no system browser / xdg-open / Desktop#browse
+	// in the sandbox); the native shell drains it and opens an in-app SFSafariViewController / CustomTabs.
+	private static final ConcurrentLinkedQueue<String> links = new ConcurrentLinkedQueue<>();
+	private static final int MAX_LINKS = 32;
+
+	// Favourite plugins: the same shared "pinnedPlugins" CSV the desktop ConfigPanel persists (RuneLite group),
+	// so a pin set on either port (or desktop) round-trips. Names stored comma-stripped (desktop format).
+	private static final String PINNED_KEY = "pinnedPlugins";
+
+	// Mobile default-profile: applied once on the first tick (client thread), only for config keys the user
+	// hasn't set, so it never fights a user choice.
+	private static boolean defaultsApplied;
+
 	// Live UI-state snapshot (written on the client thread in tick(), read lock-free from the native thread).
 	private static volatile boolean chatInputVisible;
 	private static volatile int chatInputX;
@@ -165,6 +188,57 @@ public final class MobileUiBridge
 	public static boolean isEnabled()
 	{
 		return ENABLED;
+	}
+
+	/**
+	 * Mobile notification delivery channel. {@link net.runelite.client.Notifier} forwards every fired (enabled,
+	 * focus-passing) notification here because an app sandbox has no tray / taskbar / shell-out. The native shell
+	 * drains {@link #nextNotification()} each frame and raises a real OS notification (UNUserNotificationCenter on
+	 * iOS / NotificationManager on Android). The in-canvas flash + in-chat game-message channels are unaffected
+	 * (they render through the engine). Encoded {@code "title\u0001body"}; bounded; no-op unless the mobile UI is
+	 * active so desktop dev doesn't accumulate an undrained backlog.
+	 */
+	public static void publishNotification(String title, String body)
+	{
+		if (!ENABLED)
+		{
+			return;
+		}
+		while (notifications.size() >= MAX_NOTIFICATIONS)
+		{
+			notifications.poll();
+		}
+		notifications.add((title == null ? "" : title) + '\u0001' + (body == null ? "" : body));
+	}
+
+	/** Drain the oldest pending notification ({@code "title\u0001body"}), or {@code null} if none. Native polls this. */
+	public static String nextNotification()
+	{
+		return notifications.poll();
+	}
+
+	/**
+	 * Outbound-link channel. {@link net.runelite.client.util.LinkBrowser#browse} forwards every URL here (Wiki,
+	 * HiScore, plugin "open page" links, etc.) because the sandbox has no system browser. The native shell drains
+	 * {@link #nextLink()} each frame and opens it in-app (SFSafariViewController / Custom Tabs). Bounded; gated.
+	 */
+	public static void publishLink(String url)
+	{
+		if (!ENABLED || url == null || url.isEmpty())
+		{
+			return;
+		}
+		while (links.size() >= MAX_LINKS)
+		{
+			links.poll();
+		}
+		links.add(url);
+	}
+
+	/** Drain the oldest pending outbound URL, or {@code null} if none. Native polls this. */
+	public static String nextLink()
+	{
+		return links.poll();
 	}
 
 	/**
@@ -186,6 +260,12 @@ public final class MobileUiBridge
 		}
 		QuestHelperBridge.init(pm, ct); // native Quest Helper reflow shares this wiring + the client-thread tick
 		WorldSwitcherBridge.init(c, ct, pm); // native World Switcher reflow (direct WorldService reads)
+		LootTrackerBridge.init(pm, ct);   // native Loot Tracker reflow
+		XpTrackerBridge.init(pm, ct);     // native XP Tracker reflow
+		GrandExchangeBridge.init(pm, ct); // native Grand Exchange reflow
+		TimeTrackingBridge.init(pm, ct);  // native Time Tracking reflow
+		OverlayBridge.init(pm, ct);       // native overlay edit-mode (reposition/snap/reset)
+		InfoBoxBridge.init(pm, ct);       // native infobox long-press menu
 		log.info("[mobileui] facade wired: plugins={} config={} clientThread={} eventBus={}",
 			pm != null, cm != null, ct != null, eb != null);
 	}
@@ -207,6 +287,16 @@ public final class MobileUiBridge
 		public void onPluginChanged(PluginChanged e)
 		{
 			recordEvent("plugin", e.getPlugin().getClass().getName(), e.isLoaded() ? "loaded" : "unloaded");
+		}
+
+		@Subscribe
+		public void onExternalPluginsChanged(ExternalPluginsChanged e)
+		{
+			// A hub install/remove finished downloading + (un)loading. Clear the spinner and bump the seq so the
+			// native hub screen re-fetches hubManifest() and sees the updated installed set.
+			hubRefreshing = false;
+			hubChangeSeq.incrementAndGet();
+			recordEvent("hub", "external", "changed");
 		}
 	}
 
@@ -597,6 +687,11 @@ public final class MobileUiBridge
 	private static volatile List<PluginHubManifest.DisplayData> hubDisplay;
 	private static volatile String hubStatus = "idle";
 	private static volatile boolean hubLoading;
+	// Hub install/remove progress: install()/remove() register synchronously but download+load the plugin async on
+	// the ExternalPluginManager executor, signalling completion with ExternalPluginsChanged. refreshing flips true
+	// on our install/remove and false when that event lands; the seq bumps so native can re-fetch hubManifest.
+	private static volatile boolean hubRefreshing;
+	private static final AtomicLong hubChangeSeq = new AtomicLong();
 
 	private static void ensureHubInjected()
 	{
@@ -681,6 +776,17 @@ public final class MobileUiBridge
 		return hubInstallOrRemove(internalName, true);
 	}
 
+	/**
+	 * Hub install/remove progress. {@link #hubInstall}/{@code hubUninstall} only register synchronously; the jar
+	 * download + plugin load happen async, completing with {@code ExternalPluginsChanged}. The native hub screen
+	 * polls this: while {@code refreshing} is true it shows a spinner; when {@code seq} bumps (refresh finished)
+	 * it re-fetches {@link #hubManifest()} to pick up the new installed set.
+	 */
+	public static String hubState()
+	{
+		return "{\"refreshing\":" + hubRefreshing + ",\"seq\":" + hubChangeSeq.get() + "}";
+	}
+
 	/** Uninstall a hub plugin by internal name. */
 	public static String hubUninstall(String internalName)
 	{
@@ -701,6 +807,7 @@ public final class MobileUiBridge
 		{
 			return "{\"ok\":false,\"reason\":\"not-ready\"}";
 		}
+		hubRefreshing = true; // cleared by onExternalPluginsChanged once the async download+load completes
 		final long id = enqueueClientWrite(ct, () ->
 		{
 			if (install)
@@ -814,6 +921,7 @@ public final class MobileUiBridge
 		{
 			return "[]";
 		}
+		final Set<String> pinned = pinnedNames();
 		final Json out = new Json().arr();
 		for (Plugin p : pm.getPlugins())
 		{
@@ -846,10 +954,62 @@ public final class MobileUiBridge
 				.kb("active", pm.isPluginActive(p))
 				.kb("hasConfig", hasConfig)
 				.kb("developer", d.developerPlugin())
+				.kb("pinned", pinned.contains(d.name().replace(",", "")))
 				.kvNullable("configGroup", group)
 				.end();
 		}
 		return out.end().toString();
+	}
+
+	/** The set of pinned (favourite) plugin display names, comma-stripped — the shared desktop {@code pinnedPlugins} CSV. */
+	private static Set<String> pinnedNames()
+	{
+		final ConfigManager cm = configManager;
+		if (cm == null)
+		{
+			return java.util.Collections.emptySet();
+		}
+		final String csv = cm.getConfiguration(RuneLiteConfig.GROUP_NAME, PINNED_KEY);
+		if (csv == null || csv.isEmpty())
+		{
+			return java.util.Collections.emptySet();
+		}
+		return new HashSet<>(Text.fromCSV(csv));
+	}
+
+	/**
+	 * Pin/unpin a plugin (the desktop star) by display name. Persisted as the shared {@code pinnedPlugins} CSV
+	 * the desktop {@code ConfigPanel} uses (RuneLite config group), so a pin set on either port — or on desktop —
+	 * round-trips. The native list shows a star and sorts pinned-first. The read-modify-write runs on the client
+	 * thread (like {@link #setConfig}) to avoid a lost update, and returns a {@code writeId} the native side polls
+	 * for the ack. Names are stored comma-stripped to match the desktop format.
+	 */
+	public static String setPinned(String pluginName, boolean pinned)
+	{
+		final ConfigManager cm = configManager;
+		if (!ENABLED || cm == null || pluginName == null)
+		{
+			return "{\"ok\":false,\"reason\":\"facade-off\"}";
+		}
+		final ClientThread ct = clientThread;
+		if (ct == null)
+		{
+			return "{\"ok\":false,\"reason\":\"not-ready\"}";
+		}
+		final String name = pluginName.replace(",", "");
+		final long id = enqueueClientWrite(ct, () ->
+		{
+			final String csv = cm.getConfiguration(RuneLiteConfig.GROUP_NAME, PINNED_KEY);
+			final java.util.List<String> names = new java.util.ArrayList<>(
+				csv == null || csv.isEmpty() ? java.util.Collections.emptyList() : Text.fromCSV(csv));
+			names.remove(name);
+			if (pinned)
+			{
+				names.add(name);
+			}
+			cm.setConfiguration(RuneLiteConfig.GROUP_NAME, PINNED_KEY, String.join(",", names));
+		});
+		return "{\"ok\":true,\"writeId\":" + id + "}";
 	}
 
 	/**
@@ -892,6 +1052,18 @@ public final class MobileUiBridge
 				.ki("position", item.position())
 				.kb("secret", secret)
 				.kv("type", typeName(type));
+			// Self-describe the wire format for the compound types so the native control knows exactly what string
+			// to send back via setConfig (ConfigManager deserializes by declared type): a Dimension round-trips as
+			// "WIDTHxHEIGHT", a Set as a gson JSON array of element names. Primitives/enum/color need no hint.
+			final String tn = typeName(type);
+			if ("dimension".equals(tn))
+			{
+				out.kv("encoding", "WxH");
+			}
+			else if ("set".equals(tn))
+			{
+				out.kv("encoding", "json-array");
+			}
 			// Secret values (passwords/tokens) are NOT round-tripped through the native side or its logs: emit
 			// null. The native control renders a secure field and only sends a value when the user edits it.
 			out.kvNullable("value", secret ? null : cm.getConfiguration(group, key));
@@ -984,6 +1156,75 @@ public final class MobileUiBridge
 			}
 		});
 		return "{\"ok\":true,\"queued\":\"edt\"}";
+	}
+
+	/**
+	 * Mobile default-profile: seed the handful of plugin defaults that are wrong for a touch / memory-capped
+	 * phone — currently just Low Detail ON (stock OFF, but it cuts engine memory + fill-rate, which matters on
+	 * the CPU-rendered, heap-capped mobile path). Applied once on the first {@link #tick}. The cursor / key-remap
+	 * / stretched-mode / interface-styles / anti-drag plugins flagged as touch-hostile are already stock-OFF, so
+	 * there is nothing to flip; keeping them OUT OF REACH is a native "hide incompatible" concern, not a default.
+	 * Must be a config/default policy, never a plugin edit.
+	 */
+	private static void applyMobileDefaults()
+	{
+		enableByDefaultIfUnset("LowMemoryPlugin", true);
+	}
+
+	/**
+	 * Set a plugin's enabled state to {@code desired} ONLY if the user hasn't already chosen (its enabled-config
+	 * key is unset) — so a re-seed never overrides an explicit user setting. Derives the key exactly like
+	 * {@code PluginManager} (configName or class simple name, lower-cased) and toggles on the EDT like
+	 * {@link #setPluginEnabled}.
+	 */
+	private static void enableByDefaultIfUnset(String simpleName, boolean desired)
+	{
+		final PluginManager pm = pluginManager;
+		final ConfigManager cm = configManager;
+		if (pm == null || cm == null)
+		{
+			return;
+		}
+		Plugin target = null;
+		for (Plugin p : pm.getPlugins())
+		{
+			if (p.getClass().getSimpleName().equals(simpleName))
+			{
+				target = p;
+				break;
+			}
+		}
+		if (target == null)
+		{
+			return;
+		}
+		final PluginDescriptor d = target.getClass().getAnnotation(PluginDescriptor.class);
+		final String keyName = (d != null && !d.configName().isEmpty() ? d.configName() : simpleName).toLowerCase();
+		if (cm.getConfiguration(RuneLiteConfig.GROUP_NAME, keyName) != null)
+		{
+			return; // user (or a prior seed) already chose — leave it alone
+		}
+		final Plugin plugin = target;
+		onEdt(() ->
+		{
+			try
+			{
+				pm.setPluginEnabled(plugin, desired);
+				if (desired)
+				{
+					pm.startPlugin(plugin);
+				}
+				else
+				{
+					pm.stopPlugin(plugin);
+				}
+				log.info("[mobileui] default-profile: {} -> {}", simpleName, desired);
+			}
+			catch (PluginInstantiationException ex)
+			{
+				log.warn("[mobileui] default-profile {} -> {} failed", simpleName, desired, ex);
+			}
+		});
 	}
 
 	/**
@@ -1102,8 +1343,19 @@ public final class MobileUiBridge
 		{
 			return;
 		}
+		if (!defaultsApplied)
+		{
+			defaultsApplied = true;
+			applyMobileDefaults();
+		}
 		QuestHelperBridge.tick(c); // refresh the native Quest Helper snapshots (no-op unless its screen is open)
 		WorldSwitcherBridge.tick(c); // refresh the native World Switcher snapshot (no-op unless its screen is open)
+		LootTrackerBridge.tick(c);   // refresh the native Loot Tracker snapshot (no-op unless its screen is open)
+		XpTrackerBridge.tick(c);     // refresh the native XP Tracker snapshot (no-op unless its screen is open)
+		GrandExchangeBridge.tick(c); // refresh the native Grand Exchange snapshot (no-op unless its screen is open)
+		TimeTrackingBridge.tick(c);  // refresh the native Time Tracking snapshot (no-op unless its screen is open)
+		OverlayBridge.tick(c);       // refresh the native overlay edit-mode snapshot (no-op unless open)
+		InfoBoxBridge.tick(c);       // refresh the native infobox menu snapshot (no-op unless open)
 		// The "click here to talk" affordance is the right target — NOT the scroll/message area or the tabs.
 		// INPUT_CLICKAREA is the entry hit-region; fall back to the input line (CHATBOX_INPUT) if absent.
 		Widget w = c.getWidget(InterfaceID.Chatbox.INPUT_CLICKAREA);

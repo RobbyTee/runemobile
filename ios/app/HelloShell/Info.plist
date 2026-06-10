@@ -50,5 +50,8 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<!-- Save in-game screenshots (the live composited frame) to the photo library via the 📷 HUD button. Add-only. -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save your in-game screenshots to your photo library.</string>
 </dict>
 </plist>

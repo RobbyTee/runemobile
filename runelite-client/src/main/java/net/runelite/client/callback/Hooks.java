@@ -522,6 +522,12 @@ public class Hooks implements Callbacks
 			// gated -Drunelite.menupeek.probe=true. Desktop-only diagnostic (never the device path).
 			net.runelite.client.headless.MenuPeek.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.ShiftFeedSpike.isEnabled())
+		{
+			// Mobile-UX audit OQ1/#9: does a synthetic held KEY_PRESSED VK_SHIFT flip client.isKeyPressed(KC_SHIFT)
+			// (the "Sticky Shift" feasibility gate)? Mutates input only; gated -Drunelite.shiftfeed=true. Desktop only.
+			net.runelite.client.headless.ShiftFeedSpike.tick(client, client.getGameState());
+		}
 
 		if (graphics == null)
 		{

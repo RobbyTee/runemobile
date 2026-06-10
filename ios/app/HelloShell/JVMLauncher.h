@@ -92,6 +92,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// 10=enter, 27=escape, 9=tab, 37/38/39/40=arrows). Call on the main thread.
 + (void)postKeyStroke:(int)awtKeyCode;
 
+/// Sticky-Shift: hold (held=YES) or release (held=NO) the SHIFT modifier via JavaBridge.setShiftHeld so the
+/// engine's isKeyPressed(KC_SHIFT) path reads true on touch (shift-click swaps / Shift+right-click marking /
+/// overlay "Configure"). Transition-gated on the Java side. Call on the main thread.
++ (void)postShiftHeld:(BOOL)held;
+
 /// True when the gamepack has a text field open and awaiting input (search / PM / enter-amount dialog).
 /// Polled by the shell to auto-raise/dismiss the soft keyboard. Call on the main thread.
 + (BOOL)textInputOpen;
@@ -134,6 +139,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// still walk and orb clicks still fire. x < 0 stops. Re-applied each frame by HudVeneerBridge. Main thread.
 + (void)relocateEngineMinimapX:(int)x y:(int)y;
 
+/// Make the top-right minimap BIGGER: enlarge the engine minimap globe to scalePct% of its natural size and
+/// reposition its chrome (compass / orbs / world-map / wiki / store) to keep hugging it. 0/100 = natural. The
+/// cluster stays the live engine HUD, so click-to-walk + orb clicks keep working. No-op on an older jar. Main thread.
++ (void)setEngineMinimapScale:(int)scalePct;
+
 /// W3 A4/A6: relocate the engine side panel (SIDE_CONTAINER — inventory/equipment/etc.) to canvas (x,y) so it
 /// doesn't clip under the notch at full-bleed. No-op until a tab is open. x < 0 stops. Main thread.
 + (void)relocateEngineSidePanelX:(int)x y:(int)y;
@@ -153,6 +163,18 @@ typedef void (^JVMLogSink)(NSString *line);
 /// W3 A3 (bigger chat tabs): the canvas-px width the enlarged native row spans, so the engine widens the message
 /// area to ALIGN with the bigger buttons. 0 restores the engine's default 519 width. Main thread.
 + (void)setEngineChatAreaWidth:(int)canvasPx;
+
+/// W3 A3 (finger-scroll): scroll the chat by deltaCanvasPx (positive = toward newer/bottom) via the chatbox's own
+/// scroll layer — NOT a mouse wheel (a wheel over the transparent chat also zooms the camera). Main thread.
++ (void)scrollEngineChat:(int)deltaCanvasPx;
+
+/// W3 A3: switch the chat to tab `index` by replaying its op-script (works while the engine tab sprite is hidden,
+/// so the native tab row can fully replace the engine's). No-op on an older jar. Main thread.
++ (void)switchEngineChatTab:(int)index;
+
+/// W3 A3: collapse (hide) or expand the engine chat box — tapping the active native tab collapses it (OSRS-mobile
+/// behaviour), tapping any tab reopens it. The native tab row stays visible either way. Main thread.
++ (void)setEngineChatCollapsed:(BOOL)collapsed;
 
 /// W3 A3 (bigger chat tabs): live per-tab chat geometry/state (escaped JSON) the native enlarged tab veneer reads
 /// each tick — per-tab canvas bounds, selected/new-message flags, and the filter sub-label text + colour. Returns
@@ -185,6 +207,22 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Latest event sequence (MobileUiBridge.getMobileUiSeq) — the panel stores this and polls for a bump to
 /// know when to re-read (config/plugin changed, including changes it didn't make).
 + (long long)mobileUiSeq;
+
+/// Drain the oldest pending OS notification ("titlebody"), or nil if none (MobileUiBridge.nextNotification).
+/// The shell polls this and raises a UNUserNotificationCenter notification. Main thread.
++ (nullable NSString *)mobileNextNotification;
+
+/// Drain the oldest pending outbound URL, or nil if none (MobileUiBridge.nextLink). The shell polls this and
+/// opens it in an SFSafariViewController. Main thread.
++ (nullable NSString *)mobileNextLink;
+
+/// Pin/unpin a plugin by display name (MobileUiBridge.setPinned) — persisted as the shared pinnedPlugins CSV.
+/// Returns the ack JSON. Main thread.
++ (nullable NSString *)mobileSetPinned:(NSString *)pluginName pinned:(BOOL)pinned;
+
+/// Hub install/remove progress ({refreshing,seq}) (MobileUiBridge.hubState). The hub screen polls this to show
+/// a spinner and re-fetch the manifest when seq bumps. Main thread.
++ (nullable NSString *)mobileHubState;
 
 /// Events since `sinceSeq` as JSON (MobileUiBridge.pollMobileUiEvents): {seq, events:[{seq,kind,group,key}]}.
 + (nullable NSString *)mobilePollEventsSince:(long long)sinceSeq;
