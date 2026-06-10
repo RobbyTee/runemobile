@@ -175,6 +175,9 @@ public final class JavaBridge
 	public static void noteSceneDraw() { sceneDrawCount++; }
 	/** Hooks.draw on a non-world game state -> re-arm the load-in hold. */
 	public static void armSceneHold() { sceneDrawCount = 0; }
+	/** Direct-present (no gpuPublish gate): the native shell polls this to know when the world is warmed up
+	 * (geometry uploaded), so it can reveal the GPU layer over the CPU loading-screen blit without a sky flash. */
+	public static boolean presentReady() { return sceneDrawCount >= SCENE_WARMUP; }
 
 	// GPU Route C white-flash diagnostic (one-shot): dump a handful of in-world composited GPU frames to PNG so
 	// the render bug can be seen off-device (the live frame can't be pulled). Gated -Drunelite.gpuframedump=true.

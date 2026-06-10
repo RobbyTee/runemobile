@@ -115,6 +115,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Polled by the shell to auto-raise/dismiss the soft keyboard. Call on the main thread.
 + (BOOL)textInputOpen;
 
+/// Direct-present reveal gate: YES once the world geometry is uploaded (the GPU layer can be revealed over the
+/// CPU loading-screen blit without a sky flash). YES if the bridge isn't available.
++ (BOOL)sceneWarmedUp;
+
 /// Read the W3 hybrid-chrome read-only snapshot (reverse JNI -> MobileChromeBridge.getSnapshot) as a JSON
 /// string: active-tab varc + tab-stone / side-panel / minimap / orbs / chat / viewport bounds in
 /// gamepack-canvas pixels. Returns nil before the VM/bridge is up or if the chrome facade is off

@@ -41,6 +41,7 @@ static jmethodID gMidInteractSeq = NULL;  // getInteractTapSeq()I — native hap
 static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidClickPrecise = NULL, gMidMove = NULL;
 static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
 static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
+static jmethodID gMidWarmed = NULL;   // JavaBridge.presentReady()Z — world geometry uploaded (direct-present reveal)
 static jmethodID gMidMenuSelect = NULL;  // selectMenuPoint(II)V — menu row select + hover-clear (optional)
 
 // W3 hybrid-chrome read surface — a SEPARATE facade (MobileChromeBridge) resolved lazily on the main thread.
@@ -165,6 +166,8 @@ static BOOL ensureBridge(void) {
     gMidText   = (*env)->GetStaticMethodID(env, global, "onText", "(Ljava/lang/String;)V");
     gMidKey    = (*env)->GetStaticMethodID(env, global, "onKeyStroke", "(I)V");
     gMidInputOpen = (*env)->GetStaticMethodID(env, global, "isTextInputOpen", "()Z");
+    gMidWarmed = (*env)->GetStaticMethodID(env, global, "presentReady", "()Z");   // optional (not in the null-check below)
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
     gMidClearHover = (*env)->GetStaticMethodID(env, global, "clearHover", "()V");
     if (!gMidW || !gMidH || !gMidSeq || !gMidPixels || !gMidTouch || !gMidClick || !gMidClickPrecise || !gMidMove
         || !gMidWheel || !gMidCamera || !gMidText || !gMidKey || !gMidInputOpen || !gMidClearHover) {
@@ -1133,6 +1136,16 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = gMainEnv;
     jboolean r = (*env)->CallStaticBooleanMethod(env, gBridgeClass, gMidInputOpen);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    return r == JNI_TRUE;
+}
+
+// Direct-present reveal gate: YES once the world geometry is uploaded (JavaBridge.presentReady). Returns YES if
+// the bridge/method isn't available so it can never permanently block revealing the GPU layer.
++ (BOOL)sceneWarmedUp {
+    if (!gMidWarmed || !ensureBridge()) return YES;
+    JNIEnv *env = gMainEnv;
+    jboolean r = (*env)->CallStaticBooleanMethod(env, gBridgeClass, gMidWarmed);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return YES; }
     return r == JNI_TRUE;
 }
 

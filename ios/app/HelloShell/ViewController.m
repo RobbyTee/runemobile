@@ -404,15 +404,15 @@ static const CGFloat kMenuWidth       = 210.0;
              forControlEvents:UIControlEventTouchUpInside];
     [self.debugPanel addSubview:self.zoneButton];
 
-    // 117HD resizable + DIRECT present (CAEAGLLayer, no glReadPixels readback). Same as the green Zone button but
-    // scans the drawable out directly instead of reading it back each frame (the ~32ms fps ceiling).
+    // Fallback: 117HD resizable on the READBACK present (no CAEAGLLayer). The green button defaults to direct
+    // present (faster); this is here if direct present ever scans out black or regresses.
     self.zoneFastButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.zoneFastButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.zoneFastButton setTitle:@"⚡ 117HD Fast" forState:UIControlStateNormal];
-    self.zoneFastButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
-    self.zoneFastButton.tintColor = [UIColor systemYellowColor];
+    [self.zoneFastButton setTitle:@"117HD readback" forState:UIControlStateNormal];
+    self.zoneFastButton.titleLabel.font = [UIFont systemFontOfSize:15];
+    self.zoneFastButton.tintColor = [UIColor systemGrayColor];
     self.zoneFastButton.enabled = NO;
-    [self.zoneFastButton addTarget:self action:@selector(onLaunchZoneDirect)
+    [self.zoneFastButton addTarget:self action:@selector(onLaunchZoneReadback)
              forControlEvents:UIControlEventTouchUpInside];
     [self.debugPanel addSubview:self.zoneFastButton];
 
@@ -1266,18 +1266,12 @@ static const CGFloat kMenuWidth       = 210.0;
     [self onLaunch];
 }
 
-// Dedicated "⚡ 117HD Fast" button: 117HD resizable + DIRECT present (CAEAGLLayer). Instead of the per-frame
-// glReadPixels readback (~32ms at 1304x600 = the fps ceiling), RLHD renders straight into a CAEAGLLayer drawable
-// and presentRenderbuffer scans it out — no readback. Reuses the base-GPU direct-present plumbing (RouteCBridge
-// keys off the present layer, mode-agnostic). The green "▶ 117HD (Zone)" button stays on the proven readback path
-// (~15fps) as the fallback if this scans out black or regresses. EXPERIMENT: the CAEAGLLayer covers the CPU login
-// blit so boot/login shows black until the first GPU frame (autologin still drives login), and the load-in sky
-// flash returns (the readback warmup gate doesn't cover the direct path) — both get polished once direct present
-// is confirmed to scan out + be faster.
-- (void)onLaunchZoneDirect {
+// "117HD readback" button: 117HD resizable on the proven glReadPixels READBACK present (no CAEAGLLayer) — the
+// fallback if the default direct-present path scans out black or regresses on a future change. Same resizable
+// canvas/sharpness/chrome as the green button; just the slower present (~15fps vs ~18+).
+- (void)onLaunchZoneReadback {
     if (self.launched) return;
     self.pendingRouteCZone = YES;
-    self.pendingRouteCZoneDirect = YES;
     [self onLaunch];
 }
 
@@ -1299,16 +1293,16 @@ static const CGFloat kMenuWidth       = 210.0;
     [self onLaunch];
 }
 
-// Dedicated one-tap 117HD/Zone boot. RESIZABLE mode (sharpness): the engine canvas resizes to renderW×renderH
-// (~1302x600) after login instead of the classic fixed 765x503, so the readback frame is ~2x the resolution =
-// sharper, AND the native Jagex-mobile chrome (HudVeneer/MobileChrome/tab rails — all gated on client.isResized())
-// activates. Still the proven readback present (Zone never takes the pendingRouteCGpu direct-present branch). The
-// historical base-GPU "resizable never dispatches drawScene" was never re-tested since the Zone pipeline matured;
-// if it recurs the screen holds on the loading frame (the sceneDrawn publish-gate doubles as the diagnostic) and
-// the 3-finger gesture still boots the proven FIXED 765x503 path as a fallback.
+// The DEFAULT 117HD boot (one-tap green button): RESIZABLE + DIRECT present. Resizable = the engine canvas resizes
+// to renderW×renderH (~1302x600) after login (sharp + the native Jagex-mobile chrome activates, all gated on
+// client.isResized()); direct present = RLHD renders straight into a CAEAGLLayer drawable scanned out by
+// presentRenderbuffer (no per-frame glReadPixels readback — device-confirmed faster). The CAEAGLLayer starts hidden
+// so the CPU login/loading blit shows during boot and is revealed only once the world is warmed up (no black boot,
+// no sky flash). Fallbacks: the "117HD readback" button (resizable readback) and the 3-finger gesture (fixed 765).
 - (void)onLaunchZone {
     if (self.launched) return;
     self.pendingRouteCZone = YES;
+    self.pendingRouteCZoneDirect = YES;
     [self onLaunch];
 }
 
@@ -1408,13 +1402,18 @@ static const CGFloat kMenuWidth       = 210.0;
         gl.contentsScale = (sh > 0 ? (CGFloat)renderH / sh : 1.0);   // drawable = renderW x renderH (== engine canvas)
         gl.drawableProperties = @{ kEAGLDrawablePropertyRetainedBacking : @NO,
                                    kEAGLDrawablePropertyColorFormat : kEAGLColorFormatRGBA8 };
+        // Start HIDDEN + lazily reveal: the CAEAGLLayer is a sublayer of the UIImageView so it draws ABOVE the CPU
+        // blit; keeping it hidden lets the CPU login/loading screen show during the ~10s boot, and the present fires
+        // into the hidden layer meanwhile. onDisplayTick reveals it (gl.hidden=NO + stop the CPU blit) once the world
+        // has warmed up (geometry uploaded, JVMLauncher.sceneWarmedUp) so the first visible frame is the world, not the
+        // boot sky. (Armed, not gpuPresent=YES — the switch flips gpuPresent.)
+        gl.hidden = YES;
         [self.screen.layer insertSublayer:gl atIndex:0];
         self.glLayer = gl;
-        self.gpuPresent = YES;
-        self.screen.image = nil;                       // GL presents directly; the UIImageView is just a gesture host
+        self.gpuPresentArmed = YES;
         self.screen.backgroundColor = [UIColor blackColor];
         [RouteCBridge setPresentLayer:gl];
-        [self appendLine:[NSString stringWithFormat:@"[shell] GPU direct-present: CAEAGLLayer %.0fx%.0f @%.3f -> drawable %dx%d (no readback)",
+        [self appendLine:[NSString stringWithFormat:@"[shell] GPU direct-present ARMED (hidden): CAEAGLLayer %.0fx%.0f @%.3f -> drawable %dx%d (no readback)",
                           gl.bounds.size.width, gl.bounds.size.height, gl.contentsScale, renderW, renderH]];
     }
 #elif defined(RC_ANGLE_WINDOW_PRESENT)
@@ -1514,14 +1513,15 @@ static const CGFloat kMenuWidth       = 210.0;
 // no disk, no capture budget, so it's smooth and runs for the whole session. Also keeps the app
 // foreground-active+rendering (the jetsam-protection that the §6.2 work established).
 - (void)onDisplayTick {
-    // Lazy switch to direct present: once the GPU plugin has presented its first frame, stop blitting CPU frames and
-    // let the CAMetalLayer (now live) show through. Until then we keep blitting (boot/login/CPU frames stay visible,
-    // and a parked startup shows the login screen rather than a black layer).
-    if (self.gpuPresentArmed && !self.gpuPresent && [RouteCBridge hasPresentedFrame]) {
+    // Lazy switch to direct present: keep blitting CPU frames (boot/login/loading stay visible) until the GPU has
+    // presented a frame AND the world has warmed up (geometry uploaded) — then reveal the GPU layer and stop the CPU
+    // blit. The warmup gate (sceneWarmedUp) means the first frame the user sees is the world, not the boot sky.
+    if (self.gpuPresentArmed && !self.gpuPresent && [RouteCBridge hasPresentedFrame] && [JVMLauncher sceneWarmedUp]) {
         self.gpuPresent = YES;
+        self.glLayer.hidden = NO;                    // EAGL: reveal the drawable (was hidden so the CPU login/loading blit showed)
         self.screen.image = nil;                     // GL presents directly; UIImageView is just a gesture host
         self.screen.backgroundColor = [UIColor blackColor];
-        [self appendLine:@"[shell] GPU (MetalANGLE) direct present LIVE (first GPU frame presented)"];
+        [self appendLine:@"[shell] GPU direct present LIVE (world warmed up — layer revealed)"];
     }
     if (self.gpuPresent) {
         // GPU direct-present: the engine renders straight into the CAEAGLLayer and presents on its own thread, so
