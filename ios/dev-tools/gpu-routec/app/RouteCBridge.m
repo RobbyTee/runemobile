@@ -515,8 +515,12 @@ static BOOL rcBuildFbo(int w, int h)
 		options:0 error:&err];
 	[nop replaceMatchesInString:s options:0 range:NSMakeRange(0, s.length) withTemplate:@""];
 
-	// 4) strip float-literal `f`/`F` suffix (requires a decimal point so ints/hex are untouched).
-	NSRegularExpression *fsuf = [NSRegularExpression regularExpressionWithPattern:@"(\\d*\\.\\d+|\\d+\\.\\d*)[fF]"
+	// 4) strip float-literal `f`/`F` suffix (requires a decimal point so ints/hex are untouched). The trailing
+	//    (?![A-Za-z0-9_]) is REQUIRED: without it, `material1.flowMap` matches `1.f` (digit-dot-<zero digits>-f) and
+	//    the `f` of the identifier flowMap/flags is stripped -> `material1.lowMap` (silent corruption; RLHD's water
+	//    shader hit exactly this -> "Structure has no field named lowMap"). Only strip a REAL literal suffix, i.e.
+	//    f/F not followed by an identifier char. (Same fix as the Z0 assembler downport.)
+	NSRegularExpression *fsuf = [NSRegularExpression regularExpressionWithPattern:@"(\\d*\\.\\d+|\\d+\\.\\d*)[fF](?![A-Za-z0-9_])"
 		options:0 error:&err];
 	[fsuf replaceMatchesInString:s options:0 range:NSMakeRange(0, s.length) withTemplate:@"$1"];
 
