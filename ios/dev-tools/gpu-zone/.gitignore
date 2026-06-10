@@ -8,3 +8,4 @@ build-ios/
 # The Z0-sealed shader/assembler subset (rlhd-src/{shaders,java,LICENSE,PROVENANCE.md}) stays tracked.
 rlhd-src/src/
 stage-zone-work/
+scan-work/
