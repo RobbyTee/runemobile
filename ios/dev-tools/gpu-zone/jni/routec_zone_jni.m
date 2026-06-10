@@ -159,6 +159,12 @@ static jobject z_native_order(JNIEnv *e, jobject bb) {
 
 // Buffer mapping (ES3 range-map only).
 static jobject JNICALL z_glMapBufferRange(JNIEnv *e, jclass c, jint t, jlong off, jlong len, jint access) {
+    // iOS GLES 3.0 has NO persistent mapping (GL_MAP_PERSISTENT_BIT) or glBufferStorage (it's a no-op stub here).
+    // RLHD's storage buffers (DynamicModelVAO — the animated NPC/player model streaming) try a persistent map and,
+    // on a NULL result, fall back to a per-frame non-persistent map/unmap that IS ES-3.0-compatible
+    // (GLBuffer.ensureCapacity recreates the buffer as STORAGE_NONE). Force NULL for persistent requests to trigger
+    // that fallback; otherwise the model VBO/TBO get a bogus mapping over the no-op storage and render black.
+    if (access & 0x40 /* GL_MAP_PERSISTENT_BIT */) return NULL;
     void *p = glMapBufferRange((GLenum)t, (GLintptr)off, (GLsizeiptr)len, (GLbitfield)access);
     return p ? z_native_order(e, (*e)->NewDirectByteBuffer(e, p, len)) : NULL;
 }
