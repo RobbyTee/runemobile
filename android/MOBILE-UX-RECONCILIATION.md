@@ -117,3 +117,39 @@ tokens.json wins over legacy creds by design).
     a look if scripted typing is ever needed (e.g. world-switcher search automation).
   - Long-presses with x ≳ 1660 inside the open side panel don't reach the menu-peek path (taps do) — likely
     the chrome overlay's grid hit-test region. Examines on the panel's left half work fine.
+
+## Session 2026-06-10 (AP-2a): JNI layer + thin native consumers — emulator-verified
+
+The shared Java bridges from the iOS merge (MobileUiBridge.publishNotification/nextNotification, publishLink/
+nextLink, hubState; JavaBridge.setShiftHeld) had ZERO Android JNI externs + ZERO native consumers — Android
+owed the native half across the whole AP-2/AP-4 backlog. AP-2a built the JNI layer + the three true
+thin-consumer wins (all consume already-merged shared methods; NO shared-Java change, contract UNCHANGED at
+185). Dev-bar gained a `⇧` latch button.
+
+- **Finding 12 — sticky-Shift ⇧ latch — VISUALLY VERIFIED.** `JvmLauncher.setShiftHeld` → queued `IN_SHIFT`
+  (ordered ahead of the menu-open right-click) → `JavaBridge.setShiftHeld` (synthetic held VK_SHIFT, the
+  iOS-device-proven shared path). Latch ON, long-press a tile → the menu gains **"Mark Tile"** (a
+  Ground-Markers shift-gated entry, on by default); latch OFF → it's gone (4 entries → 3). Frames:
+  `dev-tools/ap2a-mobile-ux/evidence-shift-{held-mark-tile,released-no-mark}.png`. **Unblocks Findings 18/19/20.**
+- **Finding 9 — notification delivery — VERIFIED.** A daemon (`rl-drain`, ~3Hz, OFF the UI thread) drains
+  `nextNotification()` → `NotificationManager` on a `runelite_game` channel; `POST_NOTIFICATIONS` requested on
+  API 33+. The shared publish-before-focus-gate fix (Notifier.java) means any `notifier.notify()` reaches the
+  queue regardless of (always-true headless) focus. Proven deterministically: a real `NotificationRecord`
+  posts + renders in the shade ("RuneLite / Notification delivery test"). Frame:
+  `evidence-notification-shade.png`.
+- **Finding 25 — external links — VERIFIED.** The same daemon drains `nextLink()` → `Intent.ACTION_VIEW`
+  (system browser; a plain intent, no androidx.browser dep). A published wiki URL launches Chrome. Frame:
+  `evidence-link-chrome.png` (the unconfigured-AVD Chrome first-run is an emulator artifact; the page loads on
+  a set-up browser — the ACTION_VIEW path is what's proven).
+- **Deterministic-test infra (debug-only):** added `JvmLauncher.publishNotification/publishLink` JNI (host-
+  origin publish into the shared queues — also genuinely useful for native-raised alerts later). A
+  `BuildConfig.DEBUG`-only LONG-PRESS on the ⇧ button publishes one of each, exercising queue→drain→delivery
+  without needing a flaky in-game trigger. Real engine notifications/links ride the identical path.
+
+### Scope correction discovered this session
+- **Finding 17 (hub install progress) is NOT a thin consumer on Android.** Android has **no Plugin Hub
+  browse/install screen at all** — only the plugin enable/toggle list (`PluginPanel.kt`). The shared
+  `hubManifest`/`hubInstall`/`hubUninstall`/`hubState` bridge exists and iOS has a full
+  `PluginHubViewController`, but Android never built the equivalent (the matrix's "Android hub works" row was
+  carried over from iOS). So #17 needs the whole hub screen built first — moved OUT of AP-2a to its own slot.
+  The `nativeHubState` JNI extern is staged + ready for when that screen lands.

@@ -71,6 +71,11 @@ object JvmLauncher {
     /** Make the engine pointer "absent" (call when a camera/pan gesture begins). */
     external fun nativeClearHover()
 
+    // AP-2a sticky-Shift (Finding 12): hold/release a synthetic VK_SHIFT via JavaBridge.setShiftHeld. Queued
+    // through the input path so it's ORDERED ahead of the menu-open right-click (engine must read shift held
+    // before it builds the menu, or Mark/Configure entries aren't injected). UI-thread-safe (enqueue only).
+    external fun nativeSetShiftHeld(held: Boolean)
+
     // ---- A1 input parity ----------------------------------------------------------------------------
     /** Mouse-wheel notch at game-canvas (x,y); rotation <0 = up/zoom-in, >0 = down/zoom-out (pinch). */
     external fun nativeWheel(x: Int, y: Int, rotation: Int)
@@ -123,6 +128,13 @@ object JvmLauncher {
     external fun nativeProcessedWriteId(): Long
     // A8: persist pending plugin-config writes (call when the app backgrounds). Off the UI thread (onBridge).
     external fun nativeFlushConfig(): String
+
+    // AP-2a bridge-amortized drain surfaces (off the UI thread via [onBridge]); "" = nothing pending / unresolved.
+    external fun nativeNextNotification(): String   // Finding 9:  "titlebody" or ""
+    external fun nativeNextLink(): String            // Finding 25: a URL or ""
+    external fun nativeHubState(): String            // Finding 17: {"refreshing":bool,"seq":int}
+    external fun nativePublishNotification(title: String, body: String)   // host-origin alert into the shared queue
+    external fun nativePublishLink(url: String)                            // host-origin link into the shared queue
 
     // A5 Tier-1 plugin panels: a plugin's Swing side-panel rendered off-screen to an ARGB int[] (like the
     // game blit), pulled here and shown in a zoom/pan view; taps map back via panelClick. Off the UI thread.
@@ -195,6 +207,7 @@ object JvmLauncher {
     fun touch(type: Int, x: Int, y: Int, button: Int) = nativeTouch(type, x, y, button)
     fun camera(dx: Int, dy: Int) = nativeCamera(dx, dy)
     fun clearHover() = nativeClearHover()
+    fun setShiftHeld(held: Boolean) = nativeSetShiftHeld(held)
     fun wheel(x: Int, y: Int, rotation: Int) = nativeWheel(x, y, rotation)
     fun clickPrecise(x: Int, y: Int, button: Int) = nativeClickPrecise(x, y, button)
     fun move(x: Int, y: Int) = nativeMove(x, y)
@@ -227,6 +240,11 @@ object JvmLauncher {
     fun setConfig(group: String, key: String, value: String) = nativeSetConfig(group, key, value)
     fun processedWriteId() = nativeProcessedWriteId()
     fun flushConfig() = nativeFlushConfig()
+    fun nextNotification() = nativeNextNotification()
+    fun nextLink() = nativeNextLink()
+    fun hubState() = nativeHubState()
+    fun publishNotification(title: String, body: String) = nativePublishNotification(title, body)
+    fun publishLink(url: String) = nativePublishLink(url)
 
     fun listPanels() = nativeListPanels()
     fun openPanel(index: Int) = nativeOpenPanel(index)

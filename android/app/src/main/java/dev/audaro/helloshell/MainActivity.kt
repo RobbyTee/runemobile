@@ -1,9 +1,13 @@
 package dev.audaro.helloshell
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
@@ -30,6 +34,9 @@ import android.widget.Button
 import android.widget.LinearLayout
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -68,7 +75,13 @@ class MainActivity : AppCompatActivity() {
     private var lastTapSeq = 0
     private var keyboardShown = false
     private var manualKeyboard = false   // ⌨ toggle: hold the soft keyboard up with no engine text field open
+    private var shiftHeld = false         // ⇧ latch: synthetic VK_SHIFT held (AP-2a Finding 12)
     private var frameCallback: Choreographer.FrameCallback? = null
+
+    // AP-2a Findings 9/25: a low-frequency daemon that drains the shared notification + link queues (off the UI
+    // thread — these calls daemon-attach to HotSpot). nextNotification → system shade; nextLink → browser.
+    @Volatile private var drainRun = false
+    private var notifId = 1000
 
     // A6 native chrome (OSRS-mobile 2-col tab grid; the engine stones are hidden and this grid replaces them).
     private lateinit var chromeOverlay: ChromeOverlayView
@@ -107,6 +120,9 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "MainActivity"
         private val booted = AtomicBoolean(false)
 
+        private const val NOTIF_CHANNEL = "runelite_game"
+        private const val REQ_POST_NOTIFICATIONS = 7001
+
         // AWT virtual-key codes (java.awt.event.KeyEvent) the engine's onKeyStroke expects.
         private const val VK_BACK_SPACE = 8
         private const val VK_ENTER = 10
@@ -129,6 +145,10 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+
+        // AP-2a Finding 9: a notification channel for in-game alerts (idle, level-up, etc.) + the runtime
+        // POST_NOTIFICATIONS prompt on API 33+ (silently granted below that). The drain loop delivers to it.
+        setupNotifications()
 
         // SurfaceView for the live game frame; a tiny hidden input view to host the soft keyboard's
         // InputConnection (the SurfaceView itself can't be a text editor). FrameLayout stacks them.
@@ -211,6 +231,29 @@ class MainActivity : AppCompatActivity() {
             kbButton.alpha = if (manualKeyboard) 1f else 0.7f
             Log.i(TAG, "ap0: manual keyboard ${if (manualKeyboard) "ON" else "OFF"}")
         }
+        // AP-2a (Finding 12): sticky-Shift latch. The engine's shift-gated surface — "Mark" on objects/NPCs/
+        // tiles, Menu Entry Swapper shift-to-customize, overlay "Configure" — only injects while shift is held.
+        // Touch has no hardware shift, so this latch posts a synthetic held VK_SHIFT (shared JavaBridge.
+        // setShiftHeld, iOS-device-proven): latch ON → long-press shows the shift entries → tap to commit →
+        // latch OFF. The hold is multi-second with no per-frame re-assert (proven by ShiftFeedSpike).
+        val shiftButton = devButton("⇧")
+        shiftButton.setOnClickListener {
+            shiftHeld = !shiftHeld
+            shiftButton.alpha = if (shiftHeld) 1f else 0.7f
+            JvmLauncher.setShiftHeld(shiftHeld)
+            Log.i(TAG, "ap2a: sticky-Shift ${if (shiftHeld) "HELD" else "released"}")
+        }
+        // DEBUG: long-press ⇧ publishes a host-origin notification through the shared bridge — a deterministic
+        // end-to-end check of the Finding-9 delivery path (queue → drain → NotificationManager) without
+        // needing an in-game trigger. Real engine notifications (idle/level) ride the identical path.
+        if (BuildConfig.DEBUG) shiftButton.setOnLongClickListener {
+            JvmLauncher.onBridge {
+                JvmLauncher.publishNotification("RuneLite", "Notification delivery test")
+                JvmLauncher.publishLink("https://oldschool.runescape.wiki/")
+            }
+            Log.i(TAG, "ap2a: debug test notification + link published")
+            true
+        }
         // Track G AG2: restart into GPU Route-C mode (force-enable the base gpu plugin, render the scene on GLES).
         val gpuButton = devButton("◆")
         gpuButton.setOnClickListener { restartIntoGpu() }
@@ -222,8 +265,8 @@ class MainActivity : AppCompatActivity() {
         // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
         val devBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(pluginButton); addView(kbButton); addView(chromeButton); addView(signInButton)
-            addView(logoutButton); addView(gpuButton); addView(hdButton)
+            addView(pluginButton); addView(kbButton); addView(shiftButton); addView(chromeButton)
+            addView(signInButton); addView(logoutButton); addView(gpuButton); addView(hdButton)
         }
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
@@ -373,6 +416,9 @@ class MainActivity : AppCompatActivity() {
             val app = applicationContext
             thread(name = "jvm-boot") { bootJvm(app, censusMode, gpu = gpuMode && !rlhdMode, rlhd = rlhdMode) }
         }
+        // AP-2a: start draining the notification/link queues. Safe before the VM is up — the externs return ""
+        // until the MobileUiBridge facade publishes, then start yielding real items.
+        startBridgeDrain()
     }
 
     /** Dev "GPU" button: restart the process into GPU Route-C mode (the embedded VM is one-per-process, so
@@ -662,6 +708,103 @@ class MainActivity : AppCompatActivity() {
         }
         frameCallback = cb
         Choreographer.getInstance().postFrameCallback(cb)
+    }
+
+    /** AP-2a Finding 9: create the notification channel + request POST_NOTIFICATIONS (API 33+). */
+    private fun setupNotifications() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val ch = NotificationChannel(NOTIF_CHANNEL, "Game alerts", NotificationManager.IMPORTANCE_DEFAULT)
+                .apply { description = "In-game notifications (idle, level-up, etc.)" }
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(ch)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_POST_NOTIFICATIONS)
+        }
+    }
+
+    /**
+     * AP-2a Findings 9 + 25: drain the shared notification + link queues on a dedicated daemon (NOT the UI
+     * thread — these JNI calls daemon-attach to HotSpot; the UI thread must never attach, ANR risk). A
+     * notification → the system shade (NotificationManager); a link → the browser. ~3Hz: notifications/links
+     * are human-paced, so a third of a second is imperceptible and costs almost nothing.
+     */
+    private fun startBridgeDrain() {
+        if (drainRun) return
+        drainRun = true
+        thread(name = "rl-drain", isDaemon = true) {
+            while (drainRun) {
+                try {
+                    var n = JvmLauncher.nextNotification()
+                    while (n.isNotEmpty()) {
+                        deliverNotification(n)
+                        n = JvmLauncher.nextNotification()
+                    }
+                    var url = JvmLauncher.nextLink()
+                    while (url.isNotEmpty()) {
+                        openLink(url)
+                        url = JvmLauncher.nextLink()
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "rl-drain: ${t.message}")
+                }
+                try { Thread.sleep(300) } catch (e: InterruptedException) { break }
+            }
+        }
+    }
+
+    /** Raise a system notification from a "titlebody" payload (the shared SOH-delimited format). */
+    private fun deliverNotification(payload: String) {
+        val sep = payload.indexOf('')
+        val title = if (sep >= 0) payload.substring(0, sep) else "RuneLite"
+        val body = if (sep >= 0) payload.substring(sep + 1) else payload
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.i(TAG, "ap2a: notification suppressed (POST_NOTIFICATIONS not granted): '$title'")
+            return
+        }
+        // Tap reopens the game (single top — don't stack a second activity).
+        val openSelf = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        val pi = openSelf?.let {
+            android.app.PendingIntent.getActivity(
+                this, 0, it,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
+        val n = NotificationCompat.Builder(this, NOTIF_CHANNEL)
+            .setSmallIcon(android.R.drawable.stat_notify_more)
+            .setContentTitle(title.ifEmpty { "RuneLite" })
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setAutoCancel(true)
+            .apply { if (pi != null) setContentIntent(pi) }
+            .build()
+        try {
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(notifId++, n)
+            Log.i(TAG, "ap2a: notification delivered title='$title'")
+        } catch (t: Throwable) {
+            Log.w(TAG, "ap2a: notify failed: ${t.message}")
+        }
+    }
+
+    /** AP-2a Finding 25: open an in-game outbound link (Wiki/HiScore/plugin page) in the system browser. */
+    private fun openLink(url: String) {
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            Log.i(TAG, "ap2a: link ignored (non-http): $url")
+            return
+        }
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            Log.i(TAG, "ap2a: link opened $url")
+        } catch (t: Throwable) {
+            Log.w(TAG, "ap2a: openLink failed: ${t.message}")
+        }
     }
 
     /**
@@ -964,6 +1107,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         frameCallback?.let { Choreographer.getInstance().removeFrameCallback(it) }
         frameCallback = null
+        drainRun = false   // stop the AP-2a notification/link drain daemon
         super.onDestroy()
     }
 

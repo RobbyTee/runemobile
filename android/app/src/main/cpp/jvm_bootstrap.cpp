@@ -59,6 +59,8 @@ static jmethodID g_midText = nullptr, g_midKeyStroke = nullptr;
 static jmethodID g_midTextInputOpen = nullptr, g_midInteractTapSeq = nullptr, g_midSnapRadius = nullptr;
 // A2 press-and-peek: JavaBridge.selectMenuPoint commit + the separate MenuPeekBridge read-surface.
 static jmethodID g_midSelectMenuPoint = nullptr;
+// AP-2a sticky-Shift: JavaBridge.setShiftHeld(boolean) — synthetic held VK_SHIFT (shared, iOS-device-proven).
+static jmethodID g_midSetShiftHeld = nullptr;
 static jclass    g_menuPeekCls = nullptr;
 static jmethodID g_midMenuSnapshot = nullptr, g_midMenuPublishSeq = nullptr;
 
@@ -69,6 +71,13 @@ static jclass    g_mobileUiCls = nullptr;
 static jmethodID g_midListPlugins = nullptr, g_midMobileUiSeq = nullptr, g_midPollEvents = nullptr, g_midSetPluginEnabled = nullptr;
 static jmethodID g_midGetPluginConfig = nullptr, g_midSetConfig = nullptr, g_midProcessedWriteId = nullptr;
 static jmethodID g_midFlushConfig = nullptr;   // A8: persist pending config writes when the app backgrounds
+// AP-2a bridge-amortized read surface (best-effort; a null only disables that one feature):
+//   nextNotification() -> "titlebody" or null  (Finding 9: NotificationManager delivery)
+//   nextLink()         -> URL or null                (Finding 25: Chrome Custom Tab)
+//   hubState()         -> {"refreshing":b,"seq":i}    (Finding 17: hub install progress)
+static jmethodID g_midNextNotification = nullptr, g_midNextLink = nullptr, g_midHubState = nullptr;
+// Native-origin publish into the SAME shared queues (host-raised alerts/links; also deterministic path tests).
+static jmethodID g_midPublishNotification = nullptr, g_midPublishLink = nullptr;
 // A5 Tier-1 plugin panels (rendered off-screen under CACIO; the ARGB int[] image is marshalled cross-VM).
 static jmethodID g_midListPanels = nullptr, g_midOpenPanel = nullptr, g_midClosePanel = nullptr,
                  g_midPanelW = nullptr, g_midPanelH = nullptr, g_midPanelSeq = nullptr,
@@ -180,7 +189,11 @@ static std::string           g_chatSnapshotPub = "{\"loggedIn\":false}";
 enum InputKind {
     IN_CLICK = 0, IN_TOUCH = 1, IN_CAMERA = 2, IN_CLEARHOVER = 3,
     IN_WHEEL = 4, IN_CLICKPRECISE = 5, IN_MOVE = 6, IN_KEYSTROKE = 7, IN_TEXT = 8,
-    IN_SELECTMENU = 9
+    IN_SELECTMENU = 9,
+    // AP-2a sticky-Shift: hold/release a synthetic VK_SHIFT (a=1 hold, a=0 release). Queued (not a direct
+    // facade call) so it's ORDERED with the menu-open click — the engine must see shift held BEFORE the
+    // right-click that builds the menu, or the shift-gated entries (Mark/Configure) won't be injected.
+    IN_SHIFT = 10
 };
 // s carries the IN_TEXT payload; empty for the int-only kinds (aggregate-inits to "").
 struct InputEvent { int kind, a, b, c, d; std::string s; };
@@ -382,8 +395,10 @@ static bool publishBridge(JNIEnv *env) {
         LOGE("bridge: a JavaBridge method id failed to resolve");
         return false;
     }
+    // AP-2a sticky-Shift: best-effort (a missing one only disables the ⇧ button, never the render path).
+    g_midSetShiftHeld = midOpt(env, global, "setShiftHeld", "(Z)V");
     g_bridgeCls = global;   // publish only once fully resolved
-    LOGI("bridge: JavaBridge facade published");
+    LOGI("bridge: JavaBridge facade published (shiftHeld=%s)", g_midSetShiftHeld ? "on" : "off");
 
     // A2: MenuPeekBridge is a SEPARATE facade — resolve best-effort so a missing/old one only disables menu-peek
     // (never blocks the render path). It is inert unless -Drunelite.menupeek=true, but the class is always present.
@@ -431,6 +446,12 @@ static bool publishBridge(JNIEnv *env) {
             g_midFlushConfig      = midOpt(env, mug, "flushConfig", "()Ljava/lang/String;");   // A8 background flush
             if (!g_midGetPluginConfig || !g_midSetConfig || !g_midProcessedWriteId)
                 LOGE("bridge: MobileUiBridge config methods partial (plugin config read/write disabled)");
+            // AP-2a: drain surfaces for native notification / link-out / hub-progress (each best-effort).
+            g_midNextNotification = midOpt(env, mug, "nextNotification", "()Ljava/lang/String;");
+            g_midNextLink         = midOpt(env, mug, "nextLink", "()Ljava/lang/String;");
+            g_midHubState         = midOpt(env, mug, "hubState", "()Ljava/lang/String;");
+            g_midPublishNotification = midOpt(env, mug, "publishNotification", "(Ljava/lang/String;Ljava/lang/String;)V");
+            g_midPublishLink         = midOpt(env, mug, "publishLink", "(Ljava/lang/String;)V");
             // A5 Tier-1 panel surface (best-effort, ALL-OR-NOTHING: every method the viewer uses must resolve.
             // closePanel in particular — without it, PanelView dispose can't close the open engine-side panel,
             // so a partial set disables panels entirely rather than opening one it can never close.)
@@ -612,6 +633,7 @@ static void drainInput(JNIEnv *env) {
             case IN_MOVE:         env->CallStaticVoidMethod(g_bridgeCls, g_midMove, ev.a, ev.b); break;
             case IN_KEYSTROKE:    env->CallStaticVoidMethod(g_bridgeCls, g_midKeyStroke, ev.a); break;
             case IN_SELECTMENU:   env->CallStaticVoidMethod(g_bridgeCls, g_midSelectMenuPoint, ev.a, ev.b); break;
+            case IN_SHIFT:        if (g_midSetShiftHeld) env->CallStaticVoidMethod(g_bridgeCls, g_midSetShiftHeld, (jboolean)(ev.a != 0)); break;
             case IN_TEXT: {
                 jstring js = env->NewStringUTF(ev.s.c_str());
                 env->CallStaticVoidMethod(g_bridgeCls, g_midText, js);
@@ -1087,6 +1109,11 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeClearHover(JNIEnv *, jobject) {
     enqueue({IN_CLEARHOVER, 0, 0, 0, 0});
 }
+// AP-2a sticky-Shift: queue a hold (held=1) / release (held=0) so it's ordered ahead of the menu-open click.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetShiftHeld(JNIEnv *, jobject, jboolean held) {
+    enqueue({IN_SHIFT, held ? 1 : 0, 0, 0, 0});
+}
 
 // ---- A1 input ingress (UI thread enqueues; render thread drains into the bridge) ---------------------
 extern "C" JNIEXPORT void JNICALL
@@ -1263,6 +1290,51 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeFlushConfig(JNIEnv *artEnv, jobject) {
     if (!mobileUiReady() || !g_midFlushConfig) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midFlushConfig);
+}
+// AP-2a drain surfaces: one queued item or "" (empty queue / unresolved). Off the UI thread (rl-bridge).
+//   Finding 9  — nextNotification: "titlebody" (SOH-delimited), native splits + raises a notification.
+//   Finding 25 — nextLink: a single URL to open in a Custom Tab.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeNextNotification(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midNextNotification) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midNextNotification);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeNextLink(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midNextLink) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midNextLink);
+}
+// Finding 17 — hubState: {"refreshing":bool,"seq":int}, native drives the hub install spinner.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeHubState(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midHubState) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midHubState);
+}
+// Publish a host-origin notification into the shared queue (the drain delivers it like an engine one). Off
+// the UI thread (rl-bridge). Lets the native shell raise its own alerts + deterministically exercise delivery.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePublishNotification(JNIEnv *artEnv, jobject, jstring jt, jstring jb) {
+    if (!mobileUiReady() || !g_midPublishNotification) return;
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls) return;
+    std::string t = jstr(artEnv, jt), b = jstr(artEnv, jb);
+    jstring ht = hs->NewStringUTF(t.c_str()), hb = hs->NewStringUTF(b.c_str());
+    hs->CallStaticVoidMethod(g_mobileUiCls, g_midPublishNotification, ht, hb);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+    if (ht) hs->DeleteLocalRef(ht);
+    if (hb) hs->DeleteLocalRef(hb);
+}
+// Publish a host-origin link into the shared queue (the drain opens it). Off the UI thread (rl-bridge).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePublishLink(JNIEnv *artEnv, jobject, jstring ju) {
+    if (!mobileUiReady() || !g_midPublishLink) return;
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls) return;
+    std::string u = jstr(artEnv, ju);
+    jstring hu = hs->NewStringUTF(u.c_str());
+    hs->CallStaticVoidMethod(g_mobileUiCls, g_midPublishLink, hu);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+    if (hu) hs->DeleteLocalRef(hu);
 }
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeClosePanel(JNIEnv *artEnv, jobject) {
