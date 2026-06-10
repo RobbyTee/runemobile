@@ -399,7 +399,7 @@ public class Hooks implements Callbacks
 			net.runelite.api.GameState gs = client.getGameState();
 			if (gs != net.runelite.api.GameState.LOGGED_IN && gs != net.runelite.api.GameState.LOADING)
 			{
-				net.runelite.client.headless.JavaBridge.setSceneDrawn(false);
+				net.runelite.client.headless.JavaBridge.armSceneHold();
 			}
 		}
 		if (net.runelite.client.headless.MobileUiBridge.isEnabled())
@@ -724,12 +724,12 @@ public class Hooks implements Callbacks
 			net.runelite.client.headless.GpuSceneDiag.onDrawScene();
 		}
 
-		// iOS load-in flash guard: the engine just dispatched a real 3D scene render, so this frame has geometry
-		// (not the bare sky). Let the GPU publish through from here on (re-armed off on non-world game states in
-		// draw(), so the next login load-in holds again). See JavaBridge.sceneDrawn.
+		// iOS load-in flash guard: count this 3D scene render. The GPU publish stays held until a few of these
+		// have accumulated (zones still upload for a few frames after the first draw, so the first frames are bare
+		// sky) — re-armed to 0 on non-world game states in draw(). See JavaBridge.sceneDrawCount.
 		if (net.runelite.client.headless.JavaBridge.isEnabled())
 		{
-			net.runelite.client.headless.JavaBridge.setSceneDrawn(true);
+			net.runelite.client.headless.JavaBridge.noteSceneDraw();
 		}
 
 		MainBufferProvider bufferProvider = (MainBufferProvider) client.getBufferProvider();

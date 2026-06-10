@@ -163,19 +163,21 @@ public final class RLHDStarter
 			// iOS caps GL_MAX_SAMPLES at 4, so MSAA_4 == the device max. NOTE: this is a runtime FBO change the
 			// Simulator shader probe can't pre-validate — pure device test; revert to DISABLED if it regresses.
 			MobileUiBridge.setConfig("hd", "antiAliasingMode", "MSAA_4");
-			// Supersampling AA: with MSAA off, edges alias badly and the small fixed canvas is upscaled ~3x to the
-			// retina screen -> jagged "pixelated" model/terrain edges. RLHD renders the scene to fboScene at
-			// sceneResolution = sceneViewport * (sceneResolutionScale/100), then the final glBlitFramebuffer
-			// downsamples it into the canvas viewport with sceneScalingMode's filter (HdPlugin:1315, ZoneRenderer:1109).
-			// At 200% the scene is rendered at 2x (4 samples/px) and box-downsampled -> smooth edges. This is a plain
-			// linear downscale blit (NOT the fragile MSAA resolve), single-sample fboScene, so it sidesteps the round-7
-			// black-screen path entirely. LINEAR is already the default but pin it so the downsample is smooth.
+			// Scene resolution scale (SSAA): renders the scene to fboScene at sceneResolution = sceneViewport *
+			// (sceneResolutionScale/100), then downsamples into the viewport with sceneScalingMode's filter
+			// (HdPlugin:1315, ZoneRenderer:1109). 200% (2x SSAA) was added to smooth edges back when the canvas was the
+			// tiny FIXED 765x503 upscaled ~3x to retina. In RESIZABLE mode the engine canvas is already ~1304x600
+			// (1.7x wider), so 2x SSAA on top renders the scene at 2608x1200 + MSAA_4 + shadows + tiled lighting EVERY
+			// frame -> ~9 fps on device (device-measured). The higher native canvas + MSAA_4 already carry the edge AA,
+			// so SSAA is largely redundant here: drop to 100 (native) to cut the scene-render pixel count ~4x. (After
+			// the direct-present path lands and removes the glReadPixels readback ceiling, SSAA can be dialed back up
+			// for quality if wanted.) LINEAR pins a smooth downsample for any residual scaling.
 			MobileUiBridge.setConfig("hd", "sceneScalingMode", "LINEAR");
-			final String last = MobileUiBridge.setConfig("hd", "sceneResolutionScale", "200");
+			final String last = MobileUiBridge.setConfig("hd", "sceneResolutionScale", "100");
 			if (last.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced iOS config (uiScaling=LINEAR; POM/wind/char-disp/asyncModelProcessing OFF; shadows=DETAILED/SMOOTH/transparency; normalMapping=ON; dynamicLights=SOME; tiledLighting=ON; MSAA_4; sceneResolutionScale=200 LINEAR = 2x SSAA)");
+				log.info("[routecrlhd] forced iOS config (uiScaling=LINEAR; POM/wind/char-disp/asyncModelProcessing OFF; shadows=DETAILED/SMOOTH/transparency; normalMapping=ON; dynamicLights=SOME; tiledLighting=ON; MSAA_4; sceneResolutionScale=100 LINEAR = native, no SSAA)");
 			}
 			return;
 		}
