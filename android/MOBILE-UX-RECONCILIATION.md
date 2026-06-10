@@ -94,3 +94,26 @@ run as the exception, scoped to a deliberate device-verification pass, not the p
    (dropped touch-UP = stuck camera/button), not polish. Then Logout, chat scroll-by-drag, manual `⌨` button.
 3. **Run the OQ1 shift spike** (separately, early) before planning any shift-dependent UX.
 4. All of the above is **emulator work** — see the testing policy above.
+
+## Session 2026-06-10 (later): chat scroll-by-drag VISUALLY VERIFIED (emulator, mainland account)
+
+The Tutorial-Island blocker is gone: the emulator now runs a **legacy (non-Jagex) mainland account** via the
+new username/password autologin (`HeadlessLogin` legacy stage + `LegacyCreds` + `set-legacy-login.sh`; see
+that commit). The tutorial account's tokens.json is parked on-device as `tokens.json.tutorial` (a plain
+tokens.json wins over legacy creds by design).
+
+- **Chat is in normal message mode**: tab row (All/Game/Public/…), input line, scrollbar, real scrollback —
+  not the tutorial's dialog/instruction mode.
+- **Scroll-by-drag verified end-to-end**: drag inside the live chat rect fires
+  `MainActivity: ap0: chat scroll begin game=(266,66)` and the **visible lines move** — with the scrollback
+  overflowed (>8 lines), a downward drag brought "Welcome to Old School RuneScape." / "This is a free
+  world…" back into view (~3 lines of travel for a 120-view-px drag), and the position **holds after
+  release** (no snap-back). Frames: `dev-tools/ap0-mobile-ux/evidence-chat-scroll-{before,during,after}.png`.
+- Drag direction is natural touch scrolling: drag down → older lines scroll into view.
+- Incidental findings while building scrollback for the test (not regressions, logged for later):
+  - `adb shell input text` arrives but the per-char round-trip reorders characters (scrambled chat input);
+    hardware `KEYCODE_ENTER` (`input keyevent 66`) never reaches the engine, so a pending chat line can't be
+    submitted from adb. IME (soft-keyboard) input is unaffected — this is an adb-injection quirk, but worth
+    a look if scripted typing is ever needed (e.g. world-switcher search automation).
+  - Long-presses with x ≳ 1660 inside the open side panel don't reach the menu-peek path (taps do) — likely
+    the chrome overlay's grid hit-test region. Examines on the panel's left half work fine.
