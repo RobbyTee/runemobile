@@ -42,6 +42,7 @@ data class PluginRow(
     val className: String,
     val name: String,
     val enabled: Boolean,
+    val active: Boolean,       // engine actually started it; enabled && !active (after grace) = couldn't start
     val hasConfig: Boolean,
     val configGroup: String?,
     val pinned: Boolean,
@@ -88,11 +89,19 @@ fun PluginPanel(onClose: () -> Unit) {
         return
     }
 
-    LaunchedEffect(Unit) {
+    // Finding 8: a plugin just toggled ON is starting — suppress the "couldn't start" badge during a grace
+    // window, then re-fetch the true active state. A row is incompatible = enabled && !active && not pending.
+    var pending by remember { mutableStateOf(setOf<String>()) }
+
+    suspend fun reload() {
         // listPlugins() must run off the UI thread + on a HotSpot-attached thread -> the rl-bridge executor.
         val json = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.listPlugins() }.get() }
         rows = parsePlugins(json)
         loading = false
+    }
+
+    LaunchedEffect(Unit) {
+        reload()
         Log.i("MainActivity", "ANDROID_A4_UI_GREEN panel opened rows=${rows.size}")
     }
 
@@ -120,9 +129,22 @@ fun PluginPanel(onClose: () -> Unit) {
                     items(shown, key = { it.className }) { p ->
                         PluginRowItem(
                             p,
+                            // enabled but the engine never started it (after the startup grace) = couldn't start.
+                            incompatible = p.enabled && !p.active && p.className !in pending,
                             onToggle = { checked ->
                                 rows = rows.map { if (it.className == p.className) it.copy(enabled = checked) else it }
                                 JvmLauncher.onBridge { JvmLauncher.setPluginEnabled(p.className, checked) }
+                                if (checked) {
+                                    // Grace the badge while it starts, then re-fetch the real active state.
+                                    pending = pending + p.className
+                                    scope.launch {
+                                        kotlinx.coroutines.delay(4000)
+                                        reload()
+                                        pending = pending - p.className
+                                    }
+                                } else {
+                                    pending = pending - p.className
+                                }
                             },
                             onTogglePin = {
                                 val nowPinned = !p.pinned
@@ -155,7 +177,13 @@ fun PluginPanel(onClose: () -> Unit) {
 }
 
 @Composable
-private fun PluginRowItem(p: PluginRow, onToggle: (Boolean) -> Unit, onTogglePin: () -> Unit, onOpenConfig: (() -> Unit)?) {
+private fun PluginRowItem(
+    p: PluginRow,
+    incompatible: Boolean,
+    onToggle: (Boolean) -> Unit,
+    onTogglePin: () -> Unit,
+    onOpenConfig: (() -> Unit)?,
+) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -169,9 +197,14 @@ private fun PluginRowItem(p: PluginRow, onToggle: (Boolean) -> Unit, onTogglePin
             modifier = Modifier.clickable { onTogglePin() }.padding(end = 10.dp),
         )
         val nameMod = if (onOpenConfig != null) Modifier.weight(1f).clickable { onOpenConfig() } else Modifier.weight(1f)
-        Row(nameMod, verticalAlignment = Alignment.CenterVertically) {
-            Text(p.name, color = Color.White)
-            if (onOpenConfig != null) Text("  ⚙", color = Color(0xFF9E9E9E))   // tap the name to configure
+        Column(nameMod) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(p.name, color = if (incompatible) Color(0xFF9E9E9E) else Color.White)
+                if (onOpenConfig != null) Text("  ⚙", color = Color(0xFF9E9E9E))   // tap the name to configure
+            }
+            // Finding 8: the toggle is on but the engine couldn't start it on this platform (GPU, Discord,
+            // Developer Tools, …) — tell the user instead of leaving a dead toggle.
+            if (incompatible) Text("✕ couldn't start (incompatible)", color = Color(0xFFE57373), fontSize = 11.sp)
         }
         Switch(checked = p.enabled, onCheckedChange = onToggle)
     }
@@ -185,6 +218,7 @@ private fun parsePlugins(json: String): List<PluginRow> = try {
             className = o.getString("className"),
             name = o.optString("name", o.getString("className")),
             enabled = o.optBoolean("enabled"),
+            active = o.optBoolean("active"),
             hasConfig = o.optBoolean("hasConfig"),
             configGroup = if (o.isNull("configGroup")) null else o.optString("configGroup", null),
             pinned = o.optBoolean("pinned"),
