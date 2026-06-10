@@ -153,3 +153,31 @@ thin-consumer wins (all consume already-merged shared methods; NO shared-Java ch
   `PluginHubViewController`, but Android never built the equivalent (the matrix's "Android hub works" row was
   carried over from iOS). So #17 needs the whole hub screen built first — moved OUT of AP-2a to its own slot.
   The `nativeHubState` JNI extern is staged + ready for when that screen lands.
+
+## Session 2026-06-10 (AP-2b cont.): screenshot (5) + Low-Detail default (7) — emulator-verified
+
+- **Finding 5 — screenshot → gallery — VERIFIED.** New `📷` dev-bar button → `saveScreenshot()` pulls the
+  composited CPU frame via a new `JvmLauncher.nativeFramePixels()` JNI extern (mirrors `nativePanelPixels`,
+  reads `JavaBridge.getFramePixels` off the rl-bridge thread) → builds a Bitmap → PNG into MediaStore
+  `Pictures/RuneLite`. **Format gotcha:** `getFramePixels` is `0x00RRGGBB` (alpha UNSET) — OR `0xFF000000`
+  for an opaque PNG; channel order already matches Android's ARGB int so **NO R↔B swizzle** here (unlike the
+  SurfaceView blit at `jvm_bootstrap.cpp:790`, which swizzles for RGBA_8888). Width from `nativeFrameWidth()`,
+  `h = len/w` guarded by `len % w == 0` (bails on a torn read across a resize). API 29+ scoped insert
+  (RELATIVE_PATH + IS_PENDING, no permission); pre-Q legacy path covered by `WRITE_EXTERNAL_STORAGE`
+  maxSdk=28. NO shared-Java change; contract UNCHANGED. Verified: tap → 1280×720 opaque PNG, correct colours,
+  lands in `Pictures/RuneLite/` + gallery (pulled + eyeballed). Note: CPU path only — under live GPU/117HD
+  present the frame isn't published to `getFramePixels`. Commit `b79639ff36`. Evidence:
+  `dev-tools/ap2b-mobile-ux/evidence-screenshot-{devbar,saved-mediastore}.png`.
+- **Finding 7 — Low-Detail-on mobile default — VERIFIED, NO CODE NEEDED.** The shared half already shipped in
+  the staged jar via the iOS merge: `MobileUiBridge.applyMobileDefaults()` (`:1169`) runs once on the first
+  `tick()` (`:1349`) and calls `enableByDefaultIfUnset("LowMemoryPlugin", true)` — enables Low Detail only when
+  the user hasn't chosen (config key unset), so a re-seed never overrides an explicit setting. This is a
+  pure `[shared-core]` finding (no native half), so Android gets it for free. Verified by stripping
+  `runelite.lowmemoryplugin` from the profile, rebooting → log `[mobileui] default-profile: LowMemoryPlugin
+  -> true` fires on first tick, key re-applied + persisted to `=true` after a background flush. The
+  touch-hostile plugins (cursor/key-remap/stretched/interface-styles/anti-drag) are already stock-OFF, so
+  nothing to flip — keeping them out of reach is Finding 8's native "hide incompatible" concern (done).
+
+**AP-2b status: Findings 10, 6, 8, 5, 7 all DONE.** Only remaining AP-2b item: **Finding 17 — net-new
+Plugin Hub browse/install screen** (JNI for hubManifest/hubInstall/hubUninstall + a Compose screen mirroring
+iOS's PluginHubViewController; hubState already staged). Then AP-4.
