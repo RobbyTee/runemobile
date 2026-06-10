@@ -899,18 +899,38 @@ static JNIEXPORT void JNICALL rc_AWT_swapBuffers_0(JNIEnv *env, jobject self)
 
     if ([RouteCBridge isPresenting]) {
         // Direct present: scan the drawable out to the CAEAGLLayer — no glReadPixels, no int[] blit, no CGImage.
+        // PERF (DEVICE KIT — gl_FragDepth early-Z A/B): the kit's perf block originally lived only on the readback
+        // path below, so on-device (direct present) runs logged NO [perf] lines. Mirror it here: glFinish() before
+        // present = GPU render time/frame (where the early-Z cost shows), avg + p95, mode-tagged, appended to
+        // Documents/routec-perf.log once/sec. Both A/B modes pay the same glFinish sync, so the compare is fair.
+        // STRIP with the rest of the device kit after the EAGL-vs-ANGLE decision.
+        double g0 = rc_now_seconds();
+        glFinish();                              // block until the GPU has finished rendering THIS frame
+        double tGpu = rc_now_seconds() - g0;
         double p0 = rc_now_seconds();
         [RouteCBridge present];
         double tPresent = rc_now_seconds() - p0;
-        static int frames = 0; static double accPresent = 0, lastLog = 0;
+        static int frames = 0; static double accGpu = 0, accPresent = 0, lastLog = 0;
+        static double gpuWin[1024]; static int nWin = 0;
         double now = rc_now_seconds();
-        frames++; accPresent += tPresent;
+        frames++; accGpu += tGpu; accPresent += tPresent;
+        if (nWin < 1024) gpuWin[nWin++] = tGpu * 1000.0;
         if (lastLog == 0) lastLog = now;
         double span = now - lastLog;
         if (span >= 1.0) {
-            rc_trace([NSString stringWithFormat:@"[perf] engine=%.1f fps  present=%.2f ms  (%d frames, %dx%d)",
-                frames / span, (accPresent / frames) * 1000.0, frames, [RouteCBridge fbWidth], [RouteCBridge fbHeight]]);
-            frames = 0; accPresent = 0; lastLog = now;
+            for (int i = 1; i < nWin; i++) {           // insertion sort the window (small) for the p95
+                double k = gpuWin[i]; int j = i - 1;
+                while (j >= 0 && gpuWin[j] > k) { gpuWin[j + 1] = gpuWin[j]; j--; }
+                gpuWin[j + 1] = k;
+            }
+            double p95 = nWin ? gpuWin[(int)((nWin - 1) * 0.95)] : 0.0;
+            NSString *line = [NSString stringWithFormat:
+                @"[perf] mode=%@ engine=%.1f fps  gpuFinish avg=%.2f p95=%.2f ms  present=%.2f ms  (%d frames, %dx%d)",
+                [RouteCBridge perfModeTag], frames / span, (accGpu / frames) * 1000.0, p95,
+                (accPresent / frames) * 1000.0, frames, [RouteCBridge fbWidth], [RouteCBridge fbHeight]];
+            rc_trace(line);
+            [RouteCBridge appendPerfLine:line];
+            frames = 0; accGpu = 0; accPresent = 0; lastLog = now; nWin = 0;
         }
     } else {
         rc_swap_publish(env); /* readback fallback (L1 probe / CPU): glReadPixels FBO -> JavaBridge -> publish */
