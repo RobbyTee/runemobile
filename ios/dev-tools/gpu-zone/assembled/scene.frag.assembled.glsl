@@ -934,7 +934,7 @@ vec3 sampleCaustics(const vec2 flow1, const vec2 flow2) {
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#define NORMAL_MAPPING 0
+#define NORMAL_MAPPING 1
 
 // #pragma once: already included
 

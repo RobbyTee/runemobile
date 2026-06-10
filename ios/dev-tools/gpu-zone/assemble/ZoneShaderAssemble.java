@@ -73,7 +73,7 @@ public class ZoneShaderAssemble {
 		define("TILED_LIGHTING_LAYER_COUNT", 0);
 		define("TILED_LIGHTING_TILE_SIZE", 16);
 		define("MAX_LIGHT_COUNT", 1);
-		define("NORMAL_MAPPING", false);
+		define("NORMAL_MAPPING", true); // B1: normal mapping ON — swaps sampleNormalMap stub for the real normals.glsl body
 		define("PARALLAX_OCCLUSION_MAPPING", false);
 		// B1 shadows: SHADOW_MODE_FAST=1 (was 0/OFF at Z0). Enabling it pulls the real utils/shadows.glsl into
 		// scene_frag (ios-overrides/utils/shadows.glsl = the ES3 port). SHADOW_FILTERING_PCF=0; transparency off for

@@ -107,7 +107,12 @@ public final class RLHDStarter
 			MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");                 // else HYBRID/xBR pull in scale/*.glsl
 			MobileUiBridge.setConfig("hd", "tiledLighting", "false");                  // else the tiled-lighting program compiles
 			MobileUiBridge.setConfig("hd", "dynamicLights", "NONE");                   // DYNAMIC_LIGHTS off
-			MobileUiBridge.setConfig("hd", "normalMapping", "false");                  // NORMAL_MAPPING off
+			// B1 NORMAL MAPPING (second ported feature): NORMAL_MAPPING swaps the sampleNormalMap stub (TBN[2]) for
+			// the real utils/normals.glsl body, which samples the normal map as a layer of the EXISTING material
+			// textureArray (material.normalMap index — no new texture loading) and does one int->float cast that's
+			// already in both the assembler + runtime (RouteCBridge) downport maps. TBN/cotangent_frame already
+			// compiled (the stub used it). Simulator EAGL gate GREEN with NORMAL_MAPPING=1.
+			MobileUiBridge.setConfig("hd", "normalMapping", "true");                   // NORMAL_MAPPING on
 			MobileUiBridge.setConfig("hd", "parallaxOcclusionMappingToggle", "false"); // PARALLAX_OCCLUSION_MAPPING off
 			// B1 SHADOWS (first ported feature): SHADOW_MODE_FAST pulls the real utils/shadows.glsl shadow-map
 			// sampling into scene_frag; the ES3 port (ios-overrides/utils/shadows.glsl) compiles+links on device
@@ -147,7 +152,7 @@ public final class RLHDStarter
 			if (last.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced iOS config (uiScaling=LINEAR; tiled/dynamic/normal/POM/wind/char-disp/MSAA/asyncModelProcessing OFF; shadows=FAST/SMOOTH/no-transparency; sceneResolutionScale=200 LINEAR = 2x SSAA)");
+				log.info("[routecrlhd] forced iOS config (uiScaling=LINEAR; tiled/dynamic/POM/wind/char-disp/MSAA/asyncModelProcessing OFF; shadows=FAST/SMOOTH/no-transparency; normalMapping=ON; sceneResolutionScale=200 LINEAR = 2x SSAA)");
 			}
 			return;
 		}
