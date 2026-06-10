@@ -1,3 +1,5 @@
 # xcodegen-generated (regenerate with `xcodegen generate`) + build output
 *.xcodeproj/
 build/
+# host-JVM assembler class files (regenerate with javac)
+*.class

@@ -26,8 +26,8 @@
 	//    default precision for float/int/sampler types — declared before first use. isampler2D is added for the
 	//    repacked textureFaces (rule 6) and the zone path's integer samplers.
 	NSString *prec = fragment
-		? @"\nprecision highp float;\nprecision highp int;\nprecision highp sampler2DArray;\nprecision highp sampler2D;\nprecision highp isampler2D;\nprecision highp usampler2D;\n"
-		: @"\nprecision highp float;\nprecision highp int;\nprecision highp isampler2D;\nprecision highp usampler2D;\n";
+		? @"\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp sampler2DArray;\nprecision highp isampler2D;\nprecision highp isampler2DArray;\nprecision highp usampler2D;\nprecision highp usampler2DArray;\nprecision highp sampler2DShadow;\n"
+		: @"\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp sampler2DArray;\nprecision highp isampler2D;\nprecision highp isampler2DArray;\nprecision highp usampler2D;\nprecision highp usampler2DArray;\n";
 	NSRange verLine = [s rangeOfString:@"#version 300 es"];
 	if (verLine.location != NSNotFound)
 	{

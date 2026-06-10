@@ -36,18 +36,30 @@ Superset of the base-gpu B1 downporter. Per the blueprint §5 blocker list:
 6. explicit int↔float casts — **site set discovered from Z0 compile errors** (empty until the compile loop runs;
    prefer hand-maintained variants for the cast-heavy files per the blueprint).
 
-## Status — what's done vs the gating next step
+## Status — done / in progress / remaining
 
-**Done (this scaffold):** vendored RLHD source; the downporter (rules 1–5); the EAGL compile-loop probe + verdict
-script; the xcodegen project. `ZoneProbe` currently reports **`NO_ASSEMBLED_SHADERS … PENDING`** because `assembled/`
-is empty — the verdict script returns `Z0_PENDING` (exit 3), not a false green.
+**Done:** vendored RLHD source; the downporter (`ZoneDownport`); the EAGL compile-loop probe + verdict script; the
+xcodegen project; **the assemble step (`assemble/ZoneShaderAssemble.java`) — a dependency-free host-JVM replica of
+RLHD's `ShaderIncludes.parse()` that resolves all `#include`/`#define` from the fixed minimal-config define map and
+emits `assembled/<name>.<stage>.assembled.glsl`.** All **6/6** zone targets (scene/shadow/ui × vert/frag) assemble
+clean. The `MAX_SIMULTANEOUS_WORLD_VIEWS`/`WORLD_VIEW_GETTER` overrides that `ZoneRenderer.addShaderIncludes()` does
+(not vendored) are replicated in the assembler config.
 
-**Gating next step — the assemble step.** RLHD shaders are not compilable until `#include`/`#define` are resolved by
-RLHD's `ShaderIncludes`. Build a standalone `ZoneShaderAssemble.java` (analogue of `gpu-b1/assemble/ShaderAssemble.java`)
-that reuses the vendored `ShaderIncludes` and replicates `HdPlugin.getShaderIncludes()` with a **fixed config** (start
-minimal: shadows off, tiled-lighting off, dynamic-lights off — the B0 flat-scene set), emitting `assembled/<name>.<stage>.
-assembled.glsl` for `scene`, `shadow`, `ui` (+ `tiled_lighting` later). The exact define-list to replicate
-(`HdPlugin.java:902-960` @ `7dded59`):
+**Gate run (Simulator ES 3.0, latest):** `ui.vert` **COMPILES** ✅. The other 5 fail on a **single remaining error
+class: int↔float implicit-conversion strictness** (blueprint blocker **#13** — `+`/`<`/`/`/`*`/`!=` between int and
+float). The `#version`, precision (incl. `usampler2DArray`/`sampler2DShadow`), and zero-sized-array classes are all
+cleared. So Z0 is down to the #13 cast grind.
+
+**Remaining — the #13 cast pass (strategy choice).** The failing sites are mostly in shared util GLSL
+(`utils/color_utils.glsl` color-temperature math, `scaling/bicubic.glsl` `t < 1`/`t < 2`, etc.) — int literals in
+float context. Two options (blueprint prefers the second for cast-heavy files): (a) targeted `ZoneDownport` rule-#6
+string replacements; (b) **hand-maintained iOS shader variants** of the cast-heavy includes. Each Sim compile surfaces
+one error per shader, so this is iterative (assemble is unaffected — it's purely the ES3 compile step). Once all six
+compile: **device confirm** (Sim compiler ≠ A19), then seal the md5 in `gpu-zone-z0-verdict.sh`.
+
+---
+
+### Reference — the assembler's fixed define-list (`HdPlugin.getShaderIncludes()` @ `7dded59`)
 
 ```
 addIncludePath(SHADER_PATH)
