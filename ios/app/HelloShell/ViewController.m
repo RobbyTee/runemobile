@@ -25,6 +25,7 @@
 @property (nonatomic, strong) UIButton *gpuButton;   // GPU Route C: dedicated one-tap button to boot full RuneLite on GPU
 @property (nonatomic, strong) UIButton *zoneButton;  // GPU Zone: dedicated one-tap button to boot full RuneLite on 117HD
 @property (nonatomic, strong) UIButton *zoneFastButton;  // GPU Zone: 117HD resizable + DIRECT present (no readback)
+@property (nonatomic, strong) UIButton *graphicsButton;  // native curated 117HD graphics settings (live-tunable)
 @property (nonatomic, strong) UIButton *canaryButton;
 @property (nonatomic, strong) UIButton *keyboardButton;
 // W3 hybrid-chrome device de-risk: read the MobileChromeBridge snapshot + proxy a tab switch via the proven
@@ -416,6 +417,16 @@ static const CGFloat kMenuWidth       = 210.0;
              forControlEvents:UIControlEventTouchUpInside];
     [self.debugPanel addSubview:self.zoneFastButton];
 
+    // Curated 117HD graphics settings (MSAA / shadows / lights / resolution …) the user can tune live. Works once
+    // 117HD is up; reach it during play via the ≡ toggle. Stays enabled (it reads the running plugin's config).
+    self.graphicsButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.graphicsButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.graphicsButton setTitle:@"⚙ Graphics" forState:UIControlStateNormal];
+    self.graphicsButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    [self.graphicsButton addTarget:self action:@selector(onOpenGraphics)
+             forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.graphicsButton];
+
     self.loginButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.loginButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.loginButton setTitle:@"Log in with Jagex" forState:UIControlStateNormal];
@@ -535,9 +546,11 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.gpuButton.leadingAnchor constraintEqualToAnchor:self.chromeButton.trailingAnchor constant:24],
         [self.zoneButton.centerYAnchor constraintEqualToAnchor:self.gpuButton.centerYAnchor],
         [self.zoneButton.leadingAnchor constraintEqualToAnchor:self.gpuButton.trailingAnchor constant:24],
-        // ⚡ Fast on its own row (the chrome/gpu/zone row is already full-width).
+        // ⚡ Fast + ⚙ Graphics on their own row (the chrome/gpu/zone row is already full-width).
         [self.zoneFastButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
         [self.zoneFastButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
+        [self.graphicsButton.centerYAnchor constraintEqualToAnchor:self.zoneFastButton.centerYAnchor],
+        [self.graphicsButton.leadingAnchor constraintEqualToAnchor:self.zoneFastButton.trailingAnchor constant:24],
         [self.loginButton.topAnchor constraintEqualToAnchor:self.zoneFastButton.bottomAnchor constant:6],
         [self.loginButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.logoutButton.centerYAnchor constraintEqualToAnchor:self.loginButton.centerYAnchor],
@@ -952,6 +965,28 @@ static const CGFloat kMenuWidth       = 210.0;
     if (!hasConfig || group.length == 0) return;
     PluginConfigViewController *cfg = [[PluginConfigViewController alloc] initWithGroup:group
                                                                             pluginName:[p[@"name"] description]];
+    [self presentViewController:cfg animated:YES completion:nil];
+}
+
+// Curated 117HD graphics settings the user can tune live. The whitelist is exactly the iOS-PORTED settings (each
+// proven safe to setConfig from RLHDStarter) — exposing anything else risks RLHD recompiling an unported shader
+// and stopping the plugin. Excluded on purpose (kept forced-safe in RLHDStarter): uiScalingMode (only LINEAR
+// ports), shadowFiltering (only SMOOTH ports), POM / wind / character displacement, asyncModelProcessing.
+- (void)onOpenGraphics {
+    NSArray<NSString *> *safe = @[
+        @"sceneResolutionScale",      // SSAA / render scale (sharpness <-> fps)
+        @"antiAliasingMode",          // MSAA off / 2x / 4x
+        @"shadowMode",                // OFF / FAST / DETAILED
+        @"shadowResolution",          // shadow map size
+        @"enableShadowTransparency",  // dappled foliage shadows
+        @"dynamicLights",             // NONE / FEW / SOME / MANY
+        @"tiledLighting",             // whole-scene lighting
+        @"normalMapping",             // surface relief
+        @"drawDistance",              // view distance
+    ];
+    PluginConfigViewController *cfg = [[PluginConfigViewController alloc] initWithGroup:@"hd"
+                                                                            pluginName:@"117HD Graphics"
+                                                                             whitelist:safe];
     [self presentViewController:cfg animated:YES completion:nil];
 }
 
