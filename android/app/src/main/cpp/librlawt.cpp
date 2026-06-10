@@ -674,7 +674,11 @@ static jobject rc_make_caps(JNIEnv* env){
     env->SetBooleanField(o, env->GetFieldID(c, "OpenGL43", "Z"), JNI_FALSE);
     env->SetBooleanField(o, env->GetFieldID(c, "GL_ARB_buffer_storage", "Z"), JNI_FALSE);
     env->SetBooleanField(o, env->GetFieldID(c, "GL_ARB_copy_buffer", "Z"), JNI_FALSE);
-    env->SetBooleanField(o, env->GetFieldID(c, "GL_ARB_map_buffer_range", "Z"), JNI_FALSE);
+    // glMapBufferRange + glFlushMappedBufferRange are GLES 3.0 CORE (both forwarded here), so report this TRUE so
+    // RLHD's GLMappedBuffer takes its RANGE path — the one that expresses invalidate/flush-explicit/unsynchronized
+    // correctly per the caller's intent. The legacy glMapBuffer fallback (cap false) can't express that, which
+    // raced the CPU write against the GPU draw on dynamic player-model buffers (the model-flashing bug).
+    env->SetBooleanField(o, env->GetFieldID(c, "GL_ARB_map_buffer_range", "Z"), JNI_TRUE);
     env->SetBooleanField(o, env->GetFieldID(c, "GL_ARB_shader_image_load_store", "Z"), JNI_FALSE);
     return o;
 }
