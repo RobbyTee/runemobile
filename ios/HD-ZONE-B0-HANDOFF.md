@@ -3,6 +3,60 @@
 > Branch `gpu`. Self-contained kickoff for a fresh session. Project memory auto-loads, so this is just the focused
 > "where we are + what's next." Everything below is pushed to `origin/gpu`.
 
+---
+
+## ★★★ B0 GATE MET (2026-06-10) — 117HD RENDERS THE LIVE OSRS SCENE ON THE iPHONE. One issue left: dynamic models.
+
+**Read this first; it supersedes the older sections below.** Over one long device session the full ZoneRenderer
+pipeline was brought up on the iPhone 17 Pro Max (A19 Pro). The **static HD world renders correctly** (device
+screenshots): textured rolling terrain, water, the Lumbridge-area stone bridge, HD trees, dirt paths, rocks,
+fences, plants — full 117HD materials + lighting. The fixes, in order (all on `gpu`, pushed; each a separate
+commit, see `git log`):
+
+1. **Material UBO → texture** (`b8d44f817`) — UBOMaterials 57 KB > Apple's 16 KB cap → RGBA32I `materialStore`
+   isampler2D (`gpu-zone/ios-overrides/uniforms/materials.glsl` + `java-overrides/.../MaterialManager.java` +
+   Scene/ShadowShaderProgram). 2. **Shadow int/float** (`30fbe3cd4`) — `ios-overrides/shadow_frag.glsl` for the
+   FAST/DETAILED+TRANSPARENCY branches the Z0 probe (SHADOW_MODE=0) never tested. 3. **Heap OOM** (`610eb4da8`) —
+   `-Xmx256m→1024m` + gate HeadlessCapture off in GPU mode. 4. **Buffer map failures** (`c373ab475` +
+   `ce2b6c91b`) — orphan-on-write (`GL_MAP_INVALIDATE_BUFFER_BIT`) + host the textureFaces TBO on
+   `GL_COPY_WRITE_BUFFER` (GL_TEXTURE_BUFFER is ES 3.2). 5. **TBO repack SIGSEGV** (`2e9c67c6c`) — upload exactly
+   n texels, not the full w×h rect. 6. **Black world / MSAA** (`814b63d11`) — RLHDStarter forces
+   `antiAliasingMode=DISABLED`; the 8× MSAA `glBlitFramebuffer` resolve fails on Apple GLES and falls back to a
+   black clear. 7. **★ Byte order** (`0862006a9`) — THE big one: `z_glMapBuffer`/`z_glMapBufferRange` returned JNI
+   `NewDirectByteBuffer` (BIG-endian) but the GPU reads native little-endian → every vertex/face int+float
+   byte-swapped (garbage geometry + zero HSL). Added `z_native_order` (the base bridge had it; zone omitted it).
+   8. **BGRA texture array** (`ab4dc9f64`) — RLHD uploads the material texture array as `GL_BGRA +
+   GL_UNSIGNED_INT_8_8_8_8_REV` (invalid on iOS GLES 3.0 → black textures); `z_glTexSubImage3D` now swaps R↔B and
+   uploads `GL_RGBA + GL_UNSIGNED_BYTE`. This made the STATIC SCENE render in full HD.
+
+**THE ONE ISSUE LEFT — animated models (player, NPCs) render as BLACK silhouettes** while the static scene is
+perfectly textured. Attempted fix `7fe1563c3` (NOT sufficient — still black on device): `DynamicModelVAO` streams
+model geometry + per-face data through **persistent-mapped storage buffers** (`STORAGE_PERSISTENT|IMMUTABLE|
+WRITE`, `DynamicModelVAO.java:66-84`), and iOS GLES 3.0 has neither `glBufferStorage` (no-op stub `z_noop_IJI`) nor
+`GL_MAP_PERSISTENT_BIT`. RLHD has a built-in fallback (`GLBuffer.ensureCapacity:470-489` → recreate as
+`STORAGE_NONE` non-persistent map/unmap when the persistent `glMapBufferRange` returns null). `7fe1563c3` made
+`z_glMapBufferRange` return NULL for `GL_MAP_PERSISTENT_BIT` to TRIGGER that fallback — but models are STILL black,
+so the fallback path itself isn't producing correct model data on iOS. **Next-session leads:** (a) confirm the
+fallback actually fires (does RLHD reach `ensureCapacity`'s null-branch, or is the persistent map requested via a
+different facade method / a different code path? add a one-shot log); (b) the fallback `glDeleteBuffers(id);
+id = glGenBuffers()` RECREATES the buffer object — the VAO vertex-attrib bindings + the `tbo` texture attach
+(`glTexBuffer`) point at the OLD id and may need re-binding after the recreate (the static `GLTextureBuffer`
+re-attaches in `ensureCapacity` on id-change, but the DynamicModelVAO `vboRender`/`vboStaging` VAO bindings might
+not); (c) `DynamicModelVAO` has a `useStagingBuffer && SUPPORTS_STORAGE_BUFFERS` split (`:66`) — `SUPPORTS_STORAGE_
+BUFFERS` is false on iOS, so the `:75-83` single-buffer branch is used; trace its map()/unmap()/render() (`:144`+)
+and whether `vboRender==vboStaging` survives the STORAGE_NONE recreate; (d) the model COLOUR comes from the
+per-face `tbo` (VAO::TBO, a GLTextureBuffer) — same TBO→2D repack as the (working) static scene, so if positions
+are right but colour is black, suspect the dynamic tbo's repack timing/binding specifically. The static-scene win
+stands on its own; the dynamic models are a contained next task.
+
+**Cleanup still owed (deferred, non-blocking):** the JavaBridge continuous frame-dump diagnostic was reverted (tree
+clean) but the gpu-zone shaders + diagnostics around it are fine; `ShaderOverlay` (a dev debug overlay) fails its
+`smoothstep(int,...)` compile — caught/non-fatal, not on the render path; the `gl_FragDepth` reverse-Z precision
+port may be wanted later if distance z-fighting shows (not observed yet). Device UDID
+`AEA9E1BC-E149-57AB-A9DD-C4AEA668CD9B`; build loop unchanged (see "Build/run loop" in project memory).
+
+---
+
 ## Where we are (one paragraph)
 The GPU track is on iOS native **EAGL GLES 3.0** (decision locked: EAGL + `gl_FragDepth`, not ANGLE). The base
 RuneLite `gpu` plugin already renders the live OSRS 3D world on the iPhone via the Route C JNI-GL bridge. The goal is
