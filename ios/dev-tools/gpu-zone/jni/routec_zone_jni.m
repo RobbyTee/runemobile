@@ -135,10 +135,32 @@ static void JNICALL z_glGetProgramBinary(JNIEnv *e, jclass c, jint prog, jintArr
     if (fmtArr) (*e)->SetIntArrayRegion(e, fmtArr, 0, 1, &f);
 }
 
+// JNI NewDirectByteBuffer defaults to BIG-endian; the GPU reads buffer bytes in the platform's NATIVE order
+// (little-endian on arm64). RLHD's upload workers write vertex positions + per-face data (HSL/material/terrain)
+// into the mapped buffer via IntBuffer/FloatBuffer views, so a non-native ByteBuffer byte-swaps EVERY int/float
+// -> garbage geometry (the huge camera-locked shapes) + zero HSL (black world). The base bridge already wraps its
+// mapped buffers with native order (rc_native_order, routec_gl_jni.m); the zone map functions must too.
+static jobject z_native_order(JNIEnv *e, jobject bb) {
+    if (!bb) return bb;
+    jclass boCls = (*e)->FindClass(e, "java/nio/ByteOrder");
+    jclass bbCls = (*e)->FindClass(e, "java/nio/ByteBuffer");
+    if (boCls && bbCls) {
+        jmethodID nativeOrder = (*e)->GetStaticMethodID(e, boCls, "nativeOrder", "()Ljava/nio/ByteOrder;");
+        jmethodID order = (*e)->GetMethodID(e, bbCls, "order", "(Ljava/nio/ByteOrder;)Ljava/nio/ByteBuffer;");
+        if (nativeOrder && order) {
+            jobject no = (*e)->CallStaticObjectMethod(e, boCls, nativeOrder);
+            jobject ret = (*e)->CallObjectMethod(e, bb, order, no); // returns `this`, reconfigured
+            if (ret) bb = ret;
+        }
+    }
+    (*e)->ExceptionClear(e);
+    return bb;
+}
+
 // Buffer mapping (ES3 range-map only).
 static jobject JNICALL z_glMapBufferRange(JNIEnv *e, jclass c, jint t, jlong off, jlong len, jint access) {
     void *p = glMapBufferRange((GLenum)t, (GLintptr)off, (GLsizeiptr)len, (GLbitfield)access);
-    return p ? (*e)->NewDirectByteBuffer(e, p, len) : NULL;
+    return p ? z_native_order(e, (*e)->NewDirectByteBuffer(e, p, len)) : NULL;
 }
 // glMapBuffer(target, access-enum, oldBuffer) — ES has no whole-buffer map; range-map the full GL_BUFFER_SIZE and
 // translate the access enum to a bitfield.
@@ -155,7 +177,7 @@ static jobject JNICALL z_glMapBuffer(JNIEnv *e, jclass c, jint t, jint access, j
                  : (access == GL_WRITE_ONLY) ? (GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT)
                  : (GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
     void *p = glMapBufferRange((GLenum)t, 0, sz, f);
-    return p ? (*e)->NewDirectByteBuffer(e, p, sz) : NULL;
+    return p ? z_native_order(e, (*e)->NewDirectByteBuffer(e, p, sz)) : NULL;
 }
 
 // Texture-array uploads (materials + shadow). NIO data via the direct buffer address.
