@@ -182,6 +182,11 @@ object JvmLauncher {
     external fun nativeSetChatTabRowHeight(canvasPx: Int)
     external fun nativeSetChatAreaWidth(canvasPx: Int)
 
+    // AP-0 chat scroll-by-drag: scroll the chat by deltaCanvasPx (positive = toward newer/bottom) via the
+    // chatbox's OWN scroll layer — not a mouse wheel, which would zoom the camera under the transparent chat.
+    // Off the UI thread (via [onBridge]); accumulated and applied by the engine tick.
+    external fun nativeScrollChat(deltaCanvasPx: Int)
+
     // Kotlin-friendly aliases.
     fun setEnv(key: String, value: String) = nativeSetEnv(key, value)
     fun setStdioRedirect(enabled: Boolean) = nativeSetStdioRedirect(enabled)
@@ -252,4 +257,5 @@ object JvmLauncher {
     fun chatSnapshotPub() = nativeChatSnapshotPub()
     fun setChatTabRowHeight(canvasPx: Int) = nativeSetChatTabRowHeight(canvasPx)
     fun setChatAreaWidth(canvasPx: Int) = nativeSetChatAreaWidth(canvasPx)
+    fun scrollChat(deltaCanvasPx: Int) = nativeScrollChat(deltaCanvasPx)
 }

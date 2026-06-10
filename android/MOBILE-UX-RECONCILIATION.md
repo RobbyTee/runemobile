@@ -55,6 +55,34 @@ run as the exception, scoped to a deliberate device-verification pass, not the p
 - **OQ1 (the shift-feed spike) is still the single blocker** that decides ~5 findings (12/18/19/20 + overlay
   "Configure"). Run it early; it's cheap and its yes/no gates a whole branch.
 
+## Session 2026-06-10 — OQ1 + AP-0 status (emulator-verified)
+
+- **OQ1 is RESOLVED — no spike needed.** The shift-feed was proven FEASIBLE on the live engine on 2026-06-08
+  (`d5e54948de`: a synthetic held `VK_SHIFT` posted to the gamepack Canvas flips `isKeyPressed(KC_SHIFT)`,
+  release clears it). The shared `JavaBridge.setShiftHeld(boolean)` already shipped (`7c9cf46825`, in
+  `baseline.txt`) and iOS has its native sticky-Shift button (`5a3abe83b3`). Findings 12/18/19/20 + overlay
+  "Configure" are UNBLOCKED; Android owes only the native sticky-Shift toggle (AP-2).
+- **Finding 4 (input-queue overflow guard) was already done in A8** (`jvm_bootstrap.cpp` coalesce + never-drop
+  terminal events at the 512 cap) — the audit predates it.
+- **AP-0 Findings 1/2/3 implemented + emulator-verified:**
+  - **1 Logout** (`⏻` + confirm): flushConfig → delete tokens.json (internal + external) → write a
+    `logged_out.marker` that suppresses the bundled-asset fallback (sideload bundles, undeletable) until the
+    next successful login clears it → purge WebView cookies → process restart → login-first boot gate.
+    Verified end-to-end incl. asset suppression + pushed-tokens re-arm.
+  - **2 Chat scroll-by-drag**: drag starting inside the live chat rect (chrome-snapshot bounds, tracks the
+    relocate) → accumulated canvas-px deltas → new `nativeScrollChat` JNI extern → shared
+    `HudVeneerBridge.scrollChat`. Gesture + JNI seam verified; **visible scroll not yet observed because the
+    emulator account is on Tutorial Island, where the chatbox is in dialog/instruction mode (no scrollable
+    message layer — `applyChatScroll` correctly clamps to a no-op)**. The engine-side path is the
+    iOS-device-proven shared code. Re-verify visually once the account is off the tutorial.
+  - **3 Manual `⌨` keyboard toggle**: forces the soft keyboard up for public-chat composition; the auto-raise
+    poll now compares against the ACTUAL IME visibility (`ime()` insets, API 30+), so manual mode is sticky
+    against system dismissals and stale-state wedges are impossible. Verified incl. re-raise-after-BACK.
+- **Note:** the staged Android runtime jars predated the iOS shared-core merge (no `scrollChat` in
+  `HudVeneerBridge`) — re-staged via `tools/stage-mobile-runtime.sh --android-only` +
+  `stage-android-gpu-jar.sh` (contract UNCHANGED, 184 entries). If a HudVeneer facade method is added to the
+  all-or-nothing JNI set, the staged jar must carry it or the whole chrome write surface disables.
+
 ## Recommended first steps for the next session
 
 1. **Sync the branch first.** The blueprint + the iOS-side shared-core (which the audit says to *reuse*) live

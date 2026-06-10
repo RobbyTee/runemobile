@@ -22,11 +22,13 @@ import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import android.webkit.CookieManager
 import android.widget.FrameLayout
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -54,10 +56,18 @@ class MainActivity : AppCompatActivity() {
     private var pinchActive = false
     private var scaleAccum = 1f
 
+    // AP-0 chat scroll-by-drag: a one-finger drag that STARTS inside the live chat box scrolls the chat
+    // (finger-scroll, the iOS chatScrollAccum gesture) instead of rotating the camera. The rect is the
+    // engine chatbox bounds (canvas px) from the per-frame chrome snapshot, so it tracks the relocate.
+    private var chatScrolling = false
+    private var chatScrollAccum = 0f
+    private var chatRectCanvas: IntArray? = null   // [x,y,w,h] canvas px; null = chat not reported
+
     // A1 per-frame poll state (driven by Choreographer).
     private var vibrator: Vibrator? = null
     private var lastTapSeq = 0
     private var keyboardShown = false
+    private var manualKeyboard = false   // ⌨ toggle: hold the soft keyboard up with no engine text field open
     private var frameCallback: Choreographer.FrameCallback? = null
 
     // A6 native chrome (OSRS-mobile 2-col tab grid; the engine stones are hidden and this grid replaces them).
@@ -187,6 +197,20 @@ class MainActivity : AppCompatActivity() {
         // A3: on-device Jagex login / switch account — runs the WebView OAuth, writes tokens.json, restarts.
         val signInButton = devButton("⎆")
         signInButton.setOnClickListener { startActivity(Intent(this, LoginActivity::class.java)) }
+        // AP-0: persistent Log out — forget the Jagex session entirely (tokens + web cookies) and restart.
+        // JX_* is snapshotted at JNI_CreateJavaVM, so only a clean process restart truly drops the session;
+        // with no tokens the login-first boot gate then lands on the Jagex login. Mirrors the iOS onLogout.
+        val logoutButton = devButton("⏻")
+        logoutButton.setOnClickListener { confirmLogout() }
+        // AP-0: manual ⌨ keyboard summon — composing public chat / PM has no engine text field for the
+        // auto-raise poll to react to, so this forces the soft keyboard up (and keeps the poll from
+        // instantly dismissing it). Tapping again returns to pure auto-raise. Mirrors the iOS ⌨ toggle.
+        val kbButton = devButton("⌨")
+        kbButton.setOnClickListener {
+            manualKeyboard = !manualKeyboard
+            kbButton.alpha = if (manualKeyboard) 1f else 0.7f
+            Log.i(TAG, "ap0: manual keyboard ${if (manualKeyboard) "ON" else "OFF"}")
+        }
         // Track G AG2: restart into GPU Route-C mode (force-enable the base gpu plugin, render the scene on GLES).
         val gpuButton = devButton("◆")
         gpuButton.setOnClickListener { restartIntoGpu() }
@@ -198,7 +222,8 @@ class MainActivity : AppCompatActivity() {
         // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
         val devBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(pluginButton); addView(chromeButton); addView(signInButton); addView(gpuButton); addView(hdButton)
+            addView(pluginButton); addView(kbButton); addView(chromeButton); addView(signInButton)
+            addView(logoutButton); addView(gpuButton); addView(hdButton)
         }
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
@@ -263,6 +288,7 @@ class MainActivity : AppCompatActivity() {
             }
             if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
                 cameraGestureActive = false
+                chatScrolling = false
             }
             true
         }
@@ -373,6 +399,44 @@ class MainActivity : AppCompatActivity() {
         Runtime.getRuntime().exit(0)
     }
 
+    /** Log out is destructive (drops the Jagex session + kills the process) — confirm before doing it. */
+    private fun confirmLogout() {
+        AlertDialog.Builder(this)
+            .setTitle("Log out")
+            .setMessage("Forget this Jagex session? Deletes the saved login (tokens.json) and web cookies, then restarts to the sign-in screen.")
+            .setPositiveButton("Log out") { _, _ -> doLogout() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** AP-0 logout: flush pending config (the restart kills the process), delete tokens.json, purge the
+     *  WebView cookie store (so the IdP can't silently re-auth the old account), then restart into the
+     *  login-first boot gate. Cookie removal is async — chain the restart off its callback. */
+    private fun doLogout() {
+        val purgeAndRestart = {
+            val clean = JagexTokens.deleteAll(applicationContext)
+            if (!clean) Log.w(TAG, "logout: a usable tokens.json source remains — session may return on next boot")
+            CookieManager.getInstance().removeAllCookies {
+                CookieManager.getInstance().flush()
+                Log.i(TAG, "logout: tokens deleted + cookies purged — restarting into the login gate")
+                val i = packageManager.getLaunchIntentForPackage(packageName)
+                i?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                startActivity(i)
+                finishAffinity()
+                Runtime.getRuntime().exit(0)
+            }
+        }
+        if (booted.get()) {
+            JvmLauncher.onBridge {
+                val ack = JvmLauncher.flushConfig()
+                Log.i(TAG, "logout: flushConfig -> $ack")
+                runOnUiThread(purgeAndRestart)
+            }
+        } else {
+            purgeAndRestart()
+        }
+    }
+
     /** Map a SurfaceView-local coordinate to game-canvas pixels, clamped to the current frame. */
     private fun toGameX(viewX: Float): Int {
         val fw = JvmLauncher.frameWidth()
@@ -414,9 +478,36 @@ class MainActivity : AppCompatActivity() {
             if (pinchActive || scaleGestures.isInProgress || e2.pointerCount > 1) {
                 return false
             }
-            if (!cameraGestureActive) {
-                cameraGestureActive = true
-                JvmLauncher.clearHover()
+            // AP-0: a drag that STARTS inside the live chat box scrolls the chat instead of rotating the
+            // camera (decided once, at gesture start, from the DOWN point — same rule as iOS).
+            if (!cameraGestureActive && !chatScrolling) {
+                val r = chatRectCanvas
+                if (r != null && e1 != null) {
+                    val gx = toGameX(e1.x); val gy = toGameY(e1.y)
+                    if (gx >= r[0] && gx < r[0] + r[2] && gy >= r[1] && gy < r[1] + r[3]) {
+                        chatScrolling = true
+                        chatScrollAccum = 0f
+                        Log.i(TAG, "ap0: chat scroll begin game=($gx,$gy)")
+                    }
+                }
+                if (!chatScrolling) {
+                    cameraGestureActive = true
+                    JvmLauncher.clearHover()
+                }
+            }
+            if (chatScrolling) {
+                // Content follows the finger: finger dy = -distanceY, scaled to canvas px and accumulated so
+                // sub-pixel drags aren't lost; whole px go to the chat's own scroll layer with the same
+                // direction mapping as iOS (kChatScrollDir = -1, i.e. send -dy).
+                val fh = JvmLauncher.frameHeight(); val vh = surfaceView.height
+                val k = if (fh > 0 && vh > 0) fh.toFloat() / vh else 1f
+                chatScrollAccum += -distanceY * k
+                val whole = chatScrollAccum.toInt()
+                if (whole != 0) {
+                    chatScrollAccum -= whole
+                    JvmLauncher.onBridge { JvmLauncher.scrollChat(-whole) }
+                }
+                return true
             }
             // Android distanceX/Y = old - new; negate so dragging moves the world the natural way.
             JvmLauncher.camera(-scaleX(distanceX).toInt(), -scaleY(distanceY).toInt())
@@ -529,10 +620,21 @@ class MainActivity : AppCompatActivity() {
     private fun startInputPolling() {
         val cb = object : Choreographer.FrameCallback {
             override fun doFrame(frameTimeNanos: Long) {
-                val want = JvmLauncher.isTextInputOpen()
-                if (want != keyboardShown) {
-                    keyboardShown = want
-                    Log.i(TAG, "a1: textInputOpen=$want -> ${if (want) "raise" else "dismiss"} soft keyboard")
+                val want = manualKeyboard || JvmLauncher.isTextInputOpen()
+                // Compare against the ACTUAL IME visibility, not just our last request: the system can dismiss
+                // the keyboard behind our back (focus change, back swipe), which would otherwise wedge a stale
+                // cached state — manual mode then re-raises (sticky until ⌨ is toggled off). API<30 falls back
+                // to the cached flag (no ime() inset type).
+                val imeShown = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    surfaceView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) ?: keyboardShown
+                } else {
+                    keyboardShown
+                }
+                if (want != imeShown) {
+                    if (want != keyboardShown) {
+                        keyboardShown = want
+                        Log.i(TAG, "a1: textInputOpen/manual=$want -> ${if (want) "raise" else "dismiss"} soft keyboard")
+                    }
                     val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
                     if (want) {
                         keyboardView.requestFocus()
@@ -540,6 +642,8 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         imm.hideSoftInputFromWindow(keyboardView.windowToken, 0)
                     }
+                } else if (want != keyboardShown) {
+                    keyboardShown = want   // converged without a request (e.g. user-raised IME matches want)
                 }
                 val seq = JvmLauncher.interactTapSeq()
                 if (seq != lastTapSeq) {
@@ -576,6 +680,13 @@ class MainActivity : AppCompatActivity() {
         val supported = loggedIn && topLevel == 164      // Classic/PRE_EOC: the native grid's tabs map to real stones
         chromeOverlay.setGridEnabled(supported)
         chromeOverlay.setActiveTab(active)
+
+        // AP-0 chat scroll-by-drag: cache the live chatbox bounds (canvas px) for the gesture-start hit test.
+        // The snapshot reports the post-relocate bounds, so the scroll region tracks the chat-at-top move.
+        chatRectCanvas = if (loggedIn) {
+            o?.optJSONArray("chat")?.takeIf { it.length() >= 4 && it.optInt(2) > 0 && it.optInt(3) > 0 }
+                ?.let { intArrayOf(it.optInt(0), it.optInt(1), it.optInt(2), it.optInt(3)) }
+        } else null
 
         val gridOn = supported && chromeOverlay.railsShown
         applyStonesHidden(gridOn)

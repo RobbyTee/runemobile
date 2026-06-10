@@ -110,6 +110,9 @@ static jmethodID g_midRelocateChat = nullptr, g_midRelocateMinimap = nullptr;
 // A3 enlarged native chat-tab veneer: getChatSnapshot (per-frame tab geometry/state the bigger native buttons
 // read) + setChatTabRowHeight / setChatAreaWidth (tell the engine to push the message area below the taller row).
 static jmethodID g_midChatSnapshot = nullptr, g_midSetChatRowH = nullptr, g_midSetChatAreaW = nullptr;
+// AP-0 chat scroll-by-drag: scrollChat(deltaCanvasPx) drives the chatbox's OWN scroll layer (not a mouse
+// wheel — a wheel over the transparent chat would also zoom the camera).
+static jmethodID g_midScrollChat = nullptr;
 static std::atomic<bool> g_hudReady{false};
 
 // ---- Surface / render --------------------------------------------------------------------------------
@@ -553,8 +556,10 @@ static bool publishBridge(JNIEnv *env) {
             g_midChatSnapshot      = midOpt(env, hvg, "getChatSnapshot", "()Ljava/lang/String;");
             g_midSetChatRowH       = midOpt(env, hvg, "setChatTabRowHeight", "(I)V");
             g_midSetChatAreaW      = midOpt(env, hvg, "setChatAreaWidth", "(I)V");
+            g_midScrollChat        = midOpt(env, hvg, "scrollChat", "(I)V");
             bool hudOk = g_midSetStonesHidden && g_midOpenTab && g_midRelocateSidePanel && g_midRelocateChat
-                      && g_midRelocateMinimap && g_midChatSnapshot && g_midSetChatRowH && g_midSetChatAreaW;
+                      && g_midRelocateMinimap && g_midChatSnapshot && g_midSetChatRowH && g_midSetChatAreaW
+                      && g_midScrollChat;
             if (hudOk) {
                 g_hudCls = hvg;                                         // before the release-store below
                 g_hudReady.store(true, std::memory_order_release);
@@ -1485,4 +1490,11 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeSetChatAreaWidth(JNIEnv *, jobject, jint canvasPx) {
     if (!hudReady()) return;
     facadeVoidInt(g_hudCls, g_midSetChatAreaW, canvasPx);
+}
+// AP-0 chat scroll-by-drag: accumulate a finger-drag delta into the chatbox's own scroll layer (applied on
+// the client thread in HudVeneerBridge.tick). Positive = toward newer/bottom. rl-bridge thread.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeScrollChat(JNIEnv *, jobject, jint deltaCanvasPx) {
+    if (!hudReady()) return;
+    facadeVoidInt(g_hudCls, g_midScrollChat, deltaCanvasPx);
 }
