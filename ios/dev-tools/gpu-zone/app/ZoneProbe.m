@@ -27,14 +27,13 @@ static GLenum stageForName(NSString *name)
 	return 0;   // geometry/compute are not part of the zone path — skipped
 }
 
-static BOOL compileOne(NSString *name, NSString *src, GLenum stage, void (^log)(NSString *))
+// Compile one shader; return the shader object (kept for linking) or 0 on failure.
+static GLuint compileOne(NSString *name, NSString *src, GLenum stage, void (^log)(NSString *))
 {
 	// The bundled assembled shaders are already ES 3.00 (downported at assemble time by ZoneShaderAssemble — the
 	// single source of truth for the GLSL 330->ES300 rules). Compile as-is; no runtime downport here.
-	NSString *down = src;
-
 	GLuint sh = glCreateShader(stage);
-	const char *c = [down UTF8String];
+	const char *c = [src UTF8String];
 	glShaderSource(sh, 1, &c, NULL);
 	glCompileShader(sh);
 
@@ -47,13 +46,35 @@ static BOOL compileOne(NSString *name, NSString *src, GLenum stage, void (^log)(
 	{
 		log([NSString stringWithFormat:@"[z0] COMPILE %@ = FAIL", name]);
 		log([NSString stringWithFormat:@"[z0]   infolog: %@", info]);
-		dumpNumbered(down, log);
+		dumpNumbered(src, log);
 		glDeleteShader(sh);
-		return NO;
+		return 0;
 	}
 	log([NSString stringWithFormat:@"[z0] COMPILE %@ = OK%@", name,
 		info.length ? [@" (infolog: " stringByAppendingFormat:@"%@)", info] : @""]);
-	glDeleteShader(sh);
+	return sh;   // keep — linked below
+}
+
+// Link a vert+frag program; returns YES on GL_LINK_STATUS == TRUE. Logs the link infolog (varying-interface
+// mismatches between the vertex out block and the fragment in block surface HERE, not at compile).
+static BOOL linkProgram(NSString *prog, GLuint vert, GLuint frag, void (^log)(NSString *))
+{
+	GLuint p = glCreateProgram();
+	glAttachShader(p, vert); glAttachShader(p, frag);
+	glLinkProgram(p);
+	GLint ok = 0; glGetProgramiv(p, GL_LINK_STATUS, &ok);
+	GLint len = 0; glGetProgramiv(p, GL_INFO_LOG_LENGTH, &len);
+	NSString *info = @"";
+	if (len > 1) { char *b = malloc(len); glGetProgramInfoLog(p, len, NULL, b); info = @(b); free(b); }
+	glDeleteProgram(p);
+	if (ok != GL_TRUE)
+	{
+		log([NSString stringWithFormat:@"[z0] LINK %@ = FAIL", prog]);
+		log([NSString stringWithFormat:@"[z0]   infolog: %@", info]);
+		return NO;
+	}
+	log([NSString stringWithFormat:@"[z0] LINK %@ = OK%@", prog,
+		info.length ? [@" (infolog: " stringByAppendingFormat:@"%@)", info] : @""]);
 	return YES;
 }
 
@@ -75,13 +96,12 @@ static BOOL compileOne(NSString *name, NSString *src, GLenum stage, void (^log)(
 
 	if (assembled.count == 0)
 	{
-		// Skeleton state: no assembled shaders bundled yet. The assemble step (replicate HdPlugin.getShaderIncludes
-		// over the vendored ShaderIncludes; see README "Status") produces `assembled/*.assembled.glsl`. Report
-		// PENDING, not GREEN — the verdict script keys off this.
 		log(@"[z0] NO_ASSEMBLED_SHADERS — assemble step not wired yet (see gpu-zone/README.md 'Status'). PENDING.");
 		return;
 	}
 
+	// Compile every shader, keeping the objects grouped by program (filename `<prog>.<stage>.assembled.glsl`).
+	NSMutableDictionary<NSString *, NSMutableDictionary<NSNumber *, NSNumber *> *> *programs = [NSMutableDictionary dictionary];
 	int total = 0, okCount = 0, skipped = 0;
 	for (NSString *path in assembled)
 	{
@@ -91,11 +111,33 @@ static BOOL compileOne(NSString *name, NSString *src, GLenum stage, void (^log)(
 		NSString *src = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
 		if (!src) { log([NSString stringWithFormat:@"[z0] FAIL: could not read %@", name]); continue; }
 		total++;
-		if (compileOne(name, src, stage, log)) okCount++;
+		GLuint sh = compileOne(name, src, stage, log);
+		if (sh) {
+			okCount++;
+			NSString *prog = [[name componentsSeparatedByString:@"."] firstObject];
+			if (!programs[prog]) programs[prog] = [NSMutableDictionary dictionary];
+			programs[prog][@(stage)] = @(sh);
+		}
 	}
 	log([NSString stringWithFormat:@"[z0] SUMMARY compiled=%d/%d skipped=%d", okCount, total, skipped]);
-	log(okCount == total && total > 0 ? @"[z0] VERDICT = ALL_ZONE_SHADERS_COMPILE_ES300"
-	                                  : @"[z0] VERDICT = ZONE_SHADER_COMPILE_INCOMPLETE");
+
+	// Link each program that has both a vertex and a fragment stage that compiled.
+	int progTotal = 0, progOk = 0;
+	for (NSString *prog in [programs.allKeys sortedArrayUsingSelector:@selector(compare:)])
+	{
+		NSNumber *v = programs[prog][@(GL_VERTEX_SHADER)], *f = programs[prog][@(GL_FRAGMENT_SHADER)];
+		if (v && f) {
+			progTotal++;
+			if (linkProgram(prog, v.unsignedIntValue, f.unsignedIntValue, log)) progOk++;
+		} else {
+			log([NSString stringWithFormat:@"[z0] LINK %@ = SKIP (missing %@ stage)", prog, v ? @"fragment" : @"vertex"]);
+		}
+	}
+	log([NSString stringWithFormat:@"[z0] LINK SUMMARY linked=%d/%d", progOk, progTotal]);
+
+	BOOL green = okCount == total && total > 0 && progOk == progTotal && progTotal > 0;
+	log(green ? @"[z0] VERDICT = ALL_ZONE_PROGRAMS_LINK_ES300"
+	          : @"[z0] VERDICT = ZONE_GATE_INCOMPLETE");
 }
 
 @end

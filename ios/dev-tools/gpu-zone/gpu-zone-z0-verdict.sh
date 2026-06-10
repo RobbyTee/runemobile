@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 LOG="${1:-evidence/gpu-zone-z0-sim-GREEN.log}"
-EXPECT_MD5="${2:-2d00c0e5958e5b30a9a2f1a6c175de38}"   # sealed Simulator GREEN (6/6 zone shaders compile ES 3.00)
+EXPECT_MD5="${2:-f61963a506ef288f32ca13a16b22a0ee}"   # sealed Simulator GREEN (6/6 zone shaders compile ES 3.00)
 [ -n "$LOG" ] && [ -f "$LOG" ] || { echo "!! usage: gpu-zone-z0-verdict.sh <log> [expected_md5]   (log not found)" >&2; exit 1; }
 
 ACTUAL_MD5="$(md5 -q "$LOG" 2>/dev/null || md5sum "$LOG" | awk '{print $1}')"
@@ -19,14 +19,16 @@ ACTUAL_MD5="$(md5 -q "$LOG" 2>/dev/null || md5sum "$LOG" | awk '{print $1}')"
 ES300=$(grep -q "GL_SLVERSION = OpenGL ES GLSL ES 3.00" "$LOG" && echo YES || echo NO)
 PENDING=$(grep -q "NO_ASSEMBLED_SHADERS" "$LOG" && echo YES || echo NO)
 NO_FAIL=$(grep -qE "= FAIL|-> FAIL|FAIL:" "$LOG" && echo DIRTY || echo CLEAN)
-VERDICT_LINE=$(grep -qF "VERDICT = ALL_ZONE_SHADERS_COMPILE_ES300" "$LOG" && echo OK || echo MISSING)
+VERDICT_LINE=$(grep -qF "VERDICT = ALL_ZONE_PROGRAMS_LINK_ES300" "$LOG" && echo OK || echo MISSING)
 COMPILED=$(grep -oE "SUMMARY compiled=[0-9]+/[0-9]+" "$LOG" | tail -1 || true)
+LINKED=$(grep -oE "LINK SUMMARY linked=[0-9]+/[0-9]+" "$LOG" | tail -1 || true)
 
 echo "log               : $LOG"
 echo "md5 actual        : $ACTUAL_MD5"
 echo "md5 expected      : ${EXPECT_MD5:-<unpinned>}"
 echo "es300 driver      : $ES300"
 echo "$COMPILED"
+echo "$LINKED"
 echo "no-FAIL lines     : $NO_FAIL"
 echo "verdict line      : $VERDICT_LINE"
 

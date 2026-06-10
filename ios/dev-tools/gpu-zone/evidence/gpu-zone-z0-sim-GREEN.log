@@ -7,4 +7,8 @@
 [z0] COMPILE ui.frag.assembled.glsl = OK
 [z0] COMPILE ui.vert.assembled.glsl = OK
 [z0] SUMMARY compiled=6/6 skipped=0
-[z0] VERDICT = ALL_ZONE_SHADERS_COMPILE_ES300
+[z0] LINK scene = OK
+[z0] LINK shadow = OK
+[z0] LINK ui = OK
+[z0] LINK SUMMARY linked=3/3
+[z0] VERDICT = ALL_ZONE_PROGRAMS_LINK_ES300
