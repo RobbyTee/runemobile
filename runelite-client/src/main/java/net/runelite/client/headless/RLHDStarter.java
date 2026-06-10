@@ -108,11 +108,17 @@ public final class RLHDStarter
 			// allocates small. All tunable afterwards in the plugin config panel.
 			MobileUiBridge.setConfig("hd", "antiAliasingMode", "DISABLED");
 			MobileUiBridge.setConfig("hd", "shadowResolution", "RES_2048");
+			// Force SINGLE-THREADED model processing (config key "asyncModelProcessing"). RLHD's multithreaded
+			// path (RENDER_THREADS) has the engine call the draw callbacks from worker threads, which then touch
+			// GL buffers concurrently — but our EGL/GL bridge has ONE thread-affine context, so concurrent buffer
+			// access races and corrupts animated models (real players flash with wrong geometry/colours; NPCs on
+			// the shared opaque path are less affected). Single-threaded keeps every GL call on the context thread.
+			MobileUiBridge.setConfig("hd", "asyncModelProcessing", "false");
 			final String d = MobileUiBridge.setConfig("hd", "drawDistance", "30");
 			if (d.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced mobile config: LINEAR, tiledLighting=off, AA=off, shadows=2048, draw=30");
+				log.info("[routecrlhd] forced mobile config: LINEAR, tiledLighting=off, AA=off, shadows=2048, draw=30, single-threaded");
 			}
 			return;
 		}
