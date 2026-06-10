@@ -322,7 +322,11 @@ public class ZoneShaderAssemble {
 			pragmaOnce.clear(); fileStack.clear();
 			missing.clear();
 			includeMap.put("SHADER_TYPE", shaderTypeBlock(vert ? GL_VERTEX_SHADER : GL_FRAGMENT_SHADER));
-			String assembled = downport(loadFile(SHADER_ROOT.resolve(file)), !vert);
+			// Top-level target file resolves from ios-overrides first (same as `<...>` includes), so a
+			// hand-ported ES3 copy of a top-level shader (e.g. shadow_frag.glsl) is picked up by the gate.
+			Path ovTop = OVERRIDE_ROOT.resolve(file).normalize();
+			Path topTarget = Files.exists(ovTop) ? ovTop : SHADER_ROOT.resolve(file);
+			String assembled = downport(loadFile(topTarget), !vert);
 			String stage = vert ? "vert" : "frag";
 			Path outPath = OUT_DIR.resolve(name + "." + stage + ".assembled.glsl");
 			Files.writeString(outPath, assembled);
