@@ -7,6 +7,7 @@ import sys, os, re, http.server, socketserver
 
 DIRECTORY = sys.argv[1]
 PORT = int(sys.argv[2])
+BIND = sys.argv[3] if len(sys.argv) > 3 else "127.0.0.1"  # pass 0.0.0.0 to expose on the LAN
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -76,4 +77,4 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True
 
 
-Server(("127.0.0.1", PORT), Handler).serve_forever()
+Server((BIND, PORT), Handler).serve_forever()
