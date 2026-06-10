@@ -535,9 +535,10 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.gpuButton.leadingAnchor constraintEqualToAnchor:self.chromeButton.trailingAnchor constant:24],
         [self.zoneButton.centerYAnchor constraintEqualToAnchor:self.gpuButton.centerYAnchor],
         [self.zoneButton.leadingAnchor constraintEqualToAnchor:self.gpuButton.trailingAnchor constant:24],
-        [self.zoneFastButton.centerYAnchor constraintEqualToAnchor:self.zoneButton.centerYAnchor],
-        [self.zoneFastButton.leadingAnchor constraintEqualToAnchor:self.zoneButton.trailingAnchor constant:24],
-        [self.loginButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
+        // ⚡ Fast on its own row (the chrome/gpu/zone row is already full-width).
+        [self.zoneFastButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
+        [self.zoneFastButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
+        [self.loginButton.topAnchor constraintEqualToAnchor:self.zoneFastButton.bottomAnchor constant:6],
         [self.loginButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.logoutButton.centerYAnchor constraintEqualToAnchor:self.loginButton.centerYAnchor],
         [self.logoutButton.leadingAnchor constraintEqualToAnchor:self.loginButton.trailingAnchor constant:16],
