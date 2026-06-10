@@ -56,6 +56,7 @@
 @property (nonatomic, assign) BOOL pendingRouteCGpu;  // GPU Route C: two-finger long-press -> full RuneLite on GPU
 @property (nonatomic, assign) BOOL pendingRouteCZone; // GPU Zone: three-finger long-press -> full RuneLite on 117HD
 @property (nonatomic, assign) BOOL pendingRouteCGpuNoResize;  // GPU Route C bisection: skip headless.resize (fixed 765x503)
+@property (nonatomic, assign) BOOL pendingRouteCZoneDirect;   // GPU Zone: resizable + DIRECT present (CAEAGLLayer, no readback)
 
 // W3 native shell: keep the process alive + show frames. The JVM ran fine on device but iOS
 // jetsam'd the (idle-UI) process within ~250 ms — before the engine drew its first frame. Two
@@ -1232,14 +1233,19 @@ static const CGFloat kMenuWidth       = 210.0;
     [self onLaunch];
 }
 
-// THREE-FINGER long-press: boot 117HD/Zone in the FIXED 765x503 fallback (no headless.resize) — the proven
-// readback path used during Zone bring-up. The one-tap zone button now defaults to RESIZABLE (sharper + native
-// chrome); this gesture stays as the safe fallback if resizable mode regresses the scene dispatch.
+// THREE-FINGER long-press: boot 117HD/Zone in RESIZABLE + DIRECT-PRESENT mode (experiment). Same resizable canvas
+// as the one-tap button, but instead of the per-frame glReadPixels readback (~32ms at 1304x600 = the fps ceiling),
+// RLHD renders straight into a CAEAGLLayer drawable and presentRenderbuffer scans it out — no readback. Reuses the
+// base-GPU direct-present plumbing (RouteCBridge keys off the present layer, mode-agnostic). The one-tap button
+// stays on the proven readback path (~15fps) as the fallback if this scans out black or regresses. EXPERIMENT: the
+// CAEAGLLayer covers the CPU login blit so boot/login shows black until the first GPU frame (autologin still drives
+// login), and the load-in sky flash returns (the readback warmup gate doesn't cover the direct path) — both get
+// polished once direct present is confirmed to scan out + be faster.
 - (void)onLaunchRouteCZoneGesture:(UILongPressGestureRecognizer *)g {
     if (g.state != UIGestureRecognizerStateBegan) return;
     if (self.launched) return;
     self.pendingRouteCZone = YES;
-    self.pendingRouteCGpuNoResize = YES;
+    self.pendingRouteCZoneDirect = YES;
     [self onLaunch];
 }
 
@@ -1348,7 +1354,9 @@ static const CGFloat kMenuWidth       = 210.0;
     // existing gestures + native HUD veneers keep working on top. Only for the normal resizable GPU path (the
     // no-resize bisection stays on the readback path). Must be created + sized on main BEFORE the JVM thread starts
     // (the bridge reads this layer from the JVM thread in awtCreateGLContext via renderbufferStorage:fromDrawable:).
-    if (self.pendingRouteCGpu && !self.pendingRouteCGpuNoResize) {
+    // Fires for the base-GPU resizable path AND the Zone (117HD) direct-present experiment (3-finger gesture) — the
+    // bridge present path is mode-agnostic (keys off the present layer).
+    if ((self.pendingRouteCGpu || self.pendingRouteCZoneDirect) && !self.pendingRouteCGpuNoResize) {
         [self.view layoutIfNeeded];
         CAEAGLLayer *gl = [CAEAGLLayer layer];
         gl.frame = self.screen.bounds;
