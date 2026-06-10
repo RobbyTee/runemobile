@@ -19,6 +19,10 @@ platform-agnostic; only the JNI binding differs.
 
 - **Compile-time (B0.1, DONE):** every method is declared so RLHD links. `stage-ios-zone-jar.sh` is GREEN — 304
   RLHD classes compile, 0 lwjgl leak.
+- **Drop-in superset (host-verified):** the **base** gpu plugin (delombok'd) also compiles GREEN against this
+  facade with lwjgl stripped (29 classes, 0 errors) — so re-staging the base gpu jar with this superset at B0.5
+  won't break the base path. (Verified non-destructively; the base bridge then services its 100 calls, this facade
+  just additionally *declares* the RLHD delta.)
 - **Runtime (B0.3, PENDING):** the `native` methods are **not yet bound**. This facade is the **spec** for the
   `RouteCBridge.m` `RegisterNatives` delta — the ~50 GL calls (e.g. `glDrawBuffers`, `glFramebufferTextureLayer`,
   conditional draw-indirect, `glTexBuffer`→2D TBO repack) the iOS bridge must service beyond the base-gpu 100-method
