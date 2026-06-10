@@ -95,17 +95,27 @@ public final class RLHDStarter
 		lastActionMs = now;
 
 		// Phase 0: BEFORE loading the plugin, force the simplest GLSL-ES paths so HdPlugin.startUp's shader compile
-		// uses them: uiScalingMode=LINEAR (else HYBRID/xBR pull in the int-heavy scale/*.glsl) and tiledLighting=false
-		// (else the tiled-lighting program + image-store path compile). Config writes are queued on the client thread;
-		// returning here lets them commit before the load on the next tick. (Group "hd" per HdPluginConfig.)
+		// uses them. We force the MINIMAL flat-scene config the iOS Zone shader gate (Z0) proved compiles+links on
+		// the device EAGL ES 3.0 driver. Any feature Z0 left OFF pulls in shader code with its OWN un-ported
+		// int<->float (#13) cast sites (e.g. parallax-occlusion-mapping's minLayers/numLayers loop) that the runtime
+		// downporter's cast map doesn't cover -> ShaderException. Matching the runtime config to Z0's buildConfig()
+		// makes the assembled shader equal the device-green ES300. Config writes queue on the client thread; returning
+		// lets them commit before the load on the next tick. (Group "hd"; keys/values per HdPluginConfig + the
+		// ShadowMode/DynamicLights enums.)
 		if (!configForced)
 		{
-			final String a = MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");
-			final String b = MobileUiBridge.setConfig("hd", "tiledLighting", "false");
-			if (a.contains("\"ok\":true") && b.contains("\"ok\":true"))
+			MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");                 // else HYBRID/xBR pull in scale/*.glsl
+			MobileUiBridge.setConfig("hd", "tiledLighting", "false");                  // else the tiled-lighting program compiles
+			MobileUiBridge.setConfig("hd", "dynamicLights", "NONE");                   // DYNAMIC_LIGHTS off
+			MobileUiBridge.setConfig("hd", "normalMapping", "false");                  // NORMAL_MAPPING off
+			MobileUiBridge.setConfig("hd", "parallaxOcclusionMappingToggle", "false"); // PARALLAX_OCCLUSION_MAPPING off
+			MobileUiBridge.setConfig("hd", "shadowMode", "OFF");                       // SHADOW_MODE 0
+			MobileUiBridge.setConfig("hd", "windDisplacement", "false");               // WIND_DISPLACEMENT off
+			final String last = MobileUiBridge.setConfig("hd", "characterDisplacement", "false"); // CHARACTER_DISPLACEMENT off
+			if (last.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced hd.uiScalingMode=LINEAR + tiledLighting=false");
+				log.info("[routecrlhd] forced Z0 minimal config (uiScaling=LINEAR; tiled/dynamic/normal/POM/shadow/wind/char-disp OFF)");
 			}
 			return;
 		}
