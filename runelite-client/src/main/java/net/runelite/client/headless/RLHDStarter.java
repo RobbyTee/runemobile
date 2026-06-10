@@ -111,11 +111,16 @@ public final class RLHDStarter
 			MobileUiBridge.setConfig("hd", "parallaxOcclusionMappingToggle", "false"); // PARALLAX_OCCLUSION_MAPPING off
 			MobileUiBridge.setConfig("hd", "shadowMode", "OFF");                       // SHADOW_MODE 0
 			MobileUiBridge.setConfig("hd", "windDisplacement", "false");               // WIND_DISPLACEMENT off
-			final String last = MobileUiBridge.setConfig("hd", "characterDisplacement", "false"); // CHARACTER_DISPLACEMENT off
+			MobileUiBridge.setConfig("hd", "characterDisplacement", "false");          // CHARACTER_DISPLACEMENT off
+			// MSAA off: the scene renders to an 8x-multisampled FBO that must glBlitFramebuffer-resolve to the
+			// default FBO; Apple's GLES MSAA-resolve path is fragile and an invalid/incomplete scene FBO makes
+			// ZoneRenderer fall back to clearing the screen to pure black (the observed black world). DISABLED
+			// makes the scene FBO single-sample -> a plain same-format blit.
+			final String last = MobileUiBridge.setConfig("hd", "antiAliasingMode", "DISABLED");
 			if (last.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced Z0 minimal config (uiScaling=LINEAR; tiled/dynamic/normal/POM/shadow/wind/char-disp OFF)");
+				log.info("[routecrlhd] forced Z0 minimal config (uiScaling=LINEAR; tiled/dynamic/normal/POM/shadow/wind/char-disp/MSAA OFF)");
 			}
 			return;
 		}
