@@ -740,9 +740,12 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
         @"--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
         // §6.2: heap for the full client + a writable RuneLite home (gamepack cache) + capture dir.
-        @"-Xmx256m",                              // jetsam hedge: 512m+JIT+native risked an early kill;
-                                                  // 256m is ample for the login screen (depends on the
-                                                  // increased-memory-limit entitlement)
+        @"-Xmx1024m",                             // 256m is ample for the CPU login screen, but 117HD's
+                                                  // ZoneRenderer (scene/model staging on-heap + per-frame
+                                                  // BufferedImage capture) OOMs in 256m on the first real draw
+                                                  // (device round 3). 1024m fits well under the jetsam ceiling on
+                                                  // this 12 GB device w/ the increased-memory-limit entitlement
+                                                  // (NIO direct buffers are off-heap). Dial back if jetsam kills.
         [NSString stringWithFormat:@"-Duser.home=%@", docs],                       // -> <docs>/.runelite
         [NSString stringWithFormat:@"-Drunelite.headless.capture.dir=%@", captureDir],
         // Steady capture cadence (the §6.2 TCC fix made the process long-lived, so the old eager

@@ -591,7 +591,13 @@ public class Hooks implements Callbacks
 		}
 
 		// Headless capture seam: composited game + overlays now live in mainBufferProvider.getImage().
-		net.runelite.client.headless.HeadlessCapture.capture(mainBufferProvider);
+		// In GPU mode (Route C) mainBufferProvider is the UI-only layer (the game is on the GPU), so a CPU
+		// capture here is both useless AND a per-frame ~1.5 MB BufferedImage allocation that OOMs the heap once
+		// 117HD's ZoneRenderer is resident — gate it off, same as the JavaBridge snapshot below.
+		if (!client.isGpu())
+		{
+			net.runelite.client.headless.HeadlessCapture.capture(mainBufferProvider);
+		}
 		// Live-blit seam: snapshot the now-complete frame for the native shell (avoids mid-composite tearing).
 		// In GPU mode (Route C) mainBufferProvider holds only the UI layer; the authoritative composited frame
 		// is published later by the gpu plugin's swapBuffers shim, which is then the SOLE frameSeq publisher.
