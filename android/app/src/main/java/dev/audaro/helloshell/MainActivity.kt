@@ -311,8 +311,15 @@ class MainActivity : AppCompatActivity() {
         // AG3-c: a Firebase Game Loop launch (action TEST_LOOP) also boots routecrlhd — Game Loop runs the app
         // UNINTERRUPTED (no Robo crawl/relaunch), giving the long startUp + Zone shader compile its minute on real Mali.
         val gameLoop = intent?.action == "com.google.intent.action.TEST_LOOP"
+        // One-shot marker written by the in-app HD button before it restarts the process. Intent extras don't
+        // reliably survive finishAffinity()+relaunch on every launcher (notably Quest's Horizon OS, which
+        // relaunches the app from its stored shortcut intent and drops our extra) — a file read at boot does.
+        // Consume it on read so HD mode applies to exactly this boot; the next normal launch is the CPU client.
+        val rlhdOnce = File(getExternalFilesDir(null), "rlhd.once")
+        val rlhdOnceSet = rlhdOnce.exists()
+        if (rlhdOnceSet) { rlhdOnce.delete(); Log.i(TAG, "rlhd.once marker consumed -> routecrlhd this boot") }
         val rlhdMode = (intent?.getBooleanExtra("routecrlhd", false) ?: false) ||
-            File(getExternalFilesDir(null), "rlhd.mode").exists() || gameLoop
+            File(getExternalFilesDir(null), "rlhd.mode").exists() || gameLoop || rlhdOnceSet
         if (gameLoop) Log.i(TAG, "AG3-c: Game Loop launch -> routecrlhd (uninterrupted run for the Zone shader compile)")
         // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
         // BEFORE boot. With none (and not census, which uses pushed tokens), run the on-device Jagex login first;
@@ -344,6 +351,10 @@ class MainActivity : AppCompatActivity() {
     /** Dev "HD" button: restart the process into 117HD (routecrlhd) mode — same clean-boot mechanism as
      *  [restartIntoGpu]; RLHDStarter then loads + starts the Zone plugin at LOGIN_SCREEN/LOGGED_IN. */
     private fun restartIntoRlhd() {
+        // Write a one-shot marker BEFORE restarting: some launchers (Quest's Horizon OS) relaunch the app from
+        // its stored shortcut intent and drop the routecrlhd extra, so the extra alone isn't reliable on device.
+        // The marker is filesystem state read + consumed at boot, so it survives the restart regardless.
+        runCatching { File(getExternalFilesDir(null), "rlhd.once").writeText("1") }
         val i = packageManager.getLaunchIntentForPackage(packageName)
         i?.putExtra("routecrlhd", true)
         i?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
