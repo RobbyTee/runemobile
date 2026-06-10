@@ -119,6 +119,22 @@ static ANativeWindow  *g_window = nullptr;     // SurfaceView's window (acquired
 // ANativeWindow_setBuffersGeometry on a generation change — without this, a recreated surface with the SAME
 // frame dims keeps the render loop's cached geomW/geomH, so the new window never gets its format/geometry set.
 static std::atomic<uint64_t> g_surfaceGen{0};
+// GPU direct-present (routecgpu/routecrlhd): when true the GPU draw thread presents straight to the SurfaceView
+// via an EGL window surface (eglSwapBuffers), so the CPU present thread below must NOT also drive the Surface —
+// a BufferQueue allows ONE producer, and an EGL window surface can't attach to a Surface the CPU path connected.
+static std::atomic<bool> g_directPresent{false};
+
+// Present seam handed to librlawt.cpp (it links EGL/GLES but not libandroid). librlawt owns the EGL window
+// surface; these let it borrow the SurfaceView window + watch for surface recreate, with libandroid kept here.
+static void* rcPresentAcquireWindow(uint64_t* outGen) {
+    std::lock_guard<std::mutex> lk(g_winLock);
+    if (outGen) *outGen = g_surfaceGen.load(std::memory_order_acquire);
+    if (g_window) ANativeWindow_acquire(g_window);
+    return g_window;   // ANativeWindow* as void*; caller releases via rcPresentReleaseWindow
+}
+static uint64_t rcPresentSurfaceGen() { return g_surfaceGen.load(std::memory_order_acquire); }
+static void rcPresentReleaseWindow(void* win) { if (win) ANativeWindow_release((ANativeWindow*)win); }
+
 static pthread_t       g_renderThread;
 static bool            g_renderStarted = false;
 static volatile bool   g_renderRun = false;
@@ -128,6 +144,12 @@ static volatile bool   g_renderRun = false;
 // would only matter mid-resize) can't arise in this scope.
 static std::atomic<int> g_lastFrameW{0};
 static std::atomic<int> g_lastFrameH{0};
+// Present seam (cont.): in direct-present mode the CPU present thread no longer runs (it's where g_lastFrameW/H
+// were set), so librlawt publishes the live canvas dims here each frame — touch->game coordinate mapping
+// (JvmLauncher.frameWidth/Height) depends on them, else clicks map off-canvas.
+static void rcPresentSetFrameDims(int w, int h) {
+    if (w > 0 && h > 0) { g_lastFrameW.store(w, std::memory_order_relaxed); g_lastFrameH.store(h, std::memory_order_relaxed); }
+}
 
 // A1 read-surface published by the render thread (the only HotSpot-attached caller) for the UI thread to read
 // without ever attaching to HotSpot — same pattern as the frame dims above.
@@ -692,6 +714,10 @@ static void *renderLoop(void *) {
             }
         }
 
+        // GPU direct-present mode: the draw thread owns the Surface via EGL (eglSwapBuffers). Don't also acquire
+        // and post to it here — the snapshot republish above still ran for the native overlays. Just idle-pace.
+        if (g_directPresent.load(std::memory_order_acquire)) { usleep(16000); continue; }
+
         ANativeWindow *win = nullptr;
         {
             std::lock_guard<std::mutex> lk(g_winLock);
@@ -882,6 +908,17 @@ static void *jvmThreadMain(void *argp) {
                 auto reg = (jint (*)(JNIEnv *)) dlsym(rh, "RouteC_registerGLNatives");
                 if (!reg) LOGE("%s: dlsym RouteC_registerGLNatives failed: %s", mode, dlerror());
                 else { jint rr = reg(env); LOGI("%s: RouteC_registerGLNatives rc=%d (0=OK)", mode, rr); }
+                // Direct EGL present seam: hand librlawt the window-borrow callbacks, then arm direct present so
+                // the CPU present thread never connects to the Surface (leaving it free for the EGL window surface).
+                auto setcb = (void (*)(void* (*)(uint64_t*), uint64_t (*)(), void (*)(void*), void (*)(int, int)))
+                    dlsym(rh, "RouteC_setPresentCallbacks");
+                if (setcb) {
+                    setcb(rcPresentAcquireWindow, rcPresentSurfaceGen, rcPresentReleaseWindow, rcPresentSetFrameDims);
+                    g_directPresent.store(true, std::memory_order_release);
+                    LOGI("%s: direct EGL present armed (CPU present thread stands down)", mode);
+                } else {
+                    LOGE("%s: RouteC_setPresentCallbacks not found — using CPU readback present", mode);
+                }
             }
         }
 

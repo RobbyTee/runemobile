@@ -3,6 +3,7 @@ package dev.audaro.helloshell
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
@@ -189,11 +190,15 @@ class MainActivity : AppCompatActivity() {
         // Track G AG2: restart into GPU Route-C mode (force-enable the base gpu plugin, render the scene on GLES).
         val gpuButton = devButton("◆")
         gpuButton.setOnClickListener { restartIntoGpu() }
+        // Track G AG3: restart into 117HD (routecrlhd) mode — the sideload-friendly trigger (Quest/SideQuest
+        // installs can't easily push an rlhd.mode marker, but anyone can tap a button).
+        val hdButton = devButton("HD")
+        hdButton.setOnClickListener { restartIntoRlhd() }
         // Group the dev affordances into one discreet cluster pinned to the BOTTOM-LEFT — clear of the relocated
         // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
         val devBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(pluginButton); addView(chromeButton); addView(signInButton); addView(gpuButton)
+            addView(pluginButton); addView(chromeButton); addView(signInButton); addView(gpuButton); addView(hdButton)
         }
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
@@ -307,9 +312,25 @@ class MainActivity : AppCompatActivity() {
         // AG3-c: a Firebase Game Loop launch (action TEST_LOOP) also boots routecrlhd — Game Loop runs the app
         // UNINTERRUPTED (no Robo crawl/relaunch), giving the long startUp + Zone shader compile its minute on real Mali.
         val gameLoop = intent?.action == "com.google.intent.action.TEST_LOOP"
+        // One-shot marker written by the in-app HD button before it restarts the process. Intent extras don't
+        // reliably survive finishAffinity()+relaunch on every launcher (notably Quest's Horizon OS, which
+        // relaunches the app from its stored shortcut intent and drops our extra) — a file read at boot does.
+        // Consume it on read so HD mode applies to exactly this boot; the next normal launch is the CPU client.
+        val rlhdOnce = File(getExternalFilesDir(null), "rlhd.once")
+        val rlhdOnceSet = rlhdOnce.exists()
+        if (rlhdOnceSet) { rlhdOnce.delete(); Log.i(TAG, "rlhd.once marker consumed -> routecrlhd this boot") }
+        // A TV (Shield / Android TV) is a GPU-only target here — default its leanback-launcher icon straight into
+        // 117HD (the only thing it's used for), so opening the app from the TV home screen is turnkey. A phone
+        // still boots the CPU client by default (the HD button / intent opt-in unchanged). Opt out with a
+        // cpu.mode marker if the CPU client is ever wanted on the TV.
+        val isTv = packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
+            packageManager.hasSystemFeature("android.hardware.type.television")
+        val cpuForced = File(getExternalFilesDir(null), "cpu.mode").exists()
         val rlhdMode = (intent?.getBooleanExtra("routecrlhd", false) ?: false) ||
-            File(getExternalFilesDir(null), "rlhd.mode").exists() || gameLoop
+            File(getExternalFilesDir(null), "rlhd.mode").exists() || gameLoop || rlhdOnceSet ||
+            (isTv && !cpuForced)
         if (gameLoop) Log.i(TAG, "AG3-c: Game Loop launch -> routecrlhd (uninterrupted run for the Zone shader compile)")
+        if (isTv && !cpuForced) Log.i(TAG, "TV/leanback device -> defaulting to routecrlhd (117HD) on launch")
         // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
         // BEFORE boot. With none (and not census, which uses pushed tokens), run the on-device Jagex login first;
         // it writes tokens.json then restarts the process for a clean boot (Review-2: login-first or restart).
@@ -331,6 +352,21 @@ class MainActivity : AppCompatActivity() {
     private fun restartIntoGpu() {
         val i = packageManager.getLaunchIntentForPackage(packageName)
         i?.putExtra("routecgpu", true)
+        i?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        startActivity(i)
+        finishAffinity()
+        Runtime.getRuntime().exit(0)
+    }
+
+    /** Dev "HD" button: restart the process into 117HD (routecrlhd) mode — same clean-boot mechanism as
+     *  [restartIntoGpu]; RLHDStarter then loads + starts the Zone plugin at LOGIN_SCREEN/LOGGED_IN. */
+    private fun restartIntoRlhd() {
+        // Write a one-shot marker BEFORE restarting: some launchers (Quest's Horizon OS) relaunch the app from
+        // its stored shortcut intent and drop the routecrlhd extra, so the extra alone isn't reliable on device.
+        // The marker is filesystem state read + consumed at boot, so it survives the restart regardless.
+        runCatching { File(getExternalFilesDir(null), "rlhd.once").writeText("1") }
+        val i = packageManager.getLaunchIntentForPackage(packageName)
+        i?.putExtra("routecrlhd", true)
         i?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
         startActivity(i)
         finishAffinity()
@@ -1045,15 +1081,17 @@ class MainActivity : AppCompatActivity() {
             opts.add("-Drunelite.headless.resize=${renderW}x${renderH}")
             Log.i(TAG, "A7 resize armed: ${renderW}x${renderH} (screen ${longEdge}x${shortEdge}; resizable iff account in resizable display mode)")
         }
-        if (autologinArmed && !rlhd) {
+        // 117HD auto-login: on a real home-network device login works, so autologin straight in-world (RLHDStarter
+        // engages at LOGGED_IN too) — the desired turnkey launch. SKIP it only for the Firebase DATACENTER pre-login
+        // case (an explicit rlhd_prelogin.mode marker): there the world connect is WAF-blocked and autologin would
+        // churn at state=UNKNOWN forever instead of settling at LOGIN_SCREEN, so the Zone shader-compile proof needs
+        // the clean login screen. Default (no marker) = autologin, including in routecrlhd.
+        val rlhdPreLogin = rlhd && File(app.getExternalFilesDir(null), "rlhd_prelogin.mode").exists()
+        if (autologinArmed && !rlhdPreLogin) {
             opts.addAll(JagexTokens.autologinOpts)
-            Log.i(TAG, "autologin ARMED (tokens.json present): EULA 302,312 -> Play Now 382,248, world 301")
+            Log.i(TAG, "autologin ARMED (tokens.json present)${if (rlhd) " [routecrlhd -> RLHDStarter loads 117HD at LOGGED_IN]" else ""}: EULA 302,312 -> Play Now 382,248, world 301")
         } else if (rlhd) {
-            // AG3-c is pre-login (the Zone shader compile + startUp only need the cache + login screen). Do NOT
-            // autologin: on a datacenter device (Firebase) the world connect is WAF-blocked, and the client then
-            // churns in state=UNKNOWN forever instead of settling at LOGIN_SCREEN — so RLHDStarter (which engages at
-            // LOGIN_SCREEN/LOGGED_IN) never fires. No autologin -> clean LOGIN_SCREEN -> RLHDStarter loads 117HD.
-            Log.i(TAG, "routecrlhd: autologin SKIPPED (shader compile is pre-login; settle at LOGIN_SCREEN)")
+            Log.i(TAG, "routecrlhd: autologin SKIPPED (rlhd_prelogin marker -> settle at LOGIN_SCREEN for the datacenter shader compile)")
         }
         if (census) {
             // A-1b runtime gate-flip census: turn on the remaining read-surface gates (menupeek + autologin

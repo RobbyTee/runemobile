@@ -61,6 +61,17 @@ static char sEsVer[16] = "320 es";
 static uint32_t *sReadback = nullptr;
 static size_t sReadbackN = 0;
 
+// Direct-present seam: jvm_bootstrap (which owns libandroid) hands these in via RouteC_setPresentCallbacks so we
+// can present 117HD straight to the SurfaceView via an EGL window surface — no glReadPixels, no CPU blit. When
+// these are set we are the SOLE Surface producer (the CPU present thread stands down).
+static void*    (*sCbAcquireWindow)(uint64_t*) = nullptr;   // returns ANativeWindow* (acquired) or null; we release it
+static uint64_t (*sCbSurfaceGen)(void)         = nullptr;
+static void     (*sCbReleaseWindow)(void*)     = nullptr;
+static void     (*sCbSetFrameDims)(int, int)   = nullptr;   // publish canvas dims for touch->game mapping
+static EGLSurface sWinSurf = EGL_NO_SURFACE;
+static void*      sWin     = nullptr;            // ANativeWindow* (opaque here; released via sCbReleaseWindow)
+static uint64_t   sWinGen  = (uint64_t)-1;
+
 // JavaBridge GPU seam (resolved lazily once the GPU jar's class is on the classpath).
 static jclass sJbCls = nullptr;
 static jmethodID sJbBackBuf = nullptr;   // gpuFrameBackBuffer(II)[I
@@ -170,7 +181,7 @@ static bool rcEglPrepareSurface(int w, int h) {
     }
     const EGLint cfgAttr[] = {
         EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
-        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT | EGL_WINDOW_BIT,   // pbuffer for bring-up + window surface for direct present
         EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
         EGL_DEPTH_SIZE, 24, EGL_NONE };
     EGLint nc = 0;
@@ -300,12 +311,46 @@ static jstring JNICALL rc_glGetString(JNIEnv* e, jclass, jint a0){ const char* s
 static jint JNICALL rc_glGetUniformBlockIndex(JNIEnv* e, jclass, jint a0, jstring a1){ const char* n=e->GetStringUTFChars(a1,nullptr); jint r=(jint)glGetUniformBlockIndex(a0,n); e->ReleaseStringUTFChars(a1,n); return r; }
 static jint JNICALL rc_glGetUniformLocation(JNIEnv* e, jclass, jint a0, jstring a1){ const char* n=e->GetStringUTFChars(a1,nullptr); jint r=(jint)glGetUniformLocation(a0,n); e->ReleaseStringUTFChars(a1,n); return r; }
 GLF rc_glLinkProgram(JNIEnv*, jclass, jint a0){ glLinkProgram(a0); }
+// Classic glMapBuffer has no range form on GLES, so map the WHOLE buffer via glMapBufferRange with bits derived
+// from the GL access enum. Crucially this must match classic glMapBuffer semantics: GL_WRITE_ONLY maps for
+// writing and PRESERVES existing contents — it does NOT discard. RLHD reaches this path (GL_ARB_map_buffer_range
+// reported false) for buffers it only PARTIALLY rewrites (e.g. dynamic player-model geometry written at offsets);
+// adding GL_MAP_INVALIDATE_BUFFER_BIT here would discard the whole buffer so the un-rewritten regions render as
+// garbage (stale scene data) — exactly the "player models flash with environment colours" bug. So: no invalidate.
+static GLbitfield rc_mapBitsFor(GLenum access){
+    switch (access) {
+        case GL_READ_ONLY:  return GL_MAP_READ_BIT;
+        case GL_READ_WRITE: return GL_MAP_READ_BIT | GL_MAP_WRITE_BIT;
+        default:            return GL_MAP_WRITE_BIT;   // GL_WRITE_ONLY — preserve contents (no discard)
+    }
+}
+static jobject rc_mapReuse(JNIEnv* e, GLenum target, GLenum access, GLsizeiptr sz, jobject old){
+    if (sz<=0) return nullptr;
+    void* p = glMapBufferRange(target, 0, sz, rc_mapBitsFor(access));
+    if (!p) return nullptr;
+    // LWJGL reuse contract: hand back the SAME ByteBuffer when it still describes this mapping, so the per-frame
+    // map() in GLMappedBuffer doesn't allocate a fresh direct buffer every draw.
+    if (old != nullptr && e->GetDirectBufferAddress(old) == p && e->GetDirectBufferCapacity(old) == (jlong)sz)
+        return old;
+    return rc_native_order(e, e->NewDirectByteBuffer(p, sz));
+}
 static jobject JNICALL rc_glMapBuffer(JNIEnv* e, jclass, jint a0, jint a1){
     GLint sz=0; glGetBufferParameteriv((GLenum)a0, GL_BUFFER_SIZE, &sz);
     if (sz<=0) return nullptr;
     GLbitfield acc = GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT;   // glMapBuffer(WRITE_ONLY) -> range equivalent
     void* p = glMapBufferRange((GLenum)a0, 0, sz, acc);
     return p ? rc_native_order(e, e->NewDirectByteBuffer(p, sz)) : nullptr;
+}
+// 3-arg glMapBuffer(target, access, oldBuffer) — the LWJGL "reuse the old mapped buffer" form. RLHD's
+// GLMappedBuffer takes this path when it doesn't use the range mapper (the branch real-Nvidia drivers hit,
+// where the 2-arg form above is never reached). Query the size, then map+reuse.
+static jobject JNICALL rc_glMapBuffer3(JNIEnv* e, jclass, jint t, jint a, jobject old){
+    GLint sz=0; glGetBufferParameteriv((GLenum)t, GL_BUFFER_SIZE, &sz);
+    return rc_mapReuse(e, (GLenum)t, (GLenum)a, (GLsizeiptr)sz, old);
+}
+// 4-arg glMapBuffer(target, access, length, oldBuffer) — same, with the size supplied by the caller.
+static jobject JNICALL rc_glMapBuffer4(JNIEnv* e, jclass, jint t, jint a, jlong len, jobject old){
+    return rc_mapReuse(e, (GLenum)t, (GLenum)a, (GLsizeiptr)len, old);
 }
 static jobject JNICALL rc_glMapBufferRange(JNIEnv* e, jclass, jint a0, jlong a1, jlong a2, jint a3, jobject){
     void* p = glMapBufferRange((GLenum)a0,(GLintptr)a1,(GLsizeiptr)a2,(GLbitfield)a3);
@@ -496,6 +541,8 @@ static void JNICALL rc_AWT_createGLContext(JNIEnv* env, jobject){
 static void JNICALL rc_AWT_destroy(JNIEnv*, jobject){
     if (sDpy != EGL_NO_DISPLAY) {
         eglMakeCurrent(sDpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        if (sWinSurf != EGL_NO_SURFACE) { eglDestroySurface(sDpy, sWinSurf); sWinSurf = EGL_NO_SURFACE; }
+        if (sWin && sCbReleaseWindow) { sCbReleaseWindow(sWin); sWin = nullptr; }
         if (sCtx != EGL_NO_CONTEXT) { eglDestroyContext(sDpy, sCtx); sCtx = EGL_NO_CONTEXT; }
         if (sSurf != EGL_NO_SURFACE) { eglDestroySurface(sDpy, sSurf); sSurf = EGL_NO_SURFACE; }
     }
@@ -515,13 +562,70 @@ static jint JNICALL rc_AWT_getFramebuffer(JNIEnv* env, jobject, jboolean){
 }
 static void JNICALL rc_AWT_loadNatives(JNIEnv*, jobject){ /* no-op (the .so is already loaded + registered) */ }
 static jint JNICALL rc_AWT_setSwapInterval(JNIEnv*, jobject, jint a0){ return a0; }
-// swapBuffers (offscreen, Phase 1): glReadPixels the FBO into one of JavaBridge's double buffers, vertical-flip +
-// R<->B swizzle to 0x00RRGGBB (the format the existing SurfaceView blit consumes), then publish. The gpu plugin
-// becomes the SOLE frameSeq publisher (Hooks gates the CPU snapshot off in GPU mode).
+// jvm_bootstrap installs the window-borrow callbacks here (it owns libandroid). Their presence flips swapBuffers
+// from the glReadPixels CPU path to the direct EGL window-surface present.
+extern "C" void RouteC_setPresentCallbacks(void* (*acq)(uint64_t*), uint64_t (*gen)(void), void (*rel)(void*),
+                                           void (*setDims)(int, int)) {
+    sCbAcquireWindow = acq; sCbSurfaceGen = gen; sCbReleaseWindow = rel; sCbSetFrameDims = setDims;
+    LOGI("present callbacks set — direct EGL window-surface present armed");
+}
+
+// Create/recreate the EGL window surface from the SurfaceView when the surface generation changes (background ->
+// foreground recreates the Surface). Runs on the GL/draw thread (same thread the context is current on). Returns
+// true iff a window surface is ready to present to.
+static bool rcEnsureWindowSurface() {
+    if (!sCbAcquireWindow || !sCbSurfaceGen || !sCbReleaseWindow) return false;
+    uint64_t gen = sCbSurfaceGen();
+    if (sWinSurf != EGL_NO_SURFACE && gen == sWinGen) return true;            // unchanged
+    // Surface changed (or first use): destroy the old EGL surface BEFORE releasing its window ref.
+    if (sWinSurf != EGL_NO_SURFACE) {
+        eglMakeCurrent(sDpy, sSurf, sSurf, sCtx);                            // unbind window surface -> bring-up pbuffer
+        eglDestroySurface(sDpy, sWinSurf);
+        sWinSurf = EGL_NO_SURFACE;
+    }
+    if (sWin) { sCbReleaseWindow(sWin); sWin = nullptr; }
+    uint64_t ng = 0;
+    void* w = sCbAcquireWindow(&ng);
+    sWinGen = ng;
+    if (!w) return false;                                                    // no Surface yet (backgrounded) — skip present
+    sWinSurf = eglCreateWindowSurface(sDpy, sCfg, (EGLNativeWindowType)w, nullptr);
+    if (sWinSurf == EGL_NO_SURFACE) { LOGE("eglCreateWindowSurface failed 0x%x", eglGetError()); sCbReleaseWindow(w); return false; }
+    sWin = w;
+    LOGI("direct-present: EGL window surface created gen=%llu", (unsigned long long)sWinGen);
+    return true;
+}
+
+// swapBuffers — present the composited 117HD/gpu frame. Direct path (callbacks installed): blit the offscreen FBO
+// to the window surface's default framebuffer + eglSwapBuffers (pure GPU, vsync-paced, no readback). Legacy path
+// (no seam): glReadPixels the FBO into JavaBridge's double buffer for the CPU present thread.
 static void JNICALL rc_AWT_swapBuffers(JNIEnv* env, jobject){
     rc_make_current();
     int w = sFboW, h = sFboH;
-    if (w <= 0 || h <= 0 || !rc_jb_cache(env)) return;
+    if (w <= 0 || h <= 0) return;
+
+    if (sCbAcquireWindow) {
+        // Publish the live canvas dims so touch->game mapping works (the CPU present thread that used to set them
+        // is disabled in this mode).
+        if (sCbSetFrameDims) sCbSetFrameDims(w, h);
+        // Direct EGL present. If the Surface isn't ready yet, skip this frame (it stays in the FBO) — the CPU
+        // present thread is disabled in this mode, so do NOT fall back to readback (nothing would consume it).
+        if (rcEnsureWindowSurface()) {
+            eglMakeCurrent(sDpy, sWinSurf, sWinSurf, sCtx);
+            EGLint sw = w, sh = h;
+            eglQuerySurface(sDpy, sWinSurf, EGL_WIDTH, &sw);
+            eglQuerySurface(sDpy, sWinSurf, EGL_HEIGHT, &sh);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, sFbo);
+            glReadBuffer(GL_COLOR_ATTACHMENT0);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);                       // the window surface's default framebuffer
+            // Both src (FBO) and dst (window default fb) are GL bottom-left origin, so a 1:1 blit presents upright
+            // (eglSwapBuffers maps GL bottom-left -> screen). If it shows inverted on device, swap the dst Y extents.
+            glBlitFramebuffer(0, 0, w, h,  0, 0, sw, sh,  GL_COLOR_BUFFER_BIT, GL_LINEAR);
+            eglSwapBuffers(sDpy, sWinSurf);
+        }
+        return;
+    }
+
+    if (!rc_jb_cache(env)) return;
     jintArray arr = (jintArray) env->CallStaticObjectMethod(sJbCls, sJbBackBuf, (jint)w, (jint)h);
     if (!arr) { if (env->ExceptionCheck()) env->ExceptionClear(); return; }
     const size_t n = (size_t)w * (size_t)h;
@@ -570,7 +674,11 @@ static jobject rc_make_caps(JNIEnv* env){
     env->SetBooleanField(o, env->GetFieldID(c, "OpenGL43", "Z"), JNI_FALSE);
     env->SetBooleanField(o, env->GetFieldID(c, "GL_ARB_buffer_storage", "Z"), JNI_FALSE);
     env->SetBooleanField(o, env->GetFieldID(c, "GL_ARB_copy_buffer", "Z"), JNI_FALSE);
-    env->SetBooleanField(o, env->GetFieldID(c, "GL_ARB_map_buffer_range", "Z"), JNI_FALSE);
+    // glMapBufferRange + glFlushMappedBufferRange are GLES 3.0 CORE (both forwarded here), so report this TRUE so
+    // RLHD's GLMappedBuffer takes its RANGE path — the one that expresses invalidate/flush-explicit/unsynchronized
+    // correctly per the caller's intent. The legacy glMapBuffer fallback (cap false) can't express that, which
+    // raced the CPU write against the GPU draw on dynamic player-model buffers (the model-flashing bug).
+    env->SetBooleanField(o, env->GetFieldID(c, "GL_ARB_map_buffer_range", "Z"), JNI_TRUE);
     env->SetBooleanField(o, env->GetFieldID(c, "GL_ARB_shader_image_load_store", "Z"), JNI_FALSE);
     return o;
 }
@@ -636,6 +744,8 @@ static const JNINativeMethod kGLALL[] = {
     {"glGetUniformLocation","(ILjava/lang/CharSequence;)I",(void*)rc_glGetUniformLocation},
     {"glLinkProgram","(I)V",(void*)rc_glLinkProgram},
     {"glMapBuffer","(II)Ljava/nio/ByteBuffer;",(void*)rc_glMapBuffer},
+    {"glMapBuffer","(IILjava/nio/ByteBuffer;)Ljava/nio/ByteBuffer;",(void*)rc_glMapBuffer3},
+    {"glMapBuffer","(IIJLjava/nio/ByteBuffer;)Ljava/nio/ByteBuffer;",(void*)rc_glMapBuffer4},
     {"glMapBufferRange","(IJJILjava/nio/ByteBuffer;)Ljava/nio/ByteBuffer;",(void*)rc_glMapBufferRange},
     {"glMultiDrawArrays","(ILjava/nio/IntBuffer;Ljava/nio/IntBuffer;)V",(void*)rc_glMultiDrawArrays},
     {"glReadBuffer","(I)V",(void*)rc_glReadBuffer},

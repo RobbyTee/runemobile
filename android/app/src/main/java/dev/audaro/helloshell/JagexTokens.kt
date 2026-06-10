@@ -6,9 +6,12 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Maps a pushed tokens.json -> the JX_* environment the OSRS gamepack reads when "launched from the Jagex
+ * Maps a tokens.json -> the JX_* environment the OSRS gamepack reads when "launched from the Jagex
  * launcher", mirroring the proven iOS loadJagexTokens (JVMLauncher.m). tokens.json is a gitignored secret
- * (throwaway account), pushed into the app's files dir at test time, never bundled into the build.
+ * (throwaway account), normally pushed into the app's files dir at test time. A build-time bundled copy
+ * (assets/tokens.json, also gitignored — staged only for personal sideload bundles, e.g. Quest/SideQuest
+ * installs where adb-pushing files is impractical) is the lowest-priority fallback; a pushed file wins, so
+ * refreshed tokens never need a rebuild.
  *
  * The JX_* env MUST be set before JNI_CreateJavaVM (HotSpot snapshots the environment at startup), so
  * [loadAndArm] runs on the boot thread before [JvmLauncher.startJvm] and sets each var via the native setenv
@@ -32,11 +35,21 @@ object JagexTokens {
         return candidates.firstOrNull { it.exists() && it.length() > 0 }
     }
 
+    /** Token JSON text + a loggable origin: a pushed file wins (see [locate]); else the bundled asset. */
+    private fun readSource(ctx: Context): Pair<String, String>? {
+        locate(ctx)?.let { return it.readText() to it.parent.orEmpty() }
+        return try {
+            ctx.assets.open("tokens.json").bufferedReader().use { it.readText() } to "bundled asset"
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     /** True iff a usable tokens.json (session_id + chosen_account_id) exists — the A3 login-first boot gate. */
     fun hasTokens(ctx: Context): Boolean {
-        val f = locate(ctx) ?: return false
+        val (text, _) = readSource(ctx) ?: return false
         return try {
-            val t = JSONObject(f.readText())
+            val t = JSONObject(text)
             t.optString("session_id", "").isNotEmpty() && t.optString("chosen_account_id", "").isNotEmpty()
         } catch (e: Exception) {
             false
@@ -45,13 +58,14 @@ object JagexTokens {
 
     /** Parse tokens.json and set JX_* env. Returns true iff autologin was armed. */
     fun loadAndArm(ctx: Context): Boolean {
-        val file = locate(ctx)
-        if (file == null) {
-            Log.i(TAG, "no tokens.json (filesDir or external files dir) — autologin DISABLED (login-screen render only)")
+        val source = readSource(ctx)
+        if (source == null) {
+            Log.i(TAG, "no tokens.json (filesDir, external files dir, or bundled asset) — autologin DISABLED (login-screen render only)")
             return false
         }
+        val (text, origin) = source
         val t = try {
-            JSONObject(file.readText())
+            JSONObject(text)
         } catch (e: Exception) {
             Log.w(TAG, "tokens.json parse failed: ${e.message} — autologin DISABLED")
             return false
@@ -78,7 +92,7 @@ object JagexTokens {
             val sessionPrefix = if (session.length >= 6) session.substring(0, 6) else session
             Log.i(
                 TAG,
-                "JX_* set from ${file.parent}: displayName='$display' characterId=$character session=$sessionPrefix… " +
+                "JX_* set from $origin: displayName='$display' characterId=$character session=$sessionPrefix… " +
                     "access=${if (access.isNotEmpty()) "set" else "empty"} refresh=${if (refresh.isNotEmpty()) "set" else "empty"}",
             )
         } else {

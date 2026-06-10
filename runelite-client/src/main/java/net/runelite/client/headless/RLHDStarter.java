@@ -100,12 +100,25 @@ public final class RLHDStarter
 		// returning here lets them commit before the load on the next tick. (Group "hd" per HdPluginConfig.)
 		if (!configForced)
 		{
-			final String a = MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");
-			final String b = MobileUiBridge.setConfig("hd", "tiledLighting", "false");
-			if (a.contains("\"ok\":true") && b.contains("\"ok\":true"))
+			MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");
+			MobileUiBridge.setConfig("hd", "tiledLighting", "false");
+			// Mobile-sane quality: 117HD's desktop defaults (MSAA_8 + an 8192x8192 shadow map + 50-tile draw)
+			// crush a mobile GPU. Cut the fill-rate/bandwidth killers but KEEP the HD look (lighting/shadows/
+			// textures). Pure render settings (no shader-variant change), set BEFORE startUp so the shadow map
+			// allocates small. All tunable afterwards in the plugin config panel.
+			MobileUiBridge.setConfig("hd", "antiAliasingMode", "DISABLED");
+			MobileUiBridge.setConfig("hd", "shadowResolution", "RES_2048");
+			// Force SINGLE-THREADED model processing (config key "asyncModelProcessing"). RLHD's multithreaded
+			// path (RENDER_THREADS) has the engine call the draw callbacks from worker threads, which then touch
+			// GL buffers concurrently — but our EGL/GL bridge has ONE thread-affine context, so concurrent buffer
+			// access races and corrupts animated models (real players flash with wrong geometry/colours; NPCs on
+			// the shared opaque path are less affected). Single-threaded keeps every GL call on the context thread.
+			MobileUiBridge.setConfig("hd", "asyncModelProcessing", "false");
+			final String d = MobileUiBridge.setConfig("hd", "drawDistance", "30");
+			if (d.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced hd.uiScalingMode=LINEAR + tiledLighting=false");
+				log.info("[routecrlhd] forced mobile config: LINEAR, tiledLighting=off, AA=off, shadows=2048, draw=30, single-threaded");
 			}
 			return;
 		}
