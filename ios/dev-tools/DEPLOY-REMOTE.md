@@ -14,6 +14,28 @@ remote Mac. The heavy Java compile has no such constraint, so it runs on the dev
 box) and the result is rsync'd in — including the gitignored staged jars, embedded JRE, and `tokens.json`
 that `git` doesn't carry.
 
+## Why not install straight to the phone (skip the second Mac)?
+
+Tried and proven impossible on iOS 26.5.1 (2026-06-10). Put the iPhone and the dev Mac both on
+Tailscale and you *can* reach the phone by its tailnet IP — `tailscale ping` works, the TCP handshake
+to lockdownd's port 62078 even completes — **but iOS interface-gates its developer daemons.** lockdownd
+answers a lockdown request arriving on the phone's Wi‑Fi/LAN interface and **resets the byte-identical
+request arriving over the Tailscale (VPN) interface.** Proven with a raw `QueryType`: LAN IP →
+297‑byte plist reply; tailnet IP → `Connection reset by peer`, same device, same port, same bytes. The
+RemoteXPC/install services that the iOS 17.4+ tunnel bootstraps all sit behind that same lockdownd gate,
+so there is no `devicectl` / `pymobiledevice3` path direct to a remote phone. (Tailscale itself is fine —
+it delivers the packets; iOS just refuses to service the tunnel interface. Also note iOS suspends the
+Tailscale NetworkExtension in the background, dropping the phone off the tailnet ~1 min after the app is
+backgrounded — moot given the gate.)
+
+Consequences:
+- The install connection **must originate on the phone's own physical LAN or its loopback.** That's why
+  this doc bridges to a *Mac on the phone's LAN* (or any Tailscale subnet router on that LAN), never to
+  the phone itself.
+- The only no-second-machine escape is an **on-device** installer (SideStore/AltStore), which talks to
+  `localhost` lockdownd over loopback — allowed by the gate, which is exactly why SideStore installs from
+  any network. TestFlight/ad-hoc are out: distribution signing strips `get-task-allow` → no JIT.
+
 ## One-time setup on the REMOTE Mac
 
 1. Xcode + command-line tools; sign into Xcode ▸ Settings ▸ Accounts with the Apple Developer account
