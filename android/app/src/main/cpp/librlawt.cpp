@@ -300,12 +300,43 @@ static jstring JNICALL rc_glGetString(JNIEnv* e, jclass, jint a0){ const char* s
 static jint JNICALL rc_glGetUniformBlockIndex(JNIEnv* e, jclass, jint a0, jstring a1){ const char* n=e->GetStringUTFChars(a1,nullptr); jint r=(jint)glGetUniformBlockIndex(a0,n); e->ReleaseStringUTFChars(a1,n); return r; }
 static jint JNICALL rc_glGetUniformLocation(JNIEnv* e, jclass, jint a0, jstring a1){ const char* n=e->GetStringUTFChars(a1,nullptr); jint r=(jint)glGetUniformLocation(a0,n); e->ReleaseStringUTFChars(a1,n); return r; }
 GLF rc_glLinkProgram(JNIEnv*, jclass, jint a0){ glLinkProgram(a0); }
+// Classic glMapBuffer has no range form on GLES, so map the whole buffer via glMapBufferRange with bits derived
+// from the GL access enum. WRITE_ONLY additionally discards (INVALIDATE_BUFFER) — RLHD's upload buffers are
+// fully rewritten each frame, so discard avoids a stall and matches the proven 2-arg shim above.
+static GLbitfield rc_mapBitsFor(GLenum access){
+    switch (access) {
+        case GL_READ_ONLY:  return GL_MAP_READ_BIT;
+        case GL_READ_WRITE: return GL_MAP_READ_BIT | GL_MAP_WRITE_BIT;
+        default:            return GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT;   // GL_WRITE_ONLY
+    }
+}
+static jobject rc_mapReuse(JNIEnv* e, GLenum target, GLenum access, GLsizeiptr sz, jobject old){
+    if (sz<=0) return nullptr;
+    void* p = glMapBufferRange(target, 0, sz, rc_mapBitsFor(access));
+    if (!p) return nullptr;
+    // LWJGL reuse contract: hand back the SAME ByteBuffer when it still describes this mapping, so the per-frame
+    // map() in GLMappedBuffer doesn't allocate a fresh direct buffer every draw.
+    if (old != nullptr && e->GetDirectBufferAddress(old) == p && e->GetDirectBufferCapacity(old) == (jlong)sz)
+        return old;
+    return rc_native_order(e, e->NewDirectByteBuffer(p, sz));
+}
 static jobject JNICALL rc_glMapBuffer(JNIEnv* e, jclass, jint a0, jint a1){
     GLint sz=0; glGetBufferParameteriv((GLenum)a0, GL_BUFFER_SIZE, &sz);
     if (sz<=0) return nullptr;
     GLbitfield acc = GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT;   // glMapBuffer(WRITE_ONLY) -> range equivalent
     void* p = glMapBufferRange((GLenum)a0, 0, sz, acc);
     return p ? rc_native_order(e, e->NewDirectByteBuffer(p, sz)) : nullptr;
+}
+// 3-arg glMapBuffer(target, access, oldBuffer) — the LWJGL "reuse the old mapped buffer" form. RLHD's
+// GLMappedBuffer takes this path when it doesn't use the range mapper (the branch real-Nvidia drivers hit,
+// where the 2-arg form above is never reached). Query the size, then map+reuse.
+static jobject JNICALL rc_glMapBuffer3(JNIEnv* e, jclass, jint t, jint a, jobject old){
+    GLint sz=0; glGetBufferParameteriv((GLenum)t, GL_BUFFER_SIZE, &sz);
+    return rc_mapReuse(e, (GLenum)t, (GLenum)a, (GLsizeiptr)sz, old);
+}
+// 4-arg glMapBuffer(target, access, length, oldBuffer) — same, with the size supplied by the caller.
+static jobject JNICALL rc_glMapBuffer4(JNIEnv* e, jclass, jint t, jint a, jlong len, jobject old){
+    return rc_mapReuse(e, (GLenum)t, (GLenum)a, (GLsizeiptr)len, old);
 }
 static jobject JNICALL rc_glMapBufferRange(JNIEnv* e, jclass, jint a0, jlong a1, jlong a2, jint a3, jobject){
     void* p = glMapBufferRange((GLenum)a0,(GLintptr)a1,(GLsizeiptr)a2,(GLbitfield)a3);
@@ -636,6 +667,8 @@ static const JNINativeMethod kGLALL[] = {
     {"glGetUniformLocation","(ILjava/lang/CharSequence;)I",(void*)rc_glGetUniformLocation},
     {"glLinkProgram","(I)V",(void*)rc_glLinkProgram},
     {"glMapBuffer","(II)Ljava/nio/ByteBuffer;",(void*)rc_glMapBuffer},
+    {"glMapBuffer","(IILjava/nio/ByteBuffer;)Ljava/nio/ByteBuffer;",(void*)rc_glMapBuffer3},
+    {"glMapBuffer","(IIJLjava/nio/ByteBuffer;)Ljava/nio/ByteBuffer;",(void*)rc_glMapBuffer4},
     {"glMapBufferRange","(IJJILjava/nio/ByteBuffer;)Ljava/nio/ByteBuffer;",(void*)rc_glMapBufferRange},
     {"glMultiDrawArrays","(ILjava/nio/IntBuffer;Ljava/nio/IntBuffer;)V",(void*)rc_glMultiDrawArrays},
     {"glReadBuffer","(I)V",(void*)rc_glReadBuffer},
