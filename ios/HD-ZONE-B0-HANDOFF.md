@@ -11,6 +11,28 @@ A19 Pro): all 6 RLHD zone shaders (scene/shadow/ui × vert/frag) compile to GLSL
 verdict `ALL_ZONE_PROGRAMS_LINK_ES300`, sealed in `ios/dev-tools/gpu-zone/`. So the entire zone shader surface is
 proven portable. **Next is Phase B0: actually bring up the RLHD ZoneRenderer.**
 
+## Progress this session (host-only; all pushed to `origin/gpu`)
+- **B0.1 GREEN** (`stage-ios-zone-jar.sh`, commit `c76cb1c7b`): unmodified RLHD `@7dded59` (full src vendored +
+  gitignored, see `rlhd-src/PROVENANCE.md`) compiles against `[gpu-zone/facade/ : lwjgl-stripped client jar]` →
+  `client-1.12.29-SNAPSHOT-rlhd.jar` (304 classes, 0 lwjgl leak, 47 shaders, 9 json; md5
+  `04e0b29fa4761cca3386d8eb6ca457d3`). `facade/` (35 classes, seeded from Android's validated RLHD facade-src) is
+  the RLHD-complete superset + the spec for the native delta.
+- **B0.3 facade-delta scan** (`scan-facade-delta.sh` → `facade-delta.md`/`.txt`, `used-descriptors-rlhd.txt`,
+  commit `2fd63d395`): 209 RLHD facade calls − base 100 = 117 delta, categorized → genuine native surface ≈ **31
+  GLES-core forwarders + 3 off-heap + the glTexBuffer→2D repack + 4 shims**; the rest is facade pure-Java or safe
+  B0 stub.
+- **B0.4 conformance analysis** (`B0-conformance-notes.md`, commit `725e85442`): source-proved that unmodified
+  RLHD takes the ES-3.0-core path by **caps gating** — zone is default; `supportsGpu` only needs `OpenGL33`
+  (already true); OpenCL/compute never run on the zone path; **indirect draw is caps-gated OFF** (→ auto-fallback
+  to direct `glMultiDrawArrays`, Route C shim covers) leaving only the unconditional `GL_DRAW_INDIRECT_BUFFER`
+  alloc to remap in the facade; storage-buffers off (`glBufferData` path); `glDrawBuffer`→plural via facade shim.
+  **No RLHD source patches needed.**
+
+**What's left for B0 (device-coupled):** implement the native delta in `RouteCBridge.m` (port the Android **AG3-a**
+Zone GL-delta forwarder bodies) + B0.2 TBO 2D upload + the 4 shims; wire the zone bridge after `JNI_CreateJavaVM`;
+boot RuneLite with RLHD. First device tap is still the **base-gpu render re-confirm** (handoff step 1, StikDebug).
+The bridge is JVM-only-testable (no JVM on the Simulator) → needs the device attached.
+
 ## Read first
 - `ios/HD-ZONE-B0-SCOPE.md` — the step-by-step B0 plan (this is the spec to execute).
 - `ios/dev-tools/gpu-zone/README.md` — what Z0 produced (the assembler, ios-overrides, the device runbook).
