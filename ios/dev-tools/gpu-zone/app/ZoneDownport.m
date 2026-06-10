@@ -81,14 +81,20 @@
 	//    reading the ES errors (blueprint: prefer hand-maintained variants over a brittle keyed pass for the
 	//    cast-heavy files). Sites are added here as the Z0 compile loop surfaces them. (Empty until the assemble
 	//    step exists — see README "Status".)
-	if (!fragment)
-	{
-		NSDictionary<NSString *, NSString *> *casts = @{
-			// (populated from Z0 compile errors)
-		};
-		for (NSString *from in casts)
-			[s replaceOccurrencesOfString:from withString:casts[from] options:0 range:NSMakeRange(0, s.length)];
-	}
+	//    HYBRID POLICY (README "Status"): isolated/distinctive sites are fixed here as targeted string rules;
+	//    genuinely cast-heavy math files (e.g. utils/color_utils.glsl color-temperature math on the scene path) get
+	//    a hand-maintained ios-override instead of dozens of brittle rules. The sites below are UI-path scaling
+	//    includes (fragment stage), so the rules apply to both stages.
+	NSDictionary<NSString *, NSString *> *casts = @{
+		// scaling/bicubic.glsl — `t` is float, the bicubic-window bounds are int literals (Mitchell + Catmull fns).
+		@"if (t < 1)": @"if (t < 1.0)",
+		@"if (t < 2)": @"if (t < 2.0)",
+		// scaling/hybrid.glsl — sourceDimensions/targetDimensions are ivec2; `1 - texelUv` mixes int with a vec2.
+		@"uv *= sourceDimensions;": @"uv *= vec2(sourceDimensions);",
+		@"(1 - texelUv)": @"(vec2(1.0) - texelUv)",
+	};
+	for (NSString *from in casts)
+		[s replaceOccurrencesOfString:from withString:casts[from] options:0 range:NSMakeRange(0, s.length)];
 
 	return [s copy];
 }
