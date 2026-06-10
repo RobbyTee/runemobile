@@ -3,6 +3,7 @@ package dev.audaro.helloshell
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
@@ -318,9 +319,18 @@ class MainActivity : AppCompatActivity() {
         val rlhdOnce = File(getExternalFilesDir(null), "rlhd.once")
         val rlhdOnceSet = rlhdOnce.exists()
         if (rlhdOnceSet) { rlhdOnce.delete(); Log.i(TAG, "rlhd.once marker consumed -> routecrlhd this boot") }
+        // A TV (Shield / Android TV) is a GPU-only target here — default its leanback-launcher icon straight into
+        // 117HD (the only thing it's used for), so opening the app from the TV home screen is turnkey. A phone
+        // still boots the CPU client by default (the HD button / intent opt-in unchanged). Opt out with a
+        // cpu.mode marker if the CPU client is ever wanted on the TV.
+        val isTv = packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
+            packageManager.hasSystemFeature("android.hardware.type.television")
+        val cpuForced = File(getExternalFilesDir(null), "cpu.mode").exists()
         val rlhdMode = (intent?.getBooleanExtra("routecrlhd", false) ?: false) ||
-            File(getExternalFilesDir(null), "rlhd.mode").exists() || gameLoop || rlhdOnceSet
+            File(getExternalFilesDir(null), "rlhd.mode").exists() || gameLoop || rlhdOnceSet ||
+            (isTv && !cpuForced)
         if (gameLoop) Log.i(TAG, "AG3-c: Game Loop launch -> routecrlhd (uninterrupted run for the Zone shader compile)")
+        if (isTv && !cpuForced) Log.i(TAG, "TV/leanback device -> defaulting to routecrlhd (117HD) on launch")
         // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
         // BEFORE boot. With none (and not census, which uses pushed tokens), run the on-device Jagex login first;
         // it writes tokens.json then restarts the process for a clean boot (Review-2: login-first or restart).
