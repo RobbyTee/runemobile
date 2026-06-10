@@ -60,11 +60,22 @@ MAT_*-constants, the shadows-off `sampleShadowMap` int-`0` stub macro, the full 
 `utils/color_utils.glsl`, `utils/water.glsl`, `utils/fog.glsl`; everything else via targeted CAST rules. Also fixed a
 real downport bug (the `f`-suffix strip corrupting `material1.flowMap`→`lowMap`).
 
-**Next: Phase B0** renderer bring-up (`ios/HD-ZONE-B0-SCOPE.md`): stage the RLHD jar (`stage-ios-zone-jar.sh`
-analogue), facade `glTexBuffer`→2D `glTexImage2D` RGB32I upload (blocker #1), facade-delta scan + impl, Java
-conformance fixes (#2/#11/#14), boot the ZoneRenderer. (Z0 used the minimal flat-scene config — shadows/tiled/
-dynamic-lights/displacement/POM OFF; enabling those in B1+ surfaces their shader code's own #13 sites, which the
-assembler config + CAST map grow to cover.)
+## Phase B0 — renderer bring-up (`ios/HD-ZONE-B0-SCOPE.md`)
+
+**B0.1 GREEN (host, no device).** `stage-ios-zone-jar.sh` stages the iOS-variant RLHD jar: it compiles the
+**unmodified** RLHD source (`rlhd-src/src/`, full tree @ `7dded59`, gitignored — see `rlhd-src/PROVENANCE.md`)
+against `[facade/ : lwjgl-stripped client jar]` with lombok as an annotation processor, then re-zips
+`rs117/**` classes + RLHD shader/JSON resources (no `org/lwjgl`/`rlawt` — facade ships in the gpu jar). Verdict
+`IOS_RLHD_STAGE_GREEN`: **304 RLHD classes** (== the Android count at this rev), 0 lwjgl leak, 47 shaders, 9
+loader JSON, `ZoneRenderer` + `OpenCLManager` present; class md5 `04e0b29fa4761cca3386d8eb6ca457d3`. The
+`facade/` (35 classes) is the RLHD-complete superset of the base-gpu facade and is the **spec** for the B0.3
+native delta (see `facade/README.md`). Output: `ios/app/jvm-resources/client-1.12.29-SNAPSHOT-rlhd.jar`
+(gitignored, regen via the script).
+
+**Next (B0.2+):** facade `glTexBuffer`→2D `glTexImage2D` RGB32I upload (blocker #1), the `RouteCBridge.m` native
+facade delta (~50 GL calls), Java conformance fixes (#2/#11/#14 + `gl_FragDepth` scene/shadow depth-write), wire +
+boot the ZoneRenderer. (Z0 used the minimal flat-scene config — shadows/tiled/dynamic-lights/displacement/POM OFF;
+enabling those in B1+ surfaces their shader code's own #13 sites, which the assembler config + CAST map grow to cover.)
 
 ### Device run (reproduce)
 ```sh

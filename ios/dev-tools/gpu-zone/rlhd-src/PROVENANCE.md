@@ -14,9 +14,18 @@
   These use `#include` + `#define` placeholders resolved at build time by RLHD's `ShaderIncludes` (see below).
 - `java/rs117/hd/opengl/shader/{ShaderIncludes,ShaderTemplate,ShaderException}.java` — RLHD's shader **assembler**
   (the `#include`/`#define`/UBO-block resolver), vendored as the reference for the off-JVM Z0 assemble step.
-- **NOT vendored:** assets (textures, JSON data, gamevals) — those are the separate licensing/bundle gate (blueprint
-  **B1b**), needed for materials/lighting (B1+), not for the B0 flat-scene bring-up. Also not vendored: the rest of the
-  RLHD Java (`ZoneRenderer`, `HdPlugin`, managers) — pulled in when **B0.1** (jar staging) starts; recover any of it
-  from the pinned rev above.
+- `src/` — **B0.1 (jar staging)** vendors the **full** RLHD `src/` (`src/main/java`, 159 files incl. `ZoneRenderer`,
+  `HdPlugin`, managers; `src/main/resources`, 256 files: shaders + loader JSON) **plus the repo-root `lombok.config`**
+  (`lombok.accessors.chain = true` — without it `Environment.java`'s builder-style `.setKey(...).setArea(...)` chain
+  fails to compile, since lombok defaults to `void` setters). This full tree is **gitignored** (`../.gitignore`:
+  `rlhd-src/src/`) — it's large and recoverable from the pinned rev; the Z0 shader/assembler subset above stays
+  tracked. `stage-ios-zone-jar.sh` requires `rlhd-src/src/main/java` present and fails closed otherwise.
+- **NOT vendored:** assets (textures, JSON beyond loaders, gamevals binaries) — the separate licensing/bundle gate
+  (blueprint **B1b**), needed for materials/lighting (B1+), not for the B0 flat-scene bring-up.
 
-To re-fetch the full tree: `git clone https://github.com/117HD/RLHD && git -C RLHD checkout 7dded59`.
+To re-fetch the full tree (for B0.1 staging):
+```
+git clone https://github.com/117HD/RLHD && git -C RLHD checkout 7dded59
+cp -R RLHD/src/main  ios/dev-tools/gpu-zone/rlhd-src/src/
+cp    RLHD/lombok.config  ios/dev-tools/gpu-zone/rlhd-src/src/lombok.config   # bubbles to the main/java sources
+```
