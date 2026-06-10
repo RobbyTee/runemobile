@@ -61,6 +61,17 @@ static char sEsVer[16] = "320 es";
 static uint32_t *sReadback = nullptr;
 static size_t sReadbackN = 0;
 
+// Direct-present seam: jvm_bootstrap (which owns libandroid) hands these in via RouteC_setPresentCallbacks so we
+// can present 117HD straight to the SurfaceView via an EGL window surface — no glReadPixels, no CPU blit. When
+// these are set we are the SOLE Surface producer (the CPU present thread stands down).
+static void*    (*sCbAcquireWindow)(uint64_t*) = nullptr;   // returns ANativeWindow* (acquired) or null; we release it
+static uint64_t (*sCbSurfaceGen)(void)         = nullptr;
+static void     (*sCbReleaseWindow)(void*)     = nullptr;
+static void     (*sCbSetFrameDims)(int, int)   = nullptr;   // publish canvas dims for touch->game mapping
+static EGLSurface sWinSurf = EGL_NO_SURFACE;
+static void*      sWin     = nullptr;            // ANativeWindow* (opaque here; released via sCbReleaseWindow)
+static uint64_t   sWinGen  = (uint64_t)-1;
+
 // JavaBridge GPU seam (resolved lazily once the GPU jar's class is on the classpath).
 static jclass sJbCls = nullptr;
 static jmethodID sJbBackBuf = nullptr;   // gpuFrameBackBuffer(II)[I
@@ -170,7 +181,7 @@ static bool rcEglPrepareSurface(int w, int h) {
     }
     const EGLint cfgAttr[] = {
         EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
-        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT | EGL_WINDOW_BIT,   // pbuffer for bring-up + window surface for direct present
         EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
         EGL_DEPTH_SIZE, 24, EGL_NONE };
     EGLint nc = 0;
@@ -527,6 +538,8 @@ static void JNICALL rc_AWT_createGLContext(JNIEnv* env, jobject){
 static void JNICALL rc_AWT_destroy(JNIEnv*, jobject){
     if (sDpy != EGL_NO_DISPLAY) {
         eglMakeCurrent(sDpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        if (sWinSurf != EGL_NO_SURFACE) { eglDestroySurface(sDpy, sWinSurf); sWinSurf = EGL_NO_SURFACE; }
+        if (sWin && sCbReleaseWindow) { sCbReleaseWindow(sWin); sWin = nullptr; }
         if (sCtx != EGL_NO_CONTEXT) { eglDestroyContext(sDpy, sCtx); sCtx = EGL_NO_CONTEXT; }
         if (sSurf != EGL_NO_SURFACE) { eglDestroySurface(sDpy, sSurf); sSurf = EGL_NO_SURFACE; }
     }
@@ -546,13 +559,70 @@ static jint JNICALL rc_AWT_getFramebuffer(JNIEnv* env, jobject, jboolean){
 }
 static void JNICALL rc_AWT_loadNatives(JNIEnv*, jobject){ /* no-op (the .so is already loaded + registered) */ }
 static jint JNICALL rc_AWT_setSwapInterval(JNIEnv*, jobject, jint a0){ return a0; }
-// swapBuffers (offscreen, Phase 1): glReadPixels the FBO into one of JavaBridge's double buffers, vertical-flip +
-// R<->B swizzle to 0x00RRGGBB (the format the existing SurfaceView blit consumes), then publish. The gpu plugin
-// becomes the SOLE frameSeq publisher (Hooks gates the CPU snapshot off in GPU mode).
+// jvm_bootstrap installs the window-borrow callbacks here (it owns libandroid). Their presence flips swapBuffers
+// from the glReadPixels CPU path to the direct EGL window-surface present.
+extern "C" void RouteC_setPresentCallbacks(void* (*acq)(uint64_t*), uint64_t (*gen)(void), void (*rel)(void*),
+                                           void (*setDims)(int, int)) {
+    sCbAcquireWindow = acq; sCbSurfaceGen = gen; sCbReleaseWindow = rel; sCbSetFrameDims = setDims;
+    LOGI("present callbacks set — direct EGL window-surface present armed");
+}
+
+// Create/recreate the EGL window surface from the SurfaceView when the surface generation changes (background ->
+// foreground recreates the Surface). Runs on the GL/draw thread (same thread the context is current on). Returns
+// true iff a window surface is ready to present to.
+static bool rcEnsureWindowSurface() {
+    if (!sCbAcquireWindow || !sCbSurfaceGen || !sCbReleaseWindow) return false;
+    uint64_t gen = sCbSurfaceGen();
+    if (sWinSurf != EGL_NO_SURFACE && gen == sWinGen) return true;            // unchanged
+    // Surface changed (or first use): destroy the old EGL surface BEFORE releasing its window ref.
+    if (sWinSurf != EGL_NO_SURFACE) {
+        eglMakeCurrent(sDpy, sSurf, sSurf, sCtx);                            // unbind window surface -> bring-up pbuffer
+        eglDestroySurface(sDpy, sWinSurf);
+        sWinSurf = EGL_NO_SURFACE;
+    }
+    if (sWin) { sCbReleaseWindow(sWin); sWin = nullptr; }
+    uint64_t ng = 0;
+    void* w = sCbAcquireWindow(&ng);
+    sWinGen = ng;
+    if (!w) return false;                                                    // no Surface yet (backgrounded) — skip present
+    sWinSurf = eglCreateWindowSurface(sDpy, sCfg, (EGLNativeWindowType)w, nullptr);
+    if (sWinSurf == EGL_NO_SURFACE) { LOGE("eglCreateWindowSurface failed 0x%x", eglGetError()); sCbReleaseWindow(w); return false; }
+    sWin = w;
+    LOGI("direct-present: EGL window surface created gen=%llu", (unsigned long long)sWinGen);
+    return true;
+}
+
+// swapBuffers — present the composited 117HD/gpu frame. Direct path (callbacks installed): blit the offscreen FBO
+// to the window surface's default framebuffer + eglSwapBuffers (pure GPU, vsync-paced, no readback). Legacy path
+// (no seam): glReadPixels the FBO into JavaBridge's double buffer for the CPU present thread.
 static void JNICALL rc_AWT_swapBuffers(JNIEnv* env, jobject){
     rc_make_current();
     int w = sFboW, h = sFboH;
-    if (w <= 0 || h <= 0 || !rc_jb_cache(env)) return;
+    if (w <= 0 || h <= 0) return;
+
+    if (sCbAcquireWindow) {
+        // Publish the live canvas dims so touch->game mapping works (the CPU present thread that used to set them
+        // is disabled in this mode).
+        if (sCbSetFrameDims) sCbSetFrameDims(w, h);
+        // Direct EGL present. If the Surface isn't ready yet, skip this frame (it stays in the FBO) — the CPU
+        // present thread is disabled in this mode, so do NOT fall back to readback (nothing would consume it).
+        if (rcEnsureWindowSurface()) {
+            eglMakeCurrent(sDpy, sWinSurf, sWinSurf, sCtx);
+            EGLint sw = w, sh = h;
+            eglQuerySurface(sDpy, sWinSurf, EGL_WIDTH, &sw);
+            eglQuerySurface(sDpy, sWinSurf, EGL_HEIGHT, &sh);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, sFbo);
+            glReadBuffer(GL_COLOR_ATTACHMENT0);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);                       // the window surface's default framebuffer
+            // Both src (FBO) and dst (window default fb) are GL bottom-left origin, so a 1:1 blit presents upright
+            // (eglSwapBuffers maps GL bottom-left -> screen). If it shows inverted on device, swap the dst Y extents.
+            glBlitFramebuffer(0, 0, w, h,  0, 0, sw, sh,  GL_COLOR_BUFFER_BIT, GL_LINEAR);
+            eglSwapBuffers(sDpy, sWinSurf);
+        }
+        return;
+    }
+
+    if (!rc_jb_cache(env)) return;
     jintArray arr = (jintArray) env->CallStaticObjectMethod(sJbCls, sJbBackBuf, (jint)w, (jint)h);
     if (!arr) { if (env->ExceptionCheck()) env->ExceptionClear(); return; }
     const size_t n = (size_t)w * (size_t)h;
