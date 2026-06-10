@@ -9,6 +9,7 @@ FLAG runelite.headless.autologin
 FLAG runelite.headless.autologin.cooldown
 FLAG runelite.headless.autologin.eula
 FLAG runelite.headless.autologin.eula.loginIndex
+FLAG runelite.headless.autologin.legacy
 FLAG runelite.headless.autologin.loginIndex
 FLAG runelite.headless.autologin.maxAttempts
 FLAG runelite.headless.autologin.warmup

@@ -360,7 +360,9 @@ class MainActivity : AppCompatActivity() {
         // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
         // BEFORE boot. With none (and not census, which uses pushed tokens), run the on-device Jagex login first;
         // it writes tokens.json then restarts the process for a clean boot (Review-2: login-first or restart).
-        if (!censusMode && !rlhdMode && !JagexTokens.hasTokens(applicationContext)) {
+        if (!censusMode && !rlhdMode && !JagexTokens.hasTokens(applicationContext) &&
+            !LegacyCreds.hasCreds(applicationContext)
+        ) {
             // AG3-c rlhd boots without tokens (the Zone shader compile is pre-login) — don't divert to LoginActivity.
             Log.i(TAG, "a3: no tokens.json — launching on-device Jagex login before boot")
             startActivity(Intent(this, LoginActivity::class.java))
@@ -1144,6 +1146,9 @@ class MainActivity : AppCompatActivity() {
         // HeadlessLogin's EULA->Play Now click machine. No tokens.json -> login-screen render only. The setenv
         // must happen here, before JvmLauncher.startJvm creates the VM (HotSpot snapshots env at startup).
         val autologinArmed = JagexTokens.loadAndArm(app)
+        // Legacy (non-Jagex) username/password fallback: arms HeadlessLogin's legacy stage instead. A
+        // tokens.json session wins when both exist. Same pre-startJvm setenv constraint as JX_*.
+        val legacyArmed = !autologinArmed && LegacyCreds.loadAndArm(app)
 
         // iOS's headless/CACIO opt set, minus the iOS-JIT workarounds (Android grants JIT for free):
         // dropped -XX:+MirrorMappedCodeCache / DisablePrimordialThreadGuardPages / -UseCompressedClassPointers /
@@ -1201,6 +1206,10 @@ class MainActivity : AppCompatActivity() {
         if (autologinArmed && !rlhdPreLogin) {
             opts.addAll(JagexTokens.autologinOpts)
             Log.i(TAG, "autologin ARMED (tokens.json present)${if (rlhd) " [routecrlhd -> RLHDStarter loads 117HD at LOGGED_IN]" else ""}: EULA 302,312 -> Play Now 382,248, world 301")
+        } else if (legacyArmed && !rlhdPreLogin) {
+            opts.addAll(JagexTokens.autologinOpts)
+            opts.add("-Drunelite.headless.autologin.legacy=true")
+            Log.i(TAG, "LEGACY autologin ARMED (legacy_login.json present): username/password form, world 301")
         } else if (rlhd) {
             Log.i(TAG, "routecrlhd: autologin SKIPPED (rlhd_prelogin marker -> settle at LOGIN_SCREEN for the datacenter shader compile)")
         }

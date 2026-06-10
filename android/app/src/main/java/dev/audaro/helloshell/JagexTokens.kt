@@ -78,6 +78,9 @@ object JagexTokens {
         for (f in listOfNotNull(
             File(ctx.filesDir, "tokens.json"),
             ctx.getExternalFilesDir(null)?.let { File(it, "tokens.json") },
+            // a legacy username/password file is a session too — logout must forget it as well
+            File(ctx.filesDir, "legacy_login.json"),
+            ctx.getExternalFilesDir(null)?.let { File(it, "legacy_login.json") },
         )) {
             if (f.exists() && !f.delete()) Log.w(TAG, "logout: failed to delete ${f.absolutePath}")
         }

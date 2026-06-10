@@ -29,6 +29,7 @@ import java.awt.EventQueue;
 import java.awt.Toolkit;
 import java.awt.event.FocusEvent;
 import java.awt.event.InputEvent;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
 import java.util.EnumSet;
 import lombok.extern.slf4j.Slf4j;
@@ -80,6 +81,17 @@ public final class HeadlessLogin
 	private static final int COOLDOWN_DRAWS = Integer.getInteger("runelite.headless.autologin.cooldown", 120);
 	private static final int MAX_ATTEMPTS = Integer.getInteger("runelite.headless.autologin.maxAttempts", 5);
 
+	// Legacy (non-Jagex) account mode: instead of the JX_* welcome screen, drive the classic
+	// username/password form. The credentials come from the process ENVIRONMENT (set natively before
+	// JNI_CreateJavaVM, like the JX_* handoff) — never from -D opts, which get logged. loginIndex 0 is
+	// the initial "Welcome to RuneScape" panel (Enter activates the Existing User form); loginIndex 2 is
+	// the username/password form (fields set via the Client API, Enter submits).
+	private static final boolean LEGACY_ENABLED = Boolean.getBoolean("runelite.headless.autologin.legacy");
+	private static final String LEGACY_USER = System.getenv("RL_LEGACY_USER");
+	private static final String LEGACY_PASS = System.getenv("RL_LEGACY_PASS");
+	private static final int LEGACY_WELCOME_INDEX = 0;
+	private static final int LEGACY_FORM_INDEX = 2;
+
 	// Stage 1 (optional): the EULA Accept/Decline dialog a fresh client shows before the welcome screen.
 	// Inert on a client that already accepted (desktop) — loginIndex never equals EULA_LOGIN_INDEX there.
 	private static final boolean EULA_ENABLED = Boolean.getBoolean("runelite.headless.autologin.eula");
@@ -108,6 +120,11 @@ public final class HeadlessLogin
 	private static int lastPlayDraw;
 	private static boolean worldSelected;
 	private static boolean done;
+	// Legacy-mode attempt bookkeeping (welcome-panel Enter vs credential submit are separate budgets).
+	private static int legacyWelcomeAttempts;
+	private static int lastLegacyWelcomeDraw;
+	private static int legacySubmitAttempts;
+	private static int lastLegacySubmitDraw;
 
 	static
 	{
@@ -122,9 +139,15 @@ public final class HeadlessLogin
 		if (ENABLED)
 		{
 			log.info("[headless-login] ENABLED playPoint={},{} welcomeLoginIndex={} eula={} eulaPoint={},{} "
-					+ "eulaLoginIndex={} maxAttempts={} world={} worldAddress={}",
+					+ "eulaLoginIndex={} maxAttempts={} world={} worldAddress={} legacy={}",
 				CLICK_X, CLICK_Y, WELCOME_LOGIN_INDEX, EULA_ENABLED, EULA_X, EULA_Y, EULA_LOGIN_INDEX,
-				MAX_ATTEMPTS, WORLD_ID, WORLD_ADDRESS);
+				MAX_ATTEMPTS, WORLD_ID, WORLD_ADDRESS, LEGACY_ENABLED);
+			if (LEGACY_ENABLED && (LEGACY_USER == null || LEGACY_USER.isEmpty()
+				|| LEGACY_PASS == null || LEGACY_PASS.isEmpty()))
+			{
+				log.warn("[headless-login] legacy mode enabled but RL_LEGACY_USER/RL_LEGACY_PASS env is "
+					+ "missing/empty — legacy login will not fire");
+			}
 		}
 	}
 
@@ -238,6 +261,14 @@ public final class HeadlessLogin
 			return;
 		}
 
+		// Legacy (non-Jagex) account: drive the classic username/password form instead of the JX welcome
+		// screen (loginIndex never reaches 10 without a JX_* session, so stage 2 below is inert here).
+		if (LEGACY_ENABLED)
+		{
+			tickLegacy(client, canvas, loginIndex);
+			return;
+		}
+
 		// Stage 2 — Play Now on the authenticated welcome screen.
 		if (loginIndex != WELCOME_LOGIN_INDEX)
 		{
@@ -274,6 +305,78 @@ public final class HeadlessLogin
 		log.info("[headless-login] Play Now attempt {}/{}: synthesizing click at {},{} (canvas {}x{} displayable={})",
 			playAttempts, MAX_ATTEMPTS, CLICK_X, CLICK_Y, canvas.getWidth(), canvas.getHeight(), canvas.isDisplayable());
 		synthesizeClick(canvas, CLICK_X, CLICK_Y);
+	}
+
+	/**
+	 * Legacy username/password login. loginIndex 0 = the initial "Welcome to RuneScape" panel, where Enter
+	 * activates the Existing User form; loginIndex 2 = the username/password form, where the fields are set
+	 * through the Client API and Enter (twice: field-advance, then submit) starts the login. Any other
+	 * sub-state (authenticator, error dialog) is left alone — the attempt caps stop runaway input and the
+	 * captured frames show where it parked.
+	 */
+	private static void tickLegacy(Client client, Canvas canvas, int loginIndex)
+	{
+		if (LEGACY_USER == null || LEGACY_USER.isEmpty() || LEGACY_PASS == null || LEGACY_PASS.isEmpty())
+		{
+			return;
+		}
+
+		if (loginIndex == LEGACY_WELCOME_INDEX)
+		{
+			if (legacyWelcomeAttempts >= MAX_ATTEMPTS)
+			{
+				if (!done)
+				{
+					log.warn("[headless-login] legacy: still on the welcome panel (loginIndex=0) after {} "
+						+ "Enter attempt(s) — giving up", legacyWelcomeAttempts);
+					done = true;
+				}
+				return;
+			}
+			if (legacyWelcomeAttempts > 0 && draws - lastLegacyWelcomeDraw < COOLDOWN_DRAWS)
+			{
+				return;
+			}
+			legacyWelcomeAttempts++;
+			lastLegacyWelcomeDraw = draws;
+			log.info("[headless-login] legacy welcome attempt {}/{}: Enter to open the Existing User form",
+				legacyWelcomeAttempts, MAX_ATTEMPTS);
+			synthesizeEnter(canvas);
+			return;
+		}
+
+		if (loginIndex == LEGACY_FORM_INDEX)
+		{
+			if (legacySubmitAttempts >= MAX_ATTEMPTS)
+			{
+				if (!done)
+				{
+					log.warn("[headless-login] legacy: still on the login form after {} submit attempt(s) — "
+						+ "giving up (bad credentials, or the world rejected the login)", legacySubmitAttempts);
+					done = true;
+				}
+				return;
+			}
+			if (legacySubmitAttempts > 0 && draws - lastLegacySubmitDraw < COOLDOWN_DRAWS)
+			{
+				return;
+			}
+			// Point the client at the configured world before the first submit (same reason as the JX path:
+			// a remembered members world bounces a free account back to the login screen).
+			if (!worldSelected && WORLD_ID > 0 && WORLD_ADDRESS != null)
+			{
+				selectWorld(client);
+				worldSelected = true;
+			}
+			legacySubmitAttempts++;
+			lastLegacySubmitDraw = draws;
+			client.setUsername(LEGACY_USER);
+			client.setPassword(LEGACY_PASS);
+			log.info("[headless-login] legacy submit attempt {}/{}: credentials set, Enter to log in",
+				legacySubmitAttempts, MAX_ATTEMPTS);
+			synthesizeEnter(canvas);
+			synthesizeEnter(canvas);
+		}
 	}
 
 	private static int welcomeAttempts;
@@ -351,6 +454,17 @@ public final class HeadlessLogin
 		{
 			log.warn("[headless-login] changeWorld to {} ({}) failed", WORLD_ID, WORLD_ADDRESS, ex);
 		}
+	}
+
+	/** Post an Enter key press to the canvas — the login screen's field-advance / submit key. */
+	private static void synthesizeEnter(Canvas canvas)
+	{
+		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+		final long t = System.currentTimeMillis();
+		q.postEvent(new FocusEvent(canvas, FocusEvent.FOCUS_GAINED, false, null));
+		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, KeyEvent.VK_ENTER, '\n'));
+		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, '\n'));
+		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, KeyEvent.VK_ENTER, '\n'));
 	}
 
 	private static void synthesizeClick(Canvas canvas, int x, int y)
