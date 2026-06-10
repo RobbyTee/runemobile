@@ -28,10 +28,22 @@ proven portable. **Next is Phase B0: actually bring up the RLHD ZoneRenderer.**
   alloc to remap in the facade; storage-buffers off (`glBufferData` path); `glDrawBuffer`→plural via facade shim.
   **No RLHD source patches needed.**
 
-**What's left for B0 (device-coupled):** implement the native delta in `RouteCBridge.m` (port the Android **AG3-a**
-Zone GL-delta forwarder bodies) + B0.2 TBO 2D upload + the 4 shims; wire the zone bridge after `JNI_CreateJavaVM`;
-boot RuneLite with RLHD. First device tap is still the **base-gpu render re-confirm** (handoff step 1, StikDebug).
-The bridge is JVM-only-testable (no JVM on the Simulator) → needs the device attached.
+- **B0.2/B0.3 bridge PRE-WRITTEN + arm64-green** (`jni/routec_zone_jni.m` + `zone-bridge-compile-check.sh`, commit
+  `efcf5f428`): the RLHD facade-delta native forwarders, registered ON TOP of the base bridge (untouched) via
+  `RouteC_registerZoneNatives`. **53 entries, exact match to `facade-delta.txt`** — 50 GL on GLALL (31 GLES-core
+  forwarders + `glDrawBuffer`→plural #11 + `glTexBuffer`→2D RGB32I repack #1 + 17 caps-gated-off no-op stubs) + 3
+  off-heap on MemoryUtil. `ZONE_BRIDGE_COMPILES_ARM64` (0 err/0 warn) vs jni.h + OpenGLES(EAGL) + base
+  RouteCBridge.h. Mirrors base step 3b (device-only at runtime). See `jni/README.md` for the device wiring +
+  TODO(device) list.
+
+**What's left for B0 (device-coupled, JVM-only-testable):**
+1. Re-stage the **base gpu jar** with the grown `facade/` superset (single in-jar facade covers base + RLHD).
+2. Compile `routec_zone_jni.m` into the app; in zone mode call `RouteC_registerGLNatives` then
+   `RouteC_registerZoneNatives` after `JNI_CreateJavaVM`; the `glTexBuffer` companion `glBindTexture(GL_TEXTURE_BUFFER)`
+   →2D remap in the base bridge.
+3. B0.4/B0.5: minimal UBO + stub material/water plumbing; `gl_FragDepth` on RLHD scene_*/shadow_* (net-new vs Z0's
+   compile-only proof); boot RuneLite with RLHD.
+First device tap is still the **base-gpu render re-confirm** (handoff step 1, StikDebug). Needs the device attached.
 
 ## Read first
 - `ios/HD-ZONE-B0-SCOPE.md` — the step-by-step B0 plan (this is the spec to execute).
