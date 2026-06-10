@@ -134,7 +134,8 @@ PY
 if [ "$SERVE" = 1 ]; then
   log "serve over Tailscale HTTPS"
   [ -f "$HTTPD_PID" ] && kill "$(cat "$HTTPD_PID")" 2>/dev/null || true
-  nohup python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$DIST" >"$WORK/httpd.log" 2>&1 &
+  # range/resume-capable static server (stdlib http.server ignores Range -> a flaky phone tunnel can't resume)
+  nohup python3 "$HERE/serve-static.py" "$DIST" "$PORT" >"$WORK/httpd.log" 2>&1 &
   echo $! > "$HTTPD_PID"; disown 2>/dev/null || true
   sleep 1
   tailscale serve --bg "$PORT" >/dev/null
