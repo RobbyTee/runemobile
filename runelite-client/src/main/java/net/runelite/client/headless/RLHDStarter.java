@@ -144,11 +144,14 @@ public final class RLHDStarter
 			// the race is above the mapping layer. Force it off so RENDER_THREADS=0 and all GL stays on one thread.
 			// Durable constraint: any RLHD/engine multithreaded-GL feature must stay off on the single-context bridge.
 			MobileUiBridge.setConfig("hd", "asyncModelProcessing", "false");
-			// MSAA off: the scene renders to an 8x-multisampled FBO that must glBlitFramebuffer-resolve to the
-			// default FBO; Apple's GLES MSAA-resolve path is fragile and an invalid/incomplete scene FBO makes
-			// ZoneRenderer fall back to clearing the screen to pure black (the observed black world). DISABLED
-			// makes the scene FBO single-sample -> a plain same-format blit.
-			MobileUiBridge.setConfig("hd", "antiAliasingMode", "DISABLED");
+			// B1 MSAA (was DISABLED): hardware anti-aliasing on top of the SSAA. Round 7 black-screened because with
+			// no SSAA the scene FBO blit-resolved the multisampled FBO DIRECTLY to the default FBO (CAEAGLLayer) —
+			// Apple's GLES is fragile on that exact resolve. Now that sceneResolutionScale=200 (SSAA), RLHD takes the
+			// SAFE path: it resolves the MSAA into an intermediate fboSceneResolve renderbuffer (matching format/size,
+			// HdPlugin:1356-1364) FIRST, then downscales that to the screen — sidestepping the direct-to-default blit.
+			// iOS caps GL_MAX_SAMPLES at 4, so MSAA_4 == the device max. NOTE: this is a runtime FBO change the
+			// Simulator shader probe can't pre-validate — pure device test; revert to DISABLED if it regresses.
+			MobileUiBridge.setConfig("hd", "antiAliasingMode", "MSAA_4");
 			// Supersampling AA: with MSAA off, edges alias badly and the small fixed canvas is upscaled ~3x to the
 			// retina screen -> jagged "pixelated" model/terrain edges. RLHD renders the scene to fboScene at
 			// sceneResolution = sceneViewport * (sceneResolutionScale/100), then the final glBlitFramebuffer
@@ -161,7 +164,7 @@ public final class RLHDStarter
 			if (last.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced iOS config (uiScaling=LINEAR; tiled/POM/wind/char-disp/MSAA/asyncModelProcessing OFF; shadows=DETAILED/SMOOTH/transparency; normalMapping=ON; dynamicLights=SOME; sceneResolutionScale=200 LINEAR = 2x SSAA)");
+				log.info("[routecrlhd] forced iOS config (uiScaling=LINEAR; tiled/POM/wind/char-disp/asyncModelProcessing OFF; shadows=DETAILED/SMOOTH/transparency; normalMapping=ON; dynamicLights=SOME; MSAA_4; sceneResolutionScale=200 LINEAR = 2x SSAA)");
 			}
 			return;
 		}
