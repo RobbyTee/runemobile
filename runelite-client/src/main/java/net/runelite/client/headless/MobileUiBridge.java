@@ -1022,6 +1022,31 @@ public final class MobileUiBridge
 		return "{\"ok\":true,\"writeId\":" + id + "}";
 	}
 
+	/** Raw read of a stored config value (null if unset). Used by RLHDStarter's first-launch defaults sentinel. */
+	public static String getConfig(String group, String key)
+	{
+		final ConfigManager cm = configManager;
+		if (!ENABLED || cm == null || group == null || key == null)
+		{
+			return null;
+		}
+		return cm.getConfiguration(group, key);
+	}
+
+	/** Persist the dirty config, but QUEUED on the client thread so it runs AFTER any setConfig writes enqueued
+	 * just before it (sendConfig itself is immediate; ordering matters when seeding defaults then flushing). */
+	public static String flushConfigQueued()
+	{
+		final ConfigManager cm = configManager;
+		final ClientThread ct = clientThread;
+		if (!ENABLED || cm == null || ct == null)
+		{
+			return "{\"ok\":false,\"reason\":\"not-ready\"}";
+		}
+		enqueueClientWrite(ct, cm::sendConfig);
+		return "{\"ok\":true}";
+	}
+
 	/**
 	 * Reset one config item to its default, matching the desktop: unset it, then reapply group defaults so
 	 * the item is restored to its declared default value (not merely left unset). Returns a write id to poll.
