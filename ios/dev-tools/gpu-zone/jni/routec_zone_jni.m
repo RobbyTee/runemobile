@@ -224,7 +224,19 @@ static void JNICALL z_glTexBuffer(JNIEnv *e, jclass c, jint target, jint interna
         GLint w = n < maxW ? n : maxW; if (w < 1) w = 1;
         GLint h = (n + w - 1) / w;
         // Uploads to the currently-bound GL_TEXTURE_2D on the active unit (bound via the z_glBindTexture remap).
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32I, w, h, 0, GL_RGB_INTEGER, GL_INT, src);
+        // CRITICAL: the buffer holds only n texels but the texture is w*h (n <= w*h). A single
+        // glTexImage2D(..., src) would have the driver read the WHOLE w*h*12-byte rectangle, running past the
+        // mapped buffer on the partial last row -> SIGSEGV in libGLImage (device). So allocate the texture, then
+        // upload EXACTLY the n valid texels: the complete rows, then the partial last row. The unused tail is
+        // never sampled (every shader texelFetch index is < n).
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32I, w, h, 0, GL_RGB_INTEGER, GL_INT, NULL);
+        GLint fullRows = n / w;
+        if (fullRows > 0)
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, fullRows, GL_RGB_INTEGER, GL_INT, src);
+        GLint rem = n - fullRows * w;
+        if (rem > 0)
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, fullRows, rem, 1, GL_RGB_INTEGER, GL_INT,
+                            (const char *)src + (size_t)fullRows * w * texelBytes);
         // Integer 2D textures are incomplete unless sampled with GL_NEAREST + no mipmaps (GL_LINEAR is invalid for
         // integer formats); RLHD set no params on the TBO. Make it complete so the isampler2D fetch returns data.
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
