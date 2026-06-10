@@ -115,6 +115,11 @@ object JvmLauncher {
     external fun nativeFrameWidth(): Int
     external fun nativeFrameHeight(): Int
 
+    // AP-2b Finding 5 (screenshot): the latest composited CPU frame as 0x00RRGGBB ints (alpha unset; the consumer
+    // ORs 0xFF for an opaque PNG). null before the first frame / bridge off. Pull OFF the UI thread (via [onBridge])
+    // — it attaches the caller to HotSpot. Size against [nativeFrameWidth]; guard len % width == 0.
+    external fun nativeFramePixels(): IntArray?
+
     // ---- A4 plugin control plane (MobileUiBridge; gated by -Drunelite.mobileui) ----------------------
     // CALL THESE OFF THE UI THREAD ONLY (via [onBridge]) — they daemon-attach the calling thread to the
     // embedded HotSpot VM and may block (config writes dispatch to the client thread). ART<->HotSpot strings
@@ -222,6 +227,7 @@ object JvmLauncher {
     fun menuPublishSeq() = nativeMenuPublishSeq()
     fun frameWidth() = nativeFrameWidth()
     fun frameHeight() = nativeFrameHeight()
+    fun framePixels(): IntArray? = nativeFramePixels()
 
     // ---- A3.5 bridge request/response thread --------------------------------------------------------
     // A single dedicated background thread the UI posts plugin-plane requests to, so the ART UI thread NEVER

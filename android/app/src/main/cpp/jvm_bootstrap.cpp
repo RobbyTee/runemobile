@@ -1414,6 +1414,39 @@ Java_dev_audaro_helloshell_JvmLauncher_nativePanelPixels(JNIEnv *artEnv, jobject
     return dst;
 }
 
+// AP-2b Finding 5 (screenshot): marshal the latest composited CPU frame (JavaBridge.getFramePixels, the stable
+// 0x00RRGGBB snapshot) into an ART int[] for the native PNG/MediaStore save. Same OOM-safe marshalling as the
+// panel pull; gated on the live bridge. Pull off the rl-bridge thread. Width is read separately via the existing
+// nativeFrameWidth() atomic (the caller guards len % w == 0 against a torn read across a resize).
+extern "C" JNIEXPORT jintArray JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeFramePixels(JNIEnv *artEnv, jobject) {
+    if (!g_bridgeCls || !g_midPixels) return nullptr;
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs) return nullptr;
+    jintArray src = (jintArray) hs->CallStaticObjectMethod(g_bridgeCls, g_midPixels);
+    if (hs->ExceptionCheck() || !src) { hs->ExceptionClear(); if (src) hs->DeleteLocalRef(src); return nullptr; }
+    jsize n = hs->GetArrayLength(src);
+    jintArray dst = artEnv->NewIntArray(n);
+    if (!dst) {
+        if (artEnv->ExceptionCheck()) artEnv->ExceptionClear();
+        hs->DeleteLocalRef(src);
+        return nullptr;
+    }
+    if (n > 0) {
+        jint *buf = hs->GetIntArrayElements(src, nullptr);
+        if (buf) {
+            artEnv->SetIntArrayRegion(dst, 0, n, buf);
+            hs->ReleaseIntArrayElements(src, buf, JNI_ABORT);
+        } else {
+            if (hs->ExceptionCheck()) hs->ExceptionClear();
+            hs->DeleteLocalRef(src);
+            return nullptr;
+        }
+    }
+    hs->DeleteLocalRef(src);
+    return dst;
+}
+
 // ---- A5 Tier-2 native reflow (QuestHelperBridge / WorldSwitcherBridge) -------------------------------
 // Run on the rl-bridge thread (NOT the UI thread); each gates on its facade's acquire latch, then calls the
 // cached static method on the HotSpot env and marshals the result back into the ART env. Generic by (cls, m)

@@ -8,6 +8,11 @@
          on API 33+ (requested on first boot); a no-op grant below that. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- AP-2b Finding 5: legacy gallery write for the screenshot save. API 29+ uses scoped storage (no
+         permission); only pre-Q needs this, so it's capped at API 28. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <!-- Android TV (Shield) support: TV-optional so it installs + lists on the leanback home screen, and
          touchscreen-optional since a TV has none (the leanback launcher hides apps that require touch). -->
     <uses-feature android:name="android.software.leanback" android:required="false" />

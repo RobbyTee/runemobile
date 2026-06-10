@@ -4,9 +4,12 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.provider.MediaStore
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -32,6 +35,7 @@ import android.view.Gravity
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -261,12 +265,18 @@ class MainActivity : AppCompatActivity() {
         // installs can't easily push an rlhd.mode marker, but anyone can tap a button).
         val hdButton = devButton("HD")
         hdButton.setOnClickListener { restartIntoRlhd() }
+        // AP-2b Finding 5: capture the composited frame to the gallery. The desktop ScreenshotPlugin is hotkey-
+        // driven and writes to an unreachable desktop dir; on touch we pull the same CPU buffer (JavaBridge.
+        // getFramePixels) and save a PNG to MediaStore (Pictures/RuneLite) — the system gallery picks it up.
+        val shotButton = devButton("📷")   // 📷
+        shotButton.setOnClickListener { saveScreenshot() }
         // Group the dev affordances into one discreet cluster pinned to the BOTTOM-LEFT — clear of the relocated
         // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
         val devBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(pluginButton); addView(kbButton); addView(shiftButton); addView(chromeButton)
             addView(signInButton); addView(logoutButton); addView(gpuButton); addView(hdButton)
+            addView(shotButton)
         }
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
@@ -482,6 +492,74 @@ class MainActivity : AppCompatActivity() {
             }
         } else {
             purgeAndRestart()
+        }
+    }
+
+    /** AP-2b Finding 5: pull the composited CPU frame (JavaBridge.getFramePixels — the stable 0x00RRGGBB
+     *  snapshot) and write a PNG into MediaStore (Pictures/RuneLite) so it lands in the system gallery. The
+     *  pixel pull attaches to HotSpot, so it runs on the rl-bridge thread; the encode/insert runs on a plain
+     *  background thread; the Toast hops back to the UI thread. No shared-Java change — the getter already exists.
+     *  Note: getFramePixels is the CPU path only — under live GPU/117HD present the frame isn't published here. */
+    private fun saveScreenshot() {
+        if (!booted.get()) { Toast.makeText(this, "No frame yet", Toast.LENGTH_SHORT).show(); return }
+        JvmLauncher.onBridge {
+            val px = JvmLauncher.framePixels()
+            val w = JvmLauncher.frameWidth()
+            // Width must divide the array exactly; a non-multiple means a torn read across a resize — bail and
+            // let the user retap (frames are static at the login screen and rarely resize in-world).
+            if (px == null || w <= 0 || px.isEmpty() || px.size % w != 0) {
+                runOnUiThread { Toast.makeText(this, "Screenshot unavailable", Toast.LENGTH_SHORT).show() }
+                return@onBridge
+            }
+            val h = px.size / w
+            // Source is 0x00RRGGBB (alpha unset). Force opaque; channel order already matches Android's ARGB int
+            // (0xAARRGGBB) — NO R<->B swizzle here (unlike the SurfaceView blit, which swizzles for RGBA_8888).
+            for (i in px.indices) px[i] = px[i] or 0xFF000000.toInt()
+            val ok = try {
+                val bmp = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
+                val saved = writePngToGallery(bmp)
+                bmp.recycle()
+                saved
+            } catch (t: Throwable) {
+                Log.w(TAG, "screenshot: encode/save failed", t); false
+            }
+            runOnUiThread {
+                Toast.makeText(this, if (ok) "Screenshot saved to Pictures/RuneLite" else "Screenshot save failed",
+                    Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /** Insert [bmp] as a PNG into the shared Pictures/RuneLite collection. API 29+ uses scoped storage
+     *  (RELATIVE_PATH + IS_PENDING, no permission); API 28 falls back to the legacy top-level insert (covered by
+     *  WRITE_EXTERNAL_STORAGE maxSdk=28 in the manifest). Returns true on a successful write. */
+    private fun writePngToGallery(bmp: Bitmap): Boolean {
+        val name = "RuneLite_${System.currentTimeMillis()}.png"
+        val resolver = contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, name)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/RuneLite")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+        }
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return false
+        return try {
+            resolver.openOutputStream(uri)?.use { out ->
+                if (!bmp.compress(Bitmap.CompressFormat.PNG, 100, out)) throw java.io.IOException("PNG compress failed")
+            } ?: throw java.io.IOException("null output stream")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.clear()
+                values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+            }
+            Log.i(TAG, "screenshot: saved $name -> $uri")
+            true
+        } catch (t: Throwable) {
+            resolver.delete(uri, null, null)   // roll back the half-written/pending row
+            Log.w(TAG, "screenshot: write failed", t)
+            false
         }
     }
 
