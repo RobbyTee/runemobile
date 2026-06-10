@@ -112,6 +112,15 @@ public final class RLHDStarter
 			MobileUiBridge.setConfig("hd", "shadowMode", "OFF");                       // SHADOW_MODE 0
 			MobileUiBridge.setConfig("hd", "windDisplacement", "false");               // WIND_DISPLACEMENT off
 			MobileUiBridge.setConfig("hd", "characterDisplacement", "false");          // CHARACTER_DISPLACEMENT off
+			// Single-threaded model processing: RLHD's multithreadedModelProcessing (keyName asyncModelProcessing)
+			// defaults TRUE -> useMultithreading() -> setGpuFlags(RENDER_THREADS(2)), so the engine calls the draw
+			// callbacks from worker threads that touch the DynamicModelVAO GL buffers concurrently. Our Route C bridge
+			// is a SINGLE thread-affine EAGL context, so concurrent buffer access races and intermittently corrupts the
+			// per-frame animated-model data -> real PLAYERS (the most-animated models) flash with geometry/colour
+			// sampled from elsewhere; NPCs render clean. NOT a buffer-mapping bug (players share the NPC buffer code) —
+			// the race is above the mapping layer. Force it off so RENDER_THREADS=0 and all GL stays on one thread.
+			// Durable constraint: any RLHD/engine multithreaded-GL feature must stay off on the single-context bridge.
+			MobileUiBridge.setConfig("hd", "asyncModelProcessing", "false");
 			// MSAA off: the scene renders to an 8x-multisampled FBO that must glBlitFramebuffer-resolve to the
 			// default FBO; Apple's GLES MSAA-resolve path is fragile and an invalid/incomplete scene FBO makes
 			// ZoneRenderer fall back to clearing the screen to pure black (the observed black world). DISABLED
@@ -129,7 +138,7 @@ public final class RLHDStarter
 			if (last.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced Z0 minimal config (uiScaling=LINEAR; tiled/dynamic/normal/POM/shadow/wind/char-disp/MSAA OFF; sceneResolutionScale=200 LINEAR = 2x SSAA)");
+				log.info("[routecrlhd] forced Z0 minimal config (uiScaling=LINEAR; tiled/dynamic/normal/POM/shadow/wind/char-disp/MSAA/asyncModelProcessing OFF; sceneResolutionScale=200 LINEAR = 2x SSAA)");
 			}
 			return;
 		}
