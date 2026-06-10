@@ -158,6 +158,19 @@ public final class JavaBridge
 	private static int[] bufB;
 	private static boolean useA = true;
 
+	// iOS load-in flash guard (GPU mode). The published GPU frame is the composited 3D+UI. When transitioning
+	// from the login/loading screen into the world, RLHD clears the scene to the region's SKY/fog colour (a
+	// daytime light blue) and renders it for the frames before the zone geometry finishes uploading — and since
+	// the OSRS loading screen doesn't cover the 3D viewport in this composite (unlike desktop), that bare sky
+	// flashes through. We hold the previous published frame (the loading screen) until the engine has actually
+	// dispatched a 3D scene draw (set true in Hooks.drawScene), re-armed to false whenever the game leaves the
+	// in-world states (login screen / hopping / connection lost — but NOT plain LOADING, so seamless in-play
+	// region streaming while running isn't held). Default false so the very first login load-in is covered.
+	private static volatile boolean sceneDrawn;
+
+	/** Hooks.drawScene -> true (a real 3D frame is about to be published); non-world game states -> false. */
+	public static void setSceneDrawn(boolean v) { sceneDrawn = v; }
+
 	// GPU Route C white-flash diagnostic (one-shot): dump a handful of in-world composited GPU frames to PNG so
 	// the render bug can be seen off-device (the live frame can't be pulled). Gated -Drunelite.gpuframedump=true.
 	private static final boolean FRAME_DUMP = Boolean.getBoolean("runelite.gpuframedump");
@@ -279,6 +292,11 @@ public final class JavaBridge
 	/** Publish the back buffer the native shim just filled (vertical-flipped, R/B-swizzled 0x00RRGGBB). */
 	public static void gpuPublish(int w, int h)
 	{
+		// Hold the last good frame until the scene has been drawn (the login load-in sky-flash guard, above).
+		// Not bumping frameSeq keeps the native reader on the previous frame; useA doesn't flip, so the back
+		// buffer the shim just filled is simply overwritten next frame and the double buffering stays consistent.
+		if (!sceneDrawn)
+			return;
 		frameW = w;
 		frameH = h;
 		frame = useA ? bufA : bufB;

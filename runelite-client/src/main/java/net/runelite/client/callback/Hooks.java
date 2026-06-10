@@ -391,6 +391,16 @@ public class Hooks implements Callbacks
 			// Keep the native shell's touch bridge pointed at the current client (the frame snapshot is
 			// taken post-composite, below).
 			net.runelite.client.headless.JavaBridge.register(client);
+			// iOS load-in flash guard: re-arm the publish hold whenever we're not in a continuously-rendered
+			// world — the login screen, world hopping, connection lost, etc. We deliberately do NOT re-arm on
+			// plain LOADING, since that also fires during seamless in-play region streaming while running (where
+			// the scene keeps rendering and there's no sky flash to hide). drawScene() clears it back to true
+			// once geometry is rendered. See JavaBridge.sceneDrawn.
+			net.runelite.api.GameState gs = client.getGameState();
+			if (gs != net.runelite.api.GameState.LOGGED_IN && gs != net.runelite.api.GameState.LOADING)
+			{
+				net.runelite.client.headless.JavaBridge.setSceneDrawn(false);
+			}
 		}
 		if (net.runelite.client.headless.MobileUiBridge.isEnabled())
 		{
@@ -712,6 +722,14 @@ public class Hooks implements Callbacks
 			// render `ev.dk`, both zone and legacy branches) to tell whether the engine drives the 3D scene
 			// at all in GPU mode. Read-only; gated -Drunelite.gpudiag=true.
 			net.runelite.client.headless.GpuSceneDiag.onDrawScene();
+		}
+
+		// iOS load-in flash guard: the engine just dispatched a real 3D scene render, so this frame has geometry
+		// (not the bare sky). Let the GPU publish through from here on (re-armed off on non-world game states in
+		// draw(), so the next login load-in holds again). See JavaBridge.sceneDrawn.
+		if (net.runelite.client.headless.JavaBridge.isEnabled())
+		{
+			net.runelite.client.headless.JavaBridge.setSceneDrawn(true);
 		}
 
 		MainBufferProvider bufferProvider = (MainBufferProvider) client.getBufferProvider();
