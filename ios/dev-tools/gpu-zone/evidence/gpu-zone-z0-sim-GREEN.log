@@ -1,0 +1,10 @@
+[z0] GL_VERSION = OpenGL ES 3.0 APPLE-23.1.1
+[z0] GL_SLVERSION = OpenGL ES GLSL ES 3.00
+[z0] COMPILE scene.frag.assembled.glsl = OK
+[z0] COMPILE scene.vert.assembled.glsl = OK
+[z0] COMPILE shadow.frag.assembled.glsl = OK
+[z0] COMPILE shadow.vert.assembled.glsl = OK
+[z0] COMPILE ui.frag.assembled.glsl = OK
+[z0] COMPILE ui.vert.assembled.glsl = OK
+[z0] SUMMARY compiled=6/6 skipped=0
+[z0] VERDICT = ALL_ZONE_SHADERS_COMPILE_ES300

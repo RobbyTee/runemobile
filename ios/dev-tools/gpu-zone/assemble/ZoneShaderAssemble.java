@@ -126,9 +126,10 @@ public class ZoneShaderAssemble {
 		{ "-IN.position.xz / (128 * scale)", "-IN.position.xz / (128.0 * scale)" },
 		// scene_vert.glsl — depth-bias offset, int depthBias / float.
 		{ "clipPosition.z += depthBias / 128.0;", "clipPosition.z += float(depthBias) / 128.0;" },
-		// utils/shadows.glsl — with SHADOW_MODE off, `sampleShadowMap` is a macro that expands to int `0`; wrap the
-		// float assignment in float() (harmless once shadows are enabled and it returns a real float).
-		{ "float shadow = sampleShadowMap(IN.position, distortion, lightDotNormals);", "float shadow = float(sampleShadowMap(IN.position, distortion, lightDotNormals));" },
+		// utils/shadows.glsl — with SHADOW_MODE off, the `sampleShadowMap` stub macro expands to int `0`, so every
+		// `float x = sampleShadowMap(...)` call site breaks. Fix the macro definition once (→ float `0.0`) instead of
+		// wrapping each call. (When shadows are enabled the real function returns float, so this stub is unused.)
+		{ "#define sampleShadowMap(fragPos, distortion, lightDotNormals) 0", "#define sampleShadowMap(fragPos, distortion, lightDotNormals) 0.0" },
 		// utils/fog.glsl — fog-depth guard and the camera-to-vertex midpoint.
 		{ "if (fogDepth == 0)", "if (fogDepth == 0.0)" },
 		{ "(position.y + cameraPos.y) / 2,", "(position.y + cameraPos.y) / 2.0," },
@@ -139,6 +140,57 @@ public class ZoneShaderAssemble {
 		{ "waterDepth2 * IN.texBlend.y", "float(waterDepth2) * IN.texBlend.y" },
 		{ "waterDepth3 * IN.texBlend.z", "float(waterDepth3) * IN.texBlend.z" },
 		{ "bool isUnderwater = waterDepth != 0;", "bool isUnderwater = waterDepth != 0.0;" },
+		// scene_frag.glsl body — float locals initialized from int literals.
+		{ "float mipBias = 0;", "float mipBias = 0.0;" },
+		{ "float selfShadowing = 0;", "float selfShadowing = 0.0;" },
+		{ "float overlayMix = 0;", "float overlayMix = 0.0;" },
+		{ "float shadow = 0;", "float shadow = 0.0;" },
+		{ "float closeFadeDistance = 1500;", "float closeFadeDistance = 1500.0;" },
+		// scene_frag.glsl body — clamp/max ranges with int literal args (some also fold in int * / - sites).
+		{ "clamp(blendedUv.x, 0, .984375)", "clamp(blendedUv.x, 0.0, .984375)" },
+		{ "clamp(blendedUv.y, 0, .984375)", "clamp(blendedUv.y, 0.0, .984375)" },
+		{ "clamp(underlayBlend, 0, 1)", "clamp(underlayBlend, 0.0, 1.0)" },
+		{ "clamp(overlayBlend, 0, 1)", "clamp(overlayBlend, 0.0, 1.0)" },
+		{ "clamp(result * 2 - 1, 0, 1)", "clamp(result * 2.0 - 1.0, 0.0, 1.0)" },
+		{ "clamp((1 - baseColor1.a) * 2, 0, 1)", "clamp((1.0 - baseColor1.a) * 2.0, 0.0, 1.0)" },
+		{ "clamp((1 - baseColor2.a) * 2, 0, 1)", "clamp((1.0 - baseColor2.a) * 2.0, 0.0, 1.0)" },
+		{ "clamp((1 - baseColor3.a) * 2, 0, 1)", "clamp((1.0 - baseColor3.a) * 2.0, 0.0, 1.0)" },
+		{ "max(normals.y, 0)", "max(normals.y, 0.0)" },
+		{ "clamp(outputColor.rgb, 0, 1)", "clamp(outputColor.rgb, 0.0, 1.0)" },
+		// scene_frag.glsl body — water-scroll periods + caustics animationFrame() int args (fn takes float).
+		{ "10 * waterType.duration", "10.0 * waterType.duration" },
+		{ "animationFrame(231)", "animationFrame(231.0)" },
+		{ "animationFrame(19)", "animationFrame(19.0)" },
+		{ "animationFrame(37)", "animationFrame(37.0)" },
+		// scene_frag.glsl body — entity-tint HSL blend: tint is ivec4 (.xyz ivec3, .w int), hsl* are vec3.
+		{ "hsl1 += ((tint.xyz - hsl1) * tint.w) / 128;", "hsl1 += ((vec3(tint.xyz) - hsl1) * float(tint.w)) / 128.0;" },
+		{ "hsl2 += ((tint.xyz - hsl2) * tint.w) / 128;", "hsl2 += ((vec3(tint.xyz) - hsl2) * float(tint.w)) / 128.0;" },
+		{ "hsl3 += ((tint.xyz - hsl3) * tint.w) / 128;", "hsl3 += ((vec3(tint.xyz) - hsl3) * float(tint.w)) / 128.0;" },
+		// scene_frag.glsl body — per-face base alpha from the packed alpha byte: int 1 minus the float ratio.
+		{ "1 - float(fAlphaBiasHsl[0] >> 24 & 0xff) / 255.", "1.0 - float(fAlphaBiasHsl[0] >> 24 & 0xff) / 255." },
+		{ "1 - float(fAlphaBiasHsl[1] >> 24 & 0xff) / 255.", "1.0 - float(fAlphaBiasHsl[1] >> 24 & 0xff) / 255." },
+		{ "1 - float(fAlphaBiasHsl[2] >> 24 & 0xff) / 255.", "1.0 - float(fAlphaBiasHsl[2] >> 24 & 0xff) / 255." },
+		// scene_frag.glsl body — underlay/overlay masks are ivec3; texBlend is vec3.
+		{ "vec3 underlayBlend = IN.texBlend * isUnderlay;", "vec3 underlayBlend = IN.texBlend * vec3(isUnderlay);" },
+		{ "vec3 overlayBlend = IN.texBlend * isOverlay;", "vec3 overlayBlend = IN.texBlend * vec3(isOverlay);" },
+		{ "float result = dot(IN.texBlend, isPrimary);", "float result = dot(IN.texBlend, vec3(isPrimary));" },
+		{ "result = 1 - result;", "result = 1.0 - result;" },
+		{ "float inverseShadow = 1 - shadow;", "float inverseShadow = 1.0 - shadow;" },
+		// scene_frag.glsl body — material-map "no map" ternaries (roughness + ambientOcclusion): int `1` default vs
+		// the float texture branch. One rule covers all 6 (3 materials x 2 maps).
+		{ "Map == -1 ? 1 :", "Map == -1 ? 1.0 :" },
+		// scene_frag.glsl body — caustics flow: ivec2 direction/drift mixed with vec2 animationFrame(); vec3 * int.
+		{ "const ivec2 direction = ivec2(1, -1);", "const vec2 direction = vec2(1.0, -1.0);" },
+		{ "* ivec2(1, -2)", "* vec2(1.0, -2.0)" },
+		{ "sampleCaustics(flow1, flow2) * 2;", "sampleCaustics(flow1, flow2) * 2.0;" },
+		// scene_frag.glsl body — tile-distance wireframe/grid: vec2 xz / int tile size.
+		{ "floor(IN.position.xz / 128)", "floor(IN.position.xz / 128.0)" },
+		{ "floor(cameraPos.xz / 128)", "floor(cameraPos.xz / 128.0)" },
+		{ "outputColor.a *= -256;", "outputColor.a *= -256.0;" },
+		// scene_frag.glsl body — post-process saturation/contrast guards (float uniforms vs int 1).
+		{ "if (saturation != 1 || contrast != 1)", "if (saturation != 1.0 || contrast != 1.0)" },
+		{ "float combinedFog = 1 - (1 - fogAmount) * (1 - groundFog);", "float combinedFog = 1.0 - (1.0 - fogAmount) * (1.0 - groundFog);" },
+		{ "outputColor.a * (1 - combinedFog);", "outputColor.a * (1.0 - combinedFog);" },
 		// shadow_vert.glsl — alpha from packed bytes: int `1`, and an int/float division (packed byte / float).
 		{ "float opacity = 1 - (alphaBiasHsl >> 24 & 0xFF) / float(0xFF)", "float opacity = 1.0 - float(alphaBiasHsl >> 24 & 0xFF) / float(0xFF)" },
 		// shadow_vert.glsl — opacity threshold from packed 6-bit field divided by int 0x3F.

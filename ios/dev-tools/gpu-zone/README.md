@@ -49,15 +49,18 @@ the `MATERIAL_CONSTANTS` named-material defines are replicated in the config. **
 its interface-block false-positives) that reports many #13 sites per pass — works for shadow/ui, but **not scene**
 (glslang bails at scene's in/out interface blocks, which Apple's EAGL accepts).
 
-**Gate run (Apple Simulator ES 3.0 = the authority): 5/6 COMPILE** — `scene.vert`, `shadow.vert`, `shadow.frag`,
-`ui.vert`, `ui.frag`. The `#version`-first, precision, zero-array, MAT_*-constant, and most #13 classes are cleared.
+**Gate run (Apple Simulator ES 3.0 = the authority): 6/6 COMPILE ✅ — `Z0_ZONE_SHADER_GATE_GREEN`** (sealed,
+`evidence/gpu-zone-z0-sim-GREEN.log`, md5 `2d00c0e5958e5b30a9a2f1a6c175de38`; `./gpu-zone-z0-verdict.sh` reproduces).
+All of scene/shadow/ui × vert/frag compile to ES 3.00 on the real Apple driver. Cleared: `#version`-first, precision,
+zero-array, MAT_*-constants, the shadows-off `sampleShadowMap` int-`0` stub macro, and the full #13 int↔float pass.
+ios-overrides: `utils/color_utils.glsl`, `utils/water.glsl`, `utils/fog.glsl` (pervasively cast-heavy); everything
+else via targeted CAST rules in the assembler. Also fixed a real downport bug (the `f`-suffix strip corrupting
+`material1.flowMap`→`lowMap`).
 
-**Remaining — `scene.frag` only (2253 lines).** Its tail of #13 sites lives in the water/uvs/lighting includes
-(`worldUvs(int)`, `/128`, `/255`, `/127`, `N * waterType.duration`, …) — many sites. Because glslang can't pre-scan
-scene (interface blocks), this is an **Apple-sim one-error-per-round grind**; `utils/water.glsl` + `utils/uvs.glsl`
-are good **ios-override** candidates (like `color_utils`) to clear clusters at once. Once `scene.frag` compiles:
-extend the probe to **link** the vert+frag programs (not just compile), **device confirm** (Sim compiler ≠ A19), then
-seal the md5 in `gpu-zone-z0-verdict.sh`.
+**Remaining for Z0 → GREEN-sealed-on-device:** (1) extend the probe to **link** the vert+frag programs (scene/shadow/
+ui) — currently it compiles each shader individually; (2) **device confirm** (the Simulator GLES compiler ≠ A19, the
+standing B1 caveat) and re-seal the md5 from the device log. Then **Phase B0** renderer bring-up (HD-ZONE-B0-SCOPE.md:
+stage the RLHD jar, facade `glTexBuffer`→2D `glTexImage2D` upload, facade-delta, Java conformance fixes, boot).
 
 **Iterate loop:** edit `assemble/ZoneShaderAssemble.java` (CAST rules) or add an `ios-overrides/` file →
 `cd assemble && javac ZoneShaderAssemble.java && java ZoneShaderAssemble` → for shadow/ui: `./glslang-check.sh`
