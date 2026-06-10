@@ -826,7 +826,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         [opts addObject:@"-Drunelite.gpudiag=true"];
         [opts addObject:@"-Drunelite.gpuframedump=true"];
         [opts addObject:@"-Drunelite.routecrlhd=true"];
-        log(@"[jvm] GPU Zone (117HD) ARMED (-Drunelite.gpudiag=true, gpuframedump=true, routecrlhd=true)");
+        // Keep safe-mode ON for the zone bring-up: drop -Drunelite.hub so the plugin HUB does NOT auto-load its
+        // OWN cached "117hd" jar (a child URLClassLoader without our facade -> ClassNotFoundException
+        // org.lwjgl.system.Platform, + a class-name collision with our staged rs117.hd.HdPlugin). RLHDStarter
+        // loads OUR staged jar explicitly from the system classloader (which has the facade); safe-mode also
+        // disables the base GpuPlugin, which we don't want in zone mode anyway (HdPlugin replaces it).
+        [opts removeObject:@"-Drunelite.hub=true"];
+        [opts removeObject:@"-Drunelite.pluginhub.version=1.12.27"];
+        log(@"[jvm] GPU Zone (117HD) ARMED (routecrlhd=true, gpudiag/gpuframedump=true; -Drunelite.hub dropped -> safe-mode keeps the hub's 117hd out)");
     }
 
     // Phase 4 sub-goal A — interactive login, purely in-process (no native touch bridge). Map the JX_*

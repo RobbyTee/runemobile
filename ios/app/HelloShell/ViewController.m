@@ -23,6 +23,7 @@
 @property (nonatomic, strong) UITextView *console;
 @property (nonatomic, strong) UIButton *launchButton;
 @property (nonatomic, strong) UIButton *gpuButton;   // GPU Route C: dedicated one-tap button to boot full RuneLite on GPU
+@property (nonatomic, strong) UIButton *zoneButton;  // GPU Zone: dedicated one-tap button to boot full RuneLite on 117HD
 @property (nonatomic, strong) UIButton *canaryButton;
 @property (nonatomic, strong) UIButton *keyboardButton;
 // W3 hybrid-chrome device de-risk: read the MobileChromeBridge snapshot + proxy a tab switch via the proven
@@ -391,6 +392,16 @@ static const CGFloat kMenuWidth       = 210.0;
              forControlEvents:UIControlEventTouchUpInside];
     [self.debugPanel addSubview:self.gpuButton];
 
+    self.zoneButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.zoneButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.zoneButton setTitle:@"▶ 117HD (Zone)" forState:UIControlStateNormal];
+    self.zoneButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    self.zoneButton.tintColor = [UIColor systemGreenColor];
+    self.zoneButton.enabled = NO;
+    [self.zoneButton addTarget:self action:@selector(onLaunchZone)
+             forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.zoneButton];
+
     self.loginButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.loginButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.loginButton setTitle:@"Log in with Jagex" forState:UIControlStateNormal];
@@ -508,6 +519,8 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.chromeButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.gpuButton.centerYAnchor constraintEqualToAnchor:self.chromeButton.centerYAnchor],
         [self.gpuButton.leadingAnchor constraintEqualToAnchor:self.chromeButton.trailingAnchor constant:24],
+        [self.zoneButton.centerYAnchor constraintEqualToAnchor:self.gpuButton.centerYAnchor],
+        [self.zoneButton.leadingAnchor constraintEqualToAnchor:self.gpuButton.trailingAnchor constant:24],
         [self.loginButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
         [self.loginButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.logoutButton.centerYAnchor constraintEqualToAnchor:self.loginButton.centerYAnchor],
@@ -979,6 +992,7 @@ static const CGFloat kMenuWidth       = 210.0;
         if (attached && !self.launchButton.enabled && !self.launched) {
             self.launchButton.enabled = YES;
             self.gpuButton.enabled = YES;
+            self.zoneButton.enabled = YES;
             [self appendLine:@"StikDebug attached — CS_DEBUGGED set. Tap Start JVM."];
         }
     }];
@@ -1236,6 +1250,15 @@ static const CGFloat kMenuWidth       = 210.0;
     [self onLaunch];
 }
 
+// Dedicated one-tap 117HD/Zone boot (reliable — the 3-finger gesture is too finicky on the small button). Fixed
+// 765x503 + readback present (the proven-display path Phase 1 used), not the resizable direct-present path.
+- (void)onLaunchZone {
+    if (self.launched) return;
+    self.pendingRouteCZone = YES;
+    self.pendingRouteCGpuNoResize = YES;
+    [self onLaunch];
+}
+
 - (void)onLaunch {
     if (self.launched) return;
     // If the login web view ran this session, WebKit is resident and the JVM would crash at code-cache
@@ -1244,6 +1267,7 @@ static const CGFloat kMenuWidth       = 210.0;
     self.launched = YES;
     self.launchButton.enabled = NO;
     self.gpuButton.enabled = NO;
+    self.zoneButton.enabled = NO;
     [self.jitTimer invalidate];
     [self captureStdio];
 
