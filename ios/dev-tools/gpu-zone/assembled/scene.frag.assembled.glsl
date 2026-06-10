@@ -277,6 +277,9 @@ layout(std140) uniform UBOWaterTypes {
 #define getWaterType(i) WaterTypeArray[i]
 
 
+#define MAT_CAUSTICS_MAP getMaterial(0)
+#define MAT_WATER_FLOW_MAP getMaterial(0)
+#define MAT_WATER_FOAM getMaterial(0)
 
 
 uniform sampler2DArray textureArray;
@@ -1442,8 +1445,8 @@ void calculateLighting(
 vec4 sampleWater(int waterTypeIndex, vec3 viewDir) {
     WaterType waterType = getWaterType(waterTypeIndex);
 
-    vec2 uv1 = worldUvs(3).yx - animationFrame(28 * waterType.duration);
-    vec2 uv2 = worldUvs(3) + animationFrame(24 * waterType.duration);
+    vec2 uv1 = worldUvs(3.0).yx - animationFrame(28.0 * waterType.duration);
+    vec2 uv2 = worldUvs(3.0) + animationFrame(24.0 * waterType.duration);
     vec2 uv3 = IN.uv;
 
     vec2 flowMapUv = worldUvs(15) + animationFrame(50 * waterType.duration);

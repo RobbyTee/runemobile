@@ -98,9 +98,13 @@ public class ZoneShaderAssemble {
 		// Dynamic getters: the simple (non-Intel-workaround) form RLHD emits when dynamic indexing works.
 		includeMap.put("MATERIAL_GETTER", "#define getMaterial(i) MaterialArray[i]");
 		includeMap.put("WATER_TYPE_GETTER", "#define getWaterType(i) WaterTypeArray[i]");
-		// MATERIAL_CONSTANTS: per-material `#define MAT_<NAME> getMaterial(idx)`. Empty in the minimal gate; filled
-		// from compile errors if scene_frag references named MAT_ constants in always-compiled code.
-		includeMap.put("MATERIAL_CONSTANTS", "");
+		// MATERIAL_CONSTANTS: per-material `#define MAT_<NAME> getMaterial(idx)`. The scene shaders reference a few
+		// named materials in always-compiled (water/caustics) code; define them to index 0 for the compile gate
+		// (B0/B1 wires the real MaterialManager.MATERIAL_MAP indices). MATERIAL_COUNT=1 so index 0 is in-bounds.
+		includeMap.put("MATERIAL_CONSTANTS",
+			"#define MAT_CAUSTICS_MAP getMaterial(0)\n" +
+			"#define MAT_WATER_FLOW_MAP getMaterial(0)\n" +
+			"#define MAT_WATER_FOAM getMaterial(0)\n");
 		// SHADER_TYPE block (mirrors ShaderTemplate.SHADER_TYPE_DEFINE); the per-target SHADER_TYPE value is set in run().
 	}
 
@@ -120,6 +124,12 @@ public class ZoneShaderAssemble {
 		{ "projectionMatrix[2][3] != 0)", "projectionMatrix[2][3] != 0.0)" },
 		// utils/uvs.glsl — world-UV scale, int 128 vs float scale.
 		{ "-IN.position.xz / (128 * scale)", "-IN.position.xz / (128.0 * scale)" },
+		// scene_vert.glsl — depth-bias offset, int depthBias / float.
+		{ "clipPosition.z += depthBias / 128.0;", "clipPosition.z += float(depthBias) / 128.0;" },
+		// scene_frag.glsl water — worldUvs() takes a float; water-scroll periods are int * float duration.
+		{ "worldUvs(3)", "worldUvs(3.0)" },
+		{ "28 * waterType.duration", "28.0 * waterType.duration" },
+		{ "24 * waterType.duration", "24.0 * waterType.duration" },
 		// shadow_vert.glsl — alpha from packed bytes: int `1`, and an int/float division (packed byte / float).
 		{ "float opacity = 1 - (alphaBiasHsl >> 24 & 0xFF) / float(0xFF)", "float opacity = 1.0 - float(alphaBiasHsl >> 24 & 0xFF) / float(0xFF)" },
 		// shadow_vert.glsl — opacity threshold from packed 6-bit field divided by int 0x3F.
