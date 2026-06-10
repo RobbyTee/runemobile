@@ -311,14 +311,17 @@ static jstring JNICALL rc_glGetString(JNIEnv* e, jclass, jint a0){ const char* s
 static jint JNICALL rc_glGetUniformBlockIndex(JNIEnv* e, jclass, jint a0, jstring a1){ const char* n=e->GetStringUTFChars(a1,nullptr); jint r=(jint)glGetUniformBlockIndex(a0,n); e->ReleaseStringUTFChars(a1,n); return r; }
 static jint JNICALL rc_glGetUniformLocation(JNIEnv* e, jclass, jint a0, jstring a1){ const char* n=e->GetStringUTFChars(a1,nullptr); jint r=(jint)glGetUniformLocation(a0,n); e->ReleaseStringUTFChars(a1,n); return r; }
 GLF rc_glLinkProgram(JNIEnv*, jclass, jint a0){ glLinkProgram(a0); }
-// Classic glMapBuffer has no range form on GLES, so map the whole buffer via glMapBufferRange with bits derived
-// from the GL access enum. WRITE_ONLY additionally discards (INVALIDATE_BUFFER) — RLHD's upload buffers are
-// fully rewritten each frame, so discard avoids a stall and matches the proven 2-arg shim above.
+// Classic glMapBuffer has no range form on GLES, so map the WHOLE buffer via glMapBufferRange with bits derived
+// from the GL access enum. Crucially this must match classic glMapBuffer semantics: GL_WRITE_ONLY maps for
+// writing and PRESERVES existing contents — it does NOT discard. RLHD reaches this path (GL_ARB_map_buffer_range
+// reported false) for buffers it only PARTIALLY rewrites (e.g. dynamic player-model geometry written at offsets);
+// adding GL_MAP_INVALIDATE_BUFFER_BIT here would discard the whole buffer so the un-rewritten regions render as
+// garbage (stale scene data) — exactly the "player models flash with environment colours" bug. So: no invalidate.
 static GLbitfield rc_mapBitsFor(GLenum access){
     switch (access) {
         case GL_READ_ONLY:  return GL_MAP_READ_BIT;
         case GL_READ_WRITE: return GL_MAP_READ_BIT | GL_MAP_WRITE_BIT;
-        default:            return GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT;   // GL_WRITE_ONLY
+        default:            return GL_MAP_WRITE_BIT;   // GL_WRITE_ONLY — preserve contents (no discard)
     }
 }
 static jobject rc_mapReuse(JNIEnv* e, GLenum target, GLenum access, GLsizeiptr sz, jobject old){
