@@ -40,7 +40,9 @@
 	[nop replaceMatchesInString:s options:0 range:NSMakeRange(0, s.length) withTemplate:@""];
 
 	// 4) strip float-literal `f`/`F` suffix (illegal in ES 3.00). Requires a decimal point so hex/ints are untouched.
-	NSRegularExpression *fsuf = [NSRegularExpression regularExpressionWithPattern:@"(\\d*\\.\\d+|\\d+\\.\\d*)[fF]"
+	//    The (?![A-Za-z0-9_]) is REQUIRED: else `material1.flowMap` matches `1.f` and the identifier's `f` is stripped
+	//    -> `material1.lowMap` (silent corruption). Only strip a real literal suffix, not an identifier's leading f/F.
+	NSRegularExpression *fsuf = [NSRegularExpression regularExpressionWithPattern:@"(\\d*\\.\\d+|\\d+\\.\\d*)[fF](?![A-Za-z0-9_])"
 		options:0 error:&err];
 	[fsuf replaceMatchesInString:s options:0 range:NSMakeRange(0, s.length) withTemplate:@"$1"];
 

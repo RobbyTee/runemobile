@@ -126,10 +126,19 @@ public class ZoneShaderAssemble {
 		{ "-IN.position.xz / (128 * scale)", "-IN.position.xz / (128.0 * scale)" },
 		// scene_vert.glsl — depth-bias offset, int depthBias / float.
 		{ "clipPosition.z += depthBias / 128.0;", "clipPosition.z += float(depthBias) / 128.0;" },
-		// scene_frag.glsl water — worldUvs() takes a float; water-scroll periods are int * float duration.
-		{ "worldUvs(3)", "worldUvs(3.0)" },
-		{ "28 * waterType.duration", "28.0 * waterType.duration" },
-		{ "24 * waterType.duration", "24.0 * waterType.duration" },
+		// utils/shadows.glsl — with SHADOW_MODE off, `sampleShadowMap` is a macro that expands to int `0`; wrap the
+		// float assignment in float() (harmless once shadows are enabled and it returns a real float).
+		{ "float shadow = sampleShadowMap(IN.position, distortion, lightDotNormals);", "float shadow = float(sampleShadowMap(IN.position, distortion, lightDotNormals));" },
+		// utils/fog.glsl — fog-depth guard and the camera-to-vertex midpoint.
+		{ "if (fogDepth == 0)", "if (fogDepth == 0.0)" },
+		{ "(position.y + cameraPos.y) / 2,", "(position.y + cameraPos.y) / 2.0," },
+		// utils/normals.glsl — unpack normal map from [0,1] to [-1,1].
+		{ "n.xy = n.xy * 2 - 1;", "n.xy = n.xy * 2.0 - 1.0;" },
+		// scene_frag.glsl — water-depth blend: packed int depths times float texBlend weights.
+		{ "waterDepth1 * IN.texBlend.x", "float(waterDepth1) * IN.texBlend.x" },
+		{ "waterDepth2 * IN.texBlend.y", "float(waterDepth2) * IN.texBlend.y" },
+		{ "waterDepth3 * IN.texBlend.z", "float(waterDepth3) * IN.texBlend.z" },
+		{ "bool isUnderwater = waterDepth != 0;", "bool isUnderwater = waterDepth != 0.0;" },
 		// shadow_vert.glsl — alpha from packed bytes: int `1`, and an int/float division (packed byte / float).
 		{ "float opacity = 1 - (alphaBiasHsl >> 24 & 0xFF) / float(0xFF)", "float opacity = 1.0 - float(alphaBiasHsl >> 24 & 0xFF) / float(0xFF)" },
 		// shadow_vert.glsl — opacity threshold from packed 6-bit field divided by int 0x3F.
@@ -162,8 +171,11 @@ public class ZoneShaderAssemble {
 		s = "#version 300 es\n" + prec + s;
 		// 3) drop noperspective.
 		s = s.replaceAll("\\bnoperspective\\s+", "");
-		// 4) strip float-literal f/F suffix (needs a decimal point; hex/ints untouched).
-		s = s.replaceAll("(\\d*\\.\\d+|\\d+\\.\\d*)[fF]", "$1");
+		// 4) strip float-literal f/F suffix (needs a decimal point; hex/ints untouched). The trailing (?![A-Za-z0-9_])
+		//    is REQUIRED: without it, `material1.flowMap` matches `1.f` (digit-dot-<zero digits>-f) and the `f` of an
+		//    identifier like flowMap/flags gets stripped -> `material1.lowMap` (silent corruption). Only strip when
+		//    the f/F is a real literal suffix, i.e. not followed by an identifier character.
+		s = s.replaceAll("(\\d*\\.\\d+|\\d+\\.\\d*)[fF](?![A-Za-z0-9_])", "$1");
 		// 5) textureFaces isamplerBuffer -> 2D isampler2D repack (gpu-tbo2d), only where declared.
 		if (s.contains("textureFaces")) {
 			s = s.replaceAll("uniform\\s+isamplerBuffer\\s+textureFaces\\s*;", "uniform highp isampler2D textureFaces;");

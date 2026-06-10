@@ -899,7 +899,7 @@ vec3 sampleNormalMap(const Material material, const vec2 uv, const mat3 TBN) {
     // Undo automatic sRGB to linear conversion, since we want the raw values
     n = linearToSrgb(n);
     // Scale and shift normal so it can point in both directions
-    n.xy = n.xy * 2 - 1;
+    n.xy = n.xy * 2.0 - 1.0;
     // Flip normals when UVs are flipped
     n.xy *= sign(material.textureScale.xy);
     // Scale the normal map's Z-component to adjust strength
@@ -1252,25 +1252,16 @@ float sampleShadowMap(vec3 fragPos, vec2 distortion, float lightDotNormals) {
  * Copyright (c) 2021, 117 <https://twitter.com/117scape>
  * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that
+ * the conditions of the BSD 2-clause license are met.
  *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * ===========================================================================================================
+ * iOS ES-3.0 OVERRIDE (gpu-zone Z0). Verbatim copy of rs117/hd/utils/water.glsl @ RLHD 7dded59 EXCEPT every
+ * int-literal-in-float-context is made explicit (GLSL ES 3.00 does no implicit int<->float conversion,
+ * blueprint #13). Pervasively cast-heavy, so a hand-maintained override beats ~25 brittle downporter rules.
+ * RE-MERGE against upstream when the pinned RLHD rev is bumped (water rendering evolves more than color_utils).
+ * Only numeric-literal types changed; logic is identical.
+ * ===========================================================================================================
  */
 // #pragma once: already included
 
@@ -1449,7 +1440,7 @@ vec4 sampleWater(int waterTypeIndex, vec3 viewDir) {
     vec2 uv2 = worldUvs(3.0) + animationFrame(24.0 * waterType.duration);
     vec2 uv3 = IN.uv;
 
-    vec2 flowMapUv = worldUvs(15) + animationFrame(50 * waterType.duration);
+    vec2 flowMapUv = worldUvs(15.0) + animationFrame(50.0 * waterType.duration);
     float flowMapStrength = 0.025;
 
     vec2 uvFlow = texture(textureArray, vec3(flowMapUv, MAT_WATER_FLOW_MAP.colorMap)).xy;
@@ -1463,8 +1454,8 @@ vec4 sampleWater(int waterTypeIndex, vec3 viewDir) {
     float foamMask = texture(textureArray, vec3(uv3, MAT_WATER_FOAM.colorMap)).r;
 
     // normals
-    n1 = -vec3((n1.x * 2 - 1) * waterType.normalStrength, n1.z, (n1.y * 2 - 1) * waterType.normalStrength);
-    n2 = -vec3((n2.x * 2 - 1) * waterType.normalStrength, n2.z, (n2.y * 2 - 1) * waterType.normalStrength);
+    n1 = -vec3((n1.x * 2.0 - 1.0) * waterType.normalStrength, n1.z, (n1.y * 2.0 - 1.0) * waterType.normalStrength);
+    n2 = -vec3((n2.x * 2.0 - 1.0) * waterType.normalStrength, n2.z, (n2.y * 2.0 - 1.0) * waterType.normalStrength);
     vec3 normals = normalize(n1 + n2);
 
     float lightDotNormals = dot(normals, lightDir);
@@ -1472,8 +1463,8 @@ vec4 sampleWater(int waterTypeIndex, vec3 viewDir) {
     float viewDotNormals = dot(viewDir, normals);
 
     vec2 distortion = uvFlow * .00075;
-    float shadow = sampleShadowMap(IN.position, distortion, lightDotNormals);
-    float inverseShadow = 1 - shadow;
+    float shadow = float(sampleShadowMap(IN.position, distortion, lightDotNormals));
+    float inverseShadow = 1.0 - shadow;
 
     vec3 vSpecularStrength = vec3(waterType.specularStrength);
     vec3 vSpecularGloss = vec3(waterType.specularGloss);
@@ -1517,7 +1508,7 @@ vec4 sampleWater(int waterTypeIndex, vec3 viewDir) {
 
 
     // underglow
-    vec3 underglowOut = underglowColor * max(normals.y, 0) * underglowStrength;
+    vec3 underglowOut = underglowColor * max(normals.y, 0.0) * underglowStrength;
 
 
     // fresnel reflection
@@ -1528,9 +1519,9 @@ vec4 sampleWater(int waterTypeIndex, vec3 viewDir) {
 
     // add sky gradient
     if (finalFresnel < 0.5) {
-        surfaceColor = mix(waterColorDark, waterColorMid, finalFresnel * 2);
+        surfaceColor = mix(waterColorDark, waterColorMid, finalFresnel * 2.0);
     } else {
-        surfaceColor = mix(waterColorMid, waterColorLight, (finalFresnel - 0.5) * 2);
+        surfaceColor = mix(waterColorMid, waterColorLight, (finalFresnel - 0.5) * 2.0);
     }
 
     vec3 surfaceColorOut = surfaceColor * max(combinedSpecularStrength, 0.2);
@@ -1544,26 +1535,26 @@ vec4 sampleWater(int waterTypeIndex, vec3 viewDir) {
     baseColor = mix(baseColor, surfaceColor, waterType.fresnelAmount);
     if (waterType.fresnelAmount == 0.85)
         baseColor *= .75; // Sailing hack
-    float shoreLineMask = 1 - dot(IN.texBlend, (fAlphaBiasHsl & 127) / 127.);
+    float shoreLineMask = 1.0 - dot(IN.texBlend, vec3(fAlphaBiasHsl & 127) / 127.);
     float maxFoamAmount = 0.8;
     float foamAmount = min(shoreLineMask, maxFoamAmount);
     float foamDistance = 0.7;
     vec3 foamColor = waterType.foamColor;
     foamColor = foamColor * foamMask * compositeLight;
-    foamAmount = clamp(pow(1.0 - ((1.0 - foamAmount) / foamDistance), 3), 0.0, 1.0) * waterType.hasFoam;
+    foamAmount = clamp(pow(1.0 - ((1.0 - foamAmount) / foamDistance), 3.0), 0.0, 1.0) * float(waterType.hasFoam);
     foamAmount *= foamColor.r;
     baseColor = mix(baseColor, foamColor, foamAmount);
     vec3 specularComposite = mix(lightSpecularOut, vec3(0.0), foamAmount);
     float flatFresnel = (1.0 - dot(viewDir, vec3(0, -1, 0))) * 1.0;
     finalFresnel = max(finalFresnel, flatFresnel);
     finalFresnel -= finalFresnel * shadow * 0.2;
-    baseColor += pointLightsSpecularOut + lightSpecularOut / 3;
+    baseColor += pointLightsSpecularOut + lightSpecularOut / 3.0;
 
-    float alpha = max(waterType.baseOpacity, max(foamAmount, max(finalFresnel, length(specularComposite / 3))));
+    float alpha = max(waterType.baseOpacity, max(foamAmount, max(finalFresnel, length(specularComposite / 3.0))));
 
     if (waterType.isFlat) {
         baseColor = mix(waterType.depthColor, baseColor, alpha);
-        alpha = 1;
+        alpha = 1.0;
     }
 
     return vec4(baseColor, alpha);
@@ -1571,12 +1562,12 @@ vec4 sampleWater(int waterTypeIndex, vec3 viewDir) {
 
 void sampleUnderwater(inout vec3 outputColor, WaterType waterType, float depth, float lightDotNormals) {
     // underwater terrain
-    float lowestColorLevel = 500;
-    float midColorLevel = 150;
+    float lowestColorLevel = 500.0;
+    float midColorLevel = 150.0;
     float surfaceLevel = IN.position.y - depth; // e.g. -1600
 
     if (depth < midColorLevel) {
-        outputColor *= mix(vec3(1), waterType.depthColor, translateRange(0, midColorLevel, depth));
+        outputColor *= mix(vec3(1), waterType.depthColor, translateRange(0.0, midColorLevel, depth));
     } else if (depth < lowestColorLevel) {
         outputColor *= mix(waterType.depthColor, vec3(0), translateRange(midColorLevel, lowestColorLevel, depth));
     } else {
@@ -1585,7 +1576,7 @@ void sampleUnderwater(inout vec3 outputColor, WaterType waterType, float depth, 
 
     if (underwaterCaustics) {
         const float scale = 1.75;
-        const float maxCausticsDepth = 128 * 4;
+        const float maxCausticsDepth = 128.0 * 4.0;
 
         vec2 causticsUv = worldUvs(scale);
 
@@ -1594,13 +1585,13 @@ void sampleUnderwater(inout vec3 outputColor, WaterType waterType, float depth, 
 
         causticsUv *= .75;
 
-        const ivec2 direction = ivec2(1, -2);
-        vec2 flow1 = causticsUv + animationFrame(17) * direction;
-        vec2 flow2 = causticsUv * 1.5 + animationFrame(23) * -direction;
+        const vec2 direction = vec2(1.0, -2.0);   // ES3: vec2 (was ivec2) so animationFrame()*direction is vec2*vec2
+        vec2 flow1 = causticsUv + animationFrame(17.0) * direction;
+        vec2 flow2 = causticsUv * 1.5 + animationFrame(23.0) * -direction;
         vec3 caustics = sampleCaustics(flow1, flow2, .005);
 
         vec3 causticsColor = underwaterCausticsColor * underwaterCausticsStrength;
-        outputColor.rgb *= 1 + caustics * causticsColor * depthMultiplier * lightDotNormals * lightStrength;
+        outputColor.rgb *= 1.0 + caustics * causticsColor * depthMultiplier * lightDotNormals * lightStrength;
     }
 }
 
@@ -1675,32 +1666,22 @@ vec3 applyColorFilter(vec3 color) {
  * Copyright (c) 2021, 117 <https://twitter.com/117scape>
  * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that
+ * the conditions of the BSD 2-clause license are met.
  *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * ===========================================================================================================
+ * iOS ES-3.0 OVERRIDE (gpu-zone Z0). Verbatim copy of rs117/hd/utils/fog.glsl @ RLHD 7dded59 EXCEPT every
+ * int-in-float-context is made explicit (blueprint #13): TILE_SIZE (a `#define 128`) is cast to float at each
+ * float use, the FOG_SCENE_EDGE_* macros are made float, the integer `useFog` uniform is cast, and int literal
+ * args to clamp/max/fogFactorLinear are floats. Logic identical. RE-MERGE on RLHD rev bumps.
+ * ===========================================================================================================
  */
 // #pragma once: already included
 
 
 #define TILE_SIZE 128
-#define FOG_SCENE_EDGE_MIN ((    - expandedMapLoadingChunks * 8 + 1) * TILE_SIZE)
-#define FOG_SCENE_EDGE_MAX ((104 + expandedMapLoadingChunks * 8 - 1) * TILE_SIZE)
+#define FOG_SCENE_EDGE_MIN (float((    - expandedMapLoadingChunks * 8 + 1) * TILE_SIZE))
+#define FOG_SCENE_EDGE_MAX (float((104 + expandedMapLoadingChunks * 8 - 1) * TILE_SIZE))
 #define FOG_CORNER_ROUNDING 1.5
 #define FOG_CORNER_ROUNDING_SQUARED FOG_CORNER_ROUNDING * FOG_CORNER_ROUNDING
 
@@ -1709,17 +1690,17 @@ float fogFactorLinear(const float dist, const float start, const float end) {
 }
 
 float calculateFogAmount(vec3 position) {
-    if (fogDepth == 0)
+    if (fogDepth == 0.0)
         return 0.;
 
-    float drawDistance2 = drawDistance * TILE_SIZE;
+    float drawDistance2 = drawDistance * float(TILE_SIZE);
 
     // the client draws one less tile to the north and east than it does to the south
     // and west, so subtract a tile's width from the north and east edges.
     float fogWest = max(FOG_SCENE_EDGE_MIN, cameraPos.x - drawDistance2);
-    float fogEast = min(FOG_SCENE_EDGE_MAX, cameraPos.x + drawDistance2 - TILE_SIZE);
+    float fogEast = min(FOG_SCENE_EDGE_MAX, cameraPos.x + drawDistance2 - float(TILE_SIZE));
     float fogSouth = max(FOG_SCENE_EDGE_MIN, cameraPos.z - drawDistance2);
-    float fogNorth = min(FOG_SCENE_EDGE_MAX, cameraPos.z + drawDistance2 - TILE_SIZE);
+    float fogNorth = min(FOG_SCENE_EDGE_MAX, cameraPos.z + drawDistance2 - float(TILE_SIZE));
 
     // Calculate distance from the scene edge
     float xDist = min(position.x - fogWest, fogEast - position.x);
@@ -1727,13 +1708,13 @@ float calculateFogAmount(vec3 position) {
     float nearestEdgeDistance = min(xDist, zDist);
     float secondNearestEdgeDistance = max(xDist, zDist);
     float fogDistance = nearestEdgeDistance
-        - FOG_CORNER_ROUNDING * TILE_SIZE * max(0,
+        - FOG_CORNER_ROUNDING * float(TILE_SIZE) * max(0.0,
             (nearestEdgeDistance + FOG_CORNER_ROUNDING_SQUARED)
             / (secondNearestEdgeDistance + FOG_CORNER_ROUNDING_SQUARED)
         );
 
     // This is different from the GPU plugin, and seems to have worked this way from the start
-    float edgeFogAmount = fogFactorLinear(fogDistance, 0, 5 * TILE_SIZE) * useFog;
+    float edgeFogAmount = fogFactorLinear(fogDistance, 0.0, 5.0 * float(TILE_SIZE)) * float(useFog);
 
     // Use a combination of two different methods of calculating distance fog.
     // The is super arbitrary and is only eyeballed to provide a similar overall
@@ -1741,17 +1722,17 @@ float calculateFogAmount(vec3 position) {
 
     float fogStart1 = drawDistance2 * 0.85;
     float distance1 = length(cameraPos.xz - position.xz);
-    float distanceFogAmount1 = clamp((distance1 - fogStart1) / (drawDistance2 * .15), 0, 1);
+    float distanceFogAmount1 = clamp((distance1 - fogStart1) / (drawDistance2 * .15), 0.0, 1.0);
 
     float minFogStart = 0.0;
     float maxFogStart = 0.3;
-    drawDistance2 = min(drawDistance, 90) * TILE_SIZE;
-    float fogDepthMultiplier = clamp(fogDepth, 0, 1000) / 1000.0;
+    drawDistance2 = min(drawDistance, 90.0) * float(TILE_SIZE);
+    float fogDepthMultiplier = clamp(fogDepth, 0.0, 1000.0) / 1000.0;
     float fogStart2 = (maxFogStart - (fogDepthMultiplier * (maxFogStart - minFogStart))) * drawDistance2;
-    float camToVertex = length(cameraPos - vec3(position.x, (position.y + cameraPos.y) / 2, position.z));
-    float distance2 = max(camToVertex - fogStart2, 0) / max(drawDistance2 - fogStart2, 1);
+    float camToVertex = length(cameraPos - vec3(position.x, (position.y + cameraPos.y) / 2.0, position.z));
+    float distance2 = max(camToVertex - fogStart2, 0.0) / max(drawDistance2 - fogStart2, 1.0);
     float density = fogDepth / 100.0;
-    float distanceFogAmount2 = 1 - clamp(exp(-distance2 * density), 0, 1);
+    float distanceFogAmount2 = 1.0 - clamp(exp(-distance2 * density), 0.0, 1.0);
 
     // Combine distance fogs
     float distanceFogAmount = max(distanceFogAmount1, distanceFogAmount2);
@@ -1812,9 +1793,9 @@ void main() {
     int waterDepth2 = fTerrainData[1] >> 11 & 0xFFF;
     int waterDepth3 = fTerrainData[2] >> 11 & 0xFFF;
     float waterDepth =
-        waterDepth1 * IN.texBlend.x +
-        waterDepth2 * IN.texBlend.y +
-        waterDepth3 * IN.texBlend.z;
+        float(waterDepth1) * IN.texBlend.x +
+        float(waterDepth2) * IN.texBlend.y +
+        float(waterDepth3) * IN.texBlend.z;
     int waterTypeIndex = isTerrain ? fTerrainData[0] >> 3 & 0xFF : 0;
     WaterType waterType = getWaterType(waterTypeIndex);
 
@@ -1824,9 +1805,9 @@ void main() {
     int colorMap3 = material3.colorMap;
 
     // only use one flowMap map
-    int flowMap = material1.lowMap;
+    int flowMap = material1.flowMap;
 
-    bool isUnderwater = waterDepth != 0;
+    bool isUnderwater = waterDepth != 0.0;
     bool isWater = waterTypeIndex > 0 && !isUnderwater;
 
     vec4 outputColor = vec4(1);
@@ -1858,8 +1839,8 @@ void main() {
         uv3 = (uv3 - .5) * material3.textureScale.xy + .5;
 
         // get flowMap map
-        vec2 flowMapUv = uv1 - animationFrame(material1.lowMapDuration);
-        float flowMapStrength = material1.lowMapStrength;
+        vec2 flowMapUv = uv1 - animationFrame(material1.flowMapDuration);
+        float flowMapStrength = material1.flowMapStrength;
         if (isUnderwater)
         {
             // Distort underwater textures
