@@ -123,6 +123,7 @@ object JvmLauncher {
     external fun nativeMobileUiSeq(): Long
     external fun nativePollMobileUiEvents(sinceSeq: Long): String
     external fun nativeSetPluginEnabled(className: String, enabled: Boolean): String
+    external fun nativeSetPinned(pluginName: String, pinned: Boolean): String   // Finding 6: star by display name
     external fun nativeGetPluginConfig(group: String): String
     external fun nativeSetConfig(group: String, key: String, value: String): String
     external fun nativeProcessedWriteId(): Long
@@ -236,6 +237,7 @@ object JvmLauncher {
     fun mobileUiSeq() = nativeMobileUiSeq()
     fun pollMobileUiEvents(sinceSeq: Long) = nativePollMobileUiEvents(sinceSeq)
     fun setPluginEnabled(className: String, enabled: Boolean) = nativeSetPluginEnabled(className, enabled)
+    fun setPinned(pluginName: String, pinned: Boolean) = nativeSetPinned(pluginName, pinned)
     fun getPluginConfig(group: String) = nativeGetPluginConfig(group)
     fun setConfig(group: String, key: String, value: String) = nativeSetConfig(group, key, value)
     fun processedWriteId() = nativeProcessedWriteId()

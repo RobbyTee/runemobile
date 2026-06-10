@@ -78,6 +78,8 @@ static jmethodID g_midFlushConfig = nullptr;   // A8: persist pending config wri
 static jmethodID g_midNextNotification = nullptr, g_midNextLink = nullptr, g_midHubState = nullptr;
 // Native-origin publish into the SAME shared queues (host-raised alerts/links; also deterministic path tests).
 static jmethodID g_midPublishNotification = nullptr, g_midPublishLink = nullptr;
+// AP-2b Finding 6: pin/star a plugin by display name (shared pinnedPlugins CSV; sorts the list pinned-first).
+static jmethodID g_midSetPinned = nullptr;
 // A5 Tier-1 plugin panels (rendered off-screen under CACIO; the ARGB int[] image is marshalled cross-VM).
 static jmethodID g_midListPanels = nullptr, g_midOpenPanel = nullptr, g_midClosePanel = nullptr,
                  g_midPanelW = nullptr, g_midPanelH = nullptr, g_midPanelSeq = nullptr,
@@ -452,6 +454,7 @@ static bool publishBridge(JNIEnv *env) {
             g_midHubState         = midOpt(env, mug, "hubState", "()Ljava/lang/String;");
             g_midPublishNotification = midOpt(env, mug, "publishNotification", "(Ljava/lang/String;Ljava/lang/String;)V");
             g_midPublishLink         = midOpt(env, mug, "publishLink", "(Ljava/lang/String;)V");
+            g_midSetPinned           = midOpt(env, mug, "setPinned", "(Ljava/lang/String;Z)Ljava/lang/String;");
             // A5 Tier-1 panel surface (best-effort, ALL-OR-NOTHING: every method the viewer uses must resolve.
             // closePanel in particular — without it, PanelView dispose can't close the open engine-side panel,
             // so a partial set disables panels entirely rather than opening one it can never close.)
@@ -1219,6 +1222,21 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeSetPluginEnabled(JNIEnv *artEnv, jo
     jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midSetPluginEnabled, hid, enabled);
     std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
     if (hid) hs->DeleteLocalRef(hid);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+// AP-2b Finding 6: pin/star a plugin by DISPLAY NAME (not className). Off the UI thread (rl-bridge). Returns
+// the bridge's JSON ack ({"ok":true,"writeId":n}); "" if the facade isn't published / setPinned didn't resolve.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetPinned(JNIEnv *artEnv, jobject, jstring jName, jboolean pinned) {
+    if (!mobileUiReady() || !g_midSetPinned) return artEnv->NewStringUTF("");
+    std::string name = jstr(artEnv, jName);
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls) return artEnv->NewStringUTF("");
+    jstring hn = hs->NewStringUTF(name.c_str());
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midSetPinned, hn, pinned);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (hn) hs->DeleteLocalRef(hn);
     if (r) hs->DeleteLocalRef(r);
     return artEnv->NewStringUTF(out.c_str());
 }

@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -41,6 +44,7 @@ data class PluginRow(
     val enabled: Boolean,
     val hasConfig: Boolean,
     val configGroup: String?,
+    val pinned: Boolean,
 )
 
 /**
@@ -59,6 +63,8 @@ fun PluginPanel(onClose: () -> Unit) {
     var panelOpen by remember { mutableStateOf<Pair<Int, String>?>(null) }       // (panelIndex, tooltip)
     var questOpen by remember { mutableStateOf(false) }                          // A5 Tier-2 native screens
     var worldOpen by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
 
     if (questOpen) { QuestHelperScreen(onBack = { questOpen = false }); return }
     if (worldOpen) { WorldSwitcherScreen(onBack = { worldOpen = false }); return }
@@ -110,13 +116,31 @@ fun PluginPanel(onClose: () -> Unit) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             } else {
                 val shown = rows.filter { it.name.contains(filter, ignoreCase = true) }
-                LazyColumn(Modifier.fillMaxSize()) {
+                LazyColumn(Modifier.fillMaxSize(), state = listState) {
                     items(shown, key = { it.className }) { p ->
                         PluginRowItem(
                             p,
                             onToggle = { checked ->
                                 rows = rows.map { if (it.className == p.className) it.copy(enabled = checked) else it }
                                 JvmLauncher.onBridge { JvmLauncher.setPluginEnabled(p.className, checked) }
+                            },
+                            onTogglePin = {
+                                val nowPinned = !p.pinned
+                                rows = rows.map { if (it.className == p.className) it.copy(pinned = nowPinned) else it }
+                                    .sortedWith(compareByDescending<PluginRow> { it.pinned }.thenBy { it.name.lowercase() })
+                                // Persist immediately so a deliberate pin survives even a hard kill. setPinned
+                                // ENQUEUES a client-thread write and returns a writeId; flush only AFTER that
+                                // write is processed (else sendConfig races ahead and flushes stale state).
+                                JvmLauncher.onBridge {
+                                    val ack = JvmLauncher.setPinned(p.name, nowPinned)
+                                    val wid = Regex("\"writeId\":(\\d+)").find(ack)?.groupValues?.get(1)?.toLongOrNull()
+                                    var i = 0
+                                    while (wid != null && JvmLauncher.processedWriteId() < wid && i++ < 40) Thread.sleep(25)
+                                    JvmLauncher.flushConfig()
+                                }
+                                // The row jumps to/from the pinned group; reveal it (LazyColumn keeps the old
+                                // scroll anchor otherwise, hiding a just-pinned item above the fold).
+                                if (nowPinned) scope.launch { listState.animateScrollToItem(0) }
                             },
                             onOpenConfig = if (p.hasConfig && p.configGroup != null) {
                                 { configFor = p.configGroup!! to p.name }
@@ -131,12 +155,19 @@ fun PluginPanel(onClose: () -> Unit) {
 }
 
 @Composable
-private fun PluginRowItem(p: PluginRow, onToggle: (Boolean) -> Unit, onOpenConfig: (() -> Unit)?) {
+private fun PluginRowItem(p: PluginRow, onToggle: (Boolean) -> Unit, onTogglePin: () -> Unit, onOpenConfig: (() -> Unit)?) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
+        // Star toggle: pin a favourite to the top of the list (shared pinnedPlugins CSV).
+        Text(
+            if (p.pinned) "★" else "☆",
+            color = if (p.pinned) Color(0xFFFFC107) else Color(0xFF777777),
+            fontSize = 20.sp,
+            modifier = Modifier.clickable { onTogglePin() }.padding(end = 10.dp),
+        )
         val nameMod = if (onOpenConfig != null) Modifier.weight(1f).clickable { onOpenConfig() } else Modifier.weight(1f)
         Row(nameMod, verticalAlignment = Alignment.CenterVertically) {
             Text(p.name, color = Color.White)
@@ -156,8 +187,9 @@ private fun parsePlugins(json: String): List<PluginRow> = try {
             enabled = o.optBoolean("enabled"),
             hasConfig = o.optBoolean("hasConfig"),
             configGroup = if (o.isNull("configGroup")) null else o.optString("configGroup", null),
+            pinned = o.optBoolean("pinned"),
         )
-    }.sortedBy { it.name.lowercase() }
+    }.sortedWith(compareByDescending<PluginRow> { it.pinned }.thenBy { it.name.lowercase() })
 } catch (t: Throwable) {
     Log.e("MainActivity", "ANDROID_A4_UI_RED parse failed: $t")
     emptyList()
