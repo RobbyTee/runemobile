@@ -1,8 +1,20 @@
 # Device kit — gl_FragDepth early-Z perf A/B + RGB32I device confirm
 
 > Branch `gpu`. The off-device proofs (`gpu-clipremap`, `gpu-tbo2d`) left exactly two device-only unknowns. This kit
-> measures both in one StikDebug session, writing a pullable `Documents/routec-perf.log`. **Temporary scaffolding —
-> STRIP after the EAGL-vs-ANGLE decision** (grep `DEVICE KIT` in `RouteCBridge.{h,m}` + `routec_gl_jni.m`).
+> measured both in one StikDebug session, writing a pullable `Documents/routec-perf.log`.
+>
+> **RESOLVED + STRIPPED (2026-06-09, device A/B at the Lumbridge river, iPhone 17 Pro Max / A19 Pro):**
+> - **`gl_FragDepth` early-Z cost** — `gpuFinish` avg **6.05 → 7.94 ms (1.31×)**, p95 **6.54 → 8.63 ms (1.32×)**,
+>   engine **34.9 → 30.4 fps** between `mode=baseline` (early-Z ON) and `mode=fragdepth` (early-Z OFF). That is
+>   **under the 1.5× / fps-tank threshold** that would have forced ANGLE. **Verdict: EAGL + `gl_FragDepth` is the
+>   iOS renderer.** ANGLE's `clip_control` is moot (and it drags back the near-plane wedge bug + adds nothing
+>   structural for 117HD on ES 3.0). `gl_FragDepth` is now hardwired ON (`RouteCBridge.depthFixActive` returns YES).
+> - **117HD blocker #1** — `RGB32I_DEVICE_SAMPLEABLE=YES` (and RGBA32I=YES) on the real A19 Pro GPU: the
+>   `textureFaces` TBO→2D repack samples byte-exact on device. Backend-independent; cleared for iOS Zone B0.
+>
+> The temporary scaffolding (perf logging, RGB32I probe, `perfModeTag`/`appendPerfLine`/`runDeviceProbesOnce`) was
+> **removed** after the decision (commit on `gpu`). The run procedure below is retained for reference only. Next:
+> iOS Zone B0 — the TBO transform spec'd in `gpu-tbo2d/README.md`, blocker list `HD-PORT-BLUEPRINT.md` §5.
 
 ## What it measures
 

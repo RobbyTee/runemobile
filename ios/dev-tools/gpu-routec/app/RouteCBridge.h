@@ -73,17 +73,6 @@
 // narrow A/B for water/overlay z-fighting without the global gl_FragDepth experiment.
 + (float)alphaOffsetUnits;
 
-// ---- DEVICE KIT (temporary, STRIP after the EAGL-vs-ANGLE decision) ----
-// Off-device proofs (gpu-clipremap, gpu-tbo2d) leave two device-only unknowns this kit measures in one session:
-//   (1) the gl_FragDepth EARLY-Z perf cost — A/B `mode=baseline` (no gl_FragDepth, early-Z ON) vs `mode=fragdepth`
-//       (gl_FragDepth write, early-Z OFF) on a heavy scene, via the existing per-second gpuFinish counter; and
-//   (2) GL_RGB32I 2D sampleability on the real Metal GPU (the one device-checkable item from gpu-tbo2d).
-// perfModeTag: a short tag of the active depth path for the perf log. appendPerfLine: append to a pullable log
-// Documents/routec-perf.log. runDeviceProbesOnce: run (2) once, in the current context, right after createGLContext.
-+ (NSString *)perfModeTag;
-+ (void)appendPerfLine:(NSString *)line;
-+ (void)runDeviceProbesOnce;
-
 // ---- shader downport (Route C 2E) ----
 // Rewrite desktop GLSL 330 -> GLSL ES 3.00 (the 5 B1 edits) before glShaderSource. Vertex shaders need the
 // explicit int->float casts ES forbids implicitly; fragment shaders need precision qualifiers.
