@@ -116,11 +116,20 @@ public final class RLHDStarter
 			// default FBO; Apple's GLES MSAA-resolve path is fragile and an invalid/incomplete scene FBO makes
 			// ZoneRenderer fall back to clearing the screen to pure black (the observed black world). DISABLED
 			// makes the scene FBO single-sample -> a plain same-format blit.
-			final String last = MobileUiBridge.setConfig("hd", "antiAliasingMode", "DISABLED");
+			MobileUiBridge.setConfig("hd", "antiAliasingMode", "DISABLED");
+			// Supersampling AA: with MSAA off, edges alias badly and the small fixed canvas is upscaled ~3x to the
+			// retina screen -> jagged "pixelated" model/terrain edges. RLHD renders the scene to fboScene at
+			// sceneResolution = sceneViewport * (sceneResolutionScale/100), then the final glBlitFramebuffer
+			// downsamples it into the canvas viewport with sceneScalingMode's filter (HdPlugin:1315, ZoneRenderer:1109).
+			// At 200% the scene is rendered at 2x (4 samples/px) and box-downsampled -> smooth edges. This is a plain
+			// linear downscale blit (NOT the fragile MSAA resolve), single-sample fboScene, so it sidesteps the round-7
+			// black-screen path entirely. LINEAR is already the default but pin it so the downsample is smooth.
+			MobileUiBridge.setConfig("hd", "sceneScalingMode", "LINEAR");
+			final String last = MobileUiBridge.setConfig("hd", "sceneResolutionScale", "200");
 			if (last.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced Z0 minimal config (uiScaling=LINEAR; tiled/dynamic/normal/POM/shadow/wind/char-disp/MSAA OFF)");
+				log.info("[routecrlhd] forced Z0 minimal config (uiScaling=LINEAR; tiled/dynamic/normal/POM/shadow/wind/char-disp/MSAA OFF; sceneResolutionScale=200 LINEAR = 2x SSAA)");
 			}
 			return;
 		}
