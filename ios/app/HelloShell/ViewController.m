@@ -1232,9 +1232,9 @@ static const CGFloat kMenuWidth       = 210.0;
     [self onLaunch];
 }
 
-// THREE-FINGER long-press: boot the FULL RuneLite in GPU Zone (117HD/RLHD) mode. Like the base-GPU gesture but
-// arms routecZoneMode (rlhd jar + zone natives + RLHDStarter). Fixed 765x503 (no headless.resize) for the first
-// bring-up, same bisection rationale as the base-GPU gesture — full-screen resize comes after the scene paints.
+// THREE-FINGER long-press: boot 117HD/Zone in the FIXED 765x503 fallback (no headless.resize) — the proven
+// readback path used during Zone bring-up. The one-tap zone button now defaults to RESIZABLE (sharper + native
+// chrome); this gesture stays as the safe fallback if resizable mode regresses the scene dispatch.
 - (void)onLaunchRouteCZoneGesture:(UILongPressGestureRecognizer *)g {
     if (g.state != UIGestureRecognizerStateBegan) return;
     if (self.launched) return;
@@ -1250,12 +1250,16 @@ static const CGFloat kMenuWidth       = 210.0;
     [self onLaunch];
 }
 
-// Dedicated one-tap 117HD/Zone boot (reliable — the 3-finger gesture is too finicky on the small button). Fixed
-// 765x503 + readback present (the proven-display path Phase 1 used), not the resizable direct-present path.
+// Dedicated one-tap 117HD/Zone boot. RESIZABLE mode (sharpness): the engine canvas resizes to renderW×renderH
+// (~1302x600) after login instead of the classic fixed 765x503, so the readback frame is ~2x the resolution =
+// sharper, AND the native Jagex-mobile chrome (HudVeneer/MobileChrome/tab rails — all gated on client.isResized())
+// activates. Still the proven readback present (Zone never takes the pendingRouteCGpu direct-present branch). The
+// historical base-GPU "resizable never dispatches drawScene" was never re-tested since the Zone pipeline matured;
+// if it recurs the screen holds on the loading frame (the sceneDrawn publish-gate doubles as the diagnostic) and
+// the 3-finger gesture still boots the proven FIXED 765x503 path as a fallback.
 - (void)onLaunchZone {
     if (self.launched) return;
     self.pendingRouteCZone = YES;
-    self.pendingRouteCGpuNoResize = YES;
     [self onLaunch];
 }
 
