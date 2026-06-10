@@ -189,11 +189,15 @@ class MainActivity : AppCompatActivity() {
         // Track G AG2: restart into GPU Route-C mode (force-enable the base gpu plugin, render the scene on GLES).
         val gpuButton = devButton("◆")
         gpuButton.setOnClickListener { restartIntoGpu() }
+        // Track G AG3: restart into 117HD (routecrlhd) mode — the sideload-friendly trigger (Quest/SideQuest
+        // installs can't easily push an rlhd.mode marker, but anyone can tap a button).
+        val hdButton = devButton("HD")
+        hdButton.setOnClickListener { restartIntoRlhd() }
         // Group the dev affordances into one discreet cluster pinned to the BOTTOM-LEFT — clear of the relocated
         // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
         val devBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(pluginButton); addView(chromeButton); addView(signInButton); addView(gpuButton)
+            addView(pluginButton); addView(chromeButton); addView(signInButton); addView(gpuButton); addView(hdButton)
         }
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
@@ -331,6 +335,17 @@ class MainActivity : AppCompatActivity() {
     private fun restartIntoGpu() {
         val i = packageManager.getLaunchIntentForPackage(packageName)
         i?.putExtra("routecgpu", true)
+        i?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        startActivity(i)
+        finishAffinity()
+        Runtime.getRuntime().exit(0)
+    }
+
+    /** Dev "HD" button: restart the process into 117HD (routecrlhd) mode — same clean-boot mechanism as
+     *  [restartIntoGpu]; RLHDStarter then loads + starts the Zone plugin at LOGIN_SCREEN/LOGGED_IN. */
+    private fun restartIntoRlhd() {
+        val i = packageManager.getLaunchIntentForPackage(packageName)
+        i?.putExtra("routecrlhd", true)
         i?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
         startActivity(i)
         finishAffinity()
