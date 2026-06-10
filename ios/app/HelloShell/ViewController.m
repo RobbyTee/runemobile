@@ -24,6 +24,7 @@
 @property (nonatomic, strong) UIButton *launchButton;
 @property (nonatomic, strong) UIButton *gpuButton;   // GPU Route C: dedicated one-tap button to boot full RuneLite on GPU
 @property (nonatomic, strong) UIButton *zoneButton;  // GPU Zone: dedicated one-tap button to boot full RuneLite on 117HD
+@property (nonatomic, strong) UIButton *zoneFastButton;  // GPU Zone: 117HD resizable + DIRECT present (no readback)
 @property (nonatomic, strong) UIButton *canaryButton;
 @property (nonatomic, strong) UIButton *keyboardButton;
 // W3 hybrid-chrome device de-risk: read the MobileChromeBridge snapshot + proxy a tab switch via the proven
@@ -403,6 +404,18 @@ static const CGFloat kMenuWidth       = 210.0;
              forControlEvents:UIControlEventTouchUpInside];
     [self.debugPanel addSubview:self.zoneButton];
 
+    // 117HD resizable + DIRECT present (CAEAGLLayer, no glReadPixels readback). Same as the green Zone button but
+    // scans the drawable out directly instead of reading it back each frame (the ~32ms fps ceiling).
+    self.zoneFastButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.zoneFastButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.zoneFastButton setTitle:@"⚡ 117HD Fast" forState:UIControlStateNormal];
+    self.zoneFastButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    self.zoneFastButton.tintColor = [UIColor systemYellowColor];
+    self.zoneFastButton.enabled = NO;
+    [self.zoneFastButton addTarget:self action:@selector(onLaunchZoneDirect)
+             forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.zoneFastButton];
+
     self.loginButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.loginButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.loginButton setTitle:@"Log in with Jagex" forState:UIControlStateNormal];
@@ -522,6 +535,8 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.gpuButton.leadingAnchor constraintEqualToAnchor:self.chromeButton.trailingAnchor constant:24],
         [self.zoneButton.centerYAnchor constraintEqualToAnchor:self.gpuButton.centerYAnchor],
         [self.zoneButton.leadingAnchor constraintEqualToAnchor:self.gpuButton.trailingAnchor constant:24],
+        [self.zoneFastButton.centerYAnchor constraintEqualToAnchor:self.zoneButton.centerYAnchor],
+        [self.zoneFastButton.leadingAnchor constraintEqualToAnchor:self.zoneButton.trailingAnchor constant:24],
         [self.loginButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
         [self.loginButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.logoutButton.centerYAnchor constraintEqualToAnchor:self.loginButton.centerYAnchor],
@@ -994,6 +1009,7 @@ static const CGFloat kMenuWidth       = 210.0;
             self.launchButton.enabled = YES;
             self.gpuButton.enabled = YES;
             self.zoneButton.enabled = YES;
+            self.zoneFastButton.enabled = YES;
             [self appendLine:@"StikDebug attached — CS_DEBUGGED set. Tap Start JVM."];
         }
     }];
@@ -1233,19 +1249,29 @@ static const CGFloat kMenuWidth       = 210.0;
     [self onLaunch];
 }
 
-// THREE-FINGER long-press: boot 117HD/Zone in RESIZABLE + DIRECT-PRESENT mode (experiment). Same resizable canvas
-// as the one-tap button, but instead of the per-frame glReadPixels readback (~32ms at 1304x600 = the fps ceiling),
-// RLHD renders straight into a CAEAGLLayer drawable and presentRenderbuffer scans it out — no readback. Reuses the
-// base-GPU direct-present plumbing (RouteCBridge keys off the present layer, mode-agnostic). The one-tap button
-// stays on the proven readback path (~15fps) as the fallback if this scans out black or regresses. EXPERIMENT: the
-// CAEAGLLayer covers the CPU login blit so boot/login shows black until the first GPU frame (autologin still drives
-// login), and the load-in sky flash returns (the readback warmup gate doesn't cover the direct path) — both get
-// polished once direct present is confirmed to scan out + be faster.
+// Dedicated "⚡ 117HD Fast" button: 117HD resizable + DIRECT present (CAEAGLLayer). Instead of the per-frame
+// glReadPixels readback (~32ms at 1304x600 = the fps ceiling), RLHD renders straight into a CAEAGLLayer drawable
+// and presentRenderbuffer scans it out — no readback. Reuses the base-GPU direct-present plumbing (RouteCBridge
+// keys off the present layer, mode-agnostic). The green "▶ 117HD (Zone)" button stays on the proven readback path
+// (~15fps) as the fallback if this scans out black or regresses. EXPERIMENT: the CAEAGLLayer covers the CPU login
+// blit so boot/login shows black until the first GPU frame (autologin still drives login), and the load-in sky
+// flash returns (the readback warmup gate doesn't cover the direct path) — both get polished once direct present
+// is confirmed to scan out + be faster.
+- (void)onLaunchZoneDirect {
+    if (self.launched) return;
+    self.pendingRouteCZone = YES;
+    self.pendingRouteCZoneDirect = YES;
+    [self onLaunch];
+}
+
+// THREE-FINGER long-press: boot 117HD/Zone in the FIXED 765x503 fallback (no headless.resize) — the proven
+// readback path from Zone bring-up. The one-tap buttons cover resizable readback (green) + resizable direct
+// present (⚡); this gesture stays as the fixed-mode escape hatch.
 - (void)onLaunchRouteCZoneGesture:(UILongPressGestureRecognizer *)g {
     if (g.state != UIGestureRecognizerStateBegan) return;
     if (self.launched) return;
     self.pendingRouteCZone = YES;
-    self.pendingRouteCZoneDirect = YES;
+    self.pendingRouteCGpuNoResize = YES;
     [self onLaunch];
 }
 
@@ -1278,6 +1304,7 @@ static const CGFloat kMenuWidth       = 210.0;
     self.launchButton.enabled = NO;
     self.gpuButton.enabled = NO;
     self.zoneButton.enabled = NO;
+    self.zoneFastButton.enabled = NO;
     [self.jitTimer invalidate];
     [self captureStdio];
 
