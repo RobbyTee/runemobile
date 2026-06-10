@@ -192,7 +192,25 @@ static void JNICALL z_glTexImage3D(JNIEnv *e, jclass c, jint t, jint lvl, jint i
 static void JNICALL z_glTexSubImage3D(JNIEnv *e, jclass c, jint t, jint lvl, jint xo, jint yo, jint zo,
                                       jint w, jint h, jint d, jint fmt, jint type, jobject buf) {
     void *p = buf ? (*e)->GetDirectBufferAddress(e, buf) : NULL;
-    // TODO(device): the BGRA->RGBA swizzle that the Android real-Mali run needed lives here (per-format).
+    // iOS GLES 3.0 has no GL_BGRA upload format. RLHD uploads the material texture array as
+    // GL_BGRA + GL_UNSIGNED_INT_8_8_8_8_REV over 0xAARRGGBB ints (TextureManager.uploadTexture); on iOS that
+    // errors and leaves the texture array BLACK (untextured models + ground, while vertex-HSL grass is fine).
+    // Convert to RGBA8 by swapping the R<->B bytes and upload as GL_RGBA + GL_UNSIGNED_BYTE (the Android real-Mali
+    // run needed the same swizzle; this is its iOS home). One-time per texture load, not per frame.
+    if (p && fmt == 0x80E1 /*GL_BGRA*/ && type == 0x8367 /*GL_UNSIGNED_INT_8_8_8_8_REV*/) {
+        size_t count = (size_t)w * (size_t)h * (size_t)d;
+        const uint32_t *src = (const uint32_t *)p;
+        uint32_t *tmp = (uint32_t *)malloc(count * 4);
+        if (tmp) {
+            for (size_t i = 0; i < count; i++) {
+                uint32_t v = src[i];   // mem bytes [B,G,R,A]; want [R,G,B,A] -> swap byte 0 and 2
+                tmp[i] = (v & 0xFF00FF00u) | ((v & 0x000000FFu) << 16) | ((v & 0x00FF0000u) >> 16);
+            }
+            glTexSubImage3D((GLenum)t, lvl, xo, yo, zo, w, h, d, GL_RGBA, GL_UNSIGNED_BYTE, tmp);
+            free(tmp);
+            return;
+        }
+    }
     glTexSubImage3D((GLenum)t, lvl, xo, yo, zo, w, h, d, (GLenum)fmt, (GLenum)type, p);
 }
 static void JNICALL z_glTexParameterfv(JNIEnv *e, jclass c, jint t, jint pname, jfloatArray arr) {
