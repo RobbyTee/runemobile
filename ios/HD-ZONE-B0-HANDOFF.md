@@ -84,10 +84,29 @@ enabled — future B1+ flag). Fix shipped on `gpu`:
   `373b9b4a7d633e91c9fe4a8e89ae1011`, now the `gpu-zone-z0-verdict.sh` default). Staging GREEN (class md5
   `d4dc966c00af9b0d983f25eecce62f73`), glslang 6/6 clean, both bridge arm64 compile checks GREEN, HelloShell
   built + installed on device with the new jar.
-- **NEXT (needs the user, ~1 tap):** StikDebug attach + `▶ 117HD (Zone)` → expect `HdPlugin.startUp` to get past
-  scene/shadow/ui link, then watch for (1) first-frame render correctness (material colors/water — if wrong, pull
-  `Documents/routec-shaders/*.out.glsl` + client.log; the texture upload path C3/C4-style issues would show as
-  black/garbage textures), (2) anything AFTER initializeShaders in startUp (uncharted from here on).
+- **DEVICE ROUND 2 (2026-06-09→10) — material fix HELD; shadow gap found + fixed.** Ran on the iPhone:
+  `RLHDStarter` loaded our staged `rs117.hd.HdPlugin` (count:1), and **the scene program LINKED** — no more
+  `UBOMaterials too large`; the material-store fix works on the real RuneLite boot (`SceneShaderProgram` resolved
+  its uniforms, the `unused shadowMap` warning = a clean link). `startUp` then advanced to the **next** program,
+  `fastShadowProgram`, which failed to COMPILE: `ShaderException 0:78 '-' int/float, 0:79 '*' float/int` at
+  `ZoneRenderer.initializeShaders:236`. = `shadow_frag.glsl` 78-79, the `#if SHADOW_TRANSPARENCY` depth-packing
+  block. The zone renderer compiles BOTH `fastShadowProgram` (SHADOW_MODE_FAST) and `detailedShadowProgram`
+  (DETAILED) unconditionally with `SHADOW_TRANSPARENCY=config` (default **true**), but the Z0 probe only ever
+  assembled shadow at `SHADOW_MODE=0`/transparency-off (scene+ui must see SHADOW_MODE=0), so these branches were a
+  never-gated false-green the device exposed once scene stopped failing first. **Fixed (`30fbe3cd4`):**
+  `ios-overrides/shadow_frag.glsl` — hand-ported ES3 copy with every int-in-float-context explicit across all
+  config paths (DETAILED `!= -1.0`/`clamp(...,0.0,...)`; TRANSPARENCY `1.0 - opacity`,
+  `float(SHADOW_ALPHA_MAX/SHADOW_DEPTH_MAX)`, `float(<int pack>) / float(SHADOW_COMBINED_MAX)`). One file fixes
+  runtime + probe. `ZoneShaderAssemble` now resolves top-level targets from ios-overrides first; new
+  `check-shadow-configs.sh` gates all four {FAST,DETAILED}×{transparency on,off} combos via glslang
+  (`ALL_SHADOW_CONFIGS_CLEAN`). App rebuilt + reinstalled. (Diagnosis note: `routec-shaders/*` dumps + `client.log`
+  are CUMULATIVE across launches — a stale pre-fix `UBOMaterials` scene_frag dump and the hub's pristine external
+  117hd copy were red herrings; the 16:05 session had only the shadow error, no UBO error.)
+- **NEXT (needs the user, ~1 tap):** StikDebug attach + `▶ 117HD (Zone)` → scene + both shadow programs + ui should
+  now link; watch for (1) anything AFTER `initializeShaders` in `startUp` (uncharted — likely the next blocker
+  class), (2) once it activates, first-frame render correctness (material colors/water — the texture-upload/sampling
+  path is the only material piece the link gate can't prove). Pull `Documents/.runelite/logs/client.log` (read the
+  LAST session only — it's cumulative) + `Documents/routec-shaders/*.out.glsl` if it stops again.
 
 ## Read first
 - `ios/HD-ZONE-B0-SCOPE.md` — the step-by-step B0 plan (this is the spec to execute).
