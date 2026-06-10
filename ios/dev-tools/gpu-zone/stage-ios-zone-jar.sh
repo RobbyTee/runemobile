@@ -71,14 +71,18 @@ if [ "$RC" != 0 ]; then echo "!! RLHD recompile FAILED ($(grep -c 'error:' "$WOR
 cp -R "$WORK/rlhd_out/." "$WORK/jar/"
 [ -d "$RLHD/src/main/resources" ] && cp -R "$RLHD/src/main/resources/." "$WORK/jar/"
 
-# 4b) optional iOS ES-3.0 shader overlay (full int->float ported copies the load-time downport can't safely do).
-#     Mirrors the Android overlay mechanism; empty/absent until the Z0 ios-overrides are promoted to a runtime
-#     overlay (B0.2+). When present it replaces the pristine rlhd resources, keeping rlhd-src untouched.
-OVERLAY="$(pwd)/shader-overlay"
+# 4b) iOS ES-3.0 shader overlay: the Z0-proven hand-ported copies of the pervasively cast-heavy includes
+#     (utils/{color_utils,water,fog}.glsl) that the load-time string downport can't safely transform. RLHD's own
+#     #include resolves these from rs117/hd/** at runtime, so dropping the ports there makes the runtime-assembled
+#     scene/shadow shaders match the Z0 assembled ES300 (which compiled+linked on device). The targeted per-site
+#     casts + textureFaces TBO repack are applied at glShaderSource time by RouteCBridge downportShaderSource.
+#     ios-overrides/utils/foo.glsl -> rs117/hd/utils/foo.glsl. Keeps rlhd-src untouched (committed + reproducible).
+OVERLAY="$(pwd)/ios-overrides"
 if [ -d "$OVERLAY" ]; then
-	cp -R "$OVERLAY/." "$WORK/jar/"
+	mkdir -p "$WORK/jar/rs117/hd"
+	cp -R "$OVERLAY/." "$WORK/jar/rs117/hd/"
 	OVR=$(cd "$OVERLAY" && find . -name '*.glsl' | wc -l | tr -d ' ')
-	echo "shader overlay applied : $OVR file(s)"
+	echo "shader overlay applied : $OVR ios-override(s) -> rs117/hd/"
 fi
 
 # 5) asserts.

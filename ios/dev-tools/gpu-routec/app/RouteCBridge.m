@@ -502,9 +502,12 @@ static BOOL rcBuildFbo(int w, int h)
 	NSRegularExpression *ver = [NSRegularExpression regularExpressionWithPattern:@"(?m)^[ \\t]*#version[^\\n]*\\n?"
 		options:0 error:&err];
 	[ver replaceMatchesInString:s options:0 range:NSMakeRange(0, s.length) withTemplate:@""];
+	// Precision: the full sampler set RLHD declares (usampler/isampler 2D + 2DArray + sampler2DShadow). ES 3.0
+	// requires a precision qualifier for EVERY sampler type used; declaring unused ones is harmless for the base
+	// plugin's shaders. (Z0 gate: dev-tools/gpu-zone/assemble/ZoneShaderAssemble.java.)
 	NSString *header = fragment
-		? @"#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2DArray;\nprecision highp sampler2D;\n"
-		: @"#version 300 es\nprecision highp float;\nprecision highp int;\n";
+		? @"#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp sampler2DArray;\nprecision highp isampler2D;\nprecision highp isampler2DArray;\nprecision highp usampler2D;\nprecision highp usampler2DArray;\nprecision highp sampler2DShadow;\n"
+		: @"#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp sampler2DArray;\nprecision highp isampler2D;\nprecision highp isampler2DArray;\nprecision highp usampler2D;\nprecision highp usampler2DArray;\n";
 	[s insertString:header atIndex:0];
 
 	// 3) drop `noperspective` (not in ES).
@@ -541,6 +544,98 @@ static BOOL rcBuildFbo(int w, int h)
 				options:0 range:NSMakeRange(0, s.length)];
 		}
 	}
+
+	// W3 GPU Zone B0.5 — RLHD (117HD) downport SUPERSET. RLHD's assembled scene/shadow/ui shaders need their own
+	// int<->float (#13) cast set + the textureFaces TBO->2D repack. These are no-ops on the base plugin's shaders
+	// (distinct strings; base has no textureFaces), so the downporter stays ONE shared seam. The pervasively
+	// cast-heavy includes (color_utils/water/fog) ship pre-ported as an overlay IN the rlhd jar (RLHD's own
+	// #include resolves them), so they are NOT in this map. Source of truth + provenance: the Z0 gate assembler
+	// dev-tools/gpu-zone/assemble/ZoneShaderAssemble.java (md5-sealed device-green).
+	// 5b) textureFaces isamplerBuffer -> 2D isampler2D repack (paired with the facade glTexBuffer 2D upload).
+	if ([s containsString:@"textureFaces"])
+	{
+		NSRegularExpression *tfDecl = [NSRegularExpression regularExpressionWithPattern:@"uniform\\s+isamplerBuffer\\s+textureFaces\\s*;" options:0 error:&err];
+		[tfDecl replaceMatchesInString:s options:0 range:NSMakeRange(0, s.length) withTemplate:@"uniform highp isampler2D textureFaces;"];
+		NSRange mainR = [s rangeOfString:@"void main()"];
+		if (mainR.location != NSNotFound)
+		{
+			NSRange brace = [s rangeOfString:@"{" options:0 range:NSMakeRange(mainR.location, s.length - mainR.location)];
+			if (brace.location != NSNotFound)
+				[s insertString:@"\n  int tfW = textureSize(textureFaces, 0).x;" atIndex:brace.location + 1];
+		}
+		NSRegularExpression *tfFetch = [NSRegularExpression regularExpressionWithPattern:@"texelFetch\\(\\s*textureFaces\\s*,\\s*([^(),]+?)\\s*\\)" options:0 error:&err];
+		[tfFetch replaceMatchesInString:s options:0 range:NSMakeRange(0, s.length) withTemplate:@"texelFetch(textureFaces, ivec2(($1)%tfW,($1)/tfW), 0)"];
+	}
+	// 6) RLHD explicit int<->float (#13) casts — applied to BOTH stages (RLHD's cast sites span vert + frag).
+	NSArray<NSArray<NSString *> *> *rlhdCasts = @[
+			@[@"if (t < 1)", @"if (t < 1.0)"],
+			@[@"if (t < 2)", @"if (t < 2.0)"],
+			@[@"vec2 texSize = textureSize(sampler, 0);", @"vec2 texSize = vec2(textureSize(sampler, 0));"],
+			@[@"uv *= sourceDimensions;", @"uv *= vec2(sourceDimensions);"],
+			@[@"(1 - texelUv)", @"(vec2(1.0) - texelUv)"],
+			@[@"projectionMatrix[2][3] != 0)", @"projectionMatrix[2][3] != 0.0)"],
+			@[@"-IN.position.xz / (128 * scale)", @"-IN.position.xz / (128.0 * scale)"],
+			@[@"clipPosition.z += depthBias / 128.0;", @"clipPosition.z += float(depthBias) / 128.0;"],
+			@[@"#define sampleShadowMap(fragPos, distortion, lightDotNormals) 0", @"#define sampleShadowMap(fragPos, distortion, lightDotNormals) 0.0"],
+			@[@"if (fogDepth == 0)", @"if (fogDepth == 0.0)"],
+			@[@"(position.y + cameraPos.y) / 2,", @"(position.y + cameraPos.y) / 2.0,"],
+			@[@"n.xy = n.xy * 2 - 1;", @"n.xy = n.xy * 2.0 - 1.0;"],
+			@[@"waterDepth1 * IN.texBlend.x", @"float(waterDepth1) * IN.texBlend.x"],
+			@[@"waterDepth2 * IN.texBlend.y", @"float(waterDepth2) * IN.texBlend.y"],
+			@[@"waterDepth3 * IN.texBlend.z", @"float(waterDepth3) * IN.texBlend.z"],
+			@[@"bool isUnderwater = waterDepth != 0;", @"bool isUnderwater = waterDepth != 0.0;"],
+			@[@"float mipBias = 0;", @"float mipBias = 0.0;"],
+			@[@"float selfShadowing = 0;", @"float selfShadowing = 0.0;"],
+			@[@"float overlayMix = 0;", @"float overlayMix = 0.0;"],
+			@[@"float shadow = 0;", @"float shadow = 0.0;"],
+			@[@"float closeFadeDistance = 1500;", @"float closeFadeDistance = 1500.0;"],
+			@[@"clamp(blendedUv.x, 0, .984375)", @"clamp(blendedUv.x, 0.0, .984375)"],
+			@[@"clamp(blendedUv.y, 0, .984375)", @"clamp(blendedUv.y, 0.0, .984375)"],
+			@[@"clamp(underlayBlend, 0, 1)", @"clamp(underlayBlend, 0.0, 1.0)"],
+			@[@"clamp(overlayBlend, 0, 1)", @"clamp(overlayBlend, 0.0, 1.0)"],
+			@[@"clamp(result * 2 - 1, 0, 1)", @"clamp(result * 2.0 - 1.0, 0.0, 1.0)"],
+			@[@"clamp((1 - baseColor1.a) * 2, 0, 1)", @"clamp((1.0 - baseColor1.a) * 2.0, 0.0, 1.0)"],
+			@[@"clamp((1 - baseColor2.a) * 2, 0, 1)", @"clamp((1.0 - baseColor2.a) * 2.0, 0.0, 1.0)"],
+			@[@"clamp((1 - baseColor3.a) * 2, 0, 1)", @"clamp((1.0 - baseColor3.a) * 2.0, 0.0, 1.0)"],
+			@[@"max(normals.y, 0)", @"max(normals.y, 0.0)"],
+			@[@"clamp(outputColor.rgb, 0, 1)", @"clamp(outputColor.rgb, 0.0, 1.0)"],
+			@[@"10 * waterType.duration", @"10.0 * waterType.duration"],
+			@[@"animationFrame(231)", @"animationFrame(231.0)"],
+			@[@"animationFrame(19)", @"animationFrame(19.0)"],
+			@[@"animationFrame(37)", @"animationFrame(37.0)"],
+			@[@"hsl1 += ((tint.xyz - hsl1) * tint.w) / 128;", @"hsl1 += ((vec3(tint.xyz) - hsl1) * float(tint.w)) / 128.0;"],
+			@[@"hsl2 += ((tint.xyz - hsl2) * tint.w) / 128;", @"hsl2 += ((vec3(tint.xyz) - hsl2) * float(tint.w)) / 128.0;"],
+			@[@"hsl3 += ((tint.xyz - hsl3) * tint.w) / 128;", @"hsl3 += ((vec3(tint.xyz) - hsl3) * float(tint.w)) / 128.0;"],
+			@[@"1 - float(fAlphaBiasHsl[0] >> 24 & 0xff) / 255.", @"1.0 - float(fAlphaBiasHsl[0] >> 24 & 0xff) / 255."],
+			@[@"1 - float(fAlphaBiasHsl[1] >> 24 & 0xff) / 255.", @"1.0 - float(fAlphaBiasHsl[1] >> 24 & 0xff) / 255."],
+			@[@"1 - float(fAlphaBiasHsl[2] >> 24 & 0xff) / 255.", @"1.0 - float(fAlphaBiasHsl[2] >> 24 & 0xff) / 255."],
+			@[@"vec3 underlayBlend = IN.texBlend * isUnderlay;", @"vec3 underlayBlend = IN.texBlend * vec3(isUnderlay);"],
+			@[@"vec3 overlayBlend = IN.texBlend * isOverlay;", @"vec3 overlayBlend = IN.texBlend * vec3(isOverlay);"],
+			@[@"float result = dot(IN.texBlend, isPrimary);", @"float result = dot(IN.texBlend, vec3(isPrimary));"],
+			@[@"result = 1 - result;", @"result = 1.0 - result;"],
+			@[@"float inverseShadow = 1 - shadow;", @"float inverseShadow = 1.0 - shadow;"],
+			@[@"Map == -1 ? 1 :", @"Map == -1 ? 1.0 :"],
+			@[@"const ivec2 direction = ivec2(1, -1);", @"const vec2 direction = vec2(1.0, -1.0);"],
+			@[@"* ivec2(1, -2)", @"* vec2(1.0, -2.0)"],
+			@[@"sampleCaustics(flow1, flow2) * 2;", @"sampleCaustics(flow1, flow2) * 2.0;"],
+			@[@"floor(IN.position.xz / 128)", @"floor(IN.position.xz / 128.0)"],
+			@[@"floor(cameraPos.xz / 128)", @"floor(cameraPos.xz / 128.0)"],
+			@[@"outputColor.a *= -256;", @"outputColor.a *= -256.0;"],
+			@[@"if (saturation != 1 || contrast != 1)", @"if (saturation != 1.0 || contrast != 1.0)"],
+			@[@"float combinedFog = 1 - (1 - fogAmount) * (1 - groundFog);", @"float combinedFog = 1.0 - (1.0 - fogAmount) * (1.0 - groundFog);"],
+			@[@"outputColor.a * (1 - combinedFog);", @"outputColor.a * (1.0 - combinedFog);"],
+			@[@"float opacity = 1 - (alphaBiasHsl >> 24 & 0xFF) / float(0xFF)", @"float opacity = 1.0 - float(alphaBiasHsl >> 24 & 0xFF) / float(0xFF)"],
+			@[@"MATERIAL_SHADOW_OPACITY_THRESHOLD_SHIFT & 0x3F) / 0x3F;", @"MATERIAL_SHADOW_OPACITY_THRESHOLD_SHIFT & 0x3F) / float(0x3F);"],
+			@[@"if (opacityThreshold == 0)", @"if (opacityThreshold == 0.0)"],
+			@[@"float opacity = 1;", @"float opacity = 1.0;"],
+			@[@"if (animationDuration == 0)", @"if (animationDuration == 0.0)"],
+			@[@"if (vanillaLightDotNormals > 0)", @"if (vanillaLightDotNormals > 0.0)"],
+			@[@"float lighten = max(0, lightness - IGNORE_LOW_LIGHTNESS);", @"float lighten = float(max(0, lightness - IGNORE_LOW_LIGHTNESS));"],
+			@[@"int(127 - 72 * pow(saturation / 7., .05))", @"int(127.0 - 72.0 * pow(float(saturation) / 7., .05))"],
+			@[@"(lighten * LIGHTNESS_MULTIPLIER + BASE_LIGHTEN - lightness) * vanillaLightDotNormals", @"(lighten * float(LIGHTNESS_MULTIPLIER) + float(BASE_LIGHTEN) - float(lightness)) * vanillaLightDotNormals"],
+	];
+	for (NSArray<NSString *> *c in rlhdCasts)
+		[s replaceOccurrencesOfString:c[0] withString:c[1] options:0 range:NSMakeRange(0, s.length)];
 
 	// WATER-SHIMMER ISOLATION DIAGNOSTIC (gated; STRIP once the cause is found). When the file
 	// Documents/routec-water-mode.txt contains "stripes", split the SCENE fragment into 4 vertical 88px
