@@ -36,10 +36,14 @@ SRC_LWJGL=$(unzip -l "$SRC" | grep -c 'org/lwjgl/.*[.]class' || true)
 WORK="$(pwd)/stage-work"
 rm -rf "$WORK"; mkdir -p "$WORK/facade_out" "$WORK/gpu_out" "$WORK/jar"
 
-# 1) facade compiles (the GL/AWTContext surface the plugin references, methods `native`). Default = the base-gpu
-#    facade-native; FACADE_SRC=../gpu-zone/facade stages the GROWN RLHD superset so the single in-jar facade covers
-#    both base + RLHD (the base plugin compiles fine against the superset — host-verified). README in gpu-zone/facade.
-FACADE_SRC="${FACADE_SRC:-facade-native}"
+# 1) facade compiles (the GL/AWTContext surface the plugin references, methods `native`). DEFAULT = the GROWN RLHD
+#    superset (../gpu-zone/facade) so the single in-jar facade covers BOTH base gpu + RLHD/117HD. This MUST be the
+#    default: the device app boots 117HD (RLHDStarter), and RLHD needs the superset's org.lwjgl.system.* (Platform,
+#    MemoryUtil, …) — stage with the base-only facade-native and HdPlugin.<clinit> dies with
+#    NoClassDefFoundError: org/lwjgl/system/Platform, the plugin loads 0 classes, and 117HD silently never activates.
+#    The base plugin compiles+runs fine against the superset (host- + device-verified; the extra facade classes are
+#    pure-Java or stay unbound+uncalled in base mode). Override FACADE_SRC=facade-native only for a base-gpu-only jar.
+FACADE_SRC="${FACADE_SRC:-../gpu-zone/facade}"
 [ -d "$FACADE_SRC" ] || { echo "!! FACADE_SRC dir missing: $FACADE_SRC" >&2; exit 1; }
 "$JAVAC" -d "$WORK/facade_out" $(find "$FACADE_SRC" -name '*.java')
 FACADE_LWJGL_CLASSES=$(cd "$WORK/facade_out" && find org/lwjgl -name '*.class' | wc -l | tr -d ' ')
