@@ -68,11 +68,14 @@ public class ZoneShaderAssemble {
 		// the override absent, 595 reproduces the device link failure (negative control for the gate).
 		define("MATERIAL_COUNT", 595);
 		define("WATER_TYPE_COUNT", 1);
-		define("DYNAMIC_LIGHTS", false);
+		// B1 dynamic lights: DYNAMIC_LIGHTS on, TILED off (tiled = the 1000-light/64KB-UBO path that needs the
+		// texture-backed store; dynamic non-tiled caps at getMaxSceneLights()=50 for SOME -> ~2.4KB UBOs, fits the
+		// 16KB cap). MAX_LIGHT_COUNT=50 matches dynamicLights=SOME. ios-overrides/utils/lights.glsl = the ES3 port.
+		define("DYNAMIC_LIGHTS", true);
 		define("TILED_LIGHTING", false);
 		define("TILED_LIGHTING_LAYER_COUNT", 0);
 		define("TILED_LIGHTING_TILE_SIZE", 16);
-		define("MAX_LIGHT_COUNT", 1);
+		define("MAX_LIGHT_COUNT", 50);
 		define("NORMAL_MAPPING", true); // B1: normal mapping ON — swaps sampleNormalMap stub for the real normals.glsl body
 		define("PARALLAX_OCCLUSION_MAPPING", false);
 		// B1 shadows: SHADOW_MODE_FAST=1 (was 0/OFF at Z0). Enabling it pulls the real utils/shadows.glsl into

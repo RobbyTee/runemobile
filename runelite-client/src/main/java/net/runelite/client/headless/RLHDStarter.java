@@ -106,7 +106,13 @@ public final class RLHDStarter
 		{
 			MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");                 // else HYBRID/xBR pull in scale/*.glsl
 			MobileUiBridge.setConfig("hd", "tiledLighting", "false");                  // else the tiled-lighting program compiles
-			MobileUiBridge.setConfig("hd", "dynamicLights", "NONE");                   // DYNAMIC_LIGHTS off
+			// B1 DYNAMIC LIGHTS (third ported feature): torches/fires/spells cast coloured point light. DYNAMIC_LIGHTS
+			// on pulls utils/lights.glsl (ios-overrides ES3 port, 2 casts) into scene_frag's lighting. SOME =
+			// getMaxSceneLights()=50 -> UBOLights+UBOLightsCulling shader blocks ~2.4KB, under Apple's 16KB cap (so no
+			// texture-backed store needed — that's only the 1000-light TILED path). TILED_LIGHTING stays off. The
+			// per-fragment loop runs over pointLightsCount (active nearby lights only, not all 50). Simulator EAGL gate
+			// GREEN at DYNAMIC_LIGHTS=1/MAX_LIGHT_COUNT=50.
+			MobileUiBridge.setConfig("hd", "dynamicLights", "SOME");                   // DYNAMIC_LIGHTS on (50 max scene lights)
 			// B1 NORMAL MAPPING (second ported feature): NORMAL_MAPPING swaps the sampleNormalMap stub (TBN[2]) for
 			// the real utils/normals.glsl body, which samples the normal map as a layer of the EXISTING material
 			// textureArray (material.normalMap index — no new texture loading) and does one int->float cast that's
@@ -152,7 +158,7 @@ public final class RLHDStarter
 			if (last.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced iOS config (uiScaling=LINEAR; tiled/dynamic/POM/wind/char-disp/MSAA/asyncModelProcessing OFF; shadows=FAST/SMOOTH/no-transparency; normalMapping=ON; sceneResolutionScale=200 LINEAR = 2x SSAA)");
+				log.info("[routecrlhd] forced iOS config (uiScaling=LINEAR; tiled/POM/wind/char-disp/MSAA/asyncModelProcessing OFF; shadows=FAST/SMOOTH/no-transparency; normalMapping=ON; dynamicLights=SOME; sceneResolutionScale=200 LINEAR = 2x SSAA)");
 			}
 			return;
 		}

@@ -114,8 +114,8 @@ precision highp sampler2DShadow;
 #define WIND_DISPLACEMENT 0
 #define WIND_DISPLACEMENT_NOISE_RESOLUTION 128
 #define CHARACTER_DISPLACEMENT 0
-#define DYNAMIC_LIGHTS 0
-#define MAX_LIGHT_COUNT 1
+#define DYNAMIC_LIGHTS 1
+#define MAX_LIGHT_COUNT 50
 #define TILED_LIGHTING 0
 #define TILED_LIGHTING_LAYER_COUNT 0
 #define TILED_LIGHTING_TILE_SIZE 16
@@ -1315,6 +1315,25 @@ float sampleShadowMap(vec3 fragPos, vec2 distortion, float lightDotNormals) {
 // #pragma once: already included
 
 
+/*
+ * Copyright (c) 2021, 117 <https://twitter.com/117scape>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that
+ * the conditions of the BSD 2-clause license are met.
+ *
+ * ===========================================================================================================
+ * iOS ES-3.0 OVERRIDE (gpu-zone B1, dynamic lights). Verbatim copy of rs117/hd/utils/lights.glsl @ RLHD 7dded59
+ * EXCEPT the two int-in-float-context sites in calculateLight are made explicit (blueprint #13) so the SCENE
+ * program compiles on GLES 3.00 when DYNAMIC_LIGHTS != NONE — this whole file is a no-op macro at DYNAMIC_LIGHTS
+ * off, so Z0 never compiled it:
+ *   line 19: 1 - sqrt(...)            -> 1.0 - sqrt(...)
+ *   line 25: max(dot(...), 0)         -> max(dot(...), 0.0)
+ * The UBO blocks (uniforms/lights.glsl) are sized at MAX_LIGHT_COUNT (<=100 for dynamic, NOT the 1000 tiled cap),
+ * so they fit Apple's 16 KB uniform-block limit -> no texture-backed store needed (unlike UBOMaterials). The
+ * TILED_LIGHTING branch stays #if'd out on iOS. Logic identical. RE-MERGE on RLHD rev bumps.
+ * ===========================================================================================================
+ */
 // #pragma once: first include
 
 // #pragma once: first include
@@ -1392,13 +1411,13 @@ void calculateLight(
     float distanceSquared = dot(lightToFrag, lightToFrag);
     float radiusSquared = light.position.w;
     if (distanceSquared <= radiusSquared) {
-        float attenuation = 1 - sqrt(distanceSquared / radiusSquared);
+        float attenuation = 1.0 - sqrt(distanceSquared / radiusSquared);
         attenuation *= attenuation;
 
         vec3 pointLightColor = light.color.rgb * attenuation;
         vec3 pointLightDir = normalize(lightToFrag);
 
-        float pointLightDotNormals = max(dot(normals, pointLightDir), 0);
+        float pointLightDotNormals = max(dot(normals, pointLightDir), 0.0);
         pointLightsOut += pointLightColor * pointLightDotNormals;
 
         vec3 pointLightReflectDir = reflect(-pointLightDir, normals);
@@ -1820,6 +1839,25 @@ float wireframeMask() {
 }
 #endif
 
+/*
+ * Copyright (c) 2021, 117 <https://twitter.com/117scape>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that
+ * the conditions of the BSD 2-clause license are met.
+ *
+ * ===========================================================================================================
+ * iOS ES-3.0 OVERRIDE (gpu-zone B1, dynamic lights). Verbatim copy of rs117/hd/utils/lights.glsl @ RLHD 7dded59
+ * EXCEPT the two int-in-float-context sites in calculateLight are made explicit (blueprint #13) so the SCENE
+ * program compiles on GLES 3.00 when DYNAMIC_LIGHTS != NONE — this whole file is a no-op macro at DYNAMIC_LIGHTS
+ * off, so Z0 never compiled it:
+ *   line 19: 1 - sqrt(...)            -> 1.0 - sqrt(...)
+ *   line 25: max(dot(...), 0)         -> max(dot(...), 0.0)
+ * The UBO blocks (uniforms/lights.glsl) are sized at MAX_LIGHT_COUNT (<=100 for dynamic, NOT the 1000 tiled cap),
+ * so they fit Apple's 16 KB uniform-block limit -> no texture-backed store needed (unlike UBOMaterials). The
+ * TILED_LIGHTING branch stays #if'd out on iOS. Logic identical. RE-MERGE on RLHD rev bumps.
+ * ===========================================================================================================
+ */
 // #pragma once: already included
 
 
