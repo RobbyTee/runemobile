@@ -9,3 +9,5 @@ build-ios/
 rlhd-src/src/
 stage-zone-work/
 scan-work/
+# device-pulled scratch logs (canonical copies live in evidence/)
+z0-device-*.log

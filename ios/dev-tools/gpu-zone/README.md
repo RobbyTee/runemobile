@@ -49,9 +49,24 @@ the `MATERIAL_CONSTANTS` named-material defines are replicated in the config. **
 its interface-block false-positives) that reports many #13 sites per pass — works for shadow/ui, but **not scene**
 (glslang bails at scene's in/out interface blocks, which Apple's EAGL accepts).
 
+**B0.5 MATERIAL STORE — GREEN ON THE REAL DEVICE ✅ (2026-06-09).** The B0.5 runtime blocker (`glLinkProgram:
+"Uniform interface block UBOMaterials too large (57120 exceeds max 16384)"` — Apple's GLES-on-Metal caps uniform
+blocks at 16 KB; the real material set is 595 × 96 B std140) is fixed by **texture-backing the material data**:
+`ios-overrides/uniforms/materials.glsl` drops the UBO block and rebuilds `getMaterial(i)` from 6×RGBA32I
+`texelFetch`es per material (same std140 bytes, `materialStore` isampler2D on unit 6), and the **`java-overrides/`**
+overlay (new: laid over `rlhd-src` at stage time, same pattern as `ios-overrides`) makes `MaterialManager` upload
+the UBO's serialized ByteBuffer verbatim into that texture + wires the sampler in `SceneShaderProgram` /
+`ShadowShaderProgram`. Gates: assembler now uses the REAL `MATERIAL_COUNT 595` — the **negative control**
+(`evidence/gpu-zone-b05-materialstore-NEGCONTROL.log`, override held out) reproduces the exact device link failure
+on scene AND shadow, then the fix run links **3/3 → sealed `evidence/gpu-zone-b05-materialstore-DEVICE-GREEN.log`**
+(md5 `373b9b4a7d633e91c9fe4a8e89ae1011`, the verdict-script default). `./check-std140.sh` host-gates the GLSL
+decode map against the actual `UniformBuffer` layout engine (`STD140_DECODE_MAP_MATCHES`). Staged class md5 is now
+`d4dc966c00af9b0d983f25eecce62f73` (java overlay changed classes).
+
 **Z0 COMPLETE — GREEN ON THE REAL DEVICE ✅** (iPhone 17 Pro Max, A19 Pro, `GL_VERSION = OpenGL ES 3.0 Metal -
 104.1`): **6/6 compile + 3/3 link → `Z0_ZONE_SHADER_GATE_GREEN`**, sealed `evidence/gpu-zone-z0-DEVICE-GREEN.log`
-(md5 `6690f2b89cb5c4f183e9147926afa4c2`; `./gpu-zone-z0-verdict.sh` reproduces). The Sim run is kept too
+(md5 `6690f2b89cb5c4f183e9147926afa4c2`; note Z0 ran at the placeholder `MATERIAL_COUNT 1`, which is why it could
+not catch the 16 KB cap; `./gpu-zone-z0-verdict.sh <log> 6690f…` reproduces). The Sim run is kept too
 (`evidence/gpu-zone-z0-sim-GREEN.log`) — Sim and device agree, retiring the "Sim compiler ≠ A19" caveat. All of
 scene/shadow/ui × vert/frag compile to ES 3.00 AND all three programs link (vertex-out interface blocks match the
 fragment-in blocks — no varying mismatch). **GpuZone has no JVM/JIT** (pure EAGL shader-compile probe), so the device
@@ -63,11 +78,13 @@ real downport bug (the `f`-suffix strip corrupting `material1.flowMap`→`lowMap
 ## Phase B0 — renderer bring-up (`ios/HD-ZONE-B0-SCOPE.md`)
 
 **B0.1 GREEN (host, no device).** `stage-ios-zone-jar.sh` stages the iOS-variant RLHD jar: it compiles the
-**unmodified** RLHD source (`rlhd-src/src/`, full tree @ `7dded59`, gitignored — see `rlhd-src/PROVENANCE.md`)
+RLHD source — pristine (`rlhd-src/src/`, full tree @ `7dded59`, gitignored — see `rlhd-src/PROVENANCE.md`)
+except the committed **`java-overrides/`** laid over it at stage time (B0.5: the materials subsystem) —
 against `[facade/ : lwjgl-stripped client jar]` with lombok as an annotation processor, then re-zips
 `rs117/**` classes + RLHD shader/JSON resources (no `org/lwjgl`/`rlawt` — facade ships in the gpu jar). Verdict
 `IOS_RLHD_STAGE_GREEN`: **304 RLHD classes** (== the Android count at this rev), 0 lwjgl leak, 47 shaders, 9
-loader JSON, `ZoneRenderer` + `OpenCLManager` present; class md5 `04e0b29fa4761cca3386d8eb6ca457d3`. The
+loader JSON, `ZoneRenderer` + `OpenCLManager` present; class md5 `d4dc966c00af9b0d983f25eecce62f73`
+(`04e0b29fa4761cca3386d8eb6ca457d3` was the pre-overlay B0.1 seal). The
 `facade/` (35 classes) is the RLHD-complete superset of the base-gpu facade and is the **spec** for the B0.3
 native delta (see `facade/README.md`). Output: `ios/app/jvm-resources/client-1.12.29-SNAPSHOT-rlhd.jar`
 (gitignored, regen via the script).

@@ -10,8 +10,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-LOG="${1:-evidence/gpu-zone-z0-DEVICE-GREEN.log}"
-EXPECT_MD5="${2:-6690f2b89cb5c4f183e9147926afa4c2}"   # sealed DEVICE GREEN (A19 Pro, real EAGL ES3): 6/6 compile + 3/3 link
+# Sealed runs: the Z0 original (MATERIAL_COUNT=1, UBO-based materials) and the B0.5 material-store run
+# (MATERIAL_COUNT=595, texture-backed materials.glsl — the run that proves the 16 KB-uniform-block fix).
+#   Z0   evidence/gpu-zone-z0-DEVICE-GREEN.log                 md5 6690f2b89cb5c4f183e9147926afa4c2
+#   B0.5 evidence/gpu-zone-b05-materialstore-DEVICE-GREEN.log  md5 373b9b4a7d633e91c9fe4a8e89ae1011
+# (negative control evidence/gpu-zone-b05-materialstore-NEGCONTROL.log = count 595 WITHOUT the override:
+#  scene+shadow LINK FAIL "UBOMaterials too large (57120 exceeds max 16384)" — the gate provably exercises
+#  the device blocker.)
+LOG="${1:-evidence/gpu-zone-b05-materialstore-DEVICE-GREEN.log}"
+EXPECT_MD5="${2:-373b9b4a7d633e91c9fe4a8e89ae1011}"   # sealed B0.5 DEVICE GREEN (A19 Pro, real EAGL ES3): 6/6 compile + 3/3 link @ 595 materials
 [ -n "$LOG" ] && [ -f "$LOG" ] || { echo "!! usage: gpu-zone-z0-verdict.sh <log> [expected_md5]   (log not found)" >&2; exit 1; }
 
 ACTUAL_MD5="$(md5 -q "$LOG" 2>/dev/null || md5sum "$LOG" | awk '{print $1}')"

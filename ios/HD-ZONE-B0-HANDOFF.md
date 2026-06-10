@@ -56,17 +56,38 @@ downport. Fixes landed this round (each one peeled off by reading the device Sha
   shadowMode=OFF/wind+char-disp=false (else POM etc. shader branches bring un-ported cast sites).
 - **f-suffix bug** (`7772eb6b6`): runtime regex ate `.flowMap`→`.lowMap`; added the `(?![A-Za-z0-9_])` boundary.
 
-**THE ONE BLOCKER LEFT — material UBO too big for iOS:** link fails
-`Uniform interface block UBOMaterials too large (57120 exceeds max 16384)`. Apple's GLES-on-Metal caps a uniform
-block at **16 KB**; the real `MaterialManager` loads ~476 materials × ~120 B = 57 KB (Mali/desktop allow 64 KB, so
-Android never hit it). No clean quick cap: material indices ARE array positions (shrinking the count breaks
-face→material refs), and the struct can't shrink 3.5× without dropping fields water/lighting still read. **This is
-the materials-subsystem boundary (blueprint B1).** Options for the next session: (a) **texture-back the material
-data** (an `isampler2D`/`sampler2D` material store like the textureFaces TBO→2D path — the real iOS solution, also
-unblocks other large UBOs); (b) a material **cap + face-index remap** (flat-scene B0 frame, more invasive than it
-looks); (c) shrink the struct to the B0-used fields + matching shader struct (likely still > 16 KB at 476). Recommend
-(a). The whole pipeline ABOVE this is proven on device — shaders compile + downport correctly; only the material
-look-data feed needs the iOS-shaped storage.
+**THE UBO BLOCKER — RESOLVED (2026-06-09, option (a) texture-backed material store):** link failed
+`Uniform interface block UBOMaterials too large (57120 exceeds max 16384)` — Apple's GLES-on-Metal caps a uniform
+block at **16 KB**, and the real material set is **595 materials × 96 B std140 = 57120 B** (the earlier "~476 ×
+~120 B" framing divided the same total differently). Audit confirmed UBOMaterials is the ONLY over-cap block under
+the Z0 config (next-largest: UBOWorldViews 10240 B; UBOLights would be 32000 B but only if tiled lighting is ever
+enabled — future B1+ flag). Fix shipped on `gpu`:
+- **Shader:** `gpu-zone/ios-overrides/uniforms/materials.glsl` — drops the std140 block + `#include
+  MATERIAL_GETTER`, declares `uniform highp isampler2D materialStore` (unit 6, after TEXTURED_FACES=5) and
+  rebuilds `Material getMaterial(int i)` from 6 RGBA32I `texelFetch`es decoding the exact UniformBuffer std140
+  bytes (8 ints @0–28, 4 float bits @32–47, flowMapStrength@48, flowMapDuration@56, scrollDuration@64,
+  textureScale@80; 96-B stride). Every consumer funnels through `getMaterial`/`MAT_*`, so ONE file converts the
+  scene program + both shadow programs (shadow_vert calls getMaterial unconditionally — shadow programs compile
+  even at shadowMode=OFF). Verified a fixed point of the runtime downport rules (no regex collision).
+- **Java:** NEW `gpu-zone/java-overrides/` overlay (stage-time copy over pristine rlhd-src, same pattern as
+  ios-overrides; mechanism added to `stage-ios-zone-jar.sh` step 2b): `MaterialManager` uploads the UBO's
+  serialized ByteBuffer verbatim into the RGBA32I texture after every `uboMaterials.update()` (reflection on
+  `UniformBuffer.data`; upload via the already-wired `glTexImage2D(...,long)` + `MemoryUtil.memAddress0`, NEAREST
+  filters — integer textures are incomplete under linear; PBO defensively unbound; active unit restored to GAME);
+  `SceneShaderProgram`/`ShadowShaderProgram` wire the `materialStore` sampler. **Zero facade/JNI/bridge changes.**
+  The dead Java-side UBO keeps uploading harmlessly (ShaderProgram skips absent blocks by name).
+- **Gates (all GREEN):** `check-std140.sh` (NEW) proves the GLSL decode map matches the real UniformBuffer layout
+  engine on host (`STD140_DECODE_MAP_MATCHES`). The Z0 probe now assembles at the REAL `MATERIAL_COUNT 595` (Z0's
+  placeholder 1 is why it never caught this): **negative control** (override held out) REPRODUCES the exact link
+  failure on device (`evidence/gpu-zone-b05-materialstore-NEGCONTROL.log`), fix run links **3/3 →
+  `ALL_ZONE_PROGRAMS_LINK_ES300`**, sealed `evidence/gpu-zone-b05-materialstore-DEVICE-GREEN.log` (md5
+  `373b9b4a7d633e91c9fe4a8e89ae1011`, now the `gpu-zone-z0-verdict.sh` default). Staging GREEN (class md5
+  `d4dc966c00af9b0d983f25eecce62f73`), glslang 6/6 clean, both bridge arm64 compile checks GREEN, HelloShell
+  built + installed on device with the new jar.
+- **NEXT (needs the user, ~1 tap):** StikDebug attach + `▶ 117HD (Zone)` → expect `HdPlugin.startUp` to get past
+  scene/shadow/ui link, then watch for (1) first-frame render correctness (material colors/water — if wrong, pull
+  `Documents/routec-shaders/*.out.glsl` + client.log; the texture upload path C3/C4-style issues would show as
+  black/garbage textures), (2) anything AFTER initializeShaders in startUp (uncharted from here on).
 
 ## Read first
 - `ios/HD-ZONE-B0-SCOPE.md` — the step-by-step B0 plan (this is the spec to execute).

@@ -3,7 +3,9 @@
 # `gpu-routec/stage-ios-gpu-jar.sh` and the Android `gpu/stage-rlhd-zone-jar.sh`.
 #
 # RLHD is an EXTERNAL hub plugin (vendored, gitignored, at rlhd-src/src/, rev 7dded59, targets RuneLite 1.12.+),
-# so unlike the base gpu plugin it is NOT inside the client jar. This script compiles the UNMODIFIED RLHD source
+# so unlike the base gpu plugin it is NOT inside the client jar. This script compiles the RLHD source — pristine
+# except the committed java-overrides/ files laid over it (step 2b; today = the materials subsystem, working
+# around Apple's 16 KB uniform-block cap with an RGBA32I material-store texture) —
 # against [facade/ + a lwjgl-STRIPPED client jar] — i.e. our pure-Java org.lwjgl.{opengl,opencl,system} +
 # net.runelite.rlawt.AWTContext facade is the SOLE provider of every LWJGL symbol RLHD references. Stripping real
 # lwjgl from the compile classpath is deliberate: a facade symbol RLHD uses but we don't declare becomes a javac
@@ -46,7 +48,7 @@ SRC_LWJGL=$(unzip -l "$SRC" | grep -c 'org/lwjgl/.*[.]class' || true)
 [ "$SRC_LWJGL" -gt 0 ] || { echo "!! SRC has no org/lwjgl classes — not a pristine shaded jar: $SRC" >&2; exit 1; }
 
 WORK="$(pwd)/stage-zone-work"
-rm -rf "$WORK"; mkdir -p "$WORK/facade_out" "$WORK/rlhd_out" "$WORK/cp" "$WORK/jar"
+rm -rf "$WORK"; mkdir -p "$WORK/facade_out" "$WORK/rlhd_out" "$WORK/cp" "$WORK/jar" "$WORK/rlhd_src"
 
 # 1) facade compiles (the GL/CL/system/AWTContext surface RLHD references; methods `native`).
 "$JAVAC" -nowarn -d "$WORK/facade_out" $(find "$FACADE" -name '*.java')
@@ -57,10 +59,25 @@ FACADE_LWJGL_CLASSES=$(cd "$WORK/facade_out" && find org/lwjgl -name '*.class' |
 (cd "$WORK/cp" && unzip -q "$SRC")
 rm -rf "$WORK/cp/org/lwjgl" "$WORK/cp/net/runelite/rlawt"
 
-# 3) compile the UNMODIFIED RLHD sources against [facade : stripped-client], lombok as annotation processor.
+# 2b) iOS Java overlay: copy the pristine RLHD source tree (the whole src/ level — lombok.config lives at
+#     rlhd-src/src/lombok.config and lombok resolves it by bubbling up from each source dir), then lay the
+#     committed java-overrides/ files over it. Same pattern as the ios-overrides GLSL overlay: keeps rlhd-src
+#     untouched (reproducible from PROVENANCE.md) while the iOS-only deltas live in a committable dir.
+#     Today's delta = the materials subsystem (UBOMaterials 57 KB > Apple's 16 KB uniform-block cap -> the
+#     shaders read an RGBA32I material-store texture instead; MaterialManager uploads it, the scene/shadow
+#     programs wire the sampler).
+cp -R "$RLHD/src/." "$WORK/rlhd_src/"
+JOVERLAY="$(pwd)/java-overrides"
+if [ -d "$JOVERLAY" ]; then
+	cp -R "$JOVERLAY/." "$WORK/rlhd_src/main/java/"
+	JOVR=$(cd "$JOVERLAY" && find . -name '*.java' | wc -l | tr -d ' ')
+	echo "java overlay applied   : $JOVR java-override(s) -> rlhd_src/main/java/"
+fi
+
+# 3) compile the (overlaid) RLHD sources against [facade : stripped-client], lombok as annotation processor.
 set +e
 "$JAVAC" -nowarn -proc:full -cp "$WORK/facade_out:$WORK/cp:$LOMBOK" -processorpath "$LOMBOK" \
-	-d "$WORK/rlhd_out" $(find "$RLHD/src/main/java" -name '*.java') 2>"$WORK/err.txt"
+	-d "$WORK/rlhd_out" $(find "$WORK/rlhd_src/main/java" -name '*.java') 2>"$WORK/err.txt"
 RC=$?
 set -e
 if [ "$RC" != 0 ]; then echo "!! RLHD recompile FAILED ($(grep -c 'error:' "$WORK/err.txt") errors):" >&2; grep 'error:' "$WORK/err.txt" | head -40 >&2; exit 2; fi

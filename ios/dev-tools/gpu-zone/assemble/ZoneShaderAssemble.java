@@ -61,7 +61,12 @@ public class ZoneShaderAssemble {
 		define("UI_SCALING_MODE", 0);
 		define("COLOR_BLINDNESS", 0);
 		define("APPLY_COLOR_FILTER", false);
-		define("MATERIAL_COUNT", 1);
+		// MATERIAL_COUNT at the REAL runtime size (device-observed: 595 materials x 96 B std140 = 57120 B).
+		// Z0 originally used 1, which is why the gate passed while the runtime UBOMaterials block blew Apple's
+		// 16384-byte uniform-block cap at glLinkProgram. With ios-overrides/uniforms/materials.glsl present the
+		// block is replaced by the RGBA32I material-store texture and the count no longer sizes anything; with
+		// the override absent, 595 reproduces the device link failure (negative control for the gate).
+		define("MATERIAL_COUNT", 595);
 		define("WATER_TYPE_COUNT", 1);
 		define("DYNAMIC_LIGHTS", false);
 		define("TILED_LIGHTING", false);
@@ -96,6 +101,8 @@ public class ZoneShaderAssemble {
 		// VERSION_HEADER: compute-only in the zone path (comp*.glsl), but define it harmlessly in case.
 		includeMap.put("VERSION_HEADER", "#version 330");
 		// Dynamic getters: the simple (non-Intel-workaround) form RLHD emits when dynamic indexing works.
+		// NOTE: unused once ios-overrides/uniforms/materials.glsl is present (the override drops the
+		// `#include MATERIAL_GETTER` line and defines a texelFetch-based getMaterial instead).
 		includeMap.put("MATERIAL_GETTER", "#define getMaterial(i) MaterialArray[i]");
 		includeMap.put("WATER_TYPE_GETTER", "#define getWaterType(i) WaterTypeArray[i]");
 		// MATERIAL_CONSTANTS: per-material `#define MAT_<NAME> getMaterial(idx)`. The scene shaders reference a few
