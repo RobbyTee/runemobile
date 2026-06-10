@@ -142,11 +142,17 @@ static jobject JNICALL z_glMapBufferRange(JNIEnv *e, jclass c, jint t, jlong off
 }
 // glMapBuffer(target, access-enum, oldBuffer) — ES has no whole-buffer map; range-map the full GL_BUFFER_SIZE and
 // translate the access enum to a bitfield.
+// IMPORTANT (device): Apple's GLES-on-Metal returns NULL when mapping a buffer for WRITE without orphaning — a
+// bare GL_MAP_WRITE_BIT asks the driver to preserve+sync the existing GPU contents, which it refuses (every
+// ZoneUploadJob "Failed to map buffer" was this). A whole-buffer glMapBuffer is a full rewrite, so we orphan with
+// GL_MAP_INVALIDATE_BUFFER_BIT — exactly what the base-gpu glMapBufferShim does (RouteCBridge.m), which renders
+// fine on device. The zone VBO/TBO buffers are freshly glBufferData'd then fully written by the upload workers,
+// so discarding the (undefined) old contents is correct.
 static jobject JNICALL z_glMapBuffer(JNIEnv *e, jclass c, jint t, jint access, jobject old) {
     GLint sz = 0; glGetBufferParameteriv((GLenum)t, GL_BUFFER_SIZE, &sz);
     if (sz <= 0) return NULL;
     GLbitfield f = (access == GL_READ_ONLY)  ? GL_MAP_READ_BIT
-                 : (access == GL_WRITE_ONLY) ? GL_MAP_WRITE_BIT
+                 : (access == GL_WRITE_ONLY) ? (GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT)
                  : (GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
     void *p = glMapBufferRange((GLenum)t, 0, sz, f);
     return p ? (*e)->NewDirectByteBuffer(e, p, sz) : NULL;
