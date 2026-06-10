@@ -1,3 +1,12 @@
+#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
+precision highp isampler2D;
+precision highp isampler2DArray;
+precision highp usampler2D;
+precision highp usampler2DArray;
 /*
  * Copyright (c) 2018, Adam <Adam@sigterm.info>
  * Copyright (c) 2023, Hooder <ahooder@protonmail.com>
@@ -23,14 +32,13 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#version 330
 
 // #pragma once: first include
 
 // #pragma once: first include
 
 #define EPS 1.0e-10
-#define PI 3.14159265f // max 32-bit float precision
+#define PI 3.14159265 // max 32-bit float precision
 #define HALF_PI (.5*PI)
 #define TAU (2*PI)
 
@@ -247,7 +255,7 @@ layout (location = 0) in vec3 vPosition;
     layout (location = 6) in int vWorldViewId;
     layout (location = 7) in ivec2 vSceneBase;
 
-    uniform isamplerBuffer textureFaces;
+    uniform highp isampler2D textureFaces;
 
     #if SHADOW_MODE == SHADOW_MODE_DETAILED
         out vec4 fUvw;
@@ -259,16 +267,17 @@ layout (location = 0) in vec3 vPosition;
     #endif
 
     void main() {
+  int tfW = textureSize(textureFaces, 0).x;
         int vertex = gl_VertexID % 3;
-        int alphaBiasHsl = texelFetch(textureFaces, vTextureFaceIdx)[vertex];
-        int materialData = texelFetch(textureFaces, vTextureFaceIdx + 1)[vertex];
-        int terrainData = texelFetch(textureFaces, vTextureFaceIdx + 2)[vertex];
+        int alphaBiasHsl = texelFetch(textureFaces, ivec2((vTextureFaceIdx)%tfW,(vTextureFaceIdx)/tfW), 0)[vertex];
+        int materialData = texelFetch(textureFaces, ivec2((vTextureFaceIdx + 1)%tfW,(vTextureFaceIdx + 1)/tfW), 0)[vertex];
+        int terrainData = texelFetch(textureFaces, ivec2((vTextureFaceIdx + 2)%tfW,(vTextureFaceIdx + 2)/tfW), 0)[vertex];
 
         int waterTypeIndex = terrainData >> 3 & 0xFF;
-        float opacity = 1 - (alphaBiasHsl >> 24 & 0xFF) / float(0xFF);
+        float opacity = 1.0 - float(alphaBiasHsl >> 24 & 0xFF) / float(0xFF);
 
-        float opacityThreshold = float(materialData >> MATERIAL_SHADOW_OPACITY_THRESHOLD_SHIFT & 0x3F) / 0x3F;
-        if (opacityThreshold == 0)
+        float opacityThreshold = float(materialData >> MATERIAL_SHADOW_OPACITY_THRESHOLD_SHIFT & 0x3F) / float(0x3F);
+        if (opacityThreshold == 0.0)
             opacityThreshold = SHADOW_DEFAULT_OPACITY_THRESHOLD;
 
         bool isTransparent = opacity <= opacityThreshold;
@@ -345,8 +354,8 @@ layout (location = 0) in vec3 vPosition;
         int waterTypeIndex = vTerrainData >> 3 & 0xFF;
         float opacity = 1 - (vAlphaBiasHsl >> 24 & 0xFF) / float(0xFF);
 
-        float opacityThreshold = float(vMaterialData >> MATERIAL_SHADOW_OPACITY_THRESHOLD_SHIFT & 0x3F) / 0x3F;
-        if (opacityThreshold == 0)
+        float opacityThreshold = float(vMaterialData >> MATERIAL_SHADOW_OPACITY_THRESHOLD_SHIFT & 0x3F) / float(0x3F);
+        if (opacityThreshold == 0.0)
             opacityThreshold = SHADOW_DEFAULT_OPACITY_THRESHOLD;
 
         bool isTransparent = opacity <= opacityThreshold;

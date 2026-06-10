@@ -1,3 +1,12 @@
+#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
+precision highp isampler2D;
+precision highp isampler2DArray;
+precision highp usampler2D;
+precision highp usampler2DArray;
 /*
  * Copyright (c) 2018, Adam <Adam@sigterm.info>
  * All rights reserved.
@@ -22,7 +31,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#version 330
 
 #define UI_SCALING_MODE 0
 

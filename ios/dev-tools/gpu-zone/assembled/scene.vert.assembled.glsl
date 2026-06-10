@@ -1,3 +1,12 @@
+#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
+precision highp isampler2D;
+precision highp isampler2DArray;
+precision highp usampler2D;
+precision highp usampler2DArray;
 /*
  * Copyright (c) 2018, Adam <Adam@sigterm.info>
  * Copyright (c) 2021, 117 <https://twitter.com/117scape>
@@ -23,14 +32,13 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#version 330
 
 // #pragma once: first include
 
 // #pragma once: first include
 
 #define EPS 1.0e-10
-#define PI 3.14159265f // max 32-bit float precision
+#define PI 3.14159265 // max 32-bit float precision
 #define HALF_PI (.5*PI)
 #define TAU (2*PI)
 
@@ -259,8 +267,8 @@ void computeUvs(const int materialData, const int worldViewIndex, const vec3 pos
         vec3 uvNormal = cross(v2, v3);
         vec3 perpv2 = cross(v2, uvNormal);
         vec3 perpv3 = cross(v3, uvNormal);
-        float du = 1.0f / dot(perpv3, v2);
-        float dv = 1.0f / dot(perpv2, v3);
+        float du = 1.0 / dot(perpv3, v2);
+        float dv = 1.0 / dot(perpv2, v3);
 
         for (int i = 0; i < 3; i++) {
             vec3 p = pos[i];
@@ -310,7 +318,7 @@ layout (location = 0) in vec3 vPosition;
     layout (location = 6) in int vWorldViewId;
     layout (location = 7) in ivec2 vSceneBase;
 
-    uniform isamplerBuffer textureFaces;
+    uniform highp isampler2D textureFaces;
 #else
     layout (location = 1) in vec3 vUv;
     layout (location = 2) in vec3 vNormal;
@@ -337,6 +345,7 @@ layout (location = 0) in vec3 vPosition;
     } OUT;
 
     void main() {
+  int tfW = textureSize(textureFaces, 0).x;
         int vertex = gl_VertexID % 3;
         bool isProvoking = vertex == 2;
         int materialData = 0;
@@ -344,9 +353,9 @@ layout (location = 0) in vec3 vPosition;
 
         if (isProvoking) {
             // Only the Provoking vertex needs to fetch the face data
-            fAlphaBiasHsl = texelFetch(textureFaces, vTextureFaceIdx).xyz;
-            fMaterialData = texelFetch(textureFaces, vTextureFaceIdx + 1).xyz;
-            fTerrainData = texelFetch(textureFaces, vTextureFaceIdx + 2).xyz;
+            fAlphaBiasHsl = texelFetch(textureFaces, ivec2((vTextureFaceIdx)%tfW,(vTextureFaceIdx)/tfW), 0).xyz;
+            fMaterialData = texelFetch(textureFaces, ivec2((vTextureFaceIdx + 1)%tfW,(vTextureFaceIdx + 1)/tfW), 0).xyz;
+            fTerrainData = texelFetch(textureFaces, ivec2((vTextureFaceIdx + 2)%tfW,(vTextureFaceIdx + 2)/tfW), 0).xyz;
             fWorldViewId = vWorldViewId;
             alphaBiasHsl = fAlphaBiasHsl[vertex];
             materialData = fMaterialData[vertex];
@@ -356,8 +365,8 @@ layout (location = 0) in vec3 vPosition;
             fMaterialData = ivec3(0);
             fTerrainData  = ivec3(0);
             fWorldViewId  = 0;
-            alphaBiasHsl = texelFetch(textureFaces, vTextureFaceIdx)[vertex];
-            materialData = texelFetch(textureFaces, vTextureFaceIdx + 1)[vertex];
+            alphaBiasHsl = texelFetch(textureFaces, ivec2((vTextureFaceIdx)%tfW,(vTextureFaceIdx)/tfW), 0)[vertex];
+            materialData = texelFetch(textureFaces, ivec2((vTextureFaceIdx + 1)%tfW,(vTextureFaceIdx + 1)/tfW), 0)[vertex];
         }
 
         vec3 sceneOffset = vec3(vSceneBase.x, 0, vSceneBase.y);
@@ -381,7 +390,7 @@ layout (location = 0) in vec3 vPosition;
 
         vec4 clipPosition = projectionMatrix * vec4(worldPosition, 1.0);
         int depthBias = (alphaBiasHsl >> 16) & 0xff;
-        if (projectionMatrix[2][3] != 0) // Disable depth bias for orthographic projection
+        if (projectionMatrix[2][3] != 0.0) // Disable depth bias for orthographic projection
             clipPosition.z += depthBias / 128.0;
 
         gl_Position = clipPosition;

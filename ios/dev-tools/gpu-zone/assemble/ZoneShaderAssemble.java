@@ -28,6 +28,10 @@ import java.util.regex.*;
 
 public class ZoneShaderAssemble {
 	static final Path SHADER_ROOT = Paths.get("..", "rlhd-src", "shaders", "hd").toAbsolutePath().normalize();
+	// Hand-maintained iOS ES-3.0 shader overrides, resolved BEFORE rlhd-src for `<...>` includes. Used only for
+	// pervasively cast-heavy files (e.g. utils/color_utils.glsl) where a verbatim-with-casts copy beats dozens of
+	// brittle downporter string rules (blueprint policy). Mirrors the rlhd-src/shaders/hd tree layout.
+	static final Path OVERRIDE_ROOT = Paths.get("..", "ios-overrides").toAbsolutePath().normalize();
 	static final Path OUT_DIR = Paths.get("..", "assembled").toAbsolutePath().normalize();
 
 	// GL shader-type constants (for the SHADER_TYPE define block, mirroring ShaderTemplate).
@@ -100,6 +104,68 @@ public class ZoneShaderAssemble {
 		// SHADER_TYPE block (mirrors ShaderTemplate.SHADER_TYPE_DEFINE); the per-target SHADER_TYPE value is set in run().
 	}
 
+	// --- GLSL 330 -> ES 3.00 downport (single source of truth; mirrors the rule set documented in
+	//     app/ZoneDownport.m). Applied at assemble time so the emitted shader IS the exact ES300 the device compiles
+	//     and glslangValidator can validate it offline. Keeps the int<->float (#13) cast map in one place. ---
+	static final String[][] CASTS = {
+		// scaling/bicubic.glsl — `t` is float, the bicubic-window bounds are int literals (Mitchell + Catmull fns).
+		{ "if (t < 1)", "if (t < 1.0)" },
+		{ "if (t < 2)", "if (t < 2.0)" },
+		// scaling/bicubic.glsl textureCubic — textureSize() returns ivec2.
+		{ "vec2 texSize = textureSize(sampler, 0);", "vec2 texSize = vec2(textureSize(sampler, 0));" },
+		// scaling/hybrid.glsl — sourceDimensions/targetDimensions are ivec2; `1 - texelUv` mixes int with a vec2.
+		{ "uv *= sourceDimensions;", "uv *= vec2(sourceDimensions);" },
+		{ "(1 - texelUv)", "(vec2(1.0) - texelUv)" },
+		// uniforms/world_views.glsl — orthographic-projection test, float matrix element vs int 0.
+		{ "projectionMatrix[2][3] != 0)", "projectionMatrix[2][3] != 0.0)" },
+		// utils/uvs.glsl — world-UV scale, int 128 vs float scale.
+		{ "-IN.position.xz / (128 * scale)", "-IN.position.xz / (128.0 * scale)" },
+		// shadow_vert.glsl — alpha from packed bytes: int `1`, and an int/float division (packed byte / float).
+		{ "float opacity = 1 - (alphaBiasHsl >> 24 & 0xFF) / float(0xFF)", "float opacity = 1.0 - float(alphaBiasHsl >> 24 & 0xFF) / float(0xFF)" },
+		// shadow_vert.glsl — opacity threshold from packed 6-bit field divided by int 0x3F.
+		{ "MATERIAL_SHADOW_OPACITY_THRESHOLD_SHIFT & 0x3F) / 0x3F;", "MATERIAL_SHADOW_OPACITY_THRESHOLD_SHIFT & 0x3F) / float(0x3F);" },
+		{ "if (opacityThreshold == 0)", "if (opacityThreshold == 0.0)" },
+		// shadow_frag.glsl — default opacity literal.
+		{ "float opacity = 1;", "float opacity = 1.0;" },
+		// utils/misc.glsl — animation-duration guard, float vs int 0.
+		{ "if (animationDuration == 0)", "if (animationDuration == 0.0)" },
+		// utils/misc.glsl — vanilla-shading lightness adjustment (applyVanillaLighting): float vs int throughout.
+		{ "if (vanillaLightDotNormals > 0)", "if (vanillaLightDotNormals > 0.0)" },
+		{ "float lighten = max(0, lightness - IGNORE_LOW_LIGHTNESS);", "float lighten = float(max(0, lightness - IGNORE_LOW_LIGHTNESS));" },
+		{ "int(127 - 72 * pow(saturation / 7., .05))", "int(127.0 - 72.0 * pow(float(saturation) / 7., .05))" },
+		{ "(lighten * LIGHTNESS_MULTIPLIER + BASE_LIGHTEN - lightness) * vanillaLightDotNormals", "(lighten * float(LIGHTNESS_MULTIPLIER) + float(BASE_LIGHTEN) - float(lightness)) * vanillaLightDotNormals" },
+		// utils/color_utils.glsl is pervasively cast-heavy → handled by ios-overrides/utils/color_utils.glsl (a
+		// hand-maintained ES3 copy), NOT rules here — so no color-temp / sRGB / HSL cast rules in this map.
+	};
+
+	String downport(String src, boolean fragment) {
+		String s = src;
+		// 1+2) #version + precision. ES/ANGLE require #version as the ABSOLUTE first bytes — only comments/whitespace
+		//      may precede it, and ANGLE/glslang reject even the license-comment block the RLHD shaders open with
+		//      (Apple's EAGL tolerates it, but that's a latent device/ANGLE bug — the base-gpu B1 downport hit this).
+		//      So STRIP every `#version ...` line wherever it sits and PREPEND `#version 300 es` + precision as the
+		//      very first bytes (the displaced license comment becomes a normal post-version comment, which is legal).
+		s = s.replaceAll("(?m)^\\s*#version\\s+\\d+(\\s+core)?\\s*$", "");
+		String prec = fragment
+			? "precision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp sampler2DArray;\nprecision highp isampler2D;\nprecision highp isampler2DArray;\nprecision highp usampler2D;\nprecision highp usampler2DArray;\nprecision highp sampler2DShadow;\n"
+			: "precision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp sampler2DArray;\nprecision highp isampler2D;\nprecision highp isampler2DArray;\nprecision highp usampler2D;\nprecision highp usampler2DArray;\n";
+		s = "#version 300 es\n" + prec + s;
+		// 3) drop noperspective.
+		s = s.replaceAll("\\bnoperspective\\s+", "");
+		// 4) strip float-literal f/F suffix (needs a decimal point; hex/ints untouched).
+		s = s.replaceAll("(\\d*\\.\\d+|\\d+\\.\\d*)[fF]", "$1");
+		// 5) textureFaces isamplerBuffer -> 2D isampler2D repack (gpu-tbo2d), only where declared.
+		if (s.contains("textureFaces")) {
+			s = s.replaceAll("uniform\\s+isamplerBuffer\\s+textureFaces\\s*;", "uniform highp isampler2D textureFaces;");
+			int m = s.indexOf("void main()");
+			if (m >= 0) { int br = s.indexOf('{', m); if (br >= 0) s = s.substring(0, br + 1) + "\n  int tfW = textureSize(textureFaces, 0).x;" + s.substring(br + 1); }
+			s = s.replaceAll("texelFetch\\(\\s*textureFaces\\s*,\\s*([^(),]+?)\\s*\\)", "texelFetch(textureFaces, ivec2(($1)%tfW,($1)/tfW), 0)");
+		}
+		// 6) explicit int<->float casts (#13) — targeted; cast-heavy files use ios-overrides instead.
+		for (String[] c : CASTS) s = s.replace(c[0], c[1]);
+		return s;
+	}
+
 	String shaderTypeBlock(int type) {
 		return "#define VERTEX_SHADER " + GL_VERTEX_SHADER + "\n"
 			+ "#define FRAGMENT_SHADER " + GL_FRAGMENT_SHADER + "\n"
@@ -130,9 +196,14 @@ public class ZoneShaderAssemble {
 					char end = (c == '<') ? '>' : '"';
 					int e = expr.indexOf(end, 1);
 					String inc = expr.substring(1, e);
-					// `<...>` resolves from the shader root; `"..."` relative to the current file's dir.
-					Path target = (c == '<') ? SHADER_ROOT.resolve(inc) : curDir.resolve(inc);
-					target = target.normalize();
+					// `<...>` resolves from ios-overrides first, then the shader root; `"..."` relative to the file's dir.
+					Path target;
+					if (c == '<') {
+						Path ov = OVERRIDE_ROOT.resolve(inc).normalize();
+						target = Files.exists(ov) ? ov : SHADER_ROOT.resolve(inc).normalize();
+					} else {
+						target = curDir.resolve(inc).normalize();
+					}
 					if (!Files.exists(target)) { missing.add("FILE " + inc + " (from " + fileStack.peek() + ")"); sb.append("// MISSING FILE: ").append(inc).append('\n'); continue; }
 					sb.append(loadFile(target)).append('\n');
 				} else {
@@ -170,7 +241,7 @@ public class ZoneShaderAssemble {
 			pragmaOnce.clear(); fileStack.clear();
 			missing.clear();
 			includeMap.put("SHADER_TYPE", shaderTypeBlock(vert ? GL_VERTEX_SHADER : GL_FRAGMENT_SHADER));
-			String assembled = loadFile(SHADER_ROOT.resolve(file));
+			String assembled = downport(loadFile(SHADER_ROOT.resolve(file)), !vert);
 			String stage = vert ? "vert" : "frag";
 			Path outPath = OUT_DIR.resolve(name + "." + stage + ".assembled.glsl");
 			Files.writeString(outPath, assembled);

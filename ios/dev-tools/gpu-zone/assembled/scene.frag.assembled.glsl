@@ -1,3 +1,13 @@
+#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
+precision highp isampler2D;
+precision highp isampler2DArray;
+precision highp usampler2D;
+precision highp usampler2DArray;
+precision highp sampler2DShadow;
 /*
  * Copyright (c) 2018, Adam <Adam@sigterm.info>
  * Copyright (c) 2021, 117 <https://twitter.com/117scape>
@@ -23,7 +33,6 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#version 330
 
 #define DISPLAY_BASE_COLOR 0
 #define DISPLAY_UV 0
@@ -37,7 +46,7 @@
 // #pragma once: first include
 
 #define EPS 1.0e-10
-#define PI 3.14159265f // max 32-bit float precision
+#define PI 3.14159265 // max 32-bit float precision
 #define HALF_PI (.5*PI)
 #define TAU (2*PI)
 
@@ -295,7 +304,7 @@ in FragmentData {
 out vec4 FragColor;
 
 vec2 worldUvs(float scale) {
-    return -IN.position.xz / (128 * scale);
+    return -IN.position.xz / (128.0 * scale);
 }
 
 // #pragma once: already included
@@ -338,6 +347,15 @@ vec2 worldUvs(float scale) {
  * to this software to the public domain worldwide. This software is distributed without any warranty.
  * You should have received a copy of the CC0 Public Domain Dedication along with this software.
  * If not, see <http://creativecommons.org/publicdomain/zero/1.0/>.
+ *
+ * ===========================================================================================================
+ * iOS ES-3.0 OVERRIDE (gpu-zone Z0). Verbatim copy of rs117/hd/utils/color_utils.glsl @ RLHD 7dded59 EXCEPT
+ * every int-literal-in-float-context and int->float assignment is made explicit (GLSL ES 3.00 does no implicit
+ * int<->float conversion, blueprint #13). This file is pervasively cast-heavy, so it gets a hand-maintained
+ * override (the assembler resolves ios-overrides/ before rlhd-src/) rather than dozens of brittle downporter
+ * string rules. RE-MERGE this against upstream when the pinned RLHD rev is bumped. Only numeric-literal types
+ * changed; logic is identical.
+ * ===========================================================================================================
  */
 // #pragma once: first include
 
@@ -346,11 +364,6 @@ vec2 worldUvs(float scale) {
 
 /**
  * Row-major transformation matrices for conversion between RGB and XYZ color spaces.
- *
- * Fairman, H. S., Brill, M. H., & Hemmendinger, H. (1997).
- * How the CIE 1931 color-matching functions were derived from Wright-Guild data.
- * Color Research & Application, 22(1), 11–23.
- * doi:10.1002/(sici)1520-6378(199702)22:1<11::aid-col4>3.0.co;2-7
  */
 const mat3 RGB_TO_XYZ_MATRIX = mat3(
     .49, .1769, .0,
@@ -363,48 +376,29 @@ const mat3 XYZ_TO_RGB_MATRIX = mat3(
     -.467937,  .0886025, 1.00911
 );
 
-/**
- * Transform from CIE 1931 XYZ color space to linear RGB.
- * @param XYZ coordinates
- * @return linear RGB coordinates
- */
 vec3 XYZtoRGB(vec3 XYZ) {
     return XYZ_TO_RGB_MATRIX * XYZ;
 }
 
-/**
- * Transform from linear RGB to CIE 1931 XYZ color space.
- * @param RGB linear RGB color coordinates
- * @return XYZ color coordinates
- */
 vec3 RGBtoXYZ(vec3 RGB) {
     return RGB_TO_XYZ_MATRIX * RGB;
 }
 
-/**
- * Approximate UV coordinates in the CIE 1960 UCS color space from a color temperature specified in degrees Kelvin.
- * @param kelvin temperature in degrees Kelvin. Valid from 1000 to 15000.
- * @see <a href="https://doi.org/10.1002/col.5080100109">
- *     Krystek, M. (1985). An algorithm to calculate correlated colour temperature.
- *     Color Research & Application, 10(1), 38–40. doi:10.1002/col.5080100109
- * </a>
- * @return UV coordinates in the UCS color space
- */
 vec3 colorTemperatureToLinearRgb(float kelvin) {
     // UV coordinates in CIE 1960 UCS color space
     vec2 uv = vec2(
         (0.860117757 + 1.54118254e-4 * kelvin + 1.28641212e-7 * kelvin * kelvin)
-            / (1 + 8.42420235e-4 * kelvin + 7.08145163e-7 * kelvin * kelvin),
+            / (1.0 + 8.42420235e-4 * kelvin + 7.08145163e-7 * kelvin * kelvin),
         (0.317398726 + 4.22806245e-5 * kelvin + 4.20481691e-8 * kelvin * kelvin)
-            / (1 - 2.89741816e-5 * kelvin + 1.61456053e-7 * kelvin * kelvin)
+            / (1.0 - 2.89741816e-5 * kelvin + 1.61456053e-7 * kelvin * kelvin)
     );
 
     // xy coordinates in CIES 1931 xyY space
-    vec2 xy = vec2(3 * uv.x, 2 * uv.y) / (2 * uv.x - 8 * uv.y + 4);
+    vec2 xy = vec2(3.0 * uv.x, 2.0 * uv.y) / (2.0 * uv.x - 8.0 * uv.y + 4.0);
 
     // CIE XYZ space
-    const float Y = 1;
-    vec3 XYZ = Y * vec3(xy.x / xy.y, 1, (1 - xy.x - xy.y) / xy.y);
+    const float Y = 1.0;
+    vec3 XYZ = Y * vec3(xy.x / xy.y, 1.0, (1.0 - xy.x - xy.y) / xy.y);
 
     vec3 linearRgb = XYZtoRGB(XYZ);
     float m = max(linearRgb.x, max(linearRgb.y, linearRgb.z));
@@ -412,10 +406,6 @@ vec3 colorTemperatureToLinearRgb(float kelvin) {
     return linearRgb;
 }
 
-// Conversion functions to and from sRGB and linear color space.
-// The implementation is based on the sRGB EOTF given in the Khronos Data Format Specification.
-// Source: https://web.archive.org/web/20220808015852/https://registry.khronos.org/DataFormat/specs/1.3/dataformat.1.3.pdf
-// Page number 130 (146 in the PDF)
 vec3 srgbToLinear(vec3 srgb) {
   return mix(
     srgb / 12.92,
@@ -426,7 +416,7 @@ vec3 srgbToLinear(vec3 srgb) {
 vec3 linearToSrgb(vec3 rgb) {
   return mix(
     rgb * 12.92,
-    1.055 * pow(rgb, vec3(1 / 2.4)) - 0.055,
+    1.055 * pow(rgb, vec3(1.0 / 2.4)) - 0.055,
     step(vec3(0.0031308), rgb));
 }
 
@@ -440,7 +430,7 @@ float srgbToLinear(float srgb) {
 float linearToSrgb(float rgb) {
   return mix(
     rgb * 12.92,
-    1.055 * pow(rgb, 1 / 2.4) - 0.055,
+    1.055 * pow(rgb, 1.0 / 2.4) - 0.055,
     step(0.0031308, rgb));
 }
 
@@ -450,43 +440,43 @@ vec3 srgbToHsl(vec3 srgb) {
     float X_min = min(min(srgb.r, srgb.g), srgb.b);
     float C = V - X_min;
 
-    float H = 0;
-    if (C > 0) {
+    float H = 0.0;
+    if (C > 0.0) {
         if (V == srgb.r) {
-            H = mod((srgb.g - srgb.b) / C, 6);
+            H = mod((srgb.g - srgb.b) / C, 6.0);
         } else if (V == srgb.g) {
-            H = (srgb.b - srgb.r) / C + 2;
+            H = (srgb.b - srgb.r) / C + 2.0;
         } else {
-            H = (srgb.r - srgb.g) / C + 4;
+            H = (srgb.r - srgb.g) / C + 4.0;
         }
     }
 
-    float L = (V + X_min) / 2;
-    float divisor = 1 - abs(2 * L - 1);
-    float S_L = abs(divisor) < EPS ? 0 : C / divisor;
-    return vec3(H / 6, S_L, L);
+    float L = (V + X_min) / 2.0;
+    float divisor = 1.0 - abs(2.0 * L - 1.0);
+    float S_L = abs(divisor) < EPS ? 0.0 : C / divisor;
+    return vec3(H / 6.0, S_L, L);
 }
 
 vec3 hslToSrgb(vec3 hsl) {
-    float C = (1 - abs(2 * hsl[2] - 1)) * hsl[1];
-    float H_prime = fract(hsl[0]) * 6;
-    float m = hsl[2] - C / 2;
+    float C = (1.0 - abs(2.0 * hsl[2] - 1.0)) * hsl[1];
+    float H_prime = fract(hsl[0]) * 6.0;
+    float m = hsl[2] - C / 2.0;
 
-    float r = clamp(abs(H_prime - 3) - 1, 0, 1);
-    float g = clamp(2 - abs(H_prime - 2), 0, 1);
-    float b = clamp(2 - abs(H_prime - 4), 0, 1);
+    float r = clamp(abs(H_prime - 3.0) - 1.0, 0.0, 1.0);
+    float g = clamp(2.0 - abs(H_prime - 2.0), 0.0, 1.0);
+    float b = clamp(2.0 - abs(H_prime - 4.0), 0.0, 1.0);
     return vec3(r, g, b) * C + m;
 }
 
 vec3 hslToHsv(vec3 hsl) {
-    float v = hsl[2] + hsl[1] * min(hsl[2], 1 - hsl[2]);
-    return vec3(hsl[0], abs(v) < EPS ? 0 : 2 * (1 - hsl[2] / v), v);
+    float v = hsl[2] + hsl[1] * min(hsl[2], 1.0 - hsl[2]);
+    return vec3(hsl[0], abs(v) < EPS ? 0.0 : 2.0 * (1.0 - hsl[2] / v), v);
 }
 
 vec3 hsvToHsl(vec3 hsv) {
-    float l = hsv[2] * (1 - hsv[1] / 2);
-    float divisor = min(l, 1 - l);
-    return vec3(hsv[0], abs(divisor) < EPS ? 0 : (hsv[2] - l) / divisor, l);
+    float l = hsv[2] * (1.0 - hsv[1] / 2.0);
+    float divisor = min(l, 1.0 - l);
+    return vec3(hsv[0], abs(divisor) < EPS ? 0.0 : (hsv[2] - l) / divisor, l);
 }
 
 vec3 srgbToHsv(vec3 rgb) {
@@ -508,9 +498,9 @@ int packRawHsl(ivec3 hsl) {
 // Pack HSL int Jagex format
 int packHsl(vec3 hsl) {
     ivec3 rawHsl = ivec3(
-        round((hsl[0] - .0078125f) * 64),
-        round((hsl[1] - .0625f) * 8),
-        round(hsl[2] * 128)
+        round((hsl[0] - .0078125) * 64.0),
+        round((hsl[1] - .0625) * 8.0),
+        round(hsl[2] * 128.0)
     );
     return packRawHsl(rawHsl);
 }
@@ -518,18 +508,18 @@ int packHsl(vec3 hsl) {
 // Unpack HSL from Jagex format
 vec3 unpackRawHsl(int hsl) {
     // 6-bit hue | 3-bit saturation | 7-bit lightness
-    float H = hsl >> 10 & 63;
-    float S = hsl >> 7 & 7;
-    float L = hsl & 127;
+    float H = float(hsl >> 10 & 63);
+    float S = float(hsl >> 7 & 7);
+    float L = float(hsl & 127);
     return vec3(H, S, L);
 }
 
 // Unpack HSL from Jagex format
 vec3 convertHsl(vec3 HSL) {
     // 6-bit hue | 3-bit saturation | 7-bit lightness
-    float H = HSL[0] / 64.f + .0078125f;
-    float S = HSL[1] / 8.f + .0625f;
-    float L = HSL[2] / 128.f;
+    float H = HSL[0] / 64. + .0078125;
+    float S = HSL[1] / 8. + .0625;
+    float L = HSL[2] / 128.;
     return vec3(H, S, L);
 }
 
@@ -550,7 +540,7 @@ float translateRange(float rangeStart, float rangeEnd, float value) {
 // returns a value between 0-1 representing a frame of animation
 // based on the length of the animation
 float animationFrame(float animationDuration) {
-    if (animationDuration == 0)
+    if (animationDuration == 0.0)
         return 0.0;
     return mod(elapsedTime, animationDuration) / animationDuration;
 }
@@ -582,23 +572,23 @@ void undoVanillaShading(inout int hsl, vec3 unrotatedNormal) {
     const int IGNORE_LOW_LIGHTNESS = 3;
     // multiplier applied to vertex' lightness value.
     // results in greater lightening of lighter colors
-    const float LIGHTNESS_MULTIPLIER = 3.f;
+    const float LIGHTNESS_MULTIPLIER = 3.;
     // the minimum amount by which each color will be lightened
     const int BASE_LIGHTEN = 10;
 
     int saturation = hsl >> 7 & 0x7;
     int lightness = hsl & 0x7F;
     float vanillaLightDotNormals = dot(LIGHT_DIR_MODEL, unrotatedNormal);
-    if (vanillaLightDotNormals > 0) {
+    if (vanillaLightDotNormals > 0.0) {
         vanillaLightDotNormals /= length(unrotatedNormal);
-        float lighten = max(0, lightness - IGNORE_LOW_LIGHTNESS);
-        lightness += int((lighten * LIGHTNESS_MULTIPLIER + BASE_LIGHTEN - lightness) * vanillaLightDotNormals);
+        float lighten = float(max(0, lightness - IGNORE_LOW_LIGHTNESS));
+        lightness += int((lighten * float(LIGHTNESS_MULTIPLIER) + float(BASE_LIGHTEN) - float(lightness)) * vanillaLightDotNormals);
     }
     int maxLightness;
     #if LEGACY_GREY_COLORS
         maxLightness = 55;
     #else
-        maxLightness = int(127 - 72 * pow(saturation / 7., .05));
+        maxLightness = int(127.0 - 72.0 * pow(float(saturation) / 7., .05));
     #endif
     lightness = min(lightness, maxLightness);
     hsl &= ~0x7F;
@@ -854,6 +844,15 @@ vec3 sampleCaustics(const vec2 flow1, const vec2 flow2) {
  * to this software to the public domain worldwide. This software is distributed without any warranty.
  * You should have received a copy of the CC0 Public Domain Dedication along with this software.
  * If not, see <http://creativecommons.org/publicdomain/zero/1.0/>.
+ *
+ * ===========================================================================================================
+ * iOS ES-3.0 OVERRIDE (gpu-zone Z0). Verbatim copy of rs117/hd/utils/color_utils.glsl @ RLHD 7dded59 EXCEPT
+ * every int-literal-in-float-context and int->float assignment is made explicit (GLSL ES 3.00 does no implicit
+ * int<->float conversion, blueprint #13). This file is pervasively cast-heavy, so it gets a hand-maintained
+ * override (the assembler resolves ios-overrides/ before rlhd-src/) rather than dozens of brittle downporter
+ * string rules. RE-MERGE this against upstream when the pinned RLHD rev is bumped. Only numeric-literal types
+ * changed; logic is identical.
+ * ===========================================================================================================
  */
 // #pragma once: already included
 
@@ -1125,9 +1124,9 @@ void sampleDisplacementMap(
 
 
 #if SHADOW_RESOLUTION == 0
-    #define MIN_SHADOW_BIAS -0.00125f
+    #define MIN_SHADOW_BIAS -0.00125
 #elif SHADOW_RESOLUTION == 1
-    #define MIN_SHADOW_BIAS -0.0007f
+    #define MIN_SHADOW_BIAS -0.0007
 #elif SHADOW_RESOLUTION == 2
     #define MIN_SHADOW_BIAS -0.00035
 #elif SHADOW_RESOLUTION == 3
@@ -1151,15 +1150,15 @@ float fetchShadowTexel(ivec2 pixelCoord, float fragDepth, vec3 fragPos, int i) {
         int alphaDepth = int(texelFetch(shadowMap, pixelCoord, 0).r * SHADOW_COMBINED_MAX);
         float depth = float(alphaDepth & SHADOW_DEPTH_MAX) / SHADOW_DEPTH_MAX;
         float alpha = 1 - float(alphaDepth >> SHADOW_DEPTH_BITS) / SHADOW_ALPHA_MAX;
-        return depth < fragDepth ? alpha : 0.f;
+        return depth < fragDepth ? alpha : 0.;
     #else
-        return texelFetch(shadowMap, pixelCoord, 0).r < fragDepth ? 1.f : 0.f;
+        return texelFetch(shadowMap, pixelCoord, 0).r < fragDepth ? 1. : 0.;
     #endif
 }
 
 float sampleShadowMap(vec3 fragPos, vec2 distortion, float lightDotNormals) {
     if (lightStrength <= 0)
-        return 0.f;
+        return 0.;
 
     vec4 shadowPos = lightProjectionMatrix * vec4(fragPos, 1);
     shadowPos.xyz /= shadowPos.w;
@@ -1174,7 +1173,7 @@ float sampleShadowMap(vec3 fragPos, vec2 distortion, float lightDotNormals) {
         float fadeOut = smoothstep(.75, 1., dot(shadowPos.xy, shadowPos.xy));
     #endif
     if (fadeOut >= 1)
-        return 0.f;
+        return 0.;
 
     // NDC to texture space
     ivec2 shadowRes = textureSize(shadowMap, 0);
@@ -1541,8 +1540,8 @@ vec4 sampleWater(int waterTypeIndex, vec3 viewDir) {
     vec3 baseColor = waterType.surfaceColor * compositeLight;
     baseColor = mix(baseColor, surfaceColor, waterType.fresnelAmount);
     if (waterType.fresnelAmount == 0.85)
-        baseColor *= .75f; // Sailing hack
-    float shoreLineMask = 1 - dot(IN.texBlend, (fAlphaBiasHsl & 127) / 127.f);
+        baseColor *= .75; // Sailing hack
+    float shoreLineMask = 1 - dot(IN.texBlend, (fAlphaBiasHsl & 127) / 127.);
     float maxFoamAmount = 0.8;
     float foamAmount = min(shoreLineMask, maxFoamAmount);
     float foamDistance = 0.7;
@@ -1708,7 +1707,7 @@ float fogFactorLinear(const float dist, const float start, const float end) {
 
 float calculateFogAmount(vec3 position) {
     if (fogDepth == 0)
-        return 0.f;
+        return 0.;
 
     float drawDistance2 = drawDistance * TILE_SIZE;
 
@@ -1786,7 +1785,7 @@ float calculateFogAmount(vec3 position) {
 
 #if WIREFRAME
 float wireframeMask() {
-    const float wireframeWidth = 0.8f;
+    const float wireframeWidth = 0.8;
     vec3 d = smoothstep(vec3(0.0), fwidth(IN.texBlend) * wireframeWidth, IN.texBlend);
     return min(min(d.x, d.y), d.z);
 }
@@ -1822,7 +1821,7 @@ void main() {
     int colorMap3 = material3.colorMap;
 
     // only use one flowMap map
-    int flowMap = material1.flowMap;
+    int flowMap = material1.lowMap;
 
     bool isUnderwater = waterDepth != 0;
     bool isWater = waterTypeIndex > 0 && !isUnderwater;
@@ -1856,8 +1855,8 @@ void main() {
         uv3 = (uv3 - .5) * material3.textureScale.xy + .5;
 
         // get flowMap map
-        vec2 flowMapUv = uv1 - animationFrame(material1.flowMapDuration);
-        float flowMapStrength = material1.flowMapStrength;
+        vec2 flowMapUv = uv1 - animationFrame(material1.lowMapDuration);
+        float flowMapStrength = material1.lowMapStrength;
         if (isUnderwater)
         {
             // Distort underwater textures

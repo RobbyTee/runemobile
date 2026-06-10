@@ -6,7 +6,6 @@
  * the conditions of the BSD 2-clause license are met.
  */
 #import "ZoneProbe.h"
-#import "ZoneDownport.h"
 #import <OpenGLES/EAGL.h>
 #import <OpenGLES/ES3/gl.h>
 #import <OpenGLES/ES3/glext.h>
@@ -30,8 +29,9 @@ static GLenum stageForName(NSString *name)
 
 static BOOL compileOne(NSString *name, NSString *src, GLenum stage, void (^log)(NSString *))
 {
-	BOOL fragment = (stage == GL_FRAGMENT_SHADER);
-	NSString *down = [ZoneDownport downport:src fragment:fragment];
+	// The bundled assembled shaders are already ES 3.00 (downported at assemble time by ZoneShaderAssemble — the
+	// single source of truth for the GLSL 330->ES300 rules). Compile as-is; no runtime downport here.
+	NSString *down = src;
 
 	GLuint sh = glCreateShader(stage);
 	const char *c = [down UTF8String];
