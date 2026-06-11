@@ -62,7 +62,7 @@ private class PanelSnap(val w: Int, val h: Int, val seq: Int, val px: IntArray?)
  */
 @Composable
 fun PanelList(onOpen: (Int, String) -> Unit, onOpenQuest: () -> Unit, onOpenWorld: () -> Unit, onOpenXp: () -> Unit,
-              onOpenLoot: () -> Unit, onOpenGe: () -> Unit, onBack: () -> Unit) {
+              onOpenLoot: () -> Unit, onOpenGe: () -> Unit, onOpenOverlay: () -> Unit, onBack: () -> Unit) {
     var panels by remember { mutableStateOf<List<PanelEntry>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var questAvail by remember { mutableStateOf(false) }
@@ -70,18 +70,19 @@ fun PanelList(onOpen: (Int, String) -> Unit, onOpenQuest: () -> Unit, onOpenWorl
     var xpAvail by remember { mutableStateOf(false) }
     var lootAvail by remember { mutableStateOf(false) }
     var geAvail by remember { mutableStateOf(false) }
+    var overlayAvail by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         val json = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.listPanels() }.get() }
         panels = parsePanels(json)
         val avail = withContext(Dispatchers.IO) {
             JvmLauncher.onBridge {
                 booleanArrayOf(JvmLauncher.questAvailable(), JvmLauncher.worldAvailable(), JvmLauncher.xpAvailable(),
-                    JvmLauncher.lootAvailable(), JvmLauncher.geAvailable())
+                    JvmLauncher.lootAvailable(), JvmLauncher.geAvailable(), JvmLauncher.overlayAvailable())
             }.get()
         }
-        questAvail = avail[0]; worldAvail = avail[1]; xpAvail = avail[2]; lootAvail = avail[3]; geAvail = avail[4]
+        questAvail = avail[0]; worldAvail = avail[1]; xpAvail = avail[2]; lootAvail = avail[3]; geAvail = avail[4]; overlayAvail = avail[5]
         loading = false
-        Log.i("MainActivity", "ANDROID_A5_PANELLIST count=${panels.size} quest=$questAvail world=$worldAvail xp=$xpAvail loot=$lootAvail ge=$geAvail")
+        Log.i("MainActivity", "ANDROID_A5_PANELLIST count=${panels.size} quest=$questAvail world=$worldAvail xp=$xpAvail loot=$lootAvail ge=$geAvail overlay=$overlayAvail")
     }
     Surface(color = Color(0xF2121212), modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(12.dp)) {
@@ -92,13 +93,14 @@ fun PanelList(onOpen: (Int, String) -> Unit, onOpenQuest: () -> Unit, onOpenWorl
             if (loading) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             } else {
-                if (questAvail || worldAvail || xpAvail || lootAvail || geAvail) {
+                if (questAvail || worldAvail || xpAvail || lootAvail || geAvail || overlayAvail) {
                     Text("Native screens", color = Color(0xFF80CBC4), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                     if (xpAvail) NativeRow("XP Tracker", onOpenXp)
                     if (lootAvail) NativeRow("Loot Tracker", onOpenLoot)
                     if (geAvail) NativeRow("Grand Exchange", onOpenGe)
                     if (worldAvail) NativeRow("World Switcher", onOpenWorld)
                     if (questAvail) NativeRow("Quest Helper", onOpenQuest)
+                    if (overlayAvail) NativeRow("Overlay Layout", onOpenOverlay)
                     HorizontalDivider(color = Color(0x33FFFFFF), modifier = Modifier.padding(vertical = 4.dp))
                 }
                 LazyColumn(Modifier.fillMaxSize()) {

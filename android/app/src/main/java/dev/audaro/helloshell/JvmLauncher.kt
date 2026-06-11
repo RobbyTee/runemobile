@@ -182,6 +182,14 @@ object JvmLauncher {
     external fun nativeGeSetUiOpen(open: Boolean)
     external fun nativeGeJson(): String
 
+    // Finding 15 — overlay edit (OverlayBridge): list movable overlays, snap one to a corner, reset to default.
+    // snap/reset return the bridge JSON ack; positionName is an OverlayPosition (TOP_LEFT/.../BOTTOM_RIGHT).
+    external fun nativeOverlayAvailable(): Boolean
+    external fun nativeOverlaySetUiOpen(open: Boolean)
+    external fun nativeOverlaysJson(): String
+    external fun nativeOverlaySnap(name: String, positionName: String): String
+    external fun nativeOverlayReset(name: String): String
+
     // A6 chrome: the per-frame MobileChromeBridge read-only snapshot (escaped JSON: tab/panel/minimap/orb/chat/
     // viewport canvas bounds the native edge-rails read). Gated by -Drunelite.mobilechrome. Off the UI thread.
     external fun nativeChromeSnapshot(): String
@@ -300,6 +308,11 @@ object JvmLauncher {
     fun geAvailable() = nativeGeAvailable()
     fun geSetUiOpen(open: Boolean) = nativeGeSetUiOpen(open)
     fun geJson() = nativeGeJson()
+    fun overlayAvailable() = nativeOverlayAvailable()
+    fun overlaySetUiOpen(open: Boolean) = nativeOverlaySetUiOpen(open)
+    fun overlaysJson() = nativeOverlaysJson()
+    fun overlaySnap(name: String, positionName: String) = nativeOverlaySnap(name, positionName)
+    fun overlayReset(name: String) = nativeOverlayReset(name)
     fun chromeSnapshot() = nativeChromeSnapshot()
     fun chromeSnapshotPub() = nativeChromeSnapshotPub()
     fun setStonesHidden(hidden: Boolean) = nativeSetStonesHidden(hidden)

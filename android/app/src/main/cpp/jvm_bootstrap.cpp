@@ -104,8 +104,13 @@ static jmethodID g_midQuestAvail = nullptr, g_midQuestSetUiOpen = nullptr, g_mid
                  g_midQuestActive = nullptr, g_midQuestStart = nullptr, g_midQuestStop = nullptr;
 static jclass    g_worldCls = nullptr;
 static jmethodID g_midWorldAvail = nullptr, g_midWorldSetUiOpen = nullptr, g_midWorldList = nullptr, g_midWorldHop = nullptr;
+// Finding 15 — overlay edit (OverlayBridge): list movable overlays, snap one to a corner, reset to default.
+static jclass    g_overlayCls = nullptr;
+static jmethodID g_midOverlayAvail = nullptr, g_midOverlaySetUiOpen = nullptr, g_midOverlaysJson = nullptr,
+                 g_midOverlaySnap = nullptr, g_midOverlayReset = nullptr;
 static std::atomic<bool> g_questReady{false};
 static std::atomic<bool> g_worldReady{false};
+static std::atomic<bool> g_overlayReady{false};
 
 // Finding 14 — read-only data-panel facades (XP Tracker, Loot Tracker, GE, Time Tracking). All share the same
 // shape: isAvailable()Z / setUiOpen(Z)V / <jsonGetter>()String. One struct + one generic registrar covers them.
@@ -361,6 +366,7 @@ static inline bool mobileUiReady() { return g_mobileUiReady.load(std::memory_ord
 static inline bool panelReady()    { return g_panelReady.load(std::memory_order_acquire); }
 static inline bool questReady()    { return g_questReady.load(std::memory_order_acquire); }
 static inline bool worldReady()    { return g_worldReady.load(std::memory_order_acquire); }
+static inline bool overlayReady()  { return g_overlayReady.load(std::memory_order_acquire); }
 static inline bool chromeReady()    { return g_chromeReady.load(std::memory_order_acquire); }
 static inline bool hudReady()       { return g_hudReady.load(std::memory_order_acquire); }
 
@@ -579,6 +585,36 @@ static bool publishBridge(JNIEnv *env) {
     registerDataPanel(env, "net/runelite/client/headless/XpTrackerBridge", "getXpJson", g_xpPanel);
     registerDataPanel(env, "net/runelite/client/headless/LootTrackerBridge", "getLootJson", g_lootPanel);
     registerDataPanel(env, "net/runelite/client/headless/GrandExchangeBridge", "getGeJson", g_gePanel);
+
+    // Finding 15 — OverlayBridge: overlay edit (list + snap-to-corner + reset). Dedicated facade (action methods
+    // take args), all-or-nothing, release-latched like Quest/World.
+    jclass ob = env->FindClass("net/runelite/client/headless/OverlayBridge");
+    if (ob && !env->ExceptionCheck()) {
+        jclass obg = (jclass) env->NewGlobalRef(ob);
+        env->DeleteLocalRef(ob);
+        if (!obg) {
+            LOGE("bridge: OverlayBridge NewGlobalRef failed (overlay edit disabled)");
+        } else {
+            g_midOverlayAvail     = midOpt(env, obg, "isAvailable", "()Z");
+            g_midOverlaySetUiOpen = midOpt(env, obg, "setUiOpen", "(Z)V");
+            g_midOverlaysJson     = midOpt(env, obg, "getOverlaysJson", "()Ljava/lang/String;");
+            g_midOverlaySnap      = midOpt(env, obg, "setOverlayPreferredPosition", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+            g_midOverlayReset     = midOpt(env, obg, "resetOverlay", "(Ljava/lang/String;)Ljava/lang/String;");
+            bool overlayOk = g_midOverlayAvail && g_midOverlaySetUiOpen && g_midOverlaysJson
+                          && g_midOverlaySnap && g_midOverlayReset;
+            if (overlayOk) {
+                g_overlayCls = obg;
+                g_overlayReady.store(true, std::memory_order_release);
+                LOGI("bridge: OverlayBridge facade published");
+            } else {
+                env->DeleteGlobalRef(obg);
+                LOGE("bridge: OverlayBridge method id failed (overlay edit disabled)");
+            }
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass OverlayBridge failed (overlay edit disabled)");
+    }
 
     // A6 chrome: MobileChromeBridge — read-only snapshot facade, single method, rl-bridge-thread read.
     jclass mc = env->FindClass("net/runelite/client/headless/MobileChromeBridge");
@@ -1531,6 +1567,22 @@ static jstring facadeStr(JNIEnv *artEnv, jclass cls, jmethodID m) {
     if (r) hs->DeleteLocalRef(r);
     return artEnv->NewStringUTF(out.c_str());
 }
+// (String[,String])->String facade call (marshal 1 or 2 ART args ART->HotSpot). j2==nullptr → single-arg call.
+static jstring facadeStrArgs(JNIEnv *artEnv, jclass cls, jmethodID m, jstring j1, jstring j2, bool two) {
+    if (!cls || !m) return artEnv->NewStringUTF("");
+    std::string a1 = jstr(artEnv, j1), a2 = two ? jstr(artEnv, j2) : std::string();
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs) return artEnv->NewStringUTF("");
+    jstring h1 = hs->NewStringUTF(a1.c_str());
+    jstring h2 = two ? hs->NewStringUTF(a2.c_str()) : nullptr;
+    jstring r = (jstring) (two ? hs->CallStaticObjectMethod(cls, m, h1, h2)
+                               : hs->CallStaticObjectMethod(cls, m, h1));
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (h1) hs->DeleteLocalRef(h1);
+    if (h2) hs->DeleteLocalRef(h2);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
 static jboolean facadeBool(jclass cls, jmethodID m) {
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !cls || !m) return JNI_FALSE;
@@ -1678,6 +1730,33 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeGeJson(JNIEnv *artEnv, jobject) {
     if (!g_gePanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_gePanel.cls, g_gePanel.json);
+}
+
+// Finding 15 — overlay edit. avail/setUiOpen/list like the data panels; snap(name,position) + reset(name) act.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOverlayAvailable(JNIEnv *, jobject) {
+    if (!overlayReady()) return JNI_FALSE;
+    return facadeBool(g_overlayCls, g_midOverlayAvail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOverlaySetUiOpen(JNIEnv *, jobject, jboolean open) {
+    if (!overlayReady()) return;
+    facadeVoidBool(g_overlayCls, g_midOverlaySetUiOpen, open);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOverlaysJson(JNIEnv *artEnv, jobject) {
+    if (!overlayReady()) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_overlayCls, g_midOverlaysJson);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOverlaySnap(JNIEnv *artEnv, jobject, jstring jName, jstring jPos) {
+    if (!overlayReady()) return artEnv->NewStringUTF("");
+    return facadeStrArgs(artEnv, g_overlayCls, g_midOverlaySnap, jName, jPos, true);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOverlayReset(JNIEnv *artEnv, jobject, jstring jName) {
+    if (!overlayReady()) return artEnv->NewStringUTF("");
+    return facadeStrArgs(artEnv, g_overlayCls, g_midOverlayReset, jName, nullptr, false);
 }
 
 // A6 chrome read surface: MobileChromeBridge.getSnapshot — the per-frame tab/panel/minimap/orb/chat/viewport
