@@ -260,10 +260,9 @@ static NSString * const kChatTabNames[7] = { @"All", @"Game", @"Public", @"Priva
 static const BOOL kChatTabFilterable[7] = { NO, NO, YES, YES, YES, YES, YES };
 
 // Channel-pill redesign tunables (all one-liners to dial in on device).
-static const CGFloat kChatPillCanvasW   = 150.0;  // collapsed pill width in engine-canvas px (the active channel)
 static const CGFloat kChatHoldDelay     = 0.15;   // press time before the chips fan out (s)
 static const CGFloat kChatFanAnim       = 0.18;   // fan out/in spring duration (s)
-static const CGFloat kChatFanPopPt      = 16.0;   // how much taller (screen pt) a fanned chip pops vs the row
+static const CGFloat kChatFanPopPt      = 0.0;    // extra height (screen pt) a fanned chip gets vs the row (0 = match the original tab size)
 static const CGFloat kChatPullDownPt    = 26.0;   // finger travel below a chip's bottom edge that opens its filter
 static const CGFloat kChatFilterHintPt  = 10.0;   // finger distance below mid-chip that starts revealing the ▾ hint
 
@@ -1585,12 +1584,13 @@ static int chatRowCanvasH(void) {
     [JVMLauncher setEngineChatTabRowHeight:kChatTabRowCanvasH];   // push messages below the (constant) tab row
     [JVMLauncher setEngineChatAreaWidth:0];                        // chat keeps its natural 519 width
 
-    // Stash the fan geometry (chips pop DOWN by kChatFanPopPt for fat-finger targets) + the collapsed pill frame.
+    // Stash the fan geometry (chips are the original tab size + kChatFanPopPt) + the collapsed pill frame. The
+    // pill is ONE tab wide so it matches a single original tab (the active channel) instead of an oversized bar.
     self.chatFanRowX = rowX;
     self.chatFanRowY = rowY;
     self.chatFanTabW = tabW;
     self.chatFanChipH = rowH + kChatFanPopPt;
-    self.chatPillFrame = CGRectMake(floor(rowX), floor(rowY), floor(kChatPillCanvasW * s), ceil(rowH));
+    self.chatPillFrame = CGRectMake(floor(rowX), floor(rowY), ceil(tabW), ceil(rowH));
 
     CGFloat nameSize = floor(rowH * 0.40);
     CGFloat stateSize = floor(rowH * 0.34);
@@ -1737,7 +1737,7 @@ static int chatRowCanvasH(void) {
     for (int i = 0; i < kChatTabCount; i++) {
         UIButton *c = self.chatTabButtons[i];
         BOOL on = (i == k);
-        c.transform = on ? CGAffineTransformMakeScale(1.10, 1.10) : CGAffineTransformIdentity;
+        c.transform = on ? CGAffineTransformMakeScale(1.06, 1.06) : CGAffineTransformIdentity;
         c.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.9].CGColor;
         c.layer.borderWidth = on ? 2.0 : 0.0;
         c.layer.cornerRadius = on ? 6.0 : 0.0;
