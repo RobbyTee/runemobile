@@ -64,12 +64,14 @@ fun PluginPanel(onClose: () -> Unit) {
     var panelOpen by remember { mutableStateOf<Pair<Int, String>?>(null) }       // (panelIndex, tooltip)
     var questOpen by remember { mutableStateOf(false) }                          // A5 Tier-2 native screens
     var worldOpen by remember { mutableStateOf(false) }
+    var xpOpen by remember { mutableStateOf(false) }                             // Finding 14 XP Tracker reflow
     var hubOpen by remember { mutableStateOf(false) }                            // Finding 17 hub browse/install
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
     if (questOpen) { QuestHelperScreen(onBack = { questOpen = false }); return }
     if (worldOpen) { WorldSwitcherScreen(onBack = { worldOpen = false }); return }
+    if (xpOpen) { XpTrackerScreen(onBack = { xpOpen = false }); return }
     val po = panelOpen
     if (po != null) {
         PanelView(po.first, po.second, onBack = { panelOpen = null })
@@ -80,6 +82,7 @@ fun PluginPanel(onClose: () -> Unit) {
             onOpen = { i, t -> panelOpen = i to t },
             onOpenQuest = { questOpen = true },
             onOpenWorld = { worldOpen = true },
+            onOpenXp = { xpOpen = true },
             onBack = { panelListOpen = false },
         )
         return

@@ -170,6 +170,12 @@ object JvmLauncher {
     external fun nativeWorldListJson(): String
     external fun nativeWorldHop(worldId: Int)
 
+    // Finding 14 — XP Tracker native reflow (read-only data panel; same facade shape as Quest/World).
+    // setUiOpen brackets the screen so the bridge only rebuilds the snapshot while it's shown. Off the UI thread.
+    external fun nativeXpAvailable(): Boolean
+    external fun nativeXpSetUiOpen(open: Boolean)
+    external fun nativeXpJson(): String
+
     // A6 chrome: the per-frame MobileChromeBridge read-only snapshot (escaped JSON: tab/panel/minimap/orb/chat/
     // viewport canvas bounds the native edge-rails read). Gated by -Drunelite.mobilechrome. Off the UI thread.
     external fun nativeChromeSnapshot(): String
@@ -279,6 +285,9 @@ object JvmLauncher {
     fun worldSetUiOpen(open: Boolean) = nativeWorldSetUiOpen(open)
     fun worldListJson() = nativeWorldListJson()
     fun worldHop(worldId: Int) = nativeWorldHop(worldId)
+    fun xpAvailable() = nativeXpAvailable()
+    fun xpSetUiOpen(open: Boolean) = nativeXpSetUiOpen(open)
+    fun xpJson() = nativeXpJson()
     fun chromeSnapshot() = nativeChromeSnapshot()
     fun chromeSnapshotPub() = nativeChromeSnapshotPub()
     fun setStonesHidden(hidden: Boolean) = nativeSetStonesHidden(hidden)

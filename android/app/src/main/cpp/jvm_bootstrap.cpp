@@ -106,6 +106,12 @@ static jclass    g_worldCls = nullptr;
 static jmethodID g_midWorldAvail = nullptr, g_midWorldSetUiOpen = nullptr, g_midWorldList = nullptr, g_midWorldHop = nullptr;
 static std::atomic<bool> g_questReady{false};
 static std::atomic<bool> g_worldReady{false};
+
+// Finding 14 — read-only data-panel facades (XP Tracker, Loot Tracker, GE, Time Tracking). All share the same
+// shape: isAvailable()Z / setUiOpen(Z)V / <jsonGetter>()String. One struct + one generic registrar covers them.
+struct DataPanel { jclass cls = nullptr; jmethodID avail = nullptr, setUiOpen = nullptr, json = nullptr;
+                   std::atomic<bool> ready{false}; };
+static DataPanel g_xpPanel;
 // A6 chrome: MobileChromeBridge read-only snapshot facade (tab/panel/minimap/orb/chat/viewport canvas bounds
 // the native edge-rails cover-and-proxy reads each display tick). Separate facade; rl-bridge-thread read
 // behind a release/acquire latch. Single method (getSnapshot) — populated only under -Drunelite.mobilechrome.
@@ -364,6 +370,28 @@ static jmethodID midOpt(JNIEnv *env, jclass c, const char *name, const char *sig
     return m;
 }
 
+// Finding 14: register a read-only data-panel facade (all-or-nothing, release-latched like Quest/World). The
+// json getter name differs per panel (getXpJson / getLootJson / …); avail+setUiOpen are uniform.
+static bool registerDataPanel(JNIEnv *env, const char *clsName, const char *jsonGetter, DataPanel &p) {
+    jclass c = env->FindClass(clsName);
+    if (!c || env->ExceptionCheck()) { env->ExceptionClear(); LOGE("bridge: FindClass %s failed", clsName); return false; }
+    jclass g = (jclass) env->NewGlobalRef(c);
+    env->DeleteLocalRef(c);
+    if (!g) { LOGE("bridge: %s NewGlobalRef failed", clsName); return false; }
+    jmethodID a = midOpt(env, g, "isAvailable", "()Z");
+    jmethodID s = midOpt(env, g, "setUiOpen", "(Z)V");
+    jmethodID j = midOpt(env, g, jsonGetter, "()Ljava/lang/String;");
+    if (a && s && j) {
+        p.cls = g; p.avail = a; p.setUiOpen = s; p.json = j;
+        p.ready.store(true, std::memory_order_release);
+        LOGI("bridge: %s facade published", clsName);
+        return true;
+    }
+    env->DeleteGlobalRef(g);
+    LOGE("bridge: %s method id failed (panel reflow disabled)", clsName);
+    return false;
+}
+
 // Resolve + cache the JavaBridge facade as HotSpot global refs. Called once, on the VM's main thread, at
 // boot. Returns true once every method id resolved.
 static bool publishBridge(JNIEnv *env) {
@@ -544,6 +572,9 @@ static bool publishBridge(JNIEnv *env) {
         env->ExceptionClear();
         LOGE("bridge: FindClass WorldSwitcherBridge failed (World Switcher reflow disabled)");
     }
+
+    // Finding 14 — XP Tracker native reflow (read-only data panel; same facade shape as Quest/World).
+    registerDataPanel(env, "net/runelite/client/headless/XpTrackerBridge", "getXpJson", g_xpPanel);
 
     // A6 chrome: MobileChromeBridge — read-only snapshot facade, single method, rl-bridge-thread read.
     jclass mc = env->FindClass("net/runelite/client/headless/MobileChromeBridge");
@@ -1589,6 +1620,24 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeWorldHop(JNIEnv *, jobject, jint worldId) {
     if (!worldReady()) return;
     facadeVoidInt(g_worldCls, g_midWorldHop, worldId);
+}
+
+// Finding 14 — XP Tracker native reflow (read-only). Same facade-call shape as Quest/World, gated on the panel's
+// own release latch. getXpJson returns {available, skills:[{skill,xpGained,xpHr,...,progress}], overall:{…}}.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeXpAvailable(JNIEnv *, jobject) {
+    if (!g_xpPanel.ready.load(std::memory_order_acquire)) return JNI_FALSE;
+    return facadeBool(g_xpPanel.cls, g_xpPanel.avail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeXpSetUiOpen(JNIEnv *, jobject, jboolean open) {
+    if (!g_xpPanel.ready.load(std::memory_order_acquire)) return;
+    facadeVoidBool(g_xpPanel.cls, g_xpPanel.setUiOpen, open);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeXpJson(JNIEnv *artEnv, jobject) {
+    if (!g_xpPanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_xpPanel.cls, g_xpPanel.json);
 }
 
 // A6 chrome read surface: MobileChromeBridge.getSnapshot — the per-frame tab/panel/minimap/orb/chat/viewport
