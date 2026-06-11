@@ -76,6 +76,7 @@ static jmethodID g_midFlushConfig = nullptr;   // A8: persist pending config wri
 //   nextLink()         -> URL or null                (Finding 25: Chrome Custom Tab)
 //   hubState()         -> {"refreshing":b,"seq":i}    (Finding 17: hub install progress)
 static jmethodID g_midNextNotification = nullptr, g_midNextLink = nullptr, g_midHubState = nullptr;
+static jmethodID g_midHubManifest = nullptr, g_midHubInstall = nullptr, g_midHubUninstall = nullptr;
 // Native-origin publish into the SAME shared queues (host-raised alerts/links; also deterministic path tests).
 static jmethodID g_midPublishNotification = nullptr, g_midPublishLink = nullptr;
 // AP-2b Finding 6: pin/star a plugin by display name (shared pinnedPlugins CSV; sorts the list pinned-first).
@@ -452,6 +453,10 @@ static bool publishBridge(JNIEnv *env) {
             g_midNextNotification = midOpt(env, mug, "nextNotification", "()Ljava/lang/String;");
             g_midNextLink         = midOpt(env, mug, "nextLink", "()Ljava/lang/String;");
             g_midHubState         = midOpt(env, mug, "hubState", "()Ljava/lang/String;");
+            // Finding 17 plugin-hub browse/install (best-effort; null disables the hub screen only).
+            g_midHubManifest      = midOpt(env, mug, "hubManifest", "()Ljava/lang/String;");
+            g_midHubInstall       = midOpt(env, mug, "hubInstall", "(Ljava/lang/String;)Ljava/lang/String;");
+            g_midHubUninstall     = midOpt(env, mug, "hubUninstall", "(Ljava/lang/String;)Ljava/lang/String;");
             g_midPublishNotification = midOpt(env, mug, "publishNotification", "(Ljava/lang/String;Ljava/lang/String;)V");
             g_midPublishLink         = midOpt(env, mug, "publishLink", "(Ljava/lang/String;)V");
             g_midSetPinned           = midOpt(env, mug, "setPinned", "(Ljava/lang/String;Z)Ljava/lang/String;");
@@ -1327,6 +1332,38 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeHubState(JNIEnv *artEnv, jobject) {
     if (!mobileUiReady() || !g_midHubState) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midHubState);
+}
+// Finding 17 — hubManifest: one-time async catalog download. First call returns {"status":"loading"}; the
+// native screen polls until {"status":"ok",plugins:[...]} (or error:*). No args.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeHubManifest(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midHubManifest) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midHubManifest);
+}
+// Helper: call a (String)->String bridge method on g_mobileUiCls, marshalling the arg ART->HotSpot.
+static jstring mobileUiStrArg(JNIEnv *artEnv, jmethodID m, jstring jArg) {
+    if (!m) return artEnv->NewStringUTF("");
+    std::string a = jstr(artEnv, jArg);
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls) return artEnv->NewStringUTF("");
+    jstring ha = hs->NewStringUTF(a.c_str());
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, m, ha);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (ha) hs->DeleteLocalRef(ha);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+// Finding 17 — hubInstall/hubUninstall by internal name: register synchronously (config write + flush),
+// download+load async. Returns {"ok":true,"writeId":n}; the screen then polls hubState() for the seq bump.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeHubInstall(JNIEnv *artEnv, jobject, jstring jName) {
+    if (!mobileUiReady()) return artEnv->NewStringUTF("");
+    return mobileUiStrArg(artEnv, g_midHubInstall, jName);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeHubUninstall(JNIEnv *artEnv, jobject, jstring jName) {
+    if (!mobileUiReady()) return artEnv->NewStringUTF("");
+    return mobileUiStrArg(artEnv, g_midHubUninstall, jName);
 }
 // Publish a host-origin notification into the shared queue (the drain delivers it like an engine one). Off
 // the UI thread (rl-bridge). Lets the native shell raise its own alerts + deterministically exercise delivery.

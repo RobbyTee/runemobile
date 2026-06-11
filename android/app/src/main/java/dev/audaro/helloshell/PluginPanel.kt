@@ -64,6 +64,7 @@ fun PluginPanel(onClose: () -> Unit) {
     var panelOpen by remember { mutableStateOf<Pair<Int, String>?>(null) }       // (panelIndex, tooltip)
     var questOpen by remember { mutableStateOf(false) }                          // A5 Tier-2 native screens
     var worldOpen by remember { mutableStateOf(false) }
+    var hubOpen by remember { mutableStateOf(false) }                            // Finding 17 hub browse/install
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
@@ -100,6 +101,9 @@ fun PluginPanel(onClose: () -> Unit) {
         loading = false
     }
 
+    // Finding 17: installing a hub plugin adds it to the engine's plugin set — re-fetch the toggle list on close.
+    if (hubOpen) { PluginHubScreen(onBack = { hubOpen = false; scope.launch { reload() } }); return }
+
     LaunchedEffect(Unit) {
         reload()
         Log.i("MainActivity", "ANDROID_A4_UI_GREEN panel opened rows=${rows.size}")
@@ -113,6 +117,7 @@ fun PluginPanel(onClose: () -> Unit) {
                     color = Color.White, fontSize = 20.sp, modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.titleLarge,
                 )
+                TextButton(onClick = { hubOpen = true }) { Text("Hub") }
                 TextButton(onClick = { panelListOpen = true }) { Text("Panels") }
                 TextButton(onClick = onClose) { Text("Close") }
             }

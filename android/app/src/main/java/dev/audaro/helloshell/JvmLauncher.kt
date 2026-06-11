@@ -139,6 +139,9 @@ object JvmLauncher {
     external fun nativeNextNotification(): String   // Finding 9:  "titlebody" or ""
     external fun nativeNextLink(): String            // Finding 25: a URL or ""
     external fun nativeHubState(): String            // Finding 17: {"refreshing":bool,"seq":int}
+    external fun nativeHubManifest(): String          // Finding 17: {"status":loading|ok,...,plugins:[...]}
+    external fun nativeHubInstall(internalName: String): String     // Finding 17: {"ok":true,"writeId":n}
+    external fun nativeHubUninstall(internalName: String): String   // Finding 17: {"ok":true,"writeId":n}
     external fun nativePublishNotification(title: String, body: String)   // host-origin alert into the shared queue
     external fun nativePublishLink(url: String)                            // host-origin link into the shared queue
 
@@ -251,6 +254,9 @@ object JvmLauncher {
     fun nextNotification() = nativeNextNotification()
     fun nextLink() = nativeNextLink()
     fun hubState() = nativeHubState()
+    fun hubManifest() = nativeHubManifest()
+    fun hubInstall(internalName: String) = nativeHubInstall(internalName)
+    fun hubUninstall(internalName: String) = nativeHubUninstall(internalName)
     fun publishNotification(title: String, body: String) = nativePublishNotification(title, body)
     fun publishLink(url: String) = nativePublishLink(url)
 
