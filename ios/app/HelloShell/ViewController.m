@@ -963,6 +963,7 @@ static const CGFloat kMenuWidth       = 210.0;
         @"dynamicLights",             // NONE / FEW / SOME / MANY
         @"tiledLighting",             // whole-scene lighting
         @"normalMapping",             // surface relief
+        @"parallaxOcclusionMappingToggle", // POM surface depth (off by default — adds GPU cost)
         @"drawDistance",              // view distance
     ] : nil;
     PluginConfigViewController *cfg = [[PluginConfigViewController alloc] initWithGroup:group

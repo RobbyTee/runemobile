@@ -91,7 +91,7 @@ public class ZoneShaderAssemble {
 		define("TILED_LIGHTING_TILE_SIZE", 16);
 		define("MAX_LIGHT_COUNT", 480);
 		define("NORMAL_MAPPING", true); // B1: normal mapping ON — swaps sampleNormalMap stub for the real normals.glsl body
-		define("PARALLAX_OCCLUSION_MAPPING", false);
+		define("PARALLAX_OCCLUSION_MAPPING", true);   // B1 POM: validate the displacement raymarch path compiles (ios-overrides/utils/displacement.glsl)
 		// B1 shadows: SHADOW_MODE_DETAILED=2 (FAST=1, OFF=0). DETAILED samples the caster's texture alpha in
 		// shadow_frag so foliage casts DAPPLED shadows (light through leaf gaps); transparency packs depth+alpha
 		// (16+8=24 bits) into gl_FragDepth so the shadow FBO stays depth-only (DEPTH_COMPONENT24). The scene shader
@@ -186,6 +186,11 @@ public class ZoneShaderAssemble {
 		{ "clamp((1 - baseColor3.a) * 2, 0, 1)", "clamp((1.0 - baseColor3.a) * 2.0, 0.0, 1.0)" },
 		{ "max(normals.y, 0)", "max(normals.y, 0.0)" },
 		{ "clamp(outputColor.rgb, 0, 1)", "clamp(outputColor.rgb, 0.0, 1.0)" },
+		// scene_frag.glsl body — PARALLAX_OCCLUSION_MAPPING block: average the per-material displacement (vec3/float
+		// divided by int 3) + clamp the displaced depth (max int 0). displacement.glsl itself = ios-overrides ES3 port.
+		{ "fragDelta /= 3;", "fragDelta /= 3.0;" },
+		{ "selfShadowing /= 3;", "selfShadowing /= 3.0;" },
+		{ "fragDelta.z = max(0, fragDelta.z);", "fragDelta.z = max(0.0, fragDelta.z);" },
 		// scene_frag.glsl body — water-scroll periods + caustics animationFrame() int args (fn takes float).
 		{ "10 * waterType.duration", "10.0 * waterType.duration" },
 		{ "animationFrame(231)", "animationFrame(231.0)" },

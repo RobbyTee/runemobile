@@ -53,6 +53,9 @@ public final class RLHDStarter
 	// Present -> a later launch respects the persisted values (the user's 117HD plugin-config edits) instead of
 	// re-forcing the defaults. Not a real ConfigItem, so it never shows in the panel.
 	private static final String GFX_SEEDED_KEY = "iosGfxSeeded";
+	// Separate one-shot sentinel for the shadow-map-resolution fps default, so applying it doesn't re-seed (reset)
+	// the user's other tunable picks.
+	private static final String GFX_SHADOWRES_KEY = "iosGfxShadowRes1k";
 
 	private static boolean done;
 	private static boolean configForced;
@@ -110,15 +113,15 @@ public final class RLHDStarter
 		{
 			// SAFETY-CRITICAL (forced EVERY launch, NOT user-tunable): each MUST stay or RLHD recompiles an unported
 			// shader / hits an iOS bridge limit and stops the plugin. uiScalingMode=LINEAR (HYBRID/xBR pull in unported
-			// scale/*.glsl); shadowFiltering=SMOOTH (DITHERED/PIXELATED unported); parallaxOcclusionMapping off (unported);
-			// wind/characterDisplacement off (compute-only no-ops); asyncModelProcessing off (single thread-affine EAGL
-			// ctx can't do RLHD multithreaded GL -> player flashing); sceneScalingMode=LINEAR (smooth downsample). These
-			// are kept OUT of the native graphics panel. uiScalingMode is also the client-thread-readiness probe.
+			// scale/*.glsl); shadowFiltering=SMOOTH (DITHERED/PIXELATED unported); wind/characterDisplacement off
+			// (compute-only no-ops); asyncModelProcessing off (single thread-affine EAGL ctx can't do RLHD multithreaded
+			// GL -> player flashing); sceneScalingMode=LINEAR (smooth downsample). These are kept OUT of the native
+			// graphics panel. (POM is now ported -> it's a user-tunable, seeded off below.) uiScalingMode is also the
+			// client-thread-readiness probe.
 			final String probe = MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");
 			if (!probe.contains("\"ok\":true"))
 				return;   // client thread not ready yet — retry next tick before seeding/committing
 			MobileUiBridge.setConfig("hd", "shadowFiltering", "SMOOTH");
-			MobileUiBridge.setConfig("hd", "parallaxOcclusionMappingToggle", "false");
 			MobileUiBridge.setConfig("hd", "windDisplacement", "false");
 			MobileUiBridge.setConfig("hd", "characterDisplacement", "false");
 			MobileUiBridge.setConfig("hd", "asyncModelProcessing", "false");
@@ -141,8 +144,19 @@ public final class RLHDStarter
 				MobileUiBridge.setConfig("hd", "enableShadowTransparency", "true");
 				MobileUiBridge.setConfig("hd", "antiAliasingMode", "MSAA_4");
 				MobileUiBridge.setConfig("hd", "sceneResolutionScale", "100");
+				MobileUiBridge.setConfig("hd", "parallaxOcclusionMappingToggle", "false"); // POM ported + available, off by default (it ADDS GPU cost)
 				MobileUiBridge.setConfig("hd", GFX_SEEDED_KEY, "1");
 				MobileUiBridge.flushConfigQueued();   // persist the seed + sentinel (queued AFTER the writes above)
+			}
+			// fps one-shot (independent sentinel so it doesn't reset the user's other picks): lower the shadow map to
+			// 1K once. The shadow pass (full scene rendered from the light's POV) is the heaviest GPU cost after the
+			// main scene; 1K vs 2K is barely visible at the mobile present scale but a real fps win. Reversible in the
+			// 117HD plugin config (shadowResolution).
+			if (!"1".equals(MobileUiBridge.getConfig("hd", GFX_SHADOWRES_KEY)))
+			{
+				MobileUiBridge.setConfig("hd", "shadowResolution", "RES_1024");
+				MobileUiBridge.setConfig("hd", GFX_SHADOWRES_KEY, "1");
+				MobileUiBridge.flushConfigQueued();
 			}
 			configForced = true;
 			log.info("[routecrlhd] iOS config applied — safety forced (uiScaling/shadowFiltering/scaling LINEAR/SMOOTH; "

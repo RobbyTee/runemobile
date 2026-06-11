@@ -603,6 +603,10 @@ static BOOL rcBuildFbo(int w, int h)
 			@[@"clamp((1 - baseColor3.a) * 2, 0, 1)", @"clamp((1.0 - baseColor3.a) * 2.0, 0.0, 1.0)"],
 			@[@"max(normals.y, 0)", @"max(normals.y, 0.0)"],
 			@[@"clamp(outputColor.rgb, 0, 1)", @"clamp(outputColor.rgb, 0.0, 1.0)"],
+			// scene_frag PARALLAX_OCCLUSION_MAPPING block (displacement.glsl include = ios-override ES3 port)
+			@[@"fragDelta /= 3;", @"fragDelta /= 3.0;"],
+			@[@"selfShadowing /= 3;", @"selfShadowing /= 3.0;"],
+			@[@"fragDelta.z = max(0, fragDelta.z);", @"fragDelta.z = max(0.0, fragDelta.z);"],
 			@[@"10 * waterType.duration", @"10.0 * waterType.duration"],
 			@[@"animationFrame(231)", @"animationFrame(231.0)"],
 			@[@"animationFrame(19)", @"animationFrame(19.0)"],
