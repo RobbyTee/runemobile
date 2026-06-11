@@ -412,6 +412,11 @@ static const CGFloat kMenuWidth       = 210.0;
 - (void)onPlayTapped {
     // If the login web view ran this session, WebKit is resident and the JVM can't start cleanly — onLaunch
     // will prompt a restart instead. Keep the cover up in that case so the user lands back here post-restart.
+    // Tap to Play boots straight into 117HD (resizable + direct present) so the whole HD client comes up in one
+    // tap — same as the "▶ 117HD (Zone)" button (pendingRouteCZone + direct). StikDebug must be attached (the play
+    // button only enables on attach), same as any JVM launch.
+    self.pendingRouteCZone = YES;
+    self.pendingRouteCZoneDirect = YES;
     if (self.webKitUsedThisSession) { [self onLaunch]; return; }
     if (!self.launchScreen.hidden) {
         // Fade the cover out, then hand off to the existing JVM launch path.
