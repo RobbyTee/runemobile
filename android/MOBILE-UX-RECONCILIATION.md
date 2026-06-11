@@ -241,3 +241,30 @@ account). Populated states for all three pend live game data but the wiring/pars
 verified and the data is iOS-proven. **Remaining AP-4: Finding 14 Time Tracking panel; Finding 15 overlay
 edit-mode (fully emulator-verifiable — overlays always present; but L + OQ3 long-press disambiguation); Finding
 22 infobox long-press menu; Finding 16 minimap reconstruction (XL); Finding 11 real-device pass (hardware).**
+
+## Session 2026-06-10 (AP-4 cont.): overlay edit mode — snap-to-corner (Finding 15) — FULLY VERIFIED
+
+- **Finding 15 — overlay edit (snap-to-corner first cut) — VERIFIED end-to-end.** The desktop affordance
+  (Alt-hold + free mouse drag + hover-cursor) has no clean touch analogue; on a phone the signature need is
+  moving an overlay off the relocated HUD, which the five engine snap corners cover. New `OverlayEditScreen`
+  (reached from the panel list, gated on `OverlayBridge.isAvailable`) lists every movable overlay with
+  TL/TC/TR/BL/BR snap buttons + Reset, calling `setOverlayPreferredPosition` / `resetOverlay`; the engine
+  re-renders at the new corner on the next frame (visible through the CPU blit) and persists. Dedicated
+  OverlayBridge JNI registration (5 method-ids, release-latched like Quest) + a new `facadeStrArgs`
+  (String[,String]→String) C++ helper. No shared-Java change; contract UNCHANGED (185).
+  - **This is the first AP-4 item verified with a real state change (not empty-state):** facade resolves
+    (overlay=true); the list showed 3 movable widget overlays (EXPERIENCE_TRACKER_WIDGET, RESIZABLE_MINIMAP_WIDGET,
+    RESIZABLE_VIEWPORT_BOTTOM_LINE_CHATBOX_PARENT); snapping EXPERIENCE_TRACKER_WIDGET Top-right→Top-left
+    updated the live position (engine accepted + persisted, re-poll reflected it), and Reset returned it to
+    Top-right (default). HUD restored to default after the test. Evidence:
+    `dev-tools/ap4-mobile-ux/evidence-overlay-{edit-list,snapped-topleft,reset-default}.png`.
+  - **Note:** the listed overlays here are the engine's resizable WIDGET overlays; plugin overlays appear too
+    when their plugin is active. Snapping the minimap/viewport widgets can interact with the HUD veneer
+    relocate — left to the user's discretion (the bridge call is safe either way).
+  - **Follow-up:** free pixel-drag (setOverlayPreferredLocation + an on-canvas edit gesture + snap preview via
+    snapPositionForPoint) is deferred — it needs touch-dispatch integration in MainActivity; the snap-corner
+    cut delivers the core "move it off the HUD" value safely.
+
+**AP-4 progress: Finding 14 (3/4 panels: XP/Loot/GE), Finding 15 (overlay snap) DONE. Remaining: Finding 14
+Time Tracking panel; Finding 15 free-drag follow-up; Finding 22 infobox long-press menu; Finding 16 minimap
+reconstruction (XL); Finding 11 real-device pass (hardware).**
