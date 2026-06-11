@@ -112,6 +112,8 @@ static std::atomic<bool> g_worldReady{false};
 struct DataPanel { jclass cls = nullptr; jmethodID avail = nullptr, setUiOpen = nullptr, json = nullptr;
                    std::atomic<bool> ready{false}; };
 static DataPanel g_xpPanel;
+static DataPanel g_lootPanel;
+static DataPanel g_gePanel;
 // A6 chrome: MobileChromeBridge read-only snapshot facade (tab/panel/minimap/orb/chat/viewport canvas bounds
 // the native edge-rails cover-and-proxy reads each display tick). Separate facade; rl-bridge-thread read
 // behind a release/acquire latch. Single method (getSnapshot) — populated only under -Drunelite.mobilechrome.
@@ -573,8 +575,10 @@ static bool publishBridge(JNIEnv *env) {
         LOGE("bridge: FindClass WorldSwitcherBridge failed (World Switcher reflow disabled)");
     }
 
-    // Finding 14 — XP Tracker native reflow (read-only data panel; same facade shape as Quest/World).
+    // Finding 14 — read-only data-panel reflows (XP / Loot / GE; same facade shape as Quest/World).
     registerDataPanel(env, "net/runelite/client/headless/XpTrackerBridge", "getXpJson", g_xpPanel);
+    registerDataPanel(env, "net/runelite/client/headless/LootTrackerBridge", "getLootJson", g_lootPanel);
+    registerDataPanel(env, "net/runelite/client/headless/GrandExchangeBridge", "getGeJson", g_gePanel);
 
     // A6 chrome: MobileChromeBridge — read-only snapshot facade, single method, rl-bridge-thread read.
     jclass mc = env->FindClass("net/runelite/client/headless/MobileChromeBridge");
@@ -1638,6 +1642,42 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeXpJson(JNIEnv *artEnv, jobject) {
     if (!g_xpPanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_xpPanel.cls, g_xpPanel.json);
+}
+
+// Finding 14 — Loot Tracker native reflow (read-only). getLootJson = {available, sources:[{name,subTitle,type,
+// kills,totalValue,items:[{id,name,qty,ge,ha}]}]}.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeLootAvailable(JNIEnv *, jobject) {
+    if (!g_lootPanel.ready.load(std::memory_order_acquire)) return JNI_FALSE;
+    return facadeBool(g_lootPanel.cls, g_lootPanel.avail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeLootSetUiOpen(JNIEnv *, jobject, jboolean open) {
+    if (!g_lootPanel.ready.load(std::memory_order_acquire)) return;
+    facadeVoidBool(g_lootPanel.cls, g_lootPanel.setUiOpen, open);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeLootJson(JNIEnv *artEnv, jobject) {
+    if (!g_lootPanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_lootPanel.cls, g_lootPanel.json);
+}
+
+// Finding 14 — Grand Exchange native reflow (read-only). getGeJson = {available, offers:[{slot,state,itemId,
+// name,qty,total,price,spent,progress}], history:[{buy,itemId,qty,price,time}]}.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeGeAvailable(JNIEnv *, jobject) {
+    if (!g_gePanel.ready.load(std::memory_order_acquire)) return JNI_FALSE;
+    return facadeBool(g_gePanel.cls, g_gePanel.avail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeGeSetUiOpen(JNIEnv *, jobject, jboolean open) {
+    if (!g_gePanel.ready.load(std::memory_order_acquire)) return;
+    facadeVoidBool(g_gePanel.cls, g_gePanel.setUiOpen, open);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeGeJson(JNIEnv *artEnv, jobject) {
+    if (!g_gePanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_gePanel.cls, g_gePanel.json);
 }
 
 // A6 chrome read surface: MobileChromeBridge.getSnapshot — the per-frame tab/panel/minimap/orb/chat/viewport

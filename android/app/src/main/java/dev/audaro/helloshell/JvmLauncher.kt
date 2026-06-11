@@ -175,6 +175,12 @@ object JvmLauncher {
     external fun nativeXpAvailable(): Boolean
     external fun nativeXpSetUiOpen(open: Boolean)
     external fun nativeXpJson(): String
+    external fun nativeLootAvailable(): Boolean
+    external fun nativeLootSetUiOpen(open: Boolean)
+    external fun nativeLootJson(): String
+    external fun nativeGeAvailable(): Boolean
+    external fun nativeGeSetUiOpen(open: Boolean)
+    external fun nativeGeJson(): String
 
     // A6 chrome: the per-frame MobileChromeBridge read-only snapshot (escaped JSON: tab/panel/minimap/orb/chat/
     // viewport canvas bounds the native edge-rails read). Gated by -Drunelite.mobilechrome. Off the UI thread.
@@ -288,6 +294,12 @@ object JvmLauncher {
     fun xpAvailable() = nativeXpAvailable()
     fun xpSetUiOpen(open: Boolean) = nativeXpSetUiOpen(open)
     fun xpJson() = nativeXpJson()
+    fun lootAvailable() = nativeLootAvailable()
+    fun lootSetUiOpen(open: Boolean) = nativeLootSetUiOpen(open)
+    fun lootJson() = nativeLootJson()
+    fun geAvailable() = nativeGeAvailable()
+    fun geSetUiOpen(open: Boolean) = nativeGeSetUiOpen(open)
+    fun geJson() = nativeGeJson()
     fun chromeSnapshot() = nativeChromeSnapshot()
     fun chromeSnapshotPub() = nativeChromeSnapshotPub()
     fun setStonesHidden(hidden: Boolean) = nativeSetStonesHidden(hidden)
