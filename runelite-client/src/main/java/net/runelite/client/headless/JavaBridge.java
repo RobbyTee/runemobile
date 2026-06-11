@@ -111,11 +111,12 @@ public final class JavaBridge
 	// Wired from HeadlessClientUI.init; in-game taps resolve through the engine ON THE CLIENT THREAD
 	// (scene/menu reads are only safe there).
 	private static volatile ClientThread clientThread;
-	// Resizable-mode touch diagnostics: log the FULL coordinate chain (engine canvas, world viewport, the
-	// received tap) at INFO on each in-game tap so one device session surfaces any mismatch
-	// between the native present size and what the engine projects. Default on; silence with -Drunelite.touch.diag=false.
+	// Touch-targeting diagnostics (the full coordinate chain + per-tap settle/consume/park-verify trace).
+	// OFF by default — the tap path is device-confirmed; flip on with -Drunelite.touch.diag=true to debug a
+	// regression. All [touchdiag] sites are gated behind this, so when off they (incl. the park-verify read)
+	// go fully inert. Matches the gpudiag/menupeek convention (dev flags default off on master).
 	private static final boolean TOUCH_DIAG =
-		Boolean.parseBoolean(System.getProperty("runelite.touch.diag", "true"));
+		Boolean.parseBoolean(System.getProperty("runelite.touch.diag", "false"));
 	// Hide the vanilla OSRS click cross (the red/yellow animated X at the tap point). It became visible once the
 	// engine UI composites in GPU mode and is redundant with our own native click ring. Blank the cross sprites
 	// once (replace each with a 1x1 transparent sprite). Toggle with -Drunelite.touch.hideClickCross=false.

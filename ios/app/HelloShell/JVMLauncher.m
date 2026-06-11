@@ -795,7 +795,6 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"-Drunelite.mobilechrome=true",             // W3 hybrid-chrome: arm the read-only MobileChromeBridge
                                                      // snapshot (tab/panel/minimap/orb/chat/viewport bounds).
                                                      // NOT the .probe gate — that mutates and is desktop-only.
-        @"-Drunelite.touch.diag=true",               // resizable-mode touch + UI-composite diagnostics (INFO logs)
         @"-Drunelite.menupeek=true",                 // W3 touch-targeting: arm the read-only MenuPeekBridge
                                                      // (native right-click menu data source). NOT .probe (desktop-only).
         @"-Drunelite.menupeek.maxEntries=14",        // publish enough display rows for the native menu (default 10)
