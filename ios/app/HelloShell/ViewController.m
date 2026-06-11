@@ -1728,8 +1728,10 @@ static int chatRowCanvasH(void) {
     }];
 }
 
-// Highlight the chip under the finger (scale + white border) and clear the others. -1 clears all.
-- (void)setChatHoverChip:(NSInteger)k {
+// Highlight the chip under the finger (scale + white border) and clear the others. -1 clears all. NOT named
+// setChatHoverChip: — that's the chatHoverChip property setter, and assigning self.chatHoverChip inside it would
+// recurse into itself (stack overflow). This is a distinct method that updates the property + the visuals.
+- (void)applyChatHover:(NSInteger)k {
     if (k == self.chatHoverChip) return;
     self.chatHoverChip = k;
     for (int i = 0; i < kChatTabCount; i++) {
@@ -1835,7 +1837,7 @@ static int chatRowCanvasH(void) {
                 break;
             }
             NSInteger k = [self chatChipColumnAtPoint:pScreen];
-            [self setChatHoverChip:k];
+            [self applyChatHover:k];
             [self updateChatFilterHintForColumn:k point:pScreen];
             // Pull-down escalation: finger crossed below a filterable chip's bottom by the threshold.
             if (k >= 0 && kChatTabFilterable[k]) {
