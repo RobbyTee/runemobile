@@ -22,6 +22,10 @@
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- ProMotion: allow frame rates above 60fps on iPhone (the GPU path renders in ~3ms with huge headroom).
+	     Without this the CAEAGLLayer present is capped at 60Hz even on a 120Hz display. -->
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIApplicationSupportsMultipleScenes</key>

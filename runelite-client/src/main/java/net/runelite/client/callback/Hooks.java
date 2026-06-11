@@ -391,6 +391,16 @@ public class Hooks implements Callbacks
 			// Keep the native shell's touch bridge pointed at the current client (the frame snapshot is
 			// taken post-composite, below).
 			net.runelite.client.headless.JavaBridge.register(client);
+			// iOS load-in flash guard: re-arm the publish hold whenever we're not in a continuously-rendered
+			// world — the login screen, world hopping, connection lost, etc. We deliberately do NOT re-arm on
+			// plain LOADING, since that also fires during seamless in-play region streaming while running (where
+			// the scene keeps rendering and there's no sky flash to hide). drawScene() clears it back to true
+			// once geometry is rendered. See JavaBridge.sceneDrawn.
+			net.runelite.api.GameState gs = client.getGameState();
+			if (gs != net.runelite.api.GameState.LOGGED_IN && gs != net.runelite.api.GameState.LOADING)
+			{
+				net.runelite.client.headless.JavaBridge.armSceneHold();
+			}
 		}
 		if (net.runelite.client.headless.MobileUiBridge.isEnabled())
 		{
@@ -402,9 +412,48 @@ public class Hooks implements Callbacks
 			net.runelite.client.headless.HeadlessLogin.tick(
 				client, client.getGameState(), client.getLoginIndex());
 		}
+		if (net.runelite.client.headless.WelcomePlayProbe.isEnabled())
+		{
+			// GPU Route C: dismiss the post-login "Welcome to Gielinor / Click here to play" screen so the engine
+			// actually enters the world render (without this, headless parks on the welcome screen and no scene
+			// renders — in CPU or GPU mode). Gated -Drunelite.headless.welcomeplay=true.
+			net.runelite.client.headless.WelcomePlayProbe.tick(client, client.getGameState());
+		}
 		if (net.runelite.client.headless.HeadlessResize.isEnabled())
 		{
 			net.runelite.client.headless.HeadlessResize.tick(client, client.getGameState());
+		}
+		if (net.runelite.client.headless.GpuHandshakeProbe.isEnabled())
+		{
+			// GPU Route C DESKTOP reproduction: replay GpuPlugin.startUp's engine handshake (setGpuFlags(GPU|ZBUF)
+			// + a no-GL counting DrawCallbacks) with NO GL context, so a desktop CACIO run can test whether the
+			// engine dispatches the per-frame GPU scene render headless (the device black-scene blocker). Mutates
+			// client state — DESKTOP ONLY, never the device path. Runs before GpuSceneDiag so the diag sees it.
+			// Gated -Drunelite.gpuhandshake=true.
+			net.runelite.client.headless.GpuHandshakeProbe.tick(client);
+		}
+		if (net.runelite.client.headless.GpuSceneDiag.isEnabled())
+		{
+			// GPU Route C: read-only per-frame snapshot (isGpu / registered DrawCallbacks + classloader /
+			// viewport / drawScene count) to localise the black-3D-scene blocker above the GL bridge. Runs
+			// before the isGpu early-return below so it ticks in GPU mode. Gated -Drunelite.gpudiag=true.
+			net.runelite.client.headless.GpuSceneDiag.tick(client);
+		}
+		if (net.runelite.client.headless.RouteCGpuStarter.isEnabled())
+		{
+			// GPU Route C: force-enable + start the gpu plugin once in-world (canvas valid), overriding a persisted
+			// gpuplugin=false and the startUp-too-early canvas race so the plugin reliably creates its GL context
+			// instead of silently falling back to the CPU renderer. Runs before the isGpu early-return.
+			// Gated -Drunelite.routecgpu=true.
+			net.runelite.client.headless.RouteCGpuStarter.tick(client);
+		}
+		if (net.runelite.client.headless.RLHDStarter.isEnabled())
+		{
+			// W3 GPU Zone B0.5: load + start the EXTERNAL 117HD plugin (rs117.hd.HdPlugin, in the staged rlhd jar)
+			// once there's a drawing canvas, then force the canvas valid until it activates. HdPlugin conflicts=GPU
+			// so it auto-disables the base gpu plugin (do NOT also arm RouteCGpuStarter in this mode).
+			// Gated -Drunelite.routecrlhd=true.
+			net.runelite.client.headless.RLHDStarter.tick(client);
 		}
 		if (net.runelite.client.headless.MobileToplevelProbe.isEnabled())
 		{
@@ -573,11 +622,17 @@ public class Hooks implements Callbacks
 		}
 
 		// Headless capture seam: composited game + overlays now live in mainBufferProvider.getImage().
-		net.runelite.client.headless.HeadlessCapture.capture(mainBufferProvider);
+		// In GPU mode (Route C) mainBufferProvider is the UI-only layer (the game is on the GPU), so a CPU
+		// capture here is both useless AND a per-frame ~1.5 MB BufferedImage allocation that OOMs the heap once
+		// 117HD's ZoneRenderer is resident — gate it off, same as the JavaBridge snapshot below.
+		if (!client.isGpu())
+		{
+			net.runelite.client.headless.HeadlessCapture.capture(mainBufferProvider);
+		}
 		// Live-blit seam: snapshot the now-complete frame for the native shell (avoids mid-composite tearing).
-		// In GPU mode mainBufferProvider holds only the UI layer; the authoritative composited frame is published
-		// later by the gpu plugin's swapBuffers shim (the SOLE frameSeq publisher), so gate the CPU snapshot off
-		// here to stop a UI-only frame flashing between GPU frames.
+		// In GPU mode (Route C) mainBufferProvider holds only the UI layer; the authoritative composited frame
+		// is published later by the gpu plugin's swapBuffers shim, which is then the SOLE frameSeq publisher.
+		// Gating the CPU snapshot off here prevents the UI-only frame from flashing between GPU frames.
 		if (net.runelite.client.headless.JavaBridge.isEnabled() && !client.isGpu())
 		{
 			net.runelite.client.headless.JavaBridge.snapshot(mainBufferProvider);
@@ -682,6 +737,22 @@ public class Hooks implements Callbacks
 	@Override
 	public void drawScene()
 	{
+		if (net.runelite.client.headless.GpuSceneDiag.isEnabled())
+		{
+			// GPU Route C: count the per-frame scene-render callback (fires at the end of the injected scene
+			// render `ev.dk`, both zone and legacy branches) to tell whether the engine drives the 3D scene
+			// at all in GPU mode. Read-only; gated -Drunelite.gpudiag=true.
+			net.runelite.client.headless.GpuSceneDiag.onDrawScene();
+		}
+
+		// iOS load-in flash guard: count this 3D scene render. The GPU publish stays held until a few of these
+		// have accumulated (zones still upload for a few frames after the first draw, so the first frames are bare
+		// sky) — re-armed to 0 on non-world game states in draw(). See JavaBridge.sceneDrawCount.
+		if (net.runelite.client.headless.JavaBridge.isEnabled())
+		{
+			net.runelite.client.headless.JavaBridge.noteSceneDraw();
+		}
+
 		MainBufferProvider bufferProvider = (MainBufferProvider) client.getBufferProvider();
 		Graphics2D graphics2d = getGraphics(bufferProvider);
 

@@ -5,6 +5,11 @@
 #import "PluginPanelsViewController.h"
 #import "JagexLoginViewController.h"
 #import "GLRecon.h"
+#import "RouteCBridge.h"            // GPU Route C bridge (backend selected by RC_BACKEND_ANGLE in the build)
+#import <QuartzCore/QuartzCore.h>
+#if !defined(RC_BACKEND_ANGLE)
+#import <OpenGLES/EAGLDrawable.h>   // kEAGLDrawableProperty* (EAGL direct present; not linked in the ANGLE build)
+#endif
 #import <WebKit/WebKit.h>
 #import <CoreText/CoreText.h>
 #import <SafariServices/SafariServices.h>
@@ -21,6 +26,9 @@
 }
 @property (nonatomic, strong) UITextView *console;
 @property (nonatomic, strong) UIButton *launchButton;
+@property (nonatomic, strong) UIButton *gpuButton;   // GPU Route C: dedicated one-tap button to boot full RuneLite on GPU
+@property (nonatomic, strong) UIButton *zoneButton;  // GPU Zone: dedicated one-tap button to boot full RuneLite on 117HD
+@property (nonatomic, strong) UIButton *zoneFastButton;  // GPU Zone: 117HD resizable + DIRECT present (no readback)
 @property (nonatomic, strong) UIButton *canaryButton;
 @property (nonatomic, strong) UIButton *keyboardButton;
 @property (nonatomic, strong) UIButton *shiftButton;     // sticky-Shift toggle (holds VK_SHIFT for shift-click)
@@ -54,6 +62,11 @@
 @property (nonatomic, strong) NSFileHandle *logFile;
 @property (nonatomic, assign) int jvmFd;   // raw fd for crash-proof libjvm stdout/stderr
 @property (nonatomic, assign) BOOL launched;
+@property (nonatomic, assign) BOOL pendingRouteCL1;   // GPU Route C: long-press Start -> boot the L1 kill-test
+@property (nonatomic, assign) BOOL pendingRouteCGpu;  // GPU Route C: two-finger long-press -> full RuneLite on GPU
+@property (nonatomic, assign) BOOL pendingRouteCZone; // GPU Zone: three-finger long-press -> full RuneLite on 117HD
+@property (nonatomic, assign) BOOL pendingRouteCGpuNoResize;  // GPU Route C bisection: skip headless.resize (fixed 765x503)
+@property (nonatomic, assign) BOOL pendingRouteCZoneDirect;   // GPU Zone: resizable + DIRECT present (CAEAGLLayer, no readback)
 
 // #1 "Tap to Play" front screen: a polished Jagex-Mobile-style cover shown at cold start INSTEAD of the
 // W1 debug panel (which now starts hidden behind the ≡ toggle). The big play button waits on the StikDebug
@@ -132,6 +145,13 @@
 // draws (set at launch); chatHitCanvas = the relocated chat tab-row rect in canvas px (onTap treats it as UI).
 @property (nonatomic, assign) int renderW;
 @property (nonatomic, assign) int renderH;
+
+// GPU Route C direct present: a CAEAGLLayer (EAGL) / CAMetalLayer (ANGLE) the engine renders straight into (no
+// readback). nil in CPU/L1 mode. Kept strong so the layer outlives the EGL/EAGL surface that references it.
+@property (nonatomic, strong) CAEAGLLayer *glLayer;
+@property (nonatomic, strong) CAMetalLayer *metalLayer;
+@property (nonatomic, assign) BOOL gpuPresent;        // direct-present active (skip the CPU-frame blit)
+@property (nonatomic, assign) BOOL gpuPresentArmed;   // ANGLE: window surface ready; flip gpuPresent on first GPU frame
 @property (nonatomic, assign) CGRect chatHitCanvas;
 // Pre-composited tab images (stone background + centred icon) built once from the bundled OSRS sprite assets
 // (stone-inactive/active + icon-0..13). Index = tab index; active/inactive variants. Authentic, crisp, no
@@ -567,6 +587,24 @@ static const CGFloat kMenuWidth       = 210.0;
     self.launchButton.enabled = NO;
     [self.launchButton addTarget:self action:@selector(onLaunch)
                 forControlEvents:UIControlEventTouchUpInside];
+    // GPU Route C dev affordance: LONG-PRESS the launch button to boot the L1 GPU kill-test (routec-l1.jar +
+    // RouteC_registerGLNatives + RouteCL1Probe) instead of the full RuneLite boot. A plain tap is unchanged.
+    UILongPressGestureRecognizer *l1lp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onLaunchRouteCL1Gesture:)];
+    [self.launchButton addGestureRecognizer:l1lp];
+    // TWO-FINGER long-press the launch button to boot the FULL RuneLite in GPU Route C mode (bridge natives
+    // registered -> the gpu plugin renders on the device GPU). Distinct from the one-finger L1 gesture.
+    UILongPressGestureRecognizer *gpulp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onLaunchRouteCGpuGesture:)];
+    gpulp.numberOfTouchesRequired = 2;
+    [self.launchButton addGestureRecognizer:gpulp];
+    // THREE-FINGER long-press the launch button to boot the FULL RuneLite in GPU Zone (117HD/RLHD) mode: the
+    // staged rlhd jar joins the classpath, the zone facade-delta natives register, and RLHDStarter loads +
+    // starts rs117.hd.HdPlugin (the Zone renderer). Distinct from one-finger L1 / two-finger base-GPU.
+    UILongPressGestureRecognizer *zonelp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onLaunchRouteCZoneGesture:)];
+    zonelp.numberOfTouchesRequired = 3;
+    [self.launchButton addGestureRecognizer:zonelp];
     [self.debugPanel addSubview:self.launchButton];
 
     self.canaryButton = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -583,6 +621,40 @@ static const CGFloat kMenuWidth       = 210.0;
     [self.chromeButton addTarget:self action:@selector(onChromeTest)
                 forControlEvents:UIControlEventTouchUpInside];
     [self.debugPanel addSubview:self.chromeButton];
+
+    // GPU Route C: dedicated one-tap button to boot full RuneLite on the device GPU (equivalent to the
+    // two-finger long-press on the launch button, but unambiguous). Enabled together with the launch button
+    // once the JIT debugger is attached.
+    self.gpuButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.gpuButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.gpuButton setTitle:@"▶ Run GPU (Route C)" forState:UIControlStateNormal];
+    self.gpuButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    self.gpuButton.enabled = NO;
+    [self.gpuButton addTarget:self action:@selector(onLaunchGpu)
+             forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.gpuButton];
+
+    self.zoneButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.zoneButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.zoneButton setTitle:@"▶ 117HD (Zone)" forState:UIControlStateNormal];
+    self.zoneButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    self.zoneButton.tintColor = [UIColor systemGreenColor];
+    self.zoneButton.enabled = NO;
+    [self.zoneButton addTarget:self action:@selector(onLaunchZone)
+             forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.zoneButton];
+
+    // Fallback: 117HD resizable on the READBACK present (no CAEAGLLayer). The green button defaults to direct
+    // present (faster); this is here if direct present ever scans out black or regresses.
+    self.zoneFastButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.zoneFastButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.zoneFastButton setTitle:@"117HD readback" forState:UIControlStateNormal];
+    self.zoneFastButton.titleLabel.font = [UIFont systemFontOfSize:15];
+    self.zoneFastButton.tintColor = [UIColor systemGrayColor];
+    self.zoneFastButton.enabled = NO;
+    [self.zoneFastButton addTarget:self action:@selector(onLaunchZoneReadback)
+             forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.zoneFastButton];
 
     self.loginButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.loginButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -714,7 +786,14 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.canaryButton.leadingAnchor constraintEqualToAnchor:self.launchButton.trailingAnchor constant:24],
         [self.chromeButton.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor constant:6],
         [self.chromeButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
-        [self.loginButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
+        [self.gpuButton.centerYAnchor constraintEqualToAnchor:self.chromeButton.centerYAnchor],
+        [self.gpuButton.leadingAnchor constraintEqualToAnchor:self.chromeButton.trailingAnchor constant:24],
+        [self.zoneButton.centerYAnchor constraintEqualToAnchor:self.gpuButton.centerYAnchor],
+        [self.zoneButton.leadingAnchor constraintEqualToAnchor:self.gpuButton.trailingAnchor constant:24],
+        // ⚡ Fast on its own row (the chrome/gpu/zone row is already full-width).
+        [self.zoneFastButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
+        [self.zoneFastButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
+        [self.loginButton.topAnchor constraintEqualToAnchor:self.zoneFastButton.bottomAnchor constant:6],
         [self.loginButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.logoutButton.centerYAnchor constraintEqualToAnchor:self.loginButton.centerYAnchor],
         [self.logoutButton.leadingAnchor constraintEqualToAnchor:self.loginButton.trailingAnchor constant:16],
@@ -1149,8 +1228,16 @@ static const CGFloat kMenuWidth       = 210.0;
     if (hasConfig && group.length > 0) {
         [sheet addAction:[UIAlertAction actionWithTitle:@"Configure" style:UIAlertActionStyleDefault
                                                 handler:^(UIAlertAction *a) {
+            // 117HD (group "hd"): show ONLY the iOS-ported settings (each safe to setConfig from RLHDStarter).
+            // Exposing the rest would recompile an unported shader and stop the plugin. Others show full config.
+            NSArray<NSString *> *whitelist = [group isEqualToString:@"hd"] ? @[
+                @"sceneResolutionScale", @"antiAliasingMode", @"shadowMode", @"shadowResolution",
+                @"enableShadowTransparency", @"dynamicLights", @"tiledLighting", @"normalMapping",
+                @"parallaxOcclusionMappingToggle", @"drawDistance",
+            ] : nil;
             PluginConfigViewController *cfg = [[PluginConfigViewController alloc] initWithGroup:group
-                                                                                    pluginName:name];
+                                                                                    pluginName:name
+                                                                                     whitelist:whitelist];
             [self presentViewController:cfg animated:YES completion:nil];
         }]];
     }
@@ -1223,6 +1310,9 @@ static const CGFloat kMenuWidth       = 210.0;
         }
         if (attached && !self.launchButton.enabled && !self.launched) {
             self.launchButton.enabled = YES;
+            self.gpuButton.enabled = YES;
+            self.zoneButton.enabled = YES;
+            self.zoneFastButton.enabled = YES;
             [self appendLine:@"StikDebug attached — CS_DEBUGGED set. Tap Start JVM."];
         }
     }];
@@ -1245,8 +1335,8 @@ static const CGFloat kMenuWidth       = 210.0;
 // exactly over the live desktop widget.
 - (CGRect)viewRectForGameX:(int)gx y:(int)gy w:(int)gw h:(int)gh {
     UIImage *img = self.screen.image;
-    if (img == nil) return CGRectZero;
-    CGFloat iw = img.size.width, ih = img.size.height;
+    CGFloat iw = img ? img.size.width : 0, ih = img ? img.size.height : 0;
+    if ((iw <= 0 || ih <= 0) && self.renderW > 0) { iw = self.renderW; ih = self.renderH; }  // GPU present: no UIImage
     if (iw <= 0 || ih <= 0) return CGRectZero;
     CGRect b = self.screen.bounds;
     CGFloat scale = MIN(b.size.width / iw, b.size.height / ih);
@@ -1717,6 +1807,66 @@ static int chatRowCanvasH(void) {
     });
 }
 
+// GPU Route C — long-press the launch button to route into the L1 kill-test (single fire on press-began).
+- (void)onLaunchRouteCL1Gesture:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    if (self.launched) return;
+    self.pendingRouteCL1 = YES;
+    [self onLaunch];
+}
+
+- (void)onLaunchRouteCGpuGesture:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    if (self.launched) return;
+    // GPU Route C black-scene bisection: two-finger long-press = GPU in FIXED mode (NO headless.resize, stays
+    // 765x503). The CPU path renders the scene fine at the resizable 1304x600 + viewport=0x0 state, while GPU
+    // resizable never dispatches the scene render (drawScene=0). Fixed mode isolates whether the resizable
+    // viewport/scene-dispatch path is the GPU-broken one. The ▶ Run GPU button stays GPU + resize.
+    self.pendingRouteCGpu = YES;
+    self.pendingRouteCGpuNoResize = YES;
+    [self onLaunch];
+}
+
+// "117HD readback" button: 117HD resizable on the proven glReadPixels READBACK present (no CAEAGLLayer) — the
+// fallback if the default direct-present path scans out black or regresses on a future change. Same resizable
+// canvas/sharpness/chrome as the green button; just the slower present (~15fps vs ~18+).
+- (void)onLaunchZoneReadback {
+    if (self.launched) return;
+    self.pendingRouteCZone = YES;
+    [self onLaunch];
+}
+
+// THREE-FINGER long-press: boot 117HD/Zone in the FIXED 765x503 fallback (no headless.resize) — the proven
+// readback path from Zone bring-up. The one-tap buttons cover resizable readback (green) + resizable direct
+// present (⚡); this gesture stays as the fixed-mode escape hatch.
+- (void)onLaunchRouteCZoneGesture:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    if (self.launched) return;
+    self.pendingRouteCZone = YES;
+    self.pendingRouteCGpuNoResize = YES;
+    [self onLaunch];
+}
+
+// GPU Route C — dedicated one-tap button (same effect as the two-finger long-press, but unambiguous).
+- (void)onLaunchGpu {
+    if (self.launched) return;
+    self.pendingRouteCGpu = YES;
+    [self onLaunch];
+}
+
+// The DEFAULT 117HD boot (one-tap green button): RESIZABLE + DIRECT present. Resizable = the engine canvas resizes
+// to renderW×renderH (~1302x600) after login (sharp + the native Jagex-mobile chrome activates, all gated on
+// client.isResized()); direct present = RLHD renders straight into a CAEAGLLayer drawable scanned out by
+// presentRenderbuffer (no per-frame glReadPixels readback — device-confirmed faster). The CAEAGLLayer starts hidden
+// so the CPU login/loading blit shows during boot and is revealed only once the world is warmed up (no black boot,
+// no sky flash). Fallbacks: the "117HD readback" button (resizable readback) and the 3-finger gesture (fixed 765).
+- (void)onLaunchZone {
+    if (self.launched) return;
+    self.pendingRouteCZone = YES;
+    self.pendingRouteCZoneDirect = YES;
+    [self onLaunch];
+}
+
 - (void)onLaunch {
     if (self.launched) return;
     // If the login web view ran this session, WebKit is resident and the JVM would crash at code-cache
@@ -1724,6 +1874,9 @@ static int chatRowCanvasH(void) {
     if (self.webKitUsedThisSession) { [self promptRestartToPlay]; return; }
     self.launched = YES;
     self.launchButton.enabled = NO;
+    self.gpuButton.enabled = NO;
+    self.zoneButton.enabled = NO;
+    self.zoneFastButton.enabled = NO;
     [self.jitTimer invalidate];
     [self captureStdio];
 
@@ -1747,12 +1900,27 @@ static int chatRowCanvasH(void) {
     self.captureDir = [docs stringByAppendingPathComponent:@"rl-capture"];
     self.framesShown = 0;
     self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(onDisplayTick)];
+    // ProMotion: drive the display at up to 120Hz so the GPU direct-present (synced to vsync) isn't capped at 60.
+    // The GPU renders in ~3ms, so there's headroom for 120. (Needs CADisableMinimumFrameDurationOnPhone in Info.plist.)
+    if (@available(iOS 15.0, *)) {
+        self.displayLink.preferredFrameRateRange = CAFrameRateRangeMake(60.0f, 120.0f, 120.0f);
+    }
     [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
 
     JVMLogSink log = ^(NSString *line) { [self appendLine:line]; };
     [self appendLine:@"--- launching JVM on worker thread ---"];
 
     JVMLauncher *launcher = [[JVMLauncher alloc] init];
+    launcher.routecL1Mode = self.pendingRouteCL1;   // GPU Route C L1 kill-test (set by the long-press gesture)
+    launcher.routecGpuMode = self.pendingRouteCGpu;  // GPU Route C full path (two-finger long-press)
+    launcher.routecZoneMode = self.pendingRouteCZone; // GPU Zone 117HD path (three-finger long-press)
+    if (self.pendingRouteCL1) {
+        [self appendLine:@"[shell] *** GPU Route C L1 kill-test — booting RouteCL1Probe (not full RuneLite) ***"];
+    } else if (self.pendingRouteCZone) {
+        [self appendLine:@"[shell] *** GPU Zone (117HD) — booting full RuneLite with RLHD on the GL bridge (device GPU) ***"];
+    } else if (self.pendingRouteCGpu) {
+        [self appendLine:@"[shell] *** GPU Route C — booting full RuneLite with the GL bridge (device GPU) ***"];
+    }
     // Edge-to-edge (A1): render aspect MATCHES THE FULL SCREEN (the game view fills the whole bounds), so the
     // blit fills it with no letterbox. The HUD no longer clips at the edges because it is relocated INTO the
     // safe area (updateHudLayout), not kept at the canvas corners.
@@ -1770,9 +1938,86 @@ static int chatRowCanvasH(void) {
     int renderW = (int)lround(renderH * aspect);
     self.renderW = renderW;
     self.renderH = renderH;
-    launcher.resizeSpec = [NSString stringWithFormat:@"%dx%d", renderW, renderH];
-    [self appendLine:[NSString stringWithFormat:@"[shell] full-screen %.0fx%.0f aspect %.3f -> render %@",
-                      sw, sh, aspect, launcher.resizeSpec]];
+    if (self.pendingRouteCGpuNoResize) {
+        // GPU Route C bisection: leave the canvas at the classic fixed 765x503 (no resizable switch) so we can
+        // tell whether the scene render is suppressed by GPU mode itself or only by the resizable-layout path.
+        launcher.resizeSpec = nil;
+        [self appendLine:@"[shell] *** GPU Route C — FIXED mode (no headless.resize, 765x503 bisection) ***"];
+    } else {
+        launcher.resizeSpec = [NSString stringWithFormat:@"%dx%d", renderW, renderH];
+        [self appendLine:[NSString stringWithFormat:@"[shell] full-screen %.0fx%.0f aspect %.3f -> render %@",
+                          sw, sh, aspect, launcher.resizeSpec]];
+    }
+
+#if !defined(RC_BACKEND_ANGLE)
+    // GPU Route C DIRECT PRESENT (EAGL): render straight into a CAEAGLLayer drawable (no glReadPixels readback — the
+    // measured ~16ms/frame bottleneck). A sublayer of the game view, inserted below the chrome subviews, so the
+    // existing gestures + native HUD veneers keep working on top. Only for the normal resizable GPU path (the
+    // no-resize bisection stays on the readback path). Must be created + sized on main BEFORE the JVM thread starts
+    // (the bridge reads this layer from the JVM thread in awtCreateGLContext via renderbufferStorage:fromDrawable:).
+    // Fires for the base-GPU resizable path AND the Zone (117HD) direct-present experiment (3-finger gesture) — the
+    // bridge present path is mode-agnostic (keys off the present layer).
+    if ((self.pendingRouteCGpu || self.pendingRouteCZoneDirect) && !self.pendingRouteCGpuNoResize) {
+        [self.view layoutIfNeeded];
+        CAEAGLLayer *gl = [CAEAGLLayer layer];
+        gl.frame = self.screen.bounds;
+        gl.opaque = YES;
+        gl.contentsScale = (sh > 0 ? (CGFloat)renderH / sh : 1.0);   // drawable = renderW x renderH (== engine canvas)
+        gl.drawableProperties = @{ kEAGLDrawablePropertyRetainedBacking : @NO,
+                                   kEAGLDrawablePropertyColorFormat : kEAGLColorFormatRGBA8 };
+        // Start HIDDEN + lazily reveal: the CAEAGLLayer is a sublayer of the UIImageView so it draws ABOVE the CPU
+        // blit; keeping it hidden lets the CPU login/loading screen show during the ~10s boot, and the present fires
+        // into the hidden layer meanwhile. onDisplayTick reveals it (gl.hidden=NO + stop the CPU blit) once the world
+        // has warmed up (geometry uploaded, JVMLauncher.sceneWarmedUp) so the first visible frame is the world, not the
+        // boot sky. (Armed, not gpuPresent=YES — the switch flips gpuPresent.)
+        gl.hidden = YES;
+        [self.screen.layer insertSublayer:gl atIndex:0];
+        self.glLayer = gl;
+        self.gpuPresentArmed = YES;
+        self.screen.backgroundColor = [UIColor blackColor];
+        [RouteCBridge setPresentLayer:gl];
+        [self appendLine:[NSString stringWithFormat:@"[shell] GPU direct-present ARMED (hidden): CAEAGLLayer %.0fx%.0f @%.3f -> drawable %dx%d (no readback)",
+                          gl.bounds.size.width, gl.bounds.size.height, gl.contentsScale, renderW, renderH]];
+    }
+#elif defined(RC_ANGLE_WINDOW_PRESENT)
+    // Phase A1 (MetalANGLE) WINDOW-SURFACE DIRECT PRESENT (60fps, present=0.07ms). The GPU renders the scene with
+    // ZERO GL errors and eglSwapBuffers presents at 62fps, but on device the CAMetalLayer did not scan out to the
+    // display (black screen) — the window-surface present is NOT yet visually confirmed (the gpu-present probe
+    // sealed on a glReadPixels self-check, not a screenshot). So this path is GATED OFF by default until the
+    // present is debugged; the default ANGLE build uses the proven offscreen+readback path below.
+    if (self.pendingRouteCGpu && !self.pendingRouteCGpuNoResize) {
+        [self.view layoutIfNeeded];
+        CAMetalLayer *ml = [CAMetalLayer layer];
+        ml.frame = self.screen.bounds;
+        ml.opaque = YES;
+        ml.framebufferOnly = NO;
+        ml.drawableSize = CGSizeMake(renderW, renderH);
+        ml.contentsScale = (sh > 0 ? (CGFloat)renderH / sh : 1.0);
+        [self.screen.layer insertSublayer:ml atIndex:0];
+        self.metalLayer = ml;
+        [RouteCBridge setPresentLayer:ml];
+        if ([RouteCBridge prepareWindowSurfaceOnMain]) {
+            self.gpuPresentArmed = YES;   // onDisplayTick flips to direct present once the first GPU frame presents
+            [self appendLine:[NSString stringWithFormat:@"[shell] GPU (MetalANGLE) direct present ARMED: drawable %dx%d", renderW, renderH]];
+        } else {
+            [RouteCBridge setPresentLayer:nil];
+            [ml removeFromSuperlayer];
+            self.metalLayer = nil;
+            [self appendLine:@"[shell] GPU (MetalANGLE) window surface FAILED -> offscreen FBO + readback present"];
+        }
+    } else if (self.pendingRouteCGpu) {
+        [self appendLine:@"[shell] GPU (MetalANGLE) — offscreen FBO + readback present (no-resize bisection)"];
+    }
+#else
+    // Phase A1 default: OFFSCREEN FBO + glReadPixels readback present — the PROVEN-DISPLAY path. The GPU-rendered
+    // scene is published via JavaBridge.gpuPublish -> latestFrame -> onDisplayTick blit (the exact path that
+    // displays the CPU frames), so it is guaranteed to scan out. The readback copy caps it at ~50fps; the 60fps
+    // CAMetalLayer window present is gated behind RC_ANGLE_WINDOW_PRESENT until its display is confirmed. No present
+    // layer is set -> the bridge runs offscreen + readback.
+    if (self.pendingRouteCGpu) {
+        [self appendLine:@"[shell] GPU (MetalANGLE) — offscreen FBO + readback present (proven-display path)"];
+    }
+#endif
 
     NSThread *t = [[NSThread alloc] initWithBlock:^{
         [launcher runProbesWithLog:log];
@@ -1851,14 +2096,30 @@ static int chatRowCanvasH(void) {
 // no disk, no capture budget, so it's smooth and runs for the whole session. Also keeps the app
 // foreground-active+rendering (the jetsam-protection that the §6.2 work established).
 - (void)onDisplayTick {
-    UIImage *img = [JVMLauncher latestFrame];
-    if (img == nil) return;   // VM not up yet / no frame drawn yet
-    self.screen.image = img;
-    self.framesShown++;
-    // Light heartbeat (~once/sec at 60 Hz) so the log shows the live blit running without flooding it.
-    if (self.framesShown == 1 || self.framesShown % 60 == 0) {
-        [self appendLine:[NSString stringWithFormat:@"[shell] live blit frame #%d (%.0fx%.0f)",
-                          self.framesShown, img.size.width, img.size.height]];
+    // Lazy switch to direct present: keep blitting CPU frames (boot/login/loading stay visible) until the GPU has
+    // presented a frame AND the world has warmed up (geometry uploaded) — then reveal the GPU layer and stop the CPU
+    // blit. The warmup gate (sceneWarmedUp) means the first frame the user sees is the world, not the boot sky.
+    if (self.gpuPresentArmed && !self.gpuPresent && [RouteCBridge hasPresentedFrame] && [JVMLauncher sceneWarmedUp]) {
+        self.gpuPresent = YES;
+        self.glLayer.hidden = NO;                    // EAGL: reveal the drawable (was hidden so the CPU login/loading blit showed)
+        self.screen.image = nil;                     // GL presents directly; UIImageView is just a gesture host
+        self.screen.backgroundColor = [UIColor blackColor];
+        [self appendLine:@"[shell] GPU direct present LIVE (world warmed up — layer revealed)"];
+    }
+    if (self.gpuPresent) {
+        // GPU direct-present: the engine renders straight into the CAEAGLLayer and presents on its own thread, so
+        // there is no per-tick blit here. Keep the tick alive for the heartbeat + native HUD/chrome refresh below.
+        self.framesShown++;
+    } else {
+        UIImage *img = [JVMLauncher latestFrame];
+        if (img == nil) return;   // VM not up yet / no frame drawn yet
+        self.screen.image = img;
+        self.framesShown++;
+        // Light heartbeat (~once/sec at 60 Hz) so the log shows the live blit running without flooding it.
+        if (self.framesShown == 1 || self.framesShown % 60 == 0) {
+            [self appendLine:[NSString stringWithFormat:@"[shell] live blit frame #%d (%.0fx%.0f)",
+                              self.framesShown, img.size.width, img.size.height]];
+        }
     }
 
     // Refresh the native tab rails from the chrome snapshot (~10 Hz — positions/active state rarely change,
@@ -1957,8 +2218,8 @@ static int chatRowCanvasH(void) {
 // ScaleAspectFit letterbox. Returns NO if the point is in the letterbox margin (outside the game frame).
 - (BOOL)mapPoint:(CGPoint)p toGameX:(int *)gx toGameY:(int *)gy {
     UIImage *img = self.screen.image;
-    if (img == nil) return NO;
-    CGFloat iw = img.size.width, ih = img.size.height;
+    CGFloat iw = img ? img.size.width : 0, ih = img ? img.size.height : 0;
+    if ((iw <= 0 || ih <= 0) && self.renderW > 0) { iw = self.renderW; ih = self.renderH; }  // GPU present: no UIImage
     if (iw <= 0 || ih <= 0) return NO;
     CGRect b = self.screen.bounds;
     CGFloat scale = MIN(b.size.width / iw, b.size.height / ih);   // ScaleAspectFit

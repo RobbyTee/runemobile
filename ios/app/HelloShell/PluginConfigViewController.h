@@ -11,6 +11,12 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (instancetype)initWithGroup:(NSString *)group pluginName:(NSString *)name;
 
+/// Curated variant: only config items whose key is in `whitelist` are shown, in the whitelist's order. Used for
+/// the native Graphics panel, which must expose ONLY the iOS-ported 117HD settings (the rest would recompile an
+/// unported shader and stop the plugin). Pass nil for the full plugin config.
+- (instancetype)initWithGroup:(NSString *)group pluginName:(NSString *)name
+                    whitelist:(nullable NSArray<NSString *> *)whitelist;
+
 @end
 
 NS_ASSUME_NONNULL_END

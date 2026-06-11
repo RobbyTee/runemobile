@@ -163,8 +163,29 @@ public final class JavaBridge
 	private static int[] bufB;
 	private static boolean useA = true;
 
-	// GPU (Route C) frame-dump diagnostic — off unless -Drunelite.gpuframedump=true. Saves a handful of in-world
-	// GPU frames to disk so the AG2 device gate has pullable colour/flip evidence.
+	// iOS load-in flash guard (GPU mode). The published GPU frame is the composited 3D+UI. When transitioning
+	// from the login/loading screen into the world, RLHD clears the scene to the region's SKY/fog colour (a
+	// daytime light blue) and renders it for the frames before the zone geometry finishes uploading — and since
+	// the OSRS loading screen doesn't cover the 3D viewport in this composite (unlike desktop), that bare sky
+	// flashes through. Device timing (gpudiag) showed the FIRST drawScene fires once the world is already
+	// LOGGED_IN + viewport-sized, but geometry is still uploading for a few frames after that, so releasing on the
+	// very first scene draw still publishes a sky frame. So we COUNT scene draws and hold the previous frame (the
+	// loading screen) until SCENE_WARMUP of them have rendered — by then the zones are uploaded and the world has
+	// geometry. The counter is re-armed to 0 whenever the game leaves the in-world states (login screen / hopping
+	// / connection lost — but NOT plain LOADING, so seamless in-play region streaming while running isn't held).
+	private static volatile int sceneDrawCount;
+	private static final int SCENE_WARMUP = 6;
+
+	/** Hooks.drawScene -> count a rendered 3D frame. */
+	public static void noteSceneDraw() { sceneDrawCount++; }
+	/** Hooks.draw on a non-world game state -> re-arm the load-in hold. */
+	public static void armSceneHold() { sceneDrawCount = 0; }
+	/** Direct-present (no gpuPublish gate): the native shell polls this to know when the world is warmed up
+	 * (geometry uploaded), so it can reveal the GPU layer over the CPU loading-screen blit without a sky flash. */
+	public static boolean presentReady() { return sceneDrawCount >= SCENE_WARMUP; }
+
+	// GPU Route C white-flash diagnostic (one-shot): dump a handful of in-world composited GPU frames to PNG so
+	// the render bug can be seen off-device (the live frame can't be pulled). Gated -Drunelite.gpuframedump=true.
 	private static final boolean FRAME_DUMP = Boolean.getBoolean("runelite.gpuframedump");
 	private static int frameDumpCount;
 	private static int lastFrameDumpSeq;
@@ -256,7 +277,7 @@ public final class JavaBridge
 	}
 
 	// ---- GPU (Route C) publish seam ---------------------------------------------------------------------
-	// In GPU mode the composited frame lives in the EGL FBO, not mainBufferProvider. The native swapBuffers
+	// In GPU mode the composited frame lives in the EAGL FBO, not mainBufferProvider. The native swapBuffers
 	// shim glReadPixels-es the FBO straight into one of the SAME double buffers and publishes it, becoming the
 	// SOLE frameSeq publisher (Hooks gates the CPU snapshot off when isGpu). The two calls run back-to-back on
 	// the client thread (no useA flip between them), so the buffer gpuFrameBackBuffer hands out is exactly the
@@ -285,6 +306,11 @@ public final class JavaBridge
 	/** Publish the back buffer the native shim just filled (vertical-flipped, R/B-swizzled 0x00RRGGBB). */
 	public static void gpuPublish(int w, int h)
 	{
+		// Hold the last good frame through the load-in warmup (the sky-flash guard, above). Not bumping frameSeq
+		// keeps the native reader on the previous frame; useA doesn't flip, so the back buffer the shim just
+		// filled is simply overwritten next frame and the double buffering stays consistent.
+		if (sceneDrawCount < SCENE_WARMUP)
+			return;
 		frameW = w;
 		frameH = h;
 		frame = useA ? bufA : bufB;
@@ -337,7 +363,7 @@ public final class JavaBridge
 		}
 	}
 
-	/** Canvas dimensions for sizing the offscreen GL FBO (queried by the native getFramebuffer). 0 if no client. */
+	/** Canvas dimensions for sizing the EAGL FBO (queried by the native createGLContext). 0 if no client yet. */
 	public static int canvasWidth()
 	{
 		final Client c = client;

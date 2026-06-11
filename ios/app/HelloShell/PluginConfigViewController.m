@@ -102,6 +102,7 @@
 @interface PluginConfigViewController () <UITableViewDataSource, UITableViewDelegate, UIColorPickerViewControllerDelegate>
 @property (nonatomic, copy) NSString *group;
 @property (nonatomic, copy) NSString *pluginName;
+@property (nonatomic, copy) NSArray<NSString *> *whitelist;   // nil = full config; else only these keys, in order
 @property (nonatomic, strong) UITableView *table;
 // Sections in declaration order: each @{ @"name": NSString, @"items": NSMutableArray<NSMutableDictionary*> }.
 @property (nonatomic, strong) NSMutableArray<NSMutableDictionary *> *sections;
@@ -112,9 +113,15 @@
 @implementation PluginConfigViewController
 
 - (instancetype)initWithGroup:(NSString *)group pluginName:(NSString *)name {
+    return [self initWithGroup:group pluginName:name whitelist:nil];
+}
+
+- (instancetype)initWithGroup:(NSString *)group pluginName:(NSString *)name
+                    whitelist:(NSArray<NSString *> *)whitelist {
     if ((self = [super init])) {
         _group = [group copy];
         _pluginName = [name copy];
+        _whitelist = [whitelist copy];
         _sections = [NSMutableArray array];
         self.modalPresentationStyle = UIModalPresentationFullScreen;
     }
@@ -182,6 +189,18 @@
     if (![parsed isKindOfClass:[NSDictionary class]]) { [self.table reloadData]; return; }
     NSArray *items = parsed[@"items"];
     if (![items isKindOfClass:[NSArray class]]) { [self.table reloadData]; return; }
+    // Curated (whitelist) mode: one flat section, items in whitelist order, skipping anything not present.
+    if (self.whitelist) {
+        NSMutableArray *picked = [NSMutableArray array];
+        for (NSString *wantKey in self.whitelist) {
+            for (NSDictionary *it in items) {
+                if ([it[@"key"] isEqualToString:wantKey]) { [picked addObject:[it mutableCopy]]; break; }
+            }
+        }
+        [self.sections addObject:[@{ @"name": @"", @"items": picked } mutableCopy]];
+        [self.table reloadData];
+        return;
+    }
     for (NSDictionary *it in items) {
         NSString *sec = [it[@"section"] isKindOfClass:[NSString class]] ? it[@"section"] : @"";
         NSMutableDictionary *bucket = nil;

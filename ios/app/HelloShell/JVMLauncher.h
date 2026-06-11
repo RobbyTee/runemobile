@@ -14,6 +14,25 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Set on the main thread before -runProbesWithLog: (computed from the screen aspect). Nil = 765x503.
 @property (nonatomic, copy, nullable) NSString *resizeSpec;
 
+/// W3 GPU Route C — when YES, -runProbesWithLog: boots the L1 kill-test (routec-l1.jar ALONE on the classpath,
+/// RouteC_registerGLNatives after VM create, callMain RouteCL1Probe) instead of the full RuneLite boot. The
+/// probe asserts GL.createCapabilities().OpenGL33 + real core GL calls work through the JNI bridge on a live
+/// EAGL ES3 context — the cheapest device gate for Route C. Set on the main thread before -runProbesWithLog:.
+@property (nonatomic, assign) BOOL routecL1Mode;
+
+/// W3 GPU Route C — when YES, the FULL RuneLite boots (DeviceHeadlessBoot) with the JNI GL bridge natives
+/// registered after VM create, so the unmodified gpu plugin renders the scene on the device GPU through the
+/// facade (EAGL ES3 FBO) and the swapBuffers shim publishes each composited frame to JavaBridge. The bundle
+/// must carry the iOS staged shaded jar (stage-ios-gpu-jar.sh). Set on the main thread before -runProbesWithLog:.
+@property (nonatomic, assign) BOOL routecGpuMode;
+
+/// W3 GPU Zone B0.5 — when YES, the FULL RuneLite boots with the staged 117HD (RLHD) jar on the classpath and the
+/// zone facade-delta natives registered (RouteC_registerZoneNatives, on top of the base bridge). RLHDStarter
+/// (-Drunelite.routecrlhd=true) loads + starts rs117.hd.HdPlugin (the Zone renderer) once in-world; HdPlugin
+/// conflicts=GPU so it replaces the base gpu plugin. The bundle must carry client-<ver>-rlhd.jar + the shaded jar
+/// staged with the grown facade superset. Set on the main thread before -runProbesWithLog:.
+@property (nonatomic, assign) BOOL routecZoneMode;
+
 /// CS_DEBUGGED gate (the W1-audit Claim E): true once StikDebug has attached and the
 /// kernel marks this process debugged. Poll this BEFORE warming HotSpot.
 + (BOOL)isDebuggerAttached;
@@ -100,6 +119,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// True when the gamepack has a text field open and awaiting input (search / PM / enter-amount dialog).
 /// Polled by the shell to auto-raise/dismiss the soft keyboard. Call on the main thread.
 + (BOOL)textInputOpen;
+
+/// Direct-present reveal gate: YES once the world geometry is uploaded (the GPU layer can be revealed over the
+/// CPU loading-screen blit without a sky flash). YES if the bridge isn't available.
++ (BOOL)sceneWarmedUp;
 
 /// Read the W3 hybrid-chrome read-only snapshot (reverse JNI -> MobileChromeBridge.getSnapshot) as a JSON
 /// string: active-tab varc + tab-stone / side-panel / minimap / orbs / chat / viewport bounds in

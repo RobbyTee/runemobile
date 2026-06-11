@@ -1,0 +1,22 @@
+[ga] ===== gpu-angle: MetalANGLE capability probe (EGL pbuffer on ANGLE/Metal) =====
+[ga] requested ANGLE platform = Metal (eglGetPlatformDisplayEXT)
+[ga] EGL 1.5  vendor=Google Inc. (Apple)
+[ga] EGL_VERSION = 1.5 (ANGLE 2.1.2440 git hash: 6024e9c05548)
+[ga] ES 3.1 context unavailable; fell back to ES 3.0
+[ga] GL_RENDERER = ANGLE (Apple, ANGLE Metal Renderer: Apple A19 Pro GPU, Version 26.5 (Build 23F77))
+[ga] GL_VERSION = OpenGL ES 3.0.0 (ANGLE 2.1.2440 git hash: 6024e9c05548)
+[ga] GL_SLVERSION = OpenGL ES GLSL ES 3.00 (ANGLE 2.1.2440 git hash: 6024e9c05548)
+[ga] GL_VENDOR = Google Inc. (Apple)
+[ga] ES_VERSION = 3.0  (es31=NO)
+[ga] ----- TEST A: EXT_clip_control reverse-Z depth precision -----
+[ga]   GL_EXT_clip_control advertised = YES
+[ga]   stored window_z @ viewZ=6000: clip OFF=0.508333 (expect ~0.508333)  clip ON=0.016667 (expect ~0.016667)
+[ga]   CLIP_CONTROL_WORKS = YES (glerr=0x0000)
+[ga] ----- TEST B: compute shader + SSBO (117HD's hard requirement) -----
+[ga]   context is not ES 3.1 -> no compute; COMPUTE_WORKS = NO
+[ga] ----- TEST C: MSAA -----
+[ga]   GL_MAX_SAMPLES=8  4x-MSAA fbo complete=YES
+[ga] ANGLE_METAL = YES
+[ga] VERDICT angle_metal=YES es31=NO clip_control=YES compute=NO
+[ga] ===== gpu-angle done =====
+[ga] log written to /var/mobile/Containers/Data/Application/79600F46-437F-4DC0-8261-734F2C494382/Documents/gpu-angle-verdict.log

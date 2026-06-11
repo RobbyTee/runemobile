@@ -49,6 +49,13 @@ public final class RLHDStarter
 	private static final boolean ENABLED = Boolean.getBoolean("runelite.routecrlhd");
 	private static final String HD_PLUGIN = "rs117.hd.HdPlugin";
 	private static final int MAX_ATTEMPTS = 40;     // RLHD's own startUp retry needs the game cache; allow ~a minute
+	// Sentinel (custom key in the "hd" group) marking that the user-tunable graphics defaults were seeded once.
+	// Present -> a later launch respects the persisted values (the user's 117HD plugin-config edits) instead of
+	// re-forcing the defaults. Not a real ConfigItem, so it never shows in the panel.
+	private static final String GFX_SEEDED_KEY = "iosGfxSeeded";
+	// Separate one-shot sentinel for the shadow-map-resolution fps default, so applying it doesn't re-seed (reset)
+	// the user's other tunable picks.
+	private static final String GFX_SHADOWRES_KEY = "iosGfxShadowRes1k";
 
 	private static boolean done;
 	private static boolean configForced;
@@ -95,11 +102,14 @@ public final class RLHDStarter
 		lastActionMs = now;
 
 		// Phase 0: BEFORE loading the plugin, force the simplest GLSL-ES paths so HdPlugin.startUp's shader compile
-		// uses them: uiScalingMode=LINEAR (else HYBRID/xBR pull in the int-heavy scale/*.glsl) and tiledLighting=false
-		// (else the tiled-lighting program + image-store path compile). Config writes are queued on the client thread;
-		// returning here lets them commit before the load on the next tick. (Group "hd" per HdPluginConfig.)
+		// uses them. RLHDStarter is shared by iOS (Route C / EAGL, full feature port) AND Android (real-HW,
+		// mobile-sane) — both armed by -Drunelite.routecrlhd — but they need different 117HD config. The iOS shell
+		// sets -Drunelite.gfxIos=true; without it (Android) we apply Android's mobile config. Config writes queue on
+		// the client thread; returning lets them commit before the load on the next tick. (Group "hd" per HdPluginConfig.)
 		if (!configForced)
 		{
+			if (!Boolean.getBoolean("runelite.gfxIos"))
+			{
 			MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");
 			MobileUiBridge.setConfig("hd", "tiledLighting", "false");
 			// Mobile-sane quality: 117HD's desktop defaults (MSAA_8 + an 8192x8192 shadow map + 50-tile draw)
@@ -120,6 +130,58 @@ public final class RLHDStarter
 				configForced = true;
 				log.info("[routecrlhd] forced mobile config: LINEAR, tiledLighting=off, AA=off, shadows=2048, draw=30, single-threaded");
 			}
+				return;
+			}
+			// SAFETY-CRITICAL (forced EVERY launch, NOT user-tunable): each MUST stay or RLHD recompiles an unported
+			// shader / hits an iOS bridge limit and stops the plugin. uiScalingMode=LINEAR (HYBRID/xBR pull in unported
+			// scale/*.glsl); shadowFiltering=SMOOTH (DITHERED/PIXELATED unported); wind/characterDisplacement off
+			// (compute-only no-ops); asyncModelProcessing off (single thread-affine EAGL ctx can't do RLHD multithreaded
+			// GL -> player flashing); sceneScalingMode=LINEAR (smooth downsample). These are kept OUT of the native
+			// graphics panel. (POM is now ported -> it's a user-tunable, seeded off below.) uiScalingMode is also the
+			// client-thread-readiness probe.
+			final String probe = MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");
+			if (!probe.contains("\"ok\":true"))
+				return;   // client thread not ready yet — retry next tick before seeding/committing
+			MobileUiBridge.setConfig("hd", "shadowFiltering", "SMOOTH");
+			MobileUiBridge.setConfig("hd", "windDisplacement", "false");
+			MobileUiBridge.setConfig("hd", "characterDisplacement", "false");
+			MobileUiBridge.setConfig("hd", "asyncModelProcessing", "false");
+			MobileUiBridge.setConfig("hd", "sceneScalingMode", "LINEAR");
+
+			// USER-TUNABLE graphics defaults — seeded ONCE (first launch, gated on the GFX_SEEDED_KEY sentinel) then
+			// PERSISTED. After the first launch the user owns these via the 117HD plugin config; we no longer force
+			// them, so their edits survive relaunch (RLHD loads the persisted values). All values here are the
+			// iOS-ported set the native panel exposes (each safe to change live): tiledLighting (whole-scene lighting),
+			// dynamicLights=SOME (50 lights), normalMapping (surface relief), shadowMode=DETAILED + transparency (dappled
+			// foliage shadows), antiAliasingMode=MSAA_4 (device max), sceneResolutionScale=100 (native, no SSAA — the fps
+			// pick; raise for sharpness). MAX_LIGHT_COUNT/UBO sizing + the tiled FBO/shader notes are in project memory.
+			final boolean seed = !"1".equals(MobileUiBridge.getConfig("hd", GFX_SEEDED_KEY));
+			if (seed)
+			{
+				MobileUiBridge.setConfig("hd", "tiledLighting", "true");
+				MobileUiBridge.setConfig("hd", "dynamicLights", "SOME");
+				MobileUiBridge.setConfig("hd", "normalMapping", "true");
+				MobileUiBridge.setConfig("hd", "shadowMode", "DETAILED");
+				MobileUiBridge.setConfig("hd", "enableShadowTransparency", "true");
+				MobileUiBridge.setConfig("hd", "antiAliasingMode", "MSAA_4");
+				MobileUiBridge.setConfig("hd", "sceneResolutionScale", "100");
+				MobileUiBridge.setConfig("hd", "parallaxOcclusionMappingToggle", "false"); // POM ported + available, off by default (it ADDS GPU cost)
+				MobileUiBridge.setConfig("hd", GFX_SEEDED_KEY, "1");
+				MobileUiBridge.flushConfigQueued();   // persist the seed + sentinel (queued AFTER the writes above)
+			}
+			// fps one-shot (independent sentinel so it doesn't reset the user's other picks): lower the shadow map to
+			// 1K once. The shadow pass (full scene rendered from the light's POV) is the heaviest GPU cost after the
+			// main scene; 1K vs 2K is barely visible at the mobile present scale but a real fps win. Reversible in the
+			// 117HD plugin config (shadowResolution).
+			if (!"1".equals(MobileUiBridge.getConfig("hd", GFX_SHADOWRES_KEY)))
+			{
+				MobileUiBridge.setConfig("hd", "shadowResolution", "RES_1024");
+				MobileUiBridge.setConfig("hd", GFX_SHADOWRES_KEY, "1");
+				MobileUiBridge.flushConfigQueued();
+			}
+			configForced = true;
+			log.info("[routecrlhd] iOS config applied — safety forced (uiScaling/shadowFiltering/scaling LINEAR/SMOOTH; "
+				+ "POM/wind/char-disp/async OFF); tunables {}", seed ? "SEEDED (first launch)" : "from persisted 117HD plugin config");
 			return;
 		}
 

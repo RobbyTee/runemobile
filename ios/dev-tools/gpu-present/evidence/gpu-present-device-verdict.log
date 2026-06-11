@@ -1,0 +1,13 @@
+[gp] CAMetalLayer 440x956 @3.0 -> drawable 1320x2868
+[gp] ===== gpu-present: ANGLE/Metal WINDOW-surface present de-risk =====
+[gp] EGL 1.5 vendor=Google Inc. (Apple)
+[gp] GL_RENDERER = ANGLE (Apple, ANGLE Metal Renderer: Apple A19 Pro GPU, Version 26.5 (Build 23F77))
+[gp] GL_VERSION  = OpenGL ES 3.0.0 (ANGLE 2.1.2440 git hash: 6024e9c05548)
+[gp] window surface = 1320x2868
+[gp]   clip_control: window_z OFF=0.508333 ON=0.016667 -> WORKS=YES
+[gp]   msaa: GL_MAX_SAMPLES=8  4x fbo complete=YES
+[gp] log written to /var/mobile/Containers/Data/Application/D59595F0-CF90-4558-8761-AFAA3A9C30A9/Documents/gpu-present-verdict.log
+[gp]   fb_readback: green-bar pixel = (26,191,26,255) -> YES
+[gp] ANGLE_METAL = YES
+[gp] VERDICT window_present=YES fb_readback=YES clip_control=YES msaa=YES
+[gp] ===== gpu-present done (screenshot the device to confirm bars are on screen) =====
