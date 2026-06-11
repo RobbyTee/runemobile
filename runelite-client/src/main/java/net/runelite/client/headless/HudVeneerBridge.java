@@ -33,6 +33,7 @@ import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
+import net.runelite.api.widgets.WidgetModalMode;
 import net.runelite.api.widgets.WidgetPositionMode;
 import net.runelite.api.widgets.WidgetSizeMode;
 
@@ -276,6 +277,14 @@ public final class HudVeneerBridge
 				setChatAreaWidth(Integer.getInteger("runelite.hudveneer.test.areaW", 0));
 			}
 			final boolean preEoc = c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
+
+			// The minimap-orb cluster's ORBS layer is built, but in this headless boot the engine never opens the
+			// Orbs interface (group 160) INTO that layer — so the HP/prayer/run/spec orbs + world-map/wiki/store
+			// icons never render (verified: the ORBS layer widget exists and is un-hidden, but every Orbs.* child
+			// resolves null). Open it ourselves once the layer exists; the interface's own onload binds it to the
+			// live orb varplayers, so it renders + updates like a normal client. No-op once the orbs are present.
+			ensureOrbsLoaded(c, preEoc);
+
 			final int chatId = preEoc ? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER;
 
 			// Chat box: keep the engine chatbox FULLY ALIVE at all times (never hidden). To "collapse" (the user
@@ -577,6 +586,45 @@ public final class HudVeneerBridge
 	/** One-time recursive dump of the minimap cluster (MAP_CONTAINER tree) + the named chrome widgets, so a fresh
 	 *  session can see the exact child layout (bounds / relative / size modes / sprite / type) before designing the
 	 *  enlarge-and-reposition. Off-device research only. */
+	// Cooldown so a failing open is not hammered every tick; reset implicitly once the orbs load (early return).
+	private static int orbsOpenCooldown = 0;
+
+	/**
+	 * Open the Orbs interface (group 160) into the toplevel's ORBS layer if it isn't already loaded. Headless boots
+	 * here build the ORBS layer but never populate it, leaving the orbs invisible; opening the interface (NON_MODAL,
+	 * like the engine would) runs its onload so the orbs bind to live varplayers and render + update normally. Runs
+	 * on the client thread (called from {@link #tick}). No-op once the orbs are present; if the toplevel rebuilds
+	 * (resize / relogin) and drops them, the next tick re-opens after a short cooldown.
+	 */
+	private static void ensureOrbsLoaded(Client c, boolean preEoc)
+	{
+		if (c.getWidget(InterfaceID.Orbs.ORB_HEALTH) != null)
+		{
+			return; // already loaded
+		}
+		if (orbsOpenCooldown > 0)
+		{
+			orbsOpenCooldown--;
+			return;
+		}
+		final int orbLayer = preEoc ? InterfaceID.ToplevelPreEoc.ORBS : InterfaceID.ToplevelOsrsStretch.ORBS;
+		if (c.getWidget(orbLayer) == null)
+		{
+			return; // cluster not built yet (welcome screen / mid-rebuild)
+		}
+		orbsOpenCooldown = 50; // don't re-attempt every frame if the open doesn't take
+		try
+		{
+			c.openInterface(orbLayer, InterfaceID.ORBS, WidgetModalMode.NON_MODAL);
+			log.info("[veneer] opened Orbs interface {} into ORBS layer {}",
+				InterfaceID.ORBS, Integer.toHexString(orbLayer));
+		}
+		catch (RuntimeException ex)
+		{
+			log.warn("[veneer] openInterface(orbs) failed", ex);
+		}
+	}
+
 	private static void dumpMinimapTree(Client c, boolean preEoc)
 	{
 		final int[] ids = {
