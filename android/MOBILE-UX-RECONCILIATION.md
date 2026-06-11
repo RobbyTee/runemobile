@@ -292,3 +292,29 @@ reconstruction (XL); Finding 11 real-device pass (hardware).**
 reach native screens from the panel list. Remaining: Finding 14 Time Tracking panel; Finding 15 free-drag;
 Finding 16 minimap reconstruction (XL); Finding 11 real-device pass (hardware).** Native screens now in the
 panel list: XP Tracker, Loot Tracker, Grand Exchange, World Switcher, Quest Helper, Overlay Layout, Infoboxes.
+
+## Session 2026-06-10 (AP-4 cont.): minimap magnifier (Finding 16, scaled-blit MVP) — FULLY VERIFIED
+
+- **Finding 16 — minimap magnifier — VERIFIED end-to-end.** The engine minimap is uncomfortably small on a
+  phone. A new **🗺 dev-bar toggle** shows an enlarged minimap: a **scaled-blit of the live minimap region
+  cropped from the composited frame**, with tap-to-walk mapped back to the real (relocated) minimap (which
+  stays live underneath). **This gives REAL terrain, not a dot-radar** — and corrects the audit: B5 #10 said
+  "no API to read the composited minimap bitmap → scaled blit impossible → must reconstruct from data (XL)".
+  That predated `getFramePixels` (added for Finding 5), which exposes the whole composited CPU frame, so the
+  minimap region is readable and the scaled-blit (higher fidelity, far simpler than terrain reconstruction)
+  is viable.
+  - **Efficient crop:** new `nativeMinimapCrop(rx,ry,rw,rh)` reads the full frame **once in HotSpot** (pinned,
+    no copy) and returns only the small `[rw*rh]` crop to ART — **no per-frame 3.7 MB marshal**. Pulled ~6 Hz
+    off the UI thread (one in flight at a time), gated on the magnifier toggle. The minimap rect comes from the
+    chrome snapshot's `minimap` field (tracks the relocate). Tap → `(frac × rect)` canvas point inside the real
+    minimap → `clickPrecise` (walk). No shared-Java change; contract UNCHANGED (185).
+  - **Verified:** toggle on → large minimap with real terrain (river/paths/trees + compass + white player dot +
+    yellow NPC dots); tapping it logged `f16: magnifier walk -> canvas (1198,65)` (inside the real minimap rect)
+    and **the player walked there** (scene + minimap shifted, walk path drawn). Evidence:
+    `dev-tools/ap4-mobile-ux/evidence-minimap-{magnifier,walk}.png`.
+  - **Follow-ups:** circular clip (currently a square crop), an always-on enlarged-minimap mode (vs the toggle),
+    and true terrain reconstruction (only needed if a non-CPU/GPU path ever lacks `getFramePixels`).
+
+**AP-4 progress: Findings 14 (3/4 panels), 15 (overlay snap), 22 (infobox menu), 16 (minimap magnifier) DONE.
+Remaining: Finding 14 Time Tracking panel; Finding 15 free pixel-drag; Finding 11 real-device pass (the only
+item needing hardware not on the bench).** Dev-bar now: ⚙ ⌨ ⇧ ▦ ⎆ ⏻ ◆ HD 📷 🗺.
