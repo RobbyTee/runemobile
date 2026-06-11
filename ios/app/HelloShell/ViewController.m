@@ -99,6 +99,9 @@
 @property (nonatomic, assign) BOOL menuBuilding;          // right-clicked; polling for the engine menu snapshot
 @property (nonatomic, assign) BOOL menuTouchActive;       // the long-press finger is still down (drag in progress)
 @property (nonatomic, assign) NSTimeInterval menuOpenAt;  // when the right-click fired (build timeout)
+@property (nonatomic, assign) BOOL menuClosing;           // committed/cancelled; native cover held up until the
+                                                          // engine menu actually closes (else it peeks for a frame)
+@property (nonatomic, assign) NSTimeInterval menuClosingAt; // when the close click fired (teardown timeout)
 @property (nonatomic, strong) UIView *menuContainer;      // the native OSRS-styled menu box
 @property (nonatomic, strong) NSMutableArray<UIView *> *menuRows; // the row views (index 0 = top = default)
 @property (nonatomic, strong) NSArray *menuRowEntries;    // the entry dicts, for re-rendering a row on hover
@@ -2197,6 +2200,22 @@ static int chatRowCanvasH(void) {
         }
     }
 
+    // #8 close: after a commit/cancel, hold the native cover up until the engine menu has actually closed (the
+    // snapshot's menuOpen flips false), so the briefly-still-open engine menu never peeks out from under it.
+    // Timeout at 0.3s in case the snapshot lags, so the cover can't get stuck.
+    if (self.menuClosing) {
+        BOOL engineClosed = NO;
+        NSString *snap = [JVMLauncher menuPeekSnapshot];
+        if (snap.length) {
+            NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
+                                                             options:0 error:nil];
+            if ([d isKindOfClass:[NSDictionary class]] && ![d[@"menuOpen"] boolValue]) engineClosed = YES;
+        }
+        if (engineClosed || CACurrentMediaTime() - self.menuClosingAt > 0.3) {
+            [self teardownMenuViews];
+        }
+    }
+
     // Interactable-tap feedback: when the engine resolved a tap to a real interactable it bumps the counter —
     // give a light buzz (the "you grabbed something" feel) and draw a RED click ring. A plain walk doesn't bump,
     // so after a short grace window we draw a YELLOW ring instead (and stay silent). Matches the official app.
@@ -2311,7 +2330,7 @@ static int chatRowCanvasH(void) {
 // Open the engine right-click menu at game (gx,gy) and arm the native big-row overlay anchored at the finger
 // (loc, view coords). Shared by the world long-press (onLongPress) and the chat-tab long-press (filter menu).
 - (void)openEngineMenuAtGameX:(int)gx gameY:(int)gy anchor:(CGPoint)loc {
-    if (self.menuOpen) [self teardownMenuViews];   // re-press: drop a stale menu, open fresh
+    if (self.menuOpen || self.menuClosing) [self teardownMenuViews];   // re-press: drop a stale/closing menu, open fresh
     self.lastMenuX = gx; self.lastMenuY = gy;
     self.menuAnchor = loc;
     [JVMLauncher postClickX:gx y:gy button:3];      // open the engine's OWN right-click menu at the target
@@ -2567,7 +2586,7 @@ static int chatRowCanvasH(void) {
     [self appendLine:[NSString stringWithFormat:@"[shell] menu %@ @game %d,%d",
                       self.menuFingerOnMenu ? @"select" : @"cancel", self.menuSelX, self.menuSelY]];
     self.menuOpen = NO;
-    [self teardownMenuViews];
+    [self beginMenuClose];   // hold the native cover up until the engine menu actually closes (no peek-through)
 }
 
 // Gesture interrupted (system took the touch): close the menu with no action so nothing stays stuck — click the
@@ -2583,7 +2602,18 @@ static int chatRowCanvasH(void) {
         [self appendLine:@"[shell] right-click menu closed"];
     }
     self.menuOpen = NO;
-    [self teardownMenuViews];
+    [self beginMenuClose];   // keep the cover up through the engine-menu close latency
+}
+
+// Defer the native-overlay teardown: the engine right-click menu (now composited into the UI in GPU mode) takes a
+// game cycle or two to actually close after the commit/cancel click. Removing the native cover immediately exposes
+// the engine menu for that gap (the "native menu disappears, native engine menu flashes" artifact). Instead keep
+// the cover up and let onDisplayTick tear it down once the MenuPeekBridge snapshot reports the engine menu closed
+// (or a short timeout). The container is inert here (menuOpen=NO), so gestures/camera already recovered.
+- (void)beginMenuClose {
+    if (self.menuContainer == nil) { [self teardownMenuViews]; return; }
+    self.menuClosing = YES;
+    self.menuClosingAt = CACurrentMediaTime();
 }
 
 - (void)teardownMenuViews {
@@ -2593,6 +2623,7 @@ static int chatRowCanvasH(void) {
     self.menuRowEntries = nil;
     self.menuHighlight = -1;
     self.menuBuilding = NO;
+    self.menuClosing = NO;
 }
 
 // one-finger drag -> rotate the camera. Feed incremental pixel deltas (reset the recognizer's translation

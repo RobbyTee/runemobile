@@ -125,6 +125,66 @@ public final class JavaBridge
 	// Still tunable via -Drunelite.touch.snapRadius if a small fingertip forgiveness is ever wanted.
 	private static final int SNAP_RADIUS = Integer.getInteger("runelite.touch.snapRadius", 0);
 	private static volatile int snapCount;
+	// Resizable-mode touch diagnostics: log the FULL coordinate chain (engine canvas, world viewport, the
+	// received tap, snap result) at INFO on each in-game tap so one device session surfaces any mismatch
+	// between the native present size and what the engine projects. Default on; silence with -Drunelite.touch.diag=false.
+	private static final boolean TOUCH_DIAG =
+		Boolean.parseBoolean(System.getProperty("runelite.touch.diag", "true"));
+	// Hide the vanilla OSRS click cross (the red/yellow animated X at the tap point). It became visible once the
+	// engine UI composites in GPU mode and is redundant with our own native click ring. Blank the cross sprites
+	// once (replace each with a 1x1 transparent sprite). Toggle with -Drunelite.touch.hideClickCross=false.
+	private static final boolean HIDE_CLICK_CROSS =
+		Boolean.parseBoolean(System.getProperty("runelite.touch.hideClickCross", "true"));
+	private static volatile boolean clickCrossHidden;
+
+	/** One-shot: blank the engine's click-cross sprites so no vanilla X draws at the tap (client thread). */
+	private static void hideClickCross(Client c)
+	{
+		if (clickCrossHidden || !HIDE_CLICK_CROSS)
+		{
+			return;
+		}
+		try
+		{
+			final net.runelite.api.SpritePixels[] cross = c.getCrossSprites();
+			if (cross == null)
+			{
+				return;   // not loaded yet — try again on the next tap
+			}
+			final net.runelite.api.SpritePixels blank = c.createSpritePixels(new int[]{0}, 1, 1);
+			for (int i = 0; i < cross.length; i++)
+			{
+				cross[i] = blank;
+			}
+			clickCrossHidden = true;
+			log.info("[touch] vanilla click cross hidden ({} sprites)", cross.length);
+		}
+		catch (RuntimeException ex)
+		{
+			log.debug("[touch] hideClickCross failed", ex);
+		}
+	}
+
+	/** Log the engine canvas + world-viewport geometry against an incoming tap (client thread; reads are safe here). */
+	private static void diagGeometry(Client c, String tag, int x, int y)
+	{
+		if (!TOUCH_DIAG)
+		{
+			return;
+		}
+		try
+		{
+			log.info("[touchdiag] {} tap={},{} canvas={}x{} resized={} viewport=({},{} {}x{}) inVp={}",
+				tag, x, y,
+				c.getCanvasWidth(), c.getCanvasHeight(), c.isResized(),
+				c.getViewportXOffset(), c.getViewportYOffset(), c.getViewportWidth(), c.getViewportHeight(),
+				inWorldViewport(c, x, y));
+		}
+		catch (RuntimeException ex)
+		{
+			log.info("[touchdiag] {} tap={},{} (geometry read failed: {})", tag, x, y, ex.toString());
+		}
+	}
 
 	// Selection feedback, drawn in Java straight into the game frame (so it's tight + tracks the entity, unlike
 	// a native polygon of the loose convex hull). A left tap that resolves onto an NPC/object flashes a tight
@@ -528,6 +588,8 @@ public final class JavaBridge
 	 */
 	private static void startRightClick(Canvas canvas, ClientThread ct, Client c, int x, int y)
 	{
+		diagGeometry(c, "R", x, y);
+		hideClickCross(c);
 		int cx = x, cy = y;
 		final boolean snap = SNAP_ENABLED && SMART_SNAP && (!SNAP_VIEWPORT_GATE || inWorldViewport(c, x, y));
 		if (snap)
@@ -540,8 +602,25 @@ public final class JavaBridge
 			}
 		}
 		final int fx = cx, fy = cy;
+		if (TOUCH_DIAG)
+		{
+			log.info("[touchdiag] R resolved {},{} -> {},{} (snap={})", x, y, fx, fy, fx != x || fy != y);
+		}
 		postMove(canvas, fx, fy);
-		ct.invokeLater(() -> postClickButtons(canvas, fx, fy, MouseEvent.BUTTON3));
+		ct.invokeLater(() -> {
+			postClickButtons(canvas, fx, fy, MouseEvent.BUTTON3);
+			if (TOUCH_DIAG)
+			{
+				ct.invokeLater(() -> {
+					try
+					{
+						log.info("[touchdiag] R menu after right-click: open={} count={}",
+							c.isMenuOpen(), c.getMenuEntries() == null ? -1 : c.getMenuEntries().length);
+					}
+					catch (RuntimeException ignored) { }
+				});
+			}
+		});
 	}
 
 	/**
@@ -557,6 +636,8 @@ public final class JavaBridge
 	 */
 	private static void startLeftTap(Canvas canvas, ClientThread ct, Client c, int x, int y)
 	{
+		diagGeometry(c, "L", x, y);
+		hideClickCross(c);
 		final boolean snap = SNAP_ENABLED && (!SNAP_VIEWPORT_GATE || inWorldViewport(c, x, y));
 		if (SMART_SNAP && snap)
 		{
@@ -565,6 +646,11 @@ public final class JavaBridge
 			{
 				armEntityOutline(t.actor, t.object);   // tight model outline, drawn in-frame
 				interactTapSeq++;                      // signal the native shell to fire the interactable-hit haptic
+				// Click point comes from resolveSnapTarget: actors use the hull CENTROID (a convex hull is loose —
+				// includes empty space above the model — so the centroid lands on the body, not the tapped air);
+				// objects use the LITERAL TAP (an object's clickbox is its loose 3D bounding BOX whose centroid
+				// floats off the model onto ground for tall/large objects — the zoomed-out "outline but walks"
+				// bug — whereas the literal tap is on the visible object the finger aimed at).
 				final int cx = t.point[0];
 				final int cy = t.point[1];
 				if (!t.literal)
@@ -573,8 +659,11 @@ public final class JavaBridge
 				}
 				postMove(canvas, cx, cy);
 				ct.invokeLater(() -> postLeftTapThenClear(canvas, ct, cx, cy));
-				log.debug("[snap] smart: tap {},{} -> {} {},{} ({})",
-					x, y, t.literal ? "hit" : "SNAP", cx, cy, t.actor != null ? "actor" : "object");
+				if (TOUCH_DIAG)
+				{
+					log.info("[touchdiag] L smart: tap {},{} -> {} {},{} ({})",
+						x, y, t.literal ? "hit" : "SNAP", cx, cy, t.actor != null ? "actor" : "object");
+				}
 				return;
 			}
 			// Nothing interactable within reach -> a deliberate walk. Clear any lingering outline; the walk
@@ -584,7 +673,10 @@ public final class JavaBridge
 			selUntil = 0;
 			postMove(canvas, x, y);
 			ct.invokeLater(() -> postLeftTapThenClear(canvas, ct, x, y));
-			log.debug("[snap] smart: tap {},{} -> walk (no entity within {}px)", x, y, snapRadius());
+			if (TOUCH_DIAG)
+			{
+				log.info("[touchdiag] L smart: tap {},{} -> walk (no entity within {}px)", x, y, snapRadius());
+			}
 			return;
 		}
 		final int[] p = snap ? resolveSnap(c, x, y) : new int[]{x, y};
@@ -612,6 +704,30 @@ public final class JavaBridge
 	{
 		postClickButtons(canvas, x, y, MouseEvent.BUTTON1);
 		ct.invokeLater(JavaBridge::clearHover);
+		if (TOUCH_DIAG)
+		{
+			// Capture where the engine ACTUALLY resolved the walk (the red destination flag) vs the clicked point,
+			// relative to the player — to catch the "walks to the opposite-direction tile" report. The destination
+			// is set a cycle or two after the click, so peek twice later.
+			final Client c = client;
+			ct.invokeLater(() -> ct.invokeLater(() -> diagWalkDest(c, x, y)));
+		}
+	}
+
+	/** Log the resolved walk destination (scene coords) against the clicked viewport point and the player tile. */
+	private static void diagWalkDest(Client c, int clickX, int clickY)
+	{
+		try
+		{
+			final net.runelite.api.coords.LocalPoint dst = c.getLocalDestinationLocation();
+			final net.runelite.api.Player me = c.getLocalPlayer();
+			final net.runelite.api.coords.LocalPoint mine = me == null ? null : me.getLocalLocation();
+			log.info("[touchdiag] walkDest click={},{} dest={} player={}",
+				clickX, clickY,
+				dst == null ? "null" : (dst.getSceneX() + "," + dst.getSceneY()),
+				mine == null ? "null" : (mine.getSceneX() + "," + mine.getSceneY()));
+		}
+		catch (RuntimeException ignored) { }
 	}
 
 	/** The chosen tap target: the entity refs to outline, the {@code point} to click, and how it was hit. */
@@ -736,14 +852,18 @@ public final class JavaBridge
 				}
 			}
 
-			// Direct hits: an actor under the finger outranks an object under the finger (OSRS-like).
+			// Direct hits: an actor under the finger outranks an object under the finger (OSRS-like). Both click the
+			// CENTROID of the matched silhouette — actors via getConvexHull(), objects via the GameObject model hull
+			// (see considerInteractableObj). Both hulls are the model outline (not a loose bounding box), so the
+			// centroid lands on the model and the engine resolves the entity's own action — the outline guarantees
+			// the interact instead of leaking a "Walk here" to a stray tile.
 			if (actors.contain != null)
 			{
-				return new SnapTarget((Actor) actors.contain, null, new int[]{x, y}, true);
+				return new SnapTarget((Actor) actors.contain, null, hullCentroid(actors.containShape), true);
 			}
 			if (objects.contain != null)
 			{
-				return new SnapTarget(null, (TileObject) objects.contain, new int[]{x, y}, true);
+				return new SnapTarget(null, (TileObject) objects.contain, hullCentroid(objects.containShape), true);
 			}
 
 			// Near misses: snap to whichever interactable is closest to the finger (tie -> actor). Click its own
@@ -778,7 +898,18 @@ public final class JavaBridge
 		{
 			return;
 		}
-		final Shape s = o.getClickbox();
+		// Hit-test a GameObject (trees, rocks, doors, banks, altars, …) against its model CONVEX HULL, not its
+		// getClickbox(): the clickbox is the model's loose 3D bounding BOX, so it "contains" the empty air beside
+		// and above a tall object. A tap there borders the object but the literal click lands on air, and the
+		// engine projects "Walk here" to the far ground tile under that screen ray — the "object bordered but my
+		// character walked to a completely different tile" bug. The convex hull is the model silhouette, so a
+		// contain hit is genuinely on the object and its centroid is a reliable click point. Non-GameObjects
+		// (walls / ground / decorative) are effectively flat, so their clickbox already matches the model.
+		Shape s = (o instanceof GameObject) ? ((GameObject) o).getConvexHull() : null;
+		if (s == null)
+		{
+			s = o.getClickbox();
+		}
 		if (s == null)
 		{
 			return;

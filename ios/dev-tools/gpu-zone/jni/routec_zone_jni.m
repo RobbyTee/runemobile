@@ -219,6 +219,24 @@ static void JNICALL z_glTexSubImage3D(JNIEnv *e, jclass c, jint t, jint lvl, jin
     }
     glTexSubImage3D((GLenum)t, lvl, xo, yo, zo, w, h, d, (GLenum)fmt, (GLenum)type, p);
 }
+// Interface-texture (texUi) upload, PBO-offset variant. RLHD's HdPlugin.drawUi uploads the composited engine UI
+// + ALL 2D overlays (HUD, inventory, chat, hit splats, HP/overhead bars, tile markers, our model-outline) into
+// texUi with GL_BGRA + GL_UNSIGNED_INT_8_8_8_8_REV from pboUi. That format/type pair is desktop-only: iOS GLES 3.0
+// accepts GL_BGRA_EXT only with GL_UNSIGNED_BYTE, so on device the upload errors and texUi stays the empty
+// glTexImage2D(...,NULL) allocation -> the WHOLE engine UI layer composites blank (only the native chrome veneers
+// are visible; world-area overlays like splats/HP bars/markers/outlines have nothing behind them and vanish). The
+// pboUi bytes are already [B,G,R,A] per pixel (native-order 0xAARRGGBB ints), which GL_BGRA + GL_UNSIGNED_BYTE
+// consumes with correct channels — so just downgrade the type. Other glTexSubImage2D callers (the TBO->2D repack
+// uses GL_RGB_INTEGER) are untouched. iOS-only home; desktop/Android keep the pristine call.
+static void JNICALL z_glTexSubImage2D_J(JNIEnv *e, jclass c, jint a0, jint a1, jint a2, jint a3,
+                                        jint a4, jint a5, jint a6, jint a7, jlong a8) {
+    GLenum type = (GLenum)a7;
+    if ((GLenum)a6 == 0x80E1 /*GL_BGRA*/ && type == 0x8367 /*GL_UNSIGNED_INT_8_8_8_8_REV*/) {
+        type = GL_UNSIGNED_BYTE;
+    }
+    glTexSubImage2D((GLenum)a0, (GLint)a1, (GLint)a2, (GLint)a3, (GLsizei)a4, (GLsizei)a5,
+                    (GLenum)a6, type, (const void *)(intptr_t)a8);
+}
 static void JNICALL z_glTexParameterfv(JNIEnv *e, jclass c, jint t, jint pname, jfloatArray arr) {
     // GL_TEXTURE_BORDER_COLOR (0x1004) is desktop/ES3.2-only -> GL_INVALID_ENUM on iOS GLES 3.0. RLHD sets it on
     // the shadow-map texture to pair with GL_CLAMP_TO_BORDER (remapped to CLAMP_TO_EDGE in the base bridge); since
@@ -371,6 +389,7 @@ static const JNINativeMethod kGLALLZone[] = {
     {"glTexStorage3D",                     "(IIIIII)V",                               (void *)z_glTexStorage3D},
     {"glTexImage3D",                       "(IIIIIIIIILjava/nio/ShortBuffer;)V",      (void *)z_glTexImage3D},
     {"glTexSubImage3D",                    "(IIIIIIIIIILjava/nio/IntBuffer;)V",       (void *)z_glTexSubImage3D},
+    {"glTexSubImage2D",                    "(IIIIIIIIJ)V",                            (void *)z_glTexSubImage2D_J},
     {"glTexParameterfv",                   "(II[F)V",                                 (void *)z_glTexParameterfv},
     {"glGenQueries",                       "([I)V",                                   (void *)z_glGenQueries},
     {"glDeleteQueries",                    "([I)V",                                   (void *)z_glDeleteQueries},
