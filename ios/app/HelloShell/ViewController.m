@@ -206,6 +206,8 @@
 @property (nonatomic, assign) BOOL chatFanAnimating;          // mid fan-out/in animation -> don't let the tick reframe
 @property (nonatomic, assign) NSInteger chatHoverChip;        // chip under the finger this drag (-1 = none)
 @property (nonatomic, assign) NSInteger chatFilterChip;       // chip whose filter menu is open (-1 = SELECT mode)
+@property (nonatomic, assign) BOOL chatDragMoved;            // finger left the press point -> a release commits a switch
+@property (nonatomic, assign) CGPoint chatDragStart;        // press point (screen), to measure drag distance
 @property (nonatomic, assign) CGRect chatPillFrame;           // collapsed pill frame (fan origin), in self.screen
 // Fanned-row geometry (self.screen coords), recomputed each tick; a chip's resting frame = (fanRowX + k*fanTabW,
 // fanRowY, fanTabW, fanChipH). Used as the drag hit-test target (stable even mid-animation).
@@ -1815,6 +1817,8 @@ static int chatRowCanvasH(void) {
     CGPoint pScreen = [g locationInView:self.screen];
     switch (g.state) {
         case UIGestureRecognizerStateBegan: {
+            self.chatDragStart = pScreen;
+            self.chatDragMoved = NO;
             [self fanOutChat];
             if (!self.tapHaptic) self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
             [self.tapHaptic impactOccurred];
@@ -1823,6 +1827,10 @@ static int chatRowCanvasH(void) {
             break;
         }
         case UIGestureRecognizerStateChanged: {
+            if (!self.chatDragMoved
+                && hypot(pScreen.x - self.chatDragStart.x, pScreen.y - self.chatDragStart.y) > 16.0) {
+                self.chatDragMoved = YES;   // a real drag began (tracked even mid fan-out) -> a release commits a switch
+            }
             if (self.chatFanAnimating) break;   // let the fan settle before tracking hover
             if (self.chatFilterChip >= 0) {
                 // FILTER mode: dragging back UP onto the chip row cancels the filter and returns to SELECT.
@@ -1861,13 +1869,15 @@ static int chatRowCanvasH(void) {
                 [self commitMenuSelection];
                 self.chatFilterChip = -1;
             } else {
-                NSInteger k = [self chatChipColumnAtPoint:pScreen];
-                // Only a clean release inside a chip's own rect switches; off-row / below = no change.
-                if (k >= 0) {
-                    CGRect chip = [self chatChipFrameForIndex:(int)k];
-                    if (pScreen.y <= CGRectGetMaxY(chip) && k != self.chatActiveTab) {
-                        [self chatSwitchToChip:(int)k];
-                    }
+                // Switch to the chip that was HIGHLIGHTED under the finger (what you see is what you get).
+                // Re-hit-testing the exact release point was fragile: a finger drifts as it lifts, and the
+                // old "release must be above the chip bottom" bound rejected valid releases (worse once the
+                // chips matched the shorter original tab height). A switch needs a real drag (chatDragMoved),
+                // so a hold-and-release to peek doesn't change channels.
+                NSInteger k = self.chatHoverChip;
+                if (k < 0) k = [self chatChipColumnAtPoint:pScreen];   // fast flick: hover not tracked yet
+                if (self.chatDragMoved && k >= 0 && k != self.chatActiveTab) {
+                    [self chatSwitchToChip:(int)k];
                 }
             }
             [self fanInChat];
