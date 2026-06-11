@@ -190,6 +190,12 @@ object JvmLauncher {
     external fun nativeOverlaySnap(name: String, positionName: String): String
     external fun nativeOverlayReset(name: String): String
 
+    // Finding 22 — infobox menu (InfoBoxBridge): list infoboxes + their menu options, invoke one by index.
+    external fun nativeInfoBoxAvailable(): Boolean
+    external fun nativeInfoBoxSetUiOpen(open: Boolean)
+    external fun nativeInfoBoxesJson(): String
+    external fun nativeInfoBoxInvoke(index: Int, option: String): String
+
     // A6 chrome: the per-frame MobileChromeBridge read-only snapshot (escaped JSON: tab/panel/minimap/orb/chat/
     // viewport canvas bounds the native edge-rails read). Gated by -Drunelite.mobilechrome. Off the UI thread.
     external fun nativeChromeSnapshot(): String
@@ -313,6 +319,10 @@ object JvmLauncher {
     fun overlaysJson() = nativeOverlaysJson()
     fun overlaySnap(name: String, positionName: String) = nativeOverlaySnap(name, positionName)
     fun overlayReset(name: String) = nativeOverlayReset(name)
+    fun infoBoxAvailable() = nativeInfoBoxAvailable()
+    fun infoBoxSetUiOpen(open: Boolean) = nativeInfoBoxSetUiOpen(open)
+    fun infoBoxesJson() = nativeInfoBoxesJson()
+    fun infoBoxInvoke(index: Int, option: String) = nativeInfoBoxInvoke(index, option)
     fun chromeSnapshot() = nativeChromeSnapshot()
     fun chromeSnapshotPub() = nativeChromeSnapshotPub()
     fun setStonesHidden(hidden: Boolean) = nativeSetStonesHidden(hidden)

@@ -68,6 +68,7 @@ fun PluginPanel(onClose: () -> Unit) {
     var lootOpen by remember { mutableStateOf(false) }                           // Finding 14 Loot Tracker reflow
     var geOpen by remember { mutableStateOf(false) }                             // Finding 14 Grand Exchange reflow
     var overlayOpen by remember { mutableStateOf(false) }                        // Finding 15 overlay edit
+    var infoBoxOpen by remember { mutableStateOf(false) }                        // Finding 22 infobox menu
     var hubOpen by remember { mutableStateOf(false) }                            // Finding 17 hub browse/install
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -78,6 +79,7 @@ fun PluginPanel(onClose: () -> Unit) {
     if (lootOpen) { LootTrackerScreen(onBack = { lootOpen = false }); return }
     if (geOpen) { GrandExchangeScreen(onBack = { geOpen = false }); return }
     if (overlayOpen) { OverlayEditScreen(onBack = { overlayOpen = false }); return }
+    if (infoBoxOpen) { InfoBoxScreen(onBack = { infoBoxOpen = false }); return }
     val po = panelOpen
     if (po != null) {
         PanelView(po.first, po.second, onBack = { panelOpen = null })
@@ -92,6 +94,7 @@ fun PluginPanel(onClose: () -> Unit) {
             onOpenLoot = { lootOpen = true },
             onOpenGe = { geOpen = true },
             onOpenOverlay = { overlayOpen = true },
+            onOpenInfoBox = { infoBoxOpen = true },
             onBack = { panelListOpen = false },
         )
         return

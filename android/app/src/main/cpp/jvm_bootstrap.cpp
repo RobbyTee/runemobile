@@ -108,9 +108,14 @@ static jmethodID g_midWorldAvail = nullptr, g_midWorldSetUiOpen = nullptr, g_mid
 static jclass    g_overlayCls = nullptr;
 static jmethodID g_midOverlayAvail = nullptr, g_midOverlaySetUiOpen = nullptr, g_midOverlaysJson = nullptr,
                  g_midOverlaySnap = nullptr, g_midOverlayReset = nullptr;
+// Finding 22 — infobox menu (InfoBoxBridge): list infoboxes + their menu options, invoke one (Detach/Flip/Delete).
+static jclass    g_infoboxCls = nullptr;
+static jmethodID g_midInfoBoxAvail = nullptr, g_midInfoBoxSetUiOpen = nullptr, g_midInfoBoxesJson = nullptr,
+                 g_midInfoBoxInvoke = nullptr;
 static std::atomic<bool> g_questReady{false};
 static std::atomic<bool> g_worldReady{false};
 static std::atomic<bool> g_overlayReady{false};
+static std::atomic<bool> g_infoboxReady{false};
 
 // Finding 14 — read-only data-panel facades (XP Tracker, Loot Tracker, GE, Time Tracking). All share the same
 // shape: isAvailable()Z / setUiOpen(Z)V / <jsonGetter>()String. One struct + one generic registrar covers them.
@@ -367,6 +372,7 @@ static inline bool panelReady()    { return g_panelReady.load(std::memory_order_
 static inline bool questReady()    { return g_questReady.load(std::memory_order_acquire); }
 static inline bool worldReady()    { return g_worldReady.load(std::memory_order_acquire); }
 static inline bool overlayReady()  { return g_overlayReady.load(std::memory_order_acquire); }
+static inline bool infoboxReady()  { return g_infoboxReady.load(std::memory_order_acquire); }
 static inline bool chromeReady()    { return g_chromeReady.load(std::memory_order_acquire); }
 static inline bool hudReady()       { return g_hudReady.load(std::memory_order_acquire); }
 
@@ -614,6 +620,33 @@ static bool publishBridge(JNIEnv *env) {
     } else {
         env->ExceptionClear();
         LOGE("bridge: FindClass OverlayBridge failed (overlay edit disabled)");
+    }
+
+    // Finding 22 — InfoBoxBridge: infobox list + per-infobox menu actions (Detach/Flip/Delete). Dedicated facade.
+    jclass ib = env->FindClass("net/runelite/client/headless/InfoBoxBridge");
+    if (ib && !env->ExceptionCheck()) {
+        jclass ibg = (jclass) env->NewGlobalRef(ib);
+        env->DeleteLocalRef(ib);
+        if (!ibg) {
+            LOGE("bridge: InfoBoxBridge NewGlobalRef failed (infobox menu disabled)");
+        } else {
+            g_midInfoBoxAvail     = midOpt(env, ibg, "isAvailable", "()Z");
+            g_midInfoBoxSetUiOpen = midOpt(env, ibg, "setUiOpen", "(Z)V");
+            g_midInfoBoxesJson    = midOpt(env, ibg, "getInfoBoxesJson", "()Ljava/lang/String;");
+            g_midInfoBoxInvoke    = midOpt(env, ibg, "invokeInfoBoxMenu", "(ILjava/lang/String;)Ljava/lang/String;");
+            bool ibOk = g_midInfoBoxAvail && g_midInfoBoxSetUiOpen && g_midInfoBoxesJson && g_midInfoBoxInvoke;
+            if (ibOk) {
+                g_infoboxCls = ibg;
+                g_infoboxReady.store(true, std::memory_order_release);
+                LOGI("bridge: InfoBoxBridge facade published");
+            } else {
+                env->DeleteGlobalRef(ibg);
+                LOGE("bridge: InfoBoxBridge method id failed (infobox menu disabled)");
+            }
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass InfoBoxBridge failed (infobox menu disabled)");
     }
 
     // A6 chrome: MobileChromeBridge — read-only snapshot facade, single method, rl-bridge-thread read.
@@ -1757,6 +1790,36 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeOverlayReset(JNIEnv *artEnv, jobject, jstring jName) {
     if (!overlayReady()) return artEnv->NewStringUTF("");
     return facadeStrArgs(artEnv, g_overlayCls, g_midOverlayReset, jName, nullptr, false);
+}
+
+// Finding 22 — infobox menu. avail/setUiOpen/list like the others; invoke(index, option) fires the action.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeInfoBoxAvailable(JNIEnv *, jobject) {
+    if (!infoboxReady()) return JNI_FALSE;
+    return facadeBool(g_infoboxCls, g_midInfoBoxAvail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeInfoBoxSetUiOpen(JNIEnv *, jobject, jboolean open) {
+    if (!infoboxReady()) return;
+    facadeVoidBool(g_infoboxCls, g_midInfoBoxSetUiOpen, open);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeInfoBoxesJson(JNIEnv *artEnv, jobject) {
+    if (!infoboxReady()) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_infoboxCls, g_midInfoBoxesJson);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeInfoBoxInvoke(JNIEnv *artEnv, jobject, jint index, jstring jOption) {
+    if (!infoboxReady() || !g_midInfoBoxInvoke) return artEnv->NewStringUTF("");
+    std::string opt = jstr(artEnv, jOption);
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_infoboxCls) return artEnv->NewStringUTF("");
+    jstring ho = hs->NewStringUTF(opt.c_str());
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_infoboxCls, g_midInfoBoxInvoke, index, ho);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (ho) hs->DeleteLocalRef(ho);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
 }
 
 // A6 chrome read surface: MobileChromeBridge.getSnapshot — the per-frame tab/panel/minimap/orb/chat/viewport
