@@ -2216,9 +2216,12 @@ static int chatRowCanvasH(void) {
         }
     }
 
-    // Interactable-tap feedback: when the engine resolved a tap to a real interactable it bumps the counter —
-    // give a light buzz (the "you grabbed something" feel) and draw a RED click ring. A plain walk doesn't bump,
-    // so after a short grace window we draw a YELLOW ring instead (and stay silent). Matches the official app.
+    // Interactable-tap feedback: when a tap's CONSUMED click (MenuOptionClicked truth) was a real interaction
+    // the bridge bumps the counter — give a light buzz (the "you grabbed something" feel) and draw a RED click
+    // ring. A plain walk doesn't bump, so after a grace window we draw a YELLOW ring instead (and stay silent).
+    // Matches the official app. The grace covers the engine-resolved tap pipeline: settle gate (a few frames)
+    // + click consume next tick + poll latency ≈ 80-160 ms, so 0.25 s keeps walk rings prompt without
+    // misclassifying slow interactions as walks.
     int its = [JVMLauncher interactTapSeq];
     if (its != self.lastInteractTapSeq) {
         self.lastInteractTapSeq = its;
@@ -2230,7 +2233,7 @@ static int chatRowCanvasH(void) {
             self.pendingClick = NO;
         }
     }
-    if (self.pendingClick && CACurrentMediaTime() - self.pendingClickAt > 0.10) {
+    if (self.pendingClick && CACurrentMediaTime() - self.pendingClickAt > 0.25) {
         [self flashClickRingAt:self.pendingClickPoint color:[UIColor colorWithRed:1.0 green:0.84 blue:0.0 alpha:1.0]];
         self.pendingClick = NO;
     }

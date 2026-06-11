@@ -37,12 +37,25 @@ import java.awt.event.MouseWheelEvent;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
+import net.runelite.api.Constants;
+import net.runelite.api.DecorativeObject;
+import net.runelite.api.GameObject;
 import net.runelite.api.GameState;
+import net.runelite.api.GroundObject;
 import net.runelite.api.MainBufferProvider;
+import net.runelite.api.MenuAction;
+import net.runelite.api.MenuEntry;
+import net.runelite.api.Scene;
+import net.runelite.api.Tile;
 import net.runelite.api.TileObject;
 import net.runelite.api.VarClientInt;
+import net.runelite.api.WallObject;
+import net.runelite.api.WorldView;
+import net.runelite.api.events.MenuOpened;
+import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.client.RuneLite;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.ui.overlay.outline.ModelOutlineRenderer;
 
 /**
@@ -174,6 +187,39 @@ public final class JavaBridge
 	// when it advances (the official Jagex Mobile "you grabbed something" buzz).
 	private static volatile int interactTapSeq;
 
+	// ===== Engine-resolved tap state machine (TOUCH-TARGETING-PLAN.md Phase 1) =====
+	// A left tap is never re-hit-tested by the engine: the press is consumed against the menu the engine
+	// built from the cursor position earlier IN THE SAME CLIENT TICK. So we move the synthetic cursor to the
+	// literal tap point, WAIT until the engine has demonstrably resolved it (cursor-position match AND a
+	// stable left-click tail fingerprint — the MenuPeek settle observable), only then post the click, and
+	// classify what actually fired from MenuOptionClicked. All state below is CLIENT-THREAD-ONLY (the tap
+	// ingress runs under ClientThread.invoke, tapTick under Hooks.draw, the EventBus handlers under the
+	// engine's click-detection step — all the same thread).
+	private enum TapState
+	{
+		IDLE, AWAIT_ENGINE, CLICKED
+	}
+
+	private static TapState tapState = TapState.IDLE;
+	private static int tapX;              // the pending tap point (canvas px) — also the click point
+	private static int tapY;
+	private static int settleFrames;      // frames spent in AWAIT_ENGINE since the move was posted
+	private static int stableFrames;      // consecutive frames with position match + identical tail fp
+	private static String lastTailFp;     // previous frame's tail fingerprint
+	private static int posMatchFrame;     // first frame the engine cursor matched the tap (-1 = never; diag)
+	private static String clickFp;        // tail fp at click-post time (diag: predicted vs consumed, the ⇔ check)
+	private static int clickedFrames;     // frames spent in CLICKED waiting for the truth event
+	private static boolean queuedTap;     // exactly one follow-up tap queued while CLICKED
+	private static int queuedX;
+	private static int queuedY;
+	private static volatile int parkVerifyFrames;  // diag countdown: read the tail a few frames after a park
+	// Settle gate tuning. MAX_SETTLE frames is the fail-open cap (never drop a tap); STABLE_NEEDED consecutive
+	// identical reads accept. Desktop settles ≤2 frames (MenuPeek-proven); the cap covers a lagging device EDT.
+	private static final int MAX_SETTLE = Integer.getInteger("runelite.touch.settleMax", 12);
+	private static final int STABLE_NEEDED = Integer.getInteger("runelite.touch.settleStable", 2);
+	private static final int CLICKED_TIMEOUT = Integer.getInteger("runelite.touch.clickTimeout", 10);
+	private static boolean truthSubscribed;  // EventBus registration is one-shot (client thread)
+
 	// Published complete frames for the live blit. The native side reads at the display refresh (up to
 	// 120 Hz) but the engine composites at ~50 fps, so reading mainBufferProvider directly catches it
 	// mid-clear/mid-draw -> fast flashing. Instead we snapshot ONLY at the post-overlay-composite hook
@@ -218,7 +264,7 @@ public final class JavaBridge
 	// Input bookkeeping (only ever touched from the single native UI thread that drives onTouch/onClick).
 	private static boolean focused;       // FocusEvent gained — keyboard/mouse accepted
 	private static volatile boolean entered;  // MOUSE_ENTERED posted — pointer currently "present" (volatile:
-	                                      // clearHover may run from the client thread after a snap tap)
+	                                      // parkPointer runs from the client thread after a consumed tap)
 	private static boolean pressed;
 	private static int pressButton = MouseEvent.BUTTON1;
 	private static boolean shiftHeld;     // sticky-Shift: a held VK_SHIFT KEY_PRESSED with no release (see setShiftHeld)
@@ -460,8 +506,8 @@ public final class JavaBridge
 
 	/**
 	 * Assert focus + pointer <em>presence</em> for an interaction: focus once, then a {@code MOUSE_ENTERED}
-	 * if the pointer is currently "absent" (we exit it after taps / on camera drags so nothing stays
-	 * highlighted — see {@link #clearHover()}). Mirrors what {@code HeadlessLogin} primes before a click.
+	 * if the pointer is currently "absent" (we park it after taps / on camera drags so nothing stays
+	 * highlighted — see {@link #parkPointer()}). Mirrors what {@code HeadlessLogin} primes before a click.
 	 */
 	private static void primeFocus(EventQueue q, Canvas canvas, long t, int x, int y)
 	{
@@ -474,20 +520,25 @@ public final class JavaBridge
 	}
 
 	/**
-	 * Make the engine's pointer "absent" — post a {@code MOUSE_EXITED} so nothing stays hovered/highlighted.
-	 * On a touch device there is no persistent cursor: a finger is only "on" the screen during a tap. Without
-	 * this, the engine's mouse stays frozen at the last tap point, and a one-finger <em>camera</em> drag
-	 * (which moves the world, not the pointer) rotates scenery <em>under</em> that frozen point — so random
-	 * objects light up and a stale left-click action builds there, which the next walk-tap then triggers.
-	 * The native shell calls this when a camera/pinch gesture begins (and we exit after each tap), so the
-	 * highlight only ever appears at the point you are actually tapping.
+	 * Native-facing alias for {@link #parkPointer()} (the JNI side resolves this name; keep it stable).
+	 * Called when a camera/pinch gesture begins so nothing stays hovered/highlighted under a frozen cursor.
 	 */
 	public static void clearHover()
 	{
-		if (!entered)
-		{
-			return;
-		}
+		parkPointer();
+	}
+
+	/**
+	 * Park the synthetic cursor at a neutral point: {@code MOUSE_MOVED} to (−1,−1), then {@code MOUSE_EXITED}.
+	 * The engine does NOT clear its tracked mouse position on EXITED (bug 3: park-by-exit left the cursor at
+	 * the last tap, the engine kept picking there each tick, and a zoom re-projected a model under it — the
+	 * stuck hover label). Hover ends only by MOVING to a point that picks nothing; the EXITED is just AWT
+	 * hygiene. On a touch device there is no persistent cursor — a finger is only "on" the screen during a
+	 * tap — so this runs after every consumed tap / menu select and when a camera/pinch gesture begins.
+	 * (Fallback if the engine ever clamps negative coords: park off-canvas at canvas+50 — device-verify #1.)
+	 */
+	public static void parkPointer()
+	{
 		final Canvas canvas = liveCanvas();
 		if (canvas == null)
 		{
@@ -495,9 +546,14 @@ public final class JavaBridge
 		}
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_EXITED, t, 0, -1, -1, 0, false));
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t, 0, -1, -1, 0, false));
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_EXITED, t + 1, 0, -1, -1, 0, false));
 		entered = false;
-		log.debug("[snap] clearHover (camera/pinch begin) -> MOUSE_EXITED");
+		if (TOUCH_DIAG)
+		{
+			parkVerifyFrames = 3;   // few frames out: the EDT folds the move, then a tick rebuilds the menu
+		}
+		log.debug("[touch] parkPointer -> MOVED(-1,-1) + EXITED");
 	}
 
 	/**
@@ -557,18 +613,384 @@ public final class JavaBridge
 	}
 
 	/**
-	 * In-game left-tap (client thread). Always clicks the LITERAL tap point: move the synthetic cursor there
-	 * a cycle before the click so the engine recomputes the left-click action FOR that point (posting
-	 * move+click in one batch fires the action for the PREVIOUS cursor position). No centroid/snap
-	 * redirection — the engine's own pick (model silhouette + built-in slop) decides what the tap hit, and
-	 * the outline/haptic feedback is armed from the consumed click, not from a pre-click guess.
+	 * In-game left-tap ingress (client thread). Always targets the LITERAL tap point — no centroid/snap
+	 * redirection; the engine's own pick (model silhouette + built-in slop) decides what the tap hit.
+	 * With the engine menu open the tap selects the row under it directly (the engine consumes it against
+	 * the OPEN menu, no settle needed). Otherwise the tap enters the state machine: post the move, wait for
+	 * the engine to demonstrably resolve the point ({@link #tapTick}), click, and classify the consumed
+	 * entry ({@link #onMenuOptionClicked}) — outline/haptic feedback comes from that truth.
 	 */
 	private static void startLeftTap(Canvas canvas, ClientThread ct, Client c, int x, int y)
 	{
 		diagGeometry(c, "L", x, y);
 		hideClickCross(c);
+		ensureTruthSubscribed();
+		if (c.isMenuOpen())
+		{
+			postMove(canvas, x, y);
+			ct.invokeLater(() ->
+			{
+				postClickButtons(canvas, x, y, MouseEvent.BUTTON1);
+				ct.invokeLater(JavaBridge::parkPointer);
+			});
+			return;
+		}
+		if (tapState == TapState.CLICKED)
+		{
+			// Mid-confirmation: queue exactly ONE follow-up tap; it starts on the truth/timeout transition.
+			queuedTap = true;
+			queuedX = x;
+			queuedY = y;
+			return;
+		}
+		// IDLE starts fresh; a new tap during AWAIT_ENGINE REPLACES the pending tap (re-move, reset counters).
+		beginAwait(canvas, x, y);
+	}
+
+	/** Record the pending tap, post the cursor move to it, and enter {@code AWAIT_ENGINE} (client thread). */
+	private static void beginAwait(Canvas canvas, int x, int y)
+	{
+		tapX = x;
+		tapY = y;
+		settleFrames = 0;
+		stableFrames = 0;
+		lastTailFp = null;
+		posMatchFrame = -1;
+		tapState = TapState.AWAIT_ENGINE;
 		postMove(canvas, x, y);
-		ct.invokeLater(() -> postLeftTapThenClear(canvas, ct, x, y));
+	}
+
+	/**
+	 * Per-frame settle gate + click watchdog — called once per frame from {@code Hooks.draw} (client thread,
+	 * after the engine tick rebuilt the menu). In {@code AWAIT_ENGINE}: accept once the engine's tracked
+	 * cursor equals the tap point (proves the EDT folded our move) AND the left-click tail fingerprint is
+	 * identical for {@link #STABLE_NEEDED} consecutive frames (proves the engine rebuilt the menu from it) —
+	 * then post the real click at the tap point. {@link #MAX_SETTLE} frames caps the wait (fail-open: click
+	 * anyway, never drop a tap). In {@code CLICKED}: time out back to IDLE if no truth event arrives
+	 * (shouldn't happen — MenuOptionClicked fires for every left click incl. walk/Cancel).
+	 */
+	public static void tapTick(Client c)
+	{
+		if (!ENABLED || c == null)
+		{
+			return;
+		}
+		if (parkVerifyFrames > 0 && tapState == TapState.IDLE)
+		{
+			if (--parkVerifyFrames == 0)
+			{
+				final net.runelite.api.Point mp = c.getMouseCanvasPosition();
+				log.info("[touchdiag] park-verify: mouse={},{} tail={} (expect off-canvas + Cancel-only)",
+					mp == null ? "?" : mp.getX(), mp == null ? "?" : mp.getY(), tailFingerprint(c));
+			}
+			return;
+		}
+		if (tapState == TapState.IDLE)
+		{
+			return;
+		}
+		final Canvas canvas = liveCanvas();
+		if (c.getGameState() != GameState.LOGGED_IN || canvas == null)
+		{
+			tapState = TapState.IDLE;   // world went away mid-tap: drop it (nothing sensible to click)
+			queuedTap = false;
+			return;
+		}
+		if (tapState == TapState.AWAIT_ENGINE)
+		{
+			if (c.isMenuOpen())
+			{
+				// A menu opened while this tap was settling (a long-press superseded it). The tap predates
+				// the menu — clicking now would select an arbitrary row. Drop it; the menu flow owns input.
+				// (While a menu is open the engine also stops rebuilding entries, so the gate would falsely
+				// "stabilize" against the frozen tail.)
+				tapState = TapState.IDLE;
+				queuedTap = false;
+				return;
+			}
+			settleFrames++;
+			final net.runelite.api.Point mp = c.getMouseCanvasPosition();
+			final boolean posMatch = mp != null && mp.getX() == tapX && mp.getY() == tapY;
+			if (posMatch && posMatchFrame < 0)
+			{
+				posMatchFrame = settleFrames;
+			}
+			final String fp = tailFingerprint(c);
+			if (posMatch && fp.equals(lastTailFp))
+			{
+				stableFrames++;
+			}
+			else
+			{
+				stableFrames = 0;
+				lastTailFp = fp;
+			}
+			if (stableFrames >= STABLE_NEEDED || settleFrames >= MAX_SETTLE)
+			{
+				if (TOUCH_DIAG)
+				{
+					log.info("[touchdiag] L settle: {} frames (posMatch@{}) {} tail={}",
+						settleFrames, posMatchFrame,
+						stableFrames >= STABLE_NEEDED ? "stable" : "TIMEOUT-failopen", fp);
+				}
+				clickFp = fp;
+				clickedFrames = 0;
+				tapState = TapState.CLICKED;
+				postClickButtons(canvas, tapX, tapY, MouseEvent.BUTTON1);
+			}
+		}
+		else if (tapState == TapState.CLICKED)
+		{
+			clickedFrames++;
+			if (clickedFrames >= CLICKED_TIMEOUT)
+			{
+				log.info("[touchdiag] L CLICKED timeout after {} frames — no MenuOptionClicked/MenuOpened (unexpected)",
+					clickedFrames);
+				finishTap();
+			}
+		}
+	}
+
+	/**
+	 * One-shot EventBus registration for the truth events (client thread, lazy — the injector is live by the
+	 * first in-game tap). Typed-consumer registration (no annotation scan); priority 0 is fine — we read the
+	 * consumed entry, which is final by the time the event posts.
+	 */
+	private static void ensureTruthSubscribed()
+	{
+		if (truthSubscribed)
+		{
+			return;
+		}
+		try
+		{
+			final Injector inj = RuneLite.getInjector();
+			if (inj == null)
+			{
+				return;
+			}
+			final EventBus eb = inj.getInstance(EventBus.class);
+			eb.register(MenuOptionClicked.class, JavaBridge::onMenuOptionClicked, 0f);
+			eb.register(MenuOpened.class, JavaBridge::onMenuOpened, 0f);
+			truthSubscribed = true;
+			log.info("[touch] truth events subscribed (MenuOptionClicked/MenuOpened)");
+		}
+		catch (RuntimeException ex)
+		{
+			log.debug("[touch] EventBus subscribe failed (will retry next tap)", ex);
+		}
+	}
+
+	/**
+	 * The truth: the engine consumed a left click (fires for EVERY left click, incl. walk and Cancel; carries
+	 * the consumed {@link MenuEntry}). Only acts while a tap of ours is in flight ({@code CLICKED}). Classify
+	 * the entry: an interaction bumps {@link #interactTapSeq} (native red ring + haptic) and arms the tight
+	 * model outline FROM THE ENTRY (actor ref, or object via scene coords) — so "outline shown ⇔ interaction
+	 * happened" holds by construction. A walk leaves feedback to the native yellow ring + the Tile Indicators
+	 * plugin. Then park the cursor and start any queued follow-up tap.
+	 */
+	private static void onMenuOptionClicked(MenuOptionClicked ev)
+	{
+		if (tapState != TapState.CLICKED)
+		{
+			return;
+		}
+		final Client c = client;
+		final ClientThread ct = clientThread;
+		final MenuEntry entry = ev.getMenuEntry();
+		final MenuAction type = entry == null ? null : entry.getType();
+		if (TOUCH_DIAG)
+		{
+			final String consumedFp = fingerprint(entry);
+			log.info("[touchdiag] L consumed: type={} fp={} predicted={} ({})",
+				type, consumedFp, clickFp, consumedFp.equals(clickFp) ? "MATCH" : "MISMATCH");
+		}
+		if (type == MenuAction.WALK)
+		{
+			// A deliberate walk: clear any lingering outline (the destination tile is RuneLite's Tile
+			// Indicators plugin); the native ring stays yellow because interactTapSeq does not advance.
+			selActor = null;
+			selObject = null;
+			selUntil = 0;
+			if (TOUCH_DIAG && c != null && ct != null)
+			{
+				final int cx = tapX, cy = tapY;
+				ct.invokeLater(() -> ct.invokeLater(() -> diagWalkDest(c, cx, cy)));
+			}
+		}
+		else if (type != null && type != MenuAction.CANCEL)
+		{
+			interactTapSeq++;   // the click DID interact -> native red ring + haptic
+			armOutlineFromEntry(c, entry, type);
+		}
+		finishTap();
+	}
+
+	/**
+	 * The click force-opened the engine menu instead of executing (deprioritized top entry — rare). Hand off
+	 * to the existing native menu flow (the long-press path already polls {@code menuBuilding}/
+	 * {@code menuPeekSnapshot} and shows the native rows). NO park — the menu anchors to the cursor point.
+	 */
+	private static void onMenuOpened(MenuOpened ev)
+	{
+		if (tapState != TapState.CLICKED)
+		{
+			return;
+		}
+		if (TOUCH_DIAG)
+		{
+			log.info("[touchdiag] L click force-opened the engine menu -> native menu flow");
+		}
+		queuedTap = false;
+		tapState = TapState.IDLE;
+	}
+
+	/**
+	 * Consume the {@code CLICKED} state: start the queued follow-up tap if there is one (its cursor move
+	 * supersedes any park), else park the cursor at the neutral point one cycle later and go {@code IDLE}.
+	 */
+	private static void finishTap()
+	{
+		final Canvas canvas = liveCanvas();
+		if (queuedTap && canvas != null)
+		{
+			queuedTap = false;
+			beginAwait(canvas, queuedX, queuedY);
+			return;
+		}
+		queuedTap = false;
+		tapState = TapState.IDLE;
+		final ClientThread ct = clientThread;
+		if (ct != null)
+		{
+			ct.invokeLater(JavaBridge::parkPointer);
+		}
+		else
+		{
+			parkPointer();
+		}
+	}
+
+	/**
+	 * Arm the tight model outline from the CONSUMED menu entry: actors straight off the entry; objects looked
+	 * up by the entry's scene coords + id (the InteractHighlightPlugin.findTileObject pattern). Widget /
+	 * ground-item / runelite ops get the haptic but no model outline.
+	 */
+	private static void armOutlineFromEntry(Client c, MenuEntry entry, MenuAction type)
+	{
+		try
+		{
+			final Actor actor = entry.getActor();   // set for NPC_* / PLAYER_* ops
+			if (actor != null)
+			{
+				armEntityOutline(actor, null);
+				return;
+			}
+			switch (type)
+			{
+				case GAME_OBJECT_FIRST_OPTION:
+				case GAME_OBJECT_SECOND_OPTION:
+				case GAME_OBJECT_THIRD_OPTION:
+				case GAME_OBJECT_FOURTH_OPTION:
+				case GAME_OBJECT_FIFTH_OPTION:
+				case WIDGET_TARGET_ON_GAME_OBJECT:
+					final TileObject o = findTileObject(c, entry.getWorldViewId(),
+						entry.getParam0(), entry.getParam1(), entry.getIdentifier());
+					if (o != null)
+					{
+						armEntityOutline(null, o);
+					}
+					break;
+				default:
+					break;
+			}
+		}
+		catch (RuntimeException ex)
+		{
+			log.debug("[touch] outline-from-entry failed", ex);
+		}
+	}
+
+	/**
+	 * Find the {@link TileObject} a consumed object op referenced: {@code param0/param1} are scene coords in
+	 * the entry's world view ({@code +40} extended-tiles offset for the top-level view), {@code id} matches
+	 * the object on that tile. The InteractHighlightPlugin pattern, null-hardened (client thread).
+	 */
+	private static TileObject findTileObject(Client c, int worldId, int x, int y, int id)
+	{
+		if (c == null)
+		{
+			return null;
+		}
+		final WorldView wv = c.getWorldView(worldId);
+		if (wv == null)
+		{
+			return null;
+		}
+		final int offset = worldId == WorldView.TOPLEVEL ? (Constants.EXTENDED_SCENE_SIZE - Constants.SCENE_SIZE) / 2 : 0;
+		final int sx = x + offset;
+		final int sy = y + offset;
+		final Scene scene = wv.getScene();
+		final Tile[][][] tiles = scene == null ? null : scene.getExtendedTiles();
+		final int plane = wv.getPlane();
+		if (tiles == null || plane < 0 || plane >= tiles.length
+			|| sx < 0 || sx >= tiles[plane].length || sy < 0 || sy >= tiles[plane][sx].length)
+		{
+			return null;
+		}
+		final Tile tile = tiles[plane][sx][sy];
+		if (tile == null)
+		{
+			return null;
+		}
+		for (GameObject gameObject : tile.getGameObjects())
+		{
+			if (gameObject != null && gameObject.getId() == id)
+			{
+				return gameObject;
+			}
+		}
+		final WallObject wallObject = tile.getWallObject();
+		if (wallObject != null && wallObject.getId() == id)
+		{
+			return wallObject;
+		}
+		final DecorativeObject decorativeObject = tile.getDecorativeObject();
+		if (decorativeObject != null && decorativeObject.getId() == id)
+		{
+			return decorativeObject;
+		}
+		final GroundObject groundObject = tile.getGroundObject();
+		if (groundObject != null && groundObject.getId() == id)
+		{
+			return groundObject;
+		}
+		return null;
+	}
+
+	/** Fingerprint of one menu entry (the MenuPeek shape: option|target|type|id|p0|p1|itemId). */
+	private static String fingerprint(MenuEntry e)
+	{
+		if (e == null)
+		{
+			return "EMPTY";
+		}
+		return e.getOption() + "|" + e.getTarget() + "|" + e.getType()
+			+ "|" + e.getIdentifier() + "|" + e.getParam0() + "|" + e.getParam1() + "|" + e.getItemId();
+	}
+
+	/** Fingerprint of the current left-click default = the TAIL of getMenuEntries() (ascending priority). */
+	private static String tailFingerprint(Client c)
+	{
+		try
+		{
+			final MenuEntry[] e = c.getMenu().getMenuEntries();
+			return (e == null || e.length == 0) ? "EMPTY" : fingerprint(e[e.length - 1]);
+		}
+		catch (RuntimeException ex)
+		{
+			return "ERR";
+		}
 	}
 
 	/** Arm a tight outline flash on the selected entity. */
@@ -577,27 +999,6 @@ public final class JavaBridge
 		selActor = actor;
 		selObject = object;
 		selUntil = System.currentTimeMillis() + SEL_FLASH_MS;
-	}
-
-	/**
-	 * Post the left press/release/click at {@code (x,y)}, then clear the hover one cycle later. A touchscreen has
-	 * no persistent cursor, so we don't leave the synthetic one parked on the tapped target — otherwise the
-	 * engine keeps that object's action label up and the NEXT tap can re-resolve to it (the "stuck on the stairs"
-	 * bug, originally seen via the menu and the same mechanism for plain taps). The action commits at click time,
-	 * so the trailing {@code MOUSE_EXITED} never cancels it; it just returns the engine to a cursor-less state.
-	 */
-	private static void postLeftTapThenClear(Canvas canvas, ClientThread ct, int x, int y)
-	{
-		postClickButtons(canvas, x, y, MouseEvent.BUTTON1);
-		ct.invokeLater(JavaBridge::clearHover);
-		if (TOUCH_DIAG)
-		{
-			// Capture where the engine ACTUALLY resolved the walk (the red destination flag) vs the clicked point,
-			// relative to the player — to catch the "walks to the opposite-direction tile" report. The destination
-			// is set a cycle or two after the click, so peek twice later.
-			final Client c = client;
-			ct.invokeLater(() -> ct.invokeLater(() -> diagWalkDest(c, x, y)));
-		}
 	}
 
 	/** Log the resolved walk destination (scene coords) against the clicked viewport point and the player tile. */
@@ -713,12 +1114,12 @@ public final class JavaBridge
 	}
 
 	/**
-	 * Select an open right-click menu row by left-clicking its canvas point, then clear the hover one cycle
-	 * AFTER the click so the engine doesn't leave the cursor parked on that target. On a touchscreen there is no
-	 * persistent cursor, so a parked synthetic cursor would keep showing the selected object's action label and
-	 * make the next tap re-resolve to it (the "stuck on the stairs" bug). The ordered invoke→invokeLater chain
-	 * guarantees the {@code MOUSE_EXITED} lands after the press/release/click, never before (which would cancel
-	 * the selection). Used by the native menu's commit and cancel.
+	 * Select an open right-click menu row by left-clicking its canvas point, then PARK the pointer one cycle
+	 * AFTER the click so the engine doesn't leave the cursor sitting on that target. On a touchscreen there is
+	 * no persistent cursor, so a stranded synthetic cursor would keep showing the selected object's action
+	 * label and make the next tap re-resolve to it (the "stuck on the stairs" bug). The ordered
+	 * invoke→invokeLater chain guarantees the park lands after the press/release/click, never before (which
+	 * would cancel the selection). Used by the native menu's commit and cancel.
 	 */
 	public static void selectMenuPoint(int x, int y)
 	{
@@ -734,7 +1135,7 @@ public final class JavaBridge
 			ct.invokeLater(() ->
 			{
 				postClickButtons(canvas, x, y, MouseEvent.BUTTON1);
-				ct.invokeLater(JavaBridge::clearHover);   // drop the parked cursor/label after the select
+				ct.invokeLater(JavaBridge::parkPointer);   // un-strand the cursor after the select
 			});
 		});
 	}
@@ -796,7 +1197,7 @@ public final class JavaBridge
 		}
 	}
 
-	/** Monotonic counter bumped whenever an in-game left tap resolved to an interactable (native haptic cue). */
+	/** Monotonic counter bumped whenever a tap's CONSUMED click was an interaction (native haptic cue). */
 	public static int getInteractTapSeq()
 	{
 		return interactTapSeq;

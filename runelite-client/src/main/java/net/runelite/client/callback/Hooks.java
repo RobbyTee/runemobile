@@ -564,6 +564,13 @@ public class Hooks implements Callbacks
 			// Read-only; gated -Drunelite.menupeek=true. Runs BEFORE the probe so the probe can cross-check it.
 			net.runelite.client.headless.MenuPeekBridge.tick(client);
 		}
+		if (net.runelite.client.headless.JavaBridge.isEnabled())
+		{
+			// W3 touch-targeting: advance the engine-resolved tap state machine (settle gate -> click ->
+			// truth classification). Client thread, after the engine tick rebuilt the menu — the same settle
+			// seam MenuPeekBridge reads from. Gated -Drunelite.bridge=true (inert on desktop).
+			net.runelite.client.headless.JavaBridge.tapTick(client);
+		}
 		if (net.runelite.client.headless.MenuPeek.isEnabled())
 		{
 			// Touch-targeting de-risk PROBE: prove the press-and-peek primitive (synth MOUSE_MOVED -> read
