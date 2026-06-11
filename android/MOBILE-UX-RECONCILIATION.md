@@ -332,3 +332,24 @@ it ever be wanted again.
 
 **AP-4 status after removal: Findings 14 (3/4 panels), 15 (overlay snap), 22 (infobox menu) DONE. Finding 16
 declined. Remaining: Finding 14 Time Tracking panel; Finding 15 free pixel-drag; Finding 11 real-device pass.**
+
+## Session 2026-06-10 (later): minimap ORBS missing — ROOT-CAUSED + FIXED
+
+User noticed the HP/prayer/run/special orbs (+ XP/world-map/wiki/store icons) weren't rendering around the
+minimap. **Root cause (not the magnifier — that was reverted, and not the relocate/veneer/resize):** the
+minimap-orb cluster's **ORBS layer is built but empty** — the engine never opens the Orbs interface (group 160)
+INTO that layer in our headless boot. Proven with the existing `HudVeneerBridge.dumpMinimapTree` (enabled via
+`-Drunelite.hudveneer.test=true -D…minimapScalePct=1`): `MAP_CONTAINER` + `ORBS` layer present and un-hidden,
+but every `InterfaceID.Orbs.*` child (`ORB_HEALTH`/`ORB_PRAYER`/`ORB_RUNENERGY`/`ORB_SPECENERGY`/…) resolved
+**null**. Confirmed independent of the A7 resize (still null with resize disabled). The orb *data* was always
+fine (HudDataBridge reads it from varplayers); only the orb *interface* never rendered.
+
+**Fix (`3ab27df50e`, shared):** `HudVeneerBridge.tick` now calls `ensureOrbsLoaded` — if the ORBS layer exists
+but interface 160 isn't loaded, it `client.openInterface(ORBS_LAYER, InterfaceID.ORBS, NON_MODAL)` once (as the
+engine would). The interface's own onload binds the orbs to the live varplayers, so they render + update like a
+normal client. Guarded: no-op once present, a 50-tick cooldown so a failed open isn't hammered, re-opens if a
+toplevel rebuild drops them. Private helper → **contract UNCHANGED (185)**. Emulator-verified: orbs render
+top-right with live values (HP 35 / prayer 13 / run 100 / spec 100 + XP/world-map/wiki/store). Evidence:
+`dev-tools/ap4-mobile-ux/evidence-orbs-before-after.png`. **SHARED change — the iOS port must re-stage its
+runtime jar to pick it up (iOS very likely had the same missing-orbs gap; `ensureOrbsLoaded` is a safe no-op if
+its orbs are already present).**
