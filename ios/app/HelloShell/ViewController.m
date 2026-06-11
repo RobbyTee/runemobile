@@ -445,14 +445,16 @@ static const CGFloat kMenuWidth       = 210.0;
 - (void)onPlayTapped {
     // If the login web view ran this session, WebKit is resident and the JVM can't start cleanly — onLaunch
     // will prompt a restart instead. Keep the cover up in that case so the user lands back here post-restart.
-    // Tap to Play boots VANILLA RuneLite — the desktop-default experience: the engine's default plugins with
-    // their default configs, the software/CPU renderer, NO 117HD or base GPU plugin (-Drunelite.hub already
-    // disables the base GPU plugin). 117HD is opt-in via the "▶ 117HD (Zone)" launch button. Setting no route
-    // mode routes the boot down the non-GPU CPU blit path. Explicitly clear the flags so a prior dev-button tap
-    // this session can't leak into a plain Play.
+    // Tap to Play boots the desktop-DEFAULT experience: the engine's default plugins with their default configs —
+    // which INCLUDES the base GPU plugin, because RuneLite ships it enabledByDefault=true (vanilla OSRS visuals
+    // rendered on the device GPU via the Route C bridge — NOT 117HD). 117HD is opt-in via the "▶ 117HD (Zone)"
+    // button. Base GPU uses the READBACK present (not the CAEAGLLayer direct present), so it publishes int[]
+    // frames exactly like the CPU rasterizer — that lets the GPU plugin be toggled OFF to the software renderer
+    // at runtime with no present-layer switch. Clear the other route flags so a prior dev-button tap can't leak in.
+    self.pendingRouteCGpu = YES;
     self.pendingRouteCZone = NO;
     self.pendingRouteCZoneDirect = NO;
-    self.pendingRouteCGpu = NO;
+    self.pendingRouteCGpuNoResize = NO;
     self.pendingRouteCL1 = NO;
     if (self.webKitUsedThisSession) { [self onLaunch]; return; }
     if (!self.launchScreen.hidden) {
@@ -2209,9 +2211,11 @@ static int chatRowCanvasH(void) {
     // existing gestures + native HUD veneers keep working on top. Only for the normal resizable GPU path (the
     // no-resize bisection stays on the readback path). Must be created + sized on main BEFORE the JVM thread starts
     // (the bridge reads this layer from the JVM thread in awtCreateGLContext via renderbufferStorage:fromDrawable:).
-    // Fires for the base-GPU resizable path AND the Zone (117HD) direct-present experiment (3-finger gesture) — the
-    // bridge present path is mode-agnostic (keys off the present layer).
-    if ((self.pendingRouteCGpu || self.pendingRouteCZoneDirect) && !self.pendingRouteCGpuNoResize) {
+    // Fires for the Zone (117HD) direct-present path ONLY. Base GPU intentionally uses the READBACK present (the
+    // #else path below) so it publishes int[] frames like the CPU rasterizer — that keeps the GPU plugin
+    // toggleable to/from the software renderer at runtime without swapping the present layer. The bridge present
+    // path is mode-agnostic (keys off whether a present layer was set).
+    if (self.pendingRouteCZoneDirect && !self.pendingRouteCGpuNoResize) {
         [self.view layoutIfNeeded];
         CAEAGLLayer *gl = [CAEAGLLayer layer];
         gl.frame = self.screen.bounds;

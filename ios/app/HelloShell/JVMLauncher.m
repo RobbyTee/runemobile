@@ -849,16 +849,13 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     // classloader / viewport / drawScene count) -> .runelite/logs/client.log, to localise the black-3D-scene
     // blocker (zone callbacks never firing) ABOVE the GL bridge. Inert in CPU/L1 mode.
     if (self.routecGpuMode) {
-        [opts addObject:@"-Drunelite.gpudiag=true"];
-        // WHITE-FLASH DIAGNOSTIC: dump ~8 in-world composited GPU frames to Documents/routec-frames/*.png so the
-        // render bug can be seen off-device (the live frame can't be pulled). STRIP after the bug is fixed.
-        [opts addObject:@"-Drunelite.gpuframedump=true"];
         // Force-enable + start the gpu plugin once the client is in-world (canvas laid out), overriding any persisted
         // runelite.gpuplugin=false and sidestepping the startUp-runs-too-early canvas.isValid() race. Without this the
         // GPU plugin intermittently never initialises (createGLContext never runs) and the engine silently falls back
-        // to the CPU renderer. See RouteCGpuStarter.
+        // to the CPU renderer. See RouteCGpuStarter. (gpudiag/gpuframedump are dev-only — gpuframedump fills
+        // Documents/routec-frames with a PNG per frame — and are left off for the shipping default.)
         [opts addObject:@"-Drunelite.routecgpu=true"];
-        log(@"[jvm] GPU Route C scene-render diagnostic ARMED (-Drunelite.gpudiag=true, gpuframedump=true, routecgpu=true)");
+        log(@"[jvm] base GPU ARMED (routecgpu=true)");
     }
 
     // W3 GPU Zone B0.5: arm RLHDStarter to load + start the external 117HD plugin once in-world. Same read-only
@@ -866,8 +863,8 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     // base gpu plugin — force-starting base would race it). RLHDStarter forces hd.uiScalingMode=LINEAR +
     // tiledLighting=false before load (the simplest GLSL-ES paths) then loadAndStartPlugin(rs117.hd.HdPlugin).
     if (self.routecZoneMode) {
-        [opts addObject:@"-Drunelite.gpudiag=true"];
-        [opts addObject:@"-Drunelite.gpuframedump=true"];
+        // gpudiag/gpuframedump are dev-only (gpuframedump fills Documents/routec-frames with a PNG per frame) —
+        // left off for the shipping opt-in 117HD path.
         [opts addObject:@"-Drunelite.routecrlhd=true"];
         // Tell the shared RLHDStarter this is the iOS (Route C / EAGL, full feature port) path, so it applies
         // the full iOS 117HD config (tiled/POM/seeded-tunables/safety) rather than Android's mobile config.
