@@ -268,3 +268,27 @@ edit-mode (fully emulator-verifiable — overlays always present; but L + OQ3 lo
 **AP-4 progress: Finding 14 (3/4 panels: XP/Loot/GE), Finding 15 (overlay snap) DONE. Remaining: Finding 14
 Time Tracking panel; Finding 15 free-drag follow-up; Finding 22 infobox long-press menu; Finding 16 minimap
 reconstruction (XL); Finding 11 real-device pass (hardware).**
+
+## Session 2026-06-10 (AP-4 cont.): infobox menu (Finding 22) — FULLY VERIFIED
+
+- **Finding 22 — infobox menu (Detach/Flip/Delete) — VERIFIED end-to-end.** Desktop surfaces these via an
+  infobox hover-menu; touch has no hover, AND the `InfoBoxBridge` snapshot carries **no bounds** (so a
+  long-press can't hit-test a specific infobox) — the bridge is **index-based, designed for a list UI**, not a
+  long-press (this corrects the audit's "long-press an infobox" framing for the actual bridge shape). New
+  `InfoBoxScreen` (reached from the panel list, gated on `InfoBoxBridge.isAvailable`) lists every live infobox
+  (tooltip + text value) with a button per menu option, firing `invokeInfoBoxMenu(index, option)` — which posts
+  the same `InfoBoxMenuClicked` the desktop right-click does. Dedicated InfoBoxBridge JNI registration + an
+  `(int,String)->String` invoke extern. No shared-Java change; contract UNCHANGED (185).
+  - **Verified with a real state change:** facade resolves (infobox=true); the screen listed **26 live
+    infoboxes** (the account had active stat boosts — Attack/Defence/Strength/Hitpoints boost, etc.) with
+    Detach/Flip; invoking **Detach** on "Attack boost" processed engine-side — the ~1 Hz re-poll showed that box
+    **gained a "Delete" option** (a detached infobox is deletable) while the others still showed only
+    Detach/Flip. Evidence: `dev-tools/ap4-mobile-ux/evidence-infobox-{list,detached-delete}.png`. (The
+    detached boost infobox is transient/cosmetic and self-heals when the boost wears off.)
+  - **InfoBoxBridge JSON:** `{available,infoboxes:[{index,name,text,tooltip,menu:["Detach",..]}]}` — index-based;
+    `invokeInfoBoxMenu` resolves by current list index + matches the OverlayMenuEntry by option text.
+
+**AP-4 progress: Finding 14 (3/4 panels), Finding 15 (overlay snap), Finding 22 (infobox menu) DONE — all three
+reach native screens from the panel list. Remaining: Finding 14 Time Tracking panel; Finding 15 free-drag;
+Finding 16 minimap reconstruction (XL); Finding 11 real-device pass (hardware).** Native screens now in the
+panel list: XP Tracker, Loot Tracker, Grand Exchange, World Switcher, Quest Helper, Overlay Layout, Infoboxes.
