@@ -212,3 +212,32 @@ iOS's PluginHubViewController; hubState already staged). Then AP-4.
 native reflows (14), overlay edit-mode (15), infobox long-press menu (22), minimap reconstruction (16, XL),
 and the real-device verification pass (11 — the only item needing hardware not on the bench). Dev-bar now:
 ⚙ ⌨ ⇧ ▦ ⎆ ⏻ ◆ HD 📷.
+
+## Session 2026-06-10 (AP-4 start): per-panel native reflows (Finding 14) — XP / Loot / GE
+
+Started AP-4 with Finding 14 (per-panel native Compose reflows, replacing the OOM-prone rendered-Swing-image
+fallback). All shared data bridges (XpTracker/LootTracker/GrandExchange/TimeTracking) were already merged from
+iOS; Android owed the native half. Added a **generic read-only data-panel registrar** in `jvm_bootstrap.cpp`
+(`registerDataPanel` + a `DataPanel` struct: isAvailable/setUiOpen/<jsonGetter>, release-latched like
+Quest/World) so each new panel is a 3-line JNI add + one Compose screen.
+
+- **XP Tracker** (`c8c8efd306`): `XpTrackerScreen` — live Overall row + per-skill rows (level delta, xp/hr,
+  time-to-level, actions-left, progress bar). Verified: facade resolves (xpNative=true), getXpJson round-trips,
+  the live **Overall row renders real formatted data** through the same `xpRowOf`→`fmt`→`XpRowItem` path a skill
+  row uses. A non-zero per-skill row pends a live XP gain (idle test account; not initiating blind combat on a
+  live account — death/item-loss risk).
+- **Loot Tracker + Grand Exchange** (`31eaad75b1`): `LootTrackerScreen` (per-source kills/value + item list) +
+  `GrandExchangeScreen` (active offers: buy/sell, qty/total, price, progress). Verified: both resolve
+  (loot=true ge=true), round-trip + parse, empty states render ("No loot tracked this session." / "No active
+  Grand Exchange offers." — idle account has no kills/offers).
+
+Pattern (mirrors Quest/World Tier-2): JNI `nativeXxxAvailable/SetUiOpen/Json` → Compose screen with
+`DisposableEffect{ setUiOpen(true/false) }` bracketing + a ~1.5 s poll → a NativeRow in `PanelList` gated on
+`xxxAvailable()`. No shared-Java change; contract UNCHANGED (185).
+
+**Finding 14 status: 3 of 4 panels done (XP/Loot/GE). Time Tracking deferred** (most complex — tabs + farming
+contract + bird houses + timers + stopwatches multi-section JSON; least-used; hardest to verify on an idle
+account). Populated states for all three pend live game data but the wiring/parse/render/empty paths are
+verified and the data is iOS-proven. **Remaining AP-4: Finding 14 Time Tracking panel; Finding 15 overlay
+edit-mode (fully emulator-verifiable — overlays always present; but L + OQ3 long-press disambiguation); Finding
+22 infobox long-press menu; Finding 16 minimap reconstruction (XL); Finding 11 real-device pass (hardware).**
