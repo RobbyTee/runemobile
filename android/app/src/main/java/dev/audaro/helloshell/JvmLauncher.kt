@@ -120,10 +120,6 @@ object JvmLauncher {
     // — it attaches the caller to HotSpot. Size against [nativeFrameWidth]; guard len % width == 0.
     external fun nativeFramePixels(): IntArray?
 
-    // Finding 16 — minimap magnifier: crop [rw*rh] 0xAARRGGBB ints out of the composited frame at (rx,ry) (the
-    // live minimap rect from the chrome snapshot). null if off / rect out of frame. Pull OFF the UI thread.
-    external fun nativeMinimapCrop(rx: Int, ry: Int, rw: Int, rh: Int): IntArray?
-
     // ---- A4 plugin control plane (MobileUiBridge; gated by -Drunelite.mobileui) ----------------------
     // CALL THESE OFF THE UI THREAD ONLY (via [onBridge]) — they daemon-attach the calling thread to the
     // embedded HotSpot VM and may block (config writes dispatch to the client thread). ART<->HotSpot strings
@@ -261,7 +257,6 @@ object JvmLauncher {
     fun frameWidth() = nativeFrameWidth()
     fun frameHeight() = nativeFrameHeight()
     fun framePixels(): IntArray? = nativeFramePixels()
-    fun minimapCrop(rx: Int, ry: Int, rw: Int, rh: Int): IntArray? = nativeMinimapCrop(rx, ry, rw, rh)
 
     // ---- A3.5 bridge request/response thread --------------------------------------------------------
     // A single dedicated background thread the UI posts plugin-plane requests to, so the ART UI thread NEVER
