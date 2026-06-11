@@ -318,3 +318,17 @@ panel list: XP Tracker, Loot Tracker, Grand Exchange, World Switcher, Quest Help
 **AP-4 progress: Findings 14 (3/4 panels), 15 (overlay snap), 22 (infobox menu), 16 (minimap magnifier) DONE.
 Remaining: Finding 14 Time Tracking panel; Finding 15 free pixel-drag; Finding 11 real-device pass (the only
 item needing hardware not on the bench).** Dev-bar now: ⚙ ⌨ ⇧ ▦ ⎆ ⏻ ◆ HD 📷 🗺.
+
+## Session 2026-06-10 (later): minimap magnifier (Finding 16) REMOVED per user request
+
+The minimap magnifier built earlier this session (commit `eb61029d2e`) was **removed at the user's request** —
+deemed unnecessary. Reverted in `e8fd6d85b7` (the `nativeMinimapCrop` JNI extern, the `JvmLauncher.minimapCrop`
+alias, and all the MainActivity native UI: the 🗺 toggle, the magnifier `ImageView`, `refreshMagnifier` /
+`onMagnifierTouch`, the `minimapRect` capture in `applyMinimap`, and the evidence frames). The dev-bar is back to
+⚙ ⌨ ⇧ ▦ ⎆ ⏻ ◆ HD 📷. Contract was never touched (UNCHANGED at 185). **Finding 16 is therefore OPEN/declined**
+(the small minimap stands; OQ9 answered "accept-small" in effect). The technical finding still holds for the
+record: a scaled-blit minimap IS viable via `getFramePixels` (correcting the audit's B5 #10 "impossible"), should
+it ever be wanted again.
+
+**AP-4 status after removal: Findings 14 (3/4 panels), 15 (overlay snap), 22 (infobox menu) DONE. Finding 16
+declined. Remaining: Finding 14 Time Tracking panel; Finding 15 free pixel-drag; Finding 11 real-device pass.**
