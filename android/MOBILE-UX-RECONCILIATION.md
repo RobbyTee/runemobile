@@ -181,3 +181,34 @@ thin-consumer wins (all consume already-merged shared methods; NO shared-Java ch
 **AP-2b status: Findings 10, 6, 8, 5, 7 all DONE.** Only remaining AP-2b item: **Finding 17 — net-new
 Plugin Hub browse/install screen** (JNI for hubManifest/hubInstall/hubUninstall + a Compose screen mirroring
 iOS's PluginHubViewController; hubState already staged). Then AP-4.
+
+## Session 2026-06-10 (AP-2b finish): Plugin Hub screen (17) — emulator-verified; AP-2b COMPLETE
+
+- **Finding 17 — Plugin Hub browse/install — VERIFIED (the net-new AP-2b item).** Android had only the
+  enable/toggle list; this adds a Compose `PluginHubScreen` mirroring iOS's `PluginHubViewController` over the
+  shared `MobileUiBridge` hub bridge. Reached via a new **"Hub"** button on the plugin panel header. Flow:
+  poll `hubManifest()` (~1 Hz) until the one-time async catalog download settles → list every hub plugin
+  (name/author/version/description) with an Install/Remove button → on tap, optimistic flip + in-flight
+  spinner, call `hubInstall`/`hubUninstall`, poll `hubState()` ({refreshing,seq}) until refreshing=false or a
+  25 s deadline, then **reconcile the true installed flags from a fresh `hubManifest()`** (catches a silent
+  failure). New JNI externs `nativeHubManifest`/`nativeHubInstall`/`nativeHubUninstall` (nativeHubState was
+  already staged AP-2a). NO shared-Java change; contract UNCHANGED (185). Verified: manifest **1737 plugins**;
+  install "1 Tick Flick" → spinner → reconcile → "Remove" + engine config `runelite.externalPlugins=one-tick-flick`;
+  Remove → empty. Commit `62cf93468d`. Evidence: `dev-tools/ap2b-mobile-ux/evidence-hub-{catalog,installed-remove}.png`.
+- **Hub-version pin (shared resource).** The manifest first 404'd: `runelite.pluginhub.version` was
+  `${project.version}` = our local **1.12.29**, which was **never released to RuneLite's hub** (upstream's
+  latest tag is `runelite-parent-1.12.28`; the hub publishes `1.12.28_full.js` but not `1.12.29`). Pinned
+  `runelite.pluginhub.version=1.12.28` in `runelite-client/.../runelite.properties` (decoupled from
+  project.version). 1.12.28-built plugins load fine in our 1.12.28+merge client. **This is a shared resource
+  → both ports embed it; iOS's hub 404s identically at 1.12.29 (a regression the version bump introduced
+  after iOS's hub was last verified 2026-06-02). The iOS port must re-stage its runtime jar
+  (`tools/stage-mobile-runtime.sh`) to pick up the pin.** Contract UNCHANGED; only the Android jars were
+  re-staged this session (CPU `stage-mobile-runtime --android-only` + GPU `stage-android-gpu-jar.sh`).
+- **Related latent issue spotted (NOT hub, out of scope):** `runelite.api.base=https://api.runelite.net/
+  runelite-${project.version}` (runelite.properties:18) also uses the non-existent 1.12.29 → item-price / GE /
+  session API calls likely 404 too. Flagged for a separate fix (same pin-or-revert decision).
+
+**AP-2b COMPLETE — Findings 10, 6, 8, 5, 7, 17 all done + emulator-verified.** Next: **AP-4** — per-panel
+native reflows (14), overlay edit-mode (15), infobox long-press menu (22), minimap reconstruction (16, XL),
+and the real-device verification pass (11 — the only item needing hardware not on the bench). Dev-bar now:
+⚙ ⌨ ⇧ ▦ ⎆ ⏻ ◆ HD 📷.
