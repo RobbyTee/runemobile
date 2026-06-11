@@ -34,6 +34,7 @@ import android.widget.FrameLayout
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -102,6 +103,14 @@ class MainActivity : AppCompatActivity() {
     private var lastChatRowH = Int.MIN_VALUE        // last setChatTabRowHeight sent (send only on change)
     private var lastMmX = Int.MIN_VALUE             // last minimap relocation sent (send only on change)
     private var lastMmY = Int.MIN_VALUE
+
+    // Finding 16 minimap magnifier: an enlarged scaled-blit of the live minimap region (cropped from the
+    // composited frame) with tap-to-walk mapped back to the real (relocated) minimap, which stays live underneath.
+    private lateinit var minimapMag: ImageView
+    private var magnifierOn = false
+    private var minimapRect: IntArray? = null       // live minimap [x,y,w,h] in canvas px (from the chrome snapshot)
+    private val magInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var lastMagMs = 0L
 
     // A2 press-and-peek menu state.
     private lateinit var menuOverlay: MenuOverlayView
@@ -270,13 +279,29 @@ class MainActivity : AppCompatActivity() {
         // getFramePixels) and save a PNG to MediaStore (Pictures/RuneLite) — the system gallery picks it up.
         val shotButton = devButton("📷")   // 📷
         shotButton.setOnClickListener { saveScreenshot() }
+        // Finding 16: toggle the enlarged minimap magnifier. The engine minimap is uncomfortably small on a phone;
+        // this blits its live region scaled-up and maps taps back to the real minimap (walk-to keeps working).
+        minimapMag = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_XY
+            setBackgroundColor(0xCC101010.toInt())
+            val p = (3 * resources.displayMetrics.density).toInt(); setPadding(p, p, p, p)
+            visibility = View.GONE
+            setOnTouchListener { v, e -> onMagnifierTouch(v, e) }
+        }
+        val mapButton = devButton("🗺")
+        mapButton.setOnClickListener {
+            magnifierOn = !magnifierOn
+            mapButton.alpha = if (magnifierOn) 1f else 0.7f
+            if (!magnifierOn) minimapMag.visibility = View.GONE
+            Log.i(TAG, "f16: minimap magnifier ${if (magnifierOn) "ON" else "OFF"}")
+        }
         // Group the dev affordances into one discreet cluster pinned to the BOTTOM-LEFT — clear of the relocated
         // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
         val devBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(pluginButton); addView(kbButton); addView(shiftButton); addView(chromeButton)
             addView(signInButton); addView(logoutButton); addView(gpuButton); addView(hdButton)
-            addView(shotButton)
+            addView(shotButton); addView(mapButton)
         }
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
@@ -285,6 +310,10 @@ class MainActivity : AppCompatActivity() {
             addView(chatTabOverlay, FrameLayout.LayoutParams(mp, mp)) // enlarged native chat-tab row (top-left)
             addView(keyboardView, FrameLayout.LayoutParams(1, 1))
             addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame + chrome
+            // Finding 16 minimap magnifier — centred, GONE until toggled; above the frame, below menus/panel.
+            addView(minimapMag, FrameLayout.LayoutParams(
+                (300 * resources.displayMetrics.density).toInt(),
+                (300 * resources.displayMetrics.density).toInt(), Gravity.CENTER))
             addView(pluginPanel, FrameLayout.LayoutParams(mp, mp))   // Compose plugin list (GONE until opened)
             addView(devBar, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -781,6 +810,7 @@ class MainActivity : AppCompatActivity() {
                     tryBuildNativeMenu()
                 }
                 updateChrome()
+                if (magnifierOn) refreshMagnifier()
                 Choreographer.getInstance().postFrameCallback(this)
             }
         }
@@ -1021,6 +1051,12 @@ class MainActivity : AppCompatActivity() {
      *  to the right edge, top-aligned, clear of a notch. It stays the live HUD (minimap click-to-walk + orb clicks
      *  keep working — the iOS relocateEngineMinimap move). The cluster width comes from the snapshot. On change. */
     private fun applyMinimap(o: JSONObject?) {
+        // Finding 16: capture the live minimap rect (canvas px) for the magnifier crop. The "minimap" widget bounds
+        // track the relocate (the snapshot reports absolute, post-move bounds).
+        minimapRect = o?.optJSONArray("minimap")?.let {
+            if (it.length() >= 4 && it.optInt(2) > 0 && it.optInt(3) > 0)
+                intArrayOf(it.getInt(0), it.getInt(1), it.getInt(2), it.getInt(3)) else null
+        }
         val fw = JvmLauncher.frameWidth(); val fh = JvmLauncher.frameHeight()
         val vw = surfaceView.width; val vh = surfaceView.height
         if (fw <= 0 || fh <= 0 || vw <= 0 || vh <= 0) return
@@ -1042,6 +1078,40 @@ class MainActivity : AppCompatActivity() {
         if (lastMmX == -1 && lastMmY == -1) return
         lastMmX = -1; lastMmY = -1
         JvmLauncher.onBridge { JvmLauncher.relocateMinimap(-1, -1) }
+    }
+
+    /** Finding 16: refresh the magnifier bitmap from the live minimap region (~6 Hz, off the UI thread, one
+     *  pull in flight at a time). Hides the magnifier while the minimap rect is unknown (login / chrome off). */
+    private fun refreshMagnifier() {
+        val rect = minimapRect
+        if (rect == null) { if (minimapMag.visibility != View.GONE) minimapMag.visibility = View.GONE; return }
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastMagMs < 150 || !magInFlight.compareAndSet(false, true)) return
+        lastMagMs = now
+        val rx = rect[0]; val ry = rect[1]; val rw = rect[2]; val rh = rect[3]
+        JvmLauncher.onBridge {
+            val px = JvmLauncher.minimapCrop(rx, ry, rw, rh)
+            runOnUiThread {
+                if (magnifierOn && px != null && rw > 0 && rh > 0 && px.size >= rw * rh) {
+                    minimapMag.setImageBitmap(Bitmap.createBitmap(px, 0, rw, rw, rh, Bitmap.Config.ARGB_8888))
+                    if (minimapMag.visibility != View.VISIBLE) minimapMag.visibility = View.VISIBLE
+                }
+                magInFlight.set(false)
+            }
+        }
+    }
+
+    /** Finding 16: a tap on the magnifier maps back to the real (relocated) minimap and walks there — the live
+     *  minimap underneath receives the proxied click. Returns true to consume the gesture. */
+    private fun onMagnifierTouch(v: View, e: MotionEvent): Boolean {
+        if (e.actionMasked != MotionEvent.ACTION_UP) return true
+        val rect = minimapRect ?: return true
+        val w = v.width.coerceAtLeast(1); val h = v.height.coerceAtLeast(1)
+        val cx = rect[0] + (e.x / w) * rect[2]
+        val cy = rect[1] + (e.y / h) * rect[3]
+        JvmLauncher.onBridge { JvmLauncher.clickPrecise(cx.toInt(), cy.toInt(), 1) }
+        Log.i(TAG, "f16: magnifier walk -> canvas (${cx.toInt()},${cy.toInt()})")
+        return true
     }
 
     private fun vibrateTick() {

@@ -1588,6 +1588,44 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeFramePixels(JNIEnv *artEnv, jobject
     return dst;
 }
 
+// Finding 16 — crop the minimap region out of the composited frame for the magnifier. EFFICIENT: the full frame
+// is read once in HotSpot (pinned, no copy) and only the small [rw*rh] crop crosses to ART — no per-frame 3.7MB
+// marshal. Alpha forced opaque (source is 0x00RRGGBB). Returns null if off / the rect is out of the frame (the
+// caller passes the live minimap rect from the chrome snapshot; a transient mismatch just skips a magnifier tick).
+extern "C" JNIEXPORT jintArray JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeMinimapCrop(JNIEnv *artEnv, jobject, jint rx, jint ry, jint rw, jint rh) {
+    if (!g_bridgeCls || !g_midPixels || !g_midW || !g_midH || rw <= 0 || rh <= 0 || rw > 4096 || rh > 4096) return nullptr;
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs) return nullptr;
+    jint fw = hs->CallStaticIntMethod(g_bridgeCls, g_midW);
+    jint fh = hs->CallStaticIntMethod(g_bridgeCls, g_midH);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); return nullptr; }
+    if (rx < 0 || ry < 0 || fw <= 0 || fh <= 0 || rx + rw > fw || ry + rh > fh) return nullptr;
+    jintArray src = (jintArray) hs->CallStaticObjectMethod(g_bridgeCls, g_midPixels);
+    if (hs->ExceptionCheck() || !src) { hs->ExceptionClear(); if (src) hs->DeleteLocalRef(src); return nullptr; }
+    jsize n = hs->GetArrayLength(src);
+    if ((int64_t) fw * fh > n) { hs->DeleteLocalRef(src); return nullptr; }   // frame smaller than its claimed dims
+    jintArray dst = artEnv->NewIntArray(rw * rh);
+    if (!dst) { if (artEnv->ExceptionCheck()) artEnv->ExceptionClear(); hs->DeleteLocalRef(src); return nullptr; }
+    jint *px = hs->GetIntArrayElements(src, nullptr);
+    if (!px) { if (hs->ExceptionCheck()) hs->ExceptionClear(); hs->DeleteLocalRef(src); return nullptr; }
+    jint *crop = new (std::nothrow) jint[(size_t) rw * rh];
+    if (crop) {
+        for (int yy = 0; yy < rh; yy++) {
+            const jint *s = px + (size_t)(ry + yy) * fw + rx;
+            jint *d = crop + (size_t) yy * rw;
+            for (int xx = 0; xx < rw; xx++) d[xx] = 0xFF000000 | (s[xx] & 0x00FFFFFF);   // ARGB, alpha opaque
+        }
+        artEnv->SetIntArrayRegion(dst, 0, rw * rh, crop);
+        delete[] crop;
+    } else {
+        dst = nullptr;   // OOM: GC drops the empty dst
+    }
+    hs->ReleaseIntArrayElements(src, px, JNI_ABORT);
+    hs->DeleteLocalRef(src);
+    return dst;
+}
+
 // ---- A5 Tier-2 native reflow (QuestHelperBridge / WorldSwitcherBridge) -------------------------------
 // Run on the rl-bridge thread (NOT the UI thread); each gates on its facade's acquire latch, then calls the
 // cached static method on the HotSpot env and marshals the result back into the ART env. Generic by (cls, m)
