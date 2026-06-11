@@ -191,10 +191,28 @@
 // mark the tapped tab selected and hold it until the snapshot agrees (or a short timeout). -1 = none.
 @property (nonatomic, assign) NSInteger optimisticChatTab;
 @property (nonatomic, assign) CFTimeInterval optimisticChatAt;
-// Chat collapse (mobile): the currently-shown selected tab (-1 = none/collapsed), and whether the chat box is
-// collapsed. Tapping the active tab collapses the box; tapping any tab reopens it.
+// Chat collapse (mobile): the currently-active channel (the pill shows it; -1 = unknown), and whether the chat
+// message area is collapsed. A quick tap on the pill toggles collapse; the channel stays selected either way.
 @property (nonatomic, assign) NSInteger chatActiveTab;
 @property (nonatomic, assign) BOOL chatCollapsed;
+// Channel-pill redesign: ONE collapsed pill (shows the open channel) that fans the 7 chips out on hold. The 7
+// chatTabButtons become display-only fan chips (userInteractionEnabled=NO); the pill's long-press drives the
+// whole gesture (drag sideways = switch on lift; pull down off a chip = its filter menu). State here is touched
+// only on the main thread (gesture callbacks + the display-tick layout).
+@property (nonatomic, strong) UIButton *chatPill;             // the collapsed active-channel button
+@property (nonatomic, strong) UILongPressGestureRecognizer *chatPillLP; // the fan/drag driver
+@property (nonatomic, strong) UILabel *chatFilterHint;        // the ▾ "pull down to filter" reveal under a chip
+@property (nonatomic, assign) BOOL chatFanned;                // chips are fanned out (a gesture is in flight)
+@property (nonatomic, assign) BOOL chatFanAnimating;          // mid fan-out/in animation -> don't let the tick reframe
+@property (nonatomic, assign) NSInteger chatHoverChip;        // chip under the finger this drag (-1 = none)
+@property (nonatomic, assign) NSInteger chatFilterChip;       // chip whose filter menu is open (-1 = SELECT mode)
+@property (nonatomic, assign) CGRect chatPillFrame;           // collapsed pill frame (fan origin), in self.screen
+// Fanned-row geometry (self.screen coords), recomputed each tick; a chip's resting frame = (fanRowX + k*fanTabW,
+// fanRowY, fanTabW, fanChipH). Used as the drag hit-test target (stable even mid-animation).
+@property (nonatomic, assign) CGFloat chatFanRowX;
+@property (nonatomic, assign) CGFloat chatFanRowY;
+@property (nonatomic, assign) CGFloat chatFanTabW;
+@property (nonatomic, assign) CGFloat chatFanChipH;
 // Phase-6 native plugin panel: a ⚙ button opens a full-screen modal sheet (scrim eats all touches so nothing
 // falls through to the game) listing the plugins (MobileUiBridge.listPlugins) with an enable/disable switch
 // and a running/stopped indicator. Refreshed when the bridge's event sequence advances (toggles, conflicts).
@@ -237,6 +255,17 @@ static const int kChatContentCanvasH = 142; // the chat message-area height (eng
 // if the direction feels inverted.
 static const int kChatScrollDir = -1;
 static NSString * const kChatTabNames[7] = { @"All", @"Game", @"Public", @"Private", @"Channel", @"Clan", @"Trade" };
+// Filterable channels (a right-click filter menu exists): Public/Private/Channel/Clan/Trade. All + Game have
+// none, so a pull-down on them is a no-op (no ▾ hint, no menu). Indexes into the 7-tab arrays above.
+static const BOOL kChatTabFilterable[7] = { NO, NO, YES, YES, YES, YES, YES };
+
+// Channel-pill redesign tunables (all one-liners to dial in on device).
+static const CGFloat kChatPillCanvasW   = 150.0;  // collapsed pill width in engine-canvas px (the active channel)
+static const CGFloat kChatHoldDelay     = 0.15;   // press time before the chips fan out (s)
+static const CGFloat kChatFanAnim       = 0.18;   // fan out/in spring duration (s)
+static const CGFloat kChatFanPopPt      = 16.0;   // how much taller (screen pt) a fanned chip pops vs the row
+static const CGFloat kChatPullDownPt    = 26.0;   // finger travel below a chip's bottom edge that opens its filter
+static const CGFloat kChatFilterHintPt  = 10.0;   // finger distance below mid-chip that starts revealing the ▾ hint
 
 // OSRS right-click menu geometry, straight from RuneLite's own hit-test (InteractHighlightOverlay
 // .hoveredMenuEntry): the "Choose Option" title strip is 19px, each entry row is 15px. These are fixed
@@ -1416,9 +1445,12 @@ static const CGFloat kMenuWidth       = 210.0;
     }
 }
 
-// Build the 7 native chat tab buttons once, as subviews of the game view (above the blit, like the keyboard
-// button) so each consumes its own tap. Sprite-backed, two-line RuneScape-font labels (name + filter state) like
-// the official app; hidden until the chat is relocated + logged in. updateChatTabs lays them out + states them.
+// Build the collapsed channel PILL + the 7 fan-out chips once, as subviews of the game view (above the blit).
+// The pill (active channel) is the only interactive view: a quick tap toggles the chat collapse, a hold fans the
+// 7 chips out for drag-select / pull-down-to-filter (onChatPillDrag). The chips are display-only
+// (userInteractionEnabled=NO) — the pill's long-press tracks the finger across them, so they never intercept
+// touches. Sprite-backed two-line RuneScape-font labels (name + filter state) like the official app; hidden until
+// the chat is relocated + logged in. updateChatTabs lays them out + states them.
 - (void)buildChatTabs {
     self.chatBtnImg    = [self loadAsset:@"chatbtn"];
     self.chatBtnSelImg = [self loadAsset:@"chatbtn-selected"];
@@ -1428,26 +1460,52 @@ static const CGFloat kMenuWidth       = 210.0;
         UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
         b.tag = i;
         b.hidden = YES;
+        b.userInteractionEnabled = NO;   // display-only fan chip; the pill's gesture drives selection
         b.adjustsImageWhenHighlighted = NO;
         b.titleLabel.textAlignment = NSTextAlignmentCenter;
         b.titleLabel.numberOfLines = 2;   // channel name + filter state, like the official app
         b.titleLabel.lineBreakMode = NSLineBreakByClipping;
-        // The background sprite is pixel-art with rounded ends + a vertical gradient; stretch it with bilinear so
-        // the enlarged button reads smooth (the official mobile chat scales these the same way).
         b.layer.magnificationFilter = kCAFilterLinear;
-        [b addTarget:self action:@selector(onChatTabButton:) forControlEvents:UIControlEventTouchUpInside];
-        // Long-press a tab -> the engine's filter menu (On/Filter/Off/Hide …) via the native big-row overlay.
-        UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc]
-            initWithTarget:self action:@selector(onChatTabLongPress:)];
-        lp.minimumPressDuration = 0.4;
-        [b addGestureRecognizer:lp];
         [self.screen addSubview:b];
         [self.chatTabButtons addObject:b];
     }
+
+    // The collapsed pill: shows the open channel, and owns the whole gesture.
+    UIButton *pill = [UIButton buttonWithType:UIButtonTypeCustom];
+    pill.hidden = YES;
+    pill.adjustsImageWhenHighlighted = NO;
+    pill.titleLabel.textAlignment = NSTextAlignmentCenter;
+    pill.titleLabel.numberOfLines = 2;
+    pill.titleLabel.lineBreakMode = NSLineBreakByClipping;
+    pill.layer.magnificationFilter = kCAFilterLinear;
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onChatPillTap:)];
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onChatPillDrag:)];
+    lp.minimumPressDuration = kChatHoldDelay;
+    [tap requireGestureRecognizerToFail:lp];   // a hold fans out; only a quick tap (lp failed) toggles collapse
+    [pill addGestureRecognizer:lp];
+    [pill addGestureRecognizer:tap];
+    [self.screen addSubview:pill];
+    self.chatPill = pill;
+    self.chatPillLP = lp;
+
+    // The "▾ pull down to filter" reveal that slides under the hovered chip.
+    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectZero];
+    hint.text = @"▾";
+    hint.textAlignment = NSTextAlignmentCenter;
+    hint.textColor = [UIColor colorWithRed:1.0 green:0.92 blue:0.35 alpha:1.0];
+    hint.hidden = YES;
+    hint.userInteractionEnabled = NO;
+    [self.screen addSubview:hint];
+    self.chatFilterHint = hint;
+
     self.chatTabsBuilt = YES;
     self.optimisticChatTab = -1;
     self.chatActiveTab = -1;
-    [self appendLine:[NSString stringWithFormat:@"[chat] tab buttons built (sprites %@/%@/%@)",
+    self.chatHoverChip = -1;
+    self.chatFilterChip = -1;
+    [self appendLine:[NSString stringWithFormat:@"[chat] pill + chips built (sprites %@/%@/%@)",
                       self.chatBtnImg ? @"ok" : @"X", self.chatBtnSelImg ? @"ok" : @"X",
                       self.chatBtnNewImg ? @"ok" : @"X"]];
 }
@@ -1467,11 +1525,42 @@ static int chatRowCanvasH(void) {
     return kChatTabRowCanvasH;
 }
 
-// Lay out + state the enlarged native chat tabs from the chat snapshot each tick. Mirrors updateChrome: hides
-// everything (revealing the engine's own chat) when the native chrome is toggled off or the layout is unsupported
-// (not Classic/164). The row spans the chat-panel width at the relocated chat origin; each button is bigger than
-// the engine's, sprite-backed with the live selected/new state and the engine's exact label colour. A tap proxies
-// a precise click onto the live engine button centre (from the snapshot bounds).
+// Paint one channel button (pill or fan chip) sprite-backed with a two-line RuneScape-font label (name on top,
+// filter state below in the engine's state colour). selected -> the gold SELECTED sprite; new -> the unread
+// sprite; else the idle sprite. tab = the snapshot entry for channel i (may be nil while collapsed).
+- (void)paintChatButton:(UIButton *)b channel:(int)i tab:(NSDictionary *)t selected:(BOOL)selected
+               nameFont:(UIFont *)nameFont stateFont:(UIFont *)stateFont {
+    BOOL hasNew = [t[@"new"] boolValue];
+    UIImage *bg = self.chatBtnImg;
+    if (selected) bg = self.chatBtnSelImg;
+    else if (hasNew) bg = self.chatBtnNewImg;
+    [b setBackgroundImage:bg forState:UIControlStateNormal];
+
+    NSString *name = (i >= 0 && i < kChatTabCount) ? kChatTabNames[i] : @"";
+    NSString *filter = [t[@"filter"] isKindOfClass:[NSString class]] ? t[@"filter"] : @"";
+    UIColor *nameColor = rgbColor(t ? [t[@"labelColor"] intValue] : -1)
+        ?: [UIColor colorWithRed:1.0 green:0.97 blue:0.85 alpha:1.0];
+    NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new];
+    ps.alignment = NSTextAlignmentCenter;
+    ps.lineBreakMode = NSLineBreakByClipping;
+    NSMutableAttributedString *title = [[NSMutableAttributedString alloc] initWithString:name
+        attributes:@{NSFontAttributeName: nameFont, NSForegroundColorAttributeName: nameColor,
+                     NSParagraphStyleAttributeName: ps}];
+    if (filter.length) {
+        UIColor *fc = rgbColor([t[@"filterColor"] intValue]) ?: [UIColor colorWithRed:0.0 green:0.9 blue:0.0 alpha:1.0];
+        [title appendAttributedString:[[NSAttributedString alloc]
+            initWithString:[@"\n" stringByAppendingString:filter]
+            attributes:@{NSFontAttributeName: stateFont, NSForegroundColorAttributeName: fc,
+                         NSParagraphStyleAttributeName: ps}]];
+    }
+    [b setAttributedTitle:title forState:UIControlStateNormal];
+}
+
+// Lay out + state the collapsed pill and the (resting) fan chips from the chat snapshot each tick. Mirrors
+// updateChrome: hides everything (revealing the engine's own chat) when the native chrome is toggled off or the
+// layout is unsupported (not Classic/164). The pill sits at the chat origin; the fan row spans the chat width
+// (kChatW) and is the drag hit-test target. Frame/visibility mutation is skipped mid fan-animation so the
+// animation owns the views; content (sprite + label) is always refreshed.
 - (void)updateChatTabs {
     if (!self.chatTabsBuilt) return;
     if (!self.chromeVisible || self.renderW <= 0) { [self hideChatTabs]; return; }
@@ -1480,8 +1569,7 @@ static int chatRowCanvasH(void) {
     NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
                                                       options:0 error:nil];
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) { [self hideChatTabs]; return; }
-    // LAYOUT GUARD (same as updateChrome): the native HUD only works in the Classic resizable layout (164). In any
-    // other layout, hide the native tabs so the engine's own chat row renders + works.
+    // LAYOUT GUARD (same as updateChrome): the native HUD only works in the Classic resizable layout (164).
     if ([d[@"topLevelId"] intValue] != 164) { [self hideChatTabs]; return; }
     NSArray *tabs = [d[@"tabs"] isKindOfClass:[NSArray class]] ? d[@"tabs"] : nil;
     if (tabs.count == 0) { [self hideChatTabs]; return; }
@@ -1491,23 +1579,27 @@ static int chatRowCanvasH(void) {
     CGFloat s = W / (CGFloat)self.renderW;           // canvas px -> screen pt (uniform: render aspect == screen)
     CGFloat rowX = [d[@"chatX"] intValue] * s;
     CGFloat rowY = [d[@"chatY"] intValue] * s;
-    // Official-mobile layout: 7 equal-width tabs spanning the chat width (kChatW), two-line content. No over-widening
-    // — the row IS the chat width, so the message area below stays its natural width and aligns.
     CGFloat rowW = kChatW * s;
     CGFloat rowH = kChatTabRowCanvasH * s;
     CGFloat tabW = rowW / kChatTabCount;
-    [JVMLauncher setEngineChatTabRowHeight:kChatTabRowCanvasH];   // push messages below the taller tab row
+    [JVMLauncher setEngineChatTabRowHeight:kChatTabRowCanvasH];   // push messages below the (constant) tab row
     [JVMLauncher setEngineChatAreaWidth:0];                        // chat keeps its natural 519 width
-    // Two text lines: channel name (top) + filter state (bottom). Size both to the row height.
+
+    // Stash the fan geometry (chips pop DOWN by kChatFanPopPt for fat-finger targets) + the collapsed pill frame.
+    self.chatFanRowX = rowX;
+    self.chatFanRowY = rowY;
+    self.chatFanTabW = tabW;
+    self.chatFanChipH = rowH + kChatFanPopPt;
+    self.chatPillFrame = CGRectMake(floor(rowX), floor(rowY), floor(kChatPillCanvasW * s), ceil(rowH));
+
     CGFloat nameSize = floor(rowH * 0.40);
     CGFloat stateSize = floor(rowH * 0.34);
     UIFont *nameFont = [UIFont fontWithName:@"RuneScape" size:nameSize] ?: [UIFont boldSystemFontOfSize:nameSize];
     UIFont *stateFont = [UIFont fontWithName:@"RuneScape" size:stateSize] ?: [UIFont systemFontOfSize:stateSize];
 
-    // Which tab the snapshot reports selected (sprite==SELECTED), then reconcile with the optimistic highlight.
-    // The engine's tab sprite only updates on a redraw (which may not happen until a later game interaction), so
-    // HOLD the just-tapped tab selected until the snapshot actually agrees — NO timeout (a timeout would revert the
-    // highlight to the engine's stale sprite after a few seconds, then it'd flip back on the next game click).
+    // Which channel the snapshot reports selected, reconciled with the optimistic highlight (the engine tab sprite
+    // lags a redraw). Persist the last known selection so the pill still names the open channel while collapsed
+    // (collapse can invalidate the snapshot's tab bounds/sprite).
     int snapSel = -1;
     for (int j = 0; j < (int)tabs.count && j < kChatTabCount; j++) {
         NSDictionary *tj = [tabs[j] isKindOfClass:[NSDictionary class]] ? tabs[j] : nil;
@@ -1515,59 +1607,175 @@ static int chatRowCanvasH(void) {
     }
     int effSel = snapSel;
     if (self.optimisticChatTab >= 0) {
-        if (snapSel == self.optimisticChatTab) {
-            self.optimisticChatTab = -1;   // engine sprite caught up -> trust the snapshot from here
-        } else {
-            effSel = (int)self.optimisticChatTab;   // hold the instant highlight until it does
-        }
+        if (snapSel == self.optimisticChatTab) self.optimisticChatTab = -1;
+        else effSel = (int)self.optimisticChatTab;
     }
-    if (self.chatCollapsed) { effSel = -1; }   // collapsed -> no tab highlighted (box is hidden)
-    self.chatActiveTab = effSel;               // remember it: a tap on this tab collapses the box
+    if (effSel >= 0) self.chatActiveTab = effSel;
+    int pillSel = (effSel >= 0) ? effSel : (int)self.chatActiveTab;
+    if (pillSel < 0) pillSel = 0;   // never seen a selection yet -> default to All
+
+    NSDictionary *pillTab = (pillSel < (int)tabs.count && [tabs[pillSel] isKindOfClass:[NSDictionary class]])
+        ? tabs[pillSel] : nil;
+    [self paintChatButton:self.chatPill channel:pillSel tab:pillTab selected:YES nameFont:nameFont stateFont:stateFont];
 
     for (int i = 0; i < kChatTabCount; i++) {
         UIButton *b = self.chatTabButtons[i];
-        b.frame = CGRectMake(floor(rowX + i * tabW), floor(rowY), ceil(tabW), ceil(rowH));
-
         NSDictionary *t = (i < (int)tabs.count && [tabs[i] isKindOfClass:[NSDictionary class]]) ? tabs[i] : nil;
-        BOOL selected = (i == effSel);
-        BOOL hasNew = [t[@"new"] boolValue];
-        UIImage *bg = self.chatBtnImg;
-        if (selected) bg = self.chatBtnSelImg;
-        else if (hasNew) bg = self.chatBtnNewImg;
-        [b setBackgroundImage:bg forState:UIControlStateNormal];
+        [self paintChatButton:b channel:i tab:t selected:(i == effSel)
+                     nameFont:nameFont stateFont:stateFont];
+    }
 
-        // Two-line label like the official app: channel name (off-white) on top, filter state ("On"/"Off"/…) below
-        // in the engine's state colour (green for On, etc.). "All" has no filter state -> single line.
-        NSString *name = kChatTabNames[i];
-        NSString *filter = [t[@"filter"] isKindOfClass:[NSString class]] ? t[@"filter"] : @"";
-        UIColor *nameColor = rgbColor(t ? [t[@"labelColor"] intValue] : -1)
-            ?: [UIColor colorWithRed:1.0 green:0.97 blue:0.85 alpha:1.0];
-        NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new];
-        ps.alignment = NSTextAlignmentCenter;
-        ps.lineBreakMode = NSLineBreakByClipping;
-        NSMutableAttributedString *title = [[NSMutableAttributedString alloc] initWithString:name
-            attributes:@{NSFontAttributeName: nameFont, NSForegroundColorAttributeName: nameColor,
-                         NSParagraphStyleAttributeName: ps}];
-        if (filter.length) {
-            UIColor *fc = rgbColor([t[@"filterColor"] intValue]) ?: [UIColor colorWithRed:0.0 green:0.9 blue:0.0 alpha:1.0];
-            [title appendAttributedString:[[NSAttributedString alloc]
-                initWithString:[@"\n" stringByAppendingString:filter]
-                attributes:@{NSFontAttributeName: stateFont, NSForegroundColorAttributeName: fc,
-                             NSParagraphStyleAttributeName: ps}]];
-        }
-        [b setAttributedTitle:title forState:UIControlStateNormal];
-        b.hidden = NO;
+    if (self.chatFanAnimating) return;   // the fan animation owns frames/visibility this beat
+    if (self.chatFanned) {
+        // The live gesture owns chip frames + hover transforms; don't reframe them here (setting .frame on a
+        // transformed view fights the hover scale). Just keep the pill INVISIBLE-but-present — hiding it would
+        // cancel the in-flight long-press it owns. alpha 0 keeps the recognizer alive.
+        self.chatPill.alpha = 0.0;
+    } else {
+        self.chatPill.frame = self.chatPillFrame;
+        self.chatPill.alpha = 1.0;
+        self.chatPill.hidden = NO;
+        for (UIButton *b in self.chatTabButtons) b.hidden = YES;
+        self.chatFilterHint.hidden = YES;
     }
 }
 
 - (void)hideChatTabs {
     self.chatScrollable = NO;   // chat not open -> drags fall through to the camera
+    self.chatPill.hidden = YES;
+    self.chatFilterHint.hidden = YES;
     for (UIButton *b in self.chatTabButtons) b.hidden = YES;
-    // Restore the engine's own (small) chat tab row + native width whenever the native tabs aren't shown (toggled
-    // off / not logged in / unsupported layout): drop the push-down + widen so CHATAREA returns to the engine's
-    // 23px offset / 519 width and its real CONTROLS row renders + works.
+    self.chatFanned = NO;
+    self.chatFanAnimating = NO;
+    self.chatHoverChip = -1;
+    self.chatFilterChip = -1;
+    // Restore the engine's own (small) chat tab row + native width whenever the native tabs aren't shown.
     [JVMLauncher setEngineChatTabRowHeight:0];
     [JVMLauncher setEngineChatAreaWidth:0];
+}
+
+// The resting (fanned) frame of chip i, in self.screen coords, from the stashed fan geometry.
+- (CGRect)chatChipFrameForIndex:(int)i {
+    return CGRectMake(floor(self.chatFanRowX + i * self.chatFanTabW), floor(self.chatFanRowY),
+                      ceil(self.chatFanTabW), ceil(self.chatFanChipH));
+}
+
+// Which fan column the finger is over (0..6), or -1 if clearly off the fan. Accepts a generous vertical band
+// BELOW the chips (the pull-down zone) so a finger dragging down to filter still maps to its column.
+- (NSInteger)chatChipColumnAtPoint:(CGPoint)p {
+    CGFloat rowW = self.chatFanTabW * kChatTabCount;
+    if (p.x < self.chatFanRowX || p.x >= self.chatFanRowX + rowW) return -1;
+    CGFloat top = self.chatFanRowY - 44.0;
+    CGFloat bot = self.chatFanRowY + self.chatFanChipH + kChatPullDownPt + 60.0;
+    if (p.y < top || p.y > bot) return -1;
+    NSInteger k = (NSInteger)floor((p.x - self.chatFanRowX) / self.chatFanTabW);
+    return (k < 0) ? 0 : (k >= kChatTabCount ? kChatTabCount - 1 : k);
+}
+
+// Spring the chips out from the pill into the fanned row (or back). Frame/visibility is the animation's during
+// the run (updateChatTabs defers via chatFanAnimating).
+- (void)fanOutChat {
+    if (self.chatFanned) return;
+    self.chatFanned = YES;
+    self.chatFanAnimating = YES;
+    self.chatFilterChip = -1;
+    self.chatHoverChip = -1;
+    for (int i = 0; i < kChatTabCount; i++) {
+        UIButton *c = self.chatTabButtons[i];
+        c.transform = CGAffineTransformIdentity;
+        c.layer.borderWidth = 0;
+        c.frame = self.chatPillFrame;
+        c.alpha = 0.0;
+        c.hidden = NO;
+    }
+    [UIView animateWithDuration:kChatFanAnim delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0.4
+                        options:UIViewAnimationOptionCurveEaseOut animations:^{
+        for (int i = 0; i < kChatTabCount; i++) {
+            self.chatTabButtons[i].frame = [self chatChipFrameForIndex:i];
+            self.chatTabButtons[i].alpha = 1.0;
+        }
+        self.chatPill.alpha = 0.0;
+    } completion:^(BOOL finished) {
+        self.chatFanAnimating = NO;
+        // Leave the pill hidden=NO at alpha 0 — hiding it would cancel the long-press it owns.
+    }];
+}
+
+- (void)fanInChat {
+    if (!self.chatFanned) return;
+    self.chatFanAnimating = YES;
+    self.chatFilterHint.hidden = YES;
+    self.chatPill.hidden = NO;
+    self.chatPill.alpha = 0.0;
+    // Clear any hover scale/border first — animating .frame on a transformed view is undefined.
+    for (UIButton *c in self.chatTabButtons) { c.transform = CGAffineTransformIdentity; c.layer.borderWidth = 0; }
+    [UIView animateWithDuration:kChatFanAnim delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+        for (int i = 0; i < kChatTabCount; i++) {
+            self.chatTabButtons[i].frame = self.chatPillFrame;
+            self.chatTabButtons[i].alpha = 0.0;
+        }
+        self.chatPill.alpha = 1.0;
+    } completion:^(BOOL finished) {
+        for (UIButton *c in self.chatTabButtons) {
+            c.hidden = YES;
+            c.transform = CGAffineTransformIdentity;
+            c.layer.borderWidth = 0;
+        }
+        self.chatFanned = NO;
+        self.chatFanAnimating = NO;
+        self.chatHoverChip = -1;
+        self.chatFilterChip = -1;
+    }];
+}
+
+// Highlight the chip under the finger (scale + white border) and clear the others. -1 clears all.
+- (void)setChatHoverChip:(NSInteger)k {
+    if (k == self.chatHoverChip) return;
+    self.chatHoverChip = k;
+    for (int i = 0; i < kChatTabCount; i++) {
+        UIButton *c = self.chatTabButtons[i];
+        BOOL on = (i == k);
+        c.transform = on ? CGAffineTransformMakeScale(1.10, 1.10) : CGAffineTransformIdentity;
+        c.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.9].CGColor;
+        c.layer.borderWidth = on ? 2.0 : 0.0;
+        c.layer.cornerRadius = on ? 6.0 : 0.0;
+        if (on) [c.superview bringSubviewToFront:c];
+    }
+}
+
+// Switch the open chat to channel k by replaying its op-script (works on the hidden engine tab); reopen the box
+// if it was collapsed, and optimistically show it selected this frame (the engine sprite lags a redraw).
+- (void)chatSwitchToChip:(int)k {
+    if (k < 0 || k >= kChatTabCount) return;
+    if (self.chatCollapsed) {
+        self.chatCollapsed = NO;
+        [JVMLauncher setEngineChatCollapsed:NO];
+    }
+    [JVMLauncher switchEngineChatTab:k];
+    self.optimisticChatTab = k;
+    self.optimisticChatAt = CACurrentMediaTime();
+    [self updateChatTabs];
+    [self appendLine:[NSString stringWithFormat:@"[chat] switch -> %d (%@)", k, kChatTabNames[k]]];
+}
+
+// Position + reveal the ▾ filter hint under the hovered filterable chip as the finger dips toward its bottom.
+- (void)updateChatFilterHintForColumn:(NSInteger)k point:(CGPoint)p {
+    if (k < 0 || k >= kChatTabCount || !kChatTabFilterable[k] || self.chatFilterChip >= 0) {
+        self.chatFilterHint.hidden = YES;
+        return;
+    }
+    CGRect chip = [self chatChipFrameForIndex:(int)k];
+    CGFloat mid = CGRectGetMidY(chip);
+    CGFloat reveal = (p.y - (mid + kChatFilterHintPt)) / kChatPullDownPt;   // 0 at mid+slop, ~1 at the trigger
+    reveal = fmin(fmax(reveal, 0.0), 1.0);
+    if (reveal <= 0.01) { self.chatFilterHint.hidden = YES; return; }
+    CGFloat hh = 18.0;
+    self.chatFilterHint.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold];
+    self.chatFilterHint.frame = CGRectMake(CGRectGetMinX(chip), CGRectGetMaxY(chip) + 2.0,
+                                           CGRectGetWidth(chip), hh);
+    self.chatFilterHint.alpha = reveal;
+    self.chatFilterHint.hidden = NO;
+    [self.screen bringSubviewToFront:self.chatFilterHint];
 }
 
 // Resolve the live engine chat-button centre (canvas px) for native button tag i, from the chat snapshot bounds.
@@ -1587,64 +1795,86 @@ static int chatRowCanvasH(void) {
     return YES;
 }
 
-// A native chat-tab tap -> switch the chat to that tab. The engine tab sprites are HIDDEN (so they don't peek under
-// this bigger native row), which makes them unclickable, so we REPLAY the tab's op-script (works on hidden widgets)
-// the same way the bottom tab-grid drives the hidden tab stones — NOT a proxy click (a click leaks through to the
-// chat/scene behind the hidden tab).
-- (void)onChatTabButton:(UIButton *)b {
+// Quick tap on the pill -> toggle the chat message area open/collapsed (the channel stays selected).
+- (void)onChatPillTap:(UITapGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady]) return;
-    if (!self.chatCollapsed && b.tag == self.chatActiveTab && b.tag < 7) {
-        // Tapping the already-active tab COLLAPSES the chat box (OSRS-mobile behaviour) — the native tab row stays
-        // so a tap reopens it. No op-replay (that would re-render the box the engine still has shown).
-        self.chatCollapsed = YES;
-        [JVMLauncher setEngineChatCollapsed:YES];
-        [self updateChatTabs];
-        [self appendLine:[NSString stringWithFormat:@"[chat] tab %ld (%@) -> collapse", (long)b.tag, kChatTabNames[b.tag]]];
-        return;
-    }
-    // Switch to the tapped tab (reopening the box if it was collapsed) by replaying its op-script.
-    if (self.chatCollapsed) {
-        self.chatCollapsed = NO;
-        [JVMLauncher setEngineChatCollapsed:NO];
-    }
-    [JVMLauncher switchEngineChatTab:(int)b.tag];
-    // Instant highlight: the tapped tab is now the active view; show it selected immediately (the engine's own tab
-    // sprite, which the snapshot reads, only updates on a redraw). Report (tag 7) doesn't change the selection.
-    if (b.tag < 7) {
-        self.optimisticChatTab = b.tag;
-        self.optimisticChatAt = CACurrentMediaTime();
-    }
-    [self updateChatTabs];   // reflect the new selection this frame, don't wait for the next 10Hz tick
-    [self appendLine:[NSString stringWithFormat:@"[chat] tab %ld (%@) -> op-replay switch",
-                      (long)b.tag, kChatTabNames[b.tag]]];
+    self.chatCollapsed = !self.chatCollapsed;
+    [JVMLauncher setEngineChatCollapsed:self.chatCollapsed];
+    [self updateChatTabs];
+    [self appendLine:[NSString stringWithFormat:@"[chat] pill tap -> %@", self.chatCollapsed ? @"collapse" : @"expand"]];
 }
 
-// A native chat-tab LONG-PRESS -> right-click the live engine button so the engine opens its filter menu
-// (On / Filter / Off / Hide …), then drive the same native big-row menu overlay used for world right-clicks
-// (presentNativeMenu reads the engine menu via MenuPeek; the overlay appears at the finger, the row click-through
-// targets the engine menu rows). Drag to a row + release to pick.
-- (void)onChatTabLongPress:(UILongPressGestureRecognizer *)g {
+// The driver: hold the pill to fan the channels out, then drag to pick. Horizontal drag = SELECT (lift switches
+// to the chip under the finger); pulling DOWN off a filterable chip's bottom = FILTER (open that chip's engine
+// filter menu and hand off to the native big-row overlay). Dragging back UP onto the row cancels the filter.
+- (void)onChatPillDrag:(UILongPressGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady]) return;
-    UIButton *b = (UIButton *)g.view;
-    CGPoint loc = [g locationInView:self.view];
+    CGPoint pView = [g locationInView:self.view];
+    CGPoint pScreen = [g locationInView:self.screen];
     switch (g.state) {
         case UIGestureRecognizerStateBegan: {
-            int cx = 0, cy = 0;
-            if (![self engineChatButtonCenterForTag:b.tag x:&cx y:&cy]) return;
-            [self openEngineMenuAtGameX:cx gameY:cy anchor:loc];
-            [self appendLine:[NSString stringWithFormat:@"[chat] tab %ld (%@) long-press -> filter menu @%d,%d",
-                              (long)b.tag, kChatTabNames[b.tag], cx, cy]];
+            [self fanOutChat];
+            if (!self.tapHaptic) self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+            [self.tapHaptic impactOccurred];
+            [self.tapHaptic prepare];
+            [self appendLine:@"[chat] pill hold -> fan out"];
             break;
         }
-        case UIGestureRecognizerStateChanged:
-            [self updateMenuHighlightForPoint:[g locationInView:self.screen]];
+        case UIGestureRecognizerStateChanged: {
+            if (self.chatFanAnimating) break;   // let the fan settle before tracking hover
+            if (self.chatFilterChip >= 0) {
+                // FILTER mode: dragging back UP onto the chip row cancels the filter and returns to SELECT.
+                CGRect chip = [self chatChipFrameForIndex:(int)self.chatFilterChip];
+                if (pScreen.y < CGRectGetMaxY(chip)) {
+                    [self cancelMenu];
+                    self.chatFilterChip = -1;
+                    [self appendLine:@"[chat] pull-up -> filter cancelled, back to select"];
+                } else {
+                    [self updateMenuHighlightForPoint:pScreen];
+                }
+                break;
+            }
+            NSInteger k = [self chatChipColumnAtPoint:pScreen];
+            [self setChatHoverChip:k];
+            [self updateChatFilterHintForColumn:k point:pScreen];
+            // Pull-down escalation: finger crossed below a filterable chip's bottom by the threshold.
+            if (k >= 0 && kChatTabFilterable[k]) {
+                CGRect chip = [self chatChipFrameForIndex:(int)k];
+                if (pScreen.y > CGRectGetMaxY(chip) + kChatPullDownPt) {
+                    int cx = 0, cy = 0;
+                    if ([self engineChatButtonCenterForTag:k x:&cx y:&cy]) {
+                        self.chatFilterChip = k;
+                        self.chatFilterHint.hidden = YES;
+                        [self openEngineMenuAtGameX:cx gameY:cy anchor:pView];
+                        if (self.menuHaptic) { [self.menuHaptic selectionChanged]; [self.menuHaptic prepare]; }
+                        [self appendLine:[NSString stringWithFormat:@"[chat] pull-down %ld (%@) -> filter menu @%d,%d",
+                                          (long)k, kChatTabNames[k], cx, cy]];
+                    }
+                }
+            }
             break;
-        case UIGestureRecognizerStateEnded:
-            [self commitMenuSelection];
+        }
+        case UIGestureRecognizerStateEnded: {
+            if (self.chatFilterChip >= 0) {
+                [self commitMenuSelection];
+                self.chatFilterChip = -1;
+            } else {
+                NSInteger k = [self chatChipColumnAtPoint:pScreen];
+                // Only a clean release inside a chip's own rect switches; off-row / below = no change.
+                if (k >= 0) {
+                    CGRect chip = [self chatChipFrameForIndex:(int)k];
+                    if (pScreen.y <= CGRectGetMaxY(chip) && k != self.chatActiveTab) {
+                        [self chatSwitchToChip:(int)k];
+                    }
+                }
+            }
+            [self fanInChat];
             break;
+        }
         case UIGestureRecognizerStateCancelled:
         case UIGestureRecognizerStateFailed:
-            [self cancelMenu];
+            if (self.chatFilterChip >= 0) { [self cancelMenu]; self.chatFilterChip = -1; }
+            [self fanInChat];
             break;
         default:
             break;
