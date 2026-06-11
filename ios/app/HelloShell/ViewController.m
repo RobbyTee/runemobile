@@ -2700,6 +2700,14 @@ static int chatRowCanvasH(void) {
         [JVMLauncher postClearHover];   // zoom moves the world too; don't leave a stale hover behind
         return;
     }
+    if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
+        // Each zoom step posts a wheel at the pinch centroid, which re-enters the synthetic cursor THERE (the
+        // engine zooms about the live mouse point). Left as-is, the cursor stays parked on whatever is under
+        // the fingers — so the engine (and any hover-highlight) keeps picking it after the zoom: the "chop
+        // tree box stays up when I zoom in" report. Re-park on lift so hover ends with the gesture.
+        [JVMLauncher postClearHover];
+        return;
+    }
     if (g.state != UIGestureRecognizerStateChanged) return;
     const CGFloat WHEEL_SENS = 12.0;   // notches per unit of scale change (tune by feel)
     CGFloat step = g.scale - self.pinchPrevScale;
