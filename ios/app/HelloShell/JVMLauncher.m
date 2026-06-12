@@ -810,10 +810,6 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"-Drunelite.nosafemode=true",
         @"-Drunelite.rendererpanel=true",            // arm RendererPanelStarter: load GPU + 117HD (no-start) into
                                                      // the panel so both are selectable + configurable.
-        // The base GPU plugin is enabledByDefault=true; with safe-mode off it would otherwise AUTO-START in every
-        // mode (isGpu=true) and the 117HD/CPU choice would never take effect. Force its config OFF so it only
-        // runs when the user selected GPU (RouteCGpuStarter then enables+starts it). key = GpuPlugin simpleName.
-        @"-Drunelite.forceDisablePlugins=gpuplugin",
         @"-Drunelite.nosplash=true",                 // no desktop Swing splash (its JFrame creation under CACIO
                                                      // aborted ExternalPluginManager.refreshPlugins).
         // NOTE: -Drunelite.mobilechrome.repos was tried and REVERTED — repositioned stones over the world are
@@ -843,6 +839,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         [NSString stringWithFormat:@"-Djava.library.path=%@", frameworks],
         [NSString stringWithFormat:@"-Djava.class.path=%@", classpath],
     ] mutableCopy];
+
+    // The base GPU plugin is enabledByDefault=true; with safe-mode off it would otherwise AUTO-START in every
+    // mode (isGpu=true) — and then 117HD's starter sees a GPU already active and never takes over, and CPU isn't
+    // really CPU. Force it OFF unless GPU is the SELECTED renderer (routecGpuMode), in which case RouteCGpuStarter
+    // enables + starts it. forceDisablePlugins wins over a persisted gpuplugin=true (key = GpuPlugin simpleName).
+    if (!self.routecGpuMode) {
+        [opts addObject:@"-Drunelite.forceDisablePlugins=gpuplugin"];
+    }
 
     // Full-screen landscape: after login the headless client resizes its CTC canvas to this WxH (the
     // gamepack switches to resizable layout and fills it). Login stays at 765x503 (autologin coords).
