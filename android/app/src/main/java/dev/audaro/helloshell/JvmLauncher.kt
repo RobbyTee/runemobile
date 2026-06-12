@@ -98,9 +98,6 @@ object JvmLauncher {
     /** Monotonic counter the engine bumps on each committed interact-tap — advance => fire a haptic. */
     external fun nativeInteractTapSeq(): Int
 
-    /** Finger snap radius (game px) the touch-forgiveness uses. */
-    external fun nativeSnapRadius(): Int
-
     // ---- A2 press-and-peek menu ---------------------------------------------------------------------
     /** Commit a menu choice by clicking the engine row centre (game-canvas x,y) — honours plugin onClick. */
     external fun nativeSelectMenuPoint(x: Int, y: Int)
@@ -250,7 +247,6 @@ object JvmLauncher {
     fun keyStroke(vk: Int) = nativeKeyStroke(vk)
     fun isTextInputOpen() = nativeIsTextInputOpen()
     fun interactTapSeq() = nativeInteractTapSeq()
-    fun snapRadius() = nativeSnapRadius()
     fun selectMenuPoint(x: Int, y: Int) = nativeSelectMenuPoint(x, y)
     fun menuSnapshot() = nativeMenuSnapshot()
     fun menuPublishSeq() = nativeMenuPublishSeq()
