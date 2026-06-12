@@ -86,8 +86,8 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :client:delombok :client:shadow
 ( cd ios/dev-tools/gpu-routec && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./stage-ios-gpu-jar.sh )
 # (then the app build + install above)
 ```
-- Device UDID `AEA9E1BC-E149-57AB-A9DD-C4AEA668CD9B` (iPhone 17 Pro Max). **User drives the StikDebug
-  launch + plays; Claude builds + installs + pulls logs.** Unlock the phone when StikDebug attaches.
+- Device UDID `AEA9E1BC-E149-57AB-A9DD-C4AEA668CD9B` (iPhone 17 Pro Max). **The user drives the StikDebug
+  launch + plays; the build host builds + installs + pulls logs.** Unlock the phone when StikDebug attaches.
 - Logs: `client.log` (Java/GpuSceneDiag) + `jvm-stdio.log` at
   `Documents/.runelite/logs/client.log` / `Documents/jvm-stdio.log`; pull with
   `xcrun devicectl device copy from --device <UDID> --domain-type appDataContainer
@@ -100,8 +100,8 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :client:delombok :client:shadow
   default CPU, no launch buttons. Don't regress it.
 - The full 117HD fix catalog (byte order, BGRA, MSAA, TBO repack, dynamic models, etc.) is in the
   `project_ios_gpu_track` memory — that's the reference for "what iOS-GLES gotchas look like."
-- Commit convention: under the user's name only, NO AI/Claude attribution anywhere; auto-commit + push
-  at checkpoints; scrub staged content first.
+- Commit convention: under the user's name only, no third-party/tool attribution anywhere; auto-commit +
+  push at checkpoints; scrub staged content first.
 - NOT merged to master. Merge decision (base GPU fixed first, or merge with GPU as a known-buggy opt-in)
   is the user's.
 ```
