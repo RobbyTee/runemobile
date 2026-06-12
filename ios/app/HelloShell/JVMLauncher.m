@@ -1101,6 +1101,77 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     return img;
 }
 
+// Picture-in-Picture frame feed: the same JavaBridge frame as latestFrame, but delivered as a 32BGRA
+// CVPixelBuffer (what AVSampleBufferDisplayLayer consumes). The engine's TYPE_INT_RGB ints (0x00RRGGBB)
+// already lay out as B,G,R,[junk] on little-endian arm64, so the rows copy straight in and only the alpha
+// byte needs stamping opaque. Seq-gated per CALLER (ioSeq), independent of latestFrame's own gate.
++ (CVPixelBufferRef)copyFramePixelBufferSinceSeq:(int32_t *)ioSeq {
+    if (!ioSeq || !ensureBridge()) return NULL;
+    JNIEnv *env = gMainEnv;
+
+    jint seq = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidSeq);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NULL; }
+    if (seq == *ioSeq) return NULL;   // nothing composited since the caller's last fetch
+
+    jint w = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidW);
+    jint h = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidH);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NULL; }
+    if (w <= 0 || h <= 0) return NULL;
+
+    jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, gBridgeClass, gMidPixels);
+    if (!arr || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NULL; }
+    jsize len = (*env)->GetArrayLength(env, arr);
+    NSUInteger need = (NSUInteger)w * (NSUInteger)h;
+    if ((NSUInteger)len < need) { (*env)->DeleteLocalRef(env, arr); return NULL; }
+
+    // Recycling pool (IOSurface-backed, what the video pipeline wants); rebuilt if the canvas resizes.
+    static CVPixelBufferPoolRef pool = NULL;
+    static jint poolW = 0, poolH = 0;
+    if (!pool || poolW != w || poolH != h) {
+        if (pool) { CVPixelBufferPoolRelease(pool); pool = NULL; }
+        NSDictionary *attrs = @{
+            (id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
+            (id)kCVPixelBufferWidthKey : @(w),
+            (id)kCVPixelBufferHeightKey : @(h),
+            (id)kCVPixelBufferIOSurfacePropertiesKey : @{},
+        };
+        if (CVPixelBufferPoolCreate(NULL, NULL, (__bridge CFDictionaryRef)attrs, &pool) != kCVReturnSuccess) {
+            pool = NULL;
+        }
+        poolW = w; poolH = h;
+    }
+    CVPixelBufferRef pb = NULL;
+    if (pool) CVPixelBufferPoolCreatePixelBuffer(NULL, pool, &pb);
+    if (!pb) { (*env)->DeleteLocalRef(env, arr); return NULL; }
+
+    CVPixelBufferLockBaseAddress(pb, 0);
+    uint8_t *base = (uint8_t *)CVPixelBufferGetBaseAddress(pb);
+    size_t stride = CVPixelBufferGetBytesPerRow(pb);
+    if (stride == (size_t)w * 4) {
+        (*env)->GetIntArrayRegion(env, arr, 0, (jsize)need, (jint *)base);
+    } else {
+        for (jint row = 0; row < h; row++) {   // row stride padded — copy per row
+            (*env)->GetIntArrayRegion(env, arr, row * w, w, (jint *)(base + (size_t)row * stride));
+        }
+    }
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        CVPixelBufferUnlockBaseAddress(pb, 0);
+        CVPixelBufferRelease(pb);
+        (*env)->DeleteLocalRef(env, arr);
+        return NULL;
+    }
+    for (jint row = 0; row < h; row++) {
+        uint32_t *px = (uint32_t *)(base + (size_t)row * stride);
+        for (jint i = 0; i < w; i++) px[i] |= 0xFF000000u;   // stamp alpha opaque
+    }
+    CVPixelBufferUnlockBaseAddress(pb, 0);
+    (*env)->DeleteLocalRef(env, arr);
+
+    *ioSeq = seq;
+    return pb;   // +1 — caller releases
+}
+
 + (void)postTouchType:(int)type x:(int)x y:(int)y button:(int)button {
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;

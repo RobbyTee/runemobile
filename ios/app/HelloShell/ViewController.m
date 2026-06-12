@@ -15,10 +15,13 @@
 #import <SafariServices/SafariServices.h>
 #import <UserNotifications/UserNotifications.h>
 #import <Photos/Photos.h>
+#import <AVKit/AVKit.h>             // Picture-in-Picture (AVPictureInPictureController + content source)
+#import <AVFoundation/AVFoundation.h> // AVSampleBufferDisplayLayer + the background-keepalive audio session
+#import <CoreMedia/CoreMedia.h>     // CMSampleBuffer plumbing for the PiP frame feed
 #import <unistd.h>
 #import <fcntl.h>
 
-@interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate, UNUserNotificationCenterDelegate>
+@interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate, UNUserNotificationCenterDelegate, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate>
 {
     // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
     // desktop stone. A C array, so it lives as an ivar rather than a property.
@@ -245,6 +248,20 @@
 // running (e.g. a native-lib/GPU plugin whose macOS .dylib can't load on iOS) flips from "enabling…" to
 // "couldn't start" after a grace period instead of spinning forever.
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *pluginEnabledSince;
+// Picture-in-Picture + background keepalive: the game keeps playing after a swipe-home. pipLayer is an
+// AVSampleBufferDisplayLayer fed the SAME engine frames as the on-screen blit, parked BEHIND the (opaque)
+// game view so it never shows in-app; the system lifts it into the PiP window when the app backgrounds
+// (canStartPictureInPictureAutomaticallyFromInline). A silent, mixable AVAudioEngine holds the `audio`
+// background mode so the process — JVM, render loop, game socket — keeps running even with PiP dismissed;
+// the in-game logout timer (RuneLite, up to 30 min) then decides how long the character stays in.
+@property (nonatomic, strong) AVSampleBufferDisplayLayer *pipLayer;
+@property (nonatomic, strong) AVPictureInPictureController *pipController;
+@property (nonatomic, strong) dispatch_source_t pipBgPump;   // 15 Hz frame pump while backgrounded (the
+                                                             // CADisplayLink stops firing there)
+@property (nonatomic, assign) int32_t pipFrameSeq;           // last engine frame seq fed to the PiP layer
+@property (nonatomic, strong) AVAudioEngine *keepaliveEngine;   // renders silence; holds the audio session
+@property (nonatomic, strong) AVAudioSourceNode *keepaliveSource;
+@property (nonatomic, assign) UIBackgroundTaskIdentifier bgKeepTask; // per-background grace assertion
 @end
 
 // Grace period before an enabled-but-not-active plugin is reported as failed to start.
@@ -312,9 +329,14 @@ static const CGFloat kMenuWidth       = 210.0;
     self.bgTask = UIBackgroundTaskInvalid;
     [self buildUI];
     [self openLogFile];
+    self.bgKeepTask = UIBackgroundTaskInvalid;
     // Flush RuneLite config to disk when the app backgrounds (iOS skips RuneLite's own shutdown flush).
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onEnterBackground)
                                                  name:UIApplicationDidEnterBackgroundNotification object:nil];
+    // Coming back: stop the background PiP pump (the CADisplayLink takes over) and re-arm the keepalive
+    // audio in case the session was interrupted while away.
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onWillEnterForeground)
+                                                 name:UIApplicationWillEnterForegroundNotification object:nil];
     [self appendLine:@"HelloShell — W1 minimal JVM shell"];
     [self appendLine:[NSString stringWithFormat:@"jre: %@",
                       [JVMLauncher javaHome] ?: @"(MISSING from bundle!)"]];
@@ -1148,9 +1170,36 @@ static const CGFloat kMenuWidth       = 210.0;
 
 // App going to background (user swiped home / to the switcher, before any termination): flush config so
 // every edit/toggle made this session survives a relaunch. The one lifecycle hook iOS reliably delivers.
+// Then keep the session ALIVE back there: a fresh background-task grace covers the handover, the silent
+// audio engine (audio background mode) blocks suspension so the JVM + game socket keep running, and a
+// 15 Hz pump keeps feeding live frames to the (auto-started) Picture-in-Picture window.
 - (void)onEnterBackground {
     [JVMLauncher mobileFlushConfig];
-    [self appendLine:@"[shell] backgrounded -> flushed config"];
+    if (self.bgKeepTask != UIBackgroundTaskInvalid) {
+        [[UIApplication sharedApplication] endBackgroundTask:self.bgKeepTask];
+    }
+    self.bgKeepTask = [[UIApplication sharedApplication]
+        beginBackgroundTaskWithName:@"bg-keepalive" expirationHandler:^{
+            if (self.bgKeepTask != UIBackgroundTaskInvalid) {
+                [[UIApplication sharedApplication] endBackgroundTask:self.bgKeepTask];
+                self.bgKeepTask = UIBackgroundTaskInvalid;
+            }
+        }];
+    if (self.launched) {
+        [self startKeepaliveEngine];   // defensive re-arm (a route change can stop a running engine)
+        [self startPipBgPump];
+    }
+    [self appendLine:@"[shell] backgrounded -> flushed config, keepalive armed"];
+}
+
+- (void)onWillEnterForeground {
+    [self stopPipBgPump];
+    if (self.bgKeepTask != UIBackgroundTaskInvalid) {
+        [[UIApplication sharedApplication] endBackgroundTask:self.bgKeepTask];
+        self.bgKeepTask = UIBackgroundTaskInvalid;
+    }
+    if (self.launched) [self startKeepaliveEngine];
+    [self appendLine:@"[shell] foregrounded -> background pump stopped"];
 }
 
 // Read listPlugins() once, parse the JSON array, sort by name, reload the table.
@@ -2369,6 +2418,17 @@ static int chatRowCanvasH(void) {
     }
 #endif
 
+    // (3) Background staying-power: the silent keepalive audio session (so iOS never suspends the JVM
+    // mid-session) + the Picture-in-Picture controller (auto-pops the live game into a floating window on
+    // swipe-home). PiP needs the CPU int[] frame feed, so the 117HD direct-present mode (no readback, GL
+    // scans out straight to the layer) runs keepalive-only.
+    [self setupBackgroundKeepalive];
+    if (self.pendingRouteCZoneDirect && !self.pendingRouteCGpuNoResize) {
+        [self appendLine:@"[pip] skipped — 117HD direct-present has no CPU frame feed (keepalive still on)"];
+    } else {
+        [self setupPictureInPicture];
+    }
+
     NSThread *t = [[NSThread alloc] initWithBlock:^{
         [launcher runProbesWithLog:log];
         // VM lifecycle done; let the render loop drain a beat, then release the assertion.
@@ -2556,6 +2616,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         self.glLayer.hidden = NO;                    // EAGL: reveal the drawable (was hidden so the CPU login/loading blit showed)
         self.screen.image = nil;                     // GL presents directly; UIImageView is just a gesture host
         self.screen.backgroundColor = [UIColor blackColor];
+        [self teardownPictureInPicture];             // no CPU frame feed in direct-present mode (belt: also skipped at launch)
         [self appendLine:@"[shell] GPU direct present LIVE (world warmed up — layer revealed)"];
     }
     if (self.gpuPresent) {
@@ -2572,6 +2633,13 @@ static CGRect mapRectFromArr(NSArray *a) {
             [self appendLine:[NSString stringWithFormat:@"[shell] live blit frame #%d (%.0fx%.0f)",
                               self.framesShown, img.size.width, img.size.height]];
         }
+    }
+
+    // Feed the Picture-in-Picture layer (~15-30 fps: every 4th tick; the copy is skipped inside unless the
+    // engine composited a NEW frame). The layer sits behind the opaque game view, so this is invisible in-app —
+    // it exists so the system has live video to lift into the PiP window the moment the app backgrounds.
+    if (self.pipController && !self.gpuPresent && self.framesShown % 4 == 0) {
+        [self pipPumpFrame];
     }
 
     // Refresh the native tab rails from the chrome snapshot (~10 Hz — positions/active state rarely change,
@@ -2686,6 +2754,230 @@ static CGRect mapRectFromArr(NSArray *a) {
         [self flashClickRingAt:self.pendingClickPoint color:[UIColor colorWithRed:1.0 green:0.84 blue:0.0 alpha:1.0]];
         self.pendingClick = NO;
     }
+}
+
+#pragma mark - Picture-in-Picture + background keepalive
+
+// The background story, in one place. iOS suspends a backgrounded app within seconds — the JVM freezes,
+// the game socket dies, the character is dumped at the login screen. Two cooperating mechanisms keep the
+// session alive instead:
+//   1. KEEPALIVE — the `audio` background mode (Info.plist) + a silent AVAudioEngine on a mixable playback
+//      session. While the engine renders (silence), iOS never suspends the process: the JVM keeps ticking,
+//      the connection stays up, and RuneLite's own logout timer (configurable up to 30 min) is what ends
+//      the session, exactly like leaving the desktop client unattended.
+//   2. PiP — an AVSampleBufferDisplayLayer fed the same engine frames as the on-screen blit. With
+//      canStartPictureInPictureAutomaticallyFromInline the system pops it into a floating window on
+//      swipe-home, so the game stays VISIBLE while backgrounded. Dismissing the PiP window does not end
+//      the session (keepalive holds); reopening the app restores the full UI.
+// Foreground feeding rides onDisplayTick; in background the display link stops, so a 15 Hz main-queue
+// timer takes over (main-queue so the reverse-JNI calls stay on the thread the bridge env is bound to).
+
+// Silent keepalive audio: a source node renders zeros into a muted mixer. MixWithOthers keeps it polite —
+// it neither ducks nor pauses whatever the user is listening to, and (unlike music apps) it keeps playing
+// when other audio starts. AVAudioEngine wiring throws ObjC exceptions on failure, so the whole setup is
+// fenced; on failure the app just keeps today's suspend-on-background behaviour.
+- (void)setupBackgroundKeepalive {
+    if (self.keepaliveEngine) return;
+    NSError *err = nil;
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    if (![session setCategory:AVAudioSessionCategoryPlayback
+                  withOptions:AVAudioSessionCategoryOptionMixWithOthers error:&err]) {
+        [self appendLine:[NSString stringWithFormat:@"[pip] audio session category FAILED: %@", err.localizedDescription]];
+        return;
+    }
+    if (![session setActive:YES error:&err]) {
+        [self appendLine:[NSString stringWithFormat:@"[pip] audio session activate FAILED: %@", err.localizedDescription]];
+        return;
+    }
+    @try {
+        AVAudioEngine *eng = [[AVAudioEngine alloc] init];
+        AVAudioFormat *fmt = [eng.outputNode inputFormatForBus:0];
+        AVAudioSourceNode *src = [[AVAudioSourceNode alloc] initWithFormat:fmt
+            renderBlock:^OSStatus(BOOL *isSilence, const AudioTimeStamp *ts,
+                                  AVAudioFrameCount frameCount, AudioBufferList *outputData) {
+                for (UInt32 i = 0; i < outputData->mNumberBuffers; i++) {
+                    if (outputData->mBuffers[i].mData) {
+                        memset(outputData->mBuffers[i].mData, 0, outputData->mBuffers[i].mDataByteSize);
+                    }
+                }
+                return noErr;
+            }];
+        [eng attachNode:src];
+        [eng connect:src to:eng.mainMixerNode format:fmt];
+        eng.mainMixerNode.outputVolume = 0.0;
+        self.keepaliveEngine = eng;
+        self.keepaliveSource = src;
+    } @catch (NSException *ex) {
+        self.keepaliveEngine = nil;
+        self.keepaliveSource = nil;
+        [self appendLine:[NSString stringWithFormat:@"[pip] keepalive engine wiring FAILED: %@", ex.reason]];
+        return;
+    }
+    // A phone call (or Siri) interrupts the session and stops the engine — restart when it ends, or the
+    // next background would suspend the JVM mid-session.
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAudioInterruption:)
+                                                 name:AVAudioSessionInterruptionNotification object:session];
+    [self startKeepaliveEngine];
+    [self appendLine:@"[pip] keepalive audio armed (silent, mixable — blocks background suspension)"];
+}
+
+- (void)startKeepaliveEngine {
+    if (!self.keepaliveEngine || self.keepaliveEngine.isRunning) return;
+    [[AVAudioSession sharedInstance] setActive:YES error:nil];
+    NSError *err = nil;
+    if (![self.keepaliveEngine startAndReturnError:&err]) {
+        [self appendLine:[NSString stringWithFormat:@"[pip] keepalive audio start FAILED: %@", err.localizedDescription]];
+    }
+}
+
+- (void)onAudioInterruption:(NSNotification *)note {
+    NSUInteger type = [note.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue];
+    if (type == AVAudioSessionInterruptionTypeEnded) {
+        [self startKeepaliveEngine];
+        [self appendLine:@"[pip] audio interruption ended -> keepalive restarted"];
+    }
+}
+
+// PiP scaffolding: the sample-buffer layer is inserted BELOW the opaque game view (in the hierarchy and
+// window-attached, which PiP requires, but never visible in-app — the screen view shows the same frames).
+// The system animates it out from the game view's exact rect on swipe-home.
+- (void)setupPictureInPicture {
+    if (self.pipController) return;
+    if (![AVPictureInPictureController isPictureInPictureSupported]) {
+        [self appendLine:@"[pip] not supported on this device"];
+        return;
+    }
+    [self.view layoutIfNeeded];
+    AVSampleBufferDisplayLayer *layer = [AVSampleBufferDisplayLayer layer];
+    layer.frame = self.screen.frame;
+    layer.videoGravity = AVLayerVideoGravityResizeAspect;
+    CMTimebaseRef tb = NULL;
+    if (CMTimebaseCreateWithSourceClock(kCFAllocatorDefault, CMClockGetHostTimeClock(), &tb) == noErr && tb) {
+        CMTimebaseSetTime(tb, CMClockGetTime(CMClockGetHostTimeClock()));
+        CMTimebaseSetRate(tb, 1.0);
+        layer.controlTimebase = tb;
+        CFRelease(tb);
+    }
+    [self.view.layer insertSublayer:layer below:self.screen.layer];
+    self.pipLayer = layer;
+    self.pipFrameSeq = -1;
+
+    AVPictureInPictureControllerContentSource *src = [[AVPictureInPictureControllerContentSource alloc]
+        initWithSampleBufferDisplayLayer:layer playbackDelegate:self];
+    AVPictureInPictureController *pc = [[AVPictureInPictureController alloc] initWithContentSource:src];
+    pc.delegate = self;
+    pc.canStartPictureInPictureAutomaticallyFromInline = YES;   // swipe-home -> the game pops into PiP
+    self.pipController = pc;
+    [self appendLine:@"[pip] armed — backgrounding pops the game into Picture-in-Picture"];
+}
+
+- (void)teardownPictureInPicture {
+    if (!self.pipController && !self.pipLayer) return;
+    [self stopPipBgPump];
+    self.pipController = nil;
+    [self.pipLayer removeFromSuperlayer];
+    self.pipLayer = nil;
+}
+
+// Pull the newest engine frame (no-op when nothing new composited) and enqueue it on the PiP layer,
+// stamped display-immediately so no timebase juggling is needed for a live feed.
+- (void)pipPumpFrame {
+    if (!self.pipLayer) return;
+    if (self.pipLayer.status == AVQueuedSampleBufferRenderingStatusFailed) {
+        [self.pipLayer flush];   // e.g. after a background round-trip; recovers on the next enqueue
+    }
+    int32_t seq = self.pipFrameSeq;
+    CVPixelBufferRef pb = [JVMLauncher copyFramePixelBufferSinceSeq:&seq];
+    if (!pb) return;
+    self.pipFrameSeq = seq;
+
+    // Format description cached across frames; rebuilt when the canvas dimensions change (resizable render).
+    static CMVideoFormatDescriptionRef fmt = NULL;
+    if (fmt && !CMVideoFormatDescriptionMatchesImageBuffer(fmt, pb)) { CFRelease(fmt); fmt = NULL; }
+    if (!fmt && CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, pb, &fmt) != noErr) {
+        fmt = NULL;
+        CVPixelBufferRelease(pb);
+        return;
+    }
+    CMSampleTimingInfo timing = { .duration = kCMTimeInvalid,
+                                  .presentationTimeStamp = CMClockGetTime(CMClockGetHostTimeClock()),
+                                  .decodeTimeStamp = kCMTimeInvalid };
+    CMSampleBufferRef sb = NULL;
+    if (CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, pb, fmt, &timing, &sb) == noErr && sb) {
+        CFArrayRef atts = CMSampleBufferGetSampleAttachmentsArray(sb, true);
+        if (atts && CFArrayGetCount(atts) > 0) {
+            CFMutableDictionaryRef att = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(atts, 0);
+            CFDictionarySetValue(att, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
+        }
+        [self.pipLayer enqueueSampleBuffer:sb];
+        CFRelease(sb);
+    }
+    CVPixelBufferRelease(pb);
+}
+
+// Background frame pump: the CADisplayLink stops firing once backgrounded, so a plain 15 Hz main-queue
+// timer feeds PiP instead (main queue = the thread the reverse-JNI bridge env is bound to; the run loop
+// keeps servicing it because the keepalive audio blocks suspension).
+- (void)startPipBgPump {
+    if (self.pipBgPump || !self.pipController) return;
+    dispatch_source_t t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(t, dispatch_time(DISPATCH_TIME_NOW, 0), NSEC_PER_SEC / 15, NSEC_PER_SEC / 100);
+    __weak typeof(self) weakSelf = self;
+    dispatch_source_set_event_handler(t, ^{ [weakSelf pipPumpFrame]; });
+    dispatch_resume(t);
+    self.pipBgPump = t;
+}
+
+- (void)stopPipBgPump {
+    if (!self.pipBgPump) return;
+    dispatch_source_cancel(self.pipBgPump);
+    self.pipBgPump = nil;
+}
+
+// --- AVPictureInPictureSampleBufferPlaybackDelegate: a live game has no pause/seek/duration ------------
+
+- (void)pictureInPictureController:(AVPictureInPictureController *)pc setPlaying:(BOOL)playing {
+    // Live feed — the PiP pause button is a no-op (matching a live broadcast).
+}
+
+- (CMTimeRange)pictureInPictureControllerTimeRangeForPlayback:(AVPictureInPictureController *)pc {
+    // An infinite range renders the PiP window with live-content chrome (no scrubber).
+    return CMTimeRangeMake(kCMTimeNegativeInfinity, kCMTimePositiveInfinity);
+}
+
+- (BOOL)pictureInPictureControllerIsPlaybackPaused:(AVPictureInPictureController *)pc {
+    return NO;
+}
+
+- (void)pictureInPictureController:(AVPictureInPictureController *)pc didTransitionToRenderSize:(CMVideoDimensions)newRenderSize {
+    // The engine keeps compositing at renderW x renderH; the PiP window scales it. Nothing to do.
+}
+
+- (void)pictureInPictureController:(AVPictureInPictureController *)pc skipByInterval:(CMTime)skipInterval completionHandler:(void (^)(void))completionHandler {
+    completionHandler();   // live feed — nothing to skip through
+}
+
+- (BOOL)pictureInPictureControllerShouldProhibitBackgroundAudioPlayback:(AVPictureInPictureController *)pc {
+    return NO;   // the keepalive session must keep running under PiP
+}
+
+// --- AVPictureInPictureControllerDelegate ---------------------------------------------------------------
+
+- (void)pictureInPictureControllerDidStartPictureInPicture:(AVPictureInPictureController *)pc {
+    [self appendLine:@"[pip] started"];
+}
+
+- (void)pictureInPictureControllerDidStopPictureInPicture:(AVPictureInPictureController *)pc {
+    [self appendLine:@"[pip] stopped"];
+}
+
+- (void)pictureInPictureController:(AVPictureInPictureController *)pc failedToStartPictureInPictureWithError:(NSError *)error {
+    [self appendLine:[NSString stringWithFormat:@"[pip] failed to start: %@", error.localizedDescription]];
+}
+
+- (void)pictureInPictureController:(AVPictureInPictureController *)pc
+    restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:(void (^)(BOOL))completionHandler {
+    completionHandler(YES);   // the game UI never left — nothing to restore
 }
 
 #pragma mark - Touch -> AWT bridge (Phase 5 control scheme)

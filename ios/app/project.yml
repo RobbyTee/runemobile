@@ -63,6 +63,13 @@ targets:
       # WKWebView for the on-device Jagex login (JagexLoginSpikeViewController).
       - sdk: WebKit.framework
       - sdk: Metal.framework
+      # Picture-in-Picture + background keepalive: AVKit (AVPictureInPictureController),
+      # AVFoundation (AVSampleBufferDisplayLayer + AVAudioSession/Engine), CoreMedia/CoreVideo
+      # (CMSampleBuffer/CVPixelBuffer frame plumbing).
+      - sdk: AVKit.framework
+      - sdk: AVFoundation.framework
+      - sdk: CoreMedia.framework
+      - sdk: CoreVideo.framework
       # MetalANGLE GPU backend (INACTIVE — pair with RC_BACKEND_ANGLE=1 above to enable). Vendored libEGL/libGLESv2,
       # gitignored (regenerate via dev-tools/gpu-angle/README); embedded + codesigned so the app dlopens them on
       # device. Provides EXT_clip_control (depth fix) + GL_MAX_SAMPLES=8.

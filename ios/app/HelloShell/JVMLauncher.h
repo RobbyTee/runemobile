@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <CoreVideo/CoreVideo.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -65,6 +66,13 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Pull the engine's latest composited frame as a UIImage (reverse JNI -> JavaBridge.getFramePixels).
 /// Returns nil before the first draw / if the VM isn't up yet. Call on the main thread.
 + (nullable UIImage *)latestFrame;
+
+/// Pull the engine's latest composited frame as a +1-retained 32BGRA CVPixelBuffer (the Picture-in-Picture
+/// feed: AVSampleBufferDisplayLayer wants CVPixelBuffers, not CGImages). `ioSeq` carries the caller's last
+/// seen JavaBridge frame sequence: NULL is returned when the engine hasn't composited a new frame since
+/// (pass -1 to force a fetch), otherwise `*ioSeq` is updated and the caller owns the returned buffer
+/// (CVPixelBufferRelease). Call on the main thread (shares the main thread's attached JNI env).
++ (nullable CVPixelBufferRef)copyFramePixelBufferSinceSeq:(int32_t *)ioSeq CF_RETURNS_RETAINED;
 
 /// Post a DRAG phase into the gamepack via JavaBridge.onTouch. `type`: 0=down, 1=move, 2=up;
 /// `x`,`y` are gamepack-canvas (765x503) pixels; `button` is 1 (left) or 3 (right). A release does NOT

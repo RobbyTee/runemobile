@@ -42,6 +42,14 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- Background staying-power: `audio` keeps the process (and the JVM + game connection) running while
+	     the app is backgrounded — a silent mixable AVAudioEngine holds the session, and it is also what lets
+	     the system-driven Picture-in-Picture session keep rendering after the swipe-home. The in-game logout
+	     timer (RuneLite, up to 30 min) then governs how long the character stays logged in. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<!-- Java Sound (libjsound.dylib) enumerates audio devices at RuneLite audio init —
 	     DAUDIO_GetDirectAudioDeviceCount -> DAUDIO_RequestRecordPermission touches the
 	     microphone, and iOS TCC SIGABRTs the app without this usage string (the §6.2
