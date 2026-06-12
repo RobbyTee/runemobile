@@ -7,6 +7,14 @@
  */
 #import "RouteCBridge.h"
 #import "routec_gl_compat.h"   // selects EAGL vs MetalANGLE/EGL at build time (RC_BACKEND_ANGLE) + the GL/EGL headers
+#if !defined(RC_BACKEND_ANGLE)
+// PiP present (EAGL only) needs the video plumbing. Safe HERE only: the EAGL branch already lives with the
+// OpenGLES module; the ANGLE branch must never see these (CoreVideo/AVFoundation pull OpenGLES, clashing with
+// the Khronos GLES3 headers).
+#import <AVFoundation/AVFoundation.h>
+#import <CoreMedia/CoreMedia.h>
+#import <CoreVideo/CVOpenGLESTextureCache.h>
+#endif
 
 @implementation RouteCBridge
 
@@ -255,6 +263,11 @@ static BOOL rcBuildFbo(int w, int h)
 	sPresentLayer = (__bridge void *) layer;   // a CAMetalLayer (passed before createGLContext)
 }
 
+// PiP present is EAGL-only (CVOpenGLESTextureCache binds EAGL contexts; ANGLE contexts can't use it, and the
+// ANGLE TU cannot import CoreVideo anyway — it pulls the conflicting OpenGLES module). No-op stubs.
++ (void)setPipPresentLayer:(id)layer { (void) layer; }
++ (void)setPipPresentEnabled:(BOOL)on { (void) on; }
+
 + (BOOL)isPresenting
 {
 	return sWindowMode;   // window surface present (eglSwapBuffers) vs offscreen readback
@@ -291,6 +304,131 @@ static BOOL rcBuildFbo(int w, int h)
 // ================================================================================================================
 static EAGLContext *sCtx = nil;
 static GLuint sFbo = 0, sColorRbo = 0, sDepthRbo = 0;
+
+// ---- PiP present state (see RouteCBridge.h) -------------------------------------------------------------------
+static AVSampleBufferDisplayLayer *sPipLayer = nil;   // the shell's PiP layer (also its visible presenter)
+static volatile BOOL sPipEnqueueOn = NO;              // flipped by the shell at the warmup reveal
+static CVOpenGLESTextureCacheRef sPipTexCache = NULL; // EAGL-context texture cache (lazy, render thread)
+static CVPixelBufferPoolRef sPipPool = NULL;          // IOSurface-backed 32BGRA buffers (recycled by the display)
+static int sPipPoolW = 0, sPipPoolH = 0;
+static GLuint sPipFbo = 0;                            // blit-destination FBO (color = the frame's pixel-buffer texture)
+static CMVideoFormatDescriptionRef sPipFmt = NULL;
+
+#ifndef GL_BGRA_EXT
+#define GL_BGRA_EXT 0x80E1   // GL_APPLE_texture_format_BGRA8888 (always present on iOS GLES)
+#endif
+
+// GPU-blit the offscreen FBO (sFbo — where the plugin composited the frame) into a fresh IOSurface-backed
+// CVPixelBuffer texture, Y-flipped (GL's bottom-left origin -> video's top-left), then enqueue it on the PiP
+// layer stamped display-immediately. All GPU-side (no glReadPixels stall); runs on the render (JVM) thread,
+// which AVSampleBufferDisplayLayer's enqueue supports. State-transparent to the plugin: framebuffer bindings
+// and the scissor switch (which clips glBlitFramebuffer!) are saved + restored.
+static void rcPipPresent(void)
+{
+	if (!sPipEnqueueOn || !sCtx || !sFbo || sFboW <= 0 || sFboH <= 0)
+	{
+		return;
+	}
+	if (!sPipTexCache)
+	{
+		if (CVOpenGLESTextureCacheCreate(kCFAllocatorDefault, NULL, sCtx, NULL, &sPipTexCache) != kCVReturnSuccess)
+		{
+			sPipTexCache = NULL;
+			return;
+		}
+	}
+	if (!sPipPool || sPipPoolW != sFboW || sPipPoolH != sFboH)
+	{
+		if (sPipPool) { CVPixelBufferPoolRelease(sPipPool); sPipPool = NULL; }
+		if (sPipFmt)  { CFRelease(sPipFmt); sPipFmt = NULL; }
+		NSDictionary *attrs = @{
+			(id) kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
+			(id) kCVPixelBufferWidthKey : @(sFboW),
+			(id) kCVPixelBufferHeightKey : @(sFboH),
+			(id) kCVPixelBufferIOSurfacePropertiesKey : @{},
+			(id) kCVPixelBufferOpenGLESCompatibilityKey : @YES,
+		};
+		if (CVPixelBufferPoolCreate(kCFAllocatorDefault, NULL, (__bridge CFDictionaryRef) attrs, &sPipPool) != kCVReturnSuccess)
+		{
+			sPipPool = NULL;
+			return;
+		}
+		sPipPoolW = sFboW; sPipPoolH = sFboH;
+	}
+
+	// Cap in-flight buffers: the display pipeline holds ~2; if it ever hoards the whole pool, skip this
+	// present instead of allocating without bound (the next frame re-tries ~16ms later).
+	CVPixelBufferRef pb = NULL;
+	NSDictionary *aux = @{ (id) kCVPixelBufferPoolAllocationThresholdKey : @6 };
+	if (CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault, sPipPool,
+			(__bridge CFDictionaryRef) aux, &pb) != kCVReturnSuccess || !pb)
+	{
+		return;
+	}
+	CVOpenGLESTextureRef tex = NULL;
+	if (CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, sPipTexCache, pb, NULL,
+			GL_TEXTURE_2D, GL_RGBA, sFboW, sFboH, GL_BGRA_EXT, GL_UNSIGNED_BYTE, 0, &tex) != kCVReturnSuccess || !tex)
+	{
+		CVPixelBufferRelease(pb);
+		return;
+	}
+
+	GLint prevRead = 0, prevDraw = 0;
+	glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+	glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
+	GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+	if (scissor) glDisable(GL_SCISSOR_TEST);
+
+	if (!sPipFbo) glGenFramebuffers(1, &sPipFbo);
+	GLuint texName = CVOpenGLESTextureGetName(tex);
+	glBindTexture(GL_TEXTURE_2D, texName);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, sPipFbo);
+	glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texName, 0);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, sFbo);
+	glReadBuffer(GL_COLOR_ATTACHMENT0);
+	glBlitFramebuffer(0, 0, sFboW, sFboH, 0, sFboH, sFboW, 0, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	glFlush();   // order the blit before the video pipeline samples the IOSurface
+
+	if (scissor) glEnable(GL_SCISSOR_TEST);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint) prevRead);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint) prevDraw);
+
+	if (!sPipFmt || !CMVideoFormatDescriptionMatchesImageBuffer(sPipFmt, pb))
+	{
+		if (sPipFmt) { CFRelease(sPipFmt); sPipFmt = NULL; }
+		CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, pb, &sPipFmt);
+	}
+	if (sPipFmt)
+	{
+		if (sPipLayer.status == AVQueuedSampleBufferRenderingStatusFailed)
+		{
+			[sPipLayer flush];
+		}
+		CMSampleTimingInfo timing = { .duration = kCMTimeInvalid,
+			.presentationTimeStamp = CMClockGetTime(CMClockGetHostTimeClock()),
+			.decodeTimeStamp = kCMTimeInvalid };
+		CMSampleBufferRef sb = NULL;
+		if (CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, pb, sPipFmt, &timing, &sb) == noErr && sb)
+		{
+			CFArrayRef atts = CMSampleBufferGetSampleAttachmentsArray(sb, true);
+			if (atts && CFArrayGetCount(atts) > 0)
+			{
+				CFDictionarySetValue((CFMutableDictionaryRef) CFArrayGetValueAtIndex(atts, 0),
+					kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
+			}
+			[sPipLayer enqueueSampleBuffer:sb];
+			CFRelease(sb);
+		}
+	}
+	CFRelease(tex);
+	CVPixelBufferRelease(pb);
+	CVOpenGLESTextureCacheFlush(sPipTexCache, 0);
+}
 
 // Build (or rebuild) the offscreen FBO at w*h on the current context. COLOR (RGBA8) + DEPTH24. With a present layer
 // the color RBO IS the CAEAGLLayer drawable (presentRenderbuffer scans it out -> no readback).
@@ -362,12 +500,24 @@ static BOOL rcBuildFbo(int w, int h)
 
 + (void)setPresentLayer:(id)caEaglLayer { sPresentLayer = (__bridge void *) caEaglLayer; }
 
++ (void)setPipPresentLayer:(id)layer { sPipLayer = (AVSampleBufferDisplayLayer *) layer; }
+
++ (void)setPipPresentEnabled:(BOOL)on { sPipEnqueueOn = on; }
+
 + (BOOL)prepareWindowSurfaceOnMain { return NO; }   // ANGLE-only; EAGL builds its drawable RBO in rcBuildFbo
 
-+ (BOOL)isPresenting { return sPresentLayer != NULL; }
++ (BOOL)isPresenting { return sPresentLayer != NULL || sPipLayer != nil; }
 
 + (void)present
 {
+	if (sPipLayer)
+	{
+		// PiP present: blit + enqueue (no-op until the shell enables enqueueing at the warmup reveal). The
+		// frame still COUNTS as presented either way — hasPresentedFrame is half of that reveal gate.
+		rcPipPresent();
+		sPresentedFrames++;
+		return;
+	}
 	if (!sCtx || !sColorRbo) return;
 	glBindRenderbuffer(GL_RENDERBUFFER, sColorRbo);
 	[sCtx presentRenderbuffer:GL_RENDERBUFFER];
@@ -379,6 +529,13 @@ static BOOL rcBuildFbo(int w, int h)
 	if (sDepthRbo) glDeleteRenderbuffers(1, &sDepthRbo), sDepthRbo = 0;
 	if (sColorRbo) glDeleteRenderbuffers(1, &sColorRbo), sColorRbo = 0;
 	if (sFbo) glDeleteFramebuffers(1, &sFbo), sFbo = 0;
+	if (sPipFbo) glDeleteFramebuffers(1, &sPipFbo), sPipFbo = 0;
+	if (sPipTexCache) { CFRelease(sPipTexCache); sPipTexCache = NULL; }
+	if (sPipPool) { CVPixelBufferPoolRelease(sPipPool); sPipPool = NULL; }
+	if (sPipFmt) { CFRelease(sPipFmt); sPipFmt = NULL; }
+	sPipPoolW = sPipPoolH = 0;
+	sPipLayer = nil;
+	sPipEnqueueOn = NO;
 	free(sReadback); sReadback = NULL;
 	sFboW = sFboH = 0;
 	sPresentLayer = NULL;

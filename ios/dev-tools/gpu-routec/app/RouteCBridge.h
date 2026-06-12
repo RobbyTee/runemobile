@@ -37,6 +37,18 @@
 + (BOOL)isPresenting;     // YES once a present layer is set (swapBuffers should present, not read back)
 + (BOOL)hasPresentedFrame;// YES once >=1 frame has been presented — UI switches CPU-blit -> direct present lazily
 + (void)present;          // EAGL: presentRenderbuffer; ANGLE: eglSwapBuffers
+
+// ---- PiP present (EAGL only): the 117HD Picture-in-Picture path ----
+// When an AVSampleBufferDisplayLayer is set INSTEAD of a CAEAGLLayer (main thread, before the GPU launch),
+// the plugin renders into the plain offscreen FBO and swapBuffers presents by GPU-blitting it (Y-flipped)
+// into an IOSurface-backed CVPixelBuffer enqueued on the layer — no glReadPixels, full frame rate. Because
+// that layer is the SAME one the AVPictureInPictureController sources, 117HD shows live in PiP and keeps
+// presenting while backgrounded (GL submission under an active PiP session is device-proven allowed).
+// Enqueueing starts only once setPipPresentEnabled:YES (the shell flips it at the warmup reveal, so the
+// boot/login CPU frames the shell feeds the same layer aren't raced); present() counts frames regardless,
+// so hasPresentedFrame gates the reveal exactly like the CAEAGLLayer path. `id` = AVSampleBufferDisplayLayer.
++ (void)setPipPresentLayer:(id)sampleBufferDisplayLayer;
++ (void)setPipPresentEnabled:(BOOL)on;
 // ANGLE only: create the EGL display + WINDOW surface from the present layer ON MAIN (the CAMetalLayer's thread),
 // before the render thread's createGLContext. No-op/NO on EAGL or with no present layer. Returns NO -> use readback.
 + (BOOL)prepareWindowSurfaceOnMain;

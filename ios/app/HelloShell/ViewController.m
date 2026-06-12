@@ -2380,37 +2380,53 @@ static int chatRowCanvasH(void) {
                           sw, sh, aspect, launcher.resizeSpec]];
     }
 
+    // Background staying-power + Picture-in-Picture, armed BEFORE the present-layer wiring below: the 117HD
+    // pip-present path hands the PiP layer itself to the GL bridge as its present target, so the layer must
+    // exist first. The keepalive audio session (so iOS never suspends the JVM mid-session) covers EVERY
+    // renderer; PiP covers every renderer that can feed it frames.
+    [self setupBackgroundKeepalive];
+    [self setupPictureInPicture];
+
 #if !defined(RC_BACKEND_ANGLE)
-    // GPU Route C DIRECT PRESENT (EAGL): render straight into a CAEAGLLayer drawable (no glReadPixels readback — the
-    // measured ~16ms/frame bottleneck). A sublayer of the game view, inserted below the chrome subviews, so the
-    // existing gestures + native HUD veneers keep working on top. Only for the normal resizable GPU path (the
-    // no-resize bisection stays on the readback path). Must be created + sized on main BEFORE the JVM thread starts
-    // (the bridge reads this layer from the JVM thread in awtCreateGLContext via renderbufferStorage:fromDrawable:).
-    // Fires for the Zone (117HD) direct-present path ONLY. Base GPU intentionally uses the READBACK present (the
-    // #else path below) so it publishes int[] frames like the CPU rasterizer — that keeps the GPU plugin
-    // toggleable to/from the software renderer at runtime without swapping the present layer. The bridge present
-    // path is mode-agnostic (keys off whether a present layer was set).
+    // GPU Zone (117HD) PRESENT (EAGL). Two flavours, both no-glReadPixels (the measured ~16ms/frame bottleneck):
+    //   - PIP-PRESENT (default, PiP supported): the plugin renders into the plain offscreen FBO and the bridge
+    //     GPU-blits each frame into an IOSurface CVPixelBuffer enqueued on the SAME AVSampleBufferDisplayLayer
+    //     the shell shows + the PiP controller sources. ONE visible presenter for the boot CPU frames AND the
+    //     HD frames — so 117HD pops into Picture-in-Picture and keeps presenting in the background (GL under an
+    //     active PiP session is device-proven allowed). Enqueue stays OFF until the warmup reveal in
+    //     onDisplayTick, so the shell's CPU boot/login feed isn't raced by early sky frames.
+    //   - CAEAGLLayer DIRECT (fallback, PiP unsupported): render straight into a drawable sublayer (the prior
+    //     path; no PiP). Hidden until the warmup reveal.
+    // Either way the target must be wired on main BEFORE the JVM thread starts (the bridge reads it from the
+    // JVM thread in awtCreateGLContext). Fires for the Zone direct path ONLY: base GPU keeps the READBACK
+    // present so it publishes int[] frames like the CPU rasterizer (runtime-toggleable renderer + PiP feed).
     if (self.pendingRouteCZoneDirect && !self.pendingRouteCGpuNoResize) {
         [self.view layoutIfNeeded];
-        CAEAGLLayer *gl = [CAEAGLLayer layer];
-        gl.frame = self.screen.bounds;
-        gl.opaque = YES;
-        gl.contentsScale = (sh > 0 ? (CGFloat)renderH / sh : 1.0);   // drawable = renderW x renderH (== engine canvas)
-        gl.drawableProperties = @{ kEAGLDrawablePropertyRetainedBacking : @NO,
-                                   kEAGLDrawablePropertyColorFormat : kEAGLColorFormatRGBA8 };
-        // Start HIDDEN + lazily reveal: the CAEAGLLayer is a sublayer of the UIImageView so it draws ABOVE the CPU
-        // blit; keeping it hidden lets the CPU login/loading screen show during the ~10s boot, and the present fires
-        // into the hidden layer meanwhile. onDisplayTick reveals it (gl.hidden=NO + stop the CPU blit) once the world
-        // has warmed up (geometry uploaded, JVMLauncher.sceneWarmedUp) so the first visible frame is the world, not the
-        // boot sky. (Armed, not gpuPresent=YES — the switch flips gpuPresent.)
-        gl.hidden = YES;
-        [self.screen.layer insertSublayer:gl atIndex:0];
-        self.glLayer = gl;
-        self.gpuPresentArmed = YES;
-        self.screen.backgroundColor = [UIColor blackColor];
-        [RouteCBridge setPresentLayer:gl];
-        [self appendLine:[NSString stringWithFormat:@"[shell] GPU direct-present ARMED (hidden): CAEAGLLayer %.0fx%.0f @%.3f -> drawable %dx%d (no readback)",
-                          gl.bounds.size.width, gl.bounds.size.height, gl.contentsScale, renderW, renderH]];
+        if (self.pipLayer) {
+            [RouteCBridge setPipPresentLayer:self.pipLayer];
+            self.gpuPresentArmed = YES;
+            self.screen.backgroundColor = [UIColor blackColor];
+            [self appendLine:[NSString stringWithFormat:@"[shell] GPU pip-present ARMED: 117HD -> AVSampleBufferDisplayLayer (blit %dx%d, no readback; PiP-capable)",
+                              renderW, renderH]];
+        } else {
+            CAEAGLLayer *gl = [CAEAGLLayer layer];
+            gl.frame = self.screen.bounds;
+            gl.opaque = YES;
+            gl.contentsScale = (sh > 0 ? (CGFloat)renderH / sh : 1.0);   // drawable = renderW x renderH (== engine canvas)
+            gl.drawableProperties = @{ kEAGLDrawablePropertyRetainedBacking : @NO,
+                                       kEAGLDrawablePropertyColorFormat : kEAGLColorFormatRGBA8 };
+            // Start HIDDEN + lazily reveal: the CAEAGLLayer is a sublayer of the UIImageView so it draws ABOVE the
+            // CPU blit; keeping it hidden lets the CPU login/loading screen show during the ~10s boot, and the present
+            // fires into the hidden layer meanwhile. onDisplayTick reveals it once the world has warmed up.
+            gl.hidden = YES;
+            [self.screen.layer insertSublayer:gl atIndex:0];
+            self.glLayer = gl;
+            self.gpuPresentArmed = YES;
+            self.screen.backgroundColor = [UIColor blackColor];
+            [RouteCBridge setPresentLayer:gl];
+            [self appendLine:[NSString stringWithFormat:@"[shell] GPU direct-present ARMED (hidden): CAEAGLLayer %.0fx%.0f @%.3f -> drawable %dx%d (no readback)",
+                              gl.bounds.size.width, gl.bounds.size.height, gl.contentsScale, renderW, renderH]];
+        }
     }
 #elif defined(RC_ANGLE_WINDOW_PRESENT)
     // Phase A1 (MetalANGLE) WINDOW-SURFACE DIRECT PRESENT (60fps, present=0.07ms). The GPU renders the scene with
@@ -2451,17 +2467,6 @@ static int chatRowCanvasH(void) {
         [self appendLine:@"[shell] GPU (MetalANGLE) — offscreen FBO + readback present (proven-display path)"];
     }
 #endif
-
-    // (3) Background staying-power: the silent keepalive audio session (so iOS never suspends the JVM
-    // mid-session) + the Picture-in-Picture controller (auto-pops the live game into a floating window on
-    // swipe-home). PiP needs the CPU int[] frame feed, so the 117HD direct-present mode (no readback, GL
-    // scans out straight to the layer) runs keepalive-only.
-    [self setupBackgroundKeepalive];
-    if (self.pendingRouteCZoneDirect && !self.pendingRouteCGpuNoResize) {
-        [self appendLine:@"[pip] skipped — 117HD direct-present has no CPU frame feed (keepalive still on)"];
-    } else {
-        [self setupPictureInPicture];
-    }
 
     NSThread *t = [[NSThread alloc] initWithBlock:^{
         [launcher runProbesWithLog:log];
@@ -2603,6 +2608,7 @@ static CGRect mapRectFromArr(NSArray *a) {
             self.screen.transform = CGAffineTransformIdentity;
             self.screen.layer.magnificationFilter = kCAFilterLinear;
             self.glLayer.magnificationFilter = kCAFilterLinear;
+            self.pipLayer.magnificationFilter = kCAFilterLinear;
         }
         for (UIView *v in self.mapBands) v.hidden = YES;
         return;
@@ -2611,6 +2617,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     // nearest-neighbour while the map fills the screen (the official app's map is crisp-pixelated too).
     self.screen.layer.magnificationFilter = kCAFilterNearest;
     self.glLayer.magnificationFilter = kCAFilterNearest;
+    self.pipLayer.magnificationFilter = kCAFilterNearest;
     CGFloat s = W / (CGFloat)self.renderW;   // canvas px -> screen pt (untransformed)
     CGRect r = CGRectMake(wr.origin.x * s, wr.origin.y * s, wr.size.width * s, wr.size.height * s);
     CGFloat k = W / r.size.width;            // fill the full width
@@ -2647,11 +2654,19 @@ static CGRect mapRectFromArr(NSArray *a) {
     // blit. The warmup gate (sceneWarmedUp) means the first frame the user sees is the world, not the boot sky.
     if (self.gpuPresentArmed && !self.gpuPresent && [RouteCBridge hasPresentedFrame] && [JVMLauncher sceneWarmedUp]) {
         self.gpuPresent = YES;
-        self.glLayer.hidden = NO;                    // EAGL: reveal the drawable (was hidden so the CPU login/loading blit showed)
         self.screen.image = nil;                     // GL presents directly; UIImageView is just a gesture host
         self.screen.backgroundColor = [UIColor blackColor];
-        [self teardownPictureInPicture];             // no CPU frame feed in direct-present mode (belt: also skipped at launch)
-        [self appendLine:@"[shell] GPU direct present LIVE (world warmed up — layer revealed)"];
+        if (self.glLayer) {
+            // CAEAGLLayer fallback (PiP unsupported): reveal the drawable; PiP has no frame source here.
+            self.glLayer.hidden = NO;
+            [self teardownPictureInPicture];
+            [self appendLine:@"[shell] GPU direct present LIVE (world warmed up — layer revealed)"];
+        } else {
+            // 117HD pip-present: the bridge takes over the PiP layer (the shell's CPU pump stops via the
+            // gpuPresent gates); first enqueued frame is the warmed-up world, matching the old reveal UX.
+            [RouteCBridge setPipPresentEnabled:YES];
+            [self appendLine:@"[shell] GPU pip-present LIVE (world warmed up — bridge feeds the PiP layer)"];
+        }
     }
     if (self.gpuPresent) {
         // GPU direct-present: the engine renders straight into the CAEAGLLayer and presents on its own thread, so
@@ -2920,6 +2935,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (void)teardownPictureInPicture {
     if (!self.pipController && !self.pipLayer) return;
     [self stopPipBgPump];
+    [RouteCBridge setPipPresentEnabled:NO];   // belt: never enqueue onto a torn-down layer
     if (self.pipController) {
         @try {
             [self.pipController removeObserver:self forKeyPath:@"pictureInPicturePossible" context:kPipKvoContext];
@@ -2959,6 +2975,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 // stamped display-immediately so no timebase juggling is needed for a live feed.
 - (void)pipPumpFrame {
     if (!self.pipLayer) return;
+    if (self.gpuPresent) return;   // 117HD pip-present: the GL bridge feeds the layer from the render thread
     if (self.pipLayer.status == AVQueuedSampleBufferRenderingStatusFailed) {
         [self.pipLayer flush];   // e.g. after a background round-trip; recovers on the next enqueue
     }
