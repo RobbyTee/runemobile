@@ -74,6 +74,12 @@ typedef void (^JVMLogSink)(NSString *line);
 /// (CVPixelBufferRelease). Call on the main thread (shares the main thread's attached JNI env).
 + (nullable CVPixelBufferRef)copyFramePixelBufferSinceSeq:(int32_t *)ioSeq CF_RETURNS_RETAINED;
 
+/// Gate the engine's right-click-menu RASTER (its logic/geometry stay live for click-through). Suppressed
+/// by default on device — the native big-row overlay is the only menu UI; the engine's tiny box only ever
+/// showed as 1-frame flash artifacts. The shell flips it OFF for the native-menu build-timeout fallback
+/// (so drag-select isn't blind) and back ON at menu teardown. No-op on a jar without the method.
++ (void)setEngineMenuRenderSuppressed:(BOOL)suppressed;
+
 /// Post a DRAG phase into the gamepack via JavaBridge.onTouch. `type`: 0=down, 1=move, 2=up;
 /// `x`,`y` are gamepack-canvas (765x503) pixels; `button` is 1 (left) or 3 (right). A release does NOT
 /// synthesize a click (use postClick for a tap). Call on the main thread. Used by the camera/scroll drag.

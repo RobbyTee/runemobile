@@ -51,6 +51,7 @@ import net.runelite.api.TileObject;
 import net.runelite.api.VarClientInt;
 import net.runelite.api.WallObject;
 import net.runelite.api.WorldView;
+import net.runelite.api.events.BeforeMenuRender;
 import net.runelite.api.events.MenuOpened;
 import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.client.RuneLite;
@@ -676,6 +677,10 @@ public final class JavaBridge
 		{
 			return;
 		}
+		// Deterministic early registration (boolean-gated, retries until the injector is live): the
+		// BeforeMenuRender suppression below must be in place before the FIRST menu ever opens, not
+		// lazily on the first tap.
+		ensureTruthSubscribed();
 		if (parkVerifyFrames > 0 && tapState == TapState.IDLE)
 		{
 			if (--parkVerifyFrames == 0)
@@ -773,8 +778,9 @@ public final class JavaBridge
 			final EventBus eb = inj.getInstance(EventBus.class);
 			eb.register(MenuOptionClicked.class, JavaBridge::onMenuOptionClicked, 0f);
 			eb.register(MenuOpened.class, JavaBridge::onMenuOpened, 0f);
+			eb.register(BeforeMenuRender.class, JavaBridge::onBeforeMenuRender, 0f);
 			truthSubscribed = true;
-			log.info("[touch] truth events subscribed (MenuOptionClicked/MenuOpened)");
+			log.info("[touch] truth events subscribed (MenuOptionClicked/MenuOpened/BeforeMenuRender)");
 		}
 		catch (RuntimeException ex)
 		{
@@ -844,6 +850,31 @@ public final class JavaBridge
 		}
 		queuedTap = false;
 		tapState = TapState.IDLE;
+	}
+
+	/**
+	 * Suppress the engine's own right-click-menu RASTER (not its logic). The menu stays fully live —
+	 * geometry, entries, click-to-select, MenuPeekBridge — but the gamepack never paints it: on this build
+	 * every menu the user sees is the native big-row overlay, and the engine's tiny "Choose Option" box only
+	 * ever showed as artifacts (the 1-2 frame flash when a tap force-opens a deprioritized menu, and the
+	 * peek under the native overlay while a committed menu closes). Default ON; the shell flips it OFF for
+	 * the rare native-menu build-timeout fallback (drag-select on the engine menu would otherwise be blind)
+	 * and back ON at menu teardown.
+	 */
+	private static volatile boolean menuRenderSuppressed = true;
+
+	/** Native control for the engine-menu raster gate (reverse JNI; see {@link #menuRenderSuppressed}). */
+	public static void setMenuRenderSuppressed(boolean suppressed)
+	{
+		menuRenderSuppressed = suppressed;
+	}
+
+	private static void onBeforeMenuRender(BeforeMenuRender ev)
+	{
+		if (menuRenderSuppressed)
+		{
+			ev.consume();   // consumed -> the engine skips drawing its menu this frame (logic untouched)
+		}
 	}
 
 	/**

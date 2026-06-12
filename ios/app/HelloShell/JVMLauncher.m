@@ -44,6 +44,7 @@ static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
 static jmethodID gMidWarmed = NULL;   // JavaBridge.presentReady()Z — world geometry uploaded (direct-present reveal)
 static jmethodID gMidMenuSelect = NULL;  // selectMenuPoint(II)V — menu row select + hover-clear (optional)
 static jmethodID gMidShiftHeld = NULL;   // setShiftHeld(Z)V — sticky-Shift modifier (optional; tolerate older jar)
+static jmethodID gMidMenuSuppress = NULL; // setMenuRenderSuppressed(Z)V — engine-menu raster gate (optional)
 
 // W3 hybrid-chrome read surface — a SEPARATE facade (MobileChromeBridge) resolved lazily on the main thread.
 static jclass    gChromeClass = NULL;   // global ref to net.runelite.client.headless.MobileChromeBridge
@@ -187,6 +188,8 @@ static BOOL ensureBridge(void) {
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidMenuSelect = NULL; }
     gMidShiftHeld = (*env)->GetStaticMethodID(env, global, "setShiftHeld", "(Z)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidShiftHeld = NULL; }
+    gMidMenuSuppress = (*env)->GetStaticMethodID(env, global, "setMenuRenderSuppressed", "(Z)V");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidMenuSuppress = NULL; }
     gBridgeClass = global;   // publish only once fully resolved
     return YES;
 }
@@ -1225,6 +1228,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidCamera, (jint)dx, (jint)dy);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)setEngineMenuRenderSuppressed:(BOOL)suppressed {
+    if (!ensureBridge() || !gMidMenuSuppress) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidMenuSuppress,
+                                 (jboolean)(suppressed ? JNI_TRUE : JNI_FALSE));
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 

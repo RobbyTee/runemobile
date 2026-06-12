@@ -2760,6 +2760,9 @@ static CGRect mapRectFromArr(NSArray *a) {
             self.menuBuilding = NO;
         } else if (CACurrentMediaTime() - self.menuOpenAt > 0.6) {
             self.menuBuilding = NO;   // give up; the engine menu + clamp path (updateMenuHighlight) still works
+            // Fallback degrades to drag-selecting on the ENGINE menu — un-gate its raster (suppressed by
+            // default; the user can't drag-select an invisible menu). Re-suppressed in teardownMenuViews.
+            [JVMLauncher setEngineMenuRenderSuppressed:NO];
             NSString *snap = [JVMLauncher menuPeekSnapshot];
             [self appendLine:[NSString stringWithFormat:@"[menu-diag] build TIMEOUT @game %d,%d snap=%@",
                               self.lastMenuX, self.lastMenuY,
@@ -3486,6 +3489,8 @@ static CGRect mapRectFromArr(NSArray *a) {
     self.menuHighlight = -1;
     self.menuBuilding = NO;
     self.menuClosing = NO;
+    // Restore the default engine-menu raster suppression (the build-timeout fallback un-gates it).
+    [JVMLauncher setEngineMenuRenderSuppressed:YES];
 }
 
 // one-finger drag -> rotate the camera. Feed incremental pixel deltas (reset the recognizer's translation

@@ -292,6 +292,53 @@ public final class HudVeneerBridge
 		return new int[]{chatX, chatY, w, h};
 	}
 
+	/**
+	 * Pre-render re-assert of the PEEK-SUPPRESSION hides — called from {@code Hooks.frame()}, the engine's
+	 * BeforeRender seam: after the client tick that may have rebuilt widgets, before anything rasterizes.
+	 * {@link #tick} runs in the post-render draw callback, so an interface rebuild that reset our hidden
+	 * flags (an item click's chat message re-running the chatbox script; a TOPLEVEL_REDRAW re-laying the tab
+	 * stones) used to get exactly ONE rendered frame before the re-hide — the engine chat tabs/background
+	 * flashing at the relocated top-left, and the desktop stone rows flashing at the bottom-right. Re-hiding
+	 * here makes those widgets unpaintable instead of cleaned-up-a-frame-late. Hides only (cheap setHidden
+	 * calls, idempotent); the position/size forcing stays in {@link #tick} where it always ran.
+	 */
+	public static void preRender(Client c)
+	{
+		if (!ENABLED || c == null || c.getGameState() != GameState.LOGGED_IN)
+		{
+			return;
+		}
+		try
+		{
+			if (!c.isResized())
+			{
+				return;
+			}
+			final boolean preEoc = c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
+			if (hideStones)
+			{
+				final int[] ids = stoneIds(preEoc);
+				hideRowOf(c, ids[0]);
+				hideRowOf(c, ids[7]);
+			}
+			// Same gates as the chat block in tick(): only while the chat veneer is active and the world
+			// map doesn't own the screen.
+			if (chatX >= 0 && !isWorldMapOpen(c))
+			{
+				setEngineChatTabsHidden(c, chatTabRowH > 0);
+				if (transparentChat)
+				{
+					hide(c, InterfaceID.Chatbox.CHAT_BACKGROUND);
+					hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
+					hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
+				}
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
 	/** Re-apply the requested chatbox state each frame. Client thread. */
 	public static void tick(Client c)
 	{

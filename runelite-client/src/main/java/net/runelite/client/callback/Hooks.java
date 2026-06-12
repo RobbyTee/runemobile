@@ -278,6 +278,14 @@ public class Hooks implements Callbacks
 	public void frame()
 	{
 		eventBus.post(BEFORE_RENDER);
+		if (net.runelite.client.headless.HudVeneerBridge.isEnabled())
+		{
+			// W3 native HUD: re-assert the engine-widget HIDES (tab-stone rows, engine chat tabs/background)
+			// at this pre-render seam, so an interface rebuild this tick can't paint them for one frame
+			// before the post-render tick() re-hides them (the "chrome flash on item click" artifact).
+			// After the BEFORE_RENDER post so these hides get the last word. Gated; inert on desktop.
+			net.runelite.client.headless.HudVeneerBridge.preRender(client);
+		}
 	}
 
 	/**
