@@ -1,11 +1,12 @@
 # Android ↔ iOS parity phasing
 
 > Verified, phased plan for bringing the Android port to parity with the iOS app's mobile UX.
-> Written 2026-06-12 against `android` @ `a310e583c8` and `origin/master` @ `53dcf37114`
-> (merge-base `b333c671c2`). Every status below was verified from **code on the two branches**
-> (commits cited), not from docs — the planned `IOS-PARITY-BLUEPRINT.md` reference was never
-> committed on any branch, so this document re-derives its content directly from the master
-> sources and is self-contained.
+> Written 2026-06-12 against `android` @ `a310e583c8` and `origin/master` @ `42fe9152c4`
+> (merge-base `b333c671c2`). Companion reference: `android/IOS-PARITY-BLUEPRINT.md`
+> (`42fe9152c4` — lands on this branch with the Phase-0 merge) — the feature-by-feature spec
+> of what iOS is. Every status below was verified from **code on the two branches** (commits
+> cited), treating the blueprint's Android-delta claims as hypotheses; §5 records where the
+> verification corrects it.
 >
 > Scope rule: each phase consumes **shared bridge methods that already exist in the merged
 > jar** — zero shared-Java changes are expected anywhere in this plan. If implementing a phase
@@ -57,9 +58,12 @@ origin/android origin/master` completes with **zero conflicts** (result tree
 1. `HudVeneerBridge.java` modified on both sides (master: 7 world-map/inset commits; android:
    orbs fix) — hunks don't overlap; the merged file keeps **both** `ensureOrbsLoaded` and
    `panWorldMap`/`getMapSnapshot`/`setOverlaySafeInsets` (verified in the merge-tree result).
-2. `RendererPanelStarter.java` / `WorldMapProbe.java`: **never deleted on android** — they are
-   new files added on master after the merge-base (`d2b46053cd`, `0e8e19cecf`); the merge just
-   adds them. No restore step needed.
+2. The "android deleted shared classes" claim (blueprint §a lists six: `GpuHandshakeProbe`,
+   `GpuSceneDiag`, `RendererPanelStarter`, `TracingDrawCallbacks`, `WelcomePlayProbe`,
+   `WorldMapProbe`): **wrong for all six** — each is absent at the merge-base AND on android,
+   and was *added on master* after divergence (`d2b46053cd`, `0e8e19cecf`, …). The merge simply
+   adds them; no restore step. Cross-checked: every `headless.*` class the merged `Hooks.java`
+   references exists in the merged tree.
 3. `tools/shared-contract/baseline.txt` (189 vs 185): auto-merges to **190** = master's 189 +
    android's `FLAG runelite.headless.autologin.legacy`. The real method delta master brings:
    `JavaBridge#armSceneHold/noteSceneDraw/presentReady` (GPU warm-up gate),
@@ -123,6 +127,9 @@ iOS gotchas to honor (all root-caused on iOS, `f78e237784`):
   clamp inside it (iOS fix `f82debabe7`, native-side). Android's current menu highlight is
   purely native (no cursor drive — safe today), but this applies the moment any flow streams
   finger moves into an open engine menu (the Phase-4 pull-down filter does).
+- **Re-park on pinch-zoom end as well as begin** (`469afc4af8` on iOS — the stuck-hover bug
+  originally surfaced as a pinch-zoom artifact). Check Android's `ScaleGestureDetector` path
+  clears hover on BOTH edges.
 
 **Exit gate (emulator):** tap an NPC → red ring + haptic + interaction occurs; tap open
 ground → yellow ring + walk; tap a tree canopy *gap* → no misclick-walk-to-wrong-tile
@@ -181,12 +188,13 @@ porting the iOS design (`bea94a90a0` + fixes):
 - Hold **0.15 s** → 7 channel chips fan out across the chat width (display-only, original
   32 px tab height — iOS oversized them first and walked it back, `5a70ef21ea`); drag
   sideways + lift = `switchChatTab(index)`; switching auto-expands a collapsed chat.
-- **Pull-down filter:** dragging DOWN past a filterable chip's bottom edge opens that
+- **Pull-down filter:** dragging DOWN **past ~26 pt** below a filterable chip opens that
   channel's engine filter menu at the finger; drag to a row + lift applies, drag back up
   cancels. Filterable indices are **2..6 of the 7-tab array** (Public, Private, Channel,
   Clan, Trade); All & Game have no filter (no ▾ hint, no menu). The trigger is
-  **directional, not dwell** — hesitation must not misfire. Reveal the ▾ hint as the finger
-  nears the chip's bottom edge.
+  **directional, not dwell** — a pull-down *direction* beat a dwell-timer design on iOS
+  (accidental activation ~0; can't fire during horizontal drag-select). Reveal the ▾ hint as
+  the finger nears the chip's bottom edge.
 
 iOS gotchas to honor:
 - **Collapse is shove-off-canvas, not hide** (`CHAT_COLLAPSE_OFFSCREEN_DY=3000` in
@@ -209,14 +217,19 @@ scroll-by-drag unaffected.
 
 Port the **device-confirmed Phase-1 floating-window** behavior (`74557217e7`/`7376456a3f`,
 window seeding from `6bde0eae53`/`924b8169c9`) — NOT the fullscreen display transform (see
-§4). Shared side free post-merge: `HudVeneerBridge.panWorldMap(dxPx, dyPx)` (converts px →
-tiles via the live zoom and moves the map centre — the supported panning primitive),
-`getMapSnapshot()` (map-open state + widget rects), `WorldMapProbe` (dev re-verification,
-`-Drunelite.worldmapprobe=true`). Native scope:
+§4). Shared side free post-merge and bigger than it looks: `HudVeneerBridge` seeds the window
+rect varcs every tick (the window opens flush at inset 2 px), `panWorldMap(dxPx, dyPx)`
+converts finger px → tiles via the live zoom (carrying sub-tile remainders — the supported
+panning primitive), `getMapSnapshot()` publishes the `{open, window, close, search, zoomIn,
+zoomOut}` rects, and **while the map is open the shared side already hides the chat and
+shoves the minimap cluster + side panel off-screen, restoring on close**. `WorldMapProbe`
+(`-Drunelite.worldmapprobe=true`) re-verifies the input findings if ever in doubt. Native
+scope:
 
-- Detect map open via `getMapSnapshot()`; while open: hide native chrome/floating buttons,
-  hide-or-relocate the chat, suppress the normal walk/interact tap handling inside the map
-  rect.
+- Detect map open via `getMapSnapshot()`; while open: hide Android's **own** native chrome
+  (tab grid, floating buttons — the engine HUD shoves are shared), and route in-map taps
+  through the precise-click path (`onClickPrecise`) so the walk/interact ring is suppressed
+  inside the map rect.
 - **Pan = finger drag → `panWorldMap` deltas.** Do NOT synthesize left-drag streams into the
   map — proven dead end (Phase-0 probe `0e8e19cecf`: synthetic drags do not pan the world
   map). Pinch → zoom via wheel notches at the pinch centroid (`onWheel`), with the engine's
@@ -238,7 +251,9 @@ result; close via the engine X; chrome + chat restore.
 
 1→2→3 are independent of each other but all tiny next to 4/5 — front-load them for visible
 wins per session. 4 before 5 because the pull-down filter exercises the
-engine-menu-with-cursor pattern Phase 5's long-press path reuses. Every phase is
+engine-menu-with-cursor pattern Phase 5's long-press path reuses. This deliberately deviates
+from the blueprint §d order (which puts world map immediately after the merge): the map is
+the largest native job here, and nothing in 1–4 depends on it. Every phase is
 emulator-gateable; the standing **real-device verification debt** (all Android claims are
 emulator-GREEN only) is orthogonal and unchanged by this plan.
 
@@ -259,3 +274,25 @@ emulator-GREEN only) is orthogonal and unchanged by this plan.
   here is Android-portable.
 - **Anything not on `origin/master`**: all side branches are fully merged as of 2026-06-12;
   if new in-flight branches appear, they are out of scope until merged + device-confirmed.
+
+---
+
+## 5. Corrections to the blueprint (verified 2026-06-12)
+
+Where this plan's git/code forensics disagree with `IOS-PARITY-BLUEPRINT.md`, the forensics
+won; recorded so the next session doesn't re-litigate:
+
+- **§a merge hazards are overstated.** The master→android merge is textually conflict-free
+  (`git merge-tree` verified, result `eee7c96afd8c…`) — not "a real 3-way merge" to fear. The
+  six "deleted" shared classes were never on android (added on master post-divergence); no
+  restore step exists.
+- **§a misses the one real merge breakage:** master deleted `JavaBridge.snapRadius()`, and
+  Android's render loop calls it unguarded every tick (`jvm_bootstrap.cpp:790`) — the Phase-0
+  crash fix above. (Blueprint §10 notes iOS null-checks *its* optional methods; Android's
+  `midOpt` resolves to null fine but the call site doesn't check.)
+- **The committed master baseline is stale against master's own code** (still lists
+  `snapRadius` method+flag; lacks `tapTick`/`parkPointer` and the `settleMax`/`settleStable`
+  flags) — the blueprint quotes 189 entries as if current. Phase 0 re-baselines deliberately.
+- **§b/§c chat-pill status is right but the "DONE on Android" claim found in earlier audit
+  notes is not** — Android's long-press filter veneer is the *predecessor*, not the pill
+  (blueprint §16 agrees; recorded here because one internal audit pass conflated them).
