@@ -1920,8 +1920,18 @@ static int chatRowCanvasH(void) {
             if (k >= 0 && kChatTabFilterable[k]) {
                 CGRect chip = [self chatChipFrameForIndex:(int)k];
                 if (pScreen.y > CGRectGetMaxY(chip) + kChatPullDownPt) {
+                    // A collapsed chat is SHOVED OFF-SCREEN (not hidden), so the engine filter button is at
+                    // canvas y≈3000 — a right-click there opens nothing (the "armed but invisible" filter).
+                    // Expand first; the engine restores the widget next tick and the snapshot follows, then a
+                    // later .changed event (finger still held below the chip) passes the on-canvas gate below.
+                    if (self.chatCollapsed) {
+                        self.chatCollapsed = NO;
+                        [JVMLauncher setEngineChatCollapsed:NO];
+                        [self appendLine:@"[chat] pull-down on collapsed chat -> expand first"];
+                    }
                     int cx = 0, cy = 0;
-                    if ([self engineChatButtonCenterForTag:k x:&cx y:&cy]) {
+                    if ([self engineChatButtonCenterForTag:k x:&cx y:&cy]
+                        && cy < self.renderH) {   // on-canvas = the expand has landed in the snapshot
                         self.chatFilterChip = k;
                         self.chatFilterHint.hidden = YES;
                         [self openEngineMenuAtGameX:cx gameY:cy anchor:pScreen];   // screen coords, like onLongPress
