@@ -85,6 +85,12 @@ Phase 0 answers every unknown below before any device work.
 
 ## Phase 1 — mode detection + input routing (the core)
 
+> **DONE + DEVICE-CONFIRMED 2026-06-11 (`74557217e`, user: "everything feels good").** Built with the
+> essential Phase-2 pieces: bridge `panWorldMap` (px → tiles via live zoom, sub-tile remainder
+> carried) + `getMapSnapshot`; native gates (map pan / precise taps / no ring), chrome hide/restore,
+> native safe-area ✕ proxying the engine CLOSE, search-tap keyboard raise. Pinch zoom unchanged.
+> Remaining = Phase 3 polish only (momentum pan, double-tap zoom) — build on demand.
+
 - Native polls `mapOpen` (~10 Hz with the other snapshots). While open:
   - **Pan**: a 1-finger drag that *begins inside* `MAP_CONTAINER` becomes a synthetic left drag —
     `postTouch DOWN` at the start point, incremental `MOVE`s (canvas px 1:1 with the finger), `UP` on
