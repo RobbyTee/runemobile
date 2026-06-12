@@ -146,6 +146,18 @@ iOS gotchas to honor (all root-caused on iOS, `f78e237784`):
 ground → yellow ring + walk; tap a tree canopy *gap* → no misclick-walk-to-wrong-tile
 regression; zoom immediately after a tap → no stuck hover label.
 
+**GREEN 2026-06-12:** `TapRingView` + truth-deferred classification in the Choreographer
+poll. Walk tap → `p1: ring WALK`, no seq advance, yellow ring on screen
+(`dev-tools/parity/evidence-phase1-walk-ring-20260612.png`); tree tap →
+`interactTapSeq` + haptic + `p1: ring INTERACT (+213ms)` AND the engine-side model outline
+armed on the tree (`evidence-phase1-interact-outline-20260612.png`) — the whole shared truth
+chain ran with zero shared-Java changes. **Deviation from iOS:** `RING_GRACE_MS` is 600 ms,
+not 250 ms — the settle gate's fail-open is 12 engine frames (~480 ms on a slow EDT; a real
+interaction measured +535 ms on the emulator), so 250 ms misclassified. Pinch-END re-park
+added (`469afc4af8` parity); canopy-gap correctness is design-guaranteed by the engine-truth
+machine (no native centroid logic exists to regress); the stuck-label-on-zoom check needs a
+real multitouch device — deferred to the device wall.
+
 ### Phase 2 — renderer selection as plugins + Tap-to-Play launch flow
 
 Shared side is free post-merge: `RendererPanelStarter` (gate `-Drunelite.rendererpanel=true`;

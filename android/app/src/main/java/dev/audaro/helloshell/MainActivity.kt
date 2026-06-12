@@ -13,6 +13,7 @@ import android.provider.MediaStore
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.util.Log
@@ -77,6 +78,16 @@ class MainActivity : AppCompatActivity() {
     // A1 per-frame poll state (driven by Choreographer).
     private var vibrator: Vibrator? = null
     private var lastTapSeq = 0
+
+    // Phase-1 click ring: every world tap spawns a ring whose colour is decided by ENGINE TRUTH, not at touch
+    // time — the engine-resolved tap machine settles ~80–160 ms after the tap, so showing instantly would
+    // misclassify (the iOS lesson). On tap we snapshot interactTapSeq; the Choreographer poll then resolves:
+    // seq advanced within the grace window → red (interaction), grace expired → yellow (walk).
+    private lateinit var tapRing: TapRingView
+    private var ringPending = false
+    private var ringX = 0f; private var ringY = 0f
+    private var ringArmedAtMs = 0L
+    private var ringBaseSeq = 0
     private var keyboardShown = false
     private var manualKeyboard = false   // ⌨ toggle: hold the soft keyboard up with no engine text field open
     private var shiftHeld = false         // ⇧ latch: synthetic VK_SHIFT held (AP-2a Finding 12)
@@ -137,6 +148,11 @@ class MainActivity : AppCompatActivity() {
 
         // Pinch-to-wheel: geometric step a scale ratio must cross to emit one wheel notch.
         private const val PINCH_STEP = 1.08f
+        // Click-ring truth grace: how long after a tap we wait for interactTapSeq before calling it a walk.
+        // iOS ships 250 ms (60–120 Hz engine), but the settle gate's own fail-open is 12 engine frames —
+        // ~480 ms on a slow EDT (emulator measured a real interaction landing at +535 ms). 600 ms keeps the
+        // colour truthful on slow frames; the walk ring simply appears a beat later.
+        private const val RING_GRACE_MS = 600L
 
         // OSRS engine menu geometry: 19px "Choose Option" header, 15px per row. A native row k commits to the
         // engine row centre (menuX + menuW/2, menuY + 19 + k*15 + 7) so plugin onClick/Menu-Entry-Swapper hold.
@@ -159,6 +175,7 @@ class MainActivity : AppCompatActivity() {
         surfaceView = SurfaceView(this)
         keyboardView = GameInputView(this)
         menuOverlay = MenuOverlayView(this)
+        tapRing = TapRingView(this)
         // A6 native chrome: the OSRS-mobile 2-col tab grid at the bottom-right. The engine's own 14 tab stones
         // are HIDDEN (HudVeneerBridge.setStonesHidden, driven from updateChrome) so these native cells ARE the
         // tabs; a tap opens the tab by replaying the engine stone's op script (openTab) — works while hidden, so
@@ -281,6 +298,7 @@ class MainActivity : AppCompatActivity() {
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
             addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
+            addView(tapRing, FrameLayout.LayoutParams(mp, mp))        // tap-feedback ring (over the frame, no touch)
             addView(chromeOverlay, FrameLayout.LayoutParams(mp, mp))  // native 2-col tab grid (stones hidden)
             addView(chatTabOverlay, FrameLayout.LayoutParams(mp, mp)) // enlarged native chat-tab row (top-left)
             addView(keyboardView, FrameLayout.LayoutParams(1, 1))
@@ -591,6 +609,11 @@ class MainActivity : AppCompatActivity() {
         override fun onSingleTapUp(e: MotionEvent): Boolean {
             val gx = toGameX(e.x); val gy = toGameY(e.y)
             Log.i(TAG, "tap screen=(${e.x},${e.y}) view=(${surfaceView.width}x${surfaceView.height}) frame=(${JvmLauncher.frameWidth()}x${JvmLauncher.frameHeight()}) -> game=($gx,$gy)")
+            // Arm the click ring BEFORE posting the click so the baseline seq can't race the engine's bump.
+            ringBaseSeq = JvmLauncher.interactTapSeq()
+            ringX = e.x; ringY = e.y
+            ringArmedAtMs = SystemClock.uptimeMillis()
+            ringPending = true
             JvmLauncher.click(gx, gy, 1)
             return true
         }
@@ -668,6 +691,9 @@ class MainActivity : AppCompatActivity() {
 
         override fun onScaleEnd(d: ScaleGestureDetector) {
             pinchActive = false
+            // Re-park the pointer on pinch END too (iOS 469afc4af8): the zoom re-projects the world under
+            // the last tracked cursor position, so a begin-only clear leaves a stale hover label behind.
+            JvmLauncher.clearHover()
         }
     }
 
@@ -776,6 +802,20 @@ class MainActivity : AppCompatActivity() {
                     lastTapSeq = seq
                     Log.i(TAG, "a1: interactTapSeq -> $seq (haptic)")
                     vibrateTick()
+                }
+                // Phase-1 click ring: resolve the pending tap from engine truth. Seq advanced past the
+                // tap-time baseline → the engine consumed an interaction (red); RING_GRACE_MS with no
+                // advance → plain walk (yellow). The grace covers the settle pipeline (~80–160 ms).
+                if (ringPending) {
+                    if (seq != ringBaseSeq) {
+                        ringPending = false
+                        Log.i(TAG, "p1: ring INTERACT (+${SystemClock.uptimeMillis() - ringArmedAtMs}ms)")
+                        tapRing.spawn(ringX, ringY, TapRingView.COLOR_INTERACT)
+                    } else if (SystemClock.uptimeMillis() - ringArmedAtMs > RING_GRACE_MS) {
+                        ringPending = false
+                        Log.i(TAG, "p1: ring WALK")
+                        tapRing.spawn(ringX, ringY, TapRingView.COLOR_WALK)
+                    }
                 }
                 if (menuBuilding) {
                     tryBuildNativeMenu()
