@@ -1,0 +1,9 @@
+[rc2] ===== Route C step 2: native GL bridge core on GLES 3.0 =====
+[rc2] AWTContext analogue: createGLContext+depthFBO complete=YES framebuffer=1
+[rc2] GL_VERSION=OpenGL ES 3.0 APPLE-23.1.1 SLVERSION=OpenGL ES GLSL ES 3.00
+[rc2] PASS1 depth=ON reverseZ center=(0,255,0) expect~GREEN glerr=0x0000 -> GREEN(near wins)
+[rc2] PASS2 depth=OFF paint-order center=(255,0,0) expect~RED -> RED(far last)
+[rc2] glMapBuffer->glMapBufferRange shim: OK
+[rc2] VERDICT reverseZ=OK control=OK multidraw_loop=OK map_shim=OK
+[rc2] ===== Route C step 2 done =====
+[rc2] log written to /Users/jordanmm/Library/Developer/CoreSimulator/Devices/2872C3DB-671E-41DC-A6C5-0C87E3591DDE/data/Containers/Data/Application/283BF860-DA22-4F78-BCA9-02CE05AF96DC/Documents/routec-step2-verdict.log

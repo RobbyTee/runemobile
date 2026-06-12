@@ -1,0 +1,24 @@
+[tbo] ===== gpu-tbo2d: RLHD textureFaces (GL_RGB32I texture-buffer) -> 2D integer-texture repack on iOS GLES =====
+[tbo] GL_VERSION = OpenGL ES 3.0 APPLE-23.1.1
+[tbo] GL_SLVERSION = OpenGL ES GLSL ES 3.00
+[tbo] GL_RENDERER = Apple Software Renderer
+[tbo] GL_MAX_TEXTURE_SIZE=4096  GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS=16
+[tbo] 16000 faces x 3 texels = 48000 texels; a 1D layout needs width 48000 > GL_MAX_TEXTURE_SIZE=4096 -> 2D REQUIRED
+[tbo] NOTE: software renderer; integer-2D-texture + texelFetch + vertex texture fetch are ES 3.0 CORE -> high device confidence (PHASE A format support is the one device-checkable item).
+[tbo] ===== PHASE A: integer-texture format support (RGB32I = RLHD's real format; RGBA32I = fallback) =====
+[tbo] PROGRAM P_FORMAT = OK
+[tbo]   RGB32I 8x1 (8 texels) upload glErr=NONE
+[tbo] A_RGB32I_SAMPLEABLE = YES
+[tbo]   RGBA32I 8x1 (8 texels) upload glErr=NONE
+[tbo] A_RGBA32I_SAMPLEABLE = YES
+[tbo] REPACK_FORMAT = RGB32I (exact, no host transform)  (RGB32I sampleable=YES; using RLHD's native RGB32I)
+[tbo]   RGB32I 2048x24 (48000 texels) upload glErr=NONE
+[tbo] face texture: RGB32I 2048x24
+[tbo] PROGRAM P_FRAG = OK
+[tbo] PHASE B (fragment, RLHD fetch idiom): green=16000 (want 16000) red=0 (want 0) blue/pad=384 (want 384) -> YES
+[tbo] B_FRAG_EXACT = YES
+[tbo] PROGRAM P_VERT = OK
+[tbo] PHASE C (vertex stage, gl_VertexID, RLHD pathway): green=16000 (want 16000) red=0 (want 0) black/undrawn=384 (want 384) -> YES
+[tbo] C_VERT_EXACT = YES
+[tbo] VERDICT tbo2d_repack_exact = YES  (rgb32i=YES frag=YES vert=YES)
+[tbo] ===== gpu-tbo2d done =====

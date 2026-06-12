@@ -144,10 +144,15 @@ public final class RouteCGpuStarter
 			});
 		}
 
-		// (2) Force-enable + start the gpu plugin (overrides persisted gpuplugin=false). startPlugin is a no-op once
-		//     active, so this is harmless if the plugin is already up (its own startUp retry will then complete).
-		final String r = MobileUiBridge.setPluginEnabled(GPU_PLUGIN, true);
-		log.info("[routecgpu] setPluginEnabled({}, true) -> {}", GPU_PLUGIN, r);
+		// (2) LOAD (if needed) + enable + start the gpu plugin. The core plugin scan
+		//     ({@code PluginManager.loadCorePlugins} via Guava {@code ClassPath}) does NOT enumerate the staged
+		//     jar's gpu package, so {@code setPluginEnabled} alone returns "no-such-plugin" — and the plugin never
+		//     appears in the native plugin list. {@code loadAndStartPlugin} adds the missing
+		//     {@code pm.loadPlugins(List<Class>)} + {@code loadDefaultPluginConfiguration} step (the same path
+		//     RLHDStarter uses for HdPlugin), so the GPU plugin lands in {@code pm.getPlugins()} — visible in the
+		//     panel, with an editable config and a working on/off toggle — and starts. Idempotent once loaded.
+		final String r = MobileUiBridge.loadAndStartPlugin(GPU_PLUGIN);
+		log.info("[routecgpu] loadAndStartPlugin({}) -> {}", GPU_PLUGIN, r);
 		if (r.contains("no-such-plugin") && attempts <= 2)
 		{
 			log.info("[routecgpu] plugin diag: {}", MobileUiBridge.pluginDiag("gpu"));

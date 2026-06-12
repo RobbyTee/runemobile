@@ -63,6 +63,7 @@ import net.runelite.client.config.RuneLiteConfig;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.OverlayMenuClicked;
+import net.runelite.client.headless.HudVeneerBridge;
 import net.runelite.client.input.KeyManager;
 import net.runelite.client.input.MouseAdapter;
 import net.runelite.client.input.MouseManager;
@@ -798,21 +799,33 @@ public class OverlayRenderer extends MouseAdapter
 		final boolean chatboxHidden = chatbox == null || chatbox.isHidden();
 		final Rectangle chatboxBounds = chatbox != null ? chatbox.getBounds() : new Rectangle();
 
-		snapCorners.topLeft.setPosition(
-			viewportBounds.x + BORDER,
-			viewportBounds.y + BORDER_TOP);
+		// Mobile veneer (no-op on desktop): the shell renders the canvas edge-to-edge, so the canvas corners sit
+		// under the phone's curved bezel/notch, and the veneer relocates the chat to the canvas top-left — inset
+		// every snap corner by the native safe area, and drop the top-left corner below the relocated chat, so
+		// snapped plugin overlays (e.g. Quest Helper's TOP_LEFT guidance panel) render unclipped and uncovered.
+		final int[] veneerInsets = HudVeneerBridge.getOverlayInsets();
+		final int insL = veneerInsets[0], insT = veneerInsets[1], insR = veneerInsets[2], insB = veneerInsets[3];
+
+		int topLeftX = viewportBounds.x + BORDER + insL;
+		int topLeftY = viewportBounds.y + BORDER_TOP + insT;
+		final int[] chatAvoid = HudVeneerBridge.getOverlayChatAvoid();
+		if (chatAvoid != null && topLeftX < chatAvoid[0] + chatAvoid[2] && topLeftY < chatAvoid[1] + chatAvoid[3])
+		{
+			topLeftY = chatAvoid[1] + chatAvoid[3] + BORDER;
+		}
+		snapCorners.topLeft.setPosition(topLeftX, topLeftY);
 
 		snapCorners.topCenter.setPosition(
 			viewportBounds.x + viewportBounds.width / 2,
-			viewportBounds.y + BORDER
+			viewportBounds.y + BORDER + insT
 		);
 
 		snapCorners.topRight.setPosition(
-			viewportBounds.x + viewportBounds.width - BORDER,
-			viewportBounds.y + BORDER);
+			viewportBounds.x + viewportBounds.width - BORDER - insR,
+			viewportBounds.y + BORDER + insT);
 
-		int bottomLeftX = viewportBounds.x + BORDER;
-		int bottomLeftY = viewportBounds.y + viewportBounds.height - BORDER;
+		int bottomLeftX = viewportBounds.x + BORDER + insL;
+		int bottomLeftY = viewportBounds.y + viewportBounds.height - BORDER - insB;
 		// Check to see if chat box is minimized
 		if (isResizeable && chatboxHidden)
 		{
@@ -821,8 +834,8 @@ public class OverlayRenderer extends MouseAdapter
 		snapCorners.bottomLeft.setPosition(bottomLeftX, bottomLeftY);
 
 		snapCorners.bottomRight.setPosition(
-			viewportBounds.x + viewportBounds.width - BORDER,
-			viewportBounds.y + viewportBounds.height - BORDER);
+			viewportBounds.x + viewportBounds.width - BORDER - insR,
+			viewportBounds.y + viewportBounds.height - BORDER - insB);
 
 		if (isResizeable)
 		{

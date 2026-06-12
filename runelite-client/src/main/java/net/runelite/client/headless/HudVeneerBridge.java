@@ -252,6 +252,47 @@ public final class HudVeneerBridge
 		chatCollapsed = collapsed;
 	}
 
+	// ---- Overlay snap-corner safe frame ----------------------------------------------------------------
+	// The native shell renders the canvas EDGE-TO-EDGE, so the canvas corners sit under the iPhone's curved
+	// bezel/notch, and the veneer relocates the chat to the canvas TOP-LEFT — both land on top of the default
+	// overlay snap corners, so every plugin overlay snapped there (e.g. Quest Helper's TOP_LEFT guidance
+	// panel) renders clipped and under the chat. Native pushes its safe-area insets in canvas px;
+	// OverlayRenderer.positionSnapcorners insets the snap corners by them and additionally drops the top-left
+	// corner below the relocated chat. Zero-impact on desktop (insets stay 0, chat not relocated).
+
+	private static volatile int overlayInsetL, overlayInsetT, overlayInsetR, overlayInsetB;
+
+	/** Native: the screen safe-area insets in canvas px (left, top, right, bottom). */
+	public static void setOverlaySafeInsets(int l, int t, int r, int b)
+	{
+		overlayInsetL = l;
+		overlayInsetT = t;
+		overlayInsetR = r;
+		overlayInsetB = b;
+	}
+
+	/** Snap-corner safe-area insets {l,t,r,b} in canvas px (all 0 until native pushes them). */
+	public static int[] getOverlayInsets()
+	{
+		return new int[]{overlayInsetL, overlayInsetT, overlayInsetR, overlayInsetB};
+	}
+
+	/**
+	 * The relocated chat's occupied canvas rect {x,y,w,h} for snap-corner avoidance — the native tab row only
+	 * while collapsed, the full chat box while open — or null when the veneer isn't relocating the chat.
+	 */
+	public static int[] getOverlayChatAvoid()
+	{
+		if (!ENABLED || chatX < 0)
+		{
+			return null;
+		}
+		final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
+		final int w = chatAreaW > 0 ? chatAreaW : CHAT_DEFAULT_W;
+		final int h = chatCollapsed ? rowH : rowH + ORIG_CHAT_CONTENT_H + 2;
+		return new int[]{chatX, chatY, w, h};
+	}
+
 	/** Re-apply the requested chatbox state each frame. Client thread. */
 	public static void tick(Client c)
 	{
@@ -286,13 +327,17 @@ public final class HudVeneerBridge
 			ensureOrbsLoaded(c, preEoc);
 
 			final int chatId = preEoc ? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER;
+			// While the world map is open it owns the screen: the relocated-HUD apply blocks below are gated
+			// OFF (tickWorldMap shoves chat/minimap/side off-screen instead and grows the map to the full
+			// canvas); when it closes the blocks resume re-forcing the HUD home on the very next frame.
+			final boolean mapOpenNow = isWorldMapOpen(c);
 
 			// Chat box: keep the engine chatbox FULLY ALIVE at all times (never hidden). To "collapse" (the user
 			// tapped the active tab) we shove the live widget far off-screen; reopening just moves it back — instant
 			// and full, with NO interface teardown, tab-selection loss, or rebuild. (Hiding the container tore the
 			// chat down, so reopen showed an empty box until a second tap.) The native tab row stays put because
 			// buildChatSnapshot reports the configured chatX/chatY, not the widget's moved position.
-			if (chatX >= 0)
+			if (chatX >= 0 && !mapOpenNow)
 			{
 				final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
 				final int rowW = chatAreaW > 0 ? chatAreaW : CHAT_DEFAULT_W;
@@ -389,7 +434,7 @@ public final class HudVeneerBridge
 
 			// Minimap+orbs cluster relocate (independent of chat). Force MAP_CONTAINER each frame so it survives
 			// TOPLEVEL_REDRAW; revalidate cascades to the globe + orb children.
-			if (minimapX >= 0)
+			if (minimapX >= 0 && !mapOpenNow)
 			{
 				final int containerId = preEoc
 					? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER;
@@ -417,7 +462,7 @@ public final class HudVeneerBridge
 			}
 
 			// Side panel relocate (independent). No-op until a tab is open (SIDE_CONTAINER then becomes non-null).
-			if (sideX >= 0)
+			if (sideX >= 0 && !mapOpenNow)
 			{
 				final int sideId = preEoc
 					? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER;
@@ -450,10 +495,187 @@ public final class HudVeneerBridge
 				pendingOpenTab = -1;
 				openTabNow(c, preEoc, openIdx);
 			}
+
+			tickWorldMap(c);
 		}
 		catch (RuntimeException ignore)
 		{
 		}
+	}
+
+	// ---- World map (touch-friendly — WORLDMAP-MOBILE-PLAN.md Phase 1) ----------------------------------------
+	// Phase-0 probe facts: a synthetic left-drag does NOT pan the map, but setWorldMapPositionTarget does — so
+	// the native pan gesture accumulates finger deltas (canvas px) here and tick converts them to map tiles via
+	// the live zoom (px per tile) and moves the map centre — "grab the map", 1:1 with the finger. The snapshot
+	// publishes open-state + the edge-control rects so native can gate gestures, raise the keyboard on a search
+	// tap (the map search does NOT flip INPUT_TYPE), and proxy the bezel-clipped close button.
+
+	private static final java.util.concurrent.atomic.AtomicInteger mapPanDx = new java.util.concurrent.atomic.AtomicInteger();
+	private static final java.util.concurrent.atomic.AtomicInteger mapPanDy = new java.util.concurrent.atomic.AtomicInteger();
+	private static float mapPanRemX, mapPanRemY;   // sub-tile remainders (client thread only)
+	private static volatile String mapSnapshotJson = "{\"open\":false}";
+
+	/** Native: pan the open world map by a finger delta in canvas px (drag right = map content follows right). */
+	public static void panWorldMap(int dxPx, int dyPx)
+	{
+		mapPanDx.addAndGet(dxPx);
+		mapPanDy.addAndGet(dyPx);
+	}
+
+	/** {@code {open, map:[x,y,w,h], close:[...], search:[...], zoomIn:[...], zoomOut:[...]}} (canvas px). */
+	public static String getMapSnapshot()
+	{
+		return mapSnapshotJson;
+	}
+
+	private static boolean isWorldMapOpen(Client c)
+	{
+		final Widget map = c.getWidget(InterfaceID.Worldmap.MAP_CONTAINER);
+		return map != null && !map.isHidden();
+	}
+
+	private static boolean mapWasOpen;       // close-edge tracker (client thread only) — restores the chat
+	// Canvas-px top/left margin of the map window. 2 = flush/maximal (the engine clamps the window to its
+	// windowed max and rejects minus==0 as "no stored rect", so 2 is the closest to edge-to-edge it goes).
+	private static final int MAP_INSET = 2;
+
+	private static void tickWorldMap(Client c)
+	{
+		// WINDOW RECT (probe-settled): the world map is the desktop's draggable WINDOW, and the
+		// WORLDMAP_X/Y + MINUSWIDTH/MINUSHEIGHT varcs are its remembered rect, read at OPEN — a seeded rect
+		// is honored with REAL hit-testing (zoom/close click oracles green), from the first open. Hard
+		// constraints (all probe-verified — don't re-tread): minus == 0 reads as "no stored rect" (the open
+		// falls back to the default top-left window); size = windowed-max (canvas minus the structural
+		// 215x165 reserve) minus the minus values, bigger/negative clamped; X/Y are capped at the minus
+		// values (the window must fit inside the top-left windowed REGION, so true canvas-centering of a
+		// big window is impossible); and forcing the map root re-lays render only (clicks go dead). Best
+		// clean mobile result: a near-max FLOATING window inset MAP_INSET px from the top-left — clears the
+		// curved bezel corner, engine close X fully visible, live scene showing around it (desktop-window
+		// look). Seeded every tick so the session's first open already lands there.
+		c.setVarcIntValue(VarClientID.WORLDMAP_X, MAP_INSET);
+		c.setVarcIntValue(VarClientID.WORLDMAP_Y, MAP_INSET);
+		c.setVarcIntValue(VarClientID.WORLDMAP_MINUSWIDTH, MAP_INSET * 2);
+		c.setVarcIntValue(VarClientID.WORLDMAP_MINUSHEIGHT, MAP_INSET * 2);
+
+		final boolean preEoc = c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
+		final int chatId = preEoc ? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER;
+		if (!isWorldMapOpen(c))
+		{
+			if (mapWasOpen)
+			{
+				mapWasOpen = false;
+				// Restore the chat hidden below: un-hide + rebuild (hiding tears the chat content down — the
+				// op-replay lesson; BUILD_CHATBOX re-renders the message list so it doesn't come back empty).
+				final Widget chat = c.getWidget(chatId);
+				if (chat != null && chat.isHidden())
+				{
+					chat.setHidden(false);
+				}
+				try
+				{
+					c.runScript(ScriptID.BUILD_CHATBOX);
+				}
+				catch (RuntimeException ignore)
+				{
+				}
+			}
+			mapPanDx.set(0);
+			mapPanDy.set(0);
+			mapPanRemX = mapPanRemY = 0;
+			mapSnapshotJson = "{\"open\":false}";
+			return;
+		}
+		mapWasOpen = true;
+
+		// HIDE the chat while the map is open — the relocated chat-at-top would draw over the fullscreen
+		// map's top edge. Restored + rebuilt on the close edge (hiding tears the chat content down).
+		final Widget chat = c.getWidget(chatId);
+		if (chat != null && !chat.isHidden())
+		{
+			chat.setHidden(true);
+		}
+
+		// The relocated minimap cluster + side panel would draw OVER the map window (their apply blocks are
+		// gated off while the map is open) — shove them off-screen (the collapse trick: forced far below the
+		// canvas, NOT hidden, so nothing tears down); the blocks re-force them home after close. The official
+		// mobile app shows NO HUD over the map — the native shell scales the window to fill the screen.
+		if (minimapX >= 0)
+		{
+			shoveOffscreen(c, preEoc ? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER, minimapX);
+		}
+		if (sideX >= 0)
+		{
+			shoveOffscreen(c, preEoc ? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER, sideX);
+		}
+
+		final int dx = mapPanDx.getAndSet(0);
+		final int dy = mapPanDy.getAndSet(0);
+		if (dx != 0 || dy != 0)
+		{
+			final net.runelite.api.worldmap.WorldMap wm = c.getWorldMap();
+			final net.runelite.api.Point pos = wm == null ? null : wm.getWorldMapPosition();
+			final float zoom = wm == null ? 0 : wm.getWorldMapZoom();   // px per tile
+			if (pos != null && zoom > 0)
+			{
+				// Grab-the-map: finger right -> centre moves west; canvas y grows DOWN, world y grows NORTH.
+				// Carry the sub-tile remainder so slow drags at high zoom aren't quantised away.
+				final float fx = mapPanRemX + dx / zoom;
+				final float fy = mapPanRemY + dy / zoom;
+				final int tx = Math.round(fx);
+				final int ty = Math.round(fy);
+				mapPanRemX = fx - tx;
+				mapPanRemY = fy - ty;
+				if (tx != 0 || ty != 0)
+				{
+					wm.setWorldMapPositionTarget(new net.runelite.api.coords.WorldPoint(
+						pos.getX() - tx, pos.getY() + ty, 0));
+				}
+			}
+		}
+
+		final StringBuilder sb = new StringBuilder(192);
+		sb.append("{\"open\":true");
+		appendRect(c, sb, "window", InterfaceID.Worldmap.UNIVERSE, InterfaceID.Worldmap.WINDOW);
+		appendRect(c, sb, "map", InterfaceID.Worldmap.MAP_DISPLAY, InterfaceID.Worldmap.MAP_CONTAINER);
+		appendRect(c, sb, "close", InterfaceID.Worldmap.CLOSE, -1);
+		appendRect(c, sb, "search", InterfaceID.Worldmap.SEARCH, -1);
+		appendRect(c, sb, "zoomIn", InterfaceID.Worldmap.ZOOM_IN, -1);
+		appendRect(c, sb, "zoomOut", InterfaceID.Worldmap.ZOOM_OUT, -1);
+		appendRect(c, sb, "key", InterfaceID.Worldmap.KEY_CONTAINER, -1);          // swipe-scroll target
+		appendRect(c, sb, "maplist", InterfaceID.Worldmap.MAPLIST_CONTAINER, -1);  // surface dropdown (when open)
+		sb.append('}');
+		mapSnapshotJson = sb.toString();
+	}
+
+	/** Park a relocated toplevel container far below the canvas (kept alive, not hidden — no teardown). */
+	private static void shoveOffscreen(Client c, int id, int x)
+	{
+		final Widget w = c.getWidget(id);
+		if (w != null)
+		{
+			w.setForcedPosition(x, CHAT_COLLAPSE_OFFSCREEN_DY);
+			w.revalidate();
+		}
+	}
+
+	private static void appendRect(Client c, StringBuilder sb, String key, int id, int fallbackId)
+	{
+		Widget w = c.getWidget(id);
+		if ((w == null || w.isHidden()) && fallbackId != -1)
+		{
+			w = c.getWidget(fallbackId);
+		}
+		if (w == null || w.isHidden())
+		{
+			return;
+		}
+		final java.awt.Rectangle b = w.getBounds();
+		if (b == null || b.width <= 0 || b.height <= 0)
+		{
+			return;
+		}
+		sb.append(",\"").append(key).append("\":[")
+			.append(b.x).append(',').append(b.y).append(',').append(b.width).append(',').append(b.height).append(']');
 	}
 
 	/** Hide the GRANDPARENT container of a stone (the whole stone-row half — icons + backgrounds). The engine

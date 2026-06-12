@@ -1,0 +1,19 @@
+[z0] GL_VERSION = OpenGL ES 3.0 Metal - 104.1
+[z0] GL_SLVERSION = OpenGL ES GLSL ES 3.00
+[z0] COMPILE scene.frag.assembled.glsl = OK
+[z0] COMPILE scene.vert.assembled.glsl = OK
+[z0] COMPILE shadow.frag.assembled.glsl = OK
+[z0] COMPILE shadow.vert.assembled.glsl = OK
+[z0] COMPILE ui.frag.assembled.glsl = OK
+[z0] COMPILE ui.vert.assembled.glsl = OK
+[z0] SUMMARY compiled=6/6 skipped=0
+[z0] LINK scene = FAIL
+[z0]   infolog: ERROR: Uniform interface block UBOMaterials too large (57120 exceeds max 16384)
+
+[z0] LINK shadow = FAIL
+[z0]   infolog: ERROR: Uniform interface block UBOMaterials too large (57120 exceeds max 16384)
+
+[z0] LINK ui = OK
+[z0] LINK SUMMARY linked=1/3
+[z0] VERDICT = ZONE_GATE_INCOMPLETE
+[z0] log written to /var/mobile/Containers/Data/Application/0E872310-D77E-4178-9C16-757493B8DE96/Documents/gpu-zone-z0-verdict.log

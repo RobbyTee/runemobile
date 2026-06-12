@@ -6,6 +6,7 @@
  * the conditions of the BSD 2-clause license are met (see the project headers).
  */
 #import "GLRecon.h"
+#if !defined(RC_BACKEND_ANGLE)   // EAGL recon — compiled out of the MetalANGLE build (OpenGLES.framework not linked).
 #import <Metal/Metal.h>
 #import <OpenGLES/EAGL.h>
 #import <OpenGLES/ES3/gl.h>
@@ -112,3 +113,13 @@
 }
 
 @end
+
+#else   // MetalANGLE build: OpenGLES.framework (EAGL) is not linked, so this EAGL recon is compiled out. The stub
+        // keeps the GLRecon symbol present. ANGLE GPU caps are proven by the gpu-angle / gpu-present probes instead.
+@implementation GLRecon
++ (void)runWithLog:(void (^)(NSString *line))log
+{
+	if (log) log(@"[glrecon] EAGL recon disabled in the MetalANGLE build (see gpu-angle / gpu-present probes)");
+}
+@end
+#endif

@@ -24,3 +24,10 @@ app/*.xcodeproj/
 # Java payload build dir (Hello.jar itself IS committed — small, deterministic)
 app/jvm-resources/classes/
 app/jvm-resources/client-*-shaded.jar
+# GPU Zone B0 staged RLHD jar (regen: dev-tools/gpu-zone/stage-ios-zone-jar.sh)
+app/jvm-resources/client-*-rlhd.jar
+# GPU Route C L1 kill-test jar (regen: dev-tools/gpu-routec/l1/build-l1-probe.sh)
+app/jvm-resources/routec-l1.jar
+
+# Per-machine remote-deploy config (host/paths/device UUID)
+dev-tools/deploy-remote.conf

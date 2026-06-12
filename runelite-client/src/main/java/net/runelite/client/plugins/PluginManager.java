@@ -519,6 +519,22 @@ public class PluginManager
 	{
 		final PluginDescriptor pluginDescriptor = plugin.getClass().getAnnotation(PluginDescriptor.class);
 		final String keyName = Strings.isNullOrEmpty(pluginDescriptor.configName()) ? plugin.getClass().getSimpleName() : pluginDescriptor.configName();
+		// iOS "renderers as plugins": a renderer plugin (e.g. the GPU plugin) must NOT run unless it is the chosen
+		// renderer — even if a previous session left gpuplugin=true persisted. The native launcher lists such
+		// plugins' config keys in -Drunelite.forceDisablePlugins, and ONLY when that renderer is NOT the active
+		// one (so the chosen renderer's launcher omits its key and can still enable it). This takes precedence
+		// over the persisted config value. Inert with no system property (desktop/normal runs unaffected).
+		final String forceOff = System.getProperty("runelite.forceDisablePlugins", "");
+		if (!forceOff.isEmpty())
+		{
+			for (final String k : forceOff.split(","))
+			{
+				if (keyName.equalsIgnoreCase(k.trim()))
+				{
+					return false;
+				}
+			}
+		}
 		final String value = configManager.getConfiguration(RuneLiteConfig.GROUP_NAME, keyName.toLowerCase());
 		return value != null ? Boolean.parseBoolean(value) : pluginDescriptor.enabledByDefault();
 	}

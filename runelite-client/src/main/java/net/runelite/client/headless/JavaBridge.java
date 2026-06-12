@@ -28,8 +28,6 @@ import com.google.inject.Injector;
 import java.awt.Canvas;
 import java.awt.Color;
 import java.awt.EventQueue;
-import java.awt.Rectangle;
-import java.awt.Shape;
 import java.awt.Toolkit;
 import java.awt.event.FocusEvent;
 import java.awt.event.InputEvent;
@@ -39,17 +37,25 @@ import java.awt.event.MouseWheelEvent;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
+import net.runelite.api.Constants;
+import net.runelite.api.DecorativeObject;
 import net.runelite.api.GameObject;
 import net.runelite.api.GameState;
+import net.runelite.api.GroundObject;
 import net.runelite.api.MainBufferProvider;
-import net.runelite.api.ObjectComposition;
+import net.runelite.api.MenuAction;
+import net.runelite.api.MenuEntry;
 import net.runelite.api.Scene;
 import net.runelite.api.Tile;
 import net.runelite.api.TileObject;
 import net.runelite.api.VarClientInt;
+import net.runelite.api.WallObject;
 import net.runelite.api.WorldView;
+import net.runelite.api.events.MenuOpened;
+import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.client.RuneLite;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.ui.overlay.outline.ModelOutlineRenderer;
 
 /**
@@ -102,52 +108,118 @@ public final class JavaBridge
 
 	private static volatile Client client;
 
-	// Touch forgiveness (snap-to-target). Wired from HeadlessClientUI.init; used to resolve a left tap onto
-	// the nearest entity ON THE CLIENT THREAD. Off by -Drunelite.touch.snap=false; radius (game px) tunable
-	// via -Drunelite.touch.snapRadius. snapCount is diagnostic (confirm snapping fired on device).
+	// Wired from HeadlessClientUI.init; in-game taps resolve through the engine ON THE CLIENT THREAD
+	// (scene/menu reads are only safe there).
 	private static volatile ClientThread clientThread;
-	private static final boolean SNAP_ENABLED =
-		Boolean.parseBoolean(System.getProperty("runelite.touch.snap", "true"));
-	// Gate snap resolution on the world-viewport bounds: only a tap that lands inside the 3D scene viewport
-	// may snap to a world entity. Without this, resolveSnap fires for EVERY in-game left tap regardless of
-	// where it lands — so a tap on the minimap / tabs / chat / inventory (all OUTSIDE the viewport), and in
-	// particular under the coming native edge-tab chrome, can drag a click onto a distant world entity. The
-	// literal click still routes (we never swallow it), so minimap tap-to-walk and inventory taps are
-	// unaffected; only the snap-to-entity resolution is suppressed outside the scene. A/B via the property
-	// (false = legacy snap-everywhere).
-	private static final boolean SNAP_VIEWPORT_GATE =
-		Boolean.parseBoolean(System.getProperty("runelite.touch.snapViewportGate", "true"));
-	// Snap radius = the distance HALO around an entity's silhouette within which a near-miss tap still grabs it.
-	// Default 0 to MATCH the official OSRS mobile app: there the entire model silhouette is the clickbox and you
-	// must tap ON it (no distance forgiveness). Our resolveSnapTarget already treats the full convex hull (NPCs) /
-	// clickbox (objects) as the hit shape via its `contain` test, so radius 0 leaves exactly "tap on the model ->
-	// interact, tap off -> walk" and removes the old 30px halo that grabbed entities you tapped NEAR but not on.
-	// Still tunable via -Drunelite.touch.snapRadius if a small fingertip forgiveness is ever wanted.
-	private static final int SNAP_RADIUS = Integer.getInteger("runelite.touch.snapRadius", 0);
-	private static volatile int snapCount;
+	// Touch-targeting diagnostics (the full coordinate chain + per-tap settle/consume/park-verify trace).
+	// OFF by default — the tap path is device-confirmed; flip on with -Drunelite.touch.diag=true to debug a
+	// regression. All [touchdiag] sites are gated behind this, so when off they (incl. the park-verify read)
+	// go fully inert. Matches the gpudiag/menupeek convention (dev flags default off on master).
+	private static final boolean TOUCH_DIAG =
+		Boolean.parseBoolean(System.getProperty("runelite.touch.diag", "false"));
+	// Hide the vanilla OSRS click cross (the red/yellow animated X at the tap point). It became visible once the
+	// engine UI composites in GPU mode and is redundant with our own native click ring. Blank the cross sprites
+	// once (replace each with a 1x1 transparent sprite). Toggle with -Drunelite.touch.hideClickCross=false.
+	private static final boolean HIDE_CLICK_CROSS =
+		Boolean.parseBoolean(System.getProperty("runelite.touch.hideClickCross", "true"));
+	private static volatile boolean clickCrossHidden;
+
+	/** One-shot: blank the engine's click-cross sprites so no vanilla X draws at the tap (client thread). */
+	private static void hideClickCross(Client c)
+	{
+		if (clickCrossHidden || !HIDE_CLICK_CROSS)
+		{
+			return;
+		}
+		try
+		{
+			final net.runelite.api.SpritePixels[] cross = c.getCrossSprites();
+			if (cross == null)
+			{
+				return;   // not loaded yet — try again on the next tap
+			}
+			final net.runelite.api.SpritePixels blank = c.createSpritePixels(new int[]{0}, 1, 1);
+			for (int i = 0; i < cross.length; i++)
+			{
+				cross[i] = blank;
+			}
+			clickCrossHidden = true;
+			log.info("[touch] vanilla click cross hidden ({} sprites)", cross.length);
+		}
+		catch (RuntimeException ex)
+		{
+			log.debug("[touch] hideClickCross failed", ex);
+		}
+	}
+
+	/** Log the engine canvas + world-viewport geometry against an incoming tap (client thread; reads are safe here). */
+	private static void diagGeometry(Client c, String tag, int x, int y)
+	{
+		if (!TOUCH_DIAG)
+		{
+			return;
+		}
+		try
+		{
+			log.info("[touchdiag] {} tap={},{} canvas={}x{} resized={} viewport=({},{} {}x{}) inVp={}",
+				tag, x, y,
+				c.getCanvasWidth(), c.getCanvasHeight(), c.isResized(),
+				c.getViewportXOffset(), c.getViewportYOffset(), c.getViewportWidth(), c.getViewportHeight(),
+				inWorldViewport(c, x, y));
+		}
+		catch (RuntimeException ex)
+		{
+			log.info("[touchdiag] {} tap={},{} (geometry read failed: {})", tag, x, y, ex.toString());
+		}
+	}
 
 	// Selection feedback, drawn in Java straight into the game frame (so it's tight + tracks the entity, unlike
-	// a native polygon of the loose convex hull). A left tap that resolves onto an NPC/object flashes a tight
-	// MODEL OUTLINE on it for SEL_FLASH_MS. (Walk destination is left to RuneLite's own Tile Indicators
-	// plugin — "Highlight destination tile" — rather than drawing our own marker.) Set + consumed on the
-	// client thread (the tap resolution and {@link #drawSelection}).
+	// a native polygon of the loose convex hull). A left tap whose CONSUMED click (MenuOptionClicked) hit an
+	// NPC/object flashes a tight MODEL OUTLINE on it for SEL_FLASH_MS. (Walk destination is left to RuneLite's
+	// own Tile Indicators plugin — "Highlight destination tile" — rather than drawing our own marker.) Set +
+	// consumed on the client thread (the click confirmation and {@link #drawSelection}).
 	private static final long SEL_FLASH_MS = Long.getLong("runelite.touch.selFlashMs", 1500L);
 	private static Actor selActor;            // selected NPC/player to outline (null = none)
 	private static TileObject selObject;      // selected scene object to outline (null = none)
 	private static long selUntil;             // outline fades after this timestamp
 	private static ModelOutlineRenderer outliner;   // lazily resolved from the injector (tight model outline)
-	// Bumped once each time an in-game left tap resolves to an actual interactable (a hit or a snap), NOT a bare
-	// walk. The native shell polls getInteractTapSeq() and fires a light haptic when it advances (the official
-	// Jagex Mobile "you grabbed something" buzz).
+	// Bumped once each time an in-game left tap's CONSUMED click (MenuOptionClicked truth) was an actual
+	// interaction, NOT a bare walk/cancel. The native shell polls getInteractTapSeq() and fires a light haptic
+	// when it advances (the official Jagex Mobile "you grabbed something" buzz).
 	private static volatile int interactTapSeq;
-	// Smart snap (priority-aware): instead of blindly nudging a left tap onto the nearest clickbox (the scene is
-	// clickbox-saturated, so "nearest" is near-arbitrary), let the ENGINE decide. Move to the literal tap and
-	// read its top menu action: if it's already a real interact, click there (never hijack a direct hit). Only
-	// if the tap would merely "Walk here" (you missed) do we nudge to the nearest entity — and we VALIDATE the
-	// nudge yields an interact before committing, else fall back to walking the literal point. Off by
-	// -Drunelite.touch.snapSmart=false (legacy proactive geometric snap).
-	private static final boolean SMART_SNAP =
-		Boolean.parseBoolean(System.getProperty("runelite.touch.snapSmart", "true"));
+
+	// ===== Engine-resolved tap state machine (TOUCH-TARGETING-PLAN.md Phase 1) =====
+	// A left tap is never re-hit-tested by the engine: the press is consumed against the menu the engine
+	// built from the cursor position earlier IN THE SAME CLIENT TICK. So we move the synthetic cursor to the
+	// literal tap point, WAIT until the engine has demonstrably resolved it (cursor-position match AND a
+	// stable left-click tail fingerprint — the MenuPeek settle observable), only then post the click, and
+	// classify what actually fired from MenuOptionClicked. All state below is CLIENT-THREAD-ONLY (the tap
+	// ingress runs under ClientThread.invoke, tapTick under Hooks.draw, the EventBus handlers under the
+	// engine's click-detection step — all the same thread).
+	private enum TapState
+	{
+		IDLE, AWAIT_ENGINE, CLICKED
+	}
+
+	private static TapState tapState = TapState.IDLE;
+	private static int tapX;              // the pending tap point (canvas px) — also the click point
+	private static int tapY;
+	private static int settleFrames;      // frames spent in AWAIT_ENGINE since the move was posted
+	private static int stableFrames;      // consecutive frames with position match + identical tail fp
+	private static String lastTailFp;     // previous frame's tail fingerprint
+	private static int posMatchFrame;     // first frame the engine cursor matched the tap (-1 = never; diag)
+	private static String clickFp;        // tail fp at click-post time (diag: predicted vs consumed, the ⇔ check)
+	private static int clickedFrames;     // frames spent in CLICKED waiting for the truth event
+	private static boolean queuedTap;     // exactly one follow-up tap queued while CLICKED
+	private static int queuedX;
+	private static int queuedY;
+	private static volatile int parkVerifyFrames;  // diag countdown: read the tail a few frames after a park
+	// Settle gate tuning. MAX_SETTLE frames is the fail-open cap (never drop a tap); STABLE_NEEDED consecutive
+	// identical reads accept. Desktop settles ≤2 frames (MenuPeek-proven); the cap covers a lagging device EDT.
+	private static final int MAX_SETTLE = Integer.getInteger("runelite.touch.settleMax", 12);
+	private static final int STABLE_NEEDED = Integer.getInteger("runelite.touch.settleStable", 2);
+	private static final int CLICKED_TIMEOUT = Integer.getInteger("runelite.touch.clickTimeout", 10);
+	private static boolean truthSubscribed;  // EventBus registration is one-shot (client thread)
 
 	// Published complete frames for the live blit. The native side reads at the display refresh (up to
 	// 120 Hz) but the engine composites at ~50 fps, so reading mainBufferProvider directly catches it
@@ -163,8 +235,29 @@ public final class JavaBridge
 	private static int[] bufB;
 	private static boolean useA = true;
 
-	// GPU (Route C) frame-dump diagnostic — off unless -Drunelite.gpuframedump=true. Saves a handful of in-world
-	// GPU frames to disk so the AG2 device gate has pullable colour/flip evidence.
+	// iOS load-in flash guard (GPU mode). The published GPU frame is the composited 3D+UI. When transitioning
+	// from the login/loading screen into the world, RLHD clears the scene to the region's SKY/fog colour (a
+	// daytime light blue) and renders it for the frames before the zone geometry finishes uploading — and since
+	// the OSRS loading screen doesn't cover the 3D viewport in this composite (unlike desktop), that bare sky
+	// flashes through. Device timing (gpudiag) showed the FIRST drawScene fires once the world is already
+	// LOGGED_IN + viewport-sized, but geometry is still uploading for a few frames after that, so releasing on the
+	// very first scene draw still publishes a sky frame. So we COUNT scene draws and hold the previous frame (the
+	// loading screen) until SCENE_WARMUP of them have rendered — by then the zones are uploaded and the world has
+	// geometry. The counter is re-armed to 0 whenever the game leaves the in-world states (login screen / hopping
+	// / connection lost — but NOT plain LOADING, so seamless in-play region streaming while running isn't held).
+	private static volatile int sceneDrawCount;
+	private static final int SCENE_WARMUP = 6;
+
+	/** Hooks.drawScene -> count a rendered 3D frame. */
+	public static void noteSceneDraw() { sceneDrawCount++; }
+	/** Hooks.draw on a non-world game state -> re-arm the load-in hold. */
+	public static void armSceneHold() { sceneDrawCount = 0; }
+	/** Direct-present (no gpuPublish gate): the native shell polls this to know when the world is warmed up
+	 * (geometry uploaded), so it can reveal the GPU layer over the CPU loading-screen blit without a sky flash. */
+	public static boolean presentReady() { return sceneDrawCount >= SCENE_WARMUP; }
+
+	// GPU Route C white-flash diagnostic (one-shot): dump a handful of in-world composited GPU frames to PNG so
+	// the render bug can be seen off-device (the live frame can't be pulled). Gated -Drunelite.gpuframedump=true.
 	private static final boolean FRAME_DUMP = Boolean.getBoolean("runelite.gpuframedump");
 	private static int frameDumpCount;
 	private static int lastFrameDumpSeq;
@@ -172,7 +265,7 @@ public final class JavaBridge
 	// Input bookkeeping (only ever touched from the single native UI thread that drives onTouch/onClick).
 	private static boolean focused;       // FocusEvent gained — keyboard/mouse accepted
 	private static volatile boolean entered;  // MOUSE_ENTERED posted — pointer currently "present" (volatile:
-	                                      // clearHover may run from the client thread after a snap tap)
+	                                      // parkPointer runs from the client thread after a consumed tap)
 	private static boolean pressed;
 	private static int pressButton = MouseEvent.BUTTON1;
 	private static boolean shiftHeld;     // sticky-Shift: a held VK_SHIFT KEY_PRESSED with no release (see setShiftHeld)
@@ -202,8 +295,8 @@ public final class JavaBridge
 	}
 
 	/**
-	 * Wire the {@link ClientThread} used to resolve touch-snap on the game thread. Called once from
-	 * {@code HeadlessClientUI.init}. Without it, left taps fall back to the literal point (no snap).
+	 * Wire the {@link ClientThread} used to resolve in-game taps on the game thread. Called once from
+	 * {@code HeadlessClientUI.init}. Without it, taps fall back to the plain one-batch click.
 	 */
 	public static void setClientThread(ClientThread ct)
 	{
@@ -256,7 +349,7 @@ public final class JavaBridge
 	}
 
 	// ---- GPU (Route C) publish seam ---------------------------------------------------------------------
-	// In GPU mode the composited frame lives in the EGL FBO, not mainBufferProvider. The native swapBuffers
+	// In GPU mode the composited frame lives in the EAGL FBO, not mainBufferProvider. The native swapBuffers
 	// shim glReadPixels-es the FBO straight into one of the SAME double buffers and publishes it, becoming the
 	// SOLE frameSeq publisher (Hooks gates the CPU snapshot off when isGpu). The two calls run back-to-back on
 	// the client thread (no useA flip between them), so the buffer gpuFrameBackBuffer hands out is exactly the
@@ -285,6 +378,11 @@ public final class JavaBridge
 	/** Publish the back buffer the native shim just filled (vertical-flipped, R/B-swizzled 0x00RRGGBB). */
 	public static void gpuPublish(int w, int h)
 	{
+		// Hold the last good frame through the load-in warmup (the sky-flash guard, above). Not bumping frameSeq
+		// keeps the native reader on the previous frame; useA doesn't flip, so the back buffer the shim just
+		// filled is simply overwritten next frame and the double buffering stays consistent.
+		if (sceneDrawCount < SCENE_WARMUP)
+			return;
 		frameW = w;
 		frameH = h;
 		frame = useA ? bufA : bufB;
@@ -337,7 +435,7 @@ public final class JavaBridge
 		}
 	}
 
-	/** Canvas dimensions for sizing the offscreen GL FBO (queried by the native getFramebuffer). 0 if no client. */
+	/** Canvas dimensions for sizing the EAGL FBO (queried by the native createGLContext). 0 if no client yet. */
 	public static int canvasWidth()
 	{
 		final Client c = client;
@@ -409,8 +507,8 @@ public final class JavaBridge
 
 	/**
 	 * Assert focus + pointer <em>presence</em> for an interaction: focus once, then a {@code MOUSE_ENTERED}
-	 * if the pointer is currently "absent" (we exit it after taps / on camera drags so nothing stays
-	 * highlighted — see {@link #clearHover()}). Mirrors what {@code HeadlessLogin} primes before a click.
+	 * if the pointer is currently "absent" (we park it after taps / on camera drags so nothing stays
+	 * highlighted — see {@link #parkPointer()}). Mirrors what {@code HeadlessLogin} primes before a click.
 	 */
 	private static void primeFocus(EventQueue q, Canvas canvas, long t, int x, int y)
 	{
@@ -423,20 +521,25 @@ public final class JavaBridge
 	}
 
 	/**
-	 * Make the engine's pointer "absent" — post a {@code MOUSE_EXITED} so nothing stays hovered/highlighted.
-	 * On a touch device there is no persistent cursor: a finger is only "on" the screen during a tap. Without
-	 * this, the engine's mouse stays frozen at the last tap point, and a one-finger <em>camera</em> drag
-	 * (which moves the world, not the pointer) rotates scenery <em>under</em> that frozen point — so random
-	 * objects light up and a stale left-click action builds there, which the next walk-tap then triggers.
-	 * The native shell calls this when a camera/pinch gesture begins (and we exit after each tap), so the
-	 * highlight only ever appears at the point you are actually tapping.
+	 * Native-facing alias for {@link #parkPointer()} (the JNI side resolves this name; keep it stable).
+	 * Called when a camera/pinch gesture begins so nothing stays hovered/highlighted under a frozen cursor.
 	 */
 	public static void clearHover()
 	{
-		if (!entered)
-		{
-			return;
-		}
+		parkPointer();
+	}
+
+	/**
+	 * Park the synthetic cursor at a neutral point: {@code MOUSE_MOVED} to (−1,−1), then {@code MOUSE_EXITED}.
+	 * The engine does NOT clear its tracked mouse position on EXITED (bug 3: park-by-exit left the cursor at
+	 * the last tap, the engine kept picking there each tick, and a zoom re-projected a model under it — the
+	 * stuck hover label). Hover ends only by MOVING to a point that picks nothing; the EXITED is just AWT
+	 * hygiene. On a touch device there is no persistent cursor — a finger is only "on" the screen during a
+	 * tap — so this runs after every consumed tap / menu select and when a camera/pinch gesture begins.
+	 * (Fallback if the engine ever clamps negative coords: park off-canvas at canvas+50 — device-verify #1.)
+	 */
+	public static void parkPointer()
+	{
 		final Canvas canvas = liveCanvas();
 		if (canvas == null)
 		{
@@ -444,9 +547,14 @@ public final class JavaBridge
 		}
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_EXITED, t, 0, -1, -1, 0, false));
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t, 0, -1, -1, 0, false));
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_EXITED, t + 1, 0, -1, -1, 0, false));
 		entered = false;
-		log.debug("[snap] clearHover (camera/pinch begin) -> MOUSE_EXITED");
+		if (TOUCH_DIAG)
+		{
+			parkVerifyFrames = 3;   // few frames out: the EDT folds the move, then a tick rebuilds the menu
+		}
+		log.debug("[touch] parkPointer -> MOVED(-1,-1) + EXITED");
 	}
 
 	/**
@@ -458,15 +566,12 @@ public final class JavaBridge
 	 * a recognized tap or long-press, so a drag (which streams through {@link #onTouch}) never produces a
 	 * spurious click.
 	 *
-	 * <p><b>Touch forgiveness (Phase 6).</b> A finger is far fatter than a mouse pixel, so a left tap that
-	 * lands <em>near</em> an interactable (but misses the exact clickbox) is snapped onto it — the
-	 * touch-equivalent of OSRS Mobile's enlarged interaction. We cannot change the gamepack's exact-pixel
-	 * hit test (it is the unmodified engine), but we own the {@code (x,y)} we feed it: for a left tap in-game
-	 * we resolve the nearest entity on the <em>client thread</em> (scene geometry is only safe to read there)
-	 * and then synthesize the click at the resolved point — ~1 frame later, imperceptible for a tap. If the
-	 * tap already lands on a clickbox, or nothing interactable is within {@link #snapRadius()}, the original
-	 * point is used (so a deliberate tap on empty ground still walks). Right-clicks (long-press) are left
-	 * unsnapped — that menu already has slide-to-select forgiveness.
+	 * <p><b>Engine-resolved tap.</b> A left tap in-game always clicks the <em>literal tap point</em> — same
+	 * as the official OSRS mobile client (no aim assist; the model silhouette is the clickbox, with the
+	 * engine's own built-in pick slop). The engine makes every decision: we move the synthetic cursor to the
+	 * tap, let the per-tick menu pipeline resolve it, then post the click there. What the click actually did
+	 * is read back from {@code MenuOptionClicked} (the consumed entry) — feedback comes from that truth, not
+	 * from a pre-click geometric guess.
 	 */
 	public static void onClick(int x, int y, int button)
 	{
@@ -495,76 +600,398 @@ public final class JavaBridge
 	}
 
 	/**
-	 * In-game right-tap resolution (client thread): resolve the snap target (same logic as a left tap), then
-	 * open the engine menu at the snapped point — move a cycle before the right-press so the engine builds the
-	 * menu FOR that point (a same-batch move+press would use the previous cursor position). Falls back to the
-	 * literal point when nothing interactable is within reach.
+	 * In-game right-tap (client thread): open the engine menu at the literal press point — move a cycle
+	 * before the right-press so the engine builds the menu FOR that point (a same-batch move+press would use
+	 * the previous cursor position). No aim assist, same as the official mobile client; the open menu already
+	 * has slide-to-select forgiveness.
 	 */
 	private static void startRightClick(Canvas canvas, ClientThread ct, Client c, int x, int y)
 	{
-		int cx = x, cy = y;
-		final boolean snap = SNAP_ENABLED && SMART_SNAP && (!SNAP_VIEWPORT_GATE || inWorldViewport(c, x, y));
-		if (snap)
-		{
-			final SnapTarget t = resolveSnapTarget(c, x, y);
-			if (t != null)
-			{
-				cx = t.point[0];
-				cy = t.point[1];
-			}
-		}
-		final int fx = cx, fy = cy;
-		postMove(canvas, fx, fy);
-		ct.invokeLater(() -> postClickButtons(canvas, fx, fy, MouseEvent.BUTTON3));
+		diagGeometry(c, "R", x, y);
+		hideClickCross(c);
+		postMove(canvas, x, y);
+		ct.invokeLater(() -> postClickButtons(canvas, x, y, MouseEvent.BUTTON3));
 	}
 
 	/**
-	 * In-game left-tap resolution (client thread). Always moves the pointer to the target a cycle before the
-	 * click (so the engine recomputes the left-click action FOR that point — posting move+click in one batch
-	 * fires the action for the PREVIOUS cursor position, the old "rotate then walk-tap mis-clicks" bug).
-	 *
-	 * <p>Snapping only applies inside the world viewport ({@link #SNAP_VIEWPORT_GATE}) — a tap on the UI never
-	 * snaps. With {@link #SMART_SNAP} the resolution is <b>entity-aware</b> ({@link #resolveSnapTarget}):
-	 * strongly prefer actors over the carpet of ground/object clickboxes, click the entity's own (live) hull,
-	 * and arm a tight model-outline flash on it ({@link #drawSelection}). A tap that resolves to walk arms the
-	 * destination-tile marker instead. Otherwise the legacy proactive geometric nudge is used.
+	 * In-game left-tap ingress (client thread). Always targets the LITERAL tap point — no centroid/snap
+	 * redirection; the engine's own pick (model silhouette + built-in slop) decides what the tap hit.
+	 * With the engine menu open the tap selects the row under it directly (the engine consumes it against
+	 * the OPEN menu, no settle needed). Otherwise the tap enters the state machine: post the move, wait for
+	 * the engine to demonstrably resolve the point ({@link #tapTick}), click, and classify the consumed
+	 * entry ({@link #onMenuOptionClicked}) — outline/haptic feedback comes from that truth.
 	 */
 	private static void startLeftTap(Canvas canvas, ClientThread ct, Client c, int x, int y)
 	{
-		final boolean snap = SNAP_ENABLED && (!SNAP_VIEWPORT_GATE || inWorldViewport(c, x, y));
-		if (SMART_SNAP && snap)
+		diagGeometry(c, "L", x, y);
+		hideClickCross(c);
+		ensureTruthSubscribed();
+		if (c.isMenuOpen())
 		{
-			final SnapTarget t = resolveSnapTarget(c, x, y);
-			if (t != null)
+			postMove(canvas, x, y);
+			ct.invokeLater(() ->
 			{
-				armEntityOutline(t.actor, t.object);   // tight model outline, drawn in-frame
-				interactTapSeq++;                      // signal the native shell to fire the interactable-hit haptic
-				final int cx = t.point[0];
-				final int cy = t.point[1];
-				if (!t.literal)
-				{
-					snapCount++;
-				}
-				postMove(canvas, cx, cy);
-				ct.invokeLater(() -> postLeftTapThenClear(canvas, ct, cx, cy));
-				log.debug("[snap] smart: tap {},{} -> {} {},{} ({})",
-					x, y, t.literal ? "hit" : "SNAP", cx, cy, t.actor != null ? "actor" : "object");
+				postClickButtons(canvas, x, y, MouseEvent.BUTTON1);
+				ct.invokeLater(JavaBridge::parkPointer);
+			});
+			return;
+		}
+		if (tapState == TapState.CLICKED)
+		{
+			// Mid-confirmation: queue exactly ONE follow-up tap; it starts on the truth/timeout transition.
+			queuedTap = true;
+			queuedX = x;
+			queuedY = y;
+			return;
+		}
+		// IDLE starts fresh; a new tap during AWAIT_ENGINE REPLACES the pending tap (re-move, reset counters).
+		beginAwait(canvas, x, y);
+	}
+
+	/** Record the pending tap, post the cursor move to it, and enter {@code AWAIT_ENGINE} (client thread). */
+	private static void beginAwait(Canvas canvas, int x, int y)
+	{
+		tapX = x;
+		tapY = y;
+		settleFrames = 0;
+		stableFrames = 0;
+		lastTailFp = null;
+		posMatchFrame = -1;
+		tapState = TapState.AWAIT_ENGINE;
+		postMove(canvas, x, y);
+	}
+
+	/**
+	 * Per-frame settle gate + click watchdog — called once per frame from {@code Hooks.draw} (client thread,
+	 * after the engine tick rebuilt the menu). In {@code AWAIT_ENGINE}: accept once the engine's tracked
+	 * cursor equals the tap point (proves the EDT folded our move) AND the left-click tail fingerprint is
+	 * identical for {@link #STABLE_NEEDED} consecutive frames (proves the engine rebuilt the menu from it) —
+	 * then post the real click at the tap point. {@link #MAX_SETTLE} frames caps the wait (fail-open: click
+	 * anyway, never drop a tap). In {@code CLICKED}: time out back to IDLE if no truth event arrives
+	 * (shouldn't happen — MenuOptionClicked fires for every left click incl. walk/Cancel).
+	 */
+	public static void tapTick(Client c)
+	{
+		if (!ENABLED || c == null)
+		{
+			return;
+		}
+		if (parkVerifyFrames > 0 && tapState == TapState.IDLE)
+		{
+			if (--parkVerifyFrames == 0)
+			{
+				final net.runelite.api.Point mp = c.getMouseCanvasPosition();
+				log.info("[touchdiag] park-verify: mouse={},{} tail={} (expect off-canvas + Cancel-only)",
+					mp == null ? "?" : mp.getX(), mp == null ? "?" : mp.getY(), tailFingerprint(c));
+			}
+			return;
+		}
+		if (tapState == TapState.IDLE)
+		{
+			return;
+		}
+		final Canvas canvas = liveCanvas();
+		if (c.getGameState() != GameState.LOGGED_IN || canvas == null)
+		{
+			tapState = TapState.IDLE;   // world went away mid-tap: drop it (nothing sensible to click)
+			queuedTap = false;
+			return;
+		}
+		if (tapState == TapState.AWAIT_ENGINE)
+		{
+			if (c.isMenuOpen())
+			{
+				// A menu opened while this tap was settling (a long-press superseded it). The tap predates
+				// the menu — clicking now would select an arbitrary row. Drop it; the menu flow owns input.
+				// (While a menu is open the engine also stops rebuilding entries, so the gate would falsely
+				// "stabilize" against the frozen tail.)
+				tapState = TapState.IDLE;
+				queuedTap = false;
 				return;
 			}
-			// Nothing interactable within reach -> a deliberate walk. Clear any lingering outline; the walk
-			// destination is shown by RuneLite's Tile Indicators plugin, not us.
+			settleFrames++;
+			final net.runelite.api.Point mp = c.getMouseCanvasPosition();
+			final boolean posMatch = mp != null && mp.getX() == tapX && mp.getY() == tapY;
+			if (posMatch && posMatchFrame < 0)
+			{
+				posMatchFrame = settleFrames;
+			}
+			final String fp = tailFingerprint(c);
+			if (posMatch && fp.equals(lastTailFp))
+			{
+				stableFrames++;
+			}
+			else
+			{
+				stableFrames = 0;
+				lastTailFp = fp;
+			}
+			if (stableFrames >= STABLE_NEEDED || settleFrames >= MAX_SETTLE)
+			{
+				if (TOUCH_DIAG)
+				{
+					log.info("[touchdiag] L settle: {} frames (posMatch@{}) {} tail={}",
+						settleFrames, posMatchFrame,
+						stableFrames >= STABLE_NEEDED ? "stable" : "TIMEOUT-failopen", fp);
+				}
+				clickFp = fp;
+				clickedFrames = 0;
+				tapState = TapState.CLICKED;
+				postClickButtons(canvas, tapX, tapY, MouseEvent.BUTTON1);
+			}
+		}
+		else if (tapState == TapState.CLICKED)
+		{
+			clickedFrames++;
+			if (clickedFrames >= CLICKED_TIMEOUT)
+			{
+				log.info("[touchdiag] L CLICKED timeout after {} frames — no MenuOptionClicked/MenuOpened (unexpected)",
+					clickedFrames);
+				finishTap();
+			}
+		}
+	}
+
+	/**
+	 * One-shot EventBus registration for the truth events (client thread, lazy — the injector is live by the
+	 * first in-game tap). Typed-consumer registration (no annotation scan); priority 0 is fine — we read the
+	 * consumed entry, which is final by the time the event posts.
+	 */
+	private static void ensureTruthSubscribed()
+	{
+		if (truthSubscribed)
+		{
+			return;
+		}
+		try
+		{
+			final Injector inj = RuneLite.getInjector();
+			if (inj == null)
+			{
+				return;
+			}
+			final EventBus eb = inj.getInstance(EventBus.class);
+			eb.register(MenuOptionClicked.class, JavaBridge::onMenuOptionClicked, 0f);
+			eb.register(MenuOpened.class, JavaBridge::onMenuOpened, 0f);
+			truthSubscribed = true;
+			log.info("[touch] truth events subscribed (MenuOptionClicked/MenuOpened)");
+		}
+		catch (RuntimeException ex)
+		{
+			log.debug("[touch] EventBus subscribe failed (will retry next tap)", ex);
+		}
+	}
+
+	/**
+	 * The truth: the engine consumed a left click (fires for EVERY left click, incl. walk and Cancel; carries
+	 * the consumed {@link MenuEntry}). Only acts while a tap of ours is in flight ({@code CLICKED}). Classify
+	 * the entry: an interaction bumps {@link #interactTapSeq} (native red ring + haptic) and arms the tight
+	 * model outline FROM THE ENTRY (actor ref, or object via scene coords) — so "outline shown ⇔ interaction
+	 * happened" holds by construction. A walk leaves feedback to the native yellow ring + the Tile Indicators
+	 * plugin. Then park the cursor and start any queued follow-up tap.
+	 */
+	private static void onMenuOptionClicked(MenuOptionClicked ev)
+	{
+		if (tapState != TapState.CLICKED)
+		{
+			return;
+		}
+		final Client c = client;
+		final ClientThread ct = clientThread;
+		final MenuEntry entry = ev.getMenuEntry();
+		final MenuAction type = entry == null ? null : entry.getType();
+		if (TOUCH_DIAG)
+		{
+			final String consumedFp = fingerprint(entry);
+			log.info("[touchdiag] L consumed: type={} fp={} predicted={} ({})",
+				type, consumedFp, clickFp, consumedFp.equals(clickFp) ? "MATCH" : "MISMATCH");
+		}
+		if (type == MenuAction.WALK)
+		{
+			// A deliberate walk: clear any lingering outline (the destination tile is RuneLite's Tile
+			// Indicators plugin); the native ring stays yellow because interactTapSeq does not advance.
 			selActor = null;
 			selObject = null;
 			selUntil = 0;
-			postMove(canvas, x, y);
-			ct.invokeLater(() -> postLeftTapThenClear(canvas, ct, x, y));
-			log.debug("[snap] smart: tap {},{} -> walk (no entity within {}px)", x, y, snapRadius());
+			if (TOUCH_DIAG && c != null && ct != null)
+			{
+				final int cx = tapX, cy = tapY;
+				ct.invokeLater(() -> ct.invokeLater(() -> diagWalkDest(c, cx, cy)));
+			}
+		}
+		else if (type != null && type != MenuAction.CANCEL)
+		{
+			interactTapSeq++;   // the click DID interact -> native red ring + haptic
+			armOutlineFromEntry(c, entry, type);
+		}
+		finishTap();
+	}
+
+	/**
+	 * The click force-opened the engine menu instead of executing (deprioritized top entry — rare). Hand off
+	 * to the existing native menu flow (the long-press path already polls {@code menuBuilding}/
+	 * {@code menuPeekSnapshot} and shows the native rows). NO park — the menu anchors to the cursor point.
+	 */
+	private static void onMenuOpened(MenuOpened ev)
+	{
+		if (tapState != TapState.CLICKED)
+		{
 			return;
 		}
-		final int[] p = snap ? resolveSnap(c, x, y) : new int[]{x, y};
-		postMove(canvas, p[0], p[1]);
-		final int px = p[0], py = p[1];
-		ct.invokeLater(() -> postLeftTapThenClear(canvas, ct, px, py));
+		if (TOUCH_DIAG)
+		{
+			log.info("[touchdiag] L click force-opened the engine menu -> native menu flow");
+		}
+		queuedTap = false;
+		tapState = TapState.IDLE;
+	}
+
+	/**
+	 * Consume the {@code CLICKED} state: start the queued follow-up tap if there is one (its cursor move
+	 * supersedes any park), else park the cursor at the neutral point one cycle later and go {@code IDLE}.
+	 */
+	private static void finishTap()
+	{
+		final Canvas canvas = liveCanvas();
+		if (queuedTap && canvas != null)
+		{
+			queuedTap = false;
+			beginAwait(canvas, queuedX, queuedY);
+			return;
+		}
+		queuedTap = false;
+		tapState = TapState.IDLE;
+		final ClientThread ct = clientThread;
+		if (ct != null)
+		{
+			ct.invokeLater(JavaBridge::parkPointer);
+		}
+		else
+		{
+			parkPointer();
+		}
+	}
+
+	/**
+	 * Arm the tight model outline from the CONSUMED menu entry: actors straight off the entry; objects looked
+	 * up by the entry's scene coords + id (the InteractHighlightPlugin.findTileObject pattern). Widget /
+	 * ground-item / runelite ops get the haptic but no model outline.
+	 */
+	private static void armOutlineFromEntry(Client c, MenuEntry entry, MenuAction type)
+	{
+		try
+		{
+			final Actor actor = entry.getActor();   // set for NPC_* / PLAYER_* ops
+			if (actor != null)
+			{
+				armEntityOutline(actor, null);
+				return;
+			}
+			switch (type)
+			{
+				case GAME_OBJECT_FIRST_OPTION:
+				case GAME_OBJECT_SECOND_OPTION:
+				case GAME_OBJECT_THIRD_OPTION:
+				case GAME_OBJECT_FOURTH_OPTION:
+				case GAME_OBJECT_FIFTH_OPTION:
+				case WIDGET_TARGET_ON_GAME_OBJECT:
+					final TileObject o = findTileObject(c, entry.getWorldViewId(),
+						entry.getParam0(), entry.getParam1(), entry.getIdentifier());
+					if (o != null)
+					{
+						armEntityOutline(null, o);
+					}
+					break;
+				default:
+					break;
+			}
+		}
+		catch (RuntimeException ex)
+		{
+			log.debug("[touch] outline-from-entry failed", ex);
+		}
+	}
+
+	/**
+	 * Find the {@link TileObject} a consumed object op referenced: {@code param0/param1} are scene coords in
+	 * the entry's world view ({@code +40} extended-tiles offset for the top-level view), {@code id} matches
+	 * the object on that tile. The InteractHighlightPlugin pattern, null-hardened (client thread).
+	 */
+	private static TileObject findTileObject(Client c, int worldId, int x, int y, int id)
+	{
+		if (c == null)
+		{
+			return null;
+		}
+		final WorldView wv = c.getWorldView(worldId);
+		if (wv == null)
+		{
+			return null;
+		}
+		final int offset = worldId == WorldView.TOPLEVEL ? (Constants.EXTENDED_SCENE_SIZE - Constants.SCENE_SIZE) / 2 : 0;
+		final int sx = x + offset;
+		final int sy = y + offset;
+		final Scene scene = wv.getScene();
+		final Tile[][][] tiles = scene == null ? null : scene.getExtendedTiles();
+		final int plane = wv.getPlane();
+		if (tiles == null || plane < 0 || plane >= tiles.length
+			|| sx < 0 || sx >= tiles[plane].length || sy < 0 || sy >= tiles[plane][sx].length)
+		{
+			return null;
+		}
+		final Tile tile = tiles[plane][sx][sy];
+		if (tile == null)
+		{
+			return null;
+		}
+		for (GameObject gameObject : tile.getGameObjects())
+		{
+			if (gameObject != null && gameObject.getId() == id)
+			{
+				return gameObject;
+			}
+		}
+		final WallObject wallObject = tile.getWallObject();
+		if (wallObject != null && wallObject.getId() == id)
+		{
+			return wallObject;
+		}
+		final DecorativeObject decorativeObject = tile.getDecorativeObject();
+		if (decorativeObject != null && decorativeObject.getId() == id)
+		{
+			return decorativeObject;
+		}
+		final GroundObject groundObject = tile.getGroundObject();
+		if (groundObject != null && groundObject.getId() == id)
+		{
+			return groundObject;
+		}
+		return null;
+	}
+
+	/** Fingerprint of one menu entry (the MenuPeek shape: option|target|type|id|p0|p1|itemId). */
+	private static String fingerprint(MenuEntry e)
+	{
+		if (e == null)
+		{
+			return "EMPTY";
+		}
+		return e.getOption() + "|" + e.getTarget() + "|" + e.getType()
+			+ "|" + e.getIdentifier() + "|" + e.getParam0() + "|" + e.getParam1() + "|" + e.getItemId();
+	}
+
+	/** Fingerprint of the current left-click default = the TAIL of getMenuEntries() (ascending priority). */
+	private static String tailFingerprint(Client c)
+	{
+		try
+		{
+			final MenuEntry[] e = c.getMenu().getMenuEntries();
+			return (e == null || e.length == 0) ? "EMPTY" : fingerprint(e[e.length - 1]);
+		}
+		catch (RuntimeException ex)
+		{
+			return "ERR";
+		}
 	}
 
 	/** Arm a tight outline flash on the selected entity. */
@@ -575,244 +1002,20 @@ public final class JavaBridge
 		selUntil = System.currentTimeMillis() + SEL_FLASH_MS;
 	}
 
-	/**
-	 * Post the left press/release/click at {@code (x,y)}, then clear the hover one cycle later. A touchscreen has
-	 * no persistent cursor, so we don't leave the synthetic one parked on the tapped target — otherwise the
-	 * engine keeps that object's action label up and the NEXT tap can re-resolve to it (the "stuck on the stairs"
-	 * bug, originally seen via the menu and the same mechanism for plain taps). The action commits at click time,
-	 * so the trailing {@code MOUSE_EXITED} never cancels it; it just returns the engine to a cursor-less state.
-	 */
-	private static void postLeftTapThenClear(Canvas canvas, ClientThread ct, int x, int y)
-	{
-		postClickButtons(canvas, x, y, MouseEvent.BUTTON1);
-		ct.invokeLater(JavaBridge::clearHover);
-	}
-
-	/** The chosen tap target: the entity refs to outline, the {@code point} to click, and how it was hit. */
-	private static final class SnapTarget
-	{
-		final Actor actor;      // the selected NPC/player (null if an object)
-		final TileObject object;// the selected scene object (null if an actor)
-		final int[] point;      // click point: the literal tap (a direct hit) or the entity's hull centroid
-		final boolean literal;  // true = tapped inside the hull (click the literal point, engine hits it)
-
-		SnapTarget(Actor actor, TileObject object, int[] point, boolean literal)
-		{
-			this.actor = actor;
-			this.object = object;
-			this.point = point;
-			this.literal = literal;
-		}
-	}
-
-	/** Accumulates, per category, the entity the tap is inside (if any) and the nearest entity within radius. */
-	private static final class Pick
-	{
-		Object contain;          // owner (Actor/TileObject) whose shape contains the tap
-		Shape containShape;
-		Object nearest;          // owner of the nearest shape within radius
-		Shape nearestShape;
-		double nearestD = Double.MAX_VALUE;
-
-		void consider(Object owner, Shape s, int x, int y, int r)
-		{
-			if (s == null)
-			{
-				return;
-			}
-			if (s.contains(x, y))
-			{
-				if (contain == null)
-				{
-					contain = owner;
-					containShape = s;
-				}
-				return;
-			}
-			final Rectangle b = s.getBounds();
-			if (b.width <= 0 || b.height <= 0)
-			{
-				return;
-			}
-			final double d = distToRect(x, y, b);
-			if (d <= r && d < nearestD)
-			{
-				nearestD = d;
-				nearest = owner;
-				nearestShape = s;
-			}
-		}
-	}
-
-	/**
-	 * Entity-aware tap resolution (client thread). Considers actors (NPCs/players, by convex hull) and
-	 * <b>interactable</b> scene objects (by clickbox) — stairs, doors, trees, rocks, banks, … — and clicks the
-	 * entity's own live hull/clickbox centroid so a near-miss still lands on it. Resolution: a containing actor
-	 * outranks a containing object (OSRS-like); otherwise snap to whichever interactable is CLOSEST to the finger
-	 * (tie -> actor). Returns {@code null} if nothing interactable is within {@link #snapRadius()} (a walk).
-	 *
-	 * <p>The reason objects can be included again without regressing into the old "snaps to ground clutter"
-	 * behaviour is {@link #objectInteractable}: only objects whose {@link ObjectComposition} carries a real menu
-	 * action (Mine/Chop/Open/Climb/Bank/…) are considered, so the carpet of non-interactive decoration / wall /
-	 * ground clickboxes that blankets a busy scene no longer competes. Ground items (TileItem) have no clickbox
-	 * and are handled separately. A direct tap on any object still also works via the literal-point click.
-	 */
-	static SnapTarget resolveSnapTarget(Client c, int x, int y)
+	/** Log the resolved walk destination (scene coords) against the clicked viewport point and the player tile. */
+	private static void diagWalkDest(Client c, int clickX, int clickY)
 	{
 		try
 		{
-			final WorldView wv = c.getTopLevelWorldView();
-			if (wv == null)
-			{
-				return null;
-			}
-			final int r = snapRadius();
-			final Pick actors = new Pick();
-
-			// NPCs only — players are intentionally excluded (no snap, no outline): outlining/snapping to other
-			// real players is noise, and a direct literal tap still interacts with one via the engine's own hit.
-			for (Actor a : wv.npcs())
-			{
-				actors.consider(a, a.getConvexHull(), x, y, r);
-			}
-
-			// Interactable scene objects on the current plane (action-filtered — see objectInteractable).
-			final Pick objects = new Pick();
-			final Scene scene = wv.getScene();
-			final int plane = wv.getPlane();
-			final Tile[][][] tiles = scene == null ? null : scene.getTiles();
-			if (tiles != null && plane >= 0 && plane < tiles.length)
-			{
-				for (Tile[] row : tiles[plane])
-				{
-					if (row == null)
-					{
-						continue;
-					}
-					for (Tile tile : row)
-					{
-						if (tile == null)
-						{
-							continue;
-						}
-						final GameObject[] gos = tile.getGameObjects();
-						if (gos != null)
-						{
-							for (GameObject go : gos)
-							{
-								considerInteractableObj(c, go, x, y, r, objects);
-							}
-						}
-						considerInteractableObj(c, tile.getWallObject(), x, y, r, objects);
-						considerInteractableObj(c, tile.getGroundObject(), x, y, r, objects);
-						considerInteractableObj(c, tile.getDecorativeObject(), x, y, r, objects);
-					}
-				}
-			}
-
-			// Direct hits: an actor under the finger outranks an object under the finger (OSRS-like).
-			if (actors.contain != null)
-			{
-				return new SnapTarget((Actor) actors.contain, null, new int[]{x, y}, true);
-			}
-			if (objects.contain != null)
-			{
-				return new SnapTarget(null, (TileObject) objects.contain, new int[]{x, y}, true);
-			}
-
-			// Near misses: snap to whichever interactable is closest to the finger (tie -> actor). Click its own
-			// centroid so the press lands on the entity (a moving NPC's live hull, or the object's clickbox).
-			final boolean haveA = actors.nearest != null;
-			final boolean haveO = objects.nearest != null;
-			if (haveA && (!haveO || actors.nearestD <= objects.nearestD))
-			{
-				return new SnapTarget((Actor) actors.nearest, null, hullCentroid(actors.nearestShape), false);
-			}
-			if (haveO)
-			{
-				return new SnapTarget(null, (TileObject) objects.nearest, hullCentroid(objects.nearestShape), false);
-			}
-			return null;
+			final net.runelite.api.coords.LocalPoint dst = c.getLocalDestinationLocation();
+			final net.runelite.api.Player me = c.getLocalPlayer();
+			final net.runelite.api.coords.LocalPoint mine = me == null ? null : me.getLocalLocation();
+			log.info("[touchdiag] walkDest click={},{} dest={} player={}",
+				clickX, clickY,
+				dst == null ? "null" : (dst.getSceneX() + "," + dst.getSceneY()),
+				mine == null ? "null" : (mine.getSceneX() + "," + mine.getSceneY()));
 		}
-		catch (RuntimeException ex)
-		{
-			log.debug("[snap] resolveSnapTarget failed", ex);
-			return null;
-		}
-	}
-
-	/**
-	 * Fold a scene object into the object {@link Pick} iff it is interactable. A cheap proximity reject (clickbox
-	 * bounds vs the finger) runs BEFORE the {@link #objectInteractable} composition lookup, so the lookup only
-	 * fires for the handful of objects actually under/near the tap — not every object in the scene.
-	 */
-	private static void considerInteractableObj(Client c, TileObject o, int x, int y, int r, Pick pick)
-	{
-		if (o == null)
-		{
-			return;
-		}
-		final Shape s = o.getClickbox();
-		if (s == null)
-		{
-			return;
-		}
-		if (!s.contains(x, y))
-		{
-			final Rectangle b = s.getBounds();
-			if (b.width <= 0 || b.height <= 0 || distToRect(x, y, b) > r)
-			{
-				return;   // out of reach — skip the (pricier) action lookup
-			}
-		}
-		if (objectInteractable(c, o))
-		{
-			pick.consider(o, s, x, y, r);
-		}
-	}
-
-	/**
-	 * Does this scene object carry a real left/right-click action (Mine/Chop/Open/Climb/Bank/…)? Resolves the
-	 * varbit/varp impostor first (a multi-state object's live actions live on its impostor), then checks
-	 * {@link ObjectComposition#getActions()} for any non-empty entry. Pure decoration (walls, fences, ground
-	 * textures) has all-null actions and is excluded — that filter is what lets object snapping work without
-	 * grabbing the non-interactive clickbox carpet of a busy scene.
-	 */
-	private static boolean objectInteractable(Client c, TileObject o)
-	{
-		try
-		{
-			ObjectComposition comp = c.getObjectDefinition(o.getId());
-			if (comp == null)
-			{
-				return false;
-			}
-			if (comp.getImpostorIds() != null)
-			{
-				comp = comp.getImpostor();
-				if (comp == null)
-				{
-					return false;
-				}
-			}
-			final String[] actions = comp.getActions();
-			if (actions == null)
-			{
-				return false;
-			}
-			for (final String a : actions)
-			{
-				if (a != null && !a.isEmpty())
-				{
-					return true;
-				}
-			}
-			return false;
-		}
-		catch (RuntimeException ex)
-		{
-			return false;
-		}
+		catch (RuntimeException ignored) { }
 	}
 
 	/** Lazily resolve the model-outline renderer (the tight silhouette RuneLite's NPC outline mode uses). */
@@ -912,12 +1115,12 @@ public final class JavaBridge
 	}
 
 	/**
-	 * Select an open right-click menu row by left-clicking its canvas point, then clear the hover one cycle
-	 * AFTER the click so the engine doesn't leave the cursor parked on that target. On a touchscreen there is no
-	 * persistent cursor, so a parked synthetic cursor would keep showing the selected object's action label and
-	 * make the next tap re-resolve to it (the "stuck on the stairs" bug). The ordered invoke→invokeLater chain
-	 * guarantees the {@code MOUSE_EXITED} lands after the press/release/click, never before (which would cancel
-	 * the selection). Used by the native menu's commit and cancel.
+	 * Select an open right-click menu row by left-clicking its canvas point, then PARK the pointer one cycle
+	 * AFTER the click so the engine doesn't leave the cursor sitting on that target. On a touchscreen there is
+	 * no persistent cursor, so a stranded synthetic cursor would keep showing the selected object's action
+	 * label and make the next tap re-resolve to it (the "stuck on the stairs" bug). The ordered
+	 * invoke→invokeLater chain guarantees the park lands after the press/release/click, never before (which
+	 * would cancel the selection). Used by the native menu's commit and cancel.
 	 */
 	public static void selectMenuPoint(int x, int y)
 	{
@@ -933,7 +1136,7 @@ public final class JavaBridge
 			ct.invokeLater(() ->
 			{
 				postClickButtons(canvas, x, y, MouseEvent.BUTTON1);
-				ct.invokeLater(JavaBridge::clearHover);   // drop the parked cursor/label after the select
+				ct.invokeLater(JavaBridge::parkPointer);   // un-strand the cursor after the select
 			});
 		});
 	}
@@ -969,23 +1172,11 @@ public final class JavaBridge
 			0, x, y, 1, false, awtButton));
 	}
 
-	// Mutable accumulator for the nearest snap candidate (kept off the hot path; one per resolveSnap call).
-	// Also carries diagnostics so a single device run explains every tap (why it did / didn't snap).
-	private static final class Nearest
-	{
-		Shape shape;            // best candidate within radius
-		double dist = Double.MAX_VALUE;
-		int considered;         // candidates with a non-null clickbox/hull
-		double nearestAny = Double.MAX_VALUE;  // closest candidate distance REGARDLESS of radius (for tuning)
-		boolean exact;          // the tap already lands inside a clickbox -> don't snap, engine hits it
-	}
-
 	/**
 	 * Is {@code (x,y)} (gamepack-canvas pixels) inside the live 3D-scene viewport? The engine reports the
 	 * viewport rect via {@code getViewportXOffset/YOffset/Width/Height}; a negative offset or non-positive
-	 * extent means the viewport is not currently drawn (e.g. a full-screen interface is up), in which case
-	 * nothing should snap. Read on the client thread (the caller already is). Used to keep snap from firing on
-	 * taps that land on the UI rather than the world.
+	 * extent means the viewport is not currently drawn (e.g. a full-screen interface is up). Read on the
+	 * client thread (the caller already is). Diagnostic only ({@link #diagGeometry}).
 	 */
 	private static boolean inWorldViewport(Client c, int x, int y)
 	{
@@ -1007,182 +1198,7 @@ public final class JavaBridge
 		}
 	}
 
-	/**
-	 * Touch-forgiveness resolver — MUST run on the client thread (scene geometry is only safe to read there).
-	 * Returns the point to click: the original {@code (x,y)} if it already lands inside a clickbox or nothing
-	 * interactable is within {@link #snapRadius()}, else the nearest candidate's clickbox centroid. Considers
-	 * NPCs, players, and scene objects (game/wall/ground/decorative — trees, rocks, doors, banks, …) on the
-	 * current plane. Ground items are intentionally excluded (their left-click default is "Walk here" anyway).
-	 */
-	static int[] resolveSnap(Client c, int x, int y)
-	{
-		final int[] original = {x, y};
-		try
-		{
-			final WorldView wv = c.getTopLevelWorldView();
-			if (wv == null)
-			{
-				return original;
-			}
-			final Nearest near = new Nearest();
-			final int r = snapRadius();
-
-			// Actors first (NPCs then players) — on a distance tie an actor outranks scenery.
-			for (Actor a : wv.npcs())
-			{
-				consider(a.getConvexHull(), x, y, r, near);
-			}
-			for (Actor a : wv.players())
-			{
-				consider(a.getConvexHull(), x, y, r, near);
-			}
-
-			// Scene objects on the current plane.
-			final Scene scene = wv.getScene();
-			final int plane = wv.getPlane();
-			final Tile[][][] tiles = scene == null ? null : scene.getTiles();
-			if (tiles != null && plane >= 0 && plane < tiles.length)
-			{
-				for (Tile[] row : tiles[plane])
-				{
-					if (row == null)
-					{
-						continue;
-					}
-					for (Tile tile : row)
-					{
-						if (tile == null)
-						{
-							continue;
-						}
-						final GameObject[] gos = tile.getGameObjects();
-						if (gos != null)
-						{
-							for (GameObject go : gos)
-							{
-								if (go != null)
-								{
-									consider(go.getClickbox(), x, y, r, near);
-								}
-							}
-						}
-						considerObj(tile.getWallObject(), x, y, r, near);
-						considerObj(tile.getGroundObject(), x, y, r, near);
-						considerObj(tile.getDecorativeObject(), x, y, r, near);
-					}
-				}
-			}
-
-			if (near.exact)
-			{
-				log.debug("[snap] tap {},{} -> exact-hit, no snap (considered={})", x, y, near.considered);
-				return original;
-			}
-			if (near.shape != null)
-			{
-				final int[] cen = hullCentroid(near.shape);
-				snapCount++;
-				log.debug("[snap] tap {},{} -> SNAP {},{} dist={}px (considered={} nearestAny={}px radius={} #{})",
-					x, y, cen[0], cen[1], (int) near.dist, near.considered,
-					(int) (near.nearestAny == Double.MAX_VALUE ? -1 : near.nearestAny), snapRadius(), snapCount);
-				return cen;
-			}
-			// No snap: at debug only (the device-tuning round is done; the scene is clickbox-saturated so
-			// "nearestAny" is ~always 0 and snap-to-nearest is near-redundant — priority, not radius, is the
-			// real lever if we revisit forgiveness).
-			log.debug("[snap] tap {},{} -> none (considered={} nearestAny={}px radius={})",
-				x, y, near.considered,
-				(int) (near.nearestAny == Double.MAX_VALUE ? -1 : near.nearestAny), snapRadius());
-		}
-		catch (RuntimeException ex)
-		{
-			// any scene-read hiccup -> fall back to the literal tap (never drop the click)
-			log.debug("[bridge] snap resolve failed, using literal point", ex);
-		}
-		return original;
-	}
-
-	/** {@link TileObject} overload of {@link #consider(Shape, int, int, int, Nearest)} (uses its clickbox). */
-	private static void considerObj(net.runelite.api.TileObject o, int x, int y, int r, Nearest near)
-	{
-		if (o != null)
-		{
-			consider(o.getClickbox(), x, y, r, near);
-		}
-	}
-
-	/** Fold one candidate clickbox into {@code near} (tracks exact-hit, nearest-within-radius, diagnostics). */
-	private static void consider(Shape s, int x, int y, int r, Nearest near)
-	{
-		if (s == null)
-		{
-			return;
-		}
-		if (s.contains(x, y))
-		{
-			near.exact = true;
-			return;
-		}
-		final Rectangle b = s.getBounds();
-		if (b.width <= 0 || b.height <= 0)
-		{
-			return;
-		}
-		final double d = distToRect(x, y, b);
-		near.considered++;
-		if (d < near.nearestAny)
-		{
-			near.nearestAny = d;
-		}
-		if (d <= r && d < near.dist)
-		{
-			near.dist = d;
-			near.shape = s;
-		}
-	}
-
-	/** Centroid of a convex hull's vertices — guaranteed inside the (convex) shape, unlike the bbox centre. */
-	private static int[] hullCentroid(Shape hull)
-	{
-		final java.awt.geom.PathIterator it = hull.getPathIterator(null);
-		final double[] coords = new double[6];
-		double sx = 0;
-		double sy = 0;
-		int n = 0;
-		while (!it.isDone())
-		{
-			final int seg = it.currentSegment(coords);
-			if (seg == java.awt.geom.PathIterator.SEG_MOVETO || seg == java.awt.geom.PathIterator.SEG_LINETO)
-			{
-				sx += coords[0];
-				sy += coords[1];
-				n++;
-			}
-			it.next();
-		}
-		if (n == 0)
-		{
-			final Rectangle b = hull.getBounds();
-			return new int[]{(int) b.getCenterX(), (int) b.getCenterY()};
-		}
-		return new int[]{(int) (sx / n), (int) (sy / n)};
-	}
-
-	/** Euclidean distance from a point to a rectangle (0 if inside). */
-	private static double distToRect(int px, int py, Rectangle b)
-	{
-		final int dx = Math.max(Math.max(b.x - px, px - (b.x + b.width)), 0);
-		final int dy = Math.max(Math.max(b.y - py, py - (b.y + b.height)), 0);
-		return Math.sqrt((double) dx * dx + (double) dy * dy);
-	}
-
-	/** Finger radius in game-canvas pixels: how far from an entity a tap may land and still snap onto it. */
-	public static int snapRadius()
-	{
-		return SNAP_RADIUS;
-	}
-
-	/** Monotonic counter bumped whenever an in-game left tap resolved to an interactable (native haptic cue). */
+	/** Monotonic counter bumped whenever a tap's CONSUMED click was an interaction (native haptic cue). */
 	public static int getInteractTapSeq()
 	{
 		return interactTapSeq;

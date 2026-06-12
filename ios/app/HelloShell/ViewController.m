@@ -5,6 +5,11 @@
 #import "PluginPanelsViewController.h"
 #import "JagexLoginViewController.h"
 #import "GLRecon.h"
+#import "RouteCBridge.h"            // GPU Route C bridge (backend selected by RC_BACKEND_ANGLE in the build)
+#import <QuartzCore/QuartzCore.h>
+#if !defined(RC_BACKEND_ANGLE)
+#import <OpenGLES/EAGLDrawable.h>   // kEAGLDrawableProperty* (EAGL direct present; not linked in the ANGLE build)
+#endif
 #import <WebKit/WebKit.h>
 #import <CoreText/CoreText.h>
 #import <SafariServices/SafariServices.h>
@@ -21,6 +26,9 @@
 }
 @property (nonatomic, strong) UITextView *console;
 @property (nonatomic, strong) UIButton *launchButton;
+@property (nonatomic, strong) UIButton *gpuButton;   // GPU Route C: dedicated one-tap button to boot full RuneLite on GPU
+@property (nonatomic, strong) UIButton *zoneButton;  // GPU Zone: dedicated one-tap button to boot full RuneLite on 117HD
+@property (nonatomic, strong) UIButton *zoneFastButton;  // GPU Zone: 117HD resizable + DIRECT present (no readback)
 @property (nonatomic, strong) UIButton *canaryButton;
 @property (nonatomic, strong) UIButton *keyboardButton;
 @property (nonatomic, strong) UIButton *shiftButton;     // sticky-Shift toggle (holds VK_SHIFT for shift-click)
@@ -54,6 +62,11 @@
 @property (nonatomic, strong) NSFileHandle *logFile;
 @property (nonatomic, assign) int jvmFd;   // raw fd for crash-proof libjvm stdout/stderr
 @property (nonatomic, assign) BOOL launched;
+@property (nonatomic, assign) BOOL pendingRouteCL1;   // GPU Route C: long-press Start -> boot the L1 kill-test
+@property (nonatomic, assign) BOOL pendingRouteCGpu;  // GPU Route C: two-finger long-press -> full RuneLite on GPU
+@property (nonatomic, assign) BOOL pendingRouteCZone; // GPU Zone: three-finger long-press -> full RuneLite on 117HD
+@property (nonatomic, assign) BOOL pendingRouteCGpuNoResize;  // GPU Route C bisection: skip headless.resize (fixed 765x503)
+@property (nonatomic, assign) BOOL pendingRouteCZoneDirect;   // GPU Zone: resizable + DIRECT present (CAEAGLLayer, no readback)
 
 // #1 "Tap to Play" front screen: a polished Jagex-Mobile-style cover shown at cold start INSTEAD of the
 // W1 debug panel (which now starts hidden behind the ≡ toggle). The big play button waits on the StikDebug
@@ -86,6 +99,9 @@
 @property (nonatomic, assign) BOOL menuBuilding;          // right-clicked; polling for the engine menu snapshot
 @property (nonatomic, assign) BOOL menuTouchActive;       // the long-press finger is still down (drag in progress)
 @property (nonatomic, assign) NSTimeInterval menuOpenAt;  // when the right-click fired (build timeout)
+@property (nonatomic, assign) BOOL menuClosing;           // committed/cancelled; native cover held up until the
+                                                          // engine menu actually closes (else it peeks for a frame)
+@property (nonatomic, assign) NSTimeInterval menuClosingAt; // when the close click fired (teardown timeout)
 @property (nonatomic, strong) UIView *menuContainer;      // the native OSRS-styled menu box
 @property (nonatomic, strong) NSMutableArray<UIView *> *menuRows; // the row views (index 0 = top = default)
 @property (nonatomic, strong) NSArray *menuRowEntries;    // the entry dicts, for re-rendering a row on hover
@@ -132,6 +148,13 @@
 // draws (set at launch); chatHitCanvas = the relocated chat tab-row rect in canvas px (onTap treats it as UI).
 @property (nonatomic, assign) int renderW;
 @property (nonatomic, assign) int renderH;
+
+// GPU Route C direct present: a CAEAGLLayer (EAGL) / CAMetalLayer (ANGLE) the engine renders straight into (no
+// readback). nil in CPU/L1 mode. Kept strong so the layer outlives the EGL/EAGL surface that references it.
+@property (nonatomic, strong) CAEAGLLayer *glLayer;
+@property (nonatomic, strong) CAMetalLayer *metalLayer;
+@property (nonatomic, assign) BOOL gpuPresent;        // direct-present active (skip the CPU-frame blit)
+@property (nonatomic, assign) BOOL gpuPresentArmed;   // ANGLE: window surface ready; flip gpuPresent on first GPU frame
 @property (nonatomic, assign) CGRect chatHitCanvas;
 // Pre-composited tab images (stone background + centred icon) built once from the bundled OSRS sprite assets
 // (stone-inactive/active + icon-0..13). Index = tab index; active/inactive variants. Authentic, crisp, no
@@ -163,15 +186,52 @@
 @property (nonatomic, assign) BOOL chatScrollable;
 @property (nonatomic, assign) BOOL chatScrolling;       // the current pan gesture is scrolling the chat
 @property (nonatomic, assign) CGFloat chatScrollAccum;  // accumulated drag (pt) toward the next wheel notch
+// World map (touch — WORLDMAP-MOBILE-PLAN.md Phase 1): while the fullscreen engine world map is open, a
+// 1-finger drag pans the MAP (bridge panWorldMap, "grab the map"), taps are precise UI clicks with no
+// walk-ring semantics, a tap in the search rect raises the keyboard (the map search doesn't flip INPUT_TYPE),
+// the native chrome hides, and a native ✕ in the safe area proxies the bezel-clipped engine close button.
+@property (nonatomic, assign) BOOL mapOpen;             // polled from the bridge map snapshot (~10 Hz)
+@property (nonatomic, assign) CGRect mapCloseCanvas;    // engine CLOSE rect (canvas px; zero = unknown)
+@property (nonatomic, assign) CGRect mapSearchCanvas;   // engine SEARCH rect (canvas px)
+@property (nonatomic, assign) CGRect mapWindowCanvas;   // the whole map window rect (canvas px)
+@property (nonatomic, assign) CGRect mapKeyCanvas;      // the Key list rect — swipe there scrolls the list
+@property (nonatomic, assign) CGRect mapListCanvas;     // the surface dropdown list rect (zero when closed)
+@property (nonatomic, strong) NSArray<UIView *> *mapBands; // black bands above/below the scaled map window
+@property (nonatomic, assign) BOOL mapListScrolling;    // the current pan gesture scrolls a map list (wheel)
+@property (nonatomic, assign) CGPoint mapListWheelPt;   // game point the scroll wheel is parked over
+@property (nonatomic, assign) CGFloat mapListScrollAcc; // accumulated drag pt toward the next wheel notch
+@property (nonatomic, assign) BOOL mapPanning;          // the current pan gesture is panning the map
+@property (nonatomic, assign) CGFloat mapPanAccX;       // sub-px accumulators (screen pt -> whole canvas px)
+@property (nonatomic, assign) CGFloat mapPanAccY;
 // Instant selected-highlight after a tap: the engine's tab GRAPHIC sprite (which the snapshot reads for the
 // selected state) only updates on a redraw, so the highlight lagged until the next game interaction. Optimistically
 // mark the tapped tab selected and hold it until the snapshot agrees (or a short timeout). -1 = none.
 @property (nonatomic, assign) NSInteger optimisticChatTab;
 @property (nonatomic, assign) CFTimeInterval optimisticChatAt;
-// Chat collapse (mobile): the currently-shown selected tab (-1 = none/collapsed), and whether the chat box is
-// collapsed. Tapping the active tab collapses the box; tapping any tab reopens it.
+// Chat collapse (mobile): the currently-active channel (the pill shows it; -1 = unknown), and whether the chat
+// message area is collapsed. A quick tap on the pill toggles collapse; the channel stays selected either way.
 @property (nonatomic, assign) NSInteger chatActiveTab;
 @property (nonatomic, assign) BOOL chatCollapsed;
+// Channel-pill redesign: ONE collapsed pill (shows the open channel) that fans the 7 chips out on hold. The 7
+// chatTabButtons become display-only fan chips (userInteractionEnabled=NO); the pill's long-press drives the
+// whole gesture (drag sideways = switch on lift; pull down off a chip = its filter menu). State here is touched
+// only on the main thread (gesture callbacks + the display-tick layout).
+@property (nonatomic, strong) UIButton *chatPill;             // the collapsed active-channel button
+@property (nonatomic, strong) UILongPressGestureRecognizer *chatPillLP; // the fan/drag driver
+@property (nonatomic, strong) UILabel *chatFilterHint;        // the ▾ "pull down to filter" reveal under a chip
+@property (nonatomic, assign) BOOL chatFanned;                // chips are fanned out (a gesture is in flight)
+@property (nonatomic, assign) BOOL chatFanAnimating;          // mid fan-out/in animation -> don't let the tick reframe
+@property (nonatomic, assign) NSInteger chatHoverChip;        // chip under the finger this drag (-1 = none)
+@property (nonatomic, assign) NSInteger chatFilterChip;       // chip whose filter menu is open (-1 = SELECT mode)
+@property (nonatomic, assign) BOOL chatDragMoved;            // finger left the press point -> a release commits a switch
+@property (nonatomic, assign) CGPoint chatDragStart;        // press point (screen), to measure drag distance
+@property (nonatomic, assign) CGRect chatPillFrame;           // collapsed pill frame (fan origin), in self.screen
+// Fanned-row geometry (self.screen coords), recomputed each tick; a chip's resting frame = (fanRowX + k*fanTabW,
+// fanRowY, fanTabW, fanChipH). Used as the drag hit-test target (stable even mid-animation).
+@property (nonatomic, assign) CGFloat chatFanRowX;
+@property (nonatomic, assign) CGFloat chatFanRowY;
+@property (nonatomic, assign) CGFloat chatFanTabW;
+@property (nonatomic, assign) CGFloat chatFanChipH;
 // Phase-6 native plugin panel: a ⚙ button opens a full-screen modal sheet (scrim eats all touches so nothing
 // falls through to the game) listing the plugins (MobileUiBridge.listPlugins) with an enable/disable switch
 // and a running/stopped indicator. Refreshed when the bridge's event sequence advances (toggles, conflicts).
@@ -214,6 +274,16 @@ static const int kChatContentCanvasH = 142; // the chat message-area height (eng
 // if the direction feels inverted.
 static const int kChatScrollDir = -1;
 static NSString * const kChatTabNames[7] = { @"All", @"Game", @"Public", @"Private", @"Channel", @"Clan", @"Trade" };
+// Filterable channels (a right-click filter menu exists): Public/Private/Channel/Clan/Trade. All + Game have
+// none, so a pull-down on them is a no-op (no ▾ hint, no menu). Indexes into the 7-tab arrays above.
+static const BOOL kChatTabFilterable[7] = { NO, NO, YES, YES, YES, YES, YES };
+
+// Channel-pill redesign tunables (all one-liners to dial in on device).
+static const CGFloat kChatHoldDelay     = 0.15;   // press time before the chips fan out (s)
+static const CGFloat kChatFanAnim       = 0.18;   // fan out/in spring duration (s)
+static const CGFloat kChatFanPopPt      = 0.0;    // extra height (screen pt) a fanned chip gets vs the row (0 = match the original tab size)
+static const CGFloat kChatPullDownPt    = 26.0;   // finger travel below a chip's bottom edge that opens its filter
+static const CGFloat kChatFilterHintPt  = 10.0;   // finger distance below mid-chip that starts revealing the ▾ hint
 
 // OSRS right-click menu geometry, straight from RuneLite's own hit-test (InteractHighlightOverlay
 // .hoveredMenuEntry): the "Choose Option" title strip is 19px, each entry row is 15px. These are fixed
@@ -392,6 +462,20 @@ static const CGFloat kMenuWidth       = 210.0;
 - (void)onPlayTapped {
     // If the login web view ran this session, WebKit is resident and the JVM can't start cleanly — onLaunch
     // will prompt a restart instead. Keep the cover up in that case so the user lands back here post-restart.
+    // Tap to Play boots the renderer the user SELECTED in the plugins panel, saved in NSUserDefaults
+    // "rendererPref" (cpu | gpu | 117hd). Default = cpu (the software renderer — vanilla, always works). The
+    // GPU + 117HD plugins are loaded into the panel in every mode (RendererPanelStarter) so they're selectable;
+    // flipping one there saves the preference (with a "restart to apply" message), and THIS reads it at launch.
+    // base GPU uses the readback present (int[] frames like CPU); 117HD uses the CAEAGLLayer direct present.
+    NSString *pref = [[NSUserDefaults standardUserDefaults] stringForKey:@"rendererPref"] ?: @"cpu";
+    BOOL wantGpu = [pref isEqualToString:@"gpu"];
+    BOOL wantHd = [pref isEqualToString:@"117hd"];
+    self.pendingRouteCGpu = wantGpu;
+    self.pendingRouteCZone = wantHd;
+    self.pendingRouteCZoneDirect = wantHd;
+    self.pendingRouteCGpuNoResize = NO;
+    self.pendingRouteCL1 = NO;
+    [self appendLine:[NSString stringWithFormat:@"[shell] renderer pref = %@", pref]];
     if (self.webKitUsedThisSession) { [self onLaunch]; return; }
     if (!self.launchScreen.hidden) {
         // Fade the cover out, then hand off to the existing JVM launch path.
@@ -567,6 +651,24 @@ static const CGFloat kMenuWidth       = 210.0;
     self.launchButton.enabled = NO;
     [self.launchButton addTarget:self action:@selector(onLaunch)
                 forControlEvents:UIControlEventTouchUpInside];
+    // GPU Route C dev affordance: LONG-PRESS the launch button to boot the L1 GPU kill-test (routec-l1.jar +
+    // RouteC_registerGLNatives + RouteCL1Probe) instead of the full RuneLite boot. A plain tap is unchanged.
+    UILongPressGestureRecognizer *l1lp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onLaunchRouteCL1Gesture:)];
+    [self.launchButton addGestureRecognizer:l1lp];
+    // TWO-FINGER long-press the launch button to boot the FULL RuneLite in GPU Route C mode (bridge natives
+    // registered -> the gpu plugin renders on the device GPU). Distinct from the one-finger L1 gesture.
+    UILongPressGestureRecognizer *gpulp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onLaunchRouteCGpuGesture:)];
+    gpulp.numberOfTouchesRequired = 2;
+    [self.launchButton addGestureRecognizer:gpulp];
+    // THREE-FINGER long-press the launch button to boot the FULL RuneLite in GPU Zone (117HD/RLHD) mode: the
+    // staged rlhd jar joins the classpath, the zone facade-delta natives register, and RLHDStarter loads +
+    // starts rs117.hd.HdPlugin (the Zone renderer). Distinct from one-finger L1 / two-finger base-GPU.
+    UILongPressGestureRecognizer *zonelp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onLaunchRouteCZoneGesture:)];
+    zonelp.numberOfTouchesRequired = 3;
+    [self.launchButton addGestureRecognizer:zonelp];
     [self.debugPanel addSubview:self.launchButton];
 
     self.canaryButton = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -583,6 +685,47 @@ static const CGFloat kMenuWidth       = 210.0;
     [self.chromeButton addTarget:self action:@selector(onChromeTest)
                 forControlEvents:UIControlEventTouchUpInside];
     [self.debugPanel addSubview:self.chromeButton];
+
+    // GPU Route C: dedicated one-tap button to boot full RuneLite on the device GPU (equivalent to the
+    // two-finger long-press on the launch button, but unambiguous). Enabled together with the launch button
+    // once the JIT debugger is attached.
+    self.gpuButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.gpuButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.gpuButton setTitle:@"▶ Run GPU (Route C)" forState:UIControlStateNormal];
+    self.gpuButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    self.gpuButton.enabled = NO;
+    [self.gpuButton addTarget:self action:@selector(onLaunchGpu)
+             forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.gpuButton];
+
+    self.zoneButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.zoneButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.zoneButton setTitle:@"▶ 117HD (Zone)" forState:UIControlStateNormal];
+    self.zoneButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    self.zoneButton.tintColor = [UIColor systemGreenColor];
+    self.zoneButton.enabled = NO;
+    [self.zoneButton addTarget:self action:@selector(onLaunchZone)
+             forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.zoneButton];
+
+    // Fallback: 117HD resizable on the READBACK present (no CAEAGLLayer). The green button defaults to direct
+    // present (faster); this is here if direct present ever scans out black or regresses.
+    self.zoneFastButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.zoneFastButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.zoneFastButton setTitle:@"117HD readback" forState:UIControlStateNormal];
+    self.zoneFastButton.titleLabel.font = [UIFont systemFontOfSize:15];
+    self.zoneFastButton.tintColor = [UIColor systemGrayColor];
+    self.zoneFastButton.enabled = NO;
+    [self.zoneFastButton addTarget:self action:@selector(onLaunchZoneReadback)
+             forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.zoneFastButton];
+
+    // "Renderers as plugins": the renderer launch buttons are retired — Tap to Play reads the saved renderer
+    // preference and the user selects GPU/117HD from the plugins panel. Hidden (not deleted) so the dev
+    // gestures + their constraints stay intact. The L1 kill-test button (if any) is unaffected.
+    self.gpuButton.hidden = YES;
+    self.zoneButton.hidden = YES;
+    self.zoneFastButton.hidden = YES;
 
     self.loginButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.loginButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -714,7 +857,14 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.canaryButton.leadingAnchor constraintEqualToAnchor:self.launchButton.trailingAnchor constant:24],
         [self.chromeButton.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor constant:6],
         [self.chromeButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
-        [self.loginButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
+        [self.gpuButton.centerYAnchor constraintEqualToAnchor:self.chromeButton.centerYAnchor],
+        [self.gpuButton.leadingAnchor constraintEqualToAnchor:self.chromeButton.trailingAnchor constant:24],
+        [self.zoneButton.centerYAnchor constraintEqualToAnchor:self.gpuButton.centerYAnchor],
+        [self.zoneButton.leadingAnchor constraintEqualToAnchor:self.gpuButton.trailingAnchor constant:24],
+        // ⚡ Fast on its own row (the chrome/gpu/zone row is already full-width).
+        [self.zoneFastButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
+        [self.zoneFastButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
+        [self.loginButton.topAnchor constraintEqualToAnchor:self.zoneFastButton.bottomAnchor constant:6],
         [self.loginButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.logoutButton.centerYAnchor constraintEqualToAnchor:self.loginButton.centerYAnchor],
         [self.logoutButton.leadingAnchor constraintEqualToAnchor:self.loginButton.trailingAnchor constant:16],
@@ -1076,6 +1226,22 @@ static const CGFloat kMenuWidth       = 210.0;
     cell.imageView.tintColor = [UIColor colorWithRed:0.95 green:0.78 blue:0.30 alpha:1.0];
     NSString *status;
     UIColor *statusColor;
+    // Renderer plugins (GPU / 117HD): their switch reflects the SAVED launch preference (what will be active next
+    // launch), not the live "is it running this session" state — they only activate after a restart.
+    NSString *rk = [self rendererKeyForClass:[p[@"className"] description]];
+    if (rk) {
+        enabled = [[self rendererPref] isEqualToString:rk];
+        status = enabled ? @"● selected — restart to apply" : @"○ off";
+        statusColor = enabled ? [UIColor colorWithRed:0.45 green:0.85 blue:0.40 alpha:1.0]
+                              : [UIColor colorWithWhite:0.6 alpha:1.0];
+        cell.detailTextLabel.text = hasConfig ? [status stringByAppendingString:@"   ·  hold to configure"] : status;
+        cell.detailTextLabel.textColor = statusColor;
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        UISwitch *rsw = (UISwitch *)cell.accessoryView;
+        rsw.tag = indexPath.row;
+        [rsw setOn:enabled animated:NO];
+        return cell;
+    }
     if (enabled && active) {
         status = @"● running"; statusColor = [UIColor colorWithRed:0.45 green:0.85 blue:0.40 alpha:1.0];
     } else if (enabled && !active) {
@@ -1101,12 +1267,50 @@ static const CGFloat kMenuWidth       = 210.0;
     return cell;
 }
 
+// The two renderer plugins are launch-time on iOS (the GL bridge + present layer are set up at JVM start), so
+// they're not hot-swappable like a normal plugin. Their on/off + config live in the panel like any plugin, but
+// toggling one saves a launch PREFERENCE (applied on the next launch) instead of a live start/stop.
+static NSString * const kRendererGpuClass = @"net.runelite.client.plugins.gpu.GpuPlugin";
+static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
+
+// "gpu" / "117hd" for the renderer plugins, nil for any normal plugin.
+- (NSString *)rendererKeyForClass:(NSString *)className {
+    if ([className isEqualToString:kRendererGpuClass]) return @"gpu";
+    if ([className isEqualToString:kRendererHdClass]) return @"117hd";
+    return nil;
+}
+
+- (NSString *)rendererPref {
+    return [[NSUserDefaults standardUserDefaults] stringForKey:@"rendererPref"] ?: @"cpu";
+}
+
+// A renderer-plugin row was toggled: select it (or fall back to the software renderer), save the preference,
+// and tell the user it applies on the next launch. No live setPluginEnabled.
+- (void)toggleRenderer:(NSString *)rendererKey {
+    BOOL turnOn = ![[self rendererPref] isEqualToString:rendererKey];   // tapping the selected one turns it off
+    NSString *newPref = turnOn ? rendererKey : @"cpu";
+    [[NSUserDefaults standardUserDefaults] setObject:newPref forKey:@"rendererPref"];
+    NSString *label = [rendererKey isEqualToString:@"117hd"] ? @"117HD" : @"GPU";
+    NSString *msg = turnOn
+        ? [NSString stringWithFormat:@"%@ will be your renderer the next time you launch.\n\nFully quit RuneLite (swipe it away) and relaunch to apply.", label]
+        : @"The software renderer will be used the next time you launch.\n\nFully quit RuneLite (swipe it away) and relaunch to apply.";
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Restart to apply"
+                                                              message:msg preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    UIViewController *presenter = self.presentedViewController ?: self;
+    [presenter presentViewController:a animated:YES completion:nil];
+    [self appendLine:[NSString stringWithFormat:@"[renderer] pref -> %@ (restart to apply)", newPref]];
+    [self refreshPluginList];   // the row now reflects the saved preference
+}
+
 // Toggle a plugin by row: drive MobileUiBridge.setPluginEnabled (EDT lane). The resulting PluginChanged bumps
 // the event sequence, so onDisplayTick re-reads the list and the running/stopped indicator settles.
 - (void)togglePluginAtRow:(NSInteger)row {
     if (row < 0 || row >= (NSInteger)self.pluginList.count) return;
     NSDictionary *p = self.pluginList[(NSUInteger)row];
     NSString *className = [p[@"className"] description];
+    NSString *rk = [self rendererKeyForClass:className];
+    if (rk) { [self toggleRenderer:rk]; return; }   // renderer plugins use the launch preference, not a live toggle
     BOOL newOn = ![p[@"enabled"] boolValue];
     NSString *ack = [JVMLauncher mobileSetPluginEnabled:className enabled:newOn];
     // Start/clear the grace timer from the user action (before the next refresh observes it).
@@ -1149,8 +1353,16 @@ static const CGFloat kMenuWidth       = 210.0;
     if (hasConfig && group.length > 0) {
         [sheet addAction:[UIAlertAction actionWithTitle:@"Configure" style:UIAlertActionStyleDefault
                                                 handler:^(UIAlertAction *a) {
+            // 117HD (group "hd"): show ONLY the iOS-ported settings (each safe to setConfig from RLHDStarter).
+            // Exposing the rest would recompile an unported shader and stop the plugin. Others show full config.
+            NSArray<NSString *> *whitelist = [group isEqualToString:@"hd"] ? @[
+                @"sceneResolutionScale", @"antiAliasingMode", @"shadowMode", @"shadowResolution",
+                @"enableShadowTransparency", @"dynamicLights", @"tiledLighting", @"normalMapping",
+                @"parallaxOcclusionMappingToggle", @"drawDistance",
+            ] : nil;
             PluginConfigViewController *cfg = [[PluginConfigViewController alloc] initWithGroup:group
-                                                                                    pluginName:name];
+                                                                                    pluginName:name
+                                                                                     whitelist:whitelist];
             [self presentViewController:cfg animated:YES completion:nil];
         }]];
     }
@@ -1223,6 +1435,9 @@ static const CGFloat kMenuWidth       = 210.0;
         }
         if (attached && !self.launchButton.enabled && !self.launched) {
             self.launchButton.enabled = YES;
+            self.gpuButton.enabled = YES;
+            self.zoneButton.enabled = YES;
+            self.zoneFastButton.enabled = YES;
             [self appendLine:@"StikDebug attached — CS_DEBUGGED set. Tap Start JVM."];
         }
     }];
@@ -1245,8 +1460,8 @@ static const CGFloat kMenuWidth       = 210.0;
 // exactly over the live desktop widget.
 - (CGRect)viewRectForGameX:(int)gx y:(int)gy w:(int)gw h:(int)gh {
     UIImage *img = self.screen.image;
-    if (img == nil) return CGRectZero;
-    CGFloat iw = img.size.width, ih = img.size.height;
+    CGFloat iw = img ? img.size.width : 0, ih = img ? img.size.height : 0;
+    if ((iw <= 0 || ih <= 0) && self.renderW > 0) { iw = self.renderW; ih = self.renderH; }  // GPU present: no UIImage
     if (iw <= 0 || ih <= 0) return CGRectZero;
     CGRect b = self.screen.bounds;
     CGFloat scale = MIN(b.size.width / iw, b.size.height / ih);
@@ -1318,9 +1533,12 @@ static const CGFloat kMenuWidth       = 210.0;
     }
 }
 
-// Build the 7 native chat tab buttons once, as subviews of the game view (above the blit, like the keyboard
-// button) so each consumes its own tap. Sprite-backed, two-line RuneScape-font labels (name + filter state) like
-// the official app; hidden until the chat is relocated + logged in. updateChatTabs lays them out + states them.
+// Build the collapsed channel PILL + the 7 fan-out chips once, as subviews of the game view (above the blit).
+// The pill (active channel) is the only interactive view: a quick tap toggles the chat collapse, a hold fans the
+// 7 chips out for drag-select / pull-down-to-filter (onChatPillDrag). The chips are display-only
+// (userInteractionEnabled=NO) — the pill's long-press tracks the finger across them, so they never intercept
+// touches. Sprite-backed two-line RuneScape-font labels (name + filter state) like the official app; hidden until
+// the chat is relocated + logged in. updateChatTabs lays them out + states them.
 - (void)buildChatTabs {
     self.chatBtnImg    = [self loadAsset:@"chatbtn"];
     self.chatBtnSelImg = [self loadAsset:@"chatbtn-selected"];
@@ -1330,26 +1548,52 @@ static const CGFloat kMenuWidth       = 210.0;
         UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
         b.tag = i;
         b.hidden = YES;
+        b.userInteractionEnabled = NO;   // display-only fan chip; the pill's gesture drives selection
         b.adjustsImageWhenHighlighted = NO;
         b.titleLabel.textAlignment = NSTextAlignmentCenter;
         b.titleLabel.numberOfLines = 2;   // channel name + filter state, like the official app
         b.titleLabel.lineBreakMode = NSLineBreakByClipping;
-        // The background sprite is pixel-art with rounded ends + a vertical gradient; stretch it with bilinear so
-        // the enlarged button reads smooth (the official mobile chat scales these the same way).
         b.layer.magnificationFilter = kCAFilterLinear;
-        [b addTarget:self action:@selector(onChatTabButton:) forControlEvents:UIControlEventTouchUpInside];
-        // Long-press a tab -> the engine's filter menu (On/Filter/Off/Hide …) via the native big-row overlay.
-        UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc]
-            initWithTarget:self action:@selector(onChatTabLongPress:)];
-        lp.minimumPressDuration = 0.4;
-        [b addGestureRecognizer:lp];
         [self.screen addSubview:b];
         [self.chatTabButtons addObject:b];
     }
+
+    // The collapsed pill: shows the open channel, and owns the whole gesture.
+    UIButton *pill = [UIButton buttonWithType:UIButtonTypeCustom];
+    pill.hidden = YES;
+    pill.adjustsImageWhenHighlighted = NO;
+    pill.titleLabel.textAlignment = NSTextAlignmentCenter;
+    pill.titleLabel.numberOfLines = 2;
+    pill.titleLabel.lineBreakMode = NSLineBreakByClipping;
+    pill.layer.magnificationFilter = kCAFilterLinear;
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onChatPillTap:)];
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onChatPillDrag:)];
+    lp.minimumPressDuration = kChatHoldDelay;
+    [tap requireGestureRecognizerToFail:lp];   // a hold fans out; only a quick tap (lp failed) toggles collapse
+    [pill addGestureRecognizer:lp];
+    [pill addGestureRecognizer:tap];
+    [self.screen addSubview:pill];
+    self.chatPill = pill;
+    self.chatPillLP = lp;
+
+    // The "▾ pull down to filter" reveal that slides under the hovered chip.
+    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectZero];
+    hint.text = @"▾";
+    hint.textAlignment = NSTextAlignmentCenter;
+    hint.textColor = [UIColor colorWithRed:1.0 green:0.92 blue:0.35 alpha:1.0];
+    hint.hidden = YES;
+    hint.userInteractionEnabled = NO;
+    [self.screen addSubview:hint];
+    self.chatFilterHint = hint;
+
     self.chatTabsBuilt = YES;
     self.optimisticChatTab = -1;
     self.chatActiveTab = -1;
-    [self appendLine:[NSString stringWithFormat:@"[chat] tab buttons built (sprites %@/%@/%@)",
+    self.chatHoverChip = -1;
+    self.chatFilterChip = -1;
+    [self appendLine:[NSString stringWithFormat:@"[chat] pill + chips built (sprites %@/%@/%@)",
                       self.chatBtnImg ? @"ok" : @"X", self.chatBtnSelImg ? @"ok" : @"X",
                       self.chatBtnNewImg ? @"ok" : @"X"]];
 }
@@ -1369,21 +1613,52 @@ static int chatRowCanvasH(void) {
     return kChatTabRowCanvasH;
 }
 
-// Lay out + state the enlarged native chat tabs from the chat snapshot each tick. Mirrors updateChrome: hides
-// everything (revealing the engine's own chat) when the native chrome is toggled off or the layout is unsupported
-// (not Classic/164). The row spans the chat-panel width at the relocated chat origin; each button is bigger than
-// the engine's, sprite-backed with the live selected/new state and the engine's exact label colour. A tap proxies
-// a precise click onto the live engine button centre (from the snapshot bounds).
+// Paint one channel button (pill or fan chip) sprite-backed with a two-line RuneScape-font label (name on top,
+// filter state below in the engine's state colour). selected -> the gold SELECTED sprite; new -> the unread
+// sprite; else the idle sprite. tab = the snapshot entry for channel i (may be nil while collapsed).
+- (void)paintChatButton:(UIButton *)b channel:(int)i tab:(NSDictionary *)t selected:(BOOL)selected
+               nameFont:(UIFont *)nameFont stateFont:(UIFont *)stateFont {
+    BOOL hasNew = [t[@"new"] boolValue];
+    UIImage *bg = self.chatBtnImg;
+    if (selected) bg = self.chatBtnSelImg;
+    else if (hasNew) bg = self.chatBtnNewImg;
+    [b setBackgroundImage:bg forState:UIControlStateNormal];
+
+    NSString *name = (i >= 0 && i < kChatTabCount) ? kChatTabNames[i] : @"";
+    NSString *filter = [t[@"filter"] isKindOfClass:[NSString class]] ? t[@"filter"] : @"";
+    UIColor *nameColor = rgbColor(t ? [t[@"labelColor"] intValue] : -1)
+        ?: [UIColor colorWithRed:1.0 green:0.97 blue:0.85 alpha:1.0];
+    NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new];
+    ps.alignment = NSTextAlignmentCenter;
+    ps.lineBreakMode = NSLineBreakByClipping;
+    NSMutableAttributedString *title = [[NSMutableAttributedString alloc] initWithString:name
+        attributes:@{NSFontAttributeName: nameFont, NSForegroundColorAttributeName: nameColor,
+                     NSParagraphStyleAttributeName: ps}];
+    if (filter.length) {
+        UIColor *fc = rgbColor([t[@"filterColor"] intValue]) ?: [UIColor colorWithRed:0.0 green:0.9 blue:0.0 alpha:1.0];
+        [title appendAttributedString:[[NSAttributedString alloc]
+            initWithString:[@"\n" stringByAppendingString:filter]
+            attributes:@{NSFontAttributeName: stateFont, NSForegroundColorAttributeName: fc,
+                         NSParagraphStyleAttributeName: ps}]];
+    }
+    [b setAttributedTitle:title forState:UIControlStateNormal];
+}
+
+// Lay out + state the collapsed pill and the (resting) fan chips from the chat snapshot each tick. Mirrors
+// updateChrome: hides everything (revealing the engine's own chat) when the native chrome is toggled off or the
+// layout is unsupported (not Classic/164). The pill sits at the chat origin; the fan row spans the chat width
+// (kChatW) and is the drag hit-test target. Frame/visibility mutation is skipped mid fan-animation so the
+// animation owns the views; content (sprite + label) is always refreshed.
 - (void)updateChatTabs {
     if (!self.chatTabsBuilt) return;
+    if (self.mapOpen) { [self hideChatTabs]; return; }   // fullscreen world map: the pill would cover it
     if (!self.chromeVisible || self.renderW <= 0) { [self hideChatTabs]; return; }
     NSString *snap = [JVMLauncher chatSnapshot];
     if (snap.length == 0) { [self hideChatTabs]; return; }
     NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
                                                       options:0 error:nil];
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) { [self hideChatTabs]; return; }
-    // LAYOUT GUARD (same as updateChrome): the native HUD only works in the Classic resizable layout (164). In any
-    // other layout, hide the native tabs so the engine's own chat row renders + works.
+    // LAYOUT GUARD (same as updateChrome): the native HUD only works in the Classic resizable layout (164).
     if ([d[@"topLevelId"] intValue] != 164) { [self hideChatTabs]; return; }
     NSArray *tabs = [d[@"tabs"] isKindOfClass:[NSArray class]] ? d[@"tabs"] : nil;
     if (tabs.count == 0) { [self hideChatTabs]; return; }
@@ -1393,23 +1668,28 @@ static int chatRowCanvasH(void) {
     CGFloat s = W / (CGFloat)self.renderW;           // canvas px -> screen pt (uniform: render aspect == screen)
     CGFloat rowX = [d[@"chatX"] intValue] * s;
     CGFloat rowY = [d[@"chatY"] intValue] * s;
-    // Official-mobile layout: 7 equal-width tabs spanning the chat width (kChatW), two-line content. No over-widening
-    // — the row IS the chat width, so the message area below stays its natural width and aligns.
     CGFloat rowW = kChatW * s;
     CGFloat rowH = kChatTabRowCanvasH * s;
     CGFloat tabW = rowW / kChatTabCount;
-    [JVMLauncher setEngineChatTabRowHeight:kChatTabRowCanvasH];   // push messages below the taller tab row
+    [JVMLauncher setEngineChatTabRowHeight:kChatTabRowCanvasH];   // push messages below the (constant) tab row
     [JVMLauncher setEngineChatAreaWidth:0];                        // chat keeps its natural 519 width
-    // Two text lines: channel name (top) + filter state (bottom). Size both to the row height.
+
+    // Stash the fan geometry (chips are the original tab size + kChatFanPopPt) + the collapsed pill frame. The
+    // pill is ONE tab wide so it matches a single original tab (the active channel) instead of an oversized bar.
+    self.chatFanRowX = rowX;
+    self.chatFanRowY = rowY;
+    self.chatFanTabW = tabW;
+    self.chatFanChipH = rowH + kChatFanPopPt;
+    self.chatPillFrame = CGRectMake(floor(rowX), floor(rowY), ceil(tabW), ceil(rowH));
+
     CGFloat nameSize = floor(rowH * 0.40);
     CGFloat stateSize = floor(rowH * 0.34);
     UIFont *nameFont = [UIFont fontWithName:@"RuneScape" size:nameSize] ?: [UIFont boldSystemFontOfSize:nameSize];
     UIFont *stateFont = [UIFont fontWithName:@"RuneScape" size:stateSize] ?: [UIFont systemFontOfSize:stateSize];
 
-    // Which tab the snapshot reports selected (sprite==SELECTED), then reconcile with the optimistic highlight.
-    // The engine's tab sprite only updates on a redraw (which may not happen until a later game interaction), so
-    // HOLD the just-tapped tab selected until the snapshot actually agrees — NO timeout (a timeout would revert the
-    // highlight to the engine's stale sprite after a few seconds, then it'd flip back on the next game click).
+    // Which channel the snapshot reports selected, reconciled with the optimistic highlight (the engine tab sprite
+    // lags a redraw). Persist the last known selection so the pill still names the open channel while collapsed
+    // (collapse can invalidate the snapshot's tab bounds/sprite).
     int snapSel = -1;
     for (int j = 0; j < (int)tabs.count && j < kChatTabCount; j++) {
         NSDictionary *tj = [tabs[j] isKindOfClass:[NSDictionary class]] ? tabs[j] : nil;
@@ -1417,59 +1697,177 @@ static int chatRowCanvasH(void) {
     }
     int effSel = snapSel;
     if (self.optimisticChatTab >= 0) {
-        if (snapSel == self.optimisticChatTab) {
-            self.optimisticChatTab = -1;   // engine sprite caught up -> trust the snapshot from here
-        } else {
-            effSel = (int)self.optimisticChatTab;   // hold the instant highlight until it does
-        }
+        if (snapSel == self.optimisticChatTab) self.optimisticChatTab = -1;
+        else effSel = (int)self.optimisticChatTab;
     }
-    if (self.chatCollapsed) { effSel = -1; }   // collapsed -> no tab highlighted (box is hidden)
-    self.chatActiveTab = effSel;               // remember it: a tap on this tab collapses the box
+    if (effSel >= 0) self.chatActiveTab = effSel;
+    int pillSel = (effSel >= 0) ? effSel : (int)self.chatActiveTab;
+    if (pillSel < 0) pillSel = 0;   // never seen a selection yet -> default to All
+
+    NSDictionary *pillTab = (pillSel < (int)tabs.count && [tabs[pillSel] isKindOfClass:[NSDictionary class]])
+        ? tabs[pillSel] : nil;
+    [self paintChatButton:self.chatPill channel:pillSel tab:pillTab selected:YES nameFont:nameFont stateFont:stateFont];
 
     for (int i = 0; i < kChatTabCount; i++) {
         UIButton *b = self.chatTabButtons[i];
-        b.frame = CGRectMake(floor(rowX + i * tabW), floor(rowY), ceil(tabW), ceil(rowH));
-
         NSDictionary *t = (i < (int)tabs.count && [tabs[i] isKindOfClass:[NSDictionary class]]) ? tabs[i] : nil;
-        BOOL selected = (i == effSel);
-        BOOL hasNew = [t[@"new"] boolValue];
-        UIImage *bg = self.chatBtnImg;
-        if (selected) bg = self.chatBtnSelImg;
-        else if (hasNew) bg = self.chatBtnNewImg;
-        [b setBackgroundImage:bg forState:UIControlStateNormal];
+        [self paintChatButton:b channel:i tab:t selected:(i == effSel)
+                     nameFont:nameFont stateFont:stateFont];
+    }
 
-        // Two-line label like the official app: channel name (off-white) on top, filter state ("On"/"Off"/…) below
-        // in the engine's state colour (green for On, etc.). "All" has no filter state -> single line.
-        NSString *name = kChatTabNames[i];
-        NSString *filter = [t[@"filter"] isKindOfClass:[NSString class]] ? t[@"filter"] : @"";
-        UIColor *nameColor = rgbColor(t ? [t[@"labelColor"] intValue] : -1)
-            ?: [UIColor colorWithRed:1.0 green:0.97 blue:0.85 alpha:1.0];
-        NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new];
-        ps.alignment = NSTextAlignmentCenter;
-        ps.lineBreakMode = NSLineBreakByClipping;
-        NSMutableAttributedString *title = [[NSMutableAttributedString alloc] initWithString:name
-            attributes:@{NSFontAttributeName: nameFont, NSForegroundColorAttributeName: nameColor,
-                         NSParagraphStyleAttributeName: ps}];
-        if (filter.length) {
-            UIColor *fc = rgbColor([t[@"filterColor"] intValue]) ?: [UIColor colorWithRed:0.0 green:0.9 blue:0.0 alpha:1.0];
-            [title appendAttributedString:[[NSAttributedString alloc]
-                initWithString:[@"\n" stringByAppendingString:filter]
-                attributes:@{NSFontAttributeName: stateFont, NSForegroundColorAttributeName: fc,
-                             NSParagraphStyleAttributeName: ps}]];
-        }
-        [b setAttributedTitle:title forState:UIControlStateNormal];
-        b.hidden = NO;
+    if (self.chatFanAnimating) return;   // the fan animation owns frames/visibility this beat
+    if (self.chatFanned) {
+        // The live gesture owns chip frames + hover transforms; don't reframe them here (setting .frame on a
+        // transformed view fights the hover scale). Just keep the pill INVISIBLE-but-present — hiding it would
+        // cancel the in-flight long-press it owns. alpha 0 keeps the recognizer alive.
+        self.chatPill.alpha = 0.0;
+    } else {
+        self.chatPill.frame = self.chatPillFrame;
+        self.chatPill.alpha = 1.0;
+        self.chatPill.hidden = NO;
+        for (UIButton *b in self.chatTabButtons) b.hidden = YES;
+        self.chatFilterHint.hidden = YES;
     }
 }
 
 - (void)hideChatTabs {
     self.chatScrollable = NO;   // chat not open -> drags fall through to the camera
+    self.chatPill.hidden = YES;
+    self.chatFilterHint.hidden = YES;
     for (UIButton *b in self.chatTabButtons) b.hidden = YES;
-    // Restore the engine's own (small) chat tab row + native width whenever the native tabs aren't shown (toggled
-    // off / not logged in / unsupported layout): drop the push-down + widen so CHATAREA returns to the engine's
-    // 23px offset / 519 width and its real CONTROLS row renders + works.
+    self.chatFanned = NO;
+    self.chatFanAnimating = NO;
+    self.chatHoverChip = -1;
+    self.chatFilterChip = -1;
+    // Restore the engine's own (small) chat tab row + native width whenever the native tabs aren't shown.
     [JVMLauncher setEngineChatTabRowHeight:0];
     [JVMLauncher setEngineChatAreaWidth:0];
+}
+
+// The resting (fanned) frame of chip i, in self.screen coords, from the stashed fan geometry.
+- (CGRect)chatChipFrameForIndex:(int)i {
+    return CGRectMake(floor(self.chatFanRowX + i * self.chatFanTabW), floor(self.chatFanRowY),
+                      ceil(self.chatFanTabW), ceil(self.chatFanChipH));
+}
+
+// Which fan column the finger is over (0..6), or -1 if clearly off the fan. Accepts a generous vertical band
+// BELOW the chips (the pull-down zone) so a finger dragging down to filter still maps to its column.
+- (NSInteger)chatChipColumnAtPoint:(CGPoint)p {
+    CGFloat rowW = self.chatFanTabW * kChatTabCount;
+    if (p.x < self.chatFanRowX || p.x >= self.chatFanRowX + rowW) return -1;
+    CGFloat top = self.chatFanRowY - 44.0;
+    CGFloat bot = self.chatFanRowY + self.chatFanChipH + kChatPullDownPt + 60.0;
+    if (p.y < top || p.y > bot) return -1;
+    NSInteger k = (NSInteger)floor((p.x - self.chatFanRowX) / self.chatFanTabW);
+    return (k < 0) ? 0 : (k >= kChatTabCount ? kChatTabCount - 1 : k);
+}
+
+// Spring the chips out from the pill into the fanned row (or back). Frame/visibility is the animation's during
+// the run (updateChatTabs defers via chatFanAnimating).
+- (void)fanOutChat {
+    if (self.chatFanned) return;
+    self.chatFanned = YES;
+    self.chatFanAnimating = YES;
+    self.chatFilterChip = -1;
+    self.chatHoverChip = -1;
+    for (int i = 0; i < kChatTabCount; i++) {
+        UIButton *c = self.chatTabButtons[i];
+        c.transform = CGAffineTransformIdentity;
+        c.layer.borderWidth = 0;
+        c.frame = self.chatPillFrame;
+        c.alpha = 0.0;
+        c.hidden = NO;
+    }
+    [UIView animateWithDuration:kChatFanAnim delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0.4
+                        options:UIViewAnimationOptionCurveEaseOut animations:^{
+        for (int i = 0; i < kChatTabCount; i++) {
+            self.chatTabButtons[i].frame = [self chatChipFrameForIndex:i];
+            self.chatTabButtons[i].alpha = 1.0;
+        }
+        self.chatPill.alpha = 0.0;
+    } completion:^(BOOL finished) {
+        self.chatFanAnimating = NO;
+        // Leave the pill hidden=NO at alpha 0 — hiding it would cancel the long-press it owns.
+    }];
+}
+
+- (void)fanInChat {
+    if (!self.chatFanned) return;
+    self.chatFanAnimating = YES;
+    self.chatFilterHint.hidden = YES;
+    self.chatPill.hidden = NO;
+    self.chatPill.alpha = 0.0;
+    // Clear any hover scale/border first — animating .frame on a transformed view is undefined.
+    for (UIButton *c in self.chatTabButtons) { c.transform = CGAffineTransformIdentity; c.layer.borderWidth = 0; }
+    [UIView animateWithDuration:kChatFanAnim delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+        for (int i = 0; i < kChatTabCount; i++) {
+            self.chatTabButtons[i].frame = self.chatPillFrame;
+            self.chatTabButtons[i].alpha = 0.0;
+        }
+        self.chatPill.alpha = 1.0;
+    } completion:^(BOOL finished) {
+        for (UIButton *c in self.chatTabButtons) {
+            c.hidden = YES;
+            c.transform = CGAffineTransformIdentity;
+            c.layer.borderWidth = 0;
+        }
+        self.chatFanned = NO;
+        self.chatFanAnimating = NO;
+        self.chatHoverChip = -1;
+        self.chatFilterChip = -1;
+    }];
+}
+
+// Highlight the chip under the finger (scale + white border) and clear the others. -1 clears all. NOT named
+// setChatHoverChip: — that's the chatHoverChip property setter, and assigning self.chatHoverChip inside it would
+// recurse into itself (stack overflow). This is a distinct method that updates the property + the visuals.
+- (void)applyChatHover:(NSInteger)k {
+    if (k == self.chatHoverChip) return;
+    self.chatHoverChip = k;
+    for (int i = 0; i < kChatTabCount; i++) {
+        UIButton *c = self.chatTabButtons[i];
+        BOOL on = (i == k);
+        c.transform = on ? CGAffineTransformMakeScale(1.06, 1.06) : CGAffineTransformIdentity;
+        c.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.9].CGColor;
+        c.layer.borderWidth = on ? 2.0 : 0.0;
+        c.layer.cornerRadius = on ? 6.0 : 0.0;
+        if (on) [c.superview bringSubviewToFront:c];
+    }
+}
+
+// Switch the open chat to channel k by replaying its op-script (works on the hidden engine tab); reopen the box
+// if it was collapsed, and optimistically show it selected this frame (the engine sprite lags a redraw).
+- (void)chatSwitchToChip:(int)k {
+    if (k < 0 || k >= kChatTabCount) return;
+    if (self.chatCollapsed) {
+        self.chatCollapsed = NO;
+        [JVMLauncher setEngineChatCollapsed:NO];
+    }
+    [JVMLauncher switchEngineChatTab:k];
+    self.optimisticChatTab = k;
+    self.optimisticChatAt = CACurrentMediaTime();
+    [self updateChatTabs];
+    [self appendLine:[NSString stringWithFormat:@"[chat] switch -> %d (%@)", k, kChatTabNames[k]]];
+}
+
+// Position + reveal the ▾ filter hint under the hovered filterable chip as the finger dips toward its bottom.
+- (void)updateChatFilterHintForColumn:(NSInteger)k point:(CGPoint)p {
+    if (k < 0 || k >= kChatTabCount || !kChatTabFilterable[k] || self.chatFilterChip >= 0) {
+        self.chatFilterHint.hidden = YES;
+        return;
+    }
+    CGRect chip = [self chatChipFrameForIndex:(int)k];
+    CGFloat mid = CGRectGetMidY(chip);
+    CGFloat reveal = (p.y - (mid + kChatFilterHintPt)) / kChatPullDownPt;   // 0 at mid+slop, ~1 at the trigger
+    reveal = fmin(fmax(reveal, 0.0), 1.0);
+    if (reveal <= 0.01) { self.chatFilterHint.hidden = YES; return; }
+    CGFloat hh = 18.0;
+    self.chatFilterHint.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold];
+    self.chatFilterHint.frame = CGRectMake(CGRectGetMinX(chip), CGRectGetMaxY(chip) + 2.0,
+                                           CGRectGetWidth(chip), hh);
+    self.chatFilterHint.alpha = reveal;
+    self.chatFilterHint.hidden = NO;
+    [self.screen bringSubviewToFront:self.chatFilterHint];
 }
 
 // Resolve the live engine chat-button centre (canvas px) for native button tag i, from the chat snapshot bounds.
@@ -1489,64 +1887,103 @@ static int chatRowCanvasH(void) {
     return YES;
 }
 
-// A native chat-tab tap -> switch the chat to that tab. The engine tab sprites are HIDDEN (so they don't peek under
-// this bigger native row), which makes them unclickable, so we REPLAY the tab's op-script (works on hidden widgets)
-// the same way the bottom tab-grid drives the hidden tab stones — NOT a proxy click (a click leaks through to the
-// chat/scene behind the hidden tab).
-- (void)onChatTabButton:(UIButton *)b {
+// Quick tap on the pill -> toggle the chat message area open/collapsed (the channel stays selected).
+- (void)onChatPillTap:(UITapGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady]) return;
-    if (!self.chatCollapsed && b.tag == self.chatActiveTab && b.tag < 7) {
-        // Tapping the already-active tab COLLAPSES the chat box (OSRS-mobile behaviour) — the native tab row stays
-        // so a tap reopens it. No op-replay (that would re-render the box the engine still has shown).
-        self.chatCollapsed = YES;
-        [JVMLauncher setEngineChatCollapsed:YES];
-        [self updateChatTabs];
-        [self appendLine:[NSString stringWithFormat:@"[chat] tab %ld (%@) -> collapse", (long)b.tag, kChatTabNames[b.tag]]];
-        return;
-    }
-    // Switch to the tapped tab (reopening the box if it was collapsed) by replaying its op-script.
-    if (self.chatCollapsed) {
-        self.chatCollapsed = NO;
-        [JVMLauncher setEngineChatCollapsed:NO];
-    }
-    [JVMLauncher switchEngineChatTab:(int)b.tag];
-    // Instant highlight: the tapped tab is now the active view; show it selected immediately (the engine's own tab
-    // sprite, which the snapshot reads, only updates on a redraw). Report (tag 7) doesn't change the selection.
-    if (b.tag < 7) {
-        self.optimisticChatTab = b.tag;
-        self.optimisticChatAt = CACurrentMediaTime();
-    }
-    [self updateChatTabs];   // reflect the new selection this frame, don't wait for the next 10Hz tick
-    [self appendLine:[NSString stringWithFormat:@"[chat] tab %ld (%@) -> op-replay switch",
-                      (long)b.tag, kChatTabNames[b.tag]]];
+    self.chatCollapsed = !self.chatCollapsed;
+    [JVMLauncher setEngineChatCollapsed:self.chatCollapsed];
+    [self updateChatTabs];
+    [self appendLine:[NSString stringWithFormat:@"[chat] pill tap -> %@", self.chatCollapsed ? @"collapse" : @"expand"]];
 }
 
-// A native chat-tab LONG-PRESS -> right-click the live engine button so the engine opens its filter menu
-// (On / Filter / Off / Hide …), then drive the same native big-row menu overlay used for world right-clicks
-// (presentNativeMenu reads the engine menu via MenuPeek; the overlay appears at the finger, the row click-through
-// targets the engine menu rows). Drag to a row + release to pick.
-- (void)onChatTabLongPress:(UILongPressGestureRecognizer *)g {
+// The driver: hold the pill to fan the channels out, then drag to pick. Horizontal drag = SELECT (lift switches
+// to the chip under the finger); pulling DOWN off a filterable chip's bottom = FILTER (open that chip's engine
+// filter menu and hand off to the native big-row overlay). Dragging back UP onto the row cancels the filter.
+- (void)onChatPillDrag:(UILongPressGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady]) return;
-    UIButton *b = (UIButton *)g.view;
-    CGPoint loc = [g locationInView:self.view];
+    CGPoint pScreen = [g locationInView:self.screen];
     switch (g.state) {
         case UIGestureRecognizerStateBegan: {
-            int cx = 0, cy = 0;
-            if (![self engineChatButtonCenterForTag:b.tag x:&cx y:&cy]) return;
-            [self openEngineMenuAtGameX:cx gameY:cy anchor:loc];
-            [self appendLine:[NSString stringWithFormat:@"[chat] tab %ld (%@) long-press -> filter menu @%d,%d",
-                              (long)b.tag, kChatTabNames[b.tag], cx, cy]];
+            self.chatDragStart = pScreen;
+            self.chatDragMoved = NO;
+            [self fanOutChat];
+            if (!self.tapHaptic) self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+            [self.tapHaptic impactOccurred];
+            [self.tapHaptic prepare];
+            [self appendLine:@"[chat] pill hold -> fan out"];
             break;
         }
-        case UIGestureRecognizerStateChanged:
-            [self updateMenuHighlightForPoint:[g locationInView:self.screen]];
+        case UIGestureRecognizerStateChanged: {
+            if (!self.chatDragMoved
+                && hypot(pScreen.x - self.chatDragStart.x, pScreen.y - self.chatDragStart.y) > 16.0) {
+                self.chatDragMoved = YES;   // a real drag began (tracked even mid fan-out) -> a release commits a switch
+            }
+            if (self.chatFanAnimating) break;   // let the fan settle before tracking hover
+            if (self.chatFilterChip >= 0) {
+                // FILTER mode: dragging back UP onto the chip row cancels the filter and returns to SELECT.
+                CGRect chip = [self chatChipFrameForIndex:(int)self.chatFilterChip];
+                if (pScreen.y < CGRectGetMaxY(chip)) {
+                    [self cancelMenu];
+                    self.chatFilterChip = -1;
+                    [self appendLine:@"[chat] pull-up -> filter cancelled, back to select"];
+                } else {
+                    [self updateMenuHighlightForPoint:pScreen];
+                }
+                break;
+            }
+            NSInteger k = [self chatChipColumnAtPoint:pScreen];
+            [self applyChatHover:k];
+            [self updateChatFilterHintForColumn:k point:pScreen];
+            // Pull-down escalation: finger crossed below a filterable chip's bottom by the threshold.
+            if (k >= 0 && kChatTabFilterable[k]) {
+                CGRect chip = [self chatChipFrameForIndex:(int)k];
+                if (pScreen.y > CGRectGetMaxY(chip) + kChatPullDownPt) {
+                    // A collapsed chat is SHOVED OFF-SCREEN (not hidden), so the engine filter button is at
+                    // canvas y≈3000 — a right-click there opens nothing (the "armed but invisible" filter).
+                    // Expand first; the engine restores the widget next tick and the snapshot follows, then a
+                    // later .changed event (finger still held below the chip) passes the on-canvas gate below.
+                    if (self.chatCollapsed) {
+                        self.chatCollapsed = NO;
+                        [JVMLauncher setEngineChatCollapsed:NO];
+                        [self appendLine:@"[chat] pull-down on collapsed chat -> expand first"];
+                    }
+                    int cx = 0, cy = 0;
+                    if ([self engineChatButtonCenterForTag:k x:&cx y:&cy]
+                        && cy < self.renderH) {   // on-canvas = the expand has landed in the snapshot
+                        self.chatFilterChip = k;
+                        self.chatFilterHint.hidden = YES;
+                        [self openEngineMenuAtGameX:cx gameY:cy anchor:pScreen];   // screen coords, like onLongPress
+                        if (self.menuHaptic) { [self.menuHaptic selectionChanged]; [self.menuHaptic prepare]; }
+                        [self appendLine:[NSString stringWithFormat:@"[chat] pull-down %ld (%@) -> filter menu @%d,%d collapsed=%d",
+                                          (long)k, kChatTabNames[k], cx, cy, (int)self.chatCollapsed]];
+                    }
+                }
+            }
             break;
-        case UIGestureRecognizerStateEnded:
-            [self commitMenuSelection];
+        }
+        case UIGestureRecognizerStateEnded: {
+            if (self.chatFilterChip >= 0) {
+                [self commitMenuSelection];
+                self.chatFilterChip = -1;
+            } else {
+                // Switch to the chip that was HIGHLIGHTED under the finger (what you see is what you get).
+                // Re-hit-testing the exact release point was fragile: a finger drifts as it lifts, and the
+                // old "release must be above the chip bottom" bound rejected valid releases (worse once the
+                // chips matched the shorter original tab height). A switch needs a real drag (chatDragMoved),
+                // so a hold-and-release to peek doesn't change channels.
+                NSInteger k = self.chatHoverChip;
+                if (k < 0) k = [self chatChipColumnAtPoint:pScreen];   // fast flick: hover not tracked yet
+                if (self.chatDragMoved && k >= 0 && k != self.chatActiveTab) {
+                    [self chatSwitchToChip:(int)k];
+                }
+            }
+            [self fanInChat];
             break;
+        }
         case UIGestureRecognizerStateCancelled:
         case UIGestureRecognizerStateFailed:
-            [self cancelMenu];
+            if (self.chatFilterChip >= 0) { [self cancelMenu]; self.chatFilterChip = -1; }
+            [self fanInChat];
             break;
         default:
             break;
@@ -1566,7 +2003,8 @@ static int chatRowCanvasH(void) {
     NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
                                                      options:0 error:nil];
     self.tabRailBg.hidden = YES;   // mobile cells are individually styled; no solid rail strip behind them
-    if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) {
+    if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue] || self.mapOpen) {
+        // (mapOpen: the fullscreen world map owns the screen — the native grid would cover it + steal taps)
         for (UIButton *btn in self.tabButtons) btn.hidden = YES;
         for (UIView *cv in self.stoneCovers) cv.hidden = YES;
         return;
@@ -1717,6 +2155,66 @@ static int chatRowCanvasH(void) {
     });
 }
 
+// GPU Route C — long-press the launch button to route into the L1 kill-test (single fire on press-began).
+- (void)onLaunchRouteCL1Gesture:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    if (self.launched) return;
+    self.pendingRouteCL1 = YES;
+    [self onLaunch];
+}
+
+- (void)onLaunchRouteCGpuGesture:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    if (self.launched) return;
+    // GPU Route C black-scene bisection: two-finger long-press = GPU in FIXED mode (NO headless.resize, stays
+    // 765x503). The CPU path renders the scene fine at the resizable 1304x600 + viewport=0x0 state, while GPU
+    // resizable never dispatches the scene render (drawScene=0). Fixed mode isolates whether the resizable
+    // viewport/scene-dispatch path is the GPU-broken one. The ▶ Run GPU button stays GPU + resize.
+    self.pendingRouteCGpu = YES;
+    self.pendingRouteCGpuNoResize = YES;
+    [self onLaunch];
+}
+
+// "117HD readback" button: 117HD resizable on the proven glReadPixels READBACK present (no CAEAGLLayer) — the
+// fallback if the default direct-present path scans out black or regresses on a future change. Same resizable
+// canvas/sharpness/chrome as the green button; just the slower present (~15fps vs ~18+).
+- (void)onLaunchZoneReadback {
+    if (self.launched) return;
+    self.pendingRouteCZone = YES;
+    [self onLaunch];
+}
+
+// THREE-FINGER long-press: boot 117HD/Zone in the FIXED 765x503 fallback (no headless.resize) — the proven
+// readback path from Zone bring-up. The one-tap buttons cover resizable readback (green) + resizable direct
+// present (⚡); this gesture stays as the fixed-mode escape hatch.
+- (void)onLaunchRouteCZoneGesture:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    if (self.launched) return;
+    self.pendingRouteCZone = YES;
+    self.pendingRouteCGpuNoResize = YES;
+    [self onLaunch];
+}
+
+// GPU Route C — dedicated one-tap button (same effect as the two-finger long-press, but unambiguous).
+- (void)onLaunchGpu {
+    if (self.launched) return;
+    self.pendingRouteCGpu = YES;
+    [self onLaunch];
+}
+
+// The DEFAULT 117HD boot (one-tap green button): RESIZABLE + DIRECT present. Resizable = the engine canvas resizes
+// to renderW×renderH (~1302x600) after login (sharp + the native Jagex-mobile chrome activates, all gated on
+// client.isResized()); direct present = RLHD renders straight into a CAEAGLLayer drawable scanned out by
+// presentRenderbuffer (no per-frame glReadPixels readback — device-confirmed faster). The CAEAGLLayer starts hidden
+// so the CPU login/loading blit shows during boot and is revealed only once the world is warmed up (no black boot,
+// no sky flash). Fallbacks: the "117HD readback" button (resizable readback) and the 3-finger gesture (fixed 765).
+- (void)onLaunchZone {
+    if (self.launched) return;
+    self.pendingRouteCZone = YES;
+    self.pendingRouteCZoneDirect = YES;
+    [self onLaunch];
+}
+
 - (void)onLaunch {
     if (self.launched) return;
     // If the login web view ran this session, WebKit is resident and the JVM would crash at code-cache
@@ -1724,6 +2222,9 @@ static int chatRowCanvasH(void) {
     if (self.webKitUsedThisSession) { [self promptRestartToPlay]; return; }
     self.launched = YES;
     self.launchButton.enabled = NO;
+    self.gpuButton.enabled = NO;
+    self.zoneButton.enabled = NO;
+    self.zoneFastButton.enabled = NO;
     [self.jitTimer invalidate];
     [self captureStdio];
 
@@ -1747,12 +2248,27 @@ static int chatRowCanvasH(void) {
     self.captureDir = [docs stringByAppendingPathComponent:@"rl-capture"];
     self.framesShown = 0;
     self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(onDisplayTick)];
+    // ProMotion: drive the display at up to 120Hz so the GPU direct-present (synced to vsync) isn't capped at 60.
+    // The GPU renders in ~3ms, so there's headroom for 120. (Needs CADisableMinimumFrameDurationOnPhone in Info.plist.)
+    if (@available(iOS 15.0, *)) {
+        self.displayLink.preferredFrameRateRange = CAFrameRateRangeMake(60.0f, 120.0f, 120.0f);
+    }
     [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
 
     JVMLogSink log = ^(NSString *line) { [self appendLine:line]; };
     [self appendLine:@"--- launching JVM on worker thread ---"];
 
     JVMLauncher *launcher = [[JVMLauncher alloc] init];
+    launcher.routecL1Mode = self.pendingRouteCL1;   // GPU Route C L1 kill-test (set by the long-press gesture)
+    launcher.routecGpuMode = self.pendingRouteCGpu;  // GPU Route C full path (two-finger long-press)
+    launcher.routecZoneMode = self.pendingRouteCZone; // GPU Zone 117HD path (three-finger long-press)
+    if (self.pendingRouteCL1) {
+        [self appendLine:@"[shell] *** GPU Route C L1 kill-test — booting RouteCL1Probe (not full RuneLite) ***"];
+    } else if (self.pendingRouteCZone) {
+        [self appendLine:@"[shell] *** GPU Zone (117HD) — booting full RuneLite with RLHD on the GL bridge (device GPU) ***"];
+    } else if (self.pendingRouteCGpu) {
+        [self appendLine:@"[shell] *** GPU Route C — booting full RuneLite with the GL bridge (device GPU) ***"];
+    }
     // Edge-to-edge (A1): render aspect MATCHES THE FULL SCREEN (the game view fills the whole bounds), so the
     // blit fills it with no letterbox. The HUD no longer clips at the edges because it is relocated INTO the
     // safe area (updateHudLayout), not kept at the canvas corners.
@@ -1770,9 +2286,88 @@ static int chatRowCanvasH(void) {
     int renderW = (int)lround(renderH * aspect);
     self.renderW = renderW;
     self.renderH = renderH;
-    launcher.resizeSpec = [NSString stringWithFormat:@"%dx%d", renderW, renderH];
-    [self appendLine:[NSString stringWithFormat:@"[shell] full-screen %.0fx%.0f aspect %.3f -> render %@",
-                      sw, sh, aspect, launcher.resizeSpec]];
+    if (self.pendingRouteCGpuNoResize) {
+        // GPU Route C bisection: leave the canvas at the classic fixed 765x503 (no resizable switch) so we can
+        // tell whether the scene render is suppressed by GPU mode itself or only by the resizable-layout path.
+        launcher.resizeSpec = nil;
+        [self appendLine:@"[shell] *** GPU Route C — FIXED mode (no headless.resize, 765x503 bisection) ***"];
+    } else {
+        launcher.resizeSpec = [NSString stringWithFormat:@"%dx%d", renderW, renderH];
+        [self appendLine:[NSString stringWithFormat:@"[shell] full-screen %.0fx%.0f aspect %.3f -> render %@",
+                          sw, sh, aspect, launcher.resizeSpec]];
+    }
+
+#if !defined(RC_BACKEND_ANGLE)
+    // GPU Route C DIRECT PRESENT (EAGL): render straight into a CAEAGLLayer drawable (no glReadPixels readback — the
+    // measured ~16ms/frame bottleneck). A sublayer of the game view, inserted below the chrome subviews, so the
+    // existing gestures + native HUD veneers keep working on top. Only for the normal resizable GPU path (the
+    // no-resize bisection stays on the readback path). Must be created + sized on main BEFORE the JVM thread starts
+    // (the bridge reads this layer from the JVM thread in awtCreateGLContext via renderbufferStorage:fromDrawable:).
+    // Fires for the Zone (117HD) direct-present path ONLY. Base GPU intentionally uses the READBACK present (the
+    // #else path below) so it publishes int[] frames like the CPU rasterizer — that keeps the GPU plugin
+    // toggleable to/from the software renderer at runtime without swapping the present layer. The bridge present
+    // path is mode-agnostic (keys off whether a present layer was set).
+    if (self.pendingRouteCZoneDirect && !self.pendingRouteCGpuNoResize) {
+        [self.view layoutIfNeeded];
+        CAEAGLLayer *gl = [CAEAGLLayer layer];
+        gl.frame = self.screen.bounds;
+        gl.opaque = YES;
+        gl.contentsScale = (sh > 0 ? (CGFloat)renderH / sh : 1.0);   // drawable = renderW x renderH (== engine canvas)
+        gl.drawableProperties = @{ kEAGLDrawablePropertyRetainedBacking : @NO,
+                                   kEAGLDrawablePropertyColorFormat : kEAGLColorFormatRGBA8 };
+        // Start HIDDEN + lazily reveal: the CAEAGLLayer is a sublayer of the UIImageView so it draws ABOVE the CPU
+        // blit; keeping it hidden lets the CPU login/loading screen show during the ~10s boot, and the present fires
+        // into the hidden layer meanwhile. onDisplayTick reveals it (gl.hidden=NO + stop the CPU blit) once the world
+        // has warmed up (geometry uploaded, JVMLauncher.sceneWarmedUp) so the first visible frame is the world, not the
+        // boot sky. (Armed, not gpuPresent=YES — the switch flips gpuPresent.)
+        gl.hidden = YES;
+        [self.screen.layer insertSublayer:gl atIndex:0];
+        self.glLayer = gl;
+        self.gpuPresentArmed = YES;
+        self.screen.backgroundColor = [UIColor blackColor];
+        [RouteCBridge setPresentLayer:gl];
+        [self appendLine:[NSString stringWithFormat:@"[shell] GPU direct-present ARMED (hidden): CAEAGLLayer %.0fx%.0f @%.3f -> drawable %dx%d (no readback)",
+                          gl.bounds.size.width, gl.bounds.size.height, gl.contentsScale, renderW, renderH]];
+    }
+#elif defined(RC_ANGLE_WINDOW_PRESENT)
+    // Phase A1 (MetalANGLE) WINDOW-SURFACE DIRECT PRESENT (60fps, present=0.07ms). The GPU renders the scene with
+    // ZERO GL errors and eglSwapBuffers presents at 62fps, but on device the CAMetalLayer did not scan out to the
+    // display (black screen) — the window-surface present is NOT yet visually confirmed (the gpu-present probe
+    // sealed on a glReadPixels self-check, not a screenshot). So this path is GATED OFF by default until the
+    // present is debugged; the default ANGLE build uses the proven offscreen+readback path below.
+    if (self.pendingRouteCGpu && !self.pendingRouteCGpuNoResize) {
+        [self.view layoutIfNeeded];
+        CAMetalLayer *ml = [CAMetalLayer layer];
+        ml.frame = self.screen.bounds;
+        ml.opaque = YES;
+        ml.framebufferOnly = NO;
+        ml.drawableSize = CGSizeMake(renderW, renderH);
+        ml.contentsScale = (sh > 0 ? (CGFloat)renderH / sh : 1.0);
+        [self.screen.layer insertSublayer:ml atIndex:0];
+        self.metalLayer = ml;
+        [RouteCBridge setPresentLayer:ml];
+        if ([RouteCBridge prepareWindowSurfaceOnMain]) {
+            self.gpuPresentArmed = YES;   // onDisplayTick flips to direct present once the first GPU frame presents
+            [self appendLine:[NSString stringWithFormat:@"[shell] GPU (MetalANGLE) direct present ARMED: drawable %dx%d", renderW, renderH]];
+        } else {
+            [RouteCBridge setPresentLayer:nil];
+            [ml removeFromSuperlayer];
+            self.metalLayer = nil;
+            [self appendLine:@"[shell] GPU (MetalANGLE) window surface FAILED -> offscreen FBO + readback present"];
+        }
+    } else if (self.pendingRouteCGpu) {
+        [self appendLine:@"[shell] GPU (MetalANGLE) — offscreen FBO + readback present (no-resize bisection)"];
+    }
+#else
+    // Phase A1 default: OFFSCREEN FBO + glReadPixels readback present — the PROVEN-DISPLAY path. The GPU-rendered
+    // scene is published via JavaBridge.gpuPublish -> latestFrame -> onDisplayTick blit (the exact path that
+    // displays the CPU frames), so it is guaranteed to scan out. The readback copy caps it at ~50fps; the 60fps
+    // CAMetalLayer window present is gated behind RC_ANGLE_WINDOW_PRESENT until its display is confirmed. No present
+    // layer is set -> the bridge runs offscreen + readback.
+    if (self.pendingRouteCGpu) {
+        [self appendLine:@"[shell] GPU (MetalANGLE) — offscreen FBO + readback present (proven-display path)"];
+    }
+#endif
 
     NSThread *t = [[NSThread alloc] initWithBlock:^{
         [launcher runProbesWithLog:log];
@@ -1837,6 +2432,10 @@ static int chatRowCanvasH(void) {
     [JVMLauncher relocateEngineMinimapX:mmX y:mmY];
     [JVMLauncher setEngineMinimapScale:kMinimapScalePct];   // enlarge the globe + reposition its chrome to hug it
     [JVMLauncher setEngineStonesHidden:YES];   // the native 2-col grid replaces them (no cover patch / gray box)
+    // Overlay snap-corner safe frame: plugin overlays snapped to a corner (Quest Helper's top-left guidance
+    // panel etc.) clear the curved bezel/notch; the engine also drops the top-left corner below the chat.
+    int botC = (int)lround(ins.bottom * k);
+    [JVMLauncher setEngineOverlaySafeInsetsL:leftC t:topC r:rightC b:botC];
     // The whole enlarged tab row is UI: a stray tap in it (between native buttons) should be a precise click, not
     // a walk. The native buttons own their taps; this rect just keeps any leak from drawing a walk ring.
     self.chatHitCanvas = CGRectMake(chatX, chatY, kChatW, chatRowCanvasH());
@@ -1846,19 +2445,133 @@ static int chatRowCanvasH(void) {
                       chatX, chatY, mmX, mmY, leftC, topC, rightC, k]];
 }
 
+// World map (touch): poll the bridge map snapshot (~10 Hz). Edge-triggered chrome hide/restore: the engine
+// map is FULLSCREEN at our canvas, so the native chrome (chat pill, tab grid via the mapOpen gates in
+// updateChatTabs/updateChrome, dock + corner buttons here) would cover it and steal taps. The ✕ proxies the
+// engine CLOSE (its widget sits under the curved corner). Rects refresh every poll; visibility flips on edges.
+static CGRect mapRectFromArr(NSArray *a) {
+    if (![a isKindOfClass:[NSArray class]] || a.count != 4) return CGRectZero;
+    return CGRectMake([a[0] doubleValue], [a[1] doubleValue], [a[2] doubleValue], [a[3] doubleValue]);
+}
+
+- (void)updateWorldMap {
+    NSString *snap = [JVMLauncher mapSnapshot];
+    BOOL open = NO;
+    CGRect closeR = CGRectZero, searchR = CGRectZero, windowR = CGRectZero;
+    if (snap.length) {
+        NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
+                                                          options:0 error:nil];
+        if ([d isKindOfClass:[NSDictionary class]] && [d[@"open"] boolValue]) {
+            open = YES;
+            closeR = mapRectFromArr(d[@"close"]);
+            searchR = mapRectFromArr(d[@"search"]);
+            windowR = mapRectFromArr(d[@"window"]);
+            self.mapKeyCanvas = mapRectFromArr(d[@"key"]);
+            self.mapListCanvas = mapRectFromArr(d[@"maplist"]);
+        } else {
+            self.mapKeyCanvas = CGRectZero;
+            self.mapListCanvas = CGRectZero;
+        }
+    }
+    self.mapCloseCanvas = closeR;
+    self.mapSearchCanvas = searchR;
+    self.mapWindowCanvas = windowR;
+    // Official-mobile look: scale the displayed frame so the engine's (size-capped) map window fills the
+    // screen width, black bands above/below. Display-only — input is untouched (gesture locations are read
+    // in self.screen's BOUNDS space, which UIKit maps back through the transform; mapPoint works on bounds).
+    [self applyMapZoom:open windowCanvas:windowR];
+    if (open == self.mapOpen) return;
+    self.mapOpen = open;
+    // Corner controls that overlap the (centred) map window (the chat/tab-grid veneers hide via their own
+    // ticks). The window itself is positioned by the bridge (centred via the WORLDMAP_X/Y varcs) and the
+    // scene stays visible around it, like the desktop window — no masks, and the engine's own close X is
+    // fully on-screen and tappable.
+    self.keyboardButton.hidden = open;
+    self.shiftButton.hidden = open;
+    self.screenshotButton.hidden = open;
+    self.panelDock.view.hidden = open;
+    self.debugToggle.hidden = open;
+    self.chromeToggle.hidden = open;
+    self.pluginButton.hidden = open;
+    [self appendLine:open ? @"[map] world map OPEN -> map pan/taps, chrome hidden"
+                          : @"[map] world map closed -> chrome restored"];
+}
+
+// Scale the game view so the map window fills the full screen width, centred vertically, with black bands
+// covering the magnified scene above/below — the official-OSRS-Mobile fullscreen-map look. The engine caps
+// the window's real size (probe-settled), so the fill is a DISPLAY transform only: hit-testing stays on the
+// engine's true geometry, and touches are unaffected (read in bounds space). The bands sit over the game
+// view, so they also swallow stray touches outside the scaled window.
+- (void)applyMapZoom:(BOOL)open windowCanvas:(CGRect)wr {
+    CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height;
+    if (!open || wr.size.width <= 0 || self.renderW <= 0 || W <= 0) {
+        if (!CGAffineTransformIsIdentity(self.screen.transform)) {
+            self.screen.transform = CGAffineTransformIdentity;
+            self.screen.layer.magnificationFilter = kCAFilterLinear;
+            self.glLayer.magnificationFilter = kCAFilterLinear;
+        }
+        for (UIView *v in self.mapBands) v.hidden = YES;
+        return;
+    }
+    // Pixel-art crispness: the scaled-up map reads SOFT under bilinear magnification — switch to
+    // nearest-neighbour while the map fills the screen (the official app's map is crisp-pixelated too).
+    self.screen.layer.magnificationFilter = kCAFilterNearest;
+    self.glLayer.magnificationFilter = kCAFilterNearest;
+    CGFloat s = W / (CGFloat)self.renderW;   // canvas px -> screen pt (untransformed)
+    CGRect r = CGRectMake(wr.origin.x * s, wr.origin.y * s, wr.size.width * s, wr.size.height * s);
+    CGFloat k = W / r.size.width;            // fill the full width
+    CGAffineTransform t = CGAffineTransformMake(k, 0, 0, k,
+                                                k * (W / 2 - CGRectGetMidX(r)),
+                                                k * (H / 2 - CGRectGetMidY(r)));
+    if (!CGAffineTransformEqualToTransform(self.screen.transform, t)) {
+        self.screen.transform = t;
+    }
+    if (!self.mapBands) {
+        NSMutableArray<UIView *> *m = [NSMutableArray arrayWithCapacity:2];
+        for (int i = 0; i < 2; i++) {
+            UIView *v = [[UIView alloc] initWithFrame:CGRectZero];
+            v.backgroundColor = [UIColor blackColor];
+            [self.view addSubview:v];
+            [m addObject:v];
+        }
+        self.mapBands = m;
+    }
+    CGFloat hk = r.size.height * k;          // the scaled window's on-screen height
+    CGFloat top = (H - hk) / 2;
+    self.mapBands[0].frame = CGRectMake(0, 0, W, MAX(0, top));
+    self.mapBands[1].frame = CGRectMake(0, top + hk, W, MAX(0, H - top - hk));
+    for (UIView *v in self.mapBands) { v.hidden = NO; [self.view bringSubviewToFront:v]; }
+}
+
 // Called every screen refresh once the JVM is running. Pulls the engine's latest composited frame
 // straight from the buffer via reverse JNI (JavaBridge.getFramePixels) and blits it — no PNG round-trip,
 // no disk, no capture budget, so it's smooth and runs for the whole session. Also keeps the app
 // foreground-active+rendering (the jetsam-protection that the §6.2 work established).
 - (void)onDisplayTick {
-    UIImage *img = [JVMLauncher latestFrame];
-    if (img == nil) return;   // VM not up yet / no frame drawn yet
-    self.screen.image = img;
-    self.framesShown++;
-    // Light heartbeat (~once/sec at 60 Hz) so the log shows the live blit running without flooding it.
-    if (self.framesShown == 1 || self.framesShown % 60 == 0) {
-        [self appendLine:[NSString stringWithFormat:@"[shell] live blit frame #%d (%.0fx%.0f)",
-                          self.framesShown, img.size.width, img.size.height]];
+    // Lazy switch to direct present: keep blitting CPU frames (boot/login/loading stay visible) until the GPU has
+    // presented a frame AND the world has warmed up (geometry uploaded) — then reveal the GPU layer and stop the CPU
+    // blit. The warmup gate (sceneWarmedUp) means the first frame the user sees is the world, not the boot sky.
+    if (self.gpuPresentArmed && !self.gpuPresent && [RouteCBridge hasPresentedFrame] && [JVMLauncher sceneWarmedUp]) {
+        self.gpuPresent = YES;
+        self.glLayer.hidden = NO;                    // EAGL: reveal the drawable (was hidden so the CPU login/loading blit showed)
+        self.screen.image = nil;                     // GL presents directly; UIImageView is just a gesture host
+        self.screen.backgroundColor = [UIColor blackColor];
+        [self appendLine:@"[shell] GPU direct present LIVE (world warmed up — layer revealed)"];
+    }
+    if (self.gpuPresent) {
+        // GPU direct-present: the engine renders straight into the CAEAGLLayer and presents on its own thread, so
+        // there is no per-tick blit here. Keep the tick alive for the heartbeat + native HUD/chrome refresh below.
+        self.framesShown++;
+    } else {
+        UIImage *img = [JVMLauncher latestFrame];
+        if (img == nil) return;   // VM not up yet / no frame drawn yet
+        self.screen.image = img;
+        self.framesShown++;
+        // Light heartbeat (~once/sec at 60 Hz) so the log shows the live blit running without flooding it.
+        if (self.framesShown == 1 || self.framesShown % 60 == 0) {
+            [self appendLine:[NSString stringWithFormat:@"[shell] live blit frame #%d (%.0fx%.0f)",
+                              self.framesShown, img.size.width, img.size.height]];
+        }
     }
 
     // Refresh the native tab rails from the chrome snapshot (~10 Hz — positions/active state rarely change,
@@ -1871,6 +2584,7 @@ static int chatRowCanvasH(void) {
     // snapshot (~10 Hz). Verifies the device data-flow before the full native chat veneer.
     if (self.framesShown % 6 == 0) {
         [self updateHudLayout];
+        [self updateWorldMap];
     }
 
     // Drain the shared-core notification + outbound-link queues (~2 Hz). Both no-op until something is queued;
@@ -1928,12 +2642,35 @@ static int chatRowCanvasH(void) {
             self.menuBuilding = NO;
         } else if (CACurrentMediaTime() - self.menuOpenAt > 0.6) {
             self.menuBuilding = NO;   // give up; the engine menu + clamp path (updateMenuHighlight) still works
+            NSString *snap = [JVMLauncher menuPeekSnapshot];
+            [self appendLine:[NSString stringWithFormat:@"[menu-diag] build TIMEOUT @game %d,%d snap=%@",
+                              self.lastMenuX, self.lastMenuY,
+                              snap.length ? [snap substringToIndex:MIN((NSUInteger)200, snap.length)] : @"(empty)"]];
         }
     }
 
-    // Interactable-tap feedback: when the engine resolved a tap to a real interactable it bumps the counter —
-    // give a light buzz (the "you grabbed something" feel) and draw a RED click ring. A plain walk doesn't bump,
-    // so after a short grace window we draw a YELLOW ring instead (and stay silent). Matches the official app.
+    // #8 close: after a commit/cancel, hold the native cover up until the engine menu has actually closed (the
+    // snapshot's menuOpen flips false), so the briefly-still-open engine menu never peeks out from under it.
+    // Timeout at 0.3s in case the snapshot lags, so the cover can't get stuck.
+    if (self.menuClosing) {
+        BOOL engineClosed = NO;
+        NSString *snap = [JVMLauncher menuPeekSnapshot];
+        if (snap.length) {
+            NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
+                                                             options:0 error:nil];
+            if ([d isKindOfClass:[NSDictionary class]] && ![d[@"menuOpen"] boolValue]) engineClosed = YES;
+        }
+        if (engineClosed || CACurrentMediaTime() - self.menuClosingAt > 0.3) {
+            [self teardownMenuViews];
+        }
+    }
+
+    // Interactable-tap feedback: when a tap's CONSUMED click (MenuOptionClicked truth) was a real interaction
+    // the bridge bumps the counter — give a light buzz (the "you grabbed something" feel) and draw a RED click
+    // ring. A plain walk doesn't bump, so after a grace window we draw a YELLOW ring instead (and stay silent).
+    // Matches the official app. The grace covers the engine-resolved tap pipeline: settle gate (a few frames)
+    // + click consume next tick + poll latency ≈ 80-160 ms, so 0.25 s keeps walk rings prompt without
+    // misclassifying slow interactions as walks.
     int its = [JVMLauncher interactTapSeq];
     if (its != self.lastInteractTapSeq) {
         self.lastInteractTapSeq = its;
@@ -1945,7 +2682,7 @@ static int chatRowCanvasH(void) {
             self.pendingClick = NO;
         }
     }
-    if (self.pendingClick && CACurrentMediaTime() - self.pendingClickAt > 0.10) {
+    if (self.pendingClick && CACurrentMediaTime() - self.pendingClickAt > 0.25) {
         [self flashClickRingAt:self.pendingClickPoint color:[UIColor colorWithRed:1.0 green:0.84 blue:0.0 alpha:1.0]];
         self.pendingClick = NO;
     }
@@ -1957,8 +2694,8 @@ static int chatRowCanvasH(void) {
 // ScaleAspectFit letterbox. Returns NO if the point is in the letterbox margin (outside the game frame).
 - (BOOL)mapPoint:(CGPoint)p toGameX:(int *)gx toGameY:(int *)gy {
     UIImage *img = self.screen.image;
-    if (img == nil) return NO;
-    CGFloat iw = img.size.width, ih = img.size.height;
+    CGFloat iw = img ? img.size.width : 0, ih = img ? img.size.height : 0;
+    if ((iw <= 0 || ih <= 0) && self.renderW > 0) { iw = self.renderW; ih = self.renderH; }  // GPU present: no UIImage
     if (iw <= 0 || ih <= 0) return NO;
     CGRect b = self.screen.bounds;
     CGFloat scale = MIN(b.size.width / iw, b.size.height / ih);   // ScaleAspectFit
@@ -1984,6 +2721,24 @@ static int chatRowCanvasH(void) {
     CGPoint vp = [g locationInView:self.view];
     int gx = 0, gy = 0;
     if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return;
+    // World map open: a tap INSIDE the (centred) map window is a UI click (icons/keys/buttons) — precise,
+    // no world-snap, no walk-ring semantics. A tap in the search rect ALSO raises the soft keyboard: the map
+    // search doesn't flip INPUT_TYPE (Phase-0 probe), so the auto-raise never fires; typed keys go to the
+    // canvas and the focused search field consumes them. Taps OUTSIDE the window fall through to the normal
+    // world tap (walk/interact + ring), like the desktop.
+    if (self.mapOpen && (self.mapWindowCanvas.size.width <= 0
+            || CGRectContainsPoint(self.mapWindowCanvas, CGPointMake(gx, gy)))) {
+        if (CGRectGetWidth(self.mapSearchCanvas) > 0
+                && CGRectContainsPoint(self.mapSearchCanvas, CGPointMake(gx, gy))
+                && ![self.kbField isFirstResponder]) {
+            self.kbField.text = kKbSentinel;
+            [self.kbField becomeFirstResponder];
+            [self appendLine:@"[map] search tap -> keyboard up"];
+        }
+        [JVMLauncher postClickPreciseX:gx y:gy button:1];
+        [self appendLine:[NSString stringWithFormat:@"[map] tap %d,%d (precise)", gx, gy]];
+        return;
+    }
     // W3 A3: the relocated chat tab-row is UI, not the world. Send a PRECISE click straight to the engine (no
     // world-snap pulling it to a tile/entity) and DON'T draw the walk ring — taps there toggle a chat filter, they
     // don't walk. The rect moves with the safe-area relocate (chatHitCanvas, set in updateHudLayout).
@@ -2045,7 +2800,7 @@ static int chatRowCanvasH(void) {
 // Open the engine right-click menu at game (gx,gy) and arm the native big-row overlay anchored at the finger
 // (loc, view coords). Shared by the world long-press (onLongPress) and the chat-tab long-press (filter menu).
 - (void)openEngineMenuAtGameX:(int)gx gameY:(int)gy anchor:(CGPoint)loc {
-    if (self.menuOpen) [self teardownMenuViews];   // re-press: drop a stale menu, open fresh
+    if (self.menuOpen || self.menuClosing) [self teardownMenuViews];   // re-press: drop a stale/closing menu, open fresh
     self.lastMenuX = gx; self.lastMenuY = gy;
     self.menuAnchor = loc;
     [JVMLauncher postClickX:gx y:gy button:3];      // open the engine's OWN right-click menu at the target
@@ -2142,6 +2897,9 @@ static int chatRowCanvasH(void) {
 
     [self.view addSubview:box];
     self.menuContainer = box;
+    [self appendLine:[NSString stringWithFormat:@"[menu-diag] native rows BUILT n=%ld box=%@ er=%@ viewIdx=%ld/%ld",
+                      (long)count, NSStringFromCGRect(box.frame), NSStringFromCGRect(er),
+                      (long)[self.view.subviews indexOfObject:box], (long)self.view.subviews.count]];
     self.menuHighlight = -1;
     // Seed the highlight + commit target from the press point so a lift-without-drag picks the row under it.
     [self updateNativeMenuHighlight:self.menuAnchor];
@@ -2285,7 +3043,11 @@ static int chatRowCanvasH(void) {
         self.menuSelX = gx; self.menuSelY = gy;                       // no geometry yet: fall back to the raw point
     }
 
-    [JVMLauncher postMoveX:sx y:sy];   // engine highlights the row under its (clamped) pointer
+    // Only drive the engine cursor once the live menu rect is known: the engine auto-closes its menu the
+    // instant the cursor leaves it, and before the geometry lands the clamp can't protect it — a raw move
+    // (finger still travelling, e.g. the chat pull-down) yanks the cursor out and silently kills the menu
+    // during the build window (the intermittent "haptics but no filter menu" bug).
+    if (self.menuGeomValid) [JVMLauncher postMoveX:sx y:sy];   // engine highlights the row under its (clamped) pointer
     if (fabs(p.y - self.menuHapticY) >= 14.0) {
         self.menuHapticY = p.y;
         [self.menuHaptic selectionChanged];
@@ -2301,7 +3063,7 @@ static int chatRowCanvasH(void) {
     [self appendLine:[NSString stringWithFormat:@"[shell] menu %@ @game %d,%d",
                       self.menuFingerOnMenu ? @"select" : @"cancel", self.menuSelX, self.menuSelY]];
     self.menuOpen = NO;
-    [self teardownMenuViews];
+    [self beginMenuClose];   // hold the native cover up until the engine menu actually closes (no peek-through)
 }
 
 // Gesture interrupted (system took the touch): close the menu with no action so nothing stays stuck — click the
@@ -2317,7 +3079,18 @@ static int chatRowCanvasH(void) {
         [self appendLine:@"[shell] right-click menu closed"];
     }
     self.menuOpen = NO;
-    [self teardownMenuViews];
+    [self beginMenuClose];   // keep the cover up through the engine-menu close latency
+}
+
+// Defer the native-overlay teardown: the engine right-click menu (now composited into the UI in GPU mode) takes a
+// game cycle or two to actually close after the commit/cancel click. Removing the native cover immediately exposes
+// the engine menu for that gap (the "native menu disappears, native engine menu flashes" artifact). Instead keep
+// the cover up and let onDisplayTick tear it down once the MenuPeekBridge snapshot reports the engine menu closed
+// (or a short timeout). The container is inert here (menuOpen=NO), so gestures/camera already recovered.
+- (void)beginMenuClose {
+    if (self.menuContainer == nil) { [self teardownMenuViews]; return; }
+    self.menuClosing = YES;
+    self.menuClosingAt = CACurrentMediaTime();
 }
 
 - (void)teardownMenuViews {
@@ -2327,6 +3100,7 @@ static int chatRowCanvasH(void) {
     self.menuRowEntries = nil;
     self.menuHighlight = -1;
     self.menuBuilding = NO;
+    self.menuClosing = NO;
 }
 
 // one-finger drag -> rotate the camera. Feed incremental pixel deltas (reset the recognizer's translation
@@ -2336,6 +3110,36 @@ static int chatRowCanvasH(void) {
     if (![JVMLauncher bridgeReady] || self.menuOpen) return;
     if (g.state == UIGestureRecognizerStateBegan) {
         [g setTranslation:CGPointZero inView:self.screen];
+        // World map open: a 1-finger drag that BEGINS inside the Key list or the open surface dropdown
+        // SCROLLS that list (wheel events parked over it); inside the map window it pans the MAP (bridge ->
+        // map centre). Outside the window it stays a camera drag, like the desktop.
+        if (self.mapOpen) {
+            int mgx = 0, mgy = 0;
+            if ([self mapPoint:[g locationInView:self.screen] toGameX:&mgx toGameY:&mgy]) {
+                CGPoint gp = CGPointMake(mgx, mgy);
+                if ((self.mapListCanvas.size.width > 0 && CGRectContainsPoint(self.mapListCanvas, gp))
+                        || (self.mapKeyCanvas.size.width > 0 && CGRectContainsPoint(self.mapKeyCanvas, gp))) {
+                    self.mapListScrolling = YES;
+                    self.mapListWheelPt = gp;
+                    self.mapListScrollAcc = 0;
+                    self.mapPanning = NO;
+                    self.chatScrolling = NO;
+                    [self appendLine:@"[map] list scroll begin"];
+                    return;
+                }
+                if (self.mapWindowCanvas.size.width <= 0
+                        || CGRectContainsPoint(self.mapWindowCanvas, gp)) {
+                    self.mapPanning = YES;
+                    self.mapListScrolling = NO;
+                    self.mapPanAccX = self.mapPanAccY = 0;
+                    self.chatScrolling = NO;
+                    [self appendLine:@"[map] pan begin"];
+                    return;
+                }
+            }
+        }
+        self.mapPanning = NO;
+        self.mapListScrolling = NO;
         // A drag that STARTS inside the open chat box scrolls the chat (finger-scroll) instead of rotating the
         // camera. Only when the chat is open (chatScrollable); otherwise it's a normal camera drag.
         int gx = 0, gy = 0;
@@ -2355,6 +3159,11 @@ static int chatRowCanvasH(void) {
         return;
     }
     if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
+        if (self.mapPanning || self.mapListScrolling) {
+            self.mapPanning = NO;
+            self.mapListScrolling = NO;
+            return;
+        }
         if (self.chatScrolling) {
             self.chatScrolling = NO;
             [JVMLauncher postClearHover];   // drop the cursor the wheel parked over the chat
@@ -2367,6 +3176,37 @@ static int chatRowCanvasH(void) {
     CGPoint d = [g translationInView:self.screen];
     [g setTranslation:CGPointZero inView:self.screen];   // make the next delta incremental
     if (d.x == 0 && d.y == 0) return;
+    if (self.mapListScrolling) {
+        // Swipe-scroll the Key list / surface dropdown: wheel notches parked over the list (the engine
+        // scrolls the hovered scrollable). Content follows the finger: swipe up -> wheel down.
+        const CGFloat kMapScrollPtPerNotch = 22.0;
+        self.mapListScrollAcc += -d.y / kMapScrollPtPerNotch;
+        int notches = (int)(self.mapListScrollAcc > 0 ? floor(self.mapListScrollAcc) : ceil(self.mapListScrollAcc));
+        if (notches != 0) {
+            self.mapListScrollAcc -= notches;
+            [JVMLauncher postWheelX:(int)self.mapListWheelPt.x y:(int)self.mapListWheelPt.y rotation:notches];
+        }
+        return;
+    }
+    if (self.mapPanning) {
+        // Finger pt -> whole canvas px, sub-px accumulated so slow drags aren't quantised away. The bridge
+        // converts px -> map tiles via the live zoom; kMapPanSpeed > 1 = the map travels faster than the
+        // finger (user preference — covering Gielinor 1:1 takes too many swipes).
+        const CGFloat kMapPanSpeed = 2.0;
+        CGFloat W = self.view.bounds.size.width;
+        CGFloat k = (self.renderW > 0 && W > 0) ? (CGFloat)self.renderW / W : 1.0;
+        k *= kMapPanSpeed;
+        self.mapPanAccX += d.x * k;
+        self.mapPanAccY += d.y * k;
+        int dx = (int)(self.mapPanAccX < 0 ? ceil(self.mapPanAccX) : floor(self.mapPanAccX));
+        int dy = (int)(self.mapPanAccY < 0 ? ceil(self.mapPanAccY) : floor(self.mapPanAccY));
+        if (dx != 0 || dy != 0) {
+            self.mapPanAccX -= dx;
+            self.mapPanAccY -= dy;
+            [JVMLauncher panEngineMapDx:dx dy:dy];
+        }
+        return;
+    }
     if (self.chatScrolling) {
         [self scrollChatByDragDeltaY:d.y];
         return;
@@ -2398,6 +3238,14 @@ static int chatRowCanvasH(void) {
         self.pinchPrevScale = g.scale;
         self.wheelAccum = 0;
         [JVMLauncher postClearHover];   // zoom moves the world too; don't leave a stale hover behind
+        return;
+    }
+    if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
+        // Each zoom step posts a wheel at the pinch centroid, which re-enters the synthetic cursor THERE (the
+        // engine zooms about the live mouse point). Left as-is, the cursor stays parked on whatever is under
+        // the fingers — so the engine (and any hover-highlight) keeps picking it after the zoom: the "chop
+        // tree box stays up when I zoom in" report. Re-park on lift so hover ends with the gesture.
+        [JVMLauncher postClearHover];
         return;
     }
     if (g.state != UIGestureRecognizerStateChanged) return;

@@ -33,12 +33,17 @@ public class DeviceHeadlessBoot {
         //    irrelevant headless on the CPU path, so we keep safe-mode by default but drop it for the
         //    plugin-hub path (-Drunelite.hub=true) AND for GPU Route-C (-Drunelite.routecgpu=true), where the
         //    base gpu plugin IS the renderer (it is the one plugin in the tree with loadInSafeMode=false).
+        // "Renderers as plugins" (iOS): safe-mode must be OFF in EVERY mode (incl. plain CPU) so the GPU + 117HD
+        // plugins load + show in the panel as selectable plugins (GpuPlugin is loadInSafeMode=false). Drop it
+        // whenever -Drunelite.nosafemode=true (the native launcher always sets it), in addition to the legacy
+        // hub / routecgpu cases.
         final boolean hub = Boolean.getBoolean("runelite.hub");
         final boolean routecGpu = Boolean.getBoolean("runelite.routecgpu");
-        final boolean safeModeOff = hub || routecGpu;
+        final boolean noSafeMode = Boolean.getBoolean("runelite.nosafemode");
+        final boolean safeModeOff = hub || routecGpu || noSafeMode;
         final String[] rlArgs = safeModeOff ? new String[0] : new String[]{"--safe-mode"};
         System.out.println("[boot] launching RuneLiteHeadless" + (safeModeOff
-            ? " (safe-mode OFF: " + (routecGpu ? "routecgpu" : "hub") + ")" : " --safe-mode"));
+            ? " (safe-mode OFF: " + (noSafeMode ? "nosafemode" : (routecGpu ? "routecgpu" : "hub")) + ")" : " --safe-mode"));
         net.runelite.client.headless.RuneLiteHeadless.main(rlArgs);
 
         long runSeconds = Long.getLong("headless.runSeconds", 60L);

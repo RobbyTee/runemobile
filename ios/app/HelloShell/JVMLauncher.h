@@ -14,6 +14,25 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Set on the main thread before -runProbesWithLog: (computed from the screen aspect). Nil = 765x503.
 @property (nonatomic, copy, nullable) NSString *resizeSpec;
 
+/// W3 GPU Route C — when YES, -runProbesWithLog: boots the L1 kill-test (routec-l1.jar ALONE on the classpath,
+/// RouteC_registerGLNatives after VM create, callMain RouteCL1Probe) instead of the full RuneLite boot. The
+/// probe asserts GL.createCapabilities().OpenGL33 + real core GL calls work through the JNI bridge on a live
+/// EAGL ES3 context — the cheapest device gate for Route C. Set on the main thread before -runProbesWithLog:.
+@property (nonatomic, assign) BOOL routecL1Mode;
+
+/// W3 GPU Route C — when YES, the FULL RuneLite boots (DeviceHeadlessBoot) with the JNI GL bridge natives
+/// registered after VM create, so the unmodified gpu plugin renders the scene on the device GPU through the
+/// facade (EAGL ES3 FBO) and the swapBuffers shim publishes each composited frame to JavaBridge. The bundle
+/// must carry the iOS staged shaded jar (stage-ios-gpu-jar.sh). Set on the main thread before -runProbesWithLog:.
+@property (nonatomic, assign) BOOL routecGpuMode;
+
+/// W3 GPU Zone B0.5 — when YES, the FULL RuneLite boots with the staged 117HD (RLHD) jar on the classpath and the
+/// zone facade-delta natives registered (RouteC_registerZoneNatives, on top of the base bridge). RLHDStarter
+/// (-Drunelite.routecrlhd=true) loads + starts rs117.hd.HdPlugin (the Zone renderer) once in-world; HdPlugin
+/// conflicts=GPU so it replaces the base gpu plugin. The bundle must carry client-<ver>-rlhd.jar + the shaded jar
+/// staged with the grown facade superset. Set on the main thread before -runProbesWithLog:.
+@property (nonatomic, assign) BOOL routecZoneMode;
+
 /// CS_DEBUGGED gate (the W1-audit Claim E): true once StikDebug has attached and the
 /// kernel marks this process debugged. Poll this BEFORE warming HotSpot.
 + (BOOL)isDebuggerAttached;
@@ -101,6 +120,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Polled by the shell to auto-raise/dismiss the soft keyboard. Call on the main thread.
 + (BOOL)textInputOpen;
 
+/// Direct-present reveal gate: YES once the world geometry is uploaded (the GPU layer can be revealed over the
+/// CPU loading-screen blit without a sky flash). YES if the bridge isn't available.
++ (BOOL)sceneWarmedUp;
+
 /// Read the W3 hybrid-chrome read-only snapshot (reverse JNI -> MobileChromeBridge.getSnapshot) as a JSON
 /// string: active-tab varc + tab-stone / side-panel / minimap / orbs / chat / viewport bounds in
 /// gamepack-canvas pixels. Returns nil before the VM/bridge is up or if the chrome facade is off
@@ -163,6 +186,19 @@ typedef void (^JVMLogSink)(NSString *line);
 /// W3 A3 (bigger chat tabs): the canvas-px width the enlarged native row spans, so the engine widens the message
 /// area to ALIGN with the bigger buttons. 0 restores the engine's default 519 width. Main thread.
 + (void)setEngineChatAreaWidth:(int)canvasPx;
+
+/// World map (touch): pan the open world map by a finger delta in CANVAS px — the engine converts px to map
+/// tiles via the live zoom and moves the map centre ("grab the map", 1:1 with the finger). Main thread.
++ (void)panEngineMapDx:(int)dx dy:(int)dy;
+
+/// World map (touch): {open, map/close/search/zoomIn/zoomOut rects in canvas px} JSON, or {"open":false}.
+/// Native polls this to gate gestures on the open map, raise the keyboard on a search tap, and proxy close.
++ (NSString *)mapSnapshot;
+
+/// Overlay snap-corner safe frame: the screen safe-area insets in CANVAS px. The engine insets the overlay snap
+/// corners by these (and drops the top-left corner below the relocated chat) so plugin overlays snapped to a
+/// corner (e.g. Quest Helper's top-left guidance panel) clear the curved bezel + the chat. Main thread.
++ (void)setEngineOverlaySafeInsetsL:(int)l t:(int)t r:(int)r b:(int)b;
 
 /// W3 A3 (finger-scroll): scroll the chat by deltaCanvasPx (positive = toward newer/bottom) via the chatbox's own
 /// scroll layer — NOT a mouse wheel (a wheel over the transparent chat also zooms the camera). Main thread.

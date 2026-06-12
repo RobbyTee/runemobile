@@ -692,6 +692,10 @@ public final class MobileUiBridge
 	// on our install/remove and false when that event lands; the seq bumps so native can re-fetch hubManifest.
 	private static volatile boolean hubRefreshing;
 	private static final AtomicLong hubChangeSeq = new AtomicLong();
+	// Hub plugins whose classes collide with a build-staged plugin already on the classpath. "117hd" is the
+	// public hub build of rs117.hd — this client stages its own ported HdPlugin (the canonical panel entry),
+	// so the hub copy is hidden from the catalog and refused at install.
+	private static final Set<String> HUB_BLOCKED = Set.of("117hd");
 
 	private static void ensureHubInjected()
 	{
@@ -757,6 +761,10 @@ public final class MobileUiBridge
 		final Json out = new Json().obj().kv("status", "ok").key("plugins").arr();
 		for (PluginHubManifest.DisplayData d : display)
 		{
+			if (HUB_BLOCKED.contains(d.getInternalName()))
+			{
+				continue;
+			}
 			out.obj()
 				.kv("internalName", d.getInternalName())
 				.kv("displayName", d.getDisplayName())
@@ -798,6 +806,10 @@ public final class MobileUiBridge
 		if (!ENABLED || internalName == null)
 		{
 			return "{\"ok\":false,\"reason\":\"facade-off\"}";
+		}
+		if (install && HUB_BLOCKED.contains(internalName))
+		{
+			return "{\"ok\":false,\"reason\":\"blocked\"}";
 		}
 		ensureHubInjected();
 		final ExternalPluginManager epm = extPluginManager;
@@ -1279,6 +1291,51 @@ public final class MobileUiBridge
 	}
 
 	/**
+	 * Load a plugin (if not already) WITHOUT starting it, so it appears in {@link #listPlugins()} with an
+	 * editable config but does not run. Same {@code pm.loadPlugins(List<Class>)} +
+	 * {@code loadDefaultPluginConfiguration} as {@link #loadAndStartPlugin} but with no
+	 * {@code setPluginEnabled}/{@code startPlugin}. Used to surface the renderer plugins (GPU / 117HD) in the
+	 * native panel even when they are not the active renderer — the native side then drives the actual
+	 * activation via a launch-time preference (it can't hot-swap the iOS GL bridge/present). Idempotent.
+	 */
+	public static String loadPluginNoStart(String className)
+	{
+		final PluginManager pm = pluginManager;
+		if (!ENABLED || pm == null || className == null)
+		{
+			return "{\"ok\":false,\"reason\":\"facade-off\"}";
+		}
+		if (pluginByClassName(className) != null)
+		{
+			return "{\"ok\":true,\"reason\":\"already-loaded\"}";
+		}
+		final Class<?> cls;
+		try
+		{
+			cls = Class.forName(className, false, MobileUiBridge.class.getClassLoader());
+		}
+		catch (Throwable t)
+		{
+			log.warn("[mobileui] loadPluginNoStart {} classload failed", className, t);
+			return "{\"ok\":false,\"reason\":\"classload\"}";
+		}
+		onEdt(() ->
+		{
+			try
+			{
+				final java.util.List<Plugin> loaded = pm.loadPlugins(java.util.Collections.singletonList(cls), null);
+				pm.loadDefaultPluginConfiguration(loaded);
+				log.info("[mobileui] loadPluginNoStart {} -> loaded {} plugin(s) (not started)", className, loaded.size());
+			}
+			catch (Throwable t)
+			{
+				log.warn("[mobileui] loadPluginNoStart {} FAILED", className, t);
+			}
+		});
+		return "{\"ok\":true,\"queued\":\"edt\"}";
+	}
+
+	/**
 	 * Write one config value (already serialized to its string form by the native control), queued onto the
 	 * client thread — the desktop fires {@code ConfigChanged} synchronously, so this guarantees subscribers
 	 * run where game-touching ones expect to be. The resulting {@code ConfigChanged} is the confirmation.
@@ -1298,6 +1355,31 @@ public final class MobileUiBridge
 		}
 		final long id = enqueueClientWrite(ct, () -> cm.setConfiguration(group, key, value));
 		return "{\"ok\":true,\"writeId\":" + id + "}";
+	}
+
+	/** Raw read of a stored config value (null if unset). Used by RLHDStarter's first-launch defaults sentinel. */
+	public static String getConfig(String group, String key)
+	{
+		final ConfigManager cm = configManager;
+		if (!ENABLED || cm == null || group == null || key == null)
+		{
+			return null;
+		}
+		return cm.getConfiguration(group, key);
+	}
+
+	/** Persist the dirty config, but QUEUED on the client thread so it runs AFTER any setConfig writes enqueued
+	 * just before it (sendConfig itself is immediate; ordering matters when seeding defaults then flushing). */
+	public static String flushConfigQueued()
+	{
+		final ConfigManager cm = configManager;
+		final ClientThread ct = clientThread;
+		if (!ENABLED || cm == null || ct == null)
+		{
+			return "{\"ok\":false,\"reason\":\"not-ready\"}";
+		}
+		enqueueClientWrite(ct, cm::sendConfig);
+		return "{\"ok\":true}";
 	}
 
 	/**

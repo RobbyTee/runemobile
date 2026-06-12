@@ -9,6 +9,8 @@
 #import <libkern/OSCacheControl.h>
 #import <stdatomic.h>
 #import "jni/jni.h"
+#import "routec_gl_jni.h"   // W3 GPU Route C: RouteC_registerGLNatives(env) — the JNI GL bridge registration
+#import "routec_zone_jni.h" // W3 GPU Zone B0.5: RouteC_registerZoneNatives(env) — the RLHD facade-delta natives
 
 // --- csops / CS_DEBUGGED (private; same probe Amethyst/StikDebug rely on) -----
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
@@ -39,6 +41,7 @@ static jmethodID gMidInteractSeq = NULL;  // getInteractTapSeq()I — native hap
 static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidClickPrecise = NULL, gMidMove = NULL;
 static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
 static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
+static jmethodID gMidWarmed = NULL;   // JavaBridge.presentReady()Z — world geometry uploaded (direct-present reveal)
 static jmethodID gMidMenuSelect = NULL;  // selectMenuPoint(II)V — menu row select + hover-clear (optional)
 static jmethodID gMidShiftHeld = NULL;   // setShiftHeld(Z)V — sticky-Shift modifier (optional; tolerate older jar)
 
@@ -168,6 +171,8 @@ static BOOL ensureBridge(void) {
     gMidText   = (*env)->GetStaticMethodID(env, global, "onText", "(Ljava/lang/String;)V");
     gMidKey    = (*env)->GetStaticMethodID(env, global, "onKeyStroke", "(I)V");
     gMidInputOpen = (*env)->GetStaticMethodID(env, global, "isTextInputOpen", "()Z");
+    gMidWarmed = (*env)->GetStaticMethodID(env, global, "presentReady", "()Z");   // optional (not in the null-check below)
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
     gMidClearHover = (*env)->GetStaticMethodID(env, global, "clearHover", "()V");
     if (!gMidW || !gMidH || !gMidSeq || !gMidPixels || !gMidTouch || !gMidClick || !gMidClickPrecise || !gMidMove
         || !gMidWheel || !gMidCamera || !gMidText || !gMidKey || !gMidInputOpen || !gMidClearHover) {
@@ -270,6 +275,9 @@ static jmethodID gMidScrollChat = NULL;      // scrollChat(I)V  (A3 — finger-s
 static jmethodID gMidSwitchChatTab = NULL;   // switchChatTab(I)V  (A3 — switch tab via op-replay, hidden tabs)
 static jmethodID gMidSetChatCollapsed = NULL; // setChatCollapsed(Z)V  (A3 — tap active tab hides the chat box)
 static jmethodID gMidGetChatSnap = NULL;     // getChatSnapshot()Ljava/lang/String;  (A3)
+static jmethodID gMidSetOverlayInsets = NULL; // setOverlaySafeInsets(IIII)V (snap-corner safe frame)
+static jmethodID gMidPanMap = NULL;          // panWorldMap(II)V  (world map: finger pan -> map centre)
+static jmethodID gMidGetMapSnap = NULL;      // getMapSnapshot()Ljava/lang/String;  (world map open + rects)
 static BOOL ensureVeneer(void) {
     if (gVeneerClass) return YES;
     if (!ensureBridge() || !gMainEnv) return NO;
@@ -299,6 +307,9 @@ static BOOL ensureVeneer(void) {
     gMidSetMinimapScale = (*env)->GetStaticMethodID(env, global, "setMinimapScale", "(I)V");
     gMidSwitchChatTab = (*env)->GetStaticMethodID(env, global, "switchChatTab", "(I)V");
     gMidSetChatCollapsed = (*env)->GetStaticMethodID(env, global, "setChatCollapsed", "(Z)V");
+    gMidSetOverlayInsets = (*env)->GetStaticMethodID(env, global, "setOverlaySafeInsets", "(IIII)V");
+    gMidPanMap = (*env)->GetStaticMethodID(env, global, "panWorldMap", "(II)V");
+    gMidGetMapSnap = (*env)->GetStaticMethodID(env, global, "getMapSnapshot", "()Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
     gMidSetChatHidden = m;
     gMidRelocateChat = r;
@@ -697,7 +708,28 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     // §6.2: the shaded RuneLite client jar (all deps) + a writable RuneLite home for the gamepack
     // cache, and the headless capture dir (HeadlessCapture dumps mainBufferProvider PNGs there).
     NSString *shadedPath = [[NSBundle mainBundle] pathForResource:@"client-1.12.29-SNAPSHOT-shaded" ofType:@"jar"];
-    NSString *classpath  = shadedPath ? [NSString stringWithFormat:@"%@:%@", shadedPath, jarPath] : jarPath;
+    NSString *classpath;
+    if (self.routecL1Mode) {
+        // L1 kill-test: routec-l1.jar (facade-native + RouteCL1Probe) ALONE — no shaded jar, no LWJGL, so the
+        // facade is provably the only provider and the probe isolates the JNI bridge.
+        NSString *l1jar = [[NSBundle mainBundle] pathForResource:@"routec-l1" ofType:@"jar"];
+        if (!l1jar) { log(@"[jvm] FATAL: routec-l1.jar not found in bundle"); return -11; }
+        classpath = l1jar;
+        log([NSString stringWithFormat:@"[jvm] ROUTEC L1 mode — classpath = %@", classpath]);
+    } else {
+        classpath = shadedPath ? [NSString stringWithFormat:@"%@:%@", shadedPath, jarPath] : jarPath;
+        // Always append the staged 117HD (RLHD) jar so rs117.hd.* class-loads — not just in Zone mode. The
+        // "renderers as plugins" model loads HdPlugin (no-start) into the panel in EVERY mode so 117HD is a
+        // selectable plugin, so its classes must always be resolvable. It carries no lwjgl (the facade ships in
+        // the shaded jar); RLHDStarter starts it only when 117HD is the active renderer.
+        NSString *rlhdPath = [[NSBundle mainBundle] pathForResource:@"client-1.12.29-SNAPSHOT-rlhd" ofType:@"jar"];
+        if (rlhdPath) {
+            classpath = [NSString stringWithFormat:@"%@:%@", classpath, rlhdPath];
+            log([NSString stringWithFormat:@"[jvm] rlhd jar on classpath = %@", rlhdPath]);
+        } else {
+            log(@"[jvm] WARN: client-*-rlhd.jar not in bundle — 117HD will not load");
+        }
+    }
     NSString *captureDir = [docs stringByAppendingPathComponent:@"rl-capture"];
     // Clear stale frames from prior runs: the draw counter resets each launch, so an old run's
     // higher-numbered frame would otherwise win the W3 shell's lexical-newest pick (and disk grows).
@@ -751,9 +783,12 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
         @"--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
         // §6.2: heap for the full client + a writable RuneLite home (gamepack cache) + capture dir.
-        @"-Xmx256m",                              // jetsam hedge: 512m+JIT+native risked an early kill;
-                                                  // 256m is ample for the login screen (depends on the
-                                                  // increased-memory-limit entitlement)
+        @"-Xmx1024m",                             // 256m is ample for the CPU login screen, but 117HD's
+                                                  // ZoneRenderer (scene/model staging on-heap + per-frame
+                                                  // BufferedImage capture) OOMs in 256m on the first real draw
+                                                  // (device round 3). 1024m fits well under the jetsam ceiling on
+                                                  // this 12 GB device w/ the increased-memory-limit entitlement
+                                                  // (NIO direct buffers are off-heap). Dial back if jetsam kills.
         [NSString stringWithFormat:@"-Duser.home=%@", docs],                       // -> <docs>/.runelite
         [NSString stringWithFormat:@"-Drunelite.headless.capture.dir=%@", captureDir],
         // Steady capture cadence (the §6.2 TCC fix made the process long-lived, so the old eager
@@ -773,14 +808,20 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
                                                      // (chat lines / orb values / minimap positions for the veneers)
         @"-Drunelite.hudveneer=true",                // W3 Feature-A A3: arm the HudVeneerBridge (engine-HUD
                                                      // suppression; native sets which elements to hide, e.g. chat)
-        @"-Drunelite.hub=true",                      // plugin hub: drop --safe-mode so external plugins load
-                                                     // (device-de-risked 2026-06-02). Also disables the
-                                                     // headless-irrelevant GPU plugin.
+        // "Renderers as plugins": drop safe-mode in EVERY mode (incl. plain CPU) so the GPU + 117HD plugins load
+        // + show in the panel (GpuPlugin is loadInSafeMode=false). DeviceHeadlessBoot reads this. The plugin HUB
+        // works with safe-mode off; the one hazard — the PUBLIC hub 117HD whose jar has no facade (it collides
+        // with our staged rs117.hd.HdPlugin) — is blocked in MobileUiBridge (HUB_BLOCKED hides it from the
+        // catalog + refuses install), so OUR staged GpuPlugin/HdPlugin stay the canonical panel entries.
+        @"-Drunelite.nosafemode=true",
+        // The hub serves manifests for RELEASED versions only; our jar is a -SNAPSHOT (manifest 404s without
+        // this). Pin to the latest released manifest (verify https://repo.runelite.net/plugins/manifest/
+        // <v>_full.js answers 200 when bumping the client version).
+        @"-Drunelite.pluginhub.version=1.12.28",
+        @"-Drunelite.rendererpanel=true",            // arm RendererPanelStarter: load GPU + 117HD (no-start) into
+                                                     // the panel so both are selectable + configurable.
         @"-Drunelite.nosplash=true",                 // no desktop Swing splash (its JFrame creation under CACIO
-                                                     // aborted ExternalPluginManager.refreshPlugins -> hub plugins
-                                                     // were recorded in config but never downloaded/loaded).
-        @"-Drunelite.pluginhub.version=1.12.27",     // our 1.12.28-SNAPSHOT has no hub manifest (404); 1.12.27
-                                                     // is the adjacent released API the hub serves plugins for.
+                                                     // aborted ExternalPluginManager.refreshPlugins).
         // NOTE: -Drunelite.mobilechrome.repos was tried and REVERTED — repositioned stones over the world are
         // occluded by the 3D viewport (only the mobile 601 toplevel draws tabs above it). Native rails it is.
         // Phase-6 STEP-0 device smoke confirmed GREEN (2026-06-01): lanes separate (config on client thread,
@@ -809,11 +850,48 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         [NSString stringWithFormat:@"-Djava.class.path=%@", classpath],
     ] mutableCopy];
 
+    // The base GPU plugin is enabledByDefault=true; with safe-mode off it would otherwise AUTO-START in every
+    // mode (isGpu=true) — and then 117HD's starter sees a GPU already active and never takes over, and CPU isn't
+    // really CPU. Force it OFF unless GPU is the SELECTED renderer (routecGpuMode), in which case RouteCGpuStarter
+    // enables + starts it. forceDisablePlugins wins over a persisted gpuplugin=true (key = GpuPlugin simpleName).
+    if (!self.routecGpuMode) {
+        [opts addObject:@"-Drunelite.forceDisablePlugins=gpuplugin"];
+    }
+
     // Full-screen landscape: after login the headless client resizes its CTC canvas to this WxH (the
     // gamepack switches to resizable layout and fills it). Login stays at 765x503 (autologin coords).
     if (self.resizeSpec.length) {
         [opts addObject:[NSString stringWithFormat:@"-Drunelite.headless.resize=%@", self.resizeSpec]];
         log([NSString stringWithFormat:@"[jvm] full-screen render target = %@", self.resizeSpec]);
+    }
+
+    // GPU Route C scene-render diagnostic: read-only per-frame log (isGpu / registered DrawCallbacks +
+    // classloader / viewport / drawScene count) -> .runelite/logs/client.log, to localise the black-3D-scene
+    // blocker (zone callbacks never firing) ABOVE the GL bridge. Inert in CPU/L1 mode.
+    if (self.routecGpuMode) {
+        // Force-enable + start the gpu plugin once the client is in-world (canvas laid out), overriding any persisted
+        // runelite.gpuplugin=false and sidestepping the startUp-runs-too-early canvas.isValid() race. Without this the
+        // GPU plugin intermittently never initialises (createGLContext never runs) and the engine silently falls back
+        // to the CPU renderer. See RouteCGpuStarter. (gpudiag/gpuframedump are dev-only — gpuframedump fills
+        // Documents/routec-frames with a PNG per frame — and are left off for the shipping default.)
+        [opts addObject:@"-Drunelite.routecgpu=true"];
+        log(@"[jvm] base GPU ARMED (routecgpu=true)");
+    }
+
+    // W3 GPU Zone B0.5: arm RLHDStarter to load + start the external 117HD plugin once in-world. Same read-only
+    // per-frame diagnostics + frame dump as GPU mode, but NOT routecgpu (HdPlugin conflicts=GPU and replaces the
+    // base gpu plugin — force-starting base would race it). RLHDStarter forces hd.uiScalingMode=LINEAR +
+    // tiledLighting=false before load (the simplest GLSL-ES paths) then loadAndStartPlugin(rs117.hd.HdPlugin).
+    if (self.routecZoneMode) {
+        // gpudiag/gpuframedump are dev-only (gpuframedump fills Documents/routec-frames with a PNG per frame) —
+        // left off for the shipping opt-in 117HD path.
+        [opts addObject:@"-Drunelite.routecrlhd=true"];
+        // Tell the shared RLHDStarter this is the iOS (Route C / EAGL, full feature port) path, so it applies
+        // the full iOS 117HD config (tiled/POM/seeded-tunables/safety) rather than Android's mobile config.
+        [opts addObject:@"-Drunelite.gfxIos=true"];
+        // (The hub's own "117hd" jar can't collide with our staged rs117.hd.HdPlugin — it's blocked in
+        // MobileUiBridge.HUB_BLOCKED.)
+        log(@"[jvm] GPU Zone (117HD) ARMED (routecrlhd=true)");
     }
 
     // Phase 4 sub-goal A — interactive login, purely in-process (no native touch bridge). Map the JX_*
@@ -830,8 +908,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
             @"-Drunelite.headless.autologin.point=382,248",       // Play Now centre (desktop-proven)
             @"-Drunelite.headless.autologin.world=301",           // F2P world (throwaway account)
             @"-Drunelite.headless.autologin.worldAddress=oldschool1.runescape.com",
+            // Play Now only crosses LOGIN_SCREEN -> LOGGED_IN; the gamepack then PARKS on the post-login
+            // "Welcome to Gielinor / Click here to play" screen with the world NOT yet per-frame-rendered
+            // (viewport 0x0, topLevelIf 165). WelcomePlayProbe clicks the real WelcomeScreen.PLAY widget bounds
+            // to enter the world — WITHOUT it the engine never drives the scene render (the black-3D-scene
+            // blocker; reproduced + resolved on desktop, see ios/dev-tools/gpu-routec/BLACK-SCENE-DIAGNOSIS.md).
+            @"-Drunelite.headless.welcomeplay=true",
         ]];
-        log(@"[jvm] autologin ARMED: EULA 302,312 (idx 12) -> Play Now 382,248, world 301/oldschool1");
+        log(@"[jvm] autologin ARMED: EULA 302,312 (idx 12) -> Play Now 382,248 -> WelcomePlay (enter world), world 301/oldschool1");
     }
 
     JavaVMOption *vmopts = (JavaVMOption *)calloc(opts.count, sizeof(JavaVMOption));
@@ -913,7 +997,31 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     //   "[headless-capture] … nullGraphics=0" + "wrote frame-LOGIN_SCREEN-*.png" -> §6.2 login render OK
     // PNGs land in Documents/rl-capture/. Earlier entrypoints: AwtSmoke (§6.1), UnsafePokeActivation
     // (§6.0), JitProbe/Bench/GlyphSmoke (Phase-1).
-    callMain(env, "DeviceHeadlessBoot", @[], log);
+    // Register the JNI GL bridge natives onto the facade classes (GLALL / AWTContext / GL) BEFORE the client
+    // runs. "Renderers as plugins": register ALWAYS (not just when a GPU mode is pre-selected), so whichever
+    // renderer the user activates from the panel — base GPU, or 117HD which adds the zone delta — has its GL
+    // bridge ready. The registration is inert until a renderer plugin actually calls into it. L1 mode uses the
+    // routec-l1.jar facade ALONE (no shaded/rlhd jar), so it gets only the base natives. Non-fatal: log + clear.
+    {
+        jint rr = RouteC_registerGLNatives(env);
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+        log([NSString stringWithFormat:@"[jvm] RouteC_registerGLNatives rc=%d (%@)", rr,
+            rr == 0 ? @"OK" : @"ERR — facade classes not found"]);
+        // The RLHD facade-delta natives (disjoint method sets on the same GLALL + MemoryUtil) need the rlhd jar
+        // on the classpath — always present except in the L1 probe. Base 85 must register first (above).
+        if (!self.routecL1Mode) {
+            jint zr = RouteC_registerZoneNatives(env);
+            if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+            log([NSString stringWithFormat:@"[jvm] RouteC_registerZoneNatives rc=%d (%@)", zr,
+                zr == 0 ? @"OK" : @"ERR — GLALL/MemoryUtil facade not found"]);
+        }
+    }
+
+    if (self.routecL1Mode) {
+        callMain(env, "RouteCL1Probe", @[], log);   // GPU Route C L1 kill-test (verdict -> jvm-stdio.log)
+    } else {
+        callMain(env, "DeviceHeadlessBoot", @[], log);
+    }
 
     atomic_store(&gVM, NULL);   // VM going away — stop the bridge before DestroyJavaVM
     (*vm)->DestroyJavaVM(vm);
@@ -1089,6 +1197,16 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     return r == JNI_TRUE;
 }
 
+// Direct-present reveal gate: YES once the world geometry is uploaded (JavaBridge.presentReady). Returns YES if
+// the bridge/method isn't available so it can never permanently block revealing the GPU layer.
++ (BOOL)sceneWarmedUp {
+    if (!gMidWarmed || !ensureBridge()) return YES;
+    JNIEnv *env = gMainEnv;
+    jboolean r = (*env)->CallStaticBooleanMethod(env, gBridgeClass, gMidWarmed);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return YES; }
+    return r == JNI_TRUE;
+}
+
 + (NSString *)chromeSnapshot {
     if (!ensureChrome()) return nil;
     JNIEnv *env = gMainEnv;
@@ -1197,6 +1315,13 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 
++ (void)setEngineOverlaySafeInsetsL:(int)l t:(int)t r:(int)r b:(int)b {
+    if (!ensureVeneer() || !gMidSetOverlayInsets) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetOverlayInsets, (jint)l, (jint)t, (jint)r, (jint)b);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
 + (void)scrollEngineChat:(int)deltaCanvasPx {
     if (!ensureVeneer() || !gMidScrollChat) return;
     JNIEnv *env = gMainEnv;
@@ -1222,6 +1347,25 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureVeneer() || !gMidGetChatSnap) return nil;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gVeneerClass, gMidGetChatSnap);
+    if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
+    NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
+    if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
+    (*env)->DeleteLocalRef(env, js);
+    return out;
+}
+
++ (void)panEngineMapDx:(int)dx dy:(int)dy {
+    if (!ensureVeneer() || !gMidPanMap) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidPanMap, (jint)dx, (jint)dy);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (NSString *)mapSnapshot {
+    if (!ensureVeneer() || !gMidGetMapSnap) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gVeneerClass, gMidGetMapSnap);
     if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
     const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
     NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
