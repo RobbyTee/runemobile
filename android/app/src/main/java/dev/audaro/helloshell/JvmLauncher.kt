@@ -218,6 +218,10 @@ object JvmLauncher {
     /** Phase-4 chat pill: collapse the chat (shared shove-off-canvas) / switch channel (op-script replay). */
     external fun nativeSetChatCollapsed(collapsed: Boolean)
     external fun nativeSwitchChatTab(index: Int)
+    /** Phase-5 world map: pan by finger deltas (canvas px; shared tick converts to tiles) + the published
+     *  snapshot {open, map:[x,y,w,h], close, search, zoomIn, zoomOut} (render-thread copy — UI-safe). */
+    external fun nativePanWorldMap(dx: Int, dy: Int)
+    external fun nativeMapSnapshotPub(): String
 
     // A7 edge-to-edge: pull the engine minimap+orbs cluster (MAP_CONTAINER) into the top-right safe area. It
     // stays the live engine HUD (minimap click-to-walk + orb clicks keep working). x<0 stops. Off the UI thread.
@@ -333,6 +337,8 @@ object JvmLauncher {
     fun setOverlayInsets(l: Int, t: Int, r: Int, b: Int) = nativeSetOverlayInsets(l, t, r, b)
     fun setChatCollapsed(collapsed: Boolean) = nativeSetChatCollapsed(collapsed)
     fun switchChatTab(index: Int) = nativeSwitchChatTab(index)
+    fun panWorldMap(dx: Int, dy: Int) = nativePanWorldMap(dx, dy)
+    fun mapSnapshotPub() = nativeMapSnapshotPub()
     fun relocateMinimap(x: Int, y: Int) = nativeRelocateMinimap(x, y)
     fun chatSnapshotPub() = nativeChatSnapshotPub()
     fun setChatTabRowHeight(canvasPx: Int) = nativeSetChatTabRowHeight(canvasPx)

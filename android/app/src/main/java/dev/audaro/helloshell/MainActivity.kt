@@ -75,6 +75,24 @@ class MainActivity : AppCompatActivity() {
     private var chatScrollAccum = 0f
     private var chatRectCanvas: IntArray? = null   // [x,y,w,h] canvas px; null = chat not reported
 
+    // Phase-5 world map (floating window): open-state + control rects from the published map snapshot.
+    // While open, a one-finger drag that STARTS inside the window pans the MAP (shared panWorldMap — finger
+    // deltas in canvas px; synthetic drags don't pan, probe-proven), taps inside are PRECISE clicks (close X,
+    // zoom, POIs — no walk ring), and a search-rect tap raises the IME manually (the map search never flips
+    // the engine INPUT_TYPE). The engine HUD shoves while open are all shared-side.
+    private var mapOpen = false
+    private var mapRectCanvas: IntArray? = null     // pannable map display [x,y,w,h] (canvas px)
+    private var mapSearchCanvas: IntArray? = null   // search field rect
+    // The window CHROME (close X, zoom, search bar) extends OUTSIDE the pannable display rect — the
+    // snapshot publishes each control's rect separately and taps on them must also route precise.
+    private var mapCloseCanvas: IntArray? = null
+    private var mapZoomInCanvas: IntArray? = null
+    private var mapZoomOutCanvas: IntArray? = null
+    private var mapPanning = false
+    private var mapPanAccumX = 0f; private var mapPanAccumY = 0f
+    private var mapSearchKeyboard = false           // transient ⌨-like latch while the map search is in use
+    private var lastMapSnapshot = ""
+
     // A1 per-frame poll state (driven by Choreographer).
     private var vibrator: Vibrator? = null
     private var lastTapSeq = 0
@@ -390,6 +408,7 @@ class MainActivity : AppCompatActivity() {
             if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
                 cameraGestureActive = false
                 chatScrolling = false
+                mapPanning = false
             }
             true
         }
@@ -667,6 +686,19 @@ class MainActivity : AppCompatActivity() {
         override fun onSingleTapUp(e: MotionEvent): Boolean {
             val gx = toGameX(e.x); val gy = toGameY(e.y)
             Log.i(TAG, "tap screen=(${e.x},${e.y}) view=(${surfaceView.width}x${surfaceView.height}) frame=(${JvmLauncher.frameWidth()}x${JvmLauncher.frameHeight()}) -> game=($gx,$gy)")
+            // Phase-5: taps inside the open world-map window are PRECISE clicks — the engine resolves the
+            // close X / zoom buttons / POI rows directly, the walk/interact ring stays suppressed, and a tap
+            // on the search field raises the IME manually (the map search never flips INPUT_TYPE).
+            if (mapOpen && (inCanvasRect(mapRectCanvas, gx, gy) || inCanvasRect(mapCloseCanvas, gx, gy)
+                    || inCanvasRect(mapSearchCanvas, gx, gy) || inCanvasRect(mapZoomInCanvas, gx, gy)
+                    || inCanvasRect(mapZoomOutCanvas, gx, gy))) {
+                if (inCanvasRect(mapSearchCanvas, gx, gy)) {
+                    mapSearchKeyboard = true
+                    Log.i(TAG, "p5: map search tap -> raise IME")
+                }
+                JvmLauncher.clickPrecise(gx, gy, 1)
+                return true
+            }
             // Arm the click ring BEFORE posting the click so the baseline seq can't race the engine's bump.
             ringBaseSeq = JvmLauncher.interactTapSeq()
             ringX = e.x; ringY = e.y
@@ -685,22 +717,44 @@ class MainActivity : AppCompatActivity() {
             if (pinchActive || scaleGestures.isInProgress || e2.pointerCount > 1) {
                 return false
             }
-            // AP-0: a drag that STARTS inside the live chat box scrolls the chat instead of rotating the
-            // camera (decided once, at gesture start, from the DOWN point — same rule as iOS).
-            if (!cameraGestureActive && !chatScrolling) {
-                val r = chatRectCanvas
-                if (r != null && e1 != null) {
-                    val gx = toGameX(e1.x); val gy = toGameY(e1.y)
-                    if (gx >= r[0] && gx < r[0] + r[2] && gy >= r[1] && gy < r[1] + r[3]) {
-                        chatScrolling = true
-                        chatScrollAccum = 0f
-                        Log.i(TAG, "ap0: chat scroll begin game=($gx,$gy)")
+            // Context routing, decided once at gesture start from the DOWN point (same rule as iOS):
+            // inside the open world-map window = pan the MAP; inside the live chat box = scroll the chat;
+            // anywhere else = rotate the camera.
+            if (!cameraGestureActive && !chatScrolling && !mapPanning) {
+                if (mapOpen && e1 != null && inCanvasRect(mapRectCanvas, toGameX(e1.x), toGameY(e1.y))) {
+                    mapPanning = true
+                    mapPanAccumX = 0f; mapPanAccumY = 0f
+                    Log.i(TAG, "p5: map pan begin")
+                }
+                if (!mapPanning) {
+                    val r = chatRectCanvas
+                    if (r != null && e1 != null && !mapOpen) {
+                        val gx = toGameX(e1.x); val gy = toGameY(e1.y)
+                        if (gx >= r[0] && gx < r[0] + r[2] && gy >= r[1] && gy < r[1] + r[3]) {
+                            chatScrolling = true
+                            chatScrollAccum = 0f
+                            Log.i(TAG, "ap0: chat scroll begin game=($gx,$gy)")
+                        }
+                    }
+                    if (!chatScrolling) {
+                        cameraGestureActive = true
+                        JvmLauncher.clearHover()
                     }
                 }
-                if (!chatScrolling) {
-                    cameraGestureActive = true
-                    JvmLauncher.clearHover()
+            }
+            if (mapPanning) {
+                // "Grab the map": finger deltas in canvas px, sub-px accumulated (slow drags must not
+                // quantize to zero — the iOS lesson); the shared tick converts to tiles via the live zoom.
+                val fw = JvmLauncher.frameWidth(); val vw = surfaceView.width
+                val k = if (fw > 0 && vw > 0) fw.toFloat() / vw else 1f
+                mapPanAccumX += -distanceX * k
+                mapPanAccumY += -distanceY * k
+                val wx = mapPanAccumX.toInt(); val wy = mapPanAccumY.toInt()
+                if (wx != 0 || wy != 0) {
+                    mapPanAccumX -= wx; mapPanAccumY -= wy
+                    JvmLauncher.onBridge { JvmLauncher.panWorldMap(wx, wy) }
                 }
+                return true
             }
             if (chatScrolling) {
                 // Content follows the finger: finger dy = -distanceY, scaled to canvas px and accumulated so
@@ -830,7 +884,7 @@ class MainActivity : AppCompatActivity() {
     private fun startInputPolling() {
         val cb = object : Choreographer.FrameCallback {
             override fun doFrame(frameTimeNanos: Long) {
-                val want = manualKeyboard || JvmLauncher.isTextInputOpen()
+                val want = manualKeyboard || mapSearchKeyboard || JvmLauncher.isTextInputOpen()
                 // Compare against the ACTUAL IME visibility, not just our last request: the system can dismiss
                 // the keyboard behind our back (focus change, back swipe), which would otherwise wedge a stale
                 // cached state — manual mode then re-raises (sticky until ⌨ is toggled off). API<30 falls back
@@ -880,6 +934,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 updateChrome()
                 applyOverlayInsets()
+                updateWorldMap()
                 Choreographer.getInstance().postFrameCallback(this)
             }
         }
@@ -1012,7 +1067,10 @@ class MainActivity : AppCompatActivity() {
 
         val gridOn = supported && chromeOverlay.railsShown
         applyStonesHidden(gridOn)
-        applyChatTabs(gridOn)
+        // Phase-5: the pill hides while the world map owns the screen (its engine row-height push resets too,
+        // mirroring iOS hideChatTabs); the chat/side/minimap RELOCATES keep being sent — the shared tick gates
+        // their application while the map is open and restores them on close, so nothing is released here.
+        applyChatTabs(gridOn && !mapOpen)
         if (gridOn) {
             applySidePanel(o)
             applyChatAtTop()
@@ -1131,6 +1189,39 @@ class MainActivity : AppCompatActivity() {
         Log.i(TAG, "p3: overlay safe-insets -> canvas(${canvas[0]},${canvas[1]},${canvas[2]},${canvas[3]})")
         JvmLauncher.onBridge { JvmLauncher.setOverlayInsets(canvas[0], canvas[1], canvas[2], canvas[3]) }
     }
+
+    /** Phase-5: parse the published world-map snapshot (per frame, cheap — skipped when the string is
+     *  unchanged) and gate the native chrome on the open state. The engine-side HUD shoves are shared. */
+    private fun updateWorldMap() {
+        val snap = JvmLauncher.mapSnapshotPub()
+        if (snap == lastMapSnapshot) return
+        lastMapSnapshot = snap
+        val o = try { JSONObject(snap) } catch (e: Exception) { null }
+        val open = o?.optBoolean("open") == true
+        fun rect(key: String): IntArray? = o?.optJSONArray(key)?.takeIf { it.length() >= 4 }
+            ?.let { intArrayOf(it.optInt(0), it.optInt(1), it.optInt(2), it.optInt(3)) }
+        mapRectCanvas = if (open) rect("map") else null
+        mapSearchCanvas = if (open) rect("search") else null
+        mapCloseCanvas = if (open) rect("close") else null
+        mapZoomInCanvas = if (open) rect("zoomIn") else null
+        mapZoomOutCanvas = if (open) rect("zoomOut") else null
+        if (open != mapOpen) {
+            mapOpen = open
+            // The native chrome would cover the floating window — hide it while the map owns the screen.
+            // View-level visibility only: railsShown (the user's A/B toggle) and all relocates are untouched.
+            chromeOverlay.visibility = if (open) View.GONE else View.VISIBLE
+            if (!open) {
+                mapPanning = false
+                mapSearchKeyboard = false
+            }
+            Log.i(TAG, "p5: world map ${if (open) "OPEN" else "closed"} rect=${mapRectCanvas?.joinToString(",")}" +
+                if (open) " close=${mapCloseCanvas?.joinToString(",")} search=${mapSearchCanvas?.joinToString(",")}" +
+                    " zoomIn=${mapZoomInCanvas?.joinToString(",")} zoomOut=${mapZoomOutCanvas?.joinToString(",")}" else "")
+        }
+    }
+
+    private fun inCanvasRect(r: IntArray?, gx: Int, gy: Int): Boolean =
+        r != null && gx >= r[0] && gx < r[0] + r[2] && gy >= r[1] && gy < r[1] + r[3]
 
     /** [left, top, right] safe-area insets in VIEW px (display cutout + system bars), so the relocated HUD clears
      *  a landscape notch / nav bar. 0 on the full-bleed emulator. */
@@ -1589,6 +1680,13 @@ class MainActivity : AppCompatActivity() {
                 "-Drunelite.huddata=true",
             ))
             Log.i(TAG, "A-1b census mode: +huddata + gatecensus (mobileui/mobilechrome/hudveneer/resize always-on)")
+        }
+        // Phase-5 dev: a pushed worldmapprobe.mode marker arms the shared WorldMapProbe (one-shot orb-click
+        // open + pan/zoom/search oracles, [worldmap] logs + PNGs) — the same recon the iOS Phase-0 ran on
+        // desktop, runnable on the emulator when the map flow needs re-verifying.
+        if (File(app.getExternalFilesDir(null), "worldmapprobe.mode").exists()) {
+            opts.add("-Drunelite.worldmapprobe=true")
+            Log.i(TAG, "p5: WorldMapProbe ARMED (worldmapprobe.mode marker)")
         }
         if (gpu) {
             // Arm RouteCGpuStarter (force-enable + start the gpu plugin once in-world) and the frame-dump

@@ -310,6 +310,27 @@ scope:
 1:1; pinch zooms about the centroid; search raises the keyboard and filters; tap a search
 result; close via the engine X; chrome + chat restore.
 
+**GREEN 2026-06-12 (core loop), two findings:** orb tap → floating window
+(`evidence-phase5-floating-window-20260612.png`: live scene around the window, native
+grid + pill hidden, shared HUD shoves working); drag-pan follows the finger (snapshot-diff
+verified, `evidence-phase5-panned-20260612.png`); in-window taps route precise (key-panel
+toggle consumed, no walk ring); search tap raises the IME
+(`evidence-phase5-search-ime-20260612.png`); engine-X close → HUD + pill restore + the
+search-IME latch clears. Implementation notes: the snapshot's `close`/`search`/`zoom` rects
+sit OUTSIDE the `map` rect (window chrome extends past `MAP_CONTAINER`) — the precise-tap
+gate is the UNION of all five; `Worldmap.SEARCH` is exactly `(51,520,200,20)` on the 1280×720
+canvas (a 1-px miss walk-routes, correctly). A `worldmapprobe.mode` marker now arms the
+shared probe on the emulator. **Finding 1 (open bug, account-level):** the world map does
+NOT open on the **legacy mainland account** — the engine consumes the orb op every time but
+the widget never appears; the shared `WorldMapProbe` reproduces it (`map never opened after
+4 orb clicks`); the Jagex tokens account opens it on the same build/emulator/canvas; the
+every-tick varc seeding was exonerated (gated off → still closed). Cause unknown
+(account-stored map state?); world-map testing uses the tokens account until resolved.
+**Finding 2 (pending):** typed search text could not be VERIFIED to reach the engine's
+search filter (the IME occludes the field on the emulator; the map didn't jump on Enter) —
+follow up with the keyboard-resize layout or on device. Pinch-zoom-over-map is the shared
+wheel path (probe-proven) — multitouch needs the device wall.
+
 ### Phase ordering rationale
 
 1→2→3 are independent of each other but all tiny next to 4/5 — front-load them for visible

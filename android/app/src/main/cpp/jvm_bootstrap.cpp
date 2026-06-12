@@ -141,6 +141,10 @@ static jmethodID g_midRelocateChat = nullptr, g_midRelocateMinimap = nullptr;
 static jmethodID g_midSetOverlayInsets = nullptr;
 // Phase-4 chat pill (optional, same rule): collapse toggle + channel switch by op-script replay.
 static jmethodID g_midSetChatCollapsed = nullptr, g_midSwitchChatTab = nullptr;
+// Phase-5 world map (optional): pan by finger deltas + the open-state/control-rect snapshot.
+static jmethodID g_midPanWorldMap = nullptr, g_midMapSnapshot = nullptr;
+static std::mutex g_mapLock;
+static std::string g_mapSnapshotPub = "{\"open\":false}";
 // A3 enlarged native chat-tab veneer: getChatSnapshot (per-frame tab geometry/state the bigger native buttons
 // read) + setChatTabRowHeight / setChatAreaWidth (tell the engine to push the message area below the taller row).
 static jmethodID g_midChatSnapshot = nullptr, g_midSetChatRowH = nullptr, g_midSetChatAreaW = nullptr;
@@ -697,6 +701,8 @@ static bool publishBridge(JNIEnv *env) {
             g_midSetOverlayInsets  = midOpt(env, hvg, "setOverlaySafeInsets", "(IIII)V");
             g_midSetChatCollapsed  = midOpt(env, hvg, "setChatCollapsed", "(Z)V");
             g_midSwitchChatTab     = midOpt(env, hvg, "switchChatTab", "(I)V");
+            g_midPanWorldMap       = midOpt(env, hvg, "panWorldMap", "(II)V");
+            g_midMapSnapshot       = midOpt(env, hvg, "getMapSnapshot", "()Ljava/lang/String;");
             bool hudOk = g_midSetStonesHidden && g_midOpenTab && g_midRelocateSidePanel && g_midRelocateChat
                       && g_midRelocateMinimap && g_midChatSnapshot && g_midSetChatRowH && g_midSetChatAreaW
                       && g_midScrollChat;
@@ -848,6 +854,25 @@ static void *renderLoop(void *) {
                     if (c) {
                         std::lock_guard<std::mutex> lk(g_chatLock);
                         g_chatSnapshotPub.assign(c);
+                        env->ReleaseStringUTFChars(js, c);
+                    } else if (env->ExceptionCheck()) {
+                        env->ExceptionClear();
+                    }
+                    env->DeleteLocalRef(js);
+                }
+            }
+
+            // Phase-5: republish the world-map snapshot each frame (open-state + control rects) so the UI
+            // thread can gate gestures + hide the native chrome lock-free. Optional method — older jars
+            // just leave the default {"open":false}.
+            if (g_hudReady.load(std::memory_order_acquire) && g_hudCls && g_midMapSnapshot) {
+                jstring js = (jstring) env->CallStaticObjectMethod(g_hudCls, g_midMapSnapshot);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); }
+                else if (js) {
+                    const char *c = env->GetStringUTFChars(js, nullptr);
+                    if (c) {
+                        std::lock_guard<std::mutex> lk(g_mapLock);
+                        g_mapSnapshotPub.assign(c);
                         env->ReleaseStringUTFChars(js, c);
                     } else if (env->ExceptionCheck()) {
                         env->ExceptionClear();
@@ -1888,6 +1913,18 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeSwitchChatTab(JNIEnv *, jobject, jint index) {
     if (!hudReady()) return;
     facadeVoidInt(g_hudCls, g_midSwitchChatTab, index);
+}
+// Phase-5 world map: pan by accumulated finger deltas (canvas px; the shared tick converts to tiles via the
+// live zoom) + the render-thread-published snapshot (UI reads lock-free, no attach).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanWorldMap(JNIEnv *, jobject, jint dx, jint dy) {
+    if (!hudReady()) return;
+    facadeVoidIntInt(g_hudCls, g_midPanWorldMap, dx, dy);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeMapSnapshotPub(JNIEnv *env, jobject) {
+    std::lock_guard<std::mutex> lk(g_mapLock);
+    return env->NewStringUTF(g_mapSnapshotPub.c_str());
 }
 // A3 chat-tab veneer: the render-thread-published HudVeneerBridge.getChatSnapshot (UI reads lock-free, no attach)
 // + the two row-size setters (rl-bridge thread) that push the engine message area below the taller native row.
