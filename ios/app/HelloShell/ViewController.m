@@ -194,7 +194,12 @@
 @property (nonatomic, assign) CGRect mapCloseCanvas;    // engine CLOSE rect (canvas px; zero = unknown)
 @property (nonatomic, assign) CGRect mapSearchCanvas;   // engine SEARCH rect (canvas px)
 @property (nonatomic, assign) CGRect mapWindowCanvas;   // the whole map window rect (canvas px)
+@property (nonatomic, assign) CGRect mapKeyCanvas;      // the Key list rect — swipe there scrolls the list
+@property (nonatomic, assign) CGRect mapListCanvas;     // the surface dropdown list rect (zero when closed)
 @property (nonatomic, strong) NSArray<UIView *> *mapBands; // black bands above/below the scaled map window
+@property (nonatomic, assign) BOOL mapListScrolling;    // the current pan gesture scrolls a map list (wheel)
+@property (nonatomic, assign) CGPoint mapListWheelPt;   // game point the scroll wheel is parked over
+@property (nonatomic, assign) CGFloat mapListScrollAcc; // accumulated drag pt toward the next wheel notch
 @property (nonatomic, assign) BOOL mapPanning;          // the current pan gesture is panning the map
 @property (nonatomic, assign) CGFloat mapPanAccX;       // sub-px accumulators (screen pt -> whole canvas px)
 @property (nonatomic, assign) CGFloat mapPanAccY;
@@ -2461,6 +2466,11 @@ static CGRect mapRectFromArr(NSArray *a) {
             closeR = mapRectFromArr(d[@"close"]);
             searchR = mapRectFromArr(d[@"search"]);
             windowR = mapRectFromArr(d[@"window"]);
+            self.mapKeyCanvas = mapRectFromArr(d[@"key"]);
+            self.mapListCanvas = mapRectFromArr(d[@"maplist"]);
+        } else {
+            self.mapKeyCanvas = CGRectZero;
+            self.mapListCanvas = CGRectZero;
         }
     }
     self.mapCloseCanvas = closeR;
@@ -2497,10 +2507,16 @@ static CGRect mapRectFromArr(NSArray *a) {
     if (!open || wr.size.width <= 0 || self.renderW <= 0 || W <= 0) {
         if (!CGAffineTransformIsIdentity(self.screen.transform)) {
             self.screen.transform = CGAffineTransformIdentity;
+            self.screen.layer.magnificationFilter = kCAFilterLinear;
+            self.glLayer.magnificationFilter = kCAFilterLinear;
         }
         for (UIView *v in self.mapBands) v.hidden = YES;
         return;
     }
+    // Pixel-art crispness: the scaled-up map reads SOFT under bilinear magnification — switch to
+    // nearest-neighbour while the map fills the screen (the official app's map is crisp-pixelated too).
+    self.screen.layer.magnificationFilter = kCAFilterNearest;
+    self.glLayer.magnificationFilter = kCAFilterNearest;
     CGFloat s = W / (CGFloat)self.renderW;   // canvas px -> screen pt (untransformed)
     CGRect r = CGRectMake(wr.origin.x * s, wr.origin.y * s, wr.size.width * s, wr.size.height * s);
     CGFloat k = W / r.size.width;            // fill the full width
@@ -3094,21 +3110,36 @@ static CGRect mapRectFromArr(NSArray *a) {
     if (![JVMLauncher bridgeReady] || self.menuOpen) return;
     if (g.state == UIGestureRecognizerStateBegan) {
         [g setTranslation:CGPointZero inView:self.screen];
-        // World map open: a 1-finger drag that BEGINS inside the (centred) map window pans the MAP (bridge ->
+        // World map open: a 1-finger drag that BEGINS inside the Key list or the open surface dropdown
+        // SCROLLS that list (wheel events parked over it); inside the map window it pans the MAP (bridge ->
         // map centre). Outside the window it stays a camera drag, like the desktop.
         if (self.mapOpen) {
             int mgx = 0, mgy = 0;
-            if ([self mapPoint:[g locationInView:self.screen] toGameX:&mgx toGameY:&mgy]
-                    && (self.mapWindowCanvas.size.width <= 0
-                        || CGRectContainsPoint(self.mapWindowCanvas, CGPointMake(mgx, mgy)))) {
-                self.mapPanning = YES;
-                self.mapPanAccX = self.mapPanAccY = 0;
-                self.chatScrolling = NO;
-                [self appendLine:@"[map] pan begin"];
-                return;
+            if ([self mapPoint:[g locationInView:self.screen] toGameX:&mgx toGameY:&mgy]) {
+                CGPoint gp = CGPointMake(mgx, mgy);
+                if ((self.mapListCanvas.size.width > 0 && CGRectContainsPoint(self.mapListCanvas, gp))
+                        || (self.mapKeyCanvas.size.width > 0 && CGRectContainsPoint(self.mapKeyCanvas, gp))) {
+                    self.mapListScrolling = YES;
+                    self.mapListWheelPt = gp;
+                    self.mapListScrollAcc = 0;
+                    self.mapPanning = NO;
+                    self.chatScrolling = NO;
+                    [self appendLine:@"[map] list scroll begin"];
+                    return;
+                }
+                if (self.mapWindowCanvas.size.width <= 0
+                        || CGRectContainsPoint(self.mapWindowCanvas, gp)) {
+                    self.mapPanning = YES;
+                    self.mapListScrolling = NO;
+                    self.mapPanAccX = self.mapPanAccY = 0;
+                    self.chatScrolling = NO;
+                    [self appendLine:@"[map] pan begin"];
+                    return;
+                }
             }
         }
         self.mapPanning = NO;
+        self.mapListScrolling = NO;
         // A drag that STARTS inside the open chat box scrolls the chat (finger-scroll) instead of rotating the
         // camera. Only when the chat is open (chatScrollable); otherwise it's a normal camera drag.
         int gx = 0, gy = 0;
@@ -3128,8 +3159,9 @@ static CGRect mapRectFromArr(NSArray *a) {
         return;
     }
     if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
-        if (self.mapPanning) {
+        if (self.mapPanning || self.mapListScrolling) {
             self.mapPanning = NO;
+            self.mapListScrolling = NO;
             return;
         }
         if (self.chatScrolling) {
@@ -3144,11 +3176,26 @@ static CGRect mapRectFromArr(NSArray *a) {
     CGPoint d = [g translationInView:self.screen];
     [g setTranslation:CGPointZero inView:self.screen];   // make the next delta incremental
     if (d.x == 0 && d.y == 0) return;
+    if (self.mapListScrolling) {
+        // Swipe-scroll the Key list / surface dropdown: wheel notches parked over the list (the engine
+        // scrolls the hovered scrollable). Content follows the finger: swipe up -> wheel down.
+        const CGFloat kMapScrollPtPerNotch = 22.0;
+        self.mapListScrollAcc += -d.y / kMapScrollPtPerNotch;
+        int notches = (int)(self.mapListScrollAcc > 0 ? floor(self.mapListScrollAcc) : ceil(self.mapListScrollAcc));
+        if (notches != 0) {
+            self.mapListScrollAcc -= notches;
+            [JVMLauncher postWheelX:(int)self.mapListWheelPt.x y:(int)self.mapListWheelPt.y rotation:notches];
+        }
+        return;
+    }
     if (self.mapPanning) {
         // Finger pt -> whole canvas px, sub-px accumulated so slow drags aren't quantised away. The bridge
-        // converts px -> map tiles via the live zoom ("grab the map": content tracks the finger 1:1).
+        // converts px -> map tiles via the live zoom; kMapPanSpeed > 1 = the map travels faster than the
+        // finger (user preference — covering Gielinor 1:1 takes too many swipes).
+        const CGFloat kMapPanSpeed = 2.0;
         CGFloat W = self.view.bounds.size.width;
         CGFloat k = (self.renderW > 0 && W > 0) ? (CGFloat)self.renderW / W : 1.0;
+        k *= kMapPanSpeed;
         self.mapPanAccX += d.x * k;
         self.mapPanAccY += d.y * k;
         int dx = (int)(self.mapPanAccX < 0 ? ceil(self.mapPanAccX) : floor(self.mapPanAccX));

@@ -632,6 +632,8 @@ public final class HudVeneerBridge
 		appendRect(c, sb, "search", InterfaceID.Worldmap.SEARCH, -1);
 		appendRect(c, sb, "zoomIn", InterfaceID.Worldmap.ZOOM_IN, -1);
 		appendRect(c, sb, "zoomOut", InterfaceID.Worldmap.ZOOM_OUT, -1);
+		appendRect(c, sb, "key", InterfaceID.Worldmap.KEY_CONTAINER, -1);          // swipe-scroll target
+		appendRect(c, sb, "maplist", InterfaceID.Worldmap.MAPLIST_CONTAINER, -1);  // surface dropdown (when open)
 		sb.append('}');
 		mapSnapshotJson = sb.toString();
 	}
