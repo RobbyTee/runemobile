@@ -193,11 +193,10 @@
 @property (nonatomic, assign) BOOL mapOpen;             // polled from the bridge map snapshot (~10 Hz)
 @property (nonatomic, assign) CGRect mapCloseCanvas;    // engine CLOSE rect (canvas px; zero = unknown)
 @property (nonatomic, assign) CGRect mapSearchCanvas;   // engine SEARCH rect (canvas px)
+@property (nonatomic, assign) CGRect mapWindowCanvas;   // the whole (centred) map window rect (canvas px)
 @property (nonatomic, assign) BOOL mapPanning;          // the current pan gesture is panning the map
 @property (nonatomic, assign) CGFloat mapPanAccX;       // sub-px accumulators (screen pt -> whole canvas px)
 @property (nonatomic, assign) CGFloat mapPanAccY;
-@property (nonatomic, strong) UIButton *mapCloseButton; // native ✕ shown while the map is open
-@property (nonatomic, strong) NSArray<UIView *> *mapMasks; // 4 black letterbox bands framing the map window
 // Instant selected-highlight after a tap: the engine's tab GRAPHIC sprite (which the snapshot reads for the
 // selected state) only updates on a redraw, so the highlight lagged until the next game interaction. Optimistically
 // mark the tapped tab selected and hold it until the snapshot agrees (or a short timeout). -1 = none.
@@ -2465,82 +2464,19 @@ static CGRect mapRectFromArr(NSArray *a) {
     }
     self.mapCloseCanvas = closeR;
     self.mapSearchCanvas = searchR;
-    // Letterbox: the engine lays the map to its windowed viewport region and won't go fullscreen (forcing
-    // it re-lays pixels but not hit-testing — probe-settled), so black bands frame the window natively. The
-    // bands also swallow touches, so a stray tap outside the map can't walk/interact with the scene behind.
-    [self setMapMasksVisible:open windowCanvas:windowR];
+    self.mapWindowCanvas = windowR;
     if (open == self.mapOpen) return;
     self.mapOpen = open;
-    // Corner controls that overlap the fullscreen map (the chat/tab-grid veneers hide via their own ticks).
+    // Corner controls that overlap the (centred) map window (the chat/tab-grid veneers hide via their own
+    // ticks). The window itself is positioned by the bridge (centred via the WORLDMAP_X/Y varcs) and the
+    // scene stays visible around it, like the desktop window — no masks, and the engine's own close X is
+    // fully on-screen and tappable.
     self.keyboardButton.hidden = open;
     self.shiftButton.hidden = open;
     self.screenshotButton.hidden = open;
     self.panelDock.view.hidden = open;
-    [self setMapCloseButtonVisible:open];
     [self appendLine:open ? @"[map] world map OPEN -> map pan/taps, chrome hidden"
                           : @"[map] world map closed -> chrome restored"];
-}
-
-// Frame the engine map window with black bands (top/bottom/left/right) so the exposed live-scene region
-// around the windowed map reads as a clean letterboxed screen. Re-positioned every poll (rects can shift);
-// the bands are plain opaque views so they also intercept touches over the dead region.
-- (void)setMapMasksVisible:(BOOL)show windowCanvas:(CGRect)wr {
-    if (show && !self.mapMasks) {
-        NSMutableArray<UIView *> *m = [NSMutableArray arrayWithCapacity:4];
-        for (int i = 0; i < 4; i++) {
-            UIView *v = [[UIView alloc] initWithFrame:CGRectZero];
-            v.backgroundColor = [UIColor blackColor];
-            [self.view addSubview:v];
-            [m addObject:v];
-        }
-        self.mapMasks = m;
-    }
-    if (!self.mapMasks) return;
-    if (!show || wr.size.width <= 0 || self.renderW <= 0) {
-        for (UIView *v in self.mapMasks) v.hidden = YES;
-        return;
-    }
-    CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height;
-    CGFloat s = W / (CGFloat)self.renderW;
-    CGRect r = CGRectMake(wr.origin.x * s, wr.origin.y * s, wr.size.width * s, wr.size.height * s);
-    self.mapMasks[0].frame = CGRectMake(0, 0, W, MAX(0, r.origin.y));                                        // top
-    self.mapMasks[1].frame = CGRectMake(0, CGRectGetMaxY(r), W, MAX(0, H - CGRectGetMaxY(r)));               // bottom
-    self.mapMasks[2].frame = CGRectMake(0, r.origin.y, MAX(0, r.origin.x), r.size.height);                   // left
-    self.mapMasks[3].frame = CGRectMake(CGRectGetMaxX(r), r.origin.y, MAX(0, W - CGRectGetMaxX(r)), r.size.height); // right
-    for (UIView *v in self.mapMasks) { v.hidden = NO; [self.view bringSubviewToFront:v]; }
-    if (self.mapCloseButton) [self.view bringSubviewToFront:self.mapCloseButton];
-}
-
-- (void)setMapCloseButtonVisible:(BOOL)show {
-    if (show && !self.mapCloseButton) {
-        UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-        [b setTitle:@"✕" forState:UIControlStateNormal];
-        b.titleLabel.font = [UIFont boldSystemFontOfSize:22];
-        [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        b.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
-        b.layer.cornerRadius = 8.0;
-        [b addTarget:self action:@selector(onMapClose) forControlEvents:UIControlEventTouchUpInside];
-        [self.view addSubview:b];
-        self.mapCloseButton = b;
-    }
-    if (self.mapCloseButton) {
-        UIEdgeInsets ins = self.view.safeAreaInsets;
-        const CGFloat s = 40.0;
-        self.mapCloseButton.frame = CGRectMake(self.view.bounds.size.width - ins.right - s - 8.0,
-                                               ins.top + 8.0, s, s);
-        self.mapCloseButton.hidden = !show;
-        if (show) [self.view bringSubviewToFront:self.mapCloseButton];
-    }
-}
-
-// Native ✕ -> precise click on the engine's own CLOSE widget. The close is engine-animated and SLOW
-// (~0.8 s, Phase-0 measured) — the snapshot flips open=false when it lands and the chrome restores then.
-- (void)onMapClose {
-    CGRect r = self.mapCloseCanvas;
-    if (r.size.width > 0) {
-        [JVMLauncher postClickPreciseX:(int)lround(CGRectGetMidX(r)) y:(int)lround(CGRectGetMidY(r)) button:1];
-        [self appendLine:@"[map] native close -> engine CLOSE"];
-    }
 }
 
 // Called every screen refresh once the JVM is running. Pulls the engine's latest composited frame
@@ -2721,11 +2657,13 @@ static CGRect mapRectFromArr(NSArray *a) {
     CGPoint vp = [g locationInView:self.view];
     int gx = 0, gy = 0;
     if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return;
-    // World map open: every tap is a UI click on the fullscreen map (icons/keys/buttons) — precise, no
-    // world-snap, no walk-ring semantics. A tap in the search rect ALSO raises the soft keyboard: the map
+    // World map open: a tap INSIDE the (centred) map window is a UI click (icons/keys/buttons) — precise,
+    // no world-snap, no walk-ring semantics. A tap in the search rect ALSO raises the soft keyboard: the map
     // search doesn't flip INPUT_TYPE (Phase-0 probe), so the auto-raise never fires; typed keys go to the
-    // canvas and the focused search field consumes them.
-    if (self.mapOpen) {
+    // canvas and the focused search field consumes them. Taps OUTSIDE the window fall through to the normal
+    // world tap (walk/interact + ring), like the desktop.
+    if (self.mapOpen && (self.mapWindowCanvas.size.width <= 0
+            || CGRectContainsPoint(self.mapWindowCanvas, CGPointMake(gx, gy)))) {
         if (CGRectGetWidth(self.mapSearchCanvas) > 0
                 && CGRectContainsPoint(self.mapSearchCanvas, CGPointMake(gx, gy))
                 && ![self.kbField isFirstResponder]) {
@@ -3108,14 +3046,19 @@ static CGRect mapRectFromArr(NSArray *a) {
     if (![JVMLauncher bridgeReady] || self.menuOpen) return;
     if (g.state == UIGestureRecognizerStateBegan) {
         [g setTranslation:CGPointZero inView:self.screen];
-        // World map open: the map is fullscreen, so every 1-finger drag PANS THE MAP (bridge -> map centre),
-        // never the camera behind it.
+        // World map open: a 1-finger drag that BEGINS inside the (centred) map window pans the MAP (bridge ->
+        // map centre). Outside the window it stays a camera drag, like the desktop.
         if (self.mapOpen) {
-            self.mapPanning = YES;
-            self.mapPanAccX = self.mapPanAccY = 0;
-            self.chatScrolling = NO;
-            [self appendLine:@"[map] pan begin"];
-            return;
+            int mgx = 0, mgy = 0;
+            if ([self mapPoint:[g locationInView:self.screen] toGameX:&mgx toGameY:&mgy]
+                    && (self.mapWindowCanvas.size.width <= 0
+                        || CGRectContainsPoint(self.mapWindowCanvas, CGPointMake(mgx, mgy)))) {
+                self.mapPanning = YES;
+                self.mapPanAccX = self.mapPanAccY = 0;
+                self.chatScrolling = NO;
+                [self appendLine:@"[map] pan begin"];
+                return;
+            }
         }
         self.mapPanning = NO;
         // A drag that STARTS inside the open chat box scrolls the chat (finger-scroll) instead of rotating the

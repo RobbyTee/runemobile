@@ -526,15 +526,26 @@ public final class HudVeneerBridge
 	}
 
 	private static boolean mapWasOpen;       // close-edge tracker (client thread only) — restores the chat
+	private static final int MAP_INSET = 24; // canvas-px top/left margin of the floating map window (~41 pt)
 
 	private static void tickWorldMap(Client c)
 	{
-		// SIZING NOTE (probe-settled, don't re-tread): the engine lays the world map to its windowed viewport
-		// region (canvas minus the layout's chat-strip/side reserves) and NOTHING safely changes that —
-		// forcing the map root re-lays the RENDER fullscreen but hit-testing keeps the real layout (every map
-		// click goes dead), and the WORLDMAP_MINUSWIDTH/MINUSHEIGHT/X/Y varcs change open sizes unpredictably
-		// (the apparent "fullscreen reopens" were the forced-relayout artifact). The native shell letterboxes
-		// the exposed band black instead — the map stays exactly where the engine hit-tests it.
+		// WINDOW RECT (probe-settled): the world map is the desktop's draggable WINDOW, and the
+		// WORLDMAP_X/Y + MINUSWIDTH/MINUSHEIGHT varcs are its remembered rect, read at OPEN — a seeded rect
+		// is honored with REAL hit-testing (zoom/close click oracles green), from the first open. Hard
+		// constraints (all probe-verified — don't re-tread): minus == 0 reads as "no stored rect" (the open
+		// falls back to the default top-left window); size = windowed-max (canvas minus the structural
+		// 215x165 reserve) minus the minus values, bigger/negative clamped; X/Y are capped at the minus
+		// values (the window must fit inside the top-left windowed REGION, so true canvas-centering of a
+		// big window is impossible); and forcing the map root re-lays render only (clicks go dead). Best
+		// clean mobile result: a near-max FLOATING window inset MAP_INSET px from the top-left — clears the
+		// curved bezel corner, engine close X fully visible, live scene showing around it (desktop-window
+		// look). Seeded every tick so the session's first open already lands there.
+		c.setVarcIntValue(VarClientID.WORLDMAP_X, MAP_INSET);
+		c.setVarcIntValue(VarClientID.WORLDMAP_Y, MAP_INSET);
+		c.setVarcIntValue(VarClientID.WORLDMAP_MINUSWIDTH, MAP_INSET * 2);
+		c.setVarcIntValue(VarClientID.WORLDMAP_MINUSHEIGHT, MAP_INSET * 2);
+
 		final boolean preEoc = c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
 		final int chatId = preEoc ? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER;
 		if (!isWorldMapOpen(c))

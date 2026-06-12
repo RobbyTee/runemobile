@@ -173,6 +173,27 @@ public final class WorldMapProbe
 				{
 					return;
 				}
+				// Window-rect test: WORLDMAP_X/Y/MINUSWIDTH/MINUSHEIGHT look like the desktop map window's
+				// remembered draggable/resizable rect. Seed an explicitly VALID rect ("x,y,minusW,minusH")
+				// before the open — if the open honors it (geom dump + the zoom-click oracle), the bridge can
+				// place a centered window with native hit-testing.
+				final String rect = System.getProperty("runelite.worldmapprobe.varcrect", "");
+				if (!rect.isEmpty())
+				{
+					try
+					{
+						final String[] p = rect.split(",");
+						c.setVarcIntValue(net.runelite.api.gameval.VarClientID.WORLDMAP_X, Integer.parseInt(p[0].trim()));
+						c.setVarcIntValue(net.runelite.api.gameval.VarClientID.WORLDMAP_Y, Integer.parseInt(p[1].trim()));
+						c.setVarcIntValue(net.runelite.api.gameval.VarClientID.WORLDMAP_MINUSWIDTH, Integer.parseInt(p[2].trim()));
+						c.setVarcIntValue(net.runelite.api.gameval.VarClientID.WORLDMAP_MINUSHEIGHT, Integer.parseInt(p[3].trim()));
+						log.info("[worldmap] seeded varc rect {}", rect);
+					}
+					catch (RuntimeException ex)
+					{
+						log.warn("[worldmap] bad varcrect {}", rect);
+					}
+				}
 				// Decisive sizing test: the engine sizes the map AT OPEN from the live viewport, and the
 				// viewport excludes the chat strip while the chat is layout-visible. Pre-hide the chat so the
 				// open should produce a full-height map (the mobile fullscreen lever, if the geom dump agrees).
