@@ -39,6 +39,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.BufferProvider;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.MenuEntry;
 import net.runelite.api.Point;
 import net.runelite.api.VarClientInt;
 import net.runelite.api.gameval.InterfaceID;
@@ -114,6 +115,11 @@ public final class WorldMapProbe
 	private static boolean focused;
 	private static boolean verdictEmitted;
 
+	// ---- open-failure diagnostics (legacy-account world-map bug) -------------------------------------------
+	private static int chatSeen = -1;                 // -1 = baseline not taken yet (skip the login backlog)
+	private static java.util.Set<Integer> rootGroups; // widget root groups last frame (null = baseline pending)
+	private static int hoverFrames;                   // frames spent hovering the orb before the menu read + click
+
 	private static Point panBefore;
 	private static int dragX, dragY;
 	private static boolean panned;
@@ -153,6 +159,8 @@ public final class WorldMapProbe
 
 		try
 		{
+			diffChat(c);
+			diffRoots(c);
 			step(c);
 		}
 		catch (RuntimeException ex)
@@ -243,6 +251,20 @@ public final class WorldMapProbe
 					{
 					}
 				}
+				// Hover first, click on a later frame — getMenuEntries() reflects the pointer only after the
+				// engine processed the MOUSE_MOVED, so the menu the click will consume is readable here.
+				if (hoverFrames < 3)
+				{
+					if (hoverFrames == 0)
+					{
+						synthMove(c, orb.x + orb.width / 2, orb.y + orb.height / 2);
+					}
+					hoverFrames++;
+					return;
+				}
+				hoverFrames = 0;
+				logMenu(c);
+				dumpAccountState(c);
 				synthClick(c, orb.x + orb.width / 2, orb.y + orb.height / 2);
 				log.info("[worldmap] clicked world-map orb at {},{}", orb.x + orb.width / 2, orb.y + orb.height / 2);
 				go(Phase.OPENING);
@@ -256,6 +278,13 @@ public final class WorldMapProbe
 					dumpGeometry(c);
 					go(Phase.OPEN_SETTLE);
 					break;
+				}
+				if ((phaseFrame % 10) == 9)
+				{
+					// The boundsOf gate hides "exists but hidden/zero-size" — log the raw widget states while
+					// the open is pending so a loaded-but-hidden interface is distinguishable from not-loaded.
+					logRawState(c, "UNIVERSE", InterfaceID.Worldmap.UNIVERSE);
+					logRawState(c, "MAP_CONTAINER", InterfaceID.Worldmap.MAP_CONTAINER);
 				}
 				if (phaseFrame >= OPEN_RETRY)
 				{
@@ -582,6 +611,192 @@ public final class WorldMapProbe
 			panned, pannedApi, zoomWheel, zoomBtn, searchInput, closed, relocUniverse, relocWindow);
 	}
 
+	// ---- open-failure diagnostics --------------------------------------------------------------------------
+
+	/** New chat lines since last frame (the engine says WHY an open was refused via a game message). */
+	private static void diffChat(Client c)
+	{
+		try
+		{
+			final java.util.List<net.runelite.api.MessageNode> all = new java.util.ArrayList<>();
+			for (final net.runelite.api.MessageNode node : c.getMessages())
+			{
+				if (node != null)
+				{
+					all.add(node);
+				}
+			}
+			if (chatSeen < 0)
+			{
+				chatSeen = all.size();   // baseline: skip the login backlog
+				return;
+			}
+			for (int i = chatSeen; i < all.size(); i++)
+			{
+				final net.runelite.api.MessageNode n = all.get(i);
+				log.info("[worldmap] chat+ type={} name={} value={}",
+					n.getType(), n.getName(), n.getValue());
+			}
+			chatSeen = all.size();
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	/** Widget-root group loads/unloads since last frame (does ANY interface load off the orb click?). */
+	private static void diffRoots(Client c)
+	{
+		try
+		{
+			final java.util.Set<Integer> now = new java.util.TreeSet<>();
+			final Widget[] roots = c.getWidgetRoots();
+			if (roots != null)
+			{
+				for (final Widget w : roots)
+				{
+					if (w != null)
+					{
+						now.add(w.getId() >>> 16);
+					}
+				}
+			}
+			if (rootGroups != null && !now.equals(rootGroups))
+			{
+				final java.util.Set<Integer> added = new java.util.TreeSet<>(now);
+				added.removeAll(rootGroups);
+				final java.util.Set<Integer> gone = new java.util.TreeSet<>(rootGroups);
+				gone.removeAll(now);
+				log.info("[worldmap] roots changed: +{} -{} (now {})", added, gone, now);
+			}
+			rootGroups = now;
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	/** The hover menu at the click point — IS the left-click action actually the world-map open op? */
+	private static void logMenu(Client c)
+	{
+		try
+		{
+			final MenuEntry[] entries = c.getMenuEntries();
+			if (entries == null || entries.length == 0)
+			{
+				log.info("[worldmap] menu: EMPTY");
+				return;
+			}
+			for (int i = 0; i < entries.length; i++)
+			{
+				final MenuEntry e = entries[i];
+				if (e == null)
+				{
+					continue;
+				}
+				log.info("[worldmap] menu[{}]{} option={} target={} type={} id={} p0={} p1={}",
+					i, i == entries.length - 1 ? " <LEFT-CLICK>" : "",
+					e.getOption(), e.getTarget(), e.getType(), e.getIdentifier(), e.getParam0(), e.getParam1());
+			}
+		}
+		catch (RuntimeException ex)
+		{
+			log.info("[worldmap] menu read threw {}", String.valueOf(ex));
+		}
+	}
+
+	/** The account-stored state the open script could be gated on — dumped right before each orb click. */
+	private static void dumpAccountState(Client c)
+	{
+		try
+		{
+			log.info("[worldmap] state varbit WORLDMAP_TOGGLES={} WORLDMAP_DISABLE_KEY={} varp WORLDMAP_PERM={} TUTORIAL={} TUTORIAL_2={} varc rect={},{},{},{}",
+				safeVarbit(c, net.runelite.api.gameval.VarbitID.WORLDMAP_TOGGLES),
+				safeVarbit(c, net.runelite.api.gameval.VarbitID.WORLDMAP_DISABLE_KEY),
+				safeVarp(c, net.runelite.api.gameval.VarPlayerID.WORLDMAP_PERM),
+				safeVarp(c, net.runelite.api.gameval.VarPlayerID.TUTORIAL),
+				safeVarp(c, net.runelite.api.gameval.VarPlayerID.TUTORIAL_2),
+				safeVarc(c, net.runelite.api.gameval.VarClientID.WORLDMAP_X),
+				safeVarc(c, net.runelite.api.gameval.VarClientID.WORLDMAP_Y),
+				safeVarc(c, net.runelite.api.gameval.VarClientID.WORLDMAP_MINUSWIDTH),
+				safeVarc(c, net.runelite.api.gameval.VarClientID.WORLDMAP_MINUSHEIGHT));
+		}
+		catch (RuntimeException ex)
+		{
+			log.info("[worldmap] state dump threw {}", String.valueOf(ex));
+		}
+		try
+		{
+			final Widget orb = c.getWidget(InterfaceID.Orbs.ORB_WORLDMAP);
+			log.info("[worldmap] orb onOp={}", orb == null ? "null-widget"
+				: java.util.Arrays.toString(orb.getOnOpListener()));
+			// The floating map's host layer in the PreEoc toplevel — if this is missing/hidden the floating-map
+			// opensub has nowhere to land and fails silently.
+			logRawState(c, "FLOATER", InterfaceID.ToplevelPreEoc.FLOATER);
+			logRawState(c, "OVERLAY_HUD", InterfaceID.ToplevelPreEoc.OVERLAY_HUD);
+		}
+		catch (RuntimeException ex)
+		{
+			log.info("[worldmap] orb/floater dump threw {}", String.valueOf(ex));
+		}
+	}
+
+	private static String safeVarbit(Client c, int id)
+	{
+		try
+		{
+			return Integer.toString(c.getVarbitValue(id));
+		}
+		catch (RuntimeException ex)
+		{
+			return "ERR";
+		}
+	}
+
+	private static String safeVarp(Client c, int id)
+	{
+		try
+		{
+			return Integer.toString(c.getVarpValue(id));
+		}
+		catch (RuntimeException ex)
+		{
+			return "ERR";
+		}
+	}
+
+	private static String safeVarc(Client c, int id)
+	{
+		try
+		{
+			return Integer.toString(c.getVarcIntValue(id));
+		}
+		catch (RuntimeException ex)
+		{
+			return "ERR";
+		}
+	}
+
+	private static void logRawState(Client c, String name, int id)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			if (w == null)
+			{
+				log.info("[worldmap] pending {} = null", name);
+			}
+			else
+			{
+				log.info("[worldmap] pending {} hidden={} bounds={}", name, w.isHidden(), w.getBounds());
+			}
+		}
+		catch (RuntimeException ex)
+		{
+			log.info("[worldmap] pending {} threw {}", name, String.valueOf(ex));
+		}
+	}
+
 	// ---- engine reads --------------------------------------------------------------------------------------
 
 	/** The pannable map view — MAP_DISPLAY when present, else MAP_CONTAINER. */
@@ -744,6 +959,17 @@ public final class WorldMapProbe
 			InputEvent.BUTTON1_DOWN_MASK, x, y, 1, false, MouseEvent.BUTTON1));
 		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t + 3, 0, x, y, 1, false, MouseEvent.BUTTON1));
 		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, t + 4, 0, x, y, 1, false, MouseEvent.BUTTON1));
+	}
+
+	private static void synthMove(Client c, int x, int y)
+	{
+		final EventQueue q = queue(c, x, y);
+		if (q == null)
+		{
+			return;
+		}
+		q.postEvent(new MouseEvent(c.getCanvas(), MouseEvent.MOUSE_MOVED, System.currentTimeMillis(),
+			0, x, y, 0, false));
 	}
 
 	private static void synthPress(Client c, int x, int y)
