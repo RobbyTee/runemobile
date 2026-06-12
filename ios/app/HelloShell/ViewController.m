@@ -259,6 +259,8 @@
 @property (nonatomic, strong) dispatch_source_t pipBgPump;   // 15 Hz frame pump while backgrounded (the
                                                              // CADisplayLink stops firing there)
 @property (nonatomic, assign) int32_t pipFrameSeq;           // last engine frame seq fed to the PiP layer
+@property (nonatomic, strong) UIButton *pipButton;           // 📺 manual PiP start/stop (also the diagnostic
+                                                             // for the auto-start gate)
 @property (nonatomic, strong) AVAudioEngine *keepaliveEngine;   // renders silence; holds the audio session
 @property (nonatomic, strong) AVAudioSourceNode *keepaliveSource;
 @property (nonatomic, assign) UIBackgroundTaskIdentifier bgKeepTask; // per-background grace assertion
@@ -266,6 +268,9 @@
 
 // Grace period before an enabled-but-not-active plugin is reported as failed to start.
 static const NSTimeInterval kPluginStartGrace = 4.0;
+
+// KVO context for the PiP controller's possible/active flags (diagnostics for the auto-engage gate).
+static void * const kPipKvoContext = (void *)&kPipKvoContext;
 
 // AWT virtual keycodes for the non-text keys we synthesize (java.awt.event.KeyEvent.VK_*).
 static const int AWT_VK_BACK_SPACE = 8;
@@ -580,6 +585,20 @@ static const CGFloat kMenuWidth       = 210.0;
                     forControlEvents:UIControlEventTouchUpInside];
     [self.screen addSubview:self.screenshotButton];
 
+    // Manual Picture-in-Picture: pops the game into the floating window without leaving the app, and doubles
+    // as the auto-start diagnostic (manual-works/auto-doesn't isolates the system's auto-engage gate). Hidden
+    // until setupPictureInPicture arms the controller.
+    self.pipButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.pipButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.pipButton setTitle:@"📺" forState:UIControlStateNormal];
+    self.pipButton.titleLabel.font = [UIFont systemFontOfSize:20];
+    self.pipButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
+    self.pipButton.layer.cornerRadius = 8;
+    self.pipButton.hidden = YES;
+    [self.pipButton addTarget:self action:@selector(onTogglePip)
+             forControlEvents:UIControlEventTouchUpInside];
+    [self.screen addSubview:self.pipButton];
+
     // Native tab rails (edge-split, mobile arrangement): a 2-column icon grid pinned to the right edge of the
     // game view. The opaque rail background sits behind the icon buttons; each icon is blitted from the live
     // desktop stone's sprite region, and a tap proxies a click onto the real stone centre (so the native
@@ -842,6 +861,12 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.screenshotButton.leadingAnchor constraintEqualToAnchor:self.shiftButton.trailingAnchor constant:8],
         [self.screenshotButton.widthAnchor constraintEqualToConstant:44],
         [self.screenshotButton.heightAnchor constraintEqualToConstant:36],
+
+        // Picture-in-Picture button — same row, right of the screenshot button.
+        [self.pipButton.bottomAnchor constraintEqualToAnchor:self.keyboardButton.bottomAnchor],
+        [self.pipButton.leadingAnchor constraintEqualToAnchor:self.screenshotButton.trailingAnchor constant:8],
+        [self.pipButton.widthAnchor constraintEqualToConstant:44],
+        [self.pipButton.heightAnchor constraintEqualToConstant:36],
 
         // Utility trio (⚙ ▦ ≡) — moved OUT of the top-right, where it overlapped the engine XP counter + minimap
         // orbs (the XP button lives in the left part of the relocated MAP_CONTAINER cluster, and XP-drop numbers
@@ -1188,6 +1213,15 @@ static const CGFloat kMenuWidth       = 210.0;
     if (self.launched) {
         [self startKeepaliveEngine];   // defensive re-arm (a route change can stop a running engine)
         [self startPipBgPump];
+    }
+    if (self.pipController) {
+        // The auto-engage state at the exact moment it matters, for the device log.
+        [self appendLine:[NSString stringWithFormat:
+            @"[pip] bg snapshot: possible=%d active=%d layerStatus=%ld fedSeq=%d audioRunning=%d",
+            (int)self.pipController.isPictureInPicturePossible,
+            (int)self.pipController.isPictureInPictureActive,
+            (long)self.pipLayer.status, self.pipFrameSeq,
+            (int)self.keepaliveEngine.isRunning]];
     }
     [self appendLine:@"[shell] backgrounded -> flushed config, keepalive armed"];
 }
@@ -2635,10 +2669,11 @@ static CGRect mapRectFromArr(NSArray *a) {
         }
     }
 
-    // Feed the Picture-in-Picture layer (~15-30 fps: every 4th tick; the copy is skipped inside unless the
-    // engine composited a NEW frame). The layer sits behind the opaque game view, so this is invisible in-app —
-    // it exists so the system has live video to lift into the PiP window the moment the app backgrounds.
-    if (self.pipController && !self.gpuPresent && self.framesShown % 4 == 0) {
+    // Feed the Picture-in-Picture layer every tick (the copy is skipped inside unless the engine composited
+    // a NEW frame, so this is engine-rate ~50 fps, not display-rate). The layer IS the visible presenter —
+    // it draws over the UIImageView's identical blit — because the system only auto-lifts video it considers
+    // visibly playing inline; an occluded feed layer never engaged on device.
+    if (self.pipController && !self.gpuPresent) {
         [self pipPumpFrame];
     }
 
@@ -2838,9 +2873,12 @@ static CGRect mapRectFromArr(NSArray *a) {
     }
 }
 
-// PiP scaffolding: the sample-buffer layer is inserted BELOW the opaque game view (in the hierarchy and
-// window-attached, which PiP requires, but never visible in-app — the screen view shows the same frames).
-// The system animates it out from the game view's exact rect on swipe-home.
+// PiP scaffolding. The sample-buffer layer is the VISIBLE presenter: a sublayer of the game view at index 0,
+// so it draws ABOVE the UIImageView's blitted image (same frames, fed in the same tick) and BELOW the native
+// chrome buttons. It must be visibly playing inline for the system's auto-engage to fire — the first cut
+// parked it occluded behind the opaque game view and auto-PiP never engaged on device. The UIImageView keeps
+// blitting underneath as the zero-risk fallback: the layer is non-opaque, so if it ever goes to the failed
+// state and renders nothing, the image simply shows through.
 - (void)setupPictureInPicture {
     if (self.pipController) return;
     if (![AVPictureInPictureController isPictureInPictureSupported]) {
@@ -2849,7 +2887,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     }
     [self.view layoutIfNeeded];
     AVSampleBufferDisplayLayer *layer = [AVSampleBufferDisplayLayer layer];
-    layer.frame = self.screen.frame;
+    layer.frame = self.screen.bounds;
     layer.videoGravity = AVLayerVideoGravityResizeAspect;
     CMTimebaseRef tb = NULL;
     if (CMTimebaseCreateWithSourceClock(kCFAllocatorDefault, CMClockGetHostTimeClock(), &tb) == noErr && tb) {
@@ -2858,7 +2896,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         layer.controlTimebase = tb;
         CFRelease(tb);
     }
-    [self.view.layer insertSublayer:layer below:self.screen.layer];
+    [self.screen.layer insertSublayer:layer atIndex:0];
     self.pipLayer = layer;
     self.pipFrameSeq = -1;
 
@@ -2867,16 +2905,54 @@ static CGRect mapRectFromArr(NSArray *a) {
     AVPictureInPictureController *pc = [[AVPictureInPictureController alloc] initWithContentSource:src];
     pc.delegate = self;
     pc.canStartPictureInPictureAutomaticallyFromInline = YES;   // swipe-home -> the game pops into PiP
+    // The auto-engage gate, observable: the system flips pictureInPicturePossible once every precondition
+    // (supported + background mode + window-attached visible layer + frames flowing) is met. Logged so a
+    // device run shows exactly which side of the gate we're on.
+    [pc addObserver:self forKeyPath:@"pictureInPicturePossible"
+            options:NSKeyValueObservingOptionNew | NSKeyValueObservingOptionInitial context:kPipKvoContext];
+    [pc addObserver:self forKeyPath:@"pictureInPictureActive"
+            options:NSKeyValueObservingOptionNew context:kPipKvoContext];
     self.pipController = pc;
+    self.pipButton.hidden = NO;
     [self appendLine:@"[pip] armed — backgrounding pops the game into Picture-in-Picture"];
 }
 
 - (void)teardownPictureInPicture {
     if (!self.pipController && !self.pipLayer) return;
     [self stopPipBgPump];
+    if (self.pipController) {
+        @try {
+            [self.pipController removeObserver:self forKeyPath:@"pictureInPicturePossible" context:kPipKvoContext];
+            [self.pipController removeObserver:self forKeyPath:@"pictureInPictureActive" context:kPipKvoContext];
+        } @catch (NSException *ex) { /* never registered — fine */ }
+    }
     self.pipController = nil;
     [self.pipLayer removeFromSuperlayer];
     self.pipLayer = nil;
+    self.pipButton.hidden = YES;
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    if (context != kPipKvoContext) {
+        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+        return;
+    }
+    [self appendLine:[NSString stringWithFormat:@"[pip] %@ -> %@", keyPath, change[NSKeyValueChangeNewKey]]];
+}
+
+// Manual PiP toggle (📺): starts the floating window without leaving the app; tapping again (or the PiP ✕)
+// brings it back. Also the cheapest auto-start diagnostic — manual-works/auto-doesn't = the system's
+// auto-engage gate, manual-fails = failedToStartPictureInPictureWithError says why.
+- (void)onTogglePip {
+    if (!self.pipController) return;
+    if (self.pipController.isPictureInPictureActive) {
+        [self.pipController stopPictureInPicture];
+    } else {
+        [self appendLine:[NSString stringWithFormat:@"[pip] manual start (possible=%d layerStatus=%ld fedSeq=%d)",
+                          (int)self.pipController.isPictureInPicturePossible,
+                          (long)self.pipLayer.status, self.pipFrameSeq]];
+        [self.pipController startPictureInPicture];
+    }
 }
 
 // Pull the newest engine frame (no-op when nothing new composited) and enqueue it on the PiP layer,
