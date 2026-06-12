@@ -804,10 +804,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
                                                      // suppression; native sets which elements to hide, e.g. chat)
         // "Renderers as plugins": drop safe-mode in EVERY mode (incl. plain CPU) so the GPU + 117HD plugins load
         // + show in the panel (GpuPlugin is loadInSafeMode=false). DeviceHeadlessBoot reads this. The plugin HUB
-        // is intentionally NOT enabled: with safe-mode off the hub would also expose a PUBLIC 117HD whose jar has
-        // no facade (it collides with our staged rs117.hd.HdPlugin) — so we keep the hub out and load OUR staged
-        // GpuPlugin/HdPlugin explicitly (RendererPanelStarter), which are the canonical panel entries.
+        // works with safe-mode off; the one hazard — the PUBLIC hub 117HD whose jar has no facade (it collides
+        // with our staged rs117.hd.HdPlugin) — is blocked in MobileUiBridge (HUB_BLOCKED hides it from the
+        // catalog + refuses install), so OUR staged GpuPlugin/HdPlugin stay the canonical panel entries.
         @"-Drunelite.nosafemode=true",
+        // The hub serves manifests for RELEASED versions only; our jar is a -SNAPSHOT (manifest 404s without
+        // this). Pin to the latest released manifest (verify https://repo.runelite.net/plugins/manifest/
+        // <v>_full.js answers 200 when bumping the client version).
+        @"-Drunelite.pluginhub.version=1.12.28",
         @"-Drunelite.rendererpanel=true",            // arm RendererPanelStarter: load GPU + 117HD (no-start) into
                                                      // the panel so both are selectable + configurable.
         @"-Drunelite.nosplash=true",                 // no desktop Swing splash (its JFrame creation under CACIO
@@ -879,8 +883,8 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         // Tell the shared RLHDStarter this is the iOS (Route C / EAGL, full feature port) path, so it applies
         // the full iOS 117HD config (tiled/POM/seeded-tunables/safety) rather than Android's mobile config.
         [opts addObject:@"-Drunelite.gfxIos=true"];
-        // (The plugin HUB is already off by default now — see the nosafemode/rendererpanel block above — so the
-        // hub's own cached "117hd" jar never collides with our staged rs117.hd.HdPlugin.)
+        // (The hub's own "117hd" jar can't collide with our staged rs117.hd.HdPlugin — it's blocked in
+        // MobileUiBridge.HUB_BLOCKED.)
         log(@"[jvm] GPU Zone (117HD) ARMED (routecrlhd=true)");
     }
 

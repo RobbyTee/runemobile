@@ -692,6 +692,10 @@ public final class MobileUiBridge
 	// on our install/remove and false when that event lands; the seq bumps so native can re-fetch hubManifest.
 	private static volatile boolean hubRefreshing;
 	private static final AtomicLong hubChangeSeq = new AtomicLong();
+	// Hub plugins whose classes collide with a build-staged plugin already on the classpath. "117hd" is the
+	// public hub build of rs117.hd — this client stages its own ported HdPlugin (the canonical panel entry),
+	// so the hub copy is hidden from the catalog and refused at install.
+	private static final Set<String> HUB_BLOCKED = Set.of("117hd");
 
 	private static void ensureHubInjected()
 	{
@@ -757,6 +761,10 @@ public final class MobileUiBridge
 		final Json out = new Json().obj().kv("status", "ok").key("plugins").arr();
 		for (PluginHubManifest.DisplayData d : display)
 		{
+			if (HUB_BLOCKED.contains(d.getInternalName()))
+			{
+				continue;
+			}
 			out.obj()
 				.kv("internalName", d.getInternalName())
 				.kv("displayName", d.getDisplayName())
@@ -798,6 +806,10 @@ public final class MobileUiBridge
 		if (!ENABLED || internalName == null)
 		{
 			return "{\"ok\":false,\"reason\":\"facade-off\"}";
+		}
+		if (install && HUB_BLOCKED.contains(internalName))
+		{
+			return "{\"ok\":false,\"reason\":\"blocked\"}";
 		}
 		ensureHubInjected();
 		final ExternalPluginManager epm = extPluginManager;
