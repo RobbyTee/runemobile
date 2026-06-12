@@ -482,10 +482,105 @@ public final class HudVeneerBridge
 				pendingOpenTab = -1;
 				openTabNow(c, preEoc, openIdx);
 			}
+
+			tickWorldMap(c);
 		}
 		catch (RuntimeException ignore)
 		{
 		}
+	}
+
+	// ---- World map (touch-friendly — WORLDMAP-MOBILE-PLAN.md Phase 1) ----------------------------------------
+	// Phase-0 probe facts: a synthetic left-drag does NOT pan the map, but setWorldMapPositionTarget does — so
+	// the native pan gesture accumulates finger deltas (canvas px) here and tick converts them to map tiles via
+	// the live zoom (px per tile) and moves the map centre — "grab the map", 1:1 with the finger. The snapshot
+	// publishes open-state + the edge-control rects so native can gate gestures, raise the keyboard on a search
+	// tap (the map search does NOT flip INPUT_TYPE), and proxy the bezel-clipped close button.
+
+	private static final java.util.concurrent.atomic.AtomicInteger mapPanDx = new java.util.concurrent.atomic.AtomicInteger();
+	private static final java.util.concurrent.atomic.AtomicInteger mapPanDy = new java.util.concurrent.atomic.AtomicInteger();
+	private static float mapPanRemX, mapPanRemY;   // sub-tile remainders (client thread only)
+	private static volatile String mapSnapshotJson = "{\"open\":false}";
+
+	/** Native: pan the open world map by a finger delta in canvas px (drag right = map content follows right). */
+	public static void panWorldMap(int dxPx, int dyPx)
+	{
+		mapPanDx.addAndGet(dxPx);
+		mapPanDy.addAndGet(dyPx);
+	}
+
+	/** {@code {open, map:[x,y,w,h], close:[...], search:[...], zoomIn:[...], zoomOut:[...]}} (canvas px). */
+	public static String getMapSnapshot()
+	{
+		return mapSnapshotJson;
+	}
+
+	private static void tickWorldMap(Client c)
+	{
+		final Widget map = c.getWidget(InterfaceID.Worldmap.MAP_CONTAINER);
+		if (map == null || map.isHidden())
+		{
+			mapPanDx.set(0);
+			mapPanDy.set(0);
+			mapPanRemX = mapPanRemY = 0;
+			mapSnapshotJson = "{\"open\":false}";
+			return;
+		}
+
+		final int dx = mapPanDx.getAndSet(0);
+		final int dy = mapPanDy.getAndSet(0);
+		if (dx != 0 || dy != 0)
+		{
+			final net.runelite.api.worldmap.WorldMap wm = c.getWorldMap();
+			final net.runelite.api.Point pos = wm == null ? null : wm.getWorldMapPosition();
+			final float zoom = wm == null ? 0 : wm.getWorldMapZoom();   // px per tile
+			if (pos != null && zoom > 0)
+			{
+				// Grab-the-map: finger right -> centre moves west; canvas y grows DOWN, world y grows NORTH.
+				// Carry the sub-tile remainder so slow drags at high zoom aren't quantised away.
+				final float fx = mapPanRemX + dx / zoom;
+				final float fy = mapPanRemY + dy / zoom;
+				final int tx = Math.round(fx);
+				final int ty = Math.round(fy);
+				mapPanRemX = fx - tx;
+				mapPanRemY = fy - ty;
+				if (tx != 0 || ty != 0)
+				{
+					wm.setWorldMapPositionTarget(new net.runelite.api.coords.WorldPoint(
+						pos.getX() - tx, pos.getY() + ty, 0));
+				}
+			}
+		}
+
+		final StringBuilder sb = new StringBuilder(192);
+		sb.append("{\"open\":true");
+		appendRect(c, sb, "map", InterfaceID.Worldmap.MAP_DISPLAY, InterfaceID.Worldmap.MAP_CONTAINER);
+		appendRect(c, sb, "close", InterfaceID.Worldmap.CLOSE, -1);
+		appendRect(c, sb, "search", InterfaceID.Worldmap.SEARCH, -1);
+		appendRect(c, sb, "zoomIn", InterfaceID.Worldmap.ZOOM_IN, -1);
+		appendRect(c, sb, "zoomOut", InterfaceID.Worldmap.ZOOM_OUT, -1);
+		sb.append('}');
+		mapSnapshotJson = sb.toString();
+	}
+
+	private static void appendRect(Client c, StringBuilder sb, String key, int id, int fallbackId)
+	{
+		Widget w = c.getWidget(id);
+		if ((w == null || w.isHidden()) && fallbackId != -1)
+		{
+			w = c.getWidget(fallbackId);
+		}
+		if (w == null || w.isHidden())
+		{
+			return;
+		}
+		final java.awt.Rectangle b = w.getBounds();
+		if (b == null || b.width <= 0 || b.height <= 0)
+		{
+			return;
+		}
+		sb.append(",\"").append(key).append("\":[")
+			.append(b.x).append(',').append(b.y).append(',').append(b.width).append(',').append(b.height).append(']');
 	}
 
 	/** Hide the GRANDPARENT container of a stone (the whole stone-row half — icons + backgrounds). The engine

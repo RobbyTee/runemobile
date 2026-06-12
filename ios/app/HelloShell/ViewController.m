@@ -186,6 +186,17 @@
 @property (nonatomic, assign) BOOL chatScrollable;
 @property (nonatomic, assign) BOOL chatScrolling;       // the current pan gesture is scrolling the chat
 @property (nonatomic, assign) CGFloat chatScrollAccum;  // accumulated drag (pt) toward the next wheel notch
+// World map (touch — WORLDMAP-MOBILE-PLAN.md Phase 1): while the fullscreen engine world map is open, a
+// 1-finger drag pans the MAP (bridge panWorldMap, "grab the map"), taps are precise UI clicks with no
+// walk-ring semantics, a tap in the search rect raises the keyboard (the map search doesn't flip INPUT_TYPE),
+// the native chrome hides, and a native ✕ in the safe area proxies the bezel-clipped engine close button.
+@property (nonatomic, assign) BOOL mapOpen;             // polled from the bridge map snapshot (~10 Hz)
+@property (nonatomic, assign) CGRect mapCloseCanvas;    // engine CLOSE rect (canvas px; zero = unknown)
+@property (nonatomic, assign) CGRect mapSearchCanvas;   // engine SEARCH rect (canvas px)
+@property (nonatomic, assign) BOOL mapPanning;          // the current pan gesture is panning the map
+@property (nonatomic, assign) CGFloat mapPanAccX;       // sub-px accumulators (screen pt -> whole canvas px)
+@property (nonatomic, assign) CGFloat mapPanAccY;
+@property (nonatomic, strong) UIButton *mapCloseButton; // native ✕ shown while the map is open
 // Instant selected-highlight after a tap: the engine's tab GRAPHIC sprite (which the snapshot reads for the
 // selected state) only updates on a redraw, so the highlight lagged until the next game interaction. Optimistically
 // mark the tapped tab selected and hold it until the snapshot agrees (or a short timeout). -1 = none.
@@ -1634,6 +1645,7 @@ static int chatRowCanvasH(void) {
 // animation owns the views; content (sprite + label) is always refreshed.
 - (void)updateChatTabs {
     if (!self.chatTabsBuilt) return;
+    if (self.mapOpen) { [self hideChatTabs]; return; }   // fullscreen world map: the pill would cover it
     if (!self.chromeVisible || self.renderW <= 0) { [self hideChatTabs]; return; }
     NSString *snap = [JVMLauncher chatSnapshot];
     if (snap.length == 0) { [self hideChatTabs]; return; }
@@ -1985,7 +1997,8 @@ static int chatRowCanvasH(void) {
     NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
                                                      options:0 error:nil];
     self.tabRailBg.hidden = YES;   // mobile cells are individually styled; no solid rail strip behind them
-    if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) {
+    if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue] || self.mapOpen) {
+        // (mapOpen: the fullscreen world map owns the screen — the native grid would cover it + steal taps)
         for (UIButton *btn in self.tabButtons) btn.hidden = YES;
         for (UIView *cv in self.stoneCovers) cv.hidden = YES;
         return;
@@ -2426,6 +2439,74 @@ static int chatRowCanvasH(void) {
                       chatX, chatY, mmX, mmY, leftC, topC, rightC, k]];
 }
 
+// World map (touch): poll the bridge map snapshot (~10 Hz). Edge-triggered chrome hide/restore: the engine
+// map is FULLSCREEN at our canvas, so the native chrome (chat pill, tab grid via the mapOpen gates in
+// updateChatTabs/updateChrome, dock + corner buttons here) would cover it and steal taps. The ✕ proxies the
+// engine CLOSE (its widget sits under the curved corner). Rects refresh every poll; visibility flips on edges.
+static CGRect mapRectFromArr(NSArray *a) {
+    if (![a isKindOfClass:[NSArray class]] || a.count != 4) return CGRectZero;
+    return CGRectMake([a[0] doubleValue], [a[1] doubleValue], [a[2] doubleValue], [a[3] doubleValue]);
+}
+
+- (void)updateWorldMap {
+    NSString *snap = [JVMLauncher mapSnapshot];
+    BOOL open = NO;
+    CGRect closeR = CGRectZero, searchR = CGRectZero;
+    if (snap.length) {
+        NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
+                                                          options:0 error:nil];
+        if ([d isKindOfClass:[NSDictionary class]] && [d[@"open"] boolValue]) {
+            open = YES;
+            closeR = mapRectFromArr(d[@"close"]);
+            searchR = mapRectFromArr(d[@"search"]);
+        }
+    }
+    self.mapCloseCanvas = closeR;
+    self.mapSearchCanvas = searchR;
+    if (open == self.mapOpen) return;
+    self.mapOpen = open;
+    // Corner controls that overlap the fullscreen map (the chat/tab-grid veneers hide via their own ticks).
+    self.keyboardButton.hidden = open;
+    self.shiftButton.hidden = open;
+    self.screenshotButton.hidden = open;
+    self.panelDock.view.hidden = open;
+    [self setMapCloseButtonVisible:open];
+    [self appendLine:open ? @"[map] world map OPEN -> map pan/taps, chrome hidden"
+                          : @"[map] world map closed -> chrome restored"];
+}
+
+- (void)setMapCloseButtonVisible:(BOOL)show {
+    if (show && !self.mapCloseButton) {
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+        [b setTitle:@"✕" forState:UIControlStateNormal];
+        b.titleLabel.font = [UIFont boldSystemFontOfSize:22];
+        [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        b.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
+        b.layer.cornerRadius = 8.0;
+        [b addTarget:self action:@selector(onMapClose) forControlEvents:UIControlEventTouchUpInside];
+        [self.view addSubview:b];
+        self.mapCloseButton = b;
+    }
+    if (self.mapCloseButton) {
+        UIEdgeInsets ins = self.view.safeAreaInsets;
+        const CGFloat s = 40.0;
+        self.mapCloseButton.frame = CGRectMake(self.view.bounds.size.width - ins.right - s - 8.0,
+                                               ins.top + 8.0, s, s);
+        self.mapCloseButton.hidden = !show;
+        if (show) [self.view bringSubviewToFront:self.mapCloseButton];
+    }
+}
+
+// Native ✕ -> precise click on the engine's own CLOSE widget. The close is engine-animated and SLOW
+// (~0.8 s, Phase-0 measured) — the snapshot flips open=false when it lands and the chrome restores then.
+- (void)onMapClose {
+    CGRect r = self.mapCloseCanvas;
+    if (r.size.width > 0) {
+        [JVMLauncher postClickPreciseX:(int)lround(CGRectGetMidX(r)) y:(int)lround(CGRectGetMidY(r)) button:1];
+        [self appendLine:@"[map] native close -> engine CLOSE"];
+    }
+}
+
 // Called every screen refresh once the JVM is running. Pulls the engine's latest composited frame
 // straight from the buffer via reverse JNI (JavaBridge.getFramePixels) and blits it — no PNG round-trip,
 // no disk, no capture budget, so it's smooth and runs for the whole session. Also keeps the app
@@ -2467,6 +2548,7 @@ static int chatRowCanvasH(void) {
     // snapshot (~10 Hz). Verifies the device data-flow before the full native chat veneer.
     if (self.framesShown % 6 == 0) {
         [self updateHudLayout];
+        [self updateWorldMap];
     }
 
     // Drain the shared-core notification + outbound-link queues (~2 Hz). Both no-op until something is queued;
@@ -2603,6 +2685,22 @@ static int chatRowCanvasH(void) {
     CGPoint vp = [g locationInView:self.view];
     int gx = 0, gy = 0;
     if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return;
+    // World map open: every tap is a UI click on the fullscreen map (icons/keys/buttons) — precise, no
+    // world-snap, no walk-ring semantics. A tap in the search rect ALSO raises the soft keyboard: the map
+    // search doesn't flip INPUT_TYPE (Phase-0 probe), so the auto-raise never fires; typed keys go to the
+    // canvas and the focused search field consumes them.
+    if (self.mapOpen) {
+        if (CGRectGetWidth(self.mapSearchCanvas) > 0
+                && CGRectContainsPoint(self.mapSearchCanvas, CGPointMake(gx, gy))
+                && ![self.kbField isFirstResponder]) {
+            self.kbField.text = kKbSentinel;
+            [self.kbField becomeFirstResponder];
+            [self appendLine:@"[map] search tap -> keyboard up"];
+        }
+        [JVMLauncher postClickPreciseX:gx y:gy button:1];
+        [self appendLine:[NSString stringWithFormat:@"[map] tap %d,%d (precise)", gx, gy]];
+        return;
+    }
     // W3 A3: the relocated chat tab-row is UI, not the world. Send a PRECISE click straight to the engine (no
     // world-snap pulling it to a tile/entity) and DON'T draw the walk ring — taps there toggle a chat filter, they
     // don't walk. The rect moves with the safe-area relocate (chatHitCanvas, set in updateHudLayout).
@@ -2974,6 +3072,16 @@ static int chatRowCanvasH(void) {
     if (![JVMLauncher bridgeReady] || self.menuOpen) return;
     if (g.state == UIGestureRecognizerStateBegan) {
         [g setTranslation:CGPointZero inView:self.screen];
+        // World map open: the map is fullscreen, so every 1-finger drag PANS THE MAP (bridge -> map centre),
+        // never the camera behind it.
+        if (self.mapOpen) {
+            self.mapPanning = YES;
+            self.mapPanAccX = self.mapPanAccY = 0;
+            self.chatScrolling = NO;
+            [self appendLine:@"[map] pan begin"];
+            return;
+        }
+        self.mapPanning = NO;
         // A drag that STARTS inside the open chat box scrolls the chat (finger-scroll) instead of rotating the
         // camera. Only when the chat is open (chatScrollable); otherwise it's a normal camera drag.
         int gx = 0, gy = 0;
@@ -2993,6 +3101,10 @@ static int chatRowCanvasH(void) {
         return;
     }
     if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
+        if (self.mapPanning) {
+            self.mapPanning = NO;
+            return;
+        }
         if (self.chatScrolling) {
             self.chatScrolling = NO;
             [JVMLauncher postClearHover];   // drop the cursor the wheel parked over the chat
@@ -3005,6 +3117,22 @@ static int chatRowCanvasH(void) {
     CGPoint d = [g translationInView:self.screen];
     [g setTranslation:CGPointZero inView:self.screen];   // make the next delta incremental
     if (d.x == 0 && d.y == 0) return;
+    if (self.mapPanning) {
+        // Finger pt -> whole canvas px, sub-px accumulated so slow drags aren't quantised away. The bridge
+        // converts px -> map tiles via the live zoom ("grab the map": content tracks the finger 1:1).
+        CGFloat W = self.view.bounds.size.width;
+        CGFloat k = (self.renderW > 0 && W > 0) ? (CGFloat)self.renderW / W : 1.0;
+        self.mapPanAccX += d.x * k;
+        self.mapPanAccY += d.y * k;
+        int dx = (int)(self.mapPanAccX < 0 ? ceil(self.mapPanAccX) : floor(self.mapPanAccX));
+        int dy = (int)(self.mapPanAccY < 0 ? ceil(self.mapPanAccY) : floor(self.mapPanAccY));
+        if (dx != 0 || dy != 0) {
+            self.mapPanAccX -= dx;
+            self.mapPanAccY -= dy;
+            [JVMLauncher panEngineMapDx:dx dy:dy];
+        }
+        return;
+    }
     if (self.chatScrolling) {
         [self scrollChatByDragDeltaY:d.y];
         return;

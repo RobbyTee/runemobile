@@ -187,6 +187,14 @@ typedef void (^JVMLogSink)(NSString *line);
 /// area to ALIGN with the bigger buttons. 0 restores the engine's default 519 width. Main thread.
 + (void)setEngineChatAreaWidth:(int)canvasPx;
 
+/// World map (touch): pan the open world map by a finger delta in CANVAS px — the engine converts px to map
+/// tiles via the live zoom and moves the map centre ("grab the map", 1:1 with the finger). Main thread.
++ (void)panEngineMapDx:(int)dx dy:(int)dy;
+
+/// World map (touch): {open, map/close/search/zoomIn/zoomOut rects in canvas px} JSON, or {"open":false}.
+/// Native polls this to gate gestures on the open map, raise the keyboard on a search tap, and proxy close.
++ (NSString *)mapSnapshot;
+
 /// Overlay snap-corner safe frame: the screen safe-area insets in CANVAS px. The engine insets the overlay snap
 /// corners by these (and drops the top-left corner below the relocated chat) so plugin overlays snapped to a
 /// corner (e.g. Quest Helper's top-left guidance panel) clear the curved bezel + the chat. Main thread.
