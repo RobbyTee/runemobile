@@ -262,6 +262,20 @@ iOS gotchas to honor:
 the chat open AND collapsed; quick tap collapses/expands with channel preserved;
 scroll-by-drag unaffected.
 
+**GREEN 2026-06-12:** `ChatPillView` replaces the enlarged tab row (`ChatTabOverlayView`
+deleted); two new optional veneer wrappers (`setChatCollapsed`, `switchChatTab` — op-replay,
+so switching works collapsed). Emulator, all scripted via motionevents: pill renders
+collapsed with channel + filter state (`evidence-phase4-pill-20260612.png`); quick tap
+collapse→expand round-trip; hold→fan→drag→lift switched Game→Public (op-replay + snapshot
+agree); pull-down on Public opened the full engine filter menu through the shared
+press-and-peek overlay (`evidence-phase4-pulldown-menu-20260612.png`), drag-to-row applied
+"Show friends" and the pill label flipped to Friends
+(`evidence-phase4-filter-applied-20260612.png`); the COLLAPSED pull-down logged
+`expand first`, the on-canvas gate passed on a later move (the one-tick rebuild latency,
+handled by retry-each-move exactly as on iOS), and "Show standard" was committed (filter
+restored); chat scroll-by-drag unaffected; zero crashes. Fan/hover/filter haptics ride the
+existing 18 ms tick.
+
 ### Phase 5 — world map mobile (floating-window behavior)
 
 Port the **device-confirmed Phase-1 floating-window** behavior (`74557217e7`/`7376456a3f`,

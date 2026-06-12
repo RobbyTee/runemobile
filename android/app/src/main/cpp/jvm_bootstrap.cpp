@@ -139,6 +139,8 @@ static jmethodID g_midSetStonesHidden = nullptr, g_midOpenTab = nullptr, g_midRe
 static jmethodID g_midRelocateChat = nullptr, g_midRelocateMinimap = nullptr;
 // Phase-3 overlay safe-insets (optional — absent on pre-world-map jars; facadeVoid* null-checks the id).
 static jmethodID g_midSetOverlayInsets = nullptr;
+// Phase-4 chat pill (optional, same rule): collapse toggle + channel switch by op-script replay.
+static jmethodID g_midSetChatCollapsed = nullptr, g_midSwitchChatTab = nullptr;
 // A3 enlarged native chat-tab veneer: getChatSnapshot (per-frame tab geometry/state the bigger native buttons
 // read) + setChatTabRowHeight / setChatAreaWidth (tell the engine to push the message area below the taller row).
 static jmethodID g_midChatSnapshot = nullptr, g_midSetChatRowH = nullptr, g_midSetChatAreaW = nullptr;
@@ -693,6 +695,8 @@ static bool publishBridge(JNIEnv *env) {
             // OPTIONAL (never in the all-or-nothing check — the snapRadius lesson): a jar predating the
             // world-map/insets surface simply loses overlay inset-avoidance, not the whole veneer.
             g_midSetOverlayInsets  = midOpt(env, hvg, "setOverlaySafeInsets", "(IIII)V");
+            g_midSetChatCollapsed  = midOpt(env, hvg, "setChatCollapsed", "(Z)V");
+            g_midSwitchChatTab     = midOpt(env, hvg, "switchChatTab", "(I)V");
             bool hudOk = g_midSetStonesHidden && g_midOpenTab && g_midRelocateSidePanel && g_midRelocateChat
                       && g_midRelocateMinimap && g_midChatSnapshot && g_midSetChatRowH && g_midSetChatAreaW
                       && g_midScrollChat;
@@ -1872,6 +1876,18 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeSetOverlayInsets(JNIEnv *, jobject, jint l, jint t, jint r, jint b) {
     if (!hudReady()) return;
     facadeVoid4Int(g_hudCls, g_midSetOverlayInsets, l, t, r, b);
+}
+// Phase-4 chat pill: collapse = the shared shove-off-canvas (widget stays alive, reopen instant); switch = the
+// engine tab's op-script replay (works while the button is off-canvas, unlike a proxy click).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetChatCollapsed(JNIEnv *, jobject, jboolean collapsed) {
+    if (!hudReady()) return;
+    facadeVoidBool(g_hudCls, g_midSetChatCollapsed, collapsed);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSwitchChatTab(JNIEnv *, jobject, jint index) {
+    if (!hudReady()) return;
+    facadeVoidInt(g_hudCls, g_midSwitchChatTab, index);
 }
 // A3 chat-tab veneer: the render-thread-published HudVeneerBridge.getChatSnapshot (UI reads lock-free, no attach)
 // + the two row-size setters (rl-bridge thread) that push the engine message area below the taller native row.

@@ -108,7 +108,10 @@ class MainActivity : AppCompatActivity() {
     private var lastChatY = Int.MIN_VALUE
 
     // A3 enlarged native chat-tab veneer (bigger touch targets over the relocated engine chat row).
-    private lateinit var chatTabOverlay: ChatTabOverlayView
+    private lateinit var chatTabOverlay: ChatPillView
+    // Phase-4: native-tracked chat collapse state (the shared side shoves the live widget off-canvas; this
+    // mirrors what we last asked for — the engine never collapses on its own).
+    private var chatCollapsed = false
     private var chatTabsLogged = false
     private var lastChatRowH = Int.MIN_VALUE        // last setChatTabRowHeight sent (send only on change)
     private var lastMmX = Int.MIN_VALUE             // last minimap relocation sent (send only on change)
@@ -185,26 +188,49 @@ class MainActivity : AppCompatActivity() {
             Log.i(TAG, "a6: native tab $idx tap -> openTab")
             JvmLauncher.onBridge { JvmLauncher.openTab(idx) }   // off the UI thread (daemon-attaches to HotSpot)
         }
-        // A3 enlarged native chat-tab veneer: bigger sprite-backed buttons over the relocated engine chat row. A
-        // tap proxies a precise click onto the live engine button centre (selectMenuPoint = click + deferred
-        // hover-clear, so no "Switch tab" tooltip stays parked) — the engine's own chat switching stays live.
-        chatTabOverlay = ChatTabOverlayView(this)
-        chatTabOverlay.onChatTab = { idx, ecx, ecy ->
-            Log.i(TAG, "a3: chat tab $idx tap -> selectMenuPoint($ecx,$ecy)")
-            JvmLauncher.onBridge { JvmLauncher.selectMenuPoint(ecx, ecy) }
+        // Phase-4 chat channel PILL (replaces the A3 enlarged tab row as the chat control; iOS parity).
+        // Quick tap = collapse/expand (shared shove-off-canvas); hold 0.15s = chips fan out; drag + lift =
+        // switch channel (op-script replay, works collapsed); pull DOWN past a filterable chip = its engine
+        // filter menu via the shared press-and-peek overlay.
+        chatTabOverlay = ChatPillView(this)
+        chatTabOverlay.onPillTap = {
+            chatCollapsed = !chatCollapsed
+            Log.i(TAG, "p4: pill tap -> ${if (chatCollapsed) "collapse" else "expand"}")
+            JvmLauncher.onBridge { JvmLauncher.setChatCollapsed(chatCollapsed) }
         }
-        // Long-press a chat tab -> the engine's filter menu (On/Filter/Off/Hide), via the shared press-and-peek
-        // overlay. The overlay owns this gesture, so it forwards drag/release here to drive the highlight + commit.
-        chatTabOverlay.onChatTabLongPressBegin = { _, ecx, ecy, vx, vy -> beginChatFilterMenu(ecx, ecy, vx, vy) }
-        chatTabOverlay.onChatTabLongPressMove = { vx, vy ->
+        chatTabOverlay.onSwitchChannel = { k ->
+            // Switching auto-expands a collapsed chat (mirrors the iOS chatSwitchToChip).
+            if (chatCollapsed) {
+                chatCollapsed = false
+                JvmLauncher.onBridge { JvmLauncher.setChatCollapsed(false); JvmLauncher.switchChatTab(k) }
+            } else {
+                JvmLauncher.onBridge { JvmLauncher.switchChatTab(k) }
+            }
+        }
+        chatTabOverlay.onFilterOpen = { _, ecx, ecy, vx, vy ->
+            if (chatCollapsed) {
+                // The collapsed chat's filter button sits off-canvas (y≈3000) — a right-click there opens
+                // nothing. Expand first; the engine restores the widget next tick, the snapshot follows, and a
+                // later move (finger still below the chip) passes the on-canvas gate below. iOS 69ed4cf9e.
+                chatCollapsed = false
+                JvmLauncher.onBridge { JvmLauncher.setChatCollapsed(false) }
+                Log.i(TAG, "p4: pull-down on collapsed chat -> expand first")
+                false
+            } else if (ecx >= 0 && ecy in 0 until JvmLauncher.frameHeight()) {
+                beginChatFilterMenu(ecx, ecy, vx, vy)
+                true
+            } else false   // engine button not on-canvas yet (expand still landing) — retried each move
+        }
+        chatTabOverlay.onFilterMove = { vx, vy ->
             menuCurX = vx; menuCurY = vy
             if (menuActive && menuOverlay.isActive) updateMenuHighlight(vx, vy)
         }
-        chatTabOverlay.onChatTabLongPressEnd = { cancelled ->
+        chatTabOverlay.onFilterEnd = { cancelled ->
             menuTouchActive = false
             if (cancelled) { if (menuActive) cancelMenu() }
             else if (menuOverlay.isActive) commitMenuSelection()
         }
+        chatTabOverlay.onHaptic = { vibrateTick() }
         // A4 plugin UI: a full-screen Compose panel (GONE until opened) + a small launcher button. The panel
         // is a data screen (Compose); the live game overlays above stay classic Views (hybrid, §4.2).
         val pluginPanel = ComposeView(this).apply { visibility = View.GONE }
@@ -1015,7 +1041,7 @@ class MainActivity : AppCompatActivity() {
             chatTabsLogged = true
             Log.i(TAG, "ANDROID_A3_CHATTABS_GREEN enlarged native chat-tab row drawn ($n tabs) sx=$sx sy=$sy")
         }
-        val wantRowH = if (on) ChatTabOverlayView.ROW_H_CANVAS else 0
+        val wantRowH = if (on) ChatPillView.ROW_H_CANVAS else 0
         if (wantRowH != lastChatRowH) {
             lastChatRowH = wantRowH
             JvmLauncher.onBridge { JvmLauncher.setChatTabRowHeight(wantRowH); JvmLauncher.setChatAreaWidth(0) }
@@ -1071,11 +1097,13 @@ class MainActivity : AppCompatActivity() {
         JvmLauncher.onBridge { JvmLauncher.relocateChat(chatX, chatY, true) }
     }
 
-    /** Stop relocating the chat (let it return to its native bottom position) when the chrome disengages. */
+    /** Stop relocating the chat (let it return to its native bottom position) when the chrome disengages.
+     *  Also un-collapse: with the pill gone there'd be no way to expand a shoved-off-canvas chat. */
     private fun releaseChat() {
         if (lastChatX == -1 && lastChatY == -1) return
         lastChatX = -1; lastChatY = -1
-        JvmLauncher.onBridge { JvmLauncher.relocateChat(-1, -1, false) }
+        chatCollapsed = false
+        JvmLauncher.onBridge { JvmLauncher.relocateChat(-1, -1, false); JvmLauncher.setChatCollapsed(false) }
     }
 
     // Phase-3: last overlay-insets values sent to the shared OverlayRenderer (send only on change).
