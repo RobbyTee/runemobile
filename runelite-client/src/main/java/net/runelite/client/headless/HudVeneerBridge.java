@@ -425,7 +425,7 @@ public final class HudVeneerBridge
 
 			// Minimap+orbs cluster relocate (independent of chat). Force MAP_CONTAINER each frame so it survives
 			// TOPLEVEL_REDRAW; revalidate cascades to the globe + orb children.
-			if (minimapX >= 0 && !mapOpenNow)
+			if (minimapX >= 0)   // keeps applying while the world map is open — the minimap stays visible over it
 			{
 				final int containerId = preEoc
 					? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER;
@@ -526,7 +526,9 @@ public final class HudVeneerBridge
 	}
 
 	private static boolean mapWasOpen;       // close-edge tracker (client thread only) — restores the chat
-	private static final int MAP_INSET = 24; // canvas-px top/left margin of the floating map window (~41 pt)
+	// Canvas-px top/left margin of the map window. 2 = flush/maximal (the engine clamps the window to its
+	// windowed max and rejects minus==0 as "no stored rect", so 2 is the closest to edge-to-edge it goes).
+	private static final int MAP_INSET = 2;
 
 	private static void tickWorldMap(Client c)
 	{
@@ -584,13 +586,11 @@ public final class HudVeneerBridge
 			chat.setHidden(true);
 		}
 
-		// The relocated minimap cluster + side panel would still draw OVER the fullscreen map (their apply
-		// blocks are gated off while the map is open) — shove them off-screen (the collapse trick: forced far
-		// below the canvas, NOT hidden, so nothing tears down). The blocks re-force them home after close.
-		if (minimapX >= 0)
-		{
-			shoveOffscreen(c, preEoc ? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER, minimapX);
-		}
+		// The relocated side panel would draw OVER the map window (its apply block is gated off while the
+		// map is open) — shove it off-screen (the collapse trick: forced far below the canvas, NOT hidden, so
+		// nothing tears down); the block re-forces it home after close. The MINIMAP cluster intentionally
+		// STAYS (it renders above the map window and lives in the right column the engine's windowed max
+		// can't reach anyway — the user wants the map maximal with the minimap visible).
 		if (sideX >= 0)
 		{
 			shoveOffscreen(c, preEoc ? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER, sideX);
