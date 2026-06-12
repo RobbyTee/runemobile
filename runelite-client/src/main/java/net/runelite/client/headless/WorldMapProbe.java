@@ -194,6 +194,35 @@ public final class WorldMapProbe
 						log.warn("[worldmap] bad varcrect {}", rect);
 					}
 				}
+				// Reserve-shrink test: the engine caps the map window at canvas minus a 215x165 reserve (the
+				// side column + chat strip). Hiding those widgets didn't shrink the reserve — try zeroing
+				// their LAYOUT sizes before the open (what the open script plausibly measures).
+				if (Boolean.getBoolean("runelite.worldmapprobe.preshrink"))
+				{
+					try
+					{
+						final boolean pre = c.getVarbitValue(net.runelite.api.gameval.VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
+						// NOT the minimap container — the world-map orb is its child (zeroing it killed the open).
+						final int[] ids = {
+							pre ? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER,
+							pre ? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER,
+						};
+						for (int id : ids)
+						{
+							final Widget w = c.getWidget(id);
+							if (w != null)
+							{
+								w.setOriginalWidth(0);
+								w.setOriginalHeight(0);
+								w.revalidate();
+							}
+						}
+						log.info("[worldmap] pre-shrunk chat/side/minimap layout sizes to 0");
+					}
+					catch (RuntimeException ignore)
+					{
+					}
+				}
 				// Decisive sizing test: the engine sizes the map AT OPEN from the live viewport, and the
 				// viewport excludes the chat strip while the chat is layout-visible. Pre-hide the chat so the
 				// open should produce a full-height map (the mobile fullscreen lever, if the geom dump agrees).

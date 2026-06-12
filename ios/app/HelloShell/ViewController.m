@@ -193,7 +193,8 @@
 @property (nonatomic, assign) BOOL mapOpen;             // polled from the bridge map snapshot (~10 Hz)
 @property (nonatomic, assign) CGRect mapCloseCanvas;    // engine CLOSE rect (canvas px; zero = unknown)
 @property (nonatomic, assign) CGRect mapSearchCanvas;   // engine SEARCH rect (canvas px)
-@property (nonatomic, assign) CGRect mapWindowCanvas;   // the whole (centred) map window rect (canvas px)
+@property (nonatomic, assign) CGRect mapWindowCanvas;   // the whole map window rect (canvas px)
+@property (nonatomic, strong) NSArray<UIView *> *mapBands; // black bands above/below the scaled map window
 @property (nonatomic, assign) BOOL mapPanning;          // the current pan gesture is panning the map
 @property (nonatomic, assign) CGFloat mapPanAccX;       // sub-px accumulators (screen pt -> whole canvas px)
 @property (nonatomic, assign) CGFloat mapPanAccY;
@@ -2465,6 +2466,10 @@ static CGRect mapRectFromArr(NSArray *a) {
     self.mapCloseCanvas = closeR;
     self.mapSearchCanvas = searchR;
     self.mapWindowCanvas = windowR;
+    // Official-mobile look: scale the displayed frame so the engine's (size-capped) map window fills the
+    // screen width, black bands above/below. Display-only — input is untouched (gesture locations are read
+    // in self.screen's BOUNDS space, which UIKit maps back through the transform; mapPoint works on bounds).
+    [self applyMapZoom:open windowCanvas:windowR];
     if (open == self.mapOpen) return;
     self.mapOpen = open;
     // Corner controls that overlap the (centred) map window (the chat/tab-grid veneers hide via their own
@@ -2475,8 +2480,51 @@ static CGRect mapRectFromArr(NSArray *a) {
     self.shiftButton.hidden = open;
     self.screenshotButton.hidden = open;
     self.panelDock.view.hidden = open;
+    self.debugToggle.hidden = open;
+    self.chromeToggle.hidden = open;
+    self.pluginButton.hidden = open;
     [self appendLine:open ? @"[map] world map OPEN -> map pan/taps, chrome hidden"
                           : @"[map] world map closed -> chrome restored"];
+}
+
+// Scale the game view so the map window fills the full screen width, centred vertically, with black bands
+// covering the magnified scene above/below — the official-OSRS-Mobile fullscreen-map look. The engine caps
+// the window's real size (probe-settled), so the fill is a DISPLAY transform only: hit-testing stays on the
+// engine's true geometry, and touches are unaffected (read in bounds space). The bands sit over the game
+// view, so they also swallow stray touches outside the scaled window.
+- (void)applyMapZoom:(BOOL)open windowCanvas:(CGRect)wr {
+    CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height;
+    if (!open || wr.size.width <= 0 || self.renderW <= 0 || W <= 0) {
+        if (!CGAffineTransformIsIdentity(self.screen.transform)) {
+            self.screen.transform = CGAffineTransformIdentity;
+        }
+        for (UIView *v in self.mapBands) v.hidden = YES;
+        return;
+    }
+    CGFloat s = W / (CGFloat)self.renderW;   // canvas px -> screen pt (untransformed)
+    CGRect r = CGRectMake(wr.origin.x * s, wr.origin.y * s, wr.size.width * s, wr.size.height * s);
+    CGFloat k = W / r.size.width;            // fill the full width
+    CGAffineTransform t = CGAffineTransformMake(k, 0, 0, k,
+                                                k * (W / 2 - CGRectGetMidX(r)),
+                                                k * (H / 2 - CGRectGetMidY(r)));
+    if (!CGAffineTransformEqualToTransform(self.screen.transform, t)) {
+        self.screen.transform = t;
+    }
+    if (!self.mapBands) {
+        NSMutableArray<UIView *> *m = [NSMutableArray arrayWithCapacity:2];
+        for (int i = 0; i < 2; i++) {
+            UIView *v = [[UIView alloc] initWithFrame:CGRectZero];
+            v.backgroundColor = [UIColor blackColor];
+            [self.view addSubview:v];
+            [m addObject:v];
+        }
+        self.mapBands = m;
+    }
+    CGFloat hk = r.size.height * k;          // the scaled window's on-screen height
+    CGFloat top = (H - hk) / 2;
+    self.mapBands[0].frame = CGRectMake(0, 0, W, MAX(0, top));
+    self.mapBands[1].frame = CGRectMake(0, top + hk, W, MAX(0, H - top - hk));
+    for (UIView *v in self.mapBands) { v.hidden = NO; [self.view bringSubviewToFront:v]; }
 }
 
 // Called every screen refresh once the JVM is running. Pulls the engine's latest composited frame

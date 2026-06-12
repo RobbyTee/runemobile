@@ -425,7 +425,7 @@ public final class HudVeneerBridge
 
 			// Minimap+orbs cluster relocate (independent of chat). Force MAP_CONTAINER each frame so it survives
 			// TOPLEVEL_REDRAW; revalidate cascades to the globe + orb children.
-			if (minimapX >= 0)   // keeps applying while the world map is open — the minimap stays visible over it
+			if (minimapX >= 0 && !mapOpenNow)
 			{
 				final int containerId = preEoc
 					? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER;
@@ -586,11 +586,14 @@ public final class HudVeneerBridge
 			chat.setHidden(true);
 		}
 
-		// The relocated side panel would draw OVER the map window (its apply block is gated off while the
-		// map is open) — shove it off-screen (the collapse trick: forced far below the canvas, NOT hidden, so
-		// nothing tears down); the block re-forces it home after close. The MINIMAP cluster intentionally
-		// STAYS (it renders above the map window and lives in the right column the engine's windowed max
-		// can't reach anyway — the user wants the map maximal with the minimap visible).
+		// The relocated minimap cluster + side panel would draw OVER the map window (their apply blocks are
+		// gated off while the map is open) — shove them off-screen (the collapse trick: forced far below the
+		// canvas, NOT hidden, so nothing tears down); the blocks re-force them home after close. The official
+		// mobile app shows NO HUD over the map — the native shell scales the window to fill the screen.
+		if (minimapX >= 0)
+		{
+			shoveOffscreen(c, preEoc ? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER, minimapX);
+		}
 		if (sideX >= 0)
 		{
 			shoveOffscreen(c, preEoc ? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER, sideX);
