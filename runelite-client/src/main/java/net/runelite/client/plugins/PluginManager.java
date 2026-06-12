@@ -520,7 +520,26 @@ public class PluginManager
 		final PluginDescriptor pluginDescriptor = plugin.getClass().getAnnotation(PluginDescriptor.class);
 		final String keyName = Strings.isNullOrEmpty(pluginDescriptor.configName()) ? plugin.getClass().getSimpleName() : pluginDescriptor.configName();
 		final String value = configManager.getConfiguration(RuneLiteConfig.GROUP_NAME, keyName.toLowerCase());
-		return value != null ? Boolean.parseBoolean(value) : pluginDescriptor.enabledByDefault();
+		if (value != null)
+		{
+			return Boolean.parseBoolean(value);
+		}
+		// iOS "renderers as plugins": a renderer plugin (e.g. the GPU plugin) must NOT auto-start just because it
+		// is enabledByDefault — the active renderer is chosen at launch and started by its own starter. The native
+		// launcher lists such plugins' config keys in -Drunelite.forceDisablePlugins so they default to OFF
+		// (loaded into the panel, not running). Inert with no system property (desktop/normal runs unaffected).
+		final String forceOff = System.getProperty("runelite.forceDisablePlugins", "");
+		if (!forceOff.isEmpty())
+		{
+			for (final String k : forceOff.split(","))
+			{
+				if (keyName.equalsIgnoreCase(k.trim()))
+				{
+					return false;
+				}
+			}
+		}
+		return pluginDescriptor.enabledByDefault();
 	}
 
 	/**

@@ -810,6 +810,10 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         @"-Drunelite.nosafemode=true",
         @"-Drunelite.rendererpanel=true",            // arm RendererPanelStarter: load GPU + 117HD (no-start) into
                                                      // the panel so both are selectable + configurable.
+        // The base GPU plugin is enabledByDefault=true; with safe-mode off it would otherwise AUTO-START in every
+        // mode (isGpu=true) and the 117HD/CPU choice would never take effect. Force its config OFF so it only
+        // runs when the user selected GPU (RouteCGpuStarter then enables+starts it). key = GpuPlugin simpleName.
+        @"-Drunelite.forceDisablePlugins=gpuplugin",
         @"-Drunelite.nosplash=true",                 // no desktop Swing splash (its JFrame creation under CACIO
                                                      // aborted ExternalPluginManager.refreshPlugins).
         // NOTE: -Drunelite.mobilechrome.repos was tried and REVERTED — repositioned stones over the world are
