@@ -382,14 +382,6 @@ static JNIEXPORT void JNICALL rc_GL_glClear_0(JNIEnv *env, jclass cls, jint a0)
 
 static JNIEXPORT void JNICALL rc_GL_glClearColor_0(JNIEnv *env, jclass cls, jfloat a0, jfloat a1, jfloat a2, jfloat a3)
 {
-    // SKY-DIAG (temporary — STRIP with the red-sky fix): the red/pink out-of-scene fill is either the clear
-    // colour or the skybox model. drawSkybox clears BLACK when a skybox model exists, or the sky colour when
-    // not — so the values arriving here discriminate the path in one run: black every frame -> skybox model is
-    // the red thing; blue-ish (b > r) -> Java delivers the right colour and the bug is downstream; red-ish
-    // (r > b) -> the sky int is already swapped on the Java/engine side. Logs distinct values only, capped.
-    static float skR = -1, skG = -1, skB = -1; static int skN = 0;
-    if (skN < 40 && (a0 != skR || a1 != skG || a2 != skB)) { skN++; skR = a0; skG = a1; skB = a2;
-        rc_trace([NSString stringWithFormat:@"[routec] SKY-DIAG glClearColor(%.4f, %.4f, %.4f, %.4f)", a0, a1, a2, a3]); }
     glClearColor(a0, a1, a2, a3);
 }
 
@@ -819,11 +811,6 @@ static JNIEXPORT void JNICALL rc_GL_glUniform3i_0(JNIEnv *env, jclass cls, jint 
 
 static JNIEXPORT void JNICALL rc_GL_glUniform4f_0(JNIEnv *env, jclass cls, jint a0, jfloat a1, jfloat a2, jfloat a3, jfloat a4)
 {
-    // SKY-DIAG (temporary — STRIP with the red-sky fix): the base plugin's only vec4f uniform is fogColor,
-    // so these values ARE the fog colour the shader blends the scene edge into. Distinct values only, capped.
-    static float fgR = -1, fgG = -1, fgB = -1; static int fgN = 0;
-    if (fgN < 40 && (a1 != fgR || a2 != fgG || a3 != fgB)) { fgN++; fgR = a1; fgG = a2; fgB = a3;
-        rc_trace([NSString stringWithFormat:@"[routec] SKY-DIAG glUniform4f(loc=%d, %.4f, %.4f, %.4f, %.4f)", a0, a1, a2, a3, a4]); }
     glUniform4f(a0, a1, a2, a3, a4);
 }
 

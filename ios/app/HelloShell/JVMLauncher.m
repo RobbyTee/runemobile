@@ -865,14 +865,6 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         // to the CPU renderer. See RouteCGpuStarter. (gpudiag/gpuframedump are dev-only — gpuframedump fills
         // Documents/routec-frames with a PNG per frame — and are left off for the shipping default.)
         [opts addObject:@"-Drunelite.routecgpu=true"];
-        // SKY-DIAG (temporary — STRIP with the red-sky fix): re-arm the read-only per-second diag so
-        // client.log carries skyColor + skyboxModel alongside the bridge's SKY-DIAG clear/fog traces.
-        [opts addObject:@"-Drunelite.gpudiag=true"];
-        // BAND-DIAG (temporary — STRIP with the fix): dump 8 published frames to Documents/routec-frames so the
-        // diagonal-band artifact can be split: bands IN the PNGs -> GL render/readback side; clean PNGs -> the
-        // native blit/display side. Bounded (8 PNGs, one-shot), so it can't fill the disk like the old per-frame dump.
-        [opts addObject:@"-Drunelite.gpuframedump=true"];
-        [opts addObject:[NSString stringWithFormat:@"-Drunelite.gpuframedump.dir=%@", docs]];
         log(@"[jvm] base GPU ARMED (routecgpu=true)");
     }
 

@@ -1,5 +1,16 @@
 # Handoff — fix the base GPU render bug (iOS)
 
+> **RESOLVED 2026-06-11 (device-confirmed clean).** The bug was NOT the sky/fog colour: frame-dump
+> diagnostics proved the corruption (giant wedges incl. the "red gradient", diagonal stripe moiré, ghost
+> geometry) was in the published GL frame, and the root cause was the bridge's generated JNI wrappers
+> sizing NIO-buffer arguments by `capacity()` from the buffer base instead of LWJGL's
+> `remaining()`-from-`position()`. `Zone.drawOff/drawEnd` are reused capacity-512 IntBuffers `flip()`ed
+> to k live ranges per zone draw — `glMultiDrawArrays` replayed the 512−k stale tail ranges every zone,
+> drawing wrong vertex windows of the current VAO. Fixed `glMultiDrawArrays` + both `glBufferData` NIO
+> variants in `routec_gl_jni.m`. The zone bridge's `glBufferSubData` has the same latent pattern (harmless
+> today — RLHD passes exact-size buffers); fix it in its own pass with a 117HD device check.
+> The rest of this doc is kept as the investigation record.
+
 > Branch `vanilla-default` (off `master`). Picks up after the "renderers as plugins" model landed
 > (device-confirmed) — base GPU rendering is the **one remaining item**. All file:line refs drift; re-grep.
 

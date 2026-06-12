@@ -161,16 +161,11 @@ public final class GpuSceneDiag
 		{
 			final java.awt.Dimension real = client.getRealDimensions();
 			final net.runelite.api.widgets.Widget[] roots = client.getWidgetRoots();
-			// SKY-DIAG: the red-sky bug — log what the JAVA side thinks the sky is. skyColor is the int that
-			// feeds both glClearColor and the fogColor uniform; skyboxModel says whether drawSkybox renders the
-			// engine's gradient dome (clear stays black) instead of clearing to skyColor.
-			final net.runelite.api.Scene sc = client.getScene();
-			layout = String.format("resized=%s topLevelIf=%d real=%dx%d widgetRoots=%d vpOff=%d,%d skyColor=%06x skyboxModel=%s",
+			layout = String.format("resized=%s topLevelIf=%d real=%dx%d widgetRoots=%d vpOff=%d,%d",
 				client.isResized(), client.getTopLevelInterfaceId(),
 				real == null ? -1 : real.width, real == null ? -1 : real.height,
 				roots == null ? -1 : roots.length,
-				client.getViewportXOffset(), client.getViewportYOffset(),
-				client.getSkyboxColor() & 0xFFFFFF, sc != null && sc.getSkybox() != null);
+				client.getViewportXOffset(), client.getViewportYOffset());
 		}
 		catch (Throwable t)
 		{
