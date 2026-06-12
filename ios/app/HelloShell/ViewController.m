@@ -1883,7 +1883,6 @@ static int chatRowCanvasH(void) {
 // filter menu and hand off to the native big-row overlay). Dragging back UP onto the row cancels the filter.
 - (void)onChatPillDrag:(UILongPressGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady]) return;
-    CGPoint pView = [g locationInView:self.view];
     CGPoint pScreen = [g locationInView:self.screen];
     switch (g.state) {
         case UIGestureRecognizerStateBegan: {
@@ -1925,10 +1924,10 @@ static int chatRowCanvasH(void) {
                     if ([self engineChatButtonCenterForTag:k x:&cx y:&cy]) {
                         self.chatFilterChip = k;
                         self.chatFilterHint.hidden = YES;
-                        [self openEngineMenuAtGameX:cx gameY:cy anchor:pView];
+                        [self openEngineMenuAtGameX:cx gameY:cy anchor:pScreen];   // screen coords, like onLongPress
                         if (self.menuHaptic) { [self.menuHaptic selectionChanged]; [self.menuHaptic prepare]; }
-                        [self appendLine:[NSString stringWithFormat:@"[chat] pull-down %ld (%@) -> filter menu @%d,%d",
-                                          (long)k, kChatTabNames[k], cx, cy]];
+                        [self appendLine:[NSString stringWithFormat:@"[chat] pull-down %ld (%@) -> filter menu @%d,%d collapsed=%d",
+                                          (long)k, kChatTabNames[k], cx, cy, (int)self.chatCollapsed]];
                     }
                 }
             }
@@ -2511,6 +2510,10 @@ static int chatRowCanvasH(void) {
             self.menuBuilding = NO;
         } else if (CACurrentMediaTime() - self.menuOpenAt > 0.6) {
             self.menuBuilding = NO;   // give up; the engine menu + clamp path (updateMenuHighlight) still works
+            NSString *snap = [JVMLauncher menuPeekSnapshot];
+            [self appendLine:[NSString stringWithFormat:@"[menu-diag] build TIMEOUT @game %d,%d snap=%@",
+                              self.lastMenuX, self.lastMenuY,
+                              snap.length ? [snap substringToIndex:MIN((NSUInteger)200, snap.length)] : @"(empty)"]];
         }
     }
 
@@ -2744,6 +2747,9 @@ static int chatRowCanvasH(void) {
 
     [self.view addSubview:box];
     self.menuContainer = box;
+    [self appendLine:[NSString stringWithFormat:@"[menu-diag] native rows BUILT n=%ld box=%@ er=%@ viewIdx=%ld/%ld",
+                      (long)count, NSStringFromCGRect(box.frame), NSStringFromCGRect(er),
+                      (long)[self.view.subviews indexOfObject:box], (long)self.view.subviews.count]];
     self.menuHighlight = -1;
     // Seed the highlight + commit target from the press point so a lift-without-drag picks the row under it.
     [self updateNativeMenuHighlight:self.menuAnchor];
@@ -2887,7 +2893,11 @@ static int chatRowCanvasH(void) {
         self.menuSelX = gx; self.menuSelY = gy;                       // no geometry yet: fall back to the raw point
     }
 
-    [JVMLauncher postMoveX:sx y:sy];   // engine highlights the row under its (clamped) pointer
+    // Only drive the engine cursor once the live menu rect is known: the engine auto-closes its menu the
+    // instant the cursor leaves it, and before the geometry lands the clamp can't protect it — a raw move
+    // (finger still travelling, e.g. the chat pull-down) yanks the cursor out and silently kills the menu
+    // during the build window (the intermittent "haptics but no filter menu" bug).
+    if (self.menuGeomValid) [JVMLauncher postMoveX:sx y:sy];   // engine highlights the row under its (clamped) pointer
     if (fabs(p.y - self.menuHapticY) >= 14.0) {
         self.menuHapticY = p.y;
         [self.menuHaptic selectionChanged];
