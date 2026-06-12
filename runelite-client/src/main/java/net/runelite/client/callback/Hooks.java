@@ -621,6 +621,14 @@ public class Hooks implements Callbacks
 			net.runelite.client.headless.RLHDStarter.tick(client);
 		}
 
+		// iOS "renderers as plugins": surface the GPU + 117HD plugins in the native panel (loaded, not started)
+		// so they're selectable + configurable regardless of the active renderer. Inert unless
+		// -Drunelite.rendererpanel=true; the active renderer is still started by the starters above.
+		if (net.runelite.client.headless.RendererPanelStarter.isEnabled())
+		{
+			net.runelite.client.headless.RendererPanelStarter.tick(client);
+		}
+
 		// W3 touch-targeting: draw the tap selection feedback (tight entity model outline) into the frame, on
 		// top of the scene/overlays, just before it's captured/blitted.
 		if (net.runelite.client.headless.JavaBridge.isEnabled())

@@ -712,16 +712,16 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         log([NSString stringWithFormat:@"[jvm] ROUTEC L1 mode — classpath = %@", classpath]);
     } else {
         classpath = shadedPath ? [NSString stringWithFormat:@"%@:%@", shadedPath, jarPath] : jarPath;
-        // W3 GPU Zone B0.5: append the staged 117HD (RLHD) jar so rs117.hd.* class-loads. It carries no lwjgl —
-        // the facade ships in the shaded jar (staged with the grown superset). RLHDStarter loads HdPlugin by name.
-        if (self.routecZoneMode) {
-            NSString *rlhdPath = [[NSBundle mainBundle] pathForResource:@"client-1.12.29-SNAPSHOT-rlhd" ofType:@"jar"];
-            if (rlhdPath) {
-                classpath = [NSString stringWithFormat:@"%@:%@", classpath, rlhdPath];
-                log([NSString stringWithFormat:@"[jvm] ROUTEC ZONE mode — rlhd jar on classpath = %@", rlhdPath]);
-            } else {
-                log(@"[jvm] WARN: routecZoneMode but client-*-rlhd.jar not in bundle — RLHD will not load");
-            }
+        // Always append the staged 117HD (RLHD) jar so rs117.hd.* class-loads — not just in Zone mode. The
+        // "renderers as plugins" model loads HdPlugin (no-start) into the panel in EVERY mode so 117HD is a
+        // selectable plugin, so its classes must always be resolvable. It carries no lwjgl (the facade ships in
+        // the shaded jar); RLHDStarter starts it only when 117HD is the active renderer.
+        NSString *rlhdPath = [[NSBundle mainBundle] pathForResource:@"client-1.12.29-SNAPSHOT-rlhd" ofType:@"jar"];
+        if (rlhdPath) {
+            classpath = [NSString stringWithFormat:@"%@:%@", classpath, rlhdPath];
+            log([NSString stringWithFormat:@"[jvm] rlhd jar on classpath = %@", rlhdPath]);
+        } else {
+            log(@"[jvm] WARN: client-*-rlhd.jar not in bundle — 117HD will not load");
         }
     }
     NSString *captureDir = [docs stringByAppendingPathComponent:@"rl-capture"];
@@ -802,14 +802,16 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
                                                      // (chat lines / orb values / minimap positions for the veneers)
         @"-Drunelite.hudveneer=true",                // W3 Feature-A A3: arm the HudVeneerBridge (engine-HUD
                                                      // suppression; native sets which elements to hide, e.g. chat)
-        @"-Drunelite.hub=true",                      // plugin hub: drop --safe-mode so external plugins load
-                                                     // (device-de-risked 2026-06-02). Also disables the
-                                                     // headless-irrelevant GPU plugin.
+        // "Renderers as plugins": drop safe-mode in EVERY mode (incl. plain CPU) so the GPU + 117HD plugins load
+        // + show in the panel (GpuPlugin is loadInSafeMode=false). DeviceHeadlessBoot reads this. The plugin HUB
+        // is intentionally NOT enabled: with safe-mode off the hub would also expose a PUBLIC 117HD whose jar has
+        // no facade (it collides with our staged rs117.hd.HdPlugin) — so we keep the hub out and load OUR staged
+        // GpuPlugin/HdPlugin explicitly (RendererPanelStarter), which are the canonical panel entries.
+        @"-Drunelite.nosafemode=true",
+        @"-Drunelite.rendererpanel=true",            // arm RendererPanelStarter: load GPU + 117HD (no-start) into
+                                                     // the panel so both are selectable + configurable.
         @"-Drunelite.nosplash=true",                 // no desktop Swing splash (its JFrame creation under CACIO
-                                                     // aborted ExternalPluginManager.refreshPlugins -> hub plugins
-                                                     // were recorded in config but never downloaded/loaded).
-        @"-Drunelite.pluginhub.version=1.12.27",     // our 1.12.28-SNAPSHOT has no hub manifest (404); 1.12.27
-                                                     // is the adjacent released API the hub serves plugins for.
+                                                     // aborted ExternalPluginManager.refreshPlugins).
         // NOTE: -Drunelite.mobilechrome.repos was tried and REVERTED — repositioned stones over the world are
         // occluded by the 3D viewport (only the mobile 601 toplevel draws tabs above it). Native rails it is.
         // Phase-6 STEP-0 device smoke confirmed GREEN (2026-06-01): lanes separate (config on client thread,
@@ -869,14 +871,9 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         // Tell the shared RLHDStarter this is the iOS (Route C / EAGL, full feature port) path, so it applies
         // the full iOS 117HD config (tiled/POM/seeded-tunables/safety) rather than Android's mobile config.
         [opts addObject:@"-Drunelite.gfxIos=true"];
-        // Keep safe-mode ON for the zone bring-up: drop -Drunelite.hub so the plugin HUB does NOT auto-load its
-        // OWN cached "117hd" jar (a child URLClassLoader without our facade -> ClassNotFoundException
-        // org.lwjgl.system.Platform, + a class-name collision with our staged rs117.hd.HdPlugin). RLHDStarter
-        // loads OUR staged jar explicitly from the system classloader (which has the facade); safe-mode also
-        // disables the base GpuPlugin, which we don't want in zone mode anyway (HdPlugin replaces it).
-        [opts removeObject:@"-Drunelite.hub=true"];
-        [opts removeObject:@"-Drunelite.pluginhub.version=1.12.27"];
-        log(@"[jvm] GPU Zone (117HD) ARMED (routecrlhd=true, gpudiag/gpuframedump=true; -Drunelite.hub dropped -> safe-mode keeps the hub's 117hd out)");
+        // (The plugin HUB is already off by default now — see the nosafemode/rendererpanel block above — so the
+        // hub's own cached "117hd" jar never collides with our staged rs117.hd.HdPlugin.)
+        log(@"[jvm] GPU Zone (117HD) ARMED (routecrlhd=true)");
     }
 
     // Phase 4 sub-goal A — interactive login, purely in-process (no native touch bridge). Map the JX_*
@@ -982,20 +979,19 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     //   "[headless-capture] … nullGraphics=0" + "wrote frame-LOGIN_SCREEN-*.png" -> §6.2 login render OK
     // PNGs land in Documents/rl-capture/. Earlier entrypoints: AwtSmoke (§6.1), UnsafePokeActivation
     // (§6.0), JitProbe/Bench/GlyphSmoke (Phase-1).
-    // W3 GPU Route C: register the JNI GL bridge natives onto the facade classes (GLALL / AWTContext / GL)
-    // BEFORE the probe/plugin runs. In L1 mode the facade lives in routec-l1.jar; in GPU mode it's the iOS
-    // staged shaded jar (facade-backed gpu, LWJGL stripped). A plain CPU boot does NOT register — the gpu
-    // plugin then UnsatisfiedLinkErrors at startUp and RuneLite falls back to the software blit (same as the
-    // librlawt-dlopen failure today). Non-fatal: log + clear any pending exception so the VM stays clean.
-    if (self.routecL1Mode || self.routecGpuMode || self.routecZoneMode) {
+    // Register the JNI GL bridge natives onto the facade classes (GLALL / AWTContext / GL) BEFORE the client
+    // runs. "Renderers as plugins": register ALWAYS (not just when a GPU mode is pre-selected), so whichever
+    // renderer the user activates from the panel — base GPU, or 117HD which adds the zone delta — has its GL
+    // bridge ready. The registration is inert until a renderer plugin actually calls into it. L1 mode uses the
+    // routec-l1.jar facade ALONE (no shaded/rlhd jar), so it gets only the base natives. Non-fatal: log + clear.
+    {
         jint rr = RouteC_registerGLNatives(env);
         if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
-        NSString *mode = self.routecZoneMode ? @"ZONE" : (self.routecGpuMode ? @"GPU" : @"L1");
-        log([NSString stringWithFormat:@"[jvm] RouteC_registerGLNatives rc=%d (%@) mode=%@", rr,
-            rr == 0 ? @"OK" : @"ERR — facade classes not found", mode]);
-        // W3 GPU Zone B0.5: register the RLHD facade-delta natives on TOP of the base bridge (disjoint method
-        // sets on the same GLALL class + MemoryUtil). The base 85 must register first (above).
-        if (self.routecZoneMode) {
+        log([NSString stringWithFormat:@"[jvm] RouteC_registerGLNatives rc=%d (%@)", rr,
+            rr == 0 ? @"OK" : @"ERR — facade classes not found"]);
+        // The RLHD facade-delta natives (disjoint method sets on the same GLALL + MemoryUtil) need the rlhd jar
+        // on the classpath — always present except in the L1 probe. Base 85 must register first (above).
+        if (!self.routecL1Mode) {
             jint zr = RouteC_registerZoneNatives(env);
             if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
             log([NSString stringWithFormat:@"[jvm] RouteC_registerZoneNatives rc=%d (%@)", zr,

@@ -445,17 +445,20 @@ static const CGFloat kMenuWidth       = 210.0;
 - (void)onPlayTapped {
     // If the login web view ran this session, WebKit is resident and the JVM can't start cleanly — onLaunch
     // will prompt a restart instead. Keep the cover up in that case so the user lands back here post-restart.
-    // Tap to Play boots the desktop-DEFAULT experience: the engine's default plugins with their default configs —
-    // which INCLUDES the base GPU plugin, because RuneLite ships it enabledByDefault=true (vanilla OSRS visuals
-    // rendered on the device GPU via the Route C bridge — NOT 117HD). 117HD is opt-in via the "▶ 117HD (Zone)"
-    // button. Base GPU uses the READBACK present (not the CAEAGLLayer direct present), so it publishes int[]
-    // frames exactly like the CPU rasterizer — that lets the GPU plugin be toggled OFF to the software renderer
-    // at runtime with no present-layer switch. Clear the other route flags so a prior dev-button tap can't leak in.
-    self.pendingRouteCGpu = YES;
-    self.pendingRouteCZone = NO;
-    self.pendingRouteCZoneDirect = NO;
+    // Tap to Play boots the renderer the user SELECTED in the plugins panel, saved in NSUserDefaults
+    // "rendererPref" (cpu | gpu | 117hd). Default = cpu (the software renderer — vanilla, always works). The
+    // GPU + 117HD plugins are loaded into the panel in every mode (RendererPanelStarter) so they're selectable;
+    // flipping one there saves the preference (with a "restart to apply" message), and THIS reads it at launch.
+    // base GPU uses the readback present (int[] frames like CPU); 117HD uses the CAEAGLLayer direct present.
+    NSString *pref = [[NSUserDefaults standardUserDefaults] stringForKey:@"rendererPref"] ?: @"cpu";
+    BOOL wantGpu = [pref isEqualToString:@"gpu"];
+    BOOL wantHd = [pref isEqualToString:@"117hd"];
+    self.pendingRouteCGpu = wantGpu;
+    self.pendingRouteCZone = wantHd;
+    self.pendingRouteCZoneDirect = wantHd;
     self.pendingRouteCGpuNoResize = NO;
     self.pendingRouteCL1 = NO;
+    [self appendLine:[NSString stringWithFormat:@"[shell] renderer pref = %@", pref]];
     if (self.webKitUsedThisSession) { [self onLaunch]; return; }
     if (!self.launchScreen.hidden) {
         // Fade the cover out, then hand off to the existing JVM launch path.
@@ -699,6 +702,13 @@ static const CGFloat kMenuWidth       = 210.0;
     [self.zoneFastButton addTarget:self action:@selector(onLaunchZoneReadback)
              forControlEvents:UIControlEventTouchUpInside];
     [self.debugPanel addSubview:self.zoneFastButton];
+
+    // "Renderers as plugins": the renderer launch buttons are retired — Tap to Play reads the saved renderer
+    // preference and the user selects GPU/117HD from the plugins panel. Hidden (not deleted) so the dev
+    // gestures + their constraints stay intact. The L1 kill-test button (if any) is unaffected.
+    self.gpuButton.hidden = YES;
+    self.zoneButton.hidden = YES;
+    self.zoneFastButton.hidden = YES;
 
     self.loginButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.loginButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1199,6 +1209,22 @@ static const CGFloat kMenuWidth       = 210.0;
     cell.imageView.tintColor = [UIColor colorWithRed:0.95 green:0.78 blue:0.30 alpha:1.0];
     NSString *status;
     UIColor *statusColor;
+    // Renderer plugins (GPU / 117HD): their switch reflects the SAVED launch preference (what will be active next
+    // launch), not the live "is it running this session" state — they only activate after a restart.
+    NSString *rk = [self rendererKeyForClass:[p[@"className"] description]];
+    if (rk) {
+        enabled = [[self rendererPref] isEqualToString:rk];
+        status = enabled ? @"● selected — restart to apply" : @"○ off";
+        statusColor = enabled ? [UIColor colorWithRed:0.45 green:0.85 blue:0.40 alpha:1.0]
+                              : [UIColor colorWithWhite:0.6 alpha:1.0];
+        cell.detailTextLabel.text = hasConfig ? [status stringByAppendingString:@"   ·  hold to configure"] : status;
+        cell.detailTextLabel.textColor = statusColor;
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        UISwitch *rsw = (UISwitch *)cell.accessoryView;
+        rsw.tag = indexPath.row;
+        [rsw setOn:enabled animated:NO];
+        return cell;
+    }
     if (enabled && active) {
         status = @"● running"; statusColor = [UIColor colorWithRed:0.45 green:0.85 blue:0.40 alpha:1.0];
     } else if (enabled && !active) {
@@ -1224,12 +1250,50 @@ static const CGFloat kMenuWidth       = 210.0;
     return cell;
 }
 
+// The two renderer plugins are launch-time on iOS (the GL bridge + present layer are set up at JVM start), so
+// they're not hot-swappable like a normal plugin. Their on/off + config live in the panel like any plugin, but
+// toggling one saves a launch PREFERENCE (applied on the next launch) instead of a live start/stop.
+static NSString * const kRendererGpuClass = @"net.runelite.client.plugins.gpu.GpuPlugin";
+static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
+
+// "gpu" / "117hd" for the renderer plugins, nil for any normal plugin.
+- (NSString *)rendererKeyForClass:(NSString *)className {
+    if ([className isEqualToString:kRendererGpuClass]) return @"gpu";
+    if ([className isEqualToString:kRendererHdClass]) return @"117hd";
+    return nil;
+}
+
+- (NSString *)rendererPref {
+    return [[NSUserDefaults standardUserDefaults] stringForKey:@"rendererPref"] ?: @"cpu";
+}
+
+// A renderer-plugin row was toggled: select it (or fall back to the software renderer), save the preference,
+// and tell the user it applies on the next launch. No live setPluginEnabled.
+- (void)toggleRenderer:(NSString *)rendererKey {
+    BOOL turnOn = ![[self rendererPref] isEqualToString:rendererKey];   // tapping the selected one turns it off
+    NSString *newPref = turnOn ? rendererKey : @"cpu";
+    [[NSUserDefaults standardUserDefaults] setObject:newPref forKey:@"rendererPref"];
+    NSString *label = [rendererKey isEqualToString:@"117hd"] ? @"117HD" : @"GPU";
+    NSString *msg = turnOn
+        ? [NSString stringWithFormat:@"%@ will be your renderer the next time you launch.\n\nFully quit RuneLite (swipe it away) and relaunch to apply.", label]
+        : @"The software renderer will be used the next time you launch.\n\nFully quit RuneLite (swipe it away) and relaunch to apply.";
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Restart to apply"
+                                                              message:msg preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    UIViewController *presenter = self.presentedViewController ?: self;
+    [presenter presentViewController:a animated:YES completion:nil];
+    [self appendLine:[NSString stringWithFormat:@"[renderer] pref -> %@ (restart to apply)", newPref]];
+    [self refreshPluginList];   // the row now reflects the saved preference
+}
+
 // Toggle a plugin by row: drive MobileUiBridge.setPluginEnabled (EDT lane). The resulting PluginChanged bumps
 // the event sequence, so onDisplayTick re-reads the list and the running/stopped indicator settles.
 - (void)togglePluginAtRow:(NSInteger)row {
     if (row < 0 || row >= (NSInteger)self.pluginList.count) return;
     NSDictionary *p = self.pluginList[(NSUInteger)row];
     NSString *className = [p[@"className"] description];
+    NSString *rk = [self rendererKeyForClass:className];
+    if (rk) { [self toggleRenderer:rk]; return; }   // renderer plugins use the launch preference, not a live toggle
     BOOL newOn = ![p[@"enabled"] boolValue];
     NSString *ack = [JVMLauncher mobileSetPluginEnabled:className enabled:newOn];
     // Start/clear the grace timer from the user action (before the next refresh observes it).

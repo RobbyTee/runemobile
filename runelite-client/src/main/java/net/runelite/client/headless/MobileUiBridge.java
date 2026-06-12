@@ -1279,6 +1279,51 @@ public final class MobileUiBridge
 	}
 
 	/**
+	 * Load a plugin (if not already) WITHOUT starting it, so it appears in {@link #listPlugins()} with an
+	 * editable config but does not run. Same {@code pm.loadPlugins(List<Class>)} +
+	 * {@code loadDefaultPluginConfiguration} as {@link #loadAndStartPlugin} but with no
+	 * {@code setPluginEnabled}/{@code startPlugin}. Used to surface the renderer plugins (GPU / 117HD) in the
+	 * native panel even when they are not the active renderer — the native side then drives the actual
+	 * activation via a launch-time preference (it can't hot-swap the iOS GL bridge/present). Idempotent.
+	 */
+	public static String loadPluginNoStart(String className)
+	{
+		final PluginManager pm = pluginManager;
+		if (!ENABLED || pm == null || className == null)
+		{
+			return "{\"ok\":false,\"reason\":\"facade-off\"}";
+		}
+		if (pluginByClassName(className) != null)
+		{
+			return "{\"ok\":true,\"reason\":\"already-loaded\"}";
+		}
+		final Class<?> cls;
+		try
+		{
+			cls = Class.forName(className, false, MobileUiBridge.class.getClassLoader());
+		}
+		catch (Throwable t)
+		{
+			log.warn("[mobileui] loadPluginNoStart {} classload failed", className, t);
+			return "{\"ok\":false,\"reason\":\"classload\"}";
+		}
+		onEdt(() ->
+		{
+			try
+			{
+				final java.util.List<Plugin> loaded = pm.loadPlugins(java.util.Collections.singletonList(cls), null);
+				pm.loadDefaultPluginConfiguration(loaded);
+				log.info("[mobileui] loadPluginNoStart {} -> loaded {} plugin(s) (not started)", className, loaded.size());
+			}
+			catch (Throwable t)
+			{
+				log.warn("[mobileui] loadPluginNoStart {} FAILED", className, t);
+			}
+		});
+		return "{\"ok\":true,\"queued\":\"edt\"}";
+	}
+
+	/**
 	 * Write one config value (already serialized to its string form by the native control), queued onto the
 	 * client thread — the desktop fires {@code ConfigChanged} synchronously, so this guarantees subscribers
 	 * run where game-touching ones expect to be. The resulting {@code ConfigChanged} is the confirmation.
