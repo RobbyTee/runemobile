@@ -186,6 +186,22 @@ NOT appear in the hub screen and a forced install attempt is refused. (Zone/117H
 cannot be gated on the emulator — SwiftShader lacks TBO/geometry support; gate on
 selection/persistence only, real-Mali confirm stays on the Track-G path.)
 
+**GREEN 2026-06-12:** Every boot now uses the facade jar set (the iOS single-jar-set model —
+CPU = facade jar, no routec flags, `forceDisablePlugins=gpuplugin`; the per-mode
+shaded-vs-facade split is gone) with `nosafemode` + `rendererpanel` always on and the rlhd
+jar on every classpath. Emulator: CPU boot → LOGGED_IN with `RendererPanelStarter` loading
+both rows (`GPU -> already-loaded`, `117HD -> loaded, not started`); 117 HD toggle → saved
+pref + restart dialog (`evidence-phase2-renderer-dialog-20260612.png`) → relaunch boots
+`AG3-b 117HD mode` (routecrlhd + GL natives registered) with the switch still ON
+(`evidence-phase2-pref-persisted-20260612.png`) → toggle back to cpu → clean CPU boot to
+LOGGED_IN. Hub: 1737 plugins, "117" search shows no 117HD entry
+(`evidence-phase2-hub-117hd-blocked-20260612.png`); the install refusal is the same shared
+`HUB_BLOCKED` set. Also fixed durably: `runtime.tag` now hashes the gpu/rlhd jars too (they
+were invisible to the re-unpack key, so installs kept stale copies — both jars restaged from
+the merged source this session, md5-gated GREEN by their stage scripts). The `gpu` pref path
+is wired symmetrically to the verified 117hd path (one OR-term + the same dialog); its
+emulator boot was proven at AG2.
+
 ### Phase 3 — overlay safe-insets + chat-avoid
 
 Shared side free post-merge (`78f73ccfa5`): `OverlayRenderer` already insets every snap corner

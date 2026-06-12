@@ -54,9 +54,20 @@ data class PluginRow(
  * flipping a switch calls setPluginEnabled on the bridge thread (optimistic UI). Compose for this data screen
  * per the hybrid UI decision; the live game overlays stay classic Views.
  */
+/** Phase-2 renderer-as-plugins: the two renderer rows are special-cased — their switch shows the SAVED
+ *  LAUNCH PREFERENCE (not live plugin state, which is meaningless pre-restart) and toggling writes the
+ *  preference instead of setPluginEnabled. RendererPanelStarter loads both into the list without starting. */
+private const val GPU_PLUGIN_CLASS = "net.runelite.client.plugins.gpu.GpuPlugin"
+private const val HD_PLUGIN_CLASS = "rs117.hd.HdPlugin"
+
 @Composable
-fun PluginPanel(onClose: () -> Unit) {
+fun PluginPanel(
+    onClose: () -> Unit,
+    rendererPref: String = "cpu",
+    onRendererSelect: (String) -> Unit = {},
+) {
     var rows by remember { mutableStateOf<List<PluginRow>>(emptyList()) }
+    var renderer by remember { mutableStateOf(rendererPref) }
     var loading by remember { mutableStateOf(true) }
     var filter by remember { mutableStateOf("") }
     var configFor by remember { mutableStateOf<Pair<String, String>?>(null) }   // (configGroup, pluginName)
@@ -147,6 +158,27 @@ fun PluginPanel(onClose: () -> Unit) {
                 val shown = rows.filter { it.name.contains(filter, ignoreCase = true) }
                 LazyColumn(Modifier.fillMaxSize(), state = listState) {
                     items(shown, key = { it.className }) { p ->
+                        val rendererMode = when (p.className) {
+                            GPU_PLUGIN_CLASS -> "gpu"
+                            HD_PLUGIN_CLASS -> "117hd"
+                            else -> null
+                        }
+                        if (rendererMode != null) {
+                            // Renderer row: switch state = the saved launch preference; toggle = save it.
+                            // Never marked incompatible (it is deliberately not running on this boot).
+                            PluginRowItem(
+                                p.copy(enabled = renderer == rendererMode),
+                                incompatible = false,
+                                onToggle = { checked ->
+                                    renderer = if (checked) rendererMode else "cpu"
+                                    onRendererSelect(renderer)
+                                },
+                                onTogglePin = {},
+                                onOpenConfig = if (p.hasConfig && p.configGroup != null)
+                                    { { configFor = p.configGroup!! to p.name } } else null,
+                            )
+                            return@items
+                        }
                         PluginRowItem(
                             p,
                             // enabled but the engine never started it (after the startup grace) = couldn't start.

@@ -220,10 +220,14 @@ class MainActivity : AppCompatActivity() {
         val pluginButton = devButton("⚙")   // gear
         pluginButton.setOnClickListener {
             pluginPanel.setContent {
-                PluginPanel(onClose = {
-                    pluginPanel.visibility = View.GONE
-                    pluginButton.visibility = View.VISIBLE
-                })
+                PluginPanel(
+                    onClose = {
+                        pluginPanel.visibility = View.GONE
+                        pluginButton.visibility = View.VISIBLE
+                    },
+                    rendererPref = rendererPref(),
+                    onRendererSelect = { setRendererPref(it) },
+                )
             }
             pluginPanel.visibility = View.VISIBLE
             pluginButton.visibility = View.GONE
@@ -402,8 +406,13 @@ class MainActivity : AppCompatActivity() {
         // this) boots the FULL client on the GPU-variant jar with the gpu plugin force-enabled. Also trigger on a
         // pushed marker file (getExternalFilesDir/gpu.mode): Firebase Test Lab Robo launches the default activity
         // and can't pass an intent extra, but it CAN seed a file via --other-files. Falls through the login gate.
+        // Phase-2 renderer-as-plugins: the persisted preference (cpu|gpu|117hd, default cpu — the iOS
+        // rendererPref model) joins the dev/CI triggers below as one more way into each mode. Renderers are
+        // NOT hot-swappable (jar choice + librlawt registration are fixed at JVM start), so the panel toggle
+        // writes this and the change applies on the next process start.
+        val prefRenderer = rendererPref()
         val gpuMode = (intent?.getBooleanExtra("routecgpu", false) ?: false) ||
-            File(getExternalFilesDir(null), "gpu.mode").exists()
+            File(getExternalFilesDir(null), "gpu.mode").exists() || prefRenderer == "gpu"
         // Track G AG3-b: `--ez routecrlhd true` (or a pushed rlhd.mode marker) boots the FULL client on the gpu jar
         // + the rlhd jar with the 117HD (Zone) plugin loaded + started in-world (RLHDStarter). Needs login (tokens).
         // AG3-c: a Firebase Game Loop launch (action TEST_LOOP) also boots routecrlhd — Game Loop runs the app
@@ -425,7 +434,7 @@ class MainActivity : AppCompatActivity() {
         val cpuForced = File(getExternalFilesDir(null), "cpu.mode").exists()
         val rlhdMode = (intent?.getBooleanExtra("routecrlhd", false) ?: false) ||
             File(getExternalFilesDir(null), "rlhd.mode").exists() || gameLoop || rlhdOnceSet ||
-            (isTv && !cpuForced)
+            (isTv && !cpuForced) || prefRenderer == "117hd"
         if (gameLoop) Log.i(TAG, "AG3-c: Game Loop launch -> routecrlhd (uninterrupted run for the Zone shader compile)")
         if (isTv && !cpuForced) Log.i(TAG, "TV/leanback device -> defaulting to routecrlhd (117HD) on launch")
         // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
@@ -447,6 +456,29 @@ class MainActivity : AppCompatActivity() {
         // AP-2a: start draining the notification/link queues. Safe before the VM is up — the externs return ""
         // until the MobileUiBridge facade publishes, then start yielding real items.
         startBridgeDrain()
+    }
+
+    /** Phase-2 renderer preference (cpu|gpu|117hd) — the iOS rendererPref model. Persisted; read once at
+     *  boot to pick the jar set + routec flags, so a panel toggle applies on the NEXT process start. */
+    private fun rendererPref(): String =
+        getSharedPreferences("renderer", MODE_PRIVATE).getString("mode", "cpu") ?: "cpu"
+
+    private fun setRendererPref(mode: String) {
+        getSharedPreferences("renderer", MODE_PRIVATE).edit().putString("mode", mode).apply()
+        Log.i(TAG, "p2: rendererPref -> $mode (applies on next launch)")
+        val label = when (mode) { "gpu" -> "GPU"; "117hd" -> "117 HD"; else -> "CPU (vanilla)" }
+        AlertDialog.Builder(this)
+            .setTitle("Renderer: $label")
+            .setMessage("Saved. The renderer is fixed at launch, so it applies on the next start. Restart now?")
+            .setPositiveButton("Restart") { _, _ ->
+                val i = packageManager.getLaunchIntentForPackage(packageName)
+                i?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                startActivity(i)
+                finishAffinity()
+                Runtime.getRuntime().exit(0)
+            }
+            .setNegativeButton("Later", null)
+            .show()
     }
 
     /** Dev "GPU" button: restart the process into GPU Route-C mode (the embedded VM is one-per-process, so
@@ -1353,12 +1385,19 @@ class MainActivity : AppCompatActivity() {
         // shaders/JSON) appended to the classpath. The jars carry the project version, so glob by suffix (a version
         // bump needs no code edit). AssetInstaller only unpacks assets/jvm on a runtime.tag change, so a jar may be
         // absent on an install that didn't bump the tag — copy each from assets if so.
-        val useGpuJar = gpu || rlhd
-        val jarSuffix = if (useGpuJar) "-gpu.jar" else "-shaded.jar"
+        // Phase-2: EVERY mode boots the facade-backed jar (the iOS single-jar-set model since the gpu merge).
+        // The CPU boot is the facade jar with no routec flags + gpuplugin force-disabled — identical client,
+        // renderer plugins loadable-but-stopped. This is also the only combination the rlhd jar is compiled
+        // against (facade rlawt), so the 117HD panel row class-loads cleanly on any boot. The pristine
+        // shaded jar stays staged as the surgery source + desktop-dev artifact, not a boot target.
+        val useGpuJar = true
+        val jarSuffix = "-gpu.jar"
         run {
             val wanted = mutableListOf<String>()
             if (useGpuJar) wanted.add("-gpu.jar")
-            if (rlhd) wanted.add("-rlhd.jar")
+            // Phase-2: the rlhd jar rides EVERY classpath (not just rlhd boots) so RendererPanelStarter can
+            // load rs117.hd.HdPlugin into the plugin panel as a selectable renderer row on any boot.
+            wanted.add("-rlhd.jar")
             for (suffix in wanted) {
                 val asset = runCatching { app.assets.list("jvm") }.getOrNull()
                     ?.firstOrNull { it.startsWith("client-") && it.endsWith(suffix) }
@@ -1378,8 +1417,9 @@ class MainActivity : AppCompatActivity() {
             booted.set(false)
             return
         }
-        val rlhdJar = if (rlhd) jvmDir.list { _, name -> name.startsWith("client-") && name.endsWith("-rlhd.jar") }?.firstOrNull() else null
+        val rlhdJar = jvmDir.list { _, name -> name.startsWith("client-") && name.endsWith("-rlhd.jar") }?.firstOrNull()
         if (rlhd && rlhdJar == null) {
+            // Only an rlhd BOOT hard-requires the jar; a CPU/GPU boot just loses the 117HD panel row.
             Log.e(TAG, "no client-*-rlhd.jar staged in $jvmDir (run android/dev-tools/gpu/stage-rlhd-zone-jar.sh)")
             booted.set(false)
             return
@@ -1444,7 +1484,18 @@ class MainActivity : AppCompatActivity() {
             "-Drunelite.mobileui=true",             // A4: plugin control plane (list/toggle/config from the host)
             "-Drunelite.mobilechrome=true",         // A6: publish the read-only chrome snapshot (tab-stone bounds)
             "-Drunelite.hudveneer=true",            // A6: the chrome write surface (hide stones / openTab / relocate)
+            // Phase-2 renderer-as-plugins (the iOS d2b46053c model): drop safe-mode on every boot (so the
+            // renderer plugins CAN load) and let RendererPanelStarter put GPU + 117HD into the panel without
+            // starting them. Which one actually STARTS is decided purely by the routec flags below.
+            "-Drunelite.nosafemode=true",
+            "-Drunelite.rendererpanel=true",
         )
+        if (!gpu) {
+            // GpuPlugin is enabledByDefault; with safe-mode off it would auto-start (and on the pristine
+            // shaded jar that means real LWJGL = instant native crash). Force-disable wins over persisted
+            // config (the shared 04b4e3037 rule), so the renderer choice actually applies.
+            opts.add("-Drunelite.forceDisablePlugins=gpuplugin")
+        }
         // A7 resizable: render at the screen's landscape aspect — HeadlessResize grows the gamepack Component on
         // login (stock, inset-aware, the same mechanism iOS device-proved). With the OSRS account in RESIZABLE
         // display mode the gamepack fills it (resizable toplevel 164 → chat-at-top + resizable chrome unblock);
