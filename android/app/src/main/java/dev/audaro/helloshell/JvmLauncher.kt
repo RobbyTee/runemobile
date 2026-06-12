@@ -213,6 +213,8 @@ object JvmLauncher {
     // (the tabs / scrollback / colours / input all stay live — it IS the real chat). x<0 stops relocating. Off
     // the UI thread (via [onBridge]); re-applied by the engine tick.
     external fun nativeRelocateChat(x: Int, y: Int, transparent: Boolean)
+    /** Phase-3: safe-area insets in CANVAS px — the shared OverlayRenderer insets every overlay snap corner. */
+    external fun nativeSetOverlayInsets(l: Int, t: Int, r: Int, b: Int)
 
     // A7 edge-to-edge: pull the engine minimap+orbs cluster (MAP_CONTAINER) into the top-right safe area. It
     // stays the live engine HUD (minimap click-to-walk + orb clicks keep working). x<0 stops. Off the UI thread.
@@ -325,6 +327,7 @@ object JvmLauncher {
     fun openTab(tabIndex: Int) = nativeOpenTab(tabIndex)
     fun relocateSidePanel(x: Int, y: Int) = nativeRelocateSidePanel(x, y)
     fun relocateChat(x: Int, y: Int, transparent: Boolean) = nativeRelocateChat(x, y, transparent)
+    fun setOverlayInsets(l: Int, t: Int, r: Int, b: Int) = nativeSetOverlayInsets(l, t, r, b)
     fun relocateMinimap(x: Int, y: Int) = nativeRelocateMinimap(x, y)
     fun chatSnapshotPub() = nativeChatSnapshotPub()
     fun setChatTabRowHeight(canvasPx: Int) = nativeSetChatTabRowHeight(canvasPx)

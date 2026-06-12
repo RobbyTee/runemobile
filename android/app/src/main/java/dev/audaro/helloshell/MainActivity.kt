@@ -853,6 +853,7 @@ class MainActivity : AppCompatActivity() {
                     tryBuildNativeMenu()
                 }
                 updateChrome()
+                applyOverlayInsets()
                 Choreographer.getInstance().postFrameCallback(this)
             }
         }
@@ -1075,6 +1076,32 @@ class MainActivity : AppCompatActivity() {
         if (lastChatX == -1 && lastChatY == -1) return
         lastChatX = -1; lastChatY = -1
         JvmLauncher.onBridge { JvmLauncher.relocateChat(-1, -1, false) }
+    }
+
+    // Phase-3: last overlay-insets values sent to the shared OverlayRenderer (send only on change).
+    private var lastOverlayInsets: IntArray? = null
+
+    /** Phase-3 overlay safe-insets: convert the full safe-area insets (view px, all four edges) to CANVAS px
+     *  and push them to HudVeneerBridge.setOverlaySafeInsets — the shared OverlayRenderer then keeps every
+     *  plugin-overlay snap corner clear of the cutout/system bars AND drops TOP_LEFT below the relocated chat
+     *  (getOverlayChatAvoid, consumed Java-side). Zero-impact when insets are 0 (emulator, desktop). */
+    private fun applyOverlayInsets() {
+        val fw = JvmLauncher.frameWidth(); val fh = JvmLauncher.frameHeight()
+        val vw = surfaceView.width; val vh = surfaceView.height
+        if (fw <= 0 || fh <= 0 || vw <= 0 || vh <= 0) return
+        val wi = surfaceView.rootWindowInsets ?: return
+        val (l, t, r, b) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val i = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+            listOf(i.left, i.top, i.right, i.bottom)
+        } else {
+            @Suppress("DEPRECATION")
+            listOf(wi.stableInsetLeft, wi.stableInsetTop, wi.stableInsetRight, wi.stableInsetBottom)
+        }
+        val canvas = intArrayOf(l * fw / vw, t * fh / vh, r * fw / vw, b * fh / vh)
+        if (lastOverlayInsets?.contentEquals(canvas) == true) return
+        lastOverlayInsets = canvas
+        Log.i(TAG, "p3: overlay safe-insets -> canvas(${canvas[0]},${canvas[1]},${canvas[2]},${canvas[3]})")
+        JvmLauncher.onBridge { JvmLauncher.setOverlayInsets(canvas[0], canvas[1], canvas[2], canvas[3]) }
     }
 
     /** [left, top, right] safe-area insets in VIEW px (display cutout + system bars), so the relocated HUD clears

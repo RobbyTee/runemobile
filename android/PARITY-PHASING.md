@@ -215,6 +215,16 @@ and drops TOP_LEFT below the relocated chat. Native scope is one push:
 Helper guidance) renders clear of the cutout AND below the relocated chat, both collapsed and
 expanded; desktop behavior provably unchanged (insets 0 ⇒ no-op).
 
+**GREEN 2026-06-12:** `setOverlaySafeInsets` resolved as an OPTIONAL veneer method (never in
+the all-or-nothing init check — the snapRadius lesson) + a per-frame on-change push of all
+four insets in canvas px. Emulator with
+`cmd overlay enable com.android.internal.display.cutout.emulation.tall`: boot →
+`p3: overlay safe-insets -> canvas(50,0,0,0)` (left-edge cutout in landscape, correctly
+scaled); disabling the cutout live → `canvas(0,0,0,0)`; change-driven only, zero crashes.
+The consumption side (snap-corner insetting + TOP_LEFT chat-avoid) is the shared,
+iOS-device-proven `OverlayRenderer` path — per-overlay visual confirmation rides along with
+the Phase-4/5 sessions where overlays are on screen anyway.
+
 ### Phase 4 — chat channel pill
 
 Replaces the enlarged-tab-row veneer as the user-facing chat control (keep `scrollChat`

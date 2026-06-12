@@ -137,6 +137,8 @@ static std::atomic<bool> g_chromeReady{false};
 static jclass    g_hudCls = nullptr;
 static jmethodID g_midSetStonesHidden = nullptr, g_midOpenTab = nullptr, g_midRelocateSidePanel = nullptr;
 static jmethodID g_midRelocateChat = nullptr, g_midRelocateMinimap = nullptr;
+// Phase-3 overlay safe-insets (optional — absent on pre-world-map jars; facadeVoid* null-checks the id).
+static jmethodID g_midSetOverlayInsets = nullptr;
 // A3 enlarged native chat-tab veneer: getChatSnapshot (per-frame tab geometry/state the bigger native buttons
 // read) + setChatTabRowHeight / setChatAreaWidth (tell the engine to push the message area below the taller row).
 static jmethodID g_midChatSnapshot = nullptr, g_midSetChatRowH = nullptr, g_midSetChatAreaW = nullptr;
@@ -688,6 +690,9 @@ static bool publishBridge(JNIEnv *env) {
             g_midSetChatRowH       = midOpt(env, hvg, "setChatTabRowHeight", "(I)V");
             g_midSetChatAreaW      = midOpt(env, hvg, "setChatAreaWidth", "(I)V");
             g_midScrollChat        = midOpt(env, hvg, "scrollChat", "(I)V");
+            // OPTIONAL (never in the all-or-nothing check — the snapRadius lesson): a jar predating the
+            // world-map/insets surface simply loses overlay inset-avoidance, not the whole veneer.
+            g_midSetOverlayInsets  = midOpt(env, hvg, "setOverlaySafeInsets", "(IIII)V");
             bool hudOk = g_midSetStonesHidden && g_midOpenTab && g_midRelocateSidePanel && g_midRelocateChat
                       && g_midRelocateMinimap && g_midChatSnapshot && g_midSetChatRowH && g_midSetChatAreaW
                       && g_midScrollChat;
@@ -1631,6 +1636,12 @@ static void facadeVoidIntInt(jclass cls, jmethodID m, jint a, jint b) {
     hs->CallStaticVoidMethod(cls, m, a, b);
     if (hs->ExceptionCheck()) hs->ExceptionClear();
 }
+static void facadeVoid4Int(jclass cls, jmethodID m, jint a, jint b, jint c, jint d) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m) return;
+    hs->CallStaticVoidMethod(cls, m, a, b, c, d);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+}
 static void facadeVoidIntIntBool(jclass cls, jmethodID m, jint a, jint b, jboolean c) {
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !cls || !m) return;
@@ -1854,6 +1865,13 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeRelocateMinimap(JNIEnv *, jobject, jint x, jint y) {
     if (!hudReady()) return;
     facadeVoidIntInt(g_hudCls, g_midRelocateMinimap, x, y);
+}
+// Phase-3: push the safe-area insets (CANVAS px) so the shared OverlayRenderer keeps plugin-overlay snap
+// corners clear of the display cutout + the relocated chat (getOverlayChatAvoid is consumed Java-side).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetOverlayInsets(JNIEnv *, jobject, jint l, jint t, jint r, jint b) {
+    if (!hudReady()) return;
+    facadeVoid4Int(g_hudCls, g_midSetOverlayInsets, l, t, r, b);
 }
 // A3 chat-tab veneer: the render-thread-published HudVeneerBridge.getChatSnapshot (UI reads lock-free, no attach)
 // + the two row-size setters (rl-bridge thread) that push the engine message area below the taller native row.
