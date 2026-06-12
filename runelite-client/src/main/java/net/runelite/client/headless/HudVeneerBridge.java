@@ -251,6 +251,47 @@ public final class HudVeneerBridge
 		chatCollapsed = collapsed;
 	}
 
+	// ---- Overlay snap-corner safe frame ----------------------------------------------------------------
+	// The native shell renders the canvas EDGE-TO-EDGE, so the canvas corners sit under the iPhone's curved
+	// bezel/notch, and the veneer relocates the chat to the canvas TOP-LEFT — both land on top of the default
+	// overlay snap corners, so every plugin overlay snapped there (e.g. Quest Helper's TOP_LEFT guidance
+	// panel) renders clipped and under the chat. Native pushes its safe-area insets in canvas px;
+	// OverlayRenderer.positionSnapcorners insets the snap corners by them and additionally drops the top-left
+	// corner below the relocated chat. Zero-impact on desktop (insets stay 0, chat not relocated).
+
+	private static volatile int overlayInsetL, overlayInsetT, overlayInsetR, overlayInsetB;
+
+	/** Native: the screen safe-area insets in canvas px (left, top, right, bottom). */
+	public static void setOverlaySafeInsets(int l, int t, int r, int b)
+	{
+		overlayInsetL = l;
+		overlayInsetT = t;
+		overlayInsetR = r;
+		overlayInsetB = b;
+	}
+
+	/** Snap-corner safe-area insets {l,t,r,b} in canvas px (all 0 until native pushes them). */
+	public static int[] getOverlayInsets()
+	{
+		return new int[]{overlayInsetL, overlayInsetT, overlayInsetR, overlayInsetB};
+	}
+
+	/**
+	 * The relocated chat's occupied canvas rect {x,y,w,h} for snap-corner avoidance — the native tab row only
+	 * while collapsed, the full chat box while open — or null when the veneer isn't relocating the chat.
+	 */
+	public static int[] getOverlayChatAvoid()
+	{
+		if (!ENABLED || chatX < 0)
+		{
+			return null;
+		}
+		final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
+		final int w = chatAreaW > 0 ? chatAreaW : CHAT_DEFAULT_W;
+		final int h = chatCollapsed ? rowH : rowH + ORIG_CHAT_CONTENT_H + 2;
+		return new int[]{chatX, chatY, w, h};
+	}
+
 	/** Re-apply the requested chatbox state each frame. Client thread. */
 	public static void tick(Client c)
 	{

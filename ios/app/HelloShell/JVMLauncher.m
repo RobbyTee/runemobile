@@ -275,6 +275,7 @@ static jmethodID gMidScrollChat = NULL;      // scrollChat(I)V  (A3 — finger-s
 static jmethodID gMidSwitchChatTab = NULL;   // switchChatTab(I)V  (A3 — switch tab via op-replay, hidden tabs)
 static jmethodID gMidSetChatCollapsed = NULL; // setChatCollapsed(Z)V  (A3 — tap active tab hides the chat box)
 static jmethodID gMidGetChatSnap = NULL;     // getChatSnapshot()Ljava/lang/String;  (A3)
+static jmethodID gMidSetOverlayInsets = NULL; // setOverlaySafeInsets(IIII)V (snap-corner safe frame)
 static BOOL ensureVeneer(void) {
     if (gVeneerClass) return YES;
     if (!ensureBridge() || !gMainEnv) return NO;
@@ -304,6 +305,7 @@ static BOOL ensureVeneer(void) {
     gMidSetMinimapScale = (*env)->GetStaticMethodID(env, global, "setMinimapScale", "(I)V");
     gMidSwitchChatTab = (*env)->GetStaticMethodID(env, global, "switchChatTab", "(I)V");
     gMidSetChatCollapsed = (*env)->GetStaticMethodID(env, global, "setChatCollapsed", "(Z)V");
+    gMidSetOverlayInsets = (*env)->GetStaticMethodID(env, global, "setOverlaySafeInsets", "(IIII)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
     gMidSetChatHidden = m;
     gMidRelocateChat = r;
@@ -1306,6 +1308,13 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureVeneer() || !gMidSetChatAreaW) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetChatAreaW, (jint)canvasPx);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
++ (void)setEngineOverlaySafeInsetsL:(int)l t:(int)t r:(int)r b:(int)b {
+    if (!ensureVeneer() || !gMidSetOverlayInsets) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetOverlayInsets, (jint)l, (jint)t, (jint)r, (jint)b);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 

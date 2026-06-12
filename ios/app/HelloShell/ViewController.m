@@ -2403,6 +2403,10 @@ static int chatRowCanvasH(void) {
     [JVMLauncher relocateEngineMinimapX:mmX y:mmY];
     [JVMLauncher setEngineMinimapScale:kMinimapScalePct];   // enlarge the globe + reposition its chrome to hug it
     [JVMLauncher setEngineStonesHidden:YES];   // the native 2-col grid replaces them (no cover patch / gray box)
+    // Overlay snap-corner safe frame: plugin overlays snapped to a corner (Quest Helper's top-left guidance
+    // panel etc.) clear the curved bezel/notch; the engine also drops the top-left corner below the chat.
+    int botC = (int)lround(ins.bottom * k);
+    [JVMLauncher setEngineOverlaySafeInsetsL:leftC t:topC r:rightC b:botC];
     // The whole enlarged tab row is UI: a stray tap in it (between native buttons) should be a precise click, not
     // a walk. The native buttons own their taps; this rect just keeps any leak from drawing a walk ring.
     self.chatHitCanvas = CGRectMake(chatX, chatY, kChatW, chatRowCanvasH());

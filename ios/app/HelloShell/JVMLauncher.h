@@ -187,6 +187,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// area to ALIGN with the bigger buttons. 0 restores the engine's default 519 width. Main thread.
 + (void)setEngineChatAreaWidth:(int)canvasPx;
 
+/// Overlay snap-corner safe frame: the screen safe-area insets in CANVAS px. The engine insets the overlay snap
+/// corners by these (and drops the top-left corner below the relocated chat) so plugin overlays snapped to a
+/// corner (e.g. Quest Helper's top-left guidance panel) clear the curved bezel + the chat. Main thread.
++ (void)setEngineOverlaySafeInsetsL:(int)l t:(int)t r:(int)r b:(int)b;
+
 /// W3 A3 (finger-scroll): scroll the chat by deltaCanvasPx (positive = toward newer/bottom) via the chatbox's own
 /// scroll layer — NOT a mouse wheel (a wheel over the transparent chat also zooms the camera). Main thread.
 + (void)scrollEngineChat:(int)deltaCanvasPx;
