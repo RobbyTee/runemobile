@@ -105,7 +105,7 @@ public final class WorldMapProbe
 	{
 		WAIT, OPENING, OPEN_SETTLE, PAN_PRESS, PAN_HOLD, PAN_DRAG, PAN_READ, PAN_API, PAN_API_READ,
 		WHEEL, WHEEL_READ, ZBTN, ZBTN_READ, SEARCH, SEARCH_READ, CLOSE, CLOSE_READ,
-		REOPEN, REOPENING, RELOC_UNIVERSE, RELOC_WINDOW, DONE
+		REOPEN, REOPENING, REOPEN_ZBTN_READ, RELOC_UNIVERSE, RELOC_WINDOW, DONE
 	}
 
 	private static Phase phase = Phase.WAIT;
@@ -172,6 +172,26 @@ public final class WorldMapProbe
 				if (orb == null)
 				{
 					return;
+				}
+				// Decisive sizing test: the engine sizes the map AT OPEN from the live viewport, and the
+				// viewport excludes the chat strip while the chat is layout-visible. Pre-hide the chat so the
+				// open should produce a full-height map (the mobile fullscreen lever, if the geom dump agrees).
+				if (Boolean.getBoolean("runelite.worldmapprobe.prehidechat"))
+				{
+					try
+					{
+						final boolean pre = c.getVarbitValue(net.runelite.api.gameval.VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
+						final Widget chat = c.getWidget(pre
+							? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER);
+						if (chat != null && !chat.isHidden())
+						{
+							chat.setHidden(true);
+							log.info("[worldmap] pre-hid the chat before opening");
+						}
+					}
+					catch (RuntimeException ignore)
+					{
+					}
 				}
 				synthClick(c, orb.x + orb.width / 2, orb.y + orb.height / 2);
 				log.info("[worldmap] clicked world-map orb at {},{}", orb.x + orb.width / 2, orb.y + orb.height / 2);
@@ -326,6 +346,7 @@ public final class WorldMapProbe
 				zoomBefore = mapZoom(c);
 				if (b != null)
 				{
+					log.info("[worldmap] ZBTN click at {},{} (fresh bounds {})", b.x + b.width / 2, b.y + b.height / 2, b);
 					synthClick(c, b.x + b.width / 2, b.y + b.height / 2);
 				}
 				else
@@ -381,6 +402,7 @@ public final class WorldMapProbe
 				final Rectangle b = boundsOf(c, InterfaceID.Worldmap.CLOSE);
 				if (b != null)
 				{
+					log.info("[worldmap] CLOSE click at {},{} (fresh bounds {})", b.x + b.width / 2, b.y + b.height / 2, b);
 					synthClick(c, b.x + b.width / 2, b.y + b.height / 2);
 				}
 				else
@@ -421,12 +443,33 @@ public final class WorldMapProbe
 			case REOPENING:
 				if (boundsOf(c, InterfaceID.Worldmap.MAP_CONTAINER) != null)
 				{
-					go(Phase.RELOC_UNIVERSE);
+					// The reopened map (fullscreen with the varcs zeroed) — dump + CLICK-TEST it: do the
+					// re-laid controls hit where they render? (The forced-grow lesson: pixels alone lie.)
+					log.info("[worldmap] REOPENED:");
+					dumpGeometry(c);
+					final Rectangle z = boundsOf(c, InterfaceID.Worldmap.ZOOM_IN);
+					zoomBefore = mapZoom(c);
+					if (z != null)
+					{
+						log.info("[worldmap] reopen ZBTN click at {},{}", z.x + z.width / 2, z.y + z.height / 2);
+						synthClick(c, z.x + z.width / 2, z.y + z.height / 2);
+					}
+					go(Phase.REOPEN_ZBTN_READ);
 				}
 				else if (phaseFrame >= OPEN_RETRY * 2)
 				{
 					log.info("[worldmap] reopen for the relocate tests failed");
 					finish();
+				}
+				break;
+
+			case REOPEN_ZBTN_READ:
+				if (phaseFrame >= READ_DELAY)
+				{
+					final float now = mapZoom(c);
+					log.info("[worldmap] reopen button zoom: before={} after={} works={}", zoomBefore, now, now != zoomBefore);
+					capture(c, "reopened");
+					go(Phase.RELOC_UNIVERSE);
 				}
 				break;
 

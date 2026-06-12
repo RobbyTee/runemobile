@@ -197,6 +197,7 @@
 @property (nonatomic, assign) CGFloat mapPanAccX;       // sub-px accumulators (screen pt -> whole canvas px)
 @property (nonatomic, assign) CGFloat mapPanAccY;
 @property (nonatomic, strong) UIButton *mapCloseButton; // native ✕ shown while the map is open
+@property (nonatomic, strong) NSArray<UIView *> *mapMasks; // 4 black letterbox bands framing the map window
 // Instant selected-highlight after a tap: the engine's tab GRAPHIC sprite (which the snapshot reads for the
 // selected state) only updates on a redraw, so the highlight lagged until the next game interaction. Optimistically
 // mark the tapped tab selected and hold it until the snapshot agrees (or a short timeout). -1 = none.
@@ -2451,7 +2452,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (void)updateWorldMap {
     NSString *snap = [JVMLauncher mapSnapshot];
     BOOL open = NO;
-    CGRect closeR = CGRectZero, searchR = CGRectZero;
+    CGRect closeR = CGRectZero, searchR = CGRectZero, windowR = CGRectZero;
     if (snap.length) {
         NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
                                                           options:0 error:nil];
@@ -2459,10 +2460,15 @@ static CGRect mapRectFromArr(NSArray *a) {
             open = YES;
             closeR = mapRectFromArr(d[@"close"]);
             searchR = mapRectFromArr(d[@"search"]);
+            windowR = mapRectFromArr(d[@"window"]);
         }
     }
     self.mapCloseCanvas = closeR;
     self.mapSearchCanvas = searchR;
+    // Letterbox: the engine lays the map to its windowed viewport region and won't go fullscreen (forcing
+    // it re-lays pixels but not hit-testing — probe-settled), so black bands frame the window natively. The
+    // bands also swallow touches, so a stray tap outside the map can't walk/interact with the scene behind.
+    [self setMapMasksVisible:open windowCanvas:windowR];
     if (open == self.mapOpen) return;
     self.mapOpen = open;
     // Corner controls that overlap the fullscreen map (the chat/tab-grid veneers hide via their own ticks).
@@ -2473,6 +2479,36 @@ static CGRect mapRectFromArr(NSArray *a) {
     [self setMapCloseButtonVisible:open];
     [self appendLine:open ? @"[map] world map OPEN -> map pan/taps, chrome hidden"
                           : @"[map] world map closed -> chrome restored"];
+}
+
+// Frame the engine map window with black bands (top/bottom/left/right) so the exposed live-scene region
+// around the windowed map reads as a clean letterboxed screen. Re-positioned every poll (rects can shift);
+// the bands are plain opaque views so they also intercept touches over the dead region.
+- (void)setMapMasksVisible:(BOOL)show windowCanvas:(CGRect)wr {
+    if (show && !self.mapMasks) {
+        NSMutableArray<UIView *> *m = [NSMutableArray arrayWithCapacity:4];
+        for (int i = 0; i < 4; i++) {
+            UIView *v = [[UIView alloc] initWithFrame:CGRectZero];
+            v.backgroundColor = [UIColor blackColor];
+            [self.view addSubview:v];
+            [m addObject:v];
+        }
+        self.mapMasks = m;
+    }
+    if (!self.mapMasks) return;
+    if (!show || wr.size.width <= 0 || self.renderW <= 0) {
+        for (UIView *v in self.mapMasks) v.hidden = YES;
+        return;
+    }
+    CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height;
+    CGFloat s = W / (CGFloat)self.renderW;
+    CGRect r = CGRectMake(wr.origin.x * s, wr.origin.y * s, wr.size.width * s, wr.size.height * s);
+    self.mapMasks[0].frame = CGRectMake(0, 0, W, MAX(0, r.origin.y));                                        // top
+    self.mapMasks[1].frame = CGRectMake(0, CGRectGetMaxY(r), W, MAX(0, H - CGRectGetMaxY(r)));               // bottom
+    self.mapMasks[2].frame = CGRectMake(0, r.origin.y, MAX(0, r.origin.x), r.size.height);                   // left
+    self.mapMasks[3].frame = CGRectMake(CGRectGetMaxX(r), r.origin.y, MAX(0, W - CGRectGetMaxX(r)), r.size.height); // right
+    for (UIView *v in self.mapMasks) { v.hidden = NO; [self.view bringSubviewToFront:v]; }
+    if (self.mapCloseButton) [self.view bringSubviewToFront:self.mapCloseButton];
 }
 
 - (void)setMapCloseButtonVisible:(BOOL)show {

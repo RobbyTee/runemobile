@@ -318,13 +318,17 @@ public final class HudVeneerBridge
 			}
 			final boolean preEoc = c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
 			final int chatId = preEoc ? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER;
+			// While the world map is open it owns the screen: the relocated-HUD apply blocks below are gated
+			// OFF (tickWorldMap shoves chat/minimap/side off-screen instead and grows the map to the full
+			// canvas); when it closes the blocks resume re-forcing the HUD home on the very next frame.
+			final boolean mapOpenNow = isWorldMapOpen(c);
 
 			// Chat box: keep the engine chatbox FULLY ALIVE at all times (never hidden). To "collapse" (the user
 			// tapped the active tab) we shove the live widget far off-screen; reopening just moves it back — instant
 			// and full, with NO interface teardown, tab-selection loss, or rebuild. (Hiding the container tore the
 			// chat down, so reopen showed an empty box until a second tap.) The native tab row stays put because
 			// buildChatSnapshot reports the configured chatX/chatY, not the widget's moved position.
-			if (chatX >= 0)
+			if (chatX >= 0 && !mapOpenNow)
 			{
 				final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
 				final int rowW = chatAreaW > 0 ? chatAreaW : CHAT_DEFAULT_W;
@@ -421,7 +425,7 @@ public final class HudVeneerBridge
 
 			// Minimap+orbs cluster relocate (independent of chat). Force MAP_CONTAINER each frame so it survives
 			// TOPLEVEL_REDRAW; revalidate cascades to the globe + orb children.
-			if (minimapX >= 0)
+			if (minimapX >= 0 && !mapOpenNow)
 			{
 				final int containerId = preEoc
 					? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER;
@@ -449,7 +453,7 @@ public final class HudVeneerBridge
 			}
 
 			// Side panel relocate (independent). No-op until a tab is open (SIDE_CONTAINER then becomes non-null).
-			if (sideX >= 0)
+			if (sideX >= 0 && !mapOpenNow)
 			{
 				final int sideId = preEoc
 					? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER;
@@ -515,16 +519,70 @@ public final class HudVeneerBridge
 		return mapSnapshotJson;
 	}
 
-	private static void tickWorldMap(Client c)
+	private static boolean isWorldMapOpen(Client c)
 	{
 		final Widget map = c.getWidget(InterfaceID.Worldmap.MAP_CONTAINER);
-		if (map == null || map.isHidden())
+		return map != null && !map.isHidden();
+	}
+
+	private static boolean mapWasOpen;       // close-edge tracker (client thread only) — restores the chat
+
+	private static void tickWorldMap(Client c)
+	{
+		// SIZING NOTE (probe-settled, don't re-tread): the engine lays the world map to its windowed viewport
+		// region (canvas minus the layout's chat-strip/side reserves) and NOTHING safely changes that —
+		// forcing the map root re-lays the RENDER fullscreen but hit-testing keeps the real layout (every map
+		// click goes dead), and the WORLDMAP_MINUSWIDTH/MINUSHEIGHT/X/Y varcs change open sizes unpredictably
+		// (the apparent "fullscreen reopens" were the forced-relayout artifact). The native shell letterboxes
+		// the exposed band black instead — the map stays exactly where the engine hit-tests it.
+		final boolean preEoc = c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
+		final int chatId = preEoc ? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER;
+		if (!isWorldMapOpen(c))
 		{
+			if (mapWasOpen)
+			{
+				mapWasOpen = false;
+				// Restore the chat hidden below: un-hide + rebuild (hiding tears the chat content down — the
+				// op-replay lesson; BUILD_CHATBOX re-renders the message list so it doesn't come back empty).
+				final Widget chat = c.getWidget(chatId);
+				if (chat != null && chat.isHidden())
+				{
+					chat.setHidden(false);
+				}
+				try
+				{
+					c.runScript(ScriptID.BUILD_CHATBOX);
+				}
+				catch (RuntimeException ignore)
+				{
+				}
+			}
 			mapPanDx.set(0);
 			mapPanDy.set(0);
 			mapPanRemX = mapPanRemY = 0;
 			mapSnapshotJson = "{\"open\":false}";
 			return;
+		}
+		mapWasOpen = true;
+
+		// HIDE the chat while the map is open — the relocated chat-at-top would draw over the fullscreen
+		// map's top edge. Restored + rebuilt on the close edge (hiding tears the chat content down).
+		final Widget chat = c.getWidget(chatId);
+		if (chat != null && !chat.isHidden())
+		{
+			chat.setHidden(true);
+		}
+
+		// The relocated minimap cluster + side panel would still draw OVER the fullscreen map (their apply
+		// blocks are gated off while the map is open) — shove them off-screen (the collapse trick: forced far
+		// below the canvas, NOT hidden, so nothing tears down). The blocks re-force them home after close.
+		if (minimapX >= 0)
+		{
+			shoveOffscreen(c, preEoc ? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER, minimapX);
+		}
+		if (sideX >= 0)
+		{
+			shoveOffscreen(c, preEoc ? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER, sideX);
 		}
 
 		final int dx = mapPanDx.getAndSet(0);
@@ -554,6 +612,7 @@ public final class HudVeneerBridge
 
 		final StringBuilder sb = new StringBuilder(192);
 		sb.append("{\"open\":true");
+		appendRect(c, sb, "window", InterfaceID.Worldmap.UNIVERSE, InterfaceID.Worldmap.WINDOW);
 		appendRect(c, sb, "map", InterfaceID.Worldmap.MAP_DISPLAY, InterfaceID.Worldmap.MAP_CONTAINER);
 		appendRect(c, sb, "close", InterfaceID.Worldmap.CLOSE, -1);
 		appendRect(c, sb, "search", InterfaceID.Worldmap.SEARCH, -1);
@@ -561,6 +620,17 @@ public final class HudVeneerBridge
 		appendRect(c, sb, "zoomOut", InterfaceID.Worldmap.ZOOM_OUT, -1);
 		sb.append('}');
 		mapSnapshotJson = sb.toString();
+	}
+
+	/** Park a relocated toplevel container far below the canvas (kept alive, not hidden — no teardown). */
+	private static void shoveOffscreen(Client c, int id, int x)
+	{
+		final Widget w = c.getWidget(id);
+		if (w != null)
+		{
+			w.setForcedPosition(x, CHAT_COLLAPSE_OFFSCREEN_DY);
+			w.revalidate();
+		}
 	}
 
 	private static void appendRect(Client c, StringBuilder sb, String key, int id, int fallbackId)
