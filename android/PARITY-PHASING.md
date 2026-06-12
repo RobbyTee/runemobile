@@ -97,6 +97,17 @@ origin/android origin/master` completes with **zero conflicts** (result tree
 live; orbs render top-right; plugin panel + config round-trip work; no JNI crash in a 10-min
 session; `check-contract.sh` exits 0 after the re-baseline commit.
 
+**GREEN 2026-06-12** (merge `fb34c63b56`, fix+re-baseline `d3e34be70a`, runtime content-tag
+`a38c6854a5ee`): merge applied conflict-free exactly as predicted; emulator fresh install →
+boot → `ANDROID_LOGGEDIN_GREEN md5=8aa7314f8d7b70116a5a3ad2e05b7d69`; veneer relocates live;
+orbs render (evidence `dev-tools/parity/evidence-phase0-loggedin-20260612.png`); zero
+FATAL/JNI/SIGSEGV across the soak (session ended in the engine's normal ~5-min idle
+disconnect, not a crash); contract clean at 199 entries. The snapRadius removal turned out
+worse than planned: the method id was also in the bridge's all-or-nothing init check, so
+post-merge the bridge would have refused to initialize at all. Plugin-panel round-trip not
+re-poked this session (additive-only merge on those bridges; Phase 2 exercises the panel
+heavily).
+
 ---
 
 ## 3. Phases (dependency order)
