@@ -24,6 +24,32 @@ static void rc_trace(NSString *msg)
     if (f) { fprintf(f, "%s\n", msg.UTF8String); fclose(f); }
 }
 
+// LWJGL NIO-buffer semantics: a Buffer argument means the [position, limit) window — the data pointer is
+// base + position elements and the element count is remaining(), NOT capacity(). The generated wrappers
+// originally used capacity from the buffer base; for the REUSED + flip()ed zone draw-range buffers
+// (Zone.drawOff/drawEnd, capacity 512) that replayed every stale tail entry as an extra glDrawArrays range —
+// the giant wedge / diagonal-stripe / ghost-geometry corruption all over the base-GPU scene.
+static jint rc_buf_position(JNIEnv *env, jobject buf)
+{
+    static jmethodID mid = NULL;
+    if (!mid) {
+        jclass c = (*env)->FindClass(env, "java/nio/Buffer");
+        mid = (*env)->GetMethodID(env, c, "position", "()I");
+        (*env)->DeleteLocalRef(env, c);
+    }
+    return (*env)->CallIntMethod(env, buf, mid);
+}
+static jint rc_buf_remaining(JNIEnv *env, jobject buf)
+{
+    static jmethodID mid = NULL;
+    if (!mid) {
+        jclass c = (*env)->FindClass(env, "java/nio/Buffer");
+        mid = (*env)->GetMethodID(env, c, "remaining", "()I");
+        (*env)->DeleteLocalRef(env, c);
+    }
+    return (*env)->CallIntMethod(env, buf, mid);
+}
+
 // Robust extension test: ES3/GL3-core glGetString(GL_EXTENSIONS) returns NULL (ANGLE does), so fall back to the
 // indexed glGetStringi enumeration. Works on both EAGL (legacy string) and ANGLE (indexed) backends.
 static BOOL rc_gl_has_ext(const char *name)
@@ -327,16 +353,17 @@ static JNIEXPORT void JNICALL rc_GL_glBufferData_0(JNIEnv *env, jclass cls, jint
 
 static JNIEXPORT void JNICALL rc_GL_glBufferData_1(JNIEnv *env, jclass cls, jint a0, jobject a1, jint a2)
 {
-    void *d = (*env)->GetDirectBufferAddress(env, a1);
-        jlong cap = (*env)->GetDirectBufferCapacity(env, a1); /* TODO(device): floats->bytes, use remaining() */
-        glBufferData((GLenum)a0, (GLsizeiptr)(cap * 4), d, (GLenum)a2);
+    // LWJGL semantics: upload remaining() FLOATS from position (capacity-from-base oversized the GL store
+    // with stale tail data on reused scratch buffers — same family as the multidraw range-replay bug).
+    const GLfloat *d = (const GLfloat *)(*env)->GetDirectBufferAddress(env, a1) + rc_buf_position(env, a1);
+        glBufferData((GLenum)a0, (GLsizeiptr)rc_buf_remaining(env, a1) * 4, d, (GLenum)a2);
 }
 
 static JNIEXPORT void JNICALL rc_GL_glBufferData_2(JNIEnv *env, jclass cls, jint a0, jobject a1, jint a2)
 {
-    void *d = (*env)->GetDirectBufferAddress(env, a1);
-        jlong cap = (*env)->GetDirectBufferCapacity(env, a1); /* TODO(device): ints->bytes, use remaining() */
-        glBufferData((GLenum)a0, (GLsizeiptr)(cap * 4), d, (GLenum)a2);
+    // LWJGL semantics: upload remaining() INTS from position (see glBufferData_1).
+    const GLint *d = (const GLint *)(*env)->GetDirectBufferAddress(env, a1) + rc_buf_position(env, a1);
+        glBufferData((GLenum)a0, (GLsizeiptr)rc_buf_remaining(env, a1) * 4, d, (GLenum)a2);
 }
 
 static JNIEXPORT jint JNICALL rc_GL_glCheckFramebufferStatus_0(JNIEnv *env, jclass cls, jint a0)
@@ -614,9 +641,12 @@ static JNIEXPORT jobject JNICALL rc_GL_glMapBufferRange_0(JNIEnv *env, jclass cl
 
 static JNIEXPORT void JNICALL rc_GL_glMultiDrawArrays_0(JNIEnv *env, jclass cls, jint a0, jobject a1, jobject a2)
 {
-    const GLint *first = (const GLint *)(*env)->GetDirectBufferAddress(env, a1);
-        const GLsizei *count = (const GLsizei *)(*env)->GetDirectBufferAddress(env, a2);
-        GLsizei n = (GLsizei)((*env)->GetDirectBufferCapacity(env, a1));
+    // LWJGL semantics: drawcount = first.remaining(), data from position. Zone.drawOff/drawEnd are REUSED
+    // capacity-512 buffers flip()ed to k live ranges per zone draw — drawing capacity replayed 512-k STALE
+    // ranges per zone (wedges / stripe moiré / ghost geometry; the base-GPU render bug).
+    const GLint *first = (const GLint *)(*env)->GetDirectBufferAddress(env, a1) + rc_buf_position(env, a1);
+        const GLsizei *count = (const GLsizei *)(*env)->GetDirectBufferAddress(env, a2) + rc_buf_position(env, a2);
+        GLsizei n = (GLsizei)rc_buf_remaining(env, a1);
         static int t = 0; if (t < 8) { t++;
             long total = 0; for (GLsizei i = 0; i < n && count; i++) total += count[i];
             rc_trace([NSString stringWithFormat:@"[routec] glMultiDrawArrays mode=0x%x draws=%d totalVerts=%ld first0=%d (SCENE geometry)",
