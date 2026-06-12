@@ -73,11 +73,36 @@ static void JNICALL z_glUniform4iv(JNIEnv *e, jclass c, jint l, jintArray arr) {
     glUniform4iv(l, n / 4, (const GLint *)p); (*e)->ReleaseIntArrayElements(e, arr, p, JNI_ABORT);
 }
 
-// glBufferSubData(target, offset, <typed buffer>) — size = capacity * elem. TODO(device): LWJGL uses remaining().
+// LWJGL NIO-buffer semantics: a Buffer argument means the [position, limit) window — the data pointer is
+// base + position elements and the element count is remaining(), NOT capacity() from the base. The base
+// bridge's capacity-sized wrappers caused the reused/flip()ed-buffer scene corruption (routec_gl_jni.m,
+// rc_buf_position/rc_buf_remaining); same contract here.
+static jint z_buf_position(JNIEnv *e, jobject buf) {
+    static jmethodID mid = NULL;
+    if (!mid) {
+        jclass c = (*e)->FindClass(e, "java/nio/Buffer");
+        mid = (*e)->GetMethodID(e, c, "position", "()I");
+        (*e)->DeleteLocalRef(e, c);
+    }
+    return (*e)->CallIntMethod(e, buf, mid);
+}
+static jint z_buf_remaining(JNIEnv *e, jobject buf) {
+    static jmethodID mid = NULL;
+    if (!mid) {
+        jclass c = (*e)->FindClass(e, "java/nio/Buffer");
+        mid = (*e)->GetMethodID(e, c, "remaining", "()I");
+        (*e)->DeleteLocalRef(e, c);
+    }
+    return (*e)->CallIntMethod(e, buf, mid);
+}
+
+// glBufferSubData(target, offset, <typed buffer>) — pointer = base + position*elem, size = remaining*elem.
 static void z_buffer_sub_data(JNIEnv *e, jint target, jlong off, jobject buf, int elem) {
-    void *p = (*e)->GetDirectBufferAddress(e, buf);
-    jlong cap = (*e)->GetDirectBufferCapacity(e, buf);
-    if (p && cap > 0) glBufferSubData((GLenum)target, (GLintptr)off, (GLsizeiptr)(cap * elem), p);
+    const char *p = (const char *)(*e)->GetDirectBufferAddress(e, buf);
+    jint rem = z_buf_remaining(e, buf);
+    if (p && rem > 0)
+        glBufferSubData((GLenum)target, (GLintptr)off, (GLsizeiptr)rem * elem,
+                        p + (size_t)z_buf_position(e, buf) * elem);
 }
 static void JNICALL z_glBufferSubData_B(JNIEnv *e, jclass c, jint t, jlong o, jobject b) { z_buffer_sub_data(e, t, o, b, 1); }
 static void JNICALL z_glBufferSubData_F(JNIEnv *e, jclass c, jint t, jlong o, jobject b) { z_buffer_sub_data(e, t, o, b, 4); }
