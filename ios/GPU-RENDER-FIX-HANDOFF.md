@@ -7,8 +7,9 @@
 > `remaining()`-from-`position()`. `Zone.drawOff/drawEnd` are reused capacity-512 IntBuffers `flip()`ed
 > to k live ranges per zone draw — `glMultiDrawArrays` replayed the 512−k stale tail ranges every zone,
 > drawing wrong vertex windows of the current VAO. Fixed `glMultiDrawArrays` + both `glBufferData` NIO
-> variants in `routec_gl_jni.m`. The zone bridge's `glBufferSubData` has the same latent pattern (harmless
-> today — RLHD passes exact-size buffers); fix it in its own pass with a 117HD device check.
+> variants in `routec_gl_jni.m`. The zone bridge's `glBufferSubData` had the same latent pattern (harmless
+> today — RLHD passes exact-size buffers); fixed in its own pass (`88652191b`) and 117HD
+> device-confirmed clean 2026-06-11.
 > The rest of this doc is kept as the investigation record.
 
 > Branch `vanilla-default` (off `master`). Picks up after the "renderers as plugins" model landed
