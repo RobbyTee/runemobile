@@ -43,6 +43,31 @@ under the bezel/notch and under our relocated chat/minimap veneers.
 
 ## Phase 0 — recon + off-device harness (no device round-trips)
 
+> **DONE 2026-06-11 — `WorldMapProbe` (`-Drunelite.worldmapprobe=true`, ticked in Hooks) +
+> `ios/dev-tools/headless/run-worldmap-probe.sh`; verdict
+> `WORLDMAP panned=false pannedApi=true zoomWheel=true zoomBtn=true searchInput=false closed=true
+> reloc=RED`. PNGs in `out-worldmap/cap/`. Findings:**
+>
+> 1. **Synthetic left-drag does NOT pan the map** (two pacings tried: per-frame steps, and
+>    hold-then-brisk 2-events/frame; `getWorldMapPosition` + PNG both static). The engine's drag-pan
+>    isn't reachable through synthesized AWT drags.
+> 2. **`WorldMap.setWorldMapPositionTarget()` PANS — the Phase-1 primitive.** Deterministic, and
+>    better than a drag: the shell converts finger px → tiles via `getWorldMapZoom` and moves the
+>    centre 1:1 with the finger. PNG-confirmed.
+> 3. **Wheel zoom works** over the map (3.0 → 4.0 on one synthetic notch) — pinch stays as-is.
+>    **Zoom buttons also work** (fallback unneeded but proven).
+> 4. **The map search does NOT flip `VarClientInt.INPUT_TYPE`** — the soft-keyboard auto-raise won't
+>    fire. Native must raise the keyboard itself on a tap in the search rect while the map is open
+>    (typed chars go to the canvas; verify the field consumes them in Phase 1).
+> 5. **Close works but is SLOW (~38 frames)** — the native close proxy should tolerate latency.
+> 6. **Relocating the map window is RED**: `setForcedPosition` on `UNIVERSE` moves the *reported*
+>    bounds but the render stays edge-to-edge (the tab-stone "getBounds lies" pattern,
+>    pixel-verified). Phase 2 = native safe-area proxy buttons, NOT window relocation.
+> 7. Layout recon: on the device-shaped canvas the reopened map is **fullscreen** (1173x540) — it
+>    covers everything, so the native chrome must hide while the map is open. Edge UI lands exactly
+>    in the curved corners: CLOSE top-right (26x23), SEARCH bottom-left, ZOOM bottom-right, key
+>    panel top-left.
+
 1. **Map snapshot**: add a tiny worldmap section to an existing bridge snapshot (chrome or hud):
    `mapOpen` (`Worldmap.MAP_CONTAINER` non-null + not hidden) + canvas bounds of `MAP_CONTAINER`,
    `CLOSE`, `ZOOM_IN/OUT`, `SEARCH`, `BOTTOM`, `KEY_CONTAINER`. Mirrors `getChatSnapshot`.
