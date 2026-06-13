@@ -141,7 +141,7 @@ static void runMuiNativeColorProbe(JVMLogSink log) {
 
 // Resolve + cache the JavaBridge facade on the calling (main) thread. Returns YES once usable.
 static BOOL ensureBridge(void) {
-    if (gBridgeClass) return YES;
+    if (gBridgeClass) return atomic_load(&gVM) != NULL;   // cached, but bail once the VM is torn down
     JavaVM *vm = atomic_load(&gVM);
     if (!vm) return NO;
     JNIEnv *env = NULL;
@@ -197,7 +197,7 @@ static BOOL ensureBridge(void) {
 // Resolve + cache the MobileChromeBridge facade on the calling (main) thread. Reuses the JavaBridge attach
 // (gMainEnv), so call only after ensureBridge() has run. Returns YES once usable.
 static BOOL ensureChrome(void) {
-    if (gChromeClass) return YES;
+    if (gChromeClass) return atomic_load(&gVM) != NULL;
     if (!ensureBridge() || !gMainEnv) return NO;   // shares the main thread's attached env
     JNIEnv *env = gMainEnv;
     jclass local = (*env)->FindClass(env, "net/runelite/client/headless/MobileChromeBridge");
@@ -218,7 +218,7 @@ static BOOL ensureChrome(void) {
 
 // Resolve + cache the MenuPeekBridge facade on the calling (main) thread. Shares the JavaBridge attach.
 static BOOL ensureMenuPeek(void) {
-    if (gMenuPeekClass) return YES;
+    if (gMenuPeekClass) return atomic_load(&gVM) != NULL;
     if (!ensureBridge() || !gMainEnv) return NO;   // shares the main thread's attached env
     JNIEnv *env = gMainEnv;
     jclass local = (*env)->FindClass(env, "net/runelite/client/headless/MenuPeekBridge");
@@ -242,7 +242,7 @@ static jclass    gHudClass = NULL;
 static jmethodID gMidHudSnap = NULL;   // getSnapshot()Ljava/lang/String;
 static jmethodID gMidHudSeq = NULL;    // getSeq()I
 static BOOL ensureHud(void) {
-    if (gHudClass) return YES;
+    if (gHudClass) return atomic_load(&gVM) != NULL;
     if (!ensureBridge() || !gMainEnv) return NO;   // shares the main thread's attached env
     JNIEnv *env = gMainEnv;
     jclass local = (*env)->FindClass(env, "net/runelite/client/headless/HudDataBridge");
@@ -282,7 +282,7 @@ static jmethodID gMidSetOverlayInsets = NULL; // setOverlaySafeInsets(IIII)V (sn
 static jmethodID gMidPanMap = NULL;          // panWorldMap(II)V  (world map: finger pan -> map centre)
 static jmethodID gMidGetMapSnap = NULL;      // getMapSnapshot()Ljava/lang/String;  (world map open + rects)
 static BOOL ensureVeneer(void) {
-    if (gVeneerClass) return YES;
+    if (gVeneerClass) return atomic_load(&gVM) != NULL;
     if (!ensureBridge() || !gMainEnv) return NO;
     JNIEnv *env = gMainEnv;
     jclass local = (*env)->FindClass(env, "net/runelite/client/headless/HudVeneerBridge");
@@ -326,7 +326,7 @@ static BOOL ensureVeneer(void) {
 
 // Resolve + cache the MobileUiBridge facade on the calling (main) thread. Shares the JavaBridge attach.
 static BOOL ensureMui(void) {
-    if (gMuiClass) return YES;
+    if (gMuiClass) return atomic_load(&gVM) != NULL;
     if (!ensureBridge() || !gMainEnv) return NO;
     JNIEnv *env = gMainEnv;
     jclass local = (*env)->FindClass(env, "net/runelite/client/headless/MobileUiBridge");
@@ -378,7 +378,7 @@ static BOOL ensureMui(void) {
 }
 
 static BOOL ensureQuest(void) {
-    if (gQhClass) return YES;
+    if (gQhClass) return atomic_load(&gVM) != NULL;
     if (!ensureBridge() || !gMainEnv) return NO;
     JNIEnv *env = gMainEnv;
     jclass local = (*env)->FindClass(env, "net/runelite/client/headless/QuestHelperBridge");
@@ -402,7 +402,7 @@ static BOOL ensureQuest(void) {
 }
 
 static BOOL ensureWorld(void) {
-    if (gWsClass) return YES;
+    if (gWsClass) return atomic_load(&gVM) != NULL;
     if (!ensureBridge() || !gMainEnv) return NO;
     JNIEnv *env = gMainEnv;
     jclass local = (*env)->FindClass(env, "net/runelite/client/headless/WorldSwitcherBridge");
@@ -1057,8 +1057,12 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         callMain(env, "DeviceHeadlessBoot", @[], log);
     }
 
-    atomic_store(&gVM, NULL);   // VM going away — stop the bridge before DestroyJavaVM
+    // DestroyJavaVM FIRST, then null gVM — gVM must reflect true VM liveness, not "about to go away". Today this
+    // blocks forever on the engine's non-daemon threads, so the lines below are effectively unreachable and the
+    // session keeps running on the live VM + warm bridge cache. If a clean shutdown ever lets it return, the
+    // ensure* gVM re-checks then make every facade call bail safely instead of driving a destroyed VM.
     (*vm)->DestroyJavaVM(vm);
+    atomic_store(&gVM, NULL);
     log(@"[jvm] DestroyJavaVM done.");
     return 0;
 }
@@ -1067,6 +1071,23 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
 
 + (BOOL)bridgeReady {
     return ensureBridge();
+}
+
+// Drop the warm reverse-JNI facade cache after the VM is gone (post-DestroyJavaVM). Pure C-pointer reset that
+// makes NO JNI calls — the VM and all its global refs died with DestroyJavaVM, so there is nothing to (and no
+// env to) DeleteGlobalRef against. Nulling the 8 facade class refs + gMainEnv is sufficient: every ensure*
+// short-circuits on its own class ref, so a re-created VM re-resolves each facade (and its method ids) from
+// scratch — no stale gMid* is ever read before its class ref is re-resolved. Call on the main thread.
++ (void)bridgeInvalidate {
+    gMainEnv = NULL;
+    gBridgeClass = NULL;
+    gChromeClass = NULL;
+    gMenuPeekClass = NULL;
+    gHudClass = NULL;
+    gVeneerClass = NULL;
+    gMuiClass = NULL;
+    gQhClass = NULL;
+    gWsClass = NULL;
 }
 
 // Monotonic counter that advances each time an in-game left tap resolved to an interactable (hit or snap),

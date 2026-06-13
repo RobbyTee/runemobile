@@ -2175,6 +2175,9 @@ static int chatRowCanvasH(void) {
     if (!self.chromeVisible) {
         for (UIButton *btn in self.tabButtons) btn.hidden = YES;
         for (UIView *cv in self.stoneCovers) cv.hidden = YES;   // reveal the real stones in the fallback view
+        [JVMLauncher setEngineStonesHidden:NO];   // flip HudVeneerBridge.hideStones OFF so the engine's own tab
+                                                  // stones reappear; without this the per-frame re-hide leaves
+                                                  // NO tab access at all (native grid hidden + stones still hidden)
         self.tabRailBg.hidden = YES;
         [self hideChatTabs];   // also restores the engine's own chat row (setEngineChatTabRowHeight:0)
     }
@@ -2471,9 +2474,16 @@ static int chatRowCanvasH(void) {
 
     NSThread *t = [[NSThread alloc] initWithBlock:^{
         [launcher runProbesWithLog:log];
-        // VM lifecycle done; let the render loop drain a beat, then release the assertion.
+        // VM lifecycle done; tear the render loop + bridge down on main, then release the assertion. (Unreached
+        // today — DestroyJavaVM blocks on the engine's non-daemon threads — but it's the correct clean teardown
+        // for a future real exit: stop driving JNI into a destroyed VM instead of freezing on the last frame.)
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self appendLine:@"[shell] JVM thread returned"];
+            [self appendLine:@"[shell] JVM thread returned — tearing down render loop + bridge"];
+            [self.displayLink invalidate];
+            self.displayLink = nil;
+            [self teardownPictureInPicture];
+            [self.keepaliveEngine stop];
+            [JVMLauncher bridgeInvalidate];
             [self endBgTask];
         });
     }];

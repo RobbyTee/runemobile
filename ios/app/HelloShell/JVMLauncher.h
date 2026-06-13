@@ -65,6 +65,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// True once the VM is up and the JavaBridge class has been resolved — i.e. live blit + touch are usable.
 + (BOOL)bridgeReady;
 
+/// Drop the cached reverse-JNI facade refs after the VM has been destroyed (post-DestroyJavaVM). Makes NO JNI
+/// calls — pure pointer reset so a re-created VM re-resolves cleanly. Call on the main thread, after the VM is gone.
++ (void)bridgeInvalidate;
+
 /// Monotonic counter that advances when an in-game left tap resolved to an interactable (not a bare walk).
 /// The shell polls this and fires a light haptic on change. Returns 0 if the bundled jar predates it.
 + (int)interactTapSeq;
