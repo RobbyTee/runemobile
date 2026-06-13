@@ -2700,12 +2700,19 @@ static CGRect mapRectFromArr(NSArray *a) {
         // there is no per-tick blit here. Keep the tick alive for the heartbeat + native HUD/chrome refresh below.
         self.framesShown++;
     } else {
-        UIImage *img = [JVMLauncher latestFrame];
-        if (img == nil) return;   // VM not up yet / no frame drawn yet
-        self.screen.image = img;
+        // The PiP AVSampleBufferDisplayLayer (a sublayer of `screen` at index 0) is the visible presenter, fed
+        // below by pipPumpFrame — so while it's actively rendering, blitting screen.image here is fully-occluded
+        // work, and latestFrame costs 2 full-canvas copies + a CGImage alloc per frame. Feed the UIImageView only
+        // as a FALLBACK: when the PiP layer isn't presenting (not-yet / failed / torn down), plus a ~1 Hz refresh
+        // so the occluded fallback stays current if the PiP layer ever drops out mid-session.
+        BOOL pipPresenting = (self.pipLayer != nil
+            && self.pipLayer.status == AVQueuedSampleBufferRenderingStatusRendering);
+        UIImage *img = (!pipPresenting || self.framesShown % 60 == 0) ? [JVMLauncher latestFrame] : nil;
+        if (!pipPresenting && img == nil) return;   // no composited frame yet — skip the rest of the tick (as before)
+        if (img != nil) self.screen.image = img;
         self.framesShown++;
-        // Light heartbeat (~once/sec at 60 Hz) so the log shows the live blit running without flooding it.
-        if (self.framesShown == 1 || self.framesShown % 60 == 0) {
+        // Light heartbeat (~once/sec) so the log shows the loop running without flooding it.
+        if (img != nil && (self.framesShown == 1 || self.framesShown % 60 == 0)) {
             [self appendLine:[NSString stringWithFormat:@"[shell] live blit frame #%d (%.0fx%.0f)",
                               self.framesShown, img.size.width, img.size.height]];
         }
