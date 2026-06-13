@@ -225,6 +225,7 @@
 @property (nonatomic, strong) UILabel *chatFilterHint;        // the ▾ "pull down to filter" reveal under a chip
 @property (nonatomic, assign) BOOL chatFanned;                // chips are fanned out (a gesture is in flight)
 @property (nonatomic, assign) BOOL chatFanAnimating;          // mid fan-out/in animation -> don't let the tick reframe
+@property (nonatomic, assign) CFTimeInterval chatPillBeganAt; // when the pill long-press began (tap-vs-peek timing)
 @property (nonatomic, assign) NSInteger chatHoverChip;        // chip under the finger this drag (-1 = none)
 @property (nonatomic, assign) NSInteger chatFilterChip;       // chip whose filter menu is open (-1 = SELECT mode)
 @property (nonatomic, assign) BOOL chatDragMoved;            // finger left the press point -> a release commits a switch
@@ -308,7 +309,12 @@ static NSString * const kChatTabNames[7] = { @"All", @"Game", @"Public", @"Priva
 static const BOOL kChatTabFilterable[7] = { NO, NO, YES, YES, YES, YES, YES };
 
 // Channel-pill redesign tunables (all one-liners to dial in on device).
-static const CGFloat kChatHoldDelay     = 0.15;   // press time before the chips fan out (s)
+// Was 0.15 — but a human tap is commonly 150-250ms, so the pill's long-press kept winning and the quick-tap
+// recognizer (which requires the long-press to FAIL) almost never fired, so a TAP couldn't toggle the chatbox
+// open/closed. 0.28 puts the tap/hold boundary above a normal tap; the kChatTapMaxHold fallback below also
+// treats a press-and-release-without-dragging that only just crossed the threshold as a tap.
+static const CGFloat kChatHoldDelay     = 0.28;   // press time before the chips fan out (s)
+static const CGFloat kChatTapMaxHold    = 0.16;   // a no-drag release within this long after the fan = a tap (toggle)
 static const CGFloat kChatFanAnim       = 0.18;   // fan out/in spring duration (s)
 static const CGFloat kChatFanPopPt      = 0.0;    // extra height (screen pt) a fanned chip gets vs the row (0 = match the original tab size)
 static const CGFloat kChatPullDownPt    = 26.0;   // finger travel below a chip's bottom edge that opens its filter
@@ -2119,11 +2125,17 @@ static int chatRowCanvasH(void) {
 
 // Quick tap on the pill -> toggle the chat message area open/collapsed (the channel stays selected).
 - (void)onChatPillTap:(UITapGestureRecognizer *)g {
+    [self toggleChatCollapse:@"tap"];
+}
+
+// The shared toggle, used by both the quick-tap recognizer and the long-press "released without dragging" fallback
+// (a normal human tap often exceeds the fan-out hold delay, so it arrives as a short long-press, not a tap).
+- (void)toggleChatCollapse:(NSString *)via {
     if (![JVMLauncher bridgeReady]) return;
     self.chatCollapsed = !self.chatCollapsed;
     [JVMLauncher setEngineChatCollapsed:self.chatCollapsed];
     [self updateChatTabs];
-    [self appendLine:[NSString stringWithFormat:@"[chat] pill tap -> %@", self.chatCollapsed ? @"collapse" : @"expand"]];
+    [self appendLine:[NSString stringWithFormat:@"[chat] pill %@ -> %@", via, self.chatCollapsed ? @"collapse" : @"expand"]];
 }
 
 // The driver: hold the pill to fan the channels out, then drag to pick. Horizontal drag = SELECT (lift switches
@@ -2136,6 +2148,7 @@ static int chatRowCanvasH(void) {
         case UIGestureRecognizerStateBegan: {
             self.chatDragStart = pScreen;
             self.chatDragMoved = NO;
+            self.chatPillBeganAt = CACurrentMediaTime();
             [self fanOutChat];
             if (!self.tapHaptic) self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
             [self.tapHaptic impactOccurred];
@@ -2205,6 +2218,12 @@ static int chatRowCanvasH(void) {
                 if (k < 0) k = [self chatChipColumnAtPoint:pScreen];   // fast flick: hover not tracked yet
                 if (self.chatDragMoved && k >= 0 && k != self.chatActiveTab) {
                     [self chatSwitchToChip:(int)k];
+                } else if (!self.chatDragMoved
+                           && (CACurrentMediaTime() - self.chatPillBeganAt) < kChatTapMaxHold) {
+                    // Press-and-release without dragging that only just crossed the hold delay = a TAP, not a
+                    // deliberate peek -> toggle the chatbox (covers taps that ran slightly long). A longer hold
+                    // (a real peek of the fanned channels) falls through with no toggle.
+                    [self toggleChatCollapse:@"tap(hold)"];
                 }
             }
             [self fanInChat];
