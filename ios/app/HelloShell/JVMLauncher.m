@@ -884,12 +884,18 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         [NSString stringWithFormat:@"-Djava.class.path=%@", classpath],
     ] mutableCopy];
 
-    // The base GPU plugin is enabledByDefault=true; with safe-mode off it would otherwise AUTO-START in every
-    // mode (isGpu=true) — and then 117HD's starter sees a GPU already active and never takes over, and CPU isn't
-    // really CPU. Force it OFF unless GPU is the SELECTED renderer (routecGpuMode), in which case RouteCGpuStarter
-    // enables + starts it. forceDisablePlugins wins over a persisted gpuplugin=true (key = GpuPlugin simpleName).
-    if (!self.routecGpuMode) {
-        [opts addObject:@"-Drunelite.forceDisablePlugins=gpuplugin"];
+    // BOTH renderer plugins are enabledByDefault=true, so with safe-mode off EITHER would AUTO-START in every
+    // mode — and 117HD's HdPlugin (conflicts=GPU) then hijacks rendering even when CPU or base-GPU is the chosen
+    // renderer (the "always boots 117HD regardless of selection" bug: rendererPref=cpu but HdPlugin auto-starts
+    // from enabledByDefault). Force-disable whichever renderer plugin is NOT the selected one; the chosen
+    // renderer is started by its own starter (RouteCGpuStarter / RLHDStarter). forceDisablePlugins wins over a
+    // persisted enabled=true; the key is the plugin class simpleName (GpuPlugin -> "gpuplugin", HdPlugin -> "hdplugin").
+    NSMutableArray<NSString *> *forceDisable = [NSMutableArray array];
+    if (!self.routecGpuMode)  { [forceDisable addObject:@"gpuplugin"]; }
+    if (!self.routecZoneMode) { [forceDisable addObject:@"hdplugin"]; }
+    if (forceDisable.count) {
+        [opts addObject:[NSString stringWithFormat:@"-Drunelite.forceDisablePlugins=%@",
+                         [forceDisable componentsJoinedByString:@","]]];
     }
 
     // Full-screen landscape: after login the headless client resizes its CTC canvas to this WxH (the
