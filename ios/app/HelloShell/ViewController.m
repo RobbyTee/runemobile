@@ -473,8 +473,7 @@ static const CGFloat kMenuWidth       = 210.0;
 
 // Mirror the saved tokens.json onto the launch-screen login button (same source as refreshLoginButton).
 - (void)refreshLaunchLogin {
-    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    NSData *data = [NSData dataWithContentsOfFile:[docs stringByAppendingPathComponent:@"tokens.json"]];
+    NSData *data = [NSData dataWithContentsOfFile:[JVMLauncher tokensPath]];
     id o = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
     NSDictionary *t = [o isKindOfClass:[NSDictionary class]] ? o : nil;
     NSString *sid  = [t[@"session_id"] isKindOfClass:[NSString class]] ? t[@"session_id"] : nil;
@@ -973,13 +972,13 @@ static const CGFloat kMenuWidth       = 210.0;
     [self presentViewController:vc animated:YES completion:nil];
 }
 
-// Write Documents/tokens.json in the shape loadJagexTokens reads. Stage A only → access/refresh empty
+// Write tokens.json (Application Support — see +[JVMLauncher tokensPath]) in the shape loadJagexTokens
+// reads. Stage A only → access/refresh empty
 // (the gamepack mints its own play token from session_id + chosen_account_id). File-protected at rest;
 // never bundled or committed (it's the per-device secret).
 - (void)persistTokensSession:(NSString *)sessionId account:(NSString *)accountId
                      display:(NSString *)display accounts:(NSArray *)accounts {
-    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    NSString *path = [docs stringByAppendingPathComponent:@"tokens.json"];
+    NSString *path = [JVMLauncher tokensPath];
     NSDictionary *t = @{
         @"session_id":          sessionId  ?: @"",
         @"chosen_account_id":   accountId  ?: @"",
@@ -1007,8 +1006,7 @@ static const CGFloat kMenuWidth       = 210.0;
 
 // Reflect the saved login on the button title so the user can see they're signed in (and re-login if needed).
 - (void)refreshLoginButton {
-    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    NSData *data = [NSData dataWithContentsOfFile:[docs stringByAppendingPathComponent:@"tokens.json"]];
+    NSData *data = [NSData dataWithContentsOfFile:[JVMLauncher tokensPath]];
     id o = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
     NSDictionary *t = [o isKindOfClass:[NSDictionary class]] ? o : nil;
     NSString *sid  = [t[@"session_id"] isKindOfClass:[NSString class]] ? t[@"session_id"] : nil;
@@ -1024,8 +1022,7 @@ static const CGFloat kMenuWidth       = 210.0;
 // Log out: delete the saved game session (so autologin won't fire) and purge any persisted Jagex web
 // cookies from older builds (the login webview itself is now ephemeral, so it leaves none going forward).
 - (void)onLogout {
-    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    NSString *path = [docs stringByAppendingPathComponent:@"tokens.json"];
+    NSString *path = [JVMLauncher tokensPath];
     BOOL existed = [[NSFileManager defaultManager] fileExistsAtPath:path];
     if (existed) [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
 
@@ -1052,8 +1049,7 @@ static const CGFloat kMenuWidth       = 210.0;
 // quit cleanly here; the saved tokens.json means the next launch goes straight to play with no web view
 // (no WebKit) and the brk is serviced normally. Only reached after an actual login (fresh login / switch).
 - (void)promptRestartToPlay {
-    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    NSData *data = [NSData dataWithContentsOfFile:[docs stringByAppendingPathComponent:@"tokens.json"]];
+    NSData *data = [NSData dataWithContentsOfFile:[JVMLauncher tokensPath]];
     id o = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
     NSString *name = [o isKindOfClass:[NSDictionary class]] ? o[@"chosen_display_name"] : nil;
     NSString *who = name.length ? name : @"your account";
@@ -1587,13 +1583,18 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
 
 - (void)openLogFile {
     NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    // CompleteUnlessOpen, NOT Complete: the keepalive keeps these files being written while the screen is
+    // locked, and Complete makes a file unwritable once locked. The class is set at creation and persists;
+    // opened here while unlocked, the fd/handle stays writable after the device locks.
+    NSDictionary *prot = @{NSFileProtectionKey: NSFileProtectionCompleteUnlessOpen};
     NSString *path = [docs stringByAppendingPathComponent:@"hello-shell.log"];
-    [[NSFileManager defaultManager] createFileAtPath:path contents:nil attributes:nil];
+    [[NSFileManager defaultManager] createFileAtPath:path contents:nil attributes:prot];
     self.logFile = [NSFileHandle fileHandleForWritingAtPath:path];
     // Separate raw file for libjvm stdout/stderr, written synchronously (survives a
     // crash) so the [JIT26] mapping trace + the Hello verdict are always retrievable.
     NSString *jpath = [docs stringByAppendingPathComponent:@"jvm-stdio.log"];
-    self.jvmFd = open(jpath.UTF8String, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    [[NSFileManager defaultManager] createFileAtPath:jpath contents:nil attributes:prot];  // protection persists across open()
+    self.jvmFd = open(jpath.UTF8String, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 }
 
 - (void)appendLine:(NSString *)line {
@@ -1602,12 +1603,28 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
     // reader runs on a background thread; writing self.logFile from two threads is a
     // data race that silently drops output after JLI_Launch. Funnel both here.
     dispatch_async(dispatch_get_main_queue(), ^{
-        self.console.text = [self.console.text stringByAppendingString:out];
-        if (self.console.text.length > 0) {
-            [self.console scrollRangeToVisible:NSMakeRange(self.console.text.length - 1, 1)];
-        }
+        // File first (the retrievable hello-shell.log). No per-line synchronizeFile — that fsync was a 1–10ms
+        // main-thread stall every line; jvm-stdio.log (dup2'd, unbuffered) is the crash-proof channel.
         [self.logFile writeData:[out dataUsingEncoding:NSUTF8StringEncoding]];
-        @try { [self.logFile synchronizeFile]; } @catch (__unused NSException *e) {}
+
+        // Console: append via textStorage so each line is O(append), not the O(n) whole-string rebuild +
+        // attribute re-fix that setText does (n grows unbounded → tens-of-ms stalls in a long session). Cap
+        // the backlog, and only force layout/scroll when the debug panel (the console's superview) is visible.
+        NSTextStorage *ts = self.console.textStorage;
+        NSDictionary *attrs = @{
+            NSFontAttributeName: self.console.font,
+            NSForegroundColorAttributeName: self.console.textColor,
+        };
+        [ts beginEditing];
+        [ts appendAttributedString:[[NSAttributedString alloc] initWithString:out attributes:attrs]];
+        const NSUInteger kConsoleCap = 64 * 1024;
+        if (ts.length > kConsoleCap) {
+            [ts deleteCharactersInRange:NSMakeRange(0, ts.length - kConsoleCap)];
+        }
+        [ts endEditing];
+        if (!self.debugPanel.hidden) {
+            [self.console scrollRangeToVisible:NSMakeRange(self.console.textStorage.length, 0)];
+        }
     });
 }
 
@@ -2304,6 +2321,9 @@ static int chatRowCanvasH(void) {
     if (!self.chromeVisible) {
         for (UIButton *btn in self.tabButtons) btn.hidden = YES;
         for (UIView *cv in self.stoneCovers) cv.hidden = YES;   // reveal the real stones in the fallback view
+        [JVMLauncher setEngineStonesHidden:NO];   // flip HudVeneerBridge.hideStones OFF so the engine's own tab
+                                                  // stones reappear; without this the per-frame re-hide leaves
+                                                  // NO tab access at all (native grid hidden + stones still hidden)
         self.tabRailBg.hidden = YES;
         [self hideChatTabs];   // also restores the engine's own chat row (setEngineChatTabRowHeight:0)
     }
@@ -2600,9 +2620,16 @@ static int chatRowCanvasH(void) {
 
     NSThread *t = [[NSThread alloc] initWithBlock:^{
         [launcher runProbesWithLog:log];
-        // VM lifecycle done; let the render loop drain a beat, then release the assertion.
+        // VM lifecycle done; tear the render loop + bridge down on main, then release the assertion. (Unreached
+        // today — DestroyJavaVM blocks on the engine's non-daemon threads — but it's the correct clean teardown
+        // for a future real exit: stop driving JNI into a destroyed VM instead of freezing on the last frame.)
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self appendLine:@"[shell] JVM thread returned"];
+            [self appendLine:@"[shell] JVM thread returned — tearing down render loop + bridge"];
+            [self.displayLink invalidate];
+            self.displayLink = nil;
+            [self teardownPictureInPicture];
+            [self.keepaliveEngine stop];
+            [JVMLauncher bridgeInvalidate];
             [self endBgTask];
         });
     }];
@@ -2803,12 +2830,19 @@ static CGRect mapRectFromArr(NSArray *a) {
         // there is no per-tick blit here. Keep the tick alive for the heartbeat + native HUD/chrome refresh below.
         self.framesShown++;
     } else {
-        UIImage *img = [JVMLauncher latestFrame];
-        if (img == nil) return;   // VM not up yet / no frame drawn yet
-        self.screen.image = img;
+        // The PiP AVSampleBufferDisplayLayer (a sublayer of `screen` at index 0) is the visible presenter, fed
+        // below by pipPumpFrame — so while it's actively rendering, blitting screen.image here is fully-occluded
+        // work, and latestFrame costs 2 full-canvas copies + a CGImage alloc per frame. Feed the UIImageView only
+        // as a FALLBACK: when the PiP layer isn't presenting (not-yet / failed / torn down), plus a ~1 Hz refresh
+        // so the occluded fallback stays current if the PiP layer ever drops out mid-session.
+        BOOL pipPresenting = (self.pipLayer != nil
+            && self.pipLayer.status == AVQueuedSampleBufferRenderingStatusRendering);
+        UIImage *img = (!pipPresenting || self.framesShown % 60 == 0) ? [JVMLauncher latestFrame] : nil;
+        if (!pipPresenting && img == nil) return;   // no composited frame yet — skip the rest of the tick (as before)
+        if (img != nil) self.screen.image = img;
         self.framesShown++;
-        // Light heartbeat (~once/sec at 60 Hz) so the log shows the live blit running without flooding it.
-        if (self.framesShown == 1 || self.framesShown % 60 == 0) {
+        // Light heartbeat (~once/sec) so the log shows the loop running without flooding it.
+        if (img != nil && (self.framesShown == 1 || self.framesShown % 60 == 0)) {
             [self appendLine:[NSString stringWithFormat:@"[shell] live blit frame #%d (%.0fx%.0f)",
                               self.framesShown, img.size.width, img.size.height]];
         }
@@ -3912,7 +3946,8 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (BOOL)textField:(UITextField *)tf shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString *)string {
     if (string.length > 0) {
         [JVMLauncher postText:string];
-        [self appendLine:[NSString stringWithFormat:@"[shell] key text '%@'", string]];
+        // Length only — never the typed content (chat / PMs / search / enter-amount go through here).
+        [self appendLine:[NSString stringWithFormat:@"[shell] key text len=%lu", (unsigned long)string.length]];
     } else if (range.length > 0) {
         for (NSUInteger i = 0; i < range.length; i++) {
             [JVMLauncher postKeyStroke:AWT_VK_BACK_SPACE];

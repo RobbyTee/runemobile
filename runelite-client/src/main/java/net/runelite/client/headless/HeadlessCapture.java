@@ -155,8 +155,8 @@ public final class HeadlessCapture
 		lastState = state;
 		if (state != prev)
 		{
-			log.info("[headless-capture] gameState {} -> {} (draw#{} loginIndex={} launcherDisplayName={})",
-				prev, state, drawCount.get(), loginIndex, launcherDisplayName);
+			log.info("[headless-capture] gameState {} -> {} (draw#{} loginIndex={} launcher={})",
+				prev, state, drawCount.get(), loginIndex, launcherDisplayName != null);
 		}
 
 		// Log loginIndex transitions too — they advance (e.g. EULA 12 → welcome 10) while gameState stays
@@ -165,8 +165,8 @@ public final class HeadlessCapture
 		lastLoginIndex = loginIndex;
 		if (loginIndex != prevLoginIndex && state == GameState.LOGIN_SCREEN)
 		{
-			log.info("[headless-capture] loginIndex {} -> {} (draw#{} state={} launcherDisplayName={})",
-				prevLoginIndex, loginIndex, drawCount.get(), state, launcherDisplayName);
+			log.info("[headless-capture] loginIndex {} -> {} (draw#{} state={} launcher={})",
+				prevLoginIndex, loginIndex, drawCount.get(), state, launcherDisplayName != null);
 		}
 	}
 

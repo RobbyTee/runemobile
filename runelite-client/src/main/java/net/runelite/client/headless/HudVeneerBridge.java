@@ -29,12 +29,14 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.ScriptID;
+import net.runelite.api.events.BeforeRender;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.widgets.WidgetPositionMode;
 import net.runelite.api.widgets.WidgetSizeMode;
+import net.runelite.client.eventbus.Subscribe;
 
 /**
  * W3 Feature-A (A3) — controls the engine chatbox so the chat-at-top look matches the OSRS Mobile reference.
@@ -334,8 +336,33 @@ public final class HudVeneerBridge
 				}
 			}
 		}
-		catch (RuntimeException ignore)
+		catch (RuntimeException e)
 		{
+			BridgeFaults.note("HudVeneerBridge.preRender", e);
+		}
+	}
+
+	/**
+	 * Runs {@link #preRender(Client)} as the very last {@code BeforeRender} subscriber, so the engine-widget
+	 * hides (tab-stone rows, chat tabs/background) get the final word just before the frame rasters — the
+	 * "chrome flash on item click" fix. The priority is well below {@code TabInterface}'s {@code -1} (which
+	 * rebuilds the tab stones on {@code BeforeRender}), so this re-hides them immediately after. Registered —
+	 * only when {@link #isEnabled()} — from {@link net.runelite.client.ui.HeadlessClientUI}; this replaces the
+	 * former direct call from {@code Hooks.frame()}, so that callback stays pure upstream.
+	 */
+	public static final class BeforeRenderListener
+	{
+		private final Client client;
+
+		public BeforeRenderListener(Client client)
+		{
+			this.client = client;
+		}
+
+		@Subscribe(priority = -1000f)
+		public void onBeforeRender(BeforeRender event)
+		{
+			preRender(client);
 		}
 	}
 
@@ -536,8 +563,9 @@ public final class HudVeneerBridge
 
 			tickWorldMap(c);
 		}
-		catch (RuntimeException ignore)
+		catch (RuntimeException e)
 		{
+			BridgeFaults.note("HudVeneerBridge.tick", e);
 		}
 	}
 

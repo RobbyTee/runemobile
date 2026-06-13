@@ -57,7 +57,10 @@
 	     report). We never record; the string only satisfies TCC so the probe is allowed. -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>RuneLite's audio system enumerates audio devices at startup; this app does not record.</string>
-	<!-- Expose Documents/hello-shell.log via Files.app for off-device retrieval. -->
+	<!-- Exposes the Documents dir (redacted *.log diagnostics + the gamepack cache) via Files.app/USB for
+	     off-device log retrieval. The session bearer (tokens.json) lives in Library/Application Support, which
+	     is NOT surfaced by file sharing; and the logs carry no secret, account PII, or typed-text content
+	     (see openLogFile's protection class + the [jx]/[huddata] redactions). -->
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>

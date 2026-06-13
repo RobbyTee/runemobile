@@ -48,6 +48,12 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Resolve the embedded JRE home inside the .app bundle (".../jre").
 + (nullable NSString *)javaHome;
 
+/// Absolute path to the session bearer, tokens.json, in Library/Application Support — NOT the Files.app /
+/// USB-exposed Documents dir. The single source of truth for the path: the native login writer, the
+/// login-state readers, logout, and the JVM autologin reader all go through here. First call lazily migrates
+/// any legacy Documents/tokens.json into Application Support (and purges the exposed copy). Any thread.
++ (NSString *)tokensPath;
+
 /// dlopen(libjvm) -> JNI_CreateJavaVM -> run JitProbe, Bench, GlyphSmoke in one VM,
 /// then DestroyJavaVM. Blocks until done. MUST be called on a dedicated thread with
 /// JIT already live (CS_DEBUGGED + the StikDebug brk #0x69 script). Returns 0 on a
@@ -58,6 +64,10 @@ typedef void (^JVMLogSink)(NSString *line);
 
 /// True once the VM is up and the JavaBridge class has been resolved — i.e. live blit + touch are usable.
 + (BOOL)bridgeReady;
+
+/// Drop the cached reverse-JNI facade refs after the VM has been destroyed (post-DestroyJavaVM). Makes NO JNI
+/// calls — pure pointer reset so a re-created VM re-resolves cleanly. Call on the main thread, after the VM is gone.
++ (void)bridgeInvalidate;
 
 /// Monotonic counter that advances when an in-game left tap resolved to an interactable (not a bare walk).
 /// The shell polls this and fires a light haptic on change. Returns 0 if the bundled jar predates it.
