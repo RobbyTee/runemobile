@@ -101,6 +101,16 @@ static jmethodID gQhStart = NULL;       // startQuest(Ljava/lang/String;)V
 static jmethodID gQhStop = NULL;        // stopQuest()V
 static jmethodID gQhSetOpen = NULL;     // setUiOpen(Z)V
 
+// Native overlay edit-mode — the OverlayBridge facade (move / snap / reset live overlays).
+static jclass    gOvlClass = NULL;      // global ref to net.runelite.client.headless.OverlayBridge
+static jmethodID gOvlAvailable = NULL;  // isAvailable()Z
+static jmethodID gOvlSetOpen = NULL;    // setUiOpen(Z)V
+static jmethodID gOvlList = NULL;       // getOverlaysJson()Ljava/lang/String;
+static jmethodID gOvlSetLoc = NULL;     // setOverlayPreferredLocation(Ljava/lang/String;II)Ljava/lang/String;
+static jmethodID gOvlSetPos = NULL;     // setOverlayPreferredPosition(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+static jmethodID gOvlReset = NULL;      // resetOverlay(Ljava/lang/String;)Ljava/lang/String;
+static jmethodID gOvlSnap = NULL;       // snapPositionForPoint(IIII)Ljava/lang/String;
+
 // Native World Switcher reflow — the WorldSwitcherBridge facade (direct WorldService reads, reflected hop).
 static jclass    gWsClass = NULL;       // global ref to net.runelite.client.headless.WorldSwitcherBridge
 static jmethodID gWsAvailable = NULL;   // isAvailable()Z
@@ -426,6 +436,34 @@ static BOOL ensureQuest(void) {
         return NO;
     }
     gQhClass = global;
+    return YES;
+}
+
+static BOOL ensureOvl(void) {
+    if (gOvlClass) return YES;
+    if (!ensureBridge() || !gMainEnv) return NO;
+    JNIEnv *env = gMainEnv;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/OverlayBridge");
+    if (!local || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    jclass global = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    if (!global) return NO;
+    gOvlAvailable = (*env)->GetStaticMethodID(env, global, "isAvailable", "()Z");
+    gOvlSetOpen   = (*env)->GetStaticMethodID(env, global, "setUiOpen", "(Z)V");
+    gOvlList      = (*env)->GetStaticMethodID(env, global, "getOverlaysJson", "()Ljava/lang/String;");
+    gOvlSetLoc    = (*env)->GetStaticMethodID(env, global, "setOverlayPreferredLocation", "(Ljava/lang/String;II)Ljava/lang/String;");
+    gOvlSetPos    = (*env)->GetStaticMethodID(env, global, "setOverlayPreferredPosition", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    gOvlReset     = (*env)->GetStaticMethodID(env, global, "resetOverlay", "(Ljava/lang/String;)Ljava/lang/String;");
+    if (!gOvlAvailable || !gOvlSetOpen || !gOvlList || !gOvlSetLoc || !gOvlSetPos || !gOvlReset) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteGlobalRef(env, global);
+        return NO;
+    }
+    // Optional (the live snap-preview accessor; the snap MENU uses fixed corner names, so its absence in an older
+    // jar must not disable the whole edit-mode).
+    gOvlSnap = (*env)->GetStaticMethodID(env, global, "snapPositionForPoint", "(IIII)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gOvlSnap = NULL; }
+    gOvlClass = global;
     return YES;
 }
 
@@ -1791,6 +1829,65 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gQhClass, gQhSetOpen, (jboolean)(open ? 1 : 0));
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+}
+
+// ---- Native overlay edit-mode (OverlayBridge) — move / snap / reset live overlays ------------------
+
++ (BOOL)overlayAvailable {
+    if (!ensureOvl()) return NO;
+    JNIEnv *env = gMainEnv;
+    jboolean v = (*env)->CallStaticBooleanMethod(env, gOvlClass, gOvlAvailable);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    return v ? YES : NO;
+}
+
++ (void)overlaySetUiOpen:(BOOL)open {
+    if (!ensureOvl()) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gOvlClass, gOvlSetOpen, (jboolean)(open ? 1 : 0));
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+}
+
++ (NSString *)overlaysJson {
+    if (!ensureOvl()) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gOvlClass, gOvlList));
+}
+
++ (NSString *)overlaySetLocation:(NSString *)name x:(int)x y:(int)y {
+    if (!ensureOvl() || name == nil) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring jn = (*env)->NewStringUTF(env, name.UTF8String);
+    NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gOvlClass, gOvlSetLoc, jn, (jint)x, (jint)y));
+    (*env)->DeleteLocalRef(env, jn);
+    return out;
+}
+
++ (NSString *)overlaySetPosition:(NSString *)name position:(NSString *)position {
+    if (!ensureOvl() || name == nil || position == nil) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring jn = (*env)->NewStringUTF(env, name.UTF8String);
+    jstring jp = (*env)->NewStringUTF(env, position.UTF8String);
+    NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gOvlClass, gOvlSetPos, jn, jp));
+    (*env)->DeleteLocalRef(env, jn);
+    (*env)->DeleteLocalRef(env, jp);
+    return out;
+}
+
++ (NSString *)overlayReset:(NSString *)name {
+    if (!ensureOvl() || name == nil) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring jn = (*env)->NewStringUTF(env, name.UTF8String);
+    NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gOvlClass, gOvlReset, jn));
+    (*env)->DeleteLocalRef(env, jn);
+    return out;
+}
+
++ (NSString *)overlaySnapForX:(int)x y:(int)y canvasW:(int)canvasW canvasH:(int)canvasH {
+    if (!ensureOvl()) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gOvlClass, gOvlSnap,
+                                                                    (jint)x, (jint)y, (jint)canvasW, (jint)canvasH));
 }
 
 // ---- Native World Switcher reflow (WorldSwitcherBridge) --------------------------------------------

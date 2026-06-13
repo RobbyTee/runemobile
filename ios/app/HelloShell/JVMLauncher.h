@@ -348,6 +348,23 @@ typedef void (^JVMLogSink)(NSString *line);
 + (void)questStart:(NSString *)name;
 + (void)questStop;
 
+// ---- Native overlay edit-mode (OverlayBridge) — move / snap / reset live overlays (OVL-2/3/5) ------
+
+/// Whether overlay edit-mode is available (the OverlayManager has resolved).
++ (BOOL)overlayAvailable;
+/// Tell the bridge the edit screen is open/closed (gates its client-thread snapshot refresh).
++ (void)overlaySetUiOpen:(BOOL)open;
+/// Movable overlays JSON: {available, overlays:[{name,bounds:[x,y,w,h],position,movable,snappable,resizable,dynamic}]}.
++ (nullable NSString *)overlaysJson;
+/// Move an overlay to a free pixel location (canvas px) + persist (clears its snap position). Ack JSON.
++ (nullable NSString *)overlaySetLocation:(NSString *)name x:(int)x y:(int)y;
+/// Snap an overlay to a corner by OverlayPosition name (TOP_LEFT…) + persist (clears its free location). Ack JSON.
++ (nullable NSString *)overlaySetPosition:(NSString *)name position:(NSString *)position;
+/// Reset an overlay to its default position/size. Ack JSON.
++ (nullable NSString *)overlayReset:(NSString *)name;
+/// Nearest snap-corner OverlayPosition name for a dropped point (canvas px), for a live snap preview.
++ (nullable NSString *)overlaySnapForX:(int)x y:(int)y canvasW:(int)canvasW canvasH:(int)canvasH;
+
 // ---- Native World Switcher reflow (WorldSwitcherBridge) --------------------------------------------
 
 /// Whether the native World Switcher screen can be offered (WorldService has a world list).

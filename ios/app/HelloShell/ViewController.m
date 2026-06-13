@@ -3,6 +3,7 @@
 #import "PluginConfigViewController.h"
 #import "PluginHubViewController.h"
 #import "PluginPanelsViewController.h"
+#import "OverlayEditView.h"
 #import "JagexLoginViewController.h"
 #import "GLRecon.h"
 #import "RouteCBridge.h"            // GPU Route C bridge (backend selected by RC_BACKEND_ANGLE in the build)
@@ -240,6 +241,8 @@
 // and a running/stopped indicator. Refreshed when the bridge's event sequence advances (toggles, conflicts).
 @property (nonatomic, strong) UIButton *pluginButton;
 @property (nonatomic, strong) UIButton *gridButton;   // §3.3: opens the labelled plugin-panel grid launcher
+@property (nonatomic, strong) UIButton *overlaysCardButton;   // plugin card: enters overlay edit-mode
+@property (nonatomic, strong) OverlayEditView *overlayEdit;   // active overlay edit-mode view (OVL-2/3/5)
 @property (nonatomic, strong) UIView *pluginPanel;
 @property (nonatomic, strong) UITableView *pluginTable;
 @property (nonatomic, strong) NSArray<NSDictionary *> *pluginList;  // the FILTERED view the table renders
@@ -1124,6 +1127,16 @@ static const CGFloat kMenuWidth       = 210.0;
     [panels addGestureRecognizer:panelsLegacy];
     [card addSubview:panels];
 
+    // Overlay edit-mode opener (OVL-2/3/5) — dismisses the card and shows draggable handles over the live game.
+    UIButton *overlaysBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    overlaysBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    [overlaysBtn setTitle:@"⛶ Overlays" forState:UIControlStateNormal];
+    overlaysBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+    overlaysBtn.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.40 alpha:1.0];
+    [overlaysBtn addTarget:self action:@selector(onOpenOverlayEdit) forControlEvents:UIControlEventTouchUpInside];
+    [card addSubview:overlaysBtn];
+    self.overlaysCardButton = overlaysBtn;
+
     self.pluginTable = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     self.pluginTable.translatesAutoresizingMaskIntoConstraints = NO;
     self.pluginTable.backgroundColor = [UIColor clearColor];
@@ -1175,6 +1188,8 @@ static const CGFloat kMenuWidth       = 210.0;
         [hub.trailingAnchor constraintEqualToAnchor:close.leadingAnchor constant:-18],
         [panels.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
         [panels.trailingAnchor constraintEqualToAnchor:hub.leadingAnchor constant:-18],
+        [self.overlaysCardButton.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
+        [self.overlaysCardButton.trailingAnchor constraintEqualToAnchor:panels.leadingAnchor constant:-18],
 
         [self.pluginSearch.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:6],
         [self.pluginSearch.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:6],
@@ -1189,6 +1204,25 @@ static const CGFloat kMenuWidth       = 210.0;
 // §3.3: open the labelled grid launcher for the plugin side-panels (the persistent dock holds the live list).
 - (void)onOpenGridLauncher {
     [self.panelDock presentGridLauncher];
+}
+
+// OVL-2/3/5: enter overlay edit-mode — dismiss the management card so the game (and its overlays) are visible,
+// then float draggable handles over every movable overlay. Done writes the new positions back via OverlayBridge.
+- (void)onOpenOverlayEdit {
+    if (self.renderW <= 0) return;                 // the game canvas isn't up yet
+    if (![JVMLauncher overlayAvailable]) {
+        [self appendLine:@"[overlay] edit-mode not available yet (overlay manager unresolved)"];
+        return;
+    }
+    [self onClosePluginPanel];                     // hide the card so the live overlays show through
+    if (self.overlayEdit) { [self.overlayEdit dismiss]; self.overlayEdit = nil; }
+    OverlayEditView *ov = [[OverlayEditView alloc] initWithFrame:self.view.bounds
+                                                         canvasW:self.renderW canvasH:self.renderH presenter:self];
+    ov.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    __weak typeof(self) ws = self;
+    ov.onClose = ^{ ws.overlayEdit = nil; };   // clear the strong ref on teardown (no dangling removed view)
+    [self.view addSubview:ov];
+    self.overlayEdit = ov;
 }
 
 - (void)onOpenPluginPanel {
