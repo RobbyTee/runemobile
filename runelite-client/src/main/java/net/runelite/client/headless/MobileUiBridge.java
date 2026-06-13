@@ -28,6 +28,7 @@ import java.awt.Component;
 import java.awt.EventQueue;
 import java.awt.Graphics2D;
 import java.awt.Point;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
@@ -435,10 +436,15 @@ public final class MobileUiBridge
 	{
 		final Json out = new Json().arr();
 		final java.util.List<NavigationButton> navs = panelNavs();
+		final Set<String> pinned = pinnedNames();
 		for (int i = 0; i < navs.size(); i++)
 		{
 			final NavigationButton b = navs.get(i);
-			out.obj().ki("index", i).kv("tooltip", b.getTooltip());
+			final String tip = b.getTooltip();
+			// name == tooltip (the panel's display name); pinned lets the redesign's grid show a favourites row +
+			// star-toggle reusing the shared pinnedPlugins CSV (step-0 of the right-bar redesign, §3.5).
+			out.obj().ki("index", i).kv("tooltip", tip).kv("name", tip)
+				.kb("pinned", tip != null && pinned.contains(tip.replace(",", "")));
 			final String icon = iconPngBase64(b.getIcon());
 			if (icon != null)
 			{
@@ -493,6 +499,11 @@ public final class MobileUiBridge
 	private static volatile int activeRenderScale = RENDER_SCALE;
 	private static final AtomicInteger panelSeq = new AtomicInteger();
 	private static volatile boolean panelRepainterRunning;
+	// PANEL-1: the Swing text field the last panelClick landed in (so panelText/panelKey route typed input to it)
+	// and the snapshot the native shell polls to decide whether to raise the soft keyboard + pre-fill it.
+	private static volatile javax.swing.text.JTextComponent activeTextTarget;
+	private static volatile boolean panelTextActive;
+	private static volatile String panelTextValue = "";
 
 	/** Open (realize + activate) the panel at the toolbar {@code index}; starts the repaint loop. */
 	public static String openPanel(int index)
@@ -539,6 +550,8 @@ public final class MobileUiBridge
 	{
 		EventQueue.invokeLater(MobileUiBridge::closeActiveOnEdt);
 		panelPixels = null;
+		activeTextTarget = null;   // dismiss the panel keyboard (PANEL-1)
+		panelTextActive = false;
 		panelSeq.incrementAndGet();
 		return "{\"ok\":true}";
 	}
@@ -565,6 +578,12 @@ public final class MobileUiBridge
 		activePanel = null;
 		activeWrapped = null;
 		activeWindow = null;
+		// Drop the text-input target with the panel — a panel SWITCH (openPanel queues this before realizing the
+		// new panel) must not leave a stale field focused, or the next tap's keyboard pre-fills the OLD panel's
+		// text and panelText/panelKey route into a disposed component (PANEL-1).
+		activeTextTarget = null;
+		panelTextActive = false;
+		panelTextValue = "";
 	}
 
 	// Lay out the active panel at full content height and paint it to a fresh ARGB buffer (EDT only).
@@ -689,7 +708,200 @@ public final class MobileUiBridge
 			target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_PRESSED, when, mods, p.x, p.y, 1, false, MouseEvent.BUTTON1));
 			target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_RELEASED, when + 1, 0, p.x, p.y, 1, false, MouseEvent.BUTTON1));
 			target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_CLICKED, when + 2, 0, p.x, p.y, 1, false, MouseEvent.BUTTON1));
+			// PANEL-1: if the tap landed in a text field, focus it and snapshot its text so the native shell raises
+			// the soft keyboard and pre-fills it; otherwise clear the target so the keyboard dismisses.
+			final javax.swing.text.JTextComponent tc = textComponentFor(target);
+			if (tc != null && tc.isEnabled() && tc.isEditable())
+			{
+				tc.requestFocusInWindow();
+				activeTextTarget = tc;
+				panelTextActive = true;
+				panelTextValue = tc.getText() == null ? "" : tc.getText();
+			}
+			else
+			{
+				activeTextTarget = null;
+				panelTextActive = false;
+			}
 			renderActiveOnEdt(); // reflect any state change immediately
+		});
+		return "{\"ok\":true}";
+	}
+
+	/** Walk up from {@code c} to the nearest {@link javax.swing.text.JTextComponent} (the tap may hit a child). */
+	private static javax.swing.text.JTextComponent textComponentFor(Component c)
+	{
+		while (c != null)
+		{
+			if (c instanceof javax.swing.text.JTextComponent)
+			{
+				return (javax.swing.text.JTextComponent) c;
+			}
+			c = c.getParent();
+		}
+		return null;
+	}
+
+	/** True if the last {@link #panelClick} focused an editable panel text field — native raises the keyboard. */
+	public static boolean isPanelTextActive()
+	{
+		return panelTextActive;
+	}
+
+	/** The focused panel text field's current text (native pre-fills its hidden field). */
+	public static String getPanelText()
+	{
+		return panelTextValue;
+	}
+
+	/**
+	 * Set the focused panel text field's whole text (PANEL-1) — the native side mirrors its hidden UITextField on
+	 * each change, so a {@code setText} fires the field's DocumentListeners (live-filter search boxes: GE, plugin
+	 * search, Hiscore, Skill-Calc, Notes). No-op if no field is focused.
+	 */
+	public static String panelText(String text)
+	{
+		final javax.swing.text.JTextComponent tc = activeTextTarget;
+		if (!ENABLED || tc == null)
+		{
+			return "{\"ok\":false}";
+		}
+		EventQueue.invokeLater(() ->
+		{
+			try
+			{
+				tc.setText(text == null ? "" : text);
+				panelTextValue = tc.getText() == null ? "" : tc.getText();
+			}
+			catch (Throwable ignore)
+			{
+			}
+			renderActiveOnEdt();
+		});
+		return "{\"ok\":true}";
+	}
+
+	/**
+	 * Dispatch a single key (e.g. {@code VK_ENTER} to submit, {@code VK_BACK_SPACE}) to the focused panel text
+	 * field (PANEL-1). Used for keys a whole-text mirror can't express, like Enter on a search box.
+	 */
+	public static String panelKey(int vk)
+	{
+		final javax.swing.text.JTextComponent tc = activeTextTarget;
+		if (!ENABLED || tc == null)
+		{
+			return "{\"ok\":false}";
+		}
+		EventQueue.invokeLater(() ->
+		{
+			try
+			{
+				final long when = panelSeq.get();
+				tc.dispatchEvent(new KeyEvent(tc, KeyEvent.KEY_PRESSED, when, 0, vk, KeyEvent.CHAR_UNDEFINED));
+				tc.dispatchEvent(new KeyEvent(tc, KeyEvent.KEY_RELEASED, when + 1, 0, vk, KeyEvent.CHAR_UNDEFINED));
+			}
+			catch (Throwable ignore)
+			{
+			}
+			renderActiveOnEdt();
+		});
+		return "{\"ok\":true}";
+	}
+
+	/**
+	 * A right-click (BUTTON3) at panel-space ({@code x},{@code y}) into the active panel (PANEL-2 / §3.4) — drives
+	 * context handlers (e.g. Loot Tracker reset). NOTE: a handler that opens a heavyweight {@code JPopupMenu}
+	 * won't render into the panel buffer (the same limitation as combo dropdowns); direct-action handlers work.
+	 */
+	public static String panelLongPress(int x, int y)
+	{
+		return panelButton(x, y, MouseEvent.BUTTON3);
+	}
+
+	private static String panelButton(int x, int y, int button)
+	{
+		if (!ENABLED || activeWrapped == null)
+		{
+			return "{\"ok\":false}";
+		}
+		EventQueue.invokeLater(() ->
+		{
+			final JPanel wrapped = activeWrapped;
+			if (wrapped == null)
+			{
+				return;
+			}
+			final int s = Math.max(1, activeRenderScale);
+			final Component target = SwingUtilities.getDeepestComponentAt(wrapped, x / s, y / s);
+			if (target == null)
+			{
+				return;
+			}
+			final Point p = SwingUtilities.convertPoint(wrapped, x / s, y / s, target);
+			final long when = panelSeq.get();
+			final int mask = button == MouseEvent.BUTTON3 ? MouseEvent.BUTTON3_DOWN_MASK : MouseEvent.BUTTON1_DOWN_MASK;
+			target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_PRESSED, when, mask, p.x, p.y, 1, true, button));
+			target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_RELEASED, when + 1, 0, p.x, p.y, 1, true, button));
+			target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_CLICKED, when + 2, 0, p.x, p.y, 1, false, button));
+			renderActiveOnEdt();
+		});
+		return "{\"ok\":true}";
+	}
+
+	/** Inner-scroll a panel's Swing component at ({@code x},{@code y}) by {@code rotation} wheel notches (§3.4). */
+	public static String panelWheel(int x, int y, int rotation)
+	{
+		if (!ENABLED || activeWrapped == null)
+		{
+			return "{\"ok\":false}";
+		}
+		EventQueue.invokeLater(() ->
+		{
+			final JPanel wrapped = activeWrapped;
+			if (wrapped == null)
+			{
+				return;
+			}
+			final int s = Math.max(1, activeRenderScale);
+			final Component target = SwingUtilities.getDeepestComponentAt(wrapped, x / s, y / s);
+			if (target == null)
+			{
+				return;
+			}
+			final Point p = SwingUtilities.convertPoint(wrapped, x / s, y / s, target);
+			final long when = panelSeq.get();
+			target.dispatchEvent(new java.awt.event.MouseWheelEvent(target, java.awt.event.MouseWheelEvent.MOUSE_WHEEL,
+				when, 0, p.x, p.y, 0, false, java.awt.event.MouseWheelEvent.WHEEL_UNIT_SCROLL, 3, rotation));
+			renderActiveOnEdt();
+		});
+		return "{\"ok\":true}";
+	}
+
+	/** Park a hover (MOUSE_MOVED) at panel-space ({@code x},{@code y}) so Swing tooltips/highlights fire (PANEL-2). */
+	public static String panelMove(int x, int y)
+	{
+		if (!ENABLED || activeWrapped == null)
+		{
+			return "{\"ok\":false}";
+		}
+		EventQueue.invokeLater(() ->
+		{
+			final JPanel wrapped = activeWrapped;
+			if (wrapped == null)
+			{
+				return;
+			}
+			final int s = Math.max(1, activeRenderScale);
+			final Component target = SwingUtilities.getDeepestComponentAt(wrapped, x / s, y / s);
+			if (target == null)
+			{
+				return;
+			}
+			final Point p = SwingUtilities.convertPoint(wrapped, x / s, y / s, target);
+			final long when = panelSeq.get();
+			target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_ENTERED, when, 0, p.x, p.y, 0, false));
+			target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_MOVED, when + 1, 0, p.x, p.y, 0, false));
+			renderActiveOnEdt();
 		});
 		return "{\"ok\":true}";
 	}

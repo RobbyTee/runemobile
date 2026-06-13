@@ -17,6 +17,14 @@ NS_ASSUME_NONNULL_BEGIN
 /// panel opening inline over the live (still-usable) game. The host adds this as a child view controller and
 /// pins its (passthrough) view over the game. Takes precedence over `drawerMode`.
 @property (nonatomic, assign) BOOL docked;
+
+/// §3.3 redesign: present the labelled, searchable, favourites GRID launcher (a bottom sheet of named plugin
+/// tiles) as a more discoverable entry than the 38pt icon rail. A tile opens the same panel the rail would.
+- (void)presentGridLauncher;
+
+/// YES while the panel's own soft keyboard (a focused Swing text box) is up — the host gates its game-keyboard
+/// auto-poll on this so a game textInputOpen flip doesn't yank the keyboard out from under panel typing (PANEL-1).
+- (BOOL)panelKeyboardActive;
 @end
 
 NS_ASSUME_NONNULL_END

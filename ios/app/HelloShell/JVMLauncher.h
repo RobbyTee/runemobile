@@ -260,6 +260,18 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Fully-seeded default Notification JSON (MobileUiBridge.notificationDefaults) — base for the notification sub-editor.
 + (nullable NSString *)mobileNotificationDefaults;
 
+/// Panel input P0 (PANEL-1/2). After a mobilePanelClick, poll mobilePanelTextActive to decide whether to raise the
+/// soft keyboard; mobilePanelText returns the focused field's current text (pre-fill); mobileSetPanelText mirrors the
+/// hidden field on each change; mobilePanelKey dispatches Enter/Backspace; long-press = BUTTON3; wheel = inner scroll;
+/// move = a parked hover so Swing tooltips fire.
++ (BOOL)mobilePanelTextActive;
++ (nullable NSString *)mobilePanelText;
++ (nullable NSString *)mobileSetPanelText:(NSString *)text;
++ (nullable NSString *)mobilePanelKey:(int)vk;
++ (nullable NSString *)mobilePanelLongPressX:(int)x y:(int)y;
++ (nullable NSString *)mobilePanelWheelX:(int)x y:(int)y rotation:(int)rotation;
++ (nullable NSString *)mobilePanelMoveX:(int)x y:(int)y;
+
 /// Latest event sequence (MobileUiBridge.getMobileUiSeq) — the panel stores this and polls for a bump to
 /// know when to re-read (config/plugin changed, including changes it didn't make).
 + (long long)mobileUiSeq;

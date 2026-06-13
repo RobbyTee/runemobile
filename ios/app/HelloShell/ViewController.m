@@ -239,6 +239,7 @@
 // falls through to the game) listing the plugins (MobileUiBridge.listPlugins) with an enable/disable switch
 // and a running/stopped indicator. Refreshed when the bridge's event sequence advances (toggles, conflicts).
 @property (nonatomic, strong) UIButton *pluginButton;
+@property (nonatomic, strong) UIButton *gridButton;   // §3.3: opens the labelled plugin-panel grid launcher
 @property (nonatomic, strong) UIView *pluginPanel;
 @property (nonatomic, strong) UITableView *pluginTable;
 @property (nonatomic, strong) NSArray<NSDictionary *> *pluginList;  // the FILTERED view the table renders
@@ -834,6 +835,19 @@ static const CGFloat kMenuWidth       = 210.0;
                 forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.pluginButton];
 
+    // §3.3 redesign: a ⊞ "Plugins" FAB that opens the labelled/searchable/favourites grid launcher (a more
+    // discoverable entry to the side-panels than the 38pt icon rail). Sits at the top of the corner stack (above ≡).
+    self.gridButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.gridButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.gridButton setTitle:@"⊞" forState:UIControlStateNormal];
+    self.gridButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
+    self.gridButton.tintColor = [UIColor whiteColor];
+    self.gridButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
+    self.gridButton.layer.cornerRadius = 8;
+    [self.gridButton addTarget:self action:@selector(onOpenGridLauncher)
+              forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.gridButton];
+
     UILayoutGuide *g = self.view.safeAreaLayoutGuide;
     UILayoutGuide *sg = self.screen.safeAreaLayoutGuide;
     UILayoutGuide *p = self.debugPanel.layoutMarginsGuide;
@@ -890,6 +904,12 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.debugToggle.leadingAnchor constraintEqualToAnchor:self.keyboardButton.leadingAnchor],
         [self.debugToggle.widthAnchor constraintEqualToConstant:44],
         [self.debugToggle.heightAnchor constraintEqualToConstant:36],
+
+        // §3.3 grid launcher FAB — top of the corner stack, above ≡.
+        [self.gridButton.bottomAnchor constraintEqualToAnchor:self.debugToggle.topAnchor constant:-8],
+        [self.gridButton.leadingAnchor constraintEqualToAnchor:self.keyboardButton.leadingAnchor],
+        [self.gridButton.widthAnchor constraintEqualToConstant:44],
+        [self.gridButton.heightAnchor constraintEqualToConstant:36],
 
         // Debug panel — left ~62% of the safe area, full height, below the toggle row.
         [self.debugPanel.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
@@ -1164,6 +1184,11 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.pluginTable.trailingAnchor constraintEqualToAnchor:card.trailingAnchor],
         [self.pluginTable.bottomAnchor constraintEqualToAnchor:card.bottomAnchor],
     ]];
+}
+
+// §3.3: open the labelled grid launcher for the plugin side-panels (the persistent dock holds the live list).
+- (void)onOpenGridLauncher {
+    [self.panelDock presentGridLauncher];
 }
 
 - (void)onOpenPluginPanel {
@@ -2806,8 +2831,9 @@ static CGRect mapRectFromArr(NSArray *a) {
 
     // Contextual keyboard: when the gamepack opens a text field (search / PM / enter-amount), raise the
     // soft keyboard automatically; dismiss it when the field closes. Edge-triggered (only on a change) so
-    // it never fights a keyboard the user opened manually for chat. Polled ~10 Hz to keep it cheap.
-    if (self.framesShown % 6 == 0) {
+    // it never fights a keyboard the user opened manually for chat. Polled ~10 Hz to keep it cheap. Gated off
+    // while a plugin-panel text field owns the keyboard, so a game textInputOpen flip can't steal it (PANEL-1).
+    if (self.framesShown % 6 == 0 && ![self.panelDock panelKeyboardActive]) {
         BOOL wants = [JVMLauncher textInputOpen];
         if (wants != self.prevInputOpen) {
             self.prevInputOpen = wants;

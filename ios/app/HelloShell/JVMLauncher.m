@@ -83,6 +83,14 @@ static jmethodID gMuiSetPinned = NULL;    // setPinned(Ljava/lang/String;Z)Ljava
 static jmethodID gMuiHubState = NULL;     // hubState()Ljava/lang/String; (optional)
 static jmethodID gMuiResetPlugin = NULL;  // resetPluginConfig(Ljava/lang/String;)Ljava/lang/String; (optional)
 static jmethodID gMuiNotifDefaults = NULL; // notificationDefaults()Ljava/lang/String; (optional)
+// Panel-input P0 (PANEL-1/2) — all optional so an older staged jar still boots.
+static jmethodID gMuiPanelText = NULL;      // panelText(Ljava/lang/String;)Ljava/lang/String;
+static jmethodID gMuiPanelKey = NULL;       // panelKey(I)Ljava/lang/String;
+static jmethodID gMuiPanelLongPress = NULL; // panelLongPress(II)Ljava/lang/String;
+static jmethodID gMuiPanelWheel = NULL;     // panelWheel(III)Ljava/lang/String;
+static jmethodID gMuiPanelMove = NULL;      // panelMove(II)Ljava/lang/String;
+static jmethodID gMuiPanelTextActive = NULL;// isPanelTextActive()Z
+static jmethodID gMuiPanelTextGet = NULL;   // getPanelText()Ljava/lang/String;
 
 // Native Quest Helper reflow — the QuestHelperBridge facade (reflection into the external plugin).
 static jclass    gQhClass = NULL;       // global ref to net.runelite.client.headless.QuestHelperBridge
@@ -379,6 +387,20 @@ static BOOL ensureMui(void) {
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiResetPlugin = NULL; }
     gMuiNotifDefaults = (*env)->GetStaticMethodID(env, global, "notificationDefaults", "()Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiNotifDefaults = NULL; }
+    gMuiPanelText = (*env)->GetStaticMethodID(env, global, "panelText", "(Ljava/lang/String;)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiPanelText = NULL; }
+    gMuiPanelKey = (*env)->GetStaticMethodID(env, global, "panelKey", "(I)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiPanelKey = NULL; }
+    gMuiPanelLongPress = (*env)->GetStaticMethodID(env, global, "panelLongPress", "(II)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiPanelLongPress = NULL; }
+    gMuiPanelWheel = (*env)->GetStaticMethodID(env, global, "panelWheel", "(III)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiPanelWheel = NULL; }
+    gMuiPanelMove = (*env)->GetStaticMethodID(env, global, "panelMove", "(II)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiPanelMove = NULL; }
+    gMuiPanelTextActive = (*env)->GetStaticMethodID(env, global, "isPanelTextActive", "()Z");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiPanelTextActive = NULL; }
+    gMuiPanelTextGet = (*env)->GetStaticMethodID(env, global, "getPanelText", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiPanelTextGet = NULL; }
     gMuiClass = global;   // publish only once fully resolved
     return YES;
 }
@@ -1525,6 +1547,55 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMui() || !gMuiNotifDefaults) return nil;
     JNIEnv *env = gMainEnv;
     return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiNotifDefaults));
+}
+
+// ---- Panel input P0 (PANEL-1/2): typing, key, right-click, wheel, hover into the active rendered panel -------
+
++ (BOOL)mobilePanelTextActive {
+    if (!ensureMui() || !gMuiPanelTextActive) return NO;
+    JNIEnv *env = gMainEnv;
+    jboolean v = (*env)->CallStaticBooleanMethod(env, gMuiClass, gMuiPanelTextActive);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    return v == JNI_TRUE;
+}
+
++ (NSString *)mobilePanelText {
+    if (!ensureMui() || !gMuiPanelTextGet) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiPanelTextGet));
+}
+
++ (NSString *)mobileSetPanelText:(NSString *)text {
+    if (!ensureMui() || !gMuiPanelText || text == nil) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring jt = (*env)->NewStringUTF(env, text.UTF8String);
+    NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiPanelText, jt));
+    (*env)->DeleteLocalRef(env, jt);
+    return out;
+}
+
++ (NSString *)mobilePanelKey:(int)vk {
+    if (!ensureMui() || !gMuiPanelKey) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiPanelKey, (jint)vk));
+}
+
++ (NSString *)mobilePanelLongPressX:(int)x y:(int)y {
+    if (!ensureMui() || !gMuiPanelLongPress) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiPanelLongPress, (jint)x, (jint)y));
+}
+
++ (NSString *)mobilePanelWheelX:(int)x y:(int)y rotation:(int)rotation {
+    if (!ensureMui() || !gMuiPanelWheel) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiPanelWheel, (jint)x, (jint)y, (jint)rotation));
+}
+
++ (NSString *)mobilePanelMoveX:(int)x y:(int)y {
+    if (!ensureMui() || !gMuiPanelMove) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiPanelMove, (jint)x, (jint)y));
 }
 
 + (long long)mobileUiSeq {

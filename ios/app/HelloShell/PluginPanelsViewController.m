@@ -32,7 +32,13 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 @interface WorldSwitcherViewController : UIViewController
 @end
 
-@interface PluginPanelsViewController () <UIScrollViewDelegate>
+// §3.3 redesign: the labelled/searchable/favourites grid launcher. Defined at the bottom of this file.
+@interface MUIPluginGrid : UIViewController
+- (instancetype)initWithPanels:(NSArray<NSDictionary *> *)panels onPick:(void (^)(NSString *tooltip))onPick;
+@end
+
+@interface PluginPanelsViewController () <UIScrollViewDelegate, UITextFieldDelegate>
+@property (nonatomic, strong) UITextField *panelKbField;   // PANEL-1: hidden field mirroring a focused Swing text box
 @property (nonatomic, assign) CGSize lastPanelImgSize;     // re-layout only on size change (preserve zoom)
 @property (nonatomic, strong) UIScrollView *toolbar;       // legacy: horizontal text-pill strip
 @property (nonatomic, strong) UIScrollView *rail;          // vertical plugin-icon rail (right edge)
@@ -245,6 +251,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 - (void)collapsePanel {
     self.currentIndex = -1;
     self.panelContainer.hidden = YES;
+    [self.panelKbField resignFirstResponder];   // PANEL-1: drop the soft keyboard with the panel
     [self highlightSelectors];
     [JVMLauncher mobileClosePanel];
     [JVMLauncher mobileFlushConfig];
@@ -472,6 +479,58 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     scroll.bouncesZoom = YES;
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onPanelTap:)];
     [self.panelView addGestureRecognizer:tap];
+    // PANEL-2: long-press = a right-click (BUTTON3) into the panel's Swing tree (context handlers, e.g. reset).
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self
+                                                                                     action:@selector(onPanelLongPress:)];
+    [self.panelView addGestureRecognizer:lp];
+
+    // PANEL-1: a hidden text field. When a panel tap focuses a Swing text box, it becomes first responder (raising
+    // the soft keyboard) and mirrors its text into the Swing field on every change.
+    if (!self.panelKbField) {
+        self.panelKbField = [[UITextField alloc] initWithFrame:CGRectMake(-300, -300, 10, 10)];
+        self.panelKbField.delegate = self;
+        self.panelKbField.autocorrectionType = UITextAutocorrectionTypeNo;
+        self.panelKbField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        self.panelKbField.spellCheckingType = UITextSpellCheckingTypeNo;
+        self.panelKbField.smartQuotesType = UITextSmartQuotesTypeNo;
+        self.panelKbField.smartDashesType = UITextSmartDashesTypeNo;
+        self.panelKbField.smartInsertDeleteType = UITextSmartInsertDeleteTypeNo;
+        self.panelKbField.keyboardType = UIKeyboardTypeASCIICapable;
+        self.panelKbField.keyboardAppearance = UIKeyboardAppearanceDark;
+        self.panelKbField.returnKeyType = UIReturnKeyDone;
+        [self.panelKbField addTarget:self action:@selector(onPanelKbChanged)
+                    forControlEvents:UIControlEventEditingChanged];
+        [self.view addSubview:self.panelKbField];
+    }
+}
+
+// Buffer-pixel coords for a gesture on panelView (shared by tap + long-press).
+- (CGPoint)panelBufferPointFor:(UIGestureRecognizer *)g {
+    CGPoint loc = [g locationInView:self.panelView];
+    CGFloat s = self.panelNativeW / self.panelView.bounds.size.width;
+    return CGPointMake(lround(loc.x * s), lround(loc.y * s));
+}
+
+- (void)onPanelLongPress:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    if (self.currentIndex < 0 || self.panelView.bounds.size.width < 1) return;
+    CGPoint p = [self panelBufferPointFor:g];
+    [JVMLauncher mobilePanelLongPressX:(int)p.x y:(int)p.y];
+}
+
+- (BOOL)panelKeyboardActive {
+    return self.panelKbField.isFirstResponder;
+}
+
+// The hidden field changed: mirror its whole text into the focused Swing field (live-filter search boxes react).
+- (void)onPanelKbChanged {
+    [JVMLauncher mobileSetPanelText:(self.panelKbField.text ?: @"")];
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [JVMLauncher mobilePanelKey:10];   // VK_ENTER — submit (search fields that act on Enter)
+    [textField resignFirstResponder];
+    return NO;
 }
 
 - (UIView *)viewForZoomingInScrollView:(UIScrollView *)scrollView {
@@ -485,32 +544,68 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 }
 
 - (void)onSelectorButton:(UIButton *)b {
+    [self openPanelAtIndex:b.tag fromGrid:NO];
+}
+
+// §3.3: the FAB-launched grid. Reuses the live panel list (label + icon + pinned) and routes a tile back through
+// the same openPanelAtIndex fork (native Quest Helper / World Switcher, else the rendered panel).
+- (void)presentGridLauncher {
+    if (self.presentedViewController) return;
+    __weak typeof(self) ws = self;
+    MUIPluginGrid *grid = [[MUIPluginGrid alloc] initWithPanels:(self.panels ?: @[]) onPick:^(NSString *tooltip) {
+        NSInteger idx = [ws indexForPanelTooltip:tooltip];
+        if (idx >= 0) [ws openPanelAtIndex:idx fromGrid:YES];
+    }];
+    if (@available(iOS 15.0, *)) {
+        grid.modalPresentationStyle = UIModalPresentationPageSheet;
+        UISheetPresentationController *sheet = grid.sheetPresentationController;
+        sheet.detents = @[UISheetPresentationControllerDetent.mediumDetent,
+                          UISheetPresentationControllerDetent.largeDetent];
+        sheet.prefersGrabberVisible = YES;
+    } else {
+        grid.modalPresentationStyle = UIModalPresentationFormSheet;
+    }
+    [self presentViewController:grid animated:YES completion:nil];
+}
+
+// Open the panel at `index`: route Quest Helper / World Switcher to their native reflowed screens (when the
+// reflection bridge can reach the plugin), else open the generic rendered surface. Shared by the rail buttons
+// and the grid launcher (§3.3). `fromGrid` skips the tap-active-icon-to-close shortcut (the grid always opens).
+- (void)openPanelAtIndex:(NSInteger)index fromGrid:(BOOL)fromGrid {
+    if (index < 0 || index >= (NSInteger)self.panels.count) return;
+    NSString *tip = [self.panels[index][@"tooltip"] description];
+    // The native reflowed Quest Helper / World Switcher screens are docked-mode only (the grid only runs docked).
+    // The drawer/legacy A-B fallback modes keep showing the rendered panel, matching the prior onSelectorButton.
     if (self.docked) {
-        // Quest Helper gets a genuinely native, reflowed screen instead of the rendered image — when the
-        // reflection bridge can reach the (external) plugin. Otherwise fall through to the generic surface.
-        if (b.tag >= 0 && b.tag < (NSInteger)self.panels.count) {
-            NSString *tip = [self.panels[b.tag][@"tooltip"] description];
-            if ([tip isEqualToString:@"Quest Helper"] && [JVMLauncher questAvailable]) {
-                QuestHelperViewController *qh = [[QuestHelperViewController alloc] init];
-                qh.modalPresentationStyle = UIModalPresentationOverFullScreen;
-                qh.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
-                [self presentViewController:qh animated:YES completion:nil];
-                return;
-            }
-            if ([tip isEqualToString:@"World Switcher"] && [JVMLauncher worldAvailable]) {
-                WorldSwitcherViewController *ws = [[WorldSwitcherViewController alloc] init];
-                ws.modalPresentationStyle = UIModalPresentationOverFullScreen;
-                ws.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
-                [self presentViewController:ws animated:YES completion:nil];
-                return;
-            }
+        if ([tip isEqualToString:@"Quest Helper"] && [JVMLauncher questAvailable]) {
+            QuestHelperViewController *qh = [[QuestHelperViewController alloc] init];
+            qh.modalPresentationStyle = UIModalPresentationOverFullScreen;
+            qh.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+            [self presentViewController:qh animated:YES completion:nil];
+            return;
         }
-        if (b.tag == self.currentIndex) {
-            [self collapsePanel];              // tapping the active icon closes the panel
+        if ([tip isEqualToString:@"World Switcher"] && [JVMLauncher worldAvailable]) {
+            WorldSwitcherViewController *ws = [[WorldSwitcherViewController alloc] init];
+            ws.modalPresentationStyle = UIModalPresentationOverFullScreen;
+            ws.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+            [self presentViewController:ws animated:YES completion:nil];
+            return;
+        }
+        if (!fromGrid && index == self.currentIndex) {
+            [self collapsePanel];          // tapping the active rail icon closes the panel
             return;
         }
     }
-    [self selectIndex:b.tag];
+    [self selectIndex:index];
+}
+
+// Live array position of the panel with this tooltip, or -1. The grid snapshots the panel list, so it resolves
+// its pick by stable name (the dock's tick may have rebuilt self.panels between present and pick).
+- (NSInteger)indexForPanelTooltip:(NSString *)tooltip {
+    for (NSUInteger i = 0; i < self.panels.count; i++) {
+        if ([[self.panels[i][@"tooltip"] description] isEqualToString:tooltip]) return (NSInteger)i;
+    }
+    return -1;
 }
 
 - (void)selectIndex:(NSInteger)index {
@@ -579,16 +674,36 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 
 - (void)onPanelTap:(UITapGestureRecognizer *)tap {
     if (self.currentIndex < 0 || self.panelView.bounds.size.width < 1) return;
-    CGPoint loc = [tap locationInView:self.panelView];
-    CGFloat s = self.panelNativeW / self.panelView.bounds.size.width;
-    int px = (int)lround(loc.x * s);
-    int py = (int)lround(loc.y * s);
-    [JVMLauncher mobilePanelClickX:px y:py];
+    CGPoint p = [self panelBufferPointFor:tap];
+    [JVMLauncher mobilePanelClickX:(int)p.x y:(int)p.y];
+    // PANEL-1: the click dispatch is async on the Swing EDT (which is also supersampling the panel every ~500ms),
+    // so poll a few times before deciding — a single fixed delay can race the busy EDT and miss the focus.
+    [self pollPanelKeyboard:0 forIndex:self.currentIndex];
+}
+
+// Up to 5 polls (~80ms apart) of whether the last panel tap focused a text field: raise+prefill the keyboard on
+// the first true; if all are false, resign once. Bails if the panel was switched/closed mid-poll.
+- (void)pollPanelKeyboard:(int)attempt forIndex:(NSInteger)index {
+    if (self.currentIndex != index || self.currentIndex < 0) return;   // panel switched/closed → abandon
+    if ([JVMLauncher mobilePanelTextActive]) {
+        self.panelKbField.text = [JVMLauncher mobilePanelText] ?: @"";
+        if (![self.panelKbField isFirstResponder]) [self.panelKbField becomeFirstResponder];
+        return;
+    }
+    if (attempt >= 4) {
+        if ([self.panelKbField isFirstResponder]) [self.panelKbField resignFirstResponder];
+        return;
+    }
+    __weak typeof(self) ws = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [ws pollPanelKeyboard:attempt + 1 forIndex:index];
+    });
 }
 
 - (void)onDone {
     [self.refresh invalidate];
     self.refresh = nil;
+    [self.panelKbField resignFirstResponder];
     [JVMLauncher mobileClosePanel];
     [JVMLauncher mobileFlushConfig];
     [self dismissViewControllerAnimated:YES completion:nil];
@@ -1108,5 +1223,222 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 
 - (void)searchBar:(UISearchBar *)sb textDidChange:(NSString *)text { [self applyFilter]; }
 - (void)searchBarSearchButtonClicked:(UISearchBar *)sb { [sb resignFirstResponder]; }
+
+@end
+
+#pragma mark - Grid launcher tile + VC (§3.3 redesign)
+
+// One labelled plugin tile: the plugin icon over its name, with a small ★ when pinned (a favourite).
+@interface MUIGridTile : UICollectionViewCell
+@property (nonatomic, strong) UIImageView *icon;
+@property (nonatomic, strong) UILabel *name;
+@property (nonatomic, strong) UILabel *star;
+@end
+
+@implementation MUIGridTile
+- (instancetype)initWithFrame:(CGRect)frame {
+    if ((self = [super initWithFrame:frame])) {
+        self.contentView.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.06];
+        self.contentView.layer.cornerRadius = 10;
+        self.contentView.clipsToBounds = YES;
+
+        _icon = [[UIImageView alloc] init];
+        _icon.translatesAutoresizingMaskIntoConstraints = NO;
+        _icon.contentMode = UIViewContentModeScaleAspectFit;
+        [self.contentView addSubview:_icon];
+
+        _name = [[UILabel alloc] init];
+        _name.translatesAutoresizingMaskIntoConstraints = NO;
+        _name.font = [UIFont systemFontOfSize:11];
+        _name.textColor = [UIColor whiteColor];
+        _name.textAlignment = NSTextAlignmentCenter;
+        _name.numberOfLines = 2;
+        [self.contentView addSubview:_name];
+
+        _star = [[UILabel alloc] init];
+        _star.translatesAutoresizingMaskIntoConstraints = NO;
+        _star.text = @"★";
+        _star.font = [UIFont systemFontOfSize:12];
+        _star.textColor = [UIColor colorWithRed:0.95 green:0.78 blue:0.30 alpha:1.0];
+        _star.hidden = YES;
+        [self.contentView addSubview:_star];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [_icon.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:10],
+            [_icon.centerXAnchor constraintEqualToAnchor:self.contentView.centerXAnchor],
+            [_icon.widthAnchor constraintEqualToConstant:30],
+            [_icon.heightAnchor constraintEqualToConstant:30],
+            [_name.topAnchor constraintEqualToAnchor:_icon.bottomAnchor constant:6],
+            [_name.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:4],
+            [_name.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-4],
+            [_star.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:5],
+            [_star.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-6],
+        ]];
+    }
+    return self;
+}
+@end
+
+@interface MUIPluginGrid () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, UISearchBarDelegate>
+@end
+
+@implementation MUIPluginGrid {
+    NSArray<NSDictionary *> *_all;       // every panel ({index,tooltip,name,iconPng,pinned})
+    NSMutableArray<NSDictionary *> *_shown; // filtered + favourites-first
+    NSString *_filter;
+    void (^_onPick)(NSString *);
+    UICollectionView *_grid;
+    UISearchBar *_search;
+}
+
+- (instancetype)initWithPanels:(NSArray<NSDictionary *> *)panels onPick:(void (^)(NSString *))onPick {
+    if ((self = [super init])) {
+        _all = [panels copy] ?: @[];
+        _onPick = [onPick copy];
+        _filter = @"";
+        _shown = [NSMutableArray array];
+    }
+    return self;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor colorWithRed:0.10 green:0.09 blue:0.07 alpha:1.0];
+
+    UILabel *title = [[UILabel alloc] init];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.text = @"Plugins";
+    title.font = [UIFont boldSystemFontOfSize:18];
+    title.textColor = [UIColor whiteColor];
+    [self.view addSubview:title];
+
+    _search = [[UISearchBar alloc] init];
+    _search.translatesAutoresizingMaskIntoConstraints = NO;
+    _search.delegate = self;
+    _search.placeholder = @"Search plugins";
+    _search.searchBarStyle = UISearchBarStyleMinimal;
+    _search.barStyle = UIBarStyleBlack;
+    _search.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
+    [self.view addSubview:_search];
+
+    UICollectionViewFlowLayout *layout = [[UICollectionViewFlowLayout alloc] init];
+    layout.minimumInteritemSpacing = 10;
+    layout.minimumLineSpacing = 14;
+    layout.sectionInset = UIEdgeInsetsMake(6, 16, 24, 16);
+    _grid = [[UICollectionView alloc] initWithFrame:CGRectZero collectionViewLayout:layout];
+    _grid.backgroundColor = [UIColor clearColor];
+    _grid.dataSource = self;
+    _grid.delegate = self;
+    _grid.alwaysBounceVertical = YES;
+    _grid.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
+    [_grid registerClass:[MUIGridTile class] forCellWithReuseIdentifier:@"tile"];
+    [self.view addSubview:_grid];
+
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self
+                                                                                     action:@selector(onTileLongPress:)];
+    [_grid addGestureRecognizer:lp];
+
+    UILayoutGuide *sg = self.view.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [title.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:16],
+        [title.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:20],
+        [_search.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:6],
+        [_search.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:8],
+        [_search.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-8],
+        [_grid.topAnchor constraintEqualToAnchor:_search.bottomAnchor constant:2],
+        [_grid.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [_grid.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [_grid.bottomAnchor constraintEqualToAnchor:sg.bottomAnchor],
+    ]];
+    [self applyFilter];
+}
+
+- (void)applyFilter {
+    NSArray *base = _all;
+    if (_filter.length) {
+        NSMutableArray *f = [NSMutableArray array];
+        for (NSDictionary *p in _all) {
+            NSString *n = [[p[@"tooltip"] description] lowercaseString] ?: @"";
+            if ([n containsString:_filter]) [f addObject:p];
+        }
+        base = f;
+    }
+    [_shown setArray:[base sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        BOOL pa = [a[@"pinned"] boolValue], pb = [b[@"pinned"] boolValue];
+        if (pa != pb) return pa ? NSOrderedAscending : NSOrderedDescending;   // favourites float to the top
+        return [[a[@"tooltip"] description] caseInsensitiveCompare:([b[@"tooltip"] description] ?: @"")];
+    }]];
+    [_grid reloadData];
+}
+
+- (nullable UIImage *)decodeIcon:(id)base64 {
+    if (![base64 isKindOfClass:[NSString class]] || [(NSString *)base64 length] == 0) return nil;
+    NSData *d = [[NSData alloc] initWithBase64EncodedString:base64 options:0];
+    return d ? [UIImage imageWithData:d] : nil;
+}
+
+#pragma mark search
+
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText {
+    _filter = [searchText lowercaseString];
+    [self applyFilter];
+}
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar { [searchBar resignFirstResponder]; }
+
+#pragma mark grid
+
+- (NSInteger)collectionView:(UICollectionView *)cv numberOfItemsInSection:(NSInteger)section {
+    return (NSInteger)_shown.count;
+}
+
+- (UICollectionViewCell *)collectionView:(UICollectionView *)cv cellForItemAtIndexPath:(NSIndexPath *)ip {
+    MUIGridTile *cell = [cv dequeueReusableCellWithReuseIdentifier:@"tile" forIndexPath:ip];
+    NSDictionary *p = _shown[(NSUInteger)ip.item];
+    cell.name.text = [p[@"tooltip"] description];
+    UIImage *icon = [self decodeIcon:p[@"iconPng"]];
+    cell.icon.image = icon;
+    cell.icon.hidden = (icon == nil);
+    cell.star.hidden = ![p[@"pinned"] boolValue];
+    return cell;
+}
+
+- (CGSize)collectionView:(UICollectionView *)cv layout:(UICollectionViewLayout *)layout
+  sizeForItemAtIndexPath:(NSIndexPath *)ip {
+    CGFloat avail = cv.bounds.size.width - 32;   // section insets
+    NSInteger cols = MAX(2, (NSInteger)floor(avail / 110.0));   // ~100pt tiles, more columns in landscape
+    CGFloat w = floor((avail - (cols - 1) * 10.0) / cols);
+    return CGSizeMake(w, 84);
+}
+
+- (void)collectionView:(UICollectionView *)cv didSelectItemAtIndexPath:(NSIndexPath *)ip {
+    NSDictionary *p = _shown[(NSUInteger)ip.item];
+    NSString *tooltip = [p[@"tooltip"] description] ?: @"";
+    void (^pick)(NSString *) = _onPick;
+    [self dismissViewControllerAnimated:YES completion:^{ if (pick) pick(tooltip); }];
+}
+
+// Long-press a tile = pin/unpin (favourite). Reuses the shared pinnedPlugins CSV via mobileSetPinned.
+- (void)onTileLongPress:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    NSIndexPath *ip = [_grid indexPathForItemAtPoint:[g locationInView:_grid]];
+    if (!ip || ip.item < 0 || ip.item >= (NSInteger)_shown.count) return;
+    NSDictionary *p = _shown[(NSUInteger)ip.item];
+    NSString *name = [p[@"tooltip"] description] ?: @"";
+    BOOL pinned = [p[@"pinned"] boolValue];
+    [JVMLauncher mobileSetPinned:name pinned:!pinned];
+    // Reflect immediately: flip the pinned flag in the local snapshot and re-sort (the dock reconciles on its poll).
+    NSMutableArray *updated = [NSMutableArray array];
+    for (NSDictionary *q in _all) {
+        if ([[q[@"tooltip"] description] isEqualToString:name]) {
+            NSMutableDictionary *m = [q mutableCopy];
+            m[@"pinned"] = @(!pinned);
+            [updated addObject:m];
+        } else {
+            [updated addObject:q];
+        }
+    }
+    _all = updated;
+    [self applyFilter];
+}
 
 @end
