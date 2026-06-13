@@ -47,6 +47,7 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.config.RuneLiteConfig;
 import net.runelite.client.eventbus.EventBus;
+import net.runelite.client.headless.HudVeneerBridge;
 import net.runelite.client.headless.JavaBridge;
 import net.runelite.client.headless.MobileUiBridge;
 import net.runelite.client.input.MouseManager;
@@ -111,6 +112,13 @@ public class HeadlessClientUI extends ClientUI
 			// component with PluginManager/ConfigManager/ClientThread injected; the facade itself stays a
 			// pure static JNI surface the native shell calls.
 			MobileUiBridge.init(pluginManager, configManager, clientThreadProvider.get(), rsClient, eventBus);
+		}
+		if (HudVeneerBridge.isEnabled())
+		{
+			// W3 native HUD flash fix: re-assert the engine-widget hides at a last-priority BeforeRender seam
+			// (after TabInterface rebuilds the tab stones) so they never paint for a frame. Registered here
+			// because this is where the EventBus is injected; keeps Hooks.frame() free of any fork edit.
+			eventBus.register(new HudVeneerBridge.BeforeRenderListener(rsClient));
 		}
 		if (JavaBridge.isEnabled())
 		{

@@ -278,14 +278,6 @@ public class Hooks implements Callbacks
 	public void frame()
 	{
 		eventBus.post(BEFORE_RENDER);
-		if (net.runelite.client.headless.HudVeneerBridge.isEnabled())
-		{
-			// W3 native HUD: re-assert the engine-widget HIDES (tab-stone rows, engine chat tabs/background)
-			// at this pre-render seam, so an interface rebuild this tick can't paint them for one frame
-			// before the post-render tick() re-hides them (the "chrome flash on item click" artifact).
-			// After the BEFORE_RENDER post so these hides get the last word. Gated; inert on desktop.
-			net.runelite.client.headless.HudVeneerBridge.preRender(client);
-		}
 	}
 
 	/**
@@ -388,216 +380,7 @@ public class Hooks implements Callbacks
 	@Override
 	public void draw(MainBufferProvider mainBufferProvider, Graphics graphics, int x, int y)
 	{
-		net.runelite.client.headless.HeadlessCapture.onDraw(graphics);
-		if (net.runelite.client.headless.HeadlessCapture.isEnabled())
-		{
-			net.runelite.client.headless.HeadlessCapture.observe(
-				client.getGameState(), client.getLoginIndex(), client.getLauncherDisplayName());
-		}
-		if (net.runelite.client.headless.JavaBridge.isEnabled())
-		{
-			// Keep the native shell's touch bridge pointed at the current client (the frame snapshot is
-			// taken post-composite, below).
-			net.runelite.client.headless.JavaBridge.register(client);
-			// iOS load-in flash guard: re-arm the publish hold whenever we're not in a continuously-rendered
-			// world — the login screen, world hopping, connection lost, etc. We deliberately do NOT re-arm on
-			// plain LOADING, since that also fires during seamless in-play region streaming while running (where
-			// the scene keeps rendering and there's no sky flash to hide). drawScene() clears it back to true
-			// once geometry is rendered. See JavaBridge.sceneDrawn.
-			net.runelite.api.GameState gs = client.getGameState();
-			if (gs != net.runelite.api.GameState.LOGGED_IN && gs != net.runelite.api.GameState.LOADING)
-			{
-				net.runelite.client.headless.JavaBridge.armSceneHold();
-			}
-		}
-		if (net.runelite.client.headless.MobileUiBridge.isEnabled())
-		{
-			// Snapshot UI-state the native chrome polls (chat-input bounds / soft-input) on the client thread.
-			net.runelite.client.headless.MobileUiBridge.tick(client);
-		}
-		if (net.runelite.client.headless.HeadlessLogin.isEnabled())
-		{
-			net.runelite.client.headless.HeadlessLogin.tick(
-				client, client.getGameState(), client.getLoginIndex());
-		}
-		if (net.runelite.client.headless.WelcomePlayProbe.isEnabled())
-		{
-			// GPU Route C: dismiss the post-login "Welcome to Gielinor / Click here to play" screen so the engine
-			// actually enters the world render (without this, headless parks on the welcome screen and no scene
-			// renders — in CPU or GPU mode). Gated -Drunelite.headless.welcomeplay=true.
-			net.runelite.client.headless.WelcomePlayProbe.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.HeadlessResize.isEnabled())
-		{
-			net.runelite.client.headless.HeadlessResize.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.GpuHandshakeProbe.isEnabled())
-		{
-			// GPU Route C DESKTOP reproduction: replay GpuPlugin.startUp's engine handshake (setGpuFlags(GPU|ZBUF)
-			// + a no-GL counting DrawCallbacks) with NO GL context, so a desktop CACIO run can test whether the
-			// engine dispatches the per-frame GPU scene render headless (the device black-scene blocker). Mutates
-			// client state — DESKTOP ONLY, never the device path. Runs before GpuSceneDiag so the diag sees it.
-			// Gated -Drunelite.gpuhandshake=true.
-			net.runelite.client.headless.GpuHandshakeProbe.tick(client);
-		}
-		if (net.runelite.client.headless.GpuSceneDiag.isEnabled())
-		{
-			// GPU Route C: read-only per-frame snapshot (isGpu / registered DrawCallbacks + classloader /
-			// viewport / drawScene count) to localise the black-3D-scene blocker above the GL bridge. Runs
-			// before the isGpu early-return below so it ticks in GPU mode. Gated -Drunelite.gpudiag=true.
-			net.runelite.client.headless.GpuSceneDiag.tick(client);
-		}
-		if (net.runelite.client.headless.RouteCGpuStarter.isEnabled())
-		{
-			// GPU Route C: force-enable + start the gpu plugin once in-world (canvas valid), overriding a persisted
-			// gpuplugin=false and the startUp-too-early canvas race so the plugin reliably creates its GL context
-			// instead of silently falling back to the CPU renderer. Runs before the isGpu early-return.
-			// Gated -Drunelite.routecgpu=true.
-			net.runelite.client.headless.RouteCGpuStarter.tick(client);
-		}
-		if (net.runelite.client.headless.RLHDStarter.isEnabled())
-		{
-			// W3 GPU Zone B0.5: load + start the EXTERNAL 117HD plugin (rs117.hd.HdPlugin, in the staged rlhd jar)
-			// once there's a drawing canvas, then force the canvas valid until it activates. HdPlugin conflicts=GPU
-			// so it auto-disables the base gpu plugin (do NOT also arm RouteCGpuStarter in this mode).
-			// Gated -Drunelite.routecrlhd=true.
-			net.runelite.client.headless.RLHDStarter.tick(client);
-		}
-		if (net.runelite.client.headless.MobileToplevelProbe.isEnabled())
-		{
-			// W3 mobile-layout spike: one-shot, on the client thread, gated by -Drunelite.mobileui.toplevel=osm.
-			net.runelite.client.headless.MobileToplevelProbe.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.WorldMapProbe.isEnabled())
-		{
-			// World-map mobile de-risk (WORLDMAP-MOBILE-PLAN.md Phase 0): drag-pan / wheel-zoom / search /
-			// relocate / close, all headless. Gated -Drunelite.worldmapprobe=true.
-			net.runelite.client.headless.WorldMapProbe.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.MobileChromeBridge.isEnabled())
-		{
-			// W3 hybrid-chrome read surface: snapshot desktop tab/panel/minimap/orb/chat/viewport geometry +
-			// active-tab varc on the client thread for the native chrome. Read-only — mutates nothing.
-			net.runelite.client.headless.MobileChromeBridge.tick(client);
-		}
-		if (net.runelite.client.headless.HudDataBridge.isEnabled())
-		{
-			// W3 Feature-A phase A2: read-only HUD DATA snapshot (chat lines / orb values / minimap positions)
-			// the native HUD veneers reproduce. Client thread; mutates nothing. Gated -Drunelite.huddata=true.
-			net.runelite.client.headless.HudDataBridge.tick(client);
-		}
-		if (net.runelite.client.headless.HudVeneerBridge.isEnabled())
-		{
-			// W3 Feature-A phase A3: suppress the engine HUD elements the native veneers replace (chatbox),
-			// re-applied each frame. State set from native via setChatHidden. Gated -Drunelite.hudveneer=true.
-			net.runelite.client.headless.HudVeneerBridge.tick(client);
-		}
-		if (net.runelite.client.headless.MobileChromeProbe.isEnabled())
-		{
-			// W3 hybrid-chrome de-risk: one-shot DESKTOP experiment (synth-click vs setVarcIntValue tab switch),
-			// gated by -Drunelite.mobilechrome.probe=true. Mutates — never on the device launch path.
-			net.runelite.client.headless.MobileChromeProbe.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.MobileChromeReposProbe.isEnabled())
-		{
-			// W3 authentic mobile layout: reposition the real desktop tab stones into vertical edge columns
-			// (engine draws them — feathered, no native crop). Mutates widget positions; gated
-			// -Drunelite.mobilechrome.repos=true. Desktop de-risk first.
-			net.runelite.client.headless.MobileChromeReposProbe.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.MobileChromeSpriteDump.isEnabled())
-		{
-			// W3 clean-native-chrome: one-shot DESKTOP extractor for the tab sprite assets (stones 1180/1181 +
-			// icons 774-787) -> PNG, to bundle + composite natively. Gated -Drunelite.mobilechrome.spritedump=true.
-			net.runelite.client.headless.MobileChromeSpriteDump.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.MobileChromePanelProbe.isEnabled())
-		{
-			// W3 diagnostic: can the docked side panel be moved? Gated -Drunelite.mobilechrome.panelprobe=true.
-			net.runelite.client.headless.MobileChromePanelProbe.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.MobileChromeHideTest.isEnabled())
-		{
-			// W3 diagnostic: do the stones hide cleanly + does setVarc switch the panel?
-			// Gated -Drunelite.mobilechrome.hidetest=true.
-			net.runelite.client.headless.MobileChromeHideTest.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.HudIsolationTest.isEnabled())
-		{
-			// W3 Feature-A phase A0: de-risk HUD suppression (mask vs setHidden vs transparent) AND route-back
-			// click-through, on the client thread. Mutates widget state; gated -Drunelite.hudisolation=true.
-			net.runelite.client.headless.HudIsolationTest.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.EdgeToEdgeProbe.isEnabled())
-		{
-			// W3 Feature-A phase A1 (desktop): hide the WHOLE engine 2D HUD at a wide aspect + prove the scene
-			// fills the canvas edge-to-edge. Mutates widget state; gated -Drunelite.edge2edge=true.
-			net.runelite.client.headless.EdgeToEdgeProbe.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.MinimapWalkProbe.isEnabled())
-		{
-			// W3 Feature-A: the hard route-back — does clicking the LIVE engine minimap walk (so a native minimap
-			// covers it) vs hidden (dead)? Mutates (clicks/hides); gated -Drunelite.minimapwalk=true.
-			net.runelite.client.headless.MinimapWalkProbe.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.ChatRelocateProbe.isEnabled())
-		{
-			// W3 Feature-A (A3): can the engine chatbox be RELOCATED to the top (exact OSRS skin) vs occluded?
-			// Mutates widget position; gated -Drunelite.chatreloc=true. Desktop de-risk only.
-			net.runelite.client.headless.ChatRelocateProbe.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.MinimapRelocateProbe.isEnabled())
-		{
-			// W3 Feature-A (A4): can the engine minimap be RELOCATED (inset) and still render + click-to-walk (the
-			// cheap A3-style path) vs cover-in-place native redraw? Mutates position + clicks; gated
-			// -Drunelite.minimapreloc=true. Desktop de-risk only.
-			net.runelite.client.headless.MinimapRelocateProbe.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.TabScriptProbe.isEnabled())
-		{
-			// W3 Feature-A (A4): can a tab be opened by REPLAYING the stone's op script (so the stones can be
-			// hidden + the gray cover removed)? Mutates tab state + hides stones; gated -Drunelite.tabscript=true.
-			net.runelite.client.headless.TabScriptProbe.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.StoneHideProbe.isEnabled())
-		{
-			// W3 Feature-A (A4): setHidden vs off-screen forced-position — which actually removes the tab stones?
-			// Mutates positions/hidden; gated -Drunelite.stonehide=true. Desktop de-risk only.
-			net.runelite.client.headless.StoneHideProbe.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.StoneSuppressProbe.isEnabled())
-		{
-			// W3 Feature-A (A4): steady-state test of parent/grandparent hide+relocate to remove the re-pinned tab
-			// row. Mutates widget state; gated -Drunelite.stonesuppress=true. Desktop de-risk only.
-			net.runelite.client.headless.StoneSuppressProbe.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.MenuPeekBridge.isEnabled())
-		{
-			// W3 touch-targeting: publish the read-only menu-peek snapshot the native press-and-peek UI polls
-			// (the menu the engine computed for the finger the native side streamed via JavaBridge.onMove).
-			// Read-only; gated -Drunelite.menupeek=true. Runs BEFORE the probe so the probe can cross-check it.
-			net.runelite.client.headless.MenuPeekBridge.tick(client);
-		}
-		if (net.runelite.client.headless.JavaBridge.isEnabled())
-		{
-			// W3 touch-targeting: advance the engine-resolved tap state machine (settle gate -> click ->
-			// truth classification). Client thread, after the engine tick rebuilt the menu — the same settle
-			// seam MenuPeekBridge reads from. Gated -Drunelite.bridge=true (inert on desktop).
-			net.runelite.client.headless.JavaBridge.tapTick(client);
-		}
-		if (net.runelite.client.headless.MenuPeek.isEnabled())
-		{
-			// Touch-targeting de-risk PROBE: prove the press-and-peek primitive (synth MOUSE_MOVED -> read
-			// getMenuEntries() a cycle later) + cross-check MenuPeekBridge's published top. Read-only; one-shot;
-			// gated -Drunelite.menupeek.probe=true. Desktop-only diagnostic (never the device path).
-			net.runelite.client.headless.MenuPeek.tick(client, client.getGameState());
-		}
-		if (net.runelite.client.headless.ShiftFeedSpike.isEnabled())
-		{
-			// Mobile-UX audit OQ1/#9: does a synthetic held KEY_PRESSED VK_SHIFT flip client.isKeyPressed(KC_SHIFT)
-			// (the "Sticky Shift" feasibility gate)? Mutates input only; gated -Drunelite.shiftfeed=true. Desktop only.
-			net.runelite.client.headless.ShiftFeedSpike.tick(client, client.getGameState());
-		}
+		net.runelite.client.headless.HeadlessSeams.draw(client, graphics);
 
 		if (graphics == null)
 		{
@@ -620,52 +403,7 @@ public class Hooks implements Callbacks
 		// Draw clientUI overlays
 		clientUi.paintOverlays(graphics2d);
 
-		// GPU Route C (AG2): force-enable + start the base gpu plugin once in-world, overriding a persisted
-		// gpuplugin=false and forcing the canvas valid so startUp's createGLContext fires. Inert (no-op) unless
-		// -Drunelite.routecgpu=true; runs before the isGpu early-return because it is what flips isGpu on.
-		if (net.runelite.client.headless.RouteCGpuStarter.isEnabled())
-		{
-			net.runelite.client.headless.RouteCGpuStarter.tick(client);
-		}
-
-		// Track G AG3-b: load + start the 117HD (RLHD) plugin (Zone) once in-world, overriding the base gpu plugin
-		// (HdPlugin declares conflicts="GPU", so startPlugin disables it). Inert unless -Drunelite.routecrlhd=true.
-		if (net.runelite.client.headless.RLHDStarter.isEnabled())
-		{
-			net.runelite.client.headless.RLHDStarter.tick(client);
-		}
-
-		// iOS "renderers as plugins": surface the GPU + 117HD plugins in the native panel (loaded, not started)
-		// so they're selectable + configurable regardless of the active renderer. Inert unless
-		// -Drunelite.rendererpanel=true; the active renderer is still started by the starters above.
-		if (net.runelite.client.headless.RendererPanelStarter.isEnabled())
-		{
-			net.runelite.client.headless.RendererPanelStarter.tick(client);
-		}
-
-		// W3 touch-targeting: draw the tap selection feedback (tight entity model outline) into the frame, on
-		// top of the scene/overlays, just before it's captured/blitted.
-		if (net.runelite.client.headless.JavaBridge.isEnabled())
-		{
-			net.runelite.client.headless.JavaBridge.drawSelection(client);
-		}
-
-		// Headless capture seam: composited game + overlays now live in mainBufferProvider.getImage().
-		// In GPU mode (Route C) mainBufferProvider is the UI-only layer (the game is on the GPU), so a CPU
-		// capture here is both useless AND a per-frame ~1.5 MB BufferedImage allocation that OOMs the heap once
-		// 117HD's ZoneRenderer is resident — gate it off, same as the JavaBridge snapshot below.
-		if (!client.isGpu())
-		{
-			net.runelite.client.headless.HeadlessCapture.capture(mainBufferProvider);
-		}
-		// Live-blit seam: snapshot the now-complete frame for the native shell (avoids mid-composite tearing).
-		// In GPU mode (Route C) mainBufferProvider holds only the UI layer; the authoritative composited frame
-		// is published later by the gpu plugin's swapBuffers shim, which is then the SOLE frameSeq publisher.
-		// Gating the CPU snapshot off here prevents the UI-only frame from flashing between GPU frames.
-		if (net.runelite.client.headless.JavaBridge.isEnabled() && !client.isGpu())
-		{
-			net.runelite.client.headless.JavaBridge.snapshot(mainBufferProvider);
-		}
+		net.runelite.client.headless.HeadlessSeams.postComposite(client, mainBufferProvider);
 
 		if (client.isGpu())
 		{
@@ -766,21 +504,7 @@ public class Hooks implements Callbacks
 	@Override
 	public void drawScene()
 	{
-		if (net.runelite.client.headless.GpuSceneDiag.isEnabled())
-		{
-			// GPU Route C: count the per-frame scene-render callback (fires at the end of the injected scene
-			// render `ev.dk`, both zone and legacy branches) to tell whether the engine drives the 3D scene
-			// at all in GPU mode. Read-only; gated -Drunelite.gpudiag=true.
-			net.runelite.client.headless.GpuSceneDiag.onDrawScene();
-		}
-
-		// iOS load-in flash guard: count this 3D scene render. The GPU publish stays held until a few of these
-		// have accumulated (zones still upload for a few frames after the first draw, so the first frames are bare
-		// sky) — re-armed to 0 on non-world game states in draw(). See JavaBridge.sceneDrawCount.
-		if (net.runelite.client.headless.JavaBridge.isEnabled())
-		{
-			net.runelite.client.headless.JavaBridge.noteSceneDraw();
-		}
+		net.runelite.client.headless.HeadlessSeams.drawScene(client);
 
 		MainBufferProvider bufferProvider = (MainBufferProvider) client.getBufferProvider();
 		Graphics2D graphics2d = getGraphics(bufferProvider);
