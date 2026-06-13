@@ -279,6 +279,15 @@ public final class JavaBridge
 	private static final int PITCH_MAX = 383;
 	private static float yawRemainder;
 	private static float pitchRemainder;
+	// Two-finger camera pan: native posts raw pixel deltas from the main thread (onCameraDrag); they accumulate
+	// here and are applied on the client thread in tapTick. RuneLite's camera state is client-thread-only — the
+	// old in-place read-modify-write off the JNI thread lost updates against the engine's per-tick interpolation
+	// (yaw jitter under load). yawRemainder/pitchRemainder are now touched only on the client thread.
+	private static final java.util.concurrent.atomic.AtomicInteger camDragDx = new java.util.concurrent.atomic.AtomicInteger();
+	private static final java.util.concurrent.atomic.AtomicInteger camDragDy = new java.util.concurrent.atomic.AtomicInteger();
+	// INPUT_TYPE snapshot taken on the client thread in tapTick; isTextInputOpen() reads this volatile instead of
+	// the live varc array off-thread (which the engine can reallocate under the reader).
+	private static volatile boolean textInputOpen;
 
 	private JavaBridge()
 	{
@@ -677,6 +686,8 @@ public final class JavaBridge
 		{
 			return;
 		}
+		applyCameraDrag(c);        // drain accumulated two-finger-pan deltas (camera writes are client-thread-only)
+		snapshotTextInputOpen(c);  // publish INPUT_TYPE for isTextInputOpen() to read off the client thread
 		// Deterministic early registration (boolean-gated, retries until the injector is live): the
 		// BeforeMenuRender suppression below must be in place before the FIRST menu ever opens, not
 		// lazily on the first tap.
@@ -1283,8 +1294,21 @@ public final class JavaBridge
 	 */
 	public static void onCameraDrag(int dxPixels, int dyPixels)
 	{
-		final Client c = ENABLED ? client : null;
-		if (c == null || c.getGameState() != GameState.LOGGED_IN)
+		if (!ENABLED || client == null)
+		{
+			return;
+		}
+		// Accumulate only; the camera writes happen on the client thread in tapTick -> applyCameraDrag.
+		camDragDx.addAndGet(dxPixels);
+		camDragDy.addAndGet(dyPixels);
+	}
+
+	/** Drain the accumulated two-finger-pan deltas and apply yaw/pitch — on the client thread (from tapTick). */
+	private static void applyCameraDrag(Client c)
+	{
+		final int dxPixels = camDragDx.getAndSet(0);
+		final int dyPixels = camDragDy.getAndSet(0);
+		if ((dxPixels == 0 && dyPixels == 0) || c.getGameState() != GameState.LOGGED_IN)
 		{
 			return;
 		}
@@ -1345,18 +1369,19 @@ public final class JavaBridge
 	 */
 	public static boolean isTextInputOpen()
 	{
-		final Client c = ENABLED ? client : null;
-		if (c == null)
-		{
-			return false;
-		}
+		return ENABLED && textInputOpen;   // snapshotted on the client thread (snapshotTextInputOpen), read here off-thread
+	}
+
+	/** Snapshot INPUT_TYPE on the client thread (from tapTick) so isTextInputOpen() never reads the live varc off-thread. */
+	private static void snapshotTextInputOpen(Client c)
+	{
 		try
 		{
-			return c.getVarcIntValue(VarClientInt.INPUT_TYPE) != 0;
+			textInputOpen = c.getVarcIntValue(VarClientInt.INPUT_TYPE) != 0;
 		}
 		catch (RuntimeException ex)
 		{
-			return false;
+			// keep the last snapshot
 		}
 	}
 
