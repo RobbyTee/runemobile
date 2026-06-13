@@ -1473,12 +1473,28 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
     // reader runs on a background thread; writing self.logFile from two threads is a
     // data race that silently drops output after JLI_Launch. Funnel both here.
     dispatch_async(dispatch_get_main_queue(), ^{
-        self.console.text = [self.console.text stringByAppendingString:out];
-        if (self.console.text.length > 0) {
-            [self.console scrollRangeToVisible:NSMakeRange(self.console.text.length - 1, 1)];
-        }
+        // File first (the retrievable hello-shell.log). No per-line synchronizeFile — that fsync was a 1–10ms
+        // main-thread stall every line; jvm-stdio.log (dup2'd, unbuffered) is the crash-proof channel.
         [self.logFile writeData:[out dataUsingEncoding:NSUTF8StringEncoding]];
-        @try { [self.logFile synchronizeFile]; } @catch (__unused NSException *e) {}
+
+        // Console: append via textStorage so each line is O(append), not the O(n) whole-string rebuild +
+        // attribute re-fix that setText does (n grows unbounded → tens-of-ms stalls in a long session). Cap
+        // the backlog, and only force layout/scroll when the debug panel (the console's superview) is visible.
+        NSTextStorage *ts = self.console.textStorage;
+        NSDictionary *attrs = @{
+            NSFontAttributeName: self.console.font,
+            NSForegroundColorAttributeName: self.console.textColor,
+        };
+        [ts beginEditing];
+        [ts appendAttributedString:[[NSAttributedString alloc] initWithString:out attributes:attrs]];
+        const NSUInteger kConsoleCap = 64 * 1024;
+        if (ts.length > kConsoleCap) {
+            [ts deleteCharactersInRange:NSMakeRange(0, ts.length - kConsoleCap)];
+        }
+        [ts endEditing];
+        if (!self.debugPanel.hidden) {
+            [self.console scrollRangeToVisible:NSMakeRange(self.console.textStorage.length, 0)];
+        }
     });
 }
 
