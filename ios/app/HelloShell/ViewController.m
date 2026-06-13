@@ -466,8 +466,7 @@ static const CGFloat kMenuWidth       = 210.0;
 
 // Mirror the saved tokens.json onto the launch-screen login button (same source as refreshLoginButton).
 - (void)refreshLaunchLogin {
-    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    NSData *data = [NSData dataWithContentsOfFile:[docs stringByAppendingPathComponent:@"tokens.json"]];
+    NSData *data = [NSData dataWithContentsOfFile:[JVMLauncher tokensPath]];
     id o = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
     NSDictionary *t = [o isKindOfClass:[NSDictionary class]] ? o : nil;
     NSString *sid  = [t[@"session_id"] isKindOfClass:[NSString class]] ? t[@"session_id"] : nil;
@@ -947,13 +946,13 @@ static const CGFloat kMenuWidth       = 210.0;
     [self presentViewController:vc animated:YES completion:nil];
 }
 
-// Write Documents/tokens.json in the shape loadJagexTokens reads. Stage A only → access/refresh empty
+// Write tokens.json (Application Support — see +[JVMLauncher tokensPath]) in the shape loadJagexTokens
+// reads. Stage A only → access/refresh empty
 // (the gamepack mints its own play token from session_id + chosen_account_id). File-protected at rest;
 // never bundled or committed (it's the per-device secret).
 - (void)persistTokensSession:(NSString *)sessionId account:(NSString *)accountId
                      display:(NSString *)display accounts:(NSArray *)accounts {
-    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    NSString *path = [docs stringByAppendingPathComponent:@"tokens.json"];
+    NSString *path = [JVMLauncher tokensPath];
     NSDictionary *t = @{
         @"session_id":          sessionId  ?: @"",
         @"chosen_account_id":   accountId  ?: @"",
@@ -981,8 +980,7 @@ static const CGFloat kMenuWidth       = 210.0;
 
 // Reflect the saved login on the button title so the user can see they're signed in (and re-login if needed).
 - (void)refreshLoginButton {
-    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    NSData *data = [NSData dataWithContentsOfFile:[docs stringByAppendingPathComponent:@"tokens.json"]];
+    NSData *data = [NSData dataWithContentsOfFile:[JVMLauncher tokensPath]];
     id o = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
     NSDictionary *t = [o isKindOfClass:[NSDictionary class]] ? o : nil;
     NSString *sid  = [t[@"session_id"] isKindOfClass:[NSString class]] ? t[@"session_id"] : nil;
@@ -998,8 +996,7 @@ static const CGFloat kMenuWidth       = 210.0;
 // Log out: delete the saved game session (so autologin won't fire) and purge any persisted Jagex web
 // cookies from older builds (the login webview itself is now ephemeral, so it leaves none going forward).
 - (void)onLogout {
-    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    NSString *path = [docs stringByAppendingPathComponent:@"tokens.json"];
+    NSString *path = [JVMLauncher tokensPath];
     BOOL existed = [[NSFileManager defaultManager] fileExistsAtPath:path];
     if (existed) [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
 
@@ -1026,8 +1023,7 @@ static const CGFloat kMenuWidth       = 210.0;
 // quit cleanly here; the saved tokens.json means the next launch goes straight to play with no web view
 // (no WebKit) and the brk is serviced normally. Only reached after an actual login (fresh login / switch).
 - (void)promptRestartToPlay {
-    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    NSData *data = [NSData dataWithContentsOfFile:[docs stringByAppendingPathComponent:@"tokens.json"]];
+    NSData *data = [NSData dataWithContentsOfFile:[JVMLauncher tokensPath]];
     id o = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
     NSString *name = [o isKindOfClass:[NSDictionary class]] ? o[@"chosen_display_name"] : nil;
     NSString *who = name.length ? name : @"your account";
@@ -1457,13 +1453,18 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
 
 - (void)openLogFile {
     NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    // CompleteUnlessOpen, NOT Complete: the keepalive keeps these files being written while the screen is
+    // locked, and Complete makes a file unwritable once locked. The class is set at creation and persists;
+    // opened here while unlocked, the fd/handle stays writable after the device locks.
+    NSDictionary *prot = @{NSFileProtectionKey: NSFileProtectionCompleteUnlessOpen};
     NSString *path = [docs stringByAppendingPathComponent:@"hello-shell.log"];
-    [[NSFileManager defaultManager] createFileAtPath:path contents:nil attributes:nil];
+    [[NSFileManager defaultManager] createFileAtPath:path contents:nil attributes:prot];
     self.logFile = [NSFileHandle fileHandleForWritingAtPath:path];
     // Separate raw file for libjvm stdout/stderr, written synchronously (survives a
     // crash) so the [JIT26] mapping trace + the Hello verdict are always retrievable.
     NSString *jpath = [docs stringByAppendingPathComponent:@"jvm-stdio.log"];
-    self.jvmFd = open(jpath.UTF8String, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    [[NSFileManager defaultManager] createFileAtPath:jpath contents:nil attributes:prot];  // protection persists across open()
+    self.jvmFd = open(jpath.UTF8String, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 }
 
 - (void)appendLine:(NSString *)line {
@@ -3768,7 +3769,8 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (BOOL)textField:(UITextField *)tf shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString *)string {
     if (string.length > 0) {
         [JVMLauncher postText:string];
-        [self appendLine:[NSString stringWithFormat:@"[shell] key text '%@'", string]];
+        // Length only — never the typed content (chat / PMs / search / enter-amount go through here).
+        [self appendLine:[NSString stringWithFormat:@"[shell] key text len=%lu", (unsigned long)string.length]];
     } else if (range.length > 0) {
         for (NSUInteger i = 0; i < range.length; i++) {
             [JVMLauncher postKeyStroke:AWT_VK_BACK_SPACE];

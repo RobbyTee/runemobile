@@ -12,7 +12,8 @@ static void HelloShellUncaughtHandler(NSException *e) {
     }
     NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     NSString *path = [docs stringByAppendingPathComponent:@"crash.log"];
-    [[s dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path atomically:YES];
+    [[s dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path
+        options:(NSDataWritingAtomic | NSDataWritingFileProtectionCompleteUnlessOpen) error:NULL];
 }
 
 int main(int argc, char *argv[]) {

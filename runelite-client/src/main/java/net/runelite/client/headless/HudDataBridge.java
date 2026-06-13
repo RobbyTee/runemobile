@@ -63,6 +63,9 @@ import net.runelite.api.gameval.VarbitID;
 public final class HudDataBridge
 {
 	private static final boolean ENABLED = Boolean.getBoolean("runelite.huddata");
+	// The HUDDATA_READ verdict (counts only) is always safe; the full SNAPSHOT dumps the recent chat lines
+	// including private-message text, so it is opt-in (off by default) — arm with -Drunelite.huddata.dumpSnapshot.
+	private static final boolean DUMP_SNAPSHOT = Boolean.getBoolean("runelite.huddata.dumpSnapshot");
 
 	private static final int CHAT_MAX = 40;     // most-recent chat lines published
 	private static final int DOT_MAX = 24;      // minimap dots (nearby actors) published
@@ -270,7 +273,10 @@ public final class HudDataBridge
 					+ "spec={} run={} specEnabled={} plane={} px={} py={} mapAngle={} players={} npcs={} dots={} live={}",
 				all.size(), b01(sawWelcome), hp, hpMax, pray, prayMax, energy,
 				spec, run, specEnabled, plane, px, py, mapAngle, playerCount, npcCount, dots.size(), b01(live));
-			log.info("[huddata] SNAPSHOT {}", snapshotJson);
+			if (DUMP_SNAPSHOT)
+			{
+				log.info("[huddata] SNAPSHOT {}", snapshotJson);
+			}
 		}
 	}
 

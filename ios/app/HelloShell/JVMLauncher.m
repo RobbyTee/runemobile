@@ -480,17 +480,46 @@ static NSString *jstringToNS(JNIEnv *env, jstring js) {
     return [[NSFileManager defaultManager] fileExistsAtPath:guess] ? guess : nil;
 }
 
-// Map Documents/tokens.json -> the JX_* env the OSRS gamepack reads when "launched from the Jagex
-// launcher". tokens.json is a gitignored secret (throwaway account) pushed into the app container at
-// test time (devicectl / Files.app), never bundled into the shared build. Returns YES iff a usable
-// session was found (session_id + chosen_account_id), so autologin only arms when we can authenticate.
-// Mirrors run-headless-login.sh's jq mapping. Env MUST be set before JNI_CreateJavaVM (HotSpot snapshots
-// the environment at startup). Logs redacted prefixes only — never the secret values.
-static BOOL loadJagexTokens(NSString *docs, JVMLogSink log) {
-    NSString *path = [docs stringByAppendingPathComponent:@"tokens.json"];
+// Library/Application Support — NOT surfaced by UIFileSharingEnabled / LSSupportsOpeningDocumentsInPlace
+// (those only expose Documents). Unlike Documents, the system does not create this for us, so ensure it exists.
++ (NSString *)appSupportDir {
+    NSString *as = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject;
+    [[NSFileManager defaultManager] createDirectoryAtPath:as withIntermediateDirectories:YES attributes:nil error:NULL];
+    return as;
+}
+
++ (NSString *)tokensPath {
+    NSString *path = [[self appSupportDir] stringByAppendingPathComponent:@"tokens.json"];
+    // One-time migration: older builds wrote the session bearer into the Files/USB-exposed Documents dir.
+    // Relocate any legacy copy into Application Support and purge the exposed one, so the bearer stops being
+    // browsable on existing installs — whether or not an Application Support copy already exists.
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+        NSString *legacy = [docs stringByAppendingPathComponent:@"tokens.json"];
+        if ([fm fileExistsAtPath:legacy]) {
+            if (![fm fileExistsAtPath:path]) {
+                [fm moveItemAtPath:legacy toPath:path error:NULL];
+            } else {
+                [fm removeItemAtPath:legacy error:NULL];
+            }
+        }
+    });
+    return path;
+}
+
+// Map tokens.json (Library/Application Support — see +tokensPath) -> the JX_* env the OSRS gamepack reads
+// when "launched from the Jagex launcher". tokens.json is a gitignored secret (throwaway account) pushed
+// into the app container at test time (devicectl) or minted on-device by the login web view, never bundled
+// into the shared build. Returns YES iff a usable session was found (session_id + chosen_account_id), so
+// autologin only arms when we can authenticate. Mirrors run-headless-login.sh's jq mapping. Env MUST be set
+// before JNI_CreateJavaVM (HotSpot snapshots the environment at startup). Logs presence only — never values.
+static BOOL loadJagexTokens(JVMLogSink log) {
+    NSString *path = [JVMLauncher tokensPath];
     NSData *data = [NSData dataWithContentsOfFile:path];
     if (!data) {
-        log(@"[jx] no tokens.json in Documents — autologin DISABLED (login-screen render only)");
+        log(@"[jx] no tokens.json — autologin DISABLED (login-screen render only)");
         return NO;
     }
     NSError *err = nil;
@@ -518,8 +547,10 @@ static BOOL loadJagexTokens(NSString *docs, JVMLogSink log) {
     if (display.length)  setenv("JX_DISPLAY_NAME", display.UTF8String, 1);
     if (access.length)   setenv("JX_ACCESS_TOKEN", access.UTF8String, 1);
     if (refresh.length)  setenv("JX_REFRESH_TOKEN", refresh.UTF8String, 1);
-    log([NSString stringWithFormat:@"[jx] JX_* set: displayName='%@' characterId=%@ session=%@… access=%@ refresh=%@",
-        display ?: @"", character,
+    // Presence only — the display name and the stable character id are account PII; the session prefix is
+    // kept (truncated, non-recoverable) as the "autologin armed" diagnostic.
+    log([NSString stringWithFormat:@"[jx] JX_* set: displayName=%@ characterId=%@ session=%@… access=%@ refresh=%@",
+        display.length ? @"set" : @"empty", character.length ? @"set" : @"empty",
         session.length >= 6 ? [session substringToIndex:6] : session,
         access.length ? @"set" : @"empty", refresh.length ? @"set" : @"empty"]);
     return YES;
@@ -898,10 +929,10 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     }
 
     // Phase 4 sub-goal A — interactive login, purely in-process (no native touch bridge). Map the JX_*
-    // launcher handoff from Documents/tokens.json, then arm HeadlessLogin's two-stage click machine
-    // (EULA Accept -> Play Now). Only arms when a usable token set is present, so a build with no
+    // launcher handoff from tokens.json (Application Support), then arm HeadlessLogin's two-stage click
+    // machine (EULA Accept -> Play Now). Only arms when a usable token set is present, so a build with no
     // tokens.json pushed still does the proven §6.2 login-screen render.
-    BOOL autologin = loadJagexTokens(docs, log);
+    BOOL autologin = loadJagexTokens(log);
     if (autologin) {
         [opts addObjectsFromArray:@[
             @"-Drunelite.headless.autologin=true",
