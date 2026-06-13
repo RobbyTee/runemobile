@@ -1421,6 +1421,18 @@ public final class MobileUiBridge
 	 */
 	public static void tick(Client c)
 	{
+		try
+		{
+			tickImpl(c);
+		}
+		catch (RuntimeException e)
+		{
+			BridgeFaults.note("MobileUiBridge.tick", e);
+		}
+	}
+
+	private static void tickImpl(Client c)
+	{
 		if (!ENABLED || c == null)
 		{
 			return;

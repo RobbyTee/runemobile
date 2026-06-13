@@ -107,6 +107,18 @@ public final class HudDataBridge
 
 	public static void tick(Client c)
 	{
+		try
+		{
+			tickImpl(c);
+		}
+		catch (RuntimeException e)
+		{
+			BridgeFaults.note("HudDataBridge.tick", e);
+		}
+	}
+
+	private static void tickImpl(Client c)
+	{
 		if (!ENABLED || c == null)
 		{
 			return;

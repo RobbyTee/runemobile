@@ -124,6 +124,18 @@ public final class MobileChromeBridge
 	 */
 	public static void tick(Client c)
 	{
+		try
+		{
+			tickImpl(c);
+		}
+		catch (RuntimeException e)
+		{
+			BridgeFaults.note("MobileChromeBridge.tick", e);
+		}
+	}
+
+	private static void tickImpl(Client c)
+	{
 		if (!ENABLED || c == null)
 		{
 			return;

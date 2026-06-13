@@ -336,8 +336,9 @@ public final class HudVeneerBridge
 				}
 			}
 		}
-		catch (RuntimeException ignore)
+		catch (RuntimeException e)
 		{
+			BridgeFaults.note("HudVeneerBridge.preRender", e);
 		}
 	}
 
@@ -562,8 +563,9 @@ public final class HudVeneerBridge
 
 			tickWorldMap(c);
 		}
-		catch (RuntimeException ignore)
+		catch (RuntimeException e)
 		{
+			BridgeFaults.note("HudVeneerBridge.tick", e);
 		}
 	}
 
