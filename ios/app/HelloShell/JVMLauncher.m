@@ -81,6 +81,8 @@ static jmethodID gMuiNextNotif = NULL;    // nextNotification()Ljava/lang/String
 static jmethodID gMuiNextLink = NULL;     // nextLink()Ljava/lang/String; (optional)
 static jmethodID gMuiSetPinned = NULL;    // setPinned(Ljava/lang/String;Z)Ljava/lang/String; (optional)
 static jmethodID gMuiHubState = NULL;     // hubState()Ljava/lang/String; (optional)
+static jmethodID gMuiResetPlugin = NULL;  // resetPluginConfig(Ljava/lang/String;)Ljava/lang/String; (optional)
+static jmethodID gMuiNotifDefaults = NULL; // notificationDefaults()Ljava/lang/String; (optional)
 
 // Native Quest Helper reflow — the QuestHelperBridge facade (reflection into the external plugin).
 static jclass    gQhClass = NULL;       // global ref to net.runelite.client.headless.QuestHelperBridge
@@ -373,6 +375,10 @@ static BOOL ensureMui(void) {
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiSetPinned = NULL; }
     gMuiHubState = (*env)->GetStaticMethodID(env, global, "hubState", "()Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiHubState = NULL; }
+    gMuiResetPlugin = (*env)->GetStaticMethodID(env, global, "resetPluginConfig", "(Ljava/lang/String;)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiResetPlugin = NULL; }
+    gMuiNotifDefaults = (*env)->GetStaticMethodID(env, global, "notificationDefaults", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiNotifDefaults = NULL; }
     gMuiClass = global;   // publish only once fully resolved
     return YES;
 }
@@ -1502,6 +1508,23 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiResetCfg, jg, jk));
     (*env)->DeleteLocalRef(env, jg); (*env)->DeleteLocalRef(env, jk);
     return out;
+}
+
+// Whole-plugin reset (CFG-10): reapply group defaults + plugin.resetConfiguration().
++ (NSString *)mobileResetPluginConfig:(NSString *)group {
+    if (!ensureMui() || !gMuiResetPlugin || group == nil) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring jg = (*env)->NewStringUTF(env, group.UTF8String);
+    NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiResetPlugin, jg));
+    (*env)->DeleteLocalRef(env, jg);
+    return out;
+}
+
+// Fully-seeded default Notification JSON (NOTIF-2): the base for a per-notification sub-editor.
++ (NSString *)mobileNotificationDefaults {
+    if (!ensureMui() || !gMuiNotifDefaults) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiNotifDefaults));
 }
 
 + (long long)mobileUiSeq {

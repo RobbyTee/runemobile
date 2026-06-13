@@ -254,6 +254,12 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Reset one config item to its default (MobileUiBridge.resetConfig — client-thread lane). Ack JSON.
 + (nullable NSString *)mobileResetConfigGroup:(NSString *)group key:(NSString *)key;
 
+/// Reset an ENTIRE plugin's config to defaults + plugin.resetConfiguration (MobileUiBridge.resetPluginConfig). Ack JSON.
++ (nullable NSString *)mobileResetPluginConfig:(NSString *)group;
+
+/// Fully-seeded default Notification JSON (MobileUiBridge.notificationDefaults) — base for the notification sub-editor.
++ (nullable NSString *)mobileNotificationDefaults;
+
 /// Latest event sequence (MobileUiBridge.getMobileUiSeq) — the panel stores this and polls for a bump to
 /// know when to re-read (config/plugin changed, including changes it didn't make).
 + (long long)mobileUiSeq;

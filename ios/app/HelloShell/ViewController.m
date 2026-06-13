@@ -21,7 +21,7 @@
 #import <unistd.h>
 #import <fcntl.h>
 
-@interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate, UNUserNotificationCenterDelegate, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate>
+@interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate, UNUserNotificationCenterDelegate, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate, UISearchBarDelegate>
 {
     // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
     // desktop stone. A C array, so it lives as an ivar rather than a property.
@@ -241,7 +241,10 @@
 @property (nonatomic, strong) UIButton *pluginButton;
 @property (nonatomic, strong) UIView *pluginPanel;
 @property (nonatomic, strong) UITableView *pluginTable;
-@property (nonatomic, strong) NSArray<NSDictionary *> *pluginList;
+@property (nonatomic, strong) NSArray<NSDictionary *> *pluginList;  // the FILTERED view the table renders
+@property (nonatomic, strong) NSArray<NSDictionary *> *pluginAll;   // the full sorted list (search filters this)
+@property (nonatomic, strong) UISearchBar *pluginSearch;           // CFG-5 plugin-list search
+@property (nonatomic, copy) NSString *pluginFilter;                // current lowercase search text
 @property (nonatomic, assign) long long pluginSeq;     // last MobileUiBridge event seq the panel has seen
 @property (nonatomic, assign) BOOL pluginPanelOpen;
 // className -> CFAbsoluteTime when we first saw it enabled-but-not-active, so a plugin that never reaches
@@ -1125,6 +1128,16 @@ static const CGFloat kMenuWidth       = 210.0;
     cfgLp.cancelsTouchesInView = NO;
     [self.pluginTable addGestureRecognizer:cfgLp];
 
+    // CFG-5: a search bar over the (~130-row) list, filtering by name/description.
+    self.pluginSearch = [[UISearchBar alloc] init];
+    self.pluginSearch.translatesAutoresizingMaskIntoConstraints = NO;
+    self.pluginSearch.delegate = self;
+    self.pluginSearch.placeholder = @"Search plugins";
+    self.pluginSearch.searchBarStyle = UISearchBarStyleMinimal;
+    self.pluginSearch.barStyle = UIBarStyleBlack;
+    self.pluginSearch.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
+    [card addSubview:self.pluginSearch];
+
     [self.view addSubview:self.pluginPanel];
 
     UILayoutGuide *sg = self.view.safeAreaLayoutGuide;
@@ -1143,7 +1156,10 @@ static const CGFloat kMenuWidth       = 210.0;
         [panels.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
         [panels.trailingAnchor constraintEqualToAnchor:hub.leadingAnchor constant:-18],
 
-        [self.pluginTable.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:10],
+        [self.pluginSearch.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:6],
+        [self.pluginSearch.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:6],
+        [self.pluginSearch.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-6],
+        [self.pluginTable.topAnchor constraintEqualToAnchor:self.pluginSearch.bottomAnchor constant:4],
         [self.pluginTable.leadingAnchor constraintEqualToAnchor:card.leadingAnchor],
         [self.pluginTable.trailingAnchor constraintEqualToAnchor:card.trailingAnchor],
         [self.pluginTable.bottomAnchor constraintEqualToAnchor:card.bottomAnchor],
@@ -1247,7 +1263,7 @@ static const CGFloat kMenuWidth       = 210.0;
         if ([parsed isKindOfClass:[NSArray class]]) arr = parsed;
     }
     if (arr) {
-        self.pluginList = [arr sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        self.pluginAll = [arr sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
             BOOL pa = [a[@"pinned"] boolValue], pb = [b[@"pinned"] boolValue];
             if (pa != pb) return pa ? NSOrderedAscending : NSOrderedDescending;   // pinned float to the top
             NSString *na = [a[@"name"] description] ?: @"";
@@ -1255,12 +1271,12 @@ static const CGFloat kMenuWidth       = 210.0;
             return [na caseInsensitiveCompare:nb];
         }];
     } else {
-        self.pluginList = @[];
+        self.pluginAll = @[];
     }
-    // Maintain the enabled-but-not-active timers: start one when a plugin is first seen pending, clear it
-    // once it's running or disabled.
+    // Maintain the enabled-but-not-active timers over the FULL list (so a row filtered out by search doesn't
+    // reset its grace timer): start one when a plugin is first seen pending, clear it once running or disabled.
     const CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
-    for (NSDictionary *p in self.pluginList) {
+    for (NSDictionary *p in self.pluginAll) {
         NSString *cls = [p[@"className"] description];
         if (!cls) continue;
         BOOL pending = [p[@"enabled"] boolValue] && ![p[@"active"] boolValue];
@@ -1270,7 +1286,33 @@ static const CGFloat kMenuWidth       = 210.0;
             [self.pluginEnabledSince removeObjectForKey:cls];
         }
     }
+    [self applyPluginFilter];   // derive the filtered self.pluginList + reload (preserves the active search text)
+}
+
+// CFG-5: derive the rendered list from the full list + the current search text (name/description match).
+- (void)applyPluginFilter {
+    NSString *f = self.pluginFilter;
+    if (f.length == 0) {
+        self.pluginList = self.pluginAll;
+    } else {
+        NSMutableArray *out = [NSMutableArray array];
+        for (NSDictionary *p in self.pluginAll) {
+            NSString *name = [[p[@"name"] description] lowercaseString] ?: @"";
+            NSString *desc = [[p[@"description"] description] lowercaseString] ?: @"";
+            if ([name containsString:f] || [desc containsString:f]) [out addObject:p];
+        }
+        self.pluginList = out;
+    }
     [self.pluginTable reloadData];
+}
+
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText {
+    self.pluginFilter = [searchText lowercaseString];
+    [self applyPluginFilter];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
+    [searchBar resignFirstResponder];
 }
 
 #pragma mark UITableView
@@ -1307,6 +1349,24 @@ static const CGFloat kMenuWidth       = 210.0;
     BOOL pinned = [p[@"pinned"] boolValue];
     cell.imageView.image = pinned ? [UIImage systemImageNamed:@"star.fill"] : nil;
     cell.imageView.tintColor = [UIColor colorWithRed:0.95 green:0.78 blue:0.30 alpha:1.0];
+    // CORE-1 fake-plugins ("RuneLite" / "Chat Color"): config-only, no enable concept — drop the toggle and show
+    // a disclosure chevron; a tap opens their settings (handled in togglePluginAtRow).
+    BOOL configOnly = [p[@"configOnly"] boolValue];
+    if (configOnly) {
+        cell.accessoryView = nil;   // free the accessory slot so the chevron renders
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.detailTextLabel.text = @"Client settings · tap to configure";
+        cell.detailTextLabel.textColor = [UIColor colorWithWhite:0.72 alpha:1.0];
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        return cell;
+    }
+    // Normal/renderer rows carry the toggle switch — recreate it if a prior config-only reuse niled the accessory.
+    cell.accessoryType = UITableViewCellAccessoryNone;
+    if (![cell.accessoryView isKindOfClass:[UISwitch class]]) {
+        UISwitch *sw = [[UISwitch alloc] init];
+        sw.userInteractionEnabled = NO;
+        cell.accessoryView = sw;
+    }
     NSString *status;
     UIColor *statusColor;
     // Renderer plugins (GPU / 117HD): their switch reflects the SAVED launch preference (what will be active next
@@ -1391,6 +1451,7 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
 - (void)togglePluginAtRow:(NSInteger)row {
     if (row < 0 || row >= (NSInteger)self.pluginList.count) return;
     NSDictionary *p = self.pluginList[(NSUInteger)row];
+    if ([p[@"configOnly"] boolValue]) { [self openPluginConfigForRow:p]; return; }   // CORE-1 fake-plugins: tap = configure
     NSString *className = [p[@"className"] description];
     NSString *rk = [self rendererKeyForClass:className];
     if (rk) { [self toggleRenderer:rk]; return; }   // renderer plugins use the launch preference, not a live toggle
@@ -1408,6 +1469,16 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
     }
     [self appendLine:[NSString stringWithFormat:@"[plugins] %@ -> %@ : %@",
                       p[@"name"], newOn ? @"enable" : @"disable", ack ?: @"(nil)"]];
+}
+
+// Open a config-only row's settings (the CORE-1 fake-plugins, whose tap configures rather than toggles).
+- (void)openPluginConfigForRow:(NSDictionary *)p {
+    if (self.presentedViewController) return;
+    NSString *name = [p[@"name"] description] ?: @"";
+    NSString *group = [p[@"configGroup"] isKindOfClass:[NSString class]] ? p[@"configGroup"] : nil;
+    if (group.length == 0) return;
+    PluginConfigViewController *cfg = [[PluginConfigViewController alloc] initWithGroup:group pluginName:name];
+    [self presentViewController:cfg animated:YES completion:nil];
 }
 
 // Long-press a plugin row -> open its config screen (if it has one). Tap toggles; hold configures.
@@ -3702,14 +3773,27 @@ static CGRect mapRectFromArr(NSArray *a) {
     unichar sepCh = 1;   // the "titlebody" separator the bridge uses (control char, not a literal)
     NSString *sepStr = [NSString stringWithCharacters:&sepCh length:1];
     while (n.length > 0) {   // drain the whole backlog this tick so a burst doesn't trickle out
-        NSRange sep = [n rangeOfString:sepStr];
-        NSString *title = sep.location == NSNotFound ? @"RuneLite" : [n substringToIndex:sep.location];
-        NSString *body  = sep.location == NSNotFound ? n : [n substringFromIndex:sep.location + 1];
+        // Record is "titlebodysoundvolume" (NOTIF-1). sound+volume are always the LAST two fields, so
+        // parse from the end — that way a body that itself contains the separator is still reassembled whole.
+        NSArray<NSString *> *parts = [n componentsSeparatedByString:sepStr];
+        NSString *title, *body, *soundType = @"";
+        if (parts.count >= 4) {
+            title = parts[0];
+            soundType = parts[parts.count - 2];
+            body = [[parts subarrayWithRange:NSMakeRange(1, parts.count - 3)] componentsJoinedByString:sepStr];
+        } else {   // legacy 2-field record: title␟body split on the first separator
+            NSRange sep = [n rangeOfString:sepStr];
+            title = sep.location == NSNotFound ? @"RuneLite" : [n substringToIndex:sep.location];
+            body  = sep.location == NSNotFound ? n : [n substringFromIndex:sep.location + 1];
+        }
         if (title.length == 0) title = @"RuneLite";
         UNMutableNotificationContent *c = [[UNMutableNotificationContent alloc] init];
         c.title = title;
         c.body = body;
-        c.sound = [UNNotificationSound defaultSound];
+        // NOTIF-1: honor the desktop notification-sound type. OFF → deliver the banner silently; NATIVE/CUSTOM →
+        // the platform default sound (no sandbox source for a user's custom .wav, so CUSTOM collapses to default);
+        // unspecified (older 2-arg path) → default. Volume (parts[last]) is advisory — iOS has no per-banner gain.
+        c.sound = [soundType isEqualToString:@"OFF"] ? nil : [UNNotificationSound defaultSound];
         UNNotificationRequest *req = [UNNotificationRequest requestWithIdentifier:[[NSUUID UUID] UUIDString]
                                                                          content:c trigger:nil];
         [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:req withCompletionHandler:nil];
