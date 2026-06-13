@@ -1035,10 +1035,13 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 @property (nonatomic, strong) UIView *drawer;
 @property (nonatomic, strong) UISearchBar *search;
 @property (nonatomic, strong) UISegmentedControl *filterSeg;   // All | Members | Free | PVP
+@property (nonatomic, strong) UIButton *sortRegionButton;      // WH-4/WH-5: sort + region menu
 @property (nonatomic, strong) UITableView *table;
 @property (nonatomic, strong) NSArray<NSDictionary *> *allWorlds;
 @property (nonatomic, strong) NSArray<NSDictionary *> *filtered;
 @property (nonatomic, assign) NSInteger current;
+@property (nonatomic, assign) NSInteger sortMode;     // 0 World · 1 Players · 2 Activity (WH-4)
+@property (nonatomic, assign) NSInteger regionCode;   // -1 All · else the location code 0/1/3/7 (WH-5)
 @property (nonatomic, strong) NSTimer *timer;
 @end
 
@@ -1067,6 +1070,8 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     title.textColor = [UIColor whiteColor];
     [self.drawer addSubview:title];
 
+    self.regionCode = -1;   // WH-5: all regions by default
+
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     close.translatesAutoresizingMaskIntoConstraints = NO;
     [close setTitle:@"✕" forState:UIControlStateNormal];
@@ -1074,6 +1079,33 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     close.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
     [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
     [self.drawer addSubview:close];
+
+    // WH-3 quick-hop: previous / next world (the plugin's signature keybind action, as on-screen buttons).
+    UIButton *hopPrev = [UIButton buttonWithType:UIButtonTypeSystem];
+    hopPrev.translatesAutoresizingMaskIntoConstraints = NO;
+    [hopPrev setTitle:@"◀" forState:UIControlStateNormal];
+    hopPrev.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    hopPrev.tintColor = [UIColor whiteColor];
+    [hopPrev addTarget:self action:@selector(onHopPrev) forControlEvents:UIControlEventTouchUpInside];
+    [self.drawer addSubview:hopPrev];
+
+    UIButton *hopNext = [UIButton buttonWithType:UIButtonTypeSystem];
+    hopNext.translatesAutoresizingMaskIntoConstraints = NO;
+    [hopNext setTitle:@"▶" forState:UIControlStateNormal];
+    hopNext.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    hopNext.tintColor = [UIColor whiteColor];
+    [hopNext addTarget:self action:@selector(onHopNext) forControlEvents:UIControlEventTouchUpInside];
+    [self.drawer addSubview:hopNext];
+
+    // WH-4/WH-5: a sort + region menu (kept compact so the ~52%-width drawer stays uncluttered).
+    self.sortRegionButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.sortRegionButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.sortRegionButton setTitle:@"⇅" forState:UIControlStateNormal];
+    self.sortRegionButton.titleLabel.font = [UIFont boldSystemFontOfSize:18];
+    self.sortRegionButton.tintColor = [UIColor whiteColor];
+    self.sortRegionButton.showsMenuAsPrimaryAction = YES;
+    [self.drawer addSubview:self.sortRegionButton];
+    [self rebuildSortRegionMenu];
 
     self.search = [[UISearchBar alloc] init];
     self.search.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1109,6 +1141,13 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
         [title.topAnchor constraintEqualToAnchor:dg.topAnchor constant:12],
         [close.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
         [close.trailingAnchor constraintEqualToAnchor:dg.trailingAnchor constant:-16],
+        // Header buttons, right-to-left: ✕ … ▶ ◀ ⇅
+        [hopNext.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
+        [hopNext.trailingAnchor constraintEqualToAnchor:close.leadingAnchor constant:-14],
+        [hopPrev.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
+        [hopPrev.trailingAnchor constraintEqualToAnchor:hopNext.leadingAnchor constant:-10],
+        [self.sortRegionButton.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
+        [self.sortRegionButton.trailingAnchor constraintEqualToAnchor:hopPrev.leadingAnchor constant:-14],
 
         [self.search.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:8],
         [self.search.leadingAnchor constraintEqualToAnchor:dg.leadingAnchor constant:6],
@@ -1146,6 +1185,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
         if (seg == 1 && !members) continue;
         if (seg == 2 && members) continue;
         if (seg == 3 && !pvp) continue;
+        if (self.regionCode >= 0 && [w[@"location"] integerValue] != self.regionCode) continue;   // WH-5
         if (q.length) {
             NSString *idStr = [NSString stringWithFormat:@"%@", w[@"id"]];
             NSString *act = [[w[@"activity"] description] lowercaseString];
@@ -1154,9 +1194,57 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
         }
         [out addObject:w];
     }
+    // WH-1 favourites float to the top, then WH-4 sort (World / Players desc / Activity) within each group.
+    NSInteger mode = self.sortMode;
+    [out sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        BOOL fa = [a[@"favourite"] boolValue], fb = [b[@"favourite"] boolValue];
+        if (fa != fb) return fa ? NSOrderedAscending : NSOrderedDescending;
+        if (mode == 1) {   // Players — busiest first
+            NSInteger pa = [a[@"players"] integerValue], pb = [b[@"players"] integerValue];
+            if (pa != pb) return pa > pb ? NSOrderedAscending : NSOrderedDescending;
+        } else if (mode == 2) {   // Activity (alpha), blanks last
+            NSString *aa = [a[@"activity"] description] ?: @"", *ab = [b[@"activity"] description] ?: @"";
+            if (aa.length == 0 && ab.length) return NSOrderedDescending;
+            if (ab.length == 0 && aa.length) return NSOrderedAscending;
+            NSComparisonResult r = [aa caseInsensitiveCompare:ab];
+            if (r != NSOrderedSame) return r;
+        }
+        NSInteger ia = [a[@"id"] integerValue], ib = [b[@"id"] integerValue];   // tie-break / World mode
+        return ia < ib ? NSOrderedAscending : (ia > ib ? NSOrderedDescending : NSOrderedSame);
+    }];
     self.filtered = out;
     [self.table reloadData];
 }
+
+// WH-4/WH-5: the sort + region menu (checkmark reflects the current choice).
+- (void)rebuildSortRegionMenu {
+    __weak typeof(self) ws = self;
+    UIAction *(^sortAction)(NSString *, NSInteger) = ^UIAction *(NSString *t, NSInteger m) {
+        UIAction *a = [UIAction actionWithTitle:t image:nil identifier:nil handler:^(UIAction *act) {
+            ws.sortMode = m; [ws rebuildSortRegionMenu]; [ws applyFilter];
+        }];
+        a.state = (ws.sortMode == m) ? UIMenuElementStateOn : UIMenuElementStateOff;
+        return a;
+    };
+    UIMenu *sort = [UIMenu menuWithTitle:@"Sort by" image:nil identifier:nil
+                                 options:UIMenuOptionsDisplayInline
+                                children:@[sortAction(@"World", 0), sortAction(@"Players", 1), sortAction(@"Activity", 2)]];
+    UIAction *(^regionAction)(NSString *, NSInteger) = ^UIAction *(NSString *t, NSInteger code) {
+        UIAction *a = [UIAction actionWithTitle:t image:nil identifier:nil handler:^(UIAction *act) {
+            ws.regionCode = code; [ws rebuildSortRegionMenu]; [ws applyFilter];
+        }];
+        a.state = (ws.regionCode == code) ? UIMenuElementStateOn : UIMenuElementStateOff;
+        return a;
+    };
+    UIMenu *region = [UIMenu menuWithTitle:@"Region" image:nil identifier:nil
+                                   options:UIMenuOptionsDisplayInline
+                                  children:@[regionAction(@"All regions", -1), regionAction(@"US", 0),
+                                             regionAction(@"UK", 1), regionAction(@"AUS", 3), regionAction(@"GER", 7)]];
+    self.sortRegionButton.menu = [UIMenu menuWithTitle:@"" children:@[sort, region]];
+}
+
+- (void)onHopPrev { [JVMLauncher worldHopDirection:YES]; }
+- (void)onHopNext { [JVMLauncher worldHopDirection:NO]; }
 
 - (NSString *)locationLabel:(NSInteger)loc {
     switch (loc) {
@@ -1204,13 +1292,44 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     cell.detailTextLabel.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
 
     NSInteger players = [w[@"players"] integerValue];
-    UILabel *pc = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 56, 20)];
+    BOOL fav = [w[@"favourite"] boolValue];
+    // Accessory: a ★ favourite toggle (WH-1) + the player count. The star's tag carries the world id.
+    UIView *acc = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 92, 28)];
+    UIButton *star = [UIButton buttonWithType:UIButtonTypeSystem];
+    star.frame = CGRectMake(0, 0, 32, 28);
+    [star setTitle:(fav ? @"★" : @"☆") forState:UIControlStateNormal];
+    star.titleLabel.font = [UIFont systemFontOfSize:18];
+    star.tintColor = fav ? [UIColor colorWithRed:0.95 green:0.78 blue:0.30 alpha:1.0] : [UIColor colorWithWhite:0.55 alpha:1.0];
+    star.tag = wid;
+    [star addTarget:self action:@selector(onToggleFavourite:) forControlEvents:UIControlEventTouchUpInside];
+    [acc addSubview:star];
+    UILabel *pc = [[UILabel alloc] initWithFrame:CGRectMake(34, 4, 58, 20)];
     pc.font = [UIFont systemFontOfSize:13];
     pc.textAlignment = NSTextAlignmentRight;
     pc.textColor = [UIColor colorWithWhite:0.75 alpha:1.0];
     pc.text = players >= 0 ? [NSString stringWithFormat:@"%ld", (long)players] : @"—";
-    cell.accessoryView = pc;
+    [acc addSubview:pc];
+    cell.accessoryView = acc;
     return cell;
+}
+
+// WH-1: toggle a world's favourite (the star button), then re-pull so it floats to the top.
+- (void)onToggleFavourite:(UIButton *)star {
+    NSInteger wid = star.tag;
+    BOOL nowFav = NO;
+    for (NSDictionary *w in self.allWorlds) {
+        if ([w[@"id"] integerValue] == wid) { nowFav = ![w[@"favourite"] boolValue]; break; }
+    }
+    [JVMLauncher worldSetFavourite:(int)wid favourite:nowFav];
+    // Optimistic: flip the local snapshot so the star + sort update before the next bridge poll lands.
+    NSMutableArray *updated = [NSMutableArray array];
+    for (NSDictionary *w in self.allWorlds) {
+        if ([w[@"id"] integerValue] == wid) {
+            NSMutableDictionary *m = [w mutableCopy]; m[@"favourite"] = @(nowFav); [updated addObject:m];
+        } else { [updated addObject:w]; }
+    }
+    self.allWorlds = updated;
+    [self applyFilter];
 }
 
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {

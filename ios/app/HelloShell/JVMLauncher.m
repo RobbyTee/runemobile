@@ -117,6 +117,8 @@ static jmethodID gWsAvailable = NULL;   // isAvailable()Z
 static jmethodID gWsList = NULL;        // getWorldListJson()Ljava/lang/String;
 static jmethodID gWsHop = NULL;         // hop(I)V
 static jmethodID gWsSetOpen = NULL;     // setUiOpen(Z)V
+static jmethodID gWsSetFav = NULL;      // setFavourite(IZ)V (optional)
+static jmethodID gWsHopDir = NULL;      // hopDirection(Z)V (optional)
 
 // ---- W3 plugin-config de-risk (verdict #7, NATIVE-ORIGIN leg) — STRIP AFTER DEVICE CONFIRM ----------
 // Proves the half the desktop smoke can't: that the OBJC side builds the correct signed decimal of
@@ -485,6 +487,11 @@ static BOOL ensureWorld(void) {
         (*env)->DeleteGlobalRef(env, global);
         return NO;
     }
+    // Optional (WH-1/WH-3) — an older staged jar without these still boots the rest of the switcher.
+    gWsSetFav = (*env)->GetStaticMethodID(env, global, "setFavourite", "(IZ)V");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gWsSetFav = NULL; }
+    gWsHopDir = (*env)->GetStaticMethodID(env, global, "hopDirection", "(Z)V");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gWsHopDir = NULL; }
     gWsClass = global;
     return YES;
 }
@@ -1917,6 +1924,22 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureWorld()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gWsClass, gWsSetOpen, (jboolean)(open ? 1 : 0));
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+}
+
+// WH-1: mark/unmark a world as a favourite (shared worldhopper config). No-op on an older jar.
++ (void)worldSetFavourite:(int)worldId favourite:(BOOL)favourite {
+    if (!ensureWorld() || !gWsSetFav) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gWsClass, gWsSetFav, (jint)worldId, (jboolean)(favourite ? 1 : 0));
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+}
+
+// WH-3: quick-hop to the next/previous world (reflects WorldHopperPlugin.hop(boolean)). No-op on an older jar.
++ (void)worldHopDirection:(BOOL)previous {
+    if (!ensureWorld() || !gWsHopDir) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gWsClass, gWsHopDir, (jboolean)(previous ? 1 : 0));
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
 }
 
