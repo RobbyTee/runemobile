@@ -144,10 +144,14 @@ private fun parseLoot(json: String): List<LootSource> = try {
 // ====================================================================================================
 data class GeOffer(val slot: Int, val state: String, val name: String, val qty: Int, val total: Int,
                    val price: Int, val progress: Double)
+// AP-0: saved trade history the bridge already emits (history:[{buy,itemId,name,qty,price,time}]).
+data class GeTrade(val buy: Boolean, val name: String, val qty: Int, val price: Int)
 
 @Composable
 fun GrandExchangeScreen(onBack: () -> Unit) {
     var offers by remember { mutableStateOf<List<GeOffer>>(emptyList()) }
+    var history by remember { mutableStateOf<List<GeTrade>>(emptyList()) }
+    var tab by remember { mutableStateOf(0) }            // 0 = live offers, 1 = trade history
     var firstLoad by remember { mutableStateOf(true) }
     var logged by remember { mutableStateOf(false) }
 
@@ -159,8 +163,9 @@ fun GrandExchangeScreen(onBack: () -> Unit) {
         while (coroutineContext.isActive) {
             val json = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.geJson() }.get() }
             offers = parseGe(json)
+            history = parseGeHistory(json)
             firstLoad = false
-            if (!logged) { Log.i(PR_TAG, "ANDROID_A5_TIER2_GE_UI_GREEN offers=${offers.size}"); logged = true }
+            if (!logged) { Log.i(PR_TAG, "ANDROID_A5_TIER2_GE_UI_GREEN offers=${offers.size} history=${history.size}"); logged = true }
             delay(1500)
         }
     }
@@ -170,20 +175,51 @@ fun GrandExchangeScreen(onBack: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onBack) { Text("‹ Back") }
                 Text("Grand Exchange", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
-                if (offers.isNotEmpty()) Text("${offers.size}/8", color = Color(0xFFFFD54F), fontSize = 13.sp)
+                if (tab == 0 && offers.isNotEmpty()) Text("${offers.size}/8", color = Color(0xFFFFD54F), fontSize = 13.sp)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                GeTab("Offers", tab == 0) { tab = 0 }
+                GeTab("History", tab == 1) { tab = 1 }
             }
             when {
                 firstLoad -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-                offers.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                tab == 0 && offers.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("No active Grand Exchange offers.", color = Color(0xFF9E9E9E), fontSize = 14.sp)
                 }
-                else -> LazyColumn(Modifier.fillMaxSize()) {
+                tab == 1 && history.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("No saved trade history.", color = Color(0xFF9E9E9E), fontSize = 14.sp)
+                }
+                tab == 0 -> LazyColumn(Modifier.fillMaxSize()) {
                     items(offers, key = { it.slot }) { ofr ->
                         GeOfferItem(ofr); HorizontalDivider(color = Color(0x22FFFFFF))
                     }
                 }
+                else -> LazyColumn(Modifier.fillMaxSize()) {
+                    items(history.size) { i ->
+                        GeTradeItem(history[i]); HorizontalDivider(color = Color(0x22FFFFFF))
+                    }
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun GeTab(label: String, selected: Boolean, onClick: () -> Unit) {
+    TextButton(onClick = onClick) {
+        Text(label, color = if (selected) Color(0xFFFFD54F) else Color(0xFF9E9E9E),
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, fontSize = 14.sp)
+    }
+}
+
+@Composable
+private fun GeTradeItem(t: GeTrade) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(if (t.buy) "Bought" else "Sold",
+            color = if (t.buy) Color(0xFF64B5F6) else Color(0xFFFFB74D), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Text("  ${t.name}", color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Text("×${t.qty}", color = Color(0xFFBDBDBD), fontSize = 12.sp)
+        Text("  @ ${gp(t.price.toLong())} gp", color = Color(0xFF81C784), fontSize = 12.sp)
     }
 }
 
@@ -233,4 +269,20 @@ private fun parseGe(json: String): List<GeOffer> = try {
     }
 } catch (t: Throwable) {
     Log.e(PR_TAG, "ANDROID_A5_TIER2_GE_UI_RED parse: $t"); emptyList()
+}
+
+private fun parseGeHistory(json: String): List<GeTrade> = try {
+    val o = JSONObject(json)
+    val arr = o.optJSONArray("history") ?: return emptyList()
+    (0 until arr.length()).map { i ->
+        val h = arr.getJSONObject(i)
+        GeTrade(
+            buy = h.optBoolean("buy"),
+            name = h.optString("name", "").ifEmpty { "Item ${h.optInt("itemId")}" },
+            qty = h.optInt("qty"),
+            price = h.optInt("price"),
+        )
+    }.asReversed()   // storage keeps newest last; show newest first
+} catch (t: Throwable) {
+    emptyList()
 }

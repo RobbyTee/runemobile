@@ -69,6 +69,8 @@ data class ConfigItem(
     val units: String?,
     val secret: Boolean,
     val alpha: Boolean,        // color items: true when the plugin's color exposes an editable alpha channel
+    val min: Int?,             // @Range min for int/double items (null = unbounded) — clamps writes
+    val max: Int?,             // @Range max for int/double items (null = unbounded)
 )
 
 /**
@@ -175,12 +177,8 @@ private fun ConfigItemControl(item: ConfigItem, onChange: (String) -> Unit) {
             }
         }
         when (item.type) {
-            "int", "double" -> OutlinedTextField(
-                value = item.value ?: "", onValueChange = onChange, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                visualTransformation = if (item.secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-                label = item.units?.let { u -> { Text(u) } }, modifier = Modifier.fillMaxWidth(),
-            )
+            "int" -> NumericConfigControl(item, isInt = true, onChange = onChange)
+            "double" -> NumericConfigControl(item, isInt = false, onChange = onChange)
             "string" -> OutlinedTextField(
                 value = item.value ?: "", onValueChange = onChange, singleLine = true,
                 visualTransformation = if (item.secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
@@ -219,6 +217,45 @@ private fun FontDropdown(item: ConfigItem, onChange: (String) -> Unit) {
             }
         }
     }
+}
+
+/**
+ * AP-0: int/double field that clamps to the schema @Range and only WRITES a parseable value — fixes the prior
+ * per-keystroke raw write (an out-of-range or non-numeric value corrupted the config). Local text state mirrors
+ * the keystrokes so the user can type/clear freely; an over-max value snaps the display down, an under-min value
+ * snaps up, and an unparseable intermediate (empty / "-" / "1.2.3") updates the display only — no write.
+ */
+@Composable
+private fun NumericConfigControl(item: ConfigItem, isInt: Boolean, onChange: (String) -> Unit) {
+    var text by remember(item.key, item.value) { mutableStateOf(item.value ?: "") }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { t ->
+            text = t
+            val parsed: Double? = if (isInt) t.trim().toIntOrNull()?.toDouble() else t.trim().toDoubleOrNull()
+            if (parsed != null) {
+                val lo = item.min?.toDouble()
+                val hi = item.max?.toDouble()
+                val clamped = when {
+                    hi != null && parsed > hi -> hi
+                    lo != null && parsed < lo -> lo
+                    else -> parsed
+                }
+                if (clamped != parsed) {
+                    val s = if (isInt) clamped.toInt().toString() else clamped.toString()
+                    text = s
+                    onChange(s)
+                } else {
+                    onChange(t)   // in range: write exactly what was typed (preserves "5." / "1.50")
+                }
+            }
+        },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        visualTransformation = if (item.secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+        label = item.units?.let { u -> { Text(u) } },
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 /** The writeId from a bridge ack ({"ok":true,"writeId":n}), or -1 if absent/unparseable. */
@@ -525,6 +562,8 @@ private fun parseConfig(json: String): List<ConfigItem> = try {
             units = if (o.isNull("units")) null else o.optString("units", null),
             secret = o.optBoolean("secret", false),
             alpha = o.optBoolean("alpha", false),
+            min = if (o.has("min")) o.optInt("min") else null,
+            max = if (o.has("max")) o.optInt("max") else null,
         )
     }
 } catch (t: Throwable) {

@@ -39,6 +39,7 @@ import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -1029,17 +1030,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** AP-2a Finding 25: open an in-game outbound link (Wiki/HiScore/plugin page) in the system browser. */
+    /** AP-0/Finding 25: open an in-game outbound link (Wiki/HiScore/plugin page) in an in-app Chrome Custom Tab
+     *  (stays in the task, one back-press returns to the game) instead of cold-switching to the system browser.
+     *  Falls back to ACTION_VIEW if no browser supports Custom Tabs. */
     private fun openLink(url: String) {
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
             Log.i(TAG, "ap2a: link ignored (non-http): $url")
             return
         }
+        val uri = Uri.parse(url)
         try {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            Log.i(TAG, "ap2a: link opened $url")
+            CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(this, uri)
+            Log.i(TAG, "ap2a: link opened (custom tab) $url")
         } catch (t: Throwable) {
-            Log.w(TAG, "ap2a: openLink failed: ${t.message}")
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                Log.i(TAG, "ap2a: link opened (browser fallback) $url")
+            } catch (t2: Throwable) {
+                Log.w(TAG, "ap2a: openLink failed: ${t2.message}")
+            }
         }
     }
 
