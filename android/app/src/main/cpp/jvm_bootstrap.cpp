@@ -71,6 +71,8 @@ static jclass    g_mobileUiCls = nullptr;
 static jmethodID g_midListPlugins = nullptr, g_midMobileUiSeq = nullptr, g_midPollEvents = nullptr, g_midSetPluginEnabled = nullptr;
 static jmethodID g_midGetPluginConfig = nullptr, g_midSetConfig = nullptr, g_midProcessedWriteId = nullptr;
 static jmethodID g_midFlushConfig = nullptr;   // A8: persist pending config writes when the app backgrounds
+static jmethodID g_midResetPluginConfig = nullptr;     // SC-2/CFG-10: whole-group reset to defaults
+static jmethodID g_midNotificationDefaults = nullptr;  // SC-1/NOTIF-2: default Notification seed JSON
 // AP-2a bridge-amortized read surface (best-effort; a null only disables that one feature):
 //   nextNotification() -> "titlebody" or null  (Finding 9: NotificationManager delivery)
 //   nextLink()         -> URL or null                (Finding 25: Chrome Custom Tab)
@@ -495,6 +497,8 @@ static bool publishBridge(JNIEnv *env) {
             g_midSetConfig        = midOpt(env, mug, "setConfig", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
             g_midProcessedWriteId = midOpt(env, mug, "getProcessedWriteId", "()J");
             g_midFlushConfig      = midOpt(env, mug, "flushConfig", "()Ljava/lang/String;");   // A8 background flush
+            g_midResetPluginConfig   = midOpt(env, mug, "resetPluginConfig", "(Ljava/lang/String;)Ljava/lang/String;");   // SC-2 reset
+            g_midNotificationDefaults = midOpt(env, mug, "notificationDefaults", "()Ljava/lang/String;");                  // SC-1 defaults
             if (!g_midGetPluginConfig || !g_midSetConfig || !g_midProcessedWriteId)
                 LOGE("bridge: MobileUiBridge config methods partial (plugin config read/write disabled)");
             // AP-2a: drain surfaces for native notification / link-out / hub-progress (each best-effort).
@@ -1441,6 +1445,19 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeFlushConfig(JNIEnv *artEnv, jobject) {
     if (!mobileUiReady() || !g_midFlushConfig) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midFlushConfig);
+}
+// SC-2/CFG-10: reset an entire config group to defaults. Returns the bridge JSON ack ({"ok":..,"writeId":n}).
+static jstring mobileUiStrArg(JNIEnv *artEnv, jmethodID m, jstring jArg);   // defined below (Finding 17 helpers)
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeResetPluginConfig(JNIEnv *artEnv, jobject, jstring jGroup) {
+    if (!mobileUiReady() || !g_midResetPluginConfig) return artEnv->NewStringUTF("");
+    return mobileUiStrArg(artEnv, g_midResetPluginConfig, jGroup);
+}
+// SC-1/NOTIF-2: the serialized default Notification seed JSON for the per-item editor (or "" if unresolved).
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeNotificationDefaults(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midNotificationDefaults) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midNotificationDefaults);
 }
 // AP-2a drain surfaces: one queued item or "" (empty queue / unresolved). Off the UI thread (rl-bridge).
 //   Finding 9  — nextNotification: "titlebody" (SOH-delimited), native splits + raises a notification.

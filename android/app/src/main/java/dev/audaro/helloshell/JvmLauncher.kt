@@ -131,6 +131,10 @@ object JvmLauncher {
     external fun nativeProcessedWriteId(): Long
     // A8: persist pending plugin-config writes (call when the app backgrounds). Off the UI thread (onBridge).
     external fun nativeFlushConfig(): String
+    // SC-2/CFG-10: reset an entire plugin/config group to defaults (returns {"ok":..,"writeId":n}). Off the UI thread.
+    external fun nativeResetPluginConfig(group: String): String
+    // SC-1/NOTIF-2: the serialized default Notification seed for the per-item editor. Off the UI thread.
+    external fun nativeNotificationDefaults(): String
 
     // AP-2a bridge-amortized drain surfaces (off the UI thread via [onBridge]); "" = nothing pending / unresolved.
     external fun nativeNextNotification(): String   // Finding 9:  "titlebody" or ""
@@ -282,6 +286,8 @@ object JvmLauncher {
     fun setConfig(group: String, key: String, value: String) = nativeSetConfig(group, key, value)
     fun processedWriteId() = nativeProcessedWriteId()
     fun flushConfig() = nativeFlushConfig()
+    fun resetPluginConfig(group: String) = nativeResetPluginConfig(group)
+    fun notificationDefaults() = nativeNotificationDefaults()
     fun nextNotification() = nativeNextNotification()
     fun nextLink() = nativeNextLink()
     fun hubState() = nativeHubState()

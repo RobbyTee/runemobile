@@ -46,6 +46,7 @@ data class PluginRow(
     val hasConfig: Boolean,
     val configGroup: String?,
     val pinned: Boolean,
+    val configOnly: Boolean,   // desktop config-only fake-plugin (RuneLite / Chat Color): no enable toggle, tap = config
 )
 
 /**
@@ -139,7 +140,8 @@ fun PluginPanel(
         Column(Modifier.fillMaxSize().padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "Plugins" + if (rows.isNotEmpty()) "  (${rows.count { it.enabled }}/${rows.size})" else "",
+                    "Plugins" + if (rows.isNotEmpty())
+                        "  (${rows.count { it.enabled && !it.configOnly }}/${rows.count { !it.configOnly }})" else "",
                     color = Color.White, fontSize = 20.sp, modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.titleLarge,
                 )
@@ -258,7 +260,9 @@ private fun PluginRowItem(
             // Developer Tools, …) — tell the user instead of leaving a dead toggle.
             if (incompatible) Text("✕ couldn't start (incompatible)", color = Color(0xFFE57373), fontSize = 11.sp)
         }
-        Switch(checked = p.enabled, onCheckedChange = onToggle)
+        // Config-only fake-plugins (RuneLite core settings / Chat Color) have no enable state — desktop shows no
+        // toggle, only a tap-to-configure row (the ⚙ above). Everything else gets the enable switch.
+        if (!p.configOnly) Switch(checked = p.enabled, onCheckedChange = onToggle)
     }
 }
 
@@ -274,6 +278,7 @@ private fun parsePlugins(json: String): List<PluginRow> = try {
             hasConfig = o.optBoolean("hasConfig"),
             configGroup = if (o.isNull("configGroup")) null else o.optString("configGroup", null),
             pinned = o.optBoolean("pinned"),
+            configOnly = o.optBoolean("configOnly"),
         )
     }.sortedWith(compareByDescending<PluginRow> { it.pinned }.thenBy { it.name.lowercase() })
 } catch (t: Throwable) {

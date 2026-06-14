@@ -62,9 +62,10 @@ data class ConfigItem(
     val key: String,
     val name: String,
     val description: String,
-    val type: String,          // boolean | int | double | string | enum | color | set | unknown
+    val type: String,          // boolean | int | double | string | enum | color | set | font | notification | unknown
     val value: String?,        // current value (string-serialized); null for secrets
-    val choices: List<String>?,// enum / set element names
+    val choices: List<String>?,// enum / set element names, or friendly font preset labels
+    val choiceValues: List<String>?, // font: the constant to WRITE for each label (REGULAR/BOLD/SMALL); null otherwise
     val units: String?,
     val secret: Boolean,
     val alpha: Boolean,        // color items: true when the plugin's color exposes an editable alpha channel
@@ -80,8 +81,11 @@ data class ConfigItem(
 fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit) {
     var items by remember { mutableStateOf<List<ConfigItem>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
+    var reloadKey by remember { mutableIntStateOf(0) }
+    var confirmReset by remember { mutableStateOf(false) }
 
-    LaunchedEffect(group) {
+    LaunchedEffect(group, reloadKey) {
+        loading = true
         val json = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.getPluginConfig(group) }.get() }
         items = parseConfig(json)
         loading = false
@@ -93,6 +97,36 @@ fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onBack) { Text("‹ Back") }
                 Text(pluginName, color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
+                TextButton(onClick = { confirmReset = true }) { Text("Reset", color = Color(0xFFFF8A80)) }
+            }
+            if (confirmReset) {
+                Dialog(onDismissRequest = { confirmReset = false }) {
+                    Surface(color = Color(0xFF1B1B1B), shape = RoundedCornerShape(14.dp)) {
+                        Column(Modifier.padding(18.dp).fillMaxWidth()) {
+                            Text("Reset all settings?", color = Color.White, fontSize = 16.sp)
+                            Spacer(Modifier.size(6.dp))
+                            Text("Restores $pluginName to its defaults.", color = Color.Gray, fontSize = 13.sp)
+                            Spacer(Modifier.size(12.dp))
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                TextButton(onClick = { confirmReset = false }) { Text("Cancel") }
+                                TextButton(onClick = {
+                                    confirmReset = false
+                                    // Reset enqueues a client-thread write; wait for it to be processed (poll the
+                                    // bridge's writeId) before re-pulling the schema, so the screen shows defaults.
+                                    JvmLauncher.onBridge {
+                                        val ack = JvmLauncher.resetPluginConfig(group)
+                                        val wid = parseWriteId(ack)
+                                        var tries = 0
+                                        while (wid > 0 && JvmLauncher.processedWriteId() < wid && tries++ < 60) {
+                                            Thread.sleep(10)
+                                        }
+                                        reloadKey++   // snapshot-state write off the bridge thread schedules recompose
+                                    }
+                                }) { Text("Reset", color = Color(0xFFFF8A80)) }
+                            }
+                        }
+                    }
+                }
             }
             if (loading) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -126,6 +160,13 @@ private fun ConfigItemControl(item: ConfigItem, onChange: (String) -> Unit) {
                     Switch(checked = item.value?.toBoolean() ?: false, onCheckedChange = { onChange(it.toString()) })
                 item.type == "enum" && item.choices != null ->
                     EnumDropdown(item.choices, item.value, onChange)
+                item.type == "font" && item.choices != null ->
+                    FontDropdown(item, onChange)
+                // A notification config item: a plain enable toggle writes the engine's "true"/"false" sentinel
+                // (NotificationSerializer.deserialize accepts it). An enabled-but-uninitialized notification
+                // inherits the global RuneLite defaults on first fire — exactly desktop's uncustomized behavior.
+                item.type == "notification" ->
+                    Switch(checked = isNotifEnabled(item.value), onCheckedChange = { onChange(if (it) "true" else "false") })
                 else -> {}   // text-ish controls render full-width below
             }
         }
@@ -144,13 +185,51 @@ private fun ConfigItemControl(item: ConfigItem, onChange: (String) -> Unit) {
             "color" -> ColorConfigControl(item, onChange)
             "dimension" -> DimensionConfigControl(item, onChange)
             "set" -> SetConfigControl(item, onChange)
+            "notification" -> Text(
+                "Uses the global notification defaults (sound / flash / colour). Edit those in RuneLite settings.",
+                color = Color.Gray, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+            )
             "unknown" -> OutlinedTextField(   // genuinely opaque types stay read-only (no safe round-trip)
                 value = item.value ?: "", onValueChange = {}, readOnly = true, singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            else -> {}   // boolean / enum handled inline above
+            else -> {}   // boolean / enum / font handled inline above
         }
     }
+}
+
+/** Font preset picker: shows the friendly labels (Regular/Bold/Small) but WRITES the matching engine constant
+ *  (REGULAR/BOLD/SMALL) — FontTypeSerializer.deserialize accepts those legacy strings. The stored value is an
+ *  opaque serialized FontType, so the current selection is matched best-effort against the choiceValues. */
+@Composable
+private fun FontDropdown(item: ConfigItem, onChange: (String) -> Unit) {
+    val labels = item.choices ?: emptyList()
+    val values = item.choiceValues ?: labels
+    val curLabel = values.indexOf(item.value).let { if (it >= 0) labels.getOrNull(it) else null }
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        TextButton(onClick = { expanded = true }) { Text(curLabel ?: "—", color = Color.White) }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            labels.forEachIndexed { i, l ->
+                DropdownMenuItem(text = { Text(l) }, onClick = { expanded = false; onChange(values.getOrElse(i) { l }) })
+            }
+        }
+    }
+}
+
+/** The writeId from a bridge ack ({"ok":true,"writeId":n}), or -1 if absent/unparseable. */
+private fun parseWriteId(ack: String?): Long = try {
+    JSONObject(ack ?: "{}").optLong("writeId", -1L)
+} catch (t: Throwable) {
+    -1L
+}
+
+/** True if a notification config value is enabled — tolerates the "true"/"false" sentinel or a full JSON object. */
+private fun isNotifEnabled(v: String?): Boolean {
+    val t = v?.trim().orEmpty()
+    if (t == "true") return true
+    if (t.isEmpty() || t == "false") return false
+    return try { JSONObject(t).optBoolean("enabled", false) } catch (e: Throwable) { false }
 }
 
 @Composable
@@ -430,6 +509,7 @@ private fun parseConfig(json: String): List<ConfigItem> = try {
     (0 until arr.length()).map { i ->
         val o = arr.getJSONObject(i)
         val choices = o.optJSONArray("choices")?.let { c -> (0 until c.length()).map { c.getString(it) } }
+        val choiceValues = o.optJSONArray("choiceValues")?.let { c -> (0 until c.length()).map { c.getString(it) } }
         ConfigItem(
             key = o.getString("key"),
             name = o.optString("name", o.getString("key")),
@@ -437,6 +517,7 @@ private fun parseConfig(json: String): List<ConfigItem> = try {
             type = o.optString("type", "unknown"),
             value = if (o.isNull("value")) null else o.optString("value", null),
             choices = choices,
+            choiceValues = choiceValues,
             units = if (o.isNull("units")) null else o.optString("units", null),
             secret = o.optBoolean("secret", false),
             alpha = o.optBoolean("alpha", false),
