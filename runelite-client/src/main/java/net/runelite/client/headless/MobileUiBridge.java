@@ -980,6 +980,7 @@ public final class MobileUiBridge
 				.kv("className", p.getClass().getName())
 				.kv("name", d.name())
 				.kv("description", d.description())
+				.kv("tags", String.join(" ", d.tags()))
 				.kb("enabled", pm.isPluginEnabled(p))
 				.kb("active", pm.isPluginActive(p))
 				.kb("hasConfig", hasConfig)

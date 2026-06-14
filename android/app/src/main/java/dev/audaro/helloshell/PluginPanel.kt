@@ -41,6 +41,8 @@ import org.json.JSONArray
 data class PluginRow(
     val className: String,
     val name: String,
+    val description: String,   // for search parity with desktop (name + description + tags)
+    val tags: String,          // space-joined PluginDescriptor.tags()
     val enabled: Boolean,
     val active: Boolean,       // engine actually started it; enabled && !active (after grace) = couldn't start
     val hasConfig: Boolean,
@@ -157,7 +159,11 @@ fun PluginPanel(
             if (loading) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             } else {
-                val shown = rows.filter { it.name.contains(filter, ignoreCase = true) }
+                val q = filter.trim()
+                val shown = rows.filter {
+                    q.isEmpty() || it.name.contains(q, ignoreCase = true) ||
+                        it.description.contains(q, ignoreCase = true) || it.tags.contains(q, ignoreCase = true)
+                }
                 LazyColumn(Modifier.fillMaxSize(), state = listState) {
                     items(shown, key = { it.className }) { p ->
                         val rendererMode = when (p.className) {
@@ -273,6 +279,8 @@ private fun parsePlugins(json: String): List<PluginRow> = try {
         PluginRow(
             className = o.getString("className"),
             name = o.optString("name", o.getString("className")),
+            description = o.optString("description", ""),
+            tags = o.optString("tags", ""),
             enabled = o.optBoolean("enabled"),
             active = o.optBoolean("active"),
             hasConfig = o.optBoolean("hasConfig"),

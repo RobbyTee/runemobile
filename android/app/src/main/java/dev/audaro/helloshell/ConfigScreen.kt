@@ -191,6 +191,12 @@ private fun ConfigItemControl(item: ConfigItem, onChange: (String) -> Unit) {
                 "Uses the global notification defaults (sound / flash / colour). Edit those in RuneLite settings.",
                 color = Color.Gray, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
             )
+            // AP-0: keybind items previously rendered as a blank row (no control, not even the value). There is
+            // no hardware-key capture on a touch app, so show the current binding read-only instead of nothing.
+            "keybind" -> Text(
+                "Binding: " + (item.value?.takeIf { it.isNotBlank() } ?: "Not set") + "  ·  edit on desktop",
+                color = Color(0xFF9E9E9E), fontSize = 12.sp, modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+            )
             "unknown" -> OutlinedTextField(   // genuinely opaque types stay read-only (no safe round-trip)
                 value = item.value ?: "", onValueChange = {}, readOnly = true, singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
