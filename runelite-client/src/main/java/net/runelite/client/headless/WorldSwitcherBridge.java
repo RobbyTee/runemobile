@@ -29,8 +29,10 @@ import java.util.EnumSet;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.RuneLite;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.config.ConfigManager;
 import net.runelite.client.game.WorldService;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginManager;
@@ -56,14 +58,19 @@ public final class WorldSwitcherBridge
 	private static volatile ClientThread clientThread;
 	private static volatile PluginManager pluginManager;
 	private static volatile WorldService worldService;
+	private static volatile ConfigManager configManager;
+
+	// The shared WorldHopper favourites config (worldhopper.favorite_<id>=true); same keys the desktop plugin uses.
+	private static final String WORLDHOPPER_GROUP = "worldhopper";
 
 	private static volatile boolean uiOpen;
 	private static volatile String listJson = "{\"available\":false}";
 	private static long lastRefresh;
 
-	// Reflected hop(int) on the WorldHopper plugin (private; resolved lazily).
+	// Reflected hop(int) / hop(boolean) on the WorldHopper plugin (private; resolved lazily).
 	private static Object worldHopper;
 	private static Method hopMethod;
+	private static Method hopDirMethod;
 
 	private WorldSwitcherBridge()
 	{
@@ -93,10 +100,100 @@ public final class WorldSwitcherBridge
 		return ws;
 	}
 
+	private static ConfigManager configManager()
+	{
+		ConfigManager cm = configManager;
+		if (cm == null)
+		{
+			try
+			{
+				cm = RuneLite.getInjector().getInstance(ConfigManager.class);
+				configManager = cm;
+			}
+			catch (Throwable ignore)
+			{
+			}
+		}
+		return cm;
+	}
+
 	public static boolean isAvailable()
 	{
 		final WorldService ws = worldService();
 		return ws != null && ws.getWorlds() != null;
+	}
+
+	/** Whether {@code worldId} is a favourite — the shared {@code worldhopper.favorite_<id>} config or an in-game
+	 *  favourite varbit. Matches the desktop {@code WorldHopperPlugin.isFavorite}. */
+	private static boolean isFavourite(int worldId, int fav1, int fav2)
+	{
+		if (worldId == fav1 || worldId == fav2)
+		{
+			return true;
+		}
+		final ConfigManager cm = configManager();
+		if (cm == null)
+		{
+			return false;
+		}
+		final String v = cm.getConfiguration(WORLDHOPPER_GROUP, "favorite_" + worldId);
+		return "true".equals(v);
+	}
+
+	/** Mark/unmark {@code worldId} as a favourite via the shared config (WH-1). Persists; round-trips with desktop. */
+	public static void setFavourite(int worldId, boolean favourite)
+	{
+		final ClientThread ct = clientThread;
+		final ConfigManager cm = configManager();
+		if (ct == null || cm == null)
+		{
+			return;
+		}
+		ct.invokeLater(() ->
+		{
+			try
+			{
+				if (favourite)
+				{
+					cm.setConfiguration(WORLDHOPPER_GROUP, "favorite_" + worldId, true);
+				}
+				else
+				{
+					cm.unsetConfiguration(WORLDHOPPER_GROUP, "favorite_" + worldId);
+				}
+				lastRefresh = 0; // re-emit the list with the new favourite flag promptly
+			}
+			catch (Throwable ex)
+			{
+				log.debug("[worldswitcher] setFavourite {} failed", worldId, ex);
+			}
+		});
+	}
+
+	/** Quick-hop to the next/previous world in the configured filter (WH-3 — reflects {@code hop(boolean)}). */
+	public static void hopDirection(boolean previous)
+	{
+		final ClientThread ct = clientThread;
+		if (ct == null)
+		{
+			return;
+		}
+		ct.invokeLater(() ->
+		{
+			if (!resolveHop() || hopDirMethod == null)
+			{
+				log.info("[worldswitcher] quick-hop aborted: hop(boolean) unresolved");
+				return;
+			}
+			try
+			{
+				hopDirMethod.invoke(worldHopper, previous);
+			}
+			catch (Throwable ex)
+			{
+				log.warn("[worldswitcher] quick-hop failed", ex);
+			}
+		});
 	}
 
 	public static void setUiOpen(boolean open)
@@ -181,6 +278,17 @@ public final class WorldSwitcherBridge
 			}
 			final List<World> worlds = res.getWorlds();
 			final int current = c.getWorld();
+			// In-game favourite worlds (the two world-switcher favourite slots) — read once per rebuild.
+			int fav1 = 0, fav2 = 0;
+			try
+			{
+				fav1 = c.getVarbitValue(VarbitID.WORLDSWITCHER_FAVOURITE_1);
+				fav2 = c.getVarbitValue(VarbitID.WORLDSWITCHER_FAVOURITE_2);
+			}
+			catch (Throwable ignore)
+			{
+				// not logged in / varbit not loaded yet — config favourites still apply
+			}
 			final StringBuilder sb = new StringBuilder(16384);
 			sb.append("{\"available\":true,\"current\":").append(current).append(",\"worlds\":[");
 			boolean first = true;
@@ -196,6 +304,7 @@ public final class WorldSwitcherBridge
 					.append("\"id\":").append(w.getId()).append(',')
 					.append("\"players\":").append(w.getPlayers()).append(',')
 					.append("\"location\":").append(w.getLocation()).append(',')
+					.append("\"favourite\":").append(isFavourite(w.getId(), fav1, fav2)).append(',')
 					.append("\"members\":").append(types.contains(WorldType.MEMBERS)).append(',')
 					.append("\"pvp\":").append(types.contains(WorldType.PVP)).append(',')
 					.append("\"highRisk\":").append(types.contains(WorldType.HIGH_RISK)).append(',')
@@ -244,6 +353,16 @@ public final class WorldSwitcherBridge
 					m.setAccessible(true);
 					worldHopper = p;
 					hopMethod = m;
+					try
+					{
+						final Method dir = WorldHopperPlugin.class.getDeclaredMethod("hop", boolean.class);
+						dir.setAccessible(true);
+						hopDirMethod = dir;
+					}
+					catch (Throwable ignore)
+					{
+						hopDirMethod = null; // quick-hop unavailable on an older plugin; row-tap hop still works
+					}
 					return true;
 				}
 			}

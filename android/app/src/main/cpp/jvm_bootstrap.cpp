@@ -106,6 +106,7 @@ static jmethodID g_midQuestAvail = nullptr, g_midQuestSetUiOpen = nullptr, g_mid
                  g_midQuestActive = nullptr, g_midQuestStart = nullptr, g_midQuestStop = nullptr;
 static jclass    g_worldCls = nullptr;
 static jmethodID g_midWorldAvail = nullptr, g_midWorldSetUiOpen = nullptr, g_midWorldList = nullptr, g_midWorldHop = nullptr;
+static jmethodID g_midWorldSetFav = nullptr, g_midWorldHopDir = nullptr;   // SC-5 favourites + quick-hop (best-effort)
 // Finding 15 — overlay edit (OverlayBridge): list movable overlays, snap one to a corner, reset to default.
 static jclass    g_overlayCls = nullptr;
 static jmethodID g_midOverlayAvail = nullptr, g_midOverlaySetUiOpen = nullptr, g_midOverlaysJson = nullptr,
@@ -582,6 +583,9 @@ static bool publishBridge(JNIEnv *env) {
             g_midWorldSetUiOpen = midOpt(env, wsg, "setUiOpen", "(Z)V");
             g_midWorldList      = midOpt(env, wsg, "getWorldListJson", "()Ljava/lang/String;");
             g_midWorldHop       = midOpt(env, wsg, "hop", "(I)V");
+            // SC-5 favourites + quick-hop: best-effort (a null only disables that one control, not the whole reflow).
+            g_midWorldSetFav    = midOpt(env, wsg, "setFavourite", "(IZ)V");
+            g_midWorldHopDir    = midOpt(env, wsg, "hopDirection", "(Z)V");
             bool worldOk = g_midWorldAvail && g_midWorldSetUiOpen && g_midWorldList && g_midWorldHop;
             if (worldOk) {
                 g_worldCls = wsg;
@@ -1676,6 +1680,12 @@ static void facadeVoidInt(jclass cls, jmethodID m, jint i) {
     hs->CallStaticVoidMethod(cls, m, i);
     if (hs->ExceptionCheck()) hs->ExceptionClear();
 }
+static void facadeVoidIntBool(jclass cls, jmethodID m, jint i, jboolean b) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m) return;
+    hs->CallStaticVoidMethod(cls, m, i, b);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+}
 static void facadeVoidIntInt(jclass cls, jmethodID m, jint a, jint b) {
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !cls || !m) return;
@@ -1756,6 +1766,18 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeWorldHop(JNIEnv *, jobject, jint worldId) {
     if (!worldReady()) return;
     facadeVoidInt(g_worldCls, g_midWorldHop, worldId);
+}
+// SC-5: mark/unmark a world as a favourite (best-effort; no-op if the jar predates setFavourite).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeWorldSetFavourite(JNIEnv *, jobject, jint worldId, jboolean fav) {
+    if (!worldReady() || !g_midWorldSetFav) return;
+    facadeVoidIntBool(g_worldCls, g_midWorldSetFav, worldId, fav);
+}
+// SC-5: quick-hop to the next/previous world (best-effort; no-op if hopDirection is unresolved).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeWorldHopDirection(JNIEnv *, jobject, jboolean previous) {
+    if (!worldReady() || !g_midWorldHopDir) return;
+    facadeVoidBool(g_worldCls, g_midWorldHopDir, previous);
 }
 
 // Finding 14 — XP Tracker native reflow (read-only). Same facade-call shape as Quest/World, gated on the panel's

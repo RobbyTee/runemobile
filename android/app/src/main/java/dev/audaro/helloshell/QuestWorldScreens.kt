@@ -47,6 +47,7 @@ data class ActiveQuestVm(val name: String, val steps: List<String>, val items: L
 data class WorldRow(
     val id: Int, val players: Int, val location: Int,
     val members: Boolean, val pvp: Boolean, val highRisk: Boolean, val activity: String,
+    val favourite: Boolean,
 )
 
 private const val T2 = "MainActivity"
@@ -190,7 +191,10 @@ fun WorldSwitcherScreen(onBack: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onBack) { Text("‹ Back") }
                 Text("World Switcher", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
-                if (current > 0) Text("W$current", color = Color(0xFFFFD54F), fontSize = 14.sp)
+                // SC-5 quick-hop: previous / next world in the WorldHopper filter (WorldHopperPlugin.hop(boolean)).
+                TextButton(onClick = { JvmLauncher.onBridge { JvmLauncher.worldHopDirection(true) } }) { Text("◀ Prev") }
+                TextButton(onClick = { JvmLauncher.onBridge { JvmLauncher.worldHopDirection(false) } }) { Text("Next ▶") }
+                if (current > 0) Text(" W$current", color = Color(0xFFFFD54F), fontSize = 14.sp)
             }
             Row(Modifier.padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 FilterChip(selected = membersOnly, onClick = { membersOnly = !membersOnly; if (membersOnly) f2pOnly = false },
@@ -203,10 +207,14 @@ fun WorldSwitcherScreen(onBack: () -> Unit) {
             } else {
                 val shown = worlds
                     .filter { (!membersOnly || it.members) && (!f2pOnly || !it.members) }
-                    .sortedBy { it.id }
+                    .sortedWith(compareByDescending<WorldRow> { it.favourite }.thenBy { it.id })   // favourites float to the top
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(shown, key = { it.id }) { w ->
-                        WorldRowItem(w, w.id == current) { JvmLauncher.onBridge { JvmLauncher.worldHop(w.id) } }
+                        WorldRowItem(
+                            w, w.id == current,
+                            onHop = { JvmLauncher.onBridge { JvmLauncher.worldHop(w.id) } },
+                            onToggleFav = { JvmLauncher.onBridge { JvmLauncher.worldSetFavourite(w.id, !w.favourite) } },
+                        )
                         HorizontalDivider(color = Color(0x14FFFFFF))
                     }
                 }
@@ -216,11 +224,17 @@ fun WorldSwitcherScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun WorldRowItem(w: WorldRow, isCurrent: Boolean, onHop: () -> Unit) {
+private fun WorldRowItem(w: WorldRow, isCurrent: Boolean, onHop: () -> Unit, onToggleFav: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(enabled = !isCurrent) { onHop() }.padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // SC-5 favourite toggle (shared worldhopper.favorite_<id>); favourites float to the top of the list.
+        Text(
+            if (w.favourite) "★" else "☆",
+            color = if (w.favourite) Color(0xFFFFC107) else Color(0xFF777777), fontSize = 18.sp,
+            modifier = Modifier.clickable { onToggleFav() }.padding(end = 10.dp),
+        )
         Box(
             Modifier.size(8.dp).clip(CircleShape)
                 .background(if (isCurrent) Color(0xFF66BB6A) else if (w.members) Color(0xFFFFB300) else Color(0xFF64B5F6)),
@@ -274,7 +288,7 @@ private fun parseWorldList(json: String): List<WorldRow> = try {
         WorldRow(
             id = w.optInt("id"), players = w.optInt("players"), location = w.optInt("location"),
             members = w.optBoolean("members"), pvp = w.optBoolean("pvp"), highRisk = w.optBoolean("highRisk"),
-            activity = w.optString("activity", ""),
+            activity = w.optString("activity", ""), favourite = w.optBoolean("favourite"),
         )
     }
 } catch (t: Throwable) {

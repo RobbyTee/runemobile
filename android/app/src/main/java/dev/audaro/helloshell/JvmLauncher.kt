@@ -170,6 +170,9 @@ object JvmLauncher {
     external fun nativeWorldSetUiOpen(open: Boolean)
     external fun nativeWorldListJson(): String
     external fun nativeWorldHop(worldId: Int)
+    // SC-5 World Switcher favourites + quick-hop (best-effort; no-op if the staged jar predates them).
+    external fun nativeWorldSetFavourite(worldId: Int, favourite: Boolean)
+    external fun nativeWorldHopDirection(previous: Boolean)
 
     // Finding 14 — XP Tracker native reflow (read-only data panel; same facade shape as Quest/World).
     // setUiOpen brackets the screen so the bridge only rebuilds the snapshot while it's shown. Off the UI thread.
@@ -316,6 +319,8 @@ object JvmLauncher {
     fun worldSetUiOpen(open: Boolean) = nativeWorldSetUiOpen(open)
     fun worldListJson() = nativeWorldListJson()
     fun worldHop(worldId: Int) = nativeWorldHop(worldId)
+    fun worldSetFavourite(worldId: Int, favourite: Boolean) = nativeWorldSetFavourite(worldId, favourite)
+    fun worldHopDirection(previous: Boolean) = nativeWorldHopDirection(previous)
     fun xpAvailable() = nativeXpAvailable()
     fun xpSetUiOpen(open: Boolean) = nativeXpSetUiOpen(open)
     fun xpJson() = nativeXpJson()
