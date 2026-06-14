@@ -177,7 +177,10 @@ public class Notifier
 		// sendWhenFocused=false notifications while the window is focused) would otherwise drop nearly every
 		// notification on a phone, where "focused" is meaningless (the app is the whole screen). Additive + gated:
 		// a no-op unless the mobile UI is active. The native shell raises the real OS notification.
-		net.runelite.client.headless.MobileUiBridge.publishNotification(buildTitle(), message);
+		// By here `notification` is the effective config (the per-item override, or the resolved defaults from the
+		// branch above), so its sound/volume are what the native shell should honor — OFF means no banner sound.
+		net.runelite.client.headless.MobileUiBridge.publishNotification(buildTitle(), message,
+			notification.getSound() == null ? null : notification.getSound().name(), notification.getVolume());
 
 		if (!notification.isSendWhenFocused() && clientUI.isFocused())
 		{

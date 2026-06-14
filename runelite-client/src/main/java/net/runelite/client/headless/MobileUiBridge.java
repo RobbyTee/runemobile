@@ -55,11 +55,15 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.externalplugins.ExternalPluginClient;
 import net.runelite.client.externalplugins.ExternalPluginManager;
 import net.runelite.client.externalplugins.PluginHubManifest;
+import net.runelite.client.config.ChatColorConfig;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigDescriptor;
 import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigItemDescriptor;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.config.ConfigSection;
+import net.runelite.client.config.ConfigSectionDescriptor;
+import net.runelite.client.config.Notification;
 import net.runelite.client.config.Range;
 import net.runelite.client.config.RuneLiteConfig;
 import net.runelite.client.config.Units;
@@ -200,6 +204,19 @@ public final class MobileUiBridge
 	 */
 	public static void publishNotification(String title, String body)
 	{
+		// Back-compat 2-arg overload: native falls back to the platform default sound (sound type unspecified).
+		publishNotification(title, body, null, -1);
+	}
+
+	/**
+	 * As {@link #publishNotification(String, String)} but carrying the {@link net.runelite.client.config.NotificationSound}
+	 * type name (NATIVE/CUSTOM/OFF) and a 0-100 volume hint so the native shell can honor OFF (no sound) and the
+	 * configured sound/volume instead of always playing the default beep (desktop-parity NOTIF-1). The sound/volume
+	 * are appended as extra separator-delimited fields so an older shell that splits on the first separator still
+	 * reads title+body.
+	 */
+	public static void publishNotification(String title, String body, String soundType, int volume)
+	{
 		if (!ENABLED)
 		{
 			return;
@@ -208,7 +225,8 @@ public final class MobileUiBridge
 		{
 			notifications.poll();
 		}
-		notifications.add((title == null ? "" : title) + '\u0001' + (body == null ? "" : body));
+		notifications.add((title == null ? "" : title) + '\u0001' + (body == null ? "" : body)
+			+ '\u0001' + (soundType == null ? "" : soundType) + '\u0001' + volume);
 	}
 
 	/** Drain the oldest pending notification ({@code "title\u0001body"}), or {@code null} if none. Native polls this. */
@@ -970,7 +988,64 @@ public final class MobileUiBridge
 				.kvNullable("configGroup", group)
 				.end();
 		}
+		// Desktop registers two config-only "fake plugins" (config/ConfigPlugin) that are NOT real Plugins and so
+		// never appear in pm.getPlugins(): the "RuneLite" core-settings group (overlay fonts, tooltip position,
+		// infobox size, notification defaults, wiki prices) and "Chat Color" (textrecolor). Inject them as
+		// synthetic config-only rows (configOnly:true → the native list shows no enable toggle, a tap opens config).
+		emitFakePlugin(out, pinned, FAKE_RUNELITE_NAME, "RuneLite client settings", RuneLiteConfig.GROUP_NAME);
+		emitFakePlugin(out, pinned, FAKE_CHATCOLOR_NAME, "Recolor chat text", FAKE_CHATCOLOR_GROUP);
 		return out.end().toString();
+	}
+
+	// The two desktop config-only fake-plugins (see listPlugins). Display names match desktop so a pin round-trips.
+	private static final String FAKE_RUNELITE_NAME = "RuneLite";
+	private static final String FAKE_CHATCOLOR_NAME = "Chat Color";
+	private static final String FAKE_CHATCOLOR_GROUP = "textrecolor";
+
+	/** Emit one synthetic config-only plugin row (no enable toggle, no PluginPanel) backed by a {@link Config} group. */
+	private static void emitFakePlugin(Json out, Set<String> pinned, String name, String desc, String group)
+	{
+		out.obj()
+			.kv("className", "fakeplugin:" + group)
+			.kv("name", name)
+			.kv("description", desc)
+			.kb("enabled", true)
+			.kb("active", true)
+			.kb("hasConfig", true)
+			.kb("developer", false)
+			.kb("configOnly", true)
+			.kb("pinned", pinned.contains(name.replace(",", "")))
+			.kvNullable("configGroup", group)
+			.end();
+	}
+
+	/** The {@link Config} class backing a desktop fake-plugin group, or null if {@code group} isn't one. */
+	private static Class<? extends Config> fakeConfigClass(String group)
+	{
+		if (RuneLiteConfig.GROUP_NAME.equals(group))
+		{
+			return RuneLiteConfig.class;
+		}
+		if (FAKE_CHATCOLOR_GROUP.equals(group))
+		{
+			return ChatColorConfig.class;
+		}
+		return null;
+	}
+
+	// RuneLite core-settings keys that are window-manager / hardware-input concepts with no analogue on a
+	// fullscreen touch app (the audit's WIN-NA / KEY-NA set) — filtered out of the native config editor so the
+	// "RuneLite" fake-plugin shows only the presentation + notification defaults that actually apply on mobile.
+	private static final Set<String> RUNELITE_HIDDEN_KEYS = new HashSet<>(java.util.Arrays.asList(
+		"gameSize", "automaticResizeType", "lockWindowSize", "containInScreen2", "rememberScreenBounds",
+		"uiEnableCustomChrome", "uiWindowOpacity", "gameAlwaysOnTop", "warningOnExit", "usernameInTitle",
+		"trayIcon", "notificationTray", "notificationRequestFocus", "notificationTimeout", "notificationFocused",
+		"sidebarToggleKey", "panelToggleKey", "blockExtraMouseButtons", "dragHotkey"));
+
+	/** True for a {@code runelite}-group item that should be hidden from the mobile config editor (window/HW concept). */
+	private static boolean isMobileHiddenItem(String group, String key)
+	{
+		return RuneLiteConfig.GROUP_NAME.equals(group) && RUNELITE_HIDDEN_KEYS.contains(key);
 	}
 
 	/** The set of pinned (favourite) plugin display names, comma-stripped — the shared desktop {@code pinnedPlugins} CSV. */
@@ -1034,8 +1109,8 @@ public final class MobileUiBridge
 	public static String getPluginConfig(String group)
 	{
 		final ConfigManager cm = configManager;
-		final PluginManager pm = pluginManager;
-		if (!ENABLED || cm == null || pm == null || group == null)
+		// No PluginManager needed: the fake-plugin groups resolve via descriptorForGroup -> getConfig(...).
+		if (!ENABLED || cm == null || group == null)
 		{
 			return "{}";
 		}
@@ -1054,6 +1129,12 @@ public final class MobileUiBridge
 				continue;
 			}
 			final String key = item.key();
+			if (isMobileHiddenItem(group, key))
+			{
+				// Window-chrome / hardware-input items in the RuneLite core group are N/A on a fullscreen touch
+				// app (opacity, tray, always-on-top, window resize, sidebar/panel keybinds, extra mouse buttons).
+				continue;
+			}
 			final Type type = item.getType();
 			final boolean secret = ci.secret();
 			out.obj()
@@ -1123,9 +1204,33 @@ public final class MobileUiBridge
 					out.end();
 				}
 			}
+			if ("font".equals(tn))
+			{
+				// FontType is a class with a custom serializer (not an enum). Offer the 3 named presets; the
+				// native side writes back the matching constant name — FontTypeSerializer.deserialize accepts the
+				// legacy "REGULAR"/"BOLD"/"SMALL" strings (CFG-2).
+				out.key("choices").arr().val("Regular").val("Bold").val("Small").end();
+				out.key("choiceValues").arr().val("REGULAR").val("BOLD").val("SMALL").end();
+			}
 			out.end();
 		}
-		return out.end().end().toString();
+		out.end();   // close the items array
+		// Emit each @ConfigSection so the native side shows the friendly section NAME (not the key), honors
+		// closedByDefault, and renders a collapsible header (CFG-6). Already position-sorted by getConfigDescriptor.
+		out.key("sections").arr();
+		for (ConfigSectionDescriptor s : cd.getSections())
+		{
+			final ConfigSection sec = s.getSection();
+			out.obj()
+				.kv("key", s.key())
+				.kv("name", s.name())
+				.kv("description", sec.description())
+				.kb("closedByDefault", sec.closedByDefault())
+				.ki("position", s.position())
+				.end();
+		}
+		out.end();   // close the sections array
+		return out.end().toString();   // close the root object
 	}
 
 	// ---- Writes: queued onto the correct lane, fire-and-forget -----------------------------------------
@@ -1411,6 +1516,105 @@ public final class MobileUiBridge
 		return "{\"ok\":true,\"writeId\":" + id + "}";
 	}
 
+	/**
+	 * Reset an ENTIRE plugin's config to defaults, matching the desktop ConfigPanel "Reset" — reapply group
+	 * defaults with override=true AND call {@code plugin.resetConfiguration()} so non-config plugin state
+	 * (screen-marker boxes, ground-marker tiles, GE history) is cleared too (CFG-10). Config-only fake-plugins
+	 * have no owning Plugin, so only the defaults are reapplied. Returns a write id to poll.
+	 */
+	public static String resetPluginConfig(String group)
+	{
+		final ConfigManager cm = configManager;
+		if (!ENABLED || cm == null || group == null)
+		{
+			return "{\"ok\":false,\"reason\":\"facade-off\"}";
+		}
+		final ClientThread ct = clientThread;
+		if (ct == null)
+		{
+			return "{\"ok\":false,\"reason\":\"not-ready\"}";
+		}
+		final Config proxy = proxyForGroup(group);
+		final Plugin owner = pluginForGroup(group);
+		final long id = enqueueClientWrite(ct, () ->
+		{
+			if (proxy != null)
+			{
+				cm.setDefaultConfiguration(proxy, true);
+			}
+			if (owner != null)
+			{
+				try
+				{
+					owner.resetConfiguration();
+				}
+				catch (RuntimeException ignored)
+				{
+					// a plugin's resetConfiguration touching the engine off-tick shouldn't abort the reset
+				}
+			}
+		});
+		return "{\"ok\":true,\"writeId\":" + id + "}";
+	}
+
+	/**
+	 * The fully-populated default {@link Notification} (built from the RuneLite core notification settings, exactly
+	 * like the desktop NotificationPanel seeds a freshly-enabled notification) serialized to its config JSON. The
+	 * native per-notification sub-editor uses this as the base when customizing an as-yet-uninitialized
+	 * notification, so override=true never leaves a field unset (NOTIF-2).
+	 */
+	public static String notificationDefaults()
+	{
+		final ConfigManager cm = configManager;
+		if (!ENABLED || cm == null)
+		{
+			return "{}";
+		}
+		try
+		{
+			final RuneLiteConfig rl = cm.getConfig(RuneLiteConfig.class);
+			final Notification seed = new Notification(true, true, true,
+				rl.enableTrayNotifications(), java.awt.TrayIcon.MessageType.NONE, rl.notificationRequestFocus(),
+				rl.notificationSound(), null, rl.notificationVolume(), rl.notificationTimeout(),
+				rl.enableGameMessageNotification(), rl.flashNotification(), rl.notificationFlashColor(),
+				rl.sendNotificationsWhenFocused());
+			// The injected Gson (RuneLiteAPI.GSON) is exactly what NotificationSerializer.serialize uses, so this
+			// string is byte-identical to what the engine stores — including the Color adapter's "#AARRGGBB" form.
+			return net.runelite.http.api.RuneLiteAPI.GSON.toJson(seed);
+		}
+		catch (RuntimeException ex)
+		{
+			return "{}";
+		}
+	}
+
+	/** The owning {@link Plugin} for a config {@code group} (for whole-plugin reset), or null (incl. fake-plugins). */
+	private static Plugin pluginForGroup(String group)
+	{
+		final PluginManager pm = pluginManager;
+		final ConfigManager cm = configManager;
+		if (pm == null || cm == null || group == null)
+		{
+			return null;
+		}
+		for (Plugin p : pm.getPlugins())
+		{
+			try
+			{
+				final Config proxy = pm.getPluginConfigProxy(p);
+				if (proxy != null && group.equals(cm.getConfigDescriptor(proxy).getGroup().value()))
+				{
+					return p;
+				}
+			}
+			catch (RuntimeException ignored)
+			{
+				// keep scanning
+			}
+		}
+		return null;
+	}
+
 	// ---- Live UI-state snapshot (client thread writes, native thread reads) ----------------------------
 
 	/**
@@ -1499,7 +1703,18 @@ public final class MobileUiBridge
 	{
 		final PluginManager pm = pluginManager;
 		final ConfigManager cm = configManager;
-		if (pm == null || cm == null)
+		if (cm == null || group == null)
+		{
+			return null;
+		}
+		// The desktop config-only fake-plugins ("RuneLite" / "Chat Color") have no Plugin, so resolve their
+		// descriptor straight off a getConfig(...) proxy (CORE-1).
+		final Class<? extends Config> fake = fakeConfigClass(group);
+		if (fake != null)
+		{
+			return cm.getConfigDescriptor(cm.getConfig(fake));
+		}
+		if (pm == null)
 		{
 			return null;
 		}
@@ -1531,7 +1746,16 @@ public final class MobileUiBridge
 	{
 		final PluginManager pm = pluginManager;
 		final ConfigManager cm = configManager;
-		if (pm == null || cm == null)
+		if (cm == null || group == null)
+		{
+			return null;
+		}
+		final Class<? extends Config> fake = fakeConfigClass(group);
+		if (fake != null)
+		{
+			return cm.getConfig(fake);
+		}
+		if (pm == null)
 		{
 			return null;
 		}
@@ -1626,6 +1850,10 @@ public final class MobileUiBridge
 				return "keybind";
 			case "Notification":
 				return "notification";
+			case "FontType":
+				// A class with a custom serializer (not an enum); the native side renders a 3-way preset picker
+				// from the choices/choiceValues emitted in getPluginConfig (CFG-2).
+				return "font";
 			default:
 				return "unknown";
 		}
