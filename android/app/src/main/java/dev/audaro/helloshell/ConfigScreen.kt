@@ -95,7 +95,11 @@ fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit) {
     Surface(color = Color(0xF2121212), modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onBack) { Text("‹ Back") }
+                TextButton(onClick = {
+                    // AP-0: persist pending edits on leave — config otherwise only flushes on app background/onStop.
+                    JvmLauncher.onBridge { JvmLauncher.flushConfig() }
+                    onBack()
+                }) { Text("‹ Back") }
                 Text(pluginName, color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
                 TextButton(onClick = { confirmReset = true }) { Text("Reset", color = Color(0xFFFF8A80)) }
             }

@@ -339,9 +339,13 @@ class MainActivity : AppCompatActivity() {
         // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
         val devBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(pluginButton); addView(kbButton); addView(shiftButton); addView(chromeButton)
-            addView(signInButton); addView(logoutButton); addView(gpuButton); addView(hdButton)
-            addView(shotButton)
+            // Genuine user controls ship in every build: settings gear, soft keyboard, sticky-shift, sign-in/out,
+            // screenshot.
+            addView(pluginButton); addView(kbButton); addView(shiftButton)
+            addView(signInButton); addView(logoutButton); addView(shotButton)
+            // AP-0: developer-only tooling (chrome A/B raw-stones toggle + GPU/117HD process-restart footguns) is
+            // hidden in release — renderer selection lives in the native plugin panel (renderer-as-plugins).
+            if (BuildConfig.DEBUG) { addView(chromeButton); addView(gpuButton); addView(hdButton) }
         }
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
