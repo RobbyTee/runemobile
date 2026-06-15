@@ -41,10 +41,14 @@ import kotlin.coroutines.coroutineContext
 /** One movable overlay from OverlayBridge.getOverlaysJson. */
 data class OverlayRow(val name: String, val position: String, val movable: Boolean, val snappable: Boolean)
 
-// The five real snap corners the desktop renderer uses (label → OverlayPosition name).
+// Snap targets the desktop renderer uses (label → OverlayPosition name): the five corners plus the two extra
+// edge anchors the engine supports — CANVAS_TOP_RIGHT (the full-canvas top-right, above the relocated minimap)
+// and ABOVE_CHATBOX_RIGHT (just above the chatbox, right side). The bridge already accepts every OverlayPosition
+// name (parsePosition → valueOf) + prettyCorner already labels these two; they only needed offering here.
 private val SNAP_CORNERS = listOf(
     "↖" to "TOP_LEFT", "↑" to "TOP_CENTER", "↗" to "TOP_RIGHT",
     "↙" to "BOTTOM_LEFT", "↘" to "BOTTOM_RIGHT",
+    "◥" to "CANVAS_TOP_RIGHT", "◢" to "ABOVE_CHATBOX_RIGHT",
 )
 
 private const val OE_TAG = "MainActivity"
