@@ -353,10 +353,10 @@ public final class HudVeneerBridge
 				hideRowOf(c, ids[0]);
 				hideRowOf(c, ids[7]);
 			}
-			// Same gates as the chat block in tick(): only while the chat veneer is active, the world map
-			// doesn't own the screen, and NO dialogue is open (a dialogue releases the veneer so the engine can
-			// raster the chatbox + dialogue — re-hiding here would suppress it one frame before raster).
-			if (chatX >= 0 && !isWorldMapOpen(c) && !isDialogueOpen(c))
+			// Same gates as the chat block in tick(): only while the chat veneer is active and the world map
+			// doesn't own the screen. (A dialogue uses the normal relocate path and stays at the top, so this
+			// re-assert applies during dialogues too.)
+			if (chatX >= 0 && !isWorldMapOpen(c))
 			{
 				setEngineChatTabsHidden(c, chatTabRowH > 0);
 				if (transparentChat)
@@ -435,16 +435,13 @@ public final class HudVeneerBridge
 			// and full, with NO interface teardown, tab-selection loss, or rebuild. (Hiding the container tore the
 			// chat down, so reopen showed an empty box until a second tap.) The native tab row stays put because
 			// buildChatSnapshot reports the configured chatX/chatY, not the widget's moved position.
-			if (chatX >= 0 && !mapOpenNow && dlgOpen)
-			{
-				// A dialogue interface (NPC/options/level-up/message/make-X) is open. It renders INTO the chatbox
-				// region, which the relocate + transparency would stop the engine from rastering. Release every
-				// veneer manipulation so the engine draws the chatbox + dialogue at its natural, OPAQUE position —
-				// exactly like desktop — and publish dialogueActive so the native shell hides its chat veneer.
-				releaseChatForDialogue(c, chatId);
-				buildChatSnapshot(c);
-			}
-			else if (chatX >= 0 && !mapOpenNow)
+			// A dialogue (NPC/options/level-up/message/make-X) is handled by the SAME relocate path as the chat —
+			// the dialogue renders into the chatbox region and follows it to the relocated TOP position (which is
+			// where the user expects it, and where the native tap routing resolves it). We do NOT release the chat
+			// to the natural bottom (an earlier attempt did, which moved the dialogue's clickable widget away from
+			// where it shows). `dialogueOpen` is still published so the native shell hides its chat-line veneer
+			// (so it doesn't overlap the dialogue) and routes taps over the chatbox region to a precise click.
+			if (chatX >= 0 && !mapOpenNow)
 			{
 				final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
 				final int rowW = chatAreaW > 0 ? chatAreaW : CHAT_DEFAULT_W;
@@ -1750,43 +1747,6 @@ public final class HudVeneerBridge
 		return null;
 	}
 
-	/** Undo every chat-veneer manipulation so the engine renders the chatbox — and the dialogue interface it
-	 *  hosts — at its natural, OPAQUE position (desktop-identical) while a dialogue is open. Idempotent, run each
-	 *  tick the dialogue is up; the normal apply-block resumes (re-relocates, re-applies transparency) once it
-	 *  closes. Restoring the prior collapse state is automatic — the next apply-block re-reads chatCollapsed. */
-	private static void releaseChatForDialogue(Client c, int chatId)
-	{
-		final Widget w = c.getWidget(chatId);
-		if (w != null)
-		{
-			if (w.isHidden())
-			{
-				w.setHidden(false);
-			}
-			w.setForcedPosition(-1, -1);   // clear the relocate -> the engine recomputes the natural layout
-			if (w.getOriginalWidth() != CHAT_DEFAULT_W)
-			{
-				w.setOriginalWidth(CHAT_DEFAULT_W);
-			}
-			w.revalidate();
-		}
-		forcePos(c, InterfaceID.Chatbox.CONTROLS, -1, -1);   // clear the tab-row force
-		setEngineChatTabsHidden(c, false);                    // show the engine's own tab visuals again
-		// Opaque background, like the desktop dialogue box.
-		setHidden(c, InterfaceID.Chatbox.CHAT_BACKGROUND, false);
-		setHidden(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND, false);
-		setHidden(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC, false);
-		try
-		{
-			if (c.getVarbitValue(VarbitID.CHATBOX_TRANSPARENCY) != 0)
-			{
-				c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, 0);
-			}
-		}
-		catch (RuntimeException ignore)
-		{
-		}
-	}
 
 	/** Position + size the chatbox message area ({@code CHATAREA}) so it aligns with + fits under the enlarged
 	 *  native tab row. Key: the chat CONTENT (the message display + the bottom input prompt) is fixed-height and
