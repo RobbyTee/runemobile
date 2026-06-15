@@ -307,6 +307,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// The shell polls this and raises a UNUserNotificationCenter notification. Main thread.
 + (nullable NSString *)mobileNextNotification;
 
+/// SHOT-2: drain the next auto-screenshot's sandbox PNG path, or nil (MobileUiBridge.nextScreenshot). The shell
+/// reads the file and, when auto-save is on, copies it into Photos. Main thread.
++ (nullable NSString *)mobileNextScreenshot;
+
 /// Drain the oldest pending outbound URL, or nil if none (MobileUiBridge.nextLink). The shell polls this and
 /// opens it in an SFSafariViewController. Main thread.
 + (nullable NSString *)mobileNextLink;

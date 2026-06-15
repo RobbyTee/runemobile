@@ -81,6 +81,7 @@ static jmethodID gMuiPanelSeq = NULL;     // getPanelFrameSeq()I
 static jmethodID gMuiPanelPixels = NULL;  // getPanelPixels()[I
 static jmethodID gMuiPanelClick = NULL;   // panelClick(II)Ljava/lang/String;
 static jmethodID gMuiNextNotif = NULL;    // nextNotification()Ljava/lang/String; (optional)
+static jmethodID gMuiNextShot = NULL;     // nextScreenshot()Ljava/lang/String; — SHOT-2 auto-screenshot path (optional)
 static jmethodID gMuiNextLink = NULL;     // nextLink()Ljava/lang/String; (optional)
 static jmethodID gMuiSetPinned = NULL;    // setPinned(Ljava/lang/String;Z)Ljava/lang/String; (optional)
 static jmethodID gMuiHubState = NULL;     // hubState()Ljava/lang/String; (optional)
@@ -402,6 +403,8 @@ static BOOL ensureMui(void) {
     // null-guards its own id, so a missing method only disables that one feature.
     gMuiNextNotif = (*env)->GetStaticMethodID(env, global, "nextNotification", "()Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiNextNotif = NULL; }
+    gMuiNextShot = (*env)->GetStaticMethodID(env, global, "nextScreenshot", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiNextShot = NULL; }
     gMuiNextLink = (*env)->GetStaticMethodID(env, global, "nextLink", "()Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiNextLink = NULL; }
     gMuiSetPinned = (*env)->GetStaticMethodID(env, global, "setPinned", "(Ljava/lang/String;Z)Ljava/lang/String;");
@@ -1783,6 +1786,13 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMui() || !gMuiNextNotif) return nil;
     JNIEnv *env = gMainEnv;
     return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiNextNotif));
+}
+
+// SHOT-2: the next auto-screenshot's sandbox PNG path, or nil. The shell reads the file and saves it to Photos.
++ (NSString *)mobileNextScreenshot {
+    if (!ensureMui() || !gMuiNextShot) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiNextShot));
 }
 
 + (NSString *)mobileNextLink {

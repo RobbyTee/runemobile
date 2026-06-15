@@ -76,6 +76,7 @@ import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.events.ExternalPluginsChanged;
 import net.runelite.client.events.PluginChanged;
+import net.runelite.client.events.ScreenshotTaken;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.PluginInstantiationException;
@@ -173,6 +174,13 @@ public final class MobileUiBridge
 	private static final ConcurrentLinkedQueue<String> links = new ConcurrentLinkedQueue<>();
 	private static final int MAX_LINKS = 32;
 
+	// SHOT-2: the Screenshot plugin's auto-screenshots (level-up / pet / boss kill / clue / collection-log …) are
+	// written to the app sandbox screenshot dir, which is unreachable from Photos. We subscribe to ScreenshotTaken
+	// and funnel each saved file's absolute path here; the native shell drains it and (if the user enabled
+	// auto-save) copies the PNG into the Photos library. Bounded so a backlog can't grow before a drainer exists.
+	private static final ConcurrentLinkedQueue<String> screenshots = new ConcurrentLinkedQueue<>();
+	private static final int MAX_SCREENSHOTS = 16;
+
 	// Favourite plugins: the same shared "pinnedPlugins" CSV the desktop ConfigPanel persists (RuneLite group),
 	// so a pin set on either port (or desktop) round-trips. Names stored comma-stripped (desktop format).
 	private static final String PINNED_KEY = "pinnedPlugins";
@@ -236,6 +244,15 @@ public final class MobileUiBridge
 	public static String nextNotification()
 	{
 		return notifications.poll();
+	}
+
+	/**
+	 * SHOT-2: the next auto-screenshot's sandbox file path (absolute), or null. The native shell drains this each
+	 * frame and, when the user has enabled auto-save, copies the PNG into the Photos library.
+	 */
+	public static String nextScreenshot()
+	{
+		return screenshots.poll();
 	}
 
 	/**
@@ -318,6 +335,24 @@ public final class MobileUiBridge
 			hubRefreshing = false;
 			hubChangeSeq.incrementAndGet();
 			recordEvent("hub", "external", "changed");
+		}
+
+		@Subscribe
+		public void onScreenshotTaken(ScreenshotTaken e)
+		{
+			// SHOT-2: the file is already written to the sandbox by the Screenshot plugin; queue its absolute path
+			// for the native drainer to surface into Photos. The BufferedImage is also on the event but the file
+			// path avoids pushing pixels through JNI.
+			final java.io.File f = e.getPath();
+			if (f == null)
+			{
+				return;
+			}
+			while (screenshots.size() >= MAX_SCREENSHOTS)
+			{
+				screenshots.poll();
+			}
+			screenshots.add(f.getAbsolutePath());
 		}
 	}
 

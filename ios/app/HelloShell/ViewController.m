@@ -623,6 +623,10 @@ static const CGFloat kMenuWidth       = 210.0;
     self.screenshotButton.layer.cornerRadius = 8;
     [self.screenshotButton addTarget:self action:@selector(onScreenshot)
                     forControlEvents:UIControlEventTouchUpInside];
+    // SHOT-4: long-press the camera button toggles auto-saving the engine's event screenshots to Photos (SHOT-2).
+    UILongPressGestureRecognizer *shotLp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onScreenshotLongPress:)];
+    [self.screenshotButton addGestureRecognizer:shotLp];
     [self.screen addSubview:self.screenshotButton];
 
     // Manual Picture-in-Picture: pops the game into the floating window without leaving the app, and doubles
@@ -3125,6 +3129,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     if (self.framesShown % 30 == 0) {
         [self drainNotifications];
         [self drainLinks];
+        [self drainScreenshots];   // SHOT-2: surface engine auto-screenshots to Photos (when enabled)
     }
 
     // W3 A3: refresh the enlarged native chat tab buttons (~10 Hz). Self-gates on chrome toggle + layout; runs
@@ -4584,6 +4589,44 @@ static CGRect mapRectFromArr(NSArray *a) {
     }
 }
 
+// SHOT-2: whether the engine's auto-screenshots (level-up / pet / boss kill / clue / collection-log …) are copied
+// into the Photos library. Off by default (those fire often); toggled via a long-press on the 📷 button.
+- (BOOL)autoSaveScreenshots {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:@"autoSaveScreenshots"];
+}
+
+// SHOT-2: drain the auto-screenshot queue each frame. The engine already wrote each PNG to the sandbox; when the
+// user has enabled auto-save we copy it into Photos (the only Photos-reachable path). Always drain so a backlog
+// can't build when auto-save is off.
+- (void)drainScreenshots {
+    BOOL save = [self autoSaveScreenshots];
+    int writes = 0;   // cap Photos writes per tick so a burst can't flood the main thread with async callbacks;
+    NSString *path;   // leftover paths stay queued for the next drain. When auto-save is OFF we still fully drain.
+    while ((path = [JVMLauncher mobileNextScreenshot]).length > 0) {
+        if (!save) continue;   // discard (keeps the queue from backing up)
+        UIImage *img = [UIImage imageWithContentsOfFile:path];
+        if (img == nil) continue;
+        UIImageWriteToSavedPhotosAlbum(img, self, @selector(image:didFinishSavingWithError:contextInfo:), NULL);
+        [self appendLine:[NSString stringWithFormat:@"[shell] auto-screenshot -> Photos: %@", path.lastPathComponent]];
+        if (++writes >= 3) break;   // remaining paths stay queued for the next tick
+    }
+}
+
+// SHOT-4: long-press the 📷 button to toggle auto-saving the engine's event screenshots into Photos.
+- (void)onScreenshotLongPress:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    if (self.presentedViewController) return;   // don't toggle silently behind another modal (codebase convention)
+    BOOL now = ![self autoSaveScreenshots];
+    [[NSUserDefaults standardUserDefaults] setBool:now forKey:@"autoSaveScreenshots"];
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Auto-save screenshots"
+        message:now ? @"Event screenshots (level-ups, drops, clues, kills…) will now be saved to Photos."
+                    : @"Event screenshots will no longer be saved to Photos."
+        preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:ac animated:YES completion:nil];
+    [self appendLine:now ? @"[shell] auto-save screenshots ON" : @"[shell] auto-save screenshots OFF"];
+}
+
 // Drain the shared-core outbound-link queue -> in-app SFSafariViewController. Wiki/HiScore/"open page" links land
 // here (the sandbox has no system browser). One at a time; only http(s) is opened.
 - (void)drainLinks {
@@ -4622,6 +4665,8 @@ static CGRect mapRectFromArr(NSArray *a) {
     UIImage *img = [JVMLauncher latestFrame];
     if (img == nil) { [self appendLine:@"[shell] screenshot: no frame yet"]; return; }
     UIImageWriteToSavedPhotosAlbum(img, self, @selector(image:didFinishSavingWithError:contextInfo:), NULL);
+    // SHOT-5: also copy to the clipboard, so it can be pasted straight into Messages / a notes app.
+    [UIPasteboard generalPasteboard].image = img;
 }
 
 - (void)image:(UIImage *)image didFinishSavingWithError:(NSError *)error contextInfo:(void *)ctx {
