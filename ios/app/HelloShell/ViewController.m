@@ -221,6 +221,8 @@
 // whole gesture (drag sideways = switch on lift; pull down off a chip = its filter menu). State here is touched
 // only on the main thread (gesture callbacks + the display-tick layout).
 @property (nonatomic, strong) UIButton *chatPill;             // the collapsed active-channel button
+@property (nonatomic, strong) UITextView *chatMessagesView;  // native-rendered chat MESSAGE lines (engine can't raster relocated chat)
+@property (nonatomic, assign) int chatLinesSeq;              // last rendered getChatLines seq (skip re-parse when unchanged)
 @property (nonatomic, strong) UILongPressGestureRecognizer *chatPillLP; // the fan/drag driver
 @property (nonatomic, strong) UILabel *chatFilterHint;        // the ▾ "pull down to filter" reveal under a chip
 @property (nonatomic, assign) BOOL chatFanned;                // chips are fanned out (a gesture is in flight)
@@ -1814,6 +1816,26 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
     self.chatPill = pill;
     self.chatPillLP = lp;
 
+    // Native chat MESSAGES view: the engine refuses to raster its chatbox once relocated, so we draw the message
+    // lines ourselves from the live engine model (JVMLauncher.chatLines). Text-over-scene (clear bg, glyph shadow);
+    // non-interactive (finger drags fall through to the existing engine-chat scroll); inserted BELOW the pill so the
+    // fan/filter chrome overlays it.
+    UITextView *msgs = [[UITextView alloc] initWithFrame:CGRectZero];
+    msgs.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.22];   // subtle translucent box (readability over scene)
+    msgs.layer.cornerRadius = 6.0;
+    msgs.editable = NO;
+    msgs.selectable = NO;
+    msgs.scrollEnabled = YES;             // for programmatic bottom-anchor (setContentOffset); not finger-scrolled
+    msgs.showsVerticalScrollIndicator = NO;
+    msgs.userInteractionEnabled = NO;     // touches fall through to the engine-chat scroll handler
+    msgs.clipsToBounds = YES;
+    msgs.textContainerInset = UIEdgeInsetsZero;
+    msgs.textContainer.lineFragmentPadding = 0;
+    msgs.hidden = YES;
+    [self.screen insertSubview:msgs belowSubview:pill];
+    self.chatMessagesView = msgs;
+    self.chatLinesSeq = -1;
+
     // The "▾ pull down to filter" reveal that slides under the hovered chip.
     UILabel *hint = [[UILabel alloc] initWithFrame:CGRectZero];
     hint.text = @"▾";
@@ -1918,6 +1940,9 @@ static int chatRowCanvasH(void) {
     self.chatFanChipH = rowH + kChatFanPopPt;
     self.chatPillFrame = CGRectMake(floor(rowX), floor(rowY), ceil(tabW), ceil(rowH));
 
+    // Native chat messages sit directly under the tab row, spanning the engine chat width.
+    [self updateChatMessagesAtX:rowX y:rowY + rowH width:rowW height:kChatContentCanvasH * s scale:s];
+
     CGFloat nameSize = floor(rowH * 0.40);
     CGFloat stateSize = floor(rowH * 0.34);
     UIFont *nameFont = [UIFont fontWithName:@"RuneScape" size:nameSize] ?: [UIFont boldSystemFontOfSize:nameSize];
@@ -1968,6 +1993,7 @@ static int chatRowCanvasH(void) {
 
 - (void)hideChatTabs {
     self.chatScrollable = NO;   // chat not open -> drags fall through to the camera
+    self.chatMessagesView.hidden = YES;
     self.chatPill.hidden = YES;
     self.chatFilterHint.hidden = YES;
     for (UIButton *b in self.chatTabButtons) b.hidden = YES;
@@ -1978,6 +2004,101 @@ static int chatRowCanvasH(void) {
     // Restore the engine's own (small) chat tab row + native width whenever the native tabs aren't shown.
     [JVMLauncher setEngineChatTabRowHeight:0];
     [JVMLauncher setEngineChatAreaWidth:0];
+}
+
+// Render the native chat MESSAGE lines (from JVMLauncher.chatLines — the live engine model) into chatMessagesView,
+// positioned directly under the tab row. The engine refuses to raster a relocated chatbox, so this IS the chat
+// display: colour-run attributed text over the scene, bottom-anchored (newest at the bottom like real OSRS chat).
+- (void)updateChatMessagesAtX:(CGFloat)x y:(CGFloat)y width:(CGFloat)w height:(CGFloat)h scale:(CGFloat)s {
+    UITextView *mv = self.chatMessagesView;
+    if (!mv) return;
+    if (self.chatCollapsed) { mv.hidden = YES; return; }   // collapsed -> pill only, no messages
+
+    NSString *js = [JVMLauncher chatLines];
+    if (js.length == 0) { mv.hidden = YES; return; }
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[js dataUsingEncoding:NSUTF8StringEncoding]
+                                                      options:0 error:nil];
+    if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) { mv.hidden = YES; return; }
+    NSArray *lines = [d[@"lines"] isKindOfClass:[NSArray class]] ? d[@"lines"] : nil;
+
+    mv.frame = CGRectMake(floor(x), floor(y), ceil(w), ceil(h));
+    mv.hidden = NO;
+    if (lines.count == 0) { mv.attributedText = [[NSAttributedString alloc] initWithString:@""]; return; }
+
+    CGFloat fontSize = floor(14.0 * s);
+    if (fontSize < 9) fontSize = 9;
+    UIFont *font = [UIFont fontWithName:@"RuneScape" size:fontSize] ?: [UIFont systemFontOfSize:fontSize];
+
+    NSShadow *shadow = [NSShadow new];
+    shadow.shadowColor = [UIColor blackColor];
+    shadow.shadowOffset = CGSizeMake(1.0, 1.0);
+    shadow.shadowBlurRadius = 0.0;
+    NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new];
+    ps.lineBreakMode = NSLineBreakByWordWrapping;
+    ps.alignment = NSTextAlignmentLeft;
+
+    NSMutableAttributedString *out = [[NSMutableAttributedString alloc] init];
+    for (NSDictionary *ln in lines) {
+        if (![ln isKindOfClass:[NSDictionary class]]) continue;
+        NSString *text = [ln[@"text"] isKindOfClass:[NSString class]] ? ln[@"text"] : @"";
+        if (text.length == 0) continue;
+        NSMutableAttributedString *line = [[NSMutableAttributedString alloc] initWithString:text attributes:@{
+            NSFontAttributeName: font,
+            NSForegroundColorAttributeName: [UIColor whiteColor],
+            NSShadowAttributeName: shadow,
+            NSParagraphStyleAttributeName: ps,
+        }];
+        NSArray *runs = [ln[@"runs"] isKindOfClass:[NSArray class]] ? ln[@"runs"] : nil;
+        NSUInteger tlen = text.length;
+        for (NSDictionary *r in runs) {
+            if (![r isKindOfClass:[NSDictionary class]]) continue;
+            NSInteger o = [r[@"o"] integerValue];
+            NSInteger l = [r[@"l"] integerValue];
+            if (o < 0 || l <= 0 || (NSUInteger)(o + l) > tlen) continue;
+            NSRange rng = NSMakeRange((NSUInteger)o, (NSUInteger)l);
+            UIColor *col = rgbColor([r[@"c"] intValue]);
+            if (col) [line addAttribute:NSForegroundColorAttributeName value:col range:rng];
+            if ([r[@"u"] intValue] == 1) {
+                [line addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:rng];
+            }
+        }
+        if (out.length > 0) [out appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n"]];
+        [out appendAttributedString:line];
+    }
+
+    // The bottom input line "PlayerName: typed*" (the engine chat is invisible, so the user types blind otherwise).
+    // Always shown while logged in so there's a visible prompt + live echo of what's being typed.
+    NSDictionary *input = [d[@"input"] isKindOfClass:[NSDictionary class]] ? d[@"input"] : nil;
+    NSString *pname = [input[@"name"] isKindOfClass:[NSString class]] ? input[@"name"] : @"";
+    if (pname.length > 0) {
+        NSString *typed = [input[@"text"] isKindOfClass:[NSString class]] ? input[@"text"] : @"";
+        NSString *inputLine = [NSString stringWithFormat:@"%@: %@*", pname, typed];
+        NSDictionary *attrs = @{ NSFontAttributeName: font,
+                                 NSForegroundColorAttributeName: [UIColor whiteColor],
+                                 NSShadowAttributeName: shadow,
+                                 NSParagraphStyleAttributeName: ps };
+        NSMutableAttributedString *il = [[NSMutableAttributedString alloc] initWithString:inputLine attributes:attrs];
+        // Tint the cursor "*" yellow like OSRS.
+        [il addAttribute:NSForegroundColorAttributeName value:[UIColor colorWithRed:1.0 green:0.86 blue:0.20 alpha:1.0]
+                   range:NSMakeRange(inputLine.length - 1, 1)];
+        if (out.length > 0) [out appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n"]];
+        [out appendAttributedString:il];
+    }
+
+    mv.attributedText = out;
+
+    // Bottom-anchor: newest line flush to the bottom of the box (real OSRS chat grows upward). Short content gets a
+    // top inset; overflowing content scrolls to the bottom. (scrollEnabled is on only for this programmatic offset.)
+    mv.textContainerInset = UIEdgeInsetsZero;
+    [mv layoutIfNeeded];
+    CGFloat contentH = mv.contentSize.height;
+    CGFloat boxH = mv.bounds.size.height;
+    if (contentH < boxH) {
+        mv.textContainerInset = UIEdgeInsetsMake(boxH - contentH, 0, 0, 0);
+        [mv setContentOffset:CGPointZero animated:NO];
+    } else {
+        [mv setContentOffset:CGPointMake(0, contentH - boxH) animated:NO];
+    }
 }
 
 // The resting (fanned) frame of chip i, in self.screen coords, from the stashed fan geometry.

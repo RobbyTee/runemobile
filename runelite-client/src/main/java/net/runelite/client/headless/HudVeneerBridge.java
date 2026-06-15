@@ -24,11 +24,20 @@
  */
 package net.runelite.client.headless;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.ChatLineBuffer;
+import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.MessageNode;
+import net.runelite.api.Player;
 import net.runelite.api.ScriptID;
+import net.runelite.api.VarClientStr;
 import net.runelite.api.events.BeforeRender;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarClientID;
@@ -37,6 +46,7 @@ import net.runelite.api.widgets.Widget;
 import net.runelite.api.widgets.WidgetPositionMode;
 import net.runelite.api.widgets.WidgetSizeMode;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.util.Text;
 
 /**
  * W3 Feature-A (A3) — controls the engine chatbox so the chat-at-top look matches the OSRS Mobile reference.
@@ -115,6 +125,12 @@ public final class HudVeneerBridge
 	private static volatile int chatTabRowH;
 	private static volatile int chatAreaW;
 	private static volatile String chatSnapshotJson = "{\"loggedIn\":false}";
+	// The engine refuses to RASTER its chatbox once the host container is relocated (proven), so chat-at-top draws
+	// the MESSAGE lines natively in UIKit instead. The engine chat stays alive + populated (off-screen); this snapshot
+	// is the live message model — read from client.getChatLineMap() (not the broken widgets), filtered to the active
+	// tab, with <col=> colour runs pre-parsed — that the native veneer renders. Published per-frame in tick().
+	private static volatile String chatLinesJson = "{\"loggedIn\":false}";
+	private static volatile int chatLinesSeq;
 
 	// Native chat-tab SWITCH: which tab (0..7 index into CHAT_TAB_IDS) the native veneer asked to open. The engine
 	// tab sprites are hidden (so they don't peek under the native row), which makes them unclickable — so switching
@@ -230,6 +246,15 @@ public final class HudVeneerBridge
 	public static String getChatSnapshot()
 	{
 		return chatSnapshotJson;
+	}
+
+	/** Native: the live chat MESSAGE lines (escaped JSON) for the active tab, with pre-parsed colour runs, for the
+	 *  native top-rendered chatbox. Read lock-free on the JNI thread; published on the client thread in {@link #tick}.
+	 *  Shape: {@code {"loggedIn":true,"view":N,"seq":K,"lines":[{"name":"..","type":N,"ts":N,"text":"..",
+	 *  "runs":[{"o":N,"l":N,"c":RGB,"u":1}]}],"input":{"name":"..","text":".."}}} — lines OLDEST-first. */
+	public static String getChatLines()
+	{
+		return chatLinesJson;
 	}
 
 	/** Native: scroll the chat by {@code deltaCanvasPx} (positive = toward newer/bottom). Accumulated and applied
@@ -480,6 +505,7 @@ public final class HudVeneerBridge
 					forceWidth(c, InterfaceID.Chatbox.CHAT_BACKGROUND, rowW, 0);
 				}
 				buildChatSnapshot(c);
+				buildChatLines(c);
 				// Apply any finger-scroll requested from native (client thread — runScript is legal here).
 				final int scrollDelta = pendingChatScroll.getAndSet(0);
 				if (scrollDelta != 0)
@@ -1231,6 +1257,347 @@ public final class HudVeneerBridge
 			}
 		}
 		return out.toString();
+	}
+
+	// ---- Native top-rendered chat: the live MESSAGE model (read from getChatLineMap, not the un-rasterable widgets) ----
+
+	// CHAT_VIEW (VarClientID) index -> the ChatMessageTypes that tab shows. Index 0 (All) = union every buffer; index
+	// 7 (Report) = none. Mirrors net.runelite.client.plugins.chathistory.ChatboxTab so native chat matches the engine.
+	private static final ChatMessageType[][] TAB_TYPES = {
+		null, // 0 All -> union all buffers
+		{ // 1 Game
+			ChatMessageType.GAMEMESSAGE, ChatMessageType.ENGINE, ChatMessageType.BROADCAST,
+			ChatMessageType.SNAPSHOTFEEDBACK, ChatMessageType.ITEM_EXAMINE, ChatMessageType.NPC_EXAMINE,
+			ChatMessageType.OBJECT_EXAMINE, ChatMessageType.FRIENDNOTIFICATION, ChatMessageType.IGNORENOTIFICATION,
+			ChatMessageType.CONSOLE, ChatMessageType.SPAM, ChatMessageType.PLAYERRELATED,
+			ChatMessageType.TENSECTIMEOUT, ChatMessageType.WELCOME, ChatMessageType.UNKNOWN,
+		},
+		{ // 2 Public
+			ChatMessageType.PUBLICCHAT, ChatMessageType.AUTOTYPER, ChatMessageType.MODCHAT,
+			ChatMessageType.MODAUTOTYPER,
+		},
+		{ // 3 Private
+			ChatMessageType.PRIVATECHAT, ChatMessageType.PRIVATECHATOUT, ChatMessageType.MODPRIVATECHAT,
+			ChatMessageType.LOGINLOGOUTNOTIFICATION,
+		},
+		{ // 4 Channel (friends chat)
+			ChatMessageType.FRIENDSCHATNOTIFICATION, ChatMessageType.FRIENDSCHAT,
+			ChatMessageType.CHALREQ_FRIENDSCHAT,
+		},
+		{ // 5 Clan
+			ChatMessageType.CLAN_CHAT, ChatMessageType.CLAN_MESSAGE, ChatMessageType.CLAN_GUEST_CHAT,
+			ChatMessageType.CLAN_GUEST_MESSAGE,
+		},
+		{ // 6 Trade (CLAN_GIM_* live here, per ChatboxTab.TRADE_GROUP — not Clan)
+			ChatMessageType.TRADE_SENT, ChatMessageType.TRADEREQ, ChatMessageType.TRADE,
+			ChatMessageType.CHALREQ_TRADE, ChatMessageType.CLAN_GIM_CHAT, ChatMessageType.CLAN_GIM_MESSAGE,
+		},
+		{}, // 7 Report -> none
+	};
+
+	private static final int CHAT_LINES_CAP = 40;          // newest N message lines reported to native
+	private static final int CHAT_DEFAULT_COLOR = 0xffffff;
+
+	/** Build the native chat MESSAGE snapshot from the engine's live per-type message buffers (getChatLineMap),
+	 *  filtered to the active CHAT_VIEW tab, newest {@link #CHAT_LINES_CAP} lines, oldest-first, with colour runs
+	 *  pre-parsed from the {@code <col=..>} tags, plus the bottom input line. Client thread (inside {@link #tick}). */
+	private static void buildChatLines(Client c)
+	{
+		try
+		{
+			final Map<Integer, ChatLineBuffer> map = c.getChatLineMap();
+			int view = 0;
+			try
+			{
+				view = c.getVarcIntValue(VarClientID.CHAT_VIEW);
+			}
+			catch (RuntimeException ignore)
+			{
+			}
+			final List<MessageNode> nodes = new ArrayList<>();
+			if (map != null)
+			{
+				final ChatMessageType[] types = (view > 0 && view < TAB_TYPES.length) ? TAB_TYPES[view] : null;
+				if (types != null)
+				{
+					for (final ChatMessageType t : types)
+					{
+						collectLines(map.get(t.getType()), nodes);
+					}
+				}
+				else if (view != 7)
+				{
+					for (final ChatLineBuffer buf : map.values())   // All (or unknown view) -> union every buffer
+					{
+						collectLines(buf, nodes);
+					}
+				}
+			}
+			// newest-first by timestamp (stable so same-second order is preserved), keep newest CAP, emit oldest-first.
+			nodes.sort((a, b) -> Integer.compare(safeTs(b), safeTs(a)));
+			final int n = Math.min(CHAT_LINES_CAP, nodes.size());
+			final StringBuilder sb = new StringBuilder(2048);
+			sb.append("{\"loggedIn\":true,\"view\":").append(view)
+				.append(",\"seq\":").append(++chatLinesSeq)
+				.append(",\"lines\":[");
+			boolean first = true;
+			for (int i = n - 1; i >= 0; i--)   // oldest-first so native renders top -> bottom
+			{
+				final String obj = chatLineObject(nodes.get(i));
+				if (obj == null)
+				{
+					continue;
+				}
+				if (!first)
+				{
+					sb.append(',');
+				}
+				first = false;
+				sb.append(obj);
+			}
+			sb.append(']');
+			appendChatInput(sb, c);   // the bottom "PlayerName: typed*" input line (engine chat is invisible)
+			sb.append('}');
+			chatLinesJson = sb.toString();
+		}
+		catch (RuntimeException ignore)
+		{
+			// keep the previous snapshot
+		}
+	}
+
+	/** Append {@code ,"input":{"name":..,"text":..}} — the player's name + the live chatbox input buffer, so native
+	 *  can draw the bottom "PlayerName: typed*" line the (invisible) engine chat would otherwise show. */
+	private static void appendChatInput(StringBuilder sb, Client c)
+	{
+		String name = "";
+		String typed = "";
+		try
+		{
+			final Player lp = c.getLocalPlayer();
+			if (lp != null && lp.getName() != null)
+			{
+				name = Text.removeTags(lp.getName());
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+		try
+		{
+			final String t = c.getVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT);
+			if (t != null)
+			{
+				typed = t;
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+		sb.append(",\"input\":{\"name\":\"").append(jsonEsc(name))
+			.append("\",\"text\":\"").append(jsonEsc(typed)).append("\"}");
+	}
+
+	private static void collectLines(ChatLineBuffer buf, List<MessageNode> out)
+	{
+		if (buf == null)
+		{
+			return;
+		}
+		try
+		{
+			final MessageNode[] lines = buf.getLines();
+			if (lines == null)
+			{
+				return;
+			}
+			final int len = Math.min(buf.getLength(), lines.length);
+			for (int i = 0; i < len; i++)
+			{
+				if (lines[i] != null)
+				{
+					out.add(lines[i]);
+				}
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	private static int safeTs(MessageNode n)
+	{
+		try
+		{
+			return n.getTimestamp();
+		}
+		catch (RuntimeException ex)
+		{
+			return 0;
+		}
+	}
+
+	/** One chat line as a JSON object {@code {"name":..,"type":..,"ts":..,"text":..,"runs":[..]}}, or null to skip.
+	 *  Composes "name: message" (name only when present — public/private chat; game messages have none). */
+	private static String chatLineObject(MessageNode n)
+	{
+		try
+		{
+			String raw = n.getRuneLiteFormatMessage();
+			if (raw == null)
+			{
+				raw = n.getValue();
+			}
+			if (raw == null)
+			{
+				raw = "";
+			}
+			final String name = Text.removeTags(n.getName() == null ? "" : n.getName());
+			final int typeId = n.getType() == null ? -1 : n.getType().getType();
+			final String full = name.isEmpty() ? raw : name + ": " + raw;
+			final StringBuilder sb = new StringBuilder(full.length() + 48);
+			sb.append("{\"name\":\"").append(jsonEsc(name)).append('"')
+				.append(",\"type\":").append(typeId)
+				.append(",\"ts\":").append(safeTs(n)).append(',');
+			appendTextWithRuns(sb, full, CHAT_DEFAULT_COLOR);
+			sb.append('}');
+			return sb.toString();
+		}
+		catch (RuntimeException ex)
+		{
+			return null;
+		}
+	}
+
+	/** Append {@code "text":"<stripped>","runs":[{"o":,"l":,"c":,"u":}]} for {@code raw}, parsing cs2 colour/format
+	 *  tags. Runs are recorded against the STRIPPED text offsets; only spans differing from {@code defColor} (or
+	 *  underlined) are emitted, so native applies the default elsewhere. */
+	private static void appendTextWithRuns(StringBuilder sb, String raw, int defColor)
+	{
+		final StringBuilder text = new StringBuilder(raw.length());
+		final StringBuilder runs = new StringBuilder(96);
+		boolean firstRun = true;
+		int runStart = 0;
+		int runColor = defColor;
+		boolean runUnder = false;
+		final int len = raw.length();
+		int i = 0;
+		while (i < len)
+		{
+			final char ch = raw.charAt(i);
+			if (ch != '<')
+			{
+				text.append(ch);
+				i++;
+				continue;
+			}
+			final int gt = raw.indexOf('>', i);
+			if (gt < 0)
+			{
+				text.append(ch);
+				i++;
+				continue;
+			}
+			final String tag = raw.substring(i + 1, gt);
+			i = gt + 1;
+			final String low = tag.toLowerCase(Locale.ROOT);
+			int newColor = runColor;
+			boolean newUnder = runUnder;
+			boolean changed = false;
+			if (low.startsWith("col="))
+			{
+				newColor = parseHexColor(tag.substring(4));
+				changed = true;
+			}
+			else if (low.equals("/col") || low.equals("colnormal"))
+			{
+				newColor = defColor;
+				changed = true;
+			}
+			else if (low.equals("colhighlight"))
+			{
+				newColor = 0xff0000;
+				changed = true;
+			}
+			else if (low.equals("u"))
+			{
+				newUnder = true;
+				changed = true;
+			}
+			else if (low.equals("/u"))
+			{
+				newUnder = false;
+				changed = true;
+			}
+			else if (low.equals("br"))
+			{
+				text.append(' ');   // collapse hard breaks to a space
+			}
+			else if (low.equals("lt"))
+			{
+				text.append('<');
+			}
+			else if (low.equals("gt"))
+			{
+				text.append('>');
+			}
+			// else: <img=N>, <shad..>, unknown -> dropped
+			if (changed)
+			{
+				firstRun = emitRun(runs, firstRun, runStart, text.length(), runColor, runUnder, defColor);
+				runStart = text.length();
+				runColor = newColor;
+				runUnder = newUnder;
+			}
+		}
+		emitRun(runs, firstRun, runStart, text.length(), runColor, runUnder, defColor);
+		sb.append("\"text\":\"").append(jsonEsc(text.toString())).append("\",\"runs\":[").append(runs).append(']');
+	}
+
+	/** Emit a colour/underline run {@code {"o":,"l":,"c":,"u":}} if it spans text AND differs from the default.
+	 *  Returns the updated firstRun flag (for comma handling). */
+	private static boolean emitRun(StringBuilder runs, boolean firstRun, int start, int end, int color, boolean under, int defColor)
+	{
+		if (end <= start || color < 0 || (color == defColor && !under))
+		{
+			return firstRun;
+		}
+		if (!firstRun)
+		{
+			runs.append(',');
+		}
+		runs.append("{\"o\":").append(start).append(",\"l\":").append(end - start)
+			.append(",\"c\":").append(color);
+		if (under)
+		{
+			runs.append(",\"u\":1");
+		}
+		runs.append('}');
+		return false;
+	}
+
+	/** Parse a {@code <col=...>} hex body (3- or 6-digit RRGGBB) into a 0xRRGGBB int, or -1 if malformed. */
+	private static int parseHexColor(String hex)
+	{
+		if (hex == null || hex.isEmpty())
+		{
+			return -1;
+		}
+		try
+		{
+			final String h = hex.trim();
+			int v = Integer.parseInt(h, 16);
+			if (h.length() <= 3)
+			{
+				final int r = (v >> 8) & 0xf, g = (v >> 4) & 0xf, b = v & 0xf;   // 3-digit shorthand rgb -> rrggbb
+				v = (r << 20) | (r << 16) | (g << 12) | (g << 8) | (b << 4) | b;
+			}
+			return v & 0xffffff;
+		}
+		catch (NumberFormatException ex)
+		{
+			return -1;
+		}
 	}
 
 	private static void hide(Client c, int id)

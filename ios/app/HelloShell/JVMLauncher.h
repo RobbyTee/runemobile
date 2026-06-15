@@ -241,6 +241,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// nil until the chat is relocated + logged in. Main thread.
 + (nullable NSString *)chatSnapshot;
 
+/// W3: the live chat MESSAGE lines for the active tab (escaped JSON, colour runs pre-parsed) for the native
+/// top-rendered chatbox — the engine can't raster a relocated chatbox, so its messages are drawn natively.
+/// Lines are oldest-first. Returns nil until logged in. Main thread.
++ (nullable NSString *)chatLines;
+
 // ---- Phase 6 (W3): native plugin-management + config panel (reverse JNI -> MobileUiBridge) -----------
 // All call the Java-owned control-plane facade (gated -Drunelite.mobileui). Reads return JSON snapshots
 // to parse once per panel open; writes are fire-and-forget onto the correct Java thread (EDT for plugin
