@@ -2256,15 +2256,10 @@ static int chatRowCanvasH(void) {
     if (self.chatMessagesView) self.chatMessagesView.hidden = YES;   // the dialogue replaces the chat lines
     [self.screen bringSubviewToFront:self.dialogueView];
 
-    // Head cutout (canvas px -> view-local pts). Empty when no head (message/level-up).
+    // Headless dialogue (user's choice): a FULLY opaque parchment, NO head cutout — clean and alignment-risk-free.
+    // The engine's head (still rendered underneath) is simply occluded by the parchment. (Java still publishes the
+    // head bounds for a possible future "real head" mode; they are intentionally ignored here.)
     CGRect headInView = CGRectZero;
-    NSDictionary *h = [d[@"head"] isKindOfClass:[NSDictionary class]] ? d[@"head"] : nil;
-    if (h) {
-        headInView = CGRectMake([h[@"x"] intValue] * s - boxX, [h[@"y"] intValue] * s - boxY,
-                                [h[@"w"] intValue] * s, [h[@"h"] intValue] * s);
-        headInView = CGRectIntersection(headInView, self.dialogueView.bounds);
-        if (CGRectIsNull(headInView)) headInView = CGRectZero;
-    }
     [self applyDialogueHeadCutout:headInView];
     self.dialogueContentView.frame = [self dialogueContentFrameForHead:headInView box:self.dialogueView.bounds];
 
