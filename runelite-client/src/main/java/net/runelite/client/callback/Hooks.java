@@ -466,6 +466,15 @@ public class Hooks implements Callbacks
 			// relocate / close, all headless. Gated -Drunelite.worldmapprobe=true.
 			net.runelite.client.headless.WorldMapProbe.tick(client, client.getGameState());
 		}
+		if (net.runelite.client.headless.WorldMapOrbsFix.isEnabled())
+		{
+			// SC-9 groundwork (DORMANT): accounts with "Data orbs" OFF (ORBS_DISABLED) can't open the world map —
+			// the orb's server if_button is discarded because the server never opened the orbs interface. Enabling
+			// Data orbs via the settings UI is the fix, but auto-opening that UI from the shared core is blocked in
+			// the mobile chrome (see WorldMapOrbsFix). Gated -Drunelite.orbsfix=true (NOT set by the app), so this
+			// is a no-op unless armed; inert on desktop.
+			net.runelite.client.headless.WorldMapOrbsFix.tick(client, client.getGameState());
+		}
 		if (net.runelite.client.headless.MobileChromeBridge.isEnabled())
 		{
 			// W3 hybrid-chrome read surface: snapshot desktop tab/panel/minimap/orb/chat/viewport geometry +
