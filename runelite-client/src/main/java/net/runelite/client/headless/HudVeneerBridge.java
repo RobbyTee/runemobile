@@ -1139,8 +1139,19 @@ public final class HudVeneerBridge
 			}
 			sb.append(",\"view\":").append(view)
 				.append(",\"topLevelId\":").append(topLevel)
-				.append(",\"dialogueActive\":").append(dialogueOpen)
-				.append(",\"tabs\":[");
+				.append(",\"dialogueActive\":").append(dialogueOpen);
+			if (dialogueOpen)
+			{
+				// Canvas-px bounds of the open dialogue so the native shell can route a tap there through a PRECISE
+				// click (resolving the dialogue's Continue/option) instead of walking the world behind it.
+				final int[] dr = dialogueBounds(c);
+				if (dr != null)
+				{
+					sb.append(",\"dlgX\":").append(dr[0]).append(",\"dlgY\":").append(dr[1])
+						.append(",\"dlgW\":").append(dr[2]).append(",\"dlgH\":").append(dr[3]);
+				}
+			}
+			sb.append(",\"tabs\":[");
 			final int last = CHAT_TAB_IDS.length - 1;
 			for (int i = 0; i < CHAT_TAB_IDS.length; i++)
 			{
@@ -1704,6 +1715,37 @@ public final class HudVeneerBridge
 			|| widgetShown(c, InterfaceID.Skillmulti.TITLE)     // make-X / quantity
 			|| widgetShown(c, InterfaceID.Objectbox.TEXT)       // single-item reward box
 			|| widgetShown(c, InterfaceID.ObjectboxDouble.TEXT); // double-item reward box
+	}
+
+	/** Canvas-px bounds {x,y,w,h} of the currently-open dialogue's ROOT interface (its own UNIVERSE — the dialogue
+	 *  interfaces are separate top-level groups, so their root covers the dialogue rect, which CHAT_CONTAINER's
+	 *  bounds would not). Pairs each detection widget with its interface root; returns the first open one, or null
+	 *  (not yet laid out → the native side leaves the tap on the normal path that frame). */
+	private static int[] dialogueBounds(Client c)
+	{
+		final int[][] dlg = {
+			{InterfaceID.ChatLeft.TEXT, InterfaceID.ChatLeft.UNIVERSE},
+			{InterfaceID.ChatRight.TEXT, InterfaceID.ChatRight.UNIVERSE},
+			{InterfaceID.Chatmenu.OPTIONS, InterfaceID.Chatmenu.UNIVERSE},
+			{InterfaceID.Messagebox.TEXT, InterfaceID.Messagebox.UNIVERSE},
+			{InterfaceID.LevelupDisplay.CONTINUE, InterfaceID.LevelupDisplay.UNIVERSE},
+			{InterfaceID.Skillmulti.TITLE, InterfaceID.Skillmulti.UNIVERSE},
+			{InterfaceID.Objectbox.TEXT, InterfaceID.Objectbox.UNIVERSE},
+			{InterfaceID.ObjectboxDouble.TEXT, InterfaceID.ObjectboxDouble.UNIVERSE},
+		};
+		for (final int[] d : dlg)
+		{
+			if (widgetShown(c, d[0]))
+			{
+				int[] b = canvasBounds(c.getWidget(d[1]));        // the dialogue's whole rect
+				if (b == null)
+				{
+					b = canvasBounds(c.getWidget(d[0]));          // fall back to the content widget's rect
+				}
+				return b;
+			}
+		}
+		return null;
 	}
 
 	/** Undo every chat-veneer manipulation so the engine renders the chatbox — and the dialogue interface it

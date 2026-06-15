@@ -144,6 +144,9 @@
 @property (nonatomic, assign) BOOL itemDragging;
 // Tracks the engine "dialogue open" state so the native chat veneer hides while a dialogue shows (logged once per transition).
 @property (nonatomic, assign) BOOL chatDialogueActive;
+// Canvas-px bounds of the open dialogue (from the snapshot); a tap inside it routes through the precise click so
+// the engine resolves the dialogue's Continue/option instead of walking the world behind the (now natural-bottom) box.
+@property (nonatomic, assign) CGRect dialogueChatCanvas;
 @property (nonatomic, assign) int  itemDragLastX;   // last valid canvas point of the drag — the engine MUST get a
 @property (nonatomic, assign) int  itemDragLastY;   // MOUSE_RELEASED to close WidgetDrag even if the lift maps off-canvas
 // Interactable-tap feedback: a light haptic when a tap grabs a real interactable (polled via JavaBridge
@@ -2072,7 +2075,20 @@ static int chatRowCanvasH(void) {
         [self appendLine:dlg ? @"[chat] dialogue open -> released veneer, engine chatbox shown"
                              : @"[chat] dialogue closed -> native chat veneer restored"];
     }
-    if (dlg) { [self hideChatTabs]; return; }
+    if (dlg) {
+        // Capture the dialogue's canvas rect so onTap routes taps there precisely (the box is now at the natural
+        // bottom, not the relocated chatScrollCanvas). Disable the stale top chat-tap routing for the duration.
+        if (d[@"dlgW"]) {
+            self.dialogueChatCanvas = CGRectMake([d[@"dlgX"] intValue], [d[@"dlgY"] intValue],
+                                                 [d[@"dlgW"] intValue], [d[@"dlgH"] intValue]);
+        } else {
+            self.dialogueChatCanvas = CGRectZero;   // not laid out yet this frame
+        }
+        self.chatScrollable = NO;
+        [self hideChatTabs];
+        return;
+    }
+    self.dialogueChatCanvas = CGRectZero;
     NSArray *tabs = [d[@"tabs"] isKindOfClass:[NSArray class]] ? d[@"tabs"] : nil;
     if (tabs.count == 0) { [self hideChatTabs]; return; }
     self.chatScrollable = !self.chatCollapsed;   // chat open + supported -> finger-scroll (off while collapsed)
@@ -3651,6 +3667,15 @@ static CGRect mapRectFromArr(NSArray *a) {
             && CGRectContainsPoint(self.chatScrollCanvas, CGPointMake(gx, gy))) {
         [JVMLauncher postClickPreciseX:gx y:gy button:1];
         [self appendLine:[NSString stringWithFormat:@"[shell] chat-msg tap %d,%d (precise, no ring)", gx, gy]];
+        return;
+    }
+    // Dialogue open: the chatbox (with the NPC/options/level-up dialogue) renders at the engine's natural bottom
+    // position. A tap there must click the dialogue's Continue/option PRECISELY — otherwise it walks the world
+    // behind it ("clicks underneath"). dialogueChatCanvas is the live dialogue rect from the snapshot.
+    if (self.chatDialogueActive && self.dialogueChatCanvas.size.width > 0
+            && CGRectContainsPoint(self.dialogueChatCanvas, CGPointMake(gx, gy))) {
+        [JVMLauncher postClickPreciseX:gx y:gy button:1];
+        [self appendLine:[NSString stringWithFormat:@"[shell] dialogue tap %d,%d (precise, no ring)", gx, gy]];
         return;
     }
     // Defer the ring one beat: onDisplayTick draws it red (interactable) or yellow (walk) once the engine has
