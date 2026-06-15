@@ -130,6 +130,11 @@ public final class HudVeneerBridge
 	// RELEASE the veneer (chat back to natural+opaque) and the native side hides its chat veneer (reads this in
 	// the snapshot as "dialogueActive"), giving the desktop-identical opaque dialogue box.
 	private static volatile boolean dialogueOpen;
+	// The open dialogue's content + head bounds (escaped JSON) for the native opaque dialogue. Built in tick when a
+	// dialogue is open; "{}" otherwise. The native shell draws an opaque parchment over the chatbox region (so the
+	// engine's transparent dialogue + the chat tabs/messages behind it are occluded), with a CUTOUT at the head
+	// bounds so the engine's real 3D head model still shows through.
+	private static volatile String dialogueJson = "{}";
 	// The engine refuses to RASTER its chatbox once the host container is relocated (proven), so chat-at-top draws
 	// the MESSAGE lines natively in UIKit instead. The engine chat stays alive + populated (off-screen); this snapshot
 	// is the live message model — read from client.getChatLineMap() (not the broken widgets), filtered to the active
@@ -263,6 +268,16 @@ public final class HudVeneerBridge
 	public static String getChatLines()
 	{
 		return chatLinesJson;
+	}
+
+	/** Native: the open dialogue's content for the native opaque-parchment renderer, or {@code "{}"} when none.
+	 *  Shape: {@code {"type":"npc|player|both|message|options|levelup","name":"..","text":"..","runs":[..],
+	 *  "continue":true,"options":[{"text":"..","runs":[..],"digit":N}],"head":{"x":,"y":,"w":,"h":}}} — bounds are
+	 *  canvas px. The native side draws the parchment over the chatbox region with a cutout at {@code head} so the
+	 *  engine's real 3D head model shows through; a continue tap sends SPACE, an option tap sends its digit. */
+	public static String getDialogueJson()
+	{
+		return dialogueJson;
 	}
 
 	/** Native: scroll the chat by {@code deltaCanvasPx} (positive = toward newer/bottom). Accumulated and applied
@@ -506,18 +521,26 @@ public final class HudVeneerBridge
 				// container-relative (0, rowH). The display/scroll children are revalidated so they widen too.
 				sizeChatArea(c, chatId, rowW, rowH);
 				// The engine's own chatbox must NEVER show — the native veneer renders the chat lines, and a
-				// dialogue (NPC/player/options/level-up/message/make-X) draws its OWN parchment + head, which we
-				// want to look exactly like desktop. Hide the chat background sprites (the brown box) every frame.
-				// CHAT_BACKGROUND is a child of the Chatbox group (162); the dialogue parchments are SEPARATE
-				// top-level interfaces — ChatLeft 0x00e7 (231), ChatRight 0x00d9 (217), ChatBoth 0x003c (60),
-				// Messagebox 0x00e5 (229), etc. — attached to the toplevel (164), NOT nested under the chatbox, so
-				// hiding a chatbox-group child cannot cascade to a dialogue. (Opacity is pinned once per frame by
-				// keepChatboxOpaque above, before any dialogue builds.)
+				// dialogue is re-drawn natively (opaque parchment) by the shell. Hide the chat background sprites
+				// (the brown box) every frame. During a dialogue the shell's opaque parchment occludes the engine's
+				// transparent dialogue + the chat tabs/messages too, leaving only the engine's 3D head visible
+				// through a cutout (the head can't be drawn natively, so the engine keeps rendering it).
 				hide(c, InterfaceID.Chatbox.CHAT_BACKGROUND);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
 				buildChatSnapshot(c);
 				buildChatLines(c);
+				// While a dialogue is open, publish its content + head bounds so the native shell draws an opaque
+				// parchment over the chatbox region (occluding the engine's transparent dialogue + the chat
+				// tabs/messages) with a cutout where the engine's real 3D head renders. Cleared when none is open.
+				if (dlgOpen)
+				{
+					buildDialogueJson(c);
+				}
+				else
+				{
+					dialogueJson = "{}";
+				}
 				// Apply any finger-scroll requested from native (client thread — runScript is legal here).
 				final int scrollDelta = pendingChatScroll.getAndSet(0);
 				if (scrollDelta != 0)
@@ -1763,6 +1786,149 @@ public final class HudVeneerBridge
 			}
 		}
 		return null;
+	}
+
+	/** Build {@link #dialogueJson} from the open dialogue's engine widgets, for the native opaque-parchment
+	 *  renderer. Common types are handled (NPC/player/combined chat, "Select an Option", a continue message,
+	 *  level-up); make-X / object-reward boxes stay {@code "{}"} (left to the engine — rare, still functional). */
+	private static void buildDialogueJson(Client c)
+	{
+		try
+		{
+			dialogueJson = computeDialogueJson(c);
+		}
+		catch (RuntimeException e)
+		{
+			BridgeFaults.note("HudVeneerBridge.buildDialogueJson", e);
+			dialogueJson = "{}";
+		}
+	}
+
+	private static String computeDialogueJson(Client c)
+	{
+		if (widgetShown(c, InterfaceID.ChatLeft.TEXT))
+		{
+			return dlgChat(c, "npc", InterfaceID.ChatLeft.NAME, InterfaceID.ChatLeft.TEXT, InterfaceID.ChatLeft.HEAD, InterfaceID.ChatLeft.CONTINUE);
+		}
+		if (widgetShown(c, InterfaceID.ChatRight.TEXT))
+		{
+			return dlgChat(c, "player", InterfaceID.ChatRight.NAME, InterfaceID.ChatRight.TEXT, InterfaceID.ChatRight.HEAD, InterfaceID.ChatRight.CONTINUE);
+		}
+		if (widgetShown(c, InterfaceID.ChatBoth.TEXT))
+		{
+			return dlgChat(c, "both", InterfaceID.ChatBoth.NAMES, InterfaceID.ChatBoth.TEXT, InterfaceID.ChatBoth.LEFT, InterfaceID.ChatBoth.CONTINUE);
+		}
+		if (widgetShown(c, InterfaceID.Chatmenu.OPTIONS))
+		{
+			return dlgOptions(c.getWidget(InterfaceID.Chatmenu.OPTIONS));
+		}
+		if (widgetShown(c, InterfaceID.Messagebox.TEXT))
+		{
+			return dlgChat(c, "message", -1, InterfaceID.Messagebox.TEXT, -1, InterfaceID.Messagebox.CONTINUE);
+		}
+		if (widgetShown(c, InterfaceID.LevelupDisplay.CONTINUE))
+		{
+			final String l1 = wText(c.getWidget(InterfaceID.LevelupDisplay.TEXT1));
+			final String l2 = wText(c.getWidget(InterfaceID.LevelupDisplay.TEXT2));
+			final StringBuilder sb = new StringBuilder(256);
+			sb.append("{\"type\":\"levelup\",\"continue\":true,");
+			appendTextWithRuns(sb, (l1 + " " + l2).trim(), CHAT_DEFAULT_COLOR);
+			appendBounds(sb, "cont", canvasBounds(c.getWidget(InterfaceID.LevelupDisplay.CONTINUE)));
+			sb.append('}');
+			return sb.toString();
+		}
+		return "{}";
+	}
+
+	/** A chat dialogue (NPC/player/combined/continue-message): an optional name, the body text (with colour runs),
+	 *  and the canvas bounds of the head model ({@code head}, for the native cutout) and the CONTINUE widget
+	 *  ({@code cont}, so a continue tap can PRECISELY click the engine's live widget — robust regardless of the
+	 *  "space bar to continue" setting). */
+	private static String dlgChat(Client c, String type, int nameId, int textId, int headId, int continueId)
+	{
+		final StringBuilder sb = new StringBuilder(384);
+		sb.append("{\"type\":\"").append(type).append("\",\"continue\":true");
+		if (nameId >= 0)
+		{
+			final String nm = wText(c.getWidget(nameId)).replaceAll("<[^>]*>", "");
+			if (!nm.isEmpty())
+			{
+				sb.append(",\"name\":\"").append(jsonEsc(nm)).append('"');
+			}
+		}
+		sb.append(',');
+		appendTextWithRuns(sb, wText(c.getWidget(textId)), CHAT_DEFAULT_COLOR);
+		appendBounds(sb, "head", headId >= 0 ? canvasBounds(c.getWidget(headId)) : null);
+		appendBounds(sb, "cont", continueId >= 0 ? canvasBounds(c.getWidget(continueId)) : null);
+		sb.append('}');
+		return sb.toString();
+	}
+
+	/** "Select an Option" — the title (child 0) + the option rows (children 1..n), each tagged with its digit key. */
+	private static String dlgOptions(Widget optW)
+	{
+		final StringBuilder sb = new StringBuilder(384);
+		sb.append("{\"type\":\"options\"");
+		final Widget[] kids = optW == null ? null : optW.getDynamicChildren();
+		final int n = kids == null ? 0 : kids.length;
+		if (n > 0 && kids[0] != null)
+		{
+			final String title = wText(kids[0]).replaceAll("<[^>]*>", "");
+			if (!title.isEmpty())
+			{
+				sb.append(",\"title\":\"").append(jsonEsc(title)).append('"');
+			}
+		}
+		sb.append(",\"options\":[");
+		boolean first = true;
+		for (int i = 1; i < n; i++)
+		{
+			final Widget k = kids[i];
+			if (k == null)
+			{
+				continue;
+			}
+			final String txt = wText(k);
+			if (txt.isEmpty())
+			{
+				continue;
+			}
+			if (!first)
+			{
+				sb.append(',');
+			}
+			first = false;
+			sb.append('{');
+			appendTextWithRuns(sb, txt, CHAT_DEFAULT_COLOR);
+			sb.append(",\"digit\":").append(i).append('}');
+		}
+		sb.append("]}");
+		return sb.toString();
+	}
+
+	/** Append {@code ,"key":{"x":,"y":,"w":,"h":}} for a canvas-px rect, or nothing when {@code b} is null. */
+	private static void appendBounds(StringBuilder sb, String key, int[] b)
+	{
+		if (b == null)
+		{
+			return;
+		}
+		sb.append(",\"").append(key).append("\":{\"x\":").append(b[0]).append(",\"y\":").append(b[1])
+			.append(",\"w\":").append(b[2]).append(",\"h\":").append(b[3]).append('}');
+	}
+
+	/** Null-safe {@link Widget#getText()}. */
+	private static String wText(Widget w)
+	{
+		try
+		{
+			final String t = w == null ? null : w.getText();
+			return t == null ? "" : t;
+		}
+		catch (RuntimeException ex)
+		{
+			return "";
+		}
 	}
 
 

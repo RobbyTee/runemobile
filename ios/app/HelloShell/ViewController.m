@@ -252,6 +252,13 @@
 // only on the main thread (gesture callbacks + the display-tick layout).
 @property (nonatomic, strong) UIButton *chatPill;             // the collapsed active-channel button
 @property (nonatomic, strong) UITextView *chatMessagesView;  // native-rendered chat MESSAGE lines (engine can't raster relocated chat)
+// Native dialogue: an OPAQUE parchment drawn over the whole chatbox region while a dialogue is open (occluding the
+// engine's transparent dialogue + the chat tabs/messages), with a CUTOUT where the engine's real 3D head renders.
+@property (nonatomic, strong) UIView *dialogueView;          // the parchment box (masked with a head cutout)
+@property (nonatomic, strong) UIView *dialogueContentView;   // the text area (inset to clear the head column)
+@property (nonatomic, strong) UIStackView *dialogueStack;    // name / text / continue, or option rows
+@property (nonatomic, copy)   NSString *lastDialogueJson;    // rebuild the stack only when the content changes
+@property (nonatomic, assign) CGPoint dialogueContinuePoint; // engine CONTINUE widget centre (canvas px), or (-1,-1)
 @property (nonatomic, assign) int chatLinesSeq;              // last rendered getChatLines seq (skip re-parse when unchanged)
 @property (nonatomic, assign) int chatBaseX;                 // safe-area-anchored chat origin (canvas px), before the user offset
 @property (nonatomic, assign) int chatBaseY;
@@ -2057,6 +2064,7 @@ static int chatRowCanvasH(void) {
 // animation owns the views; content (sprite + label) is always refreshed.
 - (void)updateChatTabs {
     if (!self.chatTabsBuilt) return;
+    [self updateDialogueView];   // native opaque dialogue (self-contained: shows/hides off the snapshot + JSON)
     if (self.mapOpen) { [self hideChatTabs]; return; }   // fullscreen world map: the pill would cover it
     if (!self.chromeVisible || self.renderW <= 0) { [self hideChatTabs]; return; }
     NSString *snap = [JVMLauncher chatSnapshot];
@@ -2177,6 +2185,238 @@ static int chatRowCanvasH(void) {
     // Restore the engine's own (small) chat tab row + native width whenever the native tabs aren't shown.
     [JVMLauncher setEngineChatTabRowHeight:0];
     [JVMLauncher setEngineChatAreaWidth:0];
+}
+
+#pragma mark - Native dialogue (opaque parchment over the chatbox; real engine head shows through a cutout)
+
+- (void)ensureDialogueView {
+    if (self.dialogueView) return;
+    UIView *v = [[UIView alloc] init];
+    v.backgroundColor = [UIColor colorWithRed:0.84 green:0.78 blue:0.62 alpha:1.0];   // OSRS parchment tan (opaque)
+    v.layer.cornerRadius = 4.0;
+    v.layer.borderColor = [UIColor colorWithRed:0.36 green:0.27 blue:0.13 alpha:1.0].CGColor;
+    v.layer.borderWidth = 2.0;
+    v.hidden = YES;
+    // A tap anywhere on the parchment advances a "click here to continue" dialogue (option rows are buttons on top).
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onDialogueContinue)];
+    [v addGestureRecognizer:tap];
+
+    UIView *content = [[UIView alloc] init];   // the text area; its frame is set head-aware each tick
+    content.backgroundColor = [UIColor clearColor];
+    [v addSubview:content];
+
+    UIStackView *st = [[UIStackView alloc] init];
+    st.axis = UILayoutConstraintAxisVertical;
+    st.alignment = UIStackViewAlignmentFill;
+    st.spacing = 3.0;
+    st.translatesAutoresizingMaskIntoConstraints = NO;
+    st.userInteractionEnabled = YES;
+    [content addSubview:st];
+    [NSLayoutConstraint activateConstraints:@[
+        [st.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+        [st.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+        [st.centerYAnchor constraintEqualToAnchor:content.centerYAnchor],
+        [st.topAnchor constraintGreaterThanOrEqualToAnchor:content.topAnchor],
+        [st.bottomAnchor constraintLessThanOrEqualToAnchor:content.bottomAnchor],
+    ]];
+    self.dialogueStack = st;
+    self.dialogueContentView = content;
+    self.dialogueView = v;
+    [self.screen addSubview:v];
+}
+
+- (void)hideDialogue {
+    if (self.dialogueView) self.dialogueView.hidden = YES;
+    self.lastDialogueJson = nil;
+}
+
+// Poll each chat tick: when a dialogue is open, draw the opaque parchment over the WHOLE chatbox region (so the
+// engine's transparent dialogue + the chat tabs/messages are occluded) with a cutout where the engine's real 3D
+// head renders; otherwise hide it. The engine keeps rendering underneath, so the head still shows through.
+- (void)updateDialogueView {
+    if (!self.chromeVisible || self.renderW <= 0 || self.mapOpen) { [self hideDialogue]; return; }
+    NSString *snap = [JVMLauncher chatSnapshot];
+    if (snap.length == 0) { [self hideDialogue]; return; }
+    NSDictionary *cd = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if (![cd isKindOfClass:[NSDictionary class]] || ![cd[@"loggedIn"] boolValue]
+        || [cd[@"topLevelId"] intValue] != 164 || ![cd[@"dialogueActive"] boolValue]) { [self hideDialogue]; return; }
+    NSString *js = [JVMLauncher dialogueJson];
+    if (js.length == 0) { [self hideDialogue]; return; }
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[js dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if (![d isKindOfClass:[NSDictionary class]] || ![d[@"type"] isKindOfClass:[NSString class]]) { [self hideDialogue]; return; }
+
+    [self ensureDialogueView];
+    CGFloat s = self.view.bounds.size.width / (CGFloat)self.renderW;
+    CGFloat boxX = floor([cd[@"chatX"] intValue] * s);
+    CGFloat boxY = floor([cd[@"chatY"] intValue] * s);
+    CGFloat boxW = ceil(kChatW * s);
+    CGFloat boxH = ceil((kChatTabRowCanvasH + kChatContentCanvasH) * s);
+    self.dialogueView.frame = CGRectMake(boxX, boxY, boxW, boxH);
+    self.dialogueView.hidden = NO;
+    if (self.chatMessagesView) self.chatMessagesView.hidden = YES;   // the dialogue replaces the chat lines
+    [self.screen bringSubviewToFront:self.dialogueView];
+
+    // Head cutout (canvas px -> view-local pts). Empty when no head (message/level-up).
+    CGRect headInView = CGRectZero;
+    NSDictionary *h = [d[@"head"] isKindOfClass:[NSDictionary class]] ? d[@"head"] : nil;
+    if (h) {
+        headInView = CGRectMake([h[@"x"] intValue] * s - boxX, [h[@"y"] intValue] * s - boxY,
+                                [h[@"w"] intValue] * s, [h[@"h"] intValue] * s);
+        headInView = CGRectIntersection(headInView, self.dialogueView.bounds);
+        if (CGRectIsNull(headInView)) headInView = CGRectZero;
+    }
+    [self applyDialogueHeadCutout:headInView];
+    self.dialogueContentView.frame = [self dialogueContentFrameForHead:headInView box:self.dialogueView.bounds];
+
+    // The engine CONTINUE widget centre in canvas px (= game coords) so a continue tap precisely clicks the live
+    // (occluded) widget — robust regardless of the "space bar to continue" setting. (-1,-1) when absent.
+    NSDictionary *cont = [d[@"cont"] isKindOfClass:[NSDictionary class]] ? d[@"cont"] : nil;
+    self.dialogueContinuePoint = cont
+        ? CGPointMake([cont[@"x"] intValue] + [cont[@"w"] intValue] / 2, [cont[@"y"] intValue] + [cont[@"h"] intValue] / 2)
+        : CGPointMake(-1, -1);
+
+    if (![js isEqualToString:self.lastDialogueJson]) {
+        self.lastDialogueJson = js;
+        [self rebuildDialogueContent:d scale:s];
+        // One line per new dialogue so a misaligned head cutout / continue target is diagnosable from the log.
+        [self appendLine:[NSString stringWithFormat:@"[dlg] type=%@ box=%@ head=%@ cont=(%.0f,%.0f)",
+            d[@"type"], NSStringFromCGRect(self.dialogueView.frame), NSStringFromCGRect(headInView),
+            self.dialogueContinuePoint.x, self.dialogueContinuePoint.y]];
+    }
+}
+
+// The text area: the parchment inset by padding, minus the head's column (head on the left -> text to the right,
+// and vice-versa). Falls back to the full inset box if the head math degenerates.
+- (CGRect)dialogueContentFrameForHead:(CGRect)head box:(CGRect)box {
+    CGFloat pad = 6.0;
+    CGRect c = CGRectInset(box, pad, pad);
+    if (!CGRectIsEmpty(head)) {
+        if (CGRectGetMidX(head) < CGRectGetMidX(box)) {
+            CGFloat left = CGRectGetMaxX(head) + pad;
+            c = CGRectMake(left, CGRectGetMinY(c), CGRectGetMaxX(box) - pad - left, c.size.height);
+        } else {
+            CGFloat right = CGRectGetMinX(head) - pad;
+            c = CGRectMake(pad, CGRectGetMinY(c), right - pad, c.size.height);
+        }
+        if (c.size.width < 60) c = CGRectInset(box, pad, pad);
+    }
+    return c;
+}
+
+// Mask out the head rectangle so the engine's 3D head (rendered underneath in the frame) shows through; the rest
+// stays opaque parchment. Empty rect -> no mask (full parchment, e.g. a level-up / message box with no head).
+- (void)applyDialogueHeadCutout:(CGRect)head {
+    UIView *v = self.dialogueView;
+    if (CGRectIsEmpty(head)) { v.layer.mask = nil; return; }
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    UIBezierPath *p = [UIBezierPath bezierPathWithRoundedRect:v.bounds cornerRadius:4.0];
+    [p appendPath:[UIBezierPath bezierPathWithRect:head]];
+    p.usesEvenOddFillRule = YES;
+    CAShapeLayer *mask = [v.layer.mask isKindOfClass:[CAShapeLayer class]] ? (CAShapeLayer *)v.layer.mask : nil;
+    if (!mask) { mask = [CAShapeLayer layer]; mask.fillRule = kCAFillRuleEvenOdd; v.layer.mask = mask; }
+    mask.path = p.CGPath;
+    [CATransaction commit];
+}
+
+- (void)rebuildDialogueContent:(NSDictionary *)d scale:(CGFloat)s {
+    for (UIView *v in [self.dialogueStack.arrangedSubviews copy]) {
+        [self.dialogueStack removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    CGFloat fontSize = floor(16.0 * s); if (fontSize < 12) fontSize = 12;
+    UIFont *font = [UIFont fontWithName:@"RuneScape" size:fontSize] ?: [UIFont systemFontOfSize:fontSize];
+    BOOL isOptions = [d[@"type"] isEqualToString:@"options"];
+
+    NSString *name = [d[@"name"] isKindOfClass:[NSString class]] ? d[@"name"] : nil;
+    if (name.length) {
+        UILabel *nl = [self dialogueLabel:[[NSAttributedString alloc] initWithString:name attributes:@{
+            NSFontAttributeName: font, NSForegroundColorAttributeName: [UIColor colorWithRed:0.50 green:0.0 blue:0.0 alpha:1.0]}]];
+        nl.textAlignment = NSTextAlignmentCenter;
+        [self.dialogueStack addArrangedSubview:nl];
+    }
+    if (isOptions) {
+        NSString *title = [d[@"title"] isKindOfClass:[NSString class]] ? d[@"title"] : nil;
+        if (title.length) {
+            UILabel *tl = [self dialogueLabel:[[NSAttributedString alloc] initWithString:title attributes:@{
+                NSFontAttributeName: font, NSForegroundColorAttributeName: [UIColor colorWithWhite:0.12 alpha:1.0]}]];
+            tl.textAlignment = NSTextAlignmentCenter;
+            [self.dialogueStack addArrangedSubview:tl];
+        }
+        NSArray *opts = [d[@"options"] isKindOfClass:[NSArray class]] ? d[@"options"] : @[];
+        for (NSDictionary *o in opts) {
+            if (![o isKindOfClass:[NSDictionary class]]) continue;
+            UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+            [b setAttributedTitle:[self dialogueAttrFromDict:o font:font defColor:[UIColor blackColor]] forState:UIControlStateNormal];
+            b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
+            b.titleLabel.numberOfLines = 0;
+            b.tag = [o[@"digit"] integerValue];
+            [b setBackgroundImage:[self solidImage:[UIColor colorWithRed:0.55 green:0.42 blue:0.18 alpha:0.45]] forState:UIControlStateHighlighted];
+            [b addTarget:self action:@selector(onDialogueOption:) forControlEvents:UIControlEventTouchUpInside];
+            [self.dialogueStack addArrangedSubview:b];
+        }
+    } else {
+        UILabel *tl = [self dialogueLabel:[self dialogueAttrFromDict:d font:font defColor:[UIColor blackColor]]];
+        tl.textAlignment = NSTextAlignmentCenter;
+        [self.dialogueStack addArrangedSubview:tl];
+        if ([d[@"continue"] boolValue]) {
+            UILabel *hint = [self dialogueLabel:[[NSAttributedString alloc] initWithString:@"Click here to continue"
+                attributes:@{NSFontAttributeName: font, NSForegroundColorAttributeName: [UIColor colorWithRed:0.0 green:0.0 blue:0.55 alpha:1.0]}]];
+            hint.textAlignment = NSTextAlignmentCenter;
+            [self.dialogueStack addArrangedSubview:hint];
+        }
+    }
+}
+
+- (UILabel *)dialogueLabel:(NSAttributedString *)attr {
+    UILabel *l = [UILabel new];
+    l.numberOfLines = 0;
+    l.attributedText = attr;
+    return l;
+}
+
+- (NSAttributedString *)dialogueAttrFromDict:(NSDictionary *)o font:(UIFont *)font defColor:(UIColor *)def {
+    NSString *text = [o[@"text"] isKindOfClass:[NSString class]] ? o[@"text"] : @"";
+    NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.lineBreakMode = NSLineBreakByWordWrapping;
+    NSMutableAttributedString *a = [[NSMutableAttributedString alloc] initWithString:text attributes:@{
+        NSFontAttributeName: font, NSForegroundColorAttributeName: def, NSParagraphStyleAttributeName: ps}];
+    NSArray *runs = [o[@"runs"] isKindOfClass:[NSArray class]] ? o[@"runs"] : nil;
+    NSUInteger tlen = text.length;
+    for (NSDictionary *r in runs) {
+        if (![r isKindOfClass:[NSDictionary class]]) continue;
+        NSInteger off = [r[@"o"] integerValue], l = [r[@"l"] integerValue];
+        if (off < 0 || l <= 0 || (NSUInteger)(off + l) > tlen) continue;
+        NSRange rng = NSMakeRange((NSUInteger)off, (NSUInteger)l);
+        UIColor *col = rgbColor([r[@"c"] intValue]);
+        if (col) [a addAttribute:NSForegroundColorAttributeName value:col range:rng];
+        if ([r[@"u"] intValue] == 1) [a addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:rng];
+    }
+    return a;
+}
+
+// Continue tap -> SPACE (OSRS "space bar to continue"); option tap -> its number key. postText sends the full
+// KEY_PRESSED+TYPED+RELEASED for the char, so the engine's (occluded but live) dialogue handler advances/selects.
+- (void)onDialogueContinue {
+    if (!self.dialogueView || self.dialogueView.hidden) return;
+    NSString *js = self.lastDialogueJson;
+    if (js && [js containsString:@"\"type\":\"options\""]) return;   // options need a choice, not a blind continue
+    // Prefer a PRECISE click on the engine's live CONTINUE widget (works regardless of the "space bar to continue"
+    // setting); fall back to SPACE if its bounds weren't published.
+    if (self.dialogueContinuePoint.x >= 0) {
+        [JVMLauncher postClickPreciseX:(int)self.dialogueContinuePoint.x y:(int)self.dialogueContinuePoint.y button:1];
+        [self appendLine:[NSString stringWithFormat:@"[shell] dialogue continue (click %.0f,%.0f)",
+            self.dialogueContinuePoint.x, self.dialogueContinuePoint.y]];
+    } else {
+        [JVMLauncher postText:@" "];
+        [self appendLine:@"[shell] dialogue continue (space)"];
+    }
+}
+
+- (void)onDialogueOption:(UIButton *)b {
+    NSInteger digit = b.tag;
+    if (digit < 1 || digit > 9) return;
+    [JVMLauncher postText:[NSString stringWithFormat:@"%ld", (long)digit]];
+    [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %ld", (long)digit]];
 }
 
 // Render the native chat MESSAGE lines (from JVMLauncher.chatLines — the live engine model) into chatMessagesView,
@@ -3625,12 +3865,18 @@ static CGRect mapRectFromArr(NSArray *a) {
 // (the enlarged chat tab buttons, the keyboard button, the side-tab grid). The control handles its own tap, so it
 // must not ALSO register as a walk-here click underneath. Touches on the bare game view (self.screen) pass through.
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gr shouldReceiveTouch:(UITouch *)touch {
+    // The native dialogue parchment owns its own taps (continue / option rows) — keep world/camera gestures off it.
+    if (self.dialogueView && !self.dialogueView.hidden && [touch.view isDescendantOfView:self.dialogueView]) return NO;
     return ![touch.view isKindOfClass:[UIControl class]];
 }
 
 // tap -> left click (walk / interact / select a menu entry).
 - (void)onTap:(UITapGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady]) return;
+    // The native dialogue parchment owns its own taps (continue / option rows). Re-gate here too (belt-and-
+    // suspenders with shouldReceiveTouch) so a tap on it can never ALSO route as a world/precise click.
+    if (self.dialogueView && !self.dialogueView.hidden
+        && CGRectContainsPoint(self.dialogueView.frame, [g locationInView:self.screen])) return;
     CGPoint vp = [g locationInView:self.view];
     int gx = 0, gy = 0;
     if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return;

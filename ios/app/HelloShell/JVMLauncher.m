@@ -313,6 +313,7 @@ static jmethodID gMidSwitchChatTab = NULL;   // switchChatTab(I)V  (A3 — switc
 static jmethodID gMidSetChatCollapsed = NULL; // setChatCollapsed(Z)V  (A3 — tap active tab hides the chat box)
 static jmethodID gMidGetChatSnap = NULL;     // getChatSnapshot()Ljava/lang/String;  (A3)
 static jmethodID gMidGetChatLines = NULL;    // getChatLines()Ljava/lang/String;  (native top-rendered chat)
+static jmethodID gMidGetDialogue = NULL;     // getDialogueJson()Ljava/lang/String;  (native-rendered dialogue)
 static jmethodID gMidSetOverlayInsets = NULL; // setOverlaySafeInsets(IIII)V (snap-corner safe frame)
 static jmethodID gMidPanMap = NULL;          // panWorldMap(II)V  (world map: finger pan -> map centre)
 static jmethodID gMidGetMapSnap = NULL;      // getMapSnapshot()Ljava/lang/String;  (world map open + rects)
@@ -343,6 +344,7 @@ static BOOL ensureVeneer(void) {
     gMidScrollChat = (*env)->GetStaticMethodID(env, global, "scrollChat", "(I)V");
     gMidGetChatSnap = (*env)->GetStaticMethodID(env, global, "getChatSnapshot", "()Ljava/lang/String;");
     gMidGetChatLines = (*env)->GetStaticMethodID(env, global, "getChatLines", "()Ljava/lang/String;");
+    gMidGetDialogue = (*env)->GetStaticMethodID(env, global, "getDialogueJson", "()Ljava/lang/String;");
     gMidSetMinimapScale = (*env)->GetStaticMethodID(env, global, "setMinimapScale", "(I)V");
     gMidSwitchChatTab = (*env)->GetStaticMethodID(env, global, "switchChatTab", "(I)V");
     gMidSetChatCollapsed = (*env)->GetStaticMethodID(env, global, "setChatCollapsed", "(Z)V");
@@ -1633,6 +1635,20 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureVeneer() || !gMidGetChatLines) return nil;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gVeneerClass, gMidGetChatLines);
+    if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
+    NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
+    if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
+    (*env)->DeleteLocalRef(env, js);
+    return out;
+}
+
+// The open chatbox dialogue as JSON (HudVeneerBridge.getDialogueJson), or nil/"{}" when none. The shell renders
+// it natively (opaque parchment, head cutout); nil on an older bundle without the method.
++ (NSString *)dialogueJson {
+    if (!ensureVeneer() || !gMidGetDialogue) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gVeneerClass, gMidGetDialogue);
     if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
     const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
     NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
