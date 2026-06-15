@@ -1465,7 +1465,21 @@ public final class JavaBridge
 	{
 		try
 		{
-			textInputOpen = c.getVarcIntValue(VarClientInt.INPUT_TYPE) != 0;
+			boolean want = c.getVarcIntValue(VarClientInt.INPUT_TYPE) != 0;
+			if (!want)
+			{
+				// Some engine inputs focus an input-field WIDGET without flipping INPUT_TYPE — notably the Grand
+				// Exchange custom quantity/price entry. Auto-raise the soft keyboard for those too, so the user can
+				// type a GE amount the same way they type a bank "Enter amount".
+				try
+				{
+					want = c.getFocusedInputFieldWidget() != null;
+				}
+				catch (RuntimeException ignore)
+				{
+				}
+			}
+			textInputOpen = want;
 		}
 		catch (RuntimeException ex)
 		{
