@@ -142,6 +142,8 @@
 // DRAG-1: a one-finger drag that BEGAN over the inventory grid rearranges items (synthesized engine mouse-drag)
 // instead of rotating the camera. Only set when the drag starts inside the published inventory rect.
 @property (nonatomic, assign) BOOL itemDragging;
+// Tracks the engine "dialogue open" state so the native chat veneer hides while a dialogue shows (logged once per transition).
+@property (nonatomic, assign) BOOL chatDialogueActive;
 @property (nonatomic, assign) int  itemDragLastX;   // last valid canvas point of the drag — the engine MUST get a
 @property (nonatomic, assign) int  itemDragLastY;   // MOUSE_RELEASED to close WidgetDrag even if the lift maps off-canvas
 // Interactable-tap feedback: a light haptic when a tap grabs a real interactable (polled via JavaBridge
@@ -2061,6 +2063,16 @@ static int chatRowCanvasH(void) {
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) { [self hideChatTabs]; return; }
     // LAYOUT GUARD (same as updateChrome): the native HUD only works in the Classic resizable layout (164).
     if ([d[@"topLevelId"] intValue] != 164) { [self hideChatTabs]; return; }
+    // Dialogue open: the engine has released + is rendering the chatbox (with the NPC/options/level-up/etc.
+    // dialogue) at its natural opaque position, like desktop. Hide the native chat veneer so it shows through —
+    // it auto-restores when the dialogue closes (the snapshot's dialogueActive flips false).
+    BOOL dlg = [d[@"dialogueActive"] boolValue];
+    if (dlg != self.chatDialogueActive) {
+        self.chatDialogueActive = dlg;
+        [self appendLine:dlg ? @"[chat] dialogue open -> released veneer, engine chatbox shown"
+                             : @"[chat] dialogue closed -> native chat veneer restored"];
+    }
+    if (dlg) { [self hideChatTabs]; return; }
     NSArray *tabs = [d[@"tabs"] isKindOfClass:[NSArray class]] ? d[@"tabs"] : nil;
     if (tabs.count == 0) { [self hideChatTabs]; return; }
     self.chatScrollable = !self.chatCollapsed;   // chat open + supported -> finger-scroll (off while collapsed)

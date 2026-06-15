@@ -125,6 +125,11 @@ public final class HudVeneerBridge
 	private static volatile int chatTabRowH;
 	private static volatile int chatAreaW;
 	private static volatile String chatSnapshotJson = "{\"loggedIn\":false}";
+	// True while an NPC/options/level-up/message/make-X dialogue interface is open. Those interfaces render INTO
+	// the chatbox region, which the chat veneer's relocate+transparency suppresses — so while one is open we
+	// RELEASE the veneer (chat back to natural+opaque) and the native side hides its chat veneer (reads this in
+	// the snapshot as "dialogueActive"), giving the desktop-identical opaque dialogue box.
+	private static volatile boolean dialogueOpen;
 	// The engine refuses to RASTER its chatbox once the host container is relocated (proven), so chat-at-top draws
 	// the MESSAGE lines natively in UIKit instead. The engine chat stays alive + populated (off-screen); this snapshot
 	// is the live message model — read from client.getChatLineMap() (not the broken widgets), filtered to the active
@@ -348,9 +353,10 @@ public final class HudVeneerBridge
 				hideRowOf(c, ids[0]);
 				hideRowOf(c, ids[7]);
 			}
-			// Same gates as the chat block in tick(): only while the chat veneer is active and the world
-			// map doesn't own the screen.
-			if (chatX >= 0 && !isWorldMapOpen(c))
+			// Same gates as the chat block in tick(): only while the chat veneer is active, the world map
+			// doesn't own the screen, and NO dialogue is open (a dialogue releases the veneer so the engine can
+			// raster the chatbox + dialogue — re-hiding here would suppress it one frame before raster).
+			if (chatX >= 0 && !isWorldMapOpen(c) && !isDialogueOpen(c))
 			{
 				setEngineChatTabsHidden(c, chatTabRowH > 0);
 				if (transparentChat)
@@ -421,13 +427,24 @@ public final class HudVeneerBridge
 			// OFF (tickWorldMap shoves chat/minimap/side off-screen instead and grows the map to the full
 			// canvas); when it closes the blocks resume re-forcing the HUD home on the very next frame.
 			final boolean mapOpenNow = isWorldMapOpen(c);
+			final boolean dlgOpen = isDialogueOpen(c);
+			dialogueOpen = dlgOpen;   // published in buildChatSnapshot so the native side hides its chat veneer
 
 			// Chat box: keep the engine chatbox FULLY ALIVE at all times (never hidden). To "collapse" (the user
 			// tapped the active tab) we shove the live widget far off-screen; reopening just moves it back — instant
 			// and full, with NO interface teardown, tab-selection loss, or rebuild. (Hiding the container tore the
 			// chat down, so reopen showed an empty box until a second tap.) The native tab row stays put because
 			// buildChatSnapshot reports the configured chatX/chatY, not the widget's moved position.
-			if (chatX >= 0 && !mapOpenNow)
+			if (chatX >= 0 && !mapOpenNow && dlgOpen)
+			{
+				// A dialogue interface (NPC/options/level-up/message/make-X) is open. It renders INTO the chatbox
+				// region, which the relocate + transparency would stop the engine from rastering. Release every
+				// veneer manipulation so the engine draws the chatbox + dialogue at its natural, OPAQUE position —
+				// exactly like desktop — and publish dialogueActive so the native shell hides its chat veneer.
+				releaseChatForDialogue(c, chatId);
+				buildChatSnapshot(c);
+			}
+			else if (chatX >= 0 && !mapOpenNow)
 			{
 				final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
 				final int rowW = chatAreaW > 0 ? chatAreaW : CHAT_DEFAULT_W;
@@ -1122,6 +1139,7 @@ public final class HudVeneerBridge
 			}
 			sb.append(",\"view\":").append(view)
 				.append(",\"topLevelId\":").append(topLevel)
+				.append(",\"dialogueActive\":").append(dialogueOpen)
 				.append(",\"tabs\":[");
 			final int last = CHAT_TAB_IDS.length - 1;
 			for (int i = 0; i < CHAT_TAB_IDS.length; i++)
@@ -1652,6 +1670,73 @@ public final class HudVeneerBridge
 			{
 				w.setForcedPosition(x, y);
 				w.revalidate();
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	/** True if {@code id}'s widget exists and is shown (its content widget is loaded + visible). */
+	private static boolean widgetShown(Client c, int id)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			return w != null && !w.isHidden();
+		}
+		catch (RuntimeException ex)
+		{
+			return false;
+		}
+	}
+
+	/** Is any chatbox dialogue interface open — NPC/player chat, "Select an Option", a "click here to continue"
+	 *  message, a level-up, a make-X/quantity selector, or an item-reward box? These render into the chatbox
+	 *  region; checking their content widget (loaded + shown) mirrors the in-tree dialogue plugins' detection. */
+	private static boolean isDialogueOpen(Client c)
+	{
+		return widgetShown(c, InterfaceID.ChatLeft.TEXT)        // NPC dialogue
+			|| widgetShown(c, InterfaceID.ChatRight.TEXT)       // player dialogue
+			|| widgetShown(c, InterfaceID.Chatmenu.OPTIONS)     // "Select an Option"
+			|| widgetShown(c, InterfaceID.Messagebox.TEXT)      // "click here to continue"
+			|| widgetShown(c, InterfaceID.LevelupDisplay.CONTINUE) // level-up
+			|| widgetShown(c, InterfaceID.Skillmulti.TITLE)     // make-X / quantity
+			|| widgetShown(c, InterfaceID.Objectbox.TEXT)       // single-item reward box
+			|| widgetShown(c, InterfaceID.ObjectboxDouble.TEXT); // double-item reward box
+	}
+
+	/** Undo every chat-veneer manipulation so the engine renders the chatbox — and the dialogue interface it
+	 *  hosts — at its natural, OPAQUE position (desktop-identical) while a dialogue is open. Idempotent, run each
+	 *  tick the dialogue is up; the normal apply-block resumes (re-relocates, re-applies transparency) once it
+	 *  closes. Restoring the prior collapse state is automatic — the next apply-block re-reads chatCollapsed. */
+	private static void releaseChatForDialogue(Client c, int chatId)
+	{
+		final Widget w = c.getWidget(chatId);
+		if (w != null)
+		{
+			if (w.isHidden())
+			{
+				w.setHidden(false);
+			}
+			w.setForcedPosition(-1, -1);   // clear the relocate -> the engine recomputes the natural layout
+			if (w.getOriginalWidth() != CHAT_DEFAULT_W)
+			{
+				w.setOriginalWidth(CHAT_DEFAULT_W);
+			}
+			w.revalidate();
+		}
+		forcePos(c, InterfaceID.Chatbox.CONTROLS, -1, -1);   // clear the tab-row force
+		setEngineChatTabsHidden(c, false);                    // show the engine's own tab visuals again
+		// Opaque background, like the desktop dialogue box.
+		setHidden(c, InterfaceID.Chatbox.CHAT_BACKGROUND, false);
+		setHidden(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND, false);
+		setHidden(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC, false);
+		try
+		{
+			if (c.getVarbitValue(VarbitID.CHATBOX_TRANSPARENCY) != 0)
+			{
+				c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, 0);
 			}
 		}
 		catch (RuntimeException ignore)
