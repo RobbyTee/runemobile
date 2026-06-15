@@ -22,9 +22,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// tiles) as a more discoverable entry than the 38pt icon rail. A tile opens the same panel the rail would.
 - (void)presentGridLauncher;
 
-/// §3.5 step 3: when YES (the default), the 38pt right-edge icon rail is HIDDEN and the ⊞ FAB grid is the sole
-/// panel entry; the inline panel reclaims the rail's edge strip. Setting it re-lays the dock immediately. A debug
-/// toggle (long-press the ⊞ FAB) flips it (persisted in NSUserDefaults `rightBarRailHidden`) for reversibility.
+/// The right-edge plugin-icon rail is SHOWN by default (the user's primary entry). When YES it's hidden and the ⊞
+/// FAB grid becomes the sole entry; the inline panel then reclaims the rail's edge strip. Setting it re-lays the
+/// dock immediately. A long-press on the ⊞ FAB toggles it (persisted in NSUserDefaults `rightBarRailHidden`).
 @property (nonatomic, assign) BOOL railHidden;
 
 /// YES while the panel's own soft keyboard (a focused Swing text box) is up — the host gates its game-keyboard

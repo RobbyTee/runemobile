@@ -946,8 +946,8 @@ static const CGFloat kMenuWidth       = 210.0;
     self.gridButton.layer.cornerRadius = 8;
     [self.gridButton addTarget:self action:@selector(onOpenGridLauncher)
               forControlEvents:UIControlEventTouchUpInside];
-    // §3.5 step 3: long-press the ⊞ FAB toggles the legacy 38pt icon rail back on/off (default off — FAB-only),
-    // so the rail-vs-FAB entry is reversible on device without a rebuild.
+    // Long-press the ⊞ FAB toggles the plugin-icon rail on/off (shown by default) — lets you collapse to a
+    // FAB-only entry if you prefer, reversible on device without a rebuild.
     UILongPressGestureRecognizer *gridLp = [[UILongPressGestureRecognizer alloc]
         initWithTarget:self action:@selector(onToggleRail:)];
     [self.gridButton addGestureRecognizer:gridLp];
@@ -1357,7 +1357,7 @@ static const CGFloat kMenuWidth       = 210.0;
 - (void)onToggleRail:(UILongPressGestureRecognizer *)g {
     if (g.state != UIGestureRecognizerStateBegan) return;
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    BOOL nowHidden = ([ud objectForKey:@"rightBarRailHidden"] == nil) ? YES : [ud boolForKey:@"rightBarRailHidden"];
+    BOOL nowHidden = ([ud objectForKey:@"rightBarRailHidden"] == nil) ? NO : [ud boolForKey:@"rightBarRailHidden"];
     BOOL newHidden = !nowHidden;
     [ud setBool:newHidden forKey:@"rightBarRailHidden"];
     self.panelDock.railHidden = newHidden;

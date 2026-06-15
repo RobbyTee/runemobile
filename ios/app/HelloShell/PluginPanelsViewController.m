@@ -4,15 +4,16 @@
 // Right-edge drawer / dock geometry. Desktop-faithful: a vertical icon rail pinned to the far-right edge, the
 // rendered panel content opening to its left. The panel's natural 1:1 width is ~PluginPanel.PANEL_WIDTH
 // supersampled then shown at device scale (≈322pt on a 3x screen); size the content column to fit it snug.
-static const CGFloat kRailWidth = 38.0;       // narrow enough to sit in the outer screen-edge strip
+static const CGFloat kRailWidth = 42.0;       // touch-friendly icon column in the outer screen-edge strip
 static const CGFloat kDrawerWidth = 392.0;   // modal drawer: content(322) + rail + insets/gap
 static const CGFloat kDrawerHInset = 10.0;
 static const CGFloat kTitleBarHeight = 44.0;
-static const CGFloat kRailButtonH = 40.0;     // smaller icons so the top/bottom clear the screen curve
+static const CGFloat kRailButtonH = 44.0;     // mobile touch target per plugin icon
 // Docked geometry. The native tab stones sit INSIDE the safe area (the game is inset by the tab strip), so the
 // outer sliver between them and the screen edge is free — put the plugin rail there, to the RIGHT of the tabs.
-static const CGFloat kRailTopInset = 22.0;    // pull in from the rounded corners so icons aren't clipped
-static const CGFloat kRailBottomInset = 22.0;
+// kRailCornerClear keeps the rail's top + bottom OUT of the iPhone's rounded-corner radius (~55pt) so the curve
+// can't clip the top-right / bottom-right of the bar; the rail floats in the flat middle of the right edge.
+static const CGFloat kRailCornerClear = 60.0;
 static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈322 content + chrome)
 
 /// Passthrough container for docked mode: touches that don't land on a real subview (rail/strip/panel) fall
@@ -121,13 +122,13 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 
     // §3.5 step 3: default to the rail HIDDEN (⊞ FAB grid is the entry); a debug long-press on the FAB flips it.
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    _railHidden = ([ud objectForKey:@"rightBarRailHidden"] == nil) ? YES : [ud boolForKey:@"rightBarRailHidden"];
+    _railHidden = ([ud objectForKey:@"rightBarRailHidden"] == nil) ? NO : [ud boolForKey:@"rightBarRailHidden"];
 
     self.rail = [[UIScrollView alloc] init];
     self.rail.translatesAutoresizingMaskIntoConstraints = NO;
     self.rail.showsVerticalScrollIndicator = NO;
-    self.rail.backgroundColor = [UIColor colorWithRed:0.08 green:0.07 blue:0.055 alpha:0.94];
-    self.rail.layer.cornerRadius = 8;
+    self.rail.backgroundColor = [UIColor colorWithRed:40/255.0 green:40/255.0 blue:40/255.0 alpha:0.96]; // RuneLite DARK_GRAY
+    self.rail.layer.cornerRadius = 10;
     [self.view addSubview:self.rail];
 
     // Collapsible inline panel column (hidden until an icon is tapped). Game stays visible to its left.
@@ -171,11 +172,12 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 
     UILayoutGuide *sg = self.view.safeAreaLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[
-        // Right rail: in the outer strip at the very screen edge, to the RIGHT of the native tab stones (which
-        // end at the safe-area edge). Vertically centred, clamped to the safe-area height, scrolls if needed.
-        [self.rail.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-2],
-        [self.rail.topAnchor constraintGreaterThanOrEqualToAnchor:sg.topAnchor constant:kRailTopInset],
-        [self.rail.bottomAnchor constraintLessThanOrEqualToAnchor:sg.bottomAnchor constant:-kRailBottomInset],
+        // Right rail: floats in the outer strip just off the screen edge, to the RIGHT of the native tab stones.
+        // Top/bottom are clamped OUT of the rounded-corner radius (kRailCornerClear, measured from the PHYSICAL
+        // edges) so the curve never clips the bar; vertically centred; scrolls if the plugin count overflows.
+        [self.rail.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-5],
+        [self.rail.topAnchor constraintGreaterThanOrEqualToAnchor:self.view.topAnchor constant:kRailCornerClear],
+        [self.rail.bottomAnchor constraintLessThanOrEqualToAnchor:self.view.bottomAnchor constant:-kRailCornerClear],
         [self.rail.widthAnchor constraintEqualToConstant:kRailWidth],
         railCenter,
         self.railHeight,
