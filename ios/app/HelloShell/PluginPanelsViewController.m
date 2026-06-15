@@ -44,6 +44,8 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 @property (nonatomic, strong) UIScrollView *rail;          // vertical plugin-icon rail (right edge)
 @property (nonatomic, strong) NSLayoutConstraint *railHeight; // sized to content, clamped to the clear band
 @property (nonatomic, strong) UIView *panelContainer;      // docked: collapsible inline panel column
+@property (nonatomic, strong) NSLayoutConstraint *panelTrailRail;  // panel trailing -> rail leading (rail shown)
+@property (nonatomic, strong) NSLayoutConstraint *panelTrailEdge;  // panel trailing -> screen edge (rail hidden)
 @property (nonatomic, strong) UIScrollView *panelScroll;   // vertical scroll of the rendered panel
 @property (nonatomic, strong) UIImageView *panelView;
 @property (nonatomic, strong) UILabel *emptyLabel;
@@ -115,6 +117,10 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 - (void)setupDocked {
     self.view.backgroundColor = [UIColor clearColor];
 
+    // §3.5 step 3: default to the rail HIDDEN (⊞ FAB grid is the entry); a debug long-press on the FAB flips it.
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    _railHidden = ([ud objectForKey:@"rightBarRailHidden"] == nil) ? YES : [ud boolForKey:@"rightBarRailHidden"];
+
     self.rail = [[UIScrollView alloc] init];
     self.rail.translatesAutoresizingMaskIntoConstraints = NO;
     self.rail.showsVerticalScrollIndicator = NO;
@@ -173,7 +179,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
         self.railHeight,
 
         // Inline panel column: left of the rail (over the game world, not the native tabs), full clear height.
-        [self.panelContainer.trailingAnchor constraintEqualToAnchor:self.rail.leadingAnchor constant:-6],
+        // (Trailing is one of two swappable constraints set up below — to the rail when shown, else the edge.)
         [self.panelContainer.topAnchor constraintEqualToAnchor:sg.topAnchor constant:6],
         [self.panelContainer.bottomAnchor constraintEqualToAnchor:sg.bottomAnchor constant:-6],
         [self.panelContainer.widthAnchor constraintEqualToConstant:kDockPanelW],
@@ -192,6 +198,26 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
         [self.panelScroll.trailingAnchor constraintEqualToAnchor:self.panelContainer.trailingAnchor constant:-6],
         [self.panelScroll.bottomAnchor constraintEqualToAnchor:self.panelContainer.bottomAnchor constant:-6],
     ]];
+
+    // Swappable panel trailing: anchored to the rail's leading edge when the rail is shown, else to the screen
+    // edge so the panel reclaims the rail strip when the rail is hidden (FAB-only mode). applyRailVisibility picks.
+    self.panelTrailRail = [self.panelContainer.trailingAnchor constraintEqualToAnchor:self.rail.leadingAnchor constant:-6];
+    self.panelTrailEdge = [self.panelContainer.trailingAnchor constraintEqualToAnchor:sg.trailingAnchor constant:-6];
+    [self applyRailVisibility];
+}
+
+// §3.5 step 3: show the rail only when it's not hidden AND there are panels; otherwise the ⊞ FAB is the entry and
+// the inline panel stretches to the screen edge (reclaiming the rail strip). Idempotent; safe to call any time.
+- (void)applyRailVisibility {
+    BOOL railVisible = !self.railHidden && self.panels.count > 0;
+    self.rail.hidden = !railVisible;
+    self.panelTrailRail.active = railVisible;
+    self.panelTrailEdge.active = !railVisible;
+}
+
+- (void)setRailHidden:(BOOL)railHidden {
+    _railHidden = railHidden;
+    if (self.docked && self.rail) [self applyRailVisibility];
 }
 
 // (Re)build the rail + bottom strip from the current panel list. Called on first load and whenever the nav
@@ -211,8 +237,8 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     self.rail.contentSize = CGSizeMake(kRailWidth, y + 4);
     self.railHeight.constant = y + 4;          // sized to content; clamped to the clear band, then scrolls
 
-    // No empty bar before RuneLite has registered any panels.
-    self.rail.hidden = (self.panels.count == 0);
+    // Show the rail only when not hidden (§3.5 step 3) and there are panels; else the ⊞ FAB grid is the entry.
+    [self applyRailVisibility];
 
     if (self.panels.count == 0) {
         [self collapsePanel];

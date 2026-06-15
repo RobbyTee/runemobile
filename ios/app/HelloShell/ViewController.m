@@ -946,6 +946,11 @@ static const CGFloat kMenuWidth       = 210.0;
     self.gridButton.layer.cornerRadius = 8;
     [self.gridButton addTarget:self action:@selector(onOpenGridLauncher)
               forControlEvents:UIControlEventTouchUpInside];
+    // §3.5 step 3: long-press the ⊞ FAB toggles the legacy 38pt icon rail back on/off (default off — FAB-only),
+    // so the rail-vs-FAB entry is reversible on device without a rebuild.
+    UILongPressGestureRecognizer *gridLp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onToggleRail:)];
+    [self.gridButton addGestureRecognizer:gridLp];
     [self.view addSubview:self.gridButton];
 
     UILayoutGuide *g = self.view.safeAreaLayoutGuide;
@@ -1267,17 +1272,8 @@ static const CGFloat kMenuWidth       = 210.0;
     [hub addTarget:self action:@selector(onOpenHub) forControlEvents:UIControlEventTouchUpInside];
     [card addSubview:hub];
 
-    // Plugin side-panels opener (XP tracker, GE, notes…) — presents PluginPanelsViewController.
-    UIButton *panels = [UIButton buttonWithType:UIButtonTypeSystem];
-    panels.translatesAutoresizingMaskIntoConstraints = NO;
-    [panels setTitle:@"▣ Panels" forState:UIControlStateNormal];
-    panels.titleLabel.font = [UIFont boldSystemFontOfSize:15];
-    panels.tintColor = [UIColor colorWithRed:0.70 green:0.85 blue:0.55 alpha:1.0];
-    [panels addTarget:self action:@selector(onOpenPanels) forControlEvents:UIControlEventTouchUpInside];
-    // Long-press = the legacy centered-fullscreen panel surface (instant A/B fallback against the new drawer).
-    UILongPressGestureRecognizer *panelsLegacy = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(onOpenPanelsLegacy:)];
-    [panels addGestureRecognizer:panelsLegacy];
-    [card addSubview:panels];
+    // (§3.5: the legacy "▣ Panels" drawer/centered openers were removed — the ⊞ FAB grid launcher is the single
+    // entry to the plugin side-panels now.)
 
     // Overlay edit-mode opener (OVL-2/3/5) — dismisses the card and shows draggable handles over the live game.
     UIButton *overlaysBtn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -1338,10 +1334,8 @@ static const CGFloat kMenuWidth       = 210.0;
         [close.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
         [hub.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
         [hub.trailingAnchor constraintEqualToAnchor:close.leadingAnchor constant:-18],
-        [panels.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
-        [panels.trailingAnchor constraintEqualToAnchor:hub.leadingAnchor constant:-18],
         [self.overlaysCardButton.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
-        [self.overlaysCardButton.trailingAnchor constraintEqualToAnchor:panels.leadingAnchor constant:-18],
+        [self.overlaysCardButton.trailingAnchor constraintEqualToAnchor:hub.leadingAnchor constant:-18],
 
         [self.pluginSearch.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:6],
         [self.pluginSearch.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:6],
@@ -1356,6 +1350,24 @@ static const CGFloat kMenuWidth       = 210.0;
 // §3.3: open the labelled grid launcher for the plugin side-panels (the persistent dock holds the live list).
 - (void)onOpenGridLauncher {
     [self.panelDock presentGridLauncher];
+}
+
+// §3.5 step 3 (reversible): long-press the ⊞ FAB to toggle the legacy 38pt plugin icon rail. Default is hidden
+// (FAB-only entry); this brings it back for anyone who prefers the always-visible rail. Persisted across launches.
+- (void)onToggleRail:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    BOOL nowHidden = ([ud objectForKey:@"rightBarRailHidden"] == nil) ? YES : [ud boolForKey:@"rightBarRailHidden"];
+    BOOL newHidden = !nowHidden;
+    [ud setBool:newHidden forKey:@"rightBarRailHidden"];
+    self.panelDock.railHidden = newHidden;
+    if (self.presentedViewController) return;
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Plugin rail"
+        message:(newHidden ? @"Hidden — use the ⊞ button to open plugin panels."
+                           : @"Shown — the icon rail is back on the right edge.")
+        preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:a animated:YES completion:nil];
 }
 
 // OVL-2/3/5: enter overlay edit-mode — dismiss the management card so the game (and its overlays) are visible,
@@ -1402,25 +1414,6 @@ static const CGFloat kMenuWidth       = 210.0;
 - (void)onOpenHub {
     PluginHubViewController *hubVC = [[PluginHubViewController alloc] init];
     [self presentViewController:hubVC animated:YES completion:nil];
-}
-
-- (void)onOpenPanels {
-    // Drawer mode: present over the dimmed, still-running game. Close the plugins-management overlay first so
-    // what shows behind the dim is the live game (not the opaque plugins card).
-    [self onClosePluginPanel];
-    PluginPanelsViewController *panelsVC = [[PluginPanelsViewController alloc] init];
-    panelsVC.drawerMode = YES;
-    panelsVC.modalPresentationStyle = UIModalPresentationOverFullScreen; // keep the game visible behind
-    panelsVC.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
-    [self presentViewController:panelsVC animated:YES completion:nil];
-}
-
-- (void)onOpenPanelsLegacy:(UILongPressGestureRecognizer *)g {
-    if (g.state != UIGestureRecognizerStateBegan) return;
-    PluginPanelsViewController *panelsVC = [[PluginPanelsViewController alloc] init];
-    panelsVC.drawerMode = NO;
-    panelsVC.modalPresentationStyle = UIModalPresentationFullScreen;
-    [self presentViewController:panelsVC animated:YES completion:nil];
 }
 
 // App going to background (user swiped home / to the switcher, before any termination): flush config so
