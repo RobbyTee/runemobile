@@ -56,6 +56,9 @@
 // Log out: clears tokens.json (disarms autologin) + purges any persisted Jagex web cookies. Shown only
 // when a session is saved.
 @property (nonatomic, strong) UIButton *logoutButton;
+// LOGIN-1: switch to another already-signed-in character from tokens.json (no re-OAuth) — rewrites
+// chosen_account_id and restarts. Shown only when 2+ accounts are saved.
+@property (nonatomic, strong) UIButton *switchCharButton;
 // Set once the login WKWebView has been shown this session. WebKit then stays permanently resident in the
 // process and breaks the JVM's JIT-mirror brk #0x69 (it crashes at code-cache init), so the JVM must be
 // launched in a fresh process. Gates onLaunch → a one-tap restart.
@@ -324,6 +327,9 @@ static const int kChatTabRowH = 23;
 // show it in the tab row), each a stone button with the channel name on top and, for the filterable channels, the
 // live filter state ("On"/"Off"/"Filter"/"Hide") below it in the engine's state colour. The 7 tabs span the chat
 // width (kChatW), so each is kChatW/7 wide; the row is taller than the bare sprite to fit the two text lines.
+// CHAT-3 (deliberate): the Report channel is intentionally omitted from this row to match the official mobile app
+// — it is NOT a lost capability: reporting a player is reached the way mobile does it, via the player's
+// right-click (long-press) menu "Report" entry, which surfaces through the native menu like any other entry.
 static const int kChatTabCount = 7;
 static const int kChatTabRowCanvasH = 32;   // 2-line tab height (name + state) in engine-canvas px, ~official
 static const int kChatContentCanvasH = 142; // the chat message-area height (engine-canvas px) below the tab row
@@ -857,6 +863,17 @@ static const CGFloat kMenuWidth       = 210.0;
                 forControlEvents:UIControlEventTouchUpInside];
     [self.debugPanel addSubview:self.logoutButton];
 
+    // LOGIN-1: switch to another stored character (reuses the saved session — no web re-login). Hidden until
+    // tokens.json holds 2+ accounts (refreshLoginButton reveals it).
+    self.switchCharButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.switchCharButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.switchCharButton setTitle:@"Switch character" forState:UIControlStateNormal];
+    self.switchCharButton.titleLabel.font = [UIFont systemFontOfSize:15];
+    self.switchCharButton.hidden = YES;
+    [self.switchCharButton addTarget:self action:@selector(onSwitchCharacter)
+                    forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.switchCharButton];
+
     self.console = [[UITextView alloc] init];
     self.console.translatesAutoresizingMaskIntoConstraints = NO;
     self.console.editable = NO;
@@ -1019,6 +1036,8 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.loginButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.logoutButton.centerYAnchor constraintEqualToAnchor:self.loginButton.centerYAnchor],
         [self.logoutButton.leadingAnchor constraintEqualToAnchor:self.loginButton.trailingAnchor constant:16],
+        [self.switchCharButton.centerYAnchor constraintEqualToAnchor:self.loginButton.centerYAnchor],
+        [self.switchCharButton.leadingAnchor constraintEqualToAnchor:self.logoutButton.trailingAnchor constant:16],
         [self.console.topAnchor constraintEqualToAnchor:self.loginButton.bottomAnchor constant:6],
         [self.console.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.console.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
@@ -1095,6 +1114,10 @@ static const CGFloat kMenuWidth       = 210.0;
         : @"Log in with Jagex";
     [self.loginButton setTitle:title forState:UIControlStateNormal];
     self.logoutButton.hidden = (sid.length == 0);
+    // LOGIN-1: only offer "Switch character" when there's a live session AND 2+ stored characters to switch between.
+    id accs = t[@"accounts"];
+    NSUInteger nAcc = [accs isKindOfClass:[NSArray class]] ? [(NSArray *)accs count] : 0;
+    self.switchCharButton.hidden = (sid.length == 0 || nAcc < 2);
     [self refreshLaunchLogin];   // #1: keep the Tap-to-Play login row in sync
 }
 
@@ -1120,6 +1143,48 @@ static const CGFloat kMenuWidth       = 210.0;
     [self refreshLoginButton];
     [self appendLine:existed ? @"[login] account forgotten — tokens.json cleared; autologin disarmed."
                              : @"[login] no saved account (no tokens.json)."];
+}
+
+// LOGIN-1: switch to another already-signed-in character without a fresh web OAuth. tokens.json keeps the whole
+// account list from the original sign-in; we just rewrite chosen_account_id/display to the picked one and restart
+// (the gamepack autologins from chosen_account_id at JVM launch, so a running session can't be re-pointed live).
+// If the reused session has since expired, the next launch falls back to the login screen — handled by the
+// existing login flow.
+- (void)onSwitchCharacter {
+    if (self.presentedViewController) return;
+    NSData *data = [NSData dataWithContentsOfFile:[JVMLauncher tokensPath]];
+    id o = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    NSDictionary *t = [o isKindOfClass:[NSDictionary class]] ? o : nil;
+    NSString *sid = [t[@"session_id"] isKindOfClass:[NSString class]] ? t[@"session_id"] : nil;
+    NSArray *accounts = [t[@"accounts"] isKindOfClass:[NSArray class]] ? t[@"accounts"] : nil;
+    NSString *curId = [t[@"chosen_account_id"] isKindOfClass:[NSString class]] ? t[@"chosen_account_id"] : @"";
+    if (sid.length == 0 || accounts.count < 2) return;   // button is hidden in this case; guard anyway
+
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Switch character"
+        message:@"Reuses your saved login (no re-sign-in). RuneLite restarts to load the chosen character."
+        preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSDictionary *a in accounts) {
+        if (![a isKindOfClass:[NSDictionary class]]) continue;
+        NSString *accId = [a[@"accountId"] isKindOfClass:[NSString class]] ? a[@"accountId"] : @"";
+        NSString *name  = [a[@"displayName"] isKindOfClass:[NSString class]] ? a[@"displayName"] : @"";
+        if (accId.length == 0) continue;
+        NSString *label = name.length ? name : [NSString stringWithFormat:@"Unnamed (…%@)",
+            accId.length > 4 ? [accId substringFromIndex:accId.length - 4] : accId];
+        if ([accId isEqualToString:curId]) label = [@"✓ " stringByAppendingString:label];   // current
+        [sheet addAction:[UIAlertAction actionWithTitle:label style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *x) {
+            if ([accId isEqualToString:curId]) return;   // already playing this character
+            [self persistTokensSession:sid account:accId display:name accounts:accounts];
+            [self appendLine:[NSString stringWithFormat:@"[login] switch character -> %@",
+                              name.length ? name : @"(unnamed)"]];
+            // Present the restart prompt after the sheet finishes dismissing (avoid present-while-dismissing).
+            dispatch_async(dispatch_get_main_queue(), ^{ [self promptRestartToPlay]; });
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.sourceView = self.switchCharButton;
+    sheet.popoverPresentationController.sourceRect = self.switchCharButton.bounds;
+    [self presentViewController:sheet animated:YES completion:nil];
 }
 
 // After an on-device login the WKWebView leaves WebKit permanently resident in this process, which stops
