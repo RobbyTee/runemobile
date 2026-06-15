@@ -1,17 +1,28 @@
 package dev.audaro.helloshell
 
+import android.graphics.Bitmap
 import android.util.Log
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.material3.CircularProgressIndicator
@@ -30,7 +41,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +88,13 @@ fun PluginPanel(
     var renderer by remember { mutableStateOf(rendererPref) }
     var loading by remember { mutableStateOf(true) }
     var filter by remember { mutableStateOf("") }
+    // §4 redesign (increment 2): the launcher LANDING is now a labelled tile grid (renderers / pinned / panels /
+    // config) instead of a 131-row scroll. The full plugin list is one tile away ("All plugins") and is also
+    // revealed automatically while the user is typing in the search field (config-search parity for the long tail).
+    var listMode by remember { mutableStateOf(false) }
+    // Panel data for the Panels section of the grid (lifted from PanelList so panels become first-class tiles).
+    var panels by remember { mutableStateOf<List<PanelEntry>>(emptyList()) }
+    var panelAvail by remember { mutableStateOf(BooleanArray(7)) }   // [quest,world,xp,loot,ge,overlay,infobox]
     var configFor by remember { mutableStateOf<Pair<String, String>?>(null) }   // (configGroup, pluginName)
     var panelListOpen by remember { mutableStateOf(false) }
     var panelOpen by remember { mutableStateOf<Pair<Int, String>?>(null) }       // (panelIndex, tooltip)
@@ -135,12 +157,28 @@ fun PluginPanel(
 
     LaunchedEffect(Unit) {
         reload()
-        Log.i("MainActivity", "ANDROID_A4_UI_GREEN panel opened rows=${rows.size}")
+        // Panel tiles for the grid: the same data PanelList consumes (listPanels + curated-screen availability).
+        val pjson = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.listPanels() }.get() }
+        panels = parsePanels(pjson)
+        panelAvail = withContext(Dispatchers.IO) {
+            JvmLauncher.onBridge {
+                booleanArrayOf(JvmLauncher.questAvailable(), JvmLauncher.worldAvailable(), JvmLauncher.xpAvailable(),
+                    JvmLauncher.lootAvailable(), JvmLauncher.geAvailable(), JvmLauncher.overlayAvailable(),
+                    JvmLauncher.infoBoxAvailable())
+            }.get()
+        }
+        Log.i("MainActivity", "ANDROID_LAUNCHER_GRID_GREEN rows=${rows.size} pinned=${rows.count { it.pinned }} " +
+            "panels=${panels.size} avail=${panelAvail.count { it }}")
     }
 
     Surface(color = Color(0xF2121212), modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(12.dp)) {
+            val inList = listMode || filter.isNotEmpty()
             Row(verticalAlignment = Alignment.CenterVertically) {
+                if (inList) {
+                    // Back to the landing grid (clears any active filter so the grid isn't masked by it).
+                    TextButton(onClick = { listMode = false; filter = "" }) { Text("‹ Grid") }
+                }
                 Text(
                     "Plugins" + if (rows.isNotEmpty())
                         "  (${rows.count { it.enabled && !it.configOnly }}/${rows.count { !it.configOnly }})" else "",
@@ -148,90 +186,268 @@ fun PluginPanel(
                     style = MaterialTheme.typography.titleLarge,
                 )
                 TextButton(onClick = { hubOpen = true }) { Text("Hub") }
-                TextButton(onClick = { panelListOpen = true }) { Text("Panels") }
                 TextButton(onClick = onClose) { Text("Close") }
             }
             OutlinedTextField(
                 value = filter, onValueChange = { filter = it },
-                label = { Text("Filter") }, singleLine = true,
+                label = { Text("Search plugins") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
             )
             if (loading) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            } else if (inList) {
+                PluginListBody(
+                    rows = rows, filter = filter, pending = pending, renderer = renderer, listState = listState,
+                    onToggleRow = { p, checked ->
+                        rows = rows.map { if (it.className == p.className) it.copy(enabled = checked) else it }
+                        JvmLauncher.onBridge { JvmLauncher.setPluginEnabled(p.className, checked) }
+                        if (checked) {
+                            pending = pending + p.className
+                            scope.launch {
+                                kotlinx.coroutines.delay(4000)
+                                reload()
+                                pending = pending - p.className
+                            }
+                        } else {
+                            pending = pending - p.className
+                        }
+                    },
+                    onTogglePin = { p ->
+                        val nowPinned = !p.pinned
+                        rows = rows.map { if (it.className == p.className) it.copy(pinned = nowPinned) else it }
+                            .sortedWith(compareByDescending<PluginRow> { it.pinned }.thenBy { it.name.lowercase() })
+                        // Persist immediately so a deliberate pin survives even a hard kill. setPinned ENQUEUES a
+                        // client-thread write and returns a writeId; flush only AFTER that write is processed (else
+                        // sendConfig races ahead and flushes stale state).
+                        JvmLauncher.onBridge {
+                            val ack = JvmLauncher.setPinned(p.name, nowPinned)
+                            val wid = Regex("\"writeId\":(\\d+)").find(ack)?.groupValues?.get(1)?.toLongOrNull()
+                            var i = 0
+                            while (wid != null && JvmLauncher.processedWriteId() < wid && i++ < 40) Thread.sleep(25)
+                            JvmLauncher.flushConfig()
+                        }
+                        if (nowPinned) scope.launch { listState.animateScrollToItem(0) }
+                    },
+                    onRendererSelect = { mode, checked ->
+                        renderer = if (checked) mode else "cpu"
+                        onRendererSelect(renderer)
+                    },
+                    onOpenConfig = { p -> configFor = p.configGroup!! to p.name },
+                )
             } else {
-                val q = filter.trim()
-                val shown = rows.filter {
-                    q.isEmpty() || it.name.contains(q, ignoreCase = true) ||
-                        it.description.contains(q, ignoreCase = true) || it.tags.contains(q, ignoreCase = true)
-                }
-                LazyColumn(Modifier.fillMaxSize(), state = listState) {
-                    items(shown, key = { it.className }) { p ->
-                        val rendererMode = when (p.className) {
-                            GPU_PLUGIN_CLASS -> "gpu"
-                            HD_PLUGIN_CLASS -> "117hd"
-                            else -> null
-                        }
-                        if (rendererMode != null) {
-                            // Renderer row: switch state = the saved launch preference; toggle = save it.
-                            // Never marked incompatible (it is deliberately not running on this boot).
-                            PluginRowItem(
-                                p.copy(enabled = renderer == rendererMode),
-                                incompatible = false,
-                                onToggle = { checked ->
-                                    renderer = if (checked) rendererMode else "cpu"
-                                    onRendererSelect(renderer)
-                                },
-                                onTogglePin = {},
-                                onOpenConfig = if (p.hasConfig && p.configGroup != null)
-                                    { { configFor = p.configGroup!! to p.name } } else null,
-                            )
-                            return@items
-                        }
-                        PluginRowItem(
-                            p,
-                            // enabled but the engine never started it (after the startup grace) = couldn't start.
-                            incompatible = p.enabled && !p.active && p.className !in pending,
-                            onToggle = { checked ->
-                                rows = rows.map { if (it.className == p.className) it.copy(enabled = checked) else it }
-                                JvmLauncher.onBridge { JvmLauncher.setPluginEnabled(p.className, checked) }
-                                if (checked) {
-                                    // Grace the badge while it starts, then re-fetch the real active state.
-                                    pending = pending + p.className
-                                    scope.launch {
-                                        kotlinx.coroutines.delay(4000)
-                                        reload()
-                                        pending = pending - p.className
-                                    }
-                                } else {
-                                    pending = pending - p.className
-                                }
-                            },
-                            onTogglePin = {
-                                val nowPinned = !p.pinned
-                                rows = rows.map { if (it.className == p.className) it.copy(pinned = nowPinned) else it }
-                                    .sortedWith(compareByDescending<PluginRow> { it.pinned }.thenBy { it.name.lowercase() })
-                                // Persist immediately so a deliberate pin survives even a hard kill. setPinned
-                                // ENQUEUES a client-thread write and returns a writeId; flush only AFTER that
-                                // write is processed (else sendConfig races ahead and flushes stale state).
-                                JvmLauncher.onBridge {
-                                    val ack = JvmLauncher.setPinned(p.name, nowPinned)
-                                    val wid = Regex("\"writeId\":(\\d+)").find(ack)?.groupValues?.get(1)?.toLongOrNull()
-                                    var i = 0
-                                    while (wid != null && JvmLauncher.processedWriteId() < wid && i++ < 40) Thread.sleep(25)
-                                    JvmLauncher.flushConfig()
-                                }
-                                // The row jumps to/from the pinned group; reveal it (LazyColumn keeps the old
-                                // scroll anchor otherwise, hiding a just-pinned item above the fold).
-                                if (nowPinned) scope.launch { listState.animateScrollToItem(0) }
-                            },
-                            onOpenConfig = if (p.hasConfig && p.configGroup != null) {
-                                { configFor = p.configGroup!! to p.name }
-                            } else null,
-                        )
-                        HorizontalDivider(color = Color(0x22FFFFFF))
-                    }
-                }
+                LauncherGrid(
+                    rows = rows, renderer = renderer, panels = panels, avail = panelAvail,
+                    pending = pending,
+                    onRendererSelect = { mode -> renderer = mode; onRendererSelect(mode) },
+                    onOpenConfig = { p -> configFor = p.configGroup!! to p.name },
+                    onOpenList = { listMode = true },
+                    onOpenPanel = { i, t -> panelOpen = i to t },
+                    onOpenQuest = { questOpen = true }, onOpenWorld = { worldOpen = true },
+                    onOpenXp = { xpOpen = true }, onOpenLoot = { lootOpen = true }, onOpenGe = { geOpen = true },
+                    onOpenOverlay = { overlayOpen = true }, onOpenInfoBox = { infoBoxOpen = true },
+                    onOpenHub = { hubOpen = true },
+                )
             }
+        }
+    }
+}
+
+/**
+ * §4 increment 2 — the labelled tile grid landing. Sections: Renderers (CPU/GPU/117HD radio), Pinned ★ (quick
+ * config access to favourites), Panels (curated native screens + rendered-image panels as labelled tiles), and
+ * More (All plugins / Plugin Hub). Replaces the deep 131-row scroll as the first thing the launcher shows.
+ */
+@Composable
+private fun LauncherGrid(
+    rows: List<PluginRow>,
+    renderer: String,
+    panels: List<PanelEntry>,
+    avail: BooleanArray,
+    pending: Set<String>,
+    onRendererSelect: (String) -> Unit,
+    onOpenConfig: (PluginRow) -> Unit,
+    onOpenList: () -> Unit,
+    onOpenPanel: (Int, String) -> Unit,
+    onOpenQuest: () -> Unit,
+    onOpenWorld: () -> Unit,
+    onOpenXp: () -> Unit,
+    onOpenLoot: () -> Unit,
+    onOpenGe: () -> Unit,
+    onOpenOverlay: () -> Unit,
+    onOpenInfoBox: () -> Unit,
+    onOpenHub: () -> Unit,
+) {
+    // Native curated screens, gated on the curated bridge's availability (same gating PanelList uses). Each
+    // borrows the matching engine panel's icon when one exists so the tile isn't a bare glyph.
+    fun iconFor(tooltip: String): Bitmap? = panels.firstOrNull { it.tooltip == tooltip }?.icon
+    val nativeTiles = buildList {
+        if (avail.getOrElse(2) { false }) add(TileSpec("XP Tracker", iconFor("XP Tracker"), onClick = onOpenXp))
+        if (avail.getOrElse(3) { false }) add(TileSpec("Loot Tracker", iconFor("Loot Tracker"), onClick = onOpenLoot))
+        if (avail.getOrElse(4) { false }) add(TileSpec("Grand Exchange", iconFor("Grand Exchange"), onClick = onOpenGe))
+        if (avail.getOrElse(1) { false }) add(TileSpec("World Switcher", iconFor("World Switcher"), onClick = onOpenWorld))
+        if (avail.getOrElse(0) { false }) add(TileSpec("Quest Helper", iconFor("Quest Helper"), onClick = onOpenQuest))
+        if (avail.getOrElse(5) { false }) add(TileSpec("Overlay Layout", glyph = "▦", onClick = onOpenOverlay))
+        if (avail.getOrElse(6) { false }) add(TileSpec("Infoboxes", glyph = "◳", onClick = onOpenInfoBox))
+    }
+    // Rendered-image panels for everything not covered by an available native screen (so no panel is lost when a
+    // native reflow exists; if the native screen is unavailable the rendered tile remains as the fallback).
+    val covered = nativeTiles.map { it.label }.toSet()
+    val renderedTiles = panels.filter { it.tooltip !in covered }
+        .map { p -> TileSpec(p.tooltip, p.icon) { onOpenPanel(p.index, p.tooltip) } }
+
+    val pinnedTiles = rows.filter { it.pinned && it.className != GPU_PLUGIN_CLASS && it.className != HD_PLUGIN_CLASS }
+        .map { p ->
+            TileSpec(
+                p.name, glyph = "★", star = true,
+                incompatible = p.enabled && !p.active && p.className !in pending,
+            ) { if (p.hasConfig && p.configGroup != null) onOpenConfig(p) else onOpenList() }
+        }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        SectionLabel("Renderers")
+        TileGrid(listOf(
+            TileSpec("CPU", glyph = "▣", selected = renderer == "cpu") { onRendererSelect("cpu") },
+            TileSpec("GPU", glyph = "▤", selected = renderer == "gpu") { onRendererSelect("gpu") },
+            TileSpec("117HD", glyph = "✦", selected = renderer == "117hd") { onRendererSelect("117hd") },
+        ))
+        if (renderer != "cpu") {
+            Text("Renderer change applies on next launch.", color = Color(0xFF9E9E9E), fontSize = 11.sp,
+                modifier = Modifier.padding(start = 4.dp, top = 2.dp))
+        }
+
+        if (pinnedTiles.isNotEmpty()) {
+            SectionLabel("Pinned ★")
+            TileGrid(pinnedTiles)
+        }
+
+        // Guard the header so the user never sees a bare "Panels" heading on the first frame (before the
+        // LaunchedEffect bridge fetch returns panels/availability) or if there are genuinely no panels.
+        val panelTiles = nativeTiles + renderedTiles
+        if (panelTiles.isNotEmpty()) {
+            SectionLabel("Panels")
+            TileGrid(panelTiles)
+        }
+
+        SectionLabel("More")
+        TileGrid(listOf(
+            TileSpec("All plugins", glyph = "≡", onClick = onOpenList),
+            TileSpec("Plugin Hub", glyph = "⬇", onClick = onOpenHub),
+        ))
+        Spacer(Modifier.heightIn(min = 12.dp))
+    }
+}
+
+/** Section heading inside the launcher grid. */
+@Composable
+private fun SectionLabel(text: String) {
+    Text(text, color = Color(0xFF80CBC4), fontSize = 12.sp,
+        modifier = Modifier.padding(top = 14.dp, bottom = 2.dp))
+}
+
+/** One launcher tile: an icon (engine PNG) or a glyph, a label, and optional selected/star/incompatible state. */
+private data class TileSpec(
+    val label: String,
+    val icon: Bitmap? = null,
+    val glyph: String? = null,
+    val selected: Boolean = false,
+    val star: Boolean = false,
+    val incompatible: Boolean = false,
+    val onClick: () -> Unit,
+)
+
+/** Lay tiles out in fixed-width columns, padding the last row so widths stay even. */
+@Composable
+private fun TileGrid(tiles: List<TileSpec>, cols: Int = 3) {
+    Column(Modifier.fillMaxWidth()) {
+        tiles.chunked(cols).forEach { rowTiles ->
+            Row(Modifier.fillMaxWidth()) {
+                rowTiles.forEach { LaunchTile(it) }
+                repeat(cols - rowTiles.size) { Spacer(Modifier.weight(1f).padding(4.dp)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RowScope.LaunchTile(t: TileSpec) {
+    Column(
+        Modifier.weight(1f).padding(4.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (t.selected) Color(0xFF24403D) else Color(0xFF1E1E1E))
+            .border(
+                width = if (t.selected) 1.5.dp else 0.5.dp,
+                color = if (t.selected) Color(0xFF80CBC4) else Color(0x33FFFFFF),
+                shape = RoundedCornerShape(10.dp),
+            )
+            .clickable { t.onClick() }
+            .heightIn(min = 78.dp)
+            .padding(vertical = 10.dp, horizontal = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) {
+            val ic = t.icon
+            if (ic != null) {
+                Image(ic.asImageBitmap(), null, Modifier.size(28.dp))
+            } else {
+                Text(t.glyph ?: t.label.take(1), color = Color(0xFFCCCCCC), fontSize = 20.sp)
+            }
+        }
+        Spacer(Modifier.heightIn(min = 5.dp))
+        Text(
+            t.label,
+            color = if (t.incompatible) Color(0xFF9E9E9E) else Color.White,
+            fontSize = 12.sp, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis,
+        )
+        if (t.incompatible) Text("✕ can't start", color = Color(0xFFE57373), fontSize = 9.sp)
+    }
+}
+
+/** The full searchable/toggleable plugin list — the long-tail config surface reached via search or "All plugins". */
+@Composable
+private fun PluginListBody(
+    rows: List<PluginRow>,
+    filter: String,
+    pending: Set<String>,
+    renderer: String,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    onToggleRow: (PluginRow, Boolean) -> Unit,
+    onTogglePin: (PluginRow) -> Unit,
+    onRendererSelect: (String, Boolean) -> Unit,
+    onOpenConfig: (PluginRow) -> Unit,
+) {
+    val q = filter.trim()
+    val shown = rows.filter {
+        q.isEmpty() || it.name.contains(q, ignoreCase = true) ||
+            it.description.contains(q, ignoreCase = true) || it.tags.contains(q, ignoreCase = true)
+    }
+    LazyColumn(Modifier.fillMaxSize(), state = listState) {
+        items(shown, key = { it.className }) { p ->
+            val rendererMode = when (p.className) {
+                GPU_PLUGIN_CLASS -> "gpu"
+                HD_PLUGIN_CLASS -> "117hd"
+                else -> null
+            }
+            if (rendererMode != null) {
+                // Renderer row: switch state = the saved launch preference; toggle = save it.
+                // Never marked incompatible (it is deliberately not running on this boot).
+                PluginRowItem(
+                    p.copy(enabled = renderer == rendererMode),
+                    incompatible = false,
+                    onToggle = { checked -> onRendererSelect(rendererMode, checked) },
+                    onTogglePin = {},
+                    onOpenConfig = if (p.hasConfig && p.configGroup != null) { { onOpenConfig(p) } } else null,
+                )
+                return@items
+            }
+            PluginRowItem(
+                p,
+                // enabled but the engine never started it (after the startup grace) = couldn't start.
+                incompatible = p.enabled && !p.active && p.className !in pending,
+                onToggle = { checked -> onToggleRow(p, checked) },
+                onTogglePin = { onTogglePin(p) },
+                onOpenConfig = if (p.hasConfig && p.configGroup != null) { { onOpenConfig(p) } } else null,
+            )
+            HorizontalDivider(color = Color(0x22FFFFFF))
         }
     }
 }

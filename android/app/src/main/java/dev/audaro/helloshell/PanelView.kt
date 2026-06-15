@@ -252,7 +252,8 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit) {
     }
 }
 
-private fun parsePanels(json: String): List<PanelEntry> = try {
+// Non-private: reused by the §4 launcher grid (PluginPanel.kt) so it can surface panels as tiles directly.
+fun parsePanels(json: String): List<PanelEntry> = try {
     val arr = JSONArray(json)
     (0 until arr.length()).map { i ->
         val o = arr.getJSONObject(i)
