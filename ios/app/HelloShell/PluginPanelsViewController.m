@@ -34,6 +34,8 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 @end
 @interface XpTrackerViewController : UIViewController
 @end
+@interface NotesViewController : UIViewController
+@end
 
 // §3.3 redesign: the labelled/searchable/favourites grid launcher. Defined at the bottom of this file.
 @interface MUIPluginGrid : UIViewController
@@ -626,6 +628,13 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
             xp.modalPresentationStyle = UIModalPresentationOverFullScreen;
             xp.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
             [self presentViewController:xp animated:YES completion:nil];
+            return;
+        }
+        if ([tip isEqualToString:@"Notes"] && [JVMLauncher notesAvailable]) {
+            NotesViewController *nv = [[NotesViewController alloc] init];
+            nv.modalPresentationStyle = UIModalPresentationOverFullScreen;
+            nv.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+            [self presentViewController:nv animated:YES completion:nil];
             return;
         }
         if (!fromGrid && index == self.currentIndex) {
@@ -1683,6 +1692,138 @@ static NSString *XpFmt(long n) {
         [lv2.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
     ]];
     return bar;
+}
+
+@end
+
+#pragma mark - Native Notes panel (editable, RuneLite charcoal style)
+
+@interface NotesViewController () <UITextViewDelegate>
+@property (nonatomic, strong) UITextView *textView;
+@property (nonatomic, strong) NSTimer *writeTimer;
+@end
+
+@implementation NotesViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor clearColor];
+
+    UIView *dim = [[UIView alloc] initWithFrame:self.view.bounds];
+    dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    [self.view addSubview:dim];
+    [dim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onDone)]];
+
+    UIView *drawer = [[UIView alloc] init];
+    drawer.translatesAutoresizingMaskIntoConstraints = NO;
+    drawer.backgroundColor = [UIColor colorWithRed:40/255.0 green:40/255.0 blue:40/255.0 alpha:1.0]; // DARK_GRAY
+    [self.view addSubview:drawer];
+
+    UIView *headerBar = [[UIView alloc] init];
+    headerBar.translatesAutoresizingMaskIntoConstraints = NO;
+    headerBar.backgroundColor = [UIColor colorWithRed:30/255.0 green:30/255.0 blue:30/255.0 alpha:1.0]; // DARKER_GRAY
+    [drawer addSubview:headerBar];
+
+    UILabel *title = [[UILabel alloc] init];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.font = XpRsFont(15);
+    title.textColor = XpGray(0.72);
+    title.text = @"Notes";
+    [headerBar addSubview:title];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    close.translatesAutoresizingMaskIntoConstraints = NO;
+    [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.titleLabel.font = [UIFont systemFontOfSize:17];
+    close.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0]; // BRAND_ORANGE
+    [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
+    [headerBar addSubview:close];
+
+    self.textView = [[UITextView alloc] init];
+    self.textView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.textView.backgroundColor = [UIColor colorWithRed:35/255.0 green:35/255.0 blue:35/255.0 alpha:1.0];
+    self.textView.textColor = XpGray(0.84);
+    self.textView.font = XpRsFont(16);
+    self.textView.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0]; // caret = brand orange
+    self.textView.autocorrectionType = UITextAutocorrectionTypeYes;
+    self.textView.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
+    self.textView.delegate = self;
+    self.textView.text = [JVMLauncher notesGet] ?: @"";
+    self.textView.textContainerInset = UIEdgeInsetsMake(8, 6, 8, 6);
+    [drawer addSubview:self.textView];
+
+    CGFloat drawerW = MIN(440.0, self.view.bounds.size.width * 0.52);
+    UILayoutGuide *dg = drawer.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [drawer.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [drawer.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [drawer.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [drawer.widthAnchor constraintEqualToConstant:drawerW],
+
+        [headerBar.topAnchor constraintEqualToAnchor:dg.topAnchor],
+        [headerBar.leadingAnchor constraintEqualToAnchor:drawer.leadingAnchor],
+        [headerBar.trailingAnchor constraintEqualToAnchor:drawer.trailingAnchor],
+        [headerBar.heightAnchor constraintEqualToConstant:34],
+        [title.leadingAnchor constraintEqualToAnchor:headerBar.leadingAnchor constant:10],
+        [title.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+        [close.trailingAnchor constraintEqualToAnchor:headerBar.trailingAnchor constant:-10],
+        [close.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+
+        [self.textView.topAnchor constraintEqualToAnchor:headerBar.bottomAnchor],
+        [self.textView.leadingAnchor constraintEqualToAnchor:drawer.leadingAnchor],
+        [self.textView.trailingAnchor constraintEqualToAnchor:drawer.trailingAnchor],
+        [self.textView.bottomAnchor constraintEqualToAnchor:dg.bottomAnchor],
+    ]];
+
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    [nc addObserver:self selector:@selector(kbShow:) name:UIKeyboardWillShowNotification object:nil];
+    [nc addObserver:self selector:@selector(kbHide:) name:UIKeyboardWillHideNotification object:nil];
+    // Never lose an edit: flush the note immediately if the app backgrounds before the debounce timer fires.
+    [nc addObserver:self selector:@selector(flushWrite) name:UIApplicationWillResignActiveNotification object:nil];
+}
+
+- (void)kbShow:(NSNotification *)n {
+    UIWindow *w = self.view.window;
+    if (!w) return;
+    CGRect kf = [n.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    CGRect tvInWin = [self.textView convertRect:self.textView.bounds toView:w];
+    CGFloat overlap = CGRectGetMaxY(tvInWin) - kf.origin.y;
+    if (overlap < 0) overlap = 0;
+    self.textView.contentInset = UIEdgeInsetsMake(0, 0, overlap, 0);
+    self.textView.verticalScrollIndicatorInsets = UIEdgeInsetsMake(0, 0, overlap, 0);
+}
+
+- (void)kbHide:(NSNotification *)n {
+    self.textView.contentInset = UIEdgeInsetsZero;
+    self.textView.verticalScrollIndicatorInsets = UIEdgeInsetsZero;
+}
+
+- (void)textViewDidChange:(UITextView *)textView {
+    [self.writeTimer invalidate];
+    self.writeTimer = [NSTimer scheduledTimerWithTimeInterval:0.7 target:self selector:@selector(flushWrite) userInfo:nil repeats:NO];
+}
+
+- (void)flushWrite {
+    [self.writeTimer invalidate];
+    self.writeTimer = nil;
+    [JVMLauncher notesSet:self.textView.text ?: @""];
+}
+
+- (void)onDone {
+    [self.textView resignFirstResponder];
+    [self flushWrite];
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    [self flushWrite];
+}
+
+- (void)dealloc {
+    [_writeTimer invalidate];
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 @end

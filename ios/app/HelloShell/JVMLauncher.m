@@ -75,6 +75,9 @@ static jmethodID gMuiHubUninstall = NULL; // hubUninstall(Ljava/lang/String;)Lja
 static jmethodID gMuiListPanels = NULL;   // listPanels()Ljava/lang/String;
 static jmethodID gMuiXpAvail = NULL;      // xpTrackerAvailable()Z  (native XP Tracker panel)
 static jmethodID gMuiXpJson = NULL;       // xpTrackerJson()Ljava/lang/String;
+static jmethodID gMuiNotesAvail = NULL;   // notesAvailable()Z  (native Notes panel)
+static jmethodID gMuiNotesGet = NULL;     // notesGet()Ljava/lang/String;
+static jmethodID gMuiNotesSet = NULL;     // notesSet(Ljava/lang/String;)Ljava/lang/String;
 static jmethodID gMuiOpenPanel = NULL;    // openPanel(I)Ljava/lang/String;
 static jmethodID gMuiClosePanel = NULL;   // closePanel()Ljava/lang/String;
 static jmethodID gMuiPanelW = NULL;       // getPanelWidth()I
@@ -423,6 +426,12 @@ static BOOL ensureMui(void) {
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiXpAvail = NULL; }
     gMuiXpJson = (*env)->GetStaticMethodID(env, global, "xpTrackerJson", "()Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiXpJson = NULL; }
+    gMuiNotesAvail = (*env)->GetStaticMethodID(env, global, "notesAvailable", "()Z");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiNotesAvail = NULL; }
+    gMuiNotesGet = (*env)->GetStaticMethodID(env, global, "notesGet", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiNotesGet = NULL; }
+    gMuiNotesSet = (*env)->GetStaticMethodID(env, global, "notesSet", "(Ljava/lang/String;)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiNotesSet = NULL; }
     gMuiPanelText = (*env)->GetStaticMethodID(env, global, "panelText", "(Ljava/lang/String;)Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiPanelText = NULL; }
     gMuiPanelKey = (*env)->GetStaticMethodID(env, global, "panelKey", "(I)Ljava/lang/String;");
@@ -1920,6 +1929,30 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMui() || !gMuiXpJson) return nil;
     JNIEnv *env = gMainEnv;
     return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiXpJson));
+}
+
+// Native Notes panel (§3.4): availability + read/write the single note string. nil/NO on an older jar.
++ (BOOL)notesAvailable {
+    if (!ensureMui() || !gMuiNotesAvail) return NO;
+    JNIEnv *env = gMainEnv;
+    jboolean v = (*env)->CallStaticBooleanMethod(env, gMuiClass, gMuiNotesAvail);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    return v ? YES : NO;
+}
+
++ (NSString *)notesGet {
+    if (!ensureMui() || !gMuiNotesGet) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiNotesGet));
+}
+
++ (void)notesSet:(NSString *)text {
+    if (!ensureMui() || !gMuiNotesSet || text == nil) return;
+    JNIEnv *env = gMainEnv;
+    jstring js = (*env)->NewStringUTF(env, text.UTF8String ?: "");
+    (void)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiNotesSet, js);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (js) (*env)->DeleteLocalRef(env, js);
 }
 
 + (void)mobileOpenPanel:(int)index {

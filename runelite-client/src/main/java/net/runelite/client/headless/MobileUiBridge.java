@@ -697,6 +697,40 @@ public final class MobileUiBridge
 		}
 	}
 
+	// ---- Native Notes panel (§3.4 Tier-1) -------------------------------------------------------------
+	// The note is a single config string (group "notes", key "notesData"); the native shell edits it directly in
+	// a UITextView instead of the (non-editable) Swing screenshot, writing back on the client-thread config lane.
+	/** True if the Notes plugin is loaded — the native shell forks to its editable RuneLite-styled note panel. */
+	public static boolean notesAvailable()
+	{
+		return findLoadedPlugin("NotesPlugin") != null;
+	}
+
+	/** The current note text (empty string when unset). Lock-free config read. */
+	public static String notesGet()
+	{
+		final ConfigManager cm = configManager;
+		if (cm == null)
+		{
+			return "";
+		}
+		final String s = cm.getConfiguration("notes", "notesData");
+		return s == null ? "" : s;
+	}
+
+	/** Persist the edited note text on the client-thread config lane (fires ConfigChanged where subscribers expect). */
+	public static String notesSet(String text)
+	{
+		final ConfigManager cm = configManager;
+		final ClientThread ct = clientThread;
+		if (!ENABLED || cm == null || ct == null || text == null)
+		{
+			return "{\"ok\":false}";
+		}
+		final long id = enqueueClientWrite(ct, () -> cm.setConfiguration("notes", "notesData", text));
+		return "{\"ok\":true,\"writeId\":" + id + "}";
+	}
+
 	// ---- Active plugin panel: realized off-screen under CACIO, painted to a buffer the native shell blits ----
 	// Mirrors the game blit: the panel's full Swing tree is laid out at its natural width (PANEL_WIDTH) and full
 	// content height in a SHOWING JWindow, painted to an ARGB int[] published for the native side to pull; the

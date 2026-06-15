@@ -381,6 +381,12 @@ typedef void (^JVMLogSink)(NSString *line);
 + (BOOL)xpTrackerAvailable;
 + (nullable NSString *)xpTrackerJson;
 
+/// Native Notes panel (§3.4): whether the Notes plugin is loaded, plus read/write of the single note string
+/// (config group "notes"/"notesData"). notesSet persists on the client-thread config lane.
++ (BOOL)notesAvailable;
++ (nullable NSString *)notesGet;
++ (void)notesSet:(NSString *)text;
+
 /// Tell the bridge the native Quest Helper screen is open/closed (gates its client-thread snapshot refresh).
 + (void)questSetUiOpen:(BOOL)open;
 
