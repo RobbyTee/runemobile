@@ -475,7 +475,6 @@ public final class MobileUiBridge
 	// native side scales to its view width and scrolls vertically. Touches map back to panel coords and dispatch
 	// as MouseEvents on the EDT. A daemon repaints the active panel periodically so live updates (XP, etc.) show.
 	private static final int PANEL_W = PluginPanel.PANEL_WIDTH + PluginPanel.SCROLLBAR_WIDTH;
-	private static final int PANEL_MAX_H = 2500;
 	// Supersample the 242-logical panel into a higher-res buffer so the native side can display it at device
 	// resolution 1:1 (crisp, no upscale blur) at a comfortable size. 4x of 242 = 968px ≈ 323pt at 3x density.
 	// Clicks come back in buffer px and are divided by this to recover logical coords for Swing hit-testing.
@@ -483,6 +482,13 @@ public final class MobileUiBridge
 	// Memory budget for the panel buffer (pixels). ~3M px ARGB ≈ 12 MB — the cap below which the supersample
 	// scale is allowed; tall panels step down from 4x so the buffer never OOMs the game-shared heap.
 	private static final long MAX_BUFFER_PX = 3_000_000L;
+	// Tallest panel we lay out + render in full (logical px). It is the SCALE-1 buffer limit (MAX_BUFFER_PX /
+	// width): content up to this height renders COMPLETE, with the supersample step-down below trading crispness
+	// for height so the buffer stays in budget — a tall panel is softer but no longer TRUNCATED. Was a flat 2500,
+	// which clipped the JWindow and cut off the bottom of tall panels (Notes / Time Tracking / Kourend Library) —
+	// a worse failure (inaccessible content) than reduced sharpness. Only content beyond ~MAX_BUFFER_PX px at
+	// scale 1 (≈ a dozen screens) still clips; full crispness on tall panels needs viewport-windowed rendering.
+	private static final int PANEL_MAX_H = (int) (MAX_BUFFER_PX / PANEL_W);
 	private static volatile PluginPanel activePanel;
 	private static volatile JPanel activeWrapped;
 	private static volatile JWindow activeWindow;
