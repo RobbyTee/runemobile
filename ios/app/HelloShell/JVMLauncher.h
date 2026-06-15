@@ -258,10 +258,6 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Lines are oldest-first. Returns nil until logged in. Main thread.
 + (nullable NSString *)chatLines;
 
-/// The open chatbox dialogue (NPC/player/message/options/level-up) as JSON for native rendering, or nil/"{}" when
-/// none — so the dialogue draws in the native chatbox style, not the engine's old chatbox. Main thread.
-+ (nullable NSString *)dialogueJson;
-
 // ---- Phase 6 (W3): native plugin-management + config panel (reverse JNI -> MobileUiBridge) -----------
 // All call the Java-owned control-plane facade (gated -Drunelite.mobileui). Reads return JSON snapshots
 // to parse once per panel open; writes are fire-and-forget onto the correct Java thread (EDT for plugin

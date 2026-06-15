@@ -137,14 +137,6 @@ public final class HudVeneerBridge
 	private static volatile String chatLinesJson = "{\"loggedIn\":false}";
 	private static volatile int chatLinesSeq;
 
-	// Native DIALOGUE rendering: the open chatbox dialogue (NPC/player speech, "click here to continue", "Select an
-	// Option", level-up) read from the engine widgets and published as JSON the native shell draws in the chatbox
-	// style — instead of letting the engine draw its old chatbox over the native HUD. While we render it natively
-	// the engine dialogue widgets are hidden (dialogueRendering); the dialogue stays logically open and is driven
-	// from native taps via SPACE (continue) / number keys (options).
-	private static volatile String dialogueJson = "{}";
-	private static volatile boolean dialogueRendering;
-
 	// Native chat-tab SWITCH: which tab (0..7 index into CHAT_TAB_IDS) the native veneer asked to open. The engine
 	// tab sprites are hidden (so they don't peek under the native row), which makes them unclickable — so switching
 	// REPLAYS the tab's op-script instead of clicking, the same way the bottom tab-grid drives the hidden stones.
@@ -270,15 +262,6 @@ public final class HudVeneerBridge
 		return chatLinesJson;
 	}
 
-	/** Native: the open chatbox dialogue as JSON, or {@code "{}"} when none / not natively rendered. Shapes:
-	 *  speech — {@code {"type":"npc|player|message|levelup","continue":true,"name":"..","text":"..","runs":[..]}};
-	 *  options — {@code {"type":"options","title":"..","options":[{"text":"..","runs":[..],"digit":N}]}}. The
-	 *  native side renders it in the chatbox style; a continue tap sends SPACE, an option tap sends its digit key. */
-	public static String getDialogueJson()
-	{
-		return dialogueJson;
-	}
-
 	/** Native: scroll the chat by {@code deltaCanvasPx} (positive = toward newer/bottom). Accumulated and applied
 	 *  on the client thread in {@link #tick} via the chatbox scroll layer — no mouse wheel, so the camera doesn't
 	 *  zoom (the transparent chat overlays the viewport, where a wheel would zoom). */
@@ -376,18 +359,14 @@ public final class HudVeneerBridge
 			if (chatX >= 0 && !isWorldMapOpen(c))
 			{
 				setEngineChatTabsHidden(c, chatTabRowH > 0);
-				if (transparentChat)
+				// Keep the chatbox OPAQUE while a dialogue is open (don't re-hide the background here) so the
+				// engine's dialogue parchment renders solid — matching desktop.
+				if (transparentChat && !isDialogueOpen(c))
 				{
 					hide(c, InterfaceID.Chatbox.CHAT_BACKGROUND);
 					hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
 					hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
 				}
-			}
-			// Native dialogue: re-hide the engine dialogue just before raster (the engine rebuilds it on a state
-			// change, resetting the hidden flag) so it never flashes over the natively-rendered dialogue.
-			if (dialogueRendering && chatX >= 0 && !isWorldMapOpen(c))
-			{
-				suppressEngineDialogue(c);
 			}
 		}
 		catch (RuntimeException e)
@@ -452,24 +431,6 @@ public final class HudVeneerBridge
 			final boolean mapOpenNow = isWorldMapOpen(c);
 			final boolean dlgOpen = isDialogueOpen(c);
 			dialogueOpen = dlgOpen;   // published in buildChatSnapshot so the native side hides its chat veneer
-			// Native dialogue: read the open dialogue's text/options; if we can render it natively, HIDE the engine
-			// dialogue so its old chatbox doesn't draw over the native HUD. Only suppress when we actually have
-			// content (else fall back to the engine drawing it). Re-asserted in preRender (the engine rebuilds it).
-			if (dlgOpen && chatX >= 0 && !mapOpenNow)
-			{
-				final String dj = buildDialogue(c);
-				dialogueRendering = !dj.equals("{}");
-				dialogueJson = dj;
-				if (dialogueRendering)
-				{
-					suppressEngineDialogue(c);
-				}
-			}
-			else
-			{
-				dialogueRendering = false;
-				dialogueJson = "{}";
-			}
 
 			// Chat box: keep the engine chatbox FULLY ALIVE at all times (never hidden). To "collapse" (the user
 			// tapped the active tab) we shove the live widget far off-screen; reopening just moves it back — instant
@@ -531,7 +492,11 @@ public final class HudVeneerBridge
 				// height, then pin CHATAREA to ABSOLUTE width=rowW and height=(containerH - rowH - margin) at
 				// container-relative (0, rowH). The display/scroll children are revalidated so they widen too.
 				sizeChatArea(c, chatId, rowW, rowH);
-				if (transparentChat)
+				// While a DIALOGUE is open, force the chatbox OPAQUE so the engine draws the dialogue exactly like
+				// desktop — the parchment background, the NPC/player head, the centred name + text + blue "Click
+				// here to continue". Transparent mode would render it see-through over the scene (the messy
+				// overlap). The native chat lines are hidden during a dialogue, so the engine dialogue owns the box.
+				if (transparentChat && !dlgOpen)
 				{
 					// Deterministic transparency: hide the brown chatbox background sprites directly (the
 					// CHATBOX_TRANSPARENCY varbit alone doesn't re-render an already-built chat). Re-applied each
@@ -1786,126 +1751,6 @@ public final class HudVeneerBridge
 			}
 		}
 		return null;
-	}
-	/** Build the native-render JSON for whichever chatbox dialogue is open (or {@code "{}"} for none / a type we
-	 *  leave to the engine, e.g. make-X). Order matches the engine precedence. */
-	private static String buildDialogue(Client c)
-	{
-		try
-		{
-			Widget w = c.getWidget(InterfaceID.ChatLeft.TEXT);
-			if (w != null)
-			{
-				return dlgSpeech("npc", c.getWidget(InterfaceID.ChatLeft.NAME), w);
-			}
-			w = c.getWidget(InterfaceID.ChatRight.TEXT);
-			if (w != null)
-			{
-				return dlgSpeech("player", c.getWidget(InterfaceID.ChatRight.NAME), w);
-			}
-			w = c.getWidget(InterfaceID.Messagebox.TEXT);
-			if (w != null)
-			{
-				return dlgSpeech("message", null, w);
-			}
-			final Widget opt = c.getWidget(InterfaceID.Chatmenu.OPTIONS);
-			if (opt != null)
-			{
-				return dlgOptions(opt);
-			}
-			final Widget l1 = c.getWidget(InterfaceID.LevelupDisplay.TEXT1);
-			if (l1 != null)
-			{
-				final Widget l2 = c.getWidget(InterfaceID.LevelupDisplay.TEXT2);
-				return dlgSpeechRaw("levelup", null, safeText(l1) + "<br>" + safeText(l2));
-			}
-			return "{}";
-		}
-		catch (RuntimeException ex)
-		{
-			return "{}";
-		}
-	}
-
-	private static String dlgSpeech(String type, Widget nameW, Widget textW)
-	{
-		return dlgSpeechRaw(type, nameW != null ? safeText(nameW) : null, safeText(textW));
-	}
-
-	private static String dlgSpeechRaw(String type, String name, String rawText)
-	{
-		final StringBuilder sb = new StringBuilder(256);
-		sb.append("{\"type\":\"").append(type).append("\",\"continue\":true");
-		if (name != null && !name.isEmpty())
-		{
-			sb.append(",\"name\":\"").append(jsonEsc(name.replaceAll("<[^>]*>", ""))).append('"');
-		}
-		sb.append(',');
-		appendTextWithRuns(sb, rawText == null ? "" : rawText, CHAT_DEFAULT_COLOR);
-		sb.append('}');
-		return sb.toString();
-	}
-
-	private static String dlgOptions(Widget optW)
-	{
-		final StringBuilder sb = new StringBuilder(256);
-		sb.append("{\"type\":\"options\"");
-		final Widget[] kids = optW.getDynamicChildren();
-		final int n = kids == null ? 0 : kids.length;
-		if (n > 0 && kids[0] != null)
-		{
-			sb.append(",\"title\":\"").append(jsonEsc(safeText(kids[0]).replaceAll("<[^>]*>", ""))).append('"');
-		}
-		sb.append(",\"options\":[");
-		boolean first = true;
-		for (int i = 1; i < n; i++)
-		{
-			final Widget k = kids[i];
-			if (k == null)
-			{
-				continue;
-			}
-			final String txt = safeText(k);
-			if (txt.isEmpty())
-			{
-				continue;
-			}
-			if (!first)
-			{
-				sb.append(',');
-			}
-			first = false;
-			sb.append('{');
-			appendTextWithRuns(sb, txt, CHAT_DEFAULT_COLOR);
-			sb.append(",\"digit\":").append(i);
-			sb.append('}');
-		}
-		sb.append("]}");
-		return sb.toString();
-	}
-
-	/** Hide the engine dialogue interfaces we render natively, so the old engine chatbox never draws over the
-	 *  native one. Absent types no-op; make-X / object boxes are intentionally NOT hidden (left to the engine). */
-	private static void suppressEngineDialogue(Client c)
-	{
-		setHidden(c, InterfaceID.ChatLeft.UNIVERSE, true);
-		setHidden(c, InterfaceID.ChatRight.UNIVERSE, true);
-		setHidden(c, InterfaceID.Messagebox.UNIVERSE, true);
-		setHidden(c, InterfaceID.Chatmenu.UNIVERSE, true);
-		setHidden(c, InterfaceID.LevelupDisplay.UNIVERSE, true);
-	}
-
-	private static String safeText(Widget w)
-	{
-		try
-		{
-			final String t = w == null ? null : w.getText();
-			return t == null ? "" : t;
-		}
-		catch (RuntimeException ex)
-		{
-			return "";
-		}
 	}
 
 

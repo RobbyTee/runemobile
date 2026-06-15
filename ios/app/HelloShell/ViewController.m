@@ -147,11 +147,6 @@
 // Canvas-px bounds of the open dialogue (from the snapshot); a tap inside it routes through the precise click so
 // the engine resolves the dialogue's Continue/option instead of walking the world behind the (now natural-bottom) box.
 @property (nonatomic, assign) CGRect dialogueChatCanvas;
-// Native dialogue rendering: the engine dialogue is hidden + drawn here in the chatbox style. dialogueView hosts a
-// vertical stack (name/text, or title + tappable option rows); continue tap -> SPACE, option tap -> its digit key.
-@property (nonatomic, strong) UIView *dialogueView;
-@property (nonatomic, strong) UIStackView *dialogueStack;
-@property (nonatomic, copy)   NSString *lastDialogueJson;   // skip rebuilding the stack when the content is unchanged
 @property (nonatomic, assign) int  itemDragLastX;   // last valid canvas point of the drag — the engine MUST get a
 @property (nonatomic, assign) int  itemDragLastY;   // MOUSE_RELEASED to close WidgetDrag even if the lift maps off-canvas
 // Interactable-tap feedback: a light haptic when a tap grabs a real interactable (polled via JavaBridge
@@ -2185,155 +2180,6 @@ static int chatRowCanvasH(void) {
 // Render the native chat MESSAGE lines (from JVMLauncher.chatLines — the live engine model) into chatMessagesView,
 // positioned directly under the tab row. The engine refuses to raster a relocated chatbox, so this IS the chat
 // display: colour-run attributed text over the scene, bottom-anchored (newest at the bottom like real OSRS chat).
-#pragma mark - Native dialogue (NPC/options/continue drawn in the chatbox style)
-
-- (void)ensureDialogueView {
-    if (self.dialogueView) return;
-    UIView *v = [[UIView alloc] init];
-    v.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.66];   // readable; covers the scene behind it
-    v.layer.cornerRadius = 6.0;
-    v.layer.borderColor = [UIColor colorWithWhite:0.0 alpha:0.5].CGColor;
-    v.layer.borderWidth = 1.0;
-    v.clipsToBounds = YES;   // a long dialogue clips to the chat-area box rather than spilling over the scene
-    v.hidden = YES;
-    // A tap anywhere on the box advances a "click here to continue" dialogue (option rows are buttons on top).
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onDialogueContinue)];
-    [v addGestureRecognizer:tap];
-    UIStackView *st = [[UIStackView alloc] init];
-    st.axis = UILayoutConstraintAxisVertical;
-    st.alignment = UIStackViewAlignmentFill;
-    st.spacing = 3.0;
-    st.translatesAutoresizingMaskIntoConstraints = NO;
-    st.userInteractionEnabled = YES;
-    [v addSubview:st];
-    [NSLayoutConstraint activateConstraints:@[
-        [st.leadingAnchor constraintEqualToAnchor:v.leadingAnchor constant:8],
-        [st.trailingAnchor constraintEqualToAnchor:v.trailingAnchor constant:-8],
-        [st.topAnchor constraintEqualToAnchor:v.topAnchor constant:6],
-        [st.bottomAnchor constraintLessThanOrEqualToAnchor:v.bottomAnchor constant:-6],
-    ]];
-    self.dialogueStack = st;
-    self.dialogueView = v;
-    [self.screen addSubview:v];
-}
-
-// Poll the dialogue JSON each chat tick: show the native dialogue box over the chat area (and hide the chat
-// lines) when a dialogue is open, else hide it. Rebuild the stack only when the content changes.
-- (void)updateDialogueView {
-    NSString *js = [JVMLauncher dialogueJson];
-    NSDictionary *d = nil;
-    BOOL has = NO;
-    if (js.length && self.chromeVisible && self.renderW > 0 && !self.mapOpen && self.chatScrollCanvas.size.width > 0) {
-        d = [NSJSONSerialization JSONObjectWithData:[js dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
-        has = [d isKindOfClass:[NSDictionary class]] && [d[@"type"] isKindOfClass:[NSString class]];
-    }
-    if (!has) {
-        if (self.dialogueView) self.dialogueView.hidden = YES;
-        self.lastDialogueJson = nil;
-        return;
-    }
-    [self ensureDialogueView];
-    CGFloat s = self.view.bounds.size.width / (CGFloat)self.renderW;
-    CGRect r = self.chatScrollCanvas;
-    self.dialogueView.frame = CGRectMake(floor(r.origin.x * s), floor(r.origin.y * s),
-                                         ceil(r.size.width * s), ceil(r.size.height * s));
-    self.dialogueView.hidden = NO;
-    if (self.chatMessagesView) self.chatMessagesView.hidden = YES;   // the dialogue replaces the chat lines
-    [self.screen bringSubviewToFront:self.dialogueView];
-    if ([js isEqualToString:self.lastDialogueJson]) return;   // unchanged content -> keep the built stack
-    self.lastDialogueJson = js;
-    [self rebuildDialogueContent:d scale:s];
-}
-
-- (void)rebuildDialogueContent:(NSDictionary *)d scale:(CGFloat)s {
-    for (UIView *v in [self.dialogueStack.arrangedSubviews copy]) {
-        [self.dialogueStack removeArrangedSubview:v];
-        [v removeFromSuperview];
-    }
-    CGFloat fontSize = floor(15.0 * s); if (fontSize < 11) fontSize = 11;
-    UIFont *font = [UIFont fontWithName:@"RuneScape" size:fontSize] ?: [UIFont systemFontOfSize:fontSize];
-    BOOL isOptions = [d[@"type"] isEqualToString:@"options"];
-
-    NSString *name = [d[@"name"] isKindOfClass:[NSString class]] ? d[@"name"] : nil;
-    if (name.length) {
-        [self.dialogueStack addArrangedSubview:[self dialogueLabel:[[NSAttributedString alloc]
-            initWithString:name attributes:@{NSFontAttributeName: font,
-            NSForegroundColorAttributeName: [UIColor colorWithRed:1.0 green:0.92 blue:0.35 alpha:1.0]}]]];
-    }
-    if (isOptions) {
-        NSString *title = [d[@"title"] isKindOfClass:[NSString class]] ? d[@"title"] : nil;
-        if (title.length) {
-            [self.dialogueStack addArrangedSubview:[self dialogueLabel:[[NSAttributedString alloc]
-                initWithString:title attributes:@{NSFontAttributeName: font,
-                NSForegroundColorAttributeName: [UIColor colorWithWhite:0.82 alpha:1.0]}]]];
-        }
-        NSArray *opts = [d[@"options"] isKindOfClass:[NSArray class]] ? d[@"options"] : @[];
-        for (NSDictionary *o in opts) {
-            if (![o isKindOfClass:[NSDictionary class]]) continue;
-            UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
-            [b setAttributedTitle:[self dialogueAttrFromDict:o font:font defColor:[UIColor whiteColor]]
-                         forState:UIControlStateNormal];
-            b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
-            b.titleLabel.numberOfLines = 0;
-            b.tag = [o[@"digit"] integerValue];
-            [b setBackgroundImage:[self solidImage:[UIColor colorWithWhite:1.0 alpha:0.18]] forState:UIControlStateHighlighted];
-            [b addTarget:self action:@selector(onDialogueOption:) forControlEvents:UIControlEventTouchUpInside];
-            [self.dialogueStack addArrangedSubview:b];
-        }
-    } else {
-        [self.dialogueStack addArrangedSubview:[self dialogueLabel:[self dialogueAttrFromDict:d font:font defColor:[UIColor whiteColor]]]];
-        UILabel *hint = [self dialogueLabel:[[NSAttributedString alloc] initWithString:@"Click here to continue"
-            attributes:@{NSFontAttributeName: font, NSForegroundColorAttributeName: [UIColor colorWithRed:0.45 green:0.78 blue:1.0 alpha:1.0]}]];
-        hint.textAlignment = NSTextAlignmentCenter;
-        [self.dialogueStack addArrangedSubview:hint];
-    }
-}
-
-- (UILabel *)dialogueLabel:(NSAttributedString *)attr {
-    UILabel *l = [UILabel new];
-    l.numberOfLines = 0;
-    l.attributedText = attr;
-    return l;
-}
-
-- (NSAttributedString *)dialogueAttrFromDict:(NSDictionary *)o font:(UIFont *)font defColor:(UIColor *)def {
-    NSString *text = [o[@"text"] isKindOfClass:[NSString class]] ? o[@"text"] : @"";
-    NSShadow *sh = [NSShadow new]; sh.shadowColor = [UIColor blackColor]; sh.shadowOffset = CGSizeMake(1.0, 1.0);
-    NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.lineBreakMode = NSLineBreakByWordWrapping;
-    NSMutableAttributedString *a = [[NSMutableAttributedString alloc] initWithString:text attributes:@{
-        NSFontAttributeName: font, NSForegroundColorAttributeName: def,
-        NSShadowAttributeName: sh, NSParagraphStyleAttributeName: ps}];
-    NSArray *runs = [o[@"runs"] isKindOfClass:[NSArray class]] ? o[@"runs"] : nil;
-    NSUInteger tlen = text.length;
-    for (NSDictionary *r in runs) {
-        if (![r isKindOfClass:[NSDictionary class]]) continue;
-        NSInteger off = [r[@"o"] integerValue], l = [r[@"l"] integerValue];
-        if (off < 0 || l <= 0 || (NSUInteger)(off + l) > tlen) continue;
-        NSRange rng = NSMakeRange((NSUInteger)off, (NSUInteger)l);
-        UIColor *col = rgbColor([r[@"c"] intValue]);
-        if (col) [a addAttribute:NSForegroundColorAttributeName value:col range:rng];
-        if ([r[@"u"] intValue] == 1) [a addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:rng];
-    }
-    return a;
-}
-
-// Continue tap -> SPACE (OSRS "space bar to continue"); option tap -> its number key. postText sends the full
-// KEY_PRESSED+TYPED+RELEASED for the char, so the engine's dialogue handler advances/selects.
-- (void)onDialogueContinue {
-    if (self.dialogueView.hidden) return;
-    NSString *js = self.lastDialogueJson;
-    if (js && [js containsString:@"\"type\":\"options\""]) return;   // options need a choice, not a blind continue
-    [JVMLauncher postText:@" "];
-    [self appendLine:@"[shell] dialogue continue (space)"];
-}
-
-- (void)onDialogueOption:(UIButton *)b {
-    NSInteger digit = b.tag;
-    if (digit < 1 || digit > 9) return;
-    [JVMLauncher postText:[NSString stringWithFormat:@"%ld", (long)digit]];
-    [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %ld", (long)digit]];
-}
-
 - (void)updateChatMessagesAtX:(CGFloat)x y:(CGFloat)y width:(CGFloat)w height:(CGFloat)h scale:(CGFloat)s {
     UITextView *mv = self.chatMessagesView;
     if (!mv) return;
@@ -3392,7 +3238,6 @@ static CGRect mapRectFromArr(NSArray *a) {
     // every tick (not only when chromeVisible) so it hides itself promptly when the chrome is toggled off.
     if (self.framesShown % 6 == 0) {
         [self updateChatTabs];
-        [self updateDialogueView];   // native dialogue (NPC/options/continue) drawn in the chatbox style
     }
 
     // Plugin panel: while open, re-read the list when the bridge's event sequence advances (a toggle's
@@ -3778,10 +3623,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 // (the enlarged chat tab buttons, the keyboard button, the side-tab grid). The control handles its own tap, so it
 // must not ALSO register as a walk-here click underneath. Touches on the bare game view (self.screen) pass through.
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gr shouldReceiveTouch:(UITouch *)touch {
-    if ([touch.view isKindOfClass:[UIControl class]]) return NO;
-    // The native dialogue box owns its taps (continue / options) — don't also fire the game gestures underneath.
-    if (self.dialogueView && !self.dialogueView.hidden && [touch.view isDescendantOfView:self.dialogueView]) return NO;
-    return YES;
+    return ![touch.view isKindOfClass:[UIControl class]];
 }
 
 // tap -> left click (walk / interact / select a menu entry).
