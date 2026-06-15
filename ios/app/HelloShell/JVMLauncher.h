@@ -95,6 +95,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// synthesize a click (use postClick for a tap). Call on the main thread. Used by the camera/scroll drag.
 + (void)postTouchType:(int)type x:(int)x y:(int)y button:(int)button;
 
+/// DRAG-1: the live inventory item-grid bounds in gamepack-canvas px, or CGRectNull when the inventory isn't
+/// visible. The shell uses it to divert a drag that starts over the inventory into an item rearrange. Main thread.
++ (CGRect)inventoryCanvasBounds;
+
 /// Post a discrete TAP into the gamepack via JavaBridge.onClick (the full press+release+click at one
 /// point). `x`,`y` are gamepack-canvas (765x503) pixels; `button` is 1 (left tap / menu-entry select) or
 /// 3 (long-press: open the right-click menu). Call on the main thread.

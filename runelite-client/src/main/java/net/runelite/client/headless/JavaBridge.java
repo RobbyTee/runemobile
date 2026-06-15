@@ -28,6 +28,7 @@ import com.google.inject.Injector;
 import java.awt.Canvas;
 import java.awt.Color;
 import java.awt.EventQueue;
+import java.awt.Rectangle;
 import java.awt.Toolkit;
 import java.awt.event.FocusEvent;
 import java.awt.event.InputEvent;
@@ -55,6 +56,8 @@ import net.runelite.api.WorldView;
 import net.runelite.api.events.BeforeMenuRender;
 import net.runelite.api.events.MenuOpened;
 import net.runelite.api.events.MenuOptionClicked;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.RuneLite;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.eventbus.EventBus;
@@ -689,6 +692,7 @@ public final class JavaBridge
 		}
 		applyCameraDrag(c);        // drain accumulated two-finger-pan deltas (camera writes are client-thread-only)
 		snapshotTextInputOpen(c);  // publish INPUT_TYPE for isTextInputOpen() to read off the client thread
+		snapshotInventoryBounds(c); // DRAG-1: publish the inventory item-grid bounds for the native item-drag branch
 		// Deterministic early registration (boolean-gated, retries until the injector is live): the
 		// BeforeMenuRender suppression below must be in place before the FIRST menu ever opens, not
 		// lazily on the first tap.
@@ -1467,6 +1471,44 @@ public final class JavaBridge
 		{
 			// keep the last snapshot
 		}
+	}
+
+	// DRAG-1: the inventory item-grid widget bounds (canvas px), snapshotted on the client thread each frame so
+	// the native shell can read them lock-free and decide whether a one-finger drag that STARTS over the
+	// inventory should rearrange items (a synthesized engine mouse-drag) instead of rotating the camera. -1
+	// width = not visible (inventory tab not open / hidden), so the native side leaves every drag as a camera pan.
+	private static volatile int invX = -1, invY = -1, invW = 0, invH = 0;
+
+	private static void snapshotInventoryBounds(Client c)
+	{
+		try
+		{
+			final Widget w = c.getWidget(InterfaceID.Inventory.ITEMS);
+			if (w != null && !w.isHidden())
+			{
+				final Rectangle b = w.getBounds();
+				if (b != null && b.width > 0 && b.height > 0)
+				{
+					invX = b.x;
+					invY = b.y;
+					invW = b.width;
+					invH = b.height;
+					return;
+				}
+			}
+		}
+		catch (RuntimeException ex)
+		{
+			// fall through to "not visible"
+		}
+		invX = -1;
+		invW = 0;
+	}
+
+	/** DRAG-1: the live inventory item-grid bounds {x, y, w, h} in canvas px; w &lt;= 0 means not visible. */
+	public static int[] getInventoryBounds()
+	{
+		return new int[]{invX, invY, invW, invH};
 	}
 
 	/**

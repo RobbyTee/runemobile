@@ -136,6 +136,11 @@
 @property (nonatomic, strong) UIView *menuDismissLayer;  // tap-mode full-screen tap-to-cancel layer behind the box
 @property (nonatomic, assign) BOOL menuScrollable;       // engine menu self-scrolls (>~30 entries) -> commit by invoke, not geometry
 @property (nonatomic, assign) BOOL customizeReopenPending; // a ⚙ Customize reopen is scheduled; a new menu cancels it
+// DRAG-1: a one-finger drag that BEGAN over the inventory grid rearranges items (synthesized engine mouse-drag)
+// instead of rotating the camera. Only set when the drag starts inside the published inventory rect.
+@property (nonatomic, assign) BOOL itemDragging;
+@property (nonatomic, assign) int  itemDragLastX;   // last valid canvas point of the drag — the engine MUST get a
+@property (nonatomic, assign) int  itemDragLastY;   // MOUSE_RELEASED to close WidgetDrag even if the lift maps off-canvas
 // Interactable-tap feedback: a light haptic when a tap grabs a real interactable (polled via JavaBridge
 // interactTapSeq), and a yellow fading click-ring drawn at every tap point (the Jagex-Mobile click marker).
 @property (nonatomic, assign) int lastInteractTapSeq;
@@ -4179,6 +4184,9 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (void)onCameraPan:(UIPanGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady] || self.menuOpen) return;
     if (g.state == UIGestureRecognizerStateBegan) {
+        // DRAG-1: read the pre-reset translation so we can recover the TRUE touch start (the pan only fires after
+        // ~10px of slop, so locationInView is already that far from where the finger landed on the item).
+        CGPoint t0 = [g translationInView:self.screen];
         [g setTranslation:CGPointZero inView:self.screen];
         // World map open: a 1-finger drag that BEGINS inside the Key list or the open surface dropdown
         // SCROLLS that list (wheel events parked over it); inside the map window it pans the MAP (bridge ->
@@ -4222,6 +4230,24 @@ static CGRect mapRectFromArr(NSArray *a) {
             return;
         }
         self.chatScrolling = NO;
+        // DRAG-1: a drag that STARTS over the inventory grid rearranges items (engine WidgetDrag) rather than
+        // rotating the camera. The press must land on the SOURCE item, so map the true touch start (loc - slop),
+        // not the already-moved current point. Only diverts inventory-origin drags — scene drags still rotate.
+        CGRect inv = [JVMLauncher inventoryCanvasBounds];
+        if (!CGRectIsNull(inv) && CGRectGetWidth(inv) > 0 && CGRectGetHeight(inv) > 0) {
+            CGPoint startLoc = CGPointMake([g locationInView:self.screen].x - t0.x,
+                                           [g locationInView:self.screen].y - t0.y);
+            int sx = 0, sy = 0;
+            if ([self mapPoint:startLoc toGameX:&sx toGameY:&sy]
+                    && CGRectContainsPoint(inv, CGPointMake(sx, sy))) {
+                self.itemDragging = YES;
+                self.itemDragLastX = sx; self.itemDragLastY = sy;   // seed the release-fallback point
+                [JVMLauncher postTouchType:0 x:sx y:sy button:1];   // MOUSE_PRESSED on the source item slot
+                [self appendLine:[NSString stringWithFormat:@"[shell] item drag begin @canvas %d,%d", sx, sy]];
+                return;
+            }
+        }
+        self.itemDragging = NO;
         // A camera drag moves the world, not the pointer — so clear any frozen hover first, otherwise
         // scenery rotating under the stale cursor lights up and the next walk-tap mis-clicks it.
         [JVMLauncher postClearHover];
@@ -4229,6 +4255,17 @@ static CGRect mapRectFromArr(NSArray *a) {
         return;
     }
     if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
+        if (self.itemDragging) {
+            // ALWAYS release so the engine's WidgetDrag state machine closes — even if the finger lifted in the
+            // letterbox (mapPoint fails); fall back to the last valid drag point. A stranded press would otherwise
+            // leave the inventory stuck mid-drag.
+            int dx = self.itemDragLastX, dy = self.itemDragLastY, mx = 0, my = 0;
+            if ([self mapPoint:[g locationInView:self.screen] toGameX:&mx toGameY:&my]) { dx = mx; dy = my; }
+            [JVMLauncher postTouchType:2 x:dx y:dy button:1];   // MOUSE_RELEASED on the destination slot
+            self.itemDragging = NO;
+            [self appendLine:[NSString stringWithFormat:@"[shell] item drag end @canvas %d,%d", dx, dy]];
+            return;
+        }
         if (self.mapPanning || self.mapListScrolling) {
             self.mapPanning = NO;
             self.mapListScrolling = NO;
@@ -4243,6 +4280,18 @@ static CGRect mapRectFromArr(NSArray *a) {
         return;
     }
     if (g.state != UIGestureRecognizerStateChanged) return;
+    // DRAG-1: stream the drag to the engine as MOUSE_DRAGGED at the finger's canvas point (one per frame is fine).
+    // A frame whose point maps off-canvas is just skipped — the drag stays live and the cached last-valid point
+    // (updated here) guarantees a clean release.
+    if (self.itemDragging) {
+        int dx = 0, dy = 0;
+        if ([self mapPoint:[g locationInView:self.screen] toGameX:&dx toGameY:&dy]) {
+            self.itemDragLastX = dx; self.itemDragLastY = dy;
+            [JVMLauncher postTouchType:1 x:dx y:dy button:1];   // MOUSE_DRAGGED
+        }
+        [g setTranslation:CGPointZero inView:self.screen];
+        return;
+    }
     CGPoint d = [g translationInView:self.screen];
     [g setTranslation:CGPointZero inView:self.screen];   // make the next delta incremental
     if (d.x == 0 && d.y == 0) return;

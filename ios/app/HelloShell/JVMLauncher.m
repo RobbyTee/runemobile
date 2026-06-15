@@ -47,6 +47,7 @@ static jmethodID gMidShiftHeld = NULL;   // setShiftHeld(Z)V — sticky-Shift mo
 static jmethodID gMidMenuSuppress = NULL; // setMenuRenderSuppressed(Z)V — engine-menu raster gate (optional)
 static jmethodID gMidInvokeMenu = NULL;  // invokeMenuEntry(II)V — commit a drilled-in submenu child (MENU-1, optional)
 static jmethodID gMidKeybind = NULL;     // onKeybind(II)V — fire a plugin action-hotkey chord (KEY-1, optional)
+static jmethodID gMidInvBounds = NULL;   // getInventoryBounds()[I — inventory grid bounds for item-drag (DRAG-1, optional)
 
 // W3 hybrid-chrome read surface — a SEPARATE facade (MobileChromeBridge) resolved lazily on the main thread.
 static jclass    gChromeClass = NULL;   // global ref to net.runelite.client.headless.MobileChromeBridge
@@ -220,6 +221,8 @@ static BOOL ensureBridge(void) {
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidInvokeMenu = NULL; }
     gMidKeybind = (*env)->GetStaticMethodID(env, global, "onKeybind", "(II)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidKeybind = NULL; }
+    gMidInvBounds = (*env)->GetStaticMethodID(env, global, "getInventoryBounds", "()[I");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidInvBounds = NULL; }
     gBridgeClass = global;   // publish only once fully resolved
     return YES;
 }
@@ -1326,6 +1329,24 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidTouch,
                                  (jint)type, (jint)x, (jint)y, (jint)button);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
+// DRAG-1: the live inventory item-grid bounds in canvas px, or CGRectNull when the inventory isn't visible
+// (so the caller leaves a one-finger drag as a camera pan). Reads JavaBridge.getInventoryBounds() ([x,y,w,h]).
++ (CGRect)inventoryCanvasBounds {
+    if (!ensureBridge() || !gMidInvBounds) return CGRectNull;
+    JNIEnv *env = gMainEnv;
+    jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, gBridgeClass, gMidInvBounds);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return CGRectNull; }
+    if (!arr) return CGRectNull;
+    CGRect r = CGRectNull;
+    if ((*env)->GetArrayLength(env, arr) >= 4) {
+        jint v[4];
+        (*env)->GetIntArrayRegion(env, arr, 0, 4, v);
+        if (v[2] > 0 && v[3] > 0) r = CGRectMake(v[0], v[1], v[2], v[3]);
+    }
+    (*env)->DeleteLocalRef(env, arr);
+    return r;
 }
 
 + (void)postClickX:(int)x y:(int)y button:(int)button {
