@@ -20,7 +20,7 @@ import kotlin.math.hypot
 /**
  * Phase-4 chat channel PILL (iOS parity, `bea94a90a0`…`9a8923a2c9`). At rest a single collapsed pill (one tab
  * wide) names the open channel over the relocated chat. A quick tap toggles the chat message-area collapse
- * (shared shove-off-canvas, never hide). Holding ~0.15 s fans 7 sprite-backed chips across the chat width;
+ * (shared shove-off-canvas, never hide). Holding ~0.15 s fans 8 sprite-backed chips across the chat width;
  * dragging sideways highlights and a release switches the open channel (op-script replay — works collapsed);
  * pulling DOWN past a filterable chip's bottom edge opens that channel's engine filter menu at the finger
  * (the shared press-and-peek overlay), with a ▾ hint revealing as the finger nears the edge. The pull-down is
@@ -33,11 +33,12 @@ import kotlin.math.hypot
 class ChatPillView(context: Context) : View(context) {
 
     companion object {
-        const val TAB_COUNT = 7
+        const val TAB_COUNT = 8     // 7 channel tabs + the engine's Report tab (CHAT_TAB_IDS publishes 8)
         const val CHAT_W = 519          // engine chatbox width (canvas px) — the fan row spans this
         const val ROW_H_CANVAS = 32     // 2-line chip height (canvas px); pushed into the engine row height
-        private val NAMES = arrayOf("All", "Game", "Public", "Private", "Channel", "Clan", "Trade")
-        private val FILTERABLE = booleanArrayOf(false, false, true, true, true, true, true)
+        private val NAMES = arrayOf("All", "Game", "Public", "Private", "Channel", "Clan", "Trade", "Report")
+        // Report is not a filterable channel (it opens the report-abuse interface), so it has no pull-down filter.
+        private val FILTERABLE = booleanArrayOf(false, false, true, true, true, true, true, false)
         private const val NAME_DEFAULT = 0xFFFFF7D9.toInt()   // off-white
         private const val FILTER_DEFAULT = 0xFF00E000.toInt() // green ("On")
         private const val HINT_COLOR = 0xFFFFEB59.toInt()     // the iOS ▾ yellow
