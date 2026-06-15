@@ -2,19 +2,26 @@ package dev.audaro.helloshell
 
 import android.graphics.Bitmap
 import android.util.Log
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -44,6 +51,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -106,44 +115,11 @@ fun PluginPanel(
     var overlayOpen by remember { mutableStateOf(false) }                        // Finding 15 overlay edit
     var infoBoxOpen by remember { mutableStateOf(false) }                        // Finding 22 infobox menu
     var hubOpen by remember { mutableStateOf(false) }                            // Finding 17 hub browse/install
-    val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
-
-    if (questOpen) { QuestHelperScreen(onBack = { questOpen = false }); return }
-    if (worldOpen) { WorldSwitcherScreen(onBack = { worldOpen = false }); return }
-    if (xpOpen) { XpTrackerScreen(onBack = { xpOpen = false }); return }
-    if (lootOpen) { LootTrackerScreen(onBack = { lootOpen = false }); return }
-    if (geOpen) { GrandExchangeScreen(onBack = { geOpen = false }); return }
-    if (overlayOpen) { OverlayEditScreen(onBack = { overlayOpen = false }); return }
-    if (infoBoxOpen) { InfoBoxScreen(onBack = { infoBoxOpen = false }); return }
-    val po = panelOpen
-    if (po != null) {
-        PanelView(po.first, po.second, onBack = { panelOpen = null })
-        return
-    }
-    if (panelListOpen) {
-        PanelList(
-            onOpen = { i, t -> panelOpen = i to t },
-            onOpenQuest = { questOpen = true },
-            onOpenWorld = { worldOpen = true },
-            onOpenXp = { xpOpen = true },
-            onOpenLoot = { lootOpen = true },
-            onOpenGe = { geOpen = true },
-            onOpenOverlay = { overlayOpen = true },
-            onOpenInfoBox = { infoBoxOpen = true },
-            onBack = { panelListOpen = false },
-        )
-        return
-    }
-    val cf = configFor
-    if (cf != null) {
-        ConfigScreen(cf.first, cf.second, onBack = { configFor = null })
-        return
-    }
-
     // Finding 8: a plugin just toggled ON is starting — suppress the "couldn't start" badge during a grace
     // window, then re-fetch the true active state. A row is incompatible = enabled && !active && not pending.
     var pending by remember { mutableStateOf(setOf<String>()) }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
 
     suspend fun reload() {
         // listPlugins() must run off the UI thread + on a HotSpot-attached thread -> the rl-bridge executor.
@@ -151,9 +127,6 @@ fun PluginPanel(
         rows = parsePlugins(json)
         loading = false
     }
-
-    // Finding 17: installing a hub plugin adds it to the engine's plugin set — re-fetch the toggle list on close.
-    if (hubOpen) { PluginHubScreen(onBack = { hubOpen = false; scope.launch { reload() } }); return }
 
     LaunchedEffect(Unit) {
         reload()
@@ -171,82 +144,219 @@ fun PluginPanel(
             "panels=${panels.size} avail=${panelAvail.count { it }}")
     }
 
-    Surface(color = Color(0xF2121212), modifier = Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().padding(12.dp)) {
-            val inList = listMode || filter.isNotEmpty()
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (inList) {
-                    // Back to the landing grid (clears any active filter so the grid isn't masked by it).
-                    TextButton(onClick = { listMode = false; filter = "" }) { Text("‹ Grid") }
-                }
-                Text(
-                    "Plugins" + if (rows.isNotEmpty())
-                        "  (${rows.count { it.enabled && !it.configOnly }}/${rows.count { !it.configOnly }})" else "",
-                    color = Color.White, fontSize = 20.sp, modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                TextButton(onClick = { hubOpen = true }) { Text("Hub") }
-                TextButton(onClick = onClose) { Text("Close") }
+    // §4 increment 3: the launcher + every panel now live INSIDE a PEEK/EXPAND bottom sheet (SheetScaffold) so
+    // the live game stays visible above it (the desktop slide-out parity win). A sub-screen open => PEEK (game
+    // watchable); the launcher landing => EXPAND.
+    val subActive = questOpen || worldOpen || xpOpen || lootOpen || geOpen || overlayOpen || infoBoxOpen ||
+        hubOpen || panelListOpen || panelOpen != null || configFor != null
+
+    // §4 dismiss model (d): back pops ONE level — close the active sub-screen back to the launcher, else dismiss
+    // the whole sheet. Honoured here so the Compose back-stack works (the MainActivity dispatcher disposes this
+    // composition on close, so this handler only exists while the sheet is genuinely open).
+    // Order matches the render `when` below so back always clears the screen actually showing (only ever one
+    // sub-screen is set at a time today, but keeping the orders aligned avoids a latent mismatch).
+    fun popSub(): Boolean {
+        when {
+            questOpen -> questOpen = false
+            worldOpen -> worldOpen = false
+            xpOpen -> xpOpen = false
+            lootOpen -> lootOpen = false
+            geOpen -> geOpen = false
+            overlayOpen -> overlayOpen = false
+            infoBoxOpen -> infoBoxOpen = false
+            hubOpen -> { hubOpen = false; scope.launch { reload() } }
+            panelOpen != null -> panelOpen = null
+            panelListOpen -> panelListOpen = false
+            configFor != null -> configFor = null
+            else -> return false
+        }
+        return true
+    }
+    BackHandler(enabled = true) { if (!popSub()) onClose() }
+
+    SheetScaffold(atPeek = subActive, onDismiss = onClose) {
+        when {
+            questOpen -> QuestHelperScreen(onBack = { questOpen = false })
+            worldOpen -> WorldSwitcherScreen(onBack = { worldOpen = false })
+            xpOpen -> XpTrackerScreen(onBack = { xpOpen = false })
+            lootOpen -> LootTrackerScreen(onBack = { lootOpen = false })
+            geOpen -> GrandExchangeScreen(onBack = { geOpen = false })
+            overlayOpen -> OverlayEditScreen(onBack = { overlayOpen = false })
+            infoBoxOpen -> InfoBoxScreen(onBack = { infoBoxOpen = false })
+            hubOpen -> PluginHubScreen(onBack = { hubOpen = false; scope.launch { reload() } })
+            panelOpen != null -> {
+                val po = panelOpen!!
+                PanelView(po.first, po.second, onBack = { panelOpen = null })
             }
-            OutlinedTextField(
-                value = filter, onValueChange = { filter = it },
-                label = { Text("Search plugins") }, singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+            panelListOpen -> PanelList(
+                onOpen = { i, t -> panelOpen = i to t },
+                onOpenQuest = { questOpen = true }, onOpenWorld = { worldOpen = true },
+                onOpenXp = { xpOpen = true }, onOpenLoot = { lootOpen = true }, onOpenGe = { geOpen = true },
+                onOpenOverlay = { overlayOpen = true }, onOpenInfoBox = { infoBoxOpen = true },
+                onBack = { panelListOpen = false },
             )
-            if (loading) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-            } else if (inList) {
-                PluginListBody(
-                    rows = rows, filter = filter, pending = pending, renderer = renderer, listState = listState,
-                    onToggleRow = { p, checked ->
-                        rows = rows.map { if (it.className == p.className) it.copy(enabled = checked) else it }
-                        JvmLauncher.onBridge { JvmLauncher.setPluginEnabled(p.className, checked) }
-                        if (checked) {
-                            pending = pending + p.className
-                            scope.launch {
-                                kotlinx.coroutines.delay(4000)
-                                reload()
+            configFor != null -> {
+                val cf = configFor!!
+                ConfigScreen(cf.first, cf.second, onBack = { configFor = null })
+            }
+            else -> Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+                val inList = listMode || filter.isNotEmpty()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (inList) {
+                        // Back to the landing grid (clears any active filter so the grid isn't masked by it).
+                        TextButton(onClick = { listMode = false; filter = "" }) { Text("‹ Grid") }
+                    }
+                    Text(
+                        "Plugins" + if (rows.isNotEmpty())
+                            "  (${rows.count { it.enabled && !it.configOnly }}/${rows.count { !it.configOnly }})" else "",
+                        color = Color.White, fontSize = 20.sp, modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    TextButton(onClick = { hubOpen = true }) { Text("Hub") }
+                    TextButton(onClick = onClose) { Text("Close") }
+                }
+                OutlinedTextField(
+                    value = filter, onValueChange = { filter = it },
+                    label = { Text("Search plugins") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                )
+                if (loading) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                } else if (inList) {
+                    PluginListBody(
+                        rows = rows, filter = filter, pending = pending, renderer = renderer, listState = listState,
+                        onToggleRow = { p, checked ->
+                            rows = rows.map { if (it.className == p.className) it.copy(enabled = checked) else it }
+                            JvmLauncher.onBridge { JvmLauncher.setPluginEnabled(p.className, checked) }
+                            if (checked) {
+                                pending = pending + p.className
+                                scope.launch {
+                                    kotlinx.coroutines.delay(4000)
+                                    reload()
+                                    pending = pending - p.className
+                                }
+                            } else {
                                 pending = pending - p.className
                             }
-                        } else {
-                            pending = pending - p.className
+                        },
+                        onTogglePin = { p ->
+                            val nowPinned = !p.pinned
+                            rows = rows.map { if (it.className == p.className) it.copy(pinned = nowPinned) else it }
+                                .sortedWith(compareByDescending<PluginRow> { it.pinned }.thenBy { it.name.lowercase() })
+                            // Persist immediately so a deliberate pin survives even a hard kill. setPinned ENQUEUES a
+                            // client-thread write and returns a writeId; flush only AFTER that write is processed (else
+                            // sendConfig races ahead and flushes stale state).
+                            JvmLauncher.onBridge {
+                                val ack = JvmLauncher.setPinned(p.name, nowPinned)
+                                val wid = Regex("\"writeId\":(\\d+)").find(ack)?.groupValues?.get(1)?.toLongOrNull()
+                                var i = 0
+                                while (wid != null && JvmLauncher.processedWriteId() < wid && i++ < 40) Thread.sleep(25)
+                                JvmLauncher.flushConfig()
+                            }
+                            if (nowPinned) scope.launch { listState.animateScrollToItem(0) }
+                        },
+                        onRendererSelect = { mode, checked ->
+                            renderer = if (checked) mode else "cpu"
+                            onRendererSelect(renderer)
+                        },
+                        onOpenConfig = { p -> configFor = p.configGroup!! to p.name },
+                    )
+                } else {
+                    LauncherGrid(
+                        rows = rows, renderer = renderer, panels = panels, avail = panelAvail,
+                        pending = pending,
+                        onRendererSelect = { mode -> renderer = mode; onRendererSelect(mode) },
+                        onOpenConfig = { p -> configFor = p.configGroup!! to p.name },
+                        onOpenList = { listMode = true },
+                        onOpenPanel = { i, t -> panelOpen = i to t },
+                        onOpenQuest = { questOpen = true }, onOpenWorld = { worldOpen = true },
+                        onOpenXp = { xpOpen = true }, onOpenLoot = { lootOpen = true }, onOpenGe = { geOpen = true },
+                        onOpenOverlay = { overlayOpen = true }, onOpenInfoBox = { infoBoxOpen = true },
+                        onOpenHub = { hubOpen = true },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * §4 increment 3 — the PEEK/EXPAND bottom sheet. Hosts the launcher + panels in a bottom-anchored sheet so the
+ * live game stays visible (and watchable) above it — the desktop slide-out parity win. A light scrim over the
+ * game dims with how open the sheet is and dismisses on tap; the grab handle drags between the two detents (or
+ * below PEEK to dismiss) and a tap toggles them. [atPeek] requests PEEK (a sub-screen is open, game watchable)
+ * or EXPAND (the launcher grid). The ComposeView host is transparent so the SurfaceView game composites through.
+ */
+@Composable
+private fun SheetScaffold(
+    atPeek: Boolean,
+    onDismiss: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val density = LocalDensity.current
+        val fullPx = with(density) { maxHeight.toPx() }
+        val peekPx = fullPx * 0.46f
+        val expandPx = fullPx * 0.92f
+        val sheetPx = remember { Animatable(if (atPeek) peekPx else expandPx) }
+        val scope = rememberCoroutineScope()
+        // Follow the external detent request (launcher<->panel), and re-derive on any detent-size change (e.g.
+        // multi-window/free-form resize, or the very first measure when fullPx may briefly be 0) so the
+        // absolute-px sheet height never goes stale vs its detent.
+        LaunchedEffect(atPeek, peekPx, expandPx) { sheetPx.animateTo(if (atPeek) peekPx else expandPx) }
+        // Scrim darkens with how open the sheet is; the game stays watchable through it. Tap = dismiss.
+        val scrimAlpha = (sheetPx.value / fullPx).coerceIn(0f, 1f) * 0.5f
+        Box(
+            Modifier.fillMaxSize()
+                .background(Color.Black.copy(alpha = scrimAlpha))
+                .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+        )
+        Surface(
+            color = Color(0xFF141414),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(with(density) { sheetPx.value.toDp() })
+                .imePadding()
+                // Consume taps that land on the sheet (but not on a child) so they never fall through to the
+                // dismiss scrim behind it.
+                .pointerInput(Unit) { detectTapGestures { } },
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                // Grab handle: a tap toggles PEEK<->EXPAND; a drag resizes and snaps to the nearest detent (or
+                // below PEEK to dismiss). detectTapGestures + detectVerticalDragGestures compose on one node —
+                // the tap fires on an up without slop, the drag on slop-crossing — so both affordances are live
+                // (a tap alone never triggers the drag gesture's onDragEnd, so the toggle needs its own detector).
+                Box(
+                    Modifier.fillMaxWidth().height(28.dp)
+                        .pointerInput(peekPx, expandPx) {
+                            detectTapGestures {
+                                val target = if (sheetPx.value < (peekPx + expandPx) / 2f) expandPx else peekPx
+                                scope.launch { sheetPx.animateTo(target) }
+                            }
                         }
-                    },
-                    onTogglePin = { p ->
-                        val nowPinned = !p.pinned
-                        rows = rows.map { if (it.className == p.className) it.copy(pinned = nowPinned) else it }
-                            .sortedWith(compareByDescending<PluginRow> { it.pinned }.thenBy { it.name.lowercase() })
-                        // Persist immediately so a deliberate pin survives even a hard kill. setPinned ENQUEUES a
-                        // client-thread write and returns a writeId; flush only AFTER that write is processed (else
-                        // sendConfig races ahead and flushes stale state).
-                        JvmLauncher.onBridge {
-                            val ack = JvmLauncher.setPinned(p.name, nowPinned)
-                            val wid = Regex("\"writeId\":(\\d+)").find(ack)?.groupValues?.get(1)?.toLongOrNull()
-                            var i = 0
-                            while (wid != null && JvmLauncher.processedWriteId() < wid && i++ < 40) Thread.sleep(25)
-                            JvmLauncher.flushConfig()
-                        }
-                        if (nowPinned) scope.launch { listState.animateScrollToItem(0) }
-                    },
-                    onRendererSelect = { mode, checked ->
-                        renderer = if (checked) mode else "cpu"
-                        onRendererSelect(renderer)
-                    },
-                    onOpenConfig = { p -> configFor = p.configGroup!! to p.name },
-                )
-            } else {
-                LauncherGrid(
-                    rows = rows, renderer = renderer, panels = panels, avail = panelAvail,
-                    pending = pending,
-                    onRendererSelect = { mode -> renderer = mode; onRendererSelect(mode) },
-                    onOpenConfig = { p -> configFor = p.configGroup!! to p.name },
-                    onOpenList = { listMode = true },
-                    onOpenPanel = { i, t -> panelOpen = i to t },
-                    onOpenQuest = { questOpen = true }, onOpenWorld = { worldOpen = true },
-                    onOpenXp = { xpOpen = true }, onOpenLoot = { lootOpen = true }, onOpenGe = { geOpen = true },
-                    onOpenOverlay = { overlayOpen = true }, onOpenInfoBox = { infoBoxOpen = true },
-                    onOpenHub = { hubOpen = true },
-                )
+                        .pointerInput(peekPx, expandPx) {
+                            detectVerticalDragGestures(
+                                onVerticalDrag = { change, delta ->
+                                    change.consume()
+                                    scope.launch { sheetPx.snapTo((sheetPx.value - delta).coerceIn(0f, expandPx)) }
+                                },
+                                onDragEnd = {
+                                    val v = sheetPx.value
+                                    when {
+                                        v < peekPx * 0.55f -> onDismiss()
+                                        v < (peekPx + expandPx) / 2f -> scope.launch { sheetPx.animateTo(peekPx) }
+                                        else -> scope.launch { sheetPx.animateTo(expandPx) }
+                                    }
+                                },
+                            )
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(Modifier.size(width = 40.dp, height = 5.dp).clip(RoundedCornerShape(3.dp))
+                        .background(Color(0x66FFFFFF)))
+                }
+                Box(Modifier.weight(1f).fillMaxWidth()) { content() }
             }
         }
     }

@@ -253,7 +253,11 @@ class MainActivity : AppCompatActivity() {
         chatTabOverlay.onHaptic = { vibrateTick() }
         // A4 plugin UI: a full-screen Compose panel (GONE until opened) + a small launcher button. The panel
         // is a data screen (Compose); the live game overlays above stay classic Views (hybrid, §4.2).
-        val pluginPanel = ComposeView(this).apply { visibility = View.GONE }
+        // §4 increment 3: the launcher is a transparent-host PEEK/EXPAND sheet. Material Buttons (the handle +
+        // devBar) carry a default elevation that would float them ABOVE a same-Z ComposeView regardless of
+        // add-order, so give the panel a large elevation to keep its sheet/scrim on top (no shadow — the host
+        // has no opaque outline). GONE until opened.
+        val pluginPanel = ComposeView(this).apply { visibility = View.GONE; elevation = 200f }
         // Compact, low-profile dev affordances (single-glyph): kill the Material 88dp min width + slim padding so
         // the three sit in a small bottom-left cluster instead of three chunky buttons across the HUD.
         fun devButton(glyph: String) = Button(this).apply {
@@ -270,6 +274,8 @@ class MainActivity : AppCompatActivity() {
                 PluginPanel(
                     onClose = {
                         pluginPanel.visibility = View.GONE
+                        // Dispose so the sheet's BackHandler unregisters — else BACK in-game would be swallowed.
+                        pluginPanel.disposeComposition()
                         JvmLauncher.onBridge { JvmLauncher.flushConfig() }
                     },
                     rendererPref = rendererPref(),
@@ -376,27 +382,33 @@ class MainActivity : AppCompatActivity() {
             addView(chatTabOverlay, FrameLayout.LayoutParams(mp, mp)) // enlarged native chat-tab row (top-left)
             addView(keyboardView, FrameLayout.LayoutParams(1, 1))
             addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame + chrome
-            // §4: the launcher handle sits above the game/chrome (tappable) but below the full-screen panel
-            // (covered while a panel is open) and clears the bottom gesture inset.
+            // §4: the launcher handle sits above the game/chrome (tappable) but below the launcher sheet
+            // (covered while it's open) and clears the bottom gesture inset.
             addView(launcherHandle, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
                     bottomMargin = (10 * resources.displayMetrics.density).toInt()
                 })
-            addView(pluginPanel, FrameLayout.LayoutParams(mp, mp))   // Compose plugin list (GONE until opened)
             addView(devBar, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM or Gravity.START).apply {
                     val m = (8 * resources.displayMetrics.density).toInt()
                     leftMargin = m; bottomMargin = m
                 })
+            // §4 increment 3: the launcher is now a transparent-host PEEK/EXPAND bottom sheet (SheetScaffold) —
+            // added LAST so its sheet/scrim draw OVER the handle + devBar (and the game composites through the
+            // transparent top). GONE until opened.
+            addView(pluginPanel, FrameLayout.LayoutParams(mp, mp))
         }
         setContentView(root)
-        // §4 dismiss model (d): Android system BACK closes an open launcher (one level), instead of the prior
-        // no-op / app-exit. Disabled-passthrough when nothing is open so BACK behaves normally.
+        // §4 dismiss model (d): while the launcher sheet is open the in-sheet BackHandler (PluginPanel) handles
+        // BACK — it pops one level (sub-screen -> launcher) or dismisses. This activity callback is the fallback
+        // for when no composition is active: dispose+hide if somehow still visible, else passthrough to normal
+        // BACK so the app backgrounds.
         onBackPressedDispatcher.addCallback(this) {
             if (pluginPanel.visibility == View.VISIBLE) {
                 pluginPanel.visibility = View.GONE
+                pluginPanel.disposeComposition()
                 JvmLauncher.onBridge { JvmLauncher.flushConfig() }
             } else {
                 isEnabled = false
