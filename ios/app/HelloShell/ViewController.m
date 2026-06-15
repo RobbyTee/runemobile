@@ -847,7 +847,9 @@ static const CGFloat kMenuWidth       = 210.0;
 
     self.logoutButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.logoutButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.logoutButton setTitle:@"Log out" forState:UIControlStateNormal];
+    // LOGIN-2: this clears tokens.json + the OAuth cookies and disarms autologin — it does NOT end a live in-game
+    // session (that's the in-game Logout tab). Labelled honestly so it isn't mistaken for the game logout.
+    [self.logoutButton setTitle:@"Forget account" forState:UIControlStateNormal];
     self.logoutButton.titleLabel.font = [UIFont systemFontOfSize:15];
     self.logoutButton.tintColor = [UIColor systemRedColor];
     self.logoutButton.hidden = YES;   // refreshLoginButton reveals it when a session is saved
@@ -898,6 +900,10 @@ static const CGFloat kMenuWidth       = 210.0;
     self.pluginButton.layer.cornerRadius = 8;
     [self.pluginButton addTarget:self action:@selector(onOpenPluginPanel)
                 forControlEvents:UIControlEventTouchUpInside];
+    // DISP-1: long-press ⚙ to pick the interface size (Small/Default/Large).
+    UILongPressGestureRecognizer *gearLp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onInterfaceSizePicker:)];
+    [self.pluginButton addGestureRecognizer:gearLp];
     [self.view addSubview:self.pluginButton];
 
     // §3.3 redesign: a ⊞ "Plugins" FAB that opens the labelled/searchable/favourites grid launcher (a more
@@ -1112,8 +1118,8 @@ static const CGFloat kMenuWidth       = 210.0;
     }];
 
     [self refreshLoginButton];
-    [self appendLine:existed ? @"[login] logged out — tokens.json cleared; autologin disarmed."
-                             : @"[login] already logged out (no tokens.json)."];
+    [self appendLine:existed ? @"[login] account forgotten — tokens.json cleared; autologin disarmed."
+                             : @"[login] no saved account (no tokens.json)."];
 }
 
 // After an on-device login the WKWebView leaves WebKit permanently resident in this process, which stops
@@ -2727,7 +2733,10 @@ static int chatRowCanvasH(void) {
     // so we scale the WHOLE HUD up via renderH to make the minimap bigger. 600 was the prior "official-sized"
     // value; 540 enlarges the HUD ~11% (bigger minimap/chat/orbs). Watch the right column (minimap top + native
     // tab grid bottom) for overlap as this drops (480 collided historically) — tune here.
-    int renderH = 540;
+    // DISP-1: user-selectable "Interface size" — a smaller canvas = a larger HUD. Persisted; applied at launch
+    // (long-press the ⚙ button to change). Default + clamp to the safe 480..600 band proven not to overlap.
+    int renderH = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"interfaceRenderH"];
+    if (renderH < 480 || renderH > 600) renderH = 540;
     int renderW = (int)lround(renderH * aspect);
     self.renderW = renderW;
     self.renderH = renderH;
@@ -3556,6 +3565,15 @@ static CGRect mapRectFromArr(NSArray *a) {
             && gy >= ch.origin.y && gy <= ch.origin.y + ch.size.height) {
         [JVMLauncher postClickPreciseX:gx y:gy button:1];
         [self appendLine:[NSString stringWithFormat:@"[shell] chat-tab tap %d,%d (precise, no ring)", gx, gy]];
+        return;
+    }
+    // CHAT-2: a tap on the OPEN chat MESSAGE area is chat UI (continue dialogue, click a player name / chat link),
+    // not the world behind the transparent chat — so click it PRECISELY (no world-snap, no walk-ring), like the
+    // tab row above. The tab row is already handled+returned above, so this only catches the message area below it.
+    if (self.chatScrollable && self.chatScrollCanvas.size.width > 0
+            && CGRectContainsPoint(self.chatScrollCanvas, CGPointMake(gx, gy))) {
+        [JVMLauncher postClickPreciseX:gx y:gy button:1];
+        [self appendLine:[NSString stringWithFormat:@"[shell] chat-msg tap %d,%d (precise, no ring)", gx, gy]];
         return;
     }
     // Defer the ring one beat: onDisplayTick draws it red (interactable) or yellow (walk) once the engine has
@@ -4625,6 +4643,34 @@ static CGRect mapRectFromArr(NSArray *a) {
     [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:ac animated:YES completion:nil];
     [self appendLine:now ? @"[shell] auto-save screenshots ON" : @"[shell] auto-save screenshots OFF"];
+}
+
+// DISP-1: pick the interface size (the engine canvas height — a smaller canvas scales the whole HUD up). Persisted
+// and applied on the next launch (the canvas size is fixed at startup via HeadlessResize), like the renderer pick.
+- (void)onInterfaceSizePicker:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    if (self.presentedViewController) return;
+    int cur = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"interfaceRenderH"];
+    if (cur < 480 || cur > 600) cur = 540;
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Interface size"
+        message:@"Bigger UI shows the HUD (chat, minimap, inventory) larger but less of the world. Applies on next launch."
+        preferredStyle:UIAlertControllerStyleActionSheet];
+    // label -> renderH (smaller canvas = larger UI)
+    NSArray *opts = @[@[@"Small", @600], @[@"Default", @540], @[@"Large", @480]];
+    for (NSArray *o in opts) {
+        int h = [o[1] intValue];
+        NSString *title = [NSString stringWithFormat:@"%@%@", (h == cur ? @"✓ " : @""), o[0]];
+        [ac addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault
+                                             handler:^(UIAlertAction *a) {
+            // The sheet's message already tells the user it applies on next launch — no second (nested) alert.
+            [[NSUserDefaults standardUserDefaults] setInteger:h forKey:@"interfaceRenderH"];
+            [self appendLine:[NSString stringWithFormat:@"[shell] interface size -> %@ (renderH %d), applies next launch", o[0], h]];
+        }]];
+    }
+    [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    ac.popoverPresentationController.sourceView = self.pluginButton;
+    ac.popoverPresentationController.sourceRect = self.pluginButton.bounds;
+    [self presentViewController:ac animated:YES completion:nil];
 }
 
 // Drain the shared-core outbound-link queue -> in-app SFSafariViewController. Wiki/HiScore/"open page" links land
