@@ -2066,18 +2066,20 @@ static int chatRowCanvasH(void) {
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) { [self hideChatTabs]; return; }
     // LAYOUT GUARD (same as updateChrome): the native HUD only works in the Classic resizable layout (164).
     if ([d[@"topLevelId"] intValue] != 164) { [self hideChatTabs]; return; }
-    // Dialogue open: the engine has released + is rendering the chatbox (with the NPC/options/level-up/etc.
-    // dialogue) at its natural opaque position, like desktop. Hide the native chat veneer so it shows through —
-    // it auto-restores when the dialogue closes (the snapshot's dialogueActive flips false).
+    // Dialogue open: the engine renders its own dialogue (NPC/player/options/level-up/message/make-X) — an
+    // OPAQUE parchment + head — into the relocated chatbox region at the top, exactly like desktop. Hide the
+    // native chat veneer (lines + input) so it doesn't overlap the parchment; it auto-restores when the dialogue
+    // closes (the snapshot's dialogueActive flips false).
     BOOL dlg = [d[@"dialogueActive"] boolValue];
     if (dlg != self.chatDialogueActive) {
         self.chatDialogueActive = dlg;
-        [self appendLine:dlg ? @"[chat] dialogue open -> released veneer, engine chatbox shown"
+        [self appendLine:dlg ? @"[chat] dialogue open -> native chat hidden, engine dialogue (opaque) shown"
                              : @"[chat] dialogue closed -> native chat veneer restored"];
     }
     if (dlg) {
-        // Capture the dialogue's canvas rect so onTap routes taps there precisely (the box is now at the natural
-        // bottom, not the relocated chatScrollCanvas). Disable the stale top chat-tap routing for the duration.
+        // Capture the dialogue's canvas rect so onTap routes taps there precisely (resolving the dialogue's
+        // Continue/option) instead of walking the world behind it. Disable the stale chat-scroll tap routing for
+        // the duration (the dialogue owns the chatbox region while it is open).
         if (d[@"dlgW"]) {
             self.dialogueChatCanvas = CGRectMake([d[@"dlgX"] intValue], [d[@"dlgY"] intValue],
                                                  [d[@"dlgW"] intValue], [d[@"dlgH"] intValue]);

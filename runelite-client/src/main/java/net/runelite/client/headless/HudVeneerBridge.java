@@ -175,8 +175,11 @@ public final class HudVeneerBridge
 		return ENABLED;
 	}
 
-	/** Native: move the engine chatbox to {@code (x,y)} (top-left of the screen) and optionally flip it to OSRS
-	 *  transparent-chat mode. {@code x < 0} stops relocating. */
+	/** Native: move the engine chatbox to {@code (x,y)} (top-left of the screen). {@code x < 0} stops relocating.
+	 *  NOTE: the {@code transparent} flag is currently IGNORED — the relocated chatbox is always kept OPAQUE (its
+	 *  background sprites hidden, so the brown box never shows) so that engine dialogues render as the solid
+	 *  desktop parchment; the native veneer supplies the translucent chat look over the scene. The flag is retained
+	 *  in the signature for API stability. */
 	public static void relocateChat(int x, int y, boolean transparent)
 	{
 		chatX = x;
@@ -356,17 +359,19 @@ public final class HudVeneerBridge
 			// Same gates as the chat block in tick(): only while the chat veneer is active and the world map
 			// doesn't own the screen. (A dialogue uses the normal relocate path and stays at the top, so this
 			// re-assert applies during dialogues too.)
+			// Pin the chatbox opaque as the final word before raster too (see tick/keepChatboxOpaque): a dialogue
+			// that opens this frame must read CHATBOX_TRANSPARENCY==0 when it builds, or it is born see-through.
+			keepChatboxOpaque(c);
 			if (chatX >= 0 && !isWorldMapOpen(c))
 			{
 				setEngineChatTabsHidden(c, chatTabRowH > 0);
-				// Keep the chatbox OPAQUE while a dialogue is open (don't re-hide the background here) so the
-				// engine's dialogue parchment renders solid — matching desktop.
-				if (transparentChat && !isDialogueOpen(c))
-				{
-					hide(c, InterfaceID.Chatbox.CHAT_BACKGROUND);
-					hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
-					hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
-				}
+				// The engine's own chatbox must NEVER show — hide the chat background sprites every frame as the
+				// final word before raster. CHAT_BACKGROUND is a chatbox-group (162) child; the dialogue parchments
+				// are separate top-level interfaces (ChatLeft/ChatRight/ChatBoth/Messagebox/...), so this leaves the
+				// dialogue untouched.
+				hide(c, InterfaceID.Chatbox.CHAT_BACKGROUND);
+				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
+				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
 			}
 		}
 		catch (RuntimeException e)
@@ -432,6 +437,14 @@ public final class HudVeneerBridge
 			final boolean dlgOpen = isDialogueOpen(c);
 			dialogueOpen = dlgOpen;   // published in buildChatSnapshot so the native side hides its chat veneer
 
+			// Keep the engine chatbox OPAQUE from the FIRST logged-in frame, regardless of whether/when the native
+			// shell has relocated the chat yet. A dialogue's parchment opacity is baked when the dialogue is BUILT
+			// (it reads CHATBOX_TRANSPARENCY), and setVarbit does NOT re-raster an already-built dialogue — so the
+			// varbit must already be 0 before any dialogue can open. Pinning it here (before the chat/map gates,
+			// guarded so there is no script churn) guarantees that even for the session's very first dialogue. The
+			// native veneer renders chat over the scene, so an opaque engine chatbox is invisible in normal play.
+			keepChatboxOpaque(c);
+
 			// Chat box: keep the engine chatbox FULLY ALIVE at all times (never hidden). To "collapse" (the user
 			// tapped the active tab) we shove the live widget far off-screen; reopening just moves it back — instant
 			// and full, with NO interface teardown, tab-selection loss, or rebuild. (Hiding the container tore the
@@ -492,38 +505,17 @@ public final class HudVeneerBridge
 				// height, then pin CHATAREA to ABSOLUTE width=rowW and height=(containerH - rowH - margin) at
 				// container-relative (0, rowH). The display/scroll children are revalidated so they widen too.
 				sizeChatArea(c, chatId, rowW, rowH);
-				// While a DIALOGUE is open, force the chatbox OPAQUE so the engine draws the dialogue exactly like
-				// desktop — the parchment background, the NPC/player head, the centred name + text + blue "Click
-				// here to continue". Transparent mode would render it see-through over the scene (the messy
-				// overlap). The native chat lines are hidden during a dialogue, so the engine dialogue owns the box.
-				if (transparentChat && !dlgOpen)
-				{
-					// Deterministic transparency: hide the brown chatbox background sprites directly (the
-					// CHATBOX_TRANSPARENCY varbit alone doesn't re-render an already-built chat). Re-applied each
-					// frame. The text + tab buttons stay; only the opaque box behind them goes.
-					hide(c, InterfaceID.Chatbox.CHAT_BACKGROUND);
-					hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
-					hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
-					if (c.getVarbitValue(VarbitID.CHATBOX_TRANSPARENCY) != 1)
-					{
-						c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, 1);
-					}
-				}
-				else
-				{
-					// OPAQUE mode (debug aid: makes the chat box dimensions visible). Keep the brown background
-					// shown and widen it to the native row width so the visible box matches the message area.
-					if (c.getVarbitValue(VarbitID.CHATBOX_TRANSPARENCY) != 0)
-					{
-						c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, 0);
-					}
-					final Widget bg = c.getWidget(InterfaceID.Chatbox.CHAT_BACKGROUND);
-					if (bg != null && bg.isHidden())
-					{
-						bg.setHidden(false);
-					}
-					forceWidth(c, InterfaceID.Chatbox.CHAT_BACKGROUND, rowW, 0);
-				}
+				// The engine's own chatbox must NEVER show — the native veneer renders the chat lines, and a
+				// dialogue (NPC/player/options/level-up/message/make-X) draws its OWN parchment + head, which we
+				// want to look exactly like desktop. Hide the chat background sprites (the brown box) every frame.
+				// CHAT_BACKGROUND is a child of the Chatbox group (162); the dialogue parchments are SEPARATE
+				// top-level interfaces — ChatLeft 0x00e7 (231), ChatRight 0x00d9 (217), ChatBoth 0x003c (60),
+				// Messagebox 0x00e5 (229), etc. — attached to the toplevel (164), NOT nested under the chatbox, so
+				// hiding a chatbox-group child cannot cascade to a dialogue. (Opacity is pinned once per frame by
+				// keepChatboxOpaque above, before any dialogue builds.)
+				hide(c, InterfaceID.Chatbox.CHAT_BACKGROUND);
+				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
+				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
 				buildChatSnapshot(c);
 				buildChatLines(c);
 				// Apply any finger-scroll requested from native (client thread — runScript is legal here).
@@ -1691,6 +1683,24 @@ public final class HudVeneerBridge
 		}
 	}
 
+	/** Force the chatbox to OPAQUE ({@code CHATBOX_TRANSPARENCY == 0}). Guarded so it only writes when the value
+	 *  actually differs (no per-frame script churn / varbit-listener spam). Keeping it 0 at all times is what makes
+	 *  every dialogue render as the desktop parchment + head: the dialogue bakes its transparency when it is BUILT,
+	 *  and {@code setVarbit} does not re-raster an already-built dialogue, so the varbit must already be 0 by then. */
+	private static void keepChatboxOpaque(Client c)
+	{
+		try
+		{
+			if (c.getVarbitValue(VarbitID.CHATBOX_TRANSPARENCY) != 0)
+			{
+				c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, 0);
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
 	/** True if {@code id}'s interface is LOADED — i.e. the dialogue is open. This is the standard RuneLite
 	 *  dialogue-open check (the in-tree dialogue plugins use a plain {@code getWidget(...) != null}); a dialogue
 	 *  group is only resolvable while its dialogue is up. NOTE: deliberately NOT gated on {@code !isHidden()} — a
@@ -1714,6 +1724,7 @@ public final class HudVeneerBridge
 	{
 		return widgetShown(c, InterfaceID.ChatLeft.TEXT)        // NPC dialogue
 			|| widgetShown(c, InterfaceID.ChatRight.TEXT)       // player dialogue
+			|| widgetShown(c, InterfaceID.ChatBoth.TEXT)        // combined NPC+player dialogue
 			|| widgetShown(c, InterfaceID.Chatmenu.OPTIONS)     // "Select an Option"
 			|| widgetShown(c, InterfaceID.Messagebox.TEXT)      // "click here to continue"
 			|| widgetShown(c, InterfaceID.LevelupDisplay.CONTINUE) // level-up
@@ -1731,6 +1742,7 @@ public final class HudVeneerBridge
 		final int[][] dlg = {
 			{InterfaceID.ChatLeft.TEXT, InterfaceID.ChatLeft.UNIVERSE},
 			{InterfaceID.ChatRight.TEXT, InterfaceID.ChatRight.UNIVERSE},
+			{InterfaceID.ChatBoth.TEXT, InterfaceID.ChatBoth.UNIVERSE},
 			{InterfaceID.Chatmenu.OPTIONS, InterfaceID.Chatmenu.UNIVERSE},
 			{InterfaceID.Messagebox.TEXT, InterfaceID.Messagebox.UNIVERSE},
 			{InterfaceID.LevelupDisplay.CONTINUE, InterfaceID.LevelupDisplay.UNIVERSE},
