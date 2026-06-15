@@ -1,11 +1,15 @@
 #import "OverlayEditView.h"
 #import "JVMLauncher.h"
 
+// The native chatbox handle's reserved key (it's not a RuneLite overlay, so it never appears in overlaysJson).
+static NSString * const kChatHandleKey = @"__chat__";
+
 // One draggable overlay handle: a translucent labelled box pinned over the overlay's on-screen rect. Drag it to
 // reposition (free location); tap it for the snap-corner / reset menu.
 @interface OverlayHandle : UIView
 @property (nonatomic, copy) NSString *overlayName;
 @property (nonatomic, assign) BOOL snappable;
+@property (nonatomic, assign) BOOL isChat;     // the native chatbox handle (moves via the chat host, not OverlayBridge)
 @property (nonatomic, strong) UILabel *label;
 @end
 
@@ -78,8 +82,10 @@
             __strong typeof(weakSelf) s = weakSelf;
             if (!s) { [t invalidate]; return; }
             [s rebuildHandles];
+            [s ensureChatHandle];
         }];
         [self rebuildHandles];
+        [self ensureChatHandle];
     }
     return self;
 }
@@ -166,6 +172,10 @@
         NSString *name = [o[@"name"] description];
         NSArray *b = o[@"bounds"];
         if (name.length == 0 || ![b isKindOfClass:[NSArray class]] || b.count < 4) continue;
+        // Skip the engine's CHATBOX widget overlay (RESIZABLE/FIXED_VIEWPORT_*_CHATBOX_PARENT): the chat is
+        // native-rendered here, so use the "Chat" handle instead of this duplicate/non-functional box. Other widget
+        // overlays (the minimap) + plugin overlays (XP tracker etc.) keep their handles.
+        if ([name containsString:@"CHATBOX"]) continue;
         CGRect r = CGRectMake([b[0] doubleValue] * s, [b[1] doubleValue] * s,
                               [b[2] doubleValue] * s, [b[3] doubleValue] * s);
         if (r.size.width < 8 || r.size.height < 8) continue;   // skip degenerate/unrendered overlays
@@ -191,11 +201,42 @@
         }
         h.snappable = [o[@"snappable"] boolValue];
     }
-    // Drop handles for overlays that vanished.
+    // Drop handles for overlays that vanished (never the chat handle — it isn't in overlaysJson).
     for (NSString *name in self.handles.allKeys) {
+        if ([name isEqualToString:kChatHandleKey]) continue;
         if (![seen containsObject:name]) {
             [self.handles[name] removeFromSuperview];
             [self.handles removeObjectForKey:name];
+        }
+    }
+}
+
+// Pin a "Chat" handle over the native chatbox so it's repositioned the same way as the overlays. The chat isn't a
+// RuneLite overlay, so its rect + moves come from the chat host (the ViewController), not OverlayBridge.
+- (void)ensureChatHandle {
+    if (self.dragging) return;
+    CGRect cr = self.chatHost ? [self.chatHost overlayEditChatCanvasRect] : CGRectNull;
+    OverlayHandle *h = self.handles[kChatHandleKey];
+    if (CGRectIsNull(cr) || cr.size.width <= 0 || cr.size.height <= 0) {
+        if (h) { [h removeFromSuperview]; [self.handles removeObjectForKey:kChatHandleKey]; }
+        return;
+    }
+    CGFloat s = [self scale];
+    CGRect r = CGRectMake(cr.origin.x * s, cr.origin.y * s, cr.size.width * s, cr.size.height * s);
+    if (!h) {
+        h = [[OverlayHandle alloc] initWithFrame:r];
+        h.overlayName = kChatHandleKey;
+        h.isChat = YES;
+        h.label.text = @"Chat";
+        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(onPan:)];
+        [h addGestureRecognizer:pan];   // no snap/reset menu for chat
+        [self.handleLayer addSubview:h];
+        self.handles[kChatHandleKey] = h;
+    } else {
+        NSNumber *until = self.suppressRepinUntil[kChatHandleKey];
+        if (!until || CFAbsoluteTimeGetCurrent() >= until.doubleValue) {
+            h.frame = r;
+            if (until) [self.suppressRepinUntil removeObjectForKey:kChatHandleKey];
         }
     }
 }
@@ -225,9 +266,13 @@
         CGPoint t = [g translationInView:self.handleLayer];
         h.center = CGPointMake(h.center.x + t.x, h.center.y + t.y);
         [g setTranslation:CGPointZero inView:self.handleLayer];
+        if (h.isChat) {
+            // Move the live (under-scrim) chat with the handle so it tracks the finger.
+            CGFloat s = [self scale];
+            [self.chatHost overlayEditMoveChatToCanvasX:(int)lround(h.frame.origin.x / s)
+                                                      y:(int)lround(h.frame.origin.y / s)];
+        }
     } else if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
-        // Persist the free location: the overlay's preferred location is its top-left, in canvas px. Clamp into
-        // the canvas so the persisted value matches the engine's own clamp (no drift on the next re-pin).
         CGFloat s = [self scale];
         int wpx = (int)lround(h.frame.size.width / s);
         int hpx = (int)lround(h.frame.size.height / s);
@@ -237,7 +282,13 @@
         cy = MAX(0, MIN(cy, self.canvasH - hpx));
         // Reflect the clamp on screen, then hold it against the lagging snapshot.
         h.frame = CGRectMake(cx * s, cy * s, h.frame.size.width, h.frame.size.height);
-        [JVMLauncher overlaySetLocation:h.overlayName x:cx y:cy];
+        if (h.isChat) {
+            [self.chatHost overlayEditMoveChatToCanvasX:cx y:cy];
+            [self.chatHost overlayEditCommitChatMove];
+        } else {
+            // Persist the overlay's free location (top-left, canvas px) through the bridge.
+            [JVMLauncher overlaySetLocation:h.overlayName x:cx y:cy];
+        }
         [self holdHandle:h.overlayName];
         self.dragging = nil;
     }

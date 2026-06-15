@@ -22,7 +22,7 @@
 #import <unistd.h>
 #import <fcntl.h>
 
-@interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate, UNUserNotificationCenterDelegate, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate, UISearchBarDelegate>
+@interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate, UNUserNotificationCenterDelegate, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate, UISearchBarDelegate, OverlayEditChatHost>
 {
     // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
     // desktop stone. A C array, so it lives as an ivar rather than a property.
@@ -223,6 +223,10 @@
 @property (nonatomic, strong) UIButton *chatPill;             // the collapsed active-channel button
 @property (nonatomic, strong) UITextView *chatMessagesView;  // native-rendered chat MESSAGE lines (engine can't raster relocated chat)
 @property (nonatomic, assign) int chatLinesSeq;              // last rendered getChatLines seq (skip re-parse when unchanged)
+@property (nonatomic, assign) int chatBaseX;                 // safe-area-anchored chat origin (canvas px), before the user offset
+@property (nonatomic, assign) int chatBaseY;
+@property (nonatomic, assign) int chatUserDX;               // persisted chat position offset from the base anchor (canvas px)
+@property (nonatomic, assign) int chatUserDY;
 @property (nonatomic, strong) UILongPressGestureRecognizer *chatPillLP; // the fan/drag driver
 @property (nonatomic, strong) UILabel *chatFilterHint;        // the ▾ "pull down to filter" reveal under a chip
 @property (nonatomic, assign) BOOL chatFanned;                // chips are fanned out (a gesture is in flight)
@@ -1214,15 +1218,18 @@ static const CGFloat kMenuWidth       = 210.0;
 // then float draggable handles over every movable overlay. Done writes the new positions back via OverlayBridge.
 - (void)onOpenOverlayEdit {
     if (self.renderW <= 0) return;                 // the game canvas isn't up yet
+    // Open edit-mode even if the overlay manager hasn't resolved: the native chatbox is always movable here, and
+    // the RuneLite overlay handles populate once available. (Previously this returned early, leaving the plugins
+    // panel up — which read as "the Overlays button does nothing".)
     if (![JVMLauncher overlayAvailable]) {
-        [self appendLine:@"[overlay] edit-mode not available yet (overlay manager unresolved)"];
-        return;
+        [self appendLine:@"[overlay] edit-mode: overlay manager unresolved — chat-move only for now"];
     }
     [self onClosePluginPanel];                     // hide the card so the live overlays show through
     if (self.overlayEdit) { [self.overlayEdit dismiss]; self.overlayEdit = nil; }
     OverlayEditView *ov = [[OverlayEditView alloc] initWithFrame:self.view.bounds
                                                          canvasW:self.renderW canvasH:self.renderH presenter:self];
     ov.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    ov.chatHost = self;                            // show the chatbox as a draggable "Chat" handle
     __weak typeof(self) ws = self;
     ov.onClose = ^{ ws.overlayEdit = nil; };   // clear the strong ref on teardown (no dangling removed view)
     [self.view addSubview:ov];
@@ -1835,6 +1842,10 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
     [self.screen insertSubview:msgs belowSubview:pill];
     self.chatMessagesView = msgs;
     self.chatLinesSeq = -1;
+
+    // Persisted chat position offset (set in overlay edit-mode; applied in updateHudLayout).
+    self.chatUserDX = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"chatUserDX"];
+    self.chatUserDY = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"chatUserDY"];
 
     // The "▾ pull down to filter" reveal that slides under the hovered chip.
     UILabel *hint = [[UILabel alloc] initWithFrame:CGRectZero];
@@ -2817,13 +2828,14 @@ static int chatRowCanvasH(void) {
     // between the top-left chat and the top-right minimap). 0/100 = natural size.
     const int kMinimapScalePct = 100;   // 100 = natural (the engine pins the orbs, so a bigger globe can't be wrapped cleanly)
 
-    int chatX = leftC + m;
-    int chatY = topC + m;
+    self.chatBaseX = leftC + m;
+    self.chatBaseY = topC + m;
     int mmX = self.renderW - MM_W - rightC - m;
     int mmY = topC + m;
 
     // transparent:YES = OSRS-mobile translucent chat (text over the scene, no opaque box) — the official look.
-    [JVMLauncher relocateEngineChatX:chatX y:chatY transparent:YES];
+    // Apply the persisted user drag offset to the base anchor (relocates the engine chat + sets the hit/scroll rects).
+    [self applyChatRelocate];
     // W3 A3: the native veneer recreates the tab row BIGGER (engine push-down applied per-tick in updateChatTabs).
     [JVMLauncher relocateEngineMinimapX:mmX y:mmY];
     [JVMLauncher setEngineMinimapScale:kMinimapScalePct];   // enlarge the globe + reposition its chrome to hug it
@@ -2834,11 +2846,53 @@ static int chatRowCanvasH(void) {
     [JVMLauncher setEngineOverlaySafeInsetsL:leftC t:topC r:rightC b:botC];
     // The whole enlarged tab row is UI: a stray tap in it (between native buttons) should be a precise click, not
     // a walk. The native buttons own their taps; this rect just keeps any leak from drawing a walk ring.
+    [self appendLine:[NSString stringWithFormat:@"[hud] relocate chat->%d,%d(+%d,%d) minimap->%d,%d (insets L%d T%d R%d k%.2f)",
+                      self.chatBaseX, self.chatBaseY, self.chatUserDX, self.chatUserDY, mmX, mmY, leftC, topC, rightC, k]];
+}
+
+// Relocate the chat to (base anchor + persisted user offset), clamped on-screen, and sync the hit/scroll rects.
+// Called from updateHudLayout (initial) and live while moving the chat in overlay edit-mode. The engine chat is
+// invisible (native render), so this drives the snapshot chatX/chatY that positions the native pill + messages.
+- (void)applyChatRelocate {
+    int chatX = [self clampChatX:self.chatBaseX + self.chatUserDX];
+    int chatY = [self clampChatY:self.chatBaseY + self.chatUserDY];
+    [JVMLauncher relocateEngineChatX:chatX y:chatY transparent:YES];
     self.chatHitCanvas = CGRectMake(chatX, chatY, kChatW, chatRowCanvasH());
-    // The whole chat box (tab row + message area), for finger-scroll capture.
     self.chatScrollCanvas = CGRectMake(chatX, chatY, kChatW, chatRowCanvasH() + kChatContentCanvasH);
-    [self appendLine:[NSString stringWithFormat:@"[hud] relocate chat->%d,%d minimap->%d,%d (insets L%d T%d R%d k%.2f)",
-                      chatX, chatY, mmX, mmY, leftC, topC, rightC, k]];
+}
+
+- (int)clampChatX:(int)x {
+    int maxX = self.renderW - kChatW;
+    if (maxX < 0) maxX = 0;
+    return x < 0 ? 0 : (x > maxX ? maxX : x);
+}
+
+- (int)clampChatY:(int)y {
+    int boxH = chatRowCanvasH() + kChatContentCanvasH;
+    int maxY = self.renderH - boxH;
+    if (maxY < 0) maxY = 0;
+    return y < 0 ? 0 : (y > maxY ? maxY : y);
+}
+
+// ---- OverlayEditChatHost: the chatbox is repositioned in overlay edit-mode (a draggable "Chat" handle) ----
+
+- (CGRect)overlayEditChatCanvasRect {
+    if (self.renderW <= 0 || self.chatBaseX <= 0) return CGRectNull;   // not placed yet
+    int chatX = [self clampChatX:self.chatBaseX + self.chatUserDX];
+    int chatY = [self clampChatY:self.chatBaseY + self.chatUserDY];
+    return CGRectMake(chatX, chatY, kChatW, chatRowCanvasH() + kChatContentCanvasH);
+}
+
+- (void)overlayEditMoveChatToCanvasX:(int)x y:(int)y {
+    self.chatUserDX = [self clampChatX:x] - self.chatBaseX;
+    self.chatUserDY = [self clampChatY:y] - self.chatBaseY;
+    [self applyChatRelocate];   // pill + messages follow via the snapshot next tick
+}
+
+- (void)overlayEditCommitChatMove {
+    [[NSUserDefaults standardUserDefaults] setInteger:self.chatUserDX forKey:@"chatUserDX"];
+    [[NSUserDefaults standardUserDefaults] setInteger:self.chatUserDY forKey:@"chatUserDY"];
+    [self appendLine:[NSString stringWithFormat:@"[chat] moved -> offset %d,%d", self.chatUserDX, self.chatUserDY]];
 }
 
 // World map (touch): poll the bridge map snapshot (~10 Hz). Edge-triggered chrome hide/restore: the engine
