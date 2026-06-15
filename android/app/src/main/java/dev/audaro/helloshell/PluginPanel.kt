@@ -92,6 +92,11 @@ fun PluginPanel(
     onClose: () -> Unit,
     rendererPref: String = "cpu",
     onRendererSelect: (String) -> Unit = {},
+    // §4 cutover: the scattered devBar toolbar actions now have a home as fixed launcher tiles (audit #9).
+    onScreenshot: () -> Unit = {},
+    onAccount: () -> Unit = {},
+    onLogout: () -> Unit = {},
+    onDiscord: () -> Unit = {},
 ) {
     var rows by remember { mutableStateOf<List<PluginRow>>(emptyList()) }
     var renderer by remember { mutableStateOf(rendererPref) }
@@ -105,7 +110,6 @@ fun PluginPanel(
     var panels by remember { mutableStateOf<List<PanelEntry>>(emptyList()) }
     var panelAvail by remember { mutableStateOf(BooleanArray(7)) }   // [quest,world,xp,loot,ge,overlay,infobox]
     var configFor by remember { mutableStateOf<Pair<String, String>?>(null) }   // (configGroup, pluginName)
-    var panelListOpen by remember { mutableStateOf(false) }
     var panelOpen by remember { mutableStateOf<Pair<Int, String>?>(null) }       // (panelIndex, tooltip)
     var questOpen by remember { mutableStateOf(false) }                          // A5 Tier-2 native screens
     var worldOpen by remember { mutableStateOf(false) }
@@ -130,7 +134,7 @@ fun PluginPanel(
 
     LaunchedEffect(Unit) {
         reload()
-        // Panel tiles for the grid: the same data PanelList consumes (listPanels + curated-screen availability).
+        // Panel tiles for the grid: the same data the old PanelList consumed (listPanels + curated availability).
         val pjson = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.listPanels() }.get() }
         panels = parsePanels(pjson)
         panelAvail = withContext(Dispatchers.IO) {
@@ -148,7 +152,7 @@ fun PluginPanel(
     // the live game stays visible above it (the desktop slide-out parity win). A sub-screen open => PEEK (game
     // watchable); the launcher landing => EXPAND.
     val subActive = questOpen || worldOpen || xpOpen || lootOpen || geOpen || overlayOpen || infoBoxOpen ||
-        hubOpen || panelListOpen || panelOpen != null || configFor != null
+        hubOpen || panelOpen != null || configFor != null
 
     // §4 dismiss model (d): back pops ONE level — close the active sub-screen back to the launcher, else dismiss
     // the whole sheet. Honoured here so the Compose back-stack works (the MainActivity dispatcher disposes this
@@ -166,7 +170,6 @@ fun PluginPanel(
             infoBoxOpen -> infoBoxOpen = false
             hubOpen -> { hubOpen = false; scope.launch { reload() } }
             panelOpen != null -> panelOpen = null
-            panelListOpen -> panelListOpen = false
             configFor != null -> configFor = null
             else -> return false
         }
@@ -188,13 +191,6 @@ fun PluginPanel(
                 val po = panelOpen!!
                 PanelView(po.first, po.second, onBack = { panelOpen = null })
             }
-            panelListOpen -> PanelList(
-                onOpen = { i, t -> panelOpen = i to t },
-                onOpenQuest = { questOpen = true }, onOpenWorld = { worldOpen = true },
-                onOpenXp = { xpOpen = true }, onOpenLoot = { lootOpen = true }, onOpenGe = { geOpen = true },
-                onOpenOverlay = { overlayOpen = true }, onOpenInfoBox = { infoBoxOpen = true },
-                onBack = { panelListOpen = false },
-            )
             configFor != null -> {
                 val cf = configFor!!
                 ConfigScreen(cf.first, cf.second, onBack = { configFor = null })
@@ -273,6 +269,7 @@ fun PluginPanel(
                         onOpenXp = { xpOpen = true }, onOpenLoot = { lootOpen = true }, onOpenGe = { geOpen = true },
                         onOpenOverlay = { overlayOpen = true }, onOpenInfoBox = { infoBoxOpen = true },
                         onOpenHub = { hubOpen = true },
+                        onScreenshot = onScreenshot, onAccount = onAccount, onLogout = onLogout, onDiscord = onDiscord,
                     )
                 }
             }
@@ -386,8 +383,12 @@ private fun LauncherGrid(
     onOpenOverlay: () -> Unit,
     onOpenInfoBox: () -> Unit,
     onOpenHub: () -> Unit,
+    onScreenshot: () -> Unit,
+    onAccount: () -> Unit,
+    onLogout: () -> Unit,
+    onDiscord: () -> Unit,
 ) {
-    // Native curated screens, gated on the curated bridge's availability (same gating PanelList uses). Each
+    // Native curated screens, gated on the curated bridge's availability (same gating PanelList used). Each
     // borrows the matching engine panel's icon when one exists so the tile isn't a bare glyph.
     fun iconFor(tooltip: String): Bitmap? = panels.firstOrNull { it.tooltip == tooltip }?.icon
     val nativeTiles = buildList {
@@ -442,6 +443,13 @@ private fun LauncherGrid(
         TileGrid(listOf(
             TileSpec("All plugins", glyph = "≡", onClick = onOpenList),
             TileSpec("Plugin Hub", glyph = "⬇", onClick = onOpenHub),
+            // §4 cutover: the toolbar-only nav buttons that had no Android home (audit §4.3) — fixed native
+            // tiles wired to existing handlers. Discord becomes reachable for the first time.
+            TileSpec("Screenshot", glyph = "▣", onClick = onScreenshot),
+            TileSpec("Account", glyph = "⎆", onClick = onAccount),
+            // ✕ (the device font lacks the ⏻ power glyph -> tofu); reads as "exit session".
+            TileSpec("Log out", glyph = "✕", onClick = onLogout),
+            TileSpec("Discord", glyph = "✦", onClick = onDiscord),
         ))
         Spacer(Modifier.heightIn(min = 12.dp))
     }

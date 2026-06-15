@@ -280,6 +280,13 @@ class MainActivity : AppCompatActivity() {
                     },
                     rendererPref = rendererPref(),
                     onRendererSelect = { setRendererPref(it) },
+                    // §4 cutover: the former devBar toolbar glyphs, now fixed launcher tiles (audit §4.3/#9).
+                    onScreenshot = { saveScreenshot() },
+                    onAccount = { startActivity(Intent(this@MainActivity, LoginActivity::class.java)) },
+                    onLogout = { confirmLogout() },
+                    // RuneLite's Discord invite (runelite.properties runelite.discord.invite) — Discord had no
+                    // Android home before; publishLink routes it through the shared link path to the browser.
+                    onDiscord = { JvmLauncher.onBridge { JvmLauncher.publishLink("https://discord.gg/ArdAhnN") } },
                 )
             }
             pluginPanel.visibility = View.VISIBLE
@@ -310,14 +317,9 @@ class MainActivity : AppCompatActivity() {
             chromeOverlay.setShown(!chromeOverlay.railsShown)
             chromeButton.text = if (chromeOverlay.railsShown) "▦" else "▤"
         }
-        // A3: on-device Jagex login / switch account — runs the WebView OAuth, writes tokens.json, restarts.
-        val signInButton = devButton("⎆")
-        signInButton.setOnClickListener { startActivity(Intent(this, LoginActivity::class.java)) }
-        // AP-0: persistent Log out — forget the Jagex session entirely (tokens + web cookies) and restart.
-        // JX_* is snapshotted at JNI_CreateJavaVM, so only a clean process restart truly drops the session;
-        // with no tokens the login-first boot gate then lands on the Jagex login. Mirrors the iOS onLogout.
-        val logoutButton = devButton("⏻")
-        logoutButton.setOnClickListener { confirmLogout() }
+        // §4 cutover: sign-in/switch-account (⎆), Log out (⏻) and screenshot (📷) moved out of the devBar into
+        // fixed launcher tiles (audit §4.3/#9) — wired in openLauncher to startActivity/confirmLogout/
+        // saveScreenshot. Only the in-play input modifiers (⌨ / ⇧) stay on the HUD cluster.
         // AP-0: manual ⌨ keyboard summon — composing public chat / PM has no engine text field for the
         // auto-raise poll to react to, so this forces the soft keyboard up (and keeps the poll from
         // instantly dismissing it). Tapping again returns to pure auto-raise. Mirrors the iOS ⌨ toggle.
@@ -357,19 +359,13 @@ class MainActivity : AppCompatActivity() {
         // installs can't easily push an rlhd.mode marker, but anyone can tap a button).
         val hdButton = devButton("HD")
         hdButton.setOnClickListener { restartIntoRlhd() }
-        // AP-2b Finding 5: capture the composited frame to the gallery. The desktop ScreenshotPlugin is hotkey-
-        // driven and writes to an unreachable desktop dir; on touch we pull the same CPU buffer (JavaBridge.
-        // getFramePixels) and save a PNG to MediaStore (Pictures/RuneLite) — the system gallery picks it up.
-        val shotButton = devButton("📷")   // 📷
-        shotButton.setOnClickListener { saveScreenshot() }
         // Group the dev affordances into one discreet cluster pinned to the BOTTOM-LEFT — clear of the relocated
         // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
         val devBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            // Genuine user controls ship in every build: soft keyboard, sticky-shift, sign-in/out, screenshot.
-            // (The settings entry moved out of this cluster to the bottom-center launcher handle — §4 redesign.)
+            // In-play input modifiers stay on the HUD: soft keyboard + sticky-shift. (Account/Log out/Screenshot
+            // moved to the launcher as fixed tiles — §4 cutover; the settings entry is the bottom-center handle.)
             addView(kbButton); addView(shiftButton)
-            addView(signInButton); addView(logoutButton); addView(shotButton)
             // AP-0: developer-only tooling (chrome A/B raw-stones toggle + GPU/117HD process-restart footguns) is
             // hidden in release — renderer selection lives in the native plugin panel (renderer-as-plugins).
             if (BuildConfig.DEBUG) { addView(chromeButton); addView(gpuButton); addView(hdButton) }
