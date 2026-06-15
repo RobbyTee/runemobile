@@ -156,6 +156,14 @@ object JvmLauncher {
     external fun nativePanelFrameSeq(): Int
     external fun nativePanelPixels(): IntArray?
     external fun nativePanelClick(x: Int, y: Int): String
+    // SC-4 panel-text input (best-effort; no-op if the staged jar predates them).
+    external fun nativeIsPanelTextActive(): Boolean        // a tap focused an editable field -> raise keyboard
+    external fun nativeGetPanelText(): String              // current text of the focused field (pre-fill)
+    external fun nativePanelText(text: String): String     // mirror whole text into the focused field (live filter)
+    external fun nativePanelKey(vk: Int): String           // a single key (VK_ENTER submit / VK_BACK_SPACE)
+    external fun nativePanelLongPress(x: Int, y: Int): String   // BUTTON3 into the panel
+    external fun nativePanelWheel(x: Int, y: Int, rotation: Int): String   // inner scroll
+    external fun nativePanelMove(x: Int, y: Int): String   // hover -> tooltips/highlights
 
     // A5 Tier-2 native reflow: curated native screens for Quest Helper + World Switcher (QuestHelperBridge /
     // WorldSwitcherBridge). isAvailable() gates native-vs-Tier-1: Quest is false unless the hub plugin is
@@ -308,6 +316,13 @@ object JvmLauncher {
     fun panelFrameSeq() = nativePanelFrameSeq()
     fun panelPixels(): IntArray? = nativePanelPixels()
     fun panelClick(x: Int, y: Int) = nativePanelClick(x, y)
+    fun isPanelTextActive() = nativeIsPanelTextActive()
+    fun getPanelText() = nativeGetPanelText()
+    fun panelText(text: String) = nativePanelText(text)
+    fun panelKey(vk: Int) = nativePanelKey(vk)
+    fun panelLongPress(x: Int, y: Int) = nativePanelLongPress(x, y)
+    fun panelWheel(x: Int, y: Int, rotation: Int) = nativePanelWheel(x, y, rotation)
+    fun panelMove(x: Int, y: Int) = nativePanelMove(x, y)
 
     fun questAvailable() = nativeQuestAvailable()
     fun questSetUiOpen(open: Boolean) = nativeQuestSetUiOpen(open)

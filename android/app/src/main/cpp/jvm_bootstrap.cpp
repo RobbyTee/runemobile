@@ -87,6 +87,10 @@ static jmethodID g_midSetPinned = nullptr;
 static jmethodID g_midListPanels = nullptr, g_midOpenPanel = nullptr, g_midClosePanel = nullptr,
                  g_midPanelW = nullptr, g_midPanelH = nullptr, g_midPanelSeq = nullptr,
                  g_midPanelPixels = nullptr, g_midPanelClick = nullptr;
+// SC-4 panel-text input (best-effort; a null disables only that interaction, not the whole panel surface).
+static jmethodID g_midIsPanelTextActive = nullptr, g_midGetPanelText = nullptr, g_midPanelText = nullptr,
+                 g_midPanelKey = nullptr, g_midPanelLongPress = nullptr, g_midPanelWheel = nullptr,
+                 g_midPanelMove = nullptr;
 // Publication latches for the MobileUiBridge facade. The method-id globals above are plain (non-atomic),
 // written once on the VM boot thread (publishBridge); the A4/A5 externs run on the SEPARATE rl-bridge thread
 // and a UI tap can submit a bridge call before startJvm even returns. These release/acquire flags give the
@@ -524,6 +528,15 @@ static bool publishBridge(JNIEnv *env) {
             g_midPanelSeq    = midOpt(env, mug, "getPanelFrameSeq", "()I");
             g_midPanelPixels = midOpt(env, mug, "getPanelPixels", "()[I");
             g_midPanelClick  = midOpt(env, mug, "panelClick", "(II)Ljava/lang/String;");
+            // SC-4 panel-text input (best-effort — NOT in the panelOk all-or-nothing gate; a stale jar just
+            // disables typing/scroll/long-press inside panels, the panel still opens + tap-clicks work).
+            g_midIsPanelTextActive = midOpt(env, mug, "isPanelTextActive", "()Z");
+            g_midGetPanelText      = midOpt(env, mug, "getPanelText", "()Ljava/lang/String;");
+            g_midPanelText         = midOpt(env, mug, "panelText", "(Ljava/lang/String;)Ljava/lang/String;");
+            g_midPanelKey          = midOpt(env, mug, "panelKey", "(I)Ljava/lang/String;");
+            g_midPanelLongPress    = midOpt(env, mug, "panelLongPress", "(II)Ljava/lang/String;");
+            g_midPanelWheel        = midOpt(env, mug, "panelWheel", "(III)Ljava/lang/String;");
+            g_midPanelMove         = midOpt(env, mug, "panelMove", "(II)Ljava/lang/String;");
             bool panelOk = g_midListPanels && g_midOpenPanel && g_midClosePanel && g_midPanelW
                         && g_midPanelH && g_midPanelSeq && g_midPanelPixels && g_midPanelClick;
             if (!panelOk) LOGE("bridge: MobileUiBridge panel methods incomplete (Tier-1 panels disabled)");
@@ -1570,6 +1583,59 @@ Java_dev_audaro_helloshell_JvmLauncher_nativePanelClick(JNIEnv *artEnv, jobject,
     std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
     if (r) hs->DeleteLocalRef(r);
     return artEnv->NewStringUTF(out.c_str());
+}
+// SC-4 panel-text input — all best-effort (guard on the mid; a stale jar → no-op). On the rl-bridge thread.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeIsPanelTextActive(JNIEnv *, jobject) {
+    if (!panelReady() || !g_midIsPanelTextActive) return JNI_FALSE;
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls) return JNI_FALSE;
+    jboolean v = hs->CallStaticBooleanMethod(g_mobileUiCls, g_midIsPanelTextActive);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); return JNI_FALSE; }
+    return v;
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeGetPanelText(JNIEnv *artEnv, jobject) {
+    if (!panelReady() || !g_midGetPanelText) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midGetPanelText);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelText(JNIEnv *artEnv, jobject, jstring jText) {
+    if (!panelReady() || !g_midPanelText) return artEnv->NewStringUTF("");
+    return mobileUiStrArg(artEnv, g_midPanelText, jText);
+}
+// (int|int,int|int,int,int) -> String panel-input calls, marshalled inline (no shared helper for these shapes).
+static jstring panelCall(JNIEnv *artEnv, jmethodID m, jint a, jint b, jint c, int argc) {
+    if (!m) return artEnv->NewStringUTF("");
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls) return artEnv->NewStringUTF("");
+    jstring r;
+    if (argc == 1) r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, m, a);
+    else if (argc == 2) r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, m, a, b);
+    else r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, m, a, b, c);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelKey(JNIEnv *artEnv, jobject, jint vk) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
+    return panelCall(artEnv, g_midPanelKey, vk, 0, 0, 1);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelLongPress(JNIEnv *artEnv, jobject, jint x, jint y) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
+    return panelCall(artEnv, g_midPanelLongPress, x, y, 0, 2);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelWheel(JNIEnv *artEnv, jobject, jint x, jint y, jint rotation) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
+    return panelCall(artEnv, g_midPanelWheel, x, y, rotation, 3);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelMove(JNIEnv *artEnv, jobject, jint x, jint y) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
+    return panelCall(artEnv, g_midPanelMove, x, y, 0, 2);
 }
 extern "C" JNIEXPORT jintArray JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativePanelPixels(JNIEnv *artEnv, jobject) {

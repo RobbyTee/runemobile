@@ -7,6 +7,8 @@ import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -31,19 +34,24 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import kotlin.coroutines.coroutineContext
@@ -146,6 +154,11 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit) {
     var viewW by remember { mutableStateOf(1) }
     var logged by remember { mutableStateOf(false) }
     val scroll = rememberScrollState()
+    // SC-4 panel-text input: a tap that lands in a Swing text field flips isPanelTextActive; we then raise a
+    // mirror field whose text is streamed back into the panel via panelText (live-filter search boxes).
+    var textActive by remember { mutableStateOf(false) }
+    var fieldValue by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
 
     DisposableEffect(index) {
         onDispose { JvmLauncher.onBridge { JvmLauncher.closePanel() } }
@@ -179,20 +192,60 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             } else {
                 Box(
-                    Modifier.fillMaxSize().verticalScroll(scroll)
+                    Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll)
                         .onGloballyPositioned { viewW = it.size.width.coerceAtLeast(1) }
                         .pointerInput(pw, viewW) {
-                            detectTapGestures { off ->
-                                if (pw > 0 && viewW > 0) {
-                                    // fit-width => uniform scale viewW/pw; add the scroll offset for buffer-y.
-                                    val bx = (off.x * pw / viewW)
-                                    val by = ((off.y + scroll.value) * pw / viewW)
-                                    JvmLauncher.onBridge { JvmLauncher.panelClick(bx.toInt(), by.toInt()) }
-                                }
-                            }
+                            detectTapGestures(
+                                onTap = { off ->
+                                    if (pw > 0 && viewW > 0) {
+                                        // fit-width => uniform scale viewW/pw; add the scroll offset for buffer-y.
+                                        val bx = (off.x * pw / viewW).toInt()
+                                        val by = ((off.y + scroll.value) * pw / viewW).toInt()
+                                        JvmLauncher.onBridge { JvmLauncher.panelClick(bx, by) }
+                                        // SC-4: after the click settles, ask the bridge whether it focused a text
+                                        // field; if so raise the mirror field pre-filled, else drop the keyboard.
+                                        scope.launch {
+                                            delay(140)
+                                            val active = withContext(Dispatchers.IO) {
+                                                JvmLauncher.onBridge { JvmLauncher.isPanelTextActive() }.get()
+                                            }
+                                            if (active) {
+                                                fieldValue = withContext(Dispatchers.IO) {
+                                                    JvmLauncher.onBridge { JvmLauncher.getPanelText() }.get()
+                                                }
+                                                textActive = true
+                                            } else {
+                                                textActive = false
+                                            }
+                                        }
+                                    }
+                                },
+                                onLongPress = { off ->
+                                    if (pw > 0 && viewW > 0) {
+                                        val bx = (off.x * pw / viewW).toInt()
+                                        val by = ((off.y + scroll.value) * pw / viewW).toInt()
+                                        JvmLauncher.onBridge { JvmLauncher.panelLongPress(bx, by) }   // SC-4 BUTTON3
+                                    }
+                                },
+                            )
                         },
                 ) {
                     Image(img.asImageBitmap(), tooltip, Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth)
+                }
+                if (textActive) {
+                    val fr = remember { FocusRequester() }
+                    LaunchedEffect(Unit) { fr.requestFocus() }   // raise the soft keyboard
+                    OutlinedTextField(
+                        value = fieldValue,
+                        onValueChange = { v -> fieldValue = v; JvmLauncher.onBridge { JvmLauncher.panelText(v) } },
+                        singleLine = true,
+                        label = { Text("Search / type into panel") },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            JvmLauncher.onBridge { JvmLauncher.panelKey(10) }   // AWT VK_ENTER -> submit
+                        }),
+                        modifier = Modifier.fillMaxWidth().padding(8.dp).focusRequester(fr),
+                    )
                 }
             }
         }
