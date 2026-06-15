@@ -31,6 +31,8 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 @end
 @interface WorldSwitcherViewController : UIViewController
 @end
+@interface XpTrackerViewController : UIViewController
+@end
 
 // §3.3 redesign: the labelled/searchable/favourites grid launcher. Defined at the bottom of this file.
 @interface MUIPluginGrid : UIViewController
@@ -615,6 +617,13 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
             ws.modalPresentationStyle = UIModalPresentationOverFullScreen;
             ws.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
             [self presentViewController:ws animated:YES completion:nil];
+            return;
+        }
+        if ([tip isEqualToString:@"XP Tracker"] && [JVMLauncher xpTrackerAvailable]) {
+            XpTrackerViewController *xp = [[XpTrackerViewController alloc] init];
+            xp.modalPresentationStyle = UIModalPresentationOverFullScreen;
+            xp.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+            [self presentViewController:xp animated:YES completion:nil];
             return;
         }
         if (!fromGrid && index == self.currentIndex) {
@@ -1422,6 +1431,258 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     }
     return self;
 }
+@end
+
+#pragma mark - Native XP Tracker panel (RuneLite charcoal style, real session data)
+
+// RuneLite's actual colour scheme + the bundled RuneScape font + square corners (no rounding), per the design.
+static UIFont *XpRsFont(CGFloat size) { return [UIFont fontWithName:@"RuneScape" size:size] ?: [UIFont systemFontOfSize:size]; }
+static UIColor *XpGray(CGFloat w) { return [UIColor colorWithWhite:w alpha:1.0]; }
+// RuneLite XP-tracker formatting: < 10K shows comma-grouped; else 1-decimal K / M (matches the desktop panel).
+static NSString *XpFmt(long n) {
+    if (n < 10000) {
+        NSNumberFormatter *f = [[NSNumberFormatter alloc] init];
+        f.numberStyle = NSNumberFormatterDecimalStyle;
+        return [f stringFromNumber:@(n)] ?: [NSString stringWithFormat:@"%ld", n];
+    }
+    if (n < 1000000) return [NSString stringWithFormat:@"%.1fK", n / 1000.0];
+    return [NSString stringWithFormat:@"%.1fM", n / 1000000.0];
+}
+
+@interface XpTrackerViewController ()
+@property (nonatomic, strong) UIView *drawer;
+@property (nonatomic, strong) UILabel *headerLabel;
+@property (nonatomic, strong) UIStackView *stack;
+@property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, strong) NSTimer *timer;
+@property (nonatomic, copy) NSString *lastJson;
+@end
+
+@implementation XpTrackerViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor clearColor];
+
+    UIView *dim = [[UIView alloc] initWithFrame:self.view.bounds];
+    dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    [self.view addSubview:dim];
+    [dim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onDone)]];
+
+    self.drawer = [[UIView alloc] init];
+    self.drawer.translatesAutoresizingMaskIntoConstraints = NO;
+    self.drawer.backgroundColor = [UIColor colorWithRed:40/255.0 green:40/255.0 blue:40/255.0 alpha:1.0]; // DARK_GRAY
+    [self.view addSubview:self.drawer];
+
+    UIView *headerBar = [[UIView alloc] init];
+    headerBar.translatesAutoresizingMaskIntoConstraints = NO;
+    headerBar.backgroundColor = [UIColor colorWithRed:30/255.0 green:30/255.0 blue:30/255.0 alpha:1.0]; // DARKER_GRAY
+    [self.drawer addSubview:headerBar];
+
+    self.headerLabel = [[UILabel alloc] init];
+    self.headerLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.headerLabel.font = XpRsFont(15);
+    self.headerLabel.textColor = XpGray(0.72);
+    self.headerLabel.text = @"XP tracker";
+    [headerBar addSubview:self.headerLabel];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    close.translatesAutoresizingMaskIntoConstraints = NO;
+    [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.titleLabel.font = [UIFont systemFontOfSize:17];
+    close.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0]; // BRAND_ORANGE
+    [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
+    [headerBar addSubview:close];
+
+    UIScrollView *scroll = [[UIScrollView alloc] init];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    scroll.backgroundColor = [UIColor clearColor];
+    scroll.alwaysBounceVertical = YES;
+    [self.drawer addSubview:scroll];
+
+    self.stack = [[UIStackView alloc] init];
+    self.stack.axis = UILayoutConstraintAxisVertical;
+    self.stack.spacing = 6;
+    self.stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [scroll addSubview:self.stack];
+
+    self.emptyLabel = [[UILabel alloc] init];
+    self.emptyLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.emptyLabel.font = XpRsFont(15);
+    self.emptyLabel.textColor = XpGray(0.55);
+    self.emptyLabel.numberOfLines = 0;
+    self.emptyLabel.textAlignment = NSTextAlignmentCenter;
+    self.emptyLabel.text = @"Start training a skill to track XP.";
+    self.emptyLabel.hidden = YES;
+    [self.drawer addSubview:self.emptyLabel];
+
+    CGFloat drawerW = MIN(440.0, self.view.bounds.size.width * 0.52);
+    UILayoutGuide *dg = self.drawer.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [self.drawer.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [self.drawer.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [self.drawer.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.drawer.widthAnchor constraintEqualToConstant:drawerW],
+
+        [headerBar.topAnchor constraintEqualToAnchor:dg.topAnchor],
+        [headerBar.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor],
+        [headerBar.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor],
+        [headerBar.heightAnchor constraintEqualToConstant:34],
+        [self.headerLabel.leadingAnchor constraintEqualToAnchor:headerBar.leadingAnchor constant:10],
+        [self.headerLabel.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+        [self.headerLabel.trailingAnchor constraintLessThanOrEqualToAnchor:close.leadingAnchor constant:-8],
+        [close.trailingAnchor constraintEqualToAnchor:headerBar.trailingAnchor constant:-10],
+        [close.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+
+        [scroll.topAnchor constraintEqualToAnchor:headerBar.bottomAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:dg.bottomAnchor],
+
+        [self.stack.topAnchor constraintEqualToAnchor:scroll.topAnchor constant:6],
+        [self.stack.leadingAnchor constraintEqualToAnchor:scroll.leadingAnchor constant:6],
+        [self.stack.trailingAnchor constraintEqualToAnchor:scroll.trailingAnchor constant:-6],
+        [self.stack.bottomAnchor constraintEqualToAnchor:scroll.bottomAnchor constant:-6],
+        [self.stack.widthAnchor constraintEqualToAnchor:scroll.widthAnchor constant:-12],
+
+        [self.emptyLabel.topAnchor constraintEqualToAnchor:headerBar.bottomAnchor constant:40],
+        [self.emptyLabel.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor constant:20],
+        [self.emptyLabel.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor constant:-20],
+    ]];
+
+    [self refresh];
+    self.timer = [NSTimer scheduledTimerWithTimeInterval:2.0 target:self selector:@selector(refresh) userInfo:nil repeats:YES];
+}
+
+- (void)onDone {
+    [self.timer invalidate]; self.timer = nil;
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    [self.timer invalidate]; self.timer = nil;
+}
+
+- (void)refresh {
+    NSString *json = [JVMLauncher xpTrackerJson] ?: @"{}";
+    if (self.lastJson && [json isEqualToString:self.lastJson]) return;   // unchanged -> keep the built boxes
+    self.lastJson = json;
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if (![d isKindOfClass:[NSDictionary class]]) d = @{};
+    long tg = [d[@"totalGained"] longLongValue];
+    long th = [d[@"totalHr"] longLongValue];
+    self.headerLabel.text = [NSString stringWithFormat:@"Gained: %@   ·   Per hour: %@", XpFmt(tg), XpFmt(th)];
+
+    NSArray *skills = [d[@"skills"] isKindOfClass:[NSArray class]] ? d[@"skills"] : @[];
+    for (UIView *v in [self.stack.arrangedSubviews copy]) { [self.stack removeArrangedSubview:v]; [v removeFromSuperview]; }
+    for (NSDictionary *s in skills) {
+        if (![s isKindOfClass:[NSDictionary class]]) continue;
+        [self.stack addArrangedSubview:[self skillBox:s]];
+    }
+    self.emptyLabel.hidden = (skills.count > 0);
+}
+
+- (UILabel *)statLabel:(NSString *)text right:(BOOL)right {
+    UILabel *l = [[UILabel alloc] init];
+    l.font = XpRsFont(14);
+    l.textColor = XpGray(0.62);
+    l.text = text;
+    l.textAlignment = right ? NSTextAlignmentRight : NSTextAlignmentLeft;
+    return l;
+}
+
+- (UIView *)skillBox:(NSDictionary *)s {
+    long gained = [s[@"gained"] longLongValue], hr = [s[@"hr"] longLongValue];
+    long left = [s[@"left"] longLongValue], actions = [s[@"actions"] longLongValue];
+
+    UIStackView *box = [[UIStackView alloc] init];
+    box.axis = UILayoutConstraintAxisVertical;
+    box.spacing = 6;
+    box.layoutMarginsRelativeArrangement = YES;
+    box.layoutMargins = UIEdgeInsetsMake(7, 8, 7, 8);
+    box.backgroundColor = [UIColor colorWithRed:43/255.0 green:43/255.0 blue:43/255.0 alpha:1.0];
+
+    UIStackView *topRow = [[UIStackView alloc] init];
+    topRow.axis = UILayoutConstraintAxisHorizontal;
+    topRow.spacing = 8;
+    topRow.alignment = UIStackViewAlignmentCenter;
+
+    UIImageView *icon = [[UIImageView alloc] init];
+    icon.contentMode = UIViewContentModeScaleAspectFit;
+    icon.translatesAutoresizingMaskIntoConstraints = NO;
+    [icon.widthAnchor constraintEqualToConstant:24].active = YES;
+    [icon.heightAnchor constraintEqualToConstant:24].active = YES;
+    NSString *b64 = [s[@"icon"] isKindOfClass:[NSString class]] ? s[@"icon"] : nil;
+    if (b64.length) {
+        NSData *data = [[NSData alloc] initWithBase64EncodedString:b64 options:0];
+        if (data) icon.image = [UIImage imageWithData:data];
+    }
+    [topRow addArrangedSubview:icon];
+
+    UIStackView *leftCol = [[UIStackView alloc] init];
+    leftCol.axis = UILayoutConstraintAxisVertical; leftCol.spacing = 2;
+    [leftCol addArrangedSubview:[self statLabel:[NSString stringWithFormat:@"XP gained: %@", XpFmt(gained)] right:NO]];
+    [leftCol addArrangedSubview:[self statLabel:[NSString stringWithFormat:@"XP/hour: %@", XpFmt(hr)] right:NO]];
+
+    UIStackView *rightCol = [[UIStackView alloc] init];
+    rightCol.axis = UILayoutConstraintAxisVertical; rightCol.spacing = 2;
+    [rightCol addArrangedSubview:[self statLabel:[NSString stringWithFormat:@"XP left: %@", XpFmt(left)] right:YES]];
+    [rightCol addArrangedSubview:[self statLabel:[NSString stringWithFormat:@"Actions: %@", XpFmt(actions)] right:YES]];
+
+    UIStackView *cols = [[UIStackView alloc] init];
+    cols.axis = UILayoutConstraintAxisHorizontal; cols.distribution = UIStackViewDistributionFillEqually; cols.spacing = 6;
+    [cols addArrangedSubview:leftCol];
+    [cols addArrangedSubview:rightCol];
+    [topRow addArrangedSubview:cols];
+
+    [box addArrangedSubview:topRow];
+    [box addArrangedSubview:[self barStart:[s[@"startLevel"] intValue] end:[s[@"endLevel"] intValue] progress:[s[@"progress"] intValue]]];
+    return box;
+}
+
+- (UIView *)barStart:(int)start end:(int)end progress:(int)pct {
+    if (pct < 0) pct = 0; if (pct > 100) pct = 100;
+    UIView *bar = [[UIView alloc] init];
+    bar.translatesAutoresizingMaskIntoConstraints = NO;
+    bar.backgroundColor = [UIColor colorWithRed:20/255.0 green:20/255.0 blue:20/255.0 alpha:1.0];
+    [bar.heightAnchor constraintEqualToConstant:16].active = YES;
+
+    UIView *fill = [[UIView alloc] init];
+    fill.translatesAutoresizingMaskIntoConstraints = NO;
+    fill.backgroundColor = [UIColor colorWithRed:79/255.0 green:122/255.0 blue:35/255.0 alpha:1.0]; // progress green
+    [bar addSubview:fill];
+    [NSLayoutConstraint activateConstraints:@[
+        [fill.leadingAnchor constraintEqualToAnchor:bar.leadingAnchor],
+        [fill.topAnchor constraintEqualToAnchor:bar.topAnchor],
+        [fill.bottomAnchor constraintEqualToAnchor:bar.bottomAnchor],
+        [fill.widthAnchor constraintEqualToAnchor:bar.widthAnchor multiplier:(pct / 100.0)],
+    ]];
+
+    UILabel *(^lvl)(NSString *) = ^UILabel *(NSString *t) {
+        UILabel *l = [[UILabel alloc] init];
+        l.translatesAutoresizingMaskIntoConstraints = NO;
+        l.font = XpRsFont(14);
+        l.textColor = [UIColor whiteColor];
+        l.text = t;
+        return l;
+    };
+    UILabel *lv1 = lvl([NSString stringWithFormat:@"Lvl %d", start]);
+    UILabel *pc = lvl([NSString stringWithFormat:@"%d%%", pct]);
+    UILabel *lv2 = lvl([NSString stringWithFormat:@"Lvl %d", end]);
+    [bar addSubview:lv1]; [bar addSubview:pc]; [bar addSubview:lv2];
+    [NSLayoutConstraint activateConstraints:@[
+        [lv1.leadingAnchor constraintEqualToAnchor:bar.leadingAnchor constant:6],
+        [lv1.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
+        [pc.centerXAnchor constraintEqualToAnchor:bar.centerXAnchor],
+        [pc.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
+        [lv2.trailingAnchor constraintEqualToAnchor:bar.trailingAnchor constant:-6],
+        [lv2.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
+    ]];
+    return bar;
+}
+
 @end
 
 @interface MUIPluginGrid () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, UISearchBarDelegate>

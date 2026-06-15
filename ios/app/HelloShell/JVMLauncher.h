@@ -376,6 +376,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// falls back to the generic rendered-image panel.
 + (BOOL)questAvailable;
 
+/// Native XP Tracker panel (§3.4): whether the XP Tracker plugin is loaded, and its live per-skill session JSON
+/// ({available,totalGained,totalHr,skills:[{skill,gained,hr,left,actions,startLevel,endLevel,progress,icon}]}).
++ (BOOL)xpTrackerAvailable;
++ (nullable NSString *)xpTrackerJson;
+
 /// Tell the bridge the native Quest Helper screen is open/closed (gates its client-thread snapshot refresh).
 + (void)questSetUiOpen:(BOOL)open;
 

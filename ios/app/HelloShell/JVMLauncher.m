@@ -73,6 +73,8 @@ static jmethodID gMuiHubManifest = NULL;  // hubManifest()Ljava/lang/String;
 static jmethodID gMuiHubInstall = NULL;   // hubInstall(Ljava/lang/String;)Ljava/lang/String;
 static jmethodID gMuiHubUninstall = NULL; // hubUninstall(Ljava/lang/String;)Ljava/lang/String;
 static jmethodID gMuiListPanels = NULL;   // listPanels()Ljava/lang/String;
+static jmethodID gMuiXpAvail = NULL;      // xpTrackerAvailable()Z  (native XP Tracker panel)
+static jmethodID gMuiXpJson = NULL;       // xpTrackerJson()Ljava/lang/String;
 static jmethodID gMuiOpenPanel = NULL;    // openPanel(I)Ljava/lang/String;
 static jmethodID gMuiClosePanel = NULL;   // closePanel()Ljava/lang/String;
 static jmethodID gMuiPanelW = NULL;       // getPanelWidth()I
@@ -417,6 +419,10 @@ static BOOL ensureMui(void) {
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiResetPlugin = NULL; }
     gMuiNotifDefaults = (*env)->GetStaticMethodID(env, global, "notificationDefaults", "()Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiNotifDefaults = NULL; }
+    gMuiXpAvail = (*env)->GetStaticMethodID(env, global, "xpTrackerAvailable", "()Z");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiXpAvail = NULL; }
+    gMuiXpJson = (*env)->GetStaticMethodID(env, global, "xpTrackerJson", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiXpJson = NULL; }
     gMuiPanelText = (*env)->GetStaticMethodID(env, global, "panelText", "(Ljava/lang/String;)Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiPanelText = NULL; }
     gMuiPanelKey = (*env)->GetStaticMethodID(env, global, "panelKey", "(I)Ljava/lang/String;");
@@ -1899,6 +1905,21 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMui()) return nil;
     JNIEnv *env = gMainEnv;
     return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiListPanels));
+}
+
+// Native XP Tracker panel (§3.4): availability gate + the live per-skill session JSON. nil/NO on an older jar.
++ (BOOL)xpTrackerAvailable {
+    if (!ensureMui() || !gMuiXpAvail) return NO;
+    JNIEnv *env = gMainEnv;
+    jboolean v = (*env)->CallStaticBooleanMethod(env, gMuiClass, gMuiXpAvail);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    return v ? YES : NO;
+}
+
++ (NSString *)xpTrackerJson {
+    if (!ensureMui() || !gMuiXpJson) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiXpJson));
 }
 
 + (void)mobileOpenPanel:(int)index {
