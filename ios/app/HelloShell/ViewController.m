@@ -3632,6 +3632,13 @@ static CGRect mapRectFromArr(NSArray *a) {
     CGPoint vp = [g locationInView:self.view];
     int gx = 0, gy = 0;
     if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return;
+    // [dlg-diag] one line per tap so a single "tap Continue" repro reveals the failure: dlgAct = did the bridge
+    // report a dialogue open; inScroll/inDlg = does the tap fall in the chatbox / published-dialogue rect.
+    [self appendLine:[NSString stringWithFormat:@"[dlg-diag] g=%d,%d dlgAct=%d inScroll=%d inDlg=%d scroll=%@ dlg=%@",
+        gx, gy, self.chatDialogueActive ? 1 : 0,
+        (self.chatScrollCanvas.size.width > 0 && CGRectContainsPoint(self.chatScrollCanvas, CGPointMake(gx, gy))) ? 1 : 0,
+        (self.dialogueChatCanvas.size.width > 0 && CGRectContainsPoint(self.dialogueChatCanvas, CGPointMake(gx, gy))) ? 1 : 0,
+        NSStringFromCGRect(self.chatScrollCanvas), NSStringFromCGRect(self.dialogueChatCanvas)]];
     // World map open: a tap INSIDE the (centred) map window is a UI click (icons/keys/buttons) — precise,
     // no world-snap, no walk-ring semantics. A tap in the search rect ALSO raises the soft keyboard: the map
     // search doesn't flip INPUT_TYPE (Phase-0 probe), so the auto-raise never fires; typed keys go to the

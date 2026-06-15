@@ -1688,13 +1688,15 @@ public final class HudVeneerBridge
 		}
 	}
 
-	/** True if {@code id}'s widget exists and is shown (its content widget is loaded + visible). */
+	/** True if {@code id}'s interface is LOADED — i.e. the dialogue is open. This is the standard RuneLite
+	 *  dialogue-open check (the in-tree dialogue plugins use a plain {@code getWidget(...) != null}); a dialogue
+	 *  group is only resolvable while its dialogue is up. NOTE: deliberately NOT gated on {@code !isHidden()} — a
+	 *  loaded dialogue widget can transiently report hidden, which silently killed detection. */
 	private static boolean widgetShown(Client c, int id)
 	{
 		try
 		{
-			final Widget w = c.getWidget(id);
-			return w != null && !w.isHidden();
+			return c.getWidget(id) != null;
 		}
 		catch (RuntimeException ex)
 		{
