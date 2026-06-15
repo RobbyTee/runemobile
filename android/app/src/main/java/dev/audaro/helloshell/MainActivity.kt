@@ -84,6 +84,7 @@ class MainActivity : AppCompatActivity() {
     // the engine INPUT_TYPE). The engine HUD shoves while open are all shared-side.
     private var mapOpen = false
     private var mapRectCanvas: IntArray? = null     // pannable map display [x,y,w,h] (canvas px)
+    private var minimapRectCanvas: IntArray? = null // relocated minimap+orb cluster [x,y,w,h] canvas px; null = not relocated
     private var mapSearchCanvas: IntArray? = null   // search field rect
     // The window CHROME (close X, zoom, search bar) extends OUTSIDE the pannable display rect — the
     // snapshot publishes each control's rect separately and taps on them must also route precise.
@@ -750,6 +751,15 @@ class MainActivity : AppCompatActivity() {
                 JvmLauncher.clickPrecise(gx, gy, 1)
                 return true
             }
+            // AP-0: the relocated minimap + orb cluster is HUD/UI. Clicks there still fire (minimap walk / orb
+            // ops) but the world-style walk/interact ring is suppressed — a ring drawn on the minimap or an orb
+            // is spurious (rings are for in-scene taps), and an orb tap is never a walk so the optimistic-walk
+            // grace would always paint a stray yellow ring. Mirrors the open-map precise-click suppression.
+            if (!mapOpen && inCanvasRect(minimapRectCanvas, gx, gy)) {
+                JvmLauncher.click(gx, gy, 1)
+                Log.i(TAG, "ap0: minimap/orb tap ($gx,$gy) -> click without walk-ring")
+                return true
+            }
             // Arm the click ring BEFORE posting the click so the baseline seq can't race the engine's bump.
             ringBaseSeq = JvmLauncher.interactTapSeq()
             ringX = e.x; ringY = e.y
@@ -1305,10 +1315,16 @@ class MainActivity : AppCompatActivity() {
         val ins = safeInsetsLTR()
         val margin = 8
         var mapW = 211                                    // fallback cluster width until the snapshot reports it
+        var mapH = 340                                    // fallback cluster height until the snapshot reports it
         val mc = o?.optJSONArray("mapContainer")
-        if (mc != null && mc.length() >= 4 && mc.optInt(2) > 0) mapW = mc.getInt(2)
+        if (mc != null && mc.length() >= 4 && mc.optInt(2) > 0) {
+            mapW = mc.getInt(2)
+            if (mc.optInt(3) > 0) mapH = mc.getInt(3)
+        }
         val mmX = maxOf(0, fw - mapW - Math.round(ins[2] * kx) - margin)
         val mmY = Math.round(ins[1] * ky) + margin
+        // AP-0: cache the relocated cluster's canvas rect so a tap on the minimap/orbs suppresses the walk-ring.
+        minimapRectCanvas = intArrayOf(mmX, mmY, mapW, mapH)
         if (mmX == lastMmX && mmY == lastMmY) return
         lastMmX = mmX; lastMmY = mmY
         JvmLauncher.onBridge { JvmLauncher.relocateMinimap(mmX, mmY) }
@@ -1316,6 +1332,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Stop relocating the minimap (let it return to its native position) when the chrome disengages. */
     private fun releaseMinimap() {
+        minimapRectCanvas = null   // AP-0: no relocated cluster -> don't suppress rings (raw-stones mode)
         if (lastMmX == -1 && lastMmY == -1) return
         lastMmX = -1; lastMmY = -1
         JvmLauncher.onBridge { JvmLauncher.relocateMinimap(-1, -1) }
