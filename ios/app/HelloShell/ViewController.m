@@ -3669,14 +3669,19 @@ static CGRect mapRectFromArr(NSArray *a) {
         [self appendLine:[NSString stringWithFormat:@"[shell] chat-msg tap %d,%d (precise, no ring)", gx, gy]];
         return;
     }
-    // Dialogue open: the chatbox (with the NPC/options/level-up dialogue) renders at the engine's natural bottom
-    // position. A tap there must click the dialogue's Continue/option PRECISELY — otherwise it walks the world
-    // behind it ("clicks underneath"). dialogueChatCanvas is the live dialogue rect from the snapshot.
-    if (self.chatDialogueActive && self.dialogueChatCanvas.size.width > 0
-            && CGRectContainsPoint(self.dialogueChatCanvas, CGPointMake(gx, gy))) {
-        [JVMLauncher postClickPreciseX:gx y:gy button:1];
-        [self appendLine:[NSString stringWithFormat:@"[shell] dialogue tap %d,%d (precise, no ring)", gx, gy]];
-        return;
+    // Dialogue open: the dialogue (NPC/options/level-up/continue) shows on the chatbox at the top. ANY tap over the
+    // chatbox region must NOT fall through to the world underneath — route it to a PRECISE click (so the engine
+    // resolves the dialogue's Continue/option) and CONSUME it (return) even if it hits nothing. Independent of
+    // chatScrollable (which is off during a dialogue). Uses the chatbox rect (always valid) + the published
+    // dialogue rect as a union, so the whole visible dialogue is covered.
+    if (self.chatDialogueActive) {
+        CGPoint cp = CGPointMake(gx, gy);
+        if ((self.chatScrollCanvas.size.width > 0 && CGRectContainsPoint(self.chatScrollCanvas, cp))
+                || (self.dialogueChatCanvas.size.width > 0 && CGRectContainsPoint(self.dialogueChatCanvas, cp))) {
+            [JVMLauncher postClickPreciseX:gx y:gy button:1];
+            [self appendLine:[NSString stringWithFormat:@"[shell] dialogue tap %d,%d (precise, consumed)", gx, gy]];
+            return;
+        }
     }
     // Defer the ring one beat: onDisplayTick draws it red (interactable) or yellow (walk) once the engine has
     // resolved the tap. Pump the haptic generator so the buzz is low-latency if it turns out to be an interact.
