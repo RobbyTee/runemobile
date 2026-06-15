@@ -37,6 +37,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.Toast
+import androidx.activity.addCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.browser.customtabs.CustomTabsIntent
@@ -262,20 +263,39 @@ class MainActivity : AppCompatActivity() {
             setPadding(px, px / 2, px, px / 2)
             alpha = 0.7f
         }
-        val pluginButton = devButton("⚙")   // gear
-        pluginButton.setOnClickListener {
+        // §4 right-bar redesign (increment 1): open the plugin launcher. The dismiss-flush (§4) persists any
+        // config edit made in the panel even when it's closed without backgrounding.
+        fun openLauncher() {
             pluginPanel.setContent {
                 PluginPanel(
                     onClose = {
                         pluginPanel.visibility = View.GONE
-                        pluginButton.visibility = View.VISIBLE
+                        JvmLauncher.onBridge { JvmLauncher.flushConfig() }
                     },
                     rendererPref = rendererPref(),
                     onRendererSelect = { setRendererPref(it) },
                 )
             }
             pluginPanel.visibility = View.VISIBLE
-            pluginButton.visibility = View.GONE
+        }
+        // The discoverable bottom-center HANDLE replaces the buried dev-cluster gear as the primary entry into
+        // the launcher (audit diagnosis #1: the gear read as a disposable debug control). Tap to open; system
+        // BACK closes it (wired below). Drag-up + the PEEK sheet are later increments.
+        val launcherHandle = Button(this).apply {
+            text = "≡ Plugins"
+            textSize = 12f
+            isAllCaps = false
+            minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
+            val px = (16 * resources.displayMetrics.density).toInt()
+            setPadding(px, px / 4, px, px / 4)
+            setTextColor(0xFFFFFFFF.toInt())
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = 100f
+                setColor(0xCC1E1E1E.toInt())
+                setStroke((1 * resources.displayMetrics.density).toInt(), 0x55FFFFFF)
+            }
+            alpha = 0.85f
+            setOnClickListener { openLauncher() }
         }
         // A6 A/B: toggle the native grid on/off (▦ = native tab grid + hidden stones; ▤ = raw engine stones).
         // updateChrome re-applies setStonesHidden to match, so flipping this reveals/hides the real stone row.
@@ -340,9 +360,9 @@ class MainActivity : AppCompatActivity() {
         // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
         val devBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            // Genuine user controls ship in every build: settings gear, soft keyboard, sticky-shift, sign-in/out,
-            // screenshot.
-            addView(pluginButton); addView(kbButton); addView(shiftButton)
+            // Genuine user controls ship in every build: soft keyboard, sticky-shift, sign-in/out, screenshot.
+            // (The settings entry moved out of this cluster to the bottom-center launcher handle — §4 redesign.)
+            addView(kbButton); addView(shiftButton)
             addView(signInButton); addView(logoutButton); addView(shotButton)
             // AP-0: developer-only tooling (chrome A/B raw-stones toggle + GPU/117HD process-restart footguns) is
             // hidden in release — renderer selection lives in the native plugin panel (renderer-as-plugins).
@@ -356,6 +376,13 @@ class MainActivity : AppCompatActivity() {
             addView(chatTabOverlay, FrameLayout.LayoutParams(mp, mp)) // enlarged native chat-tab row (top-left)
             addView(keyboardView, FrameLayout.LayoutParams(1, 1))
             addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame + chrome
+            // §4: the launcher handle sits above the game/chrome (tappable) but below the full-screen panel
+            // (covered while a panel is open) and clears the bottom gesture inset.
+            addView(launcherHandle, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+                    bottomMargin = (10 * resources.displayMetrics.density).toInt()
+                })
             addView(pluginPanel, FrameLayout.LayoutParams(mp, mp))   // Compose plugin list (GONE until opened)
             addView(devBar, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -365,6 +392,17 @@ class MainActivity : AppCompatActivity() {
                 })
         }
         setContentView(root)
+        // §4 dismiss model (d): Android system BACK closes an open launcher (one level), instead of the prior
+        // no-op / app-exit. Disabled-passthrough when nothing is open so BACK behaves normally.
+        onBackPressedDispatcher.addCallback(this) {
+            if (pluginPanel.visibility == View.VISIBLE) {
+                pluginPanel.visibility = View.GONE
+                JvmLauncher.onBridge { JvmLauncher.flushConfig() }
+            } else {
+                isEnabled = false
+                onBackPressedDispatcher.onBackPressed()
+            }
+        }
         // Edge-to-edge + fullscreen immersive: draw under (and hide) the status + nav bars so the game frame fills
         // the whole screen with no Android time/battery/wifi chrome. Re-asserted in onWindowFocusChanged (a dialog
         // or the soft keyboard can transiently reveal the bars). Cutout = shortEdges so a landscape notch is drawn
