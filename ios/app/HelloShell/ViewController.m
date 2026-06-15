@@ -40,6 +40,13 @@
 @property (nonatomic, assign) BOOL notifAuthRequested;   // UNUserNotificationCenter authorization asked once
 @property (nonatomic, assign) BOOL safariOpen;           // an SFSafariViewController is currently presented
 @property (nonatomic, strong) UIButton *screenshotButton; // 📷 save the live frame to Photos
+// KEY-1: an optional on-screen action-hotkey strip. The ⚡ chip toggles a row of buttons, one per *pinned*
+// plugin hotkey (Ground Items hide, quick-hop, screenshot, …); a tap fires that plugin's configured Keybind via
+// the bridge. Long-press the ⚡ chip to pick which hotkeys are pinned. Pinned set persists in NSUserDefaults.
+@property (nonatomic, strong) UIButton *hotkeyButton;     // ⚡ toggle + (long-press) picker for the hotkey strip
+@property (nonatomic, strong) UIStackView *hotkeyStrip;   // horizontal row of pinned hotkey buttons
+@property (nonatomic, strong) NSArray *hotkeyActions;     // cached [{group,key,label,keyCode,mods,bind}] from the bridge
+@property (nonatomic, assign) BOOL hotkeyStripVisible;
 // W3 hybrid-chrome device de-risk: read the MobileChromeBridge snapshot + proxy a tab switch via the proven
 // JavaBridge.onClick, logging a md5-gateable verdict. The seam proof before native rails are drawn.
 @property (nonatomic, strong) UIButton *chromeButton;
@@ -119,6 +126,16 @@
 @property (nonatomic, assign) int    menuSelY;
 @property (nonatomic, assign) BOOL   menuFingerOnMenu;    // finger over the menu (with grace) -> select; else cancel
 @property (nonatomic, strong) UISelectionFeedbackGenerator *menuHaptic; // light tick when the highlight moves
+// MENU-1/2/3 tap-mode: when the right-click menu has a submenu (▸), overflows the safe area, or shift is
+// latched, it becomes a PERSISTENT, tappable, scrollable list (drill into submenus, ⚙ Customize) instead of the
+// drag-select box. Flat short menus keep the unchanged drag-select path, so the core tap/menu flow is untouched.
+@property (nonatomic, assign) BOOL menuTapMode;          // this menu is the persistent tap-driven list
+@property (nonatomic, assign) int  menuDrillParent;      // showing the submenu of this top-level display index (-1 = top)
+@property (nonatomic, strong) NSArray *menuTopEntries;   // the top-level entries (kept so "‹ Back" can rebuild)
+@property (nonatomic, strong) UIScrollView *menuScroll;  // tap-mode row container (scrolls when the list overflows)
+@property (nonatomic, strong) UIView *menuDismissLayer;  // tap-mode full-screen tap-to-cancel layer behind the box
+@property (nonatomic, assign) BOOL menuScrollable;       // engine menu self-scrolls (>~30 entries) -> commit by invoke, not geometry
+@property (nonatomic, assign) BOOL customizeReopenPending; // a ⚙ Customize reopen is scheduled; a new menu cancels it
 // Interactable-tap feedback: a light haptic when a tap grabs a real interactable (polled via JavaBridge
 // interactTapSeq), and a yellow fading click-ring drawn at every tap point (the Jagex-Mobile click marker).
 @property (nonatomic, assign) int lastInteractTapSeq;
@@ -617,6 +634,31 @@ static const CGFloat kMenuWidth       = 210.0;
              forControlEvents:UIControlEventTouchUpInside];
     [self.screen addSubview:self.pipButton];
 
+    // KEY-1: the action-hotkey strip toggle (⚡), right of the PiP button. Tap shows/hides the pinned-hotkey
+    // strip; long-press opens the picker. A UIControl, so the gesture-delegate filter keeps its taps off the game.
+    self.hotkeyButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.hotkeyButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.hotkeyButton setTitle:@"⚡" forState:UIControlStateNormal];
+    self.hotkeyButton.titleLabel.font = [UIFont systemFontOfSize:20];
+    self.hotkeyButton.tintColor = [UIColor whiteColor];
+    self.hotkeyButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
+    self.hotkeyButton.layer.cornerRadius = 8;
+    [self.hotkeyButton addTarget:self action:@selector(onToggleHotkeyStrip)
+                forControlEvents:UIControlEventTouchUpInside];
+    UILongPressGestureRecognizer *hkLp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onHotkeyPicker:)];
+    [self.hotkeyButton addGestureRecognizer:hkLp];
+    [self.screen addSubview:self.hotkeyButton];
+
+    // The strip itself — a horizontal stack just above the ⇧/📷/📺 row, hidden until toggled.
+    self.hotkeyStrip = [[UIStackView alloc] init];
+    self.hotkeyStrip.translatesAutoresizingMaskIntoConstraints = NO;
+    self.hotkeyStrip.axis = UILayoutConstraintAxisHorizontal;
+    self.hotkeyStrip.spacing = 6;
+    self.hotkeyStrip.alignment = UIStackViewAlignmentCenter;
+    self.hotkeyStrip.hidden = YES;
+    [self.screen addSubview:self.hotkeyStrip];
+
     // Native tab rails (edge-split, mobile arrangement): a 2-column icon grid pinned to the right edge of the
     // game view. The opaque rail background sits behind the icon buttons; each icon is blitted from the live
     // desktop stone's sprite region, and a tap proxies a click onto the real stone centre (so the native
@@ -898,6 +940,16 @@ static const CGFloat kMenuWidth       = 210.0;
         [self.pipButton.leadingAnchor constraintEqualToAnchor:self.screenshotButton.trailingAnchor constant:8],
         [self.pipButton.widthAnchor constraintEqualToConstant:44],
         [self.pipButton.heightAnchor constraintEqualToConstant:36],
+
+        // KEY-1: ⚡ hotkey-strip toggle — same bottom row, right of PiP.
+        [self.hotkeyButton.bottomAnchor constraintEqualToAnchor:self.keyboardButton.bottomAnchor],
+        [self.hotkeyButton.leadingAnchor constraintEqualToAnchor:self.pipButton.trailingAnchor constant:8],
+        [self.hotkeyButton.widthAnchor constraintEqualToConstant:44],
+        [self.hotkeyButton.heightAnchor constraintEqualToConstant:36],
+        // The pinned-hotkey strip sits one row up, starting at the ⇧ button (clear of the ⚙▦≡ stack on the left).
+        [self.hotkeyStrip.bottomAnchor constraintEqualToAnchor:self.keyboardButton.topAnchor constant:-8],
+        [self.hotkeyStrip.leadingAnchor constraintEqualToAnchor:self.shiftButton.leadingAnchor],
+        [self.hotkeyStrip.heightAnchor constraintEqualToConstant:36],
 
         // Utility trio (⚙ ▦ ≡) — moved OUT of the top-right, where it overlapped the engine XP counter + minimap
         // orbs (the XP button lives in the left part of the relocated MAP_CONTAINER cluster, and XP-drop numbers
@@ -3559,6 +3611,9 @@ static CGRect mapRectFromArr(NSArray *a) {
     self.lastMenuX = gx; self.lastMenuY = gy;
     self.menuBuilding = YES;                         // #8: poll the snapshot in onDisplayTick, then build native rows
     self.menuHighlight = -1;
+    self.menuTapMode = NO;                            // re-decided (drag vs tap) when the snapshot builds the rows
+    self.menuDrillParent = -1;
+    self.customizeReopenPending = NO;                 // any fresh menu cancels a pending ⚙ Customize reopen
     self.menuHandRight = (loc.x > self.screen.bounds.size.width * 0.5); // pressed on the right -> open leftward
     self.menuHapticY = loc.y;
     self.menuHaptic = [UISelectionFeedbackGenerator new];
@@ -3581,14 +3636,45 @@ static CGRect mapRectFromArr(NSArray *a) {
     if (mw <= 0 || mh <= 0) return NO;
     self.menuGeomGame = CGRectMake([d[@"menuX"] intValue], [d[@"menuY"] intValue], mw, mh);
     self.menuGeomValid = YES;
+    self.menuScrollable = [d[@"menuScrollable"] boolValue];   // engine self-scrolls -> flat-row commit by invoke
     [self buildNativeMenuWithEntries:entries];
     return YES;
+}
+
+// Decide how to present the engine menu the snapshot just delivered. A flat, short menu keeps the original
+// drag-select box (drive selection by sliding the long-press finger — unchanged core path). A menu that carries
+// a submenu (▸, e.g. Menu-Entry-Swapper "Swap left-click ▸" under a latched Shift), overflows the safe area, or
+// arrives while Shift is latched becomes the persistent tap-mode list (MENU-1 drill-in / MENU-2 scroll / MENU-3
+// ⚙ Customize) — those cases the drag-select box can't serve.
+- (void)buildNativeMenuWithEntries:(NSArray *)entries {
+    self.menuTopEntries = entries;
+    self.menuDrillParent = -1;
+
+    BOOL hasSub = NO;
+    for (id obj in entries) {
+        if ([obj isKindOfClass:[NSDictionary class]]) {
+            id sub = ((NSDictionary *)obj)[@"sub"];
+            if ([sub isKindOfClass:[NSArray class]] && [sub count] > 0) { hasSub = YES; break; }
+        }
+    }
+    UIEdgeInsets ins = self.view.safeAreaInsets;
+    CGFloat availH = self.view.bounds.size.height - ins.top - ins.bottom - 24.0;
+    CGFloat fullH  = kMenuHeaderViewH + entries.count * kMenuRowViewH;
+    BOOL tooTall = fullH > availH;
+
+    if (hasSub || tooTall || self.shiftHeld) {
+        self.menuTapMode = YES;
+        [self buildTapMenuWithEntries:entries drilledParent:-1];
+    } else {
+        self.menuTapMode = NO;
+        [self buildDragMenuWithEntries:entries];
+    }
 }
 
 // Build the opaque OSRS-styled native menu: a "Choose Option" header + one 32pt row per entry (display order,
 // index 0 = top = left-click default). The box is sized + positioned to fully COVER the engine's own tiny
 // rendered menu so there's no double-menu. Selection is driven by the long-press drag (rows are inert).
-- (void)buildNativeMenuWithEntries:(NSArray *)entries {
+- (void)buildDragMenuWithEntries:(NSArray *)entries {
     [self.menuContainer removeFromSuperview];
     self.menuRowEntries = entries;
     NSInteger count = entries.count;
@@ -3667,6 +3753,227 @@ static CGRect mapRectFromArr(NSArray *a) {
     return s;
 }
 
+#pragma mark - MENU-1/2/3 tap-mode menu (persistent, scrollable, submenu drill-in, ⚙ Customize)
+
+// Build the persistent tap-driven menu. drilledParent>=0 means we're showing the submenu of that top-level
+// display index (with a "‹ Back" row); -1 means the top level. Rows are UIButtons inside a UIScrollView, so a
+// tap selects and a drag scrolls (no drag-select tracking — the long-press gesture is ignored in tap-mode).
+- (void)buildTapMenuWithEntries:(NSArray *)entries drilledParent:(int)drilledParent {
+    [self.menuContainer removeFromSuperview];
+    [self.menuDismissLayer removeFromSuperview];
+    self.menuRowEntries = entries;
+    self.menuDrillParent = drilledParent;
+    BOOL drilled = drilledParent >= 0;
+
+    // Full-screen tap-to-cancel layer BEHIND the box (the box, added after, gets taps on its rows first).
+    UIView *dismiss = [[UIView alloc] initWithFrame:self.view.bounds];
+    dismiss.backgroundColor = [UIColor clearColor];
+    UITapGestureRecognizer *dt = [[UITapGestureRecognizer alloc] initWithTarget:self
+                                                                         action:@selector(onTapMenuDismiss:)];
+    [dismiss addGestureRecognizer:dt];
+    [self.view addSubview:dismiss];
+    self.menuDismissLayer = dismiss;
+
+    // The engine menu rect in view coords (what the drag box covered); used to anchor the tap box near the press.
+    CGRect er = [self viewRectForGameX:(int)CGRectGetMinX(self.menuGeomGame)
+                                     y:(int)CGRectGetMinY(self.menuGeomGame)
+                                     w:(int)CGRectGetWidth(self.menuGeomGame)
+                                     h:(int)CGRectGetHeight(self.menuGeomGame)];
+
+    NSInteger nRows = entries.count + (drilled ? 1 : 0);   // +1 for the back row
+    CGFloat boxW = MAX(kMenuWidth, CGRectGetWidth(er) + 16.0);
+    CGFloat headerH = kMenuHeaderViewH;
+
+    UIEdgeInsets ins = self.view.safeAreaInsets;
+    CGFloat availH = self.view.bounds.size.height - ins.top - ins.bottom - 16.0;
+    CGFloat contentH = nRows * kMenuRowViewH;
+    CGFloat scrollH = MIN(contentH, availH - headerH);
+    CGFloat boxH = headerH + scrollH;
+
+    // Anchor over the engine rect, hand-bias away from the thumb, clamp into the safe area (same as drag mode).
+    CGFloat ox = CGRectGetMinX(er) - 8.0;
+    if (self.menuHandRight) ox = CGRectGetMaxX(er) + 8.0 - boxW;
+    CGFloat oy = CGRectGetMinY(er) - 4.0;
+    CGFloat minX = ins.left + 6.0;
+    CGFloat maxX = self.view.bounds.size.width - ins.right - 6.0 - boxW;
+    CGFloat minY = ins.top + 6.0;
+    CGFloat maxY = self.view.bounds.size.height - ins.bottom - 6.0 - boxH;
+    ox = fmin(fmax(ox, minX), fmax(minX, maxX));
+    oy = fmin(fmax(oy, minY), fmax(minY, maxY));
+
+    UIView *box = [[UIView alloc] initWithFrame:CGRectMake(ox, oy, boxW, boxH)];
+    box.backgroundColor = [UIColor colorWithRed:0.36 green:0.33 blue:0.27 alpha:1.0];
+    box.layer.borderColor = [UIColor blackColor].CGColor;
+    box.layer.borderWidth = 1.0;
+    box.layer.shadowColor = [UIColor blackColor].CGColor;
+    box.layer.shadowOpacity = 0.5;
+    box.layer.shadowRadius = 6.0;
+    box.layer.shadowOffset = CGSizeMake(0, 2);
+
+    UILabel *header = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, boxW, headerH)];
+    header.backgroundColor = [UIColor colorWithRed:0.24 green:0.21 blue:0.16 alpha:1.0];
+    header.text = drilled ? @"  Submenu" : @"  Choose Option";
+    header.font = [UIFont boldSystemFontOfSize:14];
+    header.textColor = [UIColor whiteColor];
+    [box addSubview:header];
+
+    // MENU-3: a ⚙ Customize chip on the top-level header — taps latch Shift and reopen, so the swap-config
+    // submenus appear without manually arming the corner ⇧ first. When Shift is already latched it shows a tick.
+    if (!drilled) {
+        UIButton *cog = [UIButton buttonWithType:UIButtonTypeSystem];
+        cog.frame = CGRectMake(boxW - 44.0, 0, 44.0, headerH);
+        [cog setTitle:(self.shiftHeld ? @"⚙✓" : @"⚙") forState:UIControlStateNormal];
+        cog.titleLabel.font = [UIFont systemFontOfSize:14];
+        cog.tintColor = self.shiftHeld ? [UIColor colorWithRed:0.98 green:0.78 blue:0.25 alpha:1.0]
+                                       : [UIColor colorWithWhite:0.85 alpha:1.0];
+        [cog addTarget:self action:@selector(onTapMenuCustomize:) forControlEvents:UIControlEventTouchUpInside];
+        [box addSubview:cog];
+    }
+
+    UIScrollView *sc = [[UIScrollView alloc] initWithFrame:CGRectMake(0, headerH, boxW, scrollH)];
+    sc.contentSize = CGSizeMake(boxW, contentH);
+    sc.showsVerticalScrollIndicator = (contentH > scrollH);
+    sc.bounces = YES;
+    [box addSubview:sc];
+    self.menuScroll = sc;
+
+    self.menuRows = [NSMutableArray arrayWithCapacity:nRows];
+    CGFloat ry = 0;
+    if (drilled) {
+        UIButton *back = [self tapMenuRowButton:CGRectMake(0, ry, boxW, kMenuRowViewH)];
+        [back setAttributedTitle:[self menuRowTextForOption:@"‹ Back" target:@""] forState:UIControlStateNormal];
+        [back addTarget:self action:@selector(onTapMenuBack:) forControlEvents:UIControlEventTouchUpInside];
+        [sc addSubview:back];
+        ry += kMenuRowViewH;
+    }
+    for (NSInteger k = 0; k < (NSInteger)entries.count; k++) {
+        NSDictionary *e = [entries[k] isKindOfClass:[NSDictionary class]] ? entries[k] : @{};
+        BOOL isParent = (!drilled)
+            && [e[@"sub"] isKindOfClass:[NSArray class]] && [(NSArray *)e[@"sub"] count] > 0;
+        UIButton *row = [self tapMenuRowButton:CGRectMake(0, ry, boxW, kMenuRowViewH)];
+        NSMutableAttributedString *txt = [[self menuRowTextForOption:e[@"opt"] target:e[@"tgt"]] mutableCopy];
+        if (isParent) {
+            [txt appendAttributedString:[[NSAttributedString alloc] initWithString:@"  ▸"
+                attributes:@{NSForegroundColorAttributeName: [UIColor whiteColor],
+                             NSFontAttributeName: [UIFont systemFontOfSize:16 weight:UIFontWeightBold]}]];
+        }
+        [row setAttributedTitle:txt forState:UIControlStateNormal];
+        row.tag = k;   // index into `entries`
+        [row addTarget:self action:@selector(onTapMenuRow:) forControlEvents:UIControlEventTouchUpInside];
+        [sc addSubview:row];
+        [self.menuRows addObject:row];
+        ry += kMenuRowViewH;
+    }
+
+    [self.view addSubview:box];
+    self.menuContainer = box;
+    [self appendLine:[NSString stringWithFormat:@"[menu-diag] tap-mode menu BUILT n=%ld drilled=%d",
+                      (long)entries.count, drilled]];
+}
+
+// A left-aligned, highlight-on-press menu row button (OSRS-styled).
+- (UIButton *)tapMenuRowButton:(CGRect)frame {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+    b.frame = frame;
+    b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+    b.backgroundColor = [UIColor clearColor];
+    [b setBackgroundImage:[self solidImage:[UIColor colorWithWhite:1.0 alpha:0.22]] forState:UIControlStateHighlighted];
+    return b;
+}
+
+// 1x1 stretchable solid-colour image (for a button's highlighted background).
+- (UIImage *)solidImage:(UIColor *)color {
+    UIGraphicsBeginImageContextWithOptions(CGSizeMake(1, 1), NO, 0);
+    [color setFill];
+    UIRectFill(CGRectMake(0, 0, 1, 1));
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
+// Tap a tap-mode row: at top level a ▸ parent drills into its submenu, a flat row commits via the engine row
+// click-through; inside a submenu the row commits the child directly (its RuneLite onClick, via the bridge).
+- (void)onTapMenuRow:(UIButton *)b {
+    NSInteger k = b.tag;
+    if (self.menuDrillParent >= 0) {
+        [self.menuHaptic selectionChanged];
+        [JVMLauncher invokeMenuEntryParent:self.menuDrillParent child:(int)k];
+        [self appendLine:[NSString stringWithFormat:@"[shell] menu submenu select parent=%d child=%ld",
+                          self.menuDrillParent, (long)k]];
+        [self closeTapMenuAfterInvoke];
+        return;
+    }
+    NSDictionary *e = (k >= 0 && k < (NSInteger)self.menuRowEntries.count)
+        ? self.menuRowEntries[k] : nil;
+    NSArray *sub = [e[@"sub"] isKindOfClass:[NSArray class]] ? e[@"sub"] : nil;
+    if (sub.count > 0) {
+        [self.menuHaptic selectionChanged]; [self.menuHaptic prepare];
+        [self buildTapMenuWithEntries:sub drilledParent:(int)k];   // drill in
+        return;
+    }
+    // Flat row. When the engine renders the whole menu (not self-scrolling), click its fixed-geometry row — this
+    // honours the entry's RuneLite onClick + worldViewId. When the engine menu is SCROLLABLE (>~30 entries) the
+    // fixed per-row geometry is unreliable (off-screen rows clamp to the wrong place), so commit the entry
+    // directly by index instead (childIndex<0 = the top-level entry itself).
+    if (self.menuScrollable) {
+        [self.menuHaptic selectionChanged];
+        [JVMLauncher invokeMenuEntryParent:(int)k child:-1];
+        [self appendLine:[NSString stringWithFormat:@"[shell] menu tap select row=%ld (invoke, scrollable)", (long)k]];
+        [self closeTapMenuAfterInvoke];
+        return;
+    }
+    CGRect r = self.menuGeomGame;
+    int ex = (int)lround(CGRectGetMidX(r));
+    int ey = (int)CGRectGetMinY(r) + kMenuHeaderPx + (int)k * kMenuRowPx + kMenuRowPx / 2;
+    ey = (int)fmin(fmax((CGFloat)ey, CGRectGetMinY(r) + 1), CGRectGetMaxY(r) - 2);
+    [self.menuHaptic selectionChanged];
+    [JVMLauncher postMenuSelectX:ex y:ey];
+    [self appendLine:[NSString stringWithFormat:@"[shell] menu tap select row=%ld @game %d,%d", (long)k, ex, ey]];
+    self.menuOpen = NO;
+    [self beginMenuClose];
+}
+
+// "‹ Back" — return to the top-level menu.
+- (void)onTapMenuBack:(UIButton *)b {
+    [self buildTapMenuWithEntries:self.menuTopEntries drilledParent:-1];
+}
+
+// ⚙ Customize — latch Shift (so Menu-Entry-Swapper's swap-config submenus appear) then reopen the engine menu at
+// the same target. Closes the current menu first so the reopened one is rebuilt cleanly with Shift held.
+- (void)onTapMenuCustomize:(UIButton *)b {
+    if (!self.shiftHeld) [self onToggleShift];   // latch Shift + update the corner button state
+    int gx = self.lastMenuX, gy = self.lastMenuY;
+    CGPoint anchor = self.menuAnchor;
+    // Close the open engine menu (title-strip click = no action), tear down native, then reopen shortly after.
+    CGRect r = self.menuGeomGame;
+    if (r.size.width > 0) [JVMLauncher postMenuSelectX:(int)lround(CGRectGetMidX(r)) y:(int)CGRectGetMinY(r) + 2];
+    self.menuOpen = NO;
+    [self teardownMenuViews];
+    self.customizeReopenPending = YES;   // a new long-press before the delay fires cancels this (openEngineMenuAtGameX)
+    [self appendLine:@"[shell] menu Customize -> Shift latched, reopening"];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (!self.customizeReopenPending) return;   // superseded by a fresh menu in the meantime
+        self.customizeReopenPending = NO;
+        [self openEngineMenuAtGameX:gx gameY:gy anchor:anchor];
+    });
+}
+
+// Tap outside the menu box -> cancel (close the engine menu with no action).
+- (void)onTapMenuDismiss:(UITapGestureRecognizer *)g {
+    [self cancelMenu];
+}
+
+// After invoking a submenu child directly (its action already ran on the client thread), close the now-stale
+// open engine menu with a clean title-strip click, then tear the native cover down.
+- (void)closeTapMenuAfterInvoke {
+    CGRect r = self.menuGeomGame;
+    if (r.size.width > 0) {
+        [JVMLauncher postMenuSelectX:(int)lround(CGRectGetMidX(r)) y:(int)CGRectGetMinY(r) + 2];
+    }
+    self.menuOpen = NO;
+    [self beginMenuClose];
+}
+
 // Drive the native menu from the drag: highlight the row under the finger, keep the (hidden) engine menu open
 // by parking its clamped cursor on the matching engine row, and set the commit target to that row's engine
 // centre. Off the rows -> cancel (commit clicks the title strip = close with no action).
@@ -3722,15 +4029,18 @@ static CGRect mapRectFromArr(NSArray *a) {
             break;
         }
         case UIGestureRecognizerStateChanged:
+            if (self.menuTapMode) break;              // tap-mode: the persistent list drives itself (buttons/dismiss)
             [self updateMenuHighlightForPoint:loc];   // move the engine pointer to the finger -> highlight
             break;
 
         case UIGestureRecognizerStateEnded:
+            if (self.menuTapMode) break;              // tap-mode: a lift doesn't commit; the menu stays up to tap
             [self commitMenuSelection];               // click under the finger -> select (or close if off-menu)
             break;
 
         case UIGestureRecognizerStateCancelled:
         case UIGestureRecognizerStateFailed:
+            if (self.menuTapMode) break;              // tap-mode: persistent; an interrupted hold doesn't close it
             [self cancelMenu];                        // any click closes the open engine menu (camera recovers)
             break;
 
@@ -3763,6 +4073,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 // REAL finger spot so commit can tell select (over the menu) from cancel (dragged off). Haptic ticks per row.
 - (void)updateMenuHighlightForPoint:(CGPoint)p {
     if (!self.menuOpen) return;
+    if (self.menuTapMode) return;                                            // tap-mode list isn't drag-driven
     if (self.menuContainer) { [self updateNativeMenuHighlight:p]; return; }   // #8: native rows drive selection
     int gx = 0, gy = 0;
     if (![self mapPoint:p toGameX:&gx toGameY:&gy]) return;   // letterbox: keep the menu, ignore this move
@@ -3835,6 +4146,10 @@ static CGRect mapRectFromArr(NSArray *a) {
 // the cover up and let onDisplayTick tear it down once the MenuPeekBridge snapshot reports the engine menu closed
 // (or a short timeout). The container is inert here (menuOpen=NO), so gestures/camera already recovered.
 - (void)beginMenuClose {
+    // The tap-mode dismiss layer must stop intercepting the moment we commit (don't block the game through the
+    // close-latency window); the box stays as the cover until onDisplayTick tears it down.
+    [self.menuDismissLayer removeFromSuperview];
+    self.menuDismissLayer = nil;
     if (self.menuContainer == nil) { [self teardownMenuViews]; return; }
     self.menuClosing = YES;
     self.menuClosingAt = CACurrentMediaTime();
@@ -3842,10 +4157,16 @@ static CGRect mapRectFromArr(NSArray *a) {
 
 - (void)teardownMenuViews {
     [self.menuContainer removeFromSuperview];
+    [self.menuDismissLayer removeFromSuperview];
     self.menuContainer = nil;
+    self.menuDismissLayer = nil;
+    self.menuScroll = nil;
     self.menuRows = nil;
     self.menuRowEntries = nil;
+    self.menuTopEntries = nil;
     self.menuHighlight = -1;
+    self.menuTapMode = NO;
+    self.menuDrillParent = -1;
     self.menuBuilding = NO;
     self.menuClosing = NO;
     // Restore the default engine-menu raster suppression (the build-timeout fallback un-gates it).
@@ -4044,6 +4365,131 @@ static CGRect mapRectFromArr(NSArray *a) {
         : [UIColor colorWithWhite:0.0 alpha:0.45];
     self.shiftButton.tintColor = self.shiftHeld ? [UIColor blackColor] : [UIColor whiteColor];
     [self appendLine:self.shiftHeld ? @"[shell] Shift latched ON" : @"[shell] Shift released"];
+}
+
+#pragma mark - KEY-1 action-hotkey strip
+
+// The user's pinned hotkey ids ("group|key"), persisted across launches.
+- (NSArray<NSString *> *)hotkeyPinned {
+    NSArray *a = [[NSUserDefaults standardUserDefaults] arrayForKey:@"hotkeyPinnedKeys"];
+    return [a isKindOfClass:[NSArray class]] ? a : @[];
+}
+- (void)setHotkeyPinned:(NSArray<NSString *> *)pinned {
+    [[NSUserDefaults standardUserDefaults] setObject:pinned forKey:@"hotkeyPinnedKeys"];
+}
+
+// Refresh the cached action list from the bridge (current bindings) and return it.
+- (NSArray *)refreshHotkeyActions {
+    NSString *json = [JVMLauncher mobileHotkeyActions];
+    NSArray *arr = nil;
+    if (json.length) {
+        arr = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding]
+                                              options:0 error:nil];
+    }
+    self.hotkeyActions = [arr isKindOfClass:[NSArray class]] ? arr : @[];
+    return self.hotkeyActions;
+}
+
+// Tap the ⚡ chip: show/hide the strip (rebuilding it from the current pinned set + live bindings on show).
+- (void)onToggleHotkeyStrip {
+    self.hotkeyStripVisible = !self.hotkeyStripVisible;
+    if (self.hotkeyStripVisible) {
+        [self rebuildHotkeyStrip];
+        if (self.hotkeyStrip.arrangedSubviews.count == 0) {
+            // Nothing pinned yet — guide the user straight to the picker instead of showing an empty strip.
+            self.hotkeyStripVisible = NO;
+            [self presentHotkeyPicker];
+            return;
+        }
+    }
+    self.hotkeyStrip.hidden = !self.hotkeyStripVisible;
+    self.hotkeyButton.backgroundColor = self.hotkeyStripVisible
+        ? [UIColor colorWithRed:0.95 green:0.62 blue:0.11 alpha:0.92] : [UIColor colorWithWhite:0.0 alpha:0.45];
+    self.hotkeyButton.tintColor = self.hotkeyStripVisible ? [UIColor blackColor] : [UIColor whiteColor];
+}
+
+// Rebuild the strip's buttons from the pinned set (one per pinned action that still exists).
+- (void)rebuildHotkeyStrip {
+    for (UIView *v in [self.hotkeyStrip.arrangedSubviews copy]) {
+        [self.hotkeyStrip removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    NSArray *actions = [self refreshHotkeyActions];
+    NSArray<NSString *> *pinned = [self hotkeyPinned];
+    for (NSString *pid in pinned) {
+        NSDictionary *act = [self hotkeyActionForId:pid inActions:actions];
+        if (!act) continue;
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+        NSString *label = [act[@"label"] isKindOfClass:[NSString class]] ? act[@"label"] : pid;
+        [b setTitle:label forState:UIControlStateNormal];
+        b.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+        b.titleLabel.adjustsFontSizeToFitWidth = YES;
+        b.contentEdgeInsets = UIEdgeInsetsMake(0, 8, 0, 8);
+        b.tintColor = [UIColor whiteColor];
+        b.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.6];
+        b.layer.cornerRadius = 8;
+        // Unbound actions show dimmed (tap is a no-op until the user binds them in the plugin's config).
+        BOOL unbound = [act[@"keyCode"] intValue] == 0;   // VK_UNDEFINED
+        if (unbound) b.alpha = 0.45;
+        b.accessibilityIdentifier = pid;   // "group|key" — read back in onHotkeyTap:
+        [b addTarget:self action:@selector(onHotkeyTap:) forControlEvents:UIControlEventTouchUpInside];
+        [self.hotkeyStrip addArrangedSubview:b];
+        [b.heightAnchor constraintEqualToConstant:34].active = YES;
+    }
+}
+
+// Fire the pinned action's configured Keybind through the bridge ("group|key" is carried on the button).
+- (void)onHotkeyTap:(UIButton *)b {
+    NSArray<NSString *> *parts = [b.accessibilityIdentifier componentsSeparatedByString:@"|"];
+    if (parts.count != 2) return;
+    [[UIImpactFeedbackGenerator new] impactOccurred];
+    [JVMLauncher mobileFireHotkeyGroup:parts[0] key:parts[1]];
+    [self appendLine:[NSString stringWithFormat:@"[shell] hotkey fire %@/%@", parts[0], parts[1]]];
+}
+
+// Long-press the ⚡ chip -> the picker.
+- (void)onHotkeyPicker:(UILongPressGestureRecognizer *)g {
+    if (g.state == UIGestureRecognizerStateBegan) [self presentHotkeyPicker];
+}
+
+// An action sheet of every fireable hotkey (with its current binding); tapping one toggles it pinned.
+- (void)presentHotkeyPicker {
+    NSArray *actions = [self refreshHotkeyActions];
+    NSMutableArray<NSString *> *pinned = [[self hotkeyPinned] mutableCopy];
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Action hotkeys"
+        message:@"Pin which hotkeys appear in the ⚡ strip. Bind them in each plugin's config."
+        preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSDictionary *act in actions) {
+        if (![act isKindOfClass:[NSDictionary class]]) continue;
+        NSString *pid = [self hotkeyIdFor:act];
+        BOOL isPinned = [pinned containsObject:pid];
+        NSString *bind = [act[@"bind"] isKindOfClass:[NSString class]] ? act[@"bind"] : @"Not set";
+        NSString *title = [NSString stringWithFormat:@"%@ %@  (%@)",
+                           isPinned ? @"✓" : @"○", act[@"label"], bind];
+        UIAlertAction *a = [UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault
+                                                  handler:^(UIAlertAction * _Nonnull action) {
+            NSMutableArray<NSString *> *p = [[self hotkeyPinned] mutableCopy];
+            if ([p containsObject:pid]) [p removeObject:pid]; else [p addObject:pid];
+            [self setHotkeyPinned:p];
+            [self rebuildHotkeyStrip];
+            if (!self.hotkeyStripVisible && self.hotkeyStrip.arrangedSubviews.count > 0) [self onToggleHotkeyStrip];
+        }];
+        [ac addAction:a];
+    }
+    [ac addAction:[UIAlertAction actionWithTitle:@"Done" style:UIAlertActionStyleCancel handler:nil]];
+    ac.popoverPresentationController.sourceView = self.hotkeyButton;
+    ac.popoverPresentationController.sourceRect = self.hotkeyButton.bounds;
+    [self presentViewController:ac animated:YES completion:nil];
+}
+
+- (NSString *)hotkeyIdFor:(NSDictionary *)act {
+    return [NSString stringWithFormat:@"%@|%@", act[@"group"], act[@"key"]];
+}
+- (NSDictionary *)hotkeyActionForId:(NSString *)pid inActions:(NSArray *)actions {
+    for (NSDictionary *act in actions) {
+        if ([act isKindOfClass:[NSDictionary class]] && [[self hotkeyIdFor:act] isEqualToString:pid]) return act;
+    }
+    return nil;
 }
 
 // Drain the shared-core notification queue -> real OS notifications. Idle/Chat notifications, random events, etc.

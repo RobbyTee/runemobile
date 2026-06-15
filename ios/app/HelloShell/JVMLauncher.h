@@ -109,6 +109,14 @@ typedef void (^JVMLogSink)(NSString *line);
 /// cursor stuck on the selected target (the "stays on the stairs" bug). Use for the native menu commit/cancel.
 + (void)postMenuSelectX:(int)x y:(int)y;
 
+/// MENU-1: commit a drilled-in right-click submenu child by (parent display index, child index) into the live
+/// frozen menu tree — runs the child's RuneLite onClick / menuAction. No-op on a jar without invokeMenuEntry.
++ (void)invokeMenuEntryParent:(int)parentDisplayIndex child:(int)childIndex;
+
+/// KEY-1: fire a plugin's configured action-hotkey by synthesizing its key chord (AWT extended keyCode + the
+/// InputEvent.*_DOWN_MASK modifier bits) via JavaBridge.onKeybind. No-op on a jar without onKeybind.
++ (void)onKeybindKeyCode:(int)keyCode modifiers:(int)modifiers;
+
 /// Move the pointer (no button held) into the gamepack via JavaBridge.onMove — a plain MOUSE_MOVED.
 /// Used to highlight the entry under the finger while drag-selecting an open right-click menu.
 /// `x`,`y` are gamepack-canvas (765x503) pixels. Call on the main thread.
@@ -306,6 +314,12 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Hub install/remove progress ({refreshing,seq}) (MobileUiBridge.hubState). The hub screen polls this to show
 /// a spinner and re-fetch the manifest when seq bumps. Main thread.
 + (nullable NSString *)mobileHubState;
+
+/// KEY-1: curated fireable plugin action-hotkeys + current bindings, JSON [{group,key,label,keyCode,mods,bind}].
++ (nullable NSString *)mobileHotkeyActions;
+
+/// KEY-1: fire a plugin action-hotkey by (config group, key) — the bridge reads the live Keybind + synthesizes it.
++ (void)mobileFireHotkeyGroup:(NSString *)group key:(NSString *)key;
 
 /// Events since `sinceSeq` as JSON (MobileUiBridge.pollMobileUiEvents): {seq, events:[{seq,kind,group,key}]}.
 + (nullable NSString *)mobilePollEventsSince:(long long)sinceSeq;

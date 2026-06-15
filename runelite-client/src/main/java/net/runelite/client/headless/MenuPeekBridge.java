@@ -27,6 +27,7 @@ package net.runelite.client.headless;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.Menu;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.Point;
 
@@ -61,8 +62,14 @@ public final class MenuPeekBridge
 {
 	private static final boolean ENABLED = Boolean.getBoolean("runelite.menupeek");
 
-	// How many entries (from the display top down) to publish — enough for a chip + a native chooser.
-	private static final int MAX_ENTRIES = Integer.getInteger("runelite.menupeek.maxEntries", 10);
+	// How many entries (from the display top down) to publish — enough for a chip + a native chooser. Raised
+	// from 10 so crowded scenes (ground-item piles, busy NPCs) aren't silently truncated in the native menu
+	// (MENU-2); the native side scrolls when the list overflows the safe area.
+	private static final int MAX_ENTRIES = Integer.getInteger("runelite.menupeek.maxEntries", 32);
+
+	// Per-parent submenu children to publish (MENU-1). One level only — OSRS submenus don't nest. Bounds the
+	// snapshot size for a parent like Menu-Entry-Swapper's "Swap left-click ▸" that can carry many options.
+	private static final int MAX_SUB = 16;
 
 	// Published lock-free: the native JNI thread reads these; the client thread writes them in tick().
 	private static volatile String snapshotJson = "{\"active\":false}";
@@ -172,7 +179,40 @@ public final class MenuPeekBridge
 
 	private static void appendEntry(StringBuilder sb, MenuEntry e)
 	{
-		sb.append("{\"opt\":\"").append(jsonEsc(stripTags(e.getOption())))
+		sb.append('{');
+		appendFields(sb, e);
+		// MENU-1: if this entry carries a submenu (e.g. Menu-Entry-Swapper "Swap left-click ▸"), publish its
+		// children flat under "sub" so the native menu can show a ▸ and drill in. One level only — and the
+		// children are emitted in array order; the native commit (JavaBridge.invokeMenuEntry) re-walks the live
+		// (frozen, menu-open) entries by that same index, so order need only be self-consistent.
+		final Menu sub = safeSubMenu(e);
+		if (sub != null)
+		{
+			final MenuEntry[] kids = safeSubEntries(sub);
+			if (kids != null && kids.length > 0)
+			{
+				sb.append(",\"sub\":[");
+				final int kn = Math.min(MAX_SUB, kids.length);
+				for (int i = 0; i < kn; i++)
+				{
+					if (i > 0)
+					{
+						sb.append(',');
+					}
+					sb.append('{');
+					appendFields(sb, kids[i]);   // children never recurse (no nested "sub")
+					sb.append('}');
+				}
+				sb.append(']');
+			}
+		}
+		sb.append('}');
+	}
+
+	/** The flat entry fields, WITHOUT the enclosing braces (so a submenu block can be inserted before "}"). */
+	private static void appendFields(StringBuilder sb, MenuEntry e)
+	{
+		sb.append("\"opt\":\"").append(jsonEsc(stripTags(e.getOption())))
 			.append("\",\"tgt\":\"").append(jsonEsc(stripTags(e.getTarget())))
 			.append("\",\"type\":\"").append(jsonEsc(String.valueOf(e.getType())))
 			.append("\",\"id\":").append(e.getIdentifier())
@@ -181,8 +221,32 @@ public final class MenuPeekBridge
 			.append(",\"item\":").append(e.getItemId())
 			.append(",\"wv\":").append(e.getWorldViewId())
 			.append(",\"deprio\":").append(e.isDeprioritized())
-			.append(",\"force\":").append(e.isForceLeftClick())
-			.append('}');
+			.append(",\"force\":").append(e.isForceLeftClick());
+		// NOTE: caller closes the object (after an optional "sub" block).
+	}
+
+	private static Menu safeSubMenu(MenuEntry e)
+	{
+		try
+		{
+			return e.getSubMenu();
+		}
+		catch (RuntimeException ex)
+		{
+			return null;
+		}
+	}
+
+	private static MenuEntry[] safeSubEntries(Menu m)
+	{
+		try
+		{
+			return m.getMenuEntries();
+		}
+		catch (RuntimeException ex)
+		{
+			return null;
+		}
 	}
 
 	/** Same format as {@link MenuPeek}'s fingerprint, so the probe's cross-check is a plain string compare. */

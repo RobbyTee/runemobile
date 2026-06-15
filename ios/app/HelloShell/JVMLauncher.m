@@ -45,6 +45,8 @@ static jmethodID gMidWarmed = NULL;   // JavaBridge.presentReady()Z — world ge
 static jmethodID gMidMenuSelect = NULL;  // selectMenuPoint(II)V — menu row select + hover-clear (optional)
 static jmethodID gMidShiftHeld = NULL;   // setShiftHeld(Z)V — sticky-Shift modifier (optional; tolerate older jar)
 static jmethodID gMidMenuSuppress = NULL; // setMenuRenderSuppressed(Z)V — engine-menu raster gate (optional)
+static jmethodID gMidInvokeMenu = NULL;  // invokeMenuEntry(II)V — commit a drilled-in submenu child (MENU-1, optional)
+static jmethodID gMidKeybind = NULL;     // onKeybind(II)V — fire a plugin action-hotkey chord (KEY-1, optional)
 
 // W3 hybrid-chrome read surface — a SEPARATE facade (MobileChromeBridge) resolved lazily on the main thread.
 static jclass    gChromeClass = NULL;   // global ref to net.runelite.client.headless.MobileChromeBridge
@@ -91,6 +93,8 @@ static jmethodID gMuiPanelWheel = NULL;     // panelWheel(III)Ljava/lang/String;
 static jmethodID gMuiPanelMove = NULL;      // panelMove(II)Ljava/lang/String;
 static jmethodID gMuiPanelTextActive = NULL;// isPanelTextActive()Z
 static jmethodID gMuiPanelTextGet = NULL;   // getPanelText()Ljava/lang/String;
+static jmethodID gMuiHotkeyActions = NULL;  // hotkeyActionsJson()Ljava/lang/String; — KEY-1 fireable hotkeys (optional)
+static jmethodID gMuiFireHotkey = NULL;     // fireHotkey(String,String)V — KEY-1 fire a plugin action-hotkey (optional)
 
 // Native Quest Helper reflow — the QuestHelperBridge facade (reflection into the external plugin).
 static jclass    gQhClass = NULL;       // global ref to net.runelite.client.headless.QuestHelperBridge
@@ -212,6 +216,10 @@ static BOOL ensureBridge(void) {
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidShiftHeld = NULL; }
     gMidMenuSuppress = (*env)->GetStaticMethodID(env, global, "setMenuRenderSuppressed", "(Z)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidMenuSuppress = NULL; }
+    gMidInvokeMenu = (*env)->GetStaticMethodID(env, global, "invokeMenuEntry", "(II)V");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidInvokeMenu = NULL; }
+    gMidKeybind = (*env)->GetStaticMethodID(env, global, "onKeybind", "(II)V");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidKeybind = NULL; }
     gBridgeClass = global;   // publish only once fully resolved
     return YES;
 }
@@ -415,6 +423,10 @@ static BOOL ensureMui(void) {
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiPanelTextActive = NULL; }
     gMuiPanelTextGet = (*env)->GetStaticMethodID(env, global, "getPanelText", "()Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiPanelTextGet = NULL; }
+    gMuiHotkeyActions = (*env)->GetStaticMethodID(env, global, "hotkeyActionsJson", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiHotkeyActions = NULL; }
+    gMuiFireHotkey = (*env)->GetStaticMethodID(env, global, "fireHotkey", "(Ljava/lang/String;Ljava/lang/String;)V");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiFireHotkey = NULL; }
     gMuiClass = global;   // publish only once fully resolved
     return YES;
 }
@@ -912,7 +924,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
                                                      // NOT the .probe gate — that mutates and is desktop-only.
         @"-Drunelite.menupeek=true",                 // W3 touch-targeting: arm the read-only MenuPeekBridge
                                                      // (native right-click menu data source). NOT .probe (desktop-only).
-        @"-Drunelite.menupeek.maxEntries=14",        // publish enough display rows for the native menu (default 10)
+        @"-Drunelite.menupeek.maxEntries=32",        // MENU-2: publish enough rows that crowded scenes aren't truncated (native scrolls)
         @"-Drunelite.huddata=true",                  // W3 Feature-A: arm the read-only HudDataBridge snapshot
                                                      // (chat lines / orb values / minimap positions for the veneers)
         @"-Drunelite.hudveneer=true",                // W3 Feature-A A3: arm the HudVeneerBridge (engine-HUD
@@ -1343,6 +1355,26 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
 }
 
+// MENU-1: commit a drilled-in right-click submenu child by (parent display index, child index) — the native
+// menu resolved these from the published snapshot; JavaBridge re-walks the live (frozen) menu tree and runs the
+// child's RuneLite onClick (or menuAction). No-op on an older jar without invokeMenuEntry.
++ (void)invokeMenuEntryParent:(int)parentDisplayIndex child:(int)childIndex {
+    if (!ensureBridge() || !gMidInvokeMenu) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidInvokeMenu,
+                                 (jint)parentDisplayIndex, (jint)childIndex);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
+// KEY-1: fire a plugin's configured action-hotkey by synthesizing its key chord (AWT extended keyCode + the
+// InputEvent.*_DOWN_MASK modifier bits). No-op on an older jar without onKeybind.
++ (void)onKeybindKeyCode:(int)keyCode modifiers:(int)modifiers {
+    if (!ensureBridge() || !gMidKeybind) return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidKeybind, (jint)keyCode, (jint)modifiers);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+}
+
 + (void)postMoveX:(int)x y:(int)y {
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
@@ -1752,6 +1784,27 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMui() || !gMuiHubState) return nil;
     JNIEnv *env = gMainEnv;
     return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiHubState));
+}
+
+// KEY-1: the curated fireable plugin action-hotkeys + their current bindings, as JSON
+// [{group,key,label,keyCode,mods,bind}]. nil on an older jar without the method.
++ (NSString *)mobileHotkeyActions {
+    if (!ensureMui() || !gMuiHotkeyActions) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiHotkeyActions));
+}
+
+// KEY-1: fire a plugin action-hotkey by (config group, key) — the bridge reads the live Keybind and synthesizes
+// its chord. No-op on an older jar without the method.
++ (void)mobileFireHotkeyGroup:(NSString *)group key:(NSString *)key {
+    if (!ensureMui() || !gMuiFireHotkey || group == nil || key == nil) return;
+    JNIEnv *env = gMainEnv;
+    jstring jg = (*env)->NewStringUTF(env, group.UTF8String);
+    jstring jk = (*env)->NewStringUTF(env, key.UTF8String);
+    (*env)->CallStaticVoidMethod(env, gMuiClass, gMuiFireHotkey, jg, jk);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    (*env)->DeleteLocalRef(env, jg);
+    (*env)->DeleteLocalRef(env, jk);
 }
 
 + (NSString *)mobilePollEventsSince:(long long)sinceSeq {

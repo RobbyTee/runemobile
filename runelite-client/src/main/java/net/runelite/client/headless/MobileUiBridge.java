@@ -32,6 +32,7 @@ import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
+import java.lang.reflect.Field;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayDeque;
@@ -64,6 +65,7 @@ import net.runelite.client.config.ConfigItemDescriptor;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.config.ConfigSection;
 import net.runelite.client.config.ConfigSectionDescriptor;
+import net.runelite.client.config.Keybind;
 import net.runelite.client.config.Notification;
 import net.runelite.client.config.Range;
 import net.runelite.client.config.RuneLiteConfig;
@@ -1798,6 +1800,170 @@ public final class MobileUiBridge
 		{
 			return "{}";
 		}
+	}
+
+	// ---- KEY-1: plugin action-hotkeys -------------------------------------------------------------------
+
+	/**
+	 * The curated set of plugin action-hotkeys the native shell can fire from an on-screen strip — {group, config
+	 * key, label}. These are the {@code HotkeyListener} / raw-{@code KeyListener} action binds (verified keyNames)
+	 * that perform a one-shot toggle/action and so map to a button; modifier-hold binds (e.g. anti-drag Alt) are
+	 * excluded.
+	 */
+	private static final String[][] HOTKEY_ACTIONS = {
+		{"grounditems", "hotkey", "Hide ground items"},
+		{"inventoryViewer", "toggleKeybind", "Inventory overlay"},
+		{"worldhopper", "previousKey", "Quick-hop prev"},
+		{"worldhopper", "nextKey", "Quick-hop next"},
+		{"screenshot", "hotkey", "Screenshot"},
+		{"bank", "searchKeybind", "Bank search"},
+		{"raids", "screenshotHotkey", "Raids layout shot"},
+	};
+
+	// [keyCode, modifiers] reflected fields, resolved once and published through a single volatile reference so
+	// there is no torn two-field state; a benign race just repeats the idempotent reflection.
+	private static volatile Field[] kbFields;
+
+	/**
+	 * KEY-1: the curated action-hotkeys with each one's <em>current</em> binding, as JSON
+	 * {@code [{group,key,label,keyCode,mods,bind}]}. {@code keyCode}/{@code mods} are the AWT extended key-code +
+	 * {@code InputEvent.*_DOWN_MASK} bits (so the native side can fire directly), {@code bind} a human label
+	 * ("Ctrl + F" / "Not set"). Read off the live config so a rebind in the plugin's config is reflected.
+	 */
+	public static String hotkeyActionsJson()
+	{
+		final ConfigManager cm = configManager;
+		final StringBuilder sb = new StringBuilder(256);
+		sb.append('[');
+		boolean first = true;
+		for (final String[] a : HOTKEY_ACTIONS)
+		{
+			Keybind kb = null;
+			if (cm != null)
+			{
+				try
+				{
+					kb = cm.getConfiguration(a[0], a[1], Keybind.class);
+				}
+				catch (RuntimeException ex)
+				{
+					kb = null;
+				}
+			}
+			int keyCode = KeyEvent.VK_UNDEFINED, mods = 0;
+			String bind = "Not set";
+			if (kb != null && !Keybind.NOT_SET.equals(kb))
+			{
+				final int[] km = keybindFields(kb);
+				if (km != null)
+				{
+					keyCode = km[0];
+					mods = km[1];
+				}
+				bind = kb.toString();
+			}
+			if (!first)
+			{
+				sb.append(',');
+			}
+			first = false;
+			sb.append("{\"group\":\"").append(a[0]).append("\",\"key\":\"").append(a[1])
+				.append("\",\"label\":\"").append(jsonEscape(a[2]))
+				.append("\",\"keyCode\":").append(keyCode).append(",\"mods\":").append(mods)
+				.append(",\"bind\":\"").append(jsonEscape(bind)).append("\"}");
+		}
+		sb.append(']');
+		return sb.toString();
+	}
+
+	/**
+	 * KEY-1: fire a plugin action-hotkey by (config group, key) — reads the live {@link Keybind} and synthesizes
+	 * its exact chord via {@link JavaBridge#onKeybind} (a matched {@code KEY_PRESSED}+{@code KEY_RELEASED}), which
+	 * the plugin's {@code HotkeyListener} catches. No-op if the bind is unset.
+	 */
+	public static void fireHotkey(String group, String key)
+	{
+		final ConfigManager cm = configManager;
+		if (!ENABLED || cm == null || group == null || key == null)
+		{
+			return;
+		}
+		try
+		{
+			final Keybind kb = cm.getConfiguration(group, key, Keybind.class);
+			if (kb == null || Keybind.NOT_SET.equals(kb))
+			{
+				return;
+			}
+			final int[] km = keybindFields(kb);
+			if (km == null || km[0] == KeyEvent.VK_UNDEFINED)
+			{
+				return;
+			}
+			JavaBridge.onKeybind(km[0], km[1]);
+		}
+		catch (RuntimeException ex)
+		{
+			log.debug("[mobile-ui] fireHotkey({}, {}) failed", group, key, ex);
+		}
+	}
+
+	/**
+	 * Read a {@link Keybind}'s {keyCode, modifiers} via reflection — Keybind exposes neither as a getter, and we
+	 * keep upstream {@code Keybind.java} unforked. Same-module reflection, fields cached after the first read.
+	 */
+	private static int[] keybindFields(Keybind kb)
+	{
+		try
+		{
+			Field[] f = kbFields;
+			if (f == null)
+			{
+				final Field kc = Keybind.class.getDeclaredField("keyCode");
+				final Field md = Keybind.class.getDeclaredField("modifiers");
+				kc.setAccessible(true);
+				md.setAccessible(true);
+				f = new Field[]{kc, md};
+				kbFields = f;   // single-reference publish — no torn two-field state
+			}
+			return new int[]{f[0].getInt(kb), f[1].getInt(kb)};
+		}
+		catch (ReflectiveOperationException ex)
+		{
+			return null;
+		}
+	}
+
+	/** Minimal JSON string escape (quotes/backslashes/control chars) for the small labels this bridge emits. */
+	private static String jsonEscape(String s)
+	{
+		if (s == null || s.isEmpty())
+		{
+			return "";
+		}
+		final StringBuilder b = new StringBuilder(s.length() + 4);
+		for (int i = 0; i < s.length(); i++)
+		{
+			final char c = s.charAt(i);
+			switch (c)
+			{
+				case '"':
+					b.append("\\\"");
+					break;
+				case '\\':
+					b.append("\\\\");
+					break;
+				case '\n':
+				case '\r':
+				case '\t':
+					b.append(' ');
+					break;
+				default:
+					b.append(c);
+					break;
+			}
+		}
+		return b.toString();
 	}
 
 	/** The owning {@link Plugin} for a config {@code group} (for whole-plugin reset), or null (incl. fake-plugins). */

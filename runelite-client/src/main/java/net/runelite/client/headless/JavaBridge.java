@@ -43,6 +43,7 @@ import net.runelite.api.GameObject;
 import net.runelite.api.GameState;
 import net.runelite.api.GroundObject;
 import net.runelite.api.MainBufferProvider;
+import net.runelite.api.Menu;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.Scene;
@@ -1183,6 +1184,89 @@ public final class JavaBridge
 		});
 	}
 
+	/**
+	 * MENU-1: commit a right-click SUBMENU child the native menu drilled into. The engine renders submenu
+	 * children in a flyout, not as rows of the main menu, so the {@link #selectMenuPoint} click-through (which
+	 * targets a main-menu row's canvas geometry) can't reach them. Instead we resolve the child in the live —
+	 * and, while the right-click menu is open, <em>frozen</em> — menu tree by the same (parent display index,
+	 * child index) the {@link MenuPeekBridge} snapshot published, then run its action directly: a
+	 * RuneLite-registered {@code onClick} consumer (how Menu-Entry-Swapper / Ground-Items / NPC-tag submenu
+	 * items are built) is invoked as the engine would, else fall back to {@code menuAction}. Runs on the client
+	 * thread (menu reads + onClick are client-thread-only). The native side closes the now-stale engine menu
+	 * separately (a title-strip click), exactly like a cancel.
+	 *
+	 * @param parentDisplayIndex parent row index in display order (0 = top = the menu-entries array tail),
+	 *                           matching the snapshot's {@code entries[]} order
+	 * @param childIndex         index into the parent's submenu entries (snapshot {@code sub[]} order); a value
+	 *                           {@code < 0} invokes the top-level entry itself (the scrollable-menu flat-row path)
+	 */
+	public static void invokeMenuEntry(int parentDisplayIndex, int childIndex)
+	{
+		final ClientThread ct = clientThread;
+		final Client c = client;
+		if (ct == null || c == null)
+		{
+			return;
+		}
+		ct.invokeLater(() ->
+		{
+			try
+			{
+				// The (parent display index, child index) the native side captured are only valid against the
+				// SAME open menu it snapshotted; the engine freezes getMenuEntries() while the menu is open. If
+				// it has since closed (so the array would rebuild from the live pointer), abort rather than
+				// invoke a stale/wrong entry.
+				if (!c.isMenuOpen())
+				{
+					return;
+				}
+				final MenuEntry[] e = c.getMenuEntries();
+				final int count = e == null ? 0 : e.length;
+				final int pIdx = count - 1 - parentDisplayIndex;   // display top = array tail
+				if (pIdx < 0 || pIdx >= count)
+				{
+					return;
+				}
+				final MenuEntry target;
+				if (childIndex < 0)
+				{
+					// childIndex < 0 = invoke the top-level entry itself. Used by the tap-mode flat-row commit
+					// when the engine menu is scrollable, where the row's fixed canvas geometry (and thus the
+					// click-through path) is unreliable.
+					target = e[pIdx];
+				}
+				else
+				{
+					final Menu sub = e[pIdx].getSubMenu();
+					if (sub == null)
+					{
+						return;
+					}
+					final MenuEntry[] kids = sub.getMenuEntries();
+					if (kids == null || childIndex >= kids.length)
+					{
+						return;
+					}
+					target = kids[childIndex];
+				}
+				final java.util.function.Consumer<MenuEntry> cb = target.onClick();
+				if (cb != null)
+				{
+					cb.accept(target);
+				}
+				else
+				{
+					c.menuAction(target.getParam0(), target.getParam1(), target.getType(),
+						target.getIdentifier(), target.getItemId(), target.getOption(), target.getTarget());
+				}
+			}
+			catch (RuntimeException ex)
+			{
+				log.debug("[bridge] invokeMenuEntry({}, {}) failed", parentDisplayIndex, childIndex, ex);
+			}
+		});
+	}
+
 	/** Post the focus-prime + move + press + release + click sequence at {@code (x,y)} in one batch. */
 	private static void synthesizeClick(Canvas canvas, int x, int y, int awtButton)
 	{
@@ -1420,6 +1504,33 @@ public final class JavaBridge
 			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, kc));
 		}
 		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, vk, kc));
+	}
+
+	/**
+	 * KEY-1: fire a plugin's configured action-hotkey by synthesizing the exact key chord its
+	 * {@code HotkeyListener} (or raw {@code KeyListener}, e.g. Bank search) listens for. {@code Keybind.matches}
+	 * reads the event's extended key-code + extended modifiers, so a single matched {@code KEY_PRESSED} (with
+	 * the modifier mask baked into the event — no separate modifier-key presses needed) triggers
+	 * {@code hotkeyPressed}; the paired {@code KEY_RELEASED} clears the listener's pressed latch so it can fire
+	 * again next time. Posted to the same AWT queue / focused canvas as our other key synthesis (RuneLite's
+	 * {@code KeyManager} is a canvas {@code KeyListener}), so this routes through the engine exactly like a
+	 * hardware chord. Modifier-only binds (no main key) are ignored — those are hold-to-modify, not fire-once.
+	 *
+	 * @param keyCode   the Keybind's (extended) key-code — {@code KeyEvent.VK_*}
+	 * @param modifiers the Keybind's extended-modifier mask — {@code InputEvent.*_DOWN_MASK} bits
+	 */
+	public static void onKeybind(int keyCode, int modifiers)
+	{
+		final Canvas canvas = liveCanvas();
+		if (canvas == null || keyCode == KeyEvent.VK_UNDEFINED)
+		{
+			return;
+		}
+		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+		final long t = System.currentTimeMillis();
+		ensureFocus(q, canvas);
+		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, modifiers, keyCode, KeyEvent.CHAR_UNDEFINED));
+		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, modifiers, keyCode, KeyEvent.CHAR_UNDEFINED));
 	}
 
 	/**
