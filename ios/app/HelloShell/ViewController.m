@@ -323,6 +323,11 @@ static const NSTimeInterval kPluginStartGrace = 4.0;
 // KVO context for the PiP controller's possible/active flags (diagnostics for the auto-engage gate).
 static void * const kPipKvoContext = (void *)&kPipKvoContext;
 
+// Chat veneer master switch. NO = the native chat veneer (top-relocated chatbox, collapsible pill, native-rendered
+// message lines, fan/filter tab row, native dialogue) is OFF, and the engine renders its ORIGINAL bottom chatbox +
+// tab row itself. (The veneer code stays in place behind this flag; flip to YES to restore it.)
+static const BOOL kChatVeneerEnabled = NO;
+
 // AWT virtual keycodes for the non-text keys we synthesize (java.awt.event.KeyEvent.VK_*).
 static const int AWT_VK_BACK_SPACE = 8;
 static const int AWT_VK_ENTER      = 10;
@@ -2057,6 +2062,7 @@ static int chatRowCanvasH(void) {
 // animation owns the views; content (sprite + label) is always refreshed.
 - (void)updateChatTabs {
     if (!self.chatTabsBuilt) return;
+    if (!kChatVeneerEnabled) { [self hideChatTabs]; [self hideDialogue]; return; }   // veneer removed -> engine chatbox
     [self updateDialogueView];   // native opaque dialogue (self-contained: shows/hides off the snapshot + JSON)
     if (self.mapOpen) { [self hideChatTabs]; return; }   // fullscreen world map: the pill would cover it
     if (!self.chromeVisible || self.renderW <= 0) { [self hideChatTabs]; return; }
@@ -2227,6 +2233,7 @@ static int chatRowCanvasH(void) {
 // engine's transparent dialogue + the chat tabs/messages are occluded) with a cutout where the engine's real 3D
 // head renders; otherwise hide it. The engine keeps rendering underneath, so the head still shows through.
 - (void)updateDialogueView {
+    if (!kChatVeneerEnabled) { [self hideDialogue]; return; }   // veneer removed -> engine draws the dialogue itself
     if (!self.chromeVisible || self.renderW <= 0 || self.mapOpen) { [self hideDialogue]; return; }
     NSString *snap = [JVMLauncher chatSnapshot];
     if (snap.length == 0) { [self hideDialogue]; return; }
@@ -3247,6 +3254,17 @@ static int chatRowCanvasH(void) {
 // Called from updateHudLayout (initial) and live while moving the chat in overlay edit-mode. The engine chat is
 // invisible (native render), so this drives the snapshot chatX/chatY that positions the native pill + messages.
 - (void)applyChatRelocate {
+    if (!kChatVeneerEnabled) {
+        // Veneer removed: stop relocating so the engine renders its ORIGINAL bottom chatbox + tabs, and clear the
+        // native tap rects so onTap routes to the world/engine normally (no stale top chat-region routing).
+        [JVMLauncher relocateEngineChatX:-1 y:-1 transparent:NO];
+        self.chatHitCanvas = CGRectZero;
+        self.chatScrollCanvas = CGRectZero;
+        self.dialogueChatCanvas = CGRectZero;
+        self.chatScrollable = NO;
+        self.chatDialogueActive = NO;
+        return;
+    }
     int chatX = [self clampChatX:self.chatBaseX + self.chatUserDX];
     int chatY = [self clampChatY:self.chatBaseY + self.chatUserDY];
     [JVMLauncher relocateEngineChatX:chatX y:chatY transparent:YES];
@@ -3270,6 +3288,7 @@ static int chatRowCanvasH(void) {
 // ---- OverlayEditChatHost: the chatbox is repositioned in overlay edit-mode (a draggable "Chat" handle) ----
 
 - (CGRect)overlayEditChatCanvasRect {
+    if (!kChatVeneerEnabled) return CGRectNull;   // veneer removed: no native chat to drag in overlay edit-mode
     if (self.renderW <= 0 || self.chatBaseX <= 0) return CGRectNull;   // not placed yet
     int chatX = [self clampChatX:self.chatBaseX + self.chatUserDX];
     int chatY = [self clampChatY:self.chatBaseY + self.chatUserDY];

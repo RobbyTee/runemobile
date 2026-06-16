@@ -376,7 +376,11 @@ public final class HudVeneerBridge
 			// re-assert applies during dialogues too.)
 			// Pin the chatbox opaque as the final word before raster too (see tick/keepChatboxOpaque): a dialogue
 			// that opens this frame must read CHATBOX_TRANSPARENCY==0 when it builds, or it is born see-through.
-			keepChatboxOpaque(c);
+			// Only while the veneer is relocating the chat — otherwise leave the original chatbox's transparency.
+			if (chatX >= 0)
+			{
+				keepChatboxOpaque(c);
+			}
 			if (chatX >= 0 && !isWorldMapOpen(c))
 			{
 				setEngineChatTabsHidden(c, chatTabRowH > 0);
@@ -458,7 +462,12 @@ public final class HudVeneerBridge
 			// varbit must already be 0 before any dialogue can open. Pinning it here (before the chat/map gates,
 			// guarded so there is no script churn) guarantees that even for the session's very first dialogue. The
 			// native veneer renders chat over the scene, so an opaque engine chatbox is invisible in normal play.
-			keepChatboxOpaque(c);
+			// Only while the veneer is relocating the chat (chatX >= 0); when NOT relocating, leave the engine's
+			// original chatbox at its own transparency setting (the user's choice).
+			if (chatX >= 0)
+			{
+				keepChatboxOpaque(c);
+			}
 
 			// Chat box: keep the engine chatbox FULLY ALIVE at all times (never hidden). To "collapse" (the user
 			// tapped the active tab) we shove the live widget far off-screen; reopening just moves it back — instant
