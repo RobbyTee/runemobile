@@ -328,7 +328,7 @@ static const int kChatTabRowH = 23;
 // — it is NOT a lost capability: reporting a player is reached the way mobile does it, via the player's
 // right-click (long-press) menu "Report" entry, which surfaces through the native menu like any other entry.
 static const int kChatTabCount = 7;
-static const int kChatTabRowCanvasH = 32;   // 2-line tab height (name + state) in engine-canvas px, ~official
+static const int kChatTabRowCanvasH = 48;   // 2-line tab height (name + state) in engine-canvas px (50% bigger)
 static const int kChatContentCanvasH = 142; // the chat message-area height (engine-canvas px) below the tab row
 // Finger-scroll direction: -1 = drag-down scrolls toward OLDER messages (content follows the finger). The drag is
 // converted to canvas px and applied to the chat's own scroll layer (no mouse wheel -> no camera zoom). Flip to +1
@@ -2056,8 +2056,10 @@ static int chatRowCanvasH(void) {
     [JVMLauncher setEngineChatTabRowHeight:kChatTabRowCanvasH];   // push messages below the (taller) tab row
     [JVMLauncher setEngineChatAreaWidth:0];                        // chat keeps its natural 519 width
 
-    // Native chat messages sit directly under the tab row, spanning the engine chat width.
-    [self updateChatMessagesAtX:rowX y:rowY + rowH width:rowW height:kChatContentCanvasH * s scale:s];
+    // The ENGINE renders the chat MESSAGES itself now (its tabs stay shown so the raster isn't suppressed; the
+    // native tab row below just covers the engine's small tabs). So we no longer recreate the message lines —
+    // keep the native message view hidden and let the engine draw the real colored text + scrollbar underneath.
+    self.chatMessagesView.hidden = YES;
 
     // Two text lines: channel name (top) + filter state (bottom). Size both to the row height.
     CGFloat nameSize = floor(rowH * 0.40);

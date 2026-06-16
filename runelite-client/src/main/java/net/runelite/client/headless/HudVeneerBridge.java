@@ -383,11 +383,14 @@ public final class HudVeneerBridge
 			}
 			if (chatX >= 0 && !isWorldMapOpen(c))
 			{
-				setEngineChatTabsHidden(c, chatTabRowH > 0);
-				// The engine's own chatbox must NEVER show — hide the chat background sprites every frame as the
-				// final word before raster. CHAT_BACKGROUND is a chatbox-group (162) child; the dialogue parchments
-				// are separate top-level interfaces (ChatLeft/ChatRight/ChatBoth/Messagebox/...), so this leaves the
-				// dialogue untouched.
+				// Engine tabs MUST stay shown: hiding them suppresses the ENTIRE chat raster (engine draws nothing —
+				// proven off-device). We want the engine to draw its own chat (tabs + messages + scrollbar), so the
+				// native side just lays its enlarged tab buttons ON TOP of the engine's small tabs (covering them).
+				setEngineChatTabsHidden(c, false);
+				// Hide the chat-area brown box so the engine messages render transparent over the scene (the
+				// official mobile look). CHAT_BACKGROUND is a chatbox-group (162) child; the dialogue parchments are
+				// separate top-level interfaces (ChatLeft/ChatRight/ChatBoth/Messagebox/...), so this leaves the
+				// dialogue untouched. CONTROLS backgrounds stay hidden too (the native tab row covers that area).
 				hide(c, InterfaceID.Chatbox.CHAT_BACKGROUND);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
@@ -510,13 +513,12 @@ public final class HudVeneerBridge
 				// so position the children at (0, …) — using (chatX,chatY) double-offsets them right+down (the
 				// misalignment + bottom clip). CONTROLS at the container's top-left.
 				forcePos(c, InterfaceID.Chatbox.CONTROLS, 0, 0);
-				// Hide the engine's own tab sprites so they don't peek under the native 7-tab row (the engine lays 8
-				// tabs, incl. Report, across the same width, so they don't line up). Switching is NOT a proxy-click any
-				// more (the sprite IS the click target, and a hidden widget isn't clickable) — instead the native tap
-				// REPLAYS the tab's op-script ({@link #switchChatTab}), the same trick the bottom tab-grid uses for the
-				// hidden tab stones (the widget still RESOLVES + its script runs while hidden). Gated on the native row
-				// being active; un-hides when the native chrome is toggled off so the engine row shows.
-				setEngineChatTabsHidden(c, chatTabRowH > 0);
+				// Engine tabs MUST stay shown: hiding ANY of the tab widgets suppresses the WHOLE chat raster (the
+				// engine draws nothing — proven off-device). We WANT the engine to draw its own chat (tabs + messages
+				// + scrollbar = the desktop look); the native side lays its enlarged tab buttons ON TOP of the engine's
+				// small tabs to cover them (same sprite, so no peeking). The native tab tap still REPLAYS the tab's
+				// op-script ({@link #switchChatTab}); a tap can also fall straight through to the (shown) engine tab.
+				setEngineChatTabsHidden(c, false);
 				// Apply a pending tab switch (op-replay sets the channel; switchChatTabNow rebuilds the lines).
 				final int switchTab = pendingChatTab;
 				if (switchTab >= 0)
@@ -529,11 +531,10 @@ public final class HudVeneerBridge
 				// height, then pin CHATAREA to ABSOLUTE width=rowW and height=(containerH - rowH - margin) at
 				// container-relative (0, rowH). The display/scroll children are revalidated so they widen too.
 				sizeChatArea(c, chatId, rowW, rowH);
-				// The engine's own chatbox must NEVER show — the native veneer renders the chat lines, and a
-				// dialogue is re-drawn natively (opaque parchment) by the shell. Hide the chat background sprites
-				// (the brown box) every frame. During a dialogue the shell's opaque parchment occludes the engine's
-				// transparent dialogue + the chat tabs/messages too, leaving only the engine's 3D head visible
-				// through a cutout (the head can't be drawn natively, so the engine keeps rendering it).
+				// Hide only the chat BACKGROUND sprites (the brown box) so the engine draws its chat lines transparent
+				// over the scene (the mobile look) — the engine still rasters the tabs + messages + scrollbar. During a
+				// dialogue the shell's opaque parchment occludes the engine's transparent dialogue + the tabs/messages,
+				// leaving only the engine's 3D head visible through a cutout (the head can't be drawn natively).
 				hide(c, InterfaceID.Chatbox.CHAT_BACKGROUND);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
