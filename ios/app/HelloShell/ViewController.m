@@ -328,7 +328,7 @@ static const int kChatTabRowH = 23;
 // — it is NOT a lost capability: reporting a player is reached the way mobile does it, via the player's
 // right-click (long-press) menu "Report" entry, which surfaces through the native menu like any other entry.
 static const int kChatTabCount = 7;
-static const int kChatTabRowCanvasH = 48;   // 2-line tab height (name + state) in engine-canvas px (50% bigger)
+static const int kChatTabRowCanvasH = 24;   // 2-line tab height (name + state), engine-size to match official mobile
 static const int kChatContentCanvasH = 142; // the chat message-area height (engine-canvas px) below the tab row
 // Finger-scroll direction: -1 = drag-down scrolls toward OLDER messages (content follows the finger). The drag is
 // converted to canvas px and applied to the chat's own scroll layer (no mouse wheel -> no camera zoom). Flip to +1
@@ -2067,13 +2067,17 @@ static int chatRowCanvasH(void) {
     UIFont *nameFont = [UIFont fontWithName:@"RuneScape" size:nameSize] ?: [UIFont boldSystemFontOfSize:nameSize];
     UIFont *stateFont = [UIFont fontWithName:@"RuneScape" size:stateSize] ?: [UIFont systemFontOfSize:stateSize];
 
-    // Which tab the snapshot reports selected, reconciled with the optimistic highlight (the engine tab sprite only
-    // updates on a redraw, so HOLD the just-tapped tab selected until the snapshot actually agrees).
+    // Which tab is active. Prefer the live channel VIEW (VarClientID.CHAT_VIEW: 0=All..6=Trade) — it is always
+    // correct, unlike the tab GRAPHIC sprite (which only flips on a redraw, so it often reads "none selected" and
+    // left chatActiveTab=-1, which made the FIRST tap "switch" instead of collapse => the two-tap-to-close bug).
+    // Fall back to the sprite-selected tab if the view is out of range.
     int snapSel = -1;
     for (int j = 0; j < (int)tabs.count && j < kChatTabCount; j++) {
         NSDictionary *tj = [tabs[j] isKindOfClass:[NSDictionary class]] ? tabs[j] : nil;
         if ([tj[@"selected"] boolValue]) { snapSel = j; break; }
     }
+    int view = [d[@"view"] intValue];
+    if (view >= 0 && view < kChatTabCount) snapSel = view;   // the channel view is the authoritative active tab
     int effSel = snapSel;
     if (self.optimisticChatTab >= 0) {
         if (snapSel == self.optimisticChatTab) self.optimisticChatTab = -1;   // engine sprite caught up

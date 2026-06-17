@@ -1965,6 +1965,10 @@ public final class HudVeneerBridge
 			setHidden(c, InterfaceID.Chatbox.CHATDISPLAY, false);
 			setHidden(c, InterfaceID.Chatbox.MES_LAYER, false);
 			setHidden(c, InterfaceID.Chatbox.SCROLLAREA, false);
+			// Keep the bottom input line ("<player>: <typed>*") shown — a chat rebuild can leave it hidden, which is
+			// why it was missing from the relocated chat. The official mobile chat shows this prompt at the bottom.
+			setHidden(c, InterfaceID.Chatbox.INPUT, false);
+			setHidden(c, InterfaceID.Chatbox.INPUT_CLICKAREA, false);
 			// Grow the container so the full-height content sits BELOW the taller native tab row instead of being
 			// squeezed into the original 165px box. +2 breathing room so the bottom input line never edge-clips.
 			final Widget cont = c.getWidget(containerId);
