@@ -1991,6 +1991,11 @@ static int chatRowCanvasH(void) {
     if (selected) bg = self.chatBtnSelImg;
     else if (hasNew) bg = self.chatBtnNewImg;
     [b setBackgroundImage:bg forState:UIControlStateNormal];
+    // The tab sprite has fully-transparent rounded corners; the engine's own chat tab row stays SHOWN underneath
+    // (hiding it blanks the whole chat raster), so without an opaque backing the engine tabs peek through those
+    // corners. Fill each button with the sprite's stone-brown base so nothing shows through behind the native row.
+    b.backgroundColor = [UIColor colorWithRed:66.0/255.0 green:60.0/255.0 blue:51.0/255.0 alpha:1.0];
+    b.clipsToBounds = YES;
 
     NSString *name = (i >= 0 && i < kChatTabCount) ? kChatTabNames[i] : @"";
     NSString *filter = [t[@"filter"] isKindOfClass:[NSString class]] ? t[@"filter"] : @"";

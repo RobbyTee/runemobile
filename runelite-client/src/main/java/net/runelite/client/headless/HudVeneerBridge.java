@@ -1016,13 +1016,32 @@ public final class HudVeneerBridge
 		{
 			return;
 		}
-		final int base = CHAT_TAB_IDS[idx];
-		if (!replayOp(c, base, 1))
+		// Replaying the tab's op-script (op=1 = left click) on the tab that is ALREADY the active CHAT_VIEW makes the
+		// engine TOGGLE its own chat-minimise: op=1 on the selected tab flips CHAT_VIEW between the channel and the
+		// engine's "minimised" sentinel (1337, off-device-proven), and BUILD_CHATBOX with CHAT_VIEW==1337 renders NO
+		// message lines. The native reopen always re-asserts the active tab, so replaying it every reopen flipped the
+		// box populated/empty/populated (period-2). Only replay when actually CHANGING channel (idx != live view) —
+		// or when the view is already at the minimised sentinel and needs un-minimising (idx, a 0..6 tab, != 1337).
+		// A same-channel reopen skips the replay, leaving CHAT_VIEW on its channel; BUILD_CHATBOX then repopulates.
+		int curView = -1;
+		try
 		{
-			replayOp(c, base + 1, 1);   // the op listener may sit on the graphic child instead of the button
+			curView = c.getVarcIntValue(VarClientID.CHAT_VIEW);
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+		if (curView != idx)
+		{
+			final int base = CHAT_TAB_IDS[idx];
+			if (!replayOp(c, base, 1))
+			{
+				replayOp(c, base + 1, 1);   // the op listener may sit on the graphic child instead of the button
+			}
 		}
 		// The op-replay sets CHAT_VIEW but doesn't re-render the message list (the engine does that as part of the
-		// real click). Force the chatbox to rebuild so the newly-selected channel's messages actually show.
+		// real click). Force the chatbox to rebuild so the (now-correct) channel's messages actually show — this runs
+		// whether or not we replayed, so a same-channel reopen still repopulates.
 		try
 		{
 			c.runScript(ScriptID.BUILD_CHATBOX);
