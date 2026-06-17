@@ -504,7 +504,7 @@ public final class HudVeneerBridge
 				final Widget w = c.getWidget(chatId);
 				if (w != null)
 				{
-					if (chatCollapsed || chatWindowOccluded)
+					if (chatWindowOccluded)
 					{
 						// HIDE the whole chat container. Collapse (tap the active tab) and a forefront window both hide
 						// it the same way — the off-screen shove no longer holds now the engine draws the chat itself;
@@ -565,6 +565,13 @@ public final class HudVeneerBridge
 				hide(c, InterfaceID.Chatbox.CHAT_BACKGROUND);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
+				// Collapse (tap the active tab) hides only the message CONTENT, not the container, so the lines are
+				// PRESERVED (no teardown) and reopening is instant + populated instead of an empty box that needs a
+				// second tap to rebuild. sizeChatArea force-shows these every frame, so re-hide them here when collapsed.
+				setHidden(c, InterfaceID.Chatbox.CHATAREA, chatCollapsed);
+				setHidden(c, InterfaceID.Chatbox.INPUT, chatCollapsed);
+				setHidden(c, InterfaceID.Chatbox.INPUT_CLICKAREA, chatCollapsed);
+				setHidden(c, InterfaceID.Chatbox.CHATSCROLLBAR, chatCollapsed);
 				buildChatSnapshot(c);
 				buildChatLines(c);
 				// While a dialogue is open, publish its content + head bounds so the native shell draws an opaque
