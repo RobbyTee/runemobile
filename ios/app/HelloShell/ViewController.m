@@ -2100,16 +2100,19 @@ static int chatRowCanvasH(void) {
         if (snapSel == self.optimisticChatTab) self.optimisticChatTab = -1;   // engine sprite caught up
         else effSel = (int)self.optimisticChatTab;                            // hold the instant highlight
     }
-    if (self.chatCollapsed) effSel = -1;   // collapsed -> no tab highlighted (the message box is hidden)
-    self.chatActiveTab = effSel;           // remember it: a tap on the active tab collapses the box
+    // STICKY active tab: the engine's selected-sprite AND the CHAT_VIEW varc both flicker to -1 between redraws, so
+    // assigning chatActiveTab = effSel every tick reset it to -1 mid-flicker — then the first tap on the (open)
+    // active tab read as a SWITCH instead of a collapse (two taps to hide). Keep the LAST KNOWN active tab when the
+    // snapshot momentarily reports none, so one tap on it collapses.
+    if (effSel >= 0) self.chatActiveTab = effSel;
 
     // Lay out + paint all 7 tabs as a STATIC row (no pill, no fan): each equal-width, spanning the chat width,
-    // always visible, tap-to-switch.
+    // always visible, tap-to-switch. Highlight the (sticky) active tab while open; none while collapsed.
     for (int i = 0; i < kChatTabCount; i++) {
         UIButton *b = self.chatTabButtons[i];
         b.frame = CGRectMake(floor(rowX + i * tabW), floor(rowY), ceil(tabW), ceil(rowH));
         NSDictionary *t = (i < (int)tabs.count && [tabs[i] isKindOfClass:[NSDictionary class]]) ? tabs[i] : nil;
-        [self paintChatButton:b channel:i tab:t selected:(i == effSel)
+        [self paintChatButton:b channel:i tab:t selected:(!self.chatCollapsed && i == self.chatActiveTab)
                      nameFont:nameFont stateFont:stateFont];
         b.hidden = NO;
     }

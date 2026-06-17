@@ -572,6 +572,7 @@ public final class HudVeneerBridge
 				setHidden(c, InterfaceID.Chatbox.INPUT, chatCollapsed);
 				setHidden(c, InterfaceID.Chatbox.INPUT_CLICKAREA, chatCollapsed);
 				setHidden(c, InterfaceID.Chatbox.CHATSCROLLBAR, chatCollapsed);
+				dumpChatTree(c, chatId);   // DIAGNOSTIC — find the leftover 'border' when collapsed
 				buildChatSnapshot(c);
 				buildChatLines(c);
 				// While a dialogue is open, publish its content + head bounds so the native shell draws an opaque
@@ -775,6 +776,46 @@ public final class HudVeneerBridge
 			}
 		}
 		log.info("[ifaces] open candidate groups (getWidget<<16): {}", open.length() == 0 ? "(none)" : open.toString());
+	}
+
+	// DIAGNOSTIC (remove later): dump the chat widget tree on each collapse/reopen edge, so the [chattree] log shows
+	// exactly which widgets are still SHOWN when collapsed (the leftover 'border' the user sees).
+	private static boolean lastDumpedCollapsed;
+	private static void dumpChatTree(Client c, int chatId)
+	{
+		if (chatX < 0 || chatCollapsed == lastDumpedCollapsed)
+		{
+			return;
+		}
+		lastDumpedCollapsed = chatCollapsed;
+		log.info("[chattree] === collapsed={} ===", chatCollapsed);
+		final Widget cont = c.getWidget(chatId);
+		if (cont != null)
+		{
+			dumpChatWidget(cont, 0);
+		}
+	}
+	private static void dumpChatWidget(Widget w, int depth)
+	{
+		if (w == null || depth > 2)
+		{
+			return;
+		}
+		final java.awt.Rectangle b = w.getBounds();
+		String t = w.getText();
+		if (t != null && t.length() > 20) { t = t.substring(0, 20); }
+		log.info("[chattree] d{} id={} type={} hidden={} sprite={} bounds={} text='{}'",
+			depth, Integer.toHexString(w.getId()), w.getType(), w.isHidden(), w.getSpriteId(), b, t == null ? "" : t);
+		for (final Widget[] kids : new Widget[][]{ w.getStaticChildren(), w.getDynamicChildren() })
+		{
+			if (kids != null)
+			{
+				for (final Widget k : kids)
+				{
+					dumpChatWidget(k, depth + 1);
+				}
+			}
+		}
 	}
 
 	private static boolean isWorldMapOpen(Client c)
