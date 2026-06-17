@@ -497,9 +497,10 @@ public final class HudVeneerBridge
 			{
 				final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
 				final int rowW = chatAreaW > 0 ? chatAreaW : CHAT_DEFAULT_W;
-				// A forefront window (bank / GE / shop / …) open over the relocated chat region: hide the chat so it
-				// sits BEHIND the window (the native shell also hides its tab row from the published windowOpen flag).
-				chatWindowOccluded = isForefrontWindowOverChat(c, rowW, rowH);
+				// A forefront window (bank / GE / shop / …) open: hide the chat so it sits BEHIND the window (the
+				// native shell also hides its tab row from the published windowOpen flag).
+				chatWindowOccluded = isForefrontWindowOpen(c);
+				dumpOpenInterfaces(c);   // DIAGNOSTIC — see the [ifaces] log to tune the FOREFRONT_WINDOW_GROUPS list
 				final Widget w = c.getWidget(chatId);
 				if (w != null)
 				{
@@ -693,59 +694,34 @@ public final class HudVeneerBridge
 
 	private static boolean lastWindowOccludedLogged;
 
-	/** True if a forefront window (bank / GE / shop / deposit / …) is open and overlaps the relocated chat region,
-	 *  so the chat should hide and sit behind it. Universal: each big modal opens as its own interface ROOT (via
-	 *  IF_OPENTOP), so we scan {@link Client#getWidgetRoots()}, skip the HUD toplevel + the chatbox group + small
-	 *  overlays, and test rectangle overlap with the chat box. Avoids enumerating every interface id. */
-	private static boolean isForefrontWindowOverChat(Client c, int chatW, int chatH)
+	// Forefront "window" interface groups that should sit IN FRONT of the relocated chat, so the chat hides behind
+	// them. Bank / deposit box / bank PIN / shop / Grand Exchange (offers + collect + view). Checked directly (an
+	// open interface group is loaded) rather than via getWidgetRoots — the earlier root-scan missed them. Extend
+	// this list from the [ifaces] diagnostic dump if a window the user opens isn't caught.
+	private static final int[] FOREFRONT_WINDOW_GROUPS = {
+		InterfaceID.BANKMAIN, InterfaceID.BANK_DEPOSITBOX, InterfaceID.BANKPIN_KEYPAD, InterfaceID.SHOPMAIN,
+		InterfaceID.GE_OFFERS, InterfaceID.GE_COLLECT, InterfaceID.GE_VIEWONLY,
+	};
+
+	/** True if a forefront window (bank / GE / shop / …) is open, so the chat should hide and sit behind it. */
+	private static boolean isForefrontWindowOpen(Client c)
 	{
-		if (chatX < 0)
+		for (final int g : FOREFRONT_WINDOW_GROUPS)
 		{
-			return false;
-		}
-		final Widget[] roots;
-		try
-		{
-			roots = c.getWidgetRoots();
-		}
-		catch (RuntimeException ignore)
-		{
-			return false;
-		}
-		if (roots == null)
-		{
-			return false;
-		}
-		int top = -1;
-		try
-		{
-			top = c.getTopLevelInterfaceId();
-		}
-		catch (RuntimeException ignore)
-		{
-		}
-		final int chatGroup = InterfaceID.Chatbox.CONTROLS >>> 16;   // 162
-		for (final Widget root : roots)
-		{
-			if (root == null || root.isHidden())
+			final Widget w;
+			try
+			{
+				w = c.getWidget(g << 16);   // the group's root component (child 0); non-null + shown = the group is open
+			}
+			catch (RuntimeException ignore)
 			{
 				continue;
 			}
-			final int group = root.getId() >>> 16;
-			if (group == top || group == chatGroup)
-			{
-				continue;   // the HUD toplevel + the chatbox itself are not "windows"
-			}
-			final java.awt.Rectangle b = root.getBounds();
-			if (b == null || b.width < 120 || b.height < 120)
-			{
-				continue;   // ignore small overlays — only real (centred) windows count
-			}
-			if (b.x < chatX + chatW && b.x + b.width > chatX && b.y < chatY + chatH && b.y + b.height > chatY)
+			if (w != null && !w.isHidden())
 			{
 				if (!lastWindowOccludedLogged)
 				{
-					log.info("[veneer] chat occluded by forefront window group={} bounds={}", group, b);
+					log.info("[veneer] chat occluded — forefront window group={} open", g);
 					lastWindowOccludedLogged = true;
 				}
 				return true;
@@ -753,6 +729,45 @@ public final class HudVeneerBridge
 		}
 		lastWindowOccludedLogged = false;
 		return false;
+	}
+
+	// DIAGNOSTIC (remove once occlusion is tuned): rate-limited dump of the open interface roots + candidate-window
+	// probes, so the [ifaces] log reveals exactly which group/bounds the bank/GE use when the user opens one.
+	private static int ifaceDumpTick;
+	private static void dumpOpenInterfaces(Client c)
+	{
+		if (chatX < 0 || (++ifaceDumpTick % 150) != 0)
+		{
+			return;
+		}
+		int top = -1;
+		try { top = c.getTopLevelInterfaceId(); } catch (RuntimeException ignore) { }
+		log.info("[ifaces] top={} chat=({},{})", top, chatX, chatY);
+		Widget[] roots = null;
+		try { roots = c.getWidgetRoots(); } catch (RuntimeException ignore) { }
+		if (roots != null)
+		{
+			for (final Widget r : roots)
+			{
+				if (r == null || r.isHidden())
+				{
+					continue;
+				}
+				log.info("[ifaces] root group={} bounds={}", (r.getId() >>> 16), r.getBounds());
+			}
+		}
+		final int[] probe = {12, 192, 213, 300, 402, 465, 200, 383, 109, 593, 218};
+		final StringBuilder open = new StringBuilder();
+		for (final int g : probe)
+		{
+			Widget w = null;
+			try { w = c.getWidget(g << 16); } catch (RuntimeException ignore) { }
+			if (w != null && !w.isHidden())
+			{
+				open.append(g).append(' ');
+			}
+		}
+		log.info("[ifaces] open candidate groups (getWidget<<16): {}", open.length() == 0 ? "(none)" : open.toString());
 	}
 
 	private static boolean isWorldMapOpen(Client c)
