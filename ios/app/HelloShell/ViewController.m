@@ -22,6 +22,18 @@
 #import <unistd.h>
 #import <fcntl.h>
 
+// The chat tabs match the official mobile app's small size, which makes them fiddly to hit. This button expands its
+// touch area vertically (the 7 tabs are contiguous, so a horizontal miss already lands on a neighbour) so near-miss
+// taps above/below a tab still register on that column. Purely a hit-test grow — the visible sprite is unchanged.
+static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND below each tab's touch rect
+@interface ChatTabButton : UIButton
+@end
+@implementation ChatTabButton
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    return CGRectContainsPoint(CGRectInset(self.bounds, 0, -kChatTabTouchExpand), point);
+}
+@end
+
 @interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate, UNUserNotificationCenterDelegate, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate, UISearchBarDelegate, OverlayEditChatHost>
 {
     // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
@@ -247,6 +259,7 @@
 @property (nonatomic, assign) NSInteger chatActiveTab;
 @property (nonatomic, assign) BOOL chatCollapsed;
 @property (nonatomic, strong) UITextView *chatMessagesView;  // native-rendered chat MESSAGE lines (engine can't raster relocated chat)
+@property (nonatomic, strong) UIButton *chatToggleButton;   // collapsed-state chat-bubble: the only thing shown when the chat is hidden; tap to reopen
 // Native dialogue: an OPAQUE parchment drawn over the whole chatbox region while a dialogue is open (occluding the
 // engine's transparent dialogue + the chat tabs/messages), with a CUTOUT where the engine's real 3D head renders.
 @property (nonatomic, strong) UIView *dialogueView;          // the parchment box (masked with a head cutout)
@@ -1898,7 +1911,7 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
     self.chatBtnNewImg = [self loadAsset:@"chatbtn-new"];
     self.chatTabButtons = [NSMutableArray arrayWithCapacity:kChatTabCount];
     for (int i = 0; i < kChatTabCount; i++) {
-        UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+        UIButton *b = [ChatTabButton buttonWithType:UIButtonTypeCustom];   // expanded touch area (kChatTabTouchExpand)
         b.tag = i;
         b.hidden = YES;
         b.adjustsImageWhenHighlighted = NO;
@@ -1941,6 +1954,22 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
     [self.screen insertSubview:msgs belowSubview:self.chatTabButtons[0]];
     self.chatMessagesView = msgs;
     self.chatLinesSeq = -1;
+
+    // Collapsed-state chat bubble (like the official app): when the chat is hidden, the WHOLE tab row hides too (no
+    // leftover "border") and ONLY this bubble shows — tapping it reopens the chat. Hidden while the chat is open
+    // (the tabs are the control then; a tap on the active tab collapses).
+    UIButton *bubble = [UIButton buttonWithType:UIButtonTypeCustom];
+    bubble.hidden = YES;
+    UIImage *bub = [UIImage systemImageNamed:@"bubble.left.fill"];
+    if (bub) [bubble setImage:bub forState:UIControlStateNormal];
+    else [bubble setTitle:@"💬" forState:UIControlStateNormal];
+    bubble.tintColor = [UIColor colorWithRed:1.0 green:0.97 blue:0.85 alpha:1.0];
+    bubble.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
+    bubble.layer.cornerRadius = 7.0;
+    bubble.contentEdgeInsets = UIEdgeInsetsMake(6, 7, 6, 7);
+    [bubble addTarget:self action:@selector(onChatToggleButton) forControlEvents:UIControlEventTouchUpInside];
+    [self.screen addSubview:bubble];
+    self.chatToggleButton = bubble;
 
     // Persisted chat position offset (set in overlay edit-mode; applied in updateHudLayout).
     self.chatUserDX = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"chatUserDX"];
@@ -2056,6 +2085,19 @@ static int chatRowCanvasH(void) {
     [JVMLauncher setEngineChatTabRowHeight:kChatTabRowCanvasH];   // push messages below the (taller) tab row
     [JVMLauncher setEngineChatAreaWidth:0];                        // chat keeps its natural 519 width
 
+    // Collapsed: the bridge shoved the engine chat off-screen; hide the WHOLE native tab row (so there's no leftover
+    // "border") and show ONLY the chat bubble at the chat's top-left corner. Tapping it reopens (onChatToggleButton).
+    if (self.chatCollapsed) {
+        for (UIButton *b in self.chatTabButtons) b.hidden = YES;
+        self.chatMessagesView.hidden = YES;
+        CGFloat bsz = 40.0;   // touch-friendly fixed size (the only chat control while collapsed)
+        self.chatToggleButton.frame = CGRectMake(floor(rowX), floor(rowY), bsz, bsz);
+        self.chatToggleButton.hidden = NO;
+        [self.screen bringSubviewToFront:self.chatToggleButton];
+        return;
+    }
+    self.chatToggleButton.hidden = YES;   // chat open -> the tabs are the control (tap the active tab to collapse)
+
     // The ENGINE renders the chat MESSAGES itself now (its tabs stay shown so the raster isn't suppressed; the
     // native tab row below just covers the engine's small tabs). So we no longer recreate the message lines —
     // keep the native message view hidden and let the engine draw the real colored text + scrollbar underneath.
@@ -2101,10 +2143,20 @@ static int chatRowCanvasH(void) {
 - (void)hideChatTabs {
     self.chatScrollable = NO;   // chat not open -> drags fall through to the camera
     self.chatMessagesView.hidden = YES;
+    self.chatToggleButton.hidden = YES;
     for (UIButton *b in self.chatTabButtons) b.hidden = YES;
     // Restore the engine's own (small) chat tab row + native width whenever the native tabs aren't shown.
     [JVMLauncher setEngineChatTabRowHeight:0];
     [JVMLauncher setEngineChatAreaWidth:0];
+}
+
+// The collapsed-state chat bubble: reopen the chat (the tab row + engine chat return next tick).
+- (void)onChatToggleButton {
+    if (![JVMLauncher bridgeReady]) return;
+    self.chatCollapsed = NO;
+    [JVMLauncher setEngineChatCollapsed:NO];
+    [self updateChatTabs];
+    [self appendLine:@"[chat] bubble -> reopen"];
 }
 
 #pragma mark - Native dialogue (opaque parchment over the chatbox; real engine head shows through a cutout)

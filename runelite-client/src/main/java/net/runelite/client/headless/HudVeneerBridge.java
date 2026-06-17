@@ -374,12 +374,12 @@ public final class HudVeneerBridge
 			// Same gates as the chat block in tick(): only while the chat veneer is active and the world map
 			// doesn't own the screen. (A dialogue uses the normal relocate path and stays at the top, so this
 			// re-assert applies during dialogues too.)
-			// Pin the chatbox opaque as the final word before raster too (see tick/keepChatboxOpaque): a dialogue
-			// that opens this frame must read CHATBOX_TRANSPARENCY==0 when it builds, or it is born see-through.
-			// Only while the veneer is relocating the chat — otherwise leave the original chatbox's transparency.
+			// Pin the chatbox TRANSPARENT as the final word before raster too (see tick/keepChatboxTransparent): the
+			// engine then draws the message lines with the over-scene colour set (white names + shadow), the official
+			// mobile look. Only while the veneer is relocating the chat — otherwise leave the chatbox's own setting.
 			if (chatX >= 0)
 			{
-				keepChatboxOpaque(c);
+				keepChatboxTransparent(c);
 			}
 			if (chatX >= 0 && !isWorldMapOpen(c))
 			{
@@ -459,17 +459,15 @@ public final class HudVeneerBridge
 			final boolean dlgOpen = isDialogueOpen(c);
 			dialogueOpen = dlgOpen;   // published in buildChatSnapshot so the native side hides its chat veneer
 
-			// Keep the engine chatbox OPAQUE from the FIRST logged-in frame, regardless of whether/when the native
-			// shell has relocated the chat yet. A dialogue's parchment opacity is baked when the dialogue is BUILT
-			// (it reads CHATBOX_TRANSPARENCY), and setVarbit does NOT re-raster an already-built dialogue — so the
-			// varbit must already be 0 before any dialogue can open. Pinning it here (before the chat/map gates,
-			// guarded so there is no script churn) guarantees that even for the session's very first dialogue. The
-			// native veneer renders chat over the scene, so an opaque engine chatbox is invisible in normal play.
+			// Keep the engine chatbox TRANSPARENT from the FIRST logged-in frame so the message lines render in the
+			// over-scene colour set (white names + glyph shadow = the official mobile look) instead of the dark
+			// opaque-box colours. Pinned here before the chat/map gates (guarded, no script churn). The engine's own
+			// dialogue is occluded by the native opaque parchment, so it no longer needs the chatbox forced opaque.
 			// Only while the veneer is relocating the chat (chatX >= 0); when NOT relocating, leave the engine's
 			// original chatbox at its own transparency setting (the user's choice).
 			if (chatX >= 0)
 			{
-				keepChatboxOpaque(c);
+				keepChatboxTransparent(c);
 			}
 
 			// Chat box: keep the engine chatbox FULLY ALIVE at all times (never hidden). To "collapse" (the user
@@ -1716,17 +1714,20 @@ public final class HudVeneerBridge
 		}
 	}
 
-	/** Force the chatbox to OPAQUE ({@code CHATBOX_TRANSPARENCY == 0}). Guarded so it only writes when the value
-	 *  actually differs (no per-frame script churn / varbit-listener spam). Keeping it 0 at all times is what makes
-	 *  every dialogue render as the desktop parchment + head: the dialogue bakes its transparency when it is BUILT,
-	 *  and {@code setVarbit} does not re-raster an already-built dialogue, so the varbit must already be 0 by then. */
-	private static void keepChatboxOpaque(Client c)
+	/** Force the chatbox to TRANSPARENT ({@code CHATBOX_TRANSPARENCY == 1}) so the engine draws the message lines in
+	 *  the over-scene colour set (white/light usernames + glyph shadow), the official mobile look. Guarded so it only
+	 *  writes when the value actually differs (no per-frame script churn / varbit-listener spam). */
+	private static void keepChatboxTransparent(Client c)
 	{
 		try
 		{
-			if (c.getVarbitValue(VarbitID.CHATBOX_TRANSPARENCY) != 0)
+			// TRANSPARENT chat mode (1): the engine renders the message lines with the over-scene colour set
+			// (white/light usernames + glyph shadow) instead of the opaque-box set (dark names on brown). This is
+			// the official mobile look. The engine dialogue is occluded by the native opaque parchment, so it no
+			// longer needs the chatbox forced opaque. Guarded so it only writes on a change (no script churn).
+			if (c.getVarbitValue(VarbitID.CHATBOX_TRANSPARENCY) != 1)
 			{
-				c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, 0);
+				c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, 1);
 			}
 		}
 		catch (RuntimeException ignore)
