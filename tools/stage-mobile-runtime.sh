@@ -104,11 +104,18 @@ echo "== stage shared runtime (version $VERSION) =="
 [ "$STAGE_ANDROID" = 1 ] && stage_one "Android" "$ANDROID_DEST"
 
 # --- manifest -----------------------------------------------------------------
-# Short content tag = first 12 hex of sha256(shaded+probes). Android's AssetInstaller
+# Short content tag = first 12 hex of sha256(shaded+probes+gpu-variants). Android's AssetInstaller
 # reads this from the bundle (jvm/runtime.tag) and re-unpacks when it changes, so jar
 # updates can't go stale without a hand-typed version bump. (iOS needs no tag — Xcode
-# re-bundles jvm-resources/ every build.)
-STAMP_TAG="$(printf '%s%s' "$SHADED_SHA" "$PROBES_SHA" | shasum -a 256 | cut -c1-12)"
+# re-bundles jvm-resources/ every build.) The GPU-variant jars (staged separately by
+# android/dev-tools/gpu/stage-*.sh) are folded in when present: bootJvm's copy-from-assets
+# fallback only fires when the device file is ABSENT, so without tag coverage an install
+# would keep stale gpu/rlhd jars forever.
+GPU_SHA=""
+for j in "$ANDROID_DEST"/client-*-gpu.jar "$ANDROID_DEST"/client-*-rlhd.jar; do
+  [ -f "$j" ] && GPU_SHA="${GPU_SHA}$(sha "$j")"
+done
+STAMP_TAG="$(printf '%s%s%s' "$SHADED_SHA" "$PROBES_SHA" "$GPU_SHA" | shasum -a 256 | cut -c1-12)"
 if [ "$STAGE_ANDROID" = 1 ]; then
   printf '%s\n' "$STAMP_TAG" > "$ANDROID_DEST/runtime.tag"
   echo "  wrote $ANDROID_DEST/runtime.tag ($STAMP_TAG)"

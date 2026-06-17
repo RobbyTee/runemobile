@@ -39,6 +39,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.BufferProvider;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.MenuEntry;
 import net.runelite.api.Point;
 import net.runelite.api.VarClientInt;
 import net.runelite.api.gameval.InterfaceID;
@@ -103,6 +104,7 @@ public final class WorldMapProbe
 
 	private enum Phase
 	{
+		FIX_TAB, FIX_OPENBTN, FIX_WINDOW_WAIT, FIX_TYPE, FIX_FIND, FIX_VERIFY,
 		WAIT, OPENING, OPEN_SETTLE, PAN_PRESS, PAN_HOLD, PAN_DRAG, PAN_READ, PAN_API, PAN_API_READ,
 		WHEEL, WHEEL_READ, ZBTN, ZBTN_READ, SEARCH, SEARCH_READ, CLOSE, CLOSE_READ,
 		REOPEN, REOPENING, REOPEN_ZBTN_READ, RELOC_UNIVERSE, RELOC_WINDOW, DONE
@@ -113,6 +115,25 @@ public final class WorldMapProbe
 	private static int openTries;
 	private static boolean focused;
 	private static boolean verdictEmitted;
+
+	// ---- open-failure diagnostics (legacy-account world-map bug) -------------------------------------------
+	private static int chatSeen = -1;                 // -1 = baseline not taken yet (skip the login backlog)
+	private static java.util.Set<Integer> rootGroups; // widget root groups last frame (null = baseline pending)
+	private static int hoverFrames;                   // frames spent hovering the orb before the menu read + click
+
+	// ---- Data-orbs account fix (root cause of the legacy open failure) -------------------------------------
+	// The legacy account has the old "Data orbs" setting OFF server-side (ORBS_DISABLED varbit 4084 = 1), so
+	// the SERVER never opens the Orbs interface (160) at login; HudVeneerBridge fakes it open client-side, the
+	// world-map orb renders + its op is consumed, but the op is a server-bound if_button on an interface node
+	// the server never opened — silently discarded. Fix = flip the toggle through the REAL settings UI (the
+	// settings side panel + All Settings window are server-opened, so their buttons work), which the server
+	// persists on the account. Armed by an orbsfix.mode marker next to the capture dir; one-shot.
+	private static Boolean fixMode;                   // null = marker not checked yet
+	private static int fixTabTry;                     // index into FIX_TAB_ORDER while hunting the wrench stone
+	private static int fixStartVarbit = -1;
+	private static Rectangle fixToggleRect;
+	private static boolean fixClicked;
+	private static final int[] FIX_TAB_ORDER = {11, 10, 12, 13, 9, 8};
 
 	private static Point panBefore;
 	private static int dragX, dragY;
@@ -151,8 +172,21 @@ public final class WorldMapProbe
 			return;
 		}
 
+		if (fixMode == null)
+		{
+			fixMode = DIR != null && DIR.getParentFile() != null
+				&& new File(DIR.getParentFile(), "orbsfix.mode").exists();
+			if (fixMode)
+			{
+				log.info("[worldmap] FIX MODE armed (orbsfix.mode) — will enable Data orbs through the settings UI");
+				phase = Phase.FIX_TAB;
+			}
+		}
+
 		try
 		{
+			diffChat(c);
+			diffRoots(c);
 			step(c);
 		}
 		catch (RuntimeException ex)
@@ -166,6 +200,159 @@ public final class WorldMapProbe
 	{
 		switch (phase)
 		{
+			case FIX_TAB:
+			{
+				if (phaseFrame == 0)
+				{
+					fixStartVarbit = safeVarbitInt(c, net.runelite.api.gameval.VarbitID.ORBS_DISABLED);
+					log.info("[worldmap] fix: ORBS_DISABLED={} at start", fixStartVarbit);
+					if (fixStartVarbit == 0)
+					{
+						log.info("[worldmap] fix: Data orbs already enabled — skipping to the orb test");
+						go(Phase.WAIT);
+						break;
+					}
+				}
+				if (boundsOf(c, InterfaceID.Settings.UNIVERSE) != null)
+				{
+					// The All Settings window is already up (e.g. opened by hand / native taps) — go type.
+					go(Phase.FIX_WINDOW_WAIT);
+					break;
+				}
+				if (boundsOf(c, InterfaceID.SettingsSide.SETTINGS_OPEN) != null)
+				{
+					go(Phase.FIX_OPENBTN);
+					break;
+				}
+				if ((phaseFrame % 12) == 6 && fixTabTry < FIX_TAB_ORDER.length)
+				{
+					final int idx = FIX_TAB_ORDER[fixTabTry++];
+					log.info("[worldmap] fix: replaying side-stone {} op to reach the wrench panel", idx);
+					replayStoneOp(c, idx);
+				}
+				else if (phaseFrame == FIX_TAB_ORDER.length * 12 + 12)
+				{
+					log.info("[worldmap] fix: side panel not reachable by stone replay — waiting for a native/manual "
+						+ "open of the settings window (All Settings) for ~600 frames");
+				}
+				else if (phaseFrame >= 600)
+				{
+					log.info("[worldmap] fix: settings window never appeared — giving up");
+					go(Phase.WAIT);
+				}
+				break;
+			}
+
+			case FIX_OPENBTN:
+			{
+				final Rectangle b = boundsOf(c, InterfaceID.SettingsSide.SETTINGS_OPEN);
+				if (b == null)
+				{
+					go(Phase.FIX_TAB);
+					break;
+				}
+				// A REAL click (not an op-script replay): opening the big settings window is server-side, the
+				// engine must send the if_button itself.
+				synthClick(c, b.x + b.width / 2, b.y + b.height / 2);
+				log.info("[worldmap] fix: clicked All Settings at {},{}", b.x + b.width / 2, b.y + b.height / 2);
+				go(Phase.FIX_WINDOW_WAIT);
+				break;
+			}
+
+			case FIX_WINDOW_WAIT:
+			{
+				final Rectangle u = boundsOf(c, InterfaceID.Settings.UNIVERSE);
+				if (u != null)
+				{
+					final Rectangle s = boundsOf(c, InterfaceID.Settings.SEARCHBAR_CONTAINER);
+					if (s != null)
+					{
+						synthClick(c, s.x + s.width / 2, s.y + s.height / 2);   // focus the search field
+					}
+					go(Phase.FIX_TYPE);
+				}
+				else if (phaseFrame >= 80)
+				{
+					log.info("[worldmap] fix: settings window never opened — giving up");
+					go(Phase.WAIT);
+				}
+				break;
+			}
+
+			case FIX_TYPE:
+				if (phaseFrame == 6)
+				{
+					typeString(c, "orb");
+				}
+				else if (phaseFrame >= 18)
+				{
+					try
+					{
+						final Widget st = c.getWidget(InterfaceID.Settings.SEARCH_TEXT);
+						log.info("[worldmap] fix: search text now '{}'", st == null ? "null" : st.getText());
+					}
+					catch (RuntimeException ignore)
+					{
+					}
+					go(Phase.FIX_FIND);
+				}
+				break;
+
+			case FIX_FIND:
+			{
+				if ((phaseFrame % 10) == 5)
+				{
+					fixToggleRect = findRowByText(c, "data orbs");
+					if (fixToggleRect != null)
+					{
+						log.info("[worldmap] fix: Data orbs row at {} — clicking", fixToggleRect);
+						synthClick(c, fixToggleRect.x + fixToggleRect.width / 2,
+							fixToggleRect.y + fixToggleRect.height / 2);
+						fixClicked = false;
+						go(Phase.FIX_VERIFY);
+						break;
+					}
+					if (phaseFrame >= 75)
+					{
+						dumpSettingsTexts(c);
+						log.info("[worldmap] fix: no 'Data orbs' row found — giving up");
+						go(Phase.WAIT);
+					}
+				}
+				break;
+			}
+
+			case FIX_VERIFY:
+			{
+				final int v = safeVarbitInt(c, net.runelite.api.gameval.VarbitID.ORBS_DISABLED);
+				if (v == 0)
+				{
+					log.info("[worldmap] fix: SUCCESS — ORBS_DISABLED now 0 (Data orbs enabled, server-persisted)");
+					capture(c, "orbsfix");
+					final Rectangle x = boundsOf(c, InterfaceID.Settings.CLOSE);
+					if (x != null)
+					{
+						synthClick(c, x.x + x.width / 2, x.y + x.height / 2);
+					}
+					go(Phase.WAIT);
+					break;
+				}
+				if (phaseFrame >= 40 && !fixClicked && fixToggleRect != null)
+				{
+					// Row-center click didn't take — the actual checkbox sits at the row's right edge.
+					fixClicked = true;
+					synthClick(c, fixToggleRect.x + fixToggleRect.width - 12,
+						fixToggleRect.y + fixToggleRect.height / 2);
+					log.info("[worldmap] fix: retry click at the row's right edge");
+				}
+				else if (phaseFrame >= 100)
+				{
+					log.info("[worldmap] fix: varbit still {} after clicking — giving up", v);
+					go(Phase.WAIT);
+				}
+				break;
+			}
+
 			case WAIT:
 			{
 				final Rectangle orb = boundsOf(c, InterfaceID.Orbs.ORB_WORLDMAP);
@@ -243,6 +430,20 @@ public final class WorldMapProbe
 					{
 					}
 				}
+				// Hover first, click on a later frame — getMenuEntries() reflects the pointer only after the
+				// engine processed the MOUSE_MOVED, so the menu the click will consume is readable here.
+				if (hoverFrames < 3)
+				{
+					if (hoverFrames == 0)
+					{
+						synthMove(c, orb.x + orb.width / 2, orb.y + orb.height / 2);
+					}
+					hoverFrames++;
+					return;
+				}
+				hoverFrames = 0;
+				logMenu(c);
+				dumpAccountState(c);
 				synthClick(c, orb.x + orb.width / 2, orb.y + orb.height / 2);
 				log.info("[worldmap] clicked world-map orb at {},{}", orb.x + orb.width / 2, orb.y + orb.height / 2);
 				go(Phase.OPENING);
@@ -256,6 +457,13 @@ public final class WorldMapProbe
 					dumpGeometry(c);
 					go(Phase.OPEN_SETTLE);
 					break;
+				}
+				if ((phaseFrame % 10) == 9)
+				{
+					// The boundsOf gate hides "exists but hidden/zero-size" — log the raw widget states while
+					// the open is pending so a loaded-but-hidden interface is distinguishable from not-loaded.
+					logRawState(c, "UNIVERSE", InterfaceID.Worldmap.UNIVERSE);
+					logRawState(c, "MAP_CONTAINER", InterfaceID.Worldmap.MAP_CONTAINER);
 				}
 				if (phaseFrame >= OPEN_RETRY)
 				{
@@ -582,6 +790,354 @@ public final class WorldMapProbe
 			panned, pannedApi, zoomWheel, zoomBtn, searchInput, closed, relocUniverse, relocWindow);
 	}
 
+	// ---- open-failure diagnostics --------------------------------------------------------------------------
+
+	/** New chat lines since last frame (the engine says WHY an open was refused via a game message). */
+	private static void diffChat(Client c)
+	{
+		try
+		{
+			final java.util.List<net.runelite.api.MessageNode> all = new java.util.ArrayList<>();
+			for (final net.runelite.api.MessageNode node : c.getMessages())
+			{
+				if (node != null)
+				{
+					all.add(node);
+				}
+			}
+			if (chatSeen < 0)
+			{
+				chatSeen = all.size();   // baseline: skip the login backlog
+				return;
+			}
+			for (int i = chatSeen; i < all.size(); i++)
+			{
+				final net.runelite.api.MessageNode n = all.get(i);
+				log.info("[worldmap] chat+ type={} name={} value={}",
+					n.getType(), n.getName(), n.getValue());
+			}
+			chatSeen = all.size();
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	/** Widget-root group loads/unloads since last frame (does ANY interface load off the orb click?). */
+	private static void diffRoots(Client c)
+	{
+		try
+		{
+			final java.util.Set<Integer> now = new java.util.TreeSet<>();
+			final Widget[] roots = c.getWidgetRoots();
+			if (roots != null)
+			{
+				for (final Widget w : roots)
+				{
+					if (w != null)
+					{
+						now.add(w.getId() >>> 16);
+					}
+				}
+			}
+			if (rootGroups != null && !now.equals(rootGroups))
+			{
+				final java.util.Set<Integer> added = new java.util.TreeSet<>(now);
+				added.removeAll(rootGroups);
+				final java.util.Set<Integer> gone = new java.util.TreeSet<>(rootGroups);
+				gone.removeAll(now);
+				log.info("[worldmap] roots changed: +{} -{} (now {})", added, gone, now);
+			}
+			rootGroups = now;
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	private static int safeVarbitInt(Client c, int id)
+	{
+		try
+		{
+			return c.getVarbitValue(id);
+		}
+		catch (RuntimeException ex)
+		{
+			return -1;
+		}
+	}
+
+	/** Replay a side-stone's op script (client-side tab switch — works while the stones are hidden). */
+	private static void replayStoneOp(Client c, int idx)
+	{
+		try
+		{
+			final boolean pre = c.getVarbitValue(net.runelite.api.gameval.VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
+			final int base = pre ? InterfaceID.ToplevelPreEoc.STONE0 : InterfaceID.ToplevelOsrsStretch.STONE0;
+			final Widget w = c.getWidget(base + idx);
+			if (w == null)
+			{
+				return;
+			}
+			final Object[] op = w.getOnOpListener();
+			if (op == null)
+			{
+				return;
+			}
+			c.createScriptEventBuilder(op).setSource(w).setOp(1).build().run();
+		}
+		catch (RuntimeException ex)
+		{
+			log.info("[worldmap] fix: stone {} replay threw {}", idx, String.valueOf(ex));
+		}
+	}
+
+	/** Type committed text into the engine — per char PRESSED + TYPED + RELEASED (the JavaBridge.onText shape). */
+	private static void typeString(Client c, String s)
+	{
+		final Canvas canvas = c.getCanvas();
+		if (canvas == null)
+		{
+			return;
+		}
+		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+		long t = System.currentTimeMillis();
+		for (int i = 0; i < s.length(); i++)
+		{
+			final char ch = s.charAt(i);
+			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t++, 0, KeyEvent.VK_UNDEFINED, ch));
+			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, t++, 0, KeyEvent.VK_UNDEFINED, ch));
+			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t++, 0, KeyEvent.VK_UNDEFINED, ch));
+		}
+	}
+
+	/** Find the settings row whose text contains {@code needle} (case-insensitive); returns its bounds. */
+	private static Rectangle findRowByText(Client c, String needle)
+	{
+		try
+		{
+			final Widget root = c.getWidget(InterfaceID.Settings.UNIVERSE);
+			if (root == null)
+			{
+				return null;
+			}
+			return scanForText(root, needle.toLowerCase(), 0);
+		}
+		catch (RuntimeException ex)
+		{
+			return null;
+		}
+	}
+
+	private static Rectangle scanForText(Widget w, String needle, int depth)
+	{
+		if (w == null || depth > 5)
+		{
+			return null;
+		}
+		try
+		{
+			final String text = w.getText();
+			if (text != null && text.toLowerCase().contains(needle))
+			{
+				final Rectangle b = w.getBounds();
+				if (b != null && b.width > 0 && b.height > 0)
+				{
+					return b;
+				}
+			}
+			final Widget[][] kids = {w.getDynamicChildren(), w.getStaticChildren(), w.getNestedChildren()};
+			for (final Widget[] arr : kids)
+			{
+				if (arr == null)
+				{
+					continue;
+				}
+				for (final Widget k : arr)
+				{
+					final Rectangle r = scanForText(k, needle, depth + 1);
+					if (r != null)
+					{
+						return r;
+					}
+				}
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+		return null;
+	}
+
+	/** Diagnostic: list the texts visible in the settings window (what DID the search produce?). */
+	private static void dumpSettingsTexts(Client c)
+	{
+		try
+		{
+			final StringBuilder sb = new StringBuilder();
+			collectTexts(c.getWidget(InterfaceID.Settings.UNIVERSE), sb, 0);
+			log.info("[worldmap] fix: settings texts = [{}]", sb);
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	private static void collectTexts(Widget w, StringBuilder sb, int depth)
+	{
+		if (w == null || depth > 5 || sb.length() > 1500)
+		{
+			return;
+		}
+		try
+		{
+			final String t = w.getText();
+			if (t != null && !t.isEmpty() && !w.isHidden())
+			{
+				sb.append(t.replaceAll("<[^>]*>", "")).append(" | ");
+			}
+			final Widget[][] kids = {w.getDynamicChildren(), w.getStaticChildren(), w.getNestedChildren()};
+			for (final Widget[] arr : kids)
+			{
+				if (arr == null)
+				{
+					continue;
+				}
+				for (final Widget k : arr)
+				{
+					collectTexts(k, sb, depth + 1);
+				}
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+	}
+
+	/** The hover menu at the click point — IS the left-click action actually the world-map open op? */
+	private static void logMenu(Client c)
+	{
+		try
+		{
+			final MenuEntry[] entries = c.getMenuEntries();
+			if (entries == null || entries.length == 0)
+			{
+				log.info("[worldmap] menu: EMPTY");
+				return;
+			}
+			for (int i = 0; i < entries.length; i++)
+			{
+				final MenuEntry e = entries[i];
+				if (e == null)
+				{
+					continue;
+				}
+				log.info("[worldmap] menu[{}]{} option={} target={} type={} id={} p0={} p1={}",
+					i, i == entries.length - 1 ? " <LEFT-CLICK>" : "",
+					e.getOption(), e.getTarget(), e.getType(), e.getIdentifier(), e.getParam0(), e.getParam1());
+			}
+		}
+		catch (RuntimeException ex)
+		{
+			log.info("[worldmap] menu read threw {}", String.valueOf(ex));
+		}
+	}
+
+	/** The account-stored state the open script could be gated on — dumped right before each orb click. */
+	private static void dumpAccountState(Client c)
+	{
+		try
+		{
+			log.info("[worldmap] state varbit ORBS_DISABLED={} mmMinimised12986={} mmAlt6254={} WORLDMAP_TOGGLES={} WORLDMAP_DISABLE_KEY={} varp WORLDMAP_PERM={} TUTORIAL={} TUTORIAL_2={} varc rect={},{},{},{}",
+				safeVarbit(c, net.runelite.api.gameval.VarbitID.ORBS_DISABLED),
+				safeVarbit(c, 12986),
+				safeVarbit(c, 6254),
+				safeVarbit(c, net.runelite.api.gameval.VarbitID.WORLDMAP_TOGGLES),
+				safeVarbit(c, net.runelite.api.gameval.VarbitID.WORLDMAP_DISABLE_KEY),
+				safeVarp(c, net.runelite.api.gameval.VarPlayerID.WORLDMAP_PERM),
+				safeVarp(c, net.runelite.api.gameval.VarPlayerID.TUTORIAL),
+				safeVarp(c, net.runelite.api.gameval.VarPlayerID.TUTORIAL_2),
+				safeVarc(c, net.runelite.api.gameval.VarClientID.WORLDMAP_X),
+				safeVarc(c, net.runelite.api.gameval.VarClientID.WORLDMAP_Y),
+				safeVarc(c, net.runelite.api.gameval.VarClientID.WORLDMAP_MINUSWIDTH),
+				safeVarc(c, net.runelite.api.gameval.VarClientID.WORLDMAP_MINUSHEIGHT));
+		}
+		catch (RuntimeException ex)
+		{
+			log.info("[worldmap] state dump threw {}", String.valueOf(ex));
+		}
+		try
+		{
+			final Widget orb = c.getWidget(InterfaceID.Orbs.ORB_WORLDMAP);
+			log.info("[worldmap] orb onOp={}", orb == null ? "null-widget"
+				: java.util.Arrays.toString(orb.getOnOpListener()));
+			// The floating map's host layer in the PreEoc toplevel — if this is missing/hidden the floating-map
+			// opensub has nowhere to land and fails silently.
+			logRawState(c, "FLOATER", InterfaceID.ToplevelPreEoc.FLOATER);
+			logRawState(c, "OVERLAY_HUD", InterfaceID.ToplevelPreEoc.OVERLAY_HUD);
+		}
+		catch (RuntimeException ex)
+		{
+			log.info("[worldmap] orb/floater dump threw {}", String.valueOf(ex));
+		}
+	}
+
+	private static String safeVarbit(Client c, int id)
+	{
+		try
+		{
+			return Integer.toString(c.getVarbitValue(id));
+		}
+		catch (RuntimeException ex)
+		{
+			return "ERR";
+		}
+	}
+
+	private static String safeVarp(Client c, int id)
+	{
+		try
+		{
+			return Integer.toString(c.getVarpValue(id));
+		}
+		catch (RuntimeException ex)
+		{
+			return "ERR";
+		}
+	}
+
+	private static String safeVarc(Client c, int id)
+	{
+		try
+		{
+			return Integer.toString(c.getVarcIntValue(id));
+		}
+		catch (RuntimeException ex)
+		{
+			return "ERR";
+		}
+	}
+
+	private static void logRawState(Client c, String name, int id)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			if (w == null)
+			{
+				log.info("[worldmap] pending {} = null", name);
+			}
+			else
+			{
+				log.info("[worldmap] pending {} hidden={} bounds={}", name, w.isHidden(), w.getBounds());
+			}
+		}
+		catch (RuntimeException ex)
+		{
+			log.info("[worldmap] pending {} threw {}", name, String.valueOf(ex));
+		}
+	}
+
 	// ---- engine reads --------------------------------------------------------------------------------------
 
 	/** The pannable map view — MAP_DISPLAY when present, else MAP_CONTAINER. */
@@ -744,6 +1300,17 @@ public final class WorldMapProbe
 			InputEvent.BUTTON1_DOWN_MASK, x, y, 1, false, MouseEvent.BUTTON1));
 		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t + 3, 0, x, y, 1, false, MouseEvent.BUTTON1));
 		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, t + 4, 0, x, y, 1, false, MouseEvent.BUTTON1));
+	}
+
+	private static void synthMove(Client c, int x, int y)
+	{
+		final EventQueue q = queue(c, x, y);
+		if (q == null)
+		{
+			return;
+		}
+		q.postEvent(new MouseEvent(c.getCanvas(), MouseEvent.MOUSE_MOVED, System.currentTimeMillis(),
+			0, x, y, 0, false));
 	}
 
 	private static void synthPress(Client c, int x, int y)

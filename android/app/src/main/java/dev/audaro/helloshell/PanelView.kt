@@ -5,23 +5,20 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import android.util.Log
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -31,19 +28,24 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import kotlin.coroutines.coroutineContext
@@ -53,71 +55,9 @@ data class PanelEntry(val index: Int, val tooltip: String, val icon: Bitmap?)
 
 private class PanelSnap(val w: Int, val h: Int, val seq: Int, val px: IntArray?)
 
-/**
- * A5 Tier-1 panel list (icon + tooltip) — tap a panel to open the rendered-image viewer. ALSO the entry into
- * the A5 Tier-2 native screens: when a curated bridge's isAvailable() is true, a highlighted "native" row is
- * surfaced at the top (Quest Helper / World Switcher) that opens the data-driven native screen instead of the
- * rendered image. When unavailable, the row is hidden and the plugin's rendered panel in the list is the
- * Tier-1 fallback (so no capability is lost).
- */
-@Composable
-fun PanelList(onOpen: (Int, String) -> Unit, onOpenQuest: () -> Unit, onOpenWorld: () -> Unit, onBack: () -> Unit) {
-    var panels by remember { mutableStateOf<List<PanelEntry>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
-    var questAvail by remember { mutableStateOf(false) }
-    var worldAvail by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        val json = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.listPanels() }.get() }
-        panels = parsePanels(json)
-        val avail = withContext(Dispatchers.IO) {
-            JvmLauncher.onBridge { JvmLauncher.questAvailable() to JvmLauncher.worldAvailable() }.get()
-        }
-        questAvail = avail.first; worldAvail = avail.second
-        loading = false
-        Log.i("MainActivity", "ANDROID_A5_PANELLIST count=${panels.size} questNative=$questAvail worldNative=$worldAvail")
-    }
-    Surface(color = Color(0xF2121212), modifier = Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onBack) { Text("‹ Back") }
-                Text("Panels", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
-            }
-            if (loading) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-            } else {
-                if (questAvail || worldAvail) {
-                    Text("Native screens", color = Color(0xFF80CBC4), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-                    if (worldAvail) NativeRow("World Switcher", onOpenWorld)
-                    if (questAvail) NativeRow("Quest Helper", onOpenQuest)
-                    HorizontalDivider(color = Color(0x33FFFFFF), modifier = Modifier.padding(vertical = 4.dp))
-                }
-                LazyColumn(Modifier.fillMaxSize()) {
-                    items(panels, key = { it.index }) { p ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable { onOpen(p.index, p.tooltip) }.padding(vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            p.icon?.let { Image(it.asImageBitmap(), null, Modifier.size(28.dp)); Spacer(Modifier.width(12.dp)) }
-                            Text(p.tooltip, color = Color.White)
-                        }
-                        HorizontalDivider(color = Color(0x22FFFFFF))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NativeRow(label: String, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, color = Color.White, modifier = Modifier.weight(1f))
-        Text("native ›", color = Color(0xFF80CBC4), fontSize = 12.sp)
-    }
-}
+// PanelList (the old intermediate "Panels" screen) + its NativeRow were retired in the §4 cutover — the
+// launcher grid now surfaces every panel + curated native screen as a first-class tile, so the extra list
+// level is gone. PanelEntry/PanelSnap/parsePanels live on (consumed by the grid + the viewer below).
 
 /**
  * A5 Tier-1: the rendered-image panel viewer. Opens the panel (off-screen under CACIO), polls its supersampled
@@ -131,6 +71,11 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit) {
     var viewW by remember { mutableStateOf(1) }
     var logged by remember { mutableStateOf(false) }
     val scroll = rememberScrollState()
+    // SC-4 panel-text input: a tap that lands in a Swing text field flips isPanelTextActive; we then raise a
+    // mirror field whose text is streamed back into the panel via panelText (live-filter search boxes).
+    var textActive by remember { mutableStateOf(false) }
+    var fieldValue by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
 
     DisposableEffect(index) {
         onDispose { JvmLauncher.onBridge { JvmLauncher.closePanel() } }
@@ -164,27 +109,68 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             } else {
                 Box(
-                    Modifier.fillMaxSize().verticalScroll(scroll)
+                    Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll)
                         .onGloballyPositioned { viewW = it.size.width.coerceAtLeast(1) }
                         .pointerInput(pw, viewW) {
-                            detectTapGestures { off ->
-                                if (pw > 0 && viewW > 0) {
-                                    // fit-width => uniform scale viewW/pw; add the scroll offset for buffer-y.
-                                    val bx = (off.x * pw / viewW)
-                                    val by = ((off.y + scroll.value) * pw / viewW)
-                                    JvmLauncher.onBridge { JvmLauncher.panelClick(bx.toInt(), by.toInt()) }
-                                }
-                            }
+                            detectTapGestures(
+                                onTap = { off ->
+                                    if (pw > 0 && viewW > 0) {
+                                        // fit-width => uniform scale viewW/pw; add the scroll offset for buffer-y.
+                                        val bx = (off.x * pw / viewW).toInt()
+                                        val by = ((off.y + scroll.value) * pw / viewW).toInt()
+                                        JvmLauncher.onBridge { JvmLauncher.panelClick(bx, by) }
+                                        // SC-4: after the click settles, ask the bridge whether it focused a text
+                                        // field; if so raise the mirror field pre-filled, else drop the keyboard.
+                                        scope.launch {
+                                            delay(140)
+                                            val active = withContext(Dispatchers.IO) {
+                                                JvmLauncher.onBridge { JvmLauncher.isPanelTextActive() }.get()
+                                            }
+                                            if (active) {
+                                                fieldValue = withContext(Dispatchers.IO) {
+                                                    JvmLauncher.onBridge { JvmLauncher.getPanelText() }.get()
+                                                }
+                                                textActive = true
+                                            } else {
+                                                textActive = false
+                                            }
+                                        }
+                                    }
+                                },
+                                onLongPress = { off ->
+                                    if (pw > 0 && viewW > 0) {
+                                        val bx = (off.x * pw / viewW).toInt()
+                                        val by = ((off.y + scroll.value) * pw / viewW).toInt()
+                                        JvmLauncher.onBridge { JvmLauncher.panelLongPress(bx, by) }   // SC-4 BUTTON3
+                                    }
+                                },
+                            )
                         },
                 ) {
                     Image(img.asImageBitmap(), tooltip, Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth)
+                }
+                if (textActive) {
+                    val fr = remember { FocusRequester() }
+                    LaunchedEffect(Unit) { fr.requestFocus() }   // raise the soft keyboard
+                    OutlinedTextField(
+                        value = fieldValue,
+                        onValueChange = { v -> fieldValue = v; JvmLauncher.onBridge { JvmLauncher.panelText(v) } },
+                        singleLine = true,
+                        label = { Text("Search / type into panel") },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            JvmLauncher.onBridge { JvmLauncher.panelKey(10) }   // AWT VK_ENTER -> submit
+                        }),
+                        modifier = Modifier.fillMaxWidth().padding(8.dp).focusRequester(fr),
+                    )
                 }
             }
         }
     }
 }
 
-private fun parsePanels(json: String): List<PanelEntry> = try {
+// Non-private: reused by the §4 launcher grid (PluginPanel.kt) so it can surface panels as tiles directly.
+fun parsePanels(json: String): List<PanelEntry> = try {
     val arr = JSONArray(json)
     (0 until arr.length()).map { i ->
         val o = arr.getJSONObject(i)

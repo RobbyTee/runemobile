@@ -231,7 +231,7 @@ public final class GrandExchangeBridge
 		}
 		try
 		{
-			appendHistoryFromJson(sb, raw);
+			appendHistoryFromJson(sb, raw, client);
 		}
 		catch (Throwable ex)
 		{
@@ -263,7 +263,7 @@ public final class GrandExchangeBridge
 	 * malformed element we stop early with whatever we have. Newest records are last in storage, so we keep the
 	 * trailing {@link #MAX_HISTORY}.
 	 */
-	private static void appendHistoryFromJson(StringBuilder out, String json)
+	private static void appendHistoryFromJson(StringBuilder out, String json, Client client)
 	{
 		// Collect parsed records first so we can keep only the most recent MAX_HISTORY.
 		final java.util.ArrayDeque<String> records = new java.util.ArrayDeque<>();
@@ -306,7 +306,7 @@ public final class GrandExchangeBridge
 				i++;
 			}
 			final String obj = json.substring(objStart, Math.min(i, n));
-			final String rec = parseTradeObject(obj);
+			final String rec = parseTradeObject(obj, client);
 			if (rec != null)
 			{
 				records.addLast(rec);
@@ -330,7 +330,7 @@ public final class GrandExchangeBridge
 	}
 
 	/** Build one public history record from a single stored trade object, or {@code null} if unusable. */
-	private static String parseTradeObject(String obj)
+	private static String parseTradeObject(String obj, Client client)
 	{
 		try
 		{
@@ -343,10 +343,12 @@ public final class GrandExchangeBridge
 			{
 				return null;
 			}
+			final long id = asLong(itemId, 0);
 			final StringBuilder sb = new StringBuilder(96);
 			sb.append('{')
 				.append("\"buy\":").append("true".equals(buy)).append(',')
-				.append("\"itemId\":").append(asLong(itemId, 0)).append(',')
+				.append("\"itemId\":").append(id).append(',')
+				.append("\"name\":").append(quote(itemName(client, (int) id))).append(',')
 				.append("\"qty\":").append(asLong(qty, 0)).append(',')
 				.append("\"price\":").append(asLong(price, 0));
 			if (time != null && !time.isEmpty())

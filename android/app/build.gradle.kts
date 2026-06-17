@@ -78,6 +78,7 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.browser:browser:1.8.0")   // AP-0: in-app Chrome Custom Tab for outbound links
 
     // Compose (BOM-versioned) for the A4 plugin list / config UI.
     val composeBom = platform("androidx.compose:compose-bom:2024.09.00")

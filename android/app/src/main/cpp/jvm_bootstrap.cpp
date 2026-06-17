@@ -56,9 +56,11 @@ static jmethodID g_midTouch = nullptr, g_midClick = nullptr, g_midCamera = nullp
 static jmethodID g_midWheel = nullptr, g_midClickPrecise = nullptr, g_midMove = nullptr;
 static jmethodID g_midText = nullptr, g_midKeyStroke = nullptr;
 // A1 polled read-surface: keyboard auto-raise, interact-tap haptic seq, finger snap radius.
-static jmethodID g_midTextInputOpen = nullptr, g_midInteractTapSeq = nullptr, g_midSnapRadius = nullptr;
+static jmethodID g_midTextInputOpen = nullptr, g_midInteractTapSeq = nullptr;
 // A2 press-and-peek: JavaBridge.selectMenuPoint commit + the separate MenuPeekBridge read-surface.
 static jmethodID g_midSelectMenuPoint = nullptr;
+// AP-2a sticky-Shift: JavaBridge.setShiftHeld(boolean) — synthetic held VK_SHIFT (shared, iOS-device-proven).
+static jmethodID g_midSetShiftHeld = nullptr;
 static jclass    g_menuPeekCls = nullptr;
 static jmethodID g_midMenuSnapshot = nullptr, g_midMenuPublishSeq = nullptr;
 
@@ -69,10 +71,26 @@ static jclass    g_mobileUiCls = nullptr;
 static jmethodID g_midListPlugins = nullptr, g_midMobileUiSeq = nullptr, g_midPollEvents = nullptr, g_midSetPluginEnabled = nullptr;
 static jmethodID g_midGetPluginConfig = nullptr, g_midSetConfig = nullptr, g_midProcessedWriteId = nullptr;
 static jmethodID g_midFlushConfig = nullptr;   // A8: persist pending config writes when the app backgrounds
+static jmethodID g_midResetPluginConfig = nullptr;     // SC-2/CFG-10: whole-group reset to defaults
+static jmethodID g_midNotificationDefaults = nullptr;  // SC-1/NOTIF-2: default Notification seed JSON
+// AP-2a bridge-amortized read surface (best-effort; a null only disables that one feature):
+//   nextNotification() -> "titlebody" or null  (Finding 9: NotificationManager delivery)
+//   nextLink()         -> URL or null                (Finding 25: Chrome Custom Tab)
+//   hubState()         -> {"refreshing":b,"seq":i}    (Finding 17: hub install progress)
+static jmethodID g_midNextNotification = nullptr, g_midNextLink = nullptr, g_midHubState = nullptr;
+static jmethodID g_midHubManifest = nullptr, g_midHubInstall = nullptr, g_midHubUninstall = nullptr;
+// Native-origin publish into the SAME shared queues (host-raised alerts/links; also deterministic path tests).
+static jmethodID g_midPublishNotification = nullptr, g_midPublishLink = nullptr;
+// AP-2b Finding 6: pin/star a plugin by display name (shared pinnedPlugins CSV; sorts the list pinned-first).
+static jmethodID g_midSetPinned = nullptr;
 // A5 Tier-1 plugin panels (rendered off-screen under CACIO; the ARGB int[] image is marshalled cross-VM).
 static jmethodID g_midListPanels = nullptr, g_midOpenPanel = nullptr, g_midClosePanel = nullptr,
                  g_midPanelW = nullptr, g_midPanelH = nullptr, g_midPanelSeq = nullptr,
                  g_midPanelPixels = nullptr, g_midPanelClick = nullptr;
+// SC-4 panel-text input (best-effort; a null disables only that interaction, not the whole panel surface).
+static jmethodID g_midIsPanelTextActive = nullptr, g_midGetPanelText = nullptr, g_midPanelText = nullptr,
+                 g_midPanelKey = nullptr, g_midPanelLongPress = nullptr, g_midPanelWheel = nullptr,
+                 g_midPanelMove = nullptr;
 // Publication latches for the MobileUiBridge facade. The method-id globals above are plain (non-atomic),
 // written once on the VM boot thread (publishBridge); the A4/A5 externs run on the SEPARATE rl-bridge thread
 // and a UI tap can submit a bridge call before startJvm even returns. These release/acquire flags give the
@@ -92,8 +110,27 @@ static jmethodID g_midQuestAvail = nullptr, g_midQuestSetUiOpen = nullptr, g_mid
                  g_midQuestActive = nullptr, g_midQuestStart = nullptr, g_midQuestStop = nullptr;
 static jclass    g_worldCls = nullptr;
 static jmethodID g_midWorldAvail = nullptr, g_midWorldSetUiOpen = nullptr, g_midWorldList = nullptr, g_midWorldHop = nullptr;
+static jmethodID g_midWorldSetFav = nullptr, g_midWorldHopDir = nullptr;   // SC-5 favourites + quick-hop (best-effort)
+// Finding 15 — overlay edit (OverlayBridge): list movable overlays, snap one to a corner, reset to default.
+static jclass    g_overlayCls = nullptr;
+static jmethodID g_midOverlayAvail = nullptr, g_midOverlaySetUiOpen = nullptr, g_midOverlaysJson = nullptr,
+                 g_midOverlaySnap = nullptr, g_midOverlayReset = nullptr;
+// Finding 22 — infobox menu (InfoBoxBridge): list infoboxes + their menu options, invoke one (Detach/Flip/Delete).
+static jclass    g_infoboxCls = nullptr;
+static jmethodID g_midInfoBoxAvail = nullptr, g_midInfoBoxSetUiOpen = nullptr, g_midInfoBoxesJson = nullptr,
+                 g_midInfoBoxInvoke = nullptr;
 static std::atomic<bool> g_questReady{false};
 static std::atomic<bool> g_worldReady{false};
+static std::atomic<bool> g_overlayReady{false};
+static std::atomic<bool> g_infoboxReady{false};
+
+// Finding 14 — read-only data-panel facades (XP Tracker, Loot Tracker, GE, Time Tracking). All share the same
+// shape: isAvailable()Z / setUiOpen(Z)V / <jsonGetter>()String. One struct + one generic registrar covers them.
+struct DataPanel { jclass cls = nullptr; jmethodID avail = nullptr, setUiOpen = nullptr, json = nullptr;
+                   std::atomic<bool> ready{false}; };
+static DataPanel g_xpPanel;
+static DataPanel g_lootPanel;
+static DataPanel g_gePanel;
 // A6 chrome: MobileChromeBridge read-only snapshot facade (tab/panel/minimap/orb/chat/viewport canvas bounds
 // the native edge-rails cover-and-proxy reads each display tick). Separate facade; rl-bridge-thread read
 // behind a release/acquire latch. Single method (getSnapshot) — populated only under -Drunelite.mobilechrome.
@@ -107,9 +144,20 @@ static std::atomic<bool> g_chromeReady{false};
 static jclass    g_hudCls = nullptr;
 static jmethodID g_midSetStonesHidden = nullptr, g_midOpenTab = nullptr, g_midRelocateSidePanel = nullptr;
 static jmethodID g_midRelocateChat = nullptr, g_midRelocateMinimap = nullptr;
+// Phase-3 overlay safe-insets (optional — absent on pre-world-map jars; facadeVoid* null-checks the id).
+static jmethodID g_midSetOverlayInsets = nullptr;
+// Phase-4 chat pill (optional, same rule): collapse toggle + channel switch by op-script replay.
+static jmethodID g_midSetChatCollapsed = nullptr, g_midSwitchChatTab = nullptr;
+// Phase-5 world map (optional): pan by finger deltas + the open-state/control-rect snapshot.
+static jmethodID g_midPanWorldMap = nullptr, g_midMapSnapshot = nullptr;
+static std::mutex g_mapLock;
+static std::string g_mapSnapshotPub = "{\"open\":false}";
 // A3 enlarged native chat-tab veneer: getChatSnapshot (per-frame tab geometry/state the bigger native buttons
 // read) + setChatTabRowHeight / setChatAreaWidth (tell the engine to push the message area below the taller row).
 static jmethodID g_midChatSnapshot = nullptr, g_midSetChatRowH = nullptr, g_midSetChatAreaW = nullptr;
+// AP-0 chat scroll-by-drag: scrollChat(deltaCanvasPx) drives the chatbox's OWN scroll layer (not a mouse
+// wheel — a wheel over the transparent chat would also zoom the camera).
+static jmethodID g_midScrollChat = nullptr;
 static std::atomic<bool> g_hudReady{false};
 
 // ---- Surface / render --------------------------------------------------------------------------------
@@ -155,7 +203,6 @@ static void rcPresentSetFrameDims(int w, int h) {
 // without ever attaching to HotSpot — same pattern as the frame dims above.
 static std::atomic<int> g_textInputOpen{0};   // isTextInputOpen() -> raise/dismiss the soft keyboard
 static std::atomic<int> g_interactTapSeq{0};  // getInteractTapSeq() -> fire a haptic when it advances
-static std::atomic<int> g_snapRadius{0};      // snapRadius() -> finger snap radius (game px)
 
 // A2 menu-peek snapshot, published by the render thread (only on seq change) for the UI thread to read.
 static std::mutex            g_menuLock;
@@ -177,7 +224,11 @@ static std::string           g_chatSnapshotPub = "{\"loggedIn\":false}";
 enum InputKind {
     IN_CLICK = 0, IN_TOUCH = 1, IN_CAMERA = 2, IN_CLEARHOVER = 3,
     IN_WHEEL = 4, IN_CLICKPRECISE = 5, IN_MOVE = 6, IN_KEYSTROKE = 7, IN_TEXT = 8,
-    IN_SELECTMENU = 9
+    IN_SELECTMENU = 9,
+    // AP-2a sticky-Shift: hold/release a synthetic VK_SHIFT (a=1 hold, a=0 release). Queued (not a direct
+    // facade call) so it's ORDERED with the menu-open click — the engine must see shift held BEFORE the
+    // right-click that builds the menu, or the shift-gated entries (Mark/Configure) won't be injected.
+    IN_SHIFT = 10
 };
 // s carries the IN_TEXT payload; empty for the int-only kinds (aggregate-inits to "").
 struct InputEvent { int kind, a, b, c, d; std::string s; };
@@ -334,6 +385,8 @@ static inline bool mobileUiReady() { return g_mobileUiReady.load(std::memory_ord
 static inline bool panelReady()    { return g_panelReady.load(std::memory_order_acquire); }
 static inline bool questReady()    { return g_questReady.load(std::memory_order_acquire); }
 static inline bool worldReady()    { return g_worldReady.load(std::memory_order_acquire); }
+static inline bool overlayReady()  { return g_overlayReady.load(std::memory_order_acquire); }
+static inline bool infoboxReady()  { return g_infoboxReady.load(std::memory_order_acquire); }
 static inline bool chromeReady()    { return g_chromeReady.load(std::memory_order_acquire); }
 static inline bool hudReady()       { return g_hudReady.load(std::memory_order_acquire); }
 
@@ -343,6 +396,28 @@ static jmethodID midOpt(JNIEnv *env, jclass c, const char *name, const char *sig
     jmethodID m = env->GetStaticMethodID(c, name, sig);
     if (!m && env->ExceptionCheck()) env->ExceptionClear();
     return m;
+}
+
+// Finding 14: register a read-only data-panel facade (all-or-nothing, release-latched like Quest/World). The
+// json getter name differs per panel (getXpJson / getLootJson / …); avail+setUiOpen are uniform.
+static bool registerDataPanel(JNIEnv *env, const char *clsName, const char *jsonGetter, DataPanel &p) {
+    jclass c = env->FindClass(clsName);
+    if (!c || env->ExceptionCheck()) { env->ExceptionClear(); LOGE("bridge: FindClass %s failed", clsName); return false; }
+    jclass g = (jclass) env->NewGlobalRef(c);
+    env->DeleteLocalRef(c);
+    if (!g) { LOGE("bridge: %s NewGlobalRef failed", clsName); return false; }
+    jmethodID a = midOpt(env, g, "isAvailable", "()Z");
+    jmethodID s = midOpt(env, g, "setUiOpen", "(Z)V");
+    jmethodID j = midOpt(env, g, jsonGetter, "()Ljava/lang/String;");
+    if (a && s && j) {
+        p.cls = g; p.avail = a; p.setUiOpen = s; p.json = j;
+        p.ready.store(true, std::memory_order_release);
+        LOGI("bridge: %s facade published", clsName);
+        return true;
+    }
+    env->DeleteGlobalRef(g);
+    LOGE("bridge: %s method id failed (panel reflow disabled)", clsName);
+    return false;
 }
 
 // Resolve + cache the JavaBridge facade as HotSpot global refs. Called once, on the VM's main thread, at
@@ -369,18 +444,19 @@ static bool publishBridge(JNIEnv *env) {
     g_midKeyStroke      = midOpt(env, global, "onKeyStroke", "(I)V");
     g_midTextInputOpen  = midOpt(env, global, "isTextInputOpen", "()Z");
     g_midInteractTapSeq = midOpt(env, global, "getInteractTapSeq", "()I");
-    g_midSnapRadius     = midOpt(env, global, "snapRadius", "()I");
     g_midSelectMenuPoint = midOpt(env, global, "selectMenuPoint", "(II)V");   // A2 commit
     if (!g_midSeq || !g_midW || !g_midH || !g_midPixels || !g_midTouch || !g_midClick
         || !g_midCamera || !g_midClearHover
         || !g_midWheel || !g_midClickPrecise || !g_midMove || !g_midText || !g_midKeyStroke
-        || !g_midTextInputOpen || !g_midInteractTapSeq || !g_midSnapRadius || !g_midSelectMenuPoint) {
+        || !g_midTextInputOpen || !g_midInteractTapSeq || !g_midSelectMenuPoint) {
         env->DeleteGlobalRef(global);   // midOpt already cleared any pending NoSuchMethodError
         LOGE("bridge: a JavaBridge method id failed to resolve");
         return false;
     }
+    // AP-2a sticky-Shift: best-effort (a missing one only disables the ⇧ button, never the render path).
+    g_midSetShiftHeld = midOpt(env, global, "setShiftHeld", "(Z)V");
     g_bridgeCls = global;   // publish only once fully resolved
-    LOGI("bridge: JavaBridge facade published");
+    LOGI("bridge: JavaBridge facade published (shiftHeld=%s)", g_midSetShiftHeld ? "on" : "off");
 
     // A2: MenuPeekBridge is a SEPARATE facade — resolve best-effort so a missing/old one only disables menu-peek
     // (never blocks the render path). It is inert unless -Drunelite.menupeek=true, but the class is always present.
@@ -426,8 +502,21 @@ static bool publishBridge(JNIEnv *env) {
             g_midSetConfig        = midOpt(env, mug, "setConfig", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
             g_midProcessedWriteId = midOpt(env, mug, "getProcessedWriteId", "()J");
             g_midFlushConfig      = midOpt(env, mug, "flushConfig", "()Ljava/lang/String;");   // A8 background flush
+            g_midResetPluginConfig   = midOpt(env, mug, "resetPluginConfig", "(Ljava/lang/String;)Ljava/lang/String;");   // SC-2 reset
+            g_midNotificationDefaults = midOpt(env, mug, "notificationDefaults", "()Ljava/lang/String;");                  // SC-1 defaults
             if (!g_midGetPluginConfig || !g_midSetConfig || !g_midProcessedWriteId)
                 LOGE("bridge: MobileUiBridge config methods partial (plugin config read/write disabled)");
+            // AP-2a: drain surfaces for native notification / link-out / hub-progress (each best-effort).
+            g_midNextNotification = midOpt(env, mug, "nextNotification", "()Ljava/lang/String;");
+            g_midNextLink         = midOpt(env, mug, "nextLink", "()Ljava/lang/String;");
+            g_midHubState         = midOpt(env, mug, "hubState", "()Ljava/lang/String;");
+            // Finding 17 plugin-hub browse/install (best-effort; null disables the hub screen only).
+            g_midHubManifest      = midOpt(env, mug, "hubManifest", "()Ljava/lang/String;");
+            g_midHubInstall       = midOpt(env, mug, "hubInstall", "(Ljava/lang/String;)Ljava/lang/String;");
+            g_midHubUninstall     = midOpt(env, mug, "hubUninstall", "(Ljava/lang/String;)Ljava/lang/String;");
+            g_midPublishNotification = midOpt(env, mug, "publishNotification", "(Ljava/lang/String;Ljava/lang/String;)V");
+            g_midPublishLink         = midOpt(env, mug, "publishLink", "(Ljava/lang/String;)V");
+            g_midSetPinned           = midOpt(env, mug, "setPinned", "(Ljava/lang/String;Z)Ljava/lang/String;");
             // A5 Tier-1 panel surface (best-effort, ALL-OR-NOTHING: every method the viewer uses must resolve.
             // closePanel in particular — without it, PanelView dispose can't close the open engine-side panel,
             // so a partial set disables panels entirely rather than opening one it can never close.)
@@ -439,6 +528,15 @@ static bool publishBridge(JNIEnv *env) {
             g_midPanelSeq    = midOpt(env, mug, "getPanelFrameSeq", "()I");
             g_midPanelPixels = midOpt(env, mug, "getPanelPixels", "()[I");
             g_midPanelClick  = midOpt(env, mug, "panelClick", "(II)Ljava/lang/String;");
+            // SC-4 panel-text input (best-effort — NOT in the panelOk all-or-nothing gate; a stale jar just
+            // disables typing/scroll/long-press inside panels, the panel still opens + tap-clicks work).
+            g_midIsPanelTextActive = midOpt(env, mug, "isPanelTextActive", "()Z");
+            g_midGetPanelText      = midOpt(env, mug, "getPanelText", "()Ljava/lang/String;");
+            g_midPanelText         = midOpt(env, mug, "panelText", "(Ljava/lang/String;)Ljava/lang/String;");
+            g_midPanelKey          = midOpt(env, mug, "panelKey", "(I)Ljava/lang/String;");
+            g_midPanelLongPress    = midOpt(env, mug, "panelLongPress", "(II)Ljava/lang/String;");
+            g_midPanelWheel        = midOpt(env, mug, "panelWheel", "(III)Ljava/lang/String;");
+            g_midPanelMove         = midOpt(env, mug, "panelMove", "(II)Ljava/lang/String;");
             bool panelOk = g_midListPanels && g_midOpenPanel && g_midClosePanel && g_midPanelW
                         && g_midPanelH && g_midPanelSeq && g_midPanelPixels && g_midPanelClick;
             if (!panelOk) LOGE("bridge: MobileUiBridge panel methods incomplete (Tier-1 panels disabled)");
@@ -498,6 +596,9 @@ static bool publishBridge(JNIEnv *env) {
             g_midWorldSetUiOpen = midOpt(env, wsg, "setUiOpen", "(Z)V");
             g_midWorldList      = midOpt(env, wsg, "getWorldListJson", "()Ljava/lang/String;");
             g_midWorldHop       = midOpt(env, wsg, "hop", "(I)V");
+            // SC-5 favourites + quick-hop: best-effort (a null only disables that one control, not the whole reflow).
+            g_midWorldSetFav    = midOpt(env, wsg, "setFavourite", "(IZ)V");
+            g_midWorldHopDir    = midOpt(env, wsg, "hopDirection", "(Z)V");
             bool worldOk = g_midWorldAvail && g_midWorldSetUiOpen && g_midWorldList && g_midWorldHop;
             if (worldOk) {
                 g_worldCls = wsg;
@@ -511,6 +612,68 @@ static bool publishBridge(JNIEnv *env) {
     } else {
         env->ExceptionClear();
         LOGE("bridge: FindClass WorldSwitcherBridge failed (World Switcher reflow disabled)");
+    }
+
+    // Finding 14 — read-only data-panel reflows (XP / Loot / GE; same facade shape as Quest/World).
+    registerDataPanel(env, "net/runelite/client/headless/XpTrackerBridge", "getXpJson", g_xpPanel);
+    registerDataPanel(env, "net/runelite/client/headless/LootTrackerBridge", "getLootJson", g_lootPanel);
+    registerDataPanel(env, "net/runelite/client/headless/GrandExchangeBridge", "getGeJson", g_gePanel);
+
+    // Finding 15 — OverlayBridge: overlay edit (list + snap-to-corner + reset). Dedicated facade (action methods
+    // take args), all-or-nothing, release-latched like Quest/World.
+    jclass ob = env->FindClass("net/runelite/client/headless/OverlayBridge");
+    if (ob && !env->ExceptionCheck()) {
+        jclass obg = (jclass) env->NewGlobalRef(ob);
+        env->DeleteLocalRef(ob);
+        if (!obg) {
+            LOGE("bridge: OverlayBridge NewGlobalRef failed (overlay edit disabled)");
+        } else {
+            g_midOverlayAvail     = midOpt(env, obg, "isAvailable", "()Z");
+            g_midOverlaySetUiOpen = midOpt(env, obg, "setUiOpen", "(Z)V");
+            g_midOverlaysJson     = midOpt(env, obg, "getOverlaysJson", "()Ljava/lang/String;");
+            g_midOverlaySnap      = midOpt(env, obg, "setOverlayPreferredPosition", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+            g_midOverlayReset     = midOpt(env, obg, "resetOverlay", "(Ljava/lang/String;)Ljava/lang/String;");
+            bool overlayOk = g_midOverlayAvail && g_midOverlaySetUiOpen && g_midOverlaysJson
+                          && g_midOverlaySnap && g_midOverlayReset;
+            if (overlayOk) {
+                g_overlayCls = obg;
+                g_overlayReady.store(true, std::memory_order_release);
+                LOGI("bridge: OverlayBridge facade published");
+            } else {
+                env->DeleteGlobalRef(obg);
+                LOGE("bridge: OverlayBridge method id failed (overlay edit disabled)");
+            }
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass OverlayBridge failed (overlay edit disabled)");
+    }
+
+    // Finding 22 — InfoBoxBridge: infobox list + per-infobox menu actions (Detach/Flip/Delete). Dedicated facade.
+    jclass ib = env->FindClass("net/runelite/client/headless/InfoBoxBridge");
+    if (ib && !env->ExceptionCheck()) {
+        jclass ibg = (jclass) env->NewGlobalRef(ib);
+        env->DeleteLocalRef(ib);
+        if (!ibg) {
+            LOGE("bridge: InfoBoxBridge NewGlobalRef failed (infobox menu disabled)");
+        } else {
+            g_midInfoBoxAvail     = midOpt(env, ibg, "isAvailable", "()Z");
+            g_midInfoBoxSetUiOpen = midOpt(env, ibg, "setUiOpen", "(Z)V");
+            g_midInfoBoxesJson    = midOpt(env, ibg, "getInfoBoxesJson", "()Ljava/lang/String;");
+            g_midInfoBoxInvoke    = midOpt(env, ibg, "invokeInfoBoxMenu", "(ILjava/lang/String;)Ljava/lang/String;");
+            bool ibOk = g_midInfoBoxAvail && g_midInfoBoxSetUiOpen && g_midInfoBoxesJson && g_midInfoBoxInvoke;
+            if (ibOk) {
+                g_infoboxCls = ibg;
+                g_infoboxReady.store(true, std::memory_order_release);
+                LOGI("bridge: InfoBoxBridge facade published");
+            } else {
+                env->DeleteGlobalRef(ibg);
+                LOGE("bridge: InfoBoxBridge method id failed (infobox menu disabled)");
+            }
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass InfoBoxBridge failed (infobox menu disabled)");
     }
 
     // A6 chrome: MobileChromeBridge — read-only snapshot facade, single method, rl-bridge-thread read.
@@ -553,8 +716,17 @@ static bool publishBridge(JNIEnv *env) {
             g_midChatSnapshot      = midOpt(env, hvg, "getChatSnapshot", "()Ljava/lang/String;");
             g_midSetChatRowH       = midOpt(env, hvg, "setChatTabRowHeight", "(I)V");
             g_midSetChatAreaW      = midOpt(env, hvg, "setChatAreaWidth", "(I)V");
+            g_midScrollChat        = midOpt(env, hvg, "scrollChat", "(I)V");
+            // OPTIONAL (never in the all-or-nothing check — the snapRadius lesson): a jar predating the
+            // world-map/insets surface simply loses overlay inset-avoidance, not the whole veneer.
+            g_midSetOverlayInsets  = midOpt(env, hvg, "setOverlaySafeInsets", "(IIII)V");
+            g_midSetChatCollapsed  = midOpt(env, hvg, "setChatCollapsed", "(Z)V");
+            g_midSwitchChatTab     = midOpt(env, hvg, "switchChatTab", "(I)V");
+            g_midPanWorldMap       = midOpt(env, hvg, "panWorldMap", "(II)V");
+            g_midMapSnapshot       = midOpt(env, hvg, "getMapSnapshot", "()Ljava/lang/String;");
             bool hudOk = g_midSetStonesHidden && g_midOpenTab && g_midRelocateSidePanel && g_midRelocateChat
-                      && g_midRelocateMinimap && g_midChatSnapshot && g_midSetChatRowH && g_midSetChatAreaW;
+                      && g_midRelocateMinimap && g_midChatSnapshot && g_midSetChatRowH && g_midSetChatAreaW
+                      && g_midScrollChat;
             if (hudOk) {
                 g_hudCls = hvg;                                         // before the release-store below
                 g_hudReady.store(true, std::memory_order_release);
@@ -607,6 +779,7 @@ static void drainInput(JNIEnv *env) {
             case IN_MOVE:         env->CallStaticVoidMethod(g_bridgeCls, g_midMove, ev.a, ev.b); break;
             case IN_KEYSTROKE:    env->CallStaticVoidMethod(g_bridgeCls, g_midKeyStroke, ev.a); break;
             case IN_SELECTMENU:   env->CallStaticVoidMethod(g_bridgeCls, g_midSelectMenuPoint, ev.a, ev.b); break;
+            case IN_SHIFT:        if (g_midSetShiftHeld) env->CallStaticVoidMethod(g_bridgeCls, g_midSetShiftHeld, (jboolean)(ev.a != 0)); break;
             case IN_TEXT: {
                 jstring js = env->NewStringUTF(ev.s.c_str());
                 env->CallStaticVoidMethod(g_bridgeCls, g_midText, js);
@@ -648,9 +821,6 @@ static void *renderLoop(void *) {
             int its = env->CallStaticIntMethod(g_bridgeCls, g_midInteractTapSeq);
             if (env->ExceptionCheck()) { env->ExceptionClear(); }
             else { g_interactTapSeq.store(its, std::memory_order_relaxed); }
-            int sr = env->CallStaticIntMethod(g_bridgeCls, g_midSnapRadius);
-            if (env->ExceptionCheck()) { env->ExceptionClear(); }
-            else { g_snapRadius.store(sr, std::memory_order_relaxed); }
 
             // A2: republish the menu-peek snapshot only when its publish-seq advanced (avoids a per-frame
             // String copy on the idle path). The UI thread reads g_menuSnapshot via nativeMenuSnapshot().
@@ -705,6 +875,25 @@ static void *renderLoop(void *) {
                     if (c) {
                         std::lock_guard<std::mutex> lk(g_chatLock);
                         g_chatSnapshotPub.assign(c);
+                        env->ReleaseStringUTFChars(js, c);
+                    } else if (env->ExceptionCheck()) {
+                        env->ExceptionClear();
+                    }
+                    env->DeleteLocalRef(js);
+                }
+            }
+
+            // Phase-5: republish the world-map snapshot each frame (open-state + control rects) so the UI
+            // thread can gate gestures + hide the native chrome lock-free. Optional method — older jars
+            // just leave the default {"open":false}.
+            if (g_hudReady.load(std::memory_order_acquire) && g_hudCls && g_midMapSnapshot) {
+                jstring js = (jstring) env->CallStaticObjectMethod(g_hudCls, g_midMapSnapshot);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); }
+                else if (js) {
+                    const char *c = env->GetStringUTFChars(js, nullptr);
+                    if (c) {
+                        std::lock_guard<std::mutex> lk(g_mapLock);
+                        g_mapSnapshotPub.assign(c);
                         env->ReleaseStringUTFChars(js, c);
                     } else if (env->ExceptionCheck()) {
                         env->ExceptionClear();
@@ -1082,6 +1271,11 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeClearHover(JNIEnv *, jobject) {
     enqueue({IN_CLEARHOVER, 0, 0, 0, 0});
 }
+// AP-2a sticky-Shift: queue a hold (held=1) / release (held=0) so it's ordered ahead of the menu-open click.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetShiftHeld(JNIEnv *, jobject, jboolean held) {
+    enqueue({IN_SHIFT, held ? 1 : 0, 0, 0, 0});
+}
 
 // ---- A1 input ingress (UI thread enqueues; render thread drains into the bridge) ---------------------
 extern "C" JNIEXPORT void JNICALL
@@ -1131,11 +1325,6 @@ extern "C" JNIEXPORT jint JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeInteractTapSeq(JNIEnv *, jobject) {
     return g_interactTapSeq.load(std::memory_order_relaxed);
 }
-extern "C" JNIEXPORT jint JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSnapRadius(JNIEnv *, jobject) {
-    return g_snapRadius.load(std::memory_order_relaxed);
-}
-
 // Last frame dimensions (so the UI thread can map a screen touch to game-canvas coords). 0 before render.
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeFrameWidth(JNIEnv *, jobject) { return g_lastFrameW.load(std::memory_order_relaxed); }
@@ -1187,6 +1376,21 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeSetPluginEnabled(JNIEnv *artEnv, jo
     jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midSetPluginEnabled, hid, enabled);
     std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
     if (hid) hs->DeleteLocalRef(hid);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+// AP-2b Finding 6: pin/star a plugin by DISPLAY NAME (not className). Off the UI thread (rl-bridge). Returns
+// the bridge's JSON ack ({"ok":true,"writeId":n}); "" if the facade isn't published / setPinned didn't resolve.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetPinned(JNIEnv *artEnv, jobject, jstring jName, jboolean pinned) {
+    if (!mobileUiReady() || !g_midSetPinned) return artEnv->NewStringUTF("");
+    std::string name = jstr(artEnv, jName);
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls) return artEnv->NewStringUTF("");
+    jstring hn = hs->NewStringUTF(name.c_str());
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, g_midSetPinned, hn, pinned);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (hn) hs->DeleteLocalRef(hn);
     if (r) hs->DeleteLocalRef(r);
     return artEnv->NewStringUTF(out.c_str());
 }
@@ -1259,6 +1463,96 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeFlushConfig(JNIEnv *artEnv, jobject
     if (!mobileUiReady() || !g_midFlushConfig) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midFlushConfig);
 }
+// SC-2/CFG-10: reset an entire config group to defaults. Returns the bridge JSON ack ({"ok":..,"writeId":n}).
+static jstring mobileUiStrArg(JNIEnv *artEnv, jmethodID m, jstring jArg);   // defined below (Finding 17 helpers)
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeResetPluginConfig(JNIEnv *artEnv, jobject, jstring jGroup) {
+    if (!mobileUiReady() || !g_midResetPluginConfig) return artEnv->NewStringUTF("");
+    return mobileUiStrArg(artEnv, g_midResetPluginConfig, jGroup);
+}
+// SC-1/NOTIF-2: the serialized default Notification seed JSON for the per-item editor (or "" if unresolved).
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeNotificationDefaults(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midNotificationDefaults) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midNotificationDefaults);
+}
+// AP-2a drain surfaces: one queued item or "" (empty queue / unresolved). Off the UI thread (rl-bridge).
+//   Finding 9  — nextNotification: "titlebody" (SOH-delimited), native splits + raises a notification.
+//   Finding 25 — nextLink: a single URL to open in a Custom Tab.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeNextNotification(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midNextNotification) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midNextNotification);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeNextLink(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midNextLink) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midNextLink);
+}
+// Finding 17 — hubState: {"refreshing":bool,"seq":int}, native drives the hub install spinner.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeHubState(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midHubState) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midHubState);
+}
+// Finding 17 — hubManifest: one-time async catalog download. First call returns {"status":"loading"}; the
+// native screen polls until {"status":"ok",plugins:[...]} (or error:*). No args.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeHubManifest(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midHubManifest) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midHubManifest);
+}
+// Helper: call a (String)->String bridge method on g_mobileUiCls, marshalling the arg ART->HotSpot.
+static jstring mobileUiStrArg(JNIEnv *artEnv, jmethodID m, jstring jArg) {
+    if (!m) return artEnv->NewStringUTF("");
+    std::string a = jstr(artEnv, jArg);
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls) return artEnv->NewStringUTF("");
+    jstring ha = hs->NewStringUTF(a.c_str());
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, m, ha);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (ha) hs->DeleteLocalRef(ha);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+// Finding 17 — hubInstall/hubUninstall by internal name: register synchronously (config write + flush),
+// download+load async. Returns {"ok":true,"writeId":n}; the screen then polls hubState() for the seq bump.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeHubInstall(JNIEnv *artEnv, jobject, jstring jName) {
+    if (!mobileUiReady()) return artEnv->NewStringUTF("");
+    return mobileUiStrArg(artEnv, g_midHubInstall, jName);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeHubUninstall(JNIEnv *artEnv, jobject, jstring jName) {
+    if (!mobileUiReady()) return artEnv->NewStringUTF("");
+    return mobileUiStrArg(artEnv, g_midHubUninstall, jName);
+}
+// Publish a host-origin notification into the shared queue (the drain delivers it like an engine one). Off
+// the UI thread (rl-bridge). Lets the native shell raise its own alerts + deterministically exercise delivery.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePublishNotification(JNIEnv *artEnv, jobject, jstring jt, jstring jb) {
+    if (!mobileUiReady() || !g_midPublishNotification) return;
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls) return;
+    std::string t = jstr(artEnv, jt), b = jstr(artEnv, jb);
+    jstring ht = hs->NewStringUTF(t.c_str()), hb = hs->NewStringUTF(b.c_str());
+    hs->CallStaticVoidMethod(g_mobileUiCls, g_midPublishNotification, ht, hb);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+    if (ht) hs->DeleteLocalRef(ht);
+    if (hb) hs->DeleteLocalRef(hb);
+}
+// Publish a host-origin link into the shared queue (the drain opens it). Off the UI thread (rl-bridge).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePublishLink(JNIEnv *artEnv, jobject, jstring ju) {
+    if (!mobileUiReady() || !g_midPublishLink) return;
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls) return;
+    std::string u = jstr(artEnv, ju);
+    jstring hu = hs->NewStringUTF(u.c_str());
+    hs->CallStaticVoidMethod(g_mobileUiCls, g_midPublishLink, hu);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+    if (hu) hs->DeleteLocalRef(hu);
+}
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeClosePanel(JNIEnv *artEnv, jobject) {
     if (!panelReady()) return artEnv->NewStringUTF("");
@@ -1290,6 +1584,59 @@ Java_dev_audaro_helloshell_JvmLauncher_nativePanelClick(JNIEnv *artEnv, jobject,
     if (r) hs->DeleteLocalRef(r);
     return artEnv->NewStringUTF(out.c_str());
 }
+// SC-4 panel-text input — all best-effort (guard on the mid; a stale jar → no-op). On the rl-bridge thread.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeIsPanelTextActive(JNIEnv *, jobject) {
+    if (!panelReady() || !g_midIsPanelTextActive) return JNI_FALSE;
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls) return JNI_FALSE;
+    jboolean v = hs->CallStaticBooleanMethod(g_mobileUiCls, g_midIsPanelTextActive);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); return JNI_FALSE; }
+    return v;
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeGetPanelText(JNIEnv *artEnv, jobject) {
+    if (!panelReady() || !g_midGetPanelText) return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midGetPanelText);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelText(JNIEnv *artEnv, jobject, jstring jText) {
+    if (!panelReady() || !g_midPanelText) return artEnv->NewStringUTF("");
+    return mobileUiStrArg(artEnv, g_midPanelText, jText);
+}
+// (int|int,int|int,int,int) -> String panel-input calls, marshalled inline (no shared helper for these shapes).
+static jstring panelCall(JNIEnv *artEnv, jmethodID m, jint a, jint b, jint c, int argc) {
+    if (!m) return artEnv->NewStringUTF("");
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls) return artEnv->NewStringUTF("");
+    jstring r;
+    if (argc == 1) r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, m, a);
+    else if (argc == 2) r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, m, a, b);
+    else r = (jstring) hs->CallStaticObjectMethod(g_mobileUiCls, m, a, b, c);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelKey(JNIEnv *artEnv, jobject, jint vk) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
+    return panelCall(artEnv, g_midPanelKey, vk, 0, 0, 1);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelLongPress(JNIEnv *artEnv, jobject, jint x, jint y) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
+    return panelCall(artEnv, g_midPanelLongPress, x, y, 0, 2);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelWheel(JNIEnv *artEnv, jobject, jint x, jint y, jint rotation) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
+    return panelCall(artEnv, g_midPanelWheel, x, y, rotation, 3);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanelMove(JNIEnv *artEnv, jobject, jint x, jint y) {
+    if (!panelReady()) return artEnv->NewStringUTF("");
+    return panelCall(artEnv, g_midPanelMove, x, y, 0, 2);
+}
 extern "C" JNIEXPORT jintArray JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativePanelPixels(JNIEnv *artEnv, jobject) {
     if (!panelReady()) return nullptr;
@@ -1319,6 +1666,39 @@ Java_dev_audaro_helloshell_JvmLauncher_nativePanelPixels(JNIEnv *artEnv, jobject
     return dst;
 }
 
+// AP-2b Finding 5 (screenshot): marshal the latest composited CPU frame (JavaBridge.getFramePixels, the stable
+// 0x00RRGGBB snapshot) into an ART int[] for the native PNG/MediaStore save. Same OOM-safe marshalling as the
+// panel pull; gated on the live bridge. Pull off the rl-bridge thread. Width is read separately via the existing
+// nativeFrameWidth() atomic (the caller guards len % w == 0 against a torn read across a resize).
+extern "C" JNIEXPORT jintArray JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeFramePixels(JNIEnv *artEnv, jobject) {
+    if (!g_bridgeCls || !g_midPixels) return nullptr;
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs) return nullptr;
+    jintArray src = (jintArray) hs->CallStaticObjectMethod(g_bridgeCls, g_midPixels);
+    if (hs->ExceptionCheck() || !src) { hs->ExceptionClear(); if (src) hs->DeleteLocalRef(src); return nullptr; }
+    jsize n = hs->GetArrayLength(src);
+    jintArray dst = artEnv->NewIntArray(n);
+    if (!dst) {
+        if (artEnv->ExceptionCheck()) artEnv->ExceptionClear();
+        hs->DeleteLocalRef(src);
+        return nullptr;
+    }
+    if (n > 0) {
+        jint *buf = hs->GetIntArrayElements(src, nullptr);
+        if (buf) {
+            artEnv->SetIntArrayRegion(dst, 0, n, buf);
+            hs->ReleaseIntArrayElements(src, buf, JNI_ABORT);
+        } else {
+            if (hs->ExceptionCheck()) hs->ExceptionClear();
+            hs->DeleteLocalRef(src);
+            return nullptr;
+        }
+    }
+    hs->DeleteLocalRef(src);
+    return dst;
+}
+
 // ---- A5 Tier-2 native reflow (QuestHelperBridge / WorldSwitcherBridge) -------------------------------
 // Run on the rl-bridge thread (NOT the UI thread); each gates on its facade's acquire latch, then calls the
 // cached static method on the HotSpot env and marshals the result back into the ART env. Generic by (cls, m)
@@ -1328,6 +1708,22 @@ static jstring facadeStr(JNIEnv *artEnv, jclass cls, jmethodID m) {
     if (!hs || !cls || !m) return artEnv->NewStringUTF("");
     jstring r = (jstring) hs->CallStaticObjectMethod(cls, m);
     std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+// (String[,String])->String facade call (marshal 1 or 2 ART args ART->HotSpot). j2==nullptr → single-arg call.
+static jstring facadeStrArgs(JNIEnv *artEnv, jclass cls, jmethodID m, jstring j1, jstring j2, bool two) {
+    if (!cls || !m) return artEnv->NewStringUTF("");
+    std::string a1 = jstr(artEnv, j1), a2 = two ? jstr(artEnv, j2) : std::string();
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs) return artEnv->NewStringUTF("");
+    jstring h1 = hs->NewStringUTF(a1.c_str());
+    jstring h2 = two ? hs->NewStringUTF(a2.c_str()) : nullptr;
+    jstring r = (jstring) (two ? hs->CallStaticObjectMethod(cls, m, h1, h2)
+                               : hs->CallStaticObjectMethod(cls, m, h1));
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (h1) hs->DeleteLocalRef(h1);
+    if (h2) hs->DeleteLocalRef(h2);
     if (r) hs->DeleteLocalRef(r);
     return artEnv->NewStringUTF(out.c_str());
 }
@@ -1350,10 +1746,22 @@ static void facadeVoidInt(jclass cls, jmethodID m, jint i) {
     hs->CallStaticVoidMethod(cls, m, i);
     if (hs->ExceptionCheck()) hs->ExceptionClear();
 }
+static void facadeVoidIntBool(jclass cls, jmethodID m, jint i, jboolean b) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m) return;
+    hs->CallStaticVoidMethod(cls, m, i, b);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+}
 static void facadeVoidIntInt(jclass cls, jmethodID m, jint a, jint b) {
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !cls || !m) return;
     hs->CallStaticVoidMethod(cls, m, a, b);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+}
+static void facadeVoid4Int(jclass cls, jmethodID m, jint a, jint b, jint c, jint d) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m) return;
+    hs->CallStaticVoidMethod(cls, m, a, b, c, d);
     if (hs->ExceptionCheck()) hs->ExceptionClear();
 }
 static void facadeVoidIntIntBool(jclass cls, jmethodID m, jint a, jint b, jboolean c) {
@@ -1425,6 +1833,129 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeWorldHop(JNIEnv *, jobject, jint wo
     if (!worldReady()) return;
     facadeVoidInt(g_worldCls, g_midWorldHop, worldId);
 }
+// SC-5: mark/unmark a world as a favourite (best-effort; no-op if the jar predates setFavourite).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeWorldSetFavourite(JNIEnv *, jobject, jint worldId, jboolean fav) {
+    if (!worldReady() || !g_midWorldSetFav) return;
+    facadeVoidIntBool(g_worldCls, g_midWorldSetFav, worldId, fav);
+}
+// SC-5: quick-hop to the next/previous world (best-effort; no-op if hopDirection is unresolved).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeWorldHopDirection(JNIEnv *, jobject, jboolean previous) {
+    if (!worldReady() || !g_midWorldHopDir) return;
+    facadeVoidBool(g_worldCls, g_midWorldHopDir, previous);
+}
+
+// Finding 14 — XP Tracker native reflow (read-only). Same facade-call shape as Quest/World, gated on the panel's
+// own release latch. getXpJson returns {available, skills:[{skill,xpGained,xpHr,...,progress}], overall:{…}}.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeXpAvailable(JNIEnv *, jobject) {
+    if (!g_xpPanel.ready.load(std::memory_order_acquire)) return JNI_FALSE;
+    return facadeBool(g_xpPanel.cls, g_xpPanel.avail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeXpSetUiOpen(JNIEnv *, jobject, jboolean open) {
+    if (!g_xpPanel.ready.load(std::memory_order_acquire)) return;
+    facadeVoidBool(g_xpPanel.cls, g_xpPanel.setUiOpen, open);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeXpJson(JNIEnv *artEnv, jobject) {
+    if (!g_xpPanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_xpPanel.cls, g_xpPanel.json);
+}
+
+// Finding 14 — Loot Tracker native reflow (read-only). getLootJson = {available, sources:[{name,subTitle,type,
+// kills,totalValue,items:[{id,name,qty,ge,ha}]}]}.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeLootAvailable(JNIEnv *, jobject) {
+    if (!g_lootPanel.ready.load(std::memory_order_acquire)) return JNI_FALSE;
+    return facadeBool(g_lootPanel.cls, g_lootPanel.avail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeLootSetUiOpen(JNIEnv *, jobject, jboolean open) {
+    if (!g_lootPanel.ready.load(std::memory_order_acquire)) return;
+    facadeVoidBool(g_lootPanel.cls, g_lootPanel.setUiOpen, open);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeLootJson(JNIEnv *artEnv, jobject) {
+    if (!g_lootPanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_lootPanel.cls, g_lootPanel.json);
+}
+
+// Finding 14 — Grand Exchange native reflow (read-only). getGeJson = {available, offers:[{slot,state,itemId,
+// name,qty,total,price,spent,progress}], history:[{buy,itemId,qty,price,time}]}.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeGeAvailable(JNIEnv *, jobject) {
+    if (!g_gePanel.ready.load(std::memory_order_acquire)) return JNI_FALSE;
+    return facadeBool(g_gePanel.cls, g_gePanel.avail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeGeSetUiOpen(JNIEnv *, jobject, jboolean open) {
+    if (!g_gePanel.ready.load(std::memory_order_acquire)) return;
+    facadeVoidBool(g_gePanel.cls, g_gePanel.setUiOpen, open);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeGeJson(JNIEnv *artEnv, jobject) {
+    if (!g_gePanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_gePanel.cls, g_gePanel.json);
+}
+
+// Finding 15 — overlay edit. avail/setUiOpen/list like the data panels; snap(name,position) + reset(name) act.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOverlayAvailable(JNIEnv *, jobject) {
+    if (!overlayReady()) return JNI_FALSE;
+    return facadeBool(g_overlayCls, g_midOverlayAvail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOverlaySetUiOpen(JNIEnv *, jobject, jboolean open) {
+    if (!overlayReady()) return;
+    facadeVoidBool(g_overlayCls, g_midOverlaySetUiOpen, open);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOverlaysJson(JNIEnv *artEnv, jobject) {
+    if (!overlayReady()) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_overlayCls, g_midOverlaysJson);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOverlaySnap(JNIEnv *artEnv, jobject, jstring jName, jstring jPos) {
+    if (!overlayReady()) return artEnv->NewStringUTF("");
+    return facadeStrArgs(artEnv, g_overlayCls, g_midOverlaySnap, jName, jPos, true);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOverlayReset(JNIEnv *artEnv, jobject, jstring jName) {
+    if (!overlayReady()) return artEnv->NewStringUTF("");
+    return facadeStrArgs(artEnv, g_overlayCls, g_midOverlayReset, jName, nullptr, false);
+}
+
+// Finding 22 — infobox menu. avail/setUiOpen/list like the others; invoke(index, option) fires the action.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeInfoBoxAvailable(JNIEnv *, jobject) {
+    if (!infoboxReady()) return JNI_FALSE;
+    return facadeBool(g_infoboxCls, g_midInfoBoxAvail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeInfoBoxSetUiOpen(JNIEnv *, jobject, jboolean open) {
+    if (!infoboxReady()) return;
+    facadeVoidBool(g_infoboxCls, g_midInfoBoxSetUiOpen, open);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeInfoBoxesJson(JNIEnv *artEnv, jobject) {
+    if (!infoboxReady()) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_infoboxCls, g_midInfoBoxesJson);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeInfoBoxInvoke(JNIEnv *artEnv, jobject, jint index, jstring jOption) {
+    if (!infoboxReady() || !g_midInfoBoxInvoke) return artEnv->NewStringUTF("");
+    std::string opt = jstr(artEnv, jOption);
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_infoboxCls) return artEnv->NewStringUTF("");
+    jstring ho = hs->NewStringUTF(opt.c_str());
+    jstring r = (jstring) hs->CallStaticObjectMethod(g_infoboxCls, g_midInfoBoxInvoke, index, ho);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (ho) hs->DeleteLocalRef(ho);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
 
 // A6 chrome read surface: MobileChromeBridge.getSnapshot — the per-frame tab/panel/minimap/orb/chat/viewport
 // canvas bounds the native edge-rails cover-and-proxy reads. Escaped JSON; populated under -Drunelite.mobilechrome.
@@ -1469,6 +2000,37 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeRelocateMinimap(JNIEnv *, jobject, 
     if (!hudReady()) return;
     facadeVoidIntInt(g_hudCls, g_midRelocateMinimap, x, y);
 }
+// Phase-3: push the safe-area insets (CANVAS px) so the shared OverlayRenderer keeps plugin-overlay snap
+// corners clear of the display cutout + the relocated chat (getOverlayChatAvoid is consumed Java-side).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetOverlayInsets(JNIEnv *, jobject, jint l, jint t, jint r, jint b) {
+    if (!hudReady()) return;
+    facadeVoid4Int(g_hudCls, g_midSetOverlayInsets, l, t, r, b);
+}
+// Phase-4 chat pill: collapse = the shared shove-off-canvas (widget stays alive, reopen instant); switch = the
+// engine tab's op-script replay (works while the button is off-canvas, unlike a proxy click).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetChatCollapsed(JNIEnv *, jobject, jboolean collapsed) {
+    if (!hudReady()) return;
+    facadeVoidBool(g_hudCls, g_midSetChatCollapsed, collapsed);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSwitchChatTab(JNIEnv *, jobject, jint index) {
+    if (!hudReady()) return;
+    facadeVoidInt(g_hudCls, g_midSwitchChatTab, index);
+}
+// Phase-5 world map: pan by accumulated finger deltas (canvas px; the shared tick converts to tiles via the
+// live zoom) + the render-thread-published snapshot (UI reads lock-free, no attach).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativePanWorldMap(JNIEnv *, jobject, jint dx, jint dy) {
+    if (!hudReady()) return;
+    facadeVoidIntInt(g_hudCls, g_midPanWorldMap, dx, dy);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeMapSnapshotPub(JNIEnv *env, jobject) {
+    std::lock_guard<std::mutex> lk(g_mapLock);
+    return env->NewStringUTF(g_mapSnapshotPub.c_str());
+}
 // A3 chat-tab veneer: the render-thread-published HudVeneerBridge.getChatSnapshot (UI reads lock-free, no attach)
 // + the two row-size setters (rl-bridge thread) that push the engine message area below the taller native row.
 extern "C" JNIEXPORT jstring JNICALL
@@ -1485,4 +2047,11 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeSetChatAreaWidth(JNIEnv *, jobject, jint canvasPx) {
     if (!hudReady()) return;
     facadeVoidInt(g_hudCls, g_midSetChatAreaW, canvasPx);
+}
+// AP-0 chat scroll-by-drag: accumulate a finger-drag delta into the chatbox's own scroll layer (applied on
+// the client thread in HudVeneerBridge.tick). Positive = toward newer/bottom. rl-bridge thread.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeScrollChat(JNIEnv *, jobject, jint deltaCanvasPx) {
+    if (!hudReady()) return;
+    facadeVoidInt(g_hudCls, g_midScrollChat, deltaCanvasPx);
 }

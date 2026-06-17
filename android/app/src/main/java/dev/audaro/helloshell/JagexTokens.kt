@@ -35,14 +35,28 @@ object JagexTokens {
         return candidates.firstOrNull { it.exists() && it.length() > 0 }
     }
 
-    /** Token JSON text + a loggable origin: a pushed file wins (see [locate]); else the bundled asset. */
+    /** Logged-out marker: a bundled-asset tokens.json (sideload bundles) can't be deleted, so logout writes
+     *  this to suppress the ASSET fallback until the next successful login clears it. A pushed/written
+     *  tokens.json still wins regardless — a fresh login or adb push immediately re-arms. */
+    private fun loggedOutMarker(ctx: Context): File = File(ctx.filesDir, "logged_out.marker")
+
+    /** Token JSON text + a loggable origin: a pushed file wins (see [locate]); else the bundled asset
+     *  (unless suppressed by the logout marker). */
     private fun readSource(ctx: Context): Pair<String, String>? {
         locate(ctx)?.let { return it.readText() to it.parent.orEmpty() }
+        if (loggedOutMarker(ctx).exists()) {
+            return null   // logged out: don't resurrect the session from the bundled asset
+        }
         return try {
             ctx.assets.open("tokens.json").bufferedReader().use { it.readText() } to "bundled asset"
         } catch (e: Exception) {
             null
         }
+    }
+
+    /** A fresh login owns the session again — drop the logout suppression. */
+    fun clearLoggedOut(ctx: Context) {
+        loggedOutMarker(ctx).delete()
     }
 
     /** True iff a usable tokens.json (session_id + chosen_account_id) exists — the A3 login-first boot gate. */
@@ -54,6 +68,28 @@ object JagexTokens {
         } catch (e: Exception) {
             false
         }
+    }
+
+    /** Log out: delete every deletable tokens.json copy (internal filesDir + the adb-pushable external dir —
+     *  both unconditionally; a stale pushed copy must not resurrect the session on a release build's next
+     *  boot) and write the logout marker so a build-time bundled asset (sideload bundles, undeletable) can't
+     *  re-arm the session either. Returns true iff no usable session remains. */
+    fun deleteAll(ctx: Context): Boolean {
+        for (f in listOfNotNull(
+            File(ctx.filesDir, "tokens.json"),
+            ctx.getExternalFilesDir(null)?.let { File(it, "tokens.json") },
+            // a legacy username/password file is a session too — logout must forget it as well
+            File(ctx.filesDir, "legacy_login.json"),
+            ctx.getExternalFilesDir(null)?.let { File(it, "legacy_login.json") },
+        )) {
+            if (f.exists() && !f.delete()) Log.w(TAG, "logout: failed to delete ${f.absolutePath}")
+        }
+        try {
+            loggedOutMarker(ctx).writeText("1")
+        } catch (e: Exception) {
+            Log.w(TAG, "logout: marker write failed: ${e.message}")
+        }
+        return !hasTokens(ctx)
     }
 
     /** Parse tokens.json and set JX_* env. Returns true iff autologin was armed. */

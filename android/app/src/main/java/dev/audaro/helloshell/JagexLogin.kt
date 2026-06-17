@@ -121,6 +121,7 @@ object JagexLogin {
                     "chosen_account_id->JX_CHARACTER_ID, chosen_display_name->JX_DISPLAY_NAME; the gamepack mints its " +
                     "own play token. access/refresh empty (Stage-A only).")
             File(ctx.filesDir, "tokens.json").writeText(json.toString())
+            JagexTokens.clearLoggedOut(ctx)   // a fresh login owns the session — drop the logout suppression
             val sp = if (sessionId.length >= 6) sessionId.substring(0, 6) else sessionId
             Log.i(TAG, "tokens.json written (filesDir): displayName='${chosen.optString("displayName", "")}' " +
                 "characterId=${chosen.optString("accountId", "")} session=$sp…")

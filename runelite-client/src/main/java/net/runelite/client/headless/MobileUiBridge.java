@@ -737,7 +737,6 @@ public final class MobileUiBridge
 	// native side scales to its view width and scrolls vertically. Touches map back to panel coords and dispatch
 	// as MouseEvents on the EDT. A daemon repaints the active panel periodically so live updates (XP, etc.) show.
 	private static final int PANEL_W = PluginPanel.PANEL_WIDTH + PluginPanel.SCROLLBAR_WIDTH;
-	private static final int PANEL_MAX_H = 2500;
 	// Supersample the 242-logical panel into a higher-res buffer so the native side can display it at device
 	// resolution 1:1 (crisp, no upscale blur) at a comfortable size. 4x of 242 = 968px ≈ 323pt at 3x density.
 	// Clicks come back in buffer px and are divided by this to recover logical coords for Swing hit-testing.
@@ -745,6 +744,13 @@ public final class MobileUiBridge
 	// Memory budget for the panel buffer (pixels). ~3M px ARGB ≈ 12 MB — the cap below which the supersample
 	// scale is allowed; tall panels step down from 4x so the buffer never OOMs the game-shared heap.
 	private static final long MAX_BUFFER_PX = 3_000_000L;
+	// Tallest panel we lay out + render in full (logical px). It is the SCALE-1 buffer limit (MAX_BUFFER_PX /
+	// width): content up to this height renders COMPLETE, with the supersample step-down below trading crispness
+	// for height so the buffer stays in budget — a tall panel is softer but no longer TRUNCATED. Was a flat 2500,
+	// which clipped the JWindow and cut off the bottom of tall panels (Notes / Time Tracking / Kourend Library) —
+	// a worse failure (inaccessible content) than reduced sharpness. Only content beyond ~MAX_BUFFER_PX px at
+	// scale 1 (≈ a dozen screens) still clips; full crispness on tall panels needs viewport-windowed rendering.
+	private static final int PANEL_MAX_H = (int) (MAX_BUFFER_PX / PANEL_W);
 	private static volatile PluginPanel activePanel;
 	private static volatile JPanel activeWrapped;
 	private static volatile JWindow activeWindow;
@@ -756,8 +762,8 @@ public final class MobileUiBridge
 	private static volatile int activeRenderScale = RENDER_SCALE;
 	private static final AtomicInteger panelSeq = new AtomicInteger();
 	private static volatile boolean panelRepainterRunning;
-	// PANEL-1: the Swing text field the last panelClick landed in (so panelText/panelKey route typed input to it)
-	// and the snapshot the native shell polls to decide whether to raise the soft keyboard + pre-fill it.
+	// SC-4 (PANEL-1): the Swing text field the last panelClick landed in (so panelText/panelKey route typed input
+	// to it) + the snapshot the native shell polls to decide whether to raise the soft keyboard + pre-fill it.
 	private static volatile javax.swing.text.JTextComponent activeTextTarget;
 	private static volatile boolean panelTextActive;
 	private static volatile String panelTextValue = "";
@@ -807,7 +813,7 @@ public final class MobileUiBridge
 	{
 		EventQueue.invokeLater(MobileUiBridge::closeActiveOnEdt);
 		panelPixels = null;
-		activeTextTarget = null;   // dismiss the panel keyboard (PANEL-1)
+		activeTextTarget = null;   // dismiss the panel keyboard (SC-4 / PANEL-1)
 		panelTextActive = false;
 		panelSeq.incrementAndGet();
 		return "{\"ok\":true}";
@@ -835,7 +841,7 @@ public final class MobileUiBridge
 		activePanel = null;
 		activeWrapped = null;
 		activeWindow = null;
-		// Drop the text-input target with the panel — a panel SWITCH (openPanel queues this before realizing the
+		// SC-4: drop the text-input target with the panel — a panel SWITCH (openPanel queues this before realizing the
 		// new panel) must not leave a stale field focused, or the next tap's keyboard pre-fills the OLD panel's
 		// text and panelText/panelKey route into a disposed component (PANEL-1).
 		activeTextTarget = null;
@@ -965,8 +971,8 @@ public final class MobileUiBridge
 			target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_PRESSED, when, mods, p.x, p.y, 1, false, MouseEvent.BUTTON1));
 			target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_RELEASED, when + 1, 0, p.x, p.y, 1, false, MouseEvent.BUTTON1));
 			target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_CLICKED, when + 2, 0, p.x, p.y, 1, false, MouseEvent.BUTTON1));
-			// PANEL-1: if the tap landed in a text field, focus it and snapshot its text so the native shell raises
-			// the soft keyboard and pre-fills it; otherwise clear the target so the keyboard dismisses.
+			// SC-4 (PANEL-1): if the tap landed in an editable text field, focus it and snapshot its text so the
+			// native shell raises the soft keyboard + pre-fills it; otherwise clear the target so it dismisses.
 			final javax.swing.text.JTextComponent tc = textComponentFor(target);
 			if (tc != null && tc.isEnabled() && tc.isEditable())
 			{
@@ -1012,7 +1018,7 @@ public final class MobileUiBridge
 	}
 
 	/**
-	 * Set the focused panel text field's whole text (PANEL-1) — the native side mirrors its hidden UITextField on
+	 * Set the focused panel text field's whole text (SC-4 / PANEL-1) — the native side mirrors its hidden UITextField on
 	 * each change, so a {@code setText} fires the field's DocumentListeners (live-filter search boxes: GE, plugin
 	 * search, Hiscore, Skill-Calc, Notes). No-op if no field is focused.
 	 */
@@ -1040,7 +1046,7 @@ public final class MobileUiBridge
 
 	/**
 	 * Dispatch a single key (e.g. {@code VK_ENTER} to submit, {@code VK_BACK_SPACE}) to the focused panel text
-	 * field (PANEL-1). Used for keys a whole-text mirror can't express, like Enter on a search box.
+	 * field (SC-4 / PANEL-1). Used for keys a whole-text mirror can't express, like Enter on a search box.
 	 */
 	public static String panelKey(int vk)
 	{
@@ -1066,7 +1072,7 @@ public final class MobileUiBridge
 	}
 
 	/**
-	 * A right-click (BUTTON3) at panel-space ({@code x},{@code y}) into the active panel (PANEL-2 / §3.4) — drives
+	 * A right-click (BUTTON3) at panel-space ({@code x},{@code y}) into the active panel (SC-4 / PANEL-2 / §3.4) — drives
 	 * context handlers (e.g. Loot Tracker reset). NOTE: a handler that opens a heavyweight {@code JPopupMenu}
 	 * won't render into the panel buffer (the same limitation as combo dropdowns); direct-action handlers work.
 	 */
@@ -1105,7 +1111,7 @@ public final class MobileUiBridge
 		return "{\"ok\":true}";
 	}
 
-	/** Inner-scroll a panel's Swing component at ({@code x},{@code y}) by {@code rotation} wheel notches (§3.4). */
+	/** Inner-scroll a panel's Swing component at ({@code x},{@code y}) by {@code rotation} wheel notches (SC-4 / §3.4). */
 	public static String panelWheel(int x, int y, int rotation)
 	{
 		if (!ENABLED || activeWrapped == null)
@@ -1134,7 +1140,7 @@ public final class MobileUiBridge
 		return "{\"ok\":true}";
 	}
 
-	/** Park a hover (MOUSE_MOVED) at panel-space ({@code x},{@code y}) so Swing tooltips/highlights fire (PANEL-2). */
+	/** Park a hover (MOUSE_MOVED) at panel-space ({@code x},{@code y}) so Swing tooltips/highlights fire (SC-4 / PANEL-2). */
 	public static String panelMove(int x, int y)
 	{
 		if (!ENABLED || activeWrapped == null)
@@ -1449,6 +1455,7 @@ public final class MobileUiBridge
 				.kv("className", p.getClass().getName())
 				.kv("name", d.name())
 				.kv("description", d.description())
+				.kv("tags", String.join(" ", d.tags()))
 				.kb("enabled", pm.isPluginEnabled(p))
 				.kb("active", pm.isPluginActive(p))
 				.kb("hasConfig", hasConfig)

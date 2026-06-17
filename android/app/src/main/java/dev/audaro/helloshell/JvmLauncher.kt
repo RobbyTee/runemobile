@@ -71,6 +71,11 @@ object JvmLauncher {
     /** Make the engine pointer "absent" (call when a camera/pan gesture begins). */
     external fun nativeClearHover()
 
+    // AP-2a sticky-Shift (Finding 12): hold/release a synthetic VK_SHIFT via JavaBridge.setShiftHeld. Queued
+    // through the input path so it's ORDERED ahead of the menu-open right-click (engine must read shift held
+    // before it builds the menu, or Mark/Configure entries aren't injected). UI-thread-safe (enqueue only).
+    external fun nativeSetShiftHeld(held: Boolean)
+
     // ---- A1 input parity ----------------------------------------------------------------------------
     /** Mouse-wheel notch at game-canvas (x,y); rotation <0 = up/zoom-in, >0 = down/zoom-out (pinch). */
     external fun nativeWheel(x: Int, y: Int, rotation: Int)
@@ -93,9 +98,6 @@ object JvmLauncher {
     /** Monotonic counter the engine bumps on each committed interact-tap — advance => fire a haptic. */
     external fun nativeInteractTapSeq(): Int
 
-    /** Finger snap radius (game px) the touch-forgiveness uses. */
-    external fun nativeSnapRadius(): Int
-
     // ---- A2 press-and-peek menu ---------------------------------------------------------------------
     /** Commit a menu choice by clicking the engine row centre (game-canvas x,y) — honours plugin onClick. */
     external fun nativeSelectMenuPoint(x: Int, y: Int)
@@ -110,6 +112,11 @@ object JvmLauncher {
     external fun nativeFrameWidth(): Int
     external fun nativeFrameHeight(): Int
 
+    // AP-2b Finding 5 (screenshot): the latest composited CPU frame as 0x00RRGGBB ints (alpha unset; the consumer
+    // ORs 0xFF for an opaque PNG). null before the first frame / bridge off. Pull OFF the UI thread (via [onBridge])
+    // — it attaches the caller to HotSpot. Size against [nativeFrameWidth]; guard len % width == 0.
+    external fun nativeFramePixels(): IntArray?
+
     // ---- A4 plugin control plane (MobileUiBridge; gated by -Drunelite.mobileui) ----------------------
     // CALL THESE OFF THE UI THREAD ONLY (via [onBridge]) — they daemon-attach the calling thread to the
     // embedded HotSpot VM and may block (config writes dispatch to the client thread). ART<->HotSpot strings
@@ -118,11 +125,26 @@ object JvmLauncher {
     external fun nativeMobileUiSeq(): Long
     external fun nativePollMobileUiEvents(sinceSeq: Long): String
     external fun nativeSetPluginEnabled(className: String, enabled: Boolean): String
+    external fun nativeSetPinned(pluginName: String, pinned: Boolean): String   // Finding 6: star by display name
     external fun nativeGetPluginConfig(group: String): String
     external fun nativeSetConfig(group: String, key: String, value: String): String
     external fun nativeProcessedWriteId(): Long
     // A8: persist pending plugin-config writes (call when the app backgrounds). Off the UI thread (onBridge).
     external fun nativeFlushConfig(): String
+    // SC-2/CFG-10: reset an entire plugin/config group to defaults (returns {"ok":..,"writeId":n}). Off the UI thread.
+    external fun nativeResetPluginConfig(group: String): String
+    // SC-1/NOTIF-2: the serialized default Notification seed for the per-item editor. Off the UI thread.
+    external fun nativeNotificationDefaults(): String
+
+    // AP-2a bridge-amortized drain surfaces (off the UI thread via [onBridge]); "" = nothing pending / unresolved.
+    external fun nativeNextNotification(): String   // Finding 9:  "titlebody" or ""
+    external fun nativeNextLink(): String            // Finding 25: a URL or ""
+    external fun nativeHubState(): String            // Finding 17: {"refreshing":bool,"seq":int}
+    external fun nativeHubManifest(): String          // Finding 17: {"status":loading|ok,...,plugins:[...]}
+    external fun nativeHubInstall(internalName: String): String     // Finding 17: {"ok":true,"writeId":n}
+    external fun nativeHubUninstall(internalName: String): String   // Finding 17: {"ok":true,"writeId":n}
+    external fun nativePublishNotification(title: String, body: String)   // host-origin alert into the shared queue
+    external fun nativePublishLink(url: String)                            // host-origin link into the shared queue
 
     // A5 Tier-1 plugin panels: a plugin's Swing side-panel rendered off-screen to an ARGB int[] (like the
     // game blit), pulled here and shown in a zoom/pan view; taps map back via panelClick. Off the UI thread.
@@ -134,6 +156,14 @@ object JvmLauncher {
     external fun nativePanelFrameSeq(): Int
     external fun nativePanelPixels(): IntArray?
     external fun nativePanelClick(x: Int, y: Int): String
+    // SC-4 panel-text input (best-effort; no-op if the staged jar predates them).
+    external fun nativeIsPanelTextActive(): Boolean        // a tap focused an editable field -> raise keyboard
+    external fun nativeGetPanelText(): String              // current text of the focused field (pre-fill)
+    external fun nativePanelText(text: String): String     // mirror whole text into the focused field (live filter)
+    external fun nativePanelKey(vk: Int): String           // a single key (VK_ENTER submit / VK_BACK_SPACE)
+    external fun nativePanelLongPress(x: Int, y: Int): String   // BUTTON3 into the panel
+    external fun nativePanelWheel(x: Int, y: Int, rotation: Int): String   // inner scroll
+    external fun nativePanelMove(x: Int, y: Int): String   // hover -> tooltips/highlights
 
     // A5 Tier-2 native reflow: curated native screens for Quest Helper + World Switcher (QuestHelperBridge /
     // WorldSwitcherBridge). isAvailable() gates native-vs-Tier-1: Quest is false unless the hub plugin is
@@ -148,6 +178,35 @@ object JvmLauncher {
     external fun nativeWorldSetUiOpen(open: Boolean)
     external fun nativeWorldListJson(): String
     external fun nativeWorldHop(worldId: Int)
+    // SC-5 World Switcher favourites + quick-hop (best-effort; no-op if the staged jar predates them).
+    external fun nativeWorldSetFavourite(worldId: Int, favourite: Boolean)
+    external fun nativeWorldHopDirection(previous: Boolean)
+
+    // Finding 14 — XP Tracker native reflow (read-only data panel; same facade shape as Quest/World).
+    // setUiOpen brackets the screen so the bridge only rebuilds the snapshot while it's shown. Off the UI thread.
+    external fun nativeXpAvailable(): Boolean
+    external fun nativeXpSetUiOpen(open: Boolean)
+    external fun nativeXpJson(): String
+    external fun nativeLootAvailable(): Boolean
+    external fun nativeLootSetUiOpen(open: Boolean)
+    external fun nativeLootJson(): String
+    external fun nativeGeAvailable(): Boolean
+    external fun nativeGeSetUiOpen(open: Boolean)
+    external fun nativeGeJson(): String
+
+    // Finding 15 — overlay edit (OverlayBridge): list movable overlays, snap one to a corner, reset to default.
+    // snap/reset return the bridge JSON ack; positionName is an OverlayPosition (TOP_LEFT/.../BOTTOM_RIGHT).
+    external fun nativeOverlayAvailable(): Boolean
+    external fun nativeOverlaySetUiOpen(open: Boolean)
+    external fun nativeOverlaysJson(): String
+    external fun nativeOverlaySnap(name: String, positionName: String): String
+    external fun nativeOverlayReset(name: String): String
+
+    // Finding 22 — infobox menu (InfoBoxBridge): list infoboxes + their menu options, invoke one by index.
+    external fun nativeInfoBoxAvailable(): Boolean
+    external fun nativeInfoBoxSetUiOpen(open: Boolean)
+    external fun nativeInfoBoxesJson(): String
+    external fun nativeInfoBoxInvoke(index: Int, option: String): String
 
     // A6 chrome: the per-frame MobileChromeBridge read-only snapshot (escaped JSON: tab/panel/minimap/orb/chat/
     // viewport canvas bounds the native edge-rails read). Gated by -Drunelite.mobilechrome. Off the UI thread.
@@ -169,6 +228,15 @@ object JvmLauncher {
     // (the tabs / scrollback / colours / input all stay live — it IS the real chat). x<0 stops relocating. Off
     // the UI thread (via [onBridge]); re-applied by the engine tick.
     external fun nativeRelocateChat(x: Int, y: Int, transparent: Boolean)
+    /** Phase-3: safe-area insets in CANVAS px — the shared OverlayRenderer insets every overlay snap corner. */
+    external fun nativeSetOverlayInsets(l: Int, t: Int, r: Int, b: Int)
+    /** Phase-4 chat pill: collapse the chat (shared shove-off-canvas) / switch channel (op-script replay). */
+    external fun nativeSetChatCollapsed(collapsed: Boolean)
+    external fun nativeSwitchChatTab(index: Int)
+    /** Phase-5 world map: pan by finger deltas (canvas px; shared tick converts to tiles) + the published
+     *  snapshot {open, map:[x,y,w,h], close, search, zoomIn, zoomOut} (render-thread copy — UI-safe). */
+    external fun nativePanWorldMap(dx: Int, dy: Int)
+    external fun nativeMapSnapshotPub(): String
 
     // A7 edge-to-edge: pull the engine minimap+orbs cluster (MAP_CONTAINER) into the top-right safe area. It
     // stays the live engine HUD (minimap click-to-walk + orb clicks keep working). x<0 stops. Off the UI thread.
@@ -182,6 +250,11 @@ object JvmLauncher {
     external fun nativeSetChatTabRowHeight(canvasPx: Int)
     external fun nativeSetChatAreaWidth(canvasPx: Int)
 
+    // AP-0 chat scroll-by-drag: scroll the chat by deltaCanvasPx (positive = toward newer/bottom) via the
+    // chatbox's OWN scroll layer — not a mouse wheel, which would zoom the camera under the transparent chat.
+    // Off the UI thread (via [onBridge]); accumulated and applied by the engine tick.
+    external fun nativeScrollChat(deltaCanvasPx: Int)
+
     // Kotlin-friendly aliases.
     fun setEnv(key: String, value: String) = nativeSetEnv(key, value)
     fun setStdioRedirect(enabled: Boolean) = nativeSetStdioRedirect(enabled)
@@ -190,6 +263,7 @@ object JvmLauncher {
     fun touch(type: Int, x: Int, y: Int, button: Int) = nativeTouch(type, x, y, button)
     fun camera(dx: Int, dy: Int) = nativeCamera(dx, dy)
     fun clearHover() = nativeClearHover()
+    fun setShiftHeld(held: Boolean) = nativeSetShiftHeld(held)
     fun wheel(x: Int, y: Int, rotation: Int) = nativeWheel(x, y, rotation)
     fun clickPrecise(x: Int, y: Int, button: Int) = nativeClickPrecise(x, y, button)
     fun move(x: Int, y: Int) = nativeMove(x, y)
@@ -197,12 +271,12 @@ object JvmLauncher {
     fun keyStroke(vk: Int) = nativeKeyStroke(vk)
     fun isTextInputOpen() = nativeIsTextInputOpen()
     fun interactTapSeq() = nativeInteractTapSeq()
-    fun snapRadius() = nativeSnapRadius()
     fun selectMenuPoint(x: Int, y: Int) = nativeSelectMenuPoint(x, y)
     fun menuSnapshot() = nativeMenuSnapshot()
     fun menuPublishSeq() = nativeMenuPublishSeq()
     fun frameWidth() = nativeFrameWidth()
     fun frameHeight() = nativeFrameHeight()
+    fun framePixels(): IntArray? = nativeFramePixels()
 
     // ---- A3.5 bridge request/response thread --------------------------------------------------------
     // A single dedicated background thread the UI posts plugin-plane requests to, so the ART UI thread NEVER
@@ -218,10 +292,21 @@ object JvmLauncher {
     fun mobileUiSeq() = nativeMobileUiSeq()
     fun pollMobileUiEvents(sinceSeq: Long) = nativePollMobileUiEvents(sinceSeq)
     fun setPluginEnabled(className: String, enabled: Boolean) = nativeSetPluginEnabled(className, enabled)
+    fun setPinned(pluginName: String, pinned: Boolean) = nativeSetPinned(pluginName, pinned)
     fun getPluginConfig(group: String) = nativeGetPluginConfig(group)
     fun setConfig(group: String, key: String, value: String) = nativeSetConfig(group, key, value)
     fun processedWriteId() = nativeProcessedWriteId()
     fun flushConfig() = nativeFlushConfig()
+    fun resetPluginConfig(group: String) = nativeResetPluginConfig(group)
+    fun notificationDefaults() = nativeNotificationDefaults()
+    fun nextNotification() = nativeNextNotification()
+    fun nextLink() = nativeNextLink()
+    fun hubState() = nativeHubState()
+    fun hubManifest() = nativeHubManifest()
+    fun hubInstall(internalName: String) = nativeHubInstall(internalName)
+    fun hubUninstall(internalName: String) = nativeHubUninstall(internalName)
+    fun publishNotification(title: String, body: String) = nativePublishNotification(title, body)
+    fun publishLink(url: String) = nativePublishLink(url)
 
     fun listPanels() = nativeListPanels()
     fun openPanel(index: Int) = nativeOpenPanel(index)
@@ -231,6 +316,13 @@ object JvmLauncher {
     fun panelFrameSeq() = nativePanelFrameSeq()
     fun panelPixels(): IntArray? = nativePanelPixels()
     fun panelClick(x: Int, y: Int) = nativePanelClick(x, y)
+    fun isPanelTextActive() = nativeIsPanelTextActive()
+    fun getPanelText() = nativeGetPanelText()
+    fun panelText(text: String) = nativePanelText(text)
+    fun panelKey(vk: Int) = nativePanelKey(vk)
+    fun panelLongPress(x: Int, y: Int) = nativePanelLongPress(x, y)
+    fun panelWheel(x: Int, y: Int, rotation: Int) = nativePanelWheel(x, y, rotation)
+    fun panelMove(x: Int, y: Int) = nativePanelMove(x, y)
 
     fun questAvailable() = nativeQuestAvailable()
     fun questSetUiOpen(open: Boolean) = nativeQuestSetUiOpen(open)
@@ -242,14 +334,40 @@ object JvmLauncher {
     fun worldSetUiOpen(open: Boolean) = nativeWorldSetUiOpen(open)
     fun worldListJson() = nativeWorldListJson()
     fun worldHop(worldId: Int) = nativeWorldHop(worldId)
+    fun worldSetFavourite(worldId: Int, favourite: Boolean) = nativeWorldSetFavourite(worldId, favourite)
+    fun worldHopDirection(previous: Boolean) = nativeWorldHopDirection(previous)
+    fun xpAvailable() = nativeXpAvailable()
+    fun xpSetUiOpen(open: Boolean) = nativeXpSetUiOpen(open)
+    fun xpJson() = nativeXpJson()
+    fun lootAvailable() = nativeLootAvailable()
+    fun lootSetUiOpen(open: Boolean) = nativeLootSetUiOpen(open)
+    fun lootJson() = nativeLootJson()
+    fun geAvailable() = nativeGeAvailable()
+    fun geSetUiOpen(open: Boolean) = nativeGeSetUiOpen(open)
+    fun geJson() = nativeGeJson()
+    fun overlayAvailable() = nativeOverlayAvailable()
+    fun overlaySetUiOpen(open: Boolean) = nativeOverlaySetUiOpen(open)
+    fun overlaysJson() = nativeOverlaysJson()
+    fun overlaySnap(name: String, positionName: String) = nativeOverlaySnap(name, positionName)
+    fun overlayReset(name: String) = nativeOverlayReset(name)
+    fun infoBoxAvailable() = nativeInfoBoxAvailable()
+    fun infoBoxSetUiOpen(open: Boolean) = nativeInfoBoxSetUiOpen(open)
+    fun infoBoxesJson() = nativeInfoBoxesJson()
+    fun infoBoxInvoke(index: Int, option: String) = nativeInfoBoxInvoke(index, option)
     fun chromeSnapshot() = nativeChromeSnapshot()
     fun chromeSnapshotPub() = nativeChromeSnapshotPub()
     fun setStonesHidden(hidden: Boolean) = nativeSetStonesHidden(hidden)
     fun openTab(tabIndex: Int) = nativeOpenTab(tabIndex)
     fun relocateSidePanel(x: Int, y: Int) = nativeRelocateSidePanel(x, y)
     fun relocateChat(x: Int, y: Int, transparent: Boolean) = nativeRelocateChat(x, y, transparent)
+    fun setOverlayInsets(l: Int, t: Int, r: Int, b: Int) = nativeSetOverlayInsets(l, t, r, b)
+    fun setChatCollapsed(collapsed: Boolean) = nativeSetChatCollapsed(collapsed)
+    fun switchChatTab(index: Int) = nativeSwitchChatTab(index)
+    fun panWorldMap(dx: Int, dy: Int) = nativePanWorldMap(dx, dy)
+    fun mapSnapshotPub() = nativeMapSnapshotPub()
     fun relocateMinimap(x: Int, y: Int) = nativeRelocateMinimap(x, y)
     fun chatSnapshotPub() = nativeChatSnapshotPub()
     fun setChatTabRowHeight(canvasPx: Int) = nativeSetChatTabRowHeight(canvasPx)
     fun setChatAreaWidth(canvasPx: Int) = nativeSetChatAreaWidth(canvasPx)
+    fun scrollChat(deltaCanvasPx: Int) = nativeScrollChat(deltaCanvasPx)
 }
