@@ -1502,6 +1502,49 @@ public final class MobileUiBridge
 		return null;
 	}
 
+	private static volatile boolean chatUsernamesWhited;
+
+	/** Force every chat USERNAME colour to white (the official-mobile look). The desktop "Chat Color" plugin
+	 *  ({@code textrecolor}) recolours chat sender names through {@link net.runelite.client.chat.ChatMessageManager}
+	 *  at chatbox-build time, so writing white into its username keys makes every sender render white — the engine's
+	 *  CHATBOX_TRANSPARENCY toggle is inert on this client build, so this config route is how we get there. Both the
+	 *  opaque and transparent colour sets are written so it holds in either mode. Returns true only on the call that
+	 *  actually applies it (so the caller can rebuild the chatbox once to recolour already-shown lines). Must run on
+	 *  the client thread (ConfigManager.setConfiguration posts ConfigChanged synchronously) — called from
+	 *  HudVeneerBridge.tick. */
+	static boolean forceWhiteChatUsernames()
+	{
+		if (chatUsernamesWhited)
+		{
+			return false;
+		}
+		final ConfigManager cm = configManager;
+		if (cm == null)
+		{
+			return false;   // config system not up yet — retry next tick
+		}
+		final java.awt.Color white = java.awt.Color.WHITE;
+		final String[] usernameKeys = {
+			"opaqueUsername", "opaquePrivateUsernames", "opaqueClanUsernames", "opaqueClanChatUsernames",
+			"opaqueClanChatGuestUsernames", "opaquePublicFriendUsernames", "opaquePlayerUsername",
+			"transparentUsername", "transparentPrivateUsernames", "transparentClanUsernames",
+			"transparentClanClanUsernames", "transparentClanClanGuestUsernames", "transparentPublicFriendUsernames",
+			"transparentPlayerUsername",
+		};
+		for (final String key : usernameKeys)
+		{
+			try
+			{
+				cm.setConfiguration(FAKE_CHATCOLOR_GROUP, key, white);
+			}
+			catch (RuntimeException ignore)
+			{
+			}
+		}
+		chatUsernamesWhited = true;
+		return true;
+	}
+
 	// RuneLite core-settings keys that are window-manager / hardware-input concepts with no analogue on a
 	// fullscreen touch app (the audit's WIN-NA / KEY-NA set) — filtered out of the native config editor so the
 	// "RuneLite" fake-plugin shows only the presentation + notification defaults that actually apply on mobile.

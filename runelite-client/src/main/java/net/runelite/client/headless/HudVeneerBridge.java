@@ -468,6 +468,13 @@ public final class HudVeneerBridge
 			if (chatX >= 0)
 			{
 				keepChatboxTransparent(c);
+				// Force chat USERNAMES white (official-mobile look) via the textrecolor config — ChatMessageManager
+				// recolours sender names from it (the CHATBOX_TRANSPARENCY varbit is inert here). Applies once; rebuild
+				// the chatbox that one time so the already-shown lines recolour too (new lines recolour on their build).
+				if (MobileUiBridge.forceWhiteChatUsernames())
+				{
+					try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) {}
+				}
 			}
 
 			// Chat box: keep the engine chatbox FULLY ALIVE at all times (never hidden). To "collapse" (the user
