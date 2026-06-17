@@ -485,21 +485,35 @@ public final class HudVeneerBridge
 			{
 				final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
 				final int rowW = chatAreaW > 0 ? chatAreaW : CHAT_DEFAULT_W;
-				final int drawY = chatCollapsed ? chatY + CHAT_COLLAPSE_OFFSCREEN_DY : chatY;
 				final Widget w = c.getWidget(chatId);
 				if (w != null)
 				{
-					if (w.isHidden())
+					if (chatCollapsed)
 					{
-						w.setHidden(false);   // safety: we never hide it now, but restore if something else did
+						// Collapse = HIDE the whole chat container. The off-screen shove (chatY+3000) no longer holds
+						// now that the engine draws the chat itself — it kept rendering at the top. Hiding is how the
+						// world map reliably hides the chat too. The native shell shows only the chat bubble; reopen
+						// un-hides + rebuilds (BUILD_CHATBOX) so the box doesn't come back empty.
+						if (!w.isHidden())
+						{
+							w.setHidden(true);
+						}
 					}
-					w.setForcedPosition(chatX, drawY);
-					// Widen the chat CONTAINER to the native row width so its children (the message area) can fill it.
-					if (w.getOriginalWidth() != rowW)
+					else
 					{
-						w.setOriginalWidth(rowW);
+						if (w.isHidden())
+						{
+							w.setHidden(false);
+							try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) {}
+						}
+						w.setForcedPosition(chatX, chatY);
+						// Widen the chat CONTAINER to the native row width so its children (the message area) can fill it.
+						if (w.getOriginalWidth() != rowW)
+						{
+							w.setOriginalWidth(rowW);
+						}
+						w.revalidate();
 					}
-					w.revalidate();
 				}
 				// OSRS-Mobile tabs-on-top: the desktop chat stacks the tab row (CONTROLS, 23px) UNDER the message
 				// area (CHATAREA, 142px). Flip it — force the tab row to the chat's top and push the messages down
@@ -1728,6 +1742,10 @@ public final class HudVeneerBridge
 			if (c.getVarbitValue(VarbitID.CHATBOX_TRANSPARENCY) != 1)
 			{
 				c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, 1);
+				// setVarbit alone doesn't re-colour the already-laid chat (the lines keep their opaque colours, so
+				// usernames stayed dark). Rebuild the chatbox so it re-renders in the new TRANSPARENT colour mode
+				// (white usernames + glyph shadow). Runs only on the (rare) transparency CHANGE, not every frame.
+				try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) {}
 			}
 		}
 		catch (RuntimeException ignore)
