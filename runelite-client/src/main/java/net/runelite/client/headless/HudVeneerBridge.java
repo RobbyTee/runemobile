@@ -150,8 +150,12 @@ public final class HudVeneerBridge
 
 
 	// Chat COLLAPSE: when the user taps the already-active tab, the chat box hides (mobile behaviour); a tap on any
-	// tab reopens it. Driven from native (setChatCollapsed). While collapsed the engine CHAT_CONTAINER is hidden.
+	// tab reopens it. Driven from native (setChatCollapsed). While collapsed the engine chat raster is fully blanked
+	// (the message CONTENT is hidden AND the engine tab row is hidden, which suppresses the whole raster) so nothing
+	// renders behind the always-shown native tab row; reopening shows the tabs again + rebuilds the message list.
 	private static volatile boolean chatCollapsed;
+	// Last collapsed state APPLIED on the client thread — so the tick can detect the collapsed->open edge and rebuild.
+	private static boolean chatCollapsedApplied;
 
 	// True while a forefront window (bank / GE / shop / …) is open OVER the relocated chat region — the chat is
 	// hidden so it sits BEHIND the window. Computed each tick; published as windowOpen in buildChatSnapshot so the
@@ -388,10 +392,11 @@ public final class HudVeneerBridge
 			}
 			if (chatX >= 0 && !isWorldMapOpen(c))
 			{
-				// Engine tabs MUST stay shown: hiding them suppresses the ENTIRE chat raster (engine draws nothing —
-				// proven off-device). We want the engine to draw its own chat (tabs + messages + scrollbar), so the
-				// native side just lays its enlarged tab buttons ON TOP of the engine's small tabs (covering them).
-				setEngineChatTabsHidden(c, false);
+				// Engine tabs drive the WHOLE chat raster: shown -> the engine draws its chat (tabs + messages +
+				// scrollbar) and the native row lays its enlarged buttons ON TOP; hidden -> the engine draws NOTHING
+				// (proven off-device). So while collapsed we hide them too, which blanks the engine chat entirely (the
+				// content-hide alone leaves the tab row rasterising behind the native row as a leftover 'border').
+				setEngineChatTabsHidden(c, chatCollapsed);
 				// Hide the chat-area brown box so the engine messages render transparent over the scene (the
 				// official mobile look). CHAT_BACKGROUND is a chatbox-group (162) child; the dialogue parchments are
 				// separate top-level interfaces (ChatLeft/ChatRight/ChatBoth/Messagebox/...), so this leaves the
@@ -540,12 +545,18 @@ public final class HudVeneerBridge
 				// so position the children at (0, …) — using (chatX,chatY) double-offsets them right+down (the
 				// misalignment + bottom clip). CONTROLS at the container's top-left.
 				forcePos(c, InterfaceID.Chatbox.CONTROLS, 0, 0);
-				// Engine tabs MUST stay shown: hiding ANY of the tab widgets suppresses the WHOLE chat raster (the
-				// engine draws nothing — proven off-device). We WANT the engine to draw its own chat (tabs + messages
-				// + scrollbar = the desktop look); the native side lays its enlarged tab buttons ON TOP of the engine's
-				// small tabs to cover them (same sprite, so no peeking). The native tab tap still REPLAYS the tab's
-				// op-script ({@link #switchChatTab}); a tap can also fall straight through to the (shown) engine tab.
-				setEngineChatTabsHidden(c, false);
+				// Engine tabs drive the WHOLE chat raster: hiding ANY tab widget suppresses it (the engine draws
+				// nothing — proven off-device). When OPEN we WANT that raster (tabs + messages + scrollbar = the
+				// desktop look) with the native row laid ON TOP (same sprite, no peeking) and a native tap proxying
+				// the engine tab's op-script. When COLLAPSED we hide the tabs too so the engine draws NOTHING — the
+				// content-hide below alone leaves the engine tab row rasterising behind the native row as a leftover
+				// 'border'. Rebuild the chatbox on the collapsed->open edge so the messages repopulate (not an empty box).
+				setEngineChatTabsHidden(c, chatCollapsed);
+				if (chatCollapsedApplied && !chatCollapsed)
+				{
+					try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) {}
+				}
+				chatCollapsedApplied = chatCollapsed;
 				// Apply a pending tab switch (op-replay sets the channel; switchChatTabNow rebuilds the lines).
 				final int switchTab = pendingChatTab;
 				if (switchTab >= 0)
@@ -572,7 +583,6 @@ public final class HudVeneerBridge
 				setHidden(c, InterfaceID.Chatbox.INPUT, chatCollapsed);
 				setHidden(c, InterfaceID.Chatbox.INPUT_CLICKAREA, chatCollapsed);
 				setHidden(c, InterfaceID.Chatbox.CHATSCROLLBAR, chatCollapsed);
-				dumpChatTree(c, chatId);   // DIAGNOSTIC — find the leftover 'border' when collapsed
 				buildChatSnapshot(c);
 				buildChatLines(c);
 				// While a dialogue is open, publish its content + head bounds so the native shell draws an opaque
@@ -776,46 +786,6 @@ public final class HudVeneerBridge
 			}
 		}
 		log.info("[ifaces] open candidate groups (getWidget<<16): {}", open.length() == 0 ? "(none)" : open.toString());
-	}
-
-	// DIAGNOSTIC (remove later): dump the chat widget tree on each collapse/reopen edge, so the [chattree] log shows
-	// exactly which widgets are still SHOWN when collapsed (the leftover 'border' the user sees).
-	private static boolean lastDumpedCollapsed;
-	private static void dumpChatTree(Client c, int chatId)
-	{
-		if (chatX < 0 || chatCollapsed == lastDumpedCollapsed)
-		{
-			return;
-		}
-		lastDumpedCollapsed = chatCollapsed;
-		log.info("[chattree] === collapsed={} ===", chatCollapsed);
-		final Widget cont = c.getWidget(chatId);
-		if (cont != null)
-		{
-			dumpChatWidget(cont, 0);
-		}
-	}
-	private static void dumpChatWidget(Widget w, int depth)
-	{
-		if (w == null || depth > 2)
-		{
-			return;
-		}
-		final java.awt.Rectangle b = w.getBounds();
-		String t = w.getText();
-		if (t != null && t.length() > 20) { t = t.substring(0, 20); }
-		log.info("[chattree] d{} id={} type={} hidden={} sprite={} bounds={} text='{}'",
-			depth, Integer.toHexString(w.getId()), w.getType(), w.isHidden(), w.getSpriteId(), b, t == null ? "" : t);
-		for (final Widget[] kids : new Widget[][]{ w.getStaticChildren(), w.getDynamicChildren() })
-		{
-			if (kids != null)
-			{
-				for (final Widget k : kids)
-				{
-					dumpChatWidget(k, depth + 1);
-				}
-			}
-		}
 	}
 
 	private static boolean isWorldMapOpen(Client c)
