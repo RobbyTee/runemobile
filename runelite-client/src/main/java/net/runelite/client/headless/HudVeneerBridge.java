@@ -153,6 +153,11 @@ public final class HudVeneerBridge
 	// tab reopens it. Driven from native (setChatCollapsed). While collapsed the engine CHAT_CONTAINER is hidden.
 	private static volatile boolean chatCollapsed;
 
+	// True while a forefront window (bank / GE / shop / …) is open OVER the relocated chat region — the chat is
+	// hidden so it sits BEHIND the window. Computed each tick; published as windowOpen in buildChatSnapshot so the
+	// native shell hides its tab row too (UIKit tabs draw over the engine blit, so they must hide, not z-order).
+	private static volatile boolean chatWindowOccluded;
+
 	// Finger-scroll: accumulated chat scroll delta (canvas px) requested from native, applied on the client thread
 	// in tick() via the chatbox's own scroll layer/scrollbar — NOT via a mouse wheel (the wheel also zooms the
 	// camera because the transparent chat sits over the viewport). +delta = toward newer (bottom).
@@ -492,15 +497,17 @@ public final class HudVeneerBridge
 			{
 				final int rowH = chatTabRowH > 0 ? chatTabRowH : CONTROLS_H;
 				final int rowW = chatAreaW > 0 ? chatAreaW : CHAT_DEFAULT_W;
+				// A forefront window (bank / GE / shop / …) open over the relocated chat region: hide the chat so it
+				// sits BEHIND the window (the native shell also hides its tab row from the published windowOpen flag).
+				chatWindowOccluded = isForefrontWindowOverChat(c, rowW, rowH);
 				final Widget w = c.getWidget(chatId);
 				if (w != null)
 				{
-					if (chatCollapsed)
+					if (chatCollapsed || chatWindowOccluded)
 					{
-						// Collapse = HIDE the whole chat container. The off-screen shove (chatY+3000) no longer holds
-						// now that the engine draws the chat itself — it kept rendering at the top. Hiding is how the
-						// world map reliably hides the chat too. The native shell shows only the chat bubble; reopen
-						// un-hides + rebuilds (BUILD_CHATBOX) so the box doesn't come back empty.
+						// HIDE the whole chat container. Collapse (tap the active tab) and a forefront window both hide
+						// it the same way — the off-screen shove no longer holds now the engine draws the chat itself;
+						// hiding is how the world map reliably hides it too. Reopen un-hides + rebuilds (BUILD_CHATBOX).
 						if (!w.isHidden())
 						{
 							w.setHidden(true);
@@ -682,6 +689,70 @@ public final class HudVeneerBridge
 	public static String getMapSnapshot()
 	{
 		return mapSnapshotJson;
+	}
+
+	private static boolean lastWindowOccludedLogged;
+
+	/** True if a forefront window (bank / GE / shop / deposit / …) is open and overlaps the relocated chat region,
+	 *  so the chat should hide and sit behind it. Universal: each big modal opens as its own interface ROOT (via
+	 *  IF_OPENTOP), so we scan {@link Client#getWidgetRoots()}, skip the HUD toplevel + the chatbox group + small
+	 *  overlays, and test rectangle overlap with the chat box. Avoids enumerating every interface id. */
+	private static boolean isForefrontWindowOverChat(Client c, int chatW, int chatH)
+	{
+		if (chatX < 0)
+		{
+			return false;
+		}
+		final Widget[] roots;
+		try
+		{
+			roots = c.getWidgetRoots();
+		}
+		catch (RuntimeException ignore)
+		{
+			return false;
+		}
+		if (roots == null)
+		{
+			return false;
+		}
+		int top = -1;
+		try
+		{
+			top = c.getTopLevelInterfaceId();
+		}
+		catch (RuntimeException ignore)
+		{
+		}
+		final int chatGroup = InterfaceID.Chatbox.CONTROLS >>> 16;   // 162
+		for (final Widget root : roots)
+		{
+			if (root == null || root.isHidden())
+			{
+				continue;
+			}
+			final int group = root.getId() >>> 16;
+			if (group == top || group == chatGroup)
+			{
+				continue;   // the HUD toplevel + the chatbox itself are not "windows"
+			}
+			final java.awt.Rectangle b = root.getBounds();
+			if (b == null || b.width < 120 || b.height < 120)
+			{
+				continue;   // ignore small overlays — only real (centred) windows count
+			}
+			if (b.x < chatX + chatW && b.x + b.width > chatX && b.y < chatY + chatH && b.y + b.height > chatY)
+			{
+				if (!lastWindowOccludedLogged)
+				{
+					log.info("[veneer] chat occluded by forefront window group={} bounds={}", group, b);
+					lastWindowOccludedLogged = true;
+				}
+				return true;
+			}
+		}
+		lastWindowOccludedLogged = false;
+		return false;
 	}
 
 	private static boolean isWorldMapOpen(Client c)
@@ -1186,7 +1257,8 @@ public final class HudVeneerBridge
 			}
 			sb.append(",\"view\":").append(view)
 				.append(",\"topLevelId\":").append(topLevel)
-				.append(",\"dialogueActive\":").append(dialogueOpen);
+				.append(",\"dialogueActive\":").append(dialogueOpen)
+				.append(",\"windowOpen\":").append(chatWindowOccluded);
 			if (dialogueOpen)
 			{
 				// Canvas-px bounds of the open dialogue so the native shell can route a tap there through a PRECISE
