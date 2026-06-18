@@ -153,7 +153,7 @@ public final class JavaBridge
 		}
 		catch (RuntimeException ex)
 		{
-			log.debug("[touch] hideClickCross failed", ex);
+			BridgeFaults.note("JavaBridge.hideClickCross", ex);
 		}
 	}
 
@@ -800,7 +800,7 @@ public final class JavaBridge
 		}
 		catch (RuntimeException ex)
 		{
-			log.debug("[touch] EventBus subscribe failed (will retry next tap)", ex);
+			BridgeFaults.note("JavaBridge.ensureTruthSubscribed", ex);
 		}
 	}
 
@@ -955,7 +955,7 @@ public final class JavaBridge
 		}
 		catch (RuntimeException ex)
 		{
-			log.debug("[touch] outline-from-entry failed", ex);
+			BridgeFaults.note("JavaBridge.armOutlineFromEntry", ex);
 		}
 	}
 
@@ -1037,6 +1037,7 @@ public final class JavaBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("JavaBridge.tailFingerprint", ex);
 			return "ERR";
 		}
 	}
@@ -1079,7 +1080,7 @@ public final class JavaBridge
 				}
 				catch (RuntimeException ex)
 				{
-					log.debug("[snap] no ModelOutlineRenderer", ex);
+					BridgeFaults.note("JavaBridge.outliner", ex);
 				}
 			}
 		}
@@ -1127,7 +1128,7 @@ public final class JavaBridge
 		}
 		catch (RuntimeException ex)
 		{
-			log.debug("[snap] drawSelection failed", ex);
+			BridgeFaults.note("JavaBridge.drawSelection", ex);
 		}
 	}
 
@@ -1266,7 +1267,7 @@ public final class JavaBridge
 			}
 			catch (RuntimeException ex)
 			{
-				log.debug("[bridge] invokeMenuEntry({}, {}) failed", parentDisplayIndex, childIndex, ex);
+				BridgeFaults.note("JavaBridge.invokeMenuEntry", ex);
 			}
 		});
 	}
@@ -1477,12 +1478,14 @@ public final class JavaBridge
 				}
 				catch (RuntimeException ignore)
 				{
+					BridgeFaults.note("JavaBridge.snapshotTextInputOpen", ignore);
 				}
 			}
 			textInputOpen = want;
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("JavaBridge.snapshotTextInputOpen", ex);
 			// keep the last snapshot
 		}
 	}
@@ -1513,6 +1516,7 @@ public final class JavaBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("JavaBridge.snapshotInventoryBounds", ex);
 			// fall through to "not visible"
 		}
 		invX = -1;

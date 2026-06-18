@@ -95,6 +95,7 @@ public final class WorldSwitcherBridge
 			}
 			catch (Throwable ignore)
 			{
+				BridgeFaults.note("WorldSwitcherBridge.worldService", ignore);
 			}
 		}
 		return ws;
@@ -112,6 +113,7 @@ public final class WorldSwitcherBridge
 			}
 			catch (Throwable ignore)
 			{
+				BridgeFaults.note("WorldSwitcherBridge.configManager", ignore);
 			}
 		}
 		return cm;
@@ -165,7 +167,7 @@ public final class WorldSwitcherBridge
 			}
 			catch (Throwable ex)
 			{
-				log.debug("[worldswitcher] setFavourite {} failed", worldId, ex);
+				BridgeFaults.note("WorldSwitcherBridge.setFavourite", ex);
 			}
 		});
 	}
@@ -327,7 +329,7 @@ public final class WorldSwitcherBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[worldswitcher] list refresh failed", ex);
+			BridgeFaults.note("WorldSwitcherBridge.rebuild", ex);
 			listJson = "{\"available\":false}";
 		}
 	}
@@ -369,7 +371,7 @@ public final class WorldSwitcherBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[worldswitcher] resolve hop failed", ex);
+			BridgeFaults.note("WorldSwitcherBridge.resolveHop", ex);
 		}
 		return false;
 	}

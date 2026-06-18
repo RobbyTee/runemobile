@@ -169,7 +169,7 @@ public final class XpTrackerBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[xptracker] refresh failed", ex);
+			BridgeFaults.note("XpTrackerBridge.rebuild", ex);
 			xpJson = "{\"available\":false}";
 		}
 	}
@@ -211,6 +211,7 @@ public final class XpTrackerBridge
 		}
 		catch (Throwable ignore)
 		{
+			BridgeFaults.note("XpTrackerBridge.totalSnapshot", ignore);
 		}
 		return null;
 	}
@@ -278,7 +279,7 @@ public final class XpTrackerBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[xptracker] resolve failed", ex);
+			BridgeFaults.note("XpTrackerBridge.ensureResolved", ex);
 			resolveState = -1;
 			return false;
 		}

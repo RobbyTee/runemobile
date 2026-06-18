@@ -174,7 +174,7 @@ public final class TimeTrackingBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[timetracking] refresh failed", ex);
+			BridgeFaults.note("TimeTrackingBridge.rebuild", ex);
 			json = "{\"available\":false}";
 		}
 	}
@@ -231,6 +231,7 @@ public final class TimeTrackingBridge
 		}
 		catch (Throwable ex)
 		{
+			BridgeFaults.note("TimeTrackingBridge.appendContract", ex);
 			sb.append("{\"active\":false}");
 		}
 	}
@@ -293,6 +294,7 @@ public final class TimeTrackingBridge
 		}
 		catch (Throwable ex)
 		{
+			BridgeFaults.note("TimeTrackingBridge.appendBirdHouses", ex);
 			// nothing reachable; leave the array empty
 		}
 	}
@@ -381,6 +383,7 @@ public final class TimeTrackingBridge
 		}
 		catch (Throwable ignore)
 		{
+			BridgeFaults.note("TimeTrackingBridge.clockListVia", ignore);
 		}
 		return null;
 	}
@@ -422,7 +425,7 @@ public final class TimeTrackingBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[timetracking] clock reflection failed", ex);
+			BridgeFaults.note("TimeTrackingBridge.ensureClockReflection", ex);
 			return false;
 		}
 	}
@@ -454,6 +457,7 @@ public final class TimeTrackingBridge
 		}
 		catch (Throwable ignore)
 		{
+			BridgeFaults.note("TimeTrackingBridge.birdHouseDataMap", ignore);
 		}
 		return null;
 	}
@@ -486,7 +490,7 @@ public final class TimeTrackingBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[timetracking] bird house reflection failed (using overall summary)", ex);
+			BridgeFaults.note("TimeTrackingBridge.ensureBirdHouseReflection", ex);
 			return false;
 		}
 	}
@@ -544,7 +548,7 @@ public final class TimeTrackingBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[timetracking] resolve failed", ex);
+			BridgeFaults.note("TimeTrackingBridge.ensureResolved", ex);
 			resolveState = -1;
 			return false;
 		}

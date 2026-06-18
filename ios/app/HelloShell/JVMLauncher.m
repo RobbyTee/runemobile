@@ -8,6 +8,8 @@
 #import <os/proc.h>            // os_proc_available_memory() — jetsam headroom (login-crash diagnostics)
 #import <libkern/OSCacheControl.h>
 #import <stdatomic.h>
+#import <os/lock.h>            // os_unfair_lock — guards the bridge-fault rate-limiter (QA-SYS-1)
+#import <time.h>              // clock_gettime_nsec_np — monotonic window for the rate-limiter
 #import "jni/jni.h"
 #import "routec_gl_jni.h"   // W3 GPU Route C: RouteC_registerGLNatives(env) — the JNI GL bridge registration
 #import "routec_zone_jni.h" // W3 GPU Zone B0.5: RouteC_registerZoneNatives(env) — the RLHD facade-delta natives
@@ -533,9 +535,64 @@ static BOOL ensureWorld(void) {
     return YES;
 }
 
+// ---- QA-SYS-1: rate-limited reverse-JNI fault sink -------------------------------------------------
+// The per-frame / per-poll facade methods below clear any pending Java exception and return a nil/0/NO
+// sentinel so a transient bridge fault can never escape into UIKit. That clear used to be SILENT, so a
+// post-merge engine/API drift (a changed widget id, a renamed bridge method) surfaced only as a frozen
+// frame, a dropped tap or a dead HUD — with zero diagnostic, the exact failure this port keeps debugging
+// on-device. bridgeNoteClear() emits ONE line per call-site per 5s window (the suppressed count is reported
+// on the next window) tagged "[bridge-fault]" — the SAME tag the Java-side BridgeFaults uses, so both halves
+// of the bridge grep together in jvm-stdio.log — then dumps the exception (class + message + stack via
+// ExceptionDescribe) and clears it. Returns YES if it cleared a pending exception, NO if none was pending,
+// so it is a drop-in for a bare ExceptionClear (harmless when called with nothing pending).
+static BOOL bridgeNoteClear(JNIEnv *env, const char *site) {
+    if (!env || !(*env)->ExceptionCheck(env)) {
+        return NO;   // nothing pending — same effect as the old no-op ExceptionClear
+    }
+
+    // Per-site 5s rate limit, mirroring BridgeFaults.WINDOW_MS. Pure-ObjC bookkeeping (no JNI), so it is safe
+    // to run while the Java exception is still pending; the describe+clear happens after.
+    static NSMutableDictionary<NSString *, NSArray<NSNumber *> *> *sites;   // site -> [lastLogNs, suppressed]
+    static os_unfair_lock siteLock = OS_UNFAIR_LOCK_INIT;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ sites = [NSMutableDictionary dictionary]; });
+
+    const uint64_t windowNs = 5ull * NSEC_PER_SEC;
+    const uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC);
+    NSString *key = @(site ? site : "?");
+    BOOL shouldLog;
+    unsigned long long suppressed = 0;
+    os_unfair_lock_lock(&siteLock);
+    NSArray<NSNumber *> *s = sites[key];
+    if (s && now - s[0].unsignedLongLongValue < windowNs) {
+        sites[key] = @[ s[0], @(s[1].unsignedLongLongValue + 1) ];   // within window: count, stay quiet
+        shouldLog = NO;
+    } else {
+        suppressed = s ? s[1].unsignedLongLongValue : 0;
+        sites[key] = @[ @(now), @0 ];                                // window rolled: log now, reset count
+        shouldLog = YES;
+    }
+    os_unfair_lock_unlock(&siteLock);
+
+    if (shouldLog) {
+        if (suppressed > 0) {
+            fprintf(stderr, "[bridge-fault] %s threw (%llu more suppressed in the last 5000ms)\n",
+                    site ? site : "?", suppressed);
+        } else {
+            fprintf(stderr, "[bridge-fault] %s threw\n", site ? site : "?");
+        }
+        (*env)->ExceptionDescribe(env);   // class + message + stack to stderr (jvm-stdio.log); also clears
+    }
+
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);      // suppressed path (Describe didn't run), or belt-and-suspenders
+    }
+    return YES;
+}
+
 // Pull a Java String return into an NSString (and free the local ref). Returns nil on null/exception.
 static NSString *jstringToNS(JNIEnv *env, jstring js) {
-    if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if (!js || (*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.jstringToNS"); return nil; }
     const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
     NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
     if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
@@ -1212,7 +1269,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureBridge() || !gMidInteractSeq) return 0;
     JNIEnv *env = gMainEnv;
     jint v = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidInteractSeq);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.interactTapSeq"); return 0; }
     return (int)v;
 }
 
@@ -1226,18 +1283,18 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     static UIImage *cachedImage = nil;
     static jint lastSeq = -1;
     jint seq = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidSeq);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.latestFrame"); return nil; }
     if (seq == lastSeq && cachedImage != nil) {
         return cachedImage;
     }
 
     jint w = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidW);
     jint h = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidH);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.latestFrame"); return nil; }
     if (w <= 0 || h <= 0) return nil;
 
     jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, gBridgeClass, gMidPixels);
-    if (!arr || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if (!arr || (*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.latestFrame"); return nil; }
     jsize len = (*env)->GetArrayLength(env, arr);
     NSUInteger need = (NSUInteger)w * (NSUInteger)h;
     if ((NSUInteger)len < need) { (*env)->DeleteLocalRef(env, arr); return nil; }
@@ -1281,16 +1338,16 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = gMainEnv;
 
     jint seq = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidSeq);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NULL; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.copyFramePixelBuffer"); return NULL; }
     if (seq == *ioSeq) return NULL;   // nothing composited since the caller's last fetch
 
     jint w = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidW);
     jint h = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidH);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NULL; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.copyFramePixelBuffer"); return NULL; }
     if (w <= 0 || h <= 0) return NULL;
 
     jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, gBridgeClass, gMidPixels);
-    if (!arr || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NULL; }
+    if (!arr || (*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.copyFramePixelBuffer"); return NULL; }
     jsize len = (*env)->GetArrayLength(env, arr);
     NSUInteger need = (NSUInteger)w * (NSUInteger)h;
     if ((NSUInteger)len < need) { (*env)->DeleteLocalRef(env, arr); return NULL; }
@@ -1326,7 +1383,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         }
     }
     if ((*env)->ExceptionCheck(env)) {
-        (*env)->ExceptionClear(env);
+        bridgeNoteClear(env, "JVMLauncher.copyFramePixelBuffer");
         CVPixelBufferUnlockBaseAddress(pb, 0);
         CVPixelBufferRelease(pb);
         (*env)->DeleteLocalRef(env, arr);
@@ -1348,7 +1405,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidTouch,
                                  (jint)type, (jint)x, (jint)y, (jint)button);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postTouchType"); }
 }
 
 // DRAG-1: the live inventory item-grid bounds in canvas px, or CGRectNull when the inventory isn't visible
@@ -1357,7 +1414,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureBridge() || !gMidInvBounds) return CGRectNull;
     JNIEnv *env = gMainEnv;
     jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, gBridgeClass, gMidInvBounds);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return CGRectNull; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.inventoryCanvasBounds"); return CGRectNull; }
     if (!arr) return CGRectNull;
     CGRect r = CGRectNull;
     if ((*env)->GetArrayLength(env, arr) >= 4) {
@@ -1373,14 +1430,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidClick, (jint)x, (jint)y, (jint)button);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postClick"); }
 }
 
 + (void)postClickPreciseX:(int)x y:(int)y button:(int)button {
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidClickPrecise, (jint)x, (jint)y, (jint)button);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postClickPrecise"); }
 }
 
 // Select an open-menu row at (x,y) AND clear the parked hover afterwards (avoids the "cursor stuck on the
@@ -1393,7 +1450,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     } else {
         (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidClickPrecise, (jint)x, (jint)y, (jint)1);
     }
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postMenuSelect"); }
 }
 
 // MENU-1: commit a drilled-in right-click submenu child by (parent display index, child index) — the native
@@ -1404,7 +1461,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidInvokeMenu,
                                  (jint)parentDisplayIndex, (jint)childIndex);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.invokeMenuEntry"); }
 }
 
 // KEY-1: fire a plugin's configured action-hotkey by synthesizing its key chord (AWT extended keyCode + the
@@ -1413,28 +1470,28 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureBridge() || !gMidKeybind) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidKeybind, (jint)keyCode, (jint)modifiers);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.onKeybind"); }
 }
 
 + (void)postMoveX:(int)x y:(int)y {
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidMove, (jint)x, (jint)y);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postMove"); }
 }
 
 + (void)postWheelX:(int)x y:(int)y rotation:(int)rotation {
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidWheel, (jint)x, (jint)y, (jint)rotation);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postWheel"); }
 }
 
 + (void)postCameraDx:(int)dx dy:(int)dy {
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidCamera, (jint)dx, (jint)dy);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postCamera"); }
 }
 
 + (void)setEngineMenuRenderSuppressed:(BOOL)suppressed {
@@ -1442,14 +1499,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidMenuSuppress,
                                  (jboolean)(suppressed ? JNI_TRUE : JNI_FALSE));
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.setEngineMenuRenderSuppressed"); }
 }
 
 + (void)postClearHover {
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidClearHover);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postClearHover"); }
 }
 
 + (void)postText:(NSString *)text {
@@ -1458,7 +1515,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     jstring js = (*env)->NewStringUTF(env, text.UTF8String);
     if (js) {
         (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidText, js);
-        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+        if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postText"); }
         (*env)->DeleteLocalRef(env, js);
     }
 }
@@ -1467,21 +1524,21 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidKey, (jint)awtKeyCode);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postKeyStroke"); }
 }
 
 + (void)postShiftHeld:(BOOL)held {
     if (!ensureBridge() || !gMidShiftHeld) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidShiftHeld, (jboolean)(held ? JNI_TRUE : JNI_FALSE));
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postShiftHeld"); }
 }
 
 + (BOOL)textInputOpen {
     if (!ensureBridge()) return NO;
     JNIEnv *env = gMainEnv;
     jboolean r = (*env)->CallStaticBooleanMethod(env, gBridgeClass, gMidInputOpen);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.textInputOpen"); return NO; }
     return r == JNI_TRUE;
 }
 
@@ -1491,7 +1548,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!gMidWarmed || !ensureBridge()) return YES;
     JNIEnv *env = gMainEnv;
     jboolean r = (*env)->CallStaticBooleanMethod(env, gBridgeClass, gMidWarmed);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return YES; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.sceneWarmedUp"); return YES; }
     return r == JNI_TRUE;
 }
 
@@ -1499,7 +1556,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureChrome()) return nil;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gChromeClass, gMidChromeSnap);
-    if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if (!js || (*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.chromeSnapshot"); return nil; }
     const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
     NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
     if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
@@ -1511,7 +1568,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMenuPeek()) return nil;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMenuPeekClass, gMidMenuPeekSnap);
-    if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if (!js || (*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.menuPeekSnapshot"); return nil; }
     const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
     NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
     if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
@@ -1523,7 +1580,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureHud()) return nil;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gHudClass, gMidHudSnap);
-    if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if (!js || (*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.hudSnapshot"); return nil; }
     const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
     NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
     if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
@@ -1535,7 +1592,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureHud()) return 0;
     JNIEnv *env = gMainEnv;
     jint s = (*env)->CallStaticIntMethod(env, gHudClass, gMidHudSeq);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.hudSeq"); return 0; }
     return (int)s;
 }
 
@@ -1543,7 +1600,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureVeneer()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetChatHidden, (jboolean)(hidden ? JNI_TRUE : JNI_FALSE));
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.setEngineChatHidden"); }
 }
 
 + (void)relocateEngineChatX:(int)x y:(int)y transparent:(BOOL)transparent {
@@ -1551,91 +1608,91 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidRelocateChat,
                                  (jint)x, (jint)y, (jboolean)(transparent ? JNI_TRUE : JNI_FALSE));
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.relocateEngineChat"); }
 }
 
 + (void)relocateEngineMinimapX:(int)x y:(int)y {
     if (!ensureVeneer()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidRelocateMinimap, (jint)x, (jint)y);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.relocateEngineMinimap"); }
 }
 
 + (void)setEngineMinimapScale:(int)scalePct {
     if (!ensureVeneer() || !gMidSetMinimapScale) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetMinimapScale, (jint)scalePct);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.setEngineMinimapScale"); }
 }
 
 + (void)relocateEngineSidePanelX:(int)x y:(int)y {
     if (!ensureVeneer()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidRelocateSide, (jint)x, (jint)y);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.relocateEngineSidePanel"); }
 }
 
 + (void)openEngineTab:(int)tabIndex {
     if (!ensureVeneer()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidOpenTab, (jint)tabIndex);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.openEngineTab"); }
 }
 
 + (void)setEngineStonesHidden:(BOOL)hidden {
     if (!ensureVeneer()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetStonesHidden, (jboolean)(hidden ? JNI_TRUE : JNI_FALSE));
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.setEngineStonesHidden"); }
 }
 
 + (void)setEngineChatTabRowHeight:(int)canvasPx {
     if (!ensureVeneer() || !gMidSetChatRowH) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetChatRowH, (jint)canvasPx);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.setEngineChatTabRowHeight"); }
 }
 
 + (void)setEngineChatAreaWidth:(int)canvasPx {
     if (!ensureVeneer() || !gMidSetChatAreaW) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetChatAreaW, (jint)canvasPx);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.setEngineChatAreaWidth"); }
 }
 
 + (void)setEngineOverlaySafeInsetsL:(int)l t:(int)t r:(int)r b:(int)b {
     if (!ensureVeneer() || !gMidSetOverlayInsets) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetOverlayInsets, (jint)l, (jint)t, (jint)r, (jint)b);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.setEngineOverlaySafeInsets"); }
 }
 
 + (void)scrollEngineChat:(int)deltaCanvasPx {
     if (!ensureVeneer() || !gMidScrollChat) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidScrollChat, (jint)deltaCanvasPx);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.scrollEngineChat"); }
 }
 
 + (void)switchEngineChatTab:(int)index {
     if (!ensureVeneer() || !gMidSwitchChatTab) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSwitchChatTab, (jint)index);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.switchEngineChatTab"); }
 }
 
 + (void)setEngineChatCollapsed:(BOOL)collapsed {
     if (!ensureVeneer() || !gMidSetChatCollapsed) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetChatCollapsed, (jboolean)(collapsed ? JNI_TRUE : JNI_FALSE));
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.setEngineChatCollapsed"); }
 }
 
 + (NSString *)chatSnapshot {
     if (!ensureVeneer() || !gMidGetChatSnap) return nil;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gVeneerClass, gMidGetChatSnap);
-    if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if (!js || (*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.chatSnapshot"); return nil; }
     const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
     NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
     if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
@@ -1650,7 +1707,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureVeneer() || !gMidGetChatLines) return nil;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gVeneerClass, gMidGetChatLines);
-    if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if (!js || (*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.chatLines"); return nil; }
     const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
     NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
     if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
@@ -1664,7 +1721,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureVeneer() || !gMidGetDialogue) return nil;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gVeneerClass, gMidGetDialogue);
-    if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if (!js || (*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.dialogueJson"); return nil; }
     const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
     NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
     if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
@@ -1676,14 +1733,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureVeneer() || !gMidPanMap) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidPanMap, (jint)dx, (jint)dy);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.panEngineMap"); }
 }
 
 + (NSString *)mapSnapshot {
     if (!ensureVeneer() || !gMidGetMapSnap) return nil;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gVeneerClass, gMidGetMapSnap);
-    if (!js || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if (!js || (*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mapSnapshot"); return nil; }
     const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
     NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
     if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
@@ -1762,7 +1819,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMui() || !gMuiPanelTextActive) return NO;
     JNIEnv *env = gMainEnv;
     jboolean v = (*env)->CallStaticBooleanMethod(env, gMuiClass, gMuiPanelTextActive);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mobilePanelTextActive"); return NO; }
     return v == JNI_TRUE;
 }
 
@@ -1809,7 +1866,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMui()) return 0;
     JNIEnv *env = gMainEnv;
     jlong v = (*env)->CallStaticLongMethod(env, gMuiClass, gMuiSeq);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mobileUiSeq"); return 0; }
     return (long long)v;
 }
 
@@ -1864,7 +1921,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     jstring jg = (*env)->NewStringUTF(env, group.UTF8String);
     jstring jk = (*env)->NewStringUTF(env, key.UTF8String);
     (*env)->CallStaticVoidMethod(env, gMuiClass, gMuiFireHotkey, jg, jk);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mobileFireHotkeyGroup"); }
     (*env)->DeleteLocalRef(env, jg);
     (*env)->DeleteLocalRef(env, jk);
 }
@@ -1879,7 +1936,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMui()) return 0;
     JNIEnv *env = gMainEnv;
     jlong v = (*env)->CallStaticLongMethod(env, gMuiClass, gMuiProcessed);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mobileProcessedWriteId"); return 0; }
     return (long long)v;
 }
 
@@ -1887,7 +1944,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMui()) return;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiFlush);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mobileFlushConfig"); return; }
     if (js) (*env)->DeleteLocalRef(env, js);
 }
 
@@ -1921,7 +1978,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMui() || !gMuiXpAvail) return NO;
     JNIEnv *env = gMainEnv;
     jboolean v = (*env)->CallStaticBooleanMethod(env, gMuiClass, gMuiXpAvail);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.xpTrackerAvailable"); return NO; }
     return v ? YES : NO;
 }
 
@@ -1936,7 +1993,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMui() || !gMuiNotesAvail) return NO;
     JNIEnv *env = gMainEnv;
     jboolean v = (*env)->CallStaticBooleanMethod(env, gMuiClass, gMuiNotesAvail);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.notesAvailable"); return NO; }
     return v ? YES : NO;
 }
 
@@ -1951,7 +2008,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = gMainEnv;
     jstring js = (*env)->NewStringUTF(env, text.UTF8String ?: "");
     (void)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiNotesSet, js);
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if ((*env)->ExceptionCheck(env)) bridgeNoteClear(env, "JVMLauncher.notesSet");
     if (js) (*env)->DeleteLocalRef(env, js);
 }
 
@@ -1959,7 +2016,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMui()) return;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiOpenPanel, (jint)index);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mobileOpenPanel"); return; }
     if (js) (*env)->DeleteLocalRef(env, js);
 }
 
@@ -1967,7 +2024,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMui()) return;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiClosePanel);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mobileClosePanel"); return; }
     if (js) (*env)->DeleteLocalRef(env, js);
 }
 
@@ -1975,7 +2032,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMui()) return 0;
     JNIEnv *env = gMainEnv;
     jint v = (*env)->CallStaticIntMethod(env, gMuiClass, gMuiPanelSeq);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return 0; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mobilePanelFrameSeq"); return 0; }
     return (int)v;
 }
 
@@ -1983,7 +2040,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureMui()) return;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiPanelClick, (jint)x, (jint)y);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mobilePanelClick"); return; }
     if (js) (*env)->DeleteLocalRef(env, js);
 }
 
@@ -1994,10 +2051,10 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = gMainEnv;
     jint w = (*env)->CallStaticIntMethod(env, gMuiClass, gMuiPanelW);
     jint h = (*env)->CallStaticIntMethod(env, gMuiClass, gMuiPanelH);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mobilePanelImage"); return nil; }
     if (w <= 0 || h <= 0) return nil;
     jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiPanelPixels);
-    if (!arr || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return nil; }
+    if (!arr || (*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mobilePanelImage"); return nil; }
     jsize len = (*env)->GetArrayLength(env, arr);
     NSUInteger need = (NSUInteger)w * (NSUInteger)h;
     // Validate against a torn read: the EDT repaint publishes w/h then pixels (Java side), so a frame caught
@@ -2028,7 +2085,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureQuest()) return NO;
     JNIEnv *env = gMainEnv;
     jboolean v = (*env)->CallStaticBooleanMethod(env, gQhClass, gQhAvailable);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.questAvailable"); return NO; }
     return v ? YES : NO;
 }
 
@@ -2050,21 +2107,21 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     jstring js = (*env)->NewStringUTF(env, name.UTF8String);
     (*env)->CallStaticVoidMethod(env, gQhClass, gQhStart, js);
     if (js) (*env)->DeleteLocalRef(env, js);
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if ((*env)->ExceptionCheck(env)) bridgeNoteClear(env, "JVMLauncher.questStart");
 }
 
 + (void)questStop {
     if (!ensureQuest()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gQhClass, gQhStop);
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if ((*env)->ExceptionCheck(env)) bridgeNoteClear(env, "JVMLauncher.questStop");
 }
 
 + (void)questSetUiOpen:(BOOL)open {
     if (!ensureQuest()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gQhClass, gQhSetOpen, (jboolean)(open ? 1 : 0));
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if ((*env)->ExceptionCheck(env)) bridgeNoteClear(env, "JVMLauncher.questSetUiOpen");
 }
 
 // ---- Native overlay edit-mode (OverlayBridge) — move / snap / reset live overlays ------------------
@@ -2073,7 +2130,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureOvl()) return NO;
     JNIEnv *env = gMainEnv;
     jboolean v = (*env)->CallStaticBooleanMethod(env, gOvlClass, gOvlAvailable);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.overlayAvailable"); return NO; }
     return v ? YES : NO;
 }
 
@@ -2081,7 +2138,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureOvl()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gOvlClass, gOvlSetOpen, (jboolean)(open ? 1 : 0));
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if ((*env)->ExceptionCheck(env)) bridgeNoteClear(env, "JVMLauncher.overlaySetUiOpen");
 }
 
 + (NSString *)overlaysJson {
@@ -2132,7 +2189,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureWorld()) return NO;
     JNIEnv *env = gMainEnv;
     jboolean v = (*env)->CallStaticBooleanMethod(env, gWsClass, gWsAvailable);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.worldAvailable"); return NO; }
     return v ? YES : NO;
 }
 
@@ -2146,14 +2203,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureWorld()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gWsClass, gWsHop, (jint)worldId);
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if ((*env)->ExceptionCheck(env)) bridgeNoteClear(env, "JVMLauncher.worldHop");
 }
 
 + (void)worldSetUiOpen:(BOOL)open {
     if (!ensureWorld()) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gWsClass, gWsSetOpen, (jboolean)(open ? 1 : 0));
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if ((*env)->ExceptionCheck(env)) bridgeNoteClear(env, "JVMLauncher.worldSetUiOpen");
 }
 
 // WH-1: mark/unmark a world as a favourite (shared worldhopper config). No-op on an older jar.
@@ -2161,7 +2218,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureWorld() || !gWsSetFav) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gWsClass, gWsSetFav, (jint)worldId, (jboolean)(favourite ? 1 : 0));
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if ((*env)->ExceptionCheck(env)) bridgeNoteClear(env, "JVMLauncher.worldSetFavourite");
 }
 
 // WH-3: quick-hop to the next/previous world (reflects WorldHopperPlugin.hop(boolean)). No-op on an older jar.
@@ -2169,7 +2226,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (!ensureWorld() || !gWsHopDir) return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gWsClass, gWsHopDir, (jboolean)(previous ? 1 : 0));
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if ((*env)->ExceptionCheck(env)) bridgeNoteClear(env, "JVMLauncher.worldHopDirection");
 }
 
 @end

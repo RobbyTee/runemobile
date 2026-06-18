@@ -102,6 +102,7 @@ public final class InfoBoxBridge
 			}
 			catch (Throwable ignore)
 			{
+				BridgeFaults.note("InfoBoxBridge.infoBoxManager", ignore);
 			}
 		}
 		return m;
@@ -120,6 +121,7 @@ public final class InfoBoxBridge
 			}
 			catch (Throwable ignore)
 			{
+				BridgeFaults.note("InfoBoxBridge.eventBus", ignore);
 			}
 		}
 		return eb;
@@ -219,7 +221,7 @@ public final class InfoBoxBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[infobox] invoke failed", ex);
+			BridgeFaults.note("InfoBoxBridge.doInvoke", ex);
 		}
 	}
 
@@ -304,7 +306,7 @@ public final class InfoBoxBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[infobox] refresh failed", ex);
+			BridgeFaults.note("InfoBoxBridge.rebuild", ex);
 			json = "{\"available\":false}";
 		}
 	}

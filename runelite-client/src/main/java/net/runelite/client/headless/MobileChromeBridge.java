@@ -282,6 +282,7 @@ public final class MobileChromeBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("MobileChromeBridge.resolveRoot", ex);
 			return Root.NONE;
 		}
 	}
@@ -387,6 +388,7 @@ public final class MobileChromeBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("MobileChromeBridge.boundsOf", ex);
 			return null;
 		}
 	}
@@ -414,6 +416,7 @@ public final class MobileChromeBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("MobileChromeBridge.classify", ex);
 			return 2;
 		}
 	}
@@ -434,6 +437,7 @@ public final class MobileChromeBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("MobileChromeBridge.viewport", ex);
 			return null;
 		}
 	}
@@ -456,6 +460,7 @@ public final class MobileChromeBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("MobileChromeBridge.safeResized", ex);
 			return false;
 		}
 	}
@@ -468,6 +473,7 @@ public final class MobileChromeBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("MobileChromeBridge.safeTopLevel", ex);
 			return -1;
 		}
 	}
@@ -480,6 +486,7 @@ public final class MobileChromeBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("MobileChromeBridge.safeVarc", ex);
 			return -1;
 		}
 	}

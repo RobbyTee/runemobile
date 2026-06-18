@@ -215,7 +215,7 @@ public final class QuestHelperBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[questhelper] list refresh failed", ex);
+			BridgeFaults.note("QuestHelperBridge.rebuildList", ex);
 			listJson = "{\"available\":false}";
 		}
 	}
@@ -251,7 +251,7 @@ public final class QuestHelperBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[questhelper] active refresh failed", ex);
+			BridgeFaults.note("QuestHelperBridge.rebuildActive", ex);
 			activeJson = "{\"available\":true,\"active\":false}";
 		}
 	}
@@ -274,6 +274,7 @@ public final class QuestHelperBridge
 		}
 		catch (Throwable ignore)
 		{
+			BridgeFaults.note("QuestHelperBridge.currentStepText", ignore);
 		}
 		return null;
 	}
@@ -434,7 +435,7 @@ public final class QuestHelperBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[questhelper] resolve failed", ex);
+			BridgeFaults.note("QuestHelperBridge.ensureResolved", ex);
 			resolveState = -1;
 			return false;
 		}

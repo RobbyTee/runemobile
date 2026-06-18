@@ -149,7 +149,7 @@ public final class MenuPeekBridge
 		catch (RuntimeException ex)
 		{
 			// Never let a read hiccup disturb the frame; keep the last good snapshot.
-			log.debug("[menupeek-bridge] tick read failed", ex);
+			BridgeFaults.note("MenuPeekBridge.tick", ex);
 		}
 	}
 
@@ -233,6 +233,7 @@ public final class MenuPeekBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("MenuPeekBridge.safeSubMenu", ex);
 			return null;
 		}
 	}
@@ -245,6 +246,7 @@ public final class MenuPeekBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("MenuPeekBridge.safeSubEntries", ex);
 			return null;
 		}
 	}
@@ -268,6 +270,7 @@ public final class MenuPeekBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("MenuPeekBridge.safeMouse", ex);
 			return null;
 		}
 	}
@@ -316,6 +319,7 @@ public final class MenuPeekBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("MenuPeekBridge.safeInt", ex);
 			return -1;
 		}
 	}
@@ -328,6 +332,7 @@ public final class MenuPeekBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("MenuPeekBridge.safeBool", ex);
 			return false;
 		}
 	}

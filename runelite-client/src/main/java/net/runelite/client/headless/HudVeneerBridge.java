@@ -492,7 +492,7 @@ public final class HudVeneerBridge
 				// the chatbox that one time so the already-shown lines recolour too (new lines recolour on their build).
 				if (MobileUiBridge.forceWhiteChatUsernames())
 				{
-					try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) {}
+					try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) { BridgeFaults.note("HudVeneerBridge.buildChatbox", ignore); }
 				}
 			}
 
@@ -533,7 +533,7 @@ public final class HudVeneerBridge
 						if (w.isHidden())
 						{
 							w.setHidden(false);
-							try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) {}
+							try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) { BridgeFaults.note("HudVeneerBridge.buildChatbox", ignore); }
 						}
 						w.setForcedPosition(chatX, chatY);
 						// Widen the chat CONTAINER to the native row width so its children (the message area) can fill it.
@@ -563,7 +563,7 @@ public final class HudVeneerBridge
 				setEngineChatTabsHidden(c, chatCollapsed);
 				if (chatCollapsedApplied && !chatCollapsed)
 				{
-					try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) {}
+					try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) { BridgeFaults.note("HudVeneerBridge.buildChatbox", ignore); }
 				}
 				chatCollapsedApplied = chatCollapsed;
 				// Apply a pending tab switch (op-replay sets the channel; switchChatTabNow rebuilds the lines).
@@ -742,6 +742,7 @@ public final class HudVeneerBridge
 			}
 			catch (RuntimeException ignore)
 			{
+				BridgeFaults.note("HudVeneerBridge.isForefrontWindowOpen", ignore);
 				continue;
 			}
 			if (w != null && !w.isHidden())
@@ -846,6 +847,7 @@ public final class HudVeneerBridge
 				}
 				catch (RuntimeException ignore)
 				{
+					BridgeFaults.note("HudVeneerBridge.tickWorldMap", ignore);
 				}
 			}
 			mapPanDx.set(0);
@@ -968,6 +970,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.hideRowOf", ignore);
 		}
 	}
 
@@ -1013,6 +1016,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.openTabNow", ignore);
 		}
 	}
 
@@ -1039,6 +1043,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.switchChatTabNow", ignore);
 		}
 		if (curView != idx)
 		{
@@ -1057,6 +1062,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.buildChatbox", ignore);
 		}
 	}
 
@@ -1081,6 +1087,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudVeneerBridge.replayOp", ex);
 			return false;
 		}
 	}
@@ -1297,6 +1304,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.applyMinimapScale", ignore);
 		}
 	}
 
@@ -1323,6 +1331,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.applyChatScroll", ignore);
 		}
 	}
 
@@ -1386,6 +1395,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.buildChatSnapshot", ignore);
 			// keep the previous snapshot
 		}
 	}
@@ -1423,6 +1433,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudVeneerBridge.safeWidget", ex);
 			return null;
 		}
 	}
@@ -1446,6 +1457,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudVeneerBridge.canvasBounds", ex);
 			return null;
 		}
 	}
@@ -1458,6 +1470,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudVeneerBridge.safeSpriteId", ex);
 			return -1;
 		}
 	}
@@ -1470,6 +1483,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudVeneerBridge.safeTextColor", ex);
 			return -1;
 		}
 	}
@@ -1610,6 +1624,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.buildChatLines", ignore);
 			// keep the previous snapshot
 		}
 	}
@@ -1630,6 +1645,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.appendChatInput", ignore);
 		}
 		try
 		{
@@ -1641,6 +1657,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.appendChatInput", ignore);
 		}
 		sb.append(",\"input\":{\"name\":\"").append(jsonEsc(name))
 			.append("\",\"text\":\"").append(jsonEsc(typed)).append("\"}");
@@ -1670,6 +1687,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.collectLines", ignore);
 		}
 	}
 
@@ -1681,6 +1699,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudVeneerBridge.safeTs", ex);
 			return 0;
 		}
 	}
@@ -1713,6 +1732,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudVeneerBridge.chatLineObject", ex);
 			return null;
 		}
 	}
@@ -1860,6 +1880,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.hide", ignore);
 		}
 	}
 
@@ -1888,6 +1909,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.setHidden", ignore);
 		}
 	}
 
@@ -1904,6 +1926,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.forcePos", ignore);
 		}
 	}
 
@@ -1924,11 +1947,12 @@ public final class HudVeneerBridge
 				// setVarbit alone doesn't re-colour the already-laid chat (the lines keep their opaque colours, so
 				// usernames stayed dark). Rebuild the chatbox so it re-renders in the new TRANSPARENT colour mode
 				// (white usernames + glyph shadow). Runs only on the (rare) transparency CHANGE, not every frame.
-				try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) {}
+				try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) { BridgeFaults.note("HudVeneerBridge.buildChatbox", ignore); }
 			}
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.keepChatboxTransparent", ignore);
 		}
 	}
 
@@ -2135,6 +2159,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudVeneerBridge.wText", ex);
 			return "";
 		}
 	}
@@ -2204,6 +2229,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.sizeChatArea", ignore);
 		}
 	}
 
@@ -2231,6 +2257,7 @@ public final class HudVeneerBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudVeneerBridge.forceWidth", ignore);
 		}
 	}
 

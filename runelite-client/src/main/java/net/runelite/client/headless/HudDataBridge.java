@@ -179,6 +179,7 @@ public final class HudDataBridge
 			}
 			catch (RuntimeException ignore)
 			{
+				BridgeFaults.note("HudDataBridge.tickImpl.players", ignore);
 			}
 			try
 			{
@@ -194,6 +195,7 @@ public final class HudDataBridge
 			}
 			catch (RuntimeException ignore)
 			{
+				BridgeFaults.note("HudDataBridge.tickImpl.npcs", ignore);
 			}
 		}
 
@@ -211,6 +213,7 @@ public final class HudDataBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("HudDataBridge.tickImpl", ignore);
 		}
 		final int from = Math.max(0, all.size() - CHAT_MAX);
 
@@ -391,6 +394,7 @@ public final class HudDataBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudDataBridge.safeBoosted", ex);
 			return -1;
 		}
 	}
@@ -403,6 +407,7 @@ public final class HudDataBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudDataBridge.safeReal", ex);
 			return -1;
 		}
 	}
@@ -415,6 +420,7 @@ public final class HudDataBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudDataBridge.safeEnergy", ex);
 			return 0;
 		}
 	}
@@ -427,6 +433,7 @@ public final class HudDataBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudDataBridge.safeVarp", ex);
 			return -1;
 		}
 	}
@@ -439,6 +446,7 @@ public final class HudDataBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudDataBridge.safeVarbit", ex);
 			return -1;
 		}
 	}
@@ -451,6 +459,7 @@ public final class HudDataBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudDataBridge.safeMapAngle", ex);
 			return -1;
 		}
 	}
@@ -463,6 +472,7 @@ public final class HudDataBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudDataBridge.safeWorldView", ex);
 			return null;
 		}
 	}
@@ -475,6 +485,7 @@ public final class HudDataBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("HudDataBridge.safeTs", ex);
 			return 0;
 		}
 	}

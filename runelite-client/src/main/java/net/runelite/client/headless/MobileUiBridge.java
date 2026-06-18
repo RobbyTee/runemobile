@@ -507,6 +507,7 @@ public final class MobileUiBridge
 		}
 		catch (Throwable ex)
 		{
+			BridgeFaults.note("MobileUiBridge.iconPngBase64", ex);
 			return null;
 		}
 	}
@@ -538,6 +539,7 @@ public final class MobileUiBridge
 		}
 		catch (RuntimeException ignore)
 		{
+			BridgeFaults.note("MobileUiBridge.findLoadedPlugin", ignore);
 		}
 		return null;
 	}
@@ -831,6 +833,7 @@ public final class MobileUiBridge
 			}
 			catch (Throwable ignore)
 			{
+				BridgeFaults.note("MobileUiBridge.closeActiveOnEdt", ignore);
 			}
 		}
 		if (win != null)
@@ -1038,6 +1041,7 @@ public final class MobileUiBridge
 			}
 			catch (Throwable ignore)
 			{
+				BridgeFaults.note("MobileUiBridge.panelText", ignore);
 			}
 			renderActiveOnEdt();
 		});
@@ -1065,6 +1069,7 @@ public final class MobileUiBridge
 			}
 			catch (Throwable ignore)
 			{
+				BridgeFaults.note("MobileUiBridge.panelKey", ignore);
 			}
 			renderActiveOnEdt();
 		});
@@ -1546,6 +1551,7 @@ public final class MobileUiBridge
 			}
 			catch (RuntimeException ignore)
 			{
+				BridgeFaults.note("MobileUiBridge.forceWhiteChatUsernames", ignore);
 			}
 		}
 		chatUsernamesWhited = true;
@@ -2069,6 +2075,7 @@ public final class MobileUiBridge
 				}
 				catch (RuntimeException ignored)
 				{
+					BridgeFaults.note("MobileUiBridge.resetPluginConfig", ignored);
 					// a plugin's resetConfiguration touching the engine off-tick shouldn't abort the reset
 				}
 			}
@@ -2103,6 +2110,7 @@ public final class MobileUiBridge
 		}
 		catch (RuntimeException ex)
 		{
+			BridgeFaults.note("MobileUiBridge.notificationDefaults", ex);
 			return "{}";
 		}
 	}
@@ -2209,7 +2217,7 @@ public final class MobileUiBridge
 		}
 		catch (RuntimeException ex)
 		{
-			log.debug("[mobile-ui] fireHotkey({}, {}) failed", group, key, ex);
+			BridgeFaults.note("MobileUiBridge.fireHotkey", ex);
 		}
 	}
 

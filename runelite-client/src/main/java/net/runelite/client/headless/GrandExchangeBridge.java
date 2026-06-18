@@ -189,7 +189,7 @@ public final class GrandExchangeBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[grandexchange] refresh failed", ex);
+			BridgeFaults.note("GrandExchangeBridge.rebuild", ex);
 			geJson = "{\"available\":false}";
 		}
 	}
@@ -252,6 +252,7 @@ public final class GrandExchangeBridge
 		}
 		catch (Throwable ignore)
 		{
+			BridgeFaults.note("GrandExchangeBridge.readTradeHistoryRaw", ignore);
 			return null;
 		}
 	}
@@ -527,7 +528,7 @@ public final class GrandExchangeBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[grandexchange] resolve failed", ex);
+			BridgeFaults.note("GrandExchangeBridge.ensureResolved", ex);
 			resolveState = -1;
 			return false;
 		}

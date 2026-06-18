@@ -145,6 +145,7 @@ public final class OverlayBridge
 			}
 			catch (Throwable ex)
 			{
+				BridgeFaults.note("OverlayBridge.setOverlayPreferredLocation", ex);
 				log.debug("[overlay] setPreferredLocation failed for {}", name, ex);
 			}
 		});
@@ -183,6 +184,7 @@ public final class OverlayBridge
 			}
 			catch (Throwable ex)
 			{
+				BridgeFaults.note("OverlayBridge.setOverlayPreferredPosition", ex);
 				log.debug("[overlay] setPreferredPosition failed for {}", name, ex);
 			}
 		});
@@ -211,6 +213,7 @@ public final class OverlayBridge
 			}
 			catch (Throwable ex)
 			{
+				BridgeFaults.note("OverlayBridge.resetOverlay", ex);
 				log.debug("[overlay] resetOverlay failed for {}", name, ex);
 			}
 		});
@@ -333,7 +336,7 @@ public final class OverlayBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[overlay] refresh failed", ex);
+			BridgeFaults.note("OverlayBridge.rebuild", ex);
 			overlaysJson = "{\"available\":false}";
 		}
 	}
@@ -389,7 +392,7 @@ public final class OverlayBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[overlay] resolve failed", ex);
+			BridgeFaults.note("OverlayBridge.ensureResolved", ex);
 			return false;
 		}
 	}
@@ -421,7 +424,7 @@ public final class OverlayBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[overlay] read overlays failed", ex);
+			BridgeFaults.note("OverlayBridge.currentOverlays", ex);
 		}
 		return new ArrayList<>();
 	}

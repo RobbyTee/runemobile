@@ -184,7 +184,7 @@ public final class LootTrackerBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[loottracker] refresh failed", ex);
+			BridgeFaults.note("LootTrackerBridge.rebuild", ex);
 			lootJson = "{\"available\":false}";
 		}
 	}
@@ -382,7 +382,7 @@ public final class LootTrackerBridge
 		}
 		catch (Throwable ex)
 		{
-			log.debug("[loottracker] resolve failed", ex);
+			BridgeFaults.note("LootTrackerBridge.ensureResolved", ex);
 			resolveState = -1;
 			return false;
 		}
