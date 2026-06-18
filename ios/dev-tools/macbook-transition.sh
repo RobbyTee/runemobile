@@ -19,6 +19,8 @@ ORIGIN="${ORIGIN:-git@github.com:audaro/runelite-ios.git}"
 REPO="${REPO:-$HOME/runelite-ios}"
 BRANCH="${BRANCH:-gpu}"
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
+CONFIG="${CONFIG:-Debug}"                     # Debug (default dev bootstrap) | Release (hardened, QA-P1-12/13)
+case "$CONFIG" in Debug|Release) ;; *) echo "CONFIG must be Debug or Release (got '$CONFIG')" >&2; exit 1 ;; esac
 export JAVA_HOME
 
 SSHO=(-o ConnectTimeout=12 -o StrictHostKeyChecking=accept-new)
@@ -96,10 +98,10 @@ say "6/7  Bridge arm64 compile-check"
 bash ios/dev-tools/gpu-routec/routec-device-compile-check.sh 2>&1 | grep -E 'OK |FAIL|MEGAVERDICT' || warn "compile-check produced no verdict line"
 
 # ---------------------------------------------------------------------------
-say "7/7  Build the app + install if a phone is attached"
-run xcodebuild -project ios/app/HelloShell.xcodeproj -scheme HelloShell \
+say "7/7  Build the app ($CONFIG) + install if a phone is attached"
+run xcodebuild -project ios/app/HelloShell.xcodeproj -scheme HelloShell -configuration "$CONFIG" \
   -destination "generic/platform=iOS" -derivedDataPath build/dd-gpu -allowProvisioningUpdates build
-APP="build/dd-gpu/Build/Products/Debug-iphoneos/HelloShell.app"
+APP="build/dd-gpu/Build/Products/${CONFIG}-iphoneos/HelloShell.app"
 ok "built $APP"
 DEV=$(xcrun devicectl list devices 2>/dev/null | grep -iE 'iphone' | grep -ioE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}|[0-9A-F]{8}-[0-9A-F]{16}' | head -1)
 if [ -n "${DEV:-}" ]; then

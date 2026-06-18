@@ -10,8 +10,15 @@ static void HelloShellUncaughtHandler(NSException *e) {
     for (NSString *frame in e.callStackSymbols) {
         [s appendFormat:@"%@\n", frame];
     }
-    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    NSString *path = [docs stringByAppendingPathComponent:@"crash.log"];
+    // QA-P1-12: Debug writes the crash dump to the Files/USB-exposed Documents dir for off-device retrieval;
+    // Release writes it to the sandboxed App Support dir (Documents is no longer file-shared in Release).
+#if DEBUG
+    NSString *dir = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+#else
+    NSString *dir = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject;
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:NULL];
+#endif
+    NSString *path = [dir stringByAppendingPathComponent:@"crash.log"];
     [[s dataUsingEncoding:NSUTF8StringEncoding] writeToFile:path
         options:(NSDataWritingAtomic | NSDataWritingFileProtectionCompleteUnlessOpen) error:NULL];
 }

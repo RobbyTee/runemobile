@@ -5,6 +5,16 @@ options:
     iOS: "17.0"
   createIntermediateGroups: true
 
+# Two build configurations mapped to xcodegen's standard presets. Debug = the dev daily-driver (today's
+# behaviour: file-sharing on, on-device log/capture sinks, -O0). Release = the hardened build (QA-P1-12/13):
+# Documents file-sharing OFF, the PII/diagnostic file sinks + rl-capture + on-screen console gated off via
+# `#if DEBUG`, .runelite relocated to the sandboxed App Support dir. The deploy scripts default to Debug and
+# take CONFIG=Release to opt in (StikDebug attach under Release is device-unverified — get-task-allow comes
+# from the dev profile, so it should hold).
+configs:
+  Debug: debug
+  Release: release
+
 settings:
   base:
     TARGETED_DEVICE_FAMILY: "1"          # iPhone
@@ -82,8 +92,28 @@ targets:
       # EAGL GPU backend (ACTIVE — mutually exclusive with the ANGLE frameworks + RC_BACKEND_ANGLE):
       - sdk: OpenGLES.framework
     settings:
+      configs:
+        debug:
+          # `#if DEBUG` (ObjC) gates the on-device log/capture sinks + the on-screen console. The GLES macro is
+          # repeated here so it survives the per-config override regardless of $(inherited) chaining.
+          GCC_PREPROCESSOR_DEFINITIONS:
+            - "$(inherited)"
+            - "GLES_SILENCE_DEPRECATION=1"
+            - "DEBUG=1"
+          # Debug swaps in the file-sharing variant of the plist (Documents exposed over Files.app/USB for
+          # off-device log retrieval). INFOPLIST_KEY_* does NOT merge into a manual INFOPLIST_FILE in this
+          # toolchain (verified: the keys never reached the built plist), so we swap the WHOLE plist per-config.
+          # Info-Debug.plist must stay in sync with Info.plist except for the file-sharing block.
+          INFOPLIST_FILE: HelloShell/Info-Debug.plist
+        release:
+          # No DEBUG -> the file sinks/console/rl-capture compile out. Release uses the base INFOPLIST_FILE
+          # (Info.plist), which OMITS the file-sharing keys -> Documents is not USB/Finder-exposed (QA-P1-12).
+          GCC_PREPROCESSOR_DEFINITIONS:
+            - "$(inherited)"
+            - "GLES_SILENCE_DEPRECATION=1"
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.audaro.helloshell
+        # Default/Release plist: the hardened one (no file-sharing). Debug overrides to Info-Debug.plist above.
         INFOPLIST_FILE: HelloShell/Info.plist
         CODE_SIGN_ENTITLEMENTS: HelloShell/HelloShell.entitlements
         CODE_SIGN_STYLE: Automatic

@@ -243,7 +243,10 @@
     [self.spinner startAnimating];
     self.progressStartedAt = [NSDate date];   // (re)anchor the deadline on every tap
     [self startHubProgressPolling];
+#if DEBUG
+    // QA-P1-12: dev-only — keep hub action/name out of the persistent unified log in the hardened build.
     NSLog(@"[hub] %@ %@ : %@", installed ? @"remove" : @"install", name, ack ?: @"(nil)");
+#endif
 }
 
 #pragma mark - #17 install progress

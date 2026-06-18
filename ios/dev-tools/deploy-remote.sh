@@ -22,6 +22,11 @@ CONF="$HERE/deploy-remote.conf"
 : "${DEV_UUID:?set DEV_UUID in deploy-remote.conf (iPhone devicectl UUID as seen by the remote Mac)}"
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 MODE="${MODE:-gpu}"
+# Build configuration, forwarded to remote-build.sh. Default Debug; CONFIG=Release builds the hardened
+# daily-driver (QA-P1-12/13). Validate up front — xcodebuild matches config names case-sensitively and would
+# otherwise silently fall back to Debug while the product path lookup misses.
+CONFIG="${CONFIG:-Debug}"
+case "$CONFIG" in Debug|Release) ;; *) echo "CONFIG must be Debug or Release (got '$CONFIG')" >&2; exit 1 ;; esac
 REMOTE="$REMOTE_USER@$REMOTE_HOST"
 
 BUILD_JARS=local           # local | remote | none
@@ -71,6 +76,6 @@ rsync -az --delete --info=progress2 \
 RB_ARGS=""; [ "$BUILD_JARS" = remote ] && RB_ARGS="--with-jars"
 log "Remote build + install on $REMOTE_HOST (device $DEV_UUID)"
 ssh -t "$REMOTE" \
-  "cd '$REMOTE_REPO' && DEV='$DEV_UUID' MODE='$MODE' JAVA_HOME='$JAVA_HOME' REPO='$REMOTE_REPO' bash ios/dev-tools/remote-build.sh $RB_ARGS"
+  "cd '$REMOTE_REPO' && DEV='$DEV_UUID' MODE='$MODE' CONFIG='$CONFIG' JAVA_HOME='$JAVA_HOME' REPO='$REMOTE_REPO' bash ios/dev-tools/remote-build.sh $RB_ARGS"
 
 log "Deployed. Phone: attach StikDebug, then launch HelloShell for per-launch JIT."

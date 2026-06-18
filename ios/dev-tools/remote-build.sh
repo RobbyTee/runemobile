@@ -19,6 +19,14 @@ WITH_JARS=0
 
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 MODE="${MODE:-gpu}"
+# Build configuration. Default Debug (today's dev daily-driver). CONFIG=Release builds the hardened build
+# (QA-P1-12/13: Documents file-sharing off, log/capture sinks compiled out, .runelite in App Support). NOTE:
+# StikDebug attach / JIT under Release is device-unverified — get-task-allow comes from the dev profile so it
+# should hold, but confirm on-device before relying on a Release daily-driver.
+CONFIG="${CONFIG:-Debug}"
+# Validate: xcodebuild matches config names case-sensitively and silently falls back to Debug on a no-match,
+# while the ${CONFIG}-iphoneos product path would then miss — fail fast instead.
+case "$CONFIG" in Debug|Release) ;; *) echo "CONFIG must be Debug or Release (got '$CONFIG')" >&2; exit 1 ;; esac
 REPO="${REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
 cd "$REPO"
 
@@ -48,13 +56,13 @@ SHADED="ios/app/jvm-resources/client-${VERSION}-SNAPSHOT-shaded.jar"
 log "xcodegen generate"
 ( cd ios/app && xcodegen generate )
 
-log "xcodebuild (device, allowProvisioningUpdates)"
-xcodebuild -project ios/app/HelloShell.xcodeproj -scheme HelloShell \
+log "xcodebuild (device, $CONFIG, allowProvisioningUpdates)"
+xcodebuild -project ios/app/HelloShell.xcodeproj -scheme HelloShell -configuration "$CONFIG" \
   -destination "id=$DEV" -derivedDataPath build/dd-mui -allowProvisioningUpdates build
 
 log "devicectl install -> $DEV"
 xcrun devicectl device install app --device "$DEV" \
-  build/dd-mui/Build/Products/Debug-iphoneos/HelloShell.app
+  "build/dd-mui/Build/Products/${CONFIG}-iphoneos/HelloShell.app"
 
 log "DONE — app installed on device $DEV"
 echo "Next (manual, phone-side): attach StikDebug, then launch the app for per-launch JIT."

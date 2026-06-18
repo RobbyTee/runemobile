@@ -115,7 +115,6 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) PluginPanelsViewController *panelDock; // persistent always-on panel dock
 @property (nonatomic, strong) CADisplayLink *displayLink;
 @property (nonatomic, assign) UIBackgroundTaskIdentifier bgTask;
-@property (nonatomic, copy)   NSString *captureDir;
 @property (nonatomic, copy)   NSString *lastFrameName;
 @property (nonatomic, assign) int framesShown;
 // Native mobile right-click menu: a long-press opens the engine menu (right-click), then once that menu is
@@ -1775,6 +1774,7 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
 #pragma mark - Logging
 
 - (void)openLogFile {
+#if DEBUG
     NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     // CompleteUnlessOpen, NOT Complete: the keepalive keeps these files being written while the screen is
     // locked, and Complete makes a file unwritable once locked. The class is set at creation and persists;
@@ -1788,6 +1788,12 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
     NSString *jpath = [docs stringByAppendingPathComponent:@"jvm-stdio.log"];
     [[NSFileManager defaultManager] createFileAtPath:jpath contents:nil attributes:prot];  // protection persists across open()
     self.jvmFd = open(jpath.UTF8String, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+#else
+    // QA-P1-12: the daily-driver (Release) build writes no log sinks to the (no-longer-file-shared) Documents
+    // dir. logFile stays nil (appendLine's file write no-ops on nil); force jvmFd negative so captureStdio's
+    // `jvmFd >= 0` guard skips the dup2 (the default int property is 0, which would alias fd 0/stdin).
+    self.jvmFd = -1;
+#endif
 }
 
 - (void)appendLine:(NSString *)line {
@@ -1798,11 +1804,14 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
     dispatch_async(dispatch_get_main_queue(), ^{
         // File first (the retrievable hello-shell.log). No per-line synchronizeFile — that fsync was a 1–10ms
         // main-thread stall every line; jvm-stdio.log (dup2'd, unbuffered) is the crash-proof channel.
+        // In Release self.logFile is nil (openLogFile writes no sinks) so this is a no-op.
         [self.logFile writeData:[out dataUsingEncoding:NSUTF8StringEncoding]];
 
+#if DEBUG
         // Console: append via textStorage so each line is O(append), not the O(n) whole-string rebuild +
         // attribute re-fix that setText does (n grows unbounded → tens-of-ms stalls in a long session). Cap
         // the backlog, and only force layout/scroll when the debug panel (the console's superview) is visible.
+        // QA-P1-12: the on-screen JVM console is a dev surface — compiled out of the Release daily-driver.
         NSTextStorage *ts = self.console.textStorage;
         NSDictionary *attrs = @{
             NSFontAttributeName: self.console.font,
@@ -1818,6 +1827,7 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
         if (!self.debugPanel.hidden) {
             [self.console scrollRangeToVisible:NSMakeRange(self.console.textStorage.length, 0)];
         }
+#endif
     });
 }
 
@@ -1828,6 +1838,7 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
 // immediately, so jvm-stdio.log captures the [JIT26] mapping trace and the verdict
 // even when the VM aborts. (On-screen no longer shows JVM output; it's in the file.)
 - (void)captureStdio {
+#if DEBUG
     if (self.jvmFd >= 0) {
         dup2(self.jvmFd, STDOUT_FILENO);
         dup2(self.jvmFd, STDERR_FILENO);
@@ -1835,6 +1846,10 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     [self appendLine:@"(JVM stdout/stderr -> Documents/jvm-stdio.log)"];
+#else
+    // QA-P1-12: Release does not redirect the VM's stdout/stderr into a Documents sink (there is none); they
+    // go to the system default. Nothing to capture.
+#endif
 }
 
 #pragma mark - JIT gate (the W1-audit Claim E)
@@ -2849,10 +2864,9 @@ static int chatRowCanvasH(void) {
         }];
     [self appendLine:[NSString stringWithFormat:@"[shell] bgTask=%lu", (unsigned long)self.bgTask]];
 
-    // (2) Active render loop: poll the capture dir and blit the newest frame every screen refresh.
-    // Keeps the app foreground-active+rendering (top jetsam band) AND shows the login screen live.
-    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    self.captureDir = [docs stringByAppendingPathComponent:@"rl-capture"];
+    // (2) Active render loop: blit the newest composited frame every screen refresh (straight from the engine
+    // buffer via reverse JNI — JavaBridge.getFramePixels / [JVMLauncher latestFrame], see onDisplayTick; no PNG
+    // round-trip). Keeps the app foreground-active+rendering (top jetsam band) AND shows the login screen live.
     self.framesShown = 0;
     self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(onDisplayTick)];
     // ProMotion: drive the display at up to 120Hz so the GPU direct-present (synced to vsync) isn't capped at 60.

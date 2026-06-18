@@ -57,14 +57,14 @@
 	     report). We never record; the string only satisfies TCC so the probe is allowed. -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>RuneLite's audio system enumerates audio devices at startup; this app does not record.</string>
-	<!-- Exposes the Documents dir (redacted *.log diagnostics + the gamepack cache) via Files.app/USB for
-	     off-device log retrieval. The session bearer (tokens.json) lives in Library/Application Support, which
-	     is NOT surfaced by file sharing; and the logs carry no secret, account PII, or typed-text content
-	     (see openLogFile's protection class + the [jx]/[huddata] redactions). -->
-	<key>UIFileSharingEnabled</key>
-	<true/>
-	<key>LSSupportsOpeningDocumentsInPlace</key>
-	<true/>
+	<!-- THIS is the hardened plist used by Release (and as the default). File-sharing keys
+	     (UIFileSharingEnabled / LSSupportsOpeningDocumentsInPlace) are DELIBERATELY ABSENT here so Documents is
+	     not browsable over Files.app/USB (QA-P1-12). The Debug build swaps in Info-Debug.plist (project.yml
+	     per-config INFOPLIST_FILE), which is this file PLUS the file-sharing block, for off-device log retrieval.
+	     Keep the two plists in sync except that block. In Release the diagnostic sinks + rl-capture are also
+	     compiled out (`#if DEBUG`) and .runelite moves to App Support, so nothing sensitive lands in Documents.
+	     The session bearer (tokens.json) always lives in Library/Application Support, never surfaced by file
+	     sharing regardless of config. -->
 	<!-- Save in-game screenshots (the live composited frame) to the photo library via the 📷 HUD button. Add-only. -->
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save your in-game screenshots to your photo library.</string>

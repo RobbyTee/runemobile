@@ -280,7 +280,12 @@ static NSString *const kLauncherUA =
 
 // Only ever receives redacted lines (status / display names / verdicts) — never a raw token.
 - (void)log:(NSString *)line {
+#if DEBUG
+    // QA-P1-12: NSLog writes to the iOS unified log (os_log), which persists on-device and is retrievable via
+    // sysdiagnose/Console regardless of file-sharing — these lines include the character display name (account
+    // PII) and, on error paths, raw Jagex HTTP response snippets. Dev-only; the on-screen logView stays.
     NSLog(@"[login] %@", line);
+#endif
     if (self.onLog) self.onLog(line);
     self.logView.text = self.logView.text.length
         ? [NSString stringWithFormat:@"%@\n%@", self.logView.text, line] : line;

@@ -1116,7 +1116,11 @@ typedef NS_ENUM(NSInteger, MUINotifRow) {
 - (void)writeKey:(NSString *)key value:(NSString *)value item:(NSMutableDictionary *)it {
     NSString *ack = [JVMLauncher mobileSetConfigGroup:self.group key:key value:value];
     it[@"value"] = value;
+#if DEBUG
+    // QA-P1-12: dev-only — config values can be secrets (e.g. webhook URLs); keep them out of the persistent
+    // unified log in the hardened build.
     NSLog(@"[plugincfg] %@.%@ = %@ : %@", self.group, key, value, ack ?: @"(nil)");
+#endif
 }
 
 #pragma mark - color helpers (signed-decimal ARGB == ConfigManager's Color contract)

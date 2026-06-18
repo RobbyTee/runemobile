@@ -73,12 +73,17 @@ done
 log "xcodegen generate"
 ( cd "$APPDIR" && xcodegen generate >/dev/null )
 
-log "xcodebuild HelloShell $VERSTR (generic/iOS, signed)"
-xcodebuild -project "$APPDIR/HelloShell.xcodeproj" -scheme HelloShell -configuration Debug \
+# Build configuration. Default Debug (today's behaviour). CONFIG=Release builds the hardened daily-driver
+# (QA-P1-12/13): Documents file-sharing off, log/capture sinks compiled out, .runelite in App Support. NOTE:
+# StikDebug attach / JIT under Release is device-unverified — confirm on-device before relying on it.
+CONFIG="${CONFIG:-Debug}"
+case "$CONFIG" in Debug|Release) ;; *) die "CONFIG must be Debug or Release (got '$CONFIG')" ;; esac
+log "xcodebuild HelloShell $VERSTR ($CONFIG, generic/iOS, signed)"
+xcodebuild -project "$APPDIR/HelloShell.xcodeproj" -scheme HelloShell -configuration "$CONFIG" \
   -destination 'generic/platform=iOS' -derivedDataPath "$DD" -allowProvisioningUpdates \
   MARKETING_VERSION="$VERSTR" CURRENT_PROJECT_VERSION="$BUILD" build
 
-APP="$DD/Build/Products/Debug-iphoneos/HelloShell.app"
+APP="$DD/Build/Products/${CONFIG}-iphoneos/HelloShell.app"
 [ -d "$APP" ] || die "build produced no app at $APP"
 
 # 3) package Payload/*.app -> IPA ------------------------------------------------------------------
