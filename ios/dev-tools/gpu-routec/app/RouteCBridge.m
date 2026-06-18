@@ -734,6 +734,16 @@ static BOOL rcBuildFbo(int w, int h)
 			@[@"vec2 texSize = textureSize(sampler, 0);", @"vec2 texSize = vec2(textureSize(sampler, 0));"],
 			@[@"uv *= sourceDimensions;", @"uv *= vec2(sourceDimensions);"],
 			@[@"(1 - texelUv)", @"(vec2(1.0) - texelUv)"],
+			// base `gpu` plugin UI-scaling shaders (fragui/vertui + scale/{hybrid,xbr_lv2_*}.glsl). The casts
+			// above cover bicubic + hybrid lines 12/15; these finish the set so EVERY uiScalingMode compiles on
+			// GLES 3.00 (no implicit vec/ivec or int/float conversion). HYBRID is the upstream default, so without
+			// the hybrid line-16 cast the UI program fails to compile every launch and only survives via
+			// RouteCGpuStarter's forced-LINEAR retry (~580 ERROR lines/launch); xBR is the same class, user-selectable.
+			@[@"interpolationAmount) / sourceDimensions);", @"interpolationAmount) / vec2(sourceDimensions));"],  // hybrid.glsl:16 (vec2 / ivec2)
+			@[@"vec2 textureDimensions = textureSize(image, 0);", @"vec2 textureDimensions = vec2(textureSize(image, 0));"],  // xbr_lv2_frag.glsl:105 (ivec2 -> vec2 init)
+			@[@"1.0 * targetDimensions.x / sourceDimensions.x", @"1.0 * float(targetDimensions.x) / float(sourceDimensions.x)"],  // fragui.glsl:70 (float * ivec2.x)
+			@[@"float dx = (1.0 / sourceDimensions.x);", @"float dx = (1.0 / float(sourceDimensions.x));"],  // xbr_lv2_vert.glsl:30
+			@[@"float dy = (1.0 / sourceDimensions.y);", @"float dy = (1.0 / float(sourceDimensions.y));"],  // xbr_lv2_vert.glsl:31
 			@[@"projectionMatrix[2][3] != 0)", @"projectionMatrix[2][3] != 0.0)"],
 			@[@"-IN.position.xz / (128 * scale)", @"-IN.position.xz / (128.0 * scale)"],
 			@[@"clipPosition.z += depthBias / 128.0;", @"clipPosition.z += float(depthBias) / 128.0;"],
