@@ -10,7 +10,11 @@ cd "$(dirname "$0")"
 
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 JAVAC="$JAVA_HOME/bin/javac"
-SHADED="${SHADED:-../../app/jvm-resources/client-1.12.29-SNAPSHOT-shaded.jar}"
+# QA-P1-15: derive the version from gradle.properties (mirrors stage-ios-gpu-jar.sh) instead of a hardcoded
+# literal that silently diverges on the next upstream bump. Same name today (1.12.29-SNAPSHOT).
+VERSION="$(sed -n 's/^project\.build\.version=//p' ../../../gradle.properties)"
+[ -n "$VERSION" ] || { echo "!! could not read project.build.version from gradle.properties" >&2; exit 1; }
+SHADED="${SHADED:-../../app/jvm-resources/client-${VERSION}-shaded.jar}"
 DL="${DL:-../../../runelite-client/build/generated/sources/delombok/java/main/net/runelite/client/plugins/gpu}"
 EXPECT_GLALL_MD5="${1:-}"
 

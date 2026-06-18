@@ -28,7 +28,9 @@ REPO="../../.."
 
 export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 JAVA="$JAVA_HOME/bin/java"; JAVAC="$JAVA_HOME/bin/javac"
-VERSION="${VERSION:-1.12.29-SNAPSHOT}"
+# QA-P1-15: default the version from gradle.properties (env VERSION still overrides) instead of a hardcoded literal.
+VERSION="${VERSION:-$(sed -n 's/^project\.build\.version=//p' "$REPO/gradle.properties")}"
+[ -n "$VERSION" ] || { echo "!! could not read project.build.version from $REPO/gradle.properties" >&2; exit 1; }
 SHADED="$REPO/runelite-client/build/libs/client-${VERSION}-shaded.jar"
 CACIOLIB="../cacio-smoke/lib"
 CACIO="$CACIOLIB/cacio-tta-1.18.jar:$CACIOLIB/cacio-shared-1.18.jar"   # NO byte-buddy — UnsafePoke needs none
