@@ -46,7 +46,8 @@ public final class BridgeCensus
 		"JavaBridge#drawSelection(Client)",
 		"JavaBridge#onClickPrecise(int,int,int)",
 		"JavaBridge#selectMenuPoint(int,int)",
-		"JavaBridge#snapRadius()",
+		// snapRadius() was deleted with the touch-Phase-0 snap machinery (ad41581f2f); Android dropped the
+		// native poll in d3e34be70a (ships SNAP_RADIUS=0 = mobile parity), so it is intentionally not listed.
 		"JavaBridge#getInteractTapSeq()",
 		"JavaBridge#onMove(int,int)",
 		"JavaBridge#onWheel(int,int,int)",
