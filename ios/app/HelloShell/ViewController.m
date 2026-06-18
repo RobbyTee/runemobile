@@ -21,6 +21,8 @@
 #import <CoreMedia/CoreMedia.h>     // CMSampleBuffer plumbing for the PiP frame feed
 #import <unistd.h>
 #import <fcntl.h>
+#import <os/lock.h>            // os_unfair_lock — guards the JSON-fault rate-limiter (QA-SYS-1 sibling)
+#import <time.h>              // clock_gettime_nsec_np — monotonic window for the rate-limiter
 
 // The chat tabs match the official mobile app's small size, which makes them fiddly to hit. This button expands its
 // touch area vertically (the 7 tabs are contiguous, so a horizontal miss already lands on a neighbour) so near-miss
@@ -369,6 +371,62 @@ static const CGFloat kMenuGraceY = 6.0;
 static const CGFloat kMenuRowViewH    = 32.0;
 static const CGFloat kMenuHeaderViewH = 22.0;
 static const CGFloat kMenuWidth       = 210.0;
+
+// QA-SYS-1 sibling: rate-limited JSON-parse-fault sink for the per-frame / per-poll bridge-snapshot reads.
+// The native HUD/menu polls parse a bridge JSON snapshot every frame; with `error:nil` a malformed payload
+// silently yields nil and that HUD element blanks with no trace. Every caller length-guards the snapshot
+// BEFORE parsing, so a nil result on a NON-empty snapshot is a genuine malformation. parseBridgeJSON parses
+// with a real NSError and, when that happens, emits ONE rate-limited "[json-fault]" line per site per 5s
+// window (suppressed count reported on the next window) to stderr -> jvm-stdio.log, alongside the
+// [bridge-fault] lines so all bridge diagnostics grep together. A nil/empty snapshot is the expected
+// "no data this poll" case and stays silent. Drop-in for the old inline JSONObjectWithData:error:nil:
+// returns the parsed object (NSDictionary*/NSArray*) or nil.
+static id parseBridgeJSON(NSString *snap, const char *site) {
+    if (snap.length == 0) {
+        return nil;   // expected "no snapshot this poll" — silent
+    }
+    NSError *err = nil;
+    id obj = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
+                                            options:0 error:&err];
+    if (obj != nil) {
+        return obj;
+    }
+
+    // Parse failed on a non-empty snapshot — a real malformation. Rate-limit per site (5s window), mirroring
+    // bridgeNoteClear / BridgeFaults. Pure-ObjC bookkeeping.
+    static NSMutableDictionary<NSString *, NSArray<NSNumber *> *> *sites;   // site -> [lastLogNs, suppressed]
+    static os_unfair_lock siteLock = OS_UNFAIR_LOCK_INIT;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ sites = [NSMutableDictionary dictionary]; });
+
+    const uint64_t windowNs = 5ull * NSEC_PER_SEC;
+    const uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC);
+    NSString *key = @(site ? site : "?");
+    BOOL shouldLog;
+    unsigned long long suppressed = 0;
+    os_unfair_lock_lock(&siteLock);
+    NSArray<NSNumber *> *s = sites[key];
+    if (s && now - s[0].unsignedLongLongValue < windowNs) {
+        sites[key] = @[ s[0], @(s[1].unsignedLongLongValue + 1) ];   // within window: count, stay quiet
+        shouldLog = NO;
+    } else {
+        suppressed = s ? s[1].unsignedLongLongValue : 0;
+        sites[key] = @[ @(now), @0 ];                                // window rolled: log now, reset count
+        shouldLog = YES;
+    }
+    os_unfair_lock_unlock(&siteLock);
+
+    if (shouldLog) {
+        const char *msg = err.localizedDescription.UTF8String ?: "parse returned nil";
+        if (suppressed > 0) {
+            fprintf(stderr, "[json-fault] %s failed: %s (%llu more suppressed in the last 5000ms)\n",
+                    site ? site : "?", msg, suppressed);
+        } else {
+            fprintf(stderr, "[json-fault] %s failed: %s\n", site ? site : "?", msg);
+        }
+    }
+    return nil;
+}
 
 @implementation ViewController
 
@@ -1449,9 +1507,7 @@ static const CGFloat kMenuWidth       = 210.0;
     NSString *json = [JVMLauncher mobilePlugins];
     NSArray *arr = nil;
     if (json.length) {
-        NSError *err = nil;
-        id parsed = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding]
-                                                    options:0 error:&err];
+        id parsed = parseBridgeJSON(json, "ViewController.refreshPluginList");
         if ([parsed isKindOfClass:[NSArray class]]) arr = parsed;
     }
     if (arr) {
@@ -2029,8 +2085,7 @@ static int chatRowCanvasH(void) {
     if (!self.chromeVisible || self.renderW <= 0) { [self hideChatTabs]; return; }
     NSString *snap = [JVMLauncher chatSnapshot];
     if (snap.length == 0) { [self hideChatTabs]; return; }
-    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
-                                                      options:0 error:nil];
+    NSDictionary *d = parseBridgeJSON(snap, "ViewController.updateChatTabs");
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) { [self hideChatTabs]; return; }
     // LAYOUT GUARD (same as updateChrome): the native HUD only works in the Classic resizable layout (164).
     if ([d[@"topLevelId"] intValue] != 164) { [self hideChatTabs]; return; }
@@ -2183,12 +2238,12 @@ static int chatRowCanvasH(void) {
     if (!self.chromeVisible || self.renderW <= 0 || self.mapOpen) { [self hideDialogue]; return; }
     NSString *snap = [JVMLauncher chatSnapshot];
     if (snap.length == 0) { [self hideDialogue]; return; }
-    NSDictionary *cd = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSDictionary *cd = parseBridgeJSON(snap, "ViewController.updateDialogueView");
     if (![cd isKindOfClass:[NSDictionary class]] || ![cd[@"loggedIn"] boolValue]
         || [cd[@"topLevelId"] intValue] != 164 || ![cd[@"dialogueActive"] boolValue]) { [self hideDialogue]; return; }
     NSString *js = [JVMLauncher dialogueJson];
     if (js.length == 0) { [self hideDialogue]; return; }
-    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[js dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSDictionary *d = parseBridgeJSON(js, "ViewController.updateDialogueView");
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"type"] isKindOfClass:[NSString class]]) { [self hideDialogue]; return; }
 
     [self ensureDialogueView];
@@ -2370,8 +2425,7 @@ static int chatRowCanvasH(void) {
 
     NSString *js = [JVMLauncher chatLines];
     if (js.length == 0) { mv.hidden = YES; return; }
-    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[js dataUsingEncoding:NSUTF8StringEncoding]
-                                                      options:0 error:nil];
+    NSDictionary *d = parseBridgeJSON(js, "ViewController.updateChatMessages");
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) { mv.hidden = YES; return; }
     NSArray *lines = [d[@"lines"] isKindOfClass:[NSArray class]] ? d[@"lines"] : nil;
 
@@ -2460,8 +2514,7 @@ static int chatRowCanvasH(void) {
 - (BOOL)engineChatButtonCenterForTag:(NSInteger)i x:(int *)cx y:(int *)cy {
     NSString *snap = [JVMLauncher chatSnapshot];
     if (snap.length == 0) return NO;
-    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
-                                                      options:0 error:nil];
+    NSDictionary *d = parseBridgeJSON(snap, "ViewController.engineChatButtonCenterForTag");
     NSArray *tabs = [d isKindOfClass:[NSDictionary class]] ? d[@"tabs"] : nil;
     if (![tabs isKindOfClass:[NSArray class]] || i < 0 || i >= (NSInteger)tabs.count) return NO;
     NSDictionary *t = [tabs[i] isKindOfClass:[NSDictionary class]] ? tabs[i] : nil;
@@ -2552,8 +2605,7 @@ static int chatRowCanvasH(void) {
 - (void)updateChrome {
     NSString *snap = [JVMLauncher chromeSnapshot];
     if (snap.length == 0) return;
-    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
-                                                     options:0 error:nil];
+    NSDictionary *d = parseBridgeJSON(snap, "ViewController.updateChrome");
     self.tabRailBg.hidden = YES;   // mobile cells are individually styled; no solid rail strip behind them
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue] || self.mapOpen) {
         // (mapOpen: the fullscreen world map owns the screen — the native grid would cover it + steal taps)
@@ -2980,8 +3032,7 @@ static int chatRowCanvasH(void) {
     if (self.engineChatRelocated) return;
     NSString *snap = [JVMLauncher hudSnapshot];
     if (snap.length == 0) return;   // bridge / VM not up yet — retry next tick
-    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
-                                                      options:0 error:nil];
+    NSDictionary *d = parseBridgeJSON(snap, "ViewController.updateHudLayout");
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) return;
     if (self.renderW <= 0) return;
     self.engineChatRelocated = YES;
@@ -3095,8 +3146,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     BOOL open = NO;
     CGRect closeR = CGRectZero, searchR = CGRectZero, windowR = CGRectZero;
     if (snap.length) {
-        NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
-                                                          options:0 error:nil];
+        NSDictionary *d = parseBridgeJSON(snap, "ViewController.updateWorldMap");
         if ([d isKindOfClass:[NSDictionary class]] && [d[@"open"] boolValue]) {
             open = YES;
             closeR = mapRectFromArr(d[@"close"]);
@@ -3323,8 +3373,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         BOOL engineClosed = NO;
         NSString *snap = [JVMLauncher menuPeekSnapshot];
         if (snap.length) {
-            NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
-                                                             options:0 error:nil];
+            NSDictionary *d = parseBridgeJSON(snap, "ViewController.onDisplayTick");
             if ([d isKindOfClass:[NSDictionary class]] && ![d[@"menuOpen"] boolValue]) engineClosed = YES;
         }
         if (engineClosed || CACurrentMediaTime() - self.menuClosingAt > 0.3) {
@@ -3798,8 +3847,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (BOOL)tryBuildNativeMenu {
     NSString *snap = [JVMLauncher menuPeekSnapshot];
     if (snap.length == 0) return NO;
-    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
-                                                      options:0 error:nil];
+    NSDictionary *d = parseBridgeJSON(snap, "ViewController.tryBuildNativeMenu");
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"menuOpen"] boolValue]) return NO;
     NSArray *entries = d[@"entries"];
     if (![entries isKindOfClass:[NSArray class]] || entries.count == 0) return NO;
@@ -4228,8 +4276,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (void)refreshMenuGeometry {
     NSString *snap = [JVMLauncher menuPeekSnapshot];
     if (snap.length == 0) { self.menuGeomValid = NO; return; }
-    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
-                                                     options:0 error:nil];
+    NSDictionary *d = parseBridgeJSON(snap, "ViewController.refreshMenuGeometry");
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"menuOpen"] boolValue]) { self.menuGeomValid = NO; return; }
     int mw = [d[@"menuW"] intValue], mh = [d[@"menuH"] intValue];
     if (mw <= 0 || mh <= 0) { self.menuGeomValid = NO; return; }
@@ -4598,8 +4645,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     NSString *json = [JVMLauncher mobileHotkeyActions];
     NSArray *arr = nil;
     if (json.length) {
-        arr = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding]
-                                              options:0 error:nil];
+        arr = parseBridgeJSON(json, "ViewController.refreshHotkeyActions");
     }
     self.hotkeyActions = [arr isKindOfClass:[NSArray class]] ? arr : @[];
     return self.hotkeyActions;
