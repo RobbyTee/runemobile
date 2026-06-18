@@ -70,7 +70,7 @@ static jmethodID gMuiResetCfg = NULL;   // resetConfig(2x String)Ljava/lang/Stri
 static jmethodID gMuiSeq = NULL;        // getMobileUiSeq()J
 static jmethodID gMuiPoll = NULL;       // pollMobileUiEvents(J)Ljava/lang/String;
 static jmethodID gMuiProcessed = NULL;  // getProcessedWriteId()J
-static jmethodID gMuiFlush = NULL;      // flushConfig()Ljava/lang/String;
+static jmethodID gMuiFlush = NULL;      // flushConfigQueued()Ljava/lang/String; (async, off the iOS main thread)
 static jmethodID gMuiHubManifest = NULL;  // hubManifest()Ljava/lang/String;
 static jmethodID gMuiHubInstall = NULL;   // hubInstall(Ljava/lang/String;)Ljava/lang/String;
 static jmethodID gMuiHubUninstall = NULL; // hubUninstall(Ljava/lang/String;)Ljava/lang/String;
@@ -387,7 +387,11 @@ static BOOL ensureMui(void) {
     gMuiSeq        = (*env)->GetStaticMethodID(env, global, "getMobileUiSeq", "()J");
     gMuiPoll       = (*env)->GetStaticMethodID(env, global, "pollMobileUiEvents", "(J)Ljava/lang/String;");
     gMuiProcessed  = (*env)->GetStaticMethodID(env, global, "getProcessedWriteId", "()J");
-    gMuiFlush      = (*env)->GetStaticMethodID(env, global, "flushConfig", "()Ljava/lang/String;");
+    // QA-P1-03: bind the QUEUED variant. The iOS callers (panel/overlay/config close, app background) are all
+    // fire-and-forget on the MAIN thread; flushConfigQueued enqueues sendConfig on the client thread and returns
+    // immediately, so it never blocks the UI on the fsync. (The synchronous flushConfig stays for callers that
+    // must persist before exiting — the Android logout path.)
+    gMuiFlush      = (*env)->GetStaticMethodID(env, global, "flushConfigQueued", "()Ljava/lang/String;");
     gMuiHubManifest  = (*env)->GetStaticMethodID(env, global, "hubManifest", "()Ljava/lang/String;");
     gMuiHubInstall   = (*env)->GetStaticMethodID(env, global, "hubInstall", "(Ljava/lang/String;)Ljava/lang/String;");
     gMuiHubUninstall = (*env)->GetStaticMethodID(env, global, "hubUninstall", "(Ljava/lang/String;)Ljava/lang/String;");
@@ -1244,12 +1248,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         callMain(env, "DeviceHeadlessBoot", @[], log);
     }
 
-    // DestroyJavaVM FIRST, then null gVM — gVM must reflect true VM liveness, not "about to go away". Today this
-    // blocks forever on the engine's non-daemon threads, so the lines below are effectively unreachable and the
-    // session keeps running on the live VM + warm bridge cache. If a clean shutdown ever lets it return, the
-    // ensure* gVM re-checks then make every facade call bail safely instead of driving a destroyed VM.
-    (*vm)->DestroyJavaVM(vm);
+    // QA-P1-01: null gVM BEFORE DestroyJavaVM, not after. Every facade call snapshots gVM through its ensure*
+    // gate; clearing it first means any concurrent (main-thread) facade call sees the VM as gone and bails,
+    // instead of racing a JNI call into a VM that is mid-destroy. DestroyJavaVM takes the local vm pointer (not
+    // gVM), so clearing gVM first is safe. (In practice this blocks forever on the engine's non-daemon threads,
+    // so these lines stay effectively unreachable and the session keeps running on the live VM + warm cache; the
+    // ordering only matters if a clean shutdown ever lets DestroyJavaVM return.)
     atomic_store(&gVM, NULL);
+    (*vm)->DestroyJavaVM(vm);
     log(@"[jvm] DestroyJavaVM done.");
     return 0;
 }
@@ -1954,6 +1960,9 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     return (long long)v;
 }
 
+// Fire-and-forget config flush for the iOS UI paths (panel/overlay/config close, app background). gMuiFlush is
+// bound to Java flushConfigQueued (QA-P1-03), so this enqueues the fsync on the client thread and returns at once
+// without stalling the main thread.
 + (void)mobileFlushConfig {
     if (!ensureMui()) return;
     JNIEnv *env = gMainEnv;

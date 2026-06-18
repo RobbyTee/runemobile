@@ -15,8 +15,13 @@ cd "$(dirname "$0")"
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 JAVAC="$JAVA_HOME/bin/javac"
 JAR="$JAVA_HOME/bin/jar"
-SRC="${SRC:-../../../runelite-client/build/libs/client-1.12.29-SNAPSHOT-shaded.jar}"
-OUT="${OUT:-../../app/jvm-resources/client-1.12.29-SNAPSHOT-shaded.jar}"
+# QA-P1-15: derive the version from gradle.properties (full version, e.g. 1.12.29-SNAPSHOT) so the staged jar
+# name tracks an upstream bump and stays in sync with remote-build.sh's `client-${VERSION}-shaded.jar` sanity
+# check, instead of a hardcoded literal that silently diverges. Mirrors the gpu-zone staging script.
+VERSION="$(sed -n 's/^project\.build\.version=//p' ../../../gradle.properties)"
+[ -n "$VERSION" ] || { echo "!! could not read project.build.version from gradle.properties" >&2; exit 1; }
+SRC="${SRC:-../../../runelite-client/build/libs/client-${VERSION}-shaded.jar}"
+OUT="${OUT:-../../app/jvm-resources/client-${VERSION}-shaded.jar}"
 DL="${DL:-../../../runelite-client/build/generated/sources/delombok/java/main/net/runelite/client/plugins/gpu}"
 EXPECT_MD5="${1:-}"
 

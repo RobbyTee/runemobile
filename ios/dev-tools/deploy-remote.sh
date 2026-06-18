@@ -39,8 +39,12 @@ done
 
 log() { printf '\n\033[1;35m>> %s\033[0m\n' "$*"; }
 cd "$REPO"
-VERSION="$(grep -E '^runeLiteVersion' gradle.properties 2>/dev/null | sed 's/.*=//' | tr -d ' ' || true)"
-VERSION="${VERSION:-1.12.29}"
+# QA-P1-15: read the real version key. The old grep for `runeLiteVersion` matched nothing (no such key) and
+# silently fell back to a hardcoded 1.12.29 — correct only by luck today, broken on the next upstream bump.
+# project.build.version is the full version (e.g. 1.12.29-SNAPSHOT); the jar names below use it as-is. Mirrors
+# the gpu-zone staging script.
+VERSION="$(sed -n 's/^project\.build\.version=//p' gradle.properties)"
+[ -n "$VERSION" ] || { echo "!! could not read project.build.version from gradle.properties" >&2; exit 1; }
 
 # 1) Build the jars on the dev Mac (fast box, no Xcode needed).
 if [ "$BUILD_JARS" = local ]; then
@@ -49,7 +53,7 @@ if [ "$BUILD_JARS" = local ]; then
   if [ "$MODE" = gpu ]; then
     ( cd ios/dev-tools/gpu-routec && JAVA_HOME="$JAVA_HOME" ./stage-ios-gpu-jar.sh )
   else
-    cp "runelite-client/build/libs/client-${VERSION}-SNAPSHOT-shaded.jar" ios/app/jvm-resources/
+    cp "runelite-client/build/libs/client-${VERSION}-shaded.jar" ios/app/jvm-resources/
   fi
   ( cd ios/app && JAVA_HOME="$JAVA_HOME" ./build-probes.sh )
   ( cd ios/dev-tools/gpu-routec/l1 && JAVA_HOME="$JAVA_HOME" ./build-l1-probe.sh )

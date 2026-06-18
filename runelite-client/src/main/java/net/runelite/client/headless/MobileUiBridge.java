@@ -404,11 +404,14 @@ public final class MobileUiBridge
 	}
 
 	/**
-	 * Flush pending config to disk now ({@code ConfigManager.sendConfig}, which writes only the dirty delta).
-	 * On desktop this happens on a 5-minute timer + a clean shutdown; on iOS the app is closed/killed without
-	 * running either, so the native shell calls this at explicit checkpoints (config/panel close, app
-	 * background) to make plugin toggles and config edits survive a relaunch. Safe to call off-thread (the
-	 * desktop flush runs on a scheduled executor too).
+	 * Flush pending config to disk NOW, SYNCHRONOUSLY ({@code ConfigManager.sendConfig}, the dirty delta only).
+	 * On desktop this happens on a 5-minute timer + a clean shutdown; on iOS/Android the app can be closed/killed
+	 * without running either, so the native shell calls this at explicit checkpoints to make plugin toggles and
+	 * config edits survive a relaunch. It runs {@code sendConfig} on the CALLING thread and returns only once the
+	 * write has completed — callers that must persist before the process goes away (e.g. the Android logout path,
+	 * which calls this then {@code exit(0)}) depend on that guarantee, so do NOT make this asynchronous (QA-P1-03).
+	 * Because it does a synchronous EventBus post + a blocking fsync, callers on a UI/main thread should instead
+	 * use {@link #flushConfigQueued()} (fire-and-forget; enqueues {@code sendConfig} on the client thread).
 	 */
 	public static String flushConfig()
 	{

@@ -51,7 +51,9 @@ cd "$REPO"
 FQDN="$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')" \
   || die "couldn't read this Mac's tailnet name (is Tailscale up?)"
 [ -n "$FQDN" ] || die "empty tailnet FQDN"
-JARVER="$(grep -E '^runeLiteVersion' gradle.properties 2>/dev/null | sed 's/.*=//' | tr -d ' ' || true)"; JARVER="${JARVER:-1.12.29}"
+# QA-P1-15: read the real version key (full version, e.g. 1.12.29-SNAPSHOT). The old grep for the non-existent
+# `runeLiteVersion` key silently fell back to a hardcoded 1.12.29 — correct only by luck, broken on the next bump.
+JARVER="$(sed -n 's/^project\.build\.version=//p' gradle.properties)"; [ -n "$JARVER" ] || die "could not read project.build.version from gradle.properties"
 MARKETING="$(grep -E 'MARKETING_VERSION:' "$APPDIR/project.yml" 2>/dev/null | head -1 | sed -E 's/.*: *"?([0-9.]+)"?.*/\1/' || true)"; MARKETING="${MARKETING:-0.1}"
 BUILD="$(( $(cat "$STATE" 2>/dev/null || echo 0) + 1 ))"
 VERSTR="${MARKETING}.${BUILD}"
@@ -61,11 +63,11 @@ if [ "$BUILD_JARS" = 1 ]; then
   log "Rebuild jars (MODE=$MODE, VERSION=$JARVER)"
   JAVA_HOME="$JAVA_HOME" ./gradlew :client:shadowJar
   if [ "$MODE" = gpu ]; then ( cd ios/dev-tools/gpu-routec && JAVA_HOME="$JAVA_HOME" ./stage-ios-gpu-jar.sh )
-  else cp "runelite-client/build/libs/client-${JARVER}-SNAPSHOT-shaded.jar" ios/app/jvm-resources/; fi
+  else cp "runelite-client/build/libs/client-${JARVER}-shaded.jar" ios/app/jvm-resources/; fi
   ( cd ios/app && JAVA_HOME="$JAVA_HOME" ./build-probes.sh )
   ( cd ios/dev-tools/gpu-routec/l1 && JAVA_HOME="$JAVA_HOME" ./build-l1-probe.sh )
 fi
-for j in "client-${JARVER}-SNAPSHOT-shaded.jar" "client-${JARVER}-SNAPSHOT-rlhd.jar" probes.jar routec-l1.jar; do
+for j in "client-${JARVER}-shaded.jar" "client-${JARVER}-rlhd.jar" probes.jar routec-l1.jar; do
   [ -f "$APPDIR/jvm-resources/$j" ] || die "staged jar missing: $j — re-run with --jars"
 done
 

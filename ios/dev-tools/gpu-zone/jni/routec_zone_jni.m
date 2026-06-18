@@ -217,19 +217,27 @@ static void JNICALL z_glTexStorage3D(JNIEnv *e, jclass c, jint t, jint lvls, jin
 }
 static void JNICALL z_glTexImage3D(JNIEnv *e, jclass c, jint t, jint lvl, jint ifmt, jint w, jint h, jint d,
                                    jint border, jint fmt, jint type, jobject buf) {
-    void *p = buf ? (*e)->GetDirectBufferAddress(e, buf) : NULL;
+    // QA-P1-09: LWJGL marshals an NIO buffer from its position(), not the base address — the data starts at
+    // base + position*elem. Honor that (ShortBuffer here -> elem 2) instead of passing the raw base.
+    const char *base = buf ? (const char *)(*e)->GetDirectBufferAddress(e, buf) : NULL;
+    const void *p = base ? (const void *)(base + (size_t)z_buf_position(e, buf) * 2) : NULL;
     glTexImage3D((GLenum)t, lvl, ifmt, w, h, d, border, (GLenum)fmt, (GLenum)type, p);
 }
 static void JNICALL z_glTexSubImage3D(JNIEnv *e, jclass c, jint t, jint lvl, jint xo, jint yo, jint zo,
                                       jint w, jint h, jint d, jint fmt, jint type, jobject buf) {
-    void *p = buf ? (*e)->GetDirectBufferAddress(e, buf) : NULL;
+    // QA-P1-09: the data starts at base + position*elem and only remaining() elements are valid (LWJGL's NIO
+    // contract); the BGRA repack below previously read w*h*d ints from the base, over-reading a positioned or
+    // short (reused/flip()ed) buffer — the same capacity-from-base bug z_buffer_sub_data fixes. IntBuffer -> elem 4.
+    const char *base = buf ? (const char *)(*e)->GetDirectBufferAddress(e, buf) : NULL;
+    const void *p = base ? (const void *)(base + (size_t)z_buf_position(e, buf) * 4) : NULL;
+    const size_t count = (size_t)w * (size_t)h * (size_t)d;
     // iOS GLES 3.0 has no GL_BGRA upload format. RLHD uploads the material texture array as
     // GL_BGRA + GL_UNSIGNED_INT_8_8_8_8_REV over 0xAARRGGBB ints (TextureManager.uploadTexture); on iOS that
     // errors and leaves the texture array BLACK (untextured models + ground, while vertex-HSL grass is fine).
     // Convert to RGBA8 by swapping the R<->B bytes and upload as GL_RGBA + GL_UNSIGNED_BYTE (the Android real-Mali
     // run needed the same swizzle; this is its iOS home). One-time per texture load, not per frame.
-    if (p && fmt == 0x80E1 /*GL_BGRA*/ && type == 0x8367 /*GL_UNSIGNED_INT_8_8_8_8_REV*/) {
-        size_t count = (size_t)w * (size_t)h * (size_t)d;
+    if (p && fmt == 0x80E1 /*GL_BGRA*/ && type == 0x8367 /*GL_UNSIGNED_INT_8_8_8_8_REV*/
+        && (size_t)z_buf_remaining(e, buf) >= count) {
         const uint32_t *src = (const uint32_t *)p;
         uint32_t *tmp = (uint32_t *)malloc(count * 4);
         if (tmp) {

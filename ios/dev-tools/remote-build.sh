@@ -32,8 +32,10 @@ cd "$REPO"
 
 : "${DEV:?set DEV to the iPhone devicectl UUID (xcrun devicectl list devices)}"
 
-VERSION="$(grep -E '^runeLiteVersion' gradle.properties 2>/dev/null | sed 's/.*=//' | tr -d ' ' || true)"
-VERSION="${VERSION:-1.12.29}"
+# QA-P1-15: read the real version key (project.build.version, e.g. 1.12.29-SNAPSHOT). The old grep for
+# `runeLiteVersion` matched nothing and silently fell back to a hardcoded 1.12.29 — breaks on the next bump.
+VERSION="$(sed -n 's/^project\.build\.version=//p' gradle.properties)"
+[ -n "$VERSION" ] || { echo "!! could not read project.build.version from gradle.properties" >&2; exit 1; }
 
 log() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 
@@ -43,14 +45,14 @@ if [ "$WITH_JARS" = 1 ]; then
   if [ "$MODE" = gpu ]; then
     ( cd ios/dev-tools/gpu-routec && JAVA_HOME="$JAVA_HOME" ./stage-ios-gpu-jar.sh )
   else
-    cp "runelite-client/build/libs/client-${VERSION}-SNAPSHOT-shaded.jar" ios/app/jvm-resources/
+    cp "runelite-client/build/libs/client-${VERSION}-shaded.jar" ios/app/jvm-resources/
   fi
   ( cd ios/app && JAVA_HOME="$JAVA_HOME" ./build-probes.sh )
   ( cd ios/dev-tools/gpu-routec/l1 && JAVA_HOME="$JAVA_HOME" ./build-l1-probe.sh )
 fi
 
 # Sanity: the staged shaded jar must be present (carried by rsync, or built above).
-SHADED="ios/app/jvm-resources/client-${VERSION}-SNAPSHOT-shaded.jar"
+SHADED="ios/app/jvm-resources/client-${VERSION}-shaded.jar"
 [ -f "$SHADED" ] || { echo "!! staged shaded jar missing: $SHADED — run deploy with jars, or pass --with-jars" >&2; exit 1; }
 
 log "xcodegen generate"
