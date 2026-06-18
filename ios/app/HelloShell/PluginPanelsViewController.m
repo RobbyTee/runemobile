@@ -1021,6 +1021,15 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
+// QA-P1-08: the repeating target:self timer retains this VC and keeps firing JNI quest polls forever if the
+// panel is dismissed any way other than -onDone (swipe-down, parent dismissal). Invalidate on disappear so the
+// retain cycle breaks (the VC can dealloc) and the polling stops — mirrors XpTrackerViewController. These panels
+// are leaf modals (no viewDidAppear re-arm), so disappear == dismissal here.
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    [self.timer invalidate]; self.timer = nil;
+}
+
 #pragma mark UITableView
 
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
@@ -1307,6 +1316,14 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     self.timer = nil;
     [JVMLauncher worldSetUiOpen:NO];
     [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+// QA-P1-08: the repeating target:self timer retains this VC and keeps firing JNI world-list polls forever if the
+// panel is dismissed any way other than -onDone. Invalidate on disappear so the retain cycle breaks and the
+// polling stops — mirrors XpTrackerViewController. Leaf modal (no viewDidAppear re-arm), so disappear == dismissal.
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    [self.timer invalidate]; self.timer = nil;
 }
 
 #pragma mark UITableView
