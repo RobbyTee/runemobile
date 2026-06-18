@@ -4331,10 +4331,34 @@ static CGRect mapRectFromArr(NSArray *a) {
     }
 }
 
+// Close the engine right-click menu with NO click when its live rect is unknown (menuGeomValid == NO). We can't
+// target the title strip without the rect, and selectMenuPoint()/any press-point click would land as a stray
+// world action. The engine auto-closes the menu the instant the cursor leaves the menu bounds (the behaviour
+// updateMenuHighlightForPoint clamps AGAINST to keep it open), so move the cursor to a far corner — the menu is
+// small and anchored at the press point, so the diagonally-opposite corner is always outside it — and clear the
+// parked hover. A move never clicks, so nothing is selected/walked. QA-P1-02.
+- (void)closeEngineMenuNoClick {
+    const int farX = self.menuSelX > 200 ? 4 : 760;
+    const int farY = self.menuSelY > 150 ? 4 : 499;
+    [JVMLauncher postMoveX:farX y:farY];
+    [JVMLauncher postClearHover];
+}
+
 // Release: click the resolved target. Over the menu -> the row under the finger (select); dragged off -> the menu's
 // title strip (closes with no action = cancel). Either way the menu closes, so camera/world input frees up.
 - (void)commitMenuSelection {
     if (!self.menuOpen) { [self teardownMenuViews]; return; }
+    // QA-P1-02: the finger lifted before the engine menu registered (menuGeomValid never went YES — a long-press
+    // released inside the ~1-2 frame build window, wider on a laggy device). menuSelX/Y is still the raw press
+    // point, so postMenuSelect -> selectMenuPoint would LEFT-CLICK the world there = a walk / attack / pickup the
+    // user never chose. Treat it as a clean cancel: close the (possibly just-opening) engine menu with no click.
+    if (!self.menuGeomValid) {
+        [self closeEngineMenuNoClick];
+        [self appendLine:@"[shell] menu cancel (build aborted — no click)"];
+        self.menuOpen = NO;
+        [self beginMenuClose];
+        return;
+    }
     [JVMLauncher postMenuSelectX:self.menuSelX y:self.menuSelY];
     [self appendLine:[NSString stringWithFormat:@"[shell] menu %@ @game %d,%d",
                       self.menuFingerOnMenu ? @"select" : @"cancel", self.menuSelX, self.menuSelY]];
@@ -4350,7 +4374,7 @@ static CGRect mapRectFromArr(NSArray *a) {
             CGRect r = self.menuGeomGame;
             [JVMLauncher postMenuSelectX:(int)lround(CGRectGetMidX(r)) y:(int)lround(CGRectGetMinY(r)) + 2];
         } else {
-            [JVMLauncher postMenuSelectX:self.lastMenuX y:self.lastMenuY];
+            [self closeEngineMenuNoClick];   // QA-P1-02: no rect -> close via move-off, never a press-point click
         }
         [self appendLine:@"[shell] right-click menu closed"];
     }
