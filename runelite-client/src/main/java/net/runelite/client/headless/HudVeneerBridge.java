@@ -407,8 +407,13 @@ public final class HudVeneerBridge
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
 			}
 		}
-		catch (RuntimeException e)
+		catch (Throwable e)
 		{
+			// preRender is its own per-frame engine-thread seam (a BeforeRender subscriber dispatched from
+			// Hooks.frame()), NOT routed through HeadlessSeams.guard. EventBus.post catches only Exception and
+			// Hooks.frame() catches nothing, so this is the terminal barrier: catch Throwable — not just
+			// RuntimeException — so an upstream-merge LinkageError/NoSuchMethodError behind these engine-API
+			// calls can't escape and kill the frame thread (the QA-P1-07 class). Matches HeadlessSeams.guard.
 			BridgeFaults.note("HudVeneerBridge.preRender", e);
 		}
 	}

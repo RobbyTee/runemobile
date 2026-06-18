@@ -690,6 +690,29 @@ public final class JavaBridge
 		{
 			return;
 		}
+		try
+		{
+			tapTickImpl(c);
+		}
+		catch (Throwable t)
+		{
+			// QA-P1-07: a throw here would escape into Hooks.draw and kill the engine frame thread. Drop any
+			// in-flight tap so a poisoned state isn't retried (and re-thrown) every frame, and surface it
+			// rate-limited rather than silently. tapTickImpl's leaf reads self-guard; this is the top-level
+			// backstop (the HeadlessSeams seam guard would also catch it, but resetting the state machine here
+			// is the cleaner recovery).
+			tapState = TapState.IDLE;
+			queuedTap = false;
+			BridgeFaults.note("JavaBridge.tapTick", t);
+		}
+	}
+
+	/**
+	 * Body of {@link #tapTick(Client)} — see that method's Javadoc for the settle-gate/click-watchdog
+	 * contract. Split out so the wrapper can keep a throw from escaping into the engine frame loop.
+	 */
+	private static void tapTickImpl(Client c)
+	{
 		applyCameraDrag(c);        // drain accumulated two-finger-pan deltas (camera writes are client-thread-only)
 		snapshotTextInputOpen(c);  // publish INPUT_TYPE for isTextInputOpen() to read off the client thread
 		snapshotInventoryBounds(c); // DRAG-1: publish the inventory item-grid bounds for the native item-drag branch
