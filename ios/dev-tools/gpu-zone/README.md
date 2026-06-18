@@ -86,7 +86,7 @@ against `[facade/ : lwjgl-stripped client jar]` with lombok as an annotation pro
 loader JSON, `ZoneRenderer` + `OpenCLManager` present; class md5 `d4dc966c00af9b0d983f25eecce62f73`
 (`04e0b29fa4761cca3386d8eb6ca457d3` was the pre-overlay B0.1 seal). The
 `facade/` (35 classes) is the RLHD-complete superset of the base-gpu facade and is the **spec** for the B0.3
-native delta (see `facade/README.md`). Output: `ios/app/jvm-resources/client-1.12.29-SNAPSHOT-rlhd.jar`
+native delta (see `facade/README.md`). Output: `ios/app/jvm-resources/client-<ver>-rlhd.jar`
 (gitignored, regen via the script).
 
 **Next (B0.2+):** facade `glTexBuffer`→2D `glTexImage2D` RGB32I upload (blocker #1), the `RouteCBridge.m` native
