@@ -273,6 +273,8 @@ fun PluginPanel(
                         onOpenXp = { xpOpen = true }, onOpenLoot = { lootOpen = true }, onOpenGe = { geOpen = true },
                         onOpenOverlay = { overlayOpen = true }, onOpenInfoBox = { infoBoxOpen = true },
                         onOpenHub = { hubOpen = true },
+                        // FIX-5: open the world map via op-replay, then dismiss the launcher so the fullscreen map shows.
+                        onOpenWorldMap = { JvmLauncher.onBridgeTouch { JvmLauncher.openWorldMap() }; onClose() },
                         onScreenshot = onScreenshot, onAccount = onAccount, onLogout = onLogout, onDiscord = onDiscord,
                     )
                 }
@@ -392,6 +394,7 @@ private fun LauncherGrid(
     onOpenOverlay: () -> Unit,
     onOpenInfoBox: () -> Unit,
     onOpenHub: () -> Unit,
+    onOpenWorldMap: () -> Unit,
     onScreenshot: () -> Unit,
     onAccount: () -> Unit,
     onLogout: () -> Unit,
@@ -452,6 +455,9 @@ private fun LauncherGrid(
         TileGrid(listOf(
             TileSpec("All plugins", glyph = "≡", onClick = onOpenList),
             TileSpec("Plugin Hub", glyph = "⬇", onClick = onOpenHub),
+            // FIX-5: a discoverable native open-map control (the engine globe orb is ~25px and undiscoverable;
+            // this opens the map via op-replay regardless of orb position/account).
+            TileSpec("World Map", glyph = "◉", onClick = onOpenWorldMap),
             // §4 cutover: the toolbar-only nav buttons that had no Android home (audit §4.3) — fixed native
             // tiles wired to existing handlers. Discord becomes reachable for the first time.
             TileSpec("Screenshot", glyph = "▣", onClick = onScreenshot),

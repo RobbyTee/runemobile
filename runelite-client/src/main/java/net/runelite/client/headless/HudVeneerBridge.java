@@ -117,6 +117,10 @@ public final class HudVeneerBridge
 	// applied on the client thread (where runScript is legal).
 	private static volatile boolean hideStones;
 	private static volatile int pendingOpenTab = -1;
+	// FIX-5: one-shot native "open the world map" — replays the ORB_WORLDMAP orb's op script so a native control
+	// can open the map without hitting the ~25px engine orb (and fixes the legacy-account orb block). Applied on
+	// the client thread in tick (where runScript is legal).
+	private static volatile boolean pendingOpenWorldMap;
 
 	// Native chat-tab veneer (A3 bigger buttons). chatTabRowH = the canvas-px height the native (enlarged) tab row
 	// occupies; the message area (CHATAREA) is pushed down past it instead of the engine's 23px CONTROLS row. 0 =
@@ -247,6 +251,13 @@ public final class HudVeneerBridge
 	public static void openTab(int tabIndex)
 	{
 		pendingOpenTab = tabIndex;
+	}
+
+	/** Native: open the world map (FIX-5) by replaying the {@code ORB_WORLDMAP} orb's op script — a discoverable
+	 *  open path decoupled from the ~25px engine orb. One-shot; applied on the client thread in {@link #tick}. */
+	public static void openWorldMap()
+	{
+		pendingOpenWorldMap = true;
 	}
 
 	/** Native: the canvas-px height the enlarged native chat-tab row occupies, so the message area is pushed down
@@ -691,6 +702,13 @@ public final class HudVeneerBridge
 				openTabNow(c, preEoc, openIdx);
 			}
 
+			// One-shot: open the world map by replaying the orb's op script (FIX-5 native open control).
+			if (pendingOpenWorldMap)
+			{
+				pendingOpenWorldMap = false;
+				openWorldMapNow(c);
+			}
+
 			tickWorldMap(c);
 		}
 		catch (RuntimeException e)
@@ -1022,6 +1040,49 @@ public final class HudVeneerBridge
 		catch (RuntimeException ignore)
 		{
 			BridgeFaults.note("HudVeneerBridge.openTabNow", ignore);
+		}
+	}
+
+	/** Open the world map by SYNTHESIZING a left click on the {@code ORB_WORLDMAP} orb (resolved by its live
+	 *  bounds, so the native tile opens it regardless of the ~25px orb's pixel position). This is the proven
+	 *  open path (the {@code WorldMapProbe.synthClick} shape) — an op-script replay does NOT toggle the map
+	 *  because the orb's open is server-side. Client thread (posting to the system EventQueue is legal here). */
+	private static void openWorldMapNow(Client c)
+	{
+		try
+		{
+			final Widget orb = c.getWidget(InterfaceID.Orbs.ORB_WORLDMAP);
+			if (orb == null)
+			{
+				return;
+			}
+			final java.awt.Rectangle b = orb.getBounds();
+			if (b == null || b.width <= 0 || b.height <= 0)
+			{
+				return;
+			}
+			final java.awt.Canvas canvas = c.getCanvas();
+			if (canvas == null)
+			{
+				return;
+			}
+			final int x = b.x + b.width / 2;
+			final int y = b.y + b.height / 2;
+			final java.awt.EventQueue q = java.awt.Toolkit.getDefaultToolkit().getSystemEventQueue();
+			final long t = System.currentTimeMillis();
+			// Prime focus/presence (harmless if already focused) then the full move+press+release+click — the
+			// gamepack resolves the orb's "World Map" action and opens the map, same as a finger on the orb.
+			q.postEvent(new java.awt.event.FocusEvent(canvas, java.awt.event.FocusEvent.FOCUS_GAINED, false, null));
+			q.postEvent(new java.awt.event.MouseEvent(canvas, java.awt.event.MouseEvent.MOUSE_ENTERED, t, 0, x, y, 0, false));
+			q.postEvent(new java.awt.event.MouseEvent(canvas, java.awt.event.MouseEvent.MOUSE_MOVED, t + 1, 0, x, y, 0, false));
+			q.postEvent(new java.awt.event.MouseEvent(canvas, java.awt.event.MouseEvent.MOUSE_PRESSED, t + 2,
+				java.awt.event.InputEvent.BUTTON1_DOWN_MASK, x, y, 1, false, java.awt.event.MouseEvent.BUTTON1));
+			q.postEvent(new java.awt.event.MouseEvent(canvas, java.awt.event.MouseEvent.MOUSE_RELEASED, t + 3, 0, x, y, 1, false, java.awt.event.MouseEvent.BUTTON1));
+			q.postEvent(new java.awt.event.MouseEvent(canvas, java.awt.event.MouseEvent.MOUSE_CLICKED, t + 4, 0, x, y, 1, false, java.awt.event.MouseEvent.BUTTON1));
+		}
+		catch (RuntimeException ignore)
+		{
+			BridgeFaults.note("HudVeneerBridge.openWorldMapNow", ignore);
 		}
 	}
 

@@ -153,6 +153,8 @@ static jmethodID g_midSetOverlayInsets = nullptr;
 static jmethodID g_midSetChatCollapsed = nullptr, g_midSwitchChatTab = nullptr;
 // Phase-5 world map (optional): pan by finger deltas + the open-state/control-rect snapshot.
 static jmethodID g_midPanWorldMap = nullptr, g_midMapSnapshot = nullptr;
+// FIX-5 native open-map control (optional, same rule): open the world map by ORB_WORLDMAP op-script replay.
+static jmethodID g_midOpenWorldMap = nullptr;
 static std::mutex g_mapLock;
 static std::string g_mapSnapshotPub = "{\"open\":false}";
 // A3 enlarged native chat-tab veneer: getChatSnapshot (per-frame tab geometry/state the bigger native buttons
@@ -734,6 +736,7 @@ static bool publishBridge(JNIEnv *env) {
             g_midSwitchChatTab     = midOpt(env, hvg, "switchChatTab", "(I)V");
             g_midPanWorldMap       = midOpt(env, hvg, "panWorldMap", "(II)V");
             g_midMapSnapshot       = midOpt(env, hvg, "getMapSnapshot", "()Ljava/lang/String;");
+            g_midOpenWorldMap      = midOpt(env, hvg, "openWorldMap", "()V");   // FIX-5 (optional; older jar omits it)
             bool hudOk = g_midSetStonesHidden && g_midOpenTab && g_midRelocateSidePanel && g_midRelocateChat
                       && g_midRelocateMinimap && g_midChatSnapshot && g_midSetChatRowH && g_midSetChatAreaW
                       && g_midScrollChat;
@@ -1760,6 +1763,12 @@ static void facadeVoidBool(jclass cls, jmethodID m, jboolean b) {
     hs->CallStaticVoidMethod(cls, m, b);
     if (hs->ExceptionCheck()) hs->ExceptionClear();
 }
+static void facadeVoid0(jclass cls, jmethodID m) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m) return;
+    hs->CallStaticVoidMethod(cls, m);
+    if (hs->ExceptionCheck()) hs->ExceptionClear();
+}
 static void facadeVoidInt(jclass cls, jmethodID m, jint i) {
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !cls || !m) return;
@@ -2004,6 +2013,11 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeOpenTab(JNIEnv *, jobject, jint tabIndex) {
     if (!hudReady()) return;
     facadeVoidInt(g_hudCls, g_midOpenTab, tabIndex);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOpenWorldMap(JNIEnv *, jobject) {
+    if (!hudReady()) return;
+    facadeVoid0(g_hudCls, g_midOpenWorldMap);   // FIX-5: open the map via ORB_WORLDMAP op-replay (no-op on older jar)
 }
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeRelocateSidePanel(JNIEnv *, jobject, jint x, jint y) {

@@ -225,6 +225,7 @@ object JvmLauncher {
     // daemon-attach the calling thread to HotSpot. Cheap fire-and-forget setters re-applied by the engine tick.
     external fun nativeSetStonesHidden(hidden: Boolean)
     external fun nativeOpenTab(tabIndex: Int)
+    external fun nativeOpenWorldMap()   // FIX-5: open the world map via ORB_WORLDMAP op-replay
     external fun nativeRelocateSidePanel(x: Int, y: Int)
 
     // A6 chat-at-top: move the engine's own chatbox to (x,y) canvas px and flip it to OSRS transparent-chat mode
@@ -371,6 +372,7 @@ object JvmLauncher {
     fun chromeSnapshotPub() = nativeChromeSnapshotPub()
     fun setStonesHidden(hidden: Boolean) = nativeSetStonesHidden(hidden)
     fun openTab(tabIndex: Int) = nativeOpenTab(tabIndex)
+    fun openWorldMap() = nativeOpenWorldMap()
     fun relocateSidePanel(x: Int, y: Int) = nativeRelocateSidePanel(x, y)
     fun relocateChat(x: Int, y: Int, transparent: Boolean) = nativeRelocateChat(x, y, transparent)
     fun setOverlayInsets(l: Int, t: Int, r: Int, b: Int) = nativeSetOverlayInsets(l, t, r, b)
