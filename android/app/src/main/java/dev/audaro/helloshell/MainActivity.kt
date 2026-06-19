@@ -223,18 +223,22 @@ class MainActivity : AppCompatActivity() {
         // switch channel (op-script replay, works collapsed); pull DOWN past a filterable chip = its engine
         // filter menu via the shared press-and-peek overlay.
         chatTabOverlay = ChatPillView(this)
-        chatTabOverlay.onPillTap = {
-            chatCollapsed = !chatCollapsed
-            Log.i(TAG, "p4: pill tap -> ${if (chatCollapsed) "collapse" else "expand"}")
-            JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(chatCollapsed) }
-        }
-        chatTabOverlay.onSwitchChannel = { k ->
-            // Switching auto-expands a collapsed chat (mirrors the iOS chatSwitchToChip).
-            if (chatCollapsed) {
-                chatCollapsed = false
-                JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(false); JvmLauncher.switchChatTab(k) }
+        chatTabOverlay.onTabTap = { k ->
+            // UI-3 (iOS onChatTabButton): tap the ACTIVE tab to collapse the message area; tap any other to
+            // switch the channel (auto-expanding a collapsed chat first).
+            if (!chatCollapsed && k == chatTabOverlay.currentTab) {
+                chatCollapsed = true
+                Log.i(TAG, "ui3: tab $k (active) -> collapse")
+                JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(true) }
             } else {
-                JvmLauncher.onBridgeTouch { JvmLauncher.switchChatTab(k) }
+                chatTabOverlay.markOptimistic(k)   // instant highlight
+                if (chatCollapsed) {
+                    chatCollapsed = false
+                    JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(false); JvmLauncher.switchChatTab(k) }
+                } else {
+                    JvmLauncher.onBridgeTouch { JvmLauncher.switchChatTab(k) }
+                }
+                Log.i(TAG, "ui3: tab $k -> switch")
             }
         }
         chatTabOverlay.onFilterOpen = { _, ecx, ecy, vx, vy ->
