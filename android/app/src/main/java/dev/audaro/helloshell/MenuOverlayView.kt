@@ -34,7 +34,10 @@ class MenuOverlayView(context: Context) : View(context) {
     // FIX-10: a slide-select peek menu can't scroll, so a row past the screen edge is unreachable. rowH shrinks
     // (down to a legible floor) in show() when a tall menu wouldn't otherwise fit fully on-screen.
     private var rowH = baseRowH
-    private val menuW = dp(210f)
+    // UI-5: the box width is the iOS kMenuWidth (210) floor, grown per-show to fit the widest entry's text so
+    // long rows (e.g. the Grand Exchange) don't spill outside the border (iOS: boxW = MAX(kMenuWidth, er+16)).
+    private val minMenuW = dp(210f)
+    private var boxW = minMenuW
     private val pad = dp(6f)
     private val xTol = dp(44f)   // horizontal slack so a straight slide down still tracks the rows
 
@@ -74,11 +77,20 @@ class MenuOverlayView(context: Context) : View(context) {
         val avail = vh - pad * 2 - headerH
         rowH = if (items.isNotEmpty() && items.size * baseRowH > avail)
             (avail / items.size).coerceAtLeast(dp(22f)) else baseRowH
+        // UI-5: grow the box to the widest row (opt + gap + cyan target) so long entries stay inside the border;
+        // dp(20f) = the dp(10f) text left margin (onDraw) + dp(10f) right padding.
+        var widest = 0f
+        for (e in items) {
+            var w = optPaint.measureText(e.opt)
+            if (e.tgt.isNotEmpty()) w += sp(5f) + tgtPaint.measureText(e.tgt)
+            if (w > widest) widest = w
+        }
+        boxW = maxOf(minMenuW, widest + dp(20f))
         val totalH = headerH + items.size * rowH
         // Finger sits near the near top corner; body opens away from the hand.
-        var ox = if (handRight) anchorX - (menuW - dp(26f)) else anchorX - dp(26f)
+        var ox = if (handRight) anchorX - (boxW - dp(26f)) else anchorX - dp(26f)
         var oy = anchorY - headerH * 0.5f
-        ox = ox.coerceIn(pad, (vw - menuW - pad).coerceAtLeast(pad))
+        ox = ox.coerceIn(pad, (vw - boxW - pad).coerceAtLeast(pad))
         oy = oy.coerceIn(pad, (vh - totalH - pad).coerceAtLeast(pad))
         boxX = ox
         boxY = oy
@@ -98,7 +110,7 @@ class MenuOverlayView(context: Context) : View(context) {
     /** Display-row index under a finger point (view px), or -1 for the header/cancel zone. Y-driven. */
     fun rowAt(x: Float, y: Float): Int {
         if (!active || entries.isEmpty()) return -1
-        if (x < boxX - xTol || x > boxX + menuW + xTol) return -1
+        if (x < boxX - xTol || x > boxX + boxW + xTol) return -1
         val ry = y - (boxY + headerH)
         if (ry < 0) return -1
         val r = (ry / rowH).toInt()
@@ -116,8 +128,8 @@ class MenuOverlayView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         if (!active || entries.isEmpty()) return
         val totalH = headerH + entries.size * rowH
-        canvas.drawRect(boxX, boxY, boxX + menuW, boxY + totalH, bgPaint)
-        canvas.drawRect(boxX, boxY, boxX + menuW, boxY + totalH, borderPaint)
+        canvas.drawRect(boxX, boxY, boxX + boxW, boxY + totalH, bgPaint)
+        canvas.drawRect(boxX, boxY, boxX + boxW, boxY + totalH, borderPaint)
 
         // Header "Choose Option".
         val hdrBaseline = boxY + headerH / 2f - (headerPaint.ascent() + headerPaint.descent()) / 2f
@@ -126,7 +138,7 @@ class MenuOverlayView(context: Context) : View(context) {
         var ry = boxY + headerH
         for (i in entries.indices) {
             if (i == highlight) {
-                canvas.drawRect(boxX, ry, boxX + menuW, ry + rowH, hlPaint)
+                canvas.drawRect(boxX, ry, boxX + boxW, ry + rowH, hlPaint)
             }
             val e = entries[i]
             val baseline = ry + rowH / 2f - (optPaint.ascent() + optPaint.descent()) / 2f

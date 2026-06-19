@@ -1236,12 +1236,21 @@ class MainActivity : AppCompatActivity() {
      *  when it changes. No-op until the grid has laid out (gridLeftPx>0) and a frame size is known. */
     private fun applySidePanel(o: JSONObject?) {
         val fw = JvmLauncher.frameWidth(); val vw = surfaceView.width
-        val gx0 = chromeOverlay.gridLeftPx; val gy0 = chromeOverlay.gridTopPx
-        if (fw <= 0 || vw <= 0 || gx0 <= 0f) return
+        if (fw <= 0 || vw <= 0) return
         val k = fw.toFloat() / vw.toFloat()
         var sideW = 204                                  // fallback until the panel is open + reports its width
+        var sideHc = 275                                 // the SIDE_CONTAINER is a fixed 204x275 canvas raster
         val sc = o?.optJSONArray("sideContainer")
-        if (sc != null && sc.length() >= 4 && sc.optInt(2) > 0) sideW = sc.getInt(2)
+        if (sc != null && sc.length() >= 4) {
+            if (sc.optInt(2) > 0) sideW = sc.getInt(2)
+            if (sc.optInt(3) > 0) sideHc = sc.getInt(3)
+        }
+        // UI-1: the panel is a fixed engine raster we can't grow, so shrink the native grid to the panel height
+        // (constant 275 canvas px) — they then share both the top and bottom edge. Do this BEFORE reading the
+        // grid edges below so the relocate uses the post-shrink geometry (setTargetGridHeight recomputes it).
+        chromeOverlay.setTargetGridHeight(sideHc / k)
+        val gx0 = chromeOverlay.gridLeftPx; val gy0 = chromeOverlay.gridTopPx
+        if (gx0 <= 0f) return
         val sideX = maxOf(0, Math.round(gx0 * k) - sideW)   // right edge flush against the grid's left edge
         val sideY = maxOf(0, Math.round(gy0 * k))           // stones hidden, so top-align with the grid
         if (sideX == lastSideX && sideY == lastSideY) return
@@ -1251,6 +1260,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Stop relocating the engine side panel (let it return to its native position) when the grid disengages. */
     private fun releaseSidePanel() {
+        chromeOverlay.setTargetGridHeight(0f)   // UI-1: grid back to its natural size when the chrome disengages
         if (lastSideX == -1 && lastSideY == -1) return
         lastSideX = -1; lastSideY = -1
         JvmLauncher.onBridge { JvmLauncher.relocateSidePanel(-1, -1) }

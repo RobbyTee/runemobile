@@ -44,6 +44,10 @@ class ChromeOverlayView(context: Context) : View(context) {
     // Last computed layout (view px), so onTouchEvent + the host's side-panel relocation read the same geometry.
     private var lay = Layout(0f, 0f, 0f)
     private class Layout(val gx0: Float, val gy0: Float, val cell: Float)
+    // UI-1: when > 0, shrink the 7-row grid to this view-px height so it matches the open side panel's height (the
+    // panel is a fixed engine raster we can't grow); cell is floored so tabs stay tappable and capped so it only
+    // ever shrinks below today's size.
+    private var targetGridHpx = 0f
 
     private val bmpPaint = Paint().apply { isAntiAlias = true; isFilterBitmap = true; isDither = true }
     private val fallbackPaint = Paint().apply { color = Color.argb(235, 60, 50, 38); isAntiAlias = true }
@@ -115,6 +119,16 @@ class ChromeOverlayView(context: Context) : View(context) {
     val gridLeftPx: Float get() = lay.gx0
     val gridTopPx: Float get() = lay.gy0
 
+    /** UI-1: ask the grid to match the open side-panel height (view px; 0 = natural size). Recomputes the layout
+     *  immediately so the host can read the new gridLeftPx/gridTopPx in the same pass (no one-frame jitter). */
+    fun setTargetGridHeight(viewPx: Float) {
+        if (targetGridHpx != viewPx) {
+            targetGridHpx = viewPx
+            computeLayout()
+            invalidate()
+        }
+    }
+
     /** [top, right, bottom] safe-area insets (display cutout + system bars), so the grid clears a landscape
      *  notch / nav bar. Defaults to 0 (the full-bleed emulator case). */
     private fun safeInsets(): IntArray {
@@ -134,7 +148,11 @@ class ChromeOverlayView(context: Context) : View(context) {
         val cap = dp(46f)
         val margin = dp(6f)
         val availH = (height - ins[0] - ins[2]) * 0.56f
-        val cell = minOf(cap, if (availH > 0f) availH / 7f else cap)
+        // UI-1: when a target height is set, size the 7 rows to it (floored at dp(20) so the cell can reach the
+        // ~59px the panel height needs while staying tappable), still capped at dp(46) so the grid only ever
+        // shrinks to meet the panel, never grows past today.
+        val cell = if (targetGridHpx > 0f) minOf(cap, maxOf(targetGridHpx / 7f, dp(20f)))
+                   else minOf(cap, if (availH > 0f) availH / 7f else cap)
         val gridW = 2 * cell
         val gridH = 7 * cell
         val gx0 = width - ins[1] - margin - gridW
