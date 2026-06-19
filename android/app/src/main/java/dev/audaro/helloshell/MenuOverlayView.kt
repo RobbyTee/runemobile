@@ -27,13 +27,14 @@ class MenuOverlayView(context: Context) : View(context) {
     private var boxY = 0f
     private var highlight = -1
 
-    // Touch-friendly view-space geometry (independent of the engine's fixed 19/15 px menu).
-    private val headerH = dp(34f)
-    private val baseRowH = dp(40f)
+    // View-space geometry matching the iOS native menu (kMenuHeaderViewH 22 / kMenuRowViewH 32 / kMenuWidth 210),
+    // independent of the engine's fixed 19/15 px menu.
+    private val headerH = dp(22f)
+    private val baseRowH = dp(32f)
     // FIX-10: a slide-select peek menu can't scroll, so a row past the screen edge is unreachable. rowH shrinks
     // (down to a legible floor) in show() when a tall menu wouldn't otherwise fit fully on-screen.
     private var rowH = baseRowH
-    private val menuW = dp(232f)
+    private val menuW = dp(210f)
     private val pad = dp(6f)
     private val xTol = dp(44f)   // horizontal slack so a straight slide down still tracks the rows
 
@@ -43,13 +44,13 @@ class MenuOverlayView(context: Context) : View(context) {
     }
     private val hlPaint = Paint().apply { color = Color.argb(56, 255, 255, 255) }
     private val headerPaint = Paint().apply {
-        color = Color.WHITE; textSize = sp(13f); isFakeBoldText = true; isAntiAlias = true
+        color = Color.WHITE; textSize = sp(14f); isFakeBoldText = true; isAntiAlias = true
     }
     private val optPaint = Paint().apply {
-        color = Color.WHITE; textSize = sp(15f); isFakeBoldText = true; isAntiAlias = true
+        color = Color.WHITE; textSize = sp(16f); isFakeBoldText = true; isAntiAlias = true
     }
     private val tgtPaint = Paint().apply {
-        color = Color.argb(255, 140, 217, 255); textSize = sp(15f); isFakeBoldText = true; isAntiAlias = true
+        color = Color.argb(255, 140, 217, 255); textSize = sp(16f); isFakeBoldText = true; isAntiAlias = true
     }
 
     init {
