@@ -180,10 +180,12 @@ class MainActivity : AppCompatActivity() {
         // Pinch-to-wheel: geometric step a scale ratio must cross to emit one wheel notch.
         private const val PINCH_STEP = 1.08f
         // Click-ring truth grace: how long after a tap we wait for interactTapSeq before calling it a walk.
-        // iOS ships 250 ms (60–120 Hz engine), but the settle gate's own fail-open is 12 engine frames —
-        // ~480 ms on a slow EDT (emulator measured a real interaction landing at +535 ms). 600 ms keeps the
-        // colour truthful on slow frames; the walk ring simply appears a beat later.
-        private const val RING_GRACE_MS = 600L
+        // Matches iOS (250 ms). The old 600 ms was tuned for a slow emulator EDT (interaction at +535 ms), but on
+        // real hardware the settle gate stabilises in 3–6 frames and an interaction bumps interactTapSeq at
+        // ~65–140 ms (touch-diag measured on a Pixel 7a) — so 600 ms just made every WALK ring appear a visible
+        // ~600 ms after the tap, reading as input lag. 250 ms catches real interactions with margin and the walk
+        // ring is prompt; a pathologically slow interaction (rare MAX_SETTLE) at worst flashes the wrong colour.
+        private const val RING_GRACE_MS = 250L
 
         // OSRS engine menu geometry: 19px "Choose Option" header, 15px per row. A native row k commits to the
         // engine row centre (menuX + menuW/2, menuY + 19 + k*15 + 7) so plugin onClick/Menu-Entry-Swapper hold.
