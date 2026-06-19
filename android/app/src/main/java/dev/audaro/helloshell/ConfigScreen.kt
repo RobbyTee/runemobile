@@ -85,6 +85,11 @@ fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit) {
     var loading by remember { mutableStateOf(true) }
     var reloadKey by remember { mutableIntStateOf(0) }
     var confirmReset by remember { mutableStateOf(false) }
+    // FIX-8: config writes (setConfig) are batched by the engine's ConfigManager and otherwise only hit disk on
+    // the ‹ Back flush below or the global onStop flush. A crash / force-stop AFTER an edit but BEFORE either
+    // loses it. Debounce a flush ~1s after the last edit so an edit survives any exit path (the LaunchedEffect
+    // key change cancels + restarts the timer on each write, so a burst of edits collapses to one flush).
+    var pendingFlush by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(group, reloadKey) {
         loading = true
@@ -92,6 +97,12 @@ fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit) {
         items = parseConfig(json)
         loading = false
         Log.i("MainActivity", "ANDROID_A4_CONFIG_UI_GREEN group=$group items=${items.size}")
+    }
+    LaunchedEffect(pendingFlush) {
+        if (pendingFlush > 0) {
+            kotlinx.coroutines.delay(1000)
+            JvmLauncher.onBridge { JvmLauncher.flushConfig() }
+        }
     }
 
     Surface(color = Color(0xF2121212), modifier = Modifier.fillMaxSize()) {
@@ -144,6 +155,7 @@ fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit) {
                         ConfigItemControl(item) { newVal ->
                             items = items.map { if (it.key == item.key) it.copy(value = newVal) else it }
                             JvmLauncher.onBridgeTouch { JvmLauncher.setConfig(group, item.key, newVal) }
+                            pendingFlush++   // FIX-8: arm the debounced crash-safe flush
                         }
                         HorizontalDivider(color = Color(0x22FFFFFF))
                     }

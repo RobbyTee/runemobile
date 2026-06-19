@@ -177,7 +177,11 @@ fun PluginPanel(
     }
     BackHandler(enabled = true) { if (!popSub()) onClose() }
 
-    SheetScaffold(atPeek = subActive, onDismiss = onClose) {
+    // FIX-6: open at EXPAND for editors / interactive lists (config was cramped to a couple of rows at the old
+    // peek default, and a single drag-down could dismiss it). Only the passive monitors (XP / loot / GE) keep
+    // the watch-the-game PEEK so the scene stays visible above them.
+    val peekScreen = subActive && (xpOpen || lootOpen || geOpen)
+    SheetScaffold(atPeek = peekScreen, onDismiss = onClose) {
         when {
             questOpen -> QuestHelperScreen(onBack = { questOpen = false })
             worldOpen -> WorldSwitcherScreen(onBack = { worldOpen = false })
@@ -333,7 +337,12 @@ private fun SheetScaffold(
                             }
                         }
                         .pointerInput(peekPx, expandPx) {
+                            // FIX-6: a drag that STARTS above peek (i.e. from EXPAND) snaps down to PEEK and never
+                            // dismisses in one go — only a continued drag-down FROM peek dismisses. Stops an
+                            // accidental swipe from nuking an open config editor.
+                            var startedAbovePeek = false
                             detectVerticalDragGestures(
+                                onDragStart = { startedAbovePeek = sheetPx.value > peekPx * 1.15f },
                                 onVerticalDrag = { change, delta ->
                                     change.consume()
                                     scope.launch { sheetPx.snapTo((sheetPx.value - delta).coerceIn(0f, expandPx)) }
@@ -341,7 +350,7 @@ private fun SheetScaffold(
                                 onDragEnd = {
                                     val v = sheetPx.value
                                     when {
-                                        v < peekPx * 0.55f -> onDismiss()
+                                        v < peekPx * 0.55f && !startedAbovePeek -> onDismiss()
                                         v < (peekPx + expandPx) / 2f -> scope.launch { sheetPx.animateTo(peekPx) }
                                         else -> scope.launch { sheetPx.animateTo(expandPx) }
                                     }
