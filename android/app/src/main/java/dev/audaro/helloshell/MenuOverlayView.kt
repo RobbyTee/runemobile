@@ -29,7 +29,10 @@ class MenuOverlayView(context: Context) : View(context) {
 
     // Touch-friendly view-space geometry (independent of the engine's fixed 19/15 px menu).
     private val headerH = dp(34f)
-    private val rowH = dp(40f)
+    private val baseRowH = dp(40f)
+    // FIX-10: a slide-select peek menu can't scroll, so a row past the screen edge is unreachable. rowH shrinks
+    // (down to a legible floor) in show() when a tall menu wouldn't otherwise fit fully on-screen.
+    private var rowH = baseRowH
     private val menuW = dp(232f)
     private val pad = dp(6f)
     private val xTol = dp(44f)   // horizontal slack so a straight slide down still tracks the rows
@@ -63,9 +66,14 @@ class MenuOverlayView(context: Context) : View(context) {
     fun show(items: List<Entry>, anchorX: Float, anchorY: Float, handRight: Boolean) {
         entries = items
         highlight = -1
-        val totalH = headerH + items.size * rowH
         val vw = if (width > 0) width.toFloat() else resources.displayMetrics.widthPixels.toFloat()
         val vh = if (height > 0) height.toFloat() else resources.displayMetrics.heightPixels.toFloat()
+        // FIX-10: shrink the rows so even a tall menu fits fully on-screen (rowAt + onDraw use this same rowH,
+        // and the host maps by row INDEX, so the shrink is self-consistent and doesn't shift the selection).
+        val avail = vh - pad * 2 - headerH
+        rowH = if (items.isNotEmpty() && items.size * baseRowH > avail)
+            (avail / items.size).coerceAtLeast(dp(22f)) else baseRowH
+        val totalH = headerH + items.size * rowH
         // Finger sits near the near top corner; body opens away from the hand.
         var ox = if (handRight) anchorX - (menuW - dp(26f)) else anchorX - dp(26f)
         var oy = anchorY - headerH * 0.5f
