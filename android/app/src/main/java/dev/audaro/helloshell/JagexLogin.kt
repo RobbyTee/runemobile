@@ -55,6 +55,10 @@ object JagexLogin {
             "&client_id=$CONSENT_CLIENT_ID" +
             "&redirect_uri=${e(CONSENT_REDIRECT)}" +
             "&scope=${e(CONSENT_SCOPE)}" +
+            // Force the login screen. The Android login opens this in a Chrome Custom Tab, which shares the system
+            // Chrome cookie jar — without prompt=login a warm Jagex SSO session would silently re-mint the previously
+            // logged-in account and defeat account-switching (the iOS WKWebView dodged this with an ephemeral store).
+            "&prompt=login" +
             "&nonce=$nonce&state=$state"
     }
 

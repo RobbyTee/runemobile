@@ -1,46 +1,56 @@
 package dev.audaro.helloshell
 
-import android.annotation.SuppressLint
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
-import android.view.View
-import android.webkit.CookieManager
-import android.webkit.WebResourceRequest
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.browser.customtabs.CustomTabsIntent
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.concurrent.thread
 
 /**
- * A3 on-device Jagex login — the Android twin of the iOS JagexLoginViewController. A WebView runs the Stage-A
- * OAuth consent flow (cookies cleared first so each login starts fresh and account-switching works); the
- * redirect to the loopback `http://localhost/#id_token=…` is intercepted, the id_token minted into a game
- * session + character list ([JagexLogin]), a character picked, and tokens.json written. The process is then
- * restarted so the next boot snapshots JX_* at JNI_CreateJavaVM (the Review-2 login-first-boot rule).
+ * A3 on-device Jagex login — no computer required.
  *
- * Only redacted lines are logged — never a raw token. Started with no tokens (login-first gate) or from the
- * in-app "Sign in" affordance (account switch).
+ * Android's WebView is bot-blocked by Cloudflare at the Jagex *auth* step (the human check wants an Apple
+ * device-attestation Private Access Token the embedded WebView can't produce — see ANDROID-LOGIN-DEEPDIVE.md;
+ * the partition test proved real Chrome passes where the WebView is blocked). And the consent OAuth client
+ * accepts ONLY redirect_uri=http://localhost (loopback-port and custom-scheme redirects are rejected — proven
+ * on-device), so the redirect can't be auto-routed back into the app. This flow therefore hands the auth to
+ * real Chrome and brings the result back by hand:
+ *   1. open the Stage-A consent URL in a Chrome Custom Tab (real Chrome clears Cloudflare + the human check),
+ *   2. the user signs in; Chrome lands on http://localhost/#id_token=… ("localhost refused to connect"),
+ *   3. the user copies that link; on return we read it from the clipboard (or they paste it below),
+ *   4. the id_token is minted into a game session + character list ([JagexLogin]), a character is picked, and
+ *      tokens.json is written; the process restarts so JNI_CreateJavaVM re-snapshots JX_* (login-first rule).
+ *
+ * The mint/REST calls use the launcher UA and are NOT bot-blocked. Only redacted lines are logged — never a token.
  */
 class LoginActivity : AppCompatActivity() {
 
-    private lateinit var web: WebView
     private lateinit var status: TextView
+    private lateinit var pasteField: EditText
     private val nonce = JagexLogin.randomToken()
     private val state = JagexLogin.randomToken()
-    private var captured = false   // handle the loopback redirect exactly once
+    private var launched = false      // user has opened the consent flow at least once this session
+    private var importing = false     // a mint is in flight — don't re-enter
+    private var done = false          // captured a valid id_token — handle exactly once
+    private var lastTried: String? = null
 
-    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        launched = savedInstanceState?.getBoolean("launched") ?: false
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.BLACK) }
 
@@ -51,75 +61,152 @@ class LoginActivity : AppCompatActivity() {
             setPadding(28, 16, 28, 16)
         }
         bar.addView(TextView(this).apply {
-            text = "Log in with Jagex"; setTextColor(Color.WHITE); textSize = 15f
+            text = "Log in with Jagex"; setTextColor(Color.WHITE); textSize = 16f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         })
         bar.addView(Button(this).apply { text = "Close"; setOnClickListener { cancelAndExit() } })
         root.addView(bar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
-        web = WebView(this)
-        root.addView(web, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 28, 40, 28) }
+
+        content.addView(TextView(this).apply {
+            setTextColor(Color.WHITE); textSize = 14f
+            text = "Sign in to your Jagex account in your browser, then bring the link back here.\n\n" +
+                "1.  Tap “Open Jagex login” and sign in.\n" +
+                "2.  You'll land on a page that says “localhost refused to connect” — that's expected.\n" +
+                "3.  Copy that page's link: tap the Share icon, then “Copy”.\n" +
+                "4.  Tap back to return here — it imports automatically.\n" +
+                "     (Or paste the link below and tap Import.)"
+        })
+
+        content.addView(Button(this).apply {
+            text = "Open Jagex login"; textSize = 16f
+            setOnClickListener { launchConsent() }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = 36 })
+
+        pasteField = EditText(this).apply {
+            setTextColor(Color.WHITE); setHintTextColor(Color.GRAY)
+            hint = "Paste the http://localhost/… link here"
+            textSize = 13f; setSingleLine(true)
+        }
+        content.addView(pasteField, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = 32 })
+
+        content.addView(Button(this).apply {
+            text = "Import login link"
+            setOnClickListener {
+                val t = pasteField.text?.toString()?.trim().orEmpty()
+                if (!tryImport(t)) log("✗ no Jagex login link found — copy the “localhost” link from your browser first")
+            }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = 12 })
+
+        root.addView(ScrollView(this).apply { addView(content) },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
 
         status = TextView(this).apply {
-            setTextColor(Color.GREEN); setBackgroundColor(Color.rgb(13, 13, 13)); textSize = 11f
-            setPadding(20, 14, 20, 14); text = "Loading Jagex login…"
+            setTextColor(Color.GREEN); setBackgroundColor(Color.rgb(13, 13, 13)); textSize = 12f
+            setPadding(28, 16, 28, 16); text = "Ready."
         }
         root.addView(status, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
         setContentView(root)
-
-        // Ephemeral session: clear cookies so the IdP doesn't auto-authenticate the last account from a warm
-        // SSO cookie (staying logged in across launches is carried by tokens.json, not web cookies).
-        CookieManager.getInstance().removeAllCookies(null)
-        CookieManager.getInstance().setAcceptCookie(true)
-        web.settings.javaScriptEnabled = true
-        web.settings.domStorageEnabled = true
-        web.settings.userAgentString = JagexLogin.LAUNCHER_UA
-        web.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                val url = request.url
-                // The consent flow redirects to http://localhost/#id_token=…&code=…&state=… — a loopback that
-                // won't load. Catch it BEFORE the doomed navigation and pull the id_token from the fragment.
-                if (url.host == "localhost") {
-                    if (!captured) {
-                        captured = true
-                        handleRedirect(url.encodedFragment ?: url.fragment ?: "")
-                    }
-                    return true   // cancel the localhost load
-                }
-                return false
-            }
-        }
-        web.loadUrl(JagexLogin.consentUrl(nonce, state))
     }
 
-    private fun handleRedirect(fragment: String) {
-        val idToken = JagexLogin.valueFrom(fragment, "id_token")
-        if (idToken.isNullOrEmpty()) {
-            log("✗ no id_token in redirect (frag len=${fragment.length})")
-            captured = false   // allow a retry if the user re-attempts
-            return
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean("launched", launched)
+    }
+
+    /** Open the Stage-A consent flow in a Chrome Custom Tab (real Chrome clears Cloudflare + the human check). */
+    private fun launchConsent() {
+        launched = true
+        lastTried = null
+        log("Opening Jagex login in your browser…")
+        val url = Uri.parse(JagexLogin.consentUrl(nonce, state))
+        try {
+            CustomTabsIntent.Builder()
+                .setShareState(CustomTabsIntent.SHARE_STATE_ON)   // gives a Share ▸ Copy on the localhost page
+                .build()
+                .launchUrl(this, url)
+        } catch (e: Exception) {
+            // No Custom Tabs provider — fall back to whatever handles a web link.
+            try { startActivity(Intent(Intent.ACTION_VIEW, url)) }
+            catch (e2: Exception) { log("✗ no browser available to open the login") }
         }
-        log("✓ authenticated — minting game session…")
-        web.visibility = View.GONE
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Reading the clipboard needs window focus; this fires once we're genuinely foreground after the browser.
+        // (Driven only from here, not onResume too, to avoid a duplicate clipboard read + its system "pasted" toast.)
+        if (hasFocus) maybeAutoImport()
+    }
+
+    /** The smooth path: the moment we're back in focus after the browser, auto-read the redirect link the user
+     *  copied and start the import. Gated on a prior launch + a localhost/id_token shape so we never act on
+     *  unrelated clipboard content. */
+    private fun maybeAutoImport() {
+        if (!launched || importing || done) return
+        val t = clipboardText() ?: return
+        if (t != lastTried && t.contains("id_token=") && t.contains("localhost")) tryImport(t)
+    }
+
+    private fun clipboardText(): String? = try {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()?.trim()
+    } catch (e: Exception) { null }
+
+    /** Pull the id_token from a copied/pasted http://localhost/#… link and start the mint. Returns true if a
+     *  token was found (or one is already being handled), false if the text carried no usable token. */
+    private fun tryImport(text: String): Boolean {
+        if (importing || done) return true
+        if (text.isEmpty()) return false
+        lastTried = text
+        val fragment = if (text.contains('#')) text.substringAfter('#') else text
+        val idToken = JagexLogin.valueFrom(fragment, "id_token")
+        if (idToken.isNullOrEmpty()) return false
+        done = true
+        clearLink()
+        handleRedirect(idToken)
+        return true
+    }
+
+    /** Best-effort: wipe the captured link from the paste field and the system clipboard once we hold the token, so
+     *  the id_token isn't left sitting in clipboard history / a clipboard manager. */
+    private fun clearLink() {
+        try { pasteField.text?.clear() } catch (e: Exception) { /* ignore */ }
+        try { (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).clearPrimaryClip() } catch (e: Exception) { /* ignore */ }
+    }
+
+    private fun handleRedirect(idToken: String) {
+        importing = true
+        log("✓ link captured — minting game session…")
         thread(name = "jagex-login") {
             val sessionId = JagexLogin.mintSession(idToken)
-            if (sessionId == null) { runOnUiThread { log("✗ session mint failed (see logcat)") }; return@thread }
+            if (sessionId == null) {
+                runOnUiThread { importing = false; done = false
+                    log("✗ session mint failed — the link may be expired; reopen the login and copy a fresh one") }
+                return@thread
+            }
             val accounts = JagexLogin.fetchAccounts(sessionId)
             if (accounts == null || accounts.length() == 0) {
-                runOnUiThread { log("✗ no characters returned (see logcat)") }; return@thread
+                runOnUiThread { importing = false; done = false; log("✗ no characters returned (see logcat)") }
+                return@thread
             }
             runOnUiThread { log("✓ ${accounts.length()} character(s) — choose one"); presentPicker(sessionId, accounts) }
         }
     }
 
     private fun presentPicker(sessionId: String, accounts: JSONArray) {
+        // The mint network window is up to ~35s and "Close" stays live the whole time; if the user closed the
+        // screen, don't add a dialog window to a finished Activity (BadTokenException).
+        if (isFinishing || isDestroyed) return
         if (accounts.length() == 1) { finishWith(sessionId, accounts.getJSONObject(0), accounts); return }
         val labels = (0 until accounts.length()).map { JagexLogin.accountLabel(accounts.getJSONObject(it)) }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("Choose character")
             .setItems(labels) { _, which -> finishWith(sessionId, accounts.getJSONObject(which), accounts) }
-            .setNegativeButton("Cancel") { _, _ -> cancelAndExit() }
+            // Dismiss re-arms the screen (don't kill the app); the user can reopen the login and try again.
+            .setNegativeButton("Cancel") { _, _ -> importing = false; done = false; log("Cancelled — tap “Open Jagex login” to try again") }
             .setCancelable(false)
             .show()
     }
@@ -127,7 +214,6 @@ class LoginActivity : AppCompatActivity() {
     private fun finishWith(sessionId: String, chosen: JSONObject, accounts: JSONArray) {
         val name = chosen.optString("displayName", "")
         log("✓ selected ${name.ifEmpty { "(unnamed)" }} — writing tokens + restarting")
-        teardownWeb()
         if (!JagexLogin.writeTokens(this, sessionId, chosen, accounts)) { log("✗ tokens.json write failed"); return }
         restartIntoCleanBoot()
     }
@@ -136,33 +222,21 @@ class LoginActivity : AppCompatActivity() {
      *  newly-written tokens.json (Review-2: login-first or a clean process restart). */
     private fun restartIntoCleanBoot() {
         val intent = packageManager.getLaunchIntentForPackage(packageName)
-        intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-        startActivity(intent)
+        if (intent != null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            startActivity(intent)
+        }
         finishAffinity()
-        Runtime.getRuntime().exit(0)
+        Runtime.getRuntime().exit(0)   // even if the relaunch intent was null, a manual relaunch re-snapshots JX_*
     }
 
     private fun cancelAndExit() {
-        teardownWeb()
         setResult(RESULT_CANCELED)
         finish()
     }
 
-    private fun teardownWeb() {
-        if (!::web.isInitialized) return
-        web.stopLoading()
-        web.webViewClient = WebViewClient()
-        (web.parent as? LinearLayout)?.removeView(web)
-        web.destroy()
-    }
-
     private fun log(line: String) {
         Log.i("JagexLogin", "[login] $line")
-        runOnUiThread { status.text = "${status.text}\n$line" }
-    }
-
-    override fun onDestroy() {
-        teardownWeb()
-        super.onDestroy()
+        runOnUiThread { status.text = line }
     }
 }
