@@ -1786,7 +1786,11 @@ class MainActivity : AppCompatActivity() {
             val dm = app.resources.displayMetrics
             val longEdge = maxOf(dm.widthPixels, dm.heightPixels)
             val shortEdge = maxOf(1, minOf(dm.widthPixels, dm.heightPixels))
-            val renderH = 720
+            // UI-2: match iOS's render height (540). A lower engine canvas blits up to a physically BIGGER HUD
+            // (minimap, orbs, chat, side panel, tab grid all scale together) — the only working way to enlarge the
+            // minimap (the per-widget MINIMAP-scale path overlaps the orbs / blanks terrain). 540 is iOS-proven
+            // safe; below ~480 the minimap column collides with the tab grid.
+            val renderH = 540
             val renderW = (renderH.toLong() * longEdge / shortEdge).toInt()
             opts.add("-Drunelite.headless.resize=${renderW}x${renderH}")
             Log.i(TAG, "A7 resize armed: ${renderW}x${renderH} (screen ${longEdge}x${shortEdge}; resizable iff account in resizable display mode)")
