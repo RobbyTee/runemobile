@@ -5,6 +5,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -243,6 +245,13 @@ private fun FontDropdown(item: ConfigItem, onChange: (String) -> Unit) {
  */
 @Composable
 private fun NumericConfigControl(item: ConfigItem, isInt: Boolean, onChange: (String) -> Unit) {
+    // FIX-12: a bounded int with a sane span renders as a drag slider (parity with iOS MUISliderEditor / CFG-7).
+    // Larger spans (or doubles / unbounded ints) keep the clamped text field below.
+    val lo = item.min; val hi = item.max
+    if (isInt && lo != null && hi != null && hi > lo && (hi - lo) <= 1000) {
+        BoundedIntSlider(item, lo, hi, onChange)
+        return
+    }
     var text by remember(item.key, item.value) { mutableStateOf(item.value ?: "") }
     OutlinedTextField(
         value = text,
@@ -272,6 +281,29 @@ private fun NumericConfigControl(item: ConfigItem, isInt: Boolean, onChange: (St
         label = item.units?.let { u -> { Text(u) } },
         modifier = Modifier.fillMaxWidth(),
     )
+}
+
+/**
+ * FIX-12: a drag slider for a bounded @Range int (parity with iOS). The live value follows the thumb; the write
+ * is committed once on release (no setConfig spam), rounded to an int and clamped to [lo, hi].
+ */
+@Composable
+private fun BoundedIntSlider(item: ConfigItem, lo: Int, hi: Int, onChange: (String) -> Unit) {
+    val cur = (item.value?.trim()?.toIntOrNull() ?: lo).coerceIn(lo, hi)
+    var pos by remember(item.key, item.value) { mutableFloatStateOf(cur.toFloat()) }
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        Text(
+            pos.toInt().toString() + (item.units?.takeIf { it.isNotBlank() }?.let { " $it" } ?: ""),
+            color = Color.White, fontSize = 14.sp,
+        )
+        Slider(
+            value = pos,
+            valueRange = lo.toFloat()..hi.toFloat(),
+            onValueChange = { pos = it },
+            onValueChangeFinished = { onChange(pos.toInt().coerceIn(lo, hi).toString()) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }
 
 /** The writeId from a bridge ack ({"ok":true,"writeId":n}), or -1 if absent/unparseable. */
@@ -395,27 +427,30 @@ private fun NotificationEditorDialog(item: ConfigItem, onDismiss: () -> Unit, on
                         CircularProgressIndicator()
                     }
                 } else {
-                    NotifSwitchRow("Enabled", w.optBoolean("enabled", false)) { set("enabled", it) }
-                    NotifSwitchRow("Game message", w.optBoolean("gameMessage", false)) { set("gameMessage", it) }
-                    NotifPickRow("Sound", notifLabel(NOTIF_SOUNDS, w.optString("sound")), NOTIF_SOUNDS) { set("sound", it) }
-                    NotifPickRow("Flash", notifLabel(NOTIF_FLASHES, w.optString("flash")), NOTIF_FLASHES) { set("flash", it) }
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 8.dp).clickableNoRipple { picking = true },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("Flash color", color = Color.White, modifier = Modifier.weight(1f))
-                        Box(
-                            Modifier.size(28.dp).clip(RoundedCornerShape(5.dp)).checkerboard()
-                                .background(Color(hexToArgb(w.optString("flashColor")))),
+                    // Bounded + scrollable so the fields never push Cancel/Done off a short landscape screen.
+                    Column(Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState())) {
+                        NotifSwitchRow("Enabled", w.optBoolean("enabled", false)) { set("enabled", it) }
+                        NotifSwitchRow("Game message", w.optBoolean("gameMessage", false)) { set("gameMessage", it) }
+                        NotifPickRow("Sound", notifLabel(NOTIF_SOUNDS, w.optString("sound")), NOTIF_SOUNDS) { set("sound", it) }
+                        NotifPickRow("Flash", notifLabel(NOTIF_FLASHES, w.optString("flash")), NOTIF_FLASHES) { set("flash", it) }
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 8.dp).clickableNoRipple { picking = true },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("Flash color", color = Color.White, modifier = Modifier.weight(1f))
+                            Box(
+                                Modifier.size(28.dp).clip(RoundedCornerShape(5.dp)).checkerboard()
+                                    .background(Color(hexToArgb(w.optString("flashColor")))),
+                            )
+                        }
+                        val vol = w.optInt("volume", 100)
+                        Text("Volume: $vol%", color = Color.White, modifier = Modifier.padding(top = 8.dp))
+                        Slider(
+                            value = vol.toFloat(), valueRange = 0f..100f,
+                            onValueChange = { set("volume", it.toInt()) },
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
-                    val vol = w.optInt("volume", 100)
-                    Text("Volume: $vol%", color = Color.White, modifier = Modifier.padding(top = 8.dp))
-                    Slider(
-                        value = vol.toFloat(), valueRange = 0f..100f,
-                        onValueChange = { set("volume", it.toInt()) },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
                 }
                 Spacer(Modifier.size(8.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
