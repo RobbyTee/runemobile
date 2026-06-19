@@ -109,7 +109,7 @@ fun PluginHubScreen(onBack: () -> Unit) {
         statusLine = if (target) "Installing ${p.displayName}…" else "Removing ${p.displayName}…"
         scope.launch {
             withContext(Dispatchers.IO) {
-                JvmLauncher.onBridge {
+                JvmLauncher.onBridgeTouch {
                     if (target) JvmLauncher.hubInstall(p.internalName) else JvmLauncher.hubUninstall(p.internalName)
                 }.get()
             }

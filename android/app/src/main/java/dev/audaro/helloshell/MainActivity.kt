@@ -207,7 +207,7 @@ class MainActivity : AppCompatActivity() {
         chromeOverlay = ChromeOverlayView(this)
         chromeOverlay.onTabTap = { idx ->
             Log.i(TAG, "a6: native tab $idx tap -> openTab")
-            JvmLauncher.onBridge { JvmLauncher.openTab(idx) }   // off the UI thread (daemon-attaches to HotSpot)
+            JvmLauncher.onBridgeTouch { JvmLauncher.openTab(idx) }   // off the UI thread (daemon-attaches to HotSpot)
         }
         // Phase-4 chat channel PILL (replaces the A3 enlarged tab row as the chat control; iOS parity).
         // Quick tap = collapse/expand (shared shove-off-canvas); hold 0.15s = chips fan out; drag + lift =
@@ -217,15 +217,15 @@ class MainActivity : AppCompatActivity() {
         chatTabOverlay.onPillTap = {
             chatCollapsed = !chatCollapsed
             Log.i(TAG, "p4: pill tap -> ${if (chatCollapsed) "collapse" else "expand"}")
-            JvmLauncher.onBridge { JvmLauncher.setChatCollapsed(chatCollapsed) }
+            JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(chatCollapsed) }
         }
         chatTabOverlay.onSwitchChannel = { k ->
             // Switching auto-expands a collapsed chat (mirrors the iOS chatSwitchToChip).
             if (chatCollapsed) {
                 chatCollapsed = false
-                JvmLauncher.onBridge { JvmLauncher.setChatCollapsed(false); JvmLauncher.switchChatTab(k) }
+                JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(false); JvmLauncher.switchChatTab(k) }
             } else {
-                JvmLauncher.onBridge { JvmLauncher.switchChatTab(k) }
+                JvmLauncher.onBridgeTouch { JvmLauncher.switchChatTab(k) }
             }
         }
         chatTabOverlay.onFilterOpen = { _, ecx, ecy, vx, vy ->
@@ -234,7 +234,7 @@ class MainActivity : AppCompatActivity() {
                 // nothing. Expand first; the engine restores the widget next tick, the snapshot follows, and a
                 // later move (finger still below the chip) passes the on-canvas gate below. iOS 69ed4cf9e.
                 chatCollapsed = false
-                JvmLauncher.onBridge { JvmLauncher.setChatCollapsed(false) }
+                JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(false) }
                 Log.i(TAG, "p4: pull-down on collapsed chat -> expand first")
                 false
             } else if (ecx >= 0 && ecy in 0 until JvmLauncher.frameHeight()) {
@@ -813,7 +813,7 @@ class MainActivity : AppCompatActivity() {
                 val wx = mapPanAccumX.toInt(); val wy = mapPanAccumY.toInt()
                 if (wx != 0 || wy != 0) {
                     mapPanAccumX -= wx; mapPanAccumY -= wy
-                    JvmLauncher.onBridge { JvmLauncher.panWorldMap(wx, wy) }
+                    JvmLauncher.onBridgeTouch { JvmLauncher.panWorldMap(wx, wy) }
                 }
                 return true
             }
@@ -827,7 +827,7 @@ class MainActivity : AppCompatActivity() {
                 val whole = chatScrollAccum.toInt()
                 if (whole != 0) {
                     chatScrollAccum -= whole
-                    JvmLauncher.onBridge { JvmLauncher.scrollChat(-whole) }
+                    JvmLauncher.onBridgeTouch { JvmLauncher.scrollChat(-whole) }
                 }
                 return true
             }

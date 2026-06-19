@@ -85,7 +85,7 @@ fun InfoBoxScreen(onBack: () -> Unit) {
                 else -> LazyColumn(Modifier.fillMaxSize()) {
                     items(boxes, key = { it.index.toString() + it.name }) { b ->
                         InfoBoxRowItem(b, onInvoke = { opt ->
-                            JvmLauncher.onBridge { JvmLauncher.infoBoxInvoke(b.index, opt); JvmLauncher.flushConfig() }
+                            JvmLauncher.onBridgeTouch { JvmLauncher.infoBoxInvoke(b.index, opt); JvmLauncher.flushConfig() }
                         })
                         HorizontalDivider(color = Color(0x22FFFFFF))
                     }

@@ -119,7 +119,7 @@ fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit) {
                                     confirmReset = false
                                     // Reset enqueues a client-thread write; wait for it to be processed (poll the
                                     // bridge's writeId) before re-pulling the schema, so the screen shows defaults.
-                                    JvmLauncher.onBridge {
+                                    JvmLauncher.onBridgeTouch {
                                         val ack = JvmLauncher.resetPluginConfig(group)
                                         val wid = parseWriteId(ack)
                                         var tries = 0
@@ -143,7 +143,7 @@ fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit) {
                     items(items, key = { it.key }) { item ->
                         ConfigItemControl(item) { newVal ->
                             items = items.map { if (it.key == item.key) it.copy(value = newVal) else it }
-                            JvmLauncher.onBridge { JvmLauncher.setConfig(group, item.key, newVal) }
+                            JvmLauncher.onBridgeTouch { JvmLauncher.setConfig(group, item.key, newVal) }
                         }
                         HorizontalDivider(color = Color(0x22FFFFFF))
                     }

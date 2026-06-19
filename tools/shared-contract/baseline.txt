@@ -29,6 +29,7 @@ FLAG runelite.hudveneer.test.chatY
 FLAG runelite.hudveneer.test.minimapScalePct
 FLAG runelite.hudveneer.test.rowH
 FLAG runelite.hudveneer.test.transparent
+FLAG runelite.idleKeepalive
 FLAG runelite.menupeek
 FLAG runelite.menupeek.maxEntries
 FLAG runelite.mobilechrome
@@ -101,6 +102,7 @@ METHOD JavaBridge#invokeMenuEntry(int,int)
 METHOD JavaBridge#isEnabled()
 METHOD JavaBridge#isEngineScrollableAt(int,int)
 METHOD JavaBridge#isTextInputOpen()
+METHOD JavaBridge#keepAlive()
 METHOD JavaBridge#noteSceneDraw()
 METHOD JavaBridge#onCameraDrag(int,int)
 METHOD JavaBridge#onClick(int,int,int)

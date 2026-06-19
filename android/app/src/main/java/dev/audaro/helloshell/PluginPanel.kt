@@ -223,7 +223,7 @@ fun PluginPanel(
                         rows = rows, filter = filter, pending = pending, renderer = renderer, listState = listState,
                         onToggleRow = { p, checked ->
                             rows = rows.map { if (it.className == p.className) it.copy(enabled = checked) else it }
-                            JvmLauncher.onBridge { JvmLauncher.setPluginEnabled(p.className, checked) }
+                            JvmLauncher.onBridgeTouch { JvmLauncher.setPluginEnabled(p.className, checked) }
                             if (checked) {
                                 pending = pending + p.className
                                 scope.launch {
@@ -242,7 +242,7 @@ fun PluginPanel(
                             // Persist immediately so a deliberate pin survives even a hard kill. setPinned ENQUEUES a
                             // client-thread write and returns a writeId; flush only AFTER that write is processed (else
                             // sendConfig races ahead and flushes stale state).
-                            JvmLauncher.onBridge {
+                            JvmLauncher.onBridgeTouch {
                                 val ack = JvmLauncher.setPinned(p.name, nowPinned)
                                 val wid = Regex("\"writeId\":(\\d+)").find(ack)?.groupValues?.get(1)?.toLongOrNull()
                                 var i = 0

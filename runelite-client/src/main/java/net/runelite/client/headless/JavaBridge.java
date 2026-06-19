@@ -293,6 +293,18 @@ public final class JavaBridge
 	// the live varc array off-thread (which the engine can reallocate under the reader).
 	private static volatile boolean textInputOpen;
 
+	// Idle-logout keepalive. Native-UI touches (chat-tab/grid op-script replays, config/notes/world/overlay
+	// writes, Swing-panel dispatch, plugin enable/pin/hub) post NO canvas MouseEvent, so the gamepack's
+	// mouse-idle counter climbs to the ~5-min AFK logout while the user is actively using the native UI. A
+	// native touch bumps lastNativeUiActivityMs (lock-free, any thread); the client thread drains it in
+	// tapTickImpl and posts ONE MOUSE_MOVED(-1,-1) — parkPointer's proven "picks nothing" point — which resets
+	// the gamepack mouse-idle WITHOUT moving any real hover or open-menu highlight. Same accumulate-then-drain
+	// shape as the camera pan above. Kill-switch: -Drunelite.idleKeepalive=false.
+	private static final boolean IDLE_KEEPALIVE = Boolean.parseBoolean(System.getProperty("runelite.idleKeepalive", "true"));
+	private static final long IDLE_KEEPALIVE_THROTTLE_MS = 2000L;
+	private static volatile long lastNativeUiActivityMs;   // bumped by keepAlive() from the native-UI thread
+	private static volatile long lastKeepalivePostMs;      // last MOUSE_MOVED(-1,-1) we emitted (client thread)
+
 	private JavaBridge()
 	{
 	}
@@ -572,6 +584,26 @@ public final class JavaBridge
 	}
 
 	/**
+	 * Reset the engine's idle-logout timer from a native-UI touch that posts no canvas {@code MouseEvent}
+	 * (chat-tab/grid op-replay, config/notes/world/overlay writes, Swing-panel dispatch, plugin enable/pin/hub).
+	 * <b>Lock-free</b>: records the touch time only — safe to call from any thread (JNI / native-UI). The client
+	 * thread drains it in {@link #tapTickImpl} and posts ONE {@code MOUSE_MOVED(-1,-1)} (parkPointer's neutral
+	 * "picks nothing" point) iff it's safe, which advances the gamepack's mouse-idle counter — that counter is
+	 * driven by the move <em>event</em>, not by the coordinate landing on anything — without moving any real
+	 * hover or open-menu highlight. No-op when disabled ({@code -Drunelite.idleKeepalive=false}); the LOGGED_IN
+	 * gate lives in the drain. Mirrors {@link #onCameraDrag}'s bump-then-drain split so there is no engine
+	 * access off the client thread.
+	 */
+	public static void keepAlive()
+	{
+		if (!ENABLED || !IDLE_KEEPALIVE)
+		{
+			return;
+		}
+		lastNativeUiActivityMs = System.currentTimeMillis();
+	}
+
+	/**
 	 * A discrete tap at {@code (x,y)} (gamepack-canvas pixels): the full focus-prime + move + press +
 	 * release + click sequence — the proven {@code HeadlessLogin.synthesizeClick} shape. {@code button} is
 	 * 1 (left tap: walk / interact / select a menu entry) or 3 (long-press: open the right-click menu).
@@ -714,6 +746,7 @@ public final class JavaBridge
 	private static void tapTickImpl(Client c)
 	{
 		applyCameraDrag(c);        // drain accumulated two-finger-pan deltas (camera writes are client-thread-only)
+		maybePostIdleKeepalive(c); // drain native-UI activity -> MOUSE_MOVED(-1,-1) if gated + throttled (idle reset)
 		snapshotTextInputOpen(c);  // publish INPUT_TYPE for isTextInputOpen() to read off the client thread
 		snapshotInventoryBounds(c); // DRAG-1: publish the inventory item-grid bounds for the native item-drag branch
 		// Deterministic early registration (boolean-gated, retries until the injector is live): the
@@ -1443,6 +1476,50 @@ public final class JavaBridge
 			p = Math.max(PITCH_MIN, Math.min(PITCH_MAX, p));
 			c.setCameraPitchTarget(p);
 		}
+	}
+
+	/**
+	 * Client-thread drain for {@link #keepAlive()}: if a native-UI touch is pending and it's safe, post ONE
+	 * {@code MOUSE_MOVED(-1,-1)} to the live canvas to reset the engine's idle-logout timer. Gated so it never
+	 * perturbs an open right-click menu, an in-flight tap settle, or a focused text field, and throttled to at
+	 * most one post per {@link #IDLE_KEEPALIVE_THROTTLE_MS} (so continuous native drags / floods collapse to one
+	 * event). Only {@code MOUSE_MOVED} — no {@code MOUSE_EXITED} (would flip {@code entered}), no press/click
+	 * (could walk/interact) — and {@code (-1,-1)} picks nothing, so hover/park/primeFocus bookkeeping is untouched.
+	 */
+	private static void maybePostIdleKeepalive(Client c)
+	{
+		if (!ENABLED || !IDLE_KEEPALIVE)
+		{
+			return;
+		}
+		final long activity = lastNativeUiActivityMs;
+		if (activity <= lastKeepalivePostMs)
+		{
+			return;   // nothing new since our last post (real taps don't bump this, so active play is a no-op)
+		}
+		// Gate — all coherent on the client thread:
+		if (c.getGameState() != GameState.LOGGED_IN   // pre-login / loading: nothing to keep alive
+			|| c.isMenuOpen()                          // never perturb an open right-click menu
+			|| tapState != TapState.IDLE               // never race an in-flight tap settle
+			|| queuedTap
+			|| textInputOpen)                          // never disturb a focused text field
+		{
+			return;   // not safe this tick; the pending timestamp survives for a later tick
+		}
+		final long now = System.currentTimeMillis();
+		if (now - lastKeepalivePostMs < IDLE_KEEPALIVE_THROTTLE_MS)
+		{
+			return;   // throttled; retry next tick
+		}
+		final Canvas canvas = liveCanvas();
+		if (canvas == null)
+		{
+			return;
+		}
+		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, now, 0, -1, -1, 0, false));
+		lastKeepalivePostMs = now;
+		log.debug("[touch] idle keepAlive -> MOUSE_MOVED(-1,-1)");
 	}
 
 	/**

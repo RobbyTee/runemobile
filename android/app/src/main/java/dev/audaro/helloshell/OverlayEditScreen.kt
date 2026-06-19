@@ -97,8 +97,8 @@ fun OverlayEditScreen(onBack: () -> Unit) {
                 else -> LazyColumn(Modifier.fillMaxSize()) {
                     items(overlays, key = { it.name }) { o ->
                         OverlayRowItem(o,
-                            onSnap = { pos -> JvmLauncher.onBridge { JvmLauncher.overlaySnap(o.name, pos); JvmLauncher.flushConfig() } },
-                            onReset = { JvmLauncher.onBridge { JvmLauncher.overlayReset(o.name); JvmLauncher.flushConfig() } })
+                            onSnap = { pos -> JvmLauncher.onBridgeTouch { JvmLauncher.overlaySnap(o.name, pos); JvmLauncher.flushConfig() } },
+                            onReset = { JvmLauncher.onBridgeTouch { JvmLauncher.overlayReset(o.name); JvmLauncher.flushConfig() } })
                         HorizontalDivider(color = Color(0x22FFFFFF))
                     }
                 }

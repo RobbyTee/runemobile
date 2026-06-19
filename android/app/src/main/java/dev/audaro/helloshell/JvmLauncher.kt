@@ -71,6 +71,9 @@ object JvmLauncher {
     /** Make the engine pointer "absent" (call when a camera/pan gesture begins). */
     external fun nativeClearHover()
 
+    /** FIX-3 idle keepalive: bump the engine idle-logout timer on a native-UI touch (queued; UI-thread-safe). */
+    external fun nativeKeepAlive()
+
     // AP-2a sticky-Shift (Finding 12): hold/release a synthetic VK_SHIFT via JavaBridge.setShiftHeld. Queued
     // through the input path so it's ORDERED ahead of the menu-open right-click (engine must read shift held
     // before it builds the menu, or Mark/Configure entries aren't injected). UI-thread-safe (enqueue only).
@@ -263,6 +266,7 @@ object JvmLauncher {
     fun touch(type: Int, x: Int, y: Int, button: Int) = nativeTouch(type, x, y, button)
     fun camera(dx: Int, dy: Int) = nativeCamera(dx, dy)
     fun clearHover() = nativeClearHover()
+    fun keepAlive() = nativeKeepAlive()
     fun setShiftHeld(held: Boolean) = nativeSetShiftHeld(held)
     fun wheel(x: Int, y: Int, rotation: Int) = nativeWheel(x, y, rotation)
     fun clickPrecise(x: Int, y: Int, button: Int) = nativeClickPrecise(x, y, button)
@@ -287,6 +291,15 @@ object JvmLauncher {
 
     /** Run [block] on the rl-bridge thread; returns a Future (do NOT .get() it on the UI thread). */
     fun <T> onBridge(block: () -> T): Future<T> = bridgeExec.submit(block)
+
+    /**
+     * FIX-3: like [onBridge], but ALSO bumps the engine idle-logout timer ([keepAlive]) because this call is a
+     * genuine native-UI *touch* (a write the user initiated), not a passive data refresh. Use this ONLY at real
+     * touch handlers — NOT on the per-second json-refresh polls (those run while a screen is merely open; poking
+     * keepAlive there would suppress real AFK-logout when the user walks away). keepAlive only enqueues (it's
+     * UI-thread-safe and never attaches to HotSpot), so calling it before submitting the work is fine.
+     */
+    fun <T> onBridgeTouch(block: () -> T): Future<T> { nativeKeepAlive(); return bridgeExec.submit(block) }
 
     fun listPlugins() = nativeListPlugins()
     fun mobileUiSeq() = nativeMobileUiSeq()

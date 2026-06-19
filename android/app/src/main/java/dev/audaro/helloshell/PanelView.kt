@@ -118,7 +118,7 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit) {
                                         // fit-width => uniform scale viewW/pw; add the scroll offset for buffer-y.
                                         val bx = (off.x * pw / viewW).toInt()
                                         val by = ((off.y + scroll.value) * pw / viewW).toInt()
-                                        JvmLauncher.onBridge { JvmLauncher.panelClick(bx, by) }
+                                        JvmLauncher.onBridgeTouch { JvmLauncher.panelClick(bx, by) }
                                         // SC-4: after the click settles, ask the bridge whether it focused a text
                                         // field; if so raise the mirror field pre-filled, else drop the keyboard.
                                         scope.launch {
@@ -141,7 +141,7 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit) {
                                     if (pw > 0 && viewW > 0) {
                                         val bx = (off.x * pw / viewW).toInt()
                                         val by = ((off.y + scroll.value) * pw / viewW).toInt()
-                                        JvmLauncher.onBridge { JvmLauncher.panelLongPress(bx, by) }   // SC-4 BUTTON3
+                                        JvmLauncher.onBridgeTouch { JvmLauncher.panelLongPress(bx, by) }   // SC-4 BUTTON3
                                     }
                                 },
                             )
@@ -154,12 +154,12 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit) {
                     LaunchedEffect(Unit) { fr.requestFocus() }   // raise the soft keyboard
                     OutlinedTextField(
                         value = fieldValue,
-                        onValueChange = { v -> fieldValue = v; JvmLauncher.onBridge { JvmLauncher.panelText(v) } },
+                        onValueChange = { v -> fieldValue = v; JvmLauncher.onBridgeTouch { JvmLauncher.panelText(v) } },
                         singleLine = true,
                         label = { Text("Search / type into panel") },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = {
-                            JvmLauncher.onBridge { JvmLauncher.panelKey(10) }   // AWT VK_ENTER -> submit
+                            JvmLauncher.onBridgeTouch { JvmLauncher.panelKey(10) }   // AWT VK_ENTER -> submit
                         }),
                         modifier = Modifier.fillMaxWidth().padding(8.dp).focusRequester(fr),
                     )

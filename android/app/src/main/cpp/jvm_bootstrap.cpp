@@ -61,6 +61,9 @@ static jmethodID g_midTextInputOpen = nullptr, g_midInteractTapSeq = nullptr;
 static jmethodID g_midSelectMenuPoint = nullptr;
 // AP-2a sticky-Shift: JavaBridge.setShiftHeld(boolean) — synthetic held VK_SHIFT (shared, iOS-device-proven).
 static jmethodID g_midSetShiftHeld = nullptr;
+// FIX-3 idle keepalive: JavaBridge.keepAlive() — bump the idle-logout timer on a native-UI touch (optional;
+// best-effort so an older staged jar without the method still boots).
+static jmethodID g_midKeepAlive = nullptr;
 static jclass    g_menuPeekCls = nullptr;
 static jmethodID g_midMenuSnapshot = nullptr, g_midMenuPublishSeq = nullptr;
 
@@ -228,7 +231,10 @@ enum InputKind {
     // AP-2a sticky-Shift: hold/release a synthetic VK_SHIFT (a=1 hold, a=0 release). Queued (not a direct
     // facade call) so it's ORDERED with the menu-open click — the engine must see shift held BEFORE the
     // right-click that builds the menu, or the shift-gated entries (Mark/Configure) won't be injected.
-    IN_SHIFT = 10
+    IN_SHIFT = 10,
+    // FIX-3 idle keepalive: a native-UI touch that posts no canvas event. Queued so the already-attached
+    // render thread makes the JavaBridge.keepAlive() call (the ART UI thread never attaches to HotSpot).
+    IN_KEEPALIVE = 11
 };
 // s carries the IN_TEXT payload; empty for the int-only kinds (aggregate-inits to "").
 struct InputEvent { int kind, a, b, c, d; std::string s; };
@@ -455,8 +461,12 @@ static bool publishBridge(JNIEnv *env) {
     }
     // AP-2a sticky-Shift: best-effort (a missing one only disables the ⇧ button, never the render path).
     g_midSetShiftHeld = midOpt(env, global, "setShiftHeld", "(Z)V");
+    // FIX-3 idle keepalive: best-effort (a missing one only disables the idle-reset, never the render path) so
+    // an older staged jar lacking keepAlive still boots.
+    g_midKeepAlive = midOpt(env, global, "keepAlive", "()V");
     g_bridgeCls = global;   // publish only once fully resolved
-    LOGI("bridge: JavaBridge facade published (shiftHeld=%s)", g_midSetShiftHeld ? "on" : "off");
+    LOGI("bridge: JavaBridge facade published (shiftHeld=%s keepAlive=%s)",
+         g_midSetShiftHeld ? "on" : "off", g_midKeepAlive ? "on" : "off");
 
     // A2: MenuPeekBridge is a SEPARATE facade — resolve best-effort so a missing/old one only disables menu-peek
     // (never blocks the render path). It is inert unless -Drunelite.menupeek=true, but the class is always present.
@@ -780,6 +790,7 @@ static void drainInput(JNIEnv *env) {
             case IN_KEYSTROKE:    env->CallStaticVoidMethod(g_bridgeCls, g_midKeyStroke, ev.a); break;
             case IN_SELECTMENU:   env->CallStaticVoidMethod(g_bridgeCls, g_midSelectMenuPoint, ev.a, ev.b); break;
             case IN_SHIFT:        if (g_midSetShiftHeld) env->CallStaticVoidMethod(g_bridgeCls, g_midSetShiftHeld, (jboolean)(ev.a != 0)); break;
+            case IN_KEEPALIVE:    if (g_midKeepAlive) env->CallStaticVoidMethod(g_bridgeCls, g_midKeepAlive); break;
             case IN_TEXT: {
                 jstring js = env->NewStringUTF(ev.s.c_str());
                 env->CallStaticVoidMethod(g_bridgeCls, g_midText, js);
@@ -1227,7 +1238,9 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeSetSurface(JNIEnv *env, jobject, jo
 // (drag phase 1). Terminal/important events — taps, precise clicks, touch DOWN/UP, wheel, keys, text, menu
 // commits, clear-hover — are NEVER coalesced or dropped (dropping a touch-UP would wedge the engine's drag).
 static bool isCoalescible(const InputEvent &ev) {
-    return ev.kind == IN_CAMERA || ev.kind == IN_MOVE || (ev.kind == IN_TOUCH && ev.a == 1);
+    // IN_KEEPALIVE is idempotent (it only bumps a timestamp on the Java side), so a duplicate is safe to drop
+    // under flood — a continuous native drag routed through the onBridge keepalive wrapper can't fill the queue.
+    return ev.kind == IN_CAMERA || ev.kind == IN_MOVE || ev.kind == IN_KEEPALIVE || (ev.kind == IN_TOUCH && ev.a == 1);
 }
 
 static void enqueue(InputEvent ev) {
@@ -1242,6 +1255,7 @@ static void enqueue(InputEvent ev) {
         if (ev.kind == IN_TOUCH && ev.a == 1 && tail.kind == IN_TOUCH && tail.a == 1 && tail.d == ev.d) {
             tail.b = ev.b; tail.c = ev.c; return;   // latest drag-move position (same button)
         }
+        if (ev.kind == IN_KEEPALIVE && tail.kind == IN_KEEPALIVE) return;   // idempotent: one pending is enough
     }
     if (g_inQueue.size() < 512) { g_inQueue.push_back(ev); return; }
     // 2) Queue at the cap. A coalescible position event can be safely dropped; a terminal event must survive —
@@ -1270,6 +1284,12 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeCamera(JNIEnv *, jobject, jint dx, 
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeClearHover(JNIEnv *, jobject) {
     enqueue({IN_CLEARHOVER, 0, 0, 0, 0});
+}
+// FIX-3 idle keepalive: queue a keepAlive() call (lock-free on the Java side). Enqueued like the others so the
+// already-attached render thread makes the JNI call when it drains — the ART UI thread never attaches to HotSpot.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeKeepAlive(JNIEnv *, jobject) {
+    enqueue({IN_KEEPALIVE, 0, 0, 0, 0});
 }
 // AP-2a sticky-Shift: queue a hold (held=1) / release (held=0) so it's ordered ahead of the menu-open click.
 extern "C" JNIEXPORT void JNICALL

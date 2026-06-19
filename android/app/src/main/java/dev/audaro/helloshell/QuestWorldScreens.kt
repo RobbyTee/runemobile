@@ -98,7 +98,7 @@ fun QuestHelperScreen(onBack: () -> Unit) {
             }
             val act = active
             if (act != null) {
-                ActiveQuestCard(act, onStop = { JvmLauncher.onBridge { JvmLauncher.questStop() } })
+                ActiveQuestCard(act, onStop = { JvmLauncher.onBridgeTouch { JvmLauncher.questStop() } })
                 HorizontalDivider(color = Color(0x22FFFFFF), modifier = Modifier.padding(vertical = 8.dp))
             }
             if (firstLoad) {
@@ -120,7 +120,7 @@ fun QuestHelperScreen(onBack: () -> Unit) {
                     items(shown, key = { it.name }) { q ->
                         Column(
                             Modifier.fillMaxWidth()
-                                .clickable { JvmLauncher.onBridge { JvmLauncher.questStart(q.name) } }
+                                .clickable { JvmLauncher.onBridgeTouch { JvmLauncher.questStart(q.name) } }
                                 .padding(vertical = 8.dp),
                         ) {
                             Text(q.name, color = Color.White)
@@ -192,8 +192,8 @@ fun WorldSwitcherScreen(onBack: () -> Unit) {
                 TextButton(onClick = onBack) { Text("‹ Back") }
                 Text("World Switcher", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
                 // SC-5 quick-hop: previous / next world in the WorldHopper filter (WorldHopperPlugin.hop(boolean)).
-                TextButton(onClick = { JvmLauncher.onBridge { JvmLauncher.worldHopDirection(true) } }) { Text("◀ Prev") }
-                TextButton(onClick = { JvmLauncher.onBridge { JvmLauncher.worldHopDirection(false) } }) { Text("Next ▶") }
+                TextButton(onClick = { JvmLauncher.onBridgeTouch { JvmLauncher.worldHopDirection(true) } }) { Text("◀ Prev") }
+                TextButton(onClick = { JvmLauncher.onBridgeTouch { JvmLauncher.worldHopDirection(false) } }) { Text("Next ▶") }
                 if (current > 0) Text(" W$current", color = Color(0xFFFFD54F), fontSize = 14.sp)
             }
             Row(Modifier.padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -212,8 +212,8 @@ fun WorldSwitcherScreen(onBack: () -> Unit) {
                     items(shown, key = { it.id }) { w ->
                         WorldRowItem(
                             w, w.id == current,
-                            onHop = { JvmLauncher.onBridge { JvmLauncher.worldHop(w.id) } },
-                            onToggleFav = { JvmLauncher.onBridge { JvmLauncher.worldSetFavourite(w.id, !w.favourite) } },
+                            onHop = { JvmLauncher.onBridgeTouch { JvmLauncher.worldHop(w.id) } },
+                            onToggleFav = { JvmLauncher.onBridgeTouch { JvmLauncher.worldSetFavourite(w.id, !w.favourite) } },
                         )
                         HorizontalDivider(color = Color(0x14FFFFFF))
                     }
