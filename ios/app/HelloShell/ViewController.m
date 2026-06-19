@@ -233,6 +233,13 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, assign) BOOL chatScrollable;
 @property (nonatomic, assign) BOOL chatScrolling;       // the current pan gesture is scrolling the chat
 @property (nonatomic, assign) CGFloat chatScrollAccum;  // accumulated drag (pt) toward the next wheel notch
+// SCROLL-SPIKE: a 1-finger drag that BEGINS over an open, scrollable engine interface (bank / GE / quest list /
+// settings / collection log …) scrolls THAT interface — wheel notches the engine routes to the hovered scrollable,
+// exactly like the desktop mouse wheel — instead of rotating the camera. Gated by JavaBridge.isEngineScrollableAt
+// (hit-tested in the engine) so a drag over the bare viewport still rotates (no wheel-to-camera-zoom leak).
+@property (nonatomic, assign) BOOL ifaceScrolling;      // the current pan gesture scrolls an engine interface
+@property (nonatomic, assign) CGPoint ifaceWheelPt;     // canvas px the wheel is parked over (the interface)
+@property (nonatomic, assign) CGFloat ifaceScrollAcc;   // accumulated drag (pt) toward the next wheel notch
 // World map (touch — WORLDMAP-MOBILE-PLAN.md Phase 1): while the fullscreen engine world map is open, a
 // 1-finger drag pans the MAP (bridge panWorldMap, "grab the map"), taps are precise UI clicks with no
 // walk-ring semantics, a tap in the search rect raises the keyboard (the map search doesn't flip INPUT_TYPE),
@@ -4499,6 +4506,19 @@ static CGRect mapRectFromArr(NSArray *a) {
             }
         }
         self.itemDragging = NO;
+        // SCROLL-SPIKE: a drag that STARTS over an open, scrollable engine interface scrolls THAT interface (wheel
+        // notches the engine routes to the hovered scrollable) instead of rotating the camera. Hit-tested in the
+        // engine, so only a genuinely-scrollable spot diverts the drag — over the bare viewport it stays a rotate.
+        int isx = 0, isy = 0;
+        if ([self mapPoint:[g locationInView:self.screen] toGameX:&isx toGameY:&isy]
+                && [JVMLauncher engineScrollableAtX:isx y:isy]) {
+            self.ifaceScrolling = YES;
+            self.ifaceWheelPt = CGPointMake(isx, isy);
+            self.ifaceScrollAcc = 0;
+            [self appendLine:[NSString stringWithFormat:@"[shell] iface scroll begin @canvas %d,%d", isx, isy]];
+            return;
+        }
+        self.ifaceScrolling = NO;
         // A camera drag moves the world, not the pointer — so clear any frozen hover first, otherwise
         // scenery rotating under the stale cursor lights up and the next walk-tap mis-clicks it.
         [JVMLauncher postClearHover];
@@ -4525,6 +4545,11 @@ static CGRect mapRectFromArr(NSArray *a) {
         if (self.chatScrolling) {
             self.chatScrolling = NO;
             [JVMLauncher postClearHover];   // drop the cursor the wheel parked over the chat
+            return;
+        }
+        if (self.ifaceScrolling) {
+            self.ifaceScrolling = NO;
+            [JVMLauncher postClearHover];   // drop the cursor the wheel parked over the interface
             return;
         }
         [self appendLine:@"[shell] camera pan end"];
@@ -4579,6 +4604,19 @@ static CGRect mapRectFromArr(NSArray *a) {
     }
     if (self.chatScrolling) {
         [self scrollChatByDragDeltaY:d.y];
+        return;
+    }
+    if (self.ifaceScrolling) {
+        // SCROLL-SPIKE: wheel notches parked over the interface; the engine scrolls the hovered scrollable
+        // (and redraws its scrollbar). Content follows the finger (swipe up -> wheel down), matching the
+        // map-list feel; the same 22pt/notch cadence.
+        const CGFloat kIfaceScrollPtPerNotch = 22.0;
+        self.ifaceScrollAcc += -d.y / kIfaceScrollPtPerNotch;
+        int notches = (int)(self.ifaceScrollAcc > 0 ? floor(self.ifaceScrollAcc) : ceil(self.ifaceScrollAcc));
+        if (notches != 0) {
+            self.ifaceScrollAcc -= notches;
+            [JVMLauncher postWheelX:(int)self.ifaceWheelPt.x y:(int)self.ifaceWheelPt.y rotation:notches];
+        }
         return;
     }
     // Inverted both axes (user preference): swipe direction now drags the world the opposite way (like

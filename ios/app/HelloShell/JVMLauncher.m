@@ -50,6 +50,7 @@ static jmethodID gMidMenuSuppress = NULL; // setMenuRenderSuppressed(Z)V — eng
 static jmethodID gMidInvokeMenu = NULL;  // invokeMenuEntry(II)V — commit a drilled-in submenu child (MENU-1, optional)
 static jmethodID gMidKeybind = NULL;     // onKeybind(II)V — fire a plugin action-hotkey chord (KEY-1, optional)
 static jmethodID gMidInvBounds = NULL;   // getInventoryBounds()[I — inventory grid bounds for item-drag (DRAG-1, optional)
+static jmethodID gMidEngineScroll = NULL; // isEngineScrollableAt(II)Z — SCROLL-SPIKE pan-begin gate (optional)
 
 // W3 hybrid-chrome read surface — a SEPARATE facade (MobileChromeBridge) resolved lazily on the main thread.
 static jclass    gChromeClass = NULL;   // global ref to net.runelite.client.headless.MobileChromeBridge
@@ -231,6 +232,8 @@ static BOOL ensureBridge(void) {
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidKeybind = NULL; }
     gMidInvBounds = (*env)->GetStaticMethodID(env, global, "getInventoryBounds", "()[I");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidInvBounds = NULL; }
+    gMidEngineScroll = (*env)->GetStaticMethodID(env, global, "isEngineScrollableAt", "(II)Z");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidEngineScroll = NULL; }
     gBridgeClass = global;   // publish only once fully resolved
     return YES;
 }
@@ -1444,6 +1447,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     }
     (*env)->DeleteLocalRef(env, arr);
     return r;
+}
+
++ (BOOL)engineScrollableAtX:(int)x y:(int)y {
+    if (!ensureBridge() || !gMidEngineScroll) return NO;
+    JNIEnv *env = gMainEnv;
+    jboolean r = (*env)->CallStaticBooleanMethod(env, gBridgeClass, gMidEngineScroll, (jint)x, (jint)y);
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.engineScrollableAt"); return NO; }
+    return r ? YES : NO;
 }
 
 + (void)postClickX:(int)x y:(int)y button:(int)button {

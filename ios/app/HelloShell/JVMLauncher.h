@@ -99,6 +99,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// visible. The shell uses it to divert a drag that starts over the inventory into an item rearrange. Main thread.
 + (CGRect)inventoryCanvasBounds;
 
+/// SCROLL-SPIKE: YES if a scrollable engine interface (bank / GE / quest list / settings / collection log …) is
+/// under the canvas point (x,y). The shell calls this at pan-begin to divert a one-finger drag into an interface
+/// scroll (wheel notches) instead of a camera rotate. NO when the jar predates it. Main thread.
++ (BOOL)engineScrollableAtX:(int)x y:(int)y;
+
 /// Post a discrete TAP into the gamepack via JavaBridge.onClick (the full press+release+click at one
 /// point). `x`,`y` are gamepack-canvas (765x503) pixels; `button` is 1 (left tap / menu-entry select) or
 /// 3 (long-press: open the right-click menu). Call on the main thread.

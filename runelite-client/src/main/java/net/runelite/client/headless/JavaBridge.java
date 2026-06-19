@@ -1553,6 +1553,84 @@ public final class JavaBridge
 	}
 
 	/**
+	 * SCROLL-SPIKE: true if a scrollable engine interface widget is under the canvas point (x,y) — a visible widget
+	 * whose scroll layer overflows ({@code getScrollHeight() > getHeight()}) and whose bounds contain the point.
+	 * The native shell calls this at pan-begin to decide whether a one-finger drag should scroll an open interface
+	 * (bank / GE / quest list / settings / collection log …) — emitted as wheel notches the engine routes to the
+	 * hovered scrollable, exactly like the desktop mouse wheel — instead of rotating the camera. Returning false
+	 * leaves the drag a camera pan, so a drag over the bare viewport never scroll-leaks into a zoom.
+	 *
+	 * <p>THREADING (spike caveat): this walks the live widget tree off the client thread (called straight from the
+	 * JNI pan-begin), so a concurrent client-thread relayout can give a torn bounds read. It is a gating decision
+	 * only (worst case: one mis-gated drag), is fully {@code try/catch(Throwable)}-guarded, fails safe to
+	 * {@code false}, and the node budget caps the walk so a huge open interface can't stutter pan-begin. The
+	 * production path would snapshot the scrollable rects on the client thread each frame (cf.
+	 * {@link #snapshotInventoryBounds}) and hit-test them lock-free here.
+	 */
+	public static boolean isEngineScrollableAt(int x, int y)
+	{
+		final Client c = client;
+		if (c == null)
+		{
+			return false;
+		}
+		try
+		{
+			final Widget[] roots = c.getWidgetRoots();
+			if (roots != null)
+			{
+				final int[] budget = {6000};   // node cap for the off-thread walk
+				for (final Widget root : roots)
+				{
+					if (scrollableUnder(root, x, y, 0, budget))
+					{
+						return true;
+					}
+				}
+			}
+		}
+		catch (Throwable t)
+		{
+			BridgeFaults.note("JavaBridge.isEngineScrollableAt", t);
+		}
+		return false;
+	}
+
+	// SCROLL-SPIKE: bounded recursive search for a visible, overflowing scroll layer containing (x,y). Children can
+	// render outside a parent's own bounds, so the walk doesn't prune on parent bounds — the node budget + depth cap
+	// bound the cost instead.
+	private static boolean scrollableUnder(Widget w, int x, int y, int depth, int[] budget)
+	{
+		if (w == null || depth > 24 || budget[0]-- <= 0 || w.isHidden())
+		{
+			return false;
+		}
+		final Rectangle b = w.getBounds();
+		if (b != null && b.contains(x, y) && w.getHeight() > 0 && w.getScrollHeight() > w.getHeight())
+		{
+			return true;
+		}
+		return scrollableChild(w.getStaticChildren(), x, y, depth, budget)
+			|| scrollableChild(w.getDynamicChildren(), x, y, depth, budget)
+			|| scrollableChild(w.getNestedChildren(), x, y, depth, budget);
+	}
+
+	private static boolean scrollableChild(Widget[] kids, int x, int y, int depth, int[] budget)
+	{
+		if (kids != null)
+		{
+			for (final Widget k : kids)
+			{
+				if (scrollableUnder(k, x, y, depth + 1, budget))
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Press + release one non-text key by its AWT virtual-keycode ({@code KeyEvent.VK_*}) — backspace,
 	 * enter, escape, tab, arrows, etc. Backspace/enter/tab also emit the matching {@code KEY_TYPED} control
 	 * char (a gamepack text field deletes/submits on those). Posted from the hidden field's delete/return
