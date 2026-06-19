@@ -137,6 +137,8 @@ class MainActivity : AppCompatActivity() {
 
     // A3 enlarged native chat-tab veneer (bigger touch targets over the relocated engine chat row).
     private lateinit var chatTabOverlay: ChatPillView
+    // UI-4: opaque NPC-dialogue parchment over the (transparent) engine dialogue.
+    private lateinit var dialogueOverlay: DialogueView
     // Phase-4: native-tracked chat collapse state (the shared side shoves the live widget off-canvas; this
     // mirrors what we last asked for — the engine never collapses on its own).
     private var chatCollapsed = false
@@ -265,6 +267,14 @@ class MainActivity : AppCompatActivity() {
             else if (menuOverlay.isActive) commitMenuSelection()
         }
         chatTabOverlay.onHaptic = { vibrateTick() }
+        // UI-4: the opaque dialogue parchment. A continue tap precisely clicks the engine CONTINUE widget (robust
+        // vs the space-to-continue setting); an option row posts its digit.
+        dialogueOverlay = DialogueView(this)
+        dialogueOverlay.onContinue = { cx, cy ->
+            if (cx >= 0 && cy >= 0) JvmLauncher.onBridgeTouch { JvmLauncher.clickPrecise(cx, cy, 1) }
+            else JvmLauncher.onBridgeTouch { JvmLauncher.text(" ") }
+        }
+        dialogueOverlay.onOption = { digit -> JvmLauncher.onBridgeTouch { JvmLauncher.text(digit.toString()) } }
         // A4 plugin UI: a full-screen Compose panel (GONE until opened) + a small launcher button. The panel
         // is a data screen (Compose); the live game overlays above stay classic Views (hybrid, §4.2).
         // §4 increment 3: the launcher is a transparent-host PEEK/EXPAND sheet. Material Buttons (the handle +
@@ -390,6 +400,7 @@ class MainActivity : AppCompatActivity() {
             addView(tapRing, FrameLayout.LayoutParams(mp, mp))        // tap-feedback ring (over the frame, no touch)
             addView(chromeOverlay, FrameLayout.LayoutParams(mp, mp))  // native 2-col tab grid (stones hidden)
             addView(chatTabOverlay, FrameLayout.LayoutParams(mp, mp)) // enlarged native chat-tab row (top-left)
+            addView(dialogueOverlay, FrameLayout.LayoutParams(mp, mp)) // UI-4: opaque NPC-dialogue parchment (above chat, below menus)
             addView(keyboardView, FrameLayout.LayoutParams(1, 1))
             addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame + chrome
             // §4: the launcher handle sits above the game/chrome (tappable) but below the launcher sheet
@@ -1216,7 +1227,10 @@ class MainActivity : AppCompatActivity() {
         val vw = surfaceView.width; val vh = surfaceView.height
         val sx = if (fw > 0 && vw > 0) vw.toFloat() / fw else 1f
         val sy = if (fh > 0 && vh > 0) vh.toFloat() / fh else 1f
-        val n = chatTabOverlay.update(if (on) JvmLauncher.chatSnapshotPub() else "", sx, sy, on)
+        val chatSnap = if (on) JvmLauncher.chatSnapshotPub() else ""
+        val n = chatTabOverlay.update(chatSnap, sx, sy, on)
+        // UI-4: drive the opaque NPC-dialogue parchment from the same snapshot + the dialogue JSON.
+        dialogueOverlay.update(chatSnap, if (on) JvmLauncher.dialogueJsonPub() else "{}", sx, sy, on)
         if (on && n > 0 && !chatTabsLogged) {
             chatTabsLogged = true
             Log.i(TAG, "ANDROID_A3_CHATTABS_GREEN enlarged native chat-tab row drawn ($n tabs) sx=$sx sy=$sy")

@@ -224,6 +224,11 @@ static std::string           g_chromeSnapshotPub = "{\"enabled\":false}";
 // for the UI thread's enlarged native chat-tab overlay to read lock-free without attaching to HotSpot.
 static std::mutex            g_chatLock;
 static std::string           g_chatSnapshotPub = "{\"loggedIn\":false}";
+// UI-4 NPC dialogue: getDialogueJson (optional, like getMapSnapshot) — the engine dialogue is forced transparent
+// while the chat is relocated, so the native shell draws an opaque parchment over it from this snapshot.
+static jmethodID             g_midDialogueJson = nullptr;
+static std::mutex            g_dlgLock;
+static std::string           g_dialogueJsonPub = "{}";
 
 // ---- Input queue (UI thread enqueues; render thread drains and dispatches into the bridge) -----------
 enum InputKind {
@@ -737,6 +742,7 @@ static bool publishBridge(JNIEnv *env) {
             g_midPanWorldMap       = midOpt(env, hvg, "panWorldMap", "(II)V");
             g_midMapSnapshot       = midOpt(env, hvg, "getMapSnapshot", "()Ljava/lang/String;");
             g_midOpenWorldMap      = midOpt(env, hvg, "openWorldMap", "()V");   // FIX-5 (optional; older jar omits it)
+            g_midDialogueJson      = midOpt(env, hvg, "getDialogueJson", "()Ljava/lang/String;");   // UI-4 (optional)
             bool hudOk = g_midSetStonesHidden && g_midOpenTab && g_midRelocateSidePanel && g_midRelocateChat
                       && g_midRelocateMinimap && g_midChatSnapshot && g_midSetChatRowH && g_midSetChatAreaW
                       && g_midScrollChat;
@@ -889,6 +895,24 @@ static void *renderLoop(void *) {
                     if (c) {
                         std::lock_guard<std::mutex> lk(g_chatLock);
                         g_chatSnapshotPub.assign(c);
+                        env->ReleaseStringUTFChars(js, c);
+                    } else if (env->ExceptionCheck()) {
+                        env->ExceptionClear();
+                    }
+                    env->DeleteLocalRef(js);
+                }
+            }
+
+            // UI-4: republish the NPC-dialogue snapshot each frame so the native opaque parchment can read it
+            // lock-free. Optional method — older jars just leave the default "{}" (no parchment drawn).
+            if (g_hudReady.load(std::memory_order_acquire) && g_hudCls && g_midDialogueJson) {
+                jstring js = (jstring) env->CallStaticObjectMethod(g_hudCls, g_midDialogueJson);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); }
+                else if (js) {
+                    const char *c = env->GetStringUTFChars(js, nullptr);
+                    if (c) {
+                        std::lock_guard<std::mutex> lk(g_dlgLock);
+                        g_dialogueJsonPub.assign(c);
                         env->ReleaseStringUTFChars(js, c);
                     } else if (env->ExceptionCheck()) {
                         env->ExceptionClear();
@@ -2071,6 +2095,13 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeChatSnapshotPub(JNIEnv *env, jobject) {
     std::lock_guard<std::mutex> lk(g_chatLock);
     return env->NewStringUTF(g_chatSnapshotPub.c_str());
+}
+// UI-4: the render-thread-published HudVeneerBridge.getDialogueJson (UI reads lock-free, no attach) — the native
+// opaque NPC-dialogue parchment that covers the engine's now-transparent dialogue.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeDialogueJson(JNIEnv *env, jobject) {
+    std::lock_guard<std::mutex> lk(g_dlgLock);
+    return env->NewStringUTF(g_dialogueJsonPub.c_str());
 }
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeSetChatTabRowHeight(JNIEnv *, jobject, jint canvasPx) {
