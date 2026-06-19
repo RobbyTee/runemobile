@@ -831,8 +831,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 return true
             }
-            // Android distanceX/Y = old - new; negate so dragging moves the world the natural way.
-            JvmLauncher.camera(-scaleX(distanceX).toInt(), -scaleY(distanceY).toInt())
+            // GestureDetector.onScroll distanceX/Y = old - new, which already equals what iOS sends the bridge
+            // (postCameraDx passes -translation, i.e. old - new). Pass it through un-negated so the camera
+            // yaws/pitches the same direction as iOS (grab-the-scene feel); negating double-inverts -> reversed.
+            JvmLauncher.camera(scaleX(distanceX).toInt(), scaleY(distanceY).toInt())
             return true
         }
     }
