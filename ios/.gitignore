@@ -1,5 +1,8 @@
-# Secrets — never commit
-tokens.json
+# Secrets — never commit (covers tokens.json + .bak/.tutorial/.* backups)
+tokens.json*
+
+# Device-capture evidence (capture logs / frames may hold PII or live session data — never commit)
+app/evidence/
 
 # JVM benchmark build output
 dev-tools/jvmbench/out/

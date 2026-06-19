@@ -264,7 +264,7 @@ Built the minimal Hello shell (`ios/app/`, xcodegen; commits f9fcbfd5c + ___clea
 fix 1274d5678) and ran it on the iPhone 17 Pro Max (iOS 26.5, TXM) with StikDebug attached (`CS_DEBUGGED` set)
 AND an iOS-26 JIT script assigned to our app. Results from `Documents/hello-shell.log`:
 - **Claim A — re-sign avoids the dyld bypass: SUPPORTED (proven on device).** With the build-phase re-sign of
-  every Mach-O in the embedded `jre/` (`scripts/resign-jre.sh`, signed *Apple Development: jordansimps@me.com*,
+  every Mach-O in the embedded `jre/` (`scripts/resign-jre.sh`, signed with this Mac's *Apple Development* cert,
   team 5NZ6CPA994), a **plain `dlopen(libjli.dylib)` succeeded and `JLI_Launch` resolved** — no
   `dyld_bypass_validation` needed. iOS library validation accepts the re-signed JRE dylibs. (Device build also
   carries `get-task-allow=true` + `increased-memory-limit=true`, confirming Claim D.)
