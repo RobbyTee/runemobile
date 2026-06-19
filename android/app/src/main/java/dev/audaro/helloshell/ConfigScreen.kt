@@ -27,6 +27,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -180,11 +181,11 @@ private fun ConfigItemControl(item: ConfigItem, onChange: (String) -> Unit) {
                     EnumDropdown(item.choices, item.value, onChange)
                 item.type == "font" && item.choices != null ->
                     FontDropdown(item, onChange)
-                // A notification config item: a plain enable toggle writes the engine's "true"/"false" sentinel
-                // (NotificationSerializer.deserialize accepts it). An enabled-but-uninitialized notification
-                // inherits the global RuneLite defaults on first fire — exactly desktop's uncustomized behavior.
+                // A notification config item: the inline switch flips ONLY the "enabled" field (preserving any
+                // customized sound/flash/colour/volume), mirroring iOS onNotificationSwitch. "Customize…" below
+                // opens the full sub-editor (FIX-7).
                 item.type == "notification" ->
-                    Switch(checked = isNotifEnabled(item.value), onCheckedChange = { onChange(if (it) "true" else "false") })
+                    Switch(checked = isNotifEnabled(item.value), onCheckedChange = { onChange(notifWithEnabled(item.value, it)) })
                 else -> {}   // text-ish controls render full-width below
             }
         }
@@ -199,10 +200,7 @@ private fun ConfigItemControl(item: ConfigItem, onChange: (String) -> Unit) {
             "color" -> ColorConfigControl(item, onChange)
             "dimension" -> DimensionConfigControl(item, onChange)
             "set" -> SetConfigControl(item, onChange)
-            "notification" -> Text(
-                "Uses the global notification defaults (sound / flash / colour). Edit those in RuneLite settings.",
-                color = Color.Gray, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
-            )
+            "notification" -> NotificationCustomizeControl(item, onChange)
             // AP-0: keybind items previously rendered as a blank row (no control, not even the value). There is
             // no hardware-key capture on a touch app, so show the current binding read-only instead of nothing.
             "keybind" -> Text(
@@ -289,6 +287,183 @@ private fun isNotifEnabled(v: String?): Boolean {
     if (t == "true") return true
     if (t.isEmpty() || t == "false") return false
     return try { JSONObject(t).optBoolean("enabled", false) } catch (e: Throwable) { false }
+}
+
+// ---- FIX-7: per-notification sub-editor (parity with iOS MUINotificationEditor / NOTIF-2) -----------------
+//
+// A Notification config value serializes to a JSON object {enabled, gameMessage, sound, flash, flashColor,
+// volume, override, initialized, …}. The inline switch flips only "enabled"; "Customize…" opens the full editor
+// which seeds an uninitialized notification from notificationDefaults() (so override=true never leaves a field
+// unset), edits the mobile-relevant subset, and writes the whole object back via setConfig. flashColor is the
+// gson ColorTypeAdapter "#AARRGGBB" hex (distinct from a top-level `color` item's signed decimal).
+
+// (label, stored-enum) pairs, in display order — must match NotificationSound / FlashNotification enum names.
+private val NOTIF_SOUNDS = listOf("Native" to "NATIVE", "Custom" to "CUSTOM", "Off" to "OFF")
+private val NOTIF_FLASHES = listOf(
+    "Off" to "DISABLED", "Flash for 2 seconds" to "FLASH_TWO_SECONDS", "Solid for 2 seconds" to "SOLID_TWO_SECONDS",
+    "Flash until cancelled" to "FLASH_UNTIL_CANCELLED", "Solid until cancelled" to "SOLID_UNTIL_CANCELLED",
+)
+
+/** Parse a notification config value into a mutable JSONObject (empty for the "true"/"false"/blank sentinels). */
+private fun parseNotifObj(v: String?): JSONObject {
+    val t = v?.trim().orEmpty()
+    if (!t.startsWith("{")) return JSONObject()
+    return try { JSONObject(t) } catch (e: Throwable) { JSONObject() }
+}
+
+/** Flip ONLY the "enabled" field of a notification value, preserving every other (customized) field. */
+private fun notifWithEnabled(v: String?, enabled: Boolean): String =
+    parseNotifObj(v).put("enabled", enabled).toString()
+
+/** Display label for the current stored enum value, falling back to the first option's label. */
+private fun notifLabel(options: List<Pair<String, String>>, value: String?): String =
+    options.firstOrNull { it.second == value }?.first ?: options.first().first
+
+/** "#AARRGGBB" gson hex → packed ARGB int (RGB-without-alpha → opaque); white on garbage. */
+private fun hexToArgb(s: String?): Int {
+    val h = s?.trim()?.removePrefix("#").orEmpty()
+    val v = h.toLongOrNull(16) ?: return 0xFFFFFFFF.toInt()
+    return if (h.length <= 6) (v.toInt() or 0xFF000000.toInt()) else v.toInt()
+}
+
+/** Packed ARGB int → "#AARRGGBB" gson hex (the form NotificationSerializer's Color adapter stores). */
+private fun argbToHex(argb: Int): String = "#%08X".format(argb)
+
+/**
+ * FIX-7: the row affordance for a notification config item — a one-line summary of the customised fields plus a
+ * "Customize…" button that opens the full sub-editor.
+ */
+@Composable
+private fun NotificationCustomizeControl(item: ConfigItem, onChange: (String) -> Unit) {
+    var editing by remember { mutableStateOf(false) }
+    val n = remember(item.value) { parseNotifObj(item.value) }
+    val summary = if (n.optBoolean("initialized", false))
+        "Sound: ${notifLabel(NOTIF_SOUNDS, n.optString("sound"))} · Flash: ${notifLabel(NOTIF_FLASHES, n.optString("flash"))}"
+    else
+        "Uses the global notification defaults."
+    Row(
+        Modifier.fillMaxWidth().padding(top = 2.dp).clip(RoundedCornerShape(6.dp)).clickableNoRipple { editing = true },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(summary, color = Color.Gray, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        TextButton(onClick = { editing = true }) { Text("Customize…") }
+    }
+    if (editing) {
+        NotificationEditorDialog(
+            item = item,
+            onDismiss = { editing = false },
+            onDone = { json -> editing = false; onChange(json) },
+        )
+    }
+}
+
+/**
+ * FIX-7: the full notification sub-editor dialog. Seeds an uninitialized notification from notificationDefaults()
+ * (fetched on the bridge thread, preserving the current on/off), edits the mobile-relevant fields, and on Done
+ * writes the whole Notification JSON back with override+initialized forced true so the engine honours it.
+ */
+@Composable
+private fun NotificationEditorDialog(item: ConfigItem, onDismiss: () -> Unit, onDone: (String) -> Unit) {
+    // null = still seeding (we may need to fetch defaults off the UI thread). Mutating a field copies the object
+    // so the reassignment recomposes.
+    var working by remember { mutableStateOf<JSONObject?>(null) }
+    var picking by remember { mutableStateOf(false) }
+
+    LaunchedEffect(item.key) {
+        val n = parseNotifObj(item.value)
+        working = if (n.optBoolean("initialized", false)) {
+            n
+        } else {
+            val defJson = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.notificationDefaults() }.get() }
+            val d = parseNotifObj(defJson)
+            if (d.length() == 0) n else d.put("enabled", n.optBoolean("enabled", true))   // keep current on/off
+        }
+    }
+
+    fun set(key: String, value: Any) {
+        working = JSONObject(working!!.toString()).put(key, value)
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(color = Color(0xFF1B1B1B), shape = RoundedCornerShape(14.dp)) {
+            Column(Modifier.padding(18.dp).fillMaxWidth()) {
+                Text(item.name.ifEmpty { item.key }, color = Color.White, fontSize = 16.sp)
+                Spacer(Modifier.size(10.dp))
+                val w = working
+                if (w == null) {
+                    Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                } else {
+                    NotifSwitchRow("Enabled", w.optBoolean("enabled", false)) { set("enabled", it) }
+                    NotifSwitchRow("Game message", w.optBoolean("gameMessage", false)) { set("gameMessage", it) }
+                    NotifPickRow("Sound", notifLabel(NOTIF_SOUNDS, w.optString("sound")), NOTIF_SOUNDS) { set("sound", it) }
+                    NotifPickRow("Flash", notifLabel(NOTIF_FLASHES, w.optString("flash")), NOTIF_FLASHES) { set("flash", it) }
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 8.dp).clickableNoRipple { picking = true },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Flash color", color = Color.White, modifier = Modifier.weight(1f))
+                        Box(
+                            Modifier.size(28.dp).clip(RoundedCornerShape(5.dp)).checkerboard()
+                                .background(Color(hexToArgb(w.optString("flashColor")))),
+                        )
+                    }
+                    val vol = w.optInt("volume", 100)
+                    Text("Volume: $vol%", color = Color.White, modifier = Modifier.padding(top = 8.dp))
+                    Slider(
+                        value = vol.toFloat(), valueRange = 0f..100f,
+                        onValueChange = { set("volume", it.toInt()) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Spacer(Modifier.size(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                    TextButton(
+                        enabled = working != null,
+                        onClick = {
+                            val out = JSONObject(working!!.toString()).put("override", true).put("initialized", true)
+                            onDone(out.toString())
+                        },
+                    ) { Text("Done") }
+                }
+            }
+        }
+    }
+
+    if (picking && working != null) {
+        ColorPickerDialog(
+            initialArgb = hexToArgb(working!!.optString("flashColor")),
+            showAlpha = true,
+            onDismiss = { picking = false },
+            onPick = { argb -> picking = false; set("flashColor", argbToHex(argb)) },
+        )
+    }
+}
+
+@Composable
+private fun NotifSwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Color.White, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+@Composable
+private fun NotifPickRow(label: String, current: String, options: List<Pair<String, String>>, onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Color.White, modifier = Modifier.weight(1f))
+        Box {
+            TextButton(onClick = { expanded = true }) { Text(current, color = Color(0xFFB0B0B0)) }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                options.forEach { (l, v) ->
+                    DropdownMenuItem(text = { Text(l) }, onClick = { expanded = false; onSelect(v) })
+                }
+            }
+        }
+    }
 }
 
 @Composable
