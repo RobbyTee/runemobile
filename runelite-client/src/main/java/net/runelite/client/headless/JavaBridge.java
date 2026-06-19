@@ -1604,7 +1604,13 @@ public final class JavaBridge
 			if (w != null && !w.isHidden())
 			{
 				final Rectangle b = w.getBounds();
-				if (b != null && b.width > 0 && b.height > 0)
+				// Only publish an ON-SCREEN rect. The shared item-grid widget (group 149) is universal across
+				// layouts, but a side-panel slot that isn't the shown tab can report !isHidden() with the grid
+				// PARKED off-canvas at negative coords (observed during a background/foreground layout transition
+				// where the live top level is ToplevelDisplay 165 rather than the relocated PreEoc 164). Publishing
+				// that would make the native drag hit-test claim the top-left corner; require x/y >= 0 so only the
+				// real, relocated, on-screen inventory becomes a drag target.
+				if (b != null && b.width > 0 && b.height > 0 && b.x >= 0 && b.y >= 0)
 				{
 					invX = b.x;
 					invY = b.y;

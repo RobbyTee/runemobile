@@ -93,6 +93,13 @@ class MainActivity : AppCompatActivity() {
     private var mapZoomOutCanvas: IntArray? = null
     private var mapPanning = false
     private var mapPanAccumX = 0f; private var mapPanAccumY = 0f
+    // FIX-4 inventory item-drag: a one-finger drag that STARTS inside the inventory grid drags the item (touch
+    // PRESS->DRAGGED->RELEASE) instead of rotating the camera. invRectCanvas = the live inventory bounds (canvas
+    // px) from the chrome snapshot; itemDragLast = the last valid drag point, so a release in the letterbox still
+    // closes the engine WidgetDrag (no stuck held item).
+    private var invRectCanvas: IntArray? = null
+    private var itemDragging = false
+    private var itemDragLastX = 0; private var itemDragLastY = 0
     private var mapSearchKeyboard = false           // transient ⌨-like latch while the map search is in use
     private var lastMapSnapshot = ""
 
@@ -458,6 +465,16 @@ class MainActivity : AppCompatActivity() {
                 JvmLauncher.move(toGameX(event.x), toGameY(event.y))
             }
             if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                if (itemDragging) {
+                    // FIX-4: ALWAYS release so the engine WidgetDrag closes — on a clean UP drop on the lift point
+                    // (the destination slot); on a cancel fall back to the last valid drag point.
+                    val up = event.actionMasked == MotionEvent.ACTION_UP
+                    val fx = if (up) toGameX(event.x) else itemDragLastX
+                    val fy = if (up) toGameY(event.y) else itemDragLastY
+                    JvmLauncher.touch(2, fx, fy, 1)   // MOUSE_RELEASED on the destination slot
+                    itemDragging = false
+                    Log.i(TAG, "drag-1: item drag end game=($fx,$fy)")
+                }
                 cameraGestureActive = false
                 chatScrolling = false
                 mapPanning = false
@@ -781,7 +798,7 @@ class MainActivity : AppCompatActivity() {
             // Context routing, decided once at gesture start from the DOWN point (same rule as iOS):
             // inside the open world-map window = pan the MAP; inside the live chat box = scroll the chat;
             // anywhere else = rotate the camera.
-            if (!cameraGestureActive && !chatScrolling && !mapPanning) {
+            if (!cameraGestureActive && !chatScrolling && !mapPanning && !itemDragging) {
                 if (mapOpen && e1 != null && inCanvasRect(mapRectCanvas, toGameX(e1.x), toGameY(e1.y))) {
                     mapPanning = true
                     mapPanAccumX = 0f; mapPanAccumY = 0f
@@ -798,10 +815,33 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     if (!chatScrolling) {
-                        cameraGestureActive = true
-                        JvmLauncher.clearHover()
+                        // FIX-4: a drag that STARTS inside the inventory grid drags the item (WidgetDrag), not the
+                        // camera. The true start point (e1, the DOWN event) is the source slot.
+                        val inv = invRectCanvas
+                        val sx = if (e1 != null) toGameX(e1.x) else -1
+                        val sy = if (e1 != null) toGameY(e1.y) else -1
+                        if (!mapOpen && inv != null && e1 != null
+                            && sx >= inv[0] && sx < inv[0] + inv[2] && sy >= inv[1] && sy < inv[1] + inv[3]) {
+                            itemDragging = true
+                            itemDragLastX = sx; itemDragLastY = sy
+                            // onTouch(0) primes focus + MOVED + PRESSED on the slot — no clearHover (that would
+                            // park the cursor off-canvas; iOS doesn't either).
+                            JvmLauncher.touch(0, sx, sy, 1)   // MOUSE_PRESSED on the source item slot
+                            Log.i(TAG, "drag-1: item drag begin game=($sx,$sy)")
+                        } else {
+                            cameraGestureActive = true
+                            JvmLauncher.clearHover()
+                        }
                     }
                 }
+            }
+            if (itemDragging) {
+                // Stream the WidgetDrag at the finger's current canvas point (one per frame is fine); cache the
+                // last valid point so the release always lands somewhere sensible (no stuck held item).
+                val gx = toGameX(e2.x); val gy = toGameY(e2.y)
+                itemDragLastX = gx; itemDragLastY = gy
+                JvmLauncher.touch(1, gx, gy, 1)   // MOUSE_DRAGGED
+                return true
             }
             if (mapPanning) {
                 // "Grab the map": finger deltas in canvas px, sub-px accumulated (slow drags must not
@@ -1133,6 +1173,11 @@ class MainActivity : AppCompatActivity() {
         // The snapshot reports the post-relocate bounds, so the scroll region tracks the chat-at-top move.
         chatRectCanvas = if (loggedIn) {
             o?.optJSONArray("chat")?.takeIf { it.length() >= 4 && it.optInt(2) > 0 && it.optInt(3) > 0 }
+                ?.let { intArrayOf(it.optInt(0), it.optInt(1), it.optInt(2), it.optInt(3)) }
+        } else null
+        // FIX-4: live inventory grid bounds (null when the inventory tab isn't showing) for the item-drag hit test.
+        invRectCanvas = if (loggedIn) {
+            o?.optJSONArray("inv")?.takeIf { it.length() >= 4 && it.optInt(2) > 0 && it.optInt(3) > 0 }
                 ?.let { intArrayOf(it.optInt(0), it.optInt(1), it.optInt(2), it.optInt(3)) }
         } else null
 

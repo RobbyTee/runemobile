@@ -206,6 +206,12 @@ public final class MobileChromeBridge
 		appendBounds(sb, orbs);
 		sb.append(",\"chat\":");
 		appendBounds(sb, chat);
+		// FIX-4: the inventory item-grid bounds (canvas px) so the native shell can hit-test a drag's start
+		// point on the UI thread (where it can't call into the JVM) and route it as an item-drag. Snapshotted
+		// each tapTick by JavaBridge.snapshotInventoryBounds; null when the inventory tab isn't showing.
+		final int[] inv = JavaBridge.getInventoryBounds();
+		sb.append(",\"inv\":");
+		appendBounds(sb, (inv != null && inv.length == 4 && inv[2] > 0 && inv[3] > 0) ? inv : null);
 		sb.append('}');
 
 		snapshotJson = sb.toString();
