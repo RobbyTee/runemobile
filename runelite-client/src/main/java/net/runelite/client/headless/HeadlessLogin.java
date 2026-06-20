@@ -126,6 +126,27 @@ public final class HeadlessLogin
 	private static int legacySubmitAttempts;
 	private static int lastLegacySubmitDraw;
 
+	// FIX-9 reconnect: an in-session network drop goes LOGGED_IN -> CONNECTION_LOST -> LOGIN_SCREEN at the
+	// "Failed to login. Please try again." dialog (loginIndex 9, device-captured). CONNECTION_LOST is the clean
+	// disconnect signal — a deliberate logout never sets it — so on it we re-arm the login machine to auto-
+	// recover: click Try Again (-> welcome loginIndex 10), then the normal Play Now stage. Capped per disconnect
+	// so a token-lapse / dead world can't loop; a long lapse that routes Play Now through the Cloudflare check
+	// just foregrounds Chrome (backgrounding us, which pauses this per-draw tick) — we never drive that page.
+	private static final int RECONNECT_LOGIN_INDEX = 9;
+	private static final int RECONNECT_X = Constants.GAME_FIXED_WIDTH / 2;   // "Try again" is horizontally centred
+	private static final int RECONNECT_Y = 277;                             // ~middle of the 765x503 fixed login
+	private static final int MAX_RECONNECT = 3;
+	// "Try again" gets a generous attempt budget (vs MAX_ATTEMPTS for the one-shot login stages): the engine's
+	// retry IS the network probe, so it must outlast a Wi-Fi re-associate. Looping here is benign — loginIndex 9
+	// never routes to the Cloudflare check (that's the fresh Account-login path), so a dead network just keeps
+	// failing back to 9 until this cap, then gives up. In the real case (app suspended, Wi-Fi still up) it wins
+	// on attempt 1. ~30 attempts × COOLDOWN_DRAWS comfortably covers a re-associate.
+	private static final int MAX_TRYAGAIN_ATTEMPTS = 30;
+	private static boolean sawConnectionLost;
+	private static int reconnectAttempts;
+	private static int tryAgainAttempts;
+	private static int lastTryAgainDraw;
+
 	static
 	{
 		final int[] play = parsePoint("runelite.headless.autologin.point",
@@ -191,7 +212,27 @@ public final class HeadlessLogin
 	 */
 	public static void tick(Client client, GameState state, int loginIndex)
 	{
-		if (!ENABLED || done)
+		if (!ENABLED)
+		{
+			return;
+		}
+		// FIX-9 reconnect: re-arm on a real disconnect (CONNECTION_LOST), distinct from a deliberate logout.
+		if (state == GameState.CONNECTION_LOST)
+		{
+			sawConnectionLost = true;
+		}
+		if (done && sawConnectionLost && state == GameState.LOGIN_SCREEN && reconnectAttempts < MAX_RECONNECT)
+		{
+			reconnectAttempts++;
+			sawConnectionLost = false;
+			done = false;
+			playAttempts = 0;
+			tryAgainAttempts = 0;
+			worldSelected = false;
+			log.info("[headless-login] reconnect: disconnect detected (CONNECTION_LOST) -> re-arming login (cycle {}/{})",
+				reconnectAttempts, MAX_RECONNECT);
+		}
+		if (done)
 		{
 			return;
 		}
@@ -210,12 +251,16 @@ public final class HeadlessLogin
 				{
 					return;   // welcome overlay shown -> clicked it this tick, keep going until it's gone
 				}
-				if (eulaAttempts > 0 || playAttempts > 0)
+				if (eulaAttempts > 0 || playAttempts > 0 || tryAgainAttempts > 0)
 				{
-					log.info("[headless-login] state now {} after eula={} play={} attempt(s) — stopping injection",
-						state, eulaAttempts, playAttempts);
+					log.info("[headless-login] state now {} after eula={} play={} tryAgain={} attempt(s) — stopping injection",
+						state, eulaAttempts, playAttempts, tryAgainAttempts);
 				}
 				done = true;
+				// FIX-9: a fresh login/reconnect succeeded — clear the disconnect latch + refresh the budget so a
+				// LATER drop gets its own MAX_RECONNECT cycles.
+				sawConnectionLost = false;
+				reconnectAttempts = 0;
 			}
 			return;
 		}
@@ -269,6 +314,32 @@ public final class HeadlessLogin
 			return;
 		}
 
+		// FIX-9 reconnect stage — the post-disconnect "Failed to login. Please try again." dialog (loginIndex 9).
+		// Click "Try again" to return to the welcome screen (loginIndex 10), where Stage 2 below clicks Play Now.
+		if (loginIndex == RECONNECT_LOGIN_INDEX)
+		{
+			if (tryAgainAttempts >= MAX_TRYAGAIN_ATTEMPTS)
+			{
+				if (!done)
+				{
+					log.warn("[headless-login] reconnect: still on 'Try again' (loginIndex={}) after {} attempt(s) — giving up",
+						loginIndex, tryAgainAttempts);
+					done = true;
+				}
+				return;
+			}
+			if (tryAgainAttempts > 0 && draws - lastTryAgainDraw < COOLDOWN_DRAWS)
+			{
+				return;
+			}
+			tryAgainAttempts++;
+			lastTryAgainDraw = draws;
+			log.info("[headless-login] reconnect: Try Again attempt {}/{}: synthesizing click at {},{} (scaled to canvas {}x{})",
+				tryAgainAttempts, MAX_TRYAGAIN_ATTEMPTS, RECONNECT_X, RECONNECT_Y, canvas.getWidth(), canvas.getHeight());
+			synthesizeClickScaled(canvas, RECONNECT_X, RECONNECT_Y);
+			return;
+		}
+
 		// Stage 2 — Play Now on the authenticated welcome screen.
 		if (loginIndex != WELCOME_LOGIN_INDEX)
 		{
@@ -302,9 +373,18 @@ public final class HeadlessLogin
 
 		playAttempts++;
 		lastPlayDraw = draws;
-		log.info("[headless-login] Play Now attempt {}/{}: synthesizing click at {},{} (canvas {}x{} displayable={})",
-			playAttempts, MAX_ATTEMPTS, CLICK_X, CLICK_Y, canvas.getWidth(), canvas.getHeight(), canvas.isDisplayable());
-		synthesizeClick(canvas, CLICK_X, CLICK_Y);
+		log.info("[headless-login] Play Now attempt {}/{}: synthesizing click at {},{} (canvas {}x{} displayable={} reconnect={})",
+			playAttempts, MAX_ATTEMPTS, CLICK_X, CLICK_Y, canvas.getWidth(), canvas.getHeight(), canvas.isDisplayable(), reconnectAttempts);
+		// FIX-9: on a reconnect the canvas is the resized in-world size (not 765x503), so scale the click to it.
+		// Initial login (reconnectAttempts==0) keeps the exact proven fixed coord — no regression there.
+		if (reconnectAttempts > 0)
+		{
+			synthesizeClickScaled(canvas, CLICK_X, CLICK_Y);
+		}
+		else
+		{
+			synthesizeClick(canvas, CLICK_X, CLICK_Y);
+		}
 	}
 
 	/**
@@ -465,6 +545,22 @@ public final class HeadlessLogin
 		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, KeyEvent.VK_ENTER, '\n'));
 		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, '\n'));
 		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, KeyEvent.VK_ENTER, '\n'));
+	}
+
+	/**
+	 * FIX-9: like {@link #synthesizeClick} but scales the point from the 765x503 fixed-login space to the LIVE
+	 * canvas. The initial login canvas is 765x503, but after the in-world HeadlessResize the canvas is the
+	 * resized size (e.g. 1200x540) and does NOT shrink back for the reconnect login screen — so a fixed 765-space
+	 * coord lands left of the (now wider) centred buttons. Scaling keeps the reconnect clicks on target at any
+	 * canvas size (identity at 765x503, so the initial-login path is unaffected).
+	 */
+	private static void synthesizeClickScaled(Canvas canvas, int x, int y)
+	{
+		final int cw = canvas.getWidth();
+		final int ch = canvas.getHeight();
+		final int sx = cw > 0 ? (int) ((long) x * cw / Constants.GAME_FIXED_WIDTH) : x;
+		final int sy = ch > 0 ? (int) ((long) y * ch / Constants.GAME_FIXED_HEIGHT) : y;
+		synthesizeClick(canvas, sx, sy);
 	}
 
 	private static void synthesizeClick(Canvas canvas, int x, int y)
