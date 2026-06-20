@@ -118,7 +118,9 @@ class MainActivity : AppCompatActivity() {
     private var ringArmedAtMs = 0L
     private var ringBaseSeq = 0
     private var keyboardShown = false
+    private var imeWasShown = false       // last frame's ACTUAL ime visibility — to spot a user-driven dismiss
     private var manualKeyboard = false   // ⌨ toggle: hold the soft keyboard up with no engine text field open
+    private var keyboardToggleBtn: Button? = null   // the ⌨ button, so a dismiss can reset its on/off alpha
     private var shiftHeld = false         // ⇧ latch: synthetic VK_SHIFT held (AP-2a Finding 12)
     private var frameCallback: Choreographer.FrameCallback? = null
 
@@ -349,6 +351,7 @@ class MainActivity : AppCompatActivity() {
         // auto-raise poll to react to, so this forces the soft keyboard up (and keeps the poll from
         // instantly dismissing it). Tapping again returns to pure auto-raise. Mirrors the iOS ⌨ toggle.
         val kbButton = devButton("⌨")
+        keyboardToggleBtn = kbButton
         kbButton.setOnClickListener {
             manualKeyboard = !manualKeyboard
             kbButton.alpha = if (manualKeyboard) 1f else 0.7f
@@ -1005,16 +1008,27 @@ class MainActivity : AppCompatActivity() {
     private fun startInputPolling() {
         val cb = object : Choreographer.FrameCallback {
             override fun doFrame(frameTimeNanos: Long) {
-                val want = manualKeyboard || mapSearchKeyboard || JvmLauncher.isTextInputOpen()
-                // Compare against the ACTUAL IME visibility, not just our last request: the system can dismiss
-                // the keyboard behind our back (focus change, back swipe), which would otherwise wedge a stale
-                // cached state — manual mode then re-raises (sticky until ⌨ is toggled off). API<30 falls back
-                // to the cached flag (no ime() inset type).
+                // Compare against the ACTUAL IME visibility, not just our last request (the system can dismiss
+                // the keyboard behind our back). API<30 falls back to the cached flag (no ime() inset type).
                 val imeShown = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     surfaceView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) ?: keyboardShown
                 } else {
                     keyboardShown
                 }
+                // The keyboard was up and just went down while one of OUR latches still wanted it: that's the user
+                // closing it (the soft-keyboard ▽ / back). Respect it — drop the latches so we don't immediately
+                // re-raise (the old "sticky" behavior fought the close button). Edge-triggered off the OBSERVED
+                // visibility, so the raise animation's transient !imeShown doesn't misfire. An engine text field
+                // (isTextInputOpen) is NOT a latch we clear here — if the engine truly has a field focused it
+                // re-raises next frame, which is correct.
+                if (imeWasShown && !imeShown && (manualKeyboard || mapSearchKeyboard)) {
+                    manualKeyboard = false
+                    mapSearchKeyboard = false
+                    keyboardToggleBtn?.alpha = 0.7f
+                    Log.i(TAG, "a1: user dismissed IME -> clear keyboard latches")
+                }
+                imeWasShown = imeShown
+                val want = manualKeyboard || mapSearchKeyboard || JvmLauncher.isTextInputOpen()
                 if (want != imeShown) {
                     if (want != keyboardShown) {
                         keyboardShown = want
