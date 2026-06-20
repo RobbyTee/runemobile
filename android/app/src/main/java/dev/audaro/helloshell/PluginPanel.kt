@@ -97,6 +97,7 @@ fun PluginPanel(
     onAccount: () -> Unit = {},
     onLogout: () -> Unit = {},
     onDiscord: () -> Unit = {},
+    onPanelTextActive: (Boolean) -> Unit = {},   // FIX-11: forwarded to PanelView so the host can free the IME
 ) {
     var rows by remember { mutableStateOf<List<PluginRow>>(emptyList()) }
     var renderer by remember { mutableStateOf(rendererPref) }
@@ -193,7 +194,7 @@ fun PluginPanel(
             hubOpen -> PluginHubScreen(onBack = { hubOpen = false; scope.launch { reload() } })
             panelOpen != null -> {
                 val po = panelOpen!!
-                PanelView(po.first, po.second, onBack = { panelOpen = null })
+                PanelView(po.first, po.second, onBack = { panelOpen = null }, onPanelTextActive = onPanelTextActive)
             }
             configFor != null -> {
                 val cf = configFor!!

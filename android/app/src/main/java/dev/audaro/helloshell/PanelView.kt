@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -65,7 +66,7 @@ private class PanelSnap(val w: Int, val h: Int, val seq: Int, val px: IntArray?)
  * vertical scroll, and maps taps back to buffer coords via panelClick. Closes the panel on dispose.
  */
 @Composable
-fun PanelView(index: Int, tooltip: String, onBack: () -> Unit) {
+fun PanelView(index: Int, tooltip: String, onBack: () -> Unit, onPanelTextActive: (Boolean) -> Unit = {}) {
     var bmp by remember { mutableStateOf<Bitmap?>(null) }
     var pw by remember { mutableStateOf(0) }
     var viewW by remember { mutableStateOf(1) }
@@ -76,6 +77,13 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit) {
     var textActive by remember { mutableStateOf(false) }
     var fieldValue by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+
+    // FIX-11: tell the host whenever a panel text field gains/loses focus, so its per-frame input poll stops
+    // raising GameInputView (which would steal focus) / dismissing the IME the mirror field below owns.
+    DisposableEffect(textActive) {
+        onPanelTextActive(textActive)
+        onDispose { onPanelTextActive(false) }
+    }
 
     DisposableEffect(index) {
         onDispose { JvmLauncher.onBridge { JvmLauncher.closePanel() } }
@@ -151,7 +159,10 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit) {
                 }
                 if (textActive) {
                     val fr = remember { FocusRequester() }
-                    LaunchedEffect(Unit) { fr.requestFocus() }   // raise the soft keyboard
+                    val keyboard = LocalSoftwareKeyboardController.current
+                    // Focus the mirror AND explicitly show the IME — requesting focus alone is unreliable, and the
+                    // host poll no longer fights it (onPanelTextActive frees the IME). delay lets layout settle.
+                    LaunchedEffect(Unit) { fr.requestFocus(); delay(60); keyboard?.show() }
                     OutlinedTextField(
                         value = fieldValue,
                         onValueChange = { v -> fieldValue = v; JvmLauncher.onBridgeTouch { JvmLauncher.panelText(v) } },

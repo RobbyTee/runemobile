@@ -121,6 +121,9 @@ class MainActivity : AppCompatActivity() {
     private var imeWasShown = false       // last frame's ACTUAL ime visibility — to spot a user-driven dismiss
     private var manualKeyboard = false   // ⌨ toggle: hold the soft keyboard up with no engine text field open
     private var keyboardToggleBtn: Button? = null   // the ⌨ button, so a dismiss can reset its on/off alpha
+    // FIX-11: a rendered Swing panel's text field is focused and its OWN Compose mirror field owns the soft
+    // keyboard — the per-frame poll must NOT raise GameInputView (steals focus) or dismiss the IME (kills it).
+    @Volatile var textActivePanel = false
     private var shiftHeld = false         // ⇧ latch: synthetic VK_SHIFT held (AP-2a Finding 12)
     private var frameCallback: Choreographer.FrameCallback? = null
 
@@ -314,6 +317,8 @@ class MainActivity : AppCompatActivity() {
                     // RuneLite's Discord invite (runelite.properties runelite.discord.invite) — Discord had no
                     // Android home before; publishLink routes it through the shared link path to the browser.
                     onDiscord = { JvmLauncher.onBridge { JvmLauncher.publishLink("https://discord.gg/ArdAhnN") } },
+                    // FIX-11: a panel's mirror text field is focused -> the per-frame poll must leave the IME alone.
+                    onPanelTextActive = { active -> textActivePanel = active },
                 )
             }
             pluginPanel.visibility = View.VISIBLE
@@ -1015,34 +1020,41 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     keyboardShown
                 }
-                // The keyboard was up and just went down while one of OUR latches still wanted it: that's the user
-                // closing it (the soft-keyboard ▽ / back). Respect it — drop the latches so we don't immediately
-                // re-raise (the old "sticky" behavior fought the close button). Edge-triggered off the OBSERVED
-                // visibility, so the raise animation's transient !imeShown doesn't misfire. An engine text field
-                // (isTextInputOpen) is NOT a latch we clear here — if the engine truly has a field focused it
-                // re-raises next frame, which is correct.
-                if (imeWasShown && !imeShown && (manualKeyboard || mapSearchKeyboard)) {
-                    manualKeyboard = false
-                    mapSearchKeyboard = false
-                    keyboardToggleBtn?.alpha = 0.7f
-                    Log.i(TAG, "a1: user dismissed IME -> clear keyboard latches")
-                }
-                imeWasShown = imeShown
-                val want = manualKeyboard || mapSearchKeyboard || JvmLauncher.isTextInputOpen()
-                if (want != imeShown) {
-                    if (want != keyboardShown) {
-                        keyboardShown = want
-                        Log.i(TAG, "a1: textInputOpen/manual=$want -> ${if (want) "raise" else "dismiss"} soft keyboard")
+                if (textActivePanel) {
+                    // FIX-11: a rendered Swing panel's text field is focused; its native Compose mirror field
+                    // (PanelView) owns the soft keyboard. Don't touch the IME here — raising GameInputView would
+                    // steal focus from the mirror, and dismissing would kill the keyboard the mirror just raised.
+                    imeWasShown = imeShown
+                } else {
+                    // The keyboard was up and just went down while one of OUR latches still wanted it: that's the
+                    // user closing it (the soft-keyboard ▽ / back). Respect it — drop the latches so we don't
+                    // immediately re-raise (the old "sticky" behavior fought the close button). Edge-triggered off
+                    // the OBSERVED visibility, so the raise animation's transient !imeShown doesn't misfire. An
+                    // engine text field (isTextInputOpen) is NOT a latch we clear here — if the engine truly has a
+                    // field focused it re-raises next frame, which is correct.
+                    if (imeWasShown && !imeShown && (manualKeyboard || mapSearchKeyboard)) {
+                        manualKeyboard = false
+                        mapSearchKeyboard = false
+                        keyboardToggleBtn?.alpha = 0.7f
+                        Log.i(TAG, "a1: user dismissed IME -> clear keyboard latches")
                     }
-                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                    if (want) {
-                        keyboardView.requestFocus()
-                        imm.showSoftInput(keyboardView, InputMethodManager.SHOW_IMPLICIT)
-                    } else {
-                        imm.hideSoftInputFromWindow(keyboardView.windowToken, 0)
+                    imeWasShown = imeShown
+                    val want = manualKeyboard || mapSearchKeyboard || JvmLauncher.isTextInputOpen()
+                    if (want != imeShown) {
+                        if (want != keyboardShown) {
+                            keyboardShown = want
+                            Log.i(TAG, "a1: textInputOpen/manual=$want -> ${if (want) "raise" else "dismiss"} soft keyboard")
+                        }
+                        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                        if (want) {
+                            keyboardView.requestFocus()
+                            imm.showSoftInput(keyboardView, InputMethodManager.SHOW_IMPLICIT)
+                        } else {
+                            imm.hideSoftInputFromWindow(keyboardView.windowToken, 0)
+                        }
+                    } else if (want != keyboardShown) {
+                        keyboardShown = want   // converged without a request (e.g. user-raised IME matches want)
                     }
-                } else if (want != keyboardShown) {
-                    keyboardShown = want   // converged without a request (e.g. user-raised IME matches want)
                 }
                 val seq = JvmLauncher.interactTapSeq()
                 if (seq != lastTapSeq) {
