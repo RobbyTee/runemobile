@@ -169,6 +169,14 @@ class MainActivity : AppCompatActivity() {
     private var emY = 0
     private var emW = 0
     private var emCount = 0
+    // FIX-10b tap-mode (submenu drill-in): a persistent, tap-to-select menu used when an entry has a submenu
+    // (Menu Entry Swapper swap lists) or ⇧ is latched. menuDrillParent = the top-level engine index we drilled
+    // into (-1 = top level); menuTopEntries = the saved top level for '‹ Back'; menuTapArmed = the opening
+    // long-press has been released (so subsequent discrete taps drive selection, not the release itself).
+    private var menuTapMode = false
+    private var menuTapArmed = false
+    private var menuDrillParent = -1
+    private var menuTopEntries: List<MenuOverlayView.Entry> = emptyList()
 
     companion object {
         private const val TAG = "MainActivity"
@@ -477,6 +485,21 @@ class MainActivity : AppCompatActivity() {
             if (menuActive) {
                 menuCurX = event.x
                 menuCurY = event.y
+                // FIX-10b: tap-mode (submenu drill-in / shift-customize) is a PERSISTENT menu. The opening
+                // long-press's release just ARMS it; after that each discrete tap selects a row / drills / Backs,
+                // and a tap outside dismisses. Drag-mode (below) is the original slide-select.
+                if (menuTapMode) {
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
+                            if (menuTapArmed) updateMenuHighlight(event.x, event.y)
+                        MotionEvent.ACTION_UP -> {
+                            menuTouchActive = false
+                            if (!menuTapArmed) { menuTapArmed = true; menuOverlay.setHighlight(-1) }
+                            else onMenuTap(event.x, event.y)
+                        }
+                    }
+                    return@setOnTouchListener true
+                }
                 when (event.actionMasked) {
                     MotionEvent.ACTION_MOVE -> updateMenuHighlight(event.x, event.y)
                     MotionEvent.ACTION_UP -> { menuTouchActive = false; if (menuOverlay.isActive) commitMenuSelection() }
@@ -1479,6 +1502,7 @@ class MainActivity : AppCompatActivity() {
         menuBuilding = true
         menuTouchActive = true
         menuHighlight = -1
+        menuTapMode = false; menuTapArmed = false; menuDrillParent = -1   // FIX-10b: fresh menu
         menuOpenAtNanos = System.nanoTime()
         JvmLauncher.click(gx, gy, 3)   // open the engine right-click menu at the finger
         Log.i(TAG, "a2: long-press -> menu open game=($gx,$gy) hand=${if (menuHandRight) "R" else "L"}")
@@ -1494,6 +1518,7 @@ class MainActivity : AppCompatActivity() {
         menuCurX = viewX; menuCurY = viewY
         menuHandRight = viewX > surfaceView.width * 0.5f
         menuActive = true; menuBuilding = true; menuTouchActive = true; menuHighlight = -1
+        menuTapMode = false; menuTapArmed = false; menuDrillParent = -1   // FIX-10b: fresh menu
         menuOpenAtNanos = System.nanoTime()
         JvmLauncher.click(engineCx, engineCy, 3)   // right-click the live engine chat button -> its filter menu
         Log.i(TAG, "a3: chat tab long-press -> filter menu game=($engineCx,$engineCy)")
@@ -1508,7 +1533,10 @@ class MainActivity : AppCompatActivity() {
         if (ready) {
             menuBuilding = false
             presentNativeMenu(d!!)
-            if (!menuTouchActive) cancelMenu()   // finger lifted before the menu built
+            // Drag-mode: a finger lifted before the menu built means cancel. Tap-mode (FIX-10b) is persistent —
+            // if the finger is already up, the menu just becomes immediately tap-ready (no auto-cancel).
+            if (menuTapMode) { if (!menuTouchActive) menuTapArmed = true }
+            else if (!menuTouchActive) cancelMenu()
             return
         }
         if (System.nanoTime() - menuOpenAtNanos > 1_000_000_000L) {
@@ -1527,13 +1555,92 @@ class MainActivity : AppCompatActivity() {
         val n = minOf(arr.length(), 14)
         if (n == 0 || emW <= 0) { cancelMenu(); return }
         val items = ArrayList<MenuOverlayView.Entry>(n)
+        var anySub = false
         for (k in 0 until n) {
             val o = arr.optJSONObject(k) ?: continue
-            items.add(MenuOverlayView.Entry(o.optString("opt", ""), o.optString("tgt", "")))
+            // FIX-10b: a "sub" array (Menu Entry Swapper swap list) makes this a drill-in parent. engineIndex=k
+            // (the top-level display index) so a tap can commit it via invokeMenuEntry / geometry.
+            val subArr = o.optJSONArray("sub")
+            var sub: List<MenuOverlayView.Entry>? = null
+            if (subArr != null && subArr.length() > 0) {
+                val cs = ArrayList<MenuOverlayView.Entry>(subArr.length())
+                for (c in 0 until subArr.length()) {
+                    val co = subArr.optJSONObject(c) ?: continue
+                    cs.add(MenuOverlayView.Entry(co.optString("opt", ""), co.optString("tgt", ""), engineIndex = c))
+                }
+                if (cs.isNotEmpty()) { sub = cs; anySub = true }
+            }
+            val role = if (sub != null) MenuOverlayView.Role.PARENT else MenuOverlayView.Role.NORMAL
+            items.add(MenuOverlayView.Entry(o.optString("opt", ""), o.optString("tgt", ""), sub = sub, role = role, engineIndex = k))
         }
-        menuOverlay.show(items, menuAnchorX, menuAnchorY, menuHandRight)
-        Log.i(TAG, "a2: native menu $emCount entries at game=($emX,$emY) w=$emW")
-        if (menuTouchActive) updateMenuHighlight(menuCurX, menuCurY)
+        menuTopEntries = items
+        menuDrillParent = -1
+        // FIX-10b: tap-mode when there's a submenu to drill into, or ⇧ is latched (shift-customize). Else the
+        // existing slide-select drag menu (tall menus already shrink-to-fit). The ⇧ button is the shift entry.
+        menuTapMode = anySub || shiftHeld
+        if (menuTapMode) {
+            buildTapMenu(items, drilled = false)
+            Log.i(TAG, "fix10b: tap menu $emCount entries (anySub=$anySub shift=$shiftHeld) at game=($emX,$emY)")
+        } else {
+            menuOverlay.show(items, menuAnchorX, menuAnchorY, menuHandRight)
+            Log.i(TAG, "a2: native menu $emCount entries at game=($emX,$emY) w=$emW")
+            if (menuTouchActive) updateMenuHighlight(menuCurX, menuCurY)
+        }
+    }
+
+    /** FIX-10b: (re)build the persistent tap-menu — top level, or a submenu (prepend a '‹ Back' row, retitle). */
+    private fun buildTapMenu(items: List<MenuOverlayView.Entry>, drilled: Boolean) {
+        val display = if (drilled) {
+            ArrayList<MenuOverlayView.Entry>(items.size + 1).apply {
+                add(MenuOverlayView.Entry("‹ Back", "", role = MenuOverlayView.Role.BACK))
+                addAll(items)
+            }
+        } else items
+        menuOverlay.show(display, menuAnchorX, menuAnchorY, menuHandRight,
+            tap = true, header = if (drilled) "Submenu" else "Choose Option")
+    }
+
+    /** FIX-10b: a discrete tap in tap-mode — route to a row, or dismiss when it lands outside the box. */
+    private fun onMenuTap(x: Float, y: Float) {
+        when (val r = menuOverlay.hitTest(x, y)) {
+            -2 -> cancelMenu()   // outside the box -> dismiss
+            -1 -> { }            // header -> ignore
+            else -> onTapRow(r)
+        }
+    }
+
+    /** FIX-10b: act on a tapped tap-mode row — Back / drill into a submenu / commit a leaf (top or child). */
+    private fun onTapRow(displayRow: Int) {
+        val e = menuOverlay.entryAt(displayRow) ?: return
+        when (e.role) {
+            MenuOverlayView.Role.BACK -> {
+                menuDrillParent = -1
+                menuOverlay.setHighlight(-1)
+                buildTapMenu(menuTopEntries, drilled = false)
+            }
+            MenuOverlayView.Role.PARENT -> {
+                menuDrillParent = e.engineIndex
+                menuOverlay.setHighlight(-1)
+                vibrateTick()
+                buildTapMenu(e.sub ?: emptyList(), drilled = true)
+            }
+            MenuOverlayView.Role.NORMAL -> {
+                if (menuDrillParent >= 0) {
+                    // Submenu child — not in the engine menu geometry, so invoke its onClick directly, then
+                    // dismiss the still-open engine top-level menu.
+                    JvmLauncher.invokeMenuEntry(menuDrillParent, e.engineIndex)
+                    closeEngineMenu()
+                    Log.i(TAG, "fix10b: tap submenu child parent=$menuDrillParent child=${e.engineIndex}")
+                } else {
+                    // Top-level leaf — a geometry click invokes + closes the engine menu in one.
+                    val gx = emX + emW / 2
+                    val gy = emY + MENU_HEADER_PX + e.engineIndex * MENU_ROW_PX + MENU_ROW_PX / 2
+                    JvmLauncher.selectMenuPoint(gx, gy)
+                    Log.i(TAG, "fix10b: tap top row ${e.engineIndex} -> game=($gx,$gy)")
+                }
+                teardownMenu()
+            }
+        }
     }
 
     /** Lock the highlight onto the row under the finger; haptic tick on change. */
@@ -1560,14 +1667,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Close the engine menu via its own bottom Cancel row (no stray world click), then tear down. */
-    private fun cancelMenu() {
+    /** Close the still-open engine right-click menu via its own bottom Cancel row (no stray world click). */
+    private fun closeEngineMenu() {
         if (emCount > 0 && emW > 0) {
             val k = emCount - 1
             val gx = emX + emW / 2
             val gy = emY + MENU_HEADER_PX + k * MENU_ROW_PX + MENU_ROW_PX / 2
             JvmLauncher.selectMenuPoint(gx, gy)
         }
+    }
+
+    /** Close the engine menu, then tear down. */
+    private fun cancelMenu() {
+        closeEngineMenu()
         Log.i(TAG, "a2: menu cancelled")
         teardownMenu()
     }
@@ -1578,6 +1690,10 @@ class MainActivity : AppCompatActivity() {
         menuBuilding = false
         menuTouchActive = false
         menuHighlight = -1
+        menuTapMode = false        // FIX-10b
+        menuTapArmed = false
+        menuDrillParent = -1
+        menuTopEntries = emptyList()
     }
 
     override fun onStop() {

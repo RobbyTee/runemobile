@@ -105,6 +105,9 @@ object JvmLauncher {
     /** Commit a menu choice by clicking the engine row centre (game-canvas x,y) — honours plugin onClick. */
     external fun nativeSelectMenuPoint(x: Int, y: Int)
 
+    /** FIX-10b: commit a tap-menu row / submenu child by index (child<0 = the parent entry itself). */
+    external fun nativeInvokeMenuEntry(parent: Int, child: Int)
+
     /** Latest MenuPeekBridge snapshot JSON (escaped), published by the render thread. */
     external fun nativeMenuSnapshot(): String
 
@@ -278,6 +281,7 @@ object JvmLauncher {
     fun isTextInputOpen() = nativeIsTextInputOpen()
     fun interactTapSeq() = nativeInteractTapSeq()
     fun selectMenuPoint(x: Int, y: Int) = nativeSelectMenuPoint(x, y)
+    fun invokeMenuEntry(parent: Int, child: Int) = nativeInvokeMenuEntry(parent, child)
     fun menuSnapshot() = nativeMenuSnapshot()
     fun menuPublishSeq() = nativeMenuPublishSeq()
     fun frameWidth() = nativeFrameWidth()

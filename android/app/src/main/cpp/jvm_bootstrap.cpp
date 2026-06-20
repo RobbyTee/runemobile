@@ -61,6 +61,9 @@ static jmethodID g_midTextInputOpen = nullptr, g_midInteractTapSeq = nullptr;
 static jmethodID g_midSelectMenuPoint = nullptr;
 // AP-2a sticky-Shift: JavaBridge.setShiftHeld(boolean) — synthetic held VK_SHIFT (shared, iOS-device-proven).
 static jmethodID g_midSetShiftHeld = nullptr;
+// FIX-10b: JavaBridge.invokeMenuEntry(int parentDisplayIndex, int childIndex) — commit a native tap-menu row /
+// submenu child directly (child<0 = the parent entry itself). Optional resolve (older jars lack it).
+static jmethodID g_midInvokeMenuEntry = nullptr;
 // FIX-3 idle keepalive: JavaBridge.keepAlive() — bump the idle-logout timer on a native-UI touch (optional;
 // best-effort so an older staged jar without the method still boots).
 static jmethodID g_midKeepAlive = nullptr;
@@ -241,7 +244,11 @@ enum InputKind {
     IN_SHIFT = 10,
     // FIX-3 idle keepalive: a native-UI touch that posts no canvas event. Queued so the already-attached
     // render thread makes the JavaBridge.keepAlive() call (the ART UI thread never attaches to HotSpot).
-    IN_KEEPALIVE = 11
+    IN_KEEPALIVE = 11,
+    // FIX-10b submenu commit: JavaBridge.invokeMenuEntry(parentDisplayIndex=a, childIndex=b). Drives a native
+    // tap-menu's submenu children (Menu Entry Swapper swap lists) — they aren't in the engine menu geometry,
+    // so a geometry click (selectMenuPoint) can't reach them; this calls the entry's onClick directly.
+    IN_INVOKEMENUENTRY = 12
 };
 // s carries the IN_TEXT payload; empty for the int-only kinds (aggregate-inits to "").
 struct InputEvent { int kind, a, b, c, d; std::string s; };
@@ -468,6 +475,7 @@ static bool publishBridge(JNIEnv *env) {
     }
     // AP-2a sticky-Shift: best-effort (a missing one only disables the ⇧ button, never the render path).
     g_midSetShiftHeld = midOpt(env, global, "setShiftHeld", "(Z)V");
+    g_midInvokeMenuEntry = midOpt(env, global, "invokeMenuEntry", "(II)V");   // FIX-10b submenu commit (optional)
     // FIX-3 idle keepalive: best-effort (a missing one only disables the idle-reset, never the render path) so
     // an older staged jar lacking keepAlive still boots.
     g_midKeepAlive = midOpt(env, global, "keepAlive", "()V");
@@ -799,6 +807,7 @@ static void drainInput(JNIEnv *env) {
             case IN_KEYSTROKE:    env->CallStaticVoidMethod(g_bridgeCls, g_midKeyStroke, ev.a); break;
             case IN_SELECTMENU:   env->CallStaticVoidMethod(g_bridgeCls, g_midSelectMenuPoint, ev.a, ev.b); break;
             case IN_SHIFT:        if (g_midSetShiftHeld) env->CallStaticVoidMethod(g_bridgeCls, g_midSetShiftHeld, (jboolean)(ev.a != 0)); break;
+            case IN_INVOKEMENUENTRY: if (g_midInvokeMenuEntry) env->CallStaticVoidMethod(g_bridgeCls, g_midInvokeMenuEntry, ev.a, ev.b); break;
             case IN_KEEPALIVE:    if (g_midKeepAlive) env->CallStaticVoidMethod(g_bridgeCls, g_midKeepAlive); break;
             case IN_TEXT: {
                 jstring js = env->NewStringUTF(ev.s.c_str());
@@ -1352,6 +1361,11 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeText(JNIEnv *env, jobject, jstring 
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeSelectMenuPoint(JNIEnv *, jobject, jint x, jint y) {
     enqueue({IN_SELECTMENU, x, y, 0, 0});
+}
+// FIX-10b: commit a native tap-menu row / submenu child by index (child<0 = the parent entry itself).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeInvokeMenuEntry(JNIEnv *, jobject, jint parent, jint child) {
+    enqueue({IN_INVOKEMENUENTRY, parent, child, 0, 0});
 }
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeMenuSnapshot(JNIEnv *env, jobject) {

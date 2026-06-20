@@ -18,11 +18,28 @@ import android.view.View
  */
 class MenuOverlayView(context: Context) : View(context) {
 
-    /** One menu row in display order (index 0 = top = the engine's left-click default). */
-    data class Entry(val opt: String, val tgt: String)
+    /** FIX-10b: a row's role in tap-mode. NORMAL = leaf (commit); PARENT = has a submenu (drill in); BACK = the
+     *  synthetic "‹ Back" row the host prepends inside a submenu. Drag-mode menus are all NORMAL. */
+    enum class Role { NORMAL, PARENT, BACK }
+
+    /**
+     * One menu row in display order (index 0 = top = the engine's left-click default). FIX-10b adds: [sub] (a
+     * parent's child entries, from the snapshot's "sub" array), [role], and [engineIndex] — the entry's index in
+     * the engine top-level list (for a top row) OR the child index within its parent's submenu (for a drilled
+     * child); -1 for synthetic rows. Defaults keep drag-mode callers unchanged.
+     */
+    data class Entry(
+        val opt: String,
+        val tgt: String,
+        val sub: List<Entry>? = null,
+        val role: Role = Role.NORMAL,
+        val engineIndex: Int = -1,
+    )
 
     private var entries: List<Entry> = emptyList()
     private var active = false
+    private var tapMode = false              // FIX-10b: persistent tap-to-select (submenus / shift) vs slide-select
+    private var headerText = "Choose Option"
     private var boxX = 0f
     private var boxY = 0f
     private var highlight = -1
@@ -66,9 +83,14 @@ class MenuOverlayView(context: Context) : View(context) {
     private fun dp(v: Float) = v * resources.displayMetrics.density
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
 
-    /** Show the menu (display-order entries) anchored at the finger; body biased away from the holding hand. */
-    fun show(items: List<Entry>, anchorX: Float, anchorY: Float, handRight: Boolean) {
+    /** Show the menu (display-order entries) anchored at the finger; body biased away from the holding hand.
+     *  FIX-10b: [tap] = persistent tap-to-select (submenu drill-in / shift-customize); [header] overrides the
+     *  title (e.g. "Submenu" when drilled). Drag-mode callers omit both and behave exactly as before. */
+    fun show(items: List<Entry>, anchorX: Float, anchorY: Float, handRight: Boolean,
+             tap: Boolean = false, header: String = "Choose Option") {
         entries = items
+        tapMode = tap
+        headerText = header
         highlight = -1
         val vw = if (width > 0) width.toFloat() else resources.displayMetrics.widthPixels.toFloat()
         val vh = if (height > 0) height.toFloat() else resources.displayMetrics.heightPixels.toFloat()
@@ -117,6 +139,22 @@ class MenuOverlayView(context: Context) : View(context) {
         return r.coerceAtMost(entries.size - 1)
     }
 
+    val isTapMode: Boolean get() = tapMode
+
+    /** FIX-10b tap hit-test: row index (>=0), -1 for the header strip, or -2 for a tap OUTSIDE the box (dismiss).
+     *  Unlike rowAt (slide-select, generous xTol), this respects the real box bounds so an outside tap cancels. */
+    fun hitTest(x: Float, y: Float): Int {
+        if (!active || entries.isEmpty()) return -2
+        val totalH = headerH + entries.size * rowH
+        if (x < boxX || x > boxX + boxW || y < boxY || y > boxY + totalH) return -2
+        if (y < boxY + headerH) return -1
+        val r = ((y - (boxY + headerH)) / rowH).toInt()
+        return r.coerceIn(0, entries.size - 1)
+    }
+
+    /** The entry at a display-row index, or null if out of range. */
+    fun entryAt(i: Int): Entry? = entries.getOrNull(i)
+
     /** Set the locked-on row; returns true if it changed (so the host can fire a haptic). */
     fun setHighlight(row: Int): Boolean {
         if (row == highlight) return false
@@ -131,9 +169,9 @@ class MenuOverlayView(context: Context) : View(context) {
         canvas.drawRect(boxX, boxY, boxX + boxW, boxY + totalH, bgPaint)
         canvas.drawRect(boxX, boxY, boxX + boxW, boxY + totalH, borderPaint)
 
-        // Header "Choose Option".
+        // Header ("Choose Option", or "Submenu" when drilled in — FIX-10b).
         val hdrBaseline = boxY + headerH / 2f - (headerPaint.ascent() + headerPaint.descent()) / 2f
-        canvas.drawText("Choose Option", boxX + dp(10f), hdrBaseline, headerPaint)
+        canvas.drawText(headerText, boxX + dp(10f), hdrBaseline, headerPaint)
 
         var ry = boxY + headerH
         for (i in entries.indices) {
@@ -147,6 +185,10 @@ class MenuOverlayView(context: Context) : View(context) {
             if (e.tgt.isNotEmpty()) {
                 x += optPaint.measureText(e.opt) + sp(5f)
                 canvas.drawText(e.tgt, x, baseline, tgtPaint)
+            }
+            // FIX-10b: a right-aligned ▸ marks a row that drills into a submenu.
+            if (e.role == Role.PARENT) {
+                canvas.drawText("▸", boxX + boxW - dp(16f), baseline, optPaint)
             }
             ry += rowH
         }
