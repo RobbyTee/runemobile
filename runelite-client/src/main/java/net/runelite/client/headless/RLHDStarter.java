@@ -117,7 +117,10 @@ public final class RLHDStarter
 			// textures). Pure render settings (no shader-variant change), set BEFORE startUp so the shadow map
 			// allocates small. All tunable afterwards in the plugin config panel.
 			MobileUiBridge.setConfig("hd", "antiAliasingMode", "DISABLED");
-			MobileUiBridge.setConfig("hd", "shadowResolution", "RES_2048");
+			// FIX-13: 1K shadow map (was 2K). The shadow pass is a bandwidth bottleneck on Mali; 1K vs 2K is
+			// barely visible at the mobile present scale but a real fps win — iOS already ships RES_1024 (below).
+			// Reversible in the 117HD plugin config (shadowResolution).
+			MobileUiBridge.setConfig("hd", "shadowResolution", "RES_1024");
 			// Force SINGLE-THREADED model processing (config key "asyncModelProcessing"). RLHD's multithreaded
 			// path (RENDER_THREADS) has the engine call the draw callbacks from worker threads, which then touch
 			// GL buffers concurrently — but our EGL/GL bridge has ONE thread-affine context, so concurrent buffer
@@ -128,7 +131,7 @@ public final class RLHDStarter
 			if (d.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced mobile config: LINEAR, tiledLighting=off, AA=off, shadows=2048, draw=30, single-threaded");
+				log.info("[routecrlhd] forced mobile config: LINEAR, tiledLighting=off, AA=off, shadows=1024, draw=30, single-threaded");
 			}
 				return;
 			}
