@@ -39,7 +39,11 @@ class ChatPillView(context: Context) : View(context) {
         private const val OPAQUE_BG = 0xFF423C33.toInt()       // iOS stone-brown (66,60,51); fills the FULL tab rect
 
         private const val LONG_PRESS_MS = 350L
-        private const val EXPAND_DP = 15f   // grow the tappable band above/below the row (iOS ChatTabButton ±15pt)
+        // UI-3 tighten: ASYMMETRIC tappable band. Generous ABOVE the row (toward the screen top edge, where
+        // nothing else lives, so a slightly-high tab tap still lands), but small BELOW — the chat-at-top message
+        // area + the scene sit directly under the tabs, and a big below-band was eating those taps.
+        private const val EXPAND_UP_DP = 15f
+        private const val EXPAND_DOWN_DP = 4f
         private const val SLOP_DP = 12f     // travel that turns a tap into a drag (cancels the long-press)
     }
 
@@ -159,10 +163,9 @@ class ChatPillView(context: Context) : View(context) {
 
     private fun chipRect(i: Int): RectF = RectF(rowX + i * tabW, rowY, rowX + (i + 1) * tabW, rowY + rowH)
 
-    /** Snap a touch to the nearest tab across the full row + an expanded vertical band; -1 if outside. */
+    /** Snap a touch to the nearest tab across the full row + an asymmetric vertical band; -1 if outside. */
     private fun tabAt(x: Float, y: Float): Int {
-        val expand = EXPAND_DP * dp
-        if (y < rowY - expand || y > rowY + rowH + expand) return -1
+        if (y < rowY - EXPAND_UP_DP * dp || y > rowY + rowH + EXPAND_DOWN_DP * dp) return -1
         if (x < rowX || x >= rowX + tabW * TAB_COUNT) return -1
         return ((x - rowX) / tabW).toInt().coerceIn(0, TAB_COUNT - 1)
     }
