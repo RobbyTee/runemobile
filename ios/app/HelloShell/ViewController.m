@@ -245,6 +245,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 // walk-ring semantics, a tap in the search rect raises the keyboard (the map search doesn't flip INPUT_TYPE),
 // the native chrome hides, and a native ✕ in the safe area proxies the bezel-clipped engine close button.
 @property (nonatomic, assign) BOOL mapOpen;             // polled from the bridge map snapshot (~10 Hz)
+@property (nonatomic, assign) BOOL mapWasSearching;     // FIX-14: engine WORLDMAP_SEARCHING edge (dismiss kbd on commit)
 @property (nonatomic, assign) CGRect mapCloseCanvas;    // engine CLOSE rect (canvas px; zero = unknown)
 @property (nonatomic, assign) CGRect mapSearchCanvas;   // engine SEARCH rect (canvas px)
 @property (nonatomic, assign) CGRect mapWindowCanvas;   // the whole map window rect (canvas px)
@@ -3164,12 +3165,13 @@ static CGRect mapRectFromArr(NSArray *a) {
 
 - (void)updateWorldMap {
     NSString *snap = [JVMLauncher mapSnapshot];
-    BOOL open = NO;
+    BOOL open = NO, searching = NO;
     CGRect closeR = CGRectZero, searchR = CGRectZero, windowR = CGRectZero;
     if (snap.length) {
         NSDictionary *d = parseBridgeJSON(snap, "ViewController.updateWorldMap");
         if ([d isKindOfClass:[NSDictionary class]] && [d[@"open"] boolValue]) {
             open = YES;
+            searching = [d[@"searching"] intValue] == 1;
             closeR = mapRectFromArr(d[@"close"]);
             searchR = mapRectFromArr(d[@"search"]);
             windowR = mapRectFromArr(d[@"window"]);
@@ -3180,6 +3182,14 @@ static CGRect mapRectFromArr(NSArray *a) {
             self.mapListCanvas = CGRectZero;
         }
     }
+    // FIX-14: the map search never flips INPUT_TYPE, so the soft keyboard would otherwise linger over the
+    // jumped-to map. On the engine WORLDMAP_SEARCHING 1->0 edge the search has committed (Enter) / cancelled
+    // (Quit) — resign the capture field so the keyboard auto-hides.
+    if (self.mapWasSearching && !searching && [self.kbField isFirstResponder]) {
+        [self.kbField resignFirstResponder];
+        [self appendLine:@"[map] search committed -> dismiss keyboard"];
+    }
+    self.mapWasSearching = searching;
     self.mapCloseCanvas = closeR;
     self.mapSearchCanvas = searchR;
     self.mapWindowCanvas = windowR;

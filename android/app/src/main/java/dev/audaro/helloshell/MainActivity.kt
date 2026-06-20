@@ -101,6 +101,7 @@ class MainActivity : AppCompatActivity() {
     private var itemDragging = false
     private var itemDragLastX = 0; private var itemDragLastY = 0
     private var mapSearchKeyboard = false           // transient ⌨-like latch while the map search is in use
+    private var mapWasSearching = false             // FIX-14: engine WORLDMAP_SEARCHING edge (drop the latch on commit)
     private var lastMapSnapshot = ""
 
     // A1 per-frame poll state (driven by Choreographer).
@@ -1351,6 +1352,16 @@ class MainActivity : AppCompatActivity() {
         mapCloseCanvas = if (open) rect("close") else null
         mapZoomInCanvas = if (open) rect("zoomIn") else null
         mapZoomOutCanvas = if (open) rect("zoomOut") else null
+        // FIX-14: the map search never flips INPUT_TYPE, so the soft keyboard would otherwise linger over the
+        // jumped-to map until the map closes. Watch the engine WORLDMAP_SEARCHING flag (published in the
+        // snapshot): on its 1->0 edge the search has committed (Enter) or been cancelled (Quit) — drop the latch
+        // so the per-frame input poll auto-hides the keyboard.
+        val searching = open && o?.optInt("searching", 0) == 1
+        if (mapWasSearching && !searching && mapSearchKeyboard) {
+            mapSearchKeyboard = false
+            Log.i(TAG, "p5: map search committed -> dismiss keyboard")
+        }
+        mapWasSearching = searching
         if (open != mapOpen) {
             mapOpen = open
             // The native chrome would cover the floating window — hide it while the map owns the screen.

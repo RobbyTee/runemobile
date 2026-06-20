@@ -929,6 +929,10 @@ public final class HudVeneerBridge
 
 		final StringBuilder sb = new StringBuilder(192);
 		sb.append("{\"open\":true");
+		// Engine search-active flag (1 while the magnifier search is focused). Native uses the 1->0 edge to
+		// auto-dismiss the soft keyboard once a search commits/cancels (the search never flips INPUT_TYPE, so
+		// this is the only signal the native shell has that the search ended).
+		sb.append(",\"searching\":").append(c.getVarcIntValue(VarClientID.WORLDMAP_SEARCHING));
 		appendRect(c, sb, "window", InterfaceID.Worldmap.UNIVERSE, InterfaceID.Worldmap.WINDOW);
 		appendRect(c, sb, "map", InterfaceID.Worldmap.MAP_DISPLAY, InterfaceID.Worldmap.MAP_CONTAINER);
 		appendRect(c, sb, "close", InterfaceID.Worldmap.CLOSE, -1);
