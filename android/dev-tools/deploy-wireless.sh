@@ -10,17 +10,26 @@
 #       ./deploy-wireless.sh release      # signed release build
 #       ./deploy-wireless.sh debug launch # install + launch
 #
+# Remote over Tailscale (phone NOT on this Mac's Wi-Fi — e.g. cellular/elsewhere; both on the tailnet):
+#       ./deploy-wireless.sh --tailnet <port> [debug|release] [launch]
+#   The tailnet IP is STABLE; the Wireless-debugging PORT is dynamic and mDNS does NOT cross Tailscale, so read
+#   the port off the phone (Settings > Developer options > Wireless debugging > "IP address & Port") and pass it.
+#   The port is cached, so later runs can omit it (./deploy-wireless.sh --tailnet) UNTIL the phone reboots
+#   (then re-read + re-pass it). Pairing persists; keep Tailscale exempt from Android battery optimisation.
+#
 # Legacy fallback (cable plugged in) if mDNS/pairing isn't available:  ./deploy-wireless.sh --bootstrap
 #   NOTE: the legacy `adb tcpip 5555` mode RESETS on reboot AND on deep doze (and this LAN can then return
 #   "No route to host" on :5555) — prefer --pair, which uses a paired, mDNS-discovered endpoint instead.
 #
-# The phone must be on the SAME Wi-Fi/LAN as this Mac.
+# For normal (non-tailnet) runs the phone must be on the SAME Wi-Fi/LAN as this Mac.
 set -euo pipefail
 
 # --- config (override via env) ----------------------------------------------------------------------------
 USB_SERIAL="${USB_SERIAL:-33171JEHN06239}"     # the device serial; also appears in its mDNS service name
 DEVICE_IP="${DEVICE_IP:-192.168.0.123}"        # the phone's LAN IP (for matching + legacy fallback)
 LEGACY_PHONE="${LEGACY_PHONE:-$DEVICE_IP:5555}" # legacy `adb tcpip` endpoint (fallback only)
+TAILNET_HOST="${TAILNET_HOST:-100.71.120.29}"  # the phone's STABLE Tailscale IP (for --tailnet remote deploys)
+TAILNET_CACHE="${TMPDIR:-/tmp}/helloshell-tailnet-port"   # last-known wireless-debug port over Tailscale
 PHONE="${PHONE:-}"                              # optional explicit ip:port override (skips auto-discovery)
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 # JAVA_HOME: prefer JDK 21 (AGP needs 17+); fall back to whatever's on PATH.
@@ -78,6 +87,18 @@ if [ "${1:-}" = "--bootstrap" ]; then
   exit 0
 fi
 
+# --- remote over Tailscale: target the phone's stable tailnet IP (mDNS can't cross the tailnet) ------------
+if [ "${1:-}" = "--tailnet" ]; then
+  command -v adb >/dev/null || die "adb not found (ANDROID_HOME=$ANDROID_HOME)"
+  shift
+  if [[ "${1:-}" =~ ^[0-9]+$ ]]; then echo "$1" > "$TAILNET_CACHE"; shift; fi   # explicit port -> cache it
+  port="$(cat "$TAILNET_CACHE" 2>/dev/null || true)"
+  [ -n "$port" ] || die "no Wireless-debugging port known. Read it from the phone (Settings > Developer options > Wireless debugging > 'IP address & Port') and run: ./deploy-wireless.sh --tailnet <port> [debug|release] [launch]"
+  PHONE="$TAILNET_HOST:$port"   # explicit override — ensure_connected uses it directly
+  say "remote (Tailscale) target: $PHONE  — re-pass --tailnet <port> after a phone reboot (the port changes)"
+  # remaining args ($1=config, $2=action) fall through to the normal run below
+fi
+
 # --- normal run: ensure the wireless link, build, install --------------------------------------------------
 CONFIG="${1:-debug}"; ACTION="${2:-}"
 case "$CONFIG" in
@@ -87,11 +108,10 @@ case "$CONFIG" in
 esac
 
 ensure_connected() {
-  # 1) already connected for this device (any wireless endpoint reporting 'device')?
-  local ep
-  ep="$(adb devices | awk -v ip="$DEVICE_IP" '$2=="device" && $1 ~ "^"ip":" {print $1; exit}')"
-  # 2) explicit override, then mDNS discovery, then legacy :5555
-  if [ -z "$ep" ]; then ep="${PHONE:-}"; fi
+  # 1) explicit override (PHONE env or --tailnet) wins; 2) reuse an already-connected LAN transport;
+  # 3) mDNS discovery; 4) legacy :5555.
+  local ep="${PHONE:-}"
+  if [ -z "$ep" ]; then ep="$(adb devices | awk -v ip="$DEVICE_IP" '$2=="device" && $1 ~ "^"ip":" {print $1; exit}')"; fi
   if [ -z "$ep" ]; then ep="$(discover_endpoint)"; fi
   if [ -z "$ep" ]; then ep="$LEGACY_PHONE"; fi
   if [ "$(adb -s "$ep" get-state 2>/dev/null || true)" != "device" ]; then
