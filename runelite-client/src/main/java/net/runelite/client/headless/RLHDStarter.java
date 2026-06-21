@@ -135,14 +135,14 @@ public final class RLHDStarter
 			// access races and corrupts animated models (real players flash with wrong geometry/colours; NPCs on
 			// the shared opaque path are less affected). Single-threaded keeps every GL call on the context thread.
 			MobileUiBridge.setConfig("hd", "asyncModelProcessing", "false");
-			// FIX-13 (cont): draw distance 30 -> 25 tiles. Scene geometry is submitted to BOTH the scene and the
-			// shadow (light-POV) passes, so a smaller ring shrinks both quadratically — the most efficient single cut.
-			// Still well within mobile-playable range (desktop default is 50). Reversible (drawDistance).
-			final String d = MobileUiBridge.setConfig("hd", "drawDistance", "25");
+			// Draw distance 30 (desktop default is 50). FIX-13 (cont) tested 25, but a device A/B showed it adds only
+			// ~1 fps in fill-bound open-world scenes (sceneResolutionScale does ~80% of the win) for the most visible
+			// cost (a nearer horizon) — so it stays at 30 to preserve the open-world view. Reversible (drawDistance).
+			final String d = MobileUiBridge.setConfig("hd", "drawDistance", "30");
 			if (d.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced mobile config: LINEAR, tiledLighting=off, AA=off, shadows=1024, sceneScale=85, aniso=8, draw=25, single-threaded");
+				log.info("[routecrlhd] forced mobile config: LINEAR, tiledLighting=off, AA=off, shadows=1024, sceneScale=85, aniso=8, draw=30, single-threaded");
 			}
 				return;
 			}
