@@ -37,7 +37,6 @@ import android.widget.FrameLayout
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.Button
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.addCallback
@@ -128,10 +127,6 @@ class MainActivity : AppCompatActivity() {
     private var imeWasShown = false       // last frame's ACTUAL ime visibility — to spot a user-driven dismiss
     private var manualKeyboard = false   // ⌨ toggle: hold the soft keyboard up with no engine text field open
     private var keyboardToggleBtn: Button? = null   // the ⌨ button, so a dismiss can reset its on/off alpha
-    // Keyboard accessory bar (finding M): a key palette pinned above the soft keyboard. Synced each frame.
-    private var kbAccessoryBar: HorizontalScrollView? = null
-    private var kbAccessoryShown = false   // last applied visibility (edge-trigger the show/hide)
-    private var kbAccessoryBottom = -1     // last applied IME-inset bottom (edge-trigger the lift)
     // FIX-11: a rendered Swing panel's text field is focused and its OWN Compose mirror field owns the soft
     // keyboard — the per-frame poll must NOT raise GameInputView (steals focus) or dismiss the IME (kills it).
     @Volatile var textActivePanel = false
@@ -211,12 +206,10 @@ class MainActivity : AppCompatActivity() {
         // AWT virtual-key codes (java.awt.event.KeyEvent) the engine's onKeyStroke expects.
         private const val VK_BACK_SPACE = 8
         private const val VK_ENTER = 10
-        private const val VK_ESCAPE = 27
         private const val VK_LEFT = 37
         private const val VK_UP = 38
         private const val VK_RIGHT = 39
         private const val VK_DOWN = 40
-        private const val VK_F1 = 112   // AWT F1..F12 are contiguous: VK_F1 + (n - 1)
 
         // Pinch-to-wheel: geometric step a scale ratio must cross to emit one wheel notch.
         private const val PINCH_STEP = 1.08f
@@ -506,10 +499,6 @@ class MainActivity : AppCompatActivity() {
             // hidden in release — renderer selection lives in the native plugin panel (renderer-as-plugins).
             if (BuildConfig.DEBUG) { addView(chromeButton); addView(gpuButton); addView(hdButton) }
         }
-        // Finding M: the keyboard accessory bar (key palette above the soft keyboard). GONE until the game
-        // keyboard is up; visibility + lift driven each frame by updateKbAccessory off the observed IME inset.
-        val kbAccessory = buildKbAccessoryBar()
-        kbAccessoryBar = kbAccessory
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
             addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
@@ -533,10 +522,6 @@ class MainActivity : AppCompatActivity() {
                     val m = (8 * resources.displayMetrics.density).toInt()
                     leftMargin = m; bottomMargin = m
                 })
-            // Finding M: accessory bar above the devBar/handle (so it's reachable when the keyboard covers them),
-            // but below the launcher sheet. Bottom-anchored, full width; lifted above the IME via translationY.
-            addView(kbAccessory, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
             // §4 increment 3: the launcher is now a transparent-host PEEK/EXPAND bottom sheet (SheetScaffold) —
             // added LAST so its sheet/scrim draw OVER the handle + devBar (and the game composites through the
             // transparent top). GONE until opened.
@@ -1119,74 +1104,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Keyboard accessory bar (audit finding M; iOS parity) — a key palette pinned ABOVE the soft keyboard so the
-     * non-character keys stay reachable while the IME covers the HUD. Esc / Enter / arrows / F1-F12 each post an
-     * AWT keystroke straight to the engine ([JvmLauncher.keyStroke], the same path [GameInputView] uses), so the
-     * engine interprets them in context (Enter sends a chat line, F-keys switch tabs, arrows rotate the camera or
-     * move the text caret). The buttons are non-focusable so a tap never steals focus from [keyboardView] (which
-     * would collapse the IME). Visibility + position are synced each frame by [updateKbAccessory] off the observed
-     * IME inset; it's shown only while the GAME keyboard is up (not when a Compose panel field owns input).
-     */
-    private fun buildKbAccessoryBar(): HorizontalScrollView {
-        fun keyButton(label: String, vk: Int) = Button(this).apply {
-            text = label
-            textSize = 13f
-            isAllCaps = false
-            // Non-focusable: receive the click but never grab input focus from the hidden editor, so the IME stays up.
-            isFocusable = false
-            isFocusableInTouchMode = false
-            minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
-            val px = (12 * resources.displayMetrics.density).toInt()
-            setPadding(px, px / 3, px, px / 3)
-            setTextColor(0xFFFFFFFF.toInt())
-            background = android.graphics.drawable.GradientDrawable().apply {
-                cornerRadius = 12f
-                setColor(0xE6262626.toInt())
-                setStroke((1 * resources.displayMetrics.density).toInt(), 0x44FFFFFF)
-            }
-            setOnClickListener {
-                JvmLauncher.keyStroke(vk)
-                Log.i(TAG, "kbacc: $label -> keyStroke($vk)")
-            }
-        }
-        val gap = (4 * resources.displayMetrics.density).toInt()
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(gap, gap, gap, gap)
-            fun add(v: View) = addView(v, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { rightMargin = gap })
-            add(keyButton("Esc", VK_ESCAPE))
-            add(keyButton("⏎", VK_ENTER))
-            add(keyButton("←", VK_LEFT))
-            add(keyButton("↑", VK_UP))
-            add(keyButton("↓", VK_DOWN))
-            add(keyButton("→", VK_RIGHT))
-            for (i in 1..12) add(keyButton("F$i", VK_F1 + (i - 1)))
-        }
-        return HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            isFocusable = false
-            setBackgroundColor(0xCC101010.toInt())
-            addView(row)
-            visibility = View.GONE
-        }
-    }
-
-    /** Sync the accessory bar with the observed IME each frame: show only while the game keyboard is up, and lift
-     *  the bottom-anchored bar to sit directly on top of the keyboard (translationY, no relayout). */
-    private fun updateKbAccessory(show: Boolean, imeBottom: Int) {
-        val bar = kbAccessoryBar ?: return
-        if (show != kbAccessoryShown) {
-            kbAccessoryShown = show
-            bar.visibility = if (show) View.VISIBLE else View.GONE
-        }
-        if (show && imeBottom != kbAccessoryBottom) {
-            kbAccessoryBottom = imeBottom
-            bar.translationY = -imeBottom.toFloat()
-        }
-    }
-
     /** Hide the Android status + navigation bars (sticky immersive) so the game frame is edge-to-edge with no
      *  system chrome. Transient bars come back on a swipe from the edge, then auto-hide. */
     private fun enterImmersive() {
@@ -1217,11 +1134,6 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     keyboardShown
                 }
-                // Finding M: keep the accessory bar glued above the keyboard. Only while the GAME keyboard is up —
-                // a Compose panel field (textActivePanel) owns its own input, so game keystrokes must not leak there.
-                val imeBottom = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
-                    surfaceView.rootWindowInsets?.getInsets(WindowInsets.Type.ime())?.bottom ?: 0 else 0
-                updateKbAccessory(imeShown && !textActivePanel, imeBottom)
                 if (textActivePanel) {
                     // FIX-11: a rendered Swing panel's text field is focused; its native Compose mirror field
                     // (PanelView) owns the soft keyboard. Don't touch the IME here — raising GameInputView would
