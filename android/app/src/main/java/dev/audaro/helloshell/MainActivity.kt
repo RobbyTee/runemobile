@@ -200,7 +200,8 @@ class MainActivity : AppCompatActivity() {
         @Volatile var canvasW = 0
         @Volatile var canvasH = 0
 
-        private const val NOTIF_CHANNEL = "runelite_game"
+        private const val NOTIF_CHANNEL = "runelite_game"            // audible (IMPORTANCE_DEFAULT)
+        private const val NOTIF_CHANNEL_SILENT = "runelite_game_silent"  // AP-2: no sound (IMPORTANCE_LOW)
         private const val REQ_POST_NOTIFICATIONS = 7001
 
         // AWT virtual-key codes (java.awt.event.KeyEvent) the engine's onKeyStroke expects.
@@ -1252,9 +1253,16 @@ class MainActivity : AppCompatActivity() {
     /** AP-2a Finding 9: create the notification channel + request POST_NOTIFICATIONS (API 33+). */
     private fun setupNotifications() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val ch = NotificationChannel(NOTIF_CHANNEL, "Game alerts", NotificationManager.IMPORTANCE_DEFAULT)
                 .apply { description = "In-game notifications (idle, level-up, etc.)" }
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(ch)
+            mgr.createNotificationChannel(ch)
+            // AP-2: a parallel SILENT channel. Android governs notification sound by channel on O+, so a
+            // notification whose RuneLite sound is OFF (or volume 0) is routed here — it still shows in the shade
+            // but makes no sound. Audible ones use the default channel above (the channel's own sound).
+            val chSilent = NotificationChannel(NOTIF_CHANNEL_SILENT, "Game alerts (silent)", NotificationManager.IMPORTANCE_LOW)
+                .apply { description = "In-game notifications with sound disabled"; setSound(null, null) }
+            mgr.createNotificationChannel(chSilent)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
@@ -1294,11 +1302,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Raise a system notification from a "titlebody" payload (the shared SOH-delimited format). */
+    /** Raise a system notification from the shared SOH-delimited payload "titlebodysoundTypevolume"
+     *  (NOTIF-1: soundType is the RuneLite NotificationSound name — OFF/NATIVE/CUSTOM — and volume is 0..100, or
+     *  ""/-1 for a host-origin default). Android governs notification sound by CHANNEL on O+, so OFF / volume-0
+     *  route to the silent channel and everything else to the audible one (.wav CUSTOM maps to the channel sound,
+     *  since the desktop file isn't portable to the OS channel). */
     private fun deliverNotification(payload: String) {
-        val sep = payload.indexOf('')
-        val title = if (sep >= 0) payload.substring(0, sep) else "RuneLite"
-        val body = if (sep >= 0) payload.substring(sep + 1) else payload
+        val parts = payload.split('')
+        val title: String
+        val body: String
+        if (parts.size >= 2) { title = parts[0].ifEmpty { "RuneLite" }; body = parts[1] }
+        else { title = "RuneLite"; body = payload }   // legacy/no-separator payload
+        val soundType = parts.getOrNull(2).orEmpty()
+        val volume = parts.getOrNull(3)?.toIntOrNull() ?: -1
+        val silent = soundType.equals("OFF", ignoreCase = true) || volume == 0
+        val channel = if (silent) NOTIF_CHANNEL_SILENT else NOTIF_CHANNEL
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED
@@ -1316,17 +1334,18 @@ class MainActivity : AppCompatActivity() {
                 android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
             )
         }
-        val n = NotificationCompat.Builder(this, NOTIF_CHANNEL)
+        val n = NotificationCompat.Builder(this, channel)
             .setSmallIcon(android.R.drawable.stat_notify_more)
             .setContentTitle(title.ifEmpty { "RuneLite" })
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setAutoCancel(true)
+            .setSilent(silent)   // belt-and-suspenders for pre-O (no channels); the channel governs on O+
             .apply { if (pi != null) setContentIntent(pi) }
             .build()
         try {
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(notifId++, n)
-            Log.i(TAG, "ap2a: notification delivered title='$title'")
+            Log.i(TAG, "ap2a: notification delivered title='$title' sound='$soundType' vol=$volume silent=$silent")
         } catch (t: Throwable) {
             Log.w(TAG, "ap2a: notify failed: ${t.message}")
         }
