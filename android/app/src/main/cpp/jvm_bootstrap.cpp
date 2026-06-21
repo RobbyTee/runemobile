@@ -61,6 +61,9 @@ static jmethodID g_midTextInputOpen = nullptr, g_midInteractTapSeq = nullptr;
 static jmethodID g_midSelectMenuPoint = nullptr;
 // AP-2a sticky-Shift: JavaBridge.setShiftHeld(boolean) — synthetic held VK_SHIFT (shared, iOS-device-proven).
 static jmethodID g_midSetShiftHeld = nullptr;
+// Hotkey chord: JavaBridge.onKeybind(keyCode, modifiers) — posts a matched KEY_PRESSED+KEY_RELEASED so a
+// native per-plugin hotkey button fires the plugin's Keybind. Optional resolve (older jars lack it).
+static jmethodID g_midKeybind = nullptr;
 // FIX-10b: JavaBridge.invokeMenuEntry(int parentDisplayIndex, int childIndex) — commit a native tap-menu row /
 // submenu child directly (child<0 = the parent entry itself). Optional resolve (older jars lack it).
 static jmethodID g_midInvokeMenuEntry = nullptr;
@@ -120,7 +123,7 @@ static jmethodID g_midWorldSetFav = nullptr, g_midWorldHopDir = nullptr;   // SC
 // Finding 15 — overlay edit (OverlayBridge): list movable overlays, snap one to a corner, reset to default.
 static jclass    g_overlayCls = nullptr;
 static jmethodID g_midOverlayAvail = nullptr, g_midOverlaySetUiOpen = nullptr, g_midOverlaysJson = nullptr,
-                 g_midOverlaySnap = nullptr, g_midOverlayReset = nullptr;
+                 g_midOverlaySnap = nullptr, g_midOverlayReset = nullptr, g_midOverlaySetLoc = nullptr;
 // Finding 22 — infobox menu (InfoBoxBridge): list infoboxes + their menu options, invoke one (Detach/Flip/Delete).
 static jclass    g_infoboxCls = nullptr;
 static jmethodID g_midInfoBoxAvail = nullptr, g_midInfoBoxSetUiOpen = nullptr, g_midInfoBoxesJson = nullptr,
@@ -248,7 +251,10 @@ enum InputKind {
     // FIX-10b submenu commit: JavaBridge.invokeMenuEntry(parentDisplayIndex=a, childIndex=b). Drives a native
     // tap-menu's submenu children (Menu Entry Swapper swap lists) — they aren't in the engine menu geometry,
     // so a geometry click (selectMenuPoint) can't reach them; this calls the entry's onClick directly.
-    IN_INVOKEMENUENTRY = 12
+    IN_INVOKEMENUENTRY = 12,
+    // Hotkey chord: JavaBridge.onKeybind(keyCode=a, modifiers=b). Queued (not a direct facade call) so the
+    // already-attached render thread makes the call and it stays ordered with any paired shift-hold.
+    IN_KEYBIND = 13
 };
 // s carries the IN_TEXT payload; empty for the int-only kinds (aggregate-inits to "").
 struct InputEvent { int kind, a, b, c, d; std::string s; };
@@ -475,6 +481,7 @@ static bool publishBridge(JNIEnv *env) {
     }
     // AP-2a sticky-Shift: best-effort (a missing one only disables the ⇧ button, never the render path).
     g_midSetShiftHeld = midOpt(env, global, "setShiftHeld", "(Z)V");
+    g_midKeybind      = midOpt(env, global, "onKeybind", "(II)V");
     g_midInvokeMenuEntry = midOpt(env, global, "invokeMenuEntry", "(II)V");   // FIX-10b submenu commit (optional)
     // FIX-3 idle keepalive: best-effort (a missing one only disables the idle-reset, never the render path) so
     // an older staged jar lacking keepAlive still boots.
@@ -658,6 +665,8 @@ static bool publishBridge(JNIEnv *env) {
             g_midOverlaysJson     = midOpt(env, obg, "getOverlaysJson", "()Ljava/lang/String;");
             g_midOverlaySnap      = midOpt(env, obg, "setOverlayPreferredPosition", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
             g_midOverlayReset     = midOpt(env, obg, "resetOverlay", "(Ljava/lang/String;)Ljava/lang/String;");
+            // Free pixel-drag (optional, not gated): older jars without it still get list/snap/reset.
+            g_midOverlaySetLoc    = midOpt(env, obg, "setOverlayPreferredLocation", "(Ljava/lang/String;II)Ljava/lang/String;");
             bool overlayOk = g_midOverlayAvail && g_midOverlaySetUiOpen && g_midOverlaysJson
                           && g_midOverlaySnap && g_midOverlayReset;
             if (overlayOk) {
@@ -805,6 +814,7 @@ static void drainInput(JNIEnv *env) {
             case IN_CLICKPRECISE: env->CallStaticVoidMethod(g_bridgeCls, g_midClickPrecise, ev.a, ev.b, ev.c); break;
             case IN_MOVE:         env->CallStaticVoidMethod(g_bridgeCls, g_midMove, ev.a, ev.b); break;
             case IN_KEYSTROKE:    env->CallStaticVoidMethod(g_bridgeCls, g_midKeyStroke, ev.a); break;
+            case IN_KEYBIND:      if (g_midKeybind) env->CallStaticVoidMethod(g_bridgeCls, g_midKeybind, ev.a, ev.b); break;
             case IN_SELECTMENU:   env->CallStaticVoidMethod(g_bridgeCls, g_midSelectMenuPoint, ev.a, ev.b); break;
             case IN_SHIFT:        if (g_midSetShiftHeld) env->CallStaticVoidMethod(g_bridgeCls, g_midSetShiftHeld, (jboolean)(ev.a != 0)); break;
             case IN_INVOKEMENUENTRY: if (g_midInvokeMenuEntry) env->CallStaticVoidMethod(g_bridgeCls, g_midInvokeMenuEntry, ev.a, ev.b); break;
@@ -1351,6 +1361,10 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeKeyStroke(JNIEnv *, jobject, jint v
     enqueue({IN_KEYSTROKE, vk, 0, 0, 0});
 }
 extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeKeybind(JNIEnv *, jobject, jint vk, jint modifiers) {
+    enqueue({IN_KEYBIND, vk, modifiers, 0, 0});
+}
+extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeText(JNIEnv *env, jobject, jstring js) {
     InputEvent ev{IN_TEXT, 0, 0, 0, 0};
     ev.s = jstr(env, js);
@@ -1788,6 +1802,19 @@ static jstring facadeStrArgs(JNIEnv *artEnv, jclass cls, jmethodID m, jstring j1
     if (r) hs->DeleteLocalRef(r);
     return artEnv->NewStringUTF(out.c_str());
 }
+// (String,int,int)->String facade call (overlay free pixel-drag: setOverlayPreferredLocation(name,x,y)).
+static jstring facadeStrLocArgs(JNIEnv *artEnv, jclass cls, jmethodID m, jstring jName, jint x, jint y) {
+    if (!cls || !m) return artEnv->NewStringUTF("");
+    std::string a1 = jstr(artEnv, jName);
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs) return artEnv->NewStringUTF("");
+    jstring h1 = hs->NewStringUTF(a1.c_str());
+    jstring r = (jstring) hs->CallStaticObjectMethod(cls, m, h1, x, y);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (h1) hs->DeleteLocalRef(h1);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
 static jboolean facadeBool(jclass cls, jmethodID m) {
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !cls || !m) return JNI_FALSE;
@@ -1992,6 +2019,11 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeOverlayReset(JNIEnv *artEnv, jobject, jstring jName) {
     if (!overlayReady()) return artEnv->NewStringUTF("");
     return facadeStrArgs(artEnv, g_overlayCls, g_midOverlayReset, jName, nullptr, false);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOverlaySetLocation(JNIEnv *artEnv, jobject, jstring jName, jint x, jint y) {
+    if (!overlayReady() || !g_midOverlaySetLoc) return artEnv->NewStringUTF("");
+    return facadeStrLocArgs(artEnv, g_overlayCls, g_midOverlaySetLoc, jName, x, y);
 }
 
 // Finding 22 — infobox menu. avail/setUiOpen/list like the others; invoke(index, option) fires the action.

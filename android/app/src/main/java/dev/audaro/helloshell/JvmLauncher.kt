@@ -95,6 +95,9 @@ object JvmLauncher {
     /** A special key by AWT virtual-key code (backspace, enter, arrows, …). */
     external fun nativeKeyStroke(vk: Int)
 
+    /** Fire a plugin Keybind chord via JavaBridge.onKeybind: an AWT key-code + extended-modifier mask. */
+    external fun nativeKeybind(vk: Int, modifiers: Int)
+
     /** Does the engine currently have a text field focused? Poll to auto-raise/dismiss the soft keyboard. */
     external fun nativeIsTextInputOpen(): Boolean
 
@@ -207,6 +210,9 @@ object JvmLauncher {
     external fun nativeOverlaysJson(): String
     external fun nativeOverlaySnap(name: String, positionName: String): String
     external fun nativeOverlayReset(name: String): String
+    // Free pixel-drag: move an overlay to an explicit canvas-px location (clears its snap corner). Returns the
+    // bridge JSON ack. Inert if the staged jar lacks setOverlayPreferredLocation.
+    external fun nativeOverlaySetLocation(name: String, x: Int, y: Int): String
 
     // Finding 22 — infobox menu (InfoBoxBridge): list infoboxes + their menu options, invoke one by index.
     external fun nativeInfoBoxAvailable(): Boolean
@@ -278,6 +284,7 @@ object JvmLauncher {
     fun move(x: Int, y: Int) = nativeMove(x, y)
     fun text(s: String) = nativeText(s)
     fun keyStroke(vk: Int) = nativeKeyStroke(vk)
+    fun keybind(vk: Int, modifiers: Int) = nativeKeybind(vk, modifiers)
     fun isTextInputOpen() = nativeIsTextInputOpen()
     fun interactTapSeq() = nativeInteractTapSeq()
     fun selectMenuPoint(x: Int, y: Int) = nativeSelectMenuPoint(x, y)
@@ -369,6 +376,7 @@ object JvmLauncher {
     fun overlaysJson() = nativeOverlaysJson()
     fun overlaySnap(name: String, positionName: String) = nativeOverlaySnap(name, positionName)
     fun overlayReset(name: String) = nativeOverlayReset(name)
+    fun overlaySetLocation(name: String, x: Int, y: Int) = nativeOverlaySetLocation(name, x, y)
     fun infoBoxAvailable() = nativeInfoBoxAvailable()
     fun infoBoxSetUiOpen(open: Boolean) = nativeInfoBoxSetUiOpen(open)
     fun infoBoxesJson() = nativeInfoBoxesJson()
