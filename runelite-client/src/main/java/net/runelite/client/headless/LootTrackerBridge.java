@@ -25,6 +25,7 @@
 package net.runelite.client.headless;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -77,6 +78,9 @@ public final class LootTrackerBridge
 	private static Field fAggregateRecords; // LootTrackerPanel.aggregateRecords
 	private static Field fRecordTitle, fRecordSubTitle, fRecordType, fRecordItems, fRecordKills;
 	private static Field fItemId, fItemName, fItemQuantity, fItemGePrice, fItemHaPrice;
+	// Reset action: panel.clearRecords() (empties the in-memory model) + plugin.removeAllLoot() (deletes the
+	// persisted RS-profile drops_* config so it doesn't reappear next boot) — mirrors the desktop "Reset All".
+	private static Method mClearRecords, mRemoveAllLoot;
 
 	// Cached snapshot (built on the client thread, read off-thread).
 	private static volatile String lootJson = "{\"available\":false}";
@@ -112,6 +116,43 @@ public final class LootTrackerBridge
 	public static String getLootJson()
 	{
 		return lootJson;
+	}
+
+	/**
+	 * Clear the entire loot log — the native equivalent of the desktop panel's "Reset All" (no detailed view):
+	 * empties the in-memory aggregate/session records and deletes the persisted {@code drops_*} config so it
+	 * does not reappear on the next boot. Runs on the client thread (matches the other write-bridges); the next
+	 * {@link #tick(Client)} re-snapshots the now-empty model for the native side. Returns a JSON ack.
+	 */
+	public static String resetAll()
+	{
+		final ClientThread ct = clientThread;
+		if (ct == null || !ensureResolved())
+		{
+			return ack(false, "unavailable");
+		}
+		ct.invokeLater(() ->
+		{
+			try
+			{
+				final Object p = plugin;
+				final Object panel = p == null ? null : fPanel.get(p);
+				if (panel != null)
+				{
+					mClearRecords.invoke(panel);
+				}
+				if (p != null)
+				{
+					mRemoveAllLoot.invoke(p);
+				}
+				lastRefresh = 0; // force an immediate re-snapshot on the next tick
+			}
+			catch (Throwable ex)
+			{
+				BridgeFaults.note("LootTrackerBridge.resetAll", ex);
+			}
+		});
+		return ack(true, null);
 	}
 
 	/**
@@ -375,6 +416,9 @@ public final class LootTrackerBridge
 			fItemGePrice = field(itemClass, "gePrice");
 			fItemHaPrice = field(itemClass, "haPrice");
 
+			mClearRecords = method(panelClass, "clearRecords");
+			mRemoveAllLoot = method(found.getClass(), "removeAllLoot");
+
 			plugin = found;
 			resolveState = 1;
 			log.info("[loottracker] native bridge resolved");
@@ -393,6 +437,25 @@ public final class LootTrackerBridge
 		final Field f = c.getDeclaredField(name);
 		f.setAccessible(true);
 		return f;
+	}
+
+	private static Method method(Class<?> c, String name) throws NoSuchMethodException
+	{
+		final Method m = c.getDeclaredMethod(name);
+		m.setAccessible(true);
+		return m;
+	}
+
+	private static String ack(boolean ok, String error)
+	{
+		final StringBuilder sb = new StringBuilder(48);
+		sb.append("{\"ok\":").append(ok);
+		if (error != null)
+		{
+			sb.append(",\"error\":").append(quote(error));
+		}
+		sb.append('}');
+		return sb.toString();
 	}
 
 	private static String enumName(Object enumValue)

@@ -274,6 +274,8 @@ public final class JavaBridge
 	private static boolean pressed;
 	private static int pressButton = MouseEvent.BUTTON1;
 	private static boolean shiftHeld;     // sticky-Shift: a held VK_SHIFT KEY_PRESSED with no release (see setShiftHeld)
+	private static boolean ctrlHeld;      // sticky-Ctrl: same latch for VK_CONTROL (see setCtrlHeld)
+	private static boolean altHeld;       // sticky-Alt:  same latch for VK_ALT (Ground-Items Alt-highlight; see setAltHeld)
 
 	// Camera (two-finger pan -> direct yaw/pitch target). Sub-pixel remainders so a slow drag still turns
 	// (a small per-event pixel delta would otherwise truncate to 0 yaw units).
@@ -1349,8 +1351,9 @@ public final class JavaBridge
 	{
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
-		final int downMask = awtButton == MouseEvent.BUTTON3
-			? InputEvent.BUTTON3_DOWN_MASK : InputEvent.BUTTON1_DOWN_MASK;
+		final int downMask = awtButton == MouseEvent.BUTTON3 ? InputEvent.BUTTON3_DOWN_MASK
+			: awtButton == MouseEvent.BUTTON2 ? InputEvent.BUTTON2_DOWN_MASK
+			: InputEvent.BUTTON1_DOWN_MASK;
 		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, t,
 			downMask, x, y, 1, false, awtButton));
 		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t + 1,
@@ -1792,29 +1795,74 @@ public final class JavaBridge
 	 */
 	public static void setShiftHeld(boolean held)
 	{
-		if (held == shiftHeld)
+		shiftHeld = postModifierHeld(held, shiftHeld, KeyEvent.VK_SHIFT, InputEvent.SHIFT_DOWN_MASK);
+	}
+
+	/**
+	 * Sticky-Ctrl — same mechanism as {@link #setShiftHeld}, for the Ctrl-gated surface (e.g. middle-click-style
+	 * Ctrl interactions, plugins that read {@code isKeyPressed(KC_CONTROL)}). A native modifier toggle calls this.
+	 */
+	public static void setCtrlHeld(boolean held)
+	{
+		ctrlHeld = postModifierHeld(held, ctrlHeld, KeyEvent.VK_CONTROL, InputEvent.CTRL_DOWN_MASK);
+	}
+
+	/**
+	 * Sticky-Alt — same mechanism as {@link #setShiftHeld}. Notably drives Ground Items' "hold Alt to highlight"
+	 * (the plugin shows item names / its highlight while Alt is held). A native modifier toggle calls this.
+	 */
+	public static void setAltHeld(boolean held)
+	{
+		altHeld = postModifierHeld(held, altHeld, KeyEvent.VK_ALT, InputEvent.ALT_DOWN_MASK);
+	}
+
+	/**
+	 * Shared sticky-modifier latch (see {@link #setShiftHeld} for the full rationale): transition-gated so a held
+	 * toggle isn't re-posted every frame. {@code held=true} posts ONE {@code KEY_PRESSED} (no release) with the
+	 * modifier's down-mask; {@code held=false} posts the matching {@code KEY_RELEASED}. Returns the new held state
+	 * (unchanged if there is no live canvas or nothing to do).
+	 */
+	private static boolean postModifierHeld(boolean held, boolean current, int vk, int downMask)
+	{
+		if (held == current)
 		{
-			return;
+			return current;
 		}
 		final Canvas canvas = liveCanvas();
 		if (canvas == null)
 		{
-			return;
+			return current;
 		}
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
 		if (held)
 		{
 			ensureFocus(q, canvas);
-			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, InputEvent.SHIFT_DOWN_MASK,
-				KeyEvent.VK_SHIFT, KeyEvent.CHAR_UNDEFINED, KeyEvent.KEY_LOCATION_LEFT));
+			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, downMask,
+				vk, KeyEvent.CHAR_UNDEFINED, KeyEvent.KEY_LOCATION_LEFT));
 		}
 		else
 		{
 			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t, 0,
-				KeyEvent.VK_SHIFT, KeyEvent.CHAR_UNDEFINED, KeyEvent.KEY_LOCATION_LEFT));
+				vk, KeyEvent.CHAR_UNDEFINED, KeyEvent.KEY_LOCATION_LEFT));
 		}
-		shiftHeld = held;
+		return held;
+	}
+
+	/**
+	 * Middle-button (BUTTON2) click at {@code (x,y)} — a discrete press+release+click, the touch equivalent of a
+	 * mouse middle-click. Posts through the same canvas path as {@link #onClick}; the engine handles it per its
+	 * own "middle mouse button" setting (opens-menu / camera). No client-thread aim-assist (unlike a left/right
+	 * tap) — middle-click is a deliberate, literal-point action.
+	 */
+	public static void onMiddleClick(int x, int y)
+	{
+		final Canvas canvas = liveCanvas();
+		if (canvas == null)
+		{
+			return;
+		}
+		synthesizeClick(canvas, x, y, MouseEvent.BUTTON2);
 	}
 
 	/**

@@ -64,6 +64,8 @@ static jmethodID g_midSetShiftHeld = nullptr;
 // Hotkey chord: JavaBridge.onKeybind(keyCode, modifiers) — posts a matched KEY_PRESSED+KEY_RELEASED so a
 // native per-plugin hotkey button fires the plugin's Keybind. Optional resolve (older jars lack it).
 static jmethodID g_midKeybind = nullptr;
+// Sticky Ctrl/Alt latch (mirror of setShiftHeld) + a discrete middle-button click. Optional resolve.
+static jmethodID g_midSetCtrlHeld = nullptr, g_midSetAltHeld = nullptr, g_midMiddleClick = nullptr;
 // FIX-10b: JavaBridge.invokeMenuEntry(int parentDisplayIndex, int childIndex) — commit a native tap-menu row /
 // submenu child directly (child<0 = the parent entry itself). Optional resolve (older jars lack it).
 static jmethodID g_midInvokeMenuEntry = nullptr;
@@ -139,6 +141,7 @@ struct DataPanel { jclass cls = nullptr; jmethodID avail = nullptr, setUiOpen = 
                    std::atomic<bool> ready{false}; };
 static DataPanel g_xpPanel;
 static DataPanel g_lootPanel;
+static jmethodID g_midLootReset = nullptr;   // LootTrackerBridge.resetAll() — "Reset All" write action (optional)
 static DataPanel g_gePanel;
 // A6 chrome: MobileChromeBridge read-only snapshot facade (tab/panel/minimap/orb/chat/viewport canvas bounds
 // the native edge-rails cover-and-proxy reads each display tick). Separate facade; rl-bridge-thread read
@@ -254,7 +257,10 @@ enum InputKind {
     IN_INVOKEMENUENTRY = 12,
     // Hotkey chord: JavaBridge.onKeybind(keyCode=a, modifiers=b). Queued (not a direct facade call) so the
     // already-attached render thread makes the call and it stays ordered with any paired shift-hold.
-    IN_KEYBIND = 13
+    IN_KEYBIND = 13,
+    // Sticky Ctrl/Alt latch (a=1 hold, a=0 release) — same ordering rationale as IN_SHIFT (the modifier must
+    // be held before the menu-open click that reads it). IN_MIDDLECLICK is a BUTTON2 click at (a=x, b=y).
+    IN_CTRL = 14, IN_ALT = 15, IN_MIDDLECLICK = 16
 };
 // s carries the IN_TEXT payload; empty for the int-only kinds (aggregate-inits to "").
 struct InputEvent { int kind, a, b, c, d; std::string s; };
@@ -482,6 +488,9 @@ static bool publishBridge(JNIEnv *env) {
     // AP-2a sticky-Shift: best-effort (a missing one only disables the ⇧ button, never the render path).
     g_midSetShiftHeld = midOpt(env, global, "setShiftHeld", "(Z)V");
     g_midKeybind      = midOpt(env, global, "onKeybind", "(II)V");
+    g_midSetCtrlHeld  = midOpt(env, global, "setCtrlHeld", "(Z)V");
+    g_midSetAltHeld   = midOpt(env, global, "setAltHeld", "(Z)V");
+    g_midMiddleClick  = midOpt(env, global, "onMiddleClick", "(II)V");
     g_midInvokeMenuEntry = midOpt(env, global, "invokeMenuEntry", "(II)V");   // FIX-10b submenu commit (optional)
     // FIX-3 idle keepalive: best-effort (a missing one only disables the idle-reset, never the render path) so
     // an older staged jar lacking keepAlive still boots.
@@ -649,6 +658,11 @@ static bool publishBridge(JNIEnv *env) {
     // Finding 14 — read-only data-panel reflows (XP / Loot / GE; same facade shape as Quest/World).
     registerDataPanel(env, "net/runelite/client/headless/XpTrackerBridge", "getXpJson", g_xpPanel);
     registerDataPanel(env, "net/runelite/client/headless/LootTrackerBridge", "getLootJson", g_lootPanel);
+    // Loot Tracker also has a write action (resetAll) on the same facade class — resolve it optionally so an
+    // older staged jar without it still gets the read-only reflow.
+    if (g_lootPanel.ready.load(std::memory_order_acquire)) {
+        g_midLootReset = midOpt(env, g_lootPanel.cls, "resetAll", "()Ljava/lang/String;");
+    }
     registerDataPanel(env, "net/runelite/client/headless/GrandExchangeBridge", "getGeJson", g_gePanel);
 
     // Finding 15 — OverlayBridge: overlay edit (list + snap-to-corner + reset). Dedicated facade (action methods
@@ -817,6 +831,9 @@ static void drainInput(JNIEnv *env) {
             case IN_KEYBIND:      if (g_midKeybind) env->CallStaticVoidMethod(g_bridgeCls, g_midKeybind, ev.a, ev.b); break;
             case IN_SELECTMENU:   env->CallStaticVoidMethod(g_bridgeCls, g_midSelectMenuPoint, ev.a, ev.b); break;
             case IN_SHIFT:        if (g_midSetShiftHeld) env->CallStaticVoidMethod(g_bridgeCls, g_midSetShiftHeld, (jboolean)(ev.a != 0)); break;
+            case IN_CTRL:         if (g_midSetCtrlHeld) env->CallStaticVoidMethod(g_bridgeCls, g_midSetCtrlHeld, (jboolean)(ev.a != 0)); break;
+            case IN_ALT:          if (g_midSetAltHeld) env->CallStaticVoidMethod(g_bridgeCls, g_midSetAltHeld, (jboolean)(ev.a != 0)); break;
+            case IN_MIDDLECLICK:  if (g_midMiddleClick) env->CallStaticVoidMethod(g_bridgeCls, g_midMiddleClick, ev.a, ev.b); break;
             case IN_INVOKEMENUENTRY: if (g_midInvokeMenuEntry) env->CallStaticVoidMethod(g_bridgeCls, g_midInvokeMenuEntry, ev.a, ev.b); break;
             case IN_KEEPALIVE:    if (g_midKeepAlive) env->CallStaticVoidMethod(g_bridgeCls, g_midKeepAlive); break;
             case IN_TEXT: {
@@ -1341,6 +1358,18 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeKeepAlive(JNIEnv *, jobject) {
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeSetShiftHeld(JNIEnv *, jobject, jboolean held) {
     enqueue({IN_SHIFT, held ? 1 : 0, 0, 0, 0});
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetCtrlHeld(JNIEnv *, jobject, jboolean held) {
+    enqueue({IN_CTRL, held ? 1 : 0, 0, 0, 0});
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetAltHeld(JNIEnv *, jobject, jboolean held) {
+    enqueue({IN_ALT, held ? 1 : 0, 0, 0, 0});
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeMiddleClick(JNIEnv *, jobject, jint x, jint y) {
+    enqueue({IN_MIDDLECLICK, x, y, 0, 0});
 }
 
 // ---- A1 input ingress (UI thread enqueues; render thread drains into the bridge) ---------------------
@@ -1974,6 +2003,11 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeLootJson(JNIEnv *artEnv, jobject) {
     if (!g_lootPanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_lootPanel.cls, g_lootPanel.json);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeLootResetAll(JNIEnv *artEnv, jobject) {
+    if (!g_lootPanel.ready.load(std::memory_order_acquire) || !g_midLootReset) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_lootPanel.cls, g_midLootReset);
 }
 
 // Finding 14 — Grand Exchange native reflow (read-only). getGeJson = {available, offers:[{slot,state,itemId,

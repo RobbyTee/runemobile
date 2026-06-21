@@ -79,6 +79,11 @@ object JvmLauncher {
     // before it builds the menu, or Mark/Configure entries aren't injected). UI-thread-safe (enqueue only).
     external fun nativeSetShiftHeld(held: Boolean)
 
+    /** Sticky Ctrl/Alt latch (mirror of setShiftHeld) + a discrete middle-button (BUTTON2) click. */
+    external fun nativeSetCtrlHeld(held: Boolean)
+    external fun nativeSetAltHeld(held: Boolean)
+    external fun nativeMiddleClick(x: Int, y: Int)
+
     // ---- A1 input parity ----------------------------------------------------------------------------
     /** Mouse-wheel notch at game-canvas (x,y); rotation <0 = up/zoom-in, >0 = down/zoom-out (pinch). */
     external fun nativeWheel(x: Int, y: Int, rotation: Int)
@@ -199,6 +204,9 @@ object JvmLauncher {
     external fun nativeLootAvailable(): Boolean
     external fun nativeLootSetUiOpen(open: Boolean)
     external fun nativeLootJson(): String
+    // "Reset All": clears the loot log + deletes the persisted drops_* config. Returns the bridge JSON ack.
+    // Inert if the staged jar lacks resetAll().
+    external fun nativeLootResetAll(): String
     external fun nativeGeAvailable(): Boolean
     external fun nativeGeSetUiOpen(open: Boolean)
     external fun nativeGeJson(): String
@@ -279,6 +287,9 @@ object JvmLauncher {
     fun clearHover() = nativeClearHover()
     fun keepAlive() = nativeKeepAlive()
     fun setShiftHeld(held: Boolean) = nativeSetShiftHeld(held)
+    fun setCtrlHeld(held: Boolean) = nativeSetCtrlHeld(held)
+    fun setAltHeld(held: Boolean) = nativeSetAltHeld(held)
+    fun middleClick(x: Int, y: Int) = nativeMiddleClick(x, y)
     fun wheel(x: Int, y: Int, rotation: Int) = nativeWheel(x, y, rotation)
     fun clickPrecise(x: Int, y: Int, button: Int) = nativeClickPrecise(x, y, button)
     fun move(x: Int, y: Int) = nativeMove(x, y)
@@ -368,6 +379,7 @@ object JvmLauncher {
     fun lootAvailable() = nativeLootAvailable()
     fun lootSetUiOpen(open: Boolean) = nativeLootSetUiOpen(open)
     fun lootJson() = nativeLootJson()
+    fun lootResetAll() = nativeLootResetAll()
     fun geAvailable() = nativeGeAvailable()
     fun geSetUiOpen(open: Boolean) = nativeGeSetUiOpen(open)
     fun geJson() = nativeGeJson()
