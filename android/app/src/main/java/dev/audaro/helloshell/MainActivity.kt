@@ -99,6 +99,12 @@ class MainActivity : AppCompatActivity() {
     // scene around it — we scale that gap out of view). null = no transform applied; lastMapWindow detects change.
     private var mapWindowCanvas: IntArray? = null
     private var lastMapWindowApplied: IntArray? = null
+    // Scrollable map sub-panels: the KEY (legend) list, and the surface MAPLIST dropdown when open. A swipe that
+    // STARTS inside one scrolls it (shared scrollMapPanel) instead of panning the map.
+    private var mapKeyCanvas: IntArray? = null
+    private var mapMaplistCanvas: IntArray? = null
+    private var mapScrolling = false
+    private var mapScrollAccum = 0f
     private var mapPanning = false
     private var mapPanAccumX = 0f; private var mapPanAccumY = 0f
     // FIX-4 inventory item-drag: a one-finger drag that STARTS inside the inventory grid drags the item (touch
@@ -204,6 +210,10 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "MainActivity"
         private val booted = AtomicBoolean(false)
+
+        // World-map pan speed: multiplier on the grab-the-map finger delta. 1.0 = strict 1:1 (feels slow once the
+        // map is magnified to fullscreen); >1 covers more ground per swipe. Tune to taste.
+        private const val MAP_PAN_SPEED = 2.5f
 
         // Engine canvas dimensions (set once at the boot HeadlessResize below; stable in-world). The overlay
         // free-drag UI reads these to map a drag-pad fraction → canvas pixels for OverlayBridge.setOverlayPreferredLocation.
@@ -654,6 +664,7 @@ class MainActivity : AppCompatActivity() {
                 cameraGestureActive = false
                 chatScrolling = false
                 mapPanning = false
+                mapScrolling = false
             }
             true
         }
@@ -1015,13 +1026,22 @@ class MainActivity : AppCompatActivity() {
             // Context routing, decided once at gesture start from the DOWN point (same rule as iOS):
             // inside the open world-map window = pan the MAP; inside the live chat box = scroll the chat;
             // anywhere else = rotate the camera.
-            if (!cameraGestureActive && !chatScrolling && !mapPanning && !itemDragging) {
-                if (mapOpen && e1 != null && inCanvasRect(mapRectCanvas, toGameX(e1.x), toGameY(e1.y))) {
-                    mapPanning = true
-                    mapPanAccumX = 0f; mapPanAccumY = 0f
-                    Log.i(TAG, "p5: map pan begin")
+            if (!cameraGestureActive && !chatScrolling && !mapPanning && !mapScrolling && !itemDragging) {
+                if (mapOpen && e1 != null) {
+                    val gx = toGameX(e1.x); val gy = toGameY(e1.y)
+                    // A scrollable sub-panel (surface MAPLIST dropdown / KEY legend) takes priority over map pan —
+                    // a swipe there scrolls its list, not the map.
+                    if (inCanvasRect(mapMaplistCanvas, gx, gy) || inCanvasRect(mapKeyCanvas, gx, gy)) {
+                        mapScrolling = true
+                        mapScrollAccum = 0f
+                        Log.i(TAG, "p5: map panel scroll begin game=($gx,$gy)")
+                    } else if (inCanvasRect(mapRectCanvas, gx, gy)) {
+                        mapPanning = true
+                        mapPanAccumX = 0f; mapPanAccumY = 0f
+                        Log.i(TAG, "p5: map pan begin")
+                    }
                 }
-                if (!mapPanning) {
+                if (!mapPanning && !mapScrolling) {
                     val r = chatRectCanvas
                     if (r != null && e1 != null && !mapOpen) {
                         val gx = toGameX(e1.x); val gy = toGameY(e1.y)
@@ -1062,13 +1082,28 @@ class MainActivity : AppCompatActivity() {
                 JvmLauncher.touch(1, gx, gy, 1)   // MOUSE_DRAGGED
                 return true
             }
+            if (mapScrolling) {
+                // Scroll the legend / surface-dropdown list (content follows the finger), sub-px accumulated.
+                val vh = surfaceView.height
+                val ky = if (canvasH > 0 && vh > 0) canvasH.toFloat() / vh else 1f
+                mapScrollAccum += distanceY * ky   // finger up (distanceY>0) -> reveal lower entries
+                val whole = mapScrollAccum.toInt()
+                if (whole != 0) {
+                    mapScrollAccum -= whole
+                    JvmLauncher.onBridgeTouch { JvmLauncher.scrollMapPanel(whole) }
+                }
+                return true
+            }
             if (mapPanning) {
-                // "Grab the map": finger deltas in canvas px, sub-px accumulated (slow drags must not
-                // quantize to zero — the iOS lesson); the shared tick converts to tiles via the live zoom.
-                val fw = JvmLauncher.frameWidth(); val vw = surfaceView.width
-                val k = if (fw > 0 && vw > 0) fw.toFloat() / vw else 1f
-                mapPanAccumX += -distanceX * k
-                mapPanAccumY += -distanceY * k
+                // "Grab the map": finger deltas -> canvas px, then a speed boost so a swipe covers real ground
+                // (plain 1:1 barely moves once the map is magnified to fullscreen). Sub-px accumulated so slow
+                // drags don't quantize to zero (the iOS lesson); the shared tick converts to tiles via live zoom.
+                // canvasW/H (boot-set) is the reliable canvas size — frameWidth/Height can read 0.
+                val vw = surfaceView.width; val vh = surfaceView.height
+                val kx = if (canvasW > 0 && vw > 0) canvasW.toFloat() / vw else 1f
+                val ky = if (canvasH > 0 && vh > 0) canvasH.toFloat() / vh else 1f
+                mapPanAccumX += -distanceX * kx * MAP_PAN_SPEED
+                mapPanAccumY += -distanceY * ky * MAP_PAN_SPEED
                 val wx = mapPanAccumX.toInt(); val wy = mapPanAccumY.toInt()
                 if (wx != 0 || wy != 0) {
                     mapPanAccumX -= wx; mapPanAccumY -= wy
@@ -1676,6 +1711,8 @@ class MainActivity : AppCompatActivity() {
         mapZoomInCanvas = if (open) rect("zoomIn") else null
         mapZoomOutCanvas = if (open) rect("zoomOut") else null
         mapWindowCanvas = if (open) rect("window") else null
+        mapKeyCanvas = if (open) rect("key") else null
+        mapMaplistCanvas = if (open) rect("maplist") else null
         // FIX-14: the map search never flips INPUT_TYPE, so the soft keyboard would otherwise linger over the
         // jumped-to map until the map closes. Watch the engine WORLDMAP_SEARCHING flag (published in the
         // snapshot): on its 1->0 edge the search has committed (Enter) or been cancelled (Quit) — drop the latch
@@ -1693,6 +1730,7 @@ class MainActivity : AppCompatActivity() {
             chromeOverlay.visibility = if (open) View.GONE else View.VISIBLE
             if (!open) {
                 mapPanning = false
+                mapScrolling = false
                 mapSearchKeyboard = false
                 resetMapFullscreen()
             }

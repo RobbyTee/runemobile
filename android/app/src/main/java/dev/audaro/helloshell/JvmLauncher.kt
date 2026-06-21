@@ -272,6 +272,7 @@ object JvmLauncher {
     /** Phase-5 world map: pan by finger deltas (canvas px; shared tick converts to tiles) + the published
      *  snapshot {open, map:[x,y,w,h], close, search, zoomIn, zoomOut} (render-thread copy — UI-safe). */
     external fun nativePanWorldMap(dx: Int, dy: Int)
+    external fun nativeScrollMapPanel(dy: Int)
     external fun nativeMapSnapshotPub(): String
 
     // A7 edge-to-edge: pull the engine minimap+orbs cluster (MAP_CONTAINER) into the top-right safe area. It
@@ -428,6 +429,7 @@ object JvmLauncher {
     fun setChatCollapsed(collapsed: Boolean) = nativeSetChatCollapsed(collapsed)
     fun switchChatTab(index: Int) = nativeSwitchChatTab(index)
     fun panWorldMap(dx: Int, dy: Int) = nativePanWorldMap(dx, dy)
+    fun scrollMapPanel(dy: Int) = nativeScrollMapPanel(dy)
     fun mapSnapshotPub() = nativeMapSnapshotPub()
     fun relocateMinimap(x: Int, y: Int) = nativeRelocateMinimap(x, y)
     fun chatSnapshotPub() = nativeChatSnapshotPub()

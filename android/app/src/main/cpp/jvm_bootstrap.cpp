@@ -170,6 +170,7 @@ static jmethodID g_midSetOverlayInsets = nullptr;
 static jmethodID g_midSetChatCollapsed = nullptr, g_midSwitchChatTab = nullptr;
 // Phase-5 world map (optional): pan by finger deltas + the open-state/control-rect snapshot.
 static jmethodID g_midPanWorldMap = nullptr, g_midMapSnapshot = nullptr;
+static jmethodID g_midScrollMapPanel = nullptr;   // world-map KEY/MAPLIST swipe-scroll (optional)
 // FIX-5 native open-map control (optional, same rule): open the world map by ORB_WORLDMAP op-script replay.
 static jmethodID g_midOpenWorldMap = nullptr;
 static std::mutex g_mapLock;
@@ -815,6 +816,7 @@ static bool publishBridge(JNIEnv *env) {
             g_midSetChatCollapsed  = midOpt(env, hvg, "setChatCollapsed", "(Z)V");
             g_midSwitchChatTab     = midOpt(env, hvg, "switchChatTab", "(I)V");
             g_midPanWorldMap       = midOpt(env, hvg, "panWorldMap", "(II)V");
+            g_midScrollMapPanel    = midOpt(env, hvg, "scrollMapPanel", "(I)V");   // optional (older jar omits it)
             g_midMapSnapshot       = midOpt(env, hvg, "getMapSnapshot", "()Ljava/lang/String;");
             g_midOpenWorldMap      = midOpt(env, hvg, "openWorldMap", "()V");   // FIX-5 (optional; older jar omits it)
             g_midDialogueJson      = midOpt(env, hvg, "getDialogueJson", "()Ljava/lang/String;");   // UI-4 (optional)
@@ -2292,6 +2294,13 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativePanWorldMap(JNIEnv *, jobject, jint dx, jint dy) {
     if (!hudReady()) return;
     facadeVoidIntInt(g_hudCls, g_midPanWorldMap, dx, dy);
+}
+// Phase-5 world map: swipe-scroll the KEY (legend) list / MAPLIST dropdown by an accumulated finger delta
+// (canvas px; the shared tick drives the engine UPDATE_SCROLLBAR). No-op on a jar without scrollMapPanel.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeScrollMapPanel(JNIEnv *, jobject, jint dy) {
+    if (!hudReady()) return;
+    facadeVoidInt(g_hudCls, g_midScrollMapPanel, dy);
 }
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeMapSnapshotPub(JNIEnv *env, jobject) {

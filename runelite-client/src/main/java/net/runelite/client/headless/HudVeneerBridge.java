@@ -742,6 +742,7 @@ public final class HudVeneerBridge
 
 	private static final java.util.concurrent.atomic.AtomicInteger mapPanDx = new java.util.concurrent.atomic.AtomicInteger();
 	private static final java.util.concurrent.atomic.AtomicInteger mapPanDy = new java.util.concurrent.atomic.AtomicInteger();
+	private static final java.util.concurrent.atomic.AtomicInteger mapScrollDelta = new java.util.concurrent.atomic.AtomicInteger();
 	private static float mapPanRemX, mapPanRemY;   // sub-tile remainders (client thread only)
 	private static volatile String mapSnapshotJson = "{\"open\":false}";
 
@@ -750,6 +751,14 @@ public final class HudVeneerBridge
 	{
 		mapPanDx.addAndGet(dxPx);
 		mapPanDy.addAndGet(dyPx);
+	}
+
+	/** Native: scroll the open world map's KEY (legend) list — or the surface MAPLIST dropdown while it's open —
+	 *  by a finger delta in canvas px. Applied on the client thread in {@link #tickWorldMap} via the engine's own
+	 *  {@code UPDATE_SCROLLBAR} script (the same path the scrollbar arrows use), so no mouse-wheel/camera side-effect. */
+	public static void scrollMapPanel(int deltaCanvasPx)
+	{
+		mapScrollDelta.addAndGet(deltaCanvasPx);
 	}
 
 	/** {@code {open, map:[x,y,w,h], close:[...], search:[...], zoomIn:[...], zoomOut:[...]}} (canvas px). */
@@ -891,6 +900,7 @@ public final class HudVeneerBridge
 			}
 			mapPanDx.set(0);
 			mapPanDy.set(0);
+			mapScrollDelta.set(0);
 			mapPanRemX = mapPanRemY = 0;
 			mapSnapshotJson = "{\"open\":false}";
 			return;
@@ -916,6 +926,12 @@ public final class HudVeneerBridge
 		if (sideX >= 0)
 		{
 			shoveOffscreen(c, preEoc ? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER, sideX);
+		}
+
+		final int sdy = mapScrollDelta.getAndSet(0);
+		if (sdy != 0)
+		{
+			applyMapPanelScroll(c, sdy);
 		}
 
 		final int dx = mapPanDx.getAndSet(0);
@@ -1418,6 +1434,37 @@ public final class HudVeneerBridge
 		catch (RuntimeException ignore)
 		{
 			BridgeFaults.note("HudVeneerBridge.applyChatScroll", ignore);
+		}
+	}
+
+	/** Scroll a scrollable world-map sub-panel by {@code delta} canvas px (clamped): the surface MAPLIST dropdown
+	 *  when it is open, otherwise the KEY (legend) list. Drives the panel's own scroll layer + scrollbar via the
+	 *  engine {@code UPDATE_SCROLLBAR} script (the scrollbar-arrow path), so the camera/zoom are untouched. Client
+	 *  thread (called from {@link #tickWorldMap}). */
+	private static void applyMapPanelScroll(Client c, int delta)
+	{
+		try
+		{
+			final Widget maplist = c.getWidget(InterfaceID.Worldmap.MAPLIST_CONTAINER);
+			final boolean maplistOpen = maplist != null && !maplist.isHidden();
+			final int areaId = maplistOpen ? InterfaceID.Worldmap.MAPLIST_LIST : InterfaceID.Worldmap.KEY_ENTRIES;
+			final int barId = maplistOpen ? InterfaceID.Worldmap.MAPLIST_SCROLLBAR : InterfaceID.Worldmap.KEY_SCROLLBAR;
+			final Widget area = c.getWidget(areaId);
+			if (area == null)
+			{
+				return;
+			}
+			final int max = Math.max(0, area.getScrollHeight() - area.getHeight());
+			final int cur = area.getScrollY();
+			final int next = Math.max(0, Math.min(max, cur + delta));
+			if (next != cur)
+			{
+				c.runScript(ScriptID.UPDATE_SCROLLBAR, barId, areaId, next);
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+			BridgeFaults.note("HudVeneerBridge.applyMapPanelScroll", ignore);
 		}
 	}
 
