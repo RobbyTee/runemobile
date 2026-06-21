@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "harness": {
+      "command": "/usr/bin/python3",
+      "args": ["/Users/jordanmm/runelite-ios/tools/mcp/harness_server.py"]
+    }
+  }
+}
