@@ -102,6 +102,10 @@ object JvmLauncher {
 
     /** Fire a plugin Keybind chord via JavaBridge.onKeybind: an AWT key-code + extended-modifier mask. */
     external fun nativeKeybind(vk: Int, modifiers: Int)
+    // User-defined hotkey buttons: list every bound plugin keybind ([{group,key,label,keyCode,mods,bind}]) for the
+    // native Hotkeys screen, and fire one by (group,key) off its live binding when its HUD button is tapped.
+    external fun nativeBoundKeybindsJson(): String
+    external fun nativeFireHotkey(group: String, key: String)
 
     /** Does the engine currently have a text field focused? Poll to auto-raise/dismiss the soft keyboard. */
     external fun nativeIsTextInputOpen(): Boolean
@@ -308,6 +312,8 @@ object JvmLauncher {
     fun text(s: String) = nativeText(s)
     fun keyStroke(vk: Int) = nativeKeyStroke(vk)
     fun keybind(vk: Int, modifiers: Int) = nativeKeybind(vk, modifiers)
+    fun boundKeybindsJson() = nativeBoundKeybindsJson()
+    fun fireHotkey(group: String, key: String) = nativeFireHotkey(group, key)
     fun isTextInputOpen() = nativeIsTextInputOpen()
     fun interactTapSeq() = nativeInteractTapSeq()
     fun selectMenuPoint(x: Int, y: Int) = nativeSelectMenuPoint(x, y)

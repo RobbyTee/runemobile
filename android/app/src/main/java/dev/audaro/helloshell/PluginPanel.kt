@@ -123,6 +123,7 @@ fun PluginPanel(
     var infoBoxOpen by remember { mutableStateOf(false) }                        // Finding 22 infobox menu
     var profilesOpen by remember { mutableStateOf(false) }                       // Track B #6 config profiles
     var profilesAvail by remember { mutableStateOf(false) }
+    var hotkeysOpen by remember { mutableStateOf(false) }                        // Track B #1 user-defined hotkeys
     var hubOpen by remember { mutableStateOf(false) }                            // Finding 17 hub browse/install
     // Finding 8: a plugin just toggled ON is starting — suppress the "couldn't start" badge during a grace
     // window, then re-fetch the true active state. A row is incompatible = enabled && !active && not pending.
@@ -159,7 +160,7 @@ fun PluginPanel(
     // the live game stays visible above it (the desktop slide-out parity win). A sub-screen open => PEEK (game
     // watchable); the launcher landing => EXPAND.
     val subActive = questOpen || worldOpen || xpOpen || lootOpen || geOpen || timeOpen || overlayOpen || infoBoxOpen ||
-        profilesOpen || hubOpen || panelOpen != null || configFor != null
+        profilesOpen || hotkeysOpen || hubOpen || panelOpen != null || configFor != null
 
     // §4 dismiss model (d): back pops ONE level — close the active sub-screen back to the launcher, else dismiss
     // the whole sheet. Honoured here so the Compose back-stack works (the MainActivity dispatcher disposes this
@@ -177,6 +178,7 @@ fun PluginPanel(
             overlayOpen -> overlayOpen = false
             infoBoxOpen -> infoBoxOpen = false
             profilesOpen -> profilesOpen = false
+            hotkeysOpen -> hotkeysOpen = false
             hubOpen -> { hubOpen = false; scope.launch { reload() } }
             panelOpen != null -> panelOpen = null
             configFor != null -> configFor = null
@@ -201,6 +203,7 @@ fun PluginPanel(
             overlayOpen -> OverlayEditScreen(onBack = { overlayOpen = false })
             infoBoxOpen -> InfoBoxScreen(onBack = { infoBoxOpen = false })
             profilesOpen -> ConfigProfilesScreen(onBack = { profilesOpen = false })
+            hotkeysOpen -> HotkeysScreen(onBack = { hotkeysOpen = false })
             hubOpen -> PluginHubScreen(onBack = { hubOpen = false; scope.launch { reload() } })
             panelOpen != null -> {
                 val po = panelOpen!!
@@ -286,6 +289,7 @@ fun PluginPanel(
                         onOpenOverlay = { overlayOpen = true }, onOpenInfoBox = { infoBoxOpen = true },
                         onOpenHub = { hubOpen = true },
                         profilesAvail = profilesAvail, onOpenProfiles = { profilesOpen = true },
+                        onOpenHotkeys = { hotkeysOpen = true },
                         // FIX-5: open the world map via op-replay, then dismiss the launcher so the fullscreen map shows.
                         onOpenWorldMap = { JvmLauncher.onBridgeTouch { JvmLauncher.openWorldMap() }; onClose() },
                         onScreenshot = onScreenshot, onAccount = onAccount, onLogout = onLogout, onDiscord = onDiscord,
@@ -411,6 +415,7 @@ private fun LauncherGrid(
     onOpenHub: () -> Unit,
     profilesAvail: Boolean,
     onOpenProfiles: () -> Unit,
+    onOpenHotkeys: () -> Unit,
     onOpenWorldMap: () -> Unit,
     onScreenshot: () -> Unit,
     onAccount: () -> Unit,
@@ -475,6 +480,7 @@ private fun LauncherGrid(
             add(TileSpec("Plugin Hub", glyph = "⬇", onClick = onOpenHub))
             // Track B #6: native config-profiles list/switch (gated on the bridge being wired).
             if (profilesAvail) add(TileSpec("Profiles", glyph = "⚙", onClick = onOpenProfiles))
+            add(TileSpec("Hotkeys", glyph = "⌨", onClick = onOpenHotkeys))
             // FIX-5: a discoverable native open-map control (the engine globe orb is ~25px and undiscoverable;
             // this opens the map via op-replay regardless of orb position/account).
             add(TileSpec("World Map", glyph = "◉", onClick = onOpenWorldMap))

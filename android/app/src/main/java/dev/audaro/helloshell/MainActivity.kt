@@ -37,6 +37,7 @@ import android.widget.FrameLayout
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.addCallback
@@ -134,6 +135,10 @@ class MainActivity : AppCompatActivity() {
     private var ctrlHeld = false          // ⌃ latch: synthetic VK_CONTROL held (mirror of shift)
     private var altHeld = false           // ⌥ latch: synthetic VK_ALT held (Ground Items hold-to-highlight)
     private var frameCallback: Choreographer.FrameCallback? = null
+    // User-defined hotkey buttons: a HUD strip the user populates from the Hotkeys screen (persisted in PREFS_HOTKEYS).
+    private var hotkeyRow: LinearLayout? = null            // the button container (repopulated on change)
+    private var hotkeyStrip: HorizontalScrollView? = null  // scroll host (GONE when no hotkeys are active)
+    private var hotkeyPrefsListener: android.content.SharedPreferences.OnSharedPreferenceChangeListener? = null
 
     // AP-2a Findings 9/25: a low-frequency daemon that drains the shared notification + link queues (off the UI
     // thread — these calls daemon-attach to HotSpot). nextNotification → system shade; nextLink → browser.
@@ -216,6 +221,11 @@ class MainActivity : AppCompatActivity() {
         // margin each orb's tap zone is inflated by (orbs render ~25px; this enlarges the effective finger target).
         private val ORB_KEYS = arrayOf("hp", "prayer", "run", "spec", "store", "worldmap", "wiki")
         private const val ORB_TAP_PAD = 10
+
+        // User-defined hotkey buttons: the active set the Hotkeys screen writes + the HUD strip reads. Each entry
+        // is "groupkeylabel" (SOH-delimited); fire is by (group,key) so a rebind in the plugin reflects.
+        const val PREFS_HOTKEYS = "hotkeys"
+        const val PREF_HOTKEYS_ACTIVE = "active"
 
         // Pinch-to-wheel: geometric step a scale ratio must cross to emit one wheel notch.
         private const val PINCH_STEP = 1.08f
@@ -505,6 +515,9 @@ class MainActivity : AppCompatActivity() {
             // hidden in release — renderer selection lives in the native plugin panel (renderer-as-plugins).
             if (BuildConfig.DEBUG) { addView(chromeButton); addView(gpuButton); addView(hdButton) }
         }
+        // User-defined hotkey buttons: a HUD strip the user fills from the Hotkeys screen; GONE until populated.
+        val hotkeyStripView = buildHotkeyStrip()
+        hotkeyStrip = hotkeyStripView
         val root = FrameLayout(this).apply {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
             addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
@@ -528,12 +541,26 @@ class MainActivity : AppCompatActivity() {
                     val m = (8 * resources.displayMetrics.density).toInt()
                     leftMargin = m; bottomMargin = m
                 })
+            // User-defined hotkey buttons: bottom-left, stacked above the devBar; below the launcher sheet.
+            addView(hotkeyStripView, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.START).apply {
+                    leftMargin = (8 * resources.displayMetrics.density).toInt()
+                    bottomMargin = (64 * resources.displayMetrics.density).toInt()
+                })
             // §4 increment 3: the launcher is now a transparent-host PEEK/EXPAND bottom sheet (SheetScaffold) —
             // added LAST so its sheet/scrim draw OVER the handle + devBar (and the game composites through the
             // transparent top). GONE until opened.
             addView(pluginPanel, FrameLayout.LayoutParams(mp, mp))
         }
         setContentView(root)
+        // User-defined hotkey buttons: populate the strip now + rebuild whenever the Hotkeys screen changes the set.
+        refreshHotkeyStrip()
+        hotkeyPrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, k ->
+            if (k == PREF_HOTKEYS_ACTIVE) runOnUiThread { refreshHotkeyStrip() }
+        }
+        getSharedPreferences(PREFS_HOTKEYS, Context.MODE_PRIVATE)
+            .registerOnSharedPreferenceChangeListener(hotkeyPrefsListener)
         // §4 dismiss model (d): while the launcher sheet is open the in-sheet BackHandler (PluginPanel) handles
         // BACK — it pops one level (sub-screen -> launcher) or dismisses. This activity callback is the fallback
         // for when no composition is active: dispose+hide if somehow still visible, else passthrough to normal
@@ -1149,6 +1176,61 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /** User-defined hotkey buttons: build the (empty) HUD strip host. Populated by [refreshHotkeyStrip] from the
+     *  PREFS_HOTKEYS active set the native Hotkeys screen writes. GONE until the user activates at least one. */
+    private fun buildHotkeyStrip(): HorizontalScrollView {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        hotkeyRow = row
+        return HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            isFocusable = false
+            addView(row)
+            visibility = View.GONE
+        }
+    }
+
+    /** Repopulate the hotkey strip from the persisted active set ("groupkeylabel" entries). Each button fires
+     *  its plugin keybind by (group,key) off the LIVE binding (a rebind in the plugin's config is honored). */
+    private fun refreshHotkeyStrip() {
+        val row = hotkeyRow ?: return
+        val strip = hotkeyStrip ?: return
+        row.removeAllViews()
+        val active = getSharedPreferences(PREFS_HOTKEYS, Context.MODE_PRIVATE)
+            .getStringSet(PREF_HOTKEYS_ACTIVE, emptySet()) ?: emptySet()
+        val pad = (12 * resources.displayMetrics.density).toInt()
+        for (entry in active.sorted()) {
+            val parts = entry.split('')
+            if (parts.size < 2) continue
+            val group = parts[0]; val key = parts[1]
+            val label = parts.getOrNull(2).orEmpty().ifEmpty { key }
+            val short = label.substringAfter(": ", label)   // "<Plugin>: <action>" -> "<action>"
+            val btn = Button(this).apply {
+                text = short
+                textSize = 12f
+                isAllCaps = false
+                isFocusable = false
+                minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
+                setPadding(pad, pad / 3, pad, pad / 3)
+                setTextColor(0xFFFFFFFF.toInt())
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = 12f
+                    setColor(0xCC1E1E1E.toInt())
+                    setStroke((1 * resources.displayMetrics.density).toInt(), 0x55FFFFFF)
+                }
+                setOnClickListener {
+                    JvmLauncher.onBridgeTouch { JvmLauncher.fireHotkey(group, key) }
+                    vibrateTick()
+                    Log.i(TAG, "hotkey: fire $group/$key ($short)")
+                }
+            }
+            row.addView(btn, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    rightMargin = (6 * resources.displayMetrics.density).toInt()
+                })
+        }
+        strip.visibility = if (row.childCount > 0) View.VISIBLE else View.GONE
     }
 
     /** Hide the Android status + navigation bars (sticky immersive) so the game frame is edge-to-edge with no

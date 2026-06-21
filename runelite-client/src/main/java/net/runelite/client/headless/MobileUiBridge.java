@@ -2193,6 +2193,86 @@ public final class MobileUiBridge
 	}
 
 	/**
+	 * KEY-1b (user-defined hotkey buttons): EVERY plugin {@link Keybind} (or {@code ModifierlessKeybind}) config
+	 * item that is currently BOUND, as JSON {@code [{group,key,label,keyCode,mods,bind}]} — the user picks which to
+	 * surface as on-screen buttons (rather than the hand-picked {@link #hotkeyActionsJson} set). {@code label} is
+	 * "&lt;Plugin&gt;: &lt;item name&gt;"; {@code keyCode}/{@code mods} are the AWT code + {@code InputEvent} masks
+	 * (so the native side can fire), {@code bind} a human label. Read off live config; unbound items are omitted.
+	 */
+	public static String boundKeybindsJson()
+	{
+		final PluginManager pm = pluginManager;
+		final ConfigManager cm = configManager;
+		if (!ENABLED || pm == null || cm == null)
+		{
+			return "[]";
+		}
+		final StringBuilder sb = new StringBuilder(512);
+		sb.append('[');
+		boolean first = true;
+		for (Plugin p : pm.getPlugins())
+		{
+			final PluginDescriptor d = p.getClass().getAnnotation(PluginDescriptor.class);
+			if (d == null || d.hidden())
+			{
+				continue;
+			}
+			try
+			{
+				final Config proxy = pm.getPluginConfigProxy(p);
+				if (proxy == null)
+				{
+					continue;
+				}
+				final ConfigDescriptor cd = cm.getConfigDescriptor(proxy);
+				final String group = cd.getGroup().value();
+				for (ConfigItemDescriptor item : cd.getItems())
+				{
+					final Type t = item.getType();
+					if (!(t instanceof Class) || !Keybind.class.isAssignableFrom((Class<?>) t))
+					{
+						continue;
+					}
+					final String key = item.getItem().keyName();
+					Keybind kb;
+					try
+					{
+						kb = cm.getConfiguration(group, key, Keybind.class);
+					}
+					catch (RuntimeException ex)
+					{
+						continue;
+					}
+					if (kb == null || Keybind.NOT_SET.equals(kb))
+					{
+						continue;
+					}
+					final int[] km = keybindFields(kb);
+					if (km == null || km[0] == KeyEvent.VK_UNDEFINED)
+					{
+						continue;
+					}
+					if (!first)
+					{
+						sb.append(',');
+					}
+					first = false;
+					sb.append("{\"group\":\"").append(jsonEscape(group)).append("\",\"key\":\"").append(jsonEscape(key))
+						.append("\",\"label\":\"").append(jsonEscape(d.name() + ": " + item.getItem().name()))
+						.append("\",\"keyCode\":").append(km[0]).append(",\"mods\":").append(km[1])
+						.append(",\"bind\":\"").append(jsonEscape(kb.toString())).append("\"}");
+				}
+			}
+			catch (RuntimeException ex)
+			{
+				BridgeFaults.note("MobileUiBridge.boundKeybindsJson", ex);
+			}
+		}
+		sb.append(']');
+		return sb.toString();
+	}
+
+	/**
 	 * KEY-1: fire a plugin action-hotkey by (config group, key) — reads the live {@link Keybind} and synthesizes
 	 * its exact chord via {@link JavaBridge#onKeybind} (a matched {@code KEY_PRESSED}+{@code KEY_RELEASED}), which
 	 * the plugin's {@code HotkeyListener} catches. No-op if the bind is unset.

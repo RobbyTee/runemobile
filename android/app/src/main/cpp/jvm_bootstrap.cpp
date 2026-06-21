@@ -81,6 +81,9 @@ static jmethodID g_midMenuSnapshot = nullptr, g_midMenuPublishSeq = nullptr;
 static jclass    g_mobileUiCls = nullptr;
 static jmethodID g_midListPlugins = nullptr, g_midMobileUiSeq = nullptr, g_midPollEvents = nullptr, g_midSetPluginEnabled = nullptr;
 static jmethodID g_midGetPluginConfig = nullptr, g_midSetConfig = nullptr, g_midProcessedWriteId = nullptr;
+// User-defined hotkey buttons: boundKeybindsJson() lists every bound plugin keybind; fireHotkey(group,key) fires
+// one by reading its live binding. Optional (older jars lack them) — the native Hotkeys screen no-ops without.
+static jmethodID g_midBoundKeybinds = nullptr, g_midFireHotkey = nullptr;
 static jmethodID g_midFlushConfig = nullptr;   // A8: persist pending config writes when the app backgrounds
 static jmethodID g_midResetPluginConfig = nullptr;     // SC-2/CFG-10: whole-group reset to defaults
 static jmethodID g_midNotificationDefaults = nullptr;  // SC-1/NOTIF-2: default Notification seed JSON
@@ -557,6 +560,8 @@ static bool publishBridge(JNIEnv *env) {
             g_midFlushConfig      = midOpt(env, mug, "flushConfig", "()Ljava/lang/String;");   // A8 background flush
             g_midResetPluginConfig   = midOpt(env, mug, "resetPluginConfig", "(Ljava/lang/String;)Ljava/lang/String;");   // SC-2 reset
             g_midNotificationDefaults = midOpt(env, mug, "notificationDefaults", "()Ljava/lang/String;");                  // SC-1 defaults
+            g_midBoundKeybinds        = midOpt(env, mug, "boundKeybindsJson", "()Ljava/lang/String;");                    // user-defined hotkeys (optional)
+            g_midFireHotkey           = midOpt(env, mug, "fireHotkey", "(Ljava/lang/String;Ljava/lang/String;)V");        // fire one (optional)
             if (!g_midGetPluginConfig || !g_midSetConfig || !g_midProcessedWriteId)
                 LOGE("bridge: MobileUiBridge config methods partial (plugin config read/write disabled)");
             // AP-2a: drain surfaces for native notification / link-out / hub-progress (each best-effort).
@@ -1637,6 +1642,25 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeNotificationDefaults(JNIEnv *artEnv, jobject) {
     if (!mobileUiReady() || !g_midNotificationDefaults) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midNotificationDefaults);
+}
+// User-defined hotkey buttons: list every bound plugin keybind (JSON), and fire one by (group,key) off its live
+// binding. boundKeybindsJson is read on the native Hotkeys screen; fireHotkey on a HUD button tap.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeBoundKeybindsJson(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midBoundKeybinds) return artEnv->NewStringUTF("[]");
+    return mobileUiStr(artEnv, g_midBoundKeybinds);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeFireHotkey(JNIEnv *artEnv, jobject, jstring jGroup, jstring jKey) {
+    if (!mobileUiReady() || !g_midFireHotkey) return;
+    std::string group = jstr(artEnv, jGroup), key = jstr(artEnv, jKey);
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls) return;
+    jstring hg = hs->NewStringUTF(group.c_str()), hk = hs->NewStringUTF(key.c_str());
+    hs->CallStaticVoidMethod(g_mobileUiCls, g_midFireHotkey, hg, hk);
+    if (hs->ExceptionCheck()) { hs->ExceptionClear(); }
+    if (hg) hs->DeleteLocalRef(hg);
+    if (hk) hs->DeleteLocalRef(hk);
 }
 // AP-2a drain surfaces: one queued item or "" (empty queue / unresolved). Off the UI thread (rl-bridge).
 //   Finding 9  — nextNotification: "titlebody" (SOH-delimited), native splits + raises a notification.

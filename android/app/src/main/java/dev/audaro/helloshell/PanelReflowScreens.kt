@@ -1,5 +1,6 @@
 package dev.audaro.helloshell
 
+import android.content.Context
 import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -28,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -535,4 +537,96 @@ private fun parseTimeTracking(json: String): List<TtSection> = try {
     }
 } catch (t: Throwable) {
     Log.e(PR_TAG, "ANDROID_TRACKB_TIME_UI_RED parse: $t"); emptyList()
+}
+
+// ====================================================================================================
+// Track B (#1) — user-defined hotkey buttons. boundKeybindsJson lists EVERY bound plugin keybind
+// [{group,key,label,keyCode,mods,bind}]; the user toggles which appear as on-screen HUD buttons. The active
+// set is persisted in MainActivity.PREFS_HOTKEYS ("groupkeylabel" entries) and the HUD strip rebuilds
+// reactively (a SharedPreferences listener). A button fires fireHotkey(group,key) off the live binding.
+// ====================================================================================================
+data class BoundKeybind(val group: String, val key: String, val label: String, val bind: String)
+
+private fun loadActiveHotkeys(ctx: Context): Set<String> =
+    ctx.getSharedPreferences(MainActivity.PREFS_HOTKEYS, Context.MODE_PRIVATE)
+        .getStringSet(MainActivity.PREF_HOTKEYS_ACTIVE, emptySet()) ?: emptySet()
+
+private fun saveActiveHotkeys(ctx: Context, set: Set<String>) {
+    ctx.getSharedPreferences(MainActivity.PREFS_HOTKEYS, Context.MODE_PRIVATE)
+        .edit().putStringSet(MainActivity.PREF_HOTKEYS_ACTIVE, set).apply()
+}
+
+@Composable
+fun HotkeysScreen(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    var binds by remember { mutableStateOf<List<BoundKeybind>>(emptyList()) }
+    var firstLoad by remember { mutableStateOf(true) }
+    var active by remember { mutableStateOf(loadActiveHotkeys(ctx)) }
+    var logged by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        val json = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.boundKeybindsJson() }.get() }
+        binds = parseBoundKeybinds(json)
+        firstLoad = false
+        if (!logged) { Log.i(PR_TAG, "ANDROID_TRACKB_HOTKEYS_UI_GREEN binds=${binds.size} active=${active.size}"); logged = true }
+    }
+
+    Surface(color = PR_PANEL_BG, modifier = Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onBack) { Text("‹ Back") }
+                Text("Hotkey Buttons", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
+            }
+            Text("Add a button to the HUD for any keybind you've set in a plugin's config.",
+                color = Color(0xFF9E9E9E), fontSize = 12.sp, modifier = Modifier.padding(bottom = 6.dp))
+            when {
+                firstLoad -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                binds.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("No bound plugin keybinds. Set one in a plugin's config first.",
+                        color = Color(0xFF9E9E9E), fontSize = 14.sp)
+                }
+                else -> LazyColumn(Modifier.fillMaxSize()) {
+                    items(binds, key = { it.group + it.key }) { b ->
+                        val prefix = "${b.group}${b.key}"
+                        val on = active.any { it.startsWith(prefix) }
+                        HotkeyRow(b, on) {
+                            val next = active.toMutableSet()
+                            val existing = next.firstOrNull { it.startsWith(prefix) }
+                            if (existing != null) next.remove(existing) else next.add(prefix + b.label)
+                            active = next
+                            saveActiveHotkeys(ctx, next)   // MainActivity's prefs listener rebuilds the HUD strip
+                        }
+                        HorizontalDivider(color = Color(0x18FFFFFF))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HotkeyRow(b: BoundKeybind, on: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable { onToggle() }.padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(b.label, color = Color.White, fontSize = 14.sp)
+            Text(b.bind, color = Color(0xFF9E9E9E), fontSize = 12.sp)
+        }
+        Text(
+            if (on) "✓ On HUD" else "+ Add",
+            color = if (on) Color(0xFF80CBC4) else Color(0xFFB0BEC5), fontSize = 13.sp,
+        )
+    }
+}
+
+private fun parseBoundKeybinds(json: String): List<BoundKeybind> = try {
+    val arr = org.json.JSONArray(json)
+    (0 until arr.length()).map { i ->
+        val o = arr.getJSONObject(i)
+        BoundKeybind(o.optString("group"), o.optString("key"), o.optString("label", "?"), o.optString("bind", ""))
+    }
+} catch (t: Throwable) {
+    Log.e(PR_TAG, "ANDROID_TRACKB_HOTKEYS_UI_RED parse: $t"); emptyList()
 }
