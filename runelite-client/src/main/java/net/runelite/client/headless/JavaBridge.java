@@ -751,6 +751,7 @@ public final class JavaBridge
 		maybePostIdleKeepalive(c); // drain native-UI activity -> MOUSE_MOVED(-1,-1) if gated + throttled (idle reset)
 		snapshotTextInputOpen(c);  // publish INPUT_TYPE for isTextInputOpen() to read off the client thread
 		snapshotInventoryBounds(c); // DRAG-1: publish the inventory item-grid bounds for the native item-drag branch
+		snapshotReorderPaneBounds(c); // DRAG-1b: publish Prayer/Spellbook/Bank pane bounds for native reorder-drag routing
 		// Deterministic early registration (boolean-gated, retries until the injector is live): the
 		// BeforeMenuRender suppression below must be in place before the FIRST menu ever opens, not
 		// lazily on the first tap.
@@ -1636,6 +1637,69 @@ public final class JavaBridge
 	public static int[] getInventoryBounds()
 	{
 		return new int[]{invX, invY, invW, invH};
+	}
+
+	// DRAG-1b: bounds of the engine's drag-to-reorder panes (Prayer icon container / Spellbook spell layer / Bank
+	// item grid), snapshotted on the client thread each frame so the native shell can hit-test a one-finger drag's
+	// START point lock-free and route it through onTouch — the MOUSE_PRESSED->DRAGGED->RELEASED stream the reorder
+	// plugins read via getDraggedWidget/getDraggedOnWidget — instead of rotating the camera. Packed as [x,y,w,h]
+	// per visible pane; an empty array means no reorderable pane is on-screen. Inventory keeps its own
+	// getInventoryBounds() + dedicated item-drag branch, so it is intentionally NOT duplicated here.
+	private static final int[] REORDER_PANE_WIDGETS = {
+		InterfaceID.Prayerbook.CONTAINER,
+		InterfaceID.MagicSpellbook.SPELLLAYER,
+		InterfaceID.Bankmain.ITEMS,
+	};
+	private static final int[] EMPTY_BOUNDS = new int[0];
+	private static volatile int[] reorderPaneBounds = EMPTY_BOUNDS;
+
+	private static void snapshotReorderPaneBounds(Client c)
+	{
+		try
+		{
+			int[] out = null;
+			int n = 0;
+			for (final int widgetId : REORDER_PANE_WIDGETS)
+			{
+				final Widget w = c.getWidget(widgetId);
+				if (w == null || w.isHidden())
+				{
+					continue;
+				}
+				final Rectangle b = w.getBounds();
+				// Same on-screen guard as snapshotInventoryBounds: a parked/off-canvas pane (negative coords during
+				// a layout transition) must not become a phantom drag target at the top-left corner.
+				if (b == null || b.width <= 0 || b.height <= 0 || b.x < 0 || b.y < 0)
+				{
+					continue;
+				}
+				if (out == null)
+				{
+					out = new int[REORDER_PANE_WIDGETS.length * 4];
+				}
+				out[n++] = b.x;
+				out[n++] = b.y;
+				out[n++] = b.width;
+				out[n++] = b.height;
+			}
+			reorderPaneBounds = out == null ? EMPTY_BOUNDS : (n == out.length ? out : java.util.Arrays.copyOf(out, n));
+		}
+		catch (RuntimeException ex)
+		{
+			BridgeFaults.note("JavaBridge.snapshotReorderPaneBounds", ex);
+			reorderPaneBounds = EMPTY_BOUNDS;
+		}
+	}
+
+	/**
+	 * DRAG-1b: bounds of the visible drag-to-reorder panes, packed as {@code [x,y,w,h]} per pane in canvas px
+	 * (Prayer / Spellbook / Bank, in that order, skipping any not on-screen). Empty = none visible. The native
+	 * shell hit-tests a one-finger drag's start point against these to route it as an engine reorder drag
+	 * ({@link #onTouch}) rather than a camera pan.
+	 */
+	public static int[] getReorderPaneBounds()
+	{
+		return reorderPaneBounds;
 	}
 
 	/**

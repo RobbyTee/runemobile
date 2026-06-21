@@ -22,7 +22,7 @@ FILES = [os.path.join(HEADLESS, f) for f in (
     'JavaBridge.java', 'MobileUiBridge.java', 'MenuPeekBridge.java', 'MobileChromeBridge.java',
     'HudDataBridge.java', 'HudVeneerBridge.java', 'QuestHelperBridge.java', 'WorldSwitcherBridge.java',
     'LootTrackerBridge.java', 'XpTrackerBridge.java', 'GrandExchangeBridge.java', 'TimeTrackingBridge.java',
-    'OverlayBridge.java', 'InfoBoxBridge.java',
+    'OverlayBridge.java', 'InfoBoxBridge.java', 'ConfigProfileBridge.java',
     'HeadlessLogin.java', 'HeadlessResize.java',
 )] + [os.path.join(AWT, f) for f in (
     'DeviceHeadlessBoot.java', 'UnsafePokeActivation.java',

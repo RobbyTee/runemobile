@@ -218,7 +218,24 @@ public final class MobileChromeBridge
 		final int[] inv = JavaBridge.getInventoryBounds();
 		sb.append(",\"inv\":");
 		appendBounds(sb, (inv != null && inv.length == 4 && inv[2] > 0 && inv[3] > 0) ? inv : null);
-		sb.append('}');
+		// DRAG-1b: the engine drag-to-reorder pane bounds (Prayer/Spellbook/Bank), packed [x,y,w,h] per pane, so
+		// the native shell can route a one-finger drag starting inside one as a reorder (onTouch) not a camera pan.
+		// Snapshotted each tapTick by JavaBridge.snapshotReorderPaneBounds; empty array when none is on-screen.
+		final int[] panes = JavaBridge.getReorderPaneBounds();
+		sb.append(",\"reorderPanes\":[");
+		if (panes != null)
+		{
+			for (int i = 0; i + 3 < panes.length; i += 4)
+			{
+				if (i > 0)
+				{
+					sb.append(',');
+				}
+				sb.append('[').append(panes[i]).append(',').append(panes[i + 1])
+					.append(',').append(panes[i + 2]).append(',').append(panes[i + 3]).append(']');
+			}
+		}
+		sb.append("]}");
 
 		snapshotJson = sb.toString();
 

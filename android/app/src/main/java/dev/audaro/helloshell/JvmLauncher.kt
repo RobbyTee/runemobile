@@ -222,6 +222,12 @@ object JvmLauncher {
     // bridge JSON ack. Inert if the staged jar lacks setOverlayPreferredLocation.
     external fun nativeOverlaySetLocation(name: String, x: Int, y: Int): String
 
+    // Config profiles (ConfigProfileBridge): list profiles + switch the active one. switchProfile returns the
+    // bridge JSON ack; the switch itself completes asynchronously off the engine thread.
+    external fun nativeProfilesAvailable(): Boolean
+    external fun nativeProfilesJson(): String
+    external fun nativeSwitchProfile(id: Long): String
+
     // Finding 22 — infobox menu (InfoBoxBridge): list infoboxes + their menu options, invoke one by index.
     external fun nativeInfoBoxAvailable(): Boolean
     external fun nativeInfoBoxSetUiOpen(open: Boolean)
@@ -389,6 +395,9 @@ object JvmLauncher {
     fun overlaySnap(name: String, positionName: String) = nativeOverlaySnap(name, positionName)
     fun overlayReset(name: String) = nativeOverlayReset(name)
     fun overlaySetLocation(name: String, x: Int, y: Int) = nativeOverlaySetLocation(name, x, y)
+    fun profilesAvailable() = nativeProfilesAvailable()
+    fun profilesJson() = nativeProfilesJson()
+    fun switchProfile(id: Long) = nativeSwitchProfile(id)
     fun infoBoxAvailable() = nativeInfoBoxAvailable()
     fun infoBoxSetUiOpen(open: Boolean) = nativeInfoBoxSetUiOpen(open)
     fun infoBoxesJson() = nativeInfoBoxesJson()

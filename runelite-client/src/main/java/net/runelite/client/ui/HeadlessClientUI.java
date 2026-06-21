@@ -45,8 +45,10 @@ import net.runelite.api.Client;
 import net.runelite.api.Constants;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.config.ProfileManager;
 import net.runelite.client.config.RuneLiteConfig;
 import net.runelite.client.eventbus.EventBus;
+import net.runelite.client.headless.ConfigProfileBridge;
 import net.runelite.client.headless.HudVeneerBridge;
 import net.runelite.client.headless.JavaBridge;
 import net.runelite.client.headless.MobileUiBridge;
@@ -76,6 +78,7 @@ public class HeadlessClientUI extends ClientUI
 {
 	private final Client rsClient;
 	private final ConfigManager configManager;
+	private final ProfileManager profileManager;
 	private final Provider<ClientThread> clientThreadProvider;
 	private final PluginManager pluginManager;
 	private final EventBus eventBus;
@@ -88,6 +91,7 @@ public class HeadlessClientUI extends ClientUI
 		MouseManager mouseManager,
 		Client client,
 		ConfigManager configManager,
+		ProfileManager profileManager,
 		Provider<ClientThread> clientThreadProvider,
 		EventBus eventBus,
 		PluginManager pluginManager,
@@ -98,6 +102,7 @@ public class HeadlessClientUI extends ClientUI
 		super(config, mouseManager, client, configManager, clientThreadProvider, eventBus, safeMode, title);
 		this.rsClient = client;
 		this.configManager = configManager;
+		this.profileManager = profileManager;
 		this.clientThreadProvider = clientThreadProvider;
 		this.pluginManager = pluginManager;
 		this.eventBus = eventBus;
@@ -112,6 +117,8 @@ public class HeadlessClientUI extends ClientUI
 			// component with PluginManager/ConfigManager/ClientThread injected; the facade itself stays a
 			// pure static JNI surface the native shell calls.
 			MobileUiBridge.init(pluginManager, configManager, clientThreadProvider.get(), rsClient, eventBus);
+			// Config-profiles seam (list + switch), part of the mobile-UI surface; same enable gate.
+			ConfigProfileBridge.init(configManager, profileManager);
 		}
 		if (HudVeneerBridge.isEnabled())
 		{

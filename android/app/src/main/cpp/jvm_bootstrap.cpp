@@ -134,6 +134,10 @@ static std::atomic<bool> g_questReady{false};
 static std::atomic<bool> g_worldReady{false};
 static std::atomic<bool> g_overlayReady{false};
 static std::atomic<bool> g_infoboxReady{false};
+// Config profiles (ConfigProfileBridge): list profiles + switch the active one (mirrors the desktop ProfilePanel).
+static jclass    g_profileCls = nullptr;
+static jmethodID g_midProfileAvail = nullptr, g_midProfilesJson = nullptr, g_midProfileSwitch = nullptr;
+static std::atomic<bool> g_profileReady{false};
 
 // Finding 14 — read-only data-panel facades (XP Tracker, Loot Tracker, GE, Time Tracking). All share the same
 // shape: isAvailable()Z / setUiOpen(Z)V / <jsonGetter>()String. One struct + one generic registrar covers them.
@@ -419,6 +423,7 @@ static inline bool questReady()    { return g_questReady.load(std::memory_order_
 static inline bool worldReady()    { return g_worldReady.load(std::memory_order_acquire); }
 static inline bool overlayReady()  { return g_overlayReady.load(std::memory_order_acquire); }
 static inline bool infoboxReady()  { return g_infoboxReady.load(std::memory_order_acquire); }
+static inline bool profileReady()  { return g_profileReady.load(std::memory_order_acquire); }
 static inline bool chromeReady()    { return g_chromeReady.load(std::memory_order_acquire); }
 static inline bool hudReady()       { return g_hudReady.load(std::memory_order_acquire); }
 
@@ -722,6 +727,32 @@ static bool publishBridge(JNIEnv *env) {
     } else {
         env->ExceptionClear();
         LOGE("bridge: FindClass InfoBoxBridge failed (infobox menu disabled)");
+    }
+
+    // Config profiles: ConfigProfileBridge — list (getProfilesJson) + switch (switchProfile(J)). Dedicated
+    // facade, all-or-nothing, release-latched like Overlay/InfoBox.
+    jclass cp = env->FindClass("net/runelite/client/headless/ConfigProfileBridge");
+    if (cp && !env->ExceptionCheck()) {
+        jclass cpg = (jclass) env->NewGlobalRef(cp);
+        env->DeleteLocalRef(cp);
+        if (!cpg) {
+            LOGE("bridge: ConfigProfileBridge NewGlobalRef failed (profiles disabled)");
+        } else {
+            g_midProfileAvail  = midOpt(env, cpg, "isAvailable", "()Z");
+            g_midProfilesJson  = midOpt(env, cpg, "getProfilesJson", "()Ljava/lang/String;");
+            g_midProfileSwitch = midOpt(env, cpg, "switchProfile", "(J)Ljava/lang/String;");
+            if (g_midProfileAvail && g_midProfilesJson && g_midProfileSwitch) {
+                g_profileCls = cpg;
+                g_profileReady.store(true, std::memory_order_release);
+                LOGI("bridge: ConfigProfileBridge facade published");
+            } else {
+                env->DeleteGlobalRef(cpg);
+                LOGE("bridge: ConfigProfileBridge method id failed (profiles disabled)");
+            }
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass ConfigProfileBridge failed (profiles disabled)");
     }
 
     // A6 chrome: MobileChromeBridge — read-only snapshot facade, single method, rl-bridge-thread read.
@@ -1831,6 +1862,16 @@ static jstring facadeStrArgs(JNIEnv *artEnv, jclass cls, jmethodID m, jstring j1
     if (r) hs->DeleteLocalRef(r);
     return artEnv->NewStringUTF(out.c_str());
 }
+// (long)->String facade call (config profile switch: switchProfile(id) -> ack JSON).
+static jstring facadeStrLong(JNIEnv *artEnv, jclass cls, jmethodID m, jlong v) {
+    if (!cls || !m) return artEnv->NewStringUTF("");
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs) return artEnv->NewStringUTF("");
+    jstring r = (jstring) hs->CallStaticObjectMethod(cls, m, v);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (r) hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
 // (String,int,int)->String facade call (overlay free pixel-drag: setOverlayPreferredLocation(name,x,y)).
 static jstring facadeStrLocArgs(JNIEnv *artEnv, jclass cls, jmethodID m, jstring jName, jint x, jint y) {
     if (!cls || !m) return artEnv->NewStringUTF("");
@@ -2026,6 +2067,24 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeGeJson(JNIEnv *artEnv, jobject) {
     if (!g_gePanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_gePanel.cls, g_gePanel.json);
+}
+
+// Config profiles. available + list (getProfilesJson) + switch(id) -> ack JSON (the switch runs async on the
+// bridge's own daemon thread; the native side re-reads the list to pick up the new active flag).
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeProfilesAvailable(JNIEnv *, jobject) {
+    if (!profileReady()) return JNI_FALSE;
+    return facadeBool(g_profileCls, g_midProfileAvail);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeProfilesJson(JNIEnv *artEnv, jobject) {
+    if (!profileReady()) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_profileCls, g_midProfilesJson);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSwitchProfile(JNIEnv *artEnv, jobject, jlong id) {
+    if (!profileReady()) return artEnv->NewStringUTF("");
+    return facadeStrLong(artEnv, g_profileCls, g_midProfileSwitch, id);
 }
 
 // Finding 15 — overlay edit. avail/setUiOpen/list like the data panels; snap(name,position) + reset(name) act.

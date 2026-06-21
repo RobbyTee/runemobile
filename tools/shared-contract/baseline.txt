@@ -42,6 +42,10 @@ FLAG runelite.touch.hideClickCross
 FLAG runelite.touch.selFlashMs
 FLAG runelite.touch.settleMax
 FLAG runelite.touch.settleStable
+METHOD ConfigProfileBridge#getProfilesJson()
+METHOD ConfigProfileBridge#init(ConfigManager,ProfileManager)
+METHOD ConfigProfileBridge#isAvailable()
+METHOD ConfigProfileBridge#switchProfile(long)
 METHOD DeviceHeadlessBoot#main(String[])
 METHOD GrandExchangeBridge#getGeJson()
 METHOD GrandExchangeBridge#init(PluginManager,ClientThread)
@@ -97,6 +101,7 @@ METHOD JavaBridge#getFrameSeq()
 METHOD JavaBridge#getFrameWidth()
 METHOD JavaBridge#getInteractTapSeq()
 METHOD JavaBridge#getInventoryBounds()
+METHOD JavaBridge#getReorderPaneBounds()
 METHOD JavaBridge#gpuFrameBackBuffer(int,int)
 METHOD JavaBridge#gpuPublish(int,int)
 METHOD JavaBridge#invokeMenuEntry(int,int)
