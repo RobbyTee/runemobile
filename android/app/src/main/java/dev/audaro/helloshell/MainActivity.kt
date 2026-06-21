@@ -131,6 +131,8 @@ class MainActivity : AppCompatActivity() {
     // keyboard — the per-frame poll must NOT raise GameInputView (steals focus) or dismiss the IME (kills it).
     @Volatile var textActivePanel = false
     private var shiftHeld = false         // ⇧ latch: synthetic VK_SHIFT held (AP-2a Finding 12)
+    private var ctrlHeld = false          // ⌃ latch: synthetic VK_CONTROL held (mirror of shift)
+    private var altHeld = false           // ⌥ latch: synthetic VK_ALT held (Ground Items hold-to-highlight)
     private var frameCallback: Choreographer.FrameCallback? = null
 
     // AP-2a Findings 9/25: a low-frequency daemon that drains the shared notification + link queues (off the UI
@@ -456,6 +458,24 @@ class MainActivity : AppCompatActivity() {
             Log.i(TAG, "ap2a: debug test notification + link published")
             true
         }
+        // Ctrl/Alt sticky latches — same mechanism as ⇧ (shared JavaBridge.setCtrlHeld/setAltHeld). ⌥ held drives
+        // Ground Items' hold-to-highlight (item names appear while Alt is down); ⌃ covers the Ctrl-gated surface.
+        val ctrlButton = devButton("⌃")
+        ctrlButton.alpha = 0.7f
+        ctrlButton.setOnClickListener {
+            ctrlHeld = !ctrlHeld
+            ctrlButton.alpha = if (ctrlHeld) 1f else 0.7f
+            JvmLauncher.setCtrlHeld(ctrlHeld)
+            Log.i(TAG, "mod: sticky-Ctrl ${if (ctrlHeld) "HELD" else "released"}")
+        }
+        val altButton = devButton("⌥")
+        altButton.alpha = 0.7f
+        altButton.setOnClickListener {
+            altHeld = !altHeld
+            altButton.alpha = if (altHeld) 1f else 0.7f
+            JvmLauncher.setAltHeld(altHeld)
+            Log.i(TAG, "mod: sticky-Alt ${if (altHeld) "HELD" else "released"}")
+        }
         // Track G AG2: restart into GPU Route-C mode (force-enable the base gpu plugin, render the scene on GLES).
         val gpuButton = devButton("◆")
         gpuButton.setOnClickListener { restartIntoGpu() }
@@ -469,7 +489,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             // In-play input modifiers stay on the HUD: soft keyboard + sticky-shift. (Account/Log out/Screenshot
             // moved to the launcher as fixed tiles — §4 cutover; the settings entry is the bottom-center handle.)
-            addView(kbButton); addView(shiftButton)
+            addView(kbButton); addView(shiftButton); addView(ctrlButton); addView(altButton)
             // AP-0: developer-only tooling (chrome A/B raw-stones toggle + GPU/117HD process-restart footguns) is
             // hidden in release — renderer selection lives in the native plugin panel (renderer-as-plugins).
             if (BuildConfig.DEBUG) { addView(chromeButton); addView(gpuButton); addView(hdButton) }
