@@ -7,6 +7,12 @@ app/evidence/
 # JVM benchmark build output
 dev-tools/jvmbench/out/
 
+# Headless probe output dirs (regen by re-running the headless harness)
+dev-tools/headless/out-*/
+
+# Built fake-xawt AWT shim (regen per-machine)
+dev-tools/fake-xawt/*.dylib
+
 # Bundled JRE artifacts (large; fetched per-machine)
 jre*-ios-aarch64*
 dev-tools/jre/
