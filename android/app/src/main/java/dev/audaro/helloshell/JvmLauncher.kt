@@ -280,6 +280,7 @@ object JvmLauncher {
     // push the message area below the taller native row (rowH canvas px) / keep its natural width (0).
     external fun nativeChatSnapshotPub(): String
     external fun nativeDialogueJson(): String   // UI-4: the engine NPC-dialogue snapshot (opaque-parchment source)
+    external fun nativeOrbSnapshotPub(): String // minimap-orb veneer: per-orb canvas bounds (read on tap, no attach)
     external fun nativeSetChatTabRowHeight(canvasPx: Int)
     external fun nativeSetChatAreaWidth(canvasPx: Int)
 
@@ -425,6 +426,7 @@ object JvmLauncher {
     fun relocateMinimap(x: Int, y: Int) = nativeRelocateMinimap(x, y)
     fun chatSnapshotPub() = nativeChatSnapshotPub()
     fun dialogueJsonPub() = nativeDialogueJson()
+    fun orbSnapshotPub() = nativeOrbSnapshotPub()
     fun setChatTabRowHeight(canvasPx: Int) = nativeSetChatTabRowHeight(canvasPx)
     fun setChatAreaWidth(canvasPx: Int) = nativeSetChatAreaWidth(canvasPx)
     fun scrollChat(deltaCanvasPx: Int) = nativeScrollChat(deltaCanvasPx)

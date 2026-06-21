@@ -145,6 +145,11 @@ public final class HudVeneerBridge
 	// is the live message model — read from client.getChatLineMap() (not the broken widgets), filtered to the active
 	// tab, with <col=> colour runs pre-parsed — that the native veneer renders. Published per-frame in tick().
 	private static volatile String chatLinesJson = "{\"loggedIn\":false}";
+	// Native minimap-orb touch veneer: per-frame canvas bounds of the live orbs (HP/prayer/run/spec/store/
+	// world-map/wiki). The engine hard-pins the orbs and they render at ~25px — too small/dense for a finger —
+	// so the native shell reads these bounds, enlarges the tap zone, and proxies a PRECISE click to the orb's
+	// centre. The orbs stay live engine widgets (never moved); only the touch target grows. Published in tick().
+	private static volatile String orbSnapshotJson = "{\"loggedIn\":false}";
 	private static volatile int chatLinesSeq;
 
 	// Native chat-tab SWITCH: which tab (0..7 index into CHAT_TAB_IDS) the native veneer asked to open. The engine
@@ -280,6 +285,16 @@ public final class HudVeneerBridge
 	public static String getChatSnapshot()
 	{
 		return chatSnapshotJson;
+	}
+
+	/** Native: the live per-orb canvas bounds for the minimap-orb touch veneer — {@code {"loggedIn":true,
+	 *  "hp":{"x":,"y":,"w":,"h":},"prayer":{..},"run":{..},"spec":{..},"store":{..},"worldmap":{..},"wiki":{..}}}
+	 *  (an orb key is absent when that orb is hidden — e.g. spec with no spec weapon). Read lock-free on the JNI
+	 *  thread; published on the client thread in {@link #tick}. The native side enlarges the tap zone and proxies a
+	 *  precise click to the orb centre — orbs stay live engine widgets (hard-pinned), only the touch target grows. */
+	public static String getOrbSnapshot()
+	{
+		return orbSnapshotJson;
 	}
 
 	/** Native: the live chat MESSAGE lines (escaped JSON) for the active tab, with pre-parsed colour runs, for the
@@ -485,6 +500,7 @@ public final class HudVeneerBridge
 			// resolves null). Open it ourselves once the layer exists; the interface's own onload binds it to the
 			// live orb varplayers, so it renders + updates like a normal client. No-op once the orbs are present.
 			ensureOrbsLoaded(c, preEoc);
+			buildOrbSnapshot(c);   // per-frame orb canvas bounds for the native minimap-orb touch veneer
 
 			final int chatId = preEoc ? InterfaceID.ToplevelPreEoc.CHAT_CONTAINER : InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER;
 			// While the world map is open it owns the screen: the relocated-HUD apply blocks below are gated
@@ -1510,6 +1526,49 @@ public final class HudVeneerBridge
 
 	/** {@code [x,y,w,h]} canvas bounds of a widget, or {@code null} if absent/zero-size. Hidden is fine — the
 	 *  engine CONTROLS row stays shown (covered by the native row), so its buttons keep real bounds. */
+	/** Publish the live per-orb canvas bounds for the native touch veneer (read via {@link #getOrbSnapshot}).
+	 *  Each orb is a hard-pinned live engine widget; we only report where it currently renders so the native
+	 *  shell can enlarge the tap zone and proxy a precise click to its centre. */
+	private static void buildOrbSnapshot(Client c)
+	{
+		try
+		{
+			final StringBuilder sb = new StringBuilder(256);
+			sb.append("{\"loggedIn\":true");
+			appendOrb(sb, c, "hp", InterfaceID.Orbs.ORB_HEALTH);
+			appendOrb(sb, c, "prayer", InterfaceID.Orbs.ORB_PRAYER);
+			appendOrb(sb, c, "run", InterfaceID.Orbs.ORB_RUNENERGY);
+			appendOrb(sb, c, "spec", InterfaceID.Orbs.ORB_SPECENERGY);
+			appendOrb(sb, c, "store", InterfaceID.Orbs.ORB_STORE);
+			appendOrb(sb, c, "worldmap", InterfaceID.Orbs.ORB_WORLDMAP);
+			appendOrb(sb, c, "wiki", InterfaceID.Orbs.WIKI);
+			sb.append('}');
+			orbSnapshotJson = sb.toString();
+		}
+		catch (RuntimeException ex)
+		{
+			BridgeFaults.note("HudVeneerBridge.buildOrbSnapshot", ex);
+		}
+	}
+
+	/** Append {@code ,"key":{x,y,w,h}} for a live, visible orb widget; skip it entirely when null/hidden/zero-size. */
+	private static void appendOrb(StringBuilder sb, Client c, String key, int id)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			if (w == null || w.isHidden())
+			{
+				return;
+			}
+			appendBounds(sb, key, canvasBounds(w));
+		}
+		catch (RuntimeException ex)
+		{
+			BridgeFaults.note("HudVeneerBridge.appendOrb", ex);
+		}
+	}
+
 	private static int[] canvasBounds(Widget w)
 	{
 		if (w == null)

@@ -211,6 +211,11 @@ class MainActivity : AppCompatActivity() {
         private const val VK_RIGHT = 39
         private const val VK_DOWN = 40
 
+        // Minimap-orb touch veneer: the orb keys published by HudVeneerBridge.getOrbSnapshot, and the canvas-px
+        // margin each orb's tap zone is inflated by (orbs render ~25px; this enlarges the effective finger target).
+        private val ORB_KEYS = arrayOf("hp", "prayer", "run", "spec", "store", "worldmap", "wiki")
+        private const val ORB_TAP_PAD = 10
+
         // Pinch-to-wheel: geometric step a scale ratio must cross to emit one wheel notch.
         private const val PINCH_STEP = 1.08f
         // Click-ring truth grace: how long after a tap we wait for interactTapSeq before calling it a walk.
@@ -887,6 +892,34 @@ class MainActivity : AppCompatActivity() {
         return if (fh <= 0 || vh <= 0) px.toInt() else (px * fh / vh).toInt()
     }
 
+    private class OrbHit(val name: String, val cx: Int, val cy: Int)
+
+    /** Minimap-orb veneer: given a tap in canvas px, return the live orb whose enlarged (ORB_TAP_PAD) bounds
+     *  contain it — nearest centre wins when zones overlap — or null when the tap is clear of every orb. The
+     *  per-orb bounds come from HudVeneerBridge.getOrbSnapshot, republished each frame + read lock-free. */
+    private fun nearestOrb(gx: Int, gy: Int): OrbHit? {
+        val json = JvmLauncher.orbSnapshotPub()
+        if (json.length < 16) return null   // "{\"loggedIn\":false}" or empty -> no orbs published
+        return try {
+            val o = JSONObject(json)
+            if (!o.optBoolean("loggedIn", false)) return null
+            var best: OrbHit? = null
+            var bestD = Long.MAX_VALUE
+            for (key in ORB_KEYS) {
+                val b = o.optJSONObject(key) ?: continue
+                val x = b.optInt("x"); val y = b.optInt("y"); val w = b.optInt("w"); val h = b.optInt("h")
+                if (gx < x - ORB_TAP_PAD || gx > x + w + ORB_TAP_PAD ||
+                    gy < y - ORB_TAP_PAD || gy > y + h + ORB_TAP_PAD) continue
+                val cx = x + w / 2; val cy = y + h / 2
+                val d = (gx - cx).toLong() * (gx - cx) + (gy - cy).toLong() * (gy - cy)
+                if (d < bestD) { bestD = d; best = OrbHit(key, cx, cy) }
+            }
+            best
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
     private inner class GestureListener : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent) = true
 
@@ -905,6 +938,19 @@ class MainActivity : AppCompatActivity() {
                 }
                 JvmLauncher.clickPrecise(gx, gy, 1)
                 return true
+            }
+            // Minimap-orb touch veneer: the orbs render at ~25px and sit dense next to the minimap walk surface,
+            // so a finger easily mis-taps (wrong orb, or a walk). Snap a tap landing in an orb's enlarged zone to
+            // the NEAREST orb centre and proxy a PRECISE click there (no walk ring) — adjacency is resolved by
+            // nearest-centre. Runs before the minimap-cluster handler so an orb wins over a raw minimap click.
+            if (!mapOpen) {
+                val orb = nearestOrb(gx, gy)
+                if (orb != null) {
+                    JvmLauncher.clickPrecise(orb.cx, orb.cy, 1)
+                    vibrateTick()
+                    Log.i(TAG, "orb-veneer: tap ($gx,$gy) -> ${orb.name} @(${orb.cx},${orb.cy})")
+                    return true
+                }
             }
             // AP-0: the relocated minimap + orb cluster is HUD/UI. Clicks there still fire (minimap walk / orb
             // ops) but the world-style walk/interact ring is suppressed — a ring drawn on the minimap or an orb

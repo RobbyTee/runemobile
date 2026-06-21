@@ -177,6 +177,9 @@ static jmethodID g_midChatSnapshot = nullptr, g_midSetChatRowH = nullptr, g_midS
 // AP-0 chat scroll-by-drag: scrollChat(deltaCanvasPx) drives the chatbox's OWN scroll layer (not a mouse
 // wheel — a wheel over the transparent chat would also zoom the camera).
 static jmethodID g_midScrollChat = nullptr;
+// Native minimap-orb touch veneer: getOrbSnapshot (per-frame orb canvas bounds the native shell enlarges +
+// proxy-clicks). OPTIONAL (never in the hud all-or-nothing gate) — an older staged jar simply loses the veneer.
+static jmethodID g_midOrbSnapshot = nullptr;
 static std::atomic<bool> g_hudReady{false};
 
 // ---- Surface / render --------------------------------------------------------------------------------
@@ -238,6 +241,9 @@ static std::string           g_chromeSnapshotPub = "{\"enabled\":false}";
 // for the UI thread's enlarged native chat-tab overlay to read lock-free without attaching to HotSpot.
 static std::mutex            g_chatLock;
 static std::string           g_chatSnapshotPub = "{\"loggedIn\":false}";
+// Minimap-orb veneer snapshot, republished every frame by the render thread (HudVeneerBridge.getOrbSnapshot).
+static std::mutex            g_orbLock;
+static std::string           g_orbSnapshotPub = "{\"loggedIn\":false}";
 // UI-4 NPC dialogue: getDialogueJson (optional, like getMapSnapshot) — the engine dialogue is forced transparent
 // while the chat is relocated, so the native shell draws an opaque parchment over it from this snapshot.
 static jmethodID             g_midDialogueJson = nullptr;
@@ -807,6 +813,7 @@ static bool publishBridge(JNIEnv *env) {
             g_midMapSnapshot       = midOpt(env, hvg, "getMapSnapshot", "()Ljava/lang/String;");
             g_midOpenWorldMap      = midOpt(env, hvg, "openWorldMap", "()V");   // FIX-5 (optional; older jar omits it)
             g_midDialogueJson      = midOpt(env, hvg, "getDialogueJson", "()Ljava/lang/String;");   // UI-4 (optional)
+            g_midOrbSnapshot       = midOpt(env, hvg, "getOrbSnapshot", "()Ljava/lang/String;");    // orb veneer (optional)
             bool hudOk = g_midSetStonesHidden && g_midOpenTab && g_midRelocateSidePanel && g_midRelocateChat
                       && g_midRelocateMinimap && g_midChatSnapshot && g_midSetChatRowH && g_midSetChatAreaW
                       && g_midScrollChat;
@@ -964,6 +971,24 @@ static void *renderLoop(void *) {
                     if (c) {
                         std::lock_guard<std::mutex> lk(g_chatLock);
                         g_chatSnapshotPub.assign(c);
+                        env->ReleaseStringUTFChars(js, c);
+                    } else if (env->ExceptionCheck()) {
+                        env->ExceptionClear();
+                    }
+                    env->DeleteLocalRef(js);
+                }
+            }
+
+            // Minimap-orb veneer: republish the per-orb canvas bounds each frame (HudVeneerBridge.getOrbSnapshot)
+            // so the native tap handler reads fresh orb positions lock-free, no attach. Optional method.
+            if (g_hudReady.load(std::memory_order_acquire) && g_hudCls && g_midOrbSnapshot) {
+                jstring js = (jstring) env->CallStaticObjectMethod(g_hudCls, g_midOrbSnapshot);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); }
+                else if (js) {
+                    const char *c = env->GetStringUTFChars(js, nullptr);
+                    if (c) {
+                        std::lock_guard<std::mutex> lk(g_orbLock);
+                        g_orbSnapshotPub.assign(c);
                         env->ReleaseStringUTFChars(js, c);
                     } else if (env->ExceptionCheck()) {
                         env->ExceptionClear();
@@ -2255,6 +2280,12 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeChatSnapshotPub(JNIEnv *env, jobject) {
     std::lock_guard<std::mutex> lk(g_chatLock);
     return env->NewStringUTF(g_chatSnapshotPub.c_str());
+}
+// Minimap-orb veneer: the render-thread-published HudVeneerBridge.getOrbSnapshot (UI reads lock-free, no attach).
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeOrbSnapshotPub(JNIEnv *env, jobject) {
+    std::lock_guard<std::mutex> lk(g_orbLock);
+    return env->NewStringUTF(g_orbSnapshotPub.c_str());
 }
 // UI-4: the render-thread-published HudVeneerBridge.getDialogueJson (UI reads lock-free, no attach) — the native
 // opaque NPC-dialogue parchment that covers the engine's now-transparent dialogue.
