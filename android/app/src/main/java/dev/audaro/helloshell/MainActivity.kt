@@ -94,6 +94,11 @@ class MainActivity : AppCompatActivity() {
     private var mapCloseCanvas: IntArray? = null
     private var mapZoomInCanvas: IntArray? = null
     private var mapZoomOutCanvas: IntArray? = null
+    // Fullscreen map: the outer map-WINDOW rect (canvas px) the SurfaceView is stretched to fill while the map
+    // is open, so only the map shows edge-to-edge (the engine caps the window at a structural reserve, leaving
+    // scene around it — we scale that gap out of view). null = no transform applied; lastMapWindow detects change.
+    private var mapWindowCanvas: IntArray? = null
+    private var lastMapWindowApplied: IntArray? = null
     private var mapPanning = false
     private var mapPanAccumX = 0f; private var mapPanAccumY = 0f
     // FIX-4 inventory item-drag: a one-finger drag that STARTS inside the inventory grid drags the item (touch
@@ -1670,6 +1675,7 @@ class MainActivity : AppCompatActivity() {
         mapCloseCanvas = if (open) rect("close") else null
         mapZoomInCanvas = if (open) rect("zoomIn") else null
         mapZoomOutCanvas = if (open) rect("zoomOut") else null
+        mapWindowCanvas = if (open) rect("window") else null
         // FIX-14: the map search never flips INPUT_TYPE, so the soft keyboard would otherwise linger over the
         // jumped-to map until the map closes. Watch the engine WORLDMAP_SEARCHING flag (published in the
         // snapshot): on its 1->0 edge the search has committed (Enter) or been cancelled (Quit) — drop the latch
@@ -1688,11 +1694,58 @@ class MainActivity : AppCompatActivity() {
             if (!open) {
                 mapPanning = false
                 mapSearchKeyboard = false
+                resetMapFullscreen()
             }
             Log.i(TAG, "p5: world map ${if (open) "OPEN" else "closed"} rect=${mapRectCanvas?.joinToString(",")}" +
                 if (open) " close=${mapCloseCanvas?.joinToString(",")} search=${mapSearchCanvas?.joinToString(",")}" +
                     " zoomIn=${mapZoomInCanvas?.joinToString(",")} zoomOut=${mapZoomOutCanvas?.joinToString(",")}" else "")
         }
+        // Stretch the engine map window to fill the whole screen (edge-to-edge, only the map shows). Re-apply
+        // when the window rect first settles or changes (e.g. a canvas resize); the close edge resets it above.
+        if (open) {
+            val win = mapWindowCanvas
+            if (win != null && win[2] > 0 && win[3] > 0 && !win.contentEquals(lastMapWindowApplied)) {
+                applyMapFullscreen(win)
+            }
+        }
+    }
+
+    /** Non-uniformly scale + translate the SurfaceView so the map-window canvas rect fills the whole view.
+     *  Android delivers touches to a transformed view in its UNtransformed local space, so toGameX/Y (hence
+     *  pan/tap/zoom/close) keep landing correctly with no touch-pipeline change. UI-thread only. */
+    private fun applyMapFullscreen(win: IntArray) {
+        // canvasW/canvasH = the engine render canvas (boot-set, stable) — the SAME space the snapshot rects use.
+        // (frameWidth()/frameHeight() = the last-blitted GL frame, which can read 0 before a frame composites.)
+        val cw = canvasW; val ch = canvasH
+        val vw = surfaceView.width; val vh = surfaceView.height
+        if (cw <= 0 || ch <= 0 || vw <= 0 || vh <= 0 || win[2] <= 0 || win[3] <= 0) return
+        // Map the window canvas-rect onto the full view: scale so win[w,h] fills the canvas, pivot (0,0) +
+        // translate so win[x,y] lands at the view origin. sx/sy reduce to canvas/win; tx/ty carry the view scale.
+        val sx = cw.toFloat() / win[2]
+        val sy = ch.toFloat() / win[3]
+        surfaceView.pivotX = 0f
+        surfaceView.pivotY = 0f
+        surfaceView.scaleX = sx
+        surfaceView.scaleY = sy
+        surfaceView.translationX = -win[0].toFloat() * vw / win[2]
+        surfaceView.translationY = -win[1].toFloat() * vh / win[3]
+        lastMapWindowApplied = win.copyOf()
+        Log.i(TAG, "p5: map fullscreen win=${win.joinToString(",")} canvas=${cw}x${ch} scale=($sx,$sy)")
+    }
+
+    /** Restore the SurfaceView to its untransformed full-frame state when the map closes. UI-thread only. */
+    private fun resetMapFullscreen() {
+        lastMapWindowApplied = null
+        mapWindowCanvas = null
+        if (surfaceView.scaleX == 1f && surfaceView.scaleY == 1f &&
+            surfaceView.translationX == 0f && surfaceView.translationY == 0f) return
+        surfaceView.scaleX = 1f
+        surfaceView.scaleY = 1f
+        surfaceView.translationX = 0f
+        surfaceView.translationY = 0f
+        surfaceView.pivotX = surfaceView.width / 2f
+        surfaceView.pivotY = surfaceView.height / 2f
+        Log.i(TAG, "p5: map fullscreen reset")
     }
 
     private fun inCanvasRect(r: IntArray?, gx: Int, gy: Int): Boolean =
