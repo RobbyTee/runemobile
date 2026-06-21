@@ -287,6 +287,12 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UIButton *gridButton;   // §3.3: opens the labelled plugin-panel grid launcher
 @property (nonatomic, strong) UIButton *overlaysCardButton;   // plugin card: enters overlay edit-mode
 @property (nonatomic, strong) OverlayEditView *overlayEdit;   // active overlay edit-mode view (OVL-2/3/5)
+// FIX-9 (iOS parity with Android ReconnectingOverlayView): a native "Reconnecting…" scrim shown over the live
+// frame while the headless auto-reconnect recovers an in-session drop, driven off the chrome snapshot's
+// "reconnecting" flag (HeadlessLogin.isReconnecting -> MobileChromeBridge). reconnectShown = last-applied state.
+@property (nonatomic, strong) UIView *reconnectScrim;
+@property (nonatomic, strong) UIActivityIndicatorView *reconnectSpinner;
+@property (nonatomic, assign) BOOL reconnectShown;
 @property (nonatomic, strong) UIView *pluginPanel;
 @property (nonatomic, strong) UITableView *pluginTable;
 @property (nonatomic, strong) NSArray<NSDictionary *> *pluginList;  // the FILTERED view the table renders
@@ -2625,6 +2631,73 @@ static int chatRowCanvasH(void) {
 // accented. A tap proxies a click onto the REAL stone centre (stored in _tabCentres), so the native rail's
 // position is independent of the desktop stone — no game widget is moved or hidden. Hides everything when not
 // logged in / no tabs.
+// FIX-9 (iOS parity): build the native "Reconnecting…" scrim once — a full-screen dim + a centered OSRS-styled
+// card (dark brown, amber border) with a spinner and label, mirroring Android's ReconnectingOverlayView.
+// Non-interactive (touches fall through, matching Android isClickable=false); hidden until the snapshot shows
+// an active reconnect. Built with autoresizing + Auto Layout so it tracks rotation/size.
+- (void)setupReconnectOverlay {
+    if (self.reconnectScrim) return;
+    UIView *scrim = [[UIView alloc] initWithFrame:self.view.bounds];
+    scrim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    scrim.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.59];
+    scrim.userInteractionEnabled = NO;   // touches fall through to the game (parity with Android)
+    scrim.hidden = YES;
+
+    UIView *card = [[UIView alloc] init];
+    card.translatesAutoresizingMaskIntoConstraints = NO;
+    card.backgroundColor = [UIColor colorWithRed:33/255.0 green:28/255.0 blue:23/255.0 alpha:0.93];
+    card.layer.cornerRadius = 10;
+    card.layer.borderWidth = 1.5;
+    card.layer.borderColor = [UIColor colorWithRed:140/255.0 green:128/255.0 blue:102/255.0 alpha:1.0].CGColor;
+    [scrim addSubview:card];
+
+    UIActivityIndicatorView *spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
+    spin.translatesAutoresizingMaskIntoConstraints = NO;
+    spin.color = [UIColor colorWithRed:1.0 green:0.78 blue:0.35 alpha:1.0]; // OSRS amber
+    spin.hidesWhenStopped = NO;
+    [card addSubview:spin];
+    self.reconnectSpinner = spin;
+
+    UILabel *label = [[UILabel alloc] init];
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    label.text = @"Reconnecting…";
+    label.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
+    label.textColor = [UIColor whiteColor];
+    label.textAlignment = NSTextAlignmentCenter;
+    [card addSubview:label];
+
+    [self.view addSubview:scrim];
+    self.reconnectScrim = scrim;
+
+    [NSLayoutConstraint activateConstraints:@[
+        [card.centerXAnchor constraintEqualToAnchor:scrim.centerXAnchor],
+        [card.centerYAnchor constraintEqualToAnchor:scrim.centerYAnchor],
+        [card.widthAnchor constraintEqualToConstant:240],
+        [card.heightAnchor constraintEqualToConstant:140],
+        [spin.centerXAnchor constraintEqualToAnchor:card.centerXAnchor],
+        [spin.topAnchor constraintEqualToAnchor:card.topAnchor constant:34],
+        [label.centerXAnchor constraintEqualToAnchor:card.centerXAnchor],
+        [label.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-28],
+    ]];
+}
+
+// FIX-9 (iOS parity): show the scrim while the headless auto-reconnect recovers a dropped session. The snapshot
+// carries "reconnecting":true only during an active recovery (a normal login screen / deliberate logout omits
+// it), so a plain login is never covered. Called ~10 Hz from onDisplayTick, UNGATED by login/chrome — the
+// reconnect happens while NOT logged in, so it can't sit behind the chromeVisible/loggedIn early-returns.
+- (void)updateReconnectOverlay {
+    if (!self.reconnectScrim) return;
+    NSString *snap = [JVMLauncher chromeSnapshot];
+    NSDictionary *d = parseBridgeJSON(snap, "ViewController.updateReconnectOverlay");
+    BOOL show = [d isKindOfClass:[NSDictionary class]] && ![d[@"loggedIn"] boolValue] && [d[@"reconnecting"] boolValue];
+    if (show == self.reconnectShown) return;
+    self.reconnectShown = show;
+    self.reconnectScrim.hidden = !show;
+    if (show) { [self.view bringSubviewToFront:self.reconnectScrim]; [self.reconnectSpinner startAnimating]; }
+    else { [self.reconnectSpinner stopAnimating]; }
+    [self appendLine:[NSString stringWithFormat:@"[shell] fix9: reconnect overlay -> %@", show ? @"YES" : @"NO"]];
+}
+
 - (void)updateChrome {
     NSString *snap = [JVMLauncher chromeSnapshot];
     if (snap.length == 0) return;
@@ -2935,6 +3008,7 @@ static int chatRowCanvasH(void) {
     // renderer; PiP covers every renderer that can feed it frames.
     [self setupBackgroundKeepalive];
     [self setupPictureInPicture];
+    [self setupReconnectOverlay];   // FIX-9: native "Reconnecting…" scrim (hidden until a real reconnect)
 
 #if !defined(RC_BACKEND_ANGLE)
     // GPU Zone (117HD) PRESENT (EAGL). Two flavours, both no-glReadPixels (the measured ~16ms/frame bottleneck):
@@ -3321,6 +3395,12 @@ static CGRect mapRectFromArr(NSArray *a) {
     // and the JSON read is cheap). Skipped entirely when the rails are toggled off.
     if (self.chromeVisible && self.framesShown % 6 == 0) {
         [self updateChrome];
+    }
+
+    // FIX-9: drive the "Reconnecting…" scrim ~10 Hz, UNGATED by chrome/login — the reconnect happens while NOT
+    // logged in, so it can't sit behind updateChrome's chromeVisible gate or the other updaters' loggedIn returns.
+    if (self.framesShown % 6 == 0) {
+        [self updateReconnectOverlay];
     }
 
     // W3 Feature-A (A2.5): refresh the crude native chat-at-top + HUD-status overlay from the HudDataBridge
