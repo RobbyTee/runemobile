@@ -98,6 +98,10 @@ public class Hooks implements Callbacks
 	private static final GameTick GAME_TICK = new GameTick();
 	private static final BeforeRender BEFORE_RENDER = new BeforeRender();
 
+	// fps probe (off unless -Drunelite.fpsprobe=true; the Android 117HD test path sets it). Once/sec, logs the
+	// engine's own render fps + game state so a logcat harness can measure a preset A/B in-world. Zero cost when off.
+	private static final boolean FPS_PROBE = Boolean.getBoolean("runelite.fpsprobe");
+
 	private final Client client;
 	private final OverlayRenderer renderer;
 	private final EventBus eventBus;
@@ -129,6 +133,7 @@ public class Hooks implements Callbacks
 	private static Graphics2D lastGraphics;
 
 	private long nextError;
+	private long lastFpsProbe;
 	private boolean rateLimitedError;
 	private int errorBackoff = 1;
 
@@ -277,6 +282,15 @@ public class Hooks implements Callbacks
 	@Override
 	public void frame()
 	{
+		if (FPS_PROBE)
+		{
+			long now = System.currentTimeMillis();
+			if (now - lastFpsProbe >= 1000)
+			{
+				lastFpsProbe = now;
+				log.info("[fpsprobe] fps={} gs={}", client.getFPS(), client.getGameState());
+			}
+		}
 		eventBus.post(BEFORE_RENDER);
 	}
 

@@ -4,9 +4,11 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.provider.MediaStore
@@ -210,10 +212,40 @@ class MainActivity : AppCompatActivity() {
     }
 
     @SuppressLint("ClickableViewAccessibility")
+    // FIX-13: debug-only live 117HD config flip, for a thermal-fair fps A/B (apply both presets seconds apart at
+    // one thermal/crowd/camera state — no reboot). All three keys apply live via HdPlugin.onConfigChanged.
+    //   adb shell am broadcast -a dev.audaro.helloshell.SET_HD_CONFIG --es preset new   (85/8/25)
+    //   adb shell am broadcast -a dev.audaro.helloshell.SET_HD_CONFIG --es preset base  (100/16/30, RLHD defaults)
+    //   adb shell am broadcast -a dev.audaro.helloshell.SET_HD_CONFIG --es key drawDistance --es value 20
+    private var hdConfigReceiver: BroadcastReceiver? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+
+        if (BuildConfig.DEBUG) {
+            hdConfigReceiver = object : BroadcastReceiver() {
+                override fun onReceive(ctx: Context?, intent: Intent?) {
+                    intent ?: return
+                    val pairs: List<Pair<String, String>> = when (intent.getStringExtra("preset")) {
+                        "new" -> listOf("sceneResolutionScale" to "85", "anisotropicFilteringLevel" to "8", "drawDistance" to "25")
+                        "base" -> listOf("sceneResolutionScale" to "100", "anisotropicFilteringLevel" to "16", "drawDistance" to "30")
+                        else -> {
+                            val k = intent.getStringExtra("key"); val v = intent.getStringExtra("value")
+                            if (k != null && v != null) listOf(k to v) else emptyList()
+                        }
+                    }
+                    if (pairs.isEmpty()) { Log.w(TAG, "SET_HD_CONFIG: need --es preset new|base, or --es key K --es value V"); return }
+                    JvmLauncher.onBridgeTouch { pairs.forEach { (k, v) -> JvmLauncher.setConfig("hd", k, v) } }
+                    Log.i(TAG, "SET_HD_CONFIG applied live: $pairs")
+                }
+            }
+            ContextCompat.registerReceiver(
+                this, hdConfigReceiver, IntentFilter("dev.audaro.helloshell.SET_HD_CONFIG"),
+                ContextCompat.RECEIVER_EXPORTED,
+            )
+        }
 
         // AP-2a Finding 9: a notification channel for in-game alerts (idle, level-up, etc.) + the runtime
         // POST_NOTIFICATIONS prompt on API 33+ (silently granted below that). The drain loop delivers to it.
@@ -1710,6 +1742,7 @@ class MainActivity : AppCompatActivity() {
         frameCallback?.let { Choreographer.getInstance().removeFrameCallback(it) }
         frameCallback = null
         drainRun = false   // stop the AP-2a notification/link drain daemon
+        hdConfigReceiver?.let { runCatching { unregisterReceiver(it) } }; hdConfigReceiver = null
         super.onDestroy()
     }
 
@@ -2021,8 +2054,11 @@ class MainActivity : AppCompatActivity() {
                 "-Drunelite.routecrlhd=true",
                 "-Drunelite.gpuframedump=true",
                 "-Drunelite.gpuframedump.dir=$dumpDir",
+                // FIX-13: arm the once/sec engine-fps logcat probe ([fpsprobe] fps=N gs=...) so a preset A/B can be
+                // measured in-world on real Mali (Hooks.frame, gated by this prop). Only active in 117HD test mode.
+                "-Drunelite.fpsprobe=true",
             ))
-            Log.i(TAG, "AG3-b 117HD mode: gpu jar $clientJar + rlhd jar $rlhdJar, routecrlhd + frame-dump armed (dir=$dumpDir/routec-frames)")
+            Log.i(TAG, "AG3-b 117HD mode: gpu jar $clientJar + rlhd jar $rlhdJar, routecrlhd + frame-dump + fpsprobe armed (dir=$dumpDir/routec-frames)")
         }
 
         // A8: only pipe the embedded VM's stdout/err to logcat in DEBUG builds — a release build must not leak
