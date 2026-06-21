@@ -121,17 +121,28 @@ public final class RLHDStarter
 			// barely visible at the mobile present scale but a real fps win — iOS already ships RES_1024 (below).
 			// Reversible in the 117HD plugin config (shadowResolution).
 			MobileUiBridge.setConfig("hd", "shadowResolution", "RES_1024");
+			// FIX-13 (cont): render the 3D scene FBO at 85% then blit-upscale to the canvas (UI stays native res).
+			// Quadratic fill cut on the heaviest pass (the main scene); with AA off this is the simple resolve-free
+			// path (HdPlugin sceneResolutionScale). RLHD default 100. Reversible (sceneResolutionScale).
+			MobileUiBridge.setConfig("hd", "sceneResolutionScale", "85");
+			// FIX-13 (cont): halve max anisotropic filtering (16 -> 8). 16 is desktop-max and a real texture-fetch
+			// bandwidth cost on Mali's tiler; 8 keeps mipmapping and is barely distinguishable at the mobile present
+			// scale. Pure sampler param (no shader recompile). RLHD default 16. Reversible (anisotropicFilteringLevel).
+			MobileUiBridge.setConfig("hd", "anisotropicFilteringLevel", "8");
 			// Force SINGLE-THREADED model processing (config key "asyncModelProcessing"). RLHD's multithreaded
 			// path (RENDER_THREADS) has the engine call the draw callbacks from worker threads, which then touch
 			// GL buffers concurrently — but our EGL/GL bridge has ONE thread-affine context, so concurrent buffer
 			// access races and corrupts animated models (real players flash with wrong geometry/colours; NPCs on
 			// the shared opaque path are less affected). Single-threaded keeps every GL call on the context thread.
 			MobileUiBridge.setConfig("hd", "asyncModelProcessing", "false");
-			final String d = MobileUiBridge.setConfig("hd", "drawDistance", "30");
+			// FIX-13 (cont): draw distance 30 -> 25 tiles. Scene geometry is submitted to BOTH the scene and the
+			// shadow (light-POV) passes, so a smaller ring shrinks both quadratically — the most efficient single cut.
+			// Still well within mobile-playable range (desktop default is 50). Reversible (drawDistance).
+			final String d = MobileUiBridge.setConfig("hd", "drawDistance", "25");
 			if (d.contains("\"ok\":true"))
 			{
 				configForced = true;
-				log.info("[routecrlhd] forced mobile config: LINEAR, tiledLighting=off, AA=off, shadows=1024, draw=30, single-threaded");
+				log.info("[routecrlhd] forced mobile config: LINEAR, tiledLighting=off, AA=off, shadows=1024, sceneScale=85, aniso=8, draw=25, single-threaded");
 			}
 				return;
 			}
