@@ -227,6 +227,7 @@ class MainActivity : AppCompatActivity() {
         // AWT virtual-key codes (java.awt.event.KeyEvent) the engine's onKeyStroke expects.
         private const val VK_BACK_SPACE = 8
         private const val VK_ENTER = 10
+        private const val VK_ESCAPE = 27
         private const val VK_LEFT = 37
         private const val VK_UP = 38
         private const val VK_RIGHT = 39
@@ -581,7 +582,20 @@ class MainActivity : AppCompatActivity() {
         // for when no composition is active: dispose+hide if somehow still visible, else passthrough to normal
         // BACK so the app backgrounds.
         onBackPressedDispatcher.addCallback(this) {
-            if (pluginPanel.visibility == View.VISIBLE) {
+            if (mapOpen) {
+                // The fullscreen map's close X is a tiny bezel-clipped target at the screen corner — BACK is the
+                // reliable close. Click the close button by its CANVAS coordinate (from the snapshot), which the
+                // engine resolves regardless of where the stretched view paints it; Escape as a fallback if the
+                // close rect isn't published yet.
+                val cc = mapCloseCanvas
+                if (cc != null) {
+                    JvmLauncher.clickPrecise(cc[0] + cc[2] / 2, cc[1] + cc[3] / 2, 1)
+                    Log.i(TAG, "p5: BACK -> close world map via close X canvas=(${cc[0]},${cc[1]},${cc[2]},${cc[3]})")
+                } else {
+                    JvmLauncher.keyStroke(VK_ESCAPE)
+                    Log.i(TAG, "p5: BACK -> close world map via Escape (no close rect)")
+                }
+            } else if (pluginPanel.visibility == View.VISIBLE) {
                 pluginPanel.visibility = View.GONE
                 pluginPanel.disposeComposition()
                 JvmLauncher.onBridge { JvmLauncher.flushConfig() }
