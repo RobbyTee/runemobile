@@ -908,7 +908,7 @@ public final class JavaBridge
 			selActor = null;
 			selObject = null;
 			selUntil = 0;
-			publishTapKind(TAP_KIND_WALK, null);
+			publishTapKind(TAP_KIND_WALK, (MenuEntry) null);
 			if (TOUCH_DIAG && c != null && ct != null)
 			{
 				final int cx = tapX, cy = tapY;
@@ -918,22 +918,21 @@ public final class JavaBridge
 		else if (type == null || type == MenuAction.CANCEL)
 		{
 			// The click did nothing (dead UI chrome / cancel) — no feedback at all.
-			publishTapKind(TAP_KIND_NONE, null);
+			publishTapKind(TAP_KIND_NONE, (MenuEntry) null);
 		}
 		else
 		{
 			interactTapSeq++;   // the click DID interact -> haptic (+ iOS red ring), meaning unchanged
-			final Widget w = entry.getWidget();
-			if (w != null)
+			if (entry.getWidget() != null)
 			{
 				// An interface op (inventory item / prayer / spell / tab / …): no ring, a selection border.
-				publishTapKind(TAP_KIND_WIDGET, w);
+				publishTapKind(TAP_KIND_WIDGET, entry);
 			}
 			else
 			{
 				// A scene interaction (NPC / object / player / ground item): the red ring + model outline.
 				armOutlineFromEntry(c, entry, type);
-				publishTapKind(TAP_KIND_SCENE, null);
+				publishTapKind(TAP_KIND_SCENE, (MenuEntry) null);
 			}
 		}
 		finishTap();
@@ -945,19 +944,11 @@ public final class JavaBridge
 	 * bounds-less widget degrades to NONE (nothing to outline). The seq bumps last, after the kind/bounds are
 	 * set, so a native reader that sees the new seq also sees consistent kind/bounds.
 	 */
-	private static void publishTapKind(int kind, Widget w)
+	private static void publishTapKind(int kind, MenuEntry entry)
 	{
 		if (kind == TAP_KIND_WIDGET)
 		{
-			java.awt.Rectangle b = null;
-			try
-			{
-				b = w == null ? null : w.getBounds();
-			}
-			catch (RuntimeException ex)
-			{
-				BridgeFaults.note("JavaBridge.publishTapKind", ex);
-			}
+			final java.awt.Rectangle b = tightWidgetBounds(entry);
 			if (b != null && b.width > 0 && b.height > 0)
 			{
 				wbX = b.x;
@@ -972,6 +963,42 @@ public final class JavaBridge
 		}
 		lastTapKind = kind;
 		tapKindSeq++;
+	}
+
+	/**
+	 * The tightest canvas bounds to outline for a widget op. {@code entry.getWidget()} is the op's widget —
+	 * but for an item grid (inventory / bank / equipment) that's the whole CONTAINER, so the entry's slot
+	 * ({@code param0}) child hugs the actual item. Only ever tightens: a slot child is taken only when it's
+	 * strictly smaller than the container, so a non-grid entry (prayer / spell / tab) keeps its own bounds.
+	 */
+	private static java.awt.Rectangle tightWidgetBounds(MenuEntry entry)
+	{
+		final Widget w = entry == null ? null : entry.getWidget();
+		if (w == null)
+		{
+			return null;
+		}
+		java.awt.Rectangle best = null;
+		try
+		{
+			best = w.getBounds();
+			final int slot = entry.getParam0();
+			if (slot >= 0)
+			{
+				final Widget child = w.getChild(slot);
+				final java.awt.Rectangle cb = child == null ? null : child.getBounds();
+				if (cb != null && cb.width > 0 && cb.height > 0
+					&& (best == null || (long) cb.width * cb.height < (long) best.width * best.height))
+				{
+					best = cb;
+				}
+			}
+		}
+		catch (RuntimeException ex)
+		{
+			BridgeFaults.note("JavaBridge.tightWidgetBounds", ex);
+		}
+		return best;
 	}
 
 	/** Native: bumps once per resolved left tap (pair with {@link #getLastTapKind}). */
