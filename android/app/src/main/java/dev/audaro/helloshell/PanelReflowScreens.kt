@@ -1,6 +1,7 @@
 package dev.audaro.helloshell
 
 import android.util.Log
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -313,4 +314,101 @@ private fun parseGeHistory(json: String): List<GeTrade> = try {
     }.asReversed()   // storage keeps newest last; show newest first
 } catch (t: Throwable) {
     emptyList()
+}
+
+// ====================================================================================================
+// Track B #6 — Config Profiles native screen (list + switch). getProfilesJson =
+// {available, profiles:[{id,name,active,sync,internal}]}. `internal` engine profiles ($rsprofile) are
+// hidden like the desktop panel; tapping a non-active row calls switchProfile(id) (async — the poll
+// re-reads and the row flips to active when the background switch lands).
+// ====================================================================================================
+data class ConfigProfile(val id: Long, val name: String, val active: Boolean, val sync: Boolean)
+
+@Composable
+fun ConfigProfilesScreen(onBack: () -> Unit) {
+    var profiles by remember { mutableStateOf<List<ConfigProfile>>(emptyList()) }
+    var firstLoad by remember { mutableStateOf(true) }
+    var logged by remember { mutableStateOf(false) }
+    var switching by remember { mutableStateOf<Long?>(null) }   // id mid-switch (async); cleared when it goes active
+
+    LaunchedEffect(Unit) {
+        while (coroutineContext.isActive) {
+            val json = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.profilesJson() }.get() }
+            profiles = parseProfiles(json)
+            firstLoad = false
+            // The switch runs on the engine's background executor; once the target reads back active, clear the pip.
+            if (switching != null && profiles.any { it.id == switching && it.active }) switching = null
+            if (!logged) { Log.i(PR_TAG, "ANDROID_TRACKB_PROFILES_UI_GREEN profiles=${profiles.size}"); logged = true }
+            delay(1200)
+        }
+    }
+
+    Surface(color = PR_PANEL_BG, modifier = Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onBack) { Text("‹ Back") }
+                Text("Config Profiles", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
+            }
+            when {
+                firstLoad -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                profiles.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("No config profiles available.", color = Color(0xFF9E9E9E), fontSize = 14.sp)
+                }
+                else -> LazyColumn(Modifier.fillMaxSize()) {
+                    items(profiles, key = { it.id }) { p ->
+                        ProfileRow(
+                            p, busy = switching == p.id, enabled = !p.active && switching == null,
+                            onSelect = {
+                                if (!p.active && switching == null) {
+                                    switching = p.id
+                                    JvmLauncher.onBridgeTouch { JvmLauncher.switchProfile(p.id) }
+                                    Log.i(PR_TAG, "profile-switch: -> ${p.name} (${p.id})")
+                                }
+                            },
+                        )
+                        HorizontalDivider(color = Color(0x22FFFFFF))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfileRow(p: ConfigProfile, busy: Boolean, enabled: Boolean, onSelect: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(enabled = enabled) { onSelect() }.padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            if (p.active) "●" else "○",
+            color = if (p.active) Color(0xFF80CBC4) else Color(0xFF616161),
+            modifier = Modifier.padding(end = 10.dp),
+        )
+        Text(
+            p.name, color = Color.White, modifier = Modifier.weight(1f),
+            fontWeight = if (p.active) FontWeight.Bold else FontWeight.Normal,
+        )
+        if (p.sync) Text("sync", color = Color(0xFF80CBC4), fontSize = 11.sp, modifier = Modifier.padding(end = 8.dp))
+        when {
+            busy -> Text("switching…", color = Color(0xFFFFD54F), fontSize = 11.sp)
+            p.active -> Text("active", color = Color(0xFF9E9E9E), fontSize = 11.sp)
+        }
+    }
+}
+
+private fun parseProfiles(json: String): List<ConfigProfile> = try {
+    val o = JSONObject(json)
+    if (!o.optBoolean("available", false)) emptyList()
+    else {
+        val arr = o.optJSONArray("profiles") ?: return emptyList()
+        // Hide engine-internal profiles ($rsprofile etc.) exactly like the desktop config panel does.
+        (0 until arr.length()).mapNotNull { i ->
+            val p = arr.getJSONObject(i)
+            if (p.optBoolean("internal", false)) null
+            else ConfigProfile(p.optLong("id"), p.optString("name", "?"), p.optBoolean("active"), p.optBoolean("sync"))
+        }
+    }
+} catch (t: Throwable) {
+    Log.e(PR_TAG, "ANDROID_TRACKB_PROFILES_UI_RED parse: $t"); emptyList()
 }

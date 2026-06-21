@@ -119,6 +119,8 @@ fun PluginPanel(
     var geOpen by remember { mutableStateOf(false) }                             // Finding 14 Grand Exchange reflow
     var overlayOpen by remember { mutableStateOf(false) }                        // Finding 15 overlay edit
     var infoBoxOpen by remember { mutableStateOf(false) }                        // Finding 22 infobox menu
+    var profilesOpen by remember { mutableStateOf(false) }                       // Track B #6 config profiles
+    var profilesAvail by remember { mutableStateOf(false) }
     var hubOpen by remember { mutableStateOf(false) }                            // Finding 17 hub browse/install
     // Finding 8: a plugin just toggled ON is starting — suppress the "couldn't start" badge during a grace
     // window, then re-fetch the true active state. A row is incompatible = enabled && !active && not pending.
@@ -145,6 +147,7 @@ fun PluginPanel(
                     JvmLauncher.infoBoxAvailable())
             }.get()
         }
+        profilesAvail = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.profilesAvailable() }.get() }
         Log.i("MainActivity", "ANDROID_LAUNCHER_GRID_GREEN rows=${rows.size} pinned=${rows.count { it.pinned }} " +
             "panels=${panels.size} avail=${panelAvail.count { it }}")
     }
@@ -153,7 +156,7 @@ fun PluginPanel(
     // the live game stays visible above it (the desktop slide-out parity win). A sub-screen open => PEEK (game
     // watchable); the launcher landing => EXPAND.
     val subActive = questOpen || worldOpen || xpOpen || lootOpen || geOpen || overlayOpen || infoBoxOpen ||
-        hubOpen || panelOpen != null || configFor != null
+        profilesOpen || hubOpen || panelOpen != null || configFor != null
 
     // §4 dismiss model (d): back pops ONE level — close the active sub-screen back to the launcher, else dismiss
     // the whole sheet. Honoured here so the Compose back-stack works (the MainActivity dispatcher disposes this
@@ -169,6 +172,7 @@ fun PluginPanel(
             geOpen -> geOpen = false
             overlayOpen -> overlayOpen = false
             infoBoxOpen -> infoBoxOpen = false
+            profilesOpen -> profilesOpen = false
             hubOpen -> { hubOpen = false; scope.launch { reload() } }
             panelOpen != null -> panelOpen = null
             configFor != null -> configFor = null
@@ -191,6 +195,7 @@ fun PluginPanel(
             geOpen -> GrandExchangeScreen(onBack = { geOpen = false })
             overlayOpen -> OverlayEditScreen(onBack = { overlayOpen = false })
             infoBoxOpen -> InfoBoxScreen(onBack = { infoBoxOpen = false })
+            profilesOpen -> ConfigProfilesScreen(onBack = { profilesOpen = false })
             hubOpen -> PluginHubScreen(onBack = { hubOpen = false; scope.launch { reload() } })
             panelOpen != null -> {
                 val po = panelOpen!!
@@ -274,6 +279,7 @@ fun PluginPanel(
                         onOpenXp = { xpOpen = true }, onOpenLoot = { lootOpen = true }, onOpenGe = { geOpen = true },
                         onOpenOverlay = { overlayOpen = true }, onOpenInfoBox = { infoBoxOpen = true },
                         onOpenHub = { hubOpen = true },
+                        profilesAvail = profilesAvail, onOpenProfiles = { profilesOpen = true },
                         // FIX-5: open the world map via op-replay, then dismiss the launcher so the fullscreen map shows.
                         onOpenWorldMap = { JvmLauncher.onBridgeTouch { JvmLauncher.openWorldMap() }; onClose() },
                         onScreenshot = onScreenshot, onAccount = onAccount, onLogout = onLogout, onDiscord = onDiscord,
@@ -395,6 +401,8 @@ private fun LauncherGrid(
     onOpenOverlay: () -> Unit,
     onOpenInfoBox: () -> Unit,
     onOpenHub: () -> Unit,
+    profilesAvail: Boolean,
+    onOpenProfiles: () -> Unit,
     onOpenWorldMap: () -> Unit,
     onScreenshot: () -> Unit,
     onAccount: () -> Unit,
@@ -453,20 +461,22 @@ private fun LauncherGrid(
         }
 
         SectionLabel("More")
-        TileGrid(listOf(
-            TileSpec("All plugins", glyph = "≡", onClick = onOpenList),
-            TileSpec("Plugin Hub", glyph = "⬇", onClick = onOpenHub),
+        TileGrid(buildList {
+            add(TileSpec("All plugins", glyph = "≡", onClick = onOpenList))
+            add(TileSpec("Plugin Hub", glyph = "⬇", onClick = onOpenHub))
+            // Track B #6: native config-profiles list/switch (gated on the bridge being wired).
+            if (profilesAvail) add(TileSpec("Profiles", glyph = "⚙", onClick = onOpenProfiles))
             // FIX-5: a discoverable native open-map control (the engine globe orb is ~25px and undiscoverable;
             // this opens the map via op-replay regardless of orb position/account).
-            TileSpec("World Map", glyph = "◉", onClick = onOpenWorldMap),
+            add(TileSpec("World Map", glyph = "◉", onClick = onOpenWorldMap))
             // §4 cutover: the toolbar-only nav buttons that had no Android home (audit §4.3) — fixed native
             // tiles wired to existing handlers. Discord becomes reachable for the first time.
-            TileSpec("Screenshot", glyph = "▣", onClick = onScreenshot),
-            TileSpec("Account", glyph = "⎆", onClick = onAccount),
+            add(TileSpec("Screenshot", glyph = "▣", onClick = onScreenshot))
+            add(TileSpec("Account", glyph = "⎆", onClick = onAccount))
             // ✕ (the device font lacks the ⏻ power glyph -> tofu); reads as "exit session".
-            TileSpec("Log out", glyph = "✕", onClick = onLogout),
-            TileSpec("Discord", glyph = "✦", onClick = onDiscord),
-        ))
+            add(TileSpec("Log out", glyph = "✕", onClick = onLogout))
+            add(TileSpec("Discord", glyph = "✦", onClick = onDiscord))
+        })
         Spacer(Modifier.heightIn(min = 12.dp))
     }
 }
