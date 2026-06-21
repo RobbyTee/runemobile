@@ -633,6 +633,68 @@ public final class MobileUiBridge
 		}
 	}
 
+	// ---- Native Grand Exchange panel (§3.4 Tier-1) -----------------------------------------------------
+	// Thin delegators onto GrandExchangeBridge so the native GE screen reaches it through the same JNI surface
+	// the rest of the mobile UI uses (MobileUiBridge static methods). The bridge already publishes the live
+	// 8-slot offer snapshot + saved trade history on the client thread; the only addition is the Search tab
+	// (the desktop plugin's search box doesn't live-filter and we can't fork it).
+
+	/** Whether the native shell should offer the native Grand Exchange screen (the GE plugin is loaded). */
+	public static boolean geAvailable()
+	{
+		try
+		{
+			return GrandExchangeBridge.isAvailable();
+		}
+		catch (Throwable e)
+		{
+			BridgeFaults.note("MobileUiBridge.geAvailable", e);
+			return false;
+		}
+	}
+
+	/** The native GE screen tells the bridge when it is on-screen so the client-thread refresh only runs while shown. */
+	public static String geSetUiOpen(boolean open)
+	{
+		try
+		{
+			GrandExchangeBridge.setUiOpen(open);
+		}
+		catch (Throwable e)
+		{
+			BridgeFaults.note("MobileUiBridge.geSetUiOpen", e);
+		}
+		return "";
+	}
+
+	/** The cached 8-slot offer snapshot plus saved trade history (see {@link GrandExchangeBridge#getGeJson()}). */
+	public static String geJson()
+	{
+		try
+		{
+			return GrandExchangeBridge.getGeJson();
+		}
+		catch (Throwable e)
+		{
+			BridgeFaults.note("MobileUiBridge.geJson", e);
+			return "{\"available\":false}";
+		}
+	}
+
+	/** Live tradeable-item name search for the Search tab (see {@link GrandExchangeBridge#search(String)}). */
+	public static String geSearch(String query)
+	{
+		try
+		{
+			return GrandExchangeBridge.search(query);
+		}
+		catch (Throwable e)
+		{
+			BridgeFaults.note("MobileUiBridge.geSearch", e);
+			return "{\"results\":[]}";
+		}
+	}
+
 	private static Object readField(Object obj, String name) throws Exception
 	{
 		final java.lang.reflect.Field f = obj.getClass().getDeclaredField(name);

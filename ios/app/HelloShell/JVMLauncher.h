@@ -398,6 +398,14 @@ typedef void (^JVMLogSink)(NSString *line);
 + (nullable NSString *)notesGet;
 + (void)notesSet:(NSString *)text;
 
+/// Native Grand Exchange panel (§3.4): whether the GE plugin is loaded; a ui-open gate that drives the
+/// client-thread offer/history refresh; the cached offers+history JSON; and live tradeable-item name search
+/// ({results:[{id,name,price}]}) for the Search tab (the desktop plugin's box doesn't live-filter).
++ (BOOL)geAvailable;
++ (void)geSetUiOpen:(BOOL)open;
++ (nullable NSString *)geJson;
++ (nullable NSString *)geSearch:(NSString *)query;
+
 /// Tell the bridge the native Quest Helper screen is open/closed (gates its client-thread snapshot refresh).
 + (void)questSetUiOpen:(BOOL)open;
 

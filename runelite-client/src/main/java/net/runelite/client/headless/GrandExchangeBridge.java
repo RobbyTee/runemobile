@@ -60,8 +60,13 @@ public final class GrandExchangeBridge
 	private static final int GE_SLOTS = 8;
 	private static final int MAX_HISTORY = 50;
 
+	private static final int MAX_SEARCH_RESULTS = 60;
+
 	private static volatile PluginManager pluginManager;
 	private static volatile ClientThread clientThread;
+
+	// Resolved lazily from the injector the first time the native Search tab runs a query.
+	private static volatile net.runelite.client.game.ItemManager itemManager;
 
 	// Reflection handles for the plugin's private trade-history config. resolveState: 0 unknown, 1 ok, -1 absent.
 	private static volatile int resolveState;
@@ -103,6 +108,92 @@ public final class GrandExchangeBridge
 	public static String getGeJson()
 	{
 		return geJson;
+	}
+
+	/**
+	 * Tradeable-item name search for the native GE <b>Search</b> tab — the desktop plugin's search box only fires
+	 * on Enter (no live filtering) and we cannot fork the plugin, so the native screen drives this directly. Returns
+	 * {@code {"results":[{"id","name","price"}]}} (price = the GE guide price), capped at {@link #MAX_SEARCH_RESULTS}.
+	 * Safe to call off the client thread: {@link net.runelite.client.game.ItemManager#search(String)} only scans the
+	 * immutable price cache (no engine read). Empty/short queries and an unresolved cache both yield an empty list.
+	 */
+	public static String search(String query)
+	{
+		if (query == null)
+		{
+			return "{\"results\":[]}";
+		}
+		final String q = query.trim();
+		if (q.length() < 2)
+		{
+			return "{\"results\":[]}";
+		}
+		try
+		{
+			final net.runelite.client.game.ItemManager im = ensureItemManager();
+			if (im == null)
+			{
+				return "{\"results\":[]}";
+			}
+			final java.util.List<net.runelite.http.api.item.ItemPrice> hits = im.search(q);
+			final StringBuilder sb = new StringBuilder(2048);
+			sb.append("{\"results\":[");
+			int n = 0;
+			if (hits != null)
+			{
+				for (net.runelite.http.api.item.ItemPrice ip : hits)
+				{
+					if (ip == null)
+					{
+						continue;
+					}
+					if (n >= MAX_SEARCH_RESULTS)
+					{
+						break;
+					}
+					if (n > 0)
+					{
+						sb.append(',');
+					}
+					sb.append('{')
+						.append("\"id\":").append(ip.getId()).append(',')
+						.append("\"name\":").append(quote(ip.getName())).append(',')
+						.append("\"price\":").append(ip.getPrice())
+						.append('}');
+					n++;
+				}
+			}
+			sb.append("]}");
+			return sb.toString();
+		}
+		catch (Throwable ex)
+		{
+			BridgeFaults.note("GrandExchangeBridge.search", ex);
+			return "{\"results\":[]}";
+		}
+	}
+
+	private static net.runelite.client.game.ItemManager ensureItemManager()
+	{
+		net.runelite.client.game.ItemManager im = itemManager;
+		if (im != null)
+		{
+			return im;
+		}
+		try
+		{
+			final com.google.inject.Injector inj = net.runelite.client.RuneLite.getInjector();
+			if (inj != null)
+			{
+				im = inj.getInstance(net.runelite.client.game.ItemManager.class);
+				itemManager = im;
+			}
+		}
+		catch (Throwable ex)
+		{
+			BridgeFaults.note("GrandExchangeBridge.ensureItemManager", ex);
+		}
+		return im;
 	}
 
 	/**

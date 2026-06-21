@@ -36,6 +36,8 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 @end
 @interface NotesViewController : UIViewController
 @end
+@interface GeViewController : UIViewController
+@end
 
 // §3.3 redesign: the labelled/searchable/favourites grid launcher. Defined at the bottom of this file.
 @interface MUIPluginGrid : UIViewController
@@ -635,6 +637,13 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
             nv.modalPresentationStyle = UIModalPresentationOverFullScreen;
             nv.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
             [self presentViewController:nv animated:YES completion:nil];
+            return;
+        }
+        if ([tip isEqualToString:@"Grand Exchange"] && [JVMLauncher geAvailable]) {
+            GeViewController *ge = [[GeViewController alloc] init];
+            ge.modalPresentationStyle = UIModalPresentationOverFullScreen;
+            ge.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+            [self presentViewController:ge animated:YES completion:nil];
             return;
         }
         if (!fromGrid && index == self.currentIndex) {
@@ -1841,6 +1850,459 @@ static NSString *XpFmt(long n) {
 - (void)dealloc {
     [_writeTimer invalidate];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+@end
+
+#pragma mark - Native Grand Exchange panel (Offers + live Search, RuneLite charcoal style)
+
+// The rendered Swing GE panel couldn't be typed into (its search field has no live filter and the plugin can't be
+// forked), so the native screen drives the GE directly: an Offers tab reflowing the live 8-slot snapshot + saved
+// trade history (GrandExchangeBridge.getGeJson), and a Search tab whose native field types straight into the iOS
+// keyboard and queries GrandExchangeBridge.search. Same right-anchored charcoal drawer geometry as XP Tracker.
+@interface GeViewController () <UITextFieldDelegate>
+@property (nonatomic, strong) UIView *drawer;
+@property (nonatomic, strong) UISegmentedControl *tabs;
+@property (nonatomic, strong) UIView *offersTab;
+@property (nonatomic, strong) UIView *searchTab;
+@property (nonatomic, strong) UIStackView *offersStack;
+@property (nonatomic, strong) UILabel *offersEmpty;
+@property (nonatomic, strong) UITextField *searchField;
+@property (nonatomic, strong) UIStackView *searchStack;
+@property (nonatomic, strong) UILabel *searchEmpty;
+@property (nonatomic, strong) NSTimer *timer;
+@property (nonatomic, strong) NSTimer *searchDebounce;
+@property (nonatomic, copy) NSString *lastJson;
+@end
+
+@implementation GeViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor clearColor];
+    [JVMLauncher geSetUiOpen:YES];   // arm the client-thread offer refresh while shown
+
+    UIView *dim = [[UIView alloc] initWithFrame:self.view.bounds];
+    dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    [self.view addSubview:dim];
+    [dim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onDone)]];
+
+    self.drawer = [[UIView alloc] init];
+    self.drawer.translatesAutoresizingMaskIntoConstraints = NO;
+    self.drawer.backgroundColor = [UIColor colorWithRed:40/255.0 green:40/255.0 blue:40/255.0 alpha:1.0]; // DARK_GRAY
+    [self.view addSubview:self.drawer];
+
+    UIView *headerBar = [[UIView alloc] init];
+    headerBar.translatesAutoresizingMaskIntoConstraints = NO;
+    headerBar.backgroundColor = [UIColor colorWithRed:30/255.0 green:30/255.0 blue:30/255.0 alpha:1.0]; // DARKER_GRAY
+    [self.drawer addSubview:headerBar];
+
+    UILabel *titleLabel = [[UILabel alloc] init];
+    titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    titleLabel.font = XpRsFont(15);
+    titleLabel.textColor = XpGray(0.72);
+    titleLabel.text = @"Grand Exchange";
+    [headerBar addSubview:titleLabel];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    close.translatesAutoresizingMaskIntoConstraints = NO;
+    [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.titleLabel.font = [UIFont systemFontOfSize:17];
+    close.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0]; // BRAND_ORANGE
+    [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
+    [headerBar addSubview:close];
+
+    self.tabs = [[UISegmentedControl alloc] initWithItems:@[@"Offers", @"Search"]];
+    self.tabs.translatesAutoresizingMaskIntoConstraints = NO;
+    self.tabs.selectedSegmentIndex = 0;
+    self.tabs.selectedSegmentTintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0];
+    [self.tabs setTitleTextAttributes:@{NSForegroundColorAttributeName: XpGray(0.7)} forState:UIControlStateNormal];
+    [self.tabs setTitleTextAttributes:@{NSForegroundColorAttributeName: [UIColor blackColor]} forState:UIControlStateSelected];
+    [self.tabs addTarget:self action:@selector(onTab) forControlEvents:UIControlEventValueChanged];
+    [self.drawer addSubview:self.tabs];
+
+    // ---- Offers tab -------------------------------------------------------------------------------
+    self.offersTab = [[UIView alloc] init];
+    self.offersTab.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.drawer addSubview:self.offersTab];
+
+    UIScrollView *offScroll = [[UIScrollView alloc] init];
+    offScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    offScroll.alwaysBounceVertical = YES;
+    [self.offersTab addSubview:offScroll];
+
+    self.offersStack = [[UIStackView alloc] init];
+    self.offersStack.axis = UILayoutConstraintAxisVertical;
+    self.offersStack.spacing = 6;
+    self.offersStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [offScroll addSubview:self.offersStack];
+
+    self.offersEmpty = [[UILabel alloc] init];
+    self.offersEmpty.translatesAutoresizingMaskIntoConstraints = NO;
+    self.offersEmpty.font = XpRsFont(15);
+    self.offersEmpty.textColor = XpGray(0.55);
+    self.offersEmpty.numberOfLines = 0;
+    self.offersEmpty.textAlignment = NSTextAlignmentCenter;
+    self.offersEmpty.text = @"No active offers.";
+    self.offersEmpty.hidden = YES;
+    [self.offersTab addSubview:self.offersEmpty];
+
+    // ---- Search tab -------------------------------------------------------------------------------
+    self.searchTab = [[UIView alloc] init];
+    self.searchTab.translatesAutoresizingMaskIntoConstraints = NO;
+    self.searchTab.hidden = YES;
+    [self.drawer addSubview:self.searchTab];
+
+    self.searchField = [[UITextField alloc] init];
+    self.searchField.translatesAutoresizingMaskIntoConstraints = NO;
+    self.searchField.delegate = self;
+    self.searchField.font = XpRsFont(15);
+    self.searchField.textColor = [UIColor whiteColor];
+    self.searchField.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0];
+    self.searchField.backgroundColor = [UIColor colorWithRed:20/255.0 green:20/255.0 blue:20/255.0 alpha:1.0];
+    self.searchField.borderStyle = UITextBorderStyleNone;
+    self.searchField.autocorrectionType = UITextAutocorrectionTypeNo;
+    self.searchField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    self.searchField.clearButtonMode = UITextFieldViewModeWhileEditing;
+    self.searchField.returnKeyType = UIReturnKeySearch;
+    self.searchField.attributedPlaceholder = [[NSAttributedString alloc] initWithString:@"Search items…"
+        attributes:@{NSForegroundColorAttributeName: XpGray(0.4)}];
+    // a little left padding inside the field
+    UIView *pad = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 8, 1)];
+    self.searchField.leftView = pad; self.searchField.leftViewMode = UITextFieldViewModeAlways;
+    [self.searchField addTarget:self action:@selector(onSearchChanged) forControlEvents:UIControlEventEditingChanged];
+    [self.searchTab addSubview:self.searchField];
+
+    UIScrollView *seScroll = [[UIScrollView alloc] init];
+    seScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    seScroll.alwaysBounceVertical = YES;
+    seScroll.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
+    [self.searchTab addSubview:seScroll];
+
+    self.searchStack = [[UIStackView alloc] init];
+    self.searchStack.axis = UILayoutConstraintAxisVertical;
+    self.searchStack.spacing = 4;
+    self.searchStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [seScroll addSubview:self.searchStack];
+
+    self.searchEmpty = [[UILabel alloc] init];
+    self.searchEmpty.translatesAutoresizingMaskIntoConstraints = NO;
+    self.searchEmpty.font = XpRsFont(15);
+    self.searchEmpty.textColor = XpGray(0.55);
+    self.searchEmpty.numberOfLines = 0;
+    self.searchEmpty.textAlignment = NSTextAlignmentCenter;
+    self.searchEmpty.text = @"Type an item name to see its guide price.";
+    [self.searchTab addSubview:self.searchEmpty];
+
+    CGFloat drawerW = MIN(440.0, self.view.bounds.size.width * 0.52);
+    UILayoutGuide *dg = self.drawer.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [self.drawer.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [self.drawer.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [self.drawer.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.drawer.widthAnchor constraintEqualToConstant:drawerW],
+
+        [headerBar.topAnchor constraintEqualToAnchor:dg.topAnchor],
+        [headerBar.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor],
+        [headerBar.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor],
+        [headerBar.heightAnchor constraintEqualToConstant:34],
+        [titleLabel.leadingAnchor constraintEqualToAnchor:headerBar.leadingAnchor constant:10],
+        [titleLabel.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+        [titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:close.leadingAnchor constant:-8],
+        [close.trailingAnchor constraintEqualToAnchor:headerBar.trailingAnchor constant:-10],
+        [close.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+
+        [self.tabs.topAnchor constraintEqualToAnchor:headerBar.bottomAnchor constant:8],
+        [self.tabs.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor constant:8],
+        [self.tabs.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor constant:-8],
+
+        [self.offersTab.topAnchor constraintEqualToAnchor:self.tabs.bottomAnchor constant:8],
+        [self.offersTab.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor],
+        [self.offersTab.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor],
+        [self.offersTab.bottomAnchor constraintEqualToAnchor:dg.bottomAnchor],
+        [self.searchTab.topAnchor constraintEqualToAnchor:self.offersTab.topAnchor],
+        [self.searchTab.leadingAnchor constraintEqualToAnchor:self.offersTab.leadingAnchor],
+        [self.searchTab.trailingAnchor constraintEqualToAnchor:self.offersTab.trailingAnchor],
+        [self.searchTab.bottomAnchor constraintEqualToAnchor:self.offersTab.bottomAnchor],
+
+        // offers scroll/stack
+        [offScroll.topAnchor constraintEqualToAnchor:self.offersTab.topAnchor],
+        [offScroll.leadingAnchor constraintEqualToAnchor:self.offersTab.leadingAnchor],
+        [offScroll.trailingAnchor constraintEqualToAnchor:self.offersTab.trailingAnchor],
+        [offScroll.bottomAnchor constraintEqualToAnchor:self.offersTab.bottomAnchor],
+        [self.offersStack.topAnchor constraintEqualToAnchor:offScroll.topAnchor constant:6],
+        [self.offersStack.leadingAnchor constraintEqualToAnchor:offScroll.leadingAnchor constant:8],
+        [self.offersStack.trailingAnchor constraintEqualToAnchor:offScroll.trailingAnchor constant:-8],
+        [self.offersStack.bottomAnchor constraintEqualToAnchor:offScroll.bottomAnchor constant:-6],
+        [self.offersStack.widthAnchor constraintEqualToAnchor:offScroll.widthAnchor constant:-16],
+        [self.offersEmpty.topAnchor constraintEqualToAnchor:self.offersTab.topAnchor constant:30],
+        [self.offersEmpty.leadingAnchor constraintEqualToAnchor:self.offersTab.leadingAnchor constant:20],
+        [self.offersEmpty.trailingAnchor constraintEqualToAnchor:self.offersTab.trailingAnchor constant:-20],
+
+        // search field + scroll/stack
+        [self.searchField.topAnchor constraintEqualToAnchor:self.searchTab.topAnchor],
+        [self.searchField.leadingAnchor constraintEqualToAnchor:self.searchTab.leadingAnchor constant:8],
+        [self.searchField.trailingAnchor constraintEqualToAnchor:self.searchTab.trailingAnchor constant:-8],
+        [self.searchField.heightAnchor constraintEqualToConstant:34],
+        [seScroll.topAnchor constraintEqualToAnchor:self.searchField.bottomAnchor constant:6],
+        [seScroll.leadingAnchor constraintEqualToAnchor:self.searchTab.leadingAnchor],
+        [seScroll.trailingAnchor constraintEqualToAnchor:self.searchTab.trailingAnchor],
+        [seScroll.bottomAnchor constraintEqualToAnchor:self.searchTab.bottomAnchor],
+        [self.searchStack.topAnchor constraintEqualToAnchor:seScroll.topAnchor constant:2],
+        [self.searchStack.leadingAnchor constraintEqualToAnchor:seScroll.leadingAnchor constant:8],
+        [self.searchStack.trailingAnchor constraintEqualToAnchor:seScroll.trailingAnchor constant:-8],
+        [self.searchStack.bottomAnchor constraintEqualToAnchor:seScroll.bottomAnchor constant:-6],
+        [self.searchStack.widthAnchor constraintEqualToAnchor:seScroll.widthAnchor constant:-16],
+        [self.searchEmpty.topAnchor constraintEqualToAnchor:seScroll.topAnchor constant:24],
+        [self.searchEmpty.leadingAnchor constraintEqualToAnchor:self.searchTab.leadingAnchor constant:20],
+        [self.searchEmpty.trailingAnchor constraintEqualToAnchor:self.searchTab.trailingAnchor constant:-20],
+    ]];
+
+    [self refresh];
+    self.timer = [NSTimer scheduledTimerWithTimeInterval:2.0 target:self selector:@selector(refresh) userInfo:nil repeats:YES];
+}
+
+- (void)onTab {
+    BOOL search = (self.tabs.selectedSegmentIndex == 1);
+    self.offersTab.hidden = search;
+    self.searchTab.hidden = !search;
+    if (search) {
+        [self.searchField becomeFirstResponder];
+    } else {
+        [self.searchField resignFirstResponder];
+        [self refresh];   // don't wait up to 2s for the timer when returning to Offers
+    }
+}
+
+- (void)onDone {
+    [self stopTimers];
+    [JVMLauncher geSetUiOpen:NO];
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    [self stopTimers];
+    [JVMLauncher geSetUiOpen:NO];
+}
+
+- (void)stopTimers {
+    [self.timer invalidate]; self.timer = nil;
+    [self.searchDebounce invalidate]; self.searchDebounce = nil;
+}
+
+// ---- Offers --------------------------------------------------------------------------------------
+
+- (void)refresh {
+    if (self.tabs.selectedSegmentIndex != 0) return;   // only rebuild offers while the Offers tab is showing
+    NSString *json = [JVMLauncher geJson] ?: @"{}";
+    if (self.lastJson && [json isEqualToString:self.lastJson]) return;
+    self.lastJson = json;
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if (![d isKindOfClass:[NSDictionary class]]) d = @{};
+    NSArray *offers = [d[@"offers"] isKindOfClass:[NSArray class]] ? d[@"offers"] : @[];
+    NSArray *history = [d[@"history"] isKindOfClass:[NSArray class]] ? d[@"history"] : @[];
+
+    for (UIView *v in [self.offersStack.arrangedSubviews copy]) { [self.offersStack removeArrangedSubview:v]; [v removeFromSuperview]; }
+    for (NSDictionary *o in offers) {
+        if (![o isKindOfClass:[NSDictionary class]]) continue;
+        [self.offersStack addArrangedSubview:[self offerBox:o]];
+    }
+    if (history.count > 0) {
+        [self.offersStack addArrangedSubview:[self sectionHeader:@"Recent history"]];
+        // newest last in storage → show most recent first
+        for (NSDictionary *h in [history reverseObjectEnumerator]) {
+            if (![h isKindOfClass:[NSDictionary class]]) continue;
+            [self.offersStack addArrangedSubview:[self historyRow:h]];
+        }
+    }
+    self.offersEmpty.hidden = (offers.count > 0 || history.count > 0);
+}
+
+- (UILabel *)sectionHeader:(NSString *)text {
+    UILabel *l = [[UILabel alloc] init];
+    l.font = XpRsFont(14);
+    l.textColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0];
+    l.text = text;
+    return l;
+}
+
+- (UILabel *)geStat:(NSString *)text right:(BOOL)right {
+    UILabel *l = [[UILabel alloc] init];
+    l.font = XpRsFont(14);
+    l.textColor = XpGray(0.62);
+    l.text = text;
+    l.textAlignment = right ? NSTextAlignmentRight : NSTextAlignmentLeft;
+    return l;
+}
+
+// Map a GrandExchangeOfferState name to a readable label + buy/sell tint.
+- (NSString *)prettyState:(NSString *)state buying:(BOOL *)buying {
+    NSString *s = state ?: @"";
+    BOOL buy = [s hasPrefix:@"BUY"] || [s isEqualToString:@"BOUGHT"] || [s isEqualToString:@"CANCELLED_BUY"];
+    if (buying) *buying = buy;
+    NSDictionary *map = @{
+        @"BUYING": @"Buying", @"BOUGHT": @"Bought",
+        @"SELLING": @"Selling", @"SOLD": @"Sold",
+        @"CANCELLED_BUY": @"Cancelled buy", @"CANCELLED_SELL": @"Cancelled sell",
+    };
+    return map[s] ?: s;
+}
+
+- (UIView *)offerBox:(NSDictionary *)o {
+    BOOL buying = NO;
+    NSString *state = [self prettyState:([o[@"state"] isKindOfClass:[NSString class]] ? o[@"state"] : @"") buying:&buying];
+    NSString *name = [o[@"name"] isKindOfClass:[NSString class]] ? o[@"name"] : @"";
+    long qty = [o[@"qty"] longLongValue], total = [o[@"total"] longLongValue], price = [o[@"price"] longLongValue];
+    double progress = [o[@"progress"] doubleValue];
+
+    UIStackView *box = [[UIStackView alloc] init];
+    box.axis = UILayoutConstraintAxisVertical;
+    box.spacing = 5;
+    box.layoutMarginsRelativeArrangement = YES;
+    box.layoutMargins = UIEdgeInsetsMake(7, 8, 7, 8);
+    box.backgroundColor = [UIColor colorWithRed:43/255.0 green:43/255.0 blue:43/255.0 alpha:1.0];
+
+    UIStackView *titleRow = [[UIStackView alloc] init];
+    titleRow.axis = UILayoutConstraintAxisHorizontal; titleRow.spacing = 8;
+    UILabel *nameL = [[UILabel alloc] init];
+    nameL.font = XpRsFont(15); nameL.textColor = [UIColor whiteColor];
+    nameL.text = name.length ? name : @"(item)";
+    [nameL setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+    UILabel *stateL = [[UILabel alloc] init];
+    stateL.font = XpRsFont(14);
+    stateL.textColor = buying
+        ? [UIColor colorWithRed:0.45 green:0.74 blue:1.0 alpha:1.0]    // buy = blue
+        : [UIColor colorWithRed:0.31 green:0.78 blue:0.31 alpha:1.0];  // sell = green
+    stateL.text = state;
+    stateL.textAlignment = NSTextAlignmentRight;
+    [stateL setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [titleRow addArrangedSubview:nameL];
+    [titleRow addArrangedSubview:stateL];
+
+    UIStackView *statRow = [[UIStackView alloc] init];
+    statRow.axis = UILayoutConstraintAxisHorizontal; statRow.distribution = UIStackViewDistributionFillEqually; statRow.spacing = 6;
+    [statRow addArrangedSubview:[self geStat:[NSString stringWithFormat:@"Price: %@", XpFmt(price)] right:NO]];
+    [statRow addArrangedSubview:[self geStat:[NSString stringWithFormat:@"%@ / %@", XpFmt(qty), XpFmt(total)] right:YES]];
+
+    [box addArrangedSubview:titleRow];
+    [box addArrangedSubview:statRow];
+    [box addArrangedSubview:[self progressBar:progress]];
+    return box;
+}
+
+- (UIView *)progressBar:(double)progress {
+    if (progress < 0) progress = 0; if (progress > 1) progress = 1;
+    UIView *bar = [[UIView alloc] init];
+    bar.translatesAutoresizingMaskIntoConstraints = NO;
+    bar.backgroundColor = [UIColor colorWithRed:20/255.0 green:20/255.0 blue:20/255.0 alpha:1.0];
+    [bar.heightAnchor constraintEqualToConstant:8].active = YES;
+    UIView *fill = [[UIView alloc] init];
+    fill.translatesAutoresizingMaskIntoConstraints = NO;
+    fill.backgroundColor = [UIColor colorWithRed:79/255.0 green:122/255.0 blue:35/255.0 alpha:1.0];
+    [bar addSubview:fill];
+    [NSLayoutConstraint activateConstraints:@[
+        [fill.leadingAnchor constraintEqualToAnchor:bar.leadingAnchor],
+        [fill.topAnchor constraintEqualToAnchor:bar.topAnchor],
+        [fill.bottomAnchor constraintEqualToAnchor:bar.bottomAnchor],
+        [fill.widthAnchor constraintEqualToAnchor:bar.widthAnchor multiplier:progress],
+    ]];
+    return bar;
+}
+
+- (UIView *)historyRow:(NSDictionary *)h {
+    BOOL buy = [h[@"buy"] boolValue];
+    NSString *name = [h[@"name"] isKindOfClass:[NSString class]] ? h[@"name"] : @"";
+    long qty = [h[@"qty"] longLongValue], price = [h[@"price"] longLongValue];
+
+    UIStackView *row = [[UIStackView alloc] init];
+    row.axis = UILayoutConstraintAxisHorizontal; row.spacing = 8;
+    row.layoutMarginsRelativeArrangement = YES;
+    row.layoutMargins = UIEdgeInsetsMake(3, 8, 3, 8);
+
+    UILabel *nameL = [[UILabel alloc] init];
+    nameL.font = XpRsFont(14);
+    nameL.textColor = buy
+        ? [UIColor colorWithRed:0.45 green:0.74 blue:1.0 alpha:1.0]
+        : [UIColor colorWithRed:0.31 green:0.78 blue:0.31 alpha:1.0];
+    nameL.text = [NSString stringWithFormat:@"%@ %ld× %@", buy ? @"Bought" : @"Sold", qty, name];
+    [nameL setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+
+    UILabel *priceL = [[UILabel alloc] init];
+    priceL.font = XpRsFont(14); priceL.textColor = XpGray(0.6);
+    priceL.text = [NSString stringWithFormat:@"%@ ea", XpFmt(price)];
+    priceL.textAlignment = NSTextAlignmentRight;
+    [priceL setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+
+    [row addArrangedSubview:nameL];
+    [row addArrangedSubview:priceL];
+    return row;
+}
+
+// ---- Search --------------------------------------------------------------------------------------
+
+- (void)onSearchChanged {
+    [self.searchDebounce invalidate];
+    self.searchDebounce = [NSTimer scheduledTimerWithTimeInterval:0.3 target:self selector:@selector(runSearch) userInfo:nil repeats:NO];
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [self.searchDebounce invalidate]; self.searchDebounce = nil;
+    [self runSearch];
+    return NO;
+}
+
+- (void)runSearch {
+    self.searchDebounce = nil;
+    NSString *q = self.searchField.text ?: @"";
+    NSString *trimmed = [q stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    for (UIView *v in [self.searchStack.arrangedSubviews copy]) { [self.searchStack removeArrangedSubview:v]; [v removeFromSuperview]; }
+    if (trimmed.length < 2) {
+        self.searchEmpty.text = @"Type an item name to see its guide price.";
+        self.searchEmpty.hidden = NO;
+        return;
+    }
+    NSString *json = [JVMLauncher geSearch:trimmed] ?: @"{}";
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSArray *results = ([d isKindOfClass:[NSDictionary class]] && [d[@"results"] isKindOfClass:[NSArray class]]) ? d[@"results"] : @[];
+    for (NSDictionary *r in results) {
+        if (![r isKindOfClass:[NSDictionary class]]) continue;
+        [self.searchStack addArrangedSubview:[self searchRow:r]];
+    }
+    if (results.count == 0) {
+        self.searchEmpty.text = @"No tradeable items match.";
+        self.searchEmpty.hidden = NO;
+    } else {
+        self.searchEmpty.hidden = YES;
+    }
+}
+
+- (UIView *)searchRow:(NSDictionary *)r {
+    NSString *name = [r[@"name"] isKindOfClass:[NSString class]] ? r[@"name"] : @"";
+    long price = [r[@"price"] longLongValue];
+
+    UIStackView *row = [[UIStackView alloc] init];
+    row.axis = UILayoutConstraintAxisHorizontal; row.spacing = 8;
+    row.layoutMarginsRelativeArrangement = YES;
+    row.layoutMargins = UIEdgeInsetsMake(6, 8, 6, 8);
+    row.backgroundColor = [UIColor colorWithRed:43/255.0 green:43/255.0 blue:43/255.0 alpha:1.0];
+
+    UILabel *nameL = [[UILabel alloc] init];
+    nameL.font = XpRsFont(15); nameL.textColor = [UIColor whiteColor];
+    nameL.text = name;
+    [nameL setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+
+    UILabel *priceL = [[UILabel alloc] init];
+    priceL.font = XpRsFont(14);
+    priceL.textColor = [UIColor colorWithRed:1.0 green:0.83 blue:0.0 alpha:1.0]; // coin yellow
+    priceL.text = [NSString stringWithFormat:@"%@ gp", XpFmt(price)];
+    priceL.textAlignment = NSTextAlignmentRight;
+    [priceL setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+
+    [row addArrangedSubview:nameL];
+    [row addArrangedSubview:priceL];
+    return row;
 }
 
 @end

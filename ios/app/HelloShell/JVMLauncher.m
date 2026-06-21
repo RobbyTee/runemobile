@@ -82,6 +82,10 @@ static jmethodID gMuiXpJson = NULL;       // xpTrackerJson()Ljava/lang/String;
 static jmethodID gMuiNotesAvail = NULL;   // notesAvailable()Z  (native Notes panel)
 static jmethodID gMuiNotesGet = NULL;     // notesGet()Ljava/lang/String;
 static jmethodID gMuiNotesSet = NULL;     // notesSet(Ljava/lang/String;)Ljava/lang/String;
+static jmethodID gMuiGeAvail = NULL;      // geAvailable()Z  (native Grand Exchange panel)
+static jmethodID gMuiGeSetUi = NULL;      // geSetUiOpen(Z)Ljava/lang/String;
+static jmethodID gMuiGeJson = NULL;       // geJson()Ljava/lang/String;
+static jmethodID gMuiGeSearch = NULL;     // geSearch(Ljava/lang/String;)Ljava/lang/String;
 static jmethodID gMuiOpenPanel = NULL;    // openPanel(I)Ljava/lang/String;
 static jmethodID gMuiClosePanel = NULL;   // closePanel()Ljava/lang/String;
 static jmethodID gMuiPanelW = NULL;       // getPanelWidth()I
@@ -444,6 +448,14 @@ static BOOL ensureMui(void) {
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiNotesGet = NULL; }
     gMuiNotesSet = (*env)->GetStaticMethodID(env, global, "notesSet", "(Ljava/lang/String;)Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiNotesSet = NULL; }
+    gMuiGeAvail = (*env)->GetStaticMethodID(env, global, "geAvailable", "()Z");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiGeAvail = NULL; }
+    gMuiGeSetUi = (*env)->GetStaticMethodID(env, global, "geSetUiOpen", "(Z)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiGeSetUi = NULL; }
+    gMuiGeJson = (*env)->GetStaticMethodID(env, global, "geJson", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiGeJson = NULL; }
+    gMuiGeSearch = (*env)->GetStaticMethodID(env, global, "geSearch", "(Ljava/lang/String;)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiGeSearch = NULL; }
     gMuiPanelText = (*env)->GetStaticMethodID(env, global, "panelText", "(Ljava/lang/String;)Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiPanelText = NULL; }
     gMuiPanelKey = (*env)->GetStaticMethodID(env, global, "panelKey", "(I)Ljava/lang/String;");
@@ -2065,6 +2077,41 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     (void)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiNotesSet, js);
     if ((*env)->ExceptionCheck(env)) bridgeNoteClear(env, "JVMLauncher.notesSet");
     if (js) (*env)->DeleteLocalRef(env, js);
+}
+
+// Native Grand Exchange panel (§3.4): availability + ui-open gate + offer/history JSON + live item search.
+// nil/NO on an older jar (the bridge methods are looked up optionally).
++ (BOOL)geAvailable {
+    if (!ensureMui() || !gMuiGeAvail) return NO;
+    JNIEnv *env = gMainEnv;
+    jboolean v = (*env)->CallStaticBooleanMethod(env, gMuiClass, gMuiGeAvail);
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.geAvailable"); return NO; }
+    return v ? YES : NO;
+}
+
++ (void)geSetUiOpen:(BOOL)open {
+    if (!ensureMui() || !gMuiGeSetUi) return;
+    [JVMLauncher postKeepAlive];   // idle keepalive: opening the native GE screen posts no canvas event
+    JNIEnv *env = gMainEnv;
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiGeSetUi, (jboolean)(open ? JNI_TRUE : JNI_FALSE));
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.geSetUiOpen"); return; }
+    if (js) (*env)->DeleteLocalRef(env, js);
+}
+
++ (NSString *)geJson {
+    if (!ensureMui() || !gMuiGeJson) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiGeJson));
+}
+
++ (NSString *)geSearch:(NSString *)query {
+    if (!ensureMui() || !gMuiGeSearch || query == nil) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring js = (*env)->NewStringUTF(env, query.UTF8String ?: "");
+    NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiGeSearch, js));
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.geSearch"); out = nil; }
+    if (js) (*env)->DeleteLocalRef(env, js);
+    return out;
 }
 
 + (void)mobileOpenPanel:(int)index {
