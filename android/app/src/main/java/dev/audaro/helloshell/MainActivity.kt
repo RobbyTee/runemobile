@@ -1457,11 +1457,11 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * A6: drive the native 2-col tab grid each frame from the render-thread-published MobileChromeBridge snapshot
-     * (lock-free, no HotSpot attach). The grid only engages in the supported Classic/PRE_EOC layout (logged in +
-     * toplevel 164); there it hides the engine stones (HudVeneerBridge.setStonesHidden) so the native cells ARE
-     * the tabs, highlights the open tab, and relocates the engine side panel flush-left of the grid. In any other
-     * layout it disengages — un-hides the engine stones + releases the side panel — so the real HUD renders (the
-     * iOS LAYOUT GUARD). All bridge writes go through onBridge (off the UI thread) and fire only on state change.
+     * (lock-free, no HotSpot attach). The grid engages in the supported resizable layouts (logged in + PRE_EOC
+     * Classic or OSRS_STRETCH modern); there it hides the engine stones (HudVeneerBridge.setStonesHidden) so the
+     * native cells ARE the tabs, highlights the open tab, and relocates the engine side panel flush-left of the
+     * grid. In any other layout (FIXED) it disengages — un-hides the engine stones + releases the side panel — so
+     * the real HUD renders (the iOS LAYOUT GUARD). All bridge writes go through onBridge (off the UI thread).
      */
     private fun updateChrome() {
         if (!::chromeOverlay.isInitialized) return
@@ -1479,8 +1479,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
         val topLevel = o?.optInt("topLevelId", -1) ?: -1
+        val rootKind = o?.optString("rootKind", "") ?: ""
         val active = o?.optInt("activeTab", -1) ?: -1
-        val supported = loggedIn && topLevel == 164      // Classic/PRE_EOC: the native grid's tabs map to real stones
+        // The native grid's cells map to real engine stones via openTab op-replay. Engage in BOTH resizable roots:
+        // PRE_EOC (Classic, 164) and OSRS_STRETCH (modern, 161) — the shared layer hides/replays the right stones for
+        // each (stoneIds/openTabNow branch on the root, STONE0..13 in identical order). FIXED is excluded (the shared
+        // tick hard-returns on !isResized + stoneIds has no FIXED branch), so it keeps the raw engine HUD.
+        val supported = loggedIn && (rootKind == "PRE_EOC" || rootKind == "OSRS_STRETCH")
         chromeOverlay.setGridEnabled(supported)
         chromeOverlay.setActiveTab(active)
 
@@ -1524,7 +1529,7 @@ class MainActivity : AppCompatActivity() {
             applyMinimap(o)
             if (!chromeUiLogged && chromeOverlay.gridLeftPx > 0f) {
                 chromeUiLogged = true
-                Log.i(TAG, "ANDROID_A6_UI_GREEN native 2-col tab grid drawn (engine stones hidden) topLevel=$topLevel activeTab=$active view=${surfaceView.width}x${surfaceView.height}")
+                Log.i(TAG, "ANDROID_A6_UI_GREEN native 2-col tab grid drawn (engine stones hidden) rootKind=$rootKind topLevel=$topLevel activeTab=$active view=${surfaceView.width}x${surfaceView.height}")
             }
         } else {
             releaseSidePanel()
