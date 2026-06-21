@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -60,6 +61,7 @@ fun LootTrackerScreen(onBack: () -> Unit) {
     var sources by remember { mutableStateOf<List<LootSource>>(emptyList()) }
     var firstLoad by remember { mutableStateOf(true) }
     var logged by remember { mutableStateOf(false) }
+    var showResetConfirm by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         JvmLauncher.onBridge { JvmLauncher.lootSetUiOpen(true) }
@@ -80,6 +82,11 @@ fun LootTrackerScreen(onBack: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onBack) { Text("‹ Back") }
                 Text("Loot Tracker", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
+                if (sources.isNotEmpty()) {
+                    TextButton(onClick = { showResetConfirm = true }) {
+                        Text("Reset All", color = Color(0xFFEF9A9A), fontSize = 13.sp)
+                    }
+                }
             }
             when {
                 firstLoad -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -93,6 +100,27 @@ fun LootTrackerScreen(onBack: () -> Unit) {
                 }
             }
         }
+    }
+
+    if (showResetConfirm) {
+        AlertDialog(
+            onDismissRequest = { showResetConfirm = false },
+            title = { Text("Reset loot tracker?") },
+            text = { Text("Clears all tracked loot for this session. This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showResetConfirm = false
+                    // Off the UI thread via the single-threaded bridge executor; the next poll (FIFO after
+                    // this write) confirms the cleared state — clear optimistically for immediate feedback.
+                    JvmLauncher.onBridgeTouch { JvmLauncher.lootResetAll() }
+                    sources = emptyList()
+                    Log.i(PR_TAG, "loot-reset: Reset All confirmed")
+                }) { Text("Reset All", color = Color(0xFFEF9A9A)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetConfirm = false }) { Text("Cancel") }
+            },
+        )
     }
 }
 
