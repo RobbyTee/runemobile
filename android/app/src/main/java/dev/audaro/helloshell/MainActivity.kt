@@ -102,6 +102,10 @@ class MainActivity : AppCompatActivity() {
     private var invRectCanvas: IntArray? = null
     private var itemDragging = false
     private var itemDragLastX = 0; private var itemDragLastY = 0
+    // DRAG-1b: the engine's other drag-to-reorder panes (Prayer/Spellbook/Bank) as canvas-px rects from the chrome
+    // snapshot. A drag that STARTS inside any of these routes through the same engine WidgetDrag stream as the
+    // inventory (touch PRESS->DRAGGED->RELEASE) so prayers/spells/bank items reorder instead of rotating the camera.
+    private var reorderRectsCanvas: List<IntArray> = emptyList()
     private var mapSearchKeyboard = false           // transient ⌨-like latch while the map search is in use
     private var mapWasSearching = false             // FIX-14: engine WORLDMAP_SEARCHING edge (drop the latch on commit)
     private var lastMapSnapshot = ""
@@ -924,19 +928,21 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     if (!chatScrolling) {
-                        // FIX-4: a drag that STARTS inside the inventory grid drags the item (WidgetDrag), not the
-                        // camera. The true start point (e1, the DOWN event) is the source slot.
-                        val inv = invRectCanvas
+                        // FIX-4 / DRAG-1b: a drag that STARTS inside the inventory grid OR a reorder pane
+                        // (Prayer/Spellbook/Bank) drives the engine WidgetDrag (getDraggedWidget), not the camera.
+                        // The true start point (e1, the DOWN event) is the source slot/icon. All these panes use
+                        // the identical MOUSE_PRESSED->DRAGGED->RELEASED stream, so one branch covers them.
                         val sx = if (e1 != null) toGameX(e1.x) else -1
                         val sy = if (e1 != null) toGameY(e1.y) else -1
-                        if (!mapOpen && inv != null && e1 != null
-                            && sx >= inv[0] && sx < inv[0] + inv[2] && sy >= inv[1] && sy < inv[1] + inv[3]) {
+                        val inDraggablePane = !mapOpen && e1 != null
+                            && (inCanvasRect(invRectCanvas, sx, sy) || reorderRectsCanvas.any { inCanvasRect(it, sx, sy) })
+                        if (inDraggablePane) {
                             itemDragging = true
                             itemDragLastX = sx; itemDragLastY = sy
                             // onTouch(0) primes focus + MOVED + PRESSED on the slot — no clearHover (that would
                             // park the cursor off-canvas; iOS doesn't either).
-                            JvmLauncher.touch(0, sx, sy, 1)   // MOUSE_PRESSED on the source item slot
-                            Log.i(TAG, "drag-1: item drag begin game=($sx,$sy)")
+                            JvmLauncher.touch(0, sx, sy, 1)   // MOUSE_PRESSED on the source widget
+                            Log.i(TAG, "drag-1: widget drag begin game=($sx,$sy)")
                         } else {
                             cameraGestureActive = true
                             JvmLauncher.clearHover()
@@ -1317,6 +1323,22 @@ class MainActivity : AppCompatActivity() {
             o?.optJSONArray("inv")?.takeIf { it.length() >= 4 && it.optInt(2) > 0 && it.optInt(3) > 0 }
                 ?.let { intArrayOf(it.optInt(0), it.optInt(1), it.optInt(2), it.optInt(3)) }
         } else null
+        // DRAG-1b: the Prayer/Spellbook/Bank reorder-pane rects (empty when none on-screen) for the reorder-drag hit test.
+        reorderRectsCanvas = if (loggedIn) {
+            val arr = o?.optJSONArray("reorderPanes")
+            if (arr == null || arr.length() == 0) {
+                emptyList()
+            } else {
+                val out = ArrayList<IntArray>(arr.length())
+                for (i in 0 until arr.length()) {
+                    val r = arr.optJSONArray(i) ?: continue
+                    if (r.length() >= 4 && r.optInt(2) > 0 && r.optInt(3) > 0) {
+                        out.add(intArrayOf(r.optInt(0), r.optInt(1), r.optInt(2), r.optInt(3)))
+                    }
+                }
+                out
+            }
+        } else emptyList()
 
         val gridOn = supported && chromeOverlay.railsShown
         applyStonesHidden(gridOn)
