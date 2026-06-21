@@ -117,6 +117,8 @@ fun PluginPanel(
     var xpOpen by remember { mutableStateOf(false) }                             // Finding 14 XP Tracker reflow
     var lootOpen by remember { mutableStateOf(false) }                           // Finding 14 Loot Tracker reflow
     var geOpen by remember { mutableStateOf(false) }                             // Finding 14 Grand Exchange reflow
+    var timeOpen by remember { mutableStateOf(false) }                           // Track B Time Tracking reflow
+    var timeAvail by remember { mutableStateOf(false) }
     var overlayOpen by remember { mutableStateOf(false) }                        // Finding 15 overlay edit
     var infoBoxOpen by remember { mutableStateOf(false) }                        // Finding 22 infobox menu
     var profilesOpen by remember { mutableStateOf(false) }                       // Track B #6 config profiles
@@ -148,6 +150,7 @@ fun PluginPanel(
             }.get()
         }
         profilesAvail = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.profilesAvailable() }.get() }
+        timeAvail = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.timeTrackingAvailable() }.get() }
         Log.i("MainActivity", "ANDROID_LAUNCHER_GRID_GREEN rows=${rows.size} pinned=${rows.count { it.pinned }} " +
             "panels=${panels.size} avail=${panelAvail.count { it }}")
     }
@@ -155,7 +158,7 @@ fun PluginPanel(
     // §4 increment 3: the launcher + every panel now live INSIDE a PEEK/EXPAND bottom sheet (SheetScaffold) so
     // the live game stays visible above it (the desktop slide-out parity win). A sub-screen open => PEEK (game
     // watchable); the launcher landing => EXPAND.
-    val subActive = questOpen || worldOpen || xpOpen || lootOpen || geOpen || overlayOpen || infoBoxOpen ||
+    val subActive = questOpen || worldOpen || xpOpen || lootOpen || geOpen || timeOpen || overlayOpen || infoBoxOpen ||
         profilesOpen || hubOpen || panelOpen != null || configFor != null
 
     // §4 dismiss model (d): back pops ONE level — close the active sub-screen back to the launcher, else dismiss
@@ -170,6 +173,7 @@ fun PluginPanel(
             xpOpen -> xpOpen = false
             lootOpen -> lootOpen = false
             geOpen -> geOpen = false
+            timeOpen -> timeOpen = false
             overlayOpen -> overlayOpen = false
             infoBoxOpen -> infoBoxOpen = false
             profilesOpen -> profilesOpen = false
@@ -185,7 +189,7 @@ fun PluginPanel(
     // FIX-6: open at EXPAND for editors / interactive lists (config was cramped to a couple of rows at the old
     // peek default, and a single drag-down could dismiss it). Only the passive monitors (XP / loot / GE) keep
     // the watch-the-game PEEK so the scene stays visible above them.
-    val peekScreen = subActive && (xpOpen || lootOpen || geOpen)
+    val peekScreen = subActive && (xpOpen || lootOpen || geOpen || timeOpen)
     SheetScaffold(atPeek = peekScreen, onDismiss = onClose) {
         when {
             questOpen -> QuestHelperScreen(onBack = { questOpen = false })
@@ -193,6 +197,7 @@ fun PluginPanel(
             xpOpen -> XpTrackerScreen(onBack = { xpOpen = false })
             lootOpen -> LootTrackerScreen(onBack = { lootOpen = false })
             geOpen -> GrandExchangeScreen(onBack = { geOpen = false })
+            timeOpen -> TimeTrackingScreen(onBack = { timeOpen = false })
             overlayOpen -> OverlayEditScreen(onBack = { overlayOpen = false })
             infoBoxOpen -> InfoBoxScreen(onBack = { infoBoxOpen = false })
             profilesOpen -> ConfigProfilesScreen(onBack = { profilesOpen = false })
@@ -277,6 +282,7 @@ fun PluginPanel(
                         onOpenPanel = { i, t -> panelOpen = i to t },
                         onOpenQuest = { questOpen = true }, onOpenWorld = { worldOpen = true },
                         onOpenXp = { xpOpen = true }, onOpenLoot = { lootOpen = true }, onOpenGe = { geOpen = true },
+                        timeAvail = timeAvail, onOpenTime = { timeOpen = true },
                         onOpenOverlay = { overlayOpen = true }, onOpenInfoBox = { infoBoxOpen = true },
                         onOpenHub = { hubOpen = true },
                         profilesAvail = profilesAvail, onOpenProfiles = { profilesOpen = true },
@@ -398,6 +404,8 @@ private fun LauncherGrid(
     onOpenXp: () -> Unit,
     onOpenLoot: () -> Unit,
     onOpenGe: () -> Unit,
+    timeAvail: Boolean,
+    onOpenTime: () -> Unit,
     onOpenOverlay: () -> Unit,
     onOpenInfoBox: () -> Unit,
     onOpenHub: () -> Unit,
@@ -416,6 +424,7 @@ private fun LauncherGrid(
         if (avail.getOrElse(2) { false }) add(TileSpec("XP Tracker", iconFor("XP Tracker"), onClick = onOpenXp))
         if (avail.getOrElse(3) { false }) add(TileSpec("Loot Tracker", iconFor("Loot Tracker"), onClick = onOpenLoot))
         if (avail.getOrElse(4) { false }) add(TileSpec("Grand Exchange", iconFor("Grand Exchange"), onClick = onOpenGe))
+        if (timeAvail) add(TileSpec("Time Tracking", iconFor("Time Tracking"), glyph = "⏱", onClick = onOpenTime))
         if (avail.getOrElse(1) { false }) add(TileSpec("World Switcher", iconFor("World Switcher"), onClick = onOpenWorld))
         if (avail.getOrElse(0) { false }) add(TileSpec("Quest Helper", iconFor("Quest Helper"), onClick = onOpenQuest))
         if (avail.getOrElse(5) { false }) add(TileSpec("Overlay Layout", glyph = "▦", onClick = onOpenOverlay))

@@ -147,6 +147,7 @@ static DataPanel g_xpPanel;
 static DataPanel g_lootPanel;
 static jmethodID g_midLootReset = nullptr;   // LootTrackerBridge.resetAll() — "Reset All" write action (optional)
 static DataPanel g_gePanel;
+static DataPanel g_timePanel;   // TimeTrackingBridge — farming/contract/bird-house/timer/stopwatch countdowns
 // A6 chrome: MobileChromeBridge read-only snapshot facade (tab/panel/minimap/orb/chat/viewport canvas bounds
 // the native edge-rails cover-and-proxy reads each display tick). Separate facade; rl-bridge-thread read
 // behind a release/acquire latch. Single method (getSnapshot) — populated only under -Drunelite.mobilechrome.
@@ -669,6 +670,7 @@ static bool publishBridge(JNIEnv *env) {
         g_midLootReset = midOpt(env, g_lootPanel.cls, "resetAll", "()Ljava/lang/String;");
     }
     registerDataPanel(env, "net/runelite/client/headless/GrandExchangeBridge", "getGeJson", g_gePanel);
+    registerDataPanel(env, "net/runelite/client/headless/TimeTrackingBridge", "getTimeTrackingJson", g_timePanel);
 
     // Finding 15 — OverlayBridge: overlay edit (list + snap-to-corner + reset). Dedicated facade (action methods
     // take args), all-or-nothing, release-latched like Quest/World.
@@ -2067,6 +2069,25 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeGeJson(JNIEnv *artEnv, jobject) {
     if (!g_gePanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_gePanel.cls, g_gePanel.json);
+}
+
+// Finding 14 — Time Tracking native reflow (read-only). getTimeTrackingJson = {available, farming:[{tab,name,
+// state,readyTime,remainingSec}], contract:{active,...}, birdhouses:[{name,state,readyTime,remainingSec}],
+// timers:[{name,active,remainingSec,durationSec,loop}], stopwatches:[{name,active,elapsedSec}]}.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeTimeTrackingAvailable(JNIEnv *, jobject) {
+    if (!g_timePanel.ready.load(std::memory_order_acquire)) return JNI_FALSE;
+    return facadeBool(g_timePanel.cls, g_timePanel.avail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeTimeTrackingSetUiOpen(JNIEnv *, jobject, jboolean open) {
+    if (!g_timePanel.ready.load(std::memory_order_acquire)) return;
+    facadeVoidBool(g_timePanel.cls, g_timePanel.setUiOpen, open);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeTimeTrackingJson(JNIEnv *artEnv, jobject) {
+    if (!g_timePanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_timePanel.cls, g_timePanel.json);
 }
 
 // Config profiles. available + list (getProfilesJson) + switch(id) -> ack JSON (the switch runs async on the

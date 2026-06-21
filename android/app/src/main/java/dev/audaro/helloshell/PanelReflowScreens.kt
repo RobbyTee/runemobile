@@ -412,3 +412,127 @@ private fun parseProfiles(json: String): List<ConfigProfile> = try {
 } catch (t: Throwable) {
     Log.e(PR_TAG, "ANDROID_TRACKB_PROFILES_UI_RED parse: $t"); emptyList()
 }
+
+// ====================================================================================================
+// Track B (finding M-set / Time Tracking) — native Time Tracking reflow (read-only). getTimeTrackingJson =
+// {available, farming:[{tab,name,state,readyTime,remainingSec}], contract:{active,...},
+// birdhouses:[{name,state,remainingSec}], timers:[{name,active,remainingSec,loop}], stopwatches:[{name,active,
+// elapsedSec}]}. Grouped into labelled sections; second-resolution countdowns refresh ~1s with the snapshot.
+// ====================================================================================================
+data class TtItem(val name: String, val state: String, val remainingSec: Long, val ready: Boolean, val countUp: Boolean)
+data class TtSection(val title: String, val items: List<TtItem>)
+
+@Composable
+fun TimeTrackingScreen(onBack: () -> Unit) {
+    var sections by remember { mutableStateOf<List<TtSection>>(emptyList()) }
+    var firstLoad by remember { mutableStateOf(true) }
+    var logged by remember { mutableStateOf(false) }
+
+    DisposableEffect(Unit) {
+        JvmLauncher.onBridge { JvmLauncher.timeTrackingSetUiOpen(true) }
+        onDispose { JvmLauncher.onBridge { JvmLauncher.timeTrackingSetUiOpen(false) } }
+    }
+    LaunchedEffect(Unit) {
+        while (coroutineContext.isActive) {
+            val json = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.timeTrackingJson() }.get() }
+            sections = parseTimeTracking(json)
+            firstLoad = false
+            if (!logged) { Log.i(PR_TAG, "ANDROID_TRACKB_TIME_UI_GREEN sections=${sections.size}"); logged = true }
+            delay(1000)   // countdowns are second-resolution; the bridge rebuilds on the same cadence
+        }
+    }
+
+    Surface(color = PR_PANEL_BG, modifier = Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onBack) { Text("‹ Back") }
+                Text("Time Tracking", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
+            }
+            when {
+                firstLoad -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                sections.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("Nothing being tracked.", color = Color(0xFF9E9E9E), fontSize = 14.sp)
+                }
+                else -> LazyColumn(Modifier.fillMaxSize()) {
+                    sections.forEach { sec ->
+                        item(key = "h-${sec.title}") {
+                            Text(sec.title, color = Color(0xFF80CBC4), fontSize = 12.sp,
+                                modifier = Modifier.padding(top = 12.dp, bottom = 2.dp))
+                        }
+                        items(sec.items, key = { sec.title + it.name }) { TtRow(it); HorizontalDivider(color = Color(0x18FFFFFF)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TtRow(it: TtItem) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(it.name, color = Color.White, modifier = Modifier.weight(1f), fontSize = 14.sp)
+        val right: String
+        val color: Color
+        when {
+            it.countUp -> { right = ttDur(it.remainingSec); color = Color(0xFFB0BEC5) }     // stopwatch elapsed
+            it.remainingSec > 0 -> { right = ttDur(it.remainingSec); color = Color(0xFFFFD54F) }  // counting down
+            it.ready -> { right = "Ready"; color = Color(0xFF81C784) }
+            else -> { right = ttState(it.state); color = ttStateColor(it.state) }
+        }
+        Text(right, color = color, fontSize = 13.sp)
+    }
+}
+
+/** Compact h/m/s formatter for the countdowns. */
+private fun ttDur(sec: Long): String {
+    if (sec <= 0) return "0s"
+    val h = sec / 3600; val m = (sec % 3600) / 60; val s = sec % 60
+    return when {
+        h > 0 -> "${h}h ${m}m"
+        m > 0 -> "${m}m ${s}s"
+        else -> "${s}s"
+    }
+}
+
+/** ENUM_NAME -> "Enum name". */
+private fun ttState(s: String): String =
+    if (s.isEmpty()) "—" else s.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() }
+
+private fun ttStateColor(state: String): Color = when (state.uppercase()) {
+    "HARVESTABLE", "BUILT", "OCCUPIED", "DONE", "FINISHED" -> Color(0xFF81C784)   // ready/green
+    "DISEASED", "DEAD", "STUNTED" -> Color(0xFFE57373)                            // problem/red
+    else -> Color(0xFF9E9E9E)                                                      // empty/growing/idle/grey
+}
+
+private fun parseTimeTracking(json: String): List<TtSection> = try {
+    val o = JSONObject(json)
+    if (!o.optBoolean("available", false)) emptyList()
+    else buildList {
+        // A patch is "ready" when it has no remaining countdown and its state reads as harvestable/grown.
+        fun arr(key: String, countUp: Boolean): List<TtItem> {
+            val a = o.optJSONArray(key) ?: return emptyList()
+            return (0 until a.length()).map { i ->
+                val e = a.getJSONObject(i)
+                val st = e.optString("state", "")
+                val rem = e.optLong("remainingSec")
+                TtItem(
+                    name = e.optString("name", "?"), state = st, remainingSec = if (countUp) e.optLong("elapsedSec") else rem,
+                    ready = !countUp && rem <= 0L && ttStateColor(st) == Color(0xFF81C784), countUp = countUp,
+                )
+            }
+        }
+        arr("farming", false).takeIf { it.isNotEmpty() }?.let { add(TtSection("Farming patches", it)) }
+        o.optJSONObject("contract")?.takeIf { it.optBoolean("active", false) }?.let { c ->
+            val rem = c.optLong("remainingSec")
+            val st = c.optString("state", "")
+            add(TtSection("Farming contract", listOf(TtItem(
+                name = c.optString("name", "Contract"), state = st, remainingSec = rem,
+                ready = rem <= 0L && ttStateColor(st) == Color(0xFF81C784), countUp = false))))
+        }
+        arr("birdhouses", false).takeIf { it.isNotEmpty() }?.let { add(TtSection("Bird houses", it)) }
+        arr("timers", false).takeIf { it.isNotEmpty() }?.let { add(TtSection("Timers", it)) }
+        arr("stopwatches", true).takeIf { it.isNotEmpty() }?.let { add(TtSection("Stopwatches", it)) }
+    }
+} catch (t: Throwable) {
+    Log.e(PR_TAG, "ANDROID_TRACKB_TIME_UI_RED parse: $t"); emptyList()
+}

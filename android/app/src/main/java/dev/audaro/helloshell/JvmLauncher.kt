@@ -210,6 +210,11 @@ object JvmLauncher {
     external fun nativeGeAvailable(): Boolean
     external fun nativeGeSetUiOpen(open: Boolean)
     external fun nativeGeJson(): String
+    // Time Tracking native reflow (TimeTrackingBridge; same facade shape). getTimeTrackingJson = farming patches,
+    // farming contract, bird houses, timers + stopwatches — all with second-resolution countdowns.
+    external fun nativeTimeTrackingAvailable(): Boolean
+    external fun nativeTimeTrackingSetUiOpen(open: Boolean)
+    external fun nativeTimeTrackingJson(): String
 
     // Finding 15 — overlay edit (OverlayBridge): list movable overlays, snap one to a corner, reset to default.
     // snap/reset return the bridge JSON ack; positionName is an OverlayPosition (TOP_LEFT/.../BOTTOM_RIGHT).
@@ -389,6 +394,9 @@ object JvmLauncher {
     fun geAvailable() = nativeGeAvailable()
     fun geSetUiOpen(open: Boolean) = nativeGeSetUiOpen(open)
     fun geJson() = nativeGeJson()
+    fun timeTrackingAvailable() = nativeTimeTrackingAvailable()
+    fun timeTrackingSetUiOpen(open: Boolean) = nativeTimeTrackingSetUiOpen(open)
+    fun timeTrackingJson() = nativeTimeTrackingJson()
     fun overlayAvailable() = nativeOverlayAvailable()
     fun overlaySetUiOpen(open: Boolean) = nativeOverlaySetUiOpen(open)
     fun overlaysJson() = nativeOverlaysJson()
