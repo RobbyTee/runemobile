@@ -229,6 +229,7 @@ class MainActivity : AppCompatActivity() {
         private const val VK_BACK_SPACE = 8
         private const val VK_ENTER = 10
         private const val VK_ESCAPE = 27
+        private const val VK_SPACE = 32
         private const val VK_LEFT = 37
         private const val VK_UP = 38
         private const val VK_RIGHT = 39
@@ -393,8 +394,11 @@ class MainActivity : AppCompatActivity() {
         // vs the space-to-continue setting); an option row posts its digit.
         dialogueOverlay = DialogueView(this)
         dialogueOverlay.onContinue = { cx, cy ->
+            // Click the engine CONTINUE widget when we have its bounds; otherwise advance with a real SPACE
+            // KEY event — a "click here to continue" box listens for the keypress, NOT a typed character
+            // (text(" ") never advanced it), so this is the reliable fallback when the widget bounds are absent.
             if (cx >= 0 && cy >= 0) JvmLauncher.onBridgeTouch { JvmLauncher.clickPrecise(cx, cy, 1) }
-            else JvmLauncher.onBridgeTouch { JvmLauncher.text(" ") }
+            else JvmLauncher.onBridgeTouch { JvmLauncher.keyStroke(VK_SPACE) }
         }
         dialogueOverlay.onOption = { digit -> JvmLauncher.onBridgeTouch { JvmLauncher.text(digit.toString()) } }
         // FIX-9: the "Reconnecting…" scrim (non-interactive; driven from updateChrome's snapshot).
@@ -603,6 +607,10 @@ class MainActivity : AppCompatActivity() {
                     JvmLauncher.keyStroke(VK_ESCAPE)
                     Log.i(TAG, "p5: BACK -> close world map via Escape (no close rect)")
                 }
+            } else if (dialogueOverlay.isShowing && dialogueOverlay.dismiss()) {
+                // A "click to continue" dialogue is up — BACK advances it (the reliable hardware escape hatch if
+                // an empty/stale message box ever traps the tap-to-continue).
+                Log.i(TAG, "ui4: BACK -> dismiss dialogue")
             } else if (pluginPanel.visibility == View.VISIBLE) {
                 pluginPanel.visibility = View.GONE
                 pluginPanel.disposeComposition()

@@ -67,6 +67,17 @@ class DialogueView(context: Context) : View(context) {
         if (active) { active = false; lastJson = ""; invalidate() }
     }
 
+    /** True while a dialogue parchment is being shown (so the shell can route BACK to dismiss it). */
+    val isShowing: Boolean get() = active
+
+    /** Programmatic dismiss (e.g. hardware BACK): advance a "click to continue" dialogue. No-op for an options
+     *  dialogue (there's no neutral choice) and when nothing is showing. Returns true if it acted. */
+    fun dismiss(): Boolean {
+        if (!active || options.isNotEmpty()) return false
+        onContinue?.invoke(contCx, contCy)
+        return true
+    }
+
     /** Drive each frame: [chatSnap] (for the dialogueActive/topLevel gate) + [dlgJson] + canvas→view scale. */
     fun update(chatSnap: String, dlgJson: String, sx: Float, sy: Float, show: Boolean) {
         if (!show) { hide(); return }
