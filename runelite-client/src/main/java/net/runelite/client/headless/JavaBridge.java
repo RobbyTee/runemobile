@@ -193,6 +193,20 @@ public final class JavaBridge
 	// when it advances (the official Jagex Mobile "you grabbed something" buzz).
 	private static volatile int interactTapSeq;
 
+	// Tap-KIND truth for the native shell's tap feedback (Android): every resolved left tap publishes WHAT it
+	// hit, from the consumed MenuOptionClicked entry, so the shell can ring ONLY for a real scene tap (walk /
+	// scene interaction), draw a selection BORDER for a widget op (inventory item / prayer / spell / tab …),
+	// and show nothing for a dead/cancel click. getTapKindSeq() bumps once per resolution; getLastTapKind()
+	// holds the kind; getLastWidgetBounds() packs the widget's canvas-px bounds for the WIDGET kind. This is
+	// additive — interactTapSeq (haptic + the iOS ring) keeps its exact old meaning.
+	public static final int TAP_KIND_NONE = 0;    // walk-cancel / no action -> no feedback
+	public static final int TAP_KIND_WALK = 1;    // a deliberate walk -> yellow ring
+	public static final int TAP_KIND_SCENE = 2;   // NPC / object / player / ground item -> red ring
+	public static final int TAP_KIND_WIDGET = 3;  // an interface op -> selection border, no ring
+	private static volatile int tapKindSeq;
+	private static volatile int lastTapKind;
+	private static volatile int wbX, wbY, wbW, wbH;   // last WIDGET-kind bounds (canvas px)
+
 	// ===== Engine-resolved tap state machine (TOUCH-TARGETING-PLAN.md Phase 1) =====
 	// A left tap is never re-hit-tested by the engine: the press is consumed against the menu the engine
 	// built from the cursor position earlier IN THE SAME CLIENT TICK. So we move the synthetic cursor to the
@@ -894,18 +908,90 @@ public final class JavaBridge
 			selActor = null;
 			selObject = null;
 			selUntil = 0;
+			publishTapKind(TAP_KIND_WALK, null);
 			if (TOUCH_DIAG && c != null && ct != null)
 			{
 				final int cx = tapX, cy = tapY;
 				ct.invokeLater(() -> ct.invokeLater(() -> diagWalkDest(c, cx, cy)));
 			}
 		}
-		else if (type != null && type != MenuAction.CANCEL)
+		else if (type == null || type == MenuAction.CANCEL)
 		{
-			interactTapSeq++;   // the click DID interact -> native red ring + haptic
-			armOutlineFromEntry(c, entry, type);
+			// The click did nothing (dead UI chrome / cancel) — no feedback at all.
+			publishTapKind(TAP_KIND_NONE, null);
+		}
+		else
+		{
+			interactTapSeq++;   // the click DID interact -> haptic (+ iOS red ring), meaning unchanged
+			final Widget w = entry.getWidget();
+			if (w != null)
+			{
+				// An interface op (inventory item / prayer / spell / tab / …): no ring, a selection border.
+				publishTapKind(TAP_KIND_WIDGET, w);
+			}
+			else
+			{
+				// A scene interaction (NPC / object / player / ground item): the red ring + model outline.
+				armOutlineFromEntry(c, entry, type);
+				publishTapKind(TAP_KIND_SCENE, null);
+			}
 		}
 		finishTap();
+	}
+
+	/**
+	 * Publish the resolved tap kind for the native shell (client thread). For a WIDGET kind, snapshot the
+	 * widget's canvas-px bounds (packed by {@link #getLastWidgetBounds}) so the shell can draw the border; a
+	 * bounds-less widget degrades to NONE (nothing to outline). The seq bumps last, after the kind/bounds are
+	 * set, so a native reader that sees the new seq also sees consistent kind/bounds.
+	 */
+	private static void publishTapKind(int kind, Widget w)
+	{
+		if (kind == TAP_KIND_WIDGET)
+		{
+			java.awt.Rectangle b = null;
+			try
+			{
+				b = w == null ? null : w.getBounds();
+			}
+			catch (RuntimeException ex)
+			{
+				BridgeFaults.note("JavaBridge.publishTapKind", ex);
+			}
+			if (b != null && b.width > 0 && b.height > 0)
+			{
+				wbX = b.x;
+				wbY = b.y;
+				wbW = b.width;
+				wbH = b.height;
+			}
+			else
+			{
+				kind = TAP_KIND_NONE;
+			}
+		}
+		lastTapKind = kind;
+		tapKindSeq++;
+	}
+
+	/** Native: bumps once per resolved left tap (pair with {@link #getLastTapKind}). */
+	public static int getTapKindSeq()
+	{
+		return tapKindSeq;
+	}
+
+	/** Native: the kind of the most recently resolved tap ({@code TAP_KIND_*}). */
+	public static int getLastTapKind()
+	{
+		return lastTapKind;
+	}
+
+	/** Native: the last WIDGET-kind tap's canvas-px bounds packed as {@code x<<48 | y<<32 | w<<16 | h} (each a
+	 *  16-bit field; canvas coords never exceed that). Read after {@link #getTapKindSeq} advances. */
+	public static long getLastWidgetBounds()
+	{
+		return ((long) (wbX & 0xFFFF) << 48) | ((long) (wbY & 0xFFFF) << 32)
+			| ((long) (wbW & 0xFFFF) << 16) | (long) (wbH & 0xFFFF);
 	}
 
 	/**

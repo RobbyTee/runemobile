@@ -57,6 +57,8 @@ static jmethodID g_midWheel = nullptr, g_midClickPrecise = nullptr, g_midMove = 
 static jmethodID g_midText = nullptr, g_midKeyStroke = nullptr;
 // A1 polled read-surface: keyboard auto-raise, interact-tap haptic seq, finger snap radius.
 static jmethodID g_midTextInputOpen = nullptr, g_midInteractTapSeq = nullptr;
+// Tap-KIND truth (optional jar surface; older jars omit it -> the shell keeps the legacy ring).
+static jmethodID g_midTapKindSeq = nullptr, g_midLastTapKind = nullptr, g_midLastWidgetBounds = nullptr;
 // A2 press-and-peek: JavaBridge.selectMenuPoint commit + the separate MenuPeekBridge read-surface.
 static jmethodID g_midSelectMenuPoint = nullptr;
 // AP-2a sticky-Shift: JavaBridge.setShiftHeld(boolean) — synthetic held VK_SHIFT (shared, iOS-device-proven).
@@ -229,6 +231,11 @@ static void rcPresentSetFrameDims(int w, int h) {
 // without ever attaching to HotSpot — same pattern as the frame dims above.
 static std::atomic<int> g_textInputOpen{0};   // isTextInputOpen() -> raise/dismiss the soft keyboard
 static std::atomic<int> g_interactTapSeq{0};  // getInteractTapSeq() -> fire a haptic when it advances
+// Tap-KIND truth (optional jar surface): the resolved left tap's kind + the last widget bounds, so the UI
+// thread rings only for a real scene tap and borders a widget op. Published by the render thread each tick.
+static std::atomic<int>     g_tapKindSeq{0};
+static std::atomic<int>     g_lastTapKind{0};
+static std::atomic<int64_t> g_lastWidgetBounds{0};
 
 // A2 menu-peek snapshot, published by the render thread (only on seq change) for the UI thread to read.
 static std::mutex            g_menuLock;
@@ -492,6 +499,9 @@ static bool publishBridge(JNIEnv *env) {
     g_midKeyStroke      = midOpt(env, global, "onKeyStroke", "(I)V");
     g_midTextInputOpen  = midOpt(env, global, "isTextInputOpen", "()Z");
     g_midInteractTapSeq = midOpt(env, global, "getInteractTapSeq", "()I");
+    g_midTapKindSeq     = midOpt(env, global, "getTapKindSeq", "()I");          // optional (older jar omits)
+    g_midLastTapKind    = midOpt(env, global, "getLastTapKind", "()I");
+    g_midLastWidgetBounds = midOpt(env, global, "getLastWidgetBounds", "()J");
     g_midSelectMenuPoint = midOpt(env, global, "selectMenuPoint", "(II)V");   // A2 commit
     if (!g_midSeq || !g_midW || !g_midH || !g_midPixels || !g_midTouch || !g_midClick
         || !g_midCamera || !g_midClearHover
@@ -924,6 +934,18 @@ static void *renderLoop(void *) {
             int its = env->CallStaticIntMethod(g_bridgeCls, g_midInteractTapSeq);
             if (env->ExceptionCheck()) { env->ExceptionClear(); }
             else { g_interactTapSeq.store(its, std::memory_order_relaxed); }
+            // Tap-KIND truth (optional): kind + last widget bounds, for the UI thread's ring/border decision.
+            if (g_midTapKindSeq) {
+                int tk = env->CallStaticIntMethod(g_bridgeCls, g_midLastTapKind);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); }
+                else { g_lastTapKind.store(tk, std::memory_order_relaxed); }
+                int64_t wb = env->CallStaticLongMethod(g_bridgeCls, g_midLastWidgetBounds);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); }
+                else { g_lastWidgetBounds.store(wb, std::memory_order_relaxed); }
+                int tks = env->CallStaticIntMethod(g_bridgeCls, g_midTapKindSeq);   // seq last (gates the read)
+                if (env->ExceptionCheck()) { env->ExceptionClear(); }
+                else { g_tapKindSeq.store(tks, std::memory_order_relaxed); }
+            }
 
             // A2: republish the menu-peek snapshot only when its publish-seq advanced (avoids a per-frame
             // String copy on the idle path). The UI thread reads g_menuSnapshot via nativeMenuSnapshot().
@@ -1493,6 +1515,19 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeIsTextInputOpen(JNIEnv *, jobject) 
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeInteractTapSeq(JNIEnv *, jobject) {
     return g_interactTapSeq.load(std::memory_order_relaxed);
+}
+// Tap-KIND truth read-surface (0 on a jar without the getters -> seq never advances -> shell keeps the ring).
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeTapKindSeq(JNIEnv *, jobject) {
+    return g_tapKindSeq.load(std::memory_order_relaxed);
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeLastTapKind(JNIEnv *, jobject) {
+    return g_lastTapKind.load(std::memory_order_relaxed);
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeLastWidgetBounds(JNIEnv *, jobject) {
+    return (jlong) g_lastWidgetBounds.load(std::memory_order_relaxed);
 }
 // Last frame dimensions (so the UI thread can map a screen touch to game-canvas coords). 0 before render.
 extern "C" JNIEXPORT jint JNICALL

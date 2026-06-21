@@ -113,6 +113,12 @@ object JvmLauncher {
     /** Monotonic counter the engine bumps on each committed interact-tap — advance => fire a haptic. */
     external fun nativeInteractTapSeq(): Int
 
+    /** Tap-KIND truth: [nativeTapKindSeq] bumps once per resolved left tap; [nativeLastTapKind] is its kind
+     *  (TAP_KIND_*); [nativeLastWidgetBounds] packs the WIDGET-kind bounds (canvas px, x<<48|y<<32|w<<16|h). */
+    external fun nativeTapKindSeq(): Int
+    external fun nativeLastTapKind(): Int
+    external fun nativeLastWidgetBounds(): Long
+
     // ---- A2 press-and-peek menu ---------------------------------------------------------------------
     /** Commit a menu choice by clicking the engine row centre (game-canvas x,y) — honours plugin onClick. */
     external fun nativeSelectMenuPoint(x: Int, y: Int)
@@ -317,6 +323,9 @@ object JvmLauncher {
     fun fireHotkey(group: String, key: String) = nativeFireHotkey(group, key)
     fun isTextInputOpen() = nativeIsTextInputOpen()
     fun interactTapSeq() = nativeInteractTapSeq()
+    fun tapKindSeq() = nativeTapKindSeq()
+    fun lastTapKind() = nativeLastTapKind()
+    fun lastWidgetBounds() = nativeLastWidgetBounds()
     fun selectMenuPoint(x: Int, y: Int) = nativeSelectMenuPoint(x, y)
     fun invokeMenuEntry(parent: Int, child: Int) = nativeInvokeMenuEntry(parent, child)
     fun menuSnapshot() = nativeMenuSnapshot()

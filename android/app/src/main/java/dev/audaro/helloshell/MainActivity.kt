@@ -131,10 +131,14 @@ class MainActivity : AppCompatActivity() {
     // misclassify (the iOS lesson). On tap we snapshot interactTapSeq; the Choreographer poll then resolves:
     // seq advanced within the grace window → red (interaction), grace expired → yellow (walk).
     private lateinit var tapRing: TapRingView
+    // Selection border for interface ops: tapping an item / prayer / spell / tab outlines that widget (engine
+    // truth) instead of spawning a world ring — see the tap-kind poll in startInputPolling.
+    private lateinit var widgetBorder: WidgetBorderView
     private var ringPending = false
     private var ringX = 0f; private var ringY = 0f
     private var ringArmedAtMs = 0L
     private var ringBaseSeq = 0
+    private var ringKindBaseSeq = 0   // tapKindSeq at arm time; a bump past it resolves the tap's kind
     private var keyboardShown = false
     private var imeWasShown = false       // last frame's ACTUAL ime visibility — to spot a user-driven dismiss
     private var manualKeyboard = false   // ⌨ toggle: hold the soft keyboard up with no engine text field open
@@ -253,6 +257,13 @@ class MainActivity : AppCompatActivity() {
         // ring is prompt; a pathologically slow interaction (rare MAX_SETTLE) at worst flashes the wrong colour.
         private const val RING_GRACE_MS = 250L
 
+        // Tap-KIND truth (mirrors JavaBridge.TAP_KIND_*): the engine-resolved tap hit nothing, a walk, a scene
+        // entity, or an interface widget. The shell rings only for WALK/SCENE and borders WIDGET.
+        private const val TAP_KIND_NONE = 0
+        private const val TAP_KIND_WALK = 1
+        private const val TAP_KIND_SCENE = 2
+        private const val TAP_KIND_WIDGET = 3
+
         // OSRS engine menu geometry: 19px "Choose Option" header, 15px per row. A native row k commits to the
         // engine row centre (menuX + menuW/2, menuY + 19 + k*15 + 7) so plugin onClick/Menu-Entry-Swapper hold.
         private const val MENU_HEADER_PX = 19
@@ -325,6 +336,7 @@ class MainActivity : AppCompatActivity() {
         keyboardView = GameInputView(this)
         menuOverlay = MenuOverlayView(this)
         tapRing = TapRingView(this)
+        widgetBorder = WidgetBorderView(this)
         // A6 native chrome: the OSRS-mobile 2-col tab grid at the bottom-right. The engine's own 14 tab stones
         // are HIDDEN (HudVeneerBridge.setStonesHidden, driven from updateChrome) so these native cells ARE the
         // tabs; a tap opens the tab by replaying the engine stone's op script (openTab) — works while hidden, so
@@ -538,6 +550,7 @@ class MainActivity : AppCompatActivity() {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
             addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
             addView(tapRing, FrameLayout.LayoutParams(mp, mp))        // tap-feedback ring (over the frame, no touch)
+            addView(widgetBorder, FrameLayout.LayoutParams(mp, mp))   // widget selection border (over the frame, no touch)
             addView(chromeOverlay, FrameLayout.LayoutParams(mp, mp))  // native 2-col tab grid (stones hidden)
             addView(chatTabOverlay, FrameLayout.LayoutParams(mp, mp)) // enlarged native chat-tab row (top-left)
             addView(dialogueOverlay, FrameLayout.LayoutParams(mp, mp)) // UI-4: opaque NPC-dialogue parchment (above chat, below menus)
@@ -941,6 +954,21 @@ class MainActivity : AppCompatActivity() {
         if (fh <= 0 || vh <= 0) return viewY.toInt()
         return (viewY * fh / vh).toInt().coerceIn(0, fh - 1)
     }
+
+    /** Outline the just-tapped widget: unpack its packed canvas-px bounds (x<<48|y<<32|w<<16|h), map canvas→view
+     *  (the inverse of toGameX/Y), and spawn the border. Skipped if the frame size isn't known yet. */
+    private fun spawnWidgetBorder(packed: Long) {
+        val cx = ((packed shr 48) and 0xFFFF).toInt()
+        val cy = ((packed shr 32) and 0xFFFF).toInt()
+        val cw = ((packed shr 16) and 0xFFFF).toInt()
+        val ch = (packed and 0xFFFF).toInt()
+        if (cw <= 0 || ch <= 0) return
+        val fw = JvmLauncher.frameWidth(); val fh = JvmLauncher.frameHeight()
+        val vw = surfaceView.width; val vh = surfaceView.height
+        if (fw <= 0 || fh <= 0 || vw <= 0 || vh <= 0) return
+        val sx = vw.toFloat() / fw; val sy = vh.toFloat() / fh
+        widgetBorder.spawn(cx * sx, cy * sy, (cx + cw) * sx, (cy + ch) * sy)
+    }
     private fun scaleX(px: Float): Int {
         val fw = JvmLauncher.frameWidth(); val vw = surfaceView.width
         return if (fw <= 0 || vw <= 0) px.toInt() else (px * fw / vw).toInt()
@@ -1020,8 +1048,11 @@ class MainActivity : AppCompatActivity() {
                 Log.i(TAG, "ap0: minimap/orb tap ($gx,$gy) -> click without walk-ring")
                 return true
             }
-            // Arm the click ring BEFORE posting the click so the baseline seq can't race the engine's bump.
+            // Arm the tap feedback BEFORE posting the click so the baseline seqs can't race the engine's bump.
+            // The kind seq resolves WHAT the tap hit (walk/scene = ring, widget = border, nothing = no feedback);
+            // interactTapSeq stays the haptic source.
             ringBaseSeq = JvmLauncher.interactTapSeq()
+            ringKindBaseSeq = JvmLauncher.tapKindSeq()
             ringX = e.x; ringY = e.y
             ringArmedAtMs = SystemClock.uptimeMillis()
             ringPending = true
@@ -1367,18 +1398,32 @@ class MainActivity : AppCompatActivity() {
                     Log.i(TAG, "a1: interactTapSeq -> $seq (haptic)")
                     vibrateTick()
                 }
-                // Phase-1 click ring: resolve the pending tap from engine truth. Seq advanced past the
-                // tap-time baseline → the engine consumed an interaction (red); RING_GRACE_MS with no
-                // advance → plain walk (yellow). The grace covers the settle pipeline (~80–160 ms).
+                // Phase-1 tap feedback, resolved from ENGINE TRUTH (tap-kind seq advanced past the tap-time
+                // baseline). Ring ONLY for a real scene tap — SCENE → red, WALK → yellow; a WIDGET op draws a
+                // selection border (no ring); a dead/cancel click shows nothing. So clicks that aren't "in the
+                // game" never paint a ring. The grace covers the settle pipeline (~80–160 ms); a tap that never
+                // resolves (rare — a force-opened menu) just clears with no feedback.
                 if (ringPending) {
-                    if (seq != ringBaseSeq) {
+                    val kseq = JvmLauncher.tapKindSeq()
+                    if (kseq != ringKindBaseSeq) {
                         ringPending = false
-                        Log.i(TAG, "p1: ring INTERACT (+${SystemClock.uptimeMillis() - ringArmedAtMs}ms)")
-                        tapRing.spawn(ringX, ringY, TapRingView.COLOR_INTERACT)
+                        when (JvmLauncher.lastTapKind()) {
+                            TAP_KIND_SCENE -> {
+                                Log.i(TAG, "p1: ring INTERACT (+${SystemClock.uptimeMillis() - ringArmedAtMs}ms)")
+                                tapRing.spawn(ringX, ringY, TapRingView.COLOR_INTERACT)
+                            }
+                            TAP_KIND_WALK -> {
+                                Log.i(TAG, "p1: ring WALK")
+                                tapRing.spawn(ringX, ringY, TapRingView.COLOR_WALK)
+                            }
+                            TAP_KIND_WIDGET -> {
+                                Log.i(TAG, "p1: widget border (no ring)")
+                                spawnWidgetBorder(JvmLauncher.lastWidgetBounds())
+                            }
+                            else -> Log.i(TAG, "p1: tap hit nothing -> no feedback")
+                        }
                     } else if (SystemClock.uptimeMillis() - ringArmedAtMs > RING_GRACE_MS) {
-                        ringPending = false
-                        Log.i(TAG, "p1: ring WALK")
-                        tapRing.spawn(ringX, ringY, TapRingView.COLOR_WALK)
+                        ringPending = false   // unresolved (e.g. the click force-opened a menu) — no stray ring
                     }
                 }
                 if (menuBuilding) {
