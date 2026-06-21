@@ -1061,14 +1061,16 @@ public final class JavaBridge
 		{
 			return;
 		}
-		Widget sw = w;
-		int spriteId = w.getSpriteId();
-		if (spriteId <= 0)
+		// Prefer the TOPMOST sprite child — the icon is drawn over any background. A prayer button's child 1
+		// is the symbol, child 0 the round active-highlight; tracing the topmost gives the symbol, not the
+		// ring. A simple sprite widget (tab / toggle) has no sprite child, so fall back to its own sprite.
+		Widget sw = topSpriteChild(w);
+		if (sw == null && w.getSpriteId() > 0)
 		{
-			sw = findSpriteChild(w);
-			spriteId = sw == null ? 0 : sw.getSpriteId();
+			sw = w;
 		}
-		if (sw == null || spriteId <= 0)
+		final int spriteId = sw == null ? 0 : sw.getSpriteId();
+		if (spriteId <= 0)
 		{
 			return;   // no sprite to trace (text / model widget) — graceful no-op
 		}
@@ -1083,16 +1085,17 @@ public final class JavaBridge
 			return;
 		}
 		ensureTapWidgetOverlay();
-		// Centre the silhouette in the widget cell (the icon is often smaller than its clickable widget).
+		// Centre the silhouette in the icon's cell (it can be a touch larger than the sprite).
 		final int x = b.x + (b.width - outline.getWidth()) / 2;
 		final int y = b.y + (b.height - outline.getHeight()) / 2;
 		TapWidgetOutlineOverlay.arm(outline, x, y, until);
 	}
 
-	/** First child (any child list) carrying a sprite — for a clickable widget that's a hitbox over its icon. */
-	private static Widget findSpriteChild(Widget w)
+	/** The TOPMOST child (last drawn, across child lists) carrying a sprite — the icon over any background. */
+	private static Widget topSpriteChild(Widget w)
 	{
-		final Widget[][] groups = {w.getDynamicChildren(), w.getStaticChildren(), w.getNestedChildren()};
+		Widget top = null;
+		final Widget[][] groups = {w.getChildren(), w.getDynamicChildren(), w.getStaticChildren(), w.getNestedChildren()};
 		for (final Widget[] kids : groups)
 		{
 			if (kids == null)
@@ -1103,11 +1106,11 @@ public final class JavaBridge
 			{
 				if (k != null && k.getSpriteId() > 0)
 				{
-					return k;
+					top = k;
 				}
 			}
 		}
-		return null;
+		return top;
 	}
 
 	/** The cyan silhouette of sprite {@code spriteId} (cached) — {@code SpritePixels.toBufferedOutline}. */
