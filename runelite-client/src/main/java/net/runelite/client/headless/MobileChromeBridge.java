@@ -145,7 +145,13 @@ public final class MobileChromeBridge
 		final boolean loggedIn = state == GameState.LOGGED_IN;
 		if (!loggedIn)
 		{
-			snapshotJson = "{\"enabled\":true,\"loggedIn\":false}";
+			// FIX-9: while the auto-reconnect machine is recovering an in-session drop, flag it so the native shell
+			// can show a "Reconnecting…" overlay over the engine's brief transient login screens. The default
+			// (non-reconnect) string is byte-for-byte unchanged, so a normal login screen / deliberate logout is
+			// indistinguishable downstream — only an active reconnect adds the field.
+			snapshotJson = HeadlessLogin.isReconnecting()
+				? "{\"enabled\":true,\"loggedIn\":false,\"reconnecting\":true}"
+				: "{\"enabled\":true,\"loggedIn\":false}";
 			return;
 		}
 

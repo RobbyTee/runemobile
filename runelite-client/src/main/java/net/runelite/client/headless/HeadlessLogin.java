@@ -205,6 +205,20 @@ public final class HeadlessLogin
 	}
 
 	/**
+	 * FIX-9: true while the auto-reconnect machine is actively recovering an in-session network drop
+	 * (CONNECTION_LOST -&gt; "Try again" -&gt; Play Now -&gt; LOGGED_IN). The native shell reads this through the
+	 * {@link MobileChromeBridge} snapshot to show a "Reconnecting…" overlay over the engine's brief transient
+	 * login screens. It goes true the moment a real disconnect is observed and clears on a successful relogin
+	 * <em>or</em> once the capped retry budget is exhausted ({@code done} is re-set on give-up), so the overlay
+	 * never sticks on a hard failure. A fresh initial login (no prior drop) reports false. Package-private — read
+	 * only by the sibling headless bridges in this package, so it is not part of the cross-platform contract.
+	 */
+	static boolean isReconnecting()
+	{
+		return (sawConnectionLost && reconnectAttempts < MAX_RECONNECT) || (reconnectAttempts > 0 && !done);
+	}
+
+	/**
 	 * Called once per {@code Hooks.draw} (only when enabled). Drives the login as a two-stage machine: while
 	 * the EULA dialog is up (stage 1, optional) it synthesizes an Accept click; once the gamepack reaches the
 	 * authenticated welcome screen (stage 2) it synthesizes a Play Now click. Each stage re-arms until the

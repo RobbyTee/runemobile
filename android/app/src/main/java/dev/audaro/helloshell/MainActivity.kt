@@ -147,6 +147,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var chatTabOverlay: ChatPillView
     // UI-4: opaque NPC-dialogue parchment over the (transparent) engine dialogue.
     private lateinit var dialogueOverlay: DialogueView
+    // FIX-9: a native "Reconnecting…" scrim shown while the headless auto-reconnect recovers a dropped session.
+    private lateinit var reconnectOverlay: ReconnectingOverlayView
+    // DEBUG-only force for the reconnect overlay (real network drops are hard to repro over Wi-Fi adb). null =
+    // follow the live snapshot; true/false = force shown/hidden. Driven by the SET_RECONNECT_OVERLAY broadcast.
+    @Volatile private var reconnectTestOverride: Boolean? = null
     // Phase-4: native-tracked chat collapse state (the shared side shoves the live widget off-canvas; this
     // mirrors what we last asked for — the engine never collapses on its own).
     private var chatCollapsed = false
@@ -218,6 +223,12 @@ class MainActivity : AppCompatActivity() {
     //   adb shell am broadcast -a dev.audaro.helloshell.SET_HD_CONFIG --es preset base  (100/16/30, RLHD defaults)
     //   adb shell am broadcast -a dev.audaro.helloshell.SET_HD_CONFIG --es key drawDistance --es value 20
     private var hdConfigReceiver: BroadcastReceiver? = null
+    // FIX-9: debug-only force for the "Reconnecting…" overlay (a real in-session drop is hard to repro over
+    // Wi-Fi adb, which a network toggle also kills) — lets a screencap verify the scrim renders.
+    //   adb shell am broadcast -a dev.audaro.helloshell.SET_RECONNECT_OVERLAY --es show on     (force shown)
+    //   adb shell am broadcast -a dev.audaro.helloshell.SET_RECONNECT_OVERLAY --es show off    (force hidden)
+    //   adb shell am broadcast -a dev.audaro.helloshell.SET_RECONNECT_OVERLAY --es show clear  (follow live state)
+    private var reconnectTestReceiver: BroadcastReceiver? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -243,6 +254,20 @@ class MainActivity : AppCompatActivity() {
             }
             ContextCompat.registerReceiver(
                 this, hdConfigReceiver, IntentFilter("dev.audaro.helloshell.SET_HD_CONFIG"),
+                ContextCompat.RECEIVER_EXPORTED,
+            )
+            reconnectTestReceiver = object : BroadcastReceiver() {
+                override fun onReceive(ctx: Context?, intent: Intent?) {
+                    reconnectTestOverride = when (intent?.getStringExtra("show")) {
+                        "on" -> true
+                        "off" -> false
+                        else -> null   // "clear" / anything else -> follow the live snapshot
+                    }
+                    Log.i(TAG, "SET_RECONNECT_OVERLAY override=$reconnectTestOverride")
+                }
+            }
+            ContextCompat.registerReceiver(
+                this, reconnectTestReceiver, IntentFilter("dev.audaro.helloshell.SET_RECONNECT_OVERLAY"),
                 ContextCompat.RECEIVER_EXPORTED,
             )
         }
@@ -321,6 +346,8 @@ class MainActivity : AppCompatActivity() {
             else JvmLauncher.onBridgeTouch { JvmLauncher.text(" ") }
         }
         dialogueOverlay.onOption = { digit -> JvmLauncher.onBridgeTouch { JvmLauncher.text(digit.toString()) } }
+        // FIX-9: the "Reconnecting…" scrim (non-interactive; driven from updateChrome's snapshot).
+        reconnectOverlay = ReconnectingOverlayView(this)
         // A4 plugin UI: a full-screen Compose panel (GONE until opened) + a small launcher button. The panel
         // is a data screen (Compose); the live game overlays above stay classic Views (hybrid, §4.2).
         // §4 increment 3: the launcher is a transparent-host PEEK/EXPAND sheet. Material Buttons (the handle +
@@ -452,6 +479,7 @@ class MainActivity : AppCompatActivity() {
             addView(dialogueOverlay, FrameLayout.LayoutParams(mp, mp)) // UI-4: opaque NPC-dialogue parchment (above chat, below menus)
             addView(keyboardView, FrameLayout.LayoutParams(1, 1))
             addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame + chrome
+            addView(reconnectOverlay, FrameLayout.LayoutParams(mp, mp)) // FIX-9: "Reconnecting…" scrim (non-interactive)
             // §4: the launcher handle sits above the game/chrome (tappable) but below the launcher sheet
             // (covered while it's open) and clears the bottom gesture inset.
             addView(launcherHandle, FrameLayout.LayoutParams(
@@ -1262,6 +1290,16 @@ class MainActivity : AppCompatActivity() {
         val json = JvmLauncher.chromeSnapshotPub()
         val o = try { JSONObject(json) } catch (e: Exception) { null }
         val loggedIn = o?.optBoolean("loggedIn") == true
+        // FIX-9: show the native "Reconnecting…" scrim while the headless auto-reconnect recovers a dropped
+        // session (the snapshot only carries the flag during an active reconnect — a normal login screen or a
+        // deliberate logout omits it). The DEBUG override forces it for screencap verification.
+        if (::reconnectOverlay.isInitialized) {
+            val live = !loggedIn && o?.optBoolean("reconnecting") == true
+            val show = reconnectTestOverride ?: live
+            if (reconnectOverlay.setReconnecting(show)) {
+                Log.i(TAG, "fix9: reconnect overlay -> $show")
+            }
+        }
         val topLevel = o?.optInt("topLevelId", -1) ?: -1
         val active = o?.optInt("activeTab", -1) ?: -1
         val supported = loggedIn && topLevel == 164      // Classic/PRE_EOC: the native grid's tabs map to real stones
@@ -1743,6 +1781,7 @@ class MainActivity : AppCompatActivity() {
         frameCallback = null
         drainRun = false   // stop the AP-2a notification/link drain daemon
         hdConfigReceiver?.let { runCatching { unregisterReceiver(it) } }; hdConfigReceiver = null
+        reconnectTestReceiver?.let { runCatching { unregisterReceiver(it) } }; reconnectTestReceiver = null
         super.onDestroy()
     }
 
