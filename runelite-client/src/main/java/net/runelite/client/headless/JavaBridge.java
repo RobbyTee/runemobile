@@ -925,10 +925,10 @@ public final class JavaBridge
 			interactTapSeq++;   // the click DID interact -> haptic (+ iOS red ring), meaning unchanged
 			if (entry.getWidget() != null)
 			{
-				// An interface op (inventory item / prayer / spell / tab / …): no ring. An item op also gets a
-				// tight cyan silhouette (the engine's own item outline); the kind still suppresses the ring.
+				// An interface op (inventory item / prayer / spell / tab / …): no ring, plus a tight cyan
+				// silhouette — the item outline for an item, the icon-sprite trace for any other widget.
 				publishTapKind(TAP_KIND_WIDGET, entry);
-				armItemOutline(entry);
+				armWidgetOutline(entry);
 			}
 			else
 			{
@@ -1003,15 +1003,19 @@ public final class JavaBridge
 		return best;
 	}
 
-	// Lazily-registered overlay that flashes the engine's item silhouette on the just-tapped item.
+	// Lazily-registered overlays that flash a silhouette on the just-tapped item / sprite widget.
 	private static volatile boolean tapItemOverlayAdded;
+	private static volatile boolean tapWidgetOverlayAdded;
+	// Sprite-outline cache (keyed by sprite id; the colour is fixed) — the trace never changes.
+	private static final java.util.Map<Integer, java.awt.image.BufferedImage> spriteOutlines =
+		new java.util.concurrent.ConcurrentHashMap<>();
 
 	/**
-	 * Flash the engine's tight item silhouette on the tapped item (inventory / bank / equipment). The op's
-	 * widget is the CONTAINER, so resolve the slot child ({@code param0}); only an item (itemId >= 0) has a
-	 * sprite to trace — a prayer / spell / tab widget op falls through with no outline.
+	 * Flash a tight cyan silhouette on the tapped interface widget. An item op (inventory / bank / equipment)
+	 * gets the engine's ITEM outline (the op's widget is the container, so resolve the slot child {@code
+	 * param0}). Any other icon-bearing widget — prayer / spell / tab / toggle — gets its SPRITE traced instead.
 	 */
-	private static void armItemOutline(MenuEntry entry)
+	private static void armWidgetOutline(MenuEntry entry)
 	{
 		try
 		{
@@ -1020,6 +1024,9 @@ public final class JavaBridge
 			{
 				return;
 			}
+			final long until = System.currentTimeMillis() + SEL_FLASH_MS;
+
+			// Item op: outline the actual item slot.
 			Widget itemW = w;
 			final int slot = entry.getParam0();
 			if (w.getItemId() < 0 && slot >= 0)
@@ -1030,16 +1037,105 @@ public final class JavaBridge
 					itemW = child;
 				}
 			}
-			if (itemW == null || itemW.getItemId() < 0)
+			if (itemW != null && itemW.getItemId() >= 0)
 			{
-				return;   // not an item op — nothing to trace
+				ensureTapItemOverlay();
+				TapItemOutlineOverlay.arm(itemW, until);
+				return;
 			}
-			ensureTapItemOverlay();
-			TapItemOutlineOverlay.arm(itemW, System.currentTimeMillis() + SEL_FLASH_MS);
+
+			// Sprite widget (prayer / spell / tab / …): trace the icon sprite.
+			armSpriteOutline(w, until);
 		}
 		catch (RuntimeException ex)
 		{
-			BridgeFaults.note("JavaBridge.armItemOutline", ex);
+			BridgeFaults.note("JavaBridge.armWidgetOutline", ex);
+		}
+	}
+
+	/** Trace the tapped widget's icon sprite (or a sprite-bearing child) and arm the sprite-outline overlay. */
+	private static void armSpriteOutline(Widget w, long until)
+	{
+		final Client c = client;
+		if (c == null)
+		{
+			return;
+		}
+		Widget sw = w;
+		int spriteId = w.getSpriteId();
+		if (spriteId <= 0)
+		{
+			sw = findSpriteChild(w);
+			spriteId = sw == null ? 0 : sw.getSpriteId();
+		}
+		if (sw == null || spriteId <= 0)
+		{
+			return;   // no sprite to trace (text / model widget) — graceful no-op
+		}
+		final java.awt.Rectangle b = sw.getBounds();
+		if (b == null || b.width <= 0 || b.height <= 0)
+		{
+			return;
+		}
+		final java.awt.image.BufferedImage outline = spriteOutline(c, spriteId);
+		if (outline == null)
+		{
+			return;
+		}
+		ensureTapWidgetOverlay();
+		// Centre the silhouette in the widget cell (the icon is often smaller than its clickable widget).
+		final int x = b.x + (b.width - outline.getWidth()) / 2;
+		final int y = b.y + (b.height - outline.getHeight()) / 2;
+		TapWidgetOutlineOverlay.arm(outline, x, y, until);
+	}
+
+	/** First child (any child list) carrying a sprite — for a clickable widget that's a hitbox over its icon. */
+	private static Widget findSpriteChild(Widget w)
+	{
+		final Widget[][] groups = {w.getDynamicChildren(), w.getStaticChildren(), w.getNestedChildren()};
+		for (final Widget[] kids : groups)
+		{
+			if (kids == null)
+			{
+				continue;
+			}
+			for (final Widget k : kids)
+			{
+				if (k != null && k.getSpriteId() > 0)
+				{
+					return k;
+				}
+			}
+		}
+		return null;
+	}
+
+	/** The cyan silhouette of sprite {@code spriteId} (cached) — {@code SpritePixels.toBufferedOutline}. */
+	private static java.awt.image.BufferedImage spriteOutline(Client c, int spriteId)
+	{
+		final java.awt.image.BufferedImage cached = spriteOutlines.get(spriteId);
+		if (cached != null)
+		{
+			return cached;
+		}
+		try
+		{
+			final net.runelite.api.SpritePixels[] sp = c.getSprites(c.getIndexSprites(), spriteId, 0);
+			if (sp == null || sp.length == 0 || sp[0] == null)
+			{
+				return null;
+			}
+			final java.awt.image.BufferedImage out = sp[0].toBufferedOutline(SEL_OUTLINE);
+			if (out != null)
+			{
+				spriteOutlines.put(spriteId, out);
+			}
+			return out;
+		}
+		catch (RuntimeException ex)
+		{
+			BridgeFaults.note("JavaBridge.spriteOutline", ex);
+			return null;
 		}
 	}
 
@@ -1064,6 +1160,30 @@ public final class JavaBridge
 		catch (RuntimeException ex)
 		{
 			BridgeFaults.note("JavaBridge.ensureTapItemOverlay", ex);
+		}
+	}
+
+	/** Register the sprite-widget-outline overlay with the OverlayManager once (lazily). */
+	private static void ensureTapWidgetOverlay()
+	{
+		if (tapWidgetOverlayAdded)
+		{
+			return;
+		}
+		try
+		{
+			final Injector inj = RuneLite.getInjector();
+			if (inj == null)
+			{
+				return;
+			}
+			inj.getInstance(net.runelite.client.ui.overlay.OverlayManager.class)
+				.add(inj.getInstance(TapWidgetOutlineOverlay.class));
+			tapWidgetOverlayAdded = true;
+		}
+		catch (RuntimeException ex)
+		{
+			BridgeFaults.note("JavaBridge.ensureTapWidgetOverlay", ex);
 		}
 	}
 
