@@ -131,9 +131,6 @@ class MainActivity : AppCompatActivity() {
     // misclassify (the iOS lesson). On tap we snapshot interactTapSeq; the Choreographer poll then resolves:
     // seq advanced within the grace window → red (interaction), grace expired → yellow (walk).
     private lateinit var tapRing: TapRingView
-    // Selection border for interface ops: tapping an item / prayer / spell / tab outlines that widget (engine
-    // truth) instead of spawning a world ring — see the tap-kind poll in startInputPolling.
-    private lateinit var widgetBorder: WidgetBorderView
     private var ringPending = false
     private var ringX = 0f; private var ringY = 0f
     private var ringArmedAtMs = 0L
@@ -336,7 +333,6 @@ class MainActivity : AppCompatActivity() {
         keyboardView = GameInputView(this)
         menuOverlay = MenuOverlayView(this)
         tapRing = TapRingView(this)
-        widgetBorder = WidgetBorderView(this)
         // A6 native chrome: the OSRS-mobile 2-col tab grid at the bottom-right. The engine's own 14 tab stones
         // are HIDDEN (HudVeneerBridge.setStonesHidden, driven from updateChrome) so these native cells ARE the
         // tabs; a tap opens the tab by replaying the engine stone's op script (openTab) — works while hidden, so
@@ -550,7 +546,6 @@ class MainActivity : AppCompatActivity() {
             val mp = FrameLayout.LayoutParams.MATCH_PARENT
             addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
             addView(tapRing, FrameLayout.LayoutParams(mp, mp))        // tap-feedback ring (over the frame, no touch)
-            addView(widgetBorder, FrameLayout.LayoutParams(mp, mp))   // widget selection border (over the frame, no touch)
             addView(chromeOverlay, FrameLayout.LayoutParams(mp, mp))  // native 2-col tab grid (stones hidden)
             addView(chatTabOverlay, FrameLayout.LayoutParams(mp, mp)) // enlarged native chat-tab row (top-left)
             addView(dialogueOverlay, FrameLayout.LayoutParams(mp, mp)) // UI-4: opaque NPC-dialogue parchment (above chat, below menus)
@@ -955,20 +950,6 @@ class MainActivity : AppCompatActivity() {
         return (viewY * fh / vh).toInt().coerceIn(0, fh - 1)
     }
 
-    /** Outline the just-tapped widget: unpack its packed canvas-px bounds (x<<48|y<<32|w<<16|h), map canvas→view
-     *  (the inverse of toGameX/Y), and spawn the border. Skipped if the frame size isn't known yet. */
-    private fun spawnWidgetBorder(packed: Long) {
-        val cx = ((packed shr 48) and 0xFFFF).toInt()
-        val cy = ((packed shr 32) and 0xFFFF).toInt()
-        val cw = ((packed shr 16) and 0xFFFF).toInt()
-        val ch = (packed and 0xFFFF).toInt()
-        if (cw <= 0 || ch <= 0) return
-        val fw = JvmLauncher.frameWidth(); val fh = JvmLauncher.frameHeight()
-        val vw = surfaceView.width; val vh = surfaceView.height
-        if (fw <= 0 || fh <= 0 || vw <= 0 || vh <= 0) return
-        val sx = vw.toFloat() / fw; val sy = vh.toFloat() / fh
-        widgetBorder.spawn(cx * sx, cy * sy, (cx + cw) * sx, (cy + ch) * sy)
-    }
     private fun scaleX(px: Float): Int {
         val fw = JvmLauncher.frameWidth(); val vw = surfaceView.width
         return if (fw <= 0 || vw <= 0) px.toInt() else (px * fw / vw).toInt()
@@ -1416,10 +1397,9 @@ class MainActivity : AppCompatActivity() {
                                 Log.i(TAG, "p1: ring WALK")
                                 tapRing.spawn(ringX, ringY, TapRingView.COLOR_WALK)
                             }
-                            TAP_KIND_WIDGET -> {
-                                Log.i(TAG, "p1: widget border (no ring)")
-                                spawnWidgetBorder(JvmLauncher.lastWidgetBounds())
-                            }
+                            // An interface op: no ring. An item op is outlined by the engine itself (the cyan
+                            // item silhouette, armed in JavaBridge) — nothing for the shell to draw.
+                            TAP_KIND_WIDGET -> Log.i(TAG, "p1: widget op -> no ring (engine outlines items)")
                             else -> Log.i(TAG, "p1: tap hit nothing -> no feedback")
                         }
                     } else if (SystemClock.uptimeMillis() - ringArmedAtMs > RING_GRACE_MS) {

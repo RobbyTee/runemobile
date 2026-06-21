@@ -925,8 +925,10 @@ public final class JavaBridge
 			interactTapSeq++;   // the click DID interact -> haptic (+ iOS red ring), meaning unchanged
 			if (entry.getWidget() != null)
 			{
-				// An interface op (inventory item / prayer / spell / tab / …): no ring, a selection border.
+				// An interface op (inventory item / prayer / spell / tab / …): no ring. An item op also gets a
+				// tight cyan silhouette (the engine's own item outline); the kind still suppresses the ring.
 				publishTapKind(TAP_KIND_WIDGET, entry);
+				armItemOutline(entry);
 			}
 			else
 			{
@@ -999,6 +1001,70 @@ public final class JavaBridge
 			BridgeFaults.note("JavaBridge.tightWidgetBounds", ex);
 		}
 		return best;
+	}
+
+	// Lazily-registered overlay that flashes the engine's item silhouette on the just-tapped item.
+	private static volatile boolean tapItemOverlayAdded;
+
+	/**
+	 * Flash the engine's tight item silhouette on the tapped item (inventory / bank / equipment). The op's
+	 * widget is the CONTAINER, so resolve the slot child ({@code param0}); only an item (itemId >= 0) has a
+	 * sprite to trace — a prayer / spell / tab widget op falls through with no outline.
+	 */
+	private static void armItemOutline(MenuEntry entry)
+	{
+		try
+		{
+			final Widget w = entry == null ? null : entry.getWidget();
+			if (w == null)
+			{
+				return;
+			}
+			Widget itemW = w;
+			final int slot = entry.getParam0();
+			if (w.getItemId() < 0 && slot >= 0)
+			{
+				final Widget child = w.getChild(slot);
+				if (child != null)
+				{
+					itemW = child;
+				}
+			}
+			if (itemW == null || itemW.getItemId() < 0)
+			{
+				return;   // not an item op — nothing to trace
+			}
+			ensureTapItemOverlay();
+			TapItemOutlineOverlay.arm(itemW, System.currentTimeMillis() + SEL_FLASH_MS);
+		}
+		catch (RuntimeException ex)
+		{
+			BridgeFaults.note("JavaBridge.armItemOutline", ex);
+		}
+	}
+
+	/** Register the item-outline overlay with the OverlayManager once (lazily — the injector isn't up early). */
+	private static void ensureTapItemOverlay()
+	{
+		if (tapItemOverlayAdded)
+		{
+			return;
+		}
+		try
+		{
+			final Injector inj = RuneLite.getInjector();
+			if (inj == null)
+			{
+				return;
+			}
+			inj.getInstance(net.runelite.client.ui.overlay.OverlayManager.class)
+				.add(inj.getInstance(TapItemOutlineOverlay.class));
+			tapItemOverlayAdded = true;
+		}
+		catch (RuntimeException ex)
+		{
+			BridgeFaults.note("JavaBridge.ensureTapItemOverlay", ex);
+		}
 	}
 
 	/** Native: bumps once per resolved left tap (pair with {@link #getLastTapKind}). */
