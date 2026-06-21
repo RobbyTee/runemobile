@@ -970,12 +970,13 @@ class MainActivity : AppCompatActivity() {
         override fun onSingleTapUp(e: MotionEvent): Boolean {
             val gx = toGameX(e.x); val gy = toGameY(e.y)
             Log.i(TAG, "tap screen=(${e.x},${e.y}) view=(${surfaceView.width}x${surfaceView.height}) frame=(${JvmLauncher.frameWidth()}x${JvmLauncher.frameHeight()}) -> game=($gx,$gy)")
-            // Phase-5: taps inside the open world-map window are PRECISE clicks — the engine resolves the
-            // close X / zoom buttons / POI rows directly, the walk/interact ring stays suppressed, and a tap
-            // on the search field raises the IME manually (the map search never flips INPUT_TYPE).
-            if (mapOpen && (inCanvasRect(mapRectCanvas, gx, gy) || inCanvasRect(mapCloseCanvas, gx, gy)
-                    || inCanvasRect(mapSearchCanvas, gx, gy) || inCanvasRect(mapZoomInCanvas, gx, gy)
-                    || inCanvasRect(mapZoomOutCanvas, gx, gy))) {
+            // Phase-5: while the world map is open it owns the ENTIRE screen (stretched fullscreen). EVERY tap is
+            // a PRECISE engine click — the engine resolves the close X / zoom / search / POI / legend row directly,
+            // and the world walk/interact ring stays suppressed. Crucially this also SWALLOWS taps on the map
+            // chrome / borders / empty map area: without it those fell through to the world click below, leaking a
+            // walk/interact into the live scene behind the map. A search-field tap also raises the IME manually
+            // (the map search never flips INPUT_TYPE).
+            if (mapOpen) {
                 if (inCanvasRect(mapSearchCanvas, gx, gy)) {
                     mapSearchKeyboard = true
                     Log.i(TAG, "p5: map search tap -> raise IME")
@@ -1015,6 +1016,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onLongPress(e: MotionEvent) {
+            // The map owns the whole screen while open — no right-click menu peek into the scene behind it.
+            if (mapOpen) return
             beginMenuPeek(e.x, e.y)
         }
 
@@ -1123,6 +1126,11 @@ class MainActivity : AppCompatActivity() {
                     chatScrollAccum -= whole
                     JvmLauncher.onBridgeTouch { JvmLauncher.scrollChat(-whole) }
                 }
+                return true
+            }
+            // While the map is open it owns the whole screen — a drag that isn't pan/scroll (handled above) must
+            // NOT rotate the world camera behind the map. Swallow it.
+            if (mapOpen) {
                 return true
             }
             // GestureDetector.onScroll distanceX/Y = old - new, which already equals what iOS sends the bridge
