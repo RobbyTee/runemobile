@@ -152,6 +152,36 @@ public final class HudVeneerBridge
 	private static volatile String orbSnapshotJson = "{\"loggedIn\":false}";
 	private static volatile int chatLinesSeq;
 
+	// Content-derived publish seqs: each bumps only when its snapshot JSON actually changes, so the native
+	// republish loop can skip the per-frame String copy when nothing changed (the menu-peek gate pattern). Because
+	// the seq is derived from the bytes, an unchanged seq guarantees byte-identical JSON — so the native side can
+	// never render a stale veneer (the GLM "seq must bump on every invalidation" caveat is satisfied by
+	// construction). ALWAYS publish through the publishX helpers so every assignment updates the seq.
+	private static volatile long chatSnapshotSeq;
+	private static volatile long orbSnapshotSeq;
+	private static volatile long dialogueSeq;
+	private static volatile long mapSnapshotSeq;
+
+	private static void publishChatSnapshot(String json)
+	{
+		if (!json.equals(chatSnapshotJson)) { chatSnapshotJson = json; chatSnapshotSeq++; }   // JSON before seq
+	}
+
+	private static void publishOrbSnapshot(String json)
+	{
+		if (!json.equals(orbSnapshotJson)) { orbSnapshotJson = json; orbSnapshotSeq++; }
+	}
+
+	private static void publishDialogueJson(String json)
+	{
+		if (!json.equals(dialogueJson)) { dialogueJson = json; dialogueSeq++; }
+	}
+
+	private static void publishMapSnapshot(String json)
+	{
+		if (!json.equals(mapSnapshotJson)) { mapSnapshotJson = json; mapSnapshotSeq++; }
+	}
+
 	// Native chat-tab SWITCH: which tab (0..7 index into CHAT_TAB_IDS) the native veneer asked to open. The engine
 	// tab sprites are hidden (so they don't peek under the native row), which makes them unclickable — so switching
 	// REPLAYS the tab's op-script instead of clicking, the same way the bottom tab-grid drives the hidden stones.
@@ -287,6 +317,12 @@ public final class HudVeneerBridge
 		return chatSnapshotJson;
 	}
 
+	/** Monotonic counter bumped once per CHANGED chat-tab snapshot — native skips the copy when it is unchanged. */
+	public static long getChatSnapshotSeq()
+	{
+		return chatSnapshotSeq;
+	}
+
 	/** Native: the live per-orb canvas bounds for the minimap-orb touch veneer — {@code {"loggedIn":true,
 	 *  "hp":{"x":,"y":,"w":,"h":},"prayer":{..},"run":{..},"spec":{..},"store":{..},"worldmap":{..},"wiki":{..}}}
 	 *  (an orb key is absent when that orb is hidden — e.g. spec with no spec weapon). Read lock-free on the JNI
@@ -295,6 +331,12 @@ public final class HudVeneerBridge
 	public static String getOrbSnapshot()
 	{
 		return orbSnapshotJson;
+	}
+
+	/** Monotonic counter bumped once per CHANGED orb snapshot — native skips the copy when it is unchanged. */
+	public static long getOrbSnapshotSeq()
+	{
+		return orbSnapshotSeq;
 	}
 
 	/** Native: the live chat MESSAGE lines (escaped JSON) for the active tab, with pre-parsed colour runs, for the
@@ -314,6 +356,12 @@ public final class HudVeneerBridge
 	public static String getDialogueJson()
 	{
 		return dialogueJson;
+	}
+
+	/** Monotonic counter bumped once per CHANGED dialogue snapshot — native skips the copy when it is unchanged. */
+	public static long getDialogueSeq()
+	{
+		return dialogueSeq;
 	}
 
 	/** Native: scroll the chat by {@code deltaCanvasPx} (positive = toward newer/bottom). Accumulated and applied
@@ -635,7 +683,7 @@ public final class HudVeneerBridge
 				}
 				else
 				{
-					dialogueJson = "{}";
+					publishDialogueJson("{}");
 				}
 				// Apply any finger-scroll requested from native (client thread — runScript is legal here).
 				final int scrollDelta = pendingChatScroll.getAndSet(0);
@@ -765,6 +813,12 @@ public final class HudVeneerBridge
 	public static String getMapSnapshot()
 	{
 		return mapSnapshotJson;
+	}
+
+	/** Monotonic counter bumped once per CHANGED world-map snapshot — native skips the copy when it is unchanged. */
+	public static long getMapSnapshotSeq()
+	{
+		return mapSnapshotSeq;
 	}
 
 	private static boolean lastWindowOccludedLogged;
@@ -902,7 +956,7 @@ public final class HudVeneerBridge
 			mapPanDy.set(0);
 			mapScrollDelta.set(0);
 			mapPanRemX = mapPanRemY = 0;
-			mapSnapshotJson = "{\"open\":false}";
+			publishMapSnapshot("{\"open\":false}");
 			return;
 		}
 		mapWasOpen = true;
@@ -974,7 +1028,7 @@ public final class HudVeneerBridge
 		appendRect(c, sb, "key", InterfaceID.Worldmap.KEY_CONTAINER, -1);          // swipe-scroll target
 		appendRect(c, sb, "maplist", InterfaceID.Worldmap.MAPLIST_CONTAINER, -1);  // surface dropdown (when open)
 		sb.append('}');
-		mapSnapshotJson = sb.toString();
+		publishMapSnapshot(sb.toString());
 	}
 
 	/** Park a relocated toplevel container far below the canvas (kept alive, not hidden — no teardown). */
@@ -1524,7 +1578,7 @@ public final class HudVeneerBridge
 				appendTab(c, sb, CHAT_TAB_IDS[i], CHAT_TAB_NAMES[i], i != 0 && i != last);
 			}
 			sb.append("]}");
-			chatSnapshotJson = sb.toString();
+			publishChatSnapshot(sb.toString());
 		}
 		catch (RuntimeException ignore)
 		{
@@ -1590,7 +1644,7 @@ public final class HudVeneerBridge
 			appendOrb(sb, c, "worldmap", InterfaceID.Orbs.ORB_WORLDMAP);
 			appendOrb(sb, c, "wiki", InterfaceID.Orbs.WIKI);
 			sb.append('}');
-			orbSnapshotJson = sb.toString();
+			publishOrbSnapshot(sb.toString());
 		}
 		catch (RuntimeException ex)
 		{
@@ -2203,12 +2257,12 @@ public final class HudVeneerBridge
 	{
 		try
 		{
-			dialogueJson = computeDialogueJson(c);
+			publishDialogueJson(computeDialogueJson(c));
 		}
 		catch (RuntimeException e)
 		{
 			BridgeFaults.note("HudVeneerBridge.buildDialogueJson", e);
-			dialogueJson = "{}";
+			publishDialogueJson("{}");
 		}
 	}
 

@@ -97,6 +97,21 @@ public final class MobileChromeBridge
 	// Latest read-only snapshot (escaped JSON); published on the client thread, read on the native thread.
 	private static volatile String snapshotJson = "{\"enabled\":false}";
 
+	// Content-derived publish seq: bumped only when the snapshot JSON actually changes, so the native republish
+	// loop can skip the per-frame String copy on an unchanged frame (the menu-peek gate pattern). Because the seq
+	// is derived from the bytes, an unchanged seq guarantees byte-identical JSON — the native side can never show
+	// a stale snapshot. ALWAYS publish through {@link #publishSnapshot} so every assignment updates the seq.
+	private static volatile long snapshotSeq;
+
+	private static void publishSnapshot(String json)
+	{
+		if (!json.equals(snapshotJson))
+		{
+			snapshotJson = json;   // store the JSON BEFORE the seq so a native reader that sees the new seq sees it
+			snapshotSeq++;
+		}
+	}
+
 	// One-shot readability verdict accumulator (desktop de-risk). Tracks the BEST any frame achieved, since
 	// some widgets are not built on the very first LOGGED_IN frame.
 	private static final int VERDICT_FRAME = 60;   // ~1.2s of LOGGED_IN frames at ~50 fps
@@ -149,9 +164,9 @@ public final class MobileChromeBridge
 			// can show a "Reconnecting…" overlay over the engine's brief transient login screens. The default
 			// (non-reconnect) string is byte-for-byte unchanged, so a normal login screen / deliberate logout is
 			// indistinguishable downstream — only an active reconnect adds the field.
-			snapshotJson = HeadlessLogin.isReconnecting()
+			publishSnapshot(HeadlessLogin.isReconnecting()
 				? "{\"enabled\":true,\"loggedIn\":false,\"reconnecting\":true}"
-				: "{\"enabled\":true,\"loggedIn\":false}";
+				: "{\"enabled\":true,\"loggedIn\":false}");
 			return;
 		}
 
@@ -237,7 +252,7 @@ public final class MobileChromeBridge
 		}
 		sb.append("]}");
 
-		snapshotJson = sb.toString();
+		publishSnapshot(sb.toString());
 
 		// ---- readability accumulator + one-shot verdict ----
 		loggedInFrames++;
@@ -295,6 +310,12 @@ public final class MobileChromeBridge
 	public static String getSnapshot()
 	{
 		return snapshotJson;
+	}
+
+	/** Monotonic counter bumped once per CHANGED snapshot — native skips the per-frame copy when it is unchanged. */
+	public static long getSnapshotSeq()
+	{
+		return snapshotSeq;
 	}
 
 	// ---- internals -------------------------------------------------------------------------------------

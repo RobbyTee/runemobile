@@ -158,6 +158,7 @@ static DataPanel g_timePanel;   // TimeTrackingBridge — farming/contract/bird-
 // behind a release/acquire latch. Single method (getSnapshot) — populated only under -Drunelite.mobilechrome.
 static jclass    g_chromeCls = nullptr;
 static jmethodID g_midChromeSnap = nullptr;
+static jmethodID g_midChromeSnapSeq = nullptr;   // Phase 3 (optional): content-diff publish seq for the gate below
 static std::atomic<bool> g_chromeReady{false};
 // A6 chrome write surface: HudVeneerBridge — hides the 14 engine tab stones (the native 2-col grid replaces
 // them), opens a tab by replaying its stone op-script (works while hidden), and relocates the engine side panel
@@ -172,11 +173,16 @@ static jmethodID g_midSetOverlayInsets = nullptr;
 static jmethodID g_midSetChatCollapsed = nullptr, g_midSwitchChatTab = nullptr;
 // Phase-5 world map (optional): pan by finger deltas + the open-state/control-rect snapshot.
 static jmethodID g_midPanWorldMap = nullptr, g_midMapSnapshot = nullptr;
+// Phase 3 (Task B): content-diff publish seqs for the chat/orb/dialogue/map snapshots — gate the per-frame
+// republish copy on a seq change (the menu-peek pattern). All OPTIONAL — a jar predating them just always copies.
+static jmethodID g_midChatSnapshotSeq = nullptr, g_midOrbSnapshotSeq = nullptr;
+static jmethodID g_midDialogueSeq = nullptr, g_midMapSnapshotSeq = nullptr;
 static jmethodID g_midScrollMapPanel = nullptr;   // world-map KEY/MAPLIST swipe-scroll (optional)
 // FIX-5 native open-map control (optional, same rule): open the world map by ORB_WORLDMAP op-script replay.
 static jmethodID g_midOpenWorldMap = nullptr;
 static std::mutex g_mapLock;
 static std::string g_mapSnapshotPub = "{\"open\":false}";
+static std::atomic<long long> g_mapSnapSeq{-1};   // Phase 3 (Task B): last world-map seq we copied at
 // A3 enlarged native chat-tab veneer: getChatSnapshot (per-frame tab geometry/state the bigger native buttons
 // read) + setChatTabRowHeight / setChatAreaWidth (tell the engine to push the message area below the taller row).
 static jmethodID g_midChatSnapshot = nullptr, g_midSetChatRowH = nullptr, g_midSetChatAreaW = nullptr;
@@ -245,24 +251,28 @@ static std::mutex            g_menuLock;
 static std::string           g_menuSnapshot = "{\"active\":false}";
 static std::atomic<long long> g_menuPublishSeq{-1};
 
-// A6 chrome snapshot, republished every frame by the render thread (the only HotSpot-attached caller) for the
-// UI thread's cover-and-proxy tab-rail overlay to read lock-free without ever attaching to HotSpot — same
-// pattern as the A2 menu snapshot. MobileChromeBridge has no publish-seq; the JSON is small + rebuilt each tick.
+// A6 chrome snapshot, republished by the render thread (the only HotSpot-attached caller) for the UI thread's
+// cover-and-proxy tab-rail overlay to read lock-free without ever attaching to HotSpot — same pattern as the A2
+// menu snapshot. Phase 3 (Task B): the copy is now seq-gated (getSnapshotSeq) so an unchanged frame is skipped.
 static std::mutex            g_chromeLock;
 static std::string           g_chromeSnapshotPub = "{\"enabled\":false}";
+static std::atomic<long long> g_chromeSnapSeq{-1};   // last chrome seq we copied at (-1 = none yet)
 
-// A3 chat-tab veneer snapshot, republished every frame by the render thread (HudVeneerBridge.getChatSnapshot)
-// for the UI thread's enlarged native chat-tab overlay to read lock-free without attaching to HotSpot.
+// A3 chat-tab veneer snapshot, republished by the render thread (HudVeneerBridge.getChatSnapshot) for the UI
+// thread's enlarged native chat-tab overlay to read lock-free without attaching to HotSpot. Seq-gated (Task B).
 static std::mutex            g_chatLock;
 static std::string           g_chatSnapshotPub = "{\"loggedIn\":false}";
-// Minimap-orb veneer snapshot, republished every frame by the render thread (HudVeneerBridge.getOrbSnapshot).
+static std::atomic<long long> g_chatSnapSeq{-1};
+// Minimap-orb veneer snapshot, republished by the render thread (HudVeneerBridge.getOrbSnapshot). Seq-gated (Task B).
 static std::mutex            g_orbLock;
 static std::string           g_orbSnapshotPub = "{\"loggedIn\":false}";
+static std::atomic<long long> g_orbSnapSeq{-1};
 // UI-4 NPC dialogue: getDialogueJson (optional, like getMapSnapshot) — the engine dialogue is forced transparent
-// while the chat is relocated, so the native shell draws an opaque parchment over it from this snapshot.
+// while the chat is relocated, so the native shell draws an opaque parchment over it from this snapshot. Seq-gated.
 static jmethodID             g_midDialogueJson = nullptr;
 static std::mutex            g_dlgLock;
 static std::string           g_dialogueJsonPub = "{}";
+static std::atomic<long long> g_dlgSnapSeq{-1};
 
 // ---- Input queue (UI thread enqueues; render thread drains and dispatches into the bridge) -----------
 enum InputKind {
@@ -454,6 +464,24 @@ static jmethodID midOpt(JNIEnv *env, jclass c, const char *name, const char *sig
     jmethodID m = env->GetStaticMethodID(c, name, sig);
     if (!m && env->ExceptionCheck()) env->ExceptionClear();
     return m;
+}
+
+// Phase 3 (Task B): return true iff a content-diff'd snapshot should be re-copied this frame. The Java side bumps
+// its publish seq ONLY when the snapshot JSON actually changes, so an unchanged seq means byte-identical JSON and
+// the per-frame String copy can be skipped (the menu-peek gate). Because the gate is derived from the bytes, it can
+// never skip a real change — no stale HUD. If the optional seq getter is absent (older jar), always copy (the
+// pre-Task-B behavior). On any JNI hiccup, also copy (fail safe toward freshness). Updates `cache` on advance.
+// Memory ordering: the seq->json happens-before that matters here is carried by the JAVA volatile fields (the Java
+// producer stores json before seq; CallStaticLongMethod/CallStaticObjectMethod read those volatiles through JNI, so
+// a native reader that sees the new seq also sees the new json). `cache` is render-loop-local state (single
+// producer / single consumer = this render thread), NOT the cross-thread channel, so relaxed is correct.
+static bool snapSeqAdvanced(JNIEnv *env, jclass cls, jmethodID seqMid, std::atomic<long long> &cache) {
+    if (!seqMid) return true;
+    long long sq = env->CallStaticLongMethod(cls, seqMid);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return true; }
+    if (sq == cache.load(std::memory_order_relaxed)) return false;
+    cache.store(sq, std::memory_order_relaxed);
+    return true;
 }
 
 // Finding 14: register a read-only data-panel facade (all-or-nothing, release-latched like Quest/World). The
@@ -791,6 +819,7 @@ static bool publishBridge(JNIEnv *env) {
             LOGE("bridge: MobileChromeBridge NewGlobalRef failed (chrome read surface disabled)");
         } else {
             g_midChromeSnap = midOpt(env, mcg, "getSnapshot", "()Ljava/lang/String;");
+            g_midChromeSnapSeq = midOpt(env, mcg, "getSnapshotSeq", "()J");   // optional (older jar omits -> always copy)
             if (g_midChromeSnap) {
                 g_chromeCls = mcg;                                      // before the release-store below
                 g_chromeReady.store(true, std::memory_order_release);
@@ -834,6 +863,11 @@ static bool publishBridge(JNIEnv *env) {
             g_midOpenWorldMap      = midOpt(env, hvg, "openWorldMap", "()V");   // FIX-5 (optional; older jar omits it)
             g_midDialogueJson      = midOpt(env, hvg, "getDialogueJson", "()Ljava/lang/String;");   // UI-4 (optional)
             g_midOrbSnapshot       = midOpt(env, hvg, "getOrbSnapshot", "()Ljava/lang/String;");    // orb veneer (optional)
+            // Phase 3 (Task B): content-diff publish seqs (all optional — a jar predating them just always copies).
+            g_midChatSnapshotSeq   = midOpt(env, hvg, "getChatSnapshotSeq", "()J");
+            g_midOrbSnapshotSeq    = midOpt(env, hvg, "getOrbSnapshotSeq", "()J");
+            g_midDialogueSeq       = midOpt(env, hvg, "getDialogueSeq", "()J");
+            g_midMapSnapshotSeq    = midOpt(env, hvg, "getMapSnapshotSeq", "()J");
             bool hudOk = g_midSetStonesHidden && g_midOpenTab && g_midRelocateSidePanel && g_midRelocateChat
                       && g_midRelocateMinimap && g_midChatSnapshot && g_midSetChatRowH && g_midSetChatAreaW
                       && g_midScrollChat;
@@ -976,7 +1010,8 @@ static void *renderLoop(void *) {
             // A6: republish the chrome snapshot each frame (the cover-and-proxy rails need fresh stone bounds;
             // it's a small JSON rebuilt each client tick, and only meaningful in-world, so a per-frame copy is
             // cheap). The UI thread reads g_chromeSnapshotPub via nativeChromeSnapshotPub() — no HotSpot attach.
-            if (g_chromeReady.load(std::memory_order_acquire) && g_chromeCls) {
+            if (g_chromeReady.load(std::memory_order_acquire) && g_chromeCls
+                && snapSeqAdvanced(env, g_chromeCls, g_midChromeSnapSeq, g_chromeSnapSeq)) {
                 jstring js = (jstring) env->CallStaticObjectMethod(g_chromeCls, g_midChromeSnap);
                 if (env->ExceptionCheck()) { env->ExceptionClear(); }
                 else if (js) {
@@ -995,7 +1030,8 @@ static void *renderLoop(void *) {
             // A3: republish the chat-tab snapshot each frame (HudVeneerBridge.getChatSnapshot) so the enlarged
             // native chat-tab overlay reads fresh tab geometry/state lock-free. Small JSON, only populated once
             // the chat is relocated; cheap per-frame copy. UI reads it via nativeChatSnapshotPub() — no attach.
-            if (g_hudReady.load(std::memory_order_acquire) && g_hudCls && g_midChatSnapshot) {
+            if (g_hudReady.load(std::memory_order_acquire) && g_hudCls && g_midChatSnapshot
+                && snapSeqAdvanced(env, g_hudCls, g_midChatSnapshotSeq, g_chatSnapSeq)) {
                 jstring js = (jstring) env->CallStaticObjectMethod(g_hudCls, g_midChatSnapshot);
                 if (env->ExceptionCheck()) { env->ExceptionClear(); }
                 else if (js) {
@@ -1013,7 +1049,8 @@ static void *renderLoop(void *) {
 
             // Minimap-orb veneer: republish the per-orb canvas bounds each frame (HudVeneerBridge.getOrbSnapshot)
             // so the native tap handler reads fresh orb positions lock-free, no attach. Optional method.
-            if (g_hudReady.load(std::memory_order_acquire) && g_hudCls && g_midOrbSnapshot) {
+            if (g_hudReady.load(std::memory_order_acquire) && g_hudCls && g_midOrbSnapshot
+                && snapSeqAdvanced(env, g_hudCls, g_midOrbSnapshotSeq, g_orbSnapSeq)) {
                 jstring js = (jstring) env->CallStaticObjectMethod(g_hudCls, g_midOrbSnapshot);
                 if (env->ExceptionCheck()) { env->ExceptionClear(); }
                 else if (js) {
@@ -1031,7 +1068,8 @@ static void *renderLoop(void *) {
 
             // UI-4: republish the NPC-dialogue snapshot each frame so the native opaque parchment can read it
             // lock-free. Optional method — older jars just leave the default "{}" (no parchment drawn).
-            if (g_hudReady.load(std::memory_order_acquire) && g_hudCls && g_midDialogueJson) {
+            if (g_hudReady.load(std::memory_order_acquire) && g_hudCls && g_midDialogueJson
+                && snapSeqAdvanced(env, g_hudCls, g_midDialogueSeq, g_dlgSnapSeq)) {
                 jstring js = (jstring) env->CallStaticObjectMethod(g_hudCls, g_midDialogueJson);
                 if (env->ExceptionCheck()) { env->ExceptionClear(); }
                 else if (js) {
@@ -1050,7 +1088,8 @@ static void *renderLoop(void *) {
             // Phase-5: republish the world-map snapshot each frame (open-state + control rects) so the UI
             // thread can gate gestures + hide the native chrome lock-free. Optional method — older jars
             // just leave the default {"open":false}.
-            if (g_hudReady.load(std::memory_order_acquire) && g_hudCls && g_midMapSnapshot) {
+            if (g_hudReady.load(std::memory_order_acquire) && g_hudCls && g_midMapSnapshot
+                && snapSeqAdvanced(env, g_hudCls, g_midMapSnapshotSeq, g_mapSnapSeq)) {
                 jstring js = (jstring) env->CallStaticObjectMethod(g_hudCls, g_midMapSnapshot);
                 if (env->ExceptionCheck()) { env->ExceptionClear(); }
                 else if (js) {

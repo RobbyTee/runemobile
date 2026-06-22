@@ -306,6 +306,28 @@ static bool rcBuildFbo(int w, int h) {
     return status == GL_FRAMEBUFFER_COMPLETE;
 }
 
+// Phase 3 (Task A): resize the offscreen FBO in place on a canvas resize — reallocate the EXISTING color/depth
+// renderbuffers' storage (their FBO attachments are by name, so they stay attached) instead of deleting and
+// regenerating the FBO + both RBOs each time (driver object churn). First-ever build still goes through rcBuildFbo.
+static bool rcResizeFbo(int w, int h) {
+    if (sFbo == 0 || sColorRbo == 0 || sDepthRbo == 0) return rcBuildFbo(w, h);
+    while (glGetError() != GL_NO_ERROR) {}   // drain stale errors so the check below is meaningful
+    glBindFramebuffer(GL_FRAMEBUFFER, sFbo);
+    glBindRenderbuffer(GL_RENDERBUFFER, sColorRbo);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
+    glBindRenderbuffer(GL_RENDERBUFFER, sDepthRbo);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+    // If in-place reallocation errored (e.g. GL_OUT_OF_MEMORY under pressure — in-place holds the OLD storage while
+    // allocating the NEW, so peak = old+new), fall back to the delete-then-allocate path: it frees the old storage
+    // FIRST (peak = max(old,new)), so it can still succeed, and it returns a trustworthy completeness status rather
+    // than relying on glCheckFramebufferStatus over a half-allocated RBO (the driver-quirk false-COMPLETE risk).
+    if (glGetError() != GL_NO_ERROR) return rcBuildFbo(w, h);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glViewport(0, 0, w, h);
+    sFboW = w; sFboH = h;
+    return status == GL_FRAMEBUFFER_COMPLETE;
+}
+
 // ---- Phase 1: reverse-Z clip-control enable + fail-safe self-test --------------------------------------------
 // The 117HD Zone renderer renders reverse-Z (perspectiveInfiniteReverseZ + glClearDepth(0) + GL_GEQUAL), which is
 // only depth-correct under a [0,1] clip volume. It never calls glClipControl, so we enable it here. A driver can
@@ -741,15 +763,37 @@ static void JNICALL rc_AWT_destroy(JNIEnv*, jobject){
     }
 }
 static jint JNICALL rc_AWT_getBufferMode(JNIEnv*, jobject){ return (jint)GL_COLOR_ATTACHMENT0; }
-// Per-frame (the gpu plugin calls getFramebuffer early each draw): re-bind the thread-affine context and rebuild
-// the offscreen FBO if the engine canvas resized, so glReadPixels reads exactly the composited canvas region.
+// Per-frame (the gpu plugin calls getFramebuffer early each draw): re-bind the thread-affine context and, if the
+// engine canvas resized, rebuild the offscreen FBO so the present blit covers exactly the composited canvas region.
+// Phase 3 (Task A): the engine canvas only resizes when the Android Surface changes (orientation / window / fold) —
+// and EVERY such change calls SurfaceHolder.surfaceChanged -> nativeSetSurface, which bumps the surface generation
+// (jvm_bootstrap g_surfaceGen). So re-probe the canvas size (two JNI round-trips) on a surface-gen change instead
+// of every frame. The engine's AWT canvas can lag the surface change by a frame or two, so after each gen bump we
+// frame-probe for a short SETTLE window (until it stabilises) rather than probing once; plus a 1 Hz ultra-backstop
+// covers any hypothetical resize path that never bumps the gen. Steady state is then a context re-bind + a clock
+// read, no JNI. (rcResizeFbo updates sFboW/sFboH + glViewport, so the present blit always uses the live dims.)
+static uint64_t sGfbSurfaceGen  = ~0ull;   // last surface gen we saw (sentinel: g_surfaceGen counts up from 0, so
+                                           // the first call always differs -> probes; sFbo==0 also forces it)
+static double   sGfbLastProbe   = 0;       // last wall-clock (ms) we probed the canvas size at
+static double   sGfbSettleUntil = 0;       // frame-probe every frame until this time (catch a lagging canvas resize)
 static jint JNICALL rc_AWT_getFramebuffer(JNIEnv* env, jobject, jboolean){
     rc_make_current();
-    if (rc_jb_cache(env) && sJbCanvasW && sJbCanvasH) {
-        jint cw = env->CallStaticIntMethod(sJbCls, sJbCanvasW);
-        jint ch = env->CallStaticIntMethod(sJbCls, sJbCanvasH);
-        if (env->ExceptionCheck()) env->ExceptionClear();
-        if (cw > 0 && ch > 0 && (cw != sFboW || ch != sFboH)) rcBuildFbo(cw, ch);
+    double now = rc_now_ms();
+    bool probe = (sFbo == 0);   // never built yet
+    if (sCbSurfaceGen) {
+        uint64_t gen = sCbSurfaceGen();
+        if (gen != sGfbSurfaceGen) { sGfbSurfaceGen = gen; sGfbSettleUntil = now + 500.0; }
+    }
+    if (now < sGfbSettleUntil) probe = true;            // settle window after a surface change
+    if (now - sGfbLastProbe >= 1000.0) probe = true;    // ultra-backstop (no-gen-bump resize paths)
+    if (probe) {
+        sGfbLastProbe = now;
+        if (rc_jb_cache(env) && sJbCanvasW && sJbCanvasH) {
+            jint cw = env->CallStaticIntMethod(sJbCls, sJbCanvasW);
+            jint ch = env->CallStaticIntMethod(sJbCls, sJbCanvasH);
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (cw > 0 && ch > 0 && (cw != sFboW || ch != sFboH)) rcResizeFbo(cw, ch);
+        }
     }
     return (jint)sFbo;
 }
