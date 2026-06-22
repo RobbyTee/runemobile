@@ -98,6 +98,19 @@ device lands on GPU without crashes; per-frame overhead trimmed.
 **Exit gate:** draw-bound (GE crowd) and upload-bound scenes show measured improvement; caps only
 flipped where the extension is confirmed and the forwarder is implemented.
 
+**PROBE DONE + device-verified on Mali-G710** (commit de54c99622): `rcProbePhase4Caps` at context
+creation (extension-string AND non-null `eglGetProcAddress`, + persistent+coherent map lifetime
+check) and a draw-call counter (`setprop debug.routec.drawcount 1` → `[drawcount]` per-frame profile).
+Verdict:
+- `multi_draw_indirect = 0` (string absent; the fn pointer resolves but the string check rejects it) →
+  **lever unavailable on Mali-G710.** And the draw profile shows it'd be a tiny win anyway: open
+  Lumbridge ≈ **120 GL draw calls/frame** (drawArrays 93, drawElements 10, mdaRanges 17, indirect 0),
+  multi-draw-indirect would collapse only mdaRanges→mdaCalls = **~14/frame (~12%)**. Not draw-bound
+  (77 fps at the present ceiling). → **drop the `rc_glMultiDrawArraysIndirect` + `indirectDraw` L-task.**
+- `buffer_storage = 1` + `persistent_map_ok = 1` → the **only viable Phase 4 lever** here. Next step if
+  pursued: measure upload-bound-ness (per-frame `glBufferData` re-upload cost in NPC-dense scenes)
+  before implementing `rc_glBufferStorage` + persistent-mapped `GLBuffer`. Gated on that A/B.
+
 ---
 
 ## Phase 5 — Quality ceiling  *(deferred until the floor is solid)*
