@@ -59,6 +59,18 @@ static PFNGLCLIPCONTROLEXTPROC pglClipControlEXT = nullptr;
 // Phase 1: true once glClipControl(ZERO_TO_ONE) is enabled AND the self-test confirms the [0,1] range engaged.
 static bool sClipReverseZ = false;
 
+// Phase 4 probe — EXT_buffer_storage + EXT_multi_draw_indirect (NOT in gl32.h core). Resolved via eglGetProcAddress
+// at context creation purely to GATE the (currently unimplemented + no-op'd) draw-batching / persistent-mapping
+// levers; this probe never enables them. The persistent-storage map bits are EXT-suffixed values.
+#ifndef GL_MAP_PERSISTENT_BIT_EXT
+#define GL_MAP_PERSISTENT_BIT_EXT 0x0040
+#endif
+#ifndef GL_MAP_COHERENT_BIT_EXT
+#define GL_MAP_COHERENT_BIT_EXT 0x0080
+#endif
+typedef void (*PFNGLBUFFERSTORAGEEXTPROC)(GLenum target, GLsizeiptr size, const void* data, GLbitfield flags);
+typedef void (*PFNGLMULTIDRAWARRAYSINDIRECTEXTPROC)(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride);
+
 // ---- EGL offscreen context + FBO (ported from RouteCBridge.m's RC_BACKEND_ANGLE path, ANGLE selectors dropped)
 static EGLDisplay sDpy  = EGL_NO_DISPLAY;
 static EGLContext sCtx  = EGL_NO_CONTEXT;
@@ -101,6 +113,16 @@ static double rc_now_ms() {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
 }
+
+// ---- Phase 4 draw-call probe (debug.routec.drawcount=1) ------------------------------------------------------
+// Counts the GL draw calls the 117HD Zone path issues so we can PREDICT the multi-draw-indirect win before building
+// it: every glMultiDrawArrays the renderer emits currently expands to N glDrawArrays HERE (GLES has no real
+// glMultiDrawArrays), so an N-range batch costs N driver draw calls; with EXT_multi_draw_indirect that whole batch
+// collapses to ONE glMultiDrawArraysIndirect. The saving/frame is therefore ~ (mdaRanges - mdaCalls). All draw
+// forwarders + swapBuffers run on the single GL/draw thread, so plain ints suffice. Gated like the gputime probe.
+static bool   sDrawCountOn   = false;
+static int    sDcDrawArrays  = 0, sDcDrawElements = 0, sDcMultiCalls = 0, sDcMultiRanges = 0, sDcIndirect = 0;
+static int    sDcFrames      = 0;
 
 // eglSwapInterval control. The plugin's requested interval is stored here; the boot prop
 // `debug.routec.swapinterval` overrides it (0=uncapped bench, 1=display refresh, 2=half-rate/30 cap). Applied on
@@ -450,6 +472,51 @@ static bool rc_gl_has_ext(const char *name) {
     return ext && strstr(ext, name) != nullptr;
 }
 
+// Phase 4 (extension probe): read-only gate prerequisite. Detects whether this driver actually supports the two
+// extensions the 117HD Zone path would need to engage its draw-batching / persistent-mapping levers, and verifies
+// the persistent-map lifetime contract — then logs a single verdict. It NEVER flips a cap or implements a forwarder;
+// those L-effort steps stay gated on a confirmed result here. An extension string can be present yet the entry point
+// absent (or vice-versa), so both the string AND a non-null eglGetProcAddress are required (the clipControl lesson).
+static void rcProbePhase4Caps() {
+    bool extMdi = rc_gl_has_ext("GL_EXT_multi_draw_indirect");
+    bool extBs  = rc_gl_has_ext("GL_EXT_buffer_storage");
+    void* fnMdi = (void*) eglGetProcAddress("glMultiDrawArraysIndirectEXT");
+    void* fnBs  = (void*) eglGetProcAddress("glBufferStorageEXT");
+    bool mdiOk  = extMdi && fnMdi != nullptr;
+    bool bsOk   = extBs  && fnBs  != nullptr;
+
+    // Persistent-map lifetime check (only if buffer_storage is real). At context-creation there are no frames yet,
+    // so this validates the FUNCTIONAL contract: immutable storage with the persistent+coherent flags allocates, the
+    // mapping returns a usable pointer, survives a write -> GPU sync (glFinish) -> write WITHOUT a remap, and unmaps
+    // cleanly — all GL-error-free. -1 = not tested (no buffer_storage), 0 = failed (skip persistent mapping), 1 = ok.
+    int persistOk = -1;
+    if (bsOk) {
+        PFNGLBUFFERSTORAGEEXTPROC pBufferStorage = (PFNGLBUFFERSTORAGEEXTPROC) fnBs;
+        while (glGetError() != GL_NO_ERROR) {}                       // drain stale errors so the checks below are real
+        GLuint b = 0; glGenBuffers(1, &b); glBindBuffer(GL_ARRAY_BUFFER, b);
+        const GLsizeiptr sz = 4096;
+        const GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT_EXT | GL_MAP_COHERENT_BIT_EXT;
+        pBufferStorage(GL_ARRAY_BUFFER, sz, nullptr, flags);
+        void* p = (glGetError() == GL_NO_ERROR) ? glMapBufferRange(GL_ARRAY_BUFFER, 0, sz, flags) : nullptr;
+        if (p && glGetError() == GL_NO_ERROR) {
+            ((volatile uint32_t*) p)[0] = 0xC0FFEEu;                 // write through the persistent mapping
+            glFinish();                                             // cross a GPU sync point with the mapping live
+            ((volatile uint32_t*) p)[1] = 0x0BEEFu;                 // still writable after, no remap?
+            persistOk = (glGetError() == GL_NO_ERROR) ? 1 : 0;
+            glUnmapBuffer(GL_ARRAY_BUFFER);
+            if (glGetError() != GL_NO_ERROR) persistOk = 0;
+        } else {
+            persistOk = 0;
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glDeleteBuffers(1, &b);
+        while (glGetError() != GL_NO_ERROR) {}                       // leave no error pending for the renderer
+    }
+    LOGI("[gpuprobe-caps] multi_draw_indirect=%d (ext=%d fn=%d) buffer_storage=%d (ext=%d fn=%d) persistent_map_ok=%d "
+         "-- L-effort gated on this; draw-call profile: setprop debug.routec.drawcount 1",
+         mdiOk, extMdi, fnMdi != nullptr, bsOk, extBs, fnBs != nullptr, persistOk);
+}
+
 // =============================================================================================================
 // GL forwards — kGLALL. Clean GLES forwards (iOS diag/perf/water/SS stripped). The 5 non-ES-core entry points
 // are shimmed; the BGRA UI-texture upload is swizzled to RGBA (silently corrupts colour on GLES otherwise).
@@ -488,8 +555,8 @@ GLF rc_glDepthFunc(JNIEnv*, jclass, jint a0){ glDepthFunc(a0); }
 GLF rc_glDepthMask(JNIEnv*, jclass, jboolean a0){ glDepthMask(a0); }
 GLF rc_glDetachShader(JNIEnv*, jclass, jint a0, jint a1){ glDetachShader(a0,a1); }
 GLF rc_glDisable(JNIEnv*, jclass, jint a0){ glDisable(a0); }
-GLF rc_glDrawArrays(JNIEnv*, jclass, jint a0, jint a1, jint a2){ glDrawArrays(a0,a1,a2); }
-GLF rc_glDrawElements(JNIEnv*, jclass, jint a0, jint a1, jint a2, jlong a3){ glDrawElements(a0,a1,a2,(const void*)(intptr_t)a3); }
+GLF rc_glDrawArrays(JNIEnv*, jclass, jint a0, jint a1, jint a2){ if (sDrawCountOn) sDcDrawArrays++; glDrawArrays(a0,a1,a2); }
+GLF rc_glDrawElements(JNIEnv*, jclass, jint a0, jint a1, jint a2, jlong a3){ if (sDrawCountOn) sDcDrawElements++; glDrawElements(a0,a1,a2,(const void*)(intptr_t)a3); }
 GLF rc_glEnable(JNIEnv*, jclass, jint a0){ glEnable(a0); }
 GLF rc_glEnableVertexAttribArray(JNIEnv*, jclass, jint a0){ glEnableVertexAttribArray(a0); }
 GLF rc_glFlushMappedBufferRange(JNIEnv*, jclass, jint a0, jlong a1, jlong a2){ glFlushMappedBufferRange(a0,(GLintptr)a1,(GLsizeiptr)a2); }
@@ -560,6 +627,7 @@ GLF rc_glMultiDrawArrays(JNIEnv* e, jclass, jint a0, jobject a1, jobject a2){
     const GLint* first=(const GLint*)e->GetDirectBufferAddress(a1);
     const GLsizei* count=(const GLsizei*)e->GetDirectBufferAddress(a2);
     GLsizei n=(GLsizei)e->GetDirectBufferCapacity(a1);
+    if (sDrawCountOn && first && count) { sDcMultiCalls++; sDcMultiRanges += n; }   // 1 emit = n driver draw calls here
     for (GLsizei i=0;i<n && first && count;i++) glDrawArrays((GLenum)a0, first[i], count[i]);   // GLES has no glMultiDrawArrays
 }
 GLF rc_glReadBuffer(JNIEnv*, jclass, jint a0){ glReadBuffer(a0); }
@@ -696,8 +764,8 @@ GLF rc_glGetProgramBinary_AA(JNIEnv* e, jclass, jint a0, jintArray a1, jintArray
 // compute / indirect (GLES 3.1 core) — registered for full binding; gated OFF on Zone (never invoked).
 GLF rc_glDispatchCompute(JNIEnv*, jclass, jint a0, jint a1, jint a2){ glDispatchCompute((GLuint)a0,(GLuint)a1,(GLuint)a2); }
 GLF rc_glMemoryBarrier(JNIEnv*, jclass, jint a0){ glMemoryBarrier((GLbitfield)a0); }
-GLF rc_glDrawArraysIndirect(JNIEnv*, jclass, jint a0, jlong a1){ glDrawArraysIndirect((GLenum)a0,(const void*)(intptr_t)a1); }
-GLF rc_glDrawElementsIndirect(JNIEnv*, jclass, jint a0, jint a1, jlong a2){ glDrawElementsIndirect((GLenum)a0,(GLenum)a1,(const void*)(intptr_t)a2); }
+GLF rc_glDrawArraysIndirect(JNIEnv*, jclass, jint a0, jlong a1){ if (sDrawCountOn) sDcIndirect++; glDrawArraysIndirect((GLenum)a0,(const void*)(intptr_t)a1); }
+GLF rc_glDrawElementsIndirect(JNIEnv*, jclass, jint a0, jint a1, jlong a2){ if (sDrawCountOn) sDcIndirect++; glDrawElementsIndirect((GLenum)a0,(GLenum)a1,(const void*)(intptr_t)a2); }
 GLF rc_glMultiDrawArraysIndirect(JNIEnv*, jclass, jint, jlong, jint, jint){ /* EXT_multi_draw_indirect; gated off -> no-op */ }
 GLF rc_glBufferStorage_J(JNIEnv*, jclass, jint, jlong, jint){ /* EXT_buffer_storage; GL_ARB_buffer_storage reported false -> never called */ }
 GLF rc_glBufferStorage_BB(JNIEnv*, jclass, jint, jobject, jint){ /* ditto */ }
@@ -752,6 +820,9 @@ static void JNICALL rc_AWT_createGLContext(JNIEnv* env, jobject){
     // Phase 1: complete reverse-Z by enabling the [0,1] clip range (the Zone renderer needs it but never sets it),
     // with the self-test fail-safe. Done after the FBO is built so the test has a depth-complete target.
     if (fboOk) rcSetupClipControl();
+    // Phase 4: read-only extension probe — log whether the draw-batching / persistent-mapping levers are even
+    // possible on this driver (gate prerequisite for the L-effort follow-ups). Never enables anything.
+    rcProbePhase4Caps();
 }
 static void JNICALL rc_AWT_destroy(JNIEnv*, jobject){
     if (sDpy != EGL_NO_DISPLAY) {
@@ -906,6 +977,30 @@ static void JNICALL rc_AWT_swapBuffers(JNIEnv* env, jobject){
             if (!sTQGen) { pglGenQueriesEXT(RC_NQ, sTQId); sTQGen = true; LOGI("[gpuprobe] timer queries armed"); }
             rcTimerEndFrame();
         }
+    }
+
+    // Phase 4 draw-call probe (debug.routec.drawcount): swapBuffers is the frame boundary. Re-check the gate ~1/sec
+    // and, when it was on for the whole window, log the per-frame draw-call profile + the predicted multi-draw saving.
+    // The forwarders only tally while sDrawCountOn, so the play path stays free until the prop is set.
+    {
+        static double sDcCheck = 0;
+        double now = rc_now_ms();
+        if (now - sDcCheck >= 1000.0) {
+            bool was = sDrawCountOn;
+            sDrawCountOn = rc_prop_int("debug.routec.drawcount", 0) != 0;
+            if (was && sDrawCountOn && sDcFrames > 0) {
+                int currCalls = sDcDrawArrays + sDcDrawElements + sDcMultiRanges + sDcIndirect;   // GL draw calls today
+                int potCalls  = sDcDrawArrays + sDcDrawElements + sDcMultiCalls  + sDcIndirect;   // with multi-draw-indirect
+                LOGI("[drawcount] %d fps  per-frame: drawArrays=%.0f drawElements=%.0f mdaCalls=%.1f mdaRanges=%.0f "
+                     "indirect=%.0f | glDrawCalls now=%.0f -> multiDrawIndirect=%.0f (save %.0f/frame)",
+                     sDcFrames, (double)sDcDrawArrays/sDcFrames, (double)sDcDrawElements/sDcFrames,
+                     (double)sDcMultiCalls/sDcFrames, (double)sDcMultiRanges/sDcFrames, (double)sDcIndirect/sDcFrames,
+                     (double)currCalls/sDcFrames, (double)potCalls/sDcFrames, (double)(currCalls-potCalls)/sDcFrames);
+            }
+            sDcDrawArrays = sDcDrawElements = sDcMultiCalls = sDcMultiRanges = sDcIndirect = 0; sDcFrames = 0;
+            sDcCheck = now;
+        }
+        if (sDrawCountOn) sDcFrames++;
     }
 
     if (sCbAcquireWindow) {
