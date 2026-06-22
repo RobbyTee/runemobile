@@ -96,6 +96,29 @@ heavier shared-bridge probe: while a dialogue is open, temporarily skip `sizeCha
 bounds — if it grows toward ~62px, the resize is the cause and "don't resize during a dialogue" is the lever
 (weighed against the known natural-bottom placement + tap regression). Heavy deploy (jar pipeline + runtime.tag).
 
+## Probe results — Stage 2 (device, Pixel 7a, NPC "Miss Schism", 2026-06-22)
+Enlarged the head cutout to 2.5× the 32×32 widget bounds and captured the dialogue frame. Decisive:
+- **The engine's 3D head MODEL overflows its 32×32 widget rect** — it renders at a good, desktop-like size
+  (full face: hair, eyes, mouth). Our original cutout was sized to the *widget* (32×32) and so clipped ~75% of
+  the model. **Enlarging the cutout reveals a proper head — a cheap, Kotlin-only fix, no bridge change.**
+- **BUT the head model has no opaque backing in the forced-transparent pipeline.** A rectangular cutout reveals
+  the live scene around the head silhouette (wall texture + floating overlay text bleed through). On desktop the
+  head sits on the opaque dialogue parchment; here the engine doesn't paint that parchment (confirmed by the
+  user's original report that the engine dialogue is transparent and chat bleeds through it).
+
+**So the architecture is fully understood now:**
+- VF-1 ✓ engine rasters the head at the relocated top. VF-2 ✓ head model is desktop-sized but the *widget* is
+  32×32 (cutout was clipping it). VF-3 ✓ the engine dialogue is transparent (no opaque parchment) in our pipeline.
+
+### The two real paths (decision needed)
+- **Path A — enlarge the cutout (cheap, now, Kotlin-only).** Reveals a real, properly-sized head. Compromise:
+  scene bleeds around the head silhouette (no opaque backing). A big upgrade from the tiny clipped head, but not
+  pixel-exact desktop. Mitigations: size the cutout tight to the head model; the bleed is mostly muted wall.
+- **Path B — engine draws its opaque dialogue (desktop-exact, heavy + uncertain).** The only way to get the head
+  on a clean opaque parchment like desktop. Requires making the engine paint an opaque dialogue background at the
+  relocated top — which is the unresolved hard problem (varbit 4608 is inert, dialogue groups are separate, and
+  un-forcing transparency may not produce an opaque box). Bridge work + the historical relocate/tap regressions.
+
 ## The two candidate end-states (probe picks one)
 
 ### Fallback / default ship (lowest risk) — keep the parchment, feed it the real head
