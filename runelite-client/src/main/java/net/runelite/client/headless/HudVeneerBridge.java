@@ -2471,8 +2471,13 @@ public final class HudVeneerBridge
 				cont.setOriginalHeight(wantContainerH);
 				cont.revalidate();
 			}
-			// Message area: full natural content height, at the native row width, positioned below the tab row.
-			area.setForcedPosition(0, rowH);
+			// Message area: positioned at the ENGINE'S natural CONTROLS height (23), NOT the taller native row height
+			// (rowH ~40). The engine renders the relocated chatbox to its natural ~165px viewport (CONTROLS_H +
+			// ORIG_CHAT_CONTENT_H), NOT to our grown container — so offsetting CHATAREA by the full native row pushed
+			// its bottom (and the input line) past the viewport and clipped it. Offsetting by CONTROLS_H keeps the
+			// 142px area inside the viewport; the taller native tab row simply OVERLAYS the message area's top strip
+			// (those top rows sit behind the opaque native row, like the engine CONTROLS did).
+			area.setForcedPosition(0, CONTROLS_H);
 			if (area.getWidthMode() != WidgetSizeMode.ABSOLUTE || area.getOriginalWidth() != rowW
 				|| area.getHeightMode() != WidgetSizeMode.ABSOLUTE || area.getOriginalHeight() != ORIG_CHAT_CONTENT_H)
 			{
