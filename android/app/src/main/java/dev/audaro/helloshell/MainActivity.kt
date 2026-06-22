@@ -754,6 +754,27 @@ class MainActivity : AppCompatActivity() {
         // rendererPref model) joins the dev/CI triggers below as one more way into each mode. Renderers are
         // NOT hot-swappable (jar choice + librlawt registration are fixed at JVM start), so the panel toggle
         // writes this and the change applies on the next process start.
+        // Phase 3 auto-GPU: resolve the persisted renderer, running a first-run capability probe to promote capable
+        // devices off the CPU default, with a crash-cookie first-boot fallback. The `auto-gpu-armed` marker is
+        // written before a pref-driven GPU/117HD boot and cleared by the watchdog once frames actually present; if
+        // it's still here at startup the previous promoted boot crashed/blacked/hung before presenting -> revert to
+        // CPU (permanently for an AUTO decision; one-shot for a user-explicit one, so they can retry).
+        run {
+            val rp = getSharedPreferences("renderer", MODE_PRIVATE)
+            val armed = File(filesDir, "auto-gpu-armed")
+            if (armed.exists()) {
+                armed.delete()
+                val wasAuto = rp.getBoolean("autoDecided", false)
+                rp.edit().putString("mode", "cpu").apply()
+                if (wasAuto) rp.edit().putBoolean("autoGpuFailed", true).apply()
+                Log.w(TAG, "auto-GPU: prior promoted boot never presented a frame -> CPU fallback (wasAuto=$wasAuto)")
+            }
+            if (rp.getString("mode", null) == null && !rp.getBoolean("autoGpuFailed", false)) {
+                val probed = probeGpuCaps()   // "117hd" | "gpu" | "cpu"
+                rp.edit().putString("mode", probed).putBoolean("autoDecided", probed != "cpu").apply()
+                Log.i(TAG, "auto-GPU: first-run caps probe -> default renderer '$probed'")
+            }
+        }
         val prefRenderer = rendererPref()
         val gpuMode = (intent?.getBooleanExtra("routecgpu", false) ?: false) ||
             File(getExternalFilesDir(null), "gpu.mode").exists() || prefRenderer == "gpu"
@@ -795,6 +816,14 @@ class MainActivity : AppCompatActivity() {
         }
         if (booted.compareAndSet(false, true)) {
             val app = applicationContext
+            // Phase 3 auto-GPU: arm the first-boot crash-cookie ONLY for a persisted-pref-driven GPU/117HD boot (the
+            // auto-promote or a user panel pick). Dev/CI triggers (intent extras, gpu.mode/rlhd.mode/rlhd.once
+            // markers, Game Loop, TV) are deliberate test paths and are NOT cookie-protected.
+            if (prefRenderer == "gpu" || prefRenderer == "117hd") {
+                runCatching { File(filesDir, "auto-gpu-armed").writeText(prefRenderer) }
+                startAutoGpuWatchdog()
+                Log.i(TAG, "auto-GPU: armed first-boot fallback cookie for pref '$prefRenderer'")
+            }
             thread(name = "jvm-boot") { bootJvm(app, censusMode, gpu = gpuMode && !rlhdMode, rlhd = rlhdMode) }
         }
         // AP-2a: start draining the notification/link queues. Safe before the VM is up — the externs return ""
@@ -808,7 +837,11 @@ class MainActivity : AppCompatActivity() {
         getSharedPreferences("renderer", MODE_PRIVATE).getString("mode", "cpu") ?: "cpu"
 
     private fun setRendererPref(mode: String) {
-        getSharedPreferences("renderer", MODE_PRIVATE).edit().putString("mode", mode).apply()
+        // A user pick is EXPLICIT: clear the auto-decision flag + any prior auto-fail latch + a stale crash-cookie so
+        // the auto-GPU machinery respects the choice (and a user-chosen GPU mode still gets one-shot crash protection).
+        getSharedPreferences("renderer", MODE_PRIVATE).edit()
+            .putString("mode", mode).putBoolean("autoDecided", false).putBoolean("autoGpuFailed", false).apply()
+        runCatching { File(filesDir, "auto-gpu-armed").delete() }
         Log.i(TAG, "p2: rendererPref -> $mode (applies on next launch)")
         val label = when (mode) { "gpu" -> "GPU"; "117hd" -> "117 HD"; else -> "CPU (vanilla)" }
         AlertDialog.Builder(this)
@@ -823,6 +856,96 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Later", null)
             .show()
+    }
+
+    /**
+     * Phase 3 auto-GPU capability probe (ported lean from the AG0 ReconActivity). Stands up a throwaway ES3 pbuffer
+     * context, reads the real ES tier + MSAA + compute support, tears it down, and maps to a renderer default:
+     * `117hd` (ES≥3.1 + compute — the clean Zone path), else `gpu` (ES≥3.0 + MSAA — base GPU), else `cpu`. Any
+     * failure returns `cpu` (the safe default). This is the OPTIMISTIC gate; the first-boot watchdog is the recovery.
+     */
+    private fun probeGpuCaps(): String {
+        var dpy = android.opengl.EGL14.EGL_NO_DISPLAY
+        var ctx = android.opengl.EGL14.EGL_NO_CONTEXT
+        var surf = android.opengl.EGL14.EGL_NO_SURFACE
+        try {
+            dpy = android.opengl.EGL14.eglGetDisplay(android.opengl.EGL14.EGL_DEFAULT_DISPLAY)
+            if (dpy == android.opengl.EGL14.EGL_NO_DISPLAY) return "cpu"
+            val ver = IntArray(2)
+            if (!android.opengl.EGL14.eglInitialize(dpy, ver, 0, ver, 1)) return "cpu"
+            val cfgAttr = intArrayOf(
+                android.opengl.EGL14.EGL_RENDERABLE_TYPE, 0x0040 /* EGL_OPENGL_ES3_BIT_KHR */,
+                android.opengl.EGL14.EGL_SURFACE_TYPE, android.opengl.EGL14.EGL_PBUFFER_BIT,
+                android.opengl.EGL14.EGL_RED_SIZE, 8, android.opengl.EGL14.EGL_GREEN_SIZE, 8,
+                android.opengl.EGL14.EGL_BLUE_SIZE, 8, android.opengl.EGL14.EGL_ALPHA_SIZE, 8,
+                android.opengl.EGL14.EGL_DEPTH_SIZE, 24, android.opengl.EGL14.EGL_NONE)
+            val cfgs = arrayOfNulls<android.opengl.EGLConfig>(1); val nCfg = IntArray(1)
+            if (!android.opengl.EGL14.eglChooseConfig(dpy, cfgAttr, 0, cfgs, 0, 1, nCfg, 0) || nCfg[0] < 1) return "cpu"
+            // Request the highest ES context the driver supports: 3.2 -> 3.1 -> 3.0.
+            val eglContextMinorVersion = 0x30FB
+            for (mn in intArrayOf(2, 1, 0)) {
+                val ctxAttr = intArrayOf(android.opengl.EGL14.EGL_CONTEXT_CLIENT_VERSION, 3,
+                    eglContextMinorVersion, mn, android.opengl.EGL14.EGL_NONE)
+                ctx = android.opengl.EGL14.eglCreateContext(dpy, cfgs[0], android.opengl.EGL14.EGL_NO_CONTEXT, ctxAttr, 0)
+                if (ctx != android.opengl.EGL14.EGL_NO_CONTEXT) break
+            }
+            if (ctx == android.opengl.EGL14.EGL_NO_CONTEXT) return "cpu"
+            val pbAttr = intArrayOf(android.opengl.EGL14.EGL_WIDTH, 16, android.opengl.EGL14.EGL_HEIGHT, 16, android.opengl.EGL14.EGL_NONE)
+            surf = android.opengl.EGL14.eglCreatePbufferSurface(dpy, cfgs[0], pbAttr, 0)
+            if (surf == android.opengl.EGL14.EGL_NO_SURFACE) return "cpu"
+            if (!android.opengl.EGL14.eglMakeCurrent(dpy, surf, surf, ctx)) return "cpu"
+
+            val glVer = android.opengl.GLES30.glGetString(android.opengl.GLES30.GL_VERSION) ?: ""
+            val m = Regex("OpenGL ES (\\d)\\.(\\d)").find(glVer)
+            val esTier = (m?.groupValues?.get(1)?.toIntOrNull() ?: 3) * 10 + (m?.groupValues?.get(2)?.toIntOrNull() ?: 0)
+            val tmp = IntArray(1)
+            while (android.opengl.GLES30.glGetError() != android.opengl.GLES30.GL_NO_ERROR) { /* drain */ }
+            android.opengl.GLES30.glGetIntegerv(android.opengl.GLES30.GL_MAX_SAMPLES, tmp, 0)
+            val maxSamples = if (android.opengl.GLES30.glGetError() == android.opengl.GLES30.GL_NO_ERROR) tmp[0] else -1
+            android.opengl.GLES30.glGetIntegerv(android.opengl.GLES31.GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, tmp, 0)
+            val maxCompute = if (android.opengl.GLES30.glGetError() == android.opengl.GLES30.GL_NO_ERROR) tmp[0] else -1
+            val renderer = android.opengl.GLES30.glGetString(android.opengl.GLES30.GL_RENDERER) ?: "?"
+            val baseGpuOk = esTier >= 30 && maxSamples >= 1
+            val hd117Clean = esTier >= 31 && maxCompute > 0
+            val pick = when { hd117Clean -> "117hd"; baseGpuOk -> "gpu"; else -> "cpu" }
+            Log.i(TAG, "auto-GPU caps: esTier=$esTier maxSamples=$maxSamples maxCompute=$maxCompute renderer=\"$renderer\" -> $pick")
+            return pick
+        } catch (t: Throwable) {
+            Log.e(TAG, "auto-GPU caps probe threw -> CPU fallback", t)
+            return "cpu"
+        } finally {
+            if (dpy != android.opengl.EGL14.EGL_NO_DISPLAY) {
+                android.opengl.EGL14.eglMakeCurrent(dpy, android.opengl.EGL14.EGL_NO_SURFACE,
+                    android.opengl.EGL14.EGL_NO_SURFACE, android.opengl.EGL14.EGL_NO_CONTEXT)
+                if (surf != android.opengl.EGL14.EGL_NO_SURFACE) android.opengl.EGL14.eglDestroySurface(dpy, surf)
+                if (ctx != android.opengl.EGL14.EGL_NO_CONTEXT) android.opengl.EGL14.eglDestroyContext(dpy, ctx)
+                android.opengl.EGL14.eglTerminate(dpy)
+            }
+        }
+    }
+
+    /**
+     * Phase 3 auto-GPU first-boot fallback. Polls the native frame-presented counter; the instant the promoted
+     * renderer presents a handful of frames (== it activated, not black/crashed), clear the `auto-gpu-armed` cookie
+     * to COMMIT the promote. If it never presents within the deadline, leave the cookie armed so the next launch
+     * reverts to CPU. A hard crash kills this thread too, leaving the cookie armed -> same revert. Daemon so it
+     * never holds the process open.
+     */
+    private fun startAutoGpuWatchdog() {
+        thread(name = "auto-gpu-watchdog", isDaemon = true) {
+            val successFrames = 3L                 // a few real presents prove activation (not a one-frame fluke)
+            val deadlineMs = System.currentTimeMillis() + 240_000L   // generous: cold JVM boot + cache + Zone shader compile
+            while (System.currentTimeMillis() < deadlineMs) {
+                try { Thread.sleep(1000) } catch (e: InterruptedException) { return@thread }
+                val frames = try { JvmLauncher.nativeGpuFramesPresented() } catch (t: Throwable) { 0L }
+                if (frames >= successFrames) {
+                    runCatching { File(filesDir, "auto-gpu-armed").delete() }
+                    Log.i(TAG, "auto-GPU: renderer presenting ($frames frames) -> committed; crash-cookie cleared")
+                    return@thread
+                }
+            }
+            Log.w(TAG, "auto-GPU: renderer presented no frames within 240s -> crash-cookie left armed (CPU next launch)")
+        }
     }
 
     /** Dev "GPU" button: restart the process into GPU Route-C mode (the embedded VM is one-per-process, so

@@ -136,6 +136,10 @@ object JvmLauncher {
     external fun nativeFrameWidth(): Int
     external fun nativeFrameHeight(): Int
 
+    /** Phase 3 (auto-GPU watchdog): frames the GPU/117HD renderer has actually presented. 0 == renderer not armed or
+     *  never activated (failed/black/crashed); a climbing value == it activated and is presenting. */
+    external fun nativeGpuFramesPresented(): Long
+
     // AP-2b Finding 5 (screenshot): the latest composited CPU frame as 0x00RRGGBB ints (alpha unset; the consumer
     // ORs 0xFF for an opaque PNG). null before the first frame / bridge off. Pull OFF the UI thread (via [onBridge])
     // — it attaches the caller to HotSpot. Size against [nativeFrameWidth]; guard len % width == 0.

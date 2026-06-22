@@ -220,6 +220,9 @@ static volatile bool   g_renderRun = false;
 // would only matter mid-resize) can't arise in this scope.
 static std::atomic<int> g_lastFrameW{0};
 static std::atomic<int> g_lastFrameH{0};
+// Phase 3 (auto-GPU watchdog): resolved from librlawt via dlsym when direct present is armed; returns the count of
+// frames presented by the GPU/117HD renderer (0 if not armed / renderer never activated). Polled by Kotlin.
+static uint64_t (*g_routecFramesPresented)() = nullptr;
 // Present seam (cont.): in direct-present mode the CPU present thread no longer runs (it's where g_lastFrameW/H
 // were set), so librlawt publishes the live canvas dims here each frame — touch->game coordinate mapping
 // (JvmLauncher.frameWidth/Height) depends on them, else clicks map off-canvas.
@@ -1265,6 +1268,7 @@ static void *jvmThreadMain(void *argp) {
                 if (setcb) {
                     setcb(rcPresentAcquireWindow, rcPresentSurfaceGen, rcPresentReleaseWindow, rcPresentSetFrameDims);
                     g_directPresent.store(true, std::memory_order_release);
+                    g_routecFramesPresented = (uint64_t (*)()) dlsym(rh, "RouteC_framesPresented");  // Phase 3 auto-GPU watchdog signal
                     LOGI("%s: direct EGL present armed (CPU present thread stands down)", mode);
                 } else {
                     LOGE("%s: RouteC_setPresentCallbacks not found — using CPU readback present", mode);
@@ -1534,6 +1538,12 @@ extern "C" JNIEXPORT jint JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeFrameWidth(JNIEnv *, jobject) { return g_lastFrameW.load(std::memory_order_relaxed); }
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeFrameHeight(JNIEnv *, jobject) { return g_lastFrameH.load(std::memory_order_relaxed); }
+// Phase 3 (auto-GPU watchdog): frames the GPU/117HD renderer has actually presented. 0 == not armed or renderer
+// never activated (failed/black/crashed); climbing == success. The Kotlin first-boot fallback polls this.
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeGpuFramesPresented(JNIEnv *, jobject) {
+    return g_routecFramesPresented ? (jlong) g_routecFramesPresented() : 0L;
+}
 
 // ---- A4 plugin control plane (MobileUiBridge) --------------------------------------------------------
 // These run on the Kotlin "rl-bridge" executor thread (NOT the ART UI thread). They daemon-attach that OS

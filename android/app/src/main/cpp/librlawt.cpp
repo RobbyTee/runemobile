@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <string>
 #include <regex>
+#include <atomic>
 
 #define LOG_TAG "librlawt"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -82,6 +83,10 @@ static void     (*sCbSetFrameDims)(int, int)   = nullptr;   // publish canvas di
 static EGLSurface sWinSurf = EGL_NO_SURFACE;
 static void*      sWin     = nullptr;            // ANativeWindow* (opaque here; released via sCbReleaseWindow)
 static uint64_t   sWinGen  = (uint64_t)-1;
+// Phase 3 (auto-GPU watchdog): monotonic count of frames actually presented to the window surface (direct path).
+// >0 + climbing == the GPU/117HD renderer activated and is presenting (NOT crashed / black / failed-to-start) — the
+// success signal the Kotlin first-boot fallback polls (via RouteC_framesPresented) to commit or revert the promote.
+static std::atomic<uint64_t> sFramesPresented{0};
 
 // ---- Phase 0 instrumentation & swap-interval control ---------------------------------------------------------
 // Read an Android system property as an int (settable live with `adb shell setprop`, no rebuild). Returns dflt if
@@ -806,6 +811,11 @@ extern "C" void RouteC_setPresentCallbacks(void* (*acq)(uint64_t*), uint64_t (*g
     LOGI("present callbacks set — direct EGL window-surface present armed");
 }
 
+// Phase 3 (auto-GPU watchdog): frames presented so far on the direct path. jvm_bootstrap dlsym's this and exposes it
+// to Kotlin (JvmLauncher.nativeGpuFramesPresented) so the first-boot fallback can tell "renderer activated" from
+// "failed/black/crashed" without any per-frame plumbing.
+extern "C" uint64_t RouteC_framesPresented() { return sFramesPresented.load(std::memory_order_relaxed); }
+
 // Create/recreate the EGL window surface from the SurfaceView when the surface generation changes (background ->
 // foreground recreates the Surface). Runs on the GL/draw thread (same thread the context is current on). Returns
 // true iff a window surface is ready to present to.
@@ -873,6 +883,7 @@ static void JNICALL rc_AWT_swapBuffers(JNIEnv* env, jobject){
             // (eglSwapBuffers maps GL bottom-left -> screen). If it shows inverted on device, swap the dst Y extents.
             glBlitFramebuffer(0, 0, w, h,  0, 0, sw, sh,  GL_COLOR_BUFFER_BIT, GL_LINEAR);
             eglSwapBuffers(sDpy, sWinSurf);
+            sFramesPresented.fetch_add(1, std::memory_order_relaxed);   // Phase 3: success signal for the auto-GPU watchdog
         }
         if (sTimerFns && sTimerOn) rcTimerDrainAndBegin();
         return;
