@@ -694,7 +694,7 @@ static bool rcEnsureWindowSurface() {
     sWinSurf = eglCreateWindowSurface(sDpy, sCfg, (EGLNativeWindowType)w, nullptr);
     if (sWinSurf == EGL_NO_SURFACE) { LOGE("eglCreateWindowSurface failed 0x%x", eglGetError()); sCbReleaseWindow(w); return false; }
     sWin = w;
-    sSwapDirty = true;   // re-apply the swap interval on the fresh surface
+    sSwapDirty = true;   // re-apply the swap interval on each fresh surface (incl. background->foreground recreation)
     LOGI("direct-present: EGL window surface created gen=%llu", (unsigned long long)sWinGen);
     return true;
 }
@@ -707,8 +707,10 @@ static void JNICALL rc_AWT_swapBuffers(JNIEnv* env, jobject){
     int w = sFboW, h = sFboH;
     if (w <= 0 || h <= 0) return;
 
-    // GPU timer probe (debug.routec.gputime): close the query around the frame the plugin just rendered, BEFORE
-    // the present blit below, so the measurement excludes our blit. Prop re-checked ~1/sec to keep play-path cost nil.
+    // GPU timer probe (debug.routec.gputime). The query is OPENED at the bottom of the previous swapBuffers (after
+    // that frame's present) and CLOSED here, before this frame's present blit/readback below — so the begin->end
+    // span is exactly the plugin's draw calls for one frame, with neither present path (direct blit nor legacy
+    // glReadPixels) inside it. Prop re-checked ~1/sec to keep the play-path cost nil.
     static double sPropCheck = 0;
     if (sTimerFns) {
         double now = rc_now_ms();
