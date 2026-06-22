@@ -131,8 +131,11 @@ static int    sTQActive = -1;
 static bool   sTimerOn  = false;      // gputime prop currently enabling the probe
 static double sGpuSumMs = 0, sGpuMinMs = 0, sGpuMaxMs = 0;
 static int    sGpuFrames = 0;
-static int    sGpuDisjoint = 0;       // GPU_DISJOINT events seen this window (Mali DVFS raises these under load)
+static int    sGpuDisjoint = 0;       // drains this window that saw GPU_DISJOINT (Mali DVFS raises these; per-window, not per-event)
 static int    sGpuAvailSeen = 0;      // results that became available this window (0 => availability, not disjoint, is the wall)
+static int    sGpuHitch = 0;          // kept results above the hitch threshold this window (real stalls, surfaced not hidden)
+#define RC_GPU_HITCH_MS  100.0        // a kept result over this is a real stall (shader compile / streaming / GC) — flagged
+#define RC_GPU_GARBAGE_MS 10000.0     // a result over this is disjoint OVERFLOW garbage, not a real frame — only THESE are dropped
 static double sGpuLastLog = 0;        // ms (monotonic) of the last [gpuprobe] emit
 
 // JavaBridge GPU seam (resolved lazily once the GPU jar's class is on the classpath).
@@ -657,7 +660,11 @@ static void rcTimerDrainAndBegin() {
         sTQState[i] = 0;
         sGpuAvailSeen++;
         double ms = ns / 1e6;
-        if (ms <= 0.0 || ms > 1000.0) continue;   // disjoint garbage (a real frame is single-digit-to-tens of ms)
+        // Drop ONLY disjoint overflow garbage (astronomically large) and zero/empty results — NOT real catastrophic
+        // hitches: a multi-hundred-ms stall (shader compile, texture streaming, GC) is exactly what the probe must
+        // catch, so it stays in the stats and is surfaced via the hitch counter below.
+        if (ms <= 0.0 || ms > RC_GPU_GARBAGE_MS) continue;
+        if (ms > RC_GPU_HITCH_MS) sGpuHitch++;
         sGpuSumMs += ms; sGpuFrames++;
         if (sGpuMinMs == 0 || ms < sGpuMinMs) sGpuMinMs = ms;
         if (ms > sGpuMaxMs) sGpuMaxMs = ms;
@@ -666,13 +673,13 @@ static void rcTimerDrainAndBegin() {
     if (sGpuLastLog == 0) sGpuLastLog = now;
     if (now - sGpuLastLog >= 1000.0) {
         if (sGpuFrames > 0) {
-            LOGI("[gpuprobe] frames=%d avg=%.2f min=%.2f max=%.2f ms disjoint=%d",
-                 sGpuFrames, sGpuSumMs / sGpuFrames, sGpuMinMs, sGpuMaxMs, sGpuDisjoint);
+            LOGI("[gpuprobe] frames=%d avg=%.2f min=%.2f max=%.2f ms disjoint=%d hitch=%d",
+                 sGpuFrames, sGpuSumMs / sGpuFrames, sGpuMinMs, sGpuMaxMs, sGpuDisjoint, sGpuHitch);
         } else {
             // No usable result this window — name the cause (availability wall vs all-disjoint-garbage) for diagnosis.
             LOGI("[gpuprobe] no usable GPU-time this window (availSeen=%d disjoint=%d)", sGpuAvailSeen, sGpuDisjoint);
         }
-        sGpuSumMs = sGpuMinMs = sGpuMaxMs = 0; sGpuFrames = 0; sGpuDisjoint = 0; sGpuAvailSeen = 0; sGpuLastLog = now;
+        sGpuSumMs = sGpuMinMs = sGpuMaxMs = 0; sGpuFrames = 0; sGpuDisjoint = 0; sGpuAvailSeen = 0; sGpuHitch = 0; sGpuLastLog = now;
     }
     int idx = -1;
     for (int i = 0; i < RC_NQ; i++) if (sTQState[i] == 0) { idx = i; break; }
