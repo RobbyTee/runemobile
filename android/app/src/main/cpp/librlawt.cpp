@@ -340,7 +340,14 @@ static bool rcClipControlSelfTest() {
     if (!prog) { LOGE("clipcontrol self-test: shader build FAILED -> treating clip as NOT engaged"); return false; }
     GLuint vao = 0; glGenVertexArrays(1, &vao); glBindVertexArray(vao);   // GLES3 draw needs a bound VAO
     glBindFramebuffer(GL_FRAMEBUFFER, sFbo);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {   // self-contained guard; caller also gates on fboOk
+        LOGE("clipcontrol self-test: target FBO not complete -> treating clip as NOT engaged");
+        glBindVertexArray(0); glDeleteVertexArrays(1, &vao); glDeleteProgram(prog);
+        return false;   // -> caller reverts to known-good standard depth
+    }
     glViewport(0, 0, sFboW, sFboH);
+    glDisable(GL_SCISSOR_TEST);                          // glClear is clipped by scissor -> ensure the whole buffer is painted
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);     // and gated by the colour mask -> ensure the red clear actually writes
     glDisable(GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
