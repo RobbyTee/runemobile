@@ -111,6 +111,11 @@ Verdict:
   pursued: measure upload-bound-ness (per-frame `glBufferData` re-upload cost in NPC-dense scenes)
   before implementing `rc_glBufferStorage` + persistent-mapped `GLBuffer`. Gated on that A/B.
 
+> Caveat: the multi-draw drop is driven by `multi_draw_indirect=0` (extension **absent** → the cap
+> cannot be flipped in *any* scene), NOT by the 12% figure. The ~120-call / ~14-saved numbers are
+> **open-Lumbridge only** (a light scene); the `[drawcount]` counter ships, so re-run it in a GE crowd /
+> PvM to confirm those scenes aren't draw-bound either before treating draw-call cost as closed.
+
 ---
 
 ## Phase 5 — Quality ceiling  *(deferred until the floor is solid)*

@@ -497,6 +497,9 @@ static void rcProbePhase4Caps() {
         const GLsizeiptr sz = 4096;
         const GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT_EXT | GL_MAP_COHERENT_BIT_EXT;
         pBufferStorage(GL_ARRAY_BUFFER, sz, nullptr, flags);
+        // Only map if storage SUCCEEDED — the ternary keeps the EXT map bits out of glMapBufferRange unless
+        // glBufferStorage went clean (and we are already inside the bsOk gate, so the persistent/coherent bits are
+        // valid for glMapBufferRange per EXT_buffer_storage). A storage failure short-circuits to p=nullptr.
         void* p = (glGetError() == GL_NO_ERROR) ? glMapBufferRange(GL_ARRAY_BUFFER, 0, sz, flags) : nullptr;
         if (p && glGetError() == GL_NO_ERROR) {
             ((volatile uint32_t*) p)[0] = 0xC0FFEEu;                 // write through the persistent mapping
