@@ -765,13 +765,16 @@ class MainActivity : AppCompatActivity() {
             if (armed.exists()) {
                 armed.delete()
                 val wasAuto = rp.getBoolean("autoDecided", false)
-                rp.edit().putString("mode", "cpu").apply()
-                if (wasAuto) rp.edit().putBoolean("autoGpuFailed", true).apply()
+                // commit() (synchronous): the boot path arms a SYNC cookie file next, so the pref must be durably on
+                // disk first — else a crash in the apply() flush window could leave an armed cookie with a stale mode.
+                val e = rp.edit().putString("mode", "cpu")
+                if (wasAuto) e.putBoolean("autoGpuFailed", true)
+                e.commit()
                 Log.w(TAG, "auto-GPU: prior promoted boot never presented a frame -> CPU fallback (wasAuto=$wasAuto)")
             }
             if (rp.getString("mode", null) == null && !rp.getBoolean("autoGpuFailed", false)) {
                 val probed = probeGpuCaps()   // "117hd" | "gpu" | "cpu"
-                rp.edit().putString("mode", probed).putBoolean("autoDecided", probed != "cpu").apply()
+                rp.edit().putString("mode", probed).putBoolean("autoDecided", probed != "cpu").commit()   // durable before the cookie arms
                 Log.i(TAG, "auto-GPU: first-run caps probe -> default renderer '$probed'")
             }
         }
