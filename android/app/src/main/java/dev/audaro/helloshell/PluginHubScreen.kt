@@ -24,6 +24,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,6 +33,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -63,12 +65,17 @@ data class HubRow(
  * manifest (catches a silent failure). All bridge calls go over the rl-bridge thread (HotSpot-attached).
  */
 @Composable
-fun PluginHubScreen(onBack: () -> Unit) {
+fun PluginHubScreen(onBack: () -> Unit, onPanelTextActive: (Boolean) -> Unit = {}) {
     var status by remember { mutableStateOf("loading") }   // loading | ok | error:* | off | not-ready
     var rows by remember { mutableStateOf<List<HubRow>>(emptyList()) }
     var filter by remember { mutableStateOf("") }
     var statusLine by remember { mutableStateOf("Loading manifest…") }
     val scope = rememberCoroutineScope()
+
+    // Leaving the Hub (or closing the panel from it) must release the IME-suppression latch even if the search
+    // field was focused — onFocusChanged(false) isn't guaranteed to fire on dispose, and a stuck-true latch would
+    // block the in-game ⌨ / chat keyboard. (Same guard as PluginPanel/ConfigScreen/PanelView.)
+    DisposableEffect(Unit) { onDispose { onPanelTextActive(false) } }
 
     // Manifest poll: hubManifest() kicks off a one-time background download and returns {status:loading} until
     // ready. Poll ~1 Hz until status leaves "loading", then parse once (or surface the terminal error).
@@ -156,7 +163,10 @@ fun PluginHubScreen(onBack: () -> Unit) {
                 OutlinedTextField(
                     value = filter, onValueChange = { filter = it },
                     label = { Text("Search") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    // Tell the host the IME is owned by this field while focused — else the per-frame input poll
+                    // hides the soft keyboard every frame and it opens-then-closes. Same path the other panels use.
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
+                        .onFocusChanged { onPanelTextActive(it.hasFocus) },
                 )
                 val shown = rows.filter {
                     filter.isBlank() || it.displayName.contains(filter, ignoreCase = true) ||

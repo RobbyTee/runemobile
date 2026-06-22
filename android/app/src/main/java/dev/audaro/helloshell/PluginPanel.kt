@@ -211,7 +211,7 @@ fun PluginPanel(
             infoBoxOpen -> InfoBoxScreen(onBack = { infoBoxOpen = false })
             profilesOpen -> ConfigProfilesScreen(onBack = { profilesOpen = false })
             hotkeysOpen -> HotkeysScreen(onBack = { hotkeysOpen = false })
-            hubOpen -> PluginHubScreen(onBack = { hubOpen = false; scope.launch { reload() } })
+            hubOpen -> PluginHubScreen(onBack = { hubOpen = false; scope.launch { reload() } }, onPanelTextActive = onPanelTextActive)
             panelOpen != null -> {
                 val po = panelOpen!!
                 PanelView(po.first, po.second, onBack = { panelOpen = null }, onPanelTextActive = onPanelTextActive)
