@@ -211,7 +211,7 @@ fun PluginPanel(
             }
             configFor != null -> {
                 val cf = configFor!!
-                ConfigScreen(cf.first, cf.second, onBack = { configFor = null })
+                ConfigScreen(cf.first, cf.second, onBack = { configFor = null }, onTextActive = onPanelTextActive)
             }
             else -> Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
                 val inList = listMode || filter.isNotEmpty()

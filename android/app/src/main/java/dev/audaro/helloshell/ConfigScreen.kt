@@ -35,6 +35,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -46,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -83,7 +85,7 @@ data class ConfigItem(
  * via setConfig on the bridge thread (the engine fires ConfigChanged as the ack).
  */
 @Composable
-fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit) {
+fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit, onTextActive: (Boolean) -> Unit = {}) {
     var items by remember { mutableStateOf<List<ConfigItem>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var reloadKey by remember { mutableIntStateOf(0) }
@@ -107,9 +109,14 @@ fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit) {
             JvmLauncher.onBridge { JvmLauncher.flushConfig() }
         }
     }
+    // Leaving the config screen must clear the IME-suppression latch even if a field was focused on exit.
+    DisposableEffect(Unit) { onDispose { onTextActive(false) } }
 
     Surface(color = Color(0xF2121212), modifier = Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().padding(12.dp)) {
+        // FIX (Cluster C): when a config text field gains focus, tell the host to leave the IME alone — otherwise
+        // the per-frame input poll (startInputPolling) calls hideSoftInput every frame and the keyboard never
+        // opens. hasFocus reflects the whole subtree, so moving between fields stays true (no flicker / re-hide).
+        Column(Modifier.fillMaxSize().padding(12.dp).onFocusChanged { onTextActive(it.hasFocus) }) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = {
                     // AP-0: persist pending edits on leave — config otherwise only flushes on app background/onStop.
