@@ -188,6 +188,9 @@ public final class MobileChromeBridge
 			.append(",\"rootKind\":\"").append(root.name()).append('"')
 			.append(",\"topLevelId\":").append(topLevel)
 			.append(",\"resized\":").append(resized)
+			// Bug 8: gate native chrome until the engine has drawn its first chat line (login welcome) so the
+			// tab grid/toolbar don't flash in the gap between LOGGED_IN and the HUD finishing its build.
+			.append(",\"chatReady\":").append(HudVeneerBridge.hasFirstChatLine())
 			.append(",\"activeTab\":").append(activeTab);
 
 		// World viewport rect.

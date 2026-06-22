@@ -151,6 +151,10 @@ public final class HudVeneerBridge
 	// centre. The orbs stay live engine widgets (never moved); only the touch target grows. Published in tick().
 	private static volatile String orbSnapshotJson = "{\"loggedIn\":false}";
 	private static volatile int chatLinesSeq;
+	// Bug 8: latched true once the engine has actually drawn ≥1 chat line this session (the login "Welcome to
+	// Old School RuneScape." line). The native chrome gates on this so the tab grid/toolbar don't flash in the
+	// window between LOGGED_IN and the first chat draw. Re-armed on logout (see tick()).
+	private static volatile boolean firstChatLineShown;
 
 	// Content-derived publish seqs: each bumps only when its snapshot JSON actually changes, so the native
 	// republish loop can skip the per-frame String copy when nothing changed (the menu-peek gate pattern). Because
@@ -348,6 +352,13 @@ public final class HudVeneerBridge
 		return chatLinesJson;
 	}
 
+	/** Bug 8: true once the engine has drawn its first chat line this session (login welcome). The native shell
+	 *  gates the tab grid/toolbar on this so they don't flash before the HUD has finished building. */
+	public static boolean hasFirstChatLine()
+	{
+		return firstChatLineShown;
+	}
+
 	/** Native: the open dialogue's content for the native opaque-parchment renderer, or {@code "{}"} when none.
 	 *  Shape: {@code {"type":"npc|player|both|message|options|levelup","name":"..","text":"..","runs":[..],
 	 *  "continue":true,"options":[{"text":"..","runs":[..],"digit":N}],"head":{"x":,"y":,"w":,"h":}}} — bounds are
@@ -530,6 +541,10 @@ public final class HudVeneerBridge
 	{
 		if (!ENABLED || c == null || c.getGameState() != GameState.LOGGED_IN)
 		{
+			if (c != null && c.getGameState() != GameState.LOGGED_IN)
+			{
+				firstChatLineShown = false;   // Bug 8: re-arm the chrome gate for the next login's welcome line
+			}
 			return;
 		}
 		try
@@ -1863,6 +1878,10 @@ public final class HudVeneerBridge
 			// newest-first by timestamp (stable so same-second order is preserved), keep newest CAP, emit oldest-first.
 			nodes.sort((a, b) -> Integer.compare(safeTs(b), safeTs(a)));
 			final int n = Math.min(CHAT_LINES_CAP, nodes.size());
+			if (n > 0)
+			{
+				firstChatLineShown = true;   // Bug 8: the engine has drawn its first chat line — chrome may engage
+			}
 			final StringBuilder sb = new StringBuilder(2048);
 			sb.append("{\"loggedIn\":true,\"view\":").append(view)
 				.append(",\"seq\":").append(++chatLinesSeq)
@@ -1991,7 +2010,8 @@ public final class HudVeneerBridge
 			sb.append("{\"name\":\"").append(jsonEsc(name)).append('"')
 				.append(",\"type\":").append(typeId)
 				.append(",\"ts\":").append(safeTs(n)).append(',');
-			appendTextWithRuns(sb, full, CHAT_DEFAULT_COLOR);
+			// Bug 11 — official-mobile look: chat lines render fully white (suppress per-<col=> run colours).
+			appendTextWithRuns(sb, full, CHAT_DEFAULT_COLOR, true);
 			sb.append('}');
 			return sb.toString();
 		}
@@ -2006,6 +2026,13 @@ public final class HudVeneerBridge
 	 *  tags. Runs are recorded against the STRIPPED text offsets; only spans differing from {@code defColor} (or
 	 *  underlined) are emitted, so native applies the default elsewhere. */
 	private static void appendTextWithRuns(StringBuilder sb, String raw, int defColor)
+	{
+		appendTextWithRuns(sb, raw, defColor, false);
+	}
+
+	/** As above; when {@code forceWhite}, every {@code <col=..>} colour override is ignored so all text renders at
+	 *  {@code defColor} (the official-mobile all-white chat look). Underline tags are still honoured. */
+	private static void appendTextWithRuns(StringBuilder sb, String raw, int defColor, boolean forceWhite)
 	{
 		final StringBuilder text = new StringBuilder(raw.length());
 		final StringBuilder runs = new StringBuilder(96);
@@ -2039,7 +2066,7 @@ public final class HudVeneerBridge
 			boolean changed = false;
 			if (low.startsWith("col="))
 			{
-				newColor = parseHexColor(tag.substring(4));
+				newColor = forceWhite ? defColor : parseHexColor(tag.substring(4));
 				changed = true;
 			}
 			else if (low.equals("/col") || low.equals("colnormal"))
@@ -2049,7 +2076,7 @@ public final class HudVeneerBridge
 			}
 			else if (low.equals("colhighlight"))
 			{
-				newColor = 0xff0000;
+				newColor = forceWhite ? defColor : 0xff0000;
 				changed = true;
 			}
 			else if (low.equals("u"))

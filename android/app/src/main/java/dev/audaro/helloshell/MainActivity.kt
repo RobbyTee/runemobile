@@ -1750,7 +1750,10 @@ class MainActivity : AppCompatActivity() {
         // PRE_EOC (Classic, 164) and OSRS_STRETCH (modern, 161) — the shared layer hides/replays the right stones for
         // each (stoneIds/openTabNow branch on the root, STONE0..13 in identical order). FIXED is excluded (the shared
         // tick hard-returns on !isResized + stoneIds has no FIXED branch), so it keeps the raw engine HUD.
-        val supported = loggedIn && (rootKind == "PRE_EOC" || rootKind == "OSRS_STRETCH")
+        // Bug 8: hold chrome off until the engine reports its first chat line (login "Welcome…") has drawn, so the
+        // tab grid + toolbar don't flash in the window between LOGGED_IN and the HUD finishing its build.
+        val chatReady = o?.optBoolean("chatReady") == true
+        val supported = loggedIn && chatReady && (rootKind == "PRE_EOC" || rootKind == "OSRS_STRETCH")
         chromeOverlay.setGridEnabled(supported)
         chromeOverlay.setActiveTab(active)
 

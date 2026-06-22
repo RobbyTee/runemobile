@@ -26,7 +26,11 @@ package net.runelite.client.headless;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.client.callback.ClientThread;
@@ -56,6 +60,16 @@ public final class QuestHelperBridge
 		"com.questhelper.questinfo.QuestHelperQuest",
 		"com.questhelper.QuestHelperQuest",
 	};
+
+	// Quest Helper's QuestDetails.Type enum (reflected as a String across the plugin's class loader) also covers
+	// non-quest helpers — skill trainers (Agility/Woodcutting/Mining), generic helpers and achievement diaries.
+	// Those must not leak into the native quest list. Deny the known non-quest types; anything outside the known
+	// universe is logged once and shown (fail-safe — never silently hide a genuine quest if the enum grows).
+	private static final Set<String> NON_QUEST_TYPES = new HashSet<>(Arrays.asList(
+		"SKILL", "SKILL_F2P", "SKILL_P2P", "GENERIC", "ACHIEVEMENT_DIARY"));
+	private static final Set<String> KNOWN_QUEST_TYPES = new HashSet<>(Arrays.asList(
+		"F2P", "P2P", "MINIQUEST", "PLAYER_QUEST"));
+	private static final Set<String> loggedUnknownTypes = ConcurrentHashMap.newKeySet();
 
 	private static volatile PluginManager pluginManager;
 	private static volatile ClientThread clientThread;
@@ -192,6 +206,10 @@ public final class QuestHelperBridge
 					final String name = String.valueOf(mGetName.invoke(q));
 					final String diff = enumName(mGetDifficulty.invoke(q));
 					final String type = enumName(mGetQuestType.invoke(q));
+					if (isNonQuestType(type))
+					{
+						continue; // skill trainers / generic helpers / diaries — not quests
+					}
 					final String state = enumName(mGetState.invoke(q, client));
 					if (!first)
 					{
@@ -531,6 +549,24 @@ public final class QuestHelperBridge
 			{
 			}
 		}
+	}
+
+	/** True for Quest Helper helper types that are not real quests (skill/generic/diary). Unknown types log once and show. */
+	private static boolean isNonQuestType(String type)
+	{
+		if (type == null || type.isEmpty())
+		{
+			return false;
+		}
+		if (NON_QUEST_TYPES.contains(type))
+		{
+			return true;
+		}
+		if (!KNOWN_QUEST_TYPES.contains(type) && loggedUnknownTypes.add(type))
+		{
+			log.info("[questhelper] unknown questType '{}' — showing as a quest (add to allow/deny set if wrong)", type);
+		}
+		return false;
 	}
 
 	private static String enumName(Object enumValue)

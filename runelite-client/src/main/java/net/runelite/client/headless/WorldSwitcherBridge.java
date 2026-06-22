@@ -187,9 +187,22 @@ public final class WorldSwitcherBridge
 				log.info("[worldswitcher] quick-hop aborted: hop(boolean) unresolved");
 				return;
 			}
+			// Diagnostics: the plugin's hop(boolean) silently returns if it isn't LOGGED_IN, its worldService has no
+			// world list yet, or the current world isn't in that list — log those preconditions so a no-op is visible.
+			final Client c = client;
+			final WorldService ws = worldService();
+			final WorldResult wr = ws == null ? null : ws.getWorlds();
+			final int curWorld = c == null ? -1 : c.getWorld();
+			final boolean curInList = wr != null && wr.findWorld(curWorld) != null;
+			log.info("[worldswitcher] quick-hop {} gameState={} worlds={} curWorld={} curInList={}",
+				previous ? "prev" : "next",
+				c == null ? "?" : c.getGameState(),
+				wr == null ? "null" : String.valueOf(wr.getWorlds().size()),
+				curWorld, curInList);
 			try
 			{
 				hopDirMethod.invoke(worldHopper, previous);
+				log.info("[worldswitcher] quick-hop {} invoked ok", previous ? "prev" : "next");
 			}
 			catch (Throwable ex)
 			{
