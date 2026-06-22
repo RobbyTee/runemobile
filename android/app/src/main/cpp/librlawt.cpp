@@ -39,16 +39,24 @@
 #ifndef GL_UNSIGNED_INT_8_8_8_8_REV
 #define GL_UNSIGNED_INT_8_8_8_8_REV 0x8367
 #endif
-// EXT_clip_control (reverse-Z) — resolved at runtime via eglGetProcAddress; absent on a driver -> the shim no-ops
-// (the GEQUAL projection fallback handles reverse-Z, AG2).
+// EXT_clip_control (reverse-Z) — resolved at runtime via eglGetProcAddress; absent on a driver -> reverse-Z cannot
+// be enabled and depth stays the GL standard [-1,1] range. NOTE: GEQUAL alone does NOT emulate reverse-Z — the
+// 117HD reverse-Z projection (Mat4.perspectiveInfiniteReverseZ + glClearDepth(0) + GL_GEQUAL) only maps depth
+// correctly when the clip volume is [0,1], which requires glClipControl(LOWER_LEFT, ZERO_TO_ONE). It is enabled +
+// self-tested at context creation (see rcSetupClipControl), since the Zone renderer never calls glClipControl itself.
 #ifndef GL_LOWER_LEFT
 #define GL_LOWER_LEFT 0x8CA1
 #endif
 #ifndef GL_ZERO_TO_ONE
 #define GL_ZERO_TO_ONE 0x935F
 #endif
+#ifndef GL_NEGATIVE_ONE_TO_ONE
+#define GL_NEGATIVE_ONE_TO_ONE 0x935E
+#endif
 typedef void (*PFNGLCLIPCONTROLEXTPROC)(GLenum origin, GLenum depth);
 static PFNGLCLIPCONTROLEXTPROC pglClipControlEXT = nullptr;
+// Phase 1: true once glClipControl(ZERO_TO_ONE) is enabled AND the self-test confirms the [0,1] range engaged.
+static bool sClipReverseZ = false;
 
 // ---- EGL offscreen context + FBO (ported from RouteCBridge.m's RC_BACKEND_ANGLE path, ANGLE selectors dropped)
 static EGLDisplay sDpy  = EGL_NO_DISPLAY;
@@ -293,6 +301,98 @@ static bool rcBuildFbo(int w, int h) {
     return status == GL_FRAMEBUFFER_COMPLETE;
 }
 
+// ---- Phase 1: reverse-Z clip-control enable + fail-safe self-test --------------------------------------------
+// The 117HD Zone renderer renders reverse-Z (perspectiveInfiniteReverseZ + glClearDepth(0) + GL_GEQUAL), which is
+// only depth-correct under a [0,1] clip volume. It never calls glClipControl, so we enable it here. A driver can
+// expose glClipControlEXT yet not honour it; the self-test below PROVES the [0,1] range actually engaged before we
+// trust it, and the fallback (standard [-1,1]) is exactly what the renderer ran under before this change — so a
+// lying driver can never brick the scene to black.
+static GLuint rcCompileSelfTestProgram() {
+    static const char* vs =
+        "#version 300 es\n"
+        "void main(){\n"
+        "  vec2 p = vec2(gl_VertexID==1 ? 3.0 : -1.0, gl_VertexID==2 ? 3.0 : -1.0);\n"  // fullscreen triangle
+        "  gl_Position = vec4(p, 0.25, 1.0);\n"   // clip z=0.25, w=1 -> NDC z = 0.25 (inside both clip volumes)
+        "}\n";
+    static const char* fs =
+        "#version 300 es\n"
+        "precision mediump float;\n"
+        "out vec4 o;\n"
+        "void main(){ o = vec4(0.0, 1.0, 0.0, 1.0); }\n";  // green = the fragment survived the depth test
+    GLuint v = glCreateShader(GL_VERTEX_SHADER);   glShaderSource(v,1,&vs,nullptr); glCompileShader(v);
+    GLuint f = glCreateShader(GL_FRAGMENT_SHADER); glShaderSource(f,1,&fs,nullptr); glCompileShader(f);
+    GLint ok = 0;
+    glGetShaderiv(v, GL_COMPILE_STATUS, &ok); if (!ok) { glDeleteShader(v); glDeleteShader(f); return 0; }
+    glGetShaderiv(f, GL_COMPILE_STATUS, &ok); if (!ok) { glDeleteShader(v); glDeleteShader(f); return 0; }
+    GLuint p = glCreateProgram(); glAttachShader(p, v); glAttachShader(p, f); glLinkProgram(p);
+    glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    glDeleteShader(v); glDeleteShader(f);
+    if (!ok) { glDeleteProgram(p); return 0; }
+    return p;
+}
+
+// Returns true iff the [0,1] (ZERO_TO_ONE) clip range is actually in effect. Draws one fragment at NDC z = 0.25
+// with clearDepth 0.4 + GEQUAL into sFbo, then reads back the centre pixel:
+//   ZERO_TO_ONE -> window depth 0.25 ; 0.25 >= 0.4 is FALSE -> fragment killed -> pixel stays RED  (engaged)
+//   [-1,1]      -> window depth (0.25+1)/2 = 0.625 ; 0.625 >= 0.4 TRUE -> fragment drawn -> pixel GREEN (not engaged)
+static bool rcClipControlSelfTest() {
+    GLuint prog = rcCompileSelfTestProgram();
+    if (!prog) { LOGE("clipcontrol self-test: shader build FAILED -> treating clip as NOT engaged"); return false; }
+    GLuint vao = 0; glGenVertexArrays(1, &vao); glBindVertexArray(vao);   // GLES3 draw needs a bound VAO
+    glBindFramebuffer(GL_FRAMEBUFFER, sFbo);
+    glViewport(0, 0, sFboW, sFboH);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDepthRangef(0.0f, 1.0f);
+    glDepthFunc(GL_GEQUAL);
+    glClearColor(1.0f, 0.0f, 0.0f, 1.0f);   // red = fragment failed the depth test (i.e. ZERO_TO_ONE engaged)
+    glClearDepthf(0.4f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glUseProgram(prog);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glFinish();
+    unsigned char px[4] = {0, 0, 0, 0};
+    glReadPixels(sFboW / 2, sFboH / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    // Leave GL neutral; the plugin re-sets depthFunc/clearColor/clearDepth/program/VAO every frame via RenderState.
+    glUseProgram(0);
+    glBindVertexArray(0);
+    glDeleteVertexArrays(1, &vao);
+    glDeleteProgram(prog);
+    glDepthFunc(GL_LESS);
+    glDisable(GL_DEPTH_TEST);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    bool isRed   = px[0] > 200 && px[1] < 60 && px[2] < 60;
+    bool isGreen = px[1] > 200 && px[0] < 60 && px[2] < 60;
+    LOGI("clipcontrol self-test: centre px=(%u,%u,%u,%u) -> %s", px[0], px[1], px[2], px[3],
+         isRed ? "RED (ZERO_TO_ONE engaged)" : isGreen ? "GREEN (clip NOT engaged)" : "INDETERMINATE");
+    return isRed;   // only a clean RED proves the [0,1] range took effect
+}
+
+// Enable reverse-Z [0,1] clip at context bring-up, with the fail-safe revert. `setprop debug.routec.clipcontrol 0`
+// forces standard depth (the pre-Phase-1 behaviour) on device with no rebuild.
+static void rcSetupClipControl() {
+    sClipReverseZ = false;
+    if (!pglClipControlEXT) pglClipControlEXT = (PFNGLCLIPCONTROLEXTPROC) eglGetProcAddress("glClipControlEXT");
+    if (rc_prop_int("debug.routec.clipcontrol", 1) == 0) {
+        if (pglClipControlEXT) pglClipControlEXT(GL_LOWER_LEFT, GL_NEGATIVE_ONE_TO_ONE);
+        LOGI("clipcontrol: forced OFF (debug.routec.clipcontrol=0) -> standard [-1,1] depth");
+        return;
+    }
+    if (!pglClipControlEXT) {
+        LOGE("clipcontrol: glClipControlEXT absent -> reverse-Z [0,1] unavailable; depth stays standard [-1,1]");
+        return;
+    }
+    pglClipControlEXT(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+    if (rcClipControlSelfTest()) {
+        sClipReverseZ = true;
+        LOGI("clipcontrol: reverse-Z [0,1] ENGAGED + verified");
+    } else {
+        pglClipControlEXT(GL_LOWER_LEFT, GL_NEGATIVE_ONE_TO_ONE);   // FAIL-SAFE: revert to known-good standard range
+        LOGE("clipcontrol: self-test did NOT confirm [0,1] -> reverted to standard [-1,1] (known-good)");
+    }
+}
+
 // ---- ByteBuffer native-order helper (LWJGL maps return native-ordered buffers) ------------------------------
 static jobject rc_native_order(JNIEnv *env, jobject bb) {
     if (!bb) return bb;
@@ -484,8 +584,11 @@ GLF rc_glViewport(JNIEnv*, jclass, jint a0, jint a1, jint a2, jint a3){ glViewpo
 GLF rc_glTexStorage3D(JNIEnv*, jclass, jint a0, jint a1, jint a2, jint a3, jint a4, jint a5){ glTexStorage3D(a0,a1,a2,a3,a4,a5); }
 GLF rc_glDebugMessageControl(JNIEnv*, jclass, jint, jint, jint, jint, jboolean){ /* KHR_debug optional; no-op */ }
 GLF rc_glClipControl(JNIEnv*, jclass, jint a0, jint a1){
+    // Forward to EXT_clip_control if present; no-op otherwise (depth then stays standard [-1,1] — GEQUAL does NOT
+    // emulate reverse-Z on its own). This path serves the base gpu plugin; 117HD/Zone enables + verifies reverse-Z
+    // at context creation instead (rcSetupClipControl), since it never calls glClipControl itself.
     if (!pglClipControlEXT) pglClipControlEXT = (PFNGLCLIPCONTROLEXTPROC) eglGetProcAddress("glClipControlEXT");
-    if (pglClipControlEXT) pglClipControlEXT((GLenum)a0, (GLenum)a1);   // reverse-Z if EXT_clip_control; else GEQUAL fallback (AG2)
+    if (pglClipControlEXT) pglClipControlEXT((GLenum)a0, (GLenum)a1);
 }
 
 // =============================================================================================================
@@ -612,6 +715,9 @@ static void JNICALL rc_AWT_createGLContext(JNIEnv* env, jobject){
       LOGI("GL caps: texture_buffer=%d (EXT=%d OES=%d) io_blocks=%d geom=%d", tb,
           ext && strstr(ext,"GL_EXT_texture_buffer")!=nullptr, ext && strstr(ext,"GL_OES_texture_buffer")!=nullptr,
           ext && strstr(ext,"shader_io_blocks")!=nullptr, ext && strstr(ext,"geometry_shader")!=nullptr); }
+    // Phase 1: complete reverse-Z by enabling the [0,1] clip range (the Zone renderer needs it but never sets it),
+    // with the self-test fail-safe. Done after the FBO is built so the test has a depth-complete target.
+    if (fboOk) rcSetupClipControl();
 }
 static void JNICALL rc_AWT_destroy(JNIEnv*, jobject){
     if (sDpy != EGL_NO_DISPLAY) {
