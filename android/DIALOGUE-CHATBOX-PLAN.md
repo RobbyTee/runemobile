@@ -52,17 +52,25 @@ no-behavior-change instrumentation edits:
 
 1. **iOS:** replace `headInView = CGRectZero` (`ViewController.m:2292`) with the real published `head` rect from
    `d[@"head"]`, scaled like Android does — so the cutout opens and `[dlg] head=` logs the actual rect.
-2. **Bridge log (one-shot, gated behind a flag):** when an NPC dialogue opens, log
-   `c.getWidget(InterfaceID.ChatLeft.HEAD).getBounds()` **and** `getModelZoom()`, with relocate ON **and** OFF.
+2. **Bridge log (one-shot, gated behind a flag):** when an NPC dialogue opens, log the full head-size picture
+   with relocate ON **and** OFF — not just one knob, since the chat-widget model projection differs from the
+   main scene: `ChatLeft.HEAD` `getBounds()` / `getWidth()` / `getHeight()` / `getOriginalWidth/Height`,
+   `getModelZoom()`, `getRotationX/Y/Z`, **and** the parent chain bounds (`ChatLeft` root + the `CHAT_CONTAINER`
+   host) so we can see whether the head is small because of (a) widget bounds, (b) modelZoom, (c) a clipped
+   parent/viewport, or (d) relocate/raster-suppression.
 
 Then open an NPC dialogue on device and read:
 
 - **VF-1 — Does the engine raster the dialogue subgroup (opaque content + head) at the relocated top?**
   (rasters → the engine path is viable; blank/ghost → parchment-only.)
-- **VF-2 — Is the head full-size (desktop ~96px) or small, and what's its `modelZoom`?**
-  This distinguishes: (a) relocate/raster-suppression, (b) a `WidgetType.MODEL` zoom/bounds issue, (c) other.
+- **VF-2 — Is the head full-size (desktop ~96px) or small, and WHY?** Log the full set from step 2 above
+  (bounds/width/height/modelZoom/rotations/parent bounds) — `modelZoom` alone is not enough; the chat-widget
+  model projection differs from the scene, so a clipped parent/viewport or the widget bounds could be the cause.
+  This distinguishes: (a) relocate/raster-suppression, (b) modelZoom, (c) widget/parent bounds clip, (d) other.
 - **VF-3 — Do the dialogue groups render opaque under the current pipeline** (is the parchment even needed for
-  opacity, or does the engine's own content sprite cover the chat)?
+  opacity, or does the engine's own content sprite cover the chat)? Code already confirms varbit 4608 is set in
+  exactly one place (`keepChatboxTransparent` `:2176`, always =1) and `sizeChatArea` never touches it — so
+  forcing =1 is isolated; this VF only needs to confirm the dialogue's own content sprite is opaque on-device.
 
 > NOTE: the off-device harness (`run-chat-veneer.sh`) reportedly has **no dialogue trigger** and the test account
 > is on tutorial island — so this probe is **device-only**. Confirm a tutorial NPC can open a dialogue, else
@@ -97,6 +105,10 @@ parchment when it's set; the engine dialogue shows through.
 
 Single owner = **native, per port**, off the existing `dialogueActive` edge. **Do NOT** put it in the shared
 bridge — `chatCollapsed` is native-authoritative on both ports; a bridge writer creates a two-owner desync.
+**No race exists in this design:** `dialogueActive`/`dialogueOpen` is *computed* from `isDialogueOpen(c)`
+(`HudVeneerBridge.java:558`) and only *published* in the snapshot (`:1556`) — it is engine-derived **read-only**,
+never written as a control. The only state the auto-open mutates is `chatCollapsed`, mutated **only** by the
+native side. So `dialogueActive` is the read-only trigger; `chatCollapsed` has a single (native) owner.
 - **iOS:** likely already gets it "for free" — the parchment shows off `dialogueActive` regardless of collapse
   (`updateDialogueView:2272` doesn't check collapse). If the engine path replaces the parchment, preserve this
   explicitly on the `dialogueActive` rising/falling edge (`:2126`).
@@ -112,6 +124,10 @@ bridge — `chatCollapsed` is native-authoritative on both ports; a bridge write
 - make-X / reward boxes stay on the `{}` path (`engineDialogue=false`).
 - Land both native gate changes together so the ports don't diverge; `engineDialogue` is the single shared switch.
 - Rollback is a one-line per-port gate (ignore `engineDialogue`) — no bridge revert needed.
+- **Cutout perf:** the Android cutout uses a single rectangular `clipOutRect` — the cheapest, HW-accelerated
+  clip at minSdk 28 on the target device; keep it. If a frame-time issue ever appears, replace it with 2–3
+  parchment rects drawn around the head (no clip at all) — not an even-odd `clipPath` (a non-rect path clip is
+  the same cost or worse).
 
 ## Key files
 - `runelite-client/src/main/java/net/runelite/client/headless/HudVeneerBridge.java` — lines 143, 558-687,
