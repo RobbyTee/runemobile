@@ -41,6 +41,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
@@ -130,6 +132,11 @@ fun PluginPanel(
     var pending by remember { mutableStateOf(setOf<String>()) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    // Safety: closing the whole panel while the search field (or any inner field) is focused must release the
+    // IME-suppression latch — onFocusChanged(false) isn't guaranteed to fire when a focused node is disposed, and a
+    // stuck-true latch would then block the in-game ⌨ / chat keyboard. (ConfigScreen/PanelView guard the same way.)
+    DisposableEffect(Unit) { onDispose { onPanelTextActive(false) } }
 
     suspend fun reload() {
         // listPlugins() must run off the UI thread + on a HotSpot-attached thread -> the rl-bridge executor.
@@ -232,7 +239,11 @@ fun PluginPanel(
                 OutlinedTextField(
                     value = filter, onValueChange = { filter = it },
                     label = { Text("Search plugins") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    // Tell the host the IME is owned by this field while it's focused — otherwise the per-frame input
+                    // poll (startInputPolling) sees no engine/manual text target, calls hideSoftInput every frame, and
+                    // the keyboard opens-then-closes instantly. Same path ConfigScreen/PanelView use.
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
+                        .onFocusChanged { onPanelTextActive(it.hasFocus) },
                 )
                 if (loading) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
