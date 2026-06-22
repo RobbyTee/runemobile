@@ -48,6 +48,7 @@ class DialogueView(context: Context) : View(context) {
     private var options: List<Pair<String, Int>> = emptyList()   // (text, digit)
     private val optionRects = ArrayList<RectF>()
     private var contCx = -1; private var contCy = -1
+    private var headRect: RectF? = null   // engine 3D-chathead bounds (view px) — cut out of the parchment
     private var lastJson = ""
     private var bodyLayout: StaticLayout? = null
 
@@ -100,6 +101,18 @@ class DialogueView(context: Context) : View(context) {
             contCy = cont.optInt("y") + cont.optInt("h") / 2
         } else { contCx = -1; contCy = -1 }
 
+        // The engine's 3D chathead bounds (canvas px → view px). Drawn as a transparent cutout in the parchment so
+        // the real head (still rendered underneath on the game surface) shows through, like desktop OSRS.
+        val head = d.optJSONObject("head")
+        headRect = if (head != null && head.optInt("w") > 0 && head.optInt("h") > 0) {
+            val hx = head.optInt("x") * sx; val hy = head.optInt("y") * sy
+            RectF(hx, hy, hx + head.optInt("w") * sx, hy + head.optInt("h") * sy)
+        } else null
+        // Ignore a head rect that doesn't fall inside the dialogue box (stale/bad engine coords) so the cutout
+        // can't punch outside the parchment and the text-column math can't degenerate. intersect() clamps the
+        // rect to the overlap (returns false + leaves it untouched when there is none).
+        headRect?.let { if (!it.intersect(boxX, boxY, boxX + boxW, boxY + boxH)) headRect = null }
+
         if (dlgJson != lastJson) {
             lastJson = dlgJson
             rebuild(d)
@@ -128,16 +141,31 @@ class DialogueView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         if (!active || boxW <= 0f || boxH <= 0f) return
         val r = RectF(boxX, boxY, boxX + boxW, boxY + boxH)
+        // Fill the parchment, cutting out the head rect so the engine's real 3D chathead (still rendered
+        // underneath on the game surface) shows through — the "real head" mode the bridge's head bounds exist for.
+        val hole = headRect
+        canvas.save()
+        if (hole != null) canvas.clipOutRect(hole)
         canvas.drawRoundRect(r, 5f * dp, 5f * dp, fillPaint)
+        canvas.restore()
         borderPaint.strokeWidth = 2f * dp
         canvas.drawRoundRect(r, 5f * dp, 5f * dp, borderPaint)
 
         val padX = 12f * dp
-        val cx = r.centerX()
+        // Text column = the box minus the head's column (head on the left -> text to the right, and vice-versa);
+        // fall back to the full inset width if the head math degenerates (mirrors iOS dialogueContentFrameForHead).
+        var textLeft = r.left + padX
+        var textRight = r.right - padX
+        if (hole != null) {
+            if (hole.centerX() < r.centerX()) textLeft = hole.right + padX else textRight = hole.left - padX
+            if (textRight - textLeft < 60f * dp) { textLeft = r.left + padX; textRight = r.right - padX }
+        }
+        val cx = (textLeft + textRight) / 2f
+        val colW = (textRight - textLeft).coerceAtLeast(1f)
         var y = r.top + 10f * dp
         val baseSize = (boxH * 0.11f).coerceIn(11f * dp, 20f * dp)
 
-        // Name (NPC/player), bold dark-red, centred.
+        // Name (NPC/player), bold dark-red, centred over the text column.
         name?.let {
             namePaint.textSize = baseSize * 1.05f
             y += namePaint.textSize
@@ -149,7 +177,7 @@ class DialogueView(context: Context) : View(context) {
             // Option rows (centred, tappable). The body, if any, is the prompt above them.
             if (body.isNotBlank()) {
                 bodyPaint.textSize = baseSize
-                drawBody(canvas, r, padX, y).also { y = it }
+                drawBody(canvas, textLeft, colW, y).also { y = it }
                 y += 4f * dp
             }
             optionRects.clear()
@@ -165,7 +193,7 @@ class DialogueView(context: Context) : View(context) {
         } else {
             // Statement dialogue: body text + "Click here to continue".
             bodyPaint.textSize = baseSize
-            drawBody(canvas, r, padX, y)
+            drawBody(canvas, textLeft, colW, y)
             if (hasContinue) {
                 contPaint.textSize = baseSize * 0.95f
                 canvas.drawText("Click here to continue", cx, r.bottom - 9f * dp, contPaint)
@@ -173,14 +201,14 @@ class DialogueView(context: Context) : View(context) {
         }
     }
 
-    /** Draw the wrapped body text starting at [top]; returns the y below it. */
-    private fun drawBody(canvas: Canvas, r: RectF, padX: Float, top: Float): Float {
+    /** Draw the wrapped body text in the column [textLeft]..[textLeft]+[colW] starting at [top]; returns the y below it. */
+    private fun drawBody(canvas: Canvas, textLeft: Float, colW: Float, top: Float): Float {
         if (body.isBlank()) return top
-        val w = (r.width() - padX * 2).toInt().coerceAtLeast(1)
+        val w = colW.toInt().coerceAtLeast(1)
         val layout = StaticLayout.Builder.obtain(body, 0, body.length, bodyPaint, w)
             .setAlignment(Layout.Alignment.ALIGN_CENTER).build()
         canvas.save()
-        canvas.translate(r.left + padX, top)
+        canvas.translate(textLeft, top)
         layout.draw(canvas)
         canvas.restore()
         return top + layout.height

@@ -123,7 +123,11 @@ native side. So `dialogueActive` is the read-only trigger; `chatCollapsed` has a
 - **Never** split `chatCollapsed` ownership across bridge + native (two-owner race).
 - make-X / reward boxes stay on the `{}` path (`engineDialogue=false`).
 - Land both native gate changes together so the ports don't diverge; `engineDialogue` is the single shared switch.
-- Rollback is a one-line per-port gate (ignore `engineDialogue`) — no bridge revert needed.
+- Rollback: the **engine-dialogue render path** and the **auto-open/close** feature are SEPARATE, each
+  independently gated. Reverting the engine path = ignore `engineDialogue` (one-line per-port). Auto-open is
+  keyed off `dialogueActive` (NOT `engineDialogue`) because it must work for BOTH the parchment fallback and the
+  engine path — so it gets its OWN enable flag; do **not** couple the `chatCollapsed` mutation to `!engineDialogue`
+  (that would disable auto-open exactly when the engine path ships).
 - **Cutout perf:** the Android cutout uses a single rectangular `clipOutRect` — the cheapest, HW-accelerated
   clip at minSdk 28 on the target device; keep it. If a frame-time issue ever appears, replace it with 2–3
   parchment rects drawn around the head (no clip at all) — not an even-odd `clipPath` (a non-rect path clip is
