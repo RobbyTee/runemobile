@@ -132,10 +132,10 @@ public final class RLHDStarter
 			final boolean seed = !"1".equals(MobileUiBridge.getConfig("hd", GFX_SEEDED_KEY));
 			if (seed)
 			{
-				// Performance floor (mobile-sane):
-				MobileUiBridge.setConfig("hd", "antiAliasingMode", "DISABLED");            // RLHD default MSAA_8 crushes a tiler
-				MobileUiBridge.setConfig("hd", "sceneResolutionScale", "85");              // 85% scene FBO, blit-upscale (FIX-13)
-				MobileUiBridge.setConfig("hd", "anisotropicFilteringLevel", "8");          // 16 is desktop-max fetch bandwidth (FIX-13)
+				// Quality floor (mobile-sane; Phase-2 device A/B on Mali-G710, uncapped, drift-corrected):
+				MobileUiBridge.setConfig("hd", "antiAliasingMode", "MSAA_4");              // ~+1.5 ms GPU — MSAA is tile-memory-cheap here (2x≈4x); 10-min soak held >50 fps, no throttle
+				MobileUiBridge.setConfig("hd", "sceneResolutionScale", "85");              // 85% scene FBO, blit-upscale — 100 costs ~+4 ms (quadratic fill), would break the 50 fps floor
+				MobileUiBridge.setConfig("hd", "anisotropicFilteringLevel", "16");         // distance sharpness; measured ~free (within thermal noise) on this tiler
 				MobileUiBridge.setConfig("hd", "drawDistance", "30");                      // desktop 50; keeps the open-world view
 				MobileUiBridge.setConfig("hd", "shadowResolution", "RES_1024");            // 1K shadow map — shadow pass is bandwidth-bound
 				MobileUiBridge.setConfig("hd", "parallaxOcclusionMappingToggle", "false"); // Phase 1 device A/B: ~10 fps / ~2.7 ms GPU uncapped
@@ -153,7 +153,7 @@ public final class RLHDStarter
 			configForced = true;
 			log.info("[routecrlhd] Android config applied — safety forced (uiScaling LINEAR, async OFF, tiledLighting OFF); "
 				+ "tunables {}", seed
-				? "SEEDED (first launch: AA off, scale 85, aniso 8, draw 30, shadows 1K, POM/wind/char OFF, normal/lights/shadows kept)"
+				? "SEEDED (first launch: MSAA_4, scale 85, aniso 16, draw 30, shadows 1K, POM/wind/char OFF, normal/lights SOME/shadows kept)"
 				: "from persisted 117HD plugin config");
 			return;
 			}
