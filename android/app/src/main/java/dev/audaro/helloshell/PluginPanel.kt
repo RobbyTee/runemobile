@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -346,7 +345,9 @@ private fun SheetScaffold(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .height(with(density) { sheetPx.value.toDp() })
-                .imePadding()
+                // No imePadding: the keyboard OVERLAYS the sheet (window is adjustNothing) instead of floating the
+                // bottom-anchored sheet up by the keyboard height — which exposed the game beneath it. The search
+                // fields sit at the top of the sheet, so they stay visible above the keyboard.
                 // Consume taps that land on the sheet (but not on a child) so they never fall through to the
                 // dismiss scrim behind it.
                 .pointerInput(Unit) { detectTapGestures { } },
