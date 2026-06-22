@@ -134,6 +134,12 @@ public class Hooks implements Callbacks
 
 	private long nextError;
 	private long lastFpsProbe;
+	// frame-time probe: wall-clock interval between consecutive frame() calls (microseconds), windowed per second
+	// so the logcat harness gets min/avg/95p in ms (not one smoothed fps). Sized for ~1s at high refresh; overflow
+	// just stops sampling for that window (a true-but-truncated picture beats unbounded growth).
+	private long lastFrameNanos;
+	private final long[] frameTimeUs = new long[1024];
+	private int frameTimeCount;
 	private boolean rateLimitedError;
 	private int errorBackoff = 1;
 
@@ -284,11 +290,38 @@ public class Hooks implements Callbacks
 	{
 		if (FPS_PROBE)
 		{
+			long nowNanos = System.nanoTime();
+			if (lastFrameNanos != 0 && frameTimeCount < frameTimeUs.length)
+			{
+				frameTimeUs[frameTimeCount++] = (nowNanos - lastFrameNanos) / 1000L;
+			}
+			lastFrameNanos = nowNanos;
+
 			long now = System.currentTimeMillis();
 			if (now - lastFpsProbe >= 1000)
 			{
 				lastFpsProbe = now;
 				log.info("[fpsprobe] fps={} gs={}", client.getFPS(), client.getGameState());
+				if (frameTimeCount > 0)
+				{
+					long[] s = java.util.Arrays.copyOf(frameTimeUs, frameTimeCount);
+					java.util.Arrays.sort(s);
+					long sum = 0;
+					for (long v : s)
+					{
+						sum += v;
+					}
+					// nearest-rank 95th percentile; ms throughout for the harness.
+					int idx95 = Math.min(s.length - 1, Math.max(0, (int) Math.ceil(0.95 * s.length) - 1));
+					log.info("[frameprobe] n={} min={} avg={} p95={} max={} gs={}",
+						s.length,
+						String.format("%.2f", s[0] / 1000.0),
+						String.format("%.2f", (sum / (double) s.length) / 1000.0),
+						String.format("%.2f", s[idx95] / 1000.0),
+						String.format("%.2f", s[s.length - 1] / 1000.0),
+						client.getGameState());
+					frameTimeCount = 0;
+				}
 			}
 		}
 		eventBus.post(BEFORE_RENDER);

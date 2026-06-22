@@ -404,7 +404,9 @@ def tool_android_set_hd_config(a):
     rc, o, er = run(cmd, timeout=20)
     return ok_result(
         {
-            "ok": rc == 0 and "result=0" in o or "Broadcast completed" in o,
+            # MainActivity's SET_HD_CONFIG receiver applies any non-reserved extra as a live hd key, so these
+            # --ei extras (sceneResolutionScale/anisotropicFilteringLevel) take effect with no rebuild.
+            "ok": rc == 0 and ("Broadcast completed" in o or "result=0" in o),
             "exitCode": rc,
             "sent": {"sceneResolutionScale": scale, "anisotropicFilteringLevel": aniso},
             "stdout": o.strip(),
@@ -426,11 +428,21 @@ def tool_android_fps(a):
     cmd += [label]
     rc, o, er = run(cmd, cwd=REPO_ROOT, timeout=seconds + 60)
     combined = o + "\n" + er
+    # fps stats come off the "... fps ... mean=.. median=.. min=.. max=.." line.
     stats = {}
+    fps_line = next((ln for ln in combined.splitlines() if re.search(r"\bfps\b.*mean=", ln)), "")
     for key in ("mean", "median", "min", "max"):
-        m = re.search(rf"{key}[^0-9]*([\d.]+)", combined, re.IGNORECASE)
+        m = re.search(rf"{key}[^0-9]*([\d.]+)", fps_line, re.IGNORECASE)
         if m:
             stats[key] = float(m.group(1))
+    # frame-time stats (ms) come off the "... frame ... min=.. avg=.. p95~=.. max=.." line — the trustworthy A/B signal.
+    frame = {}
+    frame_line = next((ln for ln in combined.splitlines() if "frame" in ln and "avg=" in ln), "")
+    for key, pat in (("min", r"min=([\d.]+)"), ("avg", r"avg=([\d.]+)"), ("p95", r"p95~?=([\d.]+)"), ("max", r"max=([\d.]+)")):
+        m = re.search(pat, frame_line)
+        if m:
+            frame[key] = float(m.group(1))
+    thermal = re.findall(r"thermal\[(\w+)\]: hottest=([\w.]+)C status=(\w+)", combined)
     return ok_result(
         {
             "ok": rc == 0,
@@ -438,8 +450,10 @@ def tool_android_fps(a):
             "exitCode": rc,
             "csv": csv,
             "fps": stats,
+            "frameMs": frame,
+            "thermal": {w: {"hottestC": h, "status": s} for (w, h, s) in thermal},
             "logTail": combined.strip().splitlines()[-15:],
-            "hint": "Flip a preset with android_set_hd_config between two android_fps runs for an A/B.",
+            "hint": "Flip a preset with android_set_hd_config between two android_fps runs; compare frameMs.avg/p95 (not fps) for a trustworthy A/B.",
         }
     )
 

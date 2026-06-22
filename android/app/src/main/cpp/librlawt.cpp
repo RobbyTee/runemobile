@@ -18,10 +18,13 @@
 #include <EGL/egl.h>
 #include <GLES3/gl32.h>
 #include <android/log.h>
+#include <sys/system_properties.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <time.h>
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
 #include <string>
 #include <regex>
 
@@ -71,6 +74,64 @@ static void     (*sCbSetFrameDims)(int, int)   = nullptr;   // publish canvas di
 static EGLSurface sWinSurf = EGL_NO_SURFACE;
 static void*      sWin     = nullptr;            // ANativeWindow* (opaque here; released via sCbReleaseWindow)
 static uint64_t   sWinGen  = (uint64_t)-1;
+
+// ---- Phase 0 instrumentation & swap-interval control ---------------------------------------------------------
+// Read an Android system property as an int (settable live with `adb shell setprop`, no rebuild). Returns dflt if
+// unset/empty — used for the A/B knobs below so a benchmark can pin them without a redeploy.
+static int rc_prop_int(const char* name, int dflt) {
+    char buf[PROP_VALUE_MAX] = {0};
+    int n = __system_property_get(name, buf);
+    if (n <= 0) return dflt;
+    return atoi(buf);
+}
+static double rc_now_ms() {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
+}
+
+// eglSwapInterval control. The plugin's requested interval is stored here; the boot prop
+// `debug.routec.swapinterval` overrides it (0=uncapped bench, 1=display refresh, 2=half-rate/30 cap). Applied on
+// the current draw surface when the window surface is (re)created or the request/prop changes.
+static int  sReqSwapInterval = 1;     // plugin default (display refresh) until it calls setSwapInterval
+static bool sSwapDirty       = true;  // re-apply on next present
+static void rcApplySwapInterval() {
+    int eff = rc_prop_int("debug.routec.swapinterval", sReqSwapInterval);
+    if (eglSwapInterval(sDpy, eff)) {
+        LOGI("eglSwapInterval=%d (requested=%d, prop override=%s)", eff, sReqSwapInterval,
+             rc_prop_int("debug.routec.swapinterval", -999) == -999 ? "none" : "yes");
+    } else {
+        LOGE("eglSwapInterval(%d) failed 0x%x", eff, eglGetError());
+    }
+}
+
+// GPU frame-time probe via EXT_disjoint_timer_query (GLES timer queries; resolved at context creation). Gated on
+// the `debug.routec.gputime` prop so it's off in normal play. One GL_TIME_ELAPSED query brackets each frame's
+// plugin draws (begin after present, end before the next present) so it excludes our own present blit; results are
+// read back non-blocking via a small pool and the per-second average is logged as `[gpuprobe]`.
+#define GL_TIME_ELAPSED_EXT           0x88BF
+#define GL_QUERY_RESULT_EXT           0x8866
+#define GL_QUERY_RESULT_AVAILABLE_EXT 0x8867
+#define GL_GPU_DISJOINT_EXT           0x8FBB
+typedef void (*PFNGENQEXT)(GLsizei, GLuint*);
+typedef void (*PFNQEXT)(GLenum, GLuint);
+typedef void (*PFNENDQEXT)(GLenum);
+typedef void (*PFNGETQUIVEXT)(GLuint, GLenum, GLuint*);
+typedef void (*PFNGETQUI64VEXT)(GLuint, GLenum, GLuint64*);
+static PFNGENQEXT      pglGenQueriesEXT          = nullptr;
+static PFNQEXT         pglBeginQueryEXT          = nullptr;
+static PFNENDQEXT      pglEndQueryEXT            = nullptr;
+static PFNGETQUIVEXT   pglGetQueryObjectuivEXT   = nullptr;
+static PFNGETQUI64VEXT pglGetQueryObjectui64vEXT = nullptr;
+static bool sTimerFns = false;        // EXT functions resolved on this driver
+#define RC_NQ 8
+static GLuint sTQId[RC_NQ];           // pool of query objects (0 = free, 1 = active/between begin-end, 2 = pending)
+static int    sTQState[RC_NQ] = {0};
+static bool   sTQGen   = false;
+static int    sTQActive = -1;
+static bool   sTimerOn  = false;      // gputime prop currently enabling the probe
+static double sGpuSumMs = 0, sGpuMinMs = 0, sGpuMaxMs = 0;
+static int    sGpuFrames = 0;
+static double sGpuLastLog = 0;        // ms (monotonic) of the last [gpuprobe] emit
 
 // JavaBridge GPU seam (resolved lazily once the GPU jar's class is on the classpath).
 static jclass sJbCls = nullptr;
@@ -524,6 +585,15 @@ static void JNICALL rc_AWT_createGLContext(JNIEnv* env, jobject){
     LOGI("createGLContext ENTER thread=%p", (void*)pthread_self());
     if (!rcEglPrepareSurface(w, h) || !rcEglCreateContextCurrent()) { LOGE("createGLContext: EGL bring-up FAILED"); return; }
     rc_set_es_target();
+    // Phase 0: resolve the GPU timer-query EXT (debug-gated probe) now that a context is current.
+    pglGenQueriesEXT          = (PFNGENQEXT)      eglGetProcAddress("glGenQueriesEXT");
+    pglBeginQueryEXT          = (PFNQEXT)         eglGetProcAddress("glBeginQueryEXT");
+    pglEndQueryEXT            = (PFNENDQEXT)      eglGetProcAddress("glEndQueryEXT");
+    pglGetQueryObjectuivEXT   = (PFNGETQUIVEXT)   eglGetProcAddress("glGetQueryObjectuivEXT");
+    pglGetQueryObjectui64vEXT = (PFNGETQUI64VEXT) eglGetProcAddress("glGetQueryObjectui64vEXT");
+    sTimerFns = pglGenQueriesEXT && pglBeginQueryEXT && pglEndQueryEXT && pglGetQueryObjectuivEXT && pglGetQueryObjectui64vEXT;
+    LOGI("GPU timer (EXT_disjoint_timer_query): %s (set debug.routec.gputime=1 to enable [gpuprobe])",
+         sTimerFns ? "available" : "absent");
     if (rc_jb_cache(env) && sJbCanvasW && sJbCanvasH) {
         jint cw = env->CallStaticIntMethod(sJbCls, sJbCanvasW);
         jint ch = env->CallStaticIntMethod(sJbCls, sJbCanvasH);
@@ -561,7 +631,40 @@ static jint JNICALL rc_AWT_getFramebuffer(JNIEnv* env, jobject, jboolean){
     return (jint)sFbo;
 }
 static void JNICALL rc_AWT_loadNatives(JNIEnv*, jobject){ /* no-op (the .so is already loaded + registered) */ }
-static jint JNICALL rc_AWT_setSwapInterval(JNIEnv*, jobject, jint a0){ return a0; }
+// Store the plugin's requested swap interval and re-apply it on the next present (the boot prop can still override).
+static jint JNICALL rc_AWT_setSwapInterval(JNIEnv*, jobject, jint a0){ sReqSwapInterval = a0; sSwapDirty = true; return a0; }
+
+// ---- GPU timer-query probe (debug-gated, see globals above) ---------------------------------------------------
+// End the query bracketing the frame just rendered (called before the present blit, so present is excluded).
+static void rcTimerEndFrame() {
+    if (sTQActive >= 0) { pglEndQueryEXT(GL_TIME_ELAPSED_EXT); sTQState[sTQActive] = 2; sTQActive = -1; }
+}
+// Read any finished results (non-blocking), emit [gpuprobe] once/sec, then begin the next frame's query.
+static void rcTimerDrainAndBegin() {
+    GLint disjoint = 0; glGetIntegerv(GL_GPU_DISJOINT_EXT, &disjoint);   // reading clears it
+    for (int i = 0; i < RC_NQ; i++) {
+        if (sTQState[i] != 2) continue;
+        if (disjoint) { sTQState[i] = 0; continue; }                     // unreliable timing this interval — drop
+        GLuint avail = 0; pglGetQueryObjectuivEXT(sTQId[i], GL_QUERY_RESULT_AVAILABLE_EXT, &avail);
+        if (!avail) continue;
+        GLuint64 ns = 0; pglGetQueryObjectui64vEXT(sTQId[i], GL_QUERY_RESULT_EXT, &ns);
+        sTQState[i] = 0;
+        double ms = ns / 1e6;
+        sGpuSumMs += ms; sGpuFrames++;
+        if (sGpuMinMs == 0 || ms < sGpuMinMs) sGpuMinMs = ms;
+        if (ms > sGpuMaxMs) sGpuMaxMs = ms;
+    }
+    double now = rc_now_ms();
+    if (sGpuLastLog == 0) sGpuLastLog = now;
+    if (now - sGpuLastLog >= 1000.0 && sGpuFrames > 0) {
+        LOGI("[gpuprobe] frames=%d avg=%.2f min=%.2f max=%.2f ms%s",
+             sGpuFrames, sGpuSumMs / sGpuFrames, sGpuMinMs, sGpuMaxMs, disjoint ? " (disjoint seen)" : "");
+        sGpuSumMs = sGpuMinMs = sGpuMaxMs = 0; sGpuFrames = 0; sGpuLastLog = now;
+    }
+    int idx = -1;
+    for (int i = 0; i < RC_NQ; i++) if (sTQState[i] == 0) { idx = i; break; }
+    if (idx >= 0) { pglBeginQueryEXT(GL_TIME_ELAPSED_EXT, sTQId[idx]); sTQState[idx] = 1; sTQActive = idx; }
+}
 // jvm_bootstrap installs the window-borrow callbacks here (it owns libandroid). Their presence flips swapBuffers
 // from the glReadPixels CPU path to the direct EGL window-surface present.
 extern "C" void RouteC_setPresentCallbacks(void* (*acq)(uint64_t*), uint64_t (*gen)(void), void (*rel)(void*),
@@ -591,6 +694,7 @@ static bool rcEnsureWindowSurface() {
     sWinSurf = eglCreateWindowSurface(sDpy, sCfg, (EGLNativeWindowType)w, nullptr);
     if (sWinSurf == EGL_NO_SURFACE) { LOGE("eglCreateWindowSurface failed 0x%x", eglGetError()); sCbReleaseWindow(w); return false; }
     sWin = w;
+    sSwapDirty = true;   // re-apply the swap interval on the fresh surface
     LOGI("direct-present: EGL window surface created gen=%llu", (unsigned long long)sWinGen);
     return true;
 }
@@ -603,6 +707,18 @@ static void JNICALL rc_AWT_swapBuffers(JNIEnv* env, jobject){
     int w = sFboW, h = sFboH;
     if (w <= 0 || h <= 0) return;
 
+    // GPU timer probe (debug.routec.gputime): close the query around the frame the plugin just rendered, BEFORE
+    // the present blit below, so the measurement excludes our blit. Prop re-checked ~1/sec to keep play-path cost nil.
+    static double sPropCheck = 0;
+    if (sTimerFns) {
+        double now = rc_now_ms();
+        if (now - sPropCheck >= 1000.0) { sPropCheck = now; sTimerOn = rc_prop_int("debug.routec.gputime", 0) != 0; }
+        if (sTimerOn) {
+            if (!sTQGen) { pglGenQueriesEXT(RC_NQ, sTQId); sTQGen = true; LOGI("[gpuprobe] timer queries armed"); }
+            rcTimerEndFrame();
+        }
+    }
+
     if (sCbAcquireWindow) {
         // Publish the live canvas dims so touch->game mapping works (the CPU present thread that used to set them
         // is disabled in this mode).
@@ -611,6 +727,7 @@ static void JNICALL rc_AWT_swapBuffers(JNIEnv* env, jobject){
         // present thread is disabled in this mode, so do NOT fall back to readback (nothing would consume it).
         if (rcEnsureWindowSurface()) {
             eglMakeCurrent(sDpy, sWinSurf, sWinSurf, sCtx);
+            if (sSwapDirty) { rcApplySwapInterval(); sSwapDirty = false; }    // pin vsync/fps cap on the current draw surface
             EGLint sw = w, sh = h;
             eglQuerySurface(sDpy, sWinSurf, EGL_WIDTH, &sw);
             eglQuerySurface(sDpy, sWinSurf, EGL_HEIGHT, &sh);
@@ -622,7 +739,18 @@ static void JNICALL rc_AWT_swapBuffers(JNIEnv* env, jobject){
             glBlitFramebuffer(0, 0, w, h,  0, 0, sw, sh,  GL_COLOR_BUFFER_BIT, GL_LINEAR);
             eglSwapBuffers(sDpy, sWinSurf);
         }
+        if (sTimerFns && sTimerOn) rcTimerDrainAndBegin();
         return;
+    }
+
+    // Legacy CPU-readback present (only when RouteC_setPresentCallbacks was never installed — e.g. a stale
+    // librlawt.so missing the symbol). This is the slow glFinish + glReadPixels + per-pixel swizzle path the audit
+    // killed; warn once so the regression isn't silent (Correctness #4).
+    static bool sReadbackWarned = false;
+    if (!sReadbackWarned) {
+        sReadbackWarned = true;
+        LOGE("PRESENT FALLBACK: direct-EGL present callbacks absent — using the slow glReadPixels+swizzle readback "
+             "path (2x CPU/frame). Likely a stale librlawt.so missing RouteC_setPresentCallbacks; rebuild the .so.");
     }
 
     if (!rc_jb_cache(env)) return;
@@ -652,6 +780,7 @@ static void JNICALL rc_AWT_swapBuffers(JNIEnv* env, jobject){
     env->CallStaticVoidMethod(sJbCls, sJbPublish, (jint)w, (jint)h);
     env->DeleteLocalRef(arr);
     if (env->ExceptionCheck()) env->ExceptionClear();
+    if (sTimerFns && sTimerOn) rcTimerDrainAndBegin();
 }
 
 // ---- GL.createCapabilities (kGL) -----------------------------------------------------------------------------

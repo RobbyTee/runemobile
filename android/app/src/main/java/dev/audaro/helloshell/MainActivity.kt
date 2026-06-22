@@ -271,9 +271,11 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("ClickableViewAccessibility")
     // FIX-13: debug-only live 117HD config flip, for a thermal-fair fps A/B (apply both presets seconds apart at
     // one thermal/crowd/camera state — no reboot). All three keys apply live via HdPlugin.onConfigChanged.
-    //   adb shell am broadcast -a dev.audaro.helloshell.SET_HD_CONFIG --es preset new   (85/8/25)
+    //   adb shell am broadcast -a dev.audaro.helloshell.SET_HD_CONFIG --es preset new   (85/8/30)
     //   adb shell am broadcast -a dev.audaro.helloshell.SET_HD_CONFIG --es preset base  (100/16/30, RLHD defaults)
     //   adb shell am broadcast -a dev.audaro.helloshell.SET_HD_CONFIG --es key drawDistance --es value 20
+    //   adb shell am broadcast -a dev.audaro.helloshell.SET_HD_CONFIG --ei sceneResolutionScale 90  (generic per-key;
+    //     this is the path the MCP android_set_hd_config knob drives — any non-reserved extra is applied as an hd key)
     private var hdConfigReceiver: BroadcastReceiver? = null
     // FIX-9: debug-only force for the "Reconnecting…" overlay (a real in-session drop is hard to repro over
     // Wi-Fi adb, which a network toggle also kills) — lets a screencap verify the scrim renders.
@@ -292,14 +294,25 @@ class MainActivity : AppCompatActivity() {
                 override fun onReceive(ctx: Context?, intent: Intent?) {
                     intent ?: return
                     val pairs: List<Pair<String, String>> = when (intent.getStringExtra("preset")) {
-                        "new" -> listOf("sceneResolutionScale" to "85", "anisotropicFilteringLevel" to "8", "drawDistance" to "25")
+                        "new" -> listOf("sceneResolutionScale" to "85", "anisotropicFilteringLevel" to "8", "drawDistance" to "30")
                         "base" -> listOf("sceneResolutionScale" to "100", "anisotropicFilteringLevel" to "16", "drawDistance" to "30")
                         else -> {
                             val k = intent.getStringExtra("key"); val v = intent.getStringExtra("value")
-                            if (k != null && v != null) listOf(k to v) else emptyList()
+                            if (k != null && v != null) {
+                                listOf(k to v)
+                            } else {
+                                // Generic per-key path: apply every non-reserved extra as an hd config key. This is
+                                // what the MCP android_set_hd_config knob uses (it sends --ei sceneResolutionScale /
+                                // anisotropicFilteringLevel); --es/--ez per key work too. Previously these extras were
+                                // silently ignored (the receiver only read preset/key/value) — the dead A/B knob.
+                                val reserved = setOf("preset", "key", "value")
+                                intent.extras?.keySet().orEmpty()
+                                    .filter { it !in reserved }
+                                    .mapNotNull { key -> intent.extras?.get(key)?.toString()?.let { key to it } }
+                            }
                         }
                     }
-                    if (pairs.isEmpty()) { Log.w(TAG, "SET_HD_CONFIG: need --es preset new|base, or --es key K --es value V"); return }
+                    if (pairs.isEmpty()) { Log.w(TAG, "SET_HD_CONFIG: need --es preset new|base, --es key K --es value V, or per-key extras (e.g. --ei sceneResolutionScale 90)"); return }
                     JvmLauncher.onBridgeTouch { pairs.forEach { (k, v) -> JvmLauncher.setConfig("hd", k, v) } }
                     Log.i(TAG, "SET_HD_CONFIG applied live: $pairs")
                 }
