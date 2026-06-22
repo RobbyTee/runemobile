@@ -9,12 +9,15 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
@@ -53,6 +56,13 @@ import kotlin.coroutines.coroutineContext
 
 /** One side-panel nav entry from MobileUiBridge.listPanels(). */
 data class PanelEntry(val index: Int, val tooltip: String, val icon: Bitmap?)
+
+// Desktop-like cap for the rendered panel column. The Swing PluginPanel is laid out at ~242 logical px
+// (MobileUiBridge.PANEL_W) and supersampled; the bridge's design target is ≈323pt wide (MobileUiBridge:808).
+// Stretching the buffer across the whole phone width blew that up ~1.7x (oversize + bilinear "wash"), worst
+// on tall panels (Notes/Skill Calc/Screen Markers) that step down to scale 2-3 then upscale hard. Capping the
+// display width here restores the intended size and keeps short panels near 1:1 (crisp).
+private val PANEL_MAX_DP = 340.dp
 
 private class PanelSnap(val w: Int, val h: Int, val seq: Int, val px: IntArray?)
 
@@ -116,46 +126,52 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit, onPanelTextActive
             if (img == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             } else {
-                Box(
-                    Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll)
-                        .onGloballyPositioned { viewW = it.size.width.coerceAtLeast(1) }
-                        .pointerInput(pw, viewW) {
-                            detectTapGestures(
-                                onTap = { off ->
-                                    if (pw > 0 && viewW > 0) {
-                                        // fit-width => uniform scale viewW/pw; add the scroll offset for buffer-y.
-                                        val bx = (off.x * pw / viewW).toInt()
-                                        val by = ((off.y + scroll.value) * pw / viewW).toInt()
-                                        JvmLauncher.onBridgeTouch { JvmLauncher.panelClick(bx, by) }
-                                        // SC-4: after the click settles, ask the bridge whether it focused a text
-                                        // field; if so raise the mirror field pre-filled, else drop the keyboard.
-                                        scope.launch {
-                                            delay(140)
-                                            val active = withContext(Dispatchers.IO) {
-                                                JvmLauncher.onBridge { JvmLauncher.isPanelTextActive() }.get()
-                                            }
-                                            if (active) {
-                                                fieldValue = withContext(Dispatchers.IO) {
-                                                    JvmLauncher.onBridge { JvmLauncher.getPanelText() }.get()
+                // Cap the panel to a desktop-like column (≈PANEL_MAX_DP) and centre it, instead of stretching the
+                // supersampled buffer across the whole screen. Taps still map through the box width (viewW), so
+                // hit-testing is unchanged regardless of the cap.
+                BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                    val colW = if (maxWidth < PANEL_MAX_DP) maxWidth else PANEL_MAX_DP
+                    Box(
+                        Modifier.width(colW).fillMaxHeight().verticalScroll(scroll)
+                            .onGloballyPositioned { viewW = it.size.width.coerceAtLeast(1) }
+                            .pointerInput(pw, viewW) {
+                                detectTapGestures(
+                                    onTap = { off ->
+                                        if (pw > 0 && viewW > 0) {
+                                            // fit-width => uniform scale viewW/pw; add the scroll offset for buffer-y.
+                                            val bx = (off.x * pw / viewW).toInt()
+                                            val by = ((off.y + scroll.value) * pw / viewW).toInt()
+                                            JvmLauncher.onBridgeTouch { JvmLauncher.panelClick(bx, by) }
+                                            // SC-4: after the click settles, ask the bridge whether it focused a text
+                                            // field; if so raise the mirror field pre-filled, else drop the keyboard.
+                                            scope.launch {
+                                                delay(140)
+                                                val active = withContext(Dispatchers.IO) {
+                                                    JvmLauncher.onBridge { JvmLauncher.isPanelTextActive() }.get()
                                                 }
-                                                textActive = true
-                                            } else {
-                                                textActive = false
+                                                if (active) {
+                                                    fieldValue = withContext(Dispatchers.IO) {
+                                                        JvmLauncher.onBridge { JvmLauncher.getPanelText() }.get()
+                                                    }
+                                                    textActive = true
+                                                } else {
+                                                    textActive = false
+                                                }
                                             }
                                         }
-                                    }
-                                },
-                                onLongPress = { off ->
-                                    if (pw > 0 && viewW > 0) {
-                                        val bx = (off.x * pw / viewW).toInt()
-                                        val by = ((off.y + scroll.value) * pw / viewW).toInt()
-                                        JvmLauncher.onBridgeTouch { JvmLauncher.panelLongPress(bx, by) }   // SC-4 BUTTON3
-                                    }
-                                },
-                            )
-                        },
-                ) {
-                    Image(img.asImageBitmap(), tooltip, Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth)
+                                    },
+                                    onLongPress = { off ->
+                                        if (pw > 0 && viewW > 0) {
+                                            val bx = (off.x * pw / viewW).toInt()
+                                            val by = ((off.y + scroll.value) * pw / viewW).toInt()
+                                            JvmLauncher.onBridgeTouch { JvmLauncher.panelLongPress(bx, by) }   // SC-4 BUTTON3
+                                        }
+                                    },
+                                )
+                            },
+                    ) {
+                        Image(img.asImageBitmap(), tooltip, Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth)
+                    }
                 }
                 if (textActive) {
                     val fr = remember { FocusRequester() }
