@@ -86,8 +86,20 @@ device lands on GPU without crashes; per-frame overhead trimmed.
 
 ---
 
-## Phase 4 — Draw-call / bandwidth deep wins  *(L-effort, device-gated — probe first)*
+## Phase 4 — Draw-call / bandwidth deep wins  *(CLOSED — probe complete, no L-effort warranted)*
 **Why now:** these only pay off in draw/upload-bound scenes and depend on extensions not in AG0 recon.
+
+> **CLOSED on Mali-G710** (probe commit de54c99622). The probe killed both levers as not-worth-it on
+> this device: (1) `multi_draw_indirect` is **absent** (cap can't flip in any scene) *and* the draw
+> profile shows it'd be ~12% in light scenes anyway; (2) `buffer_storage`/persistent-mapping is the only
+> survivor but pays only when upload-bound — and every track measurement says the renderer is
+> **fill/GPU-bound** (~25% GPU headroom capped, ~77 fps uncapped = the *display present ceiling*, ~120
+> draw calls/frame = not draw-bound). On a unified-memory tiler `glBufferData` orphaning is already
+> cheap, so persistent mapping is speculative, L-effort, and — being GPU-bound — wouldn't raise fps
+> (best case is minor battery). Decision: **do not implement; track is at its perf ceiling.** The
+> `[gpuprobe-caps]` + `[drawcount]` instruments ship, so this can be re-opened with data if a future
+> device/scene proves draw- or upload-bound. The higher-value remaining item is the *product* call
+> (ship uncapped 50→~74 fps vs keep the 50-cap), not engineering.
 
 | Task | File(s) | Effort |
 |---|---|---|
