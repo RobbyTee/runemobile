@@ -110,41 +110,52 @@ public final class RLHDStarter
 		{
 			if (!Boolean.getBoolean("runelite.gfxIos"))
 			{
-			MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");
-			MobileUiBridge.setConfig("hd", "tiledLighting", "false");
-			// Mobile-sane quality: 117HD's desktop defaults (MSAA_8 + an 8192x8192 shadow map + 50-tile draw)
-			// crush a mobile GPU. Cut the fill-rate/bandwidth killers but KEEP the HD look (lighting/shadows/
-			// textures). Pure render settings (no shader-variant change), set BEFORE startUp so the shadow map
-			// allocates small. All tunable afterwards in the plugin config panel.
-			MobileUiBridge.setConfig("hd", "antiAliasingMode", "DISABLED");
-			// FIX-13: 1K shadow map (was 2K). The shadow pass is a bandwidth bottleneck on Mali; 1K vs 2K is
-			// barely visible at the mobile present scale but a real fps win — iOS already ships RES_1024 (below).
-			// Reversible in the 117HD plugin config (shadowResolution).
-			MobileUiBridge.setConfig("hd", "shadowResolution", "RES_1024");
-			// FIX-13 (cont): render the 3D scene FBO at 85% then blit-upscale to the canvas (UI stays native res).
-			// Quadratic fill cut on the heaviest pass (the main scene); with AA off this is the simple resolve-free
-			// path (HdPlugin sceneResolutionScale). RLHD default 100. Reversible (sceneResolutionScale).
-			MobileUiBridge.setConfig("hd", "sceneResolutionScale", "85");
-			// FIX-13 (cont): halve max anisotropic filtering (16 -> 8). 16 is desktop-max and a real texture-fetch
-			// bandwidth cost on Mali's tiler; 8 keeps mipmapping and is barely distinguishable at the mobile present
-			// scale. Pure sampler param (no shader recompile). RLHD default 16. Reversible (anisotropicFilteringLevel).
-			MobileUiBridge.setConfig("hd", "anisotropicFilteringLevel", "8");
-			// Force SINGLE-THREADED model processing (config key "asyncModelProcessing"). RLHD's multithreaded
-			// path (RENDER_THREADS) has the engine call the draw callbacks from worker threads, which then touch
-			// GL buffers concurrently — but our EGL/GL bridge has ONE thread-affine context, so concurrent buffer
-			// access races and corrupts animated models (real players flash with wrong geometry/colours; NPCs on
-			// the shared opaque path are less affected). Single-threaded keeps every GL call on the context thread.
+			// ANDROID (real-HW, mobile-sane). SAFETY-CRITICAL (forced EVERY launch, NOT user-tunable): each MUST stay
+			// or the plugin breaks. asyncModelProcessing=false (our EGL/GL bridge has ONE thread-affine context; RLHD's
+			// multithreaded path has worker threads touch GL buffers concurrently -> races corrupt animated models);
+			// uiScalingMode=LINEAR (HYBRID/xBR pull in scale/*.glsl not yet validated on Android GLES; also the
+			// client-thread-readiness probe); tiledLighting=false (the tiled-lighting GLSL is not ported to the Android
+			// overlay yet -> feature-gated off until Phase 5; the scene renders correctly without it). uiScalingMode is
+			// forced FIRST and used as the readiness probe — if the client thread isn't up yet, retry next tick.
+			final String probe = MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");
+			if (!probe.contains("\"ok\":true"))
+				return;   // client thread not ready yet — retry next tick before seeding/committing
 			MobileUiBridge.setConfig("hd", "asyncModelProcessing", "false");
-			// Draw distance 30 (desktop default is 50). FIX-13 (cont) tested 25, but a device A/B showed it adds only
-			// ~1 fps in fill-bound open-world scenes (sceneResolutionScale does ~80% of the win) for the most visible
-			// cost (a nearer horizon) — so it stays at 30 to preserve the open-world view. Reversible (drawDistance).
-			final String d = MobileUiBridge.setConfig("hd", "drawDistance", "30");
-			if (d.contains("\"ok\":true"))
+			MobileUiBridge.setConfig("hd", "tiledLighting", "false");
+
+			// USER-TUNABLE mobile defaults — seeded ONCE (first launch, gated on the GFX_SEEDED_KEY sentinel) then
+			// PERSISTED, so the user's 117HD plugin-config edits survive relaunch. THIS FIXES THE SEED-GAP: the old
+			// Android path re-FORCED these every launch (wiping panel edits) and left the rest at RLHD's desktop
+			// defaults — which crush a mobile GPU (MSAA_8, 100% scale, aniso 16, 50-tile draw, and POM / wind /
+			// character-displacement all ON). The seed below establishes the mobile floor; quality levers above it
+			// (MSAA, sceneScale, aniso, lights) are A/B'd and raised in later Phase-2 tasks. All reversible in-panel.
+			final boolean seed = !"1".equals(MobileUiBridge.getConfig("hd", GFX_SEEDED_KEY));
+			if (seed)
 			{
-				configForced = true;
-				log.info("[routecrlhd] forced mobile config: LINEAR, tiledLighting=off, AA=off, shadows=1024, sceneScale=85, aniso=8, draw=30, single-threaded");
+				// Performance floor (mobile-sane):
+				MobileUiBridge.setConfig("hd", "antiAliasingMode", "DISABLED");            // RLHD default MSAA_8 crushes a tiler
+				MobileUiBridge.setConfig("hd", "sceneResolutionScale", "85");              // 85% scene FBO, blit-upscale (FIX-13)
+				MobileUiBridge.setConfig("hd", "anisotropicFilteringLevel", "8");          // 16 is desktop-max fetch bandwidth (FIX-13)
+				MobileUiBridge.setConfig("hd", "drawDistance", "30");                      // desktop 50; keeps the open-world view
+				MobileUiBridge.setConfig("hd", "shadowResolution", "RES_1024");            // 1K shadow map — shadow pass is bandwidth-bound
+				MobileUiBridge.setConfig("hd", "parallaxOcclusionMappingToggle", "false"); // Phase 1 device A/B: ~10 fps / ~2.7 ms GPU uncapped
+				MobileUiBridge.setConfig("hd", "windDisplacement", "false");               // compute grass sway — GPU cost on a fill-bound GPU
+				MobileUiBridge.setConfig("hd", "characterDisplacement", "false");          // same; both user-reenableable in-panel
+				// HD look kept (low / no perf cost):
+				MobileUiBridge.setConfig("hd", "normalMapping", "true");                   // surface relief; "barely impacts performance" (RLHD)
+				MobileUiBridge.setConfig("hd", "dynamicLights", "SOME");                   // 50 dynamic lights (RLHD default)
+				MobileUiBridge.setConfig("hd", "shadowMode", "DETAILED");                  // dappled shadows
+				MobileUiBridge.setConfig("hd", "shadowFiltering", "SMOOTH");               // smooth shadow edges
+				MobileUiBridge.setConfig("hd", "sceneScalingMode", "LINEAR");              // smooth downsample of the 85% scene FBO
+				MobileUiBridge.setConfig("hd", GFX_SEEDED_KEY, "1");
+				MobileUiBridge.flushConfigQueued();   // persist the seed + sentinel (queued AFTER the writes above)
 			}
-				return;
+			configForced = true;
+			log.info("[routecrlhd] Android config applied — safety forced (uiScaling LINEAR, async OFF, tiledLighting OFF); "
+				+ "tunables {}", seed
+				? "SEEDED (first launch: AA off, scale 85, aniso 8, draw 30, shadows 1K, POM/wind/char OFF, normal/lights/shadows kept)"
+				: "from persisted 117HD plugin config");
+			return;
 			}
 			// SAFETY-CRITICAL (forced EVERY launch, NOT user-tunable): each MUST stay or RLHD recompiles an unported
 			// shader / hits an iOS bridge limit and stops the plugin. uiScalingMode=LINEAR (HYBRID/xBR pull in unported
