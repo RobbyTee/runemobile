@@ -72,6 +72,18 @@ public final class WorldSwitcherBridge
 	private static Method hopMethod;
 	private static Method hopDirMethod;
 
+	// Bug 4 diagnostics: after a hop is invoked, sample the engine world-switcher handshake for a few seconds.
+	// The plugin's hop(World) sets quickHopTargetWorld then, each onGameTick, opens the Worldswitcher interface
+	// (Worldswitcher.BUTTONS widget) and finally calls client.hopToWorld(). This samples those private fields +
+	// the widget so we can see exactly where the flow stalls in the headless client. Temporary instrumentation.
+	private static java.lang.reflect.Field fQuickHopTarget;
+	private static java.lang.reflect.Field fDisplayAttempts;
+	private static boolean hopDiagFieldsResolved;
+	private static long hopDiagUntilMs;
+	private static long hopDiagNextSampleMs;
+	private static int hopDiagTargetWorld;
+	private static String hopDiagLastSig;
+
 	private WorldSwitcherBridge()
 	{
 	}
@@ -202,6 +214,7 @@ public final class WorldSwitcherBridge
 			try
 			{
 				hopDirMethod.invoke(worldHopper, previous);
+				armHopDiag(-1);   // direction-based; the plugin picks the target internally
 				log.info("[worldswitcher] quick-hop {} invoked ok", previous ? "prev" : "next");
 			}
 			catch (Throwable ex)
@@ -256,6 +269,7 @@ public final class WorldSwitcherBridge
 			try
 			{
 				hopMethod.invoke(worldHopper, worldId);
+				armHopDiag(worldId);
 				log.info("[worldswitcher] hop {} invoked ok (quick-hop target set; completes on game ticks)", worldId);
 			}
 			catch (Throwable ex)
@@ -272,12 +286,83 @@ public final class WorldSwitcherBridge
 			return;
 		}
 		final long now = System.currentTimeMillis();
+		sampleHopDiag(c, now);
 		if (now - lastRefresh < 1500)
 		{
 			return;
 		}
 		lastRefresh = now;
 		rebuild(c);
+	}
+
+	/** Bug 4: arm the post-hop handshake sampler (called from both hop paths once a hop is invoked). */
+	private static void armHopDiag(int targetWorld)
+	{
+		hopDiagTargetWorld = targetWorld;
+		hopDiagUntilMs = System.currentTimeMillis() + 6000;
+		hopDiagNextSampleMs = 0;
+		hopDiagLastSig = null;
+	}
+
+	/** Bug 4: for ~6s after a hop, sample the engine world-switcher handshake (every ~400ms) and log only when it
+	 *  CHANGES — whether quickHopTargetWorld gets set/cleared, whether openWorldHopper builds the
+	 *  Worldswitcher.BUTTONS widget, how far displaySwitcherAttempts climbs, and whether c.getWorld() actually moves.
+	 *  Device finding (2026-06-22): the plugin handshake completes fully (selects a world, opens the switcher, clears
+	 *  the target via client.hopToWorld) yet getWorld() never changes → client.hopToWorld() is inert in the headless
+	 *  client. Left in as a low-noise diagnostic for the eventual platform-level hop fix. Client thread. */
+	private static void sampleHopDiag(Client c, long now)
+	{
+		if (now > hopDiagUntilMs || now < hopDiagNextSampleMs)
+		{
+			return;
+		}
+		hopDiagNextSampleMs = now + 400;
+		try
+		{
+			if (!hopDiagFieldsResolved)
+			{
+				hopDiagFieldsResolved = true;
+				try
+				{
+					fQuickHopTarget = WorldHopperPlugin.class.getDeclaredField("quickHopTargetWorld");
+					fQuickHopTarget.setAccessible(true);
+					fDisplayAttempts = WorldHopperPlugin.class.getDeclaredField("displaySwitcherAttempts");
+					fDisplayAttempts.setAccessible(true);
+				}
+				catch (Throwable ex)
+				{
+					log.info("[worldswitcher] hop-diag: field resolve failed: {}", String.valueOf(ex));
+				}
+			}
+			final boolean buttons = c.getWidget(net.runelite.api.gameval.InterfaceID.Worldswitcher.BUTTONS) != null;
+			Object tgt = null;
+			Object attempts = null;
+			if (worldHopper != null && fQuickHopTarget != null)
+			{
+				tgt = fQuickHopTarget.get(worldHopper);
+				attempts = fDisplayAttempts.get(worldHopper);
+			}
+			final int tgtId;
+			if (tgt instanceof net.runelite.api.World)
+			{
+				tgtId = ((net.runelite.api.World) tgt).getId();
+			}
+			else
+			{
+				tgtId = -1;
+			}
+			final String sig = c.getWorld() + "/" + buttons + "/" + tgtId + "/" + attempts;
+			if (!sig.equals(hopDiagLastSig))
+			{
+				hopDiagLastSig = sig;
+				log.info("[worldswitcher] hop-diag target={} curWorld={} switcherWidget={} quickHopTargetWorld={} attempts={}",
+					hopDiagTargetWorld, c.getWorld(), buttons, tgtId, attempts);
+			}
+		}
+		catch (Throwable ex)
+		{
+			log.info("[worldswitcher] hop-diag sample failed: {}", String.valueOf(ex));
+		}
 	}
 
 	private static void rebuild(Client c)
