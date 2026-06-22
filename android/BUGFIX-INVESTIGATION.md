@@ -1,7 +1,16 @@
 # Android bug triage — root-cause investigation
 
-Investigation of 16 user-reported Android bugs. Read-only code investigation; no fixes applied yet.
-Findings below are file:line + cause + fix sketch + confidence. Several bugs share one root cause.
+Investigation of 16 user-reported Android bugs. Findings below are file:line + cause + fix sketch +
+confidence. Several bugs share one root cause.
+
+## Status
+- **DONE — Cluster A (13,14,15,16):** plugin panels capped to a centered ~340dp column (PanelView.kt).
+  Device-verified (Skill Calc + Notes). Residual: tall-panel softness deferred (optional follow-up).
+- **DONE — Clusters F+G (5,6,7,9,10):** bottom-left tools enlarged to 40dp targets, modifier latch shows a
+  clear teal active chip, Ctrl/Alt moved to debug-only (release HUD = keyboard + Shift). Device-verified.
+- **TODO — Cluster C (1,4,2,12):** keyboard in plugin config; quick-hop Next; quest-helper skill leak; dialogue portrait.
+- **TODO — Cluster D (8,11):** welcome-message chrome flash; fully-white chat text.
+- **TODO — Cluster E (3):** camera-hole / notch insets.
 
 ## Architecture note (important)
 There are **two** plugin-UI surfaces on Android:
