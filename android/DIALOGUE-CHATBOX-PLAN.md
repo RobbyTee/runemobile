@@ -78,6 +78,24 @@ Then open an NPC dialogue on device and read:
 
 ---
 
+## Probe results — Stage 1 (device, Pixel 7a, NPC "Miss Schism", 2026-06-22)
+Kotlin-only `DialogueView` log of the engine's published head bounds:
+```
+dlgprobe: headCanvas=(120,107  32x32)  headView=(240,214→304,278)  boxCanvas=(67,8 519x182)  scale=(2.0,2.0)
+```
+- **VF-1 = YES.** The engine rasters the chathead at the relocated top — it shows through the cutout.
+- **VF-2 = the head WIDGET is 32×32 canvas px** inside a 519×182 box (desktop chathead is ~62×62+). So the head
+  is small because the **engine allocates a tiny 32×32 widget** — the bounds cap the render; this is NOT a display
+  scale or (primarily) a `modelZoom` issue. The fix must make the engine allocate a larger head widget.
+- **VF-3 = not yet measured** (our parchment still occludes the engine's own background).
+
+**Open question for Stage 2:** WHY is the widget 32×32 — does it grow if we stop relocating/resizing the chat
+container during a dialogue (the design agents' "dialogue opens INTO the resized CHAT_CONTAINER" theory), or is it
+fixed by the interface's own cs2 layout at our canvas size (the synthesis "separate group" view)? That needs the
+heavier shared-bridge probe: while a dialogue is open, temporarily skip `sizeChatArea`/relocate and re-log the head
+bounds — if it grows toward ~62px, the resize is the cause and "don't resize during a dialogue" is the lever
+(weighed against the known natural-bottom placement + tap regression). Heavy deploy (jar pipeline + runtime.tag).
+
 ## The two candidate end-states (probe picks one)
 
 ### Fallback / default ship (lowest risk) — keep the parchment, feed it the real head
