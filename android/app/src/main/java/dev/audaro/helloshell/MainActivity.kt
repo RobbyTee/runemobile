@@ -425,12 +425,37 @@ class MainActivity : AppCompatActivity() {
         val pluginPanel = ComposeView(this).apply { visibility = View.GONE; elevation = 200f }
         // Compact, low-profile dev affordances (single-glyph): kill the Material 88dp min width + slim padding so
         // the three sit in a small bottom-left cluster instead of three chunky buttons across the HUD.
+        val devD = resources.displayMetrics.density
         fun devButton(glyph: String) = Button(this).apply {
             text = glyph
-            minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
-            val px = (10 * resources.displayMetrics.density).toInt()
-            setPadding(px, px / 2, px, px / 2)
+            textSize = 16f
+            setTextColor(0xFFFFFFFF.toInt())
+            minWidth = 0; minHeight = 0
+            // A proper touch target (Material min 40dp) + a rounded translucent chip so the glyphs read as
+            // tappable controls rather than tiny text (Finding: the bottom-left tools were too small to hit).
+            val touch = (40 * devD).toInt()
+            minimumWidth = touch; minimumHeight = touch
+            val px = (12 * devD).toInt()
+            setPadding(px, (px * 0.6f).toInt(), px, (px * 0.6f).toInt())
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = 12f * devD
+                setColor(0x66000000)
+                setStroke((1 * devD).toInt(), 0x33FFFFFF)
+            }
             alpha = 0.7f
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginEnd = (6 * devD).toInt() }
+        }
+        // Swap a sticky modifier between its idle and latched look — a clear filled/accented "active" state.
+        // (Finding: the sticky-Shift latch gave no indication it was on; alpha alone was too subtle.)
+        fun setModActive(b: Button, on: Boolean) {
+            b.alpha = if (on) 1f else 0.7f
+            b.background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = 12f * devD
+                setColor(if (on) 0xCC2AA189.toInt() else 0x66000000)
+                setStroke(((if (on) 2 else 1) * devD).toInt(), if (on) 0xFF3FE0BC.toInt() else 0x33FFFFFF)
+            }
         }
         // §4 right-bar redesign (increment 1): open the plugin launcher. The dismiss-flush (§4) persists any
         // config edit made in the panel even when it's closed without backgrounding.
@@ -494,7 +519,7 @@ class MainActivity : AppCompatActivity() {
         keyboardToggleBtn = kbButton
         kbButton.setOnClickListener {
             manualKeyboard = !manualKeyboard
-            kbButton.alpha = if (manualKeyboard) 1f else 0.7f
+            setModActive(kbButton, manualKeyboard)
             Log.i(TAG, "ap0: manual keyboard ${if (manualKeyboard) "ON" else "OFF"}")
         }
         // AP-2a (Finding 12): sticky-Shift latch. The engine's shift-gated surface — "Mark" on objects/NPCs/
@@ -505,7 +530,7 @@ class MainActivity : AppCompatActivity() {
         val shiftButton = devButton("⇧")
         shiftButton.setOnClickListener {
             shiftHeld = !shiftHeld
-            shiftButton.alpha = if (shiftHeld) 1f else 0.7f
+            setModActive(shiftButton, shiftHeld)
             JvmLauncher.setShiftHeld(shiftHeld)
             Log.i(TAG, "ap2a: sticky-Shift ${if (shiftHeld) "HELD" else "released"}")
         }
@@ -526,7 +551,7 @@ class MainActivity : AppCompatActivity() {
         ctrlButton.alpha = 0.7f
         ctrlButton.setOnClickListener {
             ctrlHeld = !ctrlHeld
-            ctrlButton.alpha = if (ctrlHeld) 1f else 0.7f
+            setModActive(ctrlButton, ctrlHeld)
             JvmLauncher.setCtrlHeld(ctrlHeld)
             Log.i(TAG, "mod: sticky-Ctrl ${if (ctrlHeld) "HELD" else "released"}")
         }
@@ -534,7 +559,7 @@ class MainActivity : AppCompatActivity() {
         altButton.alpha = 0.7f
         altButton.setOnClickListener {
             altHeld = !altHeld
-            altButton.alpha = if (altHeld) 1f else 0.7f
+            setModActive(altButton, altHeld)
             JvmLauncher.setAltHeld(altHeld)
             Log.i(TAG, "mod: sticky-Alt ${if (altHeld) "HELD" else "released"}")
         }
@@ -551,10 +576,12 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             // In-play input modifiers stay on the HUD: soft keyboard + sticky-shift. (Account/Log out/Screenshot
             // moved to the launcher as fixed tiles — §4 cutover; the settings entry is the bottom-center handle.)
-            addView(kbButton); addView(shiftButton); addView(ctrlButton); addView(altButton)
-            // AP-0: developer-only tooling (chrome A/B raw-stones toggle + GPU/117HD process-restart footguns) is
-            // hidden in release — renderer selection lives in the native plugin panel (renderer-as-plugins).
-            if (BuildConfig.DEBUG) { addView(chromeButton); addView(gpuButton); addView(hdButton) }
+            // Release HUD keeps only the two in-play essentials: keyboard summon (type chat/PMs) + sticky-Shift.
+            addView(kbButton); addView(shiftButton)
+            // Developer-only tooling, hidden in release: the Ctrl/Alt sticky latches (niche modifier surface),
+            // the chrome A/B raw-stones toggle, and the GPU/117HD process-restart footguns (renderer selection
+            // lives in the native plugin panel — renderer-as-plugins).
+            if (BuildConfig.DEBUG) { addView(ctrlButton); addView(altButton); addView(chromeButton); addView(gpuButton); addView(hdButton) }
         }
         // User-defined hotkey buttons: a HUD strip the user fills from the Hotkeys screen; GONE until populated.
         val hotkeyStripView = buildHotkeyStrip()
