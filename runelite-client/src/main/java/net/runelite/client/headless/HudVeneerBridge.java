@@ -660,7 +660,10 @@ public final class HudVeneerBridge
 				// content-hide below alone leaves the engine tab row rasterising behind the native row as a leftover
 				// 'border'. Rebuild the chatbox on the collapsed->open edge so the messages repopulate (not an empty box).
 				setEngineChatTabsHidden(c, chatCollapsed);
-				if (chatCollapsedApplied && !chatCollapsed)
+				// Repopulate the messages on the collapsed->open edge — UNLESS a dialogue is open (auto-open un-collapses
+				// the chat to show the dialogue; rebuilding would briefly repopulate the message lines, which then bleed
+				// over the opaque dialogue box). The dialogue replaces the messages anyway, so skip the rebuild.
+				if (chatCollapsedApplied && !chatCollapsed && !dlgOpen)
 				{
 					try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) { BridgeFaults.note("HudVeneerBridge.buildChatbox", ignore); }
 				}
@@ -676,7 +679,10 @@ public final class HudVeneerBridge
 				// FITS below it without clipping the newest line. Deterministic: read the chat container's real
 				// height, then pin CHATAREA to ABSOLUTE width=rowW and height=(containerH - rowH - margin) at
 				// container-relative (0, rowH). The display/scroll children are revalidated so they widen too.
-				sizeChatArea(c, chatId, rowW, rowH);
+				// Skip during a dialogue: sizeChatArea force-SHOWS the message widgets (CHATAREA/CHATDISPLAY/MES_LAYER/
+				// SCROLLAREA/INPUT) every frame, which re-shows the chat lines over the opaque dialogue box. The
+				// dialogue replaces the messages, so leave the area alone while one is open.
+				if (!dlgOpen) sizeChatArea(c, chatId, rowW, rowH);
 				// Path B: in classic OSRS the dialogue draws its head + text ONTO the chatbox brown box. So while a
 				// dialogue is open SHOW CHAT_BACKGROUND (opaque dialogue box); otherwise HIDE it so chat messages draw
 				// transparent over the scene. CONTROLS backgrounds stay hidden (the native tab row covers that strip).
@@ -692,6 +698,9 @@ public final class HudVeneerBridge
 				// CHATAREA hides only the message lines, not the dialogue.
 				final boolean hideMsgArea = chatCollapsed || dlgOpen;
 				setHidden(c, InterfaceID.Chatbox.CHATAREA, hideMsgArea);
+				setHidden(c, InterfaceID.Chatbox.CHATDISPLAY, hideMsgArea);
+				setHidden(c, InterfaceID.Chatbox.MES_LAYER, hideMsgArea);
+				setHidden(c, InterfaceID.Chatbox.SCROLLAREA, hideMsgArea);
 				setHidden(c, InterfaceID.Chatbox.INPUT, hideMsgArea);
 				setHidden(c, InterfaceID.Chatbox.INPUT_CLICKAREA, hideMsgArea);
 				setHidden(c, InterfaceID.Chatbox.CHATSCROLLBAR, hideMsgArea);

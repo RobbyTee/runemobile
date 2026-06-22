@@ -267,6 +267,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 // collapsed. Tapping the already-active tab toggles collapse; the channel stays selected either way.
 @property (nonatomic, assign) NSInteger chatActiveTab;
 @property (nonatomic, assign) BOOL chatCollapsed;
+@property (nonatomic, assign) BOOL savedCollapsedForDialogue;   // we forced chat open for a dialogue -> restore after
 @property (nonatomic, strong) UITextView *chatMessagesView;  // native-rendered chat MESSAGE lines (engine can't raster relocated chat)
 // Native dialogue: an OPAQUE parchment drawn over the whole chatbox region while a dialogue is open (occluding the
 // engine's transparent dialogue + the chat tabs/messages), with a CUTOUT where the engine's real 3D head renders.
@@ -2125,6 +2126,18 @@ static int chatRowCanvasH(void) {
     BOOL dlg = [d[@"dialogueActive"] boolValue];
     if (dlg != self.chatDialogueActive) {
         self.chatDialogueActive = dlg;
+        // Auto-open/close: a collapsed chat hides the engine tabs -> the engine dialogue raster is suppressed. So
+        // un-collapse for the dialogue's duration and restore the collapsed state when it closes (mirrors Android;
+        // official-mobile behaviour). Native is the single owner of chatCollapsed.
+        if (dlg && self.chatCollapsed) {
+            self.savedCollapsedForDialogue = YES;
+            self.chatCollapsed = NO;
+            [JVMLauncher setEngineChatCollapsed:NO];
+        } else if (!dlg && self.savedCollapsedForDialogue) {
+            self.savedCollapsedForDialogue = NO;
+            self.chatCollapsed = YES;
+            [JVMLauncher setEngineChatCollapsed:YES];
+        }
         [self appendLine:dlg ? @"[chat] dialogue open -> native chat hidden, engine dialogue (opaque) shown"
                              : @"[chat] dialogue closed -> native chat veneer restored"];
     }
@@ -2269,7 +2282,10 @@ static int chatRowCanvasH(void) {
     if (snap.length == 0) { [self hideDialogue]; return; }
     NSDictionary *cd = parseBridgeJSON(snap, "ViewController.updateDialogueView");
     if (![cd isKindOfClass:[NSDictionary class]] || ![cd[@"loggedIn"] boolValue]
-        || [cd[@"topLevelId"] intValue] != 164 || ![cd[@"dialogueActive"] boolValue]) { [self hideDialogue]; return; }
+        || [cd[@"topLevelId"] intValue] != 164 || ![cd[@"dialogueActive"] boolValue]
+        // Path B: the engine now paints its OWN opaque dialogue + full head; suppress the native parchment so it
+        // doesn't double-render over it (mirrors Android's engineDialogue gate).
+        || [cd[@"engineDialogue"] boolValue]) { [self hideDialogue]; return; }
     NSString *js = [JVMLauncher dialogueJson];
     if (js.length == 0) { [self hideDialogue]; return; }
     NSDictionary *d = parseBridgeJSON(js, "ViewController.updateDialogueView");
