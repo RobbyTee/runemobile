@@ -131,6 +131,8 @@ static int    sTQActive = -1;
 static bool   sTimerOn  = false;      // gputime prop currently enabling the probe
 static double sGpuSumMs = 0, sGpuMinMs = 0, sGpuMaxMs = 0;
 static int    sGpuFrames = 0;
+static int    sGpuDisjoint = 0;       // GPU_DISJOINT events seen this window (Mali DVFS raises these under load)
+static int    sGpuAvailSeen = 0;      // results that became available this window (0 => availability, not disjoint, is the wall)
 static double sGpuLastLog = 0;        // ms (monotonic) of the last [gpuprobe] emit
 
 // JavaBridge GPU seam (resolved lazily once the GPU jar's class is on the classpath).
@@ -641,25 +643,36 @@ static void rcTimerEndFrame() {
 }
 // Read any finished results (non-blocking), emit [gpuprobe] once/sec, then begin the next frame's query.
 static void rcTimerDrainAndBegin() {
+    // Mali note: GL_GPU_DISJOINT_EXT is raised by GPU DVFS frequently under load. The spec calls a result spanning
+    // a disjoint "undefined", but discarding EVERY result on disjoint yields ZERO data on a Mali tiler. So we keep
+    // available results, reject only physically-impossible values (the garbage guard below), and report the disjoint
+    // count as a caveat — relative A/B stays valid, absolute values carry the annotation.
     GLint disjoint = 0; glGetIntegerv(GL_GPU_DISJOINT_EXT, &disjoint);   // reading clears it
+    if (disjoint) sGpuDisjoint++;
     for (int i = 0; i < RC_NQ; i++) {
         if (sTQState[i] != 2) continue;
-        if (disjoint) { sTQState[i] = 0; continue; }                     // unreliable timing this interval — drop
         GLuint avail = 0; pglGetQueryObjectuivEXT(sTQId[i], GL_QUERY_RESULT_AVAILABLE_EXT, &avail);
         if (!avail) continue;
         GLuint64 ns = 0; pglGetQueryObjectui64vEXT(sTQId[i], GL_QUERY_RESULT_EXT, &ns);
         sTQState[i] = 0;
+        sGpuAvailSeen++;
         double ms = ns / 1e6;
+        if (ms <= 0.0 || ms > 1000.0) continue;   // disjoint garbage (a real frame is single-digit-to-tens of ms)
         sGpuSumMs += ms; sGpuFrames++;
         if (sGpuMinMs == 0 || ms < sGpuMinMs) sGpuMinMs = ms;
         if (ms > sGpuMaxMs) sGpuMaxMs = ms;
     }
     double now = rc_now_ms();
     if (sGpuLastLog == 0) sGpuLastLog = now;
-    if (now - sGpuLastLog >= 1000.0 && sGpuFrames > 0) {
-        LOGI("[gpuprobe] frames=%d avg=%.2f min=%.2f max=%.2f ms%s",
-             sGpuFrames, sGpuSumMs / sGpuFrames, sGpuMinMs, sGpuMaxMs, disjoint ? " (disjoint seen)" : "");
-        sGpuSumMs = sGpuMinMs = sGpuMaxMs = 0; sGpuFrames = 0; sGpuLastLog = now;
+    if (now - sGpuLastLog >= 1000.0) {
+        if (sGpuFrames > 0) {
+            LOGI("[gpuprobe] frames=%d avg=%.2f min=%.2f max=%.2f ms disjoint=%d",
+                 sGpuFrames, sGpuSumMs / sGpuFrames, sGpuMinMs, sGpuMaxMs, sGpuDisjoint);
+        } else {
+            // No usable result this window — name the cause (availability wall vs all-disjoint-garbage) for diagnosis.
+            LOGI("[gpuprobe] no usable GPU-time this window (availSeen=%d disjoint=%d)", sGpuAvailSeen, sGpuDisjoint);
+        }
+        sGpuSumMs = sGpuMinMs = sGpuMaxMs = 0; sGpuFrames = 0; sGpuDisjoint = 0; sGpuAvailSeen = 0; sGpuLastLog = now;
     }
     int idx = -1;
     for (int i = 0; i < RC_NQ; i++) if (sTQState[i] == 0) { idx = i; break; }
