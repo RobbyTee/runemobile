@@ -151,10 +151,6 @@ public final class HudVeneerBridge
 	// centre. The orbs stay live engine widgets (never moved); only the touch target grows. Published in tick().
 	private static volatile String orbSnapshotJson = "{\"loggedIn\":false}";
 	private static volatile int chatLinesSeq;
-	// Bug 8: latched true once the engine has actually drawn ≥1 chat line this session (the login "Welcome to
-	// Old School RuneScape." line). The native chrome gates on this so the tab grid/toolbar don't flash in the
-	// window between LOGGED_IN and the first chat draw. Re-armed on logout (see tick()).
-	private static volatile boolean firstChatLineShown;
 
 	// Content-derived publish seqs: each bumps only when its snapshot JSON actually changes, so the native
 	// republish loop can skip the per-frame String copy when nothing changed (the menu-peek gate pattern). Because
@@ -352,13 +348,6 @@ public final class HudVeneerBridge
 		return chatLinesJson;
 	}
 
-	/** Bug 8: true once the engine has drawn its first chat line this session (login welcome). The native shell
-	 *  gates the tab grid/toolbar on this so they don't flash before the HUD has finished building. */
-	public static boolean hasFirstChatLine()
-	{
-		return firstChatLineShown;
-	}
-
 	/** Native: the open dialogue's content for the native opaque-parchment renderer, or {@code "{}"} when none.
 	 *  Shape: {@code {"type":"npc|player|both|message|options|levelup","name":"..","text":"..","runs":[..],
 	 *  "continue":true,"options":[{"text":"..","runs":[..],"digit":N}],"head":{"x":,"y":,"w":,"h":}}} — bounds are
@@ -541,10 +530,6 @@ public final class HudVeneerBridge
 	{
 		if (!ENABLED || c == null || c.getGameState() != GameState.LOGGED_IN)
 		{
-			if (c != null && c.getGameState() != GameState.LOGGED_IN)
-			{
-				firstChatLineShown = false;   // Bug 8: re-arm the chrome gate for the next login's welcome line
-			}
 			return;
 		}
 		try
@@ -1878,10 +1863,6 @@ public final class HudVeneerBridge
 			// newest-first by timestamp (stable so same-second order is preserved), keep newest CAP, emit oldest-first.
 			nodes.sort((a, b) -> Integer.compare(safeTs(b), safeTs(a)));
 			final int n = Math.min(CHAT_LINES_CAP, nodes.size());
-			if (n > 0)
-			{
-				firstChatLineShown = true;   // Bug 8: the engine has drawn its first chat line — chrome may engage
-			}
 			final StringBuilder sb = new StringBuilder(2048);
 			sb.append("{\"loggedIn\":true,\"view\":").append(view)
 				.append(",\"seq\":").append(++chatLinesSeq)
