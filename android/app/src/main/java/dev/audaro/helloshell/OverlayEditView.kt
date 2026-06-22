@@ -37,9 +37,11 @@ class OverlayEditView(context: Context) : View(context) {
 
     private var boxes: List<Box> = emptyList()
 
-    // Drag state (view px).
+    // Drag state. dragW/dragH (view px) drive the on-screen box; dragCw/dragCh are the box's ORIGINAL canvas-px
+    // size, cached on grab so the commit clamp uses the exact integer footprint (no view-px round-trip drift).
     private var dragName: String? = null
     private var dragW = 0f; private var dragH = 0f
+    private var dragCw = 0; private var dragCh = 0
     private var grabDX = 0f; private var grabDY = 0f
     private var dragLeft = 0f; private var dragTop = 0f
 
@@ -136,6 +138,7 @@ class OverlayEditView(context: Context) : View(context) {
                 val b = boxAt(event.x, event.y) ?: return true   // consume taps in edit mode (no game interaction)
                 val sx = sx(); val sy = sy()
                 dragName = b.name
+                dragCw = b.cw; dragCh = b.ch
                 dragW = b.cw * sx; dragH = b.ch * sy
                 dragLeft = b.cx * sx; dragTop = b.cy * sy
                 grabDX = event.x - dragLeft; grabDY = event.y - dragTop
@@ -154,9 +157,8 @@ class OverlayEditView(context: Context) : View(context) {
                 if (name != null && event.actionMasked == MotionEvent.ACTION_UP) {
                     val sx = sx(); val sy = sy()
                     val cw = MainActivity.canvasW; val ch = MainActivity.canvasH
-                    val bw = (dragW / sx).roundToInt(); val bh = (dragH / sy).roundToInt()
-                    val cx = (dragLeft / sx).roundToInt().coerceIn(0, (cw - bw).coerceAtLeast(0))
-                    val cy = (dragTop / sy).roundToInt().coerceIn(0, (ch - bh).coerceAtLeast(0))
+                    val cx = (dragLeft / sx).roundToInt().coerceIn(0, (cw - dragCw).coerceAtLeast(0))
+                    val cy = (dragTop / sy).roundToInt().coerceIn(0, (ch - dragCh).coerceAtLeast(0))
                     onDrop?.invoke(name, cx, cy)
                 }
                 dragName = null
