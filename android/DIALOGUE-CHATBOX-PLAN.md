@@ -119,7 +119,26 @@ Enlarged the head cutout to 2.5× the 32×32 widget bounds and captured the dial
   relocated top — which is the unresolved hard problem (varbit 4608 is inert, dialogue groups are separate, and
   un-forcing transparency may not produce an opaque box). Bridge work + the historical relocate/tap regressions.
 
-## The two candidate end-states (probe picks one)
+## RESOLUTION — Path B SHIPPED (engine renders the opaque dialogue + full head)
+Device-verified on the Pixel 7a. The engine now paints its OWN dialogue (opaque parchment + full-size 3D head,
+desktop-accurate) instead of the native parchment + clipped-head cutout. How it works (shared bridge, both ports):
+- **Opaque dialogue:** while a dialogue is open, set `CHATBOX_TRANSPARENCY=0` AND show `CHAT_BACKGROUND` (the
+  brown box the dialogue draws onto) — in **both** `tick()` and `preRender()` (preRender is the final word before
+  raster and was re-forcing transparent + re-hiding the box every frame).
+- **Full-size head:** the engine renders the head model bigger than its 32×32 widget; suppressing the native
+  parchment (`engineDialogue` snapshot flag → native shells hide their parchment) reveals the full engine head.
+- **No chat bleed:** `sizeChatArea` force-shows the message widgets (CHATAREA/CHATDISPLAY/MES_LAYER/SCROLLAREA/
+  INPUT) every frame; while a dialogue is open we skip `sizeChatArea`, hide the full message-widget set, and skip
+  the collapsed→open BUILD_CHATBOX repopulate — so the dialogue replaces the messages (desktop behaviour).
+- **Auto-open/close:** native-owned (no `chatCollapsed` two-owner race). A collapsed chat hides the engine tabs
+  (suppressing the dialogue raster), so on the dialogue edge we un-collapse for its duration and restore after.
+
+**Verified (device, logcat + screenshots):** opaque NPC (Miss Schism, left head) + player (right head) + options
+dialogues, desktop-accurate; auto-open AND auto-close both edges. Commits: da0e0f4→46b0cca on master.
+**Pending final visual confirm:** the chat-bleed fix in the collapsed→auto-open path (deployed + root-cause-sound;
+last device re-trigger was blocked by a wandering NPC). iOS Path-B parity is code-only (StikDebug device-verify).
+
+## (historical) The two candidate end-states (probe picks one)
 
 ### Fallback / default ship (lowest risk) — keep the parchment, feed it the real head
 Keep the native opaque parchment for name/body/options, but show the engine's real 3D head through the cutout.
