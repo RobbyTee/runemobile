@@ -1809,8 +1809,11 @@ class MainActivity : AppCompatActivity() {
         val sy = if (fh > 0 && vh > 0) vh.toFloat() / fh else 1f
         val chatSnap = if (on) JvmLauncher.chatSnapshotPub() else ""
         val n = chatTabOverlay.update(chatSnap, sx, sy, on)
-        // UI-4: drive the opaque NPC-dialogue parchment from the same snapshot + the dialogue JSON.
-        dialogueOverlay.update(chatSnap, if (on) JvmLauncher.dialogueJsonPub() else "{}", sx, sy, on)
+        // Path B: when the engine renders its own opaque dialogue (engineDialogue), SUPPRESS the native parchment so
+        // the engine's dialogue + full 3D head shows through. Otherwise (make-X/reward boxes, or Path-B off) draw the
+        // native parchment as before.
+        val engineDlg = chatSnap.contains("\"engineDialogue\":true")
+        dialogueOverlay.update(chatSnap, if (on && !engineDlg) JvmLauncher.dialogueJsonPub() else "{}", sx, sy, on && !engineDlg)
         if (on && n > 0 && !chatTabsLogged) {
             chatTabsLogged = true
             Log.i(TAG, "ANDROID_A3_CHATTABS_GREEN enlarged native chat-tab row drawn ($n tabs) sx=$sx sy=$sy")

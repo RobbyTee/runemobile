@@ -463,7 +463,17 @@ public final class HudVeneerBridge
 			// mobile look. Only while the veneer is relocating the chat — otherwise leave the chatbox's own setting.
 			if (chatX >= 0)
 			{
-				keepChatboxTransparent(c);
+				// Path B: opaque (0) while a dialogue is open so the engine paints its own dialogue parchment + head;
+				// transparent (1) otherwise. This is the FINAL word before raster, so it MUST mirror tick()'s
+				// per-dialogue flip — forcing transparent here unconditionally would override the opaque dialogue.
+				if (dialogueOpen)
+				{
+					setChatboxTransparency(c, 0);
+				}
+				else
+				{
+					keepChatboxTransparent(c);
+				}
 			}
 			if (chatX >= 0 && !isWorldMapOpen(c))
 			{
@@ -472,11 +482,10 @@ public final class HudVeneerBridge
 				// (proven off-device). So while collapsed we hide them too, which blanks the engine chat entirely (the
 				// content-hide alone leaves the tab row rasterising behind the native row as a leftover 'border').
 				setEngineChatTabsHidden(c, chatCollapsed);
-				// Hide the chat-area brown box so the engine messages render transparent over the scene (the
-				// official mobile look). CHAT_BACKGROUND is a chatbox-group (162) child; the dialogue parchments are
-				// separate top-level interfaces (ChatLeft/ChatRight/ChatBoth/Messagebox/...), so this leaves the
-				// dialogue untouched. CONTROLS backgrounds stay hidden too (the native tab row covers that area).
-				hide(c, InterfaceID.Chatbox.CHAT_BACKGROUND);
+				// Path B (final word before raster): SHOW the chat brown box while a dialogue is open (the dialogue
+				// draws onto it -> opaque dialogue), HIDE it otherwise (transparent message veneer). Must mirror tick()
+				// or this re-hide would blank the dialogue box every frame. CONTROLS backgrounds stay hidden.
+				setHidden(c, InterfaceID.Chatbox.CHAT_BACKGROUND, !dialogueOpen);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
 			}
@@ -566,13 +575,23 @@ public final class HudVeneerBridge
 			// original chatbox at its own transparency setting (the user's choice).
 			if (chatX >= 0)
 			{
-				keepChatboxTransparent(c);
-				// Force chat USERNAMES white (official-mobile look) via the textrecolor config — ChatMessageManager
-				// recolours sender names from it (the CHATBOX_TRANSPARENCY varbit is inert here). Applies once; rebuild
-				// the chatbox that one time so the already-shown lines recolour too (new lines recolour on their build).
-				if (MobileUiBridge.forceWhiteChatUsernames())
+				// Path B (engine-rendered dialogue): while a dialogue is open switch the chatbox to OPAQUE (0) so the
+				// engine paints its own dialogue parchment + full 3D head (desktop look); otherwise keep it
+				// TRANSPARENT (1) for the over-scene message veneer. Edge-guarded inside setChatboxTransparency.
+				if (dlgOpen)
 				{
-					try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) { BridgeFaults.note("HudVeneerBridge.buildChatbox", ignore); }
+					setChatboxTransparency(c, 0);
+				}
+				else
+				{
+					keepChatboxTransparent(c);
+					// Force chat USERNAMES white (official-mobile look) via the textrecolor config — ChatMessageManager
+					// recolours sender names from it. Applies once; rebuild the chatbox that one time so the already-shown
+					// lines recolour too (new lines recolour on their build).
+					if (MobileUiBridge.forceWhiteChatUsernames())
+					{
+						try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) { BridgeFaults.note("HudVeneerBridge.buildChatbox", ignore); }
+					}
 				}
 			}
 
@@ -658,11 +677,10 @@ public final class HudVeneerBridge
 				// height, then pin CHATAREA to ABSOLUTE width=rowW and height=(containerH - rowH - margin) at
 				// container-relative (0, rowH). The display/scroll children are revalidated so they widen too.
 				sizeChatArea(c, chatId, rowW, rowH);
-				// Hide only the chat BACKGROUND sprites (the brown box) so the engine draws its chat lines transparent
-				// over the scene (the mobile look) — the engine still rasters the tabs + messages + scrollbar. During a
-				// dialogue the shell's opaque parchment occludes the engine's transparent dialogue + the tabs/messages,
-				// leaving only the engine's 3D head visible through a cutout (the head can't be drawn natively).
-				hide(c, InterfaceID.Chatbox.CHAT_BACKGROUND);
+				// Path B: in classic OSRS the dialogue draws its head + text ONTO the chatbox brown box. So while a
+				// dialogue is open SHOW CHAT_BACKGROUND (opaque dialogue box); otherwise HIDE it so chat messages draw
+				// transparent over the scene. CONTROLS backgrounds stay hidden (the native tab row covers that strip).
+				setHidden(c, InterfaceID.Chatbox.CHAT_BACKGROUND, !dlgOpen);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
 				// Collapse (tap the active tab) hides only the message CONTENT, not the container, so the lines are
@@ -1554,6 +1572,7 @@ public final class HudVeneerBridge
 			sb.append(",\"view\":").append(view)
 				.append(",\"topLevelId\":").append(topLevel)
 				.append(",\"dialogueActive\":").append(dialogueOpen)
+				.append(",\"engineDialogue\":").append(dialogueOpen)
 				.append(",\"windowOpen\":").append(chatWindowOccluded);
 			if (dialogueOpen)
 			{
@@ -2165,24 +2184,28 @@ public final class HudVeneerBridge
 	 *  writes when the value actually differs (no per-frame script churn / varbit-listener spam). */
 	private static void keepChatboxTransparent(Client c)
 	{
+		setChatboxTransparency(c, 1);
+	}
+
+	/** Set {@code CHATBOX_TRANSPARENCY} to {@code val} (1 = transparent over-scene mode; 0 = opaque brown/parchment
+	 *  box), rebuilding the chatbox so the new colour + background mode takes effect. Guarded so it only writes on a
+	 *  CHANGE (no per-frame script churn / varbit-listener spam). Path B sets 0 while a dialogue is open so the engine
+	 *  paints its OWN opaque dialogue parchment + full 3D head (desktop look), and 1 otherwise for the message veneer. */
+	private static void setChatboxTransparency(Client c, int val)
+	{
 		try
 		{
-			// TRANSPARENT chat mode (1): the engine renders the message lines with the over-scene colour set
-			// (white/light usernames + glyph shadow) instead of the opaque-box set (dark names on brown). This is
-			// the official mobile look. The engine dialogue is occluded by the native opaque parchment, so it no
-			// longer needs the chatbox forced opaque. Guarded so it only writes on a change (no script churn).
-			if (c.getVarbitValue(VarbitID.CHATBOX_TRANSPARENCY) != 1)
+			// setVarbit alone doesn't re-colour/re-background the already-laid chatbox (the lines keep their colours,
+			// the background stays as drawn). Rebuild on the (rare) CHANGE so it re-renders in the new mode.
+			if (c.getVarbitValue(VarbitID.CHATBOX_TRANSPARENCY) != val)
 			{
-				c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, 1);
-				// setVarbit alone doesn't re-colour the already-laid chat (the lines keep their opaque colours, so
-				// usernames stayed dark). Rebuild the chatbox so it re-renders in the new TRANSPARENT colour mode
-				// (white usernames + glyph shadow). Runs only on the (rare) transparency CHANGE, not every frame.
+				c.setVarbit(VarbitID.CHATBOX_TRANSPARENCY, val);
 				try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) { BridgeFaults.note("HudVeneerBridge.buildChatbox", ignore); }
 			}
 		}
 		catch (RuntimeException ignore)
 		{
-			BridgeFaults.note("HudVeneerBridge.keepChatboxTransparent", ignore);
+			BridgeFaults.note("HudVeneerBridge.setChatboxTransparency", ignore);
 		}
 	}
 

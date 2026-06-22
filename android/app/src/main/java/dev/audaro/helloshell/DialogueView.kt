@@ -117,10 +117,6 @@ class DialogueView(context: Context) : View(context) {
             lastJson = dlgJson
             rebuild(d)
             Log.i("DialogueView", "ui4: dialogue type=${d.optString("type")} name=${name ?: "-"} opts=${options.size} cont=($contCx,$contCy)")
-            // DLG-PROBE (Step-0): the engine's reported head CANVAS bounds vs the dialogue box, to see whether the
-            // head region the engine allocates is small (bounds cap the rendered model) or full-size-but-shrunk.
-            val hb = d.optJSONObject("head")
-            Log.i("DialogueView", "dlgprobe: headCanvas=(${hb?.optInt("x")},${hb?.optInt("y")} ${hb?.optInt("w")}x${hb?.optInt("h")}) headView=$headRect boxCanvas=(${(boxX/sx).toInt()},${(boxY/sy).toInt()} ${(boxW/sx).toInt()}x${(boxH/sy).toInt()}) scale=($sx,$sy)")
         }
         invalidate()
     }
