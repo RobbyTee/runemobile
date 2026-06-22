@@ -697,6 +697,10 @@ class MainActivity : AppCompatActivity() {
             window.attributes.layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
+        // The soft keyboard OVERLAYS content — never pan/resize the window. Set once here (a static root-window
+        // setting); without it the IME floated the bottom-anchored plugin sheet up by the keyboard height. The
+        // chat-at-top input sits at the TOP of the screen, so a bottom-overlay keyboard never covers it.
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         enterImmersive()
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
@@ -1514,10 +1518,6 @@ class MainActivity : AppCompatActivity() {
      *  system chrome. Transient bars come back on a swipe from the edge, then auto-hide. */
     private fun enterImmersive() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        // The soft keyboard OVERLAYS the content — never pan/resize the window. Without this the IME would float
-        // the bottom-anchored plugin sheet up by the keyboard height (exposing the game beneath it); the chat-at-top
-        // input also sits at the top, so overlay is the right behaviour everywhere.
-        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         WindowInsetsControllerCompat(window, window.decorView).apply {
             hide(WindowInsetsCompat.Type.systemBars())
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
