@@ -686,10 +686,15 @@ public final class HudVeneerBridge
 				// Collapse (tap the active tab) hides only the message CONTENT, not the container, so the lines are
 				// PRESERVED (no teardown) and reopening is instant + populated instead of an empty box that needs a
 				// second tap to rebuild. sizeChatArea force-shows these every frame, so re-hide them here when collapsed.
-				setHidden(c, InterfaceID.Chatbox.CHATAREA, chatCollapsed);
-				setHidden(c, InterfaceID.Chatbox.INPUT, chatCollapsed);
-				setHidden(c, InterfaceID.Chatbox.INPUT_CLICKAREA, chatCollapsed);
-				setHidden(c, InterfaceID.Chatbox.CHATSCROLLBAR, chatCollapsed);
+				// Hide the message area + input + scrollbar while COLLAPSED or while a DIALOGUE is open: the dialogue
+				// replaces the chat messages (desktop behaviour), and leaving them shown lets live chat lines bleed
+				// over the opaque dialogue box. The dialogue groups are separate top-level interfaces, so hiding
+				// CHATAREA hides only the message lines, not the dialogue.
+				final boolean hideMsgArea = chatCollapsed || dlgOpen;
+				setHidden(c, InterfaceID.Chatbox.CHATAREA, hideMsgArea);
+				setHidden(c, InterfaceID.Chatbox.INPUT, hideMsgArea);
+				setHidden(c, InterfaceID.Chatbox.INPUT_CLICKAREA, hideMsgArea);
+				setHidden(c, InterfaceID.Chatbox.CHATSCROLLBAR, hideMsgArea);
 				buildChatSnapshot(c);
 				buildChatLines(c);
 				// While a dialogue is open, publish its content + head bounds so the native shell draws an opaque
