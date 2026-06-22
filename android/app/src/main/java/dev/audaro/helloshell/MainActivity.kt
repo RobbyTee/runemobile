@@ -187,6 +187,11 @@ class MainActivity : AppCompatActivity() {
     private var lastMmX = Int.MIN_VALUE             // last minimap relocation sent (send only on change)
     private var lastMmY = Int.MIN_VALUE
 
+    // On-screen overlay-layout editor (drag movable overlays directly on the live game).
+    private lateinit var overlayEditView: OverlayEditView
+    @Volatile private var overlayEditMode = false
+    private var overlayPollThread: Thread? = null
+
     // A2 press-and-peek menu state.
     private lateinit var menuOverlay: MenuOverlayView
     private var menuActive = false      // the long-press has claimed this gesture
@@ -355,6 +360,21 @@ class MainActivity : AppCompatActivity() {
         // are HIDDEN (HudVeneerBridge.setStonesHidden, driven from updateChrome) so these native cells ARE the
         // tabs; a tap opens the tab by replaying the engine stone's op script (openTab) — works while hidden, so
         // the engine + plugins stay authoritative and no widget is moved or covered (the proven iOS layout).
+        overlayEditView = OverlayEditView(this).apply {
+            visibility = View.GONE
+            onDrop = { name, x, y ->
+                Log.i(TAG, "overlay-edit: drop $name -> ($x,$y)")
+                JvmLauncher.onBridgeTouch { JvmLauncher.overlaySetLocation(name, x, y); JvmLauncher.flushConfig() }
+            }
+            onResetAll = {
+                Log.i(TAG, "overlay-edit: reset all")
+                JvmLauncher.onBridgeTouch {
+                    for (b in overlayEditView.currentNames()) JvmLauncher.overlayReset(b)
+                    JvmLauncher.flushConfig()
+                }
+            }
+            onDone = { exitOverlayEditMode() }
+        }
         chromeOverlay = ChromeOverlayView(this)
         chromeOverlay.onTabTap = { idx ->
             Log.i(TAG, "a6: native tab $idx tap -> openTab")
@@ -483,6 +503,8 @@ class MainActivity : AppCompatActivity() {
                     onDiscord = { JvmLauncher.onBridge { JvmLauncher.publishLink("https://discord.gg/ArdAhnN") } },
                     // FIX-11: a panel's mirror text field is focused -> the per-frame poll must leave the IME alone.
                     onPanelTextActive = { active -> textActivePanel = active },
+                    // Overlay layout is edited ON the live game now: close the panel + enter the on-screen drag mode.
+                    onEnterOverlayEdit = { enterOverlayEditMode() },
                 )
             }
             pluginPanel.visibility = View.VISIBLE
@@ -599,6 +621,7 @@ class MainActivity : AppCompatActivity() {
             addView(dialogueOverlay, FrameLayout.LayoutParams(mp, mp)) // UI-4: opaque NPC-dialogue parchment (above chat, below menus)
             addView(keyboardView, FrameLayout.LayoutParams(1, 1))
             addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame + chrome
+            addView(overlayEditView, FrameLayout.LayoutParams(mp, mp)) // on-screen overlay-layout editor (GONE unless editing)
             addView(reconnectOverlay, FrameLayout.LayoutParams(mp, mp)) // FIX-9: "Reconnecting…" scrim (non-interactive)
             // §4: the launcher handle sits above the game/chrome (tappable) but below the launcher sheet
             // (covered while it's open) and clears the bottom gesture inset.
@@ -638,7 +661,9 @@ class MainActivity : AppCompatActivity() {
         // for when no composition is active: dispose+hide if somehow still visible, else passthrough to normal
         // BACK so the app backgrounds.
         onBackPressedDispatcher.addCallback(this) {
-            if (mapOpen) {
+            if (overlayEditMode) {
+                exitOverlayEditMode()   // BACK leaves the on-screen overlay editor
+            } else if (mapOpen) {
                 // The fullscreen map's close X is a tiny bezel-clipped target at the screen corner — BACK is the
                 // reliable close. Click the close button by its CANVAS coordinate (from the snapshot), which the
                 // engine resolves regardless of where the stretched view paints it; Escape as a fallback if the
@@ -1499,6 +1524,63 @@ class MainActivity : AppCompatActivity() {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) enterImmersive()   // re-assert after a dialog / keyboard transiently revealed the bars
     }
+
+    // ---- On-screen overlay-layout editor -----------------------------------------------------------------
+
+    /** Enter the on-screen overlay editor: each movable overlay becomes a draggable box over the live game. */
+    private fun enterOverlayEditMode() {
+        if (overlayEditMode) return
+        overlayEditMode = true
+        overlayEditView.setBoxes(emptyList())
+        overlayEditView.visibility = View.VISIBLE
+        JvmLauncher.onBridge { JvmLauncher.overlaySetUiOpen(true) }   // start the bounds snapshot refresh
+        startOverlayPoll()
+        Log.i(TAG, "overlay-edit: entered")
+    }
+
+    private fun exitOverlayEditMode() {
+        if (!overlayEditMode) return
+        overlayEditMode = false
+        overlayPollThread?.interrupt(); overlayPollThread = null
+        overlayEditView.visibility = View.GONE
+        JvmLauncher.onBridge { JvmLauncher.overlaySetUiOpen(false); JvmLauncher.flushConfig() }
+        Log.i(TAG, "overlay-edit: exited")
+    }
+
+    /** Background poll of the published overlay bounds (off the UI thread) feeding the editor view ~2.5 Hz. */
+    private fun startOverlayPoll() {
+        overlayPollThread?.interrupt()
+        overlayPollThread = Thread {
+            try {
+                while (overlayEditMode && !Thread.currentThread().isInterrupted) {
+                    val json = try { JvmLauncher.onBridge { JvmLauncher.overlaysJson() }.get() } catch (t: Throwable) { null }
+                    if (json != null) {
+                        val boxes = parseOverlayBoxes(json)
+                        runOnUiThread { if (overlayEditMode) overlayEditView.setBoxes(boxes) }
+                    }
+                    Thread.sleep(400)
+                }
+            } catch (ie: InterruptedException) {
+                // exit cleanly
+            }
+        }.also { it.isDaemon = true; it.start() }
+    }
+
+    private fun parseOverlayBoxes(json: String): List<OverlayEditView.Box> = try {
+        val o = JSONObject(json)
+        if (!o.optBoolean("available", false)) emptyList()
+        else {
+            val arr = o.optJSONArray("overlays") ?: return emptyList()
+            (0 until arr.length()).mapNotNull { i ->
+                val ov = arr.getJSONObject(i)
+                if (!ov.optBoolean("movable")) return@mapNotNull null
+                val b = ov.optJSONArray("bounds") ?: return@mapNotNull null
+                val w = b.optInt(2); val h = b.optInt(3)
+                if (w <= 0 || h <= 0) return@mapNotNull null
+                OverlayEditView.Box(ov.optString("name", "?"), b.optInt(0), b.optInt(1), w, h)
+            }
+        }
+    } catch (t: Throwable) { Log.e(TAG, "overlay-edit parse: $t"); emptyList() }
 
     /**
      * Per-frame poll of the engine read-surface: auto-raise/dismiss the soft keyboard when a text field gains/

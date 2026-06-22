@@ -100,6 +100,7 @@ fun PluginPanel(
     onLogout: () -> Unit = {},
     onDiscord: () -> Unit = {},
     onPanelTextActive: (Boolean) -> Unit = {},   // FIX-11: forwarded to PanelView so the host can free the IME
+    onEnterOverlayEdit: () -> Unit = {},         // overlay layout is now edited ON the live game (host drag mode)
 ) {
     var rows by remember { mutableStateOf<List<PluginRow>>(emptyList()) }
     var renderer by remember { mutableStateOf(rendererPref) }
@@ -121,7 +122,6 @@ fun PluginPanel(
     var geOpen by remember { mutableStateOf(false) }                             // Finding 14 Grand Exchange reflow
     var timeOpen by remember { mutableStateOf(false) }                           // Track B Time Tracking reflow
     var timeAvail by remember { mutableStateOf(false) }
-    var overlayOpen by remember { mutableStateOf(false) }                        // Finding 15 overlay edit
     var infoBoxOpen by remember { mutableStateOf(false) }                        // Finding 22 infobox menu
     var profilesOpen by remember { mutableStateOf(false) }                       // Track B #6 config profiles
     var profilesAvail by remember { mutableStateOf(false) }
@@ -166,7 +166,7 @@ fun PluginPanel(
     // §4 increment 3: the launcher + every panel now live INSIDE a PEEK/EXPAND bottom sheet (SheetScaffold) so
     // the live game stays visible above it (the desktop slide-out parity win). A sub-screen open => PEEK (game
     // watchable); the launcher landing => EXPAND.
-    val subActive = questOpen || worldOpen || xpOpen || lootOpen || geOpen || timeOpen || overlayOpen || infoBoxOpen ||
+    val subActive = questOpen || worldOpen || xpOpen || lootOpen || geOpen || timeOpen || infoBoxOpen ||
         profilesOpen || hotkeysOpen || hubOpen || panelOpen != null || configFor != null
 
     // §4 dismiss model (d): back pops ONE level — close the active sub-screen back to the launcher, else dismiss
@@ -182,7 +182,6 @@ fun PluginPanel(
             lootOpen -> lootOpen = false
             geOpen -> geOpen = false
             timeOpen -> timeOpen = false
-            overlayOpen -> overlayOpen = false
             infoBoxOpen -> infoBoxOpen = false
             profilesOpen -> profilesOpen = false
             hotkeysOpen -> hotkeysOpen = false
@@ -207,7 +206,6 @@ fun PluginPanel(
             lootOpen -> LootTrackerScreen(onBack = { lootOpen = false })
             geOpen -> GrandExchangeScreen(onBack = { geOpen = false })
             timeOpen -> TimeTrackingScreen(onBack = { timeOpen = false })
-            overlayOpen -> OverlayEditScreen(onBack = { overlayOpen = false })
             infoBoxOpen -> InfoBoxScreen(onBack = { infoBoxOpen = false })
             profilesOpen -> ConfigProfilesScreen(onBack = { profilesOpen = false })
             hotkeysOpen -> HotkeysScreen(onBack = { hotkeysOpen = false })
@@ -297,7 +295,7 @@ fun PluginPanel(
                         onOpenQuest = { questOpen = true }, onOpenWorld = { worldOpen = true },
                         onOpenXp = { xpOpen = true }, onOpenLoot = { lootOpen = true }, onOpenGe = { geOpen = true },
                         timeAvail = timeAvail, onOpenTime = { timeOpen = true },
-                        onOpenOverlay = { overlayOpen = true }, onOpenInfoBox = { infoBoxOpen = true },
+                        onOpenOverlay = { onEnterOverlayEdit(); onClose() }, onOpenInfoBox = { infoBoxOpen = true },
                         onOpenHub = { hubOpen = true },
                         profilesAvail = profilesAvail, onOpenProfiles = { profilesOpen = true },
                         onOpenHotkeys = { hotkeysOpen = true },
