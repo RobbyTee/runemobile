@@ -696,11 +696,13 @@ public final class HudVeneerBridge
 				// replaces the chat messages (desktop behaviour), and leaving them shown lets live chat lines bleed
 				// over the opaque dialogue box. The dialogue groups are separate top-level interfaces, so hiding
 				// CHATAREA hides only the message lines, not the dialogue.
+				// Hide the message area while COLLAPSED or while a DIALOGUE is open. Hiding the CHATAREA parent hides
+				// its children (CHATDISPLAY/MES_LAYER/INPUT) too — and since sizeChatArea (which force-shows + resizes
+				// them) is SKIPPED during a dialogue, nothing re-shows them, so this alone stops the chat-line bleed.
+				// Do NOT separately hide+show the child layers: that hide/show cycle made the engine re-lay them on the
+				// next BUILD_CHATBOX and clipped/dropped the bottom input line.
 				final boolean hideMsgArea = chatCollapsed || dlgOpen;
 				setHidden(c, InterfaceID.Chatbox.CHATAREA, hideMsgArea);
-				setHidden(c, InterfaceID.Chatbox.CHATDISPLAY, hideMsgArea);
-				setHidden(c, InterfaceID.Chatbox.MES_LAYER, hideMsgArea);
-				setHidden(c, InterfaceID.Chatbox.SCROLLAREA, hideMsgArea);
 				setHidden(c, InterfaceID.Chatbox.INPUT, hideMsgArea);
 				setHidden(c, InterfaceID.Chatbox.INPUT_CLICKAREA, hideMsgArea);
 				setHidden(c, InterfaceID.Chatbox.CHATSCROLLBAR, hideMsgArea);
@@ -2461,13 +2463,8 @@ public final class HudVeneerBridge
 			setHidden(c, InterfaceID.Chatbox.INPUT_CLICKAREA, false);
 			// Grow the container so the full-height content sits BELOW the taller native tab row instead of being
 			// squeezed into the original 165px box. +2 breathing room so the bottom input line never edge-clips.
-			// CHATAREA is sized a few px TALLER than the engine's natural content height: the bottom input line
-			// ("<name>: <typed>") is the last child of CHATDISPLAY (which sizes relative to CHATAREA) and sits at its
-			// exact bottom edge, so at the natural height its last pixel row clips. The extra room lets the input
-			// render fully. The container grows to match so the taller area isn't itself clipped.
-			final int areaH = ORIG_CHAT_CONTENT_H + 8;
 			final Widget cont = c.getWidget(containerId);
-			final int wantContainerH = rowH + areaH + 2;
+			final int wantContainerH = rowH + ORIG_CHAT_CONTENT_H + 2;
 			if (cont != null && (cont.getHeightMode() != WidgetSizeMode.ABSOLUTE || cont.getOriginalHeight() != wantContainerH))
 			{
 				cont.setHeightMode(WidgetSizeMode.ABSOLUTE);
@@ -2477,12 +2474,12 @@ public final class HudVeneerBridge
 			// Message area: full natural content height, at the native row width, positioned below the tab row.
 			area.setForcedPosition(0, rowH);
 			if (area.getWidthMode() != WidgetSizeMode.ABSOLUTE || area.getOriginalWidth() != rowW
-				|| area.getHeightMode() != WidgetSizeMode.ABSOLUTE || area.getOriginalHeight() != areaH)
+				|| area.getHeightMode() != WidgetSizeMode.ABSOLUTE || area.getOriginalHeight() != ORIG_CHAT_CONTENT_H)
 			{
 				area.setWidthMode(WidgetSizeMode.ABSOLUTE);
 				area.setOriginalWidth(rowW);
 				area.setHeightMode(WidgetSizeMode.ABSOLUTE);
-				area.setOriginalHeight(areaH);
+				area.setOriginalHeight(ORIG_CHAT_CONTENT_H);
 				area.revalidate();
 				// Only when the row is WIDER than the engine default do the display/scroll children need explicit
 				// widening (they don't cascade); at the default 519 width they keep their natural, already-aligned
@@ -2498,11 +2495,6 @@ public final class HudVeneerBridge
 			{
 				area.revalidate();
 			}
-			// Grow the message-display layers to fill the (taller) CHATAREA so the bottom INPUT line ("<name>:
-			// <typed>") — the last child of CHATDISPLAY — clears the bottom edge. At the engine's natural height
-			// CHATDISPLAY ends exactly at the input's bottom, clipping its last pixel row.
-			forceHeight(c, InterfaceID.Chatbox.CHATDISPLAY, areaH - 8);
-			forceHeight(c, InterfaceID.Chatbox.MES_LAYER, areaH - 10);
 		}
 		catch (RuntimeException ignore)
 		{
@@ -2513,30 +2505,6 @@ public final class HudVeneerBridge
 	/** Force a chat sub-widget to an ABSOLUTE width, LEFT-anchored at {@code leftX} (these widgets centre by
 	 *  default, so a width wider than their parent would shift their left edge off-screen), then revalidate. Used
 	 *  for the display/scroll widgets that don't inherit the widened CHATAREA via their own size modes. */
-	/** Force a chat sub-widget to an ABSOLUTE height (top-anchored), then revalidate. Used to grow the message
-	 *  display layers so the bottom input line (their last child) isn't clipped at the edge. */
-	private static void forceHeight(Client c, int id, int h)
-	{
-		try
-		{
-			final Widget wd = c.getWidget(id);
-			if (wd == null)
-			{
-				return;
-			}
-			if (wd.getHeightMode() != WidgetSizeMode.ABSOLUTE || wd.getOriginalHeight() != h)
-			{
-				wd.setHeightMode(WidgetSizeMode.ABSOLUTE);
-				wd.setOriginalHeight(h);
-				wd.revalidate();
-			}
-		}
-		catch (RuntimeException ignore)
-		{
-			BridgeFaults.note("HudVeneerBridge.forceHeight", ignore);
-		}
-	}
-
 	private static void forceWidth(Client c, int id, int w, int leftX)
 	{
 		try
