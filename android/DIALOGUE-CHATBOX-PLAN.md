@@ -137,6 +137,11 @@ desktop-accurate) instead of the native parchment + clipped-head cutout. How it 
 dialogues, desktop-accurate; auto-open AND auto-close both edges. Commits: da0e0f4→46b0cca on master.
 **Pending final visual confirm:** the chat-bleed fix in the collapsed→auto-open path (deployed + root-cause-sound;
 last device re-trigger was blocked by a wandering NPC). iOS Path-B parity is code-only (StikDebug device-verify).
+Also device-verify **make-X (Skillmulti) + reward boxes (Objectbox/ObjectboxDouble)**: `isDialogueOpen` includes
+them so they now get the engine-opaque treatment (they never had a native parchment — `computeDialogueJson`
+returns `{}` — so Path B should make them opaque, not transparent; confirm the quantity input + item icons render
+correctly on the shown CHAT_BACKGROUND box). Do NOT exclude them from `engineDialogue` — that reverts them to the
+old transparent state.
 
 ## (historical) The two candidate end-states (probe picks one)
 
