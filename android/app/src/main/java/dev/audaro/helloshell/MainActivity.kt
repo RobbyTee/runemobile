@@ -178,6 +178,10 @@ class MainActivity : AppCompatActivity() {
     // Phase-4: native-tracked chat collapse state (the shared side shoves the live widget off-canvas; this
     // mirrors what we last asked for — the engine never collapses on its own).
     private var chatCollapsed = false
+    // Auto-open: while an engine-rendered dialogue is up we un-collapse the chat (a collapsed chat hides the engine
+    // tabs, which suppresses the dialogue raster); these track the edge + whether WE forced it open so we can restore.
+    private var dialogueWasActive = false
+    private var savedCollapsedForDialogue = false
     private var chatTabsLogged = false
     private var lastChatRowH = Int.MIN_VALUE        // last setChatTabRowHeight sent (send only on change)
     private var lastMmX = Int.MIN_VALUE             // last minimap relocation sent (send only on change)
@@ -1814,6 +1818,23 @@ class MainActivity : AppCompatActivity() {
         // native parchment as before.
         val engineDlg = chatSnap.contains("\"engineDialogue\":true")
         dialogueOverlay.update(chatSnap, if (on && !engineDlg) JvmLauncher.dialogueJsonPub() else "{}", sx, sy, on && !engineDlg)
+        // Auto-open/close: a collapsed chat hides the engine tabs -> the dialogue raster is suppressed. So when an
+        // engine dialogue opens while collapsed, un-collapse for its duration and restore the collapsed state when it
+        // ends (official-mobile behaviour). Native is the single owner of chatCollapsed (no bridge writer / no race).
+        if (on) {
+            if (engineDlg && !dialogueWasActive && chatCollapsed) {
+                savedCollapsedForDialogue = true
+                chatCollapsed = false
+                JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(false) }
+                Log.i(TAG, "dlg: auto-opened chat for dialogue")
+            } else if (!engineDlg && dialogueWasActive && savedCollapsedForDialogue) {
+                savedCollapsedForDialogue = false
+                chatCollapsed = true
+                JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(true) }
+                Log.i(TAG, "dlg: restored collapsed chat after dialogue")
+            }
+            dialogueWasActive = engineDlg
+        }
         if (on && n > 0 && !chatTabsLogged) {
             chatTabsLogged = true
             Log.i(TAG, "ANDROID_A3_CHATTABS_GREEN enlarged native chat-tab row drawn ($n tabs) sx=$sx sy=$sy")
