@@ -23,6 +23,7 @@ FILES = [os.path.join(HEADLESS, f) for f in (
     'HudDataBridge.java', 'HudVeneerBridge.java', 'QuestHelperBridge.java', 'WorldSwitcherBridge.java',
     'LootTrackerBridge.java', 'XpTrackerBridge.java', 'GrandExchangeBridge.java', 'TimeTrackingBridge.java',
     'OverlayBridge.java', 'InfoBoxBridge.java', 'ConfigProfileBridge.java',
+    'RuneLiteAccountBridge.java',
     'HeadlessLogin.java', 'HeadlessResize.java',
 )] + [os.path.join(AWT, f) for f in (
     'DeviceHeadlessBoot.java', 'UnsafePokeActivation.java',

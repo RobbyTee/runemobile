@@ -34,6 +34,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -59,8 +60,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONObject
 
 /** One row of the A4 plugin list, parsed from MobileUiBridge.listPlugins(). */
 data class PluginRow(
@@ -242,6 +245,9 @@ fun PluginPanel(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
                         .onFocusChanged { onPanelTextActive(it.hasFocus) },
                 )
+                if (!inList) {
+                    RuneLiteAccountRow()
+                }
                 if (loading) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 } else if (inList) {
@@ -302,6 +308,52 @@ fun PluginPanel(
                         onOpenWorldMap = { JvmLauncher.onBridgeTouch { JvmLauncher.openWorldMap() }; onClose() },
                         onScreenshot = onScreenshot, onAccount = onAccount, onLogout = onLogout, onDiscord = onDiscord,
                     )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * RuneLite-account (config sync) status + login/logout — distinct from the Jagex game login. Logging in opens the
+ * runelite.net OAuth in a Custom Tab; on completion ConfigManager syncs the user's profiles + installed hub
+ * plugins. Polls the session each ~2s (off the UI thread). Hidden entirely when the bridge isn't available.
+ */
+@Composable
+private fun RuneLiteAccountRow() {
+    var json by remember { mutableStateOf("{}") }
+    LaunchedEffect(Unit) {
+        while (true) {
+            json = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.accountSessionJson() }.get() }
+            delay(2000)
+        }
+    }
+    val o = remember(json) { try { JSONObject(json) } catch (e: Exception) { JSONObject() } }
+    if (!o.optBoolean("available", false)) return   // session manager not wired (older jar) -> hide the row
+    val loggedIn = o.optBoolean("loggedIn", false)
+    val username = o.optString("username", "")
+    Surface(
+        color = Color(0xFF1B1B1B), shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("RuneLite account", color = Color(0xFF80CBC4), fontSize = 11.sp)
+                Text(
+                    if (loggedIn) username.ifEmpty { "Signed in" } else "Sync your profiles + installed plugins",
+                    color = Color.White, fontSize = 13.sp,
+                )
+            }
+            if (loggedIn) {
+                TextButton(onClick = { JvmLauncher.onBridgeTouch { JvmLauncher.accountLogout() } }) {
+                    Text("Log out", color = Color(0xFFEF9A9A))
+                }
+            } else {
+                FilledTonalButton(onClick = { JvmLauncher.onBridgeTouch { JvmLauncher.accountLogin() } }) {
+                    Text("Log in")
                 }
             }
         }

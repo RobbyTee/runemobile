@@ -241,6 +241,12 @@ object JvmLauncher {
     // bridge JSON ack. Inert if the staged jar lacks setOverlayPreferredLocation.
     external fun nativeOverlaySetLocation(name: String, x: Int, y: Int): String
 
+    // RuneLite-account login (config sync) — distinct from the Jagex game login.
+    external fun nativeAccountAvailable(): Boolean
+    external fun nativeAccountLogin()
+    external fun nativeAccountLogout()
+    external fun nativeAccountSession(): String
+
     // Config profiles (ConfigProfileBridge): list profiles + switch the active one. switchProfile returns the
     // bridge JSON ack; the switch itself completes asynchronously off the engine thread.
     external fun nativeProfilesAvailable(): Boolean
@@ -424,6 +430,10 @@ object JvmLauncher {
     fun overlaySnap(name: String, positionName: String) = nativeOverlaySnap(name, positionName)
     fun overlayReset(name: String) = nativeOverlayReset(name)
     fun overlaySetLocation(name: String, x: Int, y: Int) = nativeOverlaySetLocation(name, x, y)
+    fun accountAvailable() = nativeAccountAvailable()
+    fun accountLogin() = nativeAccountLogin()
+    fun accountLogout() = nativeAccountLogout()
+    fun accountSessionJson() = nativeAccountSession()
     fun profilesAvailable() = nativeProfilesAvailable()
     fun profilesJson() = nativeProfilesJson()
     fun switchProfile(id: Long) = nativeSwitchProfile(id)

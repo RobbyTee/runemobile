@@ -327,6 +327,10 @@ public class RuneLite
 		// Load the session so that the session profiles can be loaded next
 		sessionManager.loadSession();
 
+		// Native RuneLite-account bridge: lets the mobile shell drive login/logout + read the session state, so a
+		// signed-in user's synced profiles + installed hub plugins load (ConfigManager syncs on SessionOpen).
+		net.runelite.client.headless.RuneLiteAccountBridge.init(sessionManager);
+
 		// Load user configuration
 		configManager.load();
 

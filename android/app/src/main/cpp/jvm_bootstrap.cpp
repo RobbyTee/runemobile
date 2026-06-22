@@ -135,10 +135,15 @@ static jmethodID g_midOverlayAvail = nullptr, g_midOverlaySetUiOpen = nullptr, g
 static jclass    g_infoboxCls = nullptr;
 static jmethodID g_midInfoBoxAvail = nullptr, g_midInfoBoxSetUiOpen = nullptr, g_midInfoBoxesJson = nullptr,
                  g_midInfoBoxInvoke = nullptr;
+// RuneLite-account login (config sync): start/stop the runelite.net OAuth + read the session state.
+static jclass    g_accountCls = nullptr;
+static jmethodID g_midAccountAvail = nullptr, g_midAccountLogin = nullptr, g_midAccountLogout = nullptr,
+                 g_midAccountSession = nullptr;
 static std::atomic<bool> g_questReady{false};
 static std::atomic<bool> g_worldReady{false};
 static std::atomic<bool> g_overlayReady{false};
 static std::atomic<bool> g_infoboxReady{false};
+static std::atomic<bool> g_accountReady{false};
 // Config profiles (ConfigProfileBridge): list profiles + switch the active one (mirrors the desktop ProfilePanel).
 static jclass    g_profileCls = nullptr;
 static jmethodID g_midProfileAvail = nullptr, g_midProfilesJson = nullptr, g_midProfileSwitch = nullptr;
@@ -453,6 +458,7 @@ static inline bool panelReady()    { return g_panelReady.load(std::memory_order_
 static inline bool questReady()    { return g_questReady.load(std::memory_order_acquire); }
 static inline bool worldReady()    { return g_worldReady.load(std::memory_order_acquire); }
 static inline bool overlayReady()  { return g_overlayReady.load(std::memory_order_acquire); }
+static inline bool accountReady()  { return g_accountReady.load(std::memory_order_acquire); }
 static inline bool infoboxReady()  { return g_infoboxReady.load(std::memory_order_acquire); }
 static inline bool profileReady()  { return g_profileReady.load(std::memory_order_acquire); }
 static inline bool chromeReady()    { return g_chromeReady.load(std::memory_order_acquire); }
@@ -755,6 +761,32 @@ static bool publishBridge(JNIEnv *env) {
     } else {
         env->ExceptionClear();
         LOGE("bridge: FindClass OverlayBridge failed (overlay edit disabled)");
+    }
+
+    // RuneLite-account login (config sync): start/stop OAuth + read session. Dedicated facade, release-latched.
+    jclass ac = env->FindClass("net/runelite/client/headless/RuneLiteAccountBridge");
+    if (ac && !env->ExceptionCheck()) {
+        jclass acg = (jclass) env->NewGlobalRef(ac);
+        env->DeleteLocalRef(ac);
+        if (!acg) {
+            LOGE("bridge: RuneLiteAccountBridge NewGlobalRef failed (account login disabled)");
+        } else {
+            g_midAccountAvail   = midOpt(env, acg, "isAvailable", "()Z");
+            g_midAccountLogin   = midOpt(env, acg, "startLogin", "()V");
+            g_midAccountLogout  = midOpt(env, acg, "logout", "()V");
+            g_midAccountSession = midOpt(env, acg, "getSessionJson", "()Ljava/lang/String;");
+            if (g_midAccountAvail && g_midAccountLogin && g_midAccountLogout && g_midAccountSession) {
+                g_accountCls = acg;
+                g_accountReady.store(true, std::memory_order_release);
+                LOGI("bridge: RuneLiteAccountBridge facade published");
+            } else {
+                env->DeleteGlobalRef(acg);
+                LOGE("bridge: RuneLiteAccountBridge method id failed (account login disabled)");
+            }
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("bridge: FindClass RuneLiteAccountBridge failed (account login disabled)");
     }
 
     // Finding 22 — InfoBoxBridge: infobox list + per-infobox menu actions (Detach/Flip/Delete). Dedicated facade.
@@ -2273,6 +2305,28 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeOverlaySetLocation(JNIEnv *artEnv, jobject, jstring jName, jint x, jint y) {
     if (!overlayReady() || !g_midOverlaySetLoc) return artEnv->NewStringUTF("");
     return facadeStrLocArgs(artEnv, g_overlayCls, g_midOverlaySetLoc, jName, x, y);
+}
+
+// RuneLite-account login (config sync): avail / startLogin / logout / session-json.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeAccountAvailable(JNIEnv *, jobject) {
+    if (!accountReady()) return JNI_FALSE;
+    return facadeBool(g_accountCls, g_midAccountAvail);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeAccountLogin(JNIEnv *, jobject) {
+    if (!accountReady()) return;
+    facadeVoid0(g_accountCls, g_midAccountLogin);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeAccountLogout(JNIEnv *, jobject) {
+    if (!accountReady()) return;
+    facadeVoid0(g_accountCls, g_midAccountLogout);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeAccountSession(JNIEnv *artEnv, jobject) {
+    if (!accountReady()) return artEnv->NewStringUTF("{\"available\":false}");
+    return facadeStr(artEnv, g_accountCls, g_midAccountSession);
 }
 
 // Finding 22 — infobox menu. avail/setUiOpen/list like the others; invoke(index, option) fires the action.
