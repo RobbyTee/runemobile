@@ -178,6 +178,10 @@ class MainActivity : AppCompatActivity() {
     // chrome for longer than the window. Fail-open by construction.
     private var sawLoginScreen = false
     private var loginTransitionUntilMs = 0L
+    // PERF-FRAME-PACING-01: signature of every dynamic input updateChrome() reads; an identical signature (with no
+    // timed transition pending) lets the whole per-frame parse + native-veneer cascade short-circuit. "" forces the
+    // first frame through.
+    private var lastChromeSig = ""
     private var lastStonesHidden: Boolean? = null   // desired HudVeneer hide-stones state (send only on change)
     private var lastSideX = Int.MIN_VALUE           // last side-panel relocation sent (send only on change)
     private var lastSideY = Int.MIN_VALUE
@@ -1953,6 +1957,50 @@ class MainActivity : AppCompatActivity() {
     private fun updateChrome() {
         if (!::chromeOverlay.isInitialized) return
         val json = JvmLauncher.chromeSnapshotPub()
+        // PERF-FRAME-PACING-01: skip the per-frame JSON parse + the whole native-veneer cascade when NOTHING the
+        // chrome layer renders has changed. The signature folds in EVERY dynamic input updateChrome (and its
+        // helpers) reads:
+        //  - the chrome snapshot (loggedIn/loginScreen/reconnecting/rootKind/activeTab + all the canvas rects);
+        //  - the LIVE chat + dialogue snapshots (applyChatTabs consumes these directly — omitting them would
+        //    freeze the native chat-tab/dialogue veneer while the chrome snapshot sat unchanged);
+        //  - the non-snapshot toggles railsShown / mapOpen / reconnectTestOverride;
+        //  - the frame + view geometry and safe insets (every relocate scales/positions by these). A pre-layout /
+        //    detached 0x0 view is just another captured value: its 0↔nonzero transitions flip the signature (so the
+        //    body re-runs and relocates settle), every geometry helper already early-returns while a dimension is 0,
+        //    and the non-geometry chrome state (grid/active-tab/reconnect) tracks the snapshot regardless of size.
+        // Time-based transitions (splash dismiss, hop scrim, the post-login chrome-suppression window) must still
+        // re-evaluate on unchanged input until their deadline passes — `timedPending` forces those through. The
+        // sawLoginScreen latch is fully determined by the snapshot, so snapshot equality already covers it.
+        val chatSnap = JvmLauncher.chatSnapshotPub()
+        val dlgSnap = JvmLauncher.dialogueJsonPub()
+        val ins = safeInsetsLTR()
+        // Frame-start view of the post-login chrome-suppression window. It self-clears purely by wall clock (no
+        // state flag), so it MUST live in the signature: when it flips true→false on the deadline edge the sig
+        // changes, which forces one body run to engage chrome — otherwise an idle frame at the exact expiry would
+        // short-circuit and chrome would stall until the next input change. (This is the frame-start value; the
+        // body recomputes its own `inLoginTransition` after the arming step, since the arming frame is already
+        // forced through by the loggedIn snapshot edge.)
+        val inLoginTransitionSig = SystemClock.uptimeMillis() < loginTransitionUntilMs
+        // Variable-length JSON blobs are length-prefixed (netstring framing) so no field content — including a
+        // chat message that happens to contain '|' or ':' — can ever forge a colliding signature.
+        val sig = StringBuilder(json.length + chatSnap.length + dlgSnap.length + 96)
+            .append(json.length).append(':').append(json)
+            .append(chatSnap.length).append(':').append(chatSnap)
+            .append(dlgSnap.length).append(':').append(dlgSnap)
+            .append('|').append(chromeOverlay.railsShown)
+            .append('|').append(mapOpen)
+            .append('|').append(reconnectTestOverride)
+            .append('|').append(inLoginTransitionSig)
+            .append('|').append(surfaceView.width).append('x').append(surfaceView.height)
+            .append('|').append(JvmLauncher.frameWidth()).append('x').append(JvmLauncher.frameHeight())
+            .append('|').append(ins[0]).append(',').append(ins[1]).append(',').append(ins[2]).append(',').append(ins[3])
+            .toString()
+        // Splash + hop are NOT in the signature: each is a state flag the body itself clears (on first frame /
+        // loggedIn edge / its own timeout), so while either is up we must run the body every frame to do that
+        // clearing — a stable signature must not be allowed to freeze them.
+        val timedPending = (::splashOverlay.isInitialized && splashOverlay.isActive) || hopArmed
+        if (!timedPending && sig == lastChromeSig) return
+        lastChromeSig = sig
         val o = try { JSONObject(json) } catch (e: Exception) { null }
         val loggedIn = o?.optBoolean("loggedIn") == true
         // Bug 8: arm the login-transition latch off a genuine LOGIN_SCREEN→LOGGED_IN edge. While logged out we note
