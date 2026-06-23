@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(helloshell)
 
+# 16 KB page-size compatibility (Android 15+ / future 16 KB-page devices): align ELF LOAD segments to 16 KB so
+# the dynamic loader can map our libs on a 16 KB-page kernel. The NDK in use still defaults to 4 KB, so force it
+# explicitly for every shared lib below (helloshell + rlawt). Larger alignment only adds a little zero-padding;
+# no behavior change. Drop this once the NDK default is 16 KB (r28+).
+add_link_options("-Wl,-z,max-page-size=16384")
+
 add_library(helloshell SHARED jvm_bootstrap.cpp)
 
 find_library(log-lib log)
