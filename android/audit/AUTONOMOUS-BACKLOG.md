@@ -39,10 +39,14 @@
 - [ ] **W4.3** `SLM-PROBE-03/04` — remove MenuPeek (probe) + WorldMap cluster (downgrade live-bridge javadoc links; delete the Kotlin marker arm). KEEP `WelcomePlayProbe` (iOS-live) + `MobileUiSmokeRunner` (iOS comment-glue).
 
 ## Deferred-but-implementable (heavier; implement, mark device-verify-required)
-- [ ] **D.1** `PERF-FRAME-PACING-01` — short-circuit `updateChrome()` on unchanged snapshot (hot path; careful).
-- [ ] **D.2** `SLM-JAR-01` — drop `shaded.jar` from Android asset staging (gpu.jar is the boot closure; device-verify boot).
+- [x] **D.2** `SLM-JAR-01` — drop `shaded.jar` from the Android APK. **DONE + DEVICE-VERIFIED on Pixel 7a / Android 16 / Mali-G710.** Implemented in `tools/stage-mobile-runtime.sh` (Android `stage_one` skips shaded; `--check` is probes-only for Android; iOS untouched; runtime.tag still folds `SHADED_SHA` from build/libs) + repointed the bridge-census default to build/libs. **APK 136 MB → 110 MB (−26 MB).** Verified all 3 renderers boot to LOGGED_IN on the shaded-less APK: **CPU** (pure software, 0 routec flags, frames=26), **GPU** (auto-promote, frames=26), **117HD** (`117 HD started successfully`, routecrlhd). Zero real missing-class errors — only the pre-existing JNA / RLLibC "could not initialize" limits (JNA is byte-identical in gpu.jar and shaded.jar). Commit `4cb87a98c6`.
+- [ ] **D.1** `PERF-FRAME-PACING-01` — short-circuit `updateChrome()` on unchanged snapshot (hot path; careful; device-verify no chrome stall).
 - [ ] **D.3** `PROD-SECURITY-01` — release-exclude bundled `tokens.json` (relocate to `src/debug/assets`; device-verify autologin/login gate).
-- [ ] **D.4** `PERF-COLD-START-03` — add `-Xms` to the JVM args.
+- [ ] **D.4** `PERF-COLD-START-03` — add `-Xms` to the JVM args (memory-commit risk on low-end devices).
+
+## On-device validation log (Pixel 7a / Android 16 / Mali-G710, over Tailscale)
+- **Waves 1–4 + D.2 deployed (110 MB debug APK) and boot-verified:** clean boot to LOGGED_IN, autologin works, live OSRS renders with the full native HUD intact. **Cold-start splash (UX-ONBOARD-01) confirmed:** `onboard: splash dismissed (frame=false state=true timeout=false)` — dismissed on the real login-state signal, not the failsafe. **Window insets (UX-XCUT-01/02/03) confirmed dispatching + applying.** **DEBUG-gating (W1.2/1.3) confirmed conditional** (flags present in the debug build = correct; release strips them). **Dead-probe removal (Wave 4) confirmed harmless** (boots fine; probes were inert). All 3 renderers + the auto-GPU default (→117HD on this device) reach LOGGED_IN. Device restored to normal (doze on, stayon off) afterward.
+- **Still needs on-device feel-checks (ROADMAP §5.2):** landscape-RIGHT inset magnitude, TalkBack a11y walk, theme RuneScape-font render, sectioned-config expand/collapse, hopping-scrim duration vs the ~8 s relog, splash dismiss with no black-flash on a *cold* (re-unpack) start.
 
 ## Status log
 - **Wave 1 DONE + compile-verified + APK-validated:** W1.1 (noCompress narrowed → jar+so DEFLATE), W1.2 (gpuframedump/fpsprobe DEBUG-gated), W1.3 (headless.capture DEBUG-gated), W1.5 (AssetInstaller 1 MB buffer). **`assembleDebug` validated: APK 176 MB → 136 MB (−40 MB) from W1.1 alone.** Deferred: W1.4 (gpu-smoke/hello — ~30 KB P3), W1.6 (RuneLiteAccountRow — LaunchedEffect already auto-scoped), W1.7 (LazyColumn keys — minor).
