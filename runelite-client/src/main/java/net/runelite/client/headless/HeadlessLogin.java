@@ -147,6 +147,17 @@ public final class HeadlessLogin
 	private static int tryAgainAttempts;
 	private static int lastTryAgainDraw;
 
+	// Bug 4 — hop-via-relog. The headless in-game world hop (client.hopToWorld) is inert, but client.changeWorld()
+	// on the LOGIN_SCREEN is known-good. WorldSwitcherBridge drives a logout then calls requestWorldHop(...) to hand
+	// us the target world; once we reach the login screen we changeWorld(target) + Play Now, relogging into it.
+	// `hopAwaitingLogin` keeps us from declaring `done` while the logout is still in flight (we're momentarily still
+	// LOGGED_IN when the request arrives); it clears the instant we observe the login screen.
+	private static boolean pendingHopActive;
+	private static boolean hopAwaitingLogin;
+	private static int pendingHopWorldId;
+	private static String pendingHopWorldAddress;
+	private static boolean pendingHopMembers;
+
 	static
 	{
 		final int[] play = parsePoint("runelite.headless.autologin.point",
@@ -219,6 +230,56 @@ public final class HeadlessLogin
 	}
 
 	/**
+	 * Bug 4 — hop-via-relog. Called by {@link WorldSwitcherBridge} (same package, client thread) once it has begun
+	 * driving a logout for a world hop. Re-arms the login machine to relogin into {@code worldId}: on the next
+	 * {@link GameState#LOGIN_SCREEN} we {@code changeWorld(target)} (members type from {@code members}) before
+	 * clicking Play Now. {@code hopAwaitingLogin} stops {@link #tick} from declaring {@code done} while we're still
+	 * momentarily logged in (the logout hasn't dropped us yet). No-op unless autologin is enabled. Client thread.
+	 */
+	static void requestWorldHop(int worldId, String address, boolean members)
+	{
+		if (!ENABLED)
+		{
+			log.warn("[headless-login] world-hop relog requested (W{}) but autologin is disabled — ignoring", worldId);
+			return;
+		}
+		pendingHopActive = true;
+		pendingHopWorldId = worldId;
+		pendingHopWorldAddress = address;
+		pendingHopMembers = members;
+		hopAwaitingLogin = true;
+		// Re-arm the relogin: clear `done`/`worldSelected` and the Play-Now + Try-Again + welcome budgets so the
+		// login machine drives a fresh Play-Now (and re-dismisses the in-world welcome screen) after the logout.
+		done = false;
+		worldSelected = false;
+		playAttempts = 0;
+		lastPlayDraw = 0;
+		tryAgainAttempts = 0;
+		welcomeDone = false;
+		welcomeAttempts = 0;
+		log.info("[headless-login] world-hop relog armed -> W{} ({}) members={}", worldId, address, members);
+	}
+
+	/**
+	 * Bug 4: disarm a pending world-hop relogin. Called by {@link WorldSwitcherBridge} when its logout driver gives
+	 * up (e.g. the logout never lands), so a relogin we armed but can't fulfil doesn't strand the login machine with
+	 * {@code hopAwaitingLogin}/{@code done=false} forever. Restores {@code done} since we're still logged in (the
+	 * give-up only fires while LOGGED_IN), so the normal reconnect/idle paths keep working. Client thread.
+	 */
+	static void cancelWorldHop()
+	{
+		if (!pendingHopActive && !hopAwaitingLogin)
+		{
+			return;
+		}
+		log.info("[headless-login] world-hop relog cancelled (logout did not complete) — disarming, target was W{}", pendingHopWorldId);
+		pendingHopActive = false;
+		hopAwaitingLogin = false;
+		worldSelected = false;
+		done = true;   // we're still LOGGED_IN; treat the (failed) hop as finished so later logins behave normally
+	}
+
+	/**
 	 * Called once per {@code Hooks.draw} (only when enabled). Drives the login as a two-stage machine: while
 	 * the EULA dialog is up (stage 1, optional) it synthesizes an Accept click; once the gamepack reaches the
 	 * authenticated welcome screen (stage 2) it synthesizes a Play Now click. Each stage re-arms until the
@@ -261,6 +322,12 @@ public final class HeadlessLogin
 			// LOGGING_IN/LOADING; only finish once LOGGED_IN with no welcome overlay.
 			if (state == GameState.LOGGED_IN)
 			{
+				// Bug 4: a world-hop logout is still in flight (WorldSwitcherBridge is driving it) — we're briefly
+				// still LOGGED_IN. Don't declare done; wait until the logout drops us to the login screen below.
+				if (hopAwaitingLogin)
+				{
+					return;
+				}
 				if (tryDismissWelcome(client))
 				{
 					return;   // welcome overlay shown -> clicked it this tick, keep going until it's gone
@@ -275,8 +342,22 @@ public final class HeadlessLogin
 				// LATER drop gets its own MAX_RECONNECT cycles.
 				sawConnectionLost = false;
 				reconnectAttempts = 0;
+				// Bug 4: a world-hop relogin completed — clear the pending target so later logins behave normally.
+				if (pendingHopActive)
+				{
+					log.info("[headless-login] world-hop relog complete -> now on W{}", pendingHopWorldId);
+					pendingHopActive = false;
+				}
 			}
 			return;
+		}
+
+		// On the LOGIN_SCREEN now. Bug 4: if a world-hop logout was in flight, it has landed — clear the await latch
+		// so the stages below relogin (changeWorld(target) happens in the Play-Now world-select step).
+		if (hopAwaitingLogin)
+		{
+			hopAwaitingLogin = false;
+			log.info("[headless-login] world-hop: logout reached LOGIN_SCREEN -> reloging into W{}", pendingHopWorldId);
 		}
 
 		if (draws < WARMUP_DRAWS)
@@ -367,6 +448,9 @@ public final class HeadlessLogin
 				log.warn("[headless-login] still LOGIN_SCREEN after {} Play Now attempt(s) at {},{} — giving up "
 					+ "(wrong coords, or the engine rejects synthesized input headless)", playAttempts, CLICK_X, CLICK_Y);
 				done = true;
+				// Bug 4: a hop relogin that can't get past Play Now is over — drop the pending target so it can't
+				// hijack a later login (e.g. a future reconnect) into the stale hop world.
+				pendingHopActive = false;
 			}
 			return;
 		}
@@ -377,9 +461,15 @@ public final class HeadlessLogin
 			return;
 		}
 
-		// Point the client at the configured F2P world before the first click, so a free account isn't
-		// bounced back to the login screen with "You need a members' account to use this world".
-		if (!worldSelected && WORLD_ID > 0 && WORLD_ADDRESS != null)
+		// Point the client at the target world before the first click. Bug 4: a world hop supplies the target via
+		// requestWorldHop (it wins over the configured default); otherwise use the configured F2P world so a free
+		// account isn't bounced with "You need a members' account to use this world".
+		if (!worldSelected && pendingHopActive)
+		{
+			selectHopWorld(client);
+			worldSelected = true;
+		}
+		else if (!worldSelected && WORLD_ID > 0 && WORLD_ADDRESS != null)
 		{
 			selectWorld(client);
 			worldSelected = true;
@@ -390,8 +480,9 @@ public final class HeadlessLogin
 		log.info("[headless-login] Play Now attempt {}/{}: synthesizing click at {},{} (canvas {}x{} displayable={} reconnect={})",
 			playAttempts, MAX_ATTEMPTS, CLICK_X, CLICK_Y, canvas.getWidth(), canvas.getHeight(), canvas.isDisplayable(), reconnectAttempts);
 		// FIX-9: on a reconnect the canvas is the resized in-world size (not 765x503), so scale the click to it.
-		// Initial login (reconnectAttempts==0) keeps the exact proven fixed coord — no regression there.
-		if (reconnectAttempts > 0)
+		// Bug 4: a hop relog logs out from in-world, so its login canvas is the resized size too — scale there as
+		// well. Initial login (no reconnect, no hop) keeps the exact proven fixed coord — no regression there.
+		if (reconnectAttempts > 0 || pendingHopActive)
 		{
 			synthesizeClickScaled(canvas, CLICK_X, CLICK_Y);
 		}
@@ -547,6 +638,32 @@ public final class HeadlessLogin
 		catch (RuntimeException ex)
 		{
 			log.warn("[headless-login] changeWorld to {} ({}) failed", WORLD_ID, WORLD_ADDRESS, ex);
+		}
+	}
+
+	/**
+	 * Bug 4: point the client at the requested hop target on the login screen (the known-good headless hop —
+	 * {@code client.changeWorld} is honoured here, unlike the inert in-game {@code client.hopToWorld}). Mirrors
+	 * {@link #selectWorld} but uses the {@code requestWorldHop} target + its membership type.
+	 */
+	private static void selectHopWorld(Client client)
+	{
+		try
+		{
+			final World world = client.createWorld();
+			world.setId(pendingHopWorldId);
+			world.setAddress(pendingHopWorldAddress);
+			world.setActivity("-");
+			world.setPlayerCount(-1);
+			world.setTypes(pendingHopMembers ? EnumSet.of(WorldType.MEMBERS) : EnumSet.noneOf(WorldType.class));
+			client.changeWorld(world);
+			log.info("[headless-login] world-hop changeWorld -> {} ({}) members={}",
+				pendingHopWorldId, pendingHopWorldAddress, pendingHopMembers);
+		}
+		catch (RuntimeException ex)
+		{
+			log.warn("[headless-login] world-hop changeWorld to {} ({}) failed",
+				pendingHopWorldId, pendingHopWorldAddress, ex);
 		}
 	}
 
