@@ -54,7 +54,9 @@ object AssetInstaller {
             // leaf: a file
             dest.parentFile?.mkdirs()
             ctx.assets.open(assetPath).use { input ->
-                dest.outputStream().use { input.copyTo(it) }
+                // 1 MB buffer (vs Kotlin's default 8 KB) — the unpack streams a ~198 MB tree on first launch,
+                // so a larger buffer cuts the syscall count dramatically (PERF-COLD-START-01).
+                dest.outputStream().use { input.copyTo(it, 1 shl 20) }
             }
             return
         }

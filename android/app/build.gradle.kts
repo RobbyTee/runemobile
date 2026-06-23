@@ -35,10 +35,13 @@ android {
         }
     }
 
-    // The embedded JRE, the shaded client jar, probes.jar and the CACIO jars are large,
-    // gitignored runtime assets unpacked to filesDir on first launch. Don't recompress them.
+    // The embedded JRE + client jars are unpacked to filesDir on first launch (AssetInstaller uses
+    // ctx.assets.open(), which transparently inflates), and the app .so are extracted on install
+    // (extractNativeLibs=true) — so none are ever read in-place from the APK. Letting the jars + .so
+    // DEFLATE in the APK is therefore a download-size win (~20 MB) and runtime-neutral; the big modules
+    // jimage already compresses + boots through the same path. Only the tiny .dat/.bin stay stored.
     androidResources {
-        noCompress += listOf("jar", "so", "dat", "bin")
+        noCompress += listOf("dat", "bin")
     }
 
     compileOptions {

@@ -2664,10 +2664,7 @@ class MainActivity : AppCompatActivity() {
             "-Xmx512m",
             "-Duser.home=$home",
             "-Djava.io.tmpdir=$tmpDir",
-            "-Drunelite.headless.capture.dir=$captureDir",
             "-Drunelite.bridge=true",
-            "-Drunelite.headless.capture.interval=10",
-            "-Drunelite.headless.capture.preLoginMax=40",
             "-Dheadless.runSeconds=86400",          // keep the boot thread alive/logging for the whole session
             "-Dheadless.captureTargetFrames=999999", // never early-exit; ride the window
             "-Drunelite.menupeek=true",             // A2: publish the menu-peek snapshot each client tick
@@ -2681,6 +2678,16 @@ class MainActivity : AppCompatActivity() {
             "-Drunelite.nosafemode=true",
             "-Drunelite.rendererpanel=true",
         )
+        // Headless frame-capture (PNG snapshots + per-draw bookkeeping) is a dev/CI diagnostic only — release
+        // boots don't arm it (SLM-DFLAG-01; HeadlessCapture is inert without the dir). The boot-thread keepalive
+        // (runSeconds/captureTargetFrames above) stays unconditional; only the capture writes are DEBUG-gated.
+        if (BuildConfig.DEBUG) {
+            opts.addAll(listOf(
+                "-Drunelite.headless.capture.dir=$captureDir",
+                "-Drunelite.headless.capture.interval=10",
+                "-Drunelite.headless.capture.preLoginMax=40",
+            ))
+        }
         // Force-disable the renderer plugins that are NOT the chosen renderer — this wins over persisted/SYNCED
         // config (the isPluginEnabled force-off rule), so a RuneLite-account profile that carries the DESKTOP
         // enabled-flag for the other renderer can't start it. Critical for HdPlugin: it declares conflicts="GPU",
@@ -2755,28 +2762,36 @@ class MainActivity : AppCompatActivity() {
             // registered natively (jvm_bootstrap sees -Drunelite.routecgpu and dlopen's librlawt after VM create).
             // Dump to app-private EXTERNAL storage so Firebase Test Lab's --directories-to-pull (and adb pull)
             // can fetch the frames; fall back to internal filesDir if external is unavailable.
-            val dumpDir = (app.getExternalFilesDir(null) ?: app.filesDir).absolutePath   // +"/routec-frames/"
-            opts.addAll(listOf(
-                "-Drunelite.routecgpu=true",
-                "-Drunelite.gpuframedump=true",
-                "-Drunelite.gpuframedump.dir=$dumpDir",
-            ))
-            Log.i(TAG, "AG2 GPU mode: gpu jar $clientJar, routecgpu + frame-dump armed (dir=$dumpDir/routec-frames)")
+            opts.add("-Drunelite.routecgpu=true")
+            // The per-frame frame-dump (PNG encode to external storage) is a dev/CI diagnostic only — gate it
+            // behind DEBUG so release GPU boots don't pay the per-frame IO (SLM-DFLAG-02 / PERF-FRAME-PACING-03).
+            if (BuildConfig.DEBUG) {
+                val dumpDir = (app.getExternalFilesDir(null) ?: app.filesDir).absolutePath   // +"/routec-frames/"
+                opts.addAll(listOf(
+                    "-Drunelite.gpuframedump=true",
+                    "-Drunelite.gpuframedump.dir=$dumpDir",
+                ))
+            }
+            Log.i(TAG, "AG2 GPU mode: gpu jar $clientJar, routecgpu armed (frame-dump=${BuildConfig.DEBUG})")
         }
         if (rlhd) {
             // AG3-b: arm RLHDStarter (load + start the 117HD Zone plugin once in-world; it disables the base gpu
             // plugin via its conflicts="GPU"). librlawt is registered natively (jvm_bootstrap sees routecrlhd). Frame
             // dump to app-EXTERNAL storage so the HD frame is pullable (Firebase --directories-to-pull / adb pull).
-            val dumpDir = (app.getExternalFilesDir(null) ?: app.filesDir).absolutePath
-            opts.addAll(listOf(
-                "-Drunelite.routecrlhd=true",
-                "-Drunelite.gpuframedump=true",
-                "-Drunelite.gpuframedump.dir=$dumpDir",
-                // FIX-13: arm the once/sec engine-fps logcat probe ([fpsprobe] fps=N gs=...) so a preset A/B can be
-                // measured in-world on real Mali (Hooks.frame, gated by this prop). Only active in 117HD test mode.
-                "-Drunelite.fpsprobe=true",
-            ))
-            Log.i(TAG, "AG3-b 117HD mode: gpu jar $clientJar + rlhd jar $rlhdJar, routecrlhd + frame-dump + fpsprobe armed (dir=$dumpDir/routec-frames)")
+            opts.add("-Drunelite.routecrlhd=true")
+            // Frame-dump + the once/sec engine-fps logcat probe are dev/CI diagnostics — DEBUG-only so release
+            // 117HD boots don't pay the per-frame PNG IO or the fps branch (SLM-DFLAG-02/03 / PERF-FRAME-PACING-03/04).
+            if (BuildConfig.DEBUG) {
+                val dumpDir = (app.getExternalFilesDir(null) ?: app.filesDir).absolutePath
+                opts.addAll(listOf(
+                    "-Drunelite.gpuframedump=true",
+                    "-Drunelite.gpuframedump.dir=$dumpDir",
+                    // FIX-13: arm the once/sec engine-fps logcat probe ([fpsprobe] fps=N gs=...) so a preset A/B can be
+                    // measured in-world on real Mali (Hooks.frame, gated by this prop). Only active in 117HD test mode.
+                    "-Drunelite.fpsprobe=true",
+                ))
+            }
+            Log.i(TAG, "AG3-b 117HD mode: gpu jar $clientJar + rlhd jar $rlhdJar, routecrlhd armed (frame-dump+fpsprobe=${BuildConfig.DEBUG})")
         }
 
         // A8: only pipe the embedded VM's stdout/err to logcat in DEBUG builds — a release build must not leak
