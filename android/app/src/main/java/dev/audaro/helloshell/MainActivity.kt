@@ -160,6 +160,15 @@ class MainActivity : AppCompatActivity() {
     // A6 native chrome (OSRS-mobile 2-col tab grid; the engine stones are hidden and this grid replaces them).
     private lateinit var chromeOverlay: ChromeOverlayView
     private var chromeUiLogged = false
+    // Bug 8: a fail-open login-transition latch. On a FRESH login the engine hasn't finished its first resizable
+    // layout for a frame or two, so engaging chrome immediately flashes the half-built grid/chat tabs over the
+    // "Welcome to Gielinor" frame. We suppress chrome for a bounded window after the LOGIN_SCREEN→LOGGED_IN edge,
+    // then engage REGARDLESS. `sawLoginScreen` arms only off a genuine login (the snapshot's loginScreen flag —
+    // an in-game LOADING/teleport blip never passes through the login screen, so chrome keeps engaged there);
+    // `loginTransitionUntilMs` is a wall-clock deadline that self-clears, so a stuck/absent signal can never hide
+    // chrome for longer than the window. Fail-open by construction.
+    private var sawLoginScreen = false
+    private var loginTransitionUntilMs = 0L
     private var lastStonesHidden: Boolean? = null   // desired HudVeneer hide-stones state (send only on change)
     private var lastSideX = Int.MIN_VALUE           // last side-panel relocation sent (send only on change)
     private var lastSideY = Int.MIN_VALUE
@@ -233,6 +242,11 @@ class MainActivity : AppCompatActivity() {
         private const val NOTIF_CHANNEL = "runelite_game"            // audible (IMPORTANCE_DEFAULT)
         private const val NOTIF_CHANNEL_SILENT = "runelite_game_silent"  // AP-2: no sound (IMPORTANCE_LOW)
         private const val REQ_POST_NOTIFICATIONS = 7001
+
+        // Bug 8: how long after a fresh login to keep native chrome disengaged so the engine can finish its first
+        // resizable layout (the welcome-frame flash window). ~1.2s of LOGGED_IN frames is when the engine's chrome
+        // widgets are reliably built (cf. MobileChromeBridge.VERDICT_FRAME=60); 1500ms gives a little headroom.
+        private const val LOGIN_TRANSITION_MS = 1500L
 
         // AWT virtual-key codes (java.awt.event.KeyEvent) the engine's onKeyStroke expects.
         private const val VK_BACK_SPACE = 8
@@ -1819,6 +1833,17 @@ class MainActivity : AppCompatActivity() {
         val json = JvmLauncher.chromeSnapshotPub()
         val o = try { JSONObject(json) } catch (e: Exception) { null }
         val loggedIn = o?.optBoolean("loggedIn") == true
+        // Bug 8: arm the login-transition latch off a genuine LOGIN_SCREEN→LOGGED_IN edge. While logged out we note
+        // that we saw the login screen (the snapshot's loginScreen flag); on the next logged-in frame that consumes
+        // the flag and opens a bounded suppression window. An in-game LOADING/teleport blip reports loggedIn=false
+        // WITHOUT loginScreen, so it never arms the window → chrome stays engaged through region loads (unchanged).
+        if (!loggedIn) {
+            if (o?.optBoolean("loginScreen") == true) sawLoginScreen = true
+        } else if (sawLoginScreen) {
+            sawLoginScreen = false
+            loginTransitionUntilMs = SystemClock.uptimeMillis() + LOGIN_TRANSITION_MS
+        }
+        val inLoginTransition = SystemClock.uptimeMillis() < loginTransitionUntilMs
         // FIX-9: show the native "Reconnecting…" scrim while the headless auto-reconnect recovers a dropped
         // session (the snapshot only carries the flag during an active reconnect — a normal login screen or a
         // deliberate logout omits it). The DEBUG override forces it for screencap verification.
@@ -1836,7 +1861,9 @@ class MainActivity : AppCompatActivity() {
         // PRE_EOC (Classic, 164) and OSRS_STRETCH (modern, 161) — the shared layer hides/replays the right stones for
         // each (stoneIds/openTabNow branch on the root, STONE0..13 in identical order). FIXED is excluded (the shared
         // tick hard-returns on !isResized + stoneIds has no FIXED branch), so it keeps the raw engine HUD.
-        val supported = loggedIn && (rootKind == "PRE_EOC" || rootKind == "OSRS_STRETCH")
+        // Bug 8: `inLoginTransition` holds chrome off for the bounded post-login window (then engages regardless),
+        // so the grid/chat-tabs don't flash over the half-built welcome frame. Raw engine HUD shows during the window.
+        val supported = loggedIn && (rootKind == "PRE_EOC" || rootKind == "OSRS_STRETCH") && !inLoginTransition
         chromeOverlay.setGridEnabled(supported)
         chromeOverlay.setActiveTab(active)
 

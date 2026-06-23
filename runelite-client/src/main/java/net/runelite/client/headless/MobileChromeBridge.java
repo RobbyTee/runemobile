@@ -161,12 +161,17 @@ public final class MobileChromeBridge
 		if (!loggedIn)
 		{
 			// FIX-9: while the auto-reconnect machine is recovering an in-session drop, flag it so the native shell
-			// can show a "Reconnecting…" overlay over the engine's brief transient login screens. The default
-			// (non-reconnect) string is byte-for-byte unchanged, so a normal login screen / deliberate logout is
-			// indistinguishable downstream — only an active reconnect adds the field.
+			// can show a "Reconnecting…" overlay over the engine's brief transient login screens. The reconnect
+			// string is byte-for-byte unchanged.
+			// Bug 8: on a (non-reconnect) login screen add a loginScreen flag so the native chrome can tell a genuine
+			// LOGIN_SCREEN→LOGGED_IN login (which needs a brief post-login chrome-suppression window to avoid the
+			// welcome-frame flash) apart from an in-game LOADING/teleport blip (state==LOADING, never LOGIN_SCREEN —
+			// stays loggedIn:false with no flag, so native keeps chrome engaged through region loads).
 			publishSnapshot(HeadlessLogin.isReconnecting()
 				? "{\"enabled\":true,\"loggedIn\":false,\"reconnecting\":true}"
-				: "{\"enabled\":true,\"loggedIn\":false}");
+				: state == GameState.LOGIN_SCREEN
+					? "{\"enabled\":true,\"loggedIn\":false,\"loginScreen\":true}"
+					: "{\"enabled\":true,\"loggedIn\":false}");
 			return;
 		}
 
