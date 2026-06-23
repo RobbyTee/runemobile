@@ -2647,6 +2647,16 @@ class MainActivity : AppCompatActivity() {
             else -> "gpuplugin,hdplugin"   // CPU → block both renderer plugins
         }
         opts.add("-Drunelite.forceDisablePlugins=$forceDisable")
+        // ...and force-ENABLE the chosen renderer so a synced profile that DISABLES it (a desktop profile picks a
+        // different renderer) can't stop it mid-session and kill its GL context. CPU has no renderer plugin to pin.
+        val forceEnable = when {
+            rlhd -> "hdplugin"
+            gpu -> "gpuplugin"
+            else -> ""
+        }
+        if (forceEnable.isNotEmpty()) {
+            opts.add("-Drunelite.forceEnablePlugins=$forceEnable")
+        }
         // A7 resizable: render at the screen's landscape aspect — HeadlessResize grows the gamepack Component on
         // login (stock, inset-aware, the same mechanism iOS device-proved). With the OSRS account in RESIZABLE
         // display mode the gamepack fills it (resizable toplevel 164 → chat-at-top + resizable chrome unblock);

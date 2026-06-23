@@ -535,6 +535,22 @@ public class PluginManager
 				}
 			}
 		}
+		// Symmetric force-ENABLE: the CHOSEN mobile renderer plugin must STAY on even if a synced/switched
+		// RuneLite-account profile carries a DESKTOP enabled-flag that DISABLES it (a desktop-117HD profile has
+		// gpuplugin=false). Without this, switching to such a profile STOPS the running GPU renderer, destroys its
+		// GL context, and GpuPlugin.loadScene then hangs ("unable to map GL buffer" → "Loading - please wait.").
+		// Pairs with forceDisablePlugins (the non-chosen renderers); a plugin is never in both. Inert with no property.
+		final String forceOn = System.getProperty("runelite.forceEnablePlugins", "");
+		if (!forceOn.isEmpty())
+		{
+			for (final String k : forceOn.split(","))
+			{
+				if (keyName.equalsIgnoreCase(k.trim()))
+				{
+					return true;
+				}
+			}
+		}
 		final String value = configManager.getConfiguration(RuneLiteConfig.GROUP_NAME, keyName.toLowerCase());
 		return value != null ? Boolean.parseBoolean(value) : pluginDescriptor.enabledByDefault();
 	}
