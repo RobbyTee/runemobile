@@ -8,9 +8,20 @@ confidence. Several bugs share one root cause.
   Device-verified (Skill Calc + Notes). Residual: tall-panel softness deferred (optional follow-up).
 - **DONE — Clusters F+G (5,6,7,9,10):** bottom-left tools enlarged to 40dp targets, modifier latch shows a
   clear teal active chip, Ctrl/Alt moved to debug-only (release HUD = keyboard + Shift). Device-verified.
-- **TODO — Cluster C (1,4,2,12):** keyboard in plugin config; quick-hop Next; quest-helper skill leak; dialogue portrait.
-- **TODO — Cluster D (8,11):** welcome-message chrome flash; fully-white chat text.
-- **TODO — Cluster E (3):** camera-hole / notch insets.
+- **DONE — Bug 2 (quest-helper skill leak):** bridge deny-set on QuestDetails.Type. Device-verified (commit `06ee0d24`).
+- **DONE — Bug 11 (white chat):** forceWhite run-colour suppression, chat lines only. Device-verified (`06ee0d24`).
+- **DONE — Bug 8 (welcome chrome flash):** firstChatLineShown latch → chatReady chrome gate. Code-complete (`06ee0d24`).
+- **Bug 3 (notch) — CHAT-ROW case cleared (tested orientation only); right-pinned HUD in landscape-right NOT audited.**
+  In the observed orientation the cutout is left-edge-center (app insets `canvas(59,0,0,0)`, no top inset); the chat
+  is pinned top-LEFT and `applyChatAtTop` offsets `chatX` by the left inset, and ChatPillView follows that insetted
+  chatX — so the chat row clears it. A right-edge cutout (landscape-right) can't overlap a left-pinned chat either.
+  STILL UNVERIFIED: a RIGHT-pinned element (minimap/orbs) under a right-center cutout in landscape-right — I never
+  observed that orientation. If the user's original report was a right-side element, re-check that case. The old
+  "add safeInsets to ChatPillView" note is still wrong (would double-apply on the chat).
+- **OPEN — Bug 4 (quick-hop):** ROOT CAUSE FOUND, deeper than the original triage. Both hop(boolean) AND row-tap
+  hop(int) invoke cleanly but neither changes worlds — the shared engine flow (quickHopTargetWorld → onGameTick →
+  openWorldHopper/hopToWorld) doesn't complete in the headless client. Engine-level, separate task. See HANDOFF.
+- (Bug 1 keyboard-in-config + Bug 12 dialogue portrait were already DONE in earlier sessions — see handoff.)
 
 ## Architecture note (important)
 There are **two** plugin-UI surfaces on Android:
