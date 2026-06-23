@@ -4,7 +4,9 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.os.Build
 import android.view.View
+import android.view.WindowInsets
 
 /**
  * The A2 press-and-peek native menu: a full-screen, non-interactive overlay drawn over the live SurfaceView
@@ -83,6 +85,20 @@ class MenuOverlayView(context: Context) : View(context) {
     private fun dp(v: Float) = v * resources.displayMetrics.density
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
 
+    /** UX-XCUT-02: [left, top, right, bottom] safe-area insets (display cutout + system bars) so the "Choose
+     *  Option" box clamps to the safe rect — never under a landscape cutout / rounded corner. Mirrors the helper
+     *  ChromeOverlayView already uses. Defaults to 0 (the full-bleed emulator case). */
+    private fun safeInsets(): IntArray {
+        val wi = rootWindowInsets ?: return intArrayOf(0, 0, 0, 0)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val i = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+            intArrayOf(i.left, i.top, i.right, i.bottom)
+        } else {
+            @Suppress("DEPRECATION")
+            intArrayOf(wi.stableInsetLeft, wi.stableInsetTop, wi.stableInsetRight, wi.stableInsetBottom)
+        }
+    }
+
     /** Show the menu (display-order entries) anchored at the finger; body biased away from the holding hand.
      *  FIX-10b: [tap] = persistent tap-to-select (submenu drill-in / shift-customize); [header] overrides the
      *  title (e.g. "Submenu" when drilled). Drag-mode callers omit both and behave exactly as before. */
@@ -112,8 +128,16 @@ class MenuOverlayView(context: Context) : View(context) {
         // Finger sits near the near top corner; body opens away from the hand.
         var ox = if (handRight) anchorX - (boxW - dp(26f)) else anchorX - dp(26f)
         var oy = anchorY - headerH * 0.5f
-        ox = ox.coerceIn(pad, (vw - boxW - pad).coerceAtLeast(pad))
-        oy = oy.coerceIn(pad, (vh - totalH - pad).coerceAtLeast(pad))
+        // UX-XCUT-02: clamp the box origin to the SAFE rect (system bars + display cutout), not the raw view size,
+        // so neither the header nor row 0 (the default-action row) can draw under a landscape cutout / rounded
+        // corner. Folds the insets into the same min/max coerce the desktop window-clamp used; 0 insets are a no-op.
+        val ins = safeInsets()
+        val minX = ins[0].toFloat() + pad
+        val maxX = (vw - ins[2] - boxW - pad).coerceAtLeast(minX)
+        val minY = ins[1].toFloat() + pad
+        val maxY = (vh - ins[3] - totalH - pad).coerceAtLeast(minY)
+        ox = ox.coerceIn(minX, maxX)
+        oy = oy.coerceIn(minY, maxY)
         boxX = ox
         boxY = oy
         active = true

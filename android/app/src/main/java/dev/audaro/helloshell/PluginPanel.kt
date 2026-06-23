@@ -21,8 +21,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -451,7 +458,18 @@ private fun SheetScaffold(
                     Box(Modifier.size(width = 40.dp, height = 5.dp).clip(RoundedCornerShape(3.dp))
                         .background(Color(0x66FFFFFF)))
                 }
-                Box(Modifier.weight(1f).fillMaxWidth()) { content() }
+                // UX-XCUT-03: inset the sheet body so the ‹ Back chevron, Reset/Close, search and the LazyColumn
+                // rows clear a landscape display cutout (horizontal) and the bottom gesture inset. displayCutout ∪
+                // navigationBars deliberately AVOIDS the IME — preserving the existing no-imePadding behavior (the
+                // keyboard still OVERLAYS the sheet, the top search field stays visible above it). 0 insets are a
+                // no-op. The grab handle above stays full-width; only the content gets the safe-area padding.
+                Box(
+                    Modifier.weight(1f).fillMaxWidth()
+                        .windowInsetsPadding(
+                            WindowInsets.displayCutout.union(WindowInsets.navigationBars)
+                                .only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)
+                        )
+                ) { content() }
             }
         }
     }

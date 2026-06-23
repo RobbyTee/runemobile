@@ -47,6 +47,7 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -151,6 +152,14 @@ class MainActivity : AppCompatActivity() {
     private var hotkeyRow: LinearLayout? = null            // the button container (repopulated on change)
     private var hotkeyStrip: HorizontalScrollView? = null  // scroll host (GONE when no hotkeys are active)
     private var hotkeyPrefsListener: android.content.SharedPreferences.OnSharedPreferenceChangeListener? = null
+    // UX-XCUT-01: the only release-visible HUD controls. Held as fields so the root window-inset listener can
+    // re-apply the safe-area margin (bottom gesture inset + landscape cutout) to them on every inset change /
+    // configuration change. Their BASE margins are captured at build so the inset is ADDED, never replaced.
+    private var devBar: LinearLayout? = null
+    private var launcherHandle: Button? = null
+    private var devBarBaseLeft = 0; private var devBarBaseBottom = 0
+    private var hotkeyBaseLeft = 0; private var hotkeyBaseBottom = 0
+    private var handleBaseBottom = 0
 
     // AP-2a Findings 9/25: a low-frequency daemon that drains the shared notification + link queues (off the UI
     // thread — these calls daemon-attach to HotSpot). nextNotification → system shade; nextLink → browser.
@@ -683,23 +692,26 @@ class MainActivity : AppCompatActivity() {
             addView(hoppingOverlay, FrameLayout.LayoutParams(mp, mp))   // ENH-B06: "Hopping…" scrim (non-interactive)
             // §4: the launcher handle sits above the game/chrome (tappable) but below the launcher sheet
             // (covered while it's open) and clears the bottom gesture inset.
+            handleBaseBottom = (10 * resources.displayMetrics.density).toInt()
             addView(launcherHandle, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
-                    bottomMargin = (10 * resources.displayMetrics.density).toInt()
+                    bottomMargin = handleBaseBottom
                 })
+            devBarBaseLeft = (8 * resources.displayMetrics.density).toInt()
+            devBarBaseBottom = devBarBaseLeft
             addView(devBar, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM or Gravity.START).apply {
-                    val m = (8 * resources.displayMetrics.density).toInt()
-                    leftMargin = m; bottomMargin = m
+                    leftMargin = devBarBaseLeft; bottomMargin = devBarBaseBottom
                 })
             // User-defined hotkey buttons: bottom-left, stacked above the devBar; below the launcher sheet.
+            hotkeyBaseLeft = (8 * resources.displayMetrics.density).toInt()
+            hotkeyBaseBottom = (64 * resources.displayMetrics.density).toInt()
             addView(hotkeyStripView, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM or Gravity.START).apply {
-                    leftMargin = (8 * resources.displayMetrics.density).toInt()
-                    bottomMargin = (64 * resources.displayMetrics.density).toInt()
+                    leftMargin = hotkeyBaseLeft; bottomMargin = hotkeyBaseBottom
                 })
             // §4 increment 3: the launcher is now a transparent-host PEEK/EXPAND bottom sheet (SheetScaffold) —
             // added LAST so its sheet/scrim draw OVER the handle + devBar (and the game composites through the
@@ -710,6 +722,20 @@ class MainActivity : AppCompatActivity() {
             addView(splashOverlay, FrameLayout.LayoutParams(mp, mp))
         }
         setContentView(root)
+        // UX-XCUT-01: keep the only release HUD controls (⌨/⇧ devBar, hotkey strip, ≡ Plugins handle) out of the
+        // landscape display cutout + the bottom gesture inset. SHORT_EDGES draws the notch UNDER the frame, so
+        // these fixed bottom-START / bottom-CENTER views would otherwise sit beneath it in landscape-right. A root
+        // inset listener bumps their margins by systemBars∪displayCutout (LEFT for the bottom-START cluster, BOTTOM
+        // for all three), recomputed on every inset delivery (incl. configuration / rotation changes). Additive:
+        // the inset is added to the captured base margins, never replacing them, and 0 insets (emulator) are a no-op.
+        this.devBar = devBar
+        this.launcherHandle = launcherHandle
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            applyHudControlInsets(insets)
+            insets
+        }
+        // First pass + re-request after layout so the insets land even if they weren't dispatched before attach.
+        root.requestApplyInsets()
         // User-defined hotkey buttons: populate the strip now + rebuild whenever the Hotkeys screen changes the set.
         refreshHotkeyStrip()
         hotkeyPrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, k ->
@@ -2276,15 +2302,46 @@ class MainActivity : AppCompatActivity() {
     private fun inCanvasRect(r: IntArray?, gx: Int, gy: Int): Boolean =
         r != null && gx >= r[0] && gx < r[0] + r[2] && gy >= r[1] && gy < r[1] + r[3]
 
-    /** [left, top, right] safe-area insets in VIEW px (display cutout + system bars), so the relocated HUD clears
-     *  a landscape notch / nav bar. 0 on the full-bleed emulator. */
+    /** [left, top, right, bottom] safe-area insets in VIEW px (display cutout + system bars), so the relocated HUD
+     *  clears a landscape notch / nav bar. 0 on the full-bleed emulator. (Existing callers index 0..2 = L/T/R; the
+     *  bottom element was added for UX-XCUT-01's HUD-control inset.) */
     private fun safeInsetsLTR(): IntArray {
-        val wi = surfaceView.rootWindowInsets ?: return intArrayOf(0, 0, 0)
+        val wi = surfaceView.rootWindowInsets ?: return intArrayOf(0, 0, 0, 0)
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val i = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-            intArrayOf(i.left, i.top, i.right)
+            intArrayOf(i.left, i.top, i.right, i.bottom)
         } else {
-            @Suppress("DEPRECATION") intArrayOf(wi.stableInsetLeft, wi.stableInsetTop, wi.stableInsetRight)
+            @Suppress("DEPRECATION")
+            intArrayOf(wi.stableInsetLeft, wi.stableInsetTop, wi.stableInsetRight, wi.stableInsetBottom)
+        }
+    }
+
+    /** UX-XCUT-01: bump the release HUD controls' margins by the safe-area insets so none sit under the landscape
+     *  cutout or the bottom gesture bar. The bottom-START devBar + hotkey strip take the LEFT inset (a landscape
+     *  cutout on the left edge) and the BOTTOM inset; the bottom-CENTER ≡ Plugins handle takes the BOTTOM inset.
+     *  Additive over the captured base margins; a no-op when insets are 0. Re-runs on every inset delivery
+     *  (rotation / configuration change re-dispatches insets). */
+    private fun applyHudControlInsets(insets: WindowInsetsCompat) {
+        val i = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+        devBar?.let { v ->
+            (v.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+                lp.leftMargin = devBarBaseLeft + i.left
+                lp.bottomMargin = devBarBaseBottom + i.bottom
+                v.layoutParams = lp
+            }
+        }
+        hotkeyStrip?.let { v ->
+            (v.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+                lp.leftMargin = hotkeyBaseLeft + i.left
+                lp.bottomMargin = hotkeyBaseBottom + i.bottom
+                v.layoutParams = lp
+            }
+        }
+        launcherHandle?.let { v ->
+            (v.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+                lp.bottomMargin = handleBaseBottom + i.bottom
+                v.layoutParams = lp
+            }
         }
     }
 
