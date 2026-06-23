@@ -16,8 +16,10 @@ app/src/main/assets/jvm/client-*.jar
 app/src/main/assets/jvm/probes.jar
 app/src/main/assets/jvm/cacio/
 app/src/main/assets/jvm/runtime.tag
-#   the optional bundled Jagex session (personal sideload bundles only — a SECRET, never committed)
+#   the optional bundled Jagex session (personal sideload bundles only — a SECRET, never committed).
+#   PROD-SECURITY-01: lives under src/debug/assets so it ships ONLY in debug builds, never in release.
 app/src/main/assets/tokens.json
+app/src/debug/assets/tokens.json
 
 # Keep the small Milestone-A smoke jar tracked (hello.jar is built from jvm-src/Hello.java)
 !app/src/main/assets/jvm/hello.jar

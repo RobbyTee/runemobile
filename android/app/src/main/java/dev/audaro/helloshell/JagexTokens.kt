@@ -8,10 +8,11 @@ import java.io.File
 /**
  * Maps a tokens.json -> the JX_* environment the OSRS gamepack reads when "launched from the Jagex
  * launcher", mirroring the proven iOS loadJagexTokens (JVMLauncher.m). tokens.json is a gitignored secret
- * (throwaway account), normally pushed into the app's files dir at test time. A build-time bundled copy
- * (assets/tokens.json, also gitignored — staged only for personal sideload bundles, e.g. Quest/SideQuest
- * installs where adb-pushing files is impractical) is the lowest-priority fallback; a pushed file wins, so
- * refreshed tokens never need a rebuild.
+ * (throwaway account), normally pushed into the app's files dir at test time. A build-time bundled copy is
+ * the lowest-priority fallback (a pushed file wins, so refreshed tokens never need a rebuild). PROD-SECURITY-01:
+ * that bundled copy lives under `src/debug/assets/tokens.json`, so it ships ONLY in DEBUG builds (personal
+ * sideload bundles, e.g. Quest/SideQuest installs where adb-pushing files is impractical) — a RELEASE artifact
+ * never carries the secret, and its first launch falls through to the login gate (no asset -> autologin DISABLED).
  *
  * The JX_* env MUST be set before JNI_CreateJavaVM (HotSpot snapshots the environment at startup), so
  * [loadAndArm] runs on the boot thread before [JvmLauncher.startJvm] and sets each var via the native setenv

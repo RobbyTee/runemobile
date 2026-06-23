@@ -78,6 +78,30 @@ android {
     }
 }
 
+// PROD-SECURITY-01 defense-in-depth: tokens.json is a live, replayable Jagex session secret. It lives ONLY under
+// src/debug/assets (so release never bundles it), but src/main/assets is merged into EVERY variant — a stray copy
+// left there locally (the path is gitignored, not absent) would silently ship in a release artifact and leak an
+// account. This finalizer fails the release build fast if the secret ever reaches the merged release assets. It has
+// no inputs/outputs, so it always runs (never UP-TO-DATE) whenever a release asset merge is in the graph.
+val verifyNoReleaseSecret = tasks.register("verifyNoReleaseSecret") {
+    description = "Fail the release build if the tokens.json session secret is present in the merged release assets."
+    doLast {
+        val merged = layout.buildDirectory.dir("intermediates/assets/release").get().asFile
+        if (merged.exists()) {
+            val leaked = merged.walkTopDown().filter { it.isFile && it.name == "tokens.json" }.toList()
+            if (leaked.isNotEmpty()) {
+                throw GradleException(
+                    "PROD-SECURITY-01: tokens.json must never ship in a release artifact — found " +
+                        leaked.joinToString { it.relativeTo(merged).path } +
+                        ". Delete app/src/main/assets/tokens.json; the bundled session secret belongs only under " +
+                        "app/src/debug/assets (debug builds).",
+                )
+            }
+        }
+    }
+}
+tasks.matching { it.name == "mergeReleaseAssets" }.configureEach { finalizedBy(verifyNoReleaseSecret) }
+
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
