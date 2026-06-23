@@ -2043,20 +2043,23 @@ class MainActivity : AppCompatActivity() {
                 Log.i(TAG, "fix9: reconnect overlay -> $show")
             }
         }
-        // UX-ONBOARD-01: dismiss the cold-start splash on the earliest reliable "the engine is alive" signal —
-        // the first composited frame (frameWidth>0 is a cheap native counter, universal across renderers) OR a
-        // real login state in the snapshot (loggedIn / loginScreen). A generous wall-clock timeout is the
-        // failsafe so a missed signal can never leave the splash over the game.
+        // UX-ONBOARD-01: dismiss the cold-start splash only once the engine has actually PAINTED a frame
+        // (frameWidth>0, a cheap native counter universal across renderers) — or the wall-clock failsafe fires. A
+        // device cold-start trace showed the snapshot's login STATE (loginScreen/loggedIn) flips ~1.1 s BEFORE the
+        // first GL blit, so dismissing on state alone briefly uncovered the unpainted (black) SurfaceView. Holding
+        // the branded splash until there is real content to show closes that gap; the failsafe still guarantees the
+        // splash can never linger over a running game. `realState` now only refines the status text + diagnostics.
         if (::splashOverlay.isInitialized && splashOverlay.isActive) {
             val firstFrame = JvmLauncher.frameWidth() > 0
             val realState = loggedIn || o?.optBoolean("loginScreen") == true
             val timedOut = SystemClock.uptimeMillis() >= splashDeadlineMs
-            if (firstFrame || realState || timedOut) {
+            if (firstFrame || timedOut) {
                 splashOverlay.dismiss()
                 Log.i(TAG, "onboard: splash dismissed (frame=$firstFrame state=$realState timeout=$timedOut)")
             } else {
-                // Past unpack, before the first frame: reflect the boot phase rather than a stale "Unpacking…".
-                splashOverlay.setStatus("Starting up…")
+                // Past unpack, before the first painted frame: reflect the boot phase rather than a stale
+                // "Unpacking…". Once the engine reports a real login state the first blit is imminent, so say so.
+                splashOverlay.setStatus(if (realState) "Entering game…" else "Starting up…")
             }
         }
         // UX-DISCRETE-01 / ENH-B06: drive the "Hopping…" scrim purely Android-side off the loggedIn signal. The
