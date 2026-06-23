@@ -268,6 +268,14 @@ class MainActivity : AppCompatActivity() {
         const val PREFS_HOTKEYS = "hotkeys"
         const val PREF_HOTKEYS_ACTIVE = "active"
 
+        // Bug 4: the WorldHopper quick-hop keybinds. These mirror RuneLite's WorldHopperConfig @ConfigGroup
+        // ("worldhopper") + @ConfigItem keyNames ("nextKey"/"previousKey") — stable config API (renaming them would
+        // break every user's saved keybinds). The HUD hotkey strip reroutes these two through the relog hop path
+        // (worldHopDirection) instead of firing the plugin keybind, which is the inert in-game hop headless.
+        private const val WORLDHOPPER_GROUP = "worldhopper"
+        private const val WORLDHOPPER_NEXT_KEY = "nextKey"
+        private const val WORLDHOPPER_PREV_KEY = "previousKey"
+
         // Pinch-to-wheel: geometric step a scale ratio must cross to emit one wheel notch.
         private const val PINCH_STEP = 1.08f
         // Click-ring truth grace: how long after a tap we wait for interactTapSeq before calling it a walk.
@@ -1519,13 +1527,15 @@ class MainActivity : AppCompatActivity() {
                     // in-game hop, which is inert headless (client.hopToWorld never moves the world). Route them
                     // through the relog path instead — the same fix the World Switcher screen's Next/Prev use — so
                     // the HUD quick-hop hotkey actually hops. Every other hotkey still fires its real keybind.
-                    val quickHop = group == "worldhopper" && (key == "nextKey" || key == "previousKey")
+                    val quickHop = group == WORLDHOPPER_GROUP &&
+                        (key == WORLDHOPPER_NEXT_KEY || key == WORLDHOPPER_PREV_KEY)
+                    val prev = key == WORLDHOPPER_PREV_KEY
                     JvmLauncher.onBridgeTouch {
-                        if (quickHop) JvmLauncher.worldHopDirection(key == "previousKey")
+                        if (quickHop) JvmLauncher.worldHopDirection(prev)
                         else JvmLauncher.fireHotkey(group, key)
                     }
                     vibrateTick()
-                    Log.i(TAG, if (quickHop) "hotkey: quick-hop ${if (key == "previousKey") "prev" else "next"} via relog ($short)"
+                    Log.i(TAG, if (quickHop) "hotkey: quick-hop ${if (prev) "prev" else "next"} via relog ($short)"
                                else "hotkey: fire $group/$key ($short)")
                 }
             }
