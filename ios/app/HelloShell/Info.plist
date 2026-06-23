@@ -57,6 +57,16 @@
 	     report). We never record; the string only satisfies TCC so the probe is allowed. -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>RuneLite's audio system enumerates audio devices at startup; this app does not record.</string>
+	<!-- RuneLite-account (config/plugin sync) sign-in uses the RFC-8252 loopback OAuth flow: SessionManager runs a
+	     local com.sun.net.httpserver.HttpServer on http://localhost:<port> and api.runelite.net redirects the
+	     SFSafariViewController back to that loopback URL. NSAllowsLocalNetworking whitelists loopback/.local/
+	     link-local hosts for ATS so any in-app cleartext request to that local server is permitted, WITHOUT
+	     globally disabling ATS (NSAllowsArbitraryLoads). Loopback only — no external cleartext is allowed. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<!-- THIS is the hardened plist used by Release (and as the default). File-sharing keys
 	     (UIFileSharingEnabled / LSSupportsOpeningDocumentsInPlace) are DELIBERATELY ABSENT here so Documents is
 	     not browsable over Files.app/USB (QA-P1-12). The Debug build swaps in Info-Debug.plist (project.yml
