@@ -77,7 +77,10 @@ if [ "$CHECK_ONLY" = 1 ]; then
   fail=0
   for pair in "iOS:$IOS_DEST" "Android:$ANDROID_DEST"; do
     port="${pair%%:*}" ; dir="${pair#*:}"
-    for jar in "$SHADED_NAME:$SHADED_SHA" "probes.jar:$PROBES_SHA"; do
+    # Android intentionally omits shaded.jar (SLM-JAR-01 — not on its boot classpath); check probes only there.
+    if [ "$port" = "Android" ]; then jars="probes.jar:$PROBES_SHA"
+    else jars="$SHADED_NAME:$SHADED_SHA probes.jar:$PROBES_SHA"; fi
+    for jar in $jars; do
       name="${jar%%:*}" ; want="${jar#*:}" ; path="$dir/$name"
       if [ ! -f "$path" ]; then echo "MISSING $port $path"; fail=1
       elif [ "$(sha "$path")" != "$want" ]; then echo "STALE   $port $path"; fail=1
@@ -95,7 +98,16 @@ copy_jar() {            # $1=src  $2=dest path — skip when src and dest are th
 stage_one() {           # $1=label  $2=dest dir
   local label="$1" dest="$2"
   mkdir -p "$dest"
-  copy_jar "$SHADED_SRC" "$dest/$SHADED_NAME"
+  # SLM-JAR-01 (device-verified, all 3 renderers boot): shaded.jar is NOT on the Android boot classpath — the
+  # [gpu : rlhd : probes] closure is complete — so on Android it only bloats the APK (~26 MB). iOS still boots
+  # shaded, so stage it there; for Android, skip it (and remove any previously-staged copy so re-staging is
+  # idempotent). The runtime.tag still folds SHADED_SHA from build/libs below, so a shaded change still
+  # invalidates Android installs. NB the bridge-census dev tool reads shaded from build/libs, not this dir.
+  if [ "$label" = "Android" ]; then
+    rm -f "$dest/$SHADED_NAME"
+  else
+    copy_jar "$SHADED_SRC" "$dest/$SHADED_NAME"
+  fi
   copy_jar "$PROBES_SRC" "$dest/probes.jar"
   echo "  staged -> $dest ($label)"
 }

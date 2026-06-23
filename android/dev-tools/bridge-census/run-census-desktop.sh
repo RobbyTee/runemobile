@@ -14,12 +14,14 @@ ROOT="$(cd "$HERE/../../.." && pwd)"
 
 JAVAC="${JAVAC:-/opt/homebrew/opt/openjdk@21/bin/javac}"
 JAVA="${JAVA:-/opt/homebrew/opt/openjdk@21/bin/java}"
-# Default to the staged Android client jar, globbing the version so a bump needs no edit here.
+# Default to the freshly-built shaded client jar, globbing the version so a bump needs no edit here. Prefer the
+# shadowJar output under build/libs (the canonical source); fall back to the iOS-staged copy. The Android APK no
+# longer bundles shaded (SLM-JAR-01 — not on its boot classpath), so the old android-assets default is gone.
 if [ -n "${1:-}" ]; then
   JAR="$1"
 else
   shopt -s nullglob
-  cands=("$ROOT"/android/app/src/main/assets/jvm/client-*-shaded.jar)
+  cands=("$ROOT"/runelite-client/build/libs/client-*-shaded.jar "$ROOT"/ios/app/jvm-resources/client-*-shaded.jar)
   shopt -u nullglob
   JAR="${cands[0]:-}"
 fi
