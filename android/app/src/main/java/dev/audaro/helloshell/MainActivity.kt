@@ -181,6 +181,19 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dialogueOverlay: DialogueView
     // FIX-9: a native "Reconnecting…" scrim shown while the headless auto-reconnect recovers a dropped session.
     private lateinit var reconnectOverlay: ReconnectingOverlayView
+    // UX-ONBOARD-01: a branded cold-start splash shown immediately in onCreate over the black SurfaceView, until
+    // the engine renders its first real frame (or a real login state lands) / a generous timeout. Bounded so a
+    // missed signal can never leave it covering the game.
+    private lateinit var splashOverlay: SplashOverlayView
+    private var splashDeadlineMs = 0L
+    // UX-DISCRETE-01 / ENH-B06: a native "Hopping…" scrim over the relog-based world hop (logout→relogin). Driven
+    // purely Android-side: armed from the hop trigger sites, hidden on the next loggedIn edge after the hop or a
+    // bounded timeout. `hopWasLoggedIn` tracks the pre-hop loggedIn state so we hide on the rising edge BACK to
+    // in-world (the relog logs out first, then back in); `hopDeadlineMs` is the wall-clock failsafe.
+    private lateinit var hoppingOverlay: HoppingOverlayView
+    private var hopArmed = false
+    private var hopDeadlineMs = 0L
+    private var hopSawLoggedOut = false
     // DEBUG-only force for the reconnect overlay (real network drops are hard to repro over Wi-Fi adb). null =
     // follow the live snapshot; true/false = force shown/hidden. Driven by the SET_RECONNECT_OVERLAY broadcast.
     @Volatile private var reconnectTestOverride: Boolean? = null
@@ -239,6 +252,12 @@ class MainActivity : AppCompatActivity() {
         @Volatile var canvasW = 0
         @Volatile var canvasH = 0
 
+        // ENH-B06: a static hook the native World Switcher Composable (in PluginPanel's Compose tree, with no
+        // back-reference to the activity) calls to arm the "Hopping…" scrim from its row-tap / Prev-Next hop. The
+        // live activity installs it in onCreate and clears it in onDestroy; null = no scrim (android-only, no
+        // shared-contract change). [label] is the card text ("Hopping to world N…" or "Switching worlds…").
+        @Volatile var armHopScrimHook: ((label: String) -> Unit)? = null
+
         private const val NOTIF_CHANNEL = "runelite_game"            // audible (IMPORTANCE_DEFAULT)
         private const val NOTIF_CHANNEL_SILENT = "runelite_game_silent"  // AP-2: no sound (IMPORTANCE_LOW)
         private const val REQ_POST_NOTIFICATIONS = 7001
@@ -247,6 +266,13 @@ class MainActivity : AppCompatActivity() {
         // resizable layout (the welcome-frame flash window). ~1.2s of LOGGED_IN frames is when the engine's chrome
         // widgets are reliably built (cf. MobileChromeBridge.VERDICT_FRAME=60); 1500ms gives a little headroom.
         private const val LOGIN_TRANSITION_MS = 1500L
+
+        // UX-ONBOARD-01: hard cap on the cold-start splash. Generous — first-install unpack (~30 s) + JVM boot +
+        // first frame; the splash normally dismisses on the first frame well before this. Failsafe only.
+        private const val SPLASH_TIMEOUT_MS = 60_000L
+        // UX-DISCRETE-01 / ENH-B06: hard cap on the "Hopping…" scrim. The relog hop is ~8 s of login chrome; this
+        // leaves headroom yet guarantees the scrim never sticks if the loggedIn-edge signal is missed.
+        private const val HOP_TIMEOUT_MS = 12_000L
 
         // AWT virtual-key codes (java.awt.event.KeyEvent) the engine's onKeyStroke expects.
         private const val VK_BACK_SPACE = 8
@@ -462,6 +488,15 @@ class MainActivity : AppCompatActivity() {
         dialogueOverlay.onOption = { digit -> JvmLauncher.onBridgeTouch { JvmLauncher.text(digit.toString()) } }
         // FIX-9: the "Reconnecting…" scrim (non-interactive; driven from updateChrome's snapshot).
         reconnectOverlay = ReconnectingOverlayView(this)
+        // UX-DISCRETE-01 / ENH-B06: the "Hopping…" scrim (non-interactive; armed at the hop trigger sites, hidden
+        // from updateChrome's loggedIn signal / a timeout).
+        hoppingOverlay = HoppingOverlayView(this)
+        // UX-ONBOARD-01: the cold-start splash (non-interactive; starts ACTIVE so it covers the black boot screen
+        // the moment setContentView runs). Dismissed from updateChrome on the first real frame / a timeout.
+        splashOverlay = SplashOverlayView(this)
+        splashDeadlineMs = SystemClock.uptimeMillis() + SPLASH_TIMEOUT_MS
+        // ENH-B06: let the native World Switcher Composable arm the "Hopping…" scrim from its hop taps.
+        armHopScrimHook = { label -> armHopScrim(label) }
         // A4 plugin UI: a full-screen Compose panel (GONE until opened) + a small launcher button. The panel
         // is a data screen (Compose); the live game overlays above stay classic Views (hybrid, §4.2).
         // §4 increment 3: the launcher is a transparent-host PEEK/EXPAND sheet. Material Buttons (the handle +
@@ -645,6 +680,7 @@ class MainActivity : AppCompatActivity() {
             addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame + chrome
             addView(overlayEditView, FrameLayout.LayoutParams(mp, mp)) // on-screen overlay-layout editor (GONE unless editing)
             addView(reconnectOverlay, FrameLayout.LayoutParams(mp, mp)) // FIX-9: "Reconnecting…" scrim (non-interactive)
+            addView(hoppingOverlay, FrameLayout.LayoutParams(mp, mp))   // ENH-B06: "Hopping…" scrim (non-interactive)
             // §4: the launcher handle sits above the game/chrome (tappable) but below the launcher sheet
             // (covered while it's open) and clears the bottom gesture inset.
             addView(launcherHandle, FrameLayout.LayoutParams(
@@ -669,6 +705,9 @@ class MainActivity : AppCompatActivity() {
             // added LAST so its sheet/scrim draw OVER the handle + devBar (and the game composites through the
             // transparent top). GONE until opened.
             addView(pluginPanel, FrameLayout.LayoutParams(mp, mp))
+            // UX-ONBOARD-01: the cold-start splash is added TOPMOST so it covers every other view (incl. a black
+            // SurfaceView and any chrome) during the unpack + JVM boot + first-frame window. It self-dismisses.
+            addView(splashOverlay, FrameLayout.LayoutParams(mp, mp))
         }
         setContentView(root)
         // User-defined hotkey buttons: populate the strip now + rebuild whenever the Hotkeys screen changes the set.
@@ -1530,6 +1569,9 @@ class MainActivity : AppCompatActivity() {
                     val quickHop = group == WORLDHOPPER_GROUP &&
                         (key == WORLDHOPPER_NEXT_KEY || key == WORLDHOPPER_PREV_KEY)
                     val prev = key == WORLDHOPPER_PREV_KEY
+                    // ENH-B06: a quick-hop is a relog under the hood — cover its ~8 s login flash with the
+                    // "Hopping…" scrim (the target world isn't known from a direction-hop, so use a generic label).
+                    if (quickHop) armHopScrim("Switching worlds…")
                     JvmLauncher.onBridgeTouch {
                         if (quickHop) JvmLauncher.worldHopDirection(prev)
                         else JvmLauncher.fireHotkey(group, key)
@@ -1847,6 +1889,25 @@ class MainActivity : AppCompatActivity() {
      * grid. In any other layout (FIXED) it disengages — un-hides the engine stones + releases the side panel — so
      * the real HUD renders (the iOS LAYOUT GUARD). All bridge writes go through onBridge (off the UI thread).
      */
+    /**
+     * UX-DISCRETE-01 / ENH-B06: arm the "Hopping…" scrim. Called from BOTH world-hop trigger sites (the HUD
+     * quick-hop hotkey and the World Switcher row/Prev/Next). Sets a bounded deadline; updateChrome shows the
+     * scrim while armed and clears it on the next in-world edge after the relog (or at the deadline). [label] is
+     * shown on the card — "Hopping to world N…" when the target is known, else a generic "Switching worlds…".
+     */
+    private fun armHopScrim(label: String) {
+        if (!::hoppingOverlay.isInitialized) return
+        runOnUiThread {
+            hoppingOverlay.setLabel(label)
+            hopArmed = true
+            hopSawLoggedOut = false
+            hopDeadlineMs = SystemClock.uptimeMillis() + HOP_TIMEOUT_MS
+            // Show immediately rather than waiting a frame, so the scrim is up before the logout chrome flashes.
+            hoppingOverlay.setHopping(true)
+            Log.i(TAG, "onboard: hop scrim armed ($label)")
+        }
+    }
+
     private fun updateChrome() {
         if (!::chromeOverlay.isInitialized) return
         val json = JvmLauncher.chromeSnapshotPub()
@@ -1871,6 +1932,39 @@ class MainActivity : AppCompatActivity() {
             val show = reconnectTestOverride ?: live
             if (reconnectOverlay.setReconnecting(show)) {
                 Log.i(TAG, "fix9: reconnect overlay -> $show")
+            }
+        }
+        // UX-ONBOARD-01: dismiss the cold-start splash on the earliest reliable "the engine is alive" signal —
+        // the first composited frame (frameWidth>0 is a cheap native counter, universal across renderers) OR a
+        // real login state in the snapshot (loggedIn / loginScreen). A generous wall-clock timeout is the
+        // failsafe so a missed signal can never leave the splash over the game.
+        if (::splashOverlay.isInitialized && splashOverlay.isActive) {
+            val firstFrame = JvmLauncher.frameWidth() > 0
+            val realState = loggedIn || o?.optBoolean("loginScreen") == true
+            val timedOut = SystemClock.uptimeMillis() >= splashDeadlineMs
+            if (firstFrame || realState || timedOut) {
+                splashOverlay.dismiss()
+                Log.i(TAG, "onboard: splash dismissed (frame=$firstFrame state=$realState timeout=$timedOut)")
+            } else {
+                // Past unpack, before the first frame: reflect the boot phase rather than a stale "Unpacking…".
+                splashOverlay.setStatus("Starting up…")
+            }
+        }
+        // UX-DISCRETE-01 / ENH-B06: drive the "Hopping…" scrim purely Android-side off the loggedIn signal. The
+        // relog hop logs out then back in; we hold the scrim until we've seen the logout AND the subsequent
+        // logged-in edge (or a bounded timeout), so the routine hop stops reading as a kick.
+        if (::hoppingOverlay.isInitialized) {
+            if (hopArmed) {
+                if (!loggedIn) hopSawLoggedOut = true
+                val timedOut = SystemClock.uptimeMillis() >= hopDeadlineMs
+                val backInWorld = loggedIn && hopSawLoggedOut
+                if (timedOut || backInWorld) {
+                    hopArmed = false
+                    Log.i(TAG, "onboard: hop scrim cleared (backInWorld=$backInWorld timeout=$timedOut)")
+                }
+            }
+            if (hoppingOverlay.setHopping(hopArmed)) {
+                Log.i(TAG, "onboard: hop scrim -> $hopArmed")
             }
         }
         val topLevel = o?.optInt("topLevelId", -1) ?: -1
@@ -2449,6 +2543,7 @@ class MainActivity : AppCompatActivity() {
         drainRun = false   // stop the AP-2a notification/link drain daemon
         hdConfigReceiver?.let { runCatching { unregisterReceiver(it) } }; hdConfigReceiver = null
         reconnectTestReceiver?.let { runCatching { unregisterReceiver(it) } }; reconnectTestReceiver = null
+        armHopScrimHook = null   // ENH-B06: drop the static hook so a dead activity can't be re-armed
         super.onDestroy()
     }
 
@@ -2562,7 +2657,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bootJvm(app: android.content.Context, census: Boolean = false, gpu: Boolean = false, rlhd: Boolean = false) {
-        val javaHome = AssetInstaller.ensureInstalled(app)
+        // UX-ONBOARD-01: on the first-install path, feed a coarse "Unpacking… N%" line into the cold-start splash.
+        // The callback runs on this boot thread, so marshal each update to the UI thread. No-op once installed.
+        val javaHome = AssetInstaller.ensureInstalled(app) { pct ->
+            runOnUiThread { if (::splashOverlay.isInitialized && splashOverlay.isActive) splashOverlay.setUnpackProgress(pct) }
+        }
         val libjvm = File(javaHome, "lib/server/libjvm.so")
         if (!libjvm.exists()) {
             Log.e(TAG, "embedded JRE not installed; expected $libjvm")

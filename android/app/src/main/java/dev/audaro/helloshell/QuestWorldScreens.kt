@@ -192,8 +192,15 @@ fun WorldSwitcherScreen(onBack: () -> Unit) {
                 TextButton(onClick = onBack) { Text("‹ Back") }
                 Text("World Switcher", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
                 // SC-5 quick-hop: previous / next world in the WorldHopper filter (WorldHopperPlugin.hop(boolean)).
-                TextButton(onClick = { JvmLauncher.onBridgeTouch { JvmLauncher.worldHopDirection(true) } }) { Text("◀ Prev") }
-                TextButton(onClick = { JvmLauncher.onBridgeTouch { JvmLauncher.worldHopDirection(false) } }) { Text("Next ▶") }
+                // ENH-B06: the hop is a relog under the hood — arm the host "Hopping…" scrim before firing it.
+                TextButton(onClick = {
+                    MainActivity.armHopScrimHook?.invoke("Switching worlds…")
+                    JvmLauncher.onBridgeTouch { JvmLauncher.worldHopDirection(true) }
+                }) { Text("◀ Prev") }
+                TextButton(onClick = {
+                    MainActivity.armHopScrimHook?.invoke("Switching worlds…")
+                    JvmLauncher.onBridgeTouch { JvmLauncher.worldHopDirection(false) }
+                }) { Text("Next ▶") }
                 if (current > 0) Text(" W$current", color = Color(0xFFFFD54F), fontSize = 14.sp)
             }
             Row(Modifier.padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -212,7 +219,12 @@ fun WorldSwitcherScreen(onBack: () -> Unit) {
                     items(shown, key = { it.id }) { w ->
                         WorldRowItem(
                             w, w.id == current,
-                            onHop = { JvmLauncher.onBridgeTouch { JvmLauncher.worldHop(w.id) } },
+                            // ENH-B06: cover the relog hop's ~8 s login flash with the host "Hopping…" scrim;
+                            // the target world is known here, so name it on the card.
+                            onHop = {
+                                MainActivity.armHopScrimHook?.invoke("Hopping to world ${w.id}…")
+                                JvmLauncher.onBridgeTouch { JvmLauncher.worldHop(w.id) }
+                            },
                             onToggleFav = { JvmLauncher.onBridgeTouch { JvmLauncher.worldSetFavourite(w.id, !w.favourite) } },
                         )
                         HorizontalDivider(color = Color(0x14FFFFFF))

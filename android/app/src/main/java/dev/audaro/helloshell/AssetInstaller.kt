@@ -25,8 +25,15 @@ object AssetInstaller {
     // automatically — no hand-typed bump for the common case.
     private const val BASE = "v5"
 
-    /** Returns the JAVA_HOME path (filesDir/jvm/jre). */
-    fun ensureInstalled(ctx: Context): File {
+    /**
+     * Returns the JAVA_HOME path (filesDir/jvm/jre).
+     *
+     * [onProgress] (optional) is invoked ONLY on the first-install / re-unpack path with a coarse 0..100 percent
+     * as each top-level asset subtree finishes copying — the cold-start splash uses it for an "Unpacking… N%"
+     * line. On the fast path (already installed) it is never called. The callback runs on the calling (boot)
+     * thread, so the consumer must marshal to the UI thread itself.
+     */
+    fun ensureInstalled(ctx: Context, onProgress: ((Int) -> Unit)? = null): File {
         val root = File(ctx.filesDir, "jvm")
         val want = "$BASE-${bundledTag(ctx)}"
         val marker = File(root, ".installed-tag")
@@ -34,7 +41,19 @@ object AssetInstaller {
         if (have != want) {
             Log.i(TAG, "runtime changed ($have -> $want): re-unpacking embedded JVM assets to $root")
             root.deleteRecursively()   // wipe the stale tree so old and new jars never mix
-            copyAssetDir(ctx, "jvm", root)
+            // Coarse progress by top-level subtree (cheap, no pre-walk of the 198 MB tree): unpack each child and
+            // report the completed fraction. Only meaningful on this first-install path.
+            val top = ctx.assets.list("jvm")?.toList().orEmpty()
+            if (onProgress != null && top.isNotEmpty()) {
+                onProgress(0)
+                root.mkdirs()
+                top.forEachIndexed { i, child ->
+                    copyAssetDir(ctx, "jvm/$child", File(root, child))
+                    onProgress(((i + 1) * 100) / top.size)
+                }
+            } else {
+                copyAssetDir(ctx, "jvm", root)
+            }
             marker.writeText(want)
         }
         return File(root, "jre")
