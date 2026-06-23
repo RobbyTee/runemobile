@@ -550,6 +550,9 @@ class MainActivity : AppCompatActivity() {
                 setColor(if (on) 0xCC2AA189.toInt() else 0x66000000)
                 setStroke(((if (on) 2 else 1) * devD).toInt(), if (on) 0xFF3FE0BC.toInt() else 0x33FFFFFF)
             }
+            // UX-XCUT-04: the visual latch (filled/accented) is invisible to TalkBack, so mirror it as an a11y
+            // stateDescription ("on"/"off") — the spoken counterpart of the Compose chips' "117HD, selected".
+            ViewCompat.setStateDescription(b, if (on) "on" else "off")
         }
         // §4 right-bar redesign (increment 1): open the plugin launcher. The dismiss-flush (§4) persists any
         // config edit made in the panel even when it's closed without backgrounding.
@@ -584,6 +587,8 @@ class MainActivity : AppCompatActivity() {
         // BACK closes it (wired below). Drag-up + the PEEK sheet are later increments.
         val launcherHandle = Button(this).apply {
             text = "≡ Plugins"
+            // UX-XCUT-04: the leading ≡ glyph reads as "identical to" under TalkBack — give it a plain spoken label.
+            contentDescription = "Open plugins panel"
             textSize = 12f
             isAllCaps = false
             minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
@@ -601,9 +606,13 @@ class MainActivity : AppCompatActivity() {
         // A6 A/B: toggle the native grid on/off (▦ = native tab grid + hidden stones; ▤ = raw engine stones).
         // updateChrome re-applies setStonesHidden to match, so flipping this reveals/hides the real stone row.
         val chromeButton = devButton("▦")
+        // UX-XCUT-04: spoken label + latch state for the geometric glyphs (▦/▤ are silent/meaningless to TalkBack).
+        chromeButton.contentDescription = "Native tab grid"
+        ViewCompat.setStateDescription(chromeButton, if (chromeOverlay.railsShown) "on" else "off")
         chromeButton.setOnClickListener {
             chromeOverlay.setShown(!chromeOverlay.railsShown)
             chromeButton.text = if (chromeOverlay.railsShown) "▦" else "▤"
+            ViewCompat.setStateDescription(chromeButton, if (chromeOverlay.railsShown) "on" else "off")
         }
         // §4 cutover: sign-in/switch-account (⎆), Log out (⏻) and screenshot (📷) moved out of the devBar into
         // fixed launcher tiles (audit §4.3/#9) — wired in openLauncher to startActivity/confirmLogout/
@@ -613,6 +622,8 @@ class MainActivity : AppCompatActivity() {
         // instantly dismissing it). Tapping again returns to pure auto-raise. Mirrors the iOS ⌨ toggle.
         val kbButton = devButton("⌨")
         keyboardToggleBtn = kbButton
+        kbButton.contentDescription = "Show keyboard"
+        ViewCompat.setStateDescription(kbButton, "off")
         kbButton.setOnClickListener {
             manualKeyboard = !manualKeyboard
             setModActive(kbButton, manualKeyboard)
@@ -624,6 +635,8 @@ class MainActivity : AppCompatActivity() {
         // setShiftHeld, iOS-device-proven): latch ON → long-press shows the shift entries → tap to commit →
         // latch OFF. The hold is multi-second with no per-frame re-assert (proven by ShiftFeedSpike).
         val shiftButton = devButton("⇧")
+        shiftButton.contentDescription = "Shift key"
+        ViewCompat.setStateDescription(shiftButton, "off")
         shiftButton.setOnClickListener {
             shiftHeld = !shiftHeld
             setModActive(shiftButton, shiftHeld)
@@ -645,6 +658,8 @@ class MainActivity : AppCompatActivity() {
         // Ground Items' hold-to-highlight (item names appear while Alt is down); ⌃ covers the Ctrl-gated surface.
         val ctrlButton = devButton("⌃")
         ctrlButton.alpha = 0.7f
+        ctrlButton.contentDescription = "Control key"
+        ViewCompat.setStateDescription(ctrlButton, "off")
         ctrlButton.setOnClickListener {
             ctrlHeld = !ctrlHeld
             setModActive(ctrlButton, ctrlHeld)
@@ -653,6 +668,8 @@ class MainActivity : AppCompatActivity() {
         }
         val altButton = devButton("⌥")
         altButton.alpha = 0.7f
+        altButton.contentDescription = "Alt key"
+        ViewCompat.setStateDescription(altButton, "off")
         altButton.setOnClickListener {
             altHeld = !altHeld
             setModActive(altButton, altHeld)
@@ -661,10 +678,12 @@ class MainActivity : AppCompatActivity() {
         }
         // Track G AG2: restart into GPU Route-C mode (force-enable the base gpu plugin, render the scene on GLES).
         val gpuButton = devButton("◆")
+        gpuButton.contentDescription = "Switch to GPU renderer"
         gpuButton.setOnClickListener { restartIntoGpu() }
         // Track G AG3: restart into 117HD (routecrlhd) mode — the sideload-friendly trigger (Quest/SideQuest
         // installs can't easily push an rlhd.mode marker, but anyone can tap a button).
         val hdButton = devButton("HD")
+        hdButton.contentDescription = "Switch to 117HD renderer"
         hdButton.setOnClickListener { restartIntoRlhd() }
         // Group the dev affordances into one discreet cluster pinned to the BOTTOM-LEFT — clear of the relocated
         // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
