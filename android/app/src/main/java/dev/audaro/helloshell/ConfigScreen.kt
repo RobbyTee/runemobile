@@ -40,6 +40,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -79,7 +80,57 @@ data class ConfigItem(
     val alpha: Boolean,        // color items: true when the plugin's color exposes an editable alpha channel
     val min: Int?,             // @Range min for int/double items (null = unbounded) — clamps writes
     val max: Int?,             // @Range max for int/double items (null = unbounded)
+    val section: String,       // the owning @ConfigSection key, or "" when the item declares no section
 )
+
+/** One @ConfigSection header from MobileUiBridge.getPluginConfig(group)'s `sections` array (CFG-6). */
+data class ConfigSectionMeta(
+    val key: String,
+    val name: String,
+    val description: String,
+    val closedByDefault: Boolean,
+)
+
+/**
+ * The parsed config payload: the typed items plus the @ConfigSection metadata. The bridge emits items already
+ * sorted by item position and the `sections` array already sorted by section position (ConfigManager
+ * .getConfigDescriptor), so the grouping below preserves both orders without re-sorting.
+ */
+data class ConfigSchema(
+    val items: List<ConfigItem>,
+    val sections: List<ConfigSectionMeta>,
+)
+
+/** A render group: a (possibly null) section header followed by the items that declared it. */
+private data class ConfigGroup(
+    val meta: ConfigSectionMeta?,   // null = the leading ungrouped (no @ConfigSection) bucket
+    val items: List<ConfigItem>,
+)
+
+/**
+ * ENH-B01 / UX-PLUGCFG-01: bucket the flat item list under its @ConfigSection headings. Ungrouped items (no
+ * `section`) lead in a single header-less group; each declared section follows in the bridge's section order,
+ * holding its items in the bridge's item order. A section whose items were all hidden is dropped.
+ */
+private fun groupConfig(schema: ConfigSchema): List<ConfigGroup> {
+    val bySection = schema.items.groupBy { it.section }
+    val out = ArrayList<ConfigGroup>()
+    bySection[""]?.takeIf { it.isNotEmpty() }?.let { out.add(ConfigGroup(null, it)) }
+    for (meta in schema.sections) {
+        val rows = bySection[meta.key] ?: continue
+        if (rows.isNotEmpty()) out.add(ConfigGroup(meta, rows))
+    }
+    // Any item whose section key has no matching `sections` entry would otherwise vanish — fold it into the
+    // ungrouped lead so nothing is lost (defensive; the bridge always emits a section for every used key).
+    val known = HashSet<String>().apply { add(""); schema.sections.forEach { add(it.key) } }
+    val orphans = schema.items.filter { it.section !in known }
+    if (orphans.isNotEmpty()) {
+        val lead = out.firstOrNull { it.meta == null }
+        if (lead != null) out[out.indexOf(lead)] = lead.copy(items = lead.items + orphans)
+        else out.add(0, ConfigGroup(null, orphans))
+    }
+    return out
+}
 
 /**
  * A4 per-plugin config screen: reads one plugin's typed config schema over the rl-bridge thread
@@ -90,6 +141,10 @@ data class ConfigItem(
 @Composable
 fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit, onTextActive: (Boolean) -> Unit = {}) {
     var items by remember { mutableStateOf<List<ConfigItem>>(emptyList()) }
+    var sections by remember { mutableStateOf<List<ConfigSectionMeta>>(emptyList()) }
+    // ENH-B01 (CFG-6): per-section-key collapsed state, kept across the reloadKey re-reads below (seeded from
+    // closedByDefault on first encounter, then driven by the user's header taps). Survives a Reset re-pull.
+    val collapsed = remember { mutableStateMapOf<String, Boolean>() }
     var loading by remember { mutableStateOf(true) }
     var reloadKey by remember { mutableIntStateOf(0) }
     var confirmReset by remember { mutableStateOf(false) }
@@ -102,9 +157,13 @@ fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit, onTextAc
     LaunchedEffect(group, reloadKey) {
         loading = true
         val json = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.getPluginConfig(group) }.get() }
-        items = parseConfig(json)
+        val schema = parseConfig(json)
+        items = schema.items
+        sections = schema.sections
+        // Seed any not-yet-seen section's collapse state from closedByDefault; keep user toggles on re-read.
+        for (s in schema.sections) if (s.key !in collapsed) collapsed[s.key] = s.closedByDefault
         loading = false
-        Log.i("MainActivity", "ANDROID_A4_CONFIG_UI_GREEN group=$group items=${items.size}")
+        Log.i("MainActivity", "ANDROID_A4_CONFIG_UI_GREEN group=$group items=${items.size} sections=${sections.size}")
     }
     LaunchedEffect(pendingFlush) {
         if (pendingFlush > 0) {
@@ -169,18 +228,64 @@ fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit, onTextAc
             } else if (items.isEmpty()) {
                 Text("No configurable options.", color = Color.Gray, modifier = Modifier.padding(8.dp))
             } else {
+                val groups = remember(items, sections) { groupConfig(ConfigSchema(items, sections)) }
+                fun onItemChange(item: ConfigItem, newVal: String) {
+                    items = items.map { if (it.key == item.key) it.copy(value = newVal) else it }
+                    JvmLauncher.onBridgeTouch { JvmLauncher.setConfig(group, item.key, newVal) }
+                    pendingFlush++   // FIX-8: arm the debounced crash-safe flush
+                }
                 LazyColumn(Modifier.fillMaxSize()) {
-                    items(items, key = { it.key }) { item ->
-                        ConfigItemControl(item) { newVal ->
-                            items = items.map { if (it.key == item.key) it.copy(value = newVal) else it }
-                            JvmLauncher.onBridgeTouch { JvmLauncher.setConfig(group, item.key, newVal) }
-                            pendingFlush++   // FIX-8: arm the debounced crash-safe flush
+                    for (g in groups) {
+                        val meta = g.meta
+                        if (meta != null) {
+                            // CFG-6: a tappable OSRS-styled section header that expands/collapses its rows.
+                            item(key = "section:${meta.key}") {
+                                val isCollapsed = collapsed[meta.key] ?: meta.closedByDefault
+                                ConfigSectionHeader(meta, isCollapsed) {
+                                    collapsed[meta.key] = !isCollapsed
+                                }
+                            }
                         }
-                        HorizontalDivider(color = Color(0x22FFFFFF))
+                        val isCollapsed = meta != null && (collapsed[meta.key] ?: meta.closedByDefault)
+                        if (!isCollapsed) {
+                            items(g.items, key = { it.key }) { item ->
+                                ConfigItemControl(item) { newVal -> onItemChange(item, newVal) }
+                                HorizontalDivider(color = Color(0x22FFFFFF))
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * ENH-B01 (CFG-6): a collapsible @ConfigSection header. The whole row is tappable; the chevron + stateDescription
+ * communicate expand/collapse. Styled as a low-stone band so the grouping reads as headers, not just more rows.
+ */
+@Composable
+private fun ConfigSectionHeader(meta: ConfigSectionMeta, collapsed: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .padding(top = 10.dp, bottom = 2.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0x33FFFFFF))
+            .clickableNoRipple(onToggle)
+            .padding(horizontal = 10.dp, vertical = 10.dp)
+            .semantics {
+                contentDescription = meta.name.ifEmpty { meta.key } + " section"
+                stateDescription = if (collapsed) "Collapsed" else "Expanded"
+            },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(meta.name.ifEmpty { meta.key }, color = Color.White, fontSize = 15.sp)
+            if (meta.description.isNotEmpty()) {
+                Text(meta.description, color = Color.Gray, fontSize = 11.sp)
+            }
+        }
+        Text(if (collapsed) "▸" else "▾", color = Color(0xFFB0B0B0), fontSize = 15.sp)
     }
 }
 
@@ -237,12 +342,24 @@ private fun ConfigItemControl(item: ConfigItem, onChange: (String) -> Unit) {
             "dimension" -> DimensionConfigControl(item, onChange)
             "set" -> SetConfigControl(item, onChange)
             "notification" -> NotificationCustomizeControl(item, onChange)
-            // AP-0: keybind items previously rendered as a blank row (no control, not even the value). There is
-            // no hardware-key capture on a touch app, so show the current binding read-only instead of nothing.
-            "keybind" -> Text(
-                "Binding: " + (item.value?.takeIf { it.isNotBlank() } ?: "Not set") + "  ·  edit on desktop",
-                color = Color(0xFF9E9E9E), fontSize = 12.sp, modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
-            )
+            // AP-0 / ENH-B03: keybind items have no hardware-key capture on a touch app, so the row shows the
+            // current binding read-only plus a "Clear" control that unbinds it (writes the NOT_SET serialization
+            // "0:0" — the engine's Keybind config form, keyCode:modifiers). Mirrors desktop HotkeyButton's clear.
+            "keybind" -> {
+                val bound = isKeybindBound(item.value)
+                Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Binding: " + humanizeKeybind(item.value),
+                        color = Color(0xFF9E9E9E), fontSize = 12.sp,
+                        modifier = Modifier.weight(1f).semantics {
+                            contentDescription = "${label} binding, ${humanizeKeybind(item.value)}"
+                        },
+                    )
+                    if (bound) TextButton(onClick = { onChange(KEYBIND_NOT_SET) }) {
+                        Text("Clear", color = Color(0xFFFF8A80), fontSize = 13.sp)
+                    }
+                }
+            }
             "unknown" -> OutlinedTextField(   // genuinely opaque types stay read-only (no safe round-trip)
                 value = item.value ?: "", onValueChange = {}, readOnly = true, singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
@@ -341,6 +458,66 @@ private fun BoundedIntSlider(item: ConfigItem, lo: Int, hi: Int, onChange: (Stri
             },
         )
     }
+}
+
+// ---- ENH-B03: keybind row — show the binding + Clear (unbind) ---------------------------------------------
+//
+// The bridge emits a Keybind item's value as the engine's raw "keyCode:modifiers" config form (java AWT VK_*
+// codes + InputEvent modifier bitmask). NOT_SET is VK_UNDEFINED(0) + no modifiers → "0:0". We humanize the
+// common chords for display and write "0:0" to clear, which ConfigManager round-trips back to Keybind.NOT_SET.
+
+/** The serialized Keybind.NOT_SET (keyCode VK_UNDEFINED=0, no modifiers) — what desktop's HotkeyButton clears to. */
+private const val KEYBIND_NOT_SET = "0:0"
+
+/** True if a keybind value is set (parses as keyCode:modifiers and isn't NOT_SET). Blank/garbage → unset. */
+private fun isKeybindBound(v: String?): Boolean {
+    val (code, mods) = parseKeybind(v) ?: return false
+    return !(code == 0 && mods == 0)
+}
+
+/** Split "keyCode:modifiers" into the two ints, or null if it isn't that form. */
+private fun parseKeybind(v: String?): Pair<Int, Int>? {
+    val t = v?.trim().orEmpty()
+    val parts = t.split(":")
+    if (parts.size != 2) return null
+    val code = parts[0].trim().toIntOrNull() ?: return null
+    val mods = parts[1].trim().toIntOrNull() ?: return null
+    return code to mods
+}
+
+// java.awt.event.InputEvent down-mask bits (kept local so the Compose layer needs no AWT import).
+private const val SHIFT_DOWN = 1 shl 6
+private const val CTRL_DOWN = 1 shl 7
+private const val META_DOWN = 1 shl 8
+private const val ALT_DOWN = 1 shl 9
+
+/** Human-friendly label for a "keyCode:modifiers" keybind ("Ctrl + F1", "Shift", "Not set"). */
+private fun humanizeKeybind(v: String?): String {
+    val (code, mods) = parseKeybind(v) ?: return "Not set"
+    if (code == 0 && mods == 0) return "Not set"
+    val parts = ArrayList<String>()
+    if (mods and CTRL_DOWN != 0) parts.add("Ctrl")
+    if (mods and ALT_DOWN != 0) parts.add("Alt")
+    if (mods and SHIFT_DOWN != 0) parts.add("Shift")
+    if (mods and META_DOWN != 0) parts.add("Meta")
+    keyText(code)?.let { parts.add(it) }
+    return parts.joinToString(" + ").ifEmpty { "Not set" }
+}
+
+/** Best-effort key name for the common java.awt.event.KeyEvent VK_* codes; null for VK_UNDEFINED. */
+private fun keyText(code: Int): String? = when (code) {
+    0 -> null                                   // VK_UNDEFINED — modifier-only chord
+    in 0x70..0x7B -> "F${code - 0x6F}"          // VK_F1..VK_F12 (0x70..0x7B)
+    in 0x30..0x39 -> ('0' + (code - 0x30)).toString()   // VK_0..VK_9
+    in 0x41..0x5A -> ('A' + (code - 0x41)).toString()   // VK_A..VK_Z
+    0x20 -> "Space"
+    0x09 -> "Tab"
+    0x0A -> "Enter"
+    0x1B -> "Esc"
+    0x08 -> "Backspace"
+    0x2E -> "Delete"
+    0x25 -> "Left"; 0x26 -> "Up"; 0x27 -> "Right"; 0x28 -> "Down"
+    else -> "Key $code"
 }
 
 /** The writeId from a bridge ack ({"ok":true,"writeId":n}), or -1 if absent/unparseable. */
@@ -815,9 +992,10 @@ private fun Modifier.checkerboard(): Modifier = this.background(Color(0xFF777777
 private fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier =
     this.pointerInput(Unit) { detectTapGestures { onClick() } }
 
-private fun parseConfig(json: String): List<ConfigItem> = try {
-    val arr: JSONArray = JSONObject(json).optJSONArray("items") ?: JSONArray()
-    (0 until arr.length()).map { i ->
+private fun parseConfig(json: String): ConfigSchema = try {
+    val root = JSONObject(json)
+    val arr: JSONArray = root.optJSONArray("items") ?: JSONArray()
+    val items = (0 until arr.length()).map { i ->
         val o = arr.getJSONObject(i)
         val choices = o.optJSONArray("choices")?.let { c -> (0 until c.length()).map { c.getString(it) } }
         val choiceValues = o.optJSONArray("choiceValues")?.let { c -> (0 until c.length()).map { c.getString(it) } }
@@ -834,9 +1012,21 @@ private fun parseConfig(json: String): List<ConfigItem> = try {
             alpha = o.optBoolean("alpha", false),
             min = if (o.has("min")) o.optInt("min") else null,
             max = if (o.has("max")) o.optInt("max") else null,
+            section = o.optString("section", ""),
         )
     }
+    val secArr: JSONArray = root.optJSONArray("sections") ?: JSONArray()
+    val sections = (0 until secArr.length()).map { i ->
+        val o = secArr.getJSONObject(i)
+        ConfigSectionMeta(
+            key = o.optString("key", ""),
+            name = o.optString("name", ""),
+            description = o.optString("description", ""),
+            closedByDefault = o.optBoolean("closedByDefault", false),
+        )
+    }
+    ConfigSchema(items, sections)
 } catch (t: Throwable) {
     Log.e("MainActivity", "ANDROID_A4_CONFIG_UI_RED parse failed: $t")
-    emptyList()
+    ConfigSchema(emptyList(), emptyList())
 }
