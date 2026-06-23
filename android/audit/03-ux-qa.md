@@ -2,6 +2,10 @@
 
 > Heuristic + reference-anchored UX/UI audit of the Android `:app` native shell against two yardsticks: **OSRS Mobile** (the *feel* target — the official Jagex touch client this build emulates) and **RuneLite desktop** (the *feature* parity target). 48 findings, every one adversarially verified (CONFIRM / ADJUST / OVERTURN). **Severity = the verified-corrected value**, not the finder's first pass — several P1/P2s were honestly downgraded once a recovery path or already-shipped fix was found, and four findings were refuted outright (already-fixed or bad reference) and moved to §6 to credit the prior work. Stable ids are cited verbatim by the ROADMAP.
 > "Measurement" tags: **inspection** = the defect is statically provable from code; **needs-device** = the *feel/notch* magnitude must come from the end-of-audit device batch (see §5).
+>
+> **Severity rubric (this UX audit grades by user-experience impact, NOT by bug-tracker correctness):** **P0** = crash / hang / data-loss / hard release-blocker; **P1** = a *major* UX failure that significantly impairs feel or a core flow **even when technically recoverable** — first-impression damage, status-invisibility on a core multi-second transition, or occlusion of a *sole* control; **P2** = a moderate problem with an easy workaround; **P3** = polish / consistency. Because severity tracks experience impact (not "does the app eventually recover"), several P1s here are recoverable by design — that is intentional, not inflation. Counts: **48 findings total = 44 open (P1=5, P2=12, P3=27) + 4 refuted (§6)**; the §3 master table lists exactly the 44 open ids.
+>
+> **OSRS-Mobile reference currency:** OSRS-Mobile behaviors cited as the *feel* yardstick reflect the official Jagex client's documented behavior as of this audit (2026-06). That client evolves, so any high-impact OSRS-Mobile reference — and especially the §6 "bad-reference" refutations — should be spot-checked against the *live* app during the device QA batch (§5) before acting on it.
 
 ## 1. TL;DR
 
