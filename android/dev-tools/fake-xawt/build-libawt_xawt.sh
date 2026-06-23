@@ -26,6 +26,7 @@ HEADLESS="$JRE_LIB/libawt_headless.so"
 "$CLANG" --target=aarch64-linux-android28 -shared -fPIC -O2 \
   -o "$OUT" xawt_fake.c \
   -Wl,-soname,libawt_xawt.so \
+  -Wl,-z,max-page-size=16384 \
   -L"$JRE_LIB" -L"$JRE_LIB/server" \
   -Wl,--no-as-needed -lawt_headless \
   -Wl,--allow-shlib-undefined

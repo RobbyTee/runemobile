@@ -28,6 +28,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 # --- the pinned artifact (GitHub release assets are immutable per tag) -------------------------
+# 16 KB PAGE-SIZE NOTE: this AngelAuraMC build (the Pojav→Amethyst lineage, the canonical Android OpenJDK
+# builder) links its native .so at the default 4 KB max-page-size — all 33 jre/lib/*.so are p_align=4096, so the
+# embedded VM is NOT loadable on a true 16 KB-page kernel (fine on 4 KB devices like the Pixel 7a; the system
+# 16 KB-compat dialog doesn't flag them because they're dlopen'd from filesDir, not the app native-lib dir). No
+# pre-built 16 KB bionic arm64 OpenJDK 21 exists publicly (verified: AngelAuraMC has no 16 KB branch/commit; the
+# QuestCraft fork is older + 4 KB). To produce one: fork AngelAuraMC/angelauramc-openjdk-build, add
+# `export LDFLAGS+=" -Wl,-z,max-page-size=16384"` to the Android branch of buildjdk.sh (it already passes
+# --with-extra-ldflags="$LDFLAGS" to OpenJDK configure), run the aarch64 CI, then repoint JRE_URL/SHA/BYTES below.
+# Our own native libs (libhelloshell/librlawt via CMake, libawt_xawt via fake-xawt) are already 16 KB-aligned.
 JRE_URL="https://github.com/AngelAuraMC/angelauramc-openjdk-build/releases/download/download_jre21/jre21-android-arm64.tar.xz"
 JRE_SHA256="8d41ec401ee59f7722df60ed991f81ad146e130452804bfdd8a05d3436f7bbfe"
 JRE_BYTES=28675516
