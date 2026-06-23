@@ -125,6 +125,11 @@ private fun groupConfig(schema: ConfigSchema): List<ConfigGroup> {
     val known = HashSet<String>().apply { add(""); schema.sections.forEach { add(it.key) } }
     val orphans = schema.items.filter { it.section !in known }
     if (orphans.isNotEmpty()) {
+        // Fold-not-drop is deliberate (never hide a real config item), but an orphan means the bridge emitted an
+        // item referencing a @ConfigSection it did NOT also list in `sections` — i.e. a schema/sync mismatch worth
+        // surfacing in logcat for whoever debugs it next, rather than masking silently.
+        Log.w("ConfigScreen", "groupConfig: ${orphans.size} item(s) reference an unknown @ConfigSection " +
+            "(folded into the ungrouped lead): ${orphans.map { it.key }}")
         val lead = out.firstOrNull { it.meta == null }
         if (lead != null) out[out.indexOf(lead)] = lead.copy(items = lead.items + orphans)
         else out.add(0, ConfigGroup(null, orphans))
