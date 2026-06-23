@@ -436,6 +436,18 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Nearest snap-corner OverlayPosition name for a dropped point (canvas px), for a live snap preview.
 + (nullable NSString *)overlaySnapForX:(int)x y:(int)y canvasW:(int)canvasW canvasH:(int)canvasH;
 
+// ---- RuneLite-account login (config sync) — distinct from the Jagex game login --------------------
+
+/// Whether the RuneLite-account bridge is wired (offer the login row only when YES).
++ (BOOL)accountAvailable;
+/// {"available":bool,"loggedIn":bool,"username":".."} — the current RuneLite-account session (quick read).
++ (nullable NSString *)accountSessionJson;
+/// Begin the runelite.net OAuth login (opens the OAuth url in SFSafariViewController; completes async via the
+/// localhost loopback redirect, after which ConfigManager syncs the user's profiles + installed hub plugins).
++ (void)accountLogin;
+/// Sign out of the RuneLite account (closes + deletes the saved session).
++ (void)accountLogout;
+
 // ---- Native World Switcher reflow (WorldSwitcherBridge) --------------------------------------------
 
 /// Whether the native World Switcher screen can be offered (WorldService has a world list).

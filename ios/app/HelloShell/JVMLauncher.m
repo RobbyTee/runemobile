@@ -130,6 +130,12 @@ static jmethodID gOvlSetPos = NULL;     // setOverlayPreferredPosition(Ljava/lan
 static jmethodID gOvlReset = NULL;      // resetOverlay(Ljava/lang/String;)Ljava/lang/String;
 static jmethodID gOvlSnap = NULL;       // snapPositionForPoint(IIII)Ljava/lang/String;
 
+// RuneLite-account login (config sync) — the RuneLiteAccountBridge facade (start/stop OAuth + read session).
+static jclass    gAccountClass = NULL;  // global ref to net.runelite.client.headless.RuneLiteAccountBridge
+static jmethodID gAccAvail = NULL;      // isAvailable()Z
+static jmethodID gAccSession = NULL;    // getSessionJson()Ljava/lang/String;
+// startLogin()V + logout()V are resolved on a worker thread (login blocks on a localhost server + network call).
+
 // Native World Switcher reflow — the WorldSwitcherBridge facade (direct WorldService reads, reflected hop).
 static jclass    gWsClass = NULL;       // global ref to net.runelite.client.headless.WorldSwitcherBridge
 static jmethodID gWsAvailable = NULL;   // isAvailable()Z
@@ -527,6 +533,28 @@ static BOOL ensureOvl(void) {
     gOvlSnap = (*env)->GetStaticMethodID(env, global, "snapPositionForPoint", "(IIII)Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gOvlSnap = NULL; }
     gOvlClass = global;
+    return YES;
+}
+
+// Resolve the RuneLite-account facade on the main thread for the quick reads (available / sessionJson). The
+// blocking writes (startLogin / logout) attach their own worker thread instead (see +accountLogin/+accountLogout).
+static BOOL ensureAccount(void) {
+    if (gAccountClass) return YES;
+    if (!ensureBridge() || !gMainEnv) return NO;
+    JNIEnv *env = gMainEnv;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/RuneLiteAccountBridge");
+    if (!local || (*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return NO; }
+    jclass global = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    if (!global) return NO;
+    gAccAvail   = (*env)->GetStaticMethodID(env, global, "isAvailable", "()Z");
+    gAccSession = (*env)->GetStaticMethodID(env, global, "getSessionJson", "()Ljava/lang/String;");
+    if (!gAccAvail || !gAccSession) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteGlobalRef(env, global);
+        return NO;
+    }
+    gAccountClass = global;
     return YES;
 }
 
@@ -1099,6 +1127,14 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (forceDisable.count) {
         [opts addObject:[NSString stringWithFormat:@"-Drunelite.forceDisablePlugins=%@",
                          [forceDisable componentsJoinedByString:@","]]];
+    }
+    // ...and force-ENABLE the chosen renderer plugin so a synced/switched RuneLite-account profile that DISABLES it
+    // (a desktop profile picks a different renderer) can't STOP it mid-session and destroy its GL context — the
+    // GpuPlugin.loadScene "unable to map GL buffer" → "Loading - please wait." hang. forceEnable wins over the
+    // synced flag (symmetric to forceDisable above); CPU pins neither renderer plugin.
+    NSString *forceEnable = self.routecGpuMode ? @"gpuplugin" : (self.routecZoneMode ? @"hdplugin" : nil);
+    if (forceEnable) {
+        [opts addObject:[NSString stringWithFormat:@"-Drunelite.forceEnablePlugins=%@", forceEnable]];
     }
 
     // Full-screen landscape: after login the headless client resizes its CTC canvas to this WxH (the
@@ -2291,6 +2327,44 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gOvlClass, gOvlSnap,
                                                                     (jint)x, (jint)y, (jint)canvasW, (jint)canvasH));
 }
+
+// ---- RuneLite-account login (config sync, RuneLiteAccountBridge) — distinct from the Jagex game login ------
+
++ (BOOL)accountAvailable {
+    if (!ensureAccount()) return NO;
+    JNIEnv *env = gMainEnv;
+    jboolean v = (*env)->CallStaticBooleanMethod(env, gAccountClass, gAccAvail);
+    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.accountAvailable"); return NO; }
+    return v ? YES : NO;
+}
+
++ (NSString *)accountSessionJson {
+    if (!ensureAccount()) return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gAccountClass, gAccSession));
+}
+
+// startLogin()/logout() BLOCK (login starts a localhost server + a network call to api.runelite.net before handing
+// the OAuth url to LinkBrowser → the native SFSafariViewController). Run on a worker thread with its own daemon
+// attach (self-contained FindClass — the main-thread gAccountClass cache may not be warm yet).
+static void accountInvokeVoid(const char *method) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        JavaVM *vm = atomic_load(&gVM);
+        if (!vm) return;
+        JNIEnv *e = NULL;
+        if ((*vm)->AttachCurrentThreadAsDaemon(vm, (void **)&e, NULL) != JNI_OK || !e) return;
+        jclass cls = (*e)->FindClass(e, "net/runelite/client/headless/RuneLiteAccountBridge");
+        if (!cls || (*e)->ExceptionCheck(e)) { (*e)->ExceptionClear(e); return; }
+        jmethodID m = (*e)->GetStaticMethodID(e, cls, method, "()V");
+        if (!m) { (*e)->ExceptionClear(e); return; }
+        (*e)->CallStaticVoidMethod(e, cls, m);
+        if ((*e)->ExceptionCheck(e)) (*e)->ExceptionClear(e);
+        (*e)->DeleteLocalRef(e, cls);
+    });
+}
+
++ (void)accountLogin  { accountInvokeVoid("startLogin"); }
++ (void)accountLogout { accountInvokeVoid("logout"); }
 
 // ---- Native World Switcher reflow (WorldSwitcherBridge) --------------------------------------------
 

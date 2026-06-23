@@ -299,6 +299,11 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) NSArray<NSDictionary *> *pluginList;  // the FILTERED view the table renders
 @property (nonatomic, strong) NSArray<NSDictionary *> *pluginAll;   // the full sorted list (search filters this)
 @property (nonatomic, strong) UISearchBar *pluginSearch;           // CFG-5 plugin-list search
+@property (nonatomic, strong) UIView *accountBar;                  // RuneLite-account login/status row (config sync)
+@property (nonatomic, strong) UILabel *accountLabel;
+@property (nonatomic, strong) UIButton *accountButton;
+@property (nonatomic, strong) NSLayoutConstraint *accountBarHeight;
+@property (nonatomic, strong) NSTimer *accountTimer;
 @property (nonatomic, copy) NSString *pluginFilter;                // current lowercase search text
 @property (nonatomic, assign) long long pluginSeq;     // last MobileUiBridge event seq the panel has seen
 @property (nonatomic, assign) BOOL pluginPanelOpen;
@@ -1376,6 +1381,28 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.pluginSearch.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
     [card addSubview:self.pluginSearch];
 
+    // RuneLite-account (config sync) row — distinct from the Jagex game login. Sits between the search and the
+    // plugin list; collapses to 0pt height until the bridge reports the account is available (older jar / not wired).
+    self.accountBar = [[UIView alloc] init];
+    self.accountBar.translatesAutoresizingMaskIntoConstraints = NO;
+    self.accountBar.backgroundColor = [UIColor colorWithWhite:0.10 alpha:1.0];
+    self.accountBar.layer.cornerRadius = 8;
+    self.accountBar.clipsToBounds = YES;
+    [card addSubview:self.accountBar];
+
+    self.accountLabel = [[UILabel alloc] init];
+    self.accountLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.accountLabel.numberOfLines = 2;
+    self.accountLabel.font = [UIFont systemFontOfSize:12];
+    self.accountLabel.textColor = [UIColor whiteColor];
+    [self.accountBar addSubview:self.accountLabel];
+
+    self.accountButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.accountButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.accountButton.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+    [self.accountButton addTarget:self action:@selector(accountButtonTapped) forControlEvents:UIControlEventTouchUpInside];
+    [self.accountBar addSubview:self.accountButton];
+
     [self.view addSubview:self.pluginPanel];
 
     UILayoutGuide *sg = self.view.safeAreaLayoutGuide;
@@ -1397,11 +1424,83 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         [self.pluginSearch.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:6],
         [self.pluginSearch.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:6],
         [self.pluginSearch.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-6],
-        [self.pluginTable.topAnchor constraintEqualToAnchor:self.pluginSearch.bottomAnchor constant:4],
+
+        [self.accountBar.topAnchor constraintEqualToAnchor:self.pluginSearch.bottomAnchor constant:4],
+        [self.accountBar.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:8],
+        [self.accountBar.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-8],
+        [self.accountLabel.leadingAnchor constraintEqualToAnchor:self.accountBar.leadingAnchor constant:12],
+        [self.accountLabel.centerYAnchor constraintEqualToAnchor:self.accountBar.centerYAnchor],
+        [self.accountButton.trailingAnchor constraintEqualToAnchor:self.accountBar.trailingAnchor constant:-12],
+        [self.accountButton.centerYAnchor constraintEqualToAnchor:self.accountBar.centerYAnchor],
+        [self.accountButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.accountLabel.trailingAnchor constant:8],
+
+        [self.pluginTable.topAnchor constraintEqualToAnchor:self.accountBar.bottomAnchor constant:4],
         [self.pluginTable.leadingAnchor constraintEqualToAnchor:card.leadingAnchor],
         [self.pluginTable.trailingAnchor constraintEqualToAnchor:card.trailingAnchor],
         [self.pluginTable.bottomAnchor constraintEqualToAnchor:card.bottomAnchor],
     ]];
+    // Collapsible height (0 until the account bridge is available); updated by refreshAccountRow.
+    self.accountBarHeight = [self.accountBar.heightAnchor constraintEqualToConstant:0];
+    self.accountBarHeight.active = YES;
+    [self refreshAccountRow];
+    self.accountTimer = [NSTimer scheduledTimerWithTimeInterval:2.0 target:self
+        selector:@selector(accountTimerTick) userInfo:nil repeats:YES];
+}
+
+// RuneLite-account row: poll only while the panel is on-screen (cheap bridge read); update the row state.
+- (void)accountTimerTick {
+    if (self.accountBar.window != nil) {
+        [self refreshAccountRow];
+    }
+}
+
+// Read the current RuneLite-account session and update the row (collapsed when the bridge isn't available).
+- (void)refreshAccountRow {
+    if (![JVMLauncher accountAvailable]) {
+        if (self.accountBarHeight.constant != 0) { self.accountBarHeight.constant = 0; self.accountBar.hidden = YES; }
+        return;
+    }
+    self.accountBar.hidden = NO;
+    if (self.accountBarHeight.constant != 44) { self.accountBarHeight.constant = 44; }
+    NSString *json = [JVMLauncher accountSessionJson] ?: @"{}";
+    NSData *d = [json dataUsingEncoding:NSUTF8StringEncoding];
+    NSDictionary *o = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+    BOOL loggedIn = [o[@"loggedIn"] boolValue];
+    NSString *user = [o[@"username"] description];
+    if (loggedIn) {
+        NSString *who = (user.length ? user : @"Signed in");
+        self.accountLabel.attributedText = [self accountTitle:@"RuneLite account" detail:who];
+        [self.accountButton setTitle:@"Log out" forState:UIControlStateNormal];
+        [self.accountButton setTitleColor:[UIColor colorWithRed:0.95 green:0.55 blue:0.50 alpha:1.0] forState:UIControlStateNormal];
+    } else {
+        self.accountLabel.attributedText = [self accountTitle:@"RuneLite account" detail:@"Sync your profiles + installed plugins"];
+        [self.accountButton setTitle:@"Log in" forState:UIControlStateNormal];
+        [self.accountButton setTitleColor:[UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0] forState:UIControlStateNormal];
+    }
+}
+
+- (NSAttributedString *)accountTitle:(NSString *)title detail:(NSString *)detail {
+    NSMutableAttributedString *s = [[NSMutableAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@\n", title]
+        attributes:@{ NSFontAttributeName: [UIFont systemFontOfSize:11],
+                      NSForegroundColorAttributeName: [UIColor colorWithRed:0.50 green:0.80 blue:0.77 alpha:1.0] }];
+    [s appendAttributedString:[[NSAttributedString alloc] initWithString:detail
+        attributes:@{ NSFontAttributeName: [UIFont systemFontOfSize:13],
+                      NSForegroundColorAttributeName: [UIColor whiteColor] }]];
+    return s;
+}
+
+// Login (opens the runelite.net OAuth in SFSafariViewController via LinkBrowser) or logout. The session updates
+// asynchronously (the localhost loopback redirect); the 2s timer reflects it once the user returns from Safari.
+- (void)accountButtonTapped {
+    NSString *json = [JVMLauncher accountSessionJson] ?: @"{}";
+    NSData *d = [json dataUsingEncoding:NSUTF8StringEncoding];
+    NSDictionary *o = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+    if ([o[@"loggedIn"] boolValue]) {
+        [JVMLauncher accountLogout];
+    } else {
+        [JVMLauncher accountLogin];
+    }
+    [self refreshAccountRow];
 }
 
 // §3.3: open the labelled grid launcher for the plugin side-panels (the persistent dock holds the live list).
@@ -1518,6 +1617,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 
 // Read listPlugins() once, parse the JSON array, sort by name, reload the table.
 - (void)refreshPluginList {
+    if (self.accountBar) { [self refreshAccountRow]; }   // keep the RuneLite-account row current when the panel opens
     NSString *json = [JVMLauncher mobilePlugins];
     NSArray *arr = nil;
     if (json.length) {
