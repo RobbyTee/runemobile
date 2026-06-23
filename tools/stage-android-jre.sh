@@ -28,18 +28,19 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 # --- the pinned artifact (GitHub release assets are immutable per tag) -------------------------
-# 16 KB PAGE-SIZE NOTE: this AngelAuraMC build (the Pojav→Amethyst lineage, the canonical Android OpenJDK
-# builder) links its native .so at the default 4 KB max-page-size — all 33 jre/lib/*.so are p_align=4096, so the
-# embedded VM is NOT loadable on a true 16 KB-page kernel (fine on 4 KB devices like the Pixel 7a; the system
-# 16 KB-compat dialog doesn't flag them because they're dlopen'd from filesDir, not the app native-lib dir). No
-# pre-built 16 KB bionic arm64 OpenJDK 21 exists publicly (verified: AngelAuraMC has no 16 KB branch/commit; the
-# QuestCraft fork is older + 4 KB). To produce one: fork AngelAuraMC/angelauramc-openjdk-build, add
-# `export LDFLAGS+=" -Wl,-z,max-page-size=16384"` to the Android branch of buildjdk.sh (it already passes
-# --with-extra-ldflags="$LDFLAGS" to OpenJDK configure), run the aarch64 CI, then repoint JRE_URL/SHA/BYTES below.
-# Our own native libs (libhelloshell/librlawt via CMake, libawt_xawt via fake-xawt) are already 16 KB-aligned.
-JRE_URL="https://github.com/AngelAuraMC/angelauramc-openjdk-build/releases/download/download_jre21/jre21-android-arm64.tar.xz"
-JRE_SHA256="8d41ec401ee59f7722df60ed991f81ad146e130452804bfdd8a05d3436f7bbfe"
-JRE_BYTES=28675516
+# 16 KB PAGE-SIZE: this is a 16 KB-page-aligned bionic arm64 OpenJDK 21 — all 32 jre/lib/*.so link at
+# p_align=16384 (incl. libjvm.so + libfreetype.so), so the embedded VM loads on a true 16 KB-page kernel as well
+# as 4 KB. No such build exists upstream (the canonical AngelAuraMC / Pojav→Amethyst builder ships 4 KB by
+# construction), so we BUILT it: a fork at audaro/angelauramc-openjdk-build, branch buildjre17-21, adds
+# `-Wl,-z,max-page-size=16384` to the OpenJDK configure LDFLAGS (6_buildjdk.sh) AND to freetype's configure
+# (4_buildlibs.sh — libtool captures LDFLAGS at configure time, not make time). Built via that fork's GitHub
+# Actions (the `Build Java 21 for Android aarch64` matrix leg) and published as the release asset below.
+#   To rebuild/refresh: edit those two scripts on the fork, run the workflow, then re-pin JRE_URL/SHA/BYTES here.
+#   Upstream 4 KB fallback (no 16 KB alignment): AngelAuraMC download_jre21 / jre21-android-arm64.tar.xz
+#     sha256 8d41ec401ee59f7722df60ed991f81ad146e130452804bfdd8a05d3436f7bbfe (28675516 bytes).
+JRE_URL="https://github.com/audaro/angelauramc-openjdk-build/releases/download/jre21-android-arm64-16k/jre21-android-arm64.tar.xz"
+JRE_SHA256="db7862e4ec68a71a46cf1fec078938443410805cb61e8f99b75f10893c708c9a"
+JRE_BYTES=28679076
 
 CACHE="android/dev-tools/.jre-cache"
 TARBALL="$CACHE/jre21-android-arm64.tar.xz"
