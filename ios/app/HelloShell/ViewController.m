@@ -1500,6 +1500,13 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     } else {
         [JVMLauncher accountLogin];
     }
+    // Debounce: the login/logout runs async (worker thread → SFSafariViewController). Briefly disable the button so
+    // a double-tap can't spawn a second OAuth flow if login() fails before Safari opens (Safari is otherwise modal
+    // over the panel). The 2s poll reflects the real session state once it lands.
+    self.accountButton.enabled = NO;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        self.accountButton.enabled = YES;
+    });
     [self refreshAccountRow];
 }
 

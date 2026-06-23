@@ -539,7 +539,7 @@ static BOOL ensureOvl(void) {
 // Resolve the RuneLite-account facade on the main thread for the quick reads (available / sessionJson). The
 // blocking writes (startLogin / logout) attach their own worker thread instead (see +accountLogin/+accountLogout).
 static BOOL ensureAccount(void) {
-    if (gAccountClass) return YES;
+    if (gAccountClass) return atomic_load(&gVM) != NULL;   // cached, but bail if the VM was torn down
     if (!ensureBridge() || !gMainEnv) return NO;
     JNIEnv *env = gMainEnv;
     jclass local = (*env)->FindClass(env, "net/runelite/client/headless/RuneLiteAccountBridge");
