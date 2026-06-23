@@ -1515,9 +1515,18 @@ class MainActivity : AppCompatActivity() {
                     setStroke((1 * resources.displayMetrics.density).toInt(), 0x55FFFFFF)
                 }
                 setOnClickListener {
-                    JvmLauncher.onBridgeTouch { JvmLauncher.fireHotkey(group, key) }
+                    // Bug 4: the WorldHopper quick-hop keybinds (worldhopper/nextKey,previousKey) fire the plugin's
+                    // in-game hop, which is inert headless (client.hopToWorld never moves the world). Route them
+                    // through the relog path instead — the same fix the World Switcher screen's Next/Prev use — so
+                    // the HUD quick-hop hotkey actually hops. Every other hotkey still fires its real keybind.
+                    val quickHop = group == "worldhopper" && (key == "nextKey" || key == "previousKey")
+                    JvmLauncher.onBridgeTouch {
+                        if (quickHop) JvmLauncher.worldHopDirection(key == "previousKey")
+                        else JvmLauncher.fireHotkey(group, key)
+                    }
                     vibrateTick()
-                    Log.i(TAG, "hotkey: fire $group/$key ($short)")
+                    Log.i(TAG, if (quickHop) "hotkey: quick-hop ${if (key == "previousKey") "prev" else "next"} via relog ($short)"
+                               else "hotkey: fire $group/$key ($short)")
                 }
             }
             row.addView(btn, LinearLayout.LayoutParams(
