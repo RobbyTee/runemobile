@@ -149,22 +149,6 @@ public final class HeadlessSeams
 		{
 			guard("seam.HeadlessResize.tick", () -> HeadlessResize.tick(client, client.getGameState()));
 		}
-		if (GpuHandshakeProbe.isEnabled())
-		{
-			// GPU Route C DESKTOP reproduction: replay GpuPlugin.startUp's engine handshake (setGpuFlags(GPU|ZBUF)
-			// + a no-GL counting DrawCallbacks) with NO GL context, so a desktop CACIO run can test whether the
-			// engine dispatches the per-frame GPU scene render headless (the device black-scene blocker). Mutates
-			// client state — DESKTOP ONLY, never the device path. Runs before GpuSceneDiag so the diag sees it.
-			// Gated -Drunelite.gpuhandshake=true.
-			guard("seam.GpuHandshakeProbe.tick", () -> GpuHandshakeProbe.tick(client));
-		}
-		if (GpuSceneDiag.isEnabled())
-		{
-			// GPU Route C: read-only per-frame snapshot (isGpu / registered DrawCallbacks + classloader /
-			// viewport / drawScene count) to localise the black-3D-scene blocker above the GL bridge. Runs
-			// before the isGpu early-return below so it ticks in GPU mode. Gated -Drunelite.gpudiag=true.
-			guard("seam.GpuSceneDiag.tick", () -> GpuSceneDiag.tick(client));
-		}
 		if (RouteCGpuStarter.isEnabled())
 		{
 			// GPU Route C: force-enable + start the gpu plugin once in-world (canvas valid), overriding a persisted
@@ -180,11 +164,6 @@ public final class HeadlessSeams
 			// so it auto-disables the base gpu plugin (do NOT also arm RouteCGpuStarter in this mode).
 			// Gated -Drunelite.routecrlhd=true.
 			guard("seam.RLHDStarter.tick", () -> RLHDStarter.tick(client));
-		}
-		if (MobileToplevelProbe.isEnabled())
-		{
-			// W3 mobile-layout spike: one-shot, on the client thread, gated by -Drunelite.mobileui.toplevel=osm.
-			guard("seam.MobileToplevelProbe.tick", () -> MobileToplevelProbe.tick(client, client.getGameState()));
 		}
 		if (WorldMapProbe.isEnabled())
 		{
@@ -219,88 +198,11 @@ public final class HeadlessSeams
 			// re-applied each frame. State set from native via setChatHidden. Gated -Drunelite.hudveneer=true.
 			guard("seam.HudVeneerBridge.tick", () -> HudVeneerBridge.tick(client));
 		}
-		if (MobileChromeProbe.isEnabled())
-		{
-			// W3 hybrid-chrome de-risk: one-shot DESKTOP experiment (synth-click vs setVarcIntValue tab switch),
-			// gated by -Drunelite.mobilechrome.probe=true. Mutates — never on the device launch path.
-			guard("seam.MobileChromeProbe.tick", () -> MobileChromeProbe.tick(client, client.getGameState()));
-		}
-		if (MobileChromeReposProbe.isEnabled())
-		{
-			// W3 authentic mobile layout: reposition the real desktop tab stones into vertical edge columns
-			// (engine draws them — feathered, no native crop). Mutates widget positions; gated
-			// -Drunelite.mobilechrome.repos=true. Desktop de-risk first.
-			guard("seam.MobileChromeReposProbe.tick",
-				() -> MobileChromeReposProbe.tick(client, client.getGameState()));
-		}
-		if (MobileChromeSpriteDump.isEnabled())
-		{
-			// W3 clean-native-chrome: one-shot DESKTOP extractor for the tab sprite assets (stones 1180/1181 +
-			// icons 774-787) -> PNG, to bundle + composite natively. Gated -Drunelite.mobilechrome.spritedump=true.
-			guard("seam.MobileChromeSpriteDump.tick",
-				() -> MobileChromeSpriteDump.tick(client, client.getGameState()));
-		}
-		if (MobileChromePanelProbe.isEnabled())
-		{
-			// W3 diagnostic: can the docked side panel be moved? Gated -Drunelite.mobilechrome.panelprobe=true.
-			guard("seam.MobileChromePanelProbe.tick",
-				() -> MobileChromePanelProbe.tick(client, client.getGameState()));
-		}
-		if (MobileChromeHideTest.isEnabled())
-		{
-			// W3 diagnostic: do the stones hide cleanly + does setVarc switch the panel?
-			// Gated -Drunelite.mobilechrome.hidetest=true.
-			guard("seam.MobileChromeHideTest.tick", () -> MobileChromeHideTest.tick(client, client.getGameState()));
-		}
-		if (HudIsolationTest.isEnabled())
-		{
-			// W3 Feature-A phase A0: de-risk HUD suppression (mask vs setHidden vs transparent) AND route-back
-			// click-through, on the client thread. Mutates widget state; gated -Drunelite.hudisolation=true.
-			guard("seam.HudIsolationTest.tick", () -> HudIsolationTest.tick(client, client.getGameState()));
-		}
-		if (EdgeToEdgeProbe.isEnabled())
-		{
-			// W3 Feature-A phase A1 (desktop): hide the WHOLE engine 2D HUD at a wide aspect + prove the scene
-			// fills the canvas edge-to-edge. Mutates widget state; gated -Drunelite.edge2edge=true.
-			guard("seam.EdgeToEdgeProbe.tick", () -> EdgeToEdgeProbe.tick(client, client.getGameState()));
-		}
-		if (MinimapWalkProbe.isEnabled())
-		{
-			// W3 Feature-A: the hard route-back — does clicking the LIVE engine minimap walk (so a native minimap
-			// covers it) vs hidden (dead)? Mutates (clicks/hides); gated -Drunelite.minimapwalk=true.
-			guard("seam.MinimapWalkProbe.tick", () -> MinimapWalkProbe.tick(client, client.getGameState()));
-		}
 		if (ChatRelocateProbe.isEnabled())
 		{
 			// W3 Feature-A (A3): can the engine chatbox be RELOCATED to the top (exact OSRS skin) vs occluded?
 			// Mutates widget position; gated -Drunelite.chatreloc=true. Desktop de-risk only.
 			guard("seam.ChatRelocateProbe.tick", () -> ChatRelocateProbe.tick(client, client.getGameState()));
-		}
-		if (MinimapRelocateProbe.isEnabled())
-		{
-			// W3 Feature-A (A4): can the engine minimap be RELOCATED (inset) and still render + click-to-walk (the
-			// cheap A3-style path) vs cover-in-place native redraw? Mutates position + clicks; gated
-			// -Drunelite.minimapreloc=true. Desktop de-risk only.
-			guard("seam.MinimapRelocateProbe.tick",
-				() -> MinimapRelocateProbe.tick(client, client.getGameState()));
-		}
-		if (TabScriptProbe.isEnabled())
-		{
-			// W3 Feature-A (A4): can a tab be opened by REPLAYING the stone's op script (so the stones can be
-			// hidden + the gray cover removed)? Mutates tab state + hides stones; gated -Drunelite.tabscript=true.
-			guard("seam.TabScriptProbe.tick", () -> TabScriptProbe.tick(client, client.getGameState()));
-		}
-		if (StoneHideProbe.isEnabled())
-		{
-			// W3 Feature-A (A4): setHidden vs off-screen forced-position — which actually removes the tab stones?
-			// Mutates positions/hidden; gated -Drunelite.stonehide=true. Desktop de-risk only.
-			guard("seam.StoneHideProbe.tick", () -> StoneHideProbe.tick(client, client.getGameState()));
-		}
-		if (StoneSuppressProbe.isEnabled())
-		{
-			// W3 Feature-A (A4): steady-state test of parent/grandparent hide+relocate to remove the re-pinned tab
-			// row. Mutates widget state; gated -Drunelite.stonesuppress=true. Desktop de-risk only.
-			guard("seam.StoneSuppressProbe.tick", () -> StoneSuppressProbe.tick(client, client.getGameState()));
 		}
 		if (MenuPeekBridge.isEnabled())
 		{
@@ -390,14 +292,6 @@ public final class HeadlessSeams
 	 */
 	public static void drawScene(Client client)
 	{
-		if (GpuSceneDiag.isEnabled())
-		{
-			// GPU Route C: count the per-frame scene-render callback (fires at the end of the injected scene
-			// render `ev.dk`, both zone and legacy branches) to tell whether the engine drives the 3D scene
-			// at all in GPU mode. Read-only; gated -Drunelite.gpudiag=true.
-			guard("seam.GpuSceneDiag.onDrawScene", GpuSceneDiag::onDrawScene);
-		}
-
 		// iOS load-in flash guard: count this 3D scene render. The GPU publish stays held until a few of these
 		// have accumulated (zones still upload for a few frames after the first draw, so the first frames are bare
 		// sky) — re-armed to 0 on non-world game states in draw(). See JavaBridge.sceneDrawCount.
