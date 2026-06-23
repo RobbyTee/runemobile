@@ -165,21 +165,6 @@ public final class HeadlessSeams
 			// Gated -Drunelite.routecrlhd=true.
 			guard("seam.RLHDStarter.tick", () -> RLHDStarter.tick(client));
 		}
-		if (WorldMapProbe.isEnabled())
-		{
-			// World-map mobile de-risk (WORLDMAP-MOBILE-PLAN.md Phase 0): drag-pan / wheel-zoom / search /
-			// relocate / close, all headless. Gated -Drunelite.worldmapprobe=true.
-			guard("seam.WorldMapProbe.tick", () -> WorldMapProbe.tick(client, client.getGameState()));
-		}
-		if (WorldMapOrbsFix.isEnabled())
-		{
-			// SC-9 groundwork (DORMANT): accounts with "Data orbs" OFF (ORBS_DISABLED) can't open the world map —
-			// the orb's server if_button is discarded because the server never opened the orbs interface. Enabling
-			// Data orbs via the settings UI is the fix, but auto-opening that UI from the shared core is blocked in
-			// the mobile chrome (see WorldMapOrbsFix). Gated -Drunelite.orbsfix=true (NOT set by the app), so this
-			// is a no-op unless armed; inert on desktop.
-			guard("seam.WorldMapOrbsFix.tick", () -> WorldMapOrbsFix.tick(client, client.getGameState()));
-		}
 		if (MobileChromeBridge.isEnabled())
 		{
 			// W3 hybrid-chrome read surface: snapshot desktop tab/panel/minimap/orb/chat/viewport geometry +
@@ -217,19 +202,6 @@ public final class HeadlessSeams
 			// truth classification). Client thread, after the engine tick rebuilt the menu — the same settle
 			// seam MenuPeekBridge reads from. Gated -Drunelite.bridge=true (inert on desktop).
 			guard("seam.JavaBridge.tapTick", () -> JavaBridge.tapTick(client));
-		}
-		if (MenuPeek.isEnabled())
-		{
-			// Touch-targeting de-risk PROBE: prove the press-and-peek primitive (synth MOUSE_MOVED -> read
-			// getMenuEntries() a cycle later) + cross-check MenuPeekBridge's published top. Read-only; one-shot;
-			// gated -Drunelite.menupeek.probe=true. Desktop-only diagnostic (never the device path).
-			guard("seam.MenuPeek.tick", () -> MenuPeek.tick(client, client.getGameState()));
-		}
-		if (ShiftFeedSpike.isEnabled())
-		{
-			// Mobile-UX audit OQ1/#9: does a synthetic held KEY_PRESSED VK_SHIFT flip client.isKeyPressed(KC_SHIFT)
-			// (the "Sticky Shift" feasibility gate)? Mutates input only; gated -Drunelite.shiftfeed=true. Desktop only.
-			guard("seam.ShiftFeedSpike.tick", () -> ShiftFeedSpike.tick(client, client.getGameState()));
 		}
 	}
 

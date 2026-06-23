@@ -2921,13 +2921,6 @@ class MainActivity : AppCompatActivity() {
             ))
             Log.i(TAG, "A-1b census mode: +huddata + gatecensus (mobileui/mobilechrome/hudveneer/resize always-on)")
         }
-        // Phase-5 dev: a pushed worldmapprobe.mode marker arms the shared WorldMapProbe (one-shot orb-click
-        // open + pan/zoom/search oracles, [worldmap] logs + PNGs) — the same recon the iOS Phase-0 ran on
-        // desktop, runnable on the emulator when the map flow needs re-verifying.
-        if (File(app.getExternalFilesDir(null), "worldmapprobe.mode").exists()) {
-            opts.add("-Drunelite.worldmapprobe=true")
-            Log.i(TAG, "p5: WorldMapProbe ARMED (worldmapprobe.mode marker)")
-        }
         if (gpu) {
             // Arm RouteCGpuStarter (force-enable + start the gpu plugin once in-world) and the frame-dump
             // diagnostic so the AG2 device gate gets pullable colour/flip evidence. The bridge itself is

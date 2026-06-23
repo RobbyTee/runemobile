@@ -33,7 +33,7 @@ import net.runelite.api.Point;
 
 /**
  * W3 touch-targeting: the <b>read-only</b> menu-peek surface the native press-and-peek UI polls each display
- * tick. It is the productization of the {@link MenuPeek} de-risk probe (which proved the primitive GREEN on
+ * tick. It is the productization of the {@code MenuPeek} de-risk probe (which proved the primitive GREEN on
  * desktop): the engine rebuilds its menu every client cycle from the current pointer position, and the
  * <em>last</em> entry of {@link Client#getMenuEntries()} is the top/left-click action (see
  * {@code MenuOpened.getFirstEntry()} = {@code menuEntries[length-1]}). So while the native side streams the
@@ -162,7 +162,7 @@ public final class MenuPeekBridge
 	/**
 	 * Fingerprint of the current top (left-click) entry — {@code option|target|type|id|p0|p1|itemId} with tags
 	 * stripped. The native side caches this to detect whether the top action changed between the press preview
-	 * and release (release-revalidation), and the {@link MenuPeek} probe cross-checks it against ground truth.
+	 * and release (release-revalidation), and the {@code MenuPeek} probe cross-checks it against ground truth.
 	 */
 	public static String getTopFingerprint()
 	{
@@ -251,7 +251,7 @@ public final class MenuPeekBridge
 		}
 	}
 
-	/** Same format as {@link MenuPeek}'s fingerprint, so the probe's cross-check is a plain string compare. */
+	/** Same format as {@code MenuPeek}'s fingerprint, so the probe's cross-check is a plain string compare. */
 	static String fingerprint(MenuEntry e)
 	{
 		if (e == null)
