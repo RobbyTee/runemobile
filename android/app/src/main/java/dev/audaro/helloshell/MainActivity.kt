@@ -1156,25 +1156,41 @@ class MainActivity : AppCompatActivity() {
             // Source is 0x00RRGGBB (alpha unset). Force opaque; channel order already matches Android's ARGB int
             // (0xAARRGGBB) — NO R<->B swizzle here (unlike the SurfaceView blit, which swizzles for RGBA_8888).
             for (i in px.indices) px[i] = px[i] or 0xFF000000.toInt()
-            val ok = try {
+            val savedUri = try {
                 val bmp = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
-                val saved = writePngToGallery(bmp)
+                val u = writePngToGallery(bmp)
                 bmp.recycle()
-                saved
+                u
             } catch (t: Throwable) {
-                Log.w(TAG, "screenshot: encode/save failed", t); false
+                Log.w(TAG, "screenshot: encode/save failed", t); null
             }
             runOnUiThread {
-                Toast.makeText(this, if (ok) "Screenshot saved to Pictures/RuneLite" else "Screenshot save failed",
-                    Toast.LENGTH_SHORT).show()
+                if (savedUri != null) {
+                    Toast.makeText(this, "Screenshot saved to Pictures/RuneLite", Toast.LENGTH_SHORT).show()
+                    // ENH-A05b: on a phone the dominant post-capture intent is to SHARE (Discord / clan chat), not
+                    // hunt the gallery — offer the Android share-sheet with the saved PNG ready to send. The MediaStore
+                    // content:// Uri is directly shareable (no FileProvider needed); dismissing the chooser just leaves
+                    // the saved gallery copy. (Capture itself is still CPU-path only — the GPU/117HD readback is ENH-A05a.)
+                    runCatching {
+                        val share = Intent(Intent.ACTION_SEND).apply {
+                            type = "image/png"
+                            putExtra(Intent.EXTRA_STREAM, savedUri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        startActivity(Intent.createChooser(share, "Share screenshot"))
+                    }
+                } else {
+                    Toast.makeText(this, "Screenshot save failed", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
 
     /** Insert [bmp] as a PNG into the shared Pictures/RuneLite collection. API 29+ uses scoped storage
      *  (RELATIVE_PATH + IS_PENDING, no permission); API 28 falls back to the legacy top-level insert (covered by
-     *  WRITE_EXTERNAL_STORAGE maxSdk=28 in the manifest). Returns true on a successful write. */
-    private fun writePngToGallery(bmp: Bitmap): Boolean {
+     *  WRITE_EXTERNAL_STORAGE maxSdk=28 in the manifest). Returns the MediaStore content:// Uri on success (so the
+     *  caller can offer a share-sheet — ENH-A05b), or null on failure. */
+    private fun writePngToGallery(bmp: Bitmap): android.net.Uri? {
         val name = "RuneLite_${System.currentTimeMillis()}.png"
         val resolver = contentResolver
         val values = ContentValues().apply {
@@ -1185,7 +1201,7 @@ class MainActivity : AppCompatActivity() {
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
         }
-        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return false
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null
         return try {
             resolver.openOutputStream(uri)?.use { out ->
                 if (!bmp.compress(Bitmap.CompressFormat.PNG, 100, out)) throw java.io.IOException("PNG compress failed")
@@ -1196,11 +1212,11 @@ class MainActivity : AppCompatActivity() {
                 resolver.update(uri, values, null, null)
             }
             Log.i(TAG, "screenshot: saved $name -> $uri")
-            true
+            uri
         } catch (t: Throwable) {
             resolver.delete(uri, null, null)   // roll back the half-written/pending row
             Log.w(TAG, "screenshot: write failed", t)
-            false
+            null
         }
     }
 

@@ -40,13 +40,9 @@
                      LAUNCHER app is installed but hidden there). On a TV the icon boots straight into 117HD. -->
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
-            <!-- Firebase Test Lab Game Loop: launches the app uninterrupted (no Robo crawl/relaunch), so the long
-                 117HD boot -> login-screen -> startUp -> Zone shader compile gets its ~minute on real Mali. -->
-            <intent-filter>
-                <action android:name="com.google.intent.action.TEST_LOOP" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="application/javascript" />
-            </intent-filter>
+            <!-- The Firebase Test Lab Game-Loop entry point (com.google.intent.action.TEST_LOOP) lives in
+                 src/debug/AndroidManifest.xml so it ships ONLY in debug builds — the release app exposes no
+                 exported test surface (PROD-SECURITY-04). The manifest merger folds it onto this activity in debug. -->
         </activity>
 
         <!-- A3 on-device Jagex login: consent flow runs in a Chrome Custom Tab (real Chrome clears Cloudflare;

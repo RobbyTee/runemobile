@@ -21,7 +21,11 @@ import android.view.View
  */
 class HoppingOverlayView(context: Context) : View(context) {
 
-    private var active = false
+    // Thread contract: setHopping/setLabel are called only from the UI thread (the HUD-hotkey onClick, the
+    // World-Switcher Compose onClick, and the Choreographer-driven updateChrome hide), and onDraw runs on the UI
+    // thread too — so these need no locking. Both are @Volatile anyway as a belt-and-suspenders guard against a
+    // future off-thread caller (a stale read could only ever cause a one-frame visual blip, never a crash).
+    @Volatile private var active = false
     @Volatile private var label = "Hopping to world…"
 
     private val scrimPaint = Paint().apply { color = Color.argb(150, 0, 0, 0) }
