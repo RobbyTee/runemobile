@@ -2641,21 +2641,16 @@ class MainActivity : AppCompatActivity() {
         // so a synced profile starting it would STOP the running GPU renderer mid-session, destroy its GL context,
         // and hang the scene-load ("unable to map GL buffer" → "Loading - please wait."). The chosen renderer's key
         // is omitted so it can still start. (CPU = neither renderer runs.)
-        val forceDisable = when {
-            rlhd -> "gpuplugin"            // 117HD chosen → block the stock GPU plugin
-            gpu -> "hdplugin"              // GPU chosen → block 117HD
-            else -> "gpuplugin,hdplugin"   // CPU → block both renderer plugins
-        }
-        opts.add("-Drunelite.forceDisablePlugins=$forceDisable")
-        // ...and force-ENABLE the chosen renderer so a synced profile that DISABLES it (a desktop profile picks a
-        // different renderer) can't stop it mid-session and kill its GL context. CPU has no renderer plugin to pin.
-        val forceEnable = when {
-            rlhd -> "hdplugin"
-            gpu -> "gpuplugin"
-            else -> ""
-        }
-        if (forceEnable.isNotEmpty()) {
-            opts.add("-Drunelite.forceEnablePlugins=$forceEnable")
+        // Single source of truth for which renderer plugin is the chosen one (null = CPU, no renderer plugin runs).
+        // Force-DISABLE the OTHER renderer plugins (wins over a synced profile's desktop enable — critically
+        // HdPlugin's conflicts="GPU" would otherwise stop the GPU renderer mid-session and kill its GL context),
+        // and force-ENABLE the chosen one (so a synced profile that DISABLES it can't stop it). The two lists are
+        // mutually exclusive by construction.
+        val chosenKey = if (gpu) "gpuplugin" else if (rlhd) "hdplugin" else null
+        val rendererKeys = listOf("gpuplugin", "hdplugin")
+        opts.add("-Drunelite.forceDisablePlugins=${rendererKeys.filter { it != chosenKey }.joinToString(",")}")
+        if (chosenKey != null) {
+            opts.add("-Drunelite.forceEnablePlugins=$chosenKey")
         }
         // A7 resizable: render at the screen's landscape aspect — HeadlessResize grows the gamepack Component on
         // login (stock, inset-aware, the same mechanism iOS device-proved). With the OSRS account in RESIZABLE
