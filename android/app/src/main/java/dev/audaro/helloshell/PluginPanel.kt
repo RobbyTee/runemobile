@@ -55,6 +55,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -200,6 +203,10 @@ fun PluginPanel(
     // peek default, and a single drag-down could dismiss it). Only the passive monitors (XP / loot / GE) keep
     // the watch-the-game PEEK so the scene stays visible above them.
     val peekScreen = subActive && (xpOpen || lootOpen || geOpen || timeOpen)
+    // UX-XCUT-05: apply the OSRS Compose theme (palette + RuneScape typeface) to the whole panel + its sub-screens
+    // so the Material defaults stop reading as generic dark Material. Wraps the panel root so the host ComposeView
+    // (set in MainActivity) gets the theme without changing the call site.
+    HelloShellTheme {
     SheetScaffold(atPeek = peekScreen, onDismiss = onClose) {
         when {
             questOpen -> QuestHelperScreen(onBack = { questOpen = false })
@@ -311,6 +318,7 @@ fun PluginPanel(
                 }
             }
         }
+    }
     }
 }
 
@@ -601,6 +609,14 @@ private fun RowScope.LaunchTile(t: TileSpec) {
                 shape = RoundedCornerShape(10.dp),
             )
             .clickable { t.onClick() }
+            .semantics {
+                contentDescription = t.label + when {
+                    t.incompatible -> ", can't start"
+                    t.selected -> ", selected"
+                    else -> ""
+                }
+                if (t.selected) stateDescription = "Selected"
+            }
             .heightIn(min = 78.dp)
             .padding(vertical = 10.dp, horizontal = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -691,9 +707,14 @@ private fun PluginRowItem(
             if (p.pinned) "★" else "☆",
             color = if (p.pinned) Color(0xFFFFC107) else Color(0xFF777777),
             fontSize = 20.sp,
-            modifier = Modifier.clickable { onTogglePin() }.padding(end = 10.dp),
+            modifier = Modifier.clickable { onTogglePin() }.padding(end = 10.dp)
+                .semantics {
+                    contentDescription = if (p.pinned) "Unpin ${p.name}" else "Pin ${p.name}"
+                    stateDescription = if (p.pinned) "Pinned" else "Not pinned"
+                },
         )
-        val nameMod = if (onOpenConfig != null) Modifier.weight(1f).clickable { onOpenConfig() } else Modifier.weight(1f)
+        val nameMod = (if (onOpenConfig != null) Modifier.weight(1f).clickable { onOpenConfig() } else Modifier.weight(1f))
+            .semantics { if (onOpenConfig != null) contentDescription = "Configure ${p.name}" }
         Column(nameMod) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(p.name, color = if (incompatible) Color(0xFF9E9E9E) else Color.White)
@@ -705,7 +726,13 @@ private fun PluginRowItem(
         }
         // Config-only fake-plugins (RuneLite core settings / Chat Color) have no enable state — desktop shows no
         // toggle, only a tap-to-configure row (the ⚙ above). Everything else gets the enable switch.
-        if (!p.configOnly) Switch(checked = p.enabled, onCheckedChange = onToggle)
+        if (!p.configOnly) Switch(
+            checked = p.enabled, onCheckedChange = onToggle,
+            modifier = Modifier.semantics {
+                contentDescription = "${p.name}, ${if (p.enabled) "on" else "off"}"
+                stateDescription = if (p.enabled) "On" else "Off"
+            },
+        )
     }
 }
 

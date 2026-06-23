@@ -52,6 +52,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -118,13 +121,19 @@ fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit, onTextAc
         // opens. hasFocus reflects the whole subtree, so moving between fields stays true (no flicker / re-hide).
         Column(Modifier.fillMaxSize().padding(12.dp).onFocusChanged { onTextActive(it.hasFocus) }) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = {
-                    // AP-0: persist pending edits on leave — config otherwise only flushes on app background/onStop.
-                    JvmLauncher.onBridge { JvmLauncher.flushConfig() }
-                    onBack()
-                }) { Text("‹ Back") }
+                TextButton(
+                    onClick = {
+                        // AP-0: persist pending edits on leave — config otherwise only flushes on app background/onStop.
+                        JvmLauncher.onBridge { JvmLauncher.flushConfig() }
+                        onBack()
+                    },
+                    modifier = Modifier.semantics { contentDescription = "Back" },
+                ) { Text("‹ Back") }
                 Text(pluginName, color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
-                TextButton(onClick = { confirmReset = true }) { Text("Reset", color = Color(0xFFFF8A80)) }
+                TextButton(
+                    onClick = { confirmReset = true },
+                    modifier = Modifier.semantics { contentDescription = "Reset $pluginName settings" },
+                ) { Text("Reset", color = Color(0xFFFF8A80)) }
             }
             if (confirmReset) {
                 Dialog(onDismissRequest = { confirmReset = false }) {
@@ -177,24 +186,42 @@ fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit, onTextAc
 
 @Composable
 private fun ConfigItemControl(item: ConfigItem, onChange: (String) -> Unit) {
+    val label = item.name.ifEmpty { item.key }
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(item.name.ifEmpty { item.key }, color = Color.White)
+                Text(label, color = Color.White)
                 if (item.description.isNotEmpty()) Text(item.description, color = Color.Gray, fontSize = 12.sp)
             }
             when {
-                item.type == "boolean" ->
-                    Switch(checked = item.value?.toBoolean() ?: false, onCheckedChange = { onChange(it.toString()) })
+                item.type == "boolean" -> {
+                    val on = item.value?.toBoolean() ?: false
+                    Switch(
+                        checked = on, onCheckedChange = { onChange(it.toString()) },
+                        modifier = Modifier.semantics {
+                            contentDescription = "$label, ${if (on) "on" else "off"}"
+                            stateDescription = if (on) "On" else "Off"
+                        },
+                    )
+                }
                 item.type == "enum" && item.choices != null ->
-                    EnumDropdown(item.choices, item.value, onChange)
+                    EnumDropdown(item.choices, item.value, onChange,
+                        modifier = Modifier.semantics { contentDescription = "$label, ${item.value ?: "not set"}" })
                 item.type == "font" && item.choices != null ->
                     FontDropdown(item, onChange)
                 // A notification config item: the inline switch flips ONLY the "enabled" field (preserving any
                 // customized sound/flash/colour/volume), mirroring iOS onNotificationSwitch. "Customize…" below
                 // opens the full sub-editor (FIX-7).
-                item.type == "notification" ->
-                    Switch(checked = isNotifEnabled(item.value), onCheckedChange = { onChange(notifWithEnabled(item.value, it)) })
+                item.type == "notification" -> {
+                    val on = isNotifEnabled(item.value)
+                    Switch(
+                        checked = on, onCheckedChange = { onChange(notifWithEnabled(item.value, it)) },
+                        modifier = Modifier.semantics {
+                            contentDescription = "$label notification, ${if (on) "on" else "off"}"
+                            stateDescription = if (on) "On" else "Off"
+                        },
+                    )
+                }
                 else -> {}   // text-ish controls render full-width below
             }
         }
@@ -308,7 +335,10 @@ private fun BoundedIntSlider(item: ConfigItem, lo: Int, hi: Int, onChange: (Stri
             valueRange = lo.toFloat()..hi.toFloat(),
             onValueChange = { pos = it },
             onValueChangeFinished = { onChange(pos.toInt().coerceIn(lo, hi).toString()) },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().semantics {
+                contentDescription = item.name.ifEmpty { item.key }
+                stateDescription = pos.toInt().toString() + (item.units?.takeIf { it.isNotBlank() }?.let { " $it" } ?: "")
+            },
         )
     }
 }
@@ -509,9 +539,9 @@ private fun NotifPickRow(label: String, current: String, options: List<Pair<Stri
 }
 
 @Composable
-private fun EnumDropdown(choices: List<String>, value: String?, onSelect: (String) -> Unit) {
+private fun EnumDropdown(choices: List<String>, value: String?, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
     var expanded by remember { mutableStateOf(false) }
-    Box {
+    Box(modifier) {
         TextButton(onClick = { expanded = true }) { Text(value ?: "—", color = Color.White) }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             choices.forEach { c ->
@@ -544,7 +574,8 @@ private fun ColorConfigControl(item: ConfigItem, onChange: (String) -> Unit) {
     val argb = parseArgb(item.value)
     Row(
         Modifier.fillMaxWidth().padding(top = 4.dp).clip(RoundedCornerShape(6.dp))
-            .clickableNoRipple { picking = true },
+            .clickableNoRipple { picking = true }
+            .semantics { contentDescription = "${item.name.ifEmpty { item.key }} colour, edit" },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -606,7 +637,11 @@ private fun SetConfigControl(item: ConfigItem, onChange: (String) -> Unit) {
         else -> selected.filter { it in choices }.joinToString(", ").ifEmpty { "${selected.size} selected" }
     }
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).clickableNoRipple { if (choices.isNotEmpty()) editing = true },
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).clickableNoRipple { if (choices.isNotEmpty()) editing = true }
+            .semantics {
+                contentDescription = "${item.name.ifEmpty { item.key }}, edit selection"
+                stateDescription = summary
+            },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(summary, color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))

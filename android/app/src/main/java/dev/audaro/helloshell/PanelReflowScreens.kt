@@ -30,6 +30,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -83,7 +86,7 @@ fun LootTrackerScreen(onBack: () -> Unit) {
     Surface(color = PR_PANEL_BG, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onBack) { Text("‹ Back") }
+                TextButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "Back" }) { Text("‹ Back") }
                 Text("Loot Tracker", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
                 if (sources.isNotEmpty()) {
                     TextButton(onClick = { showResetConfirm = true }) {
@@ -204,7 +207,7 @@ fun GrandExchangeScreen(onBack: () -> Unit) {
     Surface(color = PR_PANEL_BG, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onBack) { Text("‹ Back") }
+                TextButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "Back" }) { Text("‹ Back") }
                 Text("Grand Exchange", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
                 if (tab == 0 && offers.isNotEmpty()) Text("${offers.size}/8", color = Color(0xFFFFD54F), fontSize = 13.sp)
             }
@@ -348,7 +351,7 @@ fun ConfigProfilesScreen(onBack: () -> Unit) {
     Surface(color = PR_PANEL_BG, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onBack) { Text("‹ Back") }
+                TextButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "Back" }) { Text("‹ Back") }
                 Text("Config Profiles", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
             }
             when {
@@ -379,7 +382,11 @@ fun ConfigProfilesScreen(onBack: () -> Unit) {
 @Composable
 private fun ProfileRow(p: ConfigProfile, busy: Boolean, enabled: Boolean, onSelect: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(enabled = enabled) { onSelect() }.padding(vertical = 12.dp),
+        Modifier.fillMaxWidth().clickable(enabled = enabled) { onSelect() }.padding(vertical = 12.dp)
+            .semantics {
+                contentDescription = "Profile ${p.name}" + if (p.sync) ", synced" else ""
+                stateDescription = if (p.active) "Active" else "Tap to switch"
+            },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -447,7 +454,7 @@ fun TimeTrackingScreen(onBack: () -> Unit) {
     Surface(color = PR_PANEL_BG, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onBack) { Text("‹ Back") }
+                TextButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "Back" }) { Text("‹ Back") }
                 Text("Time Tracking", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
             }
             when {
@@ -574,7 +581,7 @@ fun HotkeysScreen(onBack: () -> Unit) {
     Surface(color = PR_PANEL_BG, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onBack) { Text("‹ Back") }
+                TextButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "Back" }) { Text("‹ Back") }
                 Text("Hotkey Buttons", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
             }
             Text("Add a button to the HUD for any keybind you've set in a plugin's config.",
@@ -607,7 +614,11 @@ fun HotkeysScreen(onBack: () -> Unit) {
 @Composable
 private fun HotkeyRow(b: BoundKeybind, on: Boolean, onToggle: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable { onToggle() }.padding(vertical = 10.dp),
+        Modifier.fillMaxWidth().clickable { onToggle() }.padding(vertical = 10.dp)
+            .semantics {
+                contentDescription = "${b.label} hotkey button"
+                stateDescription = if (on) "On HUD" else "Not added"
+            },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
