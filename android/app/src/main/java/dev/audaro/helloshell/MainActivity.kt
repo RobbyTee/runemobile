@@ -2635,12 +2635,18 @@ class MainActivity : AppCompatActivity() {
             "-Drunelite.nosafemode=true",
             "-Drunelite.rendererpanel=true",
         )
-        if (!gpu) {
-            // GpuPlugin is enabledByDefault; with safe-mode off it would auto-start (and on the pristine
-            // shaded jar that means real LWJGL = instant native crash). Force-disable wins over persisted
-            // config (the shared 04b4e3037 rule), so the renderer choice actually applies.
-            opts.add("-Drunelite.forceDisablePlugins=gpuplugin")
+        // Force-disable the renderer plugins that are NOT the chosen renderer — this wins over persisted/SYNCED
+        // config (the isPluginEnabled force-off rule), so a RuneLite-account profile that carries the DESKTOP
+        // enabled-flag for the other renderer can't start it. Critical for HdPlugin: it declares conflicts="GPU",
+        // so a synced profile starting it would STOP the running GPU renderer mid-session, destroy its GL context,
+        // and hang the scene-load ("unable to map GL buffer" → "Loading - please wait."). The chosen renderer's key
+        // is omitted so it can still start. (CPU = neither renderer runs.)
+        val forceDisable = when {
+            rlhd -> "gpuplugin"            // 117HD chosen → block the stock GPU plugin
+            gpu -> "hdplugin"              // GPU chosen → block 117HD
+            else -> "gpuplugin,hdplugin"   // CPU → block both renderer plugins
         }
+        opts.add("-Drunelite.forceDisablePlugins=$forceDisable")
         // A7 resizable: render at the screen's landscape aspect — HeadlessResize grows the gamepack Component on
         // login (stock, inset-aware, the same mechanism iOS device-proved). With the OSRS account in RESIZABLE
         // display mode the gamepack fills it (resizable toplevel 164 → chat-at-top + resizable chrome unblock);
