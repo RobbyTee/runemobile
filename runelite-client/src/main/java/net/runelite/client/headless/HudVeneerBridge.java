@@ -1187,7 +1187,10 @@ public final class HudVeneerBridge
 			// few whose CS2 onOp self-contains fire — the rest silently no-op; see BUGFIX-HANDOFF 12/12). Fire the
 			// engine's real CC_OP menu action instead — the exact path a click takes, proven on the logout button
 			// (WorldSwitcherBridge) — so EVERY tab switches. op 1 = the stone's toggle op.
-			c.menuAction(w.getIndex(), ids[idx], net.runelite.api.MenuAction.CC_OP, 1, -1, "Toggle", "");
+			// param0 MUST be -1 for a static interface-component op (matches the proven logout call and RuneLite's
+			// own TabInterface potion-store click). Passing w.getIndex() misroutes the engine's onOp dispatch, so
+			// only the stones whose child-index coincidentally matched were switching (the top-/bottom-row few).
+			c.menuAction(-1, ids[idx], net.runelite.api.MenuAction.CC_OP, 1, -1, "Toggle", "");
 		}
 		catch (RuntimeException ignore)
 		{
