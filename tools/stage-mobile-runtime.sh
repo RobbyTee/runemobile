@@ -123,6 +123,18 @@ echo "== stage shared runtime (version $VERSION) =="
 # android/dev-tools/gpu/stage-*.sh) are folded in when present: bootJvm's copy-from-assets
 # fallback only fires when the device file is ABSENT, so without tag coverage an install
 # would keep stale gpu/rlhd jars forever.
+# Guard the documented stage ORDER (the gpu/rlhd stages must run BEFORE this one). The Android
+# client boots with useGpuJar=true, so an APK staged without the gpu jar is un-bootable; fail loudly
+# here rather than fold an incomplete runtime.tag and ship a broken bundle. (iOS-only / --check skip.)
+if [ "$STAGE_ANDROID" = 1 ] && [ "$CHECK_ONLY" = 0 ]; then
+  if ! ls "$ANDROID_DEST"/client-*-gpu.jar >/dev/null 2>&1; then
+    echo "!! no client-*-gpu.jar in $ANDROID_DEST — run the GPU/117HD stages FIRST:" >&2
+    echo "     android/dev-tools/gpu/stage-android-gpu-jar.sh   # -> client-*-gpu.jar" >&2
+    echo "     android/dev-tools/gpu/stage-rlhd-zone-jar.sh     # -> client-*-rlhd.jar" >&2
+    echo "   then re-run this stage so their SHAs fold into runtime.tag (un-bootable APK otherwise)." >&2
+    exit 1
+  fi
+fi
 GPU_SHA=""
 for j in "$ANDROID_DEST"/client-*-gpu.jar "$ANDROID_DEST"/client-*-rlhd.jar; do
   [ -f "$j" ] && GPU_SHA="${GPU_SHA}$(sha "$j")"

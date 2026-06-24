@@ -51,8 +51,9 @@ body:
       required: true
   - type: input
     attributes:
-      label: Release tag
-      description: The Release tag of the build you installed.
+      label: Build identifier
+      description: The Release tag, the commit SHA you built from, or "local build".
+      placeholder: e.g. v0.3.1, or commit a1b2c3d, or "local build"
     validations:
       required: true
   - type: textarea
