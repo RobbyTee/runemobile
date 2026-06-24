@@ -4,6 +4,20 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// PROD-RELEASE-ENG-02: release signing key material loaded from a gitignored keystore.properties (the key never
+// enters the repo — android/.gitignore ignores it + *.jks/*.keystore). Absent (CI / a fresh clone / debug-only
+// dev) -> the release build falls back to the debug key, so assembleRelease still yields an installable APK.
+// See keystore.properties.example for the format + key generation / rotation.
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps: Map<String, String> = if (keystorePropsFile.exists()) {
+    keystorePropsFile.readLines()
+        .mapNotNull { it.trim().takeIf { l -> l.isNotEmpty() && !l.startsWith("#") && l.contains('=') } }
+        .associate { it.substringBefore('=').trim() to it.substringAfter('=').trim() }
+} else {
+    emptyMap()
+}
+val hasReleaseKey = keystoreProps.containsKey("storeFile")
+
 android {
     namespace = "dev.audaro.helloshell"
     compileSdk = 35
@@ -52,6 +66,19 @@ android {
         jvmTarget = "17"
     }
 
+    signingConfigs {
+        // Created ONLY when keystore.properties supplies a key — otherwise the release build falls back to the
+        // debug key (below), so a keyless clone/CI still builds. storeFile is resolved relative to android/.
+        if (hasReleaseKey) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProps.getValue("storeFile"))
+                storePassword = keystoreProps["storePassword"]
+                keyAlias = keystoreProps["keyAlias"]
+                keyPassword = keystoreProps["keyPassword"]
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
@@ -63,10 +90,15 @@ android {
             // APK size is dominated by the unshrinkable native JRE + jars anyway, so R8 would save little.
             isMinifyEnabled = false
             isShrinkResources = false
-            // Personal/technical sideload (never shipped to others): sign release with the debug
-            // key so `assembleRelease` yields an installable, signed APK with no secret keystore to manage. Swap in
-            // a dedicated release keystore here if this ever needs real distribution.
-            signingConfig = signingConfigs.getByName("debug")
+            // PROD-RELEASE-ENG-02: sign with the dedicated release key when keystore.properties supplies one
+            // (stable signature for sideload updates); otherwise fall back to the AOSP debug key so a keyless
+            // clone/CI still produces an installable APK. NOTE: switching keys breaks update-in-place for anyone
+            // on the old signature — keep the same keystore once a build has been shared.
+            signingConfig = if (hasReleaseKey) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 
