@@ -1183,12 +1183,11 @@ public final class HudVeneerBridge
 			{
 				return;
 			}
-			final Object[] op = w.getOnOpListener();
-			if (op == null)
-			{
-				return;
-			}
-			c.createScriptEventBuilder(op).setSource(w).setOp(1).build().run();
+			// The raw createScriptEventBuilder(onOpListener).run() op-replay is INERT for most tab stones (only a
+			// few whose CS2 onOp self-contains fire — the rest silently no-op; see BUGFIX-HANDOFF 12/12). Fire the
+			// engine's real CC_OP menu action instead — the exact path a click takes, proven on the logout button
+			// (WorldSwitcherBridge) — so EVERY tab switches. op 1 = the stone's toggle op.
+			c.menuAction(w.getIndex(), ids[idx], net.runelite.api.MenuAction.CC_OP, 1, -1, "Toggle", "");
 		}
 		catch (RuntimeException ignore)
 		{
