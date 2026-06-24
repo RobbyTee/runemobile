@@ -1,0 +1,49 @@
+# Contributing
+
+Thanks for your interest. This is a personal/technical project; contributions are
+welcome but reviewed on a best-effort, single-maintainer basis.
+
+## Build setup
+
+See the **Build from source** section of the [README](README.md) for the staging
+scripts and build commands. A fresh clone needs the staging steps run in order
+before the app will boot.
+
+## The shared-contract rule (load-bearing)
+
+Code under `runelite-client/.../headless/` is the bridge between the engine and
+**both** native shells (Android and iOS). It is resolved by name at runtime and
+shared verbatim across ports, so changes there can break the other port silently.
+
+Before committing a change that touches `headless/`:
+
+```sh
+tools/shared-contract/check-contract.sh
+#   exit 0 = no surface change
+#   exit 1 = additive change  -> update the baseline in the same commit
+#   exit 2 = breaking change   -> not allowed
+```
+
+Install the git hooks so this runs automatically:
+
+```sh
+tools/git-hooks/install.sh
+```
+
+## Conventions
+
+- **Android:** Kotlin + Jetpack Compose shell. Keep Android work under `android/`.
+- **iOS:** Swift + UIKit shell under `ios/`.
+- **Native:** C++17. The native UI thread is never attached to the embedded JVM.
+- R8 / minification is intentionally **off** — don't enable it.
+- Don't fork the upstream RuneLite tree (`runelite-client/`, `runelite-api/`, …)
+  unnecessarily; prefer additive bridge code.
+
+## Pull requests
+
+- Keep commits to plain prose under your own name; squash WIP before opening.
+- Confirm `:app:assembleRelease` builds and you've tested on a device or emulator.
+- If you touched `headless/`, confirm the shared contract is unchanged, or that
+  `check-contract.sh` passes and you updated the baseline.
+
+Contributions are accepted under the project's BSD 2-Clause license.

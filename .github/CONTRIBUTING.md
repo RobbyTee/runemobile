@@ -1,3 +1,1 @@
-# Contributing to RuneLite
-
-Please view our [Developer Guide](https://github.com/runelite/runelite/wiki/Developer-Guide) on the RuneLite Wiki.
+See the [Contributing guide](../CONTRIBUTING.md) in the repository root.
