@@ -57,8 +57,8 @@ The shortlist: features that are **both** high-demand **and** verified shipped (
 - *Evidence (orbs/minimap):* `runelite-client/.../headless/HudVeneerBridge.java:284-291,1386-1410,1910-1931`; `android/.../MainActivity.kt:2446-2467,1306-1330,1352-1362`. *(chat):* `android/.../ChatPillView.kt:17-35`, `MainActivity.kt:2254-2264` (top-render), `:1550-1595` (soft-keyboard input); `HudVeneerBridge.java:268-273`.
 
 ### 6. Native tab grid — open any of 14 tabs via the real menu action
-**Big, reliable tab targets for prayer swaps and gear/spec management.** A 2-column OSRS-Mobile tab grid (14 tiles) opens the real interface tab through the genuine CC_OP menu action — Inventory, Prayer, Combat, Spellbook, Clan and the rest all open, active tab highlighted.
-- *Demo state:* In-game, the bottom-right grid shows 14 stone tiles; tapping one opens its panel and highlights it red.
+**Big, reliable tab targets for prayer swaps and gear/spec management.** A 2-column OSRS-Mobile tab grid opens the real interface tab through the genuine CC_OP menu action (`param0 = -1`, so the engine's varc follows the tap) — Inventory, Prayer, Combat, Spellbook, Clan and the rest, active tab highlighted.
+- *Demo state:* In-game on a **post-tutorial account**, the bottom-right grid shows all 14 stone tiles; tapping one opens its panel and highlights it red. *(On a tutorial-island account the engine self-hides locked stones — only Skills/Inventory/Settings/Logout show — so capture this on a normal account.)*
 - *Evidence:* `android/.../ChromeOverlayView.kt:1-207`, `MainActivity.kt:442-446,2110-2118`; `runelite-client/.../headless/HudVeneerBridge.java:317-320,1213-1248`.
 
 ### 7. RuneLite-account sign-in — profile + settings + hub-plugin sync
