@@ -106,8 +106,10 @@ distributed binary.
 
 RuneScape and Old School RuneScape — and the tab/stone/skill-icon/chat-button
 interface art they originate — are property of Jagex Ltd. This is an unofficial
-fan client and is not affiliated with, endorsed by, or sponsored by Jagex. The
-interface art shipped here is **original chrome drawn for this project**; it is
-not Jagex art and the in-game cache art (which RuneLite streams live and which is
-never committed) remains Jagex's property and is not covered by this project's
-license.
+fan client and is not affiliated with, endorsed by, or sponsored by Jagex. **No
+Jagex interface art is committed to or shipped in this repository.** The native
+mobile chrome renders those interface sprites from the user's own live game cache
+at runtime — the same way the upstream RuneLite client draws its interface — so
+the art is never redistributed by this project. All such cache art, which
+RuneLite streams live, remains Jagex's property and is not covered by this
+project's license.

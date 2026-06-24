@@ -82,8 +82,11 @@ fonts — are listed in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
 
 RuneScape and Old School RuneScape, and the in-game art the client renders, are
 property of Jagex Ltd and are **not** covered by this license. RuneLite streams
-that art live from the official cache; it is not committed here. The interface
-chrome shipped in this repo is original art drawn for this project.
+that art live from the official cache; it is not committed here. The native
+mobile chrome (tab stones, skill icons, chat-tab buttons) is not committed
+either: exactly like the desktop client, it renders those interface sprites from
+the user's own live game cache at runtime, so no Jagex art ships in this
+repository.
 
 ## Security
 
