@@ -169,6 +169,9 @@ class MainActivity : AppCompatActivity() {
     // A6 native chrome (OSRS-mobile 2-col tab grid; the engine stones are hidden and this grid replaces them).
     private lateinit var chromeOverlay: ChromeOverlayView
     private var chromeUiLogged = false
+    // Runtime tab/stone/chat sprites pulled from the live cache (HudVeneerBridge.tabSprites) once after login —
+    // so the native chrome composites the real OSRS art with nothing bundled. Latched once applied this session.
+    private var tabSpritesApplied = false
     // Bug 8: a fail-open login-transition latch. On a FRESH login the engine hasn't finished its first resizable
     // layout for a frame or two, so engaging chrome immediately flashes the half-built grid/chat tabs over the
     // "Welcome to Gielinor" frame. We suppress chrome for a bounded window after the LOGIN_SCREEN→LOGGED_IN edge,
@@ -446,6 +449,12 @@ class MainActivity : AppCompatActivity() {
         // switch channel (op-script replay, works collapsed); pull DOWN past a filterable chip = its engine
         // filter menu via the shared press-and-peek overlay.
         chatTabOverlay = ChatPillView(this)
+        // Apply a cached runtime sprite set immediately (later boots) so the grid/chat show real art before the
+        // post-login capture lands; the live capture in updateChrome refreshes + re-caches it.
+        TabSprites.parse(TabSprites.cached(filesDir))?.let {
+            chromeOverlay.setSprites(it)
+            chatTabOverlay.setSprites(it)
+        }
         chatTabOverlay.onTabTap = { k ->
             // UI-3 (iOS onChatTabButton): tap the ACTIVE tab to collapse the message area; tap any other to
             // switch the channel (auto-expanding a collapsed chat first).
@@ -1975,6 +1984,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateChrome() {
         if (!::chromeOverlay.isInitialized) return
+        // One-shot: once the engine has captured the tab/stone/chat sprites from the live cache (after login),
+        // hand them to the native chrome + cache them for next boot. Latched, so this is inert after it lands.
+        if (!tabSpritesApplied) {
+            val sprJson = JvmLauncher.tabSprites()
+            if (sprJson.isNotEmpty()) {
+                TabSprites.parse(sprJson)?.let { set ->
+                    chromeOverlay.setSprites(set)
+                    chatTabOverlay.setSprites(set)
+                    TabSprites.cache(filesDir, sprJson)
+                    tabSpritesApplied = true
+                    Log.i(TAG, "ANDROID_TABSPRITES_GREEN runtime cache sprites applied (${sprJson.length} bytes)")
+                }
+            }
+        }
         val json = JvmLauncher.chromeSnapshotPub()
         // PERF-FRAME-PACING-01: skip the per-frame JSON parse + the whole native-veneer cascade when NOTHING the
         // chrome layer renders has changed. The signature folds in EVERY dynamic input updateChrome (and its

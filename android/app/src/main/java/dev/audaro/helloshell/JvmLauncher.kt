@@ -132,6 +132,11 @@ object JvmLauncher {
     /** Monotonic publish counter for the menu snapshot (freshness check). */
     external fun nativeMenuPublishSeq(): Long
 
+    /** One-shot tab/stone/chat sprite set from the live cache (HudVeneerBridge.tabSprites), JSON of raw ARGB
+     *  pixels. "" until captured (first logged-in tick). Lets the native chrome composite the real OSRS art with
+     *  nothing bundled. */
+    external fun nativeTabSprites(): String
+
     /** Latest composited frame dimensions (game-canvas pixels), or 0 before the first frame. */
     external fun nativeFrameWidth(): Int
     external fun nativeFrameHeight(): Int
@@ -340,6 +345,7 @@ object JvmLauncher {
     fun invokeMenuEntry(parent: Int, child: Int) = nativeInvokeMenuEntry(parent, child)
     fun menuSnapshot() = nativeMenuSnapshot()
     fun menuPublishSeq() = nativeMenuPublishSeq()
+    fun tabSprites() = nativeTabSprites()
     fun frameWidth() = nativeFrameWidth()
     fun frameHeight() = nativeFrameHeight()
     fun framePixels(): IntArray? = nativeFramePixels()

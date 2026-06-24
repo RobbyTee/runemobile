@@ -2,7 +2,6 @@ package dev.audaro.helloshell
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -57,32 +56,26 @@ class ChromeOverlayView(context: Context) : View(context) {
 
     private fun dp(v: Float) = v * resources.displayMetrics.density
 
-    init {
-        buildTabAssets()
-    }
+    // Tab images are built from runtime cache sprites (setSprites), not bundled assets — so nothing Jagex ships in
+    // the repo. Until the first set arrives (one-shot, after login) onDraw uses the stone-toned fallback cells.
 
     /** TAB_GRID_ORDER[slot] = engine tab (stone) index, row-major (slot 0 = top-left, 1 = top-right, …). The
      *  official OSRS-mobile arrangement; identical to the iOS shell so the bundled icon-N.png glyphs line up. */
     private val order = intArrayOf(3, 1, 4, 2, 5, 13, 6, 7, 0, 12, 8, 9, 10, 11)
 
-    /** Build the 14 active + 14 inactive tab images from the bundled OSRS sprites (stone-active/inactive +
-     *  icon-0..13), composited stone-then-centred-glyph at the stone's native size. Done once. */
-    private fun buildTabAssets() {
-        val stoneInactive = loadAsset("tabassets/stone-inactive.png")
-        val stoneActive = loadAsset("tabassets/stone-active.png")
+    /** Build the 14 active + 14 inactive tab images from a runtime sprite set (the real OSRS cache sprites the
+     *  engine loaded after login — stone-active/inactive + icon-0..13), composited stone-then-centred-glyph at the
+     *  stone's native size. Idempotent; re-applies if a fresher set arrives. */
+    fun setSprites(set: TabSprites.Set) {
+        if (!set.usableForGrid()) return
         for (i in 0 until 14) {
-            val icon = loadAsset("tabassets/icon-$i.png")
-            tabInactive[i] = composite(stoneInactive, icon)
-            tabActive[i] = composite(stoneActive, icon)
+            val icon = set.icons.getOrNull(i)
+            tabInactive[i] = composite(set.stoneInactive, icon)
+            tabActive[i] = composite(set.stoneActive, icon)
         }
-        assetsBuilt = stoneInactive != null && stoneActive != null
-        Log.i("ChromeOverlay", "a6: tab assets built (stones ${if (stoneInactive != null) "ok" else "MISSING"}/${if (stoneActive != null) "ok" else "MISSING"})")
-    }
-
-    private fun loadAsset(path: String): Bitmap? = try {
-        context.assets.open(path).use { BitmapFactory.decodeStream(it) }
-    } catch (e: Exception) {
-        null
+        assetsBuilt = true
+        Log.i("ChromeOverlay", "a6: tab assets built from runtime cache sprites")
+        invalidate()
     }
 
     /** Composite a stone background with a centred glyph at the stone's native size (no scaling), like the iOS

@@ -197,6 +197,10 @@ static jmethodID g_midScrollChat = nullptr;
 // Native minimap-orb touch veneer: getOrbSnapshot (per-frame orb canvas bounds the native shell enlarges +
 // proxy-clicks). OPTIONAL (never in the hud all-or-nothing gate) — an older staged jar simply loses the veneer.
 static jmethodID g_midOrbSnapshot = nullptr;
+// Runtime tab/stone/chat sprite set from the live cache (HudVeneerBridge.tabSprites) — one-shot, read on demand
+// by the native shell so the 2-col grid composites the real OSRS art with nothing bundled. OPTIONAL (never in the
+// hud all-or-nothing gate) — an older staged jar simply has no runtime sprites and the shell keeps its fallback.
+static jmethodID g_midTabSprites = nullptr;
 static std::atomic<bool> g_hudReady{false};
 
 // ---- Surface / render --------------------------------------------------------------------------------
@@ -271,6 +275,12 @@ static std::atomic<long long> g_chatSnapSeq{-1};
 // Minimap-orb veneer snapshot, republished by the render thread (HudVeneerBridge.getOrbSnapshot). Seq-gated (Task B).
 static std::mutex            g_orbLock;
 static std::string           g_orbSnapshotPub = "{\"loggedIn\":false}";
+// One-shot runtime tab/stone/chat sprite payload (HudVeneerBridge.tabSprites). Fetched on the HotSpot render thread
+// (the only thread that may call HotSpot) into this string; the UI thread reads it lock-free via nativeTabSprites
+// WITHOUT attaching — same producer/consumer split as the snapshots above. g_tabSpritesDone latches it once captured.
+static std::mutex            g_tabSpritesLock;
+static std::string           g_tabSprites;
+static std::atomic<bool>     g_tabSpritesDone{false};
 static std::atomic<long long> g_orbSnapSeq{-1};
 // UI-4 NPC dialogue: getDialogueJson (optional, like getMapSnapshot) — the engine dialogue is forced transparent
 // while the chat is relocated, so the native shell draws an opaque parchment over it from this snapshot. Seq-gated.
@@ -895,6 +905,7 @@ static bool publishBridge(JNIEnv *env) {
             g_midOpenWorldMap      = midOpt(env, hvg, "openWorldMap", "()V");   // FIX-5 (optional; older jar omits it)
             g_midDialogueJson      = midOpt(env, hvg, "getDialogueJson", "()Ljava/lang/String;");   // UI-4 (optional)
             g_midOrbSnapshot       = midOpt(env, hvg, "getOrbSnapshot", "()Ljava/lang/String;");    // orb veneer (optional)
+            g_midTabSprites        = midOpt(env, hvg, "tabSprites", "()Ljava/lang/String;");        // runtime cache sprites (optional)
             // Phase 3 (Task B): content-diff publish seqs (all optional — a jar predating them just always copies).
             g_midChatSnapshotSeq   = midOpt(env, hvg, "getChatSnapshotSeq", "()J");
             g_midOrbSnapshotSeq    = midOpt(env, hvg, "getOrbSnapshotSeq", "()J");
@@ -1071,6 +1082,29 @@ static void *renderLoop(void *) {
                     if (c) {
                         std::lock_guard<std::mutex> lk(g_chatLock);
                         g_chatSnapshotPub.assign(c);
+                        env->ReleaseStringUTFChars(js, c);
+                    } else if (env->ExceptionCheck()) {
+                        env->ExceptionClear();
+                    }
+                    env->DeleteLocalRef(js);
+                }
+            }
+
+            // One-shot: fetch the runtime tab/stone/chat sprite payload (HudVeneerBridge.tabSprites) on THIS HotSpot
+            // thread (the bridge call MUST NOT run on the UI thread — it owns no HotSpot env). Inert after capture.
+            if (!g_tabSpritesDone.load(std::memory_order_acquire)
+                && g_hudReady.load(std::memory_order_acquire) && g_hudCls && g_midTabSprites) {
+                jstring js = (jstring) env->CallStaticObjectMethod(g_hudCls, g_midTabSprites);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); }
+                else if (js) {
+                    const char *c = env->GetStringUTFChars(js, nullptr);
+                    if (c) {
+                        if (c[0] != '\0') {
+                            std::lock_guard<std::mutex> lk(g_tabSpritesLock);
+                            g_tabSprites.assign(c);
+                            g_tabSpritesDone.store(true, std::memory_order_release);
+                            LOGI("bridge: tab sprites captured (%zu bytes)", g_tabSprites.size());
+                        }
                         env->ReleaseStringUTFChars(js, c);
                     } else if (env->ExceptionCheck()) {
                         env->ExceptionClear();
@@ -1580,6 +1614,14 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeMenuSnapshot(JNIEnv *env, jobject) 
 extern "C" JNIEXPORT jlong JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeMenuPublishSeq(JNIEnv *, jobject) {
     return (jlong) g_menuPublishSeq.load(std::memory_order_relaxed);
+}
+// Runtime tab/stone/chat sprite payload — read lock-free by the UI thread (NewStringUTF uses the UI/ART env; the
+// HotSpot fetch happens on the render thread, see the producer loop). "" until captured. NEVER call into HotSpot
+// here: this thread owns no HotSpot env, so CallStaticObjectMethod would abort the process.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeTabSprites(JNIEnv *env, jobject) {
+    std::lock_guard<std::mutex> lk(g_tabSpritesLock);
+    return env->NewStringUTF(g_tabSprites.c_str());
 }
 
 // ---- A1 read-surface (UI thread reads the render-thread-published atomics; never attaches to HotSpot) -

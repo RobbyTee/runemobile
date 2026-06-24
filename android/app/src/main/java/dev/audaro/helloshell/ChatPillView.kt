@@ -2,7 +2,6 @@ package dev.audaro.helloshell
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
@@ -94,18 +93,22 @@ class ChatPillView(context: Context) : View(context) {
     private val srcRect = Rect(); private val dstRect = RectF()
 
     init {
-        btnNormal = loadAsset("tabassets/chatbtn.png")
-        btnSelected = loadAsset("tabassets/chatbtn-selected.png")
-        btnNew = loadAsset("tabassets/chatbtn-new.png")
+        // The chat-tab button sprites come from the runtime cache (setSprites), not bundled assets. The RuneScape
+        // font is a separate bundled asset (not a cache sprite) and is loaded here as before.
         val rsFont = try { Typeface.createFromAsset(context.assets, "tabassets/runescape.ttf") } catch (e: Exception) { null }
         rsFont?.let { namePaint.typeface = it; statePaint.typeface = it }
-        Log.i("ChatPill", "ui3: static chat-tab row built (sprites ${ok(btnNormal)}/${ok(btnSelected)}/${ok(btnNew)} font ${if (rsFont != null) "ok" else "sys"})")
+        Log.i("ChatPill", "ui3: static chat-tab row built (font ${if (rsFont != null) "ok" else "sys"}; sprites pending cache)")
     }
 
-    private fun ok(b: Bitmap?) = if (b != null) "ok" else "X"
-    private fun loadAsset(path: String): Bitmap? = try {
-        context.assets.open(path).use { BitmapFactory.decodeStream(it) }
-    } catch (e: Exception) { null }
+    /** Supply the chat-tab button sprites loaded at runtime from the live cache (3051 / 3053 / 3055). */
+    fun setSprites(set: TabSprites.Set) {
+        if (!set.usableForChat()) return
+        btnNormal = set.chatbtn
+        btnSelected = set.chatbtnSelected ?: set.chatbtn
+        btnNew = set.chatbtnNew ?: set.chatbtn
+        Log.i("ChatPill", "ui3: chat-tab sprites set from runtime cache")
+        invalidate()
+    }
 
     fun setShown(on: Boolean) { if (shown != on) { shown = on; invalidate() } }
 

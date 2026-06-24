@@ -24,7 +24,9 @@
  */
 package net.runelite.client.headless;
 
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -37,6 +39,7 @@ import net.runelite.api.GameState;
 import net.runelite.api.MessageNode;
 import net.runelite.api.Player;
 import net.runelite.api.ScriptID;
+import net.runelite.api.SpritePixels;
 import net.runelite.api.VarClientStr;
 import net.runelite.api.events.BeforeRender;
 import net.runelite.api.gameval.InterfaceID;
@@ -82,6 +85,31 @@ public final class HudVeneerBridge
 	private static final String[] CHAT_TAB_NAMES = { "All", "Game", "Public", "Private", "Channel", "Clan", "Trade", "Report" };
 	private static final int SPR_CHATBTN_SELECTED = 3053;   // SpriteID.CHATBOX_BUTTON_SELECTED — active tab
 	private static final int SPR_CHATBTN_NEW = 3055;        // SpriteID.CHATBOX_BUTTON_NEW_MESSAGES — unread tab
+	private static final int SPR_CHATBTN_IDLE = 3051;       // SpriteID.CHATBOX_BUTTON — idle tab
+
+	// Native-chrome tab sprite set, loaded ONCE from the live cache after login and handed to the native shell so
+	// the 2-col grid + chat-tab veneer composite the real OSRS art with NOTHING committed to the repo (the same
+	// sprites the engine already draws — see captureTabSprites). stone 1180/1181 = RESIZEABLE_MODE_TAB_STONE_MIDDLE
+	// [_SELECTED]; 774+tabIndex = the 14 tab glyphs; 3051/3053/3055 = the chat-tab backgrounds.
+	private static final int SPR_STONE_INACTIVE = 1180;
+	private static final int SPR_STONE_ACTIVE = 1181;
+	private static final int SPR_TAB_ICON_BASE = 774;       // 774 + tabIndex, 14 glyphs (combat..music)
+	private static volatile String tabSpritesJson = "";     // one-shot ARGB payload (see captureTabSprites); "" until ready
+	private static boolean tabSpritesCaptured = false;      // client-thread guard
+	// Sprites load lazily — an archive the engine hasn't rendered (our tab stones are HIDDEN) isn't in the cache yet,
+	// so a single tick returns a partial set. We accumulate across ticks (nudging missing archives via loadData) and
+	// only latch when the grid set is complete, or at a deadline. Index: 0=stoneInactive,1=stoneActive,2..15=icons,
+	// 16=chatbtn,17=chatbtnSelected,18=chatbtnNew.
+	private static final int TAB_SPRITE_COUNT = 19;
+	private static final String[] TAB_SPRITE_KEYS = {
+		"stoneInactive", "stoneActive",
+		"i0", "i1", "i2", "i3", "i4", "i5", "i6", "i7", "i8", "i9", "i10", "i11", "i12", "i13",
+		"chatbtn", "chatbtnSelected", "chatbtnNew",
+	};
+	private static final String[] tabSpriteB64 = new String[TAB_SPRITE_COUNT];
+	private static final int[][] tabSpriteDim = new int[TAB_SPRITE_COUNT][2];
+	private static int tabCaptureTicks = 0;
+	private static final int TAB_CAPTURE_DEADLINE = 250;    // ~a few seconds of render ticks before shipping partial
 
 	// Desired state, set from native, applied on the client thread. chatX < 0 = not relocating.
 	private static volatile int chatX = -1;
@@ -538,6 +566,7 @@ public final class HudVeneerBridge
 			{
 				return;   // native veneers + transparent chat are resizable-mode only
 			}
+			captureTabSprites(c);   // one-shot: hand the real cache tab/stone/chat sprites to the native shell
 			if (TEST_APPLY && !testApplied)
 			{
 				// Off-device capture: drive the chat veneer ourselves (the native shell would on device). The
@@ -1620,6 +1649,165 @@ public final class HudVeneerBridge
 			BridgeFaults.note("HudVeneerBridge.buildChatSnapshot", ignore);
 			// keep the previous snapshot
 		}
+	}
+
+	/**
+	 * One-shot (client-thread) capture of the OSRS tab/stone/chat-button sprites from the live cache, so the native
+	 * shell composites the REAL art with nothing committed to the repo — exactly how the desktop client renders its
+	 * stones. Built once on the first logged-in tick (the cache is loaded by then), memoised into {@link #tabSpritesJson}
+	 * and read by the native side via {@link #tabSprites()}. Pixels are sent as raw big-endian ARGB bytes (Base64) — no
+	 * ImageIO/PNG dependency, which may be absent in the embedded JRE.
+	 */
+	private static int tabSpriteId(int slot)
+	{
+		if (slot == 0) return SPR_STONE_INACTIVE;
+		if (slot == 1) return SPR_STONE_ACTIVE;
+		if (slot >= 2 && slot <= 15) return SPR_TAB_ICON_BASE + (slot - 2);
+		if (slot == 16) return SPR_CHATBTN_IDLE;
+		if (slot == 17) return SPR_CHATBTN_SELECTED;
+		return SPR_CHATBTN_NEW;   // slot 18
+	}
+
+	private static void captureTabSprites(Client c)
+	{
+		if (tabSpritesCaptured)
+		{
+			return;
+		}
+		try
+		{
+			// Try to load every still-missing sprite this tick; nudge its archive in first so a lazily-streamed one
+			// (the engine never renders our hidden tabs, so it never requests these) is forced into the cache.
+			int loaded = 0;
+			for (int slot = 0; slot < TAB_SPRITE_COUNT; slot++)
+			{
+				if (tabSpriteB64[slot] == null)
+				{
+					final int id = tabSpriteId(slot);
+					nudgeSpriteArchive(c, id);
+					tabSpriteB64[slot] = spriteArgbB64(c, id, tabSpriteDim[slot]);
+				}
+				if (tabSpriteB64[slot] != null)
+				{
+					loaded++;
+				}
+			}
+			tabCaptureTicks++;
+			// Grid needs both stones + all 14 glyphs; chat (16/17) is secondary. Ship at the deadline regardless so a
+			// sprite that genuinely never resolves can't stall the chrome forever.
+			boolean gridComplete = true;
+			for (int slot = 0; slot <= 15; slot++)
+			{
+				if (tabSpriteB64[slot] == null)
+				{
+					gridComplete = false;
+					break;
+				}
+			}
+			if (!gridComplete && tabCaptureTicks < TAB_CAPTURE_DEADLINE)
+			{
+				return;   // keep accumulating
+			}
+			final StringBuilder sb = new StringBuilder(64 * 1024);
+			sb.append('{');
+			appendSpriteSlot(sb, "stoneInactive", 0);
+			sb.append(',');
+			appendSpriteSlot(sb, "stoneActive", 1);
+			sb.append(",\"icons\":[");
+			for (int i = 0; i < 14; i++)
+			{
+				if (i > 0)
+				{
+					sb.append(',');
+				}
+				appendSpriteObjSlot(sb, 2 + i);
+			}
+			sb.append(']');
+			sb.append(',');
+			appendSpriteSlot(sb, "chatbtn", 16);
+			sb.append(',');
+			appendSpriteSlot(sb, "chatbtnSelected", 17);
+			sb.append(',');
+			appendSpriteSlot(sb, "chatbtnNew", 18);
+			sb.append('}');
+			tabSpritesJson = sb.toString();
+			tabSpritesCaptured = true;
+			log.info("[veneer] tab sprites captured ({}/{} sprites, {} bytes, ticks={})",
+				loaded, TAB_SPRITE_COUNT, tabSpritesJson.length(), tabCaptureTicks);
+		}
+		catch (RuntimeException ex)
+		{
+			BridgeFaults.note("HudVeneerBridge.captureTabSprites", ex);
+		}
+	}
+
+	/** Force {@code spriteId}'s archive into the cache (the engine won't request it for our hidden tabs). */
+	private static void nudgeSpriteArchive(Client c, int spriteId)
+	{
+		try
+		{
+			c.getIndexSprites().loadData(spriteId, 0);
+		}
+		catch (RuntimeException ignore)
+		{
+			// best-effort prime; spriteArgbB64 retries next tick
+		}
+	}
+
+	/** {@code "name":{w,h,px}} from an accumulated slot. */
+	private static void appendSpriteSlot(StringBuilder sb, String name, int slot)
+	{
+		sb.append('"').append(name).append("\":");
+		appendSpriteObjSlot(sb, slot);
+	}
+
+	/** {@code {"w":W,"h":H,"px":"<base64 ARGB>"}} (or {@code null}) from an accumulated slot. */
+	private static void appendSpriteObjSlot(StringBuilder sb, int slot)
+	{
+		final String px = tabSpriteB64[slot];
+		if (px == null)
+		{
+			sb.append("null");
+			return;
+		}
+		sb.append("{\"w\":").append(tabSpriteDim[slot][0]).append(",\"h\":").append(tabSpriteDim[slot][1])
+			.append(",\"px\":\"").append(px).append("\"}");
+	}
+
+	/** Base64 of {@code spriteId}'s pixels as big-endian ARGB bytes; sets {@code dim=[w,h]}. {@code null} if absent. */
+	private static String spriteArgbB64(Client c, int spriteId, int[] dim)
+	{
+		final SpritePixels[] sp = c.getSprites(c.getIndexSprites(), spriteId, 0);
+		if (sp == null || sp.length == 0 || sp[0] == null)
+		{
+			return null;
+		}
+		final BufferedImage img = sp[0].toBufferedImage();
+		if (img == null)
+		{
+			return null;
+		}
+		final int w = img.getWidth();
+		final int h = img.getHeight();
+		final int[] argb = img.getRGB(0, 0, w, h, null, 0, w);
+		final byte[] bytes = new byte[argb.length * 4];
+		for (int i = 0; i < argb.length; i++)
+		{
+			final int p = argb[i];
+			bytes[i * 4] = (byte) (p >>> 24);
+			bytes[i * 4 + 1] = (byte) (p >>> 16);
+			bytes[i * 4 + 2] = (byte) (p >>> 8);
+			bytes[i * 4 + 3] = (byte) p;
+		}
+		dim[0] = w;
+		dim[1] = h;
+		return Base64.getEncoder().encodeToString(bytes);
+	}
+
+	/** The captured tab-sprite payload (see {@link #captureTabSprites}); {@code ""} until ready. Read from native. */
+	public static String tabSprites()
+	{
+		return tabSpritesJson;
 	}
 
 	/** Append one chat tab's geometry/state object. {@code base} = the tab parent widget; GRAPHIC=base+1,
