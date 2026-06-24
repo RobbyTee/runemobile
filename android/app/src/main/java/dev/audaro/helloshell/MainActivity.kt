@@ -1056,8 +1056,11 @@ class MainActivity : AppCompatActivity() {
             // PERF-MEMORY-THERMAL-01: arm the thermal governor for a 117HD boot (no-op for cpu/gpu). It throttles
             // the 117HD sceneResolutionScale under thermal pressure and restores it on cooldown; all config I/O is
             // bridge-threaded so the main-thread listener callback never blocks.
-            thermalGovernor = ThermalGovernor(getSystemService(POWER_SERVICE) as PowerManager, is117hd = rlhdMode)
-                .also { it.start() }
+            thermalGovernor = ThermalGovernor(
+                getSystemService(POWER_SERVICE) as PowerManager,
+                is117hd = rlhdMode,
+                markerFile = File(filesDir, "thermal-throttle.marker"),
+            ).also { it.start() }
         }
         // AP-2a: start draining the notification/link queues. Safe before the VM is up — the externs return ""
         // until the MobileUiBridge facade publishes, then start yielding real items.
