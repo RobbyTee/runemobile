@@ -16,7 +16,19 @@ val keystoreProps: Map<String, String> = if (keystorePropsFile.exists()) {
 } else {
     emptyMap()
 }
-val hasReleaseKey = keystoreProps.containsKey("storeFile")
+// A present-but-incomplete keystore.properties is user error — FAIL the build rather than silently sign with the
+// debug key (shipping an unintended signature). Only a fully ABSENT file falls back to debug. This also makes the
+// getValue("storeFile") below safe (all four keys are guaranteed non-blank when hasReleaseKey is true).
+val requiredKeystoreKeys = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+val hasReleaseKey: Boolean = when {
+    !keystorePropsFile.exists() -> false
+    requiredKeystoreKeys.all { keystoreProps[it]?.isNotBlank() == true } -> true
+    else -> throw GradleException(
+        "android/keystore.properties is present but incomplete — it needs non-empty " +
+            requiredKeystoreKeys.joinToString() + ". Fix it (see keystore.properties.example), or delete it to " +
+            "fall back to debug signing.",
+    )
+}
 
 android {
     namespace = "dev.audaro.helloshell"
