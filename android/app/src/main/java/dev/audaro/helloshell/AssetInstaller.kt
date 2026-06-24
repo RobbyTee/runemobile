@@ -19,45 +19,67 @@ object AssetInstaller {
 
     private const val TAG = "AssetInstaller"
 
-    // Re-unpack key = "<BASE>-<runtime.tag>". BASE covers the embedded JRE / native libs (bump by hand
-    // when those change — rare). The runtime.tag suffix is the staged-jar content hash that
-    // tools/stage-mobile-runtime.sh writes into the bundle, so a jar update invalidates old installs
-    // automatically — no hand-typed bump for the common case.
+    // PERF-COLD-START-06: two INDEPENDENT re-unpack gates so a jar update doesn't re-copy the whole tree.
+    //  - BASE (.installed-base) covers the embedded JRE / native libs under jvm/jre (~110 MB modules + .so). Bump
+    //    by hand when those change — rare.
+    //  - the runtime.tag content hash (.installed-tag) covers the staged jars + runtime.tag that
+    //    tools/stage-mobile-runtime.sh writes — the common per-update change.
+    // A jar-only update bumps the tag but not BASE, so only the ~38 MB of jars re-copy; the 110 MB JRE stays put
+    // (the old single "<BASE>-<tag>" key re-wiped + recopied the entire ~198 MB tree on every jar bump).
     private const val BASE = "v5"
 
     /**
      * Returns the JAVA_HOME path (filesDir/jvm/jre).
      *
      * [onProgress] (optional) is invoked ONLY on the first-install / re-unpack path with a coarse 0..100 percent
-     * as each top-level asset subtree finishes copying — the cold-start splash uses it for an "Unpacking… N%"
-     * line. On the fast path (already installed) it is never called. The callback runs on the calling (boot)
-     * thread, so the consumer must marshal to the UI thread itself.
+     * as each unpacked subtree finishes copying — the cold-start splash uses it for an "Unpacking… N%" line. On
+     * the fast path (already installed) it is never called. The callback runs on the calling (boot) thread, so the
+     * consumer must marshal to the UI thread itself.
      */
     fun ensureInstalled(ctx: Context, onProgress: ((Int) -> Unit)? = null): File {
         val root = File(ctx.filesDir, "jvm")
-        val want = "$BASE-${bundledTag(ctx)}"
-        val marker = File(root, ".installed-tag")
-        val have = if (marker.exists()) marker.readText().trim() else null
-        if (have != want) {
-            Log.i(TAG, "runtime changed ($have -> $want): re-unpacking embedded JVM assets to $root")
-            root.deleteRecursively()   // wipe the stale tree so old and new jars never mix
-            // Coarse progress by top-level subtree (cheap, no pre-walk of the 198 MB tree): unpack each child and
-            // report the completed fraction. Only meaningful on this first-install path.
-            val top = ctx.assets.list("jvm")?.toList().orEmpty()
-            if (onProgress != null && top.isNotEmpty()) {
-                onProgress(0)
-                root.mkdirs()
-                top.forEachIndexed { i, child ->
-                    copyAssetDir(ctx, "jvm/$child", File(root, child))
-                    onProgress(((i + 1) * 100) / top.size)
-                }
-            } else {
-                copyAssetDir(ctx, "jvm", root)
+        val jreDir = File(root, "jre")
+        val baseMarker = File(root, ".installed-base")
+        val tagMarker = File(root, ".installed-tag")
+        val wantTag = bundledTag(ctx)
+        // The JRE re-unpacks when BASE changes (or it's missing); the jars re-unpack when the content tag changes.
+        val baseStale = readMarker(baseMarker) != BASE || !jreDir.exists()
+        val tagStale = readMarker(tagMarker) != wantTag
+        if (!baseStale && !tagStale) return jreDir   // fast path — nothing to do
+
+        Log.i(TAG, "runtime unpack: baseStale=$baseStale (BASE=$BASE) tagStale=$tagStale (tag=$wantTag) -> $root")
+        root.mkdirs()
+        // Wipe only what's being replaced so old and new never mix — the JRE subtree when BASE changed, and the
+        // stale non-jre files (old jars) when the tag changed; the markers + the untouched gate are preserved.
+        if (baseStale) jreDir.deleteRecursively()
+        if (tagStale) {
+            root.listFiles()?.forEach { f ->
+                if (f.name != "jre" && f != baseMarker && f != tagMarker) f.deleteRecursively()
             }
-            marker.writeText(want)
         }
-        return File(root, "jre")
+        // Copy each gate, writing its marker ONLY after that gate's copy fully succeeds — so an unpack killed
+        // mid-jars doesn't re-copy the (already-landed) 110 MB JRE on retry, and a torn copy never leaves a
+        // matching marker (an interrupted gate just re-runs next launch). Coarse per-subtree progress.
+        val nonJre = ctx.assets.list("jvm")?.filter { it != "jre" }.orEmpty()
+        val total = ((if (baseStale) 1 else 0) + (if (tagStale) nonJre.size else 0)).coerceAtLeast(1)
+        var done = 0
+        onProgress?.invoke(0)
+        if (baseStale) {
+            copyAssetDir(ctx, "jvm/jre", jreDir)
+            baseMarker.writeText(BASE)
+            done++; onProgress?.invoke(done * 100 / total)
+        }
+        if (tagStale) {
+            for (child in nonJre) {
+                copyAssetDir(ctx, "jvm/$child", File(root, child))
+                done++; onProgress?.invoke(done * 100 / total)
+            }
+            tagMarker.writeText(wantTag)   // the jars share one content tag — mark done only once all have landed
+        }
+        return jreDir
     }
+
+    private fun readMarker(f: File): String? = if (f.exists()) f.readText().trim() else null
 
     /** The staged content tag shipped in the bundle (jvm/runtime.tag); "untagged" if staging didn't write it. */
     private fun bundledTag(ctx: Context): String =
