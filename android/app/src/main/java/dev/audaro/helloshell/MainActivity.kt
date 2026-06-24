@@ -149,6 +149,10 @@ class MainActivity : AppCompatActivity() {
     private var ctrlHeld = false          // ⌃ latch: synthetic VK_CONTROL held (mirror of shift)
     private var altHeld = false           // ⌥ latch: synthetic VK_ALT held (Ground Items hold-to-highlight)
     private var frameCallback: Choreographer.FrameCallback? = null
+    // PERF-BATTERY-NETWORK-01: true while backgrounded (onStop..onStart) — the Choreographer UI poll is removed
+    // and the render thread idles at 4 Hz. Gates onStart's re-post so the first onStart (right after onCreate's
+    // startInputPolling) doesn't double-post the callback.
+    private var pollingPaused = false
     // User-defined hotkey buttons: a HUD strip the user populates from the Hotkeys screen (persisted in PREFS_HOTKEYS).
     private var hotkeyRow: LinearLayout? = null            // the button container (repopulated on change)
     private var hotkeyStrip: HorizontalScrollView? = null  // scroll host (GONE when no hotkeys are active)
@@ -2764,6 +2768,19 @@ class MainActivity : AppCompatActivity() {
         menuTopEntries = emptyList()
     }
 
+    override fun onStart() {
+        super.onStart()
+        // PERF-BATTERY-NETWORK-01: returning to the foreground — un-throttle the render thread and re-arm the
+        // per-frame UI poll. Guarded by pollingPaused so the FIRST onStart (right after onCreate's
+        // startInputPolling already posted the callback) doesn't double-post it.
+        if (pollingPaused) {
+            pollingPaused = false
+            JvmLauncher.setPaused(false)
+            frameCallback?.let { Choreographer.getInstance().postFrameCallback(it) }
+            Log.i(TAG, "perf: foreground -> render resumed, UI poll re-armed")
+        }
+    }
+
     override fun onStop() {
         // A8: the app is backgrounded (and may be killed) — persist any pending plugin-config writes now so a
         // toggle/setting isn't lost. Off the UI thread (it dispatches to the client thread); fire-and-forget.
@@ -2771,6 +2788,12 @@ class MainActivity : AppCompatActivity() {
             val ack = JvmLauncher.flushConfig()
             Log.i(TAG, "a8: flushConfig on background -> $ack")
         }
+        // PERF-BATTERY-NETWORK-01: not visible — drop the render thread to 4 Hz and stop the per-frame UI poll
+        // (updateChrome/applyOverlayInsets/updateWorldMap/IME). Android has no PiP keepalive (iOS-only), so
+        // standing the engine work down backgrounded has no on-device consumer to starve.
+        pollingPaused = true
+        JvmLauncher.setPaused(true)
+        frameCallback?.let { Choreographer.getInstance().removeFrameCallback(it) }
         super.onStop()
     }
 

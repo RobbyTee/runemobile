@@ -1026,6 +1026,13 @@ static void JNICALL rc_AWT_swapBuffers(JNIEnv* env, jobject){
             glBlitFramebuffer(0, 0, w, h,  0, 0, sw, sh,  GL_COLOR_BUFFER_BIT, GL_LINEAR);
             eglSwapBuffers(sDpy, sWinSurf);
             sFramesPresented.fetch_add(1, std::memory_order_relaxed);   // Phase 3: success signal for the auto-GPU watchdog
+        } else {
+            // PERF-BATTERY-NETWORK-01: no window surface => the Surface was destroyed (app backgrounded). Without
+            // a vsync-paced eglSwapBuffers this draw thread would spin unbounded, redrawing the whole scene into
+            // the FBO and pinning the Mali GPU while screen-locked. Pace it to ~4 Hz so backgrounded GPU/117HD
+            // work collapses ~15x; the frame stays in the FBO and presents normally the instant the Surface
+            // returns (foreground). A rare transient surface-recreate just costs one ~250 ms hiccup.
+            usleep(250000);
         }
         if (sTimerFns && sTimerOn) rcTimerDrainAndBegin();
         return;

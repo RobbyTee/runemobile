@@ -214,6 +214,12 @@ static std::atomic<uint64_t> g_surfaceGen{0};
 // via an EGL window surface (eglSwapBuffers), so the CPU present thread below must NOT also drive the Surface —
 // a BufferQueue allows ONE producer, and an EGL window surface can't attach to a Surface the CPU path connected.
 static std::atomic<bool> g_directPresent{false};
+// PERF-BATTERY-NETWORK-01: set from the ART UI thread (onStop/onStart via nativeSetPaused) when the app is
+// backgrounded. While true the render thread drops its per-tick JNI snapshot-republish batch to a 4 Hz
+// drainInput-only idle (the UI thread isn't drawing the native overlays, so the republishes are wasted), and
+// the GPU draw thread's swapBuffers paces itself (librlawt, keyed off the absent Surface). Stops a pinned CPU
+// core / Mali GPU while screen-locked. Foreground (paused=false) is unchanged.
+static std::atomic<bool> g_paused{false};
 
 // Present seam handed to librlawt.cpp (it links EGL/GLES but not libandroid). librlawt owns the EGL window
 // surface; these let it borrow the SurfaceView window + watch for surface recreate, with libandroid kept here.
@@ -1001,6 +1007,15 @@ static void *renderLoop(void *) {
     int lastSeq = -1, geomW = -1, geomH = -1;
     uint64_t lastGen = 0;
     while (g_renderRun) {
+        // PERF-BATTERY-NETWORK-01: app backgrounded — the UI thread isn't drawing the native overlays, so the
+        // whole per-tick snapshot-republish batch + present below is wasted. Drop to ~4 Hz and only drainInput
+        // (so a queued terminal touch/keepalive that arrived as we backgrounded isn't stranded). Covers both the
+        // CPU blit path and the GPU direct-present idle-pace; the GPU draw thread itself is paced in librlawt.
+        if (g_paused.load(std::memory_order_acquire)) {
+            if (g_bridgeCls) drainInput(env);
+            usleep(250000);
+            continue;
+        }
         // A surface destroy/recreate invalidates the cached geometry — force re-apply on the next blit.
         uint64_t gen = g_surfaceGen.load(std::memory_order_acquire);
         if (gen != lastGen) { geomW = geomH = -1; lastGen = gen; }
@@ -1489,6 +1504,14 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeSetSurface(JNIEnv *env, jobject, jo
     if (old) ANativeWindow_release(old);
     g_surfaceGen.fetch_add(1, std::memory_order_release);   // force the render thread to re-apply geometry
     LOGI("surface %s", win ? "set" : "cleared");
+}
+
+// PERF-BATTERY-NETWORK-01: background/foreground visibility gate (called from onStop/onStart on the UI thread).
+// Paused -> the render thread idles at 4 Hz (drainInput only) instead of the 60 Hz snapshot-republish batch.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeSetPaused(JNIEnv *, jobject, jboolean paused) {
+    g_paused.store(paused ? true : false, std::memory_order_release);
+    LOGI("render %s", paused ? "paused (backgrounded)" : "resumed (foreground)");
 }
 
 // ---- Input ingress (called from the ART UI thread; pushes onto the queue, never attaches to HotSpot) --

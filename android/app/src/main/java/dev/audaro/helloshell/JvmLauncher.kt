@@ -59,6 +59,9 @@ object JvmLauncher {
     /** Hand the SurfaceView's surface (or null to clear) to the native render thread for blitting. */
     external fun nativeSetSurface(surface: Surface?)
 
+    // PERF-BATTERY-NETWORK-01: visibility gate. Paused (backgrounded) -> the render thread idles at 4 Hz.
+    external fun nativeSetPaused(paused: Boolean)
+
     /** A discrete tap at game-canvas (x,y); button 1 = left (walk/interact), 3 = long-press menu. */
     external fun nativeClick(x: Int, y: Int, button: Int)
 
@@ -319,6 +322,7 @@ object JvmLauncher {
     fun setEnv(key: String, value: String) = nativeSetEnv(key, value)
     fun setStdioRedirect(enabled: Boolean) = nativeSetStdioRedirect(enabled)
     fun setSurface(surface: Surface?) = nativeSetSurface(surface)
+    fun setPaused(paused: Boolean) = nativeSetPaused(paused)
     fun click(x: Int, y: Int, button: Int) = nativeClick(x, y, button)
     fun touch(type: Int, x: Int, y: Int, button: Int) = nativeTouch(type, x, y, button)
     fun camera(dx: Int, dy: Int) = nativeCamera(dx, dy)
