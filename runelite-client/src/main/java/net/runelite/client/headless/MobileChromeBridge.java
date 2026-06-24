@@ -167,11 +167,17 @@ public final class MobileChromeBridge
 			// LOGIN_SCREEN→LOGGED_IN login (which needs a brief post-login chrome-suppression window to avoid the
 			// welcome-frame flash) apart from an in-game LOADING/teleport blip (state==LOADING, never LOGIN_SCREEN —
 			// stays loggedIn:false with no flag, so native keeps chrome engaged through region loads).
+			// UX-LOGIN-01: a give-up (autologin/reconnect exhausted) parks on the raw login screen with no further
+			// recovery — flag it so the native shell shows a "Session expired — sign in again" overlay (launches the
+			// on-device login), distinct from the transient reconnecting scrim. Ordered: an ACTIVE reconnect wins
+			// (still recovering); else a give-up is sessionExpired; else a plain login screen.
 			publishSnapshot(HeadlessLogin.isReconnecting()
 				? "{\"enabled\":true,\"loggedIn\":false,\"reconnecting\":true}"
-				: state == GameState.LOGIN_SCREEN
-					? "{\"enabled\":true,\"loggedIn\":false,\"loginScreen\":true}"
-					: "{\"enabled\":true,\"loggedIn\":false}");
+				: HeadlessLogin.hasGivenUp()
+					? "{\"enabled\":true,\"loggedIn\":false,\"loginScreen\":true,\"sessionExpired\":true}"
+					: state == GameState.LOGIN_SCREEN
+						? "{\"enabled\":true,\"loggedIn\":false,\"loginScreen\":true}"
+						: "{\"enabled\":true,\"loggedIn\":false}");
 			return;
 		}
 

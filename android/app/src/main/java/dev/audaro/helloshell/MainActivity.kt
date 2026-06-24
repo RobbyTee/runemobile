@@ -197,6 +197,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dialogueOverlay: DialogueView
     // FIX-9: a native "Reconnecting…" scrim shown while the headless auto-reconnect recovers a dropped session.
     private lateinit var reconnectOverlay: ReconnectingOverlayView
+    // UX-LOGIN-01: a native "Session expired — sign in again" card shown when the login machine gives up (the
+    // chrome snapshot's "sessionExpired" flag); its button re-runs the on-device Jagex login (LoginActivity).
+    private lateinit var sessionExpiredOverlay: SessionExpiredOverlayView
     // UX-ONBOARD-01: a branded cold-start splash shown immediately in onCreate over the black SurfaceView, until
     // the engine renders its first real frame (or a real login state lands) / a generous timeout. Bounded so a
     // missed signal can never leave it covering the game.
@@ -213,6 +216,9 @@ class MainActivity : AppCompatActivity() {
     // DEBUG-only force for the reconnect overlay (real network drops are hard to repro over Wi-Fi adb). null =
     // follow the live snapshot; true/false = force shown/hidden. Driven by the SET_RECONNECT_OVERLAY broadcast.
     @Volatile private var reconnectTestOverride: Boolean? = null
+    // UX-LOGIN-01: DEBUG-only force for the session-expired overlay (autologin exhaustion is hard to repro without
+    // burning a session). null = follow the live snapshot; driven by the SET_SESSION_EXPIRED_OVERLAY broadcast.
+    @Volatile private var sessionExpiredTestOverride: Boolean? = null
     // Phase-4: native-tracked chat collapse state (the shared side shoves the live widget off-canvas; this
     // mirrors what we last asked for — the engine never collapses on its own).
     private var chatCollapsed = false
@@ -356,6 +362,7 @@ class MainActivity : AppCompatActivity() {
     //   adb shell am broadcast -a dev.audaro.helloshell.SET_RECONNECT_OVERLAY --es show off    (force hidden)
     //   adb shell am broadcast -a dev.audaro.helloshell.SET_RECONNECT_OVERLAY --es show clear  (follow live state)
     private var reconnectTestReceiver: BroadcastReceiver? = null
+    private var sessionExpiredTestReceiver: BroadcastReceiver? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -406,6 +413,20 @@ class MainActivity : AppCompatActivity() {
             }
             ContextCompat.registerReceiver(
                 this, reconnectTestReceiver, IntentFilter("dev.audaro.helloshell.SET_RECONNECT_OVERLAY"),
+                ContextCompat.RECEIVER_EXPORTED,
+            )
+            sessionExpiredTestReceiver = object : BroadcastReceiver() {
+                override fun onReceive(ctx: Context?, intent: Intent?) {
+                    sessionExpiredTestOverride = when (intent?.getStringExtra("show")) {
+                        "on" -> true
+                        "off" -> false
+                        else -> null   // "clear" / anything else -> follow the live snapshot
+                    }
+                    Log.i(TAG, "SET_SESSION_EXPIRED_OVERLAY override=$sessionExpiredTestOverride")
+                }
+            }
+            ContextCompat.registerReceiver(
+                this, sessionExpiredTestReceiver, IntentFilter("dev.audaro.helloshell.SET_SESSION_EXPIRED_OVERLAY"),
                 ContextCompat.RECEIVER_EXPORTED,
             )
         }
@@ -510,6 +531,10 @@ class MainActivity : AppCompatActivity() {
         dialogueOverlay.onOption = { digit -> JvmLauncher.onBridgeTouch { JvmLauncher.text(digit.toString()) } }
         // FIX-9: the "Reconnecting…" scrim (non-interactive; driven from updateChrome's snapshot).
         reconnectOverlay = ReconnectingOverlayView(this)
+        // UX-LOGIN-01: the "Session expired" card (interactive; driven from updateChrome's sessionExpired flag).
+        sessionExpiredOverlay = SessionExpiredOverlayView(this).apply {
+            onSignIn = { startActivity(Intent(this@MainActivity, LoginActivity::class.java)) }
+        }
         // UX-DISCRETE-01 / ENH-B06: the "Hopping…" scrim (non-interactive; armed at the hop trigger sites, hidden
         // from updateChrome's loggedIn signal / a timeout).
         hoppingOverlay = HoppingOverlayView(this)
@@ -722,6 +747,7 @@ class MainActivity : AppCompatActivity() {
             addView(overlayEditView, FrameLayout.LayoutParams(mp, mp)) // on-screen overlay-layout editor (GONE unless editing)
             addView(reconnectOverlay, FrameLayout.LayoutParams(mp, mp)) // FIX-9: "Reconnecting…" scrim (non-interactive)
             addView(hoppingOverlay, FrameLayout.LayoutParams(mp, mp))   // ENH-B06: "Hopping…" scrim (non-interactive)
+            addView(sessionExpiredOverlay, FrameLayout.LayoutParams(mp, mp)) // UX-LOGIN-01: "Session expired" card (interactive, top)
             // §4: the launcher handle sits above the game/chrome (tappable) but below the launcher sheet
             // (covered while it's open) and clears the bottom gesture inset.
             handleBaseBottom = (10 * resources.displayMetrics.density).toInt()
@@ -2071,6 +2097,16 @@ class MainActivity : AppCompatActivity() {
                 Log.i(TAG, "fix9: reconnect overlay -> $show")
             }
         }
+        // UX-LOGIN-01: show the interactive "Session expired" card when the login machine has GIVEN UP (autologin/
+        // reconnect exhausted) — mutually exclusive with the reconnecting scrim (which the bridge only flags while
+        // recovery is still active). Its button re-runs LoginActivity. The DEBUG override forces it for screencap.
+        if (::sessionExpiredOverlay.isInitialized) {
+            val live = !loggedIn && o?.optBoolean("sessionExpired") == true
+            val show = sessionExpiredTestOverride ?: live
+            if (sessionExpiredOverlay.setVisible(show)) {
+                Log.i(TAG, "uxlogin01: session-expired overlay -> $show")
+            }
+        }
         // UX-ONBOARD-01: dismiss the cold-start splash only once the engine has actually PAINTED a frame
         // (frameWidth>0, a cheap native counter universal across renderers) — or the wall-clock failsafe fires. A
         // device cold-start trace showed the snapshot's login STATE (loginScreen/loggedIn) flips ~1.1 s BEFORE the
@@ -2714,6 +2750,7 @@ class MainActivity : AppCompatActivity() {
         drainRun = false   // stop the AP-2a notification/link drain daemon
         hdConfigReceiver?.let { runCatching { unregisterReceiver(it) } }; hdConfigReceiver = null
         reconnectTestReceiver?.let { runCatching { unregisterReceiver(it) } }; reconnectTestReceiver = null
+        sessionExpiredTestReceiver?.let { runCatching { unregisterReceiver(it) } }; sessionExpiredTestReceiver = null
         armHopScrimHook = null   // ENH-B06: drop the static hook so a dead activity can't be re-armed
         super.onDestroy()
     }

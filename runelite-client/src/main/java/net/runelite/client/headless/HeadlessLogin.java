@@ -146,6 +146,11 @@ public final class HeadlessLogin
 	private static int reconnectAttempts;
 	private static int tryAgainAttempts;
 	private static int lastTryAgainDraw;
+	// UX-LOGIN-01: latched true when the login machine EXHAUSTS a stage's retry budget and gives up (EULA / Try
+	// Again / Play Now), as opposed to {@code done} which is also set on a SUCCESSFUL login. While set, the client is
+	// parked on the raw login screen with no further automated recovery — the native shell reads this (hasGivenUp)
+	// to show a "Session expired — sign in again" overlay. Cleared on any re-arm (reconnect / world-hop) or success.
+	private static boolean gaveUp;
 
 	// Bug 4 — hop-via-relog. The headless in-game world hop (client.hopToWorld) is inert, but client.changeWorld()
 	// on the LOGIN_SCREEN is known-good. WorldSwitcherBridge drives a logout then calls requestWorldHop(...) to hand
@@ -230,6 +235,18 @@ public final class HeadlessLogin
 	}
 
 	/**
+	 * UX-LOGIN-01: true once the login machine has exhausted a stage's retry budget and given up (the client is
+	 * parked on the raw login screen with no further automated recovery — an expired/lapsed session or rejected
+	 * autologin). Distinct from a transient {@link #isReconnecting()} recovery and from a normal login screen. The
+	 * native shell reads this to raise a "Session expired — sign in again" overlay. Package-private (same-package
+	 * bridges only); not part of the cross-platform contract.
+	 */
+	static boolean hasGivenUp()
+	{
+		return gaveUp;
+	}
+
+	/**
 	 * Bug 4 — hop-via-relog. Called by {@link WorldSwitcherBridge} (same package, client thread) once it has begun
 	 * driving a logout for a world hop. Re-arms the login machine to relogin into {@code worldId}: on the next
 	 * {@link GameState#LOGIN_SCREEN} we {@code changeWorld(target)} (members type from {@code members}) before
@@ -251,6 +268,7 @@ public final class HeadlessLogin
 		// Re-arm the relogin: clear `done`/`worldSelected` and the Play-Now + Try-Again + welcome budgets so the
 		// login machine drives a fresh Play-Now (and re-dismisses the in-world welcome screen) after the logout.
 		done = false;
+		gaveUp = false;   // UX-LOGIN-01: a fresh relogin attempt clears any prior give-up
 		worldSelected = false;
 		playAttempts = 0;
 		lastPlayDraw = 0;
@@ -277,6 +295,7 @@ public final class HeadlessLogin
 		hopAwaitingLogin = false;
 		worldSelected = false;
 		done = true;   // we're still LOGGED_IN; treat the (failed) hop as finished so later logins behave normally
+		gaveUp = false;
 	}
 
 	/**
@@ -301,6 +320,7 @@ public final class HeadlessLogin
 			reconnectAttempts++;
 			sawConnectionLost = false;
 			done = false;
+			gaveUp = false;   // UX-LOGIN-01: a new disconnect re-arms recovery — clear any prior give-up
 			playAttempts = 0;
 			tryAgainAttempts = 0;
 			worldSelected = false;
@@ -342,6 +362,7 @@ public final class HeadlessLogin
 				// LATER drop gets its own MAX_RECONNECT cycles.
 				sawConnectionLost = false;
 				reconnectAttempts = 0;
+				gaveUp = false;   // UX-LOGIN-01: a successful login clears any prior give-up
 				// Bug 4: a world-hop relogin completed — clear the pending target so later logins behave normally.
 				if (pendingHopActive)
 				{
@@ -386,6 +407,7 @@ public final class HeadlessLogin
 					log.warn("[headless-login] still on the EULA dialog (loginIndex={}) after {} Accept attempt(s) "
 						+ "at {},{} — giving up", loginIndex, eulaAttempts, EULA_X, EULA_Y);
 					done = true;
+					gaveUp = true;   // UX-LOGIN-01: parked, native shell surfaces "sign in again"
 				}
 				return;
 			}
@@ -420,6 +442,7 @@ public final class HeadlessLogin
 					log.warn("[headless-login] reconnect: still on 'Try again' (loginIndex={}) after {} attempt(s) — giving up",
 						loginIndex, tryAgainAttempts);
 					done = true;
+					gaveUp = true;   // UX-LOGIN-01: reconnect exhausted — surface "session expired"
 				}
 				return;
 			}
@@ -448,6 +471,7 @@ public final class HeadlessLogin
 				log.warn("[headless-login] still LOGIN_SCREEN after {} Play Now attempt(s) at {},{} — giving up "
 					+ "(wrong coords, or the engine rejects synthesized input headless)", playAttempts, CLICK_X, CLICK_Y);
 				done = true;
+				gaveUp = true;   // UX-LOGIN-01: autologin exhausted — surface "session expired"
 				// Bug 4: a hop relogin that can't get past Play Now is over — drop the pending target so it can't
 				// hijack a later login (e.g. a future reconnect) into the stale hop world.
 				pendingHopActive = false;
