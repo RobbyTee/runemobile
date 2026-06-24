@@ -1992,9 +1992,11 @@ class MainActivity : AppCompatActivity() {
                 TabSprites.parse(sprJson)?.let { set ->
                     chromeOverlay.setSprites(set)
                     chatTabOverlay.setSprites(set)
-                    TabSprites.cache(filesDir, sprJson)
+                    // Only persist a COMPLETE set — a deadline-partial would otherwise show glyphless tiles on every
+                    // later boot. A fresh process re-captures from the cache (usually complete within a few ticks).
+                    if (set.complete) TabSprites.cache(filesDir, sprJson)
                     tabSpritesApplied = true
-                    Log.i(TAG, "ANDROID_TABSPRITES_GREEN runtime cache sprites applied (${sprJson.length} bytes)")
+                    Log.i(TAG, "ANDROID_TABSPRITES_GREEN runtime cache sprites applied (${sprJson.length} bytes, complete=${set.complete})")
                 }
             }
         }

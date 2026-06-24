@@ -109,7 +109,7 @@ public final class HudVeneerBridge
 	private static final String[] tabSpriteB64 = new String[TAB_SPRITE_COUNT];
 	private static final int[][] tabSpriteDim = new int[TAB_SPRITE_COUNT][2];
 	private static int tabCaptureTicks = 0;
-	private static final int TAB_CAPTURE_DEADLINE = 250;    // ~a few seconds of render ticks before shipping partial
+	private static final int TAB_CAPTURE_DEADLINE = 600;    // generous safety valve before shipping a partial set
 
 	// Desired state, set from native, applied on the client thread. chatX < 0 = not relocating.
 	private static volatile int chatX = -1;
@@ -1710,6 +1710,9 @@ public final class HudVeneerBridge
 			}
 			final StringBuilder sb = new StringBuilder(64 * 1024);
 			sb.append('{');
+			// gridComplete=false means we hit the deadline with a missing slot — the consumer must NOT persist a
+			// partial set to its boot cache (a fresh process re-captures and usually completes in a few ticks).
+			sb.append("\"complete\":").append(gridComplete).append(',');
 			appendSpriteSlot(sb, "stoneInactive", 0);
 			sb.append(',');
 			appendSpriteSlot(sb, "stoneActive", 1);

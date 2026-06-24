@@ -2,6 +2,7 @@ package dev.audaro.helloshell
 
 import android.graphics.Bitmap
 import android.util.Base64
+import android.util.Log
 import org.json.JSONObject
 import java.io.File
 
@@ -22,6 +23,8 @@ object TabSprites {
         val chatbtn: Bitmap?,
         val chatbtnSelected: Bitmap?,
         val chatbtnNew: Bitmap?,
+        /** The bridge captured the full grid set (not a deadline-partial) — only persist these to the boot cache. */
+        val complete: Boolean,
     ) {
         /** Enough to drive the grid: both stones + at least one glyph. */
         fun usableForGrid() = stoneInactive != null && stoneActive != null && icons.any { it != null }
@@ -36,15 +39,22 @@ object TabSprites {
             o.optJSONArray("icons")?.let { arr ->
                 for (i in 0 until minOf(14, arr.length())) icons[i] = bmp(arr.optJSONObject(i))
             }
-            Set(
+            val set = Set(
                 bmp(o.optJSONObject("stoneInactive")),
                 bmp(o.optJSONObject("stoneActive")),
                 icons,
                 bmp(o.optJSONObject("chatbtn")),
                 bmp(o.optJSONObject("chatbtnSelected")),
                 bmp(o.optJSONObject("chatbtnNew")),
+                o.optBoolean("complete", false),
             )
+            if (!set.usableForGrid() && !set.usableForChat()) {
+                // non-empty payload that decoded to nothing usable — flag it (corrupt cache / decode mismatch)
+                Log.w("TabSprites", "payload parsed but no usable bitmaps (${json.length} bytes) — check ARGB/Base64 decode")
+            }
+            set
         } catch (e: Exception) {
+            Log.w("TabSprites", "failed to parse tab-sprite payload (${json.length} bytes): ${e.message}")
             null
         }
     }
@@ -56,8 +66,12 @@ object TabSprites {
         val px = o.optString("px", "")
         if (w <= 0 || h <= 0 || px.isEmpty()) return null
         return try {
-            val bytes = Base64.decode(px, Base64.DEFAULT)
-            if (bytes.size != w * h * 4) return null
+            // NO_WRAP matches the bridge's java.util.Base64 basic encoder (unwrapped, padded).
+            val bytes = Base64.decode(px, Base64.NO_WRAP)
+            if (bytes.size != w * h * 4) {
+                Log.w("TabSprites", "sprite byte-count mismatch: got ${bytes.size}, expected ${w * h * 4} (${w}x$h)")
+                return null
+            }
             val argb = IntArray(w * h)
             for (i in argb.indices) {
                 val a = bytes[i * 4].toInt() and 0xFF
