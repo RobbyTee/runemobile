@@ -2063,6 +2063,7 @@ class MainActivity : AppCompatActivity() {
             .append('|').append(chromeOverlay.railsShown)
             .append('|').append(mapOpen)
             .append('|').append(reconnectTestOverride)
+            .append('|').append(sessionExpiredTestOverride)
             .append('|').append(inLoginTransitionSig)
             .append('|').append(surfaceView.width).append('x').append(surfaceView.height)
             .append('|').append(JvmLauncher.frameWidth()).append('x').append(JvmLauncher.frameHeight())
