@@ -992,14 +992,23 @@ class MainActivity : AppCompatActivity() {
             val rp = getSharedPreferences("renderer", MODE_PRIVATE)
             val armed = File(filesDir, "auto-gpu-armed")
             if (armed.exists()) {
+                // PROD-CRASH-TELEMETRY-01: the cookie body is the mode that failed (gpu|117hd); read it before delete.
+                val failedMode = runCatching { armed.readText().trim() }.getOrNull()?.takeIf { it.isNotBlank() } ?: "gpu/117hd"
                 armed.delete()
                 val wasAuto = rp.getBoolean("autoDecided", false)
+                val failCount = rp.getInt("gpuFailCount", 0) + 1
                 // commit() (synchronous): the boot path arms a SYNC cookie file next, so the pref must be durably on
                 // disk first — else a crash in the apply() flush window could leave an armed cookie with a stale mode.
-                val e = rp.edit().putString("mode", "cpu")
+                val e = rp.edit().putString("mode", "cpu").putInt("gpuFailCount", failCount)
                 if (wasAuto) e.putBoolean("autoGpuFailed", true)
                 e.commit()
-                Log.w(TAG, "auto-GPU: prior promoted boot never presented a frame -> CPU fallback (wasAuto=$wasAuto)")
+                // Record WHICH renderer + GPU failed so a tail-device fallback is diagnosable post-hoc (the audit's
+                // "observable floor") instead of a silent CPU revert. The GPU string was captured by the caps probe.
+                val gpu = rp.getString("gpuRenderer", null) ?: "unknown"
+                val esTier = rp.getInt("gpuEsTier", -1)
+                val detail = "renderer=$failedMode gpu=\"$gpu\" esTier=$esTier wasAuto=$wasAuto failCount=$failCount at=${System.currentTimeMillis()}"
+                runCatching { File(filesDir, "gpu-fail.txt").writeText(detail + "\n") }   // last-failure record (run-as readable)
+                Log.w(TAG, "auto-GPU: prior promoted boot never presented a frame -> CPU fallback ($detail)")
             }
             if (rp.getString("mode", null) == null && !rp.getBoolean("autoGpuFailed", false)) {
                 val probed = probeGpuCaps()   // "117hd" | "gpu" | "cpu"
@@ -1148,6 +1157,11 @@ class MainActivity : AppCompatActivity() {
             val baseGpuOk = esTier >= 30 && maxSamples >= 1
             val hd117Clean = esTier >= 31 && maxCompute > 0
             val pick = when { hd117Clean -> "117hd"; baseGpuOk -> "gpu"; else -> "cpu" }
+            // PROD-CRASH-TELEMETRY-01: persist the GPU identity now (we hold a live context here) so that if a
+            // promoted GPU/117HD boot later fails to present, the crash-cookie fallback can name WHICH GPU died
+            // instead of reverting to CPU silently. Cheap one-time write on the first-run probe.
+            getSharedPreferences("renderer", MODE_PRIVATE).edit()
+                .putString("gpuRenderer", renderer).putInt("gpuEsTier", esTier).apply()
             Log.i(TAG, "auto-GPU caps: esTier=$esTier maxSamples=$maxSamples maxCompute=$maxCompute renderer=\"$renderer\" -> $pick")
             return pick
         } catch (t: Throwable) {
