@@ -102,6 +102,37 @@ val verifyNoReleaseSecret = tasks.register("verifyNoReleaseSecret") {
 }
 tasks.matching { it.name == "mergeReleaseAssets" }.configureEach { finalizedBy(verifyNoReleaseSecret) }
 
+// PROD-RELEASE-ENG-01 / PROD-QA-02 fail-fast asset guard: the embedded JRE + the gpu/rlhd client jars are
+// gitignored and produced by the ordered staging recipe (README "Full build-from-clean"). A fresh clone that runs
+// assembleRelease WITHOUT staging them builds an APK that hard-aborts before JNI_CreateJavaVM — bootJvm requires
+// client-*-gpu.jar and returns un-bootable on EVERY renderer when it is absent (MainActivity ~2875). Fail the
+// release build now, with a pointer to the recipe, instead of shipping a silently-broken artifact. (Until the
+// staging is wired into the Gradle graph — the remaining ENG-01 leg — this guard is what enforces the manual order.)
+val verifyReleaseBootAssets = tasks.register("verifyReleaseBootAssets") {
+    description = "Fail the release build if the staged JRE / gpu / rlhd boot artifacts are missing from the merged release assets."
+    doLast {
+        val merged = layout.buildDirectory.dir("intermediates/assets/release").get().asFile
+        if (!merged.exists()) return@doLast
+        val files = merged.walkTopDown().filter { it.isFile }.toList()
+        val missing = mutableListOf<String>()
+        if (files.none { it.name.startsWith("client-") && it.name.endsWith("-gpu.jar") })
+            missing += "jvm/client-*-gpu.jar (android/dev-tools/gpu/stage-android-gpu-jar.sh) — boot-fatal on every renderer"
+        if (files.none { it.name.startsWith("client-") && it.name.endsWith("-rlhd.jar") })
+            missing += "jvm/client-*-rlhd.jar (android/dev-tools/gpu/stage-rlhd-zone-jar.sh) — 117HD renderer"
+        if (files.none { it.name == "libjvm.so" })
+            missing += "jvm/jre/ embedded runtime (tools/stage-android-jre.sh)"
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "PROD-RELEASE-ENG-01: the release assets are missing boot artifacts:\n  - " +
+                    missing.joinToString("\n  - ") +
+                    "\nRun the ordered build-from-clean recipe in android/README.md (JRE -> :client:shadowJar -> gpu " +
+                    "-> rlhd -> mobile-runtime) before assembleRelease; a build without these is un-bootable.",
+            )
+        }
+    }
+}
+tasks.matching { it.name == "mergeReleaseAssets" }.configureEach { finalizedBy(verifyReleaseBootAssets) }
+
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
