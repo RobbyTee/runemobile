@@ -38,6 +38,11 @@ cd "$ROOT"
 #   To rebuild/refresh: edit those two scripts on the fork, run the workflow, then re-pin JRE_URL/SHA/BYTES here.
 #   Upstream 4 KB fallback (no 16 KB alignment): AngelAuraMC download_jre21 / jre21-android-arm64.tar.xz
 #     sha256 8d41ec401ee59f7722df60ed991f81ad146e130452804bfdd8a05d3436f7bbfe (28675516 bytes).
+#   NB: to revert to the 4 KB build you MUST change all THREE pins together (URL + JRE_SHA256 + JRE_BYTES) to the
+#   values on the two lines above — they diverge from the 16 KB asset. The SHA check below will refuse a URL/SHA
+#   mismatch rather than stage it, so a partial revert fails loudly (by design). 16 KB-VALIDATED: builds on a real
+#   16 KB-page kernel (ps16k arm64 emulator, PAGE_SIZE=16384) — JDK .so mmap + GL context OK; the 4 KB fallback
+#   is for 4 KB-page devices only and is NOT exercised by CI/this script.
 JRE_URL="https://github.com/audaro/angelauramc-openjdk-build/releases/download/jre21-android-arm64-16k/jre21-android-arm64.tar.xz"
 JRE_SHA256="db7862e4ec68a71a46cf1fec078938443410805cb61e8f99b75f10893c708c9a"
 JRE_BYTES=28679076
