@@ -53,7 +53,7 @@ targets:
       - path: jvm-resources/probes.jar
         buildPhase: resources
       # §6.2: the shaded RuneLite client (all deps) — gitignored build artifact, ~29 MB.
-      - path: jvm-resources/client-1.12.29-SNAPSHOT-shaded.jar
+      - path: jvm-resources/client-1.12.31-SNAPSHOT-shaded.jar
         buildPhase: resources
       # W3 GPU Route C: the native JNI GL bridge (EAGL ES3 AWTContext analogue + 97 forwarders) compiled into
       # the shell. RouteCProbe.m / main.m in the same dir are the Simulator harness — NOT added here.
@@ -67,7 +67,7 @@ targets:
         buildPhase: resources
       # W3 GPU Zone B0.5: the staged 117HD (RLHD) jar — rs117/** + RLHD shader/JSON resources, no lwjgl (facade
       # ships in the shaded jar). gitignored build artifact (regen: dev-tools/gpu-zone/stage-ios-zone-jar.sh).
-      - path: jvm-resources/client-1.12.29-SNAPSHOT-rlhd.jar
+      - path: jvm-resources/client-1.12.31-SNAPSHOT-rlhd.jar
         buildPhase: resources
     dependencies:
       # WKWebView for the on-device Jagex login (JagexLoginSpikeViewController).
