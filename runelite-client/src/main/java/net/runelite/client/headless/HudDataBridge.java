@@ -455,7 +455,11 @@ public final class HudDataBridge
 	{
 		try
 		{
-			return c.getCameraYaw();   // upstream rev239 removed the getMapAngle() alias; getCameraYaw() is identical (0-2047)
+			// upstream rev239 removed the deprecated getMapAngle() alias AND widened the camera yaw from 11-bit
+			// (JAU, 0-2047) to 14-bit (JAU14, 0-16383). The old getMapAngle() returned the 11-bit value the native
+			// minimap "mapAngle" contract expects, so shift the 14-bit yaw back down by 3 (16384/2048 = 8) to keep
+			// the published value byte-identical to before the merge.
+			return c.getCameraYaw() >> 3;
 		}
 		catch (RuntimeException ex)
 		{
