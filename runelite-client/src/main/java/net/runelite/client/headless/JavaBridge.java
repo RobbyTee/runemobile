@@ -293,10 +293,12 @@ public final class JavaBridge
 
 	// Camera (two-finger pan -> direct yaw/pitch target). Sub-pixel remainders so a slow drag still turns
 	// (a small per-event pixel delta would otherwise truncate to 0 yaw units).
-	private static final float YAW_UNITS_PER_PX = 1.5f;    // ~a screen-width drag ≈ half a turn
-	private static final float PITCH_UNITS_PER_PX = 1.2f;
-	private static final int PITCH_MIN = 128;              // RS camera-pitch clamp (normal range)
-	private static final int PITCH_MAX = 383;
+	// rev239 widened the camera angle from 11-bit (JAU, 0-2047) to 14-bit (JAU14, 0-16383) — an 8x larger
+	// unit space — so the per-pixel sensitivity and the pitch clamp both scale up 8x (and yaw now wraps mod 2^14).
+	private static final float YAW_UNITS_PER_PX = 12.0f;   // ~a screen-width drag ≈ half a turn (1.5 * 8)
+	private static final float PITCH_UNITS_PER_PX = 9.6f;  // 1.2 * 8
+	private static final int PITCH_MIN = 1024;             // RS camera-pitch clamp (normal range, JAU14: 128 * 8)
+	private static final int PITCH_MAX = 3064;             // 383 * 8
 	private static float yawRemainder;
 	private static float pitchRemainder;
 	// Two-finger camera pan: native posts raw pixel deltas from the main thread (onCameraDrag); they accumulate
@@ -1739,7 +1741,7 @@ public final class JavaBridge
 	/**
 	 * Rotate the camera by a two-finger pan: apply the raw pixel delta {@code (dxPixels,dyPixels)} to the
 	 * camera yaw/pitch <em>targets</em> directly via the client API (no synthesized middle-mouse, so it is
-	 * independent of the "middle mouse moves camera" setting). Yaw wraps mod 2048; pitch clamps to the
+	 * independent of the "middle mouse moves camera" setting). Yaw wraps mod 16384 (JAU14); pitch clamps to the
 	 * normal RS range. Only acts in-game. The native side sends raw pixel deltas; sensitivity + sub-pixel
 	 * accumulation live here.
 	 */
@@ -1769,7 +1771,7 @@ public final class JavaBridge
 		yawRemainder = yawF - yawStep;
 		if (yawStep != 0)
 		{
-			c.setCameraYawTarget((c.getCameraYawTarget() + yawStep) & 2047);
+			c.setCameraYawTarget((c.getCameraYawTarget() + yawStep) & 16383);
 		}
 
 		final float pitchF = dyPixels * PITCH_UNITS_PER_PX + pitchRemainder;
