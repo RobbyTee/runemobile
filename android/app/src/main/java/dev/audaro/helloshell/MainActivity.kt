@@ -15,6 +15,7 @@ import android.provider.MediaStore
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -200,6 +201,8 @@ class MainActivity : AppCompatActivity() {
     // UX-LOGIN-01: a native "Session expired — sign in again" card shown when the login machine gives up (the
     // chrome snapshot's "sessionExpired" flag); its button re-runs the on-device Jagex login (LoginActivity).
     private lateinit var sessionExpiredOverlay: SessionExpiredOverlayView
+    // PERF-MEMORY-THERMAL-01: throttles the 117HD scene scale under thermal pressure (armed only on a 117HD boot).
+    private var thermalGovernor: ThermalGovernor? = null
     // UX-ONBOARD-01: a branded cold-start splash shown immediately in onCreate over the black SurfaceView, until
     // the engine renders its first real frame (or a real login state lands) / a generous timeout. Bounded so a
     // missed signal can never leave it covering the game.
@@ -363,6 +366,7 @@ class MainActivity : AppCompatActivity() {
     //   adb shell am broadcast -a dev.audaro.helloshell.SET_RECONNECT_OVERLAY --es show clear  (follow live state)
     private var reconnectTestReceiver: BroadcastReceiver? = null
     private var sessionExpiredTestReceiver: BroadcastReceiver? = null
+    private var thermalTestReceiver: BroadcastReceiver? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -427,6 +431,19 @@ class MainActivity : AppCompatActivity() {
             }
             ContextCompat.registerReceiver(
                 this, sessionExpiredTestReceiver, IntentFilter("dev.audaro.helloshell.SET_SESSION_EXPIRED_OVERLAY"),
+                ContextCompat.RECEIVER_EXPORTED,
+            )
+            // PERF-MEMORY-THERMAL-01: force a thermal status for verification (real thermal pressure is hard to induce
+            // on demand). `--ei level N` injects status 0..6 (NONE..SHUTDOWN); level<0 or omitted follows the sensor.
+            thermalTestReceiver = object : BroadcastReceiver() {
+                override fun onReceive(ctx: Context?, intent: Intent?) {
+                    val level = intent?.getIntExtra("level", -1) ?: -1
+                    Log.i(TAG, "SET_THERMAL_STATUS level=$level")
+                    thermalGovernor?.forceStatus(level)
+                }
+            }
+            ContextCompat.registerReceiver(
+                this, thermalTestReceiver, IntentFilter("dev.audaro.helloshell.SET_THERMAL_STATUS"),
                 ContextCompat.RECEIVER_EXPORTED,
             )
         }
@@ -1036,6 +1053,11 @@ class MainActivity : AppCompatActivity() {
                 Log.i(TAG, "auto-GPU: armed first-boot fallback cookie for pref '$prefRenderer'")
             }
             thread(name = "jvm-boot") { bootJvm(app, censusMode, gpu = gpuMode && !rlhdMode, rlhd = rlhdMode) }
+            // PERF-MEMORY-THERMAL-01: arm the thermal governor for a 117HD boot (no-op for cpu/gpu). It throttles
+            // the 117HD sceneResolutionScale under thermal pressure and restores it on cooldown; all config I/O is
+            // bridge-threaded so the main-thread listener callback never blocks.
+            thermalGovernor = ThermalGovernor(getSystemService(POWER_SERVICE) as PowerManager, is117hd = rlhdMode)
+                .also { it.start() }
         }
         // AP-2a: start draining the notification/link queues. Safe before the VM is up — the externs return ""
         // until the MobileUiBridge facade publishes, then start yielding real items.
@@ -2752,6 +2774,8 @@ class MainActivity : AppCompatActivity() {
         hdConfigReceiver?.let { runCatching { unregisterReceiver(it) } }; hdConfigReceiver = null
         reconnectTestReceiver?.let { runCatching { unregisterReceiver(it) } }; reconnectTestReceiver = null
         sessionExpiredTestReceiver?.let { runCatching { unregisterReceiver(it) } }; sessionExpiredTestReceiver = null
+        thermalTestReceiver?.let { runCatching { unregisterReceiver(it) } }; thermalTestReceiver = null
+        thermalGovernor?.stop(); thermalGovernor = null   // PERF-MEMORY-THERMAL-01: unregister + restore the baseline scale
         armHopScrimHook = null   // ENH-B06: drop the static hook so a dead activity can't be re-armed
         super.onDestroy()
     }
