@@ -21,12 +21,15 @@ object LegacyCreds {
 
     private const val TAG = "LegacyCreds"
 
-    /** Locate legacy_login.json: internal filesDir always; the adb-pushable external dir ONLY in DEBUG
-     *  builds (same A8 rule as tokens.json — a release build keeps secrets internal-only). */
+    /** Locate legacy_login.json. PROD-SECURITY-03: legacy username/password autologin is a DEV-ONLY convenience
+     *  whose credential is stored in plaintext — so it is DROPPED from release entirely (a release build never
+     *  reads or arms it; Jagex OAuth is the only release login path). DEBUG reads internal filesDir + the
+     *  adb-pushable external dir; logout still purges the file in every build (JagexTokens.deleteAll). */
     private fun locate(ctx: Context): File? {
+        if (!BuildConfig.DEBUG) return null
         val candidates = listOfNotNull(
             File(ctx.filesDir, "legacy_login.json"),
-            if (BuildConfig.DEBUG) ctx.getExternalFilesDir(null)?.let { File(it, "legacy_login.json") } else null,
+            ctx.getExternalFilesDir(null)?.let { File(it, "legacy_login.json") },
         )
         return candidates.firstOrNull { it.exists() && it.length() > 0 }
     }
