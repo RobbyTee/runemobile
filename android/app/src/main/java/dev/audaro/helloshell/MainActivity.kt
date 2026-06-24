@@ -1239,8 +1239,12 @@ class MainActivity : AppCompatActivity() {
         }
         if (booted.get()) {
             JvmLauncher.onBridge {
+                // PROD-SECURITY-10: a Jagex logout must also end the runelite.net account session — otherwise the
+                // synced RuneLite account (profiles/plugin-hub) stays signed in after the user logs out. Same bridge
+                // (client) thread + method the account panel's own logout uses.
+                runCatching { JvmLauncher.accountLogout() }.onFailure { Log.w(TAG, "logout: accountLogout failed: ${it.message}") }
                 val ack = JvmLauncher.flushConfig()
-                Log.i(TAG, "logout: flushConfig -> $ack")
+                Log.i(TAG, "logout: accountLogout + flushConfig -> $ack")
                 runOnUiThread(purgeAndRestart)
             }
         } else {
