@@ -455,7 +455,7 @@ public final class HudDataBridge
 	{
 		try
 		{
-			return c.getMapAngle();
+			return c.getCameraYaw();   // upstream rev239 removed the getMapAngle() alias; getCameraYaw() is identical (0-2047)
 		}
 		catch (RuntimeException ex)
 		{
