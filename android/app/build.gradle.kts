@@ -144,8 +144,17 @@ val repoRoot: File = rootDir.parentFile
 val jvmAssets = file("src/main/assets/jvm")
 val clientLibs = File(repoRoot, "runelite-client/build/libs")
 val stagingJavaHome = System.getenv("JAVA_HOME") ?: "/opt/homebrew/opt/openjdk@21"
-fun jvmHasSuffix(suffix: String) =
-    jvmAssets.listFiles()?.any { it.name.startsWith("client-") && it.name.endsWith(suffix) } == true
+// Version-precise staging guards: a version bump renames every artifact (client-<ver>-*.jar), so the guards check
+// for the CURRENT version's jar (read from the root gradle.properties) rather than any client-*-*.jar — otherwise a
+// bump would skip on a stale prior-version jar and ship the old client. null (gradle.properties unreadable) => stage
+// (fail safe — never skip on uncertainty).
+val clientVersion: String? = runCatching {
+    File(repoRoot, "gradle.properties").readLines()
+        .firstOrNull { it.startsWith("project.build.version=") }
+        ?.substringAfter("=")?.trim()
+}.getOrNull()
+fun jvmMissingVersioned(suffix: String) =
+    clientVersion == null || !File(jvmAssets, "client-$clientVersion$suffix").exists()
 
 val stageJre = tasks.register<Exec>("stageJre") {
     group = "staging"; description = "Stage the SHA-pinned bionic OpenJDK 21 into assets/jvm/jre (if absent)."
@@ -158,7 +167,7 @@ val shadowJarClient = tasks.register<Exec>("shadowJarClient") {
     workingDir = repoRoot
     environment("JAVA_HOME", stagingJavaHome)
     commandLine("./gradlew", "--no-daemon", ":client:shadowJar")
-    onlyIf { clientLibs.listFiles()?.any { it.name.startsWith("client-") && it.name.endsWith("-shaded.jar") } != true }
+    onlyIf { clientVersion == null || !File(clientLibs, "client-$clientVersion-shaded.jar").exists() }
 }
 val buildProbes = tasks.register<Exec>("buildProbes") {
     group = "staging"; description = "Build probes.jar (on the Android boot classpath; folds in CACIO)."
@@ -174,7 +183,7 @@ val stageGpuJar = tasks.register<Exec>("stageGpuJar") {
     workingDir = File(repoRoot, "android/dev-tools/gpu")
     environment("JAVA_HOME", stagingJavaHome)
     commandLine("bash", "stage-android-gpu-jar.sh")
-    onlyIf { !jvmHasSuffix("-gpu.jar") }
+    onlyIf { jvmMissingVersioned("-gpu.jar") }
 }
 val stageRlhdJar = tasks.register<Exec>("stageRlhdJar") {
     group = "staging"; description = "Derive client-*-rlhd.jar (117HD Zone) from the shaded jar."
@@ -182,7 +191,7 @@ val stageRlhdJar = tasks.register<Exec>("stageRlhdJar") {
     workingDir = File(repoRoot, "android/dev-tools/gpu")
     environment("JAVA_HOME", stagingJavaHome)
     commandLine("bash", "stage-rlhd-zone-jar.sh")
-    onlyIf { !jvmHasSuffix("-rlhd.jar") }
+    onlyIf { jvmMissingVersioned("-rlhd.jar") }
 }
 val stageMobileRuntime = tasks.register<Exec>("stageMobileRuntime") {
     group = "staging"; description = "Stage probes + fold shaded/gpu/rlhd SHAs into runtime.tag (runs after gpu/rlhd)."
@@ -190,7 +199,15 @@ val stageMobileRuntime = tasks.register<Exec>("stageMobileRuntime") {
     workingDir = repoRoot
     environment("JAVA_HOME", stagingJavaHome)
     commandLine("bash", "tools/stage-mobile-runtime.sh", "--no-build", "--android-only")
-    onlyIf { !File(jvmAssets, "runtime.tag").exists() || !File(jvmAssets, "probes.jar").exists() }
+    onlyIf {
+        val tag = File(jvmAssets, "runtime.tag")
+        // (re-)fold when the tag/probes are absent, or when any staged jar is newer than the tag — e.g. a version
+        // bump just re-staged gpu/rlhd, so the tag must be recomputed rather than left stale.
+        !tag.exists() || !File(jvmAssets, "probes.jar").exists() ||
+            jvmAssets.listFiles()?.any {
+                it.name.startsWith("client-") && it.name.endsWith(".jar") && it.lastModified() > tag.lastModified()
+            } == true
+    }
 }
 val stageBootAssets = tasks.register("stageBootAssets") {
     group = "staging"
