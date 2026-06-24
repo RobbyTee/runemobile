@@ -11,8 +11,8 @@
 ## Wave 1 — slimming + dead-flag gating + leak fixes (safest, Android-only)
 - [ ] **W1.1** `SLM-PKG-02/03/05` — narrow `noCompress` to `["so","dat","bin"]` so the JRE `.so` + jars DEFLATE in-APK (runtime-neutral; copied to filesDir). build.gradle. ~20 MB download.
 - [ ] **W1.2** `SLM-DFLAG-01/02/03` — gate `headless.capture.*` + `gpuframedump` + `fpsprobe` behind `BuildConfig.DEBUG` in MainActivity (removes per-frame IO in release).
-- [ ] **W1.3** `SLM-PROBE-01(kt)` + `SLM-MARKER-01` — gate the dev probe boot-gates (netprobe/gpuSmoke/rlhdprobe/worldmapprobe/census self-tests) behind `BuildConfig.DEBUG`.
-- [ ] **W1.4** `SLM-JAR-05/03` — stop staging `gpu-smoke.jar` + `hello.jar` into release assets (dev-only).
+- [x] **W1.3** `SLM-PROBE-01(kt)` + `SLM-MARKER-01` — gate the dev probe boot-gates (netprobe/gpuSmoke/rlhdprobe/worldmapprobe/census self-tests) behind `BuildConfig.DEBUG`. DONE: each probe condition + `censusMode` now requires `BuildConfig.DEBUG` (MainActivity), dead in release.
+- [x] **W1.4** `SLM-JAR-05/03` — stop staging `gpu-smoke.jar` + `hello.jar` into release assets (dev-only). DONE: `hello.jar` deleted (zero callers); `gpu-smoke.jar` moved to `src/debug/assets/jvm/` (debug-only); build-smoke-jar.sh DEST + `.gitignore` updated; verified absent from release-merged assets.
 - [ ] **W1.5** `PERF-COLD-START-01a` — AssetInstaller copy buffer 8 KB → 1 MB.
 - [ ] **W1.6** `PERF-COMPOSE-UI-04` — `RuneLiteAccountRow` 2 s poll → `DisposableEffect`-bracketed (leak fix).
 - [ ] **W1.7** `PERF-COMPOSE-UI-07` — `LazyColumn` keys built without per-row string concat where cheap.

@@ -21,9 +21,6 @@ app/src/main/assets/jvm/runtime.tag
 app/src/main/assets/tokens.json
 app/src/debug/assets/tokens.json
 
-# Keep the small Milestone-A smoke jar tracked (hello.jar is built from jvm-src/Hello.java)
-!app/src/main/assets/jvm/hello.jar
-
 # IDE
 .idea/
 *.iml

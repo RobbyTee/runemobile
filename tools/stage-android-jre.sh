@@ -43,7 +43,11 @@ cd "$ROOT"
 #   mismatch rather than stage it, so a partial revert fails loudly (by design). 16 KB-VALIDATED: builds on a real
 #   16 KB-page kernel (ps16k arm64 emulator, PAGE_SIZE=16384) — JDK .so mmap + GL context OK; the 4 KB fallback
 #   is for 4 KB-page devices only and is NOT exercised by CI/this script.
-JRE_URL="https://github.com/audaro/angelauramc-openjdk-build/releases/download/jre21-android-arm64-16k/jre21-android-arm64.tar.xz"
+# PROD-RELEASE-ENG-06: the artifact lives on a single GitHub release. The download is SHA-pinned below, so ANY
+# byte-identical mirror is safe — set JRE_URL to override the primary, and/or JRE_URL_MIRROR to a fallback host
+# the script tries if the primary is unreachable (avoids a single point of failure for a clean build).
+JRE_URL="${JRE_URL:-https://github.com/audaro/angelauramc-openjdk-build/releases/download/jre21-android-arm64-16k/jre21-android-arm64.tar.xz}"
+JRE_URL_MIRROR="${JRE_URL_MIRROR:-}"
 JRE_SHA256="db7862e4ec68a71a46cf1fec078938443410805cb61e8f99b75f10893c708c9a"
 JRE_BYTES=28679076
 
@@ -67,7 +71,11 @@ sha() { shasum -a 256 "$1" | awk '{print $1}'; }
 mkdir -p "$CACHE"
 if [ "$FORCE" = 1 ] || [ ! -f "$TARBALL" ] || { [ "$VERIFY_SHA" = 1 ] && [ "$(sha "$TARBALL" 2>/dev/null)" != "$JRE_SHA256" ]; }; then
   echo "== download bionic jre21 (28 MB) =="
-  curl -fL --retry 3 -o "$TARBALL" "$JRE_URL"
+  if ! curl -fL --retry 3 -o "$TARBALL" "$JRE_URL"; then
+    [ -n "$JRE_URL_MIRROR" ] || { echo "!! primary host failed and no JRE_URL_MIRROR set: $JRE_URL" >&2; exit 1; }
+    echo "   primary host failed — falling back to mirror $JRE_URL_MIRROR" >&2
+    curl -fL --retry 3 -o "$TARBALL" "$JRE_URL_MIRROR"
+  fi
 else
   echo "== using cached $TARBALL =="
 fi

@@ -895,18 +895,21 @@ class MainActivity : AppCompatActivity() {
 
         // Boot the VM once per process, off the UI thread and on the application context.
         // `adb ... --ez census true` arms the A-1b runtime gate-flip census (extra gates + the census probe).
-        val censusMode = intent?.getBooleanExtra("census", false) ?: false
+        // SLM-PROBE-01(kt)/SLM-MARKER-01: every dev diagnostic below (census + netprobe/gpuSmoke/rlhdprobe) is
+        // gated on BuildConfig.DEBUG so a release build cannot be diverted into a probe via a pushed marker or ADB
+        // intent extra — they compile in for debug only and are dead in release.
+        val censusMode = BuildConfig.DEBUG && (intent?.getBooleanExtra("census", false) ?: false)
         // Track G AG1a: `adb ... --ez gpuSmoke true` boots the facade-only EGL smoke (no engine/tokens/login) to
         // probe GL.createCapabilities().OpenGL33==true through the facade on a live Android EGL context.
         // AG2 login diagnosis: a pushed `netprobe.mode` marker (--other-files) runs the network probe ONLY — does
         // the home-minted Jagex session authenticate from THIS device's IP? — then logs NETPROBE… and stops (no
         // JVM boot). Lets the Firebase device answer "can we mint/login from the datacenter?" before we build for it.
-        if (File(getExternalFilesDir(null), "netprobe.mode").exists()) {
+        if (BuildConfig.DEBUG && File(getExternalFilesDir(null), "netprobe.mode").exists()) {
             val app = applicationContext
             thread(name = "netprobe") { NetProbe.run(app) }
             return
         }
-        if (intent?.getBooleanExtra("gpuSmoke", false) == true) {
+        if (BuildConfig.DEBUG && intent?.getBooleanExtra("gpuSmoke", false) == true) {
             if (booted.compareAndSet(false, true)) {
                 val app = applicationContext
                 thread(name = "jvm-boot") { bootGpuSmoke(app) }
@@ -917,8 +920,8 @@ class MainActivity : AppCompatActivity() {
         // trigger it without an intent extra) boots the embedded VM on [client-*-gpu.jar + client-*-rlhd.jar],
         // mainClass=RLHDProbe — a headless 117HD class-load + loader-data probe (no engine/bridge/render/login).
         // Proves the OpenCL stub + Zone facade delta resolve at class-load and the loader JSON parses on-device.
-        if (intent?.getBooleanExtra("rlhdprobe", false) == true ||
-            File(getExternalFilesDir(null), "rlhdprobe.mode").exists()) {
+        if (BuildConfig.DEBUG && (intent?.getBooleanExtra("rlhdprobe", false) == true ||
+            File(getExternalFilesDir(null), "rlhdprobe.mode").exists())) {
             if (booted.compareAndSet(false, true)) {
                 val app = applicationContext
                 thread(name = "jvm-boot") { bootRlhdProbe(app) }
