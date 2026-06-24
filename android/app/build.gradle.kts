@@ -38,8 +38,15 @@ android {
         applicationId = "dev.audaro.helloshell"
         minSdk = 28
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1"
+        // PROD-VERSIONING-UPDATE-04: semver versionName + a versionCode DERIVED from it, so a release bump is a
+        // single edit and versionCode stays monotonic (Android verifies updates by a strictly-increasing
+        // versionCode). Scheme: major*10000 + minor*100 + patch (room for 99 minors/patches). Record every bump
+        // in CHANGELOG.md.
+        val verMajor = 0
+        val verMinor = 1
+        val verPatch = 0
+        versionName = "$verMajor.$verMinor.$verPatch"
+        versionCode = verMajor * 10000 + verMinor * 100 + verPatch
 
         ndk {
             // Emulator on Apple Silicon runs arm64 natively; the embedded HotSpot
