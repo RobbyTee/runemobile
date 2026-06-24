@@ -68,12 +68,17 @@ the Android boot path globs `client-*-gpu.jar`). From the repo root:
 
 ```sh
 tools/stage-android-jre.sh                              # 1. SHA-pinned bionic JRE → assets/jvm/jre
-./gradlew :client:shadowJar                             # 2. build the shared client jar (gpu/rlhd stage from it)
-android/dev-tools/gpu/stage-android-gpu-jar.sh          # 3. → client-<ver>-gpu.jar   (GL-variant of the shaded jar)
-android/dev-tools/gpu/stage-rlhd-zone-jar.sh            # 4. → client-<ver>-rlhd.jar  (117HD Zone variant)
-tools/stage-mobile-runtime.sh --no-build --android-only # 5. stage shaded+probes, fold gpu/rlhd SHAs into runtime.tag
-cd android && ./gradlew :app:assembleRelease            # 6. never bare `assemble` (also builds the :recon probe app)
+./gradlew :client:shadowJar                             # 2. shaded client jar (gpu/rlhd + probes build from it)
+( cd ios/app && ./build-probes.sh )                     # 3. probes.jar — on the Android boot classpath; step 6 needs it
+android/dev-tools/gpu/stage-android-gpu-jar.sh          # 4. → client-<ver>-gpu.jar   (GL-variant of the shaded jar)
+android/dev-tools/gpu/stage-rlhd-zone-jar.sh            # 5. → client-<ver>-rlhd.jar  (117HD Zone variant)
+tools/stage-mobile-runtime.sh --no-build --android-only # 6. stage probes, fold shaded/gpu/rlhd SHAs into runtime.tag
+cd android && ./gradlew :app:assembleRelease            # 7. never bare `assemble` (also builds the :recon probe app)
 ```
+
+(Android deliberately does **not** stage `shaded.jar` — its boot classpath is `[gpu : rlhd : probes]` (SLM-JAR-01);
+the runtime stage still folds the shaded SHA into `runtime.tag` so a shared-Java change invalidates installs. Or
+run `./gradlew :app:stageBootAssets` to do steps 1–6 in one Gradle task — see below.)
 
 The two native libraries (`libhelloshell.so`, `librlawt.so`) are **not** staged — Gradle's CMake
 `externalNativeBuild` builds them from tracked `cpp/` source automatically.

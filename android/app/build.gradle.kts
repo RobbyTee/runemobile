@@ -133,6 +133,74 @@ val verifyReleaseBootAssets = tasks.register("verifyReleaseBootAssets") {
 }
 tasks.matching { it.name == "mergeReleaseAssets" }.configureEach { finalizedBy(verifyReleaseBootAssets) }
 
+// PROD-RELEASE-ENG-01: self-stage the gitignored boot artifacts (embedded JRE, gpu/rlhd client jars, probes.jar,
+// runtime.tag) from Gradle so a clean clone yields a BOOTABLE APK without hand-running the README recipe. Each step
+// Exec-wraps the existing tracked staging script (the shared :client jar lives in the SEPARATE root build, so it is
+// reached via a nested `./gradlew :client:shadowJar`, not a cross-build dependsOn). Every task is
+// onlyIf{ its own output is absent } — so an incremental build (artifacts already staged) SKIPS all of them with
+// zero overhead, and only a fresh tree pays the cost. A shared headless/ change still needs a manual re-stage
+// (delete the jars/runtime.tag or run `:app:stageBootAssets`); verifyReleaseBootAssets is the backstop.
+val repoRoot: File = rootDir.parentFile
+val jvmAssets = file("src/main/assets/jvm")
+val clientLibs = File(repoRoot, "runelite-client/build/libs")
+val stagingJavaHome = System.getenv("JAVA_HOME") ?: "/opt/homebrew/opt/openjdk@21"
+fun jvmHasSuffix(suffix: String) =
+    jvmAssets.listFiles()?.any { it.name.startsWith("client-") && it.name.endsWith(suffix) } == true
+
+val stageJre = tasks.register<Exec>("stageJre") {
+    group = "staging"; description = "Stage the SHA-pinned bionic OpenJDK 21 into assets/jvm/jre (if absent)."
+    workingDir = repoRoot
+    commandLine("bash", "tools/stage-android-jre.sh")
+    onlyIf { !File(jvmAssets, "jre/lib/server/libjvm.so").exists() }
+}
+val shadowJarClient = tasks.register<Exec>("shadowJarClient") {
+    group = "staging"; description = "Build the shared :client shaded jar in the root build (gpu/rlhd/probes need it)."
+    workingDir = repoRoot
+    environment("JAVA_HOME", stagingJavaHome)
+    commandLine("./gradlew", "--no-daemon", ":client:shadowJar")
+    onlyIf { clientLibs.listFiles()?.any { it.name.startsWith("client-") && it.name.endsWith("-shaded.jar") } != true }
+}
+val buildProbes = tasks.register<Exec>("buildProbes") {
+    group = "staging"; description = "Build probes.jar (on the Android boot classpath; folds in CACIO)."
+    dependsOn(shadowJarClient)
+    workingDir = File(repoRoot, "ios/app")
+    environment("JAVA_HOME", stagingJavaHome)
+    commandLine("bash", "build-probes.sh")
+    onlyIf { !File(repoRoot, "ios/app/jvm-resources/probes.jar").exists() }
+}
+val stageGpuJar = tasks.register<Exec>("stageGpuJar") {
+    group = "staging"; description = "Derive client-*-gpu.jar from the shaded jar."
+    dependsOn(shadowJarClient)
+    workingDir = File(repoRoot, "android/dev-tools/gpu")
+    environment("JAVA_HOME", stagingJavaHome)
+    commandLine("bash", "stage-android-gpu-jar.sh")
+    onlyIf { !jvmHasSuffix("-gpu.jar") }
+}
+val stageRlhdJar = tasks.register<Exec>("stageRlhdJar") {
+    group = "staging"; description = "Derive client-*-rlhd.jar (117HD Zone) from the shaded jar."
+    dependsOn(shadowJarClient); mustRunAfter(stageGpuJar)   // serialize: the gpu/rlhd stages share a scratch dir
+    workingDir = File(repoRoot, "android/dev-tools/gpu")
+    environment("JAVA_HOME", stagingJavaHome)
+    commandLine("bash", "stage-rlhd-zone-jar.sh")
+    onlyIf { !jvmHasSuffix("-rlhd.jar") }
+}
+val stageMobileRuntime = tasks.register<Exec>("stageMobileRuntime") {
+    group = "staging"; description = "Stage probes + fold shaded/gpu/rlhd SHAs into runtime.tag (runs after gpu/rlhd)."
+    dependsOn(shadowJarClient, buildProbes, stageGpuJar, stageRlhdJar)
+    workingDir = repoRoot
+    environment("JAVA_HOME", stagingJavaHome)
+    commandLine("bash", "tools/stage-mobile-runtime.sh", "--no-build", "--android-only")
+    onlyIf { !File(jvmAssets, "runtime.tag").exists() || !File(jvmAssets, "probes.jar").exists() }
+}
+val stageBootAssets = tasks.register("stageBootAssets") {
+    group = "staging"
+    description = "Stage every gitignored boot artifact (JRE + gpu/rlhd/probes + runtime.tag) for a bootable APK."
+    dependsOn(stageJre, stageMobileRuntime)
+}
+// A clean tree self-stages before the asset merge; an already-staged tree skips every step above (onlyIf) → no
+// overhead on the normal incremental loop.
+tasks.named("preBuild") { dependsOn(stageBootAssets) }
+
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
