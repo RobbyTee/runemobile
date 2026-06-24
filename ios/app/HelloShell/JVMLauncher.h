@@ -264,6 +264,12 @@ typedef void (^JVMLogSink)(NSString *line);
 /// nil until the chat is relocated + logged in. Main thread.
 + (nullable NSString *)chatSnapshot;
 
+/// The real OSRS tab/stone/chat-button sprites captured from the LIVE game cache (HudVeneerBridge.tabSprites) as
+/// JSON — {complete, stoneInactive/stoneActive/chatbtn{,Selected,New}:{w,h,px}, icons:[14×{w,h,px}]}, px = base64
+/// big-endian ARGB. The shell renders the native chrome from these instead of bundling interface art (exactly how
+/// desktop RuneLite draws its UI). Empty "" until the engine has them (a few ticks post-login). Main thread.
++ (nullable NSString *)tabSprites;
+
 /// W3: the live chat MESSAGE lines for the active tab (escaped JSON, colour runs pre-parsed) for the native
 /// top-rendered chatbox — the engine can't raster a relocated chatbox, so its messages are drawn natively.
 /// Lines are oldest-first. Returns nil until logged in. Main thread.

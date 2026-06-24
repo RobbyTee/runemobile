@@ -340,6 +340,7 @@ static jmethodID gMidGetDialogue = NULL;     // getDialogueJson()Ljava/lang/Stri
 static jmethodID gMidSetOverlayInsets = NULL; // setOverlaySafeInsets(IIII)V (snap-corner safe frame)
 static jmethodID gMidPanMap = NULL;          // panWorldMap(II)V  (world map: finger pan -> map centre)
 static jmethodID gMidGetMapSnap = NULL;      // getMapSnapshot()Ljava/lang/String;  (world map open + rects)
+static jmethodID gMidTabSprites = NULL;      // tabSprites()Ljava/lang/String;  (cache-rendered chrome sprites)
 static BOOL ensureVeneer(void) {
     if (gVeneerClass) return atomic_load(&gVM) != NULL;
     if (!ensureBridge() || !gMainEnv) return NO;
@@ -374,6 +375,7 @@ static BOOL ensureVeneer(void) {
     gMidSetOverlayInsets = (*env)->GetStaticMethodID(env, global, "setOverlaySafeInsets", "(IIII)V");
     gMidPanMap = (*env)->GetStaticMethodID(env, global, "panWorldMap", "(II)V");
     gMidGetMapSnap = (*env)->GetStaticMethodID(env, global, "getMapSnapshot", "()Ljava/lang/String;");
+    gMidTabSprites = (*env)->GetStaticMethodID(env, global, "tabSprites", "()Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
     gMidSetChatHidden = m;
     gMidRelocateChat = r;
@@ -1785,6 +1787,21 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gVeneerClass, gMidGetChatSnap);
     if (!js || (*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.chatSnapshot"); return nil; }
+    const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
+    NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
+    if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
+    (*env)->DeleteLocalRef(env, js);
+    return out;
+}
+
+// The real OSRS chrome sprites (tab stones, 14 tab glyphs, chat-tab backgrounds) the engine rendered from the live
+// game cache, as JSON (base64 ARGB). The shell builds its native HUD from these instead of bundling interface art.
+// "" until captured (a few ticks post-login); nil on an older bundle without the method.
++ (NSString *)tabSprites {
+    if (!ensureVeneer() || !gMidTabSprites) return nil;
+    JNIEnv *env = gMainEnv;
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gVeneerClass, gMidTabSprites);
+    if (!js || (*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.tabSprites"); return nil; }
     const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
     NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
     if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);

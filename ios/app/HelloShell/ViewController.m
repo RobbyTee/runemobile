@@ -208,6 +208,11 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 // crop fragility.
 @property (nonatomic, strong) NSMutableArray<UIImage *> *tabImgInactive;
 @property (nonatomic, strong) NSMutableArray<UIImage *> *tabImgActive;
+// The native chrome sprites (stones/icons/chat buttons) are rendered from the LIVE OSRS cache at runtime — like
+// desktop RuneLite, which never ships interface art — NOT from bundled PNGs. The engine publishes them a few ticks
+// post-login (JVMLauncher.tabSprites); we recomposite the grid + chat row, persist for instant boot, then stop
+// polling once a COMPLETE set arrives. YES once captured this session.
+@property (nonatomic, assign) BOOL tabSpritesComplete;
 // Opaque covers over the desktop tab stones (the bottom double-UI). The stones stay clickable underneath (the
 // proxy click reaches them), the cover just hides them — hiding the widget would kill the proxy target.
 @property (nonatomic, strong) NSMutableArray<UIView *> *stoneCovers;
@@ -2031,9 +2036,29 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
 }
 
 // Load a bundled tab sprite asset at native (1x) scale.
-- (UIImage *)loadAsset:(NSString *)name {
-    NSString *p = [[NSBundle mainBundle] pathForResource:name ofType:@"png"];
-    return p ? [UIImage imageWithContentsOfFile:p] : nil;
+// Decode one {"w":W,"h":H,"px":"<base64 big-endian ARGB>"} sprite object (from JVMLauncher.tabSprites) into a
+// straight-alpha UIImage at native px (scale 1). The bytes are TYPE_INT_ARGB from BufferedImage.getRGB — alpha is
+// non-premultiplied and first in each 32-bit big-endian word — so the CGImage is alpha-first / 32-big. nil if absent.
+static UIImage *imageFromSpriteDict(id obj) {
+    if (![obj isKindOfClass:[NSDictionary class]]) return nil;
+    NSDictionary *d = (NSDictionary *)obj;
+    int w = [d[@"w"] intValue], h = [d[@"h"] intValue];
+    id b64 = d[@"px"];
+    if (w <= 0 || h <= 0 || ![b64 isKindOfClass:[NSString class]]) return nil;
+    NSData *bytes = [[NSData alloc] initWithBase64EncodedString:(NSString *)b64 options:0];
+    if (bytes.length != (NSUInteger)w * (NSUInteger)h * 4u) return nil;
+    CGDataProviderRef prov = CGDataProviderCreateWithCFData((__bridge CFDataRef)bytes);
+    if (!prov) return nil;
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGImageRef cg = CGImageCreate(w, h, 8, 32, (size_t)w * 4, cs,
+        (CGBitmapInfo)(kCGImageAlphaFirst | kCGBitmapByteOrder32Big),
+        prov, NULL, NO, kCGRenderingIntentDefault);
+    CGColorSpaceRelease(cs);
+    CGDataProviderRelease(prov);
+    if (!cg) return nil;
+    UIImage *img = [UIImage imageWithCGImage:cg scale:1.0 orientation:UIImageOrientationUp];
+    CGImageRelease(cg);
+    return img;
 }
 
 // Composite an icon centred on a stone background into one tab image (nearest-neighbour, native px).
@@ -2055,20 +2080,72 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
     }];
 }
 
-// Build the 14 active + 14 inactive tab images once from the bundled OSRS sprites (stone-inactive/active +
-// icon-0..13). Authentic feathered stones with the real tab glyph — no crop-from-frame fragility.
+// Per-device disk cache of the last COMPLETE sprite payload (NOT committed — captured at runtime from the live
+// cache). Lets the grid/chat render the real art instantly on boot instead of waiting for the post-login capture.
+- (NSString *)tabSpriteCachePath {
+    NSString *dir = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject;
+    if (!dir) return nil;
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    return [dir stringByAppendingPathComponent:@"tabsprites.json"];
+}
+
+// Decode a JVMLauncher.tabSprites payload into the live chrome images (stones recomposited with each glyph into the
+// 14 active/inactive grid tiles; the 3 chat-tab backgrounds). updateChrome/updateChatTabs re-read these ivars every
+// tick, so the next frame picks up the new art automatically. Returns YES only for a COMPLETE engine-published set.
+- (BOOL)applyTabSpriteJSON:(NSString *)json {
+    if (json.length == 0) return NO;
+    NSDictionary *d = parseBridgeJSON(json, "ViewController.applyTabSpriteJSON");
+    if (![d isKindOfClass:[NSDictionary class]]) return NO;
+    UIImage *stoneI = imageFromSpriteDict(d[@"stoneInactive"]);
+    UIImage *stoneA = imageFromSpriteDict(d[@"stoneActive"]);
+    id iconsObj = d[@"icons"];
+    NSArray *icons = [iconsObj isKindOfClass:[NSArray class]] ? (NSArray *)iconsObj : nil;
+    BOOL gridOK = (stoneI && stoneA && icons.count == 14);
+    if (gridOK) {
+        NSMutableArray<UIImage *> *inact = [NSMutableArray arrayWithCapacity:14];
+        NSMutableArray<UIImage *> *act = [NSMutableArray arrayWithCapacity:14];
+        for (int i = 0; i < 14; i++) {
+            UIImage *icon = imageFromSpriteDict(icons[i]);
+            inact[i] = [self compositeStone:stoneI icon:icon] ?: (UIImage *)[NSNull null];
+            act[i]   = [self compositeStone:stoneA icon:icon] ?: (UIImage *)[NSNull null];
+        }
+        self.tabImgInactive = inact;
+        self.tabImgActive = act;
+    }
+    UIImage *cb  = imageFromSpriteDict(d[@"chatbtn"]);
+    UIImage *cbs = imageFromSpriteDict(d[@"chatbtnSelected"]);
+    UIImage *cbn = imageFromSpriteDict(d[@"chatbtnNew"]);
+    if (cb)  self.chatBtnImg    = cb;
+    if (cbs) self.chatBtnSelImg = cbs;
+    if (cbn) self.chatBtnNewImg = cbn;
+    return [d[@"complete"] boolValue] && gridOK && cb && cbs && cbn;
+}
+
+// Pull the real OSRS sprites from the live cache once the engine has them (a few ticks post-login), then persist
+// for instant boot. One-shot: stops polling once a complete set lands. No-op until login / on an older jar.
+- (void)refreshTabSpritesFromCache {
+    NSString *json = [JVMLauncher tabSprites];
+    if (json.length == 0) return;
+    if (![self applyTabSpriteJSON:json]) return;   // partial set — keep polling
+    self.tabSpritesComplete = YES;
+    NSString *path = [self tabSpriteCachePath];
+    if (path) [json writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [self appendLine:@"[chrome] tab sprites rendered from live cache (no bundled art)"];
+}
+
+// Seed the 14 active + 14 inactive grid tiles. The sprites are rendered from the live OSRS cache (like desktop
+// RuneLite) — no committed interface art. A disk-cached payload from a prior session fills the grid instantly;
+// otherwise the tiles stay empty (updateChrome draws a stone-brown fallback) until refreshTabSpritesFromCache
+// captures them post-login.
 - (void)buildTabAssets {
-    UIImage *stoneI = [self loadAsset:@"stone-inactive"];
-    UIImage *stoneA = [self loadAsset:@"stone-active"];
     self.tabImgInactive = [NSMutableArray arrayWithCapacity:14];
     self.tabImgActive = [NSMutableArray arrayWithCapacity:14];
-    for (int i = 0; i < 14; i++) {
-        UIImage *icon = [self loadAsset:[NSString stringWithFormat:@"icon-%d", i]];
-        self.tabImgInactive[i] = [self compositeStone:stoneI icon:icon] ?: [NSNull null];
-        self.tabImgActive[i]   = [self compositeStone:stoneA icon:icon] ?: [NSNull null];
-    }
-    [self appendLine:[NSString stringWithFormat:@"[chrome] tab assets built (stones %@/%@)",
-                      stoneI ? @"ok" : @"MISSING", stoneA ? @"ok" : @"MISSING"]];
+    for (int i = 0; i < 14; i++) { self.tabImgInactive[i] = [NSNull null]; self.tabImgActive[i] = [NSNull null]; }
+    NSString *path = [self tabSpriteCachePath];
+    NSString *cached = path ? [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] : nil;
+    BOOL seeded = cached.length && [self applyTabSpriteJSON:cached];
+    [self appendLine:[NSString stringWithFormat:@"[chrome] tab assets init (%@)",
+                      seeded ? @"cached cache-sprites" : @"awaiting live cache"]];
 }
 
 #pragma mark - W3 A3: enlarged native chat tab buttons
@@ -2098,9 +2175,9 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
 // opens its filter menu (onChatTabLongPress). Sprite-backed two-line RuneScape-font labels (name + filter state)
 // like the official app; hidden until the chat is relocated + logged in. updateChatTabs lays them out + states them.
 - (void)buildChatTabs {
-    self.chatBtnImg    = [self loadAsset:@"chatbtn"];
-    self.chatBtnSelImg = [self loadAsset:@"chatbtn-selected"];
-    self.chatBtnNewImg = [self loadAsset:@"chatbtn-new"];
+    // chatBtnImg/SelImg/NewImg are rendered from the live OSRS cache (seeded from disk in buildTabAssets, refreshed
+    // by refreshTabSpritesFromCache post-login) — no bundled PNGs. nil until captured: paintChatButton falls back to
+    // its opaque stone-brown fill, which the real sprite replaces within a tick of capture.
     self.chatTabButtons = [NSMutableArray arrayWithCapacity:kChatTabCount];
     for (int i = 0; i < kChatTabCount; i++) {
         UIButton *b = [ChatTabButton buttonWithType:UIButtonTypeCustom];   // expanded touch area (kChatTabTouchExpand)
@@ -2870,11 +2947,21 @@ static int chatRowCanvasH(void) {
         int col = slot % 2, row = slot / 2;
         btn.frame = CGRectMake(gx0 + col * (cell + gap), gy0 + row * (cell + gap), cell, cell);
         BOOL isActive = (i == active);
-        // Authentic composited tab image (bundled OSRS stone + icon). Active = red stone, inactive = grey.
+        // Authentic composited tab image (live-cache OSRS stone + icon). Active = red stone, inactive = grey.
         NSArray<UIImage *> *imgs = isActive ? self.tabImgActive : self.tabImgInactive;
         UIImage *img = (i < (int)imgs.count && [imgs[i] isKindOfClass:[UIImage class]]) ? imgs[i] : nil;
         [btn setImage:img forState:UIControlStateNormal];
-        btn.backgroundColor = [UIColor clearColor];
+        // Until the sprites are captured from the cache (first-ever login, pre-capture), show an opaque stone-brown
+        // tile so the grid reads as buttons rather than vanishing; the real stone replaces it within a tick.
+        if (img) {
+            btn.backgroundColor = [UIColor clearColor];
+            btn.layer.cornerRadius = 0.0;
+        } else {
+            btn.backgroundColor = isActive ? [UIColor colorWithRed:96.0/255.0 green:32.0/255.0 blue:24.0/255.0 alpha:1.0]
+                                           : [UIColor colorWithRed:66.0/255.0 green:60.0/255.0 blue:51.0/255.0 alpha:1.0];
+            btn.layer.cornerRadius = 3.0;
+            btn.clipsToBounds = YES;
+        }
         btn.layer.borderWidth = 0.0;
         btn.alpha = 1.0;   // active vs inactive carried by the red/grey stone itself
         btn.hidden = NO;
@@ -3512,6 +3599,12 @@ static CGRect mapRectFromArr(NSArray *a) {
     // visibly playing inline; an occluded feed layer never engaged on device.
     if (self.pipController && !self.gpuPresent) {
         [self pipPumpFrame];
+    }
+
+    // Capture the real OSRS chrome sprites from the live cache once the engine has them (~2 Hz until a complete set
+    // lands, then never again this session). Mirrors desktop RuneLite: render interface art from the cache, ship none.
+    if (!self.tabSpritesComplete && self.framesShown % 15 == 0) {
+        [self refreshTabSpritesFromCache];
     }
 
     // Refresh the native tab rails from the chrome snapshot (~10 Hz — positions/active state rarely change,
