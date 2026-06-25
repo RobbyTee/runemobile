@@ -18,9 +18,13 @@
 > all active) → `GPU renderer active (isGpu=true) — 117HD up after 1 attempt`, with **0 ShaderExceptions**. So
 > 117HD + all four overlay shaders compile and start cleanly on Mali-G52 too.
 >
-> *Gate-harness note (minor follow-up): with `shaderdump` left ON, the standalone `fb-gate.sh` stdout truncated
-> mid-`SHDR`-dump before printing its VERDICT line, so the pass was confirmed directly from the fetched device
-> logcat rather than the gate summary. The matrix path avoids this by defaulting `FB_NO_SHADERDUMP=1`.*
+> *Gate-harness note (FIXED): the standalone `fb-gate.sh` initially truncated before its VERDICT line, so the
+> pass was first read directly from the fetched device logcat. Root cause was NOT shaderdump — it was the
+> frame-count line `N="$(ls "$FRAMEDIR"/*.png …)"` aborting under `set -euo pipefail` when the slow tablet dumped
+> 0 frames (`ls` on a no-match glob exits non-zero → failed command-substitution → `set -e` abort). Fixed:
+> `ls`→`find` (returns 0 on no match) in both the rlhd and gpu legs, hardened the frame-copy loop with `|| true`,
+> and filtered `SHDR[` source-dump lines out of the "shader/compile failures" display so shaderdump output no
+> longer reads as false failures. Verified against the saved G52 logcat: now prints `VERDICT=AG3C_DEVICE_PASS`.*
 
 | Device | API | Form | GPU (label) | recon | rlhd (117HD + overlay self-test) | GL_RENDERER (actual) | esTier |
 |--------|-----|------|-------------|-------|----------------------------------|---------------------|--------|

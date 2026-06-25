@@ -155,8 +155,11 @@ case "$MODE" in
           # Pull the dumped frames (Firebase --directories-to-pull lands them under the device artifacts dir).
           FRAMEDIR="$HERE/fb-gpu-frames"; rm -rf "$FRAMEDIR"; mkdir -p "$FRAMEDIR"
           PNGS="$(gsutil ls "${GCS%/}/**/routec-frames/*.png" 2>/dev/null || true)"
-          if [ -n "$PNGS" ]; then echo "$PNGS" | while read -r p; do [ -n "$p" ] && gsutil cp "$p" "$FRAMEDIR/" 2>/dev/null; done; fi
-          N="$(ls "$FRAMEDIR"/*.png 2>/dev/null | wc -l | tr -d ' ')"
+          if [ -n "$PNGS" ]; then echo "$PNGS" | while read -r p; do [ -n "$p" ] && gsutil cp "$p" "$FRAMEDIR/" 2>/dev/null || true; done; fi
+          # Use find, NOT `ls *.png`: under `set -euo pipefail`, `ls` on a no-match glob exits non-zero, which
+          # fails the command substitution and aborts the whole gate BEFORE the VERDICT prints (a slow device that
+          # dumps 0 frames in the window would otherwise truncate the run silently). find returns 0 on no match.
+          N="$(find "$FRAMEDIR" -maxdepth 1 -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
           echo "== pulled $N GPU frame PNG(s) -> $FRAMEDIR =="
           ACTIVE="$(grep -c "GPU active (isGpu=true)" "$OUT" || true)"
           CTX="$(grep -c "createGLContext DONE" "$OUT" || true)"
@@ -170,11 +173,18 @@ case "$MODE" in
   rlhd)   echo "--- AG3-c: 117HD (RLHD Zone) shader compile + startUp on the real Mali driver ---"
           grep -E "GL caps:|Renderer: *ZoneRenderer|loadAndStartPlugin .* loaded|117 HD started successfully|Using device:" "$OUT" | head -12 || true
           echo "--- shader/compile failures (want NONE) ---"
-          grep -E "ShaderException|isamplerBuffer|Illegal use of reserved word|Error while starting 117|EGL bring-up FAILED" "$OUT" | head -8 || echo "  (none)"
+          # Filter shaderdump SHDR[...] source-dump lines: with rlhd_shaderdump on, librlawt logs the numbered
+          # downported source, which legitimately contains the token 'isamplerBuffer' — that is NOT a compile
+          # failure, so without this the section floods with false positives (real-failure lines never carry the
+          # SHDR[ prefix). The verdict's SHADERR count below already excludes isamplerBuffer entirely.
+          grep -E "ShaderException|isamplerBuffer|Illegal use of reserved word|Error while starting 117|EGL bring-up FAILED" "$OUT" | grep -v 'SHDR\[' | head -8 || echo "  (none)"
           FRAMEDIR="$HERE/fb-rlhd-frames"; rm -rf "$FRAMEDIR"; mkdir -p "$FRAMEDIR"
           PNGS="$(gsutil ls "${GCS%/}/**/routec-frames/*.png" "${GCS%/}/**/rl-capture/*.png" 2>/dev/null || true)"
-          if [ -n "$PNGS" ]; then echo "$PNGS" | while read -r p; do [ -n "$p" ] && gsutil cp "$p" "$FRAMEDIR/" 2>/dev/null; done; fi
-          N="$(ls "$FRAMEDIR"/*.png 2>/dev/null | wc -l | tr -d ' ')"
+          if [ -n "$PNGS" ]; then echo "$PNGS" | while read -r p; do [ -n "$p" ] && gsutil cp "$p" "$FRAMEDIR/" 2>/dev/null || true; done; fi
+          # Use find, NOT `ls *.png`: under `set -euo pipefail`, `ls` on a no-match glob exits non-zero, which
+          # fails the command substitution and aborts the whole gate BEFORE the VERDICT prints (a slow device that
+          # dumps 0 frames in the window would otherwise truncate the run silently). find returns 0 on no match.
+          N="$(find "$FRAMEDIR" -maxdepth 1 -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
           STARTED="$(grep -c "117 HD started successfully" "$OUT" || true)"
           SHADERR="$(grep -c "ShaderException\|Illegal use of reserved word\|Failed to compile shader" "$OUT" || true)"
           TB="$(grep -oE "texture_buffer=[01]" "$OUT" | head -1 || true)"
