@@ -1993,8 +1993,8 @@ class MainActivity : AppCompatActivity() {
             )
         }
         val n = NotificationCompat.Builder(this, channel)
-            .setSmallIcon(android.R.drawable.stat_notify_more)
-            .setContentTitle(title.ifEmpty { "RuneLite" })
+            .setSmallIcon(R.drawable.ic_stat_rune)
+            .setContentTitle(title.ifEmpty { "RuneMobile" })
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setAutoCancel(true)
