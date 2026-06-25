@@ -47,6 +47,10 @@ import net.runelite.api.GameState;
 public final class RLHDStarter
 {
 	private static final boolean ENABLED = Boolean.getBoolean("runelite.routecrlhd");
+	// PROD-COMPAT-01 bring-up: once 117HD is up, force-compile the dev ShaderOverlay shaders on the live driver so a
+	// strict-GLSL-ES typing regression in an overlay surfaces in a device/matrix run (the overlays are
+	// dev-toggle-gated and never compile in a default login run). Armed by a pushed marker on Android; off by default.
+	private static final boolean OVERLAY_SELFTEST = Boolean.getBoolean("runelite.rlhdOverlaySelfTest");
 	private static final String HD_PLUGIN = "rs117.hd.HdPlugin";
 	private static final int MAX_ATTEMPTS = 40;     // RLHD's own startUp retry needs the game cache; allow ~a minute
 	// Sentinel (custom key in the "hd" group) marking that the user-tunable graphics defaults were seeded once.
@@ -60,6 +64,7 @@ public final class RLHDStarter
 	private static boolean done;
 	private static boolean configForced;
 	private static boolean loadIssued;
+	private static boolean selfTestDone;
 	private static int attempts;
 	private static long lastActionMs;
 
@@ -81,6 +86,20 @@ public final class RLHDStarter
 		}
 		if (client.isGpu())
 		{
+			// 117HD is up + the overlays are injected — force-compile the dev ShaderOverlay shaders once (queues each
+			// overlay's compile on the client thread). Diagnostic only; any failure is logged, never fatal.
+			if (OVERLAY_SELFTEST && !selfTestDone)
+			{
+				selfTestDone = true;
+				try
+				{
+					log.info("[routecrlhd] overlay self-test -> {}", MobileUiBridge.rlhdOverlaySelfTest());
+				}
+				catch (Throwable t)
+				{
+					log.warn("[routecrlhd] overlay self-test threw", t);
+				}
+			}
 			done = true;
 			log.info("[routecrlhd] GPU renderer active (isGpu=true) — 117HD up after {} attempt(s)", attempts);
 			return;

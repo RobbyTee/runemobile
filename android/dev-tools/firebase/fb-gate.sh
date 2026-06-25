@@ -94,7 +94,14 @@ if [ "$MODE" = "rlhd" ]; then
   # Also seed the shader-dump marker (librlawt logs the numbered downported source so a driver "0:N" error maps to
   # a source line). Set FB_NO_SHADERDUMP=1 to skip once the Zone shaders compile clean.
   PRELOGIN="$DEV_FILES/rlhd_prelogin.mode=$MARKER"
-  if [ -z "${FB_NO_SHADERDUMP:-}" ]; then OTHER=(--other-files "$DEV_RLHD=$MARKER,$PRELOGIN,$DEV_FILES/rlhd_shaderdump=$MARKER"); else OTHER=(--other-files "$DEV_RLHD=$MARKER,$PRELOGIN"); fi
+  OTHERLIST="$DEV_RLHD=$MARKER,$PRELOGIN"
+  if [ -z "${FB_NO_SHADERDUMP:-}" ]; then OTHERLIST="$OTHERLIST,$DEV_FILES/rlhd_shaderdump=$MARKER"; fi
+  # Overlay self-test (PROD-COMPAT-01): push the marker so RLHDStarter force-compiles the dev ShaderOverlay shaders
+  # (gamma_calibration / shadow_map / tiled_lighting + the shared overlay_vert) on the live driver — they are
+  # dev-toggle-gated and never compile in a default login run, so only this exercises their GLSL-ES port. Set
+  # FB_OVERLAY_SELFTEST=1 to enable; pairs naturally with shaderdump (a compile error then maps to a source line).
+  if [ -n "${FB_OVERLAY_SELFTEST:-}" ]; then OTHERLIST="$OTHERLIST,$DEV_FILES/rlhd_overlay_selftest=$MARKER"; fi
+  OTHER=(--other-files "$OTHERLIST")
   PULL=(--directories-to-pull "$DEV_FRAMES,$DEV_FILES/rl-capture")   # rl-capture = the 117HD-rendered frames
   : "${FB_TIMEOUT:=420s}"   # plugin load + the full Zone shader compile + startUp + a frame dump
   # Robo (the default) force-stops + relaunches the app every few seconds and crawls the UI (it reached

@@ -3161,6 +3161,15 @@ class MainActivity : AppCompatActivity() {
             // plugin via its conflicts="GPU"). librlawt is registered natively (jvm_bootstrap sees routecrlhd). Frame
             // dump to app-EXTERNAL storage so the HD frame is pullable (Firebase --directories-to-pull / adb pull).
             opts.add("-Drunelite.routecrlhd=true")
+            // PROD-COMPAT-01 bring-up: a pushed `rlhd_overlay_selftest` marker (Firebase --other-files / adb push to
+            // the app's external files dir) arms RLHDStarter to force-compile the dev ShaderOverlay shaders on the
+            // live driver once 117HD is up, so a strict-GLSL-ES typing regression in an overlay surfaces in the
+            // matrix (these overlays are dev-toggle-gated and never compile in a default login run). Inert otherwise.
+            if (File(app.getExternalFilesDir(null), "rlhd_overlay_selftest").exists() ||
+                File(app.filesDir, "rlhd_overlay_selftest").exists()) {
+                opts.add("-Drunelite.rlhdOverlaySelfTest=true")
+                Log.i(TAG, "AG3-c: rlhd_overlay_selftest marker -> overlay shader self-test armed")
+            }
             // Frame-dump + the once/sec engine-fps logcat probe are dev/CI diagnostics — DEBUG-only so release
             // 117HD boots don't pay the per-frame PNG IO or the fps branch (SLM-DFLAG-02/03 / PERF-FRAME-PACING-03/04).
             if (BuildConfig.DEBUG) {
