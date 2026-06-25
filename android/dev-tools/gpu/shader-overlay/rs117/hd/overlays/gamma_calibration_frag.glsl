@@ -46,7 +46,7 @@ void main() {
     vec4 src = vec4(vec3(0), smoothstep(0.0, .05, calibrationTimer));
 
     vec2 uv = fUv - .5;
-    uv.x *= numDots;
+    uv.x *= float(numDots);
 
     float dotIndex = floor(mod(uv.x + float(numDots) / 2. + 1.0, float(numDots + 1)));
     vec2 dotUv = uv;
