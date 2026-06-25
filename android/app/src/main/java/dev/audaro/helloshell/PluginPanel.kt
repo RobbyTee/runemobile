@@ -139,6 +139,7 @@ fun PluginPanel(
     var profilesAvail by remember { mutableStateOf(false) }
     var hotkeysOpen by remember { mutableStateOf(false) }                        // Track B #1 user-defined hotkeys
     var hubOpen by remember { mutableStateOf(false) }                            // Finding 17 hub browse/install
+    var aboutOpen by remember { mutableStateOf(false) }                          // PROD-QA-07 identity/disclosure
     // Finding 8: a plugin just toggled ON is starting — suppress the "couldn't start" badge during a grace
     // window, then re-fetch the true active state. A row is incompatible = enabled && !active && not pending.
     var pending by remember { mutableStateOf(setOf<String>()) }
@@ -179,7 +180,7 @@ fun PluginPanel(
     // the live game stays visible above it (the desktop slide-out parity win). A sub-screen open => PEEK (game
     // watchable); the launcher landing => EXPAND.
     val subActive = questOpen || worldOpen || xpOpen || lootOpen || geOpen || timeOpen || infoBoxOpen ||
-        profilesOpen || hotkeysOpen || hubOpen || panelOpen != null || configFor != null
+        profilesOpen || hotkeysOpen || hubOpen || aboutOpen || panelOpen != null || configFor != null
 
     // §4 dismiss model (d): back pops ONE level — close the active sub-screen back to the launcher, else dismiss
     // the whole sheet. Honoured here so the Compose back-stack works (the MainActivity dispatcher disposes this
@@ -198,6 +199,7 @@ fun PluginPanel(
             profilesOpen -> profilesOpen = false
             hotkeysOpen -> hotkeysOpen = false
             hubOpen -> { hubOpen = false; scope.launch { reload() } }
+            aboutOpen -> aboutOpen = false
             panelOpen != null -> panelOpen = null
             configFor != null -> configFor = null
             else -> return false
@@ -226,6 +228,7 @@ fun PluginPanel(
             profilesOpen -> ConfigProfilesScreen(onBack = { profilesOpen = false })
             hotkeysOpen -> HotkeysScreen(onBack = { hotkeysOpen = false })
             hubOpen -> PluginHubScreen(onBack = { hubOpen = false; scope.launch { reload() } }, onPanelTextActive = onPanelTextActive)
+            aboutOpen -> AboutScreen(onBack = { aboutOpen = false })
             panelOpen != null -> {
                 val po = panelOpen!!
                 PanelView(po.first, po.second, onBack = { panelOpen = null }, onPanelTextActive = onPanelTextActive)
@@ -318,6 +321,7 @@ fun PluginPanel(
                         onOpenHub = { hubOpen = true },
                         profilesAvail = profilesAvail, onOpenProfiles = { profilesOpen = true },
                         onOpenHotkeys = { hotkeysOpen = true },
+                        onOpenAbout = { aboutOpen = true },
                         // FIX-5: open the world map via op-replay, then dismiss the launcher so the fullscreen map shows.
                         onOpenWorldMap = { JvmLauncher.onBridgeTouch { JvmLauncher.openWorldMap() }; onClose() },
                         onScreenshot = onScreenshot, onAccount = onAccount, onLogout = onLogout, onDiscord = onDiscord,
@@ -372,6 +376,62 @@ private fun RuneLiteAccountRow() {
                 }
             }
         }
+    }
+}
+
+/**
+ * PROD-QA-07 (GATE row 9) — the on-device identity/disclosure surface. The honest unofficial / not-affiliated /
+ * ban-risk framing + open-source attribution previously lived only in the README (invisible on the phone); this
+ * is the same text rendered in-app, reachable from the launcher's "More" grid. Pairs with the RuneMobile name +
+ * icon (UX-ONBOARD-03) so the shipped app does not imply a Jagex-official client.
+ */
+@Composable
+private fun AboutScreen(onBack: () -> Unit) {
+    Surface(color = Color(0xFF121212), modifier = Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().padding(12.dp).verticalScroll(rememberScrollState())) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "Back" }) { Text("‹ Back") }
+                Text("About", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
+            }
+            Text("RuneMobile", color = Color.White, fontSize = 22.sp,
+                style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 4.dp))
+            Text("Version ${BuildConfig.VERSION_NAME}", color = Color(0xFF9E9E9E), fontSize = 12.sp,
+                modifier = Modifier.padding(bottom = 8.dp))
+
+            AboutSection(
+                "Unofficial fan client",
+                "RuneMobile is an unofficial, fan-made client. It is not affiliated with, endorsed by, or " +
+                    "sponsored by Jagex Ltd. or the RuneLite project.",
+            )
+            AboutSection(
+                "Account-ban risk",
+                "This is an unapproved third-party client for live Old School RuneScape. It is not on Jagex's " +
+                    "approved-client list, so playing on it puts your account at risk of a ban. Use a throwaway " +
+                    "account — never your main.",
+            )
+            AboutSection(
+                "Built on open source",
+                "Derived from RuneLite (BSD 2-Clause) and runs the game on an on-device OpenJDK 21 VM (GPLv2 with " +
+                    "Classpath Exception). The 117HD renderer is by the rs117 project (BSD 2-Clause). The plugin " +
+                    "ecosystem is unmodified. Full third-party attribution is in THIRD-PARTY-NOTICES.md in the project " +
+                    "repository.",
+            )
+            AboutSection(
+                "Trademarks & game art",
+                "RuneScape and Old School RuneScape, and their interface art, are property of Jagex Ltd. This app " +
+                    "ships no Jagex art: the mobile chrome draws those interface sprites from your own live game cache " +
+                    "at runtime — the same way the upstream RuneLite client does — so the art is never redistributed.",
+            )
+            Spacer(Modifier.heightIn(min = 16.dp))
+        }
+    }
+}
+
+@Composable
+private fun AboutSection(title: String, body: String) {
+    Column(Modifier.fillMaxWidth().padding(top = 14.dp)) {
+        Text(title, color = Color(0xFF80CBC4), fontSize = 13.sp)
+        Text(body, color = Color(0xFFCFCFCF), fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
     }
 }
 
@@ -504,6 +564,7 @@ private fun LauncherGrid(
     profilesAvail: Boolean,
     onOpenProfiles: () -> Unit,
     onOpenHotkeys: () -> Unit,
+    onOpenAbout: () -> Unit,
     onOpenWorldMap: () -> Unit,
     onScreenshot: () -> Unit,
     onAccount: () -> Unit,
@@ -579,6 +640,8 @@ private fun LauncherGrid(
             // ✕ (the device font lacks the ⏻ power glyph -> tofu); reads as "exit session".
             add(TileSpec("Log out", glyph = "✕", onClick = onLogout))
             add(TileSpec("Discord", glyph = "✦", onClick = onDiscord))
+            // PROD-QA-07: the honest unofficial/not-affiliated + attribution disclosure, on-device (was README-only).
+            add(TileSpec("About", glyph = "ⓘ", onClick = onOpenAbout))
         })
         Spacer(Modifier.heightIn(min = 12.dp))
     }
