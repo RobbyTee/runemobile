@@ -1,9 +1,0 @@
-06-08 15:58:04.675 22601 22647 I librlawt: RegisterNatives glall=0 awt=0 gl=0 (0=OK)
-06-08 15:58:04.675 22601 22647 I jvm-boot: routec: RouteC_registerGLNatives rc=0
-06-08 15:58:04.675 22601 22645 I MainActivity: AG1a: startJvm rc=0 (watch logcat: ANDROID_AG1A / librlawt / routec)
-06-08 15:58:04.682 22601 22647 I librlawt: createGLContext ENTER thread=0x79b7783730
-06-08 15:58:04.682 22601 22647 I librlawt: EGL 1.4 initialized
-06-08 15:58:04.685 22601 22646 I jvm-stdout: ==== ANDROID_AG1A smoke (Android EGL ES3 + facade + librlawt bridge) ====
-06-08 15:58:04.992 22601 22647 I librlawt: createGLContext DONE fbo=1 512x512 complete=1 GL_VERSION=OpenGL ES 3.1 (OpenGL ES 3.1.0 (ANGLE 2.1.1 git hash: fbf66f49c7cc))
-06-08 15:58:05.412 22601 22646 I jvm-stdout: ANDROID_AG1A OpenGL33=true createProgram=1 fbo=1 bufMode=36064 glErrAfterProg=0 glErrAfterShims=0 texStorage3D=1 aniso=false GL_VERSION=OpenGL ES 3.1 (OpenGL ES 3.1.0 (ANGLE 2.1.1 git hash: fbf66f49c7cc)) GL_RENDERER=Android Emulator OpenGL ES Translator (ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver-5.0.0))
-06-08 15:58:05.412 22601 22646 I jvm-stdout: ANDROID_AG1A VERDICT=PASS
