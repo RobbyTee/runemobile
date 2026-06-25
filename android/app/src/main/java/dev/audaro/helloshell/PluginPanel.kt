@@ -419,8 +419,9 @@ private fun AboutScreen(onBack: () -> Unit) {
             AboutSection(
                 "Trademarks & game art",
                 "RuneScape and Old School RuneScape, and their interface art, are property of Jagex Ltd. This app " +
-                    "ships no Jagex art: the mobile chrome draws those interface sprites from your own live game cache " +
-                    "at runtime — the same way the upstream RuneLite client does — so the art is never redistributed.",
+                    "bundles no Jagex art assets: the mobile chrome draws those interface sprites from your own live " +
+                    "game cache at runtime — the same way the upstream RuneLite client does — so the art is never " +
+                    "redistributed.",
             )
             Spacer(Modifier.heightIn(min = 16.dp))
         }
