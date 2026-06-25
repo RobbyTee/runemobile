@@ -4,6 +4,10 @@
 // vec4(..., 1), float = 1, int/float division); strict GLSL ES rejects the implicit 'int' -> 'float'. Every
 // such literal below is made an explicit float (2.0 / 1.0 / 0.0) and the int/float divide is wrapped in
 // float(...). The rc_downport pass handles version/precision but not int->float typing, so the fix lives here.
+// Also: tiledLightingResolution / sceneResolution are ivec2 uniforms (uniforms/global.glsl), so `fUv * <them>`
+// is a vec2 x ivec2 arithmetic-type mismatch that strict ES rejects (the device matrix self-test surfaced this
+// at 0:194 'vec2'/'ivec2'); each is wrapped in vec2(...). This bug was invisible until the overlay was forced
+// to compile on a real driver — it never activates in a default run (tiled-lighting is feature-gated off).
 
 //#define DEBUG_LIGHT_RADIUS_PADDING
 
@@ -19,7 +23,7 @@ in vec2 fUv;
 out vec4 FragColor;
 
 void main() {
-    vec2 texelCenter = (floor(fUv * tiledLightingResolution) + .5) / tiledLightingResolution;
+    vec2 texelCenter = (floor(fUv * vec2(tiledLightingResolution)) + .5) / vec2(tiledLightingResolution);
 
     const float eps = 1e-10;
     vec2 ndcUv = fUv * 2.0 - 1.0;
@@ -28,7 +32,7 @@ void main() {
 
     vec4 c = vec4(0.0);
 
-    ivec2 tileXY = ivec2(floor(fUv * tiledLightingResolution));
+    ivec2 tileXY = ivec2(floor(fUv * vec2(tiledLightingResolution)));
     int tiledLightCount = 0;
     for (int tileLayer = 0; tileLayer < TILED_LIGHTING_LAYER_COUNT; tileLayer++) {
         uvec4 tileLayerData = texelFetch(tiledLightingArray, ivec3(tileXY, tileLayer), 0);
@@ -58,7 +62,7 @@ void main() {
         // When both tests fail to include the light, the unincluded portion is colored white
 
         // Draw texel centers
-        if (all(equal(floor(fUv * sceneResolution), floor(texelCenter * sceneResolution)))) {
+        if (all(equal(floor(fUv * vec2(sceneResolution)), floor(texelCenter * vec2(sceneResolution))))) {
             FragColor = vec4(1.0);
             return;
         }
