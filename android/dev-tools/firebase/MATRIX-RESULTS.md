@@ -36,14 +36,36 @@ core-renderer status without this artifact.
   (GATE row 2, Pixel 7a / Mali-G710 in-world) to Mali-G715, Mali-G78, and Adreno 740.
 - Per-device gating record reproducible via `FB_DEVICE=<model> FB_VERSION=<api> ./fb-gate.sh recon|rlhd`.
 
-## Tracked finding (low priority)
+## Overlay GLES self-test — RESOLVED + DEVICE-VERIFIED (2026-06-25)
 
-**117HD `ShaderOverlay` is not GLES-portable.** `rs117.hd.overlays.ShaderOverlay`'s shader fails to compile
-on strict GLSL-ES drivers (Mali, Adreno) with `const int → float` at line 344 of the downported source. It is
-a **developer-only debug overlay** (off in normal play; here force-enabled by the test harness), so it does
-**not** affect production rendering — but it would break the shader-debug overlay for anyone enabling it on a
-strict-ES device. Fix = an explicit float cast at the offending assignment; needs an rlhd-jar rebuild + a
-confirming `FB_NO_SHADERDUMP=` re-run. Deferred (debug-only, vendored shader).
+The 117HD debug overlays were not GLES-portable on strict-ES drivers (the `const int → float` artifact above,
+plus a `vec2`/`ivec2` mismatch found below). They are **dev-toggle / feature gated**, so they never compile in
+a default login run — and `rlhd_shaderdump` only *logs* the downported source, it activates nothing. So the
+matrix's `rlhd` leg never actually exercised them. A purpose-built **overlay self-test** closes that gap:
+`MobileUiBridge.rlhdOverlaySelfTest` type-scans `HdPlugin`'s `ShaderOverlay` fields and force-`setActive(true)`s
+each (→ `initialize()` → `shader.compile()` on the live driver). Armed by a pushed `rlhd_overlay_selftest`
+marker via `FB_OVERLAY_SELFTEST=1`; the gate asserts `found≥3 && activated==found` so a no-op self-test can't
+pass on "no ShaderException". Each overlay program also compiles the shared `overlay_vert.glsl`, covering all
+four reachable overlay shaders (`overlay_frag.glsl` is replaced per-stage by every subclass → never compiled).
+
+| Device | API | GPU (actual) | 117HD | self-test | shaderErrors | VERDICT |
+|--------|-----|--------------|-------|-----------|--------------|---------|
+| Pixel 8 (shiba) | 34 | Mali-G715 | started | `found=3 activated=3` | 0 | **AG3C_DEVICE_PASS** |
+| Galaxy S23 (dm1q) | 35 | Adreno (TM) 740 | started | `found=3 activated=3` | 0 | **AG3C_DEVICE_PASS** |
+
+- **Run 1 (Mali, pre-fix) caught a real bug the static int→float port could not:** `0:194 Type mismatch in
+  arithmetic operation between 'vec2' and 'ivec2'`. `tiledLightingResolution`/`sceneResolution` are `ivec2`
+  uniforms, so `fUv * tiledLightingResolution` is a `vec2×ivec2` op strict ES rejects. Fixed by wrapping each in
+  `vec2(...)` (commit `89997d6cbe`). This overlay had **never** compiled on-device (tiled-lighting is
+  force-disabled on Android), so only the forced self-test exposed it.
+- **Run 2 (both families, post-fix) = clean PASS** (table above): `117 HD started successfully`,
+  `RLHD_OVERLAY_SELFTEST found=3 activated=3`, `shaderErrors=0` on Mali-G715 (api 34) and Adreno-740 (api 35).
+- Reproduce a device: `FB_DEVICE=<model> FB_VERSION=<api> FB_OVERLAY_SELFTEST=1 ./fb-gate.sh rlhd` (shaderdump
+  stays on, mapping any failure to a source line). Harness: commits `eba702be54` (self-test) + `e98c316440`
+  (type-scan + gate coverage assertion). Shader ports: `c346ba988b` / `d489792b8e` / `89997d6cbe`.
+- **Known dead-path twin (untouched):** the same `vec2×ivec2` pattern lives in production
+  `tiled_lighting_frag.glsl:64`, but tiled-lighting is force-disabled on Android (`RLHDStarter` sets
+  `tiledLighting=false`) so it never compiles — not forking pristine rlhd-src for a path that can't run.
 
 ## Coverage vs the audit matrix (not yet covered)
 
