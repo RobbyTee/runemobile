@@ -59,11 +59,11 @@ if [ "${1:-}" = "--pair" ]; then
   command -v adb >/dev/null || die "adb not found (ANDROID_HOME=$ANDROID_HOME)"
   pep="${2:-}"; code="${3:-}"
   [ -n "$pep" ] && [ -n "$code" ] || die "usage: ./deploy-wireless.sh --pair <ip:port> <6-digit-code>  (from the phone's 'Pair device with pairing code' screen)"
-  say "pairing with $pep (code times out fast)…"
+  say "pairing with $pep (code times out fast)..."
   adb pair "$pep" "$code" || die "pair failed — regenerate a fresh code on the phone and retry (try 'adb kill-server' first if it says 'protocol fault')"
   sleep 1
   ep="$(discover_endpoint)"; [ -n "$ep" ] || ep="$LEGACY_PHONE"
-  say "connecting to $ep…"
+  say "connecting to $ep..."
   adb connect "$ep" || true
   adb devices -l | grep -vE "emulator-|^List of" || true
   say "paired. Future runs auto-discover the endpoint: ./deploy-wireless.sh"
@@ -75,9 +75,9 @@ if [ "${1:-}" = "--bootstrap" ]; then
   command -v adb >/dev/null || die "adb not found (ANDROID_HOME=$ANDROID_HOME)"
   adb -s "$USB_SERIAL" get-state >/dev/null 2>&1 || die "phone $USB_SERIAL not on USB — plug in the cable and approve the debugging prompt"
   port="${LEGACY_PHONE##*:}"
-  say "switching adbd to TCP/IP on port $port (over USB)… (NOTE: resets on reboot/doze — prefer --pair)"
+  say "switching adbd to TCP/IP on port $port (over USB)... (NOTE: resets on reboot/doze — prefer --pair)"
   adb -s "$USB_SERIAL" tcpip "$port"
-  say "connecting to $LEGACY_PHONE over Wi-Fi…"
+  say "connecting to $LEGACY_PHONE over Wi-Fi..."
   until adb connect "$LEGACY_PHONE" 2>&1 | grep -qiE "connected"; do sleep 1; done
   if adb devices | grep -qE "$LEGACY_PHONE[[:space:]]+unauthorized"; then
     say "approve the 'Allow wireless debugging' prompt on the phone (tick 'Always allow'), then re-run --bootstrap"
@@ -115,7 +115,7 @@ ensure_connected() {
   if [ -z "$ep" ]; then ep="$(discover_endpoint)"; fi
   if [ -z "$ep" ]; then ep="$LEGACY_PHONE"; fi
   if [ "$(adb -s "$ep" get-state 2>/dev/null || true)" != "device" ]; then
-    say "connecting to $ep…"
+    say "connecting to $ep..."
     adb connect "$ep" >/dev/null 2>&1 || true
   fi
   PHONE="$ep"
@@ -129,17 +129,17 @@ ensure_connected() {
 
 ensure_connected
 
-say "building :app:$TASK…"
+say "building :app:$TASK..."
 ./gradlew ":app:$TASK" -q
 APK="app/build/outputs/apk/$CONFIG/app-$CONFIG.apk"
 [ -f "$APK" ] || die "APK not found: $APK"
 
-say "installing $(basename "$APK") ($(du -h "$APK" | cut -f1)) over Wi-Fi…"
+say "installing $(basename "$APK") ($(du -h "$APK" | cut -f1)) over Wi-Fi..."
 adb -s "$PHONE" install -r "$APK"
 adb -s "$PHONE" shell am force-stop dev.audaro.helloshell || true
 
 if [ "$ACTION" = "launch" ]; then
-  say "launching…"
+  say "launching..."
   adb -s "$PHONE" shell am start -n dev.audaro.helloshell/.MainActivity >/dev/null
 fi
 say "done — installed on $PHONE (cable not required)."

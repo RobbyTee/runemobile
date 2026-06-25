@@ -48,10 +48,24 @@ FACADE_LWJGL_CLASSES=$(cd "$WORK/facade_out" && find org/lwjgl -name '*.class' |
 (cd "$WORK/cp" && unzip -q "$SRC")
 rm -rf "$WORK/cp/org/lwjgl" "$WORK/cp/net/runelite/rlawt"
 
-# 3) compile the UNMODIFIED RLHD sources against [facade : stripped-client], lombok as annotation processor.
+# 2b) stage RLHD java sources into a work tree, then layer our tracked java-overlay/ on top — overlay files
+#     replace the same-path rlhd-src files (e.g. the JAU14->JAU11 camera-angle fix in StaticAlphaSortingJob),
+#     so our Java fixes are committed + reproducible while rlhd-src stays pristine (as shader-overlay does for GLSL).
+JSRC="$WORK/rlhd_java"; mkdir -p "$JSRC"; cp -R "$RLHD/src/main/java/." "$JSRC/"
+# Lombok config lives at the rlhd-src ROOT (lombok.accessors.chain=true → setters return `this`); carry it into
+# the work tree so chained-setter sources (e.g. Environment.java) still compile when built from $JSRC, not rlhd-src.
+[ -f "$RLHD/lombok.config" ] && cp "$RLHD/lombok.config" "$JSRC/lombok.config"
+JOVERLAY="$(pwd)/java-overlay"
+if [ -d "$JOVERLAY" ]; then
+	cp -R "$JOVERLAY/." "$JSRC/"
+	JOVR=$(cd "$JOVERLAY" && find . -name '*.java' | wc -l | tr -d ' ')
+	echo "java overlay applied  : $JOVR file(s)"
+fi
+
+# 3) compile the RLHD sources (rlhd-src + java-overlay) against [facade : stripped-client], lombok as annotation processor.
 set +e
 "$JAVAC" -nowarn -proc:full -cp "$WORK/facade_out:$WORK/cp:$LOMBOK" -processorpath "$LOMBOK" \
-	-d "$WORK/rlhd_out" $(find "$RLHD/src/main/java" -name '*.java') 2>"$WORK/err.txt"
+	-d "$WORK/rlhd_out" $(find "$JSRC" -name '*.java') 2>"$WORK/err.txt"
 RC=$?
 set -e
 if [ "$RC" != 0 ]; then echo "!! RLHD recompile FAILED ($(grep -c 'error:' "$WORK/err.txt") errors):" >&2; grep 'error:' "$WORK/err.txt" >&2; exit 2; fi
