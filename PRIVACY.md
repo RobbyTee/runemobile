@@ -8,9 +8,13 @@
 ## Summary
 
 - **There is no first-party server and no analytics.** The maintainer operates no backend and
-  receives **no** data about you or your usage. The app talks only to **Jagex** (to play the
-  game) and, **only if you choose to sign in**, to the **RuneLite project** (to sync your config
-  and hub plugins).
+  receives **no** data about you or your usage.
+- **Your personal/account data** goes only to **Jagex** (to play the game) and, **only if you
+  choose to sign in**, to the **RuneLite project** (to sync your config and hub plugins).
+- **The client also makes a few standard, non-opt-in network fetches that carry no account data** —
+  to **Jagex** (the game-launcher config) and to **RuneLite's CDN/API** (a runtime config blob and
+  the world list). Like any web request these reveal your device's IP to those hosts, but send no
+  personal payload. They are itemised in the table below.
 - **No telemetry or crash reports are sent.** This build boots the embedded client with
   `--disable-telemetry`, so RuneLite's usual boot telemetry and JVM-crash reporting to
   `api.runelite.net` are **off**.
@@ -21,15 +25,26 @@
 
 ## What leaves the device
 
+**Carries your account/personal data:**
+
 | Data | What it is | Sent to | When | Your control |
 |---|---|---|---|---|
 | Jagex OAuth (`id_token` → `session_id`) | The login handshake that proves you own the account | `account.jagex.com`, `auth.runescape.com` | When you log in | Log in / log out |
 | Game traffic | The live OSRS protocol (movement, actions, world state) | Jagex game servers (`oldschool*.runescape.com`) | While in-world | Log out / close app |
-| Live game cache fetch | OSRS art/data the engine streams to render the world | Jagex (JS5 cache) | First login / on update | Required to play |
 | RuneLite account sync | Your RuneLite profiles, plugin settings, and installed hub plugins | `api.runelite.net` | **Only if** you sign into a RuneLite account in the plugins panel | Opt-in; sign out to stop |
+
+**Non-opt-in fetches (no account data; a normal HTTP request that reveals your IP to the host):**
+
+| Data | What it is | Host | When | Notes |
+|---|---|---|---|---|
+| Game-launcher config | `jav_config` — the gamepack + game-server parameters | Jagex (`oldschool.config.runescape.com`; backup `static.runelite.net`) | At boot | Required to start the engine |
+| Live game cache fetch | OSRS art/data the engine streams to render the world (incl. its CRC/version validation, over the game connection) | Jagex (JS5 cache) | First login / on update | Required to play |
+| Runtime config | A small feature-flag/config blob RuneLite serves to all clients | RuneLite CDN (`static.runelite.net/config.json`) | At boot | Download only; no payload sent |
+| World list | The OSRS world list for the world hopper / map | RuneLite API (`api.runelite.net`) | When the world switcher loads | Download only; no payload sent |
 | Hub plugin downloads | Third-party plugin code you choose to install | RuneLite plugin repo (`repo.runelite.net`) | When you install a hub plugin | You choose what to install |
 
-That is the complete list of outbound data. **Nothing else is transmitted.**
+That is the complete list of outbound connections. **No telemetry, analytics, or crash reports
+are among them, and nothing carries your account data except the first table.**
 
 ## What is **not** collected or sent
 
@@ -73,7 +88,9 @@ These exist solely to make development convenient and are **removed from any rel
 - **Jagex Ltd.** — receives your login handshake and game traffic. Required to play. Governed by
   Jagex's own terms and privacy policy.
 - **The RuneLite project** — receives your config/plugin data **only if** you opt into RuneLite-account
-  sync, and serves hub-plugin downloads you choose to install. Governed by RuneLite's terms.
+  sync. Separately, its CDN/API serves all clients a runtime-config blob and the world list at boot, and
+  hub-plugin downloads you choose to install — these are downloads that send no account data (they reveal
+  your IP, as any HTTP request does). Governed by RuneLite's terms.
 - **No one else.**
 
 ## Notes & risk

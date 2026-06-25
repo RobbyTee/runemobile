@@ -87,6 +87,11 @@ token first).
    ```
    adb shell pm clear dev.audaro.helloshell
    ```
+   > **Note:** clearing data also resets the renderer choice and the GPU-fallback history. A device
+   > that had auto-fallen-back to the CPU renderer (after a GPU/117HD crash) will re-attempt the
+   > GPU/117HD path on the next boot — and may crash once more before the first-boot watchdog
+   > auto-falls-back again. **If a GPU/117HD crash is what you're recovering from, select the CPU
+   > renderer** (plugins panel → renderer) right after clearing to avoid the retry.
 3. Relaunch (it re-unpacks the JVM and re-downloads the cache on first login). To skip re-login on a
    debug build, push the backup token back:
    ```
