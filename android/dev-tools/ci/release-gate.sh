@@ -61,8 +61,21 @@ if [ "$contract_only" -eq 1 ]; then
 	echo; echo "✅ contract-only pre-flight PASS."; exit 0
 fi
 
-# Gradle is invoked from android/; JAVA_HOME defaults to the project's OpenJDK 21 when unset (CI sets it).
-export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}"
+# Gradle is invoked from android/. CI (and most dev shells) already export JAVA_HOME — honour it. Only when it is
+# unset do we probe known JDK-21 locations, and only export one that actually exists on disk; if none match (e.g. a
+# Linux distro path we don't list), leave JAVA_HOME unset so the gradlew wrapper / PATH `java` resolves it — never
+# hard-code a macOS-only path that would point a Linux/Windows run at a non-existent home.
+if [ -z "${JAVA_HOME:-}" ]; then
+	for cand in \
+		/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home \
+		/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home \
+		/usr/lib/jvm/temurin-21-jdk-amd64 \
+		/usr/lib/jvm/java-21-openjdk-amd64 \
+		/usr/lib/jvm/java-21-openjdk
+	do
+		if [ -x "$cand/bin/java" ]; then export JAVA_HOME="$cand"; break; fi
+	done
+fi
 GRADLEW=(./gradlew --no-daemon --console=plain)
 
 # ── Stage 2: assembleRelease (PROD-QA-01) ─────────────────────────────────────────────────────────────
