@@ -41,9 +41,17 @@ public class DeviceHeadlessBoot {
         final boolean routecGpu = Boolean.getBoolean("runelite.routecgpu");
         final boolean noSafeMode = Boolean.getBoolean("runelite.nosafemode");
         final boolean safeModeOff = hub || routecGpu || noSafeMode;
-        final String[] rlArgs = safeModeOff ? new String[0] : new String[]{"--safe-mode"};
+        // Privacy (PRIVACY-LEGAL-01): this unofficial personal client does not phone RuneLite's telemetry.
+        // --disable-telemetry makes RuneLiteModule bind a null TelemetryClient, so start() submits NO boot
+        // telemetry and NO JVM-crash reports to api.runelite.net. The only outbound data is to Jagex (for
+        // gameplay/auth) and to RuneLite ONLY if the user opts into account sync. Always on, every renderer.
+        final java.util.List<String> rl = new java.util.ArrayList<>();
+        if (!safeModeOff) rl.add("--safe-mode");
+        rl.add("--disable-telemetry");
+        final String[] rlArgs = rl.toArray(new String[0]);
         System.out.println("[boot] launching RuneLiteHeadless" + (safeModeOff
-            ? " (safe-mode OFF: " + (noSafeMode ? "nosafemode" : (routecGpu ? "routecgpu" : "hub")) + ")" : " --safe-mode"));
+            ? " (safe-mode OFF: " + (noSafeMode ? "nosafemode" : (routecGpu ? "routecgpu" : "hub")) + ")" : " --safe-mode")
+            + " --disable-telemetry");
         net.runelite.client.headless.RuneLiteHeadless.main(rlArgs);
 
         long runSeconds = Long.getLong("headless.runSeconds", 60L);

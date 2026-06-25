@@ -88,7 +88,16 @@ either: exactly like the desktop client, it renders those interface sprites from
 the user's own live game cache at runtime, so no Jagex art ships in this
 repository.
 
-## Security
+## Security & privacy
 
 See [`SECURITY.md`](SECURITY.md) for the private reporting channel and the scope
 of what is (and isn't) treated as a vulnerability.
+
+See [`PRIVACY.md`](PRIVACY.md) for exactly what data the app handles and what
+leaves the device — in short: no telemetry, no analytics, no maintainer backend;
+data goes only to Jagex (to play) and, if you opt in, to RuneLite (config sync).
+
+## Releases
+
+See [`RELEASE.md`](RELEASE.md) for the release-page disclosure, known issues, and
+the update / rollback / recovery procedure (sideload-only; no in-app update check).
