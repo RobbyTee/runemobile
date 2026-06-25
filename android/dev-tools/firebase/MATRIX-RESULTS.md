@@ -8,16 +8,18 @@
 > `GL_RENDERER (actual)` is read from the device's `ANDROID_AG0 renderer="…"` line — the **ground truth** that
 > supersedes the best-effort vendor label.
 
-## Result: recon 10/10 PASS · rlhd 9/10 PASS · 1 coverage-gap (NOT a shader failure)
+## Result: recon 10/10 PASS · rlhd 9/10 PASS · 1 UNVERIFIED (Mali-G52, re-run in flight)
 
-> ⚠️ **`gta8wifi` (Galaxy Tab A8 / Mali-G52) = `NOT_GREEN`, but this is a self-test *coverage gap*, not a 117HD
-> shader/render failure.** On that run 117HD logged `Renderer: ZoneRenderer` → `117 HD started successfully` with
-> **zero** shader/compile errors (`shader/compile failures … (none)`); the verdict tripped only because the
-> overlay self-test line was absent — the weak tablet GPU crashed game-loop attempt 1, Firebase retried, and
-> `client.isGpu()` didn't flip in the captured logcat window so the forced overlay compile never logged. 117HD
-> users on such a device are protected at runtime regardless by the **auto-GPU crash-cookie watchdog**
-> (`MainActivity.kt` — a promoted GPU/117HD boot that never presents a frame auto-demotes to CPU next boot). A
-> longer-`FB_TIMEOUT` re-run is tracked to convert this to a clean read; see the self-test section below.
+> ⚠️ **`gta8wifi` (Galaxy Tab A8 / Mali-G52) = `NOT_GREEN` → UNVERIFIED, NOT a certified pass.** 117HD *did* log
+> `Renderer: ZoneRenderer` → `117 HD started successfully` with **zero** shader/compile errors
+> (`shader/compile failures … (none)`) — so there's no evidence of a shader incompat — **but** game-loop
+> attempt 1 ended abnormally and Firebase retried, and `client.isGpu()` wasn't captured, so the forced overlay
+> self-test line is absent. We can neither certify it green nor confirm a clean 117HD boot on Mali-G52. A
+> longer-`FB_TIMEOUT` re-run (shaderdump on) is in flight to settle it. **If 117HD proves unable to run cleanly
+> on this GPU, the supported outcome is auto-demotion to CPU** — the `MainActivity.kt` caps-probe + crash-cookie
+> watchdog yields a playable, if degraded, CPU client (not a bootloop). That is a *117HD-unsupported-on-G52*
+> result, **not** a 117HD pass; the watchdog is mitigation, not exoneration. This row stays UNVERIFIED until the
+> re-run shows a clean self-test.
 
 | Device | API | Form | GPU (label) | recon | rlhd (117HD + overlay self-test) | GL_RENDERER (actual) | esTier |
 |--------|-----|------|-------------|-------|----------------------------------|---------------------|--------|
@@ -36,18 +38,20 @@
 > `gcloud firebase test android models list`, and what `fb-matrix.sh`'s auto-generated table emits). The raw
 > codename-only table the tool writes is reconstructed here with commercial names for release-gating readability.
 
-¹ Coverage gap, not a shader failure — see the boxed note above and the self-test section below.
+¹ UNVERIFIED — not a certified pass (117HD started with 0 shader errors, but the self-test wasn't captured after
+an attempt-1 anomaly + retry). See the boxed note above; re-run in flight.
 
 ## Read
 
 - **recon: 10/10 PASS.** GLES caps gate green on real Mali (G715 new, G78 old, **G52 mid/tablet**) + Adreno
   (740, **750**) across Android 12/14/15 (api 32/34/35), portrait + landscape + foldable. **esTier = 32
   (GLES 3.2) on all** → every device clears the auto-GPU promotion bar.
-- **rlhd: 9/10 PASS, 1 coverage-gap.** The heaviest renderer (117HD) compiles its Zone scene shaders **and the
+- **rlhd: 9/10 PASS, 1 UNVERIFIED.** The heaviest renderer (117HD) compiles its Zone scene shaders **and the
   four reachable overlay shaders** and starts on every tested driver family — Mali-G715 (×4), Mali-G78 (old),
-  Adreno-740 (×3 incl. foldable + cutout/landscape), Adreno-750. The lone non-green (`gta8wifi`/Mali-G52) is a
-  self-test capture gap from a crashed+retried game-loop, not a shader incompatibility (117HD started clean,
-  0 shader errors); re-run tracked.
+  Adreno-740 (×3 incl. foldable + cutout/landscape), Adreno-750. The lone non-green (`gta8wifi`/Mali-G52) is
+  **unverified** — 117HD started with 0 shader errors (no shader-incompat evidence), but an attempt-1 anomaly +
+  retry meant the self-test wasn't captured, so it is neither certified green nor a confirmed clean boot;
+  re-run in flight, and a persistent failure is recorded as 117HD-unsupported-on-G52 (CPU auto-fallback), not a pass.
 - Per-device gating record reproducible via `FB_DEVICE=<model> FB_VERSION=<api> [FB_OVERLAY_SELFTEST=1] ./fb-gate.sh recon|rlhd`.
 
 ## Overlay GLES self-test — RESOLVED + DEVICE-VERIFIED (2026-06-25)
@@ -72,12 +76,15 @@ didn't capture the self-test line (the coverage gap above); a longer-`FB_TIMEOUT
   uniforms, so `fUv * tiledLightingResolution` is a `vec2×ivec2` op strict ES rejects. Fixed by wrapping each in
   `vec2(...)` (commit `89997d6cbe`). The overlay had **never** compiled on-device (tiled-lighting is
   force-disabled on Android), so only the forced self-test exposed it.
-- **Dead-path twin NOW CLOSED:** the same `vec2×ivec2` pattern (plus `int(ceil(pointLightsCount/32.0))` and
-  `uvec4(0.0)`) lived in production `tiled_lighting_frag.glsl` (line 64 et al.). Tiled-lighting is force-disabled
-  on Android (`RLHDStarter` sets `tiledLighting=false`) so it never compiles in the product, but the source was
-  known-broken on strict ES. It is now strict-ES-clean via a layered shader-overlay override (commit
-  `6d7c9442fa`) mirroring the device-proven iOS gpu-zone port — pristine rlhd-src stays untouched. Logic
-  identical to upstream (only the type casts changed; the insertion-sort body is verbatim).
+- **Dead-path twin — SOURCE HYGIENE only, NOT functional coverage:** the same `vec2×ivec2` pattern (plus
+  `int(ceil(pointLightsCount/32.0))` and `uvec4(0.0)`) lived in production `tiled_lighting_frag.glsl` (line 64
+  et al.). Now made strict-ES-clean via a layered shader-overlay override (commit `6d7c9442fa`) mirroring the
+  iOS gpu-zone port. **Status = Verified-Compiling-by-mirror, NOT Verified-Working:** the path stays
+  force-disabled on Android (`RLHDStarter` sets `tiledLighting=false`), this override has not been compiled on an
+  Android device (the overlay self-test exercises only `ShaderOverlay` subclasses, not this production program),
+  and it is unexercised at runtime. It removes a latent strict-ES landmine if the feature is ever enabled — it
+  does not add functional coverage. Pristine rlhd-src untouched; logic identical (only type casts; insertion-sort
+  body verbatim upstream).
 - Reproduce a device: `FB_DEVICE=<model> FB_VERSION=<api> FB_OVERLAY_SELFTEST=1 ./fb-gate.sh rlhd`. Harness:
   commits `eba702be54` (self-test) + `e98c316440` (type-scan + gate coverage assertion). Shader ports:
   `c346ba988b` / `d489792b8e` / `89997d6cbe` (overlays) + `6d7c9442fa` (production twin).
