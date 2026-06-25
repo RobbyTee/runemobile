@@ -176,11 +176,22 @@ case "$MODE" in
           if [ -n "$PNGS" ]; then echo "$PNGS" | while read -r p; do [ -n "$p" ] && gsutil cp "$p" "$FRAMEDIR/" 2>/dev/null; done; fi
           N="$(ls "$FRAMEDIR"/*.png 2>/dev/null | wc -l | tr -d ' ')"
           STARTED="$(grep -c "117 HD started successfully" "$OUT" || true)"
-          SHADERR="$(grep -c "ShaderException\|Illegal use of reserved word" "$OUT" || true)"
+          SHADERR="$(grep -c "ShaderException\|Illegal use of reserved word\|Failed to compile shader" "$OUT" || true)"
           TB="$(grep -oE "texture_buffer=[01]" "$OUT" | head -1 || true)"
           echo "== pulled $N frame PNG(s) -> $FRAMEDIR =="
           echo ">> 117HD-started=$STARTED  shaderErrors=$SHADERR  $TB"
-          if [ "$STARTED" -ge 1 ] && [ "$SHADERR" = 0 ]; then echo ">> VERDICT=AG3C_DEVICE_PASS (117HD Zone shaders compile + startUp on real Mali)"; else echo ">> VERDICT=AG3C_DEVICE_NOT_GREEN (see logcat $OUT)" >&2; exit 1; fi ;;
+          # Overlay self-test coverage gate (FB_OVERLAY_SELFTEST): the run is only a valid overlay-shader proof if the
+          # self-test actually FOUND + ACTIVATED the overlays. A reflection break (found=0) or partial activation must
+          # FAIL — otherwise a no-op self-test would pass on "no ShaderException" while exercising nothing. Expect the
+          # three reachable ShaderOverlay subclasses (gamma/shadow/tiled); allow more (future overlays).
+          SELFTEST_OK=1
+          if [ -n "${FB_OVERLAY_SELFTEST:-}" ]; then
+            ST="$(grep -oE "RLHD_OVERLAY_SELFTEST found=[0-9]+ activated=[0-9]+" "$OUT" | tail -1 || true)"
+            FOUND="$(printf '%s' "$ST" | grep -oE "found=[0-9]+" | cut -d= -f2)"; ACT="$(printf '%s' "$ST" | grep -oE "activated=[0-9]+" | cut -d= -f2)"
+            echo ">> overlay self-test: ${ST:-<not logged>}"
+            if [ -z "$ST" ] || [ "${FOUND:-0}" -lt 3 ] || [ "${ACT:-0}" != "${FOUND:-0}" ]; then SELFTEST_OK=0; fi
+          fi
+          if [ "$STARTED" -ge 1 ] && [ "$SHADERR" = 0 ] && [ "$SELFTEST_OK" = 1 ]; then echo ">> VERDICT=AG3C_DEVICE_PASS (117HD Zone shaders compile + startUp on real Mali)"; else echo ">> VERDICT=AG3C_DEVICE_NOT_GREEN (see logcat $OUT)" >&2; exit 1; fi ;;
   netprobe) echo "--- NETPROBE: does the home-minted session authenticate from the Firebase (datacenter) IP? ---"
           grep -E "NETPROBE" "$OUT" || { echo "no NETPROBE lines — is the netprobe build installed?" >&2; exit 1; }
           echo "--- read: control 204 = egress OK; jagex accounts HTTP 200 = session accepted from this IP (so login fails elsewhere);"

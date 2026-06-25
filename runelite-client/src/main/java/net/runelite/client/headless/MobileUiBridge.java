@@ -2555,45 +2555,64 @@ public final class MobileUiBridge
 	 * {@code initialize() -> shader.compile()} on the client thread; a compile failure logs "Failed to compile
 	 * shader:". Every overlay program also compiles the shared {@code overlay_vert.glsl}, so this covers all four
 	 * reachable overlay shaders (overlay_frag.glsl is replaced per-stage by each subclass and never compiled).
-	 * Reflective — the overlays live in the staged rlhd jar, no compile-time dependency. Inert unless armed by
-	 * {@link RLHDStarter}; returns a short summary (grep {@code RLHD_OVERLAY_SELFTEST}) for the log.
+	 * Reflective — the overlays live in the staged rlhd jar, no compile-time dependency. To avoid coupling to
+	 * field names (a refactor would silently skip), the overlays are found by TYPE: every {@code HdPlugin} field
+	 * whose type is a {@code ShaderOverlay} subclass. This auto-covers any future overlay. The summary logs
+	 * {@code found=M activated=N} (grep {@code RLHD_OVERLAY_SELFTEST}); the CI gate asserts M>=3 and N==M, so a
+	 * reflection break (found=0) fails the run rather than passing a self-test that exercised nothing. Inert
+	 * unless armed by {@link RLHDStarter}.
 	 */
 	public static String rlhdOverlaySelfTest()
 	{
 		final Plugin hd = pluginByClassName("rs117.hd.HdPlugin");
 		if (hd == null)
 		{
-			final String s = "RLHD_OVERLAY_SELFTEST skipped (HdPlugin not loaded)";
+			final String s = "RLHD_OVERLAY_SELFTEST found=0 activated=0 (HdPlugin not loaded)";
 			log.info("[mobileui] {}", s);
 			return s;
 		}
-		final String[] fields = { "gammaCalibrationOverlay", "shadowMapOverlay", "tiledLightingOverlay" };
-		int ok = 0;
-		final StringBuilder detail = new StringBuilder();
-		for (String fn : fields)
+		final Class<?> overlayBase;
+		try
 		{
+			overlayBase = Class.forName("rs117.hd.overlays.ShaderOverlay", false, MobileUiBridge.class.getClassLoader());
+		}
+		catch (Throwable t)
+		{
+			final String s = "RLHD_OVERLAY_SELFTEST found=0 activated=0 (ShaderOverlay class missing)";
+			log.warn("[mobileui] {}", s, t);
+			return s;
+		}
+		int found = 0, ok = 0;
+		final StringBuilder detail = new StringBuilder();
+		for (java.lang.reflect.Field f : hd.getClass().getDeclaredFields())
+		{
+			if (!overlayBase.isAssignableFrom(f.getType()))
+			{
+				continue;
+			}
+			found++;
+			final String tn = f.getType().getSimpleName();
 			try
 			{
-				final java.lang.reflect.Field f = hd.getClass().getDeclaredField(fn);
 				f.setAccessible(true);
 				final Object overlay = f.get(hd);
 				if (overlay == null)
 				{
-					detail.append(fn).append("=null ");
+					detail.append(tn).append("=null ");
 					continue;
 				}
 				// setActive(true) -> initialize() -> shader.compile() (queued on the client thread inside setActive).
 				overlay.getClass().getMethod("setActive", boolean.class).invoke(overlay, true);
 				ok++;
-				detail.append(fn).append("=active ");
+				detail.append(tn).append("=active ");
 			}
 			catch (Throwable t)
 			{
-				detail.append(fn).append("=ERR(").append(t.getClass().getSimpleName()).append(") ");
-				log.warn("[mobileui] overlay self-test {} failed", fn, t);
+				detail.append(tn).append("=ERR(").append(t.getClass().getSimpleName()).append(") ");
+				log.warn("[mobileui] overlay self-test {} failed", tn, t);
 			}
 		}
-		final String summary = "RLHD_OVERLAY_SELFTEST activated=" + ok + "/" + fields.length
+		final String summary = "RLHD_OVERLAY_SELFTEST found=" + found + " activated=" + ok
 			+ " [" + detail.toString().trim() + "]";
 		log.info("[mobileui] {}", summary);
 		return summary;
