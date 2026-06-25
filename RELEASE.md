@@ -41,6 +41,19 @@ These are accepted, documented behaviors — list the ones true for the build be
 
 ---
 
+## Signing
+
+Release builds are signed with a dedicated key (not the debug key). The signing certificate is:
+
+- **Subject:** `CN=RuneMobile, O=RuneMobile`
+- **SHA-256:** `45:E3:05:84:4D:53:A6:26:5D:C8:6E:B3:99:BE:99:7A:B3:FA:27:76:F9:0F:18:B1:6F:D4:EC:90:F4:3D:3C:9E`
+
+Every published APK should carry this fingerprint (verify with
+`apksigner verify --print-certs <apk>`); a build that doesn't is not a genuine release. **Update-in-place
+only works between APKs signed by this same key** — see the rotation warning in `keystore.properties.example`.
+The key material lives outside the repo and is never committed; keep the keystore **and** its password
+backed up (a lost key means future updates require users to uninstall + reinstall).
+
 ## Versioning
 
 - `versionName` is semver (e.g. `0.1.0`); `versionCode` is derived monotonically
