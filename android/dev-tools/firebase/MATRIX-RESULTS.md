@@ -8,18 +8,19 @@
 > `GL_RENDERER (actual)` is read from the device's `ANDROID_AG0 renderer="…"` line — the **ground truth** that
 > supersedes the best-effort vendor label.
 
-## Result: recon 10/10 PASS · rlhd 9/10 PASS · 1 UNVERIFIED (Mali-G52, re-run in flight)
+## Result: recon 10/10 PASS · rlhd 10/10 PASS
 
-> ⚠️ **`gta8wifi` (Galaxy Tab A8 / Mali-G52) = `NOT_GREEN` → UNVERIFIED, NOT a certified pass.** 117HD *did* log
-> `Renderer: ZoneRenderer` → `117 HD started successfully` with **zero** shader/compile errors
-> (`shader/compile failures … (none)`) — so there's no evidence of a shader incompat — **but** game-loop
-> attempt 1 ended abnormally and Firebase retried, and `client.isGpu()` wasn't captured, so the forced overlay
-> self-test line is absent. We can neither certify it green nor confirm a clean 117HD boot on Mali-G52. A
-> longer-`FB_TIMEOUT` re-run (shaderdump on) is in flight to settle it. **If 117HD proves unable to run cleanly
-> on this GPU, the supported outcome is auto-demotion to CPU** — the `MainActivity.kt` caps-probe + crash-cookie
-> watchdog yields a playable, if degraded, CPU client (not a bootloop). That is a *117HD-unsupported-on-G52*
-> result, **not** a 117HD pass; the watchdog is mitigation, not exoneration. This row stays UNVERIFIED until the
-> re-run shows a clean self-test.
+> ✅ **`gta8wifi` (Galaxy Tab A8 / Mali-G52) — VERIFIED PASS on a clean 720s re-run.** It initially read
+> `NOT_GREEN` on the matrix run, but that was a **logcat-capture artifact**, not a 117HD problem: that run's
+> game-loop attempt 1 cold-start-flaked and Firebase retried, truncating the capture before `client.isGpu()`
+> flipped. The 720s re-run ran in a **single attempt, no retry**, and the device logcat is unambiguous:
+> `117 HD started successfully` → `RLHD_OVERLAY_SELFTEST found=3 activated=3` (Gamma + ShadowMap + TiledLighting
+> all active) → `GPU renderer active (isGpu=true) — 117HD up after 1 attempt`, with **0 ShaderExceptions**. So
+> 117HD + all four overlay shaders compile and start cleanly on Mali-G52 too.
+>
+> *Gate-harness note (minor follow-up): with `shaderdump` left ON, the standalone `fb-gate.sh` stdout truncated
+> mid-`SHDR`-dump before printing its VERDICT line, so the pass was confirmed directly from the fetched device
+> logcat rather than the gate summary. The matrix path avoids this by defaulting `FB_NO_SHADERDUMP=1`.*
 
 | Device | API | Form | GPU (label) | recon | rlhd (117HD + overlay self-test) | GL_RENDERER (actual) | esTier |
 |--------|-----|------|-------------|-------|----------------------------------|---------------------|--------|
@@ -31,27 +32,27 @@
 | Pixel 8a `akita` | 34 | phone | mali-g715 | PASS | **PASS** | Mali-G715 | 32 |
 | Pixel 9 Pro Fold `comet` | 35 | foldable | mali-g715 | PASS | **PASS** | Mali-G715 | 32 |
 | Galaxy Z Flip5 `b5q` | 34 | foldable | adreno-740 | PASS | **PASS** | Adreno (TM) 740 | 32 |
-| Galaxy Tab A8 `gta8wifi` | 34 | tablet | mali-g52 (mid) | PASS | ⚠️ NOT_GREEN ¹ | Mali-G52 | 32 |
+| Galaxy Tab A8 `gta8wifi` | 34 | tablet | mali-g52 (mid) | PASS | **PASS** ¹ | Mali-G52 | 32 |
 | Galaxy S24 Ultra `e3q` | 34 | phone | adreno-750 | PASS | **PASS** | Adreno (TM) 750 | 32 |
 
 > Device column is `Commercial name` + the Firebase Test Lab model id (the canonical inventory key used by
 > `gcloud firebase test android models list`, and what `fb-matrix.sh`'s auto-generated table emits). The raw
 > codename-only table the tool writes is reconstructed here with commercial names for release-gating readability.
 
-¹ UNVERIFIED — not a certified pass (117HD started with 0 shader errors, but the self-test wasn't captured after
-an attempt-1 anomaly + retry). See the boxed note above; re-run in flight.
+¹ Verified PASS on a clean 720s re-run (single attempt, no retry): `found=3 activated=3`, isGpu up after 1
+attempt, 0 ShaderExceptions. The matrix run's `NOT_GREEN` was a logcat-capture artifact from a cold-start retry;
+see the boxed note above.
 
 ## Read
 
 - **recon: 10/10 PASS.** GLES caps gate green on real Mali (G715 new, G78 old, **G52 mid/tablet**) + Adreno
   (740, **750**) across Android 12/14/15 (api 32/34/35), portrait + landscape + foldable. **esTier = 32
   (GLES 3.2) on all** → every device clears the auto-GPU promotion bar.
-- **rlhd: 9/10 PASS, 1 UNVERIFIED.** The heaviest renderer (117HD) compiles its Zone scene shaders **and the
-  four reachable overlay shaders** and starts on every tested driver family — Mali-G715 (×4), Mali-G78 (old),
-  Adreno-740 (×3 incl. foldable + cutout/landscape), Adreno-750. The lone non-green (`gta8wifi`/Mali-G52) is
-  **unverified** — 117HD started with 0 shader errors (no shader-incompat evidence), but an attempt-1 anomaly +
-  retry meant the self-test wasn't captured, so it is neither certified green nor a confirmed clean boot;
-  re-run in flight, and a persistent failure is recorded as 117HD-unsupported-on-G52 (CPU auto-fallback), not a pass.
+- **rlhd: 10/10 PASS.** The heaviest renderer (117HD) compiles its Zone scene shaders **and the four reachable
+  overlay shaders** and starts on every tested driver family — Mali-G715 (×4), Mali-G78 (old), **Mali-G52
+  (tablet)**, Adreno-740 (×3 incl. foldable + cutout/landscape), Adreno-750. The Tab A8 (`gta8wifi`/Mali-G52)
+  initially read `NOT_GREEN` from a cold-start-retry logcat-capture artifact; a clean 720s re-run verified it
+  green (`found=3 activated=3`, isGpu up after 1 attempt, 0 ShaderExceptions).
 - Per-device gating record reproducible via `FB_DEVICE=<model> FB_VERSION=<api> [FB_OVERLAY_SELFTEST=1] ./fb-gate.sh recon|rlhd`.
 
 ## Overlay GLES self-test — RESOLVED + DEVICE-VERIFIED (2026-06-25)
@@ -66,10 +67,9 @@ via `FB_OVERLAY_SELFTEST=1`; the gate asserts `found≥3 && activated==found` so
 "no ShaderException". Each overlay program also compiles the shared `overlay_vert.glsl`, covering all four
 reachable overlay shaders (`overlay_frag.glsl` is replaced per-stage by every subclass → never compiled).
 
-**Self-test result across the full matrix: every device that reached `isGpu` logged `RLHD_OVERLAY_SELFTEST
-found=3 activated=3`, `shaderErrors=0`** — Mali-G715 (shiba/husky/akita/comet), Mali-G78 (bluejay),
-Adreno-740 (dm1q/b5q/XQ-DQ72), Adreno-750 (e3q) = 9 devices, 4 driver families. Only `gta8wifi` (Mali-G52)
-didn't capture the self-test line (the coverage gap above); a longer-`FB_TIMEOUT` re-run is tracked.
+**Self-test result across the full matrix: all 10 devices logged `RLHD_OVERLAY_SELFTEST found=3 activated=3`,
+`shaderErrors=0`** — Mali-G715 (shiba/husky/akita/comet), Mali-G78 (bluejay), **Mali-G52 (gta8wifi, on the
+720s re-run)**, Adreno-740 (dm1q/b5q/XQ-DQ72), Adreno-750 (e3q) = 10 devices, 5 driver families.
 
 - **The pre-fix Mali run caught a real bug the static int→float port could not:** `0:194 Type mismatch in
   arithmetic operation between 'vec2' and 'ivec2'`. `tiledLightingResolution`/`sceneResolution` are `ivec2`
