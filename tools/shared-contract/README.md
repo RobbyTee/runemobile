@@ -38,7 +38,14 @@ Additive changes (a new bridge method) are safe — the other port just won't ca
 baseline so it stays truthful. Removed/renamed/re-signatured entries are the real danger and are called out
 explicitly. Emergency bypass: `git commit --no-verify`.
 
+## Promoted to a required gate stage (PROD-RELEASE-ENG-07)
+`check-contract.sh` is no longer *only* the bypassable local pre-commit hook. It is a **required, non-bypassable
+stage of the Android release gate** — `android/dev-tools/ci/release-gate.sh` runs it first and **fails on exit 2**
+(a removed/renamed/re-signatured entry that risks breaking the other port). The dormant-but-ready
+`.github/workflows/android-release-gate.yml` calls the same script, so when GitHub Actions are enabled the
+contract check runs there too. The pre-commit hook stays as the fast local pre-flight. See `android/GATE.md` row 6.
+
 ## What it does and doesn't guarantee
-It catches contract **drift** at commit time and forces a conscious cross-port check — it does not itself build
-both apps. The actual "doesn't break the other port" proof is the Android bridge census (and the iOS bridge
+It catches contract **drift** at commit/gate time and forces a conscious cross-port check — it does not itself
+build both apps. The actual "doesn't break the other port" proof is the Android bridge census (and the iOS bridge
 checks) it tells you to run; this guard makes sure you never forget to.

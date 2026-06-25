@@ -83,6 +83,16 @@ run `./gradlew :app:stageBootAssets` to do steps 1–6 in one Gradle task — se
 The two native libraries (`libhelloshell.so`, `librlawt.so`) are **not** staged — Gradle's CMake
 `externalNativeBuild` builds them from tracked `cpp/` source automatically.
 
+### Release gate (GATE.md row 6)
+Before tagging a build, run the single release gate — cross-port contract check + `:app:assembleRelease`
+(with the no-secret / boot-asset guards) + `:app:lintRelease`:
+```
+./android/dev-tools/ci/release-gate.sh                 # the runnable gate (contract + build + lint)
+./android/dev-tools/ci/release-gate.sh --contract-only # fast pre-flight: just the shared-contract diff
+```
+This script is the source of truth; `.github/workflows/android-release-gate.yml` is a thin wrapper that's
+dormant only because Actions are disabled for this fork (it activates unchanged if they're ever enabled).
+
 ## Milestones
 - **A — JVM Hello on the emulator (DONE):** `JvmLauncher.startJvm(mainClass="Hello")` boots HotSpot and runs
   `Hello.main`, printing `VERDICT = JIT ACTIVE` (logcat). De-risks `JNI_CreateJavaVM` + JIT on ART.

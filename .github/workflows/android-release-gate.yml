@@ -1,0 +1,64 @@
+# Android release gate (GATE.md row 6 — "a real gate exists and passes").
+#
+# DORMANT-BUT-READY: GitHub Actions are disabled at the repo level for this fork (it ships an unapproved
+# live-OSRS client and is never published to a marketplace), so this workflow does not execute on GitHub.
+# It is intentionally kept as a thin wrapper that calls the one runnable source of truth —
+# android/dev-tools/ci/release-gate.sh — which a developer runs locally to produce the reproducible evidence
+# the gate requires. If/when Actions are ever enabled (e.g. on a public mirror), this activates unchanged.
+#
+# Covers PROD-QA-01 (assembleRelease + lintRelease + contract; device-smoke is opt-in / needs a device pool)
+# and PROD-RELEASE-ENG-07 (the cross-port contract check as a required CI stage, not a bypassable local hook).
+name: android-release-gate
+
+on:
+  push:
+    paths:
+      - 'android/**'
+      - 'runelite-client/**'
+      - 'tools/shared-contract/**'
+      - '.github/workflows/android-release-gate.yml'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Fast, always-runnable gate: the cross-port contract diff (PROD-RELEASE-ENG-07). Needs only python3 + bash,
+  # so it is the realistic required check even on a minimal runner. Fails on a removed/changed shared entry.
+  contract:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cross-port contract gate
+        run: ./android/dev-tools/ci/release-gate.sh --contract-only
+
+  # Full release gate: assembleRelease (+ the verifyNoReleaseSecret / verifyReleaseBootAssets guards) + lintRelease.
+  # Heavy — it self-stages the embedded JRE, builds the shared :client shadowJar, and compiles native via the NDK.
+  # A keyless runner falls back to the debug signing key, so the build still produces an installable APK.
+  release-build:
+    runs-on: ubuntu-24.04
+    needs: contract
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Set up Android SDK + NDK
+        uses: android-actions/setup-android@v3
+      - name: Install NDK + cmake (native bridge build)
+        run: sdkmanager "ndk;26.1.10909125" "cmake;3.22.1"
+      - name: Release gate (assembleRelease + lintRelease + contract)
+        run: ./android/dev-tools/ci/release-gate.sh
+      # Device-smoke (boot to first frame) is NOT run here: plain CI has no GPU device. Enable a Firebase
+      # Test Lab pool + gcloud auth, then add `--with-device-smoke` to drive android/dev-tools/firebase/fb-gate.sh.
+      - name: Upload release APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: ignore
