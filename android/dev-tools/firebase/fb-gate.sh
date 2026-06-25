@@ -112,7 +112,7 @@ GLOG="$(mktemp)"
 gcloud firebase test android run \
   --type "${TYPE:-robo}" \
   --app "$APK" \
-  --device "model=${FB_DEVICE:-shiba},version=${FB_VERSION:-34},locale=en,orientation=portrait" \
+  --device "model=${FB_DEVICE:-shiba},version=${FB_VERSION:-34},locale=en,orientation=${FB_ORIENTATION:-portrait}" \
   --timeout "${FB_TIMEOUT:-180s}" \
   --results-dir "$RESULTS_DIR" \
   "${TYPE_ARGS[@]+"${TYPE_ARGS[@]}"}" \
