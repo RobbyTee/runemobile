@@ -105,6 +105,12 @@ for entry in "${DEVICES[@]}"; do
 	for mode in "${MODE_LIST[@]}"; do
 		echo "── $model :: $mode ──"
 		log="/tmp/fbm-$model-$mode.log"
+		# rlhd: skip the `rlhd_shaderdump` debug marker (FB_NO_SHADERDUMP=1). That marker activates the developer
+		# `rs117.hd.overlays.ShaderOverlay`, which is NOT part of the production 117HD path; on strict GLSL-ES
+		# drivers its overlay shader throws a non-fatal compile error (const int->float) that the gate would
+		# miscount as a renderer failure. The matrix gates the CORE renderer (Zone scene compile + startUp), so the
+		# production-representative run omits the debug overlay. (Set FB_NO_SHADERDUMP= to re-enable for bring-up.)
+		if [ "$mode" = "rlhd" ]; then export FB_NO_SHADERDUMP="${FB_NO_SHADERDUMP:-1}"; fi
 		FB_DEVICE="$model" FB_VERSION="$version" FB_ORIENTATION="$orient" "$GATE" "$mode" 2>&1 | tee "$log"
 		rc=${PIPESTATUS[0]}
 		verdict="$(grep -oE 'VERDICT=[A-Za-z0-9_]+' "$log" 2>/dev/null | tail -1 | sed 's/VERDICT=//')"
