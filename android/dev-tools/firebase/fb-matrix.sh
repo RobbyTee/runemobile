@@ -119,8 +119,18 @@ for entry in "${DEVICES[@]}"; do
 		# Capture the ACTUAL GL_RENDERER + ES tier (the ground truth that supersedes the best-effort vendor label).
 		# recon logs `ANDROID_AG0 esTier=NN(...) ... renderer="<string>"`; reuse whichever mode logged it.
 		if [ -z "$renderer" ]; then
-			renderer="$(grep -oE 'renderer="[^"]*"' "$log" 2>/dev/null | tail -1 | sed -E 's/renderer="(.*)"/\1/')"
+			# Sanitize: strip control chars and neutralise the markdown column delimiter so a driver name can
+			# never break the results table. (grep -oE is line-based, so newlines can't enter; this guards `|`.)
+			renderer="$(grep -oE 'renderer="[^"]*"' "$log" 2>/dev/null | tail -1 | sed -E 's/renderer="(.*)"/\1/' | tr -d '\000-\037' | sed 's/|/\//g')"
 			estier="$(grep -oE 'esTier=[0-9]+' "$log" 2>/dev/null | tail -1 | sed 's/esTier=//')"
+			# Integrity guard: every device in this matrix is dispatched as a PHYSICAL Test Lab device, so a
+			# software rasterizer (SwiftShader/llvmpipe/Emulator) as GL_RENDERER means the run did NOT land on the
+			# real GPU and the "ground truth" caps reading is bogus — flag it loudly rather than passing a fake ES3.2.
+			case "$renderer" in
+				*[Ss]wift[Ss]hader*|*llvmpipe*|*[Ee]mulator*)
+					echo "⚠ $model reported a SOFTWARE renderer ($renderer) on a PHYSICAL device — caps read NOT trustworthy" >&2
+					renderer="⚠SOFTWARE:$renderer"; verdict="SUSPECT(software)" ;;
+			esac
 		fi
 		row="$row $verdict |"
 	done
