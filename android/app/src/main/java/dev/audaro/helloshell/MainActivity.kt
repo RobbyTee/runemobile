@@ -1043,13 +1043,26 @@ class MainActivity : AppCompatActivity() {
             (isTv && !cpuForced) || prefRenderer == "117hd"
         if (gameLoop) Log.i(TAG, "AG3-c: Game Loop launch -> routecrlhd (uninterrupted run for the Zone shader compile)")
         if (isTv && !cpuForced) Log.i(TAG, "TV/leanback device -> defaulting to routecrlhd (117HD) on launch")
+        // PROD-SECURITY-01: the login-first divert below is skipped ONLY for the headless / non-interactive 117HD
+        // boots that MUST settle at the engine LOGIN_SCREEN with no human to divert to — the Firebase Game Loop /
+        // datacenter shader-compile proof (gameLoop + the rlhd_prelogin.mode marker) and the explicit dev/test
+        // triggers (routecrlhd intent extra, rlhd.mode marker), plus a TV (Custom-Tab OAuth is impractical on
+        // leanback, so it stays turnkey-117HD). The ordinary user 117HD default (prefRenderer=="117hd", incl. the
+        // first-boot auto-GPU promotion) is deliberately NOT in this set: a clean install with no token must still
+        // get the native Jagex login first, so login-first is not renderer-dependent for real users.
+        val rlhdTestBoot = (intent?.getBooleanExtra("routecrlhd", false) ?: false) ||
+            File(getExternalFilesDir(null), "rlhd.mode").exists() || gameLoop ||
+            File(getExternalFilesDir(null), "rlhd_prelogin.mode").exists() ||
+            (isTv && !cpuForced)
         // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
         // BEFORE boot. With none (and not census, which uses pushed tokens), run the on-device Jagex login first;
         // it writes tokens.json then restarts the process for a clean boot (Review-2: login-first or restart).
-        if (!censusMode && !rlhdMode && !JagexTokens.hasTokens(applicationContext) &&
+        if (!censusMode && !rlhdTestBoot && !JagexTokens.hasTokens(applicationContext) &&
             !LegacyCreds.hasCreds(applicationContext)
         ) {
-            // AG3-c rlhd boots without tokens (the Zone shader compile is pre-login) — don't divert to LoginActivity.
+            // Only the headless test/datacenter 117HD boots (rlhdTestBoot) skip this — they settle at LOGIN_SCREEN
+            // for the pre-login Zone shader compile. Every interactive renderer (cpu/gpu AND the 117HD user
+            // default) diverts to the on-device Jagex login first.
             Log.i(TAG, "a3: no tokens.json — launching on-device Jagex login before boot")
             startActivity(Intent(this, LoginActivity::class.java))
             finish()
