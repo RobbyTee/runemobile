@@ -47,7 +47,7 @@ done
 CORE_DEVICES=(
 	"shiba:34:phone:mali-g715"          # Pixel 8 — Mali new (Tensor G3); the Pixel-7a baseline's sibling
 	"bluejay:32:phone:mali-g78"         # Pixel 6a — Mali OLD (Android 12 / api 32)
-	"dm1q:34:phone:adreno-740"          # Galaxy S23 — Adreno (Snapdragon 8 Gen 2)
+	"dm1q:35:phone:adreno-740"          # Galaxy S23 — Adreno (Snapdragon 8 Gen 2); Test Lab carries this model on api 35 only
 	"husky:35:phone:mali-g715"          # Pixel 8 Pro — Mali new on api 35 (newest OS)
 	"XQ-DQ72:34:landscape:adreno-cutout"  # Sony Xperia 1 V — Adreno + the cutout-landscape axis
 	"akita:34:phone:mali-g715"          # Pixel 8a — Mali new, mid-tier thermal envelope
@@ -83,8 +83,8 @@ ts="$(date '+%Y-%m-%d %H:%M' 2>/dev/null || echo 'run')"
 	echo "> device's fetched logcat. \`recon\` = GLES caps tier + base-gpu shader compile; \`rlhd\` = 117HD Zone"
 	echo "> shaders compile + startUp on the real driver; \`gpu\` = base gpu plugin renders. PASS/NOT_GREEN/SKIP."
 	echo
-	echo "| Device | API | Form | GPU (label) | $(printf '%s | ' "${MODE_LIST[@]}")"
-	echo "|--------|-----|------|-------------|$(for _ in "${MODE_LIST[@]}"; do printf -- '------|'; done)"
+	echo "| Device | API | Form | GPU (label) | $(printf '%s | ' "${MODE_LIST[@]}")GL_RENDERER (actual) | esTier |"
+	echo "|--------|-----|------|-------------|$(for _ in "${MODE_LIST[@]}"; do printf -- '------|'; done)---------------------|--------|"
 } > "$OUT"
 
 for entry in "${DEVICES[@]}"; do
@@ -96,17 +96,36 @@ for entry in "${DEVICES[@]}"; do
 	echo "════════════════════════════════════════════════════════════════════"
 	echo "▶ $model (api $version, $form, $vendor, orientation=$orient)"
 	echo "════════════════════════════════════════════════════════════════════"
+	# Extraction runs under `set +e` for the whole device: a grep with no match returns non-zero, which under the
+	# script's `set -euo pipefail` would otherwise ABORT the entire matrix on the first device that produces no
+	# VERDICT line (e.g. a Test Lab "Incompatible device/OS" skip) — losing every later device. Never let one bad
+	# cell kill the run.
+	set +e
+	renderer=""; estier=""
 	for mode in "${MODE_LIST[@]}"; do
 		echo "── $model :: $mode ──"
-		set +e
-		FB_DEVICE="$model" FB_VERSION="$version" FB_ORIENTATION="$orient" \
-			"$GATE" "$mode" 2>&1 | tee "/tmp/fbm-$model-$mode.log"
+		log="/tmp/fbm-$model-$mode.log"
+		FB_DEVICE="$model" FB_VERSION="$version" FB_ORIENTATION="$orient" "$GATE" "$mode" 2>&1 | tee "$log"
 		rc=${PIPESTATUS[0]}
-		set -e
-		verdict="$(grep -oE 'VERDICT=[A-Za-z0-9_]+' "/tmp/fbm-$model-$mode.log" | tail -1 | sed 's/VERDICT=//')"
-		[ -z "$verdict" ] && verdict="$([ "$rc" -eq 0 ] && echo PASS || echo NOT_GREEN)"
+		verdict="$(grep -oE 'VERDICT=[A-Za-z0-9_]+' "$log" 2>/dev/null | tail -1 | sed 's/VERDICT=//')"
+		# Distinguish a Test Lab device/OS SKIP (no execution) from a real renderer NOT_GREEN.
+		if [ -z "$verdict" ]; then
+			if grep -qiE 'Incompatible device/OS|will be skipped|execute your robo test on 0 device' "$log" 2>/dev/null; then
+				verdict="SKIP(incompat)"
+			else
+				verdict="$([ "$rc" -eq 0 ] && echo PASS || echo NOT_GREEN)"
+			fi
+		fi
+		# Capture the ACTUAL GL_RENDERER + ES tier (the ground truth that supersedes the best-effort vendor label).
+		# recon logs `ANDROID_AG0 esTier=NN(...) ... renderer="<string>"`; reuse whichever mode logged it.
+		if [ -z "$renderer" ]; then
+			renderer="$(grep -oE 'renderer="[^"]*"' "$log" 2>/dev/null | tail -1 | sed -E 's/renderer="(.*)"/\1/')"
+			estier="$(grep -oE 'esTier=[0-9]+' "$log" 2>/dev/null | tail -1 | sed 's/esTier=//')"
+		fi
 		row="$row $verdict |"
 	done
+	set -e
+	row="$row ${renderer:-—} | ${estier:-—} |"
 	echo "$row" >> "$OUT"
 	echo "   -> $row"
 done
