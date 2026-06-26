@@ -38,74 +38,128 @@ import kotlin.concurrent.thread
  * The mint/REST calls use the launcher UA and are NOT bot-blocked. Only redacted lines are logged — never a token.
  */
 class LoginActivity : AppCompatActivity() {
-
     private lateinit var status: TextView
     private lateinit var pasteField: EditText
     private val nonce = JagexLogin.randomToken()
     private val state = JagexLogin.randomToken()
-    private var launched = false      // user has opened the consent flow at least once this session
-    private var importing = false     // a mint is in flight — don't re-enter
-    private var done = false          // captured a valid id_token — handle exactly once
+    private var launched = false // user has opened the consent flow at least once this session
+    private var importing = false // a mint is in flight — don't re-enter
+    private var done = false // captured a valid id_token — handle exactly once
     private var lastTried: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         launched = savedInstanceState?.getBoolean("launched") ?: false
 
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.BLACK) }
+        val root =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(Color.BLACK)
+            }
 
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.rgb(26, 26, 26))
-            setPadding(28, 16, 28, 16)
-        }
-        bar.addView(TextView(this).apply {
-            text = "Log in with Jagex"; setTextColor(Color.WHITE); textSize = 16f
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        })
-        bar.addView(Button(this).apply { text = "Close"; setOnClickListener { cancelAndExit() } })
+        val bar =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setBackgroundColor(Color.rgb(26, 26, 26))
+                setPadding(28, 16, 28, 16)
+            }
+        bar.addView(
+            TextView(this).apply {
+                text = "Log in with Jagex"
+                setTextColor(Color.WHITE)
+                textSize = 16f
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            },
+        )
+        bar.addView(
+            Button(this).apply {
+                text = "Close"
+                setOnClickListener { cancelAndExit() }
+            },
+        )
         root.addView(bar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
-        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 28, 40, 28) }
-
-        content.addView(TextView(this).apply {
-            setTextColor(Color.WHITE); textSize = 14f
-            text = "Sign in to your Jagex account in your browser, then bring the link back here.\n\n" +
-                "1.  Tap “Open Jagex login” and sign in.\n" +
-                "2.  You'll land on a page that says “localhost refused to connect” — that's expected.\n" +
-                "3.  Copy that page's link: tap the Share icon, then “Copy”.\n" +
-                "4.  Tap back to return here — it imports automatically.\n" +
-                "     (Or paste the link below and tap Import.)"
-        })
-
-        content.addView(Button(this).apply {
-            text = "Open Jagex login"; textSize = 16f
-            setOnClickListener { launchConsent() }
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = 36 })
-
-        pasteField = EditText(this).apply {
-            setTextColor(Color.WHITE); setHintTextColor(Color.GRAY)
-            hint = "Paste the http://localhost/… link here"
-            textSize = 13f; setSingleLine(true)
-        }
-        content.addView(pasteField, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = 32 })
-
-        content.addView(Button(this).apply {
-            text = "Import login link"
-            setOnClickListener {
-                val t = pasteField.text?.toString()?.trim().orEmpty()
-                if (!tryImport(t)) log("✗ no Jagex login link found — copy the “localhost” link from your browser first")
+        val content =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(40, 28, 40, 28)
             }
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = 12 })
 
-        root.addView(ScrollView(this).apply { addView(content) },
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        content.addView(
+            TextView(this).apply {
+                setTextColor(Color.WHITE)
+                textSize = 14f
+                text = "Sign in to your Jagex account in your browser, then bring the link back here.\n\n" +
+                    "1.  Tap “Open Jagex login” and sign in.\n" +
+                    "2.  You'll land on a page that says “localhost refused to connect” — that's expected.\n" +
+                    "3.  Copy that page's link: tap the Share icon, then “Copy”.\n" +
+                    "4.  Tap back to return here — it imports automatically.\n" +
+                    "     (Or paste the link below and tap Import.)"
+            },
+        )
 
-        status = TextView(this).apply {
-            setTextColor(Color.GREEN); setBackgroundColor(Color.rgb(13, 13, 13)); textSize = 12f
-            setPadding(28, 16, 28, 16); text = "Ready."
-        }
+        content.addView(
+            Button(this).apply {
+                text = "Open Jagex login"
+                textSize = 16f
+                setOnClickListener { launchConsent() }
+            },
+            LinearLayout
+                .LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = 36 },
+        )
+
+        pasteField =
+            EditText(this).apply {
+                setTextColor(Color.WHITE)
+                setHintTextColor(Color.GRAY)
+                hint = "Paste the http://localhost/… link here"
+                textSize = 13f
+                setSingleLine(true)
+            }
+        content.addView(
+            pasteField,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                topMargin =
+                    32
+            },
+        )
+
+        content.addView(
+            Button(this).apply {
+                text = "Import login link"
+                setOnClickListener {
+                    val t =
+                        pasteField.text
+                            ?.toString()
+                            ?.trim()
+                            .orEmpty()
+                    if (!tryImport(t)) log("✗ no Jagex login link found — copy the “localhost” link from your browser first")
+                }
+            },
+            LinearLayout
+                .LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = 12 },
+        )
+
+        root.addView(
+            ScrollView(this).apply { addView(content) },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f),
+        )
+
+        status =
+            TextView(this).apply {
+                setTextColor(Color.GREEN)
+                setBackgroundColor(Color.rgb(13, 13, 13))
+                textSize = 12f
+                setPadding(28, 16, 28, 16)
+                text = "Ready."
+            }
         root.addView(status, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
         setContentView(root)
@@ -123,14 +177,18 @@ class LoginActivity : AppCompatActivity() {
         log("Opening Jagex login in your browser…")
         val url = Uri.parse(JagexLogin.consentUrl(nonce, state))
         try {
-            CustomTabsIntent.Builder()
-                .setShareState(CustomTabsIntent.SHARE_STATE_ON)   // gives a Share ▸ Copy on the localhost page
+            CustomTabsIntent
+                .Builder()
+                .setShareState(CustomTabsIntent.SHARE_STATE_ON) // gives a Share ▸ Copy on the localhost page
                 .build()
                 .launchUrl(this, url)
         } catch (e: Exception) {
             // No Custom Tabs provider — fall back to whatever handles a web link.
-            try { startActivity(Intent(Intent.ACTION_VIEW, url)) }
-            catch (e2: Exception) { log("✗ no browser available to open the login") }
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, url))
+            } catch (e2: Exception) {
+                log("✗ no browser available to open the login")
+            }
         }
     }
 
@@ -150,10 +208,18 @@ class LoginActivity : AppCompatActivity() {
         if (t != lastTried && t.contains("id_token=") && t.contains("localhost")) tryImport(t)
     }
 
-    private fun clipboardText(): String? = try {
-        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()?.trim()
-    } catch (e: Exception) { null }
+    private fun clipboardText(): String? =
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.primaryClip
+                ?.takeIf { it.itemCount > 0 }
+                ?.getItemAt(0)
+                ?.coerceToText(this)
+                ?.toString()
+                ?.trim()
+        } catch (e: Exception) {
+            null
+        }
 
     /** Pull the id_token from a copied/pasted http://localhost/#… link and start the mint. Returns true if a
      *  token was found (or one is already being handled), false if the text carried no usable token. */
@@ -173,8 +239,16 @@ class LoginActivity : AppCompatActivity() {
     /** Best-effort: wipe the captured link from the paste field and the system clipboard once we hold the token, so
      *  the id_token isn't left sitting in clipboard history / a clipboard manager. */
     private fun clearLink() {
-        try { pasteField.text?.clear() } catch (e: Exception) { /* ignore */ }
-        try { (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).clearPrimaryClip() } catch (e: Exception) { /* ignore */ }
+        try {
+            pasteField.text?.clear()
+        } catch (e: Exception) {
+            // ignore
+        }
+        try {
+            (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).clearPrimaryClip()
+        } catch (e: Exception) {
+            // ignore
+        }
     }
 
     private fun handleRedirect(idToken: String) {
@@ -183,38 +257,65 @@ class LoginActivity : AppCompatActivity() {
         thread(name = "jagex-login") {
             val sessionId = JagexLogin.mintSession(idToken)
             if (sessionId == null) {
-                runOnUiThread { importing = false; done = false
-                    log("✗ session mint failed — the link may be expired; reopen the login and copy a fresh one") }
+                runOnUiThread {
+                    importing = false
+                    done = false
+                    log("✗ session mint failed — the link may be expired; reopen the login and copy a fresh one")
+                }
                 return@thread
             }
             val accounts = JagexLogin.fetchAccounts(sessionId)
             if (accounts == null || accounts.length() == 0) {
-                runOnUiThread { importing = false; done = false; log("✗ no characters returned (see logcat)") }
+                runOnUiThread {
+                    importing = false
+                    done = false
+                    log("✗ no characters returned (see logcat)")
+                }
                 return@thread
             }
-            runOnUiThread { log("✓ ${accounts.length()} character(s) — choose one"); presentPicker(sessionId, accounts) }
+            runOnUiThread {
+                log("✓ ${accounts.length()} character(s) — choose one")
+                presentPicker(sessionId, accounts)
+            }
         }
     }
 
-    private fun presentPicker(sessionId: String, accounts: JSONArray) {
+    private fun presentPicker(
+        sessionId: String,
+        accounts: JSONArray,
+    ) {
         // The mint network window is up to ~35s and "Close" stays live the whole time; if the user closed the
         // screen, don't add a dialog window to a finished Activity (BadTokenException).
         if (isFinishing || isDestroyed) return
-        if (accounts.length() == 1) { finishWith(sessionId, accounts.getJSONObject(0), accounts); return }
+        if (accounts.length() == 1) {
+            finishWith(sessionId, accounts.getJSONObject(0), accounts)
+            return
+        }
         val labels = (0 until accounts.length()).map { JagexLogin.accountLabel(accounts.getJSONObject(it)) }.toTypedArray()
-        AlertDialog.Builder(this)
+        AlertDialog
+            .Builder(this)
             .setTitle("Choose character")
             .setItems(labels) { _, which -> finishWith(sessionId, accounts.getJSONObject(which), accounts) }
             // Dismiss re-arms the screen (don't kill the app); the user can reopen the login and try again.
-            .setNegativeButton("Cancel") { _, _ -> importing = false; done = false; log("Cancelled — tap “Open Jagex login” to try again") }
-            .setCancelable(false)
+            .setNegativeButton("Cancel") { _, _ ->
+                importing = false
+                done = false
+                log("Cancelled — tap “Open Jagex login” to try again")
+            }.setCancelable(false)
             .show()
     }
 
-    private fun finishWith(sessionId: String, chosen: JSONObject, accounts: JSONArray) {
+    private fun finishWith(
+        sessionId: String,
+        chosen: JSONObject,
+        accounts: JSONArray,
+    ) {
         val name = chosen.optString("displayName", "")
         log("✓ selected ${name.ifEmpty { "(unnamed)" }} — writing tokens + restarting")
-        if (!JagexLogin.writeTokens(this, sessionId, chosen, accounts)) { log("✗ tokens.json write failed"); return }
+        if (!JagexLogin.writeTokens(this, sessionId, chosen, accounts)) {
+            log("✗ tokens.json write failed")
+            return
+        }
         restartIntoCleanBoot()
     }
 
@@ -227,7 +328,7 @@ class LoginActivity : AppCompatActivity() {
             startActivity(intent)
         }
         finishAffinity()
-        Runtime.getRuntime().exit(0)   // even if the relaunch intent was null, a manual relaunch re-snapshots JX_*
+        Runtime.getRuntime().exit(0) // even if the relaunch intent was null, a manual relaunch re-snapshots JX_*
     }
 
     private fun cancelAndExit() {

@@ -37,7 +37,13 @@ import org.json.JSONObject
 import kotlin.coroutines.coroutineContext
 
 /** One live infobox + its menu options, from InfoBoxBridge.getInfoBoxesJson. */
-data class InfoBoxRow(val index: Int, val name: String, val text: String, val tooltip: String, val menu: List<String>)
+data class InfoBoxRow(
+    val index: Int,
+    val name: String,
+    val text: String,
+    val tooltip: String,
+    val menu: List<String>,
+)
 
 private const val IB_TAG = "MainActivity"
 private val IB_PANEL_BG = Color(0xF2121212)
@@ -64,7 +70,10 @@ fun InfoBoxScreen(onBack: () -> Unit) {
             val json = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.infoBoxesJson() }.get() }
             boxes = parseInfoBoxes(json)
             firstLoad = false
-            if (!logged) { Log.i(IB_TAG, "ANDROID_INFOBOX_UI_GREEN boxes=${boxes.size}"); logged = true }
+            if (!logged) {
+                Log.i(IB_TAG, "ANDROID_INFOBOX_UI_GREEN boxes=${boxes.size}")
+                logged = true
+            }
             delay(1000)
         }
     }
@@ -75,19 +84,34 @@ fun InfoBoxScreen(onBack: () -> Unit) {
                 TextButton(onClick = onBack) { Text("‹ Back") }
                 Text("Infoboxes", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
             }
-            Text("Detach, flip or delete an infobox.", color = Color(0xFF9E9E9E), fontSize = 12.sp,
-                modifier = Modifier.padding(bottom = 4.dp))
+            Text(
+                "Detach, flip or delete an infobox.",
+                color = Color(0xFF9E9E9E),
+                fontSize = 12.sp,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
             when {
-                firstLoad -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-                boxes.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("No infoboxes on screen.", color = Color(0xFF9E9E9E), fontSize = 14.sp)
+                firstLoad -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 }
-                else -> LazyColumn(Modifier.fillMaxSize()) {
-                    items(boxes, key = { it.index.toString() + it.name }) { b ->
-                        InfoBoxRowItem(b, onInvoke = { opt ->
-                            JvmLauncher.onBridgeTouch { JvmLauncher.infoBoxInvoke(b.index, opt); JvmLauncher.flushConfig() }
-                        })
-                        HorizontalDivider(color = Color(0x22FFFFFF))
+
+                boxes.isEmpty() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("No infoboxes on screen.", color = Color(0xFF9E9E9E), fontSize = 14.sp)
+                    }
+                }
+
+                else -> {
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        items(boxes, key = { it.index.toString() + it.name }) { b ->
+                            InfoBoxRowItem(b, onInvoke = { opt ->
+                                JvmLauncher.onBridgeTouch {
+                                    JvmLauncher.infoBoxInvoke(b.index, opt)
+                                    JvmLauncher.flushConfig()
+                                }
+                            })
+                            HorizontalDivider(color = Color(0x22FFFFFF))
+                        }
                     }
                 }
             }
@@ -96,7 +120,10 @@ fun InfoBoxScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun InfoBoxRowItem(b: InfoBoxRow, onInvoke: (String) -> Unit) {
+private fun InfoBoxRowItem(
+    b: InfoBoxRow,
+    onInvoke: (String) -> Unit,
+) {
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             val label = b.tooltip.ifBlank { b.name }.ifBlank { "Infobox ${b.index}" }
@@ -110,7 +137,9 @@ private fun InfoBoxRowItem(b: InfoBoxRow, onInvoke: (String) -> Unit) {
                 b.menu.forEach { opt ->
                     FilledTonalButton(
                         onClick = { onInvoke(opt) },
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        contentPadding =
+                            androidx.compose.foundation.layout
+                                .PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                     ) { Text(opt, fontSize = 12.sp) }
                 }
             }
@@ -118,23 +147,26 @@ private fun InfoBoxRowItem(b: InfoBoxRow, onInvoke: (String) -> Unit) {
     }
 }
 
-private fun parseInfoBoxes(json: String): List<InfoBoxRow> = try {
-    val o = JSONObject(json)
-    if (!o.optBoolean("available", false)) emptyList()
-    else {
-        val arr = o.optJSONArray("infoboxes") ?: return emptyList()
-        (0 until arr.length()).map { i ->
-            val b = arr.getJSONObject(i)
-            val m = b.optJSONArray("menu")
-            InfoBoxRow(
-                index = b.optInt("index"),
-                name = b.optString("name", ""),
-                text = b.optString("text", ""),
-                tooltip = b.optString("tooltip", ""),
-                menu = if (m == null) emptyList() else (0 until m.length()).map { m.optString(it) }.filter { it.isNotBlank() },
-            )
+private fun parseInfoBoxes(json: String): List<InfoBoxRow> =
+    try {
+        val o = JSONObject(json)
+        if (!o.optBoolean("available", false)) {
+            emptyList()
+        } else {
+            val arr = o.optJSONArray("infoboxes") ?: return emptyList()
+            (0 until arr.length()).map { i ->
+                val b = arr.getJSONObject(i)
+                val m = b.optJSONArray("menu")
+                InfoBoxRow(
+                    index = b.optInt("index"),
+                    name = b.optString("name", ""),
+                    text = b.optString("text", ""),
+                    tooltip = b.optString("tooltip", ""),
+                    menu = if (m == null) emptyList() else (0 until m.length()).map { m.optString(it) }.filter { it.isNotBlank() },
+                )
+            }
         }
+    } catch (t: Throwable) {
+        Log.e(IB_TAG, "ANDROID_INFOBOX_UI_RED parse: $t")
+        emptyList()
     }
-} catch (t: Throwable) {
-    Log.e(IB_TAG, "ANDROID_INFOBOX_UI_RED parse: $t"); emptyList()
-}

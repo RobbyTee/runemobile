@@ -18,28 +18,47 @@ import android.view.View
  * it draws nothing and touches fall through to the game; while active it dims the screen and draws a centered
  * OSRS-styled card with a rotating spinner, self-invalidating per frame only while visible.
  */
-class ReconnectingOverlayView(context: Context) : View(context) {
-
+class ReconnectingOverlayView(
+    context: Context,
+) : View(context) {
     private var active = false
 
     private val scrimPaint = Paint().apply { color = Color.argb(150, 0, 0, 0) }
-    private val cardPaint = Paint().apply { color = Color.argb(238, 33, 28, 23); isAntiAlias = true }
-    private val borderPaint = Paint().apply {
-        color = Color.argb(255, 140, 128, 102); style = Paint.Style.STROKE
-        strokeWidth = dp(1.5f); isAntiAlias = true
-    }
-    private val textPaint = Paint().apply {
-        color = Color.WHITE; textSize = sp(17f); isFakeBoldText = true; isAntiAlias = true
-        textAlign = Paint.Align.CENTER
-    }
-    private val spinnerTrackPaint = Paint().apply {
-        color = Color.argb(60, 255, 255, 255); style = Paint.Style.STROKE
-        strokeWidth = dp(3f); isAntiAlias = true
-    }
-    private val spinnerPaint = Paint().apply {
-        color = Color.argb(255, 255, 200, 90); style = Paint.Style.STROKE
-        strokeWidth = dp(3f); strokeCap = Paint.Cap.ROUND; isAntiAlias = true
-    }
+    private val cardPaint =
+        Paint().apply {
+            color = Color.argb(238, 33, 28, 23)
+            isAntiAlias = true
+        }
+    private val borderPaint =
+        Paint().apply {
+            color = Color.argb(255, 140, 128, 102)
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1.5f)
+            isAntiAlias = true
+        }
+    private val textPaint =
+        Paint().apply {
+            color = Color.WHITE
+            textSize = sp(17f)
+            isFakeBoldText = true
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+        }
+    private val spinnerTrackPaint =
+        Paint().apply {
+            color = Color.argb(60, 255, 255, 255)
+            style = Paint.Style.STROKE
+            strokeWidth = dp(3f)
+            isAntiAlias = true
+        }
+    private val spinnerPaint =
+        Paint().apply {
+            color = Color.argb(255, 255, 200, 90)
+            style = Paint.Style.STROKE
+            strokeWidth = dp(3f)
+            strokeCap = Paint.Cap.ROUND
+            isAntiAlias = true
+        }
 
     private val spinnerRect = RectF()
 
@@ -49,6 +68,7 @@ class ReconnectingOverlayView(context: Context) : View(context) {
     }
 
     private fun dp(v: Float) = v * resources.displayMetrics.density
+
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
 
     /** Show/hide the overlay; returns true if the state changed (the per-frame poll calls this every frame, so

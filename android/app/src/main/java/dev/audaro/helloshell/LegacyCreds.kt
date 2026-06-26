@@ -18,7 +18,6 @@ import java.io.File
  * (written by android/dev-tools/a3-login/set-legacy-login.sh). Never log the password.
  */
 object LegacyCreds {
-
     private const val TAG = "LegacyCreds"
 
     /** Locate legacy_login.json. PROD-SECURITY-03: legacy username/password autologin is a DEV-ONLY convenience
@@ -27,10 +26,11 @@ object LegacyCreds {
      *  adb-pushable external dir; logout still purges the file in every build (JagexTokens.deleteAll). */
     private fun locate(ctx: Context): File? {
         if (!BuildConfig.DEBUG) return null
-        val candidates = listOfNotNull(
-            File(ctx.filesDir, "legacy_login.json"),
-            ctx.getExternalFilesDir(null)?.let { File(it, "legacy_login.json") },
-        )
+        val candidates =
+            listOfNotNull(
+                File(ctx.filesDir, "legacy_login.json"),
+                ctx.getExternalFilesDir(null)?.let { File(it, "legacy_login.json") },
+            )
         return candidates.firstOrNull { it.exists() && it.length() > 0 }
     }
 

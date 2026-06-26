@@ -19,35 +19,60 @@ import android.view.View
  * [dismiss] when the engine produces its first real frame (or a real login state is observed), and bounded by
  * a generous wall-clock timeout failsafe so a missed signal can never leave it stuck over the game.
  */
-class SplashOverlayView(context: Context) : View(context) {
-
+class SplashOverlayView(
+    context: Context,
+) : View(context) {
     // Start ACTIVE: the splash must be up the instant the activity content is set, before the boot thread runs.
     private var active = true
+
     @Volatile private var statusLine = "Loading…"
+
     // Coarse unpack progress 0..100; <0 means "no progress line" (boot/first-frame phase, just the spinner).
     @Volatile private var progressPct = -1
 
     private val scrimPaint = Paint().apply { color = Color.argb(255, 22, 18, 14) }
-    private val cardPaint = Paint().apply { color = Color.argb(238, 33, 28, 23); isAntiAlias = true }
-    private val borderPaint = Paint().apply {
-        color = Color.argb(255, 140, 128, 102); style = Paint.Style.STROKE
-        strokeWidth = dp(1.5f); isAntiAlias = true
-    }
-    private val titlePaint = Paint().apply {
-        color = Color.argb(255, 255, 200, 90); textSize = sp(22f); isFakeBoldText = true; isAntiAlias = true
-        textAlign = Paint.Align.CENTER
-    }
-    private val textPaint = Paint().apply {
-        color = Color.WHITE; textSize = sp(16f); isAntiAlias = true; textAlign = Paint.Align.CENTER
-    }
-    private val spinnerTrackPaint = Paint().apply {
-        color = Color.argb(60, 255, 255, 255); style = Paint.Style.STROKE
-        strokeWidth = dp(3f); isAntiAlias = true
-    }
-    private val spinnerPaint = Paint().apply {
-        color = Color.argb(255, 255, 200, 90); style = Paint.Style.STROKE
-        strokeWidth = dp(3f); strokeCap = Paint.Cap.ROUND; isAntiAlias = true
-    }
+    private val cardPaint =
+        Paint().apply {
+            color = Color.argb(238, 33, 28, 23)
+            isAntiAlias = true
+        }
+    private val borderPaint =
+        Paint().apply {
+            color = Color.argb(255, 140, 128, 102)
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1.5f)
+            isAntiAlias = true
+        }
+    private val titlePaint =
+        Paint().apply {
+            color = Color.argb(255, 255, 200, 90)
+            textSize = sp(22f)
+            isFakeBoldText = true
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+        }
+    private val textPaint =
+        Paint().apply {
+            color = Color.WHITE
+            textSize = sp(16f)
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+        }
+    private val spinnerTrackPaint =
+        Paint().apply {
+            color = Color.argb(60, 255, 255, 255)
+            style = Paint.Style.STROKE
+            strokeWidth = dp(3f)
+            isAntiAlias = true
+        }
+    private val spinnerPaint =
+        Paint().apply {
+            color = Color.argb(255, 255, 200, 90)
+            style = Paint.Style.STROKE
+            strokeWidth = dp(3f)
+            strokeCap = Paint.Cap.ROUND
+            isAntiAlias = true
+        }
 
     private val spinnerRect = RectF()
 
@@ -57,6 +82,7 @@ class SplashOverlayView(context: Context) : View(context) {
     }
 
     private fun dp(v: Float) = v * resources.displayMetrics.density
+
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
 
     val isActive: Boolean get() = active

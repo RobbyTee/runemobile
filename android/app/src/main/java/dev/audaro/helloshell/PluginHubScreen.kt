@@ -51,7 +51,7 @@ data class HubRow(
     val author: String?,
     val description: String?,
     val version: String?,
-    val unavailable: String?,   // non-null/non-blank = can't run on this platform (native libs, etc.)
+    val unavailable: String?, // non-null/non-blank = can't run on this platform (native libs, etc.)
     val installed: Boolean,
     val installing: Boolean = false,
 )
@@ -65,8 +65,11 @@ data class HubRow(
  * manifest (catches a silent failure). All bridge calls go over the rl-bridge thread (HotSpot-attached).
  */
 @Composable
-fun PluginHubScreen(onBack: () -> Unit, onPanelTextActive: (Boolean) -> Unit = {}) {
-    var status by remember { mutableStateOf("loading") }   // loading | ok | error:* | off | not-ready
+fun PluginHubScreen(
+    onBack: () -> Unit,
+    onPanelTextActive: (Boolean) -> Unit = {},
+) {
+    var status by remember { mutableStateOf("loading") } // loading | ok | error:* | off | not-ready
     var rows by remember { mutableStateOf<List<HubRow>>(emptyList()) }
     var filter by remember { mutableStateOf("") }
     var statusLine by remember { mutableStateOf("Loading manifest…") }
@@ -84,7 +87,11 @@ fun PluginHubScreen(onBack: () -> Unit, onPanelTextActive: (Boolean) -> Unit = {
             val json = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.hubManifest() }.get() }
             val st = runCatching { JSONObject(json).optString("status", "") }.getOrDefault("")
             when (st) {
-                "loading" -> { statusLine = "Downloading manifest…"; delay(1000) }
+                "loading" -> {
+                    statusLine = "Downloading manifest…"
+                    delay(1000)
+                }
+
                 "ok" -> {
                     rows = parseHub(json)
                     status = "ok"
@@ -92,10 +99,11 @@ fun PluginHubScreen(onBack: () -> Unit, onPanelTextActive: (Boolean) -> Unit = {
                     Log.i("MainActivity", "ANDROID_HUB_UI_GREEN manifest loaded rows=${rows.size}")
                     break
                 }
+
                 else -> {
                     status = if (st.isEmpty()) "not-ready" else st
                     statusLine = if (st.isEmpty()) "Bridge not ready…" else "Manifest unavailable ($st)"
-                    if (st.isNotEmpty()) break else delay(1000)   // keep waiting while the facade comes up
+                    if (st.isNotEmpty()) break else delay(1000) // keep waiting while the facade comes up
                 }
             }
         }
@@ -116,30 +124,35 @@ fun PluginHubScreen(onBack: () -> Unit, onPanelTextActive: (Boolean) -> Unit = {
         statusLine = if (target) "Installing ${p.displayName}…" else "Removing ${p.displayName}…"
         scope.launch {
             withContext(Dispatchers.IO) {
-                JvmLauncher.onBridgeTouch {
-                    if (target) JvmLauncher.hubInstall(p.internalName) else JvmLauncher.hubUninstall(p.internalName)
-                }.get()
+                JvmLauncher
+                    .onBridgeTouch {
+                        if (target) JvmLauncher.hubInstall(p.internalName) else JvmLauncher.hubUninstall(p.internalName)
+                    }.get()
             }
             // hubInstall set refreshing=true synchronously; poll hubState until a readable refreshing=false (the
             // async download+load fired ExternalPluginsChanged) or a generous deadline (never hang).
             val deadlineMs = 25_000L
             var waited = 0L
             while (waited < deadlineMs) {
-                delay(400); waited += 400
+                delay(400)
+                waited += 400
                 val sj = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.hubState() }.get() }
                 val d = runCatching { JSONObject(sj) }.getOrNull()
                 val haveState = d != null && d.has("refreshing")
                 if (haveState && !d!!.optBoolean("refreshing")) break
-                if (!haveState && waited >= 2_500L) break   // can't report state (older jar) → settle fast
+                if (!haveState && waited >= 2_500L) break // can't report state (older jar) → settle fast
             }
             // Reconcile the true installed flag from a fresh manifest (corrects a silent install/remove failure).
             val mj = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.hubManifest() }.get() }
             val truth = parseHub(mj).associate { it.internalName to it.installed }
-            rows = rows.map {
-                if (it.internalName == p.internalName)
-                    it.copy(installed = truth[it.internalName] ?: it.installed, installing = false)
-                else it
-            }
+            rows =
+                rows.map {
+                    if (it.internalName == p.internalName) {
+                        it.copy(installed = truth[it.internalName] ?: it.installed, installing = false)
+                    } else {
+                        it
+                    }
+                }
             statusLine = "${rows.size} plugins"
             JvmLauncher.onBridge { JvmLauncher.flushConfig() }
         }
@@ -148,8 +161,13 @@ fun PluginHubScreen(onBack: () -> Unit, onPanelTextActive: (Boolean) -> Unit = {
     Surface(color = Color(0xF2121212), modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Plugin Hub", color = Color.White, fontSize = 20.sp, modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "Plugin Hub",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleLarge,
+                )
                 TextButton(onClick = { close() }) { Text("Close") }
             }
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
@@ -161,17 +179,23 @@ fun PluginHubScreen(onBack: () -> Unit, onPanelTextActive: (Boolean) -> Unit = {
             }
             if (status == "ok") {
                 OutlinedTextField(
-                    value = filter, onValueChange = { filter = it },
-                    label = { Text("Search") }, singleLine = true,
+                    value = filter,
+                    onValueChange = { filter = it },
+                    label = { Text("Search") },
+                    singleLine = true,
                     // Tell the host the IME is owned by this field while focused — else the per-frame input poll
                     // hides the soft keyboard every frame and it opens-then-closes. Same path the other panels use.
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
-                        .onFocusChanged { onPanelTextActive(it.hasFocus) },
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp)
+                            .onFocusChanged { onPanelTextActive(it.hasFocus) },
                 )
-                val shown = rows.filter {
-                    filter.isBlank() || it.displayName.contains(filter, ignoreCase = true) ||
-                        (it.description?.contains(filter, ignoreCase = true) == true)
-                }
+                val shown =
+                    rows.filter {
+                        filter.isBlank() || it.displayName.contains(filter, ignoreCase = true) ||
+                            (it.description?.contains(filter, ignoreCase = true) == true)
+                    }
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(shown, key = { it.internalName }) { p ->
                         HubRowItem(p, onToggle = { toggleInstall(p) })
@@ -188,7 +212,10 @@ fun PluginHubScreen(onBack: () -> Unit, onPanelTextActive: (Boolean) -> Unit = {
 }
 
 @Composable
-private fun HubRowItem(p: HubRow, onToggle: () -> Unit) {
+private fun HubRowItem(
+    p: HubRow,
+    onToggle: () -> Unit,
+) {
     val unavailable = !p.unavailable.isNullOrBlank()
     Row(
         Modifier.fillMaxWidth().padding(vertical = 8.dp),
@@ -198,42 +225,69 @@ private fun HubRowItem(p: HubRow, onToggle: () -> Unit) {
         Column(Modifier.weight(1f).padding(end = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(p.displayName, color = if (unavailable) Color(0xFF9E9E9E) else Color.White, fontSize = 15.sp)
-                if (!p.author.isNullOrBlank())
+                if (!p.author.isNullOrBlank()) {
                     Text("  by ${p.author}", color = Color(0xFF777777), fontSize = 11.sp)
-                if (!p.version.isNullOrBlank())
+                }
+                if (!p.version.isNullOrBlank()) {
                     Text("  v${p.version}", color = Color(0xFF777777), fontSize = 11.sp)
+                }
             }
-            if (!p.description.isNullOrBlank())
-                Text(p.description, color = Color(0xFFB0B0B0), fontSize = 12.sp, maxLines = 2,
-                    overflow = TextOverflow.Ellipsis)
-            if (unavailable)
+            if (!p.description.isNullOrBlank()) {
+                Text(
+                    p.description,
+                    color = Color(0xFFB0B0B0),
+                    fontSize = 12.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (unavailable) {
                 Text("✕ ${p.unavailable}", color = Color(0xFFE57373), fontSize = 11.sp)
+            }
         }
         when {
-            p.installing -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-            unavailable -> {}   // no action — can't run here
-            p.installed -> OutlinedButton(onClick = onToggle) { Text("Remove") }
-            else -> Button(onClick = onToggle,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))) { Text("Install") }
+            p.installing -> {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            }
+
+            unavailable -> {}
+
+            // no action — can't run here
+            p.installed -> {
+                OutlinedButton(onClick = onToggle) { Text("Remove") }
+            }
+
+            else -> {
+                Button(
+                    onClick = onToggle,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                ) { Text("Install") }
+            }
         }
     }
 }
 
-private fun parseHub(json: String): List<HubRow> = try {
-    val arr = JSONObject(json).optJSONArray("plugins")
-    if (arr == null) emptyList() else (0 until arr.length()).map { i ->
-        val o = arr.getJSONObject(i)
-        HubRow(
-            internalName = o.getString("internalName"),
-            displayName = o.optString("displayName", o.getString("internalName")),
-            author = if (o.isNull("author")) null else o.optString("author", null),
-            description = if (o.isNull("description")) null else o.optString("description", null),
-            version = if (o.isNull("version")) null else o.optString("version", null),
-            unavailable = if (o.isNull("unavailable")) null else o.optString("unavailable", null),
-            installed = o.optBoolean("installed"),
-        )
-    }.sortedWith(compareByDescending<HubRow> { it.installed }.thenBy { it.displayName.lowercase() })
-} catch (t: Throwable) {
-    Log.e("MainActivity", "ANDROID_HUB_UI_RED parse failed: $t")
-    emptyList()
-}
+private fun parseHub(json: String): List<HubRow> =
+    try {
+        val arr = JSONObject(json).optJSONArray("plugins")
+        if (arr == null) {
+            emptyList()
+        } else {
+            (0 until arr.length())
+                .map { i ->
+                    val o = arr.getJSONObject(i)
+                    HubRow(
+                        internalName = o.getString("internalName"),
+                        displayName = o.optString("displayName", o.getString("internalName")),
+                        author = if (o.isNull("author")) null else o.optString("author", null),
+                        description = if (o.isNull("description")) null else o.optString("description", null),
+                        version = if (o.isNull("version")) null else o.optString("version", null),
+                        unavailable = if (o.isNull("unavailable")) null else o.optString("unavailable", null),
+                        installed = o.optBoolean("installed"),
+                    )
+                }.sortedWith(compareByDescending<HubRow> { it.installed }.thenBy { it.displayName.lowercase() })
+        }
+    } catch (t: Throwable) {
+        Log.e("MainActivity", "ANDROID_HUB_UI_RED parse failed: $t")
+        emptyList()
+    }

@@ -11,7 +11,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.provider.MediaStore
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -19,9 +18,11 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.provider.MediaStore
 import android.util.Log
 import android.view.Choreographer
 import android.view.GestureDetector
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
@@ -29,15 +30,14 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.WindowInsets
+import android.view.WindowManager
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
-import android.widget.FrameLayout
-import android.view.Gravity
-import android.view.WindowManager
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.Toast
@@ -45,6 +45,7 @@ import androidx.activity.addCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.browser.customtabs.CustomTabsIntent
+import androidx.compose.ui.platform.ComposeView
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -52,7 +53,6 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.compose.ui.platform.ComposeView
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -66,7 +66,6 @@ import kotlin.concurrent.thread
  * singleton and uses the application context — the boot survives Activity recreation (rotation etc.).
  */
 class MainActivity : AppCompatActivity() {
-
     private lateinit var surfaceView: SurfaceView
     private lateinit var gestures: GestureDetector
     private lateinit var scaleGestures: ScaleGestureDetector
@@ -80,7 +79,7 @@ class MainActivity : AppCompatActivity() {
     // engine chatbox bounds (canvas px) from the per-frame chrome snapshot, so it tracks the relocate.
     private var chatScrolling = false
     private var chatScrollAccum = 0f
-    private var chatRectCanvas: IntArray? = null   // [x,y,w,h] canvas px; null = chat not reported
+    private var chatRectCanvas: IntArray? = null // [x,y,w,h] canvas px; null = chat not reported
 
     // Phase-5 world map (floating window): open-state + control rects from the published map snapshot.
     // While open, a one-finger drag that STARTS inside the window pans the MAP (shared panWorldMap — finger
@@ -88,19 +87,22 @@ class MainActivity : AppCompatActivity() {
     // zoom, POIs — no walk ring), and a search-rect tap raises the IME manually (the map search never flips
     // the engine INPUT_TYPE). The engine HUD shoves while open are all shared-side.
     private var mapOpen = false
-    private var mapRectCanvas: IntArray? = null     // pannable map display [x,y,w,h] (canvas px)
+    private var mapRectCanvas: IntArray? = null // pannable map display [x,y,w,h] (canvas px)
     private var minimapRectCanvas: IntArray? = null // relocated minimap+orb cluster [x,y,w,h] canvas px; null = not relocated
-    private var mapSearchCanvas: IntArray? = null   // search field rect
+    private var mapSearchCanvas: IntArray? = null // search field rect
+
     // The window CHROME (close X, zoom, search bar) extends OUTSIDE the pannable display rect — the
     // snapshot publishes each control's rect separately and taps on them must also route precise.
     private var mapCloseCanvas: IntArray? = null
     private var mapZoomInCanvas: IntArray? = null
     private var mapZoomOutCanvas: IntArray? = null
+
     // Fullscreen map: the outer map-WINDOW rect (canvas px) the SurfaceView is stretched to fill while the map
     // is open, so only the map shows edge-to-edge (the engine caps the window at a structural reserve, leaving
     // scene around it — we scale that gap out of view). null = no transform applied; lastMapWindow detects change.
     private var mapWindowCanvas: IntArray? = null
     private var lastMapWindowApplied: IntArray? = null
+
     // Scrollable map sub-panels: the KEY (legend) list, and the surface MAPLIST dropdown when open. A swipe that
     // STARTS inside one scrolls it (shared scrollMapPanel) instead of panning the map.
     private var mapKeyCanvas: IntArray? = null
@@ -108,20 +110,24 @@ class MainActivity : AppCompatActivity() {
     private var mapScrolling = false
     private var mapScrollAccum = 0f
     private var mapPanning = false
-    private var mapPanAccumX = 0f; private var mapPanAccumY = 0f
+    private var mapPanAccumX = 0f
+    private var mapPanAccumY = 0f
+
     // FIX-4 inventory item-drag: a one-finger drag that STARTS inside the inventory grid drags the item (touch
     // PRESS->DRAGGED->RELEASE) instead of rotating the camera. invRectCanvas = the live inventory bounds (canvas
     // px) from the chrome snapshot; itemDragLast = the last valid drag point, so a release in the letterbox still
     // closes the engine WidgetDrag (no stuck held item).
     private var invRectCanvas: IntArray? = null
     private var itemDragging = false
-    private var itemDragLastX = 0; private var itemDragLastY = 0
+    private var itemDragLastX = 0
+    private var itemDragLastY = 0
+
     // DRAG-1b: the engine's other drag-to-reorder panes (Prayer/Spellbook/Bank) as canvas-px rects from the chrome
     // snapshot. A drag that STARTS inside any of these routes through the same engine WidgetDrag stream as the
     // inventory (touch PRESS->DRAGGED->RELEASE) so prayers/spells/bank items reorder instead of rotating the camera.
     private var reorderRectsCanvas: List<IntArray> = emptyList()
-    private var mapSearchKeyboard = false           // transient ⌨-like latch while the map search is in use
-    private var mapWasSearching = false             // FIX-14: engine WORLDMAP_SEARCHING edge (drop the latch on commit)
+    private var mapSearchKeyboard = false // transient ⌨-like latch while the map search is in use
+    private var mapWasSearching = false // FIX-14: engine WORLDMAP_SEARCHING edge (drop the latch on commit)
     private var lastMapSnapshot = ""
 
     // A1 per-frame poll state (driven by Choreographer).
@@ -134,36 +140,43 @@ class MainActivity : AppCompatActivity() {
     // seq advanced within the grace window → red (interaction), grace expired → yellow (walk).
     private lateinit var tapRing: TapRingView
     private var ringPending = false
-    private var ringX = 0f; private var ringY = 0f
+    private var ringX = 0f
+    private var ringY = 0f
     private var ringArmedAtMs = 0L
     private var ringBaseSeq = 0
-    private var ringKindBaseSeq = 0   // tapKindSeq at arm time; a bump past it resolves the tap's kind
+    private var ringKindBaseSeq = 0 // tapKindSeq at arm time; a bump past it resolves the tap's kind
     private var keyboardShown = false
-    private var imeWasShown = false       // last frame's ACTUAL ime visibility — to spot a user-driven dismiss
-    private var manualKeyboard = false   // ⌨ toggle: hold the soft keyboard up with no engine text field open
-    private var keyboardToggleBtn: Button? = null   // the ⌨ button, so a dismiss can reset its on/off alpha
+    private var imeWasShown = false // last frame's ACTUAL ime visibility — to spot a user-driven dismiss
+    private var manualKeyboard = false // ⌨ toggle: hold the soft keyboard up with no engine text field open
+    private var keyboardToggleBtn: Button? = null // the ⌨ button, so a dismiss can reset its on/off alpha
+
     // FIX-11: a rendered Swing panel's text field is focused and its OWN Compose mirror field owns the soft
     // keyboard — the per-frame poll must NOT raise GameInputView (steals focus) or dismiss the IME (kills it).
     @Volatile var textActivePanel = false
-    private var shiftHeld = false         // ⇧ latch: synthetic VK_SHIFT held (AP-2a Finding 12)
-    private var ctrlHeld = false          // ⌃ latch: synthetic VK_CONTROL held (mirror of shift)
-    private var altHeld = false           // ⌥ latch: synthetic VK_ALT held (Ground Items hold-to-highlight)
+    private var shiftHeld = false // ⇧ latch: synthetic VK_SHIFT held (AP-2a Finding 12)
+    private var ctrlHeld = false // ⌃ latch: synthetic VK_CONTROL held (mirror of shift)
+    private var altHeld = false // ⌥ latch: synthetic VK_ALT held (Ground Items hold-to-highlight)
     private var frameCallback: Choreographer.FrameCallback? = null
+
     // PERF-BATTERY-NETWORK-01: true while backgrounded (onStop..onStart) — the Choreographer UI poll is removed
     // and the render thread idles at 4 Hz. Gates onStart's re-post so the first onStart (right after onCreate's
     // startInputPolling) doesn't double-post the callback.
     private var pollingPaused = false
+
     // User-defined hotkey buttons: a HUD strip the user populates from the Hotkeys screen (persisted in PREFS_HOTKEYS).
-    private var hotkeyRow: LinearLayout? = null            // the button container (repopulated on change)
-    private var hotkeyStrip: HorizontalScrollView? = null  // scroll host (GONE when no hotkeys are active)
+    private var hotkeyRow: LinearLayout? = null // the button container (repopulated on change)
+    private var hotkeyStrip: HorizontalScrollView? = null // scroll host (GONE when no hotkeys are active)
     private var hotkeyPrefsListener: android.content.SharedPreferences.OnSharedPreferenceChangeListener? = null
+
     // UX-XCUT-01: the only release-visible HUD controls. Held as fields so the root window-inset listener can
     // re-apply the safe-area margin (bottom gesture inset + landscape cutout) to them on every inset change /
     // configuration change. Their BASE margins are captured at build so the inset is ADDED, never replaced.
     private var devBar: LinearLayout? = null
     private var launcherHandle: Button? = null
-    private var devBarBaseLeft = 0; private var devBarBaseBottom = 0
-    private var hotkeyBaseLeft = 0; private var hotkeyBaseBottom = 0
+    private var devBarBaseLeft = 0
+    private var devBarBaseBottom = 0
+    private var hotkeyBaseLeft = 0
+    private var hotkeyBaseBottom = 0
     private var handleBaseBottom = 0
 
     // AP-2a Findings 9/25: a low-frequency daemon that drains the shared notification + link queues (off the UI
@@ -174,9 +187,11 @@ class MainActivity : AppCompatActivity() {
     // A6 native chrome (OSRS-mobile 2-col tab grid; the engine stones are hidden and this grid replaces them).
     private lateinit var chromeOverlay: ChromeOverlayView
     private var chromeUiLogged = false
+
     // Runtime tab/stone/chat sprites pulled from the live cache (HudVeneerBridge.tabSprites) once after login —
     // so the native chrome composites the real OSRS art with nothing bundled. Latched once applied this session.
     private var tabSpritesApplied = false
+
     // Bug 8: a fail-open login-transition latch. On a FRESH login the engine hasn't finished its first resizable
     // layout for a frame or two, so engaging chrome immediately flashes the half-built grid/chat tabs over the
     // "Welcome to Gielinor" frame. We suppress chrome for a bounded window after the LOGIN_SCREEN→LOGGED_IN edge,
@@ -186,32 +201,39 @@ class MainActivity : AppCompatActivity() {
     // chrome for longer than the window. Fail-open by construction.
     private var sawLoginScreen = false
     private var loginTransitionUntilMs = 0L
+
     // PERF-FRAME-PACING-01: signature of every dynamic input updateChrome() reads; an identical signature (with no
     // timed transition pending) lets the whole per-frame parse + native-veneer cascade short-circuit. "" forces the
     // first frame through.
     private var lastChromeSig = ""
-    private var lastStonesHidden: Boolean? = null   // desired HudVeneer hide-stones state (send only on change)
-    private var lastSideX = Int.MIN_VALUE           // last side-panel relocation sent (send only on change)
+    private var lastStonesHidden: Boolean? = null // desired HudVeneer hide-stones state (send only on change)
+    private var lastSideX = Int.MIN_VALUE // last side-panel relocation sent (send only on change)
     private var lastSideY = Int.MIN_VALUE
-    private var lastChatX = Int.MIN_VALUE           // last chat-at-top relocation sent (send only on change)
+    private var lastChatX = Int.MIN_VALUE // last chat-at-top relocation sent (send only on change)
     private var lastChatY = Int.MIN_VALUE
 
     // A3 enlarged native chat-tab veneer (bigger touch targets over the relocated engine chat row).
     private lateinit var chatTabOverlay: ChatPillView
+
     // UI-4: opaque NPC-dialogue parchment over the (transparent) engine dialogue.
     private lateinit var dialogueOverlay: DialogueView
+
     // FIX-9: a native "Reconnecting…" scrim shown while the headless auto-reconnect recovers a dropped session.
     private lateinit var reconnectOverlay: ReconnectingOverlayView
+
     // UX-LOGIN-01: a native "Session expired — sign in again" card shown when the login machine gives up (the
     // chrome snapshot's "sessionExpired" flag); its button re-runs the on-device Jagex login (LoginActivity).
     private lateinit var sessionExpiredOverlay: SessionExpiredOverlayView
+
     // PERF-MEMORY-THERMAL-01: throttles the 117HD scene scale under thermal pressure (armed only on a 117HD boot).
     private var thermalGovernor: ThermalGovernor? = null
+
     // UX-ONBOARD-01: a branded cold-start splash shown immediately in onCreate over the black SurfaceView, until
     // the engine renders its first real frame (or a real login state lands) / a generous timeout. Bounded so a
     // missed signal can never leave it covering the game.
     private lateinit var splashOverlay: SplashOverlayView
     private var splashDeadlineMs = 0L
+
     // UX-DISCRETE-01 / ENH-B06: a native "Hopping…" scrim over the relog-based world hop (logout→relogin). Driven
     // purely Android-side: armed from the hop trigger sites, hidden on the next loggedIn edge after the hop or a
     // bounded timeout. `hopWasLoggedIn` tracks the pre-hop loggedIn state so we hide on the rising edge BACK to
@@ -220,33 +242,38 @@ class MainActivity : AppCompatActivity() {
     private var hopArmed = false
     private var hopDeadlineMs = 0L
     private var hopSawLoggedOut = false
+
     // DEBUG-only force for the reconnect overlay (real network drops are hard to repro over Wi-Fi adb). null =
     // follow the live snapshot; true/false = force shown/hidden. Driven by the SET_RECONNECT_OVERLAY broadcast.
     @Volatile private var reconnectTestOverride: Boolean? = null
+
     // UX-LOGIN-01: DEBUG-only force for the session-expired overlay (autologin exhaustion is hard to repro without
     // burning a session). null = follow the live snapshot; driven by the SET_SESSION_EXPIRED_OVERLAY broadcast.
     @Volatile private var sessionExpiredTestOverride: Boolean? = null
+
     // Phase-4: native-tracked chat collapse state (the shared side shoves the live widget off-canvas; this
     // mirrors what we last asked for — the engine never collapses on its own).
     private var chatCollapsed = false
+
     // Auto-open: while an engine-rendered dialogue is up we un-collapse the chat (a collapsed chat hides the engine
     // tabs, which suppresses the dialogue raster); these track the edge + whether WE forced it open so we can restore.
     private var dialogueWasActive = false
     private var savedCollapsedForDialogue = false
     private var chatTabsLogged = false
-    private var lastChatRowH = Int.MIN_VALUE        // last setChatTabRowHeight sent (send only on change)
-    private var lastMmX = Int.MIN_VALUE             // last minimap relocation sent (send only on change)
+    private var lastChatRowH = Int.MIN_VALUE // last setChatTabRowHeight sent (send only on change)
+    private var lastMmX = Int.MIN_VALUE // last minimap relocation sent (send only on change)
     private var lastMmY = Int.MIN_VALUE
 
     // On-screen overlay-layout editor (drag movable overlays directly on the live game).
     private lateinit var overlayEditView: OverlayEditView
+
     @Volatile private var overlayEditMode = false
     private var overlayPollThread: Thread? = null
 
     // A2 press-and-peek menu state.
     private lateinit var menuOverlay: MenuOverlayView
-    private var menuActive = false      // the long-press has claimed this gesture
-    private var menuBuilding = false    // waiting for the engine menu to land in the snapshot
+    private var menuActive = false // the long-press has claimed this gesture
+    private var menuBuilding = false // waiting for the engine menu to land in the snapshot
     private var menuTouchActive = false // finger still down
     private var menuAnchorX = 0f
     private var menuAnchorY = 0f
@@ -255,10 +282,11 @@ class MainActivity : AppCompatActivity() {
     private var menuHandRight = false
     private var menuOpenAtNanos = 0L
     private var menuHighlight = -1
-    private var emX = 0    // engine menu box (game-canvas coords) from the snapshot
+    private var emX = 0 // engine menu box (game-canvas coords) from the snapshot
     private var emY = 0
     private var emW = 0
     private var emCount = 0
+
     // FIX-10b tap-mode (submenu drill-in): a persistent, tap-to-select menu used when an entry has a submenu
     // (Menu Entry Swapper swap lists) or ⇧ is latched. menuDrillParent = the top-level engine index we drilled
     // into (-1 = top level); menuTopEntries = the saved top level for '‹ Back'; menuTapArmed = the opening
@@ -279,6 +307,7 @@ class MainActivity : AppCompatActivity() {
         // Engine canvas dimensions (set once at the boot HeadlessResize below; stable in-world). The overlay
         // free-drag UI reads these to map a drag-pad fraction → canvas pixels for OverlayBridge.setOverlayPreferredLocation.
         @Volatile var canvasW = 0
+
         @Volatile var canvasH = 0
 
         // ENH-B06: a static hook the native World Switcher Composable (in PluginPanel's Compose tree, with no
@@ -287,8 +316,8 @@ class MainActivity : AppCompatActivity() {
         // shared-contract change). [label] is the card text ("Hopping to world N…" or "Switching worlds…").
         @Volatile var armHopScrimHook: ((label: String) -> Unit)? = null
 
-        private const val NOTIF_CHANNEL = "runelite_game"            // audible (IMPORTANCE_DEFAULT)
-        private const val NOTIF_CHANNEL_SILENT = "runelite_game_silent"  // AP-2: no sound (IMPORTANCE_LOW)
+        private const val NOTIF_CHANNEL = "runelite_game" // audible (IMPORTANCE_DEFAULT)
+        private const val NOTIF_CHANNEL_SILENT = "runelite_game_silent" // AP-2: no sound (IMPORTANCE_LOW)
         private const val REQ_POST_NOTIFICATIONS = 7001
 
         // Bug 8: how long after a fresh login to keep native chrome disengaged so the engine can finish its first
@@ -299,6 +328,7 @@ class MainActivity : AppCompatActivity() {
         // UX-ONBOARD-01: hard cap on the cold-start splash. Generous — first-install unpack (~30 s) + JVM boot +
         // first frame; the splash normally dismisses on the first frame well before this. Failsafe only.
         private const val SPLASH_TIMEOUT_MS = 60_000L
+
         // UX-DISCRETE-01 / ENH-B06: hard cap on the "Hopping…" scrim. The relog hop is ~8 s of login chrome; this
         // leaves headroom yet guarantees the scrim never sticks if the loggedIn-edge signal is missed.
         private const val HOP_TIMEOUT_MS = 12_000L
@@ -333,6 +363,7 @@ class MainActivity : AppCompatActivity() {
 
         // Pinch-to-wheel: geometric step a scale ratio must cross to emit one wheel notch.
         private const val PINCH_STEP = 1.08f
+
         // Click-ring truth grace: how long after a tap we wait for interactTapSeq before calling it a walk.
         // Matches iOS (250 ms). The old 600 ms was tuned for a slow emulator EDT (interaction at +535 ms), but on
         // real hardware the settle gate stabilises in 3–6 frames and an interaction bumps interactTapSeq at
@@ -363,6 +394,7 @@ class MainActivity : AppCompatActivity() {
     //   adb shell am broadcast -a dev.audaro.helloshell.SET_HD_CONFIG --ei sceneResolutionScale 90  (generic per-key;
     //     this is the path the MCP android_set_hd_config knob drives — any non-reserved extra is applied as an hd key)
     private var hdConfigReceiver: BroadcastReceiver? = null
+
     // FIX-9: debug-only force for the "Reconnecting…" overlay (a real in-session drop is hard to repro over
     // Wi-Fi adb, which a network toggle also kills) — lets a screencap verify the scrim renders.
     //   adb shell am broadcast -a dev.audaro.helloshell.SET_RECONNECT_OVERLAY --es show on     (force shown)
@@ -378,76 +410,123 @@ class MainActivity : AppCompatActivity() {
         vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
 
         if (BuildConfig.DEBUG) {
-            hdConfigReceiver = object : BroadcastReceiver() {
-                override fun onReceive(ctx: Context?, intent: Intent?) {
-                    intent ?: return
-                    val pairs: List<Pair<String, String>> = when (intent.getStringExtra("preset")) {
-                        "new" -> listOf("sceneResolutionScale" to "85", "anisotropicFilteringLevel" to "8", "drawDistance" to "30")
-                        "base" -> listOf("sceneResolutionScale" to "100", "anisotropicFilteringLevel" to "16", "drawDistance" to "30")
-                        else -> {
-                            val k = intent.getStringExtra("key"); val v = intent.getStringExtra("value")
-                            if (k != null && v != null) {
-                                listOf(k to v)
-                            } else {
-                                // Generic per-key path: apply every non-reserved extra as an hd config key. This is
-                                // what the MCP android_set_hd_config knob uses (it sends --ei sceneResolutionScale /
-                                // anisotropicFilteringLevel); --es/--ez per key work too. Previously these extras were
-                                // silently ignored (the receiver only read preset/key/value) — the dead A/B knob.
-                                val reserved = setOf("preset", "key", "value")
-                                intent.extras?.keySet().orEmpty()
-                                    .filter { it !in reserved }
-                                    .mapNotNull { key -> intent.extras?.get(key)?.toString()?.let { key to it } }
+            hdConfigReceiver =
+                object : BroadcastReceiver() {
+                    override fun onReceive(
+                        ctx: Context?,
+                        intent: Intent?,
+                    ) {
+                        intent ?: return
+                        val pairs: List<Pair<String, String>> =
+                            when (intent.getStringExtra("preset")) {
+                                "new" -> {
+                                    listOf("sceneResolutionScale" to "85", "anisotropicFilteringLevel" to "8", "drawDistance" to "30")
+                                }
+
+                                "base" -> {
+                                    listOf("sceneResolutionScale" to "100", "anisotropicFilteringLevel" to "16", "drawDistance" to "30")
+                                }
+
+                                else -> {
+                                    val k = intent.getStringExtra("key")
+                                    val v = intent.getStringExtra("value")
+                                    if (k != null && v != null) {
+                                        listOf(k to v)
+                                    } else {
+                                        // Generic per-key path: apply every non-reserved extra as an hd config key. This is
+                                        // what the MCP android_set_hd_config knob uses (it sends --ei sceneResolutionScale /
+                                        // anisotropicFilteringLevel); --es/--ez per key work too. Previously these extras were
+                                        // silently ignored (the receiver only read preset/key/value) — the dead A/B knob.
+                                        val reserved = setOf("preset", "key", "value")
+                                        intent.extras
+                                            ?.keySet()
+                                            .orEmpty()
+                                            .filter { it !in reserved }
+                                            .mapNotNull { key ->
+                                                intent.extras
+                                                    ?.get(key)
+                                                    ?.toString()
+                                                    ?.let { key to it }
+                                            }
+                                    }
+                                }
                             }
+                        if (pairs.isEmpty()) {
+                            Log.w(
+                                TAG,
+                                "SET_HD_CONFIG: need --es preset new|base, --es key K --es value V, or per-key extras (e.g. --ei sceneResolutionScale 90)",
+                            )
+                            return
                         }
+                        JvmLauncher.onBridgeTouch { pairs.forEach { (k, v) -> JvmLauncher.setConfig("hd", k, v) } }
+                        Log.i(TAG, "SET_HD_CONFIG applied live: $pairs")
                     }
-                    if (pairs.isEmpty()) { Log.w(TAG, "SET_HD_CONFIG: need --es preset new|base, --es key K --es value V, or per-key extras (e.g. --ei sceneResolutionScale 90)"); return }
-                    JvmLauncher.onBridgeTouch { pairs.forEach { (k, v) -> JvmLauncher.setConfig("hd", k, v) } }
-                    Log.i(TAG, "SET_HD_CONFIG applied live: $pairs")
                 }
-            }
             ContextCompat.registerReceiver(
-                this, hdConfigReceiver, IntentFilter("dev.audaro.helloshell.SET_HD_CONFIG"),
+                this,
+                hdConfigReceiver,
+                IntentFilter("dev.audaro.helloshell.SET_HD_CONFIG"),
                 ContextCompat.RECEIVER_EXPORTED,
             )
-            reconnectTestReceiver = object : BroadcastReceiver() {
-                override fun onReceive(ctx: Context?, intent: Intent?) {
-                    reconnectTestOverride = when (intent?.getStringExtra("show")) {
-                        "on" -> true
-                        "off" -> false
-                        else -> null   // "clear" / anything else -> follow the live snapshot
+            reconnectTestReceiver =
+                object : BroadcastReceiver() {
+                    override fun onReceive(
+                        ctx: Context?,
+                        intent: Intent?,
+                    ) {
+                        reconnectTestOverride =
+                            when (intent?.getStringExtra("show")) {
+                                "on" -> true
+                                "off" -> false
+                                else -> null // "clear" / anything else -> follow the live snapshot
+                            }
+                        Log.i(TAG, "SET_RECONNECT_OVERLAY override=$reconnectTestOverride")
                     }
-                    Log.i(TAG, "SET_RECONNECT_OVERLAY override=$reconnectTestOverride")
                 }
-            }
             ContextCompat.registerReceiver(
-                this, reconnectTestReceiver, IntentFilter("dev.audaro.helloshell.SET_RECONNECT_OVERLAY"),
+                this,
+                reconnectTestReceiver,
+                IntentFilter("dev.audaro.helloshell.SET_RECONNECT_OVERLAY"),
                 ContextCompat.RECEIVER_EXPORTED,
             )
-            sessionExpiredTestReceiver = object : BroadcastReceiver() {
-                override fun onReceive(ctx: Context?, intent: Intent?) {
-                    sessionExpiredTestOverride = when (intent?.getStringExtra("show")) {
-                        "on" -> true
-                        "off" -> false
-                        else -> null   // "clear" / anything else -> follow the live snapshot
+            sessionExpiredTestReceiver =
+                object : BroadcastReceiver() {
+                    override fun onReceive(
+                        ctx: Context?,
+                        intent: Intent?,
+                    ) {
+                        sessionExpiredTestOverride =
+                            when (intent?.getStringExtra("show")) {
+                                "on" -> true
+                                "off" -> false
+                                else -> null // "clear" / anything else -> follow the live snapshot
+                            }
+                        Log.i(TAG, "SET_SESSION_EXPIRED_OVERLAY override=$sessionExpiredTestOverride")
                     }
-                    Log.i(TAG, "SET_SESSION_EXPIRED_OVERLAY override=$sessionExpiredTestOverride")
                 }
-            }
             ContextCompat.registerReceiver(
-                this, sessionExpiredTestReceiver, IntentFilter("dev.audaro.helloshell.SET_SESSION_EXPIRED_OVERLAY"),
+                this,
+                sessionExpiredTestReceiver,
+                IntentFilter("dev.audaro.helloshell.SET_SESSION_EXPIRED_OVERLAY"),
                 ContextCompat.RECEIVER_EXPORTED,
             )
             // PERF-MEMORY-THERMAL-01: force a thermal status for verification (real thermal pressure is hard to induce
             // on demand). `--ei level N` injects status 0..6 (NONE..SHUTDOWN); level<0 or omitted follows the sensor.
-            thermalTestReceiver = object : BroadcastReceiver() {
-                override fun onReceive(ctx: Context?, intent: Intent?) {
-                    val level = intent?.getIntExtra("level", -1) ?: -1
-                    Log.i(TAG, "SET_THERMAL_STATUS level=$level")
-                    thermalGovernor?.forceStatus(level)
+            thermalTestReceiver =
+                object : BroadcastReceiver() {
+                    override fun onReceive(
+                        ctx: Context?,
+                        intent: Intent?,
+                    ) {
+                        val level = intent?.getIntExtra("level", -1) ?: -1
+                        Log.i(TAG, "SET_THERMAL_STATUS level=$level")
+                        thermalGovernor?.forceStatus(level)
+                    }
                 }
-            }
             ContextCompat.registerReceiver(
-                this, thermalTestReceiver, IntentFilter("dev.audaro.helloshell.SET_THERMAL_STATUS"),
+                this,
+                thermalTestReceiver,
+                IntentFilter("dev.audaro.helloshell.SET_THERMAL_STATUS"),
                 ContextCompat.RECEIVER_EXPORTED,
             )
         }
@@ -466,25 +545,29 @@ class MainActivity : AppCompatActivity() {
         // are HIDDEN (HudVeneerBridge.setStonesHidden, driven from updateChrome) so these native cells ARE the
         // tabs; a tap opens the tab by replaying the engine stone's op script (openTab) — works while hidden, so
         // the engine + plugins stay authoritative and no widget is moved or covered (the proven iOS layout).
-        overlayEditView = OverlayEditView(this).apply {
-            visibility = View.GONE
-            onDrop = { name, x, y ->
-                Log.i(TAG, "overlay-edit: drop $name -> ($x,$y)")
-                JvmLauncher.onBridgeTouch { JvmLauncher.overlaySetLocation(name, x, y); JvmLauncher.flushConfig() }
-            }
-            onResetAll = {
-                Log.i(TAG, "overlay-edit: reset all")
-                JvmLauncher.onBridgeTouch {
-                    for (b in overlayEditView.currentNames()) JvmLauncher.overlayReset(b)
-                    JvmLauncher.flushConfig()
+        overlayEditView =
+            OverlayEditView(this).apply {
+                visibility = View.GONE
+                onDrop = { name, x, y ->
+                    Log.i(TAG, "overlay-edit: drop $name -> ($x,$y)")
+                    JvmLauncher.onBridgeTouch {
+                        JvmLauncher.overlaySetLocation(name, x, y)
+                        JvmLauncher.flushConfig()
+                    }
                 }
+                onResetAll = {
+                    Log.i(TAG, "overlay-edit: reset all")
+                    JvmLauncher.onBridgeTouch {
+                        for (b in overlayEditView.currentNames()) JvmLauncher.overlayReset(b)
+                        JvmLauncher.flushConfig()
+                    }
+                }
+                onDone = { exitOverlayEditMode() }
             }
-            onDone = { exitOverlayEditMode() }
-        }
         chromeOverlay = ChromeOverlayView(this)
         chromeOverlay.onTabTap = { idx ->
             Log.i(TAG, "a6: native tab $idx tap -> openTab")
-            JvmLauncher.onBridgeTouch { JvmLauncher.openTab(idx) }   // off the UI thread (daemon-attaches to HotSpot)
+            JvmLauncher.onBridgeTouch { JvmLauncher.openTab(idx) } // off the UI thread (daemon-attaches to HotSpot)
         }
         // Phase-4 chat channel PILL (replaces the A3 enlarged tab row as the chat control; iOS parity).
         // Quick tap = collapse/expand (shared shove-off-canvas); hold 0.15s = chips fan out; drag + lift =
@@ -505,10 +588,13 @@ class MainActivity : AppCompatActivity() {
                 Log.i(TAG, "ui3: tab $k (active) -> collapse")
                 JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(true) }
             } else {
-                chatTabOverlay.markOptimistic(k)   // instant highlight
+                chatTabOverlay.markOptimistic(k) // instant highlight
                 if (chatCollapsed) {
                     chatCollapsed = false
-                    JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(false); JvmLauncher.switchChatTab(k) }
+                    JvmLauncher.onBridgeTouch {
+                        JvmLauncher.setChatCollapsed(false)
+                        JvmLauncher.switchChatTab(k)
+                    }
                 } else {
                     JvmLauncher.onBridgeTouch { JvmLauncher.switchChatTab(k) }
                 }
@@ -527,16 +613,22 @@ class MainActivity : AppCompatActivity() {
             } else if (ecx >= 0 && ecy in 0 until JvmLauncher.frameHeight()) {
                 beginChatFilterMenu(ecx, ecy, vx, vy)
                 true
-            } else false   // engine button not on-canvas yet (expand still landing) — retried each move
+            } else {
+                false // engine button not on-canvas yet (expand still landing) — retried each move
+            }
         }
         chatTabOverlay.onFilterMove = { vx, vy ->
-            menuCurX = vx; menuCurY = vy
+            menuCurX = vx
+            menuCurY = vy
             if (menuActive && menuOverlay.isActive) updateMenuHighlight(vx, vy)
         }
         chatTabOverlay.onFilterEnd = { cancelled ->
             menuTouchActive = false
-            if (cancelled) { if (menuActive) cancelMenu() }
-            else if (menuOverlay.isActive) commitMenuSelection()
+            if (cancelled) {
+                if (menuActive) cancelMenu()
+            } else if (menuOverlay.isActive) {
+                commitMenuSelection()
+            }
         }
         chatTabOverlay.onHaptic = { vibrateTick() }
         // UI-4: the opaque dialogue parchment. A continue tap precisely clicks the engine CONTINUE widget (robust
@@ -546,16 +638,20 @@ class MainActivity : AppCompatActivity() {
             // Click the engine CONTINUE widget when we have its bounds; otherwise advance with a real SPACE
             // KEY event — a "click here to continue" box listens for the keypress, NOT a typed character
             // (text(" ") never advanced it), so this is the reliable fallback when the widget bounds are absent.
-            if (cx >= 0 && cy >= 0) JvmLauncher.onBridgeTouch { JvmLauncher.clickPrecise(cx, cy, 1) }
-            else JvmLauncher.onBridgeTouch { JvmLauncher.keyStroke(VK_SPACE) }
+            if (cx >= 0 && cy >= 0) {
+                JvmLauncher.onBridgeTouch { JvmLauncher.clickPrecise(cx, cy, 1) }
+            } else {
+                JvmLauncher.onBridgeTouch { JvmLauncher.keyStroke(VK_SPACE) }
+            }
         }
         dialogueOverlay.onOption = { digit -> JvmLauncher.onBridgeTouch { JvmLauncher.text(digit.toString()) } }
         // FIX-9: the "Reconnecting…" scrim (non-interactive; driven from updateChrome's snapshot).
         reconnectOverlay = ReconnectingOverlayView(this)
         // UX-LOGIN-01: the "Session expired" card (interactive; driven from updateChrome's sessionExpired flag).
-        sessionExpiredOverlay = SessionExpiredOverlayView(this).apply {
-            onSignIn = { startActivity(Intent(this@MainActivity, LoginActivity::class.java)) }
-        }
+        sessionExpiredOverlay =
+            SessionExpiredOverlayView(this).apply {
+                onSignIn = { startActivity(Intent(this@MainActivity, LoginActivity::class.java)) }
+            }
         // UX-DISCRETE-01 / ENH-B06: the "Hopping…" scrim (non-interactive; armed at the hop trigger sites, hidden
         // from updateChrome's loggedIn signal / a timeout).
         hoppingOverlay = HoppingOverlayView(this)
@@ -571,44 +667,62 @@ class MainActivity : AppCompatActivity() {
         // devBar) carry a default elevation that would float them ABOVE a same-Z ComposeView regardless of
         // add-order, so give the panel a large elevation to keep its sheet/scrim on top (no shadow — the host
         // has no opaque outline). GONE until opened.
-        val pluginPanel = ComposeView(this).apply { visibility = View.GONE; elevation = 200f }
+        val pluginPanel =
+            ComposeView(this).apply {
+                visibility = View.GONE
+                elevation = 200f
+            }
         // Compact, low-profile dev affordances (single-glyph): kill the Material 88dp min width + slim padding so
         // the three sit in a small bottom-left cluster instead of three chunky buttons across the HUD.
         val devD = resources.displayMetrics.density
-        fun devButton(glyph: String) = Button(this).apply {
-            text = glyph
-            textSize = 16f
-            setTextColor(0xFFFFFFFF.toInt())
-            minWidth = 0; minHeight = 0
-            // A proper touch target (Material min 40dp) + a rounded translucent chip so the glyphs read as
-            // tappable controls rather than tiny text (Finding: the bottom-left tools were too small to hit).
-            val touch = (40 * devD).toInt()
-            minimumWidth = touch; minimumHeight = touch
-            val px = (12 * devD).toInt()
-            setPadding(px, (px * 0.6f).toInt(), px, (px * 0.6f).toInt())
-            background = android.graphics.drawable.GradientDrawable().apply {
-                cornerRadius = 12f * devD
-                setColor(0x66000000)
-                setStroke((1 * devD).toInt(), 0x33FFFFFF)
+
+        fun devButton(glyph: String) =
+            Button(this).apply {
+                text = glyph
+                textSize = 16f
+                setTextColor(0xFFFFFFFF.toInt())
+                minWidth = 0
+                minHeight = 0
+                // A proper touch target (Material min 40dp) + a rounded translucent chip so the glyphs read as
+                // tappable controls rather than tiny text (Finding: the bottom-left tools were too small to hit).
+                val touch = (40 * devD).toInt()
+                minimumWidth = touch
+                minimumHeight = touch
+                val px = (12 * devD).toInt()
+                setPadding(px, (px * 0.6f).toInt(), px, (px * 0.6f).toInt())
+                background =
+                    android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = 12f * devD
+                        setColor(0x66000000)
+                        setStroke((1 * devD).toInt(), 0x33FFFFFF)
+                    }
+                alpha = 0.7f
+                layoutParams =
+                    LinearLayout
+                        .LayoutParams(
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                        ).apply { marginEnd = (6 * devD).toInt() }
             }
-            alpha = 0.7f
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { marginEnd = (6 * devD).toInt() }
-        }
+
         // Swap a sticky modifier between its idle and latched look — a clear filled/accented "active" state.
         // (Finding: the sticky-Shift latch gave no indication it was on; alpha alone was too subtle.)
-        fun setModActive(b: Button, on: Boolean) {
+        fun setModActive(
+            b: Button,
+            on: Boolean,
+        ) {
             b.alpha = if (on) 1f else 0.7f
-            b.background = android.graphics.drawable.GradientDrawable().apply {
-                cornerRadius = 12f * devD
-                setColor(if (on) 0xCC2AA189.toInt() else 0x66000000)
-                setStroke(((if (on) 2 else 1) * devD).toInt(), if (on) 0xFF3FE0BC.toInt() else 0x33FFFFFF)
-            }
+            b.background =
+                android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = 12f * devD
+                    setColor(if (on) 0xCC2AA189.toInt() else 0x66000000)
+                    setStroke(((if (on) 2 else 1) * devD).toInt(), if (on) 0xFF3FE0BC.toInt() else 0x33FFFFFF)
+                }
             // UX-XCUT-04: the visual latch (filled/accented) is invisible to TalkBack, so mirror it as an a11y
             // stateDescription ("on"/"off") — the spoken counterpart of the Compose chips' "117HD, selected".
             ViewCompat.setStateDescription(b, if (on) "on" else "off")
         }
+
         // §4 right-bar redesign (increment 1): open the plugin launcher. The dismiss-flush (§4) persists any
         // config edit made in the panel even when it's closed without backgrounding.
         fun openLauncher() {
@@ -640,24 +754,29 @@ class MainActivity : AppCompatActivity() {
         // The discoverable bottom-center HANDLE replaces the buried dev-cluster gear as the primary entry into
         // the launcher (audit diagnosis #1: the gear read as a disposable debug control). Tap to open; system
         // BACK closes it (wired below). Drag-up + the PEEK sheet are later increments.
-        val launcherHandle = Button(this).apply {
-            text = "≡ Plugins"
-            // UX-XCUT-04: the leading ≡ glyph reads as "identical to" under TalkBack — give it a plain spoken label.
-            contentDescription = "Open plugins panel"
-            textSize = 12f
-            isAllCaps = false
-            minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
-            val px = (16 * resources.displayMetrics.density).toInt()
-            setPadding(px, px / 4, px, px / 4)
-            setTextColor(0xFFFFFFFF.toInt())
-            background = android.graphics.drawable.GradientDrawable().apply {
-                cornerRadius = 100f
-                setColor(0xCC1E1E1E.toInt())
-                setStroke((1 * resources.displayMetrics.density).toInt(), 0x55FFFFFF)
+        val launcherHandle =
+            Button(this).apply {
+                text = "≡ Plugins"
+                // UX-XCUT-04: the leading ≡ glyph reads as "identical to" under TalkBack — give it a plain spoken label.
+                contentDescription = "Open plugins panel"
+                textSize = 12f
+                isAllCaps = false
+                minWidth = 0
+                minimumWidth = 0
+                minHeight = 0
+                minimumHeight = 0
+                val px = (16 * resources.displayMetrics.density).toInt()
+                setPadding(px, px / 4, px, px / 4)
+                setTextColor(0xFFFFFFFF.toInt())
+                background =
+                    android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = 100f
+                        setColor(0xCC1E1E1E.toInt())
+                        setStroke((1 * resources.displayMetrics.density).toInt(), 0x55FFFFFF)
+                    }
+                alpha = 0.85f
+                setOnClickListener { openLauncher() }
             }
-            alpha = 0.85f
-            setOnClickListener { openLauncher() }
-        }
         // A6 A/B: toggle the native grid on/off (▦ = native tab grid + hidden stones; ▤ = raw engine stones).
         // updateChrome re-applies setStonesHidden to match, so flipping this reveals/hides the real stone row.
         val chromeButton = devButton("▦")
@@ -701,13 +820,15 @@ class MainActivity : AppCompatActivity() {
         // DEBUG: long-press ⇧ publishes a host-origin notification through the shared bridge — a deterministic
         // end-to-end check of the Finding-9 delivery path (queue → drain → NotificationManager) without
         // needing an in-game trigger. Real engine notifications (idle/level) ride the identical path.
-        if (BuildConfig.DEBUG) shiftButton.setOnLongClickListener {
-            JvmLauncher.onBridge {
-                JvmLauncher.publishNotification("RuneLite", "Notification delivery test")
-                JvmLauncher.publishLink("https://oldschool.runescape.wiki/")
+        if (BuildConfig.DEBUG) {
+            shiftButton.setOnLongClickListener {
+                JvmLauncher.onBridge {
+                    JvmLauncher.publishNotification("RuneLite", "Notification delivery test")
+                    JvmLauncher.publishLink("https://oldschool.runescape.wiki/")
+                }
+                Log.i(TAG, "ap2a: debug test notification + link published")
+                true
             }
-            Log.i(TAG, "ap2a: debug test notification + link published")
-            true
         }
         // Ctrl/Alt sticky latches — same mechanism as ⇧ (shared JavaBridge.setCtrlHeld/setAltHeld). ⌥ held drives
         // Ground Items' hold-to-highlight (item names appear while Alt is down); ⌃ covers the Ctrl-gated surface.
@@ -742,64 +863,93 @@ class MainActivity : AppCompatActivity() {
         hdButton.setOnClickListener { restartIntoRlhd() }
         // Group the dev affordances into one discreet cluster pinned to the BOTTOM-LEFT — clear of the relocated
         // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
-        val devBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            // In-play input modifiers stay on the HUD: soft keyboard + sticky-shift. (Account/Log out/Screenshot
-            // moved to the launcher as fixed tiles — §4 cutover; the settings entry is the bottom-center handle.)
-            // Release HUD keeps only the two in-play essentials: keyboard summon (type chat/PMs) + sticky-Shift.
-            addView(kbButton); addView(shiftButton)
-            // Developer-only tooling, hidden in release: the Ctrl/Alt sticky latches (niche modifier surface),
-            // the chrome A/B raw-stones toggle, and the GPU/117HD process-restart footguns (renderer selection
-            // lives in the native plugin panel — renderer-as-plugins).
-            if (BuildConfig.DEBUG) { addView(ctrlButton); addView(altButton); addView(chromeButton); addView(gpuButton); addView(hdButton) }
-        }
+        val devBar =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                // In-play input modifiers stay on the HUD: soft keyboard + sticky-shift. (Account/Log out/Screenshot
+                // moved to the launcher as fixed tiles — §4 cutover; the settings entry is the bottom-center handle.)
+                // Release HUD keeps only the two in-play essentials: keyboard summon (type chat/PMs) + sticky-Shift.
+                addView(kbButton)
+                addView(shiftButton)
+                // Developer-only tooling, hidden in release: the Ctrl/Alt sticky latches (niche modifier surface),
+                // the chrome A/B raw-stones toggle, and the GPU/117HD process-restart footguns (renderer selection
+                // lives in the native plugin panel — renderer-as-plugins).
+                if (BuildConfig.DEBUG) {
+                    addView(ctrlButton)
+                    addView(altButton)
+                    addView(chromeButton)
+                    addView(gpuButton)
+                    addView(hdButton)
+                }
+            }
         // User-defined hotkey buttons: a HUD strip the user fills from the Hotkeys screen; GONE until populated.
         val hotkeyStripView = buildHotkeyStrip()
         hotkeyStrip = hotkeyStripView
-        val root = FrameLayout(this).apply {
-            val mp = FrameLayout.LayoutParams.MATCH_PARENT
-            addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
-            addView(tapRing, FrameLayout.LayoutParams(mp, mp))        // tap-feedback ring (over the frame, no touch)
-            addView(chromeOverlay, FrameLayout.LayoutParams(mp, mp))  // native 2-col tab grid (stones hidden)
-            addView(chatTabOverlay, FrameLayout.LayoutParams(mp, mp)) // enlarged native chat-tab row (top-left)
-            addView(dialogueOverlay, FrameLayout.LayoutParams(mp, mp)) // UI-4: opaque NPC-dialogue parchment (above chat, below menus)
-            addView(keyboardView, FrameLayout.LayoutParams(1, 1))
-            addView(menuOverlay, FrameLayout.LayoutParams(mp, mp))   // drawn on top of the live frame + chrome
-            addView(overlayEditView, FrameLayout.LayoutParams(mp, mp)) // on-screen overlay-layout editor (GONE unless editing)
-            addView(reconnectOverlay, FrameLayout.LayoutParams(mp, mp)) // FIX-9: "Reconnecting…" scrim (non-interactive)
-            addView(hoppingOverlay, FrameLayout.LayoutParams(mp, mp))   // ENH-B06: "Hopping…" scrim (non-interactive)
-            addView(sessionExpiredOverlay, FrameLayout.LayoutParams(mp, mp)) // UX-LOGIN-01: "Session expired" card (interactive, top)
-            // §4: the launcher handle sits above the game/chrome (tappable) but below the launcher sheet
-            // (covered while it's open) and clears the bottom gesture inset.
-            handleBaseBottom = (10 * resources.displayMetrics.density).toInt()
-            addView(launcherHandle, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
-                    bottomMargin = handleBaseBottom
-                })
-            devBarBaseLeft = (8 * resources.displayMetrics.density).toInt()
-            devBarBaseBottom = devBarBaseLeft
-            addView(devBar, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM or Gravity.START).apply {
-                    leftMargin = devBarBaseLeft; bottomMargin = devBarBaseBottom
-                })
-            // User-defined hotkey buttons: bottom-left, stacked above the devBar; below the launcher sheet.
-            hotkeyBaseLeft = (8 * resources.displayMetrics.density).toInt()
-            hotkeyBaseBottom = (64 * resources.displayMetrics.density).toInt()
-            addView(hotkeyStripView, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM or Gravity.START).apply {
-                    leftMargin = hotkeyBaseLeft; bottomMargin = hotkeyBaseBottom
-                })
-            // §4 increment 3: the launcher is now a transparent-host PEEK/EXPAND bottom sheet (SheetScaffold) —
-            // added LAST so its sheet/scrim draw OVER the handle + devBar (and the game composites through the
-            // transparent top). GONE until opened.
-            addView(pluginPanel, FrameLayout.LayoutParams(mp, mp))
-            // UX-ONBOARD-01: the cold-start splash is added TOPMOST so it covers every other view (incl. a black
-            // SurfaceView and any chrome) during the unpack + JVM boot + first-frame window. It self-dismisses.
-            addView(splashOverlay, FrameLayout.LayoutParams(mp, mp))
-        }
+        val root =
+            FrameLayout(this).apply {
+                val mp = FrameLayout.LayoutParams.MATCH_PARENT
+                addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
+                addView(tapRing, FrameLayout.LayoutParams(mp, mp)) // tap-feedback ring (over the frame, no touch)
+                addView(chromeOverlay, FrameLayout.LayoutParams(mp, mp)) // native 2-col tab grid (stones hidden)
+                addView(chatTabOverlay, FrameLayout.LayoutParams(mp, mp)) // enlarged native chat-tab row (top-left)
+                addView(dialogueOverlay, FrameLayout.LayoutParams(mp, mp)) // UI-4: opaque NPC-dialogue parchment (above chat, below menus)
+                addView(keyboardView, FrameLayout.LayoutParams(1, 1))
+                addView(menuOverlay, FrameLayout.LayoutParams(mp, mp)) // drawn on top of the live frame + chrome
+                addView(overlayEditView, FrameLayout.LayoutParams(mp, mp)) // on-screen overlay-layout editor (GONE unless editing)
+                addView(reconnectOverlay, FrameLayout.LayoutParams(mp, mp)) // FIX-9: "Reconnecting…" scrim (non-interactive)
+                addView(hoppingOverlay, FrameLayout.LayoutParams(mp, mp)) // ENH-B06: "Hopping…" scrim (non-interactive)
+                addView(sessionExpiredOverlay, FrameLayout.LayoutParams(mp, mp)) // UX-LOGIN-01: "Session expired" card (interactive, top)
+                // §4: the launcher handle sits above the game/chrome (tappable) but below the launcher sheet
+                // (covered while it's open) and clears the bottom gesture inset.
+                handleBaseBottom = (10 * resources.displayMetrics.density).toInt()
+                addView(
+                    launcherHandle,
+                    FrameLayout
+                        .LayoutParams(
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                        ).apply {
+                            bottomMargin = handleBaseBottom
+                        },
+                )
+                devBarBaseLeft = (8 * resources.displayMetrics.density).toInt()
+                devBarBaseBottom = devBarBaseLeft
+                addView(
+                    devBar,
+                    FrameLayout
+                        .LayoutParams(
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            Gravity.BOTTOM or Gravity.START,
+                        ).apply {
+                            leftMargin = devBarBaseLeft
+                            bottomMargin = devBarBaseBottom
+                        },
+                )
+                // User-defined hotkey buttons: bottom-left, stacked above the devBar; below the launcher sheet.
+                hotkeyBaseLeft = (8 * resources.displayMetrics.density).toInt()
+                hotkeyBaseBottom = (64 * resources.displayMetrics.density).toInt()
+                addView(
+                    hotkeyStripView,
+                    FrameLayout
+                        .LayoutParams(
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            Gravity.BOTTOM or Gravity.START,
+                        ).apply {
+                            leftMargin = hotkeyBaseLeft
+                            bottomMargin = hotkeyBaseBottom
+                        },
+                )
+                // §4 increment 3: the launcher is now a transparent-host PEEK/EXPAND bottom sheet (SheetScaffold) —
+                // added LAST so its sheet/scrim draw OVER the handle + devBar (and the game composites through the
+                // transparent top). GONE until opened.
+                addView(pluginPanel, FrameLayout.LayoutParams(mp, mp))
+                // UX-ONBOARD-01: the cold-start splash is added TOPMOST so it covers every other view (incl. a black
+                // SurfaceView and any chrome) during the unpack + JVM boot + first-frame window. It self-dismisses.
+                addView(splashOverlay, FrameLayout.LayoutParams(mp, mp))
+            }
         setContentView(root)
         // UX-XCUT-01: keep the only release HUD controls (⌨/⇧ devBar, hotkey strip, ≡ Plugins handle) out of the
         // landscape display cutout + the bottom gesture inset. SHORT_EDGES draws the notch UNDER the frame, so
@@ -817,9 +967,10 @@ class MainActivity : AppCompatActivity() {
         root.requestApplyInsets()
         // User-defined hotkey buttons: populate the strip now + rebuild whenever the Hotkeys screen changes the set.
         refreshHotkeyStrip()
-        hotkeyPrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, k ->
-            if (k == PREF_HOTKEYS_ACTIVE) runOnUiThread { refreshHotkeyStrip() }
-        }
+        hotkeyPrefsListener =
+            android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, k ->
+                if (k == PREF_HOTKEYS_ACTIVE) runOnUiThread { refreshHotkeyStrip() }
+            }
         getSharedPreferences(PREFS_HOTKEYS, Context.MODE_PRIVATE)
             .registerOnSharedPreferenceChangeListener(hotkeyPrefsListener)
         // §4 dismiss model (d): while the launcher sheet is open the in-sheet BackHandler (PluginPanel) handles
@@ -828,7 +979,7 @@ class MainActivity : AppCompatActivity() {
         // BACK so the app backgrounds.
         onBackPressedDispatcher.addCallback(this) {
             if (overlayEditMode) {
-                exitOverlayEditMode()   // BACK leaves the on-screen overlay editor
+                exitOverlayEditMode() // BACK leaves the on-screen overlay editor
             } else if (mapOpen) {
                 // The fullscreen map's close X is a tiny bezel-clipped target at the screen corner — BACK is the
                 // reliable close. Click the close button by its CANVAS coordinate (from the snapshot), which the
@@ -868,17 +1019,26 @@ class MainActivity : AppCompatActivity() {
         // chat-at-top input sits at the TOP of the screen, so a bottom-overlay keyboard never covers it.
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         enterImmersive()
-        surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {
-                JvmLauncher.setSurface(holder.surface)
-            }
-            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-                JvmLauncher.setSurface(holder.surface)
-            }
-            override fun surfaceDestroyed(holder: SurfaceHolder) {
-                JvmLauncher.setSurface(null)
-            }
-        })
+        surfaceView.holder.addCallback(
+            object : SurfaceHolder.Callback {
+                override fun surfaceCreated(holder: SurfaceHolder) {
+                    JvmLauncher.setSurface(holder.surface)
+                }
+
+                override fun surfaceChanged(
+                    holder: SurfaceHolder,
+                    format: Int,
+                    width: Int,
+                    height: Int,
+                ) {
+                    JvmLauncher.setSurface(holder.surface)
+                }
+
+                override fun surfaceDestroyed(holder: SurfaceHolder) {
+                    JvmLauncher.setSurface(null)
+                }
+            },
+        )
 
         gestures = GestureDetector(this, GestureListener())
         scaleGestures = ScaleGestureDetector(this, ScaleListener())
@@ -896,24 +1056,40 @@ class MainActivity : AppCompatActivity() {
                 // and a tap outside dismisses. Drag-mode (below) is the original slide-select.
                 if (menuTapMode) {
                     when (event.actionMasked) {
-                        MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
+                        MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
                             if (menuTapArmed) updateMenuHighlight(event.x, event.y)
+                        }
+
                         MotionEvent.ACTION_UP -> {
                             menuTouchActive = false
-                            if (!menuTapArmed) { menuTapArmed = true; menuOverlay.setHighlight(-1) }
-                            else onMenuTap(event.x, event.y)
+                            if (!menuTapArmed) {
+                                menuTapArmed = true
+                                menuOverlay.setHighlight(-1)
+                            } else {
+                                onMenuTap(event.x, event.y)
+                            }
                         }
                     }
                     return@setOnTouchListener true
                 }
                 when (event.actionMasked) {
-                    MotionEvent.ACTION_MOVE -> updateMenuHighlight(event.x, event.y)
-                    MotionEvent.ACTION_UP -> { menuTouchActive = false; if (menuOverlay.isActive) commitMenuSelection() }
-                    MotionEvent.ACTION_CANCEL -> { menuTouchActive = false; cancelMenu() }
+                    MotionEvent.ACTION_MOVE -> {
+                        updateMenuHighlight(event.x, event.y)
+                    }
+
+                    MotionEvent.ACTION_UP -> {
+                        menuTouchActive = false
+                        if (menuOverlay.isActive) commitMenuSelection()
+                    }
+
+                    MotionEvent.ACTION_CANCEL -> {
+                        menuTouchActive = false
+                        cancelMenu()
+                    }
                 }
                 return@setOnTouchListener true
             }
-            scaleGestures.onTouchEvent(event)   // pinch-zoom first; it sets the isInProgress flag onScroll reads
+            scaleGestures.onTouchEvent(event) // pinch-zoom first; it sets the isInProgress flag onScroll reads
             gestures.onTouchEvent(event)
             // Pre-hover: move the engine pointer to a fresh single-finger touch so tooltips/menus track it.
             if (event.actionMasked == MotionEvent.ACTION_DOWN && event.pointerCount == 1) {
@@ -926,7 +1102,7 @@ class MainActivity : AppCompatActivity() {
                     val up = event.actionMasked == MotionEvent.ACTION_UP
                     val fx = if (up) toGameX(event.x) else itemDragLastX
                     val fy = if (up) toGameY(event.y) else itemDragLastY
-                    JvmLauncher.touch(2, fx, fy, 1)   // MOUSE_RELEASED on the destination slot
+                    JvmLauncher.touch(2, fx, fy, 1) // MOUSE_RELEASED on the destination slot
                     itemDragging = false
                     Log.i(TAG, "drag-1: item drag end game=($fx,$fy)")
                 }
@@ -967,8 +1143,11 @@ class MainActivity : AppCompatActivity() {
         // trigger it without an intent extra) boots the embedded VM on [client-*-gpu.jar + client-*-rlhd.jar],
         // mainClass=RLHDProbe — a headless 117HD class-load + loader-data probe (no engine/bridge/render/login).
         // Proves the OpenCL stub + Zone facade delta resolve at class-load and the loader JSON parses on-device.
-        if (BuildConfig.DEBUG && (intent?.getBooleanExtra("rlhdprobe", false) == true ||
-            File(getExternalFilesDir(null), "rlhdprobe.mode").exists())) {
+        if (BuildConfig.DEBUG && (
+                intent?.getBooleanExtra("rlhdprobe", false) == true ||
+                    File(getExternalFilesDir(null), "rlhdprobe.mode").exists()
+            )
+        ) {
             if (booted.compareAndSet(false, true)) {
                 val app = applicationContext
                 thread(name = "jvm-boot") { bootRlhdProbe(app) }
@@ -1006,19 +1185,26 @@ class MainActivity : AppCompatActivity() {
                 // "observable floor") instead of a silent CPU revert. The GPU string was captured by the caps probe.
                 val gpu = rp.getString("gpuRenderer", null) ?: "unknown"
                 val esTier = rp.getInt("gpuEsTier", -1)
-                val detail = "renderer=$failedMode gpu=\"$gpu\" esTier=$esTier wasAuto=$wasAuto failCount=$failCount at=${System.currentTimeMillis()}"
-                runCatching { File(filesDir, "gpu-fail.txt").writeText(detail + "\n") }   // last-failure record (run-as readable)
+                val detail =
+                    "renderer=$failedMode gpu=\"$gpu\" esTier=$esTier " +
+                        "wasAuto=$wasAuto failCount=$failCount at=${System.currentTimeMillis()}"
+                runCatching { File(filesDir, "gpu-fail.txt").writeText(detail + "\n") } // last-failure record (run-as readable)
                 Log.w(TAG, "auto-GPU: prior promoted boot never presented a frame -> CPU fallback ($detail)")
             }
             if (rp.getString("mode", null) == null && !rp.getBoolean("autoGpuFailed", false)) {
-                val probed = probeGpuCaps()   // "117hd" | "gpu" | "cpu"
-                rp.edit().putString("mode", probed).putBoolean("autoDecided", probed != "cpu").commit()   // durable before the cookie arms
+                val probed = probeGpuCaps() // "117hd" | "gpu" | "cpu"
+                rp
+                    .edit()
+                    .putString("mode", probed)
+                    .putBoolean("autoDecided", probed != "cpu")
+                    .commit() // durable before the cookie arms
                 Log.i(TAG, "auto-GPU: first-run caps probe -> default renderer '$probed'")
             }
         }
         val prefRenderer = rendererPref()
-        val gpuMode = (intent?.getBooleanExtra("routecgpu", false) ?: false) ||
-            File(getExternalFilesDir(null), "gpu.mode").exists() || prefRenderer == "gpu"
+        val gpuMode =
+            (intent?.getBooleanExtra("routecgpu", false) ?: false) ||
+                File(getExternalFilesDir(null), "gpu.mode").exists() || prefRenderer == "gpu"
         // Track G AG3-b: `--ez routecrlhd true` (or a pushed rlhd.mode marker) boots the FULL client on the gpu jar
         // + the rlhd jar with the 117HD (Zone) plugin loaded + started in-world (RLHDStarter). Needs login (tokens).
         // AG3-c: a Firebase Game Loop launch (action TEST_LOOP) also boots routecrlhd — Game Loop runs the app
@@ -1030,17 +1216,22 @@ class MainActivity : AppCompatActivity() {
         // Consume it on read so HD mode applies to exactly this boot; the next normal launch is the CPU client.
         val rlhdOnce = File(getExternalFilesDir(null), "rlhd.once")
         val rlhdOnceSet = rlhdOnce.exists()
-        if (rlhdOnceSet) { rlhdOnce.delete(); Log.i(TAG, "rlhd.once marker consumed -> routecrlhd this boot") }
+        if (rlhdOnceSet) {
+            rlhdOnce.delete()
+            Log.i(TAG, "rlhd.once marker consumed -> routecrlhd this boot")
+        }
         // A TV (Shield / Android TV) is a GPU-only target here — default its leanback-launcher icon straight into
         // 117HD (the only thing it's used for), so opening the app from the TV home screen is turnkey. A phone
         // still boots the CPU client by default (the HD button / intent opt-in unchanged). Opt out with a
         // cpu.mode marker if the CPU client is ever wanted on the TV.
-        val isTv = packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
-            packageManager.hasSystemFeature("android.hardware.type.television")
+        val isTv =
+            packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
+                packageManager.hasSystemFeature("android.hardware.type.television")
         val cpuForced = File(getExternalFilesDir(null), "cpu.mode").exists()
-        val rlhdMode = (intent?.getBooleanExtra("routecrlhd", false) ?: false) ||
-            File(getExternalFilesDir(null), "rlhd.mode").exists() || gameLoop || rlhdOnceSet ||
-            (isTv && !cpuForced) || prefRenderer == "117hd"
+        val rlhdMode =
+            (intent?.getBooleanExtra("routecrlhd", false) ?: false) ||
+                File(getExternalFilesDir(null), "rlhd.mode").exists() || gameLoop || rlhdOnceSet ||
+                (isTv && !cpuForced) || prefRenderer == "117hd"
         if (gameLoop) Log.i(TAG, "AG3-c: Game Loop launch -> routecrlhd (uninterrupted run for the Zone shader compile)")
         if (isTv && !cpuForced) Log.i(TAG, "TV/leanback device -> defaulting to routecrlhd (117HD) on launch")
         // PROD-SECURITY-01: the login-first divert below is skipped ONLY for the headless / non-interactive 117HD
@@ -1050,10 +1241,11 @@ class MainActivity : AppCompatActivity() {
         // leanback, so it stays turnkey-117HD). The ordinary user 117HD default (prefRenderer=="117hd", incl. the
         // first-boot auto-GPU promotion) is deliberately NOT in this set: a clean install with no token must still
         // get the native Jagex login first, so login-first is not renderer-dependent for real users.
-        val rlhdTestBoot = (intent?.getBooleanExtra("routecrlhd", false) ?: false) ||
-            File(getExternalFilesDir(null), "rlhd.mode").exists() || gameLoop ||
-            File(getExternalFilesDir(null), "rlhd_prelogin.mode").exists() ||
-            (isTv && !cpuForced)
+        val rlhdTestBoot =
+            (intent?.getBooleanExtra("routecrlhd", false) ?: false) ||
+                File(getExternalFilesDir(null), "rlhd.mode").exists() || gameLoop ||
+                File(getExternalFilesDir(null), "rlhd_prelogin.mode").exists() ||
+                (isTv && !cpuForced)
         // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
         // BEFORE boot. With none (and not census, which uses pushed tokens), run the on-device Jagex login first;
         // it writes tokens.json then restarts the process for a clean boot (Review-2: login-first or restart).
@@ -1082,11 +1274,12 @@ class MainActivity : AppCompatActivity() {
             // PERF-MEMORY-THERMAL-01: arm the thermal governor for a 117HD boot (no-op for cpu/gpu). It throttles
             // the 117HD sceneResolutionScale under thermal pressure and restores it on cooldown; all config I/O is
             // bridge-threaded so the main-thread listener callback never blocks.
-            thermalGovernor = ThermalGovernor(
-                getSystemService(POWER_SERVICE) as PowerManager,
-                is117hd = rlhdMode,
-                markerFile = File(filesDir, "thermal-throttle.marker"),
-            ).also { it.start() }
+            thermalGovernor =
+                ThermalGovernor(
+                    getSystemService(POWER_SERVICE) as PowerManager,
+                    is117hd = rlhdMode,
+                    markerFile = File(filesDir, "thermal-throttle.marker"),
+                ).also { it.start() }
         }
         // AP-2a: start draining the notification/link queues. Safe before the VM is up — the externs return ""
         // until the MobileUiBridge facade publishes, then start yielding real items.
@@ -1095,18 +1288,27 @@ class MainActivity : AppCompatActivity() {
 
     /** Phase-2 renderer preference (cpu|gpu|117hd) — the iOS rendererPref model. Persisted; read once at
      *  boot to pick the jar set + routec flags, so a panel toggle applies on the NEXT process start. */
-    private fun rendererPref(): String =
-        getSharedPreferences("renderer", MODE_PRIVATE).getString("mode", "cpu") ?: "cpu"
+    private fun rendererPref(): String = getSharedPreferences("renderer", MODE_PRIVATE).getString("mode", "cpu") ?: "cpu"
 
     private fun setRendererPref(mode: String) {
         // A user pick is EXPLICIT: clear the auto-decision flag + any prior auto-fail latch + a stale crash-cookie so
         // the auto-GPU machinery respects the choice (and a user-chosen GPU mode still gets one-shot crash protection).
-        getSharedPreferences("renderer", MODE_PRIVATE).edit()
-            .putString("mode", mode).putBoolean("autoDecided", false).putBoolean("autoGpuFailed", false).apply()
+        getSharedPreferences("renderer", MODE_PRIVATE)
+            .edit()
+            .putString("mode", mode)
+            .putBoolean("autoDecided", false)
+            .putBoolean("autoGpuFailed", false)
+            .apply()
         runCatching { File(filesDir, "auto-gpu-armed").delete() }
         Log.i(TAG, "p2: rendererPref -> $mode (applies on next launch)")
-        val label = when (mode) { "gpu" -> "GPU"; "117hd" -> "117 HD"; else -> "CPU (vanilla)" }
-        AlertDialog.Builder(this)
+        val label =
+            when (mode) {
+                "gpu" -> "GPU"
+                "117hd" -> "117 HD"
+                else -> "CPU (vanilla)"
+            }
+        AlertDialog
+            .Builder(this)
             .setTitle("Renderer: $label")
             .setMessage("Saved. The renderer is fixed at launch, so it applies on the next start. Restart now?")
             .setPositiveButton("Restart") { _, _ ->
@@ -1115,8 +1317,7 @@ class MainActivity : AppCompatActivity() {
                 startActivity(i)
                 finishAffinity()
                 Runtime.getRuntime().exit(0)
-            }
-            .setNegativeButton("Later", null)
+            }.setNegativeButton("Later", null)
             .show()
     }
 
@@ -1135,19 +1336,38 @@ class MainActivity : AppCompatActivity() {
             if (dpy == android.opengl.EGL14.EGL_NO_DISPLAY) return "cpu"
             val ver = IntArray(2)
             if (!android.opengl.EGL14.eglInitialize(dpy, ver, 0, ver, 1)) return "cpu"
-            val cfgAttr = intArrayOf(
-                android.opengl.EGL14.EGL_RENDERABLE_TYPE, 0x0040 /* EGL_OPENGL_ES3_BIT_KHR */,
-                android.opengl.EGL14.EGL_SURFACE_TYPE, android.opengl.EGL14.EGL_PBUFFER_BIT,
-                android.opengl.EGL14.EGL_RED_SIZE, 8, android.opengl.EGL14.EGL_GREEN_SIZE, 8,
-                android.opengl.EGL14.EGL_BLUE_SIZE, 8, android.opengl.EGL14.EGL_ALPHA_SIZE, 8,
-                android.opengl.EGL14.EGL_DEPTH_SIZE, 24, android.opengl.EGL14.EGL_NONE)
-            val cfgs = arrayOfNulls<android.opengl.EGLConfig>(1); val nCfg = IntArray(1)
+            val cfgAttr =
+                intArrayOf(
+                    android.opengl.EGL14.EGL_RENDERABLE_TYPE,
+                    0x0040, // EGL_OPENGL_ES3_BIT_KHR
+                    android.opengl.EGL14.EGL_SURFACE_TYPE,
+                    android.opengl.EGL14.EGL_PBUFFER_BIT,
+                    android.opengl.EGL14.EGL_RED_SIZE,
+                    8,
+                    android.opengl.EGL14.EGL_GREEN_SIZE,
+                    8,
+                    android.opengl.EGL14.EGL_BLUE_SIZE,
+                    8,
+                    android.opengl.EGL14.EGL_ALPHA_SIZE,
+                    8,
+                    android.opengl.EGL14.EGL_DEPTH_SIZE,
+                    24,
+                    android.opengl.EGL14.EGL_NONE,
+                )
+            val cfgs = arrayOfNulls<android.opengl.EGLConfig>(1)
+            val nCfg = IntArray(1)
             if (!android.opengl.EGL14.eglChooseConfig(dpy, cfgAttr, 0, cfgs, 0, 1, nCfg, 0) || nCfg[0] < 1) return "cpu"
             // Request the highest ES context the driver supports: 3.2 -> 3.1 -> 3.0.
             val eglContextMinorVersion = 0x30FB
             for (mn in intArrayOf(2, 1, 0)) {
-                val ctxAttr = intArrayOf(android.opengl.EGL14.EGL_CONTEXT_CLIENT_VERSION, 3,
-                    eglContextMinorVersion, mn, android.opengl.EGL14.EGL_NONE)
+                val ctxAttr =
+                    intArrayOf(
+                        android.opengl.EGL14.EGL_CONTEXT_CLIENT_VERSION,
+                        3,
+                        eglContextMinorVersion,
+                        mn,
+                        android.opengl.EGL14.EGL_NONE,
+                    )
                 ctx = android.opengl.EGL14.eglCreateContext(dpy, cfgs[0], android.opengl.EGL14.EGL_NO_CONTEXT, ctxAttr, 0)
                 if (ctx != android.opengl.EGL14.EGL_NO_CONTEXT) break
             }
@@ -1169,12 +1389,20 @@ class MainActivity : AppCompatActivity() {
             val renderer = android.opengl.GLES30.glGetString(android.opengl.GLES30.GL_RENDERER) ?: "?"
             val baseGpuOk = esTier >= 30 && maxSamples >= 1
             val hd117Clean = esTier >= 31 && maxCompute > 0
-            val pick = when { hd117Clean -> "117hd"; baseGpuOk -> "gpu"; else -> "cpu" }
+            val pick =
+                when {
+                    hd117Clean -> "117hd"
+                    baseGpuOk -> "gpu"
+                    else -> "cpu"
+                }
             // PROD-CRASH-TELEMETRY-01: persist the GPU identity now (we hold a live context here) so that if a
             // promoted GPU/117HD boot later fails to present, the crash-cookie fallback can name WHICH GPU died
             // instead of reverting to CPU silently. Cheap one-time write on the first-run probe.
-            getSharedPreferences("renderer", MODE_PRIVATE).edit()
-                .putString("gpuRenderer", renderer).putInt("gpuEsTier", esTier).apply()
+            getSharedPreferences("renderer", MODE_PRIVATE)
+                .edit()
+                .putString("gpuRenderer", renderer)
+                .putInt("gpuEsTier", esTier)
+                .apply()
             Log.i(TAG, "auto-GPU caps: esTier=$esTier maxSamples=$maxSamples maxCompute=$maxCompute renderer=\"$renderer\" -> $pick")
             return pick
         } catch (t: Throwable) {
@@ -1182,8 +1410,12 @@ class MainActivity : AppCompatActivity() {
             return "cpu"
         } finally {
             if (dpy != android.opengl.EGL14.EGL_NO_DISPLAY) {
-                android.opengl.EGL14.eglMakeCurrent(dpy, android.opengl.EGL14.EGL_NO_SURFACE,
-                    android.opengl.EGL14.EGL_NO_SURFACE, android.opengl.EGL14.EGL_NO_CONTEXT)
+                android.opengl.EGL14.eglMakeCurrent(
+                    dpy,
+                    android.opengl.EGL14.EGL_NO_SURFACE,
+                    android.opengl.EGL14.EGL_NO_SURFACE,
+                    android.opengl.EGL14.EGL_NO_CONTEXT,
+                )
                 if (surf != android.opengl.EGL14.EGL_NO_SURFACE) android.opengl.EGL14.eglDestroySurface(dpy, surf)
                 if (ctx != android.opengl.EGL14.EGL_NO_CONTEXT) android.opengl.EGL14.eglDestroyContext(dpy, ctx)
                 android.opengl.EGL14.eglTerminate(dpy)
@@ -1200,11 +1432,20 @@ class MainActivity : AppCompatActivity() {
      */
     private fun startAutoGpuWatchdog() {
         thread(name = "auto-gpu-watchdog", isDaemon = true) {
-            val successFrames = 3L                 // a few real presents prove activation (not a one-frame fluke)
-            val deadlineMs = System.currentTimeMillis() + 240_000L   // generous: cold JVM boot + cache + Zone shader compile
+            val successFrames = 3L // a few real presents prove activation (not a one-frame fluke)
+            val deadlineMs = System.currentTimeMillis() + 240_000L // generous: cold JVM boot + cache + Zone shader compile
             while (System.currentTimeMillis() < deadlineMs) {
-                try { Thread.sleep(1000) } catch (e: InterruptedException) { return@thread }
-                val frames = try { JvmLauncher.nativeGpuFramesPresented() } catch (t: Throwable) { 0L }
+                try {
+                    Thread.sleep(1000)
+                } catch (e: InterruptedException) {
+                    return@thread
+                }
+                val frames =
+                    try {
+                        JvmLauncher.nativeGpuFramesPresented()
+                    } catch (t: Throwable) {
+                        0L
+                    }
                 if (frames >= successFrames) {
                     runCatching { File(filesDir, "auto-gpu-armed").delete() }
                     Log.i(TAG, "auto-GPU: renderer presenting ($frames frames) -> committed; crash-cookie cleared")
@@ -1243,10 +1484,12 @@ class MainActivity : AppCompatActivity() {
 
     /** Log out is destructive (drops the Jagex session + kills the process) — confirm before doing it. */
     private fun confirmLogout() {
-        AlertDialog.Builder(this)
+        AlertDialog
+            .Builder(this)
             .setTitle("Log out")
-            .setMessage("Forget this Jagex session? Deletes the saved login (tokens.json) and web cookies, then restarts to the sign-in screen.")
-            .setPositiveButton("Log out") { _, _ -> doLogout() }
+            .setMessage(
+                "Forget this Jagex session? Deletes the saved login (tokens.json) and web cookies, then restarts to the sign-in screen.",
+            ).setPositiveButton("Log out") { _, _ -> doLogout() }
             .setNegativeButton("Cancel", null)
             .show()
     }
@@ -1289,7 +1532,10 @@ class MainActivity : AppCompatActivity() {
      *  background thread; the Toast hops back to the UI thread. No shared-Java change — the getter already exists.
      *  Note: getFramePixels is the CPU path only — under live GPU/117HD present the frame isn't published here. */
     private fun saveScreenshot() {
-        if (!booted.get()) { Toast.makeText(this, "No frame yet", Toast.LENGTH_SHORT).show(); return }
+        if (!booted.get()) {
+            Toast.makeText(this, "No frame yet", Toast.LENGTH_SHORT).show()
+            return
+        }
         JvmLauncher.onBridge {
             val px = JvmLauncher.framePixels()
             val w = JvmLauncher.frameWidth()
@@ -1303,14 +1549,16 @@ class MainActivity : AppCompatActivity() {
             // Source is 0x00RRGGBB (alpha unset). Force opaque; channel order already matches Android's ARGB int
             // (0xAARRGGBB) — NO R<->B swizzle here (unlike the SurfaceView blit, which swizzles for RGBA_8888).
             for (i in px.indices) px[i] = px[i] or 0xFF000000.toInt()
-            val savedUri = try {
-                val bmp = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
-                val u = writePngToGallery(bmp)
-                bmp.recycle()
-                u
-            } catch (t: Throwable) {
-                Log.w(TAG, "screenshot: encode/save failed", t); null
-            }
+            val savedUri =
+                try {
+                    val bmp = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
+                    val u = writePngToGallery(bmp)
+                    bmp.recycle()
+                    u
+                } catch (t: Throwable) {
+                    Log.w(TAG, "screenshot: encode/save failed", t)
+                    null
+                }
             runOnUiThread {
                 if (savedUri != null) {
                     Toast.makeText(this, "Screenshot saved to Pictures/RuneLite", Toast.LENGTH_SHORT).show()
@@ -1319,11 +1567,12 @@ class MainActivity : AppCompatActivity() {
                     // content:// Uri is directly shareable (no FileProvider needed); dismissing the chooser just leaves
                     // the saved gallery copy. (Capture itself is still CPU-path only — the GPU/117HD readback is ENH-A05a.)
                     runCatching {
-                        val share = Intent(Intent.ACTION_SEND).apply {
-                            type = "image/png"
-                            putExtra(Intent.EXTRA_STREAM, savedUri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
+                        val share =
+                            Intent(Intent.ACTION_SEND).apply {
+                                type = "image/png"
+                                putExtra(Intent.EXTRA_STREAM, savedUri)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
                         startActivity(Intent.createChooser(share, "Share screenshot"))
                     }
                 } else {
@@ -1340,14 +1589,15 @@ class MainActivity : AppCompatActivity() {
     private fun writePngToGallery(bmp: Bitmap): android.net.Uri? {
         val name = "RuneLite_${System.currentTimeMillis()}.png"
         val resolver = contentResolver
-        val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, name)
-            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/RuneLite")
-                put(MediaStore.Images.Media.IS_PENDING, 1)
+        val values =
+            ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/RuneLite")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
             }
-        }
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null
         return try {
             resolver.openOutputStream(uri)?.use { out ->
@@ -1361,7 +1611,7 @@ class MainActivity : AppCompatActivity() {
             Log.i(TAG, "screenshot: saved $name -> $uri")
             uri
         } catch (t: Throwable) {
-            resolver.delete(uri, null, null)   // roll back the half-written/pending row
+            resolver.delete(uri, null, null) // roll back the half-written/pending row
             Log.w(TAG, "screenshot: write failed", t)
             null
         }
@@ -1374,6 +1624,7 @@ class MainActivity : AppCompatActivity() {
         if (fw <= 0 || vw <= 0) return viewX.toInt()
         return (viewX * fw / vw).toInt().coerceIn(0, fw - 1)
     }
+
     private fun toGameY(viewY: Float): Int {
         val fh = JvmLauncher.frameHeight()
         val vh = surfaceView.height
@@ -1382,22 +1633,32 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun scaleX(px: Float): Int {
-        val fw = JvmLauncher.frameWidth(); val vw = surfaceView.width
+        val fw = JvmLauncher.frameWidth()
+        val vw = surfaceView.width
         return if (fw <= 0 || vw <= 0) px.toInt() else (px * fw / vw).toInt()
     }
+
     private fun scaleY(px: Float): Int {
-        val fh = JvmLauncher.frameHeight(); val vh = surfaceView.height
+        val fh = JvmLauncher.frameHeight()
+        val vh = surfaceView.height
         return if (fh <= 0 || vh <= 0) px.toInt() else (px * fh / vh).toInt()
     }
 
-    private class OrbHit(val name: String, val cx: Int, val cy: Int)
+    private class OrbHit(
+        val name: String,
+        val cx: Int,
+        val cy: Int,
+    )
 
     /** Minimap-orb veneer: given a tap in canvas px, return the live orb whose enlarged (ORB_TAP_PAD) bounds
      *  contain it — nearest centre wins when zones overlap — or null when the tap is clear of every orb. The
      *  per-orb bounds come from HudVeneerBridge.getOrbSnapshot, republished each frame + read lock-free. */
-    private fun nearestOrb(gx: Int, gy: Int): OrbHit? {
+    private fun nearestOrb(
+        gx: Int,
+        gy: Int,
+    ): OrbHit? {
         val json = JvmLauncher.orbSnapshotPub()
-        if (json.length < 16) return null   // "{\"loggedIn\":false}" or empty -> no orbs published
+        if (json.length < 16) return null // "{\"loggedIn\":false}" or empty -> no orbs published
         return try {
             val o = JSONObject(json)
             if (!o.optBoolean("loggedIn", false)) return null
@@ -1405,12 +1666,22 @@ class MainActivity : AppCompatActivity() {
             var bestD = Long.MAX_VALUE
             for (key in ORB_KEYS) {
                 val b = o.optJSONObject(key) ?: continue
-                val x = b.optInt("x"); val y = b.optInt("y"); val w = b.optInt("w"); val h = b.optInt("h")
+                val x = b.optInt("x")
+                val y = b.optInt("y")
+                val w = b.optInt("w")
+                val h = b.optInt("h")
                 if (gx < x - ORB_TAP_PAD || gx > x + w + ORB_TAP_PAD ||
-                    gy < y - ORB_TAP_PAD || gy > y + h + ORB_TAP_PAD) continue
-                val cx = x + w / 2; val cy = y + h / 2
+                    gy < y - ORB_TAP_PAD || gy > y + h + ORB_TAP_PAD
+                ) {
+                    continue
+                }
+                val cx = x + w / 2
+                val cy = y + h / 2
                 val d = (gx - cx).toLong() * (gx - cx) + (gy - cy).toLong() * (gy - cy)
-                if (d < bestD) { bestD = d; best = OrbHit(key, cx, cy) }
+                if (d < bestD) {
+                    bestD = d
+                    best = OrbHit(key, cx, cy)
+                }
             }
             best
         } catch (t: Throwable) {
@@ -1422,8 +1693,12 @@ class MainActivity : AppCompatActivity() {
         override fun onDown(e: MotionEvent) = true
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            val gx = toGameX(e.x); val gy = toGameY(e.y)
-            Log.i(TAG, "tap screen=(${e.x},${e.y}) view=(${surfaceView.width}x${surfaceView.height}) frame=(${JvmLauncher.frameWidth()}x${JvmLauncher.frameHeight()}) -> game=($gx,$gy)")
+            val gx = toGameX(e.x)
+            val gy = toGameY(e.y)
+            Log.i(
+                TAG,
+                "tap screen=(${e.x},${e.y}) view=(${surfaceView.width}x${surfaceView.height}) frame=(${JvmLauncher.frameWidth()}x${JvmLauncher.frameHeight()}) -> game=($gx,$gy)",
+            )
             // Phase-5: while the world map is open it owns the ENTIRE screen (stretched fullscreen). EVERY tap is
             // a PRECISE engine click — the engine resolves the close X / zoom / search / POI / legend row directly,
             // and the world walk/interact ring stays suppressed. Crucially this also SWALLOWS taps on the map
@@ -1465,7 +1740,8 @@ class MainActivity : AppCompatActivity() {
             // interactTapSeq stays the haptic source.
             ringBaseSeq = JvmLauncher.interactTapSeq()
             ringKindBaseSeq = JvmLauncher.tapKindSeq()
-            ringX = e.x; ringY = e.y
+            ringX = e.x
+            ringY = e.y
             ringArmedAtMs = SystemClock.uptimeMillis()
             ringPending = true
             JvmLauncher.click(gx, gy, 1)
@@ -1478,7 +1754,12 @@ class MainActivity : AppCompatActivity() {
             beginMenuPeek(e.x, e.y)
         }
 
-        override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
+        override fun onScroll(
+            e1: MotionEvent?,
+            e2: MotionEvent,
+            distanceX: Float,
+            distanceY: Float,
+        ): Boolean {
             // One finger = camera rotate; two fingers / an active pinch = zoom (handled by ScaleListener).
             if (pinchActive || scaleGestures.isInProgress || e2.pointerCount > 1) {
                 return false
@@ -1488,7 +1769,8 @@ class MainActivity : AppCompatActivity() {
             // anywhere else = rotate the camera.
             if (!cameraGestureActive && !chatScrolling && !mapPanning && !mapScrolling && !itemDragging) {
                 if (mapOpen && e1 != null) {
-                    val gx = toGameX(e1.x); val gy = toGameY(e1.y)
+                    val gx = toGameX(e1.x)
+                    val gy = toGameY(e1.y)
                     // A scrollable sub-panel (surface MAPLIST dropdown / KEY legend) takes priority over map pan —
                     // a swipe there scrolls its list, not the map.
                     if (inCanvasRect(mapMaplistCanvas, gx, gy) || inCanvasRect(mapKeyCanvas, gx, gy)) {
@@ -1497,14 +1779,16 @@ class MainActivity : AppCompatActivity() {
                         Log.i(TAG, "p5: map panel scroll begin game=($gx,$gy)")
                     } else if (inCanvasRect(mapRectCanvas, gx, gy)) {
                         mapPanning = true
-                        mapPanAccumX = 0f; mapPanAccumY = 0f
+                        mapPanAccumX = 0f
+                        mapPanAccumY = 0f
                         Log.i(TAG, "p5: map pan begin")
                     }
                 }
                 if (!mapPanning && !mapScrolling) {
                     val r = chatRectCanvas
                     if (r != null && e1 != null && !mapOpen) {
-                        val gx = toGameX(e1.x); val gy = toGameY(e1.y)
+                        val gx = toGameX(e1.x)
+                        val gy = toGameY(e1.y)
                         if (gx >= r[0] && gx < r[0] + r[2] && gy >= r[1] && gy < r[1] + r[3]) {
                             chatScrolling = true
                             chatScrollAccum = 0f
@@ -1518,14 +1802,16 @@ class MainActivity : AppCompatActivity() {
                         // the identical MOUSE_PRESSED->DRAGGED->RELEASED stream, so one branch covers them.
                         val sx = if (e1 != null) toGameX(e1.x) else -1
                         val sy = if (e1 != null) toGameY(e1.y) else -1
-                        val inDraggablePane = !mapOpen && e1 != null
-                            && (inCanvasRect(invRectCanvas, sx, sy) || reorderRectsCanvas.any { inCanvasRect(it, sx, sy) })
+                        val inDraggablePane =
+                            !mapOpen && e1 != null &&
+                                (inCanvasRect(invRectCanvas, sx, sy) || reorderRectsCanvas.any { inCanvasRect(it, sx, sy) })
                         if (inDraggablePane) {
                             itemDragging = true
-                            itemDragLastX = sx; itemDragLastY = sy
+                            itemDragLastX = sx
+                            itemDragLastY = sy
                             // onTouch(0) primes focus + MOVED + PRESSED on the slot — no clearHover (that would
                             // park the cursor off-canvas; iOS doesn't either).
-                            JvmLauncher.touch(0, sx, sy, 1)   // MOUSE_PRESSED on the source widget
+                            JvmLauncher.touch(0, sx, sy, 1) // MOUSE_PRESSED on the source widget
                             Log.i(TAG, "drag-1: widget drag begin game=($sx,$sy)")
                         } else {
                             cameraGestureActive = true
@@ -1537,16 +1823,18 @@ class MainActivity : AppCompatActivity() {
             if (itemDragging) {
                 // Stream the WidgetDrag at the finger's current canvas point (one per frame is fine); cache the
                 // last valid point so the release always lands somewhere sensible (no stuck held item).
-                val gx = toGameX(e2.x); val gy = toGameY(e2.y)
-                itemDragLastX = gx; itemDragLastY = gy
-                JvmLauncher.touch(1, gx, gy, 1)   // MOUSE_DRAGGED
+                val gx = toGameX(e2.x)
+                val gy = toGameY(e2.y)
+                itemDragLastX = gx
+                itemDragLastY = gy
+                JvmLauncher.touch(1, gx, gy, 1) // MOUSE_DRAGGED
                 return true
             }
             if (mapScrolling) {
                 // Scroll the legend / surface-dropdown list (content follows the finger), sub-px accumulated.
                 val vh = surfaceView.height
                 val ky = if (canvasH > 0 && vh > 0) canvasH.toFloat() / vh else 1f
-                mapScrollAccum += distanceY * ky   // finger up (distanceY>0) -> reveal lower entries
+                mapScrollAccum += distanceY * ky // finger up (distanceY>0) -> reveal lower entries
                 val whole = mapScrollAccum.toInt()
                 if (whole != 0) {
                     mapScrollAccum -= whole
@@ -1559,14 +1847,17 @@ class MainActivity : AppCompatActivity() {
                 // (plain 1:1 barely moves once the map is magnified to fullscreen). Sub-px accumulated so slow
                 // drags don't quantize to zero (the iOS lesson); the shared tick converts to tiles via live zoom.
                 // canvasW/H (boot-set) is the reliable canvas size — frameWidth/Height can read 0.
-                val vw = surfaceView.width; val vh = surfaceView.height
+                val vw = surfaceView.width
+                val vh = surfaceView.height
                 val kx = if (canvasW > 0 && vw > 0) canvasW.toFloat() / vw else 1f
                 val ky = if (canvasH > 0 && vh > 0) canvasH.toFloat() / vh else 1f
                 mapPanAccumX += -distanceX * kx * MAP_PAN_SPEED
                 mapPanAccumY += -distanceY * ky * MAP_PAN_SPEED
-                val wx = mapPanAccumX.toInt(); val wy = mapPanAccumY.toInt()
+                val wx = mapPanAccumX.toInt()
+                val wy = mapPanAccumY.toInt()
                 if (wx != 0 || wy != 0) {
-                    mapPanAccumX -= wx; mapPanAccumY -= wy
+                    mapPanAccumX -= wx
+                    mapPanAccumY -= wy
                     JvmLauncher.onBridgeTouch { JvmLauncher.panWorldMap(wx, wy) }
                 }
                 return true
@@ -1575,7 +1866,8 @@ class MainActivity : AppCompatActivity() {
                 // Content follows the finger: finger dy = -distanceY, scaled to canvas px and accumulated so
                 // sub-pixel drags aren't lost; whole px go to the chat's own scroll layer with the same
                 // direction mapping as iOS (kChatScrollDir = -1, i.e. send -dy).
-                val fh = JvmLauncher.frameHeight(); val vh = surfaceView.height
+                val fh = JvmLauncher.frameHeight()
+                val vh = surfaceView.height
                 val k = if (fh > 0 && vh > 0) fh.toFloat() / vh else 1f
                 chatScrollAccum += -distanceY * k
                 val whole = chatScrollAccum.toInt()
@@ -1636,7 +1928,9 @@ class MainActivity : AppCompatActivity() {
      * to the engine via onText and special keys via onKeyStroke (AWT virtual-key codes). NO_SUGGESTIONS keeps
      * most IMEs on commitText rather than composing, which keeps the mapping 1:1.
      */
-    private inner class GameInputView(context: Context) : View(context) {
+    private inner class GameInputView(
+        context: Context,
+    ) : View(context) {
         init {
             isFocusable = true
             isFocusableInTouchMode = true
@@ -1649,7 +1943,10 @@ class MainActivity : AppCompatActivity() {
             outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or
                 EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_DONE
             return object : BaseInputConnection(this, false) {
-                override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                override fun commitText(
+                    text: CharSequence?,
+                    newCursorPosition: Int,
+                ): Boolean {
                     val s = text?.toString().orEmpty()
                     if (s.isNotEmpty()) {
                         JvmLauncher.text(s)
@@ -1657,7 +1954,10 @@ class MainActivity : AppCompatActivity() {
                     return true
                 }
 
-                override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                override fun deleteSurroundingText(
+                    beforeLength: Int,
+                    afterLength: Int,
+                ): Boolean {
                     repeat(beforeLength.coerceAtLeast(0)) { JvmLauncher.keyStroke(VK_BACK_SPACE) }
                     return true
                 }
@@ -1665,12 +1965,30 @@ class MainActivity : AppCompatActivity() {
                 override fun sendKeyEvent(event: KeyEvent): Boolean {
                     if (event.action == KeyEvent.ACTION_DOWN) {
                         when (event.keyCode) {
-                            KeyEvent.KEYCODE_DEL -> JvmLauncher.keyStroke(VK_BACK_SPACE)
-                            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> JvmLauncher.keyStroke(VK_ENTER)
-                            KeyEvent.KEYCODE_DPAD_LEFT -> JvmLauncher.keyStroke(VK_LEFT)
-                            KeyEvent.KEYCODE_DPAD_RIGHT -> JvmLauncher.keyStroke(VK_RIGHT)
-                            KeyEvent.KEYCODE_DPAD_UP -> JvmLauncher.keyStroke(VK_UP)
-                            KeyEvent.KEYCODE_DPAD_DOWN -> JvmLauncher.keyStroke(VK_DOWN)
+                            KeyEvent.KEYCODE_DEL -> {
+                                JvmLauncher.keyStroke(VK_BACK_SPACE)
+                            }
+
+                            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                                JvmLauncher.keyStroke(VK_ENTER)
+                            }
+
+                            KeyEvent.KEYCODE_DPAD_LEFT -> {
+                                JvmLauncher.keyStroke(VK_LEFT)
+                            }
+
+                            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                JvmLauncher.keyStroke(VK_RIGHT)
+                            }
+
+                            KeyEvent.KEYCODE_DPAD_UP -> {
+                                JvmLauncher.keyStroke(VK_UP)
+                            }
+
+                            KeyEvent.KEYCODE_DPAD_DOWN -> {
+                                JvmLauncher.keyStroke(VK_DOWN)
+                            }
+
                             else -> {
                                 val u = event.unicodeChar
                                 if (u != 0) JvmLauncher.text(u.toChar().toString())
@@ -1702,52 +2020,71 @@ class MainActivity : AppCompatActivity() {
         val row = hotkeyRow ?: return
         val strip = hotkeyStrip ?: return
         row.removeAllViews()
-        val active = getSharedPreferences(PREFS_HOTKEYS, Context.MODE_PRIVATE)
-            .getStringSet(PREF_HOTKEYS_ACTIVE, emptySet()) ?: emptySet()
+        val active =
+            getSharedPreferences(PREFS_HOTKEYS, Context.MODE_PRIVATE)
+                .getStringSet(PREF_HOTKEYS_ACTIVE, emptySet()) ?: emptySet()
         val pad = (12 * resources.displayMetrics.density).toInt()
         for (entry in active.sorted()) {
             val parts = entry.split('')
             if (parts.size < 2) continue
-            val group = parts[0]; val key = parts[1]
+            val group = parts[0]
+            val key = parts[1]
             val label = parts.getOrNull(2).orEmpty().ifEmpty { key }
-            val short = label.substringAfter(": ", label)   // "<Plugin>: <action>" -> "<action>"
-            val btn = Button(this).apply {
-                text = short
-                textSize = 12f
-                isAllCaps = false
-                isFocusable = false
-                minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
-                setPadding(pad, pad / 3, pad, pad / 3)
-                setTextColor(0xFFFFFFFF.toInt())
-                background = android.graphics.drawable.GradientDrawable().apply {
-                    cornerRadius = 12f
-                    setColor(0xCC1E1E1E.toInt())
-                    setStroke((1 * resources.displayMetrics.density).toInt(), 0x55FFFFFF)
-                }
-                setOnClickListener {
-                    // Bug 4: the WorldHopper quick-hop keybinds (worldhopper/nextKey,previousKey) fire the plugin's
-                    // in-game hop, which is inert headless (client.hopToWorld never moves the world). Route them
-                    // through the relog path instead — the same fix the World Switcher screen's Next/Prev use — so
-                    // the HUD quick-hop hotkey actually hops. Every other hotkey still fires its real keybind.
-                    val quickHop = group == WORLDHOPPER_GROUP &&
-                        (key == WORLDHOPPER_NEXT_KEY || key == WORLDHOPPER_PREV_KEY)
-                    val prev = key == WORLDHOPPER_PREV_KEY
-                    // ENH-B06: a quick-hop is a relog under the hood — cover its ~8 s login flash with the
-                    // "Hopping…" scrim (the target world isn't known from a direction-hop, so use a generic label).
-                    if (quickHop) armHopScrim("Switching worlds…")
-                    JvmLauncher.onBridgeTouch {
-                        if (quickHop) JvmLauncher.worldHopDirection(prev)
-                        else JvmLauncher.fireHotkey(group, key)
+            val short = label.substringAfter(": ", label) // "<Plugin>: <action>" -> "<action>"
+            val btn =
+                Button(this).apply {
+                    text = short
+                    textSize = 12f
+                    isAllCaps = false
+                    isFocusable = false
+                    minWidth = 0
+                    minimumWidth = 0
+                    minHeight = 0
+                    minimumHeight = 0
+                    setPadding(pad, pad / 3, pad, pad / 3)
+                    setTextColor(0xFFFFFFFF.toInt())
+                    background =
+                        android.graphics.drawable.GradientDrawable().apply {
+                            cornerRadius = 12f
+                            setColor(0xCC1E1E1E.toInt())
+                            setStroke((1 * resources.displayMetrics.density).toInt(), 0x55FFFFFF)
+                        }
+                    setOnClickListener {
+                        // Bug 4: the WorldHopper quick-hop keybinds (worldhopper/nextKey,previousKey) fire the plugin's
+                        // in-game hop, which is inert headless (client.hopToWorld never moves the world). Route them
+                        // through the relog path instead — the same fix the World Switcher screen's Next/Prev use — so
+                        // the HUD quick-hop hotkey actually hops. Every other hotkey still fires its real keybind.
+                        val quickHop =
+                            group == WORLDHOPPER_GROUP &&
+                                (key == WORLDHOPPER_NEXT_KEY || key == WORLDHOPPER_PREV_KEY)
+                        val prev = key == WORLDHOPPER_PREV_KEY
+                        // ENH-B06: a quick-hop is a relog under the hood — cover its ~8 s login flash with the
+                        // "Hopping…" scrim (the target world isn't known from a direction-hop, so use a generic label).
+                        if (quickHop) armHopScrim("Switching worlds…")
+                        JvmLauncher.onBridgeTouch {
+                            if (quickHop) {
+                                JvmLauncher.worldHopDirection(prev)
+                            } else {
+                                JvmLauncher.fireHotkey(group, key)
+                            }
+                        }
+                        vibrateTick()
+                        Log.i(
+                            TAG,
+                            if (quickHop) {
+                                "hotkey: quick-hop ${if (prev) "prev" else "next"} via relog ($short)"
+                            } else {
+                                "hotkey: fire $group/$key ($short)"
+                            },
+                        )
                     }
-                    vibrateTick()
-                    Log.i(TAG, if (quickHop) "hotkey: quick-hop ${if (prev) "prev" else "next"} via relog ($short)"
-                               else "hotkey: fire $group/$key ($short)")
                 }
-            }
-            row.addView(btn, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            row.addView(
+                btn,
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                     rightMargin = (6 * resources.displayMetrics.density).toInt()
-                })
+                },
+            )
         }
         strip.visibility = if (row.childCount > 0) View.VISIBLE else View.GONE
     }
@@ -1764,7 +2101,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) enterImmersive()   // re-assert after a dialog / keyboard transiently revealed the bars
+        if (hasFocus) enterImmersive() // re-assert after a dialog / keyboard transiently revealed the bars
     }
 
     // ---- On-screen overlay-layout editor -----------------------------------------------------------------
@@ -1775,7 +2112,7 @@ class MainActivity : AppCompatActivity() {
         overlayEditMode = true
         overlayEditView.setBoxes(emptyList())
         overlayEditView.visibility = View.VISIBLE
-        JvmLauncher.onBridge { JvmLauncher.overlaySetUiOpen(true) }   // start the bounds snapshot refresh
+        JvmLauncher.onBridge { JvmLauncher.overlaySetUiOpen(true) } // start the bounds snapshot refresh
         startOverlayPoll()
         Log.i(TAG, "overlay-edit: entered")
     }
@@ -1783,46 +2120,65 @@ class MainActivity : AppCompatActivity() {
     private fun exitOverlayEditMode() {
         if (!overlayEditMode) return
         overlayEditMode = false
-        overlayPollThread?.interrupt(); overlayPollThread = null
+        overlayPollThread?.interrupt()
+        overlayPollThread = null
         overlayEditView.visibility = View.GONE
-        JvmLauncher.onBridge { JvmLauncher.overlaySetUiOpen(false); JvmLauncher.flushConfig() }
+        JvmLauncher.onBridge {
+            JvmLauncher.overlaySetUiOpen(false)
+            JvmLauncher.flushConfig()
+        }
         Log.i(TAG, "overlay-edit: exited")
     }
 
     /** Background poll of the published overlay bounds (off the UI thread) feeding the editor view ~2.5 Hz. */
     private fun startOverlayPoll() {
         overlayPollThread?.interrupt()
-        overlayPollThread = Thread {
-            try {
-                while (overlayEditMode && !Thread.currentThread().isInterrupted) {
-                    val json = try { JvmLauncher.onBridge { JvmLauncher.overlaysJson() }.get() } catch (t: Throwable) { null }
-                    if (json != null) {
-                        val boxes = parseOverlayBoxes(json)
-                        runOnUiThread { if (overlayEditMode) overlayEditView.setBoxes(boxes) }
+        overlayPollThread =
+            Thread {
+                try {
+                    while (overlayEditMode && !Thread.currentThread().isInterrupted) {
+                        val json =
+                            try {
+                                JvmLauncher.onBridge { JvmLauncher.overlaysJson() }.get()
+                            } catch (t: Throwable) {
+                                null
+                            }
+                        if (json != null) {
+                            val boxes = parseOverlayBoxes(json)
+                            runOnUiThread { if (overlayEditMode) overlayEditView.setBoxes(boxes) }
+                        }
+                        Thread.sleep(400)
                     }
-                    Thread.sleep(400)
+                } catch (ie: InterruptedException) {
+                    // exit cleanly
                 }
-            } catch (ie: InterruptedException) {
-                // exit cleanly
+            }.also {
+                it.isDaemon = true
+                it.start()
             }
-        }.also { it.isDaemon = true; it.start() }
     }
 
-    private fun parseOverlayBoxes(json: String): List<OverlayEditView.Box> = try {
-        val o = JSONObject(json)
-        if (!o.optBoolean("available", false)) emptyList()
-        else {
-            val arr = o.optJSONArray("overlays") ?: return emptyList()
-            (0 until arr.length()).mapNotNull { i ->
-                val ov = arr.getJSONObject(i)
-                if (!ov.optBoolean("movable")) return@mapNotNull null
-                val b = ov.optJSONArray("bounds") ?: return@mapNotNull null
-                val w = b.optInt(2); val h = b.optInt(3)
-                if (w <= 0 || h <= 0) return@mapNotNull null
-                OverlayEditView.Box(ov.optString("name", "?"), b.optInt(0), b.optInt(1), w, h)
+    private fun parseOverlayBoxes(json: String): List<OverlayEditView.Box> =
+        try {
+            val o = JSONObject(json)
+            if (!o.optBoolean("available", false)) {
+                emptyList()
+            } else {
+                val arr = o.optJSONArray("overlays") ?: return emptyList()
+                (0 until arr.length()).mapNotNull { i ->
+                    val ov = arr.getJSONObject(i)
+                    if (!ov.optBoolean("movable")) return@mapNotNull null
+                    val b = ov.optJSONArray("bounds") ?: return@mapNotNull null
+                    val w = b.optInt(2)
+                    val h = b.optInt(3)
+                    if (w <= 0 || h <= 0) return@mapNotNull null
+                    OverlayEditView.Box(ov.optString("name", "?"), b.optInt(0), b.optInt(1), w, h)
+                }
             }
+        } catch (t: Throwable) {
+            Log.e(TAG, "overlay-edit parse: $t")
+            emptyList()
         }
-    } catch (t: Throwable) { Log.e(TAG, "overlay-edit parse: $t"); emptyList() }
 
     /**
      * Per-frame poll of the engine read-surface: auto-raise/dismiss the soft keyboard when a text field gains/
@@ -1830,93 +2186,102 @@ class MainActivity : AppCompatActivity() {
      * tracks the display refresh without a dedicated thread.
      */
     private fun startInputPolling() {
-        val cb = object : Choreographer.FrameCallback {
-            override fun doFrame(frameTimeNanos: Long) {
-                // Compare against the ACTUAL IME visibility, not just our last request (the system can dismiss
-                // the keyboard behind our back). API<30 falls back to the cached flag (no ime() inset type).
-                val imeShown = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    surfaceView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) ?: keyboardShown
-                } else {
-                    keyboardShown
-                }
-                if (textActivePanel) {
-                    // FIX-11: a rendered Swing panel's text field is focused; its native Compose mirror field
-                    // (PanelView) owns the soft keyboard. Don't touch the IME here — raising GameInputView would
-                    // steal focus from the mirror, and dismissing would kill the keyboard the mirror just raised.
-                    imeWasShown = imeShown
-                } else {
-                    // The keyboard was up and just went down while one of OUR latches still wanted it: that's the
-                    // user closing it (the soft-keyboard ▽ / back). Respect it — drop the latches so we don't
-                    // immediately re-raise (the old "sticky" behavior fought the close button). Edge-triggered off
-                    // the OBSERVED visibility, so the raise animation's transient !imeShown doesn't misfire. An
-                    // engine text field (isTextInputOpen) is NOT a latch we clear here — if the engine truly has a
-                    // field focused it re-raises next frame, which is correct.
-                    if (imeWasShown && !imeShown && (manualKeyboard || mapSearchKeyboard)) {
-                        manualKeyboard = false
-                        mapSearchKeyboard = false
-                        keyboardToggleBtn?.alpha = 0.7f
-                        Log.i(TAG, "a1: user dismissed IME -> clear keyboard latches")
-                    }
-                    imeWasShown = imeShown
-                    val want = manualKeyboard || mapSearchKeyboard || JvmLauncher.isTextInputOpen()
-                    if (want != imeShown) {
-                        if (want != keyboardShown) {
-                            keyboardShown = want
-                            Log.i(TAG, "a1: textInputOpen/manual=$want -> ${if (want) "raise" else "dismiss"} soft keyboard")
-                        }
-                        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                        if (want) {
-                            keyboardView.requestFocus()
-                            imm.showSoftInput(keyboardView, InputMethodManager.SHOW_IMPLICIT)
+        val cb =
+            object : Choreographer.FrameCallback {
+                override fun doFrame(frameTimeNanos: Long) {
+                    // Compare against the ACTUAL IME visibility, not just our last request (the system can dismiss
+                    // the keyboard behind our back). API<30 falls back to the cached flag (no ime() inset type).
+                    val imeShown =
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            surfaceView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) ?: keyboardShown
                         } else {
-                            imm.hideSoftInputFromWindow(keyboardView.windowToken, 0)
+                            keyboardShown
                         }
-                    } else if (want != keyboardShown) {
-                        keyboardShown = want   // converged without a request (e.g. user-raised IME matches want)
-                    }
-                }
-                val seq = JvmLauncher.interactTapSeq()
-                if (seq != lastTapSeq) {
-                    lastTapSeq = seq
-                    Log.i(TAG, "a1: interactTapSeq -> $seq (haptic)")
-                    vibrateTick()
-                }
-                // Phase-1 tap feedback, resolved from ENGINE TRUTH (tap-kind seq advanced past the tap-time
-                // baseline). Ring ONLY for a real scene tap — SCENE → red, WALK → yellow; a WIDGET op draws a
-                // selection border (no ring); a dead/cancel click shows nothing. So clicks that aren't "in the
-                // game" never paint a ring. The grace covers the settle pipeline (~80–160 ms); a tap that never
-                // resolves (rare — a force-opened menu) just clears with no feedback.
-                if (ringPending) {
-                    val kseq = JvmLauncher.tapKindSeq()
-                    if (kseq != ringKindBaseSeq) {
-                        ringPending = false
-                        when (JvmLauncher.lastTapKind()) {
-                            TAP_KIND_SCENE -> {
-                                Log.i(TAG, "p1: ring INTERACT (+${SystemClock.uptimeMillis() - ringArmedAtMs}ms)")
-                                tapRing.spawn(ringX, ringY, TapRingView.COLOR_INTERACT)
-                            }
-                            TAP_KIND_WALK -> {
-                                Log.i(TAG, "p1: ring WALK")
-                                tapRing.spawn(ringX, ringY, TapRingView.COLOR_WALK)
-                            }
-                            // An interface op: no ring. An item op is outlined by the engine itself (the cyan
-                            // item silhouette, armed in JavaBridge) — nothing for the shell to draw.
-                            TAP_KIND_WIDGET -> Log.i(TAG, "p1: widget op -> no ring (engine outlines items)")
-                            else -> Log.i(TAG, "p1: tap hit nothing -> no feedback")
+                    if (textActivePanel) {
+                        // FIX-11: a rendered Swing panel's text field is focused; its native Compose mirror field
+                        // (PanelView) owns the soft keyboard. Don't touch the IME here — raising GameInputView would
+                        // steal focus from the mirror, and dismissing would kill the keyboard the mirror just raised.
+                        imeWasShown = imeShown
+                    } else {
+                        // The keyboard was up and just went down while one of OUR latches still wanted it: that's the
+                        // user closing it (the soft-keyboard ▽ / back). Respect it — drop the latches so we don't
+                        // immediately re-raise (the old "sticky" behavior fought the close button). Edge-triggered off
+                        // the OBSERVED visibility, so the raise animation's transient !imeShown doesn't misfire. An
+                        // engine text field (isTextInputOpen) is NOT a latch we clear here — if the engine truly has a
+                        // field focused it re-raises next frame, which is correct.
+                        if (imeWasShown && !imeShown && (manualKeyboard || mapSearchKeyboard)) {
+                            manualKeyboard = false
+                            mapSearchKeyboard = false
+                            keyboardToggleBtn?.alpha = 0.7f
+                            Log.i(TAG, "a1: user dismissed IME -> clear keyboard latches")
                         }
-                    } else if (SystemClock.uptimeMillis() - ringArmedAtMs > RING_GRACE_MS) {
-                        ringPending = false   // unresolved (e.g. the click force-opened a menu) — no stray ring
+                        imeWasShown = imeShown
+                        val want = manualKeyboard || mapSearchKeyboard || JvmLauncher.isTextInputOpen()
+                        if (want != imeShown) {
+                            if (want != keyboardShown) {
+                                keyboardShown = want
+                                Log.i(TAG, "a1: textInputOpen/manual=$want -> ${if (want) "raise" else "dismiss"} soft keyboard")
+                            }
+                            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                            if (want) {
+                                keyboardView.requestFocus()
+                                imm.showSoftInput(keyboardView, InputMethodManager.SHOW_IMPLICIT)
+                            } else {
+                                imm.hideSoftInputFromWindow(keyboardView.windowToken, 0)
+                            }
+                        } else if (want != keyboardShown) {
+                            keyboardShown = want // converged without a request (e.g. user-raised IME matches want)
+                        }
                     }
+                    val seq = JvmLauncher.interactTapSeq()
+                    if (seq != lastTapSeq) {
+                        lastTapSeq = seq
+                        Log.i(TAG, "a1: interactTapSeq -> $seq (haptic)")
+                        vibrateTick()
+                    }
+                    // Phase-1 tap feedback, resolved from ENGINE TRUTH (tap-kind seq advanced past the tap-time
+                    // baseline). Ring ONLY for a real scene tap — SCENE → red, WALK → yellow; a WIDGET op draws a
+                    // selection border (no ring); a dead/cancel click shows nothing. So clicks that aren't "in the
+                    // game" never paint a ring. The grace covers the settle pipeline (~80–160 ms); a tap that never
+                    // resolves (rare — a force-opened menu) just clears with no feedback.
+                    if (ringPending) {
+                        val kseq = JvmLauncher.tapKindSeq()
+                        if (kseq != ringKindBaseSeq) {
+                            ringPending = false
+                            when (JvmLauncher.lastTapKind()) {
+                                TAP_KIND_SCENE -> {
+                                    Log.i(TAG, "p1: ring INTERACT (+${SystemClock.uptimeMillis() - ringArmedAtMs}ms)")
+                                    tapRing.spawn(ringX, ringY, TapRingView.COLOR_INTERACT)
+                                }
+
+                                TAP_KIND_WALK -> {
+                                    Log.i(TAG, "p1: ring WALK")
+                                    tapRing.spawn(ringX, ringY, TapRingView.COLOR_WALK)
+                                }
+
+                                // An interface op: no ring. An item op is outlined by the engine itself (the cyan
+                                // item silhouette, armed in JavaBridge) — nothing for the shell to draw.
+                                TAP_KIND_WIDGET -> {
+                                    Log.i(TAG, "p1: widget op -> no ring (engine outlines items)")
+                                }
+
+                                else -> {
+                                    Log.i(TAG, "p1: tap hit nothing -> no feedback")
+                                }
+                            }
+                        } else if (SystemClock.uptimeMillis() - ringArmedAtMs > RING_GRACE_MS) {
+                            ringPending = false // unresolved (e.g. the click force-opened a menu) — no stray ring
+                        }
+                    }
+                    if (menuBuilding) {
+                        tryBuildNativeMenu()
+                    }
+                    updateChrome()
+                    applyOverlayInsets()
+                    updateWorldMap()
+                    Choreographer.getInstance().postFrameCallback(this)
                 }
-                if (menuBuilding) {
-                    tryBuildNativeMenu()
-                }
-                updateChrome()
-                applyOverlayInsets()
-                updateWorldMap()
-                Choreographer.getInstance().postFrameCallback(this)
             }
-        }
         frameCallback = cb
         Choreographer.getInstance().postFrameCallback(cb)
     }
@@ -1925,14 +2290,19 @@ class MainActivity : AppCompatActivity() {
     private fun setupNotifications() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            val ch = NotificationChannel(NOTIF_CHANNEL, "Game alerts", NotificationManager.IMPORTANCE_DEFAULT)
-                .apply { description = "In-game notifications (idle, level-up, etc.)" }
+            val ch =
+                NotificationChannel(NOTIF_CHANNEL, "Game alerts", NotificationManager.IMPORTANCE_DEFAULT)
+                    .apply { description = "In-game notifications (idle, level-up, etc.)" }
             mgr.createNotificationChannel(ch)
             // AP-2: a parallel SILENT channel. Android governs notification sound by channel on O+, so a
             // notification whose RuneLite sound is OFF (or volume 0) is routed here — it still shows in the shade
             // but makes no sound. Audible ones use the default channel above (the channel's own sound).
-            val chSilent = NotificationChannel(NOTIF_CHANNEL_SILENT, "Game alerts (silent)", NotificationManager.IMPORTANCE_LOW)
-                .apply { description = "In-game notifications with sound disabled"; setSound(null, null) }
+            val chSilent =
+                NotificationChannel(NOTIF_CHANNEL_SILENT, "Game alerts (silent)", NotificationManager.IMPORTANCE_LOW)
+                    .apply {
+                        description = "In-game notifications with sound disabled"
+                        setSound(null, null)
+                    }
             mgr.createNotificationChannel(chSilent)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -1968,7 +2338,11 @@ class MainActivity : AppCompatActivity() {
                 } catch (t: Throwable) {
                     Log.w(TAG, "rl-drain: ${t.message}")
                 }
-                try { Thread.sleep(300) } catch (e: InterruptedException) { break }
+                try {
+                    Thread.sleep(300)
+                } catch (e: InterruptedException) {
+                    break
+                }
             }
         }
     }
@@ -1982,8 +2356,13 @@ class MainActivity : AppCompatActivity() {
         val parts = payload.split('')
         val title: String
         val body: String
-        if (parts.size >= 2) { title = parts[0].ifEmpty { "RuneLite" }; body = parts[1] }
-        else { title = "RuneLite"; body = payload }   // legacy/no-separator payload
+        if (parts.size >= 2) {
+            title = parts[0].ifEmpty { "RuneLite" }
+            body = parts[1]
+        } else {
+            title = "RuneLite"
+            body = payload
+        } // legacy/no-separator payload
         val soundType = parts.getOrNull(2).orEmpty()
         val volume = parts.getOrNull(3)?.toIntOrNull() ?: -1
         val silent = soundType.equals("OFF", ignoreCase = true) || volume == 0
@@ -1996,24 +2375,30 @@ class MainActivity : AppCompatActivity() {
             return
         }
         // Tap reopens the game (single top — don't stack a second activity).
-        val openSelf = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        }
-        val pi = openSelf?.let {
-            android.app.PendingIntent.getActivity(
-                this, 0, it,
-                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
-            )
-        }
-        val n = NotificationCompat.Builder(this, channel)
-            .setSmallIcon(R.drawable.ic_stat_rune)
-            .setContentTitle(title.ifEmpty { "RuneMobile" })
-            .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-            .setAutoCancel(true)
-            .setSilent(silent)   // belt-and-suspenders for pre-O (no channels); the channel governs on O+
-            .apply { if (pi != null) setContentIntent(pi) }
-            .build()
+        val openSelf =
+            packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
+        val pi =
+            openSelf?.let {
+                android.app.PendingIntent.getActivity(
+                    this,
+                    0,
+                    it,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
+                )
+            }
+        val n =
+            NotificationCompat
+                .Builder(this, channel)
+                .setSmallIcon(R.drawable.ic_stat_rune)
+                .setContentTitle(title.ifEmpty { "RuneMobile" })
+                .setContentText(body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                .setAutoCancel(true)
+                .setSilent(silent) // belt-and-suspenders for pre-O (no channels); the channel governs on O+
+                .apply { if (pi != null) setContentIntent(pi) }
+                .build()
         try {
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(notifId++, n)
             Log.i(TAG, "ap2a: notification delivered title='$title' sound='$soundType' vol=$volume silent=$silent")
@@ -2032,7 +2417,11 @@ class MainActivity : AppCompatActivity() {
         }
         val uri = Uri.parse(url)
         try {
-            CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(this, uri)
+            CustomTabsIntent
+                .Builder()
+                .setShowTitle(true)
+                .build()
+                .launchUrl(this, uri)
             Log.i(TAG, "ap2a: link opened (custom tab) $url")
         } catch (t: Throwable) {
             try {
@@ -2044,7 +2433,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
+    /*
      * A6: drive the native 2-col tab grid each frame from the render-thread-published MobileChromeBridge snapshot
      * (lock-free, no HotSpot attach). The grid engages in the supported resizable layouts (logged in + PRE_EOC
      * Classic or OSRS_STRETCH modern); there it hides the engine stones (HudVeneerBridge.setStonesHidden) so the
@@ -2052,6 +2441,7 @@ class MainActivity : AppCompatActivity() {
      * grid. In any other layout (FIXED) it disengages — un-hides the engine stones + releases the side panel — so
      * the real HUD renders (the iOS LAYOUT GUARD). All bridge writes go through onBridge (off the UI thread).
      */
+
     /**
      * UX-DISCRETE-01 / ENH-B06: arm the "Hopping…" scrim. Called from BOTH world-hop trigger sites (the HUD
      * quick-hop hotkey and the World Switcher row/Prev/Next). Sets a bounded deadline; updateChrome shows the
@@ -2116,26 +2506,56 @@ class MainActivity : AppCompatActivity() {
         val inLoginTransitionSig = SystemClock.uptimeMillis() < loginTransitionUntilMs
         // Variable-length JSON blobs are length-prefixed (netstring framing) so no field content — including a
         // chat message that happens to contain '|' or ':' — can ever forge a colliding signature.
-        val sig = StringBuilder(json.length + chatSnap.length + dlgSnap.length + 96)
-            .append(json.length).append(':').append(json)
-            .append(chatSnap.length).append(':').append(chatSnap)
-            .append(dlgSnap.length).append(':').append(dlgSnap)
-            .append('|').append(chromeOverlay.railsShown)
-            .append('|').append(mapOpen)
-            .append('|').append(reconnectTestOverride)
-            .append('|').append(sessionExpiredTestOverride)
-            .append('|').append(inLoginTransitionSig)
-            .append('|').append(surfaceView.width).append('x').append(surfaceView.height)
-            .append('|').append(JvmLauncher.frameWidth()).append('x').append(JvmLauncher.frameHeight())
-            .append('|').append(ins[0]).append(',').append(ins[1]).append(',').append(ins[2]).append(',').append(ins[3])
-            .toString()
+        val sig =
+            StringBuilder(json.length + chatSnap.length + dlgSnap.length + 96)
+                .append(json.length)
+                .append(':')
+                .append(json)
+                .append(chatSnap.length)
+                .append(':')
+                .append(chatSnap)
+                .append(dlgSnap.length)
+                .append(':')
+                .append(dlgSnap)
+                .append('|')
+                .append(chromeOverlay.railsShown)
+                .append('|')
+                .append(mapOpen)
+                .append('|')
+                .append(reconnectTestOverride)
+                .append('|')
+                .append(sessionExpiredTestOverride)
+                .append('|')
+                .append(inLoginTransitionSig)
+                .append('|')
+                .append(surfaceView.width)
+                .append('x')
+                .append(surfaceView.height)
+                .append('|')
+                .append(JvmLauncher.frameWidth())
+                .append('x')
+                .append(JvmLauncher.frameHeight())
+                .append('|')
+                .append(ins[0])
+                .append(',')
+                .append(ins[1])
+                .append(',')
+                .append(ins[2])
+                .append(',')
+                .append(ins[3])
+                .toString()
         // Splash + hop are NOT in the signature: each is a state flag the body itself clears (on first frame /
         // loggedIn edge / its own timeout), so while either is up we must run the body every frame to do that
         // clearing — a stable signature must not be allowed to freeze them.
         val timedPending = (::splashOverlay.isInitialized && splashOverlay.isActive) || hopArmed
         if (!timedPending && sig == lastChromeSig) return
         lastChromeSig = sig
-        val o = try { JSONObject(json) } catch (e: Exception) { null }
+        val o =
+            try {
+                JSONObject(json)
+            } catch (e: Exception) {
+                null
+            }
         val loggedIn = o?.optBoolean("loggedIn") == true
         // Bug 8: arm the login-transition latch off a genuine LOGIN_SCREEN→LOGGED_IN edge. While logged out we note
         // that we saw the login screen (the snapshot's loginScreen flag); on the next logged-in frame that consumes
@@ -2219,31 +2639,44 @@ class MainActivity : AppCompatActivity() {
 
         // AP-0 chat scroll-by-drag: cache the live chatbox bounds (canvas px) for the gesture-start hit test.
         // The snapshot reports the post-relocate bounds, so the scroll region tracks the chat-at-top move.
-        chatRectCanvas = if (loggedIn) {
-            o?.optJSONArray("chat")?.takeIf { it.length() >= 4 && it.optInt(2) > 0 && it.optInt(3) > 0 }
-                ?.let { intArrayOf(it.optInt(0), it.optInt(1), it.optInt(2), it.optInt(3)) }
-        } else null
-        // FIX-4: live inventory grid bounds (null when the inventory tab isn't showing) for the item-drag hit test.
-        invRectCanvas = if (loggedIn) {
-            o?.optJSONArray("inv")?.takeIf { it.length() >= 4 && it.optInt(2) > 0 && it.optInt(3) > 0 }
-                ?.let { intArrayOf(it.optInt(0), it.optInt(1), it.optInt(2), it.optInt(3)) }
-        } else null
-        // DRAG-1b: the Prayer/Spellbook/Bank reorder-pane rects (empty when none on-screen) for the reorder-drag hit test.
-        reorderRectsCanvas = if (loggedIn) {
-            val arr = o?.optJSONArray("reorderPanes")
-            if (arr == null || arr.length() == 0) {
-                emptyList()
+        chatRectCanvas =
+            if (loggedIn) {
+                o
+                    ?.optJSONArray("chat")
+                    ?.takeIf { it.length() >= 4 && it.optInt(2) > 0 && it.optInt(3) > 0 }
+                    ?.let { intArrayOf(it.optInt(0), it.optInt(1), it.optInt(2), it.optInt(3)) }
             } else {
-                val out = ArrayList<IntArray>(arr.length())
-                for (i in 0 until arr.length()) {
-                    val r = arr.optJSONArray(i) ?: continue
-                    if (r.length() >= 4 && r.optInt(2) > 0 && r.optInt(3) > 0) {
-                        out.add(intArrayOf(r.optInt(0), r.optInt(1), r.optInt(2), r.optInt(3)))
-                    }
-                }
-                out
+                null
             }
-        } else emptyList()
+        // FIX-4: live inventory grid bounds (null when the inventory tab isn't showing) for the item-drag hit test.
+        invRectCanvas =
+            if (loggedIn) {
+                o
+                    ?.optJSONArray("inv")
+                    ?.takeIf { it.length() >= 4 && it.optInt(2) > 0 && it.optInt(3) > 0 }
+                    ?.let { intArrayOf(it.optInt(0), it.optInt(1), it.optInt(2), it.optInt(3)) }
+            } else {
+                null
+            }
+        // DRAG-1b: the Prayer/Spellbook/Bank reorder-pane rects (empty when none on-screen) for the reorder-drag hit test.
+        reorderRectsCanvas =
+            if (loggedIn) {
+                val arr = o?.optJSONArray("reorderPanes")
+                if (arr == null || arr.length() == 0) {
+                    emptyList()
+                } else {
+                    val out = ArrayList<IntArray>(arr.length())
+                    for (i in 0 until arr.length()) {
+                        val r = arr.optJSONArray(i) ?: continue
+                        if (r.length() >= 4 && r.optInt(2) > 0 && r.optInt(3) > 0) {
+                            out.add(intArrayOf(r.optInt(0), r.optInt(1), r.optInt(2), r.optInt(3)))
+                        }
+                    }
+                    out
+                }
+            } else {
+                emptyList()
+            }
 
         val gridOn = supported && chromeOverlay.railsShown
         applyStonesHidden(gridOn)
@@ -2257,7 +2690,10 @@ class MainActivity : AppCompatActivity() {
             applyMinimap(o)
             if (!chromeUiLogged && chromeOverlay.gridLeftPx > 0f) {
                 chromeUiLogged = true
-                Log.i(TAG, "ANDROID_A6_UI_GREEN native 2-col tab grid drawn (engine stones hidden) rootKind=$rootKind topLevel=$topLevel activeTab=$active view=${surfaceView.width}x${surfaceView.height}")
+                Log.i(
+                    TAG,
+                    "ANDROID_A6_UI_GREEN native 2-col tab grid drawn (engine stones hidden) rootKind=$rootKind topLevel=$topLevel activeTab=$active view=${surfaceView.width}x${surfaceView.height}",
+                )
             }
         } else {
             releaseSidePanel()
@@ -2270,8 +2706,10 @@ class MainActivity : AppCompatActivity() {
      *  frame, and tell the engine to push its message area below the taller native row ([on]) or restore the 23px
      *  default ([!on]). The row-height write is sent only on change (off the UI thread). */
     private fun applyChatTabs(on: Boolean) {
-        val fw = JvmLauncher.frameWidth(); val fh = JvmLauncher.frameHeight()
-        val vw = surfaceView.width; val vh = surfaceView.height
+        val fw = JvmLauncher.frameWidth()
+        val fh = JvmLauncher.frameHeight()
+        val vw = surfaceView.width
+        val vh = surfaceView.height
         val sx = if (fw > 0 && vw > 0) vw.toFloat() / fw else 1f
         val sy = if (fh > 0 && vh > 0) vh.toFloat() / fh else 1f
         val chatSnap = if (on) JvmLauncher.chatSnapshotPub() else ""
@@ -2305,7 +2743,10 @@ class MainActivity : AppCompatActivity() {
         val wantRowH = if (on) ChatPillView.ROW_H_CANVAS else 0
         if (wantRowH != lastChatRowH) {
             lastChatRowH = wantRowH
-            JvmLauncher.onBridge { JvmLauncher.setChatTabRowHeight(wantRowH); JvmLauncher.setChatAreaWidth(0) }
+            JvmLauncher.onBridge {
+                JvmLauncher.setChatTabRowHeight(wantRowH)
+                JvmLauncher.setChatAreaWidth(0)
+            }
         }
     }
 
@@ -2320,11 +2761,12 @@ class MainActivity : AppCompatActivity() {
      *  edge is in view px; convert to game-canvas px (k = frameW/viewW) and subtract the panel width. Sent only
      *  when it changes. No-op until the grid has laid out (gridLeftPx>0) and a frame size is known. */
     private fun applySidePanel(o: JSONObject?) {
-        val fw = JvmLauncher.frameWidth(); val vw = surfaceView.width
+        val fw = JvmLauncher.frameWidth()
+        val vw = surfaceView.width
         if (fw <= 0 || vw <= 0) return
         val k = fw.toFloat() / vw.toFloat()
-        var sideW = 204                                  // fallback until the panel is open + reports its width
-        var sideHc = 275                                 // the SIDE_CONTAINER is a fixed 204x275 canvas raster
+        var sideW = 204 // fallback until the panel is open + reports its width
+        var sideHc = 275 // the SIDE_CONTAINER is a fixed 204x275 canvas raster
         val sc = o?.optJSONArray("sideContainer")
         if (sc != null && sc.length() >= 4) {
             if (sc.optInt(2) > 0) sideW = sc.getInt(2)
@@ -2334,20 +2776,23 @@ class MainActivity : AppCompatActivity() {
         // (constant 275 canvas px) — they then share both the top and bottom edge. Do this BEFORE reading the
         // grid edges below so the relocate uses the post-shrink geometry (setTargetGridHeight recomputes it).
         chromeOverlay.setTargetGridHeight(sideHc / k)
-        val gx0 = chromeOverlay.gridLeftPx; val gy0 = chromeOverlay.gridTopPx
+        val gx0 = chromeOverlay.gridLeftPx
+        val gy0 = chromeOverlay.gridTopPx
         if (gx0 <= 0f) return
-        val sideX = maxOf(0, Math.round(gx0 * k) - sideW)   // right edge flush against the grid's left edge
-        val sideY = maxOf(0, Math.round(gy0 * k))           // stones hidden, so top-align with the grid
+        val sideX = maxOf(0, Math.round(gx0 * k) - sideW) // right edge flush against the grid's left edge
+        val sideY = maxOf(0, Math.round(gy0 * k)) // stones hidden, so top-align with the grid
         if (sideX == lastSideX && sideY == lastSideY) return
-        lastSideX = sideX; lastSideY = sideY
+        lastSideX = sideX
+        lastSideY = sideY
         JvmLauncher.onBridge { JvmLauncher.relocateSidePanel(sideX, sideY) }
     }
 
     /** Stop relocating the engine side panel (let it return to its native position) when the grid disengages. */
     private fun releaseSidePanel() {
-        chromeOverlay.setTargetGridHeight(0f)   // UI-1: grid back to its natural size when the chrome disengages
+        chromeOverlay.setTargetGridHeight(0f) // UI-1: grid back to its natural size when the chrome disengages
         if (lastSideX == -1 && lastSideY == -1) return
-        lastSideX = -1; lastSideY = -1
+        lastSideX = -1
+        lastSideY = -1
         JvmLauncher.onBridge { JvmLauncher.relocateSidePanel(-1, -1) }
     }
 
@@ -2355,16 +2800,20 @@ class MainActivity : AppCompatActivity() {
      *  mode — the mobile look. It stays the live engine chat (tabs / scrollback / colours / input all work); the
      *  engine tick re-applies it. Insets are in view px → canvas px (k = frameW/viewW); sent only when changed. */
     private fun applyChatAtTop() {
-        val fw = JvmLauncher.frameWidth(); val fh = JvmLauncher.frameHeight()
-        val vw = surfaceView.width; val vh = surfaceView.height
+        val fw = JvmLauncher.frameWidth()
+        val fh = JvmLauncher.frameHeight()
+        val vw = surfaceView.width
+        val vh = surfaceView.height
         if (fw <= 0 || fh <= 0 || vw <= 0 || vh <= 0) return
-        val kx = fw.toFloat() / vw; val ky = fh.toFloat() / vh
+        val kx = fw.toFloat() / vw
+        val ky = fh.toFloat() / vh
         val ins = safeInsetsLTR()
-        val margin = 8                                    // canvas-px breathing room from the safe edge
+        val margin = 8 // canvas-px breathing room from the safe edge
         val chatX = Math.round(ins[0] * kx) + margin
         val chatY = Math.round(ins[1] * ky) + margin
         if (chatX == lastChatX && chatY == lastChatY) return
-        lastChatX = chatX; lastChatY = chatY
+        lastChatX = chatX
+        lastChatY = chatY
         JvmLauncher.onBridge { JvmLauncher.relocateChat(chatX, chatY, true) }
     }
 
@@ -2372,9 +2821,13 @@ class MainActivity : AppCompatActivity() {
      *  Also un-collapse: with the pill gone there'd be no way to expand a shoved-off-canvas chat. */
     private fun releaseChat() {
         if (lastChatX == -1 && lastChatY == -1) return
-        lastChatX = -1; lastChatY = -1
+        lastChatX = -1
+        lastChatY = -1
         chatCollapsed = false
-        JvmLauncher.onBridge { JvmLauncher.relocateChat(-1, -1, false); JvmLauncher.setChatCollapsed(false) }
+        JvmLauncher.onBridge {
+            JvmLauncher.relocateChat(-1, -1, false)
+            JvmLauncher.setChatCollapsed(false)
+        }
     }
 
     // Phase-3: last overlay-insets values sent to the shared OverlayRenderer (send only on change).
@@ -2385,17 +2838,20 @@ class MainActivity : AppCompatActivity() {
      *  plugin-overlay snap corner clear of the cutout/system bars AND drops TOP_LEFT below the relocated chat
      *  (getOverlayChatAvoid, consumed Java-side). Zero-impact when insets are 0 (emulator, desktop). */
     private fun applyOverlayInsets() {
-        val fw = JvmLauncher.frameWidth(); val fh = JvmLauncher.frameHeight()
-        val vw = surfaceView.width; val vh = surfaceView.height
+        val fw = JvmLauncher.frameWidth()
+        val fh = JvmLauncher.frameHeight()
+        val vw = surfaceView.width
+        val vh = surfaceView.height
         if (fw <= 0 || fh <= 0 || vw <= 0 || vh <= 0) return
         val wi = surfaceView.rootWindowInsets ?: return
-        val (l, t, r, b) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val i = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-            listOf(i.left, i.top, i.right, i.bottom)
-        } else {
-            @Suppress("DEPRECATION")
-            listOf(wi.stableInsetLeft, wi.stableInsetTop, wi.stableInsetRight, wi.stableInsetBottom)
-        }
+        val (l, t, r, b) =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val i = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                listOf(i.left, i.top, i.right, i.bottom)
+            } else {
+                @Suppress("DEPRECATION")
+                listOf(wi.stableInsetLeft, wi.stableInsetTop, wi.stableInsetRight, wi.stableInsetBottom)
+            }
         val canvas = intArrayOf(l * fw / vw, t * fh / vh, r * fw / vw, b * fh / vh)
         if (lastOverlayInsets?.contentEquals(canvas) == true) return
         lastOverlayInsets = canvas
@@ -2409,10 +2865,19 @@ class MainActivity : AppCompatActivity() {
         val snap = JvmLauncher.mapSnapshotPub()
         if (snap == lastMapSnapshot) return
         lastMapSnapshot = snap
-        val o = try { JSONObject(snap) } catch (e: Exception) { null }
+        val o =
+            try {
+                JSONObject(snap)
+            } catch (e: Exception) {
+                null
+            }
         val open = o?.optBoolean("open") == true
-        fun rect(key: String): IntArray? = o?.optJSONArray(key)?.takeIf { it.length() >= 4 }
-            ?.let { intArrayOf(it.optInt(0), it.optInt(1), it.optInt(2), it.optInt(3)) }
+
+        fun rect(key: String): IntArray? =
+            o
+                ?.optJSONArray(key)
+                ?.takeIf { it.length() >= 4 }
+                ?.let { intArrayOf(it.optInt(0), it.optInt(1), it.optInt(2), it.optInt(3)) }
         mapRectCanvas = if (open) rect("map") else null
         mapSearchCanvas = if (open) rect("search") else null
         mapCloseCanvas = if (open) rect("close") else null
@@ -2442,9 +2907,16 @@ class MainActivity : AppCompatActivity() {
                 mapSearchKeyboard = false
                 resetMapFullscreen()
             }
-            Log.i(TAG, "p5: world map ${if (open) "OPEN" else "closed"} rect=${mapRectCanvas?.joinToString(",")}" +
-                if (open) " close=${mapCloseCanvas?.joinToString(",")} search=${mapSearchCanvas?.joinToString(",")}" +
-                    " zoomIn=${mapZoomInCanvas?.joinToString(",")} zoomOut=${mapZoomOutCanvas?.joinToString(",")}" else "")
+            Log.i(
+                TAG,
+                "p5: world map ${if (open) "OPEN" else "closed"} rect=${mapRectCanvas?.joinToString(",")}" +
+                    if (open) {
+                        " close=${mapCloseCanvas?.joinToString(",")} search=${mapSearchCanvas?.joinToString(",")}" +
+                            " zoomIn=${mapZoomInCanvas?.joinToString(",")} zoomOut=${mapZoomOutCanvas?.joinToString(",")}"
+                    } else {
+                        ""
+                    },
+            )
         }
         // Stretch the engine map window to fill the whole screen (edge-to-edge, only the map shows). Re-apply
         // when the window rect first settles or changes (e.g. a canvas resize); the close edge resets it above.
@@ -2462,8 +2934,10 @@ class MainActivity : AppCompatActivity() {
     private fun applyMapFullscreen(win: IntArray) {
         // canvasW/canvasH = the engine render canvas (boot-set, stable) — the SAME space the snapshot rects use.
         // (frameWidth()/frameHeight() = the last-blitted GL frame, which can read 0 before a frame composites.)
-        val cw = canvasW; val ch = canvasH
-        val vw = surfaceView.width; val vh = surfaceView.height
+        val cw = canvasW
+        val ch = canvasH
+        val vw = surfaceView.width
+        val vh = surfaceView.height
         if (cw <= 0 || ch <= 0 || vw <= 0 || vh <= 0 || win[2] <= 0 || win[3] <= 0) return
         // Map the window canvas-rect onto the full view: scale so win[w,h] fills the canvas, pivot (0,0) +
         // translate so win[x,y] lands at the view origin. sx/sy reduce to canvas/win; tx/ty carry the view scale.
@@ -2476,7 +2950,7 @@ class MainActivity : AppCompatActivity() {
         surfaceView.translationX = -win[0].toFloat() * vw / win[2]
         surfaceView.translationY = -win[1].toFloat() * vh / win[3]
         lastMapWindowApplied = win.copyOf()
-        Log.i(TAG, "p5: map fullscreen win=${win.joinToString(",")} canvas=${cw}x${ch} scale=($sx,$sy)")
+        Log.i(TAG, "p5: map fullscreen win=${win.joinToString(",")} canvas=${cw}x$ch scale=($sx,$sy)")
     }
 
     /** Restore the SurfaceView to its untransformed full-frame state when the map closes. UI-thread only. */
@@ -2484,7 +2958,10 @@ class MainActivity : AppCompatActivity() {
         lastMapWindowApplied = null
         mapWindowCanvas = null
         if (surfaceView.scaleX == 1f && surfaceView.scaleY == 1f &&
-            surfaceView.translationX == 0f && surfaceView.translationY == 0f) return
+            surfaceView.translationX == 0f && surfaceView.translationY == 0f
+        ) {
+            return
+        }
         surfaceView.scaleX = 1f
         surfaceView.scaleY = 1f
         surfaceView.translationX = 0f
@@ -2494,8 +2971,11 @@ class MainActivity : AppCompatActivity() {
         Log.i(TAG, "p5: map fullscreen reset")
     }
 
-    private fun inCanvasRect(r: IntArray?, gx: Int, gy: Int): Boolean =
-        r != null && gx >= r[0] && gx < r[0] + r[2] && gy >= r[1] && gy < r[1] + r[3]
+    private fun inCanvasRect(
+        r: IntArray?,
+        gx: Int,
+        gy: Int,
+    ): Boolean = r != null && gx >= r[0] && gx < r[0] + r[2] && gy >= r[1] && gy < r[1] + r[3]
 
     /** [left, top, right, bottom] safe-area insets in VIEW px (display cutout + system bars), so the relocated HUD
      *  clears a landscape notch / nav bar. 0 on the full-bleed emulator. (Existing callers index 0..2 = L/T/R; the
@@ -2544,14 +3024,17 @@ class MainActivity : AppCompatActivity() {
      *  to the right edge, top-aligned, clear of a notch. It stays the live HUD (minimap click-to-walk + orb clicks
      *  keep working — the iOS relocateEngineMinimap move). The cluster width comes from the snapshot. On change. */
     private fun applyMinimap(o: JSONObject?) {
-        val fw = JvmLauncher.frameWidth(); val fh = JvmLauncher.frameHeight()
-        val vw = surfaceView.width; val vh = surfaceView.height
+        val fw = JvmLauncher.frameWidth()
+        val fh = JvmLauncher.frameHeight()
+        val vw = surfaceView.width
+        val vh = surfaceView.height
         if (fw <= 0 || fh <= 0 || vw <= 0 || vh <= 0) return
-        val kx = fw.toFloat() / vw; val ky = fh.toFloat() / vh
+        val kx = fw.toFloat() / vw
+        val ky = fh.toFloat() / vh
         val ins = safeInsetsLTR()
         val margin = 8
-        var mapW = 211                                    // fallback cluster width until the snapshot reports it
-        var mapH = 340                                    // fallback cluster height until the snapshot reports it
+        var mapW = 211 // fallback cluster width until the snapshot reports it
+        var mapH = 340 // fallback cluster height until the snapshot reports it
         val mc = o?.optJSONArray("mapContainer")
         if (mc != null && mc.length() >= 4 && mc.optInt(2) > 0) {
             mapW = mc.getInt(2)
@@ -2562,15 +3045,17 @@ class MainActivity : AppCompatActivity() {
         // AP-0: cache the relocated cluster's canvas rect so a tap on the minimap/orbs suppresses the walk-ring.
         minimapRectCanvas = intArrayOf(mmX, mmY, mapW, mapH)
         if (mmX == lastMmX && mmY == lastMmY) return
-        lastMmX = mmX; lastMmY = mmY
+        lastMmX = mmX
+        lastMmY = mmY
         JvmLauncher.onBridge { JvmLauncher.relocateMinimap(mmX, mmY) }
     }
 
     /** Stop relocating the minimap (let it return to its native position) when the chrome disengages. */
     private fun releaseMinimap() {
-        minimapRectCanvas = null   // AP-0: no relocated cluster -> don't suppress rings (raw-stones mode)
+        minimapRectCanvas = null // AP-0: no relocated cluster -> don't suppress rings (raw-stones mode)
         if (lastMmX == -1 && lastMmY == -1) return
-        lastMmX = -1; lastMmY = -1
+        lastMmX = -1
+        lastMmY = -1
         JvmLauncher.onBridge { JvmLauncher.relocateMinimap(-1, -1) }
     }
 
@@ -2590,20 +3075,27 @@ class MainActivity : AppCompatActivity() {
     // ---- A2 press-and-peek menu state machine -------------------------------------------------------
 
     /** Long-press: open the engine right-click menu at the finger and start polling for it to land. */
-    private fun beginMenuPeek(viewX: Float, viewY: Float) {
+    private fun beginMenuPeek(
+        viewX: Float,
+        viewY: Float,
+    ) {
         if (menuActive) return
         val gx = toGameX(viewX)
         val gy = toGameY(viewY)
-        menuAnchorX = viewX; menuAnchorY = viewY
-        menuCurX = viewX; menuCurY = viewY
+        menuAnchorX = viewX
+        menuAnchorY = viewY
+        menuCurX = viewX
+        menuCurY = viewY
         menuHandRight = viewX > surfaceView.width * 0.5f
         menuActive = true
         menuBuilding = true
         menuTouchActive = true
         menuHighlight = -1
-        menuTapMode = false; menuTapArmed = false; menuDrillParent = -1   // FIX-10b: fresh menu
+        menuTapMode = false
+        menuTapArmed = false
+        menuDrillParent = -1 // FIX-10b: fresh menu
         menuOpenAtNanos = System.nanoTime()
-        JvmLauncher.click(gx, gy, 3)   // open the engine right-click menu at the finger
+        JvmLauncher.click(gx, gy, 3) // open the engine right-click menu at the finger
         Log.i(TAG, "a2: long-press -> menu open game=($gx,$gy) hand=${if (menuHandRight) "R" else "L"}")
     }
 
@@ -2611,31 +3103,52 @@ class MainActivity : AppCompatActivity() {
      *  button (engine canvas px, from the snapshot) and anchoring the native press-and-peek overlay at the finger
      *  (view px). Reuses the A2 menu machinery (tryBuildNativeMenu / updateMenuHighlight / commitMenuSelection),
      *  driven by the chat overlay's long-press callbacks (it owns the gesture). Mirrors the iOS onChatTabLongPress. */
-    private fun beginChatFilterMenu(engineCx: Int, engineCy: Int, viewX: Float, viewY: Float) {
+    private fun beginChatFilterMenu(
+        engineCx: Int,
+        engineCy: Int,
+        viewX: Float,
+        viewY: Float,
+    ) {
         if (menuActive) return
-        menuAnchorX = viewX; menuAnchorY = viewY
-        menuCurX = viewX; menuCurY = viewY
+        menuAnchorX = viewX
+        menuAnchorY = viewY
+        menuCurX = viewX
+        menuCurY = viewY
         menuHandRight = viewX > surfaceView.width * 0.5f
-        menuActive = true; menuBuilding = true; menuTouchActive = true; menuHighlight = -1
-        menuTapMode = false; menuTapArmed = false; menuDrillParent = -1   // FIX-10b: fresh menu
+        menuActive = true
+        menuBuilding = true
+        menuTouchActive = true
+        menuHighlight = -1
+        menuTapMode = false
+        menuTapArmed = false
+        menuDrillParent = -1 // FIX-10b: fresh menu
         menuOpenAtNanos = System.nanoTime()
-        JvmLauncher.click(engineCx, engineCy, 3)   // right-click the live engine chat button -> its filter menu
+        JvmLauncher.click(engineCx, engineCy, 3) // right-click the live engine chat button -> its filter menu
         Log.i(TAG, "a3: chat tab long-press -> filter menu game=($engineCx,$engineCy)")
     }
 
     /** Poll the snapshot (each frame, while building) until the engine menu the long-press opened is reflected. */
     private fun tryBuildNativeMenu() {
-        val d = try { JSONObject(JvmLauncher.menuSnapshot()) } catch (e: Exception) { null }
+        val d =
+            try {
+                JSONObject(JvmLauncher.menuSnapshot())
+            } catch (e: Exception) {
+                null
+            }
         val entries = d?.optJSONArray("entries")
-        val ready = d != null && d.optBoolean("loggedIn", false) && d.optBoolean("menuOpen", false) &&
-            d.optInt("count", 0) > 0 && entries != null && entries.length() > 0
+        val ready =
+            d != null && d.optBoolean("loggedIn", false) && d.optBoolean("menuOpen", false) &&
+                d.optInt("count", 0) > 0 && entries != null && entries.length() > 0
         if (ready) {
             menuBuilding = false
             presentNativeMenu(d!!)
             // Drag-mode: a finger lifted before the menu built means cancel. Tap-mode (FIX-10b) is persistent —
             // if the finger is already up, the menu just becomes immediately tap-ready (no auto-cancel).
-            if (menuTapMode) { if (!menuTouchActive) menuTapArmed = true }
-            else if (!menuTouchActive) cancelMenu()
+            if (menuTapMode) {
+                if (!menuTouchActive) menuTapArmed = true
+            } else if (!menuTouchActive) {
+                cancelMenu()
+            }
             return
         }
         if (System.nanoTime() - menuOpenAtNanos > 1_000_000_000L) {
@@ -2652,7 +3165,10 @@ class MainActivity : AppCompatActivity() {
         emCount = d.optInt("count", 0)
         val arr = d.optJSONArray("entries") ?: return
         val n = minOf(arr.length(), 14)
-        if (n == 0 || emW <= 0) { cancelMenu(); return }
+        if (n == 0 || emW <= 0) {
+            cancelMenu()
+            return
+        }
         val items = ArrayList<MenuOverlayView.Entry>(n)
         var anySub = false
         for (k in 0 until n) {
@@ -2667,7 +3183,10 @@ class MainActivity : AppCompatActivity() {
                     val co = subArr.optJSONObject(c) ?: continue
                     cs.add(MenuOverlayView.Entry(co.optString("opt", ""), co.optString("tgt", ""), engineIndex = c))
                 }
-                if (cs.isNotEmpty()) { sub = cs; anySub = true }
+                if (cs.isNotEmpty()) {
+                    sub = cs
+                    anySub = true
+                }
             }
             val role = if (sub != null) MenuOverlayView.Role.PARENT else MenuOverlayView.Role.NORMAL
             items.add(MenuOverlayView.Entry(o.optString("opt", ""), o.optString("tgt", ""), sub = sub, role = role, engineIndex = k))
@@ -2688,23 +3207,46 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** FIX-10b: (re)build the persistent tap-menu — top level, or a submenu (prepend a '‹ Back' row, retitle). */
-    private fun buildTapMenu(items: List<MenuOverlayView.Entry>, drilled: Boolean) {
-        val display = if (drilled) {
-            ArrayList<MenuOverlayView.Entry>(items.size + 1).apply {
-                add(MenuOverlayView.Entry("‹ Back", "", role = MenuOverlayView.Role.BACK))
-                addAll(items)
+    private fun buildTapMenu(
+        items: List<MenuOverlayView.Entry>,
+        drilled: Boolean,
+    ) {
+        val display =
+            if (drilled) {
+                ArrayList<MenuOverlayView.Entry>(items.size + 1).apply {
+                    add(MenuOverlayView.Entry("‹ Back", "", role = MenuOverlayView.Role.BACK))
+                    addAll(items)
+                }
+            } else {
+                items
             }
-        } else items
-        menuOverlay.show(display, menuAnchorX, menuAnchorY, menuHandRight,
-            tap = true, header = if (drilled) "Submenu" else "Choose Option")
+        menuOverlay.show(
+            display,
+            menuAnchorX,
+            menuAnchorY,
+            menuHandRight,
+            tap = true,
+            header = if (drilled) "Submenu" else "Choose Option",
+        )
     }
 
     /** FIX-10b: a discrete tap in tap-mode — route to a row, or dismiss when it lands outside the box. */
-    private fun onMenuTap(x: Float, y: Float) {
+    private fun onMenuTap(
+        x: Float,
+        y: Float,
+    ) {
         when (val r = menuOverlay.hitTest(x, y)) {
-            -2 -> cancelMenu()   // outside the box -> dismiss
-            -1 -> { }            // header -> ignore
-            else -> onTapRow(r)
+            -2 -> {
+                cancelMenu()
+            }
+
+            // outside the box -> dismiss
+            -1 -> { }
+
+            // header -> ignore
+            else -> {
+                onTapRow(r)
+            }
         }
     }
 
@@ -2717,12 +3259,14 @@ class MainActivity : AppCompatActivity() {
                 menuOverlay.setHighlight(-1)
                 buildTapMenu(menuTopEntries, drilled = false)
             }
+
             MenuOverlayView.Role.PARENT -> {
                 menuDrillParent = e.engineIndex
                 menuOverlay.setHighlight(-1)
                 vibrateTick()
                 buildTapMenu(e.sub ?: emptyList(), drilled = true)
             }
+
             MenuOverlayView.Role.NORMAL -> {
                 if (menuDrillParent >= 0) {
                     // Submenu child — not in the engine menu geometry, so invoke its onClick directly, then
@@ -2743,7 +3287,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Lock the highlight onto the row under the finger; haptic tick on change. */
-    private fun updateMenuHighlight(x: Float, y: Float) {
+    private fun updateMenuHighlight(
+        x: Float,
+        y: Float,
+    ) {
         if (!menuOverlay.isActive) return
         val row = menuOverlay.rowAt(x, y)
         if (menuOverlay.setHighlight(row)) {
@@ -2789,7 +3336,7 @@ class MainActivity : AppCompatActivity() {
         menuBuilding = false
         menuTouchActive = false
         menuHighlight = -1
-        menuTapMode = false        // FIX-10b
+        menuTapMode = false // FIX-10b
         menuTapArmed = false
         menuDrillParent = -1
         menuTopEntries = emptyList()
@@ -2811,9 +3358,11 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         // A8: the app is backgrounded (and may be killed) — persist any pending plugin-config writes now so a
         // toggle/setting isn't lost. Off the UI thread (it dispatches to the client thread); fire-and-forget.
-        if (booted.get()) JvmLauncher.onBridge {
-            val ack = JvmLauncher.flushConfig()
-            Log.i(TAG, "a8: flushConfig on background -> $ack")
+        if (booted.get()) {
+            JvmLauncher.onBridge {
+                val ack = JvmLauncher.flushConfig()
+                Log.i(TAG, "a8: flushConfig on background -> $ack")
+            }
         }
         // PERF-BATTERY-NETWORK-01: not visible — drop the render thread to 4 Hz and stop the per-frame UI poll
         // (updateChrome/applyOverlayInsets/updateWorldMap/IME). Android has no PiP keepalive (iOS-only), so
@@ -2827,13 +3376,18 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         frameCallback?.let { Choreographer.getInstance().removeFrameCallback(it) }
         frameCallback = null
-        drainRun = false   // stop the AP-2a notification/link drain daemon
-        hdConfigReceiver?.let { runCatching { unregisterReceiver(it) } }; hdConfigReceiver = null
-        reconnectTestReceiver?.let { runCatching { unregisterReceiver(it) } }; reconnectTestReceiver = null
-        sessionExpiredTestReceiver?.let { runCatching { unregisterReceiver(it) } }; sessionExpiredTestReceiver = null
-        thermalTestReceiver?.let { runCatching { unregisterReceiver(it) } }; thermalTestReceiver = null
-        thermalGovernor?.stop(); thermalGovernor = null   // PERF-MEMORY-THERMAL-01: unregister + restore the baseline scale
-        armHopScrimHook = null   // ENH-B06: drop the static hook so a dead activity can't be re-armed
+        drainRun = false // stop the AP-2a notification/link drain daemon
+        hdConfigReceiver?.let { runCatching { unregisterReceiver(it) } }
+        hdConfigReceiver = null
+        reconnectTestReceiver?.let { runCatching { unregisterReceiver(it) } }
+        reconnectTestReceiver = null
+        sessionExpiredTestReceiver?.let { runCatching { unregisterReceiver(it) } }
+        sessionExpiredTestReceiver = null
+        thermalTestReceiver?.let { runCatching { unregisterReceiver(it) } }
+        thermalTestReceiver = null
+        thermalGovernor?.stop()
+        thermalGovernor = null // PERF-MEMORY-THERMAL-01: unregister + restore the baseline scale
+        armHopScrimHook = null // ENH-B06: drop the static hook so a dead activity can't be re-armed
         super.onDestroy()
     }
 
@@ -2862,17 +3416,18 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val tmpDir = File(app.filesDir, "tmp").apply { mkdirs() }.absolutePath
-        JvmLauncher.setStdioRedirect(BuildConfig.DEBUG)   // the probe prints ANDROID_AG1A to stdout -> logcat
+        JvmLauncher.setStdioRedirect(BuildConfig.DEBUG) // the probe prints ANDROID_AG1A to stdout -> logcat
         val opts = arrayOf("-Djava.io.tmpdir=$tmpDir", "-Drunelite.routec.smoke=true")
         Log.i(TAG, "AG1a: booting RouteCSmoke on the facade-only jar $smokeJar")
-        val rc = JvmLauncher.startJvm(
-            javaHome = javaHome.absolutePath,
-            libjvmPath = libjvm.absolutePath,
-            libraryPath = File(javaHome, "lib").absolutePath,
-            classpath = smokeJar.absolutePath,
-            mainClass = "RouteCSmoke",
-            extraOpts = opts,
-        )
+        val rc =
+            JvmLauncher.startJvm(
+                javaHome = javaHome.absolutePath,
+                libjvmPath = libjvm.absolutePath,
+                libraryPath = File(javaHome, "lib").absolutePath,
+                classpath = smokeJar.absolutePath,
+                mainClass = "RouteCSmoke",
+                extraOpts = opts,
+            )
         Log.i(TAG, "AG1a: startJvm rc=$rc (watch logcat: ANDROID_AG1A / librlawt / routec)")
     }
 
@@ -2887,13 +3442,19 @@ class MainActivity : AppCompatActivity() {
     private fun bootRlhdProbe(app: android.content.Context) {
         val javaHome = AssetInstaller.ensureInstalled(app)
         val libjvm = File(javaHome, "lib/server/libjvm.so")
-        if (!libjvm.exists()) { Log.e(TAG, "rlhdprobe: embedded JRE not installed ($libjvm)"); booted.set(false); return }
+        if (!libjvm.exists()) {
+            Log.e(TAG, "rlhdprobe: embedded JRE not installed ($libjvm)")
+            booted.set(false)
+            return
+        }
         val jvmDir = File(app.filesDir, "jvm")
         // The GPU + RLHD jars are added to assets without bumping runtime.tag, so AssetInstaller may not have
         // unpacked them — copy each from assets when absent (a fresh install copies them fine).
         for (suffix in listOf("-gpu.jar", "-rlhd.jar")) {
-            val asset = runCatching { app.assets.list("jvm") }.getOrNull()
-                ?.firstOrNull { it.startsWith("client-") && it.endsWith(suffix) }
+            val asset =
+                runCatching { app.assets.list("jvm") }
+                    .getOrNull()
+                    ?.firstOrNull { it.startsWith("client-") && it.endsWith(suffix) }
             if (asset != null && !File(jvmDir, asset).exists()) {
                 runCatching {
                     jvmDir.mkdirs()
@@ -2904,58 +3465,70 @@ class MainActivity : AppCompatActivity() {
         val gpuJar = jvmDir.list { _, n -> n.startsWith("client-") && n.endsWith("-gpu.jar") }?.firstOrNull()
         val rlhdJar = jvmDir.list { _, n -> n.startsWith("client-") && n.endsWith("-rlhd.jar") }?.firstOrNull()
         if (gpuJar == null || rlhdJar == null) {
-            Log.e(TAG, "rlhdprobe: missing jar(s) gpu=$gpuJar rlhd=$rlhdJar in $jvmDir " +
-                "(run android/dev-tools/gpu/stage-android-gpu-jar.sh + stage-rlhd-zone-jar.sh)")
-            booted.set(false); return
+            Log.e(
+                TAG,
+                "rlhdprobe: missing jar(s) gpu=$gpuJar rlhd=$rlhdJar in $jvmDir " +
+                    "(run android/dev-tools/gpu/stage-android-gpu-jar.sh + stage-rlhd-zone-jar.sh)",
+            )
+            booted.set(false)
+            return
         }
         val classpath = listOf(gpuJar, rlhdJar, "probes.jar").joinToString(":") { File(jvmDir, it).absolutePath }
         val libraryPath = File(javaHome, "lib").absolutePath
         val home = app.filesDir.absolutePath
         val tmpDir = File(app.filesDir, "tmp").apply { mkdirs() }.absolutePath
-        val opts = arrayOf(
-            "-Djava.awt.headless=false",
-            "--add-exports=java.desktop/java.awt=ALL-UNNAMED",
-            "--add-exports=java.desktop/java.awt.peer=ALL-UNNAMED",
-            "--add-exports=java.desktop/sun.awt.image=ALL-UNNAMED",
-            "--add-exports=java.desktop/sun.java2d=ALL-UNNAMED",
-            "--add-exports=java.desktop/java.awt.dnd.peer=ALL-UNNAMED",
-            "--add-exports=java.desktop/sun.awt=ALL-UNNAMED",
-            "--add-exports=java.desktop/sun.awt.event=ALL-UNNAMED",
-            "--add-exports=java.desktop/sun.awt.datatransfer=ALL-UNNAMED",
-            "--add-exports=java.base/sun.security.action=ALL-UNNAMED",
-            "--add-opens=java.base/java.util=ALL-UNNAMED",
-            "--add-opens=java.desktop/java.awt=ALL-UNNAMED",
-            "--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
-            "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
-            "-Xmx512m",
-            "-Duser.home=$home",
-            "-Djava.io.tmpdir=$tmpDir",
-            "-Drunelite.rlhdprobe=true",
-        )
-        JvmLauncher.setStdioRedirect(true)   // probe prints its verdict to stdout -> logcat
+        val opts =
+            arrayOf(
+                "-Djava.awt.headless=false",
+                "--add-exports=java.desktop/java.awt=ALL-UNNAMED",
+                "--add-exports=java.desktop/java.awt.peer=ALL-UNNAMED",
+                "--add-exports=java.desktop/sun.awt.image=ALL-UNNAMED",
+                "--add-exports=java.desktop/sun.java2d=ALL-UNNAMED",
+                "--add-exports=java.desktop/java.awt.dnd.peer=ALL-UNNAMED",
+                "--add-exports=java.desktop/sun.awt=ALL-UNNAMED",
+                "--add-exports=java.desktop/sun.awt.event=ALL-UNNAMED",
+                "--add-exports=java.desktop/sun.awt.datatransfer=ALL-UNNAMED",
+                "--add-exports=java.base/sun.security.action=ALL-UNNAMED",
+                "--add-opens=java.base/java.util=ALL-UNNAMED",
+                "--add-opens=java.desktop/java.awt=ALL-UNNAMED",
+                "--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
+                "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+                "-Xmx512m",
+                "-Duser.home=$home",
+                "-Djava.io.tmpdir=$tmpDir",
+                "-Drunelite.rlhdprobe=true",
+            )
+        JvmLauncher.setStdioRedirect(true) // probe prints its verdict to stdout -> logcat
         Log.i(TAG, "rlhdprobe: starting HotSpot RLHDProbe, cp=$classpath")
-        val rc = JvmLauncher.startJvm(
-            javaHome = javaHome.absolutePath,
-            libjvmPath = libjvm.absolutePath,
-            libraryPath = libraryPath,
-            classpath = classpath,
-            mainClass = "RLHDProbe",
-            extraOpts = opts,
-        )
+        val rc =
+            JvmLauncher.startJvm(
+                javaHome = javaHome.absolutePath,
+                libjvmPath = libjvm.absolutePath,
+                libraryPath = libraryPath,
+                classpath = classpath,
+                mainClass = "RLHDProbe",
+                extraOpts = opts,
+            )
         if (rc != 0) booted.set(false)
         Log.i(TAG, "rlhdprobe: startJvm rc=$rc (watch logcat: ANDROID_RLHD_PROBE / MEGAVERDICT)")
     }
 
-    private fun bootJvm(app: android.content.Context, census: Boolean = false, gpu: Boolean = false, rlhd: Boolean = false) {
+    private fun bootJvm(
+        app: android.content.Context,
+        census: Boolean = false,
+        gpu: Boolean = false,
+        rlhd: Boolean = false,
+    ) {
         // UX-ONBOARD-01: on the first-install path, feed a coarse "Unpacking… N%" line into the cold-start splash.
         // The callback runs on this boot thread, so marshal each update to the UI thread. No-op once installed.
-        val javaHome = AssetInstaller.ensureInstalled(app) { pct ->
-            runOnUiThread { if (::splashOverlay.isInitialized && splashOverlay.isActive) splashOverlay.setUnpackProgress(pct) }
-        }
+        val javaHome =
+            AssetInstaller.ensureInstalled(app) { pct ->
+                runOnUiThread { if (::splashOverlay.isInitialized && splashOverlay.isActive) splashOverlay.setUnpackProgress(pct) }
+            }
         val libjvm = File(javaHome, "lib/server/libjvm.so")
         if (!libjvm.exists()) {
             Log.e(TAG, "embedded JRE not installed; expected $libjvm")
-            booted.set(false)   // not booted yet — let a later launch retry the asset unpack
+            booted.set(false) // not booted yet — let a later launch retry the asset unpack
             return
         }
 
@@ -2979,8 +3552,10 @@ class MainActivity : AppCompatActivity() {
             // load rs117.hd.HdPlugin into the plugin panel as a selectable renderer row on any boot.
             wanted.add("-rlhd.jar")
             for (suffix in wanted) {
-                val asset = runCatching { app.assets.list("jvm") }.getOrNull()
-                    ?.firstOrNull { it.startsWith("client-") && it.endsWith(suffix) }
+                val asset =
+                    runCatching { app.assets.list("jvm") }
+                        .getOrNull()
+                        ?.firstOrNull { it.startsWith("client-") && it.endsWith(suffix) }
                 if (asset != null && !File(jvmDir, asset).exists()) {
                     runCatching {
                         jvmDir.mkdirs()
@@ -2989,11 +3564,16 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        val clientJar = jvmDir.list { _, name -> name.startsWith("client-") && name.endsWith(jarSuffix) }
-            ?.firstOrNull()
+        val clientJar =
+            jvmDir
+                .list { _, name -> name.startsWith("client-") && name.endsWith(jarSuffix) }
+                ?.firstOrNull()
         if (clientJar == null) {
-            Log.e(TAG, "no client-*$jarSuffix staged in $jvmDir" +
-                if (useGpuJar) " (run android/dev-tools/gpu/stage-android-gpu-jar.sh)" else "")
+            Log.e(
+                TAG,
+                "no client-*$jarSuffix staged in $jvmDir" +
+                    if (useGpuJar) " (run android/dev-tools/gpu/stage-android-gpu-jar.sh)" else "",
+            )
             booted.set(false)
             return
         }
@@ -3004,8 +3584,9 @@ class MainActivity : AppCompatActivity() {
             booted.set(false)
             return
         }
-        val classpath = (listOf(clientJar) + listOfNotNull(rlhdJar) + listOf("probes.jar"))
-            .joinToString(":") { File(jvmDir, it).absolutePath }
+        val classpath =
+            (listOf(clientJar) + listOfNotNull(rlhdJar) + listOf("probes.jar"))
+                .joinToString(":") { File(jvmDir, it).absolutePath }
         val libraryPath = File(javaHome, "lib").absolutePath
 
         // A writable RuneLite home + headless capture dir (the gamepack cache + PNG fallback evidence).
@@ -3035,47 +3616,50 @@ class MainActivity : AppCompatActivity() {
         // iOS's headless/CACIO opt set, minus the iOS-JIT workarounds (Android grants JIT for free):
         // dropped -XX:+MirrorMappedCodeCache / DisablePrimordialThreadGuardPages / -UseCompressedClassPointers /
         // ReservedCodeCacheSize. Kept: the CACIO JPMS exports/opens, headless render + bridge props.
-        val opts = mutableListOf(
-            "-Djava.awt.headless=false",
-            "--add-exports=java.desktop/java.awt=ALL-UNNAMED",
-            "--add-exports=java.desktop/java.awt.peer=ALL-UNNAMED",
-            "--add-exports=java.desktop/sun.awt.image=ALL-UNNAMED",
-            "--add-exports=java.desktop/sun.java2d=ALL-UNNAMED",
-            "--add-exports=java.desktop/java.awt.dnd.peer=ALL-UNNAMED",
-            "--add-exports=java.desktop/sun.awt=ALL-UNNAMED",
-            "--add-exports=java.desktop/sun.awt.event=ALL-UNNAMED",
-            "--add-exports=java.desktop/sun.awt.datatransfer=ALL-UNNAMED",
-            "--add-exports=java.base/sun.security.action=ALL-UNNAMED",
-            "--add-opens=java.base/java.util=ALL-UNNAMED",
-            "--add-opens=java.desktop/java.awt=ALL-UNNAMED",
-            "--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
-            "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
-            "-Xmx512m",
-            "-Duser.home=$home",
-            "-Djava.io.tmpdir=$tmpDir",
-            "-Drunelite.bridge=true",
-            "-Dheadless.runSeconds=86400",          // keep the boot thread alive/logging for the whole session
-            "-Dheadless.captureTargetFrames=999999", // never early-exit; ride the window
-            "-Drunelite.menupeek=true",             // A2: publish the menu-peek snapshot each client tick
-            "-Drunelite.menupeek.maxEntries=14",
-            "-Drunelite.mobileui=true",             // A4: plugin control plane (list/toggle/config from the host)
-            "-Drunelite.mobilechrome=true",         // A6: publish the read-only chrome snapshot (tab-stone bounds)
-            "-Drunelite.hudveneer=true",            // A6: the chrome write surface (hide stones / openTab / relocate)
-            // Phase-2 renderer-as-plugins (the iOS d2b46053c model): drop safe-mode on every boot (so the
-            // renderer plugins CAN load) and let RendererPanelStarter put GPU + 117HD into the panel without
-            // starting them. Which one actually STARTS is decided purely by the routec flags below.
-            "-Drunelite.nosafemode=true",
-            "-Drunelite.rendererpanel=true",
-        )
+        val opts =
+            mutableListOf(
+                "-Djava.awt.headless=false",
+                "--add-exports=java.desktop/java.awt=ALL-UNNAMED",
+                "--add-exports=java.desktop/java.awt.peer=ALL-UNNAMED",
+                "--add-exports=java.desktop/sun.awt.image=ALL-UNNAMED",
+                "--add-exports=java.desktop/sun.java2d=ALL-UNNAMED",
+                "--add-exports=java.desktop/java.awt.dnd.peer=ALL-UNNAMED",
+                "--add-exports=java.desktop/sun.awt=ALL-UNNAMED",
+                "--add-exports=java.desktop/sun.awt.event=ALL-UNNAMED",
+                "--add-exports=java.desktop/sun.awt.datatransfer=ALL-UNNAMED",
+                "--add-exports=java.base/sun.security.action=ALL-UNNAMED",
+                "--add-opens=java.base/java.util=ALL-UNNAMED",
+                "--add-opens=java.desktop/java.awt=ALL-UNNAMED",
+                "--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
+                "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+                "-Xmx512m",
+                "-Duser.home=$home",
+                "-Djava.io.tmpdir=$tmpDir",
+                "-Drunelite.bridge=true",
+                "-Dheadless.runSeconds=86400", // keep the boot thread alive/logging for the whole session
+                "-Dheadless.captureTargetFrames=999999", // never early-exit; ride the window
+                "-Drunelite.menupeek=true", // A2: publish the menu-peek snapshot each client tick
+                "-Drunelite.menupeek.maxEntries=14",
+                "-Drunelite.mobileui=true", // A4: plugin control plane (list/toggle/config from the host)
+                "-Drunelite.mobilechrome=true", // A6: publish the read-only chrome snapshot (tab-stone bounds)
+                "-Drunelite.hudveneer=true", // A6: the chrome write surface (hide stones / openTab / relocate)
+                // Phase-2 renderer-as-plugins (the iOS d2b46053c model): drop safe-mode on every boot (so the
+                // renderer plugins CAN load) and let RendererPanelStarter put GPU + 117HD into the panel without
+                // starting them. Which one actually STARTS is decided purely by the routec flags below.
+                "-Drunelite.nosafemode=true",
+                "-Drunelite.rendererpanel=true",
+            )
         // Headless frame-capture (PNG snapshots + per-draw bookkeeping) is a dev/CI diagnostic only — release
         // boots don't arm it (SLM-DFLAG-01; HeadlessCapture is inert without the dir). The boot-thread keepalive
         // (runSeconds/captureTargetFrames above) stays unconditional; only the capture writes are DEBUG-gated.
         if (BuildConfig.DEBUG) {
-            opts.addAll(listOf(
-                "-Drunelite.headless.capture.dir=$captureDir",
-                "-Drunelite.headless.capture.interval=10",
-                "-Drunelite.headless.capture.preLoginMax=40",
-            ))
+            opts.addAll(
+                listOf(
+                    "-Drunelite.headless.capture.dir=$captureDir",
+                    "-Drunelite.headless.capture.interval=10",
+                    "-Drunelite.headless.capture.preLoginMax=40",
+                ),
+            )
         }
         // Force-disable the renderer plugins that are NOT the chosen renderer — this wins over persisted/SYNCED
         // config (the isPluginEnabled force-off rule), so a RuneLite-account profile that carries the DESKTOP
@@ -3088,7 +3672,14 @@ class MainActivity : AppCompatActivity() {
         // HdPlugin's conflicts="GPU" would otherwise stop the GPU renderer mid-session and kill its GL context),
         // and force-ENABLE the chosen one (so a synced profile that DISABLES it can't stop it). The two lists are
         // mutually exclusive by construction.
-        val chosenKey = if (gpu) "gpuplugin" else if (rlhd) "hdplugin" else null
+        val chosenKey =
+            if (gpu) {
+                "gpuplugin"
+            } else if (rlhd) {
+                "hdplugin"
+            } else {
+                null
+            }
         val rendererKeys = listOf("gpuplugin", "hdplugin")
         opts.add("-Drunelite.forceDisablePlugins=${rendererKeys.filter { it != chosenKey }.joinToString(",")}")
         if (chosenKey != null) {
@@ -3109,9 +3700,13 @@ class MainActivity : AppCompatActivity() {
             // safe; below ~480 the minimap column collides with the tab grid.
             val renderH = 540
             val renderW = (renderH.toLong() * longEdge / shortEdge).toInt()
-            canvasW = renderW; canvasH = renderH   // for the overlay free-drag pad → canvas-pixel mapping
-            opts.add("-Drunelite.headless.resize=${renderW}x${renderH}")
-            Log.i(TAG, "A7 resize armed: ${renderW}x${renderH} (screen ${longEdge}x${shortEdge}; resizable iff account in resizable display mode)")
+            canvasW = renderW
+            canvasH = renderH // for the overlay free-drag pad → canvas-pixel mapping
+            opts.add("-Drunelite.headless.resize=${renderW}x$renderH")
+            Log.i(
+                TAG,
+                "A7 resize armed: ${renderW}x$renderH (screen ${longEdge}x$shortEdge; resizable iff account in resizable display mode)",
+            )
         }
         // 117HD auto-login: on a real home-network device login works, so autologin straight in-world (RLHDStarter
         // engages at LOGGED_IN too) — the desired turnkey launch. SKIP it only for the Firebase DATACENTER pre-login
@@ -3121,7 +3716,10 @@ class MainActivity : AppCompatActivity() {
         val rlhdPreLogin = rlhd && File(app.getExternalFilesDir(null), "rlhd_prelogin.mode").exists()
         if (autologinArmed && !rlhdPreLogin) {
             opts.addAll(JagexTokens.autologinOpts)
-            Log.i(TAG, "autologin ARMED (tokens.json present)${if (rlhd) " [routecrlhd -> RLHDStarter loads 117HD at LOGGED_IN]" else ""}: EULA 302,312 -> Play Now 382,248, world 301")
+            Log.i(
+                TAG,
+                "autologin ARMED (tokens.json present)${if (rlhd) " [routecrlhd -> RLHDStarter loads 117HD at LOGGED_IN]" else ""}: EULA 302,312 -> Play Now 382,248, world 301",
+            )
         } else if (legacyArmed && !rlhdPreLogin) {
             opts.addAll(JagexTokens.autologinOpts)
             opts.add("-Drunelite.headless.autologin.legacy=true")
@@ -3132,10 +3730,12 @@ class MainActivity : AppCompatActivity() {
         if (census) {
             // A-1b runtime gate-flip census: turn on the remaining read-surface gates (menupeek + autologin
             // are already on above) and arm the one-shot GateCensus probe in DeviceHeadlessBoot.
-            opts.addAll(listOf(
-                "-Drunelite.gatecensus=true",
-                "-Drunelite.huddata=true",
-            ))
+            opts.addAll(
+                listOf(
+                    "-Drunelite.gatecensus=true",
+                    "-Drunelite.huddata=true",
+                ),
+            )
             Log.i(TAG, "A-1b census mode: +huddata + gatecensus (mobileui/mobilechrome/hudveneer/resize always-on)")
         }
         if (gpu) {
@@ -3148,11 +3748,13 @@ class MainActivity : AppCompatActivity() {
             // The per-frame frame-dump (PNG encode to external storage) is a dev/CI diagnostic only — gate it
             // behind DEBUG so release GPU boots don't pay the per-frame IO (SLM-DFLAG-02 / PERF-FRAME-PACING-03).
             if (BuildConfig.DEBUG) {
-                val dumpDir = (app.getExternalFilesDir(null) ?: app.filesDir).absolutePath   // +"/routec-frames/"
-                opts.addAll(listOf(
-                    "-Drunelite.gpuframedump=true",
-                    "-Drunelite.gpuframedump.dir=$dumpDir",
-                ))
+                val dumpDir = (app.getExternalFilesDir(null) ?: app.filesDir).absolutePath // +"/routec-frames/"
+                opts.addAll(
+                    listOf(
+                        "-Drunelite.gpuframedump=true",
+                        "-Drunelite.gpuframedump.dir=$dumpDir",
+                    ),
+                )
             }
             Log.i(TAG, "AG2 GPU mode: gpu jar $clientJar, routecgpu armed (frame-dump=${BuildConfig.DEBUG})")
         }
@@ -3166,7 +3768,8 @@ class MainActivity : AppCompatActivity() {
             // live driver once 117HD is up, so a strict-GLSL-ES typing regression in an overlay surfaces in the
             // matrix (these overlays are dev-toggle-gated and never compile in a default login run). Inert otherwise.
             if (File(app.getExternalFilesDir(null), "rlhd_overlay_selftest").exists() ||
-                File(app.filesDir, "rlhd_overlay_selftest").exists()) {
+                File(app.filesDir, "rlhd_overlay_selftest").exists()
+            ) {
                 opts.add("-Drunelite.rlhdOverlaySelfTest=true")
                 Log.i(TAG, "AG3-c: rlhd_overlay_selftest marker -> overlay shader self-test armed")
             }
@@ -3174,15 +3777,20 @@ class MainActivity : AppCompatActivity() {
             // 117HD boots don't pay the per-frame PNG IO or the fps branch (SLM-DFLAG-02/03 / PERF-FRAME-PACING-03/04).
             if (BuildConfig.DEBUG) {
                 val dumpDir = (app.getExternalFilesDir(null) ?: app.filesDir).absolutePath
-                opts.addAll(listOf(
-                    "-Drunelite.gpuframedump=true",
-                    "-Drunelite.gpuframedump.dir=$dumpDir",
-                    // FIX-13: arm the once/sec engine-fps logcat probe ([fpsprobe] fps=N gs=...) so a preset A/B can be
-                    // measured in-world on real Mali (Hooks.frame, gated by this prop). Only active in 117HD test mode.
-                    "-Drunelite.fpsprobe=true",
-                ))
+                opts.addAll(
+                    listOf(
+                        "-Drunelite.gpuframedump=true",
+                        "-Drunelite.gpuframedump.dir=$dumpDir",
+                        // FIX-13: arm the once/sec engine-fps logcat probe ([fpsprobe] fps=N gs=...) so a preset A/B can be
+                        // measured in-world on real Mali (Hooks.frame, gated by this prop). Only active in 117HD test mode.
+                        "-Drunelite.fpsprobe=true",
+                    ),
+                )
             }
-            Log.i(TAG, "AG3-b 117HD mode: gpu jar $clientJar + rlhd jar $rlhdJar, routecrlhd armed (frame-dump+fpsprobe=${BuildConfig.DEBUG})")
+            Log.i(
+                TAG,
+                "AG3-b 117HD mode: gpu jar $clientJar + rlhd jar $rlhdJar, routecrlhd armed (frame-dump+fpsprobe=${BuildConfig.DEBUG})",
+            )
         }
 
         // A8: only pipe the embedded VM's stdout/err to logcat in DEBUG builds — a release build must not leak
@@ -3190,14 +3798,15 @@ class MainActivity : AppCompatActivity() {
         JvmLauncher.setStdioRedirect(BuildConfig.DEBUG)
 
         Log.i(TAG, "starting HotSpot: DeviceHeadlessBoot, cp=$classpath")
-        val rc = JvmLauncher.startJvm(
-            javaHome = javaHome.absolutePath,
-            libjvmPath = libjvm.absolutePath,
-            libraryPath = libraryPath,
-            classpath = classpath,
-            mainClass = "DeviceHeadlessBoot",
-            extraOpts = opts.toTypedArray(),
-        )
+        val rc =
+            JvmLauncher.startJvm(
+                javaHome = javaHome.absolutePath,
+                libjvmPath = libjvm.absolutePath,
+                libraryPath = libraryPath,
+                classpath = classpath,
+                mainClass = "DeviceHeadlessBoot",
+                extraOpts = opts.toTypedArray(),
+            )
         if (rc != 0) {
             // VM creation failed (JNI_OK == 0). Clear the boot latch so a later launch into this same process
             // retries instead of being wedged VM-less with booted==true. (A VM that came up but whose main
@@ -3235,9 +3844,29 @@ class MainActivity : AppCompatActivity() {
             } else {
                 f.parentFile?.mkdirs()
                 // Minimal valid OSRS preferences.dat with window mode = resizable (byte[3]=02).
-                f.writeBytes(byteArrayOf(
-                    0x0c, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x32,
-                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x19, 0x00))
+                f.writeBytes(
+                    byteArrayOf(
+                        0x0c,
+                        0x00,
+                        0x00,
+                        0x02,
+                        0x00,
+                        0x00,
+                        0x00,
+                        0x32,
+                        0x00,
+                        0x00,
+                        0x00,
+                        0x00,
+                        0x00,
+                        0x00,
+                        0x00,
+                        0x00,
+                        0x00,
+                        0x19,
+                        0x00,
+                    ),
+                )
                 Log.i(TAG, "a7: seeded resizable preferences.dat (fresh)")
             }
         } catch (e: Exception) {
@@ -3257,10 +3886,15 @@ class MainActivity : AppCompatActivity() {
     private fun runA6SeamSelfTest() {
         JvmLauncher.onBridge {
             var loggedIn = false
-            var everResolved = false   // viewport OR any tab stone resolved => cover-and-proxy viable in fixed mode
+            var everResolved = false // viewport OR any tab stone resolved => cover-and-proxy viable in fixed mode
             var best = "(no loggedIn snapshot)"
-            for (i in 0 until 40) {     // ~40s @ 1s — chrome only ticks once mobilechrome gate + LOGGED_IN
-                val snap = try { JvmLauncher.chromeSnapshot() } catch (t: Throwable) { "" }
+            for (i in 0 until 40) { // ~40s @ 1s — chrome only ticks once mobilechrome gate + LOGGED_IN
+                val snap =
+                    try {
+                        JvmLauncher.chromeSnapshot()
+                    } catch (t: Throwable) {
+                        ""
+                    }
                 if (snap.length > 2) {
                     try {
                         val o = org.json.JSONObject(snap)
@@ -3278,7 +3912,9 @@ class MainActivity : AppCompatActivity() {
                                 "minimap=${!o.isNull("minimap")} orbs=${!o.isNull("orbs")} chat=${!o.isNull("chat")}"
                             if (resolved) break
                         }
-                    } catch (t: Throwable) { /* transient parse — retry */ }
+                    } catch (t: Throwable) {
+                        // transient parse — retry
+                    }
                 }
                 Thread.sleep(1000)
             }
@@ -3300,11 +3936,21 @@ class MainActivity : AppCompatActivity() {
         JvmLauncher.onBridge {
             var plugins = ""
             for (i in 0 until 90) {
-                plugins = try { JvmLauncher.listPlugins() } catch (t: Throwable) { "" }
+                plugins =
+                    try {
+                        JvmLauncher.listPlugins()
+                    } catch (t: Throwable) {
+                        ""
+                    }
                 if (plugins.length > 2) break
                 Thread.sleep(1000)
             }
-            val seq = try { JvmLauncher.mobileUiSeq() } catch (t: Throwable) { -1L }
+            val seq =
+                try {
+                    JvmLauncher.mobileUiSeq()
+                } catch (t: Throwable) {
+                    -1L
+                }
             if (plugins.length <= 2) {
                 Log.e(TAG, "ANDROID_A4_SEAM_RED listPlugins empty after 90s (mobileui gate / boot?)")
                 return@onBridge
@@ -3319,18 +3965,25 @@ class MainActivity : AppCompatActivity() {
                 var was = true
                 for (i in 0 until arr.length()) {
                     val o = arr.getJSONObject(i)
-                    if (o.optBoolean("enabled")) { className = o.getString("className"); was = true; break }
+                    if (o.optBoolean("enabled")) {
+                        className = o.getString("className")
+                        was = true
+                        break
+                    }
                 }
-                if (className == null && arr.length() > 0) {      // fallback: none enabled -> first plugin
+                if (className == null && arr.length() > 0) { // fallback: none enabled -> first plugin
                     className = arr.getJSONObject(0).getString("className")
                     was = arr.getJSONObject(0).optBoolean("enabled")
                 }
-                if (className == null) { Log.e(TAG, "ANDROID_A4_TOGGLE_RED no plugins to toggle"); return@onBridge }
+                if (className == null) {
+                    Log.e(TAG, "ANDROID_A4_TOGGLE_RED no plugins to toggle")
+                    return@onBridge
+                }
                 val seq0 = JvmLauncher.mobileUiSeq()
                 val ack = JvmLauncher.setPluginEnabled(className, !was)
                 val flipped = pollEnabled(className, !was, 8)
                 val seq1 = JvmLauncher.mobileUiSeq()
-                JvmLauncher.setPluginEnabled(className, was)       // restore original state
+                JvmLauncher.setPluginEnabled(className, was) // restore original state
                 val restored = pollEnabled(className, was, 8)
                 if (flipped && restored) {
                     Log.i(TAG, "ANDROID_A4_TOGGLE_GREEN plugin=$className $was->${!was}->$was seq=$seq0->$seq1 ack=$ack")
@@ -3348,13 +4001,19 @@ class MainActivity : AppCompatActivity() {
                 var group: String? = null
                 for (i in 0 until arr2.length()) {
                     val o = arr2.getJSONObject(i)
-                    if (o.optBoolean("hasConfig") && !o.isNull("configGroup")) { group = o.getString("configGroup"); break }
+                    if (o.optBoolean("hasConfig") && !o.isNull("configGroup")) {
+                        group = o.getString("configGroup")
+                        break
+                    }
                 }
                 if (group != null) {
                     val cfg = JvmLauncher.getPluginConfig(group)
                     val wid = JvmLauncher.processedWriteId()
-                    if (cfg.length > 2) Log.i(TAG, "ANDROID_A4_CONFIG_GREEN group=$group configLen=${cfg.length} writeId=$wid")
-                    else Log.e(TAG, "ANDROID_A4_CONFIG_RED group=$group empty schema")
+                    if (cfg.length > 2) {
+                        Log.i(TAG, "ANDROID_A4_CONFIG_GREEN group=$group configLen=${cfg.length} writeId=$wid")
+                    } else {
+                        Log.e(TAG, "ANDROID_A4_CONFIG_RED group=$group empty schema")
+                    }
                 } else {
                     Log.e(TAG, "ANDROID_A4_CONFIG_RED no plugin advertises a config group")
                 }
@@ -3378,14 +4037,19 @@ class MainActivity : AppCompatActivity() {
                     var h = 0
                     for (i in 0 until 30) {
                         Thread.sleep(500)
-                        w = JvmLauncher.panelWidth(); h = JvmLauncher.panelHeight(); px = JvmLauncher.panelPixels()
+                        w = JvmLauncher.panelWidth()
+                        h = JvmLauncher.panelHeight()
+                        px = JvmLauncher.panelPixels()
                         if (w > 0 && h > 0 && (px?.size ?: 0) >= w * h) break
                     }
                     val n = px?.size ?: 0
                     if (n > 0 && w > 0 && h > 0) {
-                        Log.i(TAG, "ANDROID_A5_SEAM_GREEN panels=${parr.length()} panel='$tip' ${w}x${h} px=$n seq=${JvmLauncher.panelFrameSeq()}")
+                        Log.i(
+                            TAG,
+                            "ANDROID_A5_SEAM_GREEN panels=${parr.length()} panel='$tip' ${w}x$h px=$n seq=${JvmLauncher.panelFrameSeq()}",
+                        )
                     } else {
-                        Log.e(TAG, "ANDROID_A5_SEAM_RED panels=${parr.length()} panel='$tip' ${w}x${h} px=$n")
+                        Log.e(TAG, "ANDROID_A5_SEAM_RED panels=${parr.length()} panel='$tip' ${w}x$h px=$n")
                     }
                     JvmLauncher.closePanel()
                 }
@@ -3408,7 +4072,7 @@ class MainActivity : AppCompatActivity() {
                 val qobj = org.json.JSONObject(qlist)
                 val qListAvail = qobj.optBoolean("available")
                 val qn = qobj.optJSONArray("quests")?.length() ?: 0
-                org.json.JSONObject(JvmLauncher.questActiveJson())   // parse-check the active surface too
+                org.json.JSONObject(JvmLauncher.questActiveJson()) // parse-check the active surface too
                 JvmLauncher.questSetUiOpen(false)
                 Log.i(TAG, "ANDROID_A5_TIER2_QUEST_GREEN available=$qListAvail quests=$qn isAvailable=$qAvail")
             } catch (t: Throwable) {
@@ -3421,7 +4085,9 @@ class MainActivity : AppCompatActivity() {
             try {
                 val wFlag = JvmLauncher.worldAvailable()
                 JvmLauncher.worldSetUiOpen(true)
-                var wAvail = false; var wn = 0; var wcur = -1
+                var wAvail = false
+                var wn = 0
+                var wcur = -1
                 for (i in 0 until 30) {
                     Thread.sleep(500)
                     val o = org.json.JSONObject(JvmLauncher.worldListJson())
@@ -3443,7 +4109,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Poll listPlugins() until [className]'s enabled flag == [want] (the toggle applies async on the EDT). */
-    private fun pollEnabled(className: String, want: Boolean, secs: Int): Boolean {
+    private fun pollEnabled(
+        className: String,
+        want: Boolean,
+        secs: Int,
+    ): Boolean {
         for (i in 0 until secs * 2) {
             try {
                 val list = org.json.JSONArray(JvmLauncher.listPlugins())
@@ -3454,7 +4124,9 @@ class MainActivity : AppCompatActivity() {
                         break
                     }
                 }
-            } catch (t: Throwable) { /* transient parse/read — retry */ }
+            } catch (t: Throwable) {
+                // transient parse/read — retry
+            }
             Thread.sleep(500)
         }
         return false

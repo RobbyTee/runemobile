@@ -22,50 +22,82 @@ import org.json.JSONObject
  * advances a "click here to continue" dialogue (precise click on the engine CONTINUE widget); an option row posts
  * its digit. No shared-bridge change, so the chat-at-top look + iOS parity are untouched.
  */
-class DialogueView(context: Context) : View(context) {
-
+class DialogueView(
+    context: Context,
+) : View(context) {
     companion object {
-        private const val CHAT_W = 519           // engine chatbox width (canvas px)
+        private const val CHAT_W = 519 // engine chatbox width (canvas px)
         private const val BOX_H_CANVAS = 40 + 142 // native tab row (ChatPillView.ROW_H_CANVAS) + content height
-        private const val PARCH = 0xFFD6C79E.toInt()   // OSRS parchment tan (opaque) — iOS RGB(0.84,0.78,0.62)
-        private const val BORDER = 0xFF5C4521.toInt()  // iOS RGB(0.36,0.27,0.13)
-        private const val NAME_COLOR = 0xFF800000.toInt()  // dark red NPC/player name
-        private const val TEXT_COLOR = 0xFF1A1206.toInt()  // near-black body on parchment
-        private const val CONT_COLOR = 0xFF00008C.toInt()  // blue "Click here to continue"
+        private const val PARCH = 0xFFD6C79E.toInt() // OSRS parchment tan (opaque) — iOS RGB(0.84,0.78,0.62)
+        private const val BORDER = 0xFF5C4521.toInt() // iOS RGB(0.36,0.27,0.13)
+        private const val NAME_COLOR = 0xFF800000.toInt() // dark red NPC/player name
+        private const val TEXT_COLOR = 0xFF1A1206.toInt() // near-black body on parchment
+        private const val CONT_COLOR = 0xFF00008C.toInt() // blue "Click here to continue"
         private const val OPT_COLOR = 0xFF1A1206.toInt()
     }
 
     /** Tap-to-continue: precise-click the engine CONTINUE widget centre (canvas px); (-1,-1) → fall back to space. */
     var onContinue: ((engineCx: Int, engineCy: Int) -> Unit)? = null
+
     /** An option row tapped: post its 1-based digit to the engine. */
     var onOption: ((digit: Int) -> Unit)? = null
 
     private var active = false
-    private var boxX = 0f; private var boxY = 0f; private var boxW = 0f; private var boxH = 0f
+    private var boxX = 0f
+    private var boxY = 0f
+    private var boxW = 0f
+    private var boxH = 0f
     private var name: String? = null
     private var body: String = ""
     private var hasContinue = false
-    private var options: List<Pair<String, Int>> = emptyList()   // (text, digit)
+    private var options: List<Pair<String, Int>> = emptyList() // (text, digit)
     private val optionRects = ArrayList<RectF>()
-    private var contCx = -1; private var contCy = -1
-    private var headRect: RectF? = null   // engine 3D-chathead bounds (view px) — cut out of the parchment
+    private var contCx = -1
+    private var contCy = -1
+    private var headRect: RectF? = null // engine 3D-chathead bounds (view px) — cut out of the parchment
     private var lastJson = ""
     private var bodyLayout: StaticLayout? = null
 
     private val fillPaint = Paint().apply { color = PARCH }
-    private val borderPaint = Paint().apply { style = Paint.Style.STROKE; color = BORDER; isAntiAlias = true }
-    private val namePaint = Paint().apply {
-        color = NAME_COLOR; isAntiAlias = true; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD
-    }
-    private val contPaint = Paint().apply {
-        color = CONT_COLOR; isAntiAlias = true; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD
-    }
-    private val bodyPaint = TextPaint().apply { color = TEXT_COLOR; isAntiAlias = true }
-    private val optPaint = Paint().apply { color = OPT_COLOR; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+    private val borderPaint =
+        Paint().apply {
+            style = Paint.Style.STROKE
+            color = BORDER
+            isAntiAlias = true
+        }
+    private val namePaint =
+        Paint().apply {
+            color = NAME_COLOR
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+        }
+    private val contPaint =
+        Paint().apply {
+            color = CONT_COLOR
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+        }
+    private val bodyPaint =
+        TextPaint().apply {
+            color = TEXT_COLOR
+            isAntiAlias = true
+        }
+    private val optPaint =
+        Paint().apply {
+            color = OPT_COLOR
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+        }
     private val dp = resources.displayMetrics.density
 
     private fun hide() {
-        if (active) { active = false; lastJson = ""; invalidate() }
+        if (active) {
+            active = false
+            lastJson = ""
+            invalidate()
+        }
     }
 
     /** True while a dialogue parchment is being shown (so the shell can route BACK to dismiss it). */
@@ -80,14 +112,37 @@ class DialogueView(context: Context) : View(context) {
     }
 
     /** Drive each frame: [chatSnap] (for the dialogueActive/topLevel gate) + [dlgJson] + canvas→view scale. */
-    fun update(chatSnap: String, dlgJson: String, sx: Float, sy: Float, show: Boolean) {
-        if (!show) { hide(); return }
-        val cd = try { JSONObject(chatSnap) } catch (e: Exception) { null }
-        if (cd == null || !cd.optBoolean("loggedIn") || cd.optInt("topLevelId") != 164 || !cd.optBoolean("dialogueActive")) {
-            hide(); return
+    fun update(
+        chatSnap: String,
+        dlgJson: String,
+        sx: Float,
+        sy: Float,
+        show: Boolean,
+    ) {
+        if (!show) {
+            hide()
+            return
         }
-        val d = try { JSONObject(dlgJson) } catch (e: Exception) { null }
-        if (d == null || !d.has("type")) { hide(); return }
+        val cd =
+            try {
+                JSONObject(chatSnap)
+            } catch (e: Exception) {
+                null
+            }
+        if (cd == null || !cd.optBoolean("loggedIn") || cd.optInt("topLevelId") != 164 || !cd.optBoolean("dialogueActive")) {
+            hide()
+            return
+        }
+        val d =
+            try {
+                JSONObject(dlgJson)
+            } catch (e: Exception) {
+                null
+            }
+        if (d == null || !d.has("type")) {
+            hide()
+            return
+        }
 
         boxX = cd.optInt("chatX", 0) * sx
         boxY = cd.optInt("chatY", 0) * sy
@@ -99,15 +154,22 @@ class DialogueView(context: Context) : View(context) {
         if (cont != null) {
             contCx = cont.optInt("x") + cont.optInt("w") / 2
             contCy = cont.optInt("y") + cont.optInt("h") / 2
-        } else { contCx = -1; contCy = -1 }
+        } else {
+            contCx = -1
+            contCy = -1
+        }
 
         // The engine's 3D chathead bounds (canvas px → view px). Drawn as a transparent cutout in the parchment so
         // the real head (still rendered underneath on the game surface) shows through, like desktop OSRS.
         val head = d.optJSONObject("head")
-        headRect = if (head != null && head.optInt("w") > 0 && head.optInt("h") > 0) {
-            val hx = head.optInt("x") * sx; val hy = head.optInt("y") * sy
-            RectF(hx, hy, hx + head.optInt("w") * sx, hy + head.optInt("h") * sy)
-        } else null
+        headRect =
+            if (head != null && head.optInt("w") > 0 && head.optInt("h") > 0) {
+                val hx = head.optInt("x") * sx
+                val hy = head.optInt("y") * sy
+                RectF(hx, hy, hx + head.optInt("w") * sx, hy + head.optInt("h") * sy)
+            } else {
+                null
+            }
         // Ignore a head rect that doesn't fall inside the dialogue box (stale/bad engine coords) so the cutout
         // can't punch outside the parchment and the text-column math can't degenerate. intersect() clamps the
         // rect to the overlap (returns false + leaves it untouched when there is none).
@@ -116,7 +178,10 @@ class DialogueView(context: Context) : View(context) {
         if (dlgJson != lastJson) {
             lastJson = dlgJson
             rebuild(d)
-            Log.i("DialogueView", "ui4: dialogue type=${d.optString("type")} name=${name ?: "-"} opts=${options.size} cont=($contCx,$contCy)")
+            Log.i(
+                "DialogueView",
+                "ui4: dialogue type=${d.optString("type")} name=${name ?: "-"} opts=${options.size} cont=($contCx,$contCy)",
+            )
         }
         invalidate()
     }
@@ -126,14 +191,17 @@ class DialogueView(context: Context) : View(context) {
         body = d.optString("text", "")
         hasContinue = d.optBoolean("continue", false)
         val optArr = d.optJSONArray("options")
-        options = if (optArr != null) {
-            (0 until optArr.length()).mapNotNull { i ->
-                val o = optArr.optJSONObject(i) ?: return@mapNotNull null
-                val t = o.optString("text", "")
-                if (t.isBlank()) null else t to o.optInt("digit", i + 1)
+        options =
+            if (optArr != null) {
+                (0 until optArr.length()).mapNotNull { i ->
+                    val o = optArr.optJSONObject(i) ?: return@mapNotNull null
+                    val t = o.optString("text", "")
+                    if (t.isBlank()) null else t to o.optInt("digit", i + 1)
+                }
+            } else {
+                emptyList()
             }
-        } else emptyList()
-        bodyLayout = null   // re-laid out in onDraw against the live box width
+        bodyLayout = null // re-laid out in onDraw against the live box width
         requestLayout()
         invalidate()
     }
@@ -158,7 +226,10 @@ class DialogueView(context: Context) : View(context) {
         var textRight = r.right - padX
         if (hole != null) {
             if (hole.centerX() < r.centerX()) textLeft = hole.right + padX else textRight = hole.left - padX
-            if (textRight - textLeft < 60f * dp) { textLeft = r.left + padX; textRight = r.right - padX }
+            if (textRight - textLeft < 60f * dp) {
+                textLeft = r.left + padX
+                textRight = r.right - padX
+            }
         }
         val cx = (textLeft + textRight) / 2f
         val colW = (textRight - textLeft).coerceAtLeast(1f)
@@ -202,11 +273,19 @@ class DialogueView(context: Context) : View(context) {
     }
 
     /** Draw the wrapped body text in the column [textLeft]..[textLeft]+[colW] starting at [top]; returns the y below it. */
-    private fun drawBody(canvas: Canvas, textLeft: Float, colW: Float, top: Float): Float {
+    private fun drawBody(
+        canvas: Canvas,
+        textLeft: Float,
+        colW: Float,
+        top: Float,
+    ): Float {
         if (body.isBlank()) return top
         val w = colW.toInt().coerceAtLeast(1)
-        val layout = StaticLayout.Builder.obtain(body, 0, body.length, bodyPaint, w)
-            .setAlignment(Layout.Alignment.ALIGN_CENTER).build()
+        val layout =
+            StaticLayout.Builder
+                .obtain(body, 0, body.length, bodyPaint, w)
+                .setAlignment(Layout.Alignment.ALIGN_CENTER)
+                .build()
         canvas.save()
         canvas.translate(textLeft, top)
         layout.draw(canvas)
@@ -217,7 +296,7 @@ class DialogueView(context: Context) : View(context) {
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!active) return false
         val r = RectF(boxX, boxY, boxX + boxW, boxY + boxH)
-        if (!r.contains(event.x, event.y)) return false   // outside the parchment -> fall through
+        if (!r.contains(event.x, event.y)) return false // outside the parchment -> fall through
         if (event.actionMasked == MotionEvent.ACTION_UP) {
             if (options.isNotEmpty()) {
                 val idx = optionRects.indexOfFirst { it.contains(event.x, event.y) }
@@ -231,6 +310,6 @@ class DialogueView(context: Context) : View(context) {
                 Log.i("DialogueView", "ui4: continue -> ($contCx,$contCy)")
             }
         }
-        return true   // consume taps over the parchment while a dialogue is open
+        return true // consume taps over the parchment while a dialogue is open
     }
 }

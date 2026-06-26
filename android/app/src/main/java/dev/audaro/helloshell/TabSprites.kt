@@ -28,6 +28,7 @@ object TabSprites {
     ) {
         /** Enough to drive the grid: both stones + at least one glyph. */
         fun usableForGrid() = stoneInactive != null && stoneActive != null && icons.any { it != null }
+
         fun usableForChat() = chatbtn != null
     }
 
@@ -39,15 +40,16 @@ object TabSprites {
             o.optJSONArray("icons")?.let { arr ->
                 for (i in 0 until minOf(14, arr.length())) icons[i] = bmp(arr.optJSONObject(i))
             }
-            val set = Set(
-                bmp(o.optJSONObject("stoneInactive")),
-                bmp(o.optJSONObject("stoneActive")),
-                icons,
-                bmp(o.optJSONObject("chatbtn")),
-                bmp(o.optJSONObject("chatbtnSelected")),
-                bmp(o.optJSONObject("chatbtnNew")),
-                o.optBoolean("complete", false),
-            )
+            val set =
+                Set(
+                    bmp(o.optJSONObject("stoneInactive")),
+                    bmp(o.optJSONObject("stoneActive")),
+                    icons,
+                    bmp(o.optJSONObject("chatbtn")),
+                    bmp(o.optJSONObject("chatbtnSelected")),
+                    bmp(o.optJSONObject("chatbtnNew")),
+                    o.optBoolean("complete", false),
+                )
             if (!set.usableForGrid() && !set.usableForChat()) {
                 // non-empty payload that decoded to nothing usable — flag it (corrupt cache / decode mismatch)
                 Log.w("TabSprites", "payload parsed but no usable bitmaps (${json.length} bytes) — check ARGB/Base64 decode")
@@ -86,7 +88,10 @@ object TabSprites {
         }
     }
 
-    fun cache(filesDir: File, json: String) {
+    fun cache(
+        filesDir: File,
+        json: String,
+    ) {
         try {
             File(filesDir, CACHE_NAME).writeText(json)
         } catch (e: Exception) {
@@ -94,9 +99,10 @@ object TabSprites {
         }
     }
 
-    fun cached(filesDir: File): String? = try {
-        File(filesDir, CACHE_NAME).let { if (it.exists()) it.readText() else null }
-    } catch (e: Exception) {
-        null
-    }
+    fun cached(filesDir: File): String? =
+        try {
+            File(filesDir, CACHE_NAME).let { if (it.exists()) it.readText() else null }
+        } catch (e: Exception) {
+            null
+        }
 }

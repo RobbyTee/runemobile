@@ -54,16 +54,24 @@ object NetProbe {
         Log.i(TAG, "NETPROBE DONE")
     }
 
-    private data class Resp(val status: Int, val body: String)
+    private data class Resp(
+        val status: Int,
+        val body: String,
+    )
 
-    private fun httpGet(url: String, auth: String?): Resp {
-        val c = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 10000; readTimeout = 10000
-            requestMethod = "GET"
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "RuneLite")
-            if (auth != null) setRequestProperty("Authorization", auth)
-        }
+    private fun httpGet(
+        url: String,
+        auth: String?,
+    ): Resp {
+        val c =
+            (URL(url).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 10000
+                readTimeout = 10000
+                requestMethod = "GET"
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("User-Agent", "RuneLite")
+                if (auth != null) setRequestProperty("Authorization", auth)
+            }
         return try {
             val status = c.responseCode
             val stream = if (status in 200..299) c.inputStream else (c.errorStream ?: c.inputStream)
@@ -74,7 +82,11 @@ object NetProbe {
         }
     }
 
-    private fun probeHttp(label: String, url: String, auth: String?) {
+    private fun probeHttp(
+        label: String,
+        url: String,
+        auth: String?,
+    ) {
         try {
             val r = httpGet(url, auth)
             val snippet = r.body.replace("\n", " ").take(180)
@@ -84,7 +96,11 @@ object NetProbe {
         }
     }
 
-    private fun probeTcp(label: String, host: String, port: Int) {
+    private fun probeTcp(
+        label: String,
+        host: String,
+        port: Int,
+    ) {
         val s = Socket()
         try {
             s.connect(InetSocketAddress(host, port), 8000)
@@ -92,15 +108,21 @@ object NetProbe {
         } catch (t: Throwable) {
             Log.i(TAG, "$label -> TCP FAIL ${t.javaClass.simpleName}: ${t.message}")
         } finally {
-            try { s.close() } catch (_: Throwable) {}
+            try {
+                s.close()
+            } catch (_: Throwable) {
+            }
         }
     }
 
     private fun readSession(ctx: Context): String? {
         for (p in listOf(File(ctx.getExternalFilesDir(null), "tokens.json"), File(ctx.filesDir, "tokens.json"))) {
             if (p.exists()) {
-                return try { JSONObject(p.readText()).optString("session_id", "").ifEmpty { null } }
-                catch (_: Throwable) { null }
+                return try {
+                    JSONObject(p.readText()).optString("session_id", "").ifEmpty { null }
+                } catch (_: Throwable) {
+                    null
+                }
             }
         }
         return null

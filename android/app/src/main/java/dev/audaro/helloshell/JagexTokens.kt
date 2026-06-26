@@ -23,16 +23,16 @@ import java.io.File
  *   adb push tokens.json /sdcard/Android/data/dev.audaro.helloshell/files/tokens.json
  */
 object JagexTokens {
-
     private const val TAG = "JagexTokens"
 
     /** Locate tokens.json: internal filesDir always; the adb-pushable external dir ONLY in DEBUG builds (A8 — a
      *  release build keeps the secret internal-only, while dev keeps the `adb push …/files/tokens.json` flow). */
     private fun locate(ctx: Context): File? {
-        val candidates = listOfNotNull(
-            File(ctx.filesDir, "tokens.json"),
-            if (BuildConfig.DEBUG) ctx.getExternalFilesDir(null)?.let { File(it, "tokens.json") } else null,
-        )
+        val candidates =
+            listOfNotNull(
+                File(ctx.filesDir, "tokens.json"),
+                if (BuildConfig.DEBUG) ctx.getExternalFilesDir(null)?.let { File(it, "tokens.json") } else null,
+            )
         return candidates.firstOrNull { it.exists() && it.length() > 0 }
     }
 
@@ -46,10 +46,13 @@ object JagexTokens {
     private fun readSource(ctx: Context): Pair<String, String>? {
         locate(ctx)?.let { return it.readText() to it.parent.orEmpty() }
         if (loggedOutMarker(ctx).exists()) {
-            return null   // logged out: don't resurrect the session from the bundled asset
+            return null // logged out: don't resurrect the session from the bundled asset
         }
         return try {
-            ctx.assets.open("tokens.json").bufferedReader().use { it.readText() } to "bundled asset"
+            ctx.assets
+                .open("tokens.json")
+                .bufferedReader()
+                .use { it.readText() } to "bundled asset"
         } catch (e: Exception) {
             null
         }
@@ -101,12 +104,13 @@ object JagexTokens {
             return false
         }
         val (text, origin) = source
-        val t = try {
-            JSONObject(text)
-        } catch (e: Exception) {
-            Log.w(TAG, "tokens.json parse failed: ${e.message} — autologin DISABLED")
-            return false
-        }
+        val t =
+            try {
+                JSONObject(text)
+            } catch (e: Exception) {
+                Log.w(TAG, "tokens.json parse failed: ${e.message} — autologin DISABLED")
+                return false
+            }
         val session = t.optString("session_id", "")
         val character = t.optString("chosen_account_id", "")
         val display = t.optString("chosen_display_name", "")
@@ -143,13 +147,14 @@ object JagexTokens {
      * 765x503 login layout (EULA Accept centre; Play Now centre, desktop-proven); device-tunable via the same
      * runelite.headless.autologin.* properties if a real device's login frame differs.
      */
-    val autologinOpts: Array<String> = arrayOf(
-        "-Drunelite.headless.autologin=true",
-        "-Drunelite.headless.autologin.eula=true",
-        "-Drunelite.headless.autologin.eula.point=302,312",
-        "-Drunelite.headless.autologin.eula.loginIndex=12",
-        "-Drunelite.headless.autologin.point=382,248",
-        "-Drunelite.headless.autologin.world=301",
-        "-Drunelite.headless.autologin.worldAddress=oldschool1.runescape.com",
-    )
+    val autologinOpts: Array<String> =
+        arrayOf(
+            "-Drunelite.headless.autologin=true",
+            "-Drunelite.headless.autologin.eula=true",
+            "-Drunelite.headless.autologin.eula.point=302,312",
+            "-Drunelite.headless.autologin.eula.loginIndex=12",
+            "-Drunelite.headless.autologin.point=382,248",
+            "-Drunelite.headless.autologin.world=301",
+            "-Drunelite.headless.autologin.worldAddress=oldschool1.runescape.com",
+        )
 }

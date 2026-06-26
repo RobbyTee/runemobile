@@ -18,8 +18,9 @@ import android.view.WindowInsets
  * (MainActivity) maps the chosen row back to the engine's 19px-header/15px-row geometry to commit the click via
  * JavaBridge.selectMenuPoint, so plugin onClick consumers + Menu Entry Swapper ordering are honoured.
  */
-class MenuOverlayView(context: Context) : View(context) {
-
+class MenuOverlayView(
+    context: Context,
+) : View(context) {
     /** FIX-10b: a row's role in tap-mode. NORMAL = leaf (commit); PARENT = has a submenu (drill in); BACK = the
      *  synthetic "‹ Back" row the host prepends inside a submenu. Drag-mode menus are all NORMAL. */
     enum class Role { NORMAL, PARENT, BACK }
@@ -40,7 +41,7 @@ class MenuOverlayView(context: Context) : View(context) {
 
     private var entries: List<Entry> = emptyList()
     private var active = false
-    private var tapMode = false              // FIX-10b: persistent tap-to-select (submenus / shift) vs slide-select
+    private var tapMode = false // FIX-10b: persistent tap-to-select (submenus / shift) vs slide-select
     private var headerText = "Choose Option"
     private var boxX = 0f
     private var boxY = 0f
@@ -50,30 +51,48 @@ class MenuOverlayView(context: Context) : View(context) {
     // independent of the engine's fixed 19/15 px menu.
     private val headerH = dp(22f)
     private val baseRowH = dp(32f)
+
     // FIX-10: a slide-select peek menu can't scroll, so a row past the screen edge is unreachable. rowH shrinks
     // (down to a legible floor) in show() when a tall menu wouldn't otherwise fit fully on-screen.
     private var rowH = baseRowH
+
     // UI-5: the box width is the iOS kMenuWidth (210) floor, grown per-show to fit the widest entry's text so
     // long rows (e.g. the Grand Exchange) don't spill outside the border (iOS: boxW = MAX(kMenuWidth, er+16)).
     private val minMenuW = dp(210f)
     private var boxW = minMenuW
     private val pad = dp(6f)
-    private val xTol = dp(44f)   // horizontal slack so a straight slide down still tracks the rows
+    private val xTol = dp(44f) // horizontal slack so a straight slide down still tracks the rows
 
     private val bgPaint = Paint().apply { color = Color.argb(238, 33, 28, 23) }
-    private val borderPaint = Paint().apply {
-        color = Color.argb(255, 140, 128, 102); style = Paint.Style.STROKE; strokeWidth = dp(1f); isAntiAlias = true
-    }
+    private val borderPaint =
+        Paint().apply {
+            color = Color.argb(255, 140, 128, 102)
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1f)
+            isAntiAlias = true
+        }
     private val hlPaint = Paint().apply { color = Color.argb(56, 255, 255, 255) }
-    private val headerPaint = Paint().apply {
-        color = Color.WHITE; textSize = sp(14f); isFakeBoldText = true; isAntiAlias = true
-    }
-    private val optPaint = Paint().apply {
-        color = Color.WHITE; textSize = sp(16f); isFakeBoldText = true; isAntiAlias = true
-    }
-    private val tgtPaint = Paint().apply {
-        color = Color.argb(255, 140, 217, 255); textSize = sp(16f); isFakeBoldText = true; isAntiAlias = true
-    }
+    private val headerPaint =
+        Paint().apply {
+            color = Color.WHITE
+            textSize = sp(14f)
+            isFakeBoldText = true
+            isAntiAlias = true
+        }
+    private val optPaint =
+        Paint().apply {
+            color = Color.WHITE
+            textSize = sp(16f)
+            isFakeBoldText = true
+            isAntiAlias = true
+        }
+    private val tgtPaint =
+        Paint().apply {
+            color = Color.argb(255, 140, 217, 255)
+            textSize = sp(16f)
+            isFakeBoldText = true
+            isAntiAlias = true
+        }
 
     init {
         // Always laid out to full screen (so geometry/draw are valid the instant show() flips `active`); it is
@@ -83,6 +102,7 @@ class MenuOverlayView(context: Context) : View(context) {
     }
 
     private fun dp(v: Float) = v * resources.displayMetrics.density
+
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
 
     /** UX-XCUT-02: [left, top, right, bottom] safe-area insets (display cutout + system bars) so the "Choose
@@ -102,8 +122,14 @@ class MenuOverlayView(context: Context) : View(context) {
     /** Show the menu (display-order entries) anchored at the finger; body biased away from the holding hand.
      *  FIX-10b: [tap] = persistent tap-to-select (submenu drill-in / shift-customize); [header] overrides the
      *  title (e.g. "Submenu" when drilled). Drag-mode callers omit both and behave exactly as before. */
-    fun show(items: List<Entry>, anchorX: Float, anchorY: Float, handRight: Boolean,
-             tap: Boolean = false, header: String = "Choose Option") {
+    fun show(
+        items: List<Entry>,
+        anchorX: Float,
+        anchorY: Float,
+        handRight: Boolean,
+        tap: Boolean = false,
+        header: String = "Choose Option",
+    ) {
         entries = items
         tapMode = tap
         headerText = header
@@ -113,8 +139,12 @@ class MenuOverlayView(context: Context) : View(context) {
         // FIX-10: shrink the rows so even a tall menu fits fully on-screen (rowAt + onDraw use this same rowH,
         // and the host maps by row INDEX, so the shrink is self-consistent and doesn't shift the selection).
         val avail = vh - pad * 2 - headerH
-        rowH = if (items.isNotEmpty() && items.size * baseRowH > avail)
-            (avail / items.size).coerceAtLeast(dp(22f)) else baseRowH
+        rowH =
+            if (items.isNotEmpty() && items.size * baseRowH > avail) {
+                (avail / items.size).coerceAtLeast(dp(22f))
+            } else {
+                baseRowH
+            }
         // UI-5: grow the box to the widest row (opt + gap + cyan target) so long entries stay inside the border;
         // dp(20f) = the dp(10f) text left margin (onDraw) + dp(10f) right padding.
         var widest = 0f
@@ -154,7 +184,10 @@ class MenuOverlayView(context: Context) : View(context) {
     val isActive: Boolean get() = active
 
     /** Display-row index under a finger point (view px), or -1 for the header/cancel zone. Y-driven. */
-    fun rowAt(x: Float, y: Float): Int {
+    fun rowAt(
+        x: Float,
+        y: Float,
+    ): Int {
         if (!active || entries.isEmpty()) return -1
         if (x < boxX - xTol || x > boxX + boxW + xTol) return -1
         val ry = y - (boxY + headerH)
@@ -167,7 +200,10 @@ class MenuOverlayView(context: Context) : View(context) {
 
     /** FIX-10b tap hit-test: row index (>=0), -1 for the header strip, or -2 for a tap OUTSIDE the box (dismiss).
      *  Unlike rowAt (slide-select, generous xTol), this respects the real box bounds so an outside tap cancels. */
-    fun hitTest(x: Float, y: Float): Int {
+    fun hitTest(
+        x: Float,
+        y: Float,
+    ): Int {
         if (!active || entries.isEmpty()) return -2
         val totalH = headerH + entries.size * rowH
         if (x < boxX || x > boxX + boxW || y < boxY || y > boxY + totalH) return -2

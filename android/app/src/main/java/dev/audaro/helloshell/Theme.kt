@@ -11,7 +11,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 
-/**
+/*
  * The OSRS-flavoured Compose theme for the native plugin panel / config UI (UX-XCUT-05).
  *
  * The Compose layer previously read as a generic dark-Material settings app bolted onto the well-styled
@@ -25,37 +25,38 @@ import androidx.compose.ui.text.font.FontFamily
 // --- OSRS palette -------------------------------------------------------------------------------------------
 // Warm amber/gold primary (the classic interface gold), muted stone secondary, parchment off-white text on a
 // near-black stone surface. Accents are kept legible against the dark surfaces the panel already uses.
-private val OsrsGold = Color(0xFFE0A33B)       // primary — OSRS interface gold/amber
-private val OsrsGoldDim = Color(0xFF8C6322)    // primary container — a dimmer gold for filled tonals
-private val OsrsStone = Color(0xFFA8997E)      // secondary — muted parchment stone
-private val OsrsStoneDim = Color(0xFF4A4234)   // secondary container
-private val OsrsParchment = Color(0xFFE8E0D0)  // onSurface — warm off-white "parchment" text
+private val OsrsGold = Color(0xFFE0A33B) // primary — OSRS interface gold/amber
+private val OsrsGoldDim = Color(0xFF8C6322) // primary container — a dimmer gold for filled tonals
+private val OsrsStone = Color(0xFFA8997E) // secondary — muted parchment stone
+private val OsrsStoneDim = Color(0xFF4A4234) // secondary container
+private val OsrsParchment = Color(0xFFE8E0D0) // onSurface — warm off-white "parchment" text
 private val OsrsParchmentDim = Color(0xFFB9AE97)
-private val OsrsSurface = Color(0xFF1B1B1B)    // near-black stone surface (matches existing 0xFF1B1B1B usage)
+private val OsrsSurface = Color(0xFF1B1B1B) // near-black stone surface (matches existing 0xFF1B1B1B usage)
 private val OsrsSurfaceLow = Color(0xFF141414) // the sheet body colour already used by SheetScaffold
-private val OsrsInk = Color(0xFF1A140A)        // onPrimary — dark ink over the gold accents
-private val OsrsError = Color(0xFFE57373)      // matches the existing "couldn't start" / reset red
+private val OsrsInk = Color(0xFF1A140A) // onPrimary — dark ink over the gold accents
+private val OsrsError = Color(0xFFE57373) // matches the existing "couldn't start" / reset red
 
-private val OsrsColorScheme = darkColorScheme(
-    primary = OsrsGold,
-    onPrimary = OsrsInk,
-    primaryContainer = OsrsGoldDim,
-    onPrimaryContainer = OsrsParchment,
-    secondary = OsrsStone,
-    onSecondary = OsrsInk,
-    secondaryContainer = OsrsStoneDim,
-    onSecondaryContainer = OsrsParchment,
-    tertiary = Color(0xFF80CBC4),              // the teal already used for section labels / hints
-    background = OsrsSurfaceLow,
-    onBackground = OsrsParchment,
-    surface = OsrsSurface,
-    onSurface = OsrsParchment,
-    surfaceVariant = OsrsSurfaceLow,
-    onSurfaceVariant = OsrsParchmentDim,
-    error = OsrsError,
-    onError = OsrsInk,
-    outline = Color(0x55E0A33B),               // faint gold hairline
-)
+private val OsrsColorScheme =
+    darkColorScheme(
+        primary = OsrsGold,
+        onPrimary = OsrsInk,
+        primaryContainer = OsrsGoldDim,
+        onPrimaryContainer = OsrsParchment,
+        secondary = OsrsStone,
+        onSecondary = OsrsInk,
+        secondaryContainer = OsrsStoneDim,
+        onSecondaryContainer = OsrsParchment,
+        tertiary = Color(0xFF80CBC4), // the teal already used for section labels / hints
+        background = OsrsSurfaceLow,
+        onBackground = OsrsParchment,
+        surface = OsrsSurface,
+        onSurface = OsrsParchment,
+        surfaceVariant = OsrsSurfaceLow,
+        onSurfaceVariant = OsrsParchmentDim,
+        error = OsrsError,
+        onError = OsrsInk,
+        outline = Color(0x55E0A33B), // faint gold hairline
+    )
 
 /**
  * Load the shipped RuneScape typeface as a Compose FontFamily, falling back to the platform default if the
@@ -68,7 +69,7 @@ private fun runeScapeFontFamily(): FontFamily? {
         try {
             FontFamily(Font("tabassets/runescape.ttf", context.assets))
         } catch (t: Throwable) {
-            null   // missing/corrupt asset -> fall back to the Material default typeface gracefully
+            null // missing/corrupt asset -> fall back to the Material default typeface gracefully
         }
     }
 }
@@ -76,8 +77,9 @@ private fun runeScapeFontFamily(): FontFamily? {
 /** Material3 Typography with the RuneScape face applied to titles + default body text (when the asset loads). */
 @Composable
 private fun osrsTypography(): Typography {
-    val rs = runeScapeFontFamily() ?: return Typography()   // no asset -> stock typography, no crash
+    val rs = runeScapeFontFamily() ?: return Typography() // no asset -> stock typography, no crash
     val base = Typography()
+
     fun TextStyle.withRs(): TextStyle = copy(fontFamily = rs)
     return base.copy(
         // Titles + headers get the RS face for the OSRS feel; body/label keep RS too for one coherent skin.

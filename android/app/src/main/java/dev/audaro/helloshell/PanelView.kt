@@ -6,8 +6,6 @@ import android.util.Base64
 import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -19,6 +17,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
@@ -55,7 +55,11 @@ import org.json.JSONArray
 import kotlin.coroutines.coroutineContext
 
 /** One side-panel nav entry from MobileUiBridge.listPanels(). */
-data class PanelEntry(val index: Int, val tooltip: String, val icon: Bitmap?)
+data class PanelEntry(
+    val index: Int,
+    val tooltip: String,
+    val icon: Bitmap?,
+)
 
 // Desktop-like cap for the rendered panel column. The Swing PluginPanel is laid out at ~242 logical px
 // (MobileUiBridge.PANEL_W) and supersampled; the bridge's design target is ≈323pt wide (MobileUiBridge:808).
@@ -64,7 +68,12 @@ data class PanelEntry(val index: Int, val tooltip: String, val icon: Bitmap?)
 // display width here restores the intended size and keeps short panels near 1:1 (crisp).
 private val PANEL_MAX_DP = 340.dp
 
-private class PanelSnap(val w: Int, val h: Int, val seq: Int, val px: IntArray?)
+private class PanelSnap(
+    val w: Int,
+    val h: Int,
+    val seq: Int,
+    val px: IntArray?,
+)
 
 // PanelList (the old intermediate "Panels" screen) + its NativeRow were retired in the §4 cutover — the
 // launcher grid now surfaces every panel + curated native screen as a first-class tile, so the extra list
@@ -76,7 +85,12 @@ private class PanelSnap(val w: Int, val h: Int, val seq: Int, val px: IntArray?)
  * vertical scroll, and maps taps back to buffer coords via panelClick. Closes the panel on dispose.
  */
 @Composable
-fun PanelView(index: Int, tooltip: String, onBack: () -> Unit, onPanelTextActive: (Boolean) -> Unit = {}) {
+fun PanelView(
+    index: Int,
+    tooltip: String,
+    onBack: () -> Unit,
+    onPanelTextActive: (Boolean) -> Unit = {},
+) {
     var bmp by remember { mutableStateOf<Bitmap?>(null) }
     var pw by remember { mutableStateOf(0) }
     var viewW by remember { mutableStateOf(1) }
@@ -102,16 +116,26 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit, onPanelTextActive
         JvmLauncher.onBridge { JvmLauncher.openPanel(index) }
         var lastSeq = -1
         while (coroutineContext.isActive) {
-            val s = withContext(Dispatchers.IO) {
-                JvmLauncher.onBridge {
-                    PanelSnap(JvmLauncher.panelWidth(), JvmLauncher.panelHeight(), JvmLauncher.panelFrameSeq(), JvmLauncher.panelPixels())
-                }.get()
-            }
+            val s =
+                withContext(Dispatchers.IO) {
+                    JvmLauncher
+                        .onBridge {
+                            PanelSnap(
+                                JvmLauncher.panelWidth(),
+                                JvmLauncher.panelHeight(),
+                                JvmLauncher.panelFrameSeq(),
+                                JvmLauncher.panelPixels(),
+                            )
+                        }.get()
+                }
             if (s.seq != lastSeq && s.w > 0 && s.h > 0 && s.px != null && s.px.size >= s.w * s.h) {
                 bmp = Bitmap.createBitmap(s.px, 0, s.w, s.w, s.h, Bitmap.Config.ARGB_8888)
                 pw = s.w
                 lastSeq = s.seq
-                if (!logged) { Log.i("MainActivity", "ANDROID_A5_UI_GREEN panel='$tooltip' ${s.w}x${s.h}"); logged = true }
+                if (!logged) {
+                    Log.i("MainActivity", "ANDROID_A5_UI_GREEN panel='$tooltip' ${s.w}x${s.h}")
+                    logged = true
+                }
             }
             delay(400)
         }
@@ -132,7 +156,10 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit, onPanelTextActive
                 BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
                     val colW = if (maxWidth < PANEL_MAX_DP) maxWidth else PANEL_MAX_DP
                     Box(
-                        Modifier.width(colW).fillMaxHeight().verticalScroll(scroll)
+                        Modifier
+                            .width(colW)
+                            .fillMaxHeight()
+                            .verticalScroll(scroll)
                             .onGloballyPositioned { viewW = it.size.width.coerceAtLeast(1) }
                             .pointerInput(pw, viewW) {
                                 detectTapGestures(
@@ -146,13 +173,15 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit, onPanelTextActive
                                             // field; if so raise the mirror field pre-filled, else drop the keyboard.
                                             scope.launch {
                                                 delay(140)
-                                                val active = withContext(Dispatchers.IO) {
-                                                    JvmLauncher.onBridge { JvmLauncher.isPanelTextActive() }.get()
-                                                }
-                                                if (active) {
-                                                    fieldValue = withContext(Dispatchers.IO) {
-                                                        JvmLauncher.onBridge { JvmLauncher.getPanelText() }.get()
+                                                val active =
+                                                    withContext(Dispatchers.IO) {
+                                                        JvmLauncher.onBridge { JvmLauncher.isPanelTextActive() }.get()
                                                     }
+                                                if (active) {
+                                                    fieldValue =
+                                                        withContext(Dispatchers.IO) {
+                                                            JvmLauncher.onBridge { JvmLauncher.getPanelText() }.get()
+                                                        }
                                                     textActive = true
                                                 } else {
                                                     textActive = false
@@ -164,7 +193,7 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit, onPanelTextActive
                                         if (pw > 0 && viewW > 0) {
                                             val bx = (off.x * pw / viewW).toInt()
                                             val by = ((off.y + scroll.value) * pw / viewW).toInt()
-                                            JvmLauncher.onBridgeTouch { JvmLauncher.panelLongPress(bx, by) }   // SC-4 BUTTON3
+                                            JvmLauncher.onBridgeTouch { JvmLauncher.panelLongPress(bx, by) } // SC-4 BUTTON3
                                         }
                                     },
                                 )
@@ -178,16 +207,24 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit, onPanelTextActive
                     val keyboard = LocalSoftwareKeyboardController.current
                     // Focus the mirror AND explicitly show the IME — requesting focus alone is unreliable, and the
                     // host poll no longer fights it (onPanelTextActive frees the IME). delay lets layout settle.
-                    LaunchedEffect(Unit) { fr.requestFocus(); delay(60); keyboard?.show() }
+                    LaunchedEffect(Unit) {
+                        fr.requestFocus()
+                        delay(60)
+                        keyboard?.show()
+                    }
                     OutlinedTextField(
                         value = fieldValue,
-                        onValueChange = { v -> fieldValue = v; JvmLauncher.onBridgeTouch { JvmLauncher.panelText(v) } },
+                        onValueChange = { v ->
+                            fieldValue = v
+                            JvmLauncher.onBridgeTouch { JvmLauncher.panelText(v) }
+                        },
                         singleLine = true,
                         label = { Text("Search / type into panel") },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = {
-                            JvmLauncher.onBridgeTouch { JvmLauncher.panelKey(10) }   // AWT VK_ENTER -> submit
-                        }),
+                        keyboardActions =
+                            KeyboardActions(onDone = {
+                                JvmLauncher.onBridgeTouch { JvmLauncher.panelKey(10) } // AWT VK_ENTER -> submit
+                            }),
                         modifier = Modifier.fillMaxWidth().padding(8.dp).focusRequester(fr),
                     )
                 }
@@ -197,17 +234,19 @@ fun PanelView(index: Int, tooltip: String, onBack: () -> Unit, onPanelTextActive
 }
 
 // Non-private: reused by the §4 launcher grid (PluginPanel.kt) so it can surface panels as tiles directly.
-fun parsePanels(json: String): List<PanelEntry> = try {
-    val arr = JSONArray(json)
-    (0 until arr.length()).map { i ->
-        val o = arr.getJSONObject(i)
-        val icon = o.optString("iconPng", "").takeIf { it.isNotEmpty() }?.let {
-            val bytes = Base64.decode(it, Base64.DEFAULT)
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+fun parsePanels(json: String): List<PanelEntry> =
+    try {
+        val arr = JSONArray(json)
+        (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            val icon =
+                o.optString("iconPng", "").takeIf { it.isNotEmpty() }?.let {
+                    val bytes = Base64.decode(it, Base64.DEFAULT)
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                }
+            PanelEntry(o.optInt("index", i), o.optString("tooltip", "panel $i"), icon)
         }
-        PanelEntry(o.optInt("index", i), o.optString("tooltip", "panel $i"), icon)
+    } catch (t: Throwable) {
+        Log.e("MainActivity", "ANDROID_A5_UI_RED parse: $t")
+        emptyList()
     }
-} catch (t: Throwable) {
-    Log.e("MainActivity", "ANDROID_A5_UI_RED parse: $t")
-    emptyList()
-}

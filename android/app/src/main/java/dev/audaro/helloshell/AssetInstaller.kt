@@ -16,7 +16,6 @@ import java.io.File
  * set into a native-lib dir if a hardened device rejects it.
  */
 object AssetInstaller {
-
     private const val TAG = "AssetInstaller"
 
     // PERF-COLD-START-06: two INDEPENDENT re-unpack gates so a jar update doesn't re-copy the whole tree.
@@ -36,7 +35,10 @@ object AssetInstaller {
      * the fast path (already installed) it is never called. The callback runs on the calling (boot) thread, so the
      * consumer must marshal to the UI thread itself.
      */
-    fun ensureInstalled(ctx: Context, onProgress: ((Int) -> Unit)? = null): File {
+    fun ensureInstalled(
+        ctx: Context,
+        onProgress: ((Int) -> Unit)? = null,
+    ): File {
         val root = File(ctx.filesDir, "jvm")
         val jreDir = File(root, "jre")
         val baseMarker = File(root, ".installed-base")
@@ -45,7 +47,7 @@ object AssetInstaller {
         // The JRE re-unpacks when BASE changes (or it's missing); the jars re-unpack when the content tag changes.
         val baseStale = readMarker(baseMarker) != BASE || !jreDir.exists()
         val tagStale = readMarker(tagMarker) != wantTag
-        if (!baseStale && !tagStale) return jreDir   // fast path — nothing to do
+        if (!baseStale && !tagStale) return jreDir // fast path — nothing to do
 
         Log.i(TAG, "runtime unpack: baseStale=$baseStale (BASE=$BASE) tagStale=$tagStale (tag=$wantTag) -> $root")
         root.mkdirs()
@@ -60,21 +62,27 @@ object AssetInstaller {
         // Copy each gate, writing its marker ONLY after that gate's copy fully succeeds — so an unpack killed
         // mid-jars doesn't re-copy the (already-landed) 110 MB JRE on retry, and a torn copy never leaves a
         // matching marker (an interrupted gate just re-runs next launch). Coarse per-subtree progress.
-        val nonJre = ctx.assets.list("jvm")?.filter { it != "jre" }.orEmpty()
+        val nonJre =
+            ctx.assets
+                .list("jvm")
+                ?.filter { it != "jre" }
+                .orEmpty()
         val total = ((if (baseStale) 1 else 0) + (if (tagStale) nonJre.size else 0)).coerceAtLeast(1)
         var done = 0
         onProgress?.invoke(0)
         if (baseStale) {
             copyAssetDir(ctx, "jvm/jre", jreDir)
             baseMarker.writeText(BASE)
-            done++; onProgress?.invoke(done * 100 / total)
+            done++
+            onProgress?.invoke(done * 100 / total)
         }
         if (tagStale) {
             for (child in nonJre) {
                 copyAssetDir(ctx, "jvm/$child", File(root, child))
-                done++; onProgress?.invoke(done * 100 / total)
+                done++
+                onProgress?.invoke(done * 100 / total)
             }
-            tagMarker.writeText(wantTag)   // the jars share one content tag — mark done only once all have landed
+            tagMarker.writeText(wantTag) // the jars share one content tag — mark done only once all have landed
         }
         return jreDir
     }
@@ -83,13 +91,21 @@ object AssetInstaller {
 
     /** The staged content tag shipped in the bundle (jvm/runtime.tag); "untagged" if staging didn't write it. */
     private fun bundledTag(ctx: Context): String =
-        runCatching { ctx.assets.open("jvm/runtime.tag").bufferedReader().use { it.readText().trim() } }
-            .getOrElse {
-                Log.w(TAG, "jvm/runtime.tag missing from bundle — run tools/stage-mobile-runtime.sh")
-                "untagged"
-            }
+        runCatching {
+            ctx.assets
+                .open("jvm/runtime.tag")
+                .bufferedReader()
+                .use { it.readText().trim() }
+        }.getOrElse {
+            Log.w(TAG, "jvm/runtime.tag missing from bundle — run tools/stage-mobile-runtime.sh")
+            "untagged"
+        }
 
-    private fun copyAssetDir(ctx: Context, assetPath: String, dest: File) {
+    private fun copyAssetDir(
+        ctx: Context,
+        assetPath: String,
+        dest: File,
+    ) {
         val children = ctx.assets.list(assetPath) ?: emptyArray()
         if (children.isEmpty()) {
             // leaf: a file

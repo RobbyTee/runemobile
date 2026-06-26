@@ -26,14 +26,15 @@ import android.view.WindowInsets
  * [setGridEnabled]); a tap reports the engine tab index via [onTabTap]. Cells auto-fit the bottom ~56% of the
  * safe height so the grid never collides with the minimap (top-right).
  */
-class ChromeOverlayView(context: Context) : View(context) {
-
+class ChromeOverlayView(
+    context: Context,
+) : View(context) {
     /** Host callback: the user tapped the tab whose engine stone index is [engineIndex] — replay its op script. */
     var onTabTap: ((engineIndex: Int) -> Unit)? = null
 
-    private var active = -1          // engine tab index of the open tab (red stone), -1 = none
-    private var gridEnabled = false  // true only in the supported Classic/PRE_EOC layout (toplevel 164), logged in
-    private var shown = true         // A/B debug toggle (▦ native grid vs ▤ raw engine stones)
+    private var active = -1 // engine tab index of the open tab (red stone), -1 = none
+    private var gridEnabled = false // true only in the supported Classic/PRE_EOC layout (toplevel 164), logged in
+    private var shown = true // A/B debug toggle (▦ native grid vs ▤ raw engine stones)
 
     // Composited tab images: stone background + centred glyph, built once. [0] inactive (grey), [1] active (red).
     private val tabInactive = arrayOfNulls<Bitmap>(14)
@@ -42,15 +43,34 @@ class ChromeOverlayView(context: Context) : View(context) {
 
     // Last computed layout (view px), so onTouchEvent + the host's side-panel relocation read the same geometry.
     private var lay = Layout(0f, 0f, 0f)
-    private class Layout(val gx0: Float, val gy0: Float, val cell: Float)
+
+    private class Layout(
+        val gx0: Float,
+        val gy0: Float,
+        val cell: Float,
+    )
+
     // UI-1: when > 0, shrink the 7-row grid to this view-px height so it matches the open side panel's height (the
     // panel is a fixed engine raster we can't grow); cell is floored so tabs stay tappable and capped so it only
     // ever shrinks below today's size.
     private var targetGridHpx = 0f
 
-    private val bmpPaint = Paint().apply { isAntiAlias = true; isFilterBitmap = true; isDither = true }
-    private val fallbackPaint = Paint().apply { color = Color.argb(235, 60, 50, 38); isAntiAlias = true }
-    private val fallbackActivePaint = Paint().apply { color = Color.argb(245, 150, 60, 50); isAntiAlias = true }
+    private val bmpPaint =
+        Paint().apply {
+            isAntiAlias = true
+            isFilterBitmap = true
+            isDither = true
+        }
+    private val fallbackPaint =
+        Paint().apply {
+            color = Color.argb(235, 60, 50, 38)
+            isAntiAlias = true
+        }
+    private val fallbackActivePaint =
+        Paint().apply {
+            color = Color.argb(245, 150, 60, 50)
+            isAntiAlias = true
+        }
     private val srcRect = Rect()
     private val dstRect = RectF()
 
@@ -80,7 +100,10 @@ class ChromeOverlayView(context: Context) : View(context) {
 
     /** Composite a stone background with a centred glyph at the stone's native size (no scaling), like the iOS
      *  compositeStone:icon:. Returns the stone alone if there's no icon, or the icon alone if there's no stone. */
-    private fun composite(stone: Bitmap?, icon: Bitmap?): Bitmap? {
+    private fun composite(
+        stone: Bitmap?,
+        icon: Bitmap?,
+    ): Bitmap? {
         if (stone == null) return icon
         val out = Bitmap.createBitmap(stone.width, stone.height, Bitmap.Config.ARGB_8888)
         val c = Canvas(out)
@@ -95,16 +118,28 @@ class ChromeOverlayView(context: Context) : View(context) {
 
     /** Host: the engine's currently-open tab (stone index), for the red/grey highlight. -1 = none. */
     fun setActiveTab(activeTab: Int) {
-        if (active != activeTab) { active = activeTab; invalidate() }
+        if (active != activeTab) {
+            active = activeTab
+            invalidate()
+        }
     }
 
     /** Host: enable the native grid only in the supported layout (logged in + Classic/PRE_EOC toplevel 164).
      *  When disabled the grid draws nothing and consumes no touches (the engine stones are shown instead). */
     fun setGridEnabled(on: Boolean) {
-        if (gridEnabled != on) { gridEnabled = on; invalidate() }
+        if (gridEnabled != on) {
+            gridEnabled = on
+            invalidate()
+        }
     }
 
-    fun setShown(on: Boolean) { if (shown != on) { shown = on; invalidate() } }
+    fun setShown(on: Boolean) {
+        if (shown != on) {
+            shown = on
+            invalidate()
+        }
+    }
+
     val railsShown: Boolean get() = shown
     val isGridActive: Boolean get() = shown && gridEnabled
 
@@ -144,8 +179,12 @@ class ChromeOverlayView(context: Context) : View(context) {
         // UI-1: when a target height is set, size the 7 rows to it (floored at dp(20) so the cell can reach the
         // ~59px the panel height needs while staying tappable), still capped at dp(46) so the grid only ever
         // shrinks to meet the panel, never grows past today.
-        val cell = if (targetGridHpx > 0f) minOf(cap, maxOf(targetGridHpx / 7f, dp(20f)))
-                   else minOf(cap, if (availH > 0f) availH / 7f else cap)
+        val cell =
+            if (targetGridHpx > 0f) {
+                minOf(cap, maxOf(targetGridHpx / 7f, dp(20f)))
+            } else {
+                minOf(cap, if (availH > 0f) availH / 7f else cap)
+            }
         val gridW = 2 * cell
         val gridH = 7 * cell
         val gx0 = width - ins[1] - margin - gridW
@@ -182,7 +221,10 @@ class ChromeOverlayView(context: Context) : View(context) {
         if (l.cell <= 0f) return false
         when (event.actionMasked) {
             // Consume only if the gesture STARTS inside the grid, so non-grid taps fall through to the game below.
-            MotionEvent.ACTION_DOWN -> return slotAt(event.x, event.y) >= 0
+            MotionEvent.ACTION_DOWN -> {
+                return slotAt(event.x, event.y) >= 0
+            }
+
             MotionEvent.ACTION_UP -> {
                 val i = slotAt(event.x, event.y)
                 if (i < 0) return false
@@ -194,7 +236,10 @@ class ChromeOverlayView(context: Context) : View(context) {
     }
 
     /** Engine tab (stone) index under view-px (x,y), or -1 if outside the grid. */
-    private fun slotAt(x: Float, y: Float): Int {
+    private fun slotAt(
+        x: Float,
+        y: Float,
+    ): Int {
         val l = lay
         if (l.cell <= 0f) return -1
         val col = ((x - l.gx0) / l.cell).toInt()

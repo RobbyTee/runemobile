@@ -16,4 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "RuneliteAndroid"
 include(":app")
-include(":recon")   // Track G AG0 — standalone GLES recon app (dev.audaro.glesrecon)
+include(":recon") // Track G AG0 — standalone GLES recon app (dev.audaro.glesrecon)

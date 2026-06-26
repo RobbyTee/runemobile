@@ -42,11 +42,28 @@ import org.json.JSONObject
 import kotlin.coroutines.coroutineContext
 
 // ---- A5 Tier-2 view models (parsed from the curated bridge JSON; see QuestHelperBridge/WorldSwitcherBridge) -
-data class QuestRow(val name: String, val difficulty: String, val type: String, val state: String)
-data class ActiveQuestVm(val name: String, val steps: List<String>, val items: List<String>, val general: List<String>)
+data class QuestRow(
+    val name: String,
+    val difficulty: String,
+    val type: String,
+    val state: String,
+)
+
+data class ActiveQuestVm(
+    val name: String,
+    val steps: List<String>,
+    val items: List<String>,
+    val general: List<String>,
+)
+
 data class WorldRow(
-    val id: Int, val players: Int, val location: Int,
-    val members: Boolean, val pvp: Boolean, val highRisk: Boolean, val activity: String,
+    val id: Int,
+    val players: Int,
+    val location: Int,
+    val members: Boolean,
+    val pvp: Boolean,
+    val highRisk: Boolean,
+    val activity: String,
     val favourite: Boolean,
 )
 
@@ -67,7 +84,7 @@ fun QuestHelperScreen(onBack: () -> Unit) {
     var available by remember { mutableStateOf(true) }
     var firstLoad by remember { mutableStateOf(true) }
     var logged by remember { mutableStateOf(false) }
-    var stateFilter by remember { mutableStateOf("IN_PROGRESS") }   // default to in-progress quests
+    var stateFilter by remember { mutableStateOf("IN_PROGRESS") } // default to in-progress quests
 
     DisposableEffect(Unit) {
         JvmLauncher.onBridge { JvmLauncher.questSetUiOpen(true) }
@@ -75,9 +92,10 @@ fun QuestHelperScreen(onBack: () -> Unit) {
     }
     LaunchedEffect(Unit) {
         while (coroutineContext.isActive) {
-            val (listJson, activeJson) = withContext(Dispatchers.IO) {
-                JvmLauncher.onBridge { JvmLauncher.questListJson() to JvmLauncher.questActiveJson() }.get()
-            }
+            val (listJson, activeJson) =
+                withContext(Dispatchers.IO) {
+                    JvmLauncher.onBridge { JvmLauncher.questListJson() to JvmLauncher.questActiveJson() }.get()
+                }
             available = JSONObject(listJson).optBoolean("available", false)
             quests = parseQuestList(listJson)
             active = parseActiveQuest(activeJson)
@@ -110,8 +128,11 @@ fun QuestHelperScreen(onBack: () -> Unit) {
             } else {
                 Row(Modifier.padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     for (f in listOf("IN_PROGRESS", "NOT_STARTED", "FINISHED")) {
-                        FilterChip(selected = stateFilter == f, onClick = { stateFilter = f },
-                            label = { Text(f.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() }, fontSize = 12.sp) })
+                        FilterChip(
+                            selected = stateFilter == f,
+                            onClick = { stateFilter = f },
+                            label = { Text(f.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() }, fontSize = 12.sp) },
+                        )
                     }
                 }
                 val shown = quests.filter { it.state == stateFilter }
@@ -119,7 +140,8 @@ fun QuestHelperScreen(onBack: () -> Unit) {
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(shown, key = { it.name }) { q ->
                         Column(
-                            Modifier.fillMaxWidth()
+                            Modifier
+                                .fillMaxWidth()
                                 .clickable { JvmLauncher.onBridgeTouch { JvmLauncher.questStart(q.name) } }
                                 .padding(vertical = 8.dp),
                         ) {
@@ -135,7 +157,10 @@ fun QuestHelperScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun ActiveQuestCard(act: ActiveQuestVm, onStop: () -> Unit) {
+private fun ActiveQuestCard(
+    act: ActiveQuestVm,
+    onStop: () -> Unit,
+) {
     Column(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(act.name, color = Color(0xFFFFD54F), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -204,21 +229,35 @@ fun WorldSwitcherScreen(onBack: () -> Unit) {
                 if (current > 0) Text(" W$current", color = Color(0xFFFFD54F), fontSize = 14.sp)
             }
             Row(Modifier.padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterChip(selected = membersOnly, onClick = { membersOnly = !membersOnly; if (membersOnly) f2pOnly = false },
-                    label = { Text("Members", fontSize = 12.sp) })
-                FilterChip(selected = f2pOnly, onClick = { f2pOnly = !f2pOnly; if (f2pOnly) membersOnly = false },
-                    label = { Text("Free", fontSize = 12.sp) })
+                FilterChip(
+                    selected = membersOnly,
+                    onClick = {
+                        membersOnly = !membersOnly
+                        if (membersOnly) f2pOnly = false
+                    },
+                    label = { Text("Members", fontSize = 12.sp) },
+                )
+                FilterChip(
+                    selected = f2pOnly,
+                    onClick = {
+                        f2pOnly = !f2pOnly
+                        if (f2pOnly) membersOnly = false
+                    },
+                    label = { Text("Free", fontSize = 12.sp) },
+                )
             }
             if (firstLoad) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             } else {
-                val shown = worlds
-                    .filter { (!membersOnly || it.members) && (!f2pOnly || !it.members) }
-                    .sortedWith(compareByDescending<WorldRow> { it.favourite }.thenBy { it.id })   // favourites float to the top
+                val shown =
+                    worlds
+                        .filter { (!membersOnly || it.members) && (!f2pOnly || !it.members) }
+                        .sortedWith(compareByDescending<WorldRow> { it.favourite }.thenBy { it.id }) // favourites float to the top
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(shown, key = { it.id }) { w ->
                         WorldRowItem(
-                            w, w.id == current,
+                            w,
+                            w.id == current,
                             // ENH-B06: cover the relog hop's ~8 s login flash with the host "Hopping…" scrim;
                             // the target world is known here, so name it on the card.
                             onHop = {
@@ -236,7 +275,12 @@ fun WorldSwitcherScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun WorldRowItem(w: WorldRow, isCurrent: Boolean, onHop: () -> Unit, onToggleFav: () -> Unit) {
+private fun WorldRowItem(
+    w: WorldRow,
+    isCurrent: Boolean,
+    onHop: () -> Unit,
+    onToggleFav: () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth().clickable(enabled = !isCurrent) { onHop() }.padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -244,16 +288,31 @@ private fun WorldRowItem(w: WorldRow, isCurrent: Boolean, onHop: () -> Unit, onT
         // SC-5 favourite toggle (shared worldhopper.favorite_<id>); favourites float to the top of the list.
         Text(
             if (w.favourite) "★" else "☆",
-            color = if (w.favourite) Color(0xFFFFC107) else Color(0xFF777777), fontSize = 18.sp,
+            color = if (w.favourite) Color(0xFFFFC107) else Color(0xFF777777),
+            fontSize = 18.sp,
             modifier = Modifier.clickable { onToggleFav() }.padding(end = 10.dp),
         )
         Box(
-            Modifier.size(8.dp).clip(CircleShape)
-                .background(if (isCurrent) Color(0xFF66BB6A) else if (w.members) Color(0xFFFFB300) else Color(0xFF64B5F6)),
+            Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(
+                    if (isCurrent) {
+                        Color(0xFF66BB6A)
+                    } else if (w.members) {
+                        Color(0xFFFFB300)
+                    } else {
+                        Color(0xFF64B5F6)
+                    },
+                ),
         )
         Column(Modifier.weight(1f).padding(start = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("World ${w.id}", color = if (isCurrent) Color(0xFF66BB6A) else Color.White, fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal)
+                Text(
+                    "World ${w.id}",
+                    color = if (isCurrent) Color(0xFF66BB6A) else Color.White,
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                )
                 if (w.pvp) Text("  PvP", color = Color(0xFFEF9A9A), fontSize = 11.sp)
                 if (w.highRisk) Text("  High-risk", color = Color(0xFFEF5350), fontSize = 11.sp)
             }
@@ -268,46 +327,63 @@ private fun WorldRowItem(w: WorldRow, isCurrent: Boolean, onHop: () -> Unit, onT
 private fun prettify(enumName: String): String =
     enumName.split('_').joinToString(" ") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
 
-private fun parseQuestList(json: String): List<QuestRow> = try {
-    val o = JSONObject(json)
-    val arr = o.optJSONArray("quests") ?: return emptyList()
-    (0 until arr.length()).map { i ->
-        val q = arr.getJSONObject(i)
-        QuestRow(q.optString("name"), q.optString("difficulty"), q.optString("type"), q.optString("state"))
+private fun parseQuestList(json: String): List<QuestRow> =
+    try {
+        val o = JSONObject(json)
+        val arr = o.optJSONArray("quests") ?: return emptyList()
+        (0 until arr.length()).map { i ->
+            val q = arr.getJSONObject(i)
+            QuestRow(q.optString("name"), q.optString("difficulty"), q.optString("type"), q.optString("state"))
+        }
+    } catch (t: Throwable) {
+        Log.e(T2, "ANDROID_A5_TIER2_QUEST_UI_RED list parse: $t")
+        emptyList()
     }
-} catch (t: Throwable) {
-    Log.e(T2, "ANDROID_A5_TIER2_QUEST_UI_RED list parse: $t"); emptyList()
-}
 
-private fun parseActiveQuest(json: String): ActiveQuestVm? = try {
-    val o = JSONObject(json)
-    if (!o.optBoolean("active", false)) null
-    else ActiveQuestVm(
-        name = o.optString("name", "Quest"),
-        steps = jsonStrings(o, "steps"),
-        items = jsonStrings(o, "items"),
-        general = jsonStrings(o, "general"),
-    )
-} catch (t: Throwable) {
-    Log.e(T2, "ANDROID_A5_TIER2_QUEST_UI_RED active parse: $t"); null
-}
-
-private fun parseWorldList(json: String): List<WorldRow> = try {
-    val o = JSONObject(json)
-    val arr = o.optJSONArray("worlds") ?: return emptyList()
-    (0 until arr.length()).map { i ->
-        val w = arr.getJSONObject(i)
-        WorldRow(
-            id = w.optInt("id"), players = w.optInt("players"), location = w.optInt("location"),
-            members = w.optBoolean("members"), pvp = w.optBoolean("pvp"), highRisk = w.optBoolean("highRisk"),
-            activity = w.optString("activity", ""), favourite = w.optBoolean("favourite"),
-        )
+private fun parseActiveQuest(json: String): ActiveQuestVm? =
+    try {
+        val o = JSONObject(json)
+        if (!o.optBoolean("active", false)) {
+            null
+        } else {
+            ActiveQuestVm(
+                name = o.optString("name", "Quest"),
+                steps = jsonStrings(o, "steps"),
+                items = jsonStrings(o, "items"),
+                general = jsonStrings(o, "general"),
+            )
+        }
+    } catch (t: Throwable) {
+        Log.e(T2, "ANDROID_A5_TIER2_QUEST_UI_RED active parse: $t")
+        null
     }
-} catch (t: Throwable) {
-    Log.e(T2, "ANDROID_A5_TIER2_WORLD_UI_RED parse: $t"); emptyList()
-}
 
-private fun jsonStrings(o: JSONObject, key: String): List<String> {
+private fun parseWorldList(json: String): List<WorldRow> =
+    try {
+        val o = JSONObject(json)
+        val arr = o.optJSONArray("worlds") ?: return emptyList()
+        (0 until arr.length()).map { i ->
+            val w = arr.getJSONObject(i)
+            WorldRow(
+                id = w.optInt("id"),
+                players = w.optInt("players"),
+                location = w.optInt("location"),
+                members = w.optBoolean("members"),
+                pvp = w.optBoolean("pvp"),
+                highRisk = w.optBoolean("highRisk"),
+                activity = w.optString("activity", ""),
+                favourite = w.optBoolean("favourite"),
+            )
+        }
+    } catch (t: Throwable) {
+        Log.e(T2, "ANDROID_A5_TIER2_WORLD_UI_RED parse: $t")
+        emptyList()
+    }
+
+private fun jsonStrings(
+    o: JSONObject,
+    key: String,
+): List<String> {
     val a = o.optJSONArray(key) ?: return emptyList()
     return (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() }
 }

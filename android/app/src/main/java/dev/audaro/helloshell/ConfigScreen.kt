@@ -5,8 +5,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,8 +19,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -58,6 +58,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -71,16 +72,16 @@ data class ConfigItem(
     val key: String,
     val name: String,
     val description: String,
-    val type: String,          // boolean | int | double | string | enum | color | set | font | notification | unknown
-    val value: String?,        // current value (string-serialized); null for secrets
-    val choices: List<String>?,// enum / set element names, or friendly font preset labels
+    val type: String, // boolean | int | double | string | enum | color | set | font | notification | unknown
+    val value: String?, // current value (string-serialized); null for secrets
+    val choices: List<String>?, // enum / set element names, or friendly font preset labels
     val choiceValues: List<String>?, // font: the constant to WRITE for each label (REGULAR/BOLD/SMALL); null otherwise
     val units: String?,
     val secret: Boolean,
-    val alpha: Boolean,        // color items: true when the plugin's color exposes an editable alpha channel
-    val min: Int?,             // @Range min for int/double items (null = unbounded) — clamps writes
-    val max: Int?,             // @Range max for int/double items (null = unbounded)
-    val section: String,       // the owning @ConfigSection key, or "" when the item declares no section
+    val alpha: Boolean, // color items: true when the plugin's color exposes an editable alpha channel
+    val min: Int?, // @Range min for int/double items (null = unbounded) — clamps writes
+    val max: Int?, // @Range max for int/double items (null = unbounded)
+    val section: String, // the owning @ConfigSection key, or "" when the item declares no section
 )
 
 /** One @ConfigSection header from MobileUiBridge.getPluginConfig(group)'s `sections` array (CFG-6). */
@@ -103,7 +104,7 @@ data class ConfigSchema(
 
 /** A render group: a (possibly null) section header followed by the items that declared it. */
 private data class ConfigGroup(
-    val meta: ConfigSectionMeta?,   // null = the leading ungrouped (no @ConfigSection) bucket
+    val meta: ConfigSectionMeta?, // null = the leading ungrouped (no @ConfigSection) bucket
     val items: List<ConfigItem>,
 )
 
@@ -122,17 +123,27 @@ private fun groupConfig(schema: ConfigSchema): List<ConfigGroup> {
     }
     // Any item whose section key has no matching `sections` entry would otherwise vanish — fold it into the
     // ungrouped lead so nothing is lost (defensive; the bridge always emits a section for every used key).
-    val known = HashSet<String>().apply { add(""); schema.sections.forEach { add(it.key) } }
+    val known =
+        HashSet<String>().apply {
+            add("")
+            schema.sections.forEach { add(it.key) }
+        }
     val orphans = schema.items.filter { it.section !in known }
     if (orphans.isNotEmpty()) {
         // Fold-not-drop is deliberate (never hide a real config item), but an orphan means the bridge emitted an
         // item referencing a @ConfigSection it did NOT also list in `sections` — i.e. a schema/sync mismatch worth
         // surfacing in logcat for whoever debugs it next, rather than masking silently.
-        Log.w("ConfigScreen", "groupConfig: ${orphans.size} item(s) reference an unknown @ConfigSection " +
-            "(folded into the ungrouped lead): ${orphans.map { it.key }}")
+        Log.w(
+            "ConfigScreen",
+            "groupConfig: ${orphans.size} item(s) reference an unknown @ConfigSection " +
+                "(folded into the ungrouped lead): ${orphans.map { it.key }}",
+        )
         val lead = out.firstOrNull { it.meta == null }
-        if (lead != null) out[out.indexOf(lead)] = lead.copy(items = lead.items + orphans)
-        else out.add(0, ConfigGroup(null, orphans))
+        if (lead != null) {
+            out[out.indexOf(lead)] = lead.copy(items = lead.items + orphans)
+        } else {
+            out.add(0, ConfigGroup(null, orphans))
+        }
     }
     return out
 }
@@ -144,7 +155,12 @@ private fun groupConfig(schema: ConfigSchema): List<ConfigGroup> {
  * via setConfig on the bridge thread (the engine fires ConfigChanged as the ack).
  */
 @Composable
-fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit, onTextActive: (Boolean) -> Unit = {}) {
+fun ConfigScreen(
+    group: String,
+    pluginName: String,
+    onBack: () -> Unit,
+    onTextActive: (Boolean) -> Unit = {},
+) {
     var items by remember { mutableStateOf<List<ConfigItem>>(emptyList()) }
     var sections by remember { mutableStateOf<List<ConfigSectionMeta>>(emptyList()) }
     // ENH-B01 (CFG-6): per-section-key collapsed state, kept across the reloadKey re-reads below (seeded from
@@ -220,7 +236,7 @@ fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit, onTextAc
                                         while (wid > 0 && JvmLauncher.processedWriteId() < wid && tries++ < 60) {
                                             Thread.sleep(10)
                                         }
-                                        reloadKey++   // snapshot-state write off the bridge thread schedules recompose
+                                        reloadKey++ // snapshot-state write off the bridge thread schedules recompose
                                     }
                                 }) { Text("Reset", color = Color(0xFFFF8A80)) }
                             }
@@ -234,10 +250,14 @@ fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit, onTextAc
                 Text("No configurable options.", color = Color.Gray, modifier = Modifier.padding(8.dp))
             } else {
                 val groups = remember(items, sections) { groupConfig(ConfigSchema(items, sections)) }
-                fun onItemChange(item: ConfigItem, newVal: String) {
+
+                fun onItemChange(
+                    item: ConfigItem,
+                    newVal: String,
+                ) {
                     items = items.map { if (it.key == item.key) it.copy(value = newVal) else it }
                     JvmLauncher.onBridgeTouch { JvmLauncher.setConfig(group, item.key, newVal) }
-                    pendingFlush++   // FIX-8: arm the debounced crash-safe flush
+                    pendingFlush++ // FIX-8: arm the debounced crash-safe flush
                 }
                 LazyColumn(Modifier.fillMaxSize()) {
                     for (g in groups) {
@@ -270,9 +290,14 @@ fun ConfigScreen(group: String, pluginName: String, onBack: () -> Unit, onTextAc
  * communicate expand/collapse. Styled as a low-stone band so the grouping reads as headers, not just more rows.
  */
 @Composable
-private fun ConfigSectionHeader(meta: ConfigSectionMeta, collapsed: Boolean, onToggle: () -> Unit) {
+private fun ConfigSectionHeader(
+    meta: ConfigSectionMeta,
+    collapsed: Boolean,
+    onToggle: () -> Unit,
+) {
     Row(
-        Modifier.fillMaxWidth()
+        Modifier
+            .fillMaxWidth()
             .padding(top = 10.dp, bottom = 2.dp)
             .clip(RoundedCornerShape(6.dp))
             .background(Color(0x33FFFFFF))
@@ -295,7 +320,10 @@ private fun ConfigSectionHeader(meta: ConfigSectionMeta, collapsed: Boolean, onT
 }
 
 @Composable
-private fun ConfigItemControl(item: ConfigItem, onChange: (String) -> Unit) {
+private fun ConfigItemControl(
+    item: ConfigItem,
+    onChange: (String) -> Unit,
+) {
     val label = item.name.ifEmpty { item.key }
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -307,46 +335,83 @@ private fun ConfigItemControl(item: ConfigItem, onChange: (String) -> Unit) {
                 item.type == "boolean" -> {
                     val on = item.value?.toBoolean() ?: false
                     Switch(
-                        checked = on, onCheckedChange = { onChange(it.toString()) },
-                        modifier = Modifier.semantics {
-                            contentDescription = "$label, ${if (on) "on" else "off"}"
-                            stateDescription = if (on) "On" else "Off"
-                        },
+                        checked = on,
+                        onCheckedChange = { onChange(it.toString()) },
+                        modifier =
+                            Modifier.semantics {
+                                contentDescription = "$label, ${if (on) "on" else "off"}"
+                                stateDescription = if (on) "On" else "Off"
+                            },
                     )
                 }
-                item.type == "enum" && item.choices != null ->
-                    EnumDropdown(item.choices, item.value, onChange,
-                        modifier = Modifier.semantics { contentDescription = "$label, ${item.value ?: "not set"}" })
-                item.type == "font" && item.choices != null ->
+
+                item.type == "enum" && item.choices != null -> {
+                    EnumDropdown(
+                        item.choices,
+                        item.value,
+                        onChange,
+                        modifier = Modifier.semantics { contentDescription = "$label, ${item.value ?: "not set"}" },
+                    )
+                }
+
+                item.type == "font" && item.choices != null -> {
                     FontDropdown(item, onChange)
+                }
+
                 // A notification config item: the inline switch flips ONLY the "enabled" field (preserving any
                 // customized sound/flash/colour/volume), mirroring iOS onNotificationSwitch. "Customize…" below
                 // opens the full sub-editor (FIX-7).
                 item.type == "notification" -> {
                     val on = isNotifEnabled(item.value)
                     Switch(
-                        checked = on, onCheckedChange = { onChange(notifWithEnabled(item.value, it)) },
-                        modifier = Modifier.semantics {
-                            contentDescription = "$label notification, ${if (on) "on" else "off"}"
-                            stateDescription = if (on) "On" else "Off"
-                        },
+                        checked = on,
+                        onCheckedChange = { onChange(notifWithEnabled(item.value, it)) },
+                        modifier =
+                            Modifier.semantics {
+                                contentDescription = "$label notification, ${if (on) "on" else "off"}"
+                                stateDescription = if (on) "On" else "Off"
+                            },
                     )
                 }
-                else -> {}   // text-ish controls render full-width below
+
+                else -> {} // text-ish controls render full-width below
             }
         }
         when (item.type) {
-            "int" -> NumericConfigControl(item, isInt = true, onChange = onChange)
-            "double" -> NumericConfigControl(item, isInt = false, onChange = onChange)
-            "string" -> OutlinedTextField(
-                value = item.value ?: "", onValueChange = onChange, singleLine = true,
-                visualTransformation = if (item.secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            "color" -> ColorConfigControl(item, onChange)
-            "dimension" -> DimensionConfigControl(item, onChange)
-            "set" -> SetConfigControl(item, onChange)
-            "notification" -> NotificationCustomizeControl(item, onChange)
+            "int" -> {
+                NumericConfigControl(item, isInt = true, onChange = onChange)
+            }
+
+            "double" -> {
+                NumericConfigControl(item, isInt = false, onChange = onChange)
+            }
+
+            "string" -> {
+                OutlinedTextField(
+                    value = item.value ?: "",
+                    onValueChange = onChange,
+                    singleLine = true,
+                    visualTransformation = if (item.secret) PasswordVisualTransformation() else VisualTransformation.None,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            "color" -> {
+                ColorConfigControl(item, onChange)
+            }
+
+            "dimension" -> {
+                DimensionConfigControl(item, onChange)
+            }
+
+            "set" -> {
+                SetConfigControl(item, onChange)
+            }
+
+            "notification" -> {
+                NotificationCustomizeControl(item, onChange)
+            }
+
             // AP-0 / ENH-B03: keybind items have no hardware-key capture on a touch app, so the row shows the
             // current binding read-only plus a "Clear" control that unbinds it (writes the NOT_SET serialization
             // "0:0" — the engine's Keybind config form, keyCode:modifiers). Mirrors desktop HotkeyButton's clear.
@@ -355,21 +420,32 @@ private fun ConfigItemControl(item: ConfigItem, onChange: (String) -> Unit) {
                 Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "Binding: " + humanizeKeybind(item.value),
-                        color = Color(0xFF9E9E9E), fontSize = 12.sp,
-                        modifier = Modifier.weight(1f).semantics {
-                            contentDescription = "${label} binding, ${humanizeKeybind(item.value)}"
-                        },
+                        color = Color(0xFF9E9E9E),
+                        fontSize = 12.sp,
+                        modifier =
+                            Modifier.weight(1f).semantics {
+                                contentDescription = "$label binding, ${humanizeKeybind(item.value)}"
+                            },
                     )
-                    if (bound) TextButton(onClick = { onChange(KEYBIND_NOT_SET) }) {
-                        Text("Clear", color = Color(0xFFFF8A80), fontSize = 13.sp)
+                    if (bound) {
+                        TextButton(onClick = { onChange(KEYBIND_NOT_SET) }) {
+                            Text("Clear", color = Color(0xFFFF8A80), fontSize = 13.sp)
+                        }
                     }
                 }
             }
-            "unknown" -> OutlinedTextField(   // genuinely opaque types stay read-only (no safe round-trip)
-                value = item.value ?: "", onValueChange = {}, readOnly = true, singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            else -> {}   // boolean / enum / font handled inline above
+
+            "unknown" -> {
+                OutlinedTextField( // genuinely opaque types stay read-only (no safe round-trip)
+                    value = item.value ?: "",
+                    onValueChange = {},
+                    readOnly = true,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            else -> {} // boolean / enum / font handled inline above
         }
     }
 }
@@ -378,7 +454,10 @@ private fun ConfigItemControl(item: ConfigItem, onChange: (String) -> Unit) {
  *  (REGULAR/BOLD/SMALL) — FontTypeSerializer.deserialize accepts those legacy strings. The stored value is an
  *  opaque serialized FontType, so the current selection is matched best-effort against the choiceValues. */
 @Composable
-private fun FontDropdown(item: ConfigItem, onChange: (String) -> Unit) {
+private fun FontDropdown(
+    item: ConfigItem,
+    onChange: (String) -> Unit,
+) {
     val labels = item.choices ?: emptyList()
     val values = item.choiceValues ?: labels
     val curLabel = values.indexOf(item.value).let { if (it >= 0) labels.getOrNull(it) else null }
@@ -387,7 +466,10 @@ private fun FontDropdown(item: ConfigItem, onChange: (String) -> Unit) {
         TextButton(onClick = { expanded = true }) { Text(curLabel ?: "—", color = Color.White) }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             labels.forEachIndexed { i, l ->
-                DropdownMenuItem(text = { Text(l) }, onClick = { expanded = false; onChange(values.getOrElse(i) { l }) })
+                DropdownMenuItem(text = { Text(l) }, onClick = {
+                    expanded = false
+                    onChange(values.getOrElse(i) { l })
+                })
             }
         }
     }
@@ -400,10 +482,15 @@ private fun FontDropdown(item: ConfigItem, onChange: (String) -> Unit) {
  * snaps up, and an unparseable intermediate (empty / "-" / "1.2.3") updates the display only — no write.
  */
 @Composable
-private fun NumericConfigControl(item: ConfigItem, isInt: Boolean, onChange: (String) -> Unit) {
+private fun NumericConfigControl(
+    item: ConfigItem,
+    isInt: Boolean,
+    onChange: (String) -> Unit,
+) {
     // FIX-12: a bounded int with a sane span renders as a drag slider (parity with iOS MUISliderEditor / CFG-7).
     // Larger spans (or doubles / unbounded ints) keep the clamped text field below.
-    val lo = item.min; val hi = item.max
+    val lo = item.min
+    val hi = item.max
     if (isInt && lo != null && hi != null && hi > lo && (hi - lo) <= 1000) {
         BoundedIntSlider(item, lo, hi, onChange)
         return
@@ -417,23 +504,24 @@ private fun NumericConfigControl(item: ConfigItem, isInt: Boolean, onChange: (St
             if (parsed != null) {
                 val lo = item.min?.toDouble()
                 val hi = item.max?.toDouble()
-                val clamped = when {
-                    hi != null && parsed > hi -> hi
-                    lo != null && parsed < lo -> lo
-                    else -> parsed
-                }
+                val clamped =
+                    when {
+                        hi != null && parsed > hi -> hi
+                        lo != null && parsed < lo -> lo
+                        else -> parsed
+                    }
                 if (clamped != parsed) {
                     val s = if (isInt) clamped.toInt().toString() else clamped.toString()
                     text = s
                     onChange(s)
                 } else {
-                    onChange(t)   // in range: write exactly what was typed (preserves "5." / "1.50")
+                    onChange(t) // in range: write exactly what was typed (preserves "5." / "1.50")
                 }
             }
         },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        visualTransformation = if (item.secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+        visualTransformation = if (item.secret) PasswordVisualTransformation() else VisualTransformation.None,
         label = item.units?.let { u -> { Text(u) } },
         modifier = Modifier.fillMaxWidth(),
     )
@@ -444,23 +532,30 @@ private fun NumericConfigControl(item: ConfigItem, isInt: Boolean, onChange: (St
  * is committed once on release (no setConfig spam), rounded to an int and clamped to [lo, hi].
  */
 @Composable
-private fun BoundedIntSlider(item: ConfigItem, lo: Int, hi: Int, onChange: (String) -> Unit) {
+private fun BoundedIntSlider(
+    item: ConfigItem,
+    lo: Int,
+    hi: Int,
+    onChange: (String) -> Unit,
+) {
     val cur = (item.value?.trim()?.toIntOrNull() ?: lo).coerceIn(lo, hi)
     var pos by remember(item.key, item.value) { mutableFloatStateOf(cur.toFloat()) }
     Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
         Text(
             pos.toInt().toString() + (item.units?.takeIf { it.isNotBlank() }?.let { " $it" } ?: ""),
-            color = Color.White, fontSize = 14.sp,
+            color = Color.White,
+            fontSize = 14.sp,
         )
         Slider(
             value = pos,
             valueRange = lo.toFloat()..hi.toFloat(),
             onValueChange = { pos = it },
             onValueChangeFinished = { onChange(pos.toInt().coerceIn(lo, hi).toString()) },
-            modifier = Modifier.fillMaxWidth().semantics {
-                contentDescription = item.name.ifEmpty { item.key }
-                stateDescription = pos.toInt().toString() + (item.units?.takeIf { it.isNotBlank() }?.let { " $it" } ?: "")
-            },
+            modifier =
+                Modifier.fillMaxWidth().semantics {
+                    contentDescription = item.name.ifEmpty { item.key }
+                    stateDescription = pos.toInt().toString() + (item.units?.takeIf { it.isNotBlank() }?.let { " $it" } ?: "")
+                },
         )
     }
 }
@@ -510,34 +605,61 @@ private fun humanizeKeybind(v: String?): String {
 }
 
 /** Best-effort key name for the common java.awt.event.KeyEvent VK_* codes; null for VK_UNDEFINED. */
-private fun keyText(code: Int): String? = when (code) {
-    0 -> null                                   // VK_UNDEFINED — modifier-only chord
-    in 0x70..0x7B -> "F${code - 0x6F}"          // VK_F1..VK_F12 (0x70..0x7B)
-    in 0x30..0x39 -> ('0' + (code - 0x30)).toString()   // VK_0..VK_9
-    in 0x41..0x5A -> ('A' + (code - 0x41)).toString()   // VK_A..VK_Z
-    0x20 -> "Space"
-    0x09 -> "Tab"
-    0x0A -> "Enter"
-    0x1B -> "Esc"
-    0x08 -> "Backspace"
-    0x2E -> "Delete"
-    0x25 -> "Left"; 0x26 -> "Up"; 0x27 -> "Right"; 0x28 -> "Down"
-    else -> "Key $code"
-}
+private fun keyText(code: Int): String? =
+    when (code) {
+        0 -> null
+
+        // VK_UNDEFINED — modifier-only chord
+        in 0x70..0x7B -> "F${code - 0x6F}"
+
+        // VK_F1..VK_F12 (0x70..0x7B)
+        in 0x30..0x39 -> ('0' + (code - 0x30)).toString()
+
+        // VK_0..VK_9
+        in 0x41..0x5A -> ('A' + (code - 0x41)).toString()
+
+        // VK_A..VK_Z
+        0x20 -> "Space"
+
+        0x09 -> "Tab"
+
+        0x0A -> "Enter"
+
+        0x1B -> "Esc"
+
+        0x08 -> "Backspace"
+
+        0x2E -> "Delete"
+
+        0x25 -> "Left"
+
+        0x26 -> "Up"
+
+        0x27 -> "Right"
+
+        0x28 -> "Down"
+
+        else -> "Key $code"
+    }
 
 /** The writeId from a bridge ack ({"ok":true,"writeId":n}), or -1 if absent/unparseable. */
-private fun parseWriteId(ack: String?): Long = try {
-    JSONObject(ack ?: "{}").optLong("writeId", -1L)
-} catch (t: Throwable) {
-    -1L
-}
+private fun parseWriteId(ack: String?): Long =
+    try {
+        JSONObject(ack ?: "{}").optLong("writeId", -1L)
+    } catch (t: Throwable) {
+        -1L
+    }
 
 /** True if a notification config value is enabled — tolerates the "true"/"false" sentinel or a full JSON object. */
 private fun isNotifEnabled(v: String?): Boolean {
     val t = v?.trim().orEmpty()
     if (t == "true") return true
     if (t.isEmpty() || t == "false") return false
-    return try { JSONObject(t).optBoolean("enabled", false) } catch (e: Throwable) { false }
+    return try {
+        JSONObject(t).optBoolean("enabled", false)
+    } catch (e: Throwable) {
+        false
+    }
 }
 
 // ---- FIX-7: per-notification sub-editor (parity with iOS MUINotificationEditor / NOTIF-2) -----------------
@@ -550,25 +672,37 @@ private fun isNotifEnabled(v: String?): Boolean {
 
 // (label, stored-enum) pairs, in display order — must match NotificationSound / FlashNotification enum names.
 private val NOTIF_SOUNDS = listOf("Native" to "NATIVE", "Custom" to "CUSTOM", "Off" to "OFF")
-private val NOTIF_FLASHES = listOf(
-    "Off" to "DISABLED", "Flash for 2 seconds" to "FLASH_TWO_SECONDS", "Solid for 2 seconds" to "SOLID_TWO_SECONDS",
-    "Flash until cancelled" to "FLASH_UNTIL_CANCELLED", "Solid until cancelled" to "SOLID_UNTIL_CANCELLED",
-)
+private val NOTIF_FLASHES =
+    listOf(
+        "Off" to "DISABLED",
+        "Flash for 2 seconds" to "FLASH_TWO_SECONDS",
+        "Solid for 2 seconds" to "SOLID_TWO_SECONDS",
+        "Flash until cancelled" to "FLASH_UNTIL_CANCELLED",
+        "Solid until cancelled" to "SOLID_UNTIL_CANCELLED",
+    )
 
 /** Parse a notification config value into a mutable JSONObject (empty for the "true"/"false"/blank sentinels). */
 private fun parseNotifObj(v: String?): JSONObject {
     val t = v?.trim().orEmpty()
     if (!t.startsWith("{")) return JSONObject()
-    return try { JSONObject(t) } catch (e: Throwable) { JSONObject() }
+    return try {
+        JSONObject(t)
+    } catch (e: Throwable) {
+        JSONObject()
+    }
 }
 
 /** Flip ONLY the "enabled" field of a notification value, preserving every other (customized) field. */
-private fun notifWithEnabled(v: String?, enabled: Boolean): String =
-    parseNotifObj(v).put("enabled", enabled).toString()
+private fun notifWithEnabled(
+    v: String?,
+    enabled: Boolean,
+): String = parseNotifObj(v).put("enabled", enabled).toString()
 
 /** Display label for the current stored enum value, falling back to the first option's label. */
-private fun notifLabel(options: List<Pair<String, String>>, value: String?): String =
-    options.firstOrNull { it.second == value }?.first ?: options.first().first
+private fun notifLabel(
+    options: List<Pair<String, String>>,
+    value: String?,
+): String = options.firstOrNull { it.second == value }?.first ?: options.first().first
 
 /** "#AARRGGBB" gson hex → packed ARGB int (RGB-without-alpha → opaque); white on garbage. */
 private fun hexToArgb(s: String?): Int {
@@ -585,15 +719,24 @@ private fun argbToHex(argb: Int): String = "#%08X".format(argb)
  * "Customize…" button that opens the full sub-editor.
  */
 @Composable
-private fun NotificationCustomizeControl(item: ConfigItem, onChange: (String) -> Unit) {
+private fun NotificationCustomizeControl(
+    item: ConfigItem,
+    onChange: (String) -> Unit,
+) {
     var editing by remember { mutableStateOf(false) }
     val n = remember(item.value) { parseNotifObj(item.value) }
-    val summary = if (n.optBoolean("initialized", false))
-        "Sound: ${notifLabel(NOTIF_SOUNDS, n.optString("sound"))} · Flash: ${notifLabel(NOTIF_FLASHES, n.optString("flash"))}"
-    else
-        "Uses the global notification defaults."
+    val summary =
+        if (n.optBoolean("initialized", false)) {
+            "Sound: ${notifLabel(NOTIF_SOUNDS, n.optString("sound"))} · Flash: ${notifLabel(NOTIF_FLASHES, n.optString("flash"))}"
+        } else {
+            "Uses the global notification defaults."
+        }
     Row(
-        Modifier.fillMaxWidth().padding(top = 2.dp).clip(RoundedCornerShape(6.dp)).clickableNoRipple { editing = true },
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 2.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .clickableNoRipple { editing = true },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(summary, color = Color.Gray, fontSize = 12.sp, modifier = Modifier.weight(1f))
@@ -603,7 +746,10 @@ private fun NotificationCustomizeControl(item: ConfigItem, onChange: (String) ->
         NotificationEditorDialog(
             item = item,
             onDismiss = { editing = false },
-            onDone = { json -> editing = false; onChange(json) },
+            onDone = { json ->
+                editing = false
+                onChange(json)
+            },
         )
     }
 }
@@ -614,7 +760,11 @@ private fun NotificationCustomizeControl(item: ConfigItem, onChange: (String) ->
  * writes the whole Notification JSON back with override+initialized forced true so the engine honours it.
  */
 @Composable
-private fun NotificationEditorDialog(item: ConfigItem, onDismiss: () -> Unit, onDone: (String) -> Unit) {
+private fun NotificationEditorDialog(
+    item: ConfigItem,
+    onDismiss: () -> Unit,
+    onDone: (String) -> Unit,
+) {
     // null = still seeding (we may need to fetch defaults off the UI thread). Mutating a field copies the object
     // so the reassignment recomposes.
     var working by remember { mutableStateOf<JSONObject?>(null) }
@@ -622,16 +772,20 @@ private fun NotificationEditorDialog(item: ConfigItem, onDismiss: () -> Unit, on
 
     LaunchedEffect(item.key) {
         val n = parseNotifObj(item.value)
-        working = if (n.optBoolean("initialized", false)) {
-            n
-        } else {
-            val defJson = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.notificationDefaults() }.get() }
-            val d = parseNotifObj(defJson)
-            if (d.length() == 0) n else d.put("enabled", n.optBoolean("enabled", true))   // keep current on/off
-        }
+        working =
+            if (n.optBoolean("initialized", false)) {
+                n
+            } else {
+                val defJson = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.notificationDefaults() }.get() }
+                val d = parseNotifObj(defJson)
+                if (d.length() == 0) n else d.put("enabled", n.optBoolean("enabled", true)) // keep current on/off
+            }
     }
 
-    fun set(key: String, value: Any) {
+    fun set(
+        key: String,
+        value: Any,
+    ) {
         working = JSONObject(working!!.toString()).put(key, value)
     }
 
@@ -658,14 +812,18 @@ private fun NotificationEditorDialog(item: ConfigItem, onDismiss: () -> Unit, on
                         ) {
                             Text("Flash color", color = Color.White, modifier = Modifier.weight(1f))
                             Box(
-                                Modifier.size(28.dp).clip(RoundedCornerShape(5.dp)).checkerboard()
+                                Modifier
+                                    .size(28.dp)
+                                    .clip(RoundedCornerShape(5.dp))
+                                    .checkerboard()
                                     .background(Color(hexToArgb(w.optString("flashColor")))),
                             )
                         }
                         val vol = w.optInt("volume", 100)
                         Text("Volume: $vol%", color = Color.White, modifier = Modifier.padding(top = 8.dp))
                         Slider(
-                            value = vol.toFloat(), valueRange = 0f..100f,
+                            value = vol.toFloat(),
+                            valueRange = 0f..100f,
                             onValueChange = { set("volume", it.toInt()) },
                             modifier = Modifier.fillMaxWidth(),
                         )
@@ -691,13 +849,20 @@ private fun NotificationEditorDialog(item: ConfigItem, onDismiss: () -> Unit, on
             initialArgb = hexToArgb(working!!.optString("flashColor")),
             showAlpha = true,
             onDismiss = { picking = false },
-            onPick = { argb -> picking = false; set("flashColor", argbToHex(argb)) },
+            onPick = { argb ->
+                picking = false
+                set("flashColor", argbToHex(argb))
+            },
         )
     }
 }
 
 @Composable
-private fun NotifSwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun NotifSwitchRow(
+    label: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = Color.White, modifier = Modifier.weight(1f))
         Switch(checked = checked, onCheckedChange = onChange)
@@ -705,7 +870,12 @@ private fun NotifSwitchRow(label: String, checked: Boolean, onChange: (Boolean) 
 }
 
 @Composable
-private fun NotifPickRow(label: String, current: String, options: List<Pair<String, String>>, onSelect: (String) -> Unit) {
+private fun NotifPickRow(
+    label: String,
+    current: String,
+    options: List<Pair<String, String>>,
+    onSelect: (String) -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = Color.White, modifier = Modifier.weight(1f))
@@ -713,7 +883,10 @@ private fun NotifPickRow(label: String, current: String, options: List<Pair<Stri
             TextButton(onClick = { expanded = true }) { Text(current, color = Color(0xFFB0B0B0)) }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 options.forEach { (l, v) ->
-                    DropdownMenuItem(text = { Text(l) }, onClick = { expanded = false; onSelect(v) })
+                    DropdownMenuItem(text = { Text(l) }, onClick = {
+                        expanded = false
+                        onSelect(v)
+                    })
                 }
             }
         }
@@ -721,13 +894,21 @@ private fun NotifPickRow(label: String, current: String, options: List<Pair<Stri
 }
 
 @Composable
-private fun EnumDropdown(choices: List<String>, value: String?, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun EnumDropdown(
+    choices: List<String>,
+    value: String?,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     var expanded by remember { mutableStateOf(false) }
     Box(modifier) {
         TextButton(onClick = { expanded = true }) { Text(value ?: "—", color = Color.White) }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             choices.forEach { c ->
-                DropdownMenuItem(text = { Text(c) }, onClick = { expanded = false; onSelect(c) })
+                DropdownMenuItem(text = { Text(c) }, onClick = {
+                    expanded = false
+                    onSelect(c)
+                })
             }
         }
     }
@@ -744,25 +925,34 @@ private fun EnumDropdown(choices: List<String>, value: String?, onSelect: (Strin
 private fun parseArgb(s: String?): Int {
     val t = s?.trim().orEmpty()
     if (t.isEmpty()) return 0xFFFFFFFF.toInt()
-    t.toIntOrNull()?.let { return it }                     // the common case: decimal getRGB()
+    t.toIntOrNull()?.let { return it } // the common case: decimal getRGB()
     val hex = t.removePrefix("#").removePrefix("0x").removePrefix("0X")
     return hex.toLongOrNull(16)?.toInt() ?: 0xFFFFFFFF.toInt()
 }
 
 /** The row control for a color item: a swatch + hex label that opens the picker dialog. */
 @Composable
-private fun ColorConfigControl(item: ConfigItem, onChange: (String) -> Unit) {
+private fun ColorConfigControl(
+    item: ConfigItem,
+    onChange: (String) -> Unit,
+) {
     var picking by remember { mutableStateOf(false) }
     val argb = parseArgb(item.value)
     Row(
-        Modifier.fillMaxWidth().padding(top = 4.dp).clip(RoundedCornerShape(6.dp))
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp)
+            .clip(RoundedCornerShape(6.dp))
             .clickableNoRipple { picking = true }
             .semantics { contentDescription = "${item.name.ifEmpty { item.key }} colour, edit" },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.size(36.dp).clip(RoundedCornerShape(6.dp))
-                .checkerboard().background(Color(argb)),
+            Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .checkerboard()
+                .background(Color(argb)),
         )
         Spacer(Modifier.size(12.dp))
         Text("#%08X".format(argb), color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
@@ -773,7 +963,10 @@ private fun ColorConfigControl(item: ConfigItem, onChange: (String) -> Unit) {
             initialArgb = argb,
             showAlpha = item.alpha,
             onDismiss = { picking = false },
-            onPick = { picked -> picking = false; onChange(picked.toString()) },   // decimal ARGB, engine format
+            onPick = { picked ->
+                picking = false
+                onChange(picked.toString())
+            }, // decimal ARGB, engine format
         )
     }
 }
@@ -785,41 +978,67 @@ private fun ColorConfigControl(item: ConfigItem, onChange: (String) -> Unit) {
 
 /** Two numeric fields (W × H) writing back "WxH" only once both parse as ints (no partial corruption). */
 @Composable
-private fun DimensionConfigControl(item: ConfigItem, onChange: (String) -> Unit) {
+private fun DimensionConfigControl(
+    item: ConfigItem,
+    onChange: (String) -> Unit,
+) {
     val parts = (item.value ?: "").split("x")
     var w by remember(item.key) { mutableStateOf(parts.getOrNull(0)?.trim() ?: "") }
     var h by remember(item.key) { mutableStateOf(parts.getOrNull(1)?.trim() ?: "") }
+
     fun commit() {
-        val wi = w.trim().toIntOrNull(); val hi = h.trim().toIntOrNull()
-        if (wi != null && hi != null) onChange("${wi}x${hi}")
+        val wi = w.trim().toIntOrNull()
+        val hi = h.trim().toIntOrNull()
+        if (wi != null && hi != null) onChange("${wi}x$hi")
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
-            value = w, onValueChange = { w = it; commit() }, singleLine = true, label = { Text("W") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f),
+            value = w,
+            onValueChange = {
+                w = it
+                commit()
+            },
+            singleLine = true,
+            label = { Text("W") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.weight(1f),
         )
         Text("  ×  ", color = Color.White)
         OutlinedTextField(
-            value = h, onValueChange = { h = it; commit() }, singleLine = true, label = { Text("H") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f),
+            value = h,
+            onValueChange = {
+                h = it
+                commit()
+            },
+            singleLine = true,
+            label = { Text("H") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.weight(1f),
         )
     }
 }
 
 /** A summary row + a checklist dialog of `choices`; writes back a JSON array of selected names (choices order). */
 @Composable
-private fun SetConfigControl(item: ConfigItem, onChange: (String) -> Unit) {
+private fun SetConfigControl(
+    item: ConfigItem,
+    onChange: (String) -> Unit,
+) {
     val choices = item.choices ?: emptyList()
     val selected = remember(item.value) { parseStringArray(item.value).toMutableSet() }
     var editing by remember { mutableStateOf(false) }
-    val summary = when {
-        choices.isEmpty() -> "(no options)"
-        selected.isEmpty() -> "None"
-        selected.size == choices.size -> "All (${choices.size})"
-        else -> selected.filter { it in choices }.joinToString(", ").ifEmpty { "${selected.size} selected" }
-    }
+    val summary =
+        when {
+            choices.isEmpty() -> "(no options)"
+            selected.isEmpty() -> "None"
+            selected.size == choices.size -> "All (${choices.size})"
+            else -> selected.filter { it in choices }.joinToString(", ").ifEmpty { "${selected.size} selected" }
+        }
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).clickableNoRipple { if (choices.isNotEmpty()) editing = true }
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .clickableNoRipple { if (choices.isNotEmpty()) editing = true }
             .semantics {
                 contentDescription = "${item.name.ifEmpty { item.key }}, edit selection"
                 stateDescription = summary
@@ -856,7 +1075,7 @@ private fun SetConfigControl(item: ConfigItem, onChange: (String) -> Unit) {
                         TextButton(onClick = { editing = false }) { Text("Cancel") }
                         TextButton(onClick = {
                             editing = false
-                            onChange(jsonStringArray(choices.filter { it in working }))   // choices/enum order
+                            onChange(jsonStringArray(choices.filter { it in working })) // choices/enum order
                         }) { Text("Select") }
                     }
                 }
@@ -866,30 +1085,37 @@ private fun SetConfigControl(item: ConfigItem, onChange: (String) -> Unit) {
 }
 
 /** Parse a gson/json string array (e.g. ["A","B"]) into element names; tolerant of empty/garbage. */
-private fun parseStringArray(s: String?): List<String> = try {
-    val a = JSONArray(s ?: "[]")
-    (0 until a.length()).map { a.getString(it) }
-} catch (t: Throwable) {
-    emptyList()
-}
+private fun parseStringArray(s: String?): List<String> =
+    try {
+        val a = JSONArray(s ?: "[]")
+        (0 until a.length()).map { a.getString(it) }
+    } catch (t: Throwable) {
+        emptyList()
+    }
 
 /** Serialize element names to a JSON array string the engine's gson.fromJson accepts. */
-private fun jsonStringArray(names: List<String>): String =
-    JSONArray().apply { names.forEach { put(it) } }.toString()
+private fun jsonStringArray(names: List<String>): String = JSONArray().apply { names.forEach { put(it) } }.toString()
 
 @Composable
-private fun ColorPickerDialog(initialArgb: Int, showAlpha: Boolean, onDismiss: () -> Unit, onPick: (Int) -> Unit) {
+private fun ColorPickerDialog(
+    initialArgb: Int,
+    showAlpha: Boolean,
+    onDismiss: () -> Unit,
+    onPick: (Int) -> Unit,
+) {
     // Work in HSV (so the square + hue strip behave) + a separate alpha byte; recombine on each change.
-    val hsv = remember {
-        FloatArray(3).also { android.graphics.Color.colorToHSV(initialArgb or (0xFF shl 24), it) }
-    }
+    val hsv =
+        remember {
+            FloatArray(3).also { android.graphics.Color.colorToHSV(initialArgb or (0xFF shl 24), it) }
+        }
     var hue by remember { mutableFloatStateOf(hsv[0]) }
     var sat by remember { mutableFloatStateOf(hsv[1]) }
     var value by remember { mutableFloatStateOf(hsv[2]) }
     var alpha by remember { mutableIntStateOf((initialArgb ushr 24) and 0xFF) }
 
-    val current = (android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, value)) and 0x00FFFFFF) or
-        ((if (showAlpha) alpha else 0xFF) shl 24)
+    val current =
+        (android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, value)) and 0x00FFFFFF) or
+            ((if (showAlpha) alpha else 0xFF) shl 24)
     val opaqueHue = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, 1f, 1f)))
 
     Dialog(onDismissRequest = onDismiss) {
@@ -899,7 +1125,10 @@ private fun ColorPickerDialog(initialArgb: Int, showAlpha: Boolean, onDismiss: (
                 Spacer(Modifier.size(12.dp))
                 // Saturation (x) × value (y) square for the chosen hue.
                 Box(
-                    Modifier.fillMaxWidth().aspectRatio(1.1f).clip(RoundedCornerShape(8.dp))
+                    Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1.1f)
+                        .clip(RoundedCornerShape(8.dp))
                         .background(Brush.horizontalGradient(listOf(Color.White, opaqueHue)))
                         .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
                         .pointerInput(Unit) {
@@ -907,8 +1136,7 @@ private fun ColorPickerDialog(initialArgb: Int, showAlpha: Boolean, onDismiss: (
                                 sat = (o.x / size.width).coerceIn(0f, 1f)
                                 value = (1f - o.y / size.height).coerceIn(0f, 1f)
                             }
-                        }
-                        .pointerInput(Unit) {
+                        }.pointerInput(Unit) {
                             detectDragGestures { change, _ ->
                                 sat = (change.position.x / size.width).coerceIn(0f, 1f)
                                 value = (1f - change.position.y / size.height).coerceIn(0f, 1f)
@@ -918,8 +1146,22 @@ private fun ColorPickerDialog(initialArgb: Int, showAlpha: Boolean, onDismiss: (
                     Canvas(Modifier.fillMaxSize()) {
                         val cx = sat * size.width
                         val cy = (1f - value) * size.height
-                        drawCircle(Color.White, radius = 10f, center = Offset(cx, cy), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f))
-                        drawCircle(Color.Black, radius = 13f, center = Offset(cx, cy), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f))
+                        drawCircle(
+                            Color.White,
+                            radius = 10f,
+                            center = Offset(cx, cy),
+                            style =
+                                androidx.compose.ui.graphics.drawscope
+                                    .Stroke(width = 3f),
+                        )
+                        drawCircle(
+                            Color.Black,
+                            radius = 13f,
+                            center = Offset(cx, cy),
+                            style =
+                                androidx.compose.ui.graphics.drawscope
+                                    .Stroke(width = 1.5f),
+                        )
                     }
                 }
                 Spacer(Modifier.size(14.dp))
@@ -931,7 +1173,13 @@ private fun ColorPickerDialog(initialArgb: Int, showAlpha: Boolean, onDismiss: (
                 }
                 Spacer(Modifier.size(14.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(40.dp).clip(RoundedCornerShape(6.dp)).checkerboard().background(Color(current)))
+                    Box(
+                        Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .checkerboard()
+                            .background(Color(current)),
+                    )
                     Spacer(Modifier.size(10.dp))
                     Text("#%08X".format(current), color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
                 }
@@ -947,91 +1195,131 @@ private fun ColorPickerDialog(initialArgb: Int, showAlpha: Boolean, onDismiss: (
 
 /** A rainbow hue bar; the thumb sets hue 0..360. */
 @Composable
-private fun HueStrip(hue: Float, onHue: (Float) -> Unit) {
-    val hues = listOf(0f, 60f, 120f, 180f, 240f, 300f, 360f)
-        .map { Color(android.graphics.Color.HSVToColor(floatArrayOf(it, 1f, 1f))) }
+private fun HueStrip(
+    hue: Float,
+    onHue: (Float) -> Unit,
+) {
+    val hues =
+        listOf(0f, 60f, 120f, 180f, 240f, 300f, 360f)
+            .map { Color(android.graphics.Color.HSVToColor(floatArrayOf(it, 1f, 1f))) }
     Box(
-        Modifier.fillMaxWidth().height(26.dp).clip(RoundedCornerShape(13.dp))
+        Modifier
+            .fillMaxWidth()
+            .height(26.dp)
+            .clip(RoundedCornerShape(13.dp))
             .background(Brush.horizontalGradient(hues))
             .pointerInput(Unit) { detectTapGestures { o -> onHue((o.x / size.width).coerceIn(0f, 1f) * 360f) } }
             .pointerInput(Unit) { detectDragGestures { c, _ -> onHue((c.position.x / size.width).coerceIn(0f, 1f) * 360f) } },
     ) {
         Canvas(Modifier.fillMaxSize()) {
             val x = (hue / 360f) * size.width
-            drawCircle(Color.White, radius = size.height / 2 - 2, center = Offset(x.coerceIn(8f, size.width - 8f), size.height / 2), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f))
+            drawCircle(
+                Color.White,
+                radius = size.height / 2 - 2,
+                center = Offset(x.coerceIn(8f, size.width - 8f), size.height / 2),
+                style =
+                    androidx.compose.ui.graphics.drawscope
+                        .Stroke(width = 3f),
+            )
         }
     }
 }
 
 /** A transparent→opaque bar for the current colour; the thumb sets alpha 0..255. */
 @Composable
-private fun AlphaStrip(alpha: Int, rgb: Color, onAlpha: (Int) -> Unit) {
+private fun AlphaStrip(
+    alpha: Int,
+    rgb: Color,
+    onAlpha: (Int) -> Unit,
+) {
     Box(
-        Modifier.fillMaxWidth().height(26.dp).clip(RoundedCornerShape(13.dp)).checkerboard()
+        Modifier
+            .fillMaxWidth()
+            .height(26.dp)
+            .clip(RoundedCornerShape(13.dp))
+            .checkerboard()
             .background(Brush.horizontalGradient(listOf(rgb.copy(alpha = 0f), rgb.copy(alpha = 1f))))
             .pointerInput(Unit) { detectTapGestures { o -> onAlpha(((o.x / size.width).coerceIn(0f, 1f) * 255).toInt()) } }
             .pointerInput(Unit) { detectDragGestures { c, _ -> onAlpha(((c.position.x / size.width).coerceIn(0f, 1f) * 255).toInt()) } },
     ) {
         Canvas(Modifier.fillMaxSize()) {
             val x = (alpha / 255f) * size.width
-            drawCircle(Color.White, radius = size.height / 2 - 2, center = Offset(x.coerceIn(8f, size.width - 8f), size.height / 2), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f))
+            drawCircle(
+                Color.White,
+                radius = size.height / 2 - 2,
+                center = Offset(x.coerceIn(8f, size.width - 8f), size.height / 2),
+                style =
+                    androidx.compose.ui.graphics.drawscope
+                        .Stroke(width = 3f),
+            )
         }
     }
 }
 
 /** A grey checkerboard under translucent swatches so alpha is visible. */
-private fun Modifier.checkerboard(): Modifier = this.background(Color(0xFF777777)).drawBehind {
-    val c = 8f
-    var y = 0f; var row = 0
-    while (y < size.height) {
-        var x = if (row % 2 == 0) 0f else c
-        while (x < size.width) {
-            drawRect(Color(0xFFBBBBBB), topLeft = Offset(x, y), size = androidx.compose.ui.geometry.Size(c, c))
-            x += 2 * c
+private fun Modifier.checkerboard(): Modifier =
+    this.background(Color(0xFF777777)).drawBehind {
+        val c = 8f
+        var y = 0f
+        var row = 0
+        while (y < size.height) {
+            var x = if (row % 2 == 0) 0f else c
+            while (x < size.width) {
+                drawRect(
+                    Color(0xFFBBBBBB),
+                    topLeft = Offset(x, y),
+                    size =
+                        androidx.compose.ui.geometry
+                            .Size(c, c),
+                )
+                x += 2 * c
+            }
+            y += c
+            row++
         }
-        y += c; row++
     }
-}
 
 /** Click without the Material ripple (the row is its own surface). */
-private fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier =
-    this.pointerInput(Unit) { detectTapGestures { onClick() } }
+private fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = this.pointerInput(Unit) { detectTapGestures { onClick() } }
 
-private fun parseConfig(json: String): ConfigSchema = try {
-    val root = JSONObject(json)
-    val arr: JSONArray = root.optJSONArray("items") ?: JSONArray()
-    val items = (0 until arr.length()).map { i ->
-        val o = arr.getJSONObject(i)
-        val choices = o.optJSONArray("choices")?.let { c -> (0 until c.length()).map { c.getString(it) } }
-        val choiceValues = o.optJSONArray("choiceValues")?.let { c -> (0 until c.length()).map { c.getString(it) } }
-        ConfigItem(
-            key = o.getString("key"),
-            name = o.optString("name", o.getString("key")),
-            description = o.optString("description", ""),
-            type = o.optString("type", "unknown"),
-            value = if (o.isNull("value")) null else o.optString("value", null),
-            choices = choices,
-            choiceValues = choiceValues,
-            units = if (o.isNull("units")) null else o.optString("units", null),
-            secret = o.optBoolean("secret", false),
-            alpha = o.optBoolean("alpha", false),
-            min = if (o.has("min")) o.optInt("min") else null,
-            max = if (o.has("max")) o.optInt("max") else null,
-            section = o.optString("section", ""),
-        )
+private fun parseConfig(json: String): ConfigSchema =
+    try {
+        val root = JSONObject(json)
+        val arr: JSONArray = root.optJSONArray("items") ?: JSONArray()
+        val items =
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                val choices = o.optJSONArray("choices")?.let { c -> (0 until c.length()).map { c.getString(it) } }
+                val choiceValues = o.optJSONArray("choiceValues")?.let { c -> (0 until c.length()).map { c.getString(it) } }
+                ConfigItem(
+                    key = o.getString("key"),
+                    name = o.optString("name", o.getString("key")),
+                    description = o.optString("description", ""),
+                    type = o.optString("type", "unknown"),
+                    value = if (o.isNull("value")) null else o.optString("value", null),
+                    choices = choices,
+                    choiceValues = choiceValues,
+                    units = if (o.isNull("units")) null else o.optString("units", null),
+                    secret = o.optBoolean("secret", false),
+                    alpha = o.optBoolean("alpha", false),
+                    min = if (o.has("min")) o.optInt("min") else null,
+                    max = if (o.has("max")) o.optInt("max") else null,
+                    section = o.optString("section", ""),
+                )
+            }
+        val secArr: JSONArray = root.optJSONArray("sections") ?: JSONArray()
+        val sections =
+            (0 until secArr.length()).map { i ->
+                val o = secArr.getJSONObject(i)
+                ConfigSectionMeta(
+                    key = o.optString("key", ""),
+                    name = o.optString("name", ""),
+                    description = o.optString("description", ""),
+                    closedByDefault = o.optBoolean("closedByDefault", false),
+                )
+            }
+        ConfigSchema(items, sections)
+    } catch (t: Throwable) {
+        Log.e("MainActivity", "ANDROID_A4_CONFIG_UI_RED parse failed: $t")
+        ConfigSchema(emptyList(), emptyList())
     }
-    val secArr: JSONArray = root.optJSONArray("sections") ?: JSONArray()
-    val sections = (0 until secArr.length()).map { i ->
-        val o = secArr.getJSONObject(i)
-        ConfigSectionMeta(
-            key = o.optString("key", ""),
-            name = o.optString("name", ""),
-            description = o.optString("description", ""),
-            closedByDefault = o.optBoolean("closedByDefault", false),
-        )
-    }
-    ConfigSchema(items, sections)
-} catch (t: Throwable) {
-    Log.e("MainActivity", "ANDROID_A4_CONFIG_UI_RED parse failed: $t")
-    ConfigSchema(emptyList(), emptyList())
-}

@@ -19,33 +19,53 @@ import android.view.View
  * MainActivity — armed from the world-hop trigger sites (HUD quick-hop hotkey + World Switcher row/Prev/Next),
  * hidden on the next logged-in edge after the hop or after a bounded timeout, so it can never stick over the game.
  */
-class HoppingOverlayView(context: Context) : View(context) {
-
+class HoppingOverlayView(
+    context: Context,
+) : View(context) {
     // Thread contract: setHopping/setLabel are called only from the UI thread (the HUD-hotkey onClick, the
     // World-Switcher Compose onClick, and the Choreographer-driven updateChrome hide), and onDraw runs on the UI
     // thread too — so these need no locking. Both are @Volatile anyway as a belt-and-suspenders guard against a
     // future off-thread caller (a stale read could only ever cause a one-frame visual blip, never a crash).
     @Volatile private var active = false
+
     @Volatile private var label = "Hopping to world…"
 
     private val scrimPaint = Paint().apply { color = Color.argb(150, 0, 0, 0) }
-    private val cardPaint = Paint().apply { color = Color.argb(238, 33, 28, 23); isAntiAlias = true }
-    private val borderPaint = Paint().apply {
-        color = Color.argb(255, 140, 128, 102); style = Paint.Style.STROKE
-        strokeWidth = dp(1.5f); isAntiAlias = true
-    }
-    private val textPaint = Paint().apply {
-        color = Color.WHITE; textSize = sp(17f); isFakeBoldText = true; isAntiAlias = true
-        textAlign = Paint.Align.CENTER
-    }
-    private val spinnerTrackPaint = Paint().apply {
-        color = Color.argb(60, 255, 255, 255); style = Paint.Style.STROKE
-        strokeWidth = dp(3f); isAntiAlias = true
-    }
-    private val spinnerPaint = Paint().apply {
-        color = Color.argb(255, 255, 200, 90); style = Paint.Style.STROKE
-        strokeWidth = dp(3f); strokeCap = Paint.Cap.ROUND; isAntiAlias = true
-    }
+    private val cardPaint =
+        Paint().apply {
+            color = Color.argb(238, 33, 28, 23)
+            isAntiAlias = true
+        }
+    private val borderPaint =
+        Paint().apply {
+            color = Color.argb(255, 140, 128, 102)
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1.5f)
+            isAntiAlias = true
+        }
+    private val textPaint =
+        Paint().apply {
+            color = Color.WHITE
+            textSize = sp(17f)
+            isFakeBoldText = true
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+        }
+    private val spinnerTrackPaint =
+        Paint().apply {
+            color = Color.argb(60, 255, 255, 255)
+            style = Paint.Style.STROKE
+            strokeWidth = dp(3f)
+            isAntiAlias = true
+        }
+    private val spinnerPaint =
+        Paint().apply {
+            color = Color.argb(255, 255, 200, 90)
+            style = Paint.Style.STROKE
+            strokeWidth = dp(3f)
+            strokeCap = Paint.Cap.ROUND
+            isAntiAlias = true
+        }
 
     private val spinnerRect = RectF()
 
@@ -55,6 +75,7 @@ class HoppingOverlayView(context: Context) : View(context) {
     }
 
     private fun dp(v: Float) = v * resources.displayMetrics.density
+
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
 
     val isActive: Boolean get() = active

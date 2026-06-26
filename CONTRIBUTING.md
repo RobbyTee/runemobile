@@ -42,10 +42,16 @@ Override a single commit with `git commit --no-verify` only when a flag is a kno
 
 ## Linting
 
+Each runner soft-skips if its tool is absent, but the release gate invokes them with `--require` so a
+missing linter fails the gate rather than passing silently. Incrementally, the pre-commit hook lints only
+the staged files of each kind (if the tool is installed).
+
 - **Shell:** `tools/lint/shellcheck.sh` lints every tracked script at `--severity=warning`; config and
-  the single repo-wide mute live in `.shellcheckrc`. It also runs as a stage of the Android release gate
-  (`android/dev-tools/ci/release-gate.sh`) and, incrementally, in the pre-commit hook. Intentional
-  findings get a justified `# shellcheck disable=SCxxxx` directive, not a blanket mute.
+  the single repo-wide mute live in `.shellcheckrc`. Intentional findings get a justified
+  `# shellcheck disable=SCxxxx` directive, not a blanket mute.
+- **Kotlin:** `tools/lint/ktlint.sh` lints all tracked Kotlin; style (indent, line length, the Compose
+  `@Composable` naming exception) lives in `.editorconfig`. Auto-fix most findings with
+  `ktlint --format <files>`.
 - **Java:** upstream Checkstyle (`config/checkstyle/`) + PMD (`runelite-client/pmd-ruleset.xml`).
 
 ## Conventions

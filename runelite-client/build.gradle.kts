@@ -102,29 +102,30 @@ dependencies {
     testImplementation(libs.okhttp.mockserver)
 }
 
-val shadowJar = tasks.register<Jar>("shadowJar") {
-    dependsOn(configurations.runtimeClasspath)
-    manifest {
-        attributes["Main-Class"] = "net.runelite.client.RuneLite"
+val shadowJar =
+    tasks.register<Jar>("shadowJar") {
+        dependsOn(configurations.runtimeClasspath)
+        manifest {
+            attributes["Main-Class"] = "net.runelite.client.RuneLite"
+        }
+
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+        from(sourceSets.main.get().output)
+        from(configurations.runtimeClasspath.map { it.map { if (it.isDirectory) it else zipTree(it) } })
+
+        exclude(
+            "META-INF/INDEX.LIST",
+            "META-INF/*.SF",
+            "META-INF/*.DSA",
+            "META-INF/*.RSA",
+            "**/module-info.class",
+        )
+
+        group = BasePlugin.BUILD_GROUP
+        archiveClassifier = "shadow"
+        archiveFileName = project.name + "-" + project.version + "-shaded.jar"
     }
-
-    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-
-    from(sourceSets.main.get().output)
-    from(configurations.runtimeClasspath.map { it.map { if (it.isDirectory) it else zipTree(it) } })
-
-    exclude(
-        "META-INF/INDEX.LIST",
-        "META-INF/*.SF",
-        "META-INF/*.DSA",
-        "META-INF/*.RSA",
-        "**/module-info.class"
-    )
-
-    group = BasePlugin.BUILD_GROUP
-    archiveClassifier = "shadow"
-    archiveFileName = project.name + "-" + project.version + "-shaded.jar"
-}
 tasks.assemble { dependsOn(shadowJar) }
 
 publishing {
@@ -136,12 +137,13 @@ publishing {
     }
 }
 
-val assemble = tasks.withType<net.runelite.gradle.assemble.AssembleTask> {
-    scriptDirectory = file("src/main/scripts")
-    outputDirectory = sourceSets.main.map { File(it.output.resourcesDir, "runelite") }
-    componentsFile = file("../runelite-api/src/main/interfaces/interfaces.toml")
-    longSupport = true
-}
+val assemble =
+    tasks.withType<net.runelite.gradle.assemble.AssembleTask> {
+        scriptDirectory = file("src/main/scripts")
+        outputDirectory = sourceSets.main.map { File(it.output.resourcesDir, "runelite") }
+        componentsFile = file("../runelite-api/src/main/interfaces/interfaces.toml")
+        longSupport = true
+    }
 
 tasks.withType<net.runelite.gradle.index.IndexTask> {
     archiveOverlayDirectory = assemble.single().outputDirectory

@@ -26,7 +26,6 @@ import java.util.TimeZone
  * THROWAWAY account only. tokens.json is a gitignored secret; only redacted prefixes are ever logged.
  */
 object JagexLogin {
-
     private const val TAG = "JagexLogin"
 
     // Verbatim from ios/dev-tools/fetch-shield-tokens.sh / JagexLoginViewController.m.
@@ -36,6 +35,7 @@ object JagexLogin {
     private const val CONSENT_SCOPE = "openid offline"
     private const val SESSIONS_URL = "https://auth.runescape.com/game-session/v1/sessions"
     private const val ACCOUNTS_URL = "https://auth.runescape.com/game-session/v2/accounts?fetchMembership=true"
+
     // Cloudflare in front of the game-session API is User-Agent sensitive — match the official Mac launcher.
     const val LAUNCHER_UA =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -49,7 +49,10 @@ object JagexLogin {
     }
 
     /** The Stage-A consent URL (OIDC hybrid: id_token + code; loopback redirect we intercept). */
-    fun consentUrl(nonce: String, state: String): String {
+    fun consentUrl(
+        nonce: String,
+        state: String,
+    ): String {
         fun e(s: String) = URLEncoder.encode(s, "UTF-8")
         return "$AUTH_ENDPOINT?response_type=${e("id_token code")}" +
             "&client_id=$CONSENT_CLIENT_ID" +
@@ -63,13 +66,20 @@ object JagexLogin {
     }
 
     /** Pull a value out of an x-www-form-urlencoded fragment/query (the redirect carries id_token in #frag). */
-    fun valueFrom(query: String, key: String): String? {
+    fun valueFrom(
+        query: String,
+        key: String,
+    ): String? {
         for (pair in query.split("&")) {
             val eq = pair.indexOf('=')
             if (eq < 0) continue
             if (pair.substring(0, eq) == key) {
                 val v = pair.substring(eq + 1)
-                return try { java.net.URLDecoder.decode(v, "UTF-8") } catch (e: Exception) { v }
+                return try {
+                    java.net.URLDecoder.decode(v, "UTF-8")
+                } catch (e: Exception) {
+                    v
+                }
             }
         }
         return null
@@ -79,16 +89,35 @@ object JagexLogin {
     fun mintSession(idToken: String): String? {
         val body = JSONObject().put("idToken", idToken).toString()
         val (code, text) = post(SESSIONS_URL, body, bearer = null)
-        if (code != 200) { Log.w(TAG, "session mint HTTP $code: ${snippet(text)}"); return null }
-        val sid = try { JSONObject(text).optString("sessionId", "") } catch (e: Exception) { "" }
-        return sid.ifEmpty { Log.w(TAG, "session response had no sessionId: ${snippet(text)}"); null }
+        if (code != 200) {
+            Log.w(TAG, "session mint HTTP $code: ${snippet(text)}")
+            return null
+        }
+        val sid =
+            try {
+                JSONObject(text).optString("sessionId", "")
+            } catch (e: Exception) {
+                ""
+            }
+        return sid.ifEmpty {
+            Log.w(TAG, "session response had no sessionId: ${snippet(text)}")
+            null
+        }
     }
 
     /** GET the character list with Bearer sessionId (null/empty on failure). Blocking — off the UI thread. */
     fun fetchAccounts(sessionId: String): JSONArray? {
         val (code, text) = get(ACCOUNTS_URL, bearer = sessionId)
-        if (code != 200) { Log.w(TAG, "accounts HTTP $code: ${snippet(text)}"); return null }
-        return try { JSONArray(text) } catch (e: Exception) { Log.w(TAG, "accounts not an array: ${snippet(text)}"); null }
+        if (code != 200) {
+            Log.w(TAG, "accounts HTTP $code: ${snippet(text)}")
+            return null
+        }
+        return try {
+            JSONArray(text)
+        } catch (e: Exception) {
+            Log.w(TAG, "accounts not an array: ${snippet(text)}")
+            null
+        }
     }
 
     /** A display label for an account (displayName, else a redacted accountId tail). */
@@ -104,62 +133,86 @@ object JagexLogin {
      * first). Stage-A fields only (session_id + chosen account + the full account list); access/refresh left
      * empty. mode is internal-only (filesDir is private to the app). Returns true on success.
      */
-    fun writeTokens(ctx: Context, sessionId: String, chosen: JSONObject, accounts: JSONArray): Boolean {
-        return try {
-            val iso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
-                timeZone = TimeZone.getTimeZone("UTC")
-            }.format(Date())
-            val json = JSONObject()
-                .put("access_token", "")
-                .put("refresh_token", "")
-                .put("id_token", "")
-                .put("expires_in", 0)
-                .put("scope", "")
-                .put("session_id", sessionId)
-                .put("accounts", accounts)
-                .put("otl_token", "")
-                .put("fetched_at", iso)
-                .put("chosen_account_id", chosen.optString("accountId", ""))
-                .put("chosen_display_name", chosen.optString("displayName", ""))
-                .put("notes", "On-device Jagex login (A3, Stage-A consent). JagexTokens maps session_id->JX_SESSION_ID, " +
-                    "chosen_account_id->JX_CHARACTER_ID, chosen_display_name->JX_DISPLAY_NAME; the gamepack mints its " +
-                    "own play token. access/refresh empty (Stage-A only).")
+    fun writeTokens(
+        ctx: Context,
+        sessionId: String,
+        chosen: JSONObject,
+        accounts: JSONArray,
+    ): Boolean =
+        try {
+            val iso =
+                SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+                    .apply {
+                        timeZone = TimeZone.getTimeZone("UTC")
+                    }.format(Date())
+            val json =
+                JSONObject()
+                    .put("access_token", "")
+                    .put("refresh_token", "")
+                    .put("id_token", "")
+                    .put("expires_in", 0)
+                    .put("scope", "")
+                    .put("session_id", sessionId)
+                    .put("accounts", accounts)
+                    .put("otl_token", "")
+                    .put("fetched_at", iso)
+                    .put("chosen_account_id", chosen.optString("accountId", ""))
+                    .put("chosen_display_name", chosen.optString("displayName", ""))
+                    .put(
+                        "notes",
+                        "On-device Jagex login (A3, Stage-A consent). JagexTokens maps session_id->JX_SESSION_ID, " +
+                            "chosen_account_id->JX_CHARACTER_ID, chosen_display_name->JX_DISPLAY_NAME; the gamepack mints its " +
+                            "own play token. access/refresh empty (Stage-A only).",
+                    )
             File(ctx.filesDir, "tokens.json").writeText(json.toString())
-            JagexTokens.clearLoggedOut(ctx)   // a fresh login owns the session — drop the logout suppression
+            JagexTokens.clearLoggedOut(ctx) // a fresh login owns the session — drop the logout suppression
             val sp = if (sessionId.length >= 6) sessionId.substring(0, 6) else sessionId
-            Log.i(TAG, "tokens.json written (filesDir): displayName='${chosen.optString("displayName", "")}' " +
-                "characterId=${chosen.optString("accountId", "")} session=$sp…")
+            Log.i(
+                TAG,
+                "tokens.json written (filesDir): displayName='${chosen.optString("displayName", "")}' " +
+                    "characterId=${chosen.optString("accountId", "")} session=$sp…",
+            )
             true
         } catch (e: Exception) {
             Log.e(TAG, "tokens.json write failed: ${e.message}")
             false
         }
-    }
 
     // ---- HTTP (HttpURLConnection; launcher UA for Cloudflare) -------------------------------------------
 
-    private fun post(urlStr: String, body: String, bearer: String?): Pair<Int, String> =
-        request(urlStr, "POST", body, bearer)
+    private fun post(
+        urlStr: String,
+        body: String,
+        bearer: String?,
+    ): Pair<Int, String> = request(urlStr, "POST", body, bearer)
 
-    private fun get(urlStr: String, bearer: String?): Pair<Int, String> =
-        request(urlStr, "GET", null, bearer)
+    private fun get(
+        urlStr: String,
+        bearer: String?,
+    ): Pair<Int, String> = request(urlStr, "GET", null, bearer)
 
-    private fun request(urlStr: String, method: String, body: String?, bearer: String?): Pair<Int, String> {
+    private fun request(
+        urlStr: String,
+        method: String,
+        body: String?,
+        bearer: String?,
+    ): Pair<Int, String> {
         var conn: HttpURLConnection? = null
         return try {
-            conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-                requestMethod = method
-                connectTimeout = 15000
-                readTimeout = 20000
-                setRequestProperty("User-Agent", LAUNCHER_UA)
-                setRequestProperty("Accept", "application/json")
-                bearer?.let { setRequestProperty("Authorization", "Bearer $it") }
-                if (body != null) {
-                    doOutput = true
-                    setRequestProperty("Content-Type", "application/json")
-                    outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            conn =
+                (URL(urlStr).openConnection() as HttpURLConnection).apply {
+                    requestMethod = method
+                    connectTimeout = 15000
+                    readTimeout = 20000
+                    setRequestProperty("User-Agent", LAUNCHER_UA)
+                    setRequestProperty("Accept", "application/json")
+                    bearer?.let { setRequestProperty("Authorization", "Bearer $it") }
+                    if (body != null) {
+                        doOutput = true
+                        setRequestProperty("Content-Type", "application/json")
+                        outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                    }
                 }
-            }
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val text = stream?.bufferedReader()?.use { it.readText() } ?: ""

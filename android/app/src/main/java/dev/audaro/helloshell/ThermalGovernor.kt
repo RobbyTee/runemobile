@@ -32,11 +32,11 @@ class ThermalGovernor(
     private val markerFile: File,
 ) {
     // Touched only on the single-threaded bridge executor -> no synchronization needed.
-    private var baselineScale = -1   // -1 = not captured yet (config not readable)
+    private var baselineScale = -1 // -1 = not captured yet (config not readable)
     private var appliedScale = -1
 
-    @Volatile private var forcedStatus = -1   // DEBUG override (-1 = follow the real sensor)
-    private var listener: Any? = null         // PowerManager.OnThermalStatusChangedListener (API 29+); Any keeps the field API-safe
+    @Volatile private var forcedStatus = -1 // DEBUG override (-1 = follow the real sensor)
+    private var listener: Any? = null // PowerManager.OnThermalStatusChangedListener (API 29+); Any keeps the field API-safe
 
     fun start() {
         if (!is117hd || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
@@ -60,7 +60,7 @@ class ThermalGovernor(
         pm.addThermalStatusListener(l)
         listener = l
         Log.i(TAG, "thermal governor armed (117HD); current status=${pm.currentThermalStatus}")
-        onStatus(pm.currentThermalStatus)   // apply the starting status immediately
+        onStatus(pm.currentThermalStatus) // apply the starting status immediately
     }
 
     fun stop() {
@@ -81,7 +81,14 @@ class ThermalGovernor(
     /** DEBUG: force a thermal status for verification (SET_THERMAL_STATUS broadcast). Pass -1 to follow the sensor. */
     fun forceStatus(status: Int) {
         forcedStatus = status
-        val effective = if (status >= 0) status else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) pm.currentThermalStatus else 0
+        val effective =
+            if (status >= 0) {
+                status
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                pm.currentThermalStatus
+            } else {
+                0
+            }
         onStatus(effective)
     }
 
@@ -91,7 +98,7 @@ class ThermalGovernor(
         JvmLauncher.onBridgeTouch {
             if (baselineScale < 0) {
                 baselineScale = readBaselineScale()
-                if (baselineScale < 0) return@onBridgeTouch   // config not ready — defer rather than guess a baseline
+                if (baselineScale < 0) return@onBridgeTouch // config not ready — defer rather than guess a baseline
             }
             val target = targetScaleFor(status, baselineScale)
             if (target == appliedScale) return@onBridgeTouch
@@ -105,34 +112,46 @@ class ThermalGovernor(
 
     // Pressure -> scale. NONE/LIGHT keep the baseline; MODERATE and SEVERE+ cap progressively lower (never above
     // the baseline, so a low-res user config is honoured).
-    private fun targetScaleFor(status: Int, baseline: Int): Int = when {
-        status >= 3 -> minOf(baseline, SCALE_SEVERE)     // SEVERE / CRITICAL / EMERGENCY / SHUTDOWN
-        status >= 2 -> minOf(baseline, SCALE_MODERATE)   // MODERATE
-        else -> baseline                                 // NONE / LIGHT
-    }
+    private fun targetScaleFor(
+        status: Int,
+        baseline: Int,
+    ): Int =
+        when {
+            status >= 3 -> minOf(baseline, SCALE_SEVERE)
+
+            // SEVERE / CRITICAL / EMERGENCY / SHUTDOWN
+            status >= 2 -> minOf(baseline, SCALE_MODERATE)
+
+            // MODERATE
+            else -> baseline // NONE / LIGHT
+        }
 
     /** Read the live 117HD sceneResolutionScale (already on the bridge thread). -1 when the config isn't readable
      *  yet (no items / key absent) so the caller can defer instead of restoring a wrong default. */
-    private fun readBaselineScale(): Int = try {
-        val arr = JSONObject(JvmLauncher.getPluginConfig("hd")).optJSONArray("items")
-        var v = -1
-        if (arr != null) {
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                if (o.optString("key") == "sceneResolutionScale") {
-                    v = o.optString("value", "").toIntOrNull() ?: -1
-                    break
+    private fun readBaselineScale(): Int =
+        try {
+            val arr = JSONObject(JvmLauncher.getPluginConfig("hd")).optJSONArray("items")
+            var v = -1
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    if (o.optString("key") == "sceneResolutionScale") {
+                        v = o.optString("value", "").toIntOrNull() ?: -1
+                        break
+                    }
                 }
             }
+            v
+        } catch (e: Throwable) {
+            -1
         }
-        v
-    } catch (e: Throwable) {
-        -1
-    }
 
-    private fun readMarker(): Int = try {
-        if (markerFile.exists()) markerFile.readText().trim().toIntOrNull() ?: -1 else -1
-    } catch (e: Throwable) { -1 }
+    private fun readMarker(): Int =
+        try {
+            if (markerFile.exists()) markerFile.readText().trim().toIntOrNull() ?: -1 else -1
+        } catch (e: Throwable) {
+            -1
+        }
 
     private fun writeMarker(baseline: Int) {
         runCatching { markerFile.writeText(baseline.toString()) }

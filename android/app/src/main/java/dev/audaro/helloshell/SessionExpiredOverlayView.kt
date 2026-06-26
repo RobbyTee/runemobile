@@ -18,46 +18,73 @@ import android.view.View
  *
  * Driven by [setVisible] from MainActivity.updateChrome; [onSignIn] is invoked when the button is tapped.
  */
-class SessionExpiredOverlayView(context: Context) : View(context) {
-
+class SessionExpiredOverlayView(
+    context: Context,
+) : View(context) {
     /** Invoked when the user taps "Sign in again". */
     var onSignIn: (() -> Unit)? = null
 
     private var active = false
 
     private val scrimPaint = Paint().apply { color = Color.argb(190, 0, 0, 0) }
-    private val cardPaint = Paint().apply { color = Color.argb(240, 33, 28, 23); isAntiAlias = true }
-    private val borderPaint = Paint().apply {
-        color = Color.argb(255, 140, 128, 102); style = Paint.Style.STROKE
-        strokeWidth = dp(1.5f); isAntiAlias = true
-    }
-    private val titlePaint = Paint().apply {
-        color = Color.WHITE; textSize = sp(18f); isFakeBoldText = true; isAntiAlias = true
-        textAlign = Paint.Align.CENTER
-    }
-    private val bodyPaint = Paint().apply {
-        color = Color.argb(255, 210, 198, 170); textSize = sp(14f); isAntiAlias = true
-        textAlign = Paint.Align.CENTER
-    }
-    private val buttonPaint = Paint().apply { color = Color.argb(255, 92, 72, 38); isAntiAlias = true }
-    private val buttonBorderPaint = Paint().apply {
-        color = Color.argb(255, 180, 150, 96); style = Paint.Style.STROKE
-        strokeWidth = dp(1.5f); isAntiAlias = true
-    }
-    private val buttonTextPaint = Paint().apply {
-        color = Color.argb(255, 255, 230, 170); textSize = sp(16f); isFakeBoldText = true; isAntiAlias = true
-        textAlign = Paint.Align.CENTER
-    }
+    private val cardPaint =
+        Paint().apply {
+            color = Color.argb(240, 33, 28, 23)
+            isAntiAlias = true
+        }
+    private val borderPaint =
+        Paint().apply {
+            color = Color.argb(255, 140, 128, 102)
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1.5f)
+            isAntiAlias = true
+        }
+    private val titlePaint =
+        Paint().apply {
+            color = Color.WHITE
+            textSize = sp(18f)
+            isFakeBoldText = true
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+        }
+    private val bodyPaint =
+        Paint().apply {
+            color = Color.argb(255, 210, 198, 170)
+            textSize = sp(14f)
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+        }
+    private val buttonPaint =
+        Paint().apply {
+            color = Color.argb(255, 92, 72, 38)
+            isAntiAlias = true
+        }
+    private val buttonBorderPaint =
+        Paint().apply {
+            color = Color.argb(255, 180, 150, 96)
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1.5f)
+            isAntiAlias = true
+        }
+    private val buttonTextPaint =
+        Paint().apply {
+            color = Color.argb(255, 255, 230, 170)
+            textSize = sp(16f)
+            isFakeBoldText = true
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+        }
 
     private val cardRect = RectF()
     private val buttonRect = RectF()
 
     init {
-        isClickable = true   // consume touches while visible (the engine login screen underneath is dead)
+        isClickable = true // consume touches while visible (the engine login screen underneath is dead)
         isFocusable = false
     }
 
     private fun dp(v: Float) = v * resources.displayMetrics.density
+
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
 
     /** Show/hide; returns true if the state changed (the per-frame poll calls this every frame). */

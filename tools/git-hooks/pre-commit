@@ -66,6 +66,18 @@ if [ -n "$staged_am" ]; then
 		fi
 	fi
 
+	# Run ktlint on staged Kotlin if installed (optional). Config in .editorconfig; auto-fix: ktlint --format.
+	if command -v ktlint >/dev/null 2>&1; then
+		kt_staged="$(printf '%s\n' "$staged_am" | grep -E '\.(kt|kts)$' | grep -vE '(^|/)gradlew$' || true)"
+		if [ -n "$kt_staged" ]; then
+			kt_out="$(printf '%s\n' "$kt_staged" | xargs ktlint --relative 2>/dev/null || true)"
+			if [ -n "$kt_out" ]; then
+				hflag "ktlint findings in staged Kotlin (auto-fix: ktlint --format <files>):"
+				printf '%s\n' "$kt_out" | sed 's/^/      /'
+			fi
+		fi
+	fi
+
 	if [ "$hy_fail" -ne 0 ]; then
 		echo
 		echo "✋ pre-commit BLOCKED (hygiene). Resolve the items above, or override with 'git commit --no-verify'."
