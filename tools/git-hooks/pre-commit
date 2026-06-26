@@ -33,7 +33,7 @@ if [ -n "$staged_am" ]; then
 		# General catch: anything force-added past a gitignore / .git/info/exclude rule (local-only
 		# dev scaffolding, build output, …). No hardcoded list to rot — the patterns live in the
 		# ignore rules, not here.
-		if [ "$matched" -eq 0 ] && git check-ignore -q -- "$f"; then
+		if [ "$matched" -eq 0 ] && git check-ignore --no-index -q -- "$f"; then
 			hflag "ignored file force-added: $f  (local-only / scaffolding stays untracked)"
 		fi
 	done <<< "$staged_am"
