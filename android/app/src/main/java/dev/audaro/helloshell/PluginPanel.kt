@@ -139,6 +139,8 @@ fun PluginPanel(
     var profilesOpen by remember { mutableStateOf(false) } // Track B #6 config profiles
     var profilesAvail by remember { mutableStateOf(false) }
     var hotkeysOpen by remember { mutableStateOf(false) } // Track B #1 user-defined hotkeys
+    var notesOpen by remember { mutableStateOf(false) } // native editable Notes panel
+    var notesAvail by remember { mutableStateOf(false) }
     var hubOpen by remember { mutableStateOf(false) } // Finding 17 hub browse/install
     var aboutOpen by remember { mutableStateOf(false) } // PROD-QA-07 identity/disclosure
     // Finding 8: a plugin just toggled ON is starting — suppress the "couldn't start" badge during a grace
@@ -181,6 +183,7 @@ fun PluginPanel(
             }
         profilesAvail = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.profilesAvailable() }.get() }
         timeAvail = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.timeTrackingAvailable() }.get() }
+        notesAvail = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.notesAvailable() }.get() }
         Log.i(
             "MainActivity",
             "ANDROID_LAUNCHER_GRID_GREEN rows=${rows.size} pinned=${rows.count { it.pinned }} " +
@@ -193,7 +196,7 @@ fun PluginPanel(
     // watchable); the launcher landing => EXPAND.
     val subActive =
         questOpen || worldOpen || xpOpen || lootOpen || geOpen || timeOpen || infoBoxOpen ||
-            profilesOpen || hotkeysOpen || hubOpen || aboutOpen || panelOpen != null || configFor != null
+            profilesOpen || hotkeysOpen || notesOpen || hubOpen || aboutOpen || panelOpen != null || configFor != null
 
     // §4 dismiss model (d): back pops ONE level — close the active sub-screen back to the launcher, else dismiss
     // the whole sheet. Honoured here so the Compose back-stack works (the MainActivity dispatcher disposes this
@@ -236,6 +239,10 @@ fun PluginPanel(
 
             hotkeysOpen -> {
                 hotkeysOpen = false
+            }
+
+            notesOpen -> {
+                notesOpen = false
             }
 
             hubOpen -> {
@@ -307,6 +314,10 @@ fun PluginPanel(
 
                 hotkeysOpen -> {
                     HotkeysScreen(onBack = { hotkeysOpen = false })
+                }
+
+                notesOpen -> {
+                    NotesScreen(onBack = { notesOpen = false }, onPanelTextActive = onPanelTextActive)
                 }
 
                 hubOpen -> {
@@ -454,6 +465,8 @@ fun PluginPanel(
                                 onOpenHub = { hubOpen = true },
                                 profilesAvail = profilesAvail,
                                 onOpenProfiles = { profilesOpen = true },
+                                notesAvail = notesAvail,
+                                onOpenNotes = { notesOpen = true },
                                 onOpenHotkeys = { hotkeysOpen = true },
                                 onOpenAbout = { aboutOpen = true },
                                 // FIX-5: open the world map via op-replay, then dismiss the launcher so the fullscreen map shows.
@@ -736,6 +749,8 @@ private fun LauncherGrid(
     onOpenHub: () -> Unit,
     profilesAvail: Boolean,
     onOpenProfiles: () -> Unit,
+    notesAvail: Boolean,
+    onOpenNotes: () -> Unit,
     onOpenHotkeys: () -> Unit,
     onOpenAbout: () -> Unit,
     onOpenWorldMap: () -> Unit,
@@ -757,6 +772,8 @@ private fun LauncherGrid(
             if (avail.getOrElse(0) { false }) add(TileSpec("Quest Helper", iconFor("Quest Helper"), onClick = onOpenQuest))
             if (avail.getOrElse(5) { false }) add(TileSpec("Overlay Layout", glyph = "▦", onClick = onOpenOverlay))
             if (avail.getOrElse(6) { false }) add(TileSpec("Infoboxes", glyph = "◳", onClick = onOpenInfoBox))
+            // Native editable Notes screen supersedes the rendered Notes panel (added to `covered`, see below).
+            if (notesAvail) add(TileSpec("Notes", iconFor("Notes"), glyph = "✎", onClick = onOpenNotes))
         }
     // Rendered-image panels for everything not covered by an available native screen (so no panel is lost when a
     // native reflow exists; if the native screen is unavailable the rendered tile remains as the fallback).

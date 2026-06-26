@@ -16,6 +16,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -28,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -545,6 +547,69 @@ private fun parseProfiles(json: String): List<ConfigProfile> =
         Log.e(PR_TAG, "ANDROID_TRACKB_PROFILES_UI_RED parse: $t")
         emptyList()
     }
+
+// ====================================================================================================
+// Native Notes panel — the single editable note string on MobileUiBridge (config group "notes"/key "notesData").
+// Seeded once from notesGet(); edits persist via notesSet() on a debounce (iOS persists on a 0.7s timer too) plus
+// a flush on leave. Mirrors the iOS NotesViewController. Replaces the non-editable rendered Swing screenshot.
+// ====================================================================================================
+@Composable
+fun NotesScreen(
+    onBack: () -> Unit,
+    onPanelTextActive: (Boolean) -> Unit,
+) {
+    var text by remember { mutableStateOf<String?>(null) } // null until the initial load returns
+    var loaded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        val initial = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.notesGet() }.get() }
+        text = initial
+        loaded = true
+        Log.i(PR_TAG, "ANDROID_NOTES_UI_GREEN len=${initial.length}")
+    }
+
+    // Debounced persist: write 700ms after the latest keystroke so we don't hit the config lane on every char.
+    val current = text
+    LaunchedEffect(current) {
+        if (!loaded || current == null) return@LaunchedEffect
+        delay(700)
+        JvmLauncher.onBridgeTouch { JvmLauncher.notesSet(current) }
+    }
+
+    // Flush on leave (an edit-then-back can be shorter than the debounce) + release the IME-suppression latch so
+    // the in-game keyboard isn't blocked after the field is disposed without an onFocusChanged(false).
+    DisposableEffect(Unit) {
+        onDispose {
+            val t = text
+            if (loaded && t != null) JvmLauncher.onBridgeTouch { JvmLauncher.notesSet(t) }
+            onPanelTextActive(false)
+        }
+    }
+
+    Surface(color = PR_PANEL_BG, modifier = Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "Back" }) { Text("‹ Back") }
+                Text("Notes", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
+            }
+            if (!loaded) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            } else {
+                OutlinedTextField(
+                    value = text ?: "",
+                    onValueChange = { text = it },
+                    // Tell the host the IME is owned by this field while focused — otherwise the per-frame input poll
+                    // hides the keyboard every frame (same path ConfigScreen / the plugin search field use).
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .padding(top = 8.dp)
+                            .onFocusChanged { onPanelTextActive(it.hasFocus) },
+                )
+            }
+        }
+    }
+}
 
 // ====================================================================================================
 // Track B (finding M-set / Time Tracking) — native Time Tracking reflow (read-only). getTimeTrackingJson =

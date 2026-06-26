@@ -492,6 +492,29 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Each farming/contract/bird-house entry carries an absolute readyTime (epoch-s) + a derived remainingSec.
 + (nullable NSString *)timeTrackingJson;
 
+// ---- Native Config Profiles (ConfigProfileBridge) — list profiles + switch the active one --------------
+
+/// Whether the native Config Profiles screen can be offered (ConfigManager + ProfileManager wired).
++ (BOOL)profilesAvailable;
+/// Profiles JSON: {available, profiles:[{id,name,active,sync,internal}]}. `id` is a long; `active` marks the
+/// currently-loaded profile; `internal` flags the engine's own profiles (e.g. $rsprofile).
++ (nullable NSString *)profilesJson;
+/// Switch the active config profile by id (a write: reloads config asynchronously on a background executor).
+/// Ack JSON; the native side re-reads profilesJson to pick up the new active flag.
++ (nullable NSString *)switchProfile:(long long)profileId;
+
+// ---- Native Infobox menu (InfoBoxBridge) — the touch equivalent of right-clicking an infobox (#20) -------
+
+/// Whether the native infobox menu can be offered (the InfoBoxManager is resolvable).
++ (BOOL)infoBoxAvailable;
+/// Tell the bridge the native infobox menu is open/closed (gates the client-thread snapshot refresh).
++ (void)infoBoxSetUiOpen:(BOOL)open;
+/// Infoboxes JSON: {available, infoboxes:[{index,name,text,tooltip,menu:["Detach",…]}]}, ordered as the engine.
++ (nullable NSString *)infoBoxesJson;
+/// Fire the chosen infobox menu option (index into the live list + option text). Ack JSON. Runs on the client
+/// thread, posting InfoBoxMenuClicked exactly like the desktop right-click.
++ (nullable NSString *)invokeInfoBoxMenu:(int)index option:(NSString *)option;
+
 @end
 
 NS_ASSUME_NONNULL_END

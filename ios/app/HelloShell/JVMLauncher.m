@@ -158,6 +158,19 @@ static jmethodID gTtAvail = NULL;   // isAvailable()Z
 static jmethodID gTtSetOpen = NULL; // setUiOpen(Z)V
 static jmethodID gTtJson = NULL;    // getTimeTrackingJson()Ljava/lang/String;
 
+// Native Config Profiles reflow — the ConfigProfileBridge facade (list profiles + switch the active one).
+static jclass gProfClass = NULL;     // global ref to net.runelite.client.headless.ConfigProfileBridge
+static jmethodID gProfAvail = NULL;  // isAvailable()Z
+static jmethodID gProfJson = NULL;   // getProfilesJson()Ljava/lang/String;
+static jmethodID gProfSwitch = NULL; // switchProfile(J)Ljava/lang/String;
+
+// Native Infobox menu — the InfoBoxBridge facade (list infoboxes + their menu options, invoke one by index).
+static jclass gIbClass = NULL;      // global ref to net.runelite.client.headless.InfoBoxBridge
+static jmethodID gIbAvail = NULL;   // isAvailable()Z
+static jmethodID gIbSetOpen = NULL; // setUiOpen(Z)V
+static jmethodID gIbJson = NULL;    // getInfoBoxesJson()Ljava/lang/String;
+static jmethodID gIbInvoke = NULL;  // invokeInfoBoxMenu(ILjava/lang/String;)Ljava/lang/String;
+
 // ---- W3 plugin-config de-risk (verdict #7, NATIVE-ORIGIN leg) — STRIP AFTER DEVICE CONFIRM ----------
 // Proves the half the desktop smoke can't: that the OBJC side builds the correct signed decimal of
 // Color.getRGB(). The trap — an opaque color's getRGB() is a NEGATIVE int (top alpha bit set), and
@@ -657,6 +670,61 @@ static BOOL ensureTimeTracking(void) {
         return NO;
     }
     gTtClass = global;
+    return YES;
+}
+
+static BOOL ensureProfiles(void) {
+    if (gProfClass)
+        return atomic_load(&gVM) != NULL;
+    if (!ensureBridge() || !gMainEnv)
+        return NO;
+    JNIEnv *env = gMainEnv;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/ConfigProfileBridge");
+    if (!local || (*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return NO;
+    }
+    jclass global = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    if (!global)
+        return NO;
+    gProfAvail = (*env)->GetStaticMethodID(env, global, "isAvailable", "()Z");
+    gProfJson = (*env)->GetStaticMethodID(env, global, "getProfilesJson", "()Ljava/lang/String;");
+    gProfSwitch = (*env)->GetStaticMethodID(env, global, "switchProfile", "(J)Ljava/lang/String;");
+    if (!gProfAvail || !gProfJson || !gProfSwitch) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteGlobalRef(env, global);
+        return NO;
+    }
+    gProfClass = global;
+    return YES;
+}
+
+static BOOL ensureInfoBox(void) {
+    if (gIbClass)
+        return atomic_load(&gVM) != NULL;
+    if (!ensureBridge() || !gMainEnv)
+        return NO;
+    JNIEnv *env = gMainEnv;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/InfoBoxBridge");
+    if (!local || (*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return NO;
+    }
+    jclass global = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    if (!global)
+        return NO;
+    gIbAvail = (*env)->GetStaticMethodID(env, global, "isAvailable", "()Z");
+    gIbSetOpen = (*env)->GetStaticMethodID(env, global, "setUiOpen", "(Z)V");
+    gIbJson = (*env)->GetStaticMethodID(env, global, "getInfoBoxesJson", "()Ljava/lang/String;");
+    gIbInvoke = (*env)->GetStaticMethodID(env, global, "invokeInfoBoxMenu", "(ILjava/lang/String;)Ljava/lang/String;");
+    if (!gIbAvail || !gIbSetOpen || !gIbJson || !gIbInvoke) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteGlobalRef(env, global);
+        return NO;
+    }
+    gIbClass = global;
     return YES;
 }
 
@@ -2571,6 +2639,77 @@ static void accountInvokeVoid(const char *method) {
         return nil;
     JNIEnv *env = gMainEnv;
     return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gTtClass, gTtJson));
+}
+
+// ---- Native Config Profiles reflow (ConfigProfileBridge) — list profiles + switch the active one --------
+
++ (BOOL)profilesAvailable {
+    if (!ensureProfiles())
+        return NO;
+    JNIEnv *env = gMainEnv;
+    jboolean v = (*env)->CallStaticBooleanMethod(env, gProfClass, gProfAvail);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.profilesAvailable");
+        return NO;
+    }
+    return v ? YES : NO;
+}
+
++ (NSString *)profilesJson {
+    if (!ensureProfiles())
+        return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gProfClass, gProfJson));
+}
+
++ (NSString *)switchProfile:(long long)profileId {
+    if (!ensureProfiles())
+        return nil;
+    [JVMLauncher postKeepAlive]; // idle keepalive: the native profile switch posts no canvas event
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gProfClass, gProfSwitch, (jlong)profileId));
+}
+
+// ---- Native Infobox menu reflow (InfoBoxBridge) — list infoboxes + invoke a menu option (#20) -----------
+
++ (BOOL)infoBoxAvailable {
+    if (!ensureInfoBox())
+        return NO;
+    JNIEnv *env = gMainEnv;
+    jboolean v = (*env)->CallStaticBooleanMethod(env, gIbClass, gIbAvail);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.infoBoxAvailable");
+        return NO;
+    }
+    return v ? YES : NO;
+}
+
++ (void)infoBoxSetUiOpen:(BOOL)open {
+    if (!ensureInfoBox())
+        return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gIbClass, gIbSetOpen, (jboolean)(open ? 1 : 0));
+    if ((*env)->ExceptionCheck(env))
+        bridgeNoteClear(env, "JVMLauncher.infoBoxSetUiOpen");
+}
+
++ (NSString *)infoBoxesJson {
+    if (!ensureInfoBox())
+        return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gIbClass, gIbJson));
+}
+
++ (NSString *)invokeInfoBoxMenu:(int)index option:(NSString *)option {
+    if (!ensureInfoBox() || option == nil)
+        return nil;
+    [JVMLauncher postKeepAlive]; // idle keepalive: the native infobox invoke posts no canvas event
+    JNIEnv *env = gMainEnv;
+    jstring jo = (*env)->NewStringUTF(env, option.UTF8String);
+    NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gIbClass, gIbInvoke, (jint)index, jo));
+    if (jo)
+        (*env)->DeleteLocalRef(env, jo);
+    return out;
 }
 
 @end

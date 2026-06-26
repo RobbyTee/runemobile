@@ -107,6 +107,9 @@ static jmethodID g_midListPanels = nullptr, g_midOpenPanel = nullptr, g_midClose
 static jmethodID g_midIsPanelTextActive = nullptr, g_midGetPanelText = nullptr, g_midPanelText = nullptr,
                  g_midPanelKey = nullptr, g_midPanelLongPress = nullptr, g_midPanelWheel = nullptr,
                  g_midPanelMove = nullptr;
+// Native Notes panel: a single editable note string (config group "notes"/key "notesData") on MobileUiBridge —
+// notesGet/Set instead of the rendered Swing screenshot. Best-effort (a null disables only the Notes tile).
+static jmethodID g_midNotesAvailable = nullptr, g_midNotesGet = nullptr, g_midNotesSet = nullptr;
 // Publication latches for the MobileUiBridge facade. The method-id globals above are plain (non-atomic),
 // written once on the VM boot thread (publishBridge); the A4/A5 externs run on the SEPARATE rl-bridge thread
 // and a UI tap can submit a bridge call before startJvm even returns. These release/acquire flags give the
@@ -659,6 +662,10 @@ static bool publishBridge(JNIEnv *env) {
             g_midPanelLongPress    = midOpt(env, mug, "panelLongPress", "(II)Ljava/lang/String;");
             g_midPanelWheel        = midOpt(env, mug, "panelWheel", "(III)Ljava/lang/String;");
             g_midPanelMove         = midOpt(env, mug, "panelMove", "(II)Ljava/lang/String;");
+            // Native Notes panel (best-effort; null disables only the Notes tile).
+            g_midNotesAvailable = midOpt(env, mug, "notesAvailable", "()Z");
+            g_midNotesGet = midOpt(env, mug, "notesGet", "()Ljava/lang/String;");
+            g_midNotesSet = midOpt(env, mug, "notesSet", "(Ljava/lang/String;)Ljava/lang/String;");
             bool panelOk = g_midListPanels && g_midOpenPanel && g_midClosePanel && g_midPanelW
                         && g_midPanelH && g_midPanelSeq && g_midPanelPixels && g_midPanelClick;
             if (!panelOk) LOGE("bridge: MobileUiBridge panel methods incomplete (Tier-1 panels disabled)");
@@ -2422,6 +2429,27 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeInfoBoxInvoke(JNIEnv *artEnv, jobje
     if (ho) hs->DeleteLocalRef(ho);
     if (r) hs->DeleteLocalRef(r);
     return artEnv->NewStringUTF(out.c_str());
+}
+
+// Native Notes panel — a single editable note string on MobileUiBridge (config group "notes"). available()
+// gates the tile; get() seeds the editor; set(text) persists on the client-thread config lane (returns an ack).
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeNotesAvailable(JNIEnv *, jobject) {
+    if (!mobileUiReady() || !g_midNotesAvailable)
+        return JNI_FALSE;
+    return facadeBool(g_mobileUiCls, g_midNotesAvailable);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeNotesGet(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midNotesGet)
+        return artEnv->NewStringUTF("");
+    return facadeStr(artEnv, g_mobileUiCls, g_midNotesGet);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeNotesSet(JNIEnv *artEnv, jobject, jstring jText) {
+    if (!mobileUiReady() || !g_midNotesSet)
+        return artEnv->NewStringUTF("");
+    return facadeStrArgs(artEnv, g_mobileUiCls, g_midNotesSet, jText, nullptr, false);
 }
 
 // A6 chrome read surface: MobileChromeBridge.getSnapshot — the per-frame tab/panel/minimap/orb/chat/viewport

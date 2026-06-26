@@ -406,6 +406,14 @@ object JvmLauncher {
         option: String,
     ): String
 
+    // Native Notes panel (MobileUiBridge): a single editable note string (config group "notes"). set returns
+    // the bridge JSON ack; the write persists on the client-thread config lane.
+    external fun nativeNotesAvailable(): Boolean
+
+    external fun nativeNotesGet(): String
+
+    external fun nativeNotesSet(text: String): String
+
     // A6 chrome: the per-frame MobileChromeBridge read-only snapshot (escaped JSON: tab/panel/minimap/orb/chat/
     // viewport canvas bounds the native edge-rails read). Gated by -Drunelite.mobilechrome. Off the UI thread.
     external fun nativeChromeSnapshot(): String
@@ -810,6 +818,12 @@ object JvmLauncher {
         index: Int,
         option: String,
     ) = nativeInfoBoxInvoke(index, option)
+
+    fun notesAvailable() = nativeNotesAvailable()
+
+    fun notesGet() = nativeNotesGet()
+
+    fun notesSet(text: String) = nativeNotesSet(text)
 
     fun chromeSnapshot() = nativeChromeSnapshot()
 

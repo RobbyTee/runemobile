@@ -42,6 +42,10 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 @end
 @interface TimeTrackingViewController : UIViewController
 @end
+@interface ConfigProfilesViewController : UIViewController
+@end
+@interface InfoBoxMenuViewController : UIViewController
+@end
 
 // §3.3 redesign: the labelled/searchable/favourites grid launcher. Defined at the bottom of this file.
 @interface MUIPluginGrid : UIViewController
@@ -590,10 +594,14 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 - (void)presentGridLauncher {
     if (self.presentedViewController) return;
     __weak typeof(self) ws = self;
-    MUIPluginGrid *grid = [[MUIPluginGrid alloc] initWithPanels:(self.panels ?: @[]) onPick:^(NSString *tooltip) {
-        NSInteger idx = [ws indexForPanelTooltip:tooltip];
-        if (idx >= 0) [ws openPanelAtIndex:idx fromGrid:YES];
-    }];
+    MUIPluginGrid *grid = [[MUIPluginGrid alloc] initWithPanels:[self gridTilesWithSynthetics]
+                                                         onPick:^(NSString *tooltip) {
+                                                             if ([ws presentSyntheticPanel:tooltip])
+                                                                 return; // Profiles / Infoboxes (not plugin nav buttons)
+                                                             NSInteger idx = [ws indexForPanelTooltip:tooltip];
+                                                             if (idx >= 0)
+                                                                 [ws openPanelAtIndex:idx fromGrid:YES];
+                                                         }];
     if (@available(iOS 15.0, *)) {
         grid.modalPresentationStyle = UIModalPresentationPageSheet;
         UISheetPresentationController *sheet = grid.sheetPresentationController;
@@ -679,6 +687,39 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
         if ([[self.panels[i][@"tooltip"] description] isEqualToString:tooltip]) return (NSInteger)i;
     }
     return -1;
+}
+
+// The grid launcher's tile list: the live plugin panels plus synthetic tiles for native screens that are NOT
+// plugin nav buttons (Config Profiles, Infobox menu) — Android surfaces these as TileSpec entries too. Gated on
+// availability so they only appear once the bridges are wired (after the client is up).
+- (NSArray<NSDictionary *> *)gridTilesWithSynthetics {
+    NSMutableArray<NSDictionary *> *tiles = [(self.panels ?: @[]) mutableCopy];
+    if ([JVMLauncher profilesAvailable]) {
+        [tiles addObject:@{@"tooltip" : @"Profiles", @"name" : @"Profiles", @"synthetic" : @YES}];
+    }
+    if ([JVMLauncher infoBoxAvailable]) {
+        [tiles addObject:@{@"tooltip" : @"Infoboxes", @"name" : @"Infoboxes", @"synthetic" : @YES}];
+    }
+    return tiles;
+}
+
+// Present a synthetic native screen (Profiles / Infoboxes) by its tile name; returns YES if it handled the pick.
+- (BOOL)presentSyntheticPanel:(NSString *)tooltip {
+    if ([tooltip isEqualToString:@"Profiles"] && [JVMLauncher profilesAvailable]) {
+        ConfigProfilesViewController *vc = [[ConfigProfilesViewController alloc] init];
+        vc.modalPresentationStyle = UIModalPresentationOverFullScreen;
+        vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+        [self presentViewController:vc animated:YES completion:nil];
+        return YES;
+    }
+    if ([tooltip isEqualToString:@"Infoboxes"] && [JVMLauncher infoBoxAvailable]) {
+        InfoBoxMenuViewController *vc = [[InfoBoxMenuViewController alloc] init];
+        vc.modalPresentationStyle = UIModalPresentationOverFullScreen;
+        vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+        [self presentViewController:vc animated:YES completion:nil];
+        return YES;
+    }
+    return NO;
 }
 
 - (void)selectIndex:(NSInteger)index {
@@ -2322,6 +2363,455 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
     }
 
     self.emptyLabel.hidden = (sections > 0);
+}
+
+@end
+
+#pragma mark - Native Config Profiles panel (list + switch active profile)
+
+@interface ConfigProfilesViewController ()
+@property (nonatomic, strong) UIView *drawer;
+@property (nonatomic, strong) UIStackView *stack;
+@property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, strong) NSTimer *timer;
+@property (nonatomic, copy) NSString *lastJson;
+@property (nonatomic, copy) NSArray<NSDictionary *> *profiles;
+@end
+
+@implementation ConfigProfilesViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor clearColor];
+
+    UIView *dim = [[UIView alloc] initWithFrame:self.view.bounds];
+    dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    [self.view addSubview:dim];
+    [dim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onDone)]];
+
+    self.drawer = [[UIView alloc] init];
+    self.drawer.translatesAutoresizingMaskIntoConstraints = NO;
+    self.drawer.backgroundColor = [UIColor colorWithRed:40 / 255.0 green:40 / 255.0 blue:40 / 255.0 alpha:1.0]; // DARK_GRAY
+    [self.view addSubview:self.drawer];
+
+    UIView *headerBar = [[UIView alloc] init];
+    headerBar.translatesAutoresizingMaskIntoConstraints = NO;
+    headerBar.backgroundColor = [UIColor colorWithRed:30 / 255.0 green:30 / 255.0 blue:30 / 255.0 alpha:1.0]; // DARKER_GRAY
+    [self.drawer addSubview:headerBar];
+
+    UILabel *title = [[UILabel alloc] init];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.font = XpRsFont(15);
+    title.textColor = XpGray(0.72);
+    title.text = @"Profiles";
+    [headerBar addSubview:title];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    close.translatesAutoresizingMaskIntoConstraints = NO;
+    [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.titleLabel.font = [UIFont systemFontOfSize:17];
+    close.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0]; // BRAND_ORANGE
+    [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
+    [headerBar addSubview:close];
+
+    UIScrollView *scroll = [[UIScrollView alloc] init];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    scroll.backgroundColor = [UIColor clearColor];
+    scroll.alwaysBounceVertical = YES;
+    [self.drawer addSubview:scroll];
+
+    self.stack = [[UIStackView alloc] init];
+    self.stack.axis = UILayoutConstraintAxisVertical;
+    self.stack.spacing = 6;
+    self.stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [scroll addSubview:self.stack];
+
+    self.emptyLabel = [[UILabel alloc] init];
+    self.emptyLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.emptyLabel.font = XpRsFont(15);
+    self.emptyLabel.textColor = XpGray(0.55);
+    self.emptyLabel.numberOfLines = 0;
+    self.emptyLabel.textAlignment = NSTextAlignmentCenter;
+    self.emptyLabel.text = @"No config profiles.";
+    self.emptyLabel.hidden = YES;
+    [self.drawer addSubview:self.emptyLabel];
+
+    CGFloat drawerW = MIN(440.0, self.view.bounds.size.width * 0.52);
+    UILayoutGuide *dg = self.drawer.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [self.drawer.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [self.drawer.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [self.drawer.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.drawer.widthAnchor constraintEqualToConstant:drawerW],
+
+        [headerBar.topAnchor constraintEqualToAnchor:dg.topAnchor],
+        [headerBar.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor],
+        [headerBar.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor],
+        [headerBar.heightAnchor constraintEqualToConstant:34],
+        [title.leadingAnchor constraintEqualToAnchor:headerBar.leadingAnchor
+                                            constant:10],
+        [title.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+        [close.trailingAnchor constraintEqualToAnchor:headerBar.trailingAnchor
+                                             constant:-10],
+        [close.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+
+        [scroll.topAnchor constraintEqualToAnchor:headerBar.bottomAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:dg.bottomAnchor],
+
+        [self.stack.topAnchor constraintEqualToAnchor:scroll.topAnchor
+                                             constant:8],
+        [self.stack.leadingAnchor constraintEqualToAnchor:scroll.leadingAnchor
+                                                 constant:8],
+        [self.stack.trailingAnchor constraintEqualToAnchor:scroll.trailingAnchor
+                                                  constant:-8],
+        [self.stack.bottomAnchor constraintEqualToAnchor:scroll.bottomAnchor
+                                                constant:-8],
+        [self.stack.widthAnchor constraintEqualToAnchor:scroll.widthAnchor
+                                               constant:-16],
+
+        [self.emptyLabel.topAnchor constraintEqualToAnchor:headerBar.bottomAnchor
+                                                  constant:40],
+        [self.emptyLabel.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor
+                                                      constant:20],
+        [self.emptyLabel.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor
+                                                       constant:-20],
+    ]];
+
+    [self refresh];
+    // Re-poll on a light cadence: a switch reloads config asynchronously, so the active flag flips a beat later.
+    self.timer = [NSTimer scheduledTimerWithTimeInterval:2.0 target:self selector:@selector(refresh) userInfo:nil repeats:YES];
+}
+
+- (void)onDone {
+    [self.timer invalidate];
+    self.timer = nil;
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    [self.timer invalidate];
+    self.timer = nil;
+}
+
+- (void)refresh {
+    NSString *json = [JVMLauncher profilesJson] ?: @"{}";
+    if (self.lastJson && [json isEqualToString:self.lastJson])
+        return; // unchanged -> keep the built rows
+    self.lastJson = json;
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if (![d isKindOfClass:[NSDictionary class]])
+        d = @{};
+    NSArray *profiles = [d[@"profiles"] isKindOfClass:[NSArray class]] ? d[@"profiles"] : @[];
+    self.profiles = profiles;
+
+    for (UIView *v in [self.stack.arrangedSubviews copy]) {
+        [self.stack removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    for (NSUInteger i = 0; i < profiles.count; i++) {
+        NSDictionary *p = profiles[i];
+        if (![p isKindOfClass:[NSDictionary class]])
+            continue;
+        [self.stack addArrangedSubview:[self profileRow:p index:(NSInteger)i]];
+    }
+    self.emptyLabel.hidden = (profiles.count > 0);
+}
+
+- (UIView *)profileRow:(NSDictionary *)p index:(NSInteger)index {
+    NSString *name = [p[@"name"] isKindOfClass:[NSString class]] ? p[@"name"] : @"?";
+    BOOL active = [p[@"active"] boolValue];
+    BOOL internal = [p[@"internal"] boolValue];
+    BOOL sync = [p[@"sync"] boolValue];
+
+    UIButton *row = [UIButton buttonWithType:UIButtonTypeCustom];
+    row.tag = index;
+    row.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+    row.contentEdgeInsets = UIEdgeInsetsMake(10, 12, 10, 12);
+    row.titleLabel.font = XpRsFont(16);
+    row.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    row.layer.cornerRadius = 6;
+    [row.heightAnchor constraintGreaterThanOrEqualToConstant:42].active = YES;
+
+    NSMutableString *label = [NSMutableString string];
+    [label appendString:active ? @"✓ " : @"   "];
+    [label appendString:name];
+    if (sync)
+        [label appendString:@"  ⟳"]; // synced to the RuneLite account
+    if (internal)
+        [label appendString:@"  (system)"]; // engine profile, not user-switchable
+
+    if (active) {
+        row.backgroundColor = [UIColor colorWithRed:0.20 green:0.45 blue:0.22 alpha:1.0]; // active = green
+        [row setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    } else if (internal) {
+        row.backgroundColor = [UIColor colorWithRed:43 / 255.0 green:43 / 255.0 blue:43 / 255.0 alpha:1.0];
+        [row setTitleColor:XpGray(0.40) forState:UIControlStateNormal]; // greyed: read-only
+    } else {
+        row.backgroundColor = [UIColor colorWithRed:43 / 255.0 green:43 / 255.0 blue:43 / 255.0 alpha:1.0];
+        [row setTitleColor:XpGray(0.82) forState:UIControlStateNormal];
+    }
+    [row setTitle:label forState:UIControlStateNormal];
+
+    // Active or internal profiles are not switch targets (switching to the active one is a no-op; internal
+    // engine profiles aren't user-selectable, matching the desktop panel).
+    if (!active && !internal) {
+        [row addTarget:self action:@selector(onTapProfile:) forControlEvents:UIControlEventTouchUpInside];
+    }
+    return row;
+}
+
+- (void)onTapProfile:(UIButton *)b {
+    if (b.tag < 0 || b.tag >= (NSInteger)self.profiles.count)
+        return;
+    NSDictionary *p = self.profiles[(NSUInteger)b.tag];
+    if ([p[@"active"] boolValue] || [p[@"internal"] boolValue])
+        return;
+    long long pid = [p[@"id"] longLongValue];
+    NSString *name = [p[@"name"] isKindOfClass:[NSString class]] ? p[@"name"] : @"?";
+
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Switch profile"
+                                                               message:[NSString stringWithFormat:@"Load profile “%@”? This reloads all config and plugin settings.", name]
+                                                        preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    __weak typeof(self) ws = self;
+    [a addAction:[UIAlertAction actionWithTitle:@"Switch"
+                                          style:UIAlertActionStyleDefault
+                                        handler:^(UIAlertAction *act) {
+                                            [JVMLauncher switchProfile:pid];
+                                            ws.lastJson = nil; // force a rebuild so the active flag flips on the next poll
+                                        }]];
+    [self presentViewController:a animated:YES completion:nil];
+}
+
+@end
+
+#pragma mark - Native Infobox menu panel (the touch equivalent of right-clicking an infobox, #20)
+
+@interface InfoBoxMenuViewController ()
+@property (nonatomic, strong) UIView *drawer;
+@property (nonatomic, strong) UIStackView *stack;
+@property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, strong) NSTimer *timer;
+@property (nonatomic, copy) NSString *lastJson;
+@property (nonatomic, copy) NSArray<NSDictionary *> *infoboxes;
+@end
+
+@implementation InfoBoxMenuViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor clearColor];
+
+    UIView *dim = [[UIView alloc] initWithFrame:self.view.bounds];
+    dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    [self.view addSubview:dim];
+    [dim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onDone)]];
+
+    self.drawer = [[UIView alloc] init];
+    self.drawer.translatesAutoresizingMaskIntoConstraints = NO;
+    self.drawer.backgroundColor = [UIColor colorWithRed:40 / 255.0 green:40 / 255.0 blue:40 / 255.0 alpha:1.0]; // DARK_GRAY
+    [self.view addSubview:self.drawer];
+
+    UIView *headerBar = [[UIView alloc] init];
+    headerBar.translatesAutoresizingMaskIntoConstraints = NO;
+    headerBar.backgroundColor = [UIColor colorWithRed:30 / 255.0 green:30 / 255.0 blue:30 / 255.0 alpha:1.0]; // DARKER_GRAY
+    [self.drawer addSubview:headerBar];
+
+    UILabel *title = [[UILabel alloc] init];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.font = XpRsFont(15);
+    title.textColor = XpGray(0.72);
+    title.text = @"Infoboxes";
+    [headerBar addSubview:title];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    close.translatesAutoresizingMaskIntoConstraints = NO;
+    [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.titleLabel.font = [UIFont systemFontOfSize:17];
+    close.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0]; // BRAND_ORANGE
+    [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
+    [headerBar addSubview:close];
+
+    UIScrollView *scroll = [[UIScrollView alloc] init];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    scroll.backgroundColor = [UIColor clearColor];
+    scroll.alwaysBounceVertical = YES;
+    [self.drawer addSubview:scroll];
+
+    self.stack = [[UIStackView alloc] init];
+    self.stack.axis = UILayoutConstraintAxisVertical;
+    self.stack.spacing = 6;
+    self.stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [scroll addSubview:self.stack];
+
+    self.emptyLabel = [[UILabel alloc] init];
+    self.emptyLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.emptyLabel.font = XpRsFont(15);
+    self.emptyLabel.textColor = XpGray(0.55);
+    self.emptyLabel.numberOfLines = 0;
+    self.emptyLabel.textAlignment = NSTextAlignmentCenter;
+    self.emptyLabel.text = @"No infoboxes active.\nTap one to open its menu.";
+    self.emptyLabel.hidden = YES;
+    [self.drawer addSubview:self.emptyLabel];
+
+    CGFloat drawerW = MIN(440.0, self.view.bounds.size.width * 0.52);
+    UILayoutGuide *dg = self.drawer.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [self.drawer.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [self.drawer.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [self.drawer.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.drawer.widthAnchor constraintEqualToConstant:drawerW],
+
+        [headerBar.topAnchor constraintEqualToAnchor:dg.topAnchor],
+        [headerBar.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor],
+        [headerBar.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor],
+        [headerBar.heightAnchor constraintEqualToConstant:34],
+        [title.leadingAnchor constraintEqualToAnchor:headerBar.leadingAnchor
+                                            constant:10],
+        [title.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+        [close.trailingAnchor constraintEqualToAnchor:headerBar.trailingAnchor
+                                             constant:-10],
+        [close.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+
+        [scroll.topAnchor constraintEqualToAnchor:headerBar.bottomAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:dg.bottomAnchor],
+
+        [self.stack.topAnchor constraintEqualToAnchor:scroll.topAnchor
+                                             constant:8],
+        [self.stack.leadingAnchor constraintEqualToAnchor:scroll.leadingAnchor
+                                                 constant:8],
+        [self.stack.trailingAnchor constraintEqualToAnchor:scroll.trailingAnchor
+                                                  constant:-8],
+        [self.stack.bottomAnchor constraintEqualToAnchor:scroll.bottomAnchor
+                                                constant:-8],
+        [self.stack.widthAnchor constraintEqualToAnchor:scroll.widthAnchor
+                                               constant:-16],
+
+        [self.emptyLabel.topAnchor constraintEqualToAnchor:headerBar.bottomAnchor
+                                                  constant:40],
+        [self.emptyLabel.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor
+                                                      constant:20],
+        [self.emptyLabel.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor
+                                                       constant:-20],
+    ]];
+
+    [JVMLauncher infoBoxSetUiOpen:YES]; // gate the client-thread snapshot refresh to while-shown
+    [self refresh];
+    self.timer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(refresh) userInfo:nil repeats:YES];
+}
+
+- (void)onDone {
+    [JVMLauncher infoBoxSetUiOpen:NO];
+    [self.timer invalidate];
+    self.timer = nil;
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    [JVMLauncher infoBoxSetUiOpen:NO];
+    [self.timer invalidate];
+    self.timer = nil;
+}
+
+- (void)refresh {
+    NSString *json = [JVMLauncher infoBoxesJson] ?: @"{}";
+    if (self.lastJson && [json isEqualToString:self.lastJson])
+        return; // unchanged -> keep the built rows
+    self.lastJson = json;
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if (![d isKindOfClass:[NSDictionary class]])
+        d = @{};
+    NSArray *boxes = [d[@"infoboxes"] isKindOfClass:[NSArray class]] ? d[@"infoboxes"] : @[];
+    self.infoboxes = boxes;
+
+    for (UIView *v in [self.stack.arrangedSubviews copy]) {
+        [self.stack removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    for (NSUInteger i = 0; i < boxes.count; i++) {
+        NSDictionary *box = boxes[i];
+        if (![box isKindOfClass:[NSDictionary class]])
+            continue;
+        [self.stack addArrangedSubview:[self infoBoxRow:box index:(NSInteger)i]];
+    }
+    self.emptyLabel.hidden = (boxes.count > 0);
+}
+
+- (UIView *)infoBoxRow:(NSDictionary *)box index:(NSInteger)index {
+    NSString *name = [box[@"name"] isKindOfClass:[NSString class]] ? box[@"name"] : @"";
+    NSString *text = [box[@"text"] isKindOfClass:[NSString class]] ? box[@"text"] : @"";
+    NSString *tooltip = [box[@"tooltip"] isKindOfClass:[NSString class]] ? box[@"tooltip"] : @"";
+    NSArray *menu = [box[@"menu"] isKindOfClass:[NSArray class]] ? box[@"menu"] : @[];
+
+    // Pick the most descriptive label available (tooltip > name > text), with the counter text appended.
+    NSString *primary = tooltip.length ? tooltip : (name.length ? name : text);
+    NSString *label = (text.length && ![text isEqualToString:primary])
+                          ? [NSString stringWithFormat:@"%@  —  %@", primary, text]
+                          : (primary.length ? primary : @"(infobox)");
+
+    UIButton *row = [UIButton buttonWithType:UIButtonTypeCustom];
+    row.tag = index;
+    row.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+    row.contentEdgeInsets = UIEdgeInsetsMake(10, 12, 10, 12);
+    row.titleLabel.font = XpRsFont(15);
+    row.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    row.layer.cornerRadius = 6;
+    row.backgroundColor = [UIColor colorWithRed:43 / 255.0 green:43 / 255.0 blue:43 / 255.0 alpha:1.0];
+    [row.heightAnchor constraintGreaterThanOrEqualToConstant:42].active = YES;
+    [row setTitle:label forState:UIControlStateNormal];
+
+    if (menu.count) {
+        [row setTitleColor:XpGray(0.82) forState:UIControlStateNormal];
+        [row addTarget:self action:@selector(onTapInfoBox:) forControlEvents:UIControlEventTouchUpInside];
+    } else {
+        [row setTitleColor:XpGray(0.45) forState:UIControlStateNormal]; // no menu options -> not actionable
+    }
+    return row;
+}
+
+- (void)onTapInfoBox:(UIButton *)b {
+    if (b.tag < 0 || b.tag >= (NSInteger)self.infoboxes.count)
+        return;
+    NSDictionary *box = self.infoboxes[(NSUInteger)b.tag];
+    NSArray *menu = [box[@"menu"] isKindOfClass:[NSArray class]] ? box[@"menu"] : @[];
+    if (!menu.count)
+        return;
+    // Invoke uses the engine list index from the snapshot (the JSON skips null boxes, so it may differ from the
+    // row position), matching InfoBoxBridge.invokeInfoBoxMenu's index model.
+    NSInteger engineIndex = [box[@"index"] integerValue];
+    NSString *primary = [box[@"tooltip"] isKindOfClass:[NSString class]] && [box[@"tooltip"] length]
+                            ? box[@"tooltip"]
+                            : ([box[@"name"] isKindOfClass:[NSString class]] ? box[@"name"] : @"Infobox");
+
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:primary
+                                                                   message:nil
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+    __weak typeof(self) ws = self;
+    for (id opt in menu) {
+        if (![opt isKindOfClass:[NSString class]] || [(NSString *)opt length] == 0)
+            continue;
+        NSString *option = opt;
+        BOOL destructive = [option caseInsensitiveCompare:@"Delete"] == NSOrderedSame;
+        [sheet addAction:[UIAlertAction actionWithTitle:option
+                                                  style:destructive ? UIAlertActionStyleDestructive : UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *act) {
+                                                    [JVMLauncher invokeInfoBoxMenu:(int)engineIndex option:option];
+                                                    ws.lastJson = nil; // the action may add/remove/move infoboxes -> rebuild
+                                                }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    // iPad/large-screen: anchor the action sheet's popover to the tapped row (a nil source crashes).
+    sheet.popoverPresentationController.sourceView = b;
+    sheet.popoverPresentationController.sourceRect = b.bounds;
+    [self presentViewController:sheet animated:YES completion:nil];
 }
 
 @end
