@@ -39,13 +39,17 @@ The build pins or sources its heaviest inputs deliberately:
 - **Native libraries** (`libhelloshell`, `librlawt`) — built from **tracked C++ source** by Gradle/CMake,
   not downloaded as binaries.
 - **Gradle dependencies** — resolved from declared repositories (Maven Central, Google, the Gradle Plugin
-  Portal, and RuneLite's Maven repo) at pinned versions. Full per-artifact checksum verification
-  (Gradle `verification-metadata.xml`) is **not** enabled: on a fork that tracks upstream RuneLite
-  closely it would break every build on each dependency bump for limited assurance beyond the SHA-pinned
-  JDK fetch and the source-built native layer. The build stays reproducible from the tracked, SHA-pinned
-  staging scripts.
+  Portal, and RuneLite's Maven repo) at pinned versions over HTTPS. Per-artifact checksum verification
+  (Gradle `verification-metadata.xml`) is **not** enabled, so the integrity of these JARs rests on the
+  repositories and transport at fetch time, **not** on committed checksums — that is the residual
+  supply-chain exposure here. This is a deliberate trade-off: on a fork that tracks upstream RuneLite
+  closely, full verification breaks every build on each dependency bump, and the highest-risk inputs (the
+  JDK runtime and the native layer) are already pinned by SHA / built from source. If you require
+  byte-level guarantees, generate and build from a local manifest:
+  `./gradlew --write-verification-metadata sha256`.
 - **No build-time telemetry**, and R8/minification is intentionally off, so the shipped bytecode
-  corresponds directly to the tracked source.
+  corresponds directly to the tracked source (the third-party dependency JARs excepted, per the note
+  above).
 
 ## Handling credentials in reports
 
