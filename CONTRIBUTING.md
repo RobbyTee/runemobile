@@ -70,8 +70,10 @@ The `headless/` bridge has behavioural unit tests under
 `runelite-client/src/test/java/net/runelite/client/headless/` (JUnit 4 + Mockito, no engine boot). They lock
 down the parts of the contract the signature diff can't see — the bytes the bridge actually emits and the
 geometry it computes: MenuPeek's snapshot JSON + entry fingerprint, JavaBridge's frame double-buffering and
-the GPU load-in warmup hold, OverlayBridge's snap-corner math, and HudVeneer's chat-avoidance rect. If you
-change what the bridge emits or computes, update these so the other port doesn't break silently.
+the GPU load-in warmup hold, OverlayBridge's snap-corner math, HudVeneer's chat-avoidance rect, and the
+GrandExchange JSON reader. If you change what the bridge emits or computes, update these so the other port
+doesn't break silently. (GrandExchangeBridge's parser helpers are `private`; that one suite reaches them by
+reflection — if you rename a helper, update the reflection target in the same change.)
 
 ```sh
 ./gradlew :client:test --tests 'net.runelite.client.headless.*'
