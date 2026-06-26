@@ -34,8 +34,9 @@ This sets `core.hooksPath` (per-clone, so run it once after cloning) and activat
 
 - **`pre-commit`** — the contract check above, plus a hygiene gate that blocks staged secrets/keys
   (`tokens.json`, `*.jks`, `keystore.properties`, …), the generated `probes.jar`, local-only
-  development scaffolding (evidence, audits, handoffs, …), AI-attribution references, anything
-  `gitleaks` flags, and any `shellcheck` warning in a staged shell script (both run only if installed).
+  development scaffolding (evidence, audits, handoffs, …), AI-attribution references, and anything
+  `gitleaks` flags. It also lints the staged files of each kind — `shellcheck` (shell), `ktlint`
+  (Kotlin), `clang-format` (native, changed lines only) — each run only if that tool is installed.
 - **`commit-msg`** — blocks AI-attribution in the commit message.
 
 Override a single commit with `git commit --no-verify` only when a flag is a known false positive.
@@ -56,6 +57,11 @@ the staged files of each kind (if the tool is installed).
   `android/config/detekt/detekt.yml` (ktlint owns formatting/naming, so those rules are off); existing
   complexity/exception debt is grandfathered in `android/config/detekt/baseline.xml`, so it fails only on
   **new** findings. Accept new debt deliberately by refreshing the baseline (the failure message shows how).
+- **Native (C/C++/Obj-C):** `tools/lint/clang-format.sh` enforces `.clang-format` **incrementally** — only
+  lines you change must conform (via `git clang-format`), so the existing hand-aligned tree is grandfathered
+  and migrates as it is next edited. Apply fixes to your changes with `git clang-format`. The vendored JDK
+  headers under `ios/app/HelloShell/jni/` are excluded. This is a commit-time check (the release gate runs the
+  whole-tree linters — shell/Kotlin — that we keep fully clean; native is enforced at the diff).
 - **Java:** upstream Checkstyle (`config/checkstyle/`) + PMD (`runelite-client/pmd-ruleset.xml`).
 
 ## Conventions

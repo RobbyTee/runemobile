@@ -78,6 +78,21 @@ if [ -n "$staged_am" ]; then
 		fi
 	fi
 
+	# Run clang-format on staged native if installed (optional). Incremental: only CHANGED lines must
+	# conform (the existing hand-aligned tree is grandfathered); vendored JDK headers are excluded by the runner.
+	if command -v git-clang-format >/dev/null 2>&1; then
+		cf_staged="$(printf '%s\n' "$staged_am" | grep -E '\.(c|cc|cpp|cxx|h|hpp|m|mm)$' | grep -vE 'ios/app/HelloShell/jni/' || true)"
+		if [ -n "$cf_staged" ]; then
+			set +e
+			cf_out="$("$ROOT/tools/lint/clang-format.sh" --staged 2>&1)"; cf_rc=$?
+			set -e
+			if [ "$cf_rc" -ne 0 ]; then
+				hflag "clang-format findings in staged native code (apply: git clang-format --staged):"
+				printf '%s\n' "$cf_out" | sed 's/^/      /'
+			fi
+		fi
+	fi
+
 	if [ "$hy_fail" -ne 0 ]; then
 		echo
 		echo "✋ pre-commit BLOCKED (hygiene). Resolve the items above, or override with 'git commit --no-verify'."
