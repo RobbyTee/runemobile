@@ -74,11 +74,14 @@ public class OverlayBridgeTest
 	}
 
 	@Test
-	public void columnBoundariesResolveToCentreThenRight()
+	public void columnBoundariesUseStrictLeftInclusiveRightThirds()
 	{
-		// x == third (100): not left, not yet right -> centre. x == third*2 (200): right.
-		assertEquals(OverlayPosition.TOP_CENTER.name(), snap(100, 50));
-		assertEquals(OverlayPosition.TOP_RIGHT.name(), snap(200, 50));
+		// Implementation: left = x < third; right = x >= third*2  (strict on the left edge, inclusive on the
+		// right). third = 100, third*2 = 200. Pin both edges so a `<`/`<=` or `>=`/`>` regression is caught.
+		assertEquals(OverlayPosition.TOP_LEFT.name(), snap(99, 50));     // last left pixel
+		assertEquals(OverlayPosition.TOP_CENTER.name(), snap(100, 50));  // x == third -> first centre pixel
+		assertEquals(OverlayPosition.TOP_CENTER.name(), snap(199, 50));  // last centre pixel
+		assertEquals(OverlayPosition.TOP_RIGHT.name(), snap(200, 50));   // x == third*2 -> first right pixel
 	}
 
 	@Test

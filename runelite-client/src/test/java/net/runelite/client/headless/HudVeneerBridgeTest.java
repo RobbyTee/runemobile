@@ -27,6 +27,7 @@ package net.runelite.client.headless;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import org.junit.Before;
 import org.junit.Test;
 
 /**
@@ -54,6 +55,20 @@ public class HudVeneerBridgeTest
 	private static final int CHAT_DEFAULT_W = 519;
 	private static final int ORIG_CHAT_CONTENT_H = 142;
 
+	/**
+	 * Full reset of the shared static chat geometry before each test, so the suite is order-independent
+	 * regardless of how JUnit sequences the methods. Tests still set the specific state they assert on; this
+	 * is the safety net so a value left by one test can never leak into the next.
+	 */
+	@Before
+	public void resetState()
+	{
+		HudVeneerBridge.relocateChat(-1, -1, false);   // chatX < 0 = not relocating
+		HudVeneerBridge.setChatTabRowHeight(0);         // 0 = fall back to CONTROLS_H
+		HudVeneerBridge.setChatAreaWidth(0);            // 0 = fall back to CHAT_DEFAULT_W
+		HudVeneerBridge.setChatCollapsed(false);
+	}
+
 	@Test
 	public void enabledFlagIsSet()
 	{
@@ -75,13 +90,15 @@ public class HudVeneerBridgeTest
 	}
 
 	@Test
-	public void chatAvoidOpenUsesDefaultsAndFullHeight()
+	public void chatAvoidZeroRowAndWidthFallBackToHardcodedDefaults()
 	{
-		resetChatGeometry();
+		// Explicitly drive 0 in for both -> the rect must use the hardcoded fallbacks CONTROLS_H (23) and
+		// CHAT_DEFAULT_W (519), open height = rowH + ORIG_CHAT_CONTENT_H + 2.
+		HudVeneerBridge.setChatTabRowHeight(0);
+		HudVeneerBridge.setChatAreaWidth(0);
 		HudVeneerBridge.setChatCollapsed(false);
 		HudVeneerBridge.relocateChat(10, 20, false);
 
-		// rowH defaults to CONTROLS_H, width to CHAT_DEFAULT_W; open height = rowH + content + 2.
 		final int expectedH = CONTROLS_H + ORIG_CHAT_CONTENT_H + 2;
 		assertArrayEquals(new int[]{10, 20, CHAT_DEFAULT_W, expectedH}, HudVeneerBridge.getOverlayChatAvoid());
 	}
@@ -89,18 +106,16 @@ public class HudVeneerBridgeTest
 	@Test
 	public void chatAvoidCollapsedIsTheTabRowOnly()
 	{
-		resetChatGeometry();
-		HudVeneerBridge.setChatCollapsed(true);
+		HudVeneerBridge.setChatCollapsed(true);        // row height/width left at the @Before defaults (0)
 		HudVeneerBridge.relocateChat(10, 20, false);
 
-		// Collapsed: just the tab row (no message area added).
+		// Collapsed: just the tab row (no message area added), width still the default fallback.
 		assertArrayEquals(new int[]{10, 20, CHAT_DEFAULT_W, CONTROLS_H}, HudVeneerBridge.getOverlayChatAvoid());
 	}
 
 	@Test
 	public void chatAvoidHonoursProvidedRowHeightAndWidth()
 	{
-		resetChatGeometry();
 		HudVeneerBridge.setChatTabRowHeight(30);   // native enlarged tab row
 		HudVeneerBridge.setChatAreaWidth(600);
 		HudVeneerBridge.setChatCollapsed(false);
@@ -108,12 +123,5 @@ public class HudVeneerBridgeTest
 
 		final int expectedH = 30 + ORIG_CHAT_CONTENT_H + 2;
 		assertArrayEquals(new int[]{5, 6, 600, expectedH}, HudVeneerBridge.getOverlayChatAvoid());
-	}
-
-	/** Clear the per-test chat geometry to the "use defaults" state (0 = fall back to CONTROLS_H / CHAT_DEFAULT_W). */
-	private static void resetChatGeometry()
-	{
-		HudVeneerBridge.setChatTabRowHeight(0);
-		HudVeneerBridge.setChatAreaWidth(0);
 	}
 }
