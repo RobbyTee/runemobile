@@ -68,7 +68,7 @@ if [ -n "$staged_am" ]; then
 
 	# Run ktlint on staged Kotlin if installed (optional). Config in .editorconfig; auto-fix: ktlint --format.
 	if command -v ktlint >/dev/null 2>&1; then
-		kt_staged="$(printf '%s\n' "$staged_am" | grep -E '\.(kt|kts)$' | grep -vE '(^|/)gradlew$' || true)"
+		kt_staged="$(printf '%s\n' "$staged_am" | grep -E '^android/.*\.(kt|kts)$' | grep -vE '(^|/)gradlew$' || true)"
 		if [ -n "$kt_staged" ]; then
 			kt_out="$(printf '%s\n' "$kt_staged" | xargs ktlint --relative 2>/dev/null || true)"
 			if [ -n "$kt_out" ]; then

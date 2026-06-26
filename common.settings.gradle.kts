@@ -45,10 +45,9 @@ dependencyResolutionManagement {
 }
 
 // set up some defaults
-val rootProps =
-    file("./gradle.properties").inputStream().use { stream ->
-        java.util.Properties().apply { load(stream) }
-    }
+val rootProps = file("./gradle.properties").inputStream().use { stream ->
+    java.util.Properties().apply { load(stream) }
+}
 val checkstyleDir = file("./config/checkstyle/")
 gradle.beforeProject {
     apply(plugin = "idea")
@@ -70,7 +69,7 @@ gradle.afterProject {
             use(true)
             bottom("Copyright © 2014")
             links(
-                "https://docs.oracle.com/en/java/javase/11/docs/api/",
+                "https://docs.oracle.com/en/java/javase/11/docs/api/"
             )
         }
     }
@@ -89,10 +88,8 @@ gradle.afterProject {
                 name = "rrn"
                 if (url.scheme != "file") {
                     credentials(PasswordCredentials::class) {
-                        username =
-                            providers.gradleProperty("rrnPublishUsername").orElse(providers.gradleProperty("rrnUsername")).getOrElse("")
-                        password =
-                            providers.gradleProperty("rrnPublishPassword").orElse(providers.gradleProperty("rrnPassword")).getOrElse("")
+                        username = providers.gradleProperty("rrnPublishUsername").orElse(providers.gradleProperty("rrnUsername")).getOrElse("")
+                        password = providers.gradleProperty("rrnPublishPassword").orElse(providers.gradleProperty("rrnPassword")).getOrElse("")
                     }
                 }
             }

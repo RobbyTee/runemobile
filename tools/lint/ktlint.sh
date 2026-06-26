@@ -23,8 +23,10 @@ if ! command -v ktlint >/dev/null 2>&1; then
 	exit 0
 fi
 
-files="$(git ls-files '*.kt' '*.kts' | grep -vE '(^|/)gradlew$' || true)"
-if [ -z "$files" ]; then echo "ktlint: no Kotlin files tracked."; exit 0; fi
+# Our Kotlin lives under android/. The rest of the tree is vendored upstream RuneLite (see .gitattributes
+# linguist-vendored) and must not diverge from upstream over formatting — scope the lint to android/ only.
+files="$(git ls-files '*.kt' '*.kts' | grep -E '^android/' | grep -vE '(^|/)gradlew$' || true)"
+if [ -z "$files" ]; then echo "ktlint: no Kotlin files tracked under android/."; exit 0; fi
 count="$(printf '%s\n' "$files" | grep -c .)"
 
 echo "ktlint: linting $count Kotlin files"
