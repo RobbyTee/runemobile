@@ -7,14 +7,29 @@
 #
 # Usage:  tools/lint/shellcheck.sh            # lint, non-zero exit on any warning+
 #         tools/lint/shellcheck.sh --quiet    # only print on failure
-# Exit:   0 clean · 1 findings · 0+notice if shellcheck is not installed (soft-skip).
+#         tools/lint/shellcheck.sh --require   # FAIL (exit 1) if shellcheck is absent, instead of soft-skip
+# Exit:   0 clean · 1 findings (or absent under --require) · 0+notice if absent without --require (soft-skip).
+#
+# Soft-skip is the default so pre-commit and lean clones aren't blocked by a missing optional tool. The
+# release gate passes --require, because the authoritative pre-publish check must not pass silently when
+# the linter isn't even present.
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT" || exit 1
-quiet=0; [ "${1:-}" = "--quiet" ] && quiet=1
+quiet=0; require=0
+for a in "$@"; do
+	case "$a" in
+		--quiet)   quiet=1 ;;
+		--require) require=1 ;;
+	esac
+done
 
 if ! command -v shellcheck >/dev/null 2>&1; then
+	if [ "$require" -eq 1 ]; then
+		echo "shellcheck: not installed, but --require is set — failing (brew install shellcheck)." >&2
+		exit 1
+	fi
 	echo "shellcheck: not installed — skipping (brew install shellcheck). Lint not enforced this run." >&2
 	exit 0
 fi

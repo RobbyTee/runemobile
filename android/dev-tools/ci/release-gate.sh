@@ -64,10 +64,10 @@ fi
 # ── Stage 1b: shellcheck (shell-script lint) ──────────────────────────────────────────────────────────
 # Lint every tracked shell script at warning severity (config + the single SC2155 mute in .shellcheckrc).
 # Cheap and build-independent, so it runs on every invocation (including --skip-build) except the
-# contract-only pre-flight above. Soft-skips with a notice if shellcheck isn't installed, so a lean CI
-# image still builds.
+# contract-only pre-flight above. --require: the gate is authoritative, so a MISSING shellcheck fails here
+# (no silent pass) — unlike the pre-commit hook, which soft-skips an absent optional tool.
 stage "shellcheck (tracked shell scripts, --severity=warning)"
-"$ROOT/tools/lint/shellcheck.sh" || fail "shellcheck (shell-script lint findings — see above)"
+"$ROOT/tools/lint/shellcheck.sh" --require || fail "shellcheck (lint findings or shellcheck not installed — see above)"
 
 # Gradle is invoked from android/. CI (and most dev shells) already export JAVA_HOME — honour it. Only when it is
 # unset do we probe known JDK-21 locations, and only export one that actually exists on disk; if none match (e.g. a
