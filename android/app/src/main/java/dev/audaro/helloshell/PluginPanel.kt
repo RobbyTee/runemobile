@@ -192,11 +192,8 @@ fun PluginPanel(
     }
 
     // §4 increment 3: the launcher + every panel now live INSIDE a PEEK/EXPAND bottom sheet (SheetScaffold) so
-    // the live game stays visible above it (the desktop slide-out parity win). A sub-screen open => PEEK (game
-    // watchable); the launcher landing => EXPAND.
-    val subActive =
-        questOpen || worldOpen || xpOpen || lootOpen || geOpen || timeOpen || infoBoxOpen ||
-            profilesOpen || hotkeysOpen || notesOpen || hubOpen || aboutOpen || panelOpen != null || configFor != null
+    // the live game stays visible above it (the desktop slide-out parity win) — drag the grab handle DOWN to
+    // PEEK past any sub-screen and watch the game above it.
 
     // §4 dismiss model (d): back pops ONE level — close the active sub-screen back to the launcher, else dismiss
     // the whole sheet. Honoured here so the Compose back-stack works (the MainActivity dispatcher disposes this
@@ -270,15 +267,14 @@ fun PluginPanel(
     }
     BackHandler(enabled = true) { if (!popSub()) onClose() }
 
-    // FIX-6: open at EXPAND for editors / interactive lists (config was cramped to a couple of rows at the old
-    // peek default, and a single drag-down could dismiss it). Only the passive monitors (XP / loot / GE) keep
-    // the watch-the-game PEEK so the scene stays visible above them.
-    val peekScreen = subActive && (xpOpen || lootOpen || geOpen || timeOpen)
     // UX-XCUT-05: apply the OSRS Compose theme (palette + RuneScape typeface) to the whole panel + its sub-screens
     // so the Material defaults stop reading as generic dark Material. Wraps the panel root so the host ComposeView
     // (set in MainActivity) gets the theme without changing the call site.
     HelloShellTheme {
-        SheetScaffold(atPeek = peekScreen, onDismiss = onClose) {
+        // Every sub-screen opens at EXPAND so its scrollable content fills the window. Opening the passive
+        // monitors (XP / loot / GE / time) at the old half-height PEEK read as "the content only uses half the
+        // window"; the grab handle still drags DOWN to PEEK (or dismiss), keeping watch-the-game as a gesture.
+        SheetScaffold(atPeek = false, onDismiss = onClose) {
             when {
                 questOpen -> {
                     QuestHelperScreen(onBack = { questOpen = false })
