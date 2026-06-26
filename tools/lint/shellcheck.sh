@@ -13,6 +13,9 @@
 # Soft-skip is the default so pre-commit and lean clones aren't blocked by a missing optional tool. The
 # release gate passes --require, because the authoritative pre-publish check must not pass silently when
 # the linter isn't even present.
+#
+# Requires `shellcheck` and `git` on PATH (brew/apt install shellcheck). Run from a normal dev/CI shell —
+# not from inside the Android Gradle build or the runtime app shell, which never invoke this.
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -35,7 +38,6 @@ if ! command -v shellcheck >/dev/null 2>&1; then
 fi
 
 # Build the file list: tracked .sh + the hooks, excluding the generated gradlew wrappers.
-mapfile_compat() { while IFS= read -r line; do printf '%s\n' "$line"; done; }
 files="$( { git ls-files '*.sh'; printf '%s\n' tools/git-hooks/pre-commit tools/git-hooks/commit-msg; } \
 	| grep -vE '(^|/)gradlew$' | sort -u )"
 # Keep only paths that still exist (hooks may be uninstalled in a bare checkout).
