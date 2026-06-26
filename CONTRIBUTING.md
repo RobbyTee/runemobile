@@ -64,6 +64,20 @@ the staged files of each kind (if the tool is installed).
   whole-tree linters — shell/Kotlin — that we keep fully clean; native is enforced at the diff).
 - **Java:** upstream Checkstyle (`config/checkstyle/`) + PMD (`runelite-client/pmd-ruleset.xml`).
 
+## Testing the shared bridge
+
+The `headless/` bridge has behavioural unit tests under
+`runelite-client/src/test/java/net/runelite/client/headless/` (JUnit 4 + Mockito, no engine boot). They lock
+down the parts of the contract the signature diff can't see — the bytes the bridge actually emits (MenuPeek's
+snapshot JSON + entry fingerprint, JavaBridge's frame double-buffering and the GPU load-in warmup hold). If you
+change what the bridge emits, update these so the other port doesn't break silently.
+
+```sh
+./gradlew :client:test --tests 'net.runelite.client.headless.*'
+```
+
+The release gate runs them too (a scoped stage, so an unrelated upstream plugin-test breakage can't block it).
+
 ## Conventions
 
 - **Android:** Kotlin + Jetpack Compose shell. Keep Android work under `android/`.

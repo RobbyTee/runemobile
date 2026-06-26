@@ -97,6 +97,18 @@ if [ -z "${JAVA_HOME:-}" ]; then
 fi
 GRADLEW=(./gradlew --no-daemon --console=plain)
 
+# ── Stage 1e: headless bridge unit tests ──────────────────────────────────────────────────────────────
+# Behavioural tests of the shared iOS/Android bridge surface (MenuPeek snapshot JSON + entry fingerprint,
+# JavaBridge frame double-buffering + the GPU load-in warmup hold) — coverage the contract signature-diff
+# (Stage 1) structurally cannot give: it sees method shapes, not the bytes they emit. Scoped to the
+# net.runelite.client.headless package so an unrelated upstream plugin-test breakage never blocks our gate.
+# Needs a gradle compile, so it rides the build gate.
+if [ "$run_build" -eq 1 ]; then
+	stage "headless bridge unit tests (:client:test --tests net.runelite.client.headless.*)"
+	( cd "$ROOT" && "${GRADLEW[@]}" :client:test --tests 'net.runelite.client.headless.*' ) \
+		|| fail "headless bridge unit tests"
+fi
+
 # ── Stage 2: assembleRelease (PROD-QA-01) ─────────────────────────────────────────────────────────────
 # Self-stages the gitignored boot assets via preBuild, then the in-build guards run: verifyNoReleaseSecret
 # (no tokens.json session secret in the release artifact) + verifyReleaseBootAssets (JRE + gpu/rlhd jars
