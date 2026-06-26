@@ -65,6 +65,10 @@ public class GrandExchangeBridgeTest
 	@Test
 	public void unescapeSimpleHandlesKnownUnknownAndTrailingEscapes()
 	{
+		// The source is RuneLite's OWN persisted GE history (written + re-read via its ConfigManager), so it is
+		// trusted, well-formed JSON — a lenient reader is correct. The unknown-escape and trailing-backslash
+		// cases below pin that robustness behaviour (the reader never throws on a malformed token); they are not
+		// a claim that the parser validates arbitrary/untrusted JSON.
 		assertEquals("plain", unescapeSimple("plain"));          // no backslash -> returned as-is
 		assertEquals("a\nb", unescapeSimple("a\\nb"));           // \n -> newline
 		assertEquals("a\tb", unescapeSimple("a\\tb"));           // \t -> tab
@@ -100,6 +104,17 @@ public class GrandExchangeBridgeTest
 	{
 		assertEquals("12:30", rawValue("{\"t\":\"12:30\"}", "t"));      // quotes stripped
 		assertEquals("a\"b", rawValue("{\"t\":\"a\\\"b\"}", "t"));      // escaped inner quote unescaped
+	}
+
+	@Test
+	public void rawValueDoesNotCollideOnSubstringKeys()
+	{
+		// The key needle is quoted on BOTH sides ("\"" + key + "\""), so a key that is a suffix or prefix of
+		// another key cannot false-match: searching "id" must not pick up "trade_id" or "identifier".
+		assertNull("a suffix-key must not collide", rawValue("{\"trade_id\":2}", "id"));
+		assertNull("a prefix-key must not collide", rawValue("{\"identifier\":2}", "id"));
+		// And when the real key is also present alongside a colliding-looking one, it still resolves correctly.
+		assertEquals("7", rawValue("{\"id\":7,\"trade_id\":2}", "id"));
 	}
 
 	@Test
