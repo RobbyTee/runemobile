@@ -29,6 +29,24 @@ Expect a best-effort response. Please give enough detail to reproduce.
 - **Tokens at rest.** OAuth tokens are kept in app-private storage; no live
   `tokens.json` is shipped in any build.
 
+## Build & supply chain
+
+The build pins or sources its heaviest inputs deliberately:
+
+- **Embedded JDK / AWT runtime** (OpenJDK 21 + Caciocavallo) — fetched at build time from a pinned
+  upstream and verified by **SHA-256** before use (`tools/stage-android-jre.sh`); a mismatch aborts the
+  build. These runtimes are not committed to the repo.
+- **Native libraries** (`libhelloshell`, `librlawt`) — built from **tracked C++ source** by Gradle/CMake,
+  not downloaded as binaries.
+- **Gradle dependencies** — resolved from declared repositories (Maven Central, Google, the Gradle Plugin
+  Portal, and RuneLite's Maven repo) at pinned versions. Full per-artifact checksum verification
+  (Gradle `verification-metadata.xml`) is **not** enabled: on a fork that tracks upstream RuneLite
+  closely it would break every build on each dependency bump for limited assurance beyond the SHA-pinned
+  JDK fetch and the source-built native layer. The build stays reproducible from the tracked, SHA-pinned
+  staging scripts.
+- **No build-time telemetry**, and R8/minification is intentionally off, so the shipped bytecode
+  corresponds directly to the tracked source.
+
 ## Handling credentials in reports
 
 Never paste a real `session_id`, `id_token`, access/refresh token, or password
