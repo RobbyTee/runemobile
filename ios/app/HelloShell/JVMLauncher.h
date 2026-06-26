@@ -482,6 +482,16 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Ack JSON. No-op on an older staged jar that predates the bridge's resetAll().
 + (nullable NSString *)lootResetAll;
 
+// ---- Native Time Tracking reflow (TimeTrackingBridge) — read-only farming/bird-house/timer countdowns ----
+
+/// Whether the native Time Tracking screen can be offered (the Time Tracking plugin is loaded + resolvable).
++ (BOOL)timeTrackingAvailable;
+/// Tell the bridge the native Time Tracking screen is open/closed (gates the client-thread snapshot refresh).
++ (void)timeTrackingSetUiOpen:(BOOL)open;
+/// Time Tracking JSON: {available, farming:[…], contract:{…}, birdhouses:[…], timers:[…], stopwatches:[…]}.
+/// Each farming/contract/bird-house entry carries an absolute readyTime (epoch-s) + a derived remainingSec.
++ (nullable NSString *)timeTrackingJson;
+
 @end
 
 NS_ASSUME_NONNULL_END

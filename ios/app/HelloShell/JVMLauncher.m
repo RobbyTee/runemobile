@@ -152,6 +152,12 @@ static jmethodID gLootSetOpen = NULL; // setUiOpen(Z)V
 static jmethodID gLootJson = NULL;    // getLootJson()Ljava/lang/String;
 static jmethodID gLootReset = NULL;   // resetAll()Ljava/lang/String; (optional — older jars lack it)
 
+// Native Time Tracking reflow — the TimeTrackingBridge facade (read-only farming/bird-house/timer snapshot).
+static jclass gTtClass = NULL;      // global ref to net.runelite.client.headless.TimeTrackingBridge
+static jmethodID gTtAvail = NULL;   // isAvailable()Z
+static jmethodID gTtSetOpen = NULL; // setUiOpen(Z)V
+static jmethodID gTtJson = NULL;    // getTimeTrackingJson()Ljava/lang/String;
+
 // ---- W3 plugin-config de-risk (verdict #7, NATIVE-ORIGIN leg) — STRIP AFTER DEVICE CONFIRM ----------
 // Proves the half the desktop smoke can't: that the OBJC side builds the correct signed decimal of
 // Color.getRGB(). The trap — an opaque color's getRGB() is a NEGATIVE int (top alpha bit set), and
@@ -624,6 +630,33 @@ static BOOL ensureLoot(void) {
         gLootReset = NULL;
     }
     gLootClass = global;
+    return YES;
+}
+
+static BOOL ensureTimeTracking(void) {
+    if (gTtClass)
+        return atomic_load(&gVM) != NULL;
+    if (!ensureBridge() || !gMainEnv)
+        return NO;
+    JNIEnv *env = gMainEnv;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/TimeTrackingBridge");
+    if (!local || (*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return NO;
+    }
+    jclass global = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    if (!global)
+        return NO;
+    gTtAvail = (*env)->GetStaticMethodID(env, global, "isAvailable", "()Z");
+    gTtSetOpen = (*env)->GetStaticMethodID(env, global, "setUiOpen", "(Z)V");
+    gTtJson = (*env)->GetStaticMethodID(env, global, "getTimeTrackingJson", "()Ljava/lang/String;");
+    if (!gTtAvail || !gTtSetOpen || !gTtJson) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteGlobalRef(env, global);
+        return NO;
+    }
+    gTtClass = global;
     return YES;
 }
 
@@ -2508,6 +2541,36 @@ static void accountInvokeVoid(const char *method) {
     [JVMLauncher postKeepAlive]; // idle keepalive: the native reset posts no canvas event
     JNIEnv *env = gMainEnv;
     return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gLootClass, gLootReset));
+}
+
+// ---- Native Time Tracking reflow (TimeTrackingBridge) — read-only farming/bird-house/timer countdowns ----
+
++ (BOOL)timeTrackingAvailable {
+    if (!ensureTimeTracking())
+        return NO;
+    JNIEnv *env = gMainEnv;
+    jboolean v = (*env)->CallStaticBooleanMethod(env, gTtClass, gTtAvail);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.timeTrackingAvailable");
+        return NO;
+    }
+    return v ? YES : NO;
+}
+
++ (void)timeTrackingSetUiOpen:(BOOL)open {
+    if (!ensureTimeTracking())
+        return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gTtClass, gTtSetOpen, (jboolean)(open ? 1 : 0));
+    if ((*env)->ExceptionCheck(env))
+        bridgeNoteClear(env, "JVMLauncher.timeTrackingSetUiOpen");
+}
+
++ (NSString *)timeTrackingJson {
+    if (!ensureTimeTracking())
+        return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gTtClass, gTtJson));
 }
 
 @end

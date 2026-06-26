@@ -40,6 +40,8 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 @end
 @interface LootTrackerViewController : UIViewController
 @end
+@interface TimeTrackingViewController : UIViewController
+@end
 
 // §3.3 redesign: the labelled/searchable/favourites grid launcher. Defined at the bottom of this file.
 @interface MUIPluginGrid : UIViewController
@@ -653,6 +655,13 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
             lt.modalPresentationStyle = UIModalPresentationOverFullScreen;
             lt.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
             [self presentViewController:lt animated:YES completion:nil];
+            return;
+        }
+        if ([tip isEqualToString:@"Time Tracking"] && [JVMLauncher timeTrackingAvailable]) {
+            TimeTrackingViewController *tt = [[TimeTrackingViewController alloc] init];
+            tt.modalPresentationStyle = UIModalPresentationOverFullScreen;
+            tt.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+            [self presentViewController:tt animated:YES completion:nil];
             return;
         }
         if (!fromGrid && index == self.currentIndex) {
@@ -1989,6 +1998,330 @@ static NSString *XpFmt(long n) {
         [box addArrangedSubview:row];
     }
     return box;
+}
+
+@end
+
+#pragma mark - Native Time Tracking panel (read-only farming/bird-house/timer countdowns)
+
+// Mirrors the Loot Tracker drawer, but read-only: a right-edge charcoal drawer of the Time Tracking plugin's
+// farming patches, farming contract, bird houses, timers and stopwatches, each shown as a live status/countdown
+// instead of the dense desktop image. Data: JVMLauncher.timeTrackingJson (the shared TimeTrackingBridge
+// snapshot); the bridge gives an absolute readyTime + a derived remainingSec, so a 2s diff-poll keeps the
+// countdowns ticking while the screen is open.
+
+// Pretty seconds -> compact countdown: "2h 05m" / "12m 30s" / "45s".
+static NSString *TtCountdown(long sec) {
+    if (sec <= 0)
+        return @"0s";
+    long h = sec / 3600, m = (sec % 3600) / 60, s = sec % 60;
+    if (h > 0)
+        return [NSString stringWithFormat:@"%ldh %02ldm", h, m];
+    if (m > 0)
+        return [NSString stringWithFormat:@"%ldm %02lds", m, s];
+    return [NSString stringWithFormat:@"%lds", s];
+}
+
+// Status text + colour for a farming/contract/bird-house entry from its {state, remainingSec}.
+static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor) {
+    UIColor *amber = [UIColor colorWithRed:1.0 green:0.78 blue:0.36 alpha:1.0];  // growing
+    UIColor *green = [UIColor colorWithRed:0.49 green:0.83 blue:0.45 alpha:1.0]; // ready
+    UIColor *dim = XpGray(0.5);                                                  // empty / unknown
+    if (remainingSec > 0) {
+        *outColor = amber;
+        return TtCountdown(remainingSec);
+    }
+    NSString *st = [stateObj isKindOfClass:[NSString class]] ? stateObj : @"";
+    if ([st isEqualToString:@"COMPLETED"] || [st isEqualToString:@"HARVESTABLE"]) {
+        *outColor = green;
+        return @"Ready";
+    }
+    if ([st isEqualToString:@"EMPTY"]) {
+        *outColor = dim;
+        return @"Empty";
+    }
+    if ([st isEqualToString:@"IN_PROGRESS"] || [st isEqualToString:@"GROWING"] || [st isEqualToString:@"SEEDED"]) {
+        *outColor = amber;
+        return @"Growing";
+    }
+    if ([st isEqualToString:@"OCCUPIED"]) {
+        *outColor = dim;
+        return @"Occupied";
+    }
+    if (st.length == 0 || [st isEqualToString:@"UNKNOWN"]) {
+        *outColor = dim;
+        return @"—";
+    }
+    // Default: "FOO_BAR" -> "Foo bar".
+    NSString *pretty = [[st stringByReplacingOccurrencesOfString:@"_" withString:@" "] lowercaseString];
+    pretty = [[[pretty substringToIndex:1] uppercaseString] stringByAppendingString:[pretty substringFromIndex:1]];
+    *outColor = dim;
+    return pretty;
+}
+
+@interface TimeTrackingViewController ()
+@property (nonatomic, strong) UIView *drawer;
+@property (nonatomic, strong) UILabel *headerLabel;
+@property (nonatomic, strong) UIStackView *stack;
+@property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, strong) NSTimer *timer;
+@property (nonatomic, copy) NSString *lastJson;
+@end
+
+@implementation TimeTrackingViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor clearColor];
+
+    UIView *dim = [[UIView alloc] initWithFrame:self.view.bounds];
+    dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    [self.view addSubview:dim];
+    [dim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onDone)]];
+
+    self.drawer = [[UIView alloc] init];
+    self.drawer.translatesAutoresizingMaskIntoConstraints = NO;
+    self.drawer.backgroundColor = [UIColor colorWithRed:40 / 255.0 green:40 / 255.0 blue:40 / 255.0 alpha:1.0]; // DARK_GRAY
+    [self.view addSubview:self.drawer];
+
+    UIView *headerBar = [[UIView alloc] init];
+    headerBar.translatesAutoresizingMaskIntoConstraints = NO;
+    headerBar.backgroundColor = [UIColor colorWithRed:30 / 255.0 green:30 / 255.0 blue:30 / 255.0 alpha:1.0]; // DARKER_GRAY
+    [self.drawer addSubview:headerBar];
+
+    self.headerLabel = [[UILabel alloc] init];
+    self.headerLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.headerLabel.font = XpRsFont(15);
+    self.headerLabel.textColor = XpGray(0.72);
+    self.headerLabel.text = @"Time tracking";
+    [headerBar addSubview:self.headerLabel];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    close.translatesAutoresizingMaskIntoConstraints = NO;
+    [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.titleLabel.font = [UIFont systemFontOfSize:17];
+    close.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0]; // BRAND_ORANGE
+    [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
+    [headerBar addSubview:close];
+
+    UIScrollView *scroll = [[UIScrollView alloc] init];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    scroll.backgroundColor = [UIColor clearColor];
+    scroll.alwaysBounceVertical = YES;
+    [self.drawer addSubview:scroll];
+
+    self.stack = [[UIStackView alloc] init];
+    self.stack.axis = UILayoutConstraintAxisVertical;
+    self.stack.spacing = 6;
+    self.stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [scroll addSubview:self.stack];
+
+    self.emptyLabel = [[UILabel alloc] init];
+    self.emptyLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.emptyLabel.font = XpRsFont(15);
+    self.emptyLabel.textColor = XpGray(0.55);
+    self.emptyLabel.numberOfLines = 0;
+    self.emptyLabel.textAlignment = NSTextAlignmentCenter;
+    self.emptyLabel.text = @"Nothing tracked yet.\nPlant a crop, set a timer, or seed a bird house.";
+    self.emptyLabel.hidden = YES;
+    [self.drawer addSubview:self.emptyLabel];
+
+    CGFloat drawerW = MIN(440.0, self.view.bounds.size.width * 0.52);
+    UILayoutGuide *dg = self.drawer.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [self.drawer.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [self.drawer.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [self.drawer.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.drawer.widthAnchor constraintEqualToConstant:drawerW],
+
+        [headerBar.topAnchor constraintEqualToAnchor:dg.topAnchor],
+        [headerBar.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor],
+        [headerBar.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor],
+        [headerBar.heightAnchor constraintEqualToConstant:34],
+        [self.headerLabel.leadingAnchor constraintEqualToAnchor:headerBar.leadingAnchor
+                                                       constant:10],
+        [self.headerLabel.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+        [self.headerLabel.trailingAnchor constraintLessThanOrEqualToAnchor:close.leadingAnchor
+                                                                  constant:-8],
+        [close.trailingAnchor constraintEqualToAnchor:headerBar.trailingAnchor
+                                             constant:-10],
+        [close.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+
+        [scroll.topAnchor constraintEqualToAnchor:headerBar.bottomAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:dg.bottomAnchor],
+
+        [self.stack.topAnchor constraintEqualToAnchor:scroll.topAnchor
+                                             constant:6],
+        [self.stack.leadingAnchor constraintEqualToAnchor:scroll.leadingAnchor
+                                                 constant:6],
+        [self.stack.trailingAnchor constraintEqualToAnchor:scroll.trailingAnchor
+                                                  constant:-6],
+        [self.stack.bottomAnchor constraintEqualToAnchor:scroll.bottomAnchor
+                                                constant:-6],
+        [self.stack.widthAnchor constraintEqualToAnchor:scroll.widthAnchor
+                                               constant:-12],
+
+        [self.emptyLabel.topAnchor constraintEqualToAnchor:headerBar.bottomAnchor
+                                                  constant:40],
+        [self.emptyLabel.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor
+                                                      constant:20],
+        [self.emptyLabel.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor
+                                                       constant:-20],
+    ]];
+
+    [JVMLauncher timeTrackingSetUiOpen:YES]; // gate the client-thread snapshot refresh to while-shown
+    [self refresh];
+    self.timer = [NSTimer scheduledTimerWithTimeInterval:2.0 target:self selector:@selector(refresh) userInfo:nil repeats:YES];
+}
+
+- (void)onDone {
+    [JVMLauncher timeTrackingSetUiOpen:NO];
+    [self.timer invalidate];
+    self.timer = nil;
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    [JVMLauncher timeTrackingSetUiOpen:NO];
+    [self.timer invalidate];
+    self.timer = nil;
+}
+
+- (UILabel *)ttLabel:(NSString *)text font:(UIFont *)font color:(UIColor *)color right:(BOOL)right {
+    UILabel *l = [[UILabel alloc] init];
+    l.font = font;
+    l.textColor = color;
+    l.text = text;
+    l.textAlignment = right ? NSTextAlignmentRight : NSTextAlignmentLeft;
+    return l;
+}
+
+// A titled charcoal box with one "left … right" row per entry. Each row is @[leftString, rightString, rightColor].
+- (UIView *)sectionBox:(NSString *)title rows:(NSArray<NSArray *> *)rows {
+    UIStackView *box = [[UIStackView alloc] init];
+    box.axis = UILayoutConstraintAxisVertical;
+    box.spacing = 3;
+    box.layoutMarginsRelativeArrangement = YES;
+    box.layoutMargins = UIEdgeInsetsMake(7, 8, 7, 8);
+    box.backgroundColor = [UIColor colorWithRed:43 / 255.0 green:43 / 255.0 blue:43 / 255.0 alpha:1.0];
+
+    [box addArrangedSubview:[self ttLabel:title font:XpRsFont(15) color:[UIColor whiteColor] right:NO]];
+
+    for (NSArray *row in rows) {
+        UIStackView *r = [[UIStackView alloc] init];
+        r.axis = UILayoutConstraintAxisHorizontal;
+        r.spacing = 8;
+        r.alignment = UIStackViewAlignmentCenter;
+        UILabel *l = [self ttLabel:row[0] font:XpRsFont(14) color:XpGray(0.7) right:NO];
+        [l setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+        UILabel *rl = [self ttLabel:row[1] font:XpRsFont(14) color:row[2] right:YES];
+        [rl setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+        [r addArrangedSubview:l];
+        [r addArrangedSubview:rl];
+        [box addArrangedSubview:r];
+    }
+    return box;
+}
+
+- (void)refresh {
+    NSString *json = [JVMLauncher timeTrackingJson] ?: @"{}";
+    if (self.lastJson && [json isEqualToString:self.lastJson])
+        return; // unchanged -> keep the built boxes
+    self.lastJson = json;
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if (![d isKindOfClass:[NSDictionary class]])
+        d = @{};
+
+    for (UIView *v in [self.stack.arrangedSubviews copy]) {
+        [self.stack removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    NSInteger sections = 0;
+
+    // Farming patches (all tabs, so an empty patch reads "Empty").
+    NSArray *farming = [d[@"farming"] isKindOfClass:[NSArray class]] ? d[@"farming"] : @[];
+    NSMutableArray *frows = [NSMutableArray array];
+    for (NSDictionary *p in farming) {
+        if (![p isKindOfClass:[NSDictionary class]])
+            continue;
+        UIColor *c = nil;
+        NSString *st = TtFarmStatus(p[@"state"], [p[@"remainingSec"] longLongValue], &c);
+        NSString *name = [p[@"name"] isKindOfClass:[NSString class]] ? p[@"name"] : @"?";
+        [frows addObject:@[ name, st, c ]];
+    }
+    if (frows.count) {
+        [self.stack addArrangedSubview:[self sectionBox:@"Farming patches" rows:frows]];
+        sections++;
+    }
+
+    // Farming contract (only when one is active).
+    NSDictionary *contract = [d[@"contract"] isKindOfClass:[NSDictionary class]] ? d[@"contract"] : nil;
+    if (contract && [contract[@"active"] boolValue]) {
+        UIColor *c = nil;
+        NSString *st = TtFarmStatus(contract[@"state"], [contract[@"remainingSec"] longLongValue], &c);
+        NSString *name = [contract[@"name"] isKindOfClass:[NSString class]] ? contract[@"name"] : @"Contract";
+        [self.stack addArrangedSubview:[self sectionBox:@"Farming contract" rows:@[ @[ name, st, c ] ]]];
+        sections++;
+    }
+
+    // Bird houses.
+    NSArray *birdhouses = [d[@"birdhouses"] isKindOfClass:[NSArray class]] ? d[@"birdhouses"] : @[];
+    NSMutableArray *brows = [NSMutableArray array];
+    for (NSDictionary *b in birdhouses) {
+        if (![b isKindOfClass:[NSDictionary class]])
+            continue;
+        UIColor *c = nil;
+        NSString *st = TtFarmStatus(b[@"state"], [b[@"remainingSec"] longLongValue], &c);
+        NSString *name = [b[@"name"] isKindOfClass:[NSString class]] ? b[@"name"] : @"?";
+        [brows addObject:@[ name, st, c ]];
+    }
+    if (brows.count) {
+        [self.stack addArrangedSubview:[self sectionBox:@"Bird houses" rows:brows]];
+        sections++;
+    }
+
+    // Timers (countdown while active, else paused).
+    NSArray *timers = [d[@"timers"] isKindOfClass:[NSArray class]] ? d[@"timers"] : @[];
+    NSMutableArray *trows = [NSMutableArray array];
+    for (NSDictionary *t in timers) {
+        if (![t isKindOfClass:[NSDictionary class]])
+            continue;
+        BOOL active = [t[@"active"] boolValue];
+        long rem = [t[@"remainingSec"] longLongValue];
+        UIColor *c = active ? (rem > 0 ? [UIColor colorWithRed:1.0 green:0.78 blue:0.36 alpha:1.0]
+                                       : [UIColor colorWithRed:0.49 green:0.83 blue:0.45 alpha:1.0])
+                            : XpGray(0.5);
+        NSString *st = !active ? @"Paused" : (rem > 0 ? TtCountdown(rem) : @"Done");
+        NSString *name = [t[@"name"] isKindOfClass:[NSString class]] ? t[@"name"] : @"Timer";
+        [trows addObject:@[ name, st, c ]];
+    }
+    if (trows.count) {
+        [self.stack addArrangedSubview:[self sectionBox:@"Timers" rows:trows]];
+        sections++;
+    }
+
+    // Stopwatches (count up).
+    NSArray *stopwatches = [d[@"stopwatches"] isKindOfClass:[NSArray class]] ? d[@"stopwatches"] : @[];
+    NSMutableArray *srows = [NSMutableArray array];
+    for (NSDictionary *sw in stopwatches) {
+        if (![sw isKindOfClass:[NSDictionary class]])
+            continue;
+        BOOL active = [sw[@"active"] boolValue];
+        long el = [sw[@"elapsedSec"] longLongValue];
+        UIColor *c = active ? [UIColor colorWithRed:0.49 green:0.83 blue:0.45 alpha:1.0] : XpGray(0.5);
+        NSString *name = [sw[@"name"] isKindOfClass:[NSString class]] ? sw[@"name"] : @"Stopwatch";
+        [srows addObject:@[ name, TtCountdown(el), c ]];
+    }
+    if (srows.count) {
+        [self.stack addArrangedSubview:[self sectionBox:@"Stopwatches" rows:srows]];
+        sections++;
+    }
+
+    self.emptyLabel.hidden = (sections > 0);
 }
 
 @end
