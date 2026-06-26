@@ -129,6 +129,9 @@ next launch as usual.
 ## Pre-publish checklist
 
 - [ ] Release artifact built and **kept downloadable** (prior releases left intact for rollback).
+- [ ] **Signing verified** — `apksigner verify --print-certs <apk>` shows SHA-256
+      `45:E3:05:…:3C:9E` (matches the **Signing** section above). A build that doesn't is not a
+      genuine release; do not promote it. (No CI gate — GitHub Actions is disabled here; verify by hand.)
 - [ ] Disclosure block (above) pasted into the release notes.
 - [ ] Known-issues list trimmed to what's true for this build.
 - [ ] `versionName` / `versionCode` bumped; `android/CHANGELOG.md` updated.
