@@ -52,6 +52,7 @@ CHAT="$(field "$READ_LINE" chat)"
 VIEW="$(field "$READ_LINE" viewport)"
 
 CLICK_REACHED="$(field "$SWITCH_LINE" clickReached)"
+# shellcheck disable=SC2034  # captured for parity with varcSticks/result; surfaced in the raw line, not gated here
 VARC_IMM="$(field "$SWITCH_LINE" varcImmediate)"
 VARC_STICKS="$(field "$SWITCH_LINE" varcSticks)"
 SWITCH_RESULT="$(field "$SWITCH_LINE" result)"

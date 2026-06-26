@@ -39,6 +39,7 @@ WORK="$(pwd)/stage-work"
 rm -rf "$WORK"; mkdir -p "$WORK/facade_out" "$WORK/gpu_out" "$WORK/jar"
 
 # 1) facade compiles (the GL/AWTContext surface the plugin references, methods `native`).
+# shellcheck disable=SC2046  # intentional: word-split the .java file list into separate javac args (paths have no spaces)
 "$JAVAC" -nowarn -d "$WORK/facade_out" $(find "$FACADE" -name '*.java')
 FACADE_LWJGL_CLASSES=$(cd "$WORK/facade_out" && find org/lwjgl -name '*.class' | wc -l | tr -d ' ')
 
@@ -54,6 +55,7 @@ find "$WORK/jar/net/runelite/client/plugins/gpu" -name '*.class' -delete
 # 3) recompile the unmodified delombok'd gpu sources against [facade : stripped-jar]. Recompiling (not reusing
 #    the real-build bytecode) guarantees every reference resolves against facade classes we control.
 set +e
+# shellcheck disable=SC2046  # intentional: word-split the .java file list into separate javac args (paths have no spaces)
 "$JAVAC" -nowarn -proc:none -cp "$WORK/facade_out:$WORK/jar" -d "$WORK/gpu_out" $(find "$DL" -name '*.java') 2>"$WORK/err.txt"
 RC=$?
 set -e

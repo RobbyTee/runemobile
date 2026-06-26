@@ -79,7 +79,7 @@ if [ "${1:-}" = "--bootstrap" ]; then
   adb -s "$USB_SERIAL" tcpip "$port"
   say "connecting to $LEGACY_PHONE over Wi-Fi..."
   until adb connect "$LEGACY_PHONE" 2>&1 | grep -qiE "connected"; do sleep 1; done
-  if adb devices | grep -qE "$LEGACY_PHONE[[:space:]]+unauthorized"; then
+  if adb devices | grep -qE "${LEGACY_PHONE}[[:space:]]+unauthorized"; then
     say "approve the 'Allow wireless debugging' prompt on the phone (tick 'Always allow'), then re-run --bootstrap"
   fi
   adb devices -l | grep -E "$LEGACY_PHONE|$USB_SERIAL" || true

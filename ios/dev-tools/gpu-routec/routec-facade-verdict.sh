@@ -25,6 +25,7 @@ rm -rf facade_out deps plugin_out
 mkdir -p facade_out plugin_out
 
 # 1) facade compiles
+# shellcheck disable=SC2046  # intentional: word-split the .java file list into separate javac args (paths have no spaces)
 "$JAVAC" -d facade_out $(find facade -name "*.java")
 FACADE_CLASSES=$(find facade_out -name '*.class' | wc -l | tr -d ' ')
 

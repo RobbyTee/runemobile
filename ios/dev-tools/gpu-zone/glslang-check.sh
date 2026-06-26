@@ -8,7 +8,7 @@
 #  - glslang is the FAST FILTER, not the authority: the Apple sim (ZoneProbe) remains the final Z0 gate.
 # Run from gpu-zone/.  Usage: ./glslang-check.sh [name.stage]   (no arg = all)
 set -uo pipefail
-cd "$(dirname "$0")/assembled"
+cd "$(dirname "$0")/assembled" || exit 1
 pat="${1:-}"
 for f in *.assembled.glsl; do
 	[ -n "$pat" ] && [[ "$f" != "$pat"* ]] && continue

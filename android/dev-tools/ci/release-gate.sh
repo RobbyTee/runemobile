@@ -11,10 +11,10 @@
 #                         it is a required, non-bypassable stage of this gate (fail on a removed/changed entry).
 #
 # Usage:
-#   release-gate.sh                     # contract + assembleRelease + lintRelease (the runnable gate)
+#   release-gate.sh                     # contract + shellcheck + assembleRelease + lintRelease (the runnable gate)
 #   release-gate.sh --contract-only     # fast pre-flight: just the cross-port contract diff
 #   release-gate.sh --with-device-smoke # also run the Firebase Test Lab boot-to-first-frame smoke (needs gcloud+pool)
-#   release-gate.sh --skip-build        # contract + lint only (skip the heavy assembleRelease)
+#   release-gate.sh --skip-build        # contract + shellcheck + lint only (skip the heavy assembleRelease)
 #
 # Exit: 0 = gate PASS, non-zero = a stage failed (the failing stage is named).
 set -euo pipefail
@@ -60,6 +60,14 @@ esac
 if [ "$contract_only" -eq 1 ]; then
 	echo; echo "✅ contract-only pre-flight PASS."; exit 0
 fi
+
+# ── Stage 1b: shellcheck (shell-script lint) ──────────────────────────────────────────────────────────
+# Lint every tracked shell script at warning severity (config + the single SC2155 mute in .shellcheckrc).
+# Cheap and build-independent, so it runs on every invocation (including --skip-build) except the
+# contract-only pre-flight above. Soft-skips with a notice if shellcheck isn't installed, so a lean CI
+# image still builds.
+stage "shellcheck (tracked shell scripts, --severity=warning)"
+"$ROOT/tools/lint/shellcheck.sh" || fail "shellcheck (shell-script lint findings — see above)"
 
 # Gradle is invoked from android/. CI (and most dev shells) already export JAVA_HOME — honour it. Only when it is
 # unset do we probe known JDK-21 locations, and only export one that actually exists on disk; if none match (e.g. a
@@ -143,5 +151,5 @@ fi
 echo
 hr
 echo "✅ GATE PASS — Android release gate green."
-echo "   contract: rc=$contract_rc  |  build: $([ "$run_build" -eq 1 ] && echo assembleRelease || echo skipped)  |  lint: $([ "$run_lint" -eq 1 ] && echo lintRelease || echo skipped)  |  device-smoke: $([ "$run_device_smoke" -eq 1 ] && echo ran || echo 'opt-in (skipped)')"
+echo "   contract: rc=$contract_rc  |  shellcheck: ran  |  build: $([ "$run_build" -eq 1 ] && echo assembleRelease || echo skipped)  |  lint: $([ "$run_lint" -eq 1 ] && echo lintRelease || echo skipped)  |  device-smoke: $([ "$run_device_smoke" -eq 1 ] && echo ran || echo 'opt-in (skipped)')"
 hr

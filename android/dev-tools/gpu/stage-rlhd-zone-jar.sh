@@ -40,6 +40,7 @@ WORK="$(pwd)/stage-rlhd-work"
 rm -rf "$WORK"; mkdir -p "$WORK/facade_out" "$WORK/rlhd_out" "$WORK/cp" "$WORK/jar"
 
 # 1) facade compiles (the GL/CL/system/AWTContext surface RLHD references).
+# shellcheck disable=SC2046  # intentional: word-split the .java file list into separate javac args (paths have no spaces)
 "$JAVAC" -nowarn -d "$WORK/facade_out" $(find "$FACADE" -name '*.java')
 FACADE_LWJGL_CLASSES=$(cd "$WORK/facade_out" && find org/lwjgl -name '*.class' | wc -l | tr -d ' ')
 
@@ -64,6 +65,7 @@ fi
 
 # 3) compile the RLHD sources (rlhd-src + java-overlay) against [facade : stripped-client], lombok as annotation processor.
 set +e
+# shellcheck disable=SC2046  # intentional: word-split the .java file list into separate javac args (paths have no spaces)
 "$JAVAC" -nowarn -proc:full -cp "$WORK/facade_out:$WORK/cp:$LOMBOK" -processorpath "$LOMBOK" \
 	-d "$WORK/rlhd_out" $(find "$JSRC" -name '*.java') 2>"$WORK/err.txt"
 RC=$?

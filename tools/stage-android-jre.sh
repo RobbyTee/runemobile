@@ -49,6 +49,7 @@ cd "$ROOT"
 JRE_URL="${JRE_URL:-https://github.com/audaro/angelauramc-openjdk-build/releases/download/jre21-android-arm64-16k/jre21-android-arm64.tar.xz}"
 JRE_URL_MIRROR="${JRE_URL_MIRROR:-}"
 JRE_SHA256="db7862e4ec68a71a46cf1fec078938443410805cb61e8f99b75f10893c708c9a"
+# shellcheck disable=SC2034  # documented size pin (see header); kept as one of the three revert pins, not read here
 JRE_BYTES=28679076
 
 CACHE="android/dev-tools/.jre-cache"
@@ -140,7 +141,13 @@ echo "== build fake libawt_xawt.so (NDK) =="
 # jniLibs/arm64-v8a must hold ONLY the CMake-built libhelloshell.so (Gradle puts it there). Any JRE
 # .so staged here re-triggers the libawt realpath abort — remove them.
 if [ -d "$JNI" ]; then
-  stray="$(ls "$JNI"/*.so 2>/dev/null | grep -v '/libhelloshell\.so$' || true)"
+  stray=""
+  for so in "$JNI"/*.so; do
+    [ -e "$so" ] || continue                       # glob stayed literal -> no .so present
+    [ "$(basename "$so")" = libhelloshell.so ] && continue
+    stray+="$so"$'\n'
+  done
+  stray="${stray%$'\n'}"                            # trim the trailing newline
   if [ -n "$stray" ]; then
     echo "== removing stray JRE .so from jniLibs (the trap) =="
     echo "$stray" | sed 's/^/   rm /'

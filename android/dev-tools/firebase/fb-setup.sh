@@ -18,6 +18,7 @@ if ! command -v gcloud >/dev/null 2>&1; then
   # The cask may already be installed but not yet on PATH this shell — try to source it first.
   for inc in "$(brew --prefix 2>/dev/null)/share/google-cloud-sdk/path.bash.inc" \
              "/opt/homebrew/share/google-cloud-sdk/path.bash.inc"; do
+    # shellcheck source=/dev/null
     [ -f "$inc" ] && . "$inc" && break
   done
 fi
@@ -26,6 +27,7 @@ if ! command -v gcloud >/dev/null 2>&1; then
   command -v brew >/dev/null 2>&1 || { warn "Homebrew not found. Install it from https://brew.sh then re-run this."; exit 1; }
   brew install --cask google-cloud-sdk
   for inc in "$(brew --prefix)/share/google-cloud-sdk/path.bash.inc" "/opt/homebrew/share/google-cloud-sdk/path.bash.inc"; do
+    # shellcheck source=/dev/null
     [ -f "$inc" ] && . "$inc" && break
   done
   hash -r 2>/dev/null || true

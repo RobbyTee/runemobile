@@ -14,7 +14,7 @@ PKG="${PKG:-dev.audaro.helloshell}"
 "$ADB" logcat -c >/dev/null 2>&1 || true
 "$ADB" shell am start -n "$PKG/.MainActivity" --ez rlhdprobe true >/dev/null 2>&1
 echo "launched rlhdprobe; waiting for MEGAVERDICT..."
-for i in $(seq 1 30); do
+for _ in $(seq 1 30); do
 	sleep 4
 	if "$ADB" logcat -d 2>/dev/null | grep -q "MEGAVERDICT ="; then break; fi
 done

@@ -18,6 +18,7 @@ DEST="../../app/src/debug/assets/jvm/gpu-smoke.jar"
 
 rm -rf "$OUT"; mkdir -p "$OUT"
 # --release 11: the embedded VM is 21, but 11 bytecode keeps the facade portable + matches the iOS L1 jar.
+# shellcheck disable=SC2046  # intentional: word-split the .java file list into separate javac args (paths have no spaces)
 "$JAVAC" --release 11 -d "$OUT" $(find facade-src -name '*.java') RouteCSmoke.java
 N=$(find "$OUT" -name '*.class' | wc -l | tr -d ' ')
 mkdir -p "$(dirname "$DEST")"

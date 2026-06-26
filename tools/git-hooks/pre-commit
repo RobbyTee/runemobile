@@ -54,6 +54,18 @@ if [ -n "$staged_am" ]; then
 			|| hflag "gitleaks flagged staged content (run: gitleaks protect --staged --verbose)"
 	fi
 
+	# Run ShellCheck on staged shell scripts if installed (optional). Warning severity; .shellcheckrc applies.
+	if command -v shellcheck >/dev/null 2>&1; then
+		sh_staged="$(printf '%s\n' "$staged_am" | grep -E '\.sh$' | grep -vE '(^|/)gradlew$' || true)"
+		if [ -n "$sh_staged" ]; then
+			sc_out="$(printf '%s\n' "$sh_staged" | xargs shellcheck -f gcc --severity=warning 2>/dev/null || true)"
+			if [ -n "$sc_out" ]; then
+				hflag "shellcheck findings in staged scripts (fix or add a justified '# shellcheck disable=SCxxxx'):"
+				printf '%s\n' "$sc_out" | sed 's/^/      /'
+			fi
+		fi
+	fi
+
 	if [ "$hy_fail" -ne 0 ]; then
 		echo
 		echo "✋ pre-commit BLOCKED (hygiene). Resolve the items above, or override with 'git commit --no-verify'."

@@ -50,6 +50,7 @@ rm -rf "$WORK"; mkdir -p "$WORK/facade_out" "$WORK/gpu_out" "$WORK/jar"
 #    pure-Java or stay unbound+uncalled in base mode). Override FACADE_SRC=facade-native only for a base-gpu-only jar.
 FACADE_SRC="${FACADE_SRC:-../gpu-zone/facade}"
 [ -d "$FACADE_SRC" ] || { echo "!! FACADE_SRC dir missing: $FACADE_SRC" >&2; exit 1; }
+# shellcheck disable=SC2046  # intentional: word-split the .java file list into separate javac args (paths have no spaces)
 "$JAVAC" -d "$WORK/facade_out" $(find "$FACADE_SRC" -name '*.java')
 FACADE_LWJGL_CLASSES=$(cd "$WORK/facade_out" && find org/lwjgl -name '*.class' | wc -l | tr -d ' ')
 echo "facade source dir    : $FACADE_SRC"
@@ -67,6 +68,7 @@ find "$WORK/jar/net/runelite/client/plugins/gpu" -name '*.class' -delete
 # 3) recompile the unmodified delombok'd gpu sources against [facade-native : stripped-jar]. Recompiling (not
 #    reusing the real-build bytecode) guarantees every reference resolves against facade classes we control.
 set +e
+# shellcheck disable=SC2046  # intentional: word-split the .java file list into separate javac args (paths have no spaces)
 "$JAVAC" -nowarn -proc:none -cp "$WORK/facade_out:$WORK/jar" -d "$WORK/gpu_out" $(find "$DL" -name '*.java') 2>"$WORK/err.txt"
 RC=$?
 set -e

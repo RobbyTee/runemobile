@@ -34,7 +34,7 @@
 # PlatformGraphicsInfo.createGE() before we clobber INSTANCE) — must survive on device.
 # That is the single short device confirm; everything else is standard java.desktop 21.
 set -uo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 JAVA="${JAVA:-/opt/homebrew/opt/openjdk@21/bin/java}"
 JAVAC="${JAVAC:-/opt/homebrew/opt/openjdk@21/bin/javac}"

@@ -16,6 +16,7 @@ DEST="../../../app/jvm-resources/routec-l1.jar"
 [ -x "$JAVAC" ] || { echo "!! javac not found at $JAVAC (set JAVA_HOME)" >&2; exit 1; }
 
 rm -rf "$OUT"; mkdir -p "$OUT"
+# shellcheck disable=SC2046  # intentional: word-split the .java file list into separate javac args (paths have no spaces)
 "$JAVAC" --release 11 -d "$OUT" $(find "$FACADE" -name '*.java') RouteCL1Probe.java
 CLASSES=$(find "$OUT" -name '*.class' | wc -l | tr -d ' ')
 "$JAR" --create --file "$DEST" -C "$OUT" .

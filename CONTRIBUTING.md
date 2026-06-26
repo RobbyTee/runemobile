@@ -34,11 +34,19 @@ This sets `core.hooksPath` (per-clone, so run it once after cloning) and activat
 
 - **`pre-commit`** — the contract check above, plus a hygiene gate that blocks staged secrets/keys
   (`tokens.json`, `*.jks`, `keystore.properties`, …), the generated `probes.jar`, local-only
-  development scaffolding (evidence, audits, handoffs, …), AI-attribution references, and anything
-  `gitleaks` flags (if installed).
+  development scaffolding (evidence, audits, handoffs, …), AI-attribution references, anything
+  `gitleaks` flags, and any `shellcheck` warning in a staged shell script (both run only if installed).
 - **`commit-msg`** — blocks AI-attribution in the commit message.
 
 Override a single commit with `git commit --no-verify` only when a flag is a known false positive.
+
+## Linting
+
+- **Shell:** `tools/lint/shellcheck.sh` lints every tracked script at `--severity=warning`; config and
+  the single repo-wide mute live in `.shellcheckrc`. It also runs as a stage of the Android release gate
+  (`android/dev-tools/ci/release-gate.sh`) and, incrementally, in the pre-commit hook. Intentional
+  findings get a justified `# shellcheck disable=SCxxxx` directive, not a blanket mute.
+- **Java:** upstream Checkstyle (`config/checkstyle/`) + PMD (`runelite-client/pmd-ruleset.xml`).
 
 ## Conventions
 

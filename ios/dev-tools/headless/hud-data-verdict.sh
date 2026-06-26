@@ -26,7 +26,7 @@ echo
 
 get() { echo "$LINE" | grep -oE "$1=-?[0-9]+" | head -1 | cut -d= -f2; }
 CHATN="$(get chatN)"; WELCOME="$(get welcomeMsg)"; HP="$(get hp)"; HPMAX="$(get hpMax)"
-ENERGY="$(get energy)"; PX="$(get px)"; PY="$(get py)"; NPCS="$(get npcs)"; DOTS="$(get dots)"; LIVE="$(get live)"
+ENERGY="$(get energy)"; PX="$(get px)"; NPCS="$(get npcs)"; DOTS="$(get dots)"; LIVE="$(get live)"
 
 # Booleans (md5-gate on these, not the raw values which vary run to run).
 welcome_ok=$([ "$WELCOME" = "1" ] && echo 1 || echo 0)
