@@ -3,5 +3,6 @@
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 git -C "$ROOT" config core.hooksPath tools/git-hooks
-chmod +x "$ROOT"/tools/git-hooks/pre-commit "$ROOT"/tools/shared-contract/*.sh "$ROOT"/tools/shared-contract/*.py 2>/dev/null || true
-echo "core.hooksPath = tools/git-hooks  (cross-port contract guard active)"
+chmod +x "$ROOT"/tools/git-hooks/pre-commit "$ROOT"/tools/git-hooks/commit-msg 2>/dev/null || true
+chmod +x "$ROOT"/tools/shared-contract/*.sh "$ROOT"/tools/shared-contract/*.py 2>/dev/null || true
+echo "core.hooksPath = tools/git-hooks  (hygiene + AI-attribution + cross-port contract guards active)"

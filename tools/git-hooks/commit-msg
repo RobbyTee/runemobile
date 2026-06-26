@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Reject AI-attribution in commit messages (the history must read as the author's own work).
+# Override (discouraged): git commit --no-verify
+set -uo pipefail
+
+AI_REF='claude|codex|anthropic|co-authored-by'
+hits="$(grep -v '^#' "$1" | grep -inE "$AI_REF" || true)"
+if [ -n "$hits" ]; then
+	echo "commit-msg: blocked — AI-attribution in the commit message:" >&2
+	printf '%s\n' "$hits" | sed 's/^/   /' >&2
+	echo "Remove it (no tool attribution / Co-Authored-By trailer)." >&2
+	exit 1
+fi
+exit 0

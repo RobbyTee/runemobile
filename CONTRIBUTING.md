@@ -30,6 +30,16 @@ Install the git hooks so this runs automatically:
 tools/git-hooks/install.sh
 ```
 
+This sets `core.hooksPath` (per-clone, so run it once after cloning) and activates:
+
+- **`pre-commit`** — the contract check above, plus a hygiene gate that blocks staged secrets/keys
+  (`tokens.json`, `*.jks`, `keystore.properties`, …), the generated `probes.jar`, local-only
+  development scaffolding (evidence, audits, handoffs, …), AI-attribution references, and anything
+  `gitleaks` flags (if installed).
+- **`commit-msg`** — blocks AI-attribution in the commit message.
+
+Override a single commit with `git commit --no-verify` only when a flag is a known false positive.
+
 ## Conventions
 
 - **Android:** Kotlin + Jetpack Compose shell. Keep Android work under `android/`.

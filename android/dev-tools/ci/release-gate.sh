@@ -90,6 +90,36 @@ if [ "$run_build" -eq 1 ]; then
 	echo "  → built $(cd "$ROOT" && realpath --relative-to="$ROOT" "$apk" 2>/dev/null || echo "$apk") ($(du -h "$apk" | cut -f1))"
 fi
 
+# ── Stage 2b: signing verification (PROD-RELEASE-ENG-02) ──────────────────────────────────────────────
+# The release artifact must be signed, and when a real release key is configured its certificate MUST
+# match the published fingerprint (RELEASE.md "Signing"). A keyless clone/CI falls back to the AOSP debug
+# key — allowed but flagged. keystore.properties present yet a non-release cert = hard fail (misconfig).
+if [ "$run_build" -eq 1 ]; then
+	stage "signing verification (apksigner certificate fingerprint)"
+	rel_fp="45e305844d53a6265dc86eb399be997ab3fa2776f90f18b16fd4ec90f43d3c9e"
+	dbg_fp="0047cc5876b3f29f0f186154ad6ac705e7a9b2e393238049a471e0730ab25679"
+	apksigner="$(command -v apksigner || true)"
+	if [ -z "$apksigner" ]; then
+		for d in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/Library/Android/sdk" "$HOME/Android/Sdk"; do
+			[ -n "$d" ] || continue
+			cand="$(ls -1 "$d"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)"
+			[ -n "$cand" ] && { apksigner="$cand"; break; }
+		done
+	fi
+	[ -n "$apksigner" ] || fail "signing (apksigner not found; install Android build-tools)"
+	got_fp="$("$apksigner" verify --print-certs "$apk" 2>/dev/null \
+		| awk -F': ' '/SHA-256 digest/{print $2; exit}' | tr -d ' ' | tr 'A-F' 'a-f')"
+	[ -n "$got_fp" ] || fail "signing (could not read a certificate from $apk — is it signed?)"
+	if [ "$got_fp" = "$rel_fp" ]; then
+		echo "  → release-signed ✓ (cert SHA-256 matches RELEASE.md)"
+	elif [ "$got_fp" = "$dbg_fp" ]; then
+		[ -f "$ANDROID/keystore.properties" ] && fail "signing (keystore.properties present but APK is DEBUG-signed — release key not applied)"
+		echo "  → debug-signed (no release key configured — keyless fallback, allowed in CI)"
+	else
+		fail "signing (UNEXPECTED cert SHA-256 $got_fp — neither the release nor the debug key)"
+	fi
+fi
+
 # ── Stage 3: lintRelease (PROD-QA-01) ─────────────────────────────────────────────────────────────────
 # Android lint aborts on an error severity by default; this is the fail-on-error lint the gate spec asks for.
 if [ "$run_lint" -eq 1 ]; then

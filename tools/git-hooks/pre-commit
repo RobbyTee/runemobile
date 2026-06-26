@@ -1,14 +1,64 @@
 #!/usr/bin/env bash
-# Cross-port guard: flag commits that touch the shared iOS/Android jar surface, and block when the host-facing
-# contract (bridge/boot API + -D gate flags) drifts without being acknowledged cross-port.
+# Pre-commit gate. Two responsibilities:
+#   1) Hygiene/security — no secrets, signing keys, generated artifacts, AI attribution, or local-only
+#      development scaffolding may enter the tree (Actions are disabled on this fork, so this is the gate).
+#   2) Cross-port contract — flag staged changes to the shared iOS/Android jar surface and block when the
+#      host-facing bridge/boot API + -D gate flags drift without a refreshed baseline.
 #
-# Install once per clone:  git config core.hooksPath tools/git-hooks   (or run tools/git-hooks/install.sh)
+# Install once per clone:  tools/git-hooks/install.sh   (sets core.hooksPath = tools/git-hooks)
 # Emergency bypass:        git commit --no-verify
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
-staged="$(git diff --cached --name-only)"
+staged="$(git diff --cached --name-only)"                      # full list (contract guard)
+staged_am="$(git diff --cached --name-only --diff-filter=AM)"  # added/modified (hygiene)
 
+# ── 1) Hygiene / security (runs on every commit) ──────────────────────────────────────────────────────
+AI_REF='claude|codex|anthropic|co-authored-by'
+hy_fail=0
+hflag() { printf '  - %s\n' "$1"; hy_fail=1; }
+
+if [ -n "$staged_am" ]; then
+	while IFS= read -r f; do
+		[ -z "$f" ] && continue
+		case "$f" in
+			*tokens.json|*legacy_login.json|*.jks|*.keystore|*keystore.properties)
+				hflag "secret/key file staged: $f" ;;
+			*jvm-resources/probes.jar)
+				hflag "generated artifact staged (never commit): $f" ;;
+			*/evidence/*|*/parity/*|*-mobile-ux/*|*/marketing/*|*/audit/*|\
+			*HANDOFF.md|*-AUDIT.md|AUDIT-*.md|BLUEPRINT.md|*-BLUEPRINT.md|*-PLAN.md|*-PHASING.md|*-PHASING-REVIEW.md|\
+			*-INVESTIGATION.md|*-RECONCILIATION.md|*-RESEARCH.md|*-SCOPE.md|*-DIAGNOSIS.md|*-PROMPT.md|\
+			*-RESULT.md|*-RESULTS.md|RESULTS.md|*-notes.md|*ROADMAP.md|PHASE*.md|*GATE.md|*FINDINGS.md|\
+			*MARKETING-SHOWCASE.md|*DEVICE-KIT.md|*bridge-manifest.md|*facade-delta.md)
+				hflag "local-only scaffolding staged: $f" ;;
+		esac
+	done <<< "$staged_am"
+
+	# Content checks on added lines (exclude tools/git-hooks/, which contains these patterns literally).
+	added="$(git diff --cached --diff-filter=AM -U0 -- . ':(exclude)tools/git-hooks/' \
+		| grep -E '^\+' | grep -vE '^\+\+\+' || true)"
+	if [ -n "$added" ]; then
+		ai="$(printf '%s\n' "$added" | grep -inE "$AI_REF" || true)"
+		if [ -n "$ai" ]; then hflag "AI-attribution reference in staged content:"; printf '%s\n' "$ai" | sed 's/^/      /'; fi
+		pk="$(printf '%s\n' "$added" | grep -nE 'BEGIN (RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY' || true)"
+		[ -n "$pk" ] && hflag "private-key material in staged content"
+	fi
+
+	# gitleaks if installed (optional, stronger staged-secret scan).
+	if command -v gitleaks >/dev/null 2>&1; then
+		gitleaks protect --staged --no-banner --redact >/dev/null 2>&1 \
+			|| hflag "gitleaks flagged staged content (run: gitleaks protect --staged --verbose)"
+	fi
+
+	if [ "$hy_fail" -ne 0 ]; then
+		echo
+		echo "✋ pre-commit BLOCKED (hygiene). Resolve the items above, or override with 'git commit --no-verify'."
+		exit 1
+	fi
+fi
+
+# ── 2) Cross-port contract guard ──────────────────────────────────────────────────────────────────────
 # Tier 1 — any staged change that lands in the jars BOTH ports embed?
 shared="$(printf '%s\n' "$staged" | grep -E '^(runelite-client/|ios/dev-tools/awtsmoke/|tools/stage-.*\.sh)' || true)"
 [ -z "$shared" ] && exit 0
