@@ -21,18 +21,21 @@ hflag() { printf '  - %s\n' "$1"; hy_fail=1; }
 if [ -n "$staged_am" ]; then
 	while IFS= read -r f; do
 		[ -z "$f" ] && continue
+		matched=0
+		# Critical, config-independent: credentials/keys and the generated artifact must never land,
+		# even if someone deletes the .gitignore entry for them.
 		case "$f" in
 			*tokens.json|*legacy_login.json|*.jks|*.keystore|*keystore.properties)
-				hflag "secret/key file staged: $f" ;;
+				hflag "secret/key file staged: $f"; matched=1 ;;
 			*jvm-resources/probes.jar)
-				hflag "generated artifact staged (never commit): $f" ;;
-			*/evidence/*|*/parity/*|*-mobile-ux/*|*/marketing/*|*/audit/*|\
-			*HANDOFF.md|*-AUDIT.md|AUDIT-*.md|BLUEPRINT.md|*-BLUEPRINT.md|*-PLAN.md|*-PHASING.md|*-PHASING-REVIEW.md|\
-			*-INVESTIGATION.md|*-RECONCILIATION.md|*-RESEARCH.md|*-SCOPE.md|*-DIAGNOSIS.md|*-PROMPT.md|\
-			*-RESULT.md|*-RESULTS.md|RESULTS.md|*-notes.md|*ROADMAP.md|PHASE*.md|*GATE.md|*FINDINGS.md|\
-			*MARKETING-SHOWCASE.md|*DEVICE-KIT.md|*bridge-manifest.md|*facade-delta.md)
-				hflag "local-only scaffolding staged: $f" ;;
+				hflag "generated artifact staged (never commit): $f"; matched=1 ;;
 		esac
+		# General catch: anything force-added past a gitignore / .git/info/exclude rule (local-only
+		# dev scaffolding, build output, …). No hardcoded list to rot — the patterns live in the
+		# ignore rules, not here.
+		if [ "$matched" -eq 0 ] && git check-ignore -q -- "$f"; then
+			hflag "ignored file force-added: $f  (local-only / scaffolding stays untracked)"
+		fi
 	done <<< "$staged_am"
 
 	# Content checks on added lines (exclude tools/git-hooks/, which contains these patterns literally).
