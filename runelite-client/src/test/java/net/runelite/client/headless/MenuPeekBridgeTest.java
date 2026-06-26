@@ -137,6 +137,26 @@ public class MenuPeekBridgeTest
 	}
 
 	@Test
+	public void tickStripsAllKnownOsrsMarkupTags()
+	{
+		// stripTags is <[^>]*>, so it must strip EVERY OSRS markup form, not just <col=>. A leaked <img=> or
+		// <br> would feed raw markup to the native menu parser. Kitchen sink of the tags OSRS targets carry;
+		// the bodies (A..E) concatenate tag-free with no spurious whitespace.
+		final String target = "<col=ff0000>A</col><shad=000000>B</shad><br><img=5>C<u=00ff00>D</u>E";
+		final MenuEntry e = entry("Attack", target, MenuAction.NPC_SECOND_OPTION, 7, 0, 0, -1);
+		MenuPeekBridge.tick(loggedInClient(new MenuEntry[]{e}, new Point(1, 1)));
+		final String snap = MenuPeekBridge.getSnapshot();
+
+		assertTrue("all tag bodies survive, stripped of markup", snap.contains("\"tgt\":\"ABCDE\""));
+		for (final String tag : new String[]{"<col", "<shad", "<br", "<img", "<u"})
+		{
+			assertFalse("no " + tag + "> markup leaks into JSON", snap.contains(tag));
+		}
+		// And the fingerprint (the native string-compare key) is tag-free too.
+		assertEquals("Attack|ABCDE|" + MenuAction.NPC_SECOND_OPTION + "|7|0|0|-1", MenuPeekBridge.fingerprint(e));
+	}
+
+	@Test
 	public void tickEscapesJsonSpecialCharsInOption()
 	{
 		// A quote and a backslash must be escaped, and a newline folded to a space, or the snapshot is invalid JSON.

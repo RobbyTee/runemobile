@@ -14,7 +14,7 @@
 #   release-gate.sh                     # contract + shellcheck + assembleRelease + lintRelease (the runnable gate)
 #   release-gate.sh --contract-only     # fast pre-flight: just the cross-port contract diff
 #   release-gate.sh --with-device-smoke # also run the Firebase Test Lab boot-to-first-frame smoke (needs gcloud+pool)
-#   release-gate.sh --skip-build        # contract + shellcheck + lint only (skip the heavy assembleRelease)
+#   release-gate.sh --skip-build        # contract + shellcheck + lint + bridge unit tests (skip the heavy assembleRelease)
 #
 # Exit: 0 = gate PASS, non-zero = a stage failed (the failing stage is named).
 set -euo pipefail
@@ -102,12 +102,12 @@ GRADLEW=(./gradlew --no-daemon --console=plain)
 # JavaBridge frame double-buffering + the GPU load-in warmup hold) — coverage the contract signature-diff
 # (Stage 1) structurally cannot give: it sees method shapes, not the bytes they emit. Scoped to the
 # net.runelite.client.headless package so an unrelated upstream plugin-test breakage never blocks our gate.
-# Needs a gradle compile, so it rides the build gate.
-if [ "$run_build" -eq 1 ]; then
-	stage "headless bridge unit tests (:client:test --tests net.runelite.client.headless.*)"
-	( cd "$ROOT" && "${GRADLEW[@]}" :client:test --tests 'net.runelite.client.headless.*' ) \
-		|| fail "headless bridge unit tests"
-fi
+# A CORRECTNESS gate, so — like the linters above — it runs on every full invocation and is deliberately NOT
+# tied to --skip-build (only --contract-only, which exits before here, skips it). --skip-build still drops
+# the heavy assembleRelease/lintRelease/signing; this just costs a :client compile, far cheaper than those.
+stage "headless bridge unit tests (:client:test --tests net.runelite.client.headless.*)"
+( cd "$ROOT" && "${GRADLEW[@]}" :client:test --tests 'net.runelite.client.headless.*' ) \
+	|| fail "headless bridge unit tests"
 
 # ── Stage 2: assembleRelease (PROD-QA-01) ─────────────────────────────────────────────────────────────
 # Self-stages the gitignored boot assets via preBuild, then the in-build guards run: verifyNoReleaseSecret
