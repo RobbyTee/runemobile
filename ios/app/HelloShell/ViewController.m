@@ -22,119 +22,7 @@
 #import <unistd.h>
 #import <fcntl.h>
 #import <os/lock.h>            // os_unfair_lock — guards the JSON-fault rate-limiter (QA-SYS-1 sibling)
-#import <time.h>              // clock_gettime_nsec_np — monotonic window for the rate-limiter
-#import <mach/mach.h>         // [mainwatch] thread suspend + arm64 state for the main-thread stall watchdog
-#import <pthread.h>
-#import <stdatomic.h>
-#import <dlfcn.h> // dladdr — symbolicate the stalled main-thread backtrace
-
-// ============================================================================================
-// [mainwatch] Main-thread stall watchdog (TEMPORARY DIAGNOSTIC — remove once the panel-exit hang
-// is root-caused). A background pthread watches a heartbeat bumped by a 0.25s main-thread timer;
-// when the main thread stops ticking for >= kMainwatchStallSecs, it suspends the main thread,
-// snapshots its arm64 frame-pointer chain (memory reads only — no library calls while suspended),
-// resumes it, then symbolicates the frames with dladdr to stderr (-> Documents/jvm-stdio.log).
-// Grep "[mainwatch]". Dumps once per stall episode; re-arms when the main thread ticks again.
-// ============================================================================================
-static mach_port_t gMainThreadPort = MACH_PORT_NULL;   // main thread's port (+1 ref kept for the app's life — intentional one-time leak)
-static _Atomic(unsigned long long) gMainHeartbeat = 0; // bumped by the main-thread timer
-static const int kMainwatchStallSecs = 3;
-
-static void mainwatchDumpBacktrace(void) {
-    if (gMainThreadPort == MACH_PORT_NULL)
-        return;
-    if (thread_suspend(gMainThreadPort) != KERN_SUCCESS)
-        return;
-
-    uintptr_t frames[48];
-    int n = 0;
-    arm_thread_state64_t st;
-    mach_msg_type_number_t cnt = ARM_THREAD_STATE64_COUNT;
-    if (thread_get_state(gMainThreadPort, ARM_THREAD_STATE64, (thread_state_t)&st, &cnt) == KERN_SUCCESS) {
-        uintptr_t pc = (uintptr_t)__darwin_arm_thread_state64_get_pc(st);
-        uintptr_t fp = (uintptr_t)__darwin_arm_thread_state64_get_fp(st);
-        if (pc)
-            frames[n++] = pc;
-        // arm64 frame record: [fp+0] = caller fp, [fp+8] = return address. n<48 caps depth; each record is
-        // read via vm_read_overwrite so a wild/unmapped fp returns an error instead of segfaulting the
-        // watchdog, and a strictly-increasing 16-aligned fp keeps a garbage pointer from looping arbitrarily.
-        while (n < 48 && fp && (fp & 0xf) == 0) {
-            uintptr_t rec[2] = {0, 0}; // rec[0] = caller fp, rec[1] = return address
-            vm_size_t got = 0;
-            if (vm_read_overwrite(mach_task_self(), (vm_address_t)fp, sizeof(rec), (vm_address_t)rec, &got) != KERN_SUCCESS ||
-                got != sizeof(rec))
-                break;
-            uintptr_t nextFp = rec[0];
-            uintptr_t lr = rec[1];
-            if (!lr)
-                break;
-            frames[n++] = lr;
-            if (nextFp <= fp)
-                break;
-            fp = nextFp;
-        }
-    }
-    thread_resume(gMainThreadPort);
-
-    // Pass 1 — raw addresses, no library calls. Flushed first so the frames survive even if a stalled
-    // loader/allocator lock makes the best-effort dladdr pass below wedge. Symbolicate offline with atos if so.
-    fprintf(stderr, "[mainwatch] MAIN THREAD STALLED >= %ds — %d frames (raw):\n", kMainwatchStallSecs, n);
-    for (int i = 0; i < n; i++)
-        fprintf(stderr, "[mainwatch]  %2d  0x%016lx\n", i, (unsigned long)frames[i]);
-    fflush(stderr);
-
-    // Pass 2 — best-effort symbolication AFTER resuming (dladdr can take the dyld lock; never while suspended).
-    for (int i = 0; i < n; i++) {
-        Dl_info info;
-        if (dladdr((void *)frames[i], &info) && info.dli_sname) {
-            const char *fname = info.dli_fname ? strrchr(info.dli_fname, '/') : NULL;
-            fprintf(stderr, "[mainwatch]  sym %2d  %-34s + %-5lu  %s\n", i, info.dli_sname,
-                    (unsigned long)(frames[i] - (uintptr_t)info.dli_saddr), fname ? fname + 1 : "?");
-        }
-    }
-    fflush(stderr);
-}
-
-static void *mainwatchThread(void *arg) {
-    pthread_setname_np("mainwatch");
-    unsigned long long last = atomic_load(&gMainHeartbeat);
-    int stalled = 0;
-    BOOL dumped = NO;
-    for (;;) {
-        usleep(1000 * 1000); // 1s cadence
-        unsigned long long now = atomic_load(&gMainHeartbeat);
-        if (now != last) {
-            last = now;
-            stalled = 0;
-            dumped = NO;
-            continue;
-        }
-        if (++stalled >= kMainwatchStallSecs && !dumped) {
-            mainwatchDumpBacktrace();
-            dumped = YES;
-        }
-    }
-    return NULL;
-}
-
-// Start once, ON THE MAIN THREAD (so mach_thread_self() captures the main thread's port). The heartbeat
-// timer runs in common run-loop modes so scrolling/tracking does not read as a stall.
-static void StartMainThreadWatchdog(void) {
-    static BOOL started = NO;
-    if (started)
-        return;
-    started = YES;
-    gMainThreadPort = mach_thread_self();
-    NSTimer *hb = [NSTimer timerWithTimeInterval:0.25
-                                         repeats:YES
-                                           block:^(NSTimer *t) {
-                                               atomic_fetch_add_explicit(&gMainHeartbeat, 1, memory_order_relaxed);
-                                           }];
-    [[NSRunLoop mainRunLoop] addTimer:hb forMode:NSRunLoopCommonModes];
-    pthread_t tid;
-    if (pthread_create(&tid, NULL, mainwatchThread, NULL) == 0)
-        pthread_detach(tid);
-}
+#import <time.h>               // clock_gettime_nsec_np — monotonic window for the rate-limiter
 
 // The chat tabs match the official mobile app's small size, which makes them fiddly to hit. This button expands its
 // touch area vertically (the 7 tabs are contiguous, so a horizontal miss already lands on a neighbour) so near-miss
@@ -572,7 +460,6 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.bgTask = UIBackgroundTaskInvalid;
     [self buildUI];
     [self openLogFile];
-    StartMainThreadWatchdog(); // [mainwatch] TEMP diagnostic — dump the main-thread stack on a >=3s stall
     self.bgKeepTask = UIBackgroundTaskInvalid;
     // Flush RuneLite config to disk when the app backgrounds (iOS skips RuneLite's own shutdown flush).
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onEnterBackground)
