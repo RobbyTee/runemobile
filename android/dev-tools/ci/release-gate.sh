@@ -75,6 +75,11 @@ stage "shellcheck (tracked shell scripts, --severity=warning)"
 stage "ktlint (tracked Kotlin)"
 "$ROOT/tools/lint/ktlint.sh" --require || fail "ktlint (Kotlin lint findings or ktlint not installed — see above)"
 
+# ── Stage 1d: detekt (Kotlin static analysis) ─────────────────────────────────────────────────────────
+# Baseline-gated: existing complexity/exception debt is grandfathered, so this fails only on NEW findings.
+stage "detekt (Kotlin static analysis, baseline-gated)"
+"$ROOT/tools/lint/detekt.sh" --require || fail "detekt (new Kotlin findings or detekt not installed — see above)"
+
 # Gradle is invoked from android/. CI (and most dev shells) already export JAVA_HOME — honour it. Only when it is
 # unset do we probe known JDK-21 locations, and only export one that actually exists on disk; if none match (e.g. a
 # Linux distro path we don't list), leave JAVA_HOME unset so the gradlew wrapper / PATH `java` resolves it — never

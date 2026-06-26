@@ -49,9 +49,13 @@ the staged files of each kind (if the tool is installed).
 - **Shell:** `tools/lint/shellcheck.sh` lints every tracked script at `--severity=warning`; config and
   the single repo-wide mute live in `.shellcheckrc`. Intentional findings get a justified
   `# shellcheck disable=SCxxxx` directive, not a blanket mute.
-- **Kotlin:** `tools/lint/ktlint.sh` lints all tracked Kotlin; style (indent, line length, the Compose
-  `@Composable` naming exception) lives in `.editorconfig`. Auto-fix most findings with
-  `ktlint --format <files>`.
+- **Kotlin (style):** `tools/lint/ktlint.sh` lints all tracked Kotlin under `android/`; style (indent,
+  line length, the Compose `@Composable` naming exception) lives in `.editorconfig`. Auto-fix most
+  findings with `ktlint --format <files>`.
+- **Kotlin (static analysis):** `tools/lint/detekt.sh` runs detekt over `android/`. Config lives in
+  `android/config/detekt/detekt.yml` (ktlint owns formatting/naming, so those rules are off); existing
+  complexity/exception debt is grandfathered in `android/config/detekt/baseline.xml`, so it fails only on
+  **new** findings. Accept new debt deliberately by refreshing the baseline (the failure message shows how).
 - **Java:** upstream Checkstyle (`config/checkstyle/`) + PMD (`runelite-client/pmd-ruleset.xml`).
 
 ## Conventions

@@ -162,7 +162,7 @@ private fun LootSourceItem(s: LootSource) {
             if (s.kills > 0) Text("×${s.kills}", color = Color(0xFFB0BEC5), fontSize = 12.sp)
             Text("  ${gp(s.totalValue)} gp", color = Color(0xFFFFD54F), fontSize = 12.sp)
         }
-        s.items.forEach { it ->
+        s.items.forEach {
             Row(Modifier.fillMaxWidth().padding(start = 6.dp, top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(
                     if (it.qty > 1) "${it.name} ×${it.qty}" else it.name,

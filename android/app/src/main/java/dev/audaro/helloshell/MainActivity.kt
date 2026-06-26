@@ -374,6 +374,7 @@ class MainActivity : AppCompatActivity() {
 
         // Tap-KIND truth (mirrors JavaBridge.TAP_KIND_*): the engine-resolved tap hit nothing, a walk, a scene
         // entity, or an interface widget. The shell rings only for WALK/SCENE and borders WIDGET.
+        @Suppress("UnusedPrivateProperty") // 0=hit-nothing: kept to mirror the engine's full TAP_KIND_* enum
         private const val TAP_KIND_NONE = 0
         private const val TAP_KIND_WALK = 1
         private const val TAP_KIND_SCENE = 2
