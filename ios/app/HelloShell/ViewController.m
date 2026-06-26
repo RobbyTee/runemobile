@@ -36,7 +36,7 @@
 // resumes it, then symbolicates the frames with dladdr to stderr (-> Documents/jvm-stdio.log).
 // Grep "[mainwatch]". Dumps once per stall episode; re-arms when the main thread ticks again.
 // ============================================================================================
-static mach_port_t gMainThreadPort = MACH_PORT_NULL;   // captured on the main thread at launch
+static mach_port_t gMainThreadPort = MACH_PORT_NULL;   // main thread's port (+1 ref kept for the app's life — intentional one-time leak)
 static _Atomic(unsigned long long) gMainHeartbeat = 0; // bumped by the main-thread timer
 static const int kMainwatchStallSecs = 3;
 
@@ -55,11 +55,17 @@ static void mainwatchDumpBacktrace(void) {
         uintptr_t fp = (uintptr_t)__darwin_arm_thread_state64_get_fp(st);
         if (pc)
             frames[n++] = pc;
-        // arm64 frame record: [fp+0] = caller fp, [fp+8] = return address. Memory reads only here so the
-        // suspend window holds no allocator/dyld lock; bail on any non-monotonic/misaligned fp (garbage).
+        // arm64 frame record: [fp+0] = caller fp, [fp+8] = return address. n<48 caps depth; each record is
+        // read via vm_read_overwrite so a wild/unmapped fp returns an error instead of segfaulting the
+        // watchdog, and a strictly-increasing 16-aligned fp keeps a garbage pointer from looping arbitrarily.
         while (n < 48 && fp && (fp & 0xf) == 0) {
-            uintptr_t nextFp = ((uintptr_t *)fp)[0];
-            uintptr_t lr = ((uintptr_t *)fp)[1];
+            uintptr_t rec[2] = {0, 0}; // rec[0] = caller fp, rec[1] = return address
+            vm_size_t got = 0;
+            if (vm_read_overwrite(mach_task_self(), (vm_address_t)fp, sizeof(rec), (vm_address_t)rec, &got) != KERN_SUCCESS ||
+                got != sizeof(rec))
+                break;
+            uintptr_t nextFp = rec[0];
+            uintptr_t lr = rec[1];
             if (!lr)
                 break;
             frames[n++] = lr;
@@ -70,16 +76,20 @@ static void mainwatchDumpBacktrace(void) {
     }
     thread_resume(gMainThreadPort);
 
-    // Symbolicate AFTER resuming — dladdr can take locks, never do that while the target is suspended.
-    fprintf(stderr, "[mainwatch] MAIN THREAD STALLED >= %ds — backtrace (%d frames):\n", kMainwatchStallSecs, n);
+    // Pass 1 — raw addresses, no library calls. Flushed first so the frames survive even if a stalled
+    // loader/allocator lock makes the best-effort dladdr pass below wedge. Symbolicate offline with atos if so.
+    fprintf(stderr, "[mainwatch] MAIN THREAD STALLED >= %ds — %d frames (raw):\n", kMainwatchStallSecs, n);
+    for (int i = 0; i < n; i++)
+        fprintf(stderr, "[mainwatch]  %2d  0x%016lx\n", i, (unsigned long)frames[i]);
+    fflush(stderr);
+
+    // Pass 2 — best-effort symbolication AFTER resuming (dladdr can take the dyld lock; never while suspended).
     for (int i = 0; i < n; i++) {
         Dl_info info;
         if (dladdr((void *)frames[i], &info) && info.dli_sname) {
             const char *fname = info.dli_fname ? strrchr(info.dli_fname, '/') : NULL;
-            fprintf(stderr, "[mainwatch]  %2d  %-34s + %-5lu  %s\n", i, info.dli_sname,
+            fprintf(stderr, "[mainwatch]  sym %2d  %-34s + %-5lu  %s\n", i, info.dli_sname,
                     (unsigned long)(frames[i] - (uintptr_t)info.dli_saddr), fname ? fname + 1 : "?");
-        } else {
-            fprintf(stderr, "[mainwatch]  %2d  0x%016lx\n", i, (unsigned long)frames[i]);
         }
     }
     fflush(stderr);
