@@ -38,6 +38,8 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 @end
 @interface GeViewController : UIViewController
 @end
+@interface LootTrackerViewController : UIViewController
+@end
 
 // §3.3 redesign: the labelled/searchable/favourites grid launcher. Defined at the bottom of this file.
 @interface MUIPluginGrid : UIViewController
@@ -644,6 +646,13 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
             ge.modalPresentationStyle = UIModalPresentationOverFullScreen;
             ge.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
             [self presentViewController:ge animated:YES completion:nil];
+            return;
+        }
+        if ([tip isEqualToString:@"Loot Tracker"] && [JVMLauncher lootAvailable]) {
+            LootTrackerViewController *lt = [[LootTrackerViewController alloc] init];
+            lt.modalPresentationStyle = UIModalPresentationOverFullScreen;
+            lt.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+            [self presentViewController:lt animated:YES completion:nil];
             return;
         }
         if (!fromGrid && index == self.currentIndex) {
@@ -1718,6 +1727,268 @@ static NSString *XpFmt(long n) {
         [lv2.centerYAnchor constraintEqualToAnchor:bar.centerYAnchor],
     ]];
     return bar;
+}
+
+@end
+
+#pragma mark - Native Loot Tracker panel (read-only per-source loot, RuneLite charcoal style)
+
+// Mirrors the XP Tracker drawer: a right-edge charcoal drawer of per-source (per-NPC/event) loot boxes, each
+// listing its merged item drops + value, refreshed on a 2s diff-poll while open. Replaces the rendered-Swing
+// image fallback, which OOM'd the 256MB game heap on tall histories. Data: JVMLauncher.lootJson (the shared
+// LootTrackerBridge snapshot); "Reset All" mirrors the desktop panel's clear (LootTrackerBridge.resetAll).
+@interface LootTrackerViewController ()
+@property (nonatomic, strong) UIView *drawer;
+@property (nonatomic, strong) UILabel *headerLabel;
+@property (nonatomic, strong) UIStackView *stack;
+@property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, strong) NSTimer *timer;
+@property (nonatomic, copy) NSString *lastJson;
+@end
+
+@implementation LootTrackerViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor clearColor];
+
+    UIView *dim = [[UIView alloc] initWithFrame:self.view.bounds];
+    dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    [self.view addSubview:dim];
+    [dim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onDone)]];
+
+    self.drawer = [[UIView alloc] init];
+    self.drawer.translatesAutoresizingMaskIntoConstraints = NO;
+    self.drawer.backgroundColor = [UIColor colorWithRed:40 / 255.0 green:40 / 255.0 blue:40 / 255.0 alpha:1.0]; // DARK_GRAY
+    [self.view addSubview:self.drawer];
+
+    UIView *headerBar = [[UIView alloc] init];
+    headerBar.translatesAutoresizingMaskIntoConstraints = NO;
+    headerBar.backgroundColor = [UIColor colorWithRed:30 / 255.0 green:30 / 255.0 blue:30 / 255.0 alpha:1.0]; // DARKER_GRAY
+    [self.drawer addSubview:headerBar];
+
+    self.headerLabel = [[UILabel alloc] init];
+    self.headerLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.headerLabel.font = XpRsFont(15);
+    self.headerLabel.textColor = XpGray(0.72);
+    self.headerLabel.text = @"Loot tracker";
+    [headerBar addSubview:self.headerLabel];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    close.translatesAutoresizingMaskIntoConstraints = NO;
+    [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.titleLabel.font = [UIFont systemFontOfSize:17];
+    close.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0]; // BRAND_ORANGE
+    [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
+    [headerBar addSubview:close];
+
+    UIButton *reset = [UIButton buttonWithType:UIButtonTypeSystem];
+    reset.translatesAutoresizingMaskIntoConstraints = NO;
+    [reset setTitle:@"Reset" forState:UIControlStateNormal];
+    reset.titleLabel.font = XpRsFont(14);
+    [reset setTitleColor:XpGray(0.62) forState:UIControlStateNormal];
+    [reset addTarget:self action:@selector(onReset) forControlEvents:UIControlEventTouchUpInside];
+    [headerBar addSubview:reset];
+
+    UIScrollView *scroll = [[UIScrollView alloc] init];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    scroll.backgroundColor = [UIColor clearColor];
+    scroll.alwaysBounceVertical = YES;
+    [self.drawer addSubview:scroll];
+
+    self.stack = [[UIStackView alloc] init];
+    self.stack.axis = UILayoutConstraintAxisVertical;
+    self.stack.spacing = 6;
+    self.stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [scroll addSubview:self.stack];
+
+    self.emptyLabel = [[UILabel alloc] init];
+    self.emptyLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.emptyLabel.font = XpRsFont(15);
+    self.emptyLabel.textColor = XpGray(0.55);
+    self.emptyLabel.numberOfLines = 0;
+    self.emptyLabel.textAlignment = NSTextAlignmentCenter;
+    self.emptyLabel.text = @"No loot tracked yet.\nKill an NPC or open a reward to start.";
+    self.emptyLabel.hidden = YES;
+    [self.drawer addSubview:self.emptyLabel];
+
+    CGFloat drawerW = MIN(440.0, self.view.bounds.size.width * 0.52);
+    UILayoutGuide *dg = self.drawer.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [self.drawer.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [self.drawer.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [self.drawer.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.drawer.widthAnchor constraintEqualToConstant:drawerW],
+
+        [headerBar.topAnchor constraintEqualToAnchor:dg.topAnchor],
+        [headerBar.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor],
+        [headerBar.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor],
+        [headerBar.heightAnchor constraintEqualToConstant:34],
+        [self.headerLabel.leadingAnchor constraintEqualToAnchor:headerBar.leadingAnchor
+                                                       constant:10],
+        [self.headerLabel.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+        [self.headerLabel.trailingAnchor constraintLessThanOrEqualToAnchor:reset.leadingAnchor
+                                                                  constant:-8],
+        [reset.trailingAnchor constraintEqualToAnchor:close.leadingAnchor
+                                             constant:-12],
+        [reset.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+        [close.trailingAnchor constraintEqualToAnchor:headerBar.trailingAnchor
+                                             constant:-10],
+        [close.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+
+        [scroll.topAnchor constraintEqualToAnchor:headerBar.bottomAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:dg.bottomAnchor],
+
+        [self.stack.topAnchor constraintEqualToAnchor:scroll.topAnchor
+                                             constant:6],
+        [self.stack.leadingAnchor constraintEqualToAnchor:scroll.leadingAnchor
+                                                 constant:6],
+        [self.stack.trailingAnchor constraintEqualToAnchor:scroll.trailingAnchor
+                                                  constant:-6],
+        [self.stack.bottomAnchor constraintEqualToAnchor:scroll.bottomAnchor
+                                                constant:-6],
+        [self.stack.widthAnchor constraintEqualToAnchor:scroll.widthAnchor
+                                               constant:-12],
+
+        [self.emptyLabel.topAnchor constraintEqualToAnchor:headerBar.bottomAnchor
+                                                  constant:40],
+        [self.emptyLabel.leadingAnchor constraintEqualToAnchor:self.drawer.leadingAnchor
+                                                      constant:20],
+        [self.emptyLabel.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor
+                                                       constant:-20],
+    ]];
+
+    [JVMLauncher lootSetUiOpen:YES]; // gate the client-thread snapshot refresh to while-shown
+    [self refresh];
+    self.timer = [NSTimer scheduledTimerWithTimeInterval:2.0 target:self selector:@selector(refresh) userInfo:nil repeats:YES];
+}
+
+- (void)onDone {
+    [JVMLauncher lootSetUiOpen:NO];
+    [self.timer invalidate];
+    self.timer = nil;
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    [JVMLauncher lootSetUiOpen:NO];
+    [self.timer invalidate];
+    self.timer = nil;
+}
+
+- (void)onReset {
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Reset All"
+                                                               message:@"Clear the entire loot log? This cannot be undone."
+                                                        preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    __weak typeof(self) ws = self;
+    [a addAction:[UIAlertAction actionWithTitle:@"Reset"
+                                          style:UIAlertActionStyleDestructive
+                                        handler:^(UIAlertAction *act) {
+                                            [JVMLauncher lootResetAll];
+                                            ws.lastJson = nil; // force a rebuild on the next poll (the bridge re-snapshots empty)
+                                        }]];
+    [self presentViewController:a animated:YES completion:nil];
+}
+
+- (void)refresh {
+    NSString *json = [JVMLauncher lootJson] ?: @"{}";
+    if (self.lastJson && [json isEqualToString:self.lastJson])
+        return; // unchanged -> keep the built boxes
+    self.lastJson = json;
+    NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if (![d isKindOfClass:[NSDictionary class]])
+        d = @{};
+    NSArray *sources = [d[@"sources"] isKindOfClass:[NSArray class]] ? d[@"sources"] : @[];
+
+    for (UIView *v in [self.stack.arrangedSubviews copy]) {
+        [self.stack removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    long grandValue = 0;
+    for (NSDictionary *s in sources) {
+        if (![s isKindOfClass:[NSDictionary class]])
+            continue;
+        grandValue += [s[@"totalValue"] longLongValue];
+        [self.stack addArrangedSubview:[self sourceBox:s]];
+    }
+    self.headerLabel.text = sources.count ? [NSString stringWithFormat:@"Total value: %@", XpFmt(grandValue)] : @"Loot tracker";
+    self.emptyLabel.hidden = (sources.count > 0);
+}
+
+- (UILabel *)lootLabel:(NSString *)text font:(UIFont *)font color:(UIColor *)color right:(BOOL)right {
+    UILabel *l = [[UILabel alloc] init];
+    l.font = font;
+    l.textColor = color;
+    l.text = text;
+    l.textAlignment = right ? NSTextAlignmentRight : NSTextAlignmentLeft;
+    return l;
+}
+
+- (UIView *)sourceBox:(NSDictionary *)s {
+    NSString *name = [s[@"name"] isKindOfClass:[NSString class]] ? s[@"name"] : @"?";
+    NSString *subTitle = [s[@"subTitle"] isKindOfClass:[NSString class]] ? s[@"subTitle"] : @"";
+    long kills = [s[@"kills"] longLongValue];
+    long total = [s[@"totalValue"] longLongValue];
+    NSArray *items = [s[@"items"] isKindOfClass:[NSArray class]] ? s[@"items"] : @[];
+
+    UIStackView *box = [[UIStackView alloc] init];
+    box.axis = UILayoutConstraintAxisVertical;
+    box.spacing = 3;
+    box.layoutMarginsRelativeArrangement = YES;
+    box.layoutMargins = UIEdgeInsetsMake(7, 8, 7, 8);
+    box.backgroundColor = [UIColor colorWithRed:43 / 255.0 green:43 / 255.0 blue:43 / 255.0 alpha:1.0];
+
+    // Title row: source name (+ optional subtitle, e.g. a clue tier) on the left, stacked GE value on the right.
+    NSString *titleText = subTitle.length ? [NSString stringWithFormat:@"%@ (%@)", name, subTitle] : name;
+    UIStackView *titleRow = [[UIStackView alloc] init];
+    titleRow.axis = UILayoutConstraintAxisHorizontal;
+    titleRow.spacing = 8;
+    titleRow.alignment = UIStackViewAlignmentCenter;
+    UILabel *nameL = [self lootLabel:titleText font:XpRsFont(15) color:[UIColor whiteColor] right:NO];
+    [nameL setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+    UILabel *valL = [self lootLabel:[NSString stringWithFormat:@"%@", XpFmt(total)]
+                               font:XpRsFont(15)
+                              color:[UIColor colorWithRed:1.0 green:0.86 blue:0.34 alpha:1.0]
+                              right:YES]; // gp gold
+    [valL setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [titleRow addArrangedSubview:nameL];
+    [titleRow addArrangedSubview:valL];
+    [box addArrangedSubview:titleRow];
+
+    if (kills > 0) {
+        [box addArrangedSubview:[self lootLabel:[NSString stringWithFormat:@"Count: %@", XpFmt(kills)]
+                                           font:XpRsFont(13)
+                                          color:XpGray(0.5)
+                                          right:NO]];
+    }
+
+    // One row per merged drop: "qty × name" on the left, its stacked value on the right.
+    for (NSDictionary *it in items) {
+        if (![it isKindOfClass:[NSDictionary class]])
+            continue;
+        NSString *iname = [it[@"name"] isKindOfClass:[NSString class]] ? it[@"name"] : @"?";
+        long qty = [it[@"qty"] longLongValue];
+        long ge = [it[@"ge"] longLongValue];
+        NSString *left = qty > 1 ? [NSString stringWithFormat:@"%@ × %@", XpFmt(qty), iname] : iname;
+
+        UIStackView *row = [[UIStackView alloc] init];
+        row.axis = UILayoutConstraintAxisHorizontal;
+        row.spacing = 8;
+        row.alignment = UIStackViewAlignmentCenter;
+        UILabel *l = [self lootLabel:left font:XpRsFont(14) color:XpGray(0.7) right:NO];
+        [l setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+        UILabel *r = [self lootLabel:ge > 0 ? XpFmt(ge) : @"" font:XpRsFont(14) color:XpGray(0.5) right:YES];
+        [r setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+        [row addArrangedSubview:l];
+        [row addArrangedSubview:r];
+        [box addArrangedSubview:row];
+    }
+    return box;
 }
 
 @end

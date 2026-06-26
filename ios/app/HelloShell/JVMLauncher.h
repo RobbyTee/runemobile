@@ -469,6 +469,19 @@ typedef void (^JVMLogSink)(NSString *line);
 /// WH-3: quick-hop to the next/previous world in the configured filter (the plugin's signature keybind action).
 + (void)worldHopDirection:(BOOL)previous;
 
+// ---- Native Loot Tracker reflow (LootTrackerBridge) — read-only per-source loot, "Reset All" write -----
+
+/// Whether the native Loot Tracker screen can be offered (the Loot Tracker plugin is loaded + reflectable).
++ (BOOL)lootAvailable;
+/// Tell the bridge the native Loot Tracker screen is open/closed (gates the client-thread snapshot refresh).
++ (void)lootSetUiOpen:(BOOL)open;
+/// Loot JSON: {available, sources:[{name,subTitle,type,kills,totalValue,items:[{id,name,qty,ge,ha}]}]}.
+/// Snapshotted on the client thread, aggregated per source (kill) with duplicate item ids merged.
++ (nullable NSString *)lootJson;
+/// Clear the entire loot log (the desktop "Reset All"): empties the records + deletes the persisted drops.
+/// Ack JSON. No-op on an older staged jar that predates the bridge's resetAll().
++ (nullable NSString *)lootResetAll;
+
 @end
 
 NS_ASSUME_NONNULL_END

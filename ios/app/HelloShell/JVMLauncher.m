@@ -145,6 +145,13 @@ static jmethodID gWsSetOpen = NULL;     // setUiOpen(Z)V
 static jmethodID gWsSetFav = NULL;      // setFavourite(IZ)V (optional)
 static jmethodID gWsHopDir = NULL;      // hopDirection(Z)V (optional)
 
+// Native Loot Tracker reflow — the LootTrackerBridge facade (read-only per-source loot snapshot + Reset All).
+static jclass gLootClass = NULL;      // global ref to net.runelite.client.headless.LootTrackerBridge
+static jmethodID gLootAvail = NULL;   // isAvailable()Z
+static jmethodID gLootSetOpen = NULL; // setUiOpen(Z)V
+static jmethodID gLootJson = NULL;    // getLootJson()Ljava/lang/String;
+static jmethodID gLootReset = NULL;   // resetAll()Ljava/lang/String; (optional — older jars lack it)
+
 // ---- W3 plugin-config de-risk (verdict #7, NATIVE-ORIGIN leg) — STRIP AFTER DEVICE CONFIRM ----------
 // Proves the half the desktop smoke can't: that the OBJC side builds the correct signed decimal of
 // Color.getRGB(). The trap — an opaque color's getRGB() is a NEGATIVE int (top alpha bit set), and
@@ -584,6 +591,39 @@ static BOOL ensureWorld(void) {
     gWsHopDir = (*env)->GetStaticMethodID(env, global, "hopDirection", "(Z)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gWsHopDir = NULL; }
     gWsClass = global;
+    return YES;
+}
+
+static BOOL ensureLoot(void) {
+    if (gLootClass)
+        return atomic_load(&gVM) != NULL;
+    if (!ensureBridge() || !gMainEnv)
+        return NO;
+    JNIEnv *env = gMainEnv;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/LootTrackerBridge");
+    if (!local || (*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return NO;
+    }
+    jclass global = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    if (!global)
+        return NO;
+    gLootAvail = (*env)->GetStaticMethodID(env, global, "isAvailable", "()Z");
+    gLootSetOpen = (*env)->GetStaticMethodID(env, global, "setUiOpen", "(Z)V");
+    gLootJson = (*env)->GetStaticMethodID(env, global, "getLootJson", "()Ljava/lang/String;");
+    if (!gLootAvail || !gLootSetOpen || !gLootJson) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteGlobalRef(env, global);
+        return NO;
+    }
+    // Optional — "Reset All" write action; an older staged jar without it still serves the read-only panel.
+    gLootReset = (*env)->GetStaticMethodID(env, global, "resetAll", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gLootReset = NULL;
+    }
+    gLootClass = global;
     return YES;
 }
 
@@ -2430,6 +2470,44 @@ static void accountInvokeVoid(const char *method) {
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gWsClass, gWsHopDir, (jboolean)(previous ? 1 : 0));
     if ((*env)->ExceptionCheck(env)) bridgeNoteClear(env, "JVMLauncher.worldHopDirection");
+}
+
+// ---- Native Loot Tracker reflow (LootTrackerBridge) — read-only per-source loot + "Reset All" --------
+
++ (BOOL)lootAvailable {
+    if (!ensureLoot())
+        return NO;
+    JNIEnv *env = gMainEnv;
+    jboolean v = (*env)->CallStaticBooleanMethod(env, gLootClass, gLootAvail);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.lootAvailable");
+        return NO;
+    }
+    return v ? YES : NO;
+}
+
++ (void)lootSetUiOpen:(BOOL)open {
+    if (!ensureLoot())
+        return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gLootClass, gLootSetOpen, (jboolean)(open ? 1 : 0));
+    if ((*env)->ExceptionCheck(env))
+        bridgeNoteClear(env, "JVMLauncher.lootSetUiOpen");
+}
+
++ (NSString *)lootJson {
+    if (!ensureLoot())
+        return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gLootClass, gLootJson));
+}
+
++ (NSString *)lootResetAll {
+    if (!ensureLoot() || !gLootReset)
+        return nil;
+    [JVMLauncher postKeepAlive]; // idle keepalive: the native reset posts no canvas event
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gLootClass, gLootReset));
 }
 
 @end
