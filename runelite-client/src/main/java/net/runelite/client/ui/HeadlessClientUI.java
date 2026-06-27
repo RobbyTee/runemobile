@@ -118,7 +118,7 @@ public class HeadlessClientUI extends ClientUI
 			// pure static JNI surface the native shell calls.
 			MobileUiBridge.init(pluginManager, configManager, clientThreadProvider.get(), rsClient, eventBus);
 			// Config-profiles seam (list + switch), part of the mobile-UI surface; same enable gate.
-			ConfigProfileBridge.init(configManager, profileManager);
+			ConfigProfileBridge.init(configManager, profileManager, clientThreadProvider.get());
 		}
 		if (HudVeneerBridge.isEnabled())
 		{

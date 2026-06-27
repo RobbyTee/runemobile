@@ -43,7 +43,7 @@ FLAG runelite.touch.selFlashMs
 FLAG runelite.touch.settleMax
 FLAG runelite.touch.settleStable
 METHOD ConfigProfileBridge#getProfilesJson()
-METHOD ConfigProfileBridge#init(ConfigManager,ProfileManager)
+METHOD ConfigProfileBridge#init(ConfigManager,ProfileManager,ClientThread)
 METHOD ConfigProfileBridge#isAvailable()
 METHOD ConfigProfileBridge#switchProfile(long)
 METHOD DeviceHeadlessBoot#main(String[])

@@ -28,17 +28,19 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.config.ConfigProfile;
 import net.runelite.client.config.ProfileManager;
 
 /**
  * Native-UI bridge for <b>config profiles</b> — the shared-core seam the mobile shell uses to list the user's
- * config profiles and switch the active one, mirroring the desktop {@code ProfilePanel}. The desktop panel
- * reads the profile list under a {@link ProfileManager.Lock} on a background executor and drives a switch via
- * {@link ConfigManager#switchProfile(ConfigProfile)} on that same executor; this facade does the same so the
- * heavy switch (config reload + {@code ConfigChanged} fan-out + optional remote sync) never blocks the engine
- * frame loop. Wired from {@code HeadlessClientUI} alongside the rest of the mobile-UI facade.
+ * config profiles and switch the active one, mirroring the desktop {@code ProfilePanel}. Reads of the profile
+ * list take a {@link ProfileManager.Lock} inline. A switch runs {@link ConfigManager#switchProfile(ConfigProfile)}
+ * on the <b>client thread</b> (via {@link ClientThread#invokeLater}) so its {@code ConfigChanged}/{@code
+ * ProfileChanged} fan-out — dispatched inline on the calling thread by the EventBus — mutates the engine on the
+ * engine thread; a remote-sync switch (which blocks on a network fetch) instead runs on a background executor so
+ * it never stalls a frame. Wired from {@code HeadlessClientUI} alongside the rest of the mobile-UI facade.
  *
  * <p>Reads ({@link #getProfilesJson()}) take the profile-store file lock inline — not a per-frame hot path
  * (the native side reads only while the profiles screen is open), so no client-thread snapshot is needed.
@@ -48,18 +50,21 @@ public final class ConfigProfileBridge
 {
 	private static volatile ConfigManager configManager;
 	private static volatile ProfileManager profileManager;
-	// Switches run here (a daemon single-thread executor), exactly as the desktop ProfilePanel runs them on its
-	// background executor — never the client thread, which a multi-second reload/sync would stall.
+	private static volatile ClientThread clientThread;
+	// Fallback executor for the one switch that DOES block on the network — a remote-sync profile (account session
+	// + isSync). Those must stay off the client thread, exactly as the desktop ProfilePanel runs them on its
+	// background executor. The common local switch instead runs on the client thread (see switchProfile).
 	private static volatile ExecutorService switchExecutor;
 
 	private ConfigProfileBridge()
 	{
 	}
 
-	public static void init(ConfigManager cm, ProfileManager pm)
+	public static void init(ConfigManager cm, ProfileManager pm, ClientThread ct)
 	{
 		configManager = cm;
 		profileManager = pm;
+		clientThread = ct;
 	}
 
 	/** Whether the native shell should offer the profiles screen (both singletons wired). */
@@ -155,11 +160,29 @@ public final class ConfigProfileBridge
 		{
 			return ack(false, "unknown");
 		}
+		// Root-cause fix for the welcome-screen wedge: ConfigManager#switchProfile fans ConfigChanged +
+		// ProfileChanged out via EventBus#post, which dispatches subscribers INLINE on the calling thread. Running
+		// the whole switch on this background executor mutated the engine/live-interface stack off the client
+		// thread — switching profiles while an interface was up (e.g. the "Welcome to Gielinor" screen) raced it
+		// non-interactive: it kept rendering but taps fell through to the world. So drive the split variant: the
+		// I/O-heavy prepare (incl. the optional blocking remote-sync fetch) stays on this executor, while the
+		// engine-touching swap + event fan-out is marshalled onto the client thread, where it is engine-safe.
+		final ClientThread ct = clientThread;
 		executor().submit(() ->
 		{
 			try
 			{
-				cm.switchProfile(target);
+				cm.switchProfileMobile(target, apply ->
+				{
+					if (ct != null)
+					{
+						ct.invokeLater(apply);
+					}
+					else
+					{
+						apply.run(); // no client thread wired (shouldn't happen post-init); run inline
+					}
+				});
 			}
 			catch (Throwable ex)
 			{

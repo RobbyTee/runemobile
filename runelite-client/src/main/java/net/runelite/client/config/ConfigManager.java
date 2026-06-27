@@ -159,10 +159,42 @@ public class ConfigManager
 
 	public void switchProfile(ConfigProfile newProfile)
 	{
+		// Desktop path: prepare (I/O + optional remote sync) then apply (engine-touching swap + event fan-out)
+		// run back-to-back on the caller's thread — behaviour is identical to the original single method.
+		ConfigData newData = switchProfilePrepare(newProfile);
+		if (newData != null)
+		{
+			switchProfileApply(newProfile, newData);
+		}
+	}
+
+	/**
+	 * Mobile variant of {@link #switchProfile(ConfigProfile)} that splits the switch across two threads. The
+	 * I/O-heavy prepare half (save current config + optional blocking remote-config fetch + load the new profile
+	 * file) runs on the calling thread (a background executor); the engine-touching apply half (config swap +
+	 * {@code ConfigChanged}/{@code ProfileChanged} fan-out, which the EventBus dispatches inline) is handed to
+	 * {@code applyExec} so the caller can run it on the client thread. Posting those events off the client thread
+	 * lets a subscriber mutate the live engine/interface stack off-thread, which can race a visible interface
+	 * (e.g. the welcome screen) non-interactive. {@code applyExec} is not invoked if the switch is a no-op.
+	 */
+	public void switchProfileMobile(ConfigProfile newProfile, java.util.function.Consumer<Runnable> applyExec)
+	{
+		ConfigData newData = switchProfilePrepare(newProfile);
+		if (newData != null)
+		{
+			applyExec.accept(() -> switchProfileApply(newProfile, newData));
+		}
+	}
+
+	// I/O-heavy half: validate the target, save the current config, sync the latest revision from the server when
+	// applicable, and load the new profile's config file. Returns the loaded data, or null to abort the switch
+	// (already-active or the profile vanished mid-switch). Safe to run off the client thread.
+	private ConfigData switchProfilePrepare(ConfigProfile newProfile)
+	{
 		if (newProfile.getId() == profile.getId())
 		{
 			log.warn("switching to already-active profile!");
-			return;
+			return null;
 		}
 
 		// Ensure existing config is saved
@@ -179,7 +211,7 @@ public class ConfigManager
 				if (profile == null)
 				{
 					log.warn("lost profile while switching!");
-					return;
+					return null;
 				}
 
 				List<Profile> profiles = configClient.profiles();
@@ -194,7 +226,13 @@ public class ConfigManager
 			}
 		}
 
-		ConfigData newData = new ConfigData(ProfileManager.profileConfigFile(newProfile));
+		return new ConfigData(ProfileManager.profileConfigFile(newProfile));
+	}
+
+	// Engine-touching half: swap the active config under lock and fan ConfigChanged/ProfileChanged out. The
+	// EventBus dispatches subscribers inline, so this must run on the thread that owns the engine.
+	private void switchProfileApply(ConfigProfile newProfile, ConfigData newData)
+	{
 		Set<String> allKeys = new HashSet<>(newData.keySet());
 
 		ConfigData oldData;
