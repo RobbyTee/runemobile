@@ -1196,6 +1196,12 @@ public class HdPlugin extends Plugin {
 	}
 
 	public void updateTiledLightingFbo() {
+		// Same guard rationale as initializeShadowMapFbo: this binds awtContext.getFramebuffer below, and a
+		// config-storm / profile-switch teardown can null the GL context. Bail rather than NPE into the
+		// processPendingConfigChanges catch-all (which calls stopPlugin() under loadingLock and can deadlock).
+		if (awtContext == null) {
+			return;
+		}
 		assert configTiledLighting;
 
 		int[] newResolution = max(ivec(1), round(divide(vec(sceneResolution), TILED_LIGHTING_TILE_SIZE)));
@@ -1258,6 +1264,12 @@ public class HdPlugin extends Plugin {
 	}
 
 	public void updateSceneFbo() {
+		// Called from processPendingConfigChanges (the recreateSceneFbo branch) and binds awtContext.getFramebuffer
+		// below — the same storm-path GL-reinit deref as initializeShadowMapFbo. Guard the null context so it can't
+		// NPE into the catch-all stopPlugin() under loadingLock (the deadlock that froze the engine on rapid switch).
+		if (awtContext == null) {
+			return;
+		}
 		if (uiResolution == null)
 			return;
 
