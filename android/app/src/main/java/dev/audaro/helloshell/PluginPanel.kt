@@ -374,12 +374,12 @@ fun PluginPanel(
                             modifier =
                                 Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 6.dp)
+                                    .padding(vertical = 4.dp)
                                     .onFocusChanged { onPanelTextActive(it.hasFocus) },
                         )
-                        if (!inList) {
-                            RuneLiteAccountRow()
-                        }
+                        // The RuneLite-account row used to sit here, fixed — on the short landscape window the title +
+                        // search + account chrome ate ~60% of the sheet, leaving the scrollable options crammed into the
+                        // bottom. It now scrolls with the grid (see LauncherGrid), so only the title + search stay pinned.
                         if (loading) {
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                         } else if (inList) {
@@ -792,6 +792,8 @@ private fun LauncherGrid(
             }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        // Scrolls with the grid (was a fixed row above the list) so the pinned chrome stays just title + search.
+        RuneLiteAccountRow()
         SectionLabel("Renderers")
         TileGrid(
             listOf(
