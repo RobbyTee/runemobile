@@ -42,7 +42,7 @@ its plugins, with a native mobile UI layered on top.
 The mobile process (Android ART / iOS) hosts a **second HotSpot JVM**: native
 C++ `dlopen`s the embedded `libjvm.so`/`libjvm.dylib` and calls
 `JNI_CreateJavaVM`, then boots **stock RuneLite headless**. A
-[Caciocavallo](https://github.com/caciocavallosilano/cacio) AWT backend drives
+[Caciocavallo](https://github.com/caciocavallosilano/caciocavallo) AWT backend drives
 the engine's `Canvas`/`BufferProvider` off-screen, and the rendered frame is
 blitted to a native surface. Touch input is mapped back into AWT events.
 
