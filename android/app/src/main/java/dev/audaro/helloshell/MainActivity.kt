@@ -3509,6 +3509,9 @@ class MainActivity : AppCompatActivity() {
                 "--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
                 "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
                 "-Xmx512m",
+                // Fail fast at heap exhaustion instead of limping (seams no-op, GC thrash): a clean exit
+                // routes into the existing crash-fallback/relaunch UX and leaves a diagnosable hs_err trail.
+                "-XX:+ExitOnOutOfMemoryError",
                 "-Duser.home=$home",
                 "-Djava.io.tmpdir=$tmpDir",
                 "-Drunelite.rlhdprobe=true",
@@ -3648,6 +3651,9 @@ class MainActivity : AppCompatActivity() {
                 "--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
                 "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
                 "-Xmx512m",
+                // Fail fast at heap exhaustion instead of limping (seams no-op, GC thrash): a clean exit
+                // routes into the existing crash-fallback/relaunch UX and leaves a diagnosable hs_err trail.
+                "-XX:+ExitOnOutOfMemoryError",
                 "-Duser.home=$home",
                 "-Djava.io.tmpdir=$tmpDir",
                 "-Drunelite.bridge=true",

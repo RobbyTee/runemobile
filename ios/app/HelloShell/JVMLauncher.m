@@ -1258,6 +1258,11 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         [NSString stringWithFormat:@"-Djava.class.path=%@", classpath],
     ] mutableCopy];
 
+    // Fail fast at heap exhaustion instead of limping (bridge seams no-op, GC thrash) until an
+    // untraceable jetsam kill — a clean exit lands in the normal relaunch flow and leaves an hs_err
+    // trail. (Kept out of the literal above: any edit inside it makes clang-format reflow the block.)
+    [opts addObject:@"-XX:+ExitOnOutOfMemoryError"];
+
     // BOTH renderer plugins are enabledByDefault=true, so with safe-mode off EITHER would AUTO-START in every
     // mode — and 117HD's HdPlugin (conflicts=GPU) then hijacks rendering even when CPU or base-GPU is the chosen
     // renderer (the "always boots 117HD regardless of selection" bug: rendererPref=cpu but HdPlugin auto-starts
