@@ -417,7 +417,7 @@ public class GrandExchangePlugin extends Plugin
 			grandExchangeTrade.setResetTime(getLimitResetTime(offer.getItemId()));
 
 			log.debug("Submitting new trade: {}", grandExchangeTrade);
-			grandExchangeClient.submit(grandExchangeTrade);
+			submitToApi(grandExchangeTrade);
 			return;
 		}
 
@@ -450,7 +450,7 @@ public class GrandExchangePlugin extends Plugin
 			grandExchangeTrade.setResetTime(getLimitResetTime(offer.getItemId()));
 
 			log.debug("Submitting cancelled: {}", grandExchangeTrade);
-			grandExchangeClient.submit(grandExchangeTrade);
+			submitToApi(grandExchangeTrade);
 			saveTrade(grandExchangeTrade);
 			return;
 		}
@@ -478,8 +478,24 @@ public class GrandExchangePlugin extends Plugin
 		grandExchangeTrade.setResetTime(getLimitResetTime(offer.getItemId()));
 
 		log.debug("Submitting trade: {}", grandExchangeTrade);
-		grandExchangeClient.submit(grandExchangeTrade);
+		submitToApi(grandExchangeTrade);
 		saveTrade(grandExchangeTrade);
+	}
+
+	/**
+	 * Mobile privacy gate for the GE crowdsourcing uploads. Upstream POSTs every offer event to
+	 * api.runelite.net/ge tagged with a stable machine+account fingerprint (see getMachineUuid()). The
+	 * mobile app promises in PRIVACY.md that no gameplay data leaves the device except to Jagex, so the
+	 * upload is dropped whenever the mobile bridge is active; everything local (saveTrade history, the
+	 * native GE panel, limit timers) still runs. Desktop / stock behavior is unchanged.
+	 */
+	private void submitToApi(GrandExchangeTrade grandExchangeTrade)
+	{
+		if (net.runelite.client.headless.MobileChromeBridge.isEnabled())
+		{
+			return;
+		}
+		grandExchangeClient.submit(grandExchangeTrade);
 	}
 
 	private void saveTrade(GrandExchangeTrade trade)

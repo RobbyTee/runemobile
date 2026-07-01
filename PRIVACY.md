@@ -18,6 +18,12 @@
 - **No telemetry or crash reports are sent.** This build boots the embedded client with
   `--disable-telemetry`, so RuneLite's usual boot telemetry and JVM-crash reporting to
   `api.runelite.net` are **off**.
+- **RuneLite's crowdsourced-data uploads are also off in this build.** Stock RuneLite pings a session
+  heartbeat and, via default-on plugins, uploads loot drops, kill-count chat data, and Grand Exchange
+  offer events (the last with a machine fingerprint) to `api.runelite.net`. In this build the session
+  ping is disabled, GE offer uploads are removed, and **Loot Tracker and Chat Commands ship disabled**
+  — if you enable those two plugins, their uploads work exactly as on desktop RuneLite (see the table
+  below).
 - **Your credentials stay on the device.** OAuth tokens live in app-private storage and are sent
   only to the service that issued them (Jagex). No release build ships a login token.
 - **Everything the app stores locally** (game cache, settings, renderer choice, diagnostics) stays
@@ -32,6 +38,8 @@
 | Jagex OAuth (`id_token` → `session_id`) | The login handshake that proves you own the account | `account.jagex.com`, `auth.runescape.com` | When you log in | Log in / log out |
 | Game traffic | The live OSRS protocol (movement, actions, world state) | Jagex game servers (`oldschool*.runescape.com`) | While in-world | Log out / close app |
 | RuneLite account sync | Your RuneLite profiles, plugin settings, and installed hub plugins | `api.runelite.net` | **Only if** you sign into a RuneLite account in the plugins panel | Opt-in; sign out to stop |
+| Loot Tracker uploads | Loot drops you receive (npc/event, items) — RuneLite's crowdsourced loot database; sent even without a RuneLite account, tied to one if signed in | `api.runelite.net` | **Only if** you enable the Loot Tracker plugin (**off by default** in this build) | Opt-in; leave the plugin off |
+| Chat Commands uploads/lookups | Your kill counts, personal bests, etc. for the `!` chat commands, plus lookups of other players' stats | `api.runelite.net` | **Only if** you enable the Chat Commands plugin (**off by default** in this build) | Opt-in; leave the plugin off |
 
 **Non-opt-in fetches (no account data; a normal HTTP request that reveals your IP to the host):**
 
@@ -41,19 +49,29 @@
 | Live game cache fetch | OSRS art/data the engine streams to render the world (incl. its CRC/version validation, over the game connection) | Jagex (JS5 cache) | First login / on update | Required to play |
 | Runtime config | A small feature-flag/config blob RuneLite serves to all clients | RuneLite CDN (`static.runelite.net/config.json`) | At boot | Download only; no payload sent |
 | World list | The OSRS world list for the world hopper / map | RuneLite API (`api.runelite.net`) | When the world switcher loads | Download only; no payload sent |
+| Item prices | The GE price table plugins use to value items | RuneLite API (`api.runelite.net/…/prices.js`) | At boot and on login | Download only; no payload sent |
 | Hub plugin downloads | Third-party plugin code you choose to install | RuneLite plugin repo (`repo.runelite.net`) | When you install a hub plugin | You choose what to install |
 
 That is the complete list of outbound connections. **No telemetry, analytics, or crash reports
-are among them, and nothing carries your account data except the first table.**
+are among them, and nothing carries your account data except the first table — where every
+account-data row is opt-in.**
 
 ## What is **not** collected or sent
 
 - **No telemetry** — Java/OS version, device memory, "logged-in" flags: none of it is sent
   (`--disable-telemetry` is passed at boot).
+- **No session heartbeat** — stock RuneLite pings `api.runelite.net` every 10 minutes with a random
+  session id + a logged-in flag; this build points that endpoint at a local sink, so it never leaves
+  the device.
+- **No Grand Exchange offer uploads** — stock RuneLite crowdsources every GE offer event tagged with a
+  stable machine fingerprint (hashed MACs/OS/account); this build drops that upload entirely while the
+  local GE panel and trade history keep working.
 - **No crash reporting** — JVM crash logs are **not** uploaded anywhere; they remain on-device.
 - **No analytics, ads, tracking, or fingerprinting.** No third-party SDKs of that kind are present.
-- **No gameplay data to anyone but Jagex** — chat, inventory, location, XP, menu contents are part
-  of the normal game connection to Jagex and are sent **nowhere else**.
+- **No gameplay data to anyone but Jagex, in the default configuration** — chat, inventory, location,
+  XP, menu contents are part of the normal game connection to Jagex and are sent **nowhere else**
+  unless you opt in by enabling Loot Tracker / Chat Commands or signing into a RuneLite account
+  (first table above).
 - **No account email or password to the maintainer** — there is no maintainer backend to send them to.
 
 ## What is stored on the device
@@ -88,9 +106,10 @@ These exist solely to make development convenient and are **removed from any rel
 - **Jagex Ltd.** — receives your login handshake and game traffic. Required to play. Governed by
   Jagex's own terms and privacy policy.
 - **The RuneLite project** — receives your config/plugin data **only if** you opt into RuneLite-account
-  sync. Separately, its CDN/API serves all clients a runtime-config blob and the world list at boot, and
-  hub-plugin downloads you choose to install — these are downloads that send no account data (they reveal
-  your IP, as any HTTP request does). Governed by RuneLite's terms.
+  sync, and your loot / chat-command data **only if** you enable those two plugins (off by default in
+  this build). Separately, its CDN/API serves all clients a runtime-config blob, the world list, and the
+  item-price table at boot, and hub-plugin downloads you choose to install — these are downloads that
+  send no account data (they reveal your IP, as any HTTP request does). Governed by RuneLite's terms.
 - **No one else.**
 
 ## Notes & risk

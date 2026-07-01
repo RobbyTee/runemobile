@@ -111,6 +111,22 @@ public class HeadlessClientUI extends ClientUI
 	@Override
 	public void init() throws Exception
 	{
+		// Privacy defaults: two stock plugins are enabledByDefault upstream and UPLOAD gameplay data to
+		// api.runelite.net (Loot Tracker: drop submissions; Chat Commands: kill-count/pb submissions).
+		// Ship them OFF by default — seed a persisted disable ONCE, only while the profile has no explicit
+		// value (getConfiguration == null is exactly the state where PluginManager.isPluginEnabled falls
+		// back to enabledByDefault=true). A user who flips them on in the plugins panel writes a real
+		// value, so the seed never fights the user's choice; PRIVACY.md documents what enabling resumes.
+		// Runs after configManager.load() and before startPlugins() (RuneLite.start() calls init() between).
+		for (String pluginKey : new String[]{"loottrackerplugin", "chatcommandsplugin"})
+		{
+			if (configManager.getConfiguration(RuneLiteConfig.GROUP_NAME, pluginKey) == null)
+			{
+				configManager.setConfiguration(RuneLiteConfig.GROUP_NAME, pluginKey, "false");
+				log.info("[headless] privacy default: seeded {}=false (was unset)", pluginKey);
+			}
+		}
+
 		if (MobileUiBridge.isEnabled())
 		{
 			// Wire the Phase-6 mobile-UI facade to the live singletons. Done here because this is the one

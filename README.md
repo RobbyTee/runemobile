@@ -291,9 +291,12 @@ and updated by merging `runelite/runelite`.
 
 ## Privacy & security
 
-- **No telemetry, no analytics, no crash reporting, no maintainer backend.** Data
-  goes only to **Jagex** (to play) and, *only if you opt in*, to the **RuneLite
-  project** (config/plugin sync). See [`PRIVACY.md`](PRIVACY.md).
+- **No telemetry, no analytics, no crash reporting, no maintainer backend.** Your
+  account and gameplay data go only to **Jagex** (to play) and, *only if you opt
+  in* — by signing into RuneLite-account sync or enabling the (default-off) Loot
+  Tracker / Chat Commands plugins — to the **RuneLite project**. The client also
+  makes a few read-only fetches (world list, item prices, runtime config) from
+  RuneLite's CDN/API that carry no account data. See [`PRIVACY.md`](PRIVACY.md).
 - Report security issues via the private channel in [`SECURITY.md`](SECURITY.md).
 
 ---
