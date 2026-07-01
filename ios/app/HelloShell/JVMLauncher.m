@@ -1057,6 +1057,14 @@ static void restoreBreakpointPortToDebugger(JVMLogSink log) {
     for (mach_msg_type_number_t i = 0; i < nb; i++) if (bp[i]) mach_port_deallocate(mach_task_self(), bp[i]);
 }
 
+// Public wrapper (JVMLauncher.h): lets the shell re-run the repair after a MID-SESSION WebKit load (the
+// session-expired re-login) — the boot-time call above only protects VM creation.
++ (void)restoreBreakpointPortNow:(JVMLogSink)log {
+    restoreBreakpointPortToDebugger(log ?: ^(NSString *line) {
+        (void)line;
+    });
+}
+
 // Invoke <className>.main(args) on the (already-created) VM. Clears any exception
 // so one probe's failure doesn't poison the next.
 static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *args, JVMLogSink log) {

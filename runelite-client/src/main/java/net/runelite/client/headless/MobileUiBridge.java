@@ -111,8 +111,8 @@ import net.runelite.client.ui.NavigationButton;
  *
  * <h2>Shape of the surface</h2>
  * Reads return <b>JSON snapshots</b> (hand-built, escaped) so the JNI surface is a few {@code String}-returning
- * static methods — trivial to cache method ids for and to parse into Swift value types <em>once</em> per
- * panel open (never bound live to SwiftUI at frame rate). Writes are fire-and-forget: they queue onto the
+ * static methods — trivial to cache method ids for and to parse into native shell types <em>once</em> per
+ * panel open (never bound live to the native UI at frame rate). Writes are fire-and-forget: they queue onto the
  * right lane and return immediately; the resulting {@code ConfigChanged}/{@code PluginChanged} is the source
  * of truth, observed by re-reading the snapshot. Live UI-state the chrome polls (chat-input bounds, soft-input
  * open) is snapshotted on the client thread in {@link #tick(Client)} into volatiles and read lock-free.
