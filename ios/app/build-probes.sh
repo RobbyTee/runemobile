@@ -7,7 +7,8 @@
 #   - W1 P3 §6.0 activation confirm (awtsmoke): AwtActivation + UnsafePokeActivation
 #   - the CACIO cacio17 classes (cacio-tta + cacio-shared 1.18) FOLDED IN, so the device
 #     classpath stays just probes.jar (JVMLauncher sets -Djava.class.path to it alone).
-#     GPLv3 jars used as-is for a LOCAL device test (same jars we run on desktop) — not distributed.
+#     Cacio is GPLv2 WITH THE CLASSPATH EXCEPTION and these classes DO ship inside app binaries —
+#     see THIRD-PARTY-NOTICES.md §G for the notice that covers the combination.
 #
 # Usage: ./build-probes.sh   (run from ios/app/)
 set -euo pipefail
@@ -45,8 +46,15 @@ SHADED="${SHADED:-$(ls ../../runelite-client/build/libs/client-*-shaded.jar 2>/d
 if [ -f "$SHADED" ]; then
   echo "== compile §6.2 DeviceHeadlessBoot + GateCensus (javac $JFLAGS, prior classes+cacio+shaded on cp) =="
   "$JAVAC" $JFLAGS -cp "$OUT:$CACIO_CP:$SHADED" -d "$OUT" "$AWTSMOKE/DeviceHeadlessBoot.java" "$AWTSMOKE/GateCensus.java"
+elif [ "${ALLOW_NO_SHADED:-0}" = "1" ]; then
+  echo "== SKIP §6.2 DeviceHeadlessBoot (ALLOW_NO_SHADED=1; probes.jar will NOT boot the client) =="
 else
-  echo "== SKIP §6.2 DeviceHeadlessBoot (shaded client jar not found at $SHADED) =="
+  # Without the shaded jar this would silently produce a probes.jar MISSING the boot entry point
+  # (DeviceHeadlessBoot) — the app then dies at launch with a confusing NoClassDefFoundError. Build the
+  # shaded jar first; ALLOW_NO_SHADED=1 restores the old skip for probe-only builds.
+  echo "ERROR: shaded client jar not found (looked at: ${SHADED:-<none>})." >&2
+  echo "       Run ./gradlew :client:shadowJar at the repo root first, or set ALLOW_NO_SHADED=1." >&2
+  exit 1
 fi
 
 echo "== pack $JARFILE =="

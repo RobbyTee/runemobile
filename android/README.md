@@ -83,7 +83,7 @@ run `./gradlew :app:stageBootAssets` to do steps 1–6 in one Gradle task — se
 The two native libraries (`libhelloshell.so`, `librlawt.so`) are **not** staged — Gradle's CMake
 `externalNativeBuild` builds them from tracked `cpp/` source automatically.
 
-### Release gate (GATE.md row 6)
+### Release gate
 Before tagging a build, run the single release gate — cross-port contract check + `:app:assembleRelease`
 (with the no-secret / boot-asset guards) + `:app:lintRelease`:
 ```

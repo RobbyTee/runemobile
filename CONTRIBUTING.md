@@ -84,7 +84,7 @@ The release gate runs them too (a scoped stage, so an unrelated upstream plugin-
 ## Conventions
 
 - **Android:** Kotlin + Jetpack Compose shell. Keep Android work under `android/`.
-- **iOS:** Swift + UIKit shell under `ios/`.
+- **iOS:** Objective-C + UIKit shell under `ios/`.
 - **Native:** C++17. The native UI thread is never attached to the embedded JVM.
 - R8 / minification is intentionally **off** — don't enable it.
 - Don't fork the upstream RuneLite tree (`runelite-client/`, `runelite-api/`, …)

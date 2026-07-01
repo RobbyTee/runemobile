@@ -153,9 +153,39 @@ static NSString *const kLauncherUA =
         [self log:[NSString stringWithFormat:@"✗ no id_token in redirect (frag len=%lu)", (unsigned long)frag.length]];
         return;
     }
+    // OAuth return-leg binding: the redirect must carry OUR `state` and the id_token's OIDC `nonce`
+    // claim must be the one this view minted for the consent URL, so a token from any other consent
+    // flow (or a hijacked in-page navigation) can't complete this sign-in. Re-arm `captured` on
+    // rejection so a legitimate later redirect can still be handled.
+    NSString *returnedState = [self valueFor:@"state" in:frag];
+    if (![returnedState isEqualToString:self.oauthState] || ![[self nonceClaimOf:idToken] isEqualToString:self.nonce]) {
+        self.captured = NO;
+        [self log:@"✗ login response doesn't match this sign-in attempt — close and restart the sign-in"];
+        return;
+    }
     [self log:@"✓ authenticated — minting game session…"];
     self.web.hidden = YES;
     [self fetchSessionWithIdToken:idToken];
+}
+
+// Base64url-decode the JWT payload segment and return its OIDC `nonce` claim (@"" when absent or
+// undecodable — which then fails the isEqualToString: binding check above).
+- (NSString *)nonceClaimOf:(NSString *)jwt {
+    NSArray<NSString *> *parts = [jwt componentsSeparatedByString:@"."];
+    if (parts.count < 2)
+        return @"";
+    NSMutableString *b64 = [[parts[1] stringByReplacingOccurrencesOfString:@"-" withString:@"+"] mutableCopy];
+    [b64 replaceOccurrencesOfString:@"_" withString:@"/" options:0 range:NSMakeRange(0, b64.length)];
+    while (b64.length % 4 != 0)
+        [b64 appendString:@"="];
+    NSData *data = [[NSData alloc] initWithBase64EncodedString:b64 options:0];
+    if (!data)
+        return @"";
+    NSDictionary *claims = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![claims isKindOfClass:NSDictionary.class])
+        return @"";
+    NSString *nonce = claims[@"nonce"];
+    return [nonce isKindOfClass:NSString.class] ? nonce : @"";
 }
 
 #pragma mark - Game-session API (native URLSession)

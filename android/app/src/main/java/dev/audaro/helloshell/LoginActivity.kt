@@ -40,8 +40,8 @@ import kotlin.concurrent.thread
 class LoginActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var pasteField: EditText
-    private val nonce = JagexLogin.randomToken()
-    private val state = JagexLogin.randomToken()
+    private var nonce = JagexLogin.randomToken()
+    private var state = JagexLogin.randomToken()
     private var launched = false // user has opened the consent flow at least once this session
     private var importing = false // a mint is in flight — don't re-enter
     private var done = false // captured a valid id_token — handle exactly once
@@ -50,6 +50,10 @@ class LoginActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         launched = savedInstanceState?.getBoolean("launched") ?: false
+        // The consent URL was minted with THIS instance's nonce/state — restore them across an Activity
+        // recreation (rotation/theme flip mid-browser-trip) or the returning link would fail the binding check.
+        savedInstanceState?.getString("nonce")?.let { nonce = it }
+        savedInstanceState?.getString("state")?.let { state = it }
 
         val root =
             LinearLayout(this).apply {
@@ -168,6 +172,8 @@ class LoginActivity : AppCompatActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putBoolean("launched", launched)
+        outState.putString("nonce", nonce)
+        outState.putString("state", state)
     }
 
     /** Open the Stage-A consent flow in a Chrome Custom Tab (real Chrome clears Cloudflare + the human check). */
@@ -230,6 +236,15 @@ class LoginActivity : AppCompatActivity() {
         val fragment = if (text.contains('#')) text.substringAfter('#') else text
         val idToken = JagexLogin.valueFrom(fragment, "id_token")
         if (idToken.isNullOrEmpty()) return false
+        // OAuth return-leg binding: the redirect fragment must carry OUR `state`, and the id_token's OIDC
+        // `nonce` claim must be the one we minted for the consent URL. The return channel here is the
+        // world-readable clipboard, so without this a co-installed app could plant a foreign
+        // http://localhost/#id_token=… during the login window (login CSRF into an attacker's account).
+        val returnedState = JagexLogin.valueFrom(fragment, "state")
+        if (returnedState != state || !JagexLogin.nonceMatches(idToken, nonce)) {
+            log("✗ that login link is stale or from another sign-in attempt — tap “Sign in with Jagex” and copy the fresh link")
+            return false
+        }
         done = true
         clearLink()
         handleRedirect(idToken)

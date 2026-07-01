@@ -43,8 +43,12 @@ public class DeviceHeadlessBoot {
         final boolean safeModeOff = hub || routecGpu || noSafeMode;
         // Privacy (PRIVACY-LEGAL-01): this unofficial personal client does not phone RuneLite's telemetry.
         // --disable-telemetry makes RuneLiteModule bind a null TelemetryClient, so start() submits NO boot
-        // telemetry and NO JVM-crash reports to api.runelite.net. The only outbound data is to Jagex (for
-        // gameplay/auth) and to RuneLite ONLY if the user opts into account sync. Always on, every renderer.
+        // telemetry and NO JVM-crash reports to api.runelite.net. The other default-on upstream senders are
+        // handled downstream: the 10-min session ping is sunk to localhost (RuneLiteHeadless), Loot Tracker +
+        // Chat Commands are seeded off (HeadlessClientUI), and GE offer uploads are gated off on mobile
+        // (GrandExchangePlugin.submitToApi). Remaining outbound: Jagex (gameplay/auth), read-only GETs from
+        // api.runelite.net/static.runelite.net (item prices, hub metadata), and RuneLite-account sync ONLY
+        // if the user signs in. PRIVACY.md is the authoritative list. Always on, every renderer.
         final java.util.List<String> rl = new java.util.ArrayList<>();
         if (!safeModeOff) rl.add("--safe-mode");
         rl.add("--disable-telemetry");

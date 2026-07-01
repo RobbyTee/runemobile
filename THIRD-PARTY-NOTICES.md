@@ -50,6 +50,8 @@ present — Guava, Guice, Gson) is propagated in binary distributions.
 - FindBugs JSR-305 — `com.google.code.findbugs:jsr305:3.0.2`
 - JetBrains Annotations — `org.jetbrains:annotations:23.0.0`
 - tomlj — `org.tomlj:tomlj:1.1.0`
+- OkHttp — `com.squareup.okhttp3:okhttp:3.14.9` (in the shaded client jar)
+- Okio — `com.squareup.okio:okio:1.17.2` (in the shaded client jar)
 - AndroidX: `core` 1.13.1, `appcompat` 1.7.0, `browser` 1.8.0,
   `compose-bom` 2024.09.00 (incl. `material3`), `activity-compose` 1.9.2
 - Kotlin coroutines — `org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1`
@@ -69,6 +71,26 @@ present — Guava, Guice, Gson) is propagated in binary distributions.
   replaces them); the Java facade ships, so attribution is retained.
 - Protocol Buffers (javalite) — `com.google.protobuf:protobuf-javalite:3.21.12`
 - ANTLR 4 runtime — `org.antlr:antlr4-runtime:4.13.1`
+- RSyntaxTextArea — `com.fifesoft:rsyntaxtextarea:3.1.2` (in the shaded client jar)
+- AutoComplete — `com.fifesoft:autocomplete:3.1.1` (in the shaded client jar)
+
+## F2. Other licenses in the shaded client jar
+
+The fat (`client-*-shaded.jar`) client jar — and the `client-*-gpu.jar` /
+`client-*-rlhd.jar` staged from it — additionally embed:
+
+- **Logback** — `ch.qos.logback:logback-classic` / `logback-core:1.2.9`, dual
+  EPL-1.0 / LGPL-2.1; **EPL-1.0 elected here**. Full text:
+  https://www.eclipse.org/legal/epl-v10.html — library source at
+  https://logback.qos.ch/.
+- **Bouncy Castle** (`org.bouncycastle.*`) — bundled transitively inside the
+  RuneLite artifacts; **Bouncy Castle Licence** (an MIT-derived permissive
+  license): https://www.bouncycastle.org/licence.html.
+- **JSON-java** — `org.json:json:20090211`; the **JSON License**
+  (https://www.json.org/license.html).
+- **runelite-discord** — `net.runelite:discord:1.4`, BSD-2-Clause (RuneLite
+  project artifact, same license as §A; the native Discord IPC library it
+  fronts is not shipped on mobile).
 
 ## G. Caciocavallo Silano — GPLv2 with Classpath Exception
 
@@ -77,9 +99,13 @@ AWT toolkit used to drive the engine's `Canvas`/`BufferProvider` off-screen.
 Licensed under GPLv2 **with the Classpath Exception**. Source:
 https://github.com/caciocavallosilano/cacio
 
-It is **not committed** to this repository — it is fetched at build time. The
-Classpath Exception permits distribution combined with this BSD-2 software; the
-GPL does not extend to the application code.
+Its source is not in this repository — the two release jars (`cacio-tta` /
+`cacio-shared` 1.18) are fetched at build time and their classes are **folded
+into the generated `probes.jar`**, which binary distributions of the app embed.
+The Classpath Exception permits distributing that combination with this BSD-2
+software (the GPL does not extend to the application code); the corresponding
+source is the upstream repository linked above, and `probes.jar` itself is
+generated output (`ios/app/build-probes.sh`), not committed.
 
 ## H. OpenJDK 21 — GPLv2 with Classpath Exception
 

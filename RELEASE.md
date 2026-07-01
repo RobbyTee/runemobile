@@ -18,9 +18,12 @@
 >   It may break after any OSRS weekly update until a new build is published.
 > - **You install it yourself** by sideloading. It is not on the App Store or Google Play and never
 >   will be.
-> - **Your data:** the app sends data only to **Jagex** (to play) and, *only if you opt in*, to the
->   **RuneLite project** (config/plugin sync). No telemetry, analytics, or crash reports are sent,
->   and the maintainer runs no server and collects nothing. See **[PRIVACY.md](PRIVACY.md)**.
+> - **Your data:** the app sends your account/gameplay data only to **Jagex** (to play) and, *only
+>   if you opt in* (RuneLite-account sync, or enabling the default-off Loot Tracker / Chat Commands
+>   plugins), to the **RuneLite project**. A few read-only fetches (world list, item prices, runtime
+>   config) come from RuneLite's CDN/API and carry no account data. No telemetry, analytics, or
+>   crash reports are sent, and the maintainer runs no server and collects nothing. See
+>   **[PRIVACY.md](PRIVACY.md)**.
 > - **Game content** (art, maps, audio) is Jagex's, streamed from your own game cache at runtime and
 >   never redistributed by this project. RuneScape and Old School RuneScape are trademarks of Jagex.
 

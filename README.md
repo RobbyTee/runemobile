@@ -8,8 +8,8 @@
 > **throwaway account you can afford to lose, never your main**. Provided as-is,
 > no warranty, at your own risk.
 
-A native **iOS and Android** app that runs **real, unmodified RuneLite** —
-including the **full plugin ecosystem** — on an **in-process, on-device
+A native **iOS and Android** app that runs **real RuneLite** — including the
+**full plugin ecosystem** — on an **in-process, on-device
 OpenJDK 21**. No streaming, no companion PC, no host machine: the actual RuneLite
 client executes on your phone inside a second JVM, rendering **live OSRS**, and a
 thin native shell wraps it with touch controls and mobile chrome styled after the
@@ -41,14 +41,15 @@ its plugins, with a native mobile UI layered on top.
 
 The mobile process (Android ART / iOS) hosts a **second HotSpot JVM**: native
 C++ `dlopen`s the embedded `libjvm.so`/`libjvm.dylib` and calls
-`JNI_CreateJavaVM`, then boots **stock RuneLite headless**. A
+`JNI_CreateJavaVM`, then boots **RuneLite headless**. A
 [Caciocavallo](https://github.com/caciocavallosilano/caciocavallo) AWT backend drives
 the engine's `Canvas`/`BufferProvider` off-screen, and the rendered frame is
 blitted to a native surface. Touch input is mapped back into AWT events.
 
 A shared Java bridge under `runelite-client/.../headless/` exposes the engine to
 the native shell, and is reused **verbatim** between the Android (Kotlin / Jetpack
-Compose) and iOS (Swift / UIKit) ports — only the host shell is platform-specific.
+Compose) and iOS (Objective-C / UIKit) ports — only the host shell is
+platform-specific.
 
 - **Android grants JIT for free** — no debugger attach, no per-launch ceremony.
 - **iOS** requires a per-launch JIT debugger attach (StikDebug) because Apple does
@@ -265,9 +266,10 @@ The GPU and 117HD jars are required — omitting them produces an un-bootable AP
 
 ### iOS
 
-See [`ios/README.md`](ios/README.md) and [`ios/SETUP-NEW-MAC.md`](ios/SETUP-NEW-MAC.md).
-The iOS JRE is Mach-O (separate from Android's bionic JRE); the Xcode project is
-generated with `xcodegen` from `ios/app/project.yml`.
+See [`ios/README.md`](ios/README.md) for the full pipeline. In short: the iOS JRE
+is Mach-O (separate from Android's bionic JRE), the Xcode project is generated
+with `xcodegen` from `ios/app/project.yml`, and the jars come from the same
+staging scripts as Android.
 
 ---
 
@@ -275,7 +277,7 @@ generated with `xcodegen` from `ios/app/project.yml`.
 
 ```
  ART / iOS process
-   └─ native shell (Kotlin+Compose / Swift+UIKit) ── SurfaceView / CAEAGL host
+   └─ native shell (Kotlin+Compose / ObjC+UIKit) ── SurfaceView / CAEAGL host
         └─ C++ bootstrap: dlopen libjvm → JNI_CreateJavaVM
              └─ embedded OpenJDK 21 (HotSpot, JIT)
                   └─ stock RuneLite (headless) + Caciocavallo AWT
@@ -283,17 +285,23 @@ generated with `xcodegen` from `ios/app/project.yml`.
 ```
 
 The native UI thread is **never** attached to the embedded JVM. R8/minification is
-intentionally off. The whole project lives under `ios/` and `android/`; the rest of
-the tree (`runelite-client/`, `runelite-api/`, …) is upstream RuneLite, kept as-is
-and updated by merging `runelite/runelite`.
+intentionally off. The mobile project lives under `ios/`, `android/`, and the
+shared `runelite-client/.../headless/` bridge package; the rest of the tree
+(`runelite-client/`, `runelite-api/`, …) is upstream RuneLite, updated by merging
+`runelite/runelite` and carried with a deliberately small set of additive fork
+seams (the headless boot/UI override, bridge hooks in about a dozen upstream
+files, and the mobile privacy gates described in `PRIVACY.md`).
 
 ---
 
 ## Privacy & security
 
-- **No telemetry, no analytics, no crash reporting, no maintainer backend.** Data
-  goes only to **Jagex** (to play) and, *only if you opt in*, to the **RuneLite
-  project** (config/plugin sync). See [`PRIVACY.md`](PRIVACY.md).
+- **No telemetry, no analytics, no crash reporting, no maintainer backend.** Your
+  account and gameplay data go only to **Jagex** (to play) and, *only if you opt
+  in* — by signing into RuneLite-account sync or enabling the (default-off) Loot
+  Tracker / Chat Commands plugins — to the **RuneLite project**. The client also
+  makes a few read-only fetches (world list, item prices, runtime config) from
+  RuneLite's CDN/API that carry no account data. See [`PRIVACY.md`](PRIVACY.md).
 - Report security issues via the private channel in [`SECURITY.md`](SECURITY.md).
 
 ---

@@ -48,6 +48,25 @@ object JagexLogin {
         return Base64.encodeToString(buf, Base64.NO_WRAP or Base64.NO_PADDING or Base64.URL_SAFE).trim()
     }
 
+    /** True when the id_token's OIDC `nonce` claim matches the nonce this app minted for the consent URL.
+     *  This binds the returned token to THIS sign-in attempt so a planted/replayed link is rejected;
+     *  the token itself is then proven against Jagex by the session mint (no local signature check needed). */
+    fun nonceMatches(
+        idToken: String,
+        expectedNonce: String,
+    ): Boolean =
+        try {
+            val parts = idToken.split(".")
+            if (parts.size < 2) {
+                false
+            } else {
+                val payload = String(Base64.decode(parts[1], Base64.URL_SAFE), Charsets.UTF_8)
+                JSONObject(payload).optString("nonce", "") == expectedNonce
+            }
+        } catch (e: Exception) {
+            false
+        }
+
     /** The Stage-A consent URL (OIDC hybrid: id_token + code; loopback redirect we intercept). */
     fun consentUrl(
         nonce: String,

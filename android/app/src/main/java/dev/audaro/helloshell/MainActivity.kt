@@ -1168,7 +1168,13 @@ class MainActivity : AppCompatActivity() {
         // written before a pref-driven GPU/117HD boot and cleared by the watchdog once frames actually present; if
         // it's still here at startup the previous promoted boot crashed/blacked/hung before presenting -> revert to
         // CPU (permanently for an AUTO decision; one-shot for a user-explicit one, so they can retry).
-        run {
+        // GUARDED on !booted: onCreate re-runs on any Activity recreation the manifest doesn't absorb (dark-mode
+        // flip, locale, split-screen). In that re-entry the JVM is still up and the cookie may legitimately still
+        // be armed (the watchdog clears it only after successFrames present) — reading it here would falsely
+        // demote a healthy GPU/117HD session to CPU and could latch autoGpuFailed forever. booted is a
+        // companion-object AtomicBoolean, so it survives the recreation; the JVM-death paths reset it, so a
+        // genuine crashed-boot retry still takes this check.
+        if (!booted.get()) {
             val rp = getSharedPreferences("renderer", MODE_PRIVATE)
             val armed = File(filesDir, "auto-gpu-armed")
             if (armed.exists()) {
@@ -1191,6 +1197,14 @@ class MainActivity : AppCompatActivity() {
                         "wasAuto=$wasAuto failCount=$failCount at=${System.currentTimeMillis()}"
                 runCatching { File(filesDir, "gpu-fail.txt").writeText(detail + "\n") } // last-failure record (run-as readable)
                 Log.w(TAG, "auto-GPU: prior promoted boot never presented a frame -> CPU fallback ($detail)")
+                // Make the silent revert observable (a black-screen crash gives the user no clue why the next
+                // boot looks different): one-shot notice; the plugins panel is the re-enable path.
+                Toast
+                    .makeText(
+                        this,
+                        "HD renderer didn't start — switched to compatibility mode. Re-enable it under Plugins.",
+                        Toast.LENGTH_LONG,
+                    ).show()
             }
             if (rp.getString("mode", null) == null && !rp.getBoolean("autoGpuFailed", false)) {
                 val probed = probeGpuCaps() // "117hd" | "gpu" | "cpu"
@@ -3495,6 +3509,9 @@ class MainActivity : AppCompatActivity() {
                 "--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
                 "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
                 "-Xmx512m",
+                // Fail fast at heap exhaustion instead of limping (seams no-op, GC thrash): a clean exit
+                // routes into the existing crash-fallback/relaunch UX and leaves a diagnosable hs_err trail.
+                "-XX:+ExitOnOutOfMemoryError",
                 "-Duser.home=$home",
                 "-Djava.io.tmpdir=$tmpDir",
                 "-Drunelite.rlhdprobe=true",
@@ -3634,6 +3651,9 @@ class MainActivity : AppCompatActivity() {
                 "--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
                 "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
                 "-Xmx512m",
+                // Fail fast at heap exhaustion instead of limping (seams no-op, GC thrash): a clean exit
+                // routes into the existing crash-fallback/relaunch UX and leaves a diagnosable hs_err trail.
+                "-XX:+ExitOnOutOfMemoryError",
                 "-Duser.home=$home",
                 "-Djava.io.tmpdir=$tmpDir",
                 "-Drunelite.bridge=true",

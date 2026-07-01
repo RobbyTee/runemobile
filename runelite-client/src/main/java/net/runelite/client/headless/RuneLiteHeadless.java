@@ -44,6 +44,15 @@ public class RuneLiteHeadless
 {
 	public static void main(String[] args) throws Exception
 	{
+		// Privacy: stock RuneLite's ClientSessionManager pings api.runelite.net every 10 minutes with a
+		// random session UUID + a logged-in flag, unconditionally (RuneLite.java start()). Point the session
+		// endpoint at a local sink so the shipped default sends nothing — the ping fails soft (a warn log)
+		// and nothing else consumes the "runelite.session" endpoint. A dev run can still override the
+		// property explicitly, in which case we leave it alone. See PRIVACY.md ("What this app sends").
+		if (System.getProperty("runelite.session.url") == null)
+		{
+			System.setProperty("runelite.session.url", "http://127.0.0.1:1");
+		}
 		RuneLite.setOverrideModule(new HeadlessModule());
 		// Phase-6 STEP-0: arm the (dormant unless -Drunelite.mobileui.smoke=true) facade self-test BEFORE the
 		// engine starts, so its daemon is already polling for the injector. Runs on both desktop (CACIO/JUnit)
