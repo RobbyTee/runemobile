@@ -58,7 +58,7 @@ cp ios/dev-tools/deploy-remote.conf.example ios/dev-tools/deploy-remote.conf
 
 ```sh
 ios/dev-tools/deploy-remote.sh                # build jars here, sync, remote build+install
-ios/dev-tools/deploy-remote.sh --no-jars      # Swift-only change: skip the jar rebuild, reuse staged jars
+ios/dev-tools/deploy-remote.sh --no-jars      # shell-only change: skip the jar rebuild, reuse staged jars
 ios/dev-tools/deploy-remote.sh --remote-jars  # build the jars on the remote (self-contained remote)
 ```
 
@@ -68,7 +68,7 @@ tap = CPU path.
 
 ## Notes / tuning
 - First `rsync` is large (the ~166 MB JRE rides along once); subsequent runs are deltas only.
-- `--no-jars` is the fast path when you only touched Swift/`project.yml`.
+- `--no-jars` is the fast path when you only touched the Objective-C shell / `project.yml`.
 - To skip typing your SSH password each run, add the dev Mac's key to the remote:
   `ssh-copy-id $REMOTE_USER@$REMOTE_HOST` (or rely on Tailscale SSH).
 - Pull logs back after a run, e.g.:

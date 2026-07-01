@@ -15,7 +15,7 @@ Expect a best-effort response. Please give enough detail to reproduce.
 
 ## In scope
 
-- The native mobile shell (Kotlin/Compose, Swift/UIKit) and the C++ native layer.
+- The native mobile shell (Kotlin/Compose, Objective-C/UIKit) and the C++ native layer.
 - On-device login and token handling (Jagex OAuth and the optional RuneLite-account sync).
 - The embedded-JVM / plugin trust boundary.
 

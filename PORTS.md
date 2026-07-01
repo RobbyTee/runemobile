@@ -12,7 +12,7 @@ runelite-ios/
 ├── runelite-client/  …   upstream RuneLite + our headless bridge (net.runelite.client.headless.*)
 ├── tools/
 │   └── stage-mobile-runtime.sh   ← builds + stages the SHARED Java runtime into both ports
-├── ios/              native iOS host (Swift/UIKit, JNI bootstrap, StikDebug per-launch JIT)
+├── ios/              native iOS host (Objective-C/UIKit, JNI bootstrap, StikDebug per-launch JIT)
 └── android/          native Android host (Kotlin/ART, JNI_CreateJavaVM, free JIT)
 ```
 
@@ -28,7 +28,7 @@ Both ports embed the **same two jars**, byte-for-byte:
 The Java side — gamepack, plugins, overlays, the headless render loop, the touch/click facade — is
 **identical** on iOS and Android and reused verbatim. Only the host differs: iOS is Mach-O + per-launch JIT
 attach; Android is bionic ELF + free JIT. See [`android/README.md`](android/README.md) for the Android-specific
-bootstrap and [`ios/REALJVM-DEV-PLAN.md`](ios/REALJVM-DEV-PLAN.md) for the iOS phases.
+bootstrap and [`ios/README.md`](ios/README.md) for the iOS build pipeline.
 
 ## Build both ports from one front door
 
@@ -65,7 +65,7 @@ kinds — keep them distinguishable:
 - **desktop probe** — mutating spikes gated behind system properties, used for desktop A/B bring-up
   (`UnsafePokeActivation`, `DeviceHeadlessBoot`). Build front door is `ios/app/build-probes.sh`; folded into
   `probes.jar`. New probe classes should land under a `headless.probe` package, still inside `runelite-client`.
-- **host-specific native** — never shared. iOS Swift/Obj-C + Android Kotlin/C++. The two `fake-xawt` builds
+- **host-specific native** — never shared. iOS Objective-C + Android Kotlin/C++. The two `fake-xawt` builds
   stay **separate** on purpose — the platform link rules differ materially (Mach-O `libawt_xawt.dylib` vs
   bionic `libawt_xawt.so` with `DT_NEEDED libawt_headless.so`).
 
