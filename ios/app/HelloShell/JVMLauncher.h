@@ -48,6 +48,12 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Resolve the embedded JRE home inside the .app bundle (".../jre").
 + (nullable NSString *)javaHome;
 
+/// Re-point the task EXC_BREAKPOINT port back at the StikDebug debugger (the same-session-login fix the
+/// boot path runs before creating the VM). Call after loading WebKit MID-SESSION (e.g. the session-expired
+/// re-login) — WebKit can displace the debugger's handler, after which a JIT-mirror brk is never serviced
+/// and the JVM dies with SIGTRAP. No-op when the debugger already owns the port.
++ (void)restoreBreakpointPortNow:(JVMLogSink)log;
+
 /// Absolute path to the session bearer, tokens.json, in Library/Application Support — NOT the Files.app /
 /// USB-exposed Documents dir. The single source of truth for the path: the native login writer, the
 /// login-state readers, logout, and the JVM autologin reader all go through here. First call lazily migrates

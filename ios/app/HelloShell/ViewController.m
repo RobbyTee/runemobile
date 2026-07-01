@@ -202,6 +202,14 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) CAMetalLayer *metalLayer;
 @property (nonatomic, assign) BOOL gpuPresent;        // direct-present active (skip the CPU-frame blit)
 @property (nonatomic, assign) BOOL gpuPresentArmed;   // ANGLE: window surface ready; flip gpuPresent on first GPU frame
+// 117HD crash cookie (the Android auto-GPU fallback, ported): a marker FILE armed once a 117HD boot is
+// actually running (first engine frame published — NOT at Play-tap, so a force-quit while waiting for the
+// JIT attach never counts) and cleared the moment the GL bridge presents its FIRST frame (survival proof:
+// GL context + shader compile lived). Deliberately NOT gated on sceneWarmedUp — quitting at the login
+// screen must not read as a renderer death. A cookie still on disk at the next Play tap = the last 117HD
+// boot died before presenting -> demote the saved pref to the software renderer and say so.
+@property (nonatomic, assign) BOOL hdBootCookieArmed;   // this session wrote the marker (awaiting first present)
+@property (nonatomic, assign) BOOL hdBootCookieSettled; // this session already cleared it — don't re-arm
 @property (nonatomic, assign) CGRect chatHitCanvas;
 // Pre-composited tab images (stone background + centred icon) built once from the bundled OSRS sprite assets
 // (stone-inactive/active + icon-0..13). Index = tab index; active/inactive variants. Authentic, crisp, no
@@ -299,6 +307,26 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UIView *reconnectScrim;
 @property (nonatomic, strong) UIActivityIndicatorView *reconnectSpinner;
 @property (nonatomic, assign) BOOL reconnectShown;
+// UX-LOGIN-01 (iOS parity with Android's SessionExpiredOverlayView): a full-screen INTERACTIVE "Session
+// expired" card shown when the headless login machine has GIVEN UP (autologin/reconnect exhausted — the
+// snapshot's "sessionExpired" flag). Unlike the self-recovering reconnect scrim above, this is a hard stop:
+// the engine is parked on the raw desktop login screen with no automated recovery, so the card consumes
+// touches and offers a single "Sign in again" that re-runs the on-device Jagex login. The bridge orders the
+// flags (an active reconnect wins; sessionExpired only on give-up) so the two overlays are never both shown.
+@property (nonatomic, strong) UIView *sessionExpiredScrim;
+@property (nonatomic, assign) BOOL sessionExpiredShown;
+// PERF-MEMORY-THERMAL-01 (iOS parity with Android's ThermalGovernor): protect sustained 117HD play from
+// silent thermal throttling by stepping the 117HD sceneResolutionScale DOWN under NSProcessInfo thermal
+// pressure (serious -> 65, critical -> 50, never above the user's own baseline) and restoring the captured
+// baseline once the device cools. CPU/base-GPU are light enough to leave untouched — the governor only runs
+// on a 117HD boot. Driven from onDisplayTick (~0.5 Hz — already main-thread, which the mobile* bridge
+// selectors require) rather than the thermal notification: the tick gives the two correctness guards their
+// retry loop for free — the baseline is captured ONLY from a real live sceneResolutionScale (config not
+// readable yet -> defer, never guess), and a leaked NSUserDefaults marker from a session killed mid-throttle
+// is restored before arming (the bridge write PERSISTS config, so a throttle must never become the next
+// session's "baseline").
+@property (nonatomic, assign) int thermalBaselineScale; // <=0 (the ivar default) = not captured yet
+@property (nonatomic, assign) int thermalAppliedScale;  // last scale this governor wrote (valid once captured)
 @property (nonatomic, strong) UIView *pluginPanel;
 @property (nonatomic, strong) UITableView *pluginTable;
 @property (nonatomic, strong) NSArray<NSDictionary *> *pluginList;  // the FILTERED view the table renders
@@ -615,6 +643,32 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [self.launchScreen removeFromSuperview];
 }
 
+// 117HD crash-cookie plumbing (see the property block for the arm/clear/consume contract). The marker
+// lives in Application Support (same home as the auth tokens — not user-visible, backed up, no iCloud
+// Documents exposure) and is written atomically so a hard kill right after arming can't half-write it.
+- (NSString *)hdBootCookiePath {
+    NSString *dir = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory,
+                                                         NSUserDomainMask, YES) firstObject];
+    return [dir stringByAppendingPathComponent:@"hd-boot-armed"];
+}
+
+- (void)hdBootCookieArm {
+    NSString *path = [self hdBootCookiePath];
+    [[NSFileManager defaultManager] createDirectoryAtPath:[path stringByDeletingLastPathComponent]
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+    [[NSData data] writeToFile:path options:NSDataWritingAtomic error:nil];
+}
+
+- (void)hdBootCookieClear {
+    [[NSFileManager defaultManager] removeItemAtPath:[self hdBootCookiePath] error:nil];
+}
+
+- (BOOL)hdBootCookiePresent {
+    return [[NSFileManager defaultManager] fileExistsAtPath:[self hdBootCookiePath]];
+}
+
 - (void)onPlayTapped {
     // If the login web view ran this session, WebKit is resident and the JVM can't start cleanly — onLaunch
     // will prompt a restart instead. Keep the cover up in that case so the user lands back here post-restart.
@@ -626,6 +680,23 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     NSString *pref = [[NSUserDefaults standardUserDefaults] stringForKey:@"rendererPref"] ?: @"cpu";
     BOOL wantGpu = [pref isEqualToString:@"gpu"];
     BOOL wantHd = [pref isEqualToString:@"117hd"];
+    if (wantHd && [self hdBootCookiePresent]) {
+        // The last 117HD boot armed the cookie and died before its first GL present (GL-init/shader-compile
+        // crash or an OOM kill mid-warmup). Fall back to the always-works software renderer so the user is
+        // never crash-looped out of the game, and tell them where to turn 117HD back on.
+        [self hdBootCookieClear];
+        [[NSUserDefaults standardUserDefaults] setObject:@"cpu" forKey:@"rendererPref"];
+        pref = @"cpu";
+        wantHd = NO;
+        [self appendLine:@"[shell] 117HD did not survive its last launch — reverted to the standard renderer"];
+        UIAlertController *ac = [UIAlertController
+            alertControllerWithTitle:@"HD renderer didn't start"
+                             message:@"117HD crashed while starting last time, so this launch uses the standard "
+                                     @"renderer. You can turn 117HD back on in the plugins panel."
+                      preferredStyle:UIAlertControllerStyleAlert];
+        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:ac animated:YES completion:nil];
+    }
     self.pendingRouteCGpu = wantGpu;
     self.pendingRouteCZone = wantHd;
     self.pendingRouteCZoneDirect = wantHd;
@@ -2902,6 +2973,186 @@ static int chatRowCanvasH(void) {
     [self appendLine:[NSString stringWithFormat:@"[shell] fix9: reconnect overlay -> %@", show ? @"YES" : @"NO"]];
 }
 
+// UX-LOGIN-01: build the "Session expired" card once — same OSRS-styled dark-brown/amber-border card as the
+// reconnect scrim, but INTERACTIVE (the scrim eats touches — the engine login screen underneath is dead) with
+// a "Sign in again" button that re-runs the on-device Jagex login. Mirrors Android's SessionExpiredOverlayView.
+- (void)setupSessionExpiredOverlay {
+    if (self.sessionExpiredScrim)
+        return;
+    UIView *scrim = [[UIView alloc] initWithFrame:self.view.bounds];
+    scrim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    scrim.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.74];
+    scrim.userInteractionEnabled = YES; // consume touches while visible (parity with Android isClickable)
+    scrim.hidden = YES;
+
+    UIView *card = [[UIView alloc] init];
+    card.translatesAutoresizingMaskIntoConstraints = NO;
+    card.backgroundColor = [UIColor colorWithRed:33 / 255.0 green:28 / 255.0 blue:23 / 255.0 alpha:0.94];
+    card.layer.cornerRadius = 10;
+    card.layer.borderWidth = 1.5;
+    card.layer.borderColor = [UIColor colorWithRed:140 / 255.0 green:128 / 255.0 blue:102 / 255.0 alpha:1.0].CGColor;
+    [scrim addSubview:card];
+
+    UILabel *title = [[UILabel alloc] init];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.text = @"Session expired";
+    title.font = [UIFont systemFontOfSize:18 weight:UIFontWeightBold];
+    title.textColor = [UIColor whiteColor];
+    title.textAlignment = NSTextAlignmentCenter;
+    [card addSubview:title];
+
+    UILabel *body = [[UILabel alloc] init];
+    body.translatesAutoresizingMaskIntoConstraints = NO;
+    body.text = @"Your session has ended.\nSign in again to keep playing.";
+    body.numberOfLines = 2;
+    body.font = [UIFont systemFontOfSize:14];
+    body.textColor = [UIColor colorWithRed:210 / 255.0 green:198 / 255.0 blue:170 / 255.0 alpha:1.0];
+    body.textAlignment = NSTextAlignmentCenter;
+    [card addSubview:body];
+
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
+    btn.translatesAutoresizingMaskIntoConstraints = NO;
+    [btn setTitle:@"Sign in again" forState:UIControlStateNormal];
+    btn.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold];
+    [btn setTitleColor:[UIColor colorWithRed:255 / 255.0 green:230 / 255.0 blue:170 / 255.0 alpha:1.0]
+              forState:UIControlStateNormal];
+    btn.backgroundColor = [UIColor colorWithRed:92 / 255.0 green:72 / 255.0 blue:38 / 255.0 alpha:1.0];
+    btn.layer.cornerRadius = 8;
+    btn.layer.borderWidth = 1.5;
+    btn.layer.borderColor = [UIColor colorWithRed:180 / 255.0 green:150 / 255.0 blue:96 / 255.0 alpha:1.0].CGColor;
+    [btn addTarget:self action:@selector(onSessionExpiredSignIn) forControlEvents:UIControlEventTouchUpInside];
+    [card addSubview:btn];
+
+    [self.view addSubview:scrim];
+    self.sessionExpiredScrim = scrim;
+
+    [NSLayoutConstraint activateConstraints:@[
+        [card.centerXAnchor constraintEqualToAnchor:scrim.centerXAnchor],
+        [card.centerYAnchor constraintEqualToAnchor:scrim.centerYAnchor],
+        [card.widthAnchor constraintEqualToConstant:300],
+        [card.heightAnchor constraintEqualToConstant:196],
+        [title.centerXAnchor constraintEqualToAnchor:card.centerXAnchor],
+        [title.topAnchor constraintEqualToAnchor:card.topAnchor
+                                        constant:26],
+        [body.centerXAnchor constraintEqualToAnchor:card.centerXAnchor],
+        [body.topAnchor constraintEqualToAnchor:title.bottomAnchor
+                                       constant:12],
+        [btn.centerXAnchor constraintEqualToAnchor:card.centerXAnchor],
+        [btn.bottomAnchor constraintEqualToAnchor:card.bottomAnchor
+                                         constant:-22],
+        [btn.widthAnchor constraintEqualToConstant:252],
+        [btn.heightAnchor constraintEqualToConstant:46],
+    ]];
+}
+
+// UX-LOGIN-01: drive the card from the snapshot's give-up flag (~10 Hz from onDisplayTick, ungated by
+// login/chrome for the same reason as the reconnect updater: it only ever shows while NOT logged in).
+- (void)updateSessionExpiredOverlay {
+    if (!self.sessionExpiredScrim)
+        return;
+    NSString *snap = [JVMLauncher chromeSnapshot];
+    NSDictionary *d = parseBridgeJSON(snap, "ViewController.updateSessionExpiredOverlay");
+    BOOL show = [d isKindOfClass:[NSDictionary class]] && ![d[@"loggedIn"] boolValue] && [d[@"sessionExpired"] boolValue];
+    if (show == self.sessionExpiredShown)
+        return;
+    self.sessionExpiredShown = show;
+    self.sessionExpiredScrim.hidden = !show;
+    if (show) {
+        [self.view bringSubviewToFront:self.sessionExpiredScrim];
+    }
+    [self appendLine:[NSString stringWithFormat:@"[shell] ux-login: session-expired card -> %@", show ? @"YES" : @"NO"]];
+}
+
+// UX-LOGIN-01: "Sign in again" — re-run the on-device Jagex login over the parked client. Loading WebKit
+// while the JVM runs re-raises the debugger-displacement hazard the boot-time bp-restore exists for (WebKit
+// can steal the task EXC_BREAKPOINT port -> a JIT brk goes unserviced -> SIGTRAP), so after the web view is
+// up we re-point BREAKPOINT back at the debugger. The login flow itself already handles the rest: tokens are
+// persisted and the user is prompted into a fresh-process restart that goes straight to play.
+- (void)onSessionExpiredSignIn {
+    [self appendLine:@"[shell] ux-login: session expired — re-running the on-device Jagex login"];
+    [self onLoginWithJagex];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [JVMLauncher restoreBreakpointPortNow:^(NSString *line) {
+            [self appendLine:line];
+        }];
+    });
+}
+
+// PERF-MEMORY-THERMAL-01: read the LIVE 117HD sceneResolutionScale off the config bridge. Returns -1 while
+// the config isn't readable (bridge not up / plugin config not loaded) so the caller defers instead of
+// restoring a wrong default — the governor must never raise a user's deliberately lower scale.
+- (int)thermalReadLiveScale {
+    NSString *json = [JVMLauncher mobilePluginConfig:@"hd"];
+    if (json.length == 0)
+        return -1;
+    NSDictionary *d = parseBridgeJSON(json, "ViewController.thermalReadLiveScale");
+    if (![d isKindOfClass:[NSDictionary class]])
+        return -1;
+    for (NSDictionary *item in d[@"items"]) {
+        if ([item isKindOfClass:[NSDictionary class]] && [item[@"key"] isEqual:@"sceneResolutionScale"]) {
+            int v = [item[@"value"] intValue];
+            return v > 0 ? v : -1;
+        }
+    }
+    return -1;
+}
+
+// PERF-MEMORY-THERMAL-01: one governor evaluation (see the property block for the full contract). Called
+// ~0.5 Hz from onDisplayTick on 117HD boots only. Cheap while waiting (one early-out or one JSON parse);
+// after the baseline is captured it's an enum compare + at most one bridge write per thermal transition.
+- (void)thermalGovernorTick {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    if (self.thermalBaselineScale <= 0) {
+        // Self-heal a leaked throttle first (a prior session killed mid-throttle never restored — the
+        // persisted config still holds the stepped-down value). The marker records the TRUE baseline.
+        int leaked = (int)[ud integerForKey:@"thermalBaselineScale"];
+        if (leaked > 0) {
+            if ([JVMLauncher mobileSetConfigGroup:@"hd"
+                                              key:@"sceneResolutionScale"
+                                            value:[NSString stringWithFormat:@"%d", leaked]] == nil) {
+                return; // bridge not up yet — retry next tick, keep the marker
+            }
+            self.thermalBaselineScale = leaked;
+            self.thermalAppliedScale = leaked;
+            [ud removeObjectForKey:@"thermalBaselineScale"];
+            [self appendLine:[NSString stringWithFormat:
+                                           @"[shell] thermal: recovered a leaked throttle -> restored sceneResolutionScale=%d", leaked]];
+        } else {
+            int live = [self thermalReadLiveScale];
+            if (live <= 0)
+                return; // config not ready — defer rather than guess a baseline
+            self.thermalBaselineScale = live;
+            self.thermalAppliedScale = live;
+            [self appendLine:[NSString stringWithFormat:
+                                           @"[shell] thermal governor armed (117HD) — baseline sceneResolutionScale=%d", live]];
+        }
+    }
+    // Pressure -> scale: nominal/fair keep the baseline; serious and critical cap progressively lower
+    // (never above the baseline, so a low-res user config is honoured). Same steps as Android (65 / 50).
+    NSProcessInfoThermalState st = [NSProcessInfo processInfo].thermalState;
+    int baseline = self.thermalBaselineScale;
+    int target = baseline;
+    if (st == NSProcessInfoThermalStateCritical)
+        target = MIN(baseline, 50);
+    else if (st == NSProcessInfoThermalStateSerious)
+        target = MIN(baseline, 65);
+    if (target == self.thermalAppliedScale)
+        return;
+    if ([JVMLauncher mobileSetConfigGroup:@"hd"
+                                      key:@"sceneResolutionScale"
+                                    value:[NSString stringWithFormat:@"%d", target]] == nil) {
+        return; // write didn't take — leave appliedScale unchanged so the next tick retries
+    }
+    int prev = self.thermalAppliedScale;
+    self.thermalAppliedScale = target;
+    if (target < baseline)
+        [ud setInteger:baseline forKey:@"thermalBaselineScale"];
+    else
+        [ud removeObjectForKey:@"thermalBaselineScale"];
+    [self appendLine:[NSString stringWithFormat:
+                                   @"[shell] thermal state=%ld -> sceneResolutionScale %d->%d (baseline=%d)", (long)st, prev, target, baseline]];
+}
+
 - (void)updateChrome {
     NSString *snap = [JVMLauncher chromeSnapshot];
     if (snap.length == 0) return;
@@ -3223,6 +3474,7 @@ static int chatRowCanvasH(void) {
     [self setupBackgroundKeepalive];
     [self setupPictureInPicture];
     [self setupReconnectOverlay];   // FIX-9: native "Reconnecting…" scrim (hidden until a real reconnect)
+    [self setupSessionExpiredOverlay]; // UX-LOGIN-01: "Session expired" card (hidden until a give-up)
 
 #if !defined(RC_BACKEND_ANGLE)
     // GPU Zone (117HD) PRESENT (EAGL). Two flavours, both no-glReadPixels (the measured ~16ms/frame bottleneck):
@@ -3555,6 +3807,24 @@ static CGRect mapRectFromArr(NSArray *a) {
 // no disk, no capture budget, so it's smooth and runs for the whole session. Also keeps the app
 // foreground-active+rendering (the jetsam-protection that the §6.2 work established).
 - (void)onDisplayTick {
+    // 117HD crash cookie: CLEAR on the very first GL present (survival proof — deliberately looser than the
+    // reveal below, which also waits for sceneWarmedUp; a user quitting at the login screen must not demote),
+    // ARM once the JVM is demonstrably running a 117HD boot (a frame has published) but hasn't presented yet.
+    // Clear is checked first so a boot that presents before the shell's first CPU blit never arms at all.
+    // Gated on the 117HD flag (not just gpuPresentArmed, which an ANGLE build also sets for base GPU): only
+    // a 117HD death may write the marker, because only the 117HD pref consumes it at the next Play tap.
+    if (self.pendingRouteCZoneDirect && self.gpuPresentArmed && !self.hdBootCookieSettled) {
+        if ([RouteCBridge hasPresentedFrame]) {
+            [self hdBootCookieClear];
+            self.hdBootCookieArmed = NO;
+            self.hdBootCookieSettled = YES;
+            [self appendLine:@"[shell] 117HD first GL present — crash cookie cleared"];
+        } else if (!self.hdBootCookieArmed && self.framesShown > 0) {
+            [self hdBootCookieArm];
+            self.hdBootCookieArmed = YES;
+            [self appendLine:@"[shell] 117HD boot underway — crash cookie armed (clears on first GL present)"];
+        }
+    }
     // Lazy switch to direct present: keep blitting CPU frames (boot/login/loading stay visible) until the GPU has
     // presented a frame AND the world has warmed up (geometry uploaded) — then reveal the GPU layer and stop the CPU
     // blit. The warmup gate (sceneWarmedUp) means the first frame the user sees is the world, not the boot sky.
@@ -3621,6 +3891,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     // logged in, so it can't sit behind updateChrome's chromeVisible gate or the other updaters' loggedIn returns.
     if (self.framesShown % 6 == 0) {
         [self updateReconnectOverlay];
+        [self updateSessionExpiredOverlay]; // UX-LOGIN-01: same cadence/ungating as the reconnect scrim
     }
 
     // W3 Feature-A (A2.5): refresh the crude native chat-at-top + HUD-status overlay from the HudDataBridge
@@ -3636,6 +3907,11 @@ static CGRect mapRectFromArr(NSArray *a) {
         [self drainNotifications];
         [self drainLinks];
         [self drainScreenshots];   // SHOT-2: surface engine auto-screenshots to Photos (when enabled)
+    }
+
+    // PERF-MEMORY-THERMAL-01: thermal governor, 117HD boots only (~0.5 Hz; see thermalGovernorTick).
+    if (self.pendingRouteCZone && self.framesShown % 120 == 0) {
+        [self thermalGovernorTick];
     }
 
     // W3 A3: refresh the enlarged native chat tab buttons (~10 Hz). Self-gates on chrome toggle + layout; runs
