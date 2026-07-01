@@ -366,7 +366,11 @@ static const int kChatTabRowH = 23;
 // — it is NOT a lost capability: reporting a player is reached the way mobile does it, via the player's
 // right-click (long-press) menu "Report" entry, which surfaces through the native menu like any other entry.
 static const int kChatTabCount = 7;
-static const int kChatTabRowCanvasH = 24;   // 2-line tab height (name + state), engine-size to match official mobile
+static const int kChatTabRowCanvasH = 40;   // 2-line tab height (name + state). 40 canvas px = the Android twin's
+                                            // ChatPillView.ROW_H_CANVAS, pushed into the engine row the same way
+                                            // (setEngineChatTabRowHeight). The old 24 rendered the labels at ~7pt/
+                                            // ~6pt effective — illegible at arm's length. Label fonts scale off
+                                            // this height (0.40/0.34 below), as does the dialogue parchment box.
 static const int kChatContentCanvasH = 142; // the chat message-area height (engine-canvas px) below the tab row
 // Finger-scroll direction: -1 = drag-down scrolls toward OLDER messages (content follows the finger). The drag is
 // converted to canvas px and applied to the chat's own scroll layer (no mouse wheel -> no camera zoom). Flip to +1
