@@ -7,7 +7,8 @@
 #   - W1 P3 §6.0 activation confirm (awtsmoke): AwtActivation + UnsafePokeActivation
 #   - the CACIO cacio17 classes (cacio-tta + cacio-shared 1.18) FOLDED IN, so the device
 #     classpath stays just probes.jar (JVMLauncher sets -Djava.class.path to it alone).
-#     GPLv3 jars used as-is for a LOCAL device test (same jars we run on desktop) — not distributed.
+#     Cacio is GPLv2 WITH THE CLASSPATH EXCEPTION and these classes DO ship inside app binaries —
+#     see THIRD-PARTY-NOTICES.md §G for the notice that covers the combination.
 #
 # Usage: ./build-probes.sh   (run from ios/app/)
 set -euo pipefail
