@@ -388,6 +388,11 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) AVAudioEngine *keepaliveEngine;   // renders silence; holds the audio session
 @property (nonatomic, strong) AVAudioSourceNode *keepaliveSource;
 @property (nonatomic, assign) UIBackgroundTaskIdentifier bgKeepTask; // per-background grace assertion
+// KEEPALIVE-1: the background idle gate. The keepalive otherwise runs the JVM at full rate forever — including
+// after an AFK-logout renders the login screen to nobody. Track how long the game has been continuously
+// logged OUT while backgrounded; past the threshold, stop the pump + audio so iOS can suspend the JVM.
+@property (nonatomic, assign) NSUInteger bgPumpTicks;          // pump ticks since backgrounding (15 Hz)
+@property (nonatomic, assign) CFAbsoluteTime bgLoggedOutSince; // 0 = logged in (or not yet sampled)
 @end
 
 // Grace period before an enabled-but-not-active plugin is reported as failed to start.
@@ -1706,6 +1711,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         }];
     if (self.launched) {
         [self startKeepaliveEngine];   // defensive re-arm (a route change can stop a running engine)
+        self.bgPumpTicks = 0;          // KEEPALIVE-1: fresh idle-gate window per background trip
+        self.bgLoggedOutSince = 0;
         [self startPipBgPump];
     }
     if (self.pipController) {
@@ -4410,6 +4417,32 @@ static CGRect mapRectFromArr(NSArray *a) {
 // Pull the newest engine frame (no-op when nothing new composited) and enqueue it on the PiP layer,
 // stamped display-immediately so no timebase juggling is needed for a live feed.
 - (void)pipPumpFrame {
+    // KEEPALIVE-1 idle gate (runs for EVERY renderer, before the frame-feed early-returns): sample the
+    // session ~every 5 s; once the game has been continuously logged OUT for the threshold — an AFK-logout
+    // rendering the login screen to nobody — stop the pump and the keepalive audio so iOS can suspend the
+    // JVM instead of burning battery at full rate indefinitely. Skipped while PiP is visibly active (the
+    // user is watching the window, logged in or not). Foregrounding re-arms everything; the cost of a
+    // suspension is a possible jetsam → relaunch + StikDebug re-attach, accepted for a dead session.
+    static const CFTimeInterval kBgIdleStopSeconds = 600.0;
+    self.bgPumpTicks++;
+    if (self.bgPumpTicks % 75 == 0 && !self.pipController.isPictureInPictureActive) {
+        NSString *snap = [JVMLauncher chromeSnapshot];
+        NSDictionary *d = snap.length ? parseBridgeJSON(snap, "ViewController.bgIdleGate") : nil;
+        BOOL loggedIn = [d isKindOfClass:[NSDictionary class]] && [d[@"loggedIn"] boolValue];
+        CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+        if (loggedIn) {
+            self.bgLoggedOutSince = 0;
+        } else if (self.bgLoggedOutSince == 0) {
+            self.bgLoggedOutSince = now;
+        } else if (now - self.bgLoggedOutSince > kBgIdleStopSeconds) {
+            [self appendLine:[NSString stringWithFormat:
+                                           @"[pip] background idle gate: logged out %.0fs -> stopping keepalive (iOS may now suspend the JVM)",
+                                           now - self.bgLoggedOutSince]];
+            [self stopPipBgPump];
+            [self.keepaliveEngine stop];
+            return;
+        }
+    }
     if (!self.pipLayer) return;
     if (self.gpuPresent) return;   // 117HD pip-present: the GL bridge feeds the layer from the render thread
     if (self.pipLayer.status == AVQueuedSampleBufferRenderingStatusFailed) {
@@ -5792,9 +5825,16 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (void)onScreenshot {
     UIImage *img = [JVMLauncher latestFrame];
     if (img == nil) { [self appendLine:@"[shell] screenshot: no frame yet"]; return; }
-    UIImageWriteToSavedPhotosAlbum(img, self, @selector(image:didFinishSavingWithError:contextInfo:), NULL);
+    // PERF-1: latestFrame's CGImage borrows a rotating scratch slot that the pump rewrites within a few
+    // frames — fine for the immediate screen blit, NOT for the async Photos encode / a deferred pasteboard
+    // paste. Redraw into an independent bitmap NOW so the saved bytes can't be overwritten mid-encode.
+    UIGraphicsImageRenderer *ren = [[UIGraphicsImageRenderer alloc] initWithSize:img.size];
+    UIImage *stable = [ren imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+        [img drawAtPoint:CGPointZero];
+    }];
+    UIImageWriteToSavedPhotosAlbum(stable, self, @selector(image:didFinishSavingWithError:contextInfo:), NULL);
     // SHOT-5: also copy to the clipboard, so it can be pasted straight into Messages / a notes app.
-    [UIPasteboard generalPasteboard].image = img;
+    [UIPasteboard generalPasteboard].image = stable;
 }
 
 - (void)image:(UIImage *)image didFinishSavingWithError:(NSError *)error contextInfo:(void *)ctx {
