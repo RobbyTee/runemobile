@@ -329,7 +329,7 @@ class LoginActivity : AppCompatActivity() {
         accounts: JSONArray,
     ) {
         val name = chosen.optString("displayName", "")
-        log("✓ selected ${name.ifEmpty { "(unnamed)" }} — writing tokens + restarting")
+        log("✓ selected ${name.ifEmpty { "(unnamed)" }} — writing tokens + restarting", sensitive = true)
         if (!JagexLogin.writeTokens(this, sessionId, chosen, accounts)) {
             log("✗ tokens.json write failed")
             return
@@ -354,8 +354,14 @@ class LoginActivity : AppCompatActivity() {
         finish()
     }
 
-    private fun log(line: String) {
-        Log.i("JagexLogin", "[login] $line")
+    /** @param sensitive when true, the line carries account PII (e.g. the character display name) and is
+     *  kept out of release logcat — it still shows in the on-screen status, which is the user's own screen.
+     *  Mirrors the iOS shell, which DEBUG-gates the identical "selected <name>" line. */
+    private fun log(
+        line: String,
+        sensitive: Boolean = false,
+    ) {
+        if (!sensitive || BuildConfig.DEBUG) Log.i("JagexLogin", "[login] $line")
         runOnUiThread { status.text = line }
     }
 }
