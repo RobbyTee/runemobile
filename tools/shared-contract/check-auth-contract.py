@@ -20,8 +20,18 @@ CONTRACT = HERE / "auth-contract.json"
 
 
 def main() -> int:
-    doc = json.loads(CONTRACT.read_text())
-    sources = doc["sources"]
+    # Fail closed with a clear message (exit 3, matching the "no contract file" convention in the .sh) rather
+    # than tracebacking if the JSON is missing / malformed — this is auth-critical tooling run in the gate.
+    try:
+        doc = json.loads(CONTRACT.read_text())
+        sources = doc["sources"]
+        pins = doc["pins"]
+    except FileNotFoundError:
+        print(f"auth contract: no contract file at {CONTRACT}")
+        return 3
+    except (json.JSONDecodeError, KeyError) as e:
+        print(f"auth contract: contract file is malformed ({CONTRACT}): {e}")
+        return 3
 
     collapsed = {}
     findings = []
@@ -33,9 +43,12 @@ def main() -> int:
             continue
         collapsed[port] = re.sub(r"\s+", " ", p.read_text(encoding="utf-8", errors="replace"))
 
-    for pin in doc["pins"]:
+    for pin in pins:
         # A pin carries either a single "value" or, for strings the ports wrap across source lines with
         # concat glue, a list of "fragments" that must ALL be present (each sits within one source line).
+        if "fragments" not in pin and "value" not in pin:
+            print(f"auth contract: pin '{pin.get('id', '?')}' has neither 'value' nor 'fragments'")
+            return 3
         parts = pin["fragments"] if "fragments" in pin else [pin["value"]]
         needles = [re.sub(r"\s+", " ", part) for part in parts]
         for port in pin["ports"]:
@@ -47,7 +60,7 @@ def main() -> int:
                 findings.append((port, pin["id"], orig))
 
     if not findings:
-        print(f"auth contract: OK ({len(doc['pins'])} pins verified across iOS / Android / script)")
+        print(f"auth contract: OK ({len(pins)} pins verified across iOS / Android / script)")
         return 0
 
     print("auth contract: DRIFT — a pinned Jagex OAuth value is missing from a port that must carry it")
