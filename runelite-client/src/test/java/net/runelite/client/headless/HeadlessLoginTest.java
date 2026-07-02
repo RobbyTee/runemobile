@@ -138,6 +138,22 @@ public class HeadlessLoginTest
 		assertTrue("the re-armed cycle must read as reconnecting", HeadlessLogin.isReconnecting());
 	}
 
+	/**
+	 * UX §4.7 regression: the post-login "Click here to play" news screen stays up (the 3D viewport is never
+	 * allocated) and the fixed-coordinate auto-dismiss can't clear it. Before the fix this reported a clean
+	 * login ({@code hasGivenUp() == false}) while stranding the user on the news screen; now the give-up is
+	 * latched honestly so it isn't silently mistaken for success.
+	 */
+	@Test
+	public void welcomeStrandLatchesGiveUpInsteadOfFalseSuccess()
+	{
+		when(client.getViewportWidth()).thenReturn(0);        // pre-spawn: the news overlay is still up
+		tickN(GameState.LOGIN_SCREEN, WELCOME_LOGIN_INDEX, 5); // Play Now
+		tickN(GameState.LOGGED_IN, -1, PLAY_EXHAUST_TICKS);    // welcome-dismiss exhausts its clicks pre-spawn
+		assertTrue("a stranded post-login news screen must latch gaveUp", HeadlessLogin.hasGivenUp());
+		assertFalse("a strand is not a transient reconnect", HeadlessLogin.isReconnecting());
+	}
+
 	@Test
 	public void tryAgainExhaustionLatchesGiveUp()
 	{

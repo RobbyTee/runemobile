@@ -281,6 +281,7 @@ public final class HeadlessLogin
 		welcomeAttempts = 0;
 		lastWelcomeDraw = 0;
 		welcomeDone = false;
+		welcomeGaveUp = false;
 		legacyEnabled = Boolean.getBoolean("runelite.headless.autologin.legacy");
 	}
 
@@ -322,6 +323,7 @@ public final class HeadlessLogin
 		tryAgainAttempts = 0;
 		welcomeDone = false;
 		welcomeAttempts = 0;
+		welcomeGaveUp = false;
 		log.info("[headless-login] world-hop relog armed -> W{} ({}) members={}", worldId, address, members);
 	}
 
@@ -374,6 +376,11 @@ public final class HeadlessLogin
 			// LEGACY-1: give the legacy form its own fresh budget too, so a reconnect cycle can re-drive it.
 			legacyWelcomeAttempts = 0;
 			legacySubmitAttempts = 0;
+			// UX §4.7: re-arm the welcome dismiss too, so a reconnect that lands on the news screen re-dismisses
+			// it and a prior strand latch can't false-trigger the give-up branch on the fresh login.
+			welcomeDone = false;
+			welcomeAttempts = 0;
+			welcomeGaveUp = false;
 			log.info("[headless-login] reconnect: disconnect detected (CONNECTION_LOST) -> re-arming login (cycle {}/{})",
 				reconnectAttempts, MAX_RECONNECT);
 		}
@@ -402,6 +409,24 @@ public final class HeadlessLogin
 				{
 					return;   // welcome overlay shown -> clicked it this tick, keep going until it's gone
 				}
+				// tryDismissWelcome returned false: either the player spawned (viewport allocated) or the
+				// auto-dismiss gave up pre-spawn. UX §4.7: don't conflate the two — a give-up that reported a
+				// clean login stranded the user on the "Click here to play" news screen with autologin
+				// "successful". Latch it honestly instead; the engine still renders the news screen and touches
+				// map through, so a manual tap on the play button recovers the world.
+				if (welcomeGaveUp && client.getViewportWidth() <= 0)
+				{
+					if (!done)
+					{
+						log.warn("[headless-login] gave up auto-dismissing the post-login 'Click here to play' news "
+							+ "screen after {} click(s) at {},{} — tap the play button to enter the world",
+							welcomeAttempts, WELCOME_X, WELCOME_Y);
+						done = true;
+						gaveUp = true;   // hasGivenUp() now honest; cleared by the next re-arm / clean login
+					}
+					return;
+				}
+				welcomeGaveUp = false;   // genuinely in-world — clear any stale strand latch
 				if (eulaAttempts > 0 || playAttempts > 0 || tryAgainAttempts > 0)
 				{
 					log.info("[headless-login] state now {} after eula={} play={} tryAgain={} attempt(s) — stopping injection",
@@ -654,6 +679,10 @@ public final class HeadlessLogin
 	private static int welcomeAttempts;
 	private static int lastWelcomeDraw;
 	private static boolean welcomeDone;
+	// UX §4.7: set when the welcome-screen auto-dismiss exhausted its clicks pre-spawn (distinct from a clean
+	// in-world spawn — both leave welcomeDone true and return false). Lets tick() log an honest give-up + latch
+	// gaveUp instead of reporting a successful login while the player is stranded on the news screen.
+	private static boolean welcomeGaveUp;
 	// The "CLICK HERE TO PLAY" news welcome screen renders at the fixed 765x503 login canvas anchored top-left; the
 	// red play button sits near (390,95) there. Configurable in case it moves.
 	private static final int WELCOME_X = Integer.getInteger("runelite.headless.autologin.welcomeX", 390);
@@ -681,9 +710,8 @@ public final class HeadlessLogin
 			}
 			if (welcomeAttempts >= MAX_ATTEMPTS)
 			{
-				log.warn("[headless-login] still pre-spawn after {} welcome click(s) at {},{} — giving up",
-					welcomeAttempts, WELCOME_X, WELCOME_Y);
 				welcomeDone = true;
+				welcomeGaveUp = true;   // UX §4.7: flag the stranded-pre-spawn give-up for tick() to surface honestly
 				return false;
 			}
 			if (welcomeAttempts > 0 && draws - lastWelcomeDraw < COOLDOWN_DRAWS)
