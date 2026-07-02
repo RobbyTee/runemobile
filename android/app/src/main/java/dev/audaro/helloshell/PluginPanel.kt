@@ -4,10 +4,12 @@ import android.graphics.Bitmap
 import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -109,6 +111,9 @@ fun PluginPanel(
     onRendererSelect: (String) -> Unit = {},
     // §4 cutover: the scattered devBar toolbar actions now have a home as fixed launcher tiles (audit #9).
     onScreenshot: () -> Unit = {},
+    // PARITY-ANDROID-SHOT: long-press the Screenshot tile toggles auto-saving the engine's event screenshots
+    // (level-ups, drops, clues, kills) to the gallery — mirrors iOS long-press on the 📷 button.
+    onScreenshotLongPress: () -> Unit = {},
     onAccount: () -> Unit = {},
     onLogout: () -> Unit = {},
     onDiscord: () -> Unit = {},
@@ -471,6 +476,7 @@ fun PluginPanel(
                                     onClose()
                                 },
                                 onScreenshot = onScreenshot,
+                                onScreenshotLongPress = onScreenshotLongPress,
                                 onAccount = onAccount,
                                 onLogout = onLogout,
                                 onDiscord = onDiscord,
@@ -753,6 +759,7 @@ private fun LauncherGrid(
     onOpenAbout: () -> Unit,
     onOpenWorldMap: () -> Unit,
     onScreenshot: () -> Unit,
+    onScreenshotLongPress: () -> Unit,
     onAccount: () -> Unit,
     onLogout: () -> Unit,
     onDiscord: () -> Unit,
@@ -839,7 +846,7 @@ private fun LauncherGrid(
                 add(TileSpec("World Map", glyph = "◉", onClick = onOpenWorldMap))
                 // §4 cutover: the toolbar-only nav buttons that had no Android home (audit §4.3) — fixed native
                 // tiles wired to existing handlers. Discord becomes reachable for the first time.
-                add(TileSpec("Screenshot", glyph = "▣", onClick = onScreenshot))
+                add(TileSpec("Screenshot", glyph = "▣", onClick = onScreenshot, onLongClick = onScreenshotLongPress))
                 add(TileSpec("Account", glyph = "⎆", onClick = onAccount))
                 // ✕ (the device font lacks the ⏻ power glyph -> tofu); reads as "exit session".
                 add(TileSpec("Log out", glyph = "✕", onClick = onLogout))
@@ -872,6 +879,7 @@ private data class TileSpec(
     val star: Boolean = false,
     val incompatible: Boolean = false,
     val onClick: () -> Unit,
+    val onLongClick: (() -> Unit)? = null,
 )
 
 /** Lay tiles out in fixed-width columns, padding the last row so widths stay even. */
@@ -890,6 +898,7 @@ private fun TileGrid(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RowScope.LaunchTile(t: TileSpec) {
     Column(
@@ -902,7 +911,7 @@ private fun RowScope.LaunchTile(t: TileSpec) {
                 width = if (t.selected) 1.5.dp else 0.5.dp,
                 color = if (t.selected) Color(0xFF80CBC4) else Color(0x33FFFFFF),
                 shape = RoundedCornerShape(10.dp),
-            ).clickable { t.onClick() }
+            ).combinedClickable(onClick = { t.onClick() }, onLongClick = t.onLongClick)
             .semantics {
                 contentDescription = t.label +
                     when {

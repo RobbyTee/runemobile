@@ -94,6 +94,7 @@ static jmethodID g_midNotificationDefaults = nullptr;  // SC-1/NOTIF-2: default 
 //   nextLink()         -> URL or null                (Finding 25: Chrome Custom Tab)
 //   hubState()         -> {"refreshing":b,"seq":i}    (Finding 17: hub install progress)
 static jmethodID g_midNextNotification = nullptr, g_midNextLink = nullptr, g_midHubState = nullptr;
+static jmethodID g_midNextScreenshot = nullptr; // PARITY-ANDROID-SHOT: next auto-screenshot path or null
 static jmethodID g_midHubManifest = nullptr, g_midHubInstall = nullptr, g_midHubUninstall = nullptr;
 // Native-origin publish into the SAME shared queues (host-raised alerts/links; also deterministic path tests).
 static jmethodID g_midPublishNotification = nullptr, g_midPublishLink = nullptr;
@@ -634,6 +635,7 @@ static bool publishBridge(JNIEnv *env) {
             // AP-2a: drain surfaces for native notification / link-out / hub-progress (each best-effort).
             g_midNextNotification = midOpt(env, mug, "nextNotification", "()Ljava/lang/String;");
             g_midNextLink         = midOpt(env, mug, "nextLink", "()Ljava/lang/String;");
+            g_midNextScreenshot = midOpt(env, mug, "nextScreenshot", "()Ljava/lang/String;");
             g_midHubState         = midOpt(env, mug, "hubState", "()Ljava/lang/String;");
             // Finding 17 plugin-hub browse/install (best-effort; null disables the hub screen only).
             g_midHubManifest      = midOpt(env, mug, "hubManifest", "()Ljava/lang/String;");
@@ -1869,6 +1871,13 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_helloshell_JvmLauncher_nativeNextLink(JNIEnv *artEnv, jobject) {
     if (!mobileUiReady() || !g_midNextLink) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midNextLink);
+}
+// PARITY-ANDROID-SHOT — nextScreenshot: absolute path of the next engine auto-screenshot PNG (or "").
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_helloshell_JvmLauncher_nativeNextScreenshot(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midNextScreenshot)
+        return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midNextScreenshot);
 }
 // Finding 17 — hubState: {"refreshing":bool,"seq":int}, native drives the hub install spinner.
 extern "C" JNIEXPORT jstring JNICALL

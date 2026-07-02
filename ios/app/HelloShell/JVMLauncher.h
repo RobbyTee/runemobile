@@ -169,6 +169,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// overlay "Configure"). Transition-gated on the Java side. Call on the main thread.
 + (void)postShiftHeld:(BOOL)held;
 
+/// PARITY-IOS-LATCH: sticky-Ctrl / sticky-Alt, mirroring postShiftHeld. Alt is what makes Ground Items'
+/// Alt-gated highlight reachable on touch (no hardware key). Transition-gated on the Java side; main thread.
++ (void)postCtrlHeld:(BOOL)held;
++ (void)postAltHeld:(BOOL)held;
+
 /// True when the gamepack has a text field open and awaiting input (search / PM / enter-amount dialog).
 /// Polled by the shell to auto-raise/dismiss the soft keyboard. Call on the main thread.
 + (BOOL)textInputOpen;

@@ -243,6 +243,8 @@ object JvmLauncher {
 
     external fun nativeNextLink(): String // Finding 25: a URL or ""
 
+    external fun nativeNextScreenshot(): String // PARITY-ANDROID-SHOT: absolute PNG path or ""
+
     external fun nativeHubState(): String // Finding 17: {"refreshing":bool,"seq":int}
 
     external fun nativeHubManifest(): String // Finding 17: {"status":loading|ok,...,plugins:[...]}
@@ -663,6 +665,8 @@ object JvmLauncher {
     fun nextNotification() = nativeNextNotification()
 
     fun nextLink() = nativeNextLink()
+
+    fun nextScreenshot() = nativeNextScreenshot()
 
     fun hubState() = nativeHubState()
 
