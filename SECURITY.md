@@ -28,6 +28,14 @@ Expect a best-effort response. Please give enough detail to reproduce.
   plugins is the user's responsibility.
 - **Tokens at rest.** OAuth tokens are kept in app-private storage; no live
   `tokens.json` is shipped in any build.
+- **Android login transits the system clipboard.** The Jagex sign-in returns its
+  `id_token` by having you copy the `http://localhost/#…` redirect link; anything
+  on the clipboard is briefly visible to whatever else can read it (keyboards,
+  clipboard managers, pre-Android-10 background apps). Mitigations in place: the
+  return leg is bound to the app's own OAuth `state` + `nonce` (a planted foreign
+  link is rejected), and the clipboard is cleared the moment the token is
+  captured. The residual exposure window — between your copy and the app's read —
+  is inherent to the flow and accepted.
 
 ## Build & supply chain
 

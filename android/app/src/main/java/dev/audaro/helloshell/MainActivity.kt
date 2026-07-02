@@ -225,6 +225,10 @@ class MainActivity : AppCompatActivity() {
     // chrome snapshot's "sessionExpired" flag); its button re-runs the on-device Jagex login (LoginActivity).
     private lateinit var sessionExpiredOverlay: SessionExpiredOverlayView
 
+    // FATAL-1: a native card for engine-fatal stops (the snapshot's "fatalError"/"fatalCode" — js5connect
+    // after a weekly OSRS update, js5io, crash). Terminal; its button relaunches the process.
+    private lateinit var fatalErrorOverlay: FatalErrorOverlayView
+
     // PERF-MEMORY-THERMAL-01: throttles the 117HD scene scale under thermal pressure (armed only on a 117HD boot).
     private var thermalGovernor: ThermalGovernor? = null
 
@@ -653,6 +657,18 @@ class MainActivity : AppCompatActivity() {
             SessionExpiredOverlayView(this).apply {
                 onSignIn = { startActivity(Intent(this@MainActivity, LoginActivity::class.java)) }
             }
+        // FATAL-1: the engine-fatal card (interactive; driven from updateChrome's fatalError flag). Restart =
+        // the same clean-boot relaunch the renderer restarts use (the embedded VM is one-per-process).
+        fatalErrorOverlay =
+            FatalErrorOverlayView(this).apply {
+                onRestart = {
+                    val i = packageManager.getLaunchIntentForPackage(packageName)
+                    i?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                    startActivity(i)
+                    finishAffinity()
+                    Runtime.getRuntime().exit(0)
+                }
+            }
         // UX-DISCRETE-01 / ENH-B06: the "Hopping…" scrim (non-interactive; armed at the hop trigger sites, hidden
         // from updateChrome's loggedIn signal / a timeout).
         hoppingOverlay = HoppingOverlayView(this)
@@ -900,6 +916,7 @@ class MainActivity : AppCompatActivity() {
                 addView(reconnectOverlay, FrameLayout.LayoutParams(mp, mp)) // FIX-9: "Reconnecting…" scrim (non-interactive)
                 addView(hoppingOverlay, FrameLayout.LayoutParams(mp, mp)) // ENH-B06: "Hopping…" scrim (non-interactive)
                 addView(sessionExpiredOverlay, FrameLayout.LayoutParams(mp, mp)) // UX-LOGIN-01: "Session expired" card (interactive, top)
+                addView(fatalErrorOverlay, FrameLayout.LayoutParams(mp, mp)) // FATAL-1: engine-fatal card (topmost card)
                 // §4: the launcher handle sits above the game/chrome (tappable) but below the launcher sheet
                 // (covered while it's open) and clears the bottom gesture inset.
                 handleBaseBottom = (10 * resources.displayMetrics.density).toInt()
@@ -2603,6 +2620,14 @@ class MainActivity : AppCompatActivity() {
                 Log.i(TAG, "uxlogin01: session-expired overlay -> $show")
             }
         }
+        // FATAL-1: latch the engine-fatal card on the snapshot's fatal flag. The bridge makes fatal outrank
+        // reconnecting/sessionExpired (a fatal is not recoverable), so the overlays never co-fire; the card
+        // never hides (terminal for this process — its button relaunches).
+        if (::fatalErrorOverlay.isInitialized && o?.optBoolean("fatalError") == true) {
+            if (fatalErrorOverlay.showFatal(o.optString("fatalCode", "unknown"))) {
+                Log.i(TAG, "fatal1: engine-fatal card shown (code=${o.optString("fatalCode")})")
+            }
+        }
         // UX-ONBOARD-01: dismiss the cold-start splash only once the engine has actually PAINTED a frame
         // (frameWidth>0, a cheap native counter universal across renderers) — or the wall-clock failsafe fires. A
         // device cold-start trace showed the snapshot's login STATE (loginScreen/loggedIn) flips ~1.1 s BEFORE the
@@ -3531,6 +3556,16 @@ class MainActivity : AppCompatActivity() {
         Log.i(TAG, "rlhdprobe: startJvm rc=$rc (watch logcat: ANDROID_RLHD_PROBE / MEGAVERDICT)")
     }
 
+    // BOOT-1: every silent-black-screen guard in bootJvm routes through here so the cold-start splash shows
+    // WHY the boot died instead of dismissing over a dead SurfaceView (the splash error mode also disarms its
+    // wall-clock failsafe dismiss). Runs on the boot thread; marshals to the UI thread itself.
+    private fun postBootError(
+        title: String,
+        lines: List<String>,
+    ) {
+        runOnUiThread { if (::splashOverlay.isInitialized) splashOverlay.showBootError(title, lines) }
+    }
+
     private fun bootJvm(
         app: android.content.Context,
         census: Boolean = false,
@@ -3540,13 +3575,47 @@ class MainActivity : AppCompatActivity() {
         // UX-ONBOARD-01: on the first-install path, feed a coarse "Unpacking… N%" line into the cold-start splash.
         // The callback runs on this boot thread, so marshal each update to the UI thread. No-op once installed.
         val javaHome =
-            AssetInstaller.ensureInstalled(app) { pct ->
-                runOnUiThread { if (::splashOverlay.isInitialized && splashOverlay.isActive) splashOverlay.setUnpackProgress(pct) }
+            try {
+                AssetInstaller.ensureInstalled(app) { pct ->
+                    runOnUiThread { if (::splashOverlay.isInitialized && splashOverlay.isActive) splashOverlay.setUnpackProgress(pct) }
+                }
+            } catch (e: AssetInstaller.InsufficientSpaceException) {
+                Log.e(TAG, "boot: unpack blocked — ${e.message}")
+                booted.set(false)
+                postBootError(
+                    "Not enough storage",
+                    listOf(
+                        "This app needs about ${e.neededMb} MB free to",
+                        "unpack the game runtime (${e.freeMb} MB available).",
+                        "Free up some space, then reopen the app.",
+                    ),
+                )
+                return
+            } catch (e: Exception) {
+                Log.e(TAG, "boot: runtime unpack failed", e)
+                booted.set(false)
+                postBootError(
+                    "Couldn't unpack the game",
+                    listOf(
+                        "Unpacking the game runtime failed",
+                        "(${e.javaClass.simpleName}). Reopen the app to",
+                        "retry; if it keeps failing, reinstall it.",
+                    ),
+                )
+                return
             }
         val libjvm = File(javaHome, "lib/server/libjvm.so")
         if (!libjvm.exists()) {
             Log.e(TAG, "embedded JRE not installed; expected $libjvm")
             booted.set(false) // not booted yet — let a later launch retry the asset unpack
+            postBootError(
+                "Game runtime missing",
+                listOf(
+                    "The embedded Java runtime didn't unpack",
+                    "completely. Reopen the app to retry; if it",
+                    "keeps failing, reinstall it.",
+                ),
+            )
             return
         }
 
@@ -3593,6 +3662,14 @@ class MainActivity : AppCompatActivity() {
                     if (useGpuJar) " (run android/dev-tools/gpu/stage-android-gpu-jar.sh)" else "",
             )
             booted.set(false)
+            postBootError(
+                "Game files missing",
+                listOf(
+                    "The game's client files didn't unpack",
+                    "completely. Reopen the app to retry; if it",
+                    "keeps failing, reinstall it.",
+                ),
+            )
             return
         }
         val rlhdJar = jvmDir.list { _, name -> name.startsWith("client-") && name.endsWith("-rlhd.jar") }?.firstOrNull()
@@ -3600,6 +3677,14 @@ class MainActivity : AppCompatActivity() {
             // Only an rlhd BOOT hard-requires the jar; a CPU/GPU boot just loses the 117HD panel row.
             Log.e(TAG, "no client-*-rlhd.jar staged in $jvmDir (run android/dev-tools/gpu/stage-rlhd-zone-jar.sh)")
             booted.set(false)
+            postBootError(
+                "HD renderer files missing",
+                listOf(
+                    "The 117HD renderer's files didn't unpack",
+                    "completely. Switch the renderer in the",
+                    "plugins panel, or reinstall the app.",
+                ),
+            )
             return
         }
         val classpath =
@@ -3834,6 +3919,14 @@ class MainActivity : AppCompatActivity() {
             // class later threw is still rc==0 and stays booted — that's the engine's own run, not a boot fail.)
             Log.e(TAG, "startJvm rc=$rc — VM bringup FAILED; clearing booted so a relaunch can retry")
             booted.set(false)
+            postBootError(
+                "Couldn't start the game",
+                listOf(
+                    "The game's Java runtime failed to start",
+                    "(code $rc). Close and reopen the app to",
+                    "retry; if it keeps failing, reinstall it.",
+                ),
+            )
             return
         }
         Log.i(TAG, "startJvm rc=$rc (VM up; watch logcat tags jvm-boot/jvm-stdout)")

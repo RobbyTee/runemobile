@@ -117,6 +117,22 @@ until a new build is published.
 > On iOS the installed app icon is labelled **HelloShell** — that's the name to
 > look for on your Home Screen and in StikDebug's app list.
 
+### Expected behaviors (by design)
+
+A few things this build does that you'd otherwise only discover by surprise:
+
+- **Reconnect is a re-login.** After a disconnect the app automatically clicks
+  back through the login flow (bounded attempts) rather than resuming the old
+  session — you'll see the login screen flash by. If it can't get back in, a
+  "session expired" card asks you to sign in again.
+- **Backgrounding on Android can drop the session.** While the app is in the
+  background it idles at a slow tick to save battery, and Android/Jagex may cut
+  the connection; foregrounding it triggers the automatic re-login above. (iOS
+  keeps the session alive in the background via its picture-in-picture mode.)
+- **117HD may reduce resolution when the phone runs hot (iOS).** Under sustained
+  thermal pressure the HD renderer temporarily lowers its internal resolution
+  scale and restores it once the device cools — this is deliberate, not a bug.
+
 ---
 
 ## Install — Android

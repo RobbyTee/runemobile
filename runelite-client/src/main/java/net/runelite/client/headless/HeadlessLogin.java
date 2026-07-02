@@ -324,6 +324,9 @@ public final class HeadlessLogin
 			playAttempts = 0;
 			tryAgainAttempts = 0;
 			worldSelected = false;
+			// LEGACY-1: give the legacy form its own fresh budget too, so a reconnect cycle can re-drive it.
+			legacyWelcomeAttempts = 0;
+			legacySubmitAttempts = 0;
 			log.info("[headless-login] reconnect: disconnect detected (CONNECTION_LOST) -> re-arming login (cycle {}/{})",
 				reconnectAttempts, MAX_RECONNECT);
 		}
@@ -423,16 +426,12 @@ public final class HeadlessLogin
 			return;
 		}
 
-		// Legacy (non-Jagex) account: drive the classic username/password form instead of the JX welcome
-		// screen (loginIndex never reaches 10 without a JX_* session, so stage 2 below is inert here).
-		if (LEGACY_ENABLED)
-		{
-			tickLegacy(client, canvas, loginIndex);
-			return;
-		}
-
 		// FIX-9 reconnect stage — the post-disconnect "Failed to login. Please try again." dialog (loginIndex 9).
 		// Click "Try again" to return to the welcome screen (loginIndex 10), where Stage 2 below clicks Play Now.
+		// LEGACY-1: this stage runs for BOTH account types (it used to sit below the legacy branch, so a legacy
+		// drop parked on this dialog forever — no reconnect, no give-up): the dialog is account-agnostic, and
+		// clicking Try Again returns a legacy client to the welcome panel (loginIndex 0) where tickLegacy
+		// re-drives the form with the re-armed budgets. Exhaustion here latches gaveUp for legacy too.
 		if (loginIndex == RECONNECT_LOGIN_INDEX)
 		{
 			if (tryAgainAttempts >= MAX_TRYAGAIN_ATTEMPTS)
@@ -455,6 +454,15 @@ public final class HeadlessLogin
 			log.info("[headless-login] reconnect: Try Again attempt {}/{}: synthesizing click at {},{} (scaled to canvas {}x{})",
 				tryAgainAttempts, MAX_TRYAGAIN_ATTEMPTS, RECONNECT_X, RECONNECT_Y, canvas.getWidth(), canvas.getHeight());
 			synthesizeClickScaled(canvas, RECONNECT_X, RECONNECT_Y);
+			return;
+		}
+
+		// Legacy (non-Jagex) account: drive the classic username/password form instead of the JX welcome
+		// screen (loginIndex never reaches 10 without a JX_* session, so stage 2 below is inert here).
+		// Sits BELOW the reconnect stage so a legacy in-session drop shares the Try-Again handling above.
+		if (LEGACY_ENABLED)
+		{
+			tickLegacy(client, canvas, loginIndex);
 			return;
 		}
 
@@ -522,6 +530,12 @@ public final class HeadlessLogin
 	 * through the Client API and Enter (twice: field-advance, then submit) starts the login. Any other
 	 * sub-state (authenticator, error dialog) is left alone — the attempt caps stop runaway input and the
 	 * captured frames show where it parked.
+	 *
+	 * <p>Reconnect (LEGACY-1): an in-session drop lands on the reconnect panel (loginIndex 9), which is
+	 * handled by the shared Try-Again stage in {@code tick} BEFORE this method runs — clicking Try Again
+	 * returns the client to the legacy welcome panel (loginIndex 0), and this method re-drives the form with
+	 * the budgets the CONNECTION_LOST re-arm reset. If Try-Again or the form budgets exhaust, the give-up
+	 * latches fire and the shells show the "session expired" card.
 	 */
 	private static void tickLegacy(Client client, Canvas canvas, int loginIndex)
 	{
@@ -539,6 +553,7 @@ public final class HeadlessLogin
 					log.warn("[headless-login] legacy: still on the welcome panel (loginIndex=0) after {} "
 						+ "Enter attempt(s) — giving up", legacyWelcomeAttempts);
 					done = true;
+					gaveUp = true;   // LEGACY-1: surface "session expired" for legacy accounts too
 				}
 				return;
 			}
@@ -563,6 +578,7 @@ public final class HeadlessLogin
 					log.warn("[headless-login] legacy: still on the login form after {} submit attempt(s) — "
 						+ "giving up (bad credentials, or the world rejected the login)", legacySubmitAttempts);
 					done = true;
+					gaveUp = true;   // LEGACY-1: surface "session expired" for legacy accounts too
 				}
 				return;
 			}

@@ -315,6 +315,15 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 // flags (an active reconnect wins; sessionExpired only on give-up) so the two overlays are never both shown.
 @property (nonatomic, strong) UIView *sessionExpiredScrim;
 @property (nonatomic, assign) BOOL sessionExpiredShown;
+// FATAL-1: a native card for engine-fatal stops (the snapshot's "fatalError"/"fatalCode", noted from
+// RSAppletStub.onError via the bridge). Desktop RuneLite shows a Swing FatalErrorDialog these headless
+// boots can't render — without this, every weekly OSRS update ends in a silent black screen (stale client
+// rev -> error_game_js5connect). Terminal state: the card stays up (the applet is dead, nothing recovers);
+// the single button quits the app so the user can relaunch (and, for js5connect, install the rebuilt app).
+@property (nonatomic, strong) UIView *fatalErrorScrim;
+@property (nonatomic, strong) UILabel *fatalErrorTitle;
+@property (nonatomic, strong) UILabel *fatalErrorBody;
+@property (nonatomic, assign) BOOL fatalErrorShown;
 // PERF-MEMORY-THERMAL-01 (iOS parity with Android's ThermalGovernor): protect sustained 117HD play from
 // silent thermal throttling by stepping the 117HD sceneResolutionScale DOWN under NSProcessInfo thermal
 // pressure (serious -> 65, critical -> 50, never above the user's own baseline) and restoring the captured
@@ -3078,6 +3087,137 @@ static int chatRowCanvasH(void) {
     });
 }
 
+// FATAL-1: build the fatal-error card once — same OSRS-styled interactive card as the session-expired one,
+// but with per-code title/body (set on show) and a single "Close app" action: the applet is dead, so the
+// only path forward is a fresh process (and, after a weekly OSRS update, a rebuilt app).
+- (void)setupFatalErrorOverlay {
+    if (self.fatalErrorScrim)
+        return;
+    UIView *scrim = [[UIView alloc] initWithFrame:self.view.bounds];
+    scrim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    scrim.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.80];
+    scrim.userInteractionEnabled = YES; // terminal state — nothing underneath is interactable anyway
+    scrim.hidden = YES;
+
+    UIView *card = [[UIView alloc] init];
+    card.translatesAutoresizingMaskIntoConstraints = NO;
+    card.backgroundColor = [UIColor colorWithRed:33 / 255.0 green:28 / 255.0 blue:23 / 255.0 alpha:0.96];
+    card.layer.cornerRadius = 10;
+    card.layer.borderWidth = 1.5;
+    card.layer.borderColor = [UIColor colorWithRed:140 / 255.0 green:128 / 255.0 blue:102 / 255.0 alpha:1.0].CGColor;
+    [scrim addSubview:card];
+
+    UILabel *title = [[UILabel alloc] init];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.font = [UIFont systemFontOfSize:18 weight:UIFontWeightBold];
+    title.textColor = [UIColor whiteColor];
+    title.textAlignment = NSTextAlignmentCenter;
+    [card addSubview:title];
+    self.fatalErrorTitle = title;
+
+    UILabel *body = [[UILabel alloc] init];
+    body.translatesAutoresizingMaskIntoConstraints = NO;
+    body.numberOfLines = 0;
+    body.font = [UIFont systemFontOfSize:14];
+    body.textColor = [UIColor colorWithRed:210 / 255.0 green:198 / 255.0 blue:170 / 255.0 alpha:1.0];
+    body.textAlignment = NSTextAlignmentCenter;
+    [card addSubview:body];
+    self.fatalErrorBody = body;
+
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
+    btn.translatesAutoresizingMaskIntoConstraints = NO;
+    [btn setTitle:@"Close app" forState:UIControlStateNormal];
+    btn.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold];
+    [btn setTitleColor:[UIColor colorWithRed:255 / 255.0 green:230 / 255.0 blue:170 / 255.0 alpha:1.0]
+              forState:UIControlStateNormal];
+    btn.backgroundColor = [UIColor colorWithRed:92 / 255.0 green:72 / 255.0 blue:38 / 255.0 alpha:1.0];
+    btn.layer.cornerRadius = 8;
+    btn.layer.borderWidth = 1.5;
+    btn.layer.borderColor = [UIColor colorWithRed:180 / 255.0 green:150 / 255.0 blue:96 / 255.0 alpha:1.0].CGColor;
+    [btn addTarget:self action:@selector(onFatalErrorClose) forControlEvents:UIControlEventTouchUpInside];
+    [card addSubview:btn];
+
+    [self.view addSubview:scrim];
+    self.fatalErrorScrim = scrim;
+
+    [NSLayoutConstraint activateConstraints:@[
+        [card.centerXAnchor constraintEqualToAnchor:scrim.centerXAnchor],
+        [card.centerYAnchor constraintEqualToAnchor:scrim.centerYAnchor],
+        [card.widthAnchor constraintEqualToConstant:320],
+        [title.centerXAnchor constraintEqualToAnchor:card.centerXAnchor],
+        [title.topAnchor constraintEqualToAnchor:card.topAnchor
+                                        constant:24],
+        [body.leadingAnchor constraintEqualToAnchor:card.leadingAnchor
+                                           constant:20],
+        [body.trailingAnchor constraintEqualToAnchor:card.trailingAnchor
+                                            constant:-20],
+        [body.topAnchor constraintEqualToAnchor:title.bottomAnchor
+                                       constant:12],
+        [btn.centerXAnchor constraintEqualToAnchor:card.centerXAnchor],
+        [btn.topAnchor constraintEqualToAnchor:body.bottomAnchor
+                                      constant:18],
+        [btn.widthAnchor constraintEqualToConstant:252],
+        [btn.heightAnchor constraintEqualToConstant:46],
+        [card.bottomAnchor constraintEqualToAnchor:btn.bottomAnchor
+                                          constant:20],
+    ]];
+}
+
+// FATAL-1: per-code copy. js5connect after the weekly OSRS update = stale client rev — the honest headline
+// case (the fix is a rebuilt app, or you're offline); js5io = blocked/flaky connection; crash = engine died.
++ (NSArray<NSString *> *)fatalCopyForCode:(NSString *)code {
+    if ([code isEqualToString:@"error_game_js5connect"]) {
+        return @[
+            @"Can't reach the game servers",
+            @"Old School RuneScape may have just updated — after a weekly game update this app needs a "
+            @"rebuilt release before it can connect. Install the newest build of the app, or if you're "
+            @"offline, check your connection and reopen the app."
+        ];
+    }
+    if ([code isEqualToString:@"error_game_js5io"]) {
+        return @[
+            @"Connection to the update server failed",
+            @"The connection to the game's update server was interrupted or blocked. Check your network "
+            @"(a firewall or captive portal can block it), then reopen the app."
+        ];
+    }
+    if ([code isEqualToString:@"error_game_crash"]) {
+        return @[
+            @"The game crashed",
+            @"Close and reopen the app to get back in. If this keeps happening, disable recently added "
+            @"plugins before reconnecting."
+        ];
+    }
+    return @[
+        @"The game stopped",
+        [NSString stringWithFormat:@"Close and reopen the app to get back in. (code: %@)", code ?: @"unknown"]
+    ];
+}
+
+// FATAL-1: drive the card from the snapshot's fatal flag (~10 Hz slot, ungated — a fatal can land at any
+// point of the session). The bridge makes fatal outrank reconnecting/sessionExpired, so the overlays never
+// co-fire; latch-once (never hides) because a fatal is terminal for this process.
+- (void)updateFatalErrorOverlay {
+    if (!self.fatalErrorScrim || self.fatalErrorShown)
+        return;
+    NSString *snap = [JVMLauncher chromeSnapshot];
+    NSDictionary *d = parseBridgeJSON(snap, "ViewController.updateFatalErrorOverlay");
+    if (![d isKindOfClass:[NSDictionary class]] || ![d[@"fatalError"] boolValue])
+        return;
+    NSString *code = [d[@"fatalCode"] isKindOfClass:[NSString class]] ? d[@"fatalCode"] : @"unknown";
+    NSArray<NSString *> *copy = [ViewController fatalCopyForCode:code];
+    self.fatalErrorTitle.text = copy[0];
+    self.fatalErrorBody.text = copy[1];
+    self.fatalErrorShown = YES;
+    self.fatalErrorScrim.hidden = NO;
+    [self.view bringSubviewToFront:self.fatalErrorScrim];
+    [self appendLine:[NSString stringWithFormat:@"[shell] fatal: engine-fatal card shown (code=%@)", code]];
+}
+
+- (void)onFatalErrorClose {
+    exit(0); // same as promptRestartToPlay's restart: the applet is dead; a fresh process is the only recovery
+}
+
 // PERF-MEMORY-THERMAL-01: read the LIVE 117HD sceneResolutionScale off the config bridge. Returns -1 while
 // the config isn't readable (bridge not up / plugin config not loaded) so the caller defers instead of
 // restoring a wrong default — the governor must never raise a user's deliberately lower scale.
@@ -3475,6 +3615,7 @@ static int chatRowCanvasH(void) {
     [self setupPictureInPicture];
     [self setupReconnectOverlay];   // FIX-9: native "Reconnecting…" scrim (hidden until a real reconnect)
     [self setupSessionExpiredOverlay]; // UX-LOGIN-01: "Session expired" card (hidden until a give-up)
+    [self setupFatalErrorOverlay];     // FATAL-1: engine-fatal card (hidden until the bridge notes a fatal)
 
 #if !defined(RC_BACKEND_ANGLE)
     // GPU Zone (117HD) PRESENT (EAGL). Two flavours, both no-glReadPixels (the measured ~16ms/frame bottleneck):
@@ -3892,6 +4033,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     if (self.framesShown % 6 == 0) {
         [self updateReconnectOverlay];
         [self updateSessionExpiredOverlay]; // UX-LOGIN-01: same cadence/ungating as the reconnect scrim
+        [self updateFatalErrorOverlay];     // FATAL-1: latch-once fatal card, same cadence
     }
 
     // W3 Feature-A (A2.5): refresh the crude native chat-at-top + HUD-status overlay from the HudDataBridge

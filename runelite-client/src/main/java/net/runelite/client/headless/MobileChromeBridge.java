@@ -112,6 +112,27 @@ public final class MobileChromeBridge
 		}
 	}
 
+	// FATAL-1: the engine-fatal code (js5connect / js5io / crash / other) noted from RSAppletStub.onError.
+	// onError runs on the Swing EDT, off the client thread, so this is a plain volatile handoff — the next
+	// tick() folds it into the snapshot; never publish directly from the noting thread. A fatal stop is
+	// terminal (the applet is dead, nothing recovers), so once set it outranks every other snapshot state.
+	private static volatile String fatalCode;
+
+	/**
+	 * Note an engine-fatal error code (from {@code RSAppletStub.onError} on mobile). Terminal: the shells
+	 * surface a native card with a path forward instead of the Swing FatalErrorDialog that can't render
+	 * headless. Safe from any thread; no-op when the bridge is disabled.
+	 */
+	public static void noteFatalError(String code)
+	{
+		if (ENABLED)
+		{
+			// Codes are fixed engine tokens (e.g. error_game_js5connect); sanitize anyway so the value can
+			// be inlined into the hand-built JSON without an escaper.
+			fatalCode = code == null ? "unknown" : code.replaceAll("[^A-Za-z0-9_.-]", "_");
+		}
+	}
+
 	// One-shot readability verdict accumulator (desktop de-risk). Tracks the BEST any frame achieved, since
 	// some widgets are not built on the very first LOGGED_IN frame.
 	private static final int VERDICT_FRAME = 60;   // ~1.2s of LOGGED_IN frames at ~50 fps
@@ -153,6 +174,17 @@ public final class MobileChromeBridge
 	{
 		if (!ENABLED || c == null)
 		{
+			return;
+		}
+
+		// FATAL-1: a noted engine-fatal outranks EVERYTHING (including a lingering LOGGED_IN state — the
+		// applet is dead by the time onError fires). The shells show a native "game updated / no
+		// connection / crashed" card with a path forward; without this the headless boot is a silent
+		// black screen after every weekly OSRS update.
+		final String fatal = fatalCode;
+		if (fatal != null)
+		{
+			publishSnapshot("{\"enabled\":true,\"loggedIn\":false,\"fatalError\":true,\"fatalCode\":\"" + fatal + "\"}");
 			return;
 		}
 
