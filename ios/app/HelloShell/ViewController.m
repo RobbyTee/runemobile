@@ -784,6 +784,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.keyboardButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.keyboardButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.keyboardButton setTitle:@"⌨︎" forState:UIControlStateNormal];
+    self.keyboardButton.accessibilityLabel = @"Keyboard";
+    self.keyboardButton.accessibilityHint = @"Shows or hides the on-screen keyboard";
     self.keyboardButton.titleLabel.font = [UIFont systemFontOfSize:22];
     self.keyboardButton.tintColor = [UIColor whiteColor];
     self.keyboardButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
@@ -798,6 +800,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.shiftButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.shiftButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.shiftButton setTitle:@"⇧" forState:UIControlStateNormal];
+    self.shiftButton.accessibilityLabel = @"Sticky Shift";
+    self.shiftButton.accessibilityHint = @"Holds Shift down for shift-click actions; tap again to release";
     self.shiftButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
     self.shiftButton.tintColor = [UIColor whiteColor];
     self.shiftButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
@@ -811,6 +815,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.screenshotButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.screenshotButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.screenshotButton setTitle:@"📷" forState:UIControlStateNormal];
+    self.screenshotButton.accessibilityLabel = @"Screenshot";
+    self.screenshotButton.accessibilityHint = @"Saves the current frame to Photos; long press toggles auto-saving event screenshots";
     self.screenshotButton.titleLabel.font = [UIFont systemFontOfSize:20];
     self.screenshotButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
     self.screenshotButton.layer.cornerRadius = 8;
@@ -828,6 +834,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.pipButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.pipButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.pipButton setTitle:@"📺" forState:UIControlStateNormal];
+    self.pipButton.accessibilityLabel = @"Picture in picture";
+    self.pipButton.accessibilityHint = @"Pops the game into a floating window";
     self.pipButton.titleLabel.font = [UIFont systemFontOfSize:20];
     self.pipButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
     self.pipButton.layer.cornerRadius = 8;
@@ -841,6 +849,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.hotkeyButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.hotkeyButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.hotkeyButton setTitle:@"⚡" forState:UIControlStateNormal];
+    self.hotkeyButton.accessibilityLabel = @"Action hotkeys";
+    self.hotkeyButton.accessibilityHint = @"Shows or hides the hotkey strip; long press to edit hotkeys";
     self.hotkeyButton.titleLabel.font = [UIFont systemFontOfSize:20];
     self.hotkeyButton.tintColor = [UIColor whiteColor];
     self.hotkeyButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
@@ -1074,6 +1084,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.debugToggle = [UIButton buttonWithType:UIButtonTypeSystem];
     self.debugToggle.translatesAutoresizingMaskIntoConstraints = NO;
     [self.debugToggle setTitle:@"≡" forState:UIControlStateNormal];
+    self.debugToggle.accessibilityLabel = @"Debug panel";
+    self.debugToggle.accessibilityHint = @"Shows or hides the developer log";
     self.debugToggle.titleLabel.font = [UIFont boldSystemFontOfSize:22];
     self.debugToggle.tintColor = [UIColor whiteColor];
     self.debugToggle.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
@@ -1086,6 +1098,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.chromeToggle = [UIButton buttonWithType:UIButtonTypeSystem];
     self.chromeToggle.translatesAutoresizingMaskIntoConstraints = NO;
     [self.chromeToggle setTitle:@"▦" forState:UIControlStateNormal];
+    self.chromeToggle.accessibilityLabel = @"Game interface rails";
+    self.chromeToggle.accessibilityHint = @"Shows or hides the tab rails";
     self.chromeToggle.titleLabel.font = [UIFont boldSystemFontOfSize:22];
     self.chromeToggle.tintColor = [UIColor whiteColor];
     self.chromeToggle.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
@@ -1098,6 +1112,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.pluginButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.pluginButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.pluginButton setTitle:@"⚙" forState:UIControlStateNormal];
+    self.pluginButton.accessibilityLabel = @"Plugin settings";
+    self.pluginButton.accessibilityHint = @"Opens plugin configuration; long press to change interface size";
     self.pluginButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
     self.pluginButton.tintColor = [UIColor whiteColor];
     self.pluginButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
@@ -1115,6 +1131,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.gridButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.gridButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.gridButton setTitle:@"⊞" forState:UIControlStateNormal];
+    self.gridButton.accessibilityLabel = @"Plugins";
+    self.gridButton.accessibilityHint = @"Opens the plugin launcher; long press to toggle the icon rail";
     self.gridButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
     self.gridButton.tintColor = [UIColor whiteColor];
     self.gridButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
@@ -4913,6 +4931,8 @@ static CGRect mapRectFromArr(NSArray *a) {
         UIButton *cog = [UIButton buttonWithType:UIButtonTypeSystem];
         cog.frame = CGRectMake(boxW - 44.0, 0, 44.0, headerH);
         [cog setTitle:(self.shiftHeld ? @"⚙✓" : @"⚙") forState:UIControlStateNormal];
+        cog.accessibilityLabel = self.shiftHeld ? @"Customize, on" : @"Customize";
+        cog.accessibilityHint = @"Latches Shift and reopens the menu to show swap-config options";
         cog.titleLabel.font = [UIFont systemFontOfSize:14];
         cog.tintColor = self.shiftHeld ? [UIColor colorWithRed:0.98 green:0.78 blue:0.25 alpha:1.0]
                                        : [UIColor colorWithWhite:0.85 alpha:1.0];
