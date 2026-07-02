@@ -2,6 +2,8 @@
 #import <WebKit/WebKit.h>
 
 // ── Jagex OAuth constants — verbatim from ios/dev-tools/fetch-shield-tokens.sh (Stage A consent flow) ──
+// Pinned across all three login impls by tools/shared-contract/auth-contract.json — a change here that
+// isn't mirrored to the Android port + the script fails check-auth-contract.sh (pre-commit + release gate).
 // Stage A produces the id_token the game-session API accepts (the launcher client's id_token is rejected
 // with INVALID_ID_TOKEN). redirect_uri is a loopback that never loads; we intercept the navigation to it
 // and read the id_token out of the URL fragment.

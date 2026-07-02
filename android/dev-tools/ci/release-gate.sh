@@ -22,6 +22,7 @@ set -euo pipefail
 ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
 ANDROID="$ROOT/android"
 CONTRACT="$ROOT/tools/shared-contract/check-contract.sh"
+CONTRACT_AUTH="$ROOT/tools/shared-contract/check-auth-contract.sh"
 
 run_build=1
 run_lint=1
@@ -55,6 +56,22 @@ case "$contract_rc" in
 	1) echo "  → contract ADDITIVE-only (new entry, safe for the other port) — allowed." ;;
 	2) fail "contract (a removed/changed entry risks breaking the other port — verify both ports, then refresh baseline.txt)" 2 ;;
 	*) fail "contract (check-contract.sh errored, rc=$contract_rc)" "$contract_rc" ;;
+esac
+
+# ── Stage 1a: Jagex OAuth wire contract (OAUTH-1) ─────────────────────────────────────────────────────
+# Required, non-bypassable. The three login impls (iOS .m / Android .kt / fetch-shield-tokens.sh) mint
+# tokens.json in their own runtime BEFORE the JVM boots, so no shared bridge is possible; this checks the
+# pinned endpoints / launcher UA / client-ids / scopes / response keys have not drifted across them.
+# exit 0 = OK, 2 = drift (a port missing a pinned value).
+stage "Jagex OAuth wire contract (iOS / Android / script parity)"
+set +e
+auth_report="$("$CONTRACT_AUTH" 2>&1)"; auth_rc=$?
+set -e
+echo "$auth_report"
+case "$auth_rc" in
+	0) echo "  → auth contract OK." ;;
+	2) fail "auth contract (a pinned Jagex OAuth value drifted between ports — reconcile all three, see auth-contract.json)" 2 ;;
+	*) fail "auth contract (check-auth-contract.sh errored, rc=$auth_rc)" "$auth_rc" ;;
 esac
 
 if [ "$contract_only" -eq 1 ]; then

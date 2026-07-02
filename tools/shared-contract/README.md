@@ -49,3 +49,24 @@ contract check runs there too. The pre-commit hook stays as the fast local pre-f
 It catches contract **drift** at commit/gate time and forces a conscious cross-port check — it does not itself
 build both apps. The actual "doesn't break the other port" proof is the Android bridge census (and the iOS bridge
 checks) it tells you to run; this guard makes sure you never forget to.
+
+## Sibling guard: the Jagex OAuth wire contract (OAUTH-1)
+The login path is **not** part of the jar contract above — it runs entirely in native code (iOS `NSURLSession`,
+Android `HttpURLConnection`) and mints `tokens.json` **before the JVM boots**, so it can never route through a
+shared JVM-side bridge. Instead the same OAuth wire constants are re-implemented in three places:
+
+- `ios/app/HelloShell/JagexLoginViewController.m` (Stage-A consent → session → accounts)
+- `android/app/src/main/java/dev/audaro/helloshell/JagexLogin.kt` (same)
+- `ios/dev-tools/fetch-shield-tokens.sh` (the full flow incl. Stage-B launcher tokens + OTL mint)
+
+- **`auth-contract.json`** — the single source of truth: every endpoint, the Cloudflare-sensitive launcher
+  User-Agent, both client ids, scopes, the consent `response_type`, the PKCE method, and the Jagex request/response
+  keys, each tagged with the `ports` that must carry it.
+- **`check-auth-contract.py` / `check-auth-contract.sh`** — assert every pinned value is present in each listed
+  port (whitespace-collapsed; the wrapped launcher UA is pinned as two per-line fragments). Exit `0` clean, `2` on
+  drift, naming the exact `[port] pin: value` that diverged.
+
+Wired in the same two places as the jar guard: the **pre-commit hook** blocks when a staged login change drifts a
+pinned value, and the **release gate** runs it as required Stage 1a (`--contract-only` covers it too). Editing
+`auth-contract.json` *is* the acknowledgement — there is no separate baseline to stage. When Jagex changes a value,
+update the JSON **and every listed port in the same commit**.

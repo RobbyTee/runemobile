@@ -100,6 +100,26 @@ if [ -n "$staged_am" ]; then
 	fi
 fi
 
+# ── 1b) Jagex OAuth wire-contract guard ───────────────────────────────────────────────────────────────
+# The three login impls (iOS .m / Android .kt / fetch-shield-tokens.sh) each re-mint tokens.json in their
+# own runtime BEFORE the JVM boots, so the HTTP legs can't share one bridge (OAUTH-1). auth-contract.json
+# is the source of truth; block if a staged login change drifts a pinned endpoint / UA / client-id / scope
+# / response key from the others. Editing the JSON is the acknowledgement — no separate baseline to stage.
+authfiles="$(printf '%s\n' "$staged" | grep -E '^(ios/app/HelloShell/JagexLoginViewController\.m|android/app/src/main/java/dev/audaro/helloshell/JagexLogin\.kt|ios/dev-tools/fetch-shield-tokens\.sh|tools/shared-contract/(auth-contract\.json|check-auth-contract\.(sh|py)))$' || true)"
+if [ -n "$authfiles" ]; then
+	set +e
+	areport="$("$ROOT/tools/shared-contract/check-auth-contract.sh" 2>&1)"; arc=$?
+	set -e
+	echo "$areport"
+	if [ "$arc" -ne 0 ]; then
+		echo
+		echo "✋ BLOCKED: Jagex OAuth wire contract drift (see above)."
+		echo "   Restore the value in the flagged port, or — if Jagex changed it — update auth-contract.json"
+		echo "   AND every listed port in this same commit.  (Emergency bypass: git commit --no-verify)"
+		exit 1
+	fi
+fi
+
 # ── 2) Cross-port contract guard ──────────────────────────────────────────────────────────────────────
 # Tier 1 — any staged change that lands in the jars BOTH ports embed?
 shared="$(printf '%s\n' "$staged" | grep -E '^(runelite-client/|ios/dev-tools/awtsmoke/|tools/stage-.*\.sh)' || true)"

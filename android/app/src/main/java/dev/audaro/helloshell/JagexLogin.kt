@@ -29,6 +29,8 @@ object JagexLogin {
     private const val TAG = "JagexLogin"
 
     // Verbatim from ios/dev-tools/fetch-shield-tokens.sh / JagexLoginViewController.m.
+    // Pinned across all three login impls by tools/shared-contract/auth-contract.json — a change here that
+    // isn't mirrored to the iOS port + the script fails check-auth-contract.sh (pre-commit + release gate).
     private const val AUTH_ENDPOINT = "https://account.jagex.com/oauth2/auth"
     private const val CONSENT_CLIENT_ID = "1fddee4e-b100-4f4e-b2b0-097f9088f9d2"
     private const val CONSENT_REDIRECT = "http://localhost"

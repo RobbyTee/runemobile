@@ -31,6 +31,8 @@ set -euo pipefail
 #                            game-session API accepts (the launcher client's id_token is
 #                            REJECTED by game-session as INVALID_ID_TOKEN; we tested both)
 #
+# Pinned across all three login impls by tools/shared-contract/auth-contract.json — a change to these
+# constants that isn't mirrored to the iOS + Android ports fails check-auth-contract.sh (pre-commit + gate).
 LAUNCHER_CLIENT_ID="com_jagex_auth_desktop_launcher"
 LAUNCHER_REDIRECT="https://secure.runescape.com/m=weblogin/launcher-redirect"
 LAUNCHER_SCOPE="openid offline gamesso.token.create user.profile.read"
