@@ -30,6 +30,12 @@ class SplashOverlayView(
     // Coarse unpack progress 0..100; <0 means "no progress line" (boot/first-frame phase, just the spinner).
     @Volatile private var progressPct = -1
 
+    // BOOT-1: terminal boot-failure state — spinner stops, an error title + body lines render, and dismiss()
+    // becomes a no-op so the wall-clock failsafe can't drop the card and expose a dead black SurfaceView.
+    @Volatile private var errorMode = false
+    private var errorTitle = ""
+    private var errorLines: List<String> = emptyList()
+
     private val scrimPaint = Paint().apply { color = Color.argb(255, 22, 18, 14) }
     private val cardPaint =
         Paint().apply {
@@ -101,9 +107,25 @@ class SplashOverlayView(
         postInvalidateOnAnimation()
     }
 
+    /**
+     * BOOT-1: latch a terminal boot failure onto the splash. The card stays up (dismiss() no-ops) because a
+     * failed boot leaves nothing behind it but a black SurfaceView — the copy is the only signal the user gets.
+     */
+    fun showBootError(
+        title: String,
+        lines: List<String>,
+    ) {
+        errorMode = true
+        errorTitle = title
+        errorLines = lines
+        active = true
+        visibility = VISIBLE
+        postInvalidateOnAnimation()
+    }
+
     /** Dismiss the splash. Idempotent; returns true the first time it actually hides (so the host logs once). */
     fun dismiss(): Boolean {
-        if (!active) return false
+        if (!active || errorMode) return false
         active = false
         visibility = GONE
         invalidate()
@@ -118,15 +140,28 @@ class SplashOverlayView(
         // Opaque background so the black SurfaceView never reads through during the cold boot.
         canvas.drawRect(0f, 0f, vw, vh, scrimPaint)
 
-        // Centered status card.
-        val cardW = minOf(dp(280f), vw - dp(48f))
-        val cardH = dp(180f)
+        // Centered status card (taller in error mode to fit the body lines).
+        val lineH = dp(20f)
+        val cardW = minOf(if (errorMode) dp(340f) else dp(280f), vw - dp(48f))
+        val cardH = if (errorMode) dp(96f) + errorLines.size * lineH else dp(180f)
         val cx = vw / 2f
         val top = (vh - cardH) / 2f
         val left = cx - cardW / 2f
         val r = dp(10f)
         canvas.drawRoundRect(left, top, left + cardW, top + cardH, r, r, cardPaint)
         canvas.drawRoundRect(left, top, left + cardW, top + cardH, r, r, borderPaint)
+
+        // BOOT-1 error mode: static title + body, no spinner (nothing is in progress any more).
+        if (errorMode) {
+            val titleBaseline = top + dp(40f) - (titlePaint.ascent() + titlePaint.descent()) / 2f
+            canvas.drawText(errorTitle, cx, titleBaseline, titlePaint)
+            var y = top + dp(72f)
+            for (line in errorLines) {
+                canvas.drawText(line, cx, y, textPaint)
+                y += lineH
+            }
+            return
+        }
 
         // Brand title.
         val titleBaseline = top + dp(40f) - (titlePaint.ascent() + titlePaint.descent()) / 2f

@@ -18,6 +18,16 @@ import java.io.File
 object AssetInstaller {
     private const val TAG = "AssetInstaller"
 
+    /**
+     * BOOT-1: thrown before an unpack that cannot fit. The caller (MainActivity.bootJvm) turns this into a
+     * "free up storage" card instead of the generic boot-failure copy — it's the one boot error the user can
+     * actually fix themselves.
+     */
+    class InsufficientSpaceException(
+        val neededMb: Long,
+        val freeMb: Long,
+    ) : RuntimeException("need ~${neededMb}MB free to unpack the runtime, only ${freeMb}MB available")
+
     // PERF-COLD-START-06: two INDEPENDENT re-unpack gates so a jar update doesn't re-copy the whole tree.
     //  - BASE (.installed-base) covers the embedded JRE / native libs under jvm/jre (~110 MB modules + .so). Bump
     //    by hand when those change — rare.
@@ -51,6 +61,15 @@ object AssetInstaller {
 
         Log.i(TAG, "runtime unpack: baseStale=$baseStale (BASE=$BASE) tagStale=$tagStale (tag=$wantTag) -> $root")
         root.mkdirs()
+        // BOOT-1 precheck: a mid-copy ENOSPC leaves a torn tree (recoverable via the marker gates, but only
+        // after the user frees space and relaunches blind). Fail up front with an actionable error instead.
+        // The full tree is ~198 MB (JRE ~110 + jars ~38 + headroom); a jar-only refresh needs far less.
+        val neededMb = if (baseStale) 250L else 80L
+        val freeMb = root.usableSpace / (1024 * 1024)
+        if (freeMb < neededMb) {
+            Log.e(TAG, "runtime unpack blocked: ${freeMb}MB free, need ~${neededMb}MB")
+            throw InsufficientSpaceException(neededMb, freeMb)
+        }
         // Wipe only what's being replaced so old and new never mix — the JRE subtree when BASE changed, and the
         // stale non-jre files (old jars) when the tag changed; the markers + the untouched gate are preserved.
         if (baseStale) jreDir.deleteRecursively()

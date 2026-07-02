@@ -63,6 +63,16 @@ class RSAppletStub implements ClientConfiguration
 	@Override
 	public void onError(String code)
 	{
+		// Mobile (headless) fork seam: a Swing FatalErrorDialog can't render under the headless toolkit, so
+		// hand the code to the bridge (the native shells show a card) and stop — placed ABOVE the
+		// showOutageMessage early-return so an outage-suppressed fatal still reaches the shell. Desktop
+		// behavior below is untouched.
+		if (net.runelite.client.headless.MobileChromeBridge.isEnabled())
+		{
+			net.runelite.client.headless.MobileChromeBridge.noteFatalError(code);
+			return;
+		}
+
 		try
 		{
 			RuntimeConfig rtc = runtimeConfigLoader.get();
