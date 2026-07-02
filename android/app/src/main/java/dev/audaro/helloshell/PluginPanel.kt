@@ -878,8 +878,9 @@ private data class TileSpec(
     val selected: Boolean = false,
     val star: Boolean = false,
     val incompatible: Boolean = false,
-    val onClick: () -> Unit,
+    // onLongClick sits BEFORE onClick so the many trailing-lambda call sites keep binding their lambda to onClick.
     val onLongClick: (() -> Unit)? = null,
+    val onClick: () -> Unit,
 )
 
 /** Lay tiles out in fixed-width columns, padding the last row so widths stay even. */

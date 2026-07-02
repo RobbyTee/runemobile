@@ -1702,8 +1702,14 @@ class MainActivity : AppCompatActivity() {
     private fun drainScreenshots() {
         val save = autoSaveScreenshots()
         var writes = 0
+        var drained = 0
         var path = JvmLauncher.nextScreenshot()
-        while (path.isNotEmpty()) {
+        // The bridge queue is bounded (MAX_SCREENSHOTS) and poll() empties it, so "" arrives quickly; the drain
+        // cap is only a backstop against a pathological always-non-empty return so this I/O loop can't spin.
+        while (path.isNotEmpty() && drained < 64) {
+            drained++
+            // decodeFile is a blocking read on the rl-drain thread; capped at 3 encodes/tick so a burst of large
+            // PNGs can't stall the notification/link drains sharing this loop (leftovers surface next tick).
             if (save && writes < 3) {
                 try {
                     val bmp = BitmapFactory.decodeFile(path)
@@ -1719,6 +1725,7 @@ class MainActivity : AppCompatActivity() {
             }
             path = JvmLauncher.nextScreenshot()
         }
+        if (drained >= 64) Log.w(TAG, "screenshot: drain backstop hit (queue not emptying?)")
     }
 
     /** Map a SurfaceView-local coordinate to game-canvas pixels, clamped to the current frame. */
