@@ -216,7 +216,6 @@ public final class HudVeneerBridge
 	// One-shot, applied on the client thread in tick(). -1 = nothing pending.
 	private static volatile int pendingChatTab = -1;
 
-
 	// Chat COLLAPSE: when the user taps the already-active tab, the chat box hides (mobile behaviour); a tap on any
 	// tab reopens it. Driven from native (setChatCollapsed). While collapsed the engine chat raster is fully blanked
 	// (the message CONTENT is hidden AND the engine tab row is hidden, which suppresses the whole raster) so nothing
@@ -1834,7 +1833,7 @@ public final class HudVeneerBridge
 			.append(",\"selected\":").append(spr == SPR_CHATBTN_SELECTED)
 			.append(",\"new\":").append(spr == SPR_CHATBTN_NEW)
 			.append(",\"labelColor\":").append(txt == null ? -1 : safeTextColor(txt))
-			.append(",\"filter\":\"").append(flt == null ? "" : jsonEsc(stripTags(flt.getText())))
+			.append(",\"filter\":\"").append(flt == null ? "" : BridgeJson.escapedDropControls(stripTags(flt.getText())))
 			.append('"')
 			.append(",\"filterColor\":").append(flt == null ? -1 : safeTextColor(flt))
 			.append('}');
@@ -1957,27 +1956,6 @@ public final class HudVeneerBridge
 	}
 
 	/** Minimal JSON string escaping (the only risky chars in chat sub-labels are quotes / backslashes). */
-	private static String jsonEsc(String s)
-	{
-		if (s == null || s.isEmpty())
-		{
-			return "";
-		}
-		final StringBuilder out = new StringBuilder(s.length() + 8);
-		for (int i = 0; i < s.length(); i++)
-		{
-			final char ch = s.charAt(i);
-			if (ch == '"' || ch == '\\')
-			{
-				out.append('\\').append(ch);
-			}
-			else if (ch >= 0x20)
-			{
-				out.append(ch);
-			}
-		}
-		return out.toString();
-	}
 
 	// ---- Native top-rendered chat: the live MESSAGE model (read from getChatLineMap, not the un-rasterable widgets) ----
 
@@ -2117,8 +2095,8 @@ public final class HudVeneerBridge
 		{
 			BridgeFaults.note("HudVeneerBridge.appendChatInput", ignore);
 		}
-		sb.append(",\"input\":{\"name\":\"").append(jsonEsc(name))
-			.append("\",\"text\":\"").append(jsonEsc(typed)).append("\"}");
+		sb.append(",\"input\":{\"name\":\"").append(BridgeJson.escapedDropControls(name))
+			.append("\",\"text\":\"").append(BridgeJson.escapedDropControls(typed)).append("\"}");
 	}
 
 	private static void collectLines(ChatLineBuffer buf, List<MessageNode> out)
@@ -2181,7 +2159,7 @@ public final class HudVeneerBridge
 			final int typeId = n.getType() == null ? -1 : n.getType().getType();
 			final String full = name.isEmpty() ? raw : name + ": " + raw;
 			final StringBuilder sb = new StringBuilder(full.length() + 48);
-			sb.append("{\"name\":\"").append(jsonEsc(name)).append('"')
+			sb.append("{\"name\":\"").append(BridgeJson.escapedDropControls(name)).append('"')
 				.append(",\"type\":").append(typeId)
 				.append(",\"ts\":").append(safeTs(n)).append(',');
 			// Bug 11 — official-mobile look: chat lines render fully white (suppress per-<col=> run colours).
@@ -2285,7 +2263,7 @@ public final class HudVeneerBridge
 			}
 		}
 		emitRun(runs, firstRun, runStart, text.length(), runColor, runUnder, defColor);
-		sb.append("\"text\":\"").append(jsonEsc(text.toString())).append("\",\"runs\":[").append(runs).append(']');
+		sb.append("\"text\":\"").append(BridgeJson.escapedDropControls(text.toString())).append("\",\"runs\":[").append(runs).append(']');
 	}
 
 	/** Emit a colour/underline run {@code {"o":,"l":,"c":,"u":}} if it spans text AND differs from the default.
@@ -2555,7 +2533,7 @@ public final class HudVeneerBridge
 			final String nm = wText(c.getWidget(nameId)).replaceAll("<[^>]*>", "");
 			if (!nm.isEmpty())
 			{
-				sb.append(",\"name\":\"").append(jsonEsc(nm)).append('"');
+				sb.append(",\"name\":\"").append(BridgeJson.escapedDropControls(nm)).append('"');
 			}
 		}
 		sb.append(',');
@@ -2578,7 +2556,7 @@ public final class HudVeneerBridge
 			final String title = wText(kids[0]).replaceAll("<[^>]*>", "");
 			if (!title.isEmpty())
 			{
-				sb.append(",\"title\":\"").append(jsonEsc(title)).append('"');
+				sb.append(",\"title\":\"").append(BridgeJson.escapedDropControls(title)).append('"');
 			}
 		}
 		sb.append(",\"options\":[");
@@ -2633,7 +2611,6 @@ public final class HudVeneerBridge
 			return "";
 		}
 	}
-
 
 	/** Position + size the chatbox message area ({@code CHATAREA}) so it aligns with + fits under the enlarged
 	 *  native tab row. Key: the chat CONTENT (the message display + the bottom input prompt) is fixed-height and
@@ -2735,7 +2712,6 @@ public final class HudVeneerBridge
 			BridgeFaults.note("HudVeneerBridge.forceWidth", ignore);
 		}
 	}
-
 
 	// Dump the chatbox sub-widget layout for diagnosing the native chat-tab veneer. Fires a few times at STEADY
 	// STATE (after the native side has applied the row width — chatAreaW>0 — so the dump reflects the resized

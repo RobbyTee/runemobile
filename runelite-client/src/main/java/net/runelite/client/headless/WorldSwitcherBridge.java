@@ -511,7 +511,7 @@ public final class WorldSwitcherBridge
 					.append("\"members\":").append(types.contains(WorldType.MEMBERS)).append(',')
 					.append("\"pvp\":").append(types.contains(WorldType.PVP)).append(',')
 					.append("\"highRisk\":").append(types.contains(WorldType.HIGH_RISK)).append(',')
-					.append("\"activity\":").append(quote(w.getActivity())).append(',')
+					.append("\"activity\":").append(BridgeJson.quoted(w.getActivity())).append(',')
 					.append("\"types\":[");
 				boolean ft = true;
 				for (WorldType t : types)
@@ -521,7 +521,7 @@ public final class WorldSwitcherBridge
 						sb.append(',');
 					}
 					ft = false;
-					sb.append(quote(t.name()));
+					sb.append(BridgeJson.quoted(t.name()));
 				}
 				sb.append("]}");
 			}
@@ -577,36 +577,4 @@ public final class WorldSwitcherBridge
 		return false;
 	}
 
-	private static String quote(String s)
-	{
-		if (s == null)
-		{
-			return "\"\"";
-		}
-		final StringBuilder sb = new StringBuilder(s.length() + 2);
-		sb.append('"');
-		for (int i = 0; i < s.length(); i++)
-		{
-			final char ch = s.charAt(i);
-			switch (ch)
-			{
-				case '"': sb.append("\\\""); break;
-				case '\\': sb.append("\\\\"); break;
-				case '\n': sb.append("\\n"); break;
-				case '\r': sb.append("\\r"); break;
-				case '\t': sb.append("\\t"); break;
-				default:
-					if (ch < 0x20)
-					{
-						sb.append(String.format("\\u%04x", (int) ch));
-					}
-					else
-					{
-						sb.append(ch);
-					}
-			}
-		}
-		sb.append('"');
-		return sb.toString();
-	}
 }

@@ -316,10 +316,10 @@ public final class OverlayBridge
 					}
 					first = false;
 					sb.append('{')
-						.append("\"name\":").append(quote(name)).append(',')
+						.append("\"name\":").append(BridgeJson.quoted(name)).append(',')
 						.append("\"bounds\":[").append(b.x).append(',').append(b.y).append(',')
 						.append(b.width).append(',').append(b.height).append("],")
-						.append("\"position\":").append(quote(pos == null ? "" : pos.name())).append(',')
+						.append("\"position\":").append(BridgeJson.quoted(pos == null ? "" : pos.name())).append(',')
 						.append("\"movable\":").append(overlay.isMovable()).append(',')
 						.append("\"snappable\":").append(overlay.isSnappable()).append(',')
 						.append("\"resizable\":").append(overlay.isResizable()).append(',')
@@ -446,45 +446,13 @@ public final class OverlayBridge
 	private static String ack(String name, boolean ok, String error)
 	{
 		final StringBuilder sb = new StringBuilder(64);
-		sb.append("{\"ok\":").append(ok).append(",\"name\":").append(quote(name));
+		sb.append("{\"ok\":").append(ok).append(",\"name\":").append(BridgeJson.quoted(name));
 		if (error != null)
 		{
-			sb.append(",\"error\":").append(quote(error));
+			sb.append(",\"error\":").append(BridgeJson.quoted(error));
 		}
 		sb.append('}');
 		return sb.toString();
 	}
 
-	private static String quote(String s)
-	{
-		if (s == null)
-		{
-			return "\"\"";
-		}
-		final StringBuilder sb = new StringBuilder(s.length() + 2);
-		sb.append('"');
-		for (int i = 0; i < s.length(); i++)
-		{
-			final char ch = s.charAt(i);
-			switch (ch)
-			{
-				case '"': sb.append("\\\""); break;
-				case '\\': sb.append("\\\\"); break;
-				case '\n': sb.append("\\n"); break;
-				case '\r': sb.append("\\r"); break;
-				case '\t': sb.append("\\t"); break;
-				default:
-					if (ch < 0x20)
-					{
-						sb.append(String.format("\\u%04x", (int) ch));
-					}
-					else
-					{
-						sb.append(ch);
-					}
-			}
-		}
-		sb.append('"');
-		return sb.toString();
-	}
 }

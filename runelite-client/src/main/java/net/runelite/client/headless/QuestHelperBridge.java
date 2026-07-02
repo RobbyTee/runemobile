@@ -217,10 +217,10 @@ public final class QuestHelperBridge
 					}
 					first = false;
 					sb.append('{')
-						.append("\"name\":").append(quote(name)).append(',')
-						.append("\"difficulty\":").append(quote(diff)).append(',')
-						.append("\"type\":").append(quote(type)).append(',')
-						.append("\"state\":").append(quote(state))
+						.append("\"name\":").append(BridgeJson.quoted(name)).append(',')
+						.append("\"difficulty\":").append(BridgeJson.quoted(diff)).append(',')
+						.append("\"type\":").append(BridgeJson.quoted(type)).append(',')
+						.append("\"state\":").append(BridgeJson.quoted(state))
 						.append('}');
 				}
 				catch (Throwable perQuest)
@@ -250,7 +250,7 @@ public final class QuestHelperBridge
 			}
 			final StringBuilder sb = new StringBuilder(2048);
 			sb.append("{\"available\":true,\"active\":true,\"name\":")
-				.append(quote(String.valueOf(mGetDisplayedName.invoke(sel))));
+				.append(BridgeJson.quoted(String.valueOf(mGetDisplayedName.invoke(sel))));
 
 			sb.append(",\"steps\":[");
 			appendTextLines(sb, currentStepText(sel));
@@ -315,7 +315,7 @@ public final class QuestHelperBridge
 				sb.append(',');
 			}
 			first = false;
-			sb.append(quote(String.valueOf(line)));
+			sb.append(BridgeJson.quoted(String.valueOf(line)));
 		}
 	}
 
@@ -342,7 +342,7 @@ public final class QuestHelperBridge
 				sb.append(',');
 			}
 			first = false;
-			sb.append(quote(text));
+			sb.append(BridgeJson.quoted(text));
 		}
 	}
 
@@ -578,36 +578,4 @@ public final class QuestHelperBridge
 		return enumValue == null ? "" : String.valueOf(enumValue);
 	}
 
-	private static String quote(String s)
-	{
-		if (s == null)
-		{
-			return "\"\"";
-		}
-		final StringBuilder sb = new StringBuilder(s.length() + 2);
-		sb.append('"');
-		for (int i = 0; i < s.length(); i++)
-		{
-			final char ch = s.charAt(i);
-			switch (ch)
-			{
-				case '"': sb.append("\\\""); break;
-				case '\\': sb.append("\\\\"); break;
-				case '\n': sb.append("\\n"); break;
-				case '\r': sb.append("\\r"); break;
-				case '\t': sb.append("\\t"); break;
-				default:
-					if (ch < 0x20)
-					{
-						sb.append(String.format("\\u%04x", (int) ch));
-					}
-					else
-					{
-						sb.append(ch);
-					}
-			}
-		}
-		sb.append('"');
-		return sb.toString();
-	}
 }

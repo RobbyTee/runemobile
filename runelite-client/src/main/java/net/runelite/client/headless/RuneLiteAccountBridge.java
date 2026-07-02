@@ -109,7 +109,7 @@ public final class RuneLiteAccountBridge
 			{
 				return "{\"available\":true,\"loggedIn\":false}";
 			}
-			return "{\"available\":true,\"loggedIn\":true,\"username\":" + quote(s.getUsername()) + "}";
+			return "{\"available\":true,\"loggedIn\":true,\"username\":" + BridgeJson.quoted(s.getUsername()) + "}";
 		}
 		catch (Throwable ex)
 		{
@@ -118,36 +118,4 @@ public final class RuneLiteAccountBridge
 		}
 	}
 
-	private static String quote(String s)
-	{
-		if (s == null)
-		{
-			return "\"\"";
-		}
-		final StringBuilder sb = new StringBuilder(s.length() + 2);
-		sb.append('"');
-		for (int i = 0; i < s.length(); i++)
-		{
-			final char ch = s.charAt(i);
-			switch (ch)
-			{
-				case '"': sb.append("\\\""); break;
-				case '\\': sb.append("\\\\"); break;
-				case '\n': sb.append("\\n"); break;
-				case '\r': sb.append("\\r"); break;
-				case '\t': sb.append("\\t"); break;
-				default:
-					if (ch < 0x20)
-					{
-						sb.append(String.format("\\u%04x", (int) ch));
-					}
-					else
-					{
-						sb.append(ch);
-					}
-			}
-		}
-		sb.append('"');
-		return sb.toString();
-	}
 }

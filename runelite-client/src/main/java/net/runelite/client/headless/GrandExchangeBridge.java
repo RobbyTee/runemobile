@@ -157,7 +157,7 @@ public final class GrandExchangeBridge
 					}
 					sb.append('{')
 						.append("\"id\":").append(ip.getId()).append(',')
-						.append("\"name\":").append(quote(ip.getName())).append(',')
+						.append("\"name\":").append(BridgeJson.quoted(ip.getName())).append(',')
 						.append("\"price\":").append(ip.getPrice())
 						.append('}');
 					n++;
@@ -254,9 +254,9 @@ public final class GrandExchangeBridge
 					first = false;
 					sb.append('{')
 						.append("\"slot\":").append(slot).append(',')
-						.append("\"state\":").append(quote(state.name())).append(',')
+						.append("\"state\":").append(BridgeJson.quoted(state.name())).append(',')
 						.append("\"itemId\":").append(itemId).append(',')
-						.append("\"name\":").append(quote(itemName(client, itemId))).append(',')
+						.append("\"name\":").append(BridgeJson.quoted(itemName(client, itemId))).append(',')
 						.append("\"qty\":").append(qty).append(',')
 						.append("\"total\":").append(total).append(',')
 						.append("\"price\":").append(price).append(',')
@@ -440,12 +440,12 @@ public final class GrandExchangeBridge
 			sb.append('{')
 				.append("\"buy\":").append("true".equals(buy)).append(',')
 				.append("\"itemId\":").append(id).append(',')
-				.append("\"name\":").append(quote(itemName(client, (int) id))).append(',')
+				.append("\"name\":").append(BridgeJson.quoted(itemName(client, (int) id))).append(',')
 				.append("\"qty\":").append(asLong(qty, 0)).append(',')
 				.append("\"price\":").append(asLong(price, 0));
 			if (time != null && !time.isEmpty())
 			{
-				sb.append(",\"time\":").append(quote(time));
+				sb.append(",\"time\":").append(BridgeJson.quoted(time));
 			}
 			sb.append('}');
 			return sb.toString();
@@ -632,36 +632,4 @@ public final class GrandExchangeBridge
 		return f.get(target);
 	}
 
-	private static String quote(String s)
-	{
-		if (s == null)
-		{
-			return "\"\"";
-		}
-		final StringBuilder sb = new StringBuilder(s.length() + 2);
-		sb.append('"');
-		for (int i = 0; i < s.length(); i++)
-		{
-			final char ch = s.charAt(i);
-			switch (ch)
-			{
-				case '"': sb.append("\\\""); break;
-				case '\\': sb.append("\\\\"); break;
-				case '\n': sb.append("\\n"); break;
-				case '\r': sb.append("\\r"); break;
-				case '\t': sb.append("\\t"); break;
-				default:
-					if (ch < 0x20)
-					{
-						sb.append(String.format("\\u%04x", (int) ch));
-					}
-					else
-					{
-						sb.append(ch);
-					}
-			}
-		}
-		sb.append('"');
-		return sb.toString();
-	}
 }

@@ -196,9 +196,9 @@ public final class TimeTrackingBridge
 				}
 				first = false;
 				sb.append('{')
-					.append("\"tab\":").append(quote(tab.name())).append(',')
-					.append("\"name\":").append(quote(tab.getName())).append(',')
-					.append("\"state\":").append(quote(enumName(summary))).append(',')
+					.append("\"tab\":").append(BridgeJson.quoted(tab.name())).append(',')
+					.append("\"name\":").append(BridgeJson.quoted(tab.getName())).append(',')
+					.append("\"state\":").append(BridgeJson.quoted(enumName(summary))).append(',')
 					.append("\"readyTime\":").append(epochOf(completion)).append(',')
 					.append("\"remainingSec\":").append(remainingOf(completion, nowSec))
 					.append('}');
@@ -222,9 +222,9 @@ public final class TimeTrackingBridge
 			final long completion = farmingContractManager.getCompletionTime();
 			sb.append('{')
 				.append("\"active\":true,")
-				.append("\"name\":").append(quote(farmingContractManager.getContractName())).append(',')
-				.append("\"state\":").append(quote(enumName(farmingContractManager.getSummary()))).append(',')
-				.append("\"cropState\":").append(quote(enumName(farmingContractManager.getContractCropState()))).append(',')
+				.append("\"name\":").append(BridgeJson.quoted(farmingContractManager.getContractName())).append(',')
+				.append("\"state\":").append(BridgeJson.quoted(enumName(farmingContractManager.getSummary()))).append(',')
+				.append("\"cropState\":").append(BridgeJson.quoted(enumName(farmingContractManager.getContractCropState()))).append(',')
 				.append("\"readyTime\":").append(epochOf(completion)).append(',')
 				.append("\"remainingSec\":").append(remainingOf(completion, nowSec))
 				.append('}');
@@ -266,8 +266,8 @@ public final class TimeTrackingBridge
 					}
 					first = false;
 					sb.append('{')
-						.append("\"name\":").append(quote(spaceName)).append(',')
-						.append("\"state\":").append(quote(enumName(state))).append(',')
+						.append("\"name\":").append(BridgeJson.quoted(spaceName)).append(',')
+						.append("\"state\":").append(BridgeJson.quoted(enumName(state))).append(',')
 						.append("\"readyTime\":").append(seeded ? completion : 0).append(',')
 						.append("\"remainingSec\":").append(seeded ? Math.max(0, completion - nowSec) : 0)
 						.append('}');
@@ -286,8 +286,8 @@ public final class TimeTrackingBridge
 			final SummaryState summary = birdHouseTracker.getSummary();
 			final long completion = birdHouseTracker.getCompletionTime();
 			sb.append('{')
-				.append("\"name\":").append(quote("Bird Houses")).append(',')
-				.append("\"state\":").append(quote(enumName(summary))).append(',')
+				.append("\"name\":").append(BridgeJson.quoted("Bird Houses")).append(',')
+				.append("\"state\":").append(BridgeJson.quoted(enumName(summary))).append(',')
 				.append("\"readyTime\":").append(epochOf(completion)).append(',')
 				.append("\"remainingSec\":").append(remainingOf(completion, nowSec))
 				.append('}');
@@ -324,7 +324,7 @@ public final class TimeTrackingBridge
 				}
 				first = false;
 				sb.append('{')
-					.append("\"name\":").append(quote(name)).append(',')
+					.append("\"name\":").append(BridgeJson.quoted(name)).append(',')
 					.append("\"active\":").append(active).append(',')
 					.append("\"remainingSec\":").append(remaining).append(',')
 					.append("\"durationSec\":").append(duration).append(',')
@@ -359,7 +359,7 @@ public final class TimeTrackingBridge
 				}
 				first = false;
 				sb.append('{')
-					.append("\"name\":").append(quote(name)).append(',')
+					.append("\"name\":").append(BridgeJson.quoted(name)).append(',')
 					.append("\"active\":").append(active).append(',')
 					.append("\"elapsedSec\":").append(elapsed)
 					.append('}');
@@ -662,36 +662,4 @@ public final class TimeTrackingBridge
 		return enumValue == null ? "" : String.valueOf(enumValue);
 	}
 
-	private static String quote(String s)
-	{
-		if (s == null)
-		{
-			return "\"\"";
-		}
-		final StringBuilder sb = new StringBuilder(s.length() + 2);
-		sb.append('"');
-		for (int i = 0; i < s.length(); i++)
-		{
-			final char ch = s.charAt(i);
-			switch (ch)
-			{
-				case '"': sb.append("\\\""); break;
-				case '\\': sb.append("\\\\"); break;
-				case '\n': sb.append("\\n"); break;
-				case '\r': sb.append("\\r"); break;
-				case '\t': sb.append("\\t"); break;
-				default:
-					if (ch < 0x20)
-					{
-						sb.append(String.format("\\u%04x", (int) ch));
-					}
-					else
-					{
-						sb.append(ch);
-					}
-			}
-		}
-		sb.append('"');
-		return sb.toString();
-	}
 }
