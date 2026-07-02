@@ -3,6 +3,7 @@ FLAG headless.runSeconds
 FLAG java.io.tmpdir
 FLAG runelite.bridge
 FLAG runelite.gatecensus
+FLAG runelite.gfxIos
 FLAG runelite.gpuframedump
 FLAG runelite.gpuframedump.dir
 FLAG runelite.headless.autologin
@@ -35,7 +36,9 @@ FLAG runelite.menupeek.maxEntries
 FLAG runelite.mobilechrome
 FLAG runelite.mobileui
 FLAG runelite.nosafemode
+FLAG runelite.rlhdOverlaySelfTest
 FLAG runelite.routecgpu
+FLAG runelite.routecrlhd
 FLAG runelite.touch.clickTimeout
 FLAG runelite.touch.diag
 FLAG runelite.touch.hideClickCross
@@ -57,6 +60,9 @@ METHOD HeadlessLogin#isEnabled()
 METHOD HeadlessLogin#tick(Client,GameState,int)
 METHOD HeadlessResize#isEnabled()
 METHOD HeadlessResize#tick(Client,GameState)
+METHOD HeadlessSeams#draw(Client,Graphics)
+METHOD HeadlessSeams#drawScene(Client)
+METHOD HeadlessSeams#postComposite(Client,MainBufferProvider)
 METHOD HudDataBridge#getSeq()
 METHOD HudDataBridge#getSnapshot()
 METHOD HudDataBridge#isEnabled()
@@ -237,6 +243,8 @@ METHOD QuestHelperBridge#setUiOpen(boolean)
 METHOD QuestHelperBridge#startQuest(String)
 METHOD QuestHelperBridge#stopQuest()
 METHOD QuestHelperBridge#tick(Client)
+METHOD RLHDStarter#isEnabled()
+METHOD RLHDStarter#tick(Client)
 METHOD RuneLiteAccountBridge#getSessionJson()
 METHOD RuneLiteAccountBridge#init(SessionManager)
 METHOD RuneLiteAccountBridge#isAvailable()
@@ -262,3 +270,263 @@ METHOD XpTrackerBridge#init(PluginManager,ClientThread)
 METHOD XpTrackerBridge#isAvailable()
 METHOD XpTrackerBridge#setUiOpen(boolean)
 METHOD XpTrackerBridge#tick(Client)
+PAYLOAD ConfigProfileBridge active
+PAYLOAD ConfigProfileBridge available
+PAYLOAD ConfigProfileBridge error
+PAYLOAD ConfigProfileBridge id
+PAYLOAD ConfigProfileBridge internal
+PAYLOAD ConfigProfileBridge name
+PAYLOAD ConfigProfileBridge ok
+PAYLOAD ConfigProfileBridge profiles
+PAYLOAD ConfigProfileBridge sync
+PAYLOAD GrandExchangeBridge available
+PAYLOAD GrandExchangeBridge buy
+PAYLOAD GrandExchangeBridge history
+PAYLOAD GrandExchangeBridge id
+PAYLOAD GrandExchangeBridge itemId
+PAYLOAD GrandExchangeBridge name
+PAYLOAD GrandExchangeBridge offers
+PAYLOAD GrandExchangeBridge price
+PAYLOAD GrandExchangeBridge progress
+PAYLOAD GrandExchangeBridge qty
+PAYLOAD GrandExchangeBridge results
+PAYLOAD GrandExchangeBridge slot
+PAYLOAD GrandExchangeBridge spent
+PAYLOAD GrandExchangeBridge state
+PAYLOAD GrandExchangeBridge time
+PAYLOAD GrandExchangeBridge total
+PAYLOAD HudDataBridge chat
+PAYLOAD HudDataBridge dots
+PAYLOAD HudDataBridge enabled
+PAYLOAD HudDataBridge energy
+PAYLOAD HudDataBridge hp
+PAYLOAD HudDataBridge hpMax
+PAYLOAD HudDataBridge loggedIn
+PAYLOAD HudDataBridge mapAngle
+PAYLOAD HudDataBridge minimap
+PAYLOAD HudDataBridge name
+PAYLOAD HudDataBridge npcs
+PAYLOAD HudDataBridge orbs
+PAYLOAD HudDataBridge plane
+PAYLOAD HudDataBridge players
+PAYLOAD HudDataBridge poison
+PAYLOAD HudDataBridge pray
+PAYLOAD HudDataBridge prayMax
+PAYLOAD HudDataBridge px
+PAYLOAD HudDataBridge py
+PAYLOAD HudDataBridge run
+PAYLOAD HudDataBridge seq
+PAYLOAD HudDataBridge spec
+PAYLOAD HudDataBridge specEnabled
+PAYLOAD HudDataBridge stamina
+PAYLOAD HudDataBridge ts
+PAYLOAD HudDataBridge type
+PAYLOAD HudDataBridge value
+PAYLOAD HudVeneerBridge c
+PAYLOAD HudVeneerBridge chatX
+PAYLOAD HudVeneerBridge chatY
+PAYLOAD HudVeneerBridge complete
+PAYLOAD HudVeneerBridge continue
+PAYLOAD HudVeneerBridge dialogueActive
+PAYLOAD HudVeneerBridge digit
+PAYLOAD HudVeneerBridge dlgH
+PAYLOAD HudVeneerBridge dlgW
+PAYLOAD HudVeneerBridge dlgX
+PAYLOAD HudVeneerBridge dlgY
+PAYLOAD HudVeneerBridge engineDialogue
+PAYLOAD HudVeneerBridge filter
+PAYLOAD HudVeneerBridge filterColor
+PAYLOAD HudVeneerBridge h
+PAYLOAD HudVeneerBridge icons
+PAYLOAD HudVeneerBridge input
+PAYLOAD HudVeneerBridge l
+PAYLOAD HudVeneerBridge labelColor
+PAYLOAD HudVeneerBridge lines
+PAYLOAD HudVeneerBridge loggedIn
+PAYLOAD HudVeneerBridge name
+PAYLOAD HudVeneerBridge new
+PAYLOAD HudVeneerBridge o
+PAYLOAD HudVeneerBridge open
+PAYLOAD HudVeneerBridge options
+PAYLOAD HudVeneerBridge px
+PAYLOAD HudVeneerBridge rowH
+PAYLOAD HudVeneerBridge runs
+PAYLOAD HudVeneerBridge searching
+PAYLOAD HudVeneerBridge selected
+PAYLOAD HudVeneerBridge seq
+PAYLOAD HudVeneerBridge sprite
+PAYLOAD HudVeneerBridge tabs
+PAYLOAD HudVeneerBridge text
+PAYLOAD HudVeneerBridge title
+PAYLOAD HudVeneerBridge topLevelId
+PAYLOAD HudVeneerBridge ts
+PAYLOAD HudVeneerBridge type
+PAYLOAD HudVeneerBridge u
+PAYLOAD HudVeneerBridge view
+PAYLOAD HudVeneerBridge w
+PAYLOAD HudVeneerBridge windowOpen
+PAYLOAD HudVeneerBridge x
+PAYLOAD HudVeneerBridge y
+PAYLOAD InfoBoxBridge available
+PAYLOAD InfoBoxBridge error
+PAYLOAD InfoBoxBridge index
+PAYLOAD InfoBoxBridge infoboxes
+PAYLOAD InfoBoxBridge menu
+PAYLOAD InfoBoxBridge name
+PAYLOAD InfoBoxBridge ok
+PAYLOAD InfoBoxBridge text
+PAYLOAD InfoBoxBridge tooltip
+PAYLOAD LootTrackerBridge available
+PAYLOAD LootTrackerBridge error
+PAYLOAD LootTrackerBridge ge
+PAYLOAD LootTrackerBridge ha
+PAYLOAD LootTrackerBridge id
+PAYLOAD LootTrackerBridge items
+PAYLOAD LootTrackerBridge kills
+PAYLOAD LootTrackerBridge name
+PAYLOAD LootTrackerBridge ok
+PAYLOAD LootTrackerBridge qty
+PAYLOAD LootTrackerBridge sources
+PAYLOAD LootTrackerBridge subTitle
+PAYLOAD LootTrackerBridge totalValue
+PAYLOAD LootTrackerBridge type
+PAYLOAD MenuPeekBridge active
+PAYLOAD MenuPeekBridge count
+PAYLOAD MenuPeekBridge deprio
+PAYLOAD MenuPeekBridge entries
+PAYLOAD MenuPeekBridge force
+PAYLOAD MenuPeekBridge id
+PAYLOAD MenuPeekBridge item
+PAYLOAD MenuPeekBridge loggedIn
+PAYLOAD MenuPeekBridge menuH
+PAYLOAD MenuPeekBridge menuOpen
+PAYLOAD MenuPeekBridge menuScrollable
+PAYLOAD MenuPeekBridge menuW
+PAYLOAD MenuPeekBridge menuX
+PAYLOAD MenuPeekBridge menuY
+PAYLOAD MenuPeekBridge mouseX
+PAYLOAD MenuPeekBridge mouseY
+PAYLOAD MenuPeekBridge opt
+PAYLOAD MenuPeekBridge p0
+PAYLOAD MenuPeekBridge p1
+PAYLOAD MenuPeekBridge seq
+PAYLOAD MenuPeekBridge sub
+PAYLOAD MenuPeekBridge tgt
+PAYLOAD MenuPeekBridge type
+PAYLOAD MenuPeekBridge wv
+PAYLOAD MobileChromeBridge activeTab
+PAYLOAD MobileChromeBridge chat
+PAYLOAD MobileChromeBridge enabled
+PAYLOAD MobileChromeBridge fatalCode
+PAYLOAD MobileChromeBridge fatalError
+PAYLOAD MobileChromeBridge inv
+PAYLOAD MobileChromeBridge loggedIn
+PAYLOAD MobileChromeBridge loginScreen
+PAYLOAD MobileChromeBridge mapContainer
+PAYLOAD MobileChromeBridge minimap
+PAYLOAD MobileChromeBridge orbs
+PAYLOAD MobileChromeBridge reconnecting
+PAYLOAD MobileChromeBridge reorderPanes
+PAYLOAD MobileChromeBridge resized
+PAYLOAD MobileChromeBridge rootKind
+PAYLOAD MobileChromeBridge sessionExpired
+PAYLOAD MobileChromeBridge sideContainer
+PAYLOAD MobileChromeBridge sidePanel
+PAYLOAD MobileChromeBridge tabs
+PAYLOAD MobileChromeBridge topLevelId
+PAYLOAD MobileChromeBridge viewport
+PAYLOAD MobileUiBridge actions
+PAYLOAD MobileUiBridge available
+PAYLOAD MobileUiBridge bind
+PAYLOAD MobileUiBridge endLevel
+PAYLOAD MobileUiBridge gained
+PAYLOAD MobileUiBridge group
+PAYLOAD MobileUiBridge hr
+PAYLOAD MobileUiBridge icon
+PAYLOAD MobileUiBridge key
+PAYLOAD MobileUiBridge keyCode
+PAYLOAD MobileUiBridge label
+PAYLOAD MobileUiBridge left
+PAYLOAD MobileUiBridge mods
+PAYLOAD MobileUiBridge ok
+PAYLOAD MobileUiBridge progress
+PAYLOAD MobileUiBridge queued
+PAYLOAD MobileUiBridge reason
+PAYLOAD MobileUiBridge refreshing
+PAYLOAD MobileUiBridge results
+PAYLOAD MobileUiBridge seq
+PAYLOAD MobileUiBridge skill
+PAYLOAD MobileUiBridge skills
+PAYLOAD MobileUiBridge startLevel
+PAYLOAD MobileUiBridge status
+PAYLOAD MobileUiBridge totalGained
+PAYLOAD MobileUiBridge totalHr
+PAYLOAD MobileUiBridge writeId
+PAYLOAD OverlayBridge available
+PAYLOAD OverlayBridge bounds
+PAYLOAD OverlayBridge dynamic
+PAYLOAD OverlayBridge error
+PAYLOAD OverlayBridge movable
+PAYLOAD OverlayBridge name
+PAYLOAD OverlayBridge ok
+PAYLOAD OverlayBridge overlays
+PAYLOAD OverlayBridge position
+PAYLOAD OverlayBridge resizable
+PAYLOAD OverlayBridge snappable
+PAYLOAD QuestHelperBridge active
+PAYLOAD QuestHelperBridge available
+PAYLOAD QuestHelperBridge difficulty
+PAYLOAD QuestHelperBridge general
+PAYLOAD QuestHelperBridge items
+PAYLOAD QuestHelperBridge name
+PAYLOAD QuestHelperBridge quests
+PAYLOAD QuestHelperBridge state
+PAYLOAD QuestHelperBridge steps
+PAYLOAD QuestHelperBridge type
+PAYLOAD RLHDStarter ok
+PAYLOAD RuneLiteAccountBridge available
+PAYLOAD RuneLiteAccountBridge loggedIn
+PAYLOAD RuneLiteAccountBridge username
+PAYLOAD TimeTrackingBridge active
+PAYLOAD TimeTrackingBridge available
+PAYLOAD TimeTrackingBridge birdhouses
+PAYLOAD TimeTrackingBridge contract
+PAYLOAD TimeTrackingBridge cropState
+PAYLOAD TimeTrackingBridge durationSec
+PAYLOAD TimeTrackingBridge elapsedSec
+PAYLOAD TimeTrackingBridge farming
+PAYLOAD TimeTrackingBridge loop
+PAYLOAD TimeTrackingBridge name
+PAYLOAD TimeTrackingBridge readyTime
+PAYLOAD TimeTrackingBridge remainingSec
+PAYLOAD TimeTrackingBridge state
+PAYLOAD TimeTrackingBridge stopwatches
+PAYLOAD TimeTrackingBridge tab
+PAYLOAD TimeTrackingBridge timers
+PAYLOAD WorldSwitcherBridge activity
+PAYLOAD WorldSwitcherBridge available
+PAYLOAD WorldSwitcherBridge current
+PAYLOAD WorldSwitcherBridge favourite
+PAYLOAD WorldSwitcherBridge highRisk
+PAYLOAD WorldSwitcherBridge id
+PAYLOAD WorldSwitcherBridge location
+PAYLOAD WorldSwitcherBridge members
+PAYLOAD WorldSwitcherBridge players
+PAYLOAD WorldSwitcherBridge pvp
+PAYLOAD WorldSwitcherBridge types
+PAYLOAD WorldSwitcherBridge worlds
+PAYLOAD XpTrackerBridge actions
+PAYLOAD XpTrackerBridge actionsHr
+PAYLOAD XpTrackerBridge actionsLeft
+PAYLOAD XpTrackerBridge available
+PAYLOAD XpTrackerBridge endLevel
+PAYLOAD XpTrackerBridge overall
+PAYLOAD XpTrackerBridge progress
+PAYLOAD XpTrackerBridge skill
+PAYLOAD XpTrackerBridge skills
+PAYLOAD XpTrackerBridge startLevel
+PAYLOAD XpTrackerBridge timeToGoalSec
+PAYLOAD XpTrackerBridge timeToLevelSec
+PAYLOAD XpTrackerBridge xpGained
+PAYLOAD XpTrackerBridge xpHr
+PAYLOAD XpTrackerBridge xpLeft

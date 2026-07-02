@@ -25,12 +25,21 @@ FILES = [os.path.join(HEADLESS, f) for f in (
     'OverlayBridge.java', 'InfoBoxBridge.java', 'ConfigProfileBridge.java',
     'RuneLiteAccountBridge.java',
     'HeadlessLogin.java', 'HeadlessResize.java',
+    # ARCH-2: the renderer boot seams — their -D gates (runelite.routecrlhd / runelite.gfxIos) are part of
+    # the host-called surface; a rename must force a baseline ack or it silently breaks the other port's
+    # 117HD boot.
+    'RLHDStarter.java', 'HeadlessSeams.java',
 )] + [os.path.join(AWT, f) for f in (
     'DeviceHeadlessBoot.java', 'UnsafePokeActivation.java',
 )]
 
 METHOD_RE = re.compile(r'public\s+static\s+[\w.$<>\[\],\s]+?\s+(\w+)\s*\(([^)]*)\)')
 FLAG_RE = re.compile(r'(?:getBoolean|getInteger|getLong|getProperty)\(\s*"([^"]+)"')
+# ARCH-2: the JSON payload keys the native UIs parse. The bridges hand-roll their JSON, so every emitted key
+# appears in source as an escaped-quote literal (\"key\":) — extract those per class so a key rename/removal
+# diffs baseline.txt and forces the same acknowledgement as a signature change. Keys assembled from variables
+# are invisible to this scan — keep payload key names literal in the builders.
+PAYLOAD_RE = re.compile(r'\\"([A-Za-z_][A-Za-z0-9_]*)\\"\s*:')
 
 
 def param_types(params):
@@ -61,6 +70,8 @@ def main():
             entries.add('METHOD %s#%s(%s)' % (cls, m.group(1), param_types(m.group(2))))
         for fm in FLAG_RE.finditer(src):
             entries.add('FLAG %s' % fm.group(1))
+        for pm in PAYLOAD_RE.finditer(src):
+            entries.add('PAYLOAD %s %s' % (cls, pm.group(1)))
     if missing:
         # A renamed/removed contract file is itself a breaking change — surface it loudly.
         for m in missing:

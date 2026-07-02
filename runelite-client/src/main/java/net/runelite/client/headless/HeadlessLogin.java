@@ -86,7 +86,8 @@ public final class HeadlessLogin
 	// JNI_CreateJavaVM, like the JX_* handoff) — never from -D opts, which get logged. loginIndex 0 is
 	// the initial "Welcome to RuneScape" panel (Enter activates the Existing User form); loginIndex 2 is
 	// the username/password form (fields set via the Client API, Enter submits).
-	private static final boolean LEGACY_ENABLED = Boolean.getBoolean("runelite.headless.autologin.legacy");
+	// Non-final only for the test seam (setLegacyEnabledForTest) — production never writes it after clinit.
+	private static boolean legacyEnabled = Boolean.getBoolean("runelite.headless.autologin.legacy");
 	private static final String LEGACY_USER = System.getenv("RL_LEGACY_USER");
 	private static final String LEGACY_PASS = System.getenv("RL_LEGACY_PASS");
 	private static final int LEGACY_WELCOME_INDEX = 0;
@@ -178,8 +179,8 @@ public final class HeadlessLogin
 			log.info("[headless-login] ENABLED playPoint={},{} welcomeLoginIndex={} eula={} eulaPoint={},{} "
 					+ "eulaLoginIndex={} maxAttempts={} world={} worldAddress={} legacy={}",
 				CLICK_X, CLICK_Y, WELCOME_LOGIN_INDEX, EULA_ENABLED, EULA_X, EULA_Y, EULA_LOGIN_INDEX,
-				MAX_ATTEMPTS, WORLD_ID, WORLD_ADDRESS, LEGACY_ENABLED);
-			if (LEGACY_ENABLED && (LEGACY_USER == null || LEGACY_USER.isEmpty()
+				MAX_ATTEMPTS, WORLD_ID, WORLD_ADDRESS, legacyEnabled);
+			if (legacyEnabled && (LEGACY_USER == null || LEGACY_USER.isEmpty()
 				|| LEGACY_PASS == null || LEGACY_PASS.isEmpty()))
 			{
 				log.warn("[headless-login] legacy mode enabled but RL_LEGACY_USER/RL_LEGACY_PASS env is "
@@ -244,6 +245,52 @@ public final class HeadlessLogin
 	static boolean hasGivenUp()
 	{
 		return gaveUp;
+	}
+
+	/**
+	 * TEST-1 seam: the whole login machine is static (one engine per process), so unit tests need a
+	 * deterministic reset between scenarios. Restores every mutable field to its clinit value, including the
+	 * {@code legacyEnabled} mirror (re-read from the system property). Package-private, test-only — production
+	 * never calls this; a live re-arm goes through the CONNECTION_LOST / world-hop paths instead so the
+	 * reconnect budget survives.
+	 */
+	static void resetForTest()
+	{
+		draws = 0;
+		eulaAttempts = 0;
+		lastEulaDraw = 0;
+		eulaCleared = false;
+		playAttempts = 0;
+		lastPlayDraw = 0;
+		worldSelected = false;
+		done = false;
+		legacyWelcomeAttempts = 0;
+		lastLegacyWelcomeDraw = 0;
+		legacySubmitAttempts = 0;
+		lastLegacySubmitDraw = 0;
+		sawConnectionLost = false;
+		reconnectAttempts = 0;
+		tryAgainAttempts = 0;
+		lastTryAgainDraw = 0;
+		gaveUp = false;
+		pendingHopActive = false;
+		hopAwaitingLogin = false;
+		pendingHopWorldId = 0;
+		pendingHopWorldAddress = null;
+		pendingHopMembers = false;
+		welcomeAttempts = 0;
+		lastWelcomeDraw = 0;
+		welcomeDone = false;
+		legacyEnabled = Boolean.getBoolean("runelite.headless.autologin.legacy");
+	}
+
+	/**
+	 * TEST-1 seam: {@code legacyEnabled} is read once at clinit, so legacy-path tests can't flip it by setting
+	 * the property (the class is already loaded by then). Package-private, test-only.
+	 */
+	static void setLegacyEnabledForTest(boolean enabled)
+	{
+		legacyEnabled = enabled;
 	}
 
 	/**
@@ -460,7 +507,7 @@ public final class HeadlessLogin
 		// Legacy (non-Jagex) account: drive the classic username/password form instead of the JX welcome
 		// screen (loginIndex never reaches 10 without a JX_* session, so stage 2 below is inert here).
 		// Sits BELOW the reconnect stage so a legacy in-session drop shares the Try-Again handling above.
-		if (LEGACY_ENABLED)
+		if (legacyEnabled)
 		{
 			tickLegacy(client, canvas, loginIndex);
 			return;
