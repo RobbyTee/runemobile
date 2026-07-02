@@ -161,6 +161,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     close.translatesAutoresizingMaskIntoConstraints = NO;
     [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.accessibilityLabel = @"Close";
     close.titleLabel.font = [UIFont boldSystemFontOfSize:18];
     close.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
     [close addTarget:self action:@selector(collapsePanel) forControlEvents:UIControlEventTouchUpInside];
@@ -354,6 +355,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     close.translatesAutoresizingMaskIntoConstraints = NO;
     [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.accessibilityLabel = @"Close";
     close.titleLabel.font = [UIFont boldSystemFontOfSize:18];
     close.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
     [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
@@ -878,6 +880,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     close.translatesAutoresizingMaskIntoConstraints = NO;
     [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.accessibilityLabel = @"Close";
     close.titleLabel.font = [UIFont boldSystemFontOfSize:20];
     close.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
     [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
@@ -1198,6 +1201,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     close.translatesAutoresizingMaskIntoConstraints = NO;
     [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.accessibilityLabel = @"Close";
     close.titleLabel.font = [UIFont boldSystemFontOfSize:20];
     close.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
     [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
@@ -1207,6 +1211,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     UIButton *hopPrev = [UIButton buttonWithType:UIButtonTypeSystem];
     hopPrev.translatesAutoresizingMaskIntoConstraints = NO;
     [hopPrev setTitle:@"◀" forState:UIControlStateNormal];
+    hopPrev.accessibilityLabel = @"Previous world";
     hopPrev.titleLabel.font = [UIFont boldSystemFontOfSize:16];
     hopPrev.tintColor = [UIColor whiteColor];
     [hopPrev addTarget:self action:@selector(onHopPrev) forControlEvents:UIControlEventTouchUpInside];
@@ -1215,6 +1220,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     UIButton *hopNext = [UIButton buttonWithType:UIButtonTypeSystem];
     hopNext.translatesAutoresizingMaskIntoConstraints = NO;
     [hopNext setTitle:@"▶" forState:UIControlStateNormal];
+    hopNext.accessibilityLabel = @"Next world";
     hopNext.titleLabel.font = [UIFont boldSystemFontOfSize:16];
     hopNext.tintColor = [UIColor whiteColor];
     [hopNext addTarget:self action:@selector(onHopNext) forControlEvents:UIControlEventTouchUpInside];
@@ -1224,6 +1230,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     self.sortRegionButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.sortRegionButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.sortRegionButton setTitle:@"⇅" forState:UIControlStateNormal];
+    self.sortRegionButton.accessibilityLabel = @"Sort and filter worlds";
     self.sortRegionButton.titleLabel.font = [UIFont boldSystemFontOfSize:18];
     self.sortRegionButton.tintColor = [UIColor whiteColor];
     self.sortRegionButton.showsMenuAsPrimaryAction = YES;
@@ -1586,6 +1593,7 @@ static NSString *XpFmt(long n) {
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     close.translatesAutoresizingMaskIntoConstraints = NO;
     [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.accessibilityLabel = @"Close";
     close.titleLabel.font = [UIFont systemFontOfSize:17];
     close.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0]; // BRAND_ORANGE
     [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
@@ -1828,6 +1836,7 @@ static NSString *XpFmt(long n) {
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     close.translatesAutoresizingMaskIntoConstraints = NO;
     [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.accessibilityLabel = @"Close";
     close.titleLabel.font = [UIFont systemFontOfSize:17];
     close.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0]; // BRAND_ORANGE
     [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
@@ -2141,6 +2150,7 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     close.translatesAutoresizingMaskIntoConstraints = NO;
     [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.accessibilityLabel = @"Close";
     close.titleLabel.font = [UIFont systemFontOfSize:17];
     close.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0]; // BRAND_ORANGE
     [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
@@ -2410,6 +2420,7 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     close.translatesAutoresizingMaskIntoConstraints = NO;
     [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.accessibilityLabel = @"Close";
     close.titleLabel.font = [UIFont systemFontOfSize:17];
     close.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0]; // BRAND_ORANGE
     [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
@@ -2632,6 +2643,7 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     close.translatesAutoresizingMaskIntoConstraints = NO;
     [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.accessibilityLabel = @"Close";
     close.titleLabel.font = [UIFont systemFontOfSize:17];
     close.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0]; // BRAND_ORANGE
     [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
@@ -2855,6 +2867,7 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     close.translatesAutoresizingMaskIntoConstraints = NO;
     [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.accessibilityLabel = @"Close";
     close.titleLabel.font = [UIFont systemFontOfSize:17];
     close.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0]; // BRAND_ORANGE
     [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
@@ -3002,6 +3015,7 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     close.translatesAutoresizingMaskIntoConstraints = NO;
     [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.accessibilityLabel = @"Close";
     close.titleLabel.font = [UIFont systemFontOfSize:17];
     close.tintColor = [UIColor colorWithRed:1.0 green:0.596 blue:0.122 alpha:1.0]; // BRAND_ORANGE
     [close addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];

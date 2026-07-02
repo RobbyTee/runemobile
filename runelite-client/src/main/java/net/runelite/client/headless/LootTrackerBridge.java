@@ -313,7 +313,7 @@ public final class LootTrackerBridge
 			firstItem = false;
 			itemsSb.append('{')
 				.append("\"id\":").append(id).append(',')
-				.append("\"name\":").append(quote(names.get(id))).append(',')
+				.append("\"name\":").append(BridgeJson.quoted(names.get(id))).append(',')
 				.append("\"qty\":").append(qty).append(',')
 				.append("\"ge\":").append(ge * qty).append(',')
 				.append("\"ha\":").append(ha * qty)
@@ -331,9 +331,9 @@ public final class LootTrackerBridge
 			sb.append(',');
 		}
 		sb.append('{')
-			.append("\"name\":").append(quote(title)).append(',')
-			.append("\"subTitle\":").append(quote(subTitle)).append(',')
-			.append("\"type\":").append(quote(enumName(fRecordType.get(record)))).append(',')
+			.append("\"name\":").append(BridgeJson.quoted(title)).append(',')
+			.append("\"subTitle\":").append(BridgeJson.quoted(subTitle)).append(',')
+			.append("\"type\":").append(BridgeJson.quoted(enumName(fRecordType.get(record)))).append(',')
 			.append("\"kills\":").append(kills).append(',')
 			.append("\"totalValue\":").append(totalValue).append(',')
 			.append("\"items\":[").append(itemsSb).append(']')
@@ -452,7 +452,7 @@ public final class LootTrackerBridge
 		sb.append("{\"ok\":").append(ok);
 		if (error != null)
 		{
-			sb.append(",\"error\":").append(quote(error));
+			sb.append(",\"error\":").append(BridgeJson.quoted(error));
 		}
 		sb.append('}');
 		return sb.toString();
@@ -467,36 +467,4 @@ public final class LootTrackerBridge
 		return enumValue == null ? "" : String.valueOf(enumValue);
 	}
 
-	private static String quote(String s)
-	{
-		if (s == null)
-		{
-			return "\"\"";
-		}
-		final StringBuilder sb = new StringBuilder(s.length() + 2);
-		sb.append('"');
-		for (int i = 0; i < s.length(); i++)
-		{
-			final char ch = s.charAt(i);
-			switch (ch)
-			{
-				case '"': sb.append("\\\""); break;
-				case '\\': sb.append("\\\\"); break;
-				case '\n': sb.append("\\n"); break;
-				case '\r': sb.append("\\r"); break;
-				case '\t': sb.append("\\t"); break;
-				default:
-					if (ch < 0x20)
-					{
-						sb.append(String.format("\\u%04x", (int) ch));
-					}
-					else
-					{
-						sb.append(ch);
-					}
-			}
-		}
-		sb.append('"');
-		return sb.toString();
-	}
 }

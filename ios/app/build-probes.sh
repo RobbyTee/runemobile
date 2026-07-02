@@ -10,9 +10,18 @@
 #     Cacio is GPLv2 WITH THE CLASSPATH EXCEPTION and these classes DO ship inside app binaries —
 #     see THIRD-PARTY-NOTICES.md §G for the notice that covers the combination.
 #
-# Usage: ./build-probes.sh   (run from ios/app/)
+# Usage: ./build-probes.sh                 (run from ios/app/)
+#        ./build-probes.sh --no-verify-sha  (skip the pinned-SHA check on the folded CACIO jars)
 set -euo pipefail
 cd "$(dirname "$0")"
+
+VERIFY_SHA=1
+for a in "$@"; do
+  case "$a" in
+    --no-verify-sha) VERIFY_SHA=0 ;;
+    *) echo "build-probes: unknown arg '$a' (only --no-verify-sha)" >&2; exit 64 ;;
+  esac
+done
 
 JAVAC="${JAVAC:-/opt/homebrew/opt/openjdk@21/bin/javac}"
 JAR="${JAR:-/opt/homebrew/opt/openjdk@21/bin/jar}"
@@ -24,8 +33,40 @@ CACIO_CP="$CACIO_LIB/cacio-tta-1.18.jar:$CACIO_LIB/cacio-shared-1.18.jar"
 OUT=build/probes-classes
 JARFILE=jvm-resources/probes.jar
 
+# SUPPLY-1: the two CACIO jars are folded verbatim into probes.jar and ship inside the app binary. They are
+# gitignored (staged from local state), so a pinned SHA-256 is their only integrity gate — refuse to fold a
+# jar that doesn't match rather than silently ship a tampered/wrong-version one. Re-pin here if you
+# deliberately bump the cacio version; --no-verify-sha skips the check. (byte-buddy in the same lib dir is
+# compile/test-only and is NOT folded, so it isn't pinned here.)
+CACIO_TTA_SHA256="2dc226227d86af25d2ae9dbd87aa4e210c86d734c1d7775f80359b6474805228"
+CACIO_SHARED_SHA256="6f3a26dfaba0d0287d97922ef316b751db06d93f183e8fa274ddec53b74bd845"
+
+verify_sha() {   # <file> <expected-sha256>
+  local f="$1" want="$2" got
+  [ -f "$f" ] || { echo "build-probes: missing $f" >&2; exit 1; }
+  if command -v shasum >/dev/null 2>&1; then
+    got="$(shasum -a 256 "$f" | awk '{print $1}')"
+  else
+    got="$(sha256sum "$f" | awk '{print $1}')"
+  fi
+  if [ "$got" != "$want" ]; then
+    echo "build-probes: SHA-256 mismatch for $f" >&2
+    echo "    expected $want" >&2
+    echo "    got      $got" >&2
+    echo "    A wrong/tampered jar would ship inside probes.jar — refusing. Re-pin the SHA above if you" >&2
+    echo "    deliberately bumped cacio, or pass --no-verify-sha to skip." >&2
+    exit 1
+  fi
+}
+
 rm -rf "$OUT"; mkdir -p "$OUT" "$(dirname "$JARFILE")"
 here="$(pwd)"
+
+if [ "$VERIFY_SHA" = 1 ]; then
+  echo "== verify CACIO jar checksums (SUPPLY-1) =="
+  verify_sha "$CACIO_LIB/cacio-tta-1.18.jar"    "$CACIO_TTA_SHA256"
+  verify_sha "$CACIO_LIB/cacio-shared-1.18.jar" "$CACIO_SHARED_SHA256"
+fi
 
 echo "== fold in CACIO classes =="
 ( cd "$OUT" && unzip -oq "$here/$CACIO_LIB/cacio-tta-1.18.jar"    -x 'META-INF/*' \

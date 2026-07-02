@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -755,6 +756,7 @@ class MainActivity : AppCompatActivity() {
                     onRendererSelect = { setRendererPref(it) },
                     // §4 cutover: the former devBar toolbar glyphs, now fixed launcher tiles (audit §4.3/#9).
                     onScreenshot = { saveScreenshot() },
+                    onScreenshotLongPress = { toggleAutoScreenshots() },
                     onAccount = { startActivity(Intent(this@MainActivity, LoginActivity::class.java)) },
                     onLogout = { confirmLogout() },
                     // RuneLite's Discord invite (runelite.properties runelite.discord.invite) — Discord had no
@@ -1672,6 +1674,60 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** PARITY-ANDROID-SHOT: whether the engine's auto-screenshots (level-ups, drops, clues, kills) are copied to
+     *  the gallery as they occur. Off by default (matches iOS); toggled by a long-press on the Screenshot tile. */
+    private fun autoSaveScreenshots(): Boolean = getSharedPreferences("screenshots", MODE_PRIVATE).getBoolean("autoSave", false)
+
+    private fun toggleAutoScreenshots() {
+        val now = !autoSaveScreenshots()
+        getSharedPreferences("screenshots", MODE_PRIVATE).edit().putBoolean("autoSave", now).apply()
+        Toast
+            .makeText(
+                this,
+                if (now) {
+                    "Auto-save ON: event screenshots (level-ups, drops, clues…) go to Pictures/RuneLite"
+                } else {
+                    "Auto-save OFF: event screenshots stay on device only"
+                },
+                Toast.LENGTH_LONG,
+            ).show()
+        Log.i(TAG, "screenshot: auto-save ${if (now) "ON" else "OFF"}")
+    }
+
+    /** PARITY-ANDROID-SHOT: drain the shared-core auto-screenshot queue (MobileUiBridge.nextScreenshot — the
+     *  engine writes each event PNG to the sandbox and enqueues its absolute path). When auto-save is enabled we
+     *  decode the file and insert it into the gallery; otherwise we still drain (discard) so the queue can't back
+     *  up. Runs on the rl-drain thread; caps writes per tick so a burst can't flood the encoder. Mirrors iOS
+     *  drainScreenshots. */
+    private fun drainScreenshots() {
+        val save = autoSaveScreenshots()
+        var writes = 0
+        var drained = 0
+        var path = JvmLauncher.nextScreenshot()
+        // The bridge queue is bounded (MAX_SCREENSHOTS) and poll() empties it, so "" arrives quickly; the drain
+        // cap is only a backstop against a pathological always-non-empty return so this I/O loop can't spin.
+        while (path.isNotEmpty() && drained < 64) {
+            drained++
+            // decodeFile is a blocking read on the rl-drain thread; capped at 3 encodes/tick so a burst of large
+            // PNGs can't stall the notification/link drains sharing this loop (leftovers surface next tick).
+            if (save && writes < 3) {
+                try {
+                    val bmp = BitmapFactory.decodeFile(path)
+                    if (bmp != null) {
+                        writePngToGallery(bmp)
+                        bmp.recycle()
+                        writes++
+                        Log.i(TAG, "screenshot: auto-saved ${path.substringAfterLast('/')}")
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "screenshot: auto-save decode/write failed: ${t.message}")
+                }
+            }
+            path = JvmLauncher.nextScreenshot()
+        }
+        if (drained >= 64) Log.w(TAG, "screenshot: drain backstop hit (queue not emptying?)")
+    }
+
     /** Map a SurfaceView-local coordinate to game-canvas pixels, clamped to the current frame. */
     private fun toGameX(viewX: Float): Int {
         val fw = JvmLauncher.frameWidth()
@@ -2390,6 +2446,7 @@ class MainActivity : AppCompatActivity() {
                         openLink(url)
                         url = JvmLauncher.nextLink()
                     }
+                    drainScreenshots() // PARITY-ANDROID-SHOT: surface engine auto-screenshots to the gallery
                 } catch (t: Throwable) {
                     Log.w(TAG, "rl-drain: ${t.message}")
                 }

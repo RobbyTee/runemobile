@@ -80,6 +80,14 @@ stage "ktlint (tracked Kotlin)"
 stage "detekt (Kotlin static analysis, baseline-gated)"
 "$ROOT/tools/lint/detekt.sh" --require || fail "detekt (new Kotlin findings or detekt not installed — see above)"
 
+# ── Stage 1d2: RuneLite api/hub version-pin review (GAP-B-2) ───────────────────────────────────
+# runelite.properties pins pluginhub.version + api.base to a version that lags project.build.version (a
+# newer minor 404s — commit a310e583c8). That pin is invisible to upstream merges, so this tripwire fails
+# the gate when project.build.version advances past the last human-reviewed value in hub-pin.ack, forcing a
+# conscious "is the pin still needed?" review. Build-independent, so it runs alongside the linters.
+stage "hub-pin review (RuneLite api/hub version drift, GAP-B-2)"
+"$ROOT/tools/shared-contract/check-hub-pin.sh" || fail "hub-pin (RuneLite api/hub pin needs review — see above)"
+
 # Gradle is invoked from android/. CI (and most dev shells) already export JAVA_HOME — honour it. Only when it is
 # unset do we probe known JDK-21 locations, and only export one that actually exists on disk; if none match (e.g. a
 # Linux distro path we don't list), leave JAVA_HOME unset so the gradlew wrapper / PATH `java` resolves it — never

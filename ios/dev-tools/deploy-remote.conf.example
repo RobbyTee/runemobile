@@ -2,14 +2,14 @@
 # Sourced by deploy-remote.sh.
 
 # Tailnet name (MagicDNS) or tailnet IP of the remote Mac tethered to the iPhone.
-#   tailscale status  ->  e.g. jordys-mac-mini  (or 100.71.129.1)
-REMOTE_HOST=jordys-mac-mini
+#   tailscale status  ->  e.g. my-mac-mini  (or 100.x.y.z)
+REMOTE_HOST=my-mac-mini
 
 # SSH login user on the remote Mac.
-REMOTE_USER=jordanmm
+REMOTE_USER=youruser
 
 # Absolute path to the repo checkout on the remote Mac (deploy-remote.sh rsyncs INTO this; created if absent).
-REMOTE_REPO=/Users/jordanmm/runelite-ios
+REMOTE_REPO=/Users/youruser/runelite-ios
 
 # iPhone's devicectl UUID *as seen by the REMOTE Mac*. On the remote: xcrun devicectl list devices
 DEV_UUID=PUT-IPHONE-UUID-HERE

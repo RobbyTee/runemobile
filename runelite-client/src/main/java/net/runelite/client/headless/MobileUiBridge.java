@@ -2246,9 +2246,9 @@ public final class MobileUiBridge
 			}
 			first = false;
 			sb.append("{\"group\":\"").append(a[0]).append("\",\"key\":\"").append(a[1])
-				.append("\",\"label\":\"").append(jsonEscape(a[2]))
+				.append("\",\"label\":\"").append(BridgeJson.escaped(a[2]))
 				.append("\",\"keyCode\":").append(keyCode).append(",\"mods\":").append(mods)
-				.append(",\"bind\":\"").append(jsonEscape(bind)).append("\"}");
+				.append(",\"bind\":\"").append(BridgeJson.escaped(bind)).append("\"}");
 		}
 		sb.append(']');
 		return sb.toString();
@@ -2319,10 +2319,10 @@ public final class MobileUiBridge
 						sb.append(',');
 					}
 					first = false;
-					sb.append("{\"group\":\"").append(jsonEscape(group)).append("\",\"key\":\"").append(jsonEscape(key))
-						.append("\",\"label\":\"").append(jsonEscape(d.name() + ": " + item.getItem().name()))
+					sb.append("{\"group\":\"").append(BridgeJson.escaped(group)).append("\",\"key\":\"").append(BridgeJson.escaped(key))
+						.append("\",\"label\":\"").append(BridgeJson.escaped(d.name() + ": " + item.getItem().name()))
 						.append("\",\"keyCode\":").append(km[0]).append(",\"mods\":").append(km[1])
-						.append(",\"bind\":\"").append(jsonEscape(kb.toString())).append("\"}");
+						.append(",\"bind\":\"").append(BridgeJson.escaped(kb.toString())).append("\"}");
 				}
 			}
 			catch (RuntimeException ex)
@@ -2393,36 +2393,6 @@ public final class MobileUiBridge
 	}
 
 	/** Minimal JSON string escape (quotes/backslashes/control chars) for the small labels this bridge emits. */
-	private static String jsonEscape(String s)
-	{
-		if (s == null || s.isEmpty())
-		{
-			return "";
-		}
-		final StringBuilder b = new StringBuilder(s.length() + 4);
-		for (int i = 0; i < s.length(); i++)
-		{
-			final char c = s.charAt(i);
-			switch (c)
-			{
-				case '"':
-					b.append("\\\"");
-					break;
-				case '\\':
-					b.append("\\\\");
-					break;
-				case '\n':
-				case '\r':
-				case '\t':
-					b.append(' ');
-					break;
-				default:
-					b.append(c);
-					break;
-			}
-		}
-		return b.toString();
-	}
 
 	/** The owning {@link Plugin} for a config {@code group} (for whole-plugin reset), or null (incl. fake-plugins). */
 	private static Plugin pluginForGroup(String group)

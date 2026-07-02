@@ -212,9 +212,9 @@ public final class MenuPeekBridge
 	/** The flat entry fields, WITHOUT the enclosing braces (so a submenu block can be inserted before "}"). */
 	private static void appendFields(StringBuilder sb, MenuEntry e)
 	{
-		sb.append("\"opt\":\"").append(jsonEsc(stripTags(e.getOption())))
-			.append("\",\"tgt\":\"").append(jsonEsc(stripTags(e.getTarget())))
-			.append("\",\"type\":\"").append(jsonEsc(String.valueOf(e.getType())))
+		sb.append("\"opt\":\"").append(BridgeJson.escaped(stripTags(e.getOption())))
+			.append("\",\"tgt\":\"").append(BridgeJson.escaped(stripTags(e.getTarget())))
+			.append("\",\"type\":\"").append(BridgeJson.escaped(String.valueOf(e.getType())))
 			.append("\",\"id\":").append(e.getIdentifier())
 			.append(",\"p0\":").append(e.getParam0())
 			.append(",\"p1\":").append(e.getParam1())
@@ -278,37 +278,6 @@ public final class MenuPeekBridge
 	private static String stripTags(String s)
 	{
 		return s == null ? "" : s.replaceAll("<[^>]*>", "");
-	}
-
-	private static String jsonEsc(String s)
-	{
-		if (s == null || s.isEmpty())
-		{
-			return "";
-		}
-		final StringBuilder b = new StringBuilder(s.length() + 4);
-		for (int i = 0; i < s.length(); i++)
-		{
-			final char c = s.charAt(i);
-			switch (c)
-			{
-				case '"':
-					b.append("\\\"");
-					break;
-				case '\\':
-					b.append("\\\\");
-					break;
-				case '\n':
-				case '\r':
-				case '\t':
-					b.append(' ');
-					break;
-				default:
-					b.append(c);
-					break;
-			}
-		}
-		return b.toString();
 	}
 
 	private static int safeInt(java.util.function.IntSupplier s)

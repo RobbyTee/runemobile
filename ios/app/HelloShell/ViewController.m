@@ -70,6 +70,10 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UIButton *keyboardButton;
 @property (nonatomic, strong) UIButton *shiftButton;     // sticky-Shift toggle (holds VK_SHIFT for shift-click)
 @property (nonatomic, assign) BOOL shiftHeld;
+@property (nonatomic, strong) UIButton *ctrlButton; // PARITY-IOS-LATCH: sticky-Ctrl toggle (holds VK_CONTROL)
+@property (nonatomic, assign) BOOL ctrlHeld;
+@property (nonatomic, strong) UIButton *altButton; // PARITY-IOS-LATCH: sticky-Alt toggle (Ground-Items Alt-highlight)
+@property (nonatomic, assign) BOOL altHeld;
 @property (nonatomic, assign) BOOL notifAuthRequested;   // UNUserNotificationCenter authorization asked once
 @property (nonatomic, assign) BOOL safariOpen;           // an SFSafariViewController is currently presented
 @property (nonatomic, strong) UIButton *screenshotButton; // 📷 save the live frame to Photos
@@ -784,6 +788,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.keyboardButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.keyboardButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.keyboardButton setTitle:@"⌨︎" forState:UIControlStateNormal];
+    self.keyboardButton.accessibilityLabel = @"Keyboard";
+    self.keyboardButton.accessibilityHint = @"Shows or hides the on-screen keyboard";
     self.keyboardButton.titleLabel.font = [UIFont systemFontOfSize:22];
     self.keyboardButton.tintColor = [UIColor whiteColor];
     self.keyboardButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
@@ -798,6 +804,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.shiftButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.shiftButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.shiftButton setTitle:@"⇧" forState:UIControlStateNormal];
+    self.shiftButton.accessibilityLabel = @"Sticky Shift";
+    self.shiftButton.accessibilityHint = @"Holds Shift down for shift-click actions; tap again to release";
     self.shiftButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
     self.shiftButton.tintColor = [UIColor whiteColor];
     self.shiftButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
@@ -806,11 +814,45 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
                forControlEvents:UIControlEventTouchUpInside];
     [self.screen addSubview:self.shiftButton];
 
+    // PARITY-IOS-LATCH: sticky-Ctrl toggle, mirroring sticky-Shift. Holds VK_CONTROL via the bridge so the
+    // engine's isKeyPressed(KC_CONTROL) path reads true (e.g. Ctrl-click walk-here, Ctrl+F search fields).
+    self.ctrlButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.ctrlButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.ctrlButton setTitle:@"⌃" forState:UIControlStateNormal];
+    self.ctrlButton.accessibilityLabel = @"Sticky Control";
+    self.ctrlButton.accessibilityHint = @"Holds Control down for ctrl-click actions; tap again to release";
+    self.ctrlButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
+    self.ctrlButton.tintColor = [UIColor whiteColor];
+    self.ctrlButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
+    self.ctrlButton.layer.cornerRadius = 8;
+    [self.ctrlButton addTarget:self
+                        action:@selector(onToggleCtrl)
+              forControlEvents:UIControlEventTouchUpInside];
+    [self.screen addSubview:self.ctrlButton];
+
+    // PARITY-IOS-LATCH: sticky-Alt toggle. Holds VK_ALT via the bridge so Alt-modified interactions read true
+    // (e.g. Ground Items' Alt-highlight, Alt+key overlay hotkeys on touch with no hardware modifier).
+    self.altButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.altButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.altButton setTitle:@"⌥" forState:UIControlStateNormal];
+    self.altButton.accessibilityLabel = @"Sticky Alt";
+    self.altButton.accessibilityHint = @"Holds Alt down for alt-modified actions; tap again to release";
+    self.altButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
+    self.altButton.tintColor = [UIColor whiteColor];
+    self.altButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
+    self.altButton.layer.cornerRadius = 8;
+    [self.altButton addTarget:self
+                       action:@selector(onToggleAlt)
+             forControlEvents:UIControlEventTouchUpInside];
+    [self.screen addSubview:self.altButton];
+
     // Screenshot: save the live composited frame to Photos (the engine's auto-screenshots land in the sandbox
     // dir, unreachable; this is the manual, reachable path — native already has the frame via latestFrame).
     self.screenshotButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.screenshotButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.screenshotButton setTitle:@"📷" forState:UIControlStateNormal];
+    self.screenshotButton.accessibilityLabel = @"Screenshot";
+    self.screenshotButton.accessibilityHint = @"Saves the current frame to Photos; long press toggles auto-saving event screenshots";
     self.screenshotButton.titleLabel.font = [UIFont systemFontOfSize:20];
     self.screenshotButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
     self.screenshotButton.layer.cornerRadius = 8;
@@ -828,6 +870,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.pipButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.pipButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.pipButton setTitle:@"📺" forState:UIControlStateNormal];
+    self.pipButton.accessibilityLabel = @"Picture in picture";
+    self.pipButton.accessibilityHint = @"Pops the game into a floating window";
     self.pipButton.titleLabel.font = [UIFont systemFontOfSize:20];
     self.pipButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
     self.pipButton.layer.cornerRadius = 8;
@@ -841,6 +885,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.hotkeyButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.hotkeyButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.hotkeyButton setTitle:@"⚡" forState:UIControlStateNormal];
+    self.hotkeyButton.accessibilityLabel = @"Action hotkeys";
+    self.hotkeyButton.accessibilityHint = @"Shows or hides the hotkey strip; long press to edit hotkeys";
     self.hotkeyButton.titleLabel.font = [UIFont systemFontOfSize:20];
     self.hotkeyButton.tintColor = [UIColor whiteColor];
     self.hotkeyButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
@@ -1074,6 +1120,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.debugToggle = [UIButton buttonWithType:UIButtonTypeSystem];
     self.debugToggle.translatesAutoresizingMaskIntoConstraints = NO;
     [self.debugToggle setTitle:@"≡" forState:UIControlStateNormal];
+    self.debugToggle.accessibilityLabel = @"Debug panel";
+    self.debugToggle.accessibilityHint = @"Shows or hides the developer log";
     self.debugToggle.titleLabel.font = [UIFont boldSystemFontOfSize:22];
     self.debugToggle.tintColor = [UIColor whiteColor];
     self.debugToggle.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
@@ -1086,6 +1134,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.chromeToggle = [UIButton buttonWithType:UIButtonTypeSystem];
     self.chromeToggle.translatesAutoresizingMaskIntoConstraints = NO;
     [self.chromeToggle setTitle:@"▦" forState:UIControlStateNormal];
+    self.chromeToggle.accessibilityLabel = @"Game interface rails";
+    self.chromeToggle.accessibilityHint = @"Shows or hides the tab rails";
     self.chromeToggle.titleLabel.font = [UIFont boldSystemFontOfSize:22];
     self.chromeToggle.tintColor = [UIColor whiteColor];
     self.chromeToggle.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
@@ -1098,6 +1148,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.pluginButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.pluginButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.pluginButton setTitle:@"⚙" forState:UIControlStateNormal];
+    self.pluginButton.accessibilityLabel = @"Plugin settings";
+    self.pluginButton.accessibilityHint = @"Opens plugin configuration; long press to change interface size";
     self.pluginButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
     self.pluginButton.tintColor = [UIColor whiteColor];
     self.pluginButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
@@ -1115,6 +1167,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.gridButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.gridButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.gridButton setTitle:@"⊞" forState:UIControlStateNormal];
+    self.gridButton.accessibilityLabel = @"Plugins";
+    self.gridButton.accessibilityHint = @"Opens the plugin launcher; long press to toggle the icon rail";
     self.gridButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
     self.gridButton.tintColor = [UIColor whiteColor];
     self.gridButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
@@ -1142,36 +1196,57 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         [self.screen.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
 
         // In-game keyboard control, bottom-left of the safe area.
-        [self.keyboardButton.bottomAnchor constraintEqualToAnchor:g.bottomAnchor constant:-8],
-        [self.keyboardButton.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:8],
+        [self.keyboardButton.bottomAnchor constraintEqualToAnchor:g.bottomAnchor
+                                                         constant:-8],
+        [self.keyboardButton.leadingAnchor constraintEqualToAnchor:g.leadingAnchor
+                                                          constant:8],
         [self.keyboardButton.widthAnchor constraintEqualToConstant:44],
         [self.keyboardButton.heightAnchor constraintEqualToConstant:36],
 
         // Sticky-Shift toggle — same row, just right of the keyboard button.
         [self.shiftButton.bottomAnchor constraintEqualToAnchor:self.keyboardButton.bottomAnchor],
-        [self.shiftButton.leadingAnchor constraintEqualToAnchor:self.keyboardButton.trailingAnchor constant:8],
+        [self.shiftButton.leadingAnchor constraintEqualToAnchor:self.keyboardButton.trailingAnchor
+                                                       constant:8],
         [self.shiftButton.widthAnchor constraintEqualToConstant:44],
         [self.shiftButton.heightAnchor constraintEqualToConstant:36],
 
-        // Screenshot button — same row, right of the shift button.
+        // PARITY-IOS-LATCH: sticky-Ctrl toggle — same row, right of the shift button.
+        [self.ctrlButton.bottomAnchor constraintEqualToAnchor:self.keyboardButton.bottomAnchor],
+        [self.ctrlButton.leadingAnchor constraintEqualToAnchor:self.shiftButton.trailingAnchor
+                                                      constant:8],
+        [self.ctrlButton.widthAnchor constraintEqualToConstant:44],
+        [self.ctrlButton.heightAnchor constraintEqualToConstant:36],
+
+        // PARITY-IOS-LATCH: sticky-Alt toggle — same row, right of the ctrl button.
+        [self.altButton.bottomAnchor constraintEqualToAnchor:self.keyboardButton.bottomAnchor],
+        [self.altButton.leadingAnchor constraintEqualToAnchor:self.ctrlButton.trailingAnchor
+                                                     constant:8],
+        [self.altButton.widthAnchor constraintEqualToConstant:44],
+        [self.altButton.heightAnchor constraintEqualToConstant:36],
+
+        // Screenshot button — same row, right of the alt button.
         [self.screenshotButton.bottomAnchor constraintEqualToAnchor:self.keyboardButton.bottomAnchor],
-        [self.screenshotButton.leadingAnchor constraintEqualToAnchor:self.shiftButton.trailingAnchor constant:8],
+        [self.screenshotButton.leadingAnchor constraintEqualToAnchor:self.altButton.trailingAnchor
+                                                            constant:8],
         [self.screenshotButton.widthAnchor constraintEqualToConstant:44],
         [self.screenshotButton.heightAnchor constraintEqualToConstant:36],
 
         // Picture-in-Picture button — same row, right of the screenshot button.
         [self.pipButton.bottomAnchor constraintEqualToAnchor:self.keyboardButton.bottomAnchor],
-        [self.pipButton.leadingAnchor constraintEqualToAnchor:self.screenshotButton.trailingAnchor constant:8],
+        [self.pipButton.leadingAnchor constraintEqualToAnchor:self.screenshotButton.trailingAnchor
+                                                     constant:8],
         [self.pipButton.widthAnchor constraintEqualToConstant:44],
         [self.pipButton.heightAnchor constraintEqualToConstant:36],
 
         // KEY-1: ⚡ hotkey-strip toggle — same bottom row, right of PiP.
         [self.hotkeyButton.bottomAnchor constraintEqualToAnchor:self.keyboardButton.bottomAnchor],
-        [self.hotkeyButton.leadingAnchor constraintEqualToAnchor:self.pipButton.trailingAnchor constant:8],
+        [self.hotkeyButton.leadingAnchor constraintEqualToAnchor:self.pipButton.trailingAnchor
+                                                        constant:8],
         [self.hotkeyButton.widthAnchor constraintEqualToConstant:44],
         [self.hotkeyButton.heightAnchor constraintEqualToConstant:36],
         // The pinned-hotkey strip sits one row up, starting at the ⇧ button (clear of the ⚙▦≡ stack on the left).
-        [self.hotkeyStrip.bottomAnchor constraintEqualToAnchor:self.keyboardButton.topAnchor constant:-8],
+        [self.hotkeyStrip.bottomAnchor constraintEqualToAnchor:self.keyboardButton.topAnchor
+                                                      constant:-8],
         [self.hotkeyStrip.leadingAnchor constraintEqualToAnchor:self.shiftButton.leadingAnchor],
         [self.hotkeyStrip.heightAnchor constraintEqualToConstant:36],
 
@@ -1180,57 +1255,75 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         // expand left into the trio). Now a vertical stack in the BOTTOM-LEFT above the keyboard button, over the
         // scene and clear of every relocated HUD element (chat top-left, minimap/orbs/XP top-right, inventory
         // bottom-right). Bottom-up order: keyboard, then ⚙, ▦, ≡.
-        [self.pluginButton.bottomAnchor constraintEqualToAnchor:self.keyboardButton.topAnchor constant:-8],
+        [self.pluginButton.bottomAnchor constraintEqualToAnchor:self.keyboardButton.topAnchor
+                                                       constant:-8],
         [self.pluginButton.leadingAnchor constraintEqualToAnchor:self.keyboardButton.leadingAnchor],
         [self.pluginButton.widthAnchor constraintEqualToConstant:44],
         [self.pluginButton.heightAnchor constraintEqualToConstant:36],
 
-        [self.chromeToggle.bottomAnchor constraintEqualToAnchor:self.pluginButton.topAnchor constant:-8],
+        [self.chromeToggle.bottomAnchor constraintEqualToAnchor:self.pluginButton.topAnchor
+                                                       constant:-8],
         [self.chromeToggle.leadingAnchor constraintEqualToAnchor:self.keyboardButton.leadingAnchor],
         [self.chromeToggle.widthAnchor constraintEqualToConstant:44],
         [self.chromeToggle.heightAnchor constraintEqualToConstant:36],
 
-        [self.debugToggle.bottomAnchor constraintEqualToAnchor:self.chromeToggle.topAnchor constant:-8],
+        [self.debugToggle.bottomAnchor constraintEqualToAnchor:self.chromeToggle.topAnchor
+                                                      constant:-8],
         [self.debugToggle.leadingAnchor constraintEqualToAnchor:self.keyboardButton.leadingAnchor],
         [self.debugToggle.widthAnchor constraintEqualToConstant:44],
         [self.debugToggle.heightAnchor constraintEqualToConstant:36],
 
         // §3.3 grid launcher FAB — top of the corner stack, above ≡.
-        [self.gridButton.bottomAnchor constraintEqualToAnchor:self.debugToggle.topAnchor constant:-8],
+        [self.gridButton.bottomAnchor constraintEqualToAnchor:self.debugToggle.topAnchor
+                                                     constant:-8],
         [self.gridButton.leadingAnchor constraintEqualToAnchor:self.keyboardButton.leadingAnchor],
         [self.gridButton.widthAnchor constraintEqualToConstant:44],
         [self.gridButton.heightAnchor constraintEqualToConstant:36],
 
         // Debug panel — left ~62% of the safe area, full height, below the toggle row.
-        [self.debugPanel.topAnchor constraintEqualToAnchor:g.topAnchor constant:8],
-        [self.debugPanel.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:8],
-        [self.debugPanel.bottomAnchor constraintEqualToAnchor:g.bottomAnchor constant:-8],
-        [self.debugPanel.widthAnchor constraintEqualToAnchor:g.widthAnchor multiplier:0.62],
+        [self.debugPanel.topAnchor constraintEqualToAnchor:g.topAnchor
+                                                  constant:8],
+        [self.debugPanel.leadingAnchor constraintEqualToAnchor:g.leadingAnchor
+                                                      constant:8],
+        [self.debugPanel.bottomAnchor constraintEqualToAnchor:g.bottomAnchor
+                                                     constant:-8],
+        [self.debugPanel.widthAnchor constraintEqualToAnchor:g.widthAnchor
+                                                  multiplier:0.62],
 
         // Panel contents.
         [self.statusLabel.topAnchor constraintEqualToAnchor:p.topAnchor],
         [self.statusLabel.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.statusLabel.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
-        [self.launchButton.topAnchor constraintEqualToAnchor:self.statusLabel.bottomAnchor constant:6],
+        [self.launchButton.topAnchor constraintEqualToAnchor:self.statusLabel.bottomAnchor
+                                                    constant:6],
         [self.launchButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.canaryButton.centerYAnchor constraintEqualToAnchor:self.launchButton.centerYAnchor],
-        [self.canaryButton.leadingAnchor constraintEqualToAnchor:self.launchButton.trailingAnchor constant:24],
-        [self.chromeButton.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor constant:6],
+        [self.canaryButton.leadingAnchor constraintEqualToAnchor:self.launchButton.trailingAnchor
+                                                        constant:24],
+        [self.chromeButton.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor
+                                                    constant:6],
         [self.chromeButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.gpuButton.centerYAnchor constraintEqualToAnchor:self.chromeButton.centerYAnchor],
-        [self.gpuButton.leadingAnchor constraintEqualToAnchor:self.chromeButton.trailingAnchor constant:24],
+        [self.gpuButton.leadingAnchor constraintEqualToAnchor:self.chromeButton.trailingAnchor
+                                                     constant:24],
         [self.zoneButton.centerYAnchor constraintEqualToAnchor:self.gpuButton.centerYAnchor],
-        [self.zoneButton.leadingAnchor constraintEqualToAnchor:self.gpuButton.trailingAnchor constant:24],
+        [self.zoneButton.leadingAnchor constraintEqualToAnchor:self.gpuButton.trailingAnchor
+                                                      constant:24],
         // ⚡ Fast on its own row (the chrome/gpu/zone row is already full-width).
-        [self.zoneFastButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor constant:6],
+        [self.zoneFastButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor
+                                                      constant:6],
         [self.zoneFastButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
-        [self.loginButton.topAnchor constraintEqualToAnchor:self.zoneFastButton.bottomAnchor constant:6],
+        [self.loginButton.topAnchor constraintEqualToAnchor:self.zoneFastButton.bottomAnchor
+                                                   constant:6],
         [self.loginButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.logoutButton.centerYAnchor constraintEqualToAnchor:self.loginButton.centerYAnchor],
-        [self.logoutButton.leadingAnchor constraintEqualToAnchor:self.loginButton.trailingAnchor constant:16],
+        [self.logoutButton.leadingAnchor constraintEqualToAnchor:self.loginButton.trailingAnchor
+                                                        constant:16],
         [self.switchCharButton.centerYAnchor constraintEqualToAnchor:self.loginButton.centerYAnchor],
-        [self.switchCharButton.leadingAnchor constraintEqualToAnchor:self.logoutButton.trailingAnchor constant:16],
-        [self.console.topAnchor constraintEqualToAnchor:self.loginButton.bottomAnchor constant:6],
+        [self.switchCharButton.leadingAnchor constraintEqualToAnchor:self.logoutButton.trailingAnchor
+                                                            constant:16],
+        [self.console.topAnchor constraintEqualToAnchor:self.loginButton.bottomAnchor
+                                               constant:6],
         [self.console.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.console.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
         [self.console.bottomAnchor constraintEqualToAnchor:p.bottomAnchor],
@@ -4913,6 +5006,8 @@ static CGRect mapRectFromArr(NSArray *a) {
         UIButton *cog = [UIButton buttonWithType:UIButtonTypeSystem];
         cog.frame = CGRectMake(boxW - 44.0, 0, 44.0, headerH);
         [cog setTitle:(self.shiftHeld ? @"⚙✓" : @"⚙") forState:UIControlStateNormal];
+        cog.accessibilityLabel = self.shiftHeld ? @"Customize, on" : @"Customize";
+        cog.accessibilityHint = @"Latches Shift and reopens the menu to show swap-config options";
         cog.titleLabel.font = [UIFont systemFontOfSize:14];
         cog.tintColor = self.shiftHeld ? [UIColor colorWithRed:0.98 green:0.78 blue:0.25 alpha:1.0]
                                        : [UIColor colorWithWhite:0.85 alpha:1.0];
@@ -5553,6 +5648,28 @@ static CGRect mapRectFromArr(NSArray *a) {
         : [UIColor colorWithWhite:0.0 alpha:0.45];
     self.shiftButton.tintColor = self.shiftHeld ? [UIColor blackColor] : [UIColor whiteColor];
     [self appendLine:self.shiftHeld ? @"[shell] Shift latched ON" : @"[shell] Shift released"];
+}
+
+// PARITY-IOS-LATCH: sticky-Ctrl toggle, mirroring onToggleShift.
+- (void)onToggleCtrl {
+    self.ctrlHeld = !self.ctrlHeld;
+    [JVMLauncher postCtrlHeld:self.ctrlHeld];
+    self.ctrlButton.backgroundColor = self.ctrlHeld
+                                          ? [UIColor colorWithRed:0.95 green:0.62 blue:0.11 alpha:0.92] // RuneLite amber = latched on
+                                          : [UIColor colorWithWhite:0.0 alpha:0.45];
+    self.ctrlButton.tintColor = self.ctrlHeld ? [UIColor blackColor] : [UIColor whiteColor];
+    [self appendLine:self.ctrlHeld ? @"[shell] Control latched ON" : @"[shell] Control released"];
+}
+
+// PARITY-IOS-LATCH: sticky-Alt toggle, mirroring onToggleShift.
+- (void)onToggleAlt {
+    self.altHeld = !self.altHeld;
+    [JVMLauncher postAltHeld:self.altHeld];
+    self.altButton.backgroundColor = self.altHeld
+                                         ? [UIColor colorWithRed:0.95 green:0.62 blue:0.11 alpha:0.92] // RuneLite amber = latched on
+                                         : [UIColor colorWithWhite:0.0 alpha:0.45];
+    self.altButton.tintColor = self.altHeld ? [UIColor blackColor] : [UIColor whiteColor];
+    [self appendLine:self.altHeld ? @"[shell] Alt latched ON" : @"[shell] Alt released"];
 }
 
 #pragma mark - KEY-1 action-hotkey strip

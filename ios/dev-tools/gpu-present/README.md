@@ -26,7 +26,7 @@ cd ios/dev-tools/gpu-present
 xcodegen generate
 xcodebuild -project GpuPresent.xcodeproj -scheme GpuPresent -destination "generic/platform=iOS" \
   -derivedDataPath build/dd -allowProvisioningUpdates build
-DEV=AEA9E1BC-E149-57AB-A9DD-C4AEA668CD9B   # iPhone 17 Pro Max
+DEV=<YOUR_DEVICE_UDID>   # e.g. `xcrun devicectl list devices` to find it
 xcrun devicectl device install app --device "$DEV" build/dd/Build/Products/Debug-iphoneos/GpuPresent.app
 xcrun devicectl device process launch --device "$DEV" dev.audaro.gpupresent
 # LOOK at the device: 3 colour bars (red|green|blue) with a white stripe sweeping left->right == present works.

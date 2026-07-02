@@ -46,6 +46,8 @@ static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
 static jmethodID gMidWarmed = NULL;   // JavaBridge.presentReady()Z — world geometry uploaded (direct-present reveal)
 static jmethodID gMidMenuSelect = NULL;  // selectMenuPoint(II)V — menu row select + hover-clear (optional)
 static jmethodID gMidShiftHeld = NULL;   // setShiftHeld(Z)V — sticky-Shift modifier (optional; tolerate older jar)
+static jmethodID gMidCtrlHeld = NULL;    // setCtrlHeld(Z)V — sticky-Ctrl modifier (PARITY-IOS-LATCH; optional)
+static jmethodID gMidAltHeld = NULL;     // setAltHeld(Z)V — sticky-Alt modifier (Ground-Items Alt-highlight; optional)
 static jmethodID gMidMenuSuppress = NULL; // setMenuRenderSuppressed(Z)V — engine-menu raster gate (optional)
 static jmethodID gMidInvokeMenu = NULL;  // invokeMenuEntry(II)V — commit a drilled-in submenu child (MENU-1, optional)
 static jmethodID gMidKeybind = NULL;     // onKeybind(II)V — fire a plugin action-hotkey chord (KEY-1, optional)
@@ -261,6 +263,16 @@ static BOOL ensureBridge(void) {
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidMenuSelect = NULL; }
     gMidShiftHeld = (*env)->GetStaticMethodID(env, global, "setShiftHeld", "(Z)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidShiftHeld = NULL; }
+    gMidCtrlHeld = (*env)->GetStaticMethodID(env, global, "setCtrlHeld", "(Z)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidCtrlHeld = NULL;
+    }
+    gMidAltHeld = (*env)->GetStaticMethodID(env, global, "setAltHeld", "(Z)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidAltHeld = NULL;
+    }
     gMidMenuSuppress = (*env)->GetStaticMethodID(env, global, "setMenuRenderSuppressed", "(Z)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidMenuSuppress = NULL; }
     gMidInvokeMenu = (*env)->GetStaticMethodID(env, global, "invokeMenuEntry", "(II)V");
@@ -1782,6 +1794,26 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidShiftHeld, (jboolean)(held ? JNI_TRUE : JNI_FALSE));
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postShiftHeld"); }
+}
+
++ (void)postCtrlHeld:(BOOL)held {
+    if (!ensureBridge() || !gMidCtrlHeld)
+        return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidCtrlHeld, (jboolean)(held ? JNI_TRUE : JNI_FALSE));
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.postCtrlHeld");
+    }
+}
+
++ (void)postAltHeld:(BOOL)held {
+    if (!ensureBridge() || !gMidAltHeld)
+        return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidAltHeld, (jboolean)(held ? JNI_TRUE : JNI_FALSE));
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.postAltHeld");
+    }
 }
 
 + (BOOL)textInputOpen {
