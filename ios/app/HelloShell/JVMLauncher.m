@@ -1529,21 +1529,27 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     NSUInteger need = (NSUInteger)w * (NSUInteger)h;
     if ((NSUInteger)len < need) { (*env)->DeleteLocalRef(env, arr); return nil; }
 
-    // Reusable native scratch buffer (grows monotonically); copied again into CFData so the CGImage owns
-    // stable bytes even as the engine overwrites the Java array on the next frame.
-    static uint32_t *buf = NULL;
-    static NSUInteger bufCount = 0;
-    if (bufCount < need) {
-        free(buf);
-        buf = (uint32_t *)malloc(need * sizeof(uint32_t));
-        bufCount = buf ? need : 0;
+    // PERF-1: rotating scratch ring backing the CGImage DIRECTLY — the old path copied the frame twice
+    // (Java array -> scratch, scratch -> CFData). Depth 3 means a buffer isn't rewritten until two more
+    // frames have been fetched, which outlives every consumer: the CA commit reads the bytes this tick,
+    // and by the time a slot cycles back its image has left the screen. (A canvas resize frees the
+    // too-small slot on reuse — three frames stale by then.) No CFData duplicate, one copy per frame.
+    static uint32_t *bufs[3] = {NULL, NULL, NULL};
+    static NSUInteger bufCounts[3] = {0, 0, 0};
+    static int bufIdx = 0;
+    bufIdx = (bufIdx + 1) % 3;
+    if (bufCounts[bufIdx] < need) {
+        free(bufs[bufIdx]);
+        bufs[bufIdx] = (uint32_t *)malloc(need * sizeof(uint32_t));
+        bufCounts[bufIdx] = bufs[bufIdx] ? need : 0;
     }
+    uint32_t *buf = bufs[bufIdx];
     if (!buf) { (*env)->DeleteLocalRef(env, arr); return nil; }
     (*env)->GetIntArrayRegion(env, arr, 0, (jsize)need, (jint *)buf);
     (*env)->DeleteLocalRef(env, arr);
 
-    CFDataRef data = CFDataCreate(NULL, (const UInt8 *)buf, (CFIndex)(need * sizeof(uint32_t)));
-    CGDataProviderRef provider = CGDataProviderCreateWithCFData(data);
+    // NULL release callback: the provider borrows the static ring slot, it never owns/frees it.
+    CGDataProviderRef provider = CGDataProviderCreateWithData(NULL, buf, need * sizeof(uint32_t), NULL);
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
     // The engine buffer is TYPE_INT_RGB: packed 0x00RRGGBB ints. On little-endian arm64, reading each
     // 32-bit word native-endian with alpha-skip-first yields [skip],R,G,B — the correct opaque pixel.
@@ -1554,7 +1560,6 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     if (cg) CGImageRelease(cg);
     CGColorSpaceRelease(cs);
     CGDataProviderRelease(provider);
-    CFRelease(data);
     if (img) { cachedImage = img; lastSeq = seq; }   // remember for the skip-unchanged fast path above
     return img;
 }
@@ -1605,14 +1610,11 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     CVPixelBufferLockBaseAddress(pb, 0);
     uint8_t *base = (uint8_t *)CVPixelBufferGetBaseAddress(pb);
     size_t stride = CVPixelBufferGetBytesPerRow(pb);
-    if (stride == (size_t)w * 4) {
-        (*env)->GetIntArrayRegion(env, arr, 0, (jsize)need, (jint *)base);
-    } else {
-        for (jint row = 0; row < h; row++) {   // row stride padded — copy per row
-            (*env)->GetIntArrayRegion(env, arr, row * w, w, (jint *)(base + (size_t)row * stride));
-        }
-    }
-    if ((*env)->ExceptionCheck(env)) {
+    // PERF-1: one fused pass — read the Java pixels via a critical (pinned, no-copy) pointer and stamp the
+    // alpha byte during the row copy, instead of GetIntArrayRegion (copy 1) + a second full-buffer OR pass
+    // (copy 2's cost). The critical window holds only this loop — no JNI or blocking calls inside.
+    jint *src = (jint *)(*env)->GetPrimitiveArrayCritical(env, arr, NULL);
+    if (!src) {
         bridgeNoteClear(env, "JVMLauncher.copyFramePixelBuffer");
         CVPixelBufferUnlockBaseAddress(pb, 0);
         CVPixelBufferRelease(pb);
@@ -1620,9 +1622,12 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         return NULL;
     }
     for (jint row = 0; row < h; row++) {
-        uint32_t *px = (uint32_t *)(base + (size_t)row * stride);
-        for (jint i = 0; i < w; i++) px[i] |= 0xFF000000u;   // stamp alpha opaque
+        const jint *srow = src + (size_t)row * w;
+        uint32_t *drow = (uint32_t *)(base + (size_t)row * stride);
+        for (jint i = 0; i < w; i++)
+            drow[i] = ((uint32_t)srow[i]) | 0xFF000000u; // copy + opaque alpha
     }
+    (*env)->ReleasePrimitiveArrayCritical(env, arr, src, JNI_ABORT);
     CVPixelBufferUnlockBaseAddress(pb, 0);
     (*env)->DeleteLocalRef(env, arr);
 

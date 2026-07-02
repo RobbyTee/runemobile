@@ -1227,7 +1227,12 @@ static void *renderLoop(void *) {
                         }
                         ANativeWindow_Buffer wb;
                         if (ANativeWindow_lock(win, &wb, nullptr) == 0) {
-                            jint *px = env->GetIntArrayElements(arr, nullptr);
+                            // PERF-1: GetPrimitiveArrayCritical instead of GetIntArrayElements — the latter
+                            // malloc'd + copied the full frame every blit on ART. Critical gives a direct
+                            // (pinned) pointer; the window is kept tight (just the swizzle loop, no JNI/IO
+                            // inside) because it can block GC for its duration. librlawt's legacy path has
+                            // used the same pattern for years (librlawt.cpp GetPrimitiveArrayCritical).
+                            jint *px = (jint *)env->GetPrimitiveArrayCritical(arr, nullptr);
                             if (px) {
                                 const int cw = std::min(w, wb.width);
                                 const int ch = std::min(h, wb.height);
@@ -1240,7 +1245,7 @@ static void *renderLoop(void *) {
                                         drow[x] = 0xFF000000u | ((s & 0xFFu) << 16) | (s & 0xFF00u) | ((s >> 16) & 0xFFu);
                                     }
                                 }
-                                env->ReleaseIntArrayElements(arr, px, JNI_ABORT);
+                                env->ReleasePrimitiveArrayCritical(arr, px, JNI_ABORT);
                             }
                             ANativeWindow_unlockAndPost(win);
                         }
