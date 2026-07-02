@@ -40,6 +40,17 @@ FLAG_RE = re.compile(r'(?:getBoolean|getInteger|getLong|getProperty)\(\s*"([^"]+
 # diffs baseline.txt and forces the same acknowledgement as a signature change. Keys assembled from variables
 # are invisible to this scan — keep payload key names literal in the builders.
 PAYLOAD_RE = re.compile(r'\\"([A-Za-z_][A-Za-z0-9_]*)\\"\s*:')
+# Keys routed through an append-style helper (appendRect(c, sb, "window", ...), appendSpriteSlot(sb, "inv",
+# slot)) never appear as \"key\": literals — the helper builds that from its String arg. Pin the literal at
+# the CALL site instead: an append*-named call whose String arg is followed by more args is a key, not a
+# value (sb.append("...") has no trailing comma). If a helper is renamed the entries drop out, which diffs
+# the baseline — the gate still fires.
+HELPER_KEY_RE = re.compile(r'\bappend[A-Za-z0-9_]*\(\s*(?:[A-Za-z_][\w.]*\s*,\s*)*"([A-Za-z_][A-Za-z0-9_]*)"\s*,')
+# Tripwire for everything else: each \"key\": literal contains exactly one escaped-quote-colon, so any
+# EXCESS \": in a file is a JSON key assembled from a variable (e.g. sb.append(key).append("\":")). Pin the
+# per-class COUNT — a new dynamic-key site changes it and forces the same baseline ack, instead of silently
+# shipping an unpinned key.
+KEY_CLOSE_RE = re.compile(r'\\"\s*:')
 
 
 def param_types(params):
@@ -72,6 +83,11 @@ def main():
             entries.add('FLAG %s' % fm.group(1))
         for pm in PAYLOAD_RE.finditer(src):
             entries.add('PAYLOAD %s %s' % (cls, pm.group(1)))
+        for hm in HELPER_KEY_RE.finditer(src):
+            entries.add('PAYLOAD %s %s' % (cls, hm.group(1)))
+        dynamic = len(KEY_CLOSE_RE.findall(src)) - len(PAYLOAD_RE.findall(src))
+        if dynamic > 0:
+            entries.add('PAYLOAD-DYNAMIC %s count=%d' % (cls, dynamic))
     if missing:
         # A renamed/removed contract file is itself a breaking change — surface it loudly.
         for m in missing:
