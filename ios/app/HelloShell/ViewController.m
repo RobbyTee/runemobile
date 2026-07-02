@@ -72,8 +72,6 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, assign) BOOL shiftHeld;
 @property (nonatomic, strong) UIButton *ctrlButton; // PARITY-IOS-LATCH: sticky-Ctrl toggle (holds VK_CONTROL)
 @property (nonatomic, assign) BOOL ctrlHeld;
-@property (nonatomic, strong) UIButton *altButton; // PARITY-IOS-LATCH: sticky-Alt toggle (Ground-Items Alt-highlight)
-@property (nonatomic, assign) BOOL altHeld;
 @property (nonatomic, assign) BOOL notifAuthRequested;   // UNUserNotificationCenter authorization asked once
 @property (nonatomic, assign) BOOL safariOpen;           // an SFSafariViewController is currently presented
 @property (nonatomic, strong) UIButton *screenshotButton; // 📷 save the live frame to Photos
@@ -830,21 +828,9 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
               forControlEvents:UIControlEventTouchUpInside];
     [self.screen addSubview:self.ctrlButton];
 
-    // PARITY-IOS-LATCH: sticky-Alt toggle. Holds VK_ALT via the bridge so Alt-modified interactions read true
-    // (e.g. Ground Items' Alt-highlight, Alt+key overlay hotkeys on touch with no hardware modifier).
-    self.altButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.altButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.altButton setTitle:@"⌥" forState:UIControlStateNormal];
-    self.altButton.accessibilityLabel = @"Sticky Alt";
-    self.altButton.accessibilityHint = @"Holds Alt down for alt-modified actions; tap again to release";
-    self.altButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
-    self.altButton.tintColor = [UIColor whiteColor];
-    self.altButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
-    self.altButton.layer.cornerRadius = 8;
-    [self.altButton addTarget:self
-                       action:@selector(onToggleAlt)
-             forControlEvents:UIControlEventTouchUpInside];
-    [self.screen addSubview:self.altButton];
+    // NOTE: a sticky-Alt latch was removed — in RuneLite the drag-hotkey defaults to Alt, so holding Alt puts the
+    // client into overlay-managing mode (yellow movable-overlay boxes that swallow taps), trapping the touch user.
+    // Mobile repositions overlays via the native OverlayEditView instead, so Alt-drag isn't needed here.
 
     // Screenshot: save the live composited frame to Photos (the engine's auto-screenshots land in the sandbox
     // dir, unreachable; this is the manual, reachable path — native already has the frame via latestFrame).
@@ -1217,16 +1203,9 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         [self.ctrlButton.widthAnchor constraintEqualToConstant:44],
         [self.ctrlButton.heightAnchor constraintEqualToConstant:36],
 
-        // PARITY-IOS-LATCH: sticky-Alt toggle — same row, right of the ctrl button.
-        [self.altButton.bottomAnchor constraintEqualToAnchor:self.keyboardButton.bottomAnchor],
-        [self.altButton.leadingAnchor constraintEqualToAnchor:self.ctrlButton.trailingAnchor
-                                                     constant:8],
-        [self.altButton.widthAnchor constraintEqualToConstant:44],
-        [self.altButton.heightAnchor constraintEqualToConstant:36],
-
-        // Screenshot button — same row, right of the alt button.
+        // Screenshot button — same row, right of the ctrl button (the sticky-Alt latch was removed).
         [self.screenshotButton.bottomAnchor constraintEqualToAnchor:self.keyboardButton.bottomAnchor],
-        [self.screenshotButton.leadingAnchor constraintEqualToAnchor:self.altButton.trailingAnchor
+        [self.screenshotButton.leadingAnchor constraintEqualToAnchor:self.ctrlButton.trailingAnchor
                                                             constant:8],
         [self.screenshotButton.widthAnchor constraintEqualToConstant:44],
         [self.screenshotButton.heightAnchor constraintEqualToConstant:36],
@@ -5659,17 +5638,6 @@ static CGRect mapRectFromArr(NSArray *a) {
                                           : [UIColor colorWithWhite:0.0 alpha:0.45];
     self.ctrlButton.tintColor = self.ctrlHeld ? [UIColor blackColor] : [UIColor whiteColor];
     [self appendLine:self.ctrlHeld ? @"[shell] Control latched ON" : @"[shell] Control released"];
-}
-
-// PARITY-IOS-LATCH: sticky-Alt toggle, mirroring onToggleShift.
-- (void)onToggleAlt {
-    self.altHeld = !self.altHeld;
-    [JVMLauncher postAltHeld:self.altHeld];
-    self.altButton.backgroundColor = self.altHeld
-                                         ? [UIColor colorWithRed:0.95 green:0.62 blue:0.11 alpha:0.92] // RuneLite amber = latched on
-                                         : [UIColor colorWithWhite:0.0 alpha:0.45];
-    self.altButton.tintColor = self.altHeld ? [UIColor blackColor] : [UIColor whiteColor];
-    [self appendLine:self.altHeld ? @"[shell] Alt latched ON" : @"[shell] Alt released"];
 }
 
 #pragma mark - KEY-1 action-hotkey strip

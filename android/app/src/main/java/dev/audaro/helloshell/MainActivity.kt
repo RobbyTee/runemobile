@@ -156,7 +156,6 @@ class MainActivity : AppCompatActivity() {
     @Volatile var textActivePanel = false
     private var shiftHeld = false // ⇧ latch: synthetic VK_SHIFT held (AP-2a Finding 12)
     private var ctrlHeld = false // ⌃ latch: synthetic VK_CONTROL held (mirror of shift)
-    private var altHeld = false // ⌥ latch: synthetic VK_ALT held (Ground Items hold-to-highlight)
     private var frameCallback: Choreographer.FrameCallback? = null
 
     // PERF-BATTERY-NETWORK-01: true while backgrounded (onStop..onStart) — the Choreographer UI poll is removed
@@ -849,8 +848,10 @@ class MainActivity : AppCompatActivity() {
                 true
             }
         }
-        // Ctrl/Alt sticky latches — same mechanism as ⇧ (shared JavaBridge.setCtrlHeld/setAltHeld). ⌥ held drives
-        // Ground Items' hold-to-highlight (item names appear while Alt is down); ⌃ covers the Ctrl-gated surface.
+        // Ctrl sticky latch — same mechanism as ⇧ (shared JavaBridge.setCtrlHeld), for the Ctrl-gated surface.
+        // NOTE: a sticky-Alt latch was removed — RuneLite's drag-hotkey defaults to Alt, so holding Alt engages
+        // overlay-managing mode (yellow movable-overlay boxes that swallow taps), trapping the touch user. Mobile
+        // repositions overlays via the native overlay-edit flow, so Alt-drag isn't needed here.
         val ctrlButton = devButton("⌃")
         ctrlButton.alpha = 0.7f
         ctrlButton.contentDescription = "Control key"
@@ -860,16 +861,6 @@ class MainActivity : AppCompatActivity() {
             setModActive(ctrlButton, ctrlHeld)
             JvmLauncher.setCtrlHeld(ctrlHeld)
             Log.i(TAG, "mod: sticky-Ctrl ${if (ctrlHeld) "HELD" else "released"}")
-        }
-        val altButton = devButton("⌥")
-        altButton.alpha = 0.7f
-        altButton.contentDescription = "Alt key"
-        ViewCompat.setStateDescription(altButton, "off")
-        altButton.setOnClickListener {
-            altHeld = !altHeld
-            setModActive(altButton, altHeld)
-            JvmLauncher.setAltHeld(altHeld)
-            Log.i(TAG, "mod: sticky-Alt ${if (altHeld) "HELD" else "released"}")
         }
         // Track G AG2: restart into GPU Route-C mode (force-enable the base gpu plugin, render the scene on GLES).
         val gpuButton = devButton("◆")
@@ -895,7 +886,6 @@ class MainActivity : AppCompatActivity() {
                 // lives in the native plugin panel — renderer-as-plugins).
                 if (BuildConfig.DEBUG) {
                     addView(ctrlButton)
-                    addView(altButton)
                     addView(chromeButton)
                     addView(gpuButton)
                     addView(hdButton)
