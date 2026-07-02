@@ -173,15 +173,15 @@ class ChromeOverlayView(
     /** Recompute + cache the grid geometry from the current view size + insets (matches iOS updateChrome). */
     private fun computeLayout(): Layout {
         val ins = safeInsets()
-        val cap = dp(46f)
+        val cap = dp(48f)
         val margin = dp(6f)
         val availH = (height - ins[0] - ins[2]) * 0.56f
-        // UI-1: when a target height is set, size the 7 rows to it (floored at dp(20) so the cell can reach the
-        // ~59px the panel height needs while staying tappable), still capped at dp(46) so the grid only ever
-        // shrinks to meet the panel, never grows past today.
+        // UI-1: when a target height is set, size the 7 rows to it (floored at dp(24) — TOUCH-1 raised the
+        // tappability floor from dp(20) — so the cell can approach the panel height the grid is matching),
+        // still capped so the grid only ever shrinks to meet the panel, never grows past today.
         val cell =
             if (targetGridHpx > 0f) {
-                minOf(cap, maxOf(targetGridHpx / 7f, dp(20f)))
+                minOf(cap, maxOf(targetGridHpx / 7f, dp(24f)))
             } else {
                 minOf(cap, if (availH > 0f) availH / 7f else cap)
             }
@@ -242,8 +242,19 @@ class ChromeOverlayView(
     ): Int {
         val l = lay
         if (l.cell <= 0f) return -1
-        val col = ((x - l.gx0) / l.cell).toInt()
-        val row = ((y - l.gy0) / l.cell).toInt()
+        // TOUCH-1: 48dp cells can't fit (7 rows must clear the top-right minimap — the 0.56 band IS that
+        // clearance), so near-miss taps just OUTSIDE the grid snap to the nearest edge cell instead: clamp
+        // the point into the grid when it lands within the outward slop (left into the scene, right/bottom
+        // through the screen margin, top into the minimap gap). Interior precision is unchanged.
+        val slopL = dp(10f)
+        val slopT = dp(4f)
+        val gridW = 2 * l.cell
+        val gridH = 7 * l.cell
+        if (x < l.gx0 - slopL || y < l.gy0 - slopT) return -1
+        // No right/bottom bound check beyond the view itself — the grid runs to the screen margin there, so
+        // anything past the last cell (still inside this view) snaps back to it.
+        val col = (((x - l.gx0).coerceAtMost(gridW - 1f)) / l.cell).toInt()
+        val row = (((y - l.gy0).coerceAtMost(gridH - 1f)) / l.cell).toInt()
         if (col < 0 || col > 1 || row < 0 || row > 6) return -1
         val slot = row * 2 + col
         if (slot < 0 || slot >= order.size) return -1

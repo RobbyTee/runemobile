@@ -931,6 +931,26 @@ class MainActivity : AppCompatActivity() {
                             bottomMargin = handleBaseBottom
                         },
                 )
+                // TOUCH-1: the pill is visually ~28dp tall — expand its HIT rect to ≥48dp square via a
+                // TouchDelegate on this container (its only delegate), re-installed per layout pass so it
+                // tracks the inset-driven bottomMargin moves. Visual size unchanged.
+                launcherHandle.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+                    val host = v.parent as? android.view.ViewGroup ?: return@addOnLayoutChangeListener
+                    val r = android.graphics.Rect()
+                    v.getHitRect(r)
+                    val min = (48 * resources.displayMetrics.density).toInt()
+                    if (r.height() < min) {
+                        val add = (min - r.height()) / 2
+                        r.top -= add
+                        r.bottom += add
+                    }
+                    if (r.width() < min) {
+                        val add = (min - r.width()) / 2
+                        r.left -= add
+                        r.right += add
+                    }
+                    host.touchDelegate = android.view.TouchDelegate(r, v)
+                }
                 devBarBaseLeft = (8 * resources.displayMetrics.density).toInt()
                 devBarBaseBottom = devBarBaseLeft
                 addView(
@@ -1032,10 +1052,13 @@ class MainActivity : AppCompatActivity() {
             window.attributes.layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
-        // The soft keyboard OVERLAYS content — never pan/resize the window. Set once here (a static root-window
-        // setting); without it the IME floated the bottom-anchored plugin sheet up by the keyboard height. The
-        // chat-at-top input sits at the TOP of the screen, so a bottom-overlay keyboard never covers it.
-        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+        // The soft keyboard OVERLAYS content — decorFitsSystemWindows(false) (set in enterImmersive) means
+        // ADJUST_RESIZE never actually resizes/pans this window, so the game surface and the bottom-anchored
+        // plugin sheet stay put exactly as under ADJUST_NOTHING. The difference (UX-KBD-1): RESIZE makes the
+        // framework dispatch IME insets, so Compose imePadding() works where we opt in (the config editor's
+        // list pads above the keyboard instead of hiding fields under it). The chat-at-top input sits at the
+        // TOP of the screen, so the bottom-overlay keyboard never covers it either way.
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         enterImmersive()
         surfaceView.holder.addCallback(
             object : SurfaceHolder.Callback {

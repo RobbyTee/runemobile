@@ -36,6 +36,25 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 }
 @end
 
+// TOUCH-1: the tab-grid stones tile flush in the ~230pt band under the minimap, which caps the visual cell
+// well below the 44pt minimum (7 rows × 44 = 308pt simply doesn't fit next to the minimap). Interior edges
+// can't grow (they'd overlap a neighbour), but every OUTER edge of the grid borders free space — so each
+// button expands its hit rect outward only, per its position in the grid (left column into the scene, right
+// column/bottom row into the screen margin, top row into the minimap gap). Visual sprite unchanged.
+@interface TabGridButton : UIButton
+@property (nonatomic, assign) UIEdgeInsets hitOutset;
+@end
+@implementation TabGridButton
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    UIEdgeInsets o = self.hitOutset;
+    CGRect r = CGRectMake(self.bounds.origin.x - o.left,
+                          self.bounds.origin.y - o.top,
+                          self.bounds.size.width + o.left + o.right,
+                          self.bounds.size.height + o.top + o.bottom);
+    return CGRectContainsPoint(r, point);
+}
+@end
+
 @interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate, UNUserNotificationCenterDelegate, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate, UISearchBarDelegate, OverlayEditChatHost>
 {
     // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
@@ -433,7 +452,7 @@ static const CGFloat kMenuGraceX = 60.0;
 static const CGFloat kMenuGraceY = 6.0;
 
 // Native overlay sizing (compact — much smaller than the first pass): row height, header strip, box width.
-static const CGFloat kMenuRowViewH    = 32.0;
+static const CGFloat kMenuRowViewH = 44.0; // TOUCH-1: minimum touch-target height (was 32)
 static const CGFloat kMenuHeaderViewH = 22.0;
 static const CGFloat kMenuWidth       = 210.0;
 
@@ -851,7 +870,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 
     self.tabButtons = [NSMutableArray arrayWithCapacity:14];
     for (int i = 0; i < 14; i++) {
-        UIButton *tb = [UIButton buttonWithType:UIButtonTypeCustom];
+        TabGridButton *tb = [TabGridButton buttonWithType:UIButtonTypeCustom];
         tb.tag = i;
         tb.hidden = YES;
         tb.imageView.contentMode = UIViewContentModeScaleAspectFit;
@@ -1782,7 +1801,14 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 // Tap a plugin row -> toggle it on/off (a forgiving tap recognizer, not the table's flaky selection).
 - (void)onPluginRowTap:(UITapGestureRecognizer *)g {
     if (g.state != UIGestureRecognizerStateEnded) return;
-    NSIndexPath *ip = [self.pluginTable indexPathForRowAtPoint:[g locationInView:self.pluginTable]];
+    CGPoint pt = [g locationInView:self.pluginTable];
+    // UX-GESTURE-1: the gear button shares the row with this recognizer (cancelsTouchesInView=NO fires
+    // both) — if the tap landed on the gear, it owns the action; don't also toggle the plugin.
+    for (UIView *v = [self.pluginTable hitTest:pt withEvent:nil]; v && v != self.pluginTable; v = v.superview) {
+        if ([v isKindOfClass:[UIButton class]])
+            return;
+    }
+    NSIndexPath *ip = [self.pluginTable indexPathForRowAtPoint:pt];
     if (ip) [self togglePluginAtRow:ip.row];
 }
 
@@ -1818,12 +1844,28 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
         return cell;
     }
-    // Normal/renderer rows carry the toggle switch — recreate it if a prior config-only reuse niled the accessory.
+    // Normal/renderer rows carry the toggle switch; rows with config ALSO get a tappable gear
+    // (UX-GESTURE-1: config was long-press-only — invisible; the gear is the visible affordance, the
+    // long-press still works). Rebuilt per bind — reuse cycles through three accessory shapes anyway.
     cell.accessoryType = UITableViewCellAccessoryNone;
-    if (![cell.accessoryView isKindOfClass:[UISwitch class]]) {
+    {
         UISwitch *sw = [[UISwitch alloc] init];
-        sw.userInteractionEnabled = NO;
-        cell.accessoryView = sw;
+        sw.userInteractionEnabled = NO; // pure indicator — the row tap toggles (reliable big target)
+        if (hasConfig) {
+            UIButton *gear = [UIButton buttonWithType:UIButtonTypeSystem];
+            [gear setImage:[UIImage systemImageNamed:@"gearshape.fill"] forState:UIControlStateNormal];
+            gear.tintColor = [UIColor colorWithWhite:0.75 alpha:1.0];
+            gear.tag = indexPath.row;
+            [gear addTarget:self action:@selector(onPluginRowGear:) forControlEvents:UIControlEventTouchUpInside];
+            gear.frame = CGRectMake(0, 0, 44, 44); // full 44pt touch target
+            sw.frame = CGRectMake(48, (44 - 31) / 2.0, 51, 31);
+            UIView *acc = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 48 + 51, 44)];
+            [acc addSubview:gear];
+            [acc addSubview:sw];
+            cell.accessoryView = acc;
+        } else {
+            cell.accessoryView = sw;
+        }
     }
     NSString *status;
     UIColor *statusColor;
@@ -1838,7 +1880,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         cell.detailTextLabel.text = hasConfig ? [status stringByAppendingString:@"   ·  hold to configure"] : status;
         cell.detailTextLabel.textColor = statusColor;
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-        UISwitch *rsw = (UISwitch *)cell.accessoryView;
+        UISwitch *rsw = [self pluginSwitchInCell:cell];
         rsw.tag = indexPath.row;
         [rsw setOn:enabled animated:NO];
         return cell;
@@ -1862,10 +1904,58 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     cell.detailTextLabel.text = hasConfig ? [status stringByAppendingString:@"   ·  hold to configure"] : status;
     cell.detailTextLabel.textColor = statusColor;
     cell.selectionStyle = UITableViewCellSelectionStyleDefault;   // every row taps to toggle
-    UISwitch *sw = (UISwitch *)cell.accessoryView;
+    UISwitch *sw = [self pluginSwitchInCell:cell];
     sw.tag = indexPath.row;
     [sw setOn:enabled animated:NO];
     return cell;
+}
+
+// The toggle switch, whether the accessory is the bare switch or the gear+switch container (UX-GESTURE-1).
+- (UISwitch *)pluginSwitchInCell:(UITableViewCell *)cell {
+    if ([cell.accessoryView isKindOfClass:[UISwitch class]])
+        return (UISwitch *)cell.accessoryView;
+    for (UIView *v in cell.accessoryView.subviews) {
+        if ([v isKindOfClass:[UISwitch class]])
+            return (UISwitch *)v;
+    }
+    return nil;
+}
+
+// Gear tapped on a plugin row (UX-GESTURE-1): open that plugin's config editor directly.
+- (void)onPluginRowGear:(UIButton *)btn {
+    NSInteger row = btn.tag;
+    if (row < 0 || row >= (NSInteger)self.pluginList.count)
+        return;
+    if (self.presentedViewController)
+        return;
+    [self presentConfigEditorForPlugin:self.pluginList[(NSUInteger)row]];
+}
+
+// Present the full config editor for a plugin row (gear tap + the long-press "Configure" action).
+- (void)presentConfigEditorForPlugin:(NSDictionary *)p {
+    NSString *name = [p[@"name"] description] ?: @"";
+    NSString *group = [p[@"configGroup"] isKindOfClass:[NSString class]] ? p[@"configGroup"] : nil;
+    if (group.length == 0)
+        return;
+    // 117HD (group "hd"): show ONLY the iOS-ported settings (each safe to setConfig from RLHDStarter).
+    // Exposing the rest would recompile an unported shader and stop the plugin. Others show full config.
+    NSArray<NSString *> *whitelist = [group isEqualToString:@"hd"] ? @[
+        @"sceneResolutionScale",
+        @"antiAliasingMode",
+        @"shadowMode",
+        @"shadowResolution",
+        @"enableShadowTransparency",
+        @"dynamicLights",
+        @"tiledLighting",
+        @"normalMapping",
+        @"parallaxOcclusionMappingToggle",
+        @"drawDistance",
+    ]
+                                                                   : nil;
+    PluginConfigViewController *cfg = [[PluginConfigViewController alloc] initWithGroup:group
+                                                                             pluginName:name
+                                                                              whitelist:whitelist];
+    [self presentViewController:cfg animated:YES completion:nil];
 }
 
 // The two renderer plugins are launch-time on iOS (the GL bridge + present layer are set up at JVM start), so
@@ -1922,9 +2012,7 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
     }
     // Optimistic visual: flip this row's switch now; the next refresh reconciles with the real state.
     UITableViewCell *cell = [self.pluginTable cellForRowAtIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
-    if ([cell.accessoryView isKindOfClass:[UISwitch class]]) {
-        [(UISwitch *)cell.accessoryView setOn:newOn animated:YES];
-    }
+    [[self pluginSwitchInCell:cell] setOn:newOn animated:YES];
     [self appendLine:[NSString stringWithFormat:@"[plugins] %@ -> %@ : %@",
                       p[@"name"], newOn ? @"enable" : @"disable", ack ?: @"(nil)"]];
 }
@@ -1963,20 +2051,11 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
         [self refreshPluginList];
     }]];
     if (hasConfig && group.length > 0) {
-        [sheet addAction:[UIAlertAction actionWithTitle:@"Configure" style:UIAlertActionStyleDefault
+        [sheet addAction:[UIAlertAction actionWithTitle:@"Configure"
+                                                  style:UIAlertActionStyleDefault
                                                 handler:^(UIAlertAction *a) {
-            // 117HD (group "hd"): show ONLY the iOS-ported settings (each safe to setConfig from RLHDStarter).
-            // Exposing the rest would recompile an unported shader and stop the plugin. Others show full config.
-            NSArray<NSString *> *whitelist = [group isEqualToString:@"hd"] ? @[
-                @"sceneResolutionScale", @"antiAliasingMode", @"shadowMode", @"shadowResolution",
-                @"enableShadowTransparency", @"dynamicLights", @"tiledLighting", @"normalMapping",
-                @"parallaxOcclusionMappingToggle", @"drawDistance",
-            ] : nil;
-            PluginConfigViewController *cfg = [[PluginConfigViewController alloc] initWithGroup:group
-                                                                                    pluginName:name
-                                                                                     whitelist:whitelist];
-            [self presentViewController:cfg animated:YES completion:nil];
-        }]];
+                                                    [self presentConfigEditorForPlugin:p];
+                                                }]];
     }
     [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:sheet animated:YES completion:nil];
@@ -3331,8 +3410,11 @@ static int chatRowCanvasH(void) {
     UIEdgeInsets ins = self.view.safeAreaInsets;
     CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height;
     const CGFloat gap = 0.0, margin = 6.0;   // NO gap — the stones tile flush, like the official app
+    // TOUCH-1: 44pt cells are geometrically impossible here (7 rows must fit under the top-right minimap —
+    // the 0.56 band IS that clearance), so the cells stay official-mobile-sized and the tappability gap is
+    // closed with outward-only hit slop per grid edge (TabGridButton) — edge taps land, interiors stay exact.
     CGFloat availH = (H - ins.top - ins.bottom) * 0.56;
-    CGFloat cell = MIN(46.0, availH / 7.0);
+    CGFloat cell = MIN(48.0, availH / 7.0);
     CGFloat gridW = 2 * cell + gap, gridH = 7 * cell + 6 * gap;
     CGFloat gx0 = W - ins.right - margin - gridW;
     CGFloat gy0 = H - ins.bottom - margin - gridH;
@@ -3341,6 +3423,13 @@ static int chatRowCanvasH(void) {
         UIButton *btn = self.tabButtons[i];
         int col = slot % 2, row = slot / 2;
         btn.frame = CGRectMake(gx0 + col * (cell + gap), gy0 + row * (cell + gap), cell, cell);
+        if ([btn isKindOfClass:[TabGridButton class]]) {
+            ((TabGridButton *)btn).hitOutset = UIEdgeInsetsMake(
+                row == 0 ? 4.0 : 0.0,                 // top row: into the gap below the minimap
+                col == 0 ? 10.0 : 0.0,                // left column: into the open scene
+                row == 6 ? margin + ins.bottom : 0.0, // bottom row: through the margin to the screen edge
+                col == 1 ? margin + ins.right : 0.0); // right column: through the margin to the screen edge
+        }
         BOOL isActive = (i == active);
         // Authentic composited tab image (live-cache OSRS stone + icon). Active = red stone, inactive = grey.
         NSArray<UIImage *> *imgs = isActive ? self.tabImgActive : self.tabImgInactive;
