@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -259,7 +260,9 @@ fun ConfigScreen(
                     JvmLauncher.onBridgeTouch { JvmLauncher.setConfig(group, item.key, newVal) }
                     pendingFlush++ // FIX-8: arm the debounced crash-safe flush
                 }
-                LazyColumn(Modifier.fillMaxSize()) {
+                // UX-KBD-1: pad the list above the soft keyboard so editors deep in the sheet aren't hidden
+                // under it (text fields bring themselves into view on focus once the viewport shrinks).
+                LazyColumn(Modifier.fillMaxSize().imePadding()) {
                     for (g in groups) {
                         val meta = g.meta
                         if (meta != null) {

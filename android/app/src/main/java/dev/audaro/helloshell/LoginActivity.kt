@@ -47,6 +47,9 @@ class LoginActivity : AppCompatActivity() {
     private var done = false // captured a valid id_token — handle exactly once
     private var lastTried: String? = null
 
+    // UX-LOGIN-1: the layout paddings/margins were raw px, so the screen shrank on high-density phones.
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         launched = savedInstanceState?.getBoolean("launched") ?: false
@@ -66,7 +69,7 @@ class LoginActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setBackgroundColor(Color.rgb(26, 26, 26))
-                setPadding(28, 16, 28, 16)
+                setPadding(dp(12), dp(6), dp(12), dp(6))
             }
         bar.addView(
             TextView(this).apply {
@@ -87,7 +90,7 @@ class LoginActivity : AppCompatActivity() {
         val content =
             LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(40, 28, 40, 28)
+                setPadding(dp(16), dp(12), dp(16), dp(12))
             }
 
         content.addView(
@@ -113,7 +116,7 @@ class LoginActivity : AppCompatActivity() {
                 .LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = 36 },
+                ).apply { topMargin = dp(14) },
         )
 
         pasteField =
@@ -128,7 +131,7 @@ class LoginActivity : AppCompatActivity() {
             pasteField,
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 topMargin =
-                    32
+                    dp(12)
             },
         )
 
@@ -148,7 +151,7 @@ class LoginActivity : AppCompatActivity() {
                 .LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = 12 },
+                ).apply { topMargin = dp(5) },
         )
 
         root.addView(
@@ -161,7 +164,7 @@ class LoginActivity : AppCompatActivity() {
                 setTextColor(Color.GREEN)
                 setBackgroundColor(Color.rgb(13, 13, 13))
                 textSize = 12f
-                setPadding(28, 16, 28, 16)
+                setPadding(dp(12), dp(6), dp(12), dp(6))
                 text = "Ready."
             }
         root.addView(status, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))

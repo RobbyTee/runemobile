@@ -47,10 +47,10 @@ class MenuOverlayView(
     private var boxY = 0f
     private var highlight = -1
 
-    // View-space geometry matching the iOS native menu (kMenuHeaderViewH 22 / kMenuRowViewH 32 / kMenuWidth 210),
+    // View-space geometry matching the iOS native menu (kMenuHeaderViewH 22 / kMenuRowViewH 44 / kMenuWidth 210),
     // independent of the engine's fixed 19/15 px menu.
     private val headerH = dp(22f)
-    private val baseRowH = dp(32f)
+    private val baseRowH = dp(44f) // TOUCH-1: minimum touch-target height (was 32; FIX-10 still shrinks to fit)
 
     // FIX-10: a slide-select peek menu can't scroll, so a row past the screen edge is unreachable. rowH shrinks
     // (down to a legible floor) in show() when a tall menu wouldn't otherwise fit fully on-screen.

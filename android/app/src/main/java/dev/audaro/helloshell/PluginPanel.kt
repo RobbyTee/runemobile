@@ -646,9 +646,10 @@ private fun SheetScaffold(
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .height(with(density) { sheetPx.value.toDp() })
-                    // No imePadding: the keyboard OVERLAYS the sheet (window is adjustNothing) instead of floating the
-                    // bottom-anchored sheet up by the keyboard height — which exposed the game beneath it. The search
-                    // fields sit at the top of the sheet, so they stay visible above the keyboard.
+                    // No imePadding on the SHEET: it must not float up by the keyboard height (that exposed the
+                    // game beneath it). The window is adjustResize + decorFits(false) — a no-op for layout — so
+                    // IME insets reach the config editor inside, which opts into imePadding itself (UX-KBD-1);
+                    // the search fields sit at the top of the sheet and stay visible above the keyboard anyway.
                     // Consume taps that land on the sheet (but not on a child) so they never fall through to the
                     // dismiss scrim behind it.
                     .pointerInput(Unit) { detectTapGestures { } },
@@ -661,7 +662,8 @@ private fun SheetScaffold(
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .height(28.dp)
+                        // TOUCH-1: ≥44dp gesture strip (was 28dp); the visual pill inside stays 40×5.
+                        .height(44.dp)
                         .pointerInput(peekPx, expandPx) {
                             detectTapGestures {
                                 val target = if (sheetPx.value < (peekPx + expandPx) / 2f) expandPx else peekPx

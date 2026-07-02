@@ -131,7 +131,7 @@ private fun InfoBoxRowItem(
             if (b.text.isNotBlank()) Text(b.text, color = Color(0xFFFFD54F), fontSize = 13.sp)
         }
         if (b.menu.isEmpty()) {
-            Text("no menu actions", color = Color(0xFF777777), fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
+            Text("no menu actions", color = Color(0xFF9A9A9A), fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
         } else {
             Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 b.menu.forEach { opt ->

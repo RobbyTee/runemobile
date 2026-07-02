@@ -226,10 +226,10 @@ private fun HubRowItem(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(p.displayName, color = if (unavailable) Color(0xFF9E9E9E) else Color.White, fontSize = 15.sp)
                 if (!p.author.isNullOrBlank()) {
-                    Text("  by ${p.author}", color = Color(0xFF777777), fontSize = 11.sp)
+                    Text("  by ${p.author}", color = Color(0xFF9A9A9A), fontSize = 12.sp)
                 }
                 if (!p.version.isNullOrBlank()) {
-                    Text("  v${p.version}", color = Color(0xFF777777), fontSize = 11.sp)
+                    Text("  v${p.version}", color = Color(0xFF9A9A9A), fontSize = 12.sp)
                 }
             }
             if (!p.description.isNullOrBlank()) {
