@@ -73,6 +73,9 @@ JARVER="$(sed -n 's/^project\.build\.version=//p' gradle.properties)"; [ -n "$JA
 
 log "RuneMobile build — version=$VERSION  code=${VERSION_CODE:-semver}  sha=$GIT_SHA  jars=$JARVER  platforms=[$PLATFORMS]"
 rm -rf "$DIST"; mkdir -p "$DIST"
+# Canonicalize DIST to an absolute path: the IPA-packaging step cd's into a work dir before zipping to $DIST,
+# so a relative DIST (e.g. DIST=dist/release-0.1.0) would resolve against the wrong cwd and fail.
+DIST="$(cd "$DIST" && pwd)"
 
 # ── Config (secrets stay in $HOME) ────────────────────────────────────────────────────────────────────
 # android/keystore.properties selects the release signing key (absent → gradle falls back to the debug key,
@@ -148,10 +151,13 @@ if wants ios; then
 	log "xcodegen generate"
 	( cd "$APPDIR" && xcodegen generate >/dev/null ) || die "xcodegen failed"
 	DD="$APPDIR/build/dd-ci"
+	# CFBundleVersion floors to 1: a semver build has BUILD_NUMBER=0, but 0 reads as a build-number regression
+	# vs any prior release (and `${BUILD_NUMBER:-1}` yields 0 since 0 is set, not empty). Rolling builds keep run #.
+	IOS_BUILD="$BUILD_NUMBER"; [ "$IOS_BUILD" -gt 0 ] 2>/dev/null || IOS_BUILD=1
 	log "xcodebuild RuneMobile (Release, generic/iOS, signed)"
 	xcodebuild -project "$APPDIR/RuneMobile.xcodeproj" -scheme RuneMobile -configuration Release \
 		-destination 'generic/platform=iOS' -derivedDataPath "$DD" -allowProvisioningUpdates \
-		MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="${BUILD_NUMBER:-1}" build || die "xcodebuild failed"
+		MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$IOS_BUILD" build || die "xcodebuild failed"
 	APP="$DD/Build/Products/Release-iphoneos/RuneMobile.app"
 	[ -d "$APP" ] || die "no .app produced at $APP"
 
@@ -160,7 +166,7 @@ if wants ios; then
 	log "package IPA"
 	WORK="$DIST/ipa-work"; rm -rf "$WORK"; mkdir -p "$WORK/Payload"
 	cp -R "$APP" "$WORK/Payload/"
-	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion ${BUILD_NUMBER:-1}" \
+	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion $IOS_BUILD" \
 		"$WORK/Payload/RuneMobile.app/Info.plist" >/dev/null
 	( cd "$WORK" && zip -qry "$DIST/RuneMobile-${VERSION}.ipa" Payload )
 	rm -rf "$WORK"
