@@ -42,7 +42,7 @@ bridge must implement:
 - Support: `GL.createCapabilities/getCapabilities`, `GLUtil.setupDebugMessageCallback`→null, `Callback`,
   `Configuration.SHARED_LIBRARY_EXTRACT_DIRECTORY`, `BufferUtils`, `EXTTextureFilterAnisotropic` (2 consts).
 
-## Prior art reused (predecessor archive `/Users/jordanmm/runelite/ios-spike`, patterns only — GPL/own-repo)
+## Prior art reused (predecessor archive `~/runelite/ios-spike`, patterns only — GPL/own-repo)
 
 The predecessor ran this same GpuPlugin→iOS-GLES port on miniJVM. Verified-transferable findings:
 

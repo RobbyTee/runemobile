@@ -16,7 +16,7 @@ CONF="$HERE/deploy-remote.conf"
 # shellcheck disable=SC1090
 . "$CONF"
 
-: "${REMOTE_HOST:?set REMOTE_HOST in deploy-remote.conf (tailnet name, e.g. jordys-mac-mini)}"
+: "${REMOTE_HOST:?set REMOTE_HOST in deploy-remote.conf (tailnet name, e.g. my-build-mac)}"
 : "${REMOTE_USER:?set REMOTE_USER in deploy-remote.conf}"
 : "${REMOTE_REPO:?set REMOTE_REPO in deploy-remote.conf (repo path on the remote Mac)}"
 : "${DEV_UUID:?set DEV_UUID in deploy-remote.conf (iPhone devicectl UUID as seen by the remote Mac)}"

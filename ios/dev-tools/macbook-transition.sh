@@ -6,16 +6,16 @@
 # compiles + (if a phone is attached) installs the app. Idempotent — safe to re-run.
 #
 # RUN ON THE MACBOOK:
-#   scp jordanmm@100.71.129.1:macbook-transition.sh /tmp/t.sh && bash /tmp/t.sh
+#   scp youruser@<source-mac-tailnet-ip>:macbook-transition.sh /tmp/t.sh && bash /tmp/t.sh
 #
 # Overridable via env: MINI, MINI_USER, REPO, BRANCH, JAVA_HOME, SKIP_BUNDLE=1 (skip the 91MB transfer if state present).
 
 set -uo pipefail
 
-MINI="${MINI:-100.71.129.1}"                 # mini's tailnet IP (jordys-mac-mini)
-MINI_USER="${MINI_USER:-jordanmm}"
+MINI="${MINI:-100.100.100.100}"              # source Mac tailnet IP
+MINI_USER="${MINI_USER:-youruser}"
 BUNDLE_NAME="${BUNDLE_NAME:-runelite-ios-local-state.tar.gz}"
-ORIGIN="${ORIGIN:-git@github.com:audaro/runelite-ios.git}"
+ORIGIN="${ORIGIN:-git@github.com:YOUR_USER/YOUR_REPO.git}"
 REPO="${REPO:-$HOME/runelite-ios}"
 BRANCH="${BRANCH:-gpu}"
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"

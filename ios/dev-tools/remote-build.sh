@@ -30,6 +30,9 @@ case "$CONFIG" in Debug|Release) ;; *) echo "CONFIG must be Debug or Release (go
 REPO="${REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
 cd "$REPO"
 
+# Local signing config (gitignored): exports DEVELOPMENT_TEAM for xcodegen's ${DEVELOPMENT_TEAM} expansion.
+[ -f ios/dev-tools/signing.env ] && . ios/dev-tools/signing.env
+
 : "${DEV:?set DEV to the iPhone devicectl UUID (xcrun devicectl list devices)}"
 
 # QA-P1-15: read the real version key (project.build.version, e.g. 1.12.29-SNAPSHOT). The old grep for

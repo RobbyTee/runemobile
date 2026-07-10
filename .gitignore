@@ -57,3 +57,7 @@ keystore.properties
 **/legacy_login.json
 __pycache__/
 *.pyc
+
+### Local-only dev config (machine-specific paths / identifiers) ###
+.mcp.json
+ios/dev-tools/signing.env

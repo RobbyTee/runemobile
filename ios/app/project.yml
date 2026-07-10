@@ -117,7 +117,7 @@ targets:
         INFOPLIST_FILE: HelloShell/Info.plist
         CODE_SIGN_ENTITLEMENTS: HelloShell/HelloShell.entitlements
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: 5NZ6CPA994   # team OU of the Apple Development signing cert
+        DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}   # set in ios/dev-tools/signing.env (gitignored) or your env
         MARKETING_VERSION: "0.1"
         CURRENT_PROJECT_VERSION: "1"
         # Hello has no Obj-C/Swift dylib deps of its own; the JRE is dlopen'd at runtime.

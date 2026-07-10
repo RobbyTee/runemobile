@@ -38,8 +38,8 @@ Consequences:
 
 ## One-time setup on the REMOTE Mac
 
-1. Xcode + command-line tools; sign into Xcode ▸ Settings ▸ Accounts with the Apple Developer account
-   (team `5NZ6CPA994`). First build self-provisions via `-allowProvisioningUpdates`.
+1. Xcode + command-line tools; sign into Xcode ▸ Settings ▸ Accounts with your Apple Developer account,
+   and set your Team ID in `ios/dev-tools/signing.env` (gitignored). First build self-provisions via `-allowProvisioningUpdates`.
 2. `brew install openjdk@21 xcodegen` (only need JDK 21 if you ever use `--remote-jars`).
 3. Enable Remote Login (System Settings ▸ General ▸ Sharing ▸ Remote Login) so SSH works, **or**
    `tailscale up --ssh` to use Tailscale SSH (no key management).

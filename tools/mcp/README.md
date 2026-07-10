@@ -15,14 +15,15 @@ point `.mcp.json` at whatever `python3` has `PIL` + `numpy`
 
 ## Registration
 
-Registered for the project in [`.mcp.json`](../../.mcp.json) at the repo root:
+Register it for the project by creating `.mcp.json` at the repo root (gitignored — it holds a
+machine-specific absolute path, so each clone writes its own):
 
 ```json
 {
   "mcpServers": {
     "harness": {
       "command": "/usr/bin/python3",
-      "args": ["/Users/jordanmm/runelite-ios/tools/mcp/harness_server.py"]
+      "args": ["/path/to/repo/tools/mcp/harness_server.py"]
     }
   }
 }

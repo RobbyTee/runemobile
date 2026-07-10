@@ -4,7 +4,7 @@
 # One-time pairing (modern Wireless debugging, Android 11+ — survives reboot/sleep):
 #   On the phone: Settings > System > Developer options > Wireless debugging > ON (tick "Always allow"),
 #   then "Pair device with pairing code" to read an  ip:port  and a 6-digit code, then:
-#       ./deploy-wireless.sh --pair 192.168.0.123:46739 049166
+#       ./deploy-wireless.sh --pair 192.168.1.100:37000 000000
 # Every run after that (no cable, auto-discovers the current endpoint via mDNS):
 #       ./deploy-wireless.sh              # debug build
 #       ./deploy-wireless.sh release      # signed release build
@@ -25,10 +25,10 @@
 set -euo pipefail
 
 # --- config (override via env) ----------------------------------------------------------------------------
-USB_SERIAL="${USB_SERIAL:-33171JEHN06239}"     # the device serial; also appears in its mDNS service name
-DEVICE_IP="${DEVICE_IP:-192.168.0.123}"        # the phone's LAN IP (for matching + legacy fallback)
+USB_SERIAL="${USB_SERIAL:-YOUR_DEVICE_SERIAL}"     # the device serial; also appears in its mDNS service name
+DEVICE_IP="${DEVICE_IP:-192.168.1.100}"        # the phone's LAN IP (for matching + legacy fallback)
 LEGACY_PHONE="${LEGACY_PHONE:-$DEVICE_IP:5555}" # legacy `adb tcpip` endpoint (fallback only)
-TAILNET_HOST="${TAILNET_HOST:-100.71.120.29}"  # the phone's STABLE Tailscale IP (for --tailnet remote deploys)
+TAILNET_HOST="${TAILNET_HOST:-100.100.100.100}"  # the phone's STABLE Tailscale IP (for --tailnet remote deploys)
 TAILNET_CACHE="${TMPDIR:-/tmp}/helloshell-tailnet-port"   # last-known wireless-debug port over Tailscale
 PHONE="${PHONE:-}"                              # optional explicit ip:port override (skips auto-discovery)
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"

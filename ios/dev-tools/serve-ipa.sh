@@ -48,6 +48,8 @@ if [ "$STOP" = 1 ]; then
 fi
 
 cd "$REPO"
+# Local signing config (gitignored): exports DEVELOPMENT_TEAM for xcodegen's ${DEVELOPMENT_TEAM} expansion.
+[ -f ios/dev-tools/signing.env ] && . ios/dev-tools/signing.env
 FQDN="$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')" \
   || die "couldn't read this Mac's tailnet name (is Tailscale up?)"
 [ -n "$FQDN" ] || die "empty tailnet FQDN"

@@ -28,5 +28,5 @@ targets:
         # gate — so it runs on device WITHOUT StikDebug; just install + launch via devicectl. The Simulator build
         # ignores signing.
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: 5NZ6CPA994
+        DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
         CLANG_ENABLE_OBJC_ARC: "YES"

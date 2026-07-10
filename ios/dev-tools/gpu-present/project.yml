@@ -31,5 +31,5 @@ targets:
         FRAMEWORK_SEARCH_PATHS: "$(SRCROOT)/../gpu-angle/angle"
         CLANG_ENABLE_OBJC_ARC: "YES"
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: 5NZ6CPA994
+        DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
