@@ -33,8 +33,8 @@ except ImportError:
 
 HUB = "https://hub-cloud.browserstack.com/wd/hub"
 API = "https://api-cloud.browserstack.com/app-automate"
-PKG = "dev.audaro.helloshell"
-ACT = "dev.audaro.helloshell.MainActivity"
+PKG = "dev.audaro.runemobile"
+ACT = "dev.audaro.runemobile.MainActivity"
 
 
 def main():

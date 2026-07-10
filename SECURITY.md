@@ -44,7 +44,7 @@ The build pins or sources its heaviest inputs deliberately:
 - **Embedded JDK / AWT runtime** (OpenJDK 21 + Caciocavallo) — fetched at build time from a pinned
   upstream and verified by **SHA-256** before use (`tools/stage-android-jre.sh`); a mismatch aborts the
   build. These runtimes are not committed to the repo.
-- **Native libraries** (`libhelloshell`, `librlawt`) — built from **tracked C++ source** by Gradle/CMake,
+- **Native libraries** (`librunemobile`, `librlawt`) — built from **tracked C++ source** by Gradle/CMake,
   not downloaded as binaries.
 - **Gradle dependencies** — resolved from declared repositories (Maven Central, Google, the Gradle Plugin
   Portal, and RuneLite's Maven repo) at pinned versions over HTTPS. Per-artifact checksum verification

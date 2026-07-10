@@ -62,7 +62,7 @@ ios/dev-tools/deploy-remote.sh --no-jars      # shell-only change: skip the jar 
 ios/dev-tools/deploy-remote.sh --remote-jars  # build the jars on the remote (self-contained remote)
 ```
 
-Then on the phone: attach **StikDebug**, launch HelloShell (the per-launch JIT attach is a phone-side tap
+Then on the phone: attach **StikDebug**, launch RuneMobile (the per-launch JIT attach is a phone-side tap
 and cannot be automated). GPU mode = two-finger long-press the launch button; one-finger = L1 kill-test;
 tap = CPU path.
 
@@ -72,6 +72,6 @@ tap = CPU path.
 - To skip typing your SSH password each run, add the dev Mac's key to the remote:
   `ssh-copy-id $REMOTE_USER@$REMOTE_HOST` (or rely on Tailscale SSH).
 - Pull logs back after a run, e.g.:
-  `ssh $REMOTE_USER@$REMOTE_HOST "xcrun devicectl device copy from --device <UUID> --domain-type appDataContainer --domain-identifier dev.audaro.helloshell --source Documents/jvm-stdio.log --destination /tmp/jvm-stdio.log"`
+  `ssh $REMOTE_USER@$REMOTE_HOST "xcrun devicectl device copy from --device <UUID> --domain-type appDataContainer --domain-identifier dev.audaro.runemobile --source Documents/jvm-stdio.log --destination /tmp/jvm-stdio.log"`
 - Want it to fire automatically on every commit instead of one command? Add a `post-commit` git hook that
   runs `deploy-remote.sh --no-jars &`. (Left manual by default — auto-on-commit gets noisy.)

@@ -81,7 +81,7 @@ if [ -n "$staged_am" ]; then
 	# Run clang-format on staged native if installed (optional). Incremental: only CHANGED lines must
 	# conform (the existing hand-aligned tree is grandfathered); vendored JDK headers are excluded by the runner.
 	if command -v git-clang-format >/dev/null 2>&1; then
-		cf_staged="$(printf '%s\n' "$staged_am" | grep -E '\.(c|cc|cpp|cxx|h|hpp|m|mm)$' | grep -vE 'ios/app/HelloShell/jni/' || true)"
+		cf_staged="$(printf '%s\n' "$staged_am" | grep -E '\.(c|cc|cpp|cxx|h|hpp|m|mm)$' | grep -vE 'ios/app/RuneMobile/jni/' || true)"
 		if [ -n "$cf_staged" ]; then
 			set +e
 			cf_out="$("$ROOT/tools/lint/clang-format.sh" --staged 2>&1)"; cf_rc=$?
@@ -105,7 +105,7 @@ fi
 # own runtime BEFORE the JVM boots, so the HTTP legs can't share one bridge (OAUTH-1). auth-contract.json
 # is the source of truth; block if a staged login change drifts a pinned endpoint / UA / client-id / scope
 # / response key from the others. Editing the JSON is the acknowledgement — no separate baseline to stage.
-authfiles="$(printf '%s\n' "$staged" | grep -E '^(ios/app/HelloShell/JagexLoginViewController\.m|android/app/src/main/java/dev/audaro/helloshell/JagexLogin\.kt|ios/dev-tools/fetch-shield-tokens\.sh|tools/shared-contract/(auth-contract\.json|check-auth-contract\.(sh|py)))$' || true)"
+authfiles="$(printf '%s\n' "$staged" | grep -E '^(ios/app/RuneMobile/JagexLoginViewController\.m|android/app/src/main/java/dev/audaro/runemobile/JagexLogin\.kt|ios/dev-tools/fetch-shield-tokens\.sh|tools/shared-contract/(auth-contract\.json|check-auth-contract\.(sh|py)))$' || true)"
 if [ -n "$authfiles" ]; then
 	set +e
 	areport="$("$ROOT/tools/shared-contract/check-auth-contract.sh" 2>&1)"; arc=$?

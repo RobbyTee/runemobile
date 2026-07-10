@@ -39,14 +39,14 @@ At runtime `AssetInstaller` unpacks `assets/jvm/jre/` → `filesDir/jvm/jre` on 
 ## Two hard rules (do not relearn these the painful way)
 
 1. **The JRE `.so` set goes in `assets/` ONLY — never mirror it into `jniLibs/`.** The native bootstrap
-   (`libhelloshell.so`, loaded from the app's legit native-lib dir) `dlopen`s `libjvm.so` and preloads the
+   (`librunemobile.so`, loaded from the app's legit native-lib dir) `dlopen`s `libjvm.so` and preloads the
    rest of `lib/*.so` by **absolute path** from `filesDir`. Mirroring the JRE `.so` into
    `app/src/main/jniLibs/arm64-v8a/` makes the linker resolve `libawt.so` **by soname** from
    `/data/app/.../lib/arm64/`, so `libawt`'s `JNI_OnLoad` gets a non-absolute `dli_fname`, its `realpath()`
    fails, the toolkit-path `malloc` is handed a garbage length, and the VM aborts
    **`FATAL ERROR in native method: Could not allocate library name`** in `java.awt.Toolkit.<clinit>` —
    before CACIO can take over. Reproduced identically across two independent bionic jre21 builds; the cure is
-   **filesDir-only**. `jniLibs/` holds only the CMake-built `libhelloshell.so` (Gradle places it there).
+   **filesDir-only**. `jniLibs/` holds only the CMake-built `librunemobile.so` (Gradle places it there).
 
 2. **The API-29 `filesDir`-dlopen question is still emulator-only (PORT-PHASING Q11).** The native-initiated
    absolute-path `dlopen` of `libjvm.so` from writable `filesDir` works on the arm64 emulator (SELinux logged

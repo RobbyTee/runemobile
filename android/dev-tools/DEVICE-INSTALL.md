@@ -36,7 +36,7 @@ buildType if that ever changes.
 
 ```
 adb install -r app/build/outputs/apk/debug/app-debug.apk     # plug in ONE device; -s <serial> if several
-adb shell am start -n dev.audaro.helloshell/.MainActivity
+adb shell am start -n dev.audaro.runemobile/.MainActivity
 ```
 
 First launch: `AssetInstaller` unpacks the JRE/jars to `filesDir` (a few seconds, one-time), then the native
@@ -55,9 +55,9 @@ the WebView, pick the character — it writes `tokens.json` to internal `filesDi
 
 ```
 # internal filesDir (works for debug AND release):
-cat tokens.json | adb shell run-as dev.audaro.helloshell tee files/tokens.json > /dev/null
+cat tokens.json | adb shell run-as dev.audaro.runemobile tee files/tokens.json > /dev/null
 # OR the app's external files dir (DEBUG builds only — release ignores external storage by design):
-adb push tokens.json /sdcard/Android/data/dev.audaro.helloshell/files/tokens.json
+adb push tokens.json /sdcard/Android/data/dev.audaro.runemobile/files/tokens.json
 ```
 
 Then relaunch. Autologin arms when `session_id` + `chosen_account_id` are present.
@@ -91,7 +91,7 @@ A `--ez census true` intent extra additionally runs the A4/A5/A6 seam self-tests
 | Symptom | Likely cause / check |
 |---|---|
 | `INSTALL_FAILED_NO_MATCHING_ABIS` | device isn't `arm64-v8a` (32-bit only) — unsupported. |
-| App installs, black screen, no `jvm-boot` VM-up | the VM didn't come up — check `dlopen` of `libjvm.so` (Q11 §4); confirm the JRE unpacked (`adb shell run-as dev.audaro.helloshell ls files/jvm/jre/lib/server/`). |
+| App installs, black screen, no `jvm-boot` VM-up | the VM didn't come up — check `dlopen` of `libjvm.so` (Q11 §4); confirm the JRE unpacked (`adb shell run-as dev.audaro.runemobile ls files/jvm/jre/lib/server/`). |
 | Boots but stuck on login | no usable `tokens.json` (or release build can't see externally-pushed tokens — use the internal `run-as` push). |
 | Release build: no logs at all | expected — release does **not** pipe the VM's stdout/err to logcat (A8 hardening). Use the debug build to debug. |
 | Soft keyboard / haptics dead | check the `VIBRATE` permission is granted (it's in the manifest) and the IME shows on a chat tap. |

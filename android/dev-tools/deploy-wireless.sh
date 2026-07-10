@@ -29,7 +29,7 @@ USB_SERIAL="${USB_SERIAL:-YOUR_DEVICE_SERIAL}"     # the device serial; also app
 DEVICE_IP="${DEVICE_IP:-192.168.1.100}"        # the phone's LAN IP (for matching + legacy fallback)
 LEGACY_PHONE="${LEGACY_PHONE:-$DEVICE_IP:5555}" # legacy `adb tcpip` endpoint (fallback only)
 TAILNET_HOST="${TAILNET_HOST:-100.100.100.100}"  # the phone's STABLE Tailscale IP (for --tailnet remote deploys)
-TAILNET_CACHE="${TMPDIR:-/tmp}/helloshell-tailnet-port"   # last-known wireless-debug port over Tailscale
+TAILNET_CACHE="${TMPDIR:-/tmp}/runemobile-tailnet-port"   # last-known wireless-debug port over Tailscale
 PHONE="${PHONE:-}"                              # optional explicit ip:port override (skips auto-discovery)
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 # JAVA_HOME: prefer JDK 21 (AGP needs 17+); fall back to whatever's on PATH.
@@ -136,10 +136,10 @@ APK="app/build/outputs/apk/$CONFIG/app-$CONFIG.apk"
 
 say "installing $(basename "$APK") ($(du -h "$APK" | cut -f1)) over Wi-Fi..."
 adb -s "$PHONE" install -r "$APK"
-adb -s "$PHONE" shell am force-stop dev.audaro.helloshell || true
+adb -s "$PHONE" shell am force-stop dev.audaro.runemobile || true
 
 if [ "$ACTION" = "launch" ]; then
   say "launching..."
-  adb -s "$PHONE" shell am start -n dev.audaro.helloshell/.MainActivity >/dev/null
+  adb -s "$PHONE" shell am start -n dev.audaro.runemobile/.MainActivity >/dev/null
 fi
 say "done — installed on $PHONE (cable not required)."

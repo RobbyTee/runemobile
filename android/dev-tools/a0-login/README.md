@@ -15,8 +15,8 @@ the iOS port uses is reusable as-is — identical key mapping (`session_id`→`J
 the app's files dir (debug build):
 
 ```
-adb shell mkdir -p /sdcard/Android/data/dev.audaro.helloshell/files
-adb push ios/dev-tools/tokens.json /sdcard/Android/data/dev.audaro.helloshell/files/tokens.json
+adb shell mkdir -p /sdcard/Android/data/dev.audaro.runemobile/files
+adb push ios/dev-tools/tokens.json /sdcard/Android/data/dev.audaro.runemobile/files/tokens.json
 ```
 
 `JagexTokens` checks the internal `filesDir` first, then this external dir. No `tokens.json` → login-screen
@@ -25,7 +25,7 @@ render only (autologin disabled).
 ## Verify (md5-gated)
 ```
 adb logcat -c
-adb shell am force-stop dev.audaro.helloshell && adb shell am start -n dev.audaro.helloshell/.MainActivity
+adb shell am force-stop dev.audaro.runemobile && adb shell am start -n dev.audaro.runemobile/.MainActivity
 # wait for boot + autologin, then:
 ./check-loggedin.sh                 # live `adb logcat -d`
 ./check-loggedin.sh saved.txt       # or a saved dump (e.g. a cloud-device run)

@@ -8,7 +8,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-JNI_INC=../../app/HelloShell/jni
+JNI_INC=../../app/RuneMobile/jni
 ANGLE_INC=../gpu-angle/include
 OUT=$(mktemp -d)
 BASE=(-arch arm64 -isysroot "$SDK" -fobjc-arc -DGLES_SILENCE_DEPRECATION=1 -Wall

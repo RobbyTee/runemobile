@@ -15,7 +15,7 @@
 //
 // This probe is the assertion half. The runners decide the activation MECHANISM:
 //   run-activation-desktop.sh  -> tries the no-agent bootclasspath path on desktop JDK 21 (cheap pre-check)
-//   (device)                   -> same flags via the HelloShell JNI_CreateJavaVM launcher
+//   (device)                   -> same flags via the RuneMobile JNI_CreateJavaVM launcher
 //
 // Java-8 source level so it bundles into probes.jar / runs on the device JDK 21,
 // same as the Phase-1 probes.

@@ -91,7 +91,7 @@ run ./gradlew -q :client:shadowJar;                                             
 # ---------------------------------------------------------------------------
 say "5/7  Generate the Xcode project (EAGL backend)"
 ( cd ios/app && xcodegen generate >/dev/null ) || die "xcodegen failed"
-ok "HelloShell.xcodeproj"
+ok "RuneMobile.xcodeproj"
 
 # ---------------------------------------------------------------------------
 say "6/7  Bridge arm64 compile-check"
@@ -99,9 +99,9 @@ bash ios/dev-tools/gpu-routec/routec-device-compile-check.sh 2>&1 | grep -E 'OK 
 
 # ---------------------------------------------------------------------------
 say "7/7  Build the app ($CONFIG) + install if a phone is attached"
-run xcodebuild -project ios/app/HelloShell.xcodeproj -scheme HelloShell -configuration "$CONFIG" \
+run xcodebuild -project ios/app/RuneMobile.xcodeproj -scheme RuneMobile -configuration "$CONFIG" \
   -destination "generic/platform=iOS" -derivedDataPath build/dd-gpu -allowProvisioningUpdates build
-APP="build/dd-gpu/Build/Products/${CONFIG}-iphoneos/HelloShell.app"
+APP="build/dd-gpu/Build/Products/${CONFIG}-iphoneos/RuneMobile.app"
 ok "built $APP"
 DEV=$(xcrun devicectl list devices 2>/dev/null | grep -iE 'iphone' | grep -ioE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}|[0-9A-F]{8}-[0-9A-F]{16}' | head -1)
 if [ -n "${DEV:-}" ]; then
@@ -124,7 +124,7 @@ Next — the gl_FragDepth early-Z A/B (full steps: ios/dev-tools/gpu-routec/DEVI
   2) push mode=fragdepth, Run GPU, same spot, ~60s
   3) pull Documents/routec-perf.log and compare 'gpuFinish avg/p95' between the two lines
   (push a mode:  printf MODE > /tmp/mode.txt; xcrun devicectl device copy to --device <uuid> \\
-     --domain-type appDataContainer --domain-identifier dev.audaro.helloshell \\
+     --domain-type appDataContainer --domain-identifier dev.audaro.runemobile \\
      --source /tmp/mode.txt --destination Documents/routec-water-mode.txt )
 
 If OSRS login fails, the Jagex tokens are stale — re-mint: ios/dev-tools/fetch-shield-tokens.sh

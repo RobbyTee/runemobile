@@ -12,7 +12,7 @@
 # If they are ALSO in jniLibs/arm64-v8a, the linker resolves libawt.so by soname, libawt's JNI_OnLoad
 # gets a non-absolute dli_fname, realpath() fails, and the VM aborts "Could not allocate library name"
 # in java.awt.Toolkit.<clinit>. The native bootstrap dlopens libjvm.so from filesDir by absolute path,
-# which works. jniLibs holds ONLY the CMake-built libhelloshell.so. See android/README.md.
+# which works. jniLibs holds ONLY the CMake-built librunemobile.so. See android/README.md.
 #
 # After this, run tools/stage-mobile-runtime.sh to stage the shared client/probes jars.
 #
@@ -138,13 +138,13 @@ echo "== build fake libawt_xawt.so (NDK) =="
 [ -f "$JRE_DEST/lib/libawt_xawt.so" ] && echo "   ✓ libawt_xawt.so installed into jre/lib" || { echo "!! libawt_xawt.so not built" >&2; exit 1; }
 
 # --- 5. guard the jniLibs trap ----------------------------------------------------------------
-# jniLibs/arm64-v8a must hold ONLY the CMake-built libhelloshell.so (Gradle puts it there). Any JRE
+# jniLibs/arm64-v8a must hold ONLY the CMake-built librunemobile.so (Gradle puts it there). Any JRE
 # .so staged here re-triggers the libawt realpath abort — remove them.
 if [ -d "$JNI" ]; then
   stray=""
   for so in "$JNI"/*.so; do
     [ -e "$so" ] || continue                       # glob stayed literal -> no .so present
-    [ "$(basename "$so")" = libhelloshell.so ] && continue
+    [ "$(basename "$so")" = librunemobile.so ] && continue
     stray+="$so"$'\n'
   done
   stray="${stray%$'\n'}"                            # trim the trailing newline

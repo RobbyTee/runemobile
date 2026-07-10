@@ -36,11 +36,11 @@ val hasReleaseKey: Boolean =
     }
 
 android {
-    namespace = "dev.audaro.helloshell"
+    namespace = "dev.audaro.runemobile"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "dev.audaro.helloshell"
+        applicationId = "dev.audaro.runemobile"
         minSdk = 28
         targetSdk = 35
         // PROD-VERSIONING-UPDATE-04: semver versionName + a versionCode DERIVED from it, so a release bump is a

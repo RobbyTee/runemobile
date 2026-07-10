@@ -5,7 +5,7 @@
 # declarations) that predates this config; a flag-day reformat would be ~23k lines of churn and would
 # destroy that structure. So we enforce INCREMENTALLY via git clang-format: only lines CHANGED vs a base
 # ref must conform; untouched code is grandfathered and migrates as it is next edited. Vendored JDK headers
-# (ios/app/HelloShell/jni/*) are excluded.
+# (ios/app/RuneMobile/jni/*) are excluded.
 #
 # Usage:  tools/lint/clang-format.sh [<base-ref>]   # check working-tree changes vs base (default HEAD)
 #         tools/lint/clang-format.sh --staged         # check staged changes (used by the pre-commit hook)
@@ -39,7 +39,7 @@ fi
 gcf=(git clang-format --diff --extensions "c,cc,cpp,cxx,h,hpp,m,mm")
 [ "$staged" -eq 1 ] && gcf+=(--staged)
 out="$("${gcf[@]}" "$base" -- \
-	':(exclude)ios/app/HelloShell/jni/jni.h' ':(exclude)ios/app/HelloShell/jni/jni_md.h' 2>/dev/null || true)"
+	':(exclude)ios/app/RuneMobile/jni/jni.h' ':(exclude)ios/app/RuneMobile/jni/jni_md.h' 2>/dev/null || true)"
 
 scope="$base"; [ "$staged" -eq 1 ] && scope="--staged $base"
 case "$out" in

@@ -146,7 +146,7 @@ The JNI glue is **pre-written and compile-verified for iOS arm64** so the device
    `facade/` support classes: `GLCapabilities`, `Callback`, `Configuration`, `BufferUtils`, `PointerBuffer`,
    `EXTTextureFilterAnisotropic`, `GLUtil`, `GL33C/42C/43C/45C`) on the gpu plugin's compile/runtime path in place
    of the `org.lwjgl:lwjgl-opengl` dependency; drop `librlawt`.
-2. **Compile the bridge into the shell:** add `app/RouteCBridge.m` + `jni/routec_gl_jni.m` to the HelloShell
+2. **Compile the bridge into the shell:** add `app/RouteCBridge.m` + `jni/routec_gl_jni.m` to the RuneMobile
    target (links `OpenGLES.framework`).
 3. **Register after VM create:** call `RouteC_registerGLNatives(env)` once after `JNI_CreateJavaVM`, before the
    gpu plugin starts. Drive `RouteCBridge awtCreateGLContextWidth:height:` at the render resolution before the
@@ -202,7 +202,7 @@ All of the "Wiring it on the device" steps above + the reviewed brief
 
 **The device round (primary machine):** `cd ios/dev-tools/gpu-routec && ./stage-ios-gpu-jar.sh` (after a fresh
 `./gradlew :client:shadowJar`), `cd ios/dev-tools/gpu-routec/l1 && ./build-l1-probe.sh`, `cd ios/app && xcodegen
-generate`, then `xcodebuild -project ios/app/HelloShell.xcodeproj -scheme HelloShell -destination "id=$DEV"
+generate`, then `xcodebuild -project ios/app/RuneMobile.xcodeproj -scheme RuneMobile -destination "id=$DEV"
 -derivedDataPath build/dd-gpu -allowProvisioningUpdates build` + install + StikDebug-attach. Two-finger long-press
 the launch button; confirm the gpu plugin `startUp` succeeds through the bridge (no UnsatisfiedLinkError), shaders
 compile/link, and the composited GPU frame displays; md5-gate `jvm-stdio.log` + a captured frame. Residual device

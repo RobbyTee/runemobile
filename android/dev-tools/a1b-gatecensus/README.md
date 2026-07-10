@@ -25,8 +25,8 @@ JNI wiring is involved; the activation is entirely engine-side, which is exactly
 # build + install the census-capable APK
 ( cd android && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew :app:assembleDebug )
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-adb shell am force-stop dev.audaro.helloshell ; adb logcat -c
-adb shell am start -n dev.audaro.helloshell/.MainActivity --ez census true
+adb shell am force-stop dev.audaro.runemobile ; adb logcat -c
+adb shell am start -n dev.audaro.runemobile/.MainActivity --ez census true
 # after it reaches LOGGED_IN (a tokens.json must be pushed for autologin):
 ./check-gates.sh                 # live `adb logcat -d`
 ./check-gates.sh saved.log       # or a saved/cloud-device dump

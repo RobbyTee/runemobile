@@ -396,7 +396,7 @@ def tool_android_set_hd_config(a):
     aniso = a.get("anisotropic_filtering_level")
     if scale is None and aniso is None:
         return err_result("pass scene_resolution_scale and/or anisotropic_filtering_level.")
-    cmd = base + ["shell", "am", "broadcast", "-a", "dev.audaro.helloshell.SET_HD_CONFIG"]
+    cmd = base + ["shell", "am", "broadcast", "-a", "dev.audaro.runemobile.SET_HD_CONFIG"]
     if scale is not None:
         cmd += ["--ei", "sceneResolutionScale", str(int(scale))]
     if aniso is not None:

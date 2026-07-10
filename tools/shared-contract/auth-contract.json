@@ -13,8 +13,8 @@
     "script = ios/dev-tools/fetch-shield-tokens.sh."
   ],
   "sources": {
-    "ios": "ios/app/HelloShell/JagexLoginViewController.m",
-    "android": "android/app/src/main/java/dev/audaro/helloshell/JagexLogin.kt",
+    "ios": "ios/app/RuneMobile/JagexLoginViewController.m",
+    "android": "android/app/src/main/java/dev/audaro/runemobile/JagexLogin.kt",
     "script": "ios/dev-tools/fetch-shield-tokens.sh"
   },
   "pins": [

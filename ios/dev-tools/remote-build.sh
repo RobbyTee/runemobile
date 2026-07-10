@@ -62,12 +62,12 @@ log "xcodegen generate"
 ( cd ios/app && xcodegen generate )
 
 log "xcodebuild (device, $CONFIG, allowProvisioningUpdates)"
-xcodebuild -project ios/app/HelloShell.xcodeproj -scheme HelloShell -configuration "$CONFIG" \
+xcodebuild -project ios/app/RuneMobile.xcodeproj -scheme RuneMobile -configuration "$CONFIG" \
   -destination "id=$DEV" -derivedDataPath build/dd-mui -allowProvisioningUpdates build
 
 log "devicectl install -> $DEV"
 xcrun devicectl device install app --device "$DEV" \
-  "build/dd-mui/Build/Products/${CONFIG}-iphoneos/HelloShell.app"
+  "build/dd-mui/Build/Products/${CONFIG}-iphoneos/RuneMobile.app"
 
 log "DONE — app installed on device $DEV"
 echo "Next (manual, phone-side): attach StikDebug, then launch the app for per-launch JIT."

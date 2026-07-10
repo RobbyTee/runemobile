@@ -13,8 +13,8 @@ shell that hosts **real RuneLite** on an embedded, on-device **OpenJDK 21 with J
 
 ```
 ios/
-  app/                     the native app (xcodegen project.yml → HelloShell.xcodeproj)
-    HelloShell/            Objective-C shell (ViewController, JVMLauncher, panels, login)
+  app/                     the native app (xcodegen project.yml → RuneMobile.xcodeproj)
+    RuneMobile/            Objective-C shell (ViewController, JVMLauncher, panels, login)
     jvm-resources/         staged jars (generated/gitignored: probes.jar, client-*-shaded.jar, client-*-rlhd.jar)
     build-probes.sh        builds probes.jar (headless boot entry + CACIO folded in)
     stikdebug/             the per-launch JIT attach script (runelite-jit.js)
@@ -50,7 +50,7 @@ and an arm64 iPhone on **iOS 17.4+**.
    ```sh
    cd ios/app && xcodegen generate                   # project.yml is the source of truth
    ```
-   Open `HelloShell.xcodeproj`, set your own signing team, and build to the
+   Open `RuneMobile.xcodeproj`, set your own signing team, and build to the
    device — or build an installable `RuneLite.ipa` with
    `ios/dev-tools/serve-ipa.sh` and install it through SideStore/AltStore.
 5. **Enable JIT each launch.** Attach **StikDebug** with

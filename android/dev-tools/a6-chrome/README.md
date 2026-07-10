@@ -30,7 +30,7 @@ surface **resolves real geometry** in the current Android headless layout.
 ```
 cd android && JAVA_HOME=… ./gradlew :app:assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n dev.audaro.helloshell/.MainActivity --ez census true
+adb shell am start -n dev.audaro.runemobile/.MainActivity --ez census true
 android/dev-tools/a6-chrome/check-a6seam.sh      # greps the host self-test sentinel
 ```
 
@@ -69,7 +69,7 @@ relocated flush-left of the grid (`relocateSidePanel`). In any other layout the 
 (A/B vs the raw engine stones).
 
 ```
-adb shell am start -n dev.audaro.helloshell/.MainActivity   # autologin in-world; grid draws once toplevel 164 loads
+adb shell am start -n dev.audaro.runemobile/.MainActivity   # autologin in-world; grid draws once toplevel 164 loads
 android/dev-tools/a6-chrome/check-a6ui.sh
 ```
 

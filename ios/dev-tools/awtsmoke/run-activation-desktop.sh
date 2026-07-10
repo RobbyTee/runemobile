@@ -2,7 +2,7 @@
 # W1 Phase 3 §6.0 — desktop PRE-CHECK of the CACIO activation mechanism.
 #
 # Question: WHAT actually activates CACIO's CTC toolkit + graphicsenv on JDK 21?
-# We control launch flags + can call code via the HelloShell launcher on device, so
+# We control launch flags + can call code via the RuneMobile launcher on device, so
 # this finds what works on desktop, then asks whether it ports to the iOS JRE.
 #
 # OBSERVED (2026-05-29, OpenJDK 21.0.5 aarch64 macOS) — read the printed verdicts;

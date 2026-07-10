@@ -1,7 +1,7 @@
 # Native style (C / C++ / Objective-C / Objective-C++) for our shell + bridge code.
 # Tuned to match the existing hand-written style and to MINIMISE churn: ColumnLimit 0 means lines are
 # never reflowed/wrapped (only indentation + intra-line spacing is normalised), and includes are not
-# reordered (Obj-C import order can matter). Vendored JDK headers (HelloShell/jni/*) are excluded by the
+# reordered (Obj-C import order can matter). Vendored JDK headers (RuneMobile/jni/*) are excluded by the
 # runner, not by this file. Two language blocks: clang-format needs an explicit ObjC section for .m/.mm.
 ---
 Language:        Cpp

@@ -82,12 +82,12 @@ log "xcodegen generate"
 # StikDebug attach / JIT under Release is device-unverified — confirm on-device before relying on it.
 CONFIG="${CONFIG:-Debug}"
 case "$CONFIG" in Debug|Release) ;; *) die "CONFIG must be Debug or Release (got '$CONFIG')" ;; esac
-log "xcodebuild HelloShell $VERSTR ($CONFIG, generic/iOS, signed)"
-xcodebuild -project "$APPDIR/HelloShell.xcodeproj" -scheme HelloShell -configuration "$CONFIG" \
+log "xcodebuild RuneMobile $VERSTR ($CONFIG, generic/iOS, signed)"
+xcodebuild -project "$APPDIR/RuneMobile.xcodeproj" -scheme RuneMobile -configuration "$CONFIG" \
   -destination 'generic/platform=iOS' -derivedDataPath "$DD" -allowProvisioningUpdates \
   MARKETING_VERSION="$VERSTR" CURRENT_PROJECT_VERSION="$BUILD" build
 
-APP="$DD/Build/Products/${CONFIG}-iphoneos/HelloShell.app"
+APP="$DD/Build/Products/${CONFIG}-iphoneos/RuneMobile.app"
 [ -d "$APP" ] || die "build produced no app at $APP"
 
 # 3) package Payload/*.app -> IPA ------------------------------------------------------------------
@@ -98,7 +98,7 @@ cp -R "$APP" "$DIST/Payload/"
 # instead so the installed app's CFBundleShortVersionString matches the manifest (SideStore resigns,
 # so touching the bundle's signature is harmless).
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSTR" -c "Set :CFBundleVersion $BUILD" \
-  "$DIST/Payload/HelloShell.app/Info.plist" >/dev/null
+  "$DIST/Payload/RuneMobile.app/Info.plist" >/dev/null
 ( cd "$DIST" && rm -f RuneLite.ipa && zip -qry RuneLite.ipa Payload && rm -rf Payload )
 SIZE="$(stat -f%z "$DIST/RuneLite.ipa")"
 echo "$BUILD" > "$STATE"   # only burn the build number on success
@@ -122,7 +122,7 @@ manifest = {
   "sourceURL": base + "/apps.json",
   "apps": [{
     "name": "RuneLite",
-    "bundleIdentifier": "dev.audaro.helloshell",
+    "bundleIdentifier": "dev.audaro.runemobile",
     "developerName": "Jordan Simpson",
     "subtitle": "RuneLite on iOS (on-device JVM)",
     "version": ver,

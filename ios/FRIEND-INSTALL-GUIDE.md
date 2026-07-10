@@ -19,7 +19,7 @@ computer step. After that you install the app and run it from your phone.
 - A **throwaway OSRS account.**
 - Two files I'll send you: the app **`RuneLite.ipa`** and a small script **`runelite-jit.js`**.
 
-> Heads up on naming: once installed, the app's icon is labelled **HelloShell** (not "RuneLite"). That's
+> Heads up on naming: once installed, the app's icon is labelled **RuneMobile** (not "RuneLite"). That's
 > the name to look for on your Home Screen and in StikDebug's app list.
 
 ---
@@ -46,7 +46,7 @@ SideStore is the app that installs and re-signs other apps using *your own* Appl
 ## Step 3 — Install the game
 
 1. In SideStore, tap **＋** (top corner) → choose the **`RuneLite.ipa`** I sent you.
-2. SideStore signs it with your Apple ID and installs it. The icon (labelled **HelloShell**) lands on
+2. SideStore signs it with your Apple ID and installs it. The icon (labelled **RuneMobile**) lands on
    your Home Screen.
 
 *(No UDID, no info from your phone needed — SideStore handles signing locally.)*
@@ -67,7 +67,7 @@ This app needs a custom script so JIT works — the normal StikDebug "just conne
 1. Get **`runelite-jit.js`** (the file I sent) onto the phone: AirDrop it, or save it into **Files**.
 2. Import it into StikDebug — use its in-app **"add/import script"** button, or drop the file into
    **Files → On My iPhone → StikDebug → scripts/**.
-3. In StikDebug, open the app list, select **HelloShell**, and **assign `runelite-jit.js`** as its script.
+3. In StikDebug, open the app list, select **RuneMobile**, and **assign `runelite-jit.js`** as its script.
    StikDebug remembers this, so you only do it once.
 
 ---
@@ -75,11 +75,11 @@ This app needs a custom script so JIT works — the normal StikDebug "just conne
 ## Each time you play
 
 1. Turn on the **LocalDevVPN** toggle.
-2. Open **StikDebug**, pick **HelloShell** (with `runelite-jit.js` assigned), and let it **attach**.
+2. Open **StikDebug**, pick **RuneMobile** (with `runelite-jit.js` assigned), and let it **attach**.
    You'll see it switch JIT on (StikDebug's log shows `[rl-jit]` lines).
 3. The app boots and drops you into the game. Play.
 
-> If you open HelloShell *without* attaching StikDebug first, it just waits / won't start. That's
+> If you open RuneMobile *without* attaching StikDebug first, it just waits / won't start. That's
 > expected — do the two steps above and it'll continue.
 
 ## Logging in
@@ -92,7 +92,7 @@ This app needs a custom script so JIT works — the normal StikDebug "just conne
 
 ## Keeping it working
 
-- **Every 7 days:** open SideStore and tap **Refresh** on HelloShell (it can also auto-refresh over the VPN).
+- **Every 7 days:** open SideStore and tap **Refresh** on RuneMobile (it can also auto-refresh over the VPN).
   If it ever won't open, it's usually just expired — refresh and reopen.
 - **Every launch:** re-enable JIT via StikDebug (the "Each time you play" step).
 
@@ -100,7 +100,7 @@ This app needs a custom script so JIT works — the normal StikDebug "just conne
 
 - *App won't launch / just hangs* → JIT wasn't enabled. Do the StikDebug step (LocalDevVPN on first), then reopen.
 - *Attaches but crashes, or no `[rl-jit]` lines in StikDebug's log* → the script isn't assigned. Redo
-  Step 5 (import `runelite-jit.js` and assign it to HelloShell).
+  Step 5 (import `runelite-jit.js` and assign it to RuneMobile).
 - *Only one VPN runs at a time* → use SideStore's VPN to install/refresh, LocalDevVPN to enable JIT.
   Toggle whichever you need for the task at hand.
 - *"Unable to install" in SideStore* → make sure SideStore's VPN is on and you're signed into your Apple ID.

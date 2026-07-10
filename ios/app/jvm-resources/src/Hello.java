@@ -8,7 +8,7 @@ import java.lang.management.ManagementFactory;
  */
 public final class Hello {
     public static void main(String[] args) {
-        out("=== HelloShell: HotSpot reached main() on device ===");
+        out("=== RuneMobile: HotSpot reached main() on device ===");
         out("java.version = " + System.getProperty("java.version"));
         out("java.vm.name = " + System.getProperty("java.vm.name"));
         out("java.vm.info = " + System.getProperty("java.vm.info"));
@@ -29,7 +29,7 @@ public final class Hello {
         String info = System.getProperty("java.vm.info", "");
         boolean jit = info.contains("mixed mode") || (mon && t1 > 0);
         out("VERDICT      = " + (jit ? "JIT ACTIVE" : "INTERPRETER ONLY"));
-        out("=== HelloShell: main() returned cleanly ===");
+        out("=== RuneMobile: main() returned cleanly ===");
     }
 
     private static void out(String s) { System.out.println(s); System.out.flush(); }

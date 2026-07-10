@@ -24,7 +24,7 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: "YES"
         TARGETED_DEVICE_FAMILY: "1,2"
-        # Device signing (same team as HelloShell). This probe has NO JVM/JIT — it's a pure EAGL shader-compile
+        # Device signing (same team as RuneMobile). This probe has NO JVM/JIT — it's a pure EAGL shader-compile
         # gate — so it runs on device WITHOUT StikDebug; just install + launch via devicectl. The Simulator build
         # ignores signing.
         CODE_SIGN_STYLE: Automatic

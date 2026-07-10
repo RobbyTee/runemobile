@@ -130,7 +130,7 @@ a new build is published.
 | **Signing** | Free Apple ID = app expires every **7 days**, one-tap refresh (no charge, no jailbreak) |
 | **Verified on** | iPhone 17 Pro Max (iOS 26.5) |
 
-> On iOS the installed app icon is labelled **HelloShell** — that is the name to look
+> On iOS the installed app icon is labelled **RuneMobile** — that is the name to look
 > for on your Home Screen and in StikDebug's app list.
 
 ---
@@ -214,7 +214,7 @@ JIT step each time you play.** No jailbreak is required.
    (Settings → Privacy & Security; it prompts a restart), import the pairing file,
    install the **WireGuard VPN** it asks for, and sign in with your Apple ID.
 3. **Install the app.** In SideStore, tap **＋** → choose **`RuneMobile-<version>.ipa`**.
-   It signs and installs it; the icon (labelled **HelloShell**) lands on your Home
+   It signs and installs it; the icon (labelled **RuneMobile**) lands on your Home
    Screen.
 4. **Install [StikDebug](https://github.com/StephenDev0/StikDebug)** (the JIT enabler)
    through SideStore the same way, plus **LocalDevVPN** (the loopback VPN it uses).
@@ -226,16 +226,16 @@ JIT step each time you play.** No jailbreak is required.
 ### Each time you play
 
 1. Turn on the **LocalDevVPN** toggle.
-2. Open **StikDebug**, pick **HelloShell** (with `runelite-jit.js` assigned), and let
+2. Open **StikDebug**, pick **RuneMobile** (with `runelite-jit.js` assigned), and let
    it **attach** (its log shows `[rl-jit]` lines as JIT switches on).
-3. Open **HelloShell** and tap **Start JVM** — it boots into the game.
+3. Open **RuneMobile** and tap **Start JVM** — it boots into the game.
 
-> Opening HelloShell *without* attaching StikDebug first will simply wait — that is
+> Opening RuneMobile *without* attaching StikDebug first will simply wait — that is
 > expected. Attach, and it continues.
 
 ### iOS upkeep
 
-- **Every 7 days** (free Apple ID): open SideStore and **Refresh** HelloShell (it can
+- **Every 7 days** (free Apple ID): open SideStore and **Refresh** RuneMobile (it can
   also auto-refresh over the VPN). If it will not open, it is usually just expired.
 - **Every launch:** re-enable JIT via StikDebug (above).
 - **Only one VPN runs at a time:** use SideStore's VPN to install/refresh, and
@@ -277,7 +277,7 @@ installed.
 1. Get `runelite-jit.js` onto the phone: **AirDrop** it, or drop it into
    **Files → On My iPhone → StikDebug → `scripts/`**, or use StikDebug's in-app
    **"add / import script"** button.
-2. In **StikDebug**, open the app list, select **HelloShell**, and **assign**
+2. In **StikDebug**, open the app list, select **RuneMobile**, and **assign**
    `runelite-jit.js` as its script. StikDebug stores this per-app mapping, so you only
    do it once.
 3. Ensure **LocalDevVPN** is connected before attaching.
@@ -286,7 +286,7 @@ installed.
 
 - StikDebug's log prints `[rl-jit] attached …`, then one or more
   `[rl-jit] #<n> brk#0x69 size=… -> RX 0x…` lines (one per code-cache reservation).
-- HelloShell reaches the game after you tap **Start JVM**.
+- RuneMobile reaches the game after you tap **Start JVM**.
 
 If you see **no `[rl-jit]` lines**, the script was not assigned — redo the assignment
 step. If StikDebug **won't list or select the script at all**, or the attach aborts
@@ -334,7 +334,7 @@ recovery) are in [`RELEASE.md`](RELEASE.md).
 | Symptom | Cause / fix |
 |---|---|
 | App won't launch / just waits | JIT not enabled. Turn on LocalDevVPN, attach StikDebug, then tap **Start JVM**. |
-| Attaches but crashes, no `[rl-jit]` log lines, or StikDebug won't list/select the script | Script not assigned, or the file is corrupted/malformed — delete it from `StikDebug/scripts/` and re-import a fresh `runelite-jit.js`, then re-assign it to HelloShell. |
+| Attaches but crashes, no `[rl-jit]` log lines, or StikDebug won't list/select the script | Script not assigned, or the file is corrupted/malformed — delete it from `StikDebug/scripts/` and re-import a fresh `runelite-jit.js`, then re-assign it to RuneMobile. |
 | "Unable to install" in SideStore | SideStore's VPN must be on and you must be signed into your Apple ID. |
 | Can't enable Developer Mode | Set a device passcode first, then Settings → Privacy & Security. |
 | App stopped opening after a while | Free-signing expired (7 days). Refresh in SideStore. |

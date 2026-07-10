@@ -28,7 +28,7 @@ gate is satisfiable, headless, on a live EGL/GLES context — **before** any plu
 android/dev-tools/gpu/build-smoke-jar.sh
 cd android && JAVA_HOME=… ./gradlew :app:assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n dev.audaro.helloshell/.MainActivity --ez gpuSmoke true
+adb shell am start -n dev.audaro.runemobile/.MainActivity --ez gpuSmoke true
 android/dev-tools/gpu/check-ag1a.sh
 ```
 

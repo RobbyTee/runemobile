@@ -97,11 +97,11 @@ token first).
 **Recover from a broken state** (won't boot, stuck black screen, corrupted unpack):
 1. **Back up your token first** (so you don't have to re-login):
    ```
-   adb exec-out run-as dev.audaro.helloshell cat files/tokens.json > tokens-backup.json
+   adb exec-out run-as dev.audaro.runemobile cat files/tokens.json > tokens-backup.json
    ```
 2. **Clear app data** (wipes cache/config/unpacked JVM, keeps the app installed):
    ```
-   adb shell pm clear dev.audaro.helloshell
+   adb shell pm clear dev.audaro.runemobile
    ```
    > **Note:** clearing data also resets the renderer choice and the GPU-fallback history. A device
    > that had auto-fallen-back to the CPU renderer (after a GPU/117HD crash) will re-attempt the
@@ -111,7 +111,7 @@ token first).
 3. Relaunch (it re-unpacks the JVM and re-downloads the cache on first login). To skip re-login on a
    debug build, push the backup token back:
    ```
-   adb push tokens-backup.json /sdcard/Android/data/dev.audaro.helloshell/files/tokens.json
+   adb push tokens-backup.json /sdcard/Android/data/dev.audaro.runemobile/files/tokens.json
    ```
 4. If still broken, **reinstall the previous known-good APK** from the releases page (`-r -d`).
 

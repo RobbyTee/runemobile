@@ -23,7 +23,7 @@ bridges are already `init()`/`tick()`-wired by `MobileUiBridge`, so they're live
 
 ### Seam (census, md5-stable sentinels)
 ```
-adb shell am start -n dev.audaro.helloshell/.MainActivity --ez census true
+adb shell am start -n dev.audaro.runemobile/.MainActivity --ez census true
 ./check-a5-tier2.sh            # greps the census self-test sentinels; exit 0 == GREEN
 ```
 Emulator `rl_arm64` baseline:

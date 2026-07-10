@@ -1,6 +1,6 @@
 // runelite-ios — StikDebug JIT script for the on-device HotSpot (jre21, iOS 26 TXM)
 // ---------------------------------------------------------------------------------
-// Assign this to HelloShell in StikDebug. It services HotSpot's one code-cache
+// Assign this to RuneMobile in StikDebug. It services HotSpot's one code-cache
 // reservation so the JVM can generate executable code on a TXM device, then
 // DETACHES so the dense-compile phase runs with no debugger holding the task ports.
 //

@@ -17,7 +17,7 @@ set -euo pipefail
 SERIAL="${2:-emulator-5554}"
 [ "${1:-}" = "-s" ] && SERIAL="$2"
 
-PKG=dev.audaro.helloshell
+PKG=dev.audaro.runemobile
 DEVDIR="/sdcard/Android/data/$PKG/files"
 CFGDIR="$HOME/.config/runelite-ios"
 CFG="$CFGDIR/legacy_login.json"

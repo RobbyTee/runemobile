@@ -16,7 +16,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 UDID="${1:?usage: verdict-mobileui-device.sh <device-UDID> [slot]}"
-BUNDLE_ID="${BUNDLE_ID:-dev.audaro.helloshell}"
+BUNDLE_ID="${BUNDLE_ID:-dev.audaro.runemobile}"
 OUT="out-mobileui-device"
 mkdir -p "$OUT"
 

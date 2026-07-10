@@ -40,7 +40,7 @@ else
 fi
 TOKENS="${TOKENS:-$ROOT/ios/dev-tools/tokens.json}"
 OUT="$HERE/fb-logcat-$MODE.txt"
-PKG="dev.audaro.helloshell"
+PKG="dev.audaro.runemobile"
 DEV_FILES="/sdcard/Android/data/$PKG/files"
 DEV_TOKENS="$DEV_FILES/tokens.json"
 DEV_MARKER="$DEV_FILES/gpu.mode"

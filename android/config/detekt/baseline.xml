@@ -165,13 +165,13 @@
     <ID>TooGenericExceptionCaught:XpTrackerScreen.kt$t: Throwable</ID>
     <ID>TooManyFunctions:ChatPillView.kt$ChatPillView : View</ID>
     <ID>TooManyFunctions:ChromeOverlayView.kt$ChromeOverlayView : View</ID>
-    <ID>TooManyFunctions:ConfigScreen.kt$dev.audaro.helloshell.ConfigScreen.kt</ID>
+    <ID>TooManyFunctions:ConfigScreen.kt$dev.audaro.runemobile.ConfigScreen.kt</ID>
     <ID>TooManyFunctions:JagexLogin.kt$JagexLogin</ID>
     <ID>TooManyFunctions:JvmLauncher.kt$JvmLauncher</ID>
     <ID>TooManyFunctions:LoginActivity.kt$LoginActivity : AppCompatActivity</ID>
     <ID>TooManyFunctions:MainActivity.kt$MainActivity : AppCompatActivity</ID>
-    <ID>TooManyFunctions:PanelReflowScreens.kt$dev.audaro.helloshell.PanelReflowScreens.kt</ID>
-    <ID>TooManyFunctions:PluginPanel.kt$dev.audaro.helloshell.PluginPanel.kt</ID>
+    <ID>TooManyFunctions:PanelReflowScreens.kt$dev.audaro.runemobile.PanelReflowScreens.kt</ID>
+    <ID>TooManyFunctions:PluginPanel.kt$dev.audaro.runemobile.PluginPanel.kt</ID>
     <ID>TooManyFunctions:ReconActivity.kt$ReconActivity : Activity</ID>
   </CurrentIssues>
 </SmellBaseline>

@@ -11,21 +11,21 @@ first run is expected to *teach us what breaks first*, not necessarily to reach 
 | Path | Role |
 |---|---|
 | `project.yml` | xcodegen project (source of truth; the `.xcodeproj` is generated, gitignored) |
-| `HelloShell/JVMLauncher.{h,m}` | CS_DEBUGGED gate, RWX canary, `dlopen(libjli)`→`JLI_Launch` glue |
-| `HelloShell/ViewController.m` | on-screen console, wait-for-JIT poll, stdout/stderr capture |
-| `HelloShell/HelloShell.entitlements` | `increased-memory-limit` only (see Claim D) |
+| `RuneMobile/JVMLauncher.{h,m}` | CS_DEBUGGED gate, RWX canary, `dlopen(libjli)`→`JLI_Launch` glue |
+| `RuneMobile/ViewController.m` | on-screen console, wait-for-JIT poll, stdout/stderr capture |
+| `RuneMobile/RuneMobile.entitlements` | `increased-memory-limit` only (see Claim D) |
 | `scripts/resign-jre.sh` | build phase: re-sign every Mach-O in the embedded `jre/` (Claim A) |
 | `jvm-resources/src/Hello.java` + `Hello.jar` | the payload (prints VM name / `mixed mode` / compile-ms verdict) |
 | `../dev-tools/jre/` | the verified Amethyst `jre21` (gitignored; folder-referenced into the `.app` as `jre/`) |
 
 ## Build / run loop (you drive Xcode + StikDebug)
 1. **Generate the project:** `cd ios/app && xcodegen generate`
-2. **Open `HelloShell.xcodeproj` in Xcode 26.5.** Set the target's **Team** to your free Apple ID, plug in the
+2. **Open `RuneMobile.xcodeproj` in Xcode 26.5.** Set the target's **Team** to your free Apple ID, plug in the
    iPhone 17 Pro Max, **Build + Run** (or Archive → AltStore install). The `resign-jre` phase re-signs the
    bundled JRE dylibs with your cert.
-3. **Assign the iOS-26 JIT script** to HelloShell in **StikDebug** (the same universal TXM script used for
+3. **Assign the iOS-26 JIT script** to RuneMobile in **StikDebug** (the same universal TXM script used for
    Amethyst — see the crux note below).
-4. **Launch HelloShell.** It shows a console and `JIT: waiting…`. **Attach StikDebug.** When the kernel sets
+4. **Launch RuneMobile.** It shows a console and `JIT: waiting…`. **Attach StikDebug.** When the kernel sets
    `CS_DEBUGGED`, the status flips green and **Start JVM** enables.
 5. **Tap Start JVM.** Read the console; the full log is also at `Documents/hello-shell.log` (Files.app —
    `UIFileSharingEnabled`). Optional **RWX canary** button = naive `mprotect` RW→RX probe (diagnostic only).
@@ -43,7 +43,7 @@ JH=/opt/homebrew/opt/openjdk@21
 Pull results off-device after a run:
 ```sh
 xcrun devicectl device copy from --device <UDID> --domain-type appDataContainer \
-  --domain-identifier dev.audaro.helloshell --source Documents/jvm-stdio.log --destination /tmp/jvm.log
+  --domain-identifier dev.audaro.runemobile --source Documents/jvm-stdio.log --destination /tmp/jvm.log
 # (same for Documents/glyph-smoke.png)
 ```
 
@@ -68,7 +68,7 @@ xcrun devicectl device copy from --device <UDID> --domain-type appDataContainer 
 - `dlopen(libjli)` fails → **Claim A refuted** (re-sign insufficient; bypass needed).
 - `dlopen` succeeds but HotSpot aborts (EXC_BREAKPOINT/SIGTRAP/SIGILL) before the Hello banner with **no script
   assigned** → **Claim B confirmed** (JS-script machinery mandatory). Re-run with the script assigned.
-- Reaches `=== HelloShell: HotSpot reached main() ===` with `VERDICT = JIT ACTIVE` → **the whole Prong B gate is
+- Reaches `=== RuneMobile: HotSpot reached main() ===` with `VERDICT = JIT ACTIVE` → **the whole Prong B gate is
   green**; swap `Hello` → `JitProbe` next.
 
 Reference patterns (GPLv3 — read only, clean-room, never vendored): `AngelAuraMC/Amethyst-iOS`

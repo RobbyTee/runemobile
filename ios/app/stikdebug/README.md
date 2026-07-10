@@ -35,17 +35,17 @@ instruction-abort faults — on a fault it calls `prepare_memory_region` for the
    - AirDrop the file to the iPhone, or
    - **Files → On My iPhone → StikDebug → scripts/** and drop it there, or use StikDebug's in-app
      "add/import script" button.
-2. In **StikDebug**, open the app list, select **HelloShell**, and **assign** `runelite-jit.js` as its
+2. In **StikDebug**, open the app list, select **RuneMobile**, and **assign** `runelite-jit.js` as its
    script. (StikDebug stores the per-app mapping; on iOS-26 TXM it runs the assigned script on attach.)
 3. Make sure **LocalDevVPN** is connected.
 
 ## Run loop
-1. Launch **HelloShell** → it waits at "JIT: waiting…".
-2. **Attach StikDebug** to HelloShell (with `runelite-jit.js` assigned). `CS_DEBUGGED` flips green; the
+1. Launch **RuneMobile** → it waits at "JIT: waiting…".
+2. **Attach StikDebug** to RuneMobile (with `runelite-jit.js` assigned). `CS_DEBUGGED` flips green; the
    script attaches and sits in its continue-loop waiting for `brk #0x69`.
-3. Tap **Start JVM**. Watch HelloShell's console and StikDebug's log:
+3. Tap **Start JVM**. Watch RuneMobile's console and StikDebug's log:
    - StikDebug log should show `[rl-jit] #1 brk #0x69 size=… -> RX 0x…` lines (one per code-cache grow).
-   - HelloShell should reach `=== HelloShell: HotSpot reached main() ===` and print
+   - RuneMobile should reach `=== RuneMobile: HotSpot reached main() ===` and print
      `VERDICT = JIT ACTIVE`.
 
 ## If it still crashes / hangs

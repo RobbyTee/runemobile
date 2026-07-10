@@ -15,7 +15,7 @@ android/
   app/
     jvm-src/Hello.java              # Milestone-A smoke (compiled -> assets/jvm/hello.jar)
     src/main/
-      java/dev/audaro/helloshell/   # MainActivity, JvmLauncher (JNI facade), AssetInstaller
+      java/dev/audaro/runemobile/   # MainActivity, JvmLauncher (JNI facade), AssetInstaller
       cpp/                          # CMake + jvm_bootstrap.cpp (JNI_CreateJavaVM)
       assets/jvm/                   # staged jars + the JRE's non-native tree (gitignored, except hello.jar)
       jniLibs/arm64-v8a/            # the JRE's .so libs (gitignored) — see "Why jniLibs" below
@@ -25,7 +25,7 @@ android/
 The **entire** embedded JRE (the `lib/modules` image, `conf/`, `fontconfig`, **and every `lib/*.so` +
 `lib/server/libjvm.so`**) ships in `assets/jvm/jre/` and is unpacked to `filesDir/jvm/jre` on first launch
 (`AssetInstaller`). `JAVA_HOME` = `filesDir/jvm/jre`; `java.library.path` = `filesDir/jvm/jre/lib`. The native
-bootstrap (`libhelloshell.so`, itself loaded from the app's legit native-lib dir) `dlopen`s
+bootstrap (`librunemobile.so`, itself loaded from the app's legit native-lib dir) `dlopen`s
 `filesDir/jvm/jre/lib/server/libjvm.so` by absolute path and preloads the rest of `lib/*.so` the same way —
 **this works** (verified 2026-06-04: real RuneLite boots to `LOGIN_SCREEN` on the arm64 emulator). The old
 "API 29 forbids dlopen from filesDir, so split the .so into jniLibs" rule does **not** apply to a
@@ -37,7 +37,7 @@ native-initiated absolute-path dlopen of the app's own data here.
 > and the VM aborts **`FATAL ERROR in native method: Could not allocate library name`** during
 > `java.awt.Toolkit.<clinit>` — before CACIO can take over. Symptom looked JRE-specific but reproduced
 > identically across two independent bionic jre21 builds; the cure is filesDir-only. `jniLibs/` should hold
-> only the CMake-built `libhelloshell.so` (which Gradle places there automatically — not staged by hand).
+> only the CMake-built `librunemobile.so` (which Gradle places there automatically — not staged by hand).
 
 ## Prerequisites already set up on this Mac
 - SDK at `~/Library/Android/sdk` (platform-35, build-tools 35, platform-tools, emulator, arm64 system image).
@@ -80,7 +80,7 @@ cd android && ./gradlew :app:assembleRelease            # 7. never bare `assembl
 the runtime stage still folds the shaded SHA into `runtime.tag` so a shared-Java change invalidates installs. Or
 run `./gradlew :app:stageBootAssets` to do steps 1–6 in one Gradle task — see below.)
 
-The two native libraries (`libhelloshell.so`, `librlawt.so`) are **not** staged — Gradle's CMake
+The two native libraries (`librunemobile.so`, `librlawt.so`) are **not** staged — Gradle's CMake
 `externalNativeBuild` builds them from tracked `cpp/` source automatically.
 
 ### Release gate

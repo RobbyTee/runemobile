@@ -82,4 +82,4 @@ log "Remote build + install on $REMOTE_HOST (device $DEV_UUID)"
 ssh -t "$REMOTE" \
   "cd '$REMOTE_REPO' && DEV='$DEV_UUID' MODE='$MODE' CONFIG='$CONFIG' JAVA_HOME='$JAVA_HOME' REPO='$REMOTE_REPO' bash ios/dev-tools/remote-build.sh $RB_ARGS"
 
-log "Deployed. Phone: attach StikDebug, then launch HelloShell for per-launch JIT."
+log "Deployed. Phone: attach StikDebug, then launch RuneMobile for per-launch JIT."

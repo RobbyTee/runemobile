@@ -55,8 +55,8 @@ The login path is **not** part of the jar contract above — it runs entirely in
 Android `HttpURLConnection`) and mints `tokens.json` **before the JVM boots**, so it can never route through a
 shared JVM-side bridge. Instead the same OAuth wire constants are re-implemented in three places:
 
-- `ios/app/HelloShell/JagexLoginViewController.m` (Stage-A consent → session → accounts)
-- `android/app/src/main/java/dev/audaro/helloshell/JagexLogin.kt` (same)
+- `ios/app/RuneMobile/JagexLoginViewController.m` (Stage-A consent → session → accounts)
+- `android/app/src/main/java/dev/audaro/runemobile/JagexLogin.kt` (same)
 - `ios/dev-tools/fetch-shield-tokens.sh` (the full flow incl. Stage-B launcher tokens + OTL mint)
 
 - **`auth-contract.json`** — the single source of truth: every endpoint, the Cloudflare-sensitive launcher

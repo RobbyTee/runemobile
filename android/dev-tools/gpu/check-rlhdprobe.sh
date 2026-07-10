@@ -8,7 +8,7 @@
 # push both to files/jvm via run-as — they MUST be staged from the SAME facade-src revision). Usage: ./check-rlhdprobe.sh
 set -euo pipefail
 ADB="${ADB:-$HOME/Library/Android/sdk/platform-tools/adb}"
-PKG="${PKG:-dev.audaro.helloshell}"
+PKG="${PKG:-dev.audaro.runemobile}"
 
 "$ADB" shell am force-stop "$PKG" >/dev/null 2>&1 || true
 "$ADB" logcat -c >/dev/null 2>&1 || true

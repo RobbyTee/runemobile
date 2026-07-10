@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 ROUTEC=../gpu-routec
-JNI_INC=../../app/HelloShell/jni
+JNI_INC=../../app/RuneMobile/jni
 OUT=$(mktemp -d)
 BASE=(-arch arm64 -isysroot "$SDK" -fobjc-arc -DGLES_SILENCE_DEPRECATION=1 -Wall
       -Wno-deprecated-declarations -I "$ROUTEC/app" -I jni -I "$JNI_INC")

@@ -2,7 +2,7 @@
 //
 // The app process is ART's. Here we dlopen the embedded JRE's libjvm.so and call JNI_CreateJavaVM to
 // stand up a SECOND, in-process HotSpot VM (the one that runs RuneLite). This mirrors the iOS bootstrap
-// (ios/app/HelloShell/JVMLauncher.m) but drops every iOS-JIT workaround: Android grants JIT for free, so
+// (ios/app/RuneMobile/JVMLauncher.m) but drops every iOS-JIT workaround: Android grants JIT for free, so
 // there is no MirrorMappedCodeCache, no brk #0x69 debugger mirror, no exception-port juggling.
 //
 // Milestone B host model:
@@ -1444,7 +1444,7 @@ static void *jvmThreadMain(void *argp) {
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_startJvm(
+Java_dev_audaro_runemobile_JvmLauncher_startJvm(
         JNIEnv *artEnv, jobject /*thiz*/,
         jstring jJavaHome, jstring jLibjvmPath, jstring jLibraryPath,
         jstring jClasspath, jstring jMainClass, jobjectArray jExtraOpts) {
@@ -1491,12 +1491,12 @@ Java_dev_audaro_helloshell_JvmLauncher_startJvm(
 // pthread_create), so the worker sees them. Mirrors the iOS loadJagexTokens setenv path (JVMLauncher.m).
 // A8: DEBUG-only stdout/err->logcat pipe. Set from Kotlin (BuildConfig.DEBUG) BEFORE startJvm.
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSetStdioRedirect(JNIEnv *, jobject, jboolean enabled) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetStdioRedirect(JNIEnv *, jobject, jboolean enabled) {
     g_stdioRedirect.store(enabled == JNI_TRUE, std::memory_order_release);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSetEnv(JNIEnv *env, jobject, jstring jKey, jstring jVal) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetEnv(JNIEnv *env, jobject, jstring jKey, jstring jVal) {
     std::string k = jstr(env, jKey);
     std::string v = jstr(env, jVal);
     if (!k.empty()) {
@@ -1507,7 +1507,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeSetEnv(JNIEnv *env, jobject, jstrin
 // ---- Surface lifecycle (called from the ART UI thread) -----------------------------------------------
 
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSetSurface(JNIEnv *env, jobject, jobject surface) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetSurface(JNIEnv *env, jobject, jobject surface) {
     ANativeWindow *win = surface ? ANativeWindow_fromSurface(env, surface) : nullptr;
     ANativeWindow *old = nullptr;
     {
@@ -1523,7 +1523,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeSetSurface(JNIEnv *env, jobject, jo
 // PERF-BATTERY-NETWORK-01: background/foreground visibility gate (called from onStop/onStart on the UI thread).
 // Paused -> the render thread idles at 4 Hz (drainInput only) instead of the 60 Hz snapshot-republish batch.
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSetPaused(JNIEnv *, jobject, jboolean paused) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetPaused(JNIEnv *, jobject, jboolean paused) {
     g_paused.store(paused ? true : false, std::memory_order_release);
     LOGI("render %s", paused ? "paused (backgrounded)" : "resumed (foreground)");
 }
@@ -1566,68 +1566,68 @@ static void enqueue(InputEvent ev) {
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeClick(JNIEnv *, jobject, jint x, jint y, jint button) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeClick(JNIEnv *, jobject, jint x, jint y, jint button) {
     enqueue({IN_CLICK, x, y, button, 0});
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeTouch(JNIEnv *, jobject, jint type, jint x, jint y, jint button) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeTouch(JNIEnv *, jobject, jint type, jint x, jint y, jint button) {
     enqueue({IN_TOUCH, type, x, y, button});
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeCamera(JNIEnv *, jobject, jint dx, jint dy) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeCamera(JNIEnv *, jobject, jint dx, jint dy) {
     enqueue({IN_CAMERA, dx, dy, 0, 0});
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeClearHover(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeClearHover(JNIEnv *, jobject) {
     enqueue({IN_CLEARHOVER, 0, 0, 0, 0});
 }
 // FIX-3 idle keepalive: queue a keepAlive() call (lock-free on the Java side). Enqueued like the others so the
 // already-attached render thread makes the JNI call when it drains — the ART UI thread never attaches to HotSpot.
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeKeepAlive(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeKeepAlive(JNIEnv *, jobject) {
     enqueue({IN_KEEPALIVE, 0, 0, 0, 0});
 }
 // AP-2a sticky-Shift: queue a hold (held=1) / release (held=0) so it's ordered ahead of the menu-open click.
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSetShiftHeld(JNIEnv *, jobject, jboolean held) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetShiftHeld(JNIEnv *, jobject, jboolean held) {
     enqueue({IN_SHIFT, held ? 1 : 0, 0, 0, 0});
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSetCtrlHeld(JNIEnv *, jobject, jboolean held) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetCtrlHeld(JNIEnv *, jobject, jboolean held) {
     enqueue({IN_CTRL, held ? 1 : 0, 0, 0, 0});
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSetAltHeld(JNIEnv *, jobject, jboolean held) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetAltHeld(JNIEnv *, jobject, jboolean held) {
     enqueue({IN_ALT, held ? 1 : 0, 0, 0, 0});
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeMiddleClick(JNIEnv *, jobject, jint x, jint y) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeMiddleClick(JNIEnv *, jobject, jint x, jint y) {
     enqueue({IN_MIDDLECLICK, x, y, 0, 0});
 }
 
 // ---- A1 input ingress (UI thread enqueues; render thread drains into the bridge) ---------------------
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeWheel(JNIEnv *, jobject, jint x, jint y, jint rotation) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeWheel(JNIEnv *, jobject, jint x, jint y, jint rotation) {
     enqueue({IN_WHEEL, x, y, rotation, 0});
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeClickPrecise(JNIEnv *, jobject, jint x, jint y, jint button) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeClickPrecise(JNIEnv *, jobject, jint x, jint y, jint button) {
     enqueue({IN_CLICKPRECISE, x, y, button, 0});
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeMove(JNIEnv *, jobject, jint x, jint y) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeMove(JNIEnv *, jobject, jint x, jint y) {
     enqueue({IN_MOVE, x, y, 0, 0});
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeKeyStroke(JNIEnv *, jobject, jint vk) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeKeyStroke(JNIEnv *, jobject, jint vk) {
     enqueue({IN_KEYSTROKE, vk, 0, 0, 0});
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeKeybind(JNIEnv *, jobject, jint vk, jint modifiers) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeKeybind(JNIEnv *, jobject, jint vk, jint modifiers) {
     enqueue({IN_KEYBIND, vk, modifiers, 0, 0});
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeText(JNIEnv *env, jobject, jstring js) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeText(JNIEnv *env, jobject, jstring js) {
     InputEvent ev{IN_TEXT, 0, 0, 0, 0};
     ev.s = jstr(env, js);
     enqueue(std::move(ev));
@@ -1635,63 +1635,63 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeText(JNIEnv *env, jobject, jstring 
 
 // ---- A2 press-and-peek menu (commit + read-surface) -------------------------------------------------
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSelectMenuPoint(JNIEnv *, jobject, jint x, jint y) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSelectMenuPoint(JNIEnv *, jobject, jint x, jint y) {
     enqueue({IN_SELECTMENU, x, y, 0, 0});
 }
 // FIX-10b: commit a native tap-menu row / submenu child by index (child<0 = the parent entry itself).
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeInvokeMenuEntry(JNIEnv *, jobject, jint parent, jint child) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeInvokeMenuEntry(JNIEnv *, jobject, jint parent, jint child) {
     enqueue({IN_INVOKEMENUENTRY, parent, child, 0, 0});
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeMenuSnapshot(JNIEnv *env, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeMenuSnapshot(JNIEnv *env, jobject) {
     std::lock_guard<std::mutex> lk(g_menuLock);
     return env->NewStringUTF(g_menuSnapshot.c_str());
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeMenuPublishSeq(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeMenuPublishSeq(JNIEnv *, jobject) {
     return (jlong) g_menuPublishSeq.load(std::memory_order_relaxed);
 }
 // Runtime tab/stone/chat sprite payload — read lock-free by the UI thread (NewStringUTF uses the UI/ART env; the
 // HotSpot fetch happens on the render thread, see the producer loop). "" until captured. NEVER call into HotSpot
 // here: this thread owns no HotSpot env, so CallStaticObjectMethod would abort the process.
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeTabSprites(JNIEnv *env, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeTabSprites(JNIEnv *env, jobject) {
     std::lock_guard<std::mutex> lk(g_tabSpritesLock);
     return env->NewStringUTF(g_tabSprites.c_str());
 }
 
 // ---- A1 read-surface (UI thread reads the render-thread-published atomics; never attaches to HotSpot) -
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeIsTextInputOpen(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeIsTextInputOpen(JNIEnv *, jobject) {
     return g_textInputOpen.load(std::memory_order_relaxed) ? JNI_TRUE : JNI_FALSE;
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeInteractTapSeq(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeInteractTapSeq(JNIEnv *, jobject) {
     return g_interactTapSeq.load(std::memory_order_relaxed);
 }
 // Tap-KIND truth read-surface (0 on a jar without the getters -> seq never advances -> shell keeps the ring).
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeTapKindSeq(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeTapKindSeq(JNIEnv *, jobject) {
     return g_tapKindSeq.load(std::memory_order_relaxed);
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeLastTapKind(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeLastTapKind(JNIEnv *, jobject) {
     return g_lastTapKind.load(std::memory_order_relaxed);
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeLastWidgetBounds(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeLastWidgetBounds(JNIEnv *, jobject) {
     return (jlong) g_lastWidgetBounds.load(std::memory_order_relaxed);
 }
 // Last frame dimensions (so the UI thread can map a screen touch to game-canvas coords). 0 before render.
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeFrameWidth(JNIEnv *, jobject) { return g_lastFrameW.load(std::memory_order_relaxed); }
+Java_dev_audaro_runemobile_JvmLauncher_nativeFrameWidth(JNIEnv *, jobject) { return g_lastFrameW.load(std::memory_order_relaxed); }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeFrameHeight(JNIEnv *, jobject) { return g_lastFrameH.load(std::memory_order_relaxed); }
+Java_dev_audaro_runemobile_JvmLauncher_nativeFrameHeight(JNIEnv *, jobject) { return g_lastFrameH.load(std::memory_order_relaxed); }
 // Phase 3 (auto-GPU watchdog): frames the GPU/117HD renderer has actually presented. 0 == not armed or renderer
 // never activated (failed/black/crashed); climbing == success. The Kotlin first-boot fallback polls this.
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeGpuFramesPresented(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeGpuFramesPresented(JNIEnv *, jobject) {
     return g_routecFramesPresented ? (jlong) g_routecFramesPresented() : 0L;
 }
 
@@ -1700,7 +1700,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeGpuFramesPresented(JNIEnv *, jobjec
 // thread to the embedded HotSpot VM (bridgeEnvAttach) and marshal strings across the VM boundary as UTF-8:
 // the ART JNIEnv* (param) makes the ART return value; the HotSpot env makes the bridge call.
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeListPlugins(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeListPlugins(JNIEnv *artEnv, jobject) {
     if (!mobileUiReady()) return artEnv->NewStringUTF("");   // acquire: facade not published yet
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midListPlugins) return artEnv->NewStringUTF("");
@@ -1711,7 +1711,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeListPlugins(JNIEnv *artEnv, jobject
     return artEnv->NewStringUTF(s.c_str()); // re-create the string in the ART VM
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeMobileUiSeq(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeMobileUiSeq(JNIEnv *, jobject) {
     if (!mobileUiReady()) return -1;
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midMobileUiSeq) return -1;
@@ -1720,7 +1720,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeMobileUiSeq(JNIEnv *, jobject) {
     return v;
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePollMobileUiEvents(JNIEnv *artEnv, jobject, jlong sinceSeq) {
+Java_dev_audaro_runemobile_JvmLauncher_nativePollMobileUiEvents(JNIEnv *artEnv, jobject, jlong sinceSeq) {
     if (!mobileUiReady()) return artEnv->NewStringUTF("");
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midPollEvents) return artEnv->NewStringUTF("");
@@ -1731,7 +1731,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativePollMobileUiEvents(JNIEnv *artEnv, 
     return artEnv->NewStringUTF(s.c_str());
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSetPluginEnabled(JNIEnv *artEnv, jobject, jstring jId, jboolean enabled) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetPluginEnabled(JNIEnv *artEnv, jobject, jstring jId, jboolean enabled) {
     if (!mobileUiReady()) return artEnv->NewStringUTF("");
     std::string id = jstr(artEnv, jId);     // ART string -> std::string
     JNIEnv *hs = bridgeEnvAttach();
@@ -1746,7 +1746,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeSetPluginEnabled(JNIEnv *artEnv, jo
 // AP-2b Finding 6: pin/star a plugin by DISPLAY NAME (not className). Off the UI thread (rl-bridge). Returns
 // the bridge's JSON ack ({"ok":true,"writeId":n}); "" if the facade isn't published / setPinned didn't resolve.
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSetPinned(JNIEnv *artEnv, jobject, jstring jName, jboolean pinned) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetPinned(JNIEnv *artEnv, jobject, jstring jName, jboolean pinned) {
     if (!mobileUiReady() || !g_midSetPinned) return artEnv->NewStringUTF("");
     std::string name = jstr(artEnv, jName);
     JNIEnv *hs = bridgeEnvAttach();
@@ -1759,7 +1759,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeSetPinned(JNIEnv *artEnv, jobject, 
     return artEnv->NewStringUTF(out.c_str());
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeGetPluginConfig(JNIEnv *artEnv, jobject, jstring jGroup) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeGetPluginConfig(JNIEnv *artEnv, jobject, jstring jGroup) {
     if (!mobileUiReady()) return artEnv->NewStringUTF("");
     std::string group = jstr(artEnv, jGroup);
     JNIEnv *hs = bridgeEnvAttach();
@@ -1772,7 +1772,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeGetPluginConfig(JNIEnv *artEnv, job
     return artEnv->NewStringUTF(out.c_str());
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSetConfig(JNIEnv *artEnv, jobject, jstring jGroup, jstring jKey, jstring jValue) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetConfig(JNIEnv *artEnv, jobject, jstring jGroup, jstring jKey, jstring jValue) {
     if (!mobileUiReady()) return artEnv->NewStringUTF("");
     std::string group = jstr(artEnv, jGroup), key = jstr(artEnv, jKey), value = jstr(artEnv, jValue);
     JNIEnv *hs = bridgeEnvAttach();
@@ -1787,7 +1787,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeSetConfig(JNIEnv *artEnv, jobject, 
     return artEnv->NewStringUTF(out.c_str());
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeProcessedWriteId(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeProcessedWriteId(JNIEnv *, jobject) {
     if (!mobileUiReady()) return -1;
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midProcessedWriteId) return -1;
@@ -1816,39 +1816,39 @@ static jint mobileUiInt(jmethodID m) {
 // panelReady() gates the whole Tier-1 surface (acquire for publication + all-or-nothing: false if ANY panel
 // method, e.g. closePanel, didn't resolve — so the viewer never opens a panel it could never close).
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeListPanels(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeListPanels(JNIEnv *artEnv, jobject) {
     if (!panelReady()) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midListPanels);
 }
 // A8: persist pending plugin-config writes (call when the app backgrounds, off the UI thread). Gated by the
 // MobileUiBridge publication latch; a no-op if flushConfig didn't resolve. Returns the bridge's JSON ack.
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeFlushConfig(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeFlushConfig(JNIEnv *artEnv, jobject) {
     if (!mobileUiReady() || !g_midFlushConfig) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midFlushConfig);
 }
 // SC-2/CFG-10: reset an entire config group to defaults. Returns the bridge JSON ack ({"ok":..,"writeId":n}).
 static jstring mobileUiStrArg(JNIEnv *artEnv, jmethodID m, jstring jArg);   // defined below (Finding 17 helpers)
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeResetPluginConfig(JNIEnv *artEnv, jobject, jstring jGroup) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeResetPluginConfig(JNIEnv *artEnv, jobject, jstring jGroup) {
     if (!mobileUiReady() || !g_midResetPluginConfig) return artEnv->NewStringUTF("");
     return mobileUiStrArg(artEnv, g_midResetPluginConfig, jGroup);
 }
 // SC-1/NOTIF-2: the serialized default Notification seed JSON for the per-item editor (or "" if unresolved).
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeNotificationDefaults(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeNotificationDefaults(JNIEnv *artEnv, jobject) {
     if (!mobileUiReady() || !g_midNotificationDefaults) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midNotificationDefaults);
 }
 // User-defined hotkey buttons: list every bound plugin keybind (JSON), and fire one by (group,key) off its live
 // binding. boundKeybindsJson is read on the native Hotkeys screen; fireHotkey on a HUD button tap.
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeBoundKeybindsJson(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeBoundKeybindsJson(JNIEnv *artEnv, jobject) {
     if (!mobileUiReady() || !g_midBoundKeybinds) return artEnv->NewStringUTF("[]");
     return mobileUiStr(artEnv, g_midBoundKeybinds);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeFireHotkey(JNIEnv *artEnv, jobject, jstring jGroup, jstring jKey) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeFireHotkey(JNIEnv *artEnv, jobject, jstring jGroup, jstring jKey) {
     if (!mobileUiReady() || !g_midFireHotkey) return;
     std::string group = jstr(artEnv, jGroup), key = jstr(artEnv, jKey);
     JNIEnv *hs = bridgeEnvAttach();
@@ -1863,32 +1863,32 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeFireHotkey(JNIEnv *artEnv, jobject,
 //   Finding 9  — nextNotification: "titlebody" (SOH-delimited), native splits + raises a notification.
 //   Finding 25 — nextLink: a single URL to open in a Custom Tab.
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeNextNotification(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeNextNotification(JNIEnv *artEnv, jobject) {
     if (!mobileUiReady() || !g_midNextNotification) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midNextNotification);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeNextLink(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeNextLink(JNIEnv *artEnv, jobject) {
     if (!mobileUiReady() || !g_midNextLink) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midNextLink);
 }
 // PARITY-ANDROID-SHOT — nextScreenshot: absolute path of the next engine auto-screenshot PNG (or "").
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeNextScreenshot(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeNextScreenshot(JNIEnv *artEnv, jobject) {
     if (!mobileUiReady() || !g_midNextScreenshot)
         return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midNextScreenshot);
 }
 // Finding 17 — hubState: {"refreshing":bool,"seq":int}, native drives the hub install spinner.
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeHubState(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeHubState(JNIEnv *artEnv, jobject) {
     if (!mobileUiReady() || !g_midHubState) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midHubState);
 }
 // Finding 17 — hubManifest: one-time async catalog download. First call returns {"status":"loading"}; the
 // native screen polls until {"status":"ok",plugins:[...]} (or error:*). No args.
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeHubManifest(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeHubManifest(JNIEnv *artEnv, jobject) {
     if (!mobileUiReady() || !g_midHubManifest) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midHubManifest);
 }
@@ -1908,19 +1908,19 @@ static jstring mobileUiStrArg(JNIEnv *artEnv, jmethodID m, jstring jArg) {
 // Finding 17 — hubInstall/hubUninstall by internal name: register synchronously (config write + flush),
 // download+load async. Returns {"ok":true,"writeId":n}; the screen then polls hubState() for the seq bump.
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeHubInstall(JNIEnv *artEnv, jobject, jstring jName) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeHubInstall(JNIEnv *artEnv, jobject, jstring jName) {
     if (!mobileUiReady()) return artEnv->NewStringUTF("");
     return mobileUiStrArg(artEnv, g_midHubInstall, jName);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeHubUninstall(JNIEnv *artEnv, jobject, jstring jName) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeHubUninstall(JNIEnv *artEnv, jobject, jstring jName) {
     if (!mobileUiReady()) return artEnv->NewStringUTF("");
     return mobileUiStrArg(artEnv, g_midHubUninstall, jName);
 }
 // Publish a host-origin notification into the shared queue (the drain delivers it like an engine one). Off
 // the UI thread (rl-bridge). Lets the native shell raise its own alerts + deterministically exercise delivery.
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePublishNotification(JNIEnv *artEnv, jobject, jstring jt, jstring jb) {
+Java_dev_audaro_runemobile_JvmLauncher_nativePublishNotification(JNIEnv *artEnv, jobject, jstring jt, jstring jb) {
     if (!mobileUiReady() || !g_midPublishNotification) return;
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls) return;
@@ -1933,7 +1933,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativePublishNotification(JNIEnv *artEnv,
 }
 // Publish a host-origin link into the shared queue (the drain opens it). Off the UI thread (rl-bridge).
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePublishLink(JNIEnv *artEnv, jobject, jstring ju) {
+Java_dev_audaro_runemobile_JvmLauncher_nativePublishLink(JNIEnv *artEnv, jobject, jstring ju) {
     if (!mobileUiReady() || !g_midPublishLink) return;
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls) return;
@@ -1944,18 +1944,18 @@ Java_dev_audaro_helloshell_JvmLauncher_nativePublishLink(JNIEnv *artEnv, jobject
     if (hu) hs->DeleteLocalRef(hu);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeClosePanel(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeClosePanel(JNIEnv *artEnv, jobject) {
     if (!panelReady()) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midClosePanel);
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePanelWidth(JNIEnv *, jobject) { return panelReady() ? mobileUiInt(g_midPanelW) : 0; }
+Java_dev_audaro_runemobile_JvmLauncher_nativePanelWidth(JNIEnv *, jobject) { return panelReady() ? mobileUiInt(g_midPanelW) : 0; }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePanelHeight(JNIEnv *, jobject) { return panelReady() ? mobileUiInt(g_midPanelH) : 0; }
+Java_dev_audaro_runemobile_JvmLauncher_nativePanelHeight(JNIEnv *, jobject) { return panelReady() ? mobileUiInt(g_midPanelH) : 0; }
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePanelFrameSeq(JNIEnv *, jobject) { return panelReady() ? mobileUiInt(g_midPanelSeq) : 0; }
+Java_dev_audaro_runemobile_JvmLauncher_nativePanelFrameSeq(JNIEnv *, jobject) { return panelReady() ? mobileUiInt(g_midPanelSeq) : 0; }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeOpenPanel(JNIEnv *artEnv, jobject, jint index) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeOpenPanel(JNIEnv *artEnv, jobject, jint index) {
     if (!panelReady()) return artEnv->NewStringUTF("");
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midOpenPanel) return artEnv->NewStringUTF("");
@@ -1965,7 +1965,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeOpenPanel(JNIEnv *artEnv, jobject, 
     return artEnv->NewStringUTF(out.c_str());
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePanelClick(JNIEnv *artEnv, jobject, jint x, jint y) {
+Java_dev_audaro_runemobile_JvmLauncher_nativePanelClick(JNIEnv *artEnv, jobject, jint x, jint y) {
     if (!panelReady()) return artEnv->NewStringUTF("");
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midPanelClick) return artEnv->NewStringUTF("");
@@ -1976,7 +1976,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativePanelClick(JNIEnv *artEnv, jobject,
 }
 // SC-4 panel-text input — all best-effort (guard on the mid; a stale jar → no-op). On the rl-bridge thread.
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeIsPanelTextActive(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeIsPanelTextActive(JNIEnv *, jobject) {
     if (!panelReady() || !g_midIsPanelTextActive) return JNI_FALSE;
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls) return JNI_FALSE;
@@ -1985,12 +1985,12 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeIsPanelTextActive(JNIEnv *, jobject
     return v;
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeGetPanelText(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeGetPanelText(JNIEnv *artEnv, jobject) {
     if (!panelReady() || !g_midGetPanelText) return artEnv->NewStringUTF("");
     return mobileUiStr(artEnv, g_midGetPanelText);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePanelText(JNIEnv *artEnv, jobject, jstring jText) {
+Java_dev_audaro_runemobile_JvmLauncher_nativePanelText(JNIEnv *artEnv, jobject, jstring jText) {
     if (!panelReady() || !g_midPanelText) return artEnv->NewStringUTF("");
     return mobileUiStrArg(artEnv, g_midPanelText, jText);
 }
@@ -2008,27 +2008,27 @@ static jstring panelCall(JNIEnv *artEnv, jmethodID m, jint a, jint b, jint c, in
     return artEnv->NewStringUTF(out.c_str());
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePanelKey(JNIEnv *artEnv, jobject, jint vk) {
+Java_dev_audaro_runemobile_JvmLauncher_nativePanelKey(JNIEnv *artEnv, jobject, jint vk) {
     if (!panelReady()) return artEnv->NewStringUTF("");
     return panelCall(artEnv, g_midPanelKey, vk, 0, 0, 1);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePanelLongPress(JNIEnv *artEnv, jobject, jint x, jint y) {
+Java_dev_audaro_runemobile_JvmLauncher_nativePanelLongPress(JNIEnv *artEnv, jobject, jint x, jint y) {
     if (!panelReady()) return artEnv->NewStringUTF("");
     return panelCall(artEnv, g_midPanelLongPress, x, y, 0, 2);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePanelWheel(JNIEnv *artEnv, jobject, jint x, jint y, jint rotation) {
+Java_dev_audaro_runemobile_JvmLauncher_nativePanelWheel(JNIEnv *artEnv, jobject, jint x, jint y, jint rotation) {
     if (!panelReady()) return artEnv->NewStringUTF("");
     return panelCall(artEnv, g_midPanelWheel, x, y, rotation, 3);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePanelMove(JNIEnv *artEnv, jobject, jint x, jint y) {
+Java_dev_audaro_runemobile_JvmLauncher_nativePanelMove(JNIEnv *artEnv, jobject, jint x, jint y) {
     if (!panelReady()) return artEnv->NewStringUTF("");
     return panelCall(artEnv, g_midPanelMove, x, y, 0, 2);
 }
 extern "C" JNIEXPORT jintArray JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePanelPixels(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativePanelPixels(JNIEnv *artEnv, jobject) {
     if (!panelReady()) return nullptr;
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_mobileUiCls || !g_midPanelPixels) return nullptr;
@@ -2061,7 +2061,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativePanelPixels(JNIEnv *artEnv, jobject
 // panel pull; gated on the live bridge. Pull off the rl-bridge thread. Width is read separately via the existing
 // nativeFrameWidth() atomic (the caller guards len % w == 0 against a torn read across a resize).
 extern "C" JNIEXPORT jintArray JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeFramePixels(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeFramePixels(JNIEnv *artEnv, jobject) {
     if (!g_bridgeCls || !g_midPixels) return nullptr;
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs) return nullptr;
@@ -2192,27 +2192,27 @@ static void facadeVoidIntIntBool(jclass cls, jmethodID m, jint a, jint b, jboole
 
 // Quest Helper
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeQuestAvailable(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeQuestAvailable(JNIEnv *, jobject) {
     if (!questReady()) return JNI_FALSE;
     return facadeBool(g_questCls, g_midQuestAvail);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeQuestSetUiOpen(JNIEnv *, jobject, jboolean open) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeQuestSetUiOpen(JNIEnv *, jobject, jboolean open) {
     if (!questReady()) return;
     facadeVoidBool(g_questCls, g_midQuestSetUiOpen, open);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeQuestListJson(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeQuestListJson(JNIEnv *artEnv, jobject) {
     if (!questReady()) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_questCls, g_midQuestList);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeQuestActiveJson(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeQuestActiveJson(JNIEnv *artEnv, jobject) {
     if (!questReady()) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_questCls, g_midQuestActive);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeQuestStart(JNIEnv *artEnv, jobject, jstring jName) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeQuestStart(JNIEnv *artEnv, jobject, jstring jName) {
     if (!questReady()) return;
     std::string name = jstr(artEnv, jName);
     JNIEnv *hs = bridgeEnvAttach();
@@ -2223,7 +2223,7 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeQuestStart(JNIEnv *artEnv, jobject,
     if (hn) hs->DeleteLocalRef(hn);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeQuestStop(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeQuestStop(JNIEnv *, jobject) {
     if (!questReady()) return;
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !g_questCls || !g_midQuestStop) return;
@@ -2233,34 +2233,34 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeQuestStop(JNIEnv *, jobject) {
 
 // World Switcher
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeWorldAvailable(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeWorldAvailable(JNIEnv *, jobject) {
     if (!worldReady()) return JNI_FALSE;
     return facadeBool(g_worldCls, g_midWorldAvail);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeWorldSetUiOpen(JNIEnv *, jobject, jboolean open) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeWorldSetUiOpen(JNIEnv *, jobject, jboolean open) {
     if (!worldReady()) return;
     facadeVoidBool(g_worldCls, g_midWorldSetUiOpen, open);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeWorldListJson(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeWorldListJson(JNIEnv *artEnv, jobject) {
     if (!worldReady()) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_worldCls, g_midWorldList);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeWorldHop(JNIEnv *, jobject, jint worldId) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeWorldHop(JNIEnv *, jobject, jint worldId) {
     if (!worldReady()) return;
     facadeVoidInt(g_worldCls, g_midWorldHop, worldId);
 }
 // SC-5: mark/unmark a world as a favourite (best-effort; no-op if the jar predates setFavourite).
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeWorldSetFavourite(JNIEnv *, jobject, jint worldId, jboolean fav) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeWorldSetFavourite(JNIEnv *, jobject, jint worldId, jboolean fav) {
     if (!worldReady() || !g_midWorldSetFav) return;
     facadeVoidIntBool(g_worldCls, g_midWorldSetFav, worldId, fav);
 }
 // SC-5: quick-hop to the next/previous world (best-effort; no-op if hopDirection is unresolved).
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeWorldHopDirection(JNIEnv *, jobject, jboolean previous) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeWorldHopDirection(JNIEnv *, jobject, jboolean previous) {
     if (!worldReady() || !g_midWorldHopDir) return;
     facadeVoidBool(g_worldCls, g_midWorldHopDir, previous);
 }
@@ -2268,17 +2268,17 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeWorldHopDirection(JNIEnv *, jobject
 // Finding 14 — XP Tracker native reflow (read-only). Same facade-call shape as Quest/World, gated on the panel's
 // own release latch. getXpJson returns {available, skills:[{skill,xpGained,xpHr,...,progress}], overall:{…}}.
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeXpAvailable(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeXpAvailable(JNIEnv *, jobject) {
     if (!g_xpPanel.ready.load(std::memory_order_acquire)) return JNI_FALSE;
     return facadeBool(g_xpPanel.cls, g_xpPanel.avail);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeXpSetUiOpen(JNIEnv *, jobject, jboolean open) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeXpSetUiOpen(JNIEnv *, jobject, jboolean open) {
     if (!g_xpPanel.ready.load(std::memory_order_acquire)) return;
     facadeVoidBool(g_xpPanel.cls, g_xpPanel.setUiOpen, open);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeXpJson(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeXpJson(JNIEnv *artEnv, jobject) {
     if (!g_xpPanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_xpPanel.cls, g_xpPanel.json);
 }
@@ -2286,22 +2286,22 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeXpJson(JNIEnv *artEnv, jobject) {
 // Finding 14 — Loot Tracker native reflow (read-only). getLootJson = {available, sources:[{name,subTitle,type,
 // kills,totalValue,items:[{id,name,qty,ge,ha}]}]}.
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeLootAvailable(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeLootAvailable(JNIEnv *, jobject) {
     if (!g_lootPanel.ready.load(std::memory_order_acquire)) return JNI_FALSE;
     return facadeBool(g_lootPanel.cls, g_lootPanel.avail);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeLootSetUiOpen(JNIEnv *, jobject, jboolean open) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeLootSetUiOpen(JNIEnv *, jobject, jboolean open) {
     if (!g_lootPanel.ready.load(std::memory_order_acquire)) return;
     facadeVoidBool(g_lootPanel.cls, g_lootPanel.setUiOpen, open);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeLootJson(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeLootJson(JNIEnv *artEnv, jobject) {
     if (!g_lootPanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_lootPanel.cls, g_lootPanel.json);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeLootResetAll(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeLootResetAll(JNIEnv *artEnv, jobject) {
     if (!g_lootPanel.ready.load(std::memory_order_acquire) || !g_midLootReset) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_lootPanel.cls, g_midLootReset);
 }
@@ -2309,17 +2309,17 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeLootResetAll(JNIEnv *artEnv, jobjec
 // Finding 14 — Grand Exchange native reflow (read-only). getGeJson = {available, offers:[{slot,state,itemId,
 // name,qty,total,price,spent,progress}], history:[{buy,itemId,qty,price,time}]}.
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeGeAvailable(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeGeAvailable(JNIEnv *, jobject) {
     if (!g_gePanel.ready.load(std::memory_order_acquire)) return JNI_FALSE;
     return facadeBool(g_gePanel.cls, g_gePanel.avail);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeGeSetUiOpen(JNIEnv *, jobject, jboolean open) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeGeSetUiOpen(JNIEnv *, jobject, jboolean open) {
     if (!g_gePanel.ready.load(std::memory_order_acquire)) return;
     facadeVoidBool(g_gePanel.cls, g_gePanel.setUiOpen, open);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeGeJson(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeGeJson(JNIEnv *artEnv, jobject) {
     if (!g_gePanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_gePanel.cls, g_gePanel.json);
 }
@@ -2328,17 +2328,17 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeGeJson(JNIEnv *artEnv, jobject) {
 // state,readyTime,remainingSec}], contract:{active,...}, birdhouses:[{name,state,readyTime,remainingSec}],
 // timers:[{name,active,remainingSec,durationSec,loop}], stopwatches:[{name,active,elapsedSec}]}.
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeTimeTrackingAvailable(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeTimeTrackingAvailable(JNIEnv *, jobject) {
     if (!g_timePanel.ready.load(std::memory_order_acquire)) return JNI_FALSE;
     return facadeBool(g_timePanel.cls, g_timePanel.avail);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeTimeTrackingSetUiOpen(JNIEnv *, jobject, jboolean open) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeTimeTrackingSetUiOpen(JNIEnv *, jobject, jboolean open) {
     if (!g_timePanel.ready.load(std::memory_order_acquire)) return;
     facadeVoidBool(g_timePanel.cls, g_timePanel.setUiOpen, open);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeTimeTrackingJson(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeTimeTrackingJson(JNIEnv *artEnv, jobject) {
     if (!g_timePanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_timePanel.cls, g_timePanel.json);
 }
@@ -2346,93 +2346,93 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeTimeTrackingJson(JNIEnv *artEnv, jo
 // Config profiles. available + list (getProfilesJson) + switch(id) -> ack JSON (the switch runs async on the
 // bridge's own daemon thread; the native side re-reads the list to pick up the new active flag).
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeProfilesAvailable(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeProfilesAvailable(JNIEnv *, jobject) {
     if (!profileReady()) return JNI_FALSE;
     return facadeBool(g_profileCls, g_midProfileAvail);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeProfilesJson(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeProfilesJson(JNIEnv *artEnv, jobject) {
     if (!profileReady()) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_profileCls, g_midProfilesJson);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSwitchProfile(JNIEnv *artEnv, jobject, jlong id) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSwitchProfile(JNIEnv *artEnv, jobject, jlong id) {
     if (!profileReady()) return artEnv->NewStringUTF("");
     return facadeStrLong(artEnv, g_profileCls, g_midProfileSwitch, id);
 }
 
 // Finding 15 — overlay edit. avail/setUiOpen/list like the data panels; snap(name,position) + reset(name) act.
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeOverlayAvailable(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeOverlayAvailable(JNIEnv *, jobject) {
     if (!overlayReady()) return JNI_FALSE;
     return facadeBool(g_overlayCls, g_midOverlayAvail);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeOverlaySetUiOpen(JNIEnv *, jobject, jboolean open) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeOverlaySetUiOpen(JNIEnv *, jobject, jboolean open) {
     if (!overlayReady()) return;
     facadeVoidBool(g_overlayCls, g_midOverlaySetUiOpen, open);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeOverlaysJson(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeOverlaysJson(JNIEnv *artEnv, jobject) {
     if (!overlayReady()) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_overlayCls, g_midOverlaysJson);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeOverlaySnap(JNIEnv *artEnv, jobject, jstring jName, jstring jPos) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeOverlaySnap(JNIEnv *artEnv, jobject, jstring jName, jstring jPos) {
     if (!overlayReady()) return artEnv->NewStringUTF("");
     return facadeStrArgs(artEnv, g_overlayCls, g_midOverlaySnap, jName, jPos, true);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeOverlayReset(JNIEnv *artEnv, jobject, jstring jName) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeOverlayReset(JNIEnv *artEnv, jobject, jstring jName) {
     if (!overlayReady()) return artEnv->NewStringUTF("");
     return facadeStrArgs(artEnv, g_overlayCls, g_midOverlayReset, jName, nullptr, false);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeOverlaySetLocation(JNIEnv *artEnv, jobject, jstring jName, jint x, jint y) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeOverlaySetLocation(JNIEnv *artEnv, jobject, jstring jName, jint x, jint y) {
     if (!overlayReady() || !g_midOverlaySetLoc) return artEnv->NewStringUTF("");
     return facadeStrLocArgs(artEnv, g_overlayCls, g_midOverlaySetLoc, jName, x, y);
 }
 
 // RuneLite-account login (config sync): avail / startLogin / logout / session-json.
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeAccountAvailable(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeAccountAvailable(JNIEnv *, jobject) {
     if (!accountReady()) return JNI_FALSE;
     return facadeBool(g_accountCls, g_midAccountAvail);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeAccountLogin(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeAccountLogin(JNIEnv *, jobject) {
     if (!accountReady()) return;
     facadeVoid0(g_accountCls, g_midAccountLogin);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeAccountLogout(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeAccountLogout(JNIEnv *, jobject) {
     if (!accountReady()) return;
     facadeVoid0(g_accountCls, g_midAccountLogout);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeAccountSession(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeAccountSession(JNIEnv *artEnv, jobject) {
     if (!accountReady()) return artEnv->NewStringUTF("{\"available\":false}");
     return facadeStr(artEnv, g_accountCls, g_midAccountSession);
 }
 
 // Finding 22 — infobox menu. avail/setUiOpen/list like the others; invoke(index, option) fires the action.
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeInfoBoxAvailable(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeInfoBoxAvailable(JNIEnv *, jobject) {
     if (!infoboxReady()) return JNI_FALSE;
     return facadeBool(g_infoboxCls, g_midInfoBoxAvail);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeInfoBoxSetUiOpen(JNIEnv *, jobject, jboolean open) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeInfoBoxSetUiOpen(JNIEnv *, jobject, jboolean open) {
     if (!infoboxReady()) return;
     facadeVoidBool(g_infoboxCls, g_midInfoBoxSetUiOpen, open);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeInfoBoxesJson(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeInfoBoxesJson(JNIEnv *artEnv, jobject) {
     if (!infoboxReady()) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_infoboxCls, g_midInfoBoxesJson);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeInfoBoxInvoke(JNIEnv *artEnv, jobject, jint index, jstring jOption) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeInfoBoxInvoke(JNIEnv *artEnv, jobject, jint index, jstring jOption) {
     if (!infoboxReady() || !g_midInfoBoxInvoke) return artEnv->NewStringUTF("");
     std::string opt = jstr(artEnv, jOption);
     JNIEnv *hs = bridgeEnvAttach();
@@ -2448,19 +2448,19 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeInfoBoxInvoke(JNIEnv *artEnv, jobje
 // Native Notes panel — a single editable note string on MobileUiBridge (config group "notes"). available()
 // gates the tile; get() seeds the editor; set(text) persists on the client-thread config lane (returns an ack).
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeNotesAvailable(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeNotesAvailable(JNIEnv *, jobject) {
     if (!mobileUiReady() || !g_midNotesAvailable)
         return JNI_FALSE;
     return facadeBool(g_mobileUiCls, g_midNotesAvailable);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeNotesGet(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeNotesGet(JNIEnv *artEnv, jobject) {
     if (!mobileUiReady() || !g_midNotesGet)
         return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_mobileUiCls, g_midNotesGet);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeNotesSet(JNIEnv *artEnv, jobject, jstring jText) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeNotesSet(JNIEnv *artEnv, jobject, jstring jText) {
     if (!mobileUiReady() || !g_midNotesSet)
         return artEnv->NewStringUTF("");
     return facadeStrArgs(artEnv, g_mobileUiCls, g_midNotesSet, jText, nullptr, false);
@@ -2469,14 +2469,14 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeNotesSet(JNIEnv *artEnv, jobject, j
 // A6 chrome read surface: MobileChromeBridge.getSnapshot — the per-frame tab/panel/minimap/orb/chat/viewport
 // canvas bounds the native edge-rails cover-and-proxy reads. Escaped JSON; populated under -Drunelite.mobilechrome.
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeChromeSnapshot(JNIEnv *artEnv, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeChromeSnapshot(JNIEnv *artEnv, jobject) {
     if (!chromeReady()) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_chromeCls, g_midChromeSnap);
 }
 // A6 overlay read-surface: the render-thread-published chrome snapshot (UI reads lock-free, NO HotSpot attach —
 // safe to call from the Choreographer tick each frame). Distinct from nativeChromeSnapshot (rl-bridge, one-shot).
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeChromeSnapshotPub(JNIEnv *env, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeChromeSnapshotPub(JNIEnv *env, jobject) {
     std::lock_guard<std::mutex> lk(g_chromeLock);
     return env->NewStringUTF(g_chromeSnapshotPub.c_str());
 }
@@ -2485,107 +2485,107 @@ Java_dev_audaro_helloshell_JvmLauncher_nativeChromeSnapshotPub(JNIEnv *env, jobj
 // relocate the engine side panel for the native 2-col grid. Run on the rl-bridge thread (NOT the UI thread):
 // each gates on the facade's acquire latch, then writes the desired state (re-applied by the engine tick).
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSetStonesHidden(JNIEnv *, jobject, jboolean hidden) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetStonesHidden(JNIEnv *, jobject, jboolean hidden) {
     if (!hudReady()) return;
     facadeVoidBool(g_hudCls, g_midSetStonesHidden, hidden);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeOpenTab(JNIEnv *, jobject, jint tabIndex) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeOpenTab(JNIEnv *, jobject, jint tabIndex) {
     if (!hudReady()) return;
     facadeVoidInt(g_hudCls, g_midOpenTab, tabIndex);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeOpenWorldMap(JNIEnv *, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeOpenWorldMap(JNIEnv *, jobject) {
     if (!hudReady()) return;
     facadeVoid0(g_hudCls, g_midOpenWorldMap);   // FIX-5: open the map via ORB_WORLDMAP op-replay (no-op on older jar)
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeRelocateSidePanel(JNIEnv *, jobject, jint x, jint y) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeRelocateSidePanel(JNIEnv *, jobject, jint x, jint y) {
     if (!hudReady()) return;
     facadeVoidIntInt(g_hudCls, g_midRelocateSidePanel, x, y);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeRelocateChat(JNIEnv *, jobject, jint x, jint y, jboolean transparent) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeRelocateChat(JNIEnv *, jobject, jint x, jint y, jboolean transparent) {
     if (!hudReady()) return;
     facadeVoidIntIntBool(g_hudCls, g_midRelocateChat, x, y, transparent);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeRelocateMinimap(JNIEnv *, jobject, jint x, jint y) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeRelocateMinimap(JNIEnv *, jobject, jint x, jint y) {
     if (!hudReady()) return;
     facadeVoidIntInt(g_hudCls, g_midRelocateMinimap, x, y);
 }
 // Phase-3: push the safe-area insets (CANVAS px) so the shared OverlayRenderer keeps plugin-overlay snap
 // corners clear of the display cutout + the relocated chat (getOverlayChatAvoid is consumed Java-side).
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSetOverlayInsets(JNIEnv *, jobject, jint l, jint t, jint r, jint b) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetOverlayInsets(JNIEnv *, jobject, jint l, jint t, jint r, jint b) {
     if (!hudReady()) return;
     facadeVoid4Int(g_hudCls, g_midSetOverlayInsets, l, t, r, b);
 }
 // Phase-4 chat pill: collapse = the shared shove-off-canvas (widget stays alive, reopen instant); switch = the
 // engine tab's op-script replay (works while the button is off-canvas, unlike a proxy click).
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSetChatCollapsed(JNIEnv *, jobject, jboolean collapsed) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetChatCollapsed(JNIEnv *, jobject, jboolean collapsed) {
     if (!hudReady()) return;
     facadeVoidBool(g_hudCls, g_midSetChatCollapsed, collapsed);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSwitchChatTab(JNIEnv *, jobject, jint index) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSwitchChatTab(JNIEnv *, jobject, jint index) {
     if (!hudReady()) return;
     facadeVoidInt(g_hudCls, g_midSwitchChatTab, index);
 }
 // Phase-5 world map: pan by accumulated finger deltas (canvas px; the shared tick converts to tiles via the
 // live zoom) + the render-thread-published snapshot (UI reads lock-free, no attach).
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativePanWorldMap(JNIEnv *, jobject, jint dx, jint dy) {
+Java_dev_audaro_runemobile_JvmLauncher_nativePanWorldMap(JNIEnv *, jobject, jint dx, jint dy) {
     if (!hudReady()) return;
     facadeVoidIntInt(g_hudCls, g_midPanWorldMap, dx, dy);
 }
 // Phase-5 world map: swipe-scroll the KEY (legend) list / MAPLIST dropdown by an accumulated finger delta
 // (canvas px; the shared tick drives the engine UPDATE_SCROLLBAR). No-op on a jar without scrollMapPanel.
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeScrollMapPanel(JNIEnv *, jobject, jint dy) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeScrollMapPanel(JNIEnv *, jobject, jint dy) {
     if (!hudReady()) return;
     facadeVoidInt(g_hudCls, g_midScrollMapPanel, dy);
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeMapSnapshotPub(JNIEnv *env, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeMapSnapshotPub(JNIEnv *env, jobject) {
     std::lock_guard<std::mutex> lk(g_mapLock);
     return env->NewStringUTF(g_mapSnapshotPub.c_str());
 }
 // A3 chat-tab veneer: the render-thread-published HudVeneerBridge.getChatSnapshot (UI reads lock-free, no attach)
 // + the two row-size setters (rl-bridge thread) that push the engine message area below the taller native row.
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeChatSnapshotPub(JNIEnv *env, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeChatSnapshotPub(JNIEnv *env, jobject) {
     std::lock_guard<std::mutex> lk(g_chatLock);
     return env->NewStringUTF(g_chatSnapshotPub.c_str());
 }
 // Minimap-orb veneer: the render-thread-published HudVeneerBridge.getOrbSnapshot (UI reads lock-free, no attach).
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeOrbSnapshotPub(JNIEnv *env, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeOrbSnapshotPub(JNIEnv *env, jobject) {
     std::lock_guard<std::mutex> lk(g_orbLock);
     return env->NewStringUTF(g_orbSnapshotPub.c_str());
 }
 // UI-4: the render-thread-published HudVeneerBridge.getDialogueJson (UI reads lock-free, no attach) — the native
 // opaque NPC-dialogue parchment that covers the engine's now-transparent dialogue.
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeDialogueJson(JNIEnv *env, jobject) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeDialogueJson(JNIEnv *env, jobject) {
     std::lock_guard<std::mutex> lk(g_dlgLock);
     return env->NewStringUTF(g_dialogueJsonPub.c_str());
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSetChatTabRowHeight(JNIEnv *, jobject, jint canvasPx) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetChatTabRowHeight(JNIEnv *, jobject, jint canvasPx) {
     if (!hudReady()) return;
     facadeVoidInt(g_hudCls, g_midSetChatRowH, canvasPx);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeSetChatAreaWidth(JNIEnv *, jobject, jint canvasPx) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetChatAreaWidth(JNIEnv *, jobject, jint canvasPx) {
     if (!hudReady()) return;
     facadeVoidInt(g_hudCls, g_midSetChatAreaW, canvasPx);
 }
 // AP-0 chat scroll-by-drag: accumulate a finger-drag delta into the chatbox's own scroll layer (applied on
 // the client thread in HudVeneerBridge.tick). Positive = toward newer/bottom. rl-bridge thread.
 extern "C" JNIEXPORT void JNICALL
-Java_dev_audaro_helloshell_JvmLauncher_nativeScrollChat(JNIEnv *, jobject, jint deltaCanvasPx) {
+Java_dev_audaro_runemobile_JvmLauncher_nativeScrollChat(JNIEnv *, jobject, jint deltaCanvasPx) {
     if (!hudReady()) return;
     facadeVoidInt(g_hudCls, g_midScrollChat, deltaCanvasPx);
 }

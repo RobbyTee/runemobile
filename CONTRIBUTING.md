@@ -60,7 +60,7 @@ the staged files of each kind (if the tool is installed).
 - **Native (C/C++/Obj-C):** `tools/lint/clang-format.sh` enforces `.clang-format` **incrementally** — only
   lines you change must conform (via `git clang-format`), so the existing hand-aligned tree is grandfathered
   and migrates as it is next edited. Apply fixes to your changes with `git clang-format`. The vendored JDK
-  headers under `ios/app/HelloShell/jni/` are excluded. This is a commit-time check (the release gate runs the
+  headers under `ios/app/RuneMobile/jni/` are excluded. This is a commit-time check (the release gate runs the
   whole-tree linters — shell/Kotlin — that we keep fully clean; native is enforced at the diff).
 - **Java:** upstream Checkstyle (`config/checkstyle/`) + PMD (`runelite-client/pmd-ruleset.xml`).
 

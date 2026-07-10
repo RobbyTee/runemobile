@@ -1,4 +1,4 @@
-name: HelloShell
+name: RuneMobile
 options:
   bundleIdPrefix: dev.audaro
   deploymentTarget:
@@ -39,11 +39,11 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: NO
 
 targets:
-  HelloShell:
+  RuneMobile:
     type: application
     platform: iOS
     sources:
-      - path: HelloShell
+      - path: RuneMobile
       # The verified Amethyst jre21 (gitignored, ~24MB) — copied verbatim into
       # the .app as `jre/` (folder reference; Xcode must NOT treat it as linked
       # frameworks). Re-signed by scripts/resign-jre.sh after this copy.
@@ -104,7 +104,7 @@ targets:
           # off-device log retrieval). INFOPLIST_KEY_* does NOT merge into a manual INFOPLIST_FILE in this
           # toolchain (verified: the keys never reached the built plist), so we swap the WHOLE plist per-config.
           # Info-Debug.plist must stay in sync with Info.plist except for the file-sharing block.
-          INFOPLIST_FILE: HelloShell/Info-Debug.plist
+          INFOPLIST_FILE: RuneMobile/Info-Debug.plist
         release:
           # No DEBUG -> the file sinks/console/rl-capture compile out. Release uses the base INFOPLIST_FILE
           # (Info.plist), which OMITS the file-sharing keys -> Documents is not USB/Finder-exposed (QA-P1-12).
@@ -112,10 +112,10 @@ targets:
             - "$(inherited)"
             - "GLES_SILENCE_DEPRECATION=1"
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.audaro.helloshell
+        PRODUCT_BUNDLE_IDENTIFIER: dev.audaro.runemobile
         # Default/Release plist: the hardened one (no file-sharing). Debug overrides to Info-Debug.plist above.
-        INFOPLIST_FILE: HelloShell/Info.plist
-        CODE_SIGN_ENTITLEMENTS: HelloShell/HelloShell.entitlements
+        INFOPLIST_FILE: RuneMobile/Info.plist
+        CODE_SIGN_ENTITLEMENTS: RuneMobile/RuneMobile.entitlements
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}   # set in ios/dev-tools/signing.env (gitignored) or your env
         MARKETING_VERSION: "0.1"
@@ -125,13 +125,13 @@ targets:
           - "$(inherited)"
           - "@executable_path/Frameworks"
         # GPU Route C bridge headers (RouteCBridge.h / routec_gl_jni.h) live under dev-tools/gpu-routec;
-        # routec_gl_jni.m does `#include <jni.h>`, resolved from the embedded JNI headers in HelloShell/jni.
+        # routec_gl_jni.m does `#include <jni.h>`, resolved from the embedded JNI headers in RuneMobile/jni.
         HEADER_SEARCH_PATHS:
           - "$(inherited)"
           - "$(SRCROOT)/../dev-tools/gpu-routec/app"
           - "$(SRCROOT)/../dev-tools/gpu-routec/jni"
           - "$(SRCROOT)/../dev-tools/gpu-zone/jni"
-          - "$(SRCROOT)/HelloShell/jni"
+          - "$(SRCROOT)/RuneMobile/jni"
           # Khronos EGL/GLES3 headers for the MetalANGLE backend (gitignored; regenerate via gpu-angle/README).
           - "$(SRCROOT)/../dev-tools/gpu-angle/include"
         # ANGLE frameworks (libEGL/libGLESv2) live here for the linker + embed step.
