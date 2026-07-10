@@ -29,9 +29,13 @@ jobs:
       JAVA_HOME: /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
       BUILD_NUMBER: ${{ github.run_number }}
       GIT_SHA: ${{ github.sha }}
+      # Never publish a debug/mismatched-signed APK — the build hard-fails unless the cert is the 45:E3 release key.
+      REQUIRE_RELEASE_KEY: "1"
     steps:
+      # Pinned to a full commit SHA (not the mutable @v4 tag): this runs on a Mac holding signing material, so a
+      # retagged third-party action must not be able to run new code here. 11bd719 = actions/checkout v4.2.2.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Contract pre-flight (fast, non-bypassable)
         run: ./android/dev-tools/ci/release-gate.sh --contract-only

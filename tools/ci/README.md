@@ -30,13 +30,24 @@ tools/ci/build-release-artifacts.sh                               # full clean b
 - **Versioning.** Rolling builds get `versionName = 0.1.0-master.<run>+<sha>` and `versionCode = 1_000_000 + <run>`
   (kept above the semver-derived range so it stays monotonic). A plain local/tagged build passes neither override
   and gets the clean semver code/name. Gradle reads `-PversionCodeOverride` / `-PversionNameSuffix`.
-- **Source can lag the binaries.** The public repo is a periodically force-pushed *scrubbed snapshot*; this
-  pipeline does **not** auto-sync source (that stays a manual, gated sweep). Each release body records the exact
-  origin commit the binaries were built from.
+- **Signing is enforced, not assumed.** The build hard-fails (`REQUIRE_RELEASE_KEY=1`, set by the workflow)
+  unless the APK carries the documented **45:E3** release cert, so a missing/misconfigured keystore can never
+  silently ship a debug-signed build (which would also break user `apksigner verify` and can't upgrade a
+  release-signed install).
+- **Idempotent publish, stable URLs.** The rolling release is upserted in place — assets uploaded under stable
+  names (`RuneMobile-latest-master.{apk,ipa}`) with `--clobber`, notes refreshed — never delete-then-recreate.
+  If any step fails, the previous release and its assets stay intact (no window with no release).
+- **Source can lag the binaries — no over-claim.** The public repo is a periodically force-pushed *scrubbed
+  snapshot*; this pipeline does **not** auto-sync source (that stays a manual, gated sweep). The origin commit
+  is recorded in the notes only as an internal maintainer **build id** — a public reader can't view it and the
+  pre-release does not ship matching source, so the notes don't imply public auditability.
 - **Inherited workflows are neutered.** `CI.yml` (upstream's full build) and `android-release-gate.yml` (hosted
   ubuntu) are set to `workflow_dispatch`-only so enabling Actions doesn't fire them on every push.
 - **Runner safety.** The self-hosted runner is attached to the **private origin only** — never a public repo,
-  where an untrusted PR could execute code on the Mac.
+  where an untrusted PR could execute code on the Mac. Third-party actions are **pinned to full commit SHAs**
+  (not mutable tags) since the runner holds signing material. For extra isolation you can run the runner under
+  a dedicated, minimally-privileged macOS account (duplicate `~/.runemobile-ci`, `~/.keystores`, and the
+  `build.keychain` there) — optional, since only you can push to origin.
 
 ## One-time setup (the live steps)
 

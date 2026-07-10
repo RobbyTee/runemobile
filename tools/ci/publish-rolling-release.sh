@@ -41,39 +41,46 @@ export GH_TOKEN="${PUBLISH_TOKEN:-${GH_TOKEN:-}}"
 [ -n "$GH_TOKEN" ] || die "no PUBLISH_TOKEN / GH_TOKEN — need a token with contents:write on $PUBLISH_REPO"
 command -v gh >/dev/null || die "gh CLI not found"
 
-# Collect the assets that exist (Android-only runs won't have an .ipa).
+# Assets are uploaded under STABLE names (RuneMobile-latest-master.{apk,ipa}) so the "latest" release has stable
+# download URLs and a --clobber upload cleanly replaces the previous build in place (versioned names would
+# accumulate). The precise version lives inside the artifacts and in the notes below.
+STAGE="$DIST/publish-stage"; rm -rf "$STAGE"; mkdir -p "$STAGE"
 ASSETS=()
-for f in "RuneMobile-${VERSION}.apk" "RuneMobile-${VERSION}.ipa" "runelite-jit.js"; do
-	[ -f "$DIST/$f" ] && ASSETS+=("$DIST/$f")
-done
+[ -f "$DIST/RuneMobile-${VERSION}.apk" ] && { cp "$DIST/RuneMobile-${VERSION}.apk" "$STAGE/RuneMobile-latest-master.apk"; ASSETS+=("$STAGE/RuneMobile-latest-master.apk"); }
+[ -f "$DIST/RuneMobile-${VERSION}.ipa" ] && { cp "$DIST/RuneMobile-${VERSION}.ipa" "$STAGE/RuneMobile-latest-master.ipa"; ASSETS+=("$STAGE/RuneMobile-latest-master.ipa"); }
+[ -f "$DIST/runelite-jit.js" ] && ASSETS+=("$DIST/runelite-jit.js")
 [ "${#ASSETS[@]}" -gt 0 ] || die "no assets found in $DIST for version $VERSION"
 
 FP_LINE=""
-[ -n "${APK_FINGERPRINT:-}" ] && FP_LINE=$'\nAPK signer SHA-256: `'"${APK_FINGERPRINT}"'`'
+[ -n "${APK_FINGERPRINT:-}" ] && FP_LINE=$'\nAPK signer SHA-256: `'"${APK_FINGERPRINT}"'` (verify with `apksigner verify --print-certs`)'
 
-NOTES="Rolling build of RuneMobile from the latest \`master\`.
+# Note on traceability: GIT_SHA is the PRIVATE origin commit and is recorded only as a maintainer build id —
+# a public reader cannot view it, and this pre-release does NOT ship matching source (the public source is the
+# repo's own scrubbed snapshot, refreshed on a separate manual sweep). So the notes frame it as a build id, not
+# an auditable public commit.
+NOTES="Rolling build of RuneMobile, rebuilt on every merge to master.
 
 - Version: \`${VERSION}\`
-- Built from origin commit: \`${GIT_SHA}\`
+- Build id: \`${GIT_SHA}\` (internal maintainer reference)
 - Built: ${BUILD_DATE}${FP_LINE}
 
-This is an automated pre-release that is **replaced on every merge to master** — the assets always reflect the
-newest build. For a stable, curated build use a tagged \`v*\` release instead.
+This automated pre-release is **replaced on every merge** — the \`RuneMobile-latest-master.*\` assets always
+reflect the newest build. For a stable, curated build use a tagged \`v*\` release instead.
 
 Install instructions are in the [README](../../blob/master/README.md). RuneMobile is an unofficial, self-built
 client and is not on the approved-client list for live Old School RuneScape — use a throwaway account."
 
-# Rolling release: delete the old one (and its tag, so it re-points at current master) then recreate.
-echo ">> publishing $RELEASE_TAG to $PUBLISH_REPO (${#ASSETS[@]} assets, version $VERSION)"
-gh release delete "$RELEASE_TAG" --repo "$PUBLISH_REPO" --yes --cleanup-tag 2>/dev/null || true
-
 PRE_FLAG=(); [ "$PRERELEASE" = 1 ] && PRE_FLAG=(--prerelease)
-gh release create "$RELEASE_TAG" \
-	--repo "$PUBLISH_REPO" \
-	--target master \
-	"${PRE_FLAG[@]}" \
-	--title "$RELEASE_TITLE" \
-	--notes "$NOTES" \
-	"${ASSETS[@]}"
+
+# Idempotent upsert (no delete-then-recreate gap): create the release once if it's missing, then replace the
+# assets in place and refresh the notes. If any step fails, the previous release + its assets remain intact.
+echo ">> upserting $RELEASE_TAG on $PUBLISH_REPO (${#ASSETS[@]} assets, version $VERSION)"
+if ! gh release view "$RELEASE_TAG" --repo "$PUBLISH_REPO" >/dev/null 2>&1; then
+	gh release create "$RELEASE_TAG" --repo "$PUBLISH_REPO" --target master "${PRE_FLAG[@]}" \
+		--title "$RELEASE_TITLE" --notes "$NOTES"
+fi
+gh release upload "$RELEASE_TAG" --repo "$PUBLISH_REPO" --clobber "${ASSETS[@]}"
+gh release edit "$RELEASE_TAG" --repo "$PUBLISH_REPO" "${PRE_FLAG[@]}" --title "$RELEASE_TITLE" --notes "$NOTES"
+rm -rf "$STAGE"
 
 echo ">> published: https://github.com/$PUBLISH_REPO/releases/tag/$RELEASE_TAG"

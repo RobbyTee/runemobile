@@ -178,6 +178,19 @@ if wants android; then
 		done
 	fi
 	[ -n "$APKSIGNER" ] && APK_FP="$("$APKSIGNER" verify --print-certs "$DIST/RuneMobile-${VERSION}.apk" 2>/dev/null | sed -nE 's/.*SHA-256 digest: ([0-9a-f]+).*/\1/p' | head -1)"
+
+	# A missing keystore.properties makes gradle silently fall back to the debug key. That is fine for a local
+	# keyless build, but a PUBLISHED build MUST carry the documented release cert (README apksigner fingerprint) —
+	# a debug-signed APK breaks user `apksigner verify` trust AND can't upgrade a release-signed install. So when
+	# REQUIRE_RELEASE_KEY=1 (the CI/publish path sets it), refuse to proceed unless the cert matches. Same
+	# constant as android/dev-tools/ci/release-gate.sh Stage 2b.
+	EXPECTED_RELEASE_FP="45e305844d53a6265dc86eb399be997ab3fa2776f90f18b16fd4ec90f43d3c9e"
+	if [ "${REQUIRE_RELEASE_KEY:-0}" = 1 ]; then
+		[ -n "$APKSIGNER" ] || die "REQUIRE_RELEASE_KEY=1 but apksigner not found — cannot verify the signing cert"
+		[ "$APK_FP" = "$EXPECTED_RELEASE_FP" ] || die "APK is NOT signed with the release key (got '${APK_FP:-none}', expected 45:E3…). \
+Refusing to build a publishable artifact with the wrong/debug key — check $CI_CONFIG_DIR/keystore.properties."
+		log "signing verified: release cert 45:E3… ✓"
+	fi
 fi
 
 # ── Manifest for the publish step ─────────────────────────────────────────────────────────────────────
