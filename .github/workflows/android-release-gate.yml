@@ -25,7 +25,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      # Actions pinned to full commit SHAs (not mutable tags) so a retagged action can't run new code here.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Cross-port contract gate
         run: ./android/dev-tools/ci/release-gate.sh --contract-only
 
@@ -38,14 +39,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: 21
       - name: Set up Android SDK + NDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
       - name: Install NDK + cmake (native bridge build)
         run: sdkmanager "ndk;26.1.10909125" "cmake;3.22.1"
       - name: Release gate (assembleRelease + lintRelease + contract)
@@ -54,7 +55,7 @@ jobs:
       # Test Lab pool + gcloud auth, then add `--with-device-smoke` to drive android/dev-tools/firebase/fb-gate.sh.
       - name: Upload release APK
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: app-release
           path: android/app/build/outputs/apk/release/app-release.apk

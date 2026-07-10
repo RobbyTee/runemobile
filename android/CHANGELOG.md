@@ -20,5 +20,5 @@ OAuth + RuneLite-account sync, native HUD/chat/tab-grid veneers, plugin panel.
 - Release signing: a dedicated key via `keystore.properties` when present, else
   the debug key (see `keystore.properties.example`).
 
-[Unreleased]: https://github.com/<OWNER>/<REPO>/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/<OWNER>/<REPO>/releases/tag/v0.1.0
+[Unreleased]: https://github.com/audaro/runemobile/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/audaro/runemobile/releases/tag/v0.1.0

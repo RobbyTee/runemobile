@@ -22,6 +22,9 @@ concurrency:
 
 jobs:
   build-and-publish:
+    # Runs ONLY in the private origin repo (where the trusted runner is registered). In the public mirror or
+    # any fork this job is inert, so no workflow event can ever lure code onto the runner Mac.
+    if: github.repository == 'audaro/Rune-Mobile'
     runs-on: [self-hosted, macOS]
     permissions:
       contents: read

@@ -72,6 +72,6 @@ kinds — keep them distinguishable:
 ## Why no deeper restructure (yet)
 
 Rationale and the rejected alternatives (shared module, umbrella `includeBuild`, hoisting the desktop harness,
-unifying `fake-xawt`) are recorded in [`AUDIT-BRIEF-repo-structure-dual-port.md`](AUDIT-BRIEF-repo-structure-dual-port.md).
+unifying `fake-xawt`) were weighed in a June 2026 repo-structure review and rejected as not worth the churn.
 The cheap, drift-killing move was this doc plus the staging script; revisit a module only if shared Java grows
 its own independent build needs.
