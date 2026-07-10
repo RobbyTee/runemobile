@@ -96,7 +96,9 @@ if wants android; then
 	GRADLE_ARGS=()
 	[ -n "$VERSION_CODE" ] && GRADLE_ARGS+=("-PversionCodeOverride=$VERSION_CODE")
 	[ -n "$VERSION_NAME_SUFFIX" ] && GRADLE_ARGS+=("-PversionNameSuffix=$VERSION_NAME_SUFFIX")
-	( cd android && "${GRADLEW[@]}" :app:assembleRelease "${GRADLE_ARGS[@]}" ) || die "assembleRelease failed"
+	# ${arr[@]+"${arr[@]}"} expands to nothing when the array is empty — a plain "${arr[@]}" trips `set -u`
+	# on bash 3.2 (macOS's /bin/bash) for an empty array, which is exactly the no-BUILD_NUMBER (semver) path.
+	( cd android && "${GRADLEW[@]}" :app:assembleRelease ${GRADLE_ARGS[@]+"${GRADLE_ARGS[@]}"} ) || die "assembleRelease failed"
 	APK="android/app/build/outputs/apk/release/app-release.apk"
 	[ -f "$APK" ] || die "no app-release.apk emitted"
 	cp "$APK" "$DIST/RuneMobile-${VERSION}.apk"

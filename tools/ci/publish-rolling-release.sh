@@ -80,7 +80,7 @@ fi
 
 # 1) Create as a DRAFT (invisible) and upload ALL assets to it.
 echo ">> creating draft $TAG on $PUBLISH_REPO and uploading ${#ASSETS[@]} assets"
-gh release create "$TAG" --repo "$PUBLISH_REPO" --target master --draft "${PRE_FLAG[@]}" \
+gh release create "$TAG" --repo "$PUBLISH_REPO" --target master --draft ${PRE_FLAG[@]+"${PRE_FLAG[@]}"} \
 	--title "RuneMobile ${VERSION}" --notes "$NOTES"
 gh release upload "$TAG" --repo "$PUBLISH_REPO" "${ASSETS[@]}"
 
