@@ -194,12 +194,14 @@ Refusing to build a publishable artifact with the wrong/debug key — check $CI_
 fi
 
 # ── Manifest for the publish step ─────────────────────────────────────────────────────────────────────
+# Written with printf %q so it is safe to `source` even if a value contains spaces or shell metacharacters
+# (e.g. a DIST path with a space) — a bare KEY=value here would break parsing or allow injection when sourced.
 {
-	echo "VERSION=$VERSION"
-	echo "BUILD_NUMBER=$BUILD_NUMBER"
-	echo "GIT_SHA=$GIT_SHA"
-	echo "APK_FINGERPRINT=$APK_FP"
-	echo "DIST=$DIST"
+	printf 'VERSION=%q\n'        "$VERSION"
+	printf 'BUILD_NUMBER=%q\n'   "$BUILD_NUMBER"
+	printf 'GIT_SHA=%q\n'        "$GIT_SHA"
+	printf 'APK_FINGERPRINT=%q\n' "$APK_FP"
+	printf 'DIST=%q\n'           "$DIST"
 } > "$DIST/manifest.env"
 
 log "DONE — artifacts in $DIST:"

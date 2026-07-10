@@ -34,9 +34,11 @@ tools/ci/build-release-artifacts.sh                               # full clean b
   unless the APK carries the documented **45:E3** release cert, so a missing/misconfigured keystore can never
   silently ship a debug-signed build (which would also break user `apksigner verify` and can't upgrade a
   release-signed install).
-- **Idempotent publish, stable URLs.** The rolling release is upserted in place — assets uploaded under stable
-  names (`RuneMobile-latest-master.{apk,ipa}`) with `--clobber`, notes refreshed — never delete-then-recreate.
-  If any step fails, the previous release and its assets stay intact (no window with no release).
+- **Atomic publish.** Each merge is published as its OWN immutable prerelease, tag `master-<run>`: created as a
+  DRAFT, all assets uploaded to the draft, then flipped to published in a single `gh release edit --draft=false`.
+  A failed/cancelled publish can only leave an invisible, incomplete draft (reaped by retention) — users never
+  see a half-uploaded or mixed-version release. The newest prerelease on the page is "latest master"; older
+  rolling builds are pruned to the last 5 (`RETAIN`). Tagged `v*` semver releases are never touched.
 - **Source can lag the binaries — no over-claim.** The public repo is a periodically force-pushed *scrubbed
   snapshot*; this pipeline does **not** auto-sync source (that stays a manual, gated sweep). The origin commit
   is recorded in the notes only as an internal maintainer **build id** — a public reader can't view it and the
