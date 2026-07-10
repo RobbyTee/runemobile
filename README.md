@@ -175,7 +175,10 @@ apksigner verify --print-certs RuneMobile-<version>.apk
 ```
 
 A build that does not show this fingerprint is **not** a genuine release — do not
-install it.
+install it. This check is only as trustworthy as where you got the fingerprint: read
+the expected value from **this repository's own Releases page**, not from a mirror,
+fork, or reposted link, so a tampered copy can't hand you a matching APK and
+fingerprint together.
 
 **Install via adb (alternative):**
 
@@ -286,7 +289,10 @@ installed.
 - HelloShell reaches the game after you tap **Start JVM**.
 
 If you see **no `[rl-jit]` lines**, the script was not assigned — redo the assignment
-step. See [Troubleshooting](#troubleshooting) for more.
+step. If StikDebug **won't list or select the script at all**, or the attach aborts
+before any `[rl-jit]` line, the file is corrupted or malformed (a partial AirDrop /
+edited copy): delete it from `StikDebug/scripts/` and re-import a fresh
+`runelite-jit.js` from the release. See [Troubleshooting](#troubleshooting) for more.
 
 ---
 
@@ -328,7 +334,7 @@ recovery) are in [`RELEASE.md`](RELEASE.md).
 | Symptom | Cause / fix |
 |---|---|
 | App won't launch / just waits | JIT not enabled. Turn on LocalDevVPN, attach StikDebug, then tap **Start JVM**. |
-| Attaches but crashes, or no `[rl-jit]` log lines | The script isn't assigned. Re-import `runelite-jit.js` and assign it to HelloShell. |
+| Attaches but crashes, no `[rl-jit]` log lines, or StikDebug won't list/select the script | Script not assigned, or the file is corrupted/malformed — delete it from `StikDebug/scripts/` and re-import a fresh `runelite-jit.js`, then re-assign it to HelloShell. |
 | "Unable to install" in SideStore | SideStore's VPN must be on and you must be signed into your Apple ID. |
 | Can't enable Developer Mode | Set a device passcode first, then Settings → Privacy & Security. |
 | App stopped opening after a while | Free-signing expired (7 days). Refresh in SideStore. |
