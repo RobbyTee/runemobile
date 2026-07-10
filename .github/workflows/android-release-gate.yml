@@ -10,14 +10,11 @@
 # and PROD-RELEASE-ENG-07 (the cross-port contract check as a required CI stage, not a bypassable local hook).
 name: android-release-gate
 
+# Manual-only: this gate runs on GitHub-hosted ubuntu runners, which would consume minutes on every push once
+# Actions are enabled. The per-merge build/publish is handled by the self-hosted runemobile-release workflow
+# (which runs this gate's fast --contract-only pre-flight); run this full gate on demand for a hosted-runner
+# assembleRelease + lintRelease check. (Its logic is fully runnable locally via android/dev-tools/ci/release-gate.sh.)
 on:
-  push:
-    paths:
-      - 'android/**'
-      - 'runelite-client/**'
-      - 'tools/shared-contract/**'
-      - '.github/workflows/android-release-gate.yml'
-  pull_request:
   workflow_dispatch:
 
 jobs:

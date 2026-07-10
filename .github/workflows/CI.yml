@@ -1,6 +1,10 @@
 name: CI
 
-on: [ push, pull_request ]
+# Upstream RuneLite's full build/test (JDK 11). We keep it available for manual runs but do NOT let it fire on
+# every push/PR: this fork enables Actions only to drive the self-hosted runemobile-release workflow, and this
+# heavy hosted-runner job would otherwise consume minutes on every merge. (Re-widen the trigger if you ever
+# want upstream CI back.) Kept as workflow_dispatch so a future upstream merge conflicts loudly here, on purpose.
+on: [ workflow_dispatch ]
 
 jobs:
   build:

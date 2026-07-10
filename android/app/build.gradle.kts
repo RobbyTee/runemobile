@@ -50,8 +50,15 @@ android {
         val verMajor = 0
         val verMinor = 1
         val verPatch = 0
-        versionName = "$verMajor.$verMinor.$verPatch"
-        versionCode = verMajor * 10000 + verMinor * 100 + verPatch
+        val semverCode = verMajor * 10000 + verMinor * 100 + verPatch
+        // CI rolling builds (tools/ci/) pass -PversionCodeOverride=<monotonic> and -PversionNameSuffix=<-master.N+sha>
+        // so every merge-built APK is a strictly-newer update than the last; a normal local/tagged build passes
+        // neither and gets the plain semver code/name. The override must stay > any semver-derived code to remain
+        // monotonic across channels (CI uses a base well above the semver range — see build-release-artifacts.sh).
+        val versionCodeOverride = (project.findProperty("versionCodeOverride") as String?)?.toIntOrNull()
+        val versionNameSuffix = (project.findProperty("versionNameSuffix") as String?).orEmpty()
+        versionName = "$verMajor.$verMinor.$verPatch$versionNameSuffix"
+        versionCode = versionCodeOverride ?: semverCode
 
         ndk {
             // Emulator on Apple Silicon runs arm64 natively; the embedded HotSpot
