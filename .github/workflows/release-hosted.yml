@@ -7,10 +7,10 @@
 # only new work is providing their two inputs (Android keystore + iOS JRE) from a GitHub secret + a release
 # asset instead of the developer Mac's ~/.runemobile-ci.
 #
-# ── STATUS: DRAFT ────────────────────────────────────────────────────────────────────────────────────────
-# Manual-trigger ONLY (workflow_dispatch) until proven, so it can't fail noisily before the secrets exist.
-# Once a manual run produces a release APK + an installable IPA, flip the trigger to `push: branches: [master]` and this
-# becomes the "every merge to master rebuilds + releases both apps" pipeline.
+# ── STATUS: LIVE ─────────────────────────────────────────────────────────────────────────────────────────
+# Proven green end-to-end (both apps built + published from the hosted macOS runner, master-1014/1015), so the
+# trigger is now `push: branches: [master]`: every merge to master rebuilds + releases both apps. A manual
+# workflow_dispatch is kept for on-demand rebuilds.
 #
 # ── REQUIRED SETUP (one-time, done by the repo owner — run tools/ci/setup-hosted-secrets.sh) ─────────────
 # Only ANDROID needs real signing material — the APK installs directly, so it must carry the release key. The
@@ -25,10 +25,9 @@
 name: release-hosted
 
 on:
+  push:
+    branches: [master]
   workflow_dispatch:
-  # TODO(flip once proven): uncomment to make every merge to master rebuild + release both apps.
-  # push:
-  #   branches: [master]
 
 concurrency:
   group: release-hosted
