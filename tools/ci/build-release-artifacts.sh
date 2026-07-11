@@ -201,20 +201,40 @@ if wants ios; then
 	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion $IOS_BUILD" \
 		"$WORK/Payload/RuneMobile.app/Info.plist" >/dev/null
 	# xcodebuild built the bundle UNSIGNED (the iOS SDK forbids ad-hoc signing at build time). The codesign
-	# TOOL has no such SDK restriction, so ad-hoc-seal the whole tree here: --deep signs the nested Mach-Os
-	# (JRE dylibs, ANGLE frameworks) first, then the app wrapper. --entitlements APPLIES the app entitlements
-	# from source (an unsigned build embeds none) so SideStore can carry over increased-memory-limit when it
-	# re-signs on-device with its own dev profile (which injects get-task-allow). This also replaces the seal
-	# the plist stamp above invalidated. The log dump then proves what entitlement state ships. (Guarded to
-	# IOS_ADHOC so the live self-hosted signed path is untouched.)
+	# TOOL has no such SDK restriction, so ad-hoc-seal the whole tree here. --deep is deliberately AVOIDED: it
+	# only descends recognized code (frameworks/appex/standard dirs), so it skips the loose Mach-Os the embedded
+	# JRE ships under the nonstandard jre/ resource dir, and its --entitlements scope is ambiguous. Instead sign
+	# nested code FIRST and WITHOUT entitlements (they belong only on the app's main executable), then the app
+	# wrapper WITH entitlements — the same nested-first contract the self-hosted path's resign-jre.sh follows.
+	# SideStore reads the app-executable entitlements to request increased-memory-limit when it re-signs
+	# on-device (its dev profile injects get-task-allow); this also replaces the seal the plist stamp broke.
+	# (Guarded to IOS_ADHOC so the live self-hosted signed path is untouched.)
 	if [ "${IOS_ADHOC:-0}" = 1 ]; then
 		ENTS="$APPDIR/RuneMobile/RuneMobile.entitlements"
 		[ -f "$ENTS" ] || die "entitlements file missing: $ENTS"
-		codesign --force --deep --sign - --generate-entitlement-der --entitlements "$ENTS" \
-			"$WORK/Payload/RuneMobile.app" || die "ad-hoc sign failed"
-		codesign --verify --deep "$WORK/Payload/RuneMobile.app" || die "ad-hoc signature verify failed"
-		log "ad-hoc IPA entitlements (SideStore carries these + injects get-task-allow via its dev profile):"
-		codesign -d --entitlements :- "$WORK/Payload/RuneMobile.app" 2>/dev/null || true
+		APPB="$WORK/Payload/RuneMobile.app"
+		# 1) Embedded frameworks/dylibs (e.g. ANGLE) — CODE_SIGNING_ALLOWED=NO left these unsigned; --deep would
+		#    have caught them, but sign explicitly so nothing depends on --deep's discovery rules.
+		if [ -d "$APPB/Frameworks" ]; then
+			while IFS= read -r -d '' fw; do
+				codesign --force --sign - --timestamp=none "$fw" || die "ad-hoc sign framework failed: $fw"
+			done < <(find "$APPB/Frameworks" -maxdepth 1 \( -name '*.framework' -o -name '*.dylib' \) -print0)
+		fi
+		# 2) Every remaining Mach-O in the bundle (the embedded JRE's lib/*.dylib + bin/* execs), except the
+		#    app's own main executable (signed last, with entitlements) and the Frameworks handled above.
+		while IFS= read -r -d '' f; do
+			case "$f" in "$APPB/RuneMobile"|"$APPB/Frameworks/"*) continue;; esac
+			file -b "$f" | grep -q "Mach-O" || continue
+			codesign --force --sign - --timestamp=none "$f" || die "ad-hoc sign nested failed: $f"
+		done < <(find "$APPB" -type f \( -name '*.dylib' -o -perm -u+x \) -print0)
+		# 3) Finally the app wrapper WITH entitlements.
+		codesign --force --sign - --generate-entitlement-der --entitlements "$ENTS" "$APPB" || die "ad-hoc sign app failed"
+		codesign --verify "$APPB" || die "ad-hoc signature verify failed"
+		# The dump proves what the CI artifact declares — but the CI signature is disposable: SideStore strips it
+		# and re-signs on-device, and MAY filter entitlements against its own generated profile. Whether
+		# increased-memory-limit actually survives that re-sign is a DEVICE-INSTALL assertion (see needs-device).
+		log "ad-hoc IPA entitlements (disposable CI seal; a SideStore device install must confirm these survive):"
+		codesign -d --entitlements :- "$APPB" 2>/dev/null || true
 	fi
 	( cd "$WORK" && zip -qry "$DIST/RuneMobile-${VERSION}.ipa" Payload )
 	rm -rf "$WORK"
