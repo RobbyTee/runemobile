@@ -7,9 +7,10 @@
 #
 # What it produces (into $DIST, default dist/ci):
 #   RuneMobile-<version>.apk   release-signed APK (real 45:E3 keystore when configured, else debug key)
-#   RuneMobile-<version>.ipa   Payload IPA (real dev provisioning profile; the outer seal breaks when the
-#                              embedded JRE is re-signed — SideStore/AltStore re-sign the whole bundle on
-#                              install, so that is expected and harmless)
+#   RuneMobile-<version>.ipa   Payload IPA. Self-hosted: real dev provisioning profile. Hosted (IOS_ADHOC=1):
+#                              built unsigned then ad-hoc-sealed with the codesign tool (--deep) + app
+#                              entitlements applied from source. Either way SideStore/AltStore re-sign the whole
+#                              bundle on install, so the CI signature is disposable.
 #   runelite-jit.js            the StikDebug JIT launch template, copied verbatim
 #   manifest.env              version / sha / apk fingerprint, sourced by publish-rolling-release.sh
 #
@@ -176,10 +177,12 @@ if wants ios; then
 	# vs any prior release (and `${BUILD_NUMBER:-1}` yields 0 since 0 is set, not empty). Rolling builds keep run #.
 	IOS_BUILD="$BUILD_NUMBER"; [ "$IOS_BUILD" -gt 0 ] 2>/dev/null || IOS_BUILD=1
 	if [ "${IOS_ADHOC:-0}" = 1 ]; then
-		# Ad-hoc sign ("-"): no Apple cert/keychain/team needed; entitlements still embed into the bundle for
-		# SideStore to carry over when it re-signs on-device.
-		log "xcodebuild RuneMobile (Release, generic/iOS, ad-hoc — SideStore re-signs on install)"
-		IOS_SIGN_ARGS=(CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual CODE_SIGNING_REQUIRED=NO PROVISIONING_PROFILE_SPECIFIER= DEVELOPMENT_TEAM=)
+		# Build UNSIGNED: the iOS SDK rejects ad-hoc ("-") code signing at xcodebuild time
+		# ("Ad Hoc code signing is not allowed with SDK 'iOS NN'") — that guard is xcodebuild's, not the
+		# codesign tool's. So emit an unsigned bundle here (no Apple cert/keychain/team needed) and ad-hoc-seal
+		# the whole tree with `codesign` post-build (step 4). SideStore re-signs everything on-device at install.
+		log "xcodebuild RuneMobile (Release, generic/iOS, unsigned — ad-hoc sealed post-build; SideStore re-signs on install)"
+		IOS_SIGN_ARGS=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= CODE_SIGN_ENTITLEMENTS= PROVISIONING_PROFILE_SPECIFIER= DEVELOPMENT_TEAM=)
 	else
 		log "xcodebuild RuneMobile (Release, generic/iOS, signed)"
 		IOS_SIGN_ARGS=(-allowProvisioningUpdates)
@@ -197,16 +200,19 @@ if wants ios; then
 	cp -R "$APP" "$WORK/Payload/"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion $IOS_BUILD" \
 		"$WORK/Payload/RuneMobile.app/Info.plist" >/dev/null
-	# The plist stamp above breaks the app-wrapper seal. SideStore/AltStore re-sign the whole bundle on
-	# install (they are the real signer — get-task-allow comes from THEIR generated dev profile, not us), so a
-	# broken incoming seal is cosmetic. But re-seal ad-hoc anyway so the shipped IPA is a valid ad-hoc artifact:
-	# preserve the entitlements xcodebuild embedded; nested Mach-Os keep their own ad-hoc seals. Then dump the
-	# embedded entitlements so the log proves what increased-memory-limit/entitlement state ships for SideStore
-	# to carry over. (Guarded to IOS_ADHOC so the live self-hosted signed path is untouched.)
+	# xcodebuild built the bundle UNSIGNED (the iOS SDK forbids ad-hoc signing at build time). The codesign
+	# TOOL has no such SDK restriction, so ad-hoc-seal the whole tree here: --deep signs the nested Mach-Os
+	# (JRE dylibs, ANGLE frameworks) first, then the app wrapper. --entitlements APPLIES the app entitlements
+	# from source (an unsigned build embeds none) so SideStore can carry over increased-memory-limit when it
+	# re-signs on-device with its own dev profile (which injects get-task-allow). This also replaces the seal
+	# the plist stamp above invalidated. The log dump then proves what entitlement state ships. (Guarded to
+	# IOS_ADHOC so the live self-hosted signed path is untouched.)
 	if [ "${IOS_ADHOC:-0}" = 1 ]; then
-		codesign --force --sign - --preserve-metadata=entitlements,flags \
-			"$WORK/Payload/RuneMobile.app" || die "ad-hoc re-seal failed"
-		codesign --verify --strict "$WORK/Payload/RuneMobile.app" || die "ad-hoc signature verify failed"
+		ENTS="$APPDIR/RuneMobile/RuneMobile.entitlements"
+		[ -f "$ENTS" ] || die "entitlements file missing: $ENTS"
+		codesign --force --deep --sign - --generate-entitlement-der --entitlements "$ENTS" \
+			"$WORK/Payload/RuneMobile.app" || die "ad-hoc sign failed"
+		codesign --verify --deep "$WORK/Payload/RuneMobile.app" || die "ad-hoc signature verify failed"
 		log "ad-hoc IPA entitlements (SideStore carries these + injects get-task-allow via its dev profile):"
 		codesign -d --entitlements :- "$WORK/Payload/RuneMobile.app" 2>/dev/null || true
 	fi
