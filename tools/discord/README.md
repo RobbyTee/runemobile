@@ -8,6 +8,16 @@ run again after you tweak the blueprint in `provision-server.py`.
 Secrets live in `~/.runemobile-discord/` (outside the repo), the same way CI
 keeps its keys in `~/.runemobile-ci/`. Nothing here commits a token.
 
+## Quick start (one command)
+
+```bash
+tools/discord/setup.sh
+```
+
+It asks for your **bot token** and **server ID**, prints the exact bot-invite
+link to click, then builds the whole server and saves the webhook URLs. If you
+prefer to do the steps by hand, read on.
+
 ## What you do first (needs your Discord login — ~3 min)
 
 1. **Create the server.** In the Discord app: the **+** on the left → *Create My
