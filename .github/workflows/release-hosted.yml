@@ -45,17 +45,22 @@ jobs:
     permissions:
       contents: write   # publish the rolling release to THIS repo (no PUBLISH_TOKEN needed anymore)
     env:
-      # Offset past the retiring self-hosted pipeline's run count (~10s) so hosted builds are always strictly
-      # newer: Android versionCode = 1_000_000 + BUILD_NUMBER must never regress across the self-hosted→hosted
-      # cutover. github.run_number restarts at 1 for this new workflow file, hence the offset.
-      BUILD_NUMBER: ${{ github.run_number + 1000 }}
       GIT_SHA: ${{ github.sha }}
       REQUIRE_RELEASE_KEY: "1"           # refuse to publish an APK not signed by the real release key
       IOS_ADHOC: "1"                     # ad-hoc-sign the IPA — AltStore/SideStore re-signs it on-device
-      CI_CONFIG_DIR: ${{ runner.temp }}/runemobile-ci
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Compute build env
+        # GitHub Actions expressions have no arithmetic and no `runner.*` at job-env scope, so BUILD_NUMBER and
+        # CI_CONFIG_DIR are computed here and exported for later steps via $GITHUB_ENV.
+        #   BUILD_NUMBER: offset past the retiring self-hosted pipeline's run count (~10s) so hosted builds are
+        #   always strictly newer — Android versionCode = 1_000_000 + BUILD_NUMBER must never regress across the
+        #   self-hosted→hosted cutover. github.run_number restarts at 1 for this new workflow file, hence +1000.
+        run: |
+          echo "BUILD_NUMBER=$(( GITHUB_RUN_NUMBER + 1000 ))" >> "$GITHUB_ENV"
+          echo "CI_CONFIG_DIR=$RUNNER_TEMP/runemobile-ci" >> "$GITHUB_ENV"
 
       - name: Set up JDK 21
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
