@@ -34,10 +34,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: read   # read-only: no token is ever handed anything, nothing is pushed
+      contents: read   # the built-in GITHUB_TOKEN is read-only here — no write scope, so nothing can be pushed
     steps:
-      # Pinned to a full commit SHA (not the mutable @v4 tag) — supply-chain hygiene. No token, and
-      # persist-credentials OFF: this job holds no credential at all.
+      # Pinned to a full commit SHA (not the mutable @v4 tag) — supply-chain hygiene. The only credential is
+      # checkout's default built-in GITHUB_TOKEN (needed to clone the private repo), scoped read-only above and
+      # NOT persisted into .git/config (persist-credentials: false). No PAT, no upstream code runs, nothing pushes.
       - name: Checkout master
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

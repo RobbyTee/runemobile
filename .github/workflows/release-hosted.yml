@@ -27,11 +27,16 @@ name: release-hosted
 on:
   push:
     branches: [master]
-    # A pure docs change shouldn't burn a ~15-min macOS build. Any push that also touches non-doc files still
-    # builds (paths-ignore only skips a push whose every changed file matches). Use workflow_dispatch to force one.
+    # A change that can't affect the built artifacts shouldn't burn a ~15-min macOS build: docs, and the
+    # workflow files that don't drive this build (the upstream notifier, upstream's own CI). Any push that also
+    # touches a build-relevant file still builds (paths-ignore skips only a push whose EVERY changed file
+    # matches). release-hosted.yml itself is deliberately NOT ignored — a change to it must be re-validated.
+    # Use workflow_dispatch to force a build.
     paths-ignore:
       - '**/*.md'
       - 'LICENSE'
+      - '.github/workflows/upstream-sync.yml'
+      - '.github/workflows/CI.yml'
   workflow_dispatch:
 
 concurrency:
