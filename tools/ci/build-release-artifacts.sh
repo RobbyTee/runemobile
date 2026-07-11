@@ -229,7 +229,9 @@ if wants ios; then
 		done < <(find "$APPB" -type f \( -name '*.dylib' -o -perm -u+x \) -print0)
 		# 3) Finally the app wrapper WITH entitlements.
 		codesign --force --sign - --generate-entitlement-der --entitlements "$ENTS" "$APPB" || die "ad-hoc sign app failed"
-		codesign --verify "$APPB" || die "ad-hoc signature verify failed"
+		# --deep --strict verifies recursively: every nested component signed above must validate, not just the
+		# wrapper. (Everything is explicitly signed, so strict passes; a failure here is a real seal defect.)
+		codesign --verify --deep --strict "$APPB" || die "ad-hoc signature verify failed"
 		# The dump proves what the CI artifact declares — but the CI signature is disposable: SideStore strips it
 		# and re-signs on-device, and MAY filter entitlements against its own generated profile. Whether
 		# increased-memory-limit actually survives that re-sign is a DEVICE-INSTALL assertion (see needs-device).
