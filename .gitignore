@@ -61,6 +61,3 @@ __pycache__/
 ### Local-only dev config (machine-specific paths / identifiers) ###
 .mcp.json
 ios/dev-tools/signing.env
-
-### Discord provisioning — local secrets never commit ###
-tools/discord/*.env
