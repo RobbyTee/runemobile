@@ -84,10 +84,16 @@ write access to that repo (the default `GITHUB_TOKEN` only covers the repo the r
 workflow — which the built-in `GITHUB_TOKEN` cannot do (GitHub suppresses workflow-to-workflow recursion for
 it). So it needs its own PAT:
 
-- Fine-grained token, repository access: **only** `audaro/Rune-Mobile`. Permissions: **Contents: Read and write**.
+- Fine-grained token, repository access: **only** `audaro/Rune-Mobile`. Permissions: **Contents: Read and
+  write** AND **Workflows: Read and write** — upstream occasionally touches its own `.github/workflows/`
+  files, and GitHub rejects any push containing workflow-file changes from a token without the Workflows
+  permission (the sync would fail loudly on exactly the weeks upstream edits its CI).
 - ```bash
   gh secret set SYNC_TOKEN --repo audaro/Rune-Mobile   # paste the token when prompted
   ```
+
+The token is never persisted into the checkout (`persist-credentials: false`); the gate step runs Gradle from
+the freshly-merged tree, so credentials are handed only to the final push step via env.
 
 Until this secret exists, `upstream-sync` fails fast at its first step with a pointer here (nothing breaks).
 
