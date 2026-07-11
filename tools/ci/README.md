@@ -1,23 +1,28 @@
 # CI — rolling release on every merge to master
 
-Every push to `master` on the **private** origin (`audaro/Rune-Mobile`) builds a real-signed **APK + IPA** and
-publishes them as a single always-latest **`latest-master` prerelease** on the **public** repo
-(`audaro/runemobile`), alongside the StikDebug `runelite-jit.js` launch template.
+Every push to `master` builds a real-signed **APK** + an ad-hoc-signed **IPA** and publishes them as a rolling
+prerelease on **`audaro/runemobile`**, alongside the StikDebug `runelite-jit.js` launch template.
 
-The build runs on a **self-hosted runner on the developer Mac** — it already has the full toolchain (OpenJDK 21,
-Android SDK/NDK, Xcode) and the real signing keychain, so artifacts are properly signed at **$0** with **no key
-material uploaded to GitHub**. The iOS IPA's outer code-signature breaks when the embedded JRE is re-signed;
-that is expected and harmless because SideStore/AltStore re-sign the whole bundle on install.
+**As of the 2026-07-11 cutover this runs FULLY HOSTED on GitHub** — a `macos-15` runner, on the single public
+repo, no self-hosted Mac and no private repo in the loop. Only **Android** needs real signing material (the APK
+installs directly, so it must carry the 45:E3 release key, materialized from a repo secret). The **IPA is
+ad-hoc-signed only** — AltStore/SideStore re-sign the whole bundle on-device at install, the only supported way
+to run it, so **no Apple cert/profile/team is ever uploaded**. The build reuses `tools/ci/*.sh` verbatim; the
+inputs come from a GitHub secret (Android keystore) + a release asset (the iOS JRE) instead of `~/.runemobile-ci`.
+
+> The old **self-hosted** pipeline (`runemobile-release.yml`, runner on the developer Mac) is **RETIRED**. The
+> "One-time setup / live steps" sections below describe that retired path and are kept for reference only; the
+> live setup is `tools/ci/setup-hosted-secrets.sh` + the `release-hosted.yml` header.
 
 ## Pieces
 
 | File | Role |
 |------|------|
-| `tools/ci/build-release-artifacts.sh` | The build. Produces `dist/ci/RuneMobile-<ver>.{apk,ipa}` + `runelite-jit.js` + `manifest.env`. Runnable + testable locally. |
-| `tools/ci/publish-rolling-release.sh` | Cross-publishes `dist/ci/` to the `latest-master` prerelease on `audaro/runemobile`. |
-| `.github/workflows/runemobile-release.yml` | Thin self-hosted wrapper: contract pre-flight → build → publish. |
-| `.github/workflows/upstream-sync.yml` | Polls `runelite/runelite` every 6 h, merges new upstream work into master (gated), pushes — which fires the release workflow. |
-| `~/.runemobile-ci/` (in `$HOME`, not the repo) | `keystore.properties`, `signing.env`, `keychain.pw`. Secrets stay here. |
+| `tools/ci/build-release-artifacts.sh` | The build. Produces `dist/ci/RuneMobile-<ver>.{apk,ipa}` + `runelite-jit.js` + `manifest.env`. `IOS_ADHOC=1` builds the IPA unsigned then ad-hoc-seals it (SideStore re-signs on install). Runnable + testable locally. |
+| `tools/ci/publish-rolling-release.sh` | Publishes `dist/ci/` as a rolling prerelease on `audaro/runemobile`. |
+| `.github/workflows/release-hosted.yml` | **The live pipeline.** `push:[master]` (+ dispatch) on the hosted `macos-15` runner: materialize inputs → contract pre-flight → build → publish. |
+| `.github/workflows/upstream-sync.yml` | Polls `runelite/runelite` every 6 h on `ubuntu-latest`, merges new upstream work into master (gated), pushes via `SYNC_TOKEN` — which fires `release-hosted`. |
+| `tools/ci/setup-hosted-secrets.sh` | One-shot helper: uploads the Android keystore secrets + the `ios-jre-dep` release asset to the public repo. |
 
 Run the build by hand anytime:
 

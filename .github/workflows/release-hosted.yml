@@ -27,6 +27,11 @@ name: release-hosted
 on:
   push:
     branches: [master]
+    # A pure docs change shouldn't burn a ~15-min macOS build. Any push that also touches non-doc files still
+    # builds (paths-ignore only skips a push whose every changed file matches). Use workflow_dispatch to force one.
+    paths-ignore:
+      - '**/*.md'
+      - 'LICENSE'
   workflow_dispatch:
 
 concurrency:
