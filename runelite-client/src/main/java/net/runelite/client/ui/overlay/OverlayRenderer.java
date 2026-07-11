@@ -52,6 +52,7 @@ import net.runelite.api.GameState;
 import net.runelite.api.KeyCode;
 import net.runelite.api.events.BeforeRender;
 import net.runelite.api.events.FocusChanged;
+import net.runelite.api.events.MenuOpened;
 import net.runelite.api.events.PostMenuSort;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
@@ -175,6 +176,15 @@ public class OverlayRenderer extends MouseAdapter
 	}
 
 	@Subscribe
+	private void onMenuOpened(MenuOpened event)
+	{
+		if (client.isKeyPressed(KeyCode.KC_SHIFT) && curHoveredOverlay != null)
+		{
+			overlayManager.addOriginMenu(curHoveredOverlay);
+		}
+	}
+
+	@Subscribe
 	protected void onPostMenuSort(PostMenuSort event)
 	{
 		lastHoveredOverlay = curHoveredOverlay;
@@ -191,8 +201,6 @@ public class OverlayRenderer extends MouseAdapter
 			return;
 		}
 
-		overlayManager.addOriginMenu(overlay);
-
 		List<OverlayMenuEntry> menuEntries = overlay.getMenuEntries();
 		if (menuEntries.isEmpty())
 		{
@@ -204,7 +212,7 @@ public class OverlayRenderer extends MouseAdapter
 		{
 			OverlayMenuEntry overlayMenuEntry = menuEntries.get(i);
 
-			client.createMenuEntry(-1)
+			client.createMenuEntry(-2)
 				.setOption(overlayMenuEntry.getOption())
 				.setTarget(ColorUtil.wrapWithColorTag(overlayMenuEntry.getTarget(), JagexColors.MENU_TARGET))
 				.setType(overlayMenuEntry.getMenuAction())
