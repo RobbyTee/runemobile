@@ -23,8 +23,10 @@ for a in "$@"; do
   esac
 done
 
-JAVAC="${JAVAC:-/opt/homebrew/opt/openjdk@21/bin/javac}"
-JAR="${JAR:-/opt/homebrew/opt/openjdk@21/bin/jar}"
+# Prefer an explicit JAVAC/JAR, then $JAVA_HOME (set on CI + passed by the gradle buildProbes task), then a
+# local Homebrew fallback for dev machines with no JAVA_HOME exported.
+JAVAC="${JAVAC:-${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}/bin/javac}"
+JAR="${JAR:-${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}/bin/jar}"
 JFLAGS="--release 8"
 JVMBENCH=../dev-tools/jvmbench
 AWTSMOKE=../dev-tools/awtsmoke
