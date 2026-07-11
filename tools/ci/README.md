@@ -16,6 +16,7 @@ that is expected and harmless because SideStore/AltStore re-sign the whole bundl
 | `tools/ci/build-release-artifacts.sh` | The build. Produces `dist/ci/RuneMobile-<ver>.{apk,ipa}` + `runelite-jit.js` + `manifest.env`. Runnable + testable locally. |
 | `tools/ci/publish-rolling-release.sh` | Cross-publishes `dist/ci/` to the `latest-master` prerelease on `audaro/runemobile`. |
 | `.github/workflows/runemobile-release.yml` | Thin self-hosted wrapper: contract pre-flight → build → publish. |
+| `.github/workflows/upstream-sync.yml` | Polls `runelite/runelite` every 6 h, merges new upstream work into master (gated), pushes — which fires the release workflow. |
 | `~/.runemobile-ci/` (in `$HOME`, not the repo) | `keystore.properties`, `signing.env`, `keychain.pw`. Secrets stay here. |
 
 Run the build by hand anytime:
@@ -45,6 +46,15 @@ tools/ci/build-release-artifacts.sh                               # full clean b
   pre-release does not ship matching source, so the notes don't imply public auditability.
 - **Inherited workflows are neutered.** `CI.yml` (upstream's full build) and `android-release-gate.yml` (hosted
   ubuntu) are set to `workflow_dispatch`-only so enabling Actions doesn't fire them on every push.
+- **Upstream auto-sync.** `upstream-sync` polls `runelite/runelite` on a 6-hour schedule. When upstream/master
+  has new commits it merges them (merge commit authored as the maintainer), runs a fast gate
+  (`:client:compileJava` + the cross-port contract check) and pushes master — the PAT-authenticated push then
+  triggers `runemobile-release`, so a clean upstream revision bump ships end-to-end unattended. **On a merge
+  conflict or compile break the run fails loudly and master is left untouched** — GitHub emails the owner; fix
+  locally with the usual playbook (`git fetch upstream && git merge upstream/master`, repair any API breaks —
+  e.g. rev239's `getMapAngle`→`getCameraYaw` — then push; the release fires as normal). The gate is deliberately
+  fast/shallow: the full signed build in `runemobile-release` is the real backstop and refuses to publish a
+  broken or mis-signed build.
 - **Runner safety.** The self-hosted runner is attached to the **private origin only** — never a public repo,
   where an untrusted PR could execute code on the Mac. Third-party actions are **pinned to full commit SHAs**
   (not mutable tags) since the runner holds signing material. For extra isolation you can run the runner under
@@ -67,6 +77,19 @@ write access to that repo (the default `GITHUB_TOKEN` only covers the repo the r
   ```bash
   gh secret set PUBLISH_TOKEN --repo audaro/Rune-Mobile   # paste the token when prompted
   ```
+
+### 1b. Mint the sync token (you)
+
+`upstream-sync` pushes merged upstream work back to **this** repo, and that push must trigger the release
+workflow — which the built-in `GITHUB_TOKEN` cannot do (GitHub suppresses workflow-to-workflow recursion for
+it). So it needs its own PAT:
+
+- Fine-grained token, repository access: **only** `audaro/Rune-Mobile`. Permissions: **Contents: Read and write**.
+- ```bash
+  gh secret set SYNC_TOKEN --repo audaro/Rune-Mobile   # paste the token when prompted
+  ```
+
+Until this secret exists, `upstream-sync` fails fast at its first step with a pointer here (nothing breaks).
 
 ### 2. Install the self-hosted runner (on the Mac)
 
@@ -92,7 +115,7 @@ gh api -X PUT repos/audaro/Rune-Mobile/actions/permissions -F enabled=true -f al
 ```
 
 This reverses the fork's default "Actions disabled" stance — deliberate, and scoped: only `runemobile-release`
-auto-runs (the inherited workflows are manual-only). Push a trivial commit to `master` (or run the workflow via
+and `upstream-sync` auto-run (the inherited workflows are manual-only). Push a trivial commit to `master` (or run the workflow via
 *Actions → runemobile-release → Run workflow*) to verify the `latest-master` prerelease appears on
 `audaro/runemobile`.
 
