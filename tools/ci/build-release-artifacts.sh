@@ -197,6 +197,19 @@ if wants ios; then
 	cp -R "$APP" "$WORK/Payload/"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion $IOS_BUILD" \
 		"$WORK/Payload/RuneMobile.app/Info.plist" >/dev/null
+	# The plist stamp above breaks the app-wrapper seal. SideStore/AltStore re-sign the whole bundle on
+	# install (they are the real signer — get-task-allow comes from THEIR generated dev profile, not us), so a
+	# broken incoming seal is cosmetic. But re-seal ad-hoc anyway so the shipped IPA is a valid ad-hoc artifact:
+	# preserve the entitlements xcodebuild embedded; nested Mach-Os keep their own ad-hoc seals. Then dump the
+	# embedded entitlements so the log proves what increased-memory-limit/entitlement state ships for SideStore
+	# to carry over. (Guarded to IOS_ADHOC so the live self-hosted signed path is untouched.)
+	if [ "${IOS_ADHOC:-0}" = 1 ]; then
+		codesign --force --sign - --preserve-metadata=entitlements,flags \
+			"$WORK/Payload/RuneMobile.app" || die "ad-hoc re-seal failed"
+		codesign --verify --strict "$WORK/Payload/RuneMobile.app" || die "ad-hoc signature verify failed"
+		log "ad-hoc IPA entitlements (SideStore carries these + injects get-task-allow via its dev profile):"
+		codesign -d --entitlements :- "$WORK/Payload/RuneMobile.app" 2>/dev/null || true
+	fi
 	( cd "$WORK" && zip -qry "$DIST/RuneMobile-${VERSION}.ipa" Payload )
 	rm -rf "$WORK"
 	log "→ $DIST/RuneMobile-${VERSION}.ipa ($(du -h "$DIST/RuneMobile-${VERSION}.ipa" | cut -f1))"

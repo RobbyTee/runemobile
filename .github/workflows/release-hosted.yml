@@ -41,7 +41,7 @@ jobs:
     # in forks; fork PRs never receive secrets regardless — this is defense in depth. (Optional further
     # hardening: bind this job to a `production` deployment environment whose deployment branch is master.)
     if: github.repository_id == '1296635776' && github.ref == 'refs/heads/master'
-    runs-on: macos-14
+    runs-on: macos-15   # macos-14 entered GitHub runner deprecation 2026-07-06; macos-15 is GA (Xcode 16.x)
     permissions:
       contents: write   # publish the rolling release to THIS repo (no PUBLISH_TOKEN needed anymore)
     env:
