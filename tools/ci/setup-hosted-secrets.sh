@@ -59,8 +59,8 @@ echo
 # ── 2. iOS JRE → release asset ────────────────────────────────────────────────────────────────────────────
 say "iOS JRE build dependency (~166 MB)"
 JRE_SRC="$CI_CONFIG_DIR/ios-jre"
-[ -f "$JRE_SRC/lib/libjvm.dylib" ] || JRE_SRC="ios/dev-tools/jre"
-[ -f "$JRE_SRC/lib/libjvm.dylib" ] || die "no iOS JRE found (looked for lib/libjvm.dylib in $CI_CONFIG_DIR/ios-jre and ios/dev-tools/jre)"
+[ -f "$JRE_SRC/lib/server/libjvm.dylib" ] || JRE_SRC="ios/dev-tools/jre"
+[ -f "$JRE_SRC/lib/server/libjvm.dylib" ] || die "no iOS JRE found (looked for lib/server/libjvm.dylib in $CI_CONFIG_DIR/ios-jre and ios/dev-tools/jre)"
 echo "  packing $JRE_SRC …"
 tar czf "$TMP/jre.tar.gz" -C "$(dirname "$JRE_SRC")" "$(basename "$JRE_SRC")"
 ok "packed ($(du -h "$TMP/jre.tar.gz" | cut -f1))"
