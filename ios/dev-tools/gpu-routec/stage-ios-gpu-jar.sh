@@ -15,17 +15,24 @@ cd "$(dirname "$0")"
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 JAVAC="$JAVA_HOME/bin/javac"
 JAR="$JAVA_HOME/bin/jar"
-# QA-P1-15: derive the version from gradle.properties (full version, e.g. 1.12.29-SNAPSHOT) so the staged jar
-# name tracks an upstream bump and stays in sync with remote-build.sh's `client-${VERSION}-shaded.jar` sanity
-# check, instead of a hardcoded literal that silently diverges. Mirrors the gpu-zone staging script.
+# QA-P1-15: derive the version from gradle.properties (full version, e.g. 1.12.29-SNAPSHOT) so the SOURCE jar
+# read here always tracks an upstream bump instead of a hardcoded literal that silently diverges. The staged
+# OUT name is deliberately version-AGNOSTIC (client-shaded.jar): project.yml and JVMLauncher.m reference it as
+# a fixed string, so an upstream version bump can't break the bundle. Mirrors the gpu-zone staging script.
 VERSION="$(sed -n 's/^project\.build\.version=//p' ../../../gradle.properties)"
 [ -n "$VERSION" ] || { echo "!! could not read project.build.version from gradle.properties" >&2; exit 1; }
 SRC="${SRC:-../../../runelite-client/build/libs/client-${VERSION}-shaded.jar}"
-OUT="${OUT:-../../app/jvm-resources/client-${VERSION}-shaded.jar}"
+OUT="${OUT:-../../app/jvm-resources/client-shaded.jar}"
 DL="${DL:-../../../runelite-client/build/generated/sources/delombok/java/main/net/runelite/client/plugins/gpu}"
 EXPECT_MD5="${1:-}"
 
 [ -f "$SRC" ] || { echo "!! pristine shaded jar missing: $SRC (run ./gradlew :client:assemble)" >&2; exit 1; }
+# Refresh the delombok'd sources every stage: the output is a gitignored build artifact (absent on a fresh
+# CI workspace, and silently STALE in a persistent one after an upstream merge). Gradle's up-to-date check
+# makes the no-change case cheap; skip only when the caller pinned DL to a custom tree.
+if [ "$DL" = "../../../runelite-client/build/generated/sources/delombok/java/main/net/runelite/client/plugins/gpu" ]; then
+  ( cd ../../.. && JAVA_HOME="$JAVA_HOME" ./gradlew --no-daemon -q :client:delombok )
+fi
 [ -d "$DL" ]  || { echo "!! delombok gpu sources missing: $DL (run ./gradlew :client:delombok)" >&2; exit 1; }
 
 # Absolutize — SRC/DL are used inside `(cd "$WORK/..." && ...)` subshells where a relative path would misresolve.

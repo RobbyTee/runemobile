@@ -27,6 +27,12 @@ DL="${DL:-$ROOT/runelite-client/build/generated/sources/delombok/java/main/net/r
 EXPECT_MD5="${1:-}"
 
 [ -f "$SRC" ]  || { echo "!! pristine shaded jar missing: $SRC (run ./gradlew :client:shadowJar)" >&2; exit 1; }
+# Refresh the delombok'd sources every stage: the output is a gitignored build artifact (absent on a fresh
+# CI workspace, and silently STALE in a persistent one after an upstream merge). Gradle's up-to-date check
+# makes the no-change case cheap; skip only when the caller pinned DL to a custom tree.
+if [ "$DL" = "$ROOT/runelite-client/build/generated/sources/delombok/java/main/net/runelite/client/plugins/gpu" ]; then
+  ( cd "$ROOT" && JAVA_HOME="$JAVA_HOME" ./gradlew --no-daemon -q :client:delombok )
+fi
 [ -d "$DL" ]   || { echo "!! delombok gpu sources missing: $DL (run ./gradlew :client:delombok)" >&2; exit 1; }
 [ -d "$FACADE" ] || { echo "!! facade-src missing: $FACADE" >&2; exit 1; }
 
@@ -100,5 +106,8 @@ if [ "$OK" != yes ]; then echo "MEGAVERDICT = ANDROID_GPU_STAGE_NOT_GREEN" >&2; 
 
 mkdir -p "$(dirname "$OUT")"
 mv "$NEW" "$OUT"
+# Prune other-version leftovers: assets/jvm persists across version bumps (dev tree + CI runner workspace),
+# and a second client-*-gpu.jar matching the runtime glob would ship in the APK alongside the fresh one.
+find "$(dirname "$OUT")" -maxdepth 1 -name 'client-*-gpu.jar' ! -name "$(basename "$OUT")" -delete
 echo "staged Android gpu jar: $OUT"
 echo "MEGAVERDICT = ANDROID_GPU_STAGE_GREEN"

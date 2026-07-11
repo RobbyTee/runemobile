@@ -1121,7 +1121,7 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
 
     // §6.2: the shaded RuneLite client jar (all deps) + a writable RuneLite home for the gamepack
     // cache, and the headless capture dir (HeadlessCapture dumps mainBufferProvider PNGs there).
-    NSString *shadedPath = [[NSBundle mainBundle] pathForResource:@"client-1.12.31-SNAPSHOT-shaded" ofType:@"jar"];
+    NSString *shadedPath = [[NSBundle mainBundle] pathForResource:@"client-shaded" ofType:@"jar"];
     NSString *classpath;
     if (self.routecL1Mode) {
         // L1 kill-test: routec-l1.jar (facade-native + RouteCL1Probe) ALONE — no shaded jar, no LWJGL, so the
@@ -1136,12 +1136,12 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         // "renderers as plugins" model loads HdPlugin (no-start) into the panel in EVERY mode so 117HD is a
         // selectable plugin, so its classes must always be resolvable. It carries no lwjgl (the facade ships in
         // the shaded jar); RLHDStarter starts it only when 117HD is the active renderer.
-        NSString *rlhdPath = [[NSBundle mainBundle] pathForResource:@"client-1.12.31-SNAPSHOT-rlhd" ofType:@"jar"];
+        NSString *rlhdPath = [[NSBundle mainBundle] pathForResource:@"client-rlhd" ofType:@"jar"];
         if (rlhdPath) {
             classpath = [NSString stringWithFormat:@"%@:%@", classpath, rlhdPath];
             log([NSString stringWithFormat:@"[jvm] rlhd jar on classpath = %@", rlhdPath]);
         } else {
-            log(@"[jvm] WARN: client-*-rlhd.jar not in bundle — 117HD will not load");
+            log(@"[jvm] WARN: client-rlhd.jar not in bundle — 117HD will not load");
         }
     }
     // RuneLite home (.runelite: config + gamepack cache + RuneLite's own rolling client.log). Debug keeps it

@@ -30,7 +30,7 @@ typedef void (^JVMLogSink)(NSString *line);
 /// W3 GPU Zone B0.5 — when YES, the FULL RuneLite boots with the staged 117HD (RLHD) jar on the classpath and the
 /// zone facade-delta natives registered (RouteC_registerZoneNatives, on top of the base bridge). RLHDStarter
 /// (-Drunelite.routecrlhd=true) loads + starts rs117.hd.HdPlugin (the Zone renderer) once in-world; HdPlugin
-/// conflicts=GPU so it replaces the base gpu plugin. The bundle must carry client-<ver>-rlhd.jar + the shaded jar
+/// conflicts=GPU so it replaces the base gpu plugin. The bundle must carry client-rlhd.jar + the shaded jar
 /// staged with the grown facade superset. Set on the main thread before -runProbesWithLog:.
 @property (nonatomic, assign) BOOL routecZoneMode;
 

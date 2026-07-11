@@ -79,7 +79,7 @@ if [ "$CHECK_ONLY" = 1 ]; then
     port="${pair%%:*}" ; dir="${pair#*:}"
     # Android intentionally omits shaded.jar (SLM-JAR-01 — not on its boot classpath); check probes only there.
     if [ "$port" = "Android" ]; then jars="probes.jar:$PROBES_SHA"
-    else jars="$SHADED_NAME:$SHADED_SHA probes.jar:$PROBES_SHA"; fi
+    else jars="client-shaded.jar:$SHADED_SHA probes.jar:$PROBES_SHA"; fi
     for jar in $jars; do
       name="${jar%%:*}" ; want="${jar#*:}" ; path="$dir/$name"
       if [ ! -f "$path" ]; then echo "MISSING $port $path"; fail=1
@@ -106,7 +106,9 @@ stage_one() {           # $1=label  $2=dest dir
   if [ "$label" = "Android" ]; then
     rm -f "$dest/$SHADED_NAME"
   else
-    copy_jar "$SHADED_SRC" "$dest/$SHADED_NAME"
+    # iOS stages under the version-AGNOSTIC bundle name (project.yml/JVMLauncher.m reference it as a fixed
+    # string). NB this is the PRISTINE jar — the gpu deploy flows overwrite it with the facade variant.
+    copy_jar "$SHADED_SRC" "$dest/client-shaded.jar"
   fi
   copy_jar "$PROBES_SRC" "$dest/probes.jar"
   echo "  staged -> $dest ($label)"

@@ -13,8 +13,7 @@ ROOT="$(cd ../../.. && pwd)"
 
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 JAVAP="$JAVA_HOME/bin/javap"
-VERSION="$(sed -n 's/^project\.build\.version=//p' "$ROOT/gradle.properties")"
-JAR="${JAR:-$ROOT/ios/app/jvm-resources/client-${VERSION}-rlhd.jar}"
+JAR="${JAR:-$ROOT/ios/app/jvm-resources/client-rlhd.jar}"
 BASE="${BASE:-../gpu-routec/used-descriptors.txt}"
 
 [ -f "$JAR" ]  || { echo "!! staged rlhd jar missing: $JAR (run ./stage-ios-zone-jar.sh)" >&2; exit 1; }

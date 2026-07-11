@@ -14,7 +14,7 @@ JAVAC="$JAVA_HOME/bin/javac"
 # literal that silently diverges on the next upstream bump. Same name today (1.12.29-SNAPSHOT).
 VERSION="$(sed -n 's/^project\.build\.version=//p' ../../../gradle.properties)"
 [ -n "$VERSION" ] || { echo "!! could not read project.build.version from gradle.properties" >&2; exit 1; }
-SHADED="${SHADED:-../../app/jvm-resources/client-${VERSION}-shaded.jar}"
+SHADED="${SHADED:-../../app/jvm-resources/client-shaded.jar}"
 DL="${DL:-../../../runelite-client/build/generated/sources/delombok/java/main/net/runelite/client/plugins/gpu}"
 EXPECT_GLALL_MD5="${1:-}"
 

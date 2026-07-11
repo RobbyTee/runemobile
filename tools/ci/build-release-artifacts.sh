@@ -118,24 +118,41 @@ if wants ios; then
 	[ -n "${DEVELOPMENT_TEAM:-}" ] || die "DEVELOPMENT_TEAM unset — add it to $CI_CONFIG_DIR/signing.env"
 
 	APPDIR="ios/app"
-	# 1) Stage the 4 embedded jars (shaded client + rlhd + probes + routec-l1). Reuse if asked and present.
+	# 0) The embedded JRE (ios/dev-tools/jre) is verified + patched local state (patch-jre-txm.sh) — NOT
+	#    reproducible from a URL, so a fresh workspace seeds it from the CI config dir.
+	#    One-time seed:  cp -R <dev-checkout>/ios/dev-tools/jre ~/.runemobile-ci/ios-jre
+	if [ ! -f ios/dev-tools/jre/lib/libjvm.dylib ]; then
+		[ -d "$CI_CONFIG_DIR/ios-jre" ] || die "ios/dev-tools/jre missing and no seed at $CI_CONFIG_DIR/ios-jre (see tools/ci/README.md)"
+		log "Seed ios/dev-tools/jre from $CI_CONFIG_DIR/ios-jre"
+		rm -rf ios/dev-tools/jre
+		cp -R "$CI_CONFIG_DIR/ios-jre" ios/dev-tools/jre
+	fi
+
+	# 1) Stage the 4 embedded jars (shaded client + rlhd + probes + routec-l1). Staged names are
+	#    version-agnostic (client-shaded.jar / client-rlhd.jar) so the tracked references in project.yml +
+	#    JVMLauncher.m survive upstream version bumps; the stagers read version-precise SOURCE jars.
+	#    REUSE_JARS trusts whatever is staged — a local fast path only; CI never sets it.
 	NEED_JARS=1
 	if [ "$REUSE_JARS" = 1 ]; then
 		NEED_JARS=0
-		for j in "client-${JARVER}-shaded.jar" "client-${JARVER}-rlhd.jar" probes.jar routec-l1.jar; do
+		for j in client-shaded.jar client-rlhd.jar probes.jar routec-l1.jar; do
 			[ -f "$APPDIR/jvm-resources/$j" ] || NEED_JARS=1
 		done
 	fi
 	if [ "$NEED_JARS" = 1 ]; then
-		log "Stage iOS jars (shadowJar + gpu-routec + probes + l1)"
+		log "Stage iOS jars (shadowJar + gpu-routec + gpu-zone + probes + l1)"
+		# Clear first: the workspace persists across runs, and an orphaned jar from a prior naming/version
+		# would otherwise sit in jvm-resources forever (harmless to the bundle, confusing to debug).
+		rm -f "$APPDIR"/jvm-resources/*.jar
 		"${GRADLEW[@]}" :client:shadowJar || die "shadowJar failed"
 		( cd ios/dev-tools/gpu-routec && JAVA_HOME="$JAVA_HOME" ./stage-ios-gpu-jar.sh ) || die "stage-ios-gpu-jar failed"
+		( cd ios/dev-tools/gpu-zone && JAVA_HOME="$JAVA_HOME" ./stage-ios-zone-jar.sh ) || die "stage-ios-zone-jar failed"
 		( cd "$APPDIR" && JAVA_HOME="$JAVA_HOME" ./build-probes.sh ) || die "build-probes failed"
 		( cd ios/dev-tools/gpu-routec/l1 && JAVA_HOME="$JAVA_HOME" ./build-l1-probe.sh ) || die "build-l1-probe failed"
 	else
 		log "Reusing already-staged iOS jars"
 	fi
-	for j in "client-${JARVER}-shaded.jar" "client-${JARVER}-rlhd.jar" probes.jar routec-l1.jar; do
+	for j in client-shaded.jar client-rlhd.jar probes.jar routec-l1.jar; do
 		[ -f "$APPDIR/jvm-resources/$j" ] || die "staged jar missing: $j"
 	done
 

@@ -48,14 +48,17 @@ if [ "$WITH_JARS" = 1 ]; then
   if [ "$MODE" = gpu ]; then
     ( cd ios/dev-tools/gpu-routec && JAVA_HOME="$JAVA_HOME" ./stage-ios-gpu-jar.sh )
   else
-    cp "runelite-client/build/libs/client-${VERSION}-shaded.jar" ios/app/jvm-resources/
+    cp "runelite-client/build/libs/client-${VERSION}-shaded.jar" ios/app/jvm-resources/client-shaded.jar
   fi
+  # client-rlhd.jar is a mandatory bundled resource (project.yml) in every mode — 117HD is a selectable plugin.
+  ( cd ios/dev-tools/gpu-zone && JAVA_HOME="$JAVA_HOME" ./stage-ios-zone-jar.sh )
   ( cd ios/app && JAVA_HOME="$JAVA_HOME" ./build-probes.sh )
   ( cd ios/dev-tools/gpu-routec/l1 && JAVA_HOME="$JAVA_HOME" ./build-l1-probe.sh )
 fi
 
-# Sanity: the staged shaded jar must be present (carried by rsync, or built above).
-SHADED="ios/app/jvm-resources/client-${VERSION}-shaded.jar"
+# Sanity: the staged shaded jar must be present (carried by rsync, or built above). Version-agnostic name
+# (the stagers rename on stage) so an upstream version bump can't break this check or the bundle.
+SHADED="ios/app/jvm-resources/client-shaded.jar"
 [ -f "$SHADED" ] || { echo "!! staged shaded jar missing: $SHADED — run deploy with jars, or pass --with-jars" >&2; exit 1; }
 
 log "xcodegen generate"

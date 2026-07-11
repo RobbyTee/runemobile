@@ -53,8 +53,10 @@ if [ "$BUILD_JARS" = local ]; then
   if [ "$MODE" = gpu ]; then
     ( cd ios/dev-tools/gpu-routec && JAVA_HOME="$JAVA_HOME" ./stage-ios-gpu-jar.sh )
   else
-    cp "runelite-client/build/libs/client-${VERSION}-shaded.jar" ios/app/jvm-resources/
+    cp "runelite-client/build/libs/client-${VERSION}-shaded.jar" ios/app/jvm-resources/client-shaded.jar
   fi
+  # client-rlhd.jar is a mandatory bundled resource (project.yml) in every mode — 117HD is a selectable plugin.
+  ( cd ios/dev-tools/gpu-zone && JAVA_HOME="$JAVA_HOME" ./stage-ios-zone-jar.sh )
   ( cd ios/app && JAVA_HOME="$JAVA_HOME" ./build-probes.sh )
   ( cd ios/dev-tools/gpu-routec/l1 && JAVA_HOME="$JAVA_HOME" ./build-l1-probe.sh )
 fi

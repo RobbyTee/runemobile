@@ -18,8 +18,8 @@
 # the native RegisterNatives bindings in RouteCBridge.m are the separate B0.2/B0.3 work. The facade here is the
 # spec for that delta — it enumerates every GL/CL/system symbol the iOS bridge must service.
 #
-# Output: client-<ver>-rlhd.jar = rs117/** classes (facade-backed) + RLHD shader/JSON resources. It carries NO
-# org.lwjgl/rlawt — at runtime the facade ships in the base-gpu client-<ver>-shaded.jar staged alongside it.
+# Output: client-rlhd.jar = rs117/** classes (facade-backed) + RLHD shader/JSON resources. It carries NO
+# org.lwjgl/rlawt — at runtime the facade ships in the base-gpu client-shaded.jar staged alongside it.
 # Deterministic + md5-gateable: pass an expected class-manifest md5 as $1.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -31,15 +31,33 @@ JAR="$JAVA_HOME/bin/jar"
 VERSION="$(sed -n 's/^project\.build\.version=//p' "$ROOT/gradle.properties")"
 [ -n "$VERSION" ] || { echo "!! could not read project.build.version from gradle.properties" >&2; exit 1; }
 
-LOMBOK="${LOMBOK:-$(find "$HOME/.gradle/caches" -name 'lombok-1.18.*.jar' 2>/dev/null | grep -vE 'sources|javadoc|plugin' | head -1)}"
+# Newest cached lombok (sort -V): the cache can hold several 1.18.x, and an old one (<1.18.30) crashes on the
+# JDK 21 javac (NoSuchFieldError JCImport.qualid) — an arbitrary `head -1` pick broke exactly that way.
+LOMBOK="${LOMBOK:-$(find "$HOME/.gradle/caches" -name 'lombok-1.18.*.jar' 2>/dev/null | grep -vE 'sources|javadoc|plugin' | sort -V | tail -1)}"
 FACADE="$(pwd)/facade"
 RLHD="$(pwd)/rlhd-src"
 SRC="${SRC:-$ROOT/runelite-client/build/libs/client-${VERSION}-shaded.jar}"
-OUT="${OUT:-$ROOT/ios/app/jvm-resources/client-${VERSION}-rlhd.jar}"
+# Version-AGNOSTIC OUT name (client-rlhd.jar): project.yml and JVMLauncher.m reference it as a fixed string,
+# so an upstream version bump can't break the bundle (the SOURCE jar above stays version-precise).
+OUT="${OUT:-$ROOT/ios/app/jvm-resources/client-rlhd.jar}"
 EXPECT_MD5="${1:-}"
 
 [ -f "$SRC" ]    || { echo "!! pristine shaded jar missing: $SRC (run ./gradlew :client:shadowJar)" >&2; exit 1; }
 [ -d "$FACADE" ] || { echo "!! facade missing: $FACADE" >&2; exit 1; }
+# rlhd-src/src is the vendored 117HD/RLHD tree (gitignored) — self-provision on a fresh workspace (CI) by
+# fetching the pinned rev per rlhd-src/PROVENANCE.md; the commit SHA is the integrity pin.
+RLHD_REV=7dded591a21d4c17c2d8c077c8ac0ecfbbd7313f
+if [ ! -d "$RLHD/src/main/java" ]; then
+  echo "== rlhd-src/src missing — fetching 117HD/RLHD @ $RLHD_REV =="
+  T="$(mktemp -d)"
+  git -C "$T" init -q
+  git -C "$T" fetch -q --depth 1 https://github.com/117HD/RLHD.git "$RLHD_REV"
+  git -C "$T" checkout -q FETCH_HEAD
+  mkdir -p "$RLHD/src"
+  cp -R "$T/src/main" "$RLHD/src/"
+  cp "$T/lombok.config" "$RLHD/src/lombok.config"
+  rm -rf "$T"
+fi
 [ -d "$RLHD/src/main/java" ] || { echo "!! rlhd-src/src missing: $RLHD/src (vendored, gitignored — re-fetch per rlhd-src/PROVENANCE.md)" >&2; exit 1; }
 [ -n "$LOMBOK" ] && [ -f "$LOMBOK" ] || { echo "!! lombok jar not found in ~/.gradle/caches" >&2; exit 1; }
 
@@ -82,7 +100,13 @@ set +e
 	-d "$WORK/rlhd_out" $(find "$WORK/rlhd_src/main/java" -name '*.java') 2>"$WORK/err.txt"
 RC=$?
 set -e
-if [ "$RC" != 0 ]; then echo "!! RLHD recompile FAILED ($(grep -c 'error:' "$WORK/err.txt") errors):" >&2; grep 'error:' "$WORK/err.txt" | head -40 >&2; exit 2; fi
+# On failure show javac 'error:' lines, or the raw head when there are none (e.g. an annotation-processor
+# crash) — a bare no-match grep would die under pipefail BEFORE printing anything or reaching exit 2.
+if [ "$RC" != 0 ]; then
+  echo "!! RLHD recompile FAILED:" >&2
+  { grep 'error:' "$WORK/err.txt" || head -40 "$WORK/err.txt"; } | head -40 >&2
+  exit 2
+fi
 
 # 4) package: rs117/** classes + ALL RLHD resources (shaders/JSON). NO org.lwjgl/rlawt (facade ships in the gpu
 #    jar). Keep the resource tree exactly as RLHD loads it via getResourceAsStream. The shaders ship pristine

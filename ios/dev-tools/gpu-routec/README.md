@@ -187,7 +187,7 @@ All of the "Wiring it on the device" steps above + the reviewed brief
 (`ios/AUDIT-BRIEF-w3-gpu-routec-3b-device-wiring.md`) are now built and verified host-side:
 
 - **2A classpath swap:** `stage-ios-gpu-jar.sh` (md5-gated) post-processes the pristine desktop shaded jar into
-  the iOS variant in the bundle (`client-<ver>-shaded.jar`) — org/lwjgl + rlawt + the gpu package
+  the iOS variant in the bundle (`client-shaded.jar`) — org/lwjgl + rlawt + the gpu package
   stripped, the unmodified gpu tree recompiled against `facade-native`, exactly one facade provider per namespace.
 - **2C/2D/2E** live in `gen/routec_jni_gen.py` (regen with `python3 gen/routec_jni_gen.py`): glShaderSource
   downports GLSL 330→ES 3.00 (vtx/frag-aware via GL_SHADER_TYPE, the 5 B1 edits); swapBuffers reads the FBO back

@@ -65,11 +65,12 @@ if [ "$BUILD_JARS" = 1 ]; then
   log "Rebuild jars (MODE=$MODE, VERSION=$JARVER)"
   JAVA_HOME="$JAVA_HOME" ./gradlew :client:shadowJar
   if [ "$MODE" = gpu ]; then ( cd ios/dev-tools/gpu-routec && JAVA_HOME="$JAVA_HOME" ./stage-ios-gpu-jar.sh )
-  else cp "runelite-client/build/libs/client-${JARVER}-shaded.jar" ios/app/jvm-resources/; fi
+  else cp "runelite-client/build/libs/client-${JARVER}-shaded.jar" ios/app/jvm-resources/client-shaded.jar; fi
+  ( cd ios/dev-tools/gpu-zone && JAVA_HOME="$JAVA_HOME" ./stage-ios-zone-jar.sh )
   ( cd ios/app && JAVA_HOME="$JAVA_HOME" ./build-probes.sh )
   ( cd ios/dev-tools/gpu-routec/l1 && JAVA_HOME="$JAVA_HOME" ./build-l1-probe.sh )
 fi
-for j in "client-${JARVER}-shaded.jar" "client-${JARVER}-rlhd.jar" probes.jar routec-l1.jar; do
+for j in client-shaded.jar client-rlhd.jar probes.jar routec-l1.jar; do
   [ -f "$APPDIR/jvm-resources/$j" ] || die "staged jar missing: $j — re-run with --jars"
 done
 

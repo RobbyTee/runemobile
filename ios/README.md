@@ -15,7 +15,7 @@ shell that hosts **real RuneLite** on an embedded, on-device **OpenJDK 21 with J
 ios/
   app/                     the native app (xcodegen project.yml → RuneMobile.xcodeproj)
     RuneMobile/            Objective-C shell (ViewController, JVMLauncher, panels, login)
-    jvm-resources/         staged jars (generated/gitignored: probes.jar, client-*-shaded.jar, client-*-rlhd.jar)
+    jvm-resources/         staged jars (generated/gitignored: probes.jar, client-shaded.jar, client-rlhd.jar)
     build-probes.sh        builds probes.jar (headless boot entry + CACIO folded in)
     stikdebug/             the per-launch JIT attach script (runelite-jit.js)
   dev-tools/               build/dev tooling (see its subdirectory READMEs)
@@ -44,7 +44,7 @@ and an arm64 iPhone on **iOS 17.4+**.
    `build-probes.sh` fails loudly if the shaded jar is missing — build it first.)
 3. **Stage the 117HD renderer jar** (required for the 117HD renderer option):
    ```sh
-   ios/dev-tools/gpu-zone/stage-ios-zone-jar.sh      # → app/jvm-resources/client-<ver>-rlhd.jar
+   ios/dev-tools/gpu-zone/stage-ios-zone-jar.sh      # → app/jvm-resources/client-rlhd.jar
    ```
 4. **Generate the Xcode project and build:**
    ```sh

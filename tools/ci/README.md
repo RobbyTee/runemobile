@@ -114,6 +114,21 @@ mkdir -p ~/actions-runner && cd ~/actions-runner
 Run it **interactively in tmux/mosh** if signing misbehaves under launchd — the dedicated `build.keychain` the
 build unlocks is what makes non-interactive signing work, but an interactive session is the proven path.
 
+### 2b. Seed the iOS JRE (on the Mac)
+
+The runner builds from a fresh checkout, and every gitignored build input **self-provisions** — the cacio jars
+fetch from Maven Central (still gated by their pinned SHA-256), `rlhd-src` fetches the pinned `117HD/RLHD` rev,
+delombok output regenerates via `:client:delombok`, and the Android JRE is a SHA-pinned download — **except one**:
+the embedded iOS JRE (`ios/dev-tools/jre`) is verified + patched local state (`patch-jre-txm.sh`, see
+`ios/dev-tools/JRE21-INVENTORY.md`) and can't be rebuilt from a URL. Seed it once into the CI config dir:
+
+```bash
+cp -R /path/to/dev-checkout/ios/dev-tools/jre ~/.runemobile-ci/ios-jre
+```
+
+The build copies it into any workspace where `ios/dev-tools/jre/lib/libjvm.dylib` is missing, and fails with a
+pointer here if the seed is absent.
+
 ### 3. Enable Actions on the private origin (you or me)
 
 ```bash

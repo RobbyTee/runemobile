@@ -24,7 +24,9 @@ JAR="$JAVA_HOME/bin/jar"
 VERSION="$(sed -n 's/^project\.build\.version=//p' "$ROOT/gradle.properties")"
 [ -n "$VERSION" ] || { echo "!! could not read project.build.version from gradle.properties" >&2; exit 1; }
 
-LOMBOK="${LOMBOK:-$(find "$HOME/.gradle/caches" -name 'lombok-1.18.*.jar' 2>/dev/null | grep -vE 'sources|javadoc|plugin' | head -1)}"
+# Newest cached lombok (sort -V): the cache can hold several 1.18.x, and an old one (<1.18.30) crashes on the
+# JDK 21 javac (NoSuchFieldError JCImport.qualid) — an arbitrary `head -1` pick broke exactly that way.
+LOMBOK="${LOMBOK:-$(find "$HOME/.gradle/caches" -name 'lombok-1.18.*.jar' 2>/dev/null | grep -vE 'sources|javadoc|plugin' | sort -V | tail -1)}"
 FACADE="$(pwd)/facade-src"
 RLHD="$(pwd)/rlhd-src"
 SRC="${SRC:-$ROOT/runelite-client/build/libs/client-${VERSION}-shaded.jar}"
@@ -33,6 +35,16 @@ EXPECT_MD5="${1:-}"
 
 [ -f "$SRC" ]    || { echo "!! pristine shaded jar missing: $SRC (run ./gradlew :client:shadowJar)" >&2; exit 1; }
 [ -d "$FACADE" ] || { echo "!! facade-src missing: $FACADE" >&2; exit 1; }
+# rlhd-src is the vendored 117HD/RLHD tree (gitignored) — self-provision on a fresh workspace (CI) by
+# fetching the pinned rev; the commit SHA is the integrity pin (same rev the HD blueprint audited).
+RLHD_REV=7dded591a21d4c17c2d8c077c8ac0ecfbbd7313f
+if [ ! -d "$RLHD/src/main/java" ]; then
+  echo "== rlhd-src missing — fetching 117HD/RLHD @ $RLHD_REV =="
+  rm -rf "$RLHD"; mkdir -p "$RLHD"
+  git -C "$RLHD" init -q
+  git -C "$RLHD" fetch -q --depth 1 https://github.com/117HD/RLHD.git "$RLHD_REV"
+  git -C "$RLHD" checkout -q FETCH_HEAD
+fi
 [ -d "$RLHD/src/main/java" ] || { echo "!! rlhd-src missing: $RLHD (vendored, gitignored)" >&2; exit 1; }
 [ -n "$LOMBOK" ] && [ -f "$LOMBOK" ] || { echo "!! lombok jar not found in ~/.gradle/caches" >&2; exit 1; }
 
@@ -70,7 +82,13 @@ set +e
 	-d "$WORK/rlhd_out" $(find "$JSRC" -name '*.java') 2>"$WORK/err.txt"
 RC=$?
 set -e
-if [ "$RC" != 0 ]; then echo "!! RLHD recompile FAILED ($(grep -c 'error:' "$WORK/err.txt") errors):" >&2; grep 'error:' "$WORK/err.txt" >&2; exit 2; fi
+# On failure show javac 'error:' lines, or the raw head when there are none (e.g. an annotation-processor
+# crash) — a bare no-match grep would die under pipefail BEFORE printing anything or reaching exit 2.
+if [ "$RC" != 0 ]; then
+  echo "!! RLHD recompile FAILED:" >&2
+  { grep 'error:' "$WORK/err.txt" || head -40 "$WORK/err.txt"; } | head -40 >&2
+  exit 2
+fi
 
 # 3b) compile the AG2.5-b class-load + loader-data probe (RLHDProbe) against [facade : stripped-client] (it needs
 #     only Gson + the facade Configuration; it reaches the RLHD classes via Class.forName at runtime).
@@ -128,5 +146,7 @@ if [ "$OK" != yes ]; then echo "MEGAVERDICT = ANDROID_RLHD_STAGE_NOT_GREEN" >&2;
 
 mkdir -p "$(dirname "$OUT")"
 mv "$NEW" "$OUT"
+# Prune other-version leftovers (same rationale as stage-android-gpu-jar.sh).
+find "$(dirname "$OUT")" -maxdepth 1 -name 'client-*-rlhd.jar' ! -name "$(basename "$OUT")" -delete
 echo "staged Android rlhd jar: $OUT"
 echo "MEGAVERDICT = ANDROID_RLHD_STAGE_GREEN"
