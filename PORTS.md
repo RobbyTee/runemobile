@@ -1,7 +1,7 @@
 # Mobile ports — repo map
 
-This repo is a private fork of [`runelite/runelite`](https://github.com/runelite/runelite) that adds **two
-mobile ports** running real RuneLite on an on-device JVM. Everything below `ios/` and `android/` is ours;
+This repo (`audaro/runemobile`) is the canonical public fork of [`runelite/runelite`](https://github.com/runelite/runelite),
+adding **two mobile ports** that run real RuneLite on an on-device JVM. Everything below `ios/` and `android/` is ours;
 the rest of the tree (`runelite-client/`, `runelite-api/`, …) is upstream RuneLite, kept as-is so we can
 `git merge upstream/master`.
 

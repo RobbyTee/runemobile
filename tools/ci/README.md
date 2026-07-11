@@ -52,9 +52,13 @@ tools/ci/build-release-artifacts.sh                               # full clean b
 - **Secret-bearing runs are gated to master + this repo id.** `release-hosted` (which decodes the Android
   signing key) runs only on `github.repository_id == '1296635776'` **and** `github.ref == 'refs/heads/master'`,
   so a dispatch/push on any other branch — or in a fork, which never receives secrets — can't run with the
-  production key. Third-party actions are **pinned to full commit SHAs** (not mutable tags). The signing key
-  reaches a build only via a **push to master** (a human merge or the reviewed upstream sweep) — never via an
-  unreviewed auto-merge (see *Upstream watch*).
+  production key. Third-party actions are **pinned to full commit SHAs** (not mutable tags). This guard controls
+  *where* the key-bearing build runs; it does **not** by itself prove the master commit was reviewed. That
+  property is enforced by **branch protection on `master`** — which must **require a pull request with an
+  approval, restrict direct pushes, and enforce the rule for admins (no bypass)** — so the signing key only ever
+  builds code that landed through a reviewed PR (or the reviewed upstream sweep), never an unreviewed direct push
+  or auto-merge (see *Upstream watch*). Configuring that protection is the one-time setup step below; until it is
+  set, a direct push to master by anyone with write access would build with the key.
 
 ## One-time setup
 
@@ -77,8 +81,11 @@ it on-device, and `release-hosted` publishes with the built-in `GITHUB_TOKEN`.
 gh api -X PUT repos/audaro/runemobile/actions/permissions -F enabled=true -f allowed_actions=all
 ```
 
-Then in the repo Settings: **branch-protect `master`** (block force-push). Push a commit to master (or *Actions →
-release-hosted → Run workflow*) to verify the rolling prerelease appears.
+Then in the repo Settings, **branch-protect `master`**: require a pull request with **at least one approval**,
+**restrict who can push directly** (dismiss stale approvals on new commits), **block force-pushes and
+deletions**, and **enforce the rules for administrators (no bypass)**. This is what makes the signing-key build
+run only on reviewed code (see *Signing / secret-bearing runs* above) — the workflow `if:` guard alone does not.
+Then push (or *Actions → release-hosted → Run workflow*) to verify the rolling prerelease appears.
 
 To pause the pipeline: `gh api -X PUT repos/audaro/runemobile/actions/permissions -F enabled=false`.
 
