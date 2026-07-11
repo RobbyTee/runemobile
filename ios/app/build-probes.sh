@@ -63,13 +63,21 @@ verify_sha() {   # <file> <expected-sha256>
 # whether the bytes are trusted, so a failed or tampered download can never fold into probes.jar.
 CACIO_MAVEN="https://repo1.maven.org/maven2/com/github/caciocavallosilano"
 fetch_if_missing() {   # <file>
-  local f="$1" name artifact
+  local f="$1" name artifact tmp
   [ -f "$f" ] && return 0
   name="$(basename "$f")"; artifact="${name%-1.18.jar}"
   echo "== fetch $name from Maven Central =="
   mkdir -p "$(dirname "$f")"
-  curl -sfL -o "$f" "$CACIO_MAVEN/$artifact/1.18/$name" \
-    || { echo "build-probes: failed to fetch $name from Maven Central" >&2; rm -f "$f"; exit 1; }
+  # Download to a temp sibling and atomically rename on success: an interrupted/killed curl can never leave a
+  # partial file at the real path (which the [ -f ] guard above would then skip forever, failing the SHA gate
+  # on every subsequent run until hand-deleted). The trailing SHA check is still the trust decision.
+  tmp="$(mktemp "$(dirname "$f")/.$name.XXXXXX")"
+  if curl -sfL -o "$tmp" "$CACIO_MAVEN/$artifact/1.18/$name"; then
+    mv -f "$tmp" "$f"
+  else
+    rm -f "$tmp"
+    echo "build-probes: failed to fetch $name from Maven Central" >&2; exit 1
+  fi
 }
 
 rm -rf "$OUT"; mkdir -p "$OUT" "$(dirname "$JARFILE")"

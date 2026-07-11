@@ -24,8 +24,14 @@ JAR="$JAVA_HOME/bin/jar"
 VERSION="$(sed -n 's/^project\.build\.version=//p' "$ROOT/gradle.properties")"
 [ -n "$VERSION" ] || { echo "!! could not read project.build.version from gradle.properties" >&2; exit 1; }
 
-# Newest cached lombok (sort -V): the cache can hold several 1.18.x, and an old one (<1.18.30) crashes on the
-# JDK 21 javac (NoSuchFieldError JCImport.qualid) — an arbitrary `head -1` pick broke exactly that way.
+# Use the PROJECT-PINNED lombok (libs.versions.toml: `lombok = "x.y.z"`) — the exact jar the real build uses.
+# An arbitrary cached 1.18.x could be an unrelated/incompatible version, and an old one crashes JDK 21 javac
+# (NoSuchFieldError JCTree$JCImport.qualid). shadowJar (which runs before staging) pulls the pinned jar into
+# the cache. Fall back to newest-cached only if the pin is unreadable.
+LOMBOK_VER="$(sed -n 's/^lombok[[:space:]]*=[[:space:]]*"\([0-9.]*\)".*/\1/p' "$ROOT/libs.versions.toml" | head -1)"
+if [ -z "${LOMBOK:-}" ] && [ -n "$LOMBOK_VER" ]; then
+  LOMBOK="$(find "$HOME/.gradle/caches" -name "lombok-${LOMBOK_VER}.jar" 2>/dev/null | grep -vE 'sources|javadoc|plugin' | head -1)"
+fi
 LOMBOK="${LOMBOK:-$(find "$HOME/.gradle/caches" -name 'lombok-1.18.*.jar' 2>/dev/null | grep -vE 'sources|javadoc|plugin' | sort -V | tail -1)}"
 FACADE="$(pwd)/facade-src"
 RLHD="$(pwd)/rlhd-src"
@@ -35,11 +41,14 @@ EXPECT_MD5="${1:-}"
 
 [ -f "$SRC" ]    || { echo "!! pristine shaded jar missing: $SRC (run ./gradlew :client:shadowJar)" >&2; exit 1; }
 [ -d "$FACADE" ] || { echo "!! facade-src missing: $FACADE" >&2; exit 1; }
-# rlhd-src is the vendored 117HD/RLHD tree (gitignored) — self-provision on a fresh workspace (CI) by
-# fetching the pinned rev; the commit SHA is the integrity pin (same rev the HD blueprint audited).
+# rlhd-src is the vendored 117HD/RLHD tree (gitignored) — self-provision on a fresh workspace (CI) by fetching
+# the pinned rev; the commit SHA is the integrity pin (same rev the HD blueprint audited). Re-provision when
+# the tree is ABSENT or its checked-out HEAD != the pin (RLHD_REV bumped, or a persistent runner/dev workspace
+# still holds old sources, or a hand-vendored tree with no .git) so a rev bump can't silently compile against
+# stale sources. It's a full git checkout here, so `git rev-parse HEAD` is the actual-vs-pinned check.
 RLHD_REV=7dded591a21d4c17c2d8c077c8ac0ecfbbd7313f
-if [ ! -d "$RLHD/src/main/java" ]; then
-  echo "== rlhd-src missing — fetching 117HD/RLHD @ $RLHD_REV =="
+if [ ! -d "$RLHD/src/main/java" ] || [ "$(git -C "$RLHD" rev-parse HEAD 2>/dev/null)" != "$RLHD_REV" ]; then
+  echo "== rlhd-src absent or != pinned rev — (re)fetching 117HD/RLHD @ $RLHD_REV =="
   rm -rf "$RLHD"; mkdir -p "$RLHD"
   git -C "$RLHD" init -q
   git -C "$RLHD" fetch -q --depth 1 https://github.com/117HD/RLHD.git "$RLHD_REV"
