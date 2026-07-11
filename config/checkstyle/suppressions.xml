@@ -31,4 +31,7 @@
 	<suppress files="net[/\\]runelite[/\\]client[/\\]party[/\\]Party\.java" checks=".*"/>
 	<suppress files="net[/\\]runelite[/\\]api[/\\]widgets[/\\]ComponentID\.java" checks=".*"/>
 	<suppress files="net[/\\]runelite[/\\]api[/\\]widgets[/\\]InterfaceID\.java" checks=".*"/>
+	<!-- Mobile JNI bridge: only the deliberate compact-brace / tab-indent formatting is exempt; every other
+	     Checkstyle rule still applies to these classes. (Their PMD carve-out is in runelite-client/build.gradle.kts.) -->
+	<suppress files="net[/\\]runelite[/\\]client[/\\]headless[/\\]" checks="LeftCurly|RightCurly|RegexpSinglelineJava"/>
 </suppressions>

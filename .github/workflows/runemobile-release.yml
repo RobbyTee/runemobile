@@ -7,7 +7,7 @@
 # Mac. The one secret this needs is PUBLISH_TOKEN (a PAT with contents:write on audaro/runemobile).
 #
 # The actual build/publish logic lives in tools/ci/*.sh (runnable + testable without GitHub); this workflow is
-# a thin wrapper, matching the android-release-gate.sh convention.
+# a thin wrapper, matching the release-gate.sh convention (logic in a runnable script; the workflow just calls it).
 name: runemobile-release
 
 on:

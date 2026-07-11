@@ -36,7 +36,6 @@ import java.lang.reflect.Field;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayDeque;
-import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;

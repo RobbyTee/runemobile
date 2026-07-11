@@ -41,9 +41,9 @@ explicitly. Emergency bypass: `git commit --no-verify`.
 ## Promoted to a required gate stage (PROD-RELEASE-ENG-07)
 `check-contract.sh` is no longer *only* the bypassable local pre-commit hook. It is a **required, non-bypassable
 stage of the Android release gate** — `android/dev-tools/ci/release-gate.sh` runs it first and **fails on exit 2**
-(a removed/renamed/re-signatured entry that risks breaking the other port). The dormant-but-ready
-`.github/workflows/android-release-gate.yml` calls the same script, so when GitHub Actions are enabled the
-contract check runs there too. The pre-commit hook stays as the fast local pre-flight. See `android/GATE.md` row 6.
+(a removed/renamed/re-signatured entry that risks breaking the other port). The `release-hosted` workflow runs
+this same contract check as a non-bypassable pre-flight before it builds, so it also runs in CI. The pre-commit
+hook stays as the fast local pre-flight. See `android/GATE.md` row 6.
 
 ## What it does and doesn't guarantee
 It catches contract **drift** at commit/gate time and forces a conscious cross-port check — it does not itself

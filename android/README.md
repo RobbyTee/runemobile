@@ -90,8 +90,8 @@ Before tagging a build, run the single release gate — cross-port contract chec
 ./android/dev-tools/ci/release-gate.sh                 # the runnable gate (contract + build + lint)
 ./android/dev-tools/ci/release-gate.sh --contract-only # fast pre-flight: just the shared-contract diff
 ```
-This script is the source of truth; `.github/workflows/android-release-gate.yml` is a thin wrapper that's
-dormant only because Actions are disabled for this fork (it activates unchanged if they're ever enabled).
+This script is the source of truth for the Android gate — run it locally for the full reproducible evidence.
+Its fast `--contract-only` pre-flight is also invoked by the `release-hosted` pipeline before every build.
 
 ## Milestones
 - **A — JVM Hello on the emulator (DONE):** `JvmLauncher.startJvm(mainClass="Hello")` boots HotSpot and runs

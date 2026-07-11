@@ -44,8 +44,8 @@ tools/ci/build-release-artifacts.sh                               # full clean b
   snapshot*; this pipeline does **not** auto-sync source (that stays a manual, gated sweep). The origin commit
   is recorded in the notes only as an internal maintainer **build id** — a public reader can't view it and the
   pre-release does not ship matching source, so the notes don't imply public auditability.
-- **Inherited workflows are neutered.** `CI.yml` (upstream's full build) and `android-release-gate.yml` (hosted
-  ubuntu) are set to `workflow_dispatch`-only so enabling Actions doesn't fire them on every push.
+- **CI validates the mirror.** `CI.yml` (upstream's full build) runs on every push + PR, guarded to the public
+  repo id so it never fires on the private origin. It is what makes the public repo build like RuneLite's.
 - **Upstream auto-sync.** `upstream-sync` polls `runelite/runelite` on a 6-hour schedule. When upstream/master
   has new commits it merges them (merge commit authored as the maintainer), runs a fast gate
   (`:client:compileJava` + the cross-port contract check) and pushes master — the PAT-authenticated push then
