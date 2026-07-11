@@ -1,5 +1,11 @@
 # RuneLite on Mobile — iOS & Android (unofficial)
 
+[![License: BSD-2-Clause](https://img.shields.io/badge/license-BSD--2--Clause-blue)](LICENSE)
+![Platform: iOS | Android](https://img.shields.io/badge/platform-iOS%20%7C%20Android-lightgrey)
+![Distribution: sideload-only](https://img.shields.io/badge/distribution-sideload--only-red)
+![Status: pre-release](https://img.shields.io/badge/status-pre--release-orange)
+[![Third-party notices](https://img.shields.io/badge/licenses-third--party%20notices-informational)](THIRD-PARTY-NOTICES.md)
+
 > ⚠️ **Unofficial fan project. Not affiliated with, endorsed, sponsored, or approved
 > by Jagex Ltd or the RuneLite project.** This is a **sideload-only**, personal /
 > technical build. It is **not** on Jagex's approved-client list and **not** on the
