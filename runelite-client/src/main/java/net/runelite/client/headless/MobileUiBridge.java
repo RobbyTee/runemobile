@@ -2528,7 +2528,7 @@ public final class MobileUiBridge
 	 * Reflective — the overlays live in the staged rlhd jar, no compile-time dependency. To avoid coupling to
 	 * field names (a refactor would silently skip), the overlays are found by TYPE: every {@code HdPlugin} field
 	 * whose type is a {@code ShaderOverlay} subclass. This auto-covers any future overlay. The summary logs
-	 * {@code found=M activated=N} (grep {@code RLHD_OVERLAY_SELFTEST}); the CI gate asserts M>=3 and N==M, so a
+	 * {@code found=M activated=N} (grep {@code RLHD_OVERLAY_SELFTEST}); the CI gate asserts {@code M>=3} and {@code N==M}, so a
 	 * reflection break (found=0) fails the run rather than passing a self-test that exercised nothing. Inert
 	 * unless armed by {@link RLHDStarter}.
 	 */

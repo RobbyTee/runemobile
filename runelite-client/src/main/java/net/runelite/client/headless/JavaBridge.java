@@ -267,9 +267,9 @@ public final class JavaBridge
 	private static volatile int sceneDrawCount;
 	private static final int SCENE_WARMUP = 6;
 
-	/** Hooks.drawScene -> count a rendered 3D frame. */
+	/** Hooks.drawScene &rarr; count a rendered 3D frame. */
 	public static void noteSceneDraw() { sceneDrawCount++; }
-	/** Hooks.draw on a non-world game state -> re-arm the load-in hold. */
+	/** Hooks.draw on a non-world game state &rarr; re-arm the load-in hold. */
 	public static void armSceneHold() { sceneDrawCount = 0; }
 	/** Direct-present (no gpuPublish gate): the native shell polls this to know when the world is warmed up
 	 * (geometry uploaded), so it can reveal the GPU layer over the CPU loading-screen blit without a sky flash. */
