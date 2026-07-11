@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Pre-commit gate. Two responsibilities:
-#   1) Hygiene/security — no secrets, signing keys, generated artifacts, AI attribution, or local-only
-#      development scaffolding may enter the tree (Actions are disabled on this fork, so this is the gate).
+#   1) Hygiene/security — no secrets, signing keys, generated artifacts, or local-only development
+#      scaffolding may enter the tree (a fast local gate that runs before the hosted CI does).
 #   2) Cross-port contract — flag staged changes to the shared iOS/Android jar surface and block when the
 #      host-facing bridge/boot API + -D gate flags drift without a refreshed baseline.
 #
@@ -14,7 +14,6 @@ staged="$(git diff --cached --name-only)"                      # full list (cont
 staged_am="$(git diff --cached --name-only --diff-filter=AM)"  # added/modified (hygiene)
 
 # ── 1) Hygiene / security (runs on every commit) ──────────────────────────────────────────────────────
-AI_REF='claude|codex|anthropic|co-authored-by'
 hy_fail=0
 hflag() { printf '  - %s\n' "$1"; hy_fail=1; }
 
@@ -38,12 +37,10 @@ if [ -n "$staged_am" ]; then
 		fi
 	done <<< "$staged_am"
 
-	# Content checks on added lines (exclude tools/git-hooks/, which contains these patterns literally).
+	# Content checks on added lines (exclude tools/git-hooks/, which contains the key regex literally).
 	added="$(git diff --cached --diff-filter=AM -U0 -- . ':(exclude)tools/git-hooks/' \
 		| grep -E '^\+' | grep -vE '^\+\+\+' || true)"
 	if [ -n "$added" ]; then
-		ai="$(printf '%s\n' "$added" | grep -inE "$AI_REF" || true)"
-		if [ -n "$ai" ]; then hflag "AI-attribution reference in staged content:"; printf '%s\n' "$ai" | sed 's/^/      /'; fi
 		pk="$(printf '%s\n' "$added" | grep -nE 'BEGIN (RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY' || true)"
 		[ -n "$pk" ] && hflag "private-key material in staged content"
 	fi

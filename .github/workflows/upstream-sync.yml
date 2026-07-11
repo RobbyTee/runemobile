@@ -10,11 +10,10 @@
 #     human review of the upstream diff — would let a single malicious upstream commit exfiltrate the key (a
 #     compile/contract gate cannot prevent exfiltration). Running upstream Gradle next to a push token on one
 #     runner is the same class of risk (a planted pre-push hook could steal the token).
-#   - Coherence: the public repo is a synthetic forward-history mirror (its history is NOT RuneLite's DAG), so
-#     an auto-merge pushed to public master would be reverted by the next mirror refresh → re-merge/release
-#     churn. Upstream history only lives on the PRIVATE origin, which is authoritative.
-# The playbook: `git fetch upstream && git merge upstream/master` → fix any API breaks (e.g. rev239's
-# getMapAngle→getCameraYaw) → mirror to public. See tools/ci/README.md.
+# master shares real history with runelite/runelite (this repo is a genuine fork), so the merge is the usual
+# `git fetch upstream && git merge upstream/master` → fix any API breaks (e.g. rev239's
+# getMapAngle→getCameraYaw) → push. release-hosted then rebuilds + republishes both apps on the push.
+# See tools/ci/README.md.
 name: upstream-sync
 
 on:
@@ -28,17 +27,17 @@ concurrency:
 
 jobs:
   watch:
-    # Runs only in the private origin (id 1253608468), whose master shares real history with runelite/runelite
-    # so the ancestor check is meaningful; inert in the public forward-history mirror and in any fork.
-    if: github.repository_id == '1253608468'
+    # Runs only on the canonical repo (id 1296635776), whose master shares real history with runelite/runelite
+    # so the ancestor check is meaningful; inert in any fork.
+    if: github.repository_id == '1296635776'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read   # the built-in GITHUB_TOKEN is read-only here — no write scope, so nothing can be pushed
     steps:
       # Pinned to a full commit SHA (not the mutable @v4 tag) — supply-chain hygiene. The only credential is
-      # checkout's default built-in GITHUB_TOKEN (needed to clone the private repo), scoped read-only above and
-      # NOT persisted into .git/config (persist-credentials: false). No PAT, no upstream code runs, nothing pushes.
+      # checkout's default built-in GITHUB_TOKEN, scoped read-only above and NOT persisted into .git/config
+      # (persist-credentials: false). No PAT, no upstream code runs, nothing pushes.
       - name: Checkout master
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -59,6 +58,6 @@ jobs:
             exit 0
           fi
           behind="$(git rev-list --count HEAD..upstream/master)"
-          echo "::error::runelite/runelite is $behind commit(s) ahead of master — an OSRS revision bump may be pending (js5connect_outofdate). Merge locally per the playbook (git fetch upstream && git merge upstream/master → fix API breaks → mirror). See tools/ci/README.md."
+          echo "::error::runelite/runelite is $behind commit(s) ahead of master — an OSRS revision bump may be pending (js5connect_outofdate). Merge locally per the playbook (git fetch upstream && git merge upstream/master → fix API breaks → push). See tools/ci/README.md."
           git --no-pager log --oneline HEAD..upstream/master | head -30
           exit 1

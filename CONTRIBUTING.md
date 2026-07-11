@@ -34,10 +34,9 @@ This sets `core.hooksPath` (per-clone, so run it once after cloning) and activat
 
 - **`pre-commit`** — the contract check above, plus a hygiene gate that blocks staged secrets/keys
   (`tokens.json`, `*.jks`, `keystore.properties`, …), the generated `probes.jar`, local-only
-  development scaffolding (evidence, audits, handoffs, …), AI-attribution references, and anything
-  `gitleaks` flags. It also lints the staged files of each kind — `shellcheck` (shell), `ktlint`
-  (Kotlin), `clang-format` (native, changed lines only) — each run only if that tool is installed.
-- **`commit-msg`** — blocks AI-attribution in the commit message.
+  development scaffolding (evidence, audits, handoffs, …), and anything `gitleaks` flags. It also
+  lints the staged files of each kind — `shellcheck` (shell), `ktlint` (Kotlin), `clang-format`
+  (native, changed lines only) — each run only if that tool is installed.
 
 Override a single commit with `git commit --no-verify` only when a flag is a known false positive.
 

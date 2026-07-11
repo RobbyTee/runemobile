@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# publish-rolling-release.sh — publish the built artifacts as an immutable per-build prerelease on the PUBLIC
-# repo, atomically. The build runs on the PRIVATE origin (audaro/Rune-Mobile) where merges land; this step
-# cross-publishes the APK/IPA/jit-script to audaro/runemobile.
+# publish-rolling-release.sh — publish the built artifacts as an immutable per-build prerelease on this repo
+# (audaro/runemobile), atomically. The hosted build runs on every merge to master and this step publishes the
+# APK/IPA/jit-script to the repo's Releases page.
 #
 # ATOMICITY: each merge gets its OWN immutable prerelease, tag `master-<BUILD_NUMBER>`. It is created as a
 # DRAFT (invisible), ALL assets are uploaded to the draft, and only then is it flipped to published in a single
@@ -10,8 +10,8 @@
 # mixed-version release. The newest prerelease at the top of the Releases page IS "latest master"; old rolling
 # builds are pruned to $RETAIN. Tagged `v*` semver releases are never touched.
 #
-# Auth: needs a token with contents:write on $PUBLISH_REPO as $PUBLISH_TOKEN (preferred) or $GH_TOKEN. Store it
-# as the GitHub Actions secret PUBLISH_TOKEN on the private origin (see tools/ci/README.md). Never written to disk.
+# Auth: needs a token with contents:write on $PUBLISH_REPO as $PUBLISH_TOKEN (preferred) or $GH_TOKEN. Since
+# the build and the release live on the same repo, the workflow's built-in GITHUB_TOKEN suffices. Never written to disk.
 #
 # Usage:
 #   PUBLISH_TOKEN=<pat> tools/ci/publish-rolling-release.sh [DIST_DIR]
@@ -55,12 +55,11 @@ done
 FP_LINE=""
 [ -n "${APK_FINGERPRINT:-}" ] && FP_LINE=$'\nAPK signer SHA-256: `'"${APK_FINGERPRINT}"'` (verify with `apksigner verify --print-certs`)'
 
-# GIT_SHA is the PRIVATE origin commit — recorded only as an internal maintainer build id (a public reader
-# cannot view it, and this pre-release ships no matching source). Framed as such, not as an auditable commit.
+# GIT_SHA is the master commit this build was cut from — a public, auditable reference on this repo.
 NOTES="Automated build of RuneMobile from \`master\` (one immutable prerelease per merge).
 
 - Version: \`${VERSION}\`
-- Build id: \`${GIT_SHA}\` (internal maintainer reference)
+- Commit: \`${GIT_SHA}\`
 - Built: ${BUILD_DATE}${FP_LINE}
 
 The newest prerelease here is the latest \`master\` build; older rolling builds are pruned automatically. For a
