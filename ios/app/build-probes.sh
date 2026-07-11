@@ -59,8 +59,24 @@ verify_sha() {   # <file> <expected-sha256>
   fi
 }
 
+# Fetched from Maven Central when absent (fresh checkout / CI workspace); the SHA gate below still decides
+# whether the bytes are trusted, so a failed or tampered download can never fold into probes.jar.
+CACIO_MAVEN="https://repo1.maven.org/maven2/com/github/caciocavallosilano"
+fetch_if_missing() {   # <file>
+  local f="$1" name artifact
+  [ -f "$f" ] && return 0
+  name="$(basename "$f")"; artifact="${name%-1.18.jar}"
+  echo "== fetch $name from Maven Central =="
+  mkdir -p "$(dirname "$f")"
+  curl -sfL -o "$f" "$CACIO_MAVEN/$artifact/1.18/$name" \
+    || { echo "build-probes: failed to fetch $name from Maven Central" >&2; rm -f "$f"; exit 1; }
+}
+
 rm -rf "$OUT"; mkdir -p "$OUT" "$(dirname "$JARFILE")"
 here="$(pwd)"
+
+fetch_if_missing "$CACIO_LIB/cacio-tta-1.18.jar"
+fetch_if_missing "$CACIO_LIB/cacio-shared-1.18.jar"
 
 if [ "$VERIFY_SHA" = 1 ]; then
   echo "== verify CACIO jar checksums (SUPPLY-1) =="
