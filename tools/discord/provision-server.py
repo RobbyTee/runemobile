@@ -50,6 +50,9 @@ EMBED_LINKS = 1 << 14
 ATTACH_FILES = 1 << 15
 READ_MESSAGE_HISTORY = 1 << 16
 ADD_REACTIONS = 1 << 6
+CREATE_PUBLIC_THREADS = 1 << 35
+CREATE_PRIVATE_THREADS = 1 << 36
+SEND_MESSAGES_IN_THREADS = 1 << 38
 
 CHANNEL_CATEGORY = 4
 CHANNEL_TEXT = 0
@@ -109,7 +112,7 @@ BLUEPRINT = [
         {"name": "crashes-and-logs",
          "topic": "Crash reports and log dumps. In-app 'Report bug' posts here.",
          "webhook": "In-App Reports"},
-        {"name": "triage",
+        {"name": "triage", "private": "Maintainer",
          "topic": "Maintainers-only: sorting, prioritising, and de-duping reports."},
         {"name": "feature-requests", "topic": "Ideas and requests (not bugs)."},
     ]),
@@ -191,8 +194,10 @@ def load_config() -> tuple[str, str]:
 
 
 # ---- Provisioning steps ----------------------------------------------------
-def ensure_roles(dc: Discord, guild: str, dry: bool) -> None:
+def ensure_roles(dc: Discord, guild: str, dry: bool) -> dict:
+    """Create missing roles; return {role_name: role_obj} for real (non-dry) ones."""
     existing = {r["name"]: r for r in dc.get(f"/guilds/{guild}/roles")}
+    roles = dict(existing)
     for role in ROLES:
         if role["name"] in existing:
             print(f"  role   ok      {role['name']}")
@@ -200,25 +205,50 @@ def ensure_roles(dc: Discord, guild: str, dry: bool) -> None:
         if dry:
             print(f"  role   CREATE  {role['name']}")
             continue
-        dc.post(f"/guilds/{guild}/roles", role)
+        roles[role["name"]] = dc.post(f"/guilds/{guild}/roles", role)
         print(f"  role   created {role['name']}")
+    return roles
+
+
+# Thread send/create bits are denied alongside SEND_MESSAGES, otherwise a member
+# can still reply inside an existing thread of a "read-only" channel.
+_NO_SEND = SEND_MESSAGES | ADD_REACTIONS | SEND_MESSAGES_IN_THREADS \
+    | CREATE_PUBLIC_THREADS | CREATE_PRIVATE_THREADS
 
 
 def _readonly_overwrites(guild: str) -> list[dict]:
-    # @everyone (role id == guild id): can view + read history, cannot send.
+    # @everyone (role id == guild id): can view + read history, cannot post.
     return [{
         "id": guild,
         "type": 0,
         "allow": str(VIEW_CHANNEL | READ_MESSAGE_HISTORY),
-        "deny": str(SEND_MESSAGES | ADD_REACTIONS),
+        "deny": str(_NO_SEND),
     }]
 
 
-def ensure_channels(dc: Discord, guild: str, dry: bool) -> dict:
-    """Create categories + channels; return {channel_name: channel_obj} for real ones."""
+def _private_overwrites(guild: str, role_id: str) -> list[dict]:
+    # Hidden from @everyone; visible + writable only to the named role.
+    return [
+        {"id": guild, "type": 0, "allow": "0", "deny": str(VIEW_CHANNEL)},
+        {"id": role_id, "type": 0,
+         "allow": str(VIEW_CHANNEL | SEND_MESSAGES | READ_MESSAGE_HISTORY),
+         "deny": "0"},
+    ]
+
+
+def ensure_channels(dc: Discord, guild: str, roles: dict, dry: bool) -> dict:
+    """Create categories + channels; return {channel_name: channel_obj} for real ones.
+
+    Existing channels are matched by (name, parent category) so a same-named
+    channel in a different category is never adopted. Managed fields (topic,
+    permissions) are only set at creation time — this script owns these channels,
+    so it does not fight a human who deliberately edits one after the fact.
+    """
     channels = dc.get(f"/guilds/{guild}/channels")
     by_name_type = {(c["name"], c["type"]): c for c in channels}
-    created: dict[str, dict] = {c["name"]: c for c in channels if c["type"] == CHANNEL_TEXT}
+    by_name_parent = {(c["name"], c.get("parent_id")): c
+                      for c in channels if c["type"] == CHANNEL_TEXT}
+    created: dict[str, dict] = {}
 
     for cat_name, chans in BLUEPRINT:
         cat = by_name_type.get((cat_name, CHANNEL_CATEGORY))
@@ -232,15 +262,17 @@ def ensure_channels(dc: Discord, guild: str, dry: bool) -> dict:
                           {"name": cat_name, "type": CHANNEL_CATEGORY})
             print(f"  cat    created {cat_name}")
 
+        cat_id = cat["id"] if cat else None
         for ch in chans:
             name = ch["name"]
-            existing = by_name_type.get((name, CHANNEL_TEXT))
+            existing = by_name_parent.get((name, cat_id))
             if existing:
                 print(f"  chan   ok      #{name}")
                 created[name] = existing
                 continue
             if dry:
-                flags = " [readonly]" if ch.get("readonly") else ""
+                flags = " [private]" if ch.get("private") else (
+                    " [readonly]" if ch.get("readonly") else "")
                 hook = f" [webhook: {ch['webhook']}]" if ch.get("webhook") else ""
                 print(f"  chan   CREATE  #{name}{flags}{hook}")
                 continue
@@ -249,9 +281,16 @@ def ensure_channels(dc: Discord, guild: str, dry: bool) -> dict:
                 "type": CHANNEL_TEXT,
                 "topic": ch.get("topic", ""),
             }
-            if cat:
-                body["parent_id"] = cat["id"]
-            if ch.get("readonly"):
+            if cat_id:
+                body["parent_id"] = cat_id
+            if ch.get("private"):
+                role = roles.get(ch["private"])
+                if role:
+                    body["permission_overwrites"] = _private_overwrites(guild, role["id"])
+                else:
+                    print(f"  chan   WARN    role '{ch['private']}' missing; "
+                          f"#{name} created without private lock")
+            elif ch.get("readonly"):
                 body["permission_overwrites"] = _readonly_overwrites(guild)
             obj = dc.post(f"/guilds/{guild}/channels", body)
             created[name] = obj
@@ -325,9 +364,9 @@ def main() -> None:
         print("DRY RUN — nothing will be created.\n")
 
     print("Roles:")
-    ensure_roles(dc, guild, args.dry_run)
+    roles = ensure_roles(dc, guild, args.dry_run)
     print("\nChannels:")
-    channels = ensure_channels(dc, guild, args.dry_run)
+    channels = ensure_channels(dc, guild, roles, args.dry_run)
     print("\nWebhooks:")
     urls = ensure_webhooks(dc, channels, args.dry_run, args.save_webhooks)
     print("\nTemplates:")
