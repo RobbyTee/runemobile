@@ -1,7 +1,19 @@
 # Contributing
 
-Thanks for your interest. This is a personal/technical project; contributions are
-welcome but reviewed on a best-effort, single-maintainer basis.
+Contributions are genuinely welcome — bug reports, fixes, port improvements, docs, and new plugin/UI
+work all help. This is a single-maintainer project, so reviews happen on a best-effort basis and a reply
+may take a little while, but every issue and PR gets read.
+
+**Good ways to start:**
+
+- **Found a bug?** Open an issue with your device/OS, the port (iOS or Android), and steps to reproduce.
+- **Small fix?** Send a PR directly — typos, crashes, one-file fixes need no preamble.
+- **Larger change?** Open an issue first so we can agree on the approach before you invest the work —
+  especially anything touching the shared `headless/` bridge (see below), the build/CI, or upstream RuneLite
+  code, where a heads-up saves a round-trip.
+
+New to the codebase? [`PORTS.md`](PORTS.md) is the repo map, and the README's **Build from source** section
+gets you to a running app.
 
 ## Build setup
 
@@ -96,4 +108,5 @@ The release gate runs them too (a scoped stage, so an unrelated upstream plugin-
 - If you touched `headless/`, confirm the shared contract is unchanged, or that
   `check-contract.sh` passes and you updated the baseline.
 
-Contributions are accepted under the project's BSD 2-Clause license.
+Don't sweat getting every convention perfect on the first try — open the PR and we'll sort out the details
+together. Contributions are accepted under the project's BSD 2-Clause license.
