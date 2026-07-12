@@ -842,8 +842,10 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     UIButton *login = [UIButton buttonWithType:UIButtonTypeSystem];
     login.translatesAutoresizingMaskIntoConstraints = NO;
     login.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightRegular];
+    login.titleLabel.numberOfLines = 2;
+    login.titleLabel.textAlignment = NSTextAlignmentCenter;
     [login setTitleColor:[UIColor colorWithWhite:0.78 alpha:1.0] forState:UIControlStateNormal];
-    [login addTarget:self action:@selector(onLoginWithJagex) forControlEvents:UIControlEventTouchUpInside];
+    [login addTarget:self action:@selector(onLaunchLoginTapped) forControlEvents:UIControlEventTouchUpInside];
     [cover addSubview:login];
     self.playLoginButton = login;
 
@@ -887,10 +889,44 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     NSString *sid  = [t[@"session_id"] isKindOfClass:[NSString class]] ? t[@"session_id"] : nil;
     NSString *name = [t[@"chosen_display_name"] isKindOfClass:[NSString class]] ? t[@"chosen_display_name"] : nil;
     NSString *title = sid.length
-        ? (name.length ? [NSString stringWithFormat:@"Logged in: %@  ·  switch account", name]
-                       : @"Logged in  ·  switch account")
-        : @"Log in with Jagex";
+                          ? (name.length ? [NSString stringWithFormat:@"Logged in: %@  ·  switch or log out", name]
+                                         : @"Logged in  ·  switch or log out")
+                          : @"Log in with Jagex";
     [self.playLoginButton setTitle:title forState:UIControlStateNormal];
+}
+
+// Launch-screen account button: with no saved session, go straight to the web login; when logged in, offer an
+// account menu (switch account / log out) so the user can sign out without digging into the dev debug panel.
+- (void)onLaunchLoginTapped {
+    if (self.presentedViewController)
+        return;
+    NSData *data = [NSData dataWithContentsOfFile:[JVMLauncher tokensPath]];
+    id o = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    NSDictionary *t = [o isKindOfClass:[NSDictionary class]] ? o : nil;
+    NSString *sid = [t[@"session_id"] isKindOfClass:[NSString class]] ? t[@"session_id"] : nil;
+    if (sid.length == 0) {
+        [self onLoginWithJagex]; // not signed in — go straight to the web login
+        return;
+    }
+    NSString *name = [t[@"chosen_display_name"] isKindOfClass:[NSString class]] ? t[@"chosen_display_name"] : nil;
+    UIAlertController *sheet = [UIAlertController
+        alertControllerWithTitle:(name.length ? [NSString stringWithFormat:@"Logged in as %@", name] : @"Logged in")
+                         message:nil
+                  preferredStyle:UIAlertControllerStyleActionSheet];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Switch account (sign in again)"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *x) {
+                                                [self onLoginWithJagex];
+                                            }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Log out"
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(UIAlertAction *x) {
+                                                [self onLogout];
+                                            }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.sourceView = self.playLoginButton;
+    sheet.popoverPresentationController.sourceRect = self.playLoginButton.bounds;
+    [self presentViewController:sheet animated:YES completion:nil];
 }
 
 // Hidden dev affordance: dismiss the cover to expose the W1 debug panel (does NOT launch the JVM).
@@ -2057,6 +2093,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     }];
 
     [self refreshLoginButton];
+    [self refreshLaunchLogin]; // keep the launch-screen account button in sync (logout can come from there now)
     [self appendLine:existed ? @"[login] account forgotten — tokens.json cleared; autologin disarmed."
                              : @"[login] no saved account (no tokens.json)."];
 }
