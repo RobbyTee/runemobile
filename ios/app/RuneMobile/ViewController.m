@@ -1478,11 +1478,12 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         [self.controlsBox.leadingAnchor constraintEqualToAnchor:g.leadingAnchor
                                                        constant:8],
 
-        // Always-on keyboard toggle — top-centre of the safe area (keyboard-safe: the soft keyboard rises from
-        // the bottom and never reaches here, and top-centre sits between the top-left chat and top-right minimap).
+        // Always-on keyboard toggle — near the top-centre of the safe area (keyboard-safe: the soft keyboard
+        // rises from the bottom and never reaches here), nudged 25px right of centre.
         [self.kbFab.topAnchor constraintEqualToAnchor:g.topAnchor
                                              constant:8],
-        [self.kbFab.centerXAnchor constraintEqualToAnchor:g.centerXAnchor],
+        [self.kbFab.centerXAnchor constraintEqualToAnchor:g.centerXAnchor
+                                                 constant:25],
         [self.kbFab.widthAnchor constraintEqualToConstant:44],
         [self.kbFab.heightAnchor constraintEqualToConstant:36],
 
