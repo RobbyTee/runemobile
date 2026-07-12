@@ -917,7 +917,12 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [sheet addAction:[UIAlertAction actionWithTitle:@"Switch account (sign in again)"
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction *x) {
-                                                [self onLoginWithJagex];
+                                                // Present the web login after the sheet finishes dismissing —
+                                                // presenting a modal from inside the action handler races the
+                                                // sheet's own dismissal (matches onSwitchCharacter).
+                                                dispatch_async(dispatch_get_main_queue(), ^{
+                                                    [self onLoginWithJagex];
+                                                });
                                             }]];
     [sheet addAction:[UIAlertAction actionWithTitle:@"Log out"
                                               style:UIAlertActionStyleDestructive
