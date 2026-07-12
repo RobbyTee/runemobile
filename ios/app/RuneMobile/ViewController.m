@@ -1854,6 +1854,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 - (void)applyDeveloperMode {
     if (!self.developerMode)
         self.debugPanel.hidden = YES;
+    [self applyPerfOverlayState]; // the perf overlay is a dev surface too — it must vanish when dev mode is off
 }
 - (void)setDeveloperModeEnabled:(BOOL)on {
     self.developerMode = on;
@@ -4330,12 +4331,16 @@ static int chatRowCanvasH(void) {
 // Reflect the saved perf-overlay toggle onto the overlay itself and the dev-panel button label. Called at
 // panel-build (so the overlay honours the last choice across launches) and after every toggle.
 - (void)applyPerfOverlayState {
-    BOOL on = [[NSUserDefaults standardUserDefaults] boolForKey:@"perfOverlayOn"];
-    self.perfOverlay.hidden = !on;
-    if (on)
+    BOOL pref = [[NSUserDefaults standardUserDefaults] boolForKey:@"perfOverlayOn"];
+    // The overlay is a developer surface: it only shows when dev mode is ON *and* the toggle is set. This keeps
+    // it from lingering on-screen after a user turns developer mode back off (the panel is hidden, so is this).
+    BOOL show = pref && self.developerMode;
+    self.perfOverlay.hidden = !show;
+    if (show)
         [self.view bringSubviewToFront:self.perfOverlay];
-    [self.perfHudButton setTitle:(on ? @"Perf ✓" : @"Perf") forState:UIControlStateNormal];
-    if (on)
+    // The button lives inside the dev panel (only reachable in dev mode), so its title just mirrors the toggle.
+    [self.perfHudButton setTitle:(pref ? @"Perf ✓" : @"Perf") forState:UIControlStateNormal];
+    if (show)
         [self refreshDevDiagnostics]; // populate it immediately rather than waiting for the next tick
 }
 
@@ -4374,14 +4379,16 @@ static int chatRowCanvasH(void) {
     // Active renderer. Once launched, the pending flags ARE the effective renderer (locked at boot); the saved
     // preference can differ (the user may have picked another for next launch), so only trust it pre-launch.
     NSString *renderer;
-    BOOL activeGpu = NO; // GPU/117HD direct-present freezes getFrameSeq — real FPS isn't measurable shell-side.
+    // Only the 117HD DIRECT-present path presents off-thread and never bumps getFrameSeq, so FPS is unmeasurable
+    // shell-side. Base GPU uses the readback present (gpuPublish bumps frameSeq like the CPU snapshot), so its FPS
+    // IS measurable — don't lump it in with 117HD.
+    BOOL directPresent = NO;
     if (self.launched) {
         if (self.pendingRouteCZone) {
             renderer = @"117hd";
-            activeGpu = YES;
+            directPresent = self.pendingRouteCZoneDirect;
         } else if (self.pendingRouteCGpu) {
             renderer = @"gpu";
-            activeGpu = YES;
         } else {
             renderer = @"cpu";
         }
@@ -4405,8 +4412,8 @@ static int chatRowCanvasH(void) {
         _lastFrameSeq = seq;
     }
     NSString *fpsStr = !self.launched ? @"—"
-                                      : (activeGpu ? @"n/a (GPU present)"
-                                                   : [NSString stringWithFormat:@"%.0f", _lastFps]);
+                                      : (directPresent ? @"n/a (GPU present)"
+                                                       : [NSString stringWithFormat:@"%.0f", _lastFps]);
 
     // Resident memory of this process (the increased-memory-limit entitlement is what keeps the JVM heap alive).
     double residentMB = 0;
@@ -4419,7 +4426,7 @@ static int chatRowCanvasH(void) {
 
     // Compact always-on perf overlay (if enabled): fps · resident MB · thermal. Cheap — no bridge JSON.
     if (overlayVisible) {
-        NSString *fpsShort = !self.launched ? @"—" : (activeGpu ? @"gpu" : [NSString stringWithFormat:@"%.0f", _lastFps]);
+        NSString *fpsShort = !self.launched ? @"—" : (directPresent ? @"gpu" : [NSString stringWithFormat:@"%.0f", _lastFps]);
         self.perfOverlay.text = [NSString stringWithFormat:@" %@ fps · %.0f MB · %@ ", fpsShort, residentMB, thermal];
     }
 

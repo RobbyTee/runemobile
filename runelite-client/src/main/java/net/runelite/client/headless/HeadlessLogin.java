@@ -233,17 +233,21 @@ public final class HeadlessLogin
 	static boolean isReconnecting()
 	{
 		// Developer test hook (devSimulateReconnect): force true for a bounded window so the native overlay can
-		// be exercised without a real drop. Time-bounded, so it can never wedge the state on permanently.
-		if (System.currentTimeMillis() < simulateReconnectUntil)
+		// be exercised without a real drop. nanoTime is monotonic, so a wall-clock jump can't extend the window;
+		// the subtraction (deadline - now > 0) is wrap-safe. `armed` guards the initial state, since nanoTime's
+		// origin is arbitrary (and may be negative), so a zero-sentinel deadline would be ambiguous.
+		if (simulateReconnectArmed && simulateReconnectDeadlineNanos - System.nanoTime() > 0)
 		{
 			return true;
 		}
 		return (sawConnectionLost && reconnectAttempts < MAX_RECONNECT) || (reconnectAttempts > 0 && !done);
 	}
 
-	// Wall-clock deadline until which isReconnecting() is forced true by the developer "test reconnect" tool.
-	// Volatile: set from the shell's JNI thread, read on the client thread. 0 = inactive.
-	private static volatile long simulateReconnectUntil;
+	// Monotonic (nanoTime) deadline until which isReconnecting() is forced true by the developer "test reconnect"
+	// tool, plus a one-way arm flag. Volatile: set from the shell's JNI thread, read on the client thread. The
+	// deadline is written before the flag, so a reader seeing armed==true is guaranteed to see the paired deadline.
+	private static volatile boolean simulateReconnectArmed;
+	private static volatile long simulateReconnectDeadlineNanos;
 
 	/**
 	 * Developer test hook: make {@link #isReconnecting()} return true for {@code seconds} (clamped 1..10) so the
@@ -252,7 +256,8 @@ public final class HeadlessLogin
 	static void startSimulatedReconnect(int seconds)
 	{
 		int s = Math.max(1, Math.min(10, seconds));
-		simulateReconnectUntil = System.currentTimeMillis() + s * 1000L;
+		simulateReconnectDeadlineNanos = System.nanoTime() + s * 1_000_000_000L;
+		simulateReconnectArmed = true;
 	}
 
 	/**
