@@ -70,6 +70,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UIButton *canaryButton;
 @property (nonatomic, strong) UIButton *keyboardButton;
 @property (nonatomic, strong) UIButton *settingsButton;  // persistent ⚙ entry point (bottom-left) — the only always-on control
+@property (nonatomic, strong) UIButton *kbFab;           // always-on ⌨︎ keyboard toggle, pinned top-centre (keyboard-safe)
 @property (nonatomic, strong) UIStackView *controlsBox;  // packs the player's pinned on-screen controls above the gear
 @property (nonatomic, strong) UIView *editOverlay;       // the "Edit controls" palette overlay (nil unless editing)
 @property (nonatomic, assign) BOOL developerMode;        // gates the dev tools (debug panel)
@@ -1080,6 +1081,25 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.controlsBox.alignment = UIStackViewAlignmentLeading;
     [self.screen addSubview:self.controlsBox];
 
+    // Always-on keyboard toggle. Unlike the retired bottom-left ⌨︎ (hidden with the rest of the legacy cluster),
+    // this one is pinned at the TOP of the safe area — clear of the soft keyboard, which rises from the bottom and
+    // covered the old spot, so the toggle stays reachable even while the keyboard is up. Top-centre keeps it clear
+    // of the relocated HUD (chat top-left, minimap/orbs top-right) and the bottom-corner native controls. It hides
+    // with the other chrome whenever a full overlay (the world map) takes over, so it never floats over one.
+    self.kbFab = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.kbFab.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.kbFab setTitle:@"⌨︎" forState:UIControlStateNormal];
+    self.kbFab.accessibilityLabel = @"Keyboard";
+    self.kbFab.accessibilityHint = @"Shows or hides the on-screen keyboard";
+    self.kbFab.titleLabel.font = [UIFont systemFontOfSize:22];
+    self.kbFab.tintColor = [UIColor whiteColor];
+    self.kbFab.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
+    self.kbFab.layer.cornerRadius = 8;
+    [self.kbFab addTarget:self
+                   action:@selector(onToggleKeyboard)
+         forControlEvents:UIControlEventTouchUpInside];
+    [self.screen addSubview:self.kbFab];
+
     // Sticky-Shift toggle, next to the keyboard button. Holds VK_SHIFT down via the bridge so the engine's
     // isKeyPressed(KC_SHIFT) path reads true — re-enabling shift-click menu swaps, Shift+right-click marking,
     // and overlay "Configure" on touch (no hardware key). Tap to latch on (highlighted), tap again to release.
@@ -1458,6 +1478,14 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         [self.controlsBox.leadingAnchor constraintEqualToAnchor:g.leadingAnchor
                                                        constant:8],
 
+        // Always-on keyboard toggle — top-centre of the safe area (keyboard-safe: the soft keyboard rises from
+        // the bottom and never reaches here, and top-centre sits between the top-left chat and top-right minimap).
+        [self.kbFab.topAnchor constraintEqualToAnchor:g.topAnchor
+                                             constant:8],
+        [self.kbFab.centerXAnchor constraintEqualToAnchor:g.centerXAnchor],
+        [self.kbFab.widthAnchor constraintEqualToConstant:44],
+        [self.kbFab.heightAnchor constraintEqualToConstant:36],
+
         // (Legacy cluster constraints below stay valid but the buttons are hidden — see hideLegacyCluster.)
         // In-game keyboard control — first row of the legacy cluster.
         [self.keyboardButton.bottomAnchor constraintEqualToAnchor:g.bottomAnchor
@@ -1588,6 +1616,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.developerMode = [[NSUserDefaults standardUserDefaults] boolForKey:@"developerMode"];
     [self applyDeveloperMode];
     [self rebuildPinnedControls];
+    // Keep the keyboard toggle above the (top-left, dev-only) debug panel so it never hides behind it.
+    [self.screen bringSubviewToFront:self.kbFab];
 }
 
 // The legacy always-on cluster (keyboard/shift/ctrl/screenshot/PiP/hotkey + the ≡▦⚙ column + the handle).
@@ -1618,7 +1648,9 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         };
     add(@"Modifiers", @"shift", @"⇧", @"latch", 0);
     add(@"Modifiers", @"ctrl", @"⌃", @"latch", 0);
-    add(@"Common", @"keyboard", @"⌨︎", @"util", 0);
+    // The ⌨︎ keyboard toggle is NOT pinnable — it's a permanent top-centre FAB (self.kbFab), so pinning a
+    // second copy at the covered bottom-left would defeat the point. Its util handler below stays for any
+    // stale pin already saved (it just no-ops out of the palette).
     add(@"Common", @"space", @"Space", @"key", AWT_VK_SPACE);
     add(@"Common", @"enter", @"Enter", @"key", AWT_VK_ENTER);
     add(@"Common", @"esc", @"Esc", @"key", AWT_VK_ESCAPE);
@@ -4722,6 +4754,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     // must NOT toggle it here — setting .hidden=NO on close would resurrect the retired buttons.)
     self.settingsButton.hidden = open;
     self.controlsBox.hidden = open;
+    self.kbFab.hidden = open;
     self.panelDock.view.hidden = open;
     [self appendLine:open ? @"[map] world map OPEN -> map pan/taps, chrome hidden"
                           : @"[map] world map closed -> chrome restored"];

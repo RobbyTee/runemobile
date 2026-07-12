@@ -1861,8 +1861,9 @@ public final class JavaBridge
 	/**
 	 * Whether the gamepack currently has a text field open and awaiting input — a search box (bank/GE/world
 	 * map), a private-message recipient, an "enter amount/name" dialog, etc. ({@code VarClientInt.INPUT_TYPE}
-	 * is non-zero). The native shell polls this to auto-raise the soft keyboard when the game asks for text
-	 * and dismiss it when the field closes, so typing is summoned from inside the game, not a chrome button.
+	 * is non-zero), or the legacy login screen's credential/authenticator entry. The native shell polls this
+	 * to auto-raise the soft keyboard when the game asks for text and dismiss it when the field closes, so
+	 * typing is summoned from inside the game, not a chrome button.
 	 */
 	public static boolean isTextInputOpen()
 	{
@@ -1883,6 +1884,28 @@ public final class JavaBridge
 				try
 				{
 					want = c.getFocusedInputFieldWidget() != null;
+				}
+				catch (RuntimeException ignore)
+				{
+					BridgeFaults.note("JavaBridge.snapshotTextInputOpen", ignore);
+				}
+			}
+			if (!want)
+			{
+				// The legacy login screen never flips INPUT_TYPE or focuses an input-field widget — its
+				// username/password (loginIndex 2) and authenticator (loginIndex 4) fields are drawn by the
+				// gamepack, not the widget system. Detect those two forms the same way LoginScreenPlugin does
+				// so the soft keyboard auto-raises when the player lands on the credential entry, instead of
+				// making them hunt for a keyboard button. The welcome/world-select/connecting screens
+				// (other loginIndex values) have no text field, so they stay untouched.
+				try
+				{
+					GameState gs = c.getGameState();
+					if (gs == GameState.LOGIN_SCREEN || gs == GameState.LOGIN_SCREEN_AUTHENTICATOR)
+					{
+						int li = c.getLoginIndex();
+						want = li == 2 || li == 4;
+					}
 				}
 				catch (RuntimeException ignore)
 				{
