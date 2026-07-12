@@ -586,13 +586,33 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     [self openPanelAtIndex:b.tag];
 }
 
+// Config Profiles / Infoboxes are native screens, not plugin nav-buttons, so they don't sit on the icon rail —
+// Settings routes to them here. Availability is pre-checked by the caller; re-guard so a stale tap can't crash.
+- (void)presentConfigProfiles {
+    if (self.presentedViewController || ![JVMLauncher profilesAvailable])
+        return;
+    ConfigProfilesViewController *vc = [[ConfigProfilesViewController alloc] init];
+    vc.modalPresentationStyle = UIModalPresentationOverFullScreen;
+    vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+    [self presentViewController:vc animated:YES completion:nil];
+}
+
+- (void)presentInfoboxes {
+    if (self.presentedViewController || ![JVMLauncher infoBoxAvailable])
+        return;
+    InfoBoxMenuViewController *vc = [[InfoBoxMenuViewController alloc] init];
+    vc.modalPresentationStyle = UIModalPresentationOverFullScreen;
+    vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+    [self presentViewController:vc animated:YES completion:nil];
+}
+
 // Open the panel at `index`: route Quest Helper / World Switcher to their native reflowed screens (when the
 // reflection bridge can reach the plugin), else open the generic rendered surface. Driven by the rail buttons.
 - (void)openPanelAtIndex:(NSInteger)index {
     if (index < 0 || index >= (NSInteger)self.panels.count) return;
     NSString *tip = [self.panels[index][@"tooltip"] description];
-    // The native reflowed Quest Helper / World Switcher screens are docked-mode only (the grid only runs docked).
-    // The drawer/legacy A-B fallback modes keep showing the rendered panel, matching the prior onSelectorButton.
+    // The native reflowed Quest Helper / World Switcher screens are docked-mode only. The drawer/legacy A-B
+    // fallback modes keep showing the rendered panel, matching the prior onSelectorButton.
     if (self.docked) {
         if ([tip isEqualToString:@"Quest Helper"] && [JVMLauncher questAvailable]) {
             QuestHelperViewController *qh = [[QuestHelperViewController alloc] init];

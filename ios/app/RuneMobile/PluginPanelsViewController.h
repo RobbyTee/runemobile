@@ -23,6 +23,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// immediately. Toggled from Settings ("Show plugin rail"), persisted in NSUserDefaults `rightBarRailHidden`.
 @property (nonatomic, assign) BOOL railHidden;
 
+/// Present the native Config Profiles / Infoboxes screens (Settings entry points; the availability of each is
+/// pre-checked so these no-op if the bridge isn't wired). These are NOT plugin nav-buttons, so they don't sit on
+/// the icon rail — Settings reaches them directly.
+- (void)presentConfigProfiles;
+- (void)presentInfoboxes;
+
 /// YES while the panel's own soft keyboard (a focused Swing text box) is up — the host gates its game-keyboard
 /// auto-poll on this so a game textInputOpen flip doesn't yank the keyboard out from under panel typing (PANEL-1).
 - (BOOL)panelKeyboardActive;

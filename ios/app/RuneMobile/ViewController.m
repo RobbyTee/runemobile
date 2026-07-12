@@ -542,8 +542,12 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 @property (nonatomic, assign) BOOL pluginRailOn;
 @property (nonatomic, assign) BOOL debugOn;
 @property (nonatomic, assign) BOOL developerMode;
+@property (nonatomic, assign) BOOL profilesAvailable; // gates the "Config profiles" row (bridge wired)
+@property (nonatomic, assign) BOOL infoBoxAvailable;  // gates the "Infoboxes" row (bridge wired)
 @property (nonatomic, copy) void (^onEditControls)(void);
 @property (nonatomic, copy) void (^onOpenPlugins)(void);
+@property (nonatomic, copy) void (^onOpenProfiles)(void);
+@property (nonatomic, copy) void (^onOpenInfoboxes)(void);
 @property (nonatomic, copy) void (^onToggleRails)(BOOL);
 @property (nonatomic, copy) void (^onTogglePluginRail)(BOOL);
 @property (nonatomic, copy) void (^onToggleDebug)(BOOL);
@@ -574,6 +578,17 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
+// Extra PLUGINS rows appended after the base two, in fixed order, only when their bridge is wired (mirrors the
+// old grid's synthetic tiles). Both cellForRow and didSelect index into this so the two stay consistent.
+- (NSArray<NSString *> *)pluginExtraRows {
+    NSMutableArray<NSString *> *rows = [NSMutableArray array];
+    if (self.profilesAvailable)
+        [rows addObject:@"profiles"];
+    if (self.infoBoxAvailable)
+        [rows addObject:@"infoboxes"];
+    return rows;
+}
+
 // Sections: 0 Controls · 1 Game · 2 Plugins · 3 Developer (dev rows only when developerMode is on).
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv {
     return 4;
@@ -586,7 +601,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         case 1:
             return 1; // Show tab rails
         case 2:
-            return 2; // Plugin panels + Show plugin rail
+            return 2 + (NSInteger)[self pluginExtraRows].count; // Plugin panels + Show plugin rail (+ profiles/infoboxes)
         case 3:
             return self.developerMode ? 2 : 1; // Developer mode (+ debug panel)
         default:
@@ -648,11 +663,21 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
             cell.textLabel.text = @"Plugin panels";
             cell.detailTextLabel.text = @"Configure your RuneLite plugins";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-        } else {
+        } else if (ip.row == 1) {
             cell.textLabel.text = @"Show plugin rail";
             cell.detailTextLabel.text = @"The plugin-icon strip on the right edge";
             cell.accessoryView = [self switchOn:self.pluginRailOn action:@selector(onPluginRail:)];
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        } else {
+            NSString *extra = [self pluginExtraRows][ip.row - 2];
+            if ([extra isEqualToString:@"profiles"]) {
+                cell.textLabel.text = @"Config profiles";
+                cell.detailTextLabel.text = @"Switch between your saved RuneLite profiles";
+            } else {
+                cell.textLabel.text = @"Infoboxes";
+                cell.detailTextLabel.text = @"Manage the on-screen infobox overlays";
+            }
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         }
     } else { // Developer
         if (ip.row == 0) {
@@ -681,6 +706,10 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         then(self.onEditControls);
     else if (ip.section == 2 && ip.row == 0)
         then(self.onOpenPlugins);
+    else if (ip.section == 2 && ip.row >= 2) {
+        NSString *extra = [self pluginExtraRows][ip.row - 2];
+        then([extra isEqualToString:@"profiles"] ? self.onOpenProfiles : self.onOpenInfoboxes);
+    }
 }
 
 - (void)onRails:(UISwitch *)sw {
@@ -1766,11 +1795,19 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     vc.pluginRailOn = !([ud objectForKey:@"rightBarRailHidden"] != nil && [ud boolForKey:@"rightBarRailHidden"]);
     vc.debugOn = !self.debugPanel.hidden;
     vc.developerMode = self.developerMode;
+    vc.profilesAvailable = [JVMLauncher profilesAvailable];
+    vc.infoBoxAvailable = [JVMLauncher infoBoxAvailable];
     vc.onEditControls = ^{
         [ws onEditControls];
     };
     vc.onOpenPlugins = ^{
         [ws onOpenPluginPanel];
+    };
+    vc.onOpenProfiles = ^{
+        [ws.panelDock presentConfigProfiles];
+    };
+    vc.onOpenInfoboxes = ^{
+        [ws.panelDock presentInfoboxes];
     };
     vc.onToggleRails = ^(BOOL on) {
         if (on != ws.chromeVisible)
