@@ -25,6 +25,7 @@
 #import <fcntl.h>
 #import <os/lock.h>            // os_unfair_lock — guards the JSON-fault rate-limiter (QA-SYS-1 sibling)
 #import <time.h>               // clock_gettime_nsec_np — monotonic window for the rate-limiter
+#import <mach/mach.h>          // task_info — resident memory for the developer-mode diagnostics readout
 
 // The chat tabs match the official mobile app's small size, which makes them fiddly to hit. This button expands its
 // touch area vertically (the 7 tabs are contiguous, so a horizontal miss already lands on a neighbour) so near-miss
@@ -62,13 +63,14 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
     // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
     // desktop stone. A C array, so it lives as an ivar rather than a property.
     CGPoint _tabCentres[14];
+    // Developer-mode FPS sampler: framesShown + timestamp of the last sample window, and the last computed rate.
+    int _fpsFrames;
+    CFTimeInterval _fpsStamp;
+    double _lastFps;
 }
 @property (nonatomic, strong) UITextView *console;
-@property (nonatomic, strong) UIButton *launchButton;
-@property (nonatomic, strong) UIButton *gpuButton;   // GPU Route C: dedicated one-tap button to boot full RuneLite on GPU
-@property (nonatomic, strong) UIButton *zoneButton;  // GPU Zone: dedicated one-tap button to boot full RuneLite on 117HD
-@property (nonatomic, strong) UIButton *zoneFastButton;  // GPU Zone: 117HD resizable + DIRECT present (no readback)
-@property (nonatomic, strong) UIButton *canaryButton;
+@property (nonatomic, strong) UIButton *launchButton; // dev-boot the JVM (the Tap-to-Play cover is the normal path)
+@property (nonatomic, strong) UIButton *canaryButton; // "Test JIT" — the RWX self-test proving JIT is live
 @property (nonatomic, strong) UIButton *keyboardButton;
 @property (nonatomic, strong) UIButton *settingsButton;  // persistent ⚙ entry point (bottom-left) — the only always-on control
 @property (nonatomic, strong) UIButton *kbFab;           // always-on ⌨︎ keyboard toggle, pinned top-centre (keyboard-safe)
@@ -89,26 +91,17 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UIStackView *hotkeyStrip;   // horizontal row of pinned hotkey buttons
 @property (nonatomic, strong) NSArray *hotkeyActions;     // cached [{group,key,label,keyCode,mods,bind}] from the bridge
 @property (nonatomic, assign) BOOL hotkeyStripVisible;
-// W3 hybrid-chrome device de-risk: read the MobileChromeBridge snapshot + proxy a tab switch via the proven
-// JavaBridge.onClick, logging a md5-gateable verdict. The seam proof before native rails are drawn.
-@property (nonatomic, strong) UIButton *chromeButton;
-// On-device Jagex login: opens an embedded OAuth login (WKWebView), mints a session, writes tokens.json.
-// Pure native (no JVM/JIT) so it's enabled from launch, not gated on StikDebug attach.
-@property (nonatomic, strong) UIButton *loginButton;
-// Log out: clears tokens.json (disarms autologin) + purges any persisted Jagex web cookies. Shown only
-// when a session is saved.
-@property (nonatomic, strong) UIButton *logoutButton;
-// LOGIN-1: switch to another already-signed-in character from tokens.json (no re-OAuth) — rewrites
-// chosen_account_id and restarts. Shown only when 2+ accounts are saved.
-@property (nonatomic, strong) UIButton *switchCharButton;
 // Set once the login WKWebView has been shown this session. WebKit then stays permanently resident in the
 // process and breaks the JVM's JIT-mirror brk #0x69 (it crashes at code-cache init), so the JVM must be
 // launched in a fresh process. Gates onLaunch → a one-tap restart.
 @property (nonatomic, assign) BOOL webKitUsedThisSession;
-// Collapsible debug overlay: a small always-on-top toggle shows/hides a panel holding the status,
-// launch/canary buttons and the log console, so the game stays full-screen.
+// Collapsible developer overlay: a small always-on-top toggle shows/hides a panel holding the JIT status,
+// a live diagnostics readout, the dev actions (boot / test JIT / copy-clear-share log) and the log console,
+// so the game stays full-screen. Gated behind Settings → Developer mode (or a triple-tap on the play cover).
 @property (nonatomic, strong) UIView *debugPanel;
 @property (nonatomic, strong) UIButton *debugToggle;
+@property (nonatomic, strong) UILabel *diagLabel;        // live JVM/renderer/FPS/memory/session/build readout
+@property (nonatomic, strong) UIStackView *devActionRow; // Test JIT / Copy log / Clear / Share, in a row
 // Hidden capture field: becomes first responder to raise the soft keyboard; its change/return callbacks
 // are translated into AWT KeyEvents. It never actually holds text (a zero-width sentinel keeps backspace
 // firing, and every change returns NO).
@@ -1283,6 +1276,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.debugPanel.hidden = YES;   // #1: hidden by default — the ≡ toggle reveals the W1 scaffolding on demand
     [self.view addSubview:self.debugPanel];
 
+    // Row 1 — JIT status line (coloured: amber while waiting, green once CS_DEBUGGED). Driven by the JIT poller.
     self.statusLabel = [[UILabel alloc] init];
     self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
     self.statusLabel.textColor = [UIColor systemYellowColor];
@@ -1290,120 +1284,58 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.statusLabel.text = @"JIT: waiting…";
     [self.debugPanel addSubview:self.statusLabel];
 
+    // Row 2 — live diagnostics readout (JVM / renderer / FPS / memory / session / bridge / build). Refreshed
+    // by refreshDevDiagnostics from the JIT poller (pre-launch) and the display tick (in-game), only while shown.
+    self.diagLabel = [[UILabel alloc] init];
+    self.diagLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.diagLabel.numberOfLines = 0;
+    self.diagLabel.textColor = [UIColor colorWithWhite:0.72 alpha:1.0];
+    self.diagLabel.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
+    self.diagLabel.text = @"(diagnostics appear here)";
+    [self.debugPanel addSubview:self.diagLabel];
+
+    // Row 3 — primary boot. The Tap-to-Play cover is the normal entry point; this is the dev boot for when the
+    // panel is revealed directly (triple-tap on the cover). Enabled once the StikDebug attach flips CS_DEBUGGED.
     self.launchButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.launchButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.launchButton setTitle:@"Run AWT activation (§6.0)" forState:UIControlStateNormal];
+    [self.launchButton setTitle:@"Start game" forState:UIControlStateNormal];
     self.launchButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
     self.launchButton.enabled = NO;
-    [self.launchButton addTarget:self action:@selector(onLaunch)
+    [self.launchButton addTarget:self
+                          action:@selector(onLaunch)
                 forControlEvents:UIControlEventTouchUpInside];
-    // GPU Route C dev affordance: LONG-PRESS the launch button to boot the L1 GPU kill-test (routec-l1.jar +
-    // RouteC_registerGLNatives + RouteCL1Probe) instead of the full RuneLite boot. A plain tap is unchanged.
-    UILongPressGestureRecognizer *l1lp = [[UILongPressGestureRecognizer alloc]
-        initWithTarget:self action:@selector(onLaunchRouteCL1Gesture:)];
-    [self.launchButton addGestureRecognizer:l1lp];
-    // TWO-FINGER long-press the launch button to boot the FULL RuneLite in GPU Route C mode (bridge natives
-    // registered -> the gpu plugin renders on the device GPU). Distinct from the one-finger L1 gesture.
-    UILongPressGestureRecognizer *gpulp = [[UILongPressGestureRecognizer alloc]
-        initWithTarget:self action:@selector(onLaunchRouteCGpuGesture:)];
-    gpulp.numberOfTouchesRequired = 2;
-    [self.launchButton addGestureRecognizer:gpulp];
-    // THREE-FINGER long-press the launch button to boot the FULL RuneLite in GPU Zone (117HD/RLHD) mode: the
-    // staged rlhd jar joins the classpath, the zone facade-delta natives register, and RLHDStarter loads +
-    // starts rs117.hd.HdPlugin (the Zone renderer). Distinct from one-finger L1 / two-finger base-GPU.
-    UILongPressGestureRecognizer *zonelp = [[UILongPressGestureRecognizer alloc]
-        initWithTarget:self action:@selector(onLaunchRouteCZoneGesture:)];
-    zonelp.numberOfTouchesRequired = 3;
-    [self.launchButton addGestureRecognizer:zonelp];
     [self.debugPanel addSubview:self.launchButton];
 
+    // Row 4 — dev actions, in one horizontal row: JIT self-test + log tools (copy / clear / share the file).
     self.canaryButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.canaryButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.canaryButton setTitle:@"RWX canary" forState:UIControlStateNormal];
-    [self.canaryButton addTarget:self action:@selector(onCanary)
-                forControlEvents:UIControlEventTouchUpInside];
-    [self.debugPanel addSubview:self.canaryButton];
+    [self.canaryButton setTitle:@"Test JIT" forState:UIControlStateNormal];
+    self.canaryButton.titleLabel.font = [UIFont systemFontOfSize:14];
+    [self.canaryButton addTarget:self action:@selector(onCanary) forControlEvents:UIControlEventTouchUpInside];
 
-    self.chromeButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.chromeButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.chromeButton setTitle:@"Chrome test (read+switch)" forState:UIControlStateNormal];
-    self.chromeButton.titleLabel.font = [UIFont systemFontOfSize:15];
-    [self.chromeButton addTarget:self action:@selector(onChromeTest)
-                forControlEvents:UIControlEventTouchUpInside];
-    [self.debugPanel addSubview:self.chromeButton];
+    UIButton *copyLog = [UIButton buttonWithType:UIButtonTypeSystem];
+    [copyLog setTitle:@"Copy log" forState:UIControlStateNormal];
+    copyLog.titleLabel.font = [UIFont systemFontOfSize:14];
+    [copyLog addTarget:self action:@selector(onCopyLog) forControlEvents:UIControlEventTouchUpInside];
 
-    // GPU Route C: dedicated one-tap button to boot full RuneLite on the device GPU (equivalent to the
-    // two-finger long-press on the launch button, but unambiguous). Enabled together with the launch button
-    // once the JIT debugger is attached.
-    self.gpuButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.gpuButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.gpuButton setTitle:@"▶ Run GPU (Route C)" forState:UIControlStateNormal];
-    self.gpuButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
-    self.gpuButton.enabled = NO;
-    [self.gpuButton addTarget:self action:@selector(onLaunchGpu)
-             forControlEvents:UIControlEventTouchUpInside];
-    [self.debugPanel addSubview:self.gpuButton];
+    UIButton *clearLog = [UIButton buttonWithType:UIButtonTypeSystem];
+    [clearLog setTitle:@"Clear" forState:UIControlStateNormal];
+    clearLog.titleLabel.font = [UIFont systemFontOfSize:14];
+    [clearLog addTarget:self action:@selector(onClearLog) forControlEvents:UIControlEventTouchUpInside];
 
-    self.zoneButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.zoneButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.zoneButton setTitle:@"▶ 117HD (Zone)" forState:UIControlStateNormal];
-    self.zoneButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
-    self.zoneButton.tintColor = [UIColor systemGreenColor];
-    self.zoneButton.enabled = NO;
-    [self.zoneButton addTarget:self action:@selector(onLaunchZone)
-             forControlEvents:UIControlEventTouchUpInside];
-    [self.debugPanel addSubview:self.zoneButton];
+    UIButton *shareLog = [UIButton buttonWithType:UIButtonTypeSystem];
+    [shareLog setTitle:@"Share" forState:UIControlStateNormal];
+    shareLog.titleLabel.font = [UIFont systemFontOfSize:14];
+    [shareLog addTarget:self action:@selector(onShareLog) forControlEvents:UIControlEventTouchUpInside];
 
-    // Fallback: 117HD resizable on the READBACK present (no CAEAGLLayer). The green button defaults to direct
-    // present (faster); this is here if direct present ever scans out black or regresses.
-    self.zoneFastButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.zoneFastButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.zoneFastButton setTitle:@"117HD readback" forState:UIControlStateNormal];
-    self.zoneFastButton.titleLabel.font = [UIFont systemFontOfSize:15];
-    self.zoneFastButton.tintColor = [UIColor systemGrayColor];
-    self.zoneFastButton.enabled = NO;
-    [self.zoneFastButton addTarget:self action:@selector(onLaunchZoneReadback)
-             forControlEvents:UIControlEventTouchUpInside];
-    [self.debugPanel addSubview:self.zoneFastButton];
+    self.devActionRow = [[UIStackView alloc] initWithArrangedSubviews:@[ self.canaryButton, copyLog, clearLog, shareLog ]];
+    self.devActionRow.translatesAutoresizingMaskIntoConstraints = NO;
+    self.devActionRow.axis = UILayoutConstraintAxisHorizontal;
+    self.devActionRow.distribution = UIStackViewDistributionFillEqually;
+    self.devActionRow.alignment = UIStackViewAlignmentCenter;
+    self.devActionRow.spacing = 4;
+    [self.debugPanel addSubview:self.devActionRow];
 
-    // "Renderers as plugins": the renderer launch buttons are retired — Tap to Play reads the saved renderer
-    // preference and the user selects GPU/117HD from the plugins panel. Hidden (not deleted) so the dev
-    // gestures + their constraints stay intact. The L1 kill-test button (if any) is unaffected.
-    self.gpuButton.hidden = YES;
-    self.zoneButton.hidden = YES;
-    self.zoneFastButton.hidden = YES;
-
-    self.loginButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.loginButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.loginButton setTitle:@"Log in with Jagex" forState:UIControlStateNormal];
-    self.loginButton.titleLabel.font = [UIFont systemFontOfSize:15];
-    [self.loginButton addTarget:self action:@selector(onLoginWithJagex)
-               forControlEvents:UIControlEventTouchUpInside];
-    [self.debugPanel addSubview:self.loginButton];
-
-    self.logoutButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.logoutButton.translatesAutoresizingMaskIntoConstraints = NO;
-    // LOGIN-2: this clears tokens.json + the OAuth cookies and disarms autologin — it does NOT end a live in-game
-    // session (that's the in-game Logout tab). Labelled honestly so it isn't mistaken for the game logout.
-    [self.logoutButton setTitle:@"Forget account" forState:UIControlStateNormal];
-    self.logoutButton.titleLabel.font = [UIFont systemFontOfSize:15];
-    self.logoutButton.tintColor = [UIColor systemRedColor];
-    self.logoutButton.hidden = YES;   // refreshLoginButton reveals it when a session is saved
-    [self.logoutButton addTarget:self action:@selector(onLogout)
-                forControlEvents:UIControlEventTouchUpInside];
-    [self.debugPanel addSubview:self.logoutButton];
-
-    // LOGIN-1: switch to another stored character (reuses the saved session — no web re-login). Hidden until
-    // tokens.json holds 2+ accounts (refreshLoginButton reveals it).
-    self.switchCharButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.switchCharButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.switchCharButton setTitle:@"Switch character" forState:UIControlStateNormal];
-    self.switchCharButton.titleLabel.font = [UIFont systemFontOfSize:15];
-    self.switchCharButton.hidden = YES;
-    [self.switchCharButton addTarget:self action:@selector(onSwitchCharacter)
-                    forControlEvents:UIControlEventTouchUpInside];
-    [self.debugPanel addSubview:self.switchCharButton];
-
+    // Row 5 — the live log console.
     self.console = [[UITextView alloc] init];
     self.console.translatesAutoresizingMaskIntoConstraints = NO;
     self.console.editable = NO;
@@ -1575,46 +1507,29 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         [self.debugPanel.widthAnchor constraintEqualToAnchor:g.widthAnchor
                                                   multiplier:0.62],
 
-        // Panel contents.
+        // Panel contents — stacked top to bottom: JIT status, diagnostics, Start, the action row, then the log.
         [self.statusLabel.topAnchor constraintEqualToAnchor:p.topAnchor],
         [self.statusLabel.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.statusLabel.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
-        [self.launchButton.topAnchor constraintEqualToAnchor:self.statusLabel.bottomAnchor
+        [self.diagLabel.topAnchor constraintEqualToAnchor:self.statusLabel.bottomAnchor
+                                                 constant:4],
+        [self.diagLabel.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
+        [self.diagLabel.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
+        [self.launchButton.topAnchor constraintEqualToAnchor:self.diagLabel.bottomAnchor
                                                     constant:6],
         [self.launchButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
-        [self.canaryButton.centerYAnchor constraintEqualToAnchor:self.launchButton.centerYAnchor],
-        [self.canaryButton.leadingAnchor constraintEqualToAnchor:self.launchButton.trailingAnchor
-                                                        constant:24],
-        [self.chromeButton.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor
+        [self.devActionRow.topAnchor constraintEqualToAnchor:self.launchButton.bottomAnchor
                                                     constant:6],
-        [self.chromeButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
-        [self.gpuButton.centerYAnchor constraintEqualToAnchor:self.chromeButton.centerYAnchor],
-        [self.gpuButton.leadingAnchor constraintEqualToAnchor:self.chromeButton.trailingAnchor
-                                                     constant:24],
-        [self.zoneButton.centerYAnchor constraintEqualToAnchor:self.gpuButton.centerYAnchor],
-        [self.zoneButton.leadingAnchor constraintEqualToAnchor:self.gpuButton.trailingAnchor
-                                                      constant:24],
-        // ⚡ Fast on its own row (the chrome/gpu/zone row is already full-width).
-        [self.zoneFastButton.topAnchor constraintEqualToAnchor:self.chromeButton.bottomAnchor
-                                                      constant:6],
-        [self.zoneFastButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
-        [self.loginButton.topAnchor constraintEqualToAnchor:self.zoneFastButton.bottomAnchor
-                                                   constant:6],
-        [self.loginButton.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
-        [self.logoutButton.centerYAnchor constraintEqualToAnchor:self.loginButton.centerYAnchor],
-        [self.logoutButton.leadingAnchor constraintEqualToAnchor:self.loginButton.trailingAnchor
-                                                        constant:16],
-        [self.switchCharButton.centerYAnchor constraintEqualToAnchor:self.loginButton.centerYAnchor],
-        [self.switchCharButton.leadingAnchor constraintEqualToAnchor:self.logoutButton.trailingAnchor
-                                                            constant:16],
-        [self.console.topAnchor constraintEqualToAnchor:self.loginButton.bottomAnchor
+        [self.devActionRow.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
+        [self.devActionRow.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
+        [self.console.topAnchor constraintEqualToAnchor:self.devActionRow.bottomAnchor
                                                constant:6],
         [self.console.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.console.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
         [self.console.bottomAnchor constraintEqualToAnchor:p.bottomAnchor],
     ]];
 
-    [self refreshLoginButton];   // reflect any already-saved session on the button title
+    [self refreshLoginButton]; // reflect any already-saved session on the launch-screen login row
 
     // Fresh screen: hide the entire legacy bottom-left cluster (it stays in the hierarchy, inert, so its
     // constraints and action methods keep working when a control is pinned). Then restore dev mode + build
@@ -2094,21 +2009,9 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 }
 
 // Reflect the saved login on the button title so the user can see they're signed in (and re-login if needed).
+// Account state now lives entirely on the Tap-to-Play cover (log in / switch / forget), so this just keeps
+// that row current. Retained as the single call site the login/logout/switch flows already invoke.
 - (void)refreshLoginButton {
-    NSData *data = [NSData dataWithContentsOfFile:[JVMLauncher tokensPath]];
-    id o = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-    NSDictionary *t = [o isKindOfClass:[NSDictionary class]] ? o : nil;
-    NSString *sid  = [t[@"session_id"] isKindOfClass:[NSString class]] ? t[@"session_id"] : nil;
-    NSString *name = [t[@"chosen_display_name"] isKindOfClass:[NSString class]] ? t[@"chosen_display_name"] : nil;
-    NSString *title = sid.length
-        ? (name.length ? [NSString stringWithFormat:@"Logged in: %@  ·  re-login", name] : @"Logged in  ·  re-login")
-        : @"Log in with Jagex";
-    [self.loginButton setTitle:title forState:UIControlStateNormal];
-    self.logoutButton.hidden = (sid.length == 0);
-    // LOGIN-1: only offer "Switch character" when there's a live session AND 2+ stored characters to switch between.
-    id accs = t[@"accounts"];
-    NSUInteger nAcc = [accs isKindOfClass:[NSArray class]] ? [(NSArray *)accs count] : 0;
-    self.switchCharButton.hidden = (sid.length == 0 || nAcc < 2);
     [self refreshLaunchLogin];   // #1: keep the Tap-to-Play login row in sync
 }
 
@@ -2174,8 +2077,11 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         }]];
     }
     [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    sheet.popoverPresentationController.sourceView = self.switchCharButton;
-    sheet.popoverPresentationController.sourceRect = self.switchCharButton.bounds;
+    // Anchor to the bottom-centre of the view (this is reached from the Tap-to-Play account menu); on iPhone
+    // the action sheet slides up regardless, but a valid anchor keeps it safe in any regular-width context.
+    sheet.popoverPresentationController.sourceView = self.view;
+    sheet.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(self.view.bounds),
+                                                                CGRectGetMaxY(self.view.bounds) - 40, 1, 1);
     [self presentViewController:sheet animated:YES completion:nil];
 }
 
@@ -2948,11 +2854,9 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
         }
         if (attached && !self.launchButton.enabled && !self.launched) {
             self.launchButton.enabled = YES;
-            self.gpuButton.enabled = YES;
-            self.zoneButton.enabled = YES;
-            self.zoneFastButton.enabled = YES;
-            [self appendLine:@"StikDebug attached — CS_DEBUGGED set. Tap Start JVM."];
+            [self appendLine:@"StikDebug attached — CS_DEBUGGED set. Tap Start game."];
         }
+        [self refreshDevDiagnostics]; // keep the readout live pre-launch (no-op while the panel is hidden)
     }];
 }
 
@@ -4280,121 +4184,87 @@ static int chatRowCanvasH(void) {
     [self appendLine:[NSString stringWithFormat:@"[chrome] rails %@", self.chromeVisible ? @"ON" : @"OFF"]];
 }
 
-// W3 hybrid-chrome device de-risk: prove the native side can (a) READ the MobileChromeBridge snapshot on
-// device and (b) SWITCH the active tab by proxying a click on a live tab-stone centre through the proven
-// JavaBridge.onClick — the cover-and-proxy seam, before any native rails are drawn. Emits a single
-// bash-parseable verdict line to hello-shell.log (md5-gated off-device).
-- (void)onChromeTest {
-    if (![JVMLauncher bridgeReady]) { [self appendLine:@"[chrome-dev] bridge not ready (log in first)"]; return; }
-    NSString *snap = [JVMLauncher chromeSnapshot];
-    if (snap.length == 0) { [self appendLine:@"[chrome-dev] snapshot nil/empty"]; return; }
-    // Log a trimmed copy so the device snapshot bounds are recoverable for building the rails next.
-    NSString *trim = snap.length > 600 ? [snap substringToIndex:600] : snap;
-    [self appendLine:[NSString stringWithFormat:@"[chrome-dev] snapshot=%@", trim]];
+// Copy the whole log to the clipboard so a session can be pasted into a bug note without the device round-trip.
+- (void)onCopyLog {
+    [UIPasteboard generalPasteboard].string = self.console.text ?: @"";
+    [self appendLine:@"[dev] log copied to clipboard"];
+}
 
-    NSError *err = nil;
-    id obj = [NSJSONSerialization JSONObjectWithData:[snap dataUsingEncoding:NSUTF8StringEncoding]
-                                             options:0 error:&err];
-    if (![obj isKindOfClass:[NSDictionary class]]) {
-        [self appendLine:[NSString stringWithFormat:@"[chrome-dev] parse failed: %@", err.localizedDescription]];
+// Clear the on-screen console (the on-disk jvm-stdio.log is untouched — use Share to export the full file).
+- (void)onClearLog {
+    self.console.text = @"";
+}
+
+// Share the raw JVM stdout/stderr log file (Documents/jvm-stdio.log) via the system share sheet — AirDrop it
+// to a Mac, save to Files, etc. Falls back to sharing the on-screen console text if the file isn't there yet.
+- (void)onShareLog {
+    NSString *docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    NSString *logPath = [docs stringByAppendingPathComponent:@"jvm-stdio.log"];
+    id item = [[NSFileManager defaultManager] fileExistsAtPath:logPath]
+                  ? (id)[NSURL fileURLWithPath:logPath]
+                  : (id)(self.console.text ?: @"");
+    UIActivityViewController *av = [[UIActivityViewController alloc] initWithActivityItems:@[ item ]
+                                                                     applicationActivities:nil];
+    av.popoverPresentationController.sourceView = self.devActionRow;
+    av.popoverPresentationController.sourceRect = self.devActionRow.bounds;
+    [self presentViewController:av animated:YES completion:nil];
+}
+
+// Developer-mode diagnostics: refresh the live readout (JVM / renderer / FPS / memory / session / bridge /
+// build). Cheap-guards on the panel being visible, so it's a no-op during normal play. Called from the JIT
+// poller (pre-launch) and the display tick (in-game).
+- (void)refreshDevDiagnostics {
+    if (!self.debugPanel || self.debugPanel.hidden)
         return;
+
+    // FPS — sample framesShown over a ~0.5s window so the number is stable rather than per-frame jitter.
+    CFTimeInterval now = CACurrentMediaTime();
+    if (_fpsStamp <= 0) {
+        _fpsStamp = now;
+        _fpsFrames = self.framesShown;
     }
-    NSDictionary *d = (NSDictionary *)obj;
-    if (![d[@"loggedIn"] boolValue]) { [self appendLine:@"[chrome-dev] not LOGGED_IN yet — log in then retry"]; return; }
-    int activeBefore = [d[@"activeTab"] intValue];
-    NSArray *tabs = [d[@"tabs"] isKindOfClass:[NSArray class]] ? d[@"tabs"] : @[];
-
-    // Pick a target: the first present tab stone (non-null bounds) whose index != the active tab.
-    int target = -1, tcx = 0, tcy = 0, present = 0;
-    for (NSUInteger i = 0; i < tabs.count; i++) {
-        id t = tabs[i];
-        if (![t isKindOfClass:[NSArray class]] || [(NSArray *)t count] < 4) continue;
-        present++;
-        if (target < 0 && (int)i != activeBefore) {
-            NSArray *b = (NSArray *)t;
-            target = (int)i;
-            tcx = [b[0] intValue] + [b[2] intValue] / 2;
-            tcy = [b[1] intValue] + [b[3] intValue] / 2;
-        }
+    CFTimeInterval dt = now - _fpsStamp;
+    if (dt >= 0.5) {
+        _lastFps = (self.framesShown - _fpsFrames) / dt;
+        _fpsStamp = now;
+        _fpsFrames = self.framesShown;
     }
-    if (target < 0) { [self appendLine:[NSString stringWithFormat:@"[chrome-dev] no switchable tab (present=%d active=%d)", present, activeBefore]]; return; }
 
-    [self appendLine:[NSString stringWithFormat:@"[chrome-dev] read=ok present=%d activeBefore=%d target=%d centre=%d,%d -> proxy click",
-                      present, activeBefore, target, tcx, tcy]];
-    [JVMLauncher postClickX:tcx y:tcy button:1];
+    // Resident memory of this process (the increased-memory-limit entitlement is what keeps the JVM heap alive).
+    double residentMB = 0;
+    mach_task_basic_info_data_t ti;
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&ti, &count) == KERN_SUCCESS)
+        residentMB = ti.resident_size / (1024.0 * 1024.0);
 
-    // Re-read after the engine has had a few ticks to switch + the bridge to re-snapshot, then verdict.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        NSString *snap2 = [JVMLauncher chromeSnapshot];
-        NSDictionary *d2 = [snap2 isKindOfClass:[NSString class]]
-            ? [NSJSONSerialization JSONObjectWithData:[snap2 dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil]
-            : nil;
-        int activeAfter = [d2 isKindOfClass:[NSDictionary class]] ? [d2[@"activeTab"] intValue] : -999;
-        BOOL switched = (activeAfter == target);
-        [self appendLine:[NSString stringWithFormat:
-            @"[chrome-dev] CHROME_DEVICE read=ok present=%d activeBefore=%d target=%d activeAfter=%d switched=%@",
-            present, activeBefore, target, activeAfter, switched ? @"yes" : @"no"]];
-    });
-}
+    // Bridge + session state (nil before the VM/facade is up).
+    BOOL bridge = [JVMLauncher bridgeReady];
+    NSString *session = @"—";
+    if (bridge) {
+        NSString *snap = [JVMLauncher chromeSnapshot];
+        NSDictionary *d = snap.length ? parseBridgeJSON(snap, "ViewController.refreshDevDiagnostics") : nil;
+        if ([d[@"reconnecting"] boolValue])
+            session = @"reconnecting";
+        else if ([d[@"loggedIn"] boolValue])
+            session = @"logged in";
+        else
+            session = @"at login";
+    }
 
-// GPU Route C — long-press the launch button to route into the L1 kill-test (single fire on press-began).
-- (void)onLaunchRouteCL1Gesture:(UILongPressGestureRecognizer *)g {
-    if (g.state != UIGestureRecognizerStateBegan) return;
-    if (self.launched) return;
-    self.pendingRouteCL1 = YES;
-    [self onLaunch];
-}
+    NSString *pref = [[NSUserDefaults standardUserDefaults] stringForKey:@"rendererPref"] ?: @"cpu";
+    NSString *ver = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"?";
+    NSString *bld = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"?";
+    NSString *jvm = self.launched ? (bridge ? @"running" : @"booting…") : @"not started";
 
-- (void)onLaunchRouteCGpuGesture:(UILongPressGestureRecognizer *)g {
-    if (g.state != UIGestureRecognizerStateBegan) return;
-    if (self.launched) return;
-    // GPU Route C black-scene bisection: two-finger long-press = GPU in FIXED mode (NO headless.resize, stays
-    // 765x503). The CPU path renders the scene fine at the resizable 1304x600 + viewport=0x0 state, while GPU
-    // resizable never dispatches the scene render (drawScene=0). Fixed mode isolates whether the resizable
-    // viewport/scene-dispatch path is the GPU-broken one. The ▶ Run GPU button stays GPU + resize.
-    self.pendingRouteCGpu = YES;
-    self.pendingRouteCGpuNoResize = YES;
-    [self onLaunch];
-}
-
-// "117HD readback" button: 117HD resizable on the proven glReadPixels READBACK present (no CAEAGLLayer) — the
-// fallback if the default direct-present path scans out black or regresses on a future change. Same resizable
-// canvas/sharpness/chrome as the green button; just the slower present (~15fps vs ~18+).
-- (void)onLaunchZoneReadback {
-    if (self.launched) return;
-    self.pendingRouteCZone = YES;
-    [self onLaunch];
-}
-
-// THREE-FINGER long-press: boot 117HD/Zone in the FIXED 765x503 fallback (no headless.resize) — the proven
-// readback path from Zone bring-up. The one-tap buttons cover resizable readback (green) + resizable direct
-// present (⚡); this gesture stays as the fixed-mode escape hatch.
-- (void)onLaunchRouteCZoneGesture:(UILongPressGestureRecognizer *)g {
-    if (g.state != UIGestureRecognizerStateBegan) return;
-    if (self.launched) return;
-    self.pendingRouteCZone = YES;
-    self.pendingRouteCGpuNoResize = YES;
-    [self onLaunch];
-}
-
-// GPU Route C — dedicated one-tap button (same effect as the two-finger long-press, but unambiguous).
-- (void)onLaunchGpu {
-    if (self.launched) return;
-    self.pendingRouteCGpu = YES;
-    [self onLaunch];
-}
-
-// The DEFAULT 117HD boot (one-tap green button): RESIZABLE + DIRECT present. Resizable = the engine canvas resizes
-// to renderW×renderH (~1302x600) after login (sharp + the native Jagex-mobile chrome activates, all gated on
-// client.isResized()); direct present = RLHD renders straight into a CAEAGLLayer drawable scanned out by
-// presentRenderbuffer (no per-frame glReadPixels readback — device-confirmed faster). The CAEAGLLayer starts hidden
-// so the CPU login/loading blit shows during boot and is revealed only once the world is warmed up (no black boot,
-// no sky flash). Fallbacks: the "117HD readback" button (resizable readback) and the 3-finger gesture (fixed 765).
-- (void)onLaunchZone {
-    if (self.launched) return;
-    self.pendingRouteCZone = YES;
-    self.pendingRouteCZoneDirect = YES;
-    [self onLaunch];
+    self.diagLabel.text = [NSString stringWithFormat:
+                                        @"JVM       %@\n"
+                                        @"Renderer  %@\n"
+                                        @"FPS       %.0f\n"
+                                        @"Memory    %.0f MB\n"
+                                        @"Session   %@\n"
+                                        @"Bridge    %@\n"
+                                        @"Build     %@ (%@)",
+                                        jvm, pref, _lastFps, residentMB, session, bridge ? @"ready" : @"—", ver, bld];
 }
 
 - (void)onLaunch {
@@ -4404,9 +4274,6 @@ static int chatRowCanvasH(void) {
     if (self.webKitUsedThisSession) { [self promptRestartToPlay]; return; }
     self.launched = YES;
     self.launchButton.enabled = NO;
-    self.gpuButton.enabled = NO;
-    self.zoneButton.enabled = NO;
-    self.zoneFastButton.enabled = NO;
     [self.jitTimer invalidate];
     [self captureStdio];
 
@@ -4922,6 +4789,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         [self drainNotifications];
         [self drainLinks];
         [self drainScreenshots];   // SHOT-2: surface engine auto-screenshots to Photos (when enabled)
+        [self refreshDevDiagnostics]; // developer-mode readout (~2 Hz; no-op while the panel is hidden)
     }
 
     // PERF-MEMORY-THERMAL-01: thermal governor, 117HD boots only (~0.5 Hz; see thermalGovernorTick).
