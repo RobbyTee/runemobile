@@ -47,11 +47,6 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 @interface InfoBoxMenuViewController : UIViewController
 @end
 
-// §3.3 redesign: the labelled/searchable/favourites grid launcher. Defined at the bottom of this file.
-@interface MUIPluginGrid : UIViewController
-- (instancetype)initWithPanels:(NSArray<NSDictionary *> *)panels onPick:(void (^)(NSString *tooltip))onPick;
-@end
-
 @interface PluginPanelsViewController () <UIScrollViewDelegate, UITextFieldDelegate>
 @property (nonatomic, strong) UITextField *panelKbField;   // PANEL-1: hidden field mirroring a focused Swing text box
 @property (nonatomic, assign) CGSize lastPanelImgSize;     // re-layout only on size change (preserve zoom)
@@ -588,38 +583,12 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 }
 
 - (void)onSelectorButton:(UIButton *)b {
-    [self openPanelAtIndex:b.tag fromGrid:NO];
-}
-
-// §3.3: the FAB-launched grid. Reuses the live panel list (label + icon + pinned) and routes a tile back through
-// the same openPanelAtIndex fork (native Quest Helper / World Switcher, else the rendered panel).
-- (void)presentGridLauncher {
-    if (self.presentedViewController) return;
-    __weak typeof(self) ws = self;
-    MUIPluginGrid *grid = [[MUIPluginGrid alloc] initWithPanels:[self gridTilesWithSynthetics]
-                                                         onPick:^(NSString *tooltip) {
-                                                             if ([ws presentSyntheticPanel:tooltip])
-                                                                 return; // Profiles / Infoboxes (not plugin nav buttons)
-                                                             NSInteger idx = [ws indexForPanelTooltip:tooltip];
-                                                             if (idx >= 0)
-                                                                 [ws openPanelAtIndex:idx fromGrid:YES];
-                                                         }];
-    if (@available(iOS 15.0, *)) {
-        grid.modalPresentationStyle = UIModalPresentationPageSheet;
-        UISheetPresentationController *sheet = grid.sheetPresentationController;
-        sheet.detents = @[UISheetPresentationControllerDetent.mediumDetent,
-                          UISheetPresentationControllerDetent.largeDetent];
-        sheet.prefersGrabberVisible = YES;
-    } else {
-        grid.modalPresentationStyle = UIModalPresentationFormSheet;
-    }
-    [self presentViewController:grid animated:YES completion:nil];
+    [self openPanelAtIndex:b.tag];
 }
 
 // Open the panel at `index`: route Quest Helper / World Switcher to their native reflowed screens (when the
-// reflection bridge can reach the plugin), else open the generic rendered surface. Shared by the rail buttons
-// and the grid launcher (§3.3). `fromGrid` skips the tap-active-icon-to-close shortcut (the grid always opens).
-- (void)openPanelAtIndex:(NSInteger)index fromGrid:(BOOL)fromGrid {
+// reflection bridge can reach the plugin), else open the generic rendered surface. Driven by the rail buttons.
+- (void)openPanelAtIndex:(NSInteger)index {
     if (index < 0 || index >= (NSInteger)self.panels.count) return;
     NSString *tip = [self.panels[index][@"tooltip"] description];
     // The native reflowed Quest Helper / World Switcher screens are docked-mode only (the grid only runs docked).
@@ -674,54 +643,12 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
             [self presentViewController:tt animated:YES completion:nil];
             return;
         }
-        if (!fromGrid && index == self.currentIndex) {
+        if (index == self.currentIndex) {
             [self collapsePanel];          // tapping the active rail icon closes the panel
             return;
         }
     }
     [self selectIndex:index];
-}
-
-// Live array position of the panel with this tooltip, or -1. The grid snapshots the panel list, so it resolves
-// its pick by stable name (the dock's tick may have rebuilt self.panels between present and pick).
-- (NSInteger)indexForPanelTooltip:(NSString *)tooltip {
-    for (NSUInteger i = 0; i < self.panels.count; i++) {
-        if ([[self.panels[i][@"tooltip"] description] isEqualToString:tooltip]) return (NSInteger)i;
-    }
-    return -1;
-}
-
-// The grid launcher's tile list: the live plugin panels plus synthetic tiles for native screens that are NOT
-// plugin nav buttons (Config Profiles, Infobox menu) — Android surfaces these as TileSpec entries too. Gated on
-// availability so they only appear once the bridges are wired (after the client is up).
-- (NSArray<NSDictionary *> *)gridTilesWithSynthetics {
-    NSMutableArray<NSDictionary *> *tiles = [(self.panels ?: @[]) mutableCopy];
-    if ([JVMLauncher profilesAvailable]) {
-        [tiles addObject:@{@"tooltip" : @"Profiles", @"name" : @"Profiles", @"synthetic" : @YES}];
-    }
-    if ([JVMLauncher infoBoxAvailable]) {
-        [tiles addObject:@{@"tooltip" : @"Infoboxes", @"name" : @"Infoboxes", @"synthetic" : @YES}];
-    }
-    return tiles;
-}
-
-// Present a synthetic native screen (Profiles / Infoboxes) by its tile name; returns YES if it handled the pick.
-- (BOOL)presentSyntheticPanel:(NSString *)tooltip {
-    if ([tooltip isEqualToString:@"Profiles"] && [JVMLauncher profilesAvailable]) {
-        ConfigProfilesViewController *vc = [[ConfigProfilesViewController alloc] init];
-        vc.modalPresentationStyle = UIModalPresentationOverFullScreen;
-        vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
-        [self presentViewController:vc animated:YES completion:nil];
-        return YES;
-    }
-    if ([tooltip isEqualToString:@"Infoboxes"] && [JVMLauncher infoBoxAvailable]) {
-        InfoBoxMenuViewController *vc = [[InfoBoxMenuViewController alloc] init];
-        vc.modalPresentationStyle = UIModalPresentationOverFullScreen;
-        vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
-        [self presentViewController:vc animated:YES completion:nil];
-        return YES;
-    }
-    return NO;
 }
 
 - (void)selectIndex:(NSInteger)index {
@@ -1481,59 +1408,6 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 - (void)searchBar:(UISearchBar *)sb textDidChange:(NSString *)text { [self applyFilter]; }
 - (void)searchBarSearchButtonClicked:(UISearchBar *)sb { [sb resignFirstResponder]; }
 
-@end
-
-#pragma mark - Grid launcher tile + VC (§3.3 redesign)
-
-// One labelled plugin tile: the plugin icon over its name, with a small ★ when pinned (a favourite).
-@interface MUIGridTile : UICollectionViewCell
-@property (nonatomic, strong) UIImageView *icon;
-@property (nonatomic, strong) UILabel *name;
-@property (nonatomic, strong) UILabel *star;
-@end
-
-@implementation MUIGridTile
-- (instancetype)initWithFrame:(CGRect)frame {
-    if ((self = [super initWithFrame:frame])) {
-        self.contentView.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.06];
-        self.contentView.layer.cornerRadius = 10;
-        self.contentView.clipsToBounds = YES;
-
-        _icon = [[UIImageView alloc] init];
-        _icon.translatesAutoresizingMaskIntoConstraints = NO;
-        _icon.contentMode = UIViewContentModeScaleAspectFit;
-        [self.contentView addSubview:_icon];
-
-        _name = [[UILabel alloc] init];
-        _name.translatesAutoresizingMaskIntoConstraints = NO;
-        _name.font = [UIFont systemFontOfSize:11];
-        _name.textColor = [UIColor whiteColor];
-        _name.textAlignment = NSTextAlignmentCenter;
-        _name.numberOfLines = 2;
-        [self.contentView addSubview:_name];
-
-        _star = [[UILabel alloc] init];
-        _star.translatesAutoresizingMaskIntoConstraints = NO;
-        _star.text = @"★";
-        _star.font = [UIFont systemFontOfSize:12];
-        _star.textColor = [UIColor colorWithRed:0.95 green:0.78 blue:0.30 alpha:1.0];
-        _star.hidden = YES;
-        [self.contentView addSubview:_star];
-
-        [NSLayoutConstraint activateConstraints:@[
-            [_icon.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:10],
-            [_icon.centerXAnchor constraintEqualToAnchor:self.contentView.centerXAnchor],
-            [_icon.widthAnchor constraintEqualToConstant:30],
-            [_icon.heightAnchor constraintEqualToConstant:30],
-            [_name.topAnchor constraintEqualToAnchor:_icon.bottomAnchor constant:6],
-            [_name.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:4],
-            [_name.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-4],
-            [_star.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:5],
-            [_star.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-6],
-        ]];
-    }
-    return self;
-}
 @end
 
 #pragma mark - Native XP Tracker panel (RuneLite charcoal style, real session data)
@@ -3411,223 +3285,6 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
     [row addArrangedSubview:nameL];
     [row addArrangedSubview:priceL];
     return row;
-}
-
-@end
-
-@interface MUIPluginGrid () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, UISearchBarDelegate>
-@end
-
-@implementation MUIPluginGrid {
-    NSArray<NSDictionary *> *_all;       // every panel ({index,tooltip,name,iconPng,pinned})
-    NSMutableArray<NSDictionary *> *_shown; // filtered + favourites-first
-    NSString *_filter;
-    void (^_onPick)(NSString *);
-    UICollectionView *_grid;
-    UISearchBar *_search;
-    UILabel *_empty;
-}
-
-- (instancetype)initWithPanels:(NSArray<NSDictionary *> *)panels onPick:(void (^)(NSString *))onPick {
-    if ((self = [super init])) {
-        _all = [panels copy] ?: @[];
-        _onPick = [onPick copy];
-        _filter = @"";
-        _shown = [NSMutableArray array];
-    }
-    return self;
-}
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.view.backgroundColor = [UIColor colorWithRed:0.10 green:0.09 blue:0.07 alpha:1.0];
-
-    UILabel *title = [[UILabel alloc] init];
-    title.translatesAutoresizingMaskIntoConstraints = NO;
-    title.text = @"Plugins";
-    title.font = [UIFont boldSystemFontOfSize:18];
-    title.textColor = [UIColor whiteColor];
-    [self.view addSubview:title];
-
-    // Close (✕) — the app is UIRequiresFullScreen + landscape, so this sheet presents FULL-SCREEN and the
-    // grabber/swipe-to-dismiss is unavailable. Without an explicit close the launcher traps the player (worse
-    // still if it opened before the game is up, when the grid is empty and there's no tile to tap out through).
-    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
-    close.translatesAutoresizingMaskIntoConstraints = NO;
-    [close setTitle:@"✕" forState:UIControlStateNormal];
-    close.accessibilityLabel = @"Close";
-    close.titleLabel.font = [UIFont boldSystemFontOfSize:20];
-    close.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
-    [close addTarget:self action:@selector(onCloseGrid) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:close];
-
-    _search = [[UISearchBar alloc] init];
-    _search.translatesAutoresizingMaskIntoConstraints = NO;
-    _search.delegate = self;
-    _search.placeholder = @"Search plugins";
-    _search.searchBarStyle = UISearchBarStyleMinimal;
-    _search.barStyle = UIBarStyleBlack;
-    _search.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
-    [self.view addSubview:_search];
-
-    UICollectionViewFlowLayout *layout = [[UICollectionViewFlowLayout alloc] init];
-    layout.minimumInteritemSpacing = 10;
-    layout.minimumLineSpacing = 14;
-    layout.sectionInset = UIEdgeInsetsMake(6, 16, 24, 16);
-    _grid = [[UICollectionView alloc] initWithFrame:CGRectZero collectionViewLayout:layout];
-    _grid.backgroundColor = [UIColor clearColor];
-    _grid.dataSource = self;
-    _grid.delegate = self;
-    _grid.alwaysBounceVertical = YES;
-    _grid.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
-    [_grid registerClass:[MUIGridTile class] forCellWithReuseIdentifier:@"tile"];
-    [self.view addSubview:_grid];
-
-    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self
-                                                                                     action:@selector(onTileLongPress:)];
-    [_grid addGestureRecognizer:lp];
-
-    _empty = [[UILabel alloc] init];
-    _empty.translatesAutoresizingMaskIntoConstraints = NO;
-    _empty.textAlignment = NSTextAlignmentCenter;
-    _empty.numberOfLines = 0;
-    _empty.font = [UIFont systemFontOfSize:15];
-    _empty.textColor = [UIColor colorWithWhite:1.0 alpha:0.5];
-    _empty.hidden = YES;
-    [self.view addSubview:_empty];
-
-    UILayoutGuide *sg = self.view.safeAreaLayoutGuide;
-    [NSLayoutConstraint activateConstraints:@[
-        [title.topAnchor constraintEqualToAnchor:self.view.topAnchor
-                                        constant:16],
-        [title.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor
-                                            constant:20],
-        [close.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
-        [close.trailingAnchor constraintEqualToAnchor:sg.trailingAnchor
-                                             constant:-12],
-        [close.widthAnchor constraintEqualToConstant:44],
-        [close.heightAnchor constraintEqualToConstant:44],
-        [title.trailingAnchor constraintLessThanOrEqualToAnchor:close.leadingAnchor
-                                                       constant:-8],
-        [_search.topAnchor constraintEqualToAnchor:title.bottomAnchor
-                                          constant:6],
-        [_search.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor
-                                              constant:8],
-        [_search.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor
-                                               constant:-8],
-        [_grid.topAnchor constraintEqualToAnchor:_search.bottomAnchor
-                                        constant:2],
-        [_grid.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
-        [_grid.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [_grid.bottomAnchor constraintEqualToAnchor:sg.bottomAnchor],
-        [_empty.centerXAnchor constraintEqualToAnchor:_grid.centerXAnchor],
-        [_empty.centerYAnchor constraintEqualToAnchor:_grid.centerYAnchor],
-        [_empty.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.view.leadingAnchor
-                                                          constant:32],
-        [_empty.trailingAnchor constraintLessThanOrEqualToAnchor:self.view.trailingAnchor
-                                                        constant:-32],
-    ]];
-    [self applyFilter];
-}
-
-- (void)applyFilter {
-    NSArray *base = _all;
-    if (_filter.length) {
-        NSMutableArray *f = [NSMutableArray array];
-        for (NSDictionary *p in _all) {
-            NSString *n = [[p[@"tooltip"] description] lowercaseString] ?: @"";
-            if ([n containsString:_filter]) [f addObject:p];
-        }
-        base = f;
-    }
-    [_shown setArray:[base sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
-        BOOL pa = [a[@"pinned"] boolValue], pb = [b[@"pinned"] boolValue];
-        if (pa != pb) return pa ? NSOrderedAscending : NSOrderedDescending;   // favourites float to the top
-        return [[a[@"tooltip"] description] caseInsensitiveCompare:([b[@"tooltip"] description] ?: @"")];
-    }]];
-    [_grid reloadData];
-    if (_shown.count == 0) {
-        _empty.text = (_all.count == 0)
-                          ? @"No plugins yet.\nStart the game, then reopen to see your plugin panels."
-                          : @"No plugins match your search.";
-        _empty.hidden = NO;
-    } else {
-        _empty.hidden = YES;
-    }
-}
-
-- (nullable UIImage *)decodeIcon:(id)base64 {
-    if (![base64 isKindOfClass:[NSString class]] || [(NSString *)base64 length] == 0) return nil;
-    NSData *d = [[NSData alloc] initWithBase64EncodedString:base64 options:0];
-    return d ? [UIImage imageWithData:d] : nil;
-}
-
-#pragma mark search
-
-- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText {
-    _filter = [searchText lowercaseString];
-    [self applyFilter];
-}
-- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar { [searchBar resignFirstResponder]; }
-
-- (void)onCloseGrid {
-    [self dismissViewControllerAnimated:YES completion:nil];
-}
-
-#pragma mark grid
-
-- (NSInteger)collectionView:(UICollectionView *)cv numberOfItemsInSection:(NSInteger)section {
-    return (NSInteger)_shown.count;
-}
-
-- (UICollectionViewCell *)collectionView:(UICollectionView *)cv cellForItemAtIndexPath:(NSIndexPath *)ip {
-    MUIGridTile *cell = [cv dequeueReusableCellWithReuseIdentifier:@"tile" forIndexPath:ip];
-    NSDictionary *p = _shown[(NSUInteger)ip.item];
-    cell.name.text = [p[@"tooltip"] description];
-    UIImage *icon = [self decodeIcon:p[@"iconPng"]];
-    cell.icon.image = icon;
-    cell.icon.hidden = (icon == nil);
-    cell.star.hidden = ![p[@"pinned"] boolValue];
-    return cell;
-}
-
-- (CGSize)collectionView:(UICollectionView *)cv layout:(UICollectionViewLayout *)layout
-  sizeForItemAtIndexPath:(NSIndexPath *)ip {
-    CGFloat avail = cv.bounds.size.width - 32;   // section insets
-    NSInteger cols = MAX(2, (NSInteger)floor(avail / 110.0));   // ~100pt tiles, more columns in landscape
-    CGFloat w = floor((avail - (cols - 1) * 10.0) / cols);
-    return CGSizeMake(w, 84);
-}
-
-- (void)collectionView:(UICollectionView *)cv didSelectItemAtIndexPath:(NSIndexPath *)ip {
-    NSDictionary *p = _shown[(NSUInteger)ip.item];
-    NSString *tooltip = [p[@"tooltip"] description] ?: @"";
-    void (^pick)(NSString *) = _onPick;
-    [self dismissViewControllerAnimated:YES completion:^{ if (pick) pick(tooltip); }];
-}
-
-// Long-press a tile = pin/unpin (favourite). Reuses the shared pinnedPlugins CSV via mobileSetPinned.
-- (void)onTileLongPress:(UILongPressGestureRecognizer *)g {
-    if (g.state != UIGestureRecognizerStateBegan) return;
-    NSIndexPath *ip = [_grid indexPathForItemAtPoint:[g locationInView:_grid]];
-    if (!ip || ip.item < 0 || ip.item >= (NSInteger)_shown.count) return;
-    NSDictionary *p = _shown[(NSUInteger)ip.item];
-    NSString *name = [p[@"tooltip"] description] ?: @"";
-    BOOL pinned = [p[@"pinned"] boolValue];
-    [JVMLauncher mobileSetPinned:name pinned:!pinned];
-    // Reflect immediately: flip the pinned flag in the local snapshot and re-sort (the dock reconciles on its poll).
-    NSMutableArray *updated = [NSMutableArray array];
-    for (NSDictionary *q in _all) {
-        if ([[q[@"tooltip"] description] isEqualToString:name]) {
-            NSMutableDictionary *m = [q mutableCopy];
-            m[@"pinned"] = @(!pinned);
-            [updated addObject:m];
-        } else {
-            [updated addObject:q];
-        }
-    }
-    _all = updated;
-    [self applyFilter];
 }
 
 @end

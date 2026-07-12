@@ -72,7 +72,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UIButton *settingsButton;  // persistent ⚙ entry point (bottom-left) — the only always-on control
 @property (nonatomic, strong) UIStackView *controlsBox;  // packs the player's pinned on-screen controls above the gear
 @property (nonatomic, strong) UIView *editOverlay;       // the "Edit controls" palette overlay (nil unless editing)
-@property (nonatomic, assign) BOOL developerMode;        // gates the dev tools (debug panel + plugin grid launcher)
+@property (nonatomic, assign) BOOL developerMode;        // gates the dev tools (debug panel)
 @property (nonatomic, strong) UIButton *shiftButton;     // sticky-Shift toggle (holds VK_SHIFT for shift-click)
 @property (nonatomic, assign) BOOL shiftHeld;
 @property (nonatomic, strong) UIButton *ctrlButton; // PARITY-IOS-LATCH: sticky-Ctrl toggle (holds VK_CONTROL)
@@ -325,7 +325,6 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 // falls through to the game) listing the plugins (MobileUiBridge.listPlugins) with an enable/disable switch
 // and a running/stopped indicator. Refreshed when the bridge's event sequence advances (toggles, conflicts).
 @property (nonatomic, strong) UIButton *pluginButton;
-@property (nonatomic, strong) UIButton *gridButton;   // §3.3: opens the labelled plugin-panel grid launcher
 @property (nonatomic, strong) UIButton *overlaysCardButton;   // plugin card: enters overlay edit-mode
 @property (nonatomic, strong) OverlayEditView *overlayEdit;   // active overlay edit-mode view (OVL-2/3/5)
 // FIX-9 (iOS parity with Android ReconnectingOverlayView): a native "Reconnecting…" scrim shown over the live
@@ -537,7 +536,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 
 // A small grouped settings screen presented from the gear. It owns no state — every row is wired to a block
 // the host supplies, so it stays decoupled from ViewController's private methods. Developer mode is a plain
-// switch here; flipping it reveals/hides the dev rows (debug panel + plugin grid launcher) in place.
+// switch here; flipping it reveals/hides the dev rows (debug panel) in place.
 @interface RMSettingsViewController : UITableViewController
 @property (nonatomic, assign) BOOL railsOn;
 @property (nonatomic, assign) BOOL pluginRailOn;
@@ -545,7 +544,6 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 @property (nonatomic, assign) BOOL developerMode;
 @property (nonatomic, copy) void (^onEditControls)(void);
 @property (nonatomic, copy) void (^onOpenPlugins)(void);
-@property (nonatomic, copy) void (^onOpenGrid)(void);
 @property (nonatomic, copy) void (^onToggleRails)(BOOL);
 @property (nonatomic, copy) void (^onTogglePluginRail)(BOOL);
 @property (nonatomic, copy) void (^onToggleDebug)(BOOL);
@@ -590,7 +588,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         case 2:
             return 2; // Plugin panels + Show plugin rail
         case 3:
-            return self.developerMode ? 3 : 1; // Developer mode (+ debug panel, grid launcher)
+            return self.developerMode ? 2 : 1; // Developer mode (+ debug panel)
         default:
             return 0;
     }
@@ -617,7 +615,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     if (s == 3)
         return self.developerMode
                    ? @"Diagnostic tools. Leave off for normal play."
-                   : @"Turn on to reveal the debug panel and plugin grid launcher.";
+                   : @"Turn on to reveal the debug panel.";
     return nil;
 }
 
@@ -661,14 +659,10 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
             cell.textLabel.text = @"Developer mode";
             cell.accessoryView = [self switchOn:self.developerMode action:@selector(onDeveloper:)];
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
-        } else if (ip.row == 1) {
+        } else {
             cell.textLabel.text = @"Show debug panel";
             cell.accessoryView = [self switchOn:self.debugOn action:@selector(onDebug:)];
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
-        } else {
-            cell.textLabel.text = @"Plugin grid launcher";
-            cell.detailTextLabel.text = @"Browse plugin panels in a grid";
-            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         }
     }
     return cell;
@@ -687,8 +681,6 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         then(self.onEditControls);
     else if (ip.section == 2 && ip.row == 0)
         then(self.onOpenPlugins);
-    else if (ip.section == 3 && ip.row == 2)
-        then(self.onOpenGrid);
 }
 
 - (void)onRails:(UISwitch *)sw {
@@ -1375,26 +1367,6 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [self.pluginButton addGestureRecognizer:gearLp];
     [self.view addSubview:self.pluginButton];
 
-    // §3.3 redesign: a ⊞ "Plugins" FAB that opens the labelled/searchable/favourites grid launcher (a more
-    // discoverable entry to the side-panels than the 38pt icon rail). Sits at the top of the corner stack (above ≡).
-    self.gridButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.gridButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.gridButton setTitle:@"⊞" forState:UIControlStateNormal];
-    self.gridButton.accessibilityLabel = @"Plugins";
-    self.gridButton.accessibilityHint = @"Opens the plugin launcher; long press to toggle the icon rail";
-    self.gridButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
-    self.gridButton.tintColor = [UIColor whiteColor];
-    self.gridButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
-    self.gridButton.layer.cornerRadius = 8;
-    [self.gridButton addTarget:self action:@selector(onOpenGridLauncher)
-              forControlEvents:UIControlEventTouchUpInside];
-    // Long-press the ⊞ FAB toggles the plugin-icon rail on/off (shown by default) — lets you collapse to a
-    // FAB-only entry if you prefer, reversible on device without a rebuild.
-    UILongPressGestureRecognizer *gridLp = [[UILongPressGestureRecognizer alloc]
-        initWithTarget:self action:@selector(onToggleRail:)];
-    [self.gridButton addGestureRecognizer:gridLp];
-    [self.view addSubview:self.gridButton];
-
     UILayoutGuide *g = self.view.safeAreaLayoutGuide;
     UILayoutGuide *sg = self.screen.safeAreaLayoutGuide;
     UILayoutGuide *p = self.debugPanel.layoutMarginsGuide;
@@ -1493,13 +1465,6 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         [self.debugToggle.widthAnchor constraintEqualToConstant:44],
         [self.debugToggle.heightAnchor constraintEqualToConstant:36],
 
-        // §3.3 grid launcher FAB — top of the corner stack, above ≡.
-        [self.gridButton.bottomAnchor constraintEqualToAnchor:self.debugToggle.topAnchor
-                                                     constant:-8],
-        [self.gridButton.leadingAnchor constraintEqualToAnchor:self.keyboardButton.leadingAnchor],
-        [self.gridButton.widthAnchor constraintEqualToConstant:44],
-        [self.gridButton.heightAnchor constraintEqualToConstant:36],
-
         // Debug panel — left ~62% of the safe area, full height, below the toggle row.
         [self.debugPanel.topAnchor constraintEqualToAnchor:g.topAnchor
                                                   constant:8],
@@ -1560,13 +1525,13 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [self rebuildPinnedControls];
 }
 
-// The legacy always-on cluster (keyboard/shift/ctrl/screenshot/PiP/hotkey + the ⊞≡▦⚙ column + the handle).
+// The legacy always-on cluster (keyboard/shift/ctrl/screenshot/PiP/hotkey + the ≡▦⚙ column + the handle).
 // These stay in the view hierarchy — their action methods and latch styling still reference them — but they
 // never show; the new system drives everything through the ⚙ gear and the pinned-controls stack.
 - (void)hideLegacyCluster {
     NSArray<UIView *> *legacy = @[ self.keyboardButton, self.shiftButton, self.ctrlButton, self.screenshotButton,
                                    self.pipButton, self.hotkeyButton, self.pluginButton, self.chromeToggle,
-                                   self.debugToggle, self.gridButton ];
+                                   self.debugToggle ];
     for (UIView *v in legacy)
         v.hidden = YES;
 }
@@ -1780,7 +1745,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 #pragma mark - Developer mode
 
 // Developer mode gates the dev-only surfaces. When OFF (default) the debug panel is hidden and can't be
-// summoned; when ON, Settings exposes "Show debug panel" + "Plugin grid launcher".
+// summoned; when ON, Settings exposes "Show debug panel".
 - (void)applyDeveloperMode {
     if (!self.developerMode)
         self.debugPanel.hidden = YES;
@@ -1806,9 +1771,6 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     };
     vc.onOpenPlugins = ^{
         [ws onOpenPluginPanel];
-    };
-    vc.onOpenGrid = ^{
-        [ws onOpenGridLauncher];
     };
     vc.onToggleRails = ^(BOOL on) {
         if (on != ws.chromeVisible)
@@ -2172,7 +2134,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [hub addTarget:self action:@selector(onOpenHub) forControlEvents:UIControlEventTouchUpInside];
     [card addSubview:hub];
 
-    // (§3.5: the legacy "▣ Panels" drawer/centered openers were removed — the ⊞ FAB grid launcher is the single
+    // (§3.5: the legacy "▣ Panels" drawer/centered openers were removed — the plugin icon rail is the single
     // entry to the plugin side-panels now.)
 
     // Overlay edit-mode opener (OVL-2/3/5) — dismisses the card and shows draggable handles over the live game.
@@ -2346,29 +2308,6 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         self.accountButton.enabled = YES;
     });
     [self refreshAccountRow];
-}
-
-// §3.3: open the labelled grid launcher for the plugin side-panels (the persistent dock holds the live list).
-- (void)onOpenGridLauncher {
-    [self.panelDock presentGridLauncher];
-}
-
-// §3.5 step 3 (reversible): long-press the ⊞ FAB to toggle the legacy 38pt plugin icon rail. Default is hidden
-// (FAB-only entry); this brings it back for anyone who prefers the always-visible rail. Persisted across launches.
-- (void)onToggleRail:(UILongPressGestureRecognizer *)g {
-    if (g.state != UIGestureRecognizerStateBegan) return;
-    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    BOOL nowHidden = ([ud objectForKey:@"rightBarRailHidden"] == nil) ? NO : [ud boolForKey:@"rightBarRailHidden"];
-    BOOL newHidden = !nowHidden;
-    [ud setBool:newHidden forKey:@"rightBarRailHidden"];
-    self.panelDock.railHidden = newHidden;
-    if (self.presentedViewController) return;
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Plugin rail"
-        message:(newHidden ? @"Hidden — use the ⊞ button to open plugin panels."
-                           : @"Shown — the icon rail is back on the right edge.")
-        preferredStyle:UIAlertControllerStyleAlert];
-    [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-    [self presentViewController:a animated:YES completion:nil];
 }
 
 // OVL-2/3/5: enter overlay edit-mode — dismiss the management card so the game (and its overlays) are visible,

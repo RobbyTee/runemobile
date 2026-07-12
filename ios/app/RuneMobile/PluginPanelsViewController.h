@@ -18,13 +18,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// pins its (passthrough) view over the game. Takes precedence over `drawerMode`.
 @property (nonatomic, assign) BOOL docked;
 
-/// §3.3 redesign: present the labelled, searchable, favourites GRID launcher (a bottom sheet of named plugin
-/// tiles) as a more discoverable entry than the 38pt icon rail. A tile opens the same panel the rail would.
-- (void)presentGridLauncher;
-
-/// The right-edge plugin-icon rail is SHOWN by default (the user's primary entry). When YES it's hidden and the ⊞
-/// FAB grid becomes the sole entry; the inline panel then reclaims the rail's edge strip. Setting it re-lays the
-/// dock immediately. A long-press on the ⊞ FAB toggles it (persisted in NSUserDefaults `rightBarRailHidden`).
+/// The right-edge plugin-icon rail is SHOWN by default (the user's primary entry to the plugin side-panels).
+/// When YES it's hidden and the inline panel reclaims the rail's edge strip. Setting it re-lays the dock
+/// immediately. Toggled from Settings ("Show plugin rail"), persisted in NSUserDefaults `rightBarRailHidden`.
 @property (nonatomic, assign) BOOL railHidden;
 
 /// YES while the panel's own soft keyboard (a focused Swing text box) is up — the host gates its game-keyboard
