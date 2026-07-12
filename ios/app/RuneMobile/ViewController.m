@@ -178,6 +178,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UIView *menuDismissLayer;  // tap-mode full-screen tap-to-cancel layer behind the box
 @property (nonatomic, assign) BOOL menuScrollable;       // engine menu self-scrolls (>~30 entries) -> commit by invoke, not geometry
 @property (nonatomic, assign) BOOL customizeReopenPending; // a ⚙ Customize reopen is scheduled; a new menu cancels it
+@property (nonatomic, assign) BOOL customizeAutoShift;     // Customize latched Shift itself; release it when the menu closes
 // DRAG-1: a one-finger drag that BEGAN over the inventory grid rearranges items (synthesized engine mouse-drag)
 // instead of rotating the camera. Only set when the drag starts inside the published inventory rect.
 @property (nonatomic, assign) BOOL itemDragging;
@@ -707,6 +708,10 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 }
 - (void)onDeveloper:(UISwitch *)sw {
     self.developerMode = sw.on;
+    // Disabling dev mode hides the debug panel host-side (applyDeveloperMode), so mirror that here — otherwise
+    // re-enabling in the same sheet would show "Show debug panel" ON over an actually-hidden panel.
+    if (!sw.on)
+        self.debugOn = NO;
     if (self.onToggleDeveloper)
         self.onToggleDeveloper(sw.on);
     [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:3]
@@ -1636,6 +1641,10 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
             self.ctrlHeld = NO;
             [JVMLauncher postCtrlHeld:NO];
             [self appendLine:@"[shell] Control released (unpinned)"];
+        } else if ([cid isEqualToString:@"hotkeys"] && self.hotkeyStripVisible) {
+            // Unpinning ⚡ while its strip is open would strand the strip with no toggle — close it too.
+            self.hotkeyStripVisible = NO;
+            self.hotkeyStrip.hidden = YES;
         }
     }
     NSMutableArray *ids = [[self pinnedControlIds] mutableCopy];
@@ -5748,15 +5757,21 @@ static CGRect mapRectFromArr(NSArray *a) {
 // ⚙ Customize — latch Shift (so Menu-Entry-Swapper's swap-config submenus appear) then reopen the engine menu at
 // the same target. Closes the current menu first so the reopened one is rebuilt cleanly with Shift held.
 - (void)onTapMenuCustomize:(UIButton *)b {
-    if (!self.shiftHeld) [self onToggleShift];   // latch Shift + update the corner button state
+    // Configure/overlay entries only surface with Shift held, so latch it. Shift may not be pinned to the
+    // screen now, so a latch here could strand an invisible held modifier — remember we set it and release it
+    // when this Customize menu closes (teardownMenuViews), so it never outlives the interaction.
+    BOOL autoLatched = !self.shiftHeld;
+    if (autoLatched)
+        [self onToggleShift]; // latch Shift + update the corner button state (if pinned)
     int gx = self.lastMenuX, gy = self.lastMenuY;
     CGPoint anchor = self.menuAnchor;
     // Close the open engine menu (title-strip click = no action), tear down native, then reopen shortly after.
     CGRect r = self.menuGeomGame;
     if (r.size.width > 0) [JVMLauncher postMenuSelectX:(int)lround(CGRectGetMidX(r)) y:(int)CGRectGetMinY(r) + 2];
     self.menuOpen = NO;
-    [self teardownMenuViews];
+    [self teardownMenuViews];            // (arms nothing yet — set customizeAutoShift AFTER so this teardown doesn't release)
     self.customizeReopenPending = YES;   // a new long-press before the delay fires cancels this (openEngineMenuAtGameX)
+    self.customizeAutoShift = autoLatched; // release the Shift WE latched once the reopened menu closes
     [self appendLine:@"[shell] menu Customize -> Shift latched, reopening"];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (!self.customizeReopenPending) return;   // superseded by a fresh menu in the meantime
@@ -5999,6 +6014,13 @@ static CGRect mapRectFromArr(NSArray *a) {
     self.menuDrillParent = -1;
     self.menuBuilding = NO;
     self.menuClosing = NO;
+    // Release the Shift that onTapMenuCustomize auto-latched (only if WE set it), now that its menu has closed —
+    // this is what keeps an unpinned Shift from being stranded held after a Customize interaction.
+    if (self.customizeAutoShift) {
+        self.customizeAutoShift = NO;
+        if (self.shiftHeld)
+            [self onToggleShift];
+    }
     // Restore the default engine-menu raster suppression (the build-timeout fallback un-gates it).
     [JVMLauncher setEngineMenuRenderSuppressed:YES];
 }
