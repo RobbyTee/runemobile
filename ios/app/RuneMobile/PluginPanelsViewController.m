@@ -3425,6 +3425,7 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
     void (^_onPick)(NSString *);
     UICollectionView *_grid;
     UISearchBar *_search;
+    UILabel *_empty;
 }
 
 - (instancetype)initWithPanels:(NSArray<NSDictionary *> *)panels onPick:(void (^)(NSString *))onPick {
@@ -3447,6 +3448,18 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
     title.font = [UIFont boldSystemFontOfSize:18];
     title.textColor = [UIColor whiteColor];
     [self.view addSubview:title];
+
+    // Close (✕) — the app is UIRequiresFullScreen + landscape, so this sheet presents FULL-SCREEN and the
+    // grabber/swipe-to-dismiss is unavailable. Without an explicit close the launcher traps the player (worse
+    // still if it opened before the game is up, when the grid is empty and there's no tile to tap out through).
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    close.translatesAutoresizingMaskIntoConstraints = NO;
+    [close setTitle:@"✕" forState:UIControlStateNormal];
+    close.accessibilityLabel = @"Close";
+    close.titleLabel.font = [UIFont boldSystemFontOfSize:20];
+    close.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
+    [close addTarget:self action:@selector(onCloseGrid) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:close];
 
     _search = [[UISearchBar alloc] init];
     _search.translatesAutoresizingMaskIntoConstraints = NO;
@@ -3474,17 +3487,45 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
                                                                                      action:@selector(onTileLongPress:)];
     [_grid addGestureRecognizer:lp];
 
+    _empty = [[UILabel alloc] init];
+    _empty.translatesAutoresizingMaskIntoConstraints = NO;
+    _empty.textAlignment = NSTextAlignmentCenter;
+    _empty.numberOfLines = 0;
+    _empty.font = [UIFont systemFontOfSize:15];
+    _empty.textColor = [UIColor colorWithWhite:1.0 alpha:0.5];
+    _empty.hidden = YES;
+    [self.view addSubview:_empty];
+
     UILayoutGuide *sg = self.view.safeAreaLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[
-        [title.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:16],
-        [title.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:20],
-        [_search.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:6],
-        [_search.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:8],
-        [_search.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-8],
-        [_grid.topAnchor constraintEqualToAnchor:_search.bottomAnchor constant:2],
+        [title.topAnchor constraintEqualToAnchor:self.view.topAnchor
+                                        constant:16],
+        [title.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor
+                                            constant:20],
+        [close.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
+        [close.trailingAnchor constraintEqualToAnchor:sg.trailingAnchor
+                                             constant:-12],
+        [close.widthAnchor constraintEqualToConstant:44],
+        [close.heightAnchor constraintEqualToConstant:44],
+        [title.trailingAnchor constraintLessThanOrEqualToAnchor:close.leadingAnchor
+                                                       constant:-8],
+        [_search.topAnchor constraintEqualToAnchor:title.bottomAnchor
+                                          constant:6],
+        [_search.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor
+                                              constant:8],
+        [_search.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor
+                                               constant:-8],
+        [_grid.topAnchor constraintEqualToAnchor:_search.bottomAnchor
+                                        constant:2],
         [_grid.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [_grid.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [_grid.bottomAnchor constraintEqualToAnchor:sg.bottomAnchor],
+        [_empty.centerXAnchor constraintEqualToAnchor:_grid.centerXAnchor],
+        [_empty.centerYAnchor constraintEqualToAnchor:_grid.centerYAnchor],
+        [_empty.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.view.leadingAnchor
+                                                          constant:32],
+        [_empty.trailingAnchor constraintLessThanOrEqualToAnchor:self.view.trailingAnchor
+                                                        constant:-32],
     ]];
     [self applyFilter];
 }
@@ -3505,6 +3546,14 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
         return [[a[@"tooltip"] description] caseInsensitiveCompare:([b[@"tooltip"] description] ?: @"")];
     }]];
     [_grid reloadData];
+    if (_shown.count == 0) {
+        _empty.text = (_all.count == 0)
+                          ? @"No plugins yet.\nStart the game, then reopen to see your plugin panels."
+                          : @"No plugins match your search.";
+        _empty.hidden = NO;
+    } else {
+        _empty.hidden = YES;
+    }
 }
 
 - (nullable UIImage *)decodeIcon:(id)base64 {
@@ -3520,6 +3569,10 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
     [self applyFilter];
 }
 - (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar { [searchBar resignFirstResponder]; }
+
+- (void)onCloseGrid {
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
 
 #pragma mark grid
 

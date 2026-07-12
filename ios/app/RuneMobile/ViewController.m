@@ -19,6 +19,7 @@
 #import <AVKit/AVKit.h>             // Picture-in-Picture (AVPictureInPictureController + content source)
 #import <AVFoundation/AVFoundation.h> // AVSampleBufferDisplayLayer + the background-keepalive audio session
 #import <CoreMedia/CoreMedia.h>     // CMSampleBuffer plumbing for the PiP frame feed
+#import <objc/runtime.h>            // objc_setAssociatedObject — attach a control's spec to its button
 #import <unistd.h>
 #import <fcntl.h>
 #import <os/lock.h>            // os_unfair_lock — guards the JSON-fault rate-limiter (QA-SYS-1 sibling)
@@ -68,6 +69,10 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UIButton *zoneFastButton;  // GPU Zone: 117HD resizable + DIRECT present (no readback)
 @property (nonatomic, strong) UIButton *canaryButton;
 @property (nonatomic, strong) UIButton *keyboardButton;
+@property (nonatomic, strong) UIButton *settingsButton;  // persistent ⚙ entry point (bottom-left) — the only always-on control
+@property (nonatomic, strong) UIStackView *controlsBox;  // packs the player's pinned on-screen controls above the gear
+@property (nonatomic, strong) UIView *editOverlay;       // the "Edit controls" palette overlay (nil unless editing)
+@property (nonatomic, assign) BOOL developerMode;        // gates the dev tools (debug panel + plugin grid launcher)
 @property (nonatomic, strong) UIButton *shiftButton;     // sticky-Shift toggle (holds VK_SHIFT for shift-click)
 @property (nonatomic, assign) BOOL shiftHeld;
 @property (nonatomic, strong) UIButton *ctrlButton; // PARITY-IOS-LATCH: sticky-Ctrl toggle (holds VK_CONTROL)
@@ -412,6 +417,14 @@ static const BOOL kChatVeneerEnabled = YES;
 // AWT virtual keycodes for the non-text keys we synthesize (java.awt.event.KeyEvent.VK_*).
 static const int AWT_VK_BACK_SPACE = 8;
 static const int AWT_VK_ENTER      = 10;
+static const int AWT_VK_TAB = 9;
+static const int AWT_VK_ESCAPE = 27;
+static const int AWT_VK_SPACE = 32;
+static const int AWT_VK_LEFT = 37;
+static const int AWT_VK_UP = 38;
+static const int AWT_VK_RIGHT = 39;
+static const int AWT_VK_DOWN = 40;
+static const int AWT_VK_0 = 48; // '0'..'9' == 48..57; F1..F12 == 112..123
 // Zero-width sentinel so a backspace on an "empty" field still fires shouldChangeCharactersInRange.
 static NSString * const kKbSentinel = @"​";
 
@@ -518,6 +531,189 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     }
     return nil;
 }
+
+#pragma mark - RMSettingsViewController (the ⚙ sheet)
+
+// A small grouped settings screen presented from the gear. It owns no state — every row is wired to a block
+// the host supplies, so it stays decoupled from ViewController's private methods. Developer mode is a plain
+// switch here; flipping it reveals/hides the dev rows (debug panel + plugin grid launcher) in place.
+@interface RMSettingsViewController : UITableViewController
+@property (nonatomic, assign) BOOL railsOn;
+@property (nonatomic, assign) BOOL pluginRailOn;
+@property (nonatomic, assign) BOOL debugOn;
+@property (nonatomic, assign) BOOL developerMode;
+@property (nonatomic, copy) void (^onEditControls)(void);
+@property (nonatomic, copy) void (^onOpenPlugins)(void);
+@property (nonatomic, copy) void (^onOpenGrid)(void);
+@property (nonatomic, copy) void (^onToggleRails)(BOOL);
+@property (nonatomic, copy) void (^onTogglePluginRail)(BOOL);
+@property (nonatomic, copy) void (^onToggleDebug)(BOOL);
+@property (nonatomic, copy) void (^onToggleDeveloper)(BOOL);
+@end
+
+@implementation RMSettingsViewController
+
+- (instancetype)init {
+    return [super initWithStyle:UITableViewStyleInsetGrouped];
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"Settings";
+    self.view.backgroundColor = [UIColor colorWithWhite:0.07 alpha:1.0];
+    self.tableView.backgroundColor = [UIColor colorWithWhite:0.07 alpha:1.0];
+    self.navigationController.navigationBar.barTintColor = [UIColor colorWithWhite:0.10 alpha:1.0];
+    self.navigationController.navigationBar.titleTextAttributes =
+        @{NSForegroundColorAttributeName : [UIColor whiteColor]};
+    self.navigationItem.rightBarButtonItem =
+        [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                      target:self
+                                                      action:@selector(onDone)];
+}
+
+- (void)onDone {
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+// Sections: 0 Controls · 1 Game · 2 Plugins · 3 Developer (dev rows only when developerMode is on).
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tv {
+    return 4;
+}
+
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
+    switch (s) {
+        case 0:
+            return 1; // Edit controls
+        case 1:
+            return 1; // Show tab rails
+        case 2:
+            return 2; // Plugin panels + Show plugin rail
+        case 3:
+            return self.developerMode ? 3 : 1; // Developer mode (+ debug panel, grid launcher)
+        default:
+            return 0;
+    }
+}
+
+- (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s {
+    switch (s) {
+        case 0:
+            return @"ON-SCREEN CONTROLS";
+        case 1:
+            return @"GAME";
+        case 2:
+            return @"PLUGINS";
+        case 3:
+            return @"DEVELOPER";
+        default:
+            return nil;
+    }
+}
+
+- (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
+    if (s == 0)
+        return @"Pick which keys and buttons sit on your screen. Start fresh, add only what you use.";
+    if (s == 3)
+        return self.developerMode
+                   ? @"Diagnostic tools. Leave off for normal play."
+                   : @"Turn on to reveal the debug panel and plugin grid launcher.";
+    return nil;
+}
+
+- (UISwitch *)switchOn:(BOOL)on action:(SEL)sel {
+    UISwitch *sw = [[UISwitch alloc] init];
+    sw.on = on;
+    sw.onTintColor = [UIColor colorWithRed:0.95 green:0.62 blue:0.11 alpha:1.0];
+    [sw addTarget:self action:sel forControlEvents:UIControlEventValueChanged];
+    return sw;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+                                                   reuseIdentifier:nil];
+    cell.backgroundColor = [UIColor colorWithWhite:0.13 alpha:1.0];
+    cell.textLabel.textColor = [UIColor whiteColor];
+    cell.detailTextLabel.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
+    cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+    if (ip.section == 0) {
+        cell.textLabel.text = @"Edit on-screen controls";
+        cell.detailTextLabel.text = @"Add or remove keys and buttons";
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    } else if (ip.section == 1) {
+        cell.textLabel.text = @"Show tab rails";
+        cell.detailTextLabel.text = @"The row of game interface tabs";
+        cell.accessoryView = [self switchOn:self.railsOn action:@selector(onRails:)];
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    } else if (ip.section == 2) {
+        if (ip.row == 0) {
+            cell.textLabel.text = @"Plugin panels";
+            cell.detailTextLabel.text = @"Configure your RuneLite plugins";
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        } else {
+            cell.textLabel.text = @"Show plugin rail";
+            cell.detailTextLabel.text = @"The plugin-icon strip on the right edge";
+            cell.accessoryView = [self switchOn:self.pluginRailOn action:@selector(onPluginRail:)];
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        }
+    } else { // Developer
+        if (ip.row == 0) {
+            cell.textLabel.text = @"Developer mode";
+            cell.accessoryView = [self switchOn:self.developerMode action:@selector(onDeveloper:)];
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        } else if (ip.row == 1) {
+            cell.textLabel.text = @"Show debug panel";
+            cell.accessoryView = [self switchOn:self.debugOn action:@selector(onDebug:)];
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        } else {
+            cell.textLabel.text = @"Plugin grid launcher";
+            cell.detailTextLabel.text = @"Browse plugin panels in a grid";
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        }
+    }
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
+    [tv deselectRowAtIndexPath:ip animated:YES];
+    void (^then)(void (^)(void)) = ^(void (^act)(void)) {
+        [self dismissViewControllerAnimated:YES
+                                 completion:^{
+                                     if (act)
+                                         act();
+                                 }];
+    };
+    if (ip.section == 0)
+        then(self.onEditControls);
+    else if (ip.section == 2 && ip.row == 0)
+        then(self.onOpenPlugins);
+    else if (ip.section == 3 && ip.row == 2)
+        then(self.onOpenGrid);
+}
+
+- (void)onRails:(UISwitch *)sw {
+    self.railsOn = sw.on;
+    if (self.onToggleRails)
+        self.onToggleRails(sw.on);
+}
+- (void)onPluginRail:(UISwitch *)sw {
+    self.pluginRailOn = sw.on;
+    if (self.onTogglePluginRail)
+        self.onTogglePluginRail(sw.on);
+}
+- (void)onDebug:(UISwitch *)sw {
+    self.debugOn = sw.on;
+    if (self.onToggleDebug)
+        self.onToggleDebug(sw.on);
+}
+- (void)onDeveloper:(UISwitch *)sw {
+    self.developerMode = sw.on;
+    if (self.onToggleDeveloper)
+        self.onToggleDeveloper(sw.on);
+    [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:3]
+                  withRowAnimation:UITableViewRowAnimationAutomatic];
+}
+
+@end
 
 @implementation ViewController
 
@@ -795,6 +991,32 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [self.keyboardButton addTarget:self action:@selector(onToggleKeyboard)
                   forControlEvents:UIControlEventTouchUpInside];
     [self.screen addSubview:self.keyboardButton];
+
+    // Settings gear — the ONE always-on control (bottom-left corner). The screen starts fresh: no keyboard,
+    // no modifiers, nothing. Tap the gear to open Settings, where the player pins whichever controls they want
+    // (Edit controls), flips Developer mode, opens plugins, etc. Everything else is opt-in.
+    self.settingsButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.settingsButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.settingsButton setTitle:@"⚙" forState:UIControlStateNormal];
+    self.settingsButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
+    self.settingsButton.accessibilityLabel = @"Settings";
+    self.settingsButton.accessibilityHint = @"Pin on-screen controls, plugins, and developer options";
+    self.settingsButton.tintColor = [UIColor whiteColor];
+    self.settingsButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
+    self.settingsButton.layer.cornerRadius = 8;
+    [self.settingsButton addTarget:self
+                            action:@selector(onOpenSettings)
+                  forControlEvents:UIControlEventTouchUpInside];
+    [self.screen addSubview:self.settingsButton];
+
+    // The pinned-controls stack packs the player's chosen buttons directly above the gear (no gaps — hidden
+    // rows collapse). Rebuilt by rebuildPinnedControls from the persisted "pinnedControls" list.
+    self.controlsBox = [[UIStackView alloc] init];
+    self.controlsBox.translatesAutoresizingMaskIntoConstraints = NO;
+    self.controlsBox.axis = UILayoutConstraintAxisVertical;
+    self.controlsBox.spacing = 8;
+    self.controlsBox.alignment = UIStackViewAlignmentLeading;
+    [self.screen addSubview:self.controlsBox];
 
     // Sticky-Shift toggle, next to the keyboard button. Holds VK_SHIFT down via the bridge so the engine's
     // isKeyPressed(KC_SHIFT) path reads true — re-enabling shift-click menu swaps, Shift+right-click marking,
@@ -1181,7 +1403,21 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         [self.screen.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [self.screen.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
 
-        // In-game keyboard control, bottom-left of the safe area.
+        // Settings gear — bottom-left corner of the safe area. The ONLY always-on control; the pinned-controls
+        // stack packs directly above it.
+        [self.settingsButton.bottomAnchor constraintEqualToAnchor:g.bottomAnchor
+                                                         constant:-8],
+        [self.settingsButton.leadingAnchor constraintEqualToAnchor:g.leadingAnchor
+                                                          constant:8],
+        [self.settingsButton.widthAnchor constraintEqualToConstant:44],
+        [self.settingsButton.heightAnchor constraintEqualToConstant:36],
+        [self.controlsBox.bottomAnchor constraintEqualToAnchor:self.settingsButton.topAnchor
+                                                      constant:-8],
+        [self.controlsBox.leadingAnchor constraintEqualToAnchor:g.leadingAnchor
+                                                       constant:8],
+
+        // (Legacy cluster constraints below stay valid but the buttons are hidden — see hideLegacyCluster.)
+        // In-game keyboard control — first row of the legacy cluster.
         [self.keyboardButton.bottomAnchor constraintEqualToAnchor:g.bottomAnchor
                                                          constant:-8],
         [self.keyboardButton.leadingAnchor constraintEqualToAnchor:g.leadingAnchor
@@ -1309,10 +1545,418 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     ]];
 
     [self refreshLoginButton];   // reflect any already-saved session on the button title
+
+    // Fresh screen: hide the entire legacy bottom-left cluster (it stays in the hierarchy, inert, so its
+    // constraints and action methods keep working when a control is pinned). Then restore dev mode + build
+    // whatever the player has pinned. Only the ⚙ gear shows until they pin something.
+    [self hideLegacyCluster];
+    self.developerMode = [[NSUserDefaults standardUserDefaults] boolForKey:@"developerMode"];
+    [self applyDeveloperMode];
+    [self rebuildPinnedControls];
+}
+
+// The legacy always-on cluster (keyboard/shift/ctrl/screenshot/PiP/hotkey + the ⊞≡▦⚙ column + the handle).
+// These stay in the view hierarchy — their action methods and latch styling still reference them — but they
+// never show; the new system drives everything through the ⚙ gear and the pinned-controls stack.
+- (void)hideLegacyCluster {
+    NSArray<UIView *> *legacy = @[ self.keyboardButton, self.shiftButton, self.ctrlButton, self.screenshotButton,
+                                   self.pipButton, self.hotkeyButton, self.pluginButton, self.chromeToggle,
+                                   self.debugToggle, self.gridButton ];
+    for (UIView *v in legacy)
+        v.hidden = YES;
+}
+
+#pragma mark - Pinned on-screen controls (player-customisable)
+
+// Every control the player can sticky to the screen, in canonical order and grouped by section. `kind`:
+//   latch  — sticky modifier held via the bridge (Shift/Ctrl), amber while held
+//   key    — momentary AWT keystroke (F-keys, arrows, Esc/Enter/Space/Tab, digits)
+//   util   — a native action button (keyboard, screenshot, PiP, hotkey strip)
+- (NSArray<NSDictionary *> *)allControlSpecs {
+    static NSArray *specs = nil;
+    if (specs)
+        return specs;
+    NSMutableArray *m = [NSMutableArray array];
+    void (^add)(NSString *, NSString *, NSString *, NSString *, int) =
+        ^(NSString *sec, NSString *cid, NSString *glyph, NSString *kind, int vk) {
+            [m addObject:@{@"section" : sec, @"id" : cid, @"glyph" : glyph, @"kind" : kind, @"vk" : @(vk)}];
+        };
+    add(@"Modifiers", @"shift", @"⇧", @"latch", 0);
+    add(@"Modifiers", @"ctrl", @"⌃", @"latch", 0);
+    add(@"Common", @"keyboard", @"⌨︎", @"util", 0);
+    add(@"Common", @"space", @"Space", @"key", AWT_VK_SPACE);
+    add(@"Common", @"enter", @"Enter", @"key", AWT_VK_ENTER);
+    add(@"Common", @"esc", @"Esc", @"key", AWT_VK_ESCAPE);
+    add(@"Common", @"tab", @"Tab", @"key", AWT_VK_TAB);
+    for (int i = 1; i <= 12; i++)
+        add(@"Tabs (F-keys)", ([NSString stringWithFormat:@"f%d", i]),
+            ([NSString stringWithFormat:@"F%d", i]), @"key", 111 + i); // VK_F1==112
+    for (int i = 1; i <= 9; i++)
+        add(@"Numbers", ([NSString stringWithFormat:@"num%d", i]),
+            ([NSString stringWithFormat:@"%d", i]), @"key", AWT_VK_0 + i);
+    add(@"Numbers", @"num0", @"0", @"key", AWT_VK_0);
+    add(@"Camera", @"left", @"←", @"key", AWT_VK_LEFT);
+    add(@"Camera", @"up", @"↑", @"key", AWT_VK_UP);
+    add(@"Camera", @"right", @"→", @"key", AWT_VK_RIGHT);
+    add(@"Camera", @"down", @"↓", @"key", AWT_VK_DOWN);
+    add(@"Utility", @"screenshot", @"📷", @"util", 0);
+    add(@"Utility", @"pip", @"📺", @"util", 0);
+    add(@"Utility", @"hotkeys", @"⚡", @"util", 0);
+    specs = [m copy];
+    return specs;
+}
+
+- (NSDictionary *)controlSpecForId:(NSString *)cid {
+    for (NSDictionary *s in [self allControlSpecs])
+        if ([s[@"id"] isEqualToString:cid])
+            return s;
+    return nil;
+}
+
+- (NSArray<NSString *> *)pinnedControlIds {
+    NSArray *a = [[NSUserDefaults standardUserDefaults] arrayForKey:@"pinnedControls"];
+    return [a isKindOfClass:[NSArray class]] ? a : @[];
+}
+- (void)setPinnedControlIds:(NSArray<NSString *> *)ids {
+    [[NSUserDefaults standardUserDefaults] setObject:(ids ?: @[]) forKey:@"pinnedControls"];
+    [self rebuildPinnedControls];
+}
+- (BOOL)isControlPinned:(NSString *)cid {
+    return [[self pinnedControlIds] containsObject:cid];
+}
+- (void)setControl:(NSString *)cid pinned:(BOOL)pinned {
+    // Unpinning a latched modifier would otherwise leave it held with no button to release it — the engine
+    // would stay in shift/ctrl mode invisibly. Drop the bridge latch before the button disappears.
+    if (!pinned) {
+        if ([cid isEqualToString:@"shift"] && self.shiftHeld) {
+            self.shiftHeld = NO;
+            [JVMLauncher postShiftHeld:NO];
+            [self appendLine:@"[shell] Shift released (unpinned)"];
+        } else if ([cid isEqualToString:@"ctrl"] && self.ctrlHeld) {
+            self.ctrlHeld = NO;
+            [JVMLauncher postCtrlHeld:NO];
+            [self appendLine:@"[shell] Control released (unpinned)"];
+        }
+    }
+    NSMutableArray *ids = [[self pinnedControlIds] mutableCopy];
+    if (pinned) {
+        if (![ids containsObject:cid])
+            [ids addObject:cid];
+    } else {
+        [ids removeObject:cid];
+    }
+    [self setPinnedControlIds:ids];
+}
+
+// Build a single pinned control button from its spec, styled like the legacy cluster and wired to fire.
+- (UIButton *)makePinnedButtonForSpec:(NSDictionary *)spec {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+    b.translatesAutoresizingMaskIntoConstraints = NO;
+    NSString *cid = spec[@"id"];
+    NSString *glyph = spec[@"glyph"];
+    BOOL wide = (glyph.length > 2); // word labels (Space/Enter/Esc/Tab) get a wider pill
+    b.titleLabel.font = wide ? [UIFont boldSystemFontOfSize:14] : [UIFont boldSystemFontOfSize:20];
+    [b setTitle:glyph forState:UIControlStateNormal];
+    b.accessibilityLabel = cid;
+    b.tintColor = [UIColor whiteColor];
+    b.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.5];
+    b.layer.cornerRadius = 8;
+    [b.widthAnchor constraintEqualToConstant:(wide ? 60 : 44)].active = YES;
+    [b.heightAnchor constraintEqualToConstant:36].active = YES;
+    // Rebind the stateful-control properties to THIS live button every rebuild — the old instances were just
+    // removed from the stack, so leaving the pointers stale would make onToggleShift/Ctrl/HotkeyStrip style a
+    // dead view. For the three that carry visible state, also paint the current state (amber = active) so a
+    // rebuild while shift is latched / the hotkey strip is open keeps the on-screen button in sync.
+    BOOL active = NO;
+    if ([cid isEqualToString:@"shift"]) {
+        self.shiftButton = b;
+        active = self.shiftHeld;
+    } else if ([cid isEqualToString:@"ctrl"]) {
+        self.ctrlButton = b;
+        active = self.ctrlHeld;
+    } else if ([cid isEqualToString:@"hotkeys"]) {
+        self.hotkeyButton = b;
+        active = self.hotkeyStripVisible;
+        // Match the legacy ⚡: long-press reopens the hotkey picker (tap only toggles the strip, so without
+        // this a user who already has hotkeys pinned could never edit the set).
+        UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc]
+            initWithTarget:self
+                    action:@selector(onHotkeyPicker:)];
+        [b addGestureRecognizer:lp];
+    } else if ([cid isEqualToString:@"screenshot"]) {
+        // Preserve SHOT-4: long-press the pinned 📷 toggles auto-saving the engine's event screenshots.
+        UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc]
+            initWithTarget:self
+                    action:@selector(onScreenshotLongPress:)];
+        [b addGestureRecognizer:lp];
+    }
+    if (active) {
+        b.backgroundColor = [UIColor colorWithRed:0.95 green:0.62 blue:0.11 alpha:0.92];
+        b.tintColor = [UIColor blackColor];
+    }
+    objc_setAssociatedObject(b, "rmSpec", spec, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [b addTarget:self action:@selector(onPinnedControlTapped:) forControlEvents:UIControlEventTouchUpInside];
+    return b;
+}
+
+// Fire the tapped pinned control by its spec: latch → toggle held; key → momentary keystroke; util → route to
+// the existing native action (which owns the keyboard field / screenshot / PiP / hotkey strip).
+- (void)onPinnedControlTapped:(UIButton *)b {
+    NSDictionary *spec = objc_getAssociatedObject(b, "rmSpec");
+    NSString *kind = spec[@"kind"];
+    NSString *cid = spec[@"id"];
+    if ([kind isEqualToString:@"latch"]) {
+        if ([cid isEqualToString:@"shift"]) {
+            self.shiftButton = b;
+            [self onToggleShift];
+        } else if ([cid isEqualToString:@"ctrl"]) {
+            self.ctrlButton = b;
+            [self onToggleCtrl];
+        }
+    } else if ([kind isEqualToString:@"key"]) {
+        [JVMLauncher postKeyStroke:[spec[@"vk"] intValue]];
+        [self appendLine:[NSString stringWithFormat:@"[shell] key %@", spec[@"glyph"]]];
+    } else if ([kind isEqualToString:@"util"]) {
+        if ([cid isEqualToString:@"keyboard"])
+            [self onToggleKeyboard];
+        else if ([cid isEqualToString:@"screenshot"])
+            [self onScreenshot];
+        else if ([cid isEqualToString:@"pip"])
+            [self onTogglePip];
+        else if ([cid isEqualToString:@"hotkeys"]) {
+            self.hotkeyButton = b;
+            [self onToggleHotkeyStrip];
+        }
+    }
+}
+
+// Rebuild the corner stack from the pinned list. Buttons wrap into rows (max 4 wide) so pinning many keys
+// grows the stack upward without ever running off the right edge.
+- (void)rebuildPinnedControls {
+    for (UIView *row in self.controlsBox.arrangedSubviews) {
+        [self.controlsBox removeArrangedSubview:row];
+        [row removeFromSuperview];
+    }
+    NSArray<NSString *> *pinned = [self pinnedControlIds];
+    // Emit in canonical spec order (not pin order) so the layout is stable regardless of pin sequence.
+    NSMutableArray<NSDictionary *> *live = [NSMutableArray array];
+    for (NSDictionary *s in [self allControlSpecs])
+        if ([pinned containsObject:s[@"id"]])
+            [live addObject:s];
+    // Bound the stack's HEIGHT, not its width: 4 per row normally, but once the player pins enough to exceed
+    // maxRows we widen the rows instead of growing taller (the screen is landscape, so horizontal room is
+    // plentiful and vertical room — between the gear and the safe-area top — is the scarce axis). Pinning all
+    // ~36 controls yields 5 rows of 8 rather than 9 rows that would run off the top of the screen.
+    const NSUInteger maxRows = 5;
+    NSUInteger perRow = 4;
+    if (live.count > maxRows * perRow)
+        perRow = (live.count + maxRows - 1) / maxRows;
+    UIStackView *row = nil;
+    for (NSUInteger i = 0; i < live.count; i++) {
+        if (i % perRow == 0) {
+            row = [[UIStackView alloc] init];
+            row.axis = UILayoutConstraintAxisHorizontal;
+            row.spacing = 8;
+            row.alignment = UIStackViewAlignmentCenter;
+            [self.controlsBox addArrangedSubview:row];
+        }
+        [row addArrangedSubview:[self makePinnedButtonForSpec:live[i]]];
+    }
 }
 
 - (void)onToggleDebug {
     self.debugPanel.hidden = !self.debugPanel.hidden;
+}
+
+#pragma mark - Developer mode
+
+// Developer mode gates the dev-only surfaces. When OFF (default) the debug panel is hidden and can't be
+// summoned; when ON, Settings exposes "Show debug panel" + "Plugin grid launcher".
+- (void)applyDeveloperMode {
+    if (!self.developerMode)
+        self.debugPanel.hidden = YES;
+}
+- (void)setDeveloperModeEnabled:(BOOL)on {
+    self.developerMode = on;
+    [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"developerMode"];
+    [self applyDeveloperMode];
+}
+
+#pragma mark - Settings + Edit-controls entry points
+
+- (void)onOpenSettings {
+    RMSettingsViewController *vc = [[RMSettingsViewController alloc] init];
+    __weak ViewController *ws = self;
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    vc.railsOn = self.chromeVisible;
+    vc.pluginRailOn = !([ud objectForKey:@"rightBarRailHidden"] != nil && [ud boolForKey:@"rightBarRailHidden"]);
+    vc.debugOn = !self.debugPanel.hidden;
+    vc.developerMode = self.developerMode;
+    vc.onEditControls = ^{
+        [ws onEditControls];
+    };
+    vc.onOpenPlugins = ^{
+        [ws onOpenPluginPanel];
+    };
+    vc.onOpenGrid = ^{
+        [ws onOpenGridLauncher];
+    };
+    vc.onToggleRails = ^(BOOL on) {
+        if (on != ws.chromeVisible)
+            [ws onToggleChrome];
+    };
+    vc.onTogglePluginRail = ^(BOOL on) {
+        [[NSUserDefaults standardUserDefaults] setBool:!on forKey:@"rightBarRailHidden"];
+        ws.panelDock.railHidden = !on;
+    };
+    vc.onToggleDebug = ^(BOOL on) {
+        ws.debugPanel.hidden = !on;
+    };
+    vc.onToggleDeveloper = ^(BOOL on) {
+        [ws setDeveloperModeEnabled:on];
+    };
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+    nav.modalPresentationStyle = UIModalPresentationFormSheet;
+    [self presentViewController:nav animated:YES completion:nil];
+}
+
+// Enter the visual "Edit controls" overlay: dim the scene and show the full palette; the pinned corner stack
+// stays live above the dim so the player sees each pick land. Tap Done (or the backdrop) to finish.
+- (void)onEditControls {
+    if (self.editOverlay)
+        return;
+    UIView *ov = [[UIView alloc] initWithFrame:self.view.bounds];
+    ov.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    ov.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.72];
+    self.editOverlay = ov;
+    [self.view addSubview:ov];
+
+    UILabel *hint = [[UILabel alloc] init];
+    hint.translatesAutoresizingMaskIntoConstraints = NO;
+    hint.text = @"Tap a key to add it to your screen. Tap again to remove it.";
+    hint.font = [UIFont systemFontOfSize:14];
+    hint.textColor = [UIColor colorWithWhite:1.0 alpha:0.7];
+    hint.numberOfLines = 0;
+    [ov addSubview:hint];
+
+    UIButton *done = [UIButton buttonWithType:UIButtonTypeSystem];
+    done.translatesAutoresizingMaskIntoConstraints = NO;
+    [done setTitle:@"Done" forState:UIControlStateNormal];
+    done.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    done.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
+    [done addTarget:self action:@selector(onEditControlsDone) forControlEvents:UIControlEventTouchUpInside];
+    [ov addSubview:done];
+
+    UIScrollView *scroll = [[UIScrollView alloc] init];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    [ov addSubview:scroll];
+
+    UIStackView *col = [[UIStackView alloc] init];
+    col.translatesAutoresizingMaskIntoConstraints = NO;
+    col.axis = UILayoutConstraintAxisVertical;
+    col.spacing = 10;
+    col.alignment = UIStackViewAlignmentLeading;
+    [scroll addSubview:col];
+    [self buildEditPaletteInto:col];
+
+    UILayoutGuide *sg = self.view.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [done.topAnchor constraintEqualToAnchor:sg.topAnchor
+                                       constant:8],
+        [done.trailingAnchor constraintEqualToAnchor:sg.trailingAnchor
+                                            constant:-16],
+        [hint.centerYAnchor constraintEqualToAnchor:done.centerYAnchor],
+        [hint.leadingAnchor constraintEqualToAnchor:sg.leadingAnchor
+                                           constant:16],
+        [hint.trailingAnchor constraintLessThanOrEqualToAnchor:done.leadingAnchor
+                                                      constant:-12],
+        [scroll.topAnchor constraintEqualToAnchor:done.bottomAnchor
+                                         constant:10],
+        [scroll.leadingAnchor constraintEqualToAnchor:sg.leadingAnchor
+                                             constant:16],
+        [scroll.trailingAnchor constraintEqualToAnchor:sg.trailingAnchor
+                                              constant:-16],
+        [scroll.bottomAnchor constraintEqualToAnchor:sg.bottomAnchor
+                                            constant:-12],
+        [col.topAnchor constraintEqualToAnchor:scroll.topAnchor],
+        [col.leadingAnchor constraintEqualToAnchor:scroll.leadingAnchor],
+        [col.trailingAnchor constraintEqualToAnchor:scroll.trailingAnchor],
+        [col.bottomAnchor constraintEqualToAnchor:scroll.bottomAnchor],
+        [col.widthAnchor constraintEqualToAnchor:scroll.widthAnchor],
+    ]];
+}
+
+// Lay out the palette: one section label + a wrapped run of chips per group, in spec order.
+- (void)buildEditPaletteInto:(UIStackView *)col {
+    NSString *curSection = nil;
+    UIStackView *row = nil;
+    NSUInteger inRow = 0;
+    const NSUInteger perRow = 7;
+    for (NSDictionary *spec in [self allControlSpecs]) {
+        if (![spec[@"section"] isEqualToString:curSection]) {
+            curSection = spec[@"section"];
+            UILabel *hdr = [[UILabel alloc] init];
+            hdr.text = [curSection uppercaseString];
+            hdr.font = [UIFont boldSystemFontOfSize:12];
+            hdr.textColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
+            [col addArrangedSubview:hdr];
+            row = nil;
+            inRow = 0;
+        }
+        if (!row || inRow == perRow) {
+            row = [[UIStackView alloc] init];
+            row.axis = UILayoutConstraintAxisHorizontal;
+            row.spacing = 8;
+            row.alignment = UIStackViewAlignmentCenter;
+            [col addArrangedSubview:row];
+            inRow = 0;
+        }
+        [row addArrangedSubview:[self makePaletteChipForSpec:spec]];
+        inRow++;
+    }
+}
+
+- (UIButton *)makePaletteChipForSpec:(NSDictionary *)spec {
+    UIButton *chip = [UIButton buttonWithType:UIButtonTypeSystem];
+    chip.translatesAutoresizingMaskIntoConstraints = NO;
+    NSString *glyph = spec[@"glyph"];
+    BOOL wide = (glyph.length > 2);
+    [chip setTitle:glyph forState:UIControlStateNormal];
+    chip.titleLabel.font = wide ? [UIFont boldSystemFontOfSize:14] : [UIFont boldSystemFontOfSize:19];
+    chip.layer.cornerRadius = 8;
+    chip.layer.borderWidth = 1.0;
+    [chip.widthAnchor constraintEqualToConstant:(wide ? 62 : 44)].active = YES;
+    [chip.heightAnchor constraintEqualToConstant:40].active = YES;
+    objc_setAssociatedObject(chip, "rmSpec", spec, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [self styleChip:chip pinned:[self isControlPinned:spec[@"id"]]];
+    [chip addTarget:self action:@selector(onPaletteChipTapped:) forControlEvents:UIControlEventTouchUpInside];
+    return chip;
+}
+
+// Solid amber = pinned (on your screen); ghosted outline = available to add.
+- (void)styleChip:(UIButton *)chip pinned:(BOOL)pinned {
+    if (pinned) {
+        chip.backgroundColor = [UIColor colorWithRed:0.95 green:0.62 blue:0.11 alpha:0.95];
+        chip.tintColor = [UIColor blackColor];
+        chip.layer.borderColor = [UIColor colorWithRed:1.0 green:0.85 blue:0.4 alpha:1.0].CGColor;
+    } else {
+        chip.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.06];
+        chip.tintColor = [UIColor colorWithWhite:1.0 alpha:0.85];
+        chip.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.25].CGColor;
+    }
+}
+
+- (void)onPaletteChipTapped:(UIButton *)chip {
+    NSDictionary *spec = objc_getAssociatedObject(chip, "rmSpec");
+    NSString *cid = spec[@"id"];
+    BOOL nowPinned = ![self isControlPinned:cid];
+    [self setControl:cid pinned:nowPinned]; // persists + rebuilds the live corner stack
+    [self styleChip:chip pinned:nowPinned];
+}
+
+- (void)onEditControlsDone {
+    [self.editOverlay removeFromSuperview];
+    self.editOverlay = nil;
 }
 
 // On-device Jagex login: present the embedded OAuth login, and on success persist the chosen character to
@@ -4051,14 +4695,12 @@ static CGRect mapRectFromArr(NSArray *a) {
     // Corner controls that overlap the (centred) map window (the chat/tab-grid veneers hide via their own
     // ticks). The window itself is positioned by the bridge (centred via the WORLDMAP_X/Y varcs) and the
     // scene stays visible around it, like the desktop window — no masks, and the engine's own close X is
-    // fully on-screen and tappable.
-    self.keyboardButton.hidden = open;
-    self.shiftButton.hidden = open;
-    self.screenshotButton.hidden = open;
+    // fully on-screen and tappable. Only the live controls need hiding: the ⚙ gear, the pinned-controls
+    // stack, and the plugin dock. (The legacy cluster stays permanently hidden via hideLegacyCluster, so we
+    // must NOT toggle it here — setting .hidden=NO on close would resurrect the retired buttons.)
+    self.settingsButton.hidden = open;
+    self.controlsBox.hidden = open;
     self.panelDock.view.hidden = open;
-    self.debugToggle.hidden = open;
-    self.chromeToggle.hidden = open;
-    self.pluginButton.hidden = open;
     [self appendLine:open ? @"[map] world map OPEN -> map pan/taps, chrome hidden"
                           : @"[map] world map closed -> chrome restored"];
 }
@@ -4443,7 +5085,8 @@ static CGRect mapRectFromArr(NSArray *a) {
     [pc addObserver:self forKeyPath:@"pictureInPictureActive"
             options:NSKeyValueObservingOptionNew context:kPipKvoContext];
     self.pipController = pc;
-    self.pipButton.hidden = NO;
+    // (The legacy pipButton stays hidden — PiP is driven by the pinned 📺 control now; onTogglePip's
+    // `if (!self.pipController) return;` guard makes a pre-arm tap a harmless no-op.)
     [self appendLine:@"[pip] armed — backgrounding pops the game into Picture-in-Picture"];
 }
 
