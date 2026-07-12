@@ -21,6 +21,15 @@
 #   0x81fc80: b.ne <fallback>   (MirrorMappedCodeCache flag gate)      -> nop
 #   0x81fc8c: cbz w0,<mmap>      (DeviceRequiresTXMWorkaround gate)     -> nop
 #
+# iOS 27 regression (2026-07): DeviceRequiresTXMWorkaround() probes /private/preboot
+# via opendir()/readdir(). On iOS 26.5 the sandboxed opendir() failed cleanly and the
+# function returned 0; on iOS 27.0 the same probe dereferences a bad DIR* and SIGSEGVs
+# inside readdir() during CodeCache::initialize() — the JVM dies before any Java runs.
+# Because both result-gates above are already NOPed, the function's return value is
+# unused, so its CALL is pure dead weight. NOP the bl to remove the crashing probe;
+# x19 (saved code-cache size at 0x81fc84) flows straight into the brk #0x69 path.
+#   0x81fc88: bl DeviceRequiresTXMWorkaround (@0x81fb8c)                -> nop
+#
 # Idempotent + verified. Run after fetching/extracting the JRE (JRE21-INVENTORY.md).
 # The app's resign-jre.sh re-signs the patched dylib at build time.
 set -euo pipefail
@@ -29,7 +38,7 @@ LIBJVM="${1:-$(dirname "$0")/jre/lib/server/libjvm.dylib}"
 NOP="1f2003d5"   # nop
 
 # site:expected_original (little-endian hex as stored in the file)
-SITES=( "$((0x81fc80)):61080054" "$((0x81fc8c)):e0010034" )
+SITES=( "$((0x81fc80)):61080054" "$((0x81fc88)):c1ffff97" "$((0x81fc8c)):e0010034" )
 
 if [ ! -f "$LIBJVM" ]; then echo "patch-jre-txm: not found: $LIBJVM" >&2; exit 1; fi
 
