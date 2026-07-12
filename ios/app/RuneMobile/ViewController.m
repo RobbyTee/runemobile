@@ -71,7 +71,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UIButton *keyboardButton;
 @property (nonatomic, strong) UIButton *settingsButton;  // persistent ⚙ entry point (bottom-left) — the only always-on control
 @property (nonatomic, strong) UIButton *kbFab;           // always-on ⌨︎ keyboard toggle, pinned top-centre (keyboard-safe)
-@property (nonatomic, strong) UIStackView *controlsBox;  // packs the player's pinned on-screen controls above the gear
+@property (nonatomic, strong) UIStackView *controlsBox;  // packs the player's pinned on-screen controls to the right of the gear
 @property (nonatomic, strong) UIView *editOverlay;       // the "Edit controls" palette overlay (nil unless editing)
 @property (nonatomic, assign) BOOL developerMode;        // gates the dev tools (debug panel)
 @property (nonatomic, strong) UIButton *shiftButton;     // sticky-Shift toggle (holds VK_SHIFT for shift-click)
@@ -1077,8 +1077,9 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
                   forControlEvents:UIControlEventTouchUpInside];
     [self.screen addSubview:self.settingsButton];
 
-    // The pinned-controls stack packs the player's chosen buttons directly above the gear (no gaps — hidden
-    // rows collapse). Rebuilt by rebuildPinnedControls from the persisted "pinnedControls" list.
+    // The pinned-controls stack packs the player's chosen buttons in a row to the right of the gear (no gaps —
+    // hidden rows collapse; extra rows wrap upward). Rebuilt by rebuildPinnedControls from the persisted
+    // "pinnedControls" list. The outer stack stays vertical so overflow rows grow up, away from the gear row.
     self.controlsBox = [[UIStackView alloc] init];
     self.controlsBox.translatesAutoresizingMaskIntoConstraints = NO;
     self.controlsBox.axis = UILayoutConstraintAxisVertical;
@@ -1471,16 +1472,15 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         [self.screen.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
 
         // Settings gear — bottom-left corner of the safe area. The ONLY always-on control; the pinned-controls
-        // stack packs directly above it.
+        // stack packs in a row directly to its right (first row aligned to the gear, extra rows wrap upward).
         [self.settingsButton.bottomAnchor constraintEqualToAnchor:g.bottomAnchor
                                                          constant:-8],
         [self.settingsButton.leadingAnchor constraintEqualToAnchor:g.leadingAnchor
                                                           constant:8],
         [self.settingsButton.widthAnchor constraintEqualToConstant:44],
         [self.settingsButton.heightAnchor constraintEqualToConstant:36],
-        [self.controlsBox.bottomAnchor constraintEqualToAnchor:self.settingsButton.topAnchor
-                                                      constant:-8],
-        [self.controlsBox.leadingAnchor constraintEqualToAnchor:g.leadingAnchor
+        [self.controlsBox.bottomAnchor constraintEqualToAnchor:self.settingsButton.bottomAnchor],
+        [self.controlsBox.leadingAnchor constraintEqualToAnchor:self.settingsButton.trailingAnchor
                                                        constant:8],
 
         // Always-on keyboard toggle — near the top-centre of the safe area (keyboard-safe: the soft keyboard
