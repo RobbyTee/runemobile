@@ -26,6 +26,7 @@
 #import <os/lock.h>            // os_unfair_lock — guards the JSON-fault rate-limiter (QA-SYS-1 sibling)
 #import <time.h>               // clock_gettime_nsec_np — monotonic window for the rate-limiter
 #import <mach/mach.h>          // task_info — resident memory for the developer-mode diagnostics readout
+#import <sys/utsname.h>        // uname — device model identifier for the diagnostics report
 
 // The chat tabs match the official mobile app's small size, which makes them fiddly to hit. This button expands its
 // touch area vertically (the 7 tabs are contiguous, so a horizontal miss already lands on a neighbour) so near-miss
@@ -63,8 +64,9 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
     // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
     // desktop stone. A C array, so it lives as an ivar rather than a property.
     CGPoint _tabCentres[14];
-    // Developer-mode FPS sampler: framesShown + timestamp of the last sample window, and the last computed rate.
-    int _fpsFrames;
+    // Developer-mode FPS sampler: the engine's rendered-frame seq + timestamp of the last sample window, and
+    // the last computed rate. Uses JavaBridge.getFrameSeq (real composited frames), NOT display-link ticks.
+    int _lastFrameSeq;
     CFTimeInterval _fpsStamp;
     double _lastFps;
 }
@@ -102,6 +104,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UIButton *debugToggle;
 @property (nonatomic, strong) UILabel *diagLabel;        // live JVM/renderer/FPS/memory/session/build readout
 @property (nonatomic, strong) UIStackView *devActionRow; // Test JIT / Copy log / Clear / Share, in a row
+@property (nonatomic, strong) UIButton *debugClose;      // ✕ in the panel corner — the only way to dismiss it once open
 // Hidden capture field: becomes first responder to raise the soft keyboard; its change/return callbacks
 // are translated into AWT KeyEvents. It never actually holds text (a zero-width sentinel keeps backspace
 // firing, and every change returns NO).
@@ -929,11 +932,12 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [self presentViewController:sheet animated:YES completion:nil];
 }
 
-// Hidden dev affordance: dismiss the cover to expose the W1 debug panel (does NOT launch the JVM).
+// Hidden dev affordance: dismiss the cover to expose the developer panel (does NOT launch the JVM). The cover
+// is only HIDDEN (not removed) so the panel's ✕ can bring it back — otherwise closing pre-launch would strand
+// the user on a not-yet-started game with no play button.
 - (void)onRevealDebug {
     self.debugPanel.hidden = NO;
     self.launchScreen.hidden = YES;
-    [self.launchScreen removeFromSuperview];
 }
 
 // 117HD crash-cookie plumbing (see the property block for the arm/clear/consume contract). The marker
@@ -1292,6 +1296,9 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.diagLabel.textColor = [UIColor colorWithWhite:0.72 alpha:1.0];
     self.diagLabel.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
     self.diagLabel.text = @"(diagnostics appear here)";
+    self.diagLabel.userInteractionEnabled = YES; // tap the readout to copy a full report
+    [self.diagLabel addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self
+                                                                                 action:@selector(onCopyReport)]];
     [self.debugPanel addSubview:self.diagLabel];
 
     // Row 3 — primary boot. The Tap-to-Play cover is the normal entry point; this is the dev boot for when the
@@ -1343,6 +1350,17 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.console.textColor = [UIColor greenColor];
     self.console.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
     [self.debugPanel addSubview:self.console];
+
+    // Close (✕) — the panel covers the ⚙ gear, so without this there's no way back to Settings to hide it.
+    // Added last so it sits above the console; anchored to the panel's top-right corner.
+    self.debugClose = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.debugClose.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.debugClose setTitle:@"✕" forState:UIControlStateNormal];
+    self.debugClose.titleLabel.font = [UIFont boldSystemFontOfSize:18];
+    self.debugClose.tintColor = [UIColor whiteColor];
+    self.debugClose.accessibilityLabel = @"Close developer panel";
+    [self.debugClose addTarget:self action:@selector(onCloseDebug) forControlEvents:UIControlEventTouchUpInside];
+    [self.debugPanel addSubview:self.debugClose];
 
     // (2) Debug toggle — always on top (added last), top-right. Expands/collapses the debug panel so the
     // game can stay full-screen.
@@ -1507,10 +1525,17 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         [self.debugPanel.widthAnchor constraintEqualToAnchor:g.widthAnchor
                                                   multiplier:0.62],
 
+        // Close (✕) — top-right corner of the panel, level with the status line.
+        [self.debugClose.topAnchor constraintEqualToAnchor:p.topAnchor],
+        [self.debugClose.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
+        [self.debugClose.widthAnchor constraintEqualToConstant:36],
+        [self.debugClose.heightAnchor constraintEqualToConstant:32],
+
         // Panel contents — stacked top to bottom: JIT status, diagnostics, Start, the action row, then the log.
         [self.statusLabel.topAnchor constraintEqualToAnchor:p.topAnchor],
         [self.statusLabel.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
-        [self.statusLabel.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
+        [self.statusLabel.trailingAnchor constraintEqualToAnchor:self.debugClose.leadingAnchor
+                                                        constant:-8],
         [self.diagLabel.topAnchor constraintEqualToAnchor:self.statusLabel.bottomAnchor
                                                  constant:4],
         [self.diagLabel.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
@@ -1759,6 +1784,16 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 
 - (void)onToggleDebug {
     self.debugPanel.hidden = !self.debugPanel.hidden;
+}
+
+// ✕ in the panel corner. Hide the panel; if it was opened pre-launch via the triple-tap (the launch cover is
+// still around), bring that cover back so the user isn't dropped onto a not-yet-started game with no way in.
+- (void)onCloseDebug {
+    self.debugPanel.hidden = YES;
+    if (!self.launched && self.launchScreen) {
+        self.launchScreen.hidden = NO;
+        [self.view bringSubviewToFront:self.launchScreen];
+    }
 }
 
 #pragma mark - Developer mode
@@ -4184,10 +4219,17 @@ static int chatRowCanvasH(void) {
     [self appendLine:[NSString stringWithFormat:@"[chrome] rails %@", self.chromeVisible ? @"ON" : @"OFF"]];
 }
 
-// Copy the whole log to the clipboard so a session can be pasted into a bug note without the device round-trip.
+// Copy a full diagnostics report (environment + live metrics + log) to the clipboard, so a session can be
+// pasted into a bug note without the device round-trip. Built on devReportText so it's never empty — even in
+// a Release build where the on-screen console is compiled out, or before the JVM has produced any output.
 - (void)onCopyLog {
-    [UIPasteboard generalPasteboard].string = self.console.text ?: @"";
-    [self appendLine:@"[dev] log copied to clipboard"];
+    [UIPasteboard generalPasteboard].string = [self devReportText];
+    [self appendLine:@"[dev] diagnostics report copied to clipboard"];
+}
+
+// Also copy the report when the diagnostics readout itself is tapped (a quick, discoverable grab).
+- (void)onCopyReport {
+    [self onCopyLog];
 }
 
 // Clear the on-screen console (the on-disk jvm-stdio.log is untouched — use Share to export the full file).
@@ -4195,14 +4237,15 @@ static int chatRowCanvasH(void) {
     self.console.text = @"";
 }
 
-// Share the raw JVM stdout/stderr log file (Documents/jvm-stdio.log) via the system share sheet — AirDrop it
-// to a Mac, save to Files, etc. Falls back to sharing the on-screen console text if the file isn't there yet.
+// Share via the system share sheet — AirDrop to a Mac, save to Files, etc. Prefers the raw JVM stdout/stderr
+// log FILE (Documents/jvm-stdio.log) when it exists; otherwise shares the full diagnostics report text so the
+// action is never a no-op (the file is only written in debug builds, and not before the JVM starts).
 - (void)onShareLog {
     NSString *docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
     NSString *logPath = [docs stringByAppendingPathComponent:@"jvm-stdio.log"];
     id item = [[NSFileManager defaultManager] fileExistsAtPath:logPath]
                   ? (id)[NSURL fileURLWithPath:logPath]
-                  : (id)(self.console.text ?: @"");
+                  : (id)[self devReportText];
     UIActivityViewController *av = [[UIActivityViewController alloc] initWithActivityItems:@[ item ]
                                                                      applicationActivities:nil];
     av.popoverPresentationController.sourceView = self.devActionRow;
@@ -4217,18 +4260,42 @@ static int chatRowCanvasH(void) {
     if (!self.debugPanel || self.debugPanel.hidden)
         return;
 
-    // FPS — sample framesShown over a ~0.5s window so the number is stable rather than per-frame jitter.
+    // Active renderer. Once launched, the pending flags ARE the effective renderer (locked at boot); the saved
+    // preference can differ (the user may have picked another for next launch), so only trust it pre-launch.
+    NSString *renderer;
+    BOOL activeGpu = NO; // GPU/117HD direct-present freezes getFrameSeq — real FPS isn't measurable shell-side.
+    if (self.launched) {
+        if (self.pendingRouteCZone) {
+            renderer = @"117hd";
+            activeGpu = YES;
+        } else if (self.pendingRouteCGpu) {
+            renderer = @"gpu";
+            activeGpu = YES;
+        } else {
+            renderer = @"cpu";
+        }
+    } else {
+        NSString *pref = [[NSUserDefaults standardUserDefaults] stringForKey:@"rendererPref"] ?: @"cpu";
+        renderer = [pref stringByAppendingString:@" (next launch)"];
+    }
+
+    // FPS — sampled from the engine's real rendered-frame counter (getFrameSeq) over a ~0.5s window, NOT
+    // display-link ticks. Frozen under GPU direct-present, so report those honestly rather than as a stall.
+    int seq = self.launched ? [JVMLauncher renderedFrameSeq] : -1;
     CFTimeInterval now = CACurrentMediaTime();
     if (_fpsStamp <= 0) {
         _fpsStamp = now;
-        _fpsFrames = self.framesShown;
+        _lastFrameSeq = seq;
     }
     CFTimeInterval dt = now - _fpsStamp;
     if (dt >= 0.5) {
-        _lastFps = (self.framesShown - _fpsFrames) / dt;
+        _lastFps = (seq >= 0 && _lastFrameSeq >= 0 && seq >= _lastFrameSeq) ? (seq - _lastFrameSeq) / dt : 0;
         _fpsStamp = now;
-        _fpsFrames = self.framesShown;
+        _lastFrameSeq = seq;
     }
+    NSString *fpsStr = !self.launched ? @"—"
+                                      : (activeGpu ? @"n/a (GPU present)"
+                                                   : [NSString stringWithFormat:@"%.0f", _lastFps]);
 
     // Resident memory of this process (the increased-memory-limit entitlement is what keeps the JVM heap alive).
     double residentMB = 0;
@@ -4251,7 +4318,6 @@ static int chatRowCanvasH(void) {
             session = @"at login";
     }
 
-    NSString *pref = [[NSUserDefaults standardUserDefaults] stringForKey:@"rendererPref"] ?: @"cpu";
     NSString *ver = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"?";
     NSString *bld = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"?";
     NSString *jvm = self.launched ? (bridge ? @"running" : @"booting…") : @"not started";
@@ -4259,12 +4325,45 @@ static int chatRowCanvasH(void) {
     self.diagLabel.text = [NSString stringWithFormat:
                                         @"JVM       %@\n"
                                         @"Renderer  %@\n"
-                                        @"FPS       %.0f\n"
+                                        @"FPS       %@\n"
                                         @"Memory    %.0f MB\n"
+                                        @"Thermal   %@\n"
                                         @"Session   %@\n"
                                         @"Bridge    %@\n"
                                         @"Build     %@ (%@)",
-                                        jvm, pref, _lastFps, residentMB, session, bridge ? @"ready" : @"—", ver, bld];
+                                        jvm, renderer, fpsStr, residentMB, [self thermalStateString],
+                                        session, bridge ? @"ready" : @"—", ver, bld];
+}
+
+// Human-readable thermal pressure — directly relevant to this app's throttling / perf work.
+- (NSString *)thermalStateString {
+    switch ([NSProcessInfo processInfo].thermalState) {
+        case NSProcessInfoThermalStateNominal:
+            return @"nominal";
+        case NSProcessInfoThermalStateFair:
+            return @"fair";
+        case NSProcessInfoThermalStateSerious:
+            return @"serious";
+        case NSProcessInfoThermalStateCritical:
+            return @"critical";
+    }
+    return @"unknown";
+}
+
+// A self-contained diagnostics report for pasting into a bug note: device/OS environment, the live readout,
+// the JIT gate, then the on-screen log. Never empty (environment + metrics are always present), which is why
+// Copy log and Share build on this rather than the raw console (Debug-only, and empty before boot).
+- (NSString *)devReportText {
+    [self refreshDevDiagnostics]; // ensure the readout reflects this instant
+    struct utsname sys;
+    uname(&sys);
+    double ramGB = [NSProcessInfo processInfo].physicalMemory / (1024.0 * 1024.0 * 1024.0);
+    NSString *env = [NSString stringWithFormat:@"Device    %s · iOS %@ · %.0f GB RAM\nJIT       %@",
+                                               sys.machine, [UIDevice currentDevice].systemVersion, ramGB,
+                                               [JVMLauncher isDebuggerAttached] ? @"CS_DEBUGGED" : @"not attached"];
+    NSString *log = self.console.text.length ? self.console.text : @"(log is captured only in debug builds)";
+    return [NSString stringWithFormat:@"RuneMobile diagnostics\n%@\n%@\n\n--- log ---\n%@",
+                                      env, self.diagLabel.text ?: @"", log];
 }
 
 - (void)onLaunch {

@@ -79,6 +79,12 @@ typedef void (^JVMLogSink)(NSString *line);
 /// The shell polls this and fires a light haptic on change. Returns 0 if the bundled jar predates it.
 + (int)interactTapSeq;
 
+/// The engine's monotonic rendered-frame counter (JavaBridge.getFrameSeq). Advances once per composited
+/// SOFTWARE frame, so a delta over time yields a true engine FPS. The GPU direct-present path (117HD) does
+/// not bump it (it presents off-thread), so a frozen value there is "not measured", not a stall. -1 before
+/// the bridge is up. Main thread only.
++ (int)renderedFrameSeq;
+
 /// Pull the engine's latest composited frame as a UIImage (reverse JNI -> JavaBridge.getFramePixels).
 /// Returns nil before the first draw / if the VM isn't up yet. Call on the main thread.
 + (nullable UIImage *)latestFrame;

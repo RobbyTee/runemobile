@@ -1515,6 +1515,22 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     return (int)v;
 }
 
+// The engine's rendered-frame counter (JavaBridge.getFrameSeq — same one latestFrame uses to skip stale
+// frames). It advances once per COMPOSITED software frame, so the shell can derive a true engine FPS from
+// its delta. Note: the GPU direct-present path (117HD) does NOT bump it — it presents off-thread — so a
+// frozen value there means "GPU-presented, not measured here", not a stall. -1 before the bridge is up.
++ (int)renderedFrameSeq {
+    if (!ensureBridge() || !gMidSeq || !gMainEnv)
+        return -1;
+    JNIEnv *env = gMainEnv;
+    jint v = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidSeq);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.renderedFrameSeq");
+        return -1;
+    }
+    return (int)v;
+}
+
 + (UIImage *)latestFrame {
     if (!ensureBridge()) return nil;
     JNIEnv *env = gMainEnv;
