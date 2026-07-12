@@ -6,6 +6,7 @@
 #import "OverlayEditView.h"
 #import "JagexLoginViewController.h"
 #import "GLRecon.h"
+#import "RMKeyboardDismiss.h"
 #import "RouteCBridge.h"            // GPU Route C bridge (backend selected by RC_BACKEND_ANGLE in the build)
 #import <QuartzCore/QuartzCore.h>
 #if !defined(RC_BACKEND_ANGLE)
@@ -2291,6 +2292,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.pluginSearch.searchBarStyle = UISearchBarStyleMinimal;
     self.pluginSearch.barStyle = UIBarStyleBlack;
     self.pluginSearch.tintColor = [UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0];
+    [self.pluginSearch rm_installKeyboardDoneBar]; // always-available keyboard dismiss (empty Return is greyed out)
     [card addSubview:self.pluginSearch];
 
     // RuneLite-account (config sync) row — distinct from the Jagex game login. Sits between the search and the

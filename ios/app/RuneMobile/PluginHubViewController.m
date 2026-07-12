@@ -1,5 +1,6 @@
 #import "PluginHubViewController.h"
 #import "JVMLauncher.h"
+#import "RMKeyboardDismiss.h"
 
 @interface PluginHubViewController () <UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate>
 @property (nonatomic, strong) UITableView *table;
@@ -54,6 +55,7 @@
     self.search.placeholder = @"Search plugins";
     self.search.searchBarStyle = UISearchBarStyleMinimal;
     self.search.barStyle = UIBarStyleBlack;
+    [self.search rm_installKeyboardDoneBar]; // always-available keyboard dismiss (empty Return is greyed out)
     [self.view addSubview:self.search];
 
     self.statusLabel = [[UILabel alloc] init];

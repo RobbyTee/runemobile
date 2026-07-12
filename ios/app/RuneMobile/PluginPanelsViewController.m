@@ -1,5 +1,6 @@
 #import "PluginPanelsViewController.h"
 #import "JVMLauncher.h"
+#import "RMKeyboardDismiss.h"
 
 // Right-edge drawer / dock geometry. Desktop-faithful: a vertical icon rail pinned to the far-right edge, the
 // rendered panel content opening to its left. The panel's natural 1:1 width is ~PluginPanel.PANEL_WIDTH
@@ -850,6 +851,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     self.search.delegate = self;
     self.search.barStyle = UIBarStyleBlack;
     self.search.searchBarStyle = UISearchBarStyleMinimal;
+    [self.search rm_installKeyboardDoneBar]; // always-available keyboard dismiss
     [self.browseView addSubview:self.search];
 
     self.statusSeg = [[UISegmentedControl alloc] initWithItems:@[@"All", @"In progress", @"Not started", @"Done"]];
@@ -1190,6 +1192,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     self.search.delegate = self;
     self.search.searchBarStyle = UISearchBarStyleMinimal;
     self.search.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
+    [self.search rm_installKeyboardDoneBar]; // always-available keyboard dismiss (number pad has no Return)
     [self.drawer addSubview:self.search];
 
     self.filterSeg = [[UISegmentedControl alloc] initWithItems:@[@"All", @"Members", @"Free", @"PVP"]];
@@ -2968,6 +2971,7 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
     self.searchField.autocapitalizationType = UITextAutocapitalizationTypeNone;
     self.searchField.clearButtonMode = UITextFieldViewModeWhileEditing;
     self.searchField.returnKeyType = UIReturnKeySearch;
+    [self.searchField rm_installKeyboardDoneBar]; // always-available keyboard dismiss
     self.searchField.attributedPlaceholder = [[NSAttributedString alloc] initWithString:@"Search items…"
         attributes:@{NSForegroundColorAttributeName: XpGray(0.4)}];
     // a little left padding inside the field
