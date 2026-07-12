@@ -515,6 +515,28 @@ public final class JavaBridge
 	}
 
 	/**
+	 * Developer diagnostics: the JVM heap as "usedMB/maxMB" (e.g. {@code "142/512"}). Distinct from the OS
+	 * resident memory the shell reads via mach — this is the Java-heap pressure the GC actually manages.
+	 */
+	public static String heapStats()
+	{
+		Runtime r = Runtime.getRuntime();
+		long usedMb = (r.totalMemory() - r.freeMemory()) / (1024L * 1024L);
+		long maxMb = r.maxMemory() / (1024L * 1024L);
+		return usedMb + "/" + maxMb;
+	}
+
+	/**
+	 * Developer test hook: force {@link HeadlessLogin#isReconnecting()} true for a few seconds so the native
+	 * "Reconnecting…" overlay + snapshot path can be exercised WITHOUT dropping the real game socket. Purely a
+	 * UI/plumbing test — it does not touch the connection or the reconnect budget.
+	 */
+	public static void devSimulateReconnect(int seconds)
+	{
+		HeadlessLogin.startSimulatedReconnect(seconds);
+	}
+
+	/**
 	 * The latest <em>complete</em> composited frame as packed {@code 0xAARRGGBB} ints (a stable snapshot,
 	 * not the live back buffer). Returns {@code null} before the first frame.
 	 */

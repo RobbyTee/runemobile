@@ -105,6 +105,9 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UILabel *diagLabel;        // live JVM/renderer/FPS/memory/session/build readout
 @property (nonatomic, strong) UIStackView *devActionRow; // Test JIT / Copy log / Clear / Share, in a row
 @property (nonatomic, strong) UIButton *debugClose;      // ✕ in the panel corner — the only way to dismiss it once open
+@property (nonatomic, strong) UIStackView *devActionRow2; // Snapshot / Perf HUD / Test reconnect, in a row
+@property (nonatomic, strong) UILabel *perfOverlay;       // compact always-on fps·mem·thermal chip over the game
+@property (nonatomic, strong) UIButton *perfHudButton;    // dev-panel toggle for the perf overlay (label reflects state)
 // Hidden capture field: becomes first responder to raise the soft keyboard; its change/return callbacks
 // are translated into AWT KeyEvents. It never actually holds text (a zero-width sentinel keeps backspace
 // firing, and every change returns NO).
@@ -1342,6 +1345,43 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.devActionRow.spacing = 4;
     [self.debugPanel addSubview:self.devActionRow];
 
+    // Row 4b — inspectors / tests: dump the HUD snapshot, toggle the perf overlay, exercise the reconnect UI.
+    UIButton *snapBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [snapBtn setTitle:@"Snapshot" forState:UIControlStateNormal];
+    snapBtn.titleLabel.font = [UIFont systemFontOfSize:14];
+    [snapBtn addTarget:self action:@selector(onDumpSnapshot) forControlEvents:UIControlEventTouchUpInside];
+
+    self.perfHudButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.perfHudButton.titleLabel.font = [UIFont systemFontOfSize:14];
+    [self.perfHudButton addTarget:self action:@selector(onTogglePerfOverlay) forControlEvents:UIControlEventTouchUpInside];
+
+    UIButton *reconnBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [reconnBtn setTitle:@"Reconnect" forState:UIControlStateNormal];
+    reconnBtn.titleLabel.font = [UIFont systemFontOfSize:14];
+    [reconnBtn addTarget:self action:@selector(onReconnectTest) forControlEvents:UIControlEventTouchUpInside];
+
+    self.devActionRow2 = [[UIStackView alloc] initWithArrangedSubviews:@[ snapBtn, self.perfHudButton, reconnBtn ]];
+    self.devActionRow2.translatesAutoresizingMaskIntoConstraints = NO;
+    self.devActionRow2.axis = UILayoutConstraintAxisHorizontal;
+    self.devActionRow2.distribution = UIStackViewDistributionFillEqually;
+    self.devActionRow2.alignment = UIStackViewAlignmentCenter;
+    self.devActionRow2.spacing = 4;
+    [self.debugPanel addSubview:self.devActionRow2];
+
+    // The compact perf overlay — a small chip over the game (top-leading, safe-area). Hidden unless the player
+    // turns it on (persisted). It updates from refreshDevDiagnostics even while the panel is closed.
+    self.perfOverlay = [[UILabel alloc] init];
+    self.perfOverlay.translatesAutoresizingMaskIntoConstraints = NO;
+    self.perfOverlay.font = [UIFont monospacedDigitSystemFontOfSize:11 weight:UIFontWeightSemibold];
+    self.perfOverlay.textColor = [UIColor systemGreenColor];
+    self.perfOverlay.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.55];
+    self.perfOverlay.layer.cornerRadius = 5;
+    self.perfOverlay.clipsToBounds = YES;
+    self.perfOverlay.text = @" — fps ";
+    self.perfOverlay.hidden = YES;
+    [self.view addSubview:self.perfOverlay];
+    [self applyPerfOverlayState]; // reflect the saved toggle onto the overlay + the button title
+
     // Row 5 — the live log console.
     self.console = [[UITextView alloc] init];
     self.console.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1547,11 +1587,22 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
                                                     constant:6],
         [self.devActionRow.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.devActionRow.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
-        [self.console.topAnchor constraintEqualToAnchor:self.devActionRow.bottomAnchor
+        [self.devActionRow2.topAnchor constraintEqualToAnchor:self.devActionRow.bottomAnchor
+                                                     constant:2],
+        [self.devActionRow2.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
+        [self.devActionRow2.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
+        [self.console.topAnchor constraintEqualToAnchor:self.devActionRow2.bottomAnchor
                                                constant:6],
         [self.console.leadingAnchor constraintEqualToAnchor:p.leadingAnchor],
         [self.console.trailingAnchor constraintEqualToAnchor:p.trailingAnchor],
         [self.console.bottomAnchor constraintEqualToAnchor:p.bottomAnchor],
+
+        // Perf overlay chip — top-leading of the safe area, over the game (only visible when toggled on).
+        [self.perfOverlay.topAnchor constraintEqualToAnchor:g.topAnchor
+                                                   constant:6],
+        [self.perfOverlay.leadingAnchor constraintEqualToAnchor:g.leadingAnchor
+                                                       constant:6],
+        [self.perfOverlay.heightAnchor constraintEqualToConstant:20],
     ]];
 
     [self refreshLoginButton]; // reflect any already-saved session on the launch-screen login row
@@ -4253,11 +4304,71 @@ static int chatRowCanvasH(void) {
     [self presentViewController:av animated:YES completion:nil];
 }
 
+// ---- Row 4b: inspectors / tests -------------------------------------------------------------------
+
+// Dump the live HUD/bridge snapshot (the JSON that drives the native chrome — logged-in, reconnecting, tab
+// state, etc.) into the console, pretty-printed. A quick, side-effect-free peek at what the engine is telling
+// the shell — the single most useful thing when the native veneers and the game disagree.
+- (void)onDumpSnapshot {
+    if (![JVMLauncher bridgeReady]) {
+        [self appendLine:@"[snapshot] bridge not ready (start the game first)"];
+        return;
+    }
+    NSString *snap = [JVMLauncher chromeSnapshot];
+    NSDictionary *d = snap.length ? parseBridgeJSON(snap, "ViewController.onDumpSnapshot") : nil;
+    if (!d) {
+        [self appendLine:@"[snapshot] (empty / unparseable)"];
+        return;
+    }
+    NSData *pretty = [NSJSONSerialization dataWithJSONObject:d
+                                                     options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys
+                                                       error:nil];
+    NSString *text = pretty ? [[NSString alloc] initWithData:pretty encoding:NSUTF8StringEncoding] : snap;
+    [self appendLine:[NSString stringWithFormat:@"[snapshot]\n%@", text]];
+}
+
+// Reflect the saved perf-overlay toggle onto the overlay itself and the dev-panel button label. Called at
+// panel-build (so the overlay honours the last choice across launches) and after every toggle.
+- (void)applyPerfOverlayState {
+    BOOL on = [[NSUserDefaults standardUserDefaults] boolForKey:@"perfOverlayOn"];
+    self.perfOverlay.hidden = !on;
+    if (on)
+        [self.view bringSubviewToFront:self.perfOverlay];
+    [self.perfHudButton setTitle:(on ? @"Perf ✓" : @"Perf") forState:UIControlStateNormal];
+    if (on)
+        [self refreshDevDiagnostics]; // populate it immediately rather than waiting for the next tick
+}
+
+// Toggle the compact always-on perf overlay (fps · resident MB · thermal), persisted so it survives relaunch.
+- (void)onTogglePerfOverlay {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    BOOL on = ![ud boolForKey:@"perfOverlayOn"];
+    [ud setBool:on forKey:@"perfOverlayOn"];
+    [self applyPerfOverlayState];
+    [self appendLine:[NSString stringWithFormat:@"[dev] perf overlay %@", on ? @"ON" : @"OFF"]];
+}
+
+// Exercise the native "Reconnecting…" UI without dropping the live socket: a transient flag (clamped 1–10s,
+// here 4) is OR'd into HeadlessLogin.isReconnecting(), so the snapshot path + overlay light up exactly as they
+// would on a real CONNECTION_LOST, then clear themselves. Safe to run mid-session — the game keeps playing.
+- (void)onReconnectTest {
+    if (![JVMLauncher bridgeReady]) {
+        [self appendLine:@"[reconnect] bridge not ready (start the game first)"];
+        return;
+    }
+    [JVMLauncher devSimulateReconnect:4];
+    [self appendLine:@"[reconnect] simulating reconnect for 4s (UI only — socket untouched)"];
+}
+
 // Developer-mode diagnostics: refresh the live readout (JVM / renderer / FPS / memory / session / bridge /
 // build). Cheap-guards on the panel being visible, so it's a no-op during normal play. Called from the JIT
 // poller (pre-launch) and the display tick (in-game).
 - (void)refreshDevDiagnostics {
-    if (!self.debugPanel || self.debugPanel.hidden)
+    // Runs when EITHER dev surface is up: the full panel, or the compact always-on perf overlay (which must
+    // keep updating while the panel is hidden — that's its whole point). No-op otherwise, so normal play is free.
+    BOOL panelVisible = self.debugPanel && !self.debugPanel.hidden;
+    BOOL overlayVisible = self.perfOverlay && !self.perfOverlay.hidden;
+    if (!panelVisible && !overlayVisible)
         return;
 
     // Active renderer. Once launched, the pending flags ARE the effective renderer (locked at boot); the saved
@@ -4304,9 +4415,21 @@ static int chatRowCanvasH(void) {
     if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&ti, &count) == KERN_SUCCESS)
         residentMB = ti.resident_size / (1024.0 * 1024.0);
 
-    // Bridge + session state (nil before the VM/facade is up).
+    NSString *thermal = [self thermalStateString];
+
+    // Compact always-on perf overlay (if enabled): fps · resident MB · thermal. Cheap — no bridge JSON.
+    if (overlayVisible) {
+        NSString *fpsShort = !self.launched ? @"—" : (activeGpu ? @"gpu" : [NSString stringWithFormat:@"%.0f", _lastFps]);
+        self.perfOverlay.text = [NSString stringWithFormat:@" %@ fps · %.0f MB · %@ ", fpsShort, residentMB, thermal];
+    }
+
+    if (!panelVisible)
+        return; // the overlay is done; skip the fuller (bridge-JSON) panel readout when the panel is hidden
+
+    // Bridge + session state (nil before the VM/facade is up), plus the JVM heap (used/max MB, Java-side).
     BOOL bridge = [JVMLauncher bridgeReady];
     NSString *session = @"—";
+    NSString *heap = @"—";
     if (bridge) {
         NSString *snap = [JVMLauncher chromeSnapshot];
         NSDictionary *d = snap.length ? parseBridgeJSON(snap, "ViewController.refreshDevDiagnostics") : nil;
@@ -4316,6 +4439,9 @@ static int chatRowCanvasH(void) {
             session = @"logged in";
         else
             session = @"at login";
+        NSString *h = [JVMLauncher heapStats];
+        if (h.length)
+            heap = [h stringByAppendingString:@" MB"];
     }
 
     NSString *ver = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"?";
@@ -4327,11 +4453,12 @@ static int chatRowCanvasH(void) {
                                         @"Renderer  %@\n"
                                         @"FPS       %@\n"
                                         @"Memory    %.0f MB\n"
+                                        @"Heap      %@\n"
                                         @"Thermal   %@\n"
                                         @"Session   %@\n"
                                         @"Bridge    %@\n"
                                         @"Build     %@ (%@)",
-                                        jvm, renderer, fpsStr, residentMB, [self thermalStateString],
+                                        jvm, renderer, fpsStr, residentMB, heap, thermal,
                                         session, bridge ? @"ready" : @"—", ver, bld];
 }
 

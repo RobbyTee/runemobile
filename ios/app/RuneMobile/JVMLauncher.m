@@ -40,6 +40,8 @@ static JNIEnv   *gMainEnv = NULL;     // the UI thread's attached env (main thre
 static jclass    gBridgeClass = NULL; // global ref to net.runelite.client.headless.JavaBridge
 static jmethodID gMidW = NULL, gMidH = NULL, gMidSeq = NULL, gMidPixels = NULL;
 static jmethodID gMidInteractSeq = NULL;  // getInteractTapSeq()I — native haptic cue (optional; tolerate older jar)
+static jmethodID gMidHeapStats = NULL;    // heapStats()Ljava/lang/String; — dev diagnostics (optional)
+static jmethodID gMidSimReconnect = NULL; // devSimulateReconnect(I)V — dev "test reconnect" hook (optional)
 static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidClickPrecise = NULL, gMidMove = NULL;
 static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
 static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
@@ -259,6 +261,16 @@ static BOOL ensureBridge(void) {
     // Optional (not in the mandatory set above, so an older jar without it still boots the bridge).
     gMidInteractSeq = (*env)->GetStaticMethodID(env, global, "getInteractTapSeq", "()I");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidInteractSeq = NULL; }
+    gMidHeapStats = (*env)->GetStaticMethodID(env, global, "heapStats", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidHeapStats = NULL;
+    }
+    gMidSimReconnect = (*env)->GetStaticMethodID(env, global, "devSimulateReconnect", "(I)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidSimReconnect = NULL;
+    }
     gMidMenuSelect = (*env)->GetStaticMethodID(env, global, "selectMenuPoint", "(II)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidMenuSelect = NULL; }
     gMidShiftHeld = (*env)->GetStaticMethodID(env, global, "setShiftHeld", "(Z)V");
@@ -1529,6 +1541,31 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
         return -1;
     }
     return (int)v;
+}
+
+// JVM heap usage as "usedMB/maxMB" (JavaBridge.heapStats). nil before the bridge is up or on an older jar.
++ (NSString *)heapStats {
+    if (!ensureBridge() || !gMidHeapStats || !gMainEnv)
+        return nil;
+    JNIEnv *env = gMainEnv;
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gBridgeClass, gMidHeapStats);
+    if (!js || (*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.heapStats");
+        return nil;
+    }
+    return jstringToNS(env, js);
+}
+
+// Developer "test reconnect": force the reconnect overlay on for `seconds` (bridge-clamped 1..10) without a
+// real socket drop. No-op before the bridge is up / on an older jar.
++ (void)devSimulateReconnect:(int)seconds {
+    if (!ensureBridge() || !gMidSimReconnect || !gMainEnv)
+        return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidSimReconnect, (jint)seconds);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.devSimulateReconnect");
+    }
 }
 
 + (UIImage *)latestFrame {

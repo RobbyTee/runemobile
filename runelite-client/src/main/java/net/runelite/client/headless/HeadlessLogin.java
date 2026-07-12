@@ -232,7 +232,27 @@ public final class HeadlessLogin
 	 */
 	static boolean isReconnecting()
 	{
+		// Developer test hook (devSimulateReconnect): force true for a bounded window so the native overlay can
+		// be exercised without a real drop. Time-bounded, so it can never wedge the state on permanently.
+		if (System.currentTimeMillis() < simulateReconnectUntil)
+		{
+			return true;
+		}
 		return (sawConnectionLost && reconnectAttempts < MAX_RECONNECT) || (reconnectAttempts > 0 && !done);
+	}
+
+	// Wall-clock deadline until which isReconnecting() is forced true by the developer "test reconnect" tool.
+	// Volatile: set from the shell's JNI thread, read on the client thread. 0 = inactive.
+	private static volatile long simulateReconnectUntil;
+
+	/**
+	 * Developer test hook: make {@link #isReconnecting()} return true for {@code seconds} (clamped 1..10) so the
+	 * shell's "Reconnecting…" overlay can be verified. Does not touch the socket or the reconnect budget.
+	 */
+	static void startSimulatedReconnect(int seconds)
+	{
+		int s = Math.max(1, Math.min(10, seconds));
+		simulateReconnectUntil = System.currentTimeMillis() + s * 1000L;
 	}
 
 	/**

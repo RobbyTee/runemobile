@@ -85,6 +85,14 @@ typedef void (^JVMLogSink)(NSString *line);
 /// the bridge is up. Main thread only.
 + (int)renderedFrameSeq;
 
+/// JVM heap usage as "usedMB/maxMB" (JavaBridge.heapStats) — the Java-heap pressure the GC manages, distinct
+/// from the OS resident memory. nil before the bridge is up / on an older jar. Main thread only.
++ (nullable NSString *)heapStats;
+
+/// Developer test hook: force the "Reconnecting…" overlay on for `seconds` (bridge-clamped 1..10) WITHOUT a
+/// real socket drop — exercises the overlay + snapshot path only. No-op before the bridge is up. Main thread.
++ (void)devSimulateReconnect:(int)seconds;
+
 /// Pull the engine's latest composited frame as a UIImage (reverse JNI -> JavaBridge.getFramePixels).
 /// Returns nil before the first draw / if the VM isn't up yet. Call on the main thread.
 + (nullable UIImage *)latestFrame;
