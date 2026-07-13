@@ -29,6 +29,7 @@ import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.Point;
 import java.awt.Rectangle;
+import net.runelite.client.headless.HudVeneerBridge;
 import org.intellij.lang.annotations.MagicConstant;
 
 class SnapCorner
@@ -89,6 +90,77 @@ class SnapCorner
 	{
 		curx = offx;
 		cury = offy;
+	}
+
+	// ---- Mobile veneer (no-op on desktop) --------------------------------------------------------------
+	// The native shell renders the canvas edge-to-edge (the raw corners sit under the phone's curved
+	// bezel/notch) and relocates the engine chatbox to the top of the canvas (the chatbox-derived anchors
+	// would follow it there). Every consumer of a corner's anchor — the render-time positioning in
+	// OverlayRenderer.positionSnapcorners AND the draggable CornerOverlay shown in overlay-management
+	// mode — resolves it through these helpers, so the visible drag target and the actual snap geometry
+	// can never disagree. curx/cury stay in the raw (uninset) coordinate space so persisted positions
+	// remain portable.
+
+	OverlayOriginX effectiveOriginX()
+	{
+		if (originX == OverlayOriginX.CHATBOX_LEFT && HudVeneerBridge.getOverlayChatAvoid() != null)
+		{
+			// the chatbox is relocated to the top of the canvas (already inside the safe area) — anchor
+			// to the HUD left edge instead, where the corner visually belongs
+			return OverlayOriginX.HUD_CONTAINER_LEFT;
+		}
+		return originX;
+	}
+
+	OverlayOriginY effectiveOriginY()
+	{
+		if (originY == OverlayOriginY.CHATBOX_TOP && HudVeneerBridge.getOverlayChatAvoid() != null)
+		{
+			return OverlayOriginY.HUD_CONTAINER_BOTTOM;
+		}
+		return originY;
+	}
+
+	void applyVeneerInsets(Point p)
+	{
+		shiftByVeneerInsets(p, 1);
+	}
+
+	void unapplyVeneerInsets(Point p)
+	{
+		shiftByVeneerInsets(p, -1);
+	}
+
+	private void shiftByVeneerInsets(Point p, int dir)
+	{
+		if (position == OverlayPosition.CANVAS_TOP_RIGHT)
+		{
+			return; // deliberately pinned to the true canvas corner
+		}
+		final int[] ins = HudVeneerBridge.getOverlayInsets();
+		switch (effectiveOriginX())
+		{
+			case HUD_CONTAINER_LEFT:
+				p.x += dir * ins[0];
+				break;
+			case HUD_CONTAINER_RIGHT:
+				p.x -= dir * ins[2];
+				break;
+			default:
+				break;
+		}
+		switch (effectiveOriginY())
+		{
+			case TOP:
+			case HUD_CONTAINER_TOP:
+				p.y += dir * ins[1];
+				break;
+			case HUD_CONTAINER_BOTTOM:
+				p.y -= dir * ins[3];
+				break;
+			default:
+				break;
+		}
 	}
 
 	void setPosition(int x, int y)
@@ -219,6 +291,7 @@ class SnapCorner
 		{
 			var p = new Point(curx, cury);
 			SnapCorner.this.translateOffsetForAlignment(p);
+			applyVeneerInsets(p);
 			return p;
 		}
 
@@ -251,8 +324,8 @@ class SnapCorner
 			setSnappable(false);
 			setLayer(OverlayLayer.UNDER_WIDGETS);
 			setOrigin(OverlayOrigin.MANUAL);
-			setOriginX(originX);
-			setOriginY(originY);
+			setOriginX(effectiveOriginX());
+			setOriginY(effectiveOriginY());
 			setPreferredLocation(translateOffsetForAlignment());
 		}
 
@@ -267,6 +340,7 @@ class SnapCorner
 		{
 			var location = getPreferredLocation();
 			var l = translateLocationForAlignment(location);
+			unapplyVeneerInsets(l);
 			curx = l.x;
 			cury = l.y;
 		}
@@ -280,8 +354,8 @@ class SnapCorner
 			setPreferredSize(null);
 			setPreferredLocation(translateOffsetForAlignment());
 			setOrigin(OverlayOrigin.MANUAL);
-			setOriginX(originX);
-			setOriginY(originY);
+			setOriginX(effectiveOriginX());
+			setOriginY(effectiveOriginY());
 		}
 
 		@Override

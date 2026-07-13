@@ -823,56 +823,23 @@ public class OverlayRenderer extends MouseAdapter
 	private void positionSnapcorners()
 	{
 		// Mobile veneer (no-op on desktop): the shell renders the canvas edge-to-edge, so the canvas corners sit
-		// under the phone's curved bezel/notch, and the veneer relocates the chat to the canvas top-left — inset
-		// every default snap corner by the native safe area, re-anchor the chatbox-derived corners to the HUD
-		// bottom (the relocated chatbox is at the top of the canvas), and drop the top-left corner below the
-		// relocated chat, so snapped plugin overlays (e.g. Quest Helper's TOP_LEFT guidance panel) render
-		// unclipped and uncovered. User-repositioned corners are honored verbatim.
-		final int[] veneerInsets = HudVeneerBridge.getOverlayInsets();
-		final int insL = veneerInsets[0], insT = veneerInsets[1], insR = veneerInsets[2], insB = veneerInsets[3];
+		// under the phone's curved bezel/notch, and the veneer relocates the chat to the canvas top-left —
+		// resolve every corner through its effective anchor (SnapCorner re-anchors the chatbox-derived origins
+		// to the HUD edges and applies the native safe-area insets; the draggable CornerOverlay resolves through
+		// the same helpers), and drop the default top-left corner below the relocated chat, so snapped plugin
+		// overlays (e.g. Quest Helper's TOP_LEFT guidance panel) render unclipped and uncovered.
 		final int[] chatAvoid = HudVeneerBridge.getOverlayChatAvoid();
 
 		var location = new Point();
 		for (SnapCorner s : snapCorners.getSnapCorners())
 		{
 			location.setLocation(s.curx, s.cury); // relative x,y of align corner
-			OverlayOriginY originY = s.originY;
-			if (chatAvoid != null && !s.isRepositioned() && originY == OverlayOriginY.CHATBOX_TOP)
+			overlayManager.computeAbsolutePosition(OverlayOrigin.MANUAL, s.effectiveOriginX(), s.effectiveOriginY(), location, location);
+			s.applyVeneerInsets(location);
+			if (s == snapCorners.topLeft && chatAvoid != null && !s.isRepositioned()
+				&& location.x < chatAvoid[0] + chatAvoid[2] && location.y < chatAvoid[1] + chatAvoid[3])
 			{
-				originY = OverlayOriginY.HUD_CONTAINER_BOTTOM;
-			}
-			overlayManager.computeAbsolutePosition(OverlayOrigin.MANUAL, s.originX, originY, location, location);
-			if (!s.isRepositioned() && s != snapCorners.canvasTopRight)
-			{
-				switch (s.originX)
-				{
-					case HUD_CONTAINER_LEFT:
-					case CHATBOX_LEFT:
-						location.x += insL;
-						break;
-					case HUD_CONTAINER_RIGHT:
-						location.x -= insR;
-						break;
-					default:
-						break;
-				}
-				switch (originY)
-				{
-					case TOP:
-					case HUD_CONTAINER_TOP:
-						location.y += insT;
-						break;
-					case HUD_CONTAINER_BOTTOM:
-						location.y -= insB;
-						break;
-					default:
-						break;
-				}
-				if (s == snapCorners.topLeft && chatAvoid != null
-					&& location.x < chatAvoid[0] + chatAvoid[2] && location.y < chatAvoid[1] + chatAvoid[3])
-				{
-					location.y = chatAvoid[1] + chatAvoid[3] + PADDING;
-				}
+				location.y = chatAvoid[1] + chatAvoid[3] + PADDING;
 			}
 			int cx = location.x, cy = location.y; // absolute x,y of the align corner
 			s.translateOffsetForAlignment(location);
