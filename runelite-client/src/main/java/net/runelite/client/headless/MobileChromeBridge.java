@@ -293,6 +293,25 @@ public final class MobileChromeBridge
 					.append(',').append(panes[i + 2]).append(',').append(panes[i + 3]).append(']');
 			}
 		}
+		sb.append(']');
+		// DRAG-2: the generic scrollable-widget rects (bank/GE/quest-list/settings/collection-log …), packed
+		// [x,y,w,h] per rect, so Android can route a one-finger drag starting inside one as an interface scroll
+		// (wheel notches) not a camera pan. Snapshotted each tapTick by JavaBridge.snapshotScrollableRects; empty
+		// array when none is on-screen. Android-only consumer (iOS keeps its on-demand isEngineScrollableAt path).
+		final int[] scrollRects = JavaBridge.getScrollableRects();
+		sb.append(",\"scrollRects\":[");
+		if (scrollRects != null)
+		{
+			for (int i = 0; i + 3 < scrollRects.length; i += 4)
+			{
+				if (i > 0)
+				{
+					sb.append(',');
+				}
+				sb.append('[').append(scrollRects[i]).append(',').append(scrollRects[i + 1])
+					.append(',').append(scrollRects[i + 2]).append(',').append(scrollRects[i + 3]).append(']');
+			}
+		}
 		sb.append("]}");
 
 		publishSnapshot(sb.toString());

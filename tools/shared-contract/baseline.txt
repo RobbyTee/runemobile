@@ -119,6 +119,7 @@ METHOD JavaBridge#getInventoryBounds()
 METHOD JavaBridge#getLastTapKind()
 METHOD JavaBridge#getLastWidgetBounds()
 METHOD JavaBridge#getReorderPaneBounds()
+METHOD JavaBridge#getScrollableRects()
 METHOD JavaBridge#getTapKindSeq()
 METHOD JavaBridge#gpuFrameBackBuffer(int,int)
 METHOD JavaBridge#gpuPublish(int,int)
@@ -453,6 +454,7 @@ PAYLOAD MobileChromeBridge reconnecting
 PAYLOAD MobileChromeBridge reorderPanes
 PAYLOAD MobileChromeBridge resized
 PAYLOAD MobileChromeBridge rootKind
+PAYLOAD MobileChromeBridge scrollRects
 PAYLOAD MobileChromeBridge sessionExpired
 PAYLOAD MobileChromeBridge sideContainer
 PAYLOAD MobileChromeBridge sidePanel

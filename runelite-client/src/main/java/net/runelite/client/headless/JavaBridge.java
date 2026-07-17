@@ -790,6 +790,7 @@ public final class JavaBridge
 		snapshotTextInputOpen(c);  // publish INPUT_TYPE for isTextInputOpen() to read off the client thread
 		snapshotInventoryBounds(c); // DRAG-1: publish the inventory item-grid bounds for the native item-drag branch
 		snapshotReorderPaneBounds(c); // DRAG-1b: publish Prayer/Spellbook/Bank pane bounds for native reorder-drag routing
+		snapshotScrollableRects(c); // DRAG-2: publish generic scrollable-widget rects for Android's native drag-to-scroll routing
 		// Deterministic early registration (boolean-gated, retries until the injector is live): the
 		// BeforeMenuRender suppression below must be in place before the FIRST menu ever opens, not
 		// lazily on the first tap.
@@ -2049,6 +2050,98 @@ public final class JavaBridge
 	public static int[] getReorderPaneBounds()
 	{
 		return reorderPaneBounds;
+	}
+
+	// DRAG-2: bounds of ALL visible, overflowing scroll-layer widgets, snapshotted on the client thread each
+	// frame so Android can hit-test a one-finger drag's START point lock-free (via the getSnapshot payload's
+	// scrollRects) and route it as an interface scroll — wheel notches at the drag point — instead of a camera
+	// rotate. This is the Android-safe snapshot counterpart to isEngineScrollableAt (an off-thread point
+	// hit-test iOS calls synchronously per touch); Android's UI thread cannot make that per-touch JNI call into
+	// HotSpot (jvm_bootstrap's UI-thread natives own no HotSpot env), so it consumes this pre-snapshotted rect
+	// array exactly as DRAG-1b does reorderPaneBounds. Packed [x,y,w,h] per rect, capped at MAX_SCROLLABLE_RECTS.
+	private static final int MAX_SCROLLABLE_RECTS = 16;
+	private static volatile int[] scrollableRects = EMPTY_BOUNDS;
+
+	private static void snapshotScrollableRects(Client c)
+	{
+		try
+		{
+			final Widget[] roots = c.getWidgetRoots();
+			int[] out = null;
+			final int[] n = {0};
+			if (roots != null)
+			{
+				out = new int[MAX_SCROLLABLE_RECTS * 4];
+				final int[] budget = {6000};   // same node cap as isEngineScrollableAt's off-thread walk
+				for (final Widget root : roots)
+				{
+					collectScrollable(root, out, n, 0, budget);
+					if (n[0] >= out.length)
+					{
+						break;
+					}
+				}
+			}
+			scrollableRects = (out == null || n[0] == 0) ? EMPTY_BOUNDS
+				: (n[0] == out.length ? out : java.util.Arrays.copyOf(out, n[0]));
+		}
+		catch (RuntimeException ex)
+		{
+			BridgeFaults.note("JavaBridge.snapshotScrollableRects", ex);
+			scrollableRects = EMPTY_BOUNDS;
+		}
+	}
+
+	// DRAG-2: structural copy of scrollableUnder/scrollableChild that APPENDS every visible overflowing
+	// scroll-layer rect into out/n (packed [x,y,w,h]) instead of short-circuiting on the first point-match, and
+	// stops once out is full. Same depth cap + node budget as the point-hit-test walk; children can render
+	// outside a parent's bounds, so it doesn't prune on parent bounds.
+	private static void collectScrollable(Widget w, int[] out, int[] n, int depth, int[] budget)
+	{
+		if (w == null || depth > 24 || budget[0]-- <= 0 || n[0] >= out.length || w.isHidden())
+		{
+			return;
+		}
+		final Rectangle b = w.getBounds();
+		if (b != null && b.width > 0 && b.height > 0 && b.x >= 0 && b.y >= 0
+			&& w.getHeight() > 0 && w.getScrollHeight() > w.getHeight())
+		{
+			out[n[0]++] = b.x;
+			out[n[0]++] = b.y;
+			out[n[0]++] = b.width;
+			out[n[0]++] = b.height;
+		}
+		collectScrollableChildren(w.getStaticChildren(), out, n, depth, budget);
+		collectScrollableChildren(w.getDynamicChildren(), out, n, depth, budget);
+		collectScrollableChildren(w.getNestedChildren(), out, n, depth, budget);
+	}
+
+	private static void collectScrollableChildren(Widget[] kids, int[] out, int[] n, int depth, int[] budget)
+	{
+		if (kids != null)
+		{
+			for (final Widget k : kids)
+			{
+				if (n[0] >= out.length || budget[0] <= 0)
+				{
+					return;
+				}
+				collectScrollable(k, out, n, depth + 1, budget);
+			}
+		}
+	}
+
+	/**
+	 * DRAG-2: bounds of all visible, overflowing scroll-layer widgets, packed as {@code [x,y,w,h]} per rect in
+	 * canvas px (capped at {@value #MAX_SCROLLABLE_RECTS}). This is the Android-safe snapshot counterpart to
+	 * {@link #isEngineScrollableAt} (an off-thread point hit-test iOS calls synchronously per touch): Android's
+	 * UI thread cannot make that per-touch JNI call into HotSpot, so it hit-tests this pre-snapshotted array
+	 * lock-free (published in the getSnapshot payload as {@code scrollRects}), mirroring how DRAG-1b's
+	 * {@link #getReorderPaneBounds} is consumed. Empty = no scrollable interface visible.
+	 */
+	public static int[] getScrollableRects()
+	{
+		return scrollableRects;
 	}
 
 	/**

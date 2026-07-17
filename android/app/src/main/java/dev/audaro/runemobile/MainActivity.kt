@@ -127,6 +127,16 @@ class MainActivity : AppCompatActivity() {
     // snapshot. A drag that STARTS inside any of these routes through the same engine WidgetDrag stream as the
     // inventory (touch PRESS->DRAGGED->RELEASE) so prayers/spells/bank items reorder instead of rotating the camera.
     private var reorderRectsCanvas: List<IntArray> = emptyList()
+
+    // DRAG-2: the generic scrollable-interface rects (bank/GE/quest-list/settings/collection-log …) from the
+    // chrome snapshot's scrollRects. A drag that STARTS inside any of these scrolls that interface (wheel notches
+    // at the drag point) instead of rotating the camera — the Android counterpart to iOS's isEngineScrollableAt
+    // point hit-test, consumed from the pre-snapshotted array (Android's UI thread can't call into HotSpot).
+    private var scrollRectsCanvas: List<IntArray> = emptyList()
+    private var ifaceScrolling = false
+    private var ifaceWheelX = 0
+    private var ifaceWheelY = 0
+    private var ifaceScrollAccum = 0f
     private var mapSearchKeyboard = false // transient ⌨-like latch while the map search is in use
     private var mapWasSearching = false // FIX-14: engine WORLDMAP_SEARCHING edge (drop the latch on commit)
     private var lastMapSnapshot = ""
@@ -385,6 +395,10 @@ class MainActivity : AppCompatActivity() {
 
         // Pinch-to-wheel: geometric step a scale ratio must cross to emit one wheel notch.
         private const val PINCH_STEP = 1.08f
+
+        // DRAG-2: view-px of finger drag per interface-scroll wheel notch. Matches iOS's kIfaceScrollPtPerNotch
+        // (22.0, ViewController.m) so the drag-to-scroll cadence feels identical on both platforms.
+        private const val IFACE_SCROLL_PT_PER_NOTCH = 22f
 
         // Click-ring truth grace: how long after a tap we wait for interactTapSeq before calling it a walk.
         // Matches iOS (250 ms). The old 600 ms was tuned for a slow emulator EDT (interaction at +535 ms), but on
@@ -1161,6 +1175,7 @@ class MainActivity : AppCompatActivity() {
                 chatScrolling = false
                 mapPanning = false
                 mapScrolling = false
+                ifaceScrolling = false // DRAG-2: end the interface drag-to-scroll gesture
             }
             true
         }
@@ -1921,7 +1936,7 @@ class MainActivity : AppCompatActivity() {
             // Context routing, decided once at gesture start from the DOWN point (same rule as iOS):
             // inside the open world-map window = pan the MAP; inside the live chat box = scroll the chat;
             // anywhere else = rotate the camera.
-            if (!cameraGestureActive && !chatScrolling && !mapPanning && !mapScrolling && !itemDragging) {
+            if (!cameraGestureActive && !chatScrolling && !mapPanning && !mapScrolling && !itemDragging && !ifaceScrolling) {
                 if (mapOpen && e1 != null) {
                     val gx = toGameX(e1.x)
                     val gy = toGameY(e1.y)
@@ -1967,6 +1982,15 @@ class MainActivity : AppCompatActivity() {
                             // park the cursor off-canvas; iOS doesn't either).
                             JvmLauncher.touch(0, sx, sy, 1) // MOUSE_PRESSED on the source widget
                             Log.i(TAG, "drag-1: widget drag begin game=($sx,$sy)")
+                        } else if (e1 != null && !mapOpen && scrollRectsCanvas.any { inCanvasRect(it, sx, sy) }) {
+                            // DRAG-2: a drag that STARTS over an open scrollable interface (bank/GE/quest-list/
+                            // settings/collection-log) scrolls that interface via wheel notches at the drag point,
+                            // instead of rotating the camera — parity with iOS's isEngineScrollableAt routing.
+                            ifaceScrolling = true
+                            ifaceWheelX = sx
+                            ifaceWheelY = sy
+                            ifaceScrollAccum = 0f
+                            Log.i(TAG, "drag-2: iface scroll begin game=($sx,$sy)")
                         } else {
                             cameraGestureActive = true
                             JvmLauncher.clearHover()
@@ -2028,6 +2052,18 @@ class MainActivity : AppCompatActivity() {
                 if (whole != 0) {
                     chatScrollAccum -= whole
                     JvmLauncher.onBridgeTouch { JvmLauncher.scrollChat(-whole) }
+                }
+                return true
+            }
+            if (ifaceScrolling) {
+                // DRAG-2: content follows the finger — finger dy (= -distanceY) accumulated into wheel notches at
+                // the drag-start point. wheel()/nativeWheel is an enqueue-only fire-and-forget call (like touch()/
+                // camera()), NOT a request/response onBridgeTouch call, so call it directly like ScaleListener does.
+                ifaceScrollAccum += -distanceY / IFACE_SCROLL_PT_PER_NOTCH
+                val notches = ifaceScrollAccum.toInt()
+                if (notches != 0) {
+                    ifaceScrollAccum -= notches
+                    JvmLauncher.wheel(ifaceWheelX, ifaceWheelY, notches)
                 }
                 return true
             }
@@ -2825,6 +2861,25 @@ class MainActivity : AppCompatActivity() {
         reorderRectsCanvas =
             if (loggedIn) {
                 val arr = o?.optJSONArray("reorderPanes")
+                if (arr == null || arr.length() == 0) {
+                    emptyList()
+                } else {
+                    val out = ArrayList<IntArray>(arr.length())
+                    for (i in 0 until arr.length()) {
+                        val r = arr.optJSONArray(i) ?: continue
+                        if (r.length() >= 4 && r.optInt(2) > 0 && r.optInt(3) > 0) {
+                            out.add(intArrayOf(r.optInt(0), r.optInt(1), r.optInt(2), r.optInt(3)))
+                        }
+                    }
+                    out
+                }
+            } else {
+                emptyList()
+            }
+        // DRAG-2: the generic scrollable-interface rects (empty when none on-screen) for the drag-to-scroll hit test.
+        scrollRectsCanvas =
+            if (loggedIn) {
+                val arr = o?.optJSONArray("scrollRects")
                 if (arr == null || arr.length() == 0) {
                     emptyList()
                 } else {

@@ -24,8 +24,12 @@
  */
 package net.runelite.client.headless;
 
+import java.awt.Rectangle;
+import java.lang.reflect.Method;
 import java.util.Arrays;
+import net.runelite.api.Client;
 import net.runelite.api.MainBufferProvider;
+import net.runelite.api.widgets.Widget;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -154,6 +158,63 @@ public class JavaBridgeTest
 		JavaBridge.gpuFrameBackBuffer(4, 2);
 		JavaBridge.gpuPublish(4, 2);
 		assertEquals("once warmed up the GPU frame publishes", seqBefore + 1, JavaBridge.getFrameSeq());
+	}
+
+	// ---- DRAG-2: getScrollableRects snapshot -----------------------------------------------------------
+
+	@Test
+	public void scrollableRectsCollectsOverflowingScrollLayers() throws Exception
+	{
+		// A root that is NOT itself scrollable (scrollHeight == height) with one overflowing scroll-layer child.
+		final Widget child = scrollWidget(new Rectangle(10, 20, 100, 200), 200, 400);
+		final Widget root = plainWidget(new Rectangle(0, 0, 300, 300));
+		when(root.getDynamicChildren()).thenReturn(new Widget[]{child});
+		final Client c = mock(Client.class);
+		when(c.getWidgetRoots()).thenReturn(new Widget[]{root});
+
+		invokeSnapshot(c);
+
+		assertArrayEquals("the overflowing child's [x,y,w,h] is packed", new int[]{10, 20, 100, 200}, JavaBridge.getScrollableRects());
+	}
+
+	@Test
+	public void scrollableRectsIgnoresNonOverflowingAndOffscreenWidgets() throws Exception
+	{
+		// height == scrollHeight (no overflow) -> not scrollable; and an off-canvas negative-origin scroll layer
+		// (a parked pane mid-layout) must be filtered exactly like the reorder/inventory snapshots do.
+		final Widget flat = scrollWidget(new Rectangle(0, 0, 100, 100), 100, 100);
+		final Widget offscreen = scrollWidget(new Rectangle(-5, 0, 100, 100), 100, 400);
+		final Widget root = plainWidget(new Rectangle(0, 0, 300, 300));
+		when(root.getDynamicChildren()).thenReturn(new Widget[]{flat, offscreen});
+		final Client c = mock(Client.class);
+		when(c.getWidgetRoots()).thenReturn(new Widget[]{root});
+
+		invokeSnapshot(c);
+
+		assertEquals("nothing scrollable + on-screen -> empty snapshot", 0, JavaBridge.getScrollableRects().length);
+	}
+
+	private static void invokeSnapshot(Client c) throws Exception
+	{
+		final Method m = JavaBridge.class.getDeclaredMethod("snapshotScrollableRects", Client.class);
+		m.setAccessible(true);
+		m.invoke(null, c);
+	}
+
+	private static Widget plainWidget(Rectangle bounds)
+	{
+		final Widget w = mock(Widget.class);
+		when(w.isHidden()).thenReturn(false);
+		when(w.getBounds()).thenReturn(bounds);
+		return w;
+	}
+
+	private static Widget scrollWidget(Rectangle bounds, int height, int scrollHeight)
+	{
+		final Widget w = plainWidget(bounds);
+		when(w.getHeight()).thenReturn(height);
+		when(w.getScrollHeight()).thenReturn(scrollHeight);
+		return w;
 	}
 
 	// ---- helpers ---------------------------------------------------------------------------------------
