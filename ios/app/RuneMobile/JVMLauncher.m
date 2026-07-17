@@ -55,6 +55,7 @@ static jmethodID gMidInvokeMenu = NULL;  // invokeMenuEntry(II)V — commit a dr
 static jmethodID gMidKeybind = NULL;     // onKeybind(II)V — fire a plugin action-hotkey chord (KEY-1, optional)
 static jmethodID gMidInvBounds = NULL;   // getInventoryBounds()[I — inventory grid bounds for item-drag (DRAG-1, optional)
 static jmethodID gMidEngineScroll = NULL; // isEngineScrollableAt(II)Z — SCROLL-SPIKE pan-begin gate (optional)
+static jmethodID gMidReorderBounds = NULL; // getReorderPaneBounds()[I — DRAG-1b reorder-pane bounds (optional)
 static jmethodID gMidKeepAlive = NULL;   // keepAlive()V — idle-logout reset from native-UI touches (optional; tolerate older jar)
 
 // W3 hybrid-chrome read surface — a SEPARATE facade (MobileChromeBridge) resolved lazily on the main thread.
@@ -295,6 +296,11 @@ static BOOL ensureBridge(void) {
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidInvBounds = NULL; }
     gMidEngineScroll = (*env)->GetStaticMethodID(env, global, "isEngineScrollableAt", "(II)Z");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidEngineScroll = NULL; }
+    gMidReorderBounds = (*env)->GetStaticMethodID(env, global, "getReorderPaneBounds", "()[I");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidReorderBounds = NULL;
+    }
     gMidKeepAlive = (*env)->GetStaticMethodID(env, global, "keepAlive", "()V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidKeepAlive = NULL; }
     gBridgeClass = global;   // publish only once fully resolved
@@ -1352,6 +1358,15 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     // trail. (Kept out of the literal above: any edit inside it makes clang-format reflow the block.)
     [opts addObject:@"-XX:+ExitOnOutOfMemoryError"];
 
+#if DEBUG
+    // Debug-only tap forensics: log every in-world left/right tap's geometry (tap X,Y vs the engine's live
+    // canvas + world viewport + inVp), the settle-gate result (stable / TIMEOUT-failopen), and the engine-
+    // consumed MenuEntry (WALK / interaction / Cancel) to client.log + jvm-stdio.log. Makes a "taps stop
+    // registering after zoom-out" repro decisive: it shows whether the tap lands in the world viewport at the
+    // right canvas scale and whether the click ever resolved to a game action. Off on master/Release.
+    [opts addObject:@"-Drunelite.touch.diag=true"];
+#endif
+
     // BOTH renderer plugins are enabledByDefault=true, so with safe-mode off EITHER would AUTO-START in every
     // mode — and 117HD's HdPlugin (conflicts=GPU) then hijacks rendering even when CPU or base-GPU is the chosen
     // renderer (the "always boots 117HD regardless of selection" bug: rendererPref=cpu but HdPlugin auto-starts
@@ -1781,6 +1796,32 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     }
     (*env)->DeleteLocalRef(env, arr);
     return r;
+}
+
+// DRAG-1b: variable-length [x,y,w,h] groups (0-3 visible reorder panes: Prayer/Spellbook/Bank) from
+// JavaBridge.getReorderPaneBounds(). Returns @[] on any bridge/exception/older-jar failure — same fail-safe
+// style as inventoryCanvasBounds. Groups with w<=0 or h<=0 are skipped.
++ (NSArray<NSValue *> *)reorderPaneCanvasBounds {
+    if (!ensureBridge() || !gMidReorderBounds)
+        return @[];
+    JNIEnv *env = gMainEnv;
+    jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, gBridgeClass, gMidReorderBounds);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.reorderPaneCanvasBounds");
+        return @[];
+    }
+    if (!arr)
+        return @[];
+    NSMutableArray<NSValue *> *out = [NSMutableArray array];
+    jint n = (*env)->GetArrayLength(env, arr);
+    for (jint i = 0; i + 4 <= n; i += 4) {
+        jint v[4];
+        (*env)->GetIntArrayRegion(env, arr, i, 4, v);
+        if (v[2] > 0 && v[3] > 0)
+            [out addObject:[NSValue valueWithCGRect:CGRectMake(v[0], v[1], v[2], v[3])]];
+    }
+    (*env)->DeleteLocalRef(env, arr);
+    return out;
 }
 
 + (BOOL)engineScrollableAtX:(int)x y:(int)y {

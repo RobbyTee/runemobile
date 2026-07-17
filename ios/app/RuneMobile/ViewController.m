@@ -6585,21 +6585,33 @@ static CGRect mapRectFromArr(NSArray *a) {
             return;
         }
         self.chatScrolling = NO;
-        // DRAG-1: a drag that STARTS over the inventory grid rearranges items (engine WidgetDrag) rather than
-        // rotating the camera. The press must land on the SOURCE item, so map the true touch start (loc - slop),
-        // not the already-moved current point. Only diverts inventory-origin drags — scene drags still rotate.
+        // DRAG-1/DRAG-1b: a drag that STARTS over the inventory grid OR a reorder pane (Prayer/Spellbook/Bank)
+        // rearranges items (engine WidgetDrag) rather than rotating the camera. The press must land on the SOURCE
+        // slot, so map the true touch start (loc - slop), not the already-moved current point. Only diverts
+        // inventory-/reorder-origin drags — scene drags still rotate. Mirrors Android's combined-branch classification.
         CGRect inv = [JVMLauncher inventoryCanvasBounds];
-        if (!CGRectIsNull(inv) && CGRectGetWidth(inv) > 0 && CGRectGetHeight(inv) > 0) {
+        NSArray<NSValue *> *reorderPanes = [JVMLauncher reorderPaneCanvasBounds];
+        BOOL haveInv = !CGRectIsNull(inv) && CGRectGetWidth(inv) > 0 && CGRectGetHeight(inv) > 0;
+        if (haveInv || reorderPanes.count > 0) {
             CGPoint startLoc = CGPointMake([g locationInView:self.screen].x - t0.x,
                                            [g locationInView:self.screen].y - t0.y);
             int sx = 0, sy = 0;
-            if ([self mapPoint:startLoc toGameX:&sx toGameY:&sy]
-                    && CGRectContainsPoint(inv, CGPointMake(sx, sy))) {
-                self.itemDragging = YES;
-                self.itemDragLastX = sx; self.itemDragLastY = sy;   // seed the release-fallback point
-                [JVMLauncher postTouchType:0 x:sx y:sy button:1];   // MOUSE_PRESSED on the source item slot
-                [self appendLine:[NSString stringWithFormat:@"[shell] item drag begin @canvas %d,%d", sx, sy]];
-                return;
+            if ([self mapPoint:startLoc toGameX:&sx toGameY:&sy]) {
+                BOOL hit = haveInv && CGRectContainsPoint(inv, CGPointMake(sx, sy));
+                for (NSValue *v in reorderPanes) {
+                    if (hit)
+                        break;
+                    if (CGRectContainsPoint(v.CGRectValue, CGPointMake(sx, sy)))
+                        hit = YES;
+                }
+                if (hit) {
+                    self.itemDragging = YES;
+                    self.itemDragLastX = sx;
+                    self.itemDragLastY = sy;                          // seed the release-fallback point
+                    [JVMLauncher postTouchType:0 x:sx y:sy button:1]; // MOUSE_PRESSED on the source slot
+                    [self appendLine:[NSString stringWithFormat:@"[shell] item drag begin @canvas %d,%d", sx, sy]];
+                    return;
+                }
             }
         }
         self.itemDragging = NO;

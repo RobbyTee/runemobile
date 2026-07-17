@@ -119,6 +119,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// visible. The shell uses it to divert a drag that starts over the inventory into an item rearrange. Main thread.
 + (CGRect)inventoryCanvasBounds;
 
+/// DRAG-1b: the visible reorder-pane bounds (Prayer/Spellbook/Bank) in gamepack-canvas px as NSValue-wrapped
+/// CGRects (0-3 panes), or @[] when none. Backed by JavaBridge.getReorderPaneBounds(); diverts a drag that
+/// starts over a reorder pane into an engine WidgetDrag rather than a camera rotate. Main thread.
++ (NSArray<NSValue *> *)reorderPaneCanvasBounds;
+
 /// SCROLL-SPIKE: YES if a scrollable engine interface (bank / GE / quest list / settings / collection log …) is
 /// under the canvas point (x,y). The shell calls this at pan-begin to divert a one-finger drag into an interface
 /// scroll (wheel notches) instead of a camera rotate. NO when the jar predates it. Main thread.
