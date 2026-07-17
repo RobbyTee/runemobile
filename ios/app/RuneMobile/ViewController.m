@@ -5586,6 +5586,15 @@ static CGRect mapRectFromArr(NSArray *a) {
             return;
         }
     }
+    // NOTIF-BG-1 (PARITY-P0-5): this is the ONLY tick alive while backgrounded (the CADisplayLink path in
+    // onDisplayTick stops firing per iOS once backgrounded) — drain notifications/links here too, at the same
+    // ~2 Hz cadence as the foreground path (framesShown % 30 at ~60fps), reusing the counter already ticked
+    // above. Runs even when gpuPresent or pipLayer is nil since notifications/links are independent of the
+    // video-feed path (matches Android's rl-drain daemon, which loops regardless of foreground state).
+    if (self.bgPumpTicks % 8 == 0) {
+        [self drainNotifications];
+        [self drainLinks];
+    }
     if (!self.pipLayer) return;
     if (self.gpuPresent) return;   // 117HD pip-present: the GL bridge feeds the layer from the render thread
     if (self.pipLayer.status == AVQueuedSampleBufferRenderingStatusFailed) {
