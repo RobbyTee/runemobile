@@ -101,6 +101,9 @@ object JvmLauncher {
 
     external fun nativeSetAltHeld(held: Boolean)
 
+    /** Menu-degrade fallback: lift/restore the engine's own "Choose Option" raster suppression. */
+    external fun nativeSetMenuRenderSuppressed(suppressed: Boolean)
+
     external fun nativeMiddleClick(
         x: Int,
         y: Int,
@@ -590,6 +593,9 @@ object JvmLauncher {
         x: Int,
         y: Int,
     ) = nativeSelectMenuPoint(x, y)
+
+    // Name matches iOS's +[JVMLauncher setEngineMenuRenderSuppressed:] for cross-platform greppability.
+    fun setEngineMenuRenderSuppressed(suppressed: Boolean) = nativeSetMenuRenderSuppressed(suppressed)
 
     fun invokeMenuEntry(
         parent: Int,

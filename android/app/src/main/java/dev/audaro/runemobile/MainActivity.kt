@@ -318,6 +318,19 @@ class MainActivity : AppCompatActivity() {
     private var emW = 0
     private var emCount = 0
 
+    // Menu build-timeout DEGRADE fallback (mirrors iOS ViewController.m): when the native styled overlay never
+    // lands within the timeout, lift the engine's raster suppression and drive the engine's OWN "Choose Option"
+    // menu by clamping the cursor over it (move-based), committing on release. Geometry-only (no entries needed).
+    private var menuDegraded = false
+    private var menuGeomValid = false
+    private var menuGeomX = 0
+    private var menuGeomY = 0
+    private var menuGeomW = 0
+    private var menuGeomH = 0
+    private var menuSelX = 0
+    private var menuSelY = 0
+    private var menuFingerOnMenu = false
+
     // FIX-10b tap-mode (submenu drill-in): a persistent, tap-to-select menu used when an entry has a submenu
     // (Menu Entry Swapper swap lists) or ⇧ is latched. menuDrillParent = the top-level engine index we drilled
     // into (-1 = top level); menuTopEntries = the saved top level for '‹ Back'; menuTapArmed = the opening
@@ -1122,6 +1135,26 @@ class MainActivity : AppCompatActivity() {
             if (menuActive) {
                 menuCurX = event.x
                 menuCurY = event.y
+                // Degraded mode (native overlay build timed out): drive the engine's own raw menu directly. Preempts
+                // the native-overlay tap/drag handling below (which would no-op — menuOverlay.isActive is false here).
+                if (menuDegraded) {
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_MOVE -> {
+                            updateDegradedMenu(event.x, event.y)
+                        }
+
+                        MotionEvent.ACTION_UP -> {
+                            menuTouchActive = false
+                            commitDegradedMenu()
+                        }
+
+                        MotionEvent.ACTION_CANCEL -> {
+                            menuTouchActive = false
+                            cancelDegradedMenu()
+                        }
+                    }
+                    return@setOnTouchListener true
+                }
                 // FIX-10b: tap-mode (submenu drill-in / shift-customize) is a PERSISTENT menu. The opening
                 // long-press's release just ARMS it; after that each discrete tap selects a row / drills / Backs,
                 // and a tap outside dismisses. Drag-mode (below) is the original slide-select.
@@ -3351,6 +3384,7 @@ class MainActivity : AppCompatActivity() {
         menuTapMode = false
         menuTapArmed = false
         menuDrillParent = -1 // FIX-10b: fresh menu
+        menuDegraded = false // a new long-press always starts un-degraded
         menuOpenAtNanos = System.nanoTime()
         JvmLauncher.click(gx, gy, 3) // open the engine right-click menu at the finger
         Log.i(TAG, "a2: long-press -> menu open game=($gx,$gy) hand=${if (menuHandRight) "R" else "L"}")
@@ -3379,6 +3413,7 @@ class MainActivity : AppCompatActivity() {
         menuTapMode = false
         menuTapArmed = false
         menuDrillParent = -1 // FIX-10b: fresh menu
+        menuDegraded = false // a new long-press always starts un-degraded
         menuOpenAtNanos = System.nanoTime()
         JvmLauncher.click(engineCx, engineCy, 3) // right-click the live engine chat button -> its filter menu
         Log.i(TAG, "a3: chat tab long-press -> filter menu game=($engineCx,$engineCy)")
@@ -3408,10 +3443,104 @@ class MainActivity : AppCompatActivity() {
             }
             return
         }
-        if (System.nanoTime() - menuOpenAtNanos > 1_000_000_000L) {
-            Log.i(TAG, "a2: no engine menu within 1s — aborting")
-            teardownMenu()
+        // Build timeout: instead of abandoning the interaction, DEGRADE to the engine's own raw menu (mirrors iOS,
+        // 600ms == its > 0.6 timeout). Lift the raster suppression so the engine "Choose Option" menu shows, and
+        // keep the gesture alive in degraded mode (do NOT teardownMenu here). The touch listener now drives the
+        // engine cursor via updateDegradedMenu until release.
+        if (!menuDegraded && System.nanoTime() - menuOpenAtNanos > 600_000_000L) {
+            menuBuilding = false
+            menuDegraded = true
+            JvmLauncher.setEngineMenuRenderSuppressed(false)
+            Log.i(TAG, "a2: native menu build TIMEOUT — degrading to raw engine menu")
         }
+    }
+
+    // === Degraded (raw-engine) menu drive (mirrors iOS ViewController.m refreshMenuGeometry / updateMenuHighlight
+    // ForPoint / closeEngineMenuNoClick / commitMenuSelection / cancelMenu). Used only in menuDegraded mode. ===
+
+    /** Refresh the live engine-menu rect from the snapshot. Geometry-only: unlike tryBuildNativeMenu's `ready`
+     *  check it does NOT require `entries`, so it can succeed even when the native overlay build never can. */
+    private fun refreshMenuGeometry() {
+        val d =
+            try {
+                JSONObject(JvmLauncher.menuSnapshot())
+            } catch (e: Exception) {
+                null
+            }
+        if (d == null || !d.optBoolean("menuOpen", false) || d.optInt("menuW", 0) <= 0 || d.optInt("menuH", 0) <= 0) {
+            menuGeomValid = false
+            return
+        }
+        menuGeomX = d.optInt("menuX")
+        menuGeomY = d.optInt("menuY")
+        menuGeomW = d.optInt("menuW")
+        menuGeomH = d.optInt("menuH")
+        menuGeomValid = true
+    }
+
+    /** Drag: clamp the engine cursor strictly inside the live menu rect (the engine auto-closes its menu the instant
+     *  the cursor leaves), tracking the real finger so release can tell select (on-menu) from cancel (off-menu). */
+    private fun updateDegradedMenu(
+        x: Float,
+        y: Float,
+    ) {
+        val gx = toGameX(x)
+        val gy = toGameY(y)
+        refreshMenuGeometry()
+        if (menuGeomValid) {
+            val sx = gx.coerceIn(menuGeomX + 1, menuGeomX + menuGeomW - 2)
+            val sy = gy.coerceIn(menuGeomY + 1, menuGeomY + menuGeomH - 2)
+            // Same outward grace inset iOS uses (kMenuGraceX=60, kMenuGraceY=6): a finger just outside the rect
+            // still counts as on-menu so a small overshoot doesn't read as cancel.
+            menuFingerOnMenu = gx >= menuGeomX - 60 && gx <= menuGeomX + menuGeomW + 60 &&
+                gy >= menuGeomY - 6 && gy <= menuGeomY + menuGeomH + 6
+            if (menuFingerOnMenu) {
+                menuSelX = sx
+                menuSelY = sy // release here -> select the row under the finger
+            } else {
+                menuSelX = menuGeomX + menuGeomW / 2
+                menuSelY = menuGeomY + 2 // dragged off -> title strip = clean cancel (no world click)
+            }
+            // Only drive the cursor once the rect is known: a raw move before geometry lands yanks the cursor out
+            // of the just-opening menu and silently auto-closes it.
+            JvmLauncher.move(sx, sy)
+        } else {
+            menuFingerOnMenu = false
+            menuSelX = gx
+            menuSelY = gy // no geometry yet: remember the raw point (commit treats this as a no-click close)
+        }
+    }
+
+    /** Close the engine menu with NO click when its rect is unknown: move the cursor to a far corner (the menu is
+     *  small + anchored at the press point, so the opposite corner is always outside it) + clear the hover. */
+    private fun closeDegradedMenuNoClick() {
+        val farX = if (menuSelX > 200) 4 else 760
+        val farY = if (menuSelY > 150) 4 else 499
+        JvmLauncher.move(farX, farY)
+        JvmLauncher.clearHover()
+    }
+
+    /** Release in degraded mode: click the resolved target (row under finger = select; title strip = cancel). */
+    private fun commitDegradedMenu() {
+        if (!menuGeomValid) {
+            closeDegradedMenuNoClick()
+            Log.i(TAG, "a2: degraded menu cancel (build aborted — no click)")
+            teardownMenu()
+            return
+        }
+        JvmLauncher.selectMenuPoint(menuSelX, menuSelY)
+        Log.i(TAG, "a2: degraded menu ${if (menuFingerOnMenu) "select" else "cancel"} @game=($menuSelX,$menuSelY)")
+        teardownMenu()
+    }
+
+    /** Gesture interrupted in degraded mode: close with no action (title strip if the rect is known, else move-off). */
+    private fun cancelDegradedMenu() {
+        if (menuGeomValid) {
+            JvmLauncher.selectMenuPoint(menuGeomX + menuGeomW / 2, menuGeomY + 2)
+        } else {
+            closeDegradedMenuNoClick()
+        }
+        teardownMenu()
     }
 
     /** Build the native overlay from the snapshot (game-space engine box + display-order entries). */
@@ -3582,6 +3711,10 @@ class MainActivity : AppCompatActivity() {
 
     /** Close the engine menu, then tear down. */
     private fun cancelMenu() {
+        if (menuDegraded) {
+            cancelDegradedMenu()
+            return
+        }
         closeEngineMenu()
         Log.i(TAG, "a2: menu cancelled")
         teardownMenu()
@@ -3597,6 +3730,12 @@ class MainActivity : AppCompatActivity() {
         menuTapArmed = false
         menuDrillParent = -1
         menuTopEntries = emptyList()
+        // Restore the engine's default raster suppression after a degraded fallback (mirrors iOS teardownMenuViews).
+        if (menuDegraded) {
+            menuDegraded = false
+            menuGeomValid = false
+            JvmLauncher.setEngineMenuRenderSuppressed(true)
+        }
     }
 
     override fun onStart() {

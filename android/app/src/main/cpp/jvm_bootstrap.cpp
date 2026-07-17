@@ -63,6 +63,7 @@ static jmethodID g_midTapKindSeq = nullptr, g_midLastTapKind = nullptr, g_midLas
 static jmethodID g_midSelectMenuPoint = nullptr;
 // AP-2a sticky-Shift: JavaBridge.setShiftHeld(boolean) — synthetic held VK_SHIFT (shared, iOS-device-proven).
 static jmethodID g_midSetShiftHeld = nullptr;
+static jmethodID g_midSetMenuRenderSuppressed = nullptr;
 // Hotkey chord: JavaBridge.onKeybind(keyCode, modifiers) — posts a matched KEY_PRESSED+KEY_RELEASED so a
 // native per-plugin hotkey button fires the plugin's Keybind. Optional resolve (older jars lack it).
 static jmethodID g_midKeybind = nullptr;
@@ -301,26 +302,31 @@ static std::atomic<long long> g_dlgSnapSeq{-1};
 
 // ---- Input queue (UI thread enqueues; render thread drains and dispatches into the bridge) -----------
 enum InputKind {
+    // clang-format off
     IN_CLICK = 0, IN_TOUCH = 1, IN_CAMERA = 2, IN_CLEARHOVER = 3,
     IN_WHEEL = 4, IN_CLICKPRECISE = 5, IN_MOVE = 6, IN_KEYSTROKE = 7, IN_TEXT = 8,
     IN_SELECTMENU = 9,
     // AP-2a sticky-Shift: hold/release a synthetic VK_SHIFT (a=1 hold, a=0 release). Queued (not a direct
-    // facade call) so it's ORDERED with the menu-open click — the engine must see shift held BEFORE the
+    // facade call) so it's ORDERED with the menu-open click - the engine must see shift held BEFORE the
     // right-click that builds the menu, or the shift-gated entries (Mark/Configure) won't be injected.
     IN_SHIFT = 10,
     // FIX-3 idle keepalive: a native-UI touch that posts no canvas event. Queued so the already-attached
     // render thread makes the JavaBridge.keepAlive() call (the ART UI thread never attaches to HotSpot).
     IN_KEEPALIVE = 11,
     // FIX-10b submenu commit: JavaBridge.invokeMenuEntry(parentDisplayIndex=a, childIndex=b). Drives a native
-    // tap-menu's submenu children (Menu Entry Swapper swap lists) — they aren't in the engine menu geometry,
+    // tap-menu's submenu children (Menu Entry Swapper swap lists) - they aren't in the engine menu geometry,
     // so a geometry click (selectMenuPoint) can't reach them; this calls the entry's onClick directly.
     IN_INVOKEMENUENTRY = 12,
     // Hotkey chord: JavaBridge.onKeybind(keyCode=a, modifiers=b). Queued (not a direct facade call) so the
     // already-attached render thread makes the call and it stays ordered with any paired shift-hold.
     IN_KEYBIND = 13,
-    // Sticky Ctrl/Alt latch (a=1 hold, a=0 release) — same ordering rationale as IN_SHIFT (the modifier must
+    // Sticky Ctrl/Alt latch (a=1 hold, a=0 release) - same ordering rationale as IN_SHIFT (the modifier must
     // be held before the menu-open click that reads it). IN_MIDDLECLICK is a BUTTON2 click at (a=x, b=y).
-    IN_CTRL = 14, IN_ALT = 15, IN_MIDDLECLICK = 16
+    // Native-menu build-timeout degrade (IN_MENU_SUPPRESS): JavaBridge.setMenuRenderSuppressed(a!=0). Lifts the
+    // engine's own "Choose Option" raster suppression so a long-press falls back to the raw engine menu when the
+    // native styled overlay never lands. Queued so the render thread makes the call (ordered with menu clicks).
+    IN_CTRL = 14, IN_ALT = 15, IN_MIDDLECLICK = 16, IN_MENU_SUPPRESS = 17
+    // clang-format on
 };
 // s carries the IN_TEXT payload; empty for the int-only kinds (aggregate-inits to "").
 struct InputEvent { int kind, a, b, c, d; std::string s; };
@@ -570,6 +576,8 @@ static bool publishBridge(JNIEnv *env) {
     }
     // AP-2a sticky-Shift: best-effort (a missing one only disables the ⇧ button, never the render path).
     g_midSetShiftHeld = midOpt(env, global, "setShiftHeld", "(Z)V");
+    // Menu-degrade fallback: best-effort (a missing one only disables the raw-menu fallback, never the render path).
+    g_midSetMenuRenderSuppressed = midOpt(env, global, "setMenuRenderSuppressed", "(Z)V");
     g_midKeybind      = midOpt(env, global, "onKeybind", "(II)V");
     g_midSetCtrlHeld  = midOpt(env, global, "setCtrlHeld", "(Z)V");
     g_midSetAltHeld   = midOpt(env, global, "setAltHeld", "(Z)V");
@@ -987,6 +995,10 @@ static void drainInput(JNIEnv *env) {
             case IN_ALT:          if (g_midSetAltHeld) env->CallStaticVoidMethod(g_bridgeCls, g_midSetAltHeld, (jboolean)(ev.a != 0)); break;
             case IN_MIDDLECLICK:  if (g_midMiddleClick) env->CallStaticVoidMethod(g_bridgeCls, g_midMiddleClick, ev.a, ev.b); break;
             case IN_INVOKEMENUENTRY: if (g_midInvokeMenuEntry) env->CallStaticVoidMethod(g_bridgeCls, g_midInvokeMenuEntry, ev.a, ev.b); break;
+            case IN_MENU_SUPPRESS:
+                if (g_midSetMenuRenderSuppressed)
+                    env->CallStaticVoidMethod(g_bridgeCls, g_midSetMenuRenderSuppressed, (jboolean)(ev.a != 0));
+                break;
             case IN_KEEPALIVE:    if (g_midKeepAlive) env->CallStaticVoidMethod(g_bridgeCls, g_midKeepAlive); break;
             case IN_TEXT: {
                 jstring js = env->NewStringUTF(ev.s.c_str());
@@ -1599,6 +1611,11 @@ Java_dev_audaro_runemobile_JvmLauncher_nativeSetCtrlHeld(JNIEnv *, jobject, jboo
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeSetAltHeld(JNIEnv *, jobject, jboolean held) {
     enqueue({IN_ALT, held ? 1 : 0, 0, 0, 0});
+}
+// Menu-degrade fallback: queue a suppress(true)/unsuppress(false) so it's ordered with the menu clicks.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetMenuRenderSuppressed(JNIEnv *, jobject, jboolean suppressed) {
+    enqueue({IN_MENU_SUPPRESS, suppressed ? 1 : 0, 0, 0, 0});
 }
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeMiddleClick(JNIEnv *, jobject, jint x, jint y) {
