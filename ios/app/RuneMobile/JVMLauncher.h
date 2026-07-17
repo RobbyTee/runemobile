@@ -79,6 +79,14 @@ typedef void (^JVMLogSink)(NSString *line);
 /// The shell polls this and fires a light haptic on change. Returns 0 if the bundled jar predates it.
 + (int)interactTapSeq;
 
+/// Tap-kind change counter (JavaBridge.getTapKindSeq): bumps each time the engine resolves a tap into a kind.
+/// Pair with lastTapKind to read the kind once per resolution. Returns 0 on an older jar without it.
++ (int)tapKindSeq;
+
+/// The last resolved tap kind (JavaBridge.getLastTapKind): TAP_KIND_NONE=0 / WALK=1 / SCENE=2 / WIDGET=3. The
+/// shell suppresses its red click-ring on WIDGET (the engine draws its own item/tab outline). 0 on an older jar.
++ (int)lastTapKind;
+
 /// The engine's monotonic rendered-frame counter (JavaBridge.getFrameSeq). Advances once per composited
 /// SOFTWARE frame, so a delta over time yields a true engine FPS. The GPU direct-present path (117HD) does
 /// not bump it (it presents off-thread), so a frozen value there is "not measured", not a stall. -1 before

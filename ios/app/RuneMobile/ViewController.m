@@ -195,6 +195,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 // Interactable-tap feedback: a light haptic when a tap grabs a real interactable (polled via JavaBridge
 // interactTapSeq), and a yellow fading click-ring drawn at every tap point (the Jagex-Mobile click marker).
 @property (nonatomic, assign) int lastInteractTapSeq;
+@property (nonatomic, assign) int lastTapKindSeqSeen; // read the engine's tap kind exactly once per resolution
 @property (nonatomic, strong) UIImpactFeedbackGenerator *tapHaptic;
 // The click ring is deferred one beat so it can pick the official colour: RED if the tap resolved to an
 // interactable (the engine bumped interactTapSeq), YELLOW for a plain walk (no bump within the grace window).
@@ -454,6 +455,7 @@ static const int AWT_VK_UP = 38;
 static const int AWT_VK_RIGHT = 39;
 static const int AWT_VK_DOWN = 40;
 static const int AWT_VK_0 = 48; // '0'..'9' == 48..57; F1..F12 == 112..123
+static const int kTapKindWidget = 3; // JavaBridge.TAP_KIND_WIDGET — suppress the shell's red ring on these taps
 // Zero-width sentinel so a backspace on an "empty" field still fires shouldChangeCharactersInRange.
 static NSString * const kKbSentinel = @"​";
 
@@ -5733,15 +5735,24 @@ static CGRect mapRectFromArr(NSArray *a) {
     // Matches the official app. The grace covers the engine-resolved tap pipeline: settle gate (a few frames)
     // + click consume next tick + poll latency ≈ 80-160 ms, so 0.25 s keeps walk rings prompt without
     // misclassifying slow interactions as walks.
+    // Read the resolved tap KIND once per resolution: a WIDGET tap (inventory item, prayer/spell icon, equipment
+    // slot, tab-stone) gets no red ring — the engine draws its own cyan outline there, so the ring is redundant
+    // noise (parity with Android's TAP_KIND_WIDGET branch). SCENE taps still ring. 0 (TAP_KIND_NONE) on an older
+    // jar means the gate is inert (0 != kTapKindWidget), preserving today's ring-on-every-interaction behavior.
+    int tks = [JVMLauncher tapKindSeq];
+    int tk = (tks != self.lastTapKindSeqSeen) ? [JVMLauncher lastTapKind] : -1;
+    self.lastTapKindSeqSeen = tks;
     int its = [JVMLauncher interactTapSeq];
     if (its != self.lastInteractTapSeq) {
         self.lastInteractTapSeq = its;
         if (!self.tapHaptic) { self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight]; }
-        [self.tapHaptic impactOccurred];
+        [self.tapHaptic impactOccurred]; // haptic fires on EVERY real interaction, widget or scene (unchanged)
         [self.tapHaptic prepare];
         if (self.pendingClick) {
-            [self flashClickRingAt:self.pendingClickPoint color:[UIColor colorWithRed:1.0 green:0.2 blue:0.15 alpha:1.0]];
-            self.pendingClick = NO;
+            if (tk != kTapKindWidget) {
+                [self flashClickRingAt:self.pendingClickPoint color:[UIColor colorWithRed:1.0 green:0.2 blue:0.15 alpha:1.0]];
+            }
+            self.pendingClick = NO; // a widget tap still resolves the pending state, it just draws no ring
         }
     }
     if (self.pendingClick && CACurrentMediaTime() - self.pendingClickAt > 0.25) {
