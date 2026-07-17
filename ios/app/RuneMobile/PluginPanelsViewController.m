@@ -290,6 +290,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 - (void)collapsePanel {
     self.currentIndex = -1;
     self.panelContainer.hidden = YES;
+    self.panelKbField.hidden = YES;             // PANEL-1: don't leave the field visible after the panel closes
     [self.panelKbField resignFirstResponder];   // PANEL-1: drop the soft keyboard with the panel
     [self highlightSelectors];
     [JVMLauncher mobileClosePanel];
@@ -527,7 +528,16 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     // PANEL-1: a hidden text field. When a panel tap focuses a Swing text box, it becomes first responder (raising
     // the soft keyboard) and mirrors its text into the Swing field on every change.
     if (!self.panelKbField) {
-        self.panelKbField = [[UITextField alloc] initWithFrame:CGRectMake(-300, -300, 10, 10)];
+        // PANEL-1: a REAL, visible text field docked at the bottom of the panel column (parity with Android's
+        // labelled OutlinedTextField) so the user sees what they type into the rendered Swing panel. Hidden until
+        // a Swing text box is focused (pollPanelKeyboard toggles it), mirroring Android's `if (textActive)`.
+        self.panelKbField = [[UITextField alloc] init];
+        self.panelKbField.translatesAutoresizingMaskIntoConstraints = NO;
+        self.panelKbField.placeholder = @"Search / type into panel";
+        self.panelKbField.borderStyle = UITextBorderStyleRoundedRect;
+        self.panelKbField.backgroundColor = [UIColor colorWithWhite:0.15 alpha:0.95];
+        self.panelKbField.textColor = [UIColor whiteColor];
+        self.panelKbField.hidden = YES;
         self.panelKbField.delegate = self;
         self.panelKbField.autocorrectionType = UITextAutocorrectionTypeNo;
         self.panelKbField.autocapitalizationType = UITextAutocapitalizationTypeNone;
@@ -540,7 +550,19 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
         self.panelKbField.returnKeyType = UIReturnKeyDone;
         [self.panelKbField addTarget:self action:@selector(onPanelKbChanged)
                     forControlEvents:UIControlEventEditingChanged];
-        [self.view addSubview:self.panelKbField];
+        // Dock it to the bottom of scroll's own container (panelContainer / drawer / self.view per mode); added
+        // last so it floats on top in z-order over the bottom of the rendered panel.
+        UIView *host = scroll.superview ?: self.view;
+        [host addSubview:self.panelKbField];
+        [NSLayoutConstraint activateConstraints:@[
+            [self.panelKbField.leadingAnchor constraintEqualToAnchor:host.leadingAnchor
+                                                            constant:8],
+            [self.panelKbField.trailingAnchor constraintEqualToAnchor:host.trailingAnchor
+                                                             constant:-8],
+            [self.panelKbField.bottomAnchor constraintEqualToAnchor:host.bottomAnchor
+                                                           constant:-8],
+            [self.panelKbField.heightAnchor constraintEqualToConstant:36],
+        ]];
     }
 }
 
@@ -751,10 +773,12 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     if (self.currentIndex != index || self.currentIndex < 0) return;   // panel switched/closed → abandon
     if ([JVMLauncher mobilePanelTextActive]) {
         self.panelKbField.text = [JVMLauncher mobilePanelText] ?: @"";
+        self.panelKbField.hidden = NO; // a Swing text box is focused — reveal the docked field
         if (![self.panelKbField isFirstResponder]) [self.panelKbField becomeFirstResponder];
         return;
     }
     if (attempt >= 4) {
+        self.panelKbField.hidden = YES; // nothing focused — hide the field again
         if ([self.panelKbField isFirstResponder]) [self.panelKbField resignFirstResponder];
         return;
     }
@@ -767,6 +791,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 - (void)onDone {
     [self.refresh invalidate];
     self.refresh = nil;
+    self.panelKbField.hidden = YES; // PANEL-1: never linger visible after the panel closes
     [self.panelKbField resignFirstResponder];
     [JVMLauncher mobileClosePanel];
     [JVMLauncher mobileFlushConfig];
