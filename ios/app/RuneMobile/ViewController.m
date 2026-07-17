@@ -2741,7 +2741,9 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         for (NSDictionary *p in self.pluginAll) {
             NSString *name = [[p[@"name"] description] lowercaseString] ?: @"";
             NSString *desc = [[p[@"description"] description] lowercaseString] ?: @"";
-            if ([name containsString:f] || [desc containsString:f]) [out addObject:p];
+            NSString *tags = [[p[@"tags"] description] lowercaseString] ?: @"";
+            if ([name containsString:f] || [desc containsString:f] || [tags containsString:f])
+                [out addObject:p];
         }
         self.pluginList = out;
     }
