@@ -334,6 +334,19 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UIView *reconnectScrim;
 @property (nonatomic, strong) UIActivityIndicatorView *reconnectSpinner;
 @property (nonatomic, assign) BOOL reconnectShown;
+// PARITY-P0-3 (iOS parity with Android's HoppingOverlayView + MainActivity.armHopScrim): a native "Switching
+// worlds…" scrim shown over the live frame during a world hop. Unlike the reconnect scrim it is NOT keyed off a
+// bridge flag — WorldSwitcherBridge.hop() drives a logout→LOGIN_SCREEN→relogin sequence during which
+// HeadlessLogin.isReconnecting() stays false, so there is no signal to poll. Instead it is armed client-side at
+// the hop-trigger sites (the World Switcher's ◀/▶ and row taps, via the RMWorldHopArmed notification) and cleared
+// on the next loggedIn edge after the hop or a bounded 12 s timeout (matching Android's HOP_TIMEOUT_MS).
+@property (nonatomic, strong) UIView *hoppingScrim;
+@property (nonatomic, strong) UIActivityIndicatorView *hoppingSpinner;
+@property (nonatomic, strong) UILabel *hoppingLabel;
+@property (nonatomic, assign) BOOL hoppingShown;
+@property (nonatomic, assign) BOOL hopArmed;
+@property (nonatomic, assign) BOOL hopSawLoggedOut;
+@property (nonatomic, assign) CFAbsoluteTime hopDeadlineAt;
 // UX-LOGIN-01 (iOS parity with Android's SessionExpiredOverlayView): a full-screen INTERACTIVE "Session
 // expired" card shown when the headless login machine has GIVEN UP (autologin/reconnect exhausted — the
 // snapshot's "sessionExpired" flag). Unlike the self-recovering reconnect scrim above, this is a hard stop:
@@ -758,6 +771,13 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     // audio in case the session was interrupted while away.
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onWillEnterForeground)
                                                  name:UIApplicationWillEnterForegroundNotification object:nil];
+    // PARITY-P0-3: the modally-presented World Switcher posts this when a hop starts so we can arm the hop scrim
+    // over the game view (it has no direct reference back to this root VC). No removeObserver — like the
+    // background/foreground observers above, this VC is the app's single long-lived root.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(onHopScrimArmed:)
+                                                 name:@"RMWorldHopArmed"
+                                               object:nil];
     [self appendLine:@"RuneMobile — W1 minimal JVM shell"];
     [self appendLine:[NSString stringWithFormat:@"jre: %@",
                       [JVMLauncher javaHome] ?: @"(MISSING from bundle!)"]];
@@ -3820,6 +3840,114 @@ static int chatRowCanvasH(void) {
     ]];
 }
 
+// PARITY-P0-3: build the world-hop scrim once, structurally identical to the reconnect scrim (same OSRS-styled
+// dark-brown/amber-border card, non-interactive so touches fall through). The label defaults to "Switching
+// worlds…" and is overwritten per-hop by armHopScrim:.
+- (void)setupHoppingOverlay {
+    if (self.hoppingScrim)
+        return;
+    UIView *scrim = [[UIView alloc] initWithFrame:self.view.bounds];
+    scrim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    scrim.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.59];
+    scrim.userInteractionEnabled = NO; // touches fall through to the game (parity with Android)
+    scrim.hidden = YES;
+
+    UIView *card = [[UIView alloc] init];
+    card.translatesAutoresizingMaskIntoConstraints = NO;
+    card.backgroundColor = [UIColor colorWithRed:33 / 255.0 green:28 / 255.0 blue:23 / 255.0 alpha:0.93];
+    card.layer.cornerRadius = 10;
+    card.layer.borderWidth = 1.5;
+    card.layer.borderColor = [UIColor colorWithRed:140 / 255.0 green:128 / 255.0 blue:102 / 255.0 alpha:1.0].CGColor;
+    [scrim addSubview:card];
+
+    UIActivityIndicatorView *spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
+    spin.translatesAutoresizingMaskIntoConstraints = NO;
+    spin.color = [UIColor colorWithRed:1.0 green:0.78 blue:0.35 alpha:1.0]; // OSRS amber
+    spin.hidesWhenStopped = NO;
+    [card addSubview:spin];
+    self.hoppingSpinner = spin;
+
+    UILabel *label = [[UILabel alloc] init];
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    label.text = @"Switching worlds…";
+    label.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
+    label.textColor = [UIColor whiteColor];
+    label.textAlignment = NSTextAlignmentCenter;
+    [card addSubview:label];
+    self.hoppingLabel = label;
+
+    [self.view addSubview:scrim];
+    self.hoppingScrim = scrim;
+
+    [NSLayoutConstraint activateConstraints:@[
+        [card.centerXAnchor constraintEqualToAnchor:scrim.centerXAnchor],
+        [card.centerYAnchor constraintEqualToAnchor:scrim.centerYAnchor],
+        [card.widthAnchor constraintEqualToConstant:240],
+        [card.heightAnchor constraintEqualToConstant:140],
+        [spin.centerXAnchor constraintEqualToAnchor:card.centerXAnchor],
+        [spin.topAnchor constraintEqualToAnchor:card.topAnchor
+                                       constant:34],
+        [label.centerXAnchor constraintEqualToAnchor:card.centerXAnchor],
+        [label.bottomAnchor constraintEqualToAnchor:card.bottomAnchor
+                                           constant:-28],
+    ]];
+}
+
+// PARITY-P0-3: arm the hop scrim (mirrors Android's armHopScrim). Shown EAGERLY here — before the engine's
+// logout chrome can flash through — so it is up the moment the user taps a hop control. Cleared later by
+// updateHoppingOverlay on the loggedIn edge or the 12 s deadline.
+- (void)armHopScrim:(NSString *)label {
+    if (!self.hoppingScrim)
+        return;
+    self.hoppingLabel.text = label;
+    self.hopArmed = YES;
+    self.hopSawLoggedOut = NO;
+    self.hopDeadlineAt = CFAbsoluteTimeGetCurrent() + 12.0; // matches Android HOP_TIMEOUT_MS = 12_000L
+    self.hoppingShown = YES;
+    self.hoppingScrim.hidden = NO;
+    [self.view bringSubviewToFront:self.hoppingScrim];
+    [self.hoppingSpinner startAnimating];
+    [self appendLine:[NSString stringWithFormat:@"[shell] onboard: hop scrim armed (%@)", label]];
+}
+
+// PARITY-P0-3: clear the hop scrim once the client is logged back in after the relog (backInWorld edge) or the
+// 12 s deadline lapses. Called ~10 Hz from onDisplayTick, UNGATED (the hop happens while NOT logged in, so it
+// must not sit behind the chromeVisible/loggedIn-gated updaters). Mirrors MainActivity.updateChrome's clear block.
+- (void)updateHoppingOverlay {
+    if (!self.hoppingScrim)
+        return;
+    if (self.hopArmed) {
+        NSDictionary *d = parseBridgeJSON([JVMLauncher chromeSnapshot], "ViewController.updateHoppingOverlay");
+        BOOL loggedIn = [d isKindOfClass:[NSDictionary class]] && [d[@"loggedIn"] boolValue];
+        if (!loggedIn)
+            self.hopSawLoggedOut = YES;
+        BOOL timedOut = CFAbsoluteTimeGetCurrent() >= self.hopDeadlineAt;
+        BOOL backInWorld = loggedIn && self.hopSawLoggedOut;
+        if (backInWorld || timedOut) {
+            self.hopArmed = NO;
+            [self appendLine:[NSString stringWithFormat:@"[shell] onboard: hop scrim clear (backInWorld=%@ timeout=%@)",
+                                                        backInWorld ? @"YES" : @"NO", timedOut ? @"YES" : @"NO"]];
+        }
+    }
+    if (self.hopArmed != self.hoppingShown) {
+        self.hoppingShown = self.hopArmed;
+        self.hoppingScrim.hidden = !self.hopArmed;
+        if (self.hopArmed) {
+            [self.view bringSubviewToFront:self.hoppingScrim];
+            [self.hoppingSpinner startAnimating];
+        } else {
+            [self.hoppingSpinner stopAnimating];
+        }
+        [self appendLine:[NSString stringWithFormat:@"[shell] onboard: hop scrim -> %@", self.hopArmed ? @"YES" : @"NO"]];
+    }
+}
+
+// PARITY-P0-3: the modally-presented WorldSwitcherViewController has no back-reference to this root VC, so it
+// signals a hop start via NSNotificationCenter (mirroring Android's decoupled MainActivity.armHopScrimHook).
+- (void)onHopScrimArmed:(NSNotification *)note {
+    [self armHopScrim:note.userInfo[@"label"] ?: @"Switching worlds…"];
+}
+
 // FIX-9 (iOS parity): show the scrim while the headless auto-reconnect recovers a dropped session. The snapshot
 // carries "reconnecting":true only during an active recovery (a normal login screen / deliberate logout omits
 // it), so a plain login is never covered. Called ~10 Hz from onDisplayTick, UNGATED by login/chrome — the
@@ -4590,6 +4718,7 @@ static int chatRowCanvasH(void) {
     [self setupReconnectOverlay];   // FIX-9: native "Reconnecting…" scrim (hidden until a real reconnect)
     [self setupSessionExpiredOverlay]; // UX-LOGIN-01: "Session expired" card (hidden until a give-up)
     [self setupFatalErrorOverlay];     // FATAL-1: engine-fatal card (hidden until the bridge notes a fatal)
+    [self setupHoppingOverlay];        // PARITY-P0-3: world-hop scrim (hidden until a hop is armed)
 
 #if !defined(RC_BACKEND_ANGLE)
     // GPU Zone (117HD) PRESENT (EAGL). Two flavours, both no-glReadPixels (the measured ~16ms/frame bottleneck):
@@ -5007,6 +5136,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         [self updateReconnectOverlay];
         [self updateSessionExpiredOverlay]; // UX-LOGIN-01: same cadence/ungating as the reconnect scrim
         [self updateFatalErrorOverlay];     // FATAL-1: latch-once fatal card, same cadence
+        [self updateHoppingOverlay];        // PARITY-P0-3: world-hop scrim, same cadence/ungating
     }
 
     // W3 Feature-A (A2.5): refresh the crude native chat-at-top + HUD-status overlay from the HudDataBridge

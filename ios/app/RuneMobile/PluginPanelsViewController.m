@@ -1323,8 +1323,17 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     self.sortRegionButton.menu = [UIMenu menuWithTitle:@"" children:@[sort, region]];
 }
 
-- (void)onHopPrev { [JVMLauncher worldHopDirection:YES]; }
-- (void)onHopNext { [JVMLauncher worldHopDirection:NO]; }
+// PARITY-P0-3: arm the game-view hop scrim before the hop kicks off (parity with Android's WorldSwitcherScreen
+// Prev/Next, which call armHopScrimHook("Switching worlds…") before worldHopDirection). ViewController listens
+// for RMWorldHopArmed — the direction hops don't know the target world, so they use the generic label.
+- (void)onHopPrev {
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"RMWorldHopArmed" object:nil userInfo:@{@"label" : @"Switching worlds…"}];
+    [JVMLauncher worldHopDirection:YES];
+}
+- (void)onHopNext {
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"RMWorldHopArmed" object:nil userInfo:@{@"label" : @"Switching worlds…"}];
+    [JVMLauncher worldHopDirection:NO];
+}
 
 - (NSString *)locationLabel:(NSInteger)loc {
     switch (loc) {
@@ -1423,6 +1432,10 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [tv deselectRowAtIndexPath:ip animated:YES];
     NSInteger wid = [self.filtered[ip.row][@"id"] integerValue];
+    // PARITY-P0-3: the target world IS known here (unlike the direction hops), so arm with Android's row-tap label.
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"RMWorldHopArmed"
+                                                        object:nil
+                                                      userInfo:@{@"label" : [NSString stringWithFormat:@"Hopping to world %ld…", (long)wid]}];
     [JVMLauncher worldHop:(int)wid];
 }
 
