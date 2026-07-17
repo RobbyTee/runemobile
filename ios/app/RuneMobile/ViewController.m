@@ -1,5 +1,6 @@
 #import "ViewController.h"
 #import "JVMLauncher.h"
+#import "AboutViewController.h"
 #import "PluginConfigViewController.h"
 #import "PluginHubViewController.h"
 #import "PluginPanelsViewController.h"
@@ -2344,6 +2345,16 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [card addSubview:overlaysBtn];
     self.overlaysCardButton = overlaysBtn;
 
+    // About/disclosure opener (iOS parity with Android's "About" tile) — a compact ⓘ glyph so the title row
+    // still fits Done/Hub/Overlays/About. Opens the full-screen unofficial-status/ban-risk/attribution modal.
+    UIButton *aboutBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    aboutBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    [aboutBtn setTitle:@"ⓘ" forState:UIControlStateNormal];
+    aboutBtn.titleLabel.font = [UIFont boldSystemFontOfSize:18];
+    aboutBtn.tintColor = [UIColor colorWithRed:0.50 green:0.80 blue:0.77 alpha:1.0];
+    [aboutBtn addTarget:self action:@selector(onOpenAbout) forControlEvents:UIControlEventTouchUpInside];
+    [card addSubview:aboutBtn];
+
     self.pluginTable = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     self.pluginTable.translatesAutoresizingMaskIntoConstraints = NO;
     self.pluginTable.backgroundColor = [UIColor clearColor];
@@ -2452,6 +2463,9 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         [self.overlaysCardButton.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
         [self.overlaysCardButton.trailingAnchor constraintEqualToAnchor:hub.leadingAnchor
                                                                constant:-18],
+        [aboutBtn.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
+        [aboutBtn.trailingAnchor constraintEqualToAnchor:self.overlaysCardButton.leadingAnchor
+                                                constant:-18],
 
         [self.pluginSearch.topAnchor constraintEqualToAnchor:title.bottomAnchor
                                                     constant:6],
@@ -2626,6 +2640,11 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 - (void)onOpenHub {
     PluginHubViewController *hubVC = [[PluginHubViewController alloc] init];
     [self presentViewController:hubVC animated:YES completion:nil];
+}
+
+- (void)onOpenAbout {
+    AboutViewController *vc = [[AboutViewController alloc] init];
+    [self presentViewController:vc animated:YES completion:nil];
 }
 
 // App going to background (user swiped home / to the switcher, before any termination): flush config so
