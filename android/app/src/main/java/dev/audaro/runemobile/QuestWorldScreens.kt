@@ -15,8 +15,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -191,6 +194,10 @@ fun WorldSwitcherScreen(onBack: () -> Unit) {
     var logged by remember { mutableStateOf(false) }
     var membersOnly by remember { mutableStateOf(false) }
     var f2pOnly by remember { mutableStateOf(false) }
+    var pvpOnly by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var sortMode by remember { mutableStateOf(0) } // 0 = World, 1 = Players (busiest first), 2 = Activity
+    var regionCode by remember { mutableStateOf(-1) } // -1 = all; else World.location (US 0 / UK 1 / AUS 3 / GER 7)
 
     DisposableEffect(Unit) {
         JvmLauncher.onBridge { JvmLauncher.worldSetUiOpen(true) }
@@ -228,12 +235,23 @@ fun WorldSwitcherScreen(onBack: () -> Unit) {
                 }) { Text("Next ▶") }
                 if (current > 0) Text(" W$current", color = Color(0xFFFFD54F), fontSize = 14.sp)
             }
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                label = { Text("World number or activity") },
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            )
+            // The chips are a single exclusive choice (Members / Free / PvP), mirroring iOS's status segment.
             Row(Modifier.padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 FilterChip(
                     selected = membersOnly,
                     onClick = {
                         membersOnly = !membersOnly
-                        if (membersOnly) f2pOnly = false
+                        if (membersOnly) {
+                            f2pOnly = false
+                            pvpOnly = false
+                        }
                     },
                     label = { Text("Members", fontSize = 12.sp) },
                 )
@@ -241,18 +259,59 @@ fun WorldSwitcherScreen(onBack: () -> Unit) {
                     selected = f2pOnly,
                     onClick = {
                         f2pOnly = !f2pOnly
-                        if (f2pOnly) membersOnly = false
+                        if (f2pOnly) {
+                            membersOnly = false
+                            pvpOnly = false
+                        }
                     },
                     label = { Text("Free", fontSize = 12.sp) },
+                )
+                FilterChip(
+                    selected = pvpOnly,
+                    onClick = {
+                        pvpOnly = !pvpOnly
+                        if (pvpOnly) {
+                            membersOnly = false
+                            f2pOnly = false
+                        }
+                    },
+                    label = { Text("PvP", fontSize = 12.sp) },
+                )
+            }
+            Row(Modifier.padding(bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                WorldMenuButton(
+                    label = "Sort: ${sortModeLabel(sortMode)}",
+                    options = listOf("World" to 0, "Players" to 1, "Activity" to 2),
+                    selected = sortMode,
+                    onSelect = { sortMode = it },
+                )
+                WorldMenuButton(
+                    label = "Region: ${regionLabel(regionCode)}",
+                    options = listOf("All" to -1, "US" to 0, "UK" to 1, "AUS" to 3, "GER" to 7),
+                    selected = regionCode,
+                    onSelect = { regionCode = it },
                 )
             }
             if (firstLoad) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             } else {
-                val shown =
-                    worlds
-                        .filter { (!membersOnly || it.members) && (!f2pOnly || !it.members) }
-                        .sortedWith(compareByDescending<WorldRow> { it.favourite }.thenBy { it.id }) // favourites float to the top
+                // Search AND chip-filter AND region all intersect (mirrors iOS -applyFilter). Numeric/text query
+                // matches world-id or activity substring, case-insensitive; favourites always float to the top,
+                // then the chosen sort applies within the favourite / non-favourite groups.
+                val q = query.trim().lowercase()
+                val filtered =
+                    worlds.filter { w ->
+                        (!membersOnly || w.members) &&
+                            (!f2pOnly || !w.members) &&
+                            (!pvpOnly || w.pvp) &&
+                            (regionCode < 0 || w.location == regionCode) &&
+                            (
+                                q.isEmpty() ||
+                                    w.id.toString().contains(q) ||
+                                    w.activity.lowercase().contains(q)
+                            )
+                    }
+                val shown = filtered.sortedWith(worldComparator(sortMode))
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(shown, key = { it.id }) { w ->
                         WorldRowItem(
@@ -322,6 +381,69 @@ private fun WorldRowItem(
         Text(if (w.members) "  P2P" else "  F2P", color = if (w.members) Color(0xFFFFB300) else Color(0xFF64B5F6), fontSize = 11.sp)
     }
 }
+
+@Composable
+private fun WorldMenuButton(
+    label: String,
+    options: List<Pair<String, Int>>,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        TextButton(onClick = { expanded = true }) { Text(label, fontSize = 12.sp, color = Color(0xFFBDBDBD)) }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (t, v) ->
+                DropdownMenuItem(
+                    text = { Text(if (v == selected) "✓ $t" else t) },
+                    onClick = {
+                        onSelect(v)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+private fun sortModeLabel(mode: Int): String =
+    when (mode) {
+        1 -> "Players"
+        2 -> "Activity"
+        else -> "World"
+    }
+
+private fun regionLabel(code: Int): String =
+    when (code) {
+        0 -> "US"
+        1 -> "UK"
+        3 -> "AUS"
+        7 -> "GER"
+        else -> "All"
+    }
+
+// Favourites always float to the top; the chosen sort orders within each group (id is the tie-break / World mode).
+private fun worldComparator(mode: Int): Comparator<WorldRow> =
+    Comparator { a, b ->
+        if (a.favourite != b.favourite) {
+            return@Comparator if (a.favourite) -1 else 1
+        }
+        when (mode) {
+            1 -> {
+                if (a.players != b.players) return@Comparator if (a.players > b.players) -1 else 1
+            }
+
+            2 -> {
+                val aa = a.activity
+                val ab = b.activity
+                if (aa.isEmpty() && ab.isNotEmpty()) return@Comparator 1 // blanks last
+                if (ab.isEmpty() && aa.isNotEmpty()) return@Comparator -1
+                val r = aa.compareTo(ab, ignoreCase = true)
+                if (r != 0) return@Comparator r
+            }
+        }
+        a.id.compareTo(b.id)
+    }
 
 // ---- JSON parsers (schemas verified against the bridge source) ---------------------------------------
 private fun prettify(enumName: String): String =
