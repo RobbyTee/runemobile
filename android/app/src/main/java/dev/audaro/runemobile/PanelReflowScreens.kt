@@ -232,13 +232,21 @@ data class GeTrade(
     val price: Int,
 )
 
+data class GeSearchHit(
+    val id: Int,
+    val name: String,
+    val price: Int,
+)
+
 @Composable
 fun GrandExchangeScreen(onBack: () -> Unit) {
     var offers by remember { mutableStateOf<List<GeOffer>>(emptyList()) }
     var history by remember { mutableStateOf<List<GeTrade>>(emptyList()) }
-    var tab by remember { mutableStateOf(0) } // 0 = live offers, 1 = trade history
+    var tab by remember { mutableStateOf(0) } // 0 = live offers, 1 = trade history, 2 = item/price search
     var firstLoad by remember { mutableStateOf(true) }
     var logged by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var searchHits by remember { mutableStateOf<List<GeSearchHit>>(emptyList()) }
 
     DisposableEffect(Unit) {
         JvmLauncher.onBridge { JvmLauncher.geSetUiOpen(true) }
@@ -257,6 +265,18 @@ fun GrandExchangeScreen(onBack: () -> Unit) {
             delay(1500)
         }
     }
+    // Debounced item/price-check search. Empty/short (<2 char) queries clear the list without hitting the bridge
+    // (the shared search() enforces the same 2-char floor). Re-keys on `query` so each keystroke restarts the wait.
+    LaunchedEffect(query) {
+        val q = query.trim()
+        if (q.length < 2) {
+            searchHits = emptyList()
+            return@LaunchedEffect
+        }
+        delay(300)
+        val json = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.geSearch(q) }.get() }
+        searchHits = parseGeSearch(json)
+    }
 
     Surface(color = PR_PANEL_BG, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(12.dp)) {
@@ -268,8 +288,43 @@ fun GrandExchangeScreen(onBack: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 GeTab("Offers", tab == 0) { tab = 0 }
                 GeTab("History", tab == 1) { tab = 1 }
+                GeTab("Search", tab == 2) { tab = 2 }
+            }
+            if (tab == 2) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    singleLine = true,
+                    label = { Text("Item name") },
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 4.dp),
+                )
             }
             when {
+                tab == 2 -> {
+                    when {
+                        query.trim().length < 2 -> {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("Type an item name to price-check.", color = Color(0xFF9E9E9E), fontSize = 14.sp)
+                            }
+                        }
+
+                        searchHits.isEmpty() -> {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("No matching tradeables.", color = Color(0xFF9E9E9E), fontSize = 14.sp)
+                            }
+                        }
+
+                        else -> {
+                            LazyColumn(Modifier.fillMaxSize()) {
+                                items(searchHits, key = { it.id }) { hit ->
+                                    GeSearchItem(hit)
+                                    HorizontalDivider(color = Color(0x22FFFFFF))
+                                }
+                            }
+                        }
+                    }
+                }
+
                 firstLoad -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 }
@@ -340,6 +395,14 @@ private fun GeTradeItem(t: GeTrade) {
 }
 
 @Composable
+private fun GeSearchItem(h: GeSearchHit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(h.name, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Text("${gp(h.price.toLong())} gp", color = Color(0xFF81C784), fontSize = 12.sp)
+    }
+}
+
+@Composable
 private fun GeOfferItem(o: GeOffer) {
     val buying = o.state.contains("BUY", ignoreCase = true) || o.state == "BUYING" || o.state == "BOUGHT"
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
@@ -392,6 +455,22 @@ private fun parseGe(json: String): List<GeOffer> =
         }
     } catch (t: Throwable) {
         Log.e(PR_TAG, "ANDROID_A5_TIER2_GE_UI_RED parse: $t")
+        emptyList()
+    }
+
+private fun parseGeSearch(json: String): List<GeSearchHit> =
+    try {
+        val arr = JSONObject(json).optJSONArray("results") ?: return emptyList()
+        (0 until arr.length()).map { i ->
+            val g = arr.getJSONObject(i)
+            GeSearchHit(
+                id = g.optInt("id"),
+                name = g.optString("name", "?"),
+                price = g.optInt("price"),
+            )
+        }
+    } catch (t: Throwable) {
+        Log.e(PR_TAG, "ANDROID_A5_TIER2_GE_SEARCH_RED parse: $t")
         emptyList()
     }
 

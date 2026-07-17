@@ -162,6 +162,7 @@ static DataPanel g_xpPanel;
 static DataPanel g_lootPanel;
 static jmethodID g_midLootReset = nullptr;   // LootTrackerBridge.resetAll() — "Reset All" write action (optional)
 static DataPanel g_gePanel;
+static jmethodID g_midGeSearch = nullptr; // GrandExchangeBridge.search(query) -> {"results":[{id,name,price}]} (optional)
 static DataPanel g_timePanel;   // TimeTrackingBridge — farming/contract/bird-house/timer/stopwatch countdowns
 // A6 chrome: MobileChromeBridge read-only snapshot facade (tab/panel/minimap/orb/chat/viewport canvas bounds
 // the native edge-rails cover-and-proxy reads each display tick). Separate facade; rl-bridge-thread read
@@ -762,6 +763,11 @@ static bool publishBridge(JNIEnv *env) {
         g_midLootReset = midOpt(env, g_lootPanel.cls, "resetAll", "()Ljava/lang/String;");
     }
     registerDataPanel(env, "net/runelite/client/headless/GrandExchangeBridge", "getGeJson", g_gePanel);
+    // GE also has an item/price-check search on the same facade class; resolve it optionally so an older
+    // staged jar without it still gets the read-only offers/history reflow.
+    if (g_gePanel.ready.load(std::memory_order_acquire)) {
+        g_midGeSearch = midOpt(env, g_gePanel.cls, "search", "(Ljava/lang/String;)Ljava/lang/String;");
+    }
     registerDataPanel(env, "net/runelite/client/headless/TimeTrackingBridge", "getTimeTrackingJson", g_timePanel);
 
     // Finding 15 — OverlayBridge: overlay edit (list + snap-to-corner + reset). Dedicated facade (action methods
@@ -2339,6 +2345,12 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeGeJson(JNIEnv *artEnv, jobject) {
     if (!g_gePanel.ready.load(std::memory_order_acquire)) return artEnv->NewStringUTF("");
     return facadeStr(artEnv, g_gePanel.cls, g_gePanel.json);
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeGeSearch(JNIEnv *artEnv, jobject, jstring jQuery) {
+    if (!g_gePanel.ready.load(std::memory_order_acquire) || !g_midGeSearch)
+        return artEnv->NewStringUTF("{\"results\":[]}");
+    return facadeStrArgs(artEnv, g_gePanel.cls, g_midGeSearch, jQuery, nullptr, false);
 }
 
 // Finding 14 — Time Tracking native reflow (read-only). getTimeTrackingJson = {available, farming:[{tab,name,

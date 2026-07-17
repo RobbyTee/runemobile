@@ -351,6 +351,9 @@ object JvmLauncher {
 
     external fun nativeGeJson(): String
 
+    // GE item/price-check search (GrandExchangeBridge.search) -> {"results":[{id,name,price}]}.
+    external fun nativeGeSearch(query: String): String
+
     // Time Tracking native reflow (TimeTrackingBridge; same facade shape). getTimeTrackingJson = farming patches,
     // farming contract, bird houses, timers + stopwatches — all with second-resolution countdowns.
     external fun nativeTimeTrackingAvailable(): Boolean
@@ -778,6 +781,8 @@ object JvmLauncher {
     fun geSetUiOpen(open: Boolean) = nativeGeSetUiOpen(open)
 
     fun geJson() = nativeGeJson()
+
+    fun geSearch(query: String) = nativeGeSearch(query)
 
     fun timeTrackingAvailable() = nativeTimeTrackingAvailable()
 
