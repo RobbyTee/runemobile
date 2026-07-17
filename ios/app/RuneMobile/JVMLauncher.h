@@ -305,6 +305,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// scroll layer — NOT a mouse wheel (a wheel over the transparent chat also zooms the camera). Main thread.
 + (void)scrollEngineChat:(int)deltaCanvasPx;
 
+/// World map (touch): scroll the open map's Key/maplist by deltaCanvasPx via the engine's own UPDATE_SCROLLBAR
+/// script — NOT a mouse wheel (a wheel over the map zooms it, per onPinch). No-op on an older jar. Main thread.
++ (void)scrollEngineMapPanel:(int)deltaCanvasPx;
+
 /// W3 A3: switch the chat to tab `index` by replaying its op-script (works while the engine tab sprite is hidden,
 /// so the native tab row can fully replace the engine's). No-op on an older jar. Main thread.
 + (void)switchEngineChatTab:(int)index;

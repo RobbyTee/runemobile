@@ -407,6 +407,7 @@ static jmethodID gMidSetStonesHidden = NULL; // setStonesHidden(Z)V  (A4 — hid
 static jmethodID gMidSetChatRowH = NULL;     // setChatTabRowHeight(I)V  (A3 — bigger native chat tabs)
 static jmethodID gMidSetChatAreaW = NULL;    // setChatAreaWidth(I)V  (A3 — widen message area to align)
 static jmethodID gMidScrollChat = NULL;      // scrollChat(I)V  (A3 — finger-scroll the chat, no wheel/zoom)
+static jmethodID gMidScrollMapPanel = NULL;  // scrollMapPanel(I)V  (world map: finger-scroll the Key/maplist, no wheel/zoom)
 static jmethodID gMidSwitchChatTab = NULL;   // switchChatTab(I)V  (A3 — switch tab via op-replay, hidden tabs)
 static jmethodID gMidSetChatCollapsed = NULL; // setChatCollapsed(Z)V  (A3 — tap active tab hides the chat box)
 static jmethodID gMidGetChatSnap = NULL;     // getChatSnapshot()Ljava/lang/String;  (A3)
@@ -450,6 +451,7 @@ static BOOL ensureVeneer(void) {
     gMidSetChatCollapsed = (*env)->GetStaticMethodID(env, global, "setChatCollapsed", "(Z)V");
     gMidSetOverlayInsets = (*env)->GetStaticMethodID(env, global, "setOverlaySafeInsets", "(IIII)V");
     gMidPanMap = (*env)->GetStaticMethodID(env, global, "panWorldMap", "(II)V");
+    gMidScrollMapPanel = (*env)->GetStaticMethodID(env, global, "scrollMapPanel", "(I)V");
     gMidGetMapSnap = (*env)->GetStaticMethodID(env, global, "getMapSnapshot", "()Ljava/lang/String;");
     gMidGetOrbSnap = (*env)->GetStaticMethodID(env, global, "getOrbSnapshot", "()Ljava/lang/String;");
     gMidTabSprites = (*env)->GetStaticMethodID(env, global, "tabSprites", "()Ljava/lang/String;");
@@ -2188,6 +2190,16 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidScrollChat, (jint)deltaCanvasPx);
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.scrollEngineChat"); }
+}
+
++ (void)scrollEngineMapPanel:(int)deltaCanvasPx {
+    if (!ensureVeneer() || !gMidScrollMapPanel)
+        return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidScrollMapPanel, (jint)deltaCanvasPx);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.scrollEngineMapPanel");
+    }
 }
 
 + (void)switchEngineChatTab:(int)index {

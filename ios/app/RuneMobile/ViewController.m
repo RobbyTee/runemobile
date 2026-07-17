@@ -7079,15 +7079,10 @@ static CGRect mapRectFromArr(NSArray *a) {
     [g setTranslation:CGPointZero inView:self.screen];   // make the next delta incremental
     if (d.x == 0 && d.y == 0) return;
     if (self.mapListScrolling) {
-        // Swipe-scroll the Key list / surface dropdown: wheel notches parked over the list (the engine
-        // scrolls the hovered scrollable). Content follows the finger: swipe up -> wheel down.
-        const CGFloat kMapScrollPtPerNotch = 22.0;
-        self.mapListScrollAcc += -d.y / kMapScrollPtPerNotch;
-        int notches = (int)(self.mapListScrollAcc > 0 ? floor(self.mapListScrollAcc) : ceil(self.mapListScrollAcc));
-        if (notches != 0) {
-            self.mapListScrollAcc -= notches;
-            [JVMLauncher postWheelX:(int)self.mapListWheelPt.x y:(int)self.mapListWheelPt.y rotation:notches];
-        }
+        // Swipe-scroll the Key list / surface dropdown via the engine's own UPDATE_SCROLLBAR script (the same
+        // fix chat already uses) instead of a mouse wheel — a wheel over the map is the zoom trigger (onPinch),
+        // so the old wheel path mis-fired as a zoom. Content follows the finger, no camera/zoom side-effect.
+        [self scrollMapListByDragDeltaY:d.y];
         return;
     }
     if (self.mapPanning) {
@@ -7156,6 +7151,23 @@ static CGRect mapRectFromArr(NSArray *a) {
     if (whole == 0) return;
     self.chatScrollAccum -= whole;
     [JVMLauncher scrollEngineChat:(whole * kChatScrollDir)];
+}
+
+// The world-map analogue of scrollChatByDragDeltaY: scroll the open map's Key/maplist via the engine's own
+// UPDATE_SCROLLBAR script (scrollMapPanel), NOT a mouse wheel — a wheel over the map zooms it (onPinch). Drag
+// is scaled 1:1 to engine-canvas px and accumulated. No negation: scrollMapPanel is a direct content-follows-
+// finger px delta (unlike the old wheel path's notch count), matching Android's mapScrolling branch.
+- (void)scrollMapListByDragDeltaY:(CGFloat)dy {
+    CGFloat W = self.view.bounds.size.width;
+    if (self.renderW <= 0 || W <= 0)
+        return;
+    CGFloat canvasPerPt = (CGFloat)self.renderW / W; // screen pt -> engine-canvas px
+    self.mapListScrollAcc += dy * canvasPerPt;
+    int whole = (int)(self.mapListScrollAcc < 0 ? ceil(self.mapListScrollAcc) : floor(self.mapListScrollAcc));
+    if (whole == 0)
+        return;
+    self.mapListScrollAcc -= whole;
+    [JVMLauncher scrollEngineMapPanel:whole];
 }
 
 // pinch -> zoom via the mouse wheel. Accumulate the scale change into whole wheel notches; pinch out
