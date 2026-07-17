@@ -1120,6 +1120,48 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     }
 }
 
+// Force the OSRS gamepack into RESIZABLE display mode before the VM boots. The engine reads the window
+// mode from preferences.dat byte[3] (1 = fixed/classic, 2 = resizable) at startup; our entire native HUD
+// is gated on the resizable layout (isResized()), so an account last saved in the desktop "Fixed - Classic"
+// layout would otherwise boot pillarboxed (765x503, brown border) with no reachable way to switch. The mode
+// is a purely client-side preference (not server-synced), so patching the local file each launch is enough.
+// Mirrors the Android ensureResizableDisplayMode path. rlHome == user.home; the gamepack cache lives at
+// user.home/.runelite/jagexcache/oldschool/LIVE (see RuneLite.copyJagexCache).
+static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
+    @try {
+        NSString *dir = [rlHome stringByAppendingPathComponent:@".runelite/jagexcache/oldschool/LIVE"];
+        NSString *path = [dir stringByAppendingPathComponent:@"preferences.dat"];
+        NSData *data = [NSData dataWithContentsOfFile:path];
+        if (data && data.length >= 4) {
+            NSMutableData *m = [data mutableCopy];
+            uint8_t *bytes = (uint8_t *)m.mutableBytes;
+            if (bytes[3] != 0x02) {
+                bytes[3] = 0x02;
+                [m writeToFile:path atomically:YES];
+                log(@"[jvm] preferences.dat patched fixed->resizable (byte3=2)");
+            } else {
+                log(@"[jvm] preferences.dat already resizable");
+            }
+        } else {
+            [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                                      withIntermediateDirectories:YES
+                                                       attributes:nil
+                                                            error:nil];
+            // Minimal valid OSRS preferences.dat with window mode = resizable (byte[3]=02).
+            // clang-format off
+            const uint8_t seed[] = {
+                0x0c, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x19, 0x00,
+            };
+            // clang-format on
+            [[NSData dataWithBytes:seed length:sizeof(seed)] writeToFile:path atomically:YES];
+            log(@"[jvm] seeded resizable preferences.dat (fresh)");
+        }
+    } @catch (NSException *e) {
+        log([NSString stringWithFormat:@"[jvm] ensureResizableDisplayMode failed: %@", e.reason]);
+    }
+}
+
 - (int)runProbesWithLog:(JVMLogSink)log {
     NSString *javaHome = [JVMLauncher javaHome];
     if (!javaHome) { log(@"[jvm] FATAL: embedded jre not found in bundle"); return -10; }
@@ -1172,6 +1214,9 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     NSString *rlHome = [JVMLauncher appSupportDir];
 #endif
     (void)glyphPng;
+
+    // Ensure the account boots in resizable layout (not desktop "Fixed - Classic"), which our native HUD requires.
+    RMEnsureResizableDisplayMode(rlHome, log);
 
     setenv("JAVA_HOME", javaHome.UTF8String, 1);
 
