@@ -3074,12 +3074,20 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
     // still gets its one-shot crash protection and the caps probe respects the choice going forward.
     [ud setBool:NO forKey:@"autoGpuFailed"];
     NSString *label = [rendererKey isEqualToString:@"117hd"] ? @"117HD" : @"GPU";
-    NSString *msg = turnOn
-        ? [NSString stringWithFormat:@"%@ will be your renderer the next time you launch.\n\nFully quit RuneLite (swipe it away) and relaunch to apply.", label]
-        : @"The software renderer will be used the next time you launch.\n\nFully quit RuneLite (swipe it away) and relaunch to apply.";
+    NSString *which = turnOn ? label : @"The software renderer";
+    // iOS (unlike Android) cannot relaunch itself, but it can quit now so the user just re-taps the icon.
+    // Quitting also means StikDebug must be re-attached on the next launch for JIT.
+    NSString *msg = [NSString stringWithFormat:@"%@ will be your renderer the next time you launch.\n\nQuit now to apply, then relaunch (re-attach StikDebug for JIT). Or choose Later and quit yourself.", which];
     UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Restart to apply"
                                                               message:msg preferredStyle:UIAlertControllerStyleAlert];
-    [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [a addAction:[UIAlertAction actionWithTitle:@"Later" style:UIAlertActionStyleCancel handler:nil]];
+    [a addAction:[UIAlertAction actionWithTitle:@"Quit now"
+                                          style:UIAlertActionStyleDestructive
+                                        handler:^(UIAlertAction *act) {
+                                            [ud synchronize];                // force the rendererPref to disk before the hard exit bypasses teardown
+                                            [JVMLauncher mobileFlushConfig]; // persist any pending RuneLite config edits too
+                                            exit(0);
+                                        }]];
     UIViewController *presenter = self.presentedViewController ?: self;
     [presenter presentViewController:a animated:YES completion:nil];
     [self appendLine:[NSString stringWithFormat:@"[renderer] pref -> %@ (restart to apply)", newPref]];
