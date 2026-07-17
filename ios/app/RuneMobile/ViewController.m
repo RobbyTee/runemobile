@@ -87,6 +87,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, assign) BOOL notifAuthRequested;   // UNUserNotificationCenter authorization asked once
 @property (nonatomic, assign) BOOL safariOpen;           // an SFSafariViewController is currently presented
 @property (nonatomic, strong) UIButton *screenshotButton; // 📷 save the live frame to Photos
+@property (nonatomic, strong) UILabel *toastLabel;        // transient pill confirmation (replace-not-stack)
 // KEY-1: an optional on-screen action-hotkey strip. The ⚡ chip toggles a row of buttons, one per *pinned*
 // plugin hotkey (Ground Items hide, quick-hop, screenshot, …); a tap fires that plugin's configured Keybind via
 // the bridge. Long-press the ⚡ chip to pick which hotkeys are pinned. Pinned set persists in NSUserDefaults.
@@ -3165,6 +3166,73 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
             [self.console scrollRangeToVisible:NSMakeRange(self.console.textStorage.length, 0)];
         }
 #endif
+    });
+}
+
+// A transient confirmation pill (parity with Android's screenshot Toast), centered above the bottom safe area.
+// Player-visible in Release too, unlike appendLine (whose console is DEBUG-only). Replaces the current toast
+// rather than stacking, never intercepts touches, and respects reduce-motion by skipping the fade animation.
+- (void)showToast:(NSString *)text {
+    if (text.length == 0)
+        return;
+    [self.toastLabel removeFromSuperview];
+
+    UILabel *pill = [[UILabel alloc] init];
+    pill.translatesAutoresizingMaskIntoConstraints = NO;
+    pill.text = text;
+    pill.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+    pill.textColor = [UIColor whiteColor];
+    pill.textAlignment = NSTextAlignmentCenter;
+    pill.numberOfLines = 0;
+    pill.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.78]; // matches the app's scrim/card darkening
+    pill.layer.cornerRadius = 14;
+    pill.layer.masksToBounds = YES;
+    pill.userInteractionEnabled = NO; // never steal a tap from the game/HUD
+    [self.view addSubview:pill];
+    self.toastLabel = pill;
+
+    UILayoutGuide *g = self.view.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [pill.centerXAnchor constraintEqualToAnchor:g.centerXAnchor],
+        [pill.bottomAnchor constraintEqualToAnchor:g.bottomAnchor
+                                          constant:-24],
+        [pill.leadingAnchor constraintGreaterThanOrEqualToAnchor:g.leadingAnchor
+                                                        constant:24],
+        [pill.trailingAnchor constraintLessThanOrEqualToAnchor:g.trailingAnchor
+                                                      constant:-24],
+        [pill.heightAnchor constraintGreaterThanOrEqualToConstant:34],
+    ]];
+    // A UILabel has no text inset, so pad horizontally with spaces (the height constraint gives vertical room).
+    pill.text = [NSString stringWithFormat:@"  %@  ", text];
+
+    BOOL reduceMotion = UIAccessibilityIsReduceMotionEnabled();
+    if (reduceMotion) {
+        pill.alpha = 1.0;
+    } else {
+        pill.alpha = 0.0;
+        [UIView animateWithDuration:0.2
+                         animations:^{
+                             pill.alpha = 1.0;
+                         }];
+    }
+    // Hold ~1.6s, then fade out and remove — but only if this is still the current toast (a newer one replaces it).
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (self.toastLabel != pill)
+            return;
+        void (^done)(BOOL) = ^(BOOL f) {
+            if (self.toastLabel == pill)
+                self.toastLabel = nil;
+            [pill removeFromSuperview];
+        };
+        if (reduceMotion) {
+            done(YES);
+        } else {
+            [UIView animateWithDuration:0.25
+                             animations:^{
+                                 pill.alpha = 0.0;
+                             }
+                             completion:done];
+        }
     });
 }
 
@@ -7392,7 +7460,11 @@ static CGRect mapRectFromArr(NSArray *a) {
 // on a phone); this is the manual reachable path — native already holds the frame via latestFrame.
 - (void)onScreenshot {
     UIImage *img = [JVMLauncher latestFrame];
-    if (img == nil) { [self appendLine:@"[shell] screenshot: no frame yet"]; return; }
+    if (img == nil) {
+        [self appendLine:@"[shell] screenshot: no frame yet"];
+        [self showToast:@"Screenshot failed — no frame yet"];
+        return;
+    }
     // PERF-1: latestFrame's CGImage borrows a rotating scratch slot that the pump rewrites within a few
     // frames — fine for the immediate screen blit, NOT for the async Photos encode / a deferred pasteboard
     // paste. Redraw into an independent bitmap NOW so the saved bytes can't be overwritten mid-encode.
@@ -7409,6 +7481,16 @@ static CGRect mapRectFromArr(NSArray *a) {
     [self appendLine:error
         ? [NSString stringWithFormat:@"[shell] screenshot save failed: %@", error.localizedDescription]
         : @"[shell] screenshot saved to Photos"];
+    if (!error) {
+        [self showToast:@"Screenshot saved to Photos"];
+        return;
+    }
+    // A denied Photos permission surfaces as PHPhotosErrorDomain (access) or an access-shaped message; steer the
+    // player to Settings in that case, otherwise report a generic save failure.
+    NSString *desc = error.localizedDescription.lowercaseString ?: @"";
+    BOOL permissionShaped = [error.domain isEqualToString:@"PHPhotosErrorDomain"] || [desc containsString:@"permission"] || [desc containsString:@"access"] || [desc containsString:@"denied"] || [desc containsString:@"authoriz"];
+    [self showToast:permissionShaped ? @"Screenshot failed — allow Photos access in Settings"
+                                     : @"Screenshot save failed"];
 }
 
 // Every edit is intercepted and forwarded as KeyEvents; the field itself never changes (return NO), so it
