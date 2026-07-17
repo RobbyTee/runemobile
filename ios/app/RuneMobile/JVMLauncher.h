@@ -271,6 +271,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// while the stones are hidden, so the native 2-col grid drives tabs with no cover patch. Main thread.
 + (void)openEngineTab:(int)tabIndex;
 
+/// World map (touch): open the world map via HudVeneerBridge.openWorldMap — a discoverable path decoupled from
+/// the tiny in-scene orb. No-op on an older jar without openWorldMap. Main thread.
++ (void)openEngineWorldMap;
+
 /// W3 A4: hide (YES) or show (NO) all 14 engine tab stones, so the native 2-col grid replaces them with no gray
 /// cover patch. Re-applied each frame by HudVeneerBridge. Main thread.
 + (void)setEngineStonesHidden:(BOOL)hidden;

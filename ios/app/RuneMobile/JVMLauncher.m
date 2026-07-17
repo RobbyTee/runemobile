@@ -415,6 +415,7 @@ static jmethodID gMidGetChatLines = NULL;    // getChatLines()Ljava/lang/String;
 static jmethodID gMidGetDialogue = NULL;     // getDialogueJson()Ljava/lang/String;  (native-rendered dialogue)
 static jmethodID gMidSetOverlayInsets = NULL; // setOverlaySafeInsets(IIII)V (snap-corner safe frame)
 static jmethodID gMidPanMap = NULL;          // panWorldMap(II)V  (world map: finger pan -> map centre)
+static jmethodID gMidOpenWorldMap = NULL;    // openWorldMap()V  (world map: discoverable one-shot open)
 static jmethodID gMidGetMapSnap = NULL;      // getMapSnapshot()Ljava/lang/String;  (world map open + rects)
 static jmethodID gMidGetOrbSnap = NULL;      // getOrbSnapshot()Ljava/lang/String;  (orb touch-target veneer)
 static jmethodID gMidTabSprites = NULL;      // tabSprites()Ljava/lang/String;  (cache-rendered chrome sprites)
@@ -452,6 +453,7 @@ static BOOL ensureVeneer(void) {
     gMidSetOverlayInsets = (*env)->GetStaticMethodID(env, global, "setOverlaySafeInsets", "(IIII)V");
     gMidPanMap = (*env)->GetStaticMethodID(env, global, "panWorldMap", "(II)V");
     gMidScrollMapPanel = (*env)->GetStaticMethodID(env, global, "scrollMapPanel", "(I)V");
+    gMidOpenWorldMap = (*env)->GetStaticMethodID(env, global, "openWorldMap", "()V");
     gMidGetMapSnap = (*env)->GetStaticMethodID(env, global, "getMapSnapshot", "()Ljava/lang/String;");
     gMidGetOrbSnap = (*env)->GetStaticMethodID(env, global, "getOrbSnapshot", "()Ljava/lang/String;");
     gMidTabSprites = (*env)->GetStaticMethodID(env, global, "tabSprites", "()Ljava/lang/String;");
@@ -2162,6 +2164,17 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetStonesHidden, (jboolean)(hidden ? JNI_TRUE : JNI_FALSE));
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.setEngineStonesHidden"); }
+}
+
++ (void)openEngineWorldMap {
+    if (!ensureVeneer() || !gMidOpenWorldMap)
+        return;
+    [JVMLauncher postKeepAlive]; // idle keepalive: a discoverable map-open posts no canvas event on its own
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidOpenWorldMap);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.openEngineWorldMap");
+    }
 }
 
 + (void)setEngineChatTabRowHeight:(int)canvasPx {

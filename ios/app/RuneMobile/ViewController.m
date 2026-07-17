@@ -1778,6 +1778,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     add(@"Utility", @"screenshot", @"📷", @"util", 0);
     add(@"Utility", @"pip", @"📺", @"util", 0);
     add(@"Utility", @"hotkeys", @"⚡", @"util", 0);
+    add(@"Utility", @"worldmap", @"🗺", @"util", 0);
     specs = [m copy];
     return specs;
 }
@@ -1906,6 +1907,9 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         else if ([cid isEqualToString:@"hotkeys"]) {
             self.hotkeyButton = b;
             [self onToggleHotkeyStrip];
+        } else if ([cid isEqualToString:@"worldmap"]) {
+            [JVMLauncher openEngineWorldMap];
+            [self appendLine:@"[shell] world map -> openWorldMap"];
         }
     }
 }
