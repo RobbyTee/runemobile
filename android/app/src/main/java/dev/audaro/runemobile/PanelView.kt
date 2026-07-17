@@ -5,6 +5,10 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import android.util.Log
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -37,8 +41,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -100,6 +106,10 @@ fun PanelView(
     // mirror field whose text is streamed back into the panel via panelText (live-filter search boxes).
     var textActive by remember { mutableStateOf(false) }
     var fieldValue by remember { mutableStateOf("") }
+    // Pinch-to-zoom on the rendered panel (parity with iOS's UIScrollView zoom 1..4x). Purely visual - the
+    // underlying buffer and tap coordinates are untouched (Compose inverts hit-testing through graphicsLayer).
+    var scale by remember { mutableStateOf(1f) }
+    var panOffset by remember { mutableStateOf(Offset.Zero) }
     val scope = rememberCoroutineScope()
 
     // FIX-11: tell the host whenever a panel text field gains/loses focus, so its per-frame input poll stops
@@ -111,6 +121,11 @@ fun PanelView(
 
     DisposableEffect(index) {
         onDispose { JvmLauncher.onBridge { JvmLauncher.closePanel() } }
+    }
+    LaunchedEffect(index) {
+        // Reset zoom/pan when a different panel is opened (parity with iOS's zoomScale=1 reset on new panel).
+        scale = 1f
+        panOffset = Offset.Zero
     }
     LaunchedEffect(index) {
         JvmLauncher.onBridge { JvmLauncher.openPanel(index) }
@@ -161,7 +176,21 @@ fun PanelView(
                             .fillMaxHeight()
                             .verticalScroll(scroll)
                             .onGloballyPositioned { viewW = it.size.width.coerceAtLeast(1) }
-                            .pointerInput(pw, viewW) {
+                            // Pinch/pan: only reacts once 2+ pointers are down, so it never competes with the
+                            // single-finger tap/scroll below. Placed BEFORE the tap detector in the chain.
+                            .pointerInput(Unit) {
+                                awaitEachGesture {
+                                    awaitFirstDown(requireUnconsumed = false)
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        if (event.changes.size >= 2) {
+                                            scale = (scale * event.calculateZoom()).coerceIn(1f, 4f)
+                                            panOffset += event.calculatePan()
+                                            event.changes.forEach { it.consume() }
+                                        }
+                                    } while (event.changes.any { it.pressed })
+                                }
+                            }.pointerInput(pw, viewW) {
                                 detectTapGestures(
                                     onTap = { off ->
                                         if (pw > 0 && viewW > 0) {
@@ -206,7 +235,19 @@ fun PanelView(
                                 )
                             },
                     ) {
-                        Image(img.asImageBitmap(), tooltip, Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth)
+                        Image(
+                            img.asImageBitmap(),
+                            tooltip,
+                            Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer(
+                                    scaleX = scale,
+                                    scaleY = scale,
+                                    translationX = panOffset.x,
+                                    translationY = panOffset.y,
+                                ),
+                            contentScale = ContentScale.FillWidth,
+                        )
                     }
                 }
                 if (textActive) {
