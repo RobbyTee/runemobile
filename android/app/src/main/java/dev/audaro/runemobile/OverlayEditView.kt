@@ -8,7 +8,12 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
+import kotlin.math.hypot
 import kotlin.math.roundToInt
+
+// A grabbed handle released within this long (and under touchSlop) counts as a tap, not a drag-move.
+private const val TAP_MAX_MS = 250L
 
 // Strip a trailing "Overlay" and space out the camel-cased class name for a readable box label.
 private fun prettyOverlayName(n: String): String {
@@ -40,6 +45,9 @@ class OverlayEditView(
     var onDone: (() -> Unit)? = null
     var onResetAll: (() -> Unit)? = null
 
+    /** A tap (no real drag) on [name]'s handle: host shows the snap-to-corner / reset menu. */
+    var onHandleMenu: ((name: String) -> Unit)? = null
+
     private var boxes: List<Box> = emptyList()
 
     // Drag state. dragW/dragH (view px) drive the on-screen box; dragCw/dragCh are the box's ORIGINAL canvas-px
@@ -53,6 +61,12 @@ class OverlayEditView(
     private var grabDY = 0f
     private var dragLeft = 0f
     private var dragTop = 0f
+
+    // Tap-vs-drag discrimination on a grabbed handle: a release under touchSlop of the down point (and quick)
+    // opens the snap/reset menu instead of committing a move.
+    private var downX = 0f
+    private var downY = 0f
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
 
     private val dp = resources.displayMetrics.density
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x33FFD54F } // translucent amber
@@ -149,7 +163,7 @@ class OverlayEditView(
         layoutToolbar()
         drawButton(canvas, doneRect, "Done")
         drawButton(canvas, resetRect, "Reset all")
-        canvas.drawText("Drag an overlay to move it", width / 2f, 26f * dp, hintTxt)
+        canvas.drawText("Drag to move · tap for snap / reset", width / 2f, 26f * dp, hintTxt)
     }
 
     private fun drawButton(
@@ -203,6 +217,8 @@ class OverlayEditView(
                 dragTop = b.cy * sy
                 grabDX = event.x - dragLeft
                 grabDY = event.y - dragTop
+                downX = event.x
+                downY = event.y
                 invalidate()
                 return true
             }
@@ -218,13 +234,20 @@ class OverlayEditView(
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 val name = dragName
                 if (name != null && event.actionMasked == MotionEvent.ACTION_UP) {
-                    val sx = sx()
-                    val sy = sy()
-                    val cw = MainActivity.canvasW
-                    val ch = MainActivity.canvasH
-                    val cx = (dragLeft / sx).roundToInt().coerceIn(0, (cw - dragCw).coerceAtLeast(0))
-                    val cy = (dragTop / sy).roundToInt().coerceIn(0, (ch - dragCh).coerceAtLeast(0))
-                    onDrop?.invoke(name, cx, cy)
+                    val moved = hypot(event.x - downX, event.y - downY)
+                    val quick = event.eventTime - event.downTime <= TAP_MAX_MS
+                    if (moved <= touchSlop && quick) {
+                        // A tap, not a drag: open the snap/reset menu (parity with iOS's per-handle action sheet).
+                        onHandleMenu?.invoke(name)
+                    } else {
+                        val sx = sx()
+                        val sy = sy()
+                        val cw = MainActivity.canvasW
+                        val ch = MainActivity.canvasH
+                        val cx = (dragLeft / sx).roundToInt().coerceIn(0, (cw - dragCw).coerceAtLeast(0))
+                        val cy = (dragTop / sy).roundToInt().coerceIn(0, (ch - dragCh).coerceAtLeast(0))
+                        onDrop?.invoke(name, cx, cy)
+                    }
                 }
                 dragName = null
                 invalidate()

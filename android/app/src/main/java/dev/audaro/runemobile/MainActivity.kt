@@ -618,6 +618,7 @@ class MainActivity : AppCompatActivity() {
                         JvmLauncher.flushConfig()
                     }
                 }
+                onHandleMenu = { name -> showOverlayHandleMenu(name) }
                 onDone = { exitOverlayEditMode() }
             }
         chromeOverlay = ChromeOverlayView(this)
@@ -2368,6 +2369,36 @@ class MainActivity : AppCompatActivity() {
             JvmLauncher.flushConfig()
         }
         Log.i(TAG, "overlay-edit: exited")
+    }
+
+    // Per-handle snap-to-corner / reset menu (parity with iOS OverlayEditView's action sheet). The position
+    // strings are the OverlayPosition enum names the shared OverlayBridge.snap parses; "Reset to default" reuses
+    // the same per-name reset onResetAll loops over, but for just this overlay. Both persist via flushConfig.
+    private fun showOverlayHandleMenu(name: String) {
+        val labels =
+            arrayOf(
+                "Snap top-left",
+                "Snap top-center",
+                "Snap top-right",
+                "Snap bottom-left",
+                "Snap bottom-right",
+                "Reset to default",
+            )
+        val positions = arrayOf("TOP_LEFT", "TOP_CENTER", "TOP_RIGHT", "BOTTOM_LEFT", "BOTTOM_RIGHT")
+        AlertDialog
+            .Builder(this)
+            .setTitle(name.removeSuffix("Overlay"))
+            .setItems(labels) { _, which ->
+                JvmLauncher.onBridgeTouch {
+                    if (which < positions.size) {
+                        JvmLauncher.overlaySnap(name, positions[which])
+                    } else {
+                        JvmLauncher.overlayReset(name)
+                    }
+                    JvmLauncher.flushConfig()
+                }
+            }.setNegativeButton("Cancel", null)
+            .show()
     }
 
     /** Background poll of the published overlay bounds (off the UI thread) feeding the editor view ~2.5 Hz. */
