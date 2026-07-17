@@ -74,6 +74,28 @@ data class PanelEntry(
 // display width here restores the intended size and keeps short panels near 1:1 (crisp).
 private val PANEL_MAX_DP = 340.dp
 
+/**
+ * Map a viewport tap (display px) to panel-buffer px, inverting the pinch/pan graphicsLayer applied to the image
+ * (transform origin = the image's centre; the image is FillWidth so its displayed height follows the bitmap's
+ * aspect). [scrollY] converts the viewport y to the scroll-content y the transform lives in. At scale=1/pan=0 this
+ * reduces to the original fit-width mapping (off * pw / viewW), so un-zoomed taps are unchanged.
+ */
+private fun panelBufferCoords(
+    off: Offset,
+    pw: Int,
+    viewW: Int,
+    scrollY: Int,
+    scale: Float,
+    pan: Offset,
+    img: Bitmap,
+): Pair<Int, Int> {
+    val originX = viewW / 2f
+    val originY = viewW.toFloat() * img.height / img.width.coerceAtLeast(1) / 2f // displayed image centre-y (content px)
+    val cx = originX + (off.x - originX - pan.x) / scale
+    val cy = originY + ((off.y + scrollY) - originY - pan.y) / scale
+    return Pair((cx * pw / viewW).toInt(), (cy * pw / viewW).toInt())
+}
+
 private class PanelSnap(
     val w: Int,
     val h: Int,
@@ -194,9 +216,7 @@ fun PanelView(
                                 detectTapGestures(
                                     onTap = { off ->
                                         if (pw > 0 && viewW > 0) {
-                                            // fit-width => uniform scale viewW/pw; add the scroll offset for buffer-y.
-                                            val bx = (off.x * pw / viewW).toInt()
-                                            val by = ((off.y + scroll.value) * pw / viewW).toInt()
+                                            val (bx, by) = panelBufferCoords(off, pw, viewW, scroll.value, scale, panOffset, img)
                                             JvmLauncher.onBridgeTouch { JvmLauncher.panelClick(bx, by) }
                                             // SC-4: after the click settles, ask the bridge whether it focused a text
                                             // field; if so raise the mirror field pre-filled, else drop the keyboard.
@@ -227,8 +247,7 @@ fun PanelView(
                                     },
                                     onLongPress = { off ->
                                         if (pw > 0 && viewW > 0) {
-                                            val bx = (off.x * pw / viewW).toInt()
-                                            val by = ((off.y + scroll.value) * pw / viewW).toInt()
+                                            val (bx, by) = panelBufferCoords(off, pw, viewW, scroll.value, scale, panOffset, img)
                                             JvmLauncher.onBridgeTouch { JvmLauncher.panelLongPress(bx, by) } // SC-4 BUTTON3
                                         }
                                     },

@@ -204,7 +204,8 @@ class MainActivity : AppCompatActivity() {
     private var devTicking = false
     private var devLastFrames = -1L
     private var devLastSampleNanos = 0L
-    private var devHeapCache = "—"
+
+    @Volatile private var devHeapCache = "—" // written on the rl-bridge thread, read on the UI thread
     private var devBarBaseLeft = 0
     private var devBarBaseBottom = 0
     private var hotkeyBaseLeft = 0
@@ -1856,7 +1857,8 @@ class MainActivity : AppCompatActivity() {
     /** Whether the persisted "Developer mode" toggle (PluginPanel DeveloperModeRow) is on. Works in Release too. */
     private fun developerModeEnabled(): Boolean = getSharedPreferences("dev", MODE_PRIVATE).getBoolean("developerMode", false)
 
-    /** Called by the Compose toggle (live) and from onCreate (initial). Builds+shows or tears down the overlay. */
+    /** Called by the Compose toggle (live) and from onStart (initial/foreground). Builds+shows or tears the overlay
+     *  fully down so an off state costs nothing (no views retained, no timer, no in-flight sampling). */
     fun onDeveloperModeChanged(on: Boolean) {
         runOnUiThread {
             if (on) {
@@ -1864,11 +1866,20 @@ class MainActivity : AppCompatActivity() {
                 perfChip?.visibility = View.VISIBLE
                 startDevTicker()
             } else {
-                stopDevTicker()
-                devPanel?.visibility = View.GONE
-                perfChip?.visibility = View.GONE
+                tearDownDevViews()
             }
         }
+    }
+
+    private fun tearDownDevViews() {
+        stopDevTicker() // also gates any in-flight heap-sample callback (it early-returns when !devTicking)
+        val root = rootContainer
+        perfChip?.let { root?.removeView(it) }
+        devPanel?.let { root?.removeView(it) }
+        perfChip = null
+        devPanel = null
+        devDiag = null
+        devHeapCache = "—"
     }
 
     private fun ensureDevViews() {
@@ -1973,10 +1984,11 @@ class MainActivity : AppCompatActivity() {
         }
         devLastFrames = frames
         devLastSampleNanos = now
-        // Heap crosses into HotSpot, so pull it off the UI thread and cache the latest for the next paint.
+        // Heap crosses into HotSpot, so pull it off the UI thread and cache the latest for the next paint. The
+        // devTicking guard drops a callback that lands after developer mode was switched off (teardown).
         JvmLauncher.onBridge {
             val h = JvmLauncher.heapStats()
-            if (h.isNotEmpty()) devHeapCache = h
+            if (h.isNotEmpty() && devTicking) devHeapCache = h
         }
         val thermal = thermalStatusLabel()
         perfChip?.text = String.format("%.0f fps · %s · %s", fps, devHeapCache, thermal)
@@ -3363,9 +3375,13 @@ class MainActivity : AppCompatActivity() {
         val margin = 8 // canvas-px breathing room from the safe edge
         chatBaseX = Math.round(ins[0] * kx) + margin
         chatBaseY = Math.round(ins[1] * ky) + margin
-        // Honour the user's edit-mode override (P2-3); clamp on-canvas so a stale offset can't push it off-frame.
-        val chatX = (chatBaseX + chatUserDX).coerceIn(0, (fw - 1).coerceAtLeast(0))
-        val chatY = (chatBaseY + chatUserDY).coerceIn(0, (fh - 1).coerceAtLeast(0))
+        // Honour the user's edit-mode override (P2-3); clamp the WHOLE chatbox on-frame (against frame − chat size,
+        // from the last reported bounds) so a stale offset from a since-changed dimension can't push it off-screen.
+        val cr = chatRectCanvas
+        val chatW = cr?.getOrNull(2) ?: 0
+        val chatH = cr?.getOrNull(3) ?: 0
+        val chatX = (chatBaseX + chatUserDX).coerceIn(0, (fw - chatW).coerceAtLeast(0))
+        val chatY = (chatBaseY + chatUserDY).coerceIn(0, (fh - chatH).coerceAtLeast(0))
         if (chatX == lastChatX && chatY == lastChatY) return
         lastChatX = chatX
         lastChatY = chatY
