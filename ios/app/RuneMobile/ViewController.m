@@ -299,6 +299,8 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, assign) BOOL mapPanning;          // the current pan gesture is panning the map
 @property (nonatomic, assign) CGFloat mapPanAccX;       // sub-px accumulators (screen pt -> whole canvas px)
 @property (nonatomic, assign) CGFloat mapPanAccY;
+@property (nonatomic, assign) CGFloat cameraDragAccX; // sub-px accumulators (screen pt -> whole canvas px) for the 1-finger camera-rotate drag
+@property (nonatomic, assign) CGFloat cameraDragAccY;
 // Instant selected-highlight after a tap: the engine's tab GRAPHIC sprite (which the snapshot reads for the
 // selected state) only updates on a redraw, so the highlight lagged until the next game interaction. Optimistically
 // mark the tapped tab selected and hold it until the snapshot agrees (or a short timeout). -1 = none.
@@ -6617,6 +6619,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         // A camera drag moves the world, not the pointer — so clear any frozen hover first, otherwise
         // scenery rotating under the stale cursor lights up and the next walk-tap mis-clicks it.
         [JVMLauncher postClearHover];
+        self.cameraDragAccX = self.cameraDragAccY = 0; // reset like mapPanAccX/Y and chatScrollAccum at gesture-begin
         [self appendLine:@"[shell] camera pan begin (1-finger)"];
         return;
     }
@@ -6716,7 +6719,20 @@ static CGRect mapRectFromArr(NSArray *a) {
     }
     // Inverted both axes (user preference): swipe direction now drags the world the opposite way (like
     // grabbing the scene), matching the feel they want vs. the previous "push the camera" direction.
-    [JVMLauncher postCameraDx:(int)lround(-d.x) dy:(int)lround(-d.y)];
+    // Scale screen-pt deltas to engine-canvas px (renderW / view width) with sub-px accumulation so yaw/pitch
+    // matches the bridge's canvas-pixel-calibrated sensitivity (JavaBridge.onCameraDrag / YAW_UNITS_PER_PX /
+    // PITCH_UNITS_PER_PX) and Android's canvas-scaled deltas — same conversion mapPanning / scrollChatByDragDeltaY use.
+    CGFloat W = self.view.bounds.size.width;
+    CGFloat k = (self.renderW > 0 && W > 0) ? (CGFloat)self.renderW / W : 1.0;
+    self.cameraDragAccX += -d.x * k;
+    self.cameraDragAccY += -d.y * k;
+    int cdx = (int)(self.cameraDragAccX < 0 ? ceil(self.cameraDragAccX) : floor(self.cameraDragAccX));
+    int cdy = (int)(self.cameraDragAccY < 0 ? ceil(self.cameraDragAccY) : floor(self.cameraDragAccY));
+    if (cdx != 0 || cdy != 0) {
+        self.cameraDragAccX -= cdx;
+        self.cameraDragAccY -= cdy;
+        [JVMLauncher postCameraDx:cdx dy:cdy];
+    }
 }
 
 // Convert a vertical drag delta (screen pt) into a chat scroll, applied to the chat's OWN scroll layer (not a
