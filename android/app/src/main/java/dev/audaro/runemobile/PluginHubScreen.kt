@@ -193,7 +193,10 @@ fun PluginHubScreen(
                 )
                 val shown =
                     rows.filter {
+                        // Match name, author, and description (parity with iOS's three-field hub search) — a
+                        // user often recalls a plugin by its author.
                         filter.isBlank() || it.displayName.contains(filter, ignoreCase = true) ||
+                            (it.author?.contains(filter, ignoreCase = true) == true) ||
                             (it.description?.contains(filter, ignoreCase = true) == true)
                     }
                 LazyColumn(Modifier.fillMaxSize()) {
