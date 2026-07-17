@@ -137,7 +137,14 @@
     NSMutableArray *rows = [NSMutableArray array];
     if ([plugins isKindOfClass:[NSArray class]]) {
         for (NSDictionary *p in plugins) [rows addObject:[p mutableCopy]];
+        // Installed-first grouping, then alphabetical within each group (parity with Android's
+        // compareByDescending{installed}.thenBy{displayName.lowercase()}) — lets a user see what they
+        // already have at a glance in the ~1700-entry catalog. Sorted once here, never re-sorted mid-session.
         [rows sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+            BOOL aInstalled = [a[@"installed"] boolValue];
+            BOOL bInstalled = [b[@"installed"] boolValue];
+            if (aInstalled != bInstalled)
+                return aInstalled ? NSOrderedAscending : NSOrderedDescending;
             return [([a[@"displayName"] description] ?: @"") caseInsensitiveCompare:([b[@"displayName"] description] ?: @"")];
         }];
     }
