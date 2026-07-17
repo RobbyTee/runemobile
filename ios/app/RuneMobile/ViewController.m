@@ -336,6 +336,12 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UIView *reconnectScrim;
 @property (nonatomic, strong) UIActivityIndicatorView *reconnectSpinner;
 @property (nonatomic, assign) BOOL reconnectShown;
+// Boot-progress overlay (iOS parity with Android's SplashOverlayView): a "Starting up…" spinner card shown
+// from the Play tap until the first engine frame paints, covering the JVM-boot gap. Dismissed on the tick
+// renderedFrameWidth first reads > 0, a fatal-error card taking over, or a 60s failsafe (matches SPLASH_TIMEOUT_MS).
+@property (nonatomic, strong) UIView *bootStatusScrim;
+@property (nonatomic, strong) UIActivityIndicatorView *bootStatusSpinner;
+@property (nonatomic, assign) CFTimeInterval bootStatusDeadline;
 // PARITY-P0-3 (iOS parity with Android's HoppingOverlayView + MainActivity.armHopScrim): a native "Switching
 // worlds…" scrim shown over the live frame during a world hop. Unlike the reconnect scrim it is NOT keyed off a
 // bridge flag — WorldSwitcherBridge.hop() drives a logout→LOGIN_SCREEN→relogin sequence during which
@@ -3983,6 +3989,74 @@ static int chatRowCanvasH(void) {
     ]];
 }
 
+// Boot-progress overlay: structurally identical to the reconnect scrim (same OSRS dark-brown/amber card), with
+// two deltas - the label reads "Starting up…" and the scrim BLOCKS touches (unlike the reconnect scrim, there is
+// no live game underneath yet during cold boot). Armed on the Play tap, cleared by updateBootStatusOverlay.
+- (void)setupBootStatusOverlay {
+    if (self.bootStatusScrim)
+        return;
+    UIView *scrim = [[UIView alloc] initWithFrame:self.view.bounds];
+    scrim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    scrim.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.59];
+    scrim.userInteractionEnabled = YES; // nothing runs underneath yet - swallow touches
+    scrim.hidden = YES;
+
+    UIView *card = [[UIView alloc] init];
+    card.translatesAutoresizingMaskIntoConstraints = NO;
+    card.backgroundColor = [UIColor colorWithRed:33 / 255.0 green:28 / 255.0 blue:23 / 255.0 alpha:0.93];
+    card.layer.cornerRadius = 10;
+    card.layer.borderWidth = 1.5;
+    card.layer.borderColor = [UIColor colorWithRed:140 / 255.0 green:128 / 255.0 blue:102 / 255.0 alpha:1.0].CGColor;
+    [scrim addSubview:card];
+
+    UIActivityIndicatorView *spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
+    spin.translatesAutoresizingMaskIntoConstraints = NO;
+    spin.color = [UIColor colorWithRed:1.0 green:0.78 blue:0.35 alpha:1.0]; // OSRS amber
+    spin.hidesWhenStopped = NO;
+    [card addSubview:spin];
+    self.bootStatusSpinner = spin;
+
+    UILabel *label = [[UILabel alloc] init];
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    label.text = @"Starting up…";
+    label.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
+    label.textColor = [UIColor whiteColor];
+    label.textAlignment = NSTextAlignmentCenter;
+    [card addSubview:label];
+
+    [self.view addSubview:scrim];
+    self.bootStatusScrim = scrim;
+
+    [NSLayoutConstraint activateConstraints:@[
+        [card.centerXAnchor constraintEqualToAnchor:scrim.centerXAnchor],
+        [card.centerYAnchor constraintEqualToAnchor:scrim.centerYAnchor],
+        [card.widthAnchor constraintEqualToConstant:240],
+        [card.heightAnchor constraintEqualToConstant:140],
+        [spin.centerXAnchor constraintEqualToAnchor:card.centerXAnchor],
+        [spin.topAnchor constraintEqualToAnchor:card.topAnchor
+                                       constant:34],
+        [label.centerXAnchor constraintEqualToAnchor:card.centerXAnchor],
+        [label.bottomAnchor constraintEqualToAnchor:card.bottomAnchor
+                                           constant:-28],
+    ]];
+}
+
+// Clear the boot overlay the moment real content is ready: the first painted frame (renderedFrameWidth > 0),
+// a fatal-error card taking over (fatalErrorShown - hands off to that card so the two never stack), or the 60s
+// failsafe (a boot that never produces a frame must not wedge the UI). One-way: once hidden it stays hidden.
+- (void)updateBootStatusOverlay {
+    if (!self.bootStatusScrim || self.bootStatusScrim.hidden)
+        return;
+    BOOL firstFrame = [JVMLauncher renderedFrameWidth] > 0;
+    BOOL timedOut = CACurrentMediaTime() >= self.bootStatusDeadline;
+    if (firstFrame || self.fatalErrorShown || timedOut) {
+        self.bootStatusScrim.hidden = YES;
+        [self.bootStatusSpinner stopAnimating];
+        [self appendLine:[NSString stringWithFormat:@"[shell] onboard: boot overlay dismissed (frame=%@ timeout=%@)",
+                                                    firstFrame ? @"YES" : @"NO", timedOut ? @"YES" : @"NO"]];
+    }
+}
+
 // PARITY-P0-3: build the world-hop scrim once, structurally identical to the reconnect scrim (same OSRS-styled
 // dark-brown/amber-border card, non-interactive so touches fall through). The label defaults to "Switching
 // worlds…" and is overwritten per-hop by armHopScrim:.
@@ -4854,6 +4928,15 @@ static int chatRowCanvasH(void) {
     // re-opens it (logs/canary), and logs still go to Documents/hello-shell.log; the ⌨ control stays.
     self.debugPanel.hidden = YES;
 
+    // Boot-progress overlay: cover the JVM-boot gap with a spinner instead of a bare near-black screen.
+    // 60.0s matches Android's SPLASH_TIMEOUT_MS failsafe so both platforms' bounds stay in lockstep. The
+    // onLaunch `if (self.launched) return;` guard above makes this one-shot per process.
+    [self setupBootStatusOverlay];
+    self.bootStatusDeadline = CACurrentMediaTime() + 60.0;
+    self.bootStatusScrim.hidden = NO;
+    [self.view bringSubviewToFront:self.bootStatusScrim];
+    [self.bootStatusSpinner startAnimating];
+
     // (1) Background-task assertion: tell iOS this is important in-progress work so it won't
     // suspend/kill the process while the JVM runs off-main. (The device jetsam'd the idle-UI
     // process within ~250 ms before; this is the primary longevity fix.)
@@ -5270,6 +5353,10 @@ static CGRect mapRectFromArr(NSArray *a) {
 // no disk, no capture budget, so it's smooth and runs for the whole session. Also keeps the app
 // foreground-active+rendering (the jetsam-protection that the §6.2 work established).
 - (void)onDisplayTick {
+    // Boot-progress overlay: MUST run before the `if (!pipPresenting && img == nil) return;` early-out below,
+    // which skips the rest of this method for the entire pre-first-frame window - exactly the window this overlay
+    // covers. Downstream update* calls (reconnect/fatal) run after that return, so they can't clear this one.
+    [self updateBootStatusOverlay];
     // 117HD crash cookie: CLEAR on the very first GL present (survival proof — deliberately looser than the
     // reveal below, which also waits for sceneWarmedUp; a user quitting at the login screen must not demote),
     // ARM once the JVM is demonstrably running a 117HD boot (a frame has published) but hasn't presented yet.

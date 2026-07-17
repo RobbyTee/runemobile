@@ -85,6 +85,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// the bridge is up. Main thread only.
 + (int)renderedFrameSeq;
 
+/// The width of the latest engine frame (JavaBridge.getFrameWidth) — a cheap "has anything painted yet"
+/// probe: > 0 once the engine has composited at least one frame, 0 before then, -1 before the bridge is up.
+/// Used by the boot-progress overlay to dismiss itself the tick real content first appears. Main thread only.
++ (int)renderedFrameWidth;
+
 /// JVM heap usage as "usedMB/maxMB" (JavaBridge.heapStats) — the Java-heap pressure the GC manages, distinct
 /// from the OS resident memory. nil before the bridge is up / on an older jar. Main thread only.
 + (nullable NSString *)heapStats;

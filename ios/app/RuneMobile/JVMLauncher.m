@@ -1623,6 +1623,18 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     return (int)v;
 }
 
++ (int)renderedFrameWidth {
+    if (!ensureBridge() || !gMidW || !gMainEnv)
+        return -1;
+    JNIEnv *env = gMainEnv;
+    jint v = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidW);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.renderedFrameWidth");
+        return -1;
+    }
+    return (int)v;
+}
+
 // JVM heap usage as "usedMB/maxMB" (JavaBridge.heapStats). nil before the bridge is up or on an older jar.
 + (NSString *)heapStats {
     if (!ensureBridge() || !gMidHeapStats || !gMainEnv)
