@@ -385,6 +385,11 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UILabel *accountLabel;
 @property (nonatomic, strong) UIButton *accountButton;
 @property (nonatomic, strong) NSLayoutConstraint *accountBarHeight;
+// PARITY-P0-4: the in-game Jagex-session row (always present once launched — play can't start without tokens.json,
+// unlike the collapsible RuneLite-account row above). Its "Log out" ends the session like Android's in-game logout.
+@property (nonatomic, strong) UIView *jagexSessionBar;
+@property (nonatomic, strong) UILabel *jagexSessionLabel;
+@property (nonatomic, strong) UIButton *jagexLogoutButton;
 @property (nonatomic, strong) NSTimer *accountTimer;
 @property (nonatomic, copy) NSString *pluginFilter;                // current lowercase search text
 @property (nonatomic, assign) long long pluginSeq;     // last MobileUiBridge event seq the panel has seen
@@ -2125,9 +2130,21 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 // Log out: delete the saved game session (so autologin won't fire) and purge any persisted Jagex web
 // cookies from older builds (the login webview itself is now ephemeral, so it leaves none going forward).
 - (void)onLogout {
+    [self onLogoutWithCompletion:nil];
+}
+
+// PARITY-P0-4: the logout body, with an optional completion that fires (on the main queue) only AFTER the async
+// WKWebsiteDataStore cookie purge actually finishes — so an in-game logout can safely exit(0) once the cookies
+// are really gone. The pre-launch caller passes nil (it keeps the process alive regardless, as before).
+- (void)onLogoutWithCompletion:(void (^)(void))completion {
     NSString *path = [JVMLauncher tokensPath];
     BOOL existed = [[NSFileManager defaultManager] fileExistsAtPath:path];
     if (existed) [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+
+    [self refreshLoginButton];
+    [self refreshLaunchLogin]; // keep the launch-screen account button in sync (logout can come from there now)
+    [self appendLine:existed ? @"[login] account forgotten — tokens.json cleared; autologin disarmed."
+                             : @"[login] no saved account (no tokens.json)."];
 
     NSSet *types = [NSSet setWithObjects:WKWebsiteDataTypeCookies, WKWebsiteDataTypeLocalStorage,
                     WKWebsiteDataTypeSessionStorage, WKWebsiteDataTypeIndexedDBDatabases, nil];
@@ -2138,13 +2155,53 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
             NSString *n = r.displayName.lowercaseString ?: @"";
             if ([n containsString:@"jagex"] || [n containsString:@"runescape"]) [kill addObject:r];
         }
-        if (kill.count) [ds removeDataOfTypes:types forDataRecords:kill completionHandler:^{}];
+        if (kill.count) {
+            [ds removeDataOfTypes:types
+                   forDataRecords:kill
+                completionHandler:^{
+                    if (completion)
+                        dispatch_async(dispatch_get_main_queue(), completion);
+                }];
+        } else {
+            if (completion)
+                dispatch_async(dispatch_get_main_queue(), completion); // nothing to purge
+        }
     }];
+}
 
-    [self refreshLoginButton];
-    [self refreshLaunchLogin]; // keep the launch-screen account button in sync (logout can come from there now)
-    [self appendLine:existed ? @"[login] account forgotten — tokens.json cleared; autologin disarmed."
-                             : @"[login] no saved account (no tokens.json)."];
+// PARITY-P0-4: the in-game Jagex logout confirm (parity with Android's confirmLogout()). Reachable any time the
+// plugin panel is open during live play, unlike the pre-launch-only -onLogout path.
+- (void)onInGameJagexLogout {
+    UIAlertController *a = [UIAlertController
+        alertControllerWithTitle:@"Log out"
+                         message:@"Forget this Jagex session? Deletes the saved login and web cookies, then "
+                                 @"restarts to the sign-in screen."
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"Log out"
+                                          style:UIAlertActionStyleDestructive
+                                        handler:^(UIAlertAction *_) {
+                                            [self performInGameJagexLogout];
+                                        }]];
+    [a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    a.popoverPresentationController.sourceView = self.jagexLogoutButton;
+    a.popoverPresentationController.sourceRect = self.jagexLogoutButton.bounds;
+    [self presentViewController:a animated:YES completion:nil];
+}
+
+// PARITY-P0-4: perform the logout, mirroring Android doLogout()'s ordering (accountLogout + flushConfig BEFORE
+// the token/cookie purge and restart). Both iOS bridge calls are fire-and-forget (no completion signal), so give
+// them a short grace period, then delete tokens.json + purge cookies (now safely awaited via the Step A
+// completion) and exit(0) so the next launch reads an empty tokens.json and lands on the pre-launch login gate.
+- (void)performInGameJagexLogout {
+    if (self.launched && [JVMLauncher bridgeReady]) {
+        [JVMLauncher accountLogout]; // end the RuneLite-account sync session too (parity with Android PROD-SECURITY-10)
+        [JVMLauncher mobileFlushConfig];
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self onLogoutWithCompletion:^{
+            exit(0);
+        }];
+    });
 }
 
 // LOGIN-1: switch to another already-signed-in character without a fresh web OAuth. tokens.json keeps the whole
@@ -2308,6 +2365,31 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [self.pluginSearch rm_installKeyboardDoneBar]; // always-available keyboard dismiss (empty Return is greyed out)
     [card addSubview:self.pluginSearch];
 
+    // PARITY-P0-4: the Jagex-session row — the in-game logout control (parity with Android's always-reachable
+    // "Log out" tile). Sits directly under the search, above the RuneLite-account row. Same visual model as the
+    // accountBar below, but never collapses (a running session always has a Jagex login).
+    self.jagexSessionBar = [[UIView alloc] init];
+    self.jagexSessionBar.translatesAutoresizingMaskIntoConstraints = NO;
+    self.jagexSessionBar.backgroundColor = [UIColor colorWithWhite:0.10 alpha:1.0];
+    self.jagexSessionBar.layer.cornerRadius = 8;
+    self.jagexSessionBar.clipsToBounds = YES;
+    [card addSubview:self.jagexSessionBar];
+
+    self.jagexSessionLabel = [[UILabel alloc] init];
+    self.jagexSessionLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.jagexSessionLabel.numberOfLines = 2;
+    self.jagexSessionLabel.font = [UIFont systemFontOfSize:12];
+    self.jagexSessionLabel.textColor = [UIColor whiteColor];
+    [self.jagexSessionBar addSubview:self.jagexSessionLabel];
+
+    self.jagexLogoutButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.jagexLogoutButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.jagexLogoutButton.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+    [self.jagexLogoutButton setTitle:@"Log out" forState:UIControlStateNormal];
+    [self.jagexLogoutButton setTitleColor:[UIColor colorWithRed:0.95 green:0.55 blue:0.50 alpha:1.0] forState:UIControlStateNormal];
+    [self.jagexLogoutButton addTarget:self action:@selector(onInGameJagexLogout) forControlEvents:UIControlEventTouchUpInside];
+    [self.jagexSessionBar addSubview:self.jagexLogoutButton];
+
     // RuneLite-account (config sync) row — distinct from the Jagex game login. Sits between the search and the
     // plugin list; collapses to 0pt height until the bridge reports the account is available (older jar / not wired).
     self.accountBar = [[UIView alloc] init];
@@ -2334,34 +2416,69 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 
     UILayoutGuide *sg = self.view.safeAreaLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[
-        [card.topAnchor constraintEqualToAnchor:sg.topAnchor constant:10],
-        [card.bottomAnchor constraintEqualToAnchor:sg.bottomAnchor constant:-10],
-        [card.leadingAnchor constraintEqualToAnchor:sg.leadingAnchor constant:24],
-        [card.trailingAnchor constraintEqualToAnchor:sg.trailingAnchor constant:-24],
+        [card.topAnchor constraintEqualToAnchor:sg.topAnchor
+                                       constant:10],
+        [card.bottomAnchor constraintEqualToAnchor:sg.bottomAnchor
+                                          constant:-10],
+        [card.leadingAnchor constraintEqualToAnchor:sg.leadingAnchor
+                                           constant:24],
+        [card.trailingAnchor constraintEqualToAnchor:sg.trailingAnchor
+                                            constant:-24],
 
-        [title.topAnchor constraintEqualToAnchor:card.topAnchor constant:14],
-        [title.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
+        [title.topAnchor constraintEqualToAnchor:card.topAnchor
+                                        constant:14],
+        [title.leadingAnchor constraintEqualToAnchor:card.leadingAnchor
+                                            constant:16],
         [close.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
-        [close.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
+        [close.trailingAnchor constraintEqualToAnchor:card.trailingAnchor
+                                             constant:-16],
         [hub.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
-        [hub.trailingAnchor constraintEqualToAnchor:close.leadingAnchor constant:-18],
+        [hub.trailingAnchor constraintEqualToAnchor:close.leadingAnchor
+                                           constant:-18],
         [self.overlaysCardButton.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
-        [self.overlaysCardButton.trailingAnchor constraintEqualToAnchor:hub.leadingAnchor constant:-18],
+        [self.overlaysCardButton.trailingAnchor constraintEqualToAnchor:hub.leadingAnchor
+                                                               constant:-18],
 
-        [self.pluginSearch.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:6],
-        [self.pluginSearch.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:6],
-        [self.pluginSearch.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-6],
+        [self.pluginSearch.topAnchor constraintEqualToAnchor:title.bottomAnchor
+                                                    constant:6],
+        [self.pluginSearch.leadingAnchor constraintEqualToAnchor:card.leadingAnchor
+                                                        constant:6],
+        [self.pluginSearch.trailingAnchor constraintEqualToAnchor:card.trailingAnchor
+                                                         constant:-6],
 
-        [self.accountBar.topAnchor constraintEqualToAnchor:self.pluginSearch.bottomAnchor constant:4],
-        [self.accountBar.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:8],
-        [self.accountBar.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-8],
-        [self.accountLabel.leadingAnchor constraintEqualToAnchor:self.accountBar.leadingAnchor constant:12],
+        [self.jagexSessionBar.topAnchor constraintEqualToAnchor:self.pluginSearch.bottomAnchor
+                                                       constant:4],
+        [self.jagexSessionBar.leadingAnchor constraintEqualToAnchor:card.leadingAnchor
+                                                           constant:8],
+        [self.jagexSessionBar.trailingAnchor constraintEqualToAnchor:card.trailingAnchor
+                                                            constant:-8],
+        [self.jagexSessionBar.heightAnchor constraintEqualToConstant:44],
+        [self.jagexSessionLabel.leadingAnchor constraintEqualToAnchor:self.jagexSessionBar.leadingAnchor
+                                                             constant:12],
+        [self.jagexSessionLabel.centerYAnchor constraintEqualToAnchor:self.jagexSessionBar.centerYAnchor],
+        [self.jagexLogoutButton.trailingAnchor constraintEqualToAnchor:self.jagexSessionBar.trailingAnchor
+                                                              constant:-12],
+        [self.jagexLogoutButton.centerYAnchor constraintEqualToAnchor:self.jagexSessionBar.centerYAnchor],
+        [self.jagexLogoutButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.jagexSessionLabel.trailingAnchor
+                                                                          constant:8],
+
+        [self.accountBar.topAnchor constraintEqualToAnchor:self.jagexSessionBar.bottomAnchor
+                                                  constant:4],
+        [self.accountBar.leadingAnchor constraintEqualToAnchor:card.leadingAnchor
+                                                      constant:8],
+        [self.accountBar.trailingAnchor constraintEqualToAnchor:card.trailingAnchor
+                                                       constant:-8],
+        [self.accountLabel.leadingAnchor constraintEqualToAnchor:self.accountBar.leadingAnchor
+                                                        constant:12],
         [self.accountLabel.centerYAnchor constraintEqualToAnchor:self.accountBar.centerYAnchor],
-        [self.accountButton.trailingAnchor constraintEqualToAnchor:self.accountBar.trailingAnchor constant:-12],
+        [self.accountButton.trailingAnchor constraintEqualToAnchor:self.accountBar.trailingAnchor
+                                                          constant:-12],
         [self.accountButton.centerYAnchor constraintEqualToAnchor:self.accountBar.centerYAnchor],
-        [self.accountButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.accountLabel.trailingAnchor constant:8],
+        [self.accountButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.accountLabel.trailingAnchor
+                                                                      constant:8],
 
-        [self.pluginTable.topAnchor constraintEqualToAnchor:self.accountBar.bottomAnchor constant:4],
+        [self.pluginTable.topAnchor constraintEqualToAnchor:self.accountBar.bottomAnchor
+                                                   constant:4],
         [self.pluginTable.leadingAnchor constraintEqualToAnchor:card.leadingAnchor],
         [self.pluginTable.trailingAnchor constraintEqualToAnchor:card.trailingAnchor],
         [self.pluginTable.bottomAnchor constraintEqualToAnchor:card.bottomAnchor],
@@ -2370,6 +2487,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.accountBarHeight = [self.accountBar.heightAnchor constraintEqualToConstant:0];
     self.accountBarHeight.active = YES;
     [self refreshAccountRow];
+    [self refreshJagexSessionRow]; // PARITY-P0-4: populate the Jagex-session row from tokens.json
     self.accountTimer = [NSTimer scheduledTimerWithTimeInterval:2.0 target:self
         selector:@selector(accountTimerTick) userInfo:nil repeats:YES];
 }
@@ -2404,6 +2522,19 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         [self.accountButton setTitle:@"Log in" forState:UIControlStateNormal];
         [self.accountButton setTitleColor:[UIColor colorWithRed:1.0 green:0.78 blue:0.20 alpha:1.0] forState:UIControlStateNormal];
     }
+}
+
+// PARITY-P0-4: refresh the Jagex-session row's label from tokens.json (the saved chosen_display_name). The row
+// itself is always visible once launched; only the display name is dynamic.
+- (void)refreshJagexSessionRow {
+    if (!self.jagexSessionBar)
+        return;
+    NSData *data = [NSData dataWithContentsOfFile:[JVMLauncher tokensPath]];
+    id o = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    NSString *name = ([o isKindOfClass:[NSDictionary class]] && [o[@"chosen_display_name"] isKindOfClass:[NSString class]])
+                         ? o[@"chosen_display_name"]
+                         : nil;
+    self.jagexSessionLabel.attributedText = [self accountTitle:@"Jagex account" detail:(name.length ? name : @"Signed in")];
 }
 
 - (NSAttributedString *)accountTitle:(NSString *)title detail:(NSString *)detail {
@@ -2531,6 +2662,9 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 // Read listPlugins() once, parse the JSON array, sort by name, reload the table.
 - (void)refreshPluginList {
     if (self.accountBar) { [self refreshAccountRow]; }   // keep the RuneLite-account row current when the panel opens
+    if (self.jagexSessionBar) {
+        [self refreshJagexSessionRow];
+    } // PARITY-P0-4: keep the Jagex-session row current too
     NSString *json = [JVMLauncher mobilePlugins];
     NSArray *arr = nil;
     if (json.length) {
