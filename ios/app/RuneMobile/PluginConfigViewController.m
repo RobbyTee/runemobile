@@ -799,8 +799,15 @@ typedef NS_ENUM(NSInteger, MUINotifRow) {
         [sw addTarget:self action:@selector(onNotificationSwitch:) forControlEvents:UIControlEventValueChanged];
         cell.accessoryView = sw;
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;   // tap (not the switch) → sub-editor
+    } else if ([type isEqualToString:@"keybind"]) {
+        // Keybind: humanize the raw "keyCode:modifiers" for display; only a BOUND row is tappable (to Clear it),
+        // matching Android only showing the Clear button when bound.
+        cell.detailTextLabel.text = [self humanizeKeybind:value];
+        cell.accessoryType = UITableViewCellAccessoryNone;
+        cell.selectionStyle = [self isKeybindBound:value] ? UITableViewCellSelectionStyleDefault
+                                                          : UITableViewCellSelectionStyleNone;
     } else {
-        // set / keybind / dimension / unknown → read-only for v1. Don't dump raw serialized blobs as the value.
+        // unknown → read-only for v1. Don't dump raw serialized blobs as the value.
         BOOL looksSerialized = [value hasPrefix:@"{"] || [value hasPrefix:@"["];
         cell.detailTextLabel.text = (value && !looksSerialized) ? value : @"(not editable yet)";
         cell.detailTextLabel.textColor = [UIColor colorWithWhite:0.5 alpha:1.0];
@@ -839,6 +846,8 @@ typedef NS_ENUM(NSInteger, MUINotifRow) {
         [self editDimension:it at:indexPath];
     } else if ([type isEqualToString:@"set"]) {
         [self editSet:it at:indexPath];
+    } else if ([type isEqualToString:@"keybind"]) {
+        [self editKeybind:it at:indexPath];
     }
 }
 
@@ -1011,6 +1020,22 @@ typedef NS_ENUM(NSInteger, MUINotifRow) {
     [self presentViewController:ac animated:YES completion:nil];
 }
 
+// A bound keybind row can be cleared (unbound). We can't capture a hardware chord on a touch device, so mirror
+// Android's Clear-only affordance: confirm, then write "0:0" (Keybind.NOT_SET) via the same writeKey: facade.
+- (void)editKeybind:(NSMutableDictionary *)it at:(NSIndexPath *)ip {
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:it[@"name"]
+                                                                message:[NSString stringWithFormat:@"Currently bound to %@.", [self humanizeKeybind:it[@"value"]]]
+                                                         preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Clear"
+                                           style:UIAlertActionStyleDestructive
+                                         handler:^(UIAlertAction *a) {
+                                             [self writeKey:it[@"key"] value:@"0:0" item:it];
+                                             [self.table reloadRowsAtIndexPaths:@[ ip ] withRowAnimation:UITableViewRowAnimationNone];
+                                         }]];
+    [self presentViewController:ac animated:YES completion:nil];
+}
+
 - (void)editText:(NSMutableDictionary *)it type:(NSString *)type at:(NSIndexPath *)ip {
     UIAlertController *ac = [UIAlertController alertControllerWithTitle:it[@"name"]
         message:it[@"description"] preferredStyle:UIAlertControllerStyleAlert];
@@ -1121,6 +1146,100 @@ typedef NS_ENUM(NSInteger, MUINotifRow) {
     // unified log in the hardened build.
     NSLog(@"[plugincfg] %@.%@ = %@ : %@", self.group, key, value, ack ?: @"(nil)");
 #endif
+}
+
+#pragma mark - keybind helpers (raw "keyCode:modifiers" AWT form <-> humanized label)
+
+// The bridge emits a Keybind item's value as the engine's raw "keyCode:modifiers" config form (java AWT VK_*
+// codes + InputEvent modifier bitmask). NOT_SET is VK_UNDEFINED(0) + no modifiers -> "0:0". We humanize the
+// common chords for display and write "0:0" to clear, which ConfigManager round-trips back to Keybind.NOT_SET.
+// Ported 1:1 from Android ConfigScreen.kt parseKeybind/isKeybindBound/humanizeKeybind/keyText.
+
+// Split "keyCode:modifiers" into the two ints; nil if it isn't that form.
+- (NSArray<NSNumber *> *)parseKeybind:(NSString *)v {
+    NSString *t = [(v ?: @"") stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    NSArray<NSString *> *parts = [t componentsSeparatedByString:@":"];
+    if (parts.count != 2)
+        return nil;
+    NSString *c = [parts[0] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    NSString *m = [parts[1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    NSScanner *sc = [NSScanner scannerWithString:c];
+    NSScanner *sm = [NSScanner scannerWithString:m];
+    int code = 0, mods = 0;
+    if (![sc scanInt:&code] || !sc.isAtEnd)
+        return nil;
+    if (![sm scanInt:&mods] || !sm.isAtEnd)
+        return nil;
+    return @[ @(code), @(mods) ];
+}
+
+// True if a keybind value is set (parses as keyCode:modifiers and isn't NOT_SET). Blank/garbage -> unset.
+- (BOOL)isKeybindBound:(NSString *)v {
+    NSArray<NSNumber *> *p = [self parseKeybind:v];
+    if (!p)
+        return NO;
+    return !(p[0].intValue == 0 && p[1].intValue == 0);
+}
+
+// Best-effort key name for the common java.awt.event.KeyEvent VK_* codes; nil for VK_UNDEFINED(0).
+- (NSString *)keyTextForCode:(int)code {
+    if (code == 0)
+        return nil;
+    if (code >= 0x70 && code <= 0x7B)
+        return [NSString stringWithFormat:@"F%d", code - 0x6F]; // VK_F1..VK_F12
+    if (code >= 0x30 && code <= 0x39)
+        return [NSString stringWithFormat:@"%c", (char)('0' + (code - 0x30))]; // VK_0..9
+    if (code >= 0x41 && code <= 0x5A)
+        return [NSString stringWithFormat:@"%c", (char)('A' + (code - 0x41))]; // VK_A..Z
+    switch (code) {
+        case 0x20:
+            return @"Space";
+        case 0x09:
+            return @"Tab";
+        case 0x0A:
+            return @"Enter";
+        case 0x1B:
+            return @"Esc";
+        case 0x08:
+            return @"Backspace";
+        case 0x2E:
+            return @"Delete";
+        case 0x25:
+            return @"Left";
+        case 0x26:
+            return @"Up";
+        case 0x27:
+            return @"Right";
+        case 0x28:
+            return @"Down";
+        default:
+            return [NSString stringWithFormat:@"Key %d", code];
+    }
+}
+
+// Human-friendly label for a "keyCode:modifiers" keybind ("Ctrl + F1", "Shift", "Not set").
+- (NSString *)humanizeKeybind:(NSString *)v {
+    NSArray<NSNumber *> *p = [self parseKeybind:v];
+    if (!p)
+        return @"Not set";
+    int code = p[0].intValue, mods = p[1].intValue;
+    if (code == 0 && mods == 0)
+        return @"Not set";
+    // java.awt.event.InputEvent down-mask bits.
+    const int kShiftDown = 1 << 6, kCtrlDown = 1 << 7, kMetaDown = 1 << 8, kAltDown = 1 << 9;
+    NSMutableArray<NSString *> *parts = [NSMutableArray array];
+    if (mods & kCtrlDown)
+        [parts addObject:@"Ctrl"];
+    if (mods & kAltDown)
+        [parts addObject:@"Alt"];
+    if (mods & kShiftDown)
+        [parts addObject:@"Shift"];
+    if (mods & kMetaDown)
+        [parts addObject:@"Meta"];
+    NSString *kt = [self keyTextForCode:code];
+    if (kt)
+        [parts addObject:kt];
+    return parts.count ? [parts componentsJoinedByString:@" + "] : @"Not set";
 }
 
 #pragma mark - color helpers (signed-decimal ARGB == ConfigManager's Color contract)
