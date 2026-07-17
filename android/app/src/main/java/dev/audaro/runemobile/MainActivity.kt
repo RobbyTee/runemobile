@@ -82,6 +82,12 @@ class MainActivity : AppCompatActivity() {
     private var chatScrollAccum = 0f
     private var chatRectCanvas: IntArray? = null // [x,y,w,h] canvas px; null = chat not reported
 
+    // [x,y,w,h] canvas px of the open dialogue (dlgX/Y/W/H from the chat snapshot); null = not open this frame.
+    private var dialogueChatCanvas: IntArray? = null
+
+    // Raw dialogueActive bit from the chat snapshot (independent of the engineDlg parchment gate); mirrors iOS.
+    private var chatDialogueActive = false
+
     // Phase-5 world map (floating window): open-state + control rects from the published map snapshot.
     // While open, a one-finger drag that STARTS inside the window pans the MAP (shared panWorldMap — finger
     // deltas in canvas px; synthetic drags don't pan, probe-proven), taps inside are PRECISE clicks (close X,
@@ -1904,6 +1910,17 @@ class MainActivity : AppCompatActivity() {
                 Log.i(TAG, "ap0: minimap/orb tap ($gx,$gy) -> click without walk-ring")
                 return true
             }
+            // Dialogue tap-guard (mirrors iOS ViewController.m onTap): while an engine dialogue is open, a tap inside
+            // the chatbox region OR the published dialogue rect is a PRECISE click that advances/selects the dialogue —
+            // consume it (no walk-ring, no haptic, no JvmLauncher.click). Region-gated like iOS: a tap OUTSIDE both
+            // rects still falls through to the generic world click below.
+            if (chatDialogueActive &&
+                (inCanvasRect(chatRectCanvas, gx, gy) || inCanvasRect(dialogueChatCanvas, gx, gy))
+            ) {
+                JvmLauncher.clickPrecise(gx, gy, 1)
+                Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> precise, consumed")
+                return true
+            }
             // Arm the tap feedback BEFORE posting the click so the baseline seqs can't race the engine's bump.
             // The kind seq resolves WHAT the tap hit (walk/scene = ring, widget = border, nothing = no feedback);
             // interactTapSeq stays the haptic source.
@@ -2936,6 +2953,28 @@ class MainActivity : AppCompatActivity() {
         // the engine's dialogue + full 3D head shows through. Otherwise (make-X/reward boxes, or Path-B off) draw the
         // native parchment as before.
         val engineDlg = chatSnap.contains("\"engineDialogue\":true")
+        // Dialogue tap-guard state (mirrors iOS ViewController.m): keep the raw dialogueActive bit + the published
+        // dialogue chatbox rect so onSingleTapUp can precise-click a tap landing in the dialogue region instead of
+        // leaking a world walk/ring. Only maintained while the chat veneer is active; reset when it isn't so the
+        // guard cleanly disengages (unsupported layout / map open / chat off all send an empty chatSnap).
+        if (chatSnap.isEmpty()) {
+            chatDialogueActive = false
+            dialogueChatCanvas = null
+        } else {
+            try {
+                val cs = org.json.JSONObject(chatSnap)
+                chatDialogueActive = cs.optBoolean("dialogueActive", false)
+                dialogueChatCanvas =
+                    if (cs.has("dlgW")) {
+                        intArrayOf(cs.optInt("dlgX"), cs.optInt("dlgY"), cs.optInt("dlgW"), cs.optInt("dlgH"))
+                    } else {
+                        null
+                    }
+            } catch (_: org.json.JSONException) {
+                chatDialogueActive = false
+                dialogueChatCanvas = null
+            }
+        }
         dialogueOverlay.update(chatSnap, if (on && !engineDlg) JvmLauncher.dialogueJsonPub() else "{}", sx, sy, on && !engineDlg)
         // Auto-open/close: a collapsed chat hides the engine tabs -> the dialogue raster is suppressed. So when an
         // engine dialogue opens while collapsed, un-collapse for its duration and restore the collapsed state when it
