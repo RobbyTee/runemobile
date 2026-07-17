@@ -390,10 +390,14 @@ private fun ConfigItemControl(
             }
 
             "string" -> {
+                // Multi-line capable: dropping singleLine lets Enter insert a literal newline, so newline-delimited
+                // lists (e.g. Chat Filter filteredWords/filteredRegex/filteredNames, "one per line") round-trip.
+                // minLines/maxLines bound the field's growth (available since compose 1.4, well within our bom).
                 OutlinedTextField(
                     value = item.value ?: "",
                     onValueChange = onChange,
-                    singleLine = true,
+                    minLines = 1,
+                    maxLines = 6,
                     visualTransformation = if (item.secret) PasswordVisualTransformation() else VisualTransformation.None,
                     modifier = Modifier.fillMaxWidth(),
                 )
