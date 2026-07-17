@@ -159,12 +159,10 @@ object JvmLauncher {
     external fun nativeInteractTapSeq(): Int
 
     /** Tap-KIND truth: [nativeTapKindSeq] bumps once per resolved left tap; [nativeLastTapKind] is its kind
-     *  (TAP_KIND_*); [nativeLastWidgetBounds] packs the WIDGET-kind bounds (canvas px, x<<48|y<<32|w<<16|h). */
+     *  (TAP_KIND_*). */
     external fun nativeTapKindSeq(): Int
 
     external fun nativeLastTapKind(): Int
-
-    external fun nativeLastWidgetBounds(): Long
 
     // ---- A2 press-and-peek menu ---------------------------------------------------------------------
 
@@ -589,8 +587,6 @@ object JvmLauncher {
     fun tapKindSeq() = nativeTapKindSeq()
 
     fun lastTapKind() = nativeLastTapKind()
-
-    fun lastWidgetBounds() = nativeLastWidgetBounds()
 
     fun selectMenuPoint(
         x: Int,
