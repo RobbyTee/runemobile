@@ -5338,9 +5338,9 @@ static int chatRowCanvasH(void) {
 - (void)startVmThreadWithLauncher:(JVMLauncher *)launcher log:(JVMLogSink)log {
     NSThread *t = [[NSThread alloc] initWithBlock:^{
         [self runVmProbesAndReport:launcher log:log]; // PARITY-P0-6: shows a boot-failure card on a negative rc
-        // VM lifecycle done; tear the render loop + bridge down on main, then release the assertion. (Unreached
-        // today - DestroyJavaVM blocks on the engine's non-daemon threads - but it's the correct clean teardown
-        // for a future real exit: stop driving JNI into a destroyed VM instead of freezing on the last frame.)
+        // VM lifecycle done; tear the render loop + bridge down on main, then release the assertion. (Reached
+        // only on a boot FAILURE - on success jvm-main parks forever inside runProbesWithLog, since the boot
+        // entrypoint returns mid-session while the engine's non-daemon threads keep the session alive.)
         dispatch_async(dispatch_get_main_queue(), ^{
             [self appendLine:@"[shell] JVM thread returned - tearing down render loop + bridge"];
             [self.displayLink invalidate];
