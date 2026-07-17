@@ -2774,9 +2774,29 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     for (UIView *v = [self.pluginTable hitTest:pt withEvent:nil]; v && v != self.pluginTable; v = v.superview) {
         if ([v isKindOfClass:[UIButton class]])
             return;
+        // The leading star (an interactive UIImageView) owns its own tap — don't also toggle enabled.
+        if ([v isKindOfClass:[UIImageView class]] && v.userInteractionEnabled)
+            return;
     }
     NSIndexPath *ip = [self.pluginTable indexPathForRowAtPoint:pt];
     if (ip) [self togglePluginAtRow:ip.row];
+}
+
+// A direct tap on a row's leading star toggles that plugin's pinned state (Android parity — no long-press needed).
+- (void)onPluginRowStarTap:(UITapGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateEnded)
+        return;
+    CGPoint pt = [g locationInView:self.pluginTable];
+    NSIndexPath *ip = [self.pluginTable indexPathForRowAtPoint:pt];
+    if (!ip || ip.row < 0 || ip.row >= (NSInteger)self.pluginList.count)
+        return;
+    NSDictionary *p = self.pluginList[(NSUInteger)ip.row];
+    NSString *name = [p[@"name"] description];
+    if (name.length == 0)
+        return;
+    BOOL pinned = [p[@"pinned"] boolValue];
+    [JVMLauncher mobileSetPinned:name pinned:!pinned];
+    [self refreshPluginList];
 }
 
 
@@ -2790,6 +2810,13 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         UISwitch *sw = [[UISwitch alloc] init];
         sw.userInteractionEnabled = NO;   // pure indicator — the row tap toggles (reliable big target)
         cell.accessoryView = sw;
+        // UX: the leading star is a direct pin toggle (parity with Android's tappable star). Make the icon
+        // itself the tap target; onPluginRowStarTap: resolves the row and flips pinned. Added once (cells reuse).
+        cell.imageView.userInteractionEnabled = YES;
+        UITapGestureRecognizer *starTap = [[UITapGestureRecognizer alloc]
+            initWithTarget:self
+                    action:@selector(onPluginRowStarTap:)];
+        [cell.imageView addGestureRecognizer:starTap];
     }
     NSDictionary *p = self.pluginList[(NSUInteger)indexPath.row];
     BOOL enabled = [p[@"enabled"] boolValue];
@@ -2798,8 +2825,11 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         && [p[@"configGroup"] isKindOfClass:[NSString class]] && [p[@"configGroup"] length] > 0;
     cell.textLabel.text = [p[@"name"] description];
     BOOL pinned = [p[@"pinned"] boolValue];
-    cell.imageView.image = pinned ? [UIImage systemImageNamed:@"star.fill"] : nil;
-    cell.imageView.tintColor = [UIColor colorWithRed:0.95 green:0.78 blue:0.30 alpha:1.0];
+    // Always show a star so it's a discoverable, always-tappable pin toggle (Android parity): filled amber when
+    // pinned, dim outline when not. A direct tap on it flips pinned via onPluginRowStarTap:.
+    cell.imageView.image = [UIImage systemImageNamed:(pinned ? @"star.fill" : @"star")];
+    cell.imageView.tintColor = pinned ? [UIColor colorWithRed:0.95 green:0.78 blue:0.30 alpha:1.0]
+                                      : [UIColor colorWithWhite:0.55 alpha:1.0];
     // CORE-1 fake-plugins ("RuneLite" / "Chat Color"): config-only, no enable concept — drop the toggle and show
     // a disclosure chevron; a tap opens their settings (handled in togglePluginAtRow).
     BOOL configOnly = [p[@"configOnly"] boolValue];
