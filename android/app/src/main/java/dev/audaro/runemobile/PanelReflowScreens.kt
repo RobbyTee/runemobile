@@ -511,6 +511,7 @@ fun ConfigProfilesScreen(onBack: () -> Unit) {
     var firstLoad by remember { mutableStateOf(true) }
     var logged by remember { mutableStateOf(false) }
     var switching by remember { mutableStateOf<Long?>(null) } // id mid-switch (async); cleared when it goes active
+    var confirmTarget by remember { mutableStateOf<ConfigProfile?>(null) } // pending confirmation before we switch
 
     LaunchedEffect(Unit) {
         while (coroutineContext.isActive) {
@@ -552,11 +553,9 @@ fun ConfigProfilesScreen(onBack: () -> Unit) {
                                 busy = switching == p.id,
                                 enabled = !p.active && switching == null,
                                 onSelect = {
-                                    if (!p.active && switching == null) {
-                                        switching = p.id
-                                        JvmLauncher.onBridgeTouch { JvmLauncher.switchProfile(p.id) }
-                                        Log.i(PR_TAG, "profile-switch: -> ${p.name} (${p.id})")
-                                    }
+                                    // Switching swaps every plugin's config; confirm first so a stray tap
+                                    // can't silently reshuffle the whole setup.
+                                    if (!p.active && switching == null) confirmTarget = p
                                 },
                             )
                             HorizontalDivider(color = Color(0x22FFFFFF))
@@ -565,6 +564,27 @@ fun ConfigProfilesScreen(onBack: () -> Unit) {
                 }
             }
         }
+    }
+
+    confirmTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { confirmTarget = null },
+            title = { Text("Switch profile?") },
+            text = { Text("Load “${target.name}”? This replaces the active configuration for every plugin.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmTarget = null
+                    if (!target.active && switching == null) {
+                        switching = target.id
+                        JvmLauncher.onBridgeTouch { JvmLauncher.switchProfile(target.id) }
+                        Log.i(PR_TAG, "profile-switch: -> ${target.name} (${target.id})")
+                    }
+                }) { Text("Switch") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmTarget = null }) { Text("Cancel") }
+            },
+        )
     }
 }
 
