@@ -8,6 +8,13 @@
          on API 33+ (requested on first boot); a no-op grant below that. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- PARITY-P0-1: a started foreground service keeps the JVM + game socket resident while the app is
+         backgrounded (the Android idiom for iOS's silent-audio keepalive). "specialUse" is the correct
+         type for a game-session keepalive (none of the concrete FGS types fit); targetSdk 34+ requires
+         the paired PROPERTY_SPECIAL_USE_FGS_SUBTYPE on the service below. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <!-- AP-2b Finding 5: legacy gallery write for the screenshot save. API 29+ uses scoped storage (no
          permission); only pre-Q needs this, so it's capped at API 28. -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
@@ -54,5 +61,16 @@
             android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode|locale|density|smallestScreenSize"
             android:screenOrientation="sensorLandscape" />
+
+        <!-- PARITY-P0-1: background-session keepalive foreground service (started/stopped by MainActivity's
+             onStop/onStart around the login-state + pref gate). Not exported; specialUse subtype declared. -->
+        <service
+            android:name=".KeepaliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="session-keepalive" />
+        </service>
     </application>
 </manifest>

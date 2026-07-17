@@ -182,6 +182,17 @@ class MainActivity : AppCompatActivity() {
     // AP-2a Findings 9/25: a low-frequency daemon that drains the shared notification + link queues (off the UI
     // thread — these calls daemon-attach to HotSpot). nextNotification → system shade; nextLink → browser.
     @Volatile private var drainRun = false
+
+    // PARITY-P0-1: background-keepalive service state. The idle-stop Runnable is posted to the main looper in
+    // onStop (when the service is started) and removed in onStart / onDestroy, so a return-to-foreground before
+    // the deadline cancels it and it never stops a live foreground session.
+    private var keepaliveStarted = false
+    private val keepaliveHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
+    private val keepaliveIdleStop =
+        Runnable {
+            Log.i(TAG, "keepalive: idle-stop deadline reached -> stopping service")
+            stopKeepaliveService()
+        }
     private var notifId = 1000
 
     // A6 native chrome (OSRS-mobile 2-col tab grid; the engine stones are hidden and this grid replaces them).
@@ -336,6 +347,13 @@ class MainActivity : AppCompatActivity() {
         // UX-DISCRETE-01 / ENH-B06: hard cap on the "Hopping…" scrim. The relog hop is ~8 s of login chrome; this
         // leaves headroom yet guarantees the scrim never sticks if the loggedIn-edge signal is missed.
         private const val HOP_TIMEOUT_MS = 12_000L
+
+        // PARITY-P0-1: background-keepalive settings + idle-stop window. The idle-stop mirrors iOS's
+        // kBgIdleStopSeconds (600 s / 10 min, ViewController.m) — after this long backgrounded, KeepaliveService
+        // stops itself so a forgotten backgrounded app doesn't hold the process (and drain battery) indefinitely.
+        private const val PREFS_KEEPALIVE = "keepalive"
+        private const val KEY_KEEPALIVE_ENABLED = "enabled"
+        private const val KEEPALIVE_IDLE_STOP_MS = 600_000L
 
         // AWT virtual-key codes (java.awt.event.KeyEvent) the engine's onKeyStroke expects.
         private const val VK_BACK_SPACE = 8
@@ -1682,6 +1700,41 @@ class MainActivity : AppCompatActivity() {
                 Toast.LENGTH_LONG,
             ).show()
         Log.i(TAG, "screenshot: auto-save ${if (now) "ON" else "OFF"}")
+    }
+
+    /** PARITY-P0-1: whether the background-session keepalive is enabled (default ON — matches iOS, which always
+     *  keeps the session alive backgrounded). Toggled by the "Keep session alive" switch in the plugin panel. */
+    private fun keepaliveEnabled(): Boolean = getSharedPreferences(PREFS_KEEPALIVE, MODE_PRIVATE).getBoolean(KEY_KEEPALIVE_ENABLED, true)
+
+    /** PARITY-P0-1: start the foreground keepalive service (once) and arm the idle-stop deadline. Called from
+     *  onStop only when the pref is on and the client is logged in — a logged-out/idle background must not hold
+     *  the process (mirrors iOS's idle-stop, which stops the keepalive engine when logged out). */
+    private fun startKeepaliveService() {
+        if (keepaliveStarted) return
+        keepaliveStarted = true
+        try {
+            ContextCompat.startForegroundService(this, Intent(this, KeepaliveService::class.java))
+            keepaliveHandler.removeCallbacks(keepaliveIdleStop)
+            keepaliveHandler.postDelayed(keepaliveIdleStop, KEEPALIVE_IDLE_STOP_MS)
+            Log.i(TAG, "keepalive: service requested (idle-stop in ${KEEPALIVE_IDLE_STOP_MS / 1000}s)")
+        } catch (t: Throwable) {
+            // startForegroundService can throw if the OS forbids an FGS start from the background on some OEMs;
+            // fall back to today's behaviour (reconnect overlay self-heals on return).
+            keepaliveStarted = false
+            Log.w(TAG, "keepalive: startForegroundService refused: ${t.message}")
+        }
+    }
+
+    /** PARITY-P0-1: stop the keepalive service and cancel the idle-stop. Idempotent. */
+    private fun stopKeepaliveService() {
+        keepaliveHandler.removeCallbacks(keepaliveIdleStop)
+        if (!keepaliveStarted) return
+        keepaliveStarted = false
+        try {
+            stopService(Intent(this, KeepaliveService::class.java))
+        } catch (t: Throwable) {
+            Log.w(TAG, "keepalive: stopService failed: ${t.message}")
+        }
     }
 
     /** PARITY-ANDROID-SHOT: drain the shared-core auto-screenshot queue (MobileUiBridge.nextScreenshot — the
@@ -3463,6 +3516,9 @@ class MainActivity : AppCompatActivity() {
             frameCallback?.let { Choreographer.getInstance().postFrameCallback(it) }
             Log.i(TAG, "perf: foreground -> render resumed, UI poll re-armed")
         }
+        // PARITY-P0-1: back in the foreground — the process no longer needs the keepalive promotion, so drop the
+        // service (and cancel the idle-stop) as the first thing on return, before the idle deadline could fire.
+        stopKeepaliveService()
     }
 
     override fun onStop() {
@@ -3480,6 +3536,19 @@ class MainActivity : AppCompatActivity() {
         pollingPaused = true
         JvmLauncher.setPaused(true)
         frameCallback?.let { Choreographer.getInstance().removeFrameCallback(it) }
+        // PARITY-P0-1: keep the JVM + game socket resident while backgrounded (parity with iOS's keepalive),
+        // but only when it's worth it — the pref is on AND the client is logged in (mirrors iOS's idle-stop,
+        // which never keeps a logged-out session alive). The render throttle above is unchanged; the service
+        // only prevents process suspension. Reuses the same lock-free chrome snapshot the reconnect overlay polls.
+        val loggedIn =
+            try {
+                JSONObject(JvmLauncher.chromeSnapshotPub()).optBoolean("loggedIn", false)
+            } catch (e: Exception) {
+                false
+            }
+        if (booted.get() && keepaliveEnabled() && loggedIn) {
+            startKeepaliveService()
+        }
         super.onStop()
     }
 
@@ -3498,6 +3567,7 @@ class MainActivity : AppCompatActivity() {
         thermalGovernor?.stop()
         thermalGovernor = null // PERF-MEMORY-THERMAL-01: unregister + restore the baseline scale
         armHopScrimHook = null // ENH-B06: drop the static hook so a dead activity can't be re-armed
+        stopKeepaliveService() // PARITY-P0-1: don't leave the keepalive FGS running past the activity's death
         super.onDestroy()
     }
 

@@ -1,5 +1,6 @@
 package dev.audaro.runemobile
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.activity.compose.BackHandler
@@ -62,6 +63,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -545,6 +547,47 @@ private fun RuneLiteAccountRow() {
 }
 
 /**
+ * PARITY-P0-1 (`android-background-keepalive`): the player-facing "keep session alive in background" switch.
+ * Default ON — matches iOS, which always keeps the JVM + game socket resident while backgrounded. When OFF the
+ * app behaves exactly as it did before this feature (the reconnect overlay self-heals on return). Self-contained
+ * (reads/writes SharedPreferences directly, like RuneLiteAccountRow reads its own bridge state) so no new params
+ * thread through PluginPanel/LauncherHome; MainActivity.keepaliveEnabled() reads the same pref in onStop.
+ */
+@Composable
+private fun KeepaliveRow() {
+    val ctx = LocalContext.current
+    val prefs = remember { ctx.getSharedPreferences("keepalive", Context.MODE_PRIVATE) }
+    var enabled by remember { mutableStateOf(prefs.getBoolean("enabled", true)) }
+    Surface(
+        color = Color(0xFF1B1B1B),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Background session", color = Color(0xFF80CBC4), fontSize = 11.sp)
+                Text("Keep the game alive while the app is in the background", color = Color.White, fontSize = 13.sp)
+            }
+            Switch(
+                checked = enabled,
+                onCheckedChange = {
+                    enabled = it
+                    prefs.edit().putBoolean("enabled", it).apply()
+                },
+                modifier =
+                    Modifier.semantics {
+                        contentDescription = "Keep session alive in background, ${if (enabled) "on" else "off"}"
+                        stateDescription = if (enabled) "On" else "Off"
+                    },
+            )
+        }
+    }
+}
+
+/**
  * PROD-QA-07 (GATE row 9) — the on-device identity/disclosure surface. The honest unofficial / not-affiliated /
  * ban-risk framing + open-source attribution previously lived only in the README (invisible on the phone); this
  * is the same text rendered in-app, reachable from the launcher's "More" grid. Pairs with the RuneMobile name +
@@ -803,6 +846,7 @@ private fun LauncherGrid(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         // Scrolls with the grid (was a fixed row above the list) so the pinned chrome stays just title + search.
         RuneLiteAccountRow()
+        KeepaliveRow() // PARITY-P0-1: background-session keepalive toggle (default ON)
         SectionLabel("Renderers")
         TileGrid(
             listOf(
