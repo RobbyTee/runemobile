@@ -2392,7 +2392,9 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     UILabel *title = [[UILabel alloc] init];
     title.translatesAutoresizingMaskIntoConstraints = NO;
     title.text = @"Plugins";
-    title.font = [UIFont boldSystemFontOfSize:18];
+    // OSRS typeface for the panel (parity with Android's osrsTypography). The asset is already bundled and
+    // proven to load elsewhere in this file; fall back silently to system-bold if it ever fails.
+    title.font = [UIFont fontWithName:@"RuneScape" size:20] ?: [UIFont boldSystemFontOfSize:18];
     title.textColor = [UIColor whiteColor];
     [card addSubview:title];
 
@@ -2909,6 +2911,9 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     BOOL hasConfig = [p[@"hasConfig"] boolValue]
         && [p[@"configGroup"] isKindOfClass:[NSString class]] && [p[@"configGroup"] length] > 0;
     cell.textLabel.text = [p[@"name"] description];
+    // OSRS typeface on every row (name + status detail), matching the panel title / Android's osrsTypography.
+    cell.textLabel.font = [UIFont fontWithName:@"RuneScape" size:17] ?: [UIFont systemFontOfSize:17];
+    cell.detailTextLabel.font = [UIFont fontWithName:@"RuneScape" size:14] ?: [UIFont systemFontOfSize:13];
     BOOL pinned = [p[@"pinned"] boolValue];
     // Always show a star so it's a discoverable, always-tappable pin toggle (Android parity): filled amber when
     // pinned, dim outline when not. A direct tap on it flips pinned via onPluginRowStarTap:.
