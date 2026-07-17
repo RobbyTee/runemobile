@@ -35,7 +35,8 @@ typedef jint (*CreateJavaVM_t)(JavaVM **pvm, void **penv, void *args);
 // on the main/UI thread, so they AttachCurrentThreadAsDaemon and cache the JavaBridge class + method ids
 // once. gVM is written by the worker thread and read by the main thread, so it is published atomically
 // (a plain static is a C-level data race even where it happens to work on-device).
-static _Atomic(JavaVM *) gVM = NULL;  // set right after JNI_CreateJavaVM; cleared before DestroyJavaVM
+static _Atomic(JavaVM *) gVM = NULL;  // set right after JNI_CreateJavaVM; cleared only after DestroyJavaVM
+                                      // returns (i.e. a real session end — see the teardown-order note there)
 static JNIEnv   *gMainEnv = NULL;     // the UI thread's attached env (main thread only)
 static jclass    gBridgeClass = NULL; // global ref to net.runelite.client.headless.JavaBridge
 static jmethodID gMidW = NULL, gMidH = NULL, gMidSeq = NULL, gMidPixels = NULL;
@@ -1598,14 +1599,17 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
         callMain(env, "DeviceHeadlessBoot", @[], log);
     }
 
-    // QA-P1-01: null gVM BEFORE DestroyJavaVM, not after. Every facade call snapshots gVM through its ensure*
-    // gate; clearing it first means any concurrent (main-thread) facade call sees the VM as gone and bails,
-    // instead of racing a JNI call into a VM that is mid-destroy. DestroyJavaVM takes the local vm pointer (not
-    // gVM), so clearing gVM first is safe. (In practice this blocks forever on the engine's non-daemon threads,
-    // so these lines stay effectively unreachable and the session keeps running on the live VM + warm cache; the
-    // ordering only matters if a clean shutdown ever lets DestroyJavaVM return.)
-    atomic_store(&gVM, NULL);
+    // DestroyJavaVM FIRST, then null gVM. This order is LOAD-BEARING: DeviceHeadlessBoot.main RETURNS at the
+    // headless.runSeconds timeout (~240s into every session) while the engine's non-daemon threads keep the
+    // session fully alive, so this line IS reached mid-play. DestroyJavaVM then blocks here for the rest of the
+    // session (it waits for the engine's non-daemon threads), during which the VM is live and every facade call
+    // is legal — gVM must stay set or bridgeReady flips NO and ALL input (tap/long-press/pan/pinch) dies at the
+    // 4-minute mark while the world keeps rendering (the 2026-07-17 dead-taps bug; QA-P1-01 had swapped this to
+    // null-first on the mistaken belief the store was unreachable). Only if a clean shutdown ever lets
+    // DestroyJavaVM return do we null gVM — the sliver between actual unload and the store is a theoretical
+    // race QA-P1-01 worried about, but it requires the engine to exit on its own, which never happens in-app.
     (*vm)->DestroyJavaVM(vm);
+    atomic_store(&gVM, NULL);
     log(@"[jvm] DestroyJavaVM done.");
     return 0;
 }
