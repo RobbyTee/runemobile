@@ -88,6 +88,7 @@ fun QuestHelperScreen(onBack: () -> Unit) {
     var firstLoad by remember { mutableStateOf(true) }
     var logged by remember { mutableStateOf(false) }
     var stateFilter by remember { mutableStateOf("IN_PROGRESS") } // default to in-progress quests
+    var query by remember { mutableStateOf("") } // quest-name search (parity with iOS's UISearchBar)
 
     DisposableEffect(Unit) {
         JvmLauncher.onBridge { JvmLauncher.questSetUiOpen(true) }
@@ -129,8 +130,16 @@ fun QuestHelperScreen(onBack: () -> Unit) {
                     Text("Quest Helper isn't available.", color = Color(0xFFBDBDBD))
                 }
             } else {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    singleLine = true,
+                    label = { Text("Search quests") },
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+                // "All" (no status filter) ahead of the three status chips (parity with iOS's 4-way segment).
                 Row(Modifier.padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (f in listOf("IN_PROGRESS", "NOT_STARTED", "FINISHED")) {
+                    for (f in listOf("ALL", "IN_PROGRESS", "NOT_STARTED", "FINISHED")) {
                         FilterChip(
                             selected = stateFilter == f,
                             onClick = { stateFilter = f },
@@ -138,7 +147,12 @@ fun QuestHelperScreen(onBack: () -> Unit) {
                         )
                     }
                 }
-                val shown = quests.filter { it.state == stateFilter }
+                // Status filter (ALL = every bucket) intersected with the name search (parity with iOS -applyFilter).
+                val shown =
+                    quests.filter {
+                        (stateFilter == "ALL" || it.state == stateFilter) &&
+                            (query.isBlank() || it.name.contains(query, ignoreCase = true))
+                    }
                 Text("${shown.size} quests", color = Color(0xFF9E9E9E), fontSize = 12.sp)
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(shown, key = { it.name }) { q ->
