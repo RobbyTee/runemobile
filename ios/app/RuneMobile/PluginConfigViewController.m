@@ -212,11 +212,13 @@
 @implementation MUITextEditor {
     NSString *_title; NSString *_initial; void (^_onDone)(NSString *);
     UITextView *_tv;
+    BOOL _secure;
 }
 
-- (instancetype)initWithTitle:(NSString *)title text:(NSString *)text onDone:(void (^)(NSString *))onDone {
+- (instancetype)initWithTitle:(NSString *)title text:(NSString *)text secure:(BOOL)secure onDone:(void (^)(NSString *))onDone {
     if ((self = [super init])) {
         _title = [title copy]; _initial = [text copy] ?: @""; _onDone = [onDone copy];
+        _secure = secure;
         self.modalPresentationStyle = UIModalPresentationFullScreen;
     }
     return self;
@@ -258,6 +260,7 @@
     _tv.autocorrectionType = UITextAutocorrectionTypeNo;
     _tv.autocapitalizationType = UITextAutocapitalizationTypeNone;
     _tv.keyboardAppearance = UIKeyboardAppearanceDark;
+    _tv.secureTextEntry = _secure; // secret config (API keys / webhook URLs): mask the typed value (parity with Android)
     [self.view addSubview:_tv];
 
     UILayoutGuide *sg = self.view.safeAreaLayoutGuide;
@@ -972,11 +975,15 @@ typedef NS_ENUM(NSInteger, MUINotifRow) {
 // CFG-9: multi-line string editor (desktop renders String as a wrapping JTextArea).
 - (void)editTextMultiline:(NSMutableDictionary *)it at:(NSIndexPath *)ip {
     NSString *cur = [it[@"value"] isKindOfClass:[NSString class]] ? it[@"value"] : @"";
+    BOOL secret = [it[@"secret"] boolValue];
     __weak typeof(self) ws = self;
-    MUITextEditor *ed = [[MUITextEditor alloc] initWithTitle:it[@"name"] text:cur onDone:^(NSString *text) {
-        [ws writeKey:it[@"key"] value:(text ?: @"") item:it];
-        [ws.table reloadRowsAtIndexPaths:@[ip] withRowAnimation:UITableViewRowAnimationNone];
-    }];
+    MUITextEditor *ed = [[MUITextEditor alloc] initWithTitle:it[@"name"]
+                                                        text:cur
+                                                      secure:secret
+                                                      onDone:^(NSString *text) {
+                                                          [ws writeKey:it[@"key"] value:(text ?: @"")item:it];
+                                                          [ws.table reloadRowsAtIndexPaths:@[ ip ] withRowAnimation:UITableViewRowAnimationNone];
+                                                      }];
     [self presentViewController:ed animated:YES completion:nil];
 }
 
@@ -1054,6 +1061,7 @@ typedef NS_ENUM(NSInteger, MUINotifRow) {
     NSString *cur = [it[@"value"] isKindOfClass:[NSString class]] ? it[@"value"] : @"";
     [ac addTextFieldWithConfigurationHandler:^(UITextField *tf) {
         tf.text = cur;
+        tf.secureTextEntry = [it[@"secret"] boolValue]; // defensive parity with Android's clamped-numeric gating
         if ([type isEqualToString:@"int"]) tf.keyboardType = UIKeyboardTypeNumberPad;
         else if ([type isEqualToString:@"double"]) tf.keyboardType = UIKeyboardTypeDecimalPad;
     }];
