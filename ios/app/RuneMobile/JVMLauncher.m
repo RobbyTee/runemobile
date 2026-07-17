@@ -118,6 +118,7 @@ static jmethodID gMuiPanelTextGet = NULL;   // getPanelText()Ljava/lang/String;
 static jmethodID gMuiHotkeyActions = NULL;  // hotkeyActionsJson()Ljava/lang/String; — KEY-1 fireable hotkeys (optional)
 static jmethodID gMuiBoundKeybinds = NULL;  // boundKeybindsJson()Ljava/lang/String; — KEY-1b every bound plugin keybind (optional)
 static jmethodID gMuiFireHotkey = NULL;     // fireHotkey(String,String)V — KEY-1 fire a plugin action-hotkey (optional)
+static jmethodID gMuiPublishNotif = NULL;   // publishNotification(String,String)V — dev "test notification" hook (optional)
 
 // Native Quest Helper reflow — the QuestHelperBridge facade (reflection into the external plugin).
 static jclass    gQhClass = NULL;       // global ref to net.runelite.client.headless.QuestHelperBridge
@@ -576,6 +577,11 @@ static BOOL ensureMui(void) {
     }
     gMuiFireHotkey = (*env)->GetStaticMethodID(env, global, "fireHotkey", "(Ljava/lang/String;Ljava/lang/String;)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiFireHotkey = NULL; }
+    gMuiPublishNotif = (*env)->GetStaticMethodID(env, global, "publishNotification", "(Ljava/lang/String;Ljava/lang/String;)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMuiPublishNotif = NULL;
+    }
     gMuiClass = global;   // publish only once fully resolved
     return YES;
 }
@@ -2508,6 +2514,23 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mobileFireHotkeyGroup"); }
     (*env)->DeleteLocalRef(env, jg);
     (*env)->DeleteLocalRef(env, jk);
+}
+
+// Dev-panel test hook: publish a host-origin notification through the shared bridge, exercising the whole
+// delivery path (queue -> nextNotification drain -> UNUserNotificationCenter) without an in-game trigger.
+// Mirrors Android's DEBUG long-press on the Shift key. No-op on an older jar without the method.
++ (void)devPublishTestNotification {
+    if (!ensureMui() || !gMuiPublishNotif)
+        return;
+    JNIEnv *env = gMainEnv;
+    jstring jt = (*env)->NewStringUTF(env, "RuneLite");
+    jstring jb = (*env)->NewStringUTF(env, "Notification delivery test");
+    (*env)->CallStaticVoidMethod(env, gMuiClass, gMuiPublishNotif, jt, jb);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.devPublishTestNotification");
+    }
+    (*env)->DeleteLocalRef(env, jt);
+    (*env)->DeleteLocalRef(env, jb);
 }
 
 + (NSString *)mobilePollEventsSince:(long long)sinceSeq {

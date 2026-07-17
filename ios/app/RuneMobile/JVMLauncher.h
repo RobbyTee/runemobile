@@ -110,6 +110,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// real socket drop — exercises the overlay + snapshot path only. No-op before the bridge is up. Main thread.
 + (void)devSimulateReconnect:(int)seconds;
 
+/// Developer test hook: publish a host-origin notification ("RuneLite" / "Notification delivery test") through
+/// the shared bridge, exercising the full delivery path (queue -> drain -> OS notification) without an in-game
+/// trigger. Mirrors Android's DEBUG Shift long-press. No-op before the bridge is up / on an older jar. Main thread.
++ (void)devPublishTestNotification;
+
 /// Pull the engine's latest composited frame as a UIImage (reverse JNI -> JavaBridge.getFramePixels).
 /// Returns nil before the first draw / if the VM isn't up yet. Call on the main thread.
 + (nullable UIImage *)latestFrame;

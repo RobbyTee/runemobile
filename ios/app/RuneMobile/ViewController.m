@@ -1461,7 +1461,14 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     reconnBtn.titleLabel.font = [UIFont systemFontOfSize:14];
     [reconnBtn addTarget:self action:@selector(onReconnectTest) forControlEvents:UIControlEventTouchUpInside];
 
-    self.devActionRow2 = [[UIStackView alloc] initWithArrangedSubviews:@[ snapBtn, self.perfHudButton, reconnBtn ]];
+    // Parity with Android's DEBUG Shift long-press: publish a host-origin notification through the shared
+    // bridge to exercise the whole delivery path (queue -> drain -> OS notification) without an in-game trigger.
+    UIButton *notifBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [notifBtn setTitle:@"Test notif" forState:UIControlStateNormal];
+    notifBtn.titleLabel.font = [UIFont systemFontOfSize:14];
+    [notifBtn addTarget:self action:@selector(onTestNotification) forControlEvents:UIControlEventTouchUpInside];
+
+    self.devActionRow2 = [[UIStackView alloc] initWithArrangedSubviews:@[ snapBtn, self.perfHudButton, reconnBtn, notifBtn ]];
     self.devActionRow2.translatesAutoresizingMaskIntoConstraints = NO;
     self.devActionRow2.axis = UILayoutConstraintAxisHorizontal;
     self.devActionRow2.distribution = UIStackViewDistributionFillEqually;
@@ -4977,6 +4984,18 @@ static int chatRowCanvasH(void) {
     }
     [JVMLauncher devSimulateReconnect:4];
     [self appendLine:@"[reconnect] simulating reconnect for 4s (UI only — socket untouched)"];
+}
+
+// Parity with Android's DEBUG Shift long-press: publish a host-origin notification so the full delivery path
+// (bridge queue -> nextNotification drain -> UNUserNotificationCenter) can be verified without an in-game
+// trigger. Dev-panel only — no Release user-facing surface.
+- (void)onTestNotification {
+    if (![JVMLauncher bridgeReady]) {
+        [self appendLine:@"[notif] bridge not ready (start the game first)"];
+        return;
+    }
+    [JVMLauncher devPublishTestNotification];
+    [self appendLine:@"[notif] published test notification (drains through the normal path)"];
 }
 
 // Developer-mode diagnostics: refresh the live readout (JVM / renderer / FPS / memory / session / bridge /
