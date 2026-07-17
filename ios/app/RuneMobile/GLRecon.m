@@ -112,6 +112,59 @@
 	log(@"[glrecon] ===== B0 done =====");
 }
 
++ (NSString *)recommendedRendererTier {
+    // 117HD is the clean high-end path; base GPU is the mid path; CPU is the safe floor. Query the two decisive
+    // signals: the Metal GPU family (Apple7+ has compute + GLES3.1-equiv features — the 117HD requirement) and a
+    // live native ES3 context that can render+read back an offscreen FBO (the base-GPU int[] blit path). Any
+    // failure short-circuits to CPU. Mirrors Android probeGpuCaps()'s tier -> {117hd, gpu, cpu} mapping.
+    @try {
+        BOOL metalHiTier = NO;
+        id<MTLDevice> mtl = MTLCreateSystemDefaultDevice();
+        if (mtl && @available(iOS 13.0, *)) {
+            metalHiTier = [mtl supportsFamily:MTLGPUFamilyApple7] || [mtl supportsFamily:MTLGPUFamilyApple8] || [mtl supportsFamily:MTLGPUFamilyApple9];
+        }
+
+        EAGLContext *ctx = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES3];
+        if (!ctx) {
+            return @"cpu"; // no native ES3 at all -> neither GPU tier is reachable
+        }
+        EAGLContext *prev = [EAGLContext currentContext];
+        [EAGLContext setCurrentContext:ctx];
+
+        // Prove windowless GPU rendering + readback works (same check the recon does) before promoting to base GPU.
+        GLuint tex = 0, fbo = 0;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+        GLenum fbs = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        glViewport(0, 0, 16, 16);
+        glClearColor(0.2f, 0.4f, 0.6f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glFinish();
+        unsigned char px[4] = {0, 0, 0, 0};
+        glReadPixels(8, 8, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        BOOL fboOk = (fbs == GL_FRAMEBUFFER_COMPLETE) && px[0] > 40 && px[0] < 62 && px[2] > 140 && px[2] < 165;
+
+        glDeleteFramebuffers(1, &fbo);
+        glDeleteTextures(1, &tex);
+        [EAGLContext setCurrentContext:prev];
+
+        if (fboOk && metalHiTier) {
+            return @"117hd";
+        }
+        if (fboOk) {
+            return @"gpu";
+        }
+        return @"cpu";
+    }
+    @catch (__unused NSException *e) {
+        return @"cpu"; // any probe fault -> the safe default; the crash cookie is the true net
+    }
+}
+
 @end
 
 #else   // MetalANGLE build: OpenGLES.framework (EAGL) is not linked, so this EAGL recon is compiled out. The stub
@@ -120,6 +173,11 @@
 + (void)runWithLog:(void (^)(NSString *line))log
 {
 	if (log) log(@"[glrecon] EAGL recon disabled in the MetalANGLE build (see gpu-angle / gpu-present probes)");
+}
++ (NSString *)recommendedRendererTier {
+    // The MetalANGLE build always runs on a Metal-backed context; ANGLE gives ES3.1+compute over Metal, so a
+    // modern device is 117HD-capable. Keep it optimistic here — the crash cookie is the recovery net.
+    return @"117hd";
 }
 @end
 #endif

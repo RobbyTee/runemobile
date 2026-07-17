@@ -1017,7 +1017,18 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     // GPU + 117HD plugins are loaded into the panel in every mode (RendererPanelStarter) so they're selectable;
     // flipping one there saves the preference (with a "restart to apply" message), and THIS reads it at launch.
     // base GPU uses the readback present (int[] frames like CPU); 117HD uses the CAEAGLLayer direct present.
-    NSString *pref = [[NSUserDefaults standardUserDefaults] stringForKey:@"rendererPref"] ?: @"cpu";
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    NSString *pref = [ud stringForKey:@"rendererPref"];
+    if (pref == nil && ![ud boolForKey:@"autoGpuFailed"]) {
+        // First run on a fresh install with no prior GPU failure: optimistically promote to the best renderer this
+        // hardware supports (parity with Android's probeGpuCaps auto-promote). The boot crash-cookie (P1-21)
+        // self-heals a bad promotion; autoGpuFailed latches re-promotion off once a promoted boot has failed.
+        pref = [GLRecon recommendedRendererTier];
+        [ud setObject:pref forKey:@"rendererPref"];
+        [self appendLine:[NSString stringWithFormat:@"[shell] auto-GPU: first-run caps probe -> default renderer %@", pref]];
+    }
+    if (pref == nil)
+        pref = @"cpu";
     BOOL wantGpu = [pref isEqualToString:@"gpu"];
     BOOL wantHd = [pref isEqualToString:@"117hd"];
     if ((wantHd || wantGpu) && [self hdBootCookiePresent]) {
@@ -1026,7 +1037,10 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         // user is never crash-looped out of the game, and tell them where to turn the GPU renderer back on.
         NSString *rname = wantHd ? @"117HD" : @"GPU";
         [self hdBootCookieClear];
-        [[NSUserDefaults standardUserDefaults] setObject:@"cpu" forKey:@"rendererPref"];
+        [ud setObject:@"cpu" forKey:@"rendererPref"];
+        // Latch off the first-run auto-promote so the caps probe never re-promotes a device that already failed once
+        // (parity with Android's !autoGpuFailed gate). A later explicit user pick in the panel clears this.
+        [ud setBool:YES forKey:@"autoGpuFailed"];
         pref = @"cpu";
         wantHd = NO;
         wantGpu = NO;
@@ -2984,7 +2998,11 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
 - (void)toggleRenderer:(NSString *)rendererKey {
     BOOL turnOn = ![[self rendererPref] isEqualToString:rendererKey];   // tapping the selected one turns it off
     NSString *newPref = turnOn ? rendererKey : @"cpu";
-    [[NSUserDefaults standardUserDefaults] setObject:newPref forKey:@"rendererPref"];
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    [ud setObject:newPref forKey:@"rendererPref"];
+    // An explicit pick clears the auto-fail latch (parity with Android's setRendererPref) so a user-chosen GPU mode
+    // still gets its one-shot crash protection and the caps probe respects the choice going forward.
+    [ud setBool:NO forKey:@"autoGpuFailed"];
     NSString *label = [rendererKey isEqualToString:@"117hd"] ? @"117HD" : @"GPU";
     NSString *msg = turnOn
         ? [NSString stringWithFormat:@"%@ will be your renderer the next time you launch.\n\nFully quit RuneLite (swipe it away) and relaunch to apply.", label]
