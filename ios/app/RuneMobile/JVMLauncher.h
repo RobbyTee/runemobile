@@ -90,6 +90,12 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Used by the boot-progress overlay to dismiss itself the tick real content first appears. Main thread only.
 + (int)renderedFrameWidth;
 
+/// The base-GPU present counter (JavaBridge.getGpuFrameSeq) — > 0 once the GPU readback seam has actually
+/// published a frame. Unlike renderedFrameSeq (CPU login frames bump it too) this is true GPU provenance, so
+/// the boot crash-cookie clears only after the GPU renderer has really presented. -1 before the bridge is up
+/// or on an older jar. Main thread only.
++ (int)gpuFrameSeq;
+
 /// JVM heap usage as "usedMB/maxMB" (JavaBridge.heapStats) — the Java-heap pressure the GC manages, distinct
 /// from the OS resident memory. nil before the bridge is up / on an older jar. Main thread only.
 + (nullable NSString *)heapStats;

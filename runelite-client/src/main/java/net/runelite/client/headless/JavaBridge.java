@@ -250,6 +250,11 @@ public final class JavaBridge
 	private static volatile int frameW;
 	private static volatile int frameH;
 	private static volatile int frameSeq;
+	// Bumped ONLY by gpuPublish (the base-GPU readback seam), so a non-zero value is hard proof the GPU renderer
+	// actually rendered + read back + published a real frame - unlike frameSeq (shared with the CPU snapshot) or
+	// isGpu (which flips the instant the renderer arms, before its first frame). The native boot crash-cookie
+	// clears only once this advances, so a GPU that arms then crashes before its first frame keeps the cookie set.
+	private static volatile int gpuFrameSeq;
 	private static int[] bufA;
 	private static int[] bufB;
 	private static boolean useA = true;
@@ -431,6 +436,7 @@ public final class JavaBridge
 		frameH = h;
 		frame = useA ? bufA : bufB;
 		frameSeq++;
+		gpuFrameSeq++;   // GPU-only present proof (see field decl): the boot crash-cookie clears off this
 		useA = !useA;
 		if (FRAME_DUMP)
 		{
@@ -512,6 +518,16 @@ public final class JavaBridge
 	public static int getFrameSeq()
 	{
 		return frameSeq;
+	}
+
+	/**
+	 * The base-GPU present counter: non-zero once {@link #gpuPublish} has published at least one real GPU frame.
+	 * The native boot crash-cookie reads this to distinguish "GPU renderer actually presented" from mere CPU
+	 * login frames (which also bump {@code frameSeq}), so it clears the cookie only after true GPU provenance.
+	 */
+	public static int getGpuFrameSeq()
+	{
+		return gpuFrameSeq;
 	}
 
 	/**

@@ -129,28 +129,35 @@
             return @"cpu"; // no native ES3 at all -> neither GPU tier is reachable
         }
         EAGLContext *prev = [EAGLContext currentContext];
-        [EAGLContext setCurrentContext:ctx];
+        if (![EAGLContext setCurrentContext:ctx]) {
+            return @"cpu"; // couldn't make the probe context current -> can't prove the GPU path; no prev to restore
+        }
 
-        // Prove windowless GPU rendering + readback works (same check the recon does) before promoting to base GPU.
-        GLuint tex = 0, fbo = 0;
-        glGenTextures(1, &tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-        glGenFramebuffers(1, &fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
-        GLenum fbs = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-        glViewport(0, 0, 16, 16);
-        glClearColor(0.2f, 0.4f, 0.6f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glFinish();
-        unsigned char px[4] = {0, 0, 0, 0};
-        glReadPixels(8, 8, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
-        BOOL fboOk = (fbs == GL_FRAMEBUFFER_COMPLETE) && px[0] > 40 && px[0] < 62 && px[2] > 140 && px[2] < 165;
+        BOOL fboOk = NO;
+        @try {
+            // Prove windowless GPU rendering + readback works (same check the recon does) before promoting to base GPU.
+            GLuint tex = 0, fbo = 0;
+            glGenTextures(1, &tex);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+            glGenFramebuffers(1, &fbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+            GLenum fbs = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+            glViewport(0, 0, 16, 16);
+            glClearColor(0.2f, 0.4f, 0.6f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glFinish();
+            unsigned char px[4] = {0, 0, 0, 0};
+            glReadPixels(8, 8, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+            fboOk = (fbs == GL_FRAMEBUFFER_COMPLETE) && px[0] > 40 && px[0] < 62 && px[2] > 140 && px[2] < 165;
 
-        glDeleteFramebuffers(1, &fbo);
-        glDeleteTextures(1, &tex);
-        [EAGLContext setCurrentContext:prev];
+            glDeleteFramebuffers(1, &fbo);
+            glDeleteTextures(1, &tex);
+        }
+        @finally {
+            [EAGLContext setCurrentContext:prev]; // always restore the caller's context, even if the probe threw
+        }
 
         if (fboOk && metalHiTier) {
             return @"117hd";
@@ -175,9 +182,11 @@
 	if (log) log(@"[glrecon] EAGL recon disabled in the MetalANGLE build (see gpu-angle / gpu-present probes)");
 }
 + (NSString *)recommendedRendererTier {
-    // The MetalANGLE build always runs on a Metal-backed context; ANGLE gives ES3.1+compute over Metal, so a
-    // modern device is 117HD-capable. Keep it optimistic here — the crash cookie is the recovery net.
-    return @"117hd";
+    // MetalANGLE build: EAGL is compiled out, so we can't run the native ES3 FBO probe the active build uses to
+    // gate the tier. Default to base GPU (@"gpu") rather than @"117hd" - ANGLE gives ES3.1+compute over Metal so
+    // 117HD is usually reachable, but without the live probe we don't assert the top tier here; the user can opt
+    // up in the renderer picker, and the boot crash-cookie is the recovery net either way.
+    return @"gpu";
 }
 @end
 #endif

@@ -5453,15 +5453,19 @@ static CGRect mapRectFromArr(NSArray *a) {
             [self appendLine:@"[shell] 117HD boot underway — crash cookie armed (clears on first GL present)"];
         }
     } else if (self.pendingRouteCGpu && self.launched && !self.hdBootCookieSettled) {
-        if (self.framesShown > 0) {
+        // Base GPU: clear ONLY on true GPU provenance. framesShown is not it - the CPU snapshot publishes login
+        // frames (bumping framesShown) before the engine flips into GPU mode, so clearing on framesShown would
+        // fire during CPU login, before any GPU shader ran. gpuFrameSeq is bumped solely by the GPU readback
+        // seam, so > 0 means the GPU renderer actually rendered + read back + presented a real frame.
+        if ([JVMLauncher gpuFrameSeq] > 0) {
             [self hdBootCookieClear];
             self.hdBootCookieArmed = NO;
             self.hdBootCookieSettled = YES;
             [self appendLine:@"[shell] GPU first frame — crash cookie cleared"];
-        } else if (!self.hdBootCookieArmed) {
+        } else if (!self.hdBootCookieArmed && self.framesShown > 0) {
             [self hdBootCookieArm];
             self.hdBootCookieArmed = YES;
-            [self appendLine:@"[shell] GPU boot underway — crash cookie armed (clears on first frame)"];
+            [self appendLine:@"[shell] GPU boot underway — crash cookie armed (clears on first GPU frame)"];
         }
     }
     // Lazy switch to direct present: keep blitting CPU frames (boot/login/loading stay visible) until the GPU has

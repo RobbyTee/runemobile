@@ -39,6 +39,7 @@ static _Atomic(JavaVM *) gVM = NULL;  // set right after JNI_CreateJavaVM; clear
 static JNIEnv   *gMainEnv = NULL;     // the UI thread's attached env (main thread only)
 static jclass    gBridgeClass = NULL; // global ref to net.runelite.client.headless.JavaBridge
 static jmethodID gMidW = NULL, gMidH = NULL, gMidSeq = NULL, gMidPixels = NULL;
+static jmethodID gMidGpuSeq = NULL;       // getGpuFrameSeq()I - base-GPU present proof (optional; older jars lack it)
 static jmethodID gMidInteractSeq = NULL;  // getInteractTapSeq()I — native haptic cue (optional; tolerate older jar)
 static jmethodID gMidHeapStats = NULL;    // heapStats()Ljava/lang/String; — dev diagnostics (optional)
 static jmethodID gMidSimReconnect = NULL; // devSimulateReconnect(I)V — dev "test reconnect" hook (optional)
@@ -267,6 +268,11 @@ static BOOL ensureBridge(void) {
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         gMidHeapStats = NULL;
+    }
+    gMidGpuSeq = (*env)->GetStaticMethodID(env, global, "getGpuFrameSeq", "()I");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidGpuSeq = NULL;
     }
     gMidSimReconnect = (*env)->GetStaticMethodID(env, global, "devSimulateReconnect", "(I)V");
     if ((*env)->ExceptionCheck(env)) {
@@ -1630,6 +1636,22 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     jint v = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidW);
     if ((*env)->ExceptionCheck(env)) {
         bridgeNoteClear(env, "JVMLauncher.renderedFrameWidth");
+        return -1;
+    }
+    return (int)v;
+}
+
+// The base-GPU present counter (JavaBridge.getGpuFrameSeq): >0 once the GPU readback seam has published a real
+// frame. Distinct from renderedFrameSeq (which CPU login frames also bump) - this is true GPU provenance, used
+// by the boot crash-cookie to clear only after the GPU renderer has actually presented. -1 before the bridge
+// is up or on an older jar without the method.
++ (int)gpuFrameSeq {
+    if (!ensureBridge() || !gMidGpuSeq || !gMainEnv)
+        return -1;
+    JNIEnv *env = gMainEnv;
+    jint v = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidGpuSeq);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.gpuFrameSeq");
         return -1;
     }
     return (int)v;
