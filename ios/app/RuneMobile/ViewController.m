@@ -2871,6 +2871,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         return;
     // 117HD (group "hd"): show ONLY the iOS-ported settings (each safe to setConfig from RLHDStarter).
     // Exposing the rest would recompile an unported shader and stop the plugin. Others show full config.
+    // KEEP IN SYNC with Android ConfigScreen.kt HD_CONFIG_WHITELIST and RLHDStarter.java's SAFETY-CRITICAL block.
     NSArray<NSString *> *whitelist = [group isEqualToString:@"hd"] ? @[
         @"sceneResolutionScale",
         @"antiAliasingMode",

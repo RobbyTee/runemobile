@@ -109,6 +109,24 @@ private data class ConfigGroup(
     val items: List<ConfigItem>,
 )
 
+// 117HD (group "hd") config safety whitelist: ONLY the iOS-ported settings, each safe to setConfig live.
+// Exposing any other "hd" key would recompile an unported shader / hit an iOS bridge limit and stop the plugin.
+// KEEP IN SYNC with iOS ViewController.m -presentConfigEditorForPlugin and the SAFETY-CRITICAL block in
+// runelite-client/.../headless/RLHDStarter.java (which force-corrects the unsafe keys every launch).
+private val HD_CONFIG_WHITELIST =
+    setOf(
+        "sceneResolutionScale",
+        "antiAliasingMode",
+        "shadowMode",
+        "shadowResolution",
+        "enableShadowTransparency",
+        "dynamicLights",
+        "tiledLighting",
+        "normalMapping",
+        "parallaxOcclusionMappingToggle",
+        "drawDistance",
+    )
+
 /**
  * ENH-B01 / UX-PLUGCFG-01: bucket the flat item list under its @ConfigSection headings. Ungrouped items (no
  * `section`) lead in a single header-less group; each declared section follows in the bridge's section order,
@@ -180,7 +198,9 @@ fun ConfigScreen(
         loading = true
         val json = withContext(Dispatchers.IO) { JvmLauncher.onBridge { JvmLauncher.getPluginConfig(group) }.get() }
         val schema = parseConfig(json)
-        items = schema.items
+        // 117HD safety whitelist (parity with iOS): show only the ported/safe "hd" keys; empty sections then drop
+        // out of groupConfig automatically. Every other plugin group shows its full config unchanged.
+        items = if (group == "hd") schema.items.filter { it.key in HD_CONFIG_WHITELIST } else schema.items
         sections = schema.sections
         // Seed any not-yet-seen section's collapse state from closedByDefault; keep user toggles on re-read.
         for (s in schema.sections) if (s.key !in collapsed) collapsed[s.key] = s.closedByDefault
