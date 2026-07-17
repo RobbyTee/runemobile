@@ -204,12 +204,21 @@
     NSDictionary *p = self.shown[(NSUInteger)indexPath.row];
     NSString *author = [p[@"author"] isKindOfClass:[NSString class]] ? p[@"author"] : @"";
     NSString *desc = [p[@"description"] isKindOfClass:[NSString class]] ? p[@"description"] : @"";
+    NSString *reason = [p[@"unavailable"] isKindOfClass:[NSString class]] ? p[@"unavailable"] : @"";
     cell.textLabel.text = [p[@"displayName"] description];
-    cell.detailTextLabel.text = author.length ? [NSString stringWithFormat:@"%@ — %@", author, desc] : desc;
+    if (reason.length > 0) {
+        // Unavailable plugin: surface the real reason string (red), matching Android's HubRowItem. The color
+        // reset in the else-branch is mandatory every call — cells are reused across rows with mixed states.
+        cell.detailTextLabel.text = [NSString stringWithFormat:@"✕ %@", reason];
+        cell.detailTextLabel.textColor = [UIColor colorWithRed:0.898 green:0.451 blue:0.451 alpha:1.0];
+    } else {
+        cell.detailTextLabel.text = author.length ? [NSString stringWithFormat:@"%@ — %@", author, desc] : desc;
+        cell.detailTextLabel.textColor = [UIColor colorWithWhite:0.66 alpha:1.0];
+    }
 
     UIButton *btn = (UIButton *)cell.accessoryView;
     btn.tag = indexPath.row;
-    BOOL unavailable = [p[@"unavailable"] isKindOfClass:[NSString class]] && [p[@"unavailable"] length] > 0;
+    BOOL unavailable = reason.length > 0;
     BOOL installed = [p[@"installed"] boolValue];
     BOOL installing = [p[@"installing"] boolValue];
     if (installing) {
