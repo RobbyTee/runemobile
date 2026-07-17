@@ -291,6 +291,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, assign) BOOL mapOpen;             // polled from the bridge map snapshot (~10 Hz)
 @property (nonatomic, assign) BOOL mapWasSearching;     // FIX-14: engine WORLDMAP_SEARCHING edge (dismiss kbd on commit)
 @property (nonatomic, assign) CGRect mapCloseCanvas;    // engine CLOSE rect (canvas px; zero = unknown)
+@property (nonatomic, strong) UIButton *closeMapButton; // ✕ native world-map close, shown only while mapOpen (proxies the engine CLOSE rect)
 @property (nonatomic, assign) CGRect mapSearchCanvas;   // engine SEARCH rect (canvas px)
 @property (nonatomic, assign) CGRect mapWindowCanvas;   // the whole map window rect (canvas px)
 @property (nonatomic, assign) CGRect mapKeyCanvas;      // the Key list rect — swipe there scrolls the list
@@ -1245,6 +1246,23 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [self.screenshotButton addGestureRecognizer:shotLp];
     [self.screen addSubview:self.screenshotButton];
 
+    // A native ✕ close for the world map (iOS has no hardware/gesture Back to hang it off like Android). Shown
+    // only while the map is open, pinned top-right of the safe area (a corner the map's chrome-hide leaves empty).
+    // Tapping it proxies the engine's own CLOSE rect via a precise click, so the player needn't land the tiny X.
+    self.closeMapButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.closeMapButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.closeMapButton setTitle:@"✕" forState:UIControlStateNormal];
+    self.closeMapButton.accessibilityLabel = @"Close map";
+    self.closeMapButton.accessibilityHint = @"Closes the world map";
+    self.closeMapButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
+    self.closeMapButton.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.55];
+    self.closeMapButton.layer.cornerRadius = 8;
+    self.closeMapButton.hidden = YES;
+    [self.closeMapButton addTarget:self
+                            action:@selector(onCloseWorldMap)
+                  forControlEvents:UIControlEventTouchUpInside];
+    [self.screen addSubview:self.closeMapButton];
+
     // Manual Picture-in-Picture: pops the game into the floating window without leaving the app, and doubles
     // as the auto-start diagnostic (manual-works/auto-doesn't isolates the system's auto-engage gate). Hidden
     // until setupPictureInPicture arms the controller.
@@ -1566,6 +1584,15 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
                                                  constant:25],
         [self.kbFab.widthAnchor constraintEqualToConstant:44],
         [self.kbFab.heightAnchor constraintEqualToConstant:36],
+
+        // World-map ✕ close: top-right of the safe area (empty while the map's chrome-hide clears the gear/
+        // controls/kbFab/dock). Same icon-button metrics as the others.
+        [self.closeMapButton.topAnchor constraintEqualToAnchor:g.topAnchor
+                                                      constant:8],
+        [self.closeMapButton.trailingAnchor constraintEqualToAnchor:g.trailingAnchor
+                                                           constant:-8],
+        [self.closeMapButton.widthAnchor constraintEqualToConstant:44],
+        [self.closeMapButton.heightAnchor constraintEqualToConstant:36],
 
         // (Legacy cluster constraints below stay valid but the buttons are hidden — see hideLegacyCluster.)
         // In-game keyboard control — first row of the legacy cluster.
@@ -5466,8 +5493,26 @@ static CGRect mapRectFromArr(NSArray *a) {
     self.controlsBox.hidden = open;
     self.kbFab.hidden = open;
     self.panelDock.view.hidden = open;
+    self.closeMapButton.hidden = !open; // inverse of the rest: the ✕ shows only WHILE the map is open
     [self appendLine:open ? @"[map] world map OPEN -> map pan/taps, chrome hidden"
                           : @"[map] world map closed -> chrome restored"];
+}
+
+// The ✕ close handler (parity with Android's Back callback): proxy the engine's own CLOSE rect via a precise
+// click when we know it, else fall back to Esc (rare: map just opened, close-rect snapshot not yet polled).
+- (void)onCloseWorldMap {
+    if (![JVMLauncher bridgeReady])
+        return;
+    CGRect cc = self.mapCloseCanvas;
+    if (cc.size.width > 0 && cc.size.height > 0) {
+        int gx = (int)lround(CGRectGetMidX(cc));
+        int gy = (int)lround(CGRectGetMidY(cc));
+        [JVMLauncher postClickPreciseX:gx y:gy button:1];
+        [self appendLine:[NSString stringWithFormat:@"[map] close -> precise click @%d,%d", gx, gy]];
+    } else {
+        [JVMLauncher postKeyStroke:AWT_VK_ESCAPE];
+        [self appendLine:@"[map] close -> Esc (no close rect yet)"];
+    }
 }
 
 // Scale the game view so the map window fills the full screen width, centred vertically, with black bands
