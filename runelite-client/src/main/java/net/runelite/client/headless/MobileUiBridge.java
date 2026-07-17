@@ -611,6 +611,11 @@ public final class MobileUiBridge
 					.append(",\"hr\":").append(snapInt(s, "xpPerHour"))
 					.append(",\"left\":").append(snapInt(s, "xpRemainingToGoal"))
 					.append(",\"actions\":").append(snapInt(s, "actionsInSession"))
+					// P1-9: actions-left / actions-hr / time-to-level so iOS matches Android's XP panel. timeToLevelSec
+					// reuses XpTrackerBridge.parseDuration (same source of truth) so the two facades can't diverge.
+					.append(",\"actionsLeft\":").append(snapInt(s, "actionsRemainingToGoal"))
+					.append(",\"actionsHr\":").append(snapInt(s, "actionsPerHour"))
+					.append(",\"timeToLevelSec\":").append(XpTrackerBridge.parseDuration(snapString(s, "timeTillGoalShort")))
 					.append(",\"startLevel\":").append(snapInt(s, "startLevel"))
 					.append(",\"endLevel\":").append(snapInt(s, "endLevel"))
 					.append(",\"progress\":").append((int) Math.round(snapDouble(s, "skillProgressToGoal")));
@@ -726,6 +731,21 @@ public final class MobileUiBridge
 		catch (Exception e)
 		{
 			return 0;
+		}
+	}
+
+	private static String snapString(Object snap, String field)
+	{
+		try
+		{
+			final java.lang.reflect.Field f = snap.getClass().getDeclaredField(field);
+			f.setAccessible(true);
+			final Object v = f.get(snap);
+			return v == null ? null : v.toString();
+		}
+		catch (Exception e)
+		{
+			return null;
 		}
 	}
 

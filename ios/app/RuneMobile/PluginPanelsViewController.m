@@ -1462,6 +1462,16 @@ static NSString *XpFmt(long n) {
     return [NSString stringWithFormat:@"%.1fM", n / 1000000.0];
 }
 
+// Collapse seconds to a compact duration, matching Android XpTrackerScreen.fmtTime ("1h 20m" / "5m 3s" / "9s").
+static NSString *XpTimeFmt(long sec) {
+    long h = sec / 3600, m = (sec % 3600) / 60, s = sec % 60;
+    if (h > 0)
+        return [NSString stringWithFormat:@"%ldh %ldm", h, m];
+    if (m > 0)
+        return [NSString stringWithFormat:@"%ldm %lds", m, s];
+    return [NSString stringWithFormat:@"%lds", s];
+}
+
 @interface XpTrackerViewController ()
 @property (nonatomic, strong) UIView *drawer;
 @property (nonatomic, strong) UILabel *headerLabel;
@@ -1610,6 +1620,8 @@ static NSString *XpFmt(long n) {
 - (UIView *)skillBox:(NSDictionary *)s {
     long gained = [s[@"gained"] longLongValue], hr = [s[@"hr"] longLongValue];
     long left = [s[@"left"] longLongValue], actions = [s[@"actions"] longLongValue];
+    // P1-9: parity with Android's XP panel — time-to-level + actions-left (from MobileUiBridge.xpTrackerJson).
+    long timeToLevelSec = [s[@"timeToLevelSec"] longLongValue], actionsLeft = [s[@"actionsLeft"] longLongValue];
 
     UIStackView *box = [[UIStackView alloc] init];
     box.axis = UILayoutConstraintAxisVertical;
@@ -1639,11 +1651,16 @@ static NSString *XpFmt(long n) {
     leftCol.axis = UILayoutConstraintAxisVertical; leftCol.spacing = 2;
     [leftCol addArrangedSubview:[self statLabel:[NSString stringWithFormat:@"XP gained: %@", XpFmt(gained)] right:NO]];
     [leftCol addArrangedSubview:[self statLabel:[NSString stringWithFormat:@"XP/hour: %@", XpFmt(hr)] right:NO]];
+    // Only shown when the plugin has a reachable goal (timeToLevelSec > 0, matching Android's guard).
+    if (timeToLevelSec > 0)
+        [leftCol addArrangedSubview:[self statLabel:[NSString stringWithFormat:@"Time to level: %@", XpTimeFmt(timeToLevelSec)] right:NO]];
 
     UIStackView *rightCol = [[UIStackView alloc] init];
     rightCol.axis = UILayoutConstraintAxisVertical; rightCol.spacing = 2;
     [rightCol addArrangedSubview:[self statLabel:[NSString stringWithFormat:@"XP left: %@", XpFmt(left)] right:YES]];
     [rightCol addArrangedSubview:[self statLabel:[NSString stringWithFormat:@"Actions: %@", XpFmt(actions)] right:YES]];
+    if (actionsLeft > 0)
+        [rightCol addArrangedSubview:[self statLabel:[NSString stringWithFormat:@"Actions left: %@", XpFmt(actionsLeft)] right:YES]];
 
     UIStackView *cols = [[UIStackView alloc] init];
     cols.axis = UILayoutConstraintAxisHorizontal; cols.distribution = UIStackViewDistributionFillEqually; cols.spacing = 6;

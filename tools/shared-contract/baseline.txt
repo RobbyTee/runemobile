@@ -462,6 +462,8 @@ PAYLOAD MobileChromeBridge tabs
 PAYLOAD MobileChromeBridge topLevelId
 PAYLOAD MobileChromeBridge viewport
 PAYLOAD MobileUiBridge actions
+PAYLOAD MobileUiBridge actionsHr
+PAYLOAD MobileUiBridge actionsLeft
 PAYLOAD MobileUiBridge available
 PAYLOAD MobileUiBridge bind
 PAYLOAD MobileUiBridge endLevel
@@ -485,6 +487,7 @@ PAYLOAD MobileUiBridge skill
 PAYLOAD MobileUiBridge skills
 PAYLOAD MobileUiBridge startLevel
 PAYLOAD MobileUiBridge status
+PAYLOAD MobileUiBridge timeToLevelSec
 PAYLOAD MobileUiBridge totalGained
 PAYLOAD MobileUiBridge totalHr
 PAYLOAD MobileUiBridge writeId

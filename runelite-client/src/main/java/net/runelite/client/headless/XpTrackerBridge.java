@@ -332,7 +332,12 @@ public final class XpTrackerBridge
 	 * infinity glyph when no rate is known). The native contract wants whole seconds, so parse it back; an
 	 * unparseable / infinite value becomes {@code -1} (the native side renders that as "&infin;").
 	 */
-	private static int parseDuration(String s)
+	/**
+	 * Parse a colon-separated {@code timeTillGoalShort} ("H:MM:SS" / "MM:SS") into whole seconds, or {@code -1}
+	 * for an empty / infinity ("∞") value. Package-private so {@link MobileUiBridge#xpTrackerJson()} reuses the
+	 * exact same conversion — the two facades emit {@code timeToLevelSec} from one source of truth (P1-9).
+	 */
+	static int parseDuration(String s)
 	{
 		if (s == null || s.isEmpty())
 		{
