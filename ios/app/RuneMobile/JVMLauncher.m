@@ -114,6 +114,7 @@ static jmethodID gMuiPanelMove = NULL;      // panelMove(II)Ljava/lang/String;
 static jmethodID gMuiPanelTextActive = NULL;// isPanelTextActive()Z
 static jmethodID gMuiPanelTextGet = NULL;   // getPanelText()Ljava/lang/String;
 static jmethodID gMuiHotkeyActions = NULL;  // hotkeyActionsJson()Ljava/lang/String; — KEY-1 fireable hotkeys (optional)
+static jmethodID gMuiBoundKeybinds = NULL;  // boundKeybindsJson()Ljava/lang/String; — KEY-1b every bound plugin keybind (optional)
 static jmethodID gMuiFireHotkey = NULL;     // fireHotkey(String,String)V — KEY-1 fire a plugin action-hotkey (optional)
 
 // Native Quest Helper reflow — the QuestHelperBridge facade (reflection into the external plugin).
@@ -536,6 +537,11 @@ static BOOL ensureMui(void) {
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiPanelTextGet = NULL; }
     gMuiHotkeyActions = (*env)->GetStaticMethodID(env, global, "hotkeyActionsJson", "()Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiHotkeyActions = NULL; }
+    gMuiBoundKeybinds = (*env)->GetStaticMethodID(env, global, "boundKeybindsJson", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMuiBoundKeybinds = NULL;
+    }
     gMuiFireHotkey = (*env)->GetStaticMethodID(env, global, "fireHotkey", "(Ljava/lang/String;Ljava/lang/String;)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiFireHotkey = NULL; }
     gMuiClass = global;   // publish only once fully resolved
@@ -2367,6 +2373,15 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     if (!ensureMui() || !gMuiHotkeyActions) return nil;
     JNIEnv *env = gMainEnv;
     return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiHotkeyActions));
+}
+
+// KEY-1b: every currently-bound plugin Keybind/ModifierlessKeybind across all enabled plugins, same JSON shape
+// [{group,key,label,keyCode,mods,bind}] as mobileHotkeyActions. nil on an older jar without the method.
++ (NSString *)mobileBoundKeybinds {
+    if (!ensureMui() || !gMuiBoundKeybinds)
+        return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiBoundKeybinds));
 }
 
 // KEY-1: fire a plugin action-hotkey by (config group, key) — the bridge reads the live Keybind and synthesizes

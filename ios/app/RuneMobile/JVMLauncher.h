@@ -377,6 +377,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// KEY-1: curated fireable plugin action-hotkeys + current bindings, JSON [{group,key,label,keyCode,mods,bind}].
 + (nullable NSString *)mobileHotkeyActions;
 
+/// KEY-1b: every currently-bound plugin keybind (MobileUiBridge.boundKeybindsJson), same JSON shape as
+/// mobileHotkeyActions. Drives the dynamic hotkey picker so it lists all bound actions, not a curated few.
++ (nullable NSString *)mobileBoundKeybinds;
+
 /// KEY-1: fire a plugin action-hotkey by (config group, key) — the bridge reads the live Keybind + synthesizes it.
 + (void)mobileFireHotkeyGroup:(NSString *)group key:(NSString *)key;
 

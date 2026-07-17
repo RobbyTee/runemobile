@@ -6852,7 +6852,9 @@ static CGRect mapRectFromArr(NSArray *a) {
 
 // Refresh the cached action list from the bridge (current bindings) and return it.
 - (NSArray *)refreshHotkeyActions {
-    NSString *json = [JVMLauncher mobileHotkeyActions];
+    // KEY-1b: list EVERY currently-bound plugin keybind (parity with Android's Hotkeys screen), not just the
+    // curated hotkeyActionsJson set. Same {group,key,label,keyCode,mods,bind} shape, so nothing downstream changes.
+    NSString *json = [JVMLauncher mobileBoundKeybinds];
     NSArray *arr = nil;
     if (json.length) {
         arr = parseBridgeJSON(json, "ViewController.refreshHotkeyActions");
