@@ -6916,7 +6916,16 @@ static CGRect mapRectFromArr(NSArray *a) {
     NSArray<NSString *> *parts = [b.accessibilityIdentifier componentsSeparatedByString:@"|"];
     if (parts.count != 2) return;
     [[UIImpactFeedbackGenerator new] impactOccurred];
-    [JVMLauncher mobileFireHotkeyGroup:parts[0] key:parts[1]];
+    // Quick-hop prev/next is a ~8s relog under the hood, not a keypress: route it through the
+    // world-hop bridge (same path the World Switcher's prev/next buttons use) instead of firing
+    // the raw keybind, which does nothing when the hopper plugin isn't focused. Mirrors Android.
+    BOOL isWorldHop = [parts[0] isEqualToString:@"worldhopper"] &&
+                      ([parts[1] isEqualToString:@"nextKey"] || [parts[1] isEqualToString:@"previousKey"]);
+    if (isWorldHop) {
+        [JVMLauncher worldHopDirection:[parts[1] isEqualToString:@"previousKey"]];
+    } else {
+        [JVMLauncher mobileFireHotkeyGroup:parts[0] key:parts[1]];
+    }
     [self appendLine:[NSString stringWithFormat:@"[shell] hotkey fire %@/%@", parts[0], parts[1]]];
 }
 
