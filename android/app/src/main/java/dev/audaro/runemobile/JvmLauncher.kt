@@ -236,6 +236,12 @@ object JvmLauncher {
     // SC-2/CFG-10: reset an entire plugin/config group to defaults (returns {"ok":..,"writeId":n}). Off the UI thread.
     external fun nativeResetPluginConfig(group: String): String
 
+    // P2-4: reset a single config key to its plugin default (returns {"ok":..,"writeId":n}). Off the UI thread.
+    external fun nativeResetConfig(
+        group: String,
+        key: String,
+    ): String
+
     // SC-1/NOTIF-2: the serialized default Notification seed for the per-item editor. Off the UI thread.
     external fun nativeNotificationDefaults(): String
 
@@ -664,6 +670,11 @@ object JvmLauncher {
     fun flushConfig() = nativeFlushConfig()
 
     fun resetPluginConfig(group: String) = nativeResetPluginConfig(group)
+
+    fun resetConfig(
+        group: String,
+        key: String,
+    ) = nativeResetConfig(group, key)
 
     fun notificationDefaults() = nativeNotificationDefaults()
 

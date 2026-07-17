@@ -89,6 +89,7 @@ static jmethodID g_midGetPluginConfig = nullptr, g_midSetConfig = nullptr, g_mid
 static jmethodID g_midBoundKeybinds = nullptr, g_midFireHotkey = nullptr;
 static jmethodID g_midFlushConfig = nullptr;   // A8: persist pending config writes when the app backgrounds
 static jmethodID g_midResetPluginConfig = nullptr;     // SC-2/CFG-10: whole-group reset to defaults
+static jmethodID g_midResetConfig = nullptr;           // P2-4: single-key reset to default
 static jmethodID g_midNotificationDefaults = nullptr;  // SC-1/NOTIF-2: default Notification seed JSON
 // AP-2a bridge-amortized read surface (best-effort; a null only disables that one feature):
 //   nextNotification() -> "titlebody" or null  (Finding 9: NotificationManager delivery)
@@ -634,6 +635,7 @@ static bool publishBridge(JNIEnv *env) {
             g_midProcessedWriteId = midOpt(env, mug, "getProcessedWriteId", "()J");
             g_midFlushConfig      = midOpt(env, mug, "flushConfig", "()Ljava/lang/String;");   // A8 background flush
             g_midResetPluginConfig   = midOpt(env, mug, "resetPluginConfig", "(Ljava/lang/String;)Ljava/lang/String;");   // SC-2 reset
+            g_midResetConfig = midOpt(env, mug, "resetConfig", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"); // P2-4 single-key reset
             g_midNotificationDefaults = midOpt(env, mug, "notificationDefaults", "()Ljava/lang/String;");                  // SC-1 defaults
             g_midBoundKeybinds        = midOpt(env, mug, "boundKeybindsJson", "()Ljava/lang/String;");                    // user-defined hotkeys (optional)
             g_midFireHotkey           = midOpt(env, mug, "fireHotkey", "(Ljava/lang/String;Ljava/lang/String;)V");        // fire one (optional)
@@ -1850,6 +1852,26 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeResetPluginConfig(JNIEnv *artEnv, jobject, jstring jGroup) {
     if (!mobileUiReady() || !g_midResetPluginConfig) return artEnv->NewStringUTF("");
     return mobileUiStrArg(artEnv, g_midResetPluginConfig, jGroup);
+}
+// P2-4: reset a single config key to its plugin default. Returns the bridge JSON ack ({"ok":..,"writeId":n}).
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeResetConfig(JNIEnv *artEnv, jobject, jstring jGroup, jstring jKey) {
+    if (!mobileUiReady())
+        return artEnv->NewStringUTF("");
+    std::string group = jstr(artEnv, jGroup), key = jstr(artEnv, jKey);
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !g_midResetConfig)
+        return artEnv->NewStringUTF("");
+    jstring hg = hs->NewStringUTF(group.c_str()), hk = hs->NewStringUTF(key.c_str());
+    jstring r = (jstring)hs->CallStaticObjectMethod(g_mobileUiCls, g_midResetConfig, hg, hk);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (hg)
+        hs->DeleteLocalRef(hg);
+    if (hk)
+        hs->DeleteLocalRef(hk);
+    if (r)
+        hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
 }
 // SC-1/NOTIF-2: the serialized default Notification seed JSON for the per-item editor (or "" if unresolved).
 extern "C" JNIEXPORT jstring JNICALL

@@ -280,6 +280,20 @@ fun ConfigScreen(
                     JvmLauncher.onBridgeTouch { JvmLauncher.setConfig(group, item.key, newVal) }
                     pendingFlush++ // FIX-8: arm the debounced crash-safe flush
                 }
+
+                // P2-4: revert ONE key to its plugin default (parity with iOS's swipe-to-reset). Same wait-for-writeId
+                // then re-pull pattern as the whole-plugin reset, but scoped to a single key so siblings are untouched.
+                fun onItemReset(item: ConfigItem) {
+                    JvmLauncher.onBridgeTouch {
+                        val ack = JvmLauncher.resetConfig(group, item.key)
+                        val wid = parseWriteId(ack)
+                        var tries = 0
+                        while (wid > 0 && JvmLauncher.processedWriteId() < wid && tries++ < 60) {
+                            Thread.sleep(10)
+                        }
+                        reloadKey++ // re-pull the schema off the bridge thread → recompose with the default value
+                    }
+                }
                 // UX-KBD-1: pad the list above the soft keyboard so editors deep in the sheet aren't hidden
                 // under it (text fields bring themselves into view on focus once the viewport shrinks).
                 LazyColumn(Modifier.fillMaxSize().imePadding()) {
@@ -297,7 +311,10 @@ fun ConfigScreen(
                         val isCollapsed = meta != null && (collapsed[meta.key] ?: meta.closedByDefault)
                         if (!isCollapsed) {
                             items(g.items, key = { it.key }) { item ->
-                                ConfigItemControl(item) { newVal -> onItemChange(item, newVal) }
+                                ConfigItemControl(
+                                    item,
+                                    onReset = { onItemReset(item) },
+                                ) { newVal -> onItemChange(item, newVal) }
                                 HorizontalDivider(color = Color(0x22FFFFFF))
                             }
                         }
@@ -342,9 +359,14 @@ private fun ConfigSectionHeader(
     }
 }
 
+// P2-4: config-item types that support a per-key reset-to-default (mirrors the iOS swipe-to-reset whitelist).
+// notification / keybind / unknown are excluded (keybind has its own Clear; notification/unknown have no default).
+private val RESETTABLE_TYPES = setOf("boolean", "int", "double", "string", "enum", "color", "dimension", "set", "font")
+
 @Composable
 private fun ConfigItemControl(
     item: ConfigItem,
+    onReset: () -> Unit,
     onChange: (String) -> Unit,
 ) {
     val label = item.name.ifEmpty { item.key }
@@ -398,6 +420,15 @@ private fun ConfigItemControl(
                 }
 
                 else -> {} // text-ish controls render full-width below
+            }
+            // Per-key reset affordance (whitelisted types): reverts just this setting to its plugin default.
+            if (item.type in RESETTABLE_TYPES) {
+                TextButton(
+                    onClick = onReset,
+                    modifier = Modifier.semantics { contentDescription = "Reset $label to default" },
+                ) {
+                    Text("↺", color = Color(0xFFB0B0B0), fontSize = 16.sp)
+                }
             }
         }
         when (item.type) {
