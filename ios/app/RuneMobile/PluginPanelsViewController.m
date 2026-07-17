@@ -2357,6 +2357,10 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
 @property (nonatomic, strong) NSTimer *timer;
 @property (nonatomic, copy) NSString *lastJson;
 @property (nonatomic, copy) NSArray<NSDictionary *> *profiles;
+// Busy-lock during a profile switch (parity with Android): the id being switched to; while set, other rows are
+// disabled and the target shows "switching…". Cleared when the target goes active or after a ~15s safety timeout.
+@property (nonatomic, strong) NSNumber *pendingSwitchId;
+@property (nonatomic, strong) NSDate *pendingSwitchDeadline;
 @end
 
 @implementation ConfigProfilesViewController
@@ -2481,13 +2485,34 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
 
 - (void)refresh {
     NSString *json = [JVMLauncher profilesJson] ?: @"{}";
-    if (self.lastJson && [json isEqualToString:self.lastJson])
-        return; // unchanged -> keep the built rows
-    self.lastJson = json;
+    BOOL unchanged = self.lastJson && [json isEqualToString:self.lastJson];
     NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
     if (![d isKindOfClass:[NSDictionary class]])
         d = @{};
     NSArray *profiles = [d[@"profiles"] isKindOfClass:[NSArray class]] ? d[@"profiles"] : @[];
+
+    // Resolve the busy lock every tick (even when the row list is unchanged): drop it once the target profile
+    // is active, or after the safety timeout so a failed switch can't brick the panel. Forcing a rebuild
+    // re-enables the rows.
+    if (self.pendingSwitchId != nil) {
+        BOOL targetActive = NO;
+        for (NSDictionary *p in profiles) {
+            if ([p isKindOfClass:[NSDictionary class]] && [p[@"id"] longLongValue] == self.pendingSwitchId.longLongValue && [p[@"active"] boolValue]) {
+                targetActive = YES;
+                break;
+            }
+        }
+        BOOL timedOut = self.pendingSwitchDeadline && [self.pendingSwitchDeadline timeIntervalSinceNow] <= 0;
+        if (targetActive || timedOut) {
+            self.pendingSwitchId = nil;
+            self.pendingSwitchDeadline = nil;
+            unchanged = NO; // force a rebuild to drop the "switching…" state
+        }
+    }
+
+    if (unchanged)
+        return; // unchanged -> keep the built rows
+    self.lastJson = json;
     self.profiles = profiles;
 
     for (UIView *v in [self.stack.arrangedSubviews copy]) {
@@ -2508,6 +2533,8 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
     BOOL active = [p[@"active"] boolValue];
     BOOL internal = [p[@"internal"] boolValue];
     BOOL sync = [p[@"sync"] boolValue];
+    BOOL busy = (self.pendingSwitchId != nil); // a switch is in flight: lock every row until it settles
+    BOOL isTarget = busy && [p[@"id"] longLongValue] == self.pendingSwitchId.longLongValue;
 
     UIButton *row = [UIButton buttonWithType:UIButtonTypeCustom];
     row.tag = index;
@@ -2525,6 +2552,8 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
         [label appendString:@"  ⟳"]; // synced to the RuneLite account
     if (internal)
         [label appendString:@"  (system)"]; // engine profile, not user-switchable
+    if (isTarget)
+        [label appendString:@"  ⏳ switching…"]; // this row's switch is in flight
 
     if (active) {
         row.backgroundColor = [UIColor colorWithRed:0.20 green:0.45 blue:0.22 alpha:1.0]; // active = green
@@ -2539,14 +2568,19 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
     [row setTitle:label forState:UIControlStateNormal];
 
     // Active or internal profiles are not switch targets (switching to the active one is a no-op; internal
-    // engine profiles aren't user-selectable, matching the desktop panel).
-    if (!active && !internal) {
+    // engine profiles aren't user-selectable, matching the desktop panel). While a switch is in flight every
+    // row is locked (no tap target) so racing taps do nothing (parity with Android's busy lock).
+    if (!active && !internal && !busy) {
         [row addTarget:self action:@selector(onTapProfile:) forControlEvents:UIControlEventTouchUpInside];
+    } else if (busy && !active && !internal) {
+        [row setTitleColor:XpGray(0.40) forState:UIControlStateNormal]; // dim the locked, non-target rows
     }
     return row;
 }
 
 - (void)onTapProfile:(UIButton *)b {
+    if (self.pendingSwitchId != nil)
+        return; // a switch is already in flight — ignore racing taps
     if (b.tag < 0 || b.tag >= (NSInteger)self.profiles.count)
         return;
     NSDictionary *p = self.profiles[(NSUInteger)b.tag];
@@ -2564,7 +2598,12 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
                                           style:UIAlertActionStyleDefault
                                         handler:^(UIAlertAction *act) {
                                             [JVMLauncher switchProfile:pid];
-                                            ws.lastJson = nil; // force a rebuild so the active flag flips on the next poll
+                                            // Arm the busy lock (parity with Android): disable every row + show
+                                            // "switching…" until the target goes active or the 15s timeout fires.
+                                            ws.pendingSwitchId = @(pid);
+                                            ws.pendingSwitchDeadline = [NSDate dateWithTimeIntervalSinceNow:15.0];
+                                            ws.lastJson = nil; // force a rebuild so the busy state renders now
+                                            [ws refresh];
                                         }]];
     [self presentViewController:a animated:YES completion:nil];
 }
