@@ -289,6 +289,7 @@ static NSString * const kChatHandleKey = @"__chat__";
             // Persist the overlay's free location (top-left, canvas px) through the bridge.
             [JVMLauncher overlaySetLocation:h.overlayName x:cx y:cy];
         }
+        [JVMLauncher mobileFlushConfig]; // crash-safe per-action persist (parity with Android's onDrop flush)
         [self holdHandle:h.overlayName];
         self.dragging = nil;
     }
@@ -313,6 +314,7 @@ static NSString * const kChatHandleKey = @"__chat__";
         for (NSArray<NSString *> *c in corners) {
             [ac addAction:[UIAlertAction actionWithTitle:c[0] style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
                 [JVMLauncher overlaySetPosition:h.overlayName position:c[1]];
+                [JVMLauncher mobileFlushConfig]; // persist the snap now (parity with Android's per-action flush)
                 [self holdHandle:h.overlayName];
             }]];
         }
@@ -320,6 +322,7 @@ static NSString * const kChatHandleKey = @"__chat__";
     [ac addAction:[UIAlertAction actionWithTitle:@"Reset to default" style:UIAlertActionStyleDestructive
                                          handler:^(UIAlertAction *a) {
         [JVMLauncher overlayReset:h.overlayName];
+        [JVMLauncher mobileFlushConfig]; // persist the reset now (parity with Android's onResetAll flush)
         [self holdHandle:h.overlayName];
     }]];
     [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];

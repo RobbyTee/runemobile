@@ -2768,6 +2768,7 @@ static NSString *TtFarmStatus(id stateObj, long remainingSec, UIColor **outColor
                                                   style:destructive ? UIAlertActionStyleDestructive : UIAlertActionStyleDefault
                                                 handler:^(UIAlertAction *act) {
                                                     [JVMLauncher invokeInfoBoxMenu:(int)engineIndex option:option];
+                                                    [JVMLauncher mobileFlushConfig]; // persist now (parity with Android's per-action flush; iOS has no periodic flush)
                                                     ws.lastJson = nil; // the action may add/remove/move infoboxes -> rebuild
                                                 }]];
     }
