@@ -1020,19 +1020,25 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     NSString *pref = [[NSUserDefaults standardUserDefaults] stringForKey:@"rendererPref"] ?: @"cpu";
     BOOL wantGpu = [pref isEqualToString:@"gpu"];
     BOOL wantHd = [pref isEqualToString:@"117hd"];
-    if (wantHd && [self hdBootCookiePresent]) {
-        // The last 117HD boot armed the cookie and died before its first GL present (GL-init/shader-compile
-        // crash or an OOM kill mid-warmup). Fall back to the always-works software renderer so the user is
-        // never crash-looped out of the game, and tell them where to turn 117HD back on.
+    if ((wantHd || wantGpu) && [self hdBootCookiePresent]) {
+        // The last GPU boot (base GPU OR 117HD) armed the cookie and died before its first GL present (GL-init/
+        // shader-compile crash or an OOM kill mid-warmup). Fall back to the always-works software renderer so the
+        // user is never crash-looped out of the game, and tell them where to turn the GPU renderer back on.
+        NSString *rname = wantHd ? @"117HD" : @"GPU";
         [self hdBootCookieClear];
         [[NSUserDefaults standardUserDefaults] setObject:@"cpu" forKey:@"rendererPref"];
         pref = @"cpu";
         wantHd = NO;
-        [self appendLine:@"[shell] 117HD did not survive its last launch — reverted to the standard renderer"];
+        wantGpu = NO;
+        [self appendLine:[NSString stringWithFormat:@"[shell] %@ did not survive its last launch — reverted to the "
+                                                    @"standard renderer",
+                                                    rname]];
         UIAlertController *ac = [UIAlertController
-            alertControllerWithTitle:@"HD renderer didn't start"
-                             message:@"117HD crashed while starting last time, so this launch uses the standard "
-                                     @"renderer. You can turn 117HD back on in the plugins panel."
+            alertControllerWithTitle:[NSString stringWithFormat:@"%@ renderer didn't start", rname]
+                             message:[NSString stringWithFormat:@"%@ crashed while starting last time, so this "
+                                                                @"launch uses the standard renderer. You can turn "
+                                                                @"%@ back on in the plugins panel.",
+                                                                rname, rname]
                       preferredStyle:UIAlertControllerStyleAlert];
         [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:ac animated:YES completion:nil];
@@ -5408,12 +5414,15 @@ static CGRect mapRectFromArr(NSArray *a) {
     // which skips the rest of this method for the entire pre-first-frame window - exactly the window this overlay
     // covers. Downstream update* calls (reconnect/fatal) run after that return, so they can't clear this one.
     [self updateBootStatusOverlay];
-    // 117HD crash cookie: CLEAR on the very first GL present (survival proof — deliberately looser than the
-    // reveal below, which also waits for sceneWarmedUp; a user quitting at the login screen must not demote),
-    // ARM once the JVM is demonstrably running a 117HD boot (a frame has published) but hasn't presented yet.
-    // Clear is checked first so a boot that presents before the shell's first CPU blit never arms at all.
-    // Gated on the 117HD flag (not just gpuPresentArmed, which an ANGLE build also sets for base GPU): only
-    // a 117HD death may write the marker, because only the 117HD pref consumes it at the next Play tap.
+    // GPU crash cookie (P1-21: now protects BOTH GPU tiers — the pref consumes it for base GPU and 117HD alike).
+    // CLEAR on proof the GPU renderer produced a usable frame; ARM once its boot is underway but hasn't yet, so a
+    // boot that dies in GL-init/shader-compile falls back to CPU next launch. The survival proof differs by tier:
+    //   - 117HD (direct present): the first GL present (deliberately looser than the sceneWarmedUp reveal below;
+    //     a user quitting at the login screen must not demote). Armed once a CPU boot frame has published.
+    //   - base GPU (readback present): the first blitted frame (framesShown>0) — it never sets gpuPresentArmed nor
+    //     presents off-thread, so hasPresentedFrame never fires for it; its readback frame IS the survival proof.
+    //     Armed as soon as its boot is running and frameless (before that first readback frame).
+    // Clear is checked first so a boot that produces its frame before the shell notices never stays armed.
     if (self.pendingRouteCZoneDirect && self.gpuPresentArmed && !self.hdBootCookieSettled) {
         if ([RouteCBridge hasPresentedFrame]) {
             [self hdBootCookieClear];
@@ -5424,6 +5433,17 @@ static CGRect mapRectFromArr(NSArray *a) {
             [self hdBootCookieArm];
             self.hdBootCookieArmed = YES;
             [self appendLine:@"[shell] 117HD boot underway — crash cookie armed (clears on first GL present)"];
+        }
+    } else if (self.pendingRouteCGpu && self.launched && !self.hdBootCookieSettled) {
+        if (self.framesShown > 0) {
+            [self hdBootCookieClear];
+            self.hdBootCookieArmed = NO;
+            self.hdBootCookieSettled = YES;
+            [self appendLine:@"[shell] GPU first frame — crash cookie cleared"];
+        } else if (!self.hdBootCookieArmed) {
+            [self hdBootCookieArm];
+            self.hdBootCookieArmed = YES;
+            [self appendLine:@"[shell] GPU boot underway — crash cookie armed (clears on first frame)"];
         }
     }
     // Lazy switch to direct present: keep blitting CPU frames (boot/login/loading stay visible) until the GPU has
