@@ -7423,10 +7423,11 @@ static CGRect mapRectFromArr(NSArray *a) {
         // Record is "titlebodysoundvolume" (NOTIF-1). sound+volume are always the LAST two fields, so
         // parse from the end — that way a body that itself contains the separator is still reassembled whole.
         NSArray<NSString *> *parts = [n componentsSeparatedByString:sepStr];
-        NSString *title, *body, *soundType = @"";
+        NSString *title, *body, *soundType = @"", *volumeStr = @"";
         if (parts.count >= 4) {
             title = parts[0];
             soundType = parts[parts.count - 2];
+            volumeStr = parts[parts.count - 1];
             body = [[parts subarrayWithRange:NSMakeRange(1, parts.count - 3)] componentsJoinedByString:sepStr];
         } else {   // legacy 2-field record: title␟body split on the first separator
             NSRange sep = [n rangeOfString:sepStr];
@@ -7437,10 +7438,14 @@ static CGRect mapRectFromArr(NSArray *a) {
         UNMutableNotificationContent *c = [[UNMutableNotificationContent alloc] init];
         c.title = title;
         c.body = body;
-        // NOTIF-1: honor the desktop notification-sound type. OFF → deliver the banner silently; NATIVE/CUSTOM →
-        // the platform default sound (no sandbox source for a user's custom .wav, so CUSTOM collapses to default);
-        // unspecified (older 2-arg path) → default. Volume (parts[last]) is advisory — iOS has no per-banner gain.
-        c.sound = [soundType isEqualToString:@"OFF"] ? nil : [UNNotificationSound defaultSound];
+        // NOTIF-1: honor the desktop notification-sound type AND the per-notification volume (parity with
+        // Android's deliverNotification silent = soundType=="OFF" || volume==0). OFF or volume==0 → deliver
+        // the banner silently; NATIVE/CUSTOM with volume>0 → the platform default sound (no sandbox source
+        // for a user's custom .wav, so CUSTOM collapses to default); unspecified volume (-1, legacy 2-arg
+        // path) never forces silence on its own.
+        NSInteger volume = volumeStr.length ? [volumeStr integerValue] : -1;
+        BOOL silent = [soundType isEqualToString:@"OFF"] || volume == 0;
+        c.sound = silent ? nil : [UNNotificationSound defaultSound];
         UNNotificationRequest *req = [UNNotificationRequest requestWithIdentifier:[[NSUUID UUID] UUIDString]
                                                                          content:c trigger:nil];
         [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:req withCompletionHandler:nil];
