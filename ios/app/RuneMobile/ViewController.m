@@ -823,6 +823,27 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     // #1: the "Tap to Play" cover sits ABOVE everything (game, HUD veneers, panel dock, debug panel) so the
     // cold-start experience is the polished play screen, not the W1 scaffolding. Dismissed on launch.
     [self buildLaunchScreen];
+
+    // Immersive fullscreen (parity with Android's sticky edge-to-edge, MainActivity enterImmersive): hide the
+    // status bar + home indicator so the game fills the whole screen with no clock/battery/signal chrome,
+    // matching the target Jagex OSRS Mobile look. Apply immediately rather than waiting for the next appearance
+    // query. This VC is the window's rootViewController directly (AppDelegate), so the per-VC overrides below win.
+    [self setNeedsStatusBarAppearanceUpdate];
+    [self setNeedsUpdateOfHomeIndicatorAutoHidden];
+}
+
+// Immersive-chrome overrides (see the enterImmersive parity note in viewDidLoad). The status bar auto-reveals
+// transiently on a top-edge swipe (UIKit default for prefersStatusBarHidden), matching Android's swipe-to-peek.
+- (BOOL)prefersStatusBarHidden {
+    return YES;
+}
+
+- (UIStatusBarAnimation)preferredStatusBarUpdateAnimation {
+    return UIStatusBarAnimationSlide;
+}
+
+- (BOOL)prefersHomeIndicatorAutoHidden {
+    return YES;
 }
 
 #pragma mark - #1 Tap-to-Play front screen
@@ -2709,6 +2730,10 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         self.bgKeepTask = UIBackgroundTaskInvalid;
     }
     if (self.launched) [self startKeepaliveEngine];
+    // Re-assert immersive chrome (parity with Android's onWindowFocusChanged re-hide): a modal, interruption, or
+    // the background round-trip can leave the status bar visible, so restore the hidden state on every resume.
+    [self setNeedsStatusBarAppearanceUpdate];
+    [self setNeedsUpdateOfHomeIndicatorAutoHidden];
     [self appendLine:@"[shell] foregrounded -> background pump stopped"];
 }
 
