@@ -524,6 +524,9 @@ typedef NS_ENUM(NSInteger, MUINotifRow) {
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *sectionCollapsed;
 // The item currently being edited via the system color picker (so the delegate callback knows the key/type).
 @property (nonatomic, strong) NSMutableDictionary *colorEditItem;
+// CFG debounced crash-safety flush: each write arms a 1s one-shot; a burst of edits collapses to one flush ~1s
+// after the last edit, so a crash/force-quit before Done/background still persists the edit (parity with Android).
+@property (nonatomic, strong) NSTimer *pendingFlushTimer;
 @end
 
 @implementation PluginConfigViewController
@@ -590,9 +593,18 @@ typedef NS_ENUM(NSInteger, MUINotifRow) {
 }
 
 - (void)onDone {
-    // Persist edits now — iOS won't run RuneLite's shutdown/periodic flush when the app closes.
+    // Persist edits now — iOS won't run RuneLite's shutdown/periodic flush when the app closes. Cancel the
+    // debounce timer first so it can't fire a redundant flush after this VC is dismissed.
+    [self.pendingFlushTimer invalidate];
+    self.pendingFlushTimer = nil;
     [JVMLauncher mobileFlushConfig];
     [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)dealloc {
+    // The block captures no self (mobileFlushConfig is a class method), but the NSTimer retains its target
+    // until invalidated — kill it here so it never outlives the controller if dismissed by some other path.
+    [_pendingFlushTimer invalidate];
 }
 
 // Read getPluginConfig(group) and bucket items into sections (declaration order).
@@ -1146,6 +1158,15 @@ typedef NS_ENUM(NSInteger, MUINotifRow) {
     // unified log in the hardened build.
     NSLog(@"[plugincfg] %@.%@ = %@ : %@", self.group, key, value, ack ?: @"(nil)");
 #endif
+    // CFG debounced crash-safety flush (parity with Android FIX-8): reset a 1s one-shot on every write so a burst
+    // of edits collapses to a single flush ~1s after the last edit. mobileFlushConfig is a fire-and-forget async
+    // enqueue safe to call redundantly; onDone/dealloc invalidate the timer so it never outlives this VC.
+    [self.pendingFlushTimer invalidate];
+    self.pendingFlushTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
+                                                             repeats:NO
+                                                               block:^(NSTimer *t) {
+                                                                   [JVMLauncher mobileFlushConfig];
+                                                               }];
 }
 
 #pragma mark - keybind helpers (raw "keyCode:modifiers" AWT form <-> humanized label)
