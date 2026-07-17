@@ -239,6 +239,14 @@ class MainActivity : AppCompatActivity() {
     private var lastChatX = Int.MIN_VALUE // last chat-at-top relocation sent (send only on change)
     private var lastChatY = Int.MIN_VALUE
 
+    // P2-3 chat-at-top user override (canvas px): the auto placement is the safe-area inset base; the user can
+    // drag the "Chat" handle in overlay edit-mode to nudge it, and that offset is persisted + re-applied. Reset-all
+    // clears it. chatBaseX/Y are the last computed auto base (so the edit handle can turn absolute coords → offset).
+    private var chatBaseX = 0
+    private var chatBaseY = 0
+    private var chatUserDX = 0
+    private var chatUserDY = 0
+
     // A3 enlarged native chat-tab veneer (bigger touch targets over the relocated engine chat row).
     private lateinit var chatTabOverlay: ChatPillView
 
@@ -382,6 +390,9 @@ class MainActivity : AppCompatActivity() {
         // stops itself so a forgotten backgrounded app doesn't hold the process (and drain battery) indefinitely.
         private const val PREFS_KEEPALIVE = "keepalive"
         private const val KEY_KEEPALIVE_ENABLED = "enabled"
+        private const val PREFS_CHAT = "chat" // chat-at-top user override
+        private const val KEY_CHAT_DX = "chatOverrideX"
+        private const val KEY_CHAT_DY = "chatOverrideY"
         private const val KEEPALIVE_IDLE_STOP_MS = 600_000L
 
         // AWT virtual-key codes (java.awt.event.KeyEvent) the engine's onKeyStroke expects.
@@ -613,14 +624,45 @@ class MainActivity : AppCompatActivity() {
                 }
                 onResetAll = {
                     Log.i(TAG, "overlay-edit: reset all")
+                    // Also drop the chat-at-top override → next tick re-applies the automatic safe-area placement.
+                    chatUserDX = 0
+                    chatUserDY = 0
+                    getSharedPreferences(PREFS_CHAT, MODE_PRIVATE)
+                        .edit()
+                        .remove(KEY_CHAT_DX)
+                        .remove(KEY_CHAT_DY)
+                        .apply()
+                    lastChatX = Int.MIN_VALUE
+                    lastChatY = Int.MIN_VALUE
                     JvmLauncher.onBridgeTouch {
                         for (b in overlayEditView.currentNames()) JvmLauncher.overlayReset(b)
                         JvmLauncher.flushConfig()
                     }
                 }
                 onHandleMenu = { name -> showOverlayHandleMenu(name) }
+                onChatMove = { cx, cy ->
+                    // Absolute canvas coords from the handle → offset from the current auto base; relocate live.
+                    chatUserDX = cx - chatBaseX
+                    chatUserDY = cy - chatBaseY
+                    lastChatX = cx
+                    lastChatY = cy
+                    JvmLauncher.onBridgeTouch { JvmLauncher.relocateChat(cx, cy, true) }
+                }
+                onChatCommit = {
+                    getSharedPreferences(PREFS_CHAT, MODE_PRIVATE)
+                        .edit()
+                        .putInt(KEY_CHAT_DX, chatUserDX)
+                        .putInt(KEY_CHAT_DY, chatUserDY)
+                        .apply()
+                    Log.i(TAG, "chat-edit: moved -> offset ($chatUserDX,$chatUserDY)")
+                }
                 onDone = { exitOverlayEditMode() }
             }
+        // Restore any persisted chat-at-top override so applyChatAtTop honours it from the first frame.
+        getSharedPreferences(PREFS_CHAT, MODE_PRIVATE).let {
+            chatUserDX = it.getInt(KEY_CHAT_DX, 0)
+            chatUserDY = it.getInt(KEY_CHAT_DY, 0)
+        }
         chromeOverlay = ChromeOverlayView(this)
         chromeOverlay.onTabTap = { idx ->
             Log.i(TAG, "a6: native tab $idx tap -> openTab")
@@ -2416,7 +2458,21 @@ class MainActivity : AppCompatActivity() {
                             }
                         if (json != null) {
                             val boxes = parseOverlayBoxes(json)
-                            runOnUiThread { if (overlayEditMode) overlayEditView.setBoxes(boxes) }
+                            runOnUiThread {
+                                if (overlayEditMode) {
+                                    overlayEditView.setBoxes(boxes)
+                                    // Offer the draggable "Chat" handle only while chat-at-top is live and its
+                                    // bounds are known (post-relocate rect from the chrome snapshot).
+                                    val cr = chatRectCanvas
+                                    overlayEditView.setChatBox(
+                                        if (lastChatX >= 0 && cr != null) {
+                                            OverlayEditView.Box(OverlayEditView.CHAT_HANDLE, cr[0], cr[1], cr[2], cr[3])
+                                        } else {
+                                            null
+                                        },
+                                    )
+                                }
+                            }
                         }
                         Thread.sleep(400)
                     }
@@ -3130,8 +3186,11 @@ class MainActivity : AppCompatActivity() {
         val ky = fh.toFloat() / vh
         val ins = safeInsetsLTR()
         val margin = 8 // canvas-px breathing room from the safe edge
-        val chatX = Math.round(ins[0] * kx) + margin
-        val chatY = Math.round(ins[1] * ky) + margin
+        chatBaseX = Math.round(ins[0] * kx) + margin
+        chatBaseY = Math.round(ins[1] * ky) + margin
+        // Honour the user's edit-mode override (P2-3); clamp on-canvas so a stale offset can't push it off-frame.
+        val chatX = (chatBaseX + chatUserDX).coerceIn(0, (fw - 1).coerceAtLeast(0))
+        val chatY = (chatBaseY + chatUserDY).coerceIn(0, (fh - 1).coerceAtLeast(0))
         if (chatX == lastChatX && chatY == lastChatY) return
         lastChatX = chatX
         lastChatY = chatY

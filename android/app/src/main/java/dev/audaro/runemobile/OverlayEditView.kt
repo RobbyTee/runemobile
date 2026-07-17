@@ -48,7 +48,17 @@ class OverlayEditView(
     /** A tap (no real drag) on [name]'s handle: host shows the snap-to-corner / reset menu. */
     var onHandleMenu: ((name: String) -> Unit)? = null
 
+    /** Live drag of the synthetic "Chat" handle → new chatbox top-left in CANVAS px (host relocates the engine chat). */
+    var onChatMove: ((canvasX: Int, canvasY: Int) -> Unit)? = null
+
+    /** Chat handle released → host persists the override. */
+    var onChatCommit: (() -> Unit)? = null
+
     private var boxes: List<Box> = emptyList()
+
+    // Synthetic draggable chatbox handle, present only while chat-at-top relocation is active (host feeds it). It
+    // is dragged like the overlay boxes but moves the live engine chat instead of an overlay-preferred-location.
+    private var chatBox: Box? = null
 
     // Drag state. dragW/dragH (view px) drive the on-screen box; dragCw/dragCh are the box's ORIGINAL canvas-px
     // size, cached on grab so the commit clamp uses the exact integer footprint (no view-px round-trip drift).
@@ -115,6 +125,17 @@ class OverlayEditView(
         invalidate()
     }
 
+    /** Feed the live chatbox bounds (canvas px) while chat-at-top is active, or null to remove the handle. The
+     *  box being dragged is preserved so the live relocate isn't fought by the poll. */
+    fun setChatBox(box: Box?) {
+        if (dragName == CHAT_HANDLE) return
+        chatBox = box
+        invalidate()
+    }
+
+    /** boxes + the synthetic chat handle (when present) — the full set drawn and hit-tested. */
+    private fun allBoxes(): List<Box> = chatBox?.let { boxes + it } ?: boxes
+
     /** Names of the overlays currently shown (for Reset-all). */
     fun currentNames(): List<String> = boxes.map { it.name }
 
@@ -131,8 +152,8 @@ class OverlayEditView(
         if (visibility != VISIBLE) return
         val sx = sx()
         val sy = sy()
-        // Movable-overlay boxes (the dragged one is drawn from its live drag rect, others from fed bounds).
-        for (b in boxes) {
+        // Movable-overlay boxes + the chat handle (the dragged one is drawn from its live drag rect, others fed).
+        for (b in allBoxes()) {
             val dragging = b.name == dragName
             val l: Float
             val t: Float
@@ -152,7 +173,7 @@ class OverlayEditView(
             rrf.set(l, t, r, bot)
             canvas.drawRect(rrf, if (dragging) fillActive else fill)
             canvas.drawRect(rrf, border)
-            val name = prettyOverlayName(b.name)
+            val name = if (b.name == CHAT_HANDLE) "Chat" else prettyOverlayName(b.name)
             val tw = label.measureText(name)
             val lx = l + 3f * dp
             val ly = t + 13f * dp
@@ -181,9 +202,10 @@ class OverlayEditView(
     ): Box? {
         val sx = sx()
         val sy = sy()
-        // Topmost (last-drawn) box under the point wins.
-        for (i in boxes.indices.reversed()) {
-            val b = boxes[i]
+        // Topmost (last-drawn) box under the point wins; the chat handle is drawn last so it wins ties.
+        val all = allBoxes()
+        for (i in all.indices.reversed()) {
+            val b = all[i]
             val l = b.cx * sx
             val t = b.cy * sy
             val r = (b.cx + b.cw) * sx
@@ -227,6 +249,10 @@ class OverlayEditView(
                 if (dragName == null) return true
                 dragLeft = (event.x - grabDX).coerceIn(0f, (width - dragW).coerceAtLeast(0f))
                 dragTop = (event.y - grabDY).coerceIn(0f, (height - dragH).coerceAtLeast(0f))
+                if (dragName == CHAT_HANDLE) {
+                    // Relocate the live engine chat as the finger moves (iOS overlayEditMoveChatToCanvasX parity).
+                    onChatMove?.invoke(canvasXOf(dragLeft), canvasYOf(dragTop))
+                }
                 invalidate()
                 return true
             }
@@ -236,17 +262,16 @@ class OverlayEditView(
                 if (name != null && event.actionMasked == MotionEvent.ACTION_UP) {
                     val moved = hypot(event.x - downX, event.y - downY)
                     val quick = event.eventTime - event.downTime <= TAP_MAX_MS
-                    if (moved <= touchSlop && quick) {
+                    if (name == CHAT_HANDLE) {
+                        // The chat already tracked the finger via onChatMove; just persist the final spot. A pure
+                        // tap leaves the offset unchanged, so committing is harmless (no snap/reset menu here).
+                        onChatMove?.invoke(canvasXOf(dragLeft), canvasYOf(dragTop))
+                        onChatCommit?.invoke()
+                    } else if (moved <= touchSlop && quick) {
                         // A tap, not a drag: open the snap/reset menu (parity with iOS's per-handle action sheet).
                         onHandleMenu?.invoke(name)
                     } else {
-                        val sx = sx()
-                        val sy = sy()
-                        val cw = MainActivity.canvasW
-                        val ch = MainActivity.canvasH
-                        val cx = (dragLeft / sx).roundToInt().coerceIn(0, (cw - dragCw).coerceAtLeast(0))
-                        val cy = (dragTop / sy).roundToInt().coerceIn(0, (ch - dragCh).coerceAtLeast(0))
-                        onDrop?.invoke(name, cx, cy)
+                        onDrop?.invoke(name, canvasXOf(dragLeft), canvasYOf(dragTop))
                     }
                 }
                 dragName = null
@@ -255,5 +280,15 @@ class OverlayEditView(
             }
         }
         return false
+    }
+
+    // View-px drag top-left → clamped canvas-px top-left, using the box's original canvas footprint.
+    private fun canvasXOf(left: Float): Int = (left / sx()).roundToInt().coerceIn(0, (MainActivity.canvasW - dragCw).coerceAtLeast(0))
+
+    private fun canvasYOf(top: Float): Int = (top / sy()).roundToInt().coerceIn(0, (MainActivity.canvasH - dragCh).coerceAtLeast(0))
+
+    companion object {
+        // Sentinel overlay name for the synthetic chat handle (mirrors iOS's kChatHandleKey).
+        const val CHAT_HANDLE = "__chat__"
     }
 }
