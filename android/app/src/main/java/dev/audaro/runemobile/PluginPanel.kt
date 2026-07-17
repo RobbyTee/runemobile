@@ -588,6 +588,47 @@ private fun KeepaliveRow() {
 }
 
 /**
+ * P2-1 (`android-inapp-dev-panel`): the "Developer mode" switch. Unlike a BuildConfig.DEBUG gate this persists and
+ * works in Release builds (parity with iOS's developerMode NSUserDefaults toggle) — when ON, MainActivity shows the
+ * live perf chip (fps · heap · thermal) + the developer panel (diag readout, Simulate-reconnect). OFF = zero cost.
+ */
+@Composable
+private fun DeveloperModeRow() {
+    val ctx = LocalContext.current
+    val prefs = remember { ctx.getSharedPreferences("dev", Context.MODE_PRIVATE) }
+    var enabled by remember { mutableStateOf(prefs.getBoolean("developerMode", false)) }
+    Surface(
+        color = Color(0xFF1B1B1B),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Developer mode", color = Color(0xFF80CBC4), fontSize = 11.sp)
+                Text("Show the perf chip (fps · heap · thermal) and developer tools", color = Color.White, fontSize = 13.sp)
+            }
+            Switch(
+                checked = enabled,
+                onCheckedChange = {
+                    enabled = it
+                    prefs.edit().putBoolean("developerMode", it).apply()
+                    // Live-apply so the chip/panel appear or vanish without a relaunch.
+                    (ctx as? MainActivity)?.onDeveloperModeChanged(it)
+                },
+                modifier =
+                    Modifier.semantics {
+                        contentDescription = "Developer mode, ${if (enabled) "on" else "off"}"
+                        stateDescription = if (enabled) "On" else "Off"
+                    },
+            )
+        }
+    }
+}
+
+/**
  * PROD-QA-07 (GATE row 9) — the on-device identity/disclosure surface. The honest unofficial / not-affiliated /
  * ban-risk framing + open-source attribution previously lived only in the README (invisible on the phone); this
  * is the same text rendered in-app, reachable from the launcher's "More" grid. Pairs with the RuneMobile name +
@@ -847,6 +888,7 @@ private fun LauncherGrid(
         // Scrolls with the grid (was a fixed row above the list) so the pinned chrome stays just title + search.
         RuneLiteAccountRow()
         KeepaliveRow() // PARITY-P0-1: background-session keepalive toggle (default ON)
+        DeveloperModeRow() // P2-1: developer-mode toggle (perf chip + dev panel; default OFF)
         SectionLabel("Renderers")
         TileGrid(
             listOf(

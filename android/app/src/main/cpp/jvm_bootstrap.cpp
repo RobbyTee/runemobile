@@ -75,6 +75,9 @@ static jmethodID g_midInvokeMenuEntry = nullptr;
 // FIX-3 idle keepalive: JavaBridge.keepAlive() — bump the idle-logout timer on a native-UI touch (optional;
 // best-effort so an older staged jar without the method still boots).
 static jmethodID g_midKeepAlive = nullptr;
+// P2-1 dev panel: JavaBridge.heapStats()->String and devSimulateReconnect(int) — both optional (older jars lack
+// them; the native calls degrade to a no-op / empty string).
+static jmethodID g_midHeapStats = nullptr, g_midSimReconnect = nullptr;
 static jclass    g_menuPeekCls = nullptr;
 static jmethodID g_midMenuSnapshot = nullptr, g_midMenuPublishSeq = nullptr;
 
@@ -251,6 +254,10 @@ static std::atomic<int> g_lastFrameH{0};
 // Phase 3 (auto-GPU watchdog): resolved from librlawt via dlsym when direct present is armed; returns the count of
 // frames presented by the GPU/117HD renderer (0 if not armed / renderer never activated). Polled by Kotlin.
 static uint64_t (*g_routecFramesPresented)() = nullptr;
+// P2-4 dev perf chip: monotonic count of CPU-path frames actually blitted to the Surface (incremented after
+// each unlockAndPost below). The GPU direct-present path stands the CPU thread down, so the unified frame count
+// exposed to Kotlin prefers the routec counter when armed and falls back to this for cpu/base-gpu boots.
+static std::atomic<uint64_t> g_cpuPresentCount{0};
 // Present seam (cont.): in direct-present mode the CPU present thread no longer runs (it's where g_lastFrameW/H
 // were set), so librlawt publishes the live canvas dims here each frame — touch->game coordinate mapping
 // (JvmLauncher.frameWidth/Height) depends on them, else clicks map off-canvas.
@@ -586,6 +593,8 @@ static bool publishBridge(JNIEnv *env) {
     // FIX-3 idle keepalive: best-effort (a missing one only disables the idle-reset, never the render path) so
     // an older staged jar lacking keepAlive still boots.
     g_midKeepAlive = midOpt(env, global, "keepAlive", "()V");
+    g_midHeapStats = midOpt(env, global, "heapStats", "()Ljava/lang/String;"); // P2-1 dev panel (optional)
+    g_midSimReconnect = midOpt(env, global, "devSimulateReconnect", "(I)V");   // P2-1 dev panel (optional)
     g_bridgeCls = global;   // publish only once fully resolved
     LOGI("bridge: JavaBridge facade published (shiftHeld=%s keepAlive=%s)",
          g_midSetShiftHeld ? "on" : "off", g_midKeepAlive ? "on" : "off");
@@ -1268,6 +1277,7 @@ static void *renderLoop(void *) {
                                 env->ReleasePrimitiveArrayCritical(arr, px, JNI_ABORT);
                             }
                             ANativeWindow_unlockAndPost(win);
+                            g_cpuPresentCount.fetch_add(1, std::memory_order_relaxed); // P2-4 dev fps chip
                         }
                     }
                     env->DeleteLocalRef(arr);
@@ -1712,6 +1722,40 @@ Java_dev_audaro_runemobile_JvmLauncher_nativeFrameHeight(JNIEnv *, jobject) { re
 extern "C" JNIEXPORT jlong JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeGpuFramesPresented(JNIEnv *, jobject) {
     return g_routecFramesPresented ? (jlong) g_routecFramesPresented() : 0L;
+}
+// P2-1 dev perf chip: a unified monotonic present count across renderers — the GPU direct-present counter when
+// armed (the CPU thread stands down then), else the CPU blit counter. Diffed once/sec by the chip for fps.
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeFramesPresented(JNIEnv *, jobject) {
+    if (g_routecFramesPresented) {
+        uint64_t g = g_routecFramesPresented();
+        if (g > 0)
+            return (jlong)g;
+    }
+    return (jlong)g_cpuPresentCount.load(std::memory_order_relaxed);
+}
+// P2-1 dev panel: JVM heap usage as "usedMB/maxMB" (JavaBridge.heapStats). "" before the bridge is up / older jar.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeHeapStats(JNIEnv *artEnv, jobject) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_bridgeCls || !g_midHeapStats)
+        return artEnv->NewStringUTF("");
+    jstring r = (jstring)hs->CallStaticObjectMethod(g_bridgeCls, g_midHeapStats);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (r)
+        hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+// P2-1 dev panel: exercise the headless auto-reconnect path (drops + re-establishes the session) for N seconds,
+// so the native "Reconnecting…" overlay can be verified without a real network loss. No-op on an older jar.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeSimulateReconnect(JNIEnv *, jobject, jint seconds) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_bridgeCls || !g_midSimReconnect)
+        return;
+    hs->CallStaticVoidMethod(g_bridgeCls, g_midSimReconnect, seconds);
+    if (hs->ExceptionCheck())
+        hs->ExceptionClear();
 }
 
 // ---- A4 plugin control plane (MobileUiBridge) --------------------------------------------------------

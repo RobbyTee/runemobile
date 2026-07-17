@@ -12,6 +12,8 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -41,6 +43,7 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.addCallback
 import androidx.appcompat.app.AlertDialog
@@ -189,6 +192,19 @@ class MainActivity : AppCompatActivity() {
     // configuration change. Their BASE margins are captured at build so the inset is ADDED, never replaced.
     private var devBar: LinearLayout? = null
     private var launcherHandle: Button? = null
+
+    // P2-1 (`android-inapp-dev-panel`): developer-mode overlay. All lazily created and fully torn down when the
+    // pref is off, so a non-dev build/session pays nothing (no views, no timer). rootContainer is the frame the
+    // chip/panel attach to; the ticker samples fps (native present-count delta), heap (bridge), and thermal ~1 Hz.
+    private var rootContainer: FrameLayout? = null
+    private var perfChip: TextView? = null
+    private var devPanel: LinearLayout? = null
+    private var devDiag: TextView? = null
+    private val devHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
+    private var devTicking = false
+    private var devLastFrames = -1L
+    private var devLastSampleNanos = 0L
+    private var devHeapCache = "—"
     private var devBarBaseLeft = 0
     private var devBarBaseBottom = 0
     private var hotkeyBaseLeft = 0
@@ -1075,6 +1091,7 @@ class MainActivity : AppCompatActivity() {
                 addView(splashOverlay, FrameLayout.LayoutParams(mp, mp))
             }
         setContentView(root)
+        rootContainer = root // P2-1: the frame the developer-mode chip/panel attach to when enabled
         // UX-XCUT-01: keep the only release HUD controls (⌨/⇧ devBar, hotkey strip, ≡ Plugins handle) out of the
         // landscape display cutout + the bottom gesture inset. SHORT_EDGES draws the notch UNDER the frame, so
         // these fixed bottom-START / bottom-CENTER views would otherwise sit beneath it in landscape-right. A root
@@ -1831,6 +1848,164 @@ class MainActivity : AppCompatActivity() {
             stopService(Intent(this, KeepaliveService::class.java))
         } catch (t: Throwable) {
             Log.w(TAG, "keepalive: stopService failed: ${t.message}")
+        }
+    }
+
+    // ---- P2-1 developer-mode overlay (perf chip + dev panel) --------------------------------------------------
+
+    /** Whether the persisted "Developer mode" toggle (PluginPanel DeveloperModeRow) is on. Works in Release too. */
+    private fun developerModeEnabled(): Boolean = getSharedPreferences("dev", MODE_PRIVATE).getBoolean("developerMode", false)
+
+    /** Called by the Compose toggle (live) and from onCreate (initial). Builds+shows or tears down the overlay. */
+    fun onDeveloperModeChanged(on: Boolean) {
+        runOnUiThread {
+            if (on) {
+                ensureDevViews()
+                perfChip?.visibility = View.VISIBLE
+                startDevTicker()
+            } else {
+                stopDevTicker()
+                devPanel?.visibility = View.GONE
+                perfChip?.visibility = View.GONE
+            }
+        }
+    }
+
+    private fun ensureDevViews() {
+        val root = rootContainer ?: return
+        if (perfChip != null) return
+        val d = resources.displayMetrics.density
+        // The always-on perf chip: tap it to open/close the panel. Top-center, below the status bar / notch.
+        val chip =
+            TextView(this).apply {
+                text = "…"
+                setTextColor(0xFFB2FF59.toInt())
+                textSize = 11f
+                typeface = Typeface.MONOSPACE
+                setBackgroundColor(0xAA000000.toInt())
+                setPadding((6 * d).toInt(), (3 * d).toInt(), (6 * d).toInt(), (3 * d).toInt())
+                contentDescription = "Developer perf chip"
+                setOnClickListener { toggleDevPanel() }
+            }
+        root.addView(
+            chip,
+            FrameLayout
+                .LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or Gravity.CENTER_HORIZONTAL,
+                ).apply { topMargin = (40 * d).toInt() },
+        )
+        perfChip = chip
+        // The developer panel (GONE until the chip is tapped): a diag readout + a Simulate-reconnect button.
+        val diag =
+            TextView(this).apply {
+                setTextColor(Color.WHITE)
+                textSize = 11f
+                typeface = Typeface.MONOSPACE
+            }
+        val reconnectBtn =
+            Button(this).apply {
+                text = "Simulate reconnect"
+                setOnClickListener {
+                    Log.i(TAG, "dev: simulate reconnect (8s)")
+                    JvmLauncher.onBridge { JvmLauncher.simulateReconnect(8) }
+                }
+            }
+        val panel =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(0xE6101010.toInt())
+                setPadding((12 * d).toInt(), (12 * d).toInt(), (12 * d).toInt(), (12 * d).toInt())
+                visibility = View.GONE
+                addView(diag)
+                addView(reconnectBtn)
+            }
+        root.addView(
+            panel,
+            FrameLayout
+                .LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or Gravity.CENTER_HORIZONTAL,
+                ).apply { topMargin = (72 * d).toInt() },
+        )
+        devPanel = panel
+        devDiag = diag
+    }
+
+    private fun toggleDevPanel() {
+        val p = devPanel ?: return
+        p.visibility = if (p.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+    }
+
+    private fun startDevTicker() {
+        if (devTicking) return
+        devTicking = true
+        devLastFrames = -1L
+        devLastSampleNanos = 0L
+        devHandler.post(devTick)
+    }
+
+    private fun stopDevTicker() {
+        devTicking = false
+        devHandler.removeCallbacks(devTick)
+    }
+
+    private val devTick =
+        object : Runnable {
+            override fun run() {
+                if (!devTicking) return
+                updatePerfChip()
+                devHandler.postDelayed(this, 1000)
+            }
+        }
+
+    /** ~1 Hz: fps from the native present-count delta, heap from the bridge (cached; fetched off the UI thread),
+     *  thermal from PowerManager. Feeds both the chip and (when open) the diag readout. */
+    private fun updatePerfChip() {
+        val now = System.nanoTime()
+        val frames = JvmLauncher.framesPresented() // pure native atomic read — no HotSpot attach, UI-thread safe
+        var fps = 0.0
+        if (devLastFrames >= 0 && devLastSampleNanos > 0) {
+            val dt = (now - devLastSampleNanos) / 1_000_000_000.0
+            if (dt > 0) fps = ((frames - devLastFrames).coerceAtLeast(0)) / dt
+        }
+        devLastFrames = frames
+        devLastSampleNanos = now
+        // Heap crosses into HotSpot, so pull it off the UI thread and cache the latest for the next paint.
+        JvmLauncher.onBridge {
+            val h = JvmLauncher.heapStats()
+            if (h.isNotEmpty()) devHeapCache = h
+        }
+        val thermal = thermalStatusLabel()
+        perfChip?.text = String.format("%.0f fps · %s · %s", fps, devHeapCache, thermal)
+        devDiag?.let { d ->
+            if (devPanel?.visibility == View.VISIBLE) {
+                d.text =
+                    buildString {
+                        append("fps    ").append(String.format("%.1f", fps)).append('\n')
+                        append("heap   ").append(devHeapCache).append(" MB\n")
+                        append("thermal ").append(thermal).append('\n')
+                        append("renderer ").append(rendererPref())
+                    }
+            }
+        }
+    }
+
+    /** Human thermal label from PowerManager.currentThermalStatus (API 29+), or "n/a" below Q. */
+    private fun thermalStatusLabel(): String {
+        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return "n/a"
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return "n/a"
+        return when (pm.currentThermalStatus) {
+            PowerManager.THERMAL_STATUS_NONE -> "none"
+            PowerManager.THERMAL_STATUS_LIGHT -> "light"
+            PowerManager.THERMAL_STATUS_MODERATE -> "moderate"
+            PowerManager.THERMAL_STATUS_SEVERE -> "severe"
+            PowerManager.THERMAL_STATUS_CRITICAL -> "critical"
+            PowerManager.THERMAL_STATUS_EMERGENCY -> "emergency"
+            PowerManager.THERMAL_STATUS_SHUTDOWN -> "shutdown"
+            else -> "?"
         }
     }
 
@@ -3842,6 +4017,8 @@ class MainActivity : AppCompatActivity() {
         // PARITY-P0-1: back in the foreground — the process no longer needs the keepalive promotion, so drop the
         // service (and cancel the idle-stop) as the first thing on return, before the idle deadline could fire.
         stopKeepaliveService()
+        // P2-1: re-arm the perf ticker on foreground (it's paused in onStop) when developer mode is on.
+        if (developerModeEnabled()) onDeveloperModeChanged(true)
     }
 
     override fun onStop() {
@@ -3859,6 +4036,7 @@ class MainActivity : AppCompatActivity() {
         pollingPaused = true
         JvmLauncher.setPaused(true)
         frameCallback?.let { Choreographer.getInstance().removeFrameCallback(it) }
+        stopDevTicker() // P2-1: no perf sampling while backgrounded
         // PARITY-P0-1: keep the JVM + game socket resident while backgrounded (parity with iOS's keepalive),
         // but only when it's worth it — the pref is on AND the client is logged in (mirrors iOS's idle-stop,
         // which never keeps a logged-out session alive). The render throttle above is unchanged; the service
@@ -3878,6 +4056,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         frameCallback?.let { Choreographer.getInstance().removeFrameCallback(it) }
         frameCallback = null
+        stopDevTicker() // P2-1: kill the perf ticker
         drainRun = false // stop the AP-2a notification/link drain daemon
         hdConfigReceiver?.let { runCatching { unregisterReceiver(it) } }
         hdConfigReceiver = null

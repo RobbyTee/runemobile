@@ -198,6 +198,17 @@ object JvmLauncher {
      *  never activated (failed/black/crashed); a climbing value == it activated and is presenting. */
     external fun nativeGpuFramesPresented(): Long
 
+    /** P2-1 dev perf chip: a unified monotonic present count across all renderers (GPU direct-present when armed,
+     *  else the CPU blit path). Diff two samples a second apart for fps. */
+    external fun nativeFramesPresented(): Long
+
+    /** P2-1 dev panel: JVM heap usage as "usedMB/maxMB" (JavaBridge.heapStats). "" before the bridge is up. */
+    external fun nativeHeapStats(): String
+
+    /** P2-1 dev panel: exercise the auto-reconnect path for [seconds] so the Reconnecting overlay can be verified
+     *  without a real network drop. No-op on an older jar. Call OFF the UI thread (via [onBridge]). */
+    external fun nativeSimulateReconnect(seconds: Int)
+
     // AP-2b Finding 5 (screenshot): the latest composited CPU frame as 0x00RRGGBB ints (alpha unset; the consumer
     // ORs 0xFF for an opaque PNG). null before the first frame / bridge off. Pull OFF the UI thread (via [onBridge])
     // — it attaches the caller to HotSpot. Size against [nativeFrameWidth]; guard len % width == 0.
@@ -618,6 +629,13 @@ object JvmLauncher {
     fun frameHeight() = nativeFrameHeight()
 
     fun framePixels(): IntArray? = nativeFramePixels()
+
+    // P2-1 dev perf chip / panel.
+    fun framesPresented() = nativeFramesPresented()
+
+    fun heapStats() = nativeHeapStats()
+
+    fun simulateReconnect(seconds: Int) = nativeSimulateReconnect(seconds)
 
     // ---- A3.5 bridge request/response thread --------------------------------------------------------
     // A single dedicated background thread the UI posts plugin-plane requests to, so the ART UI thread NEVER
