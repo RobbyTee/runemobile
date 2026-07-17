@@ -1120,13 +1120,16 @@ static void callMain(JNIEnv *env, const char *className, NSArray<NSString *> *ar
     }
 }
 
-// Force the OSRS gamepack into RESIZABLE display mode before the VM boots. The engine reads the window
-// mode from preferences.dat byte[3] (1 = fixed/classic, 2 = resizable) at startup; our entire native HUD
-// is gated on the resizable layout (isResized()), so an account last saved in the desktop "Fixed - Classic"
-// layout would otherwise boot pillarboxed (765x503, brown border) with no reachable way to switch. The mode
-// is a purely client-side preference (not server-synced), so patching the local file each launch is enough.
-// Mirrors the Android ensureResizableDisplayMode path. rlHome == user.home; the gamepack cache lives at
-// user.home/.runelite/jagexcache/oldschool/LIVE (see RuneLite.copyJagexCache).
+// Force the OSRS gamepack into the RESIZABLE - CLASSIC layout before the VM boots. The engine persists the
+// display settings client-side in preferences.dat: byte[3] is the window mode (1 = fixed/classic,
+// 2 = resizable) and byte[1] is the resizable arrangement (0 = classic/PRE_EOC, 1 = modern/OSRS_STRETCH,
+// mirrored live by VarbitID.RESIZABLE_STONE_ARRANGEMENT; see MobileChromeBridge). Our entire native HUD is
+// gated on the resizable-Classic root (isResized() + PRE_EOC toplevel 164): an account last saved in the
+// desktop "Fixed - Classic" layout would boot pillarboxed (765x503, brown border), and one saved in
+// resizable-Modern lands on the unsupported 161/165 root. Pin BOTH control bytes each launch (leaving the
+// user's audio/brightness bytes untouched). Byte values verified against the Android classic seed vs a live
+// device pull. Mirrors the Android ensureResizableDisplayMode path. rlHome == user.home; the gamepack cache
+// lives at user.home/.runelite/jagexcache/oldschool/LIVE (see RuneLite.copyJagexCache).
 static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     @try {
         NSString *dir = [rlHome stringByAppendingPathComponent:@".runelite/jagexcache/oldschool/LIVE"];
@@ -1135,19 +1138,28 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
         if (data && data.length >= 4) {
             NSMutableData *m = [data mutableCopy];
             uint8_t *bytes = (uint8_t *)m.mutableBytes;
-            if (bytes[3] != 0x02) {
+            BOOL changed = NO;
+            if (bytes[3] != 0x02) { // window mode -> resizable
                 bytes[3] = 0x02;
+                changed = YES;
+            }
+            if (bytes[1] != 0x00) { // arrangement -> classic (PRE_EOC)
+                bytes[1] = 0x00;
+                changed = YES;
+            }
+            if (changed) {
                 [m writeToFile:path atomically:YES];
-                log(@"[jvm] preferences.dat patched fixed->resizable (byte3=2)");
+                log(@"[jvm] preferences.dat pinned resizable-classic (byte1=0,byte3=2)");
             } else {
-                log(@"[jvm] preferences.dat already resizable");
+                log(@"[jvm] preferences.dat already resizable-classic");
             }
         } else {
             [[NSFileManager defaultManager] createDirectoryAtPath:dir
                                       withIntermediateDirectories:YES
                                                        attributes:nil
                                                             error:nil];
-            // Minimal valid OSRS preferences.dat with window mode = resizable (byte[3]=02).
+            // Minimal valid OSRS preferences.dat: window mode = resizable (byte[3]=02), arrangement = classic
+            // (byte[1]=00). Matches the Android classic seed.
             // clang-format off
             const uint8_t seed[] = {
                 0x0c, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00,
@@ -1215,7 +1227,7 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 #endif
     (void)glyphPng;
 
-    // Ensure the account boots in resizable layout (not desktop "Fixed - Classic"), which our native HUD requires.
+    // Ensure the account boots in the resizable-Classic layout (PRE_EOC), which our native HUD requires.
     RMEnsureResizableDisplayMode(rlHome, log);
 
     setenv("JAVA_HOME", javaHome.UTF8String, 1);
