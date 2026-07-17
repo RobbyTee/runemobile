@@ -916,14 +916,14 @@ class MainActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL
                 // In-play input modifiers stay on the HUD: soft keyboard + sticky-shift. (Account/Log out/Screenshot
                 // moved to the launcher as fixed tiles — §4 cutover; the settings entry is the bottom-center handle.)
-                // Release HUD keeps only the two in-play essentials: keyboard summon (type chat/PMs) + sticky-Shift.
+                // Release HUD keeps the in-play modifier surface: keyboard summon (type chat/PMs) + sticky-Shift +
+                // sticky-Ctrl (opt-in latches; iOS exposes ⌃ in every build via Edit Controls, so match that).
                 addView(kbButton)
                 addView(shiftButton)
-                // Developer-only tooling, hidden in release: the Ctrl/Alt sticky latches (niche modifier surface),
-                // the chrome A/B raw-stones toggle, and the GPU/117HD process-restart footguns (renderer selection
-                // lives in the native plugin panel — renderer-as-plugins).
+                addView(ctrlButton)
+                // Developer-only tooling, hidden in release: the chrome A/B raw-stones toggle and the GPU/117HD
+                // process-restart footguns (renderer selection lives in the native plugin panel — renderer-as-plugins).
                 if (BuildConfig.DEBUG) {
-                    addView(ctrlButton)
                     addView(chromeButton)
                     addView(gpuButton)
                     addView(hdButton)
