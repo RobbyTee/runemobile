@@ -59,6 +59,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 @property (nonatomic, strong) NSLayoutConstraint *panelTrailEdge;  // panel trailing -> screen edge (rail hidden)
 @property (nonatomic, strong) UIScrollView *panelScroll;   // vertical scroll of the rendered panel
 @property (nonatomic, strong) UIImageView *panelView;
+@property (nonatomic, strong) UIActivityIndicatorView *panelSpinner; // shown until the first panel frame arrives
 @property (nonatomic, strong) UILabel *emptyLabel;
 @property (nonatomic, strong) NSArray<NSDictionary *> *panels;
 @property (nonatomic, copy) NSString *panelsSignature;     // detect nav-button changes (toggles/new plugins)
@@ -525,6 +526,21 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
                                                                                      action:@selector(onPanelLongPress:)];
     [self.panelView addGestureRecognizer:lp];
 
+    // Loading indicator (parity with Android PanelView's CircularProgressIndicator when img==null): a spinner
+    // centered over the panel column, shown when a panel is selected and hidden the instant its first frame
+    // arrives. Created once; centered on scroll.superview (the panel container) so it works across all modes.
+    if (!self.panelSpinner) {
+        self.panelSpinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
+        self.panelSpinner.translatesAutoresizingMaskIntoConstraints = NO;
+        self.panelSpinner.color = [UIColor whiteColor];
+        self.panelSpinner.hidesWhenStopped = YES;
+        [scroll.superview addSubview:self.panelSpinner];
+        [NSLayoutConstraint activateConstraints:@[
+            [self.panelSpinner.centerXAnchor constraintEqualToAnchor:scroll.superview.centerXAnchor],
+            [self.panelSpinner.centerYAnchor constraintEqualToAnchor:scroll.superview.centerYAnchor],
+        ]];
+    }
+
     // PANEL-1: a hidden text field. When a panel tap focuses a Swing text box, it becomes first responder (raising
     // the soft keyboard) and mirrors its text into the Swing field on every change.
     if (!self.panelKbField) {
@@ -699,6 +715,8 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     self.currentIndex = index;
     self.lastSeq = -1;                         // force a re-pull
     self.lastPanelImgSize = CGSizeZero;        // re-layout + reset zoom for the newly selected panel
+    self.panelView.image = nil;                // clear the stale previous panel's frame while the new one renders
+    [self.panelSpinner startAnimating];        // show the loading spinner until the first frame arrives (Android parity)
     if (self.emptyLabel) self.emptyLabel.text = @"";
     self.titleLabel.text = [self.panels[index][@"tooltip"] description];
     if (self.docked) {
@@ -737,6 +755,7 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     self.lastSeq = seq;
     self.panelNativeW = img.size.width;
     self.panelView.image = img;                 // refresh content every frame (live updates)
+    [self.panelSpinner stopAnimating];          // first frame is in — drop the loading spinner
     // Only (re)compute the base layout when the buffer SIZE changes — re-laying out every repaint would reset
     // the user's pinch-zoom/scroll. Same panel keeps the same buffer dimensions across repaints.
     if (CGSizeEqualToSize(img.size, self.lastPanelImgSize)) return;
