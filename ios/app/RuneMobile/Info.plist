@@ -78,5 +78,9 @@
 	<!-- Save in-game screenshots (the live composited frame) to the photo library via the 📷 HUD button. Add-only. -->
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save your in-game screenshots to your photo library.</string>
+	<!-- Read-write access so screenshots can be organized into (and reused from) a dedicated "RuneLite" album,
+	     rather than creating a duplicate album each time. Only the RuneLite album is touched. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Organize your in-game screenshots into a dedicated RuneLite album.</string>
 </dict>
 </plist>

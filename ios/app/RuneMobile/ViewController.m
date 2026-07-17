@@ -7483,7 +7483,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         if (!save) continue;   // discard (keeps the queue from backing up)
         UIImage *img = [UIImage imageWithContentsOfFile:path];
         if (img == nil) continue;
-        UIImageWriteToSavedPhotosAlbum(img, self, @selector(image:didFinishSavingWithError:contextInfo:), NULL);
+        [self saveImageToRuneLiteAlbum:img announce:NO]; // silent path — no toast for event auto-saves
         [self appendLine:[NSString stringWithFormat:@"[shell] auto-screenshot -> Photos: %@", path.lastPathComponent]];
         if (++writes >= 3) break;   // remaining paths stay queued for the next tick
     }
@@ -7580,25 +7580,120 @@ static CGRect mapRectFromArr(NSArray *a) {
     UIImage *stable = [ren imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
         [img drawAtPoint:CGPointZero];
     }];
-    UIImageWriteToSavedPhotosAlbum(stable, self, @selector(image:didFinishSavingWithError:contextInfo:), NULL);
+    [self saveImageToRuneLiteAlbum:stable announce:YES];
     // SHOT-5: also copy to the clipboard, so it can be pasted straight into Messages / a notes app.
     [UIPasteboard generalPasteboard].image = stable;
 }
 
-- (void)image:(UIImage *)image didFinishSavingWithError:(NSError *)error contextInfo:(void *)ctx {
-    [self appendLine:error
-        ? [NSString stringWithFormat:@"[shell] screenshot save failed: %@", error.localizedDescription]
-        : @"[shell] screenshot saved to Photos"];
-    if (!error) {
-        [self showToast:@"Screenshot saved to Photos"];
+// SHOT-6: save an image into a dedicated "RuneLite" Photos album (parity with Android's Pictures/RuneLite),
+// creating the album on first use and caching its localIdentifier so later saves reuse it (no duplicate albums).
+// All screenshot paths (manual capture + event auto-save) funnel through here. announce=YES surfaces a
+// success/failure toast (manual capture); the silent auto-save path passes NO. Read-write authorization is
+// required so the album can be fetched/reused; .denied/.limited/.restricted fall back to the failure path.
+- (void)saveImageToRuneLiteAlbum:(UIImage *)image announce:(BOOL)announce {
+    if (image == nil)
+        return;
+    PHPhotoLibrary *lib = [PHPhotoLibrary sharedPhotoLibrary];
+    PHAuthorizationStatus st = [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelReadWrite];
+    if (st == PHAuthorizationStatusNotDetermined) {
+        [PHPhotoLibrary requestAuthorizationForAccessLevel:PHAccessLevelReadWrite
+                                                   handler:^(PHAuthorizationStatus granted) {
+                                                       dispatch_async(dispatch_get_main_queue(), ^{
+                                                           if (granted == PHAuthorizationStatusAuthorized || granted == PHAuthorizationStatusLimited) {
+                                                               [self saveImageToRuneLiteAlbum:image announce:announce];
+                                                           } else {
+                                                               [self reportScreenshotSaved:NO permissionShaped:YES announce:announce];
+                                                           }
+                                                       });
+                                                   }];
         return;
     }
-    // A denied Photos permission surfaces as PHPhotosErrorDomain (access) or an access-shaped message; steer the
-    // player to Settings in that case, otherwise report a generic save failure.
-    NSString *desc = error.localizedDescription.lowercaseString ?: @"";
-    BOOL permissionShaped = [error.domain isEqualToString:@"PHPhotosErrorDomain"] || [desc containsString:@"permission"] || [desc containsString:@"access"] || [desc containsString:@"denied"] || [desc containsString:@"authoriz"];
-    [self showToast:permissionShaped ? @"Screenshot failed — allow Photos access in Settings"
-                                     : @"Screenshot save failed"];
+    if (st != PHAuthorizationStatusAuthorized && st != PHAuthorizationStatusLimited) {
+        [self reportScreenshotSaved:NO permissionShaped:YES announce:announce];
+        return;
+    }
+    (void)lib;
+    [self resolveRuneLiteAlbum:^(PHAssetCollection *album) {
+        if (album == nil) {
+            [self reportScreenshotSaved:NO permissionShaped:NO announce:announce];
+            return;
+        }
+        [self addImage:image toAlbum:album announce:announce];
+    }];
+}
+
+// Fetch (or create on first use) the "RuneLite" album, caching its localIdentifier in NSUserDefaults so the
+// steady-state cost is a single fetch-by-identifier. If the user deleted the album the cached id resolves to
+// nil and we recreate it cleanly. Calls back on the main queue with the collection (nil on failure).
+- (void)resolveRuneLiteAlbum:(void (^)(PHAssetCollection *album))done {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    NSString *cachedId = [ud stringForKey:@"runeLiteAlbumId"];
+    if (cachedId.length) {
+        PHFetchResult *r = [PHAssetCollection fetchAssetCollectionsWithLocalIdentifiers:@[ cachedId ] options:nil];
+        if (r.firstObject) {
+            done(r.firstObject);
+            return;
+        }
+    }
+    // Not cached / deleted: look up by title before creating, so we never orphan a duplicate album.
+    PHFetchOptions *opt = [[PHFetchOptions alloc] init];
+    opt.predicate = [NSPredicate predicateWithFormat:@"title = %@", @"RuneLite"];
+    PHFetchResult *byTitle = [PHAssetCollection fetchAssetCollectionsWithType:PHAssetCollectionTypeAlbum
+                                                                      subtype:PHAssetCollectionSubtypeAny
+                                                                      options:opt];
+    if (byTitle.firstObject) {
+        [ud setObject:((PHAssetCollection *)byTitle.firstObject).localIdentifier forKey:@"runeLiteAlbumId"];
+        done(byTitle.firstObject);
+        return;
+    }
+    __block NSString *placeholderId = nil;
+    [[PHPhotoLibrary sharedPhotoLibrary]
+        performChanges:^{
+            PHAssetCollectionChangeRequest *cr = [PHAssetCollectionChangeRequest creationRequestForAssetCollectionWithTitle:@"RuneLite"];
+            placeholderId = cr.placeholderForCreatedAssetCollection.localIdentifier;
+        }
+        completionHandler:^(BOOL success, NSError *err) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (!success || placeholderId == nil) {
+                    done(nil);
+                    return;
+                }
+                PHFetchResult *r = [PHAssetCollection fetchAssetCollectionsWithLocalIdentifiers:@[ placeholderId ] options:nil];
+                PHAssetCollection *created = r.firstObject;
+                if (created)
+                    [ud setObject:created.localIdentifier forKey:@"runeLiteAlbumId"];
+                done(created);
+            });
+        }];
+}
+
+// Add the image to the general library and place the new asset into the RuneLite album, then report.
+- (void)addImage:(UIImage *)image toAlbum:(PHAssetCollection *)album announce:(BOOL)announce {
+    [[PHPhotoLibrary sharedPhotoLibrary]
+        performChanges:^{
+            PHAssetChangeRequest *ar = [PHAssetChangeRequest creationRequestForAssetFromImage:image];
+            PHAssetCollectionChangeRequest *cc = [PHAssetCollectionChangeRequest changeRequestForAssetCollection:album];
+            [cc addAssets:@[ ar.placeholderForCreatedAsset ]];
+        }
+        completionHandler:^(BOOL success, NSError *err) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self reportScreenshotSaved:success permissionShaped:NO announce:announce];
+            });
+        }];
+}
+
+// Log always; toast only for the manual capture (announce). permissionShaped steers a denied user to Settings.
+- (void)reportScreenshotSaved:(BOOL)ok permissionShaped:(BOOL)permissionShaped announce:(BOOL)announce {
+    [self appendLine:ok ? @"[shell] screenshot saved to RuneLite album"
+                        : @"[shell] screenshot save failed"];
+    if (!announce)
+        return;
+    if (ok) {
+        [self showToast:@"Screenshot saved to RuneLite album"];
+    } else {
+        [self showToast:permissionShaped ? @"Screenshot failed — allow Photos access in Settings"
+                                         : @"Screenshot save failed"];
+    }
 }
 
 // Every edit is intercepted and forwarded as KeyEvents; the field itself never changes (return NO), so it
