@@ -46,6 +46,16 @@
     [done addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:done];
 
+    // Cancel discards the working selection (only -onDone commits it), so an accidental tap isn't final
+    // (parity with Android's SetConfigControl Cancel). Layout mirrors MUITextEditor/MUISliderEditor.
+    UIButton *cancel = [UIButton buttonWithType:UIButtonTypeSystem];
+    cancel.translatesAutoresizingMaskIntoConstraints = NO;
+    [cancel setTitle:@"Cancel" forState:UIControlStateNormal];
+    cancel.titleLabel.font = [UIFont systemFontOfSize:16];
+    cancel.tintColor = [UIColor colorWithWhite:0.7 alpha:1.0];
+    [cancel addTarget:self action:@selector(onCancel) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:cancel];
+
     _table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped];
     _table.translatesAutoresizingMaskIntoConstraints = NO;
     _table.backgroundColor = [UIColor clearColor];
@@ -55,11 +65,20 @@
 
     UILayoutGuide *sg = self.view.safeAreaLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[
-        [title.topAnchor constraintEqualToAnchor:sg.topAnchor constant:14],
-        [title.leadingAnchor constraintEqualToAnchor:sg.leadingAnchor constant:20],
+        [title.topAnchor constraintEqualToAnchor:sg.topAnchor
+                                        constant:14],
+        [title.leadingAnchor constraintEqualToAnchor:sg.leadingAnchor
+                                            constant:20],
+        [title.trailingAnchor constraintLessThanOrEqualToAnchor:cancel.leadingAnchor
+                                                       constant:-8],
         [done.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
-        [done.trailingAnchor constraintEqualToAnchor:sg.trailingAnchor constant:-20],
-        [_table.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:10],
+        [done.trailingAnchor constraintEqualToAnchor:sg.trailingAnchor
+                                            constant:-20],
+        [cancel.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
+        [cancel.trailingAnchor constraintEqualToAnchor:done.leadingAnchor
+                                              constant:-16],
+        [_table.topAnchor constraintEqualToAnchor:title.bottomAnchor
+                                         constant:10],
         [_table.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [_table.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [_table.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
@@ -71,6 +90,11 @@
     NSMutableArray *out = [NSMutableArray array];
     for (NSString *c in _choices) { if ([_selected containsObject:c]) [out addObject:c]; }
     if (_onDone) _onDone(out);
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)onCancel {
+    // Discard the working selection without ever invoking _onDone, so no write occurs.
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
