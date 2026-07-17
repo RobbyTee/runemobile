@@ -250,10 +250,11 @@ public final class JavaBridge
 	private static volatile int frameW;
 	private static volatile int frameH;
 	private static volatile int frameSeq;
-	// Bumped ONLY by gpuPublish (the base-GPU readback seam), so a non-zero value is hard proof the GPU renderer
-	// actually rendered + read back + published a real frame - unlike frameSeq (shared with the CPU snapshot) or
-	// isGpu (which flips the instant the renderer arms, before its first frame). The native boot crash-cookie
-	// clears only once this advances, so a GPU that arms then crashes before its first frame keeps the cookie set.
+	// Bumped by gpuPublish on EVERY GPU readback the native shim makes (before the display warmup gate), so a
+	// non-zero value is hard proof the GPU renderer rendered + read back a real frame - even the login screen,
+	// before the world warms up. Distinct from frameSeq (shared with the CPU snapshot) and isGpu (which flips
+	// the instant the renderer arms, before its first frame). The native boot crash-cookie clears only once this
+	// advances, so a GPU that arms then crashes before rendering anything keeps the cookie set (fall back to CPU).
 	private static volatile int gpuFrameSeq;
 	private static int[] bufA;
 	private static int[] bufB;
@@ -427,6 +428,11 @@ public final class JavaBridge
 	/** Publish the back buffer the native shim just filled (vertical-flipped, R/B-swizzled 0x00RRGGBB). */
 	public static void gpuPublish(int w, int h)
 	{
+		// GPU liveness proof (see field decl) - bumped BEFORE the warmup gate below, so it counts every GPU
+		// readback the shim makes, including the login/loading screen. That is exactly the crash-cookie signal:
+		// the risky GL init (context + shader compile) is already done once the GPU renders any frame, so a
+		// normal quit at the GPU login screen must NOT leave the cookie armed (it would falsely demote to CPU).
+		gpuFrameSeq++;
 		// Hold the last good frame through the load-in warmup (the sky-flash guard, above). Not bumping frameSeq
 		// keeps the native reader on the previous frame; useA doesn't flip, so the back buffer the shim just
 		// filled is simply overwritten next frame and the double buffering stays consistent.
@@ -436,7 +442,6 @@ public final class JavaBridge
 		frameH = h;
 		frame = useA ? bufA : bufB;
 		frameSeq++;
-		gpuFrameSeq++;   // GPU-only present proof (see field decl): the boot crash-cookie clears off this
 		useA = !useA;
 		if (FRAME_DUMP)
 		{
@@ -521,9 +526,11 @@ public final class JavaBridge
 	}
 
 	/**
-	 * The base-GPU present counter: non-zero once {@link #gpuPublish} has published at least one real GPU frame.
-	 * The native boot crash-cookie reads this to distinguish "GPU renderer actually presented" from mere CPU
-	 * login frames (which also bump {@code frameSeq}), so it clears the cookie only after true GPU provenance.
+	 * The base-GPU liveness counter: non-zero once {@link #gpuPublish} has read back at least one real GPU frame
+	 * (counted before the display warmup gate, so the login screen counts too). The native boot crash-cookie
+	 * reads this to distinguish "GPU renderer actually rendered" from mere CPU login frames (which bump
+	 * {@code frameSeq}), so it clears the cookie only after true GPU provenance - without demoting a healthy GPU
+	 * to CPU when the player quits at the login screen before the world warms up.
 	 */
 	public static int getGpuFrameSeq()
 	{
@@ -963,7 +970,6 @@ public final class JavaBridge
 		}
 		else
 		{
-			interactTapSeq++;   // the click DID interact -> haptic (+ iOS red ring), meaning unchanged
 			if (entry.getWidget() != null)
 			{
 				// An interface op (inventory item / prayer / spell / tab / …): no ring, plus a tight cyan
@@ -977,6 +983,10 @@ public final class JavaBridge
 				armOutlineFromEntry(c, entry, type);
 				publishTapKind(TAP_KIND_SCENE, (MenuEntry) null);
 			}
+			// Bump LAST, after the kind is published: interactTapSeq is the release barrier the native shell
+			// polls (haptic + iOS ring). A reader seeing the new seq is then guaranteed the matching tap kind is
+			// already committed (both volatile), so a widget tap can never race into drawing the red ring.
+			interactTapSeq++;
 		}
 		finishTap();
 	}

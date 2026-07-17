@@ -195,7 +195,6 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 // Interactable-tap feedback: a light haptic when a tap grabs a real interactable (polled via JavaBridge
 // interactTapSeq), and a yellow fading click-ring drawn at every tap point (the Jagex-Mobile click marker).
 @property (nonatomic, assign) int lastInteractTapSeq;
-@property (nonatomic, assign) int lastTapKindSeqSeen; // read the engine's tap kind exactly once per resolution
 @property (nonatomic, strong) UIImpactFeedbackGenerator *tapHaptic;
 // The click ring is deferred one beat so it can pick the official colour: RED if the tap resolved to an
 // interactable (the engine bumped interactTapSeq), YELLOW for a plain walk (no bump within the grace window).
@@ -5784,13 +5783,6 @@ static CGRect mapRectFromArr(NSArray *a) {
     // Matches the official app. The grace covers the engine-resolved tap pipeline: settle gate (a few frames)
     // + click consume next tick + poll latency ≈ 80-160 ms, so 0.25 s keeps walk rings prompt without
     // misclassifying slow interactions as walks.
-    // Read the resolved tap KIND once per resolution: a WIDGET tap (inventory item, prayer/spell icon, equipment
-    // slot, tab-stone) gets no red ring — the engine draws its own cyan outline there, so the ring is redundant
-    // noise (parity with Android's TAP_KIND_WIDGET branch). SCENE taps still ring. 0 (TAP_KIND_NONE) on an older
-    // jar means the gate is inert (0 != kTapKindWidget), preserving today's ring-on-every-interaction behavior.
-    int tks = [JVMLauncher tapKindSeq];
-    int tk = (tks != self.lastTapKindSeqSeen) ? [JVMLauncher lastTapKind] : -1;
-    self.lastTapKindSeqSeen = tks;
     int its = [JVMLauncher interactTapSeq];
     if (its != self.lastInteractTapSeq) {
         self.lastInteractTapSeq = its;
@@ -5798,7 +5790,12 @@ static CGRect mapRectFromArr(NSArray *a) {
         [self.tapHaptic impactOccurred]; // haptic fires on EVERY real interaction, widget or scene (unchanged)
         [self.tapHaptic prepare];
         if (self.pendingClick) {
-            if (tk != kTapKindWidget) {
+            // Read the resolved tap KIND now: interactTapSeq bumps LAST (after the kind is published), so seeing
+            // the new seq guarantees lastTapKind is the matching kind. A WIDGET tap (inventory item, prayer/spell
+            // icon, equipment slot, tab-stone) draws no red ring - the engine draws its own cyan outline there,
+            // so the ring is redundant (parity with Android's TAP_KIND_WIDGET branch). SCENE taps still ring; an
+            // older jar returns 0 (TAP_KIND_NONE != kTapKindWidget), preserving ring-on-every-interaction.
+            if ([JVMLauncher lastTapKind] != kTapKindWidget) {
                 [self flashClickRingAt:self.pendingClickPoint color:[UIColor colorWithRed:1.0 green:0.2 blue:0.15 alpha:1.0]];
             }
             self.pendingClick = NO; // a widget tap still resolves the pending state, it just draws no ring
@@ -7159,14 +7156,16 @@ static CGRect mapRectFromArr(NSArray *a) {
 
 // The world-map analogue of scrollChatByDragDeltaY: scroll the open map's Key/maplist via the engine's own
 // UPDATE_SCROLLBAR script (scrollMapPanel), NOT a mouse wheel — a wheel over the map zooms it (onPinch). Drag
-// is scaled 1:1 to engine-canvas px and accumulated. No negation: scrollMapPanel is a direct content-follows-
-// finger px delta (unlike the old wheel path's notch count), matching Android's mapScrolling branch.
+// is scaled 1:1 to engine-canvas px and accumulated. NEGATE dy: scrollMapPanel adds delta to scrollY (which
+// grows downward), so content-follows-finger needs finger-up (UIKit dy<0) -> positive delta -> reveal lower
+// entries. Same as chat (scrollEngineChat applies kChatScrollDir=-1 over identical cur+delta scrollbar
+// semantics); Android's branch reads the opposite-signed distanceY, so it needs no negation and iOS does.
 - (void)scrollMapListByDragDeltaY:(CGFloat)dy {
     CGFloat W = self.view.bounds.size.width;
     if (self.renderW <= 0 || W <= 0)
         return;
     CGFloat canvasPerPt = (CGFloat)self.renderW / W; // screen pt -> engine-canvas px
-    self.mapListScrollAcc += dy * canvasPerPt;
+    self.mapListScrollAcc += -dy * canvasPerPt;
     int whole = (int)(self.mapListScrollAcc < 0 ? ceil(self.mapListScrollAcc) : floor(self.mapListScrollAcc));
     if (whole == 0)
         return;

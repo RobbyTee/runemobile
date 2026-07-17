@@ -41,7 +41,6 @@ static jclass    gBridgeClass = NULL; // global ref to net.runelite.client.headl
 static jmethodID gMidW = NULL, gMidH = NULL, gMidSeq = NULL, gMidPixels = NULL;
 static jmethodID gMidGpuSeq = NULL;       // getGpuFrameSeq()I - base-GPU present proof (optional; older jars lack it)
 static jmethodID gMidInteractSeq = NULL;  // getInteractTapSeq()I — native haptic cue (optional; tolerate older jar)
-static jmethodID gMidTapKindSeq = NULL;   // getTapKindSeq()I — tap-kind change counter (optional; older jar tolerant)
 static jmethodID gMidLastTapKind = NULL;  // getLastTapKind()I — TAP_KIND_NONE/WALK/SCENE/WIDGET (optional)
 static jmethodID gMidHeapStats = NULL;    // heapStats()Ljava/lang/String; — dev diagnostics (optional)
 static jmethodID gMidSimReconnect = NULL; // devSimulateReconnect(I)V — dev "test reconnect" hook (optional)
@@ -265,11 +264,9 @@ static BOOL ensureBridge(void) {
     }
     // Optional (not in the mandatory set above, so an older jar without it still boots the bridge).
     gMidInteractSeq = (*env)->GetStaticMethodID(env, global, "getInteractTapSeq", "()I");
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidInteractSeq = NULL; }
-    gMidTapKindSeq = (*env)->GetStaticMethodID(env, global, "getTapKindSeq", "()I");
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
-        gMidTapKindSeq = NULL;
+        gMidInteractSeq = NULL;
     }
     gMidLastTapKind = (*env)->GetStaticMethodID(env, global, "getLastTapKind", "()I");
     if ((*env)->ExceptionCheck(env)) {
@@ -452,12 +449,23 @@ static BOOL ensureVeneer(void) {
     gMidSetChatCollapsed = (*env)->GetStaticMethodID(env, global, "setChatCollapsed", "(Z)V");
     gMidSetOverlayInsets = (*env)->GetStaticMethodID(env, global, "setOverlaySafeInsets", "(IIII)V");
     gMidPanMap = (*env)->GetStaticMethodID(env, global, "panWorldMap", "(II)V");
-    gMidScrollMapPanel = (*env)->GetStaticMethodID(env, global, "scrollMapPanel", "(I)V");
-    gMidOpenWorldMap = (*env)->GetStaticMethodID(env, global, "openWorldMap", "()V");
     gMidGetMapSnap = (*env)->GetStaticMethodID(env, global, "getMapSnapshot", "()Ljava/lang/String;");
     gMidGetOrbSnap = (*env)->GetStaticMethodID(env, global, "getOrbSnapshot", "()Ljava/lang/String;");
     gMidTabSprites = (*env)->GetStaticMethodID(env, global, "tabSprites", "()Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    // The two newest optional veneer methods resolve AFTER the batch's clear, each with its own check/clear -
+    // an older jar missing one leaves a pending NoSuchMethodError, and we must not carry that into the next
+    // GetStaticMethodID (it would poison the resolution above, notably the critical getMapSnapshot).
+    gMidScrollMapPanel = (*env)->GetStaticMethodID(env, global, "scrollMapPanel", "(I)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidScrollMapPanel = NULL;
+    }
+    gMidOpenWorldMap = (*env)->GetStaticMethodID(env, global, "openWorldMap", "()V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidOpenWorldMap = NULL;
+    }
     gMidSetChatHidden = m;
     gMidRelocateChat = r;
     gMidRelocateMinimap = mm;
@@ -1626,20 +1634,6 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     JNIEnv *env = gMainEnv;
     jint v = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidInteractSeq);
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.interactTapSeq"); return 0; }
-    return (int)v;
-}
-
-// The tap-kind change counter (JavaBridge.getTapKindSeq): bumps whenever the engine resolves a new tap into a
-// kind. Pair with lastTapKind to read the kind exactly once per resolution. 0 on an older jar without it.
-+ (int)tapKindSeq {
-    if (!ensureBridge() || !gMidTapKindSeq)
-        return 0;
-    JNIEnv *env = gMainEnv;
-    jint v = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidTapKindSeq);
-    if ((*env)->ExceptionCheck(env)) {
-        bridgeNoteClear(env, "JVMLauncher.tapKindSeq");
-        return 0;
-    }
     return (int)v;
 }
 

@@ -79,12 +79,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// The shell polls this and fires a light haptic on change. Returns 0 if the bundled jar predates it.
 + (int)interactTapSeq;
 
-/// Tap-kind change counter (JavaBridge.getTapKindSeq): bumps each time the engine resolves a tap into a kind.
-/// Pair with lastTapKind to read the kind once per resolution. Returns 0 on an older jar without it.
-+ (int)tapKindSeq;
-
-/// The last resolved tap kind (JavaBridge.getLastTapKind): TAP_KIND_NONE=0 / WALK=1 / SCENE=2 / WIDGET=3. The
-/// shell suppresses its red click-ring on WIDGET (the engine draws its own item/tab outline). 0 on an older jar.
+/// The last resolved tap kind (JavaBridge.getLastTapKind): TAP_KIND_NONE=0 / WALK=1 / SCENE=2 / WIDGET=3. Read
+/// it right after interactTapSeq bumps (that seq is published last, as a release barrier, so the kind is then
+/// committed). The shell suppresses its red click-ring on WIDGET (the engine draws its own outline). 0 on an
+/// older jar.
 + (int)lastTapKind;
 
 /// The engine's monotonic rendered-frame counter (JavaBridge.getFrameSeq). Advances once per composited
