@@ -397,6 +397,7 @@ static jmethodID gMidGetDialogue = NULL;     // getDialogueJson()Ljava/lang/Stri
 static jmethodID gMidSetOverlayInsets = NULL; // setOverlaySafeInsets(IIII)V (snap-corner safe frame)
 static jmethodID gMidPanMap = NULL;          // panWorldMap(II)V  (world map: finger pan -> map centre)
 static jmethodID gMidGetMapSnap = NULL;      // getMapSnapshot()Ljava/lang/String;  (world map open + rects)
+static jmethodID gMidGetOrbSnap = NULL;      // getOrbSnapshot()Ljava/lang/String;  (orb touch-target veneer)
 static jmethodID gMidTabSprites = NULL;      // tabSprites()Ljava/lang/String;  (cache-rendered chrome sprites)
 static BOOL ensureVeneer(void) {
     if (gVeneerClass) return atomic_load(&gVM) != NULL;
@@ -432,6 +433,7 @@ static BOOL ensureVeneer(void) {
     gMidSetOverlayInsets = (*env)->GetStaticMethodID(env, global, "setOverlaySafeInsets", "(IIII)V");
     gMidPanMap = (*env)->GetStaticMethodID(env, global, "panWorldMap", "(II)V");
     gMidGetMapSnap = (*env)->GetStaticMethodID(env, global, "getMapSnapshot", "()Ljava/lang/String;");
+    gMidGetOrbSnap = (*env)->GetStaticMethodID(env, global, "getOrbSnapshot", "()Ljava/lang/String;");
     gMidTabSprites = (*env)->GetStaticMethodID(env, global, "tabSprites", "()Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
     gMidSetChatHidden = m;
@@ -2201,6 +2203,23 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
     NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
     if (utf) (*env)->ReleaseStringUTFChars(env, js, utf);
+    (*env)->DeleteLocalRef(env, js);
+    return out;
+}
+
++ (NSString *)orbSnapshot {
+    if (!ensureVeneer() || !gMidGetOrbSnap)
+        return nil;
+    JNIEnv *env = gMainEnv;
+    jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gVeneerClass, gMidGetOrbSnap);
+    if (!js || (*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.orbSnapshot");
+        return nil;
+    }
+    const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
+    NSString *out = utf ? [NSString stringWithUTF8String:utf] : nil;
+    if (utf)
+        (*env)->ReleaseStringUTFChars(env, js, utf);
     (*env)->DeleteLocalRef(env, js);
     return out;
 }

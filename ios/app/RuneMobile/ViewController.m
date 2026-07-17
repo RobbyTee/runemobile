@@ -497,6 +497,12 @@ static const CGFloat kMenuRowViewH = 44.0; // TOUCH-1: minimum touch-target heig
 static const CGFloat kMenuHeaderViewH = 22.0;
 static const CGFloat kMenuWidth       = 210.0;
 
+// Minimap-orb touch veneer (mirrors Android ORB_KEYS / ORB_TAP_PAD): the orbs published by
+// HudVeneerBridge.getOrbSnapshot, and the px each orb's raw sprite rect is enlarged by on every
+// side so a fat-finger tap near a small orb (e.g. spec, tucked beside run/prayer) still activates it.
+static NSArray<NSString *> *const kOrbKeys = @[ @"hp", @"prayer", @"run", @"spec", @"store", @"worldmap", @"wiki" ];
+static const CGFloat kOrbTapPad = 10.0;
+
 // QA-SYS-1 sibling: rate-limited JSON-parse-fault sink for the per-frame / per-poll bridge-snapshot reads.
 // The native HUD/menu polls parse a bridge JSON snapshot every frame; with `error:nil` a malformed payload
 // silently yields nil and that HUD element blanks with no trace. Every caller length-guards the snapshot
@@ -5804,6 +5810,51 @@ static CGRect mapRectFromArr(NSArray *a) {
 }
 
 // tap -> left click (walk / interact / select a menu entry).
+// Minimap-orb touch veneer: does the game-canvas point (gx,gy) fall within any published orb's rect enlarged
+// by kOrbTapPad on each side? If several match, pick the one whose true centre is nearest the tap. Returns YES
+// and the winning orb's centre via the out-params (plus its key via outKey), NO if no orb was hit. Mirrors
+// Android MainActivity.nearestOrb(). Silent (returns NO) whenever the snapshot is nil/logged-out/malformed.
+- (BOOL)nearestOrbAtGameX:(int)gx gameY:(int)gy outX:(int *)ocx outY:(int *)ocy outKey:(NSString **)outKey {
+    NSString *snap = [JVMLauncher orbSnapshot];
+    if (snap.length == 0)
+        return NO;
+    id parsed = parseBridgeJSON(snap, "ViewController.nearestOrb");
+    if (![parsed isKindOfClass:[NSDictionary class]])
+        return NO;
+    NSDictionary *d = parsed;
+    if (![d[@"loggedIn"] boolValue])
+        return NO;
+    BOOL found = NO;
+    long bestDist = 0;
+    for (NSString *key in kOrbKeys) {
+        id sub = d[key];
+        if (![sub isKindOfClass:[NSDictionary class]])
+            continue; // a hidden orb isn't published
+        int x = [sub[@"x"] intValue];
+        int y = [sub[@"y"] intValue];
+        int w = [sub[@"w"] intValue];
+        int h = [sub[@"h"] intValue];
+        if (gx < x - kOrbTapPad || gx > x + w + kOrbTapPad)
+            continue;
+        if (gy < y - kOrbTapPad || gy > y + h + kOrbTapPad)
+            continue;
+        int cx = x + w / 2;
+        int cy = y + h / 2;
+        long dist = (long)(gx - cx) * (gx - cx) + (long)(gy - cy) * (gy - cy);
+        if (!found || dist < bestDist) {
+            found = YES;
+            bestDist = dist;
+            if (ocx)
+                *ocx = cx;
+            if (ocy)
+                *ocy = cy;
+            if (outKey)
+                *outKey = key;
+        }
+    }
+    return found;
+}
+
 - (void)onTap:(UITapGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady]) return;
     // The native dialogue parchment owns its own taps (continue / option rows). Re-gate here too (belt-and-
@@ -5837,6 +5888,23 @@ static CGRect mapRectFromArr(NSArray *a) {
         [JVMLauncher postClickPreciseX:gx y:gy button:1];
         [self appendLine:[NSString stringWithFormat:@"[map] tap %d,%d (precise)", gx, gy]];
         return;
+    }
+    // Minimap-orb touch veneer (only when the map is closed — matches Android's ordering, and wins over the
+    // general minimap/world click below): a tap within kOrbTapPad of an orb's sprite snaps to the orb's true
+    // centre and fires a PRECISE click there (no world-snap, no walk-ring — an orb toggle doesn't walk).
+    {
+        int ocx = 0, ocy = 0;
+        NSString *orbKey = nil;
+        if ([self nearestOrbAtGameX:gx gameY:gy outX:&ocx outY:&ocy outKey:&orbKey]) {
+            [JVMLauncher postClickPreciseX:ocx y:ocy button:1];
+            if (!self.tapHaptic) {
+                self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+            }
+            [self.tapHaptic prepare];
+            [self.tapHaptic impactOccurred];
+            [self appendLine:[NSString stringWithFormat:@"[shell] orb-veneer tap %d,%d -> %@ @(%d,%d)", gx, gy, orbKey, ocx, ocy]];
+            return;
+        }
     }
     // W3 A3: the relocated chat tab-row is UI, not the world. Send a PRECISE click straight to the engine (no
     // world-snap pulling it to a tile/entity) and DON'T draw the walk ring — taps there toggle a chat filter, they

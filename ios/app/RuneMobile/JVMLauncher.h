@@ -272,6 +272,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Native polls this to gate gestures on the open map, raise the keyboard on a search tap, and proxy close.
 + (NSString *)mapSnapshot;
 
+/// Minimap-orb touch veneer: the live per-orb canvas bounds JSON from HudVeneerBridge.getOrbSnapshot
+/// (hp/prayer/run/spec/store/worldmap/wiki), read each tap so a touch can snap to the nearest orb's enlarged
+/// hit-box. nil until the veneer/method is unavailable (older bundle) or logged out.
++ (nullable NSString *)orbSnapshot;
+
 /// Overlay snap-corner safe frame: the screen safe-area insets in CANVAS px. The engine insets the overlay snap
 /// corners by these (and drops the top-left corner below the relocated chat) so plugin overlays snapped to a
 /// corner (e.g. Quest Helper's top-left guidance panel) clear the curved bezel + the chat. Main thread.
