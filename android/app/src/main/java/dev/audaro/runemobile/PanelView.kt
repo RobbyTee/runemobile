@@ -172,11 +172,18 @@ fun PanelView(
                                             // SC-4: after the click settles, ask the bridge whether it focused a text
                                             // field; if so raise the mirror field pre-filled, else drop the keyboard.
                                             scope.launch {
-                                                delay(140)
-                                                val active =
-                                                    withContext(Dispatchers.IO) {
-                                                        JvmLauncher.onBridge { JvmLauncher.isPanelTextActive() }.get()
-                                                    }
+                                                // Bounded retry (parity with iOS's 5x80ms poll): a single fixed check
+                                                // can miss the focus event when the Swing EDT is momentarily busy,
+                                                // forcing a second tap. Poll up to 5x at 80ms (~400ms worst case).
+                                                var active = false
+                                                for (attempt in 0 until 5) {
+                                                    delay(80)
+                                                    active =
+                                                        withContext(Dispatchers.IO) {
+                                                            JvmLauncher.onBridge { JvmLauncher.isPanelTextActive() }.get()
+                                                        }
+                                                    if (active) break
+                                                }
                                                 if (active) {
                                                     fieldValue =
                                                         withContext(Dispatchers.IO) {
