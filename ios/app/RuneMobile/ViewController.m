@@ -4311,6 +4311,42 @@ static int chatRowCanvasH(void) {
     ];
 }
 
+// PARITY-P0-6: map runProbesWithLog's documented negative boot-failure codes to a [title, body] pair, mirroring
+// Android's bootJvm copy. -10 missing embedded JRE, -11 missing probes.jar/routec-l1.jar, -12 dlopen(libjvm),
+// -13 dlsym, -14 JNI_CreateJavaVM. Same default-fallback shape as fatalCopyForCode:.
++ (NSArray<NSString *> *)bootFailureCopyForCode:(int)rc {
+    switch (rc) {
+        case -10:
+            return @[
+                @"Game runtime missing",
+                @"The embedded Java runtime didn't install completely. Reopen the app to retry; if it keeps "
+                @"failing, reinstall it."
+            ];
+        case -11:
+            return @[
+                @"Game files missing",
+                @"Some of the game's files didn't install completely. Reopen the app to retry; if it keeps "
+                @"failing, reinstall it."
+            ];
+        case -12:
+        case -13:
+        case -14:
+            return @[
+                @"Couldn't start the game",
+                [NSString stringWithFormat:@"The game's Java runtime failed to start (code %d). Close and reopen "
+                                           @"the app to retry; if it keeps failing, reinstall it.",
+                                           rc]
+            ];
+        default:
+            return @[
+                @"Couldn't start the game",
+                [NSString stringWithFormat:@"The game's Java runtime failed to start (code %d). Close and reopen "
+                                           @"the app to retry; if it keeps failing, reinstall it.",
+                                           rc]
+            ];
+    }
+}
+
 // FATAL-1: drive the card from the snapshot's fatal flag (~10 Hz slot, ungated — a fatal can land at any
 // point of the session). The bridge makes fatal outrank reconnecting/sessionExpired, so the overlays never
 // co-fire; latch-once (never hides) because a fatal is terminal for this process.
@@ -4329,6 +4365,39 @@ static int chatRowCanvasH(void) {
     self.fatalErrorScrim.hidden = NO;
     [self.view bringSubviewToFront:self.fatalErrorScrim];
     [self appendLine:[NSString stringWithFormat:@"[shell] fatal: engine-fatal card shown (code=%@)", code]];
+}
+
+// PARITY-P0-6: show the reused FATAL-1 card for a pre-boot JVM failure, PUSHED directly (unlike
+// updateFatalErrorOverlay, which polls the live bridge — a failed boot has no bridge to poll yet). Uses the same
+// scrim/title/body views, already built by setupFatalErrorOverlay (called on onLaunch before the JVM thread).
+- (void)showBootFailureWithTitle:(NSString *)title lines:(NSArray<NSString *> *)lines {
+    if (!self.fatalErrorScrim || self.fatalErrorShown)
+        return;
+    self.fatalErrorTitle.text = title;
+    self.fatalErrorBody.text = [lines componentsJoinedByString:@"\n"];
+    self.fatalErrorShown = YES;
+    self.fatalErrorScrim.hidden = NO;
+    [self.view bringSubviewToFront:self.fatalErrorScrim];
+    [self appendLine:[NSString stringWithFormat:@"[shell] boot-failure card shown: %@", title]];
+}
+
+// PARITY-P0-6: map a boot rc to copy + show the card, hopping to the main queue (called from the jvm-main
+// thread). Split out of the boot thread block so the failure path is a single call at the call site.
+// PARITY-P0-6: run the JVM probes on the jvm-main thread and, on a negative rc, surface the boot-failure card.
+// Split out of the NSThread block so the block body itself is untouched.
+- (void)runVmProbesAndReport:(JVMLauncher *)launcher log:(JVMLogSink)log {
+    int rc = [launcher runProbesWithLog:log];
+    [self reportBootFailure:rc];
+}
+
+- (void)reportBootFailure:(int)rc {
+    if (rc == 0)
+        return; // successful boot (runProbesWithLog ran the VM); nothing to report
+    NSArray<NSString *> *copy = [ViewController bootFailureCopyForCode:rc];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self appendLine:[NSString stringWithFormat:@"[shell] JVM boot FAILED rc=%d", rc]];
+        [self showBootFailureWithTitle:copy[0] lines:@[ copy[1] ]];
+    });
 }
 
 - (void)onFatalErrorClose {
@@ -4935,13 +5004,21 @@ static int chatRowCanvasH(void) {
     }
 #endif
 
+    [self startVmThreadWithLauncher:launcher
+                                log:log];
+}
+
+// The jvm-main worker thread: boot the VM (runProbesWithLog, which runs the engine and normally never returns),
+// then on a real return tear the render loop + bridge down on main. Extracted from -onLaunch so PARITY-P0-6's
+// boot-failure reporting can be added without disturbing the surrounding preprocessor-gated GPU-route block.
+- (void)startVmThreadWithLauncher:(JVMLauncher *)launcher log:(JVMLogSink)log {
     NSThread *t = [[NSThread alloc] initWithBlock:^{
-        [launcher runProbesWithLog:log];
+        [self runVmProbesAndReport:launcher log:log]; // PARITY-P0-6: shows a boot-failure card on a negative rc
         // VM lifecycle done; tear the render loop + bridge down on main, then release the assertion. (Unreached
-        // today — DestroyJavaVM blocks on the engine's non-daemon threads — but it's the correct clean teardown
+        // today - DestroyJavaVM blocks on the engine's non-daemon threads - but it's the correct clean teardown
         // for a future real exit: stop driving JNI into a destroyed VM instead of freezing on the last frame.)
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self appendLine:@"[shell] JVM thread returned — tearing down render loop + bridge"];
+            [self appendLine:@"[shell] JVM thread returned - tearing down render loop + bridge"];
             [self.displayLink invalidate];
             self.displayLink = nil;
             [self teardownPictureInPicture];
