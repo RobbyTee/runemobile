@@ -45,8 +45,9 @@ public class DeviceHeadlessBoot {
         // --disable-telemetry makes RuneLiteModule bind a null TelemetryClient, so start() submits NO boot
         // telemetry and NO JVM-crash reports to api.runelite.net. The other default-on upstream senders are
         // handled downstream: the 10-min session ping is sunk to localhost (RuneLiteHeadless), Loot Tracker +
-        // Chat Commands are seeded off (HeadlessClientUI), and GE offer uploads are gated off on mobile
-        // (GrandExchangePlugin.submitToApi). Remaining outbound: Jagex (gameplay/auth), read-only GETs from
+        // Chat Commands are seeded off (HeadlessClientUI), and the GE offer upload is gone outright — upstream
+        // deleted the api.runelite.net/ge crowdsourcing path, so there is no longer anything to gate.
+        // Remaining outbound: Jagex (gameplay/auth), read-only GETs from
         // api.runelite.net/static.runelite.net (item prices, hub metadata), and RuneLite-account sync ONLY
         // if the user signs in. PRIVACY.md is the authoritative list. Always on, every renderer.
         final java.util.List<String> rl = new java.util.ArrayList<>();

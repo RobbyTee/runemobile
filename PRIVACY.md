@@ -19,9 +19,10 @@
   `--disable-telemetry`, so RuneLite's usual boot telemetry and JVM-crash reporting to
   `api.runelite.net` are **off**.
 - **RuneLite's crowdsourced-data uploads are also off in this build.** Stock RuneLite pings a session
-  heartbeat and, via default-on plugins, uploads loot drops, kill-count chat data, and Grand Exchange
-  offer events (the last with a machine fingerprint) to `api.runelite.net`. In this build the session
-  ping is disabled, GE offer uploads are removed, and **Loot Tracker and Chat Commands ship disabled**
+  heartbeat and, via default-on plugins, uploads loot drops and kill-count chat data — and, until
+  upstream removed that path, Grand Exchange offer events tagged with a machine fingerprint — to
+  `api.runelite.net`. In this build the session ping is disabled, GE offer uploads are gone, and
+  **Loot Tracker and Chat Commands ship disabled**
   — if you enable those two plugins, their uploads work exactly as on desktop RuneLite (see the table
   below).
 - **Your credentials stay on the device.** OAuth tokens live in app-private storage and are sent
@@ -63,9 +64,9 @@ account-data row is opt-in.**
 - **No session heartbeat** — stock RuneLite pings `api.runelite.net` every 10 minutes with a random
   session id + a logged-in flag; this build points that endpoint at a local sink, so it never leaves
   the device.
-- **No Grand Exchange offer uploads** — stock RuneLite crowdsources every GE offer event tagged with a
-  stable machine fingerprint (hashed MACs/OS/account); this build drops that upload entirely while the
-  local GE panel and trade history keep working.
+- **No Grand Exchange offer uploads** — RuneLite used to crowdsource every GE offer event tagged with a
+  stable machine fingerprint (hashed MACs/OS/account). This build dropped that upload, and upstream has
+  since deleted the path outright; the local GE panel and trade history keep working either way.
 - **No crash reporting** — JVM crash logs are **not** uploaded anywhere; they remain on-device.
 - **No analytics, ads, tracking, or fingerprinting.** No third-party SDKs of that kind are present.
 - **No gameplay data to anyone but Jagex, in the default configuration** — chat, inventory, location,
