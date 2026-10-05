@@ -243,8 +243,10 @@ public final class GrandExchangeBridge
 					final int itemId = offer.getItemId();
 					final int qty = offer.getQuantitySold();
 					final int total = offer.getTotalQuantity();
-					final int price = offer.getPrice();
-					final int spent = offer.getSpent();
+					// Upstream widened GrandExchangeOffer#getPrice/#getSpent to long (an offer's running total can
+					// exceed int). Carry the full width — narrowing here would silently truncate a money value.
+					final long price = offer.getPrice();
+					final long spent = offer.getSpent();
 					final double progress = total > 0 ? Math.max(0.0, Math.min(1.0, (double) qty / total)) : 0.0;
 
 					if (!first)

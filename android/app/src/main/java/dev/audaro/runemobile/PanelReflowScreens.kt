@@ -220,7 +220,8 @@ data class GeOffer(
     val name: String,
     val qty: Int,
     val total: Int,
-    val price: Int,
+    // Long: upstream widened the GE offer price/spent to long, so the bridge can emit > Int.MAX_VALUE.
+    val price: Long,
     val progress: Double,
 )
 
@@ -229,13 +230,13 @@ data class GeTrade(
     val buy: Boolean,
     val name: String,
     val qty: Int,
-    val price: Int,
+    val price: Long,
 )
 
 data class GeSearchHit(
     val id: Int,
     val name: String,
-    val price: Int,
+    val price: Long,
 )
 
 @Composable
@@ -390,7 +391,7 @@ private fun GeTradeItem(t: GeTrade) {
         )
         Text("  ${t.name}", color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
         Text("×${t.qty}", color = Color(0xFFBDBDBD), fontSize = 12.sp)
-        Text("  @ ${gp(t.price.toLong())} gp", color = Color(0xFF81C784), fontSize = 12.sp)
+        Text("  @ ${gp(t.price)} gp", color = Color(0xFF81C784), fontSize = 12.sp)
     }
 }
 
@@ -398,7 +399,7 @@ private fun GeTradeItem(t: GeTrade) {
 private fun GeSearchItem(h: GeSearchHit) {
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(h.name, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
-        Text("${gp(h.price.toLong())} gp", color = Color(0xFF81C784), fontSize = 12.sp)
+        Text("${gp(h.price)} gp", color = Color(0xFF81C784), fontSize = 12.sp)
     }
 }
 
@@ -418,7 +419,7 @@ private fun GeOfferItem(o: GeOffer) {
         }
         Row(Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("${o.qty}/${o.total}", color = Color(0xFFBDBDBD), fontSize = 12.sp)
-            Text("@ ${gp(o.price.toLong())} gp", color = Color(0xFF81C784), fontSize = 12.sp)
+            Text("@ ${gp(o.price)} gp", color = Color(0xFF81C784), fontSize = 12.sp)
         }
         if (o.progress in 0.0..1.0) {
             LinearProgressIndicator(
@@ -448,7 +449,7 @@ private fun parseGe(json: String): List<GeOffer> =
                     name = g.optString("name", "?"),
                     qty = g.optInt("qty"),
                     total = g.optInt("total"),
-                    price = g.optInt("price"),
+                    price = g.optLong("price"),
                     progress = g.optDouble("progress", 0.0),
                 )
             }
@@ -466,7 +467,7 @@ private fun parseGeSearch(json: String): List<GeSearchHit> =
             GeSearchHit(
                 id = g.optInt("id"),
                 name = g.optString("name", "?"),
-                price = g.optInt("price"),
+                price = g.optLong("price"),
             )
         }
     } catch (t: Throwable) {
@@ -485,7 +486,7 @@ private fun parseGeHistory(json: String): List<GeTrade> =
                     buy = h.optBoolean("buy"),
                     name = h.optString("name", "").ifEmpty { "Item ${h.optInt("itemId")}" },
                     qty = h.optInt("qty"),
-                    price = h.optInt("price"),
+                    price = h.optLong("price"),
                 )
             }.asReversed() // storage keeps newest last; show newest first
     } catch (t: Throwable) {
