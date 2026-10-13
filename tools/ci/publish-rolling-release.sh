@@ -102,8 +102,16 @@ gh release list --repo "$PUBLISH_REPO" --limit 100 --json tagName \
 	| tail -n +"$((RETAIN + 1))" \
 	| while IFS= read -r old; do
 		[ -n "$old" ] || continue
-		echo "   deleting $old"
-		gh release delete "$old" --repo "$PUBLISH_REPO" --yes --cleanup-tag 2>/dev/null || true
+		# Report the ACTUAL outcome. This used to echo "deleting $old" BEFORE trying, send stderr to
+		# /dev/null and swallow the exit with `|| true` — so a prune that deleted nothing logged exactly
+		# like one that worked (observed on master-1024: it claimed to delete master-1019, which is still
+		# there with all 3 assets). Still non-fatal: a failed prune must not fail an otherwise-good
+		# publish — but it now says so instead of lying.
+		if err="$(gh release delete "$old" --repo "$PUBLISH_REPO" --yes --cleanup-tag 2>&1)"; then
+			echo "   deleted $old"
+		else
+			echo "   !! prune FAILED for $old (left in place): ${err//$'\n'/ }" >&2
+		fi
 	done
 
 echo ">> published: https://github.com/$PUBLISH_REPO/releases/tag/$TAG"
