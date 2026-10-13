@@ -8,6 +8,14 @@ All notable changes to the Android app are recorded here. Format follows
 accepts update-in-place.
 
 ## [Unreleased]
+### Changed
+- Rebased onto upstream RuneLite `1.13.2-SNAPSHOT` (tag `runelite-parent-1.13.1`), bringing
+  `rev241` (2026-10-07) game data: new GameVals/Legacy ID classes, item variations, and the
+  Sailing skill-calculator data.
+- Grand Exchange offer price/spent widened `int` -> `long` upstream; the native GE panel now
+  parses the wider values (`optLong`), so a total past `Int.MAX_VALUE` no longer truncates.
+- Upstream removed its Grand Exchange crowdsourcing upload outright, so the mobile privacy gate
+  that suppressed it is gone as redundant. No GE offer data leaves the device, as before.
 
 ## [0.1.0]
 Initial pre-release of the native Android client: real RuneLite headless on an

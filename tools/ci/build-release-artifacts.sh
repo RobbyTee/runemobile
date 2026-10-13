@@ -278,6 +278,8 @@ fi
 	printf 'VERSION=%q\n'        "$VERSION"
 	printf 'BUILD_NUMBER=%q\n'   "$BUILD_NUMBER"
 	printf 'GIT_SHA=%q\n'        "$GIT_SHA"
+	# The upstream RuneLite the jars were built from, so a published build states which client it IS.
+	printf 'RUNELITE_VERSION=%q\n' "$JARVER"
 	printf 'APK_FINGERPRINT=%q\n' "$APK_FP"
 	printf 'DIST=%q\n'           "$DIST"
 } > "$DIST/manifest.env"

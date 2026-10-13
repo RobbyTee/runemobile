@@ -53,6 +53,10 @@ done
 [ "${#ASSETS[@]}" -gt 0 ] || die "no assets found in $DIST for version $VERSION"
 
 FP_LINE=""
+# RuneLite base: present in manifests written by current build-release-artifacts.sh; older ones omit it,
+# so the line is simply left out rather than printing an empty value.
+RL_LINE=""
+[ -n "${RUNELITE_VERSION:-}" ] && RL_LINE=$'\n'"- RuneLite base: \`${RUNELITE_VERSION}\`"
 [ -n "${APK_FINGERPRINT:-}" ] && FP_LINE=$'\nAPK signer SHA-256: `'"${APK_FINGERPRINT}"'` (verify with `apksigner verify --print-certs`)'
 
 # GIT_SHA is the master commit this build was cut from — a public, auditable reference on this repo.
@@ -60,7 +64,7 @@ NOTES="Automated build of RuneMobile from \`master\` (one immutable prerelease p
 
 - Version: \`${VERSION}\`
 - Commit: \`${GIT_SHA}\`
-- Built: ${BUILD_DATE}${FP_LINE}
+- Built: ${BUILD_DATE}${RL_LINE}${FP_LINE}
 
 The newest prerelease here is the latest \`master\` build; older rolling builds are pruned automatically. For a
 stable, curated build use a tagged \`v*\` release instead.

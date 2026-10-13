@@ -115,9 +115,10 @@ the other as parity is closed.
 
 ## Platform status & supported devices
 
-This is an early **`0.1.0` pre-release.** It is playable, but it is a
-single-maintainer, best-effort build and may break after an OSRS weekly update until
-a new build is published.
+This is an early **`0.1.0` pre-release**, tracking upstream RuneLite
+**`1.13.2-SNAPSHOT`** (latest release tag `runelite-parent-1.13.1`) with **`rev241`**
+(2026-10-07) game data. It is playable, but it is a single-maintainer, best-effort
+build and may break after an OSRS weekly update until a new build is published.
 
 ### Android
 
