@@ -30,6 +30,37 @@ generated-code PCs, never a `brk #0x69`). So the script handles **both**: real `
 instruction-abort faults — on a fault it calls `prepare_memory_region` for the faulting 16 KB page and retries
 (continue without re-delivering the signal), turning the debugger into the on-demand RX mapper.
 
+## Installing StikDebug without SideStore (the reliable path)
+
+SideStore is a single point of failure: when its Apple-ID sign-in breaks, it cannot sign anything, and every
+install — StikDebug included — sits on a spinner forever with no error. We do not need it. The paid team
+already has a **wildcard** development profile (`<TEAM_ID>.*`, found under
+`~/Library/Developer/Xcode/UserData/Provisioning Profiles/`), and a wildcard matches *any* bundle id, so the
+stock StikDebug IPA can be signed under its own id and pushed straight over USB:
+
+```sh
+# 1. grab the release IPA (it ships UNSIGNED — that is normal; a sideload store signs it at install)
+curl -sL -o StikDebug.ipa "$(gh api repos/StikDebug/StikDebug/releases/latest --jq '.assets[0].browser_download_url')"
+unzip -q StikDebug.ipa -d stik && APP=stik/Payload/StikDebug.app
+
+# 2. embed the WILDCARD profile (must list this device's hardware udid, not the CoreDevice uuid)
+cp "~/Library/Developer/Xcode/UserData/Provisioning Profiles/<wildcard>.mobileprovision" "$APP/embedded.mobileprovision"
+
+# 3. sign, keeping bundle id com.stik.stikdebug so it upgrades IN PLACE and keeps the pairing
+#    file + per-app script assignments. ent.plist: application-identifier <TEAM_ID>.com.stik.stikdebug,
+#    com.apple.developer.team-identifier, get-task-allow, keychain-access-groups.
+codesign --force --sign "Apple Development: <you>" --entitlements ent.plist --generate-entitlement-der "$APP"
+
+# 4. install
+xcrun devicectl device install app --device <device-uuid> "$APP"
+```
+
+Why this is better than the store path: the signature is a 1-year paid-team one, so there is no weekly
+refresh, and it works when SideStore is wedged. Keeping the original bundle id is the important bit — a
+different id would install alongside as a second app and start from an empty container.
+
+The bundle has no frameworks or extensions (one arm64 binary), so there is nothing to sign first.
+
 ## Install + assign (on the iPhone)
 0. **Keep StikDebug current — this is load-bearing, not hygiene.** Add the official AltSource
    `https://stikdebug.xyz/index.json` to SideStore/AltStore and update from there, so later versions are
