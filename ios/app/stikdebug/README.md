@@ -37,9 +37,8 @@ instruction-abort faults — on a fault it calls `prepare_memory_region` for the
    lot: 3.1.9 fixed pairing-file handling, 3.1.11 moved DDI mounting to cryptex (and stopped requiring a
    reboot to remount on iOS 26.4+), 3.1.12 fixed DDI for iOS < 26.4 *and* improved TXM scripts — which is
    the exact mechanism `runelite-jit.js` relies on. An old StikDebug on a new iOS is a known hang.
-   That source also lists **StikPair** (on-device pairing file, no computer) — but it requires **iOS 27+**,
-   so it will NOT install on the 26.5 dev device: SideStore just spins on it. Pairing stays an iloader job
-   here until the device moves to iOS 27.
+   That source also lists **StikPair** (on-device pairing file, no computer), which needs **iOS 27+** and so
+   is usable on the 27.2 dev device — it should retire the iloader step for pairing.
 1. Get `runelite-jit.js` onto the phone and into StikDebug's scripts:
    - AirDrop the file to the iPhone, or
    - **Files → On My iPhone → StikDebug → scripts/** and drop it there, or use StikDebug's in-app
@@ -59,6 +58,11 @@ instruction-abort faults — on a fault it calls `prepare_memory_region` for the
 
 ## If it still crashes / hangs
 Capture both logs. Useful signals:
+- **Every SideStore install sits on the spinner (any app, not just ours)** → this is the sideloader, not the
+  app being installed. Apple changed something server-side that breaks Apple-ID sign-in on SideStore **0.6.4
+  and earlier** (fixed in 0.7.0-alpha); with no sign-in there is no signing certificate, so installs never
+  start. Check the SideStore version before blaming the app, and note the `nightly` release asset is rebuilt
+  continuously — it is much fresher than the newest numbered tag.
 - **Spinner stuck on "Starting JIT for RuneMobile", never reaching attach** → this is *before* our script
   runs, so it is not a `runelite-jit.js` problem. In order: (a) StikDebug out of date against the iOS
   version — see step 0, the DDI mount is what stalls here; (b) LocalDevVPN running but not *connected*
