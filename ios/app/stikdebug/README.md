@@ -31,6 +31,13 @@ instruction-abort faults — on a fault it calls `prepare_memory_region` for the
 (continue without re-delivering the signal), turning the debugger into the on-demand RX mapper.
 
 ## Install + assign (on the iPhone)
+0. **Keep StikDebug current — this is load-bearing, not hygiene.** Add the official AltSource
+   `https://stikdebug.xyz/index.json` to SideStore/AltStore and update from there, so later versions are
+   one tap. StikDebug mounts the Developer Disk Image during "Starting JIT", and that code has changed a
+   lot: 3.1.9 fixed pairing-file handling, 3.1.11 moved DDI mounting to cryptex (and stopped requiring a
+   reboot to remount on iOS 26.4+), 3.1.12 fixed DDI for iOS < 26.4 *and* improved TXM scripts — which is
+   the exact mechanism `runelite-jit.js` relies on. An old StikDebug on a new iOS is a known hang.
+   The same source also ships **StikPair**, which makes a pairing file on-device (no computer, no iloader).
 1. Get `runelite-jit.js` onto the phone and into StikDebug's scripts:
    - AirDrop the file to the iPhone, or
    - **Files → On My iPhone → StikDebug → scripts/** and drop it there, or use StikDebug's in-app
@@ -50,6 +57,14 @@ instruction-abort faults — on a fault it calls `prepare_memory_region` for the
 
 ## If it still crashes / hangs
 Capture both logs. Useful signals:
+- **Spinner stuck on "Starting JIT for RuneMobile", never reaching attach** → this is *before* our script
+  runs, so it is not a `runelite-jit.js` problem. In order: (a) StikDebug out of date against the iOS
+  version — see step 0, the DDI mount is what stalls here; (b) LocalDevVPN running but not *connected*
+  (the app being open is not the same as the tunnel being up, and only one VPN runs at a time — SideStore's
+  must be off); (c) a stale pairing file; (d) a Mac holding the device's debug tunnel (quit Xcode; check
+  `pgrep -xl Xcode`). Confirm the app itself is alive with
+  `xcrun devicectl device info processes --device <udid> | grep -i runemobile` — if RuneMobile is running
+  and the spinner never resolves, the fault is on the StikDebug side, not ours.
 - **No `[rl-jit] attached` line** → the script wasn't assigned/run; re-check the assignment.
 - **`_M alloc FAILED`** → RX allocation rejected (try a smaller `-XX:ReservedCodeCacheSize` in the app's
   JLI args, e.g. 64m).
