@@ -69,7 +69,8 @@ The bundle has no frameworks or extensions (one arm64 binary), so there is nothi
    reboot to remount on iOS 26.4+), 3.1.12 fixed DDI for iOS < 26.4 *and* improved TXM scripts — which is
    the exact mechanism `runelite-jit.js` relies on. An old StikDebug on a new iOS is a known hang.
    That source also lists **StikPair** (on-device pairing file, no computer), which needs **iOS 27+** and so
-   is usable on the 27.2 dev device — it should retire the iloader step for pairing.
+   runs on the 27.2 dev device — it retires the iloader step for pairing. It is unsigned and framework-free
+   exactly like StikDebug, so the devicectl recipe above installs it too, as `com.stik.StikPair`.
 1. Get `runelite-jit.js` onto the phone and into StikDebug's scripts:
    - AirDrop the file to the iPhone, or
    - **Files → On My iPhone → StikDebug → scripts/** and drop it there, or use StikDebug's in-app
@@ -94,6 +95,16 @@ Capture both logs. Useful signals:
   and earlier** (fixed in 0.7.0-alpha); with no sign-in there is no signing certificate, so installs never
   start. Check the SideStore version before blaming the app, and note the `nightly` release asset is rebuilt
   continuously — it is much fresher than the newest numbered tag.
+- **"Connection Error … the device or VPN closed the tunnel connection before setup finished",
+  `ConnectionReset` to `10.7.0.1:49152`** → read this as a PAIRING problem, not a VPN problem. The tunnel
+  reaching 10.7.0.1 at all proves the loopback VPN is routing; it is the handshake after connect that is
+  being rejected, and a pairing file minted for an older iOS is the usual reason. The pairing format has
+  changed across majors (pymobiledevice3's classic lockdown record is rejected outright with "missing field
+  public key"), so a file that worked on the previous major can fail here while LocalDevVPN looks perfectly
+  healthy. On **iOS 27+** mint a fresh one on-device with **StikPair** instead of going back to iloader:
+  open StikPair → Pair, then on the same device Settings → Privacy & Security → Developer Mode → **Pair with
+  StikPair**, and import the result into StikDebug. (If that entry is missing, force-quit StikPair and
+  reopen.) StikPair needs a working network — turn Airplane Mode off rather than relying on Wi-Fi alone.
 - **Spinner stuck on "Starting JIT for RuneMobile", never reaching attach** → this is *before* our script
   runs, so it is not a `runelite-jit.js` problem. In order: (a) StikDebug out of date against the iOS
   version — see step 0, the DDI mount is what stalls here; (b) LocalDevVPN running but not *connected*
