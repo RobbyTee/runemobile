@@ -2737,6 +2737,25 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 // 15 Hz pump keeps feeding live frames to the (auto-started) Picture-in-Picture window.
 - (void)onEnterBackground {
     [JVMLauncher mobileFlushConfig];
+    // Reaching the background IS survival, so stop treating the next launch as a crash.
+    //
+    // The cookie exists to catch a GPU boot that dies during GL init, shader compile or warmup --
+    // all of which happen in the first seconds, in the foreground, long before anyone can send the
+    // app to the background. But base GPU arms as soon as any frame shows and only clears on a real
+    // GPU frame, which does not arrive until the world loads. Everything in between -- sitting at
+    // the login screen, reading the plugins panel, switching apps -- left it armed, so a user who
+    // quit and relaunched was told the renderer had crashed and was moved back to software.
+    //
+    // That is not hypothetical: switching renderers REQUIRES a relaunch, so the ordinary way to turn
+    // the GPU renderer on ran into this every time. An OOM during world load is unaffected; it
+    // happens in the foreground with the cookie still armed, and still demotes correctly.
+    if (self.hdBootCookieArmed && !self.hdBootCookieSettled) {
+        [self hdBootCookieClear];
+        self.hdBootCookieArmed = NO;
+        self.hdBootCookieSettled = YES;
+        [self appendLine:@"[shell] backgrounded before the first GPU frame — crash cookie cleared "
+                         @"(the boot survived; a relaunch from here is not a crash)"];
+    }
     if (self.bgKeepTask != UIBackgroundTaskInvalid) {
         [[UIApplication sharedApplication] endBackgroundTask:self.bgKeepTask];
     }
