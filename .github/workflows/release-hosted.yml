@@ -80,6 +80,13 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+        with:
+          # Override the action's default `packages: tools platform-tools`. Google delisted the obsolete
+          # `tools` package from the SDK repository, so sdkmanager now exits 1 on "Failed to find package
+          # 'tools'" and the whole job dies in the setup step. Nothing here needs it: Gradle resolves the
+          # build-tools and platform it wants on its own. This broke the hosted build on its own, with no
+          # change on our side -- the last green run was 2026-07-13.
+          packages: platform-tools
 
       - name: Install xcodegen
         run: brew install xcodegen
