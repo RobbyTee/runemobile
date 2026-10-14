@@ -41,6 +41,7 @@ import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
+import okhttp3.ResponseBody;
 
 @Slf4j
 public class AccountClient
@@ -76,7 +77,22 @@ public class AccountClient
 
 		try (Response response = client.newCall(request).execute())
 		{
-			InputStream in = response.body().byteStream();
+			// Check the status before parsing. An error page is still a body, so handing it straight to gson
+			// reports "Expected BEGIN_OBJECT but was STRING" — which names neither the status nor the URL, and
+			// reads like malformed JSON rather than an endpoint that is not there. A retired api.runelite.net
+			// version behaves exactly this way.
+			if (!response.isSuccessful())
+			{
+				throw new IOException("Unsuccessful response " + response.code() + " from " + url);
+			}
+
+			ResponseBody body = response.body();
+			if (body == null)
+			{
+				throw new IOException("Empty response from " + url);
+			}
+
+			InputStream in = body.byteStream();
 			return gson.fromJson(new InputStreamReader(in, StandardCharsets.UTF_8), OAuthResponse.class);
 		}
 		catch (JsonParseException ex)
