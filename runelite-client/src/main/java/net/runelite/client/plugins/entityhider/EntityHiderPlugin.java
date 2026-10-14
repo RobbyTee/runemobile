@@ -29,6 +29,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSet;
 import com.google.inject.Module;
 import com.google.inject.Provides;
+import com.google.inject.util.Providers;
 import java.util.Set;
 import javax.inject.Inject;
 import net.runelite.api.Client;
@@ -135,18 +136,23 @@ public class EntityHiderPlugin extends Plugin
 	}
 
 	/**
-	 * Expose an (empty) public module purely so that a plugin declaring
-	 * {@code @PluginDependency(EntityHiderPlugin.class)} can be instantiated. Since upstream started
-	 * requiring dependencies to provide their services explicitly, {@code PluginManager.instantiate}
-	 * rejects any dependency whose {@code getPublicModule()} is null with "does not expose any services",
-	 * and this plugin never had one. That makes the staged 117HD build — which declares the dependency for
-	 * ordering only and consumes nothing from it — fail to load, so it never reaches the renderer panel.
-	 * Nothing is bound here because there is no service to share; this only satisfies the dependency check.
+	 * Share this plugin and its config with dependents. Upstream requires a {@code @PluginDependency} target
+	 * to expose its services, and this plugin never did, so a dependent could not be instantiated at all.
+	 * <p>
+	 * Both bindings are load-bearing for the staged 117HD build: {@code rs117.hd.scene.LightManager} injects
+	 * {@code EntityHiderPlugin} AND {@code EntityHiderConfig}. The instances are bound explicitly so the
+	 * dependent's child injector shares the LIVE plugin rather than constructing a second, unregistered copy
+	 * — which is also what binding only the plugin would fail at, since its own {@code config} field is
+	 * injected and {@code EntityHiderConfig} is otherwise unreachable from that injector.
 	 */
 	@Override
 	protected Module getPublicModule()
 	{
-		return b -> {};
+		return b ->
+		{
+			b.bind(EntityHiderPlugin.class).toProvider(Providers.of(this));
+			b.bind(EntityHiderConfig.class).toProvider(Providers.of(config));
+		};
 	}
 
 	@Override
