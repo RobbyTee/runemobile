@@ -44,7 +44,7 @@ curl -sL -o StikDebug.ipa "$(gh api repos/StikDebug/StikDebug/releases/latest --
 unzip -q StikDebug.ipa -d stik && APP=stik/Payload/StikDebug.app
 
 # 2. embed the WILDCARD profile (must list this device's hardware udid, not the CoreDevice uuid)
-cp "~/Library/Developer/Xcode/UserData/Provisioning Profiles/<wildcard>.mobileprovision" "$APP/embedded.mobileprovision"
+cp "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/<wildcard>.mobileprovision" "$APP/embedded.mobileprovision"
 
 # 3. sign, keeping bundle id com.stik.stikdebug so it upgrades IN PLACE and keeps the pairing
 #    file + per-app script assignments. ent.plist: application-identifier <TEAM_ID>.com.stik.stikdebug,
