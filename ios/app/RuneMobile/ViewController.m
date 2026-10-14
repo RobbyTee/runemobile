@@ -3189,12 +3189,26 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
     // locked, and Complete makes a file unwritable once locked. The class is set at creation and persists;
     // opened here while unlocked, the fd/handle stays writable after the device locks.
     NSDictionary *prot = @{NSFileProtectionKey: NSFileProtectionCompleteUnlessOpen};
+    // Keep the PREVIOUS launch's logs. Both sinks are recreated below, so without this the only
+    // record of a launch that died is destroyed by the launch that comes to investigate it — and a
+    // boot crash is precisely the thing you cannot reproduce on demand. The GPU renderer's crash
+    // cookie is diagnosed entirely from the launch that armed it, which is always the one before.
+    void (^rotate)(NSString *) = ^(NSString *current) {
+        NSFileManager *fm = [NSFileManager defaultManager];
+        if (![fm fileExistsAtPath:current])
+            return;
+        NSString *previous = [current stringByAppendingPathExtension:@"prev"];
+        [fm removeItemAtPath:previous error:NULL];
+        [fm moveItemAtPath:current toPath:previous error:NULL];
+    };
     NSString *path = [docs stringByAppendingPathComponent:@"hello-shell.log"];
+    rotate(path);
     [[NSFileManager defaultManager] createFileAtPath:path contents:nil attributes:prot];
     self.logFile = [NSFileHandle fileHandleForWritingAtPath:path];
     // Separate raw file for libjvm stdout/stderr, written synchronously (survives a
     // crash) so the [JIT26] mapping trace + the Hello verdict are always retrievable.
     NSString *jpath = [docs stringByAppendingPathComponent:@"jvm-stdio.log"];
+    rotate(jpath);
     [[NSFileManager defaultManager] createFileAtPath:jpath contents:nil attributes:prot];  // protection persists across open()
     self.jvmFd = open(jpath.UTF8String, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 #else
