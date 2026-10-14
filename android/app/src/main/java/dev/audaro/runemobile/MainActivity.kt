@@ -869,9 +869,11 @@ class MainActivity : AppCompatActivity() {
                     onScreenshotLongPress = { toggleAutoScreenshots() },
                     onAccount = { startActivity(Intent(this@MainActivity, LoginActivity::class.java)) },
                     onLogout = { confirmLogout() },
-                    // RuneLite's Discord invite (runelite.properties runelite.discord.invite) — Discord had no
-                    // Android home before; publishLink routes it through the shared link path to the browser.
-                    onDiscord = { JvmLauncher.onBridge { JvmLauncher.publishLink("https://discord.gg/ArdAhnN") } },
+                    // RuneMobile's own Discord (mirrors runelite.properties runelite.discord.invite) — Discord had
+                    // no Android home before; publishLink routes it through the shared link path to the browser.
+                    // Deliberately NOT RuneLite's invite: this is an unofficial fork they do not support, so sending
+                    // our users there gets them turned away and spams volunteers working on a different client.
+                    onDiscord = { JvmLauncher.onBridge { JvmLauncher.publishLink("https://discord.gg/RUHgB5TTR") } },
                     // FIX-11: a panel's mirror text field is focused -> the per-frame poll must leave the IME alone.
                     onPanelTextActive = { active -> textActivePanel = active },
                     // Overlay layout is edited ON the live game now: close the panel + enter the on-screen drag mode.

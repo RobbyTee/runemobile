@@ -39,6 +39,7 @@ engine and its plugins, with a native mobile UI layered on top.
 - [StikDebug & the JIT script](#stikdebug--the-jit-script)
 - [Logging in](#logging-in)
 - [Updating, rollback & recovery](#updating-rollback--recovery)
+- [Community & support](#community--support)
 - [Troubleshooting](#troubleshooting)
 - [Build from source](#build-from-source)
 - [Architecture](#architecture)
@@ -332,6 +333,24 @@ identity keeps your token, cache, config, and renderer choice.
 
 Full recovery steps (broken state, token backup, clearing app data, GPU-crash
 recovery) are in [`RELEASE.md`](RELEASE.md).
+
+---
+
+## Community & support
+
+The official community for this project is the **RuneMobile Discord**:
+
+**https://discord.gg/RUHgB5TTR**
+
+That is the right place for install help, device-specific quirks, and build
+questions. Please bring issues with **this** client here rather than to the
+RuneLite or Jagex channels: RuneMobile is an unofficial fork and neither project
+supports it, so they cannot help you and reports there only create noise for
+volunteers working on something else. Reproducible bugs are still best filed as a
+GitHub issue so they do not get lost in chat.
+
+When asking for help, **never paste `tokens.json`, an `access_token`, a
+`refresh_token`, or an unredacted log** — see [Privacy & security](#privacy--security).
 
 ---
 
