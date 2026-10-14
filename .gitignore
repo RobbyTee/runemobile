@@ -61,3 +61,40 @@ __pycache__/
 ### Local-only dev config (machine-specific paths / identifiers) ###
 .mcp.json
 ios/dev-tools/signing.env
+
+### Internal working notes — not part of the shipped project ###
+# Design docs, audits, handoffs and investigation write-ups live in the tree while work is in
+# progress but are not published. These were previously covered only by .git/info/exclude, which
+# is local to one clone: a fresh clone had no protection at all, so a stray `git add -A` would
+# have committed them. Keep them here, where the rule travels with the repo.
+AUDIT-*.md
+*-AUDIT.md
+*-HANDOFF.md
+HANDOFF.md
+*-BLUEPRINT.md
+BLUEPRINT.md
+*-PLAN.md
+*-PHASING.md
+*-PHASING-REVIEW.md
+*-INVESTIGATION.md
+*-RECONCILIATION.md
+*-RESEARCH.md
+*-SCOPE.md
+*-DIAGNOSIS.md
+*-PROMPT.md
+*-DEEPDIVE.md
+*-RESULT.md
+*-RESULTS.md
+*-notes.md
+PHASE*.md
+ROADMAP.md
+RESULTS.md
+GATE.md
+FINDINGS.md
+MARKETING-SHOWCASE.md
+DEVICE-KIT.md
+bridge-manifest.md
+facade-delta.md
+ANDROID-QA-*.md
+QA-HEADLESS-*.md
+AUDIT-RESULT-*.md
