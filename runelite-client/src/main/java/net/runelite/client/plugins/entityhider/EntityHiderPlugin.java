@@ -27,6 +27,7 @@ package net.runelite.client.plugins.entityhider;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSet;
+import com.google.inject.Module;
 import com.google.inject.Provides;
 import java.util.Set;
 import javax.inject.Inject;
@@ -131,6 +132,21 @@ public class EntityHiderPlugin extends Plugin
 	EntityHiderConfig provideConfig(ConfigManager configManager)
 	{
 		return configManager.getConfig(EntityHiderConfig.class);
+	}
+
+	/**
+	 * Expose an (empty) public module purely so that a plugin declaring
+	 * {@code @PluginDependency(EntityHiderPlugin.class)} can be instantiated. Since upstream started
+	 * requiring dependencies to provide their services explicitly, {@code PluginManager.instantiate}
+	 * rejects any dependency whose {@code getPublicModule()} is null with "does not expose any services",
+	 * and this plugin never had one. That makes the staged 117HD build — which declares the dependency for
+	 * ordering only and consumes nothing from it — fail to load, so it never reaches the renderer panel.
+	 * Nothing is bound here because there is no service to share; this only satisfies the dependency check.
+	 */
+	@Override
+	protected Module getPublicModule()
+	{
+		return b -> {};
 	}
 
 	@Override
