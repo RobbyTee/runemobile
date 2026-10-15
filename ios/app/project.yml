@@ -139,6 +139,12 @@ targets:
         FRAMEWORK_SEARCH_PATHS:
           - "$(inherited)"
           - "$(SRCROOT)/../dev-tools/gpu-angle/angle"
+    preBuildScripts:
+      # The GPU renderer is dead -- silently -- if jvm-resources/client-shaded.jar is the pristine desktop
+      # jar instead of the staged iOS variant, and the two are interchangeable by name. Gate the build on it.
+      - script: "\"${SRCROOT}/scripts/check-staged-jar.sh\""
+        name: "Check staged iOS shaded jar"
+        basedOnDependencyAnalysis: false
     postBuildScripts:
       - script: "\"${SRCROOT}/scripts/resign-jre.sh\""
         name: "Re-sign embedded JRE"
