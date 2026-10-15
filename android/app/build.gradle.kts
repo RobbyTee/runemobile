@@ -244,6 +244,32 @@ val verifyStagedClientJar =
                     }
                 val index = names.count { it == "runelite/index" }
                 val scripts = names.count { Regex("^runelite/\\d+/\\d+").containsMatchIn(it) }
+                // The shell resolves the dialogue handlers with midOpt (OPTIONAL), so a jar predating them still
+                // boots -- and then every dialogue tap is consumed and silently does nothing, because the native
+                // call finds a null method id and returns. The publish half lives elsewhere in the same class and
+                // keeps working, so the parchment looks perfectly healthy while the buttons are dead. That shipped
+                // on 2026-10-15: the staged jar was two days older than the source and only a device tap found it.
+                // Substring-matched against the class bytes: the failure this guards is a jar built before these
+                // methods existed, where neither name appears at all.
+                val bridgePath = "net/runelite/client/headless/HudVeneerBridge.class"
+                val bridgeBytes =
+                    ZipFile(jar).use { zip ->
+                        zip.getEntry(bridgePath)?.let { e -> zip.getInputStream(e).use { it.readBytes() } }
+                    }
+                if (bridgeBytes == null) {
+                    throw GradleException("${jar.name} has no $bridgePath -- the staged client jar is not ours.")
+                }
+                val bridgeText = String(bridgeBytes, Charsets.ISO_8859_1)
+                val missingHandlers = listOf("continueDialogue", "selectDialogueOption").filter { !bridgeText.contains(it) }
+                if (missingHandlers.isNotEmpty()) {
+                    throw GradleException(
+                        "${jar.name} is STALE: HudVeneerBridge lacks $missingHandlers.\n" +
+                            "The shell resolves these optionally, so the app boots and every dialogue tap does " +
+                            "nothing at all. Rebuild and re-stage:\n" +
+                            "  JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :client:shadowJar   (in the repo root build)\n" +
+                            "  android/dev-tools/gpu/stage-android-gpu-jar.sh",
+                    )
+                }
                 if (index != 1 || scripts < 1) {
                     throw GradleException(
                         "${jar.name} is missing build-generated runelite/ resources " +
