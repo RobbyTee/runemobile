@@ -310,6 +310,14 @@ public final class JavaBridge
 	private static final int PITCH_MAX = 3064;             // 383 * 8
 	private static float yawRemainder;
 	private static float pitchRemainder;
+	// Held camera turn (an arrow button down), as the same raw PIXEL rate a drag delivers -- per SECOND, not per
+	// frame, so the turn does not speed up with the frame rate. Fed into the drag accumulators each frame, which
+	// keeps the unit space, the pitch clamp, the sub-pixel remainders and the in-game guard in one place.
+	private static volatile int camHoldDxPerSec;
+	private static volatile int camHoldDyPerSec;
+	private static long camHoldLastMs;
+	private static float camHoldRemX;
+	private static float camHoldRemY;
 	// Two-finger camera pan: native posts raw pixel deltas from the main thread (onCameraDrag); they accumulate
 	// here and are applied on the client thread in tapTick. RuneLite's camera state is client-thread-only — the
 	// old in-place read-modify-write off the JNI thread lost updates against the engine's per-tick interpolation
@@ -894,6 +902,7 @@ public final class JavaBridge
 	 */
 	private static void tapTickImpl(Client c)
 	{
+		feedCameraHold();          // a held arrow button turns by feeding the same accumulators a drag uses
 		applyCameraDrag(c);        // drain accumulated two-finger-pan deltas (camera writes are client-thread-only)
 		maybePostIdleKeepalive(c); // drain native-UI activity -> MOUSE_MOVED(-1,-1) if gated + throttled (idle reset)
 		snapshotTextInputOpen(c);  // publish INPUT_TYPE for isTextInputOpen() to read off the client thread
@@ -1889,6 +1898,65 @@ public final class JavaBridge
 		// Accumulate only; the camera writes happen on the client thread in tapTick -> applyCameraDrag.
 		camDragDx.addAndGet(dxPixels);
 		camDragDy.addAndGet(dyPixels);
+	}
+
+	/**
+	 * Hold the camera turning until released, as a pixel RATE in the same units {@link #onCameraDrag} takes:
+	 * {@code 0, 0} releases. The shell sets it once on press instead of repeating a nudge, and each frame the
+	 * elapsed share of that rate is fed into the drag accumulators — so this inherits the JAU14 unit space, the
+	 * pitch clamp and the sub-pixel accumulation rather than restating any of them.
+	 *
+	 * @param dxPixelsPerSec horizontal rate; the sign matches a drag, so positive turns as dragging right does
+	 * @param dyPixelsPerSec vertical rate; positive tilts down, as dragging down does
+	 */
+	public static void setCameraHold(int dxPixelsPerSec, int dyPixelsPerSec)
+	{
+		camHoldDxPerSec = dxPixelsPerSec;
+		camHoldDyPerSec = dyPixelsPerSec;
+	}
+
+	/**
+	 * Convert the standing hold into this frame's pixel delta — on the client thread, immediately before the
+	 * drag drain. Time-scaled so the turn rate is the same at 20fps and 50fps, and a long frame (a stall, a
+	 * return from background) is capped rather than flinging the camera round by the whole gap.
+	 */
+	private static void feedCameraHold()
+	{
+		final int rx = camHoldDxPerSec;
+		final int ry = camHoldDyPerSec;
+		final long now = System.currentTimeMillis();
+		if (rx == 0 && ry == 0)
+		{
+			camHoldLastMs = 0;
+			camHoldRemX = 0;
+			camHoldRemY = 0;
+			return;
+		}
+		if (camHoldLastMs == 0)
+		{
+			camHoldLastMs = now;   // first frame of a hold only starts the clock
+			return;
+		}
+		float dt = (now - camHoldLastMs) / 1000.0f;
+		camHoldLastMs = now;
+		if (dt > 0.25f)
+		{
+			dt = 0.25f;
+		}
+		final float fx = rx * dt + camHoldRemX;
+		final int ix = (int) fx;
+		camHoldRemX = fx - ix;
+		final float fy = ry * dt + camHoldRemY;
+		final int iy = (int) fy;
+		camHoldRemY = fy - iy;
+		if (ix != 0)
+		{
+			camDragDx.addAndGet(ix);
+		}
+		if (iy != 0)
+		{
+			camDragDy.addAndGet(iy);
+		}
 	}
 
 	/** Drain the accumulated two-finger-pan deltas and apply yaw/pitch — on the client thread (from tapTick). */

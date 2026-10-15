@@ -47,6 +47,7 @@ static jmethodID gMidHeapStats = NULL;    // heapStats()Ljava/lang/String; — d
 static jmethodID gMidSimReconnect = NULL; // devSimulateReconnect(I)V — dev "test reconnect" hook (optional)
 static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidClickPrecise = NULL, gMidMove = NULL;
 static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
+static jmethodID gMidCameraHold = NULL; // setCameraHold(II)V — a held arrow turns at a pixel RATE per second
 static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
 static jmethodID gMidWarmed = NULL;   // JavaBridge.presentReady()Z — world geometry uploaded (direct-present reveal)
 static jmethodID gMidMenuSelect = NULL;  // selectMenuPoint(II)V — menu row select + hover-clear (optional)
@@ -252,6 +253,7 @@ static BOOL ensureBridge(void) {
     gMidMove   = (*env)->GetStaticMethodID(env, global, "onMove", "(II)V");
     gMidWheel  = (*env)->GetStaticMethodID(env, global, "onWheel", "(III)V");
     gMidCamera = (*env)->GetStaticMethodID(env, global, "onCameraDrag", "(II)V");
+    gMidCameraHold = (*env)->GetStaticMethodID(env, global, "setCameraHold", "(II)V");
     gMidText   = (*env)->GetStaticMethodID(env, global, "onText", "(Ljava/lang/String;)V");
     gMidKey    = (*env)->GetStaticMethodID(env, global, "onKeyStroke", "(I)V");
     gMidInputOpen = (*env)->GetStaticMethodID(env, global, "isTextInputOpen", "()Z");
@@ -404,7 +406,6 @@ static jmethodID gMidRelocateSide = NULL;    // relocateSidePanel(II)V (A4/A6 �
 static jmethodID gMidOpenTab = NULL;         // openTab(I)V  (A4 — open a tab by replaying its stone op script)
 static jmethodID gMidContinueDlg = NULL;     // continueDialogue()V — advance a chat dialogue via WIDGET_CONTINUE
 static jmethodID gMidSelectOpt = NULL;       // selectDialogueOption(IJ)V — pick an option row via WIDGET_CONTINUE
-static jmethodID gMidCameraHold = NULL;      // setCameraHold(II)V — hold the camera turning, 0,0 releases
 static jmethodID gMidSetStonesHidden = NULL; // setStonesHidden(Z)V  (A4 — hide the engine tab stones)
 static jmethodID gMidSetChatRowH = NULL;     // setChatTabRowHeight(I)V  (A3 — bigger native chat tabs)
 static jmethodID gMidSetChatAreaW = NULL;    // setChatAreaWidth(I)V  (A3 — widen message area to align)
@@ -480,7 +481,6 @@ static BOOL ensureVeneer(void) {
     gMidOpenTab = ot;
     gMidContinueDlg = (*env)->GetStaticMethodID(env, global, "continueDialogue", "()V");
     gMidSelectOpt = (*env)->GetStaticMethodID(env, global, "selectDialogueOption", "(IJ)V");
-    gMidCameraHold = (*env)->GetStaticMethodID(env, global, "setCameraHold", "(II)V");
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         gMidContinueDlg = NULL;
@@ -1996,6 +1996,17 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postWheel"); }
 }
 
++ (void)setCameraHoldDxPerSec:(int)dxPerSec dyPerSec:(int)dyPerSec {
+    if (!ensureBridge() || !gMidCameraHold)
+        return;
+    [JVMLauncher postKeepAlive]; // idle keepalive: a held button posts no canvas event of its own
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidCameraHold, (jint)dxPerSec, (jint)dyPerSec);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.setCameraHold");
+    }
+}
+
 + (void)postCameraDx:(int)dx dy:(int)dy {
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
@@ -2184,17 +2195,6 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidContinueDlg);
     if ((*env)->ExceptionCheck(env)) {
         bridgeNoteClear(env, "JVMLauncher.continueEngineDialogue");
-    }
-}
-
-+ (void)setCameraHoldYaw:(int)dYaw pitch:(int)dPitch {
-    if (!ensureVeneer() || !gMidCameraHold)
-        return;
-    [JVMLauncher postKeepAlive]; // idle keepalive: a camera hold posts no canvas event of its own
-    JNIEnv *env = gMainEnv;
-    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidCameraHold, (jint)dYaw, (jint)dPitch);
-    if ((*env)->ExceptionCheck(env)) {
-        bridgeNoteClear(env, "JVMLauncher.setCameraHoldYaw");
     }
 }
 

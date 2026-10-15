@@ -182,6 +182,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// pinch centroid); `rotation` notches: negative = zoom in. Used by pinch-to-zoom. Call on the main thread.
 + (void)postWheelX:(int)x y:(int)y rotation:(int)rotation;
 
+/// Hold the camera turning at a pixel RATE per second, in the same sign convention as a drag; `0, 0`
+/// releases. Per second rather than per frame so the turn does not track the frame rate.
++ (void)setCameraHoldDxPerSec:(int)dxPerSec dyPerSec:(int)dyPerSec;
+
 /// Rotate the camera via JavaBridge.onCameraDrag — raw two-finger-pan pixel deltas applied to the camera
 /// yaw/pitch targets directly (no middle-mouse). Call on the main thread.
 + (void)postCameraDx:(int)dx dy:(int)dy;
@@ -276,10 +280,6 @@ typedef void (^JVMLogSink)(NSString *line);
 
 /// Advance the open chat dialogue through the engine's own continue handler.
 + (void)continueEngineDialogue;
-
-/// Hold the camera turning by a per-frame yaw/pitch delta; `0, 0` releases it. The engine's own camera
-/// targets are driven directly -- it does not act on a synthesized held arrow key.
-+ (void)setCameraHoldYaw:(int)dYaw pitch:(int)dPitch;
 
 /// Bumped only when the published dialogue CHANGES, so it identifies which dialogue the shell is looking at.
 + (long long)dialogueSeq;

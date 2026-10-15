@@ -1906,30 +1906,30 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
 
 // Fire the tapped pinned control by its spec: latch → toggle held; key → momentary keystroke; util → route to
 // the existing native action (which owns the keyboard field / screenshot / PiP / hotkey strip).
-// Per-frame camera deltas while an arrow is held. The engine applies these every frame it renders, so the
-// turn rate follows the frame rate; these values are tuned for the ~20-50fps the device actually runs at.
-static const int kCamYawStep = 14;
-static const int kCamPitchStep = 7;
+// Turn rate for a held arrow, as the pixel-per-second rate the two-finger drag path already speaks: the
+// bridge converts it per frame, so these are real rates and not per-frame steps that would track the frame
+// rate. Signs follow a drag -- positive x turns as dragging right, positive y tilts down.
+static const int kCamYawPxPerSec = 320;
+static const int kCamPitchPxPerSec = 200;
 
 - (void)onCameraHoldBegin:(UIButton *)b {
     NSDictionary *spec = objc_getAssociatedObject(b, "rmSpec");
     const int vk = [spec[@"vk"] intValue];
-    int dYaw = 0, dPitch = 0;
+    int dx = 0, dy = 0;
     if (vk == AWT_VK_LEFT)
-        dYaw = -kCamYawStep;
+        dx = -kCamYawPxPerSec;
     else if (vk == AWT_VK_RIGHT)
-        dYaw = kCamYawStep;
+        dx = kCamYawPxPerSec;
     else if (vk == AWT_VK_UP)
-        dPitch = kCamPitchStep;
+        dy = -kCamPitchPxPerSec;
     else if (vk == AWT_VK_DOWN)
-        dPitch = -kCamPitchStep;
-    [JVMLauncher setCameraHoldYaw:dYaw pitch:dPitch];
-    [self appendLine:[NSString stringWithFormat:@"[shell] camera hold %@ yaw=%d pitch=%d", spec[@"glyph"], dYaw,
-                                                dPitch]];
+        dy = kCamPitchPxPerSec;
+    [JVMLauncher setCameraHoldDxPerSec:dx dyPerSec:dy];
+    [self appendLine:[NSString stringWithFormat:@"[shell] camera hold %@ dx=%d dy=%d", spec[@"glyph"], dx, dy]];
 }
 
 - (void)onCameraHoldEnd:(UIButton *)b {
-    [JVMLauncher setCameraHoldYaw:0 pitch:0];
+    [JVMLauncher setCameraHoldDxPerSec:0 dyPerSec:0];
 }
 
 - (void)onPinnedControlTapped:(UIButton *)b {
