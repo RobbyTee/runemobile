@@ -402,6 +402,7 @@ static jmethodID gMidRelocateMinimap = NULL; // relocateMinimap(II)V  (A4 — mi
 static jmethodID gMidSetMinimapScale = NULL; // setMinimapScale(I)V  (bigger minimap)
 static jmethodID gMidRelocateSide = NULL;    // relocateSidePanel(II)V (A4/A6 — inventory side panel)
 static jmethodID gMidOpenTab = NULL;         // openTab(I)V  (A4 — open a tab by replaying its stone op script)
+static jmethodID gMidContinueDlg = NULL;     // continueDialogue()V — advance a chat dialogue via WIDGET_CONTINUE
 static jmethodID gMidSetStonesHidden = NULL; // setStonesHidden(Z)V  (A4 — hide the engine tab stones)
 static jmethodID gMidSetChatRowH = NULL;     // setChatTabRowHeight(I)V  (A3 — bigger native chat tabs)
 static jmethodID gMidSetChatAreaW = NULL;    // setChatAreaWidth(I)V  (A3 — widen message area to align)
@@ -473,6 +474,11 @@ static BOOL ensureVeneer(void) {
     gMidRelocateMinimap = mm;
     gMidRelocateSide = sp;
     gMidOpenTab = ot;
+    gMidContinueDlg = (*env)->GetStaticMethodID(env, global, "continueDialogue", "()V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidContinueDlg = NULL;
+    }
     gMidSetStonesHidden = sh;
     gVeneerClass = global;
     return YES;
@@ -2162,6 +2168,17 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidOpenTab, (jint)tabIndex);
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.openEngineTab"); }
+}
+
++ (void)continueEngineDialogue {
+    if (!ensureVeneer() || !gMidContinueDlg)
+        return;
+    [JVMLauncher postKeepAlive]; // idle keepalive: a native dialogue tap posts no canvas event of its own
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidContinueDlg);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.continueEngineDialogue");
+    }
 }
 
 + (void)setEngineStonesHidden:(BOOL)hidden {

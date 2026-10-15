@@ -149,6 +149,12 @@ public final class HudVeneerBridge
 	// can open the map without hitting the ~25px engine orb (and fixes the legacy-account orb block). Applied on
 	// the client thread in tick (where runScript is legal).
 	private static volatile boolean pendingOpenWorldMap;
+	// One-shot dialogue continue. The CONTINUE component carries no op listener (contdiag: onOp=null), so the
+	// op-script replay used for the tab stones cannot drive it -- the engine performs a continue through its own
+	// WIDGET_CONTINUE handler, which is what this sends. lastContinueId is refreshed every tick a chat dialogue
+	// publishes, so the action always targets the dialogue currently on screen.
+	private static volatile boolean pendingContinueDialogue;
+	private static volatile int lastContinueId = -1;
 
 	// Native chat-tab veneer (A3 bigger buttons). chatTabRowH = the canvas-px height the native (enlarged) tab row
 	// occupies; the message area (CHATAREA) is pushed down past it instead of the engine's 23px CONTROLS row. 0 =
@@ -320,6 +326,12 @@ public final class HudVeneerBridge
 	public static void openWorldMap()
 	{
 		pendingOpenWorldMap = true;
+	}
+
+	/** Native: advance the open chat dialogue. Applied on the client thread in {@link #tick}. */
+	public static void continueDialogue()
+	{
+		pendingContinueDialogue = true;
 	}
 
 	/** Native: the canvas-px height the enlarged native chat-tab row occupies, so the message area is pushed down
@@ -835,6 +847,13 @@ public final class HudVeneerBridge
 				openWorldMapNow(c);
 			}
 
+			// One-shot: advance the chat dialogue through the engine's own continue handler.
+			if (pendingContinueDialogue)
+			{
+				pendingContinueDialogue = false;
+				continueDialogueNow(c);
+			}
+
 			tickWorldMap(c);
 		}
 		catch (RuntimeException e)
@@ -1168,6 +1187,33 @@ public final class HudVeneerBridge
 
 	/** Open a tab by replaying its stone's op script with the stone as source + op 1 (RuneLite's standard
 	 *  widget-op replay). Works while the stone is hidden — confirmed by TabScriptProbe. Client thread. */
+	/**
+	 * Perform a continue on the dialogue currently published. The component is a static interface child, so
+	 * param0 is -1 -- the same rule the tab stones and the logout click already established here; passing an
+	 * index misroutes the engine's dispatch. Its live hidden state is logged alongside, because the one sample
+	 * taken when a dialogue first builds read hidden=true and that may simply have been its first tick.
+	 */
+	private static void continueDialogueNow(Client c)
+	{
+		final int id = lastContinueId;
+		if (id < 0)
+		{
+			System.out.println("[cont] no continue id published");
+			return;
+		}
+		try
+		{
+			final Widget w = c.getWidget(id);
+			System.out.println("[cont] fire id=" + id + " widget=" + (w != null)
+				+ (w == null ? "" : " hidden=" + w.isHidden() + " clickMask=" + w.getClickMask()));
+			c.menuAction(-1, id, net.runelite.api.MenuAction.WIDGET_CONTINUE, 1, -1, "Continue", "");
+		}
+		catch (RuntimeException ignore)
+		{
+			BridgeFaults.note("HudVeneerBridge.continueDialogueNow", ignore);
+		}
+	}
+
 	private static void openTabNow(Client c, boolean preEoc, int idx)
 	{
 		try
@@ -2528,6 +2574,7 @@ public final class HudVeneerBridge
 
 	private static String dlgChat(Client c, String type, int nameId, int textId, int headId, int continueId)
 	{
+		lastContinueId = continueId;
 		if (!contDiagDone && continueId >= 0)
 		{
 			contDiagDone = true;

@@ -6401,8 +6401,8 @@ static CGRect mapRectFromArr(NSArray *a) {
             if (self.dialogueTargetsKnown) {
                 // Modelled dialogue (chat / message / level-up): continue it with SPACE and consume the tap,
                 // whether or not a CONTINUE widget was published. Never fall through to a click here.
-                [JVMLauncher postText:@" "];
-                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue continue tap %d,%d (space)", gx, gy]];
+                [JVMLauncher continueEngineDialogue];
+                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue continue tap %d,%d (continue)", gx, gy]];
                 return;
             }
             // Unmodelled (make-X / reward box): the engine's own clickable widgets are right under the finger.

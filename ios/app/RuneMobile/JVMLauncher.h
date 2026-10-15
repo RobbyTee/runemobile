@@ -274,6 +274,9 @@ typedef void (^JVMLogSink)(NSString *line);
 /// while the stones are hidden, so the native 2-col grid drives tabs with no cover patch. Main thread.
 + (void)openEngineTab:(int)tabIndex;
 
+/// Advance the open chat dialogue through the engine's own continue handler.
++ (void)continueEngineDialogue;
+
 /// World map (touch): open the world map via HudVeneerBridge.openWorldMap — a discoverable path decoupled from
 /// the tiny in-scene orb. No-op on an older jar without openWorldMap. Main thread.
 + (void)openEngineWorldMap;
