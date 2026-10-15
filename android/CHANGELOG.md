@@ -9,6 +9,27 @@ accepts update-in-place.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-15
+### Fixed
+- Tapping a dialogue walked the character instead of answering it. When the engine draws its own
+  dialogue the native parchment is suppressed, so the touch never reached the overlay and fell back
+  to a positional click, which resolved against the scene behind the dialogue box — moving the player
+  to the tile under the text and ending the conversation by walking away. Dialogue taps now drive the
+  engine's own continue and option handlers, so a tap advances the conversation or selects the row it
+  landed on. Option rows that miss every row are consumed rather than answered with a blind advance;
+  make-X and reward boxes, which the client does not model, keep their direct click.
+- Answering a dialogue no longer counts as being idle. The positional click it replaced was input the
+  game's idle timer could see, so a long conversation could trigger an AFK logout mid-sentence.
+- The renderer tiles showed the saved preference rather than what the next launch would actually run.
+  A device marker or a TV default outranks the preference at boot, so the panel could show CPU
+  selected while 117HD ran. The tiles now reflect the next launch, and say so when a pick is being
+  overridden.
+
+### Internal
+- The build now fails if the staged client jar is missing the dialogue handlers. The app resolves them
+  optionally so an older jar still boots, which meant a stale jar produced dialogue taps that silently
+  did nothing at all.
+
 ## [0.2.0] - 2026-10-13
 ### Fixed
 - 117HD could not load at all and so never appeared in the plugin panel. Upstream began requiring a
