@@ -260,7 +260,15 @@ val verifyStagedClientJar =
                     throw GradleException("${jar.name} has no $bridgePath -- the staged client jar is not ours.")
                 }
                 val bridgeText = String(bridgeBytes, Charsets.ISO_8859_1)
-                val missingHandlers = listOf("continueDialogue", "selectDialogueOption").filter { !bridgeText.contains(it) }
+                // Match the CONSTANT_Utf8 entry exactly (tag 0x01, u2 length, bytes) rather than the bare name: a
+                // plain substring also hits the private continueDialogueNow / selectDialogueOptionNow helpers, so a
+                // jar carrying only those would pass. They were added in the same commit as the public pair, so the
+                // staleness this gate exists for trips either way -- this just stops a later refactor sneaking past.
+                val missingHandlers =
+                    listOf("continueDialogue", "selectDialogueOption").filter { name ->
+                        val entry = "\u0001" + ((name.length shr 8) and 0xFF).toChar() + (name.length and 0xFF).toChar() + name
+                        !bridgeText.contains(entry)
+                    }
                 if (missingHandlers.isNotEmpty()) {
                     throw GradleException(
                         "${jar.name} is STALE: HudVeneerBridge lacks $missingHandlers.\n" +
