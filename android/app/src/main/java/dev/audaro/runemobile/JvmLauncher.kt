@@ -654,16 +654,30 @@ object JvmLauncher {
     @Volatile
     var sessionRenderer: String = ""
 
-    /** The renderer a PERSISTENT boot override will force at the next launch (cpu|gpu|117hd), or null when the
-     *  saved preference decides. Only the overrides that survive a relaunch count: the `gpu.mode` / `rlhd.mode`
-     *  marker files and a TV/leanback device without `cpu.mode` (which boots 117HD by design). Intent extras, a
-     *  Game Loop launch and the one-shot `rlhd.once` marker do NOT, so they are excluded.
-     *
-     *  The panel needs this to avoid promising something a restart will not do: with an override in effect the
-     *  pref does not decide the next boot, so "off after restart" / "restart to apply" would be a lie. Set once
-     *  in the boot path and constant thereafter, so reading it during composition needs no state. */
+    /** Whether a PERSISTENT boot override will ask for 117HD / GPU at the next launch: the `rlhd.mode` and
+     *  `gpu.mode` marker files, plus a TV/leanback device without `cpu.mode` (which boots 117HD by design).
+     *  Only overrides that survive a relaunch count, so an intent extra, a Game Loop launch and the one-shot
+     *  `rlhd.once` marker are excluded. Set in the boot path and constant thereafter. */
     @Volatile
-    var pinnedRenderer: String? = null
+    var rlhdForcedNextBoot = false
+
+    @Volatile
+    var gpuForcedNextBoot = false
+
+    /** The renderer the next launch will actually run, from the saved [pref] and the overrides above, in the
+     *  boot path's own precedence (117HD wins over GPU, GPU over CPU).
+     *
+     *  An override does NOT simply win: a 117HD pref satisfies the same condition the `rlhd.mode` marker and
+     *  the TV default do, so it outranks a `gpu.mode` override, and switching the pick to 117HD takes effect
+     *  even with that marker present. Anything that reports on the next boot has to apply the whole
+     *  expression, pref included -- a lone "which renderer is pinned" answer tells the panel that a pick is
+     *  being ignored when it is about to be honoured. */
+    fun nextBootRenderer(pref: String): String =
+        when {
+            rlhdForcedNextBoot || pref == "117hd" -> "117hd"
+            gpuForcedNextBoot || pref == "gpu" -> "gpu"
+            else -> "cpu"
+        }
 
     fun framesPresented() = nativeFramesPresented()
 

@@ -1075,8 +1075,15 @@ private fun PluginListBody(
                         } else {
                             null
                         },
-                    // pinnedRenderer is fixed once the boot path has run, so it needs no polled state.
-                    status = rendererStatus(rendererMode, session, renderer, presented, JvmLauncher.pinnedRenderer),
+                    // `renderer` is the live pick, so the next-boot answer tracks a mid-session change with it.
+                    status =
+                        rendererStatus(
+                            rendererMode,
+                            session,
+                            JvmLauncher.nextBootRenderer(renderer),
+                            renderer,
+                            presented,
+                        ),
                 )
                 return@items
             }
@@ -1127,34 +1134,37 @@ private data class RowStatus(
     val color: Color,
 )
 
-/** What [mode]'s renderer row should report, given the renderer that actually booted ([session]), the saved
- *  preference ([pref]) and whether any frame has presented. Null before the boot records anything: say nothing
- *  rather than guess. A pick applies only at the next launch and a dev/CI-forced boot runs a renderer the pref
- *  never asked for, so neither may read as "running". */
+/** What [mode]'s renderer row should report, given the renderer that actually booted ([session]), what the
+ *  next launch will run ([next], from JvmLauncher.nextBootRenderer), the saved preference ([pref]) and whether
+ *  any frame has presented. Null before the boot records anything: say nothing rather than guess. A pick
+ *  applies only at the next launch and a dev/CI-forced boot runs a renderer the pref never asked for, so
+ *  neither may read as "running".
+ *
+ *  Every row that mentions restarting is keyed off [next], the only sound basis for one: it folds the saved
+ *  pick together with the persistent overrides in the boot path's own precedence. Asking merely "is some
+ *  renderer pinned?" gets it backwards -- a 117HD pick outranks a `gpu.mode` override and does take effect,
+ *  and a row keyed off the pin alone would tell the user their pick was being ignored. */
 private fun rendererStatus(
     mode: String,
     session: String,
+    next: String,
     pref: String,
     presented: Boolean,
-    pinned: String?,
 ): RowStatus? =
     when {
         session.isEmpty() -> null
 
         session == mode && !presented -> RowStatus("○ starting…", STATUS_PENDING)
 
-        session == mode && pref == mode -> RowStatus("● running", STATUS_RUNNING)
-
-        // Only the pref decides the next boot when nothing is pinned, so only then may a row talk about the
-        // restart. A pinned renderer keeps booting whatever the pick says (gpu.mode / rlhd.mode / a TV), and a
-        // pin on ANOTHER renderer means this pick will not take effect at the next launch either.
-        session == mode && pinned == mode -> RowStatus("● running — forced, ignores your pick", STATUS_PENDING)
+        session == mode && next == mode -> RowStatus("● running", STATUS_RUNNING)
 
         session == mode -> RowStatus("● running — off after restart", STATUS_PENDING)
 
-        pref == mode && pinned != null -> RowStatus("○ selected — another renderer is forced", STATUS_PENDING)
+        // Coming on next launch. Separated only to avoid calling it "selected" when a marker or a TV is what
+        // asks for it rather than the pick (reachable after an auto-GPU demotion rewrites the pref to cpu).
+        next == mode && pref == mode -> RowStatus("● selected — restart to apply", STATUS_PENDING)
 
-        pref == mode -> RowStatus("● selected — restart to apply", STATUS_PENDING)
+        next == mode -> RowStatus("● forced — on after restart", STATUS_PENDING)
 
         else -> RowStatus("○ off", STATUS_OFF)
     }

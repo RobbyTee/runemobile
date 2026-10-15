@@ -70,9 +70,21 @@ row would answer the dialogue that had just replaced it.
 
 `"● running — off after restart"` and `"● selected — restart to apply"` assume the saved pref decides
 the next boot. A `gpu.mode` / `rlhd.mode` marker overrides it on **every** launch, and a TV/leanback
-device boots 117HD by design — a shipping path, not a dev-only one. `JvmLauncher.pinnedRenderer`
-publishes which renderer a **persistent** override will force (markers + the TV default; intent extras,
-a Game Loop launch and the one-shot `rlhd.once` are correctly excluded) and those two rows defer to it.
+device boots 117HD by design — a shipping path, not a dev-only one.
+
+**Asking "which renderer is pinned?" is not enough, and the first attempt at this got it backwards.**
+The pref is not merely overridden by a marker: `prefRenderer == "117hd"` satisfies the *same* condition
+`rlhd.mode` and the TV default do, so a 117HD pick **outranks** a `gpu.mode` override and does take
+effect. A row keyed off the pin alone therefore told the user their pick was being ignored when it was
+about to be honoured — reachable by simply tapping 117HD with `gpu.mode` present, since the panel's
+`renderer` state is the **live** pick, not the boot-time one.
+
+So `JvmLauncher` publishes the two *persistent* override flags (`rlhdForcedNextBoot` /
+`gpuForcedNextBoot`; intent extras, a Game Loop launch and the one-shot `rlhd.once` are correctly
+excluded) and `nextBootRenderer(pref)` applies them **with the live pref, in the boot path's own
+precedence**. Every row that mentions restarting is keyed off that one value, which made the status
+table smaller as well as correct. Keep the precedence in that one function — duplicating it is what
+produced the backwards answer.
 
 ## What needed no port (don't re-tread)
 

@@ -1415,16 +1415,14 @@ class MainActivity : AppCompatActivity() {
                 (isTv && !cpuForced) || prefRenderer == "117hd"
         if (gameLoop) Log.i(TAG, "AG3-c: Game Loop launch -> routecrlhd (uninterrupted run for the Zone shader compile)")
         if (isTv && !cpuForced) Log.i(TAG, "TV/leanback device -> defaulting to routecrlhd (117HD) on launch")
-        // Which renderer a persistent override will force at the NEXT launch too, so the panel never promises a
-        // restart will change something it won't. Marker files and the TV default survive a relaunch; the intent
-        // extras, the Game Loop action and rlhd.once (consumed above) do not, so they are left out. Same rlhd-wins
-        // precedence as the boot below.
-        JvmLauncher.pinnedRenderer =
-            when {
-                File(getExternalFilesDir(null), "rlhd.mode").exists() || (isTv && !cpuForced) -> "117hd"
-                File(getExternalFilesDir(null), "gpu.mode").exists() -> "gpu"
-                else -> null
-            }
+        // The persistent slices of the two expressions above, so the panel can work out what the NEXT launch will
+        // run and never promise a restart will change something it won't. Marker files and the TV default survive
+        // a relaunch; the intent extras, the Game Loop action and rlhd.once (consumed above) do not, so they are
+        // left out. The pref is deliberately NOT folded in here -- it changes mid-session, and
+        // JvmLauncher.nextBootRenderer applies it against these with the same precedence the boot uses.
+        JvmLauncher.rlhdForcedNextBoot =
+            File(getExternalFilesDir(null), "rlhd.mode").exists() || (isTv && !cpuForced)
+        JvmLauncher.gpuForcedNextBoot = File(getExternalFilesDir(null), "gpu.mode").exists()
         // PROD-SECURITY-01: the login-first divert below is skipped ONLY for the headless / non-interactive 117HD
         // boots that MUST settle at the engine LOGIN_SCREEN with no human to divert to — the Firebase Game Loop /
         // datacenter shader-compile proof (gameLoop + the rlhd_prelogin.mode marker) and the explicit dev/test
