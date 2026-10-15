@@ -508,7 +508,10 @@ object JvmLauncher {
 
     external fun nativeDialogueJson(): String // UI-4: the engine NPC-dialogue snapshot (opaque-parchment source)
 
-    external fun nativeDialogueSeq(): Long // the publish that json came from (same lock, so they agree)
+    // The json AND its publish seq as "<seq>\n<json>", from one critical section. Deliberately no seq-only
+    // accessor: two reads can pair new json with an older seq, and the shell re-tags its rows only when the
+    // json TEXT changes, so such a seq latches and every option tap is refused until the text changes.
+    external fun nativeDialoguePublish(): String
 
     // UI-4 dialogue actions: the engine's own WIDGET_CONTINUE handler. Clicking the CONTINUE widget walks
     // the player (it reads hidden, so the click lands on the scene behind the chatbox) and a synthesized
@@ -650,6 +653,17 @@ object JvmLauncher {
      *  plugins panel reports THIS, so a row cannot claim to be running something that isn't. */
     @Volatile
     var sessionRenderer: String = ""
+
+    /** The renderer a PERSISTENT boot override will force at the next launch (cpu|gpu|117hd), or null when the
+     *  saved preference decides. Only the overrides that survive a relaunch count: the `gpu.mode` / `rlhd.mode`
+     *  marker files and a TV/leanback device without `cpu.mode` (which boots 117HD by design). Intent extras, a
+     *  Game Loop launch and the one-shot `rlhd.once` marker do NOT, so they are excluded.
+     *
+     *  The panel needs this to avoid promising something a restart will not do: with an override in effect the
+     *  pref does not decide the next boot, so "off after restart" / "restart to apply" would be a lie. Set once
+     *  in the boot path and constant thereafter, so reading it during composition needs no state. */
+    @Volatile
+    var pinnedRenderer: String? = null
 
     fun framesPresented() = nativeFramesPresented()
 
@@ -935,7 +949,7 @@ object JvmLauncher {
 
     fun dialogueJsonPub() = nativeDialogueJson()
 
-    fun dialogueSeqPub() = nativeDialogueSeq()
+    fun dialoguePublishRaw() = nativeDialoguePublish()
 
     fun continueDialogue() = nativeContinueDialogue()
 

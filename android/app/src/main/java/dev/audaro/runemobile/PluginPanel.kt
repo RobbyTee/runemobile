@@ -1075,7 +1075,8 @@ private fun PluginListBody(
                         } else {
                             null
                         },
-                    status = rendererStatus(rendererMode, session, renderer, presented),
+                    // pinnedRenderer is fixed once the boot path has run, so it needs no polled state.
+                    status = rendererStatus(rendererMode, session, renderer, presented, JvmLauncher.pinnedRenderer),
                 )
                 return@items
             }
@@ -1135,13 +1136,26 @@ private fun rendererStatus(
     session: String,
     pref: String,
     presented: Boolean,
+    pinned: String?,
 ): RowStatus? =
     when {
         session.isEmpty() -> null
+
         session == mode && !presented -> RowStatus("○ starting…", STATUS_PENDING)
+
         session == mode && pref == mode -> RowStatus("● running", STATUS_RUNNING)
+
+        // Only the pref decides the next boot when nothing is pinned, so only then may a row talk about the
+        // restart. A pinned renderer keeps booting whatever the pick says (gpu.mode / rlhd.mode / a TV), and a
+        // pin on ANOTHER renderer means this pick will not take effect at the next launch either.
+        session == mode && pinned == mode -> RowStatus("● running — forced, ignores your pick", STATUS_PENDING)
+
         session == mode -> RowStatus("● running — off after restart", STATUS_PENDING)
+
+        pref == mode && pinned != null -> RowStatus("○ selected — another renderer is forced", STATUS_PENDING)
+
         pref == mode -> RowStatus("● selected — restart to apply", STATUS_PENDING)
+
         else -> RowStatus("○ off", STATUS_OFF)
     }
 

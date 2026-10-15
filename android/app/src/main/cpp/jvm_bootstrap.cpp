@@ -2680,12 +2680,25 @@ Java_dev_audaro_runemobile_JvmLauncher_nativeDialogueJson(JNIEnv *env, jobject) 
     std::lock_guard<std::mutex> lk(g_dlgLock);
     return env->NewStringUTF(g_dialogueJsonPub.c_str());
 }
-// The seq of the json the call above returns -- taken under the same lock, so a row can be answered against the
-// publish that drew it rather than whatever has arrived since.
-extern "C" JNIEXPORT jlong JNICALL
-Java_dev_audaro_runemobile_JvmLauncher_nativeDialogueSeq(JNIEnv *, jobject) {
-    std::lock_guard<std::mutex> lk(g_dlgLock);
-    return (jlong)g_dlgPubSeq.load(std::memory_order_relaxed);
+// The dialogue json AND the publish it came from, "<seq>\n<json>", taken in ONE critical section. There is
+// deliberately no way to fetch the seq by itself: two separate reads can pair new json with an older seq, and
+// because the shell re-tags its rows only when the json TEXT changes, such a seq LATCHES -- every option tap is
+// then refused by selectDialogueOption's guard until the dialogue text happens to change. A dialogue that
+// silently stops answering, which is what the earlier "seq before payload fails safe" reasoning here missed.
+// The lock makes the HANDOVER atomic, not the cache fill: the republish above reads the engine's seq before its
+// json, so a publish landing between the two leaves this pair one publish apart -- in the safe direction (a
+// pick is refused, not misapplied). It corrects on the next render pass, because the engine's seq then still
+// differs from g_dlgSnapSeq and the republish fires again.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeDialoguePublish(JNIEnv *env, jobject) {
+    std::string out;
+    {
+        std::lock_guard<std::mutex> lk(g_dlgLock);
+        out = std::to_string((long long)g_dlgPubSeq.load(std::memory_order_relaxed));
+        out += '\n';
+        out += g_dialogueJsonPub;
+    }
+    return env->NewStringUTF(out.c_str());
 }
 // Advance / answer the dialogue through the engine's own handler. A precise click on the CONTINUE widget walks
 // the player instead: the component carries no op listener and reads hidden, so the click resolves against the

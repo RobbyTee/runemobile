@@ -1415,6 +1415,16 @@ class MainActivity : AppCompatActivity() {
                 (isTv && !cpuForced) || prefRenderer == "117hd"
         if (gameLoop) Log.i(TAG, "AG3-c: Game Loop launch -> routecrlhd (uninterrupted run for the Zone shader compile)")
         if (isTv && !cpuForced) Log.i(TAG, "TV/leanback device -> defaulting to routecrlhd (117HD) on launch")
+        // Which renderer a persistent override will force at the NEXT launch too, so the panel never promises a
+        // restart will change something it won't. Marker files and the TV default survive a relaunch; the intent
+        // extras, the Game Loop action and rlhd.once (consumed above) do not, so they are left out. Same rlhd-wins
+        // precedence as the boot below.
+        JvmLauncher.pinnedRenderer =
+            when {
+                File(getExternalFilesDir(null), "rlhd.mode").exists() || (isTv && !cpuForced) -> "117hd"
+                File(getExternalFilesDir(null), "gpu.mode").exists() -> "gpu"
+                else -> null
+            }
         // PROD-SECURITY-01: the login-first divert below is skipped ONLY for the headless / non-interactive 117HD
         // boots that MUST settle at the engine LOGIN_SCREEN with no human to divert to — the Firebase Game Loop /
         // datacenter shader-compile proof (gameLoop + the rlhd_prelogin.mode marker) and the explicit dev/test
@@ -3283,10 +3293,11 @@ class MainActivity : AppCompatActivity() {
                 dialogueChatCanvas = null
             }
         }
-        // Seq before payload, which DialoguePublish's argument order enforces: both come from one lock, and
-        // reading the seq first can only under-report, failing a pick safe instead of answering the wrong dialogue.
-        val dlg = DialoguePublish(JvmLauncher.dialogueSeqPub(), if (on && !engineDlg) JvmLauncher.dialogueJsonPub() else "{}")
-        dialogueOverlay.update(chatSnap, dlg, sx, sy, on && !engineDlg)
+        // One call for the json and its publish seq: fetched separately they can skew, and a skewed seq latches
+        // into the parchment's rows and gets every option tap refused (see DialoguePublish).
+        val show = on && !engineDlg
+        val dlg = if (show) DialoguePublish.fromNative(JvmLauncher.dialoguePublishRaw()) else DialoguePublish(-1L, "{}")
+        dialogueOverlay.update(chatSnap, dlg, sx, sy, show)
         // Auto-open/close: a collapsed chat hides the engine tabs -> the dialogue raster is suppressed. So when an
         // engine dialogue opens while collapsed, un-collapse for its duration and restore the collapsed state when it
         // ends (official-mobile behaviour). Native is the single owner of chatCollapsed (no bridge writer / no race).

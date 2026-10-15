@@ -3955,9 +3955,25 @@ static int chatRowCanvasH(void) {
         || [cd[@"engineDialogue"] boolValue]) { [self hideDialogue]; return; }
     // This is a SECOND read of the dialogue, independent of the one the tap targets are built from, so it needs
     // its own sequence: the two can observe different publishes, and a row this view is showing must be answered
-    // against the dialogue IT was built from. Sequence before payload, so a publish in between fails safe.
-    const long long viewSeq = [JVMLauncher dialogueSeq];
-    NSString *js = [JVMLauncher dialogueJson];
+    // against the dialogue IT was built from.
+    //
+    // Read the pair CONSISTENTLY, not merely sequence-first. getDialogueSeq bumps only on a CHANGED snapshot, so
+    // a sequence that is identical either side of the json read is the one that json belongs to; a publish
+    // landing mid-read is detected and the pair re-read. It is not airtight: publishDialogueJson stores the
+    // payload BEFORE bumping the seq, so a read that catches that window sees an unchanged (older) seq beside
+    // the newer json. That skew is the safe direction -- a pick is refused, never misapplied -- and the
+    // unconditional re-tag below keeps it to that one pass. Sequence-before-payload alone is not enough here,
+    // which the old comment missed: this view re-tags its rows only when the json TEXT changes, so a skewed
+    // sequence LATCHES -- every option pick is refused until the text happens to move. That is a dialogue that
+    // silently stops answering, not a pick that fails safe.
+    long long viewSeq = 0;
+    NSString *js = nil;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        viewSeq = [JVMLauncher dialogueSeq];
+        js = [JVMLauncher dialogueJson];
+        if ([JVMLauncher dialogueSeq] == viewSeq)
+            break; // nothing published across the json read
+    }
     if (js.length == 0) { [self hideDialogue]; return; }
     NSDictionary *d = parseBridgeJSON(js, "ViewController.updateDialogueView");
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"type"] isKindOfClass:[NSString class]]) { [self hideDialogue]; return; }
@@ -3987,9 +4003,13 @@ static int chatRowCanvasH(void) {
         ? CGPointMake([cont[@"x"] intValue] + [cont[@"w"] intValue] / 2, [cont[@"y"] intValue] + [cont[@"h"] intValue] / 2)
         : CGPointMake(-1, -1);
 
+    // Re-tag on EVERY pass, not only when the text changes: the rows always belong to the json currently held
+    // (a changed text rebuilds them immediately below), so this is simply that json's sequence -- and doing it
+    // unconditionally means a sequence that was somehow stale cannot latch. It corrects on the next pass
+    // instead of refusing every pick until the dialogue text moves.
+    self.dialogueViewSeq = viewSeq;
     if (![js isEqualToString:self.lastDialogueJson]) {
         self.lastDialogueJson = js;
-        self.dialogueViewSeq = viewSeq; // the rows about to be built belong to THIS publish
         [self rebuildDialogueContent:d scale:s];
         // One line per new dialogue so a misaligned head cutout / continue target is diagnosable from the log.
         [self appendLine:[NSString stringWithFormat:@"[dlg] type=%@ box=%@ head=%@ cont=(%.0f,%.0f)",
@@ -4130,6 +4150,9 @@ static int chatRowCanvasH(void) {
     // Read the sequence BEFORE the payload: if a publish lands between the two, the recorded seq is older than
     // the targets built from it, so a pick made against them is refused rather than applied to a dialogue that
     // has already moved on. The other order would accept exactly that stale pick.
+    // (This path records the seq UNCONDITIONALLY below, which is what keeps a mid-read publish transient: it
+    // corrects on the next poll. Gating that record on a text change would turn it into a latch -- see
+    // updateDialogueView.)
     const long long seq = [JVMLauncher dialogueSeq];
     NSString *js = [JVMLauncher dialogueJson];
     if (js.length == 0)

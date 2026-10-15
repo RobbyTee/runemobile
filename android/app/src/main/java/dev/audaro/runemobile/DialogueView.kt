@@ -180,9 +180,13 @@ class DialogueView(
         // rect to the overlap (returns false + leaves it untouched when there is none).
         headRect?.let { if (!it.intersect(boxX, boxY, boxX + boxW, boxY + boxH)) headRect = null }
 
+        // Re-tag EVERY frame, not only when the text changes. The rows always belong to the json currently held
+        // (any text change rebuilds them below in this same call), so this is simply that json's seq -- and
+        // doing it unconditionally means a seq that was somehow stale cannot latch: it corrects on the next
+        // frame instead of refusing every tap until the dialogue text moves.
+        viewSeq = dlg.seq
         if (dlg.json != lastJson) {
             lastJson = dlg.json
-            viewSeq = dlg.seq // the rows about to be built belong to THIS publish
             rebuild(d)
             Log.i(
                 "DialogueView",
@@ -320,14 +324,25 @@ class DialogueView(
     }
 }
 
-/** A dialogue snapshot and the publish it came from. They travel as one deliberately: a seq that does not
- *  belong to the json beside it is exactly what lets a stale option row answer the dialogue that replaced it,
- *  and the native side hands both out under one lock so they always agree.
+/** A dialogue snapshot and the publish it came from, which the native side hands over as one value from a
+ *  single critical section -- the only way to obtain either.
  *
- *  [seq] comes first so that constructing one reads it first -- arguments evaluate left to right, and of the two
- *  possible skews only that one is safe: a seq older than its json drops a pick, where a newer one would let a
- *  stale row answer the dialogue that replaced it. */
+ *  Fetching them separately is the trap: a publish landing between the two reads pairs new json with an older
+ *  seq, and because [DialogueView] re-tags its rows only when the json TEXT changes, that seq then LATCHES.
+ *  Every option tap is refused by selectDialogueOption's guard until the dialogue text happens to change, so
+ *  the dialogue silently stops answering. "Read the seq first and a skew fails safe" only covers the single
+ *  pick made on that frame; it misses the latch entirely. */
 data class DialoguePublish(
     val seq: Long,
     val json: String,
-)
+) {
+    companion object {
+        /** Split the native `"<seq>\n<json>"` pair. An unparseable seq becomes -1, which no publish can equal,
+         *  so a pick is refused rather than answered against a dialogue we cannot identify. */
+        fun fromNative(raw: String): DialoguePublish {
+            val nl = raw.indexOf('\n')
+            if (nl < 0) return DialoguePublish(-1L, "{}")
+            return DialoguePublish(raw.substring(0, nl).toLongOrNull() ?: -1L, raw.substring(nl + 1))
+        }
+    }
+}

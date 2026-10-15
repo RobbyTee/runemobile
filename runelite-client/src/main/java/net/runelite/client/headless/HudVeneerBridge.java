@@ -212,10 +212,14 @@ public final class HudVeneerBridge
 		if (!json.equals(orbSnapshotJson)) { orbSnapshotJson = json; orbSnapshotSeq++; }
 	}
 
-	// Bumps the seq ONLY on a changed snapshot, and both shells lean on that: each captures the seq when it
-	// rebuilds its parchment rows, i.e. when the json text it holds changed. Were this to bump on an unchanged
-	// snapshot, their captured seq would go stale without a rebuild and every option tap would be dropped by
-	// selectDialogueOption's guard -- a dialogue that silently stops answering, on both ports at once.
+	// Bumps the seq ONLY on a changed snapshot, so it names the dialogue state a shell is showing and a pick can
+	// be matched to it. The shells no longer depend on that in the way an earlier note here claimed: they used to
+	// capture the seq only when rebuilding their rows, which meant a seq that went stale without a rebuild got
+	// every option tap dropped by selectDialogueOption's guard until the text next changed -- a dialogue that
+	// silently stopped answering. Both now re-tag their rows every pass, so a stale seq corrects itself.
+	// Note the write order: payload first, THEN the seq. It must stay that way. A reader that catches the pair
+	// mid-publish then sees a seq OLDER than the json, which gets a pick refused; bumping the seq first would
+	// hand it a seq NEWER than the json, and a stale row would answer the dialogue that had just replaced it.
 	private static void publishDialogueJson(String json)
 	{
 		if (!json.equals(dialogueJson)) { dialogueJson = json; dialogueSeq++; }
