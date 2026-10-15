@@ -1,3 +1,5 @@
+import java.util.zip.ZipFile
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -209,6 +211,54 @@ val verifyReleaseBootAssets =
         }
     }
 tasks.matching { it.name == "mergeReleaseAssets" }.configureEach { finalizedBy(verifyReleaseBootAssets) }
+
+// The overlay index and the assembled scripts under runelite/ are written INTO processResources' OWN output
+// directory by separate tasks. Anything that invalidates processResources (editing runelite.properties is enough)
+// re-runs it, and Gradle then deletes those files as stale output while the tasks that produce them stay
+// UP-TO-DATE and never put them back. The jar still stages, installs and boots clean, and the client dies in
+// OverlayIndex.<clinit> reading a null /runelite/index: no draws, a black screen, and nothing saying why. That
+// shipped on the iOS side on 2026-10-15; Android embeds the same shaded jar, so it is exposed identically and the
+// presence checks above cannot see it -- the file is there, it is just hollow. Rebuilding :client:shadowJar
+// restores them (the missing file makes the task out of date again); this is what notices. Hooked to debug too,
+// because the dev build is where the trap actually bites.
+// Only the -gpu jar is checked: it is the shaded client that carries OverlayIndex. The -rlhd jar is the 117HD
+// side jar (590 entries) and has neither resource by design.
+val stagedJvmDir = file("src/main/assets/jvm")
+val verifyStagedClientJar =
+    tasks.register("verifyStagedClientJar") {
+        description = "Fail the build if the staged client jar lost its build-generated runelite/ resources."
+        doLast {
+            val jars =
+                stagedJvmDir
+                    .listFiles()
+                    ?.filter { it.name.startsWith("client-") && it.name.endsWith("-gpu.jar") }
+                    .orEmpty()
+            jars.forEach { jar ->
+                val names =
+                    ZipFile(jar).use { zip ->
+                        zip
+                            .entries()
+                            .asSequence()
+                            .map { it.name }
+                            .toList()
+                    }
+                val index = names.count { it == "runelite/index" }
+                val scripts = names.count { Regex("^runelite/\\d+/\\d+").containsMatchIn(it) }
+                if (index != 1 || scripts < 1) {
+                    throw GradleException(
+                        "${jar.name} is missing build-generated runelite/ resources " +
+                            "(runelite/index=$index, want 1; assembled scripts=$scripts, want >= 1).\n" +
+                            "The client will die in OverlayIndex.<clinit> and never draw a frame. Rebuild and re-stage:\n" +
+                            "  JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :client:shadowJar   (in the repo root build)\n" +
+                            "  android/dev-tools/gpu/stage-android-gpu-jar.sh",
+                    )
+                }
+            }
+        }
+    }
+tasks.matching { it.name == "mergeDebugAssets" || it.name == "mergeReleaseAssets" }.configureEach {
+    finalizedBy(verifyStagedClientJar)
+}
 
 // PROD-RELEASE-ENG-01: self-stage the gitignored boot artifacts (embedded JRE, gpu/rlhd client jars, probes.jar,
 // runtime.tag) from Gradle so a clean clone yields a BOOTABLE APK without hand-running the README recipe. Each step
