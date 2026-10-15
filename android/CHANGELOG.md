@@ -9,6 +9,20 @@ accepts update-in-place.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-15
+### Fixed
+- The renderer could ignore the setting entirely. Marker files used by development and test runs were
+  read by every build, so an empty leftover file outranked the saved preference: the panel showed CPU
+  selected while every launch ran 117HD, with nothing on screen able to explain it. Release builds now
+  decide the renderer from the preference alone, and those files are honoured only in development
+  builds. The same files could also skip the sign-in step that normally comes first.
+
+### Changed
+- The game's boot thread no longer wakes four times a second for the whole session. It was polling
+  counters that only move when frame capture is on — a development-only mode — and printing a line a
+  second that a release build discards. It now sleeps quietly unless there is something to record,
+  which saves battery and avoids pointless disk writes during a long session.
+
 ## [0.2.1] - 2026-10-15
 ### Fixed
 - Tapping a dialogue walked the character instead of answering it. When the engine draws its own
