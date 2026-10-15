@@ -324,6 +324,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, assign) CGPoint dialogueContinuePoint; // engine CONTINUE widget centre (canvas px), or (-1,-1)
 @property (nonatomic, assign) BOOL dialogueIsOptions;        // the open dialogue is a "Select an Option" menu
 @property (nonatomic, assign) BOOL dialogueTargetsKnown;     // the bridge models this dialogue's clickables
+@property (nonatomic, copy) NSString *lastTargetsJson;       // dialogue publish we last logged (log on change only)
 @property (nonatomic, strong) NSArray<NSValue *> *dialogueOptionRects;   // per-option engine canvas bounds
 @property (nonatomic, strong) NSArray<NSNumber *> *dialogueOptionDigits; // the matching option numbers
 @property (nonatomic, assign) int chatLinesSeq;              // last rendered getChatLines seq (skip re-parse when unchanged)
@@ -3988,6 +3989,13 @@ static int chatRowCanvasH(void) {
     }
     [self clearDialogueTapTargets];
     self.dialogueTargetsKnown = YES;
+    // DIAGNOSTIC: the publish itself, once per change -- shows whether a tap ADVANCED the conversation (a new
+    // text line) or ENDED it, which the open/closed lines alone cannot distinguish.
+    if (![js isEqualToString:self.lastTargetsJson]) {
+        self.lastTargetsJson = js;
+        [self appendLine:[NSString stringWithFormat:@"[dlg] %@",
+                                                    js.length > 200 ? [js substringToIndex:200] : js]];
+    }
     NSDictionary *cont = [d[@"cont"] isKindOfClass:[NSDictionary class]] ? d[@"cont"] : nil;
     if (cont) {
         self.dialogueContinuePoint = CGPointMake([cont[@"x"] intValue] + [cont[@"w"] intValue] / 2,
