@@ -325,6 +325,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, assign) BOOL dialogueIsOptions;        // the open dialogue is a "Select an Option" menu
 @property (nonatomic, assign) BOOL dialogueTargetsKnown;     // the bridge models this dialogue's clickables
 @property (nonatomic, assign) long long dialogueTargetsSeq;  // the dialogue publish those clickables came from
+@property (nonatomic, assign) long long dialogueViewSeq;     // the publish the PARCHMENT's rows were built from
 @property (nonatomic, copy) NSString *lastTargetsJson;       // dialogue publish we last logged (log on change only)
 @property (nonatomic, strong) NSArray<NSValue *> *dialogueOptionRects;   // per-option engine canvas bounds
 @property (nonatomic, strong) NSArray<NSNumber *> *dialogueOptionDigits; // the matching option numbers
@@ -3879,6 +3880,10 @@ static int chatRowCanvasH(void) {
         // Path B: the engine now paints its OWN opaque dialogue + full head; suppress the native parchment so it
         // doesn't double-render over it (mirrors Android's engineDialogue gate).
         || [cd[@"engineDialogue"] boolValue]) { [self hideDialogue]; return; }
+    // This is a SECOND read of the dialogue, independent of the one the tap targets are built from, so it needs
+    // its own sequence: the two can observe different publishes, and a row this view is showing must be answered
+    // against the dialogue IT was built from. Sequence before payload, so a publish in between fails safe.
+    const long long viewSeq = [JVMLauncher dialogueSeq];
     NSString *js = [JVMLauncher dialogueJson];
     if (js.length == 0) { [self hideDialogue]; return; }
     NSDictionary *d = parseBridgeJSON(js, "ViewController.updateDialogueView");
@@ -3911,6 +3916,7 @@ static int chatRowCanvasH(void) {
 
     if (![js isEqualToString:self.lastDialogueJson]) {
         self.lastDialogueJson = js;
+        self.dialogueViewSeq = viewSeq; // the rows about to be built belong to THIS publish
         [self rebuildDialogueContent:d scale:s];
         // One line per new dialogue so a misaligned head cutout / continue target is diagnosable from the log.
         [self appendLine:[NSString stringWithFormat:@"[dlg] type=%@ box=%@ head=%@ cont=(%.0f,%.0f)",
@@ -4118,7 +4124,7 @@ static int chatRowCanvasH(void) {
 - (void)onDialogueOption:(UIButton *)b {
     NSInteger digit = b.tag; // the published child index, straight from the option's "digit"
     if (digit < 1 || digit > 9) return;
-    [JVMLauncher selectEngineDialogueOption:(int)digit seq:self.dialogueTargetsSeq];
+    [JVMLauncher selectEngineDialogueOption:(int)digit seq:self.dialogueViewSeq];
     [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %ld (op)", (long)digit]];
 }
 
