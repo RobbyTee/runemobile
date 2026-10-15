@@ -619,8 +619,35 @@ public final class JavaBridge
 	 * focus first could not rescue it: a posted FOCUS_GAINED is dropped the same way. Calling the listeners is
 	 * where a real key press ends up anyway, minus the focus arbitration we have no window manager for.
 	 */
+	private static boolean keyDiagDone;
+
 	static void dispatchKey(Canvas canvas, KeyEvent e)
 	{
+		if (!keyDiagDone)
+		{
+			keyDiagDone = true;
+			final StringBuilder sb = new StringBuilder(256);
+			sb.append("[keydiag] canvas=").append(canvas.getClass().getName())
+				.append(" key=").append(canvas.getKeyListeners().length)
+				.append(" focus=").append(canvas.getFocusListeners().length)
+				.append(" mouse=").append(canvas.getMouseListeners().length)
+				.append(" focusable=").append(canvas.isFocusable())
+				.append(" displayable=").append(canvas.isDisplayable());
+			for (final KeyListener l : canvas.getKeyListeners())
+			{
+				sb.append(" KL:").append(l.getClass().getName());
+			}
+			for (java.awt.Container up = canvas.getParent(); up != null; up = up.getParent())
+			{
+				sb.append(" | parent=").append(up.getClass().getName())
+					.append(" key=").append(up.getKeyListeners().length);
+				for (final KeyListener l : up.getKeyListeners())
+				{
+					sb.append(" KL:").append(l.getClass().getName());
+				}
+			}
+			System.out.println(sb);
+		}
 		EventQueue.invokeLater(() ->
 		{
 			for (final KeyListener l : canvas.getKeyListeners())
