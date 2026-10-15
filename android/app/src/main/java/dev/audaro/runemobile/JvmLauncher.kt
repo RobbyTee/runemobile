@@ -643,6 +643,14 @@ object JvmLauncher {
     fun framePixels(): IntArray? = nativeFramePixels()
 
     // P2-1 dev perf chip / panel.
+
+    /** The renderer this process actually BOOTED with (cpu|gpu|117hd); empty until the boot path sets it.
+     *  Not the same thing as the saved preference: a pick made mid-session only applies at the next launch, and
+     *  a dev/CI-forced boot (gpu.mode marker, intent extra, TV) runs a renderer the pref never asked for. The
+     *  plugins panel reports THIS, so a row cannot claim to be running something that isn't. */
+    @Volatile
+    var sessionRenderer: String = ""
+
     fun framesPresented() = nativeFramesPresented()
 
     fun heapStats() = nativeHeapStats()

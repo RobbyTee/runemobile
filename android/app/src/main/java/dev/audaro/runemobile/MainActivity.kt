@@ -4241,6 +4241,15 @@ class MainActivity : AppCompatActivity() {
         gpu: Boolean = false,
         rlhd: Boolean = false,
     ) {
+        // Record what actually booted, from the parameters the boot is about to use, so the panel reports the
+        // running renderer rather than the saved pref (these diverge whenever a pick has not been restarted into,
+        // and on every dev/CI-forced boot). Set before the unpack below, which can fail and return early.
+        JvmLauncher.sessionRenderer =
+            when {
+                rlhd -> "117hd"
+                gpu -> "gpu"
+                else -> "cpu"
+            }
         // UX-ONBOARD-01: on the first-install path, feed a coarse "Unpacking… N%" line into the cold-start splash.
         // The callback runs on this boot thread, so marshal each update to the UI thread. No-op once installed.
         val javaHome =

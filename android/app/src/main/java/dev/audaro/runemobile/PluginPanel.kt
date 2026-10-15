@@ -1051,6 +1051,20 @@ private fun PluginListBody(
             q.isEmpty() || it.name.contains(q, ignoreCase = true) ||
                 it.description.contains(q, ignoreCase = true) || it.tags.contains(q, ignoreCase = true)
         }
+    // A renderer row's switch is the saved LAUNCH preference, so on its own it says nothing about what is
+    // actually rendering: a pick applies at the next launch, and a dev/CI-forced boot runs something the pref
+    // never asked for. Poll the booted renderer and the frame counter so the row can report the live state and
+    // "starting…" turns into "running" the moment the first frame presents. framesPresented is a native atomic
+    // read (no HotSpot attach), and the loop is scoped to this list, so it stops when the panel closes.
+    var session by remember { mutableStateOf(JvmLauncher.sessionRenderer) }
+    var presented by remember { mutableStateOf(JvmLauncher.framesPresented() > 0L) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            session = JvmLauncher.sessionRenderer
+            presented = JvmLauncher.framesPresented() > 0L
+            delay(500)
+        }
+    }
     LazyColumn(Modifier.fillMaxSize(), state = listState) {
         items(shown, key = { it.className }) { p ->
             val rendererMode =
@@ -1060,8 +1074,24 @@ private fun PluginListBody(
                     else -> null
                 }
             if (rendererMode != null) {
-                // Renderer row: switch state = the saved launch preference; toggle = save it.
-                // Never marked incompatible (it is deliberately not running on this boot).
+                // Renderer row: switch state = the saved launch preference; toggle = save it. Never marked
+                // incompatible (it is deliberately not running on this boot) -- the status line below says what
+                // is actually happening instead, so a saved pick cannot read as a running renderer.
+                val status =
+                    when {
+                        // pre-boot: say nothing rather than guess
+                        session.isEmpty() -> null
+
+                        session == rendererMode && !presented -> "○ starting…"
+
+                        session == rendererMode && renderer == rendererMode -> "● running"
+
+                        session == rendererMode -> "● running — off after restart"
+
+                        renderer == rendererMode -> "● selected — restart to apply"
+
+                        else -> "○ off"
+                    }
                 PluginRowItem(
                     p.copy(enabled = renderer == rendererMode),
                     incompatible = false,
@@ -1072,6 +1102,13 @@ private fun PluginListBody(
                             { onOpenConfig(p) }
                         } else {
                             null
+                        },
+                    status = status,
+                    statusColor =
+                        when {
+                            status == "● running" -> Color(0xFF81C784)
+                            status == null || status.startsWith("○ off") -> Color(0xFF9E9E9E)
+                            else -> Color(0xFFFFB74D)
                         },
                 )
                 return@items
@@ -1101,6 +1138,8 @@ private fun PluginRowItem(
     onToggle: (Boolean) -> Unit,
     onTogglePin: () -> Unit,
     onOpenConfig: (() -> Unit)?,
+    status: String? = null,
+    statusColor: Color = Color(0xFF9E9E9E),
 ) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = 8.dp),
@@ -1132,6 +1171,8 @@ private fun PluginRowItem(
             // Finding 8: the toggle is on but the engine couldn't start it on this platform (GPU, Discord,
             // Developer Tools, …) — tell the user instead of leaving a dead toggle.
             if (incompatible) Text("✕ couldn't start (incompatible)", color = Color(0xFFE57373), fontSize = 11.sp)
+            // Renderer rows only: what is RUNNING, which the switch (a launch preference) cannot convey.
+            if (status != null) Text(status, color = statusColor, fontSize = 11.sp)
         }
         // Config-only fake-plugins (RuneLite core settings / Chat Color) have no enable state — desktop shows no
         // toggle, only a tap-to-configure row (the ⚙ above). Everything else gets the enable switch.
