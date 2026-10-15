@@ -64,6 +64,19 @@ making it unconditional would silently stop every option tap on iOS and Android 
 entries; auth 18 pins; hub-pin 1.13.1 at project 1.13.2); clang-format and ktlint clean (both blocked a
 commit and were fixed, not bypassed).
 
+**The full gate (`--skip-build`) FAILS at detekt, and did so before this work.** Measured on a worktree
+at `7820e7698c`: **26** weighted issues against a baseline last refreshed **10 Jul**, in files nobody
+touched here (ConfigScreen, PanelReflowScreens, QuestWorldScreens, PanelView, KeepaliveService…). CI
+only runs `--contract-only`, which is why a stale baseline can sit red unnoticed — the same way the
+hub-pin tripwire did until 2026-10-15. This work now adds exactly **one** finding on top of that 26:
+`PluginRowItem` takes 6 parameters against a threshold of 5. It is left visible rather than baselined.
+
+Two baseline entries were **re-keyed, not added** (`DialogueView.update`'s complexity and return count):
+detekt keys a finding by the function's whole signature, so renaming a parameter silently converts
+baselined debt into a "new" finding. Regenerate such an ID with `--create-baseline` and swap it in; the
+file still holds 171 entries. **Do not refresh the whole baseline to get green** — that would bless the
+26 inherited findings in one commit.
+
 ## Exact next step
 
 Field-test on a device, in this order:
