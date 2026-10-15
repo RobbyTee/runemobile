@@ -1397,7 +1397,7 @@ class MainActivity : AppCompatActivity() {
         val prefRenderer = rendererPref()
         val gpuMode =
             (intent?.getBooleanExtra("routecgpu", false) ?: false) ||
-                File(getExternalFilesDir(null), "gpu.mode").exists() || prefRenderer == "gpu"
+                devMarker("gpu.mode") || prefRenderer == "gpu"
         // Track G AG3-b: `--ez routecrlhd true` (or a pushed rlhd.mode marker) boots the FULL client on the gpu jar
         // + the rlhd jar with the 117HD (Zone) plugin loaded + started in-world (RLHDStarter). Needs login (tokens).
         // AG3-c: a Firebase Game Loop launch (action TEST_LOOP) also boots routecrlhd — Game Loop runs the app
@@ -1420,10 +1420,10 @@ class MainActivity : AppCompatActivity() {
         val isTv =
             packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
                 packageManager.hasSystemFeature("android.hardware.type.television")
-        val cpuForced = File(getExternalFilesDir(null), "cpu.mode").exists()
+        val cpuForced = devMarker("cpu.mode")
         val rlhdMode =
             (intent?.getBooleanExtra("routecrlhd", false) ?: false) ||
-                File(getExternalFilesDir(null), "rlhd.mode").exists() || gameLoop || rlhdOnceSet ||
+                devMarker("rlhd.mode") || gameLoop || rlhdOnceSet ||
                 (isTv && !cpuForced) || prefRenderer == "117hd"
         if (gameLoop) Log.i(TAG, "AG3-c: Game Loop launch -> routecrlhd (uninterrupted run for the Zone shader compile)")
         if (isTv && !cpuForced) Log.i(TAG, "TV/leanback device -> defaulting to routecrlhd (117HD) on launch")
@@ -1432,9 +1432,8 @@ class MainActivity : AppCompatActivity() {
         // a relaunch; the intent extras, the Game Loop action and rlhd.once (consumed above) do not, so they are
         // left out. The pref is deliberately NOT folded in here -- it changes mid-session, and
         // JvmLauncher.nextBootRenderer applies it against these with the same precedence the boot uses.
-        JvmLauncher.rlhdForcedNextBoot =
-            File(getExternalFilesDir(null), "rlhd.mode").exists() || (isTv && !cpuForced)
-        JvmLauncher.gpuForcedNextBoot = File(getExternalFilesDir(null), "gpu.mode").exists()
+        JvmLauncher.rlhdForcedNextBoot = devMarker("rlhd.mode") || (isTv && !cpuForced)
+        JvmLauncher.gpuForcedNextBoot = devMarker("gpu.mode")
         // PROD-SECURITY-01: the login-first divert below is skipped ONLY for the headless / non-interactive 117HD
         // boots that MUST settle at the engine LOGIN_SCREEN with no human to divert to — the Firebase Game Loop /
         // datacenter shader-compile proof (gameLoop + the rlhd_prelogin.mode marker) and the explicit dev/test
@@ -1444,8 +1443,8 @@ class MainActivity : AppCompatActivity() {
         // get the native Jagex login first, so login-first is not renderer-dependent for real users.
         val rlhdTestBoot =
             (intent?.getBooleanExtra("routecrlhd", false) ?: false) ||
-                File(getExternalFilesDir(null), "rlhd.mode").exists() || gameLoop ||
-                File(getExternalFilesDir(null), "rlhd_prelogin.mode").exists() ||
+                devMarker("rlhd.mode") || gameLoop ||
+                devMarker("rlhd_prelogin.mode") ||
                 (isTv && !cpuForced)
         // A3 login-first boot gate: JX_* is snapshotted at JNI_CreateJavaVM, so a valid tokens.json must exist
         // BEFORE boot. With none (and not census, which uses pushed tokens), run the on-device Jagex login first;
@@ -1489,7 +1488,16 @@ class MainActivity : AppCompatActivity() {
 
     /** Phase-2 renderer preference (cpu|gpu|117hd) — the iOS rendererPref model. Persisted; read once at
      *  boot to pick the jar set + routec flags, so a panel toggle applies on the NEXT process start. */
+
     private fun rendererPref(): String = getSharedPreferences("renderer", MODE_PRIVATE).getString("mode", "cpu") ?: "cpu"
+
+    /** A dev/ADB marker file in the app's external files dir -- honoured in DEBUG builds ONLY.
+     *  A release build must decide the renderer from the user's own pick, not from a file any process with
+     *  access to that directory can drop: an EMPTY rlhd.mode left behind by a test run silently outranked the
+     *  saved pref, so the panel showed CPU selected while every boot ran 117HD. The same files also reach
+     *  rlhdTestBoot, which SKIPS the login-first divert (PROD-SECURITY-01) -- a gate no stray file should move.
+     *  The Game Loop / datacenter proof is unaffected: its gameLoop intent action satisfies that set on its own. */
+    private fun devMarker(name: String): Boolean = BuildConfig.DEBUG && File(getExternalFilesDir(null), name).exists()
 
     private fun setRendererPref(mode: String) {
         // A user pick is EXPLICIT: clear the auto-decision flag + any prior auto-fail latch + a stale crash-cookie so
@@ -4616,7 +4624,7 @@ class MainActivity : AppCompatActivity() {
         // case (an explicit rlhd_prelogin.mode marker): there the world connect is WAF-blocked and autologin would
         // churn at state=UNKNOWN forever instead of settling at LOGIN_SCREEN, so the Zone shader-compile proof needs
         // the clean login screen. Default (no marker) = autologin, including in routecrlhd.
-        val rlhdPreLogin = rlhd && File(app.getExternalFilesDir(null), "rlhd_prelogin.mode").exists()
+        val rlhdPreLogin = rlhd && devMarker("rlhd_prelogin.mode")
         if (autologinArmed && !rlhdPreLogin) {
             opts.addAll(JagexTokens.autologinOpts)
             Log.i(
