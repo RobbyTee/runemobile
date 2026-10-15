@@ -2201,44 +2201,7 @@ class MainActivity : AppCompatActivity() {
             if (chatDialogueActive &&
                 (inCanvasRect(chatRectCanvas, gx, gy) || inCanvasRect(dialogueChatCanvas, gx, gy))
             ) {
-                // Only the CONTINUE widget and the option rows are clickable; the rest of the box is inert, and a
-                // precise click on inert parchment resolves against the SCENE behind it -- that walked the player to
-                // the tile under the dialogue, and walking away closed it, which reads as "the tap did nothing".
-                // Drive the engine's own handlers instead, and keep the raw click only for the dialogue types the
-                // bridge does not model, whose widgets really are under the finger.
-                for (i in dialogueOptionRects.indices) {
-                    if (!inCanvasRect(dialogueOptionRects[i], gx, gy)) continue
-                    val digit = dialogueOptionDigits.getOrNull(i) ?: continue
-                    // A precise click was an input event the engine's idle timer saw; these handlers are direct
-                    // menuActions it never sees, so bump the keepalive or a conversation that is the user's only
-                    // activity can AFK-log them out mid-dialogue.
-                    JvmLauncher.keepAlive()
-                    JvmLauncher.selectDialogueOption(digit, dialogueTargetsSeq)
-                    Log.i(TAG, "dlg: dialogue option $digit tap ($gx,$gy) -> op, consumed")
-                    return true
-                }
-                // An options menu needs a row, not a blind advance: consume a miss rather than picking for the user.
-                // A continue cannot stand in here either -- it advances, it does not choose -- so a tap that matched
-                // no row ends here whether or not the row bounds were published.
-                if (dialogueIsOptions) {
-                    Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> options, no row, consumed")
-                    return true
-                }
-                if (dialogueTargetsKnown) {
-                    // Modelled dialogue (chat / message / level-up): continue it, and consume the tap whether or not
-                    // a CONTINUE widget was published -- the bridge resolves the live target itself and does nothing
-                    // when no dialogue is open. Never fall through to a click here.
-                    // A precise click was an input event the engine's idle timer saw; these handlers are direct
-                    // menuActions it never sees, so bump the keepalive or a conversation that is the user's only
-                    // activity can AFK-log them out mid-dialogue.
-                    JvmLauncher.keepAlive()
-                    JvmLauncher.continueDialogue()
-                    Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> continue, consumed")
-                    return true
-                }
-                // Unmodelled (make-X / reward box): the engine's own clickable widgets are right under the finger.
-                JvmLauncher.clickPrecise(gx, gy, 1)
-                Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> engine-owned, raw, consumed")
+                resolveDialogueTap(gx, gy)
                 return true
             }
             // Arm the tap feedback BEFORE posting the click so the baseline seqs can't race the engine's bump.
@@ -3606,6 +3569,51 @@ class MainActivity : AppCompatActivity() {
         Log.i(TAG, "p5: map fullscreen reset")
     }
 
+    /** Resolve a tap that landed on an open dialogue, having already been region-gated by the caller.
+     *  Only the CONTINUE widget and the option rows are clickable; the rest of the box is inert, and a precise
+     *  click on inert parchment resolves against the SCENE behind it -- that walked the player to the tile under
+     *  the dialogue, and walking away closed it, which reads as "the tap did nothing". Drive the engine's own
+     *  handlers instead, and keep the raw click only for the dialogue types the bridge does not model, whose
+     *  widgets really are under the finger. The tap is consumed either way; this only picks how. */
+    private fun resolveDialogueTap(
+        gx: Int,
+        gy: Int,
+    ) {
+        val row = dialogueOptionRects.indices.firstOrNull { inCanvasRect(dialogueOptionRects[it], gx, gy) }
+        val digit = row?.let { dialogueOptionDigits.getOrNull(it) }
+        when {
+            // A precise click was an input event the engine's idle timer saw; these handlers are direct
+            // menuActions it never sees, so bump the keepalive or a conversation that is the user's only
+            // activity can AFK-log them out mid-dialogue.
+            digit != null -> {
+                JvmLauncher.keepAlive()
+                JvmLauncher.selectDialogueOption(digit, dialogueTargetsSeq)
+                Log.i(TAG, "dlg: dialogue option $digit tap ($gx,$gy) -> op, consumed")
+            }
+
+            // An options menu needs a row, not a blind advance: consume a miss rather than picking for the user.
+            // A continue cannot stand in here either -- it advances, it does not choose -- so a tap that matched
+            // no row ends here whether or not the row bounds were published.
+            dialogueIsOptions -> {
+                Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> options, no row, consumed")
+            }
+
+            // Modelled dialogue (chat / message / level-up): continue it whether or not a CONTINUE widget was
+            // published -- the bridge resolves the live target itself and does nothing when none is open.
+            dialogueTargetsKnown -> {
+                JvmLauncher.keepAlive()
+                JvmLauncher.continueDialogue()
+                Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> continue, consumed")
+            }
+
+            // Unmodelled (make-X / reward box): the engine's own clickable widgets are right under the finger.
+            else -> {
+                JvmLauncher.clickPrecise(gx, gy, 1)
+                Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> engine-owned, raw, consumed")
+            }
+        }
+    }
+
     private fun clearDialogueTapTargets() {
         dialogueTargetsKnown = false
         dialogueTargetsSeq = -1L
@@ -3626,29 +3634,37 @@ class MainActivity : AppCompatActivity() {
             try {
                 org.json.JSONObject(js)
             } catch (_: org.json.JSONException) {
-                return
+                null
             }
         // "{}" is a deliberate answer, not a hiccup: the bridge models chat/options/message/level-up only, and
         // leaves make-X + object-reward boxes to the engine. Those draw their OWN clickable widgets where the
         // finger lands, so leave the targets clear and let the raw precise click through for them.
-        val type = d.optString("type", "")
-        if (type.isEmpty()) return
-        dialogueTargetsKnown = true
-        dialogueTargetsSeq = seq
-        if (js != lastTargetsJson) {
-            lastTargetsJson = js
-            Log.i(TAG, "dlg: publish seq=$seq ${js.take(200)}")
+        val type = d?.optString("type", "").orEmpty()
+        if (type.isNotEmpty() && d != null) {
+            dialogueTargetsKnown = true
+            dialogueTargetsSeq = seq
+            if (js != lastTargetsJson) {
+                lastTargetsJson = js
+                Log.i(TAG, "dlg: publish seq=$seq ${js.take(200)}")
+            }
+            if (type == "options") {
+                // Rows can be published without bounds (hidden children). Keep isOptions set anyway: a miss must
+                // be consumed, never answered with a continue.
+                dialogueIsOptions = true
+                buildDialogueOptionTargets(d)
+            }
         }
-        if (type != "options") return
-        // Rows can be published without bounds (hidden children). Keep isOptions set anyway: a miss must be
-        // consumed, never answered with a continue.
-        dialogueIsOptions = true
+    }
+
+    /** Fill the option rects/digits from an "options" publish. The digit is the ENGINE child index, so it is
+     *  passed through rather than renumbered from the drawn row order. */
+    private fun buildDialogueOptionTargets(d: org.json.JSONObject) {
         val opts = d.optJSONArray("options") ?: return
         val rects = ArrayList<IntArray>(opts.length())
         val digits = ArrayList<Int>(opts.length())
         for (i in 0 until opts.length()) {
-            val o = opts.optJSONObject(i) ?: continue
-            val b = o.optJSONObject("b") ?: continue
+            val o = opts.optJSONObject(i)
+            val b = o?.optJSONObject("b") ?: continue
             rects.add(intArrayOf(b.optInt("x"), b.optInt("y"), b.optInt("w"), b.optInt("h")))
             digits.add(o.optInt("digit", i + 1))
         }
