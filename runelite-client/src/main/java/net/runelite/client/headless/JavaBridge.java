@@ -2277,6 +2277,22 @@ public final class JavaBridge
 		{
 			kc = '\t';
 		}
+		// Printable keys carry a character and MUST also produce a KEY_TYPED -- that is the event the engine
+		// reads for "space to continue" and for picking a numbered dialogue option. Without it the press lands
+		// as CHAR_UNDEFINED with no typed event at all, and the engine ignores it.
+		else if (vk == KeyEvent.VK_SPACE)
+		{
+			kc = ' ';
+		}
+		else if (vk >= KeyEvent.VK_0 && vk <= KeyEvent.VK_9)
+		{
+			kc = (char) vk;
+		}
+		else if (vk >= KeyEvent.VK_A && vk <= KeyEvent.VK_Z)
+		{
+			// VK_A..VK_Z share their codes with ASCII uppercase; unshifted typing is lowercase.
+			kc = Character.toLowerCase((char) vk);
+		}
 		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, vk, kc));
 		if (kc != KeyEvent.CHAR_UNDEFINED)
 		{
