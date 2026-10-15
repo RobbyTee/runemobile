@@ -1932,6 +1932,39 @@ static const int kCamPitchPxPerSec = 200;
     [JVMLauncher setCameraHoldDxPerSec:0 dyPerSec:0];
 }
 
+// Route a key button to the dialogue action it is standing in for, returning YES if it was consumed.
+//
+// These buttons exist to do what their keys do in the game, and a dialogue does not answer to a key here: a
+// synthesized one reaches the gamepack's listener and comes back consumed without moving the conversation
+// (device-confirmed). The dialogue tap already drives the engine's own handler, so Space and the numbers are
+// pointed at the same handler while a dialogue is open, and still send a keystroke for everything else.
+//
+// Text entry outranks both: while the game is asking for text, a digit is a digit and a space is a space.
+- (BOOL)routeDialogueKey:(int)vk {
+    if (!self.dialogueTargetsKnown || [JVMLauncher textInputOpen])
+        return NO;
+    if (self.dialogueIsOptions) {
+        const int n = vk - AWT_VK_0;
+        if (n < 1 || n > 9)
+            return NO;
+        // The pressed number is the option's POSITION as drawn, which is how the game labels the rows. It is
+        // not the published digit: that is the engine's child index, and a blank padding row would shift it.
+        if ((NSUInteger)n > self.dialogueOptionDigits.count) {
+            [self appendLine:[NSString stringWithFormat:@"[shell] dialogue key %d (no such option)", n]];
+            return YES; // an options menu with no such row: swallow rather than emit a stray keystroke
+        }
+        NSNumber *digit = self.dialogueOptionDigits[n - 1];
+        [JVMLauncher selectEngineDialogueOption:digit.intValue seq:self.dialogueTargetsSeq];
+        [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %@ key %d (op)", digit, n]];
+        return YES;
+    }
+    if (vk != AWT_VK_SPACE)
+        return NO;
+    [JVMLauncher continueEngineDialogue];
+    [self appendLine:@"[shell] dialogue continue key (continue)"];
+    return YES;
+}
+
 - (void)onPinnedControlTapped:(UIButton *)b {
     NSDictionary *spec = objc_getAssociatedObject(b, "rmSpec");
     NSString *kind = spec[@"kind"];
@@ -1945,7 +1978,10 @@ static const int kCamPitchPxPerSec = 200;
             [self onToggleCtrl];
         }
     } else if ([kind isEqualToString:@"key"]) {
-        [JVMLauncher postKeyStroke:[spec[@"vk"] intValue]];
+        const int vk = [spec[@"vk"] intValue];
+        if ([self routeDialogueKey:vk])
+            return;
+        [JVMLauncher postKeyStroke:vk];
         [self appendLine:[NSString stringWithFormat:@"[shell] key %@", spec[@"glyph"]]];
     } else if ([kind isEqualToString:@"util"]) {
         if ([cid isEqualToString:@"keyboard"])
@@ -4066,28 +4102,24 @@ static int chatRowCanvasH(void) {
 }
 
 // Continue tap -> SPACE (OSRS "space bar to continue"); option tap -> its number key. postText sends the full
-// KEY_PRESSED+TYPED+RELEASED for the char, so the engine's (occluded but live) dialogue handler advances/selects.
+// The native parchment's own buttons. Both go through the engine's continue handler, like a tap on the engine
+// dialogue does: a precise click on the CONTINUE widget resolves against the SCENE behind the chatbox and walks
+// the player instead (the widget is drawn there but reads hidden), and a synthesized key is consumed without
+// moving the conversation. Neither was reachable while the parchment stays hidden, which is the only reason the
+// walking never showed up here too.
 - (void)onDialogueContinue {
     if (!self.dialogueView || self.dialogueView.hidden) return;
     NSString *js = self.lastDialogueJson;
     if (js && [js containsString:@"\"type\":\"options\""]) return;   // options need a choice, not a blind continue
-    // Prefer a PRECISE click on the engine's live CONTINUE widget (works regardless of the "space bar to continue"
-    // setting); fall back to SPACE if its bounds weren't published.
-    if (self.dialogueContinuePoint.x >= 0) {
-        [JVMLauncher postClickPreciseX:(int)self.dialogueContinuePoint.x y:(int)self.dialogueContinuePoint.y button:1];
-        [self appendLine:[NSString stringWithFormat:@"[shell] dialogue continue (click %.0f,%.0f)",
-            self.dialogueContinuePoint.x, self.dialogueContinuePoint.y]];
-    } else {
-        [JVMLauncher postText:@" "];
-        [self appendLine:@"[shell] dialogue continue (space)"];
-    }
+    [JVMLauncher continueEngineDialogue];
+    [self appendLine:@"[shell] dialogue continue (continue)"];
 }
 
 - (void)onDialogueOption:(UIButton *)b {
-    NSInteger digit = b.tag;
+    NSInteger digit = b.tag; // the published child index, straight from the option's "digit"
     if (digit < 1 || digit > 9) return;
-    [JVMLauncher postText:[NSString stringWithFormat:@"%ld", (long)digit]];
-    [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %ld", (long)digit]];
+    [JVMLauncher selectEngineDialogueOption:(int)digit seq:self.dialogueTargetsSeq];
+    [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %ld (op)", (long)digit]];
 }
 
 // Render the native chat MESSAGE lines (from JVMLauncher.chatLines — the live engine model) into chatMessagesView,
