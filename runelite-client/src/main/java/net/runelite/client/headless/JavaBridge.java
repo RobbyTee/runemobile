@@ -620,6 +620,7 @@ public final class JavaBridge
 	 * where a real key press ends up anyway, minus the focus arbitration we have no window manager for.
 	 */
 	private static boolean keyDiagDone;
+	private static int keyDeliveries;
 
 	static void dispatchKey(Canvas canvas, KeyEvent e)
 	{
@@ -650,8 +651,10 @@ public final class JavaBridge
 		}
 		EventQueue.invokeLater(() ->
 		{
+			int called = 0;
 			for (final KeyListener l : canvas.getKeyListeners())
 			{
+				called++;
 				switch (e.getID())
 				{
 					case KeyEvent.KEY_PRESSED:
@@ -666,6 +669,13 @@ public final class JavaBridge
 					default:
 						break;
 				}
+			}
+			if (keyDeliveries < 12)
+			{
+				keyDeliveries++;
+				System.out.println("[keydiag] delivered id=" + e.getID() + " vk=" + e.getKeyCode()
+					+ " char=" + (int) e.getKeyChar() + " -> listeners=" + called
+					+ " consumed=" + e.isConsumed());
 			}
 		});
 	}

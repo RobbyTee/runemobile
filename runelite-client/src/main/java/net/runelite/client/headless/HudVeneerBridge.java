@@ -2524,8 +2524,20 @@ public final class HudVeneerBridge
 	 *  and the canvas bounds of the head model ({@code head}, for the native cutout) and the CONTINUE widget
 	 *  ({@code cont}, so a continue tap can PRECISELY click the engine's live widget — robust regardless of the
 	 *  "space bar to continue" setting). */
+	private static boolean contDiagDone;
+
 	private static String dlgChat(Client c, String type, int nameId, int textId, int headId, int continueId)
 	{
+		if (!contDiagDone && continueId >= 0)
+		{
+			contDiagDone = true;
+			final Widget cw = c.getWidget(continueId);
+			System.out.println("[contdiag] id=" + continueId + " widget=" + (cw != null)
+				+ (cw == null ? "" : " wid=" + cw.getId() + " parent=" + cw.getParentId()
+					+ " clickMask=" + cw.getClickMask() + " hidden=" + cw.isHidden()
+					+ " onOp=" + java.util.Arrays.toString(cw.getOnOpListener())
+					+ " bounds=" + cw.getBounds() + " canvas=" + cw.getCanvasLocation()));
+		}
 		final StringBuilder sb = new StringBuilder(384);
 		sb.append("{\"type\":\"").append(type).append("\",\"continue\":true");
 		if (nameId >= 0)
