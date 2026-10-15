@@ -74,6 +74,15 @@ case "$auth_rc" in
 	*) fail "auth contract (check-auth-contract.sh errored, rc=$auth_rc)" "$auth_rc" ;;
 esac
 
+# ── Stage 1b: RuneLite api/hub version-pin review (GAP-B-2) ──────────────────────────
+# The plugin hub is pinned to a released version and api.base follows the project version; an upstream merge
+# rewrites neither, so this tripwire forces a review once project.build.version moves past hub-pin.ack.
+# It lives in the PRE-FLIGHT, not among the linters: release-hosted.yml gates publishing on --contract-only,
+# so a check that runs only in the full gate cannot stop a release shipping a dead pin -- which is exactly
+# what happened between 2026-10-13 and 2026-10-15. Build-independent, so it costs the pre-flight nothing.
+stage "hub-pin review (RuneLite api/hub version drift, GAP-B-2)"
+"$ROOT/tools/shared-contract/check-hub-pin.sh" || fail "hub-pin (RuneLite api/hub pin needs review — see above)"
+
 if [ "$contract_only" -eq 1 ]; then
 	echo; echo "✅ contract-only pre-flight PASS."; exit 0
 fi
@@ -96,14 +105,6 @@ stage "ktlint (tracked Kotlin)"
 # Baseline-gated: existing complexity/exception debt is grandfathered, so this fails only on NEW findings.
 stage "detekt (Kotlin static analysis, baseline-gated)"
 "$ROOT/tools/lint/detekt.sh" --require || fail "detekt (new Kotlin findings or detekt not installed — see above)"
-
-# ── Stage 1d2: RuneLite api/hub version-pin review (GAP-B-2) ───────────────────────────────────
-# runelite.properties pins pluginhub.version + api.base to a version that lags project.build.version (a
-# newer minor 404s — commit a310e583c8). That pin is invisible to upstream merges, so this tripwire fails
-# the gate when project.build.version advances past the last human-reviewed value in hub-pin.ack, forcing a
-# conscious "is the pin still needed?" review. Build-independent, so it runs alongside the linters.
-stage "hub-pin review (RuneLite api/hub version drift, GAP-B-2)"
-"$ROOT/tools/shared-contract/check-hub-pin.sh" || fail "hub-pin (RuneLite api/hub pin needs review — see above)"
 
 # Gradle is invoked from android/. CI (and most dev shells) already export JAVA_HOME — honour it. Only when it is
 # unset do we probe known JDK-21 locations, and only export one that actually exists on disk; if none match (e.g. a

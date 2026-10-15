@@ -1307,10 +1307,10 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 
     NSMutableArray<NSString *> *opts = [@[
         @"-XX:+UnlockExperimentalVMOptions",
-        @"-XX:+MirrorMappedCodeCache",            // iOS-26 code cache (Amethyst jre21 patch)
+        @"-XX:+MirrorMappedCodeCache", // iOS-26 code cache (Amethyst jre21 patch)
         @"-XX:+DisablePrimordialThreadGuardPages",
-        @"-XX:-UseCompressedClassPointers",       // free cert: no extended-virtual-addressing
-        @"-XX:ReservedCodeCacheSize=64m",         // bound the brk #0x69 RX reservation
+        @"-XX:-UseCompressedClassPointers", // free cert: no extended-virtual-addressing
+        @"-XX:ReservedCodeCacheSize=64m",   // bound the brk #0x69 RX reservation
         // NOTE (UPDATE 14): TieredStopAtLevel=1 + CICompilerCount=1 were tried and REVERTED — they did
         // NOT fix the §6.2 crash, they only MOVED it (code-cache is_unloading → GC heap corruption in
         // copy_to_survivor_space, with the crash reporter itself faulting = broad memory corruption).
@@ -1339,13 +1339,13 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
         @"--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
         @"--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
         // §6.2: heap for the full client + a writable RuneLite home (gamepack cache) + capture dir.
-        @"-Xmx1024m",                             // 256m is ample for the CPU login screen, but 117HD's
-                                                  // ZoneRenderer (scene/model staging on-heap + per-frame
-                                                  // BufferedImage capture) OOMs in 256m on the first real draw
-                                                  // (device round 3). 1024m fits well under the jetsam ceiling on
-                                                  // this 12 GB device w/ the increased-memory-limit entitlement
-                                                  // (NIO direct buffers are off-heap). Dial back if jetsam kills.
-        [NSString stringWithFormat:@"-Duser.home=%@", rlHome],                     // -> <rlHome>/.runelite
+        @"-Xmx1024m",                                          // 256m is ample for the CPU login screen, but 117HD's
+                                                               // ZoneRenderer (scene/model staging on-heap + per-frame
+                                                               // BufferedImage capture) OOMs in 256m on the first real draw
+                                                               // (device round 3). 1024m fits well under the jetsam ceiling on
+                                                               // this 12 GB device w/ the increased-memory-limit entitlement
+                                                               // (NIO direct buffers are off-heap). Dial back if jetsam kills.
+        [NSString stringWithFormat:@"-Duser.home=%@", rlHome], // -> <rlHome>/.runelite
 #if DEBUG
         [NSString stringWithFormat:@"-Drunelite.headless.capture.dir=%@", captureDir],
 #endif
@@ -1353,33 +1353,36 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
         // interval=2/preLoginMax=6/exit-at-8 burst is no longer needed): grab a fresh login frame
         // ~every 10th draw so the W3 shell shows the LIVE, animated, complete login screen for the
         // whole window, and keep enough budget that it never freezes mid-run.
-        @"-Drunelite.bridge=true",                   // enable the reverse-JNI live-blit + touch facade (W3 B)
-        @"-Drunelite.mobileui=true",                 // Phase-6 (W3): arm the MobileUiBridge control-plane facade
-                                                     // (plugin/config DTOs + chat-input tick snapshot)
-        @"-Drunelite.mobilechrome=true",             // W3 hybrid-chrome: arm the read-only MobileChromeBridge
-                                                     // snapshot (tab/panel/minimap/orb/chat/viewport bounds).
-                                                     // NOT the .probe gate — that mutates and is desktop-only.
-        @"-Drunelite.menupeek=true",                 // W3 touch-targeting: arm the read-only MenuPeekBridge
-                                                     // (native right-click menu data source). NOT .probe (desktop-only).
-        @"-Drunelite.menupeek.maxEntries=32",        // MENU-2: publish enough rows that crowded scenes aren't truncated (native scrolls)
-        @"-Drunelite.huddata=true",                  // W3 Feature-A: arm the read-only HudDataBridge snapshot
-                                                     // (chat lines / orb values / minimap positions for the veneers)
-        @"-Drunelite.hudveneer=true",                // W3 Feature-A A3: arm the HudVeneerBridge (engine-HUD
-                                                     // suppression; native sets which elements to hide, e.g. chat)
+        @"-Drunelite.bridge=true",            // enable the reverse-JNI live-blit + touch facade (W3 B)
+        @"-Drunelite.mobileui=true",          // Phase-6 (W3): arm the MobileUiBridge control-plane facade
+                                              // (plugin/config DTOs + chat-input tick snapshot)
+        @"-Drunelite.mobilechrome=true",      // W3 hybrid-chrome: arm the read-only MobileChromeBridge
+                                              // snapshot (tab/panel/minimap/orb/chat/viewport bounds).
+                                              // NOT the .probe gate — that mutates and is desktop-only.
+        @"-Drunelite.menupeek=true",          // W3 touch-targeting: arm the read-only MenuPeekBridge
+                                              // (native right-click menu data source). NOT .probe (desktop-only).
+        @"-Drunelite.menupeek.maxEntries=32", // MENU-2: publish enough rows that crowded scenes aren't truncated (native scrolls)
+        @"-Drunelite.huddata=true",           // W3 Feature-A: arm the read-only HudDataBridge snapshot
+                                              // (chat lines / orb values / minimap positions for the veneers)
+        @"-Drunelite.hudveneer=true",         // W3 Feature-A A3: arm the HudVeneerBridge (engine-HUD
+                                              // suppression; native sets which elements to hide, e.g. chat)
         // "Renderers as plugins": drop safe-mode in EVERY mode (incl. plain CPU) so the GPU + 117HD plugins load
         // + show in the panel (GpuPlugin is loadInSafeMode=false). DeviceHeadlessBoot reads this. The plugin HUB
         // works with safe-mode off; the one hazard — the PUBLIC hub 117HD whose jar has no facade (it collides
         // with our staged rs117.hd.HdPlugin) — is blocked in MobileUiBridge (HUB_BLOCKED hides it from the
         // catalog + refuses install), so OUR staged GpuPlugin/HdPlugin stay the canonical panel entries.
         @"-Drunelite.nosafemode=true",
-        // The hub serves manifests for RELEASED versions only; our jar is a -SNAPSHOT (manifest 404s without
-        // this). Pin to the latest released manifest (verify https://repo.runelite.net/plugins/manifest/
-        // <v>_full.js answers 200 when bumping the client version).
-        @"-Drunelite.pluginhub.version=1.12.28",
-        @"-Drunelite.rendererpanel=true",            // arm RendererPanelStarter: load GPU + 117HD (no-start) into
-                                                     // the panel so both are selectable + configurable.
-        @"-Drunelite.nosplash=true",                 // no desktop Swing splash (its JFrame creation under CACIO
-                                                     // aborted ExternalPluginManager.refreshPlugins).
+        // The hub serves manifests for RELEASED versions only; our jar is a -SNAPSHOT (1.13.2-SNAPSHOT_full.js
+        // 404s, verified), so this cannot simply follow the client version. Pin it to the release our tree is
+        // BASED on -- plugins built against 1.13.1 call API a 1.13.2-SNAPSHOT client certainly has, while a
+        // newer manifest can call API added after our merge base and fail at load. check-hub-pin.sh holds this
+        // equal to runelite.properties; change both, and verify the manifest answers 200 first.
+        @"-Drunelite.pluginhub.version=1.13.1",
+        @"-Drunelite.rendererpanel=true", // arm RendererPanelStarter: load GPU + 117HD (no-start) into
+                                          // the panel so both are selectable + configurable.
+        @"-Drunelite.nosplash=true",      // no desktop Swing splash (its JFrame creation under CACIO
+                                          // aborted ExternalPluginManager.refreshPlugins).
+
         // NOTE: -Drunelite.mobilechrome.repos was tried and REVERTED — repositioned stones over the world are
         // occluded by the 3D viewport (only the mobile 601 toplevel draws tabs above it). Native rails it is.
         // Phase-6 STEP-0 device smoke confirmed GREEN (2026-06-01): lanes separate (config on client thread,
@@ -1399,12 +1402,12 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
         // NOTE: -Drunelite.hub also drops safe-mode (enables external plugins) — the real hub UI will pass it.
 #if DEBUG
         @"-Drunelite.headless.capture.interval=10",
-        @"-Drunelite.headless.capture.preLoginMax=40",  // login-screen/EULA frames before LOGGED_IN gets its
-                                                        // own (MAX_FRAMES) budget; a long LOADING can't starve it
+        @"-Drunelite.headless.capture.preLoginMax=40", // login-screen/EULA frames before LOGGED_IN gets its
+                                                       // own (MAX_FRAMES) budget; a long LOADING can't starve it
 #endif
-        @"-Dheadless.runSeconds=240",               // wide window: interactive login adds EULA+Play Now clicks,
-                                                    // network login, and a first-run cache download before LOGGED_IN
-        @"-Dheadless.captureTargetFrames=999",      // don't early-exit; ride the window so the LOGGED_IN frame lands
+        @"-Dheadless.runSeconds=240",          // wide window: interactive login adds EULA+Play Now clicks,
+                                               // network login, and a first-run cache download before LOGGED_IN
+        @"-Dheadless.captureTargetFrames=999", // don't early-exit; ride the window so the LOGGED_IN frame lands
         [NSString stringWithFormat:@"-Djava.home=%@", javaHome],
         [NSString stringWithFormat:@"-Djava.library.path=%@", frameworks],
         [NSString stringWithFormat:@"-Djava.class.path=%@", classpath],
