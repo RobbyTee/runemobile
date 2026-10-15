@@ -39,13 +39,40 @@ dialogue taps rather than the whole HUD veneer.
 
 `g_dlgSnapSeq` advances **before** the dialogue json is copied under `g_dlgLock`, so reading the two
 separately can hand the shell a seq **newer** than the text it holds — the unsafe direction, where a
-stale row answers the dialogue that replaced it. The publish seq is now stored with the string under
-the lock (`g_dlgPubSeq`) and read back under it, and the shell reads **seq before payload**, so a
-mismatch can only drop a pick, never misdirect one.
+stale row answers the dialogue that replaced it. The publish seq is stored with the string under the
+lock (`g_dlgPubSeq`) and read back under it.
 
-Both ports capture that seq when they rebuild their rows, which is only correct because
-`publishDialogueJson` bumps on a **changed** snapshot. That invariant is now noted at the bump site:
-making it unconditional would silently stop every option tap on iOS and Android at once.
+**"Read the seq before the payload and a skew fails safe" was wrong, and the fix is in `b5ebdc115a`.**
+It accounts only for the pick made on that one frame. Both shells re-tagged their rows **only when the
+json text changed**, so a single skewed read **latches**: the rows carry a seq that no longer matches,
+and `selectDialogueOption`'s guard refuses *every* tap until the dialogue text happens to change —
+which on an options dialogue is never, while the player sits there deciding. A dialogue that silently
+stops answering, which is exactly what the comment at the bump site warned about.
+
+What holds now:
+
+* **Android** takes the seq and the json from **one** critical section (`nativeDialoguePublish`), and
+  the seq-only accessor was **deleted** so nobody can reach for it again.
+* **iOS** cannot do that without a new shared-contract method, so it re-reads the seq after the json
+  and retries while it moved (`getDialogueSeq` bumps only on a changed snapshot, so a seq that is
+  stable either side of the json read is the one that json belongs to).
+* **Both** re-tag their rows on **every** pass, not only on a text change. This is what kills the latch
+  as a class — the rows always belong to the json currently held, so a stale seq corrects next pass.
+
+Neither is airtight and the code says so: `publishDialogueJson` writes the payload *then* bumps the
+seq, so a read catching that window sees an older seq beside newer json, and the native cache fill
+reads the seq before the json so it can sit one publish apart for a frame. Both are the **safe**
+direction (a pick is refused, never misapplied) and both self-correct on the next pass. **The write
+order is load-bearing**: bumping the seq first would hand out a seq *newer* than its json, and a stale
+row would answer the dialogue that had just replaced it.
+
+### Renderer rows may not promise a restart they do not control
+
+`"● running — off after restart"` and `"● selected — restart to apply"` assume the saved pref decides
+the next boot. A `gpu.mode` / `rlhd.mode` marker overrides it on **every** launch, and a TV/leanback
+device boots 117HD by design — a shipping path, not a dev-only one. `JvmLauncher.pinnedRenderer`
+publishes which renderer a **persistent** override will force (markers + the TV default; intent extras,
+a Game Loop launch and the one-shot `rlhd.once` are correctly excluded) and those two rows defer to it.
 
 ## What needed no port (don't re-tread)
 
