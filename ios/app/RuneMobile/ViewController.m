@@ -240,6 +240,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 // boot died before presenting -> demote the saved pref to the software renderer and say so.
 @property (nonatomic, assign) BOOL hdBootCookieArmed;   // this session wrote the marker (awaiting first present)
 @property (nonatomic, assign) BOOL hdBootCookieSettled; // this session already cleared it — don't re-arm
+@property (nonatomic, assign) BOOL appBackgrounded;     // away: the cookie must not re-arm until we return
 @property (nonatomic, assign) CGRect chatHitCanvas;
 // Pre-composited tab images (stone background + centred icon) built once from the bundled OSRS sprite assets
 // (stone-inactive/active + icon-0..13). Index = tab index; active/inactive variants. Authentic, crisp, no
@@ -2830,10 +2831,15 @@ static const int kCamPitchPxPerSec = 200;
     // That is not hypothetical: switching renderers REQUIRES a relaunch, so the ordinary way to turn
     // the GPU renderer on ran into this every time. An OOM during world load is unaffected; it
     // happens in the foreground with the cookie still armed, and still demotes correctly.
+    self.appBackgrounded = YES;
     if (self.hdBootCookieArmed && !self.hdBootCookieSettled) {
         [self hdBootCookieClear];
         self.hdBootCookieArmed = NO;
-        self.hdBootCookieSettled = YES;
+        // NOT settled: reaching the background proves this boot survived, it does not prove the GPU works. The
+        // app usually comes back, and the renderer can still die later -- during world load, in a shader it has
+        // not compiled yet, or in an OOM -- so the session must stay able to re-arm. Marking it settled here
+        // retired the cookie permanently on the first app switch and took the world-load OOM demotion with it,
+        // which is the one the original comment claimed was unaffected. Re-arming is held off only while away.
         [self appendLine:@"[shell] backgrounded before the first GPU frame — crash cookie cleared "
                          @"(the boot survived; a relaunch from here is not a crash)"];
     }
@@ -2866,6 +2872,7 @@ static const int kCamPitchPxPerSec = 200;
 }
 
 - (void)onWillEnterForeground {
+    self.appBackgrounded = NO; // back in the foreground: an unproven GPU boot may arm its cookie again
     [self stopPipBgPump];
     if (self.bgKeepTask != UIBackgroundTaskInvalid) {
         [[UIApplication sharedApplication] endBackgroundTask:self.bgKeepTask];
@@ -5844,7 +5851,7 @@ static CGRect mapRectFromArr(NSArray *a) {
             self.hdBootCookieArmed = NO;
             self.hdBootCookieSettled = YES;
             [self appendLine:@"[shell] 117HD first GL present — crash cookie cleared"];
-        } else if (!self.hdBootCookieArmed && self.framesShown > 0) {
+        } else if (!self.hdBootCookieArmed && !self.appBackgrounded && self.framesShown > 0) {
             [self hdBootCookieArm];
             self.hdBootCookieArmed = YES;
             [self appendLine:@"[shell] 117HD boot underway — crash cookie armed (clears on first GL present)"];
@@ -5859,7 +5866,7 @@ static CGRect mapRectFromArr(NSArray *a) {
             self.hdBootCookieArmed = NO;
             self.hdBootCookieSettled = YES;
             [self appendLine:@"[shell] GPU first frame — crash cookie cleared"];
-        } else if (!self.hdBootCookieArmed && self.framesShown > 0) {
+        } else if (!self.hdBootCookieArmed && !self.appBackgrounded && self.framesShown > 0) {
             [self hdBootCookieArm];
             self.hdBootCookieArmed = YES;
             [self appendLine:@"[shell] GPU boot underway — crash cookie armed (clears on first GPU frame)"];
