@@ -2209,6 +2209,10 @@ class MainActivity : AppCompatActivity() {
                 for (i in dialogueOptionRects.indices) {
                     if (!inCanvasRect(dialogueOptionRects[i], gx, gy)) continue
                     val digit = dialogueOptionDigits.getOrNull(i) ?: continue
+                    // A precise click was an input event the engine's idle timer saw; these handlers are direct
+                    // menuActions it never sees, so bump the keepalive or a conversation that is the user's only
+                    // activity can AFK-log them out mid-dialogue.
+                    JvmLauncher.keepAlive()
                     JvmLauncher.selectDialogueOption(digit, dialogueTargetsSeq)
                     Log.i(TAG, "dlg: dialogue option $digit tap ($gx,$gy) -> op, consumed")
                     return true
@@ -2224,6 +2228,10 @@ class MainActivity : AppCompatActivity() {
                     // Modelled dialogue (chat / message / level-up): continue it, and consume the tap whether or not
                     // a CONTINUE widget was published -- the bridge resolves the live target itself and does nothing
                     // when no dialogue is open. Never fall through to a click here.
+                    // A precise click was an input event the engine's idle timer saw; these handlers are direct
+                    // menuActions it never sees, so bump the keepalive or a conversation that is the user's only
+                    // activity can AFK-log them out mid-dialogue.
+                    JvmLauncher.keepAlive()
                     JvmLauncher.continueDialogue()
                     Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> continue, consumed")
                     return true
