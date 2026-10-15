@@ -91,6 +91,18 @@ class MainActivity : AppCompatActivity() {
     // Raw dialogueActive bit from the chat snapshot (independent of the engineDlg parchment gate); mirrors iOS.
     private var chatDialogueActive = false
 
+    // Dialogue tap targets, maintained whenever a dialogue is open -- INCLUDING while the engine draws its own
+    // dialogue and the native parchment is suppressed. That is exactly when DialogueView never sees the touch and
+    // onSingleTapUp has to resolve it alone, so targets kept only for the parchment left engine-drawn dialogues
+    // falling back to a precise click, which resolves on the SCENE behind the box and walks the player.
+    // Canvas px, straight from the publish; the seq identifies the dialogue the rows came from.
+    private var dialogueTargetsKnown = false
+    private var dialogueTargetsSeq = -1L
+    private var dialogueIsOptions = false
+    private var dialogueOptionRects: List<IntArray> = emptyList()
+    private var dialogueOptionDigits: List<Int> = emptyList()
+    private var lastTargetsJson = ""
+
     // Phase-5 world map (floating window): open-state + control rects from the published map snapshot.
     // While open, a one-finger drag that STARTS inside the window pans the MAP (shared panWorldMap — finger
     // deltas in canvas px; synthetic drags don't pan, probe-proven), taps inside are PRECISE clicks (close X,
@@ -2182,15 +2194,43 @@ class MainActivity : AppCompatActivity() {
                 Log.i(TAG, "ap0: minimap/orb tap ($gx,$gy) -> click without walk-ring")
                 return true
             }
-            // Dialogue tap-guard (mirrors iOS ViewController.m onTap): while an engine dialogue is open, a tap inside
-            // the chatbox region OR the published dialogue rect is a PRECISE click that advances/selects the dialogue —
-            // consume it (no walk-ring, no haptic, no JvmLauncher.click). Region-gated like iOS: a tap OUTSIDE both
-            // rects still falls through to the generic world click below.
+            // Dialogue tap-guard (mirrors iOS ViewController.m onTap): while a dialogue is open, a tap inside the
+            // chatbox region OR the published dialogue rect belongs to the dialogue -- consume it (no walk-ring, no
+            // haptic, no JvmLauncher.click). Region-gated like iOS: a tap OUTSIDE both rects still falls through to
+            // the generic world click below.
             if (chatDialogueActive &&
                 (inCanvasRect(chatRectCanvas, gx, gy) || inCanvasRect(dialogueChatCanvas, gx, gy))
             ) {
+                // Only the CONTINUE widget and the option rows are clickable; the rest of the box is inert, and a
+                // precise click on inert parchment resolves against the SCENE behind it -- that walked the player to
+                // the tile under the dialogue, and walking away closed it, which reads as "the tap did nothing".
+                // Drive the engine's own handlers instead, and keep the raw click only for the dialogue types the
+                // bridge does not model, whose widgets really are under the finger.
+                for (i in dialogueOptionRects.indices) {
+                    if (!inCanvasRect(dialogueOptionRects[i], gx, gy)) continue
+                    val digit = dialogueOptionDigits.getOrNull(i) ?: continue
+                    JvmLauncher.selectDialogueOption(digit, dialogueTargetsSeq)
+                    Log.i(TAG, "dlg: dialogue option $digit tap ($gx,$gy) -> op, consumed")
+                    return true
+                }
+                // An options menu needs a row, not a blind advance: consume a miss rather than picking for the user.
+                // A continue cannot stand in here either -- it advances, it does not choose -- so a tap that matched
+                // no row ends here whether or not the row bounds were published.
+                if (dialogueIsOptions) {
+                    Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> options, no row, consumed")
+                    return true
+                }
+                if (dialogueTargetsKnown) {
+                    // Modelled dialogue (chat / message / level-up): continue it, and consume the tap whether or not
+                    // a CONTINUE widget was published -- the bridge resolves the live target itself and does nothing
+                    // when no dialogue is open. Never fall through to a click here.
+                    JvmLauncher.continueDialogue()
+                    Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> continue, consumed")
+                    return true
+                }
+                // Unmodelled (make-X / reward box): the engine's own clickable widgets are right under the finger.
                 JvmLauncher.clickPrecise(gx, gy, 1)
-                Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> precise, consumed")
+                Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> engine-owned, raw, consumed")
                 return true
             }
             // Arm the tap feedback BEFORE posting the click so the baseline seqs can't race the engine's bump.
@@ -3294,8 +3334,11 @@ class MainActivity : AppCompatActivity() {
         // One call for the json and its publish seq: fetched separately they can skew, and a skewed seq latches
         // into the parchment's rows and gets every option tap refused (see DialoguePublish).
         val show = on && !engineDlg
-        val dlg = if (show) DialoguePublish.fromNative(JvmLauncher.dialoguePublishRaw()) else DialoguePublish(-1L, "{}")
-        dialogueOverlay.update(chatSnap, dlg, sx, sy, show)
+        // Read the publish whenever the veneer is live, not only when the parchment is drawn: under Path B the
+        // engine owns the dialogue and the parchment is suppressed, yet the tap guard still needs its rows.
+        val dlg = if (on) DialoguePublish.fromNative(JvmLauncher.dialoguePublishRaw()) else DialoguePublish(-1L, "{}")
+        if (chatDialogueActive) updateDialogueTapTargets(dlg.json, dlg.seq) else clearDialogueTapTargets()
+        dialogueOverlay.update(chatSnap, if (show) dlg else DialoguePublish(-1L, "{}"), sx, sy, show)
         // Auto-open/close: a collapsed chat hides the engine tabs -> the dialogue raster is suppressed. So when an
         // engine dialogue opens while collapsed, un-collapse for its duration and restore the collapsed state when it
         // ends (official-mobile behaviour). Native is the single owner of chatCollapsed (no bridge writer / no race).
@@ -3553,6 +3596,56 @@ class MainActivity : AppCompatActivity() {
         surfaceView.pivotX = surfaceView.width / 2f
         surfaceView.pivotY = surfaceView.height / 2f
         Log.i(TAG, "p5: map fullscreen reset")
+    }
+
+    private fun clearDialogueTapTargets() {
+        dialogueTargetsKnown = false
+        dialogueTargetsSeq = -1L
+        dialogueIsOptions = false
+        dialogueOptionRects = emptyList()
+        dialogueOptionDigits = emptyList()
+    }
+
+    /** Rebuild the dialogue tap targets from a publish (mirrors iOS ViewController.updateDialogueTapTargets).
+     *  Called whether or not the native parchment is shown -- when the engine draws its own dialogue these targets
+     *  are the only thing between a tap and a world walk. */
+    private fun updateDialogueTapTargets(
+        js: String,
+        seq: Long,
+    ) {
+        clearDialogueTapTargets()
+        val d =
+            try {
+                org.json.JSONObject(js)
+            } catch (_: org.json.JSONException) {
+                return
+            }
+        // "{}" is a deliberate answer, not a hiccup: the bridge models chat/options/message/level-up only, and
+        // leaves make-X + object-reward boxes to the engine. Those draw their OWN clickable widgets where the
+        // finger lands, so leave the targets clear and let the raw precise click through for them.
+        val type = d.optString("type", "")
+        if (type.isEmpty()) return
+        dialogueTargetsKnown = true
+        dialogueTargetsSeq = seq
+        if (js != lastTargetsJson) {
+            lastTargetsJson = js
+            Log.i(TAG, "dlg: publish seq=$seq ${js.take(200)}")
+        }
+        if (type != "options") return
+        // Rows can be published without bounds (hidden children). Keep isOptions set anyway: a miss must be
+        // consumed, never answered with a continue.
+        dialogueIsOptions = true
+        val opts = d.optJSONArray("options") ?: return
+        val rects = ArrayList<IntArray>(opts.length())
+        val digits = ArrayList<Int>(opts.length())
+        for (i in 0 until opts.length()) {
+            val o = opts.optJSONObject(i) ?: continue
+            val b = o.optJSONObject("b") ?: continue
+            rects.add(intArrayOf(b.optInt("x"), b.optInt("y"), b.optInt("w"), b.optInt("h")))
+            digits.add(o.optInt("digit", i + 1))
+        }
+        dialogueOptionRects = rects
+        dialogueOptionDigits = digits
     }
 
     private fun inCanvasRect(
