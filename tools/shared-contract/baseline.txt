@@ -67,6 +67,7 @@ METHOD HudDataBridge#getSeq()
 METHOD HudDataBridge#getSnapshot()
 METHOD HudDataBridge#isEnabled()
 METHOD HudDataBridge#tick(Client)
+METHOD HudVeneerBridge#continueDialogue()
 METHOD HudVeneerBridge#getChatLines()
 METHOD HudVeneerBridge#getChatSnapshot()
 METHOD HudVeneerBridge#getChatSnapshotSeq()
@@ -88,6 +89,7 @@ METHOD HudVeneerBridge#relocateMinimap(int,int)
 METHOD HudVeneerBridge#relocateSidePanel(int,int)
 METHOD HudVeneerBridge#scrollChat(int)
 METHOD HudVeneerBridge#scrollMapPanel(int)
+METHOD HudVeneerBridge#selectDialogueOption(int,long)
 METHOD HudVeneerBridge#setChatAreaWidth(int)
 METHOD HudVeneerBridge#setChatCollapsed(boolean)
 METHOD HudVeneerBridge#setChatHidden(boolean)
@@ -146,6 +148,7 @@ METHOD JavaBridge#presentReady()
 METHOD JavaBridge#register(Client)
 METHOD JavaBridge#selectMenuPoint(int,int)
 METHOD JavaBridge#setAltHeld(boolean)
+METHOD JavaBridge#setCameraHold(int,int)
 METHOD JavaBridge#setClientThread(ClientThread)
 METHOD JavaBridge#setCtrlHeld(boolean)
 METHOD JavaBridge#setMenuRenderSuppressed(boolean)
@@ -326,6 +329,7 @@ PAYLOAD HudDataBridge stamina
 PAYLOAD HudDataBridge ts
 PAYLOAD HudDataBridge type
 PAYLOAD HudDataBridge value
+PAYLOAD HudVeneerBridge b
 PAYLOAD HudVeneerBridge c
 PAYLOAD HudVeneerBridge chatX
 PAYLOAD HudVeneerBridge chatY

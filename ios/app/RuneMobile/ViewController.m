@@ -322,6 +322,13 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UIStackView *dialogueStack;    // name / text / continue, or option rows
 @property (nonatomic, copy)   NSString *lastDialogueJson;    // rebuild the stack only when the content changes
 @property (nonatomic, assign) CGPoint dialogueContinuePoint; // engine CONTINUE widget centre (canvas px), or (-1,-1)
+@property (nonatomic, assign) BOOL dialogueIsOptions;        // the open dialogue is a "Select an Option" menu
+@property (nonatomic, assign) BOOL dialogueTargetsKnown;     // the bridge models this dialogue's clickables
+@property (nonatomic, assign) long long dialogueTargetsSeq;  // the dialogue publish those clickables came from
+@property (nonatomic, assign) long long dialogueViewSeq;     // the publish the PARCHMENT's rows were built from
+@property (nonatomic, copy) NSString *lastTargetsJson;       // dialogue publish we last logged (log on change only)
+@property (nonatomic, strong) NSArray<NSValue *> *dialogueOptionRects;   // per-option engine canvas bounds
+@property (nonatomic, strong) NSArray<NSNumber *> *dialogueOptionDigits; // the matching option numbers
 @property (nonatomic, assign) int chatLinesSeq;              // last rendered getChatLines seq (skip re-parse when unchanged)
 @property (nonatomic, assign) int chatBaseX;                 // safe-area-anchored chat origin (canvas px), before the user offset
 @property (nonatomic, assign) int chatBaseY;
@@ -1777,10 +1784,12 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         add(@"Numbers", ([NSString stringWithFormat:@"num%d", i]),
             ([NSString stringWithFormat:@"%d", i]), @"key", AWT_VK_0 + i);
     add(@"Numbers", @"num0", @"0", @"key", AWT_VK_0);
-    add(@"Camera", @"left", @"←", @"key", AWT_VK_LEFT);
-    add(@"Camera", @"up", @"↑", @"key", AWT_VK_UP);
-    add(@"Camera", @"right", @"→", @"key", AWT_VK_RIGHT);
-    add(@"Camera", @"down", @"↓", @"key", AWT_VK_DOWN);
+    // Held camera controls, not key strokes: the engine does not act on a synthesized arrow, and a momentary
+    // press could not turn a camera that moves while a key is DOWN. The vk is kept as the direction tag.
+    add(@"Camera", @"left", @"←", @"cam", AWT_VK_LEFT);
+    add(@"Camera", @"up", @"↑", @"cam", AWT_VK_UP);
+    add(@"Camera", @"right", @"→", @"cam", AWT_VK_RIGHT);
+    add(@"Camera", @"down", @"↓", @"cam", AWT_VK_DOWN);
     add(@"Utility", @"screenshot", @"📷", @"util", 0);
     add(@"Utility", @"pip", @"📺", @"util", 0);
     add(@"Utility", @"hotkeys", @"⚡", @"util", 0);
@@ -1882,12 +1891,81 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         b.tintColor = [UIColor blackColor];
     }
     objc_setAssociatedObject(b, "rmSpec", spec, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if ([spec[@"kind"] isEqualToString:@"cam"]) {
+        // A hold needs both edges, and EVERY way a touch can end has to release it -- a cancel (an incoming
+        // call, the app going away mid-press) included, or the camera would keep turning with nothing held.
+        [b addTarget:self action:@selector(onCameraHoldBegin:) forControlEvents:UIControlEventTouchDown];
+        [b addTarget:self
+                      action:@selector(onCameraHoldEnd:)
+            forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside |
+                             UIControlEventTouchCancel | UIControlEventTouchDragExit];
+        return b;
+    }
     [b addTarget:self action:@selector(onPinnedControlTapped:) forControlEvents:UIControlEventTouchUpInside];
     return b;
 }
 
 // Fire the tapped pinned control by its spec: latch → toggle held; key → momentary keystroke; util → route to
 // the existing native action (which owns the keyboard field / screenshot / PiP / hotkey strip).
+// Turn rate for a held arrow, as the pixel-per-second rate the two-finger drag path already speaks: the
+// bridge converts it per frame, so these are real rates and not per-frame steps that would track the frame
+// rate. Signs follow a drag -- positive x turns as dragging right, positive y tilts down.
+static const int kCamYawPxPerSec = 320;
+static const int kCamPitchPxPerSec = 200;
+
+- (void)onCameraHoldBegin:(UIButton *)b {
+    NSDictionary *spec = objc_getAssociatedObject(b, "rmSpec");
+    const int vk = [spec[@"vk"] intValue];
+    int dx = 0, dy = 0;
+    if (vk == AWT_VK_LEFT)
+        dx = -kCamYawPxPerSec;
+    else if (vk == AWT_VK_RIGHT)
+        dx = kCamYawPxPerSec;
+    else if (vk == AWT_VK_UP)
+        dy = -kCamPitchPxPerSec;
+    else if (vk == AWT_VK_DOWN)
+        dy = kCamPitchPxPerSec;
+    [JVMLauncher setCameraHoldDxPerSec:dx dyPerSec:dy];
+    [self appendLine:[NSString stringWithFormat:@"[shell] camera hold %@ dx=%d dy=%d", spec[@"glyph"], dx, dy]];
+}
+
+- (void)onCameraHoldEnd:(UIButton *)b {
+    [JVMLauncher setCameraHoldDxPerSec:0 dyPerSec:0];
+}
+
+// Route a key button to the dialogue action it is standing in for, returning YES if it was consumed.
+//
+// These buttons exist to do what their keys do in the game, and a dialogue does not answer to a key here: a
+// synthesized one reaches the gamepack's listener and comes back consumed without moving the conversation
+// (device-confirmed). The dialogue tap already drives the engine's own handler, so Space and the numbers are
+// pointed at the same handler while a dialogue is open, and still send a keystroke for everything else.
+//
+// Text entry outranks both: while the game is asking for text, a digit is a digit and a space is a space.
+- (BOOL)routeDialogueKey:(int)vk {
+    if (!self.dialogueTargetsKnown || [JVMLauncher textInputOpen])
+        return NO;
+    if (self.dialogueIsOptions) {
+        const int n = vk - AWT_VK_0;
+        if (n < 1 || n > 9)
+            return NO;
+        // The pressed number is the option's POSITION as drawn, which is how the game labels the rows. It is
+        // not the published digit: that is the engine's child index, and a blank padding row would shift it.
+        if ((NSUInteger)n > self.dialogueOptionDigits.count) {
+            [self appendLine:[NSString stringWithFormat:@"[shell] dialogue key %d (no such option)", n]];
+            return YES; // an options menu with no such row: swallow rather than emit a stray keystroke
+        }
+        NSNumber *digit = self.dialogueOptionDigits[n - 1];
+        [JVMLauncher selectEngineDialogueOption:digit.intValue seq:self.dialogueTargetsSeq];
+        [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %@ key %d (op)", digit, n]];
+        return YES;
+    }
+    if (vk != AWT_VK_SPACE)
+        return NO;
+    [JVMLauncher continueEngineDialogue];
+    [self appendLine:@"[shell] dialogue continue key (continue)"];
+    return YES;
+}
+
 - (void)onPinnedControlTapped:(UIButton *)b {
     NSDictionary *spec = objc_getAssociatedObject(b, "rmSpec");
     NSString *kind = spec[@"kind"];
@@ -1901,7 +1979,10 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
             [self onToggleCtrl];
         }
     } else if ([kind isEqualToString:@"key"]) {
-        [JVMLauncher postKeyStroke:[spec[@"vk"] intValue]];
+        const int vk = [spec[@"vk"] intValue];
+        if ([self routeDialogueKey:vk])
+            return;
+        [JVMLauncher postKeyStroke:vk];
         [self appendLine:[NSString stringWithFormat:@"[shell] key %@", spec[@"glyph"]]];
     } else if ([kind isEqualToString:@"util"]) {
         if ([cid isEqualToString:@"keyboard"])
@@ -3686,6 +3767,7 @@ static int chatRowCanvasH(void) {
         [self appendLine:dlg ? @"[chat] dialogue open -> native chat hidden, engine dialogue (opaque) shown"
                              : @"[chat] dialogue closed -> native chat veneer restored"];
     }
+    [self updateDialogueTapTargetsActive:dlg];
     if (dlg) {
         // Capture the dialogue's canvas rect so onTap routes taps there precisely (resolving the dialogue's
         // Continue/option) instead of walking the world behind it. Disable the stale chat-scroll tap routing for
@@ -3831,6 +3913,10 @@ static int chatRowCanvasH(void) {
         // Path B: the engine now paints its OWN opaque dialogue + full head; suppress the native parchment so it
         // doesn't double-render over it (mirrors Android's engineDialogue gate).
         || [cd[@"engineDialogue"] boolValue]) { [self hideDialogue]; return; }
+    // This is a SECOND read of the dialogue, independent of the one the tap targets are built from, so it needs
+    // its own sequence: the two can observe different publishes, and a row this view is showing must be answered
+    // against the dialogue IT was built from. Sequence before payload, so a publish in between fails safe.
+    const long long viewSeq = [JVMLauncher dialogueSeq];
     NSString *js = [JVMLauncher dialogueJson];
     if (js.length == 0) { [self hideDialogue]; return; }
     NSDictionary *d = parseBridgeJSON(js, "ViewController.updateDialogueView");
@@ -3863,6 +3949,7 @@ static int chatRowCanvasH(void) {
 
     if (![js isEqualToString:self.lastDialogueJson]) {
         self.lastDialogueJson = js;
+        self.dialogueViewSeq = viewSeq; // the rows about to be built belong to THIS publish
         [self rebuildDialogueContent:d scale:s];
         // One line per new dialogue so a misaligned head cutout / continue target is diagnosable from the log.
         [self appendLine:[NSString stringWithFormat:@"[dlg] type=%@ box=%@ head=%@ cont=(%.0f,%.0f)",
@@ -3980,29 +4067,98 @@ static int chatRowCanvasH(void) {
     return a;
 }
 
+- (void)clearDialogueTapTargets {
+    self.dialogueContinuePoint = CGPointMake(-1, -1);
+    self.dialogueIsOptions = NO;
+    self.dialogueTargetsKnown = NO;
+    self.dialogueOptionRects = nil;
+    self.dialogueOptionDigits = nil;
+}
+
+// Keep the engine's clickable dialogue widgets (CONTINUE, option rows) current in canvas px for as long as a
+// dialogue is open. updateDialogueView used to be the only thing reading them, so they went stale the moment the
+// engine began drawing its own dialogue and the native parchment was suppressed -- which is exactly when onTap
+// has to resolve a tap on its own.
+- (void)updateDialogueTapTargetsActive:(BOOL)active {
+    if (!active) {
+        [self clearDialogueTapTargets];
+        return;
+    }
+    // While a dialogue IS open, a missing or unparseable publish is a hiccup, not a change of target: KEEP the
+    // last good bounds. Blanking them would drop the tap onto the raw-click fallback, which is the very thing
+    // that walked the player instead of advancing the dialogue.
+    // Read the sequence BEFORE the payload: if a publish lands between the two, the recorded seq is older than
+    // the targets built from it, so a pick made against them is refused rather than applied to a dialogue that
+    // has already moved on. The other order would accept exactly that stale pick.
+    const long long seq = [JVMLauncher dialogueSeq];
+    NSString *js = [JVMLauncher dialogueJson];
+    if (js.length == 0)
+        return;
+    NSDictionary *d = parseBridgeJSON(js, "ViewController.updateDialogueTapTargets");
+    if (![d isKindOfClass:[NSDictionary class]])
+        return;
+    NSString *type = [d[@"type"] isKindOfClass:[NSString class]] ? d[@"type"] : nil;
+    if (type.length == 0) {
+        // "{}" is a deliberate answer, not a hiccup: the bridge models chat/options/message/level-up only, and
+        // leaves make-X + object-reward boxes to the engine. Those draw their OWN clickable widgets where the
+        // finger lands, so clear the targets and let the raw precise click through for them.
+        [self clearDialogueTapTargets];
+        return;
+    }
+    [self clearDialogueTapTargets];
+    self.dialogueTargetsKnown = YES;
+    self.dialogueTargetsSeq = seq;
+    // DIAGNOSTIC: the publish itself, once per change -- shows whether a tap ADVANCED the conversation (a new
+    // text line) or ENDED it, which the open/closed lines alone cannot distinguish.
+    if (![js isEqualToString:self.lastTargetsJson]) {
+        self.lastTargetsJson = js;
+        [self appendLine:[NSString stringWithFormat:@"[dlg] %@",
+                                                    js.length > 200 ? [js substringToIndex:200] : js]];
+    }
+    NSDictionary *cont = [d[@"cont"] isKindOfClass:[NSDictionary class]] ? d[@"cont"] : nil;
+    if (cont) {
+        self.dialogueContinuePoint = CGPointMake([cont[@"x"] intValue] + [cont[@"w"] intValue] / 2,
+                                                 [cont[@"y"] intValue] + [cont[@"h"] intValue] / 2);
+    }
+    if (![type isEqualToString:@"options"])
+        return;
+    self.dialogueIsOptions = YES;
+    NSArray *opts = [d[@"options"] isKindOfClass:[NSArray class]] ? d[@"options"] : @[];
+    NSMutableArray *rects = [NSMutableArray arrayWithCapacity:opts.count];
+    NSMutableArray *digits = [NSMutableArray arrayWithCapacity:opts.count];
+    for (NSDictionary *o in opts) {
+        if (![o isKindOfClass:[NSDictionary class]])
+            continue;
+        NSDictionary *b = [o[@"b"] isKindOfClass:[NSDictionary class]] ? o[@"b"] : nil;
+        if (!b)
+            continue;
+        [rects addObject:[NSValue valueWithCGRect:CGRectMake([b[@"x"] intValue], [b[@"y"] intValue],
+                                                             [b[@"w"] intValue], [b[@"h"] intValue])]];
+        [digits addObject:@([o[@"digit"] integerValue])];
+    }
+    self.dialogueOptionRects = rects;
+    self.dialogueOptionDigits = digits;
+}
+
 // Continue tap -> SPACE (OSRS "space bar to continue"); option tap -> its number key. postText sends the full
-// KEY_PRESSED+TYPED+RELEASED for the char, so the engine's (occluded but live) dialogue handler advances/selects.
+// The native parchment's own buttons. Both go through the engine's continue handler, like a tap on the engine
+// dialogue does: a precise click on the CONTINUE widget resolves against the SCENE behind the chatbox and walks
+// the player instead (the widget is drawn there but reads hidden), and a synthesized key is consumed without
+// moving the conversation. Neither was reachable while the parchment stays hidden, which is the only reason the
+// walking never showed up here too.
 - (void)onDialogueContinue {
     if (!self.dialogueView || self.dialogueView.hidden) return;
     NSString *js = self.lastDialogueJson;
     if (js && [js containsString:@"\"type\":\"options\""]) return;   // options need a choice, not a blind continue
-    // Prefer a PRECISE click on the engine's live CONTINUE widget (works regardless of the "space bar to continue"
-    // setting); fall back to SPACE if its bounds weren't published.
-    if (self.dialogueContinuePoint.x >= 0) {
-        [JVMLauncher postClickPreciseX:(int)self.dialogueContinuePoint.x y:(int)self.dialogueContinuePoint.y button:1];
-        [self appendLine:[NSString stringWithFormat:@"[shell] dialogue continue (click %.0f,%.0f)",
-            self.dialogueContinuePoint.x, self.dialogueContinuePoint.y]];
-    } else {
-        [JVMLauncher postText:@" "];
-        [self appendLine:@"[shell] dialogue continue (space)"];
-    }
+    [JVMLauncher continueEngineDialogue];
+    [self appendLine:@"[shell] dialogue continue (continue)"];
 }
 
 - (void)onDialogueOption:(UIButton *)b {
-    NSInteger digit = b.tag;
+    NSInteger digit = b.tag; // the published child index, straight from the option's "digit"
     if (digit < 1 || digit > 9) return;
-    [JVMLauncher postText:[NSString stringWithFormat:@"%ld", (long)digit]];
-    [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %ld", (long)digit]];
+    [JVMLauncher selectEngineDialogueOption:(int)digit seq:self.dialogueViewSeq];
+    [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %ld (op)", (long)digit]];
 }
 
 // Render the native chat MESSAGE lines (from JVMLauncher.chatLines — the live engine model) into chatMessagesView,
@@ -6329,8 +6485,50 @@ static CGRect mapRectFromArr(NSArray *a) {
         CGPoint cp = CGPointMake(gx, gy);
         if ((self.chatScrollCanvas.size.width > 0 && CGRectContainsPoint(self.chatScrollCanvas, cp))
                 || (self.dialogueChatCanvas.size.width > 0 && CGRectContainsPoint(self.dialogueChatCanvas, cp))) {
+            // Only the CONTINUE widget and the option rows are clickable -- the rest of the box is inert, and a
+            // click on inert parchment resolves against the SCENE behind it, so the tap walked the player to the
+            // tile under the dialogue (and walking away then closed it, which read as "the tap did nothing").
+            // Click the engine's live widget at the canvas bounds the bridge publishes for it instead.
+            // Drive a dialogue through the engine's own continue handler -- not a click, and not a key.
+            //
+            // Not a click: the engine resolves one against whatever IT believes is under that canvas point, and
+            // for the relocated chatbox that is the SCENE, so the tap walked the player to the tile behind the
+            // box and ended the conversation by walking away. The published bounds say where the box is DRAWN;
+            // the continue component reads hidden, so there was never anything there to hit.
+            //
+            // Not a key either, though that took measuring: keys do now reach the gamepack's canvas listener
+            // and come back consumed, yet space and the option digits leave a dialogue untouched -- device-
+            // confirmed, with the continue working through the handler in the same session.
+            //
+            // Both halves of the engine's dispatch rule are in play below. A continue is a static component, so
+            // param0 is -1. An option row is a dynamic child, so it is addressed by its index instead.
+            for (NSUInteger i = 0; i < self.dialogueOptionRects.count; i++) {
+                if (!CGRectContainsPoint([self.dialogueOptionRects[i] CGRectValue], cp))
+                    continue;
+                NSNumber *digit = self.dialogueOptionDigits[i];
+                [JVMLauncher selectEngineDialogueOption:digit.intValue seq:self.dialogueTargetsSeq];
+                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %@ tap %d,%d (op)",
+                                                            digit, gx, gy]];
+                return;
+            }
+            // An options menu needs a row, not a blind advance: consume a miss rather than picking for the user.
+            // A continue cannot stand in here either -- it advances, it does not choose -- so a tap that matched
+            // no row ends here whether or not the row bounds were published.
+            if (self.dialogueIsOptions) {
+                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue tap %d,%d (options, no row)", gx, gy]];
+                return;
+            }
+            if (self.dialogueTargetsKnown) {
+                // Modelled dialogue (chat / message / level-up): continue it, and consume the tap whether or not
+                // a CONTINUE widget was published -- the bridge resolves the live target itself and does nothing
+                // when no dialogue is open. Never fall through to a click here.
+                [JVMLauncher continueEngineDialogue];
+                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue continue tap %d,%d (continue)", gx, gy]];
+                return;
+            }
+            // Unmodelled (make-X / reward box): the engine's own clickable widgets are right under the finger.
             [JVMLauncher postClickPreciseX:gx y:gy button:1];
-            [self appendLine:[NSString stringWithFormat:@"[shell] dialogue tap %d,%d (precise, consumed)", gx, gy]];
+            [self appendLine:[NSString stringWithFormat:@"[shell] dialogue tap %d,%d (engine-owned, raw)", gx, gy]];
             return;
         }
     }

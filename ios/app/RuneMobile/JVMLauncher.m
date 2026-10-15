@@ -47,6 +47,7 @@ static jmethodID gMidHeapStats = NULL;    // heapStats()Ljava/lang/String; — d
 static jmethodID gMidSimReconnect = NULL; // devSimulateReconnect(I)V — dev "test reconnect" hook (optional)
 static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidClickPrecise = NULL, gMidMove = NULL;
 static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
+static jmethodID gMidCameraHold = NULL; // setCameraHold(II)V — a held arrow turns at a pixel RATE per second
 static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
 static jmethodID gMidWarmed = NULL;   // JavaBridge.presentReady()Z — world geometry uploaded (direct-present reveal)
 static jmethodID gMidMenuSelect = NULL;  // selectMenuPoint(II)V — menu row select + hover-clear (optional)
@@ -252,6 +253,7 @@ static BOOL ensureBridge(void) {
     gMidMove   = (*env)->GetStaticMethodID(env, global, "onMove", "(II)V");
     gMidWheel  = (*env)->GetStaticMethodID(env, global, "onWheel", "(III)V");
     gMidCamera = (*env)->GetStaticMethodID(env, global, "onCameraDrag", "(II)V");
+    gMidCameraHold = (*env)->GetStaticMethodID(env, global, "setCameraHold", "(II)V");
     gMidText   = (*env)->GetStaticMethodID(env, global, "onText", "(Ljava/lang/String;)V");
     gMidKey    = (*env)->GetStaticMethodID(env, global, "onKeyStroke", "(I)V");
     gMidInputOpen = (*env)->GetStaticMethodID(env, global, "isTextInputOpen", "()Z");
@@ -402,6 +404,8 @@ static jmethodID gMidRelocateMinimap = NULL; // relocateMinimap(II)V  (A4 — mi
 static jmethodID gMidSetMinimapScale = NULL; // setMinimapScale(I)V  (bigger minimap)
 static jmethodID gMidRelocateSide = NULL;    // relocateSidePanel(II)V (A4/A6 — inventory side panel)
 static jmethodID gMidOpenTab = NULL;         // openTab(I)V  (A4 — open a tab by replaying its stone op script)
+static jmethodID gMidContinueDlg = NULL;     // continueDialogue()V — advance a chat dialogue via WIDGET_CONTINUE
+static jmethodID gMidSelectOpt = NULL;       // selectDialogueOption(IJ)V — pick an option row via WIDGET_CONTINUE
 static jmethodID gMidSetStonesHidden = NULL; // setStonesHidden(Z)V  (A4 — hide the engine tab stones)
 static jmethodID gMidSetChatRowH = NULL;     // setChatTabRowHeight(I)V  (A3 — bigger native chat tabs)
 static jmethodID gMidSetChatAreaW = NULL;    // setChatAreaWidth(I)V  (A3 — widen message area to align)
@@ -412,6 +416,7 @@ static jmethodID gMidSetChatCollapsed = NULL; // setChatCollapsed(Z)V  (A3 — t
 static jmethodID gMidGetChatSnap = NULL;     // getChatSnapshot()Ljava/lang/String;  (A3)
 static jmethodID gMidGetChatLines = NULL;    // getChatLines()Ljava/lang/String;  (native top-rendered chat)
 static jmethodID gMidGetDialogue = NULL;     // getDialogueJson()Ljava/lang/String;  (native-rendered dialogue)
+static jmethodID gMidGetDlgSeq = NULL;       // getDialogueSeq()J — bumped only when the dialogue CHANGES
 static jmethodID gMidSetOverlayInsets = NULL; // setOverlaySafeInsets(IIII)V (snap-corner safe frame)
 static jmethodID gMidPanMap = NULL;          // panWorldMap(II)V  (world map: finger pan -> map centre)
 static jmethodID gMidOpenWorldMap = NULL;    // openWorldMap()V  (world map: discoverable one-shot open)
@@ -446,6 +451,7 @@ static BOOL ensureVeneer(void) {
     gMidGetChatSnap = (*env)->GetStaticMethodID(env, global, "getChatSnapshot", "()Ljava/lang/String;");
     gMidGetChatLines = (*env)->GetStaticMethodID(env, global, "getChatLines", "()Ljava/lang/String;");
     gMidGetDialogue = (*env)->GetStaticMethodID(env, global, "getDialogueJson", "()Ljava/lang/String;");
+    gMidGetDlgSeq = (*env)->GetStaticMethodID(env, global, "getDialogueSeq", "()J");
     gMidSetMinimapScale = (*env)->GetStaticMethodID(env, global, "setMinimapScale", "(I)V");
     gMidSwitchChatTab = (*env)->GetStaticMethodID(env, global, "switchChatTab", "(I)V");
     gMidSetChatCollapsed = (*env)->GetStaticMethodID(env, global, "setChatCollapsed", "(Z)V");
@@ -473,6 +479,12 @@ static BOOL ensureVeneer(void) {
     gMidRelocateMinimap = mm;
     gMidRelocateSide = sp;
     gMidOpenTab = ot;
+    gMidContinueDlg = (*env)->GetStaticMethodID(env, global, "continueDialogue", "()V");
+    gMidSelectOpt = (*env)->GetStaticMethodID(env, global, "selectDialogueOption", "(IJ)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidContinueDlg = NULL;
+    }
     gMidSetStonesHidden = sh;
     gVeneerClass = global;
     return YES;
@@ -1984,6 +1996,17 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postWheel"); }
 }
 
++ (void)setCameraHoldDxPerSec:(int)dxPerSec dyPerSec:(int)dyPerSec {
+    if (!ensureBridge() || !gMidCameraHold)
+        return;
+    [JVMLauncher postKeepAlive]; // idle keepalive: a held button posts no canvas event of its own
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidCameraHold, (jint)dxPerSec, (jint)dyPerSec);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.setCameraHold");
+    }
+}
+
 + (void)postCameraDx:(int)dx dy:(int)dy {
     if (!ensureBridge()) return;
     JNIEnv *env = gMainEnv;
@@ -2162,6 +2185,40 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidOpenTab, (jint)tabIndex);
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.openEngineTab"); }
+}
+
++ (void)continueEngineDialogue {
+    if (!ensureVeneer() || !gMidContinueDlg)
+        return;
+    [JVMLauncher postKeepAlive]; // idle keepalive: a native dialogue tap posts no canvas event of its own
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidContinueDlg);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.continueEngineDialogue");
+    }
+}
+
++ (long long)dialogueSeq {
+    if (!ensureVeneer() || !gMidGetDlgSeq)
+        return 0;
+    JNIEnv *env = gMainEnv;
+    jlong v = (*env)->CallStaticLongMethod(env, gVeneerClass, gMidGetDlgSeq);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.dialogueSeq");
+        return 0;
+    }
+    return (long long)v;
+}
+
++ (void)selectEngineDialogueOption:(int)digit seq:(long long)seq {
+    if (!ensureVeneer() || !gMidSelectOpt)
+        return;
+    [JVMLauncher postKeepAlive]; // idle keepalive: a native dialogue tap posts no canvas event of its own
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSelectOpt, (jint)digit, (jlong)seq);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.selectEngineDialogueOption");
+    }
 }
 
 + (void)setEngineStonesHidden:(BOOL)hidden {

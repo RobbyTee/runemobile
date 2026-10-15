@@ -149,6 +149,18 @@ public final class HudVeneerBridge
 	// can open the map without hitting the ~25px engine orb (and fixes the legacy-account orb block). Applied on
 	// the client thread in tick (where runScript is legal).
 	private static volatile boolean pendingOpenWorldMap;
+	// One-shot dialogue continue. The CONTINUE component carries no op listener (onOp=null), so the op-script
+	// replay used for the tab stones cannot drive it -- the engine performs a continue through its own
+	// WIDGET_CONTINUE handler, which is what this sends. The target is resolved on the client thread when the
+	// action fires, never stored: a remembered id goes stale the moment the dialogue changes type or closes,
+	// and firing a continue at a closed widget is exactly the kind of blind action this screen cannot afford.
+	private static volatile boolean pendingContinueDialogue;
+	// One-shot option pick: the row's child index, with the dialogue sequence the shell's tap targets were built
+	// from. dialogueSeq only moves when the published dialogue actually CHANGES, so comparing it rejects a tap
+	// aimed at a dialogue that has since been replaced -- which matters because a wrong pick answers a quest for
+	// the player. The digit is written last and read first: it is the trigger, and the seq is already in place.
+	private static volatile long pendingDialogueOptionSeq;
+	private static volatile int pendingDialogueOptionDigit = -1;
 
 	// Native chat-tab veneer (A3 bigger buttons). chatTabRowH = the canvas-px height the native (enlarged) tab row
 	// occupies; the message area (CHATAREA) is pushed down past it instead of the engine's 23px CONTROLS row. 0 =
@@ -320,6 +332,26 @@ public final class HudVeneerBridge
 	public static void openWorldMap()
 	{
 		pendingOpenWorldMap = true;
+	}
+
+	/** Native: advance the open chat dialogue. Applied on the client thread in {@link #tick}. */
+	public static void continueDialogue()
+	{
+		pendingContinueDialogue = true;
+	}
+
+	/**
+	 * Native: pick an option in the open options dialogue. Applied on the client thread in {@link #tick}.
+	 *
+	 * @param digit the option's child index, as published in {@code dlgOptions}
+	 * @param seq   {@link #getDialogueSeq} as it stood when the shell built the tap targets this pick came from.
+	 *              The pick is dropped if the dialogue has been republished since, so a tap meant for the
+	 *              previous dialogue cannot answer the one that replaced it
+	 */
+	public static void selectDialogueOption(int digit, long seq)
+	{
+		pendingDialogueOptionSeq = seq;
+		pendingDialogueOptionDigit = digit;
 	}
 
 	/** Native: the canvas-px height the enlarged native chat-tab row occupies, so the message area is pushed down
@@ -835,6 +867,22 @@ public final class HudVeneerBridge
 				openWorldMapNow(c);
 			}
 
+			// One-shot: advance the chat dialogue through the engine's own continue handler.
+			if (pendingContinueDialogue)
+			{
+				pendingContinueDialogue = false;
+				continueDialogueNow(c);
+			}
+
+			// One-shot: pick an option through the same continue handler.
+			final int optDigit = pendingDialogueOptionDigit;
+			if (optDigit >= 0)
+			{
+				final long optSeq = pendingDialogueOptionSeq;
+				pendingDialogueOptionDigit = -1;
+				selectDialogueOptionNow(c, optDigit, optSeq);
+			}
+
 			tickWorldMap(c);
 		}
 		catch (RuntimeException e)
@@ -1168,6 +1216,108 @@ public final class HudVeneerBridge
 
 	/** Open a tab by replaying its stone's op script with the stone as source + op 1 (RuneLite's standard
 	 *  widget-op replay). Works while the stone is hidden — confirmed by TabScriptProbe. Client thread. */
+	/**
+	 * Perform a continue on the dialogue currently published. The component is a static interface child, so
+	 * param0 is -1 -- the same rule the tab stones and the logout click already established here; passing an
+	 * index misroutes the engine's dispatch. Its live hidden state is logged alongside, because the one sample
+	 * taken when a dialogue first builds read hidden=true and that may simply have been its first tick.
+	 */
+	private static void continueDialogueNow(Client c)
+	{
+		final int id = resolveContinueId(c);
+		if (id < 0)
+		{
+			System.out.println("[cont] no dialogue open");
+			return;
+		}
+		try
+		{
+			final Widget w = c.getWidget(id);
+			System.out.println("[cont] fire id=" + id + " widget=" + (w != null)
+				+ (w == null ? "" : " hidden=" + w.isHidden() + " clickMask=" + w.getClickMask()));
+			if (w == null)
+			{
+				return;
+			}
+			c.menuAction(-1, id, net.runelite.api.MenuAction.WIDGET_CONTINUE, 0, -1, "Continue", "");
+		}
+		catch (RuntimeException ignore)
+		{
+			BridgeFaults.note("HudVeneerBridge.continueDialogueNow", ignore);
+		}
+	}
+
+	/**
+	 * The CONTINUE component of whatever dialogue is open right now, or -1 if none is. Mirrors
+	 * {@link #computeDialogueJson}'s detection order, and like it keys the chat kinds off their TEXT widget --
+	 * a chat CONTINUE reads hidden even while its dialogue is on screen, so testing CONTINUE itself would find
+	 * nothing. Options are deliberately absent: choosing a row is not continuing, and a continue fired at an
+	 * options menu would answer for the player.
+	 */
+	private static int resolveContinueId(Client c)
+	{
+		if (widgetShown(c, InterfaceID.ChatLeft.TEXT))
+		{
+			return InterfaceID.ChatLeft.CONTINUE;
+		}
+		if (widgetShown(c, InterfaceID.ChatRight.TEXT))
+		{
+			return InterfaceID.ChatRight.CONTINUE;
+		}
+		if (widgetShown(c, InterfaceID.ChatBoth.TEXT))
+		{
+			return InterfaceID.ChatBoth.CONTINUE;
+		}
+		if (widgetShown(c, InterfaceID.Messagebox.TEXT))
+		{
+			return InterfaceID.Messagebox.CONTINUE;
+		}
+		if (widgetShown(c, InterfaceID.LevelupDisplay.CONTINUE))
+		{
+			return InterfaceID.LevelupDisplay.CONTINUE;
+		}
+		return -1;
+	}
+
+	/**
+	 * Pick a dialogue option. An option row is a DYNAMIC child of the options component, not a static component
+	 * like the continue, so it is addressed by index: param0 is the child index and param1 the parent. That is
+	 * the other half of the rule the tab stones established -- there, passing an index misrouted a static
+	 * component's op; here, -1 would name no row at all. The action is the engine's continue handler, the same
+	 * one a continue tap uses, because answering an option resumes the paused script exactly as continuing does.
+	 */
+	private static void selectDialogueOptionNow(Client c, int digit, long seq)
+	{
+		try
+		{
+			// The dialogue must still be the one the tap was aimed at. A count of rows cannot establish that --
+			// the next dialogue often offers the same number of options, and in a quest those mean different
+			// answers -- so compare the publish the targets were built from.
+			if (seq != dialogueSeq)
+			{
+				System.out.println("[opt] dropped digit=" + digit + " seq=" + seq + " live=" + dialogueSeq);
+				return;
+			}
+			final Widget optW = c.getWidget(InterfaceID.Chatmenu.OPTIONS);
+			final Widget[] kids = optW == null ? null : optW.getDynamicChildren();
+			final int n = kids == null ? 0 : kids.length;
+			// kids[0] is the title, so rows start at 1; a padded blank row is not a row.
+			if (digit < 1 || digit >= n || kids[digit] == null || wText(kids[digit]).isEmpty())
+			{
+				System.out.println("[opt] dropped digit=" + digit + " kids=" + n + " (no such row)");
+				return;
+			}
+			System.out.println("[opt] fire digit=" + digit + " parent=" + optW.getId()
+				+ " childId=" + kids[digit].getId() + " index=" + kids[digit].getIndex()
+				+ " hidden=" + kids[digit].isHidden() + " clickMask=" + kids[digit].getClickMask());
+			c.menuAction(digit, optW.getId(), net.runelite.api.MenuAction.WIDGET_CONTINUE, 0, -1, "Continue", "");
+		}
+		catch (RuntimeException ignore)
+		{
+			BridgeFaults.note("HudVeneerBridge.selectDialogueOptionNow", ignore);
+		}
+	}
+
 	private static void openTabNow(Client c, boolean preEoc, int idx)
 	{
 		try
@@ -2580,7 +2730,11 @@ public final class HudVeneerBridge
 			first = false;
 			sb.append('{');
 			appendTextWithRuns(sb, txt, CHAT_DEFAULT_COLOR);
-			sb.append(",\"digit\":").append(i).append('}');
+			sb.append(",\"digit\":").append(i);
+			// The option row's own canvas bounds: the native shell clicks THIS widget for the row under the
+			// finger, so a pick lands on the engine's live option instead of inert parchment.
+			appendBounds(sb, "b", canvasBounds(k));
+			sb.append('}');
 		}
 		sb.append("]}");
 		return sb.toString();

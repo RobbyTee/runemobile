@@ -813,9 +813,11 @@ public final class HeadlessLogin
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
 		q.postEvent(new FocusEvent(canvas, FocusEvent.FOCUS_GAINED, false, null));
-		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, KeyEvent.VK_ENTER, '\n'));
-		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, '\n'));
-		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, KeyEvent.VK_ENTER, '\n'));
+		// Posted KeyEvents never arrive (see JavaBridge.dispatchKey): no focused window headless means no focus
+		// owner, and the KeyboardFocusManager drops them.
+		JavaBridge.dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, KeyEvent.VK_ENTER, '\n'));
+		JavaBridge.dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, '\n'));
+		JavaBridge.dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, KeyEvent.VK_ENTER, '\n'));
 	}
 
 	/**

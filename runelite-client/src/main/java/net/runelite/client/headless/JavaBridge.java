@@ -31,8 +31,10 @@ import java.awt.EventQueue;
 import java.awt.Rectangle;
 import java.awt.Toolkit;
 import java.awt.event.FocusEvent;
+import java.awt.event.FocusListener;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
+import java.awt.event.KeyListener;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseWheelEvent;
 import lombok.extern.slf4j.Slf4j;
@@ -289,6 +291,7 @@ public final class JavaBridge
 
 	// Input bookkeeping (only ever touched from the single native UI thread that drives onTouch/onClick).
 	private static boolean focused;       // FocusEvent gained — keyboard/mouse accepted
+	private static Canvas focusedCanvas;  // WHICH canvas we focused (the engine can swap it under us)
 	private static volatile boolean entered;  // MOUSE_ENTERED posted — pointer currently "present" (volatile:
 	                                      // parkPointer runs from the client thread after a consumed tap)
 	private static boolean pressed;
@@ -307,6 +310,14 @@ public final class JavaBridge
 	private static final int PITCH_MAX = 3064;             // 383 * 8
 	private static float yawRemainder;
 	private static float pitchRemainder;
+	// Held camera turn (an arrow button down), as the same raw PIXEL rate a drag delivers -- per SECOND, not per
+	// frame, so the turn does not speed up with the frame rate. Fed into the drag accumulators each frame, which
+	// keeps the unit space, the pitch clamp, the sub-pixel remainders and the in-game guard in one place.
+	private static volatile int camHoldDxPerSec;
+	private static volatile int camHoldDyPerSec;
+	private static long camHoldLastMs;
+	private static float camHoldRemX;
+	private static float camHoldRemY;
 	// Two-finger camera pan: native posts raw pixel deltas from the main thread (onCameraDrag); they accumulate
 	// here and are applied on the client thread in tapTick. RuneLite's camera state is client-thread-only — the
 	// old in-place read-modify-write off the JNI thread lost updates against the engine's per-tick interpolation
@@ -587,11 +598,94 @@ public final class JavaBridge
 	 */
 	private static void ensureFocus(EventQueue q, Canvas canvas)
 	{
-		if (!focused)
+		if (focused && canvas == focusedCanvas)
 		{
-			q.postEvent(new FocusEvent(canvas, FocusEvent.FOCUS_GAINED, false, null));
-			focused = true;
+			return;
 		}
+		focused = true;
+		focusedCanvas = canvas;
+		final FocusEvent fe = new FocusEvent(canvas, FocusEvent.FOCUS_GAINED, false, null);
+		// ONE delivery path only. A posted FocusEvent never arrives here (same KeyboardFocusManager arbitration
+		// as a key), so the gamepack was never told it had focus; posting it as well would double-deliver the
+		// gain to every listener in any environment where it DOES arrive. Hand it straight to the listeners.
+		EventQueue.invokeLater(() ->
+		{
+			for (final FocusListener l : canvas.getFocusListeners())
+			{
+				l.focusGained(fe);
+			}
+		});
+	}
+
+	/**
+	 * Deliver a key event to the canvas's own listeners, on the EDT.
+	 *
+	 * AWT does not hand a KeyEvent to its source component: it gives it to the KeyboardFocusManager, which
+	 * routes it to the FOCUS OWNER. Headless there is no focused Window, so there is no focus owner and the
+	 * KFM discards the event -- posting a KeyEvent to the queue delivered NOTHING, every time, which is why no
+	 * synthesized key ever reached the game while taps always did (a MouseEvent goes to its source). Asserting
+	 * focus first could not rescue it: a posted FOCUS_GAINED is dropped the same way. Calling the listeners is
+	 * where a real key press ends up anyway, minus the focus arbitration we have no window manager for.
+	 */
+	private static boolean keyDiagDone;
+	private static int keyDeliveries;
+
+	static void dispatchKey(Canvas canvas, KeyEvent e)
+	{
+		if (!keyDiagDone)
+		{
+			keyDiagDone = true;
+			final StringBuilder sb = new StringBuilder(256);
+			sb.append("[keydiag] canvas=").append(canvas.getClass().getName())
+				.append(" key=").append(canvas.getKeyListeners().length)
+				.append(" focus=").append(canvas.getFocusListeners().length)
+				.append(" mouse=").append(canvas.getMouseListeners().length)
+				.append(" focusable=").append(canvas.isFocusable())
+				.append(" displayable=").append(canvas.isDisplayable());
+			for (final KeyListener l : canvas.getKeyListeners())
+			{
+				sb.append(" KL:").append(l.getClass().getName());
+			}
+			for (java.awt.Container up = canvas.getParent(); up != null; up = up.getParent())
+			{
+				sb.append(" | parent=").append(up.getClass().getName())
+					.append(" key=").append(up.getKeyListeners().length);
+				for (final KeyListener l : up.getKeyListeners())
+				{
+					sb.append(" KL:").append(l.getClass().getName());
+				}
+			}
+			System.out.println(sb);
+		}
+		EventQueue.invokeLater(() ->
+		{
+			int called = 0;
+			for (final KeyListener l : canvas.getKeyListeners())
+			{
+				called++;
+				switch (e.getID())
+				{
+					case KeyEvent.KEY_PRESSED:
+						l.keyPressed(e);
+						break;
+					case KeyEvent.KEY_TYPED:
+						l.keyTyped(e);
+						break;
+					case KeyEvent.KEY_RELEASED:
+						l.keyReleased(e);
+						break;
+					default:
+						break;
+				}
+			}
+			if (keyDeliveries < 12)
+			{
+				keyDeliveries++;
+				System.out.println("[keydiag] delivered id=" + e.getID() + " vk=" + e.getKeyCode()
+					+ " char=" + (int) e.getKeyChar() + " -> listeners=" + called
+					+ " consumed=" + e.isConsumed());
+			}
+		});
 	}
 
 	/**
@@ -808,6 +902,7 @@ public final class JavaBridge
 	 */
 	private static void tapTickImpl(Client c)
 	{
+		feedCameraHold();          // a held arrow button turns by feeding the same accumulators a drag uses
 		applyCameraDrag(c);        // drain accumulated two-finger-pan deltas (camera writes are client-thread-only)
 		maybePostIdleKeepalive(c); // drain native-UI activity -> MOUSE_MOVED(-1,-1) if gated + throttled (idle reset)
 		snapshotTextInputOpen(c);  // publish INPUT_TYPE for isTextInputOpen() to read off the client thread
@@ -1805,6 +1900,65 @@ public final class JavaBridge
 		camDragDy.addAndGet(dyPixels);
 	}
 
+	/**
+	 * Hold the camera turning until released, as a pixel RATE in the same units {@link #onCameraDrag} takes:
+	 * {@code 0, 0} releases. The shell sets it once on press instead of repeating a nudge, and each frame the
+	 * elapsed share of that rate is fed into the drag accumulators — so this inherits the JAU14 unit space, the
+	 * pitch clamp and the sub-pixel accumulation rather than restating any of them.
+	 *
+	 * @param dxPixelsPerSec horizontal rate; the sign matches a drag, so positive turns as dragging right does
+	 * @param dyPixelsPerSec vertical rate; positive tilts down, as dragging down does
+	 */
+	public static void setCameraHold(int dxPixelsPerSec, int dyPixelsPerSec)
+	{
+		camHoldDxPerSec = dxPixelsPerSec;
+		camHoldDyPerSec = dyPixelsPerSec;
+	}
+
+	/**
+	 * Convert the standing hold into this frame's pixel delta — on the client thread, immediately before the
+	 * drag drain. Time-scaled so the turn rate is the same at 20fps and 50fps, and a long frame (a stall, a
+	 * return from background) is capped rather than flinging the camera round by the whole gap.
+	 */
+	private static void feedCameraHold()
+	{
+		final int rx = camHoldDxPerSec;
+		final int ry = camHoldDyPerSec;
+		final long now = System.currentTimeMillis();
+		if (rx == 0 && ry == 0)
+		{
+			camHoldLastMs = 0;
+			camHoldRemX = 0;
+			camHoldRemY = 0;
+			return;
+		}
+		if (camHoldLastMs == 0)
+		{
+			camHoldLastMs = now;   // first frame of a hold only starts the clock
+			return;
+		}
+		float dt = (now - camHoldLastMs) / 1000.0f;
+		camHoldLastMs = now;
+		if (dt > 0.25f)
+		{
+			dt = 0.25f;
+		}
+		final float fx = rx * dt + camHoldRemX;
+		final int ix = (int) fx;
+		camHoldRemX = fx - ix;
+		final float fy = ry * dt + camHoldRemY;
+		final int iy = (int) fy;
+		camHoldRemY = fy - iy;
+		if (ix != 0)
+		{
+			camDragDx.addAndGet(ix);
+		}
+		if (iy != 0)
+		{
+			camDragDy.addAndGet(iy);
+		}
+	}
+
 	/** Drain the accumulated two-finger-pan deltas and apply yaw/pitch — on the client thread (from tapTick). */
 	private static void applyCameraDrag(Client c)
 	{
@@ -1900,9 +2054,9 @@ public final class JavaBridge
 		{
 			final char c = s.charAt(i);
 			final int vk = KeyEvent.getExtendedKeyCodeForChar(c);
-			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, vk, c));
-			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, c));
-			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, vk, c));
+			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, vk, c));
+			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, c));
+			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, vk, c));
 			t += 3;
 		}
 	}
@@ -2277,12 +2431,28 @@ public final class JavaBridge
 		{
 			kc = '\t';
 		}
-		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, vk, kc));
+		// Printable keys carry a character and MUST also produce a KEY_TYPED -- that is the event the engine
+		// reads for "space to continue" and for picking a numbered dialogue option. Without it the press lands
+		// as CHAR_UNDEFINED with no typed event at all, and the engine ignores it.
+		else if (vk == KeyEvent.VK_SPACE)
+		{
+			kc = ' ';
+		}
+		else if (vk >= KeyEvent.VK_0 && vk <= KeyEvent.VK_9)
+		{
+			kc = (char) vk;
+		}
+		else if (vk >= KeyEvent.VK_A && vk <= KeyEvent.VK_Z)
+		{
+			// VK_A..VK_Z share their codes with ASCII uppercase; unshifted typing is lowercase.
+			kc = Character.toLowerCase((char) vk);
+		}
+		dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, vk, kc));
 		if (kc != KeyEvent.CHAR_UNDEFINED)
 		{
-			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, kc));
+			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, kc));
 		}
-		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, vk, kc));
+		dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, vk, kc));
 	}
 
 	/**
@@ -2291,9 +2461,12 @@ public final class JavaBridge
 	 * reads the event's extended key-code + extended modifiers, so a single matched {@code KEY_PRESSED} (with
 	 * the modifier mask baked into the event — no separate modifier-key presses needed) triggers
 	 * {@code hotkeyPressed}; the paired {@code KEY_RELEASED} clears the listener's pressed latch so it can fire
-	 * again next time. Posted to the same AWT queue / focused canvas as our other key synthesis (RuneLite's
-	 * {@code KeyManager} is a canvas {@code KeyListener}), so this routes through the engine exactly like a
-	 * hardware chord. Modifier-only binds (no main key) are ignored — those are hold-to-modify, not fire-once.
+	 * again next time. Delivered like our other key synthesis: handed to the canvas's own {@code KeyListener}s
+	 * on the EDT, because a posted {@code KeyEvent} is routed by the {@code KeyboardFocusManager} to the focus
+	 * owner and headless there is none, so nothing posted arrives. That is NOT the same as a hardware key: it
+	 * bypasses AWT's dispatch, so only listeners registered on this canvas are reached and anything AWT would
+	 * do around them does not happen. It is enough for the listeners the engine and RuneLite register there.
+	 * Modifier-only binds (no main key) are ignored — those are hold-to-modify, not fire-once.
 	 *
 	 * @param keyCode   the Keybind's (extended) key-code — {@code KeyEvent.VK_*}
 	 * @param modifiers the Keybind's extended-modifier mask — {@code InputEvent.*_DOWN_MASK} bits
@@ -2308,8 +2481,8 @@ public final class JavaBridge
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
 		ensureFocus(q, canvas);
-		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, modifiers, keyCode, KeyEvent.CHAR_UNDEFINED));
-		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, modifiers, keyCode, KeyEvent.CHAR_UNDEFINED));
+		dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, modifiers, keyCode, KeyEvent.CHAR_UNDEFINED));
+		dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, modifiers, keyCode, KeyEvent.CHAR_UNDEFINED));
 	}
 
 	/**
@@ -2370,12 +2543,12 @@ public final class JavaBridge
 		if (held)
 		{
 			ensureFocus(q, canvas);
-			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, downMask,
+			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, downMask,
 				vk, KeyEvent.CHAR_UNDEFINED, KeyEvent.KEY_LOCATION_LEFT));
 		}
 		else
 		{
-			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t, 0,
+			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t, 0,
 				vk, KeyEvent.CHAR_UNDEFINED, KeyEvent.KEY_LOCATION_LEFT));
 		}
 		return held;
