@@ -1,6 +1,11 @@
 # Handoff — engine input, dialogue actions, camera hold
 
-Branch `fix/dialogue-tap-falls-through`, **not merged to master**. Nine commits, pushed to `origin`.
+Merged to `master` (merge commit below). Pushed to `origin` (private) ONLY — **not** to `publish`.
+
+`release-hosted.yml` fires on any push to master in the PUBLIC repo (`publish` = audaro/runemobile,
+id 1296635776) and publishes a rolling prerelease of both apps. `origin` (audaro/Rune-Mobile, id
+1253608468) fails that guard, so master lives there without shipping anything. The next push to
+`publish` is what releases — hold it until the GPU bug is fixed.
 
 ## What shipped
 
@@ -56,8 +61,9 @@ the drag convention and were not verified against the buttons in play. Then merg
   clearing it.
 - **Release builds emit no diagnostics:** `appendLine` has no log file in Release and the console is
   `#if DEBUG`, so a field report (0.2.0) cannot produce a log. This blocked the original report.
-- **Two fixes stranded on `jit/no-localdevvpn-no-stikdebug`:** `b284097080` clears the GPU crash cookie
-  on background (that bug is live in 0.2.0) and `53dcd0f2b7` rotates the log instead of truncating it.
+- ~~Two fixes stranded on `jit/no-localdevvpn-no-stikdebug`~~ — **not stranded, both are on master**:
+  `eac7d4f603` counts reaching the background as surviving the GPU boot, and `fb3d17ff13` keeps the
+  previous launch's logs. Checked at merge time; the handoff said otherwise and was wrong.
 - `remote-build.sh` assumes an unlocked keychain.
 
 ## Diagnostics worth keeping
