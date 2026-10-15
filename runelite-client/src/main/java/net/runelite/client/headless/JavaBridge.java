@@ -597,9 +597,9 @@ public final class JavaBridge
 		focused = true;
 		focusedCanvas = canvas;
 		final FocusEvent fe = new FocusEvent(canvas, FocusEvent.FOCUS_GAINED, false, null);
-		q.postEvent(fe);   // still correct if a real focus owner ever exists; on its own it reaches nothing
-		// A POSTED FocusEvent never arrives either (same KeyboardFocusManager arbitration as a key), so the
-		// gamepack was never told it had focus. Hand it to the canvas's own listeners, like a real focus gain.
+		// ONE delivery path only. A posted FocusEvent never arrives here (same KeyboardFocusManager arbitration
+		// as a key), so the gamepack was never told it had focus; posting it as well would double-deliver the
+		// gain to every listener in any environment where it DOES arrive. Hand it straight to the listeners.
 		EventQueue.invokeLater(() ->
 		{
 			for (final FocusListener l : canvas.getFocusListeners())

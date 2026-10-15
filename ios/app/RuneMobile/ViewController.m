@@ -6374,35 +6374,35 @@ static CGRect mapRectFromArr(NSArray *a) {
             // click on inert parchment resolves against the SCENE behind it, so the tap walked the player to the
             // tile under the dialogue (and walking away then closed it, which read as "the tap did nothing").
             // Click the engine's live widget at the canvas bounds the bridge publishes for it instead.
+            // Advance a dialogue the way the game itself does -- SPACE to continue, the option's number key to
+            // pick -- NOT a synthetic click. A click here is resolved by the engine against whatever it believes
+            // is under that canvas point, and for the relocated chatbox that is the SCENE: the tap walked the
+            // player to the tile behind the box, which then ended the conversation by walking away. (The
+            // published widget bounds are where the box is DRAWN; this codebase has already found that a
+            // relocated widget's bounds and the engine's own resolution can disagree -- see the CC_OP tab
+            // stones, where an op-replay was inert and only the real menu action worked.) A key that the game
+            // ignores does nothing; a click that misses moves your character, so the key is the safe primitive.
             for (NSUInteger i = 0; i < self.dialogueOptionRects.count; i++) {
                 if (!CGRectContainsPoint([self.dialogueOptionRects[i] CGRectValue], cp))
                     continue;
-                CGRect orc = [self.dialogueOptionRects[i] CGRectValue];
-                int ox = (int)(orc.origin.x + orc.size.width / 2);
-                int oy = (int)(orc.origin.y + orc.size.height / 2);
-                [JVMLauncher postClickPreciseX:ox y:oy button:1];
-                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %@ tap %d,%d -> click %d,%d",
-                                                            self.dialogueOptionDigits[i], gx, gy, ox, oy]];
+                NSNumber *digit = self.dialogueOptionDigits[i];
+                [JVMLauncher postText:digit.stringValue];
+                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %@ tap %d,%d (key)",
+                                                            digit, gx, gy]];
                 return;
             }
             // An options menu needs a row, not a blind advance: consume a miss rather than picking for the user.
-            // Only when the row geometry is actually known -- option rows are real clickable widgets, so without
-            // bounds a raw click still resolves one, where a consume would just deaden the tap.
-            if (self.dialogueIsOptions && self.dialogueOptionRects.count > 0) {
+            // SPACE cannot stand in here (it continues, it does not choose), so a tap that matched no row ends
+            // here whether or not the row bounds were published.
+            if (self.dialogueIsOptions) {
                 [self appendLine:[NSString stringWithFormat:@"[shell] dialogue tap %d,%d (options, no row)", gx, gy]];
                 return;
             }
-            if (self.dialogueContinuePoint.x >= 0) {
-                int cx = (int)self.dialogueContinuePoint.x, cy = (int)self.dialogueContinuePoint.y;
-                [JVMLauncher postClickPreciseX:cx y:cy button:1];
-                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue continue tap %d,%d -> click %d,%d",
-                                                            gx, gy, cx, cy]];
-                return;
-            }
-            if (self.dialogueTargetsKnown && !self.dialogueIsOptions) {
-                // Modelled dialogue, but its CONTINUE widget isn't published this frame: consume rather than
-                // click, or the click resolves against the scene behind the box and walks the player.
-                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue tap %d,%d (no continue widget)", gx, gy]];
+            if (self.dialogueTargetsKnown) {
+                // Modelled dialogue (chat / message / level-up): continue it with SPACE and consume the tap,
+                // whether or not a CONTINUE widget was published. Never fall through to a click here.
+                [JVMLauncher postText:@" "];
+                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue continue tap %d,%d (space)", gx, gy]];
                 return;
             }
             // Unmodelled (make-X / reward box): the engine's own clickable widgets are right under the finger.
