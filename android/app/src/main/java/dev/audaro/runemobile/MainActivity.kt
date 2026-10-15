@@ -3283,17 +3283,10 @@ class MainActivity : AppCompatActivity() {
                 dialogueChatCanvas = null
             }
         }
-        // Seq before payload: both come from one lock, and reading it first can only ever under-report, which
-        // fails a pick safe rather than answering the wrong dialogue.
-        val dlgSeq = JvmLauncher.dialogueSeqPub()
-        dialogueOverlay.update(
-            chatSnap,
-            if (on && !engineDlg) JvmLauncher.dialogueJsonPub() else "{}",
-            dlgSeq,
-            sx,
-            sy,
-            on && !engineDlg,
-        )
+        // Seq before payload, which DialoguePublish's argument order enforces: both come from one lock, and
+        // reading the seq first can only under-report, failing a pick safe instead of answering the wrong dialogue.
+        val dlg = DialoguePublish(JvmLauncher.dialogueSeqPub(), if (on && !engineDlg) JvmLauncher.dialogueJsonPub() else "{}")
+        dialogueOverlay.update(chatSnap, dlg, sx, sy, on && !engineDlg)
         // Auto-open/close: a collapsed chat hides the engine tabs -> the dialogue raster is suppressed. So when an
         // engine dialogue opens while collapsed, un-collapse for its duration and restore the collapsed state when it
         // ends (official-mobile behaviour). Native is the single owner of chatCollapsed (no bridge writer / no race).

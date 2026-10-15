@@ -18,10 +18,13 @@ import org.json.JSONObject
  * engine chat/dialogue into transparent-colour mode while the chat is relocated, so the engine's dialogue box has
  * no opaque background and the chat lines behind it bleed through. This view draws an OPAQUE OSRS parchment over
  * the chat region from HudVeneerBridge.getDialogueJson + the chat snapshot's dialogueActive flag, and renders the
- * name / body / continue / options natively on top (the engine dialogue underneath is simply occluded). A tap
- * advances a "click here to continue" dialogue (precise click on the engine CONTINUE widget); an option row posts
- * its digit. No shared-bridge change, so the chat-at-top look + iOS parity are untouched.
+ * name / body / continue / options natively on top (the engine dialogue underneath is simply occluded). Taps are
+ * handed to the engine's own handler via HudVeneerBridge.continueDialogue / selectDialogueOption: clicking the
+ * CONTINUE widget walks the player (it reads hidden, so the click lands on the scene behind the chatbox) and a
+ * synthesized SPACE comes back consumed without advancing anything. No shared-bridge change, so the chat-at-top
+ * look + iOS parity are untouched.
  */
+
 class DialogueView(
     context: Context,
 ) : View(context) {
@@ -113,11 +116,10 @@ class DialogueView(
         return true
     }
 
-    /** Drive each frame: [chatSnap] (for the dialogueActive/topLevel gate) + [dlgJson] + canvas→view scale. */
+    /** Drive each frame: [chatSnap] (for the dialogueActive/topLevel gate) + [dlg] + canvas→view scale. */
     fun update(
         chatSnap: String,
-        dlgJson: String,
-        dlgSeq: Long,
+        dlg: DialoguePublish,
         sx: Float,
         sy: Float,
         show: Boolean,
@@ -138,7 +140,7 @@ class DialogueView(
         }
         val d =
             try {
-                JSONObject(dlgJson)
+                JSONObject(dlg.json)
             } catch (e: Exception) {
                 null
             }
@@ -178,9 +180,9 @@ class DialogueView(
         // rect to the overlap (returns false + leaves it untouched when there is none).
         headRect?.let { if (!it.intersect(boxX, boxY, boxX + boxW, boxY + boxH)) headRect = null }
 
-        if (dlgJson != lastJson) {
-            lastJson = dlgJson
-            viewSeq = dlgSeq // the rows about to be built belong to THIS publish
+        if (dlg.json != lastJson) {
+            lastJson = dlg.json
+            viewSeq = dlg.seq // the rows about to be built belong to THIS publish
             rebuild(d)
             Log.i(
                 "DialogueView",
@@ -317,3 +319,15 @@ class DialogueView(
         return true // consume taps over the parchment while a dialogue is open
     }
 }
+
+/** A dialogue snapshot and the publish it came from. They travel as one deliberately: a seq that does not
+ *  belong to the json beside it is exactly what lets a stale option row answer the dialogue that replaced it,
+ *  and the native side hands both out under one lock so they always agree.
+ *
+ *  [seq] comes first so that constructing one reads it first -- arguments evaluate left to right, and of the two
+ *  possible skews only that one is safe: a seq older than its json drops a pick, where a newer one would let a
+ *  stale row answer the dialogue that replaced it. */
+data class DialoguePublish(
+    val seq: Long,
+    val json: String,
+)

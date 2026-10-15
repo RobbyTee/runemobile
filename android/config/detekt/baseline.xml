@@ -28,7 +28,7 @@
     <ID>CyclomaticComplexMethod:ConfigScreen.kt$@Composable private fun ConfigItemControl( item: ConfigItem, onChange: (String) -&gt; Unit, )</ID>
     <ID>CyclomaticComplexMethod:ConfigScreen.kt$@Composable private fun NumericConfigControl( item: ConfigItem, isInt: Boolean, onChange: (String) -&gt; Unit, )</ID>
     <ID>CyclomaticComplexMethod:ConfigScreen.kt$private fun keyText(code: Int): String?</ID>
-    <ID>CyclomaticComplexMethod:DialogueView.kt$DialogueView$fun update( chatSnap: String, dlgJson: String, sx: Float, sy: Float, show: Boolean, )</ID>
+    <ID>CyclomaticComplexMethod:DialogueView.kt$DialogueView$fun update( chatSnap: String, dlg: DialoguePublish, sx: Float, sy: Float, show: Boolean, )</ID>
     <ID>CyclomaticComplexMethod:LoginActivity.kt$LoginActivity$override fun onCreate(savedInstanceState: Bundle?)</ID>
     <ID>CyclomaticComplexMethod:MainActivity.kt$MainActivity$override fun onCreate(savedInstanceState: Bundle?)</ID>
     <ID>CyclomaticComplexMethod:MainActivity.kt$MainActivity$private fun applyChatTabs(on: Boolean)</ID>
@@ -102,7 +102,7 @@
     <ID>ReturnCount:ConfigScreen.kt$private fun isNotifEnabled(v: String?): Boolean</ID>
     <ID>ReturnCount:ConfigScreen.kt$private fun parseArgb(s: String?): Int</ID>
     <ID>ReturnCount:ConfigScreen.kt$private fun parseKeybind(v: String?): Pair&lt;Int, Int&gt;?</ID>
-    <ID>ReturnCount:DialogueView.kt$DialogueView$fun update( chatSnap: String, dlgJson: String, sx: Float, sy: Float, show: Boolean, )</ID>
+    <ID>ReturnCount:DialogueView.kt$DialogueView$fun update( chatSnap: String, dlg: DialoguePublish, sx: Float, sy: Float, show: Boolean, )</ID>
     <ID>ReturnCount:DialogueView.kt$DialogueView$override fun onTouchEvent(event: MotionEvent): Boolean</ID>
     <ID>ReturnCount:JagexTokens.kt$JagexTokens$fun loadAndArm(ctx: Context): Boolean</ID>
     <ID>ReturnCount:JagexTokens.kt$JagexTokens$private fun readSource(ctx: Context): Pair&lt;String, String&gt;?</ID>

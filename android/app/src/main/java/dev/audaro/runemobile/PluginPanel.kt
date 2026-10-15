@@ -1051,20 +1051,7 @@ private fun PluginListBody(
             q.isEmpty() || it.name.contains(q, ignoreCase = true) ||
                 it.description.contains(q, ignoreCase = true) || it.tags.contains(q, ignoreCase = true)
         }
-    // A renderer row's switch is the saved LAUNCH preference, so on its own it says nothing about what is
-    // actually rendering: a pick applies at the next launch, and a dev/CI-forced boot runs something the pref
-    // never asked for. Poll the booted renderer and the frame counter so the row can report the live state and
-    // "starting…" turns into "running" the moment the first frame presents. framesPresented is a native atomic
-    // read (no HotSpot attach), and the loop is scoped to this list, so it stops when the panel closes.
-    var session by remember { mutableStateOf(JvmLauncher.sessionRenderer) }
-    var presented by remember { mutableStateOf(JvmLauncher.framesPresented() > 0L) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            session = JvmLauncher.sessionRenderer
-            presented = JvmLauncher.framesPresented() > 0L
-            delay(500)
-        }
-    }
+    val (session, presented) = rememberRendererRuntime()
     LazyColumn(Modifier.fillMaxSize(), state = listState) {
         items(shown, key = { it.className }) { p ->
             val rendererMode =
@@ -1075,23 +1062,8 @@ private fun PluginListBody(
                 }
             if (rendererMode != null) {
                 // Renderer row: switch state = the saved launch preference; toggle = save it. Never marked
-                // incompatible (it is deliberately not running on this boot) -- the status line below says what
-                // is actually happening instead, so a saved pick cannot read as a running renderer.
-                val status =
-                    when {
-                        // pre-boot: say nothing rather than guess
-                        session.isEmpty() -> null
-
-                        session == rendererMode && !presented -> "○ starting…"
-
-                        session == rendererMode && renderer == rendererMode -> "● running"
-
-                        session == rendererMode -> "● running — off after restart"
-
-                        renderer == rendererMode -> "● selected — restart to apply"
-
-                        else -> "○ off"
-                    }
+                // incompatible (it is deliberately not running on this boot) -- rendererStatus says what is
+                // actually happening instead, so a saved pick cannot read as a running renderer.
                 PluginRowItem(
                     p.copy(enabled = renderer == rendererMode),
                     incompatible = false,
@@ -1103,13 +1075,7 @@ private fun PluginListBody(
                         } else {
                             null
                         },
-                    status = status,
-                    statusColor =
-                        when {
-                            status == "● running" -> Color(0xFF81C784)
-                            status == null || status.startsWith("○ off") -> Color(0xFF9E9E9E)
-                            else -> Color(0xFFFFB74D)
-                        },
+                    status = rendererStatus(rendererMode, session, renderer, presented),
                 )
                 return@items
             }
@@ -1131,6 +1097,54 @@ private fun PluginListBody(
     }
 }
 
+/** The live renderer facts a row needs: the renderer that actually BOOTED, and whether anything has presented
+ *  yet. A row's switch is the saved LAUNCH preference and says nothing about either -- a pick applies at the
+ *  next launch, and a dev/CI-forced boot runs something the pref never asked for. Polled at 2 Hz so "starting…"
+ *  becomes "running" the moment the first frame lands; framesPresented is a native atomic read (no HotSpot
+ *  attach) and the loop is scoped to the caller, so it stops when the panel closes. */
+@Composable
+private fun rememberRendererRuntime(): Pair<String, Boolean> {
+    var session by remember { mutableStateOf(JvmLauncher.sessionRenderer) }
+    var presented by remember { mutableStateOf(JvmLauncher.framesPresented() > 0L) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            session = JvmLauncher.sessionRenderer
+            presented = JvmLauncher.framesPresented() > 0L
+            delay(500)
+        }
+    }
+    return session to presented
+}
+
+private val STATUS_RUNNING = Color(0xFF81C784)
+private val STATUS_PENDING = Color(0xFFFFB74D)
+private val STATUS_OFF = Color(0xFF9E9E9E)
+
+/** A renderer row's live state -- what its switch, a saved LAUNCH preference, cannot convey on its own. */
+private data class RowStatus(
+    val text: String,
+    val color: Color,
+)
+
+/** What [mode]'s renderer row should report, given the renderer that actually booted ([session]), the saved
+ *  preference ([pref]) and whether any frame has presented. Null before the boot records anything: say nothing
+ *  rather than guess. A pick applies only at the next launch and a dev/CI-forced boot runs a renderer the pref
+ *  never asked for, so neither may read as "running". */
+private fun rendererStatus(
+    mode: String,
+    session: String,
+    pref: String,
+    presented: Boolean,
+): RowStatus? =
+    when {
+        session.isEmpty() -> null
+        session == mode && !presented -> RowStatus("○ starting…", STATUS_PENDING)
+        session == mode && pref == mode -> RowStatus("● running", STATUS_RUNNING)
+        session == mode -> RowStatus("● running — off after restart", STATUS_PENDING)
+        pref == mode -> RowStatus("● selected — restart to apply", STATUS_PENDING)
+        else -> RowStatus("○ off", STATUS_OFF)
+    }
+
 @Composable
 private fun PluginRowItem(
     p: PluginRow,
@@ -1138,8 +1152,7 @@ private fun PluginRowItem(
     onToggle: (Boolean) -> Unit,
     onTogglePin: () -> Unit,
     onOpenConfig: (() -> Unit)?,
-    status: String? = null,
-    statusColor: Color = Color(0xFF9E9E9E),
+    status: RowStatus? = null,
 ) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = 8.dp),
@@ -1172,7 +1185,7 @@ private fun PluginRowItem(
             // Developer Tools, …) — tell the user instead of leaving a dead toggle.
             if (incompatible) Text("✕ couldn't start (incompatible)", color = Color(0xFFE57373), fontSize = 11.sp)
             // Renderer rows only: what is RUNNING, which the switch (a launch preference) cannot convey.
-            if (status != null) Text(status, color = statusColor, fontSize = 11.sp)
+            if (status != null) Text(status.text, color = status.color, fontSize = 11.sp)
         }
         // Config-only fake-plugins (RuneLite core settings / Chat Color) have no enable state — desktop shows no
         // toggle, only a tap-to-configure row (the ⚙ above). Everything else gets the enable switch.
