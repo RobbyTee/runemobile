@@ -277,6 +277,13 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Advance the open chat dialogue through the engine's own continue handler.
 + (void)continueEngineDialogue;
 
+/// Bumped only when the published dialogue CHANGES, so it identifies which dialogue the shell is looking at.
++ (long long)dialogueSeq;
+
+/// Pick an option row in the open options dialogue, by its published digit. `seq` is the dialogue sequence the
+/// tapped targets were built from, so a dialogue that changed since the tap is not answered by mistake.
++ (void)selectEngineDialogueOption:(int)digit seq:(long long)seq;
+
 /// World map (touch): open the world map via HudVeneerBridge.openWorldMap — a discoverable path decoupled from
 /// the tiny in-scene orb. No-op on an older jar without openWorldMap. Main thread.
 + (void)openEngineWorldMap;

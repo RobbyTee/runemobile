@@ -155,6 +155,12 @@ public final class HudVeneerBridge
 	// action fires, never stored: a remembered id goes stale the moment the dialogue changes type or closes,
 	// and firing a continue at a closed widget is exactly the kind of blind action this screen cannot afford.
 	private static volatile boolean pendingContinueDialogue;
+	// One-shot option pick: the row's child index, with the dialogue sequence the shell's tap targets were built
+	// from. dialogueSeq only moves when the published dialogue actually CHANGES, so comparing it rejects a tap
+	// aimed at a dialogue that has since been replaced -- which matters because a wrong pick answers a quest for
+	// the player. The digit is written last and read first: it is the trigger, and the seq is already in place.
+	private static volatile long pendingDialogueOptionSeq;
+	private static volatile int pendingDialogueOptionDigit = -1;
 
 	// Native chat-tab veneer (A3 bigger buttons). chatTabRowH = the canvas-px height the native (enlarged) tab row
 	// occupies; the message area (CHATAREA) is pushed down past it instead of the engine's 23px CONTROLS row. 0 =
@@ -332,6 +338,20 @@ public final class HudVeneerBridge
 	public static void continueDialogue()
 	{
 		pendingContinueDialogue = true;
+	}
+
+	/**
+	 * Native: pick an option in the open options dialogue. Applied on the client thread in {@link #tick}.
+	 *
+	 * @param digit the option's child index, as published in {@code dlgOptions}
+	 * @param seq   {@link #getDialogueSeq} as it stood when the shell built the tap targets this pick came from.
+	 *              The pick is dropped if the dialogue has been republished since, so a tap meant for the
+	 *              previous dialogue cannot answer the one that replaced it
+	 */
+	public static void selectDialogueOption(int digit, long seq)
+	{
+		pendingDialogueOptionSeq = seq;
+		pendingDialogueOptionDigit = digit;
 	}
 
 	/** Native: the canvas-px height the enlarged native chat-tab row occupies, so the message area is pushed down
@@ -854,6 +874,15 @@ public final class HudVeneerBridge
 				continueDialogueNow(c);
 			}
 
+			// One-shot: pick an option through the same continue handler.
+			final int optDigit = pendingDialogueOptionDigit;
+			if (optDigit >= 0)
+			{
+				final long optSeq = pendingDialogueOptionSeq;
+				pendingDialogueOptionDigit = -1;
+				selectDialogueOptionNow(c, optDigit, optSeq);
+			}
+
 			tickWorldMap(c);
 		}
 		catch (RuntimeException e)
@@ -1248,6 +1277,45 @@ public final class HudVeneerBridge
 			return InterfaceID.LevelupDisplay.CONTINUE;
 		}
 		return -1;
+	}
+
+	/**
+	 * Pick a dialogue option. An option row is a DYNAMIC child of the options component, not a static component
+	 * like the continue, so it is addressed by index: param0 is the child index and param1 the parent. That is
+	 * the other half of the rule the tab stones established -- there, passing an index misrouted a static
+	 * component's op; here, -1 would name no row at all. The action is the engine's continue handler, the same
+	 * one a continue tap uses, because answering an option resumes the paused script exactly as continuing does.
+	 */
+	private static void selectDialogueOptionNow(Client c, int digit, long seq)
+	{
+		try
+		{
+			// The dialogue must still be the one the tap was aimed at. A count of rows cannot establish that --
+			// the next dialogue often offers the same number of options, and in a quest those mean different
+			// answers -- so compare the publish the targets were built from.
+			if (seq != dialogueSeq)
+			{
+				System.out.println("[opt] dropped digit=" + digit + " seq=" + seq + " live=" + dialogueSeq);
+				return;
+			}
+			final Widget optW = c.getWidget(InterfaceID.Chatmenu.OPTIONS);
+			final Widget[] kids = optW == null ? null : optW.getDynamicChildren();
+			final int n = kids == null ? 0 : kids.length;
+			// kids[0] is the title, so rows start at 1; a padded blank row is not a row.
+			if (digit < 1 || digit >= n || kids[digit] == null || wText(kids[digit]).isEmpty())
+			{
+				System.out.println("[opt] dropped digit=" + digit + " kids=" + n + " (no such row)");
+				return;
+			}
+			System.out.println("[opt] fire digit=" + digit + " parent=" + optW.getId()
+				+ " childId=" + kids[digit].getId() + " index=" + kids[digit].getIndex()
+				+ " hidden=" + kids[digit].isHidden() + " clickMask=" + kids[digit].getClickMask());
+			c.menuAction(digit, optW.getId(), net.runelite.api.MenuAction.WIDGET_CONTINUE, 0, -1, "Continue", "");
+		}
+		catch (RuntimeException ignore)
+		{
+			BridgeFaults.note("HudVeneerBridge.selectDialogueOptionNow", ignore);
+		}
 	}
 
 	private static void openTabNow(Client c, boolean preEoc, int idx)

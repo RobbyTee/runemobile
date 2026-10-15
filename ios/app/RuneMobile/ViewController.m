@@ -324,6 +324,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, assign) CGPoint dialogueContinuePoint; // engine CONTINUE widget centre (canvas px), or (-1,-1)
 @property (nonatomic, assign) BOOL dialogueIsOptions;        // the open dialogue is a "Select an Option" menu
 @property (nonatomic, assign) BOOL dialogueTargetsKnown;     // the bridge models this dialogue's clickables
+@property (nonatomic, assign) long long dialogueTargetsSeq;  // the dialogue publish those clickables came from
 @property (nonatomic, copy) NSString *lastTargetsJson;       // dialogue publish we last logged (log on change only)
 @property (nonatomic, strong) NSArray<NSValue *> *dialogueOptionRects;   // per-option engine canvas bounds
 @property (nonatomic, strong) NSArray<NSNumber *> *dialogueOptionDigits; // the matching option numbers
@@ -3973,6 +3974,10 @@ static int chatRowCanvasH(void) {
     // While a dialogue IS open, a missing or unparseable publish is a hiccup, not a change of target: KEEP the
     // last good bounds. Blanking them would drop the tap onto the raw-click fallback, which is the very thing
     // that walked the player instead of advancing the dialogue.
+    // Read the sequence BEFORE the payload: if a publish lands between the two, the recorded seq is older than
+    // the targets built from it, so a pick made against them is refused rather than applied to a dialogue that
+    // has already moved on. The other order would accept exactly that stale pick.
+    const long long seq = [JVMLauncher dialogueSeq];
     NSString *js = [JVMLauncher dialogueJson];
     if (js.length == 0)
         return;
@@ -3989,6 +3994,7 @@ static int chatRowCanvasH(void) {
     }
     [self clearDialogueTapTargets];
     self.dialogueTargetsKnown = YES;
+    self.dialogueTargetsSeq = seq;
     // DIAGNOSTIC: the publish itself, once per change -- shows whether a tap ADVANCED the conversation (a new
     // text line) or ENDED it, which the open/closed lines alone cannot distinguish.
     if (![js isEqualToString:self.lastTargetsJson]) {
@@ -6374,33 +6380,39 @@ static CGRect mapRectFromArr(NSArray *a) {
             // click on inert parchment resolves against the SCENE behind it, so the tap walked the player to the
             // tile under the dialogue (and walking away then closed it, which read as "the tap did nothing").
             // Click the engine's live widget at the canvas bounds the bridge publishes for it instead.
-            // Advance a dialogue the way the game itself does -- SPACE to continue, the option's number key to
-            // pick -- NOT a synthetic click. A click here is resolved by the engine against whatever it believes
-            // is under that canvas point, and for the relocated chatbox that is the SCENE: the tap walked the
-            // player to the tile behind the box, which then ended the conversation by walking away. (The
-            // published widget bounds are where the box is DRAWN; this codebase has already found that a
-            // relocated widget's bounds and the engine's own resolution can disagree -- see the CC_OP tab
-            // stones, where an op-replay was inert and only the real menu action worked.) A key that the game
-            // ignores does nothing; a click that misses moves your character, so the key is the safe primitive.
+            // Drive a dialogue through the engine's own continue handler -- not a click, and not a key.
+            //
+            // Not a click: the engine resolves one against whatever IT believes is under that canvas point, and
+            // for the relocated chatbox that is the SCENE, so the tap walked the player to the tile behind the
+            // box and ended the conversation by walking away. The published bounds say where the box is DRAWN;
+            // the continue component reads hidden, so there was never anything there to hit.
+            //
+            // Not a key either, though that took measuring: keys do now reach the gamepack's canvas listener
+            // and come back consumed, yet space and the option digits leave a dialogue untouched -- device-
+            // confirmed, with the continue working through the handler in the same session.
+            //
+            // Both halves of the engine's dispatch rule are in play below. A continue is a static component, so
+            // param0 is -1. An option row is a dynamic child, so it is addressed by its index instead.
             for (NSUInteger i = 0; i < self.dialogueOptionRects.count; i++) {
                 if (!CGRectContainsPoint([self.dialogueOptionRects[i] CGRectValue], cp))
                     continue;
                 NSNumber *digit = self.dialogueOptionDigits[i];
-                [JVMLauncher postText:digit.stringValue];
-                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %@ tap %d,%d (key)",
+                [JVMLauncher selectEngineDialogueOption:digit.intValue seq:self.dialogueTargetsSeq];
+                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %@ tap %d,%d (op)",
                                                             digit, gx, gy]];
                 return;
             }
             // An options menu needs a row, not a blind advance: consume a miss rather than picking for the user.
-            // SPACE cannot stand in here (it continues, it does not choose), so a tap that matched no row ends
-            // here whether or not the row bounds were published.
+            // A continue cannot stand in here either -- it advances, it does not choose -- so a tap that matched
+            // no row ends here whether or not the row bounds were published.
             if (self.dialogueIsOptions) {
                 [self appendLine:[NSString stringWithFormat:@"[shell] dialogue tap %d,%d (options, no row)", gx, gy]];
                 return;
             }
             if (self.dialogueTargetsKnown) {
-                // Modelled dialogue (chat / message / level-up): continue it with SPACE and consume the tap,
-                // whether or not a CONTINUE widget was published. Never fall through to a click here.
+                // Modelled dialogue (chat / message / level-up): continue it, and consume the tap whether or not
+                // a CONTINUE widget was published -- the bridge resolves the live target itself and does nothing
+                // when no dialogue is open. Never fall through to a click here.
                 [JVMLauncher continueEngineDialogue];
                 [self appendLine:[NSString stringWithFormat:@"[shell] dialogue continue tap %d,%d (continue)", gx, gy]];
                 return;
