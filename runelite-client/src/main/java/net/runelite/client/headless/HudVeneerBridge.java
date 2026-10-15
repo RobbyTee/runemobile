@@ -2580,7 +2580,11 @@ public final class HudVeneerBridge
 			first = false;
 			sb.append('{');
 			appendTextWithRuns(sb, txt, CHAT_DEFAULT_COLOR);
-			sb.append(",\"digit\":").append(i).append('}');
+			sb.append(",\"digit\":").append(i);
+			// The option row's own canvas bounds: the native shell clicks THIS widget for the row under the
+			// finger, so a pick lands on the engine's live option instead of inert parchment.
+			appendBounds(sb, "b", canvasBounds(k));
+			sb.append('}');
 		}
 		sb.append("]}");
 		return sb.toString();

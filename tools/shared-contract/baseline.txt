@@ -326,6 +326,7 @@ PAYLOAD HudDataBridge stamina
 PAYLOAD HudDataBridge ts
 PAYLOAD HudDataBridge type
 PAYLOAD HudDataBridge value
+PAYLOAD HudVeneerBridge b
 PAYLOAD HudVeneerBridge c
 PAYLOAD HudVeneerBridge chatX
 PAYLOAD HudVeneerBridge chatY

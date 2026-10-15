@@ -322,6 +322,10 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UIStackView *dialogueStack;    // name / text / continue, or option rows
 @property (nonatomic, copy)   NSString *lastDialogueJson;    // rebuild the stack only when the content changes
 @property (nonatomic, assign) CGPoint dialogueContinuePoint; // engine CONTINUE widget centre (canvas px), or (-1,-1)
+@property (nonatomic, assign) BOOL dialogueIsOptions;        // the open dialogue is a "Select an Option" menu
+@property (nonatomic, assign) BOOL dialogueTargetsKnown;     // the bridge models this dialogue's clickables
+@property (nonatomic, strong) NSArray<NSValue *> *dialogueOptionRects;   // per-option engine canvas bounds
+@property (nonatomic, strong) NSArray<NSNumber *> *dialogueOptionDigits; // the matching option numbers
 @property (nonatomic, assign) int chatLinesSeq;              // last rendered getChatLines seq (skip re-parse when unchanged)
 @property (nonatomic, assign) int chatBaseX;                 // safe-area-anchored chat origin (canvas px), before the user offset
 @property (nonatomic, assign) int chatBaseY;
@@ -3653,6 +3657,7 @@ static int chatRowCanvasH(void) {
         [self appendLine:dlg ? @"[chat] dialogue open -> native chat hidden, engine dialogue (opaque) shown"
                              : @"[chat] dialogue closed -> native chat veneer restored"];
     }
+    [self updateDialogueTapTargetsActive:dlg];
     if (dlg) {
         // Capture the dialogue's canvas rect so onTap routes taps there precisely (resolving the dialogue's
         // Continue/option) instead of walking the world behind it. Disable the stale chat-scroll tap routing for
@@ -3945,6 +3950,67 @@ static int chatRowCanvasH(void) {
         if ([r[@"u"] intValue] == 1) [a addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:rng];
     }
     return a;
+}
+
+- (void)clearDialogueTapTargets {
+    self.dialogueContinuePoint = CGPointMake(-1, -1);
+    self.dialogueIsOptions = NO;
+    self.dialogueTargetsKnown = NO;
+    self.dialogueOptionRects = nil;
+    self.dialogueOptionDigits = nil;
+}
+
+// Keep the engine's clickable dialogue widgets (CONTINUE, option rows) current in canvas px for as long as a
+// dialogue is open. updateDialogueView used to be the only thing reading them, so they went stale the moment the
+// engine began drawing its own dialogue and the native parchment was suppressed -- which is exactly when onTap
+// has to resolve a tap on its own.
+- (void)updateDialogueTapTargetsActive:(BOOL)active {
+    if (!active) {
+        [self clearDialogueTapTargets];
+        return;
+    }
+    // While a dialogue IS open, a missing or unparseable publish is a hiccup, not a change of target: KEEP the
+    // last good bounds. Blanking them would drop the tap onto the raw-click fallback, which is the very thing
+    // that walked the player instead of advancing the dialogue.
+    NSString *js = [JVMLauncher dialogueJson];
+    if (js.length == 0)
+        return;
+    NSDictionary *d = parseBridgeJSON(js, "ViewController.updateDialogueTapTargets");
+    if (![d isKindOfClass:[NSDictionary class]])
+        return;
+    NSString *type = [d[@"type"] isKindOfClass:[NSString class]] ? d[@"type"] : nil;
+    if (type.length == 0) {
+        // "{}" is a deliberate answer, not a hiccup: the bridge models chat/options/message/level-up only, and
+        // leaves make-X + object-reward boxes to the engine. Those draw their OWN clickable widgets where the
+        // finger lands, so clear the targets and let the raw precise click through for them.
+        [self clearDialogueTapTargets];
+        return;
+    }
+    [self clearDialogueTapTargets];
+    self.dialogueTargetsKnown = YES;
+    NSDictionary *cont = [d[@"cont"] isKindOfClass:[NSDictionary class]] ? d[@"cont"] : nil;
+    if (cont) {
+        self.dialogueContinuePoint = CGPointMake([cont[@"x"] intValue] + [cont[@"w"] intValue] / 2,
+                                                 [cont[@"y"] intValue] + [cont[@"h"] intValue] / 2);
+    }
+    if (![type isEqualToString:@"options"])
+        return;
+    self.dialogueIsOptions = YES;
+    NSArray *opts = [d[@"options"] isKindOfClass:[NSArray class]] ? d[@"options"] : @[];
+    NSMutableArray *rects = [NSMutableArray arrayWithCapacity:opts.count];
+    NSMutableArray *digits = [NSMutableArray arrayWithCapacity:opts.count];
+    for (NSDictionary *o in opts) {
+        if (![o isKindOfClass:[NSDictionary class]])
+            continue;
+        NSDictionary *b = [o[@"b"] isKindOfClass:[NSDictionary class]] ? o[@"b"] : nil;
+        if (!b)
+            continue;
+        [rects addObject:[NSValue valueWithCGRect:CGRectMake([b[@"x"] intValue], [b[@"y"] intValue],
+                                                             [b[@"w"] intValue], [b[@"h"] intValue])]];
+        [digits addObject:@([o[@"digit"] integerValue])];
+    }
+    self.dialogueOptionRects = rects;
+    self.dialogueOptionDigits = digits;
 }
 
 // Continue tap -> SPACE (OSRS "space bar to continue"); option tap -> its number key. postText sends the full
@@ -6296,8 +6362,44 @@ static CGRect mapRectFromArr(NSArray *a) {
         CGPoint cp = CGPointMake(gx, gy);
         if ((self.chatScrollCanvas.size.width > 0 && CGRectContainsPoint(self.chatScrollCanvas, cp))
                 || (self.dialogueChatCanvas.size.width > 0 && CGRectContainsPoint(self.dialogueChatCanvas, cp))) {
+            // Only the CONTINUE widget and the option rows are clickable -- the rest of the box is inert, and a
+            // click on inert parchment resolves against the SCENE behind it, so the tap walked the player to the
+            // tile under the dialogue (and walking away then closed it, which read as "the tap did nothing").
+            // Click the engine's live widget at the canvas bounds the bridge publishes for it instead.
+            for (NSUInteger i = 0; i < self.dialogueOptionRects.count; i++) {
+                if (!CGRectContainsPoint([self.dialogueOptionRects[i] CGRectValue], cp))
+                    continue;
+                CGRect orc = [self.dialogueOptionRects[i] CGRectValue];
+                int ox = (int)(orc.origin.x + orc.size.width / 2);
+                int oy = (int)(orc.origin.y + orc.size.height / 2);
+                [JVMLauncher postClickPreciseX:ox y:oy button:1];
+                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %@ tap %d,%d -> click %d,%d",
+                                                            self.dialogueOptionDigits[i], gx, gy, ox, oy]];
+                return;
+            }
+            // An options menu needs a row, not a blind advance: consume a miss rather than picking for the user.
+            // Only when the row geometry is actually known -- option rows are real clickable widgets, so without
+            // bounds a raw click still resolves one, where a consume would just deaden the tap.
+            if (self.dialogueIsOptions && self.dialogueOptionRects.count > 0) {
+                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue tap %d,%d (options, no row)", gx, gy]];
+                return;
+            }
+            if (self.dialogueContinuePoint.x >= 0) {
+                int cx = (int)self.dialogueContinuePoint.x, cy = (int)self.dialogueContinuePoint.y;
+                [JVMLauncher postClickPreciseX:cx y:cy button:1];
+                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue continue tap %d,%d -> click %d,%d",
+                                                            gx, gy, cx, cy]];
+                return;
+            }
+            if (self.dialogueTargetsKnown && !self.dialogueIsOptions) {
+                // Modelled dialogue, but its CONTINUE widget isn't published this frame: consume rather than
+                // click, or the click resolves against the scene behind the box and walks the player.
+                [self appendLine:[NSString stringWithFormat:@"[shell] dialogue tap %d,%d (no continue widget)", gx, gy]];
+                return;
+            }
+            // Unmodelled (make-X / reward box): the engine's own clickable widgets are right under the finger.
             [JVMLauncher postClickPreciseX:gx y:gy button:1];
-            [self appendLine:[NSString stringWithFormat:@"[shell] dialogue tap %d,%d (precise, consumed)", gx, gy]];
+            [self appendLine:[NSString stringWithFormat:@"[shell] dialogue tap %d,%d (engine-owned, raw)", gx, gy]];
             return;
         }
     }
