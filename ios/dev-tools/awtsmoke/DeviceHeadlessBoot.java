@@ -72,12 +72,26 @@ public class DeviceHeadlessBoot {
         // Poll every 250 ms: log draws/frames so the run is self-diagnosing, and EXIT as soon as we have
         // targetFrames PNGs (don't wait out the clock — minimise required survival time). If the log stops
         // with no "captured"/"timeout" line, iOS killed us before even this fired.
-        final long pollMs = 250L;
+        //
+        // ...but ONLY when there is something to observe. With no capture dir HeadlessCapture is inert, so the
+        // counters never move and the target is never met: every poll re-reads four static zeroes and prints a
+        // line nothing reads (release builds open no log sinks at all). That is the normal shipping path, and
+        // the window it rides is the whole session — the app passes runSeconds=86400, i.e. ~345k wakeups and
+        // ~86k log lines a day to learn nothing. Hold the thread in long sleeps instead and stay silent. The
+        // total window is unchanged either way: polls is derived from runSeconds, so the loop still returns at
+        // the same wall-clock deadline.
+        final boolean watching = System.getProperty("runelite.headless.capture.dir") != null
+            || Boolean.getBoolean("runelite.gatecensus");
+        final long pollMs = watching ? 250L : 60_000L;
         final long polls = Math.max(1, (runSeconds * 1000L) / pollMs);
         int lastDraws = -1, lastFrames = -1;
         for (long p = 1; p <= polls; p++)
         {
             Thread.sleep(pollMs);
+            if (!watching)
+            {
+                continue; // nothing to sample or report — just keep the boot thread alive for the session
+            }
             int draws = -1, frames = -1, nullG = -1;
             String state = "?";
             try

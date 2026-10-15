@@ -18,6 +18,7 @@ FLAG runelite.headless.autologin.welcomeX
 FLAG runelite.headless.autologin.welcomeY
 FLAG runelite.headless.autologin.world
 FLAG runelite.headless.autologin.worldAddress
+FLAG runelite.headless.capture.dir
 FLAG runelite.headless.resize
 FLAG runelite.hub
 FLAG runelite.huddata
