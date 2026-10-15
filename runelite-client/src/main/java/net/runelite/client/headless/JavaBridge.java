@@ -2393,9 +2393,12 @@ public final class JavaBridge
 	 * reads the event's extended key-code + extended modifiers, so a single matched {@code KEY_PRESSED} (with
 	 * the modifier mask baked into the event — no separate modifier-key presses needed) triggers
 	 * {@code hotkeyPressed}; the paired {@code KEY_RELEASED} clears the listener's pressed latch so it can fire
-	 * again next time. Posted to the same AWT queue / focused canvas as our other key synthesis (RuneLite's
-	 * {@code KeyManager} is a canvas {@code KeyListener}), so this routes through the engine exactly like a
-	 * hardware chord. Modifier-only binds (no main key) are ignored — those are hold-to-modify, not fire-once.
+	 * again next time. Delivered like our other key synthesis: handed to the canvas's own {@code KeyListener}s
+	 * on the EDT, because a posted {@code KeyEvent} is routed by the {@code KeyboardFocusManager} to the focus
+	 * owner and headless there is none, so nothing posted arrives. That is NOT the same as a hardware key: it
+	 * bypasses AWT's dispatch, so only listeners registered on this canvas are reached and anything AWT would
+	 * do around them does not happen. It is enough for the listeners the engine and RuneLite register there.
+	 * Modifier-only binds (no main key) are ignored — those are hold-to-modify, not fire-once.
 	 *
 	 * @param keyCode   the Keybind's (extended) key-code — {@code KeyEvent.VK_*}
 	 * @param modifiers the Keybind's extended-modifier mask — {@code InputEvent.*_DOWN_MASK} bits

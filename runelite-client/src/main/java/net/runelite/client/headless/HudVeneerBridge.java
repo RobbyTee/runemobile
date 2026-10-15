@@ -149,12 +149,12 @@ public final class HudVeneerBridge
 	// can open the map without hitting the ~25px engine orb (and fixes the legacy-account orb block). Applied on
 	// the client thread in tick (where runScript is legal).
 	private static volatile boolean pendingOpenWorldMap;
-	// One-shot dialogue continue. The CONTINUE component carries no op listener (contdiag: onOp=null), so the
-	// op-script replay used for the tab stones cannot drive it -- the engine performs a continue through its own
-	// WIDGET_CONTINUE handler, which is what this sends. lastContinueId is refreshed every tick a chat dialogue
-	// publishes, so the action always targets the dialogue currently on screen.
+	// One-shot dialogue continue. The CONTINUE component carries no op listener (onOp=null), so the op-script
+	// replay used for the tab stones cannot drive it -- the engine performs a continue through its own
+	// WIDGET_CONTINUE handler, which is what this sends. The target is resolved on the client thread when the
+	// action fires, never stored: a remembered id goes stale the moment the dialogue changes type or closes,
+	// and firing a continue at a closed widget is exactly the kind of blind action this screen cannot afford.
 	private static volatile boolean pendingContinueDialogue;
-	private static volatile int lastContinueId = -1;
 
 	// Native chat-tab veneer (A3 bigger buttons). chatTabRowH = the canvas-px height the native (enlarged) tab row
 	// occupies; the message area (CHATAREA) is pushed down past it instead of the engine's 23px CONTROLS row. 0 =
@@ -1195,10 +1195,10 @@ public final class HudVeneerBridge
 	 */
 	private static void continueDialogueNow(Client c)
 	{
-		final int id = lastContinueId;
+		final int id = resolveContinueId(c);
 		if (id < 0)
 		{
-			System.out.println("[cont] no continue id published");
+			System.out.println("[cont] no dialogue open");
 			return;
 		}
 		try
@@ -1206,12 +1206,48 @@ public final class HudVeneerBridge
 			final Widget w = c.getWidget(id);
 			System.out.println("[cont] fire id=" + id + " widget=" + (w != null)
 				+ (w == null ? "" : " hidden=" + w.isHidden() + " clickMask=" + w.getClickMask()));
-			c.menuAction(-1, id, net.runelite.api.MenuAction.WIDGET_CONTINUE, 1, -1, "Continue", "");
+			if (w == null)
+			{
+				return;
+			}
+			c.menuAction(-1, id, net.runelite.api.MenuAction.WIDGET_CONTINUE, 0, -1, "Continue", "");
 		}
 		catch (RuntimeException ignore)
 		{
 			BridgeFaults.note("HudVeneerBridge.continueDialogueNow", ignore);
 		}
+	}
+
+	/**
+	 * The CONTINUE component of whatever dialogue is open right now, or -1 if none is. Mirrors
+	 * {@link #computeDialogueJson}'s detection order, and like it keys the chat kinds off their TEXT widget --
+	 * a chat CONTINUE reads hidden even while its dialogue is on screen, so testing CONTINUE itself would find
+	 * nothing. Options are deliberately absent: choosing a row is not continuing, and a continue fired at an
+	 * options menu would answer for the player.
+	 */
+	private static int resolveContinueId(Client c)
+	{
+		if (widgetShown(c, InterfaceID.ChatLeft.TEXT))
+		{
+			return InterfaceID.ChatLeft.CONTINUE;
+		}
+		if (widgetShown(c, InterfaceID.ChatRight.TEXT))
+		{
+			return InterfaceID.ChatRight.CONTINUE;
+		}
+		if (widgetShown(c, InterfaceID.ChatBoth.TEXT))
+		{
+			return InterfaceID.ChatBoth.CONTINUE;
+		}
+		if (widgetShown(c, InterfaceID.Messagebox.TEXT))
+		{
+			return InterfaceID.Messagebox.CONTINUE;
+		}
+		if (widgetShown(c, InterfaceID.LevelupDisplay.CONTINUE))
+		{
+			return InterfaceID.LevelupDisplay.CONTINUE;
+		}
+		return -1;
 	}
 
 	private static void openTabNow(Client c, boolean preEoc, int idx)
@@ -2570,21 +2606,8 @@ public final class HudVeneerBridge
 	 *  and the canvas bounds of the head model ({@code head}, for the native cutout) and the CONTINUE widget
 	 *  ({@code cont}, so a continue tap can PRECISELY click the engine's live widget — robust regardless of the
 	 *  "space bar to continue" setting). */
-	private static boolean contDiagDone;
-
 	private static String dlgChat(Client c, String type, int nameId, int textId, int headId, int continueId)
 	{
-		lastContinueId = continueId;
-		if (!contDiagDone && continueId >= 0)
-		{
-			contDiagDone = true;
-			final Widget cw = c.getWidget(continueId);
-			System.out.println("[contdiag] id=" + continueId + " widget=" + (cw != null)
-				+ (cw == null ? "" : " wid=" + cw.getId() + " parent=" + cw.getParentId()
-					+ " clickMask=" + cw.getClickMask() + " hidden=" + cw.isHidden()
-					+ " onOp=" + java.util.Arrays.toString(cw.getOnOpListener())
-					+ " bounds=" + cw.getBounds() + " canvas=" + cw.getCanvasLocation()));
-		}
 		final StringBuilder sb = new StringBuilder(384);
 		sb.append("{\"type\":\"").append(type).append("\",\"continue\":true");
 		if (nameId >= 0)
