@@ -31,8 +31,10 @@ import java.awt.EventQueue;
 import java.awt.Rectangle;
 import java.awt.Toolkit;
 import java.awt.event.FocusEvent;
+import java.awt.event.FocusListener;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
+import java.awt.event.KeyListener;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseWheelEvent;
 import lombok.extern.slf4j.Slf4j;
@@ -289,6 +291,7 @@ public final class JavaBridge
 
 	// Input bookkeeping (only ever touched from the single native UI thread that drives onTouch/onClick).
 	private static boolean focused;       // FocusEvent gained — keyboard/mouse accepted
+	private static Canvas focusedCanvas;  // WHICH canvas we focused (the engine can swap it under us)
 	private static volatile boolean entered;  // MOUSE_ENTERED posted — pointer currently "present" (volatile:
 	                                      // parkPointer runs from the client thread after a consumed tap)
 	private static boolean pressed;
@@ -587,11 +590,57 @@ public final class JavaBridge
 	 */
 	private static void ensureFocus(EventQueue q, Canvas canvas)
 	{
-		if (!focused)
+		if (focused && canvas == focusedCanvas)
 		{
-			q.postEvent(new FocusEvent(canvas, FocusEvent.FOCUS_GAINED, false, null));
-			focused = true;
+			return;
 		}
+		focused = true;
+		focusedCanvas = canvas;
+		final FocusEvent fe = new FocusEvent(canvas, FocusEvent.FOCUS_GAINED, false, null);
+		q.postEvent(fe);   // still correct if a real focus owner ever exists; on its own it reaches nothing
+		// A POSTED FocusEvent never arrives either (same KeyboardFocusManager arbitration as a key), so the
+		// gamepack was never told it had focus. Hand it to the canvas's own listeners, like a real focus gain.
+		EventQueue.invokeLater(() ->
+		{
+			for (final FocusListener l : canvas.getFocusListeners())
+			{
+				l.focusGained(fe);
+			}
+		});
+	}
+
+	/**
+	 * Deliver a key event to the canvas's own listeners, on the EDT.
+	 *
+	 * AWT does not hand a KeyEvent to its source component: it gives it to the KeyboardFocusManager, which
+	 * routes it to the FOCUS OWNER. Headless there is no focused Window, so there is no focus owner and the
+	 * KFM discards the event -- posting a KeyEvent to the queue delivered NOTHING, every time, which is why no
+	 * synthesized key ever reached the game while taps always did (a MouseEvent goes to its source). Asserting
+	 * focus first could not rescue it: a posted FOCUS_GAINED is dropped the same way. Calling the listeners is
+	 * where a real key press ends up anyway, minus the focus arbitration we have no window manager for.
+	 */
+	static void dispatchKey(Canvas canvas, KeyEvent e)
+	{
+		EventQueue.invokeLater(() ->
+		{
+			for (final KeyListener l : canvas.getKeyListeners())
+			{
+				switch (e.getID())
+				{
+					case KeyEvent.KEY_PRESSED:
+						l.keyPressed(e);
+						break;
+					case KeyEvent.KEY_TYPED:
+						l.keyTyped(e);
+						break;
+					case KeyEvent.KEY_RELEASED:
+						l.keyReleased(e);
+						break;
+					default:
+						break;
+				}
+			}
+		});
 	}
 
 	/**
@@ -1900,9 +1949,9 @@ public final class JavaBridge
 		{
 			final char c = s.charAt(i);
 			final int vk = KeyEvent.getExtendedKeyCodeForChar(c);
-			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, vk, c));
-			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, c));
-			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, vk, c));
+			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, vk, c));
+			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, c));
+			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, vk, c));
 			t += 3;
 		}
 	}
@@ -2293,12 +2342,12 @@ public final class JavaBridge
 			// VK_A..VK_Z share their codes with ASCII uppercase; unshifted typing is lowercase.
 			kc = Character.toLowerCase((char) vk);
 		}
-		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, vk, kc));
+		dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, vk, kc));
 		if (kc != KeyEvent.CHAR_UNDEFINED)
 		{
-			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, kc));
+			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, kc));
 		}
-		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, vk, kc));
+		dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, vk, kc));
 	}
 
 	/**
@@ -2324,8 +2373,8 @@ public final class JavaBridge
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
 		ensureFocus(q, canvas);
-		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, modifiers, keyCode, KeyEvent.CHAR_UNDEFINED));
-		q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, modifiers, keyCode, KeyEvent.CHAR_UNDEFINED));
+		dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, modifiers, keyCode, KeyEvent.CHAR_UNDEFINED));
+		dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, modifiers, keyCode, KeyEvent.CHAR_UNDEFINED));
 	}
 
 	/**
@@ -2386,12 +2435,12 @@ public final class JavaBridge
 		if (held)
 		{
 			ensureFocus(q, canvas);
-			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, downMask,
+			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, downMask,
 				vk, KeyEvent.CHAR_UNDEFINED, KeyEvent.KEY_LOCATION_LEFT));
 		}
 		else
 		{
-			q.postEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t, 0,
+			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t, 0,
 				vk, KeyEvent.CHAR_UNDEFINED, KeyEvent.KEY_LOCATION_LEFT));
 		}
 		return held;
