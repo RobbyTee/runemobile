@@ -61,6 +61,7 @@ __pycache__/
 ### Local-only dev config (machine-specific paths / identifiers) ###
 .mcp.json
 ios/dev-tools/signing.env
+ios/dev-tools/asc-key.env
 
 ### Internal working notes — not part of the shipped project ###
 # Design docs, audits, handoffs and investigation write-ups live in the tree while work is in
