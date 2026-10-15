@@ -3060,10 +3060,32 @@ static const int kCamPitchPxPerSec = 200;
     // launch), not the live "is it running this session" state — they only activate after a restart.
     NSString *rk = [self rendererKeyForClass:[p[@"className"] description]];
     if (rk) {
+        // The switch reports the SAVED preference (what the next launch will use); the status reports what this
+        // session is actually running. They differ only until the next restart, and collapsing them into one
+        // line is why the selected renderer read "restart to apply" permanently -- including while it was the
+        // renderer drawing the screen. Base GPU proves itself with a real readback frame; 117HD direct-presents
+        // and has no such counter, so for it, booting with it is the best evidence there is.
         enabled = [[self rendererPref] isEqualToString:rk];
-        status = enabled ? @"● selected — restart to apply" : @"○ off";
-        statusColor = enabled ? [UIColor colorWithRed:0.45 green:0.85 blue:0.40 alpha:1.0]
-                              : [UIColor colorWithWhite:0.6 alpha:1.0];
+        BOOL live = [[self sessionRendererKey] isEqualToString:rk];
+        BOOL proven = live && (![rk isEqualToString:@"gpu"] || [JVMLauncher gpuFrameSeq] > 0);
+        UIColor *rOn = [UIColor colorWithRed:0.45 green:0.85 blue:0.40 alpha:1.0];
+        UIColor *rPending = [UIColor colorWithRed:0.95 green:0.80 blue:0.30 alpha:1.0];
+        if (enabled && proven) {
+            status = @"● running";
+            statusColor = rOn;
+        } else if (enabled && live) {
+            status = @"○ starting…";
+            statusColor = rPending;
+        } else if (enabled) {
+            status = @"● selected — restart to apply";
+            statusColor = rPending;
+        } else if (live) {
+            status = @"● running — off after restart";
+            statusColor = rPending;
+        } else {
+            status = @"○ off";
+            statusColor = [UIColor colorWithWhite:0.6 alpha:1.0];
+        }
         cell.detailTextLabel.text = hasConfig ? [status stringByAppendingString:@"   ·  hold to configure"] : status;
         cell.detailTextLabel.textColor = statusColor;
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
@@ -3161,6 +3183,17 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
 
 - (NSString *)rendererPref {
     return [[NSUserDefaults standardUserDefaults] stringForKey:@"rendererPref"] ?: @"cpu";
+}
+
+// The renderer this session actually BOOTED with -- which is not the saved preference: a preference picked
+// after launch applies next time, and a GPU boot that failed its crash cookie was reverted to software before
+// the JVM started. Both flags are assigned once, at the launch decision, and are what the JVM itself was given.
+- (NSString *)sessionRendererKey {
+    if (self.pendingRouteCZone)
+        return @"117hd";
+    if (self.pendingRouteCGpu)
+        return @"gpu";
+    return @"cpu";
 }
 
 // A renderer-plugin row was toggled: select it (or fall back to the software renderer), save the preference,
