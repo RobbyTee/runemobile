@@ -36,11 +36,12 @@ class DialogueView(
         private const val OPT_COLOR = 0xFF1A1206.toInt()
     }
 
-    /** Tap-to-continue: precise-click the engine CONTINUE widget centre (canvas px); (-1,-1) → fall back to space. */
-    var onContinue: ((engineCx: Int, engineCy: Int) -> Unit)? = null
+    /** Tap-to-continue: drive the engine's own continue handler. (Neither of the two obvious routes works: a
+     *  precise click on the CONTINUE widget walks the player, and a synthesized SPACE is consumed unmoved.) */
+    var onContinue: (() -> Unit)? = null
 
-    /** An option row tapped: post its 1-based digit to the engine. */
-    var onOption: ((digit: Int) -> Unit)? = null
+    /** An option row tapped: its published digit, with the seq of the publish the row was drawn from. */
+    var onOption: ((digit: Int, seq: Long) -> Unit)? = null
 
     private var active = false
     private var boxX = 0f
@@ -56,6 +57,7 @@ class DialogueView(
     private var contCy = -1
     private var headRect: RectF? = null // engine 3D-chathead bounds (view px) — cut out of the parchment
     private var lastJson = ""
+    private var viewSeq = 0L // the publish these rows were built from -- an answer must quote it, not a later one
     private var bodyLayout: StaticLayout? = null
 
     private val fillPaint = Paint().apply { color = PARCH }
@@ -107,7 +109,7 @@ class DialogueView(
      *  dialogue (there's no neutral choice) and when nothing is showing. Returns true if it acted. */
     fun dismiss(): Boolean {
         if (!active || options.isNotEmpty()) return false
-        onContinue?.invoke(contCx, contCy)
+        onContinue?.invoke()
         return true
     }
 
@@ -115,6 +117,7 @@ class DialogueView(
     fun update(
         chatSnap: String,
         dlgJson: String,
+        dlgSeq: Long,
         sx: Float,
         sy: Float,
         show: Boolean,
@@ -177,6 +180,7 @@ class DialogueView(
 
         if (dlgJson != lastJson) {
             lastJson = dlgJson
+            viewSeq = dlgSeq // the rows about to be built belong to THIS publish
             rebuild(d)
             Log.i(
                 "DialogueView",
@@ -302,12 +306,12 @@ class DialogueView(
                 val idx = optionRects.indexOfFirst { it.contains(event.x, event.y) }
                 if (idx >= 0) {
                     val digit = options[idx].second
-                    onOption?.invoke(digit)
+                    onOption?.invoke(digit, viewSeq)
                     Log.i("DialogueView", "ui4: option $idx -> digit $digit")
                 }
             } else {
-                onContinue?.invoke(contCx, contCy)
-                Log.i("DialogueView", "ui4: continue -> ($contCx,$contCy)")
+                onContinue?.invoke()
+                Log.i("DialogueView", "ui4: continue")
             }
         }
         return true // consume taps over the parchment while a dialogue is open

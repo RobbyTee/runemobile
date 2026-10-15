@@ -508,6 +508,18 @@ object JvmLauncher {
 
     external fun nativeDialogueJson(): String // UI-4: the engine NPC-dialogue snapshot (opaque-parchment source)
 
+    external fun nativeDialogueSeq(): Long // the publish that json came from (same lock, so they agree)
+
+    // UI-4 dialogue actions: the engine's own WIDGET_CONTINUE handler. Clicking the CONTINUE widget walks
+    // the player (it reads hidden, so the click lands on the scene behind the chatbox) and a synthesized
+    // key is consumed without advancing anything -- both were tried on device.
+    external fun nativeContinueDialogue()
+
+    external fun nativeSelectDialogueOption(
+        digit: Int,
+        seq: Long,
+    )
+
     external fun nativeOrbSnapshotPub(): String // minimap-orb veneer: per-orb canvas bounds (read on tap, no attach)
 
     external fun nativeSetChatTabRowHeight(canvasPx: Int)
@@ -914,6 +926,15 @@ object JvmLauncher {
     fun chatSnapshotPub() = nativeChatSnapshotPub()
 
     fun dialogueJsonPub() = nativeDialogueJson()
+
+    fun dialogueSeqPub() = nativeDialogueSeq()
+
+    fun continueDialogue() = nativeContinueDialogue()
+
+    fun selectDialogueOption(
+        digit: Int,
+        seq: Long,
+    ) = nativeSelectDialogueOption(digit, seq)
 
     fun orbSnapshotPub() = nativeOrbSnapshotPub()
 

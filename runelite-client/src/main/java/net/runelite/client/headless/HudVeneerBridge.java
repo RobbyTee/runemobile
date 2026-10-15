@@ -212,6 +212,10 @@ public final class HudVeneerBridge
 		if (!json.equals(orbSnapshotJson)) { orbSnapshotJson = json; orbSnapshotSeq++; }
 	}
 
+	// Bumps the seq ONLY on a changed snapshot, and both shells lean on that: each captures the seq when it
+	// rebuilds its parchment rows, i.e. when the json text it holds changed. Were this to bump on an unchanged
+	// snapshot, their captured seq would go stale without a rebuild and every option tap would be dropped by
+	// selectDialogueOption's guard -- a dialogue that silently stops answering, on both ports at once.
 	private static void publishDialogueJson(String json)
 	{
 		if (!json.equals(dialogueJson)) { dialogueJson = json; dialogueSeq++; }
@@ -411,7 +415,10 @@ public final class HudVeneerBridge
 	 *  Shape: {@code {"type":"npc|player|both|message|options|levelup","name":"..","text":"..","runs":[..],
 	 *  "continue":true,"options":[{"text":"..","runs":[..],"digit":N}],"head":{"x":,"y":,"w":,"h":}}} — bounds are
 	 *  canvas px. The native side draws the parchment over the chatbox region with a cutout at {@code head} so the
-	 *  engine's real 3D head model shows through; a continue tap sends SPACE, an option tap sends its digit. */
+	 *  engine's real 3D head model shows through. Taps go to {@link #continueDialogue()} /
+	 *  {@link #selectDialogueOption(int, long)}: a click on the CONTINUE widget resolves against the scene behind
+	 *  the chatbox and walks the player, and a synthesized SPACE comes back consumed without advancing anything.
+	 *  {@code digit} is the engine child index, so pass it through rather than renumbering the drawn rows. */
 	public static String getDialogueJson()
 	{
 		return dialogueJson;

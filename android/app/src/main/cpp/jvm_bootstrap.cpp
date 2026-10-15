@@ -192,6 +192,9 @@ static jmethodID g_midPanWorldMap = nullptr, g_midMapSnapshot = nullptr;
 // republish copy on a seq change (the menu-peek pattern). All OPTIONAL — a jar predating them just always copies.
 static jmethodID g_midChatSnapshotSeq = nullptr, g_midOrbSnapshotSeq = nullptr;
 static jmethodID g_midDialogueSeq = nullptr, g_midMapSnapshotSeq = nullptr;
+// Dialogue actions driven through the engine's own WIDGET_CONTINUE handler. OPTIONAL (same rule): a jar
+// predating them loses the dialogue taps, not the veneer.
+static jmethodID g_midContinueDlg = nullptr, g_midSelectDlgOpt = nullptr;
 static jmethodID g_midScrollMapPanel = nullptr;   // world-map KEY/MAPLIST swipe-scroll (optional)
 // FIX-5 native open-map control (optional, same rule): open the world map by ORB_WORLDMAP op-script replay.
 static jmethodID g_midOpenWorldMap = nullptr;
@@ -307,6 +310,11 @@ static jmethodID             g_midDialogueJson = nullptr;
 static std::mutex            g_dlgLock;
 static std::string           g_dialogueJsonPub = "{}";
 static std::atomic<long long> g_dlgSnapSeq{-1};
+// The seq of the string CURRENTLY in g_dialogueJsonPub. g_dlgSnapSeq advances before the copy below, so reading
+// it alongside the json can hand the UI a seq newer than the text it has -- the unsafe direction, since an
+// option row would then answer the dialogue that replaced the one it was drawn from. Written under g_dlgLock
+// with the string, and read back under it, so the pair is always consistent.
+static std::atomic<long long> g_dlgPubSeq{-1};
 
 // ---- Input queue (UI thread enqueues; render thread drains and dispatches into the bridge) -----------
 enum InputKind {
@@ -942,6 +950,8 @@ static bool publishBridge(JNIEnv *env) {
             g_midMapSnapshot       = midOpt(env, hvg, "getMapSnapshot", "()Ljava/lang/String;");
             g_midOpenWorldMap      = midOpt(env, hvg, "openWorldMap", "()V");   // FIX-5 (optional; older jar omits it)
             g_midDialogueJson      = midOpt(env, hvg, "getDialogueJson", "()Ljava/lang/String;");   // UI-4 (optional)
+            g_midContinueDlg = midOpt(env, hvg, "continueDialogue", "()V");                         // UI-4 (optional)
+            g_midSelectDlgOpt = midOpt(env, hvg, "selectDialogueOption", "(IJ)V");                  // UI-4 (optional)
             g_midOrbSnapshot       = midOpt(env, hvg, "getOrbSnapshot", "()Ljava/lang/String;");    // orb veneer (optional)
             g_midTabSprites        = midOpt(env, hvg, "tabSprites", "()Ljava/lang/String;");        // runtime cache sprites (optional)
             // Phase 3 (Task B): content-diff publish seqs (all optional — a jar predating them just always copies).
@@ -1194,6 +1204,7 @@ static void *renderLoop(void *) {
                     if (c) {
                         std::lock_guard<std::mutex> lk(g_dlgLock);
                         g_dialogueJsonPub.assign(c);
+                        g_dlgPubSeq.store(g_dlgSnapSeq.load(std::memory_order_relaxed), std::memory_order_relaxed);
                         env->ReleaseStringUTFChars(js, c);
                     } else if (env->ExceptionCheck()) {
                         env->ExceptionClear();
@@ -2260,6 +2271,14 @@ static void facadeVoidIntInt(jclass cls, jmethodID m, jint a, jint b) {
     hs->CallStaticVoidMethod(cls, m, a, b);
     if (hs->ExceptionCheck()) hs->ExceptionClear();
 }
+static void facadeVoidIntLong(jclass cls, jmethodID m, jint a, jlong b) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !cls || !m)
+        return;
+    hs->CallStaticVoidMethod(cls, m, a, b);
+    if (hs->ExceptionCheck())
+        hs->ExceptionClear();
+}
 static void facadeVoid4Int(jclass cls, jmethodID m, jint a, jint b, jint c, jint d) {
     JNIEnv *hs = bridgeEnvAttach();
     if (!hs || !cls || !m) return;
@@ -2660,6 +2679,29 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeDialogueJson(JNIEnv *env, jobject) {
     std::lock_guard<std::mutex> lk(g_dlgLock);
     return env->NewStringUTF(g_dialogueJsonPub.c_str());
+}
+// The seq of the json the call above returns -- taken under the same lock, so a row can be answered against the
+// publish that drew it rather than whatever has arrived since.
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeDialogueSeq(JNIEnv *, jobject) {
+    std::lock_guard<std::mutex> lk(g_dlgLock);
+    return (jlong)g_dlgPubSeq.load(std::memory_order_relaxed);
+}
+// Advance / answer the dialogue through the engine's own handler. A precise click on the CONTINUE widget walks
+// the player instead: the component carries no op listener and reads hidden, so the click resolves against the
+// scene behind the chatbox. A synthesized key reaches the gamepack's listener and comes back consumed without
+// moving the conversation. Both were tried on device; this is what works.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeContinueDialogue(JNIEnv *, jobject) {
+    if (!hudReady())
+        return;
+    facadeVoid0(g_hudCls, g_midContinueDlg);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeSelectDialogueOption(JNIEnv *, jobject, jint digit, jlong seq) {
+    if (!hudReady())
+        return;
+    facadeVoidIntLong(g_hudCls, g_midSelectDlgOpt, digit, seq);
 }
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeSetChatTabRowHeight(JNIEnv *, jobject, jint canvasPx) {

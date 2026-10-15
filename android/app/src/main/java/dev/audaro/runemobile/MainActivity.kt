@@ -416,7 +416,6 @@ class MainActivity : AppCompatActivity() {
         private const val VK_BACK_SPACE = 8
         private const val VK_ENTER = 10
         private const val VK_ESCAPE = 27
-        private const val VK_SPACE = 32
         private const val VK_LEFT = 37
         private const val VK_UP = 38
         private const val VK_RIGHT = 39
@@ -747,20 +746,20 @@ class MainActivity : AppCompatActivity() {
             }
         }
         chatTabOverlay.onHaptic = { vibrateTick() }
-        // UI-4: the opaque dialogue parchment. A continue tap precisely clicks the engine CONTINUE widget (robust
-        // vs the space-to-continue setting); an option row posts its digit.
+        // UI-4: the opaque dialogue parchment. Both taps go through the engine's own WIDGET_CONTINUE handler.
+        // The two routes this used to take were each wrong on device, and neither says so:
+        //   * a precise click on the CONTINUE widget WALKS THE PLAYER. The component carries no op listener and
+        //     reads hidden while drawn, so the click resolves against the scene behind the relocated chatbox --
+        //     and walking away closes the dialogue, which looks like a tap that half-worked.
+        //   * a synthesized SPACE (or a typed digit) reaches the gamepack's listener and comes back consumed
+        //     with the conversation unmoved. "Consumed" is not "acted on".
         dialogueOverlay = DialogueView(this)
-        dialogueOverlay.onContinue = { cx, cy ->
-            // Click the engine CONTINUE widget when we have its bounds; otherwise advance with a real SPACE
-            // KEY event — a "click here to continue" box listens for the keypress, NOT a typed character
-            // (text(" ") never advanced it), so this is the reliable fallback when the widget bounds are absent.
-            if (cx >= 0 && cy >= 0) {
-                JvmLauncher.onBridgeTouch { JvmLauncher.clickPrecise(cx, cy, 1) }
-            } else {
-                JvmLauncher.onBridgeTouch { JvmLauncher.keyStroke(VK_SPACE) }
-            }
+        dialogueOverlay.onContinue = { JvmLauncher.onBridgeTouch { JvmLauncher.continueDialogue() } }
+        dialogueOverlay.onOption = { digit, seq ->
+            // The seq is the publish the row was drawn from: the engine re-sends options as a quest branches,
+            // and the same row index can mean a different answer a frame later.
+            JvmLauncher.onBridgeTouch { JvmLauncher.selectDialogueOption(digit, seq) }
         }
-        dialogueOverlay.onOption = { digit -> JvmLauncher.onBridgeTouch { JvmLauncher.text(digit.toString()) } }
         // FIX-9: the "Reconnecting…" scrim (non-interactive; driven from updateChrome's snapshot).
         reconnectOverlay = ReconnectingOverlayView(this)
         // UX-LOGIN-01: the "Session expired" card (interactive; driven from updateChrome's sessionExpired flag).
@@ -3284,7 +3283,17 @@ class MainActivity : AppCompatActivity() {
                 dialogueChatCanvas = null
             }
         }
-        dialogueOverlay.update(chatSnap, if (on && !engineDlg) JvmLauncher.dialogueJsonPub() else "{}", sx, sy, on && !engineDlg)
+        // Seq before payload: both come from one lock, and reading it first can only ever under-report, which
+        // fails a pick safe rather than answering the wrong dialogue.
+        val dlgSeq = JvmLauncher.dialogueSeqPub()
+        dialogueOverlay.update(
+            chatSnap,
+            if (on && !engineDlg) JvmLauncher.dialogueJsonPub() else "{}",
+            dlgSeq,
+            sx,
+            sy,
+            on && !engineDlg,
+        )
         // Auto-open/close: a collapsed chat hides the engine tabs -> the dialogue raster is suppressed. So when an
         // engine dialogue opens while collapsed, un-collapse for its duration and restore the collapsed state when it
         // ends (official-mobile behaviour). Native is the single owner of chatCollapsed (no bridge writer / no race).
