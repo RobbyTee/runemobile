@@ -403,7 +403,8 @@ static jmethodID gMidSetMinimapScale = NULL; // setMinimapScale(I)V  (bigger min
 static jmethodID gMidRelocateSide = NULL;    // relocateSidePanel(II)V (A4/A6 — inventory side panel)
 static jmethodID gMidOpenTab = NULL;         // openTab(I)V  (A4 — open a tab by replaying its stone op script)
 static jmethodID gMidContinueDlg = NULL;     // continueDialogue()V — advance a chat dialogue via WIDGET_CONTINUE
-static jmethodID gMidSelectOpt = NULL;       // selectDialogueOption(II)V — pick an option row via WIDGET_CONTINUE
+static jmethodID gMidSelectOpt = NULL;       // selectDialogueOption(IJ)V — pick an option row via WIDGET_CONTINUE
+static jmethodID gMidCameraHold = NULL;      // setCameraHold(II)V — hold the camera turning, 0,0 releases
 static jmethodID gMidSetStonesHidden = NULL; // setStonesHidden(Z)V  (A4 — hide the engine tab stones)
 static jmethodID gMidSetChatRowH = NULL;     // setChatTabRowHeight(I)V  (A3 — bigger native chat tabs)
 static jmethodID gMidSetChatAreaW = NULL;    // setChatAreaWidth(I)V  (A3 — widen message area to align)
@@ -479,6 +480,7 @@ static BOOL ensureVeneer(void) {
     gMidOpenTab = ot;
     gMidContinueDlg = (*env)->GetStaticMethodID(env, global, "continueDialogue", "()V");
     gMidSelectOpt = (*env)->GetStaticMethodID(env, global, "selectDialogueOption", "(IJ)V");
+    gMidCameraHold = (*env)->GetStaticMethodID(env, global, "setCameraHold", "(II)V");
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         gMidContinueDlg = NULL;
@@ -2182,6 +2184,17 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidContinueDlg);
     if ((*env)->ExceptionCheck(env)) {
         bridgeNoteClear(env, "JVMLauncher.continueEngineDialogue");
+    }
+}
+
++ (void)setCameraHoldYaw:(int)dYaw pitch:(int)dPitch {
+    if (!ensureVeneer() || !gMidCameraHold)
+        return;
+    [JVMLauncher postKeepAlive]; // idle keepalive: a camera hold posts no canvas event of its own
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidCameraHold, (jint)dYaw, (jint)dPitch);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.setCameraHoldYaw");
     }
 }
 

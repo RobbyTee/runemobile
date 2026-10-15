@@ -154,6 +154,17 @@ public final class HudVeneerBridge
 	// WIDGET_CONTINUE handler, which is what this sends. The target is resolved on the client thread when the
 	// action fires, never stored: a remembered id goes stale the moment the dialogue changes type or closes,
 	// and firing a continue at a closed widget is exactly the kind of blind action this screen cannot afford.
+	// Held camera nudge, in engine units applied per FRAME while an arrow button is down (0 = not held). The
+	// camera is driven through the engine's own yaw/pitch TARGETS rather than by synthesizing a held arrow key:
+	// a key reaches the gamepack's listener and is consumed, but the engine does not act on a synthesized one,
+	// and a pinned button fires once on touch-up so there was never a held key to act on either way.
+	private static volatile int cameraHoldYaw;
+	private static volatile int cameraHoldPitch;
+	// Engine pitch limits. Yaw wraps freely; pitch does not, and winding past the end is not recoverable by the
+	// player, so it is clamped here rather than handed out of range.
+	private static final int CAMERA_PITCH_MIN = 128;
+	private static final int CAMERA_PITCH_MAX = 383;
+
 	private static volatile boolean pendingContinueDialogue;
 	// One-shot option pick: the row's child index, with the dialogue sequence the shell's tap targets were built
 	// from. dialogueSeq only moves when the published dialogue actually CHANGES, so comparing it rejects a tap
@@ -332,6 +343,20 @@ public final class HudVeneerBridge
 	public static void openWorldMap()
 	{
 		pendingOpenWorldMap = true;
+	}
+
+	/**
+	 * Native: hold the camera turning. Both deltas are per-frame engine units, and {@code 0, 0} releases.
+	 * Applied on the client thread in {@link #tick} for as long as the hold stands, so one press turns the
+	 * camera continuously without the shell having to repeat the call.
+	 *
+	 * @param dYaw   per-frame yaw delta; positive turns one way, negative the other
+	 * @param dPitch per-frame pitch delta, clamped to the engine's usable range
+	 */
+	public static void setCameraHold(int dYaw, int dPitch)
+	{
+		cameraHoldYaw = dYaw;
+		cameraHoldPitch = dPitch;
 	}
 
 	/** Native: advance the open chat dialogue. Applied on the client thread in {@link #tick}. */
@@ -867,6 +892,9 @@ public final class HudVeneerBridge
 				openWorldMapNow(c);
 			}
 
+			// Held, not one-shot: re-applied every frame the arrow stays down.
+			applyCameraHold(c);
+
 			// One-shot: advance the chat dialogue through the engine's own continue handler.
 			if (pendingContinueDialogue)
 			{
@@ -1315,6 +1343,37 @@ public final class HudVeneerBridge
 		catch (RuntimeException ignore)
 		{
 			BridgeFaults.note("HudVeneerBridge.selectDialogueOptionNow", ignore);
+		}
+	}
+
+	/**
+	 * Turn the camera while an arrow is held. Accumulates onto the TARGET yaw/pitch, not the live ones: the live
+	 * values lag behind the target and can be overridden by the engine during a cutscene, so reading them back
+	 * would fight whatever else is moving the camera.
+	 */
+	private static void applyCameraHold(Client c)
+	{
+		final int dYaw = cameraHoldYaw;
+		final int dPitch = cameraHoldPitch;
+		if (dYaw == 0 && dPitch == 0)
+		{
+			return;
+		}
+		try
+		{
+			if (dYaw != 0)
+			{
+				c.setCameraYawTarget((c.getCameraYawTarget() + dYaw) & 2047);
+			}
+			if (dPitch != 0)
+			{
+				final int p = c.getCameraPitchTarget() + dPitch;
+				c.setCameraPitchTarget(Math.max(CAMERA_PITCH_MIN, Math.min(CAMERA_PITCH_MAX, p)));
+			}
+		}
+		catch (RuntimeException ignore)
+		{
+			BridgeFaults.note("HudVeneerBridge.applyCameraHold", ignore);
 		}
 	}
 

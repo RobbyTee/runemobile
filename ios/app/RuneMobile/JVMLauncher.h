@@ -277,6 +277,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Advance the open chat dialogue through the engine's own continue handler.
 + (void)continueEngineDialogue;
 
+/// Hold the camera turning by a per-frame yaw/pitch delta; `0, 0` releases it. The engine's own camera
+/// targets are driven directly -- it does not act on a synthesized held arrow key.
++ (void)setCameraHoldYaw:(int)dYaw pitch:(int)dPitch;
+
 /// Bumped only when the published dialogue CHANGES, so it identifies which dialogue the shell is looking at.
 + (long long)dialogueSeq;
 

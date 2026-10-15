@@ -1783,10 +1783,12 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         add(@"Numbers", ([NSString stringWithFormat:@"num%d", i]),
             ([NSString stringWithFormat:@"%d", i]), @"key", AWT_VK_0 + i);
     add(@"Numbers", @"num0", @"0", @"key", AWT_VK_0);
-    add(@"Camera", @"left", @"←", @"key", AWT_VK_LEFT);
-    add(@"Camera", @"up", @"↑", @"key", AWT_VK_UP);
-    add(@"Camera", @"right", @"→", @"key", AWT_VK_RIGHT);
-    add(@"Camera", @"down", @"↓", @"key", AWT_VK_DOWN);
+    // Held camera controls, not key strokes: the engine does not act on a synthesized arrow, and a momentary
+    // press could not turn a camera that moves while a key is DOWN. The vk is kept as the direction tag.
+    add(@"Camera", @"left", @"←", @"cam", AWT_VK_LEFT);
+    add(@"Camera", @"up", @"↑", @"cam", AWT_VK_UP);
+    add(@"Camera", @"right", @"→", @"cam", AWT_VK_RIGHT);
+    add(@"Camera", @"down", @"↓", @"cam", AWT_VK_DOWN);
     add(@"Utility", @"screenshot", @"📷", @"util", 0);
     add(@"Utility", @"pip", @"📺", @"util", 0);
     add(@"Utility", @"hotkeys", @"⚡", @"util", 0);
@@ -1888,12 +1890,48 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         b.tintColor = [UIColor blackColor];
     }
     objc_setAssociatedObject(b, "rmSpec", spec, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if ([spec[@"kind"] isEqualToString:@"cam"]) {
+        // A hold needs both edges, and EVERY way a touch can end has to release it -- a cancel (an incoming
+        // call, the app going away mid-press) included, or the camera would keep turning with nothing held.
+        [b addTarget:self action:@selector(onCameraHoldBegin:) forControlEvents:UIControlEventTouchDown];
+        [b addTarget:self
+                      action:@selector(onCameraHoldEnd:)
+            forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside |
+                             UIControlEventTouchCancel | UIControlEventTouchDragExit];
+        return b;
+    }
     [b addTarget:self action:@selector(onPinnedControlTapped:) forControlEvents:UIControlEventTouchUpInside];
     return b;
 }
 
 // Fire the tapped pinned control by its spec: latch → toggle held; key → momentary keystroke; util → route to
 // the existing native action (which owns the keyboard field / screenshot / PiP / hotkey strip).
+// Per-frame camera deltas while an arrow is held. The engine applies these every frame it renders, so the
+// turn rate follows the frame rate; these values are tuned for the ~20-50fps the device actually runs at.
+static const int kCamYawStep = 14;
+static const int kCamPitchStep = 7;
+
+- (void)onCameraHoldBegin:(UIButton *)b {
+    NSDictionary *spec = objc_getAssociatedObject(b, "rmSpec");
+    const int vk = [spec[@"vk"] intValue];
+    int dYaw = 0, dPitch = 0;
+    if (vk == AWT_VK_LEFT)
+        dYaw = -kCamYawStep;
+    else if (vk == AWT_VK_RIGHT)
+        dYaw = kCamYawStep;
+    else if (vk == AWT_VK_UP)
+        dPitch = kCamPitchStep;
+    else if (vk == AWT_VK_DOWN)
+        dPitch = -kCamPitchStep;
+    [JVMLauncher setCameraHoldYaw:dYaw pitch:dPitch];
+    [self appendLine:[NSString stringWithFormat:@"[shell] camera hold %@ yaw=%d pitch=%d", spec[@"glyph"], dYaw,
+                                                dPitch]];
+}
+
+- (void)onCameraHoldEnd:(UIButton *)b {
+    [JVMLauncher setCameraHoldYaw:0 pitch:0];
+}
+
 - (void)onPinnedControlTapped:(UIButton *)b {
     NSDictionary *spec = objc_getAssociatedObject(b, "rmSpec");
     NSString *kind = spec[@"kind"];
