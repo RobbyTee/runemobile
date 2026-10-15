@@ -890,14 +890,28 @@ private fun LauncherGrid(
         KeepaliveRow() // PARITY-P0-1: background-session keepalive toggle (default ON)
         DeveloperModeRow() // P2-1: developer-mode toggle (perf chip + dev panel; default OFF)
         SectionLabel("Renderers")
+        // Light the tile the NEXT BOOT will actually run, not the raw pick. A pushed marker or the TV default
+        // outranks the preference, and tiles lit from the pref alone told the user their choice had taken when
+        // the next launch would ignore it -- device-confirmed on 2026-10-15, where a July rlhd.mode marker pinned
+        // every boot to 117HD while the CPU tile sat lit and the caveat below was hidden (it only showed for a
+        // non-cpu pick, so the one case that needed explaining was the one case that said nothing).
+        val nextBoot = JvmLauncher.nextBootRenderer(renderer)
         TileGrid(
             listOf(
-                TileSpec("CPU", glyph = "▣", selected = renderer == "cpu") { onRendererSelect("cpu") },
-                TileSpec("GPU", glyph = "▤", selected = renderer == "gpu") { onRendererSelect("gpu") },
-                TileSpec("117HD", glyph = "✦", selected = renderer == "117hd") { onRendererSelect("117hd") },
+                TileSpec("CPU", glyph = "▣", selected = nextBoot == "cpu") { onRendererSelect("cpu") },
+                TileSpec("GPU", glyph = "▤", selected = nextBoot == "gpu") { onRendererSelect("gpu") },
+                TileSpec("117HD", glyph = "✦", selected = nextBoot == "117hd") { onRendererSelect("117hd") },
             ),
         )
-        if (renderer != "cpu") {
+        if (nextBoot != renderer) {
+            Text(
+                "A device marker or this device's default forces ${nextBoot.uppercase()} on the next launch, " +
+                    "so the ${renderer.uppercase()} pick won't apply.",
+                color = Color(0xFFFFB74D),
+                fontSize = 11.sp,
+                modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+            )
+        } else if (nextBoot != "cpu") {
             Text(
                 "Renderer change applies on next launch.",
                 color = Color(0xFF9E9E9E),
