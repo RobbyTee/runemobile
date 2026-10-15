@@ -15,11 +15,18 @@ first run is expected to *teach us what breaks first*, not necessarily to reach 
 | `RuneMobile/ViewController.m` | on-screen console, wait-for-JIT poll, stdout/stderr capture |
 | `RuneMobile/RuneMobile.entitlements` | `increased-memory-limit` only (see Claim D) |
 | `scripts/resign-jre.sh` | build phase: re-sign every Mach-O in the embedded `jre/` (Claim A) |
+| `scripts/check-staged-jar.sh` | build phase: refuse a bundle whose `client-shaded.jar` is the pristine desktop jar |
 | `jvm-resources/src/Hello.java` + `Hello.jar` | the payload (prints VM name / `mixed mode` / compile-ms verdict) |
 | `../dev-tools/jre/` | the verified Amethyst `jre21` (gitignored; folder-referenced into the `.app` as `jre/`) |
 
 ## Build / run loop (you drive Xcode + StikDebug)
-1. **Generate the project:** `cd ios/app && xcodegen generate`
+1. **Generate the project:** `cd ios/app && xcodegen generate`, then **stage the client jar**:
+   `( cd ../dev-tools/gpu-routec && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./stage-ios-gpu-jar.sh )`.
+   That writes `jvm-resources/client-shaded.jar`, the iOS variant of the shaded client, with `org.lwjgl`
+   and `net.runelite.rlawt` replaced by the native GL facade. The bundle requires the file, and the
+   `check-staged-jar` phase fails the build if it is the **pristine desktop jar** instead — that jar
+   builds, boots and renders, but the GPU renderer cannot start against it (no `GLALL`, so the GL bridge
+   never registers, and the surviving `librlawt` is a macOS dylib that `dlopen` refuses on device).
 2. **Open `RuneMobile.xcodeproj` in Xcode 26.5.** Set the target's **Team** to your free Apple ID, plug in the
    iPhone 17 Pro Max, **Build + Run** (or Archive → AltStore install). The `resign-jre` phase re-signs the
    bundled JRE dylibs with your cert.
