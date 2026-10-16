@@ -153,8 +153,10 @@ next launch as usual.
 - [ ] `versionName` / `versionCode` bumped; `android/CHANGELOG.md` updated.
 - [ ] `PRIVACY.md` still accurate (re-check if any data flow changed).
 - [ ] Built against the current OSRS revision (no `js5connect_outofdate`).
-- [ ] **`altstore.json` uploaded to the stable release** (`gh release upload <tag> dist/ci/altstore.json
-      --clobber`). The feed is served from whichever release is Latest, so a stable release published
-      without it leaves every AltStore user pinned to the previous version while being told they are up
-      to date. `build-release-artifacts.sh` regenerates it whenever an IPA is built; the rolling
-      publisher deliberately does not upload it.
+- [ ] **Published with `tools/ci/publish-stable-release.sh <tag>`**, not a hand-written
+      `gh release create`. The AltStore feed is served from whichever release is Latest, so a stable
+      release published without `altstore.json` attached leaves every user pinned to the previous
+      version while being told they are up to date. The script refuses to publish a tag that disagrees
+      with the built version or a manifest describing a different release, and re-reads the live feed
+      afterwards to prove it took. (The rolling publisher deliberately does not upload the manifest —
+      prereleases must never be offered as updates.)
