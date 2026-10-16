@@ -1,0 +1,92 @@
+# iOS-only build for this fork — produces an unsigned/ad-hoc .ipa as a downloadable workflow artifact.
+#
+# Why a separate workflow: release-hosted.yml is pinned to the canonical repo (repository_id check), also builds a
+# release-signed APK that needs the upstream maintainer's keystore secrets, and pulls the iOS JRE from a release
+# asset (`ios-jre-dep`) that only exists on the canonical repo. This workflow needs NO secrets: it builds iOS only,
+# ad-hoc-signs (SideStore/AltStore re-sign on-device at install), and provisions the JRE itself from the pinned
+# Amethyst artifact documented in ios/dev-tools/JRE21-INVENTORY.md — checksum-verified, then patched with
+# ios/dev-tools/patch-jre-txm.sh (which refuses to touch unexpected bytes). Either check failing aborts the build.
+#
+# Output: Actions → this run → Artifacts → "RuneMobile-ipa" (the .ipa + the StikDebug runelite-jit.js script).
+
+name: ios-fork-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, 'claude/**']
+    paths-ignore:
+      - '**/*.md'
+      - 'LICENSE'
+
+concurrency:
+  group: ios-fork-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-ipa:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      IOS_ADHOC: "1"
+      PLATFORMS: ios
+      # Pinned iOS JRE (Amethyst CDN) — see ios/dev-tools/JRE21-INVENTORY.md.
+      JRE_URL: https://crystall1ne.dev/cdn/amethyst-ios/jre21-ios-aarch64.zip
+      JRE_SHA256: 2c405fcc8c1cf95773617a93a2b090192191c871874cf1408f7a52500d8f0c71
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Compute build env
+        run: |
+          echo "BUILD_NUMBER=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "CI_CONFIG_DIR=$RUNNER_TEMP/runemobile-ci" >> "$GITHUB_ENV"
+          echo "DIST=$RUNNER_TEMP/dist" >> "$GITHUB_ENV"
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Fetch, verify and patch the iOS JRE
+        run: |
+          set -euo pipefail
+          W="$RUNNER_TEMP/jre-work"
+          rm -rf "$W"; mkdir -p "$W/unzip" "$W/jre"
+          curl -fSL --retry 3 -o "$W/jre.zip" "$JRE_URL"
+          echo "$JRE_SHA256  $W/jre.zip" | shasum -a 256 -c -
+          unzip -q "$W/jre.zip" -d "$W/unzip"
+          TARBALL="$(find "$W/unzip" -name 'jre21-ios-arm64-*-release.tar.xz' -print -quit)"
+          [ -n "$TARBALL" ] || { echo "::error::no jre21-ios-arm64-*-release.tar.xz inside the zip"; exit 1; }
+          tar -xf "$TARBALL" -C "$W/jre"
+          LIBJVM="$(find "$W/jre" -path '*/lib/server/libjvm.dylib' -print -quit)"
+          [ -n "$LIBJVM" ] || { echo "::error::no lib/server/libjvm.dylib in the extracted JRE"; exit 1; }
+          JRE_ROOT="$(cd "$(dirname "$LIBJVM")/../.." && pwd)"
+          grep -q 'JAVA_VERSION="21' "$JRE_ROOT/release" || { echo "::error::extracted JRE is not Java 21"; exit 1; }
+          ios/dev-tools/patch-jre-txm.sh "$JRE_ROOT/lib/server/libjvm.dylib"
+          mkdir -p "$CI_CONFIG_DIR"
+          rm -rf "$CI_CONFIG_DIR/ios-jre"
+          mv "$JRE_ROOT" "$CI_CONFIG_DIR/ios-jre"
+          ls "$CI_CONFIG_DIR/ios-jre"
+
+      - name: Build ad-hoc IPA
+        run: |
+          export GIT_SHA="$(git rev-parse --short HEAD)"
+          tools/ci/build-release-artifacts.sh
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: RuneMobile-ipa
+          path: |
+            ${{ env.DIST }}/*.ipa
+            ${{ env.DIST }}/runelite-jit.js
+          if-no-files-found: error
+          retention-days: 30
