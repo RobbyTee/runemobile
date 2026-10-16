@@ -9,6 +9,29 @@ accepts update-in-place.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-16
+### Fixed
+- Dialogue boxes the game opens for itself could not be answered at all. Quest confirmations, "are you
+  sure you want to destroy this", crate and reward boxes — anything the game puts in the chat area that
+  isn't one of the handful of dialogue layouts the client knows by name — were not treated as dialogues,
+  so the native chat veneer stayed on top of the box and a tap on Yes or No either went to the chat or
+  resolved against the scene behind it, walking the character away and ending the conversation. Any box
+  the game opens in the chat area is now recognised as a dialogue, covered, and answered by pressing the
+  button under your finger rather than clicking through it.
+- Tapping near the top of a dialogue switched a chat channel instead of answering it (Android). The
+  native chat tab row is drawn across the top of the chat area, which is exactly where the dialogue
+  appears, and it took the tap before the box underneath could see it. The row now steps aside for as
+  long as a dialogue is open, as it already did on iOS.
+- A tap meant for one dialogue could answer the next one. A tap waiting on the game thread survived a
+  loading screen or a world hop, so it could land on whichever box happened to be open when the game
+  came back. A waiting tap is now stamped with the frame it was made on, and dropped if it hasn't been
+  applied by the next one.
+
+### Added
+- The app now says at launch that it is built for the Resizable - Modern layout, with a "don't show
+  again" for anyone who has already set it. The touch controls, chat and overlays are laid out against
+  that layout and no other, which was true but written down nowhere.
+
 ## [0.2.2] - 2026-10-15
 ### Fixed
 - The renderer could ignore the setting entirely. Marker files used by development and test runs were
