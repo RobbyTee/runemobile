@@ -284,5 +284,12 @@ fi
 	printf 'DIST=%q\n'           "$DIST"
 } > "$DIST/manifest.env"
 
+# AltStore/SideStore source manifest. Only meaningful when an IPA was built (iOS-only or both); an
+# Android-only build has nothing to advertise, so skip it rather than publish a feed pointing at no file.
+if [ -f "$DIST/RuneMobile-$VERSION.ipa" ]; then
+	log "AltStore source manifest"
+	"$ROOT/tools/ci/make-altstore-source.sh" "$DIST"
+fi
+
 log "DONE — artifacts in $DIST:"
 ls -la "$DIST" | sed 's/^/    /'
