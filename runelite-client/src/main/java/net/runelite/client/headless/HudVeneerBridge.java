@@ -36,11 +36,13 @@ import net.runelite.api.ChatLineBuffer;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.HashTable;
 import net.runelite.api.MessageNode;
 import net.runelite.api.Player;
 import net.runelite.api.ScriptID;
 import net.runelite.api.SpritePixels;
 import net.runelite.api.VarClientStr;
+import net.runelite.api.WidgetNode;
 import net.runelite.api.events.BeforeRender;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarClientID;
@@ -2582,11 +2584,12 @@ public final class HudVeneerBridge
 	}
 
 	/** Is any chatbox dialogue interface open — NPC/player chat, "Select an Option", a "click here to continue"
-	 *  message, a level-up, a make-X/quantity selector, or an item-reward box? These render into the chatbox
-	 *  region; checking their content widget (loaded + shown) mirrors the in-tree dialogue plugins' detection. */
+	 *  message, a level-up, a make-X/quantity selector, an item-reward box, or a box only the content that opened
+	 *  it has a name for? The named kinds are read off their content widget (loaded + shown), mirroring the
+	 *  in-tree dialogue plugins' detection; {@link #chatboxSubInterface} answers for the rest. */
 	private static boolean isDialogueOpen(Client c)
 	{
-		return widgetShown(c, InterfaceID.ChatLeft.TEXT)        // NPC dialogue
+		final boolean named = widgetShown(c, InterfaceID.ChatLeft.TEXT)   // NPC dialogue
 			|| widgetShown(c, InterfaceID.ChatRight.TEXT)       // player dialogue
 			|| widgetShown(c, InterfaceID.ChatBoth.TEXT)        // combined NPC+player dialogue
 			|| widgetShown(c, InterfaceID.Chatmenu.OPTIONS)     // "Select an Option"
@@ -2595,6 +2598,67 @@ public final class HudVeneerBridge
 			|| widgetShown(c, InterfaceID.Skillmulti.TITLE)     // make-X / quantity
 			|| widgetShown(c, InterfaceID.Objectbox.TEXT)       // single-item reward box
 			|| widgetShown(c, InterfaceID.ObjectboxDouble.TEXT); // double-item reward box
+		if (named)
+		{
+			noteUnnamedDialogue(-1);
+			return true;
+		}
+		final int sub = chatboxSubInterface(c);
+		noteUnnamedDialogue(sub);
+		return sub >= 0;
+	}
+
+	/** The group of an interface the engine has opened ONTO THE CHATBOX, or -1 when there is none. That
+	 *  attachment is what a chatbox dialogue IS — the engine opens the dialogue's own interface on a chatbox
+	 *  component and the component table records it — so reading it answers for every dialogue, including the
+	 *  ones a list of groups cannot name: a quest's own "do you wish to take one?" confirm box is as real a
+	 *  dialogue as an NPC's, and one we don't recognise is not merely drawn wrong. It leaves the native tab row
+	 *  over the box, the chat message area force-shown under it, and every tap on it routed to the chat veneer,
+	 *  which answers with a click the dialogue never sees — the "I cannot tap Yes / No" report.
+	 *  (The chatbox itself hangs off the TOPLEVEL, so it can never match its own test.) */
+	private static int chatboxSubInterface(Client c)
+	{
+		try
+		{
+			final HashTable<WidgetNode> open = c.getComponentTable();
+			if (open == null)
+			{
+				return -1;
+			}
+			for (final WidgetNode n : open)
+			{
+				// Keyed by the PARENT COMPONENT the interface was opened on (what getParentId returns for its
+				// root); the dialogue kinds we already model all attach to a component of the chatbox group.
+				if (n != null && (((int) n.getHash()) >>> 16) == InterfaceID.CHATBOX)
+				{
+					return n.getId();
+				}
+			}
+		}
+		catch (RuntimeException ex)
+		{
+			BridgeFaults.note("HudVeneerBridge.chatboxSubInterface", ex);
+		}
+		return -1;
+	}
+
+	// The group noteUnnamedDialogue last reported, so one open writes one line. -1 = none open (or a named one).
+	private static int lastUnnamedDialogueGroup = -1;
+
+	/** Name an open chatbox dialogue that none of the named kinds matched, once per open. These are handled
+	 *  generically — the engine draws the box and owns the taps on it — so nothing depends on this line; it is
+	 *  here so the NEXT such report arrives with its interface group already identified rather than described. */
+	private static void noteUnnamedDialogue(int group)
+	{
+		if (group == lastUnnamedDialogueGroup)
+		{
+			return;
+		}
+		lastUnnamedDialogueGroup = group;
+		if (group >= 0)
+		{
+			log.info("[veneer] chatbox dialogue group={} — unnamed kind, engine-drawn + engine-owned taps", group);
+		}
 	}
 
 	/** Canvas-px bounds {x,y,w,h} of the currently-open dialogue's ROOT interface (its own UNIVERSE — the dialogue
@@ -2626,7 +2690,9 @@ public final class HudVeneerBridge
 				return b;
 			}
 		}
-		return null;
+		// An unnamed kind: its root component (child 0) is the dialogue's rect, same as the UNIVERSE entries above.
+		final int sub = chatboxSubInterface(c);
+		return sub >= 0 && widgetShown(c, sub << 16) ? canvasBounds(c.getWidget(sub << 16)) : null;
 	}
 
 	/** Build {@link #dialogueJson} from the open dialogue's engine widgets, for the native opaque-parchment
