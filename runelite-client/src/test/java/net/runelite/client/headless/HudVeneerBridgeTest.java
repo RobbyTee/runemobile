@@ -381,4 +381,53 @@ public class HudVeneerBridgeTest
 
 		verify(c).menuAction(-1, (584 << 16) | 8, MenuAction.CC_OP, 1, -1, "No", "");
 	}
+
+	@Test
+	public void tapIsDroppedWhenTheSameGroupReopensAfterAGap()
+	{
+		// The case the group check CANNOT see: a destroy prompt replaced by another destroy prompt -- same group,
+		// different item. Reaching it needs the gap that makes a tap survive at all: tick returns early while
+		// logged out, so the tap is never consumed there, and the engine runs on without it. The tap is dated for
+		// exactly this, and two ticks later it is no longer an answer to anything the finger was on.
+		final Widget first = widgetAt(584 << 16, 93, 8, 519, 142);
+		final Widget firstYes = widgetAt((584 << 16) | 7, 300, 100, 60, 30, "Continue");
+		when(first.getStaticChildren()).thenReturn(new Widget[]{firstYes});
+		final Client tapped = clientWithDialogue(InterfaceID.CONFIRMDESTROY, first);
+
+		final Widget second = widgetAt(584 << 16, 93, 8, 519, 142);
+		final Widget secondYes = widgetAt((584 << 16) | 7, 300, 100, 60, 30, "Continue");
+		when(second.getStaticChildren()).thenReturn(new Widget[]{secondYes});
+		final Client live = clientWithDialogue(InterfaceID.CONFIRMDESTROY, second);
+
+		final Client loading = mock(Client.class);
+		when(loading.getGameState()).thenReturn(GameState.LOADING);
+
+		HudVeneerBridge.relocateChat(93, 8, true);
+		HudVeneerBridge.tick(tapped);          // the first prompt is on screen
+		HudVeneerBridge.tapDialogue(320, 115); // ... and the tap is dated to it
+		HudVeneerBridge.tick(loading);         // a hop: the tap is not consumed, but time passes
+		HudVeneerBridge.tick(loading);
+		HudVeneerBridge.tick(live);            // back, with another prompt of the SAME group open
+
+		verify(live, never()).menuAction(anyInt(), anyInt(), any(MenuAction.class), anyInt(), anyInt(),
+			anyString(), anyString());
+	}
+
+	@Test
+	public void aTapTakenAfterThisTicksResolveIsStillAnsweredByTheNextOne()
+	{
+		// The other side of dating a tap: one ticks' staleness is the NORMAL path, not a stale tap. A finger that
+		// lands after this tick's one-shot has already run is answered by the following tick, and must be.
+		final Widget box = widgetAt(584 << 16, 93, 8, 519, 142);
+		final Widget yes = widgetAt((584 << 16) | 7, 300, 100, 60, 30, "Continue");
+		when(box.getStaticChildren()).thenReturn(new Widget[]{yes});
+		final Client c = clientWithDialogue(InterfaceID.CONFIRMDESTROY, box);
+
+		HudVeneerBridge.relocateChat(93, 8, true);
+		HudVeneerBridge.tick(c);
+		HudVeneerBridge.tapDialogue(320, 115);
+		HudVeneerBridge.tick(c);
+
+		verify(c).menuAction(-1, (584 << 16) | 7, MenuAction.CC_OP, 1, -1, "Continue", "");
+	}
 }

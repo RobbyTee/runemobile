@@ -175,14 +175,27 @@ public final class HudVeneerBridge
 	// and a box that closed in between (quest step advancing, a dialogue replacing it) would be answered in the
 	// player's name by a tap meant for something else -- the same hazard selectDialogueOption's seq guard exists
 	// for. The seq cannot serve here: it moves only when the PUBLISHED dialogue json changes, and these kinds
-	// publish none, so it sits still across two different boxes. It rejects a DIFFERENT box, not the same group
-	// re-opened for another item, which is the same limit the seq guard has.
+	// publish none, so it sits still across two different boxes.
 	//
-	// group|x|y packed into one atomic (16 bits each) so the client thread can never read a torn trio: a point
-	// validated against another tap's group would reintroduce exactly what the guard is for. Canvas coordinates
-	// and interface groups all fit 16 bits. NO_TAP (bit 63) is a value the packing cannot produce.
+	// The group alone cannot answer "is this still the same box": the SAME group re-opened for another item
+	// reads identical, and the engine gives no per-open identity to compare (it rebuilds a group's widgets, but
+	// is not required to hand back new objects). So the tap is also DATED, and answered only on the tick it was
+	// taken or the next one -- which is every tap that is not stale, since the one-shot runs every tick. That
+	// bounds the staleness in TIME instead of by identity, and covers what the group check cannot see: a box
+	// replaced by another of its own group while the tap waited.
+	//
+	// gen|group|x|y packed into one atomic so the client thread can never read a torn set: a point validated
+	// against another tap's group, or dated by another tap's tick, would reintroduce exactly what this guards.
+	// Canvas coordinates and interface groups fit 16 bits; the generation takes the 15 below the sign bit, so
+	// NO_TAP (bit 63) stays a value the packing cannot produce. It wraps, and is compared as a wrapped
+	// difference, which a counter this is only ever asked about two ticks of can afford.
 	private static final long NO_TAP = Long.MIN_VALUE;
 	private static final AtomicLong pendingDialogueTap = new AtomicLong(NO_TAP);
+	// Display ticks since the bridge started. Written on the client thread, read by tapDialogue on the native one.
+	private static volatile int tickGen;
+	// How many ticks old a queued tap may be when it resolves. 1, not 0: a tap landing after this tick's one-shot
+	// has already run is answered by the next one, and that is the normal path, not a stale tap.
+	private static final int MAX_TAP_AGE_TICKS = 1;
 
 	// Native chat-tab veneer (A3 bigger buttons). chatTabRowH = the canvas-px height the native (enlarged) tab row
 	// occupies; the message area (CHATAREA) is pushed down past it instead of the engine's 23px CONTROLS row. 0 =
@@ -402,12 +415,13 @@ public final class HudVeneerBridge
 		// Stamped with the box that was open as of the last tick -- the one that was on screen under the finger.
 		// A tap taken while a NAMED kind is open stamps -1, which no live group matches, so it is dropped: the
 		// shells only route here for the unmodelled kinds, and a lagging shell must not answer a chat dialogue.
-		pendingDialogueTap.set(packTap(lastUnnamedDialogueGroup, canvasX, canvasY));
+		pendingDialogueTap.set(packTap(tickGen, lastUnnamedDialogueGroup, canvasX, canvasY));
 	}
 
-	private static long packTap(int group, int x, int y)
+	private static long packTap(int gen, int group, int x, int y)
 	{
-		return ((long) (group & 0xffff) << 32) | ((long) (x & 0xffff) << 16) | (y & 0xffff);
+		return ((long) (gen & 0x7fff) << 48) | ((long) (group & 0xffff) << 32)
+			| ((long) (x & 0xffff) << 16) | (y & 0xffff);
 	}
 
 	/** The group out of a packed tap. 0xffff is the "none open" -1 coming back through 16 bits, and is returned
@@ -416,6 +430,12 @@ public final class HudVeneerBridge
 	{
 		final int g = (int) ((tap >> 32) & 0xffff);
 		return g == 0xffff ? -1 : g;
+	}
+
+	/** Ticks between the tap being taken and now, as a wrapped 15-bit difference. */
+	private static int tapAge(long tap)
+	{
+		return (tickGen - (int) ((tap >> 48) & 0x7fff)) & 0x7fff;
 	}
 
 	/** Native: the canvas-px height the enlarged native chat-tab row occupies, so the message area is pushed down
@@ -654,6 +674,13 @@ public final class HudVeneerBridge
 	/** Re-apply the requested chatbox state each frame. Client thread. */
 	public static void tick(Client c)
 	{
+		// Before the gate on purpose: this counter is what dates a queued dialogue tap, and the gap it has to
+		// measure is exactly the one this gate creates. A tap queued with a box open, followed by a loading
+		// screen or a world hop, is not consumed while logged out -- tick returns here without reaching the
+		// one-shot -- so the tap would otherwise come back alive and answer whatever box is open on return.
+		// If tick stops being called altogether the counter stands still, which is correct: no tick, no engine
+		// state change, so nothing can have replaced the box the finger was on.
+		tickGen++;
 		if (!ENABLED || c == null || c.getGameState() != GameState.LOGGED_IN)
 		{
 			return;
@@ -954,7 +981,8 @@ public final class HudVeneerBridge
 			final long tap = pendingDialogueTap.getAndSet(NO_TAP);
 			if (tap != NO_TAP)
 			{
-				tapDialogueNow(c, unpackTapGroup(tap), (int) ((tap >> 16) & 0xffff), (int) (tap & 0xffff));
+				tapDialogueNow(c, unpackTapGroup(tap), tapAge(tap),
+					(int) ((tap >> 16) & 0xffff), (int) (tap & 0xffff));
 			}
 
 			tickWorldMap(c);
@@ -1427,10 +1455,17 @@ public final class HudVeneerBridge
 	 * for a static component, the child index for a dynamic one. A miss logs what IS under the finger, so a box
 	 * that answers to something else arrives already described instead of needing another report.
 	 */
-	private static void tapDialogueNow(Client c, int tappedGroup, int x, int y)
+	private static void tapDialogueNow(Client c, int tappedGroup, int ageTicks, int x, int y)
 	{
 		try
 		{
+			if (ageTicks > MAX_TAP_AGE_TICKS)
+			{
+				// Older than the tick after the one it was taken on, so the engine has run on without it: a
+				// loading screen, a world hop, a frame that threw. Whatever is open now, the finger was not on it.
+				log.info("[veneer] dialogue tap {},{} — dropped: {} ticks stale", x, y, ageTicks);
+				return;
+			}
 			final int group = chatboxSubInterface(c);
 			if (group != tappedGroup)
 			{
