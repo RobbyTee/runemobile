@@ -16,6 +16,39 @@
 > you can afford to lose, never your main.** Provided **as-is, without warranty, at
 > your own risk.** See [Legal notice](#legal-notice) and [Risk & disclaimer](#risk--disclaimer).
 
+## Get it
+
+**iOS — one tap:** add the release feed to your sideloader, then hit Install inside it. The feed always
+points at the newest build, so updates are one tap instead of a re-download.
+
+[![Add to AltStore](https://img.shields.io/badge/Add_source_to-AltStore-7B4DFF?style=for-the-badge&logo=apple&logoColor=white)](https://altstore.io/source/github.com/audaro/runemobile/releases/latest/download/altstore.json)
+[![SideStore](https://img.shields.io/badge/Add_source_to-SideStore-2D9CDB?style=for-the-badge&logo=apple&logoColor=white)](#add-the-feed-to-sidestore)
+[![Download IPA](https://img.shields.io/badge/iOS-download_.ipa-111111?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/audaro/runemobile/releases/latest)
+[![Download APK](https://img.shields.io/badge/Android-download_.apk-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/audaro/runemobile/releases/latest)
+
+Any AltStore-compatible client can use the feed directly:
+
+```
+https://github.com/audaro/runemobile/releases/latest/download/altstore.json
+```
+
+### Add the feed to SideStore
+
+SideStore adds sources through a `sidestore://` link, and GitHub strips non-web links from this page, so
+the button above cannot carry it. Either paste the feed URL above into **SideStore → Sources → +**, or
+open this link on the device itself:
+
+```
+sidestore://source?url=https://github.com/audaro/runemobile/releases/latest/download/altstore.json
+```
+
+**No sideloader yet?** Get [AltStore](https://altstore.io) or [SideStore](https://sidestore.io) first —
+both install the app from your own computer; neither needs a jailbreak. Full walkthrough:
+[Install — iOS](#install--ios). On Android there is no store: the
+[APK](https://github.com/audaro/runemobile/releases/latest) installs directly.
+
+---
+
 A native **iOS and Android** application that runs the **genuine RuneLite client** —
 including the **full, unmodified plugin ecosystem** — on an **in-process, on-device
 OpenJDK 21**. No streaming, no companion PC, no host machine: the real RuneLite
@@ -30,6 +63,7 @@ engine and its plugins, with a native mobile UI layered on top.
 
 ## Contents
 
+- [Get it](#get-it)
 - [How it works](#how-it-works)
 - [Feature overview](#feature-overview)
 - [Platform status & supported devices](#platform-status--supported-devices)
