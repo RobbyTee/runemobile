@@ -6533,8 +6533,12 @@ static CGRect mapRectFromArr(NSArray *a) {
     // CHAT-2: a tap on the OPEN chat MESSAGE area is chat UI (continue dialogue, click a player name / chat link),
     // not the world behind the transparent chat — so click it PRECISELY (no world-snap, no walk-ring), like the
     // tab row above. The tab row is already handled+returned above, so this only catches the message area below it.
-    if (self.chatScrollable && self.chatScrollCanvas.size.width > 0
-            && CGRectContainsPoint(self.chatScrollCanvas, CGPointMake(gx, gy))) {
+    // ...but never while a dialogue owns that region. chatScrollable is cleared when a dialogue is detected, so
+    // this block was only ever reached with no dialogue open -- an invariant held in ANOTHER function, one chrome
+    // snapshot away. Until that snapshot lands (or if it never does) a stale YES sends the tap to the precise
+    // click below, which is the exact walk-the-player behaviour the dialogue block exists to prevent, and it
+    // returns before that block can run. State the precedence here instead of depending on the ordering.
+    if (self.chatScrollable && !self.chatDialogueActive && self.chatScrollCanvas.size.width > 0 && CGRectContainsPoint(self.chatScrollCanvas, CGPointMake(gx, gy))) {
         [JVMLauncher postClickPreciseX:gx y:gy button:1];
         [self appendLine:[NSString stringWithFormat:@"[shell] chat-msg tap %d,%d (precise, no ring)", gx, gy]];
         return;
