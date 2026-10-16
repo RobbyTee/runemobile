@@ -3283,33 +3283,39 @@ class MainActivity : AppCompatActivity() {
         val sx = if (fw > 0 && vw > 0) vw.toFloat() / fw else 1f
         val sy = if (fh > 0 && vh > 0) vh.toFloat() / fh else 1f
         val chatSnap = if (on) JvmLauncher.chatSnapshotPub() else ""
-        val n = chatTabOverlay.update(chatSnap, sx, sy, on)
+        // Read the dialogue state BEFORE driving the tab row, because while a dialogue is open the row has to go
+        // away. It is an OPAQUE strip sitting on the top of the relocated chatbox -- which is exactly where the
+        // engine draws the dialogue -- so it covers the box's top edge, and ChatPillView.onTouchEvent consumes a
+        // tap anywhere in its band. That band is upstream of the dialogue gate in onSingleTapUp, so a tap on the
+        // box's top strip switched a chat channel instead of pressing the dialogue, and the box underneath never
+        // saw it. iOS hides its row on the same flag (ViewController.updateChatTabs -> hideChatTabs), which is
+        // why only this port was left holding that half of it.
+        val cs =
+            if (chatSnap.isEmpty()) {
+                null
+            } else {
+                try {
+                    org.json.JSONObject(chatSnap)
+                } catch (_: org.json.JSONException) {
+                    null
+                }
+            }
+        chatDialogueActive = cs?.optBoolean("dialogueActive", false) ?: false
+        dialogueChatCanvas =
+            if (cs != null && cs.has("dlgW")) {
+                intArrayOf(cs.optInt("dlgX"), cs.optInt("dlgY"), cs.optInt("dlgW"), cs.optInt("dlgH"))
+            } else {
+                null
+            }
+        // The row's own enable gate from here on: the dialogue owns the chatbox region for as long as it is open.
+        val tabsOn = on && !chatDialogueActive
+        val n = chatTabOverlay.update(chatSnap, sx, sy, tabsOn)
         // Path B: when the engine renders its own opaque dialogue (engineDialogue), SUPPRESS the native parchment so
         // the engine's dialogue + full 3D head shows through. Otherwise (make-X/reward boxes, or Path-B off) draw the
         // native parchment as before.
         val engineDlg = chatSnap.contains("\"engineDialogue\":true")
-        // Dialogue tap-guard state (mirrors iOS ViewController.m): keep the raw dialogueActive bit + the published
-        // dialogue chatbox rect so onSingleTapUp can precise-click a tap landing in the dialogue region instead of
-        // leaking a world walk/ring. Only maintained while the chat veneer is active; reset when it isn't so the
-        // guard cleanly disengages (unsupported layout / map open / chat off all send an empty chatSnap).
-        if (chatSnap.isEmpty()) {
-            chatDialogueActive = false
-            dialogueChatCanvas = null
-        } else {
-            try {
-                val cs = org.json.JSONObject(chatSnap)
-                chatDialogueActive = cs.optBoolean("dialogueActive", false)
-                dialogueChatCanvas =
-                    if (cs.has("dlgW")) {
-                        intArrayOf(cs.optInt("dlgX"), cs.optInt("dlgY"), cs.optInt("dlgW"), cs.optInt("dlgH"))
-                    } else {
-                        null
-                    }
-            } catch (_: org.json.JSONException) {
-                chatDialogueActive = false
-                dialogueChatCanvas = null
-            }
-        }
+        // (chatDialogueActive + dialogueChatCanvas are set above, before the tab row is driven off them: the tap
+        // guard in onSingleTapUp needs the rect, and the row needs to be out of the way of the same region.)
         // One call for the json and its publish seq: fetched separately they can skew, and a skewed seq latches
         // into the parchment's rows and gets every option tap refused (see DialoguePublish).
         val show = on && !engineDlg
@@ -3335,11 +3341,13 @@ class MainActivity : AppCompatActivity() {
             }
             dialogueWasActive = engineDlg
         }
-        if (on && n > 0 && !chatTabsLogged) {
+        if (tabsOn && n > 0 && !chatTabsLogged) {
             chatTabsLogged = true
             Log.i(TAG, "ANDROID_A3_CHATTABS_GREEN enlarged native chat-tab row drawn ($n tabs) sx=$sx sy=$sy")
         }
-        val wantRowH = if (on) ChatPillView.ROW_H_CANVAS else 0
+        // Follows the native row: with it hidden, give the engine its own 23px CONTROLS row back, exactly as
+        // iOS's hideChatTabs does (setEngineChatTabRowHeight:0).
+        val wantRowH = if (tabsOn) ChatPillView.ROW_H_CANVAS else 0
         if (wantRowH != lastChatRowH) {
             lastChatRowH = wantRowH
             JvmLauncher.onBridge {
