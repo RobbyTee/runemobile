@@ -6523,9 +6523,13 @@ static CGRect mapRectFromArr(NSArray *a) {
     // W3 A3: the relocated chat tab-row is UI, not the world. Send a PRECISE click straight to the engine (no
     // world-snap pulling it to a tile/entity) and DON'T draw the walk ring — taps there toggle a chat filter, they
     // don't walk. The rect moves with the safe-area relocate (chatHitCanvas, set in updateHudLayout).
+    // A dialogue outranks this too. hideChatTabs hides the buttons and sets the engine tab row to height 0, but
+    // leaves chatHitCanvas at the band applyChatRelocate gave it -- so while a dialogue is open this rect is a
+    // live tap target over a strip that no longer holds tabs, and the dialogue is what is drawn there. It is the
+    // TOP BAND of chatScrollCanvas (same origin and width), not a region beside it, so without this the dialogue
+    // handler below never sees a tap in it: the raw click goes to the scene behind the parchment.
     CGRect ch = self.chatHitCanvas;
-    if (ch.size.width > 0 && gx >= ch.origin.x && gx <= ch.origin.x + ch.size.width
-            && gy >= ch.origin.y && gy <= ch.origin.y + ch.size.height) {
+    if (!self.chatDialogueActive && ch.size.width > 0 && gx >= ch.origin.x && gx <= ch.origin.x + ch.size.width && gy >= ch.origin.y && gy <= ch.origin.y + ch.size.height) {
         [JVMLauncher postClickPreciseX:gx y:gy button:1];
         [self appendLine:[NSString stringWithFormat:@"[shell] chat-tab tap %d,%d (precise, no ring)", gx, gy]];
         return;
