@@ -33,8 +33,12 @@ jobs:
     env:
       IOS_ADHOC: "1"
       PLATFORMS: ios
-      # Pinned iOS JRE (Amethyst CDN) — see ios/dev-tools/JRE21-INVENTORY.md.
-      JRE_URL: https://crystall1ne.dev/cdn/amethyst-ios/jre21-ios-aarch64.zip
+      # Pinned iOS JRE (Amethyst) — see ios/dev-tools/JRE21-INVENTORY.md. Amethyst moved its CDN from
+      # crystall1ne.dev (now 404) to assets.angelauramc.dev (their current Makefile `jre:` target); the old host
+      # is kept as a fallback. The SHA-256 pin is the trust decision either way.
+      JRE_URLS: >-
+        https://assets.angelauramc.dev/openjdk/ios-arm64/jre21-ios-aarch64.zip
+        https://crystall1ne.dev/cdn/amethyst-ios/jre21-ios-aarch64.zip
       JRE_SHA256: 2c405fcc8c1cf95773617a93a2b090192191c871874cf1408f7a52500d8f0c71
     steps:
       - name: Checkout
@@ -60,9 +64,31 @@ jobs:
           set -euo pipefail
           W="$RUNNER_TEMP/jre-work"
           rm -rf "$W"; mkdir -p "$W/unzip" "$W/jre"
-          curl -fSL --retry 3 -o "$W/jre.zip" "$JRE_URL"
-          echo "$JRE_SHA256  $W/jre.zip" | shasum -a 256 -c -
+          got=0
+          for u in $JRE_URLS; do
+            echo "== trying $u"
+            if curl -fSL --retry 3 -o "$W/jre.zip" "$u"; then got=1; break; fi
+          done
+          [ "$got" = 1 ] || { echo "::error::could not download the iOS JRE from any host"; exit 1; }
           unzip -q "$W/jre.zip" -d "$W/unzip"
+          ACTUAL="$(shasum -a 256 "$W/jre.zip" | awk '{print $1}')"
+          if [ "$ACTUAL" != "$JRE_SHA256" ]; then
+            # Not trusted — print what changed so the pin/patch offsets can be re-derived deliberately, then stop.
+            echo "::error::iOS JRE SHA-256 mismatch: expected $JRE_SHA256, got $ACTUAL ($(stat -f %z "$W/jre.zip") bytes)"
+            unzip -l "$W/jre.zip" || true
+            T="$(find "$W/unzip" -name 'jre21-ios-arm64-*.tar.xz' -print -quit)"
+            if [ -n "$T" ]; then
+              mkdir -p "$W/diag" && tar -xf "$T" -C "$W/diag" || true
+              R="$(find "$W/diag" -name release -print -quit)"; [ -n "$R" ] && cat "$R"
+              L="$(find "$W/diag" -path '*/lib/server/libjvm.dylib' -print -quit)"
+              if [ -n "$L" ]; then
+                ls -l "$L"
+                for off in 0x81fc80 0x81fc88 0x81fc8c; do echo "bytes@$off: $(xxd -s $((off)) -l 4 -p "$L")"; done
+              fi
+            fi
+            exit 1
+          fi
+          echo "iOS JRE SHA-256 OK ($ACTUAL)"
           TARBALL="$(find "$W/unzip" -name 'jre21-ios-arm64-*-release.tar.xz' -print -quit)"
           [ -n "$TARBALL" ] || { echo "::error::no jre21-ios-arm64-*-release.tar.xz inside the zip"; exit 1; }
           tar -xf "$TARBALL" -C "$W/jre"
