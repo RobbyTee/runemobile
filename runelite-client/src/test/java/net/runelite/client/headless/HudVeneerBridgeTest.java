@@ -24,12 +24,14 @@
  */
 package net.runelite.client.headless;
 
+import java.awt.Rectangle;
 import java.util.Collections;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.HashTable;
 import net.runelite.api.WidgetNode;
 import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.widgets.Widget;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -197,5 +199,23 @@ public class HudVeneerBridgeTest
 
 		assertTrue("only the chatbox's own open interfaces are dialogues",
 			HudVeneerBridge.getChatSnapshot().contains("\"dialogueActive\":false"));
+	}
+
+	@Test
+	public void unnamedDialogueRectComesFromItsRootComponent()
+	{
+		// The shells union this rect with the chatbox rect to decide which taps belong to the dialogue, so an
+		// unnamed kind has to publish one of its own: its root component (child 0), the same component the named
+		// kinds' UNIVERSE entries name. Without it the box is detected but its rect is whatever the chat says.
+		final Client c = loggedInClientWith(openInterface(InterfaceID.Chatbox.MES_LAYER, InterfaceID.CONFIRMDESTROY));
+		final Widget root = mock(Widget.class);
+		when(root.getBounds()).thenReturn(new Rectangle(93, 8, 519, 142));
+		when(c.getWidget(InterfaceID.Confirmdestroy.UNIVERSE)).thenReturn(root);
+		HudVeneerBridge.relocateChat(93, 8, true);
+
+		HudVeneerBridge.tick(c);
+
+		assertTrue("the unnamed dialogue's own rect, in canvas px",
+			HudVeneerBridge.getChatSnapshot().contains("\"dlgX\":93,\"dlgY\":8,\"dlgW\":519,\"dlgH\":142"));
 	}
 }
