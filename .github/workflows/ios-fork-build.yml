@@ -3,8 +3,8 @@
 # Why a separate workflow: release-hosted.yml is pinned to the canonical repo (repository_id check), also builds a
 # release-signed APK that needs the upstream maintainer's keystore secrets, and pulls the iOS JRE from a release
 # asset (`ios-jre-dep`) that only exists on the canonical repo. This workflow needs NO secrets: it builds iOS only,
-# ad-hoc-signs (SideStore/AltStore re-sign on-device at install), and provisions the JRE itself from the pinned
-# Amethyst artifact documented in ios/dev-tools/JRE21-INVENTORY.md — checksum-verified, then patched with
+# ad-hoc-signs (SideStore/AltStore re-sign on-device at install), and provisions the JRE itself: the pinned
+# original Amethyst zip documented in ios/dev-tools/JRE21-INVENTORY.md, checksum-verified, then patched here with
 # ios/dev-tools/patch-jre-txm.sh (which refuses to touch unexpected bytes). Either check failing aborts the build.
 #
 # Output: Actions → this run → Artifacts → "RuneMobile-ipa" (the .ipa + the StikDebug runelite-jit.js script).
@@ -33,12 +33,13 @@ jobs:
     env:
       IOS_ADHOC: "1"
       PLATFORMS: ios
-      # Pinned iOS JRE (Amethyst) — see ios/dev-tools/JRE21-INVENTORY.md. Amethyst moved its CDN from
-      # crystall1ne.dev (now 404) to assets.angelauramc.dev (their current Makefile `jre:` target); the old host
-      # is kept as a fallback. The SHA-256 pin is the trust decision either way.
-      JRE_URLS: >-
-        https://assets.angelauramc.dev/openjdk/ios-arm64/jre21-ios-aarch64.zip
-        https://crystall1ne.dev/cdn/amethyst-ios/jre21-ios-aarch64.zip
+      # Pinned iOS JRE (Amethyst jre21-ios-arm64-20250915) — see ios/dev-tools/JRE21-INVENTORY.md. Its original
+      # host (crystall1ne.dev) now 404s, and Amethyst's new host (assets.angelauramc.dev) serves a 2026-07-08
+      # rebuild whose libjvm no longer matches patch-jre-txm.sh's offsets. The upstream maintainer's public
+      # `ios-jre-dep` bundle still carries the original zip verbatim, so take ONLY that zip from it; the SHA-256
+      # pin below (unchanged) is the trust decision, not the host, and the patch is re-applied here from source.
+      JRE_BUNDLE_URL: https://github.com/audaro/runemobile/releases/download/ios-jre-dep/jre.tar.gz
+      JRE_BUNDLE_MEMBER: ios-jre/jre21-ios-aarch64.zip
       JRE_SHA256: 2c405fcc8c1cf95773617a93a2b090192191c871874cf1408f7a52500d8f0c71
     steps:
       - name: Checkout
@@ -64,31 +65,15 @@ jobs:
           set -euo pipefail
           W="$RUNNER_TEMP/jre-work"
           rm -rf "$W"; mkdir -p "$W/unzip" "$W/jre"
-          got=0
-          for u in $JRE_URLS; do
-            echo "== trying $u"
-            if curl -fSL --retry 3 -o "$W/jre.zip" "$u"; then got=1; break; fi
-          done
-          [ "$got" = 1 ] || { echo "::error::could not download the iOS JRE from any host"; exit 1; }
-          unzip -q "$W/jre.zip" -d "$W/unzip"
+          curl -fSL --retry 3 -o "$W/bundle.tar.gz" "$JRE_BUNDLE_URL"
+          mkdir -p "$W/bundle"
+          tar -xzf "$W/bundle.tar.gz" -C "$W/bundle" "$JRE_BUNDLE_MEMBER"
+          mv "$W/bundle/$JRE_BUNDLE_MEMBER" "$W/jre.zip"
+          rm -rf "$W/bundle" "$W/bundle.tar.gz"
           ACTUAL="$(shasum -a 256 "$W/jre.zip" | awk '{print $1}')"
-          if [ "$ACTUAL" != "$JRE_SHA256" ]; then
-            # Not trusted — print what changed so the pin/patch offsets can be re-derived deliberately, then stop.
-            echo "::error::iOS JRE SHA-256 mismatch: expected $JRE_SHA256, got $ACTUAL ($(stat -f %z "$W/jre.zip") bytes)"
-            unzip -l "$W/jre.zip" || true
-            T="$(find "$W/unzip" -name 'jre21-ios-arm64-*.tar.xz' -print -quit)"
-            if [ -n "$T" ]; then
-              mkdir -p "$W/diag" && tar -xf "$T" -C "$W/diag" || true
-              R="$(find "$W/diag" -name release -print -quit)"; [ -n "$R" ] && cat "$R"
-              L="$(find "$W/diag" -path '*/lib/server/libjvm.dylib' -print -quit)"
-              if [ -n "$L" ]; then
-                ls -l "$L"
-                for off in 0x81fc80 0x81fc88 0x81fc8c; do echo "bytes@$off: $(xxd -s $((off)) -l 4 -p "$L")"; done
-              fi
-            fi
-            exit 1
-          fi
+          [ "$ACTUAL" = "$JRE_SHA256" ] || { echo "::error::iOS JRE SHA-256 mismatch: expected $JRE_SHA256, got $ACTUAL"; exit 1; }
           echo "iOS JRE SHA-256 OK ($ACTUAL)"
+          unzip -q "$W/jre.zip" -d "$W/unzip"
           TARBALL="$(find "$W/unzip" -name 'jre21-ios-arm64-*-release.tar.xz' -print -quit)"
           [ -n "$TARBALL" ] || { echo "::error::no jre21-ios-arm64-*-release.tar.xz inside the zip"; exit 1; }
           tar -xf "$TARBALL" -C "$W/jre"
