@@ -56,11 +56,13 @@ PY
 ASSETS=("$APK" "$IPA" "$FEED")
 [ -f "$DIST/runelite-jit.js" ] && ASSETS+=("$DIST/runelite-jit.js")
 
+NEW_RELEASE=0
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
 	echo ">> $TAG exists — uploading assets and marking latest"
 	gh release upload "$TAG" "${ASSETS[@]}" --repo "$REPO" --clobber
 	gh release edit "$TAG" --repo "$REPO" --latest --prerelease=false
 else
+	NEW_RELEASE=1
 	echo ">> creating $TAG on $REPO with ${#ASSETS[@]} assets"
 	if [ -n "$NOTES" ]; then
 		gh release create "$TAG" "${ASSETS[@]}" --repo "$REPO" --title "RuneMobile $VERSION" --notes-file "$NOTES" --latest
@@ -81,3 +83,17 @@ want = sys.argv[1]
 sys.exit(0) if v == want else sys.exit(f'live feed serves {v}, expected {want}')
 " "$VERSION" || die "the live feed is stale — users would be told they are up to date on an older build"
 echo ">> OK — $TAG is Latest and the feed serves $VERSION"
+
+# Announce it in Discord, here rather than by hand afterwards: at this point the release is Latest and the
+# feed has been proven to serve it, so the announcement cannot point people at something they can't install.
+# Only for a release this run created — re-uploading an asset to an existing tag must not re-announce it.
+# The Discord tooling is a local-only checkout (tools/discord/ is in .git/info/exclude, so it is absent from
+# a fresh clone and from the public mirror); publishing must work exactly the same without it.
+ANNOUNCE="$ROOT/tools/discord/post-release.sh"
+if [ ! -x "$ANNOUNCE" ]; then
+	echo ">> no local Discord tooling — skipping the announcement"
+elif [ "$NEW_RELEASE" = 1 ] || [ -n "${FORCE_ANNOUNCE:-}" ]; then
+	"$ANNOUNCE" "$VERSION" "https://github.com/$REPO/releases/tag/$TAG" "$NOTES" || true
+else
+	echo ">> $TAG already existed — not re-announcing (FORCE_ANNOUNCE=1 to override)"
+fi
