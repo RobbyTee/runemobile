@@ -66,9 +66,21 @@ backed up (a lost key means future updates require users to uninstall + reinstal
 
 ## Update check
 
-There is **no in-app update check** in this build (it would require a published release feed, which is
-deferred while distribution stays sideload-only). **Check the releases page manually** for a newer
-build, especially after an OSRS weekly update (a stale client shows a black screen /
+There is **no in-app update check**, but iOS has a **release feed** — an AltStore/SideStore source:
+
+```
+https://github.com/audaro/runemobile/releases/latest/download/altstore.json
+```
+
+Added to AltStore it shows the installed version against the newest release and installs updates in one
+tap. This matters beyond convenience: AltStore's **"refresh" re-signs the build already installed and
+does NOT change its version**, so someone who refreshes to clear a signing problem will believe they
+updated when they have not — a stale build is indistinguishable from a fix that did not work. The feed
+makes the real version visible on both sides.
+
+The URL resolves to the newest **stable** release (`/releases/latest/` skips prereleases), so the
+rolling per-merge builds are never offered as an update. Android has no equivalent feed — **check the
+releases page manually**, especially after an OSRS weekly update (a stale client shows a black screen /
 `js5connect_outofdate` until rebuilt against the new revision).
 
 ---
@@ -141,3 +153,8 @@ next launch as usual.
 - [ ] `versionName` / `versionCode` bumped; `android/CHANGELOG.md` updated.
 - [ ] `PRIVACY.md` still accurate (re-check if any data flow changed).
 - [ ] Built against the current OSRS revision (no `js5connect_outofdate`).
+- [ ] **`altstore.json` uploaded to the stable release** (`gh release upload <tag> dist/ci/altstore.json
+      --clobber`). The feed is served from whichever release is Latest, so a stable release published
+      without it leaves every AltStore user pinned to the previous version while being told they are up
+      to date. `build-release-artifacts.sh` regenerates it whenever an IPA is built; the rolling
+      publisher deliberately does not upload it.
