@@ -3581,8 +3581,9 @@ class MainActivity : AppCompatActivity() {
      *  Only the CONTINUE widget and the option rows are clickable; the rest of the box is inert, and a precise
      *  click on inert parchment resolves against the SCENE behind it -- that walked the player to the tile under
      *  the dialogue, and walking away closed it, which reads as "the tap did nothing". Drive the engine's own
-     *  handlers instead, and keep the raw click only for the dialogue types the bridge does not model, whose
-     *  widgets really are under the finger. The tap is consumed either way; this only picks how. */
+     *  handlers instead -- including for the types the bridge does not model, whose buttons are the box's own
+     *  components: the bridge resolves the point against them and fires that widget's op. The tap is consumed
+     *  either way; this only picks how. */
     private fun resolveDialogueTap(
         gx: Int,
         gy: Int,
@@ -3614,10 +3615,15 @@ class MainActivity : AppCompatActivity() {
                 Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> continue, consumed")
             }
 
-            // Unmodelled (make-X / reward box): the engine's own clickable widgets are right under the finger.
+            // Unmodelled (a quest's own Yes/No, make-X, a reward box): no CONTINUE and no option rows, because
+            // the buttons are that box's OWN components. A raw click is not the answer either -- the engine
+            // resolves one over the relocated chatbox against the SCENE behind it, so the tap walked the player
+            // past the box instead of pressing anything. Hand the POINT to the bridge, which matches the box's
+            // live widgets on the client thread and fires the op of the one under the finger.
             else -> {
-                JvmLauncher.clickPrecise(gx, gy, 1)
-                Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> engine-owned, raw, consumed")
+                JvmLauncher.keepAlive()
+                JvmLauncher.tapDialogue(gx, gy)
+                Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> engine-owned, op, consumed")
             }
         }
     }

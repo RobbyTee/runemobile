@@ -29,6 +29,7 @@ import java.util.Collections;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.HashTable;
+import net.runelite.api.MenuAction;
 import net.runelite.api.WidgetNode;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
@@ -37,7 +38,12 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import org.junit.Before;
 import org.junit.Test;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -217,5 +223,162 @@ public class HudVeneerBridgeTest
 
 		assertTrue("the unnamed dialogue's own rect, in canvas px",
 			HudVeneerBridge.getChatSnapshot().contains("\"dlgX\":93,\"dlgY\":8,\"dlgW\":519,\"dlgH\":142"));
+	}
+
+	// --- pressing an unnamed dialogue --------------------------------------------------------------------------
+	// Its buttons are the box's OWN components, so there is no modelled continue or option row to fire, and a
+	// click at the finger is resolved against the scene behind the relocated chatbox -- it walks the player past
+	// the box instead of pressing anything. tapDialogue therefore carries the POINT in and fires the op of the
+	// widget under it. What these pin is the engine's dispatch rule (param0: -1 static, index dynamic), that the
+	// BUTTON wins over the box behind it, and that a press lands only where there is something to press.
+
+	/** A widget with canvas bounds and an optional sparse action list, the two things the resolver reads. */
+	private static Widget widgetAt(int id, int x, int y, int w, int h, String... actions)
+	{
+		final Widget wi = mock(Widget.class);
+		when(wi.getId()).thenReturn(id);
+		when(wi.getBounds()).thenReturn(new Rectangle(x, y, w, h));
+		when(wi.getActions()).thenReturn(actions.length == 0 ? null : actions);
+		return wi;
+	}
+
+	/** A logged-in client with {@code group} open on the chatbox and {@code root} as that group's root component. */
+	private static Client clientWithDialogue(int group, Widget root)
+	{
+		final Client c = loggedInClientWith(openInterface(InterfaceID.Chatbox.MES_LAYER, group));
+		when(c.getWidget(group << 16)).thenReturn(root);
+		return c;
+	}
+
+	/** Tap a box the shell has already seen open: a tick to publish it, the tap, then the tick that resolves it.
+	 *  That order is the real one -- a tap is stamped with the box that was on screen when the finger landed. */
+	private static void tapAfterPublish(Client c, int x, int y)
+	{
+		HudVeneerBridge.relocateChat(93, 8, true);
+		HudVeneerBridge.tick(c);
+		HudVeneerBridge.tapDialogue(x, y);
+		HudVeneerBridge.tick(c);
+	}
+
+	@Test
+	public void tapOnADialogueButtonFiresThatButtonsOwnOp()
+	{
+		// The box fills the chatbox and carries an op of its own; the Yes sits inside it. The tap is on the Yes,
+		// so the Yes is what must fire -- the enclosing box is not what the finger pressed.
+		final Widget box = widgetAt(584 << 16, 93, 8, 519, 142, "Close");
+		final Widget yes = widgetAt((584 << 16) | 7, 300, 100, 60, 30, "Continue");
+		when(box.getStaticChildren()).thenReturn(new Widget[]{yes});
+		final Client c = clientWithDialogue(InterfaceID.CONFIRMDESTROY, box);
+
+		tapAfterPublish(c, 320, 115);
+
+		// param0 = -1: a static interface component is addressed by id alone, and passing an index misroutes the
+		// engine's op dispatch (the rule the tab stones established here).
+		verify(c).menuAction(-1, (584 << 16) | 7, MenuAction.CC_OP, 1, -1, "Continue", "");
+	}
+
+	@Test
+	public void tapOnADynamicRowIsAddressedByItsIndex()
+	{
+		final Widget box = widgetAt(584 << 16, 93, 8, 519, 142);
+		final Widget row = widgetAt((584 << 16) | 3, 100, 40, 300, 20, null, "Select");
+		when(row.getIndex()).thenReturn(4);
+		when(box.getDynamicChildren()).thenReturn(new Widget[]{row});
+		final Client c = clientWithDialogue(InterfaceID.CONFIRMDESTROY, box);
+
+		tapAfterPublish(c, 150, 50);
+
+		// A dynamic child is addressed by index, and the op is the first NAMED action -- here op 2, since op 1
+		// has no name and so no menu entry a finger could have pressed.
+		verify(c).menuAction(4, (584 << 16) | 3, MenuAction.CC_OP, 2, -1, "Select", "");
+	}
+
+	@Test
+	public void tapOnTheInertPartOfADialoguePressesNothing()
+	{
+		// Parchment with no op anywhere under the finger. Firing something would answer a quest for the player,
+		// and falling back to a click is the walk-the-player this path exists to stop: the tap is consumed.
+		final Widget box = widgetAt(584 << 16, 93, 8, 519, 142);
+		final Widget text = widgetAt((584 << 16) | 5, 100, 40, 300, 40);
+		when(box.getStaticChildren()).thenReturn(new Widget[]{text});
+		final Client c = clientWithDialogue(InterfaceID.CONFIRMDESTROY, box);
+
+		tapAfterPublish(c, 200, 60);
+
+		verify(c, never()).menuAction(anyInt(), anyInt(), any(MenuAction.class), anyInt(), anyInt(),
+			anyString(), anyString());
+	}
+
+	@Test
+	public void tapOutsideEveryWidgetPressesNothing()
+	{
+		// The region gate is the shells' (chatbox rect union the published dialogue rect), so a point can arrive
+		// that no widget holds. Nothing is pressed rather than the nearest thing found.
+		final Widget box = widgetAt(584 << 16, 93, 8, 519, 142);
+		final Widget yes = widgetAt((584 << 16) | 7, 300, 100, 60, 30, "Continue");
+		when(box.getStaticChildren()).thenReturn(new Widget[]{yes});
+		final Client c = clientWithDialogue(InterfaceID.CONFIRMDESTROY, box);
+
+		tapAfterPublish(c, 700, 400);
+
+		verify(c, never()).menuAction(anyInt(), anyInt(), any(MenuAction.class), anyInt(), anyInt(),
+			anyString(), anyString());
+	}
+
+	@Test
+	public void tapIsDroppedWhenAnotherBoxHasReplacedTheOneTapped()
+	{
+		// The finger was on the destroy prompt; by the time the tap resolves, a different box is open at the same
+		// place. Pressing what is there now would answer, in the player's name, a question they never saw.
+		final Widget destroy = widgetAt(584 << 16, 93, 8, 519, 142);
+		final Widget yes = widgetAt((584 << 16) | 7, 300, 100, 60, 30, "Continue");
+		when(destroy.getStaticChildren()).thenReturn(new Widget[]{yes});
+		final Client tapped = clientWithDialogue(InterfaceID.CONFIRMDESTROY, destroy);
+
+		final Widget other = widgetAt(InterfaceID.OBJECTBOX << 16, 93, 8, 519, 142);
+		final Widget button = widgetAt((InterfaceID.OBJECTBOX << 16) | 2, 300, 100, 60, 30, "Continue");
+		when(other.getStaticChildren()).thenReturn(new Widget[]{button});
+		final Client live = clientWithDialogue(InterfaceID.OBJECTBOX, other);
+
+		HudVeneerBridge.relocateChat(93, 8, true);
+		HudVeneerBridge.tick(tapped);          // the destroy prompt is what is on screen
+		HudVeneerBridge.tapDialogue(320, 115); // ... and what the tap is stamped with
+		HudVeneerBridge.tick(live);            // the box changed before the tap could resolve
+
+		verify(live, never()).menuAction(anyInt(), anyInt(), any(MenuAction.class), anyInt(), anyInt(),
+			anyString(), anyString());
+	}
+
+	@Test
+	public void aSelfHiddenButtonIsNotPressed()
+	{
+		// A box can carry a button it is not currently offering. Its bounds and actions stay populated, so only
+		// its hidden flag says so -- and pressing what the user cannot see is not an answer they gave.
+		final Widget box = widgetAt(584 << 16, 93, 8, 519, 142);
+		final Widget ghost = widgetAt((584 << 16) | 9, 300, 100, 60, 30, "Continue");
+		when(ghost.isSelfHidden()).thenReturn(true);
+		when(box.getStaticChildren()).thenReturn(new Widget[]{ghost});
+		final Client c = clientWithDialogue(InterfaceID.CONFIRMDESTROY, box);
+
+		tapAfterPublish(c, 320, 115);
+
+		verify(c, never()).menuAction(anyInt(), anyInt(), any(MenuAction.class), anyInt(), anyInt(),
+			anyString(), anyString());
+	}
+
+	@Test
+	public void twoButtonsOfEqualSizeResolveToTheOneDrawnOnTop()
+	{
+		// Same size, same place, both pressable: the later child is the one the engine draws over the other, so
+		// it is the one under the finger. Declining the overlap would leave the tap with nothing to press.
+		final Widget box = widgetAt(584 << 16, 93, 8, 519, 142);
+		final Widget under = widgetAt((584 << 16) | 7, 300, 100, 60, 30, "Yes");
+		final Widget over = widgetAt((584 << 16) | 8, 300, 100, 60, 30, "No");
+		when(box.getStaticChildren()).thenReturn(new Widget[]{under, over});
+		final Client c = clientWithDialogue(InterfaceID.CONFIRMDESTROY, box);
+
+		tapAfterPublish(c, 320, 115);
+
+		verify(c).menuAction(-1, (584 << 16) | 8, MenuAction.CC_OP, 1, -1, "No", "");
 	}
 }

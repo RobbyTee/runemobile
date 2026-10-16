@@ -406,6 +406,7 @@ static jmethodID gMidRelocateSide = NULL;    // relocateSidePanel(II)V (A4/A6 �
 static jmethodID gMidOpenTab = NULL;         // openTab(I)V  (A4 — open a tab by replaying its stone op script)
 static jmethodID gMidContinueDlg = NULL;     // continueDialogue()V — advance a chat dialogue via WIDGET_CONTINUE
 static jmethodID gMidSelectOpt = NULL;       // selectDialogueOption(IJ)V — pick an option row via WIDGET_CONTINUE
+static jmethodID gMidTapDlg = NULL;          // tapDialogue(II)V — press an unmodelled box's own widget via CC_OP
 static jmethodID gMidSetStonesHidden = NULL; // setStonesHidden(Z)V  (A4 — hide the engine tab stones)
 static jmethodID gMidSetChatRowH = NULL;     // setChatTabRowHeight(I)V  (A3 — bigger native chat tabs)
 static jmethodID gMidSetChatAreaW = NULL;    // setChatAreaWidth(I)V  (A3 — widen message area to align)
@@ -484,6 +485,13 @@ static BOOL ensureVeneer(void) {
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         gMidContinueDlg = NULL;
+    }
+    // Absent on an older staged jar: the call sites check the id, so the dialogue falls back to doing nothing
+    // rather than to a click that would walk the player.
+    gMidTapDlg = (*env)->GetStaticMethodID(env, global, "tapDialogue", "(II)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidTapDlg = NULL;
     }
     gMidSetStonesHidden = sh;
     gVeneerClass = global;
@@ -2221,6 +2229,17 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSelectOpt, (jint)digit, (jlong)seq);
     if ((*env)->ExceptionCheck(env)) {
         bridgeNoteClear(env, "JVMLauncher.selectEngineDialogueOption");
+    }
+}
+
++ (void)tapEngineDialogueAtX:(int)x y:(int)y {
+    if (!ensureVeneer() || !gMidTapDlg)
+        return;
+    [JVMLauncher postKeepAlive]; // idle keepalive: a native dialogue tap posts no canvas event of its own
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidTapDlg, (jint)x, (jint)y);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.tapEngineDialogueAtX");
     }
 }
 

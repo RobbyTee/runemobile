@@ -194,7 +194,7 @@ static jmethodID g_midChatSnapshotSeq = nullptr, g_midOrbSnapshotSeq = nullptr;
 static jmethodID g_midDialogueSeq = nullptr, g_midMapSnapshotSeq = nullptr;
 // Dialogue actions driven through the engine's own WIDGET_CONTINUE handler. OPTIONAL (same rule): a jar
 // predating them loses the dialogue taps, not the veneer.
-static jmethodID g_midContinueDlg = nullptr, g_midSelectDlgOpt = nullptr;
+static jmethodID g_midContinueDlg = nullptr, g_midSelectDlgOpt = nullptr, g_midTapDlg = nullptr;
 static jmethodID g_midScrollMapPanel = nullptr;   // world-map KEY/MAPLIST swipe-scroll (optional)
 // FIX-5 native open-map control (optional, same rule): open the world map by ORB_WORLDMAP op-script replay.
 static jmethodID g_midOpenWorldMap = nullptr;
@@ -952,6 +952,7 @@ static bool publishBridge(JNIEnv *env) {
             g_midDialogueJson      = midOpt(env, hvg, "getDialogueJson", "()Ljava/lang/String;");   // UI-4 (optional)
             g_midContinueDlg = midOpt(env, hvg, "continueDialogue", "()V");                         // UI-4 (optional)
             g_midSelectDlgOpt = midOpt(env, hvg, "selectDialogueOption", "(IJ)V");                  // UI-4 (optional)
+            g_midTapDlg = midOpt(env, hvg, "tapDialogue", "(II)V");                                 // UI-4 (optional)
             g_midOrbSnapshot       = midOpt(env, hvg, "getOrbSnapshot", "()Ljava/lang/String;");    // orb veneer (optional)
             g_midTabSprites        = midOpt(env, hvg, "tabSprites", "()Ljava/lang/String;");        // runtime cache sprites (optional)
             // Phase 3 (Task B): content-diff publish seqs (all optional — a jar predating them just always copies).
@@ -2715,6 +2716,15 @@ Java_dev_audaro_runemobile_JvmLauncher_nativeSelectDialogueOption(JNIEnv *, jobj
     if (!hudReady())
         return;
     facadeVoidIntLong(g_hudCls, g_midSelectDlgOpt, digit, seq);
+}
+// Press an open box that no named kind models (a quest's own Yes/No): its buttons are its own components, so
+// the bridge matches the POINT against them on the client thread and fires that widget's op. Not a click, for
+// the reason above -- over the relocated chatbox a click is resolved against the scene and walks the player.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeTapDialogue(JNIEnv *, jobject, jint x, jint y) {
+    if (!hudReady())
+        return;
+    facadeVoidIntInt(g_hudCls, g_midTapDlg, x, y);
 }
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeSetChatTabRowHeight(JNIEnv *, jobject, jint canvasPx) {

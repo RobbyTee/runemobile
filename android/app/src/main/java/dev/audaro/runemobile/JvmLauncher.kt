@@ -523,6 +523,13 @@ object JvmLauncher {
         seq: Long,
     )
 
+    // The same reasoning for a box no named kind models: the point is resolved against the box's own widgets
+    // on the client thread and delivered as that widget's op.
+    external fun nativeTapDialogue(
+        x: Int,
+        y: Int,
+    )
+
     external fun nativeOrbSnapshotPub(): String // minimap-orb veneer: per-orb canvas bounds (read on tap, no attach)
 
     external fun nativeSetChatTabRowHeight(canvasPx: Int)
@@ -966,6 +973,11 @@ object JvmLauncher {
     fun dialoguePublishRaw() = nativeDialoguePublish()
 
     fun continueDialogue() = nativeContinueDialogue()
+
+    fun tapDialogue(
+        x: Int,
+        y: Int,
+    ) = nativeTapDialogue(x, y)
 
     fun selectDialogueOption(
         digit: Int,

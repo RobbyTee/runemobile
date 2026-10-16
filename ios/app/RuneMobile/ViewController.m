@@ -6597,9 +6597,15 @@ static CGRect mapRectFromArr(NSArray *a) {
                 [self appendLine:[NSString stringWithFormat:@"[shell] dialogue continue tap %d,%d (continue)", gx, gy]];
                 return;
             }
-            // Unmodelled (make-X / reward box): the engine's own clickable widgets are right under the finger.
-            [JVMLauncher postClickPreciseX:gx y:gy button:1];
-            [self appendLine:[NSString stringWithFormat:@"[shell] dialogue tap %d,%d (engine-owned, raw)", gx, gy]];
+            // Unmodelled (a quest's own Yes/No, make-X, a reward box): no CONTINUE and no option rows to fire,
+            // because the buttons are that box's OWN components. A raw click here is not the answer either --
+            // it reads as engine-owned, but the engine resolves a click over the relocated chatbox against the
+            // SCENE behind it, so the tap walked the player past the box instead of pressing anything (the same
+            // dead end the modelled continue hit, and what "I cannot tap Yes / No" actually was). Hand the POINT
+            // to the bridge: it matches the box's live widgets on the client thread and fires the op of the one
+            // under the finger, the same menu-action path every other relocated control here uses.
+            [JVMLauncher tapEngineDialogueAtX:gx y:gy];
+            [self appendLine:[NSString stringWithFormat:@"[shell] dialogue tap %d,%d (engine-owned, op)", gx, gy]];
             return;
         }
     }

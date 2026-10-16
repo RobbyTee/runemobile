@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatLineBuffer;
 import net.runelite.api.ChatMessageType;
@@ -163,6 +164,25 @@ public final class HudVeneerBridge
 	// the player. The digit is written last and read first: it is the trigger, and the seq is already in place.
 	private static volatile long pendingDialogueOptionSeq;
 	private static volatile int pendingDialogueOptionDigit = -1;
+	// One-shot tap on a dialogue no named kind models -- a quest's own "do you wish to take one?" Yes/No, an
+	// item box's buttons. Carried as a POINT and resolved on the client thread, for the same reason the continue
+	// above is a menu action rather than a click: the chatbox is force-positioned to the top of the screen and a
+	// click there is resolved by the engine against the SCENE behind it, which walks the player and ends the
+	// conversation.
+	//
+	// The tap carries the GROUP that was open when it was queued, and the resolver drops it unless that is still
+	// what is open. Without it a tap resolves against whatever the next tick finds under the same coordinates,
+	// and a box that closed in between (quest step advancing, a dialogue replacing it) would be answered in the
+	// player's name by a tap meant for something else -- the same hazard selectDialogueOption's seq guard exists
+	// for. The seq cannot serve here: it moves only when the PUBLISHED dialogue json changes, and these kinds
+	// publish none, so it sits still across two different boxes. It rejects a DIFFERENT box, not the same group
+	// re-opened for another item, which is the same limit the seq guard has.
+	//
+	// group|x|y packed into one atomic (16 bits each) so the client thread can never read a torn trio: a point
+	// validated against another tap's group would reintroduce exactly what the guard is for. Canvas coordinates
+	// and interface groups all fit 16 bits. NO_TAP (bit 63) is a value the packing cannot produce.
+	private static final long NO_TAP = Long.MIN_VALUE;
+	private static final AtomicLong pendingDialogueTap = new AtomicLong(NO_TAP);
 
 	// Native chat-tab veneer (A3 bigger buttons). chatTabRowH = the canvas-px height the native (enlarged) tab row
 	// occupies; the message area (CHATAREA) is pushed down past it instead of the engine's 23px CONTROLS row. 0 =
@@ -362,6 +382,40 @@ public final class HudVeneerBridge
 	{
 		pendingDialogueOptionSeq = seq;
 		pendingDialogueOptionDigit = digit;
+	}
+
+	/**
+	 * Native: press whatever the open dialogue has under this canvas point. For the kinds that have no modelled
+	 * continue or option row -- the ones {@link #isDialogueOpen} finds by their chatbox attachment rather than
+	 * by name -- the buttons are the box's OWN components, so only the box can name them: the point is matched
+	 * against its live widgets on the client thread in {@link #tick} and delivered as that widget's engine op.
+	 *
+	 * <p>A point with nothing pressable under it is consumed, not forwarded as a click. Doing nothing is the
+	 * right answer on the inert parts of a box, and the fallback click is exactly the walk-the-player this
+	 * exists to stop.
+	 *
+	 * @param canvasX canvas-px x of the tap
+	 * @param canvasY canvas-px y of the tap
+	 */
+	public static void tapDialogue(int canvasX, int canvasY)
+	{
+		// Stamped with the box that was open as of the last tick -- the one that was on screen under the finger.
+		// A tap taken while a NAMED kind is open stamps -1, which no live group matches, so it is dropped: the
+		// shells only route here for the unmodelled kinds, and a lagging shell must not answer a chat dialogue.
+		pendingDialogueTap.set(packTap(lastUnnamedDialogueGroup, canvasX, canvasY));
+	}
+
+	private static long packTap(int group, int x, int y)
+	{
+		return ((long) (group & 0xffff) << 32) | ((long) (x & 0xffff) << 16) | (y & 0xffff);
+	}
+
+	/** The group out of a packed tap. 0xffff is the "none open" -1 coming back through 16 bits, and is returned
+	 *  as -1 so it compares against a live group as itself and reads as itself in the log. */
+	private static int unpackTapGroup(long tap)
+	{
+		final int g = (int) ((tap >> 32) & 0xffff);
+		return g == 0xffff ? -1 : g;
 	}
 
 	/** Native: the canvas-px height the enlarged native chat-tab row occupies, so the message area is pushed down
@@ -896,6 +950,13 @@ public final class HudVeneerBridge
 				selectDialogueOptionNow(c, optDigit, optSeq);
 			}
 
+			// One-shot: press the widget under a tap on a dialogue the named kinds don't model, through its own op.
+			final long tap = pendingDialogueTap.getAndSet(NO_TAP);
+			if (tap != NO_TAP)
+			{
+				tapDialogueNow(c, unpackTapGroup(tap), (int) ((tap >> 16) & 0xffff), (int) (tap & 0xffff));
+			}
+
 			tickWorldMap(c);
 		}
 		catch (RuntimeException e)
@@ -1329,6 +1390,205 @@ public final class HudVeneerBridge
 		{
 			BridgeFaults.note("HudVeneerBridge.selectDialogueOptionNow", ignore);
 		}
+	}
+
+	/** The widget a dialogue tap resolved to, and the op to fire on it. */
+	private static final class DialogueTarget
+	{
+		private Widget w;
+		private boolean dynamic;   // came from the dynamic children, so the engine addresses it by index
+		private int op;
+		private String action = "";
+		private int area = Integer.MAX_VALUE;
+	}
+
+	private static final Widget[] NO_KIDS = new Widget[0];
+
+	/**
+	 * Press the open dialogue's own widget under a canvas point -- the answer for every box that has no modelled
+	 * continue or option row, which is every box the chatbox attachment finds and a name does not.
+	 *
+	 * <p>Takes the SMALLEST widget whose bounds hold the point and that carries a named op. Smallest, because a
+	 * button sits inside the box's own full-size background and the background is not what the finger pressed;
+	 * named, because a widget with no op name has no menu entry a player could click either. Two candidates of
+	 * EQUAL area are resolved to the one visited last, which is the later entry in a child array -- the one the
+	 * engine draws on top, so the one the finger landed on. That is as far as draw order can be established from
+	 * the widget API; declining an overlap instead would leave a Yes with nothing behind the tap at all, which
+	 * on a quest prompt is worse than taking the topmost.
+	 *
+	 * <p>Visibility is judged INSIDE the box only: a candidate is rejected if its own hidden flag is set, or if
+	 * anything between it and the box's root has one, so an invisible button cannot be pressed. What is NOT
+	 * consulted is {@link Widget#isHidden()}, which walks the chatbox ancestry above the box -- and that reads
+	 * hidden for a dialogue plainly on screen (the modelled continue does, which is the whole reason a click
+	 * never reaches one), so judging by it would reject every button in every box.
+	 *
+	 * <p>The press goes out as the engine's own CC_OP menu action, the proven path for every relocated widget
+	 * here (the tab stones, the logout button), with param0 following the dispatch rule those established: -1
+	 * for a static component, the child index for a dynamic one. A miss logs what IS under the finger, so a box
+	 * that answers to something else arrives already described instead of needing another report.
+	 */
+	private static void tapDialogueNow(Client c, int tappedGroup, int x, int y)
+	{
+		try
+		{
+			final int group = chatboxSubInterface(c);
+			if (group != tappedGroup)
+			{
+				// The box the finger was on is not the box that is open now. Answering this one with that tap
+				// would speak for the player in a conversation they never saw.
+				log.info("[veneer] dialogue tap {},{} — dropped: tapped group={} open group={}",
+					x, y, tappedGroup, group);
+				return;
+			}
+			final Widget root = c.getWidget(group << 16);
+			if (root == null)
+			{
+				log.info("[veneer] dialogue tap {},{} — group={} has no root component", x, y, group);
+				return;
+			}
+			final DialogueTarget best = new DialogueTarget();
+			findDialogueOp(root, false, false, x, y, best, 0);
+			if (best.w == null)
+			{
+				final StringBuilder under = new StringBuilder();
+				describeUnder(root, x, y, under, 0);
+				log.info("[veneer] dialogue tap {},{} group={} — nothing pressable; under the finger:{}",
+					x, y, group, under.length() == 0 ? " (nothing)" : under.toString());
+				return;
+			}
+			final int param0 = best.dynamic ? best.w.getIndex() : -1;
+			log.info("[veneer] dialogue tap {},{} group={} — fire id={} param0={} op={} action={}",
+				x, y, group, best.w.getId(), param0, best.op, best.action);
+			c.menuAction(param0, best.w.getId(), net.runelite.api.MenuAction.CC_OP, best.op, -1, best.action, "");
+		}
+		catch (RuntimeException ex)
+		{
+			BridgeFaults.note("HudVeneerBridge.tapDialogueNow", ex);
+		}
+	}
+
+	/**
+	 * Walk an open dialogue for the smallest op-carrying widget holding the point. The walk does NOT stop at a
+	 * parent whose bounds miss the point: a layer that holds the buttons can itself report no size at all, and
+	 * gating the descent on it finds nothing. Depth-capped because this runs on the client thread, where a tree
+	 * that somehow refers back to itself would take the game down with it rather than just miss a tap.
+	 */
+	private static void findDialogueOp(Widget w, boolean dynamic, boolean hiddenAbove, int x, int y,
+		DialogueTarget best, int depth)
+	{
+		if (w == null || depth > MAX_DIALOGUE_DEPTH)
+		{
+			return;
+		}
+		// Concealed by its own flag or by something above it inside the box: not pressable, but still walked --
+		// a layer flagged hidden can hold the visible button, and the miss log should still describe what is here.
+		final boolean concealed = hiddenAbove || w.isSelfHidden();
+		final int[] b = canvasBounds(w);
+		if (!concealed && b != null && x >= b[0] && x < b[0] + b[2] && y >= b[1] && y < b[1] + b[3])
+		{
+			final int area = b[2] * b[3];
+			if (area <= best.area)
+			{
+				final String[] acts = w.getActions();
+				final int op = firstNamedOp(acts);
+				if (op > 0)
+				{
+					best.w = w;
+					best.dynamic = dynamic;
+					best.op = op;
+					best.action = acts[op - 1];
+					best.area = area;
+				}
+			}
+		}
+		for (final Widget k : kidsOf(w.getStaticChildren()))
+		{
+			findDialogueOp(k, false, concealed, x, y, best, depth + 1);
+		}
+		for (final Widget k : kidsOf(w.getNestedChildren()))
+		{
+			findDialogueOp(k, false, concealed, x, y, best, depth + 1);
+		}
+		for (final Widget k : kidsOf(w.getDynamicChildren()))
+		{
+			findDialogueOp(k, true, concealed, x, y, best, depth + 1);
+		}
+	}
+
+	/** Everything under the finger, for the miss log: enough per widget to decide what a box answers to. */
+	private static void describeUnder(Widget w, int x, int y, StringBuilder out, int depth)
+	{
+		if (w == null || depth > MAX_DIALOGUE_DEPTH || out.length() > 1200)
+		{
+			return;
+		}
+		final int[] b = canvasBounds(w);
+		if (b != null && x >= b[0] && x < b[0] + b[2] && y >= b[1] && y < b[1] + b[3])
+		{
+			out.append(" [id=").append(w.getId()).append(" idx=").append(w.getIndex())
+				.append(" ").append(b[2]).append('x').append(b[3])
+				.append(" hidden=").append(w.isHidden()).append('/').append(w.isSelfHidden())
+				.append(" mask=").append(w.getClickMask())
+				.append(" onOp=").append(w.getOnOpListener() != null)
+				.append(" acts=").append(actionsOf(w))
+				.append(" text=").append(wText(w)).append(']');
+		}
+		for (final Widget k : kidsOf(w.getStaticChildren()))
+		{
+			describeUnder(k, x, y, out, depth + 1);
+		}
+		for (final Widget k : kidsOf(w.getNestedChildren()))
+		{
+			describeUnder(k, x, y, out, depth + 1);
+		}
+		for (final Widget k : kidsOf(w.getDynamicChildren()))
+		{
+			describeUnder(k, x, y, out, depth + 1);
+		}
+	}
+
+	/** A dialogue's own tree is a handful of levels; this is a guard against a cycle, not a real limit. */
+	private static final int MAX_DIALOGUE_DEPTH = 8;
+
+	/** The 1-based op index of the widget's first NAMED action, or 0 if it carries none. */
+	private static int firstNamedOp(String[] actions)
+	{
+		if (actions == null)
+		{
+			return 0;
+		}
+		for (int i = 0; i < actions.length; i++)
+		{
+			if (actions[i] != null && !actions[i].isEmpty())
+			{
+				return i + 1;
+			}
+		}
+		return 0;
+	}
+
+	/** The widget's named actions, as {@code op:name} pairs, for the miss log. */
+	private static String actionsOf(Widget w)
+	{
+		final String[] a = w.getActions();
+		if (a == null)
+		{
+			return "-";
+		}
+		final StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < a.length; i++)
+		{
+			if (a[i] != null && !a[i].isEmpty())
+			{
+				sb.append(sb.length() == 0 ? "" : ",").append(i + 1).append(':').append(a[i]);
+			}
+		}
+		return sb.length() == 0 ? "-" : sb.toString();
+	}
+
+	private static Widget[] kidsOf(Widget[] kids)
+	{
+		return kids == null ? NO_KIDS : kids;
 	}
 
 	private static void openTabNow(Client c, boolean preEoc, int idx)
@@ -2643,7 +2903,9 @@ public final class HudVeneerBridge
 	}
 
 	// The group noteUnnamedDialogue last reported, so one open writes one line. -1 = none open (or a named one).
-	private static int lastUnnamedDialogueGroup = -1;
+	// Volatile: written here on the client thread, read by tapDialogue on the native one to stamp a tap with
+	// the box the finger was actually on.
+	private static volatile int lastUnnamedDialogueGroup = -1;
 
 	/** Name an open chatbox dialogue that none of the named kinds matched, once per open. These are handled
 	 *  generically — the engine draws the box and owns the taps on it — so nothing depends on this line; it is

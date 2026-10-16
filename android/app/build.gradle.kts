@@ -265,7 +265,7 @@ val verifyStagedClientJar =
                 // jar carrying only those would pass. They were added in the same commit as the public pair, so the
                 // staleness this gate exists for trips either way -- this just stops a later refactor sneaking past.
                 val missingHandlers =
-                    listOf("continueDialogue", "selectDialogueOption").filter { name ->
+                    listOf("continueDialogue", "selectDialogueOption", "tapDialogue").filter { name ->
                         val entry = "\u0001" + ((name.length shr 8) and 0xFF).toChar() + (name.length and 0xFF).toChar() + name
                         !bridgeText.contains(entry)
                     }

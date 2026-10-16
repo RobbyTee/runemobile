@@ -288,6 +288,12 @@ typedef void (^JVMLogSink)(NSString *line);
 /// tapped targets were built from, so a dialogue that changed since the tap is not answered by mistake.
 + (void)selectEngineDialogueOption:(int)digit seq:(long long)seq;
 
+/// Press whatever the open dialogue has at this canvas point. For a box with no modelled continue or option row
+/// (a quest's own Yes/No, an item box) the buttons are the box's own components, so the bridge matches the point
+/// against them on the client thread and fires that widget's engine op. A point with nothing pressable under it
+/// is consumed -- a click there would be resolved against the scene behind the chatbox and walk the player.
++ (void)tapEngineDialogueAtX:(int)x y:(int)y;
+
 /// World map (touch): open the world map via HudVeneerBridge.openWorldMap — a discoverable path decoupled from
 /// the tiny in-scene orb. No-op on an older jar without openWorldMap. Main thread.
 + (void)openEngineWorldMap;
