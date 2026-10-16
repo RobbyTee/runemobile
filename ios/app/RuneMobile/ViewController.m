@@ -383,6 +383,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @property (nonatomic, strong) UILabel *fatalErrorTitle;
 @property (nonatomic, strong) UILabel *fatalErrorBody;
 @property (nonatomic, assign) BOOL fatalErrorShown;
+@property (nonatomic, assign) BOOL layoutNoticeShown; // UX-ONBOARD-02: launch layout hint, once per process
 // PERF-MEMORY-THERMAL-01 (iOS parity with Android's ThermalGovernor): protect sustained 117HD play from
 // silent thermal throttling by stepping the 117HD sceneResolutionScale DOWN under NSProcessInfo thermal
 // pressure (serious -> 65, critical -> 50, never above the user's own baseline) and restoring the captured
@@ -841,6 +842,48 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     // query. This VC is the window's rootViewController directly (AppDelegate), so the per-VC overrides below win.
     [self setNeedsStatusBarAppearanceUpdate];
     [self setNeedsUpdateOfHomeIndicatorAutoHidden];
+}
+
+// UX-ONBOARD-02: the whole native chrome -- the chat veneer, the tab row, the dialogue tap routing -- is laid out
+// against the resizable-MODERN top level (interface 164; see updateChatTabs, which stands down for any other id),
+// so in Fixed or Resizable-Classic the HUD simply doesn't line up with the game under it. Say so once per launch,
+// over the Tap to Play cover, until the user asks not to see it again.
+static NSString *const kLayoutNoticeOffKey = @"layoutNoticeSuppressed";
+static NSString *const kLayoutNoticeTitle = @"Use Resizable - Modern layout";
+static NSString *const kLayoutNoticeBody =
+    @"RuneMobile's touch controls and overlays are built for the Resizable - Modern layout. "
+    @"You can switch layouts in the game's Display settings.";
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    [self maybeShowLayoutNotice];
+}
+
+- (void)maybeShowLayoutNotice {
+    // Once per process: viewDidAppear fires again after the login web view, a plugin panel, or a backgrounding.
+    if (self.layoutNoticeShown)
+        return;
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:kLayoutNoticeOffKey])
+        return;
+    // Never stack: the fatal-error card owns the screen when a boot has failed, and an alert over an already
+    // presented VC would be refused by UIKit (and the flag would latch as if it had been shown).
+    if (self.fatalErrorShown || self.presentedViewController != nil)
+        return;
+    self.layoutNoticeShown = YES;
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:kLayoutNoticeTitle
+                                                                message:kLayoutNoticeBody
+                                                         preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Got it" style:UIAlertActionStyleDefault handler:nil]];
+    __weak __typeof(self) weakSelf = self;
+    [ac addAction:[UIAlertAction actionWithTitle:@"Don't show again"
+                                           style:UIAlertActionStyleDefault
+                                         handler:^(UIAlertAction *action) {
+                                             (void)action;
+                                             [[NSUserDefaults standardUserDefaults] setBool:YES
+                                                                                     forKey:kLayoutNoticeOffKey];
+                                             [weakSelf appendLine:@"[shell] onboard: layout notice suppressed"];
+                                         }]];
+    [self presentViewController:ac animated:YES completion:nil];
 }
 
 // Immersive-chrome overrides (see the enterImmersive parity note in viewDidLoad). The status bar auto-reveals

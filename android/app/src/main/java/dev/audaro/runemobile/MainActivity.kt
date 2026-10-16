@@ -302,6 +302,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var splashOverlay: SplashOverlayView
     private var splashDeadlineMs = 0L
 
+    // UX-ONBOARD-02: launch layout hint — shown once per launch (this Activity handles its own config changes, so
+    // onCreate doesn't re-run on rotation), suppressed for good by the dialog's "Don't show again".
+    private var layoutNoticeShown = false
+
     // UX-DISCRETE-01 / ENH-B06: a native "Hopping…" scrim over the relog-based world hop (logout→relogin). Driven
     // purely Android-side: armed from the hop trigger sites, hidden on the next loggedIn edge after the hop or a
     // bounded timeout. `hopWasLoggedIn` tracks the pre-hop loggedIn state so we hide on the rising edge BACK to
@@ -441,6 +445,10 @@ class MainActivity : AppCompatActivity() {
         // User-defined hotkey buttons: the active set the Hotkeys screen writes + the HUD strip reads. Each entry
         // is "groupkeylabel" (SOH-delimited); fire is by (group,key) so a rebind in the plugin reflects.
         const val PREFS_HOTKEYS = "hotkeys"
+
+        // UX-ONBOARD-02: one-time launch notices (currently just the layout hint).
+        private const val PREFS_NOTICES = "notices"
+        private const val KEY_LAYOUT_NOTICE_OFF = "layoutNoticeSuppressed"
         const val PREF_HOTKEYS_ACTIVE = "active"
 
         // Bug 4: the WorldHopper quick-hop keybinds. These mirror RuneLite's WorldHopperConfig @ConfigGroup
@@ -1484,6 +1492,9 @@ class MainActivity : AppCompatActivity() {
         // AP-2a: start draining the notification/link queues. Safe before the VM is up — the externs return ""
         // until the MobileUiBridge facade publishes, then start yielding real items.
         startBridgeDrain()
+        // UX-ONBOARD-02: the layout hint. Posted rather than shown from inside onCreate, so it lands after the
+        // window is attached and enterImmersive has applied instead of racing them.
+        window.decorView.post { maybeShowLayoutNotice() }
     }
 
     /** Phase-2 renderer preference (cpu|gpu|117hd) — the iOS rendererPref model. Persisted; read once at
@@ -2585,6 +2596,34 @@ class MainActivity : AppCompatActivity() {
             )
         }
         strip.visibility = if (row.childCount > 0) View.VISIBLE else View.GONE
+    }
+
+    /** UX-ONBOARD-02: the whole native chrome — the chat veneer, the tab row, the dialogue tap routing — is laid
+     *  out against the resizable-MODERN top level (interface 164; the veneer stands down for any other id), so in
+     *  Fixed or Resizable-Classic the HUD doesn't line up with the game under it. Say so once per launch, over the
+     *  cold-start splash, until the user asks not to see it again. */
+    private fun maybeShowLayoutNotice() {
+        if (layoutNoticeShown || isFinishing || isDestroyed) return
+        if (getSharedPreferences(PREFS_NOTICES, MODE_PRIVATE).getBoolean(KEY_LAYOUT_NOTICE_OFF, false)) return
+        layoutNoticeShown = true
+        AlertDialog
+            .Builder(this)
+            .setTitle("Use Resizable - Modern layout")
+            .setMessage(
+                "RuneMobile's touch controls and overlays are built for the Resizable - Modern layout. " +
+                    "You can switch layouts in the game's Display settings.",
+            ).setPositiveButton("Got it", null)
+            .setNegativeButton("Don't show again") { _, _ ->
+                getSharedPreferences(PREFS_NOTICES, MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(KEY_LAYOUT_NOTICE_OFF, true)
+                    .apply()
+                Log.i(TAG, "onboard: layout notice suppressed")
+            }
+            // A dialog takes window focus, which drops sticky immersive; onWindowFocusChanged re-asserts it on the
+            // way in, so do the same on the way out instead of leaving the system bars up over the game.
+            .setOnDismissListener { enterImmersive() }
+            .show()
     }
 
     /** Hide the Android status + navigation bars (sticky immersive) so the game frame is edge-to-edge with no
