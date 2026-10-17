@@ -210,6 +210,10 @@ public final class HudVeneerBridge
 	// RELEASE the veneer (chat back to natural+opaque) and the native side hides its chat veneer (reads this in
 	// the snapshot as "dialogueActive"), giving the desktop-identical opaque dialogue box.
 	private static volatile boolean dialogueOpen;
+	// The engine's chatbox message layer is taking typed input (GE item search, bank search, "Enter amount").
+	// Separate from dialogueOpen because it is the opposite kind of thing: a dialogue REPLACES the chat area,
+	// a prompt lives INSIDE it. Published so the native shell routes a tap there as a precise click.
+	private static volatile boolean chatPromptOpen;
 	// The open dialogue's content + head bounds (escaped JSON) for the native opaque dialogue. Built in tick when a
 	// dialogue is open; "{}" otherwise. The native shell draws an opaque parchment over the chatbox region (so the
 	// engine's transparent dialogue + the chat tabs/messages behind it are occluded), with a CUTOUT at the head
@@ -612,7 +616,9 @@ public final class HudVeneerBridge
 				// Path B: opaque (0) while a dialogue is open so the engine paints its own dialogue parchment + head;
 				// transparent (1) otherwise. This is the FINAL word before raster, so it MUST mirror tick()'s
 				// per-dialogue flip — forcing transparent here unconditionally would override the opaque dialogue.
-				if (dialogueOpen)
+				// A message-layer prompt takes the opaque box for the same reason tick() un-hides CHAT_BACKGROUND
+				// for it: transparent here would paint that box away again on the very next frame.
+				if (dialogueOpen || chatPromptOpen)
 				{
 					setChatboxTransparency(c, 0);
 				}
@@ -720,6 +726,10 @@ public final class HudVeneerBridge
 			final boolean mapOpenNow = isWorldMapOpen(c);
 			final boolean dlgOpen = isDialogueOpen(c);
 			dialogueOpen = dlgOpen;   // published in buildChatSnapshot so the native side hides its chat veneer
+			// A prompt only counts when no dialogue owns the chat area: make-X and friends are named dialogues
+			// that may also drive the message layer, and they keep their existing (parchment) handling.
+			final boolean promptOpen = !dlgOpen && isChatPromptOpen(c);
+			chatPromptOpen = promptOpen;
 
 			// Keep the engine chatbox TRANSPARENT from the FIRST logged-in frame so the message lines render in the
 			// over-scene colour set (white names + glyph shadow = the official mobile look) instead of the dark
@@ -772,7 +782,6 @@ public final class HudVeneerBridge
 				// prompt and stops it hit-testing: the player taps "Choose an item", the engine opens the
 				// search exactly as it should, and nothing appears — there is no way to see it, scroll it, or
 				// pick a result. Nothing about the tap is wrong, which is why it reads as a dead button.
-				final boolean promptOpen = isChatPromptOpen(c);
 				chatWindowOccluded = isForefrontWindowOpen(c) && !promptOpen;
 				dumpOpenInterfaces(c);   // DIAGNOSTIC — see the [ifaces] log to tune the FOREFRONT_WINDOW_GROUPS list
 				final Widget w = c.getWidget(chatId);
@@ -854,7 +863,8 @@ public final class HudVeneerBridge
 				// Path B: in classic OSRS the dialogue draws its head + text ONTO the chatbox brown box. So while a
 				// dialogue is open SHOW CHAT_BACKGROUND (opaque dialogue box); otherwise HIDE it so chat messages draw
 				// transparent over the scene. CONTROLS backgrounds stay hidden (the native tab row covers that strip).
-				setHidden(c, InterfaceID.Chatbox.CHAT_BACKGROUND, !dlgOpen);
+				// A prompt gets the box too: it is text the player has to read over whatever window is behind it.
+				setHidden(c, InterfaceID.Chatbox.CHAT_BACKGROUND, !dlgOpen && !promptOpen);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
 				// Collapse (tap the active tab) hides only the message CONTENT, not the container, so the lines are
@@ -869,7 +879,10 @@ public final class HudVeneerBridge
 				// them) is SKIPPED during a dialogue, nothing re-shows them, so this alone stops the chat-line bleed.
 				// Do NOT separately hide+show the child layers: that hide/show cycle made the engine re-lay them on the
 				// next BUILD_CHATBOX and clipped/dropped the bottom input line.
-				final boolean hideMsgArea = chatCollapsed || dlgOpen;
+				// ... but NOT while a prompt is open. The prompt is drawn INTO the chat area, so hiding its parent
+				// hides the prompt — the same mistake as the forefront-window rule above, one level down. A
+				// collapsed chat yields to it too: the player just asked the game for this input.
+				final boolean hideMsgArea = (chatCollapsed || dlgOpen) && !promptOpen;
 				setHidden(c, InterfaceID.Chatbox.CHATAREA, hideMsgArea);
 				setHidden(c, InterfaceID.Chatbox.INPUT, hideMsgArea);
 				setHidden(c, InterfaceID.Chatbox.INPUT_CLICKAREA, hideMsgArea);
@@ -2089,10 +2102,13 @@ public final class HudVeneerBridge
 			}
 			sb.append(",\"view\":").append(view)
 				.append(",\"topLevelId\":").append(topLevel)
-				.append(",\"dialogueActive\":").append(dialogueOpen)
-				.append(",\"engineDialogue\":").append(dialogueOpen)
+				// A prompt reports as an engine dialogue to the native shell on purpose: both mean "taps over the
+				// chat region belong to the engine, route them as precise clicks and keep the chat-line veneer out
+				// of the way". What they must NOT share is the hiding above, which is why they are separate flags.
+				.append(",\"dialogueActive\":").append(dialogueOpen || chatPromptOpen)
+				.append(",\"engineDialogue\":").append(dialogueOpen || chatPromptOpen)
 				.append(",\"windowOpen\":").append(chatWindowOccluded);
-			if (dialogueOpen)
+			if (dialogueOpen || chatPromptOpen)
 			{
 				// Canvas-px bounds of the open dialogue so the native shell can route a tap there through a PRECISE
 				// click (resolving the dialogue's Continue/option) instead of walking the world behind it.
@@ -2937,16 +2953,11 @@ public final class HudVeneerBridge
 		}
 		final int sub = chatboxSubInterface(c);
 		noteUnnamedDialogue(sub);
-		if (sub >= 0)
-		{
-			return true;
-		}
-		// A message-layer prompt opens no interface of its own — it is drawn into the chatbox's own MES_LAYER,
-		// so neither the named list nor the sub-interface probe sees it. It is still a dialogue for everything
-		// the native shell does with this flag: route a tap there through a PRECISE click (which is how a
-		// search result gets picked) instead of the chat veneer's own gestures, and hide the native chat-line
-		// veneer so it does not sit on top of the prompt.
-		return isChatPromptOpen(c);
+		// NOTE: a message-layer prompt (GE/bank search, "Enter amount") is deliberately NOT a dialogue here.
+		// This flag means "a separate interface has replaced the chat lines", and the hiding it drives — of
+		// CHATAREA, the parent of MES_LAYER — would hide the prompt itself, which lives INSIDE the chat area.
+		// The prompt is tracked separately as chatPromptOpen; see the tick.
+		return sub >= 0;
 	}
 
 	/** The group of an interface the engine has opened ONTO THE CHATBOX, or -1 when there is none. That

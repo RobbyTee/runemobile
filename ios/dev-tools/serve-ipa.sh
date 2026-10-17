@@ -50,18 +50,24 @@ if [ -z "$TS" ]; then
     if [ -x "$c" ]; then TS="$c"; break; fi
   done
 fi
-[ -n "$TS" ] || die "no tailscale CLI on PATH or in /Applications/Tailscale.app — is Tailscale installed?"
+# No die() here: --stop must still kill the local server when the CLI is missing, or a missing CLI leaves a
+# static server serving an IPA with no way to stop it. The build path checks TS for itself, below.
 
 # --- teardown -------------------------------------------------------------------------------------
 if [ "$STOP" = 1 ]; then
   [ -f "$HTTPD_PID" ] && kill "$(cat "$HTTPD_PID")" 2>/dev/null && rm -f "$HTTPD_PID" && echo "static server stopped"
-  "$TS" serve reset 2>/dev/null && echo "tailscale serve reset" || true
+  if [ -n "$TS" ]; then
+    "$TS" serve reset 2>/dev/null && echo "tailscale serve reset" || true
+  else
+    echo "no tailscale CLI found — local server stopped, but 'tailscale serve' was left as it is" >&2
+  fi
   exit 0
 fi
 
 cd "$REPO"
 # Local signing config (gitignored): exports DEVELOPMENT_TEAM for xcodegen's ${DEVELOPMENT_TEAM} expansion.
 [ -f ios/dev-tools/signing.env ] && . ios/dev-tools/signing.env
+[ -n "$TS" ] || die "no tailscale CLI on PATH or in /Applications/Tailscale.app — is Tailscale installed?"
 FQDN="$("$TS" status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')" \
   || die "couldn't read this Mac's tailnet name (is Tailscale up?)"
 [ -n "$FQDN" ] || die "empty tailnet FQDN"
