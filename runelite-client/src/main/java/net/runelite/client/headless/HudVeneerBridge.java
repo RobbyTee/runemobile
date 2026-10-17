@@ -643,7 +643,11 @@ public final class HudVeneerBridge
 				// Path B (final word before raster): SHOW the chat brown box while a dialogue is open (the dialogue
 				// draws onto it -> opaque dialogue), HIDE it otherwise (transparent message veneer). Must mirror tick()
 				// or this re-hide would blank the dialogue box every frame. CONTROLS backgrounds stay hidden.
-				setHidden(c, InterfaceID.Chatbox.CHAT_BACKGROUND, !dialogueOpen);
+				// A PROMPT counts as open here too, exactly as it does for the transparency flip above. tick() shows
+				// the box for a prompt and this ran after it with the dialogue test alone, so the last write before
+				// raster hid it again every frame: the engine's search grid drew its icons over the bare scene with
+				// nothing behind them. Transparency 0 cannot help a background that is hidden.
+				setHidden(c, InterfaceID.Chatbox.CHAT_BACKGROUND, !dialogueOpen && !chatPromptOpen);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND);
 				hide(c, InterfaceID.Chatbox.CONTROLS_BACKGROUND_GRAPHIC);
 			}
