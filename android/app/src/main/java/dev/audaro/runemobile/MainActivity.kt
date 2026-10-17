@@ -177,13 +177,22 @@ class MainActivity : AppCompatActivity() {
     // tap in the game marked itself ~250 ms after a finger that had already left the glass, because a walk
     // resolves by nothing ever bumping. On tap we snapshot the seqs; the Choreographer poll resolves them.
     private lateinit var tapRing: TapRingView
-    private var ringPending = false
-    private var ringX = 0f
-    private var ringY = 0f
-    private var ringArmedAtMs = 0L
-    private var ringBaseSeq = 0
-    private var ringKindBaseSeq = 0 // tapKindSeq at arm time; a bump past it resolves the tap's kind
-    private var pendingRingId = -1 // the ring drawn at the lift, so the resolved kind can repaint/withdraw it
+
+    /** A ring drawn on the lift that is still waiting for the engine to say what its tap hit. */
+    private class PendingRing(
+        val ringId: Int,
+        val armedAtMs: Long,
+    )
+
+    // Rings waiting on an answer, OLDEST FIRST. More than one is in flight whenever a tap is made before the
+    // previous one resolved — spam-tapping two spots, which is exactly the case this is a queue for. The
+    // engine publishes one kind per resolved tap (publishTapKind bumps tapKindSeq once, from
+    // onMenuOptionClicked) and resolves taps in the order they were clicked, so each bump belongs to the
+    // oldest ring still waiting. A single slot got this wrong in a way the user can see: the newer ring
+    // absorbed the older tap's answer and could be recoloured — or withdrawn outright — by a result that
+    // was never its own, while the older ring sat there yellow.
+    private val pendingRings = ArrayDeque<PendingRing>()
+    private var ringKindSeq = 0 // the tapKindSeq value consumed so far; re-based when the queue starts filling
 
     // ---- Tap classifier (parity with iOS RMSceneView + kSceneDragSlop) ----------------------------------
     // Who decides what a tap is. GestureDetector fires onScroll the moment the finger passes ViewConfiguration's
@@ -2215,6 +2224,66 @@ class MainActivity : AppCompatActivity() {
     )
 
     /**
+     * Hand each engine answer to the ring it belongs to. One bump of the kind seq = one resolved tap, in the
+     * order the taps were clicked, so the oldest ring still waiting owns the next bump.
+     *
+     * Only the NEWEST bump's kind is still readable — lastTapKind holds a single value — so a ring whose
+     * answer was overtaken inside one frame keeps the walk colour it was drawn in rather than being given
+     * somebody else's result. That is the safe direction: a walk is both the commonest tap and what the ring
+     * already shows, and the alternative is withdrawing a marker the user is looking at.
+     */
+    private fun resolvePendingRings() {
+        val kseq = JvmLauncher.tapKindSeq()
+        var advanced = kseq - ringKindSeq
+        if (advanced < 0) {
+            // The counter went backwards (a fresh client/login): nothing queued can be matched to it any more.
+            ringKindSeq = kseq
+            pendingRings.clear()
+        } else if (advanced > 0) {
+            ringKindSeq = kseq
+            while (advanced > 1 && pendingRings.isNotEmpty()) {
+                pendingRings.removeFirst() // overtaken: its kind is no longer the published one
+                advanced--
+                Log.i(TAG, "p1: ring answer overtaken within a frame -> left as drawn")
+            }
+            val p = if (pendingRings.isEmpty()) null else pendingRings.removeFirst()
+            if (p != null) {
+                when (JvmLauncher.lastTapKind()) {
+                    TAP_KIND_SCENE -> {
+                        // The marker drawn at the lift is the right ring in the wrong colour: repaint it in
+                        // place rather than drawing a second one over its tail.
+                        Log.i(TAG, "p1: ring INTERACT (+${SystemClock.uptimeMillis() - p.armedAtMs}ms)")
+                        tapRing.recolor(p.ringId, TapRingView.COLOR_INTERACT)
+                    }
+
+                    TAP_KIND_WALK -> {
+                        Log.i(TAG, "p1: ring WALK (already drawn)")
+                    }
+
+                    // An interface op: no ring. An item op is outlined by the engine itself (the cyan item
+                    // silhouette, armed in JavaBridge) — nothing for the shell to draw, so take the marker
+                    // back instead of leaving a walk ring on a slot that never walked.
+                    TAP_KIND_WIDGET -> {
+                        Log.i(TAG, "p1: widget op -> ring withdrawn (engine outlines items)")
+                        tapRing.retire(p.ringId)
+                    }
+
+                    else -> {
+                        Log.i(TAG, "p1: tap hit nothing -> ring withdrawn")
+                        tapRing.retire(p.ringId)
+                    }
+                }
+            }
+        }
+        // A ring nobody ever answered for (a walk resolves by nothing bumping at all, and a force-opened menu
+        // answers never): the colour it already has is the right guess, so just stop waiting for it.
+        val now = SystemClock.uptimeMillis()
+        while (pendingRings.isNotEmpty() && now - pendingRings.first().armedAtMs > RING_GRACE_MS) {
+            pendingRings.removeFirst()
+        }
+    }
+
+    /**
      * Drop the arm this touch took, if it still has one. Idempotent, and safe to call from any exit: the
      * bridge only ever drops an arm that is still waiting, never a tap that has already been committed.
      */
@@ -2336,6 +2405,14 @@ class MainActivity : AppCompatActivity() {
             // is spurious (rings are for in-scene taps), and an orb tap is never a walk so the optimistic-walk
             // grace would always paint a stray yellow ring. Mirrors the open-map precise-click suppression.
             if (!mapOpen && inCanvasRect(minimapRectCanvas, gx, gy)) {
+                // Ringless, but still a GATED left tap, so the engine will publish a kind for it like any
+                // other — queue a ring-less placeholder (id 0, which recolor/retire ignore) so it consumes
+                // its own answer instead of the next real ring consuming it. The bump-per-tap mapping only
+                // holds if every tap that produces one is in the queue.
+                if (pendingRings.isEmpty()) {
+                    ringKindSeq = JvmLauncher.tapKindSeq()
+                }
+                pendingRings.addLast(PendingRing(0, SystemClock.uptimeMillis()))
                 JvmLauncher.click(gx, gy, 1)
                 Log.i(TAG, "ap0: minimap/orb tap ($gx,$gy) -> click without walk-ring")
                 return true
@@ -2350,20 +2427,19 @@ class MainActivity : AppCompatActivity() {
                 resolveDialogueTap(gx, gy)
                 return true
             }
-            // Arm the tap feedback BEFORE posting the click so the baseline seqs can't race the engine's bump.
-            // The kind seq resolves WHAT the tap hit (scene = red, walk = the colour it already has, widget or
-            // nothing = withdrawn); interactTapSeq stays the haptic source.
-            ringBaseSeq = JvmLauncher.interactTapSeq()
-            ringKindBaseSeq = JvmLauncher.tapKindSeq()
-            ringX = tx
-            ringY = ty
-            ringArmedAtMs = SystemClock.uptimeMillis()
-            ringPending = true
+            // Re-base the kind seq BEFORE posting the click, and only when nothing is already waiting:
+            // everything the engine has published up to here belongs to taps already answered for, and while
+            // a queue is in flight the running seq is what tracks which answer is next. interactTapSeq stays
+            // the haptic source and is read separately.
+            if (pendingRings.isEmpty()) {
+                ringKindSeq = JvmLauncher.tapKindSeq()
+            }
             // Mark the click NOW, in the walk colour. This is the one place that knows the tap is a world click
             // rather than one of the routed paths above, so no camera drag or UI tap can flash a ring it has to
             // take back — and the user is owed the marker on the lift, not whenever the engine gets back to us.
-            // The resolved kind is then applied to this ring instead of deciding whether to draw one.
-            pendingRingId = tapRing.spawn(tx, ty, TapRingView.COLOR_WALK)
+            // The resolved kind is then applied to THIS ring (scene = red, walk = the colour it already has,
+            // widget or nothing = withdrawn) instead of deciding whether to draw one at all.
+            pendingRings.addLast(PendingRing(tapRing.spawn(tx, ty, TapRingView.COLOR_WALK), SystemClock.uptimeMillis()))
             JvmLauncher.click(gx, gy, 1)
             return true
         }
@@ -2962,43 +3038,8 @@ class MainActivity : AppCompatActivity() {
                     // selection border (no ring); a dead/cancel click shows nothing. So clicks that aren't "in the
                     // game" never paint a ring. The grace covers the settle pipeline (~80–160 ms); a tap that never
                     // resolves (rare — a force-opened menu) just clears with no feedback.
-                    if (ringPending) {
-                        val kseq = JvmLauncher.tapKindSeq()
-                        if (kseq != ringKindBaseSeq) {
-                            ringPending = false
-                            when (JvmLauncher.lastTapKind()) {
-                                TAP_KIND_SCENE -> {
-                                    // The marker drawn at the lift is the right ring in the wrong colour:
-                                    // repaint it in place rather than drawing a second one over its tail.
-                                    Log.i(TAG, "p1: ring INTERACT (+${SystemClock.uptimeMillis() - ringArmedAtMs}ms)")
-                                    tapRing.recolor(pendingRingId, TapRingView.COLOR_INTERACT)
-                                }
-
-                                TAP_KIND_WALK -> {
-                                    Log.i(TAG, "p1: ring WALK (already drawn)")
-                                }
-
-                                // An interface op: no ring. An item op is outlined by the engine itself (the cyan
-                                // item silhouette, armed in JavaBridge) — nothing for the shell to draw, so take
-                                // the marker back instead of leaving a walk ring on a slot that never walked.
-                                TAP_KIND_WIDGET -> {
-                                    Log.i(TAG, "p1: widget op -> ring withdrawn (engine outlines items)")
-                                    tapRing.retire(pendingRingId)
-                                }
-
-                                else -> {
-                                    Log.i(TAG, "p1: tap hit nothing -> ring withdrawn")
-                                    tapRing.retire(pendingRingId)
-                                }
-                            }
-                            pendingRingId = -1
-                        } else if (SystemClock.uptimeMillis() - ringArmedAtMs > RING_GRACE_MS) {
-                            // Nothing resolved within the grace (a rare force-opened menu, or a walk the engine
-                            // never published): the ring on screen is already the walk colour, which is the
-                            // right guess and the one it was drawn in. Just stop waiting for an answer.
-                            ringPending = false
-                            pendingRingId = -1
-                        }
+                    if (pendingRings.isNotEmpty()) {
+                        resolvePendingRings()
                     }
                     if (menuBuilding) {
                         tryBuildNativeMenu()
