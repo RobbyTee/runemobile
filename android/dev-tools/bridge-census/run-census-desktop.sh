@@ -14,16 +14,21 @@ ROOT="$(cd "$HERE/../../.." && pwd)"
 
 JAVAC="${JAVAC:-/opt/homebrew/opt/openjdk@21/bin/javac}"
 JAVA="${JAVA:-/opt/homebrew/opt/openjdk@21/bin/java}"
-# Default to the freshly-built shaded client jar, globbing the version so a bump needs no edit here. Prefer the
-# shadowJar output under build/libs (the canonical source); fall back to the iOS-staged copy. The Android APK no
-# longer bundles shaded (SLM-JAR-01 — not on its boot classpath), so the old android-assets default is gone.
+# Default to the freshly-built shaded client jar. Prefer the shadowJar output under build/libs (the canonical
+# source); fall back to the iOS-staged copy. The Android APK no longer bundles shaded (SLM-JAR-01 — not on its
+# boot classpath), so the old android-assets default is gone.
+#
+# The version comes from gradle.properties (QA-P1-15), NOT from a glob: build/libs keeps every jar ever built
+# there, and a glob's first match is the lexicographically smallest version, i.e. the OLDEST. This script is
+# what the shared-contract gate tells you to run to prove a bridge change is safe, and on 2026-10-17 it
+# cheerfully reported GREEN for a jar built in July — a verdict about a jar nobody was shipping.
 if [ -n "${1:-}" ]; then
   JAR="$1"
 else
-  shopt -s nullglob
-  cands=("$ROOT"/runelite-client/build/libs/client-*-shaded.jar "$ROOT"/ios/app/jvm-resources/client-*-shaded.jar)
-  shopt -u nullglob
-  JAR="${cands[0]:-}"
+  VERSION="$(sed -n 's/^project\.build\.version=//p' "$ROOT/gradle.properties")"
+  [ -n "$VERSION" ] || { echo "could not read project.build.version from $ROOT/gradle.properties" >&2; exit 2; }
+  JAR="$ROOT/runelite-client/build/libs/client-${VERSION}-shaded.jar"
+  [ -f "$JAR" ] || JAR="$ROOT/ios/app/jvm-resources/client-shaded.jar"
 fi
 
 [ -x "$JAVAC" ] || { echo "javac not found at $JAVAC (set JAVAC=...)" >&2; exit 2; }

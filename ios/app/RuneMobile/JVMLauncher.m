@@ -51,6 +51,8 @@ static jmethodID gMidCameraHold = NULL; // setCameraHold(II)V — a held arrow t
 static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
 static jmethodID gMidWarmed = NULL;   // JavaBridge.presentReady()Z — world geometry uploaded (direct-present reveal)
 static jmethodID gMidMenuSelect = NULL;  // selectMenuPoint(II)V — menu row select + hover-clear (optional)
+static jmethodID gMidArmTap = NULL;      // armTap(II)V — resolve the tap point while the finger is down (optional)
+static jmethodID gMidCancelArm = NULL;   // cancelArmedTap()V — the touch became a drag/hold (optional)
 static jmethodID gMidShiftHeld = NULL;   // setShiftHeld(Z)V — sticky-Shift modifier (optional; tolerate older jar)
 static jmethodID gMidCtrlHeld = NULL;    // setCtrlHeld(Z)V — sticky-Ctrl modifier (PARITY-IOS-LATCH; optional)
 static jmethodID gMidAltHeld = NULL;     // setAltHeld(Z)V — sticky-Alt modifier (Ground-Items Alt-highlight; optional)
@@ -323,6 +325,16 @@ static BOOL ensureBridge(void) {
     }
     gMidKeepAlive = (*env)->GetStaticMethodID(env, global, "keepAlive", "()V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidKeepAlive = NULL; }
+    gMidArmTap = (*env)->GetStaticMethodID(env, global, "armTap", "(II)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidArmTap = NULL;
+    }
+    gMidCancelArm = (*env)->GetStaticMethodID(env, global, "cancelArmedTap", "()V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidCancelArm = NULL;
+    }
     gBridgeClass = global;   // publish only once fully resolved
     return YES;
 }
@@ -1998,6 +2010,37 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidMove, (jint)x, (jint)y);
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postMove"); }
+}
+
++ (void)postArmTapX:(int)x y:(int)y {
+    if (!ensureBridge())
+        return;
+    JNIEnv *env = gMainEnv;
+    if (!gMidArmTap) {
+        // An older staged jar has no arm: post the plain hover move instead, which is what the arm does
+        // first anyway. The tap then settles after the lift, exactly as it did before arming existed.
+        if (gMidMove) {
+            (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidMove, (jint)x, (jint)y);
+            if ((*env)->ExceptionCheck(env)) {
+                bridgeNoteClear(env, "JVMLauncher.postArmTap.move");
+            }
+        }
+        return;
+    }
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidArmTap, (jint)x, (jint)y);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.postArmTap");
+    }
+}
+
++ (void)postCancelArmedTap {
+    if (!ensureBridge() || !gMidCancelArm)
+        return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidCancelArm);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.postCancelArmedTap");
+    }
 }
 
 + (void)postWheelX:(int)x y:(int)y rotation:(int)rotation {

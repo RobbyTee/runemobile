@@ -40,6 +40,8 @@ FLAG runelite.nosafemode
 FLAG runelite.rlhdOverlaySelfTest
 FLAG runelite.routecgpu
 FLAG runelite.routecrlhd
+FLAG runelite.touch.armSlop
+FLAG runelite.touch.armedTimeout
 FLAG runelite.touch.clickTimeout
 FLAG runelite.touch.diag
 FLAG runelite.touch.hideClickCross
@@ -109,6 +111,8 @@ METHOD InfoBoxBridge#isAvailable()
 METHOD InfoBoxBridge#setUiOpen(boolean)
 METHOD InfoBoxBridge#tick(Client)
 METHOD JavaBridge#armSceneHold()
+METHOD JavaBridge#armTap(int,int)
+METHOD JavaBridge#cancelArmedTap()
 METHOD JavaBridge#canvasHeight()
 METHOD JavaBridge#canvasWidth()
 METHOD JavaBridge#clearHover()

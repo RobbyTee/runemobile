@@ -219,7 +219,7 @@ public final class JavaBridge
 	// engine's click-detection step — all the same thread).
 	private enum TapState
 	{
-		IDLE, AWAIT_ENGINE, CLICKED
+		IDLE, AWAIT_ENGINE, ARMED, CLICKED
 	}
 
 	private static TapState tapState = TapState.IDLE;
@@ -235,6 +235,20 @@ public final class JavaBridge
 	private static int queuedX;
 	private static int queuedY;
 	private static volatile int parkVerifyFrames;  // diag countdown: read the tail a few frames after a park
+	// Finger-DOWN arm. The native side calls armTap() when the finger lands and onClick() when it lifts; a tap
+	// cannot be posted before the lift (a drag is the camera, a hold is the menu) but the ENGINE's half of the
+	// wait does not have to happen after it. An armed tap runs the same gate and, when it accepts, parks in
+	// ARMED instead of clicking -- so the settle is spent while the finger is still on the glass, and the lift
+	// posts the click on the spot. tapUncommitted says which kind of wait an AWAIT_ENGINE is.
+	private static boolean tapUncommitted;
+	private static int armedFrames;          // frames held in ARMED (fail-safe release: a lift may never come)
+	// Release an arm nobody committed after ~2.4s at 50fps. Not a correctness device -- a later tap replaces an
+	// arm anyway -- it stops a settled arm from holding the pointer park and the idle keepalive off forever.
+	private static final int ARMED_TIMEOUT = Integer.getInteger("runelite.touch.armedTimeout", 120);
+	// How far the lift may land from the arm and still commit it. The engine resolved the ARM point and that is
+	// where the click goes, so this stays tight: a finger that slid further gets the full gate at its lift
+	// point, exactly as it did before arming existed.
+	private static final int ARM_SLOP = Integer.getInteger("runelite.touch.armSlop", 4);
 	// Settle gate tuning. MAX_SETTLE frames is the fail-open cap (never drop a tap); STABLE_NEEDED consecutive
 	// identical reads accept. Desktop settles ≤2 frames (MenuPeek-proven); the cap covers a lagging device EDT.
 	private static final int MAX_SETTLE = Integer.getInteger("runelite.touch.settleMax", 12);
@@ -728,6 +742,14 @@ public final class JavaBridge
 		{
 			return;
 		}
+		if (tapUncommitted && (tapState == TapState.AWAIT_ENGINE || tapState == TapState.ARMED))
+		{
+			// A finger is on the glass and the engine is resolving the point under it (armTap). Parking would
+			// move the cursor off that point, so the gate could never accept and the lift would pay for the
+			// whole settle after all — and a hover under a finger that is really there is not a stale hover.
+			// Only ever skips the park queued by the PREVIOUS tap's finishTap, which the next one re-queues.
+			return;
+		}
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
 		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t, 0, -1, -1, 0, false));
@@ -803,6 +825,61 @@ public final class JavaBridge
 	}
 
 	/**
+	 * The finger LANDED at {@code (x,y)} — start resolving that point now, click nothing. A left tap is only
+	 * posted when the finger lifts, but the engine-resolved gate it then has to pass ({@link #tapTick}: move the
+	 * synthetic cursor, wait for the engine to demonstrably resolve the point) does not have to run after the
+	 * lift. Running it here spends those frames while the finger is still down, so the lift can post the click
+	 * immediately ({@link #commitArmedTap}) instead of a few frames later — which is all the "taps feel
+	 * delayed" latency that is ours to remove. Safe to call for a touch that never becomes a tap: the gate only
+	 * moves the pointer, which performs no action, and an arm nobody commits is dropped by
+	 * {@link #cancelArmedTap()}, by the next tap, or by {@link #ARMED_TIMEOUT}.
+	 */
+	public static void armTap(int x, int y)
+	{
+		final Canvas canvas = liveCanvas();
+		final ClientThread ct = clientThread;
+		final Client c = client;
+		if (canvas == null || ct == null || c == null || c.getGameState() != GameState.LOGGED_IN)
+		{
+			return;
+		}
+		ct.invoke(() ->
+		{
+			// Only ever from rest: a tap already settling, clicked or armed owns the state machine, and a finger
+			// landing is not a reason to disturb it. With a menu open the tap selects the row under it directly
+			// and needs no gate at all, so there is nothing to arm.
+			if (tapState != TapState.IDLE || c.isMenuOpen())
+			{
+				return;
+			}
+			ensureTruthSubscribed();
+			hideClickCross(c);
+			beginAwait(canvas, x, y, true);
+		});
+	}
+
+	/**
+	 * The touch that armed turned into something else — a camera drag, a long-press menu, a pinch — so no click
+	 * is coming for it. Drop the arm. Never touches a tap that has already been committed and clicked.
+	 */
+	public static void cancelArmedTap()
+	{
+		final ClientThread ct = clientThread;
+		if (ct == null)
+		{
+			return;
+		}
+		ct.invoke(() ->
+		{
+			if (tapState == TapState.ARMED || (tapState == TapState.AWAIT_ENGINE && tapUncommitted))
+			{
+				tapUncommitted = false;
+				tapState = TapState.IDLE;
+			}
+		});
+	}
+
+	/**
 	 * In-game right-tap (client thread): open the engine menu at the literal press point — move a cycle
 	 * before the right-press so the engine builds the menu FOR that point (a same-batch move+press would use
 	 * the previous cursor position). No aim assist, same as the official mobile client; the open menu already
@@ -839,6 +916,22 @@ public final class JavaBridge
 			});
 			return;
 		}
+		if (tapUncommitted && Math.abs(x - tapX) <= ARM_SLOP && Math.abs(y - tapY) <= ARM_SLOP)
+		{
+			// The lift of the very touch that armed this point.
+			if (tapState == TapState.ARMED && commitArmedTap(c, canvas))
+			{
+				return;
+			}
+			if (tapState == TapState.AWAIT_ENGINE)
+			{
+				// Still settling (a fast tap). Just make the wait a committed one: the gate clicks when it
+				// accepts, which is what it would have done anyway — restarting it here would throw away the
+				// frames the arm has already banked.
+				tapUncommitted = false;
+				return;
+			}
+		}
 		if (tapState == TapState.CLICKED)
 		{
 			// Mid-confirmation: queue exactly ONE follow-up tap; it starts on the truth/timeout transition.
@@ -847,13 +940,25 @@ public final class JavaBridge
 			queuedY = y;
 			return;
 		}
-		// IDLE starts fresh; a new tap during AWAIT_ENGINE REPLACES the pending tap (re-move, reset counters).
+		// IDLE starts fresh; a tap during AWAIT_ENGINE or ARMED REPLACES the pending one (re-move, reset).
 		beginAwait(canvas, x, y);
 	}
 
 	/** Record the pending tap, post the cursor move to it, and enter {@code AWAIT_ENGINE} (client thread). */
 	private static void beginAwait(Canvas canvas, int x, int y)
 	{
+		beginAwait(canvas, x, y, false);
+	}
+
+	/**
+	 * As {@link #beginAwait(Canvas, int, int)}, where {@code uncommitted} says what happens when the gate
+	 * accepts: {@code false} posts the click (the tap has already happened), {@code true} parks in
+	 * {@link TapState#ARMED} and waits for the finger to lift.
+	 */
+	private static void beginAwait(Canvas canvas, int x, int y, boolean uncommitted)
+	{
+		tapUncommitted = uncommitted;
+		armedFrames = 0;
 		tapX = x;
 		tapY = y;
 		settleFrames = 0;
@@ -862,6 +967,41 @@ public final class JavaBridge
 		posMatchFrame = -1;
 		tapState = TapState.AWAIT_ENGINE;
 		postMove(canvas, x, y);
+	}
+
+	/**
+	 * Post the click for a tap whose point was already armed and settled, now that the finger has lifted —
+	 * instead of settling the same point all over again. Re-proves BOTH of the gate's observables first: the
+	 * engine's cursor is still on the arm point, and the left-click tail is still the one that stabilised.
+	 * Anything that moved the pointer in between (a precise click on a native control, a pointer park) would
+	 * otherwise leave the engine resolving this press against a different point's menu — the exact
+	 * mis-targeting the gate exists to prevent. The click goes to the ARM point, because that is the point the
+	 * engine resolved. Returns false when the fast path is not provably safe, leaving the caller to run the
+	 * full gate at the lift point.
+	 */
+	private static boolean commitArmedTap(Client c, Canvas canvas)
+	{
+		final net.runelite.api.Point mp = c.getMouseCanvasPosition();
+		if (mp == null || mp.getX() != tapX || mp.getY() != tapY)
+		{
+			return false;
+		}
+		final String fp = tailFingerprint(c);
+		if (!fp.equals(lastTailFp))
+		{
+			return false;
+		}
+		if (TOUCH_DIAG)
+		{
+			log.info("[touchdiag] L commit: armed {} frames before the lift, click {},{} tail={}",
+				armedFrames, tapX, tapY, fp);
+		}
+		tapUncommitted = false;
+		clickFp = fp;
+		clickedFrames = 0;
+		tapState = TapState.CLICKED;
+		postClickButtons(canvas, tapX, tapY, MouseEvent.BUTTON1);
+		return true;
 	}
 
 	/**
@@ -971,10 +1111,45 @@ public final class JavaBridge
 						settleFrames, posMatchFrame,
 						stableFrames >= STABLE_NEEDED ? "stable" : "TIMEOUT-failopen", fp);
 				}
+				if (tapUncommitted)
+				{
+					tapUncommitted = false;
+					if (stableFrames >= STABLE_NEEDED)
+					{
+						// Armed by a finger still on the glass, and the point is now resolved: hold the click
+						// for the lift.
+						armedFrames = 0;
+						tapState = TapState.ARMED;
+					}
+					else
+					{
+						// Fail-open with nothing proved. For a real tap that means "click anyway, never drop
+						// it", but an arm has no tap to drop: go back to rest so the lift runs an ordinary one
+						// instead of waiting out a second gate. The arm can then only ever help.
+						tapState = TapState.IDLE;
+					}
+					return;
+				}
 				clickFp = fp;
 				clickedFrames = 0;
 				tapState = TapState.CLICKED;
 				postClickButtons(canvas, tapX, tapY, MouseEvent.BUTTON1);
+			}
+		}
+		else if (tapState == TapState.ARMED)
+		{
+			if (c.isMenuOpen())
+			{
+				// A long-press opened the menu over this contact — the menu flow owns input now, same as it
+				// does for a tap still settling.
+				tapUncommitted = false;
+				tapState = TapState.IDLE;
+				return;
+			}
+			if (++armedFrames >= ARMED_TIMEOUT)
+			{
+				tapUncommitted = false;
+				tapState = TapState.IDLE;
 			}
 		}
 		else if (tapState == TapState.CLICKED)

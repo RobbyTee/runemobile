@@ -6721,9 +6721,10 @@ static CGRect mapRectFromArr(NSArray *a) {
 // to demonstrably resolve it, only then presses), and the ring then waited for the resolved kind on top —
 // 150-250 ms of nothing after a finger that had already landed. Drawing on contact costs nothing and tells no
 // lie: the only thing not yet known is the COLOUR, and the kind still reaches the ring that is already there.
-// Also pre-arms the engine cursor at the point so the settle gate's position match is satisfied before the
-// click even starts. A move with no button held is the hover primitive — it performs no action, so a touch
-// that turns out to be a camera drag or a hold has still done nothing to the world.
+// Also ARMS the point: the bridge runs the engine-resolved gate a left tap has to pass (move the synthetic
+// cursor, wait for the engine to demonstrably resolve the point) now, while the finger is down, so the lift
+// posts the click on the spot instead of a few frames later. It presses nothing — a touch that turns into a
+// camera drag or a hold has still done nothing to the world, and those paths drop the arm.
 - (void)onSceneTouchDown:(CGPoint)p {
     if (![JVMLauncher bridgeReady])
         return;
@@ -6738,7 +6739,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
     }
     [self.tapHaptic prepare];
-    [JVMLauncher postMoveX:gx y:gy];
+    [JVMLauncher postArmTapX:gx y:gy];
 }
 
 // Would a tap at this point take the plain world-click path — the only path that draws a click marker? Mirrors
@@ -7288,6 +7289,7 @@ static CGRect mapRectFromArr(NSArray *a) {
             int gx = 0, gy = 0;
             if (![self mapPoint:loc toGameX:&gx toGameY:&gy]) return; // letterbox
             [self retireLiveRing];                                    // a hold opens the menu, it never walks
+            [JVMLauncher postCancelArmedTap];
             [self openEngineMenuAtGameX:gx gameY:gy anchor:loc];
             [self appendLine:[NSString stringWithFormat:@"[shell] long-press -> engine menu @game %d,%d", gx, gy]];
             break;
@@ -7474,6 +7476,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     if (![JVMLauncher bridgeReady] || self.menuOpen) return;
     if (g.state == UIGestureRecognizerStateBegan) {
         [self retireLiveRing]; // this touch is a drag, not a tap: no click is coming for its marker
+        [JVMLauncher postCancelArmedTap];
         // DRAG-1: read the pre-reset translation so we can recover the TRUE touch start (the pan only fires after
         // ~10px of slop, so locationInView is already that far from where the finger landed on the item).
         CGPoint t0 = [g translationInView:self.screen];
@@ -7716,6 +7719,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     if (![JVMLauncher bridgeReady]) return;
     if (g.state == UIGestureRecognizerStateBegan) {
         [self retireLiveRing]; // two fingers zoom, they never tap
+        [JVMLauncher postCancelArmedTap];
         self.pinchPrevScale = g.scale;
         self.wheelAccum = 0;
         [JVMLauncher postClearHover];   // zoom moves the world too; don't leave a stale hover behind

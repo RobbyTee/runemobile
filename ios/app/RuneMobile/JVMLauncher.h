@@ -178,6 +178,15 @@ typedef void (^JVMLogSink)(NSString *line);
 /// `x`,`y` are gamepack-canvas (765x503) pixels. Call on the main thread.
 + (void)postMoveX:(int)x y:(int)y;
 
+/// Tell the bridge a finger has LANDED at the game-canvas point it will click if it lifts as a tap, so the
+/// engine-resolved gate a left tap must pass (cursor move + wait for the engine to resolve the point) runs
+/// during the finger-down time instead of after the lift. Clicks nothing by itself; a touch that turns into
+/// a drag or a hold must call postCancelArmedTap. Main thread. No-ops into a plain move on an older jar.
++ (void)postArmTapX:(int)x y:(int)y;
+
+/// The armed touch became a camera drag, a long-press menu or a pinch: drop the arm. Main thread.
++ (void)postCancelArmedTap;
+
 /// Scroll the wheel via JavaBridge.onWheel (a MouseWheelEvent). `x`,`y` are gamepack-canvas pixels (the
 /// pinch centroid); `rotation` notches: negative = zoom in. Used by pinch-to-zoom. Call on the main thread.
 + (void)postWheelX:(int)x y:(int)y rotation:(int)rotation;
