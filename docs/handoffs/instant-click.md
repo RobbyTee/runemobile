@@ -34,6 +34,15 @@ Three waits stacked on one tap, and none of them was the game being slow:
   never click against another point's menu. An arm that only failed open returns to rest, so arming can only
   help. `cancelArmedTap` drops it on hold/drag/pinch; `ARMED_TIMEOUT` (120 frames) is the fail-safe.
 - Tunables, all `Integer.getInteger`: `runelite.touch.armSlop` (4 canvas px), `runelite.touch.armedTimeout`.
+- **Two ring slots, not one.** `liveRing` is the ring of the touch on the glass; at the lift it is handed to
+  `pendingRing`, which is the one the answer repaints or withdraws. They have to be separate: the answer is
+  80-160 ms out and the bridge queues the next tap behind the one it is confirming, so with a single slot the
+  first tap's answer repainted — or withdrew — the ring the second finger had just drawn somewhere else.
+- **`tapUncommitted` lives as long as the arm does.** It is what the lift reads to know an `ARMED` state is
+  still its own, so clearing it on entry to `ARMED` (as the first cut did) silently disabled the whole fast
+  path: every lift fell back to a fresh gate. The invariant now is "set iff a finger-down arm is live", every
+  exit clears it, and `parkPointer`'s guard is stated in terms of the state so it cannot depend on the flag's
+  lifetime. Both of these came out of review, not testing — see **Open risks**.
 
 What is left: the click still happens **on lift**. Everything after the lift is now one client-thread hop.
 
@@ -59,7 +68,9 @@ phone. On device, check in this order:
 2. A tap on an NPC/object rings instantly and turns **red** when the interaction resolves.
 3. An inventory/prayer/tab tap rings briefly and the ring is **withdrawn** (no walk ring left behind).
 4. A camera drag and a long-press each leave **no** ring and perform no click at their origin.
-5. The thing this was for: taps feel like they happen when the finger lands.
+5. Spam-tap two spots alternately: each tap's ring keeps its OWN colour and position (this is the case the
+   second ring slot exists for).
+6. The thing this was for: taps feel like they happen when the finger lands.
 
 With `-Drunelite.touch.diag` the log prints `L settle: N frames` then `L commit: armed N frames before the
 lift` for an armed tap; a tap that fell back prints the old settle line alone.

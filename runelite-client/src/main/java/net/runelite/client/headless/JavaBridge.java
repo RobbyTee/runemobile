@@ -742,7 +742,7 @@ public final class JavaBridge
 		{
 			return;
 		}
-		if (tapUncommitted && (tapState == TapState.AWAIT_ENGINE || tapState == TapState.ARMED))
+		if (tapState == TapState.ARMED || (tapState == TapState.AWAIT_ENGINE && tapUncommitted))
 		{
 			// A finger is on the glass and the engine is resolving the point under it (armTap). Parking would
 			// move the cursor off that point, so the gate could never accept and the lift would pay for the
@@ -1071,6 +1071,7 @@ public final class JavaBridge
 		if (c.getGameState() != GameState.LOGGED_IN || canvas == null)
 		{
 			tapState = TapState.IDLE;   // world went away mid-tap: drop it (nothing sensible to click)
+			tapUncommitted = false;     // ... including any finger-down arm (the invariant: set only in AWAIT_ENGINE/ARMED)
 			queuedTap = false;
 			return;
 		}
@@ -1113,11 +1114,11 @@ public final class JavaBridge
 				}
 				if (tapUncommitted)
 				{
-					tapUncommitted = false;
 					if (stableFrames >= STABLE_NEEDED)
 					{
 						// Armed by a finger still on the glass, and the point is now resolved: hold the click
-						// for the lift.
+						// for the lift. tapUncommitted STAYS set — it is what the lift reads to know the arm
+						// is still waiting for it (and what keeps the pointer park off the armed point).
 						armedFrames = 0;
 						tapState = TapState.ARMED;
 					}
@@ -1126,6 +1127,7 @@ public final class JavaBridge
 						// Fail-open with nothing proved. For a real tap that means "click anyway, never drop
 						// it", but an arm has no tap to drop: go back to rest so the lift runs an ordinary one
 						// instead of waiting out a second gate. The arm can then only ever help.
+						tapUncommitted = false;
 						tapState = TapState.IDLE;
 					}
 					return;

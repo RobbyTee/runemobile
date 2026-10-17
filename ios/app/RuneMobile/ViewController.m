@@ -235,9 +235,15 @@ static UIColor *RMInteractRingColor(void) {
 @property (nonatomic, assign) BOOL pendingClick;
 @property (nonatomic, assign) CGPoint pendingClickPoint;
 @property (nonatomic, assign) NSTimeInterval pendingClickAt;
-// The contact ring still waiting for that answer, or nil when none is (it expired, the touch turned into a
-// drag, or the point didn't read as a world tap) — then the pending-click path draws one itself, as before.
+// The ring of the touch currently ON the glass, or nil when there is none (it expired, the touch turned into
+// a drag, or the point didn't read as a world tap).
 @property (nonatomic, strong) CAShapeLayer *liveRing;
+// The ring of the tap that has LIFTED and is waiting for its kind. A separate slot because those two overlap
+// by construction: the answer is 80-160 ms out, the Java side queues the next tap behind the one it is still
+// confirming, and spam-tapping is how this game is played. With one slot, the first tap's answer repainted —
+// or withdrew — the ring the SECOND finger had just drawn somewhere else. nil = no ring is waiting, and then
+// the pending-click path draws one itself, as it always did.
+@property (nonatomic, strong) CAShapeLayer *pendingRing;
 @property (nonatomic, assign) int emX;                    // live engine-menu geometry (for click-through)
 @property (nonatomic, assign) int emY;
 @property (nonatomic, assign) int emW;
@@ -6165,8 +6171,8 @@ static CGRect mapRectFromArr(NSArray *a) {
             // so the ring is redundant (parity with Android's TAP_KIND_WIDGET branch). SCENE taps still ring; an
             // older jar returns 0 (TAP_KIND_NONE != kTapKindWidget), preserving ring-on-every-interaction.
             if ([JVMLauncher lastTapKind] == kTapKindWidget) {
-                [self retireLiveRing]; // the engine cuffs the slot itself — take the contact marker back
-            } else if (![self promoteLiveRingToInteract]) {
+                [self retirePendingRing]; // the engine cuffs the slot itself — take this tap's marker back
+            } else if (![self promotePendingRingToInteract]) {
                 [self flashClickRingAt:self.pendingClickPoint color:RMInteractRingColor()];
             }
             self.pendingClick = NO; // a widget tap still resolves the pending state, it just draws no ring
@@ -6176,10 +6182,10 @@ static CGRect mapRectFromArr(NSArray *a) {
         // Nothing bumped: a plain walk, which is the colour the contact marker already has. So this only draws
         // for a tap that made no contact marker (the point read as UI, or the ring outlived the grace) — and it
         // ends the pending state either way, which also stops a late interact answer repainting a walk ring.
-        if (!self.liveRing) {
+        if (!self.pendingRing) {
             [self flashClickRingAt:self.pendingClickPoint color:RMWalkRingColor()];
         }
-        self.liveRing = nil;
+        self.pendingRing = nil;
         self.pendingClick = NO;
     }
 }
@@ -6709,6 +6715,11 @@ static CGRect mapRectFromArr(NSArray *a) {
     self.pendingClick = YES;
     self.pendingClickPoint = vp;
     self.pendingClickAt = CACurrentMediaTime();
+    // This tap's own marker, handed over by name: whatever lands on the glass next gets a fresh liveRing and
+    // cannot be repainted by this tap's answer. (A second lift while this one is still pending overwrites the
+    // slot; the one it replaces simply finishes its fade in the walk colour, which is what it already shows.)
+    self.pendingRing = self.liveRing;
+    self.liveRing = nil;
     if (!self.tapHaptic) { self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight]; }
     [self.tapHaptic prepare];
     [JVMLauncher postClickX:gx y:gy button:1];
@@ -6767,14 +6778,27 @@ static CGRect mapRectFromArr(NSArray *a) {
     return YES;
 }
 
-// The touch turned into a drag, a hold or a pinch, or the engine answered WIDGET — no walk ring belongs to it,
-// so take the contact marker back. Freeze the size it had reached and fade what is left of it out quickly: the
-// ring is mid-animation, and dropping the layer outright reads as a flicker.
+// The touch on the glass turned into a drag, a hold or a pinch: no click is coming for it, so take its marker
+// back.
 - (void)retireLiveRing {
     CAShapeLayer *ring = self.liveRing;
+    self.liveRing = nil;
+    [self retireRing:ring];
+}
+
+// The same for a tap that has already lifted, when the engine answers WIDGET: it draws its own cuff on the
+// slot, so that tap gets no ring after all (parity with Android's TAP_KIND_WIDGET branch).
+- (void)retirePendingRing {
+    CAShapeLayer *ring = self.pendingRing;
+    self.pendingRing = nil;
+    [self retireRing:ring];
+}
+
+// Freeze the size the ring had reached and fade what is left of it out quickly, rather than dropping the layer
+// outright: it is mid-animation, and a hard removal reads as a flicker.
+- (void)retireRing:(CAShapeLayer *)ring {
     if (!ring)
         return;
-    self.liveRing = nil;
     CALayer *shown = (CALayer *)ring.presentationLayer;
     float opacity = shown ? shown.opacity : 1.0f;
     CATransform3D size = shown ? shown.transform : CATransform3DIdentity;
@@ -6794,14 +6818,14 @@ static CGRect mapRectFromArr(NSArray *a) {
     [CATransaction commit];
 }
 
-// The engine resolved the tap as a real interaction: the marker drawn on contact is the right ring in the
+// The engine resolved the tap as a real interaction: the marker it drew on contact is the right ring in the
 // wrong colour, so repaint it in place — actions off, because an implicit cross-fade would smear the red over
-// what is left of the ring's life. NO when no contact marker is alive, i.e. the caller should draw one.
-- (BOOL)promoteLiveRingToInteract {
-    CAShapeLayer *ring = self.liveRing;
+// what is left of the ring's life. NO when that tap has no ring alive, i.e. the caller should draw one.
+- (BOOL)promotePendingRingToInteract {
+    CAShapeLayer *ring = self.pendingRing;
     if (!ring)
         return NO;
-    self.liveRing = nil;
+    self.pendingRing = nil;
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     ring.strokeColor = RMInteractRingColor().CGColor;
@@ -6837,6 +6861,8 @@ static CGRect mapRectFromArr(NSArray *a) {
         [ring removeFromSuperlayer];
         if (weakSelf.liveRing == ring)
             weakSelf.liveRing = nil; // never offer a dead layer the late answer
+        if (weakSelf.pendingRing == ring)
+            weakSelf.pendingRing = nil;
     }];
     [ring addAnimation:grp forKey:@"clickRing"];
     ring.opacity = 0.0;   // end state (the animation drives the visible fade)
