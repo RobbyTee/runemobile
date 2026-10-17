@@ -69,6 +69,7 @@ static jmethodID g_midSetMenuRenderSuppressed = nullptr;
 static jmethodID g_midKeybind = nullptr;
 // Sticky Ctrl/Alt latch (mirror of setShiftHeld) + a discrete middle-button click. Optional resolve.
 static jmethodID g_midSetCtrlHeld = nullptr, g_midSetAltHeld = nullptr, g_midMiddleClick = nullptr;
+static jmethodID g_midArmTap = nullptr, g_midCancelArmedTap = nullptr;
 // FIX-10b: JavaBridge.invokeMenuEntry(int parentDisplayIndex, int childIndex) — commit a native tap-menu row /
 // submenu child directly (child<0 = the parent entry itself). Optional resolve (older jars lack it).
 static jmethodID g_midInvokeMenuEntry = nullptr;
@@ -341,7 +342,13 @@ enum InputKind {
     // Native-menu build-timeout degrade (IN_MENU_SUPPRESS): JavaBridge.setMenuRenderSuppressed(a!=0). Lifts the
     // engine's own "Choose Option" raster suppression so a long-press falls back to the raw engine menu when the
     // native styled overlay never lands. Queued so the render thread makes the call (ordered with menu clicks).
-    IN_CTRL = 14, IN_ALT = 15, IN_MIDDLECLICK = 16, IN_MENU_SUPPRESS = 17
+    IN_CTRL = 14, IN_ALT = 15, IN_MIDDLECLICK = 16, IN_MENU_SUPPRESS = 17,
+    // Finger-down tap arm: JavaBridge.armTap(x=a, y=b) when the finger LANDS, cancelArmedTap() when the touch
+    // turns out not to be a tap. Queued like every other input so the already-attached render thread makes the
+    // call and the arm stays ORDERED with the click the lift posts -- the click must reach onClick first (it
+    // commits the arm) and the cancel after it (a no-op by then). Both are terminal: never coalesced, never
+    // dropped, since a lost cancel strands an arm and a stranded arm refuses to arm the NEXT touch.
+    IN_ARMTAP = 18, IN_CANCELARM = 19
     // clang-format on
 };
 // s carries the IN_TEXT payload; empty for the int-only kinds (aggregate-inits to "").
@@ -598,6 +605,10 @@ static bool publishBridge(JNIEnv *env) {
     g_midSetAltHeld   = midOpt(env, global, "setAltHeld", "(Z)V");
     g_midMiddleClick  = midOpt(env, global, "onMiddleClick", "(II)V");
     g_midInvokeMenuEntry = midOpt(env, global, "invokeMenuEntry", "(II)V");   // FIX-10b submenu commit (optional)
+    // Finger-down tap arm: best-effort, like every other late addition. A jar without them only costs the fast
+    // path (the lift falls back to the full settle gate, which is where this started) -- never the render path.
+    g_midArmTap = midOpt(env, global, "armTap", "(II)V");
+    g_midCancelArmedTap = midOpt(env, global, "cancelArmedTap", "()V");
     // FIX-3 idle keepalive: best-effort (a missing one only disables the idle-reset, never the render path) so
     // an older staged jar lacking keepAlive still boots.
     g_midKeepAlive = midOpt(env, global, "keepAlive", "()V");
@@ -1021,6 +1032,14 @@ static void drainInput(JNIEnv *env) {
             case IN_ALT:          if (g_midSetAltHeld) env->CallStaticVoidMethod(g_bridgeCls, g_midSetAltHeld, (jboolean)(ev.a != 0)); break;
             case IN_MIDDLECLICK:  if (g_midMiddleClick) env->CallStaticVoidMethod(g_bridgeCls, g_midMiddleClick, ev.a, ev.b); break;
             case IN_INVOKEMENUENTRY: if (g_midInvokeMenuEntry) env->CallStaticVoidMethod(g_bridgeCls, g_midInvokeMenuEntry, ev.a, ev.b); break;
+            case IN_ARMTAP:
+                if (g_midArmTap)
+                    env->CallStaticVoidMethod(g_bridgeCls, g_midArmTap, ev.a, ev.b);
+                break;
+            case IN_CANCELARM:
+                if (g_midCancelArmedTap)
+                    env->CallStaticVoidMethod(g_bridgeCls, g_midCancelArmedTap);
+                break;
             case IN_MENU_SUPPRESS:
                 if (g_midSetMenuRenderSuppressed)
                     env->CallStaticVoidMethod(g_bridgeCls, g_midSetMenuRenderSuppressed, (jboolean)(ev.a != 0));
@@ -1662,6 +1681,14 @@ Java_dev_audaro_runemobile_JvmLauncher_nativeClickPrecise(JNIEnv *, jobject, jin
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeMove(JNIEnv *, jobject, jint x, jint y) {
     enqueue({IN_MOVE, x, y, 0, 0});
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeArmTap(JNIEnv *, jobject, jint x, jint y) {
+    enqueue({IN_ARMTAP, x, y, 0, 0});
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeCancelArmedTap(JNIEnv *, jobject) {
+    enqueue({IN_CANCELARM, 0, 0, 0, 0});
 }
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeKeyStroke(JNIEnv *, jobject, jint vk) {

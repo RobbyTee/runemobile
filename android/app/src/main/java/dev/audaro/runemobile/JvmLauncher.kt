@@ -131,6 +131,21 @@ object JvmLauncher {
         y: Int,
     )
 
+    /**
+     * The finger LANDED at game-canvas (x,y): start resolving that point now, click nothing. A left tap is
+     * never re-hit-tested, so the bridge has to move the synthetic cursor there and wait until the engine has
+     * demonstrably resolved it before it can press — frames that used to be spent AFTER the lift, which is
+     * most of what "taps feel delayed" was. Arming spends them while the finger is still on the glass, so the
+     * lift's [nativeClick] posts the click on the spot. Presses nothing on its own.
+     */
+    external fun nativeArmTap(
+        x: Int,
+        y: Int,
+    )
+
+    /** The armed touch turned into a drag, a hold or a pinch, so no click is coming for it: drop the arm. */
+    external fun nativeCancelArmedTap()
+
     /** Commit a string of text to the focused engine field (soft-keyboard input). */
     external fun nativeText(s: String)
 
@@ -602,6 +617,13 @@ object JvmLauncher {
         x: Int,
         y: Int,
     ) = nativeMove(x, y)
+
+    fun armTap(
+        x: Int,
+        y: Int,
+    ) = nativeArmTap(x, y)
+
+    fun cancelArmedTap() = nativeCancelArmedTap()
 
     fun text(s: String) = nativeText(s)
 

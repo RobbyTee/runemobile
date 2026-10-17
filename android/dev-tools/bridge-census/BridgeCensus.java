@@ -56,6 +56,10 @@ public final class BridgeCensus
 		"JavaBridge#isTextInputOpen()",
 		"JavaBridge#onKeyStroke(int)",
 		"JavaBridge#onTouch(int,int,int,int)",
+		// Finger-down tap arm: the engine-resolved gate runs while the finger is on the glass so the lift can
+		// post the click on the spot. The shell binds both from jvm_bootstrap.cpp, so both belong in the census.
+		"JavaBridge#armTap(int,int)",
+		"JavaBridge#cancelArmedTap()",
 		// --- MobileUiBridge: plugin control plane + panels (A4/A5) ---
 		"MobileUiBridge#isEnabled()",
 		"MobileUiBridge#init(PluginManager,ConfigManager,ClientThread,Client,EventBus)",

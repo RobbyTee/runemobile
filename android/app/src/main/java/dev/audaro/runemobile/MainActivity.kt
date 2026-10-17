@@ -61,6 +61,7 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
+import kotlin.math.hypot
 
 /**
  * Milestone B host: brings up the embedded HotSpot VM running headless RuneLite (DeviceHeadlessBoot) and
@@ -170,10 +171,11 @@ class MainActivity : AppCompatActivity() {
     private var vibrator: Vibrator? = null
     private var lastTapSeq = 0
 
-    // Phase-1 click ring: every world tap spawns a ring whose colour is decided by ENGINE TRUTH, not at touch
-    // time — the engine-resolved tap machine settles ~80–160 ms after the tap, so showing instantly would
-    // misclassify (the iOS lesson). On tap we snapshot interactTapSeq; the Choreographer poll then resolves:
-    // seq advanced within the grace window → red (interaction), grace expired → yellow (walk).
+    // Phase-1 click ring. The ring is spawned on the LIFT in the walk colour and the engine-resolved kind is
+    // then applied to the ring already on screen (recolour for a scene interaction, withdraw for a widget op
+    // or a dead click). Deferring the DRAW until truth arrived — which is what this did — meant the commonest
+    // tap in the game marked itself ~250 ms after a finger that had already left the glass, because a walk
+    // resolves by nothing ever bumping. On tap we snapshot the seqs; the Choreographer poll resolves them.
     private lateinit var tapRing: TapRingView
     private var ringPending = false
     private var ringX = 0f
@@ -181,6 +183,23 @@ class MainActivity : AppCompatActivity() {
     private var ringArmedAtMs = 0L
     private var ringBaseSeq = 0
     private var ringKindBaseSeq = 0 // tapKindSeq at arm time; a bump past it resolves the tap's kind
+    private var pendingRingId = -1 // the ring drawn at the lift, so the resolved kind can repaint/withdraw it
+
+    // ---- Tap classifier (parity with iOS RMSceneView + kSceneDragSlop) ----------------------------------
+    // Who decides what a tap is. GestureDetector fires onScroll the moment the finger passes ViewConfiguration's
+    // scaledTouchSlop (8dp ≈ 1.3mm), and the moment it does, the tap is gone AND the long-press is cancelled —
+    // so an ordinary finger's roll rotated the camera a few pixels and never clicked, and a press-and-hold with
+    // the same roll never opened the menu either: the touch was classified as a drag before the user had
+    // finished making it. That is the "sometimes my taps don't register" feel, and it is upstream of every
+    // latency fix. 18dp (≈3mm) is past a finger's roll and well short of a deliberate drag; it is ONE number,
+    // read by every branch, so the tap, the hold and the drag cannot disagree about where the boundary is.
+    private val sceneDragSlopPx by lazy { 18f * resources.displayMetrics.density }
+    private var touchOriginX = 0f // where this one-finger sequence LANDED (the point a tap commits to)
+    private var touchOriginY = 0f
+    private var touchStrayed = 0f // the FURTHEST it ever got from there, not where it ended up
+    private var touchMulti = false // a second finger joined: this sequence belongs to the pinch, never a tap
+    private var touchPastSlop = false // it left the radius: a drag now, and no click is coming for it
+    private var tapArmed = false // armTap was posted for this sequence and nothing has dropped it yet
     private var keyboardShown = false
     private var imeWasShown = false // last frame's ACTUAL ime visibility — to spot a user-driven dismiss
     private var manualKeyboard = false // ⌨ toggle: hold the soft keyboard up with no engine text field open
@@ -1282,11 +1301,61 @@ class MainActivity : AppCompatActivity() {
                 }
                 return@setOnTouchListener true
             }
+            // Track the raw sequence ourselves before anything else sees it — landing point, furthest stray,
+            // second finger — because the tap/drag decision is ours now (see sceneDragSlopPx) and ACTION_DOWN
+            // is also the moment the engine's half of the click wait can start.
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    touchOriginX = event.x
+                    touchOriginY = event.y
+                    touchStrayed = 0f
+                    touchMulti = false
+                    touchPastSlop = false
+                }
+
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    touchMulti = true
+                    dropTapArm() // a pinch, not a tap: the first finger's arm goes with it
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    if (!touchMulti) {
+                        // The FURTHEST it ever got, not where it ended up: a finger that swings out and comes
+                        // back was a drag, and the stray that classified it must not be forgotten on the way in.
+                        val d = hypot(event.x - touchOriginX, event.y - touchOriginY)
+                        if (d > touchStrayed) touchStrayed = d
+                        if (!touchPastSlop && touchStrayed > sceneDragSlopPx) {
+                            touchPastSlop = true
+                            dropTapArm() // this touch is a drag now (iOS does this at the pan's Began)
+                        }
+                    }
+                }
+            }
             scaleGestures.onTouchEvent(event) // pinch-zoom first; it sets the isInProgress flag onScroll reads
-            gestures.onTouchEvent(event)
-            // Pre-hover: move the engine pointer to a fresh single-finger touch so tooltips/menus track it.
+            // Withhold ACTION_MOVE from the detector until the finger has left the tap radius. A detector that
+            // never sees movement stays in its own tap region, so BOTH the tap and the long-press survive a
+            // roll that its 8dp would have taken them away for — the Android mirror of RMCameraPanRecognizer
+            // withholding -touchesMoved: from super. Everything else (down, up, cancel, pointer changes) goes
+            // through untouched, and the pinch detector above always sees the whole stream.
+            if (event.actionMasked != MotionEvent.ACTION_MOVE || touchPastSlop || touchMulti) {
+                gestures.onTouchEvent(event)
+            }
+            // Finger down. Nothing is drawn and nothing is clicked here — a touch is not yet a tap — but a left
+            // tap is never re-hit-tested, so the bridge has to move the synthetic cursor to the point and wait
+            // for the engine to resolve it before it can press. armTap spends those frames while the finger is
+            // still on the glass (it posts the cursor move itself), so the lift posts the click on the spot
+            // instead of a few frames after it. Only for a tap that would take the plain world-click path; the
+            // routed ones (orb, minimap, map window, dialogue) click precisely and need no gate, so they keep
+            // the plain pre-hover move that tooltips and menu tracking read.
             if (event.actionMasked == MotionEvent.ACTION_DOWN && event.pointerCount == 1) {
-                JvmLauncher.move(toGameX(event.x), toGameY(event.y))
+                val dgx = toGameX(event.x)
+                val dgy = toGameY(event.y)
+                if (isPlainWorldTap(dgx, dgy)) {
+                    tapArmed = true
+                    JvmLauncher.armTap(dgx, dgy)
+                } else {
+                    JvmLauncher.move(dgx, dgy)
+                }
             }
             if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
                 if (itemDragging) {
@@ -1304,6 +1373,16 @@ class MainActivity : AppCompatActivity() {
                 mapPanning = false
                 mapScrolling = false
                 ifaceScrolling = false // DRAG-2: end the interface drag-to-scroll gesture
+                // Whatever this touch did, it is finished with its arm. Cancelling here rather than at each of
+                // the router's exits is both shorter and safer: it cannot be missed when a branch is added. It
+                // reads as a no-op when the click DID happen, because the two reach the bridge in the order
+                // they were made: gestures.onTouchEvent above has already enqueued the click, and both cross
+                // the SAME two queues in turn — the native input queue the render thread drains, then
+                // ClientThread.invoke — so the commit has moved the state to CLICKED by the time the cancel
+                // runs, and a cancel never touches a committed tap. Every other exit (a routed precise click,
+                // a stray the detector rejected, a cancelled sequence) would otherwise leave an arm nobody
+                // commits, and a live arm refuses to arm the NEXT touch — the one thing it exists to do.
+                dropTapArm()
             }
             true
         }
@@ -2135,6 +2214,40 @@ class MainActivity : AppCompatActivity() {
         val cy: Int,
     )
 
+    /**
+     * Drop the arm this touch took, if it still has one. Idempotent, and safe to call from any exit: the
+     * bridge only ever drops an arm that is still waiting, never a tap that has already been committed.
+     */
+    private fun dropTapArm() {
+        if (!tapArmed) return
+        tapArmed = false
+        JvmLauncher.cancelArmedTap()
+    }
+
+    /**
+     * Would a tap at this canvas point take the plain world-click path — the only path that arms, and the only
+     * one that draws a click marker? Mirrors onSingleTapUp's early returns: the open world map (which owns the
+     * whole screen), a minimap orb, the relocated minimap cluster, and an open dialogue's chat region, all of
+     * which click precisely and ring nothing. Worth keeping in lockstep with those returns, but nothing
+     * depends on it being exact: this only decides whether to ARM, so a mismatch costs an arm nobody commits
+     * (dropped at the lift) or a fast path not taken — never a wrong click and never a wrong ring, which are
+     * decided later by the routing itself.
+     */
+    private fun isPlainWorldTap(
+        gx: Int,
+        gy: Int,
+    ): Boolean {
+        if (mapOpen) return false
+        if (nearestOrb(gx, gy) != null) return false
+        if (inCanvasRect(minimapRectCanvas, gx, gy)) return false
+        if (chatDialogueActive &&
+            (inCanvasRect(chatRectCanvas, gx, gy) || inCanvasRect(dialogueChatCanvas, gx, gy))
+        ) {
+            return false
+        }
+        return true
+    }
+
     /** Minimap-orb veneer: given a tap in canvas px, return the live orb whose enlarged (ORB_TAP_PAD) bounds
      *  contain it — nearest centre wins when zones overlap — or null when the tap is clear of every orb. The
      *  per-orb bounds come from HudVeneerBridge.getOrbSnapshot, republished each frame + read lock-free. */
@@ -2178,11 +2291,18 @@ class MainActivity : AppCompatActivity() {
         override fun onDown(e: MotionEvent) = true
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            val gx = toGameX(e.x)
-            val gy = toGameY(e.y)
+            // The tap goes to where the finger LANDED, not where it left. That is the point the user aimed at,
+            // it is the point the engine has been resolving since contact (armTap), and committing to it is
+            // what makes the fast path apply to a tap that rolled — the whole case the classifier exists for.
+            // Every branch below routes on it, so a rolled tap cannot pick a different orb or slot than a
+            // still one. e (the UP event) is only used for what it is: the event that ended the sequence.
+            val tx = touchOriginX
+            val ty = touchOriginY
+            val gx = toGameX(tx)
+            val gy = toGameY(ty)
             Log.i(
                 TAG,
-                "tap screen=(${e.x},${e.y}) view=(${surfaceView.width}x${surfaceView.height}) frame=(${JvmLauncher.frameWidth()}x${JvmLauncher.frameHeight()}) -> game=($gx,$gy)",
+                "tap landed=($tx,$ty) lifted=(${e.x},${e.y}) strayed=$touchStrayed view=(${surfaceView.width}x${surfaceView.height}) frame=(${JvmLauncher.frameWidth()}x${JvmLauncher.frameHeight()}) -> game=($gx,$gy)",
             )
             // Phase-5: while the world map is open it owns the ENTIRE screen (stretched fullscreen). EVERY tap is
             // a PRECISE engine click — the engine resolves the close X / zoom / search / POI / legend row directly,
@@ -2231,14 +2351,19 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
             // Arm the tap feedback BEFORE posting the click so the baseline seqs can't race the engine's bump.
-            // The kind seq resolves WHAT the tap hit (walk/scene = ring, widget = border, nothing = no feedback);
-            // interactTapSeq stays the haptic source.
+            // The kind seq resolves WHAT the tap hit (scene = red, walk = the colour it already has, widget or
+            // nothing = withdrawn); interactTapSeq stays the haptic source.
             ringBaseSeq = JvmLauncher.interactTapSeq()
             ringKindBaseSeq = JvmLauncher.tapKindSeq()
-            ringX = e.x
-            ringY = e.y
+            ringX = tx
+            ringY = ty
             ringArmedAtMs = SystemClock.uptimeMillis()
             ringPending = true
+            // Mark the click NOW, in the walk colour. This is the one place that knows the tap is a world click
+            // rather than one of the routed paths above, so no camera drag or UI tap can flash a ring it has to
+            // take back — and the user is owed the marker on the lift, not whenever the engine gets back to us.
+            // The resolved kind is then applied to this ring instead of deciding whether to draw one.
+            pendingRingId = tapRing.spawn(tx, ty, TapRingView.COLOR_WALK)
             JvmLauncher.click(gx, gy, 1)
             return true
         }
@@ -2323,6 +2448,11 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
+                // Classify only: this first call carries the whole withheld slop as its distance (the detector
+                // measures from the DOWN event, and everything inside the radius was kept from it), so applying
+                // it would snap the camera / map / list 18dp on the first frame of every drag. iOS zeroes the
+                // pan's translation at Began for exactly this reason; dropping the reading is the same thing.
+                return true
             }
             if (itemDragging) {
                 // Stream the WidgetDrag at the finger's current canvas point (one per frame is fine); cache the
@@ -2838,27 +2968,36 @@ class MainActivity : AppCompatActivity() {
                             ringPending = false
                             when (JvmLauncher.lastTapKind()) {
                                 TAP_KIND_SCENE -> {
+                                    // The marker drawn at the lift is the right ring in the wrong colour:
+                                    // repaint it in place rather than drawing a second one over its tail.
                                     Log.i(TAG, "p1: ring INTERACT (+${SystemClock.uptimeMillis() - ringArmedAtMs}ms)")
-                                    tapRing.spawn(ringX, ringY, TapRingView.COLOR_INTERACT)
+                                    tapRing.recolor(pendingRingId, TapRingView.COLOR_INTERACT)
                                 }
 
                                 TAP_KIND_WALK -> {
-                                    Log.i(TAG, "p1: ring WALK")
-                                    tapRing.spawn(ringX, ringY, TapRingView.COLOR_WALK)
+                                    Log.i(TAG, "p1: ring WALK (already drawn)")
                                 }
 
                                 // An interface op: no ring. An item op is outlined by the engine itself (the cyan
-                                // item silhouette, armed in JavaBridge) — nothing for the shell to draw.
+                                // item silhouette, armed in JavaBridge) — nothing for the shell to draw, so take
+                                // the marker back instead of leaving a walk ring on a slot that never walked.
                                 TAP_KIND_WIDGET -> {
-                                    Log.i(TAG, "p1: widget op -> no ring (engine outlines items)")
+                                    Log.i(TAG, "p1: widget op -> ring withdrawn (engine outlines items)")
+                                    tapRing.retire(pendingRingId)
                                 }
 
                                 else -> {
-                                    Log.i(TAG, "p1: tap hit nothing -> no feedback")
+                                    Log.i(TAG, "p1: tap hit nothing -> ring withdrawn")
+                                    tapRing.retire(pendingRingId)
                                 }
                             }
+                            pendingRingId = -1
                         } else if (SystemClock.uptimeMillis() - ringArmedAtMs > RING_GRACE_MS) {
-                            ringPending = false // unresolved (e.g. the click force-opened a menu) — no stray ring
+                            // Nothing resolved within the grace (a rare force-opened menu, or a walk the engine
+                            // never published): the ring on screen is already the walk colour, which is the
+                            // right guess and the one it was drawn in. Just stop waiting for an answer.
+                            ringPending = false
+                            pendingRingId = -1
                         }
                     }
                     if (menuBuilding) {
@@ -3859,6 +3998,10 @@ class MainActivity : AppCompatActivity() {
         viewY: Float,
     ) {
         if (menuActive) return
+        // The hold claimed this touch: it opens a menu, it never clicks. Drop the arm here rather than at the
+        // lift, because once menuActive is set the touch listener short-circuits into menu-peek and the
+        // ACTION_UP that would otherwise drop it is never reached (iOS gets this from touchesCancelled).
+        dropTapArm()
         val gx = toGameX(viewX)
         val gy = toGameY(viewY)
         menuAnchorX = viewX
