@@ -1,14 +1,15 @@
-# Instant click — the tap delay, and what is left of it
+# Instant click — the tap delay, and who decides what a tap is
 
-Branch `master`. Commits `97cbf49a22` (native marker) and `7116329bb6` (bridge arm). Both pushed to
-`origin`. Not on the phone yet — see **Next step**.
+Branch `master`. Commits `97cbf49a22` (marker), `7116329bb6` (bridge arm), `9c5e7d03a4` (review fixes) and
+the one this handoff ships with (the tap classifier). All pushed to `origin`. Not on the phone yet — see
+**Next step**.
 
 ## What the delay actually was
 
 Three waits stacked on one tap, and none of them was the game being slow:
 
-1. **`UITapGestureRecognizer` fires on finger-UP.** Structural: one-finger drag is the camera and a hold is
-   the menu, so a tap is only a tap once the finger leaves without doing either.
+1. **`UITapGestureRecognizer` fires on finger-UP**, and not even then if the touch rolled — see the next
+   section, this turned out to be the bigger half of the problem.
 2. **The engine-resolved gate.** A left tap is never re-hit-tested — the engine consumes the press against
    the menu it built from the cursor position earlier in the same tick — so `JavaBridge` moves the synthetic
    cursor to the tap point, waits until the engine has demonstrably resolved it (cursor match + a stable
@@ -19,38 +20,72 @@ Three waits stacked on one tap, and none of them was the game being slow:
    0.25s grace. The commonest tap in the game therefore marked itself ~250ms after a finger that had
    already lifted.
 
-## What shipped
+## Who decides what a tap is (the part that mattered most)
 
-- **The marker is drawn on contact** (`RMSceneView.touchesBegan:` → `onSceneTouchDown:`), in the walk
-  colour. The resolved kind still reaches the ring that is already on screen: `promoteLiveRingToInteract`
-  repaints it red, `retireLiveRing` takes it back for a WIDGET tap (the engine cuffs those itself) or when
-  the touch turns into a hold/drag/pinch. Every older path still draws its own ring when no contact marker
-  exists, so nothing regresses. A `UIImageView` subclass carries the touch-down callback deliberately — a
-  zero-duration recognizer would have re-arbitrated the whole tap/hold/pan/pinch set.
+UIKit's numbers are wrong for this game. A pan recognizer begins after **~10pt**, which is inside the roll of
+an ordinary finger-tap, and the moment it begins it takes the touch away from **both** the tap and the
+long-press. So a tap with a little roll in it rotated the camera three pixels and never clicked, and a
+press-and-hold with a little roll never opened the menu either: the touch was classified as a drag before the
+user had finished making it. That is the "sometimes my taps don't register" feel, and no amount of shaving
+latency off the click path would have touched it.
+
+So the decision is ours now, and **one number** makes it — `kSceneDragSlop = 18.0` (≈3mm: past a finger's
+roll, well short of a deliberate drag), read by all three gestures so they cannot disagree:
+
+| one-finger touch | who takes it |
+| --- | --- |
+| strays ≤ 18pt, lifts within 0.45s | **click**, at the point it LANDED on |
+| strays ≤ 18pt, held past 0.4s | long-press → menu (`allowableMovement` raised to the same 18pt) |
+| strays > 18pt | camera drag (or map / chat / inventory / interface drag) |
+| second finger joins | pinch → zoom |
+
+- `RMSceneView` (the canvas) tracks each one-finger sequence: landing point, the **furthest** it ever strayed
+  (not where it ended — a finger that swings out and comes back was a drag), and how long it was down. A lift
+  that reaches `-touchesEnded:` is a tap *by elimination*: a recognizer that claims a touch cancels it in the
+  view, so a sequence that gets that far is one nobody else wanted. There is no tap recognizer any more.
+- `RMCameraPanRecognizer` withholds `-touchesMoved:` from `super` until the finger leaves that 18pt radius,
+  so the pan stays in `Possible` and claims nothing until it is really a drag. It also records the **landing
+  point** and exposes it, because the drag branches classify a drag by where it started (which inventory
+  slot, the chat, the map) and the old code reconstructed that from the translation at `Began` — fine at
+  UIKit's 10pt, a whole inventory slot's worth of wrong once the withheld slop is 18pt.
+- Cost of the change: rotation now has an 18pt dead zone instead of 10pt before the camera starts moving.
+
+## What else shipped
+
+- **The marker is drawn on the lift**, in the walk colour, in `worldTapAtScreenPoint:` — the one place that
+  knows the tap is a world click and not one of the routed paths (dialogue, world map, orb, chat, engine
+  dialogue), so a camera drag or a UI tap never flashes a ring it has to take back. The resolved kind still
+  reaches the ring already on screen: `promotePendingRingToInteract` repaints it red,`retirePendingRing`
+  takes it back for a WIDGET tap (the engine cuffs those itself). One slot is enough now that nothing is
+  drawn before the lift; a second tap inside the answer window takes the slot and the ring it replaced just
+  finishes its fade in the colour it already has.
 - **The gate runs while the finger is down.** `JavaBridge.armTap(x,y)` on contact enters the same
   `AWAIT_ENGINE` without a pending click and parks in the new `ARMED` state when it accepts;
   `commitArmedTap` posts the click at the lift. It re-proves both observables first (cursor still on the arm
   point, tail still the one that stabilised) and falls back to the full gate otherwise, so the fast path can
   never click against another point's menu. An arm that only failed open returns to rest, so arming can only
-  help. `cancelArmedTap` drops it on hold/drag/pinch; `ARMED_TIMEOUT` (120 frames) is the fail-safe.
+  help. `cancelArmedTap` drops it on a hold, a drag, a pinch, or a lift we rejected as a tap; `ARMED_TIMEOUT`
+  (120 frames) is the fail-safe. Nothing is drawn and nothing is pressed at contact — a touch is not yet a
+  tap, and that is exactly why the arm exists: it spends the engine's frames, not the user's.
+- The click goes to where the finger **landed**, not where it lifted: it is the point the user aimed at, it
+  is the point the engine has been resolving since contact, and committing to it is what makes the fast path
+  apply to a tap that rolled.
 - Tunables, all `Integer.getInteger`: `runelite.touch.armSlop` (4 canvas px), `runelite.touch.armedTimeout`.
-- **Two ring slots, not one.** `liveRing` is the ring of the touch on the glass; at the lift it is handed to
-  `pendingRing`, which is the one the answer repaints or withdraws. They have to be separate: the answer is
-  80-160 ms out and the bridge queues the next tap behind the one it is confirming, so with a single slot the
-  first tap's answer repainted — or withdrew — the ring the second finger had just drawn somewhere else.
 - **`tapUncommitted` lives as long as the arm does.** It is what the lift reads to know an `ARMED` state is
   still its own, so clearing it on entry to `ARMED` (as the first cut did) silently disabled the whole fast
   path: every lift fell back to a fresh gate. The invariant now is "set iff a finger-down arm is live", every
   exit clears it, and `parkPointer`'s guard is stated in terms of the state so it cannot depend on the flag's
-  lifetime. Both of these came out of review, not testing — see **Open risks**.
+  lifetime. That one came out of review, not testing — see **Open risks**.
 
-What is left: the click still happens **on lift**. Everything after the lift is now one client-thread hop.
+What is left: the click happens **on lift**, which is what it is for. Everything after the lift is one
+client-thread hop.
 
 ## Gate status
 
 - `./gradlew :client:compileJava` — clean. `:client:shadowJar` + `gpu-routec/stage-ios-gpu-jar.sh` —
   `ROUTEC_STAGE_GREEN`; the staged `client-shaded.jar` carries `armTap(II)V` and `cancelArmedTap()V`
-  (verified with `javap` on the staged jar, which is what the app boots).
+  (verified with `javap` on the staged jar, which is what the app boots). The classifier is native-only —
+  no Java change, so no jar rebuild.
 - `clang -fsyntax-only` on `ViewController.m` and `JVMLauncher.m` — 17 warnings, all pre-existing, none in
   the new code. `git clang-format --staged` applied.
 - Android bridge census — **GREEN, 78/78 resolved, 0 missing**; shared contract baseline refreshed
@@ -64,13 +99,17 @@ What is left: the click still happens **on lift**. Everything after the lift is 
 `ios/dev-tools/serve-ipa.sh` (the jars are already staged, so no `--jars` needed), then SideStore on the
 phone. On device, check in this order:
 
-1. A tap on open ground rings **instantly** and the ring is yellow.
+1. A tap on open ground rings **instantly on the lift** and the ring is yellow.
 2. A tap on an NPC/object rings instantly and turns **red** when the interaction resolves.
-3. An inventory/prayer/tab tap rings briefly and the ring is **withdrawn** (no walk ring left behind).
-4. A camera drag and a long-press each leave **no** ring and perform no click at their origin.
-5. Spam-tap two spots alternately: each tap's ring keeps its OWN colour and position (this is the case the
-   second ring slot exists for).
-6. The thing this was for: taps feel like they happen when the finger lands.
+3. **A sloppy tap** — land and lift with an obvious roll, up to about a fingertip's width — still clicks, at
+   the point it landed on, and the camera does not move. This is the case the classifier exists for.
+4. **A sloppy hold** — press and hold with the same roll — still opens the menu.
+5. A deliberate drag rotates the camera (now after a slightly longer dead zone) and leaves no ring and no
+   click at its origin. Same for a pinch.
+6. An inventory/prayer/tab tap rings briefly and the ring is **withdrawn** (no walk ring left behind). An
+   inventory **drag** still picks up the item under the finger — not its neighbour (the landing point).
+7. Spam-tap two spots alternately: each tap's ring keeps its own colour and position.
+8. The thing this was for: taps land when you expect them to, and nothing is dropped.
 
 With `-Drunelite.touch.diag` the log prints `L settle: N frames` then `L commit: armed N frames before the
 lift` for an armed tap; a tap that fell back prints the old settle line alone.
@@ -80,12 +119,16 @@ lift` for an armed tap; a tap that fell back prints the old settle line alone.
 - **The arm is a change to the tap state machine**, which is the thing that fixed wrong-target taps. The fast
   path is guarded by re-proving the gate's own observables, but only a device session proves it: watch for a
   tap acting on the PREVIOUS tap's target, which would be the signature.
-- `isPlainWorldTapAtGameX:gameY:screenPoint:` mirrors `onTap:`'s early returns (dialogue parchment, world
-  map, orbs, chat tab row, chat message area, open dialogue). They must stay in lockstep — a mismatch is
-  cosmetic (a marker retired a frame later, or drawn by the old fallback), never a wrong click, but it will
-  drift the first time one of those regions moves.
-- A WIDGET tap now shows the walk ring for the ~100-150ms before the kind comes back, then withdraws it.
-  That is new visible behaviour on inventory taps; if it reads as a flicker, the honest fix is publishing the
-  widget bounds natively so contact can skip the ring there, not re-deferring the ring.
+- **`RMCameraPanRecognizer` withholds touches from `super`.** It is the standard way to give a pan a
+  threshold and the handler reads nothing but translation deltas (no velocity), but it is UIKit internals: if
+  a drag ever begins and then behaves oddly on the first frame, this is the first place to look.
+- **18pt is a guess that feels right, not a measured number.** If taps still drop, raise it; if the camera
+  feels sticky to start, lower it. One constant, both effects — that is the point of it being one constant.
+- A WIDGET tap shows the walk ring for the ~100-150ms before the kind comes back, then withdraws it. If that
+  reads as a flicker, the honest fix is publishing the widget bounds natively so the lift can skip the ring
+  there, not re-deferring the ring.
+- `isPlainWorldTapAtGameX:gameY:screenPoint:` mirrors `worldTapAtScreenPoint:`'s early returns. Worth keeping
+  in lockstep, but it now only decides whether to ARM, so a mismatch costs an arm nobody commits or a fast
+  path not taken — never a wrong click or a wrong ring.
 - Rapid tapping: the previous tap's pointer park is skipped while an arm is live, but a tap whose finger is
   down for less than ~3 frames still settles after the lift (it just loses nothing).

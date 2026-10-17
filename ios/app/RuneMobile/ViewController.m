@@ -61,7 +61,7 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 @end
 
 // The official click-marker colours, in one place: yellow = a plain walk, red = the tap grabbed an
-// interactable. Three sites draw or repaint the ring (contact, the interact answer, the walk fallback) and
+// interactable. Three sites draw or repaint the ring (the lift, the interact answer, the walk fallback) and
 // they have to agree.
 static UIColor *RMWalkRingColor(void) {
     return [UIColor colorWithRed:1.0 green:0.84 blue:0.0 alpha:1.0];
@@ -70,25 +70,123 @@ static UIColor *RMInteractRingColor(void) {
     return [UIColor colorWithRed:1.0 green:0.2 blue:0.15 alpha:1.0];
 }
 
-// The game canvas. A UIImageView subclass for one reason: -touchesBegan: runs the instant the finger lands,
-// and a UITapGestureRecognizer cannot fire before the finger LIFTS. The click marker and the cursor pre-arm
-// both belong at touch-down, and a zero-duration recognizer added to carry them would re-arbitrate the
-// tap/long-press/pan/pinch set that IS the control scheme (a recognizer that succeeds on contact prevents the
-// others unless every pair is taught to run simultaneously). A view's own touch callbacks run alongside the
-// recognizers and change none of that. Controls layered above the canvas hit-test first, so a touch on one
-// never arrives here.
+// ONE number decides tap vs drag for every one-finger touch on the canvas, and both halves of the decision
+// read it, so they cannot disagree: a touch that never strays further than this (and lifts in time) is a
+// CLICK, and the camera refuses to start rotating until it is exceeded.
+//
+// It exists because UIKit's own numbers are wrong for this. A pan recognizer begins after ~10pt — well inside
+// the roll of an ordinary finger-tap — and the moment it does, it takes the touch away from BOTH the tap and
+// the long-press. So a tap with a little roll in it rotated the camera a few pixels and never clicked, and a
+// press-and-hold with a little roll never opened the menu either: the touch had already been classified as a
+// drag before the user had finished making it. The official app has no such gap, which is what "make sure the
+// click is determined based on whether the person is actually clicking or rotating" is about.
+//
+// 18pt ≈ 3mm of travel: past a finger's roll, well short of a deliberate drag. The cost is that rotation now
+// has an 18pt dead zone instead of 10pt before the camera starts moving.
+static const CGFloat kSceneDragSlop = 18.0;
+// A touch that stays inside that radius but sits there is a hold, not a tap. The long-press recognizer fires
+// at 0.4s and takes the sequence (opening the menu), so this only decides touches it did not claim.
+static const NSTimeInterval kSceneTapMaxHold = 0.45;
+
+// The game canvas, and the tap classifier. A UIImageView subclass because the decision above has to be made
+// from the raw touch sequence: -touchesBegan: runs the instant the finger lands (a tap recognizer cannot fire
+// before it LIFTS, which is too late to arm the engine), and -touchesEnded: runs only for a sequence that no
+// recognizer claimed — which is exactly the signal we need, since a recognizer that claims a touch cancels it
+// in the view. So the camera pan, the long-press and the pinch keep their recognizers, and a lift that
+// reaches here is a tap by elimination: whatever strayed too far or stayed too long is already somebody
+// else's gesture. Controls layered above the canvas hit-test first, so a touch on one never arrives here.
 @interface RMSceneView : UIImageView
 /// The landing point (in this view) of the first finger of a touch sequence.
 @property (nonatomic, copy) void (^touchDown)(CGPoint point);
+/// A one-finger sequence that no recognizer took: where it landed, the furthest it ever strayed from there,
+/// and how long it lasted. The handler decides whether that is a click.
+@property (nonatomic, copy) void (^touchUp)(CGPoint origin, CGFloat strayed, NSTimeInterval held);
 @end
 
-@implementation RMSceneView
+@implementation RMSceneView {
+    CGPoint _origin;
+    NSTimeInterval _landed;
+    CGFloat _strayed;
+    BOOL _multi; // a second finger joined: this sequence belongs to the pinch, not to a tap
+}
+
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesBegan:touches withEvent:event];
-    // allTouches counts the whole sequence, so a second finger (pinch) doesn't re-fire the marker.
-    if (self.touchDown && event.allTouches.count == 1) {
-        self.touchDown([touches.anyObject locationInView:self]);
+    if (event.allTouches.count != 1) {
+        _multi = YES; // stays set until a fresh single-finger sequence starts
+        return;
     }
+    _origin = [touches.anyObject locationInView:self];
+    _landed = CACurrentMediaTime();
+    _strayed = 0;
+    _multi = NO;
+    if (self.touchDown) {
+        self.touchDown(_origin);
+    }
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesMoved:touches withEvent:event];
+    if (_multi) {
+        return;
+    }
+    // The FURTHEST it ever got, not where it ended up: a finger that swings out and comes back was a drag.
+    CGPoint p = [touches.anyObject locationInView:self];
+    CGFloat d = hypot(p.x - _origin.x, p.y - _origin.y);
+    if (d > _strayed) {
+        _strayed = d;
+    }
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesEnded:touches withEvent:event];
+    if (_multi || !self.touchUp) {
+        return;
+    }
+    self.touchUp(_origin, _strayed, CACurrentMediaTime() - _landed);
+}
+// No -touchesCancelled: a cancelled sequence is one a recognizer claimed, which is precisely when there is
+// no tap to report.
+@end
+
+// The camera drag, held back to kSceneDragSlop. UIPanGestureRecognizer has no threshold to set, and its own
+// ~10pt is small enough to steal taps and long-presses (see kSceneDragSlop), so keep it in Possible until the
+// finger has clearly left the tap it might have been — a recognizer that never begins never takes the touch
+// from anyone. Translation is unaffected: the pan measures its own from the landing point, and the handler
+// already recovers the true touch start from it (DRAG-1), so a wider slop just means a bigger first reading.
+@interface RMCameraPanRecognizer : UIPanGestureRecognizer
+/// Where the finger actually landed, in this recognizer's own view. The handler needs the landing point to
+/// decide what a drag STARTED on (an inventory slot, the chat, the map) and must not reconstruct it from the
+/// translation at the moment the pan begins: whether that translation spans the whole withheld slop or only
+/// the move that crossed it is UIKit's business, and the difference is a whole inventory slot.
+@property (nonatomic, readonly) CGPoint landing;
+@end
+
+@implementation RMCameraPanRecognizer {
+    BOOL _tracking;
+}
+
+- (void)reset {
+    [super reset];
+    _tracking = NO;
+}
+
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesBegan:touches withEvent:event];
+    if (!_tracking) {
+        _landing = [touches.anyObject locationInView:self.view];
+        _tracking = YES;
+    }
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if (self.state == UIGestureRecognizerStatePossible && _tracking) {
+        CGPoint p = [touches.anyObject locationInView:self.view];
+        if (hypot(p.x - _landing.x, p.y - _landing.y) <= kSceneDragSlop) {
+            return; // still inside tap range — withhold the move, stay Possible, claim nothing
+        }
+    }
+    [super touchesMoved:touches withEvent:event];
 }
 @end
 
@@ -235,14 +333,9 @@ static UIColor *RMInteractRingColor(void) {
 @property (nonatomic, assign) BOOL pendingClick;
 @property (nonatomic, assign) CGPoint pendingClickPoint;
 @property (nonatomic, assign) NSTimeInterval pendingClickAt;
-// The ring of the touch currently ON the glass, or nil when there is none (it expired, the touch turned into
-// a drag, or the point didn't read as a world tap).
-@property (nonatomic, strong) CAShapeLayer *liveRing;
-// The ring of the tap that has LIFTED and is waiting for its kind. A separate slot because those two overlap
-// by construction: the answer is 80-160 ms out, the Java side queues the next tap behind the one it is still
-// confirming, and spam-tapping is how this game is played. With one slot, the first tap's answer repainted —
-// or withdrew — the ring the SECOND finger had just drawn somewhere else. nil = no ring is waiting, and then
-// the pending-click path draws one itself, as it always did.
+// The ring of the tap that is waiting for its kind, or nil when none is (it expired, or this tap's ring has
+// already had the answer applied). The answer is 80-160 ms out and spam-tapping is how this game is played,
+// so a second tap inside that window replaces it and the ring it replaced just finishes its fade.
 @property (nonatomic, strong) CAShapeLayer *pendingRing;
 @property (nonatomic, assign) int emX;                    // live engine-menu geometry (for click-through)
 @property (nonatomic, assign) int emY;
@@ -1200,6 +1293,9 @@ static NSString *const kLayoutNoticeBody =
     sceneView.touchDown = ^(CGPoint point) {
         [weakSelfForScene onSceneTouchDown:point];
     };
+    sceneView.touchUp = ^(CGPoint origin, CGFloat strayed, NSTimeInterval held) {
+        [weakSelfForScene onSceneTouchUp:origin strayed:strayed held:held];
+    };
     self.screen = sceneView;
     self.screen.translatesAutoresizingMaskIntoConstraints = NO;
     self.screen.backgroundColor = [UIColor colorWithWhite:0.06 alpha:1.0];
@@ -1208,20 +1304,23 @@ static NSString *const kLayoutNoticeBody =
     self.screen.userInteractionEnabled = YES;                    // receive the game gestures
     [self.view addSubview:self.screen];
 
-    // Phase 5 control scheme on the game view. UIKit gesture recognizers own classification: tap = left
-    // click (walk/interact/menu-entry), long-press = drag-to-select menu, one-finger drag = camera rotate,
-    // pinch = zoom. Mutual-exclusivity disambiguates the one-finger trio.
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
-        initWithTarget:self action:@selector(onTap:)];
-    tap.delegate = self;   // never fire a game tap when the touch lands on a native control (chat tab / keyboard)
-    [self.screen addGestureRecognizer:tap];
+    // Phase 5 control scheme on the game view: tap = left click (walk/interact/menu-entry), long-press =
+    // drag-to-select menu, one-finger drag = camera rotate, pinch = zoom. The hold, the drag and the zoom are
+    // recognizers; the TAP is not (RMSceneView + kSceneDragSlop decides it from the touch sequence), because a
+    // tap recognizer rejects any touch that rolled more than ~10pt and the pan used to claim those first — so
+    // a tap with a little roll in it did nothing at all.
     UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc]
         initWithTarget:self action:@selector(onLongPress:)];
     longPress.minimumPressDuration = 0.4;
+    // Same slop as the tap and the camera, so the three partition every one-finger touch with ONE number: a
+    // hold that rolled 15pt is still a hold (UIKit's default 10pt failed it, and then nothing opened the menu
+    // and nothing clicked either — the touch fell between all three gestures).
+    longPress.allowableMovement = kSceneDragSlop;
     longPress.delegate = self;
     [self.screen addGestureRecognizer:longPress];
-    UIPanGestureRecognizer *camPan = [[UIPanGestureRecognizer alloc]
-        initWithTarget:self action:@selector(onCameraPan:)];
+    UIPanGestureRecognizer *camPan = [[RMCameraPanRecognizer alloc]
+        initWithTarget:self
+                action:@selector(onCameraPan:)];
     camPan.minimumNumberOfTouches = 1;
     camPan.maximumNumberOfTouches = 1;
     [self.screen addGestureRecognizer:camPan];
@@ -6179,9 +6278,9 @@ static CGRect mapRectFromArr(NSArray *a) {
         }
     }
     if (self.pendingClick && CACurrentMediaTime() - self.pendingClickAt > 0.25) {
-        // Nothing bumped: a plain walk, which is the colour the contact marker already has. So this only draws
-        // for a tap that made no contact marker (the point read as UI, or the ring outlived the grace) — and it
-        // ends the pending state either way, which also stops a late interact answer repainting a walk ring.
+        // Nothing bumped: a plain walk, which is the colour the marker already has — so there is nothing to
+        // draw unless this tap's ring is gone (it outlived the grace, or a later tap took the slot). Ends the
+        // pending state either way, which also stops a late interact answer repainting a walk ring.
         if (!self.pendingRing) {
             [self flashClickRingAt:self.pendingClickPoint color:RMWalkRingColor()];
         }
@@ -6568,15 +6667,34 @@ static CGRect mapRectFromArr(NSArray *a) {
     return found;
 }
 
-- (void)onTap:(UITapGestureRecognizer *)g {
+// The finger lifted and no recognizer had claimed the sequence. Was it a click? Everything the decision needs
+// is here: how far the finger strayed from where it landed and how long it was down. Nothing else is consulted
+// — by the time this runs, a drag has already begun rotating and a hold has already opened the menu, and
+// either of those cancels the sequence so it never reaches here at all.
+//
+// The click goes to where the finger LANDED, not where it left: that is the point the user aimed at, it is the
+// point the engine has been resolving since contact (armTap), and committing to it is what makes the click
+// land on the lift instead of a few frames after it.
+- (void)onSceneTouchUp:(CGPoint)origin strayed:(CGFloat)strayed held:(NSTimeInterval)held {
+    if (strayed > kSceneDragSlop || held > kSceneTapMaxHold) {
+        [JVMLauncher postCancelArmedTap]; // a drag or a hold that nobody else claimed: no click, drop the arm
+        return;
+    }
+    [self worldTapAtScreenPoint:origin];
+}
+
+// A confirmed tap at a point on the game canvas: route it (native dialogue, world map, orb, chat, engine
+// dialogue) or click the world. Called for a real finger lift, and by the dev/replay paths.
+- (void)worldTapAtScreenPoint:(CGPoint)sp {
     if (![JVMLauncher bridgeReady]) return;
     // The native dialogue parchment owns its own taps (continue / option rows). Re-gate here too (belt-and-
-    // suspenders with shouldReceiveTouch) so a tap on it can never ALSO route as a world/precise click.
-    if (self.dialogueView && !self.dialogueView.hidden
-        && CGRectContainsPoint(self.dialogueView.frame, [g locationInView:self.screen])) return;
-    CGPoint vp = [g locationInView:self.view];
+    // suspenders with the view hit-test) so a tap on it can never ALSO route as a world/precise click.
+    if (self.dialogueView && !self.dialogueView.hidden && CGRectContainsPoint(self.dialogueView.frame, sp))
+        return;
+    CGPoint vp = [self.screen convertPoint:sp toView:self.view];
     int gx = 0, gy = 0;
-    if (![self mapPoint:[g locationInView:self.screen] toGameX:&gx toGameY:&gy]) return;
+    if (![self mapPoint:sp toGameX:&gx toGameY:&gy])
+        return;
     // [dlg-diag] one line per tap so a single "tap Continue" repro reveals the failure: dlgAct = did the bridge
     // report a dialogue open; inScroll/inDlg = does the tap fall in the chatbox / published-dialogue rect.
     [self appendLine:[NSString stringWithFormat:@"[dlg-diag] g=%d,%d dlgAct=%d inScroll=%d inDlg=%d scroll=%@ dlg=%@",
@@ -6708,34 +6826,31 @@ static CGRect mapRectFromArr(NSArray *a) {
             return;
         }
     }
-    // The marker is already on screen in the walk colour (drawn when the finger landed). Hold the pending state
-    // so onDisplayTick can carry the resolved kind to it: red if the engine says the tap hit an interactable,
-    // retired if it says WIDGET, left exactly as drawn when nothing bumps within the grace window.
+    // Mark the click NOW, in the walk colour — this is the one place that knows the tap is a world click
+    // rather than one of the routed paths above, and the user is owed the marker on the lift, not whenever the
+    // engine gets back to us. Hold the pending state so onDisplayTick can carry the resolved kind to the ring
+    // already on screen: red if the engine says the tap hit an interactable, retired if it says WIDGET, left
+    // exactly as drawn when nothing bumps within the grace window.
     // Pump the haptic generator so the buzz is low-latency if it turns out to be an interact.
     self.pendingClick = YES;
     self.pendingClickPoint = vp;
     self.pendingClickAt = CACurrentMediaTime();
-    // This tap's own marker, handed over by name: whatever lands on the glass next gets a fresh liveRing and
-    // cannot be repainted by this tap's answer. (A second lift while this one is still pending overwrites the
-    // slot; the one it replaces simply finishes its fade in the walk colour, which is what it already shows.)
-    self.pendingRing = self.liveRing;
-    self.liveRing = nil;
+    // A second tap inside that window takes the slot; the ring it replaces finishes its fade in the walk
+    // colour, which is what it already shows.
+    self.pendingRing = [self flashClickRingAt:vp color:RMWalkRingColor()];
     if (!self.tapHaptic) { self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight]; }
     [self.tapHaptic prepare];
     [JVMLauncher postClickX:gx y:gy button:1];
     [self appendLine:[NSString stringWithFormat:@"[shell] tap -> click(L) game %d,%d", gx, gy]];
 }
 
-// Finger down on the game canvas. The click marker is drawn HERE, not when the tap completes, and this is the
-// whole of "clicks feel delayed": a tap recognizer cannot fire before the finger lifts, and the engine click
-// is a few frames behind THAT (the settle gate moves the synthetic cursor to the point, waits for the engine
-// to demonstrably resolve it, only then presses), and the ring then waited for the resolved kind on top —
-// 150-250 ms of nothing after a finger that had already landed. Drawing on contact costs nothing and tells no
-// lie: the only thing not yet known is the COLOUR, and the kind still reaches the ring that is already there.
-// Also ARMS the point: the bridge runs the engine-resolved gate a left tap has to pass (move the synthetic
-// cursor, wait for the engine to demonstrably resolve the point) now, while the finger is down, so the lift
-// posts the click on the spot instead of a few frames later. It presses nothing — a touch that turns into a
-// camera drag or a hold has still done nothing to the world, and those paths drop the arm.
+// Finger down on the game canvas. Nothing is drawn and nothing is clicked here — a touch is not yet a tap —
+// but this is where the ENGINE's half of the wait can be spent, and it is most of why clicks felt delayed. A
+// left tap is never re-hit-tested, so the bridge has to move the synthetic cursor to the point, wait until the
+// engine demonstrably resolved it, and only then press; done after the lift, those frames are dead time the
+// user is watching. armTap runs that gate now, while the finger is still on the glass, so the lift can post
+// the click on the spot (commitArmedTap). It presses nothing: a touch that turns into a camera drag or a hold
+// has still done nothing to the world, and each of those paths drops the arm.
 - (void)onSceneTouchDown:(CGPoint)p {
     if (![JVMLauncher bridgeReady])
         return;
@@ -6744,8 +6859,6 @@ static CGRect mapRectFromArr(NSArray *a) {
         return; // letterbox
     if (![self isPlainWorldTapAtGameX:gx gameY:gy screenPoint:p])
         return;
-    self.liveRing = [self flashClickRingAt:[self.screen convertPoint:p toView:self.view]
-                                     color:RMWalkRingColor()];
     if (!self.tapHaptic) {
         self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
     }
@@ -6754,10 +6867,11 @@ static CGRect mapRectFromArr(NSArray *a) {
 }
 
 // Would a tap at this point take the plain world-click path — the only path that draws a click marker? Mirrors
-// onTap:'s early returns (the native dialogue parchment, the open world map, the minimap orbs, the relocated
+// worldTapAtScreenPoint:'s early returns (the dialogue parchment, the open world map, the minimap orbs, the
 // chat tab row, the chat message area, an open dialogue's box), all of which route through the precise click
-// and ring nothing. KEEP IN LOCKSTEP with those returns: a mismatch is cosmetic either way — a marker retired
-// a frame later, or one drawn by the pending-click fallback instead of on contact — never a wrong click.
+// and ring nothing. Worth keeping in lockstep with those returns, but nothing depends on it being exact: this
+// only decides whether to ARM, so a mismatch costs an arm nobody commits (dropped at the lift) or a fast path
+// not taken. The marker and the click are decided later, by the routing itself.
 - (BOOL)isPlainWorldTapAtGameX:(int)gx gameY:(int)gy screenPoint:(CGPoint)p {
     if (self.dialogueView && !self.dialogueView.hidden && CGRectContainsPoint(self.dialogueView.frame, p))
         return NO;
@@ -6778,16 +6892,8 @@ static CGRect mapRectFromArr(NSArray *a) {
     return YES;
 }
 
-// The touch on the glass turned into a drag, a hold or a pinch: no click is coming for it, so take its marker
-// back.
-- (void)retireLiveRing {
-    CAShapeLayer *ring = self.liveRing;
-    self.liveRing = nil;
-    [self retireRing:ring];
-}
-
-// The same for a tap that has already lifted, when the engine answers WIDGET: it draws its own cuff on the
-// slot, so that tap gets no ring after all (parity with Android's TAP_KIND_WIDGET branch).
+// The engine answered WIDGET: it draws its own cuff on the slot, so that tap gets no ring after all (parity
+// with Android's TAP_KIND_WIDGET branch).
 - (void)retirePendingRing {
     CAShapeLayer *ring = self.pendingRing;
     self.pendingRing = nil;
@@ -6818,7 +6924,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     [CATransaction commit];
 }
 
-// The engine resolved the tap as a real interaction: the marker it drew on contact is the right ring in the
+// The engine resolved the tap as a real interaction: the marker drawn at the lift is the right ring in the
 // wrong colour, so repaint it in place — actions off, because an implicit cross-fade would smear the red over
 // what is left of the ring's life. NO when that tap has no ring alive, i.e. the caller should draw one.
 - (BOOL)promotePendingRingToInteract {
@@ -6835,7 +6941,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 
 // Draw the official-style click marker: a ring (red = interactable, yellow = walk) that expands and fades out
 // over ~0.45s at the tap point, then removes itself. Pure native (CAShapeLayer) — no game involvement.
-// Returns the layer, so a ring drawn on contact can still be repainted or retired while it is alive.
+// Returns the layer, so the ring can still be repainted or retired while it is alive.
 - (CAShapeLayer *)flashClickRingAt:(CGPoint)p color:(UIColor *)color {
     const CGFloat r0 = 9.0;   // starting radius
     CAShapeLayer *ring = [CAShapeLayer layer];
@@ -6859,10 +6965,8 @@ static CGRect mapRectFromArr(NSArray *a) {
     __weak ViewController *weakSelf = self;
     [CATransaction setCompletionBlock:^{
         [ring removeFromSuperlayer];
-        if (weakSelf.liveRing == ring)
-            weakSelf.liveRing = nil; // never offer a dead layer the late answer
         if (weakSelf.pendingRing == ring)
-            weakSelf.pendingRing = nil;
+            weakSelf.pendingRing = nil; // never offer a dead layer the late answer
     }];
     [ring addAnimation:grp forKey:@"clickRing"];
     ring.opacity = 0.0;   // end state (the animation drives the visible fade)
@@ -7314,8 +7418,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         case UIGestureRecognizerStateBegan: {
             int gx = 0, gy = 0;
             if (![self mapPoint:loc toGameX:&gx toGameY:&gy]) return; // letterbox
-            [self retireLiveRing];                                    // a hold opens the menu, it never walks
-            [JVMLauncher postCancelArmedTap];
+            [JVMLauncher postCancelArmedTap];                         // a hold opens the menu, it never walks
             [self openEngineMenuAtGameX:gx gameY:gy anchor:loc];
             [self appendLine:[NSString stringWithFormat:@"[shell] long-press -> engine menu @game %d,%d", gx, gy]];
             break;
@@ -7501,11 +7604,13 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (void)onCameraPan:(UIPanGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady] || self.menuOpen) return;
     if (g.state == UIGestureRecognizerStateBegan) {
-        [self retireLiveRing]; // this touch is a drag, not a tap: no click is coming for its marker
-        [JVMLauncher postCancelArmedTap];
-        // DRAG-1: read the pre-reset translation so we can recover the TRUE touch start (the pan only fires after
-        // ~10px of slop, so locationInView is already that far from where the finger landed on the item).
-        CGPoint t0 = [g translationInView:self.screen];
+        [JVMLauncher postCancelArmedTap]; // this touch is a drag, not a tap: no click is coming
+        // DRAG-1: the TRUE touch start, which several branches below classify the drag by. locationInView is
+        // already kSceneDragSlop away from it by the time a pan begins, so the recognizer hands us the landing
+        // point it recorded (see RMCameraPanRecognizer.landing) rather than us unwinding a translation.
+        CGPoint landing = [g isKindOfClass:[RMCameraPanRecognizer class]]
+                              ? ((RMCameraPanRecognizer *)g).landing
+                              : [g locationInView:self.screen];
         [g setTranslation:CGPointZero inView:self.screen];
         // World map open: a 1-finger drag that BEGINS inside the Key list or the open surface dropdown
         // SCROLLS that list (wheel events parked over it); inside the map window it pans the MAP (bridge ->
@@ -7557,10 +7662,8 @@ static CGRect mapRectFromArr(NSArray *a) {
         NSArray<NSValue *> *reorderPanes = [JVMLauncher reorderPaneCanvasBounds];
         BOOL haveInv = !CGRectIsNull(inv) && CGRectGetWidth(inv) > 0 && CGRectGetHeight(inv) > 0;
         if (haveInv || reorderPanes.count > 0) {
-            CGPoint startLoc = CGPointMake([g locationInView:self.screen].x - t0.x,
-                                           [g locationInView:self.screen].y - t0.y);
             int sx = 0, sy = 0;
-            if ([self mapPoint:startLoc toGameX:&sx toGameY:&sy]) {
+            if ([self mapPoint:landing toGameX:&sx toGameY:&sy]) {
                 BOOL hit = haveInv && CGRectContainsPoint(inv, CGPointMake(sx, sy));
                 for (NSValue *v in reorderPanes) {
                     if (hit)
@@ -7744,8 +7847,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (void)onPinch:(UIPinchGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady]) return;
     if (g.state == UIGestureRecognizerStateBegan) {
-        [self retireLiveRing]; // two fingers zoom, they never tap
-        [JVMLauncher postCancelArmedTap];
+        [JVMLauncher postCancelArmedTap]; // two fingers zoom, they never tap
         self.pinchPrevScale = g.scale;
         self.wheelAccum = 0;
         [JVMLauncher postClearHover];   // zoom moves the world too; don't leave a stale hover behind
