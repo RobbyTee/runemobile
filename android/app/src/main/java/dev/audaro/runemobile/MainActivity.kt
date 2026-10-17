@@ -99,6 +99,10 @@ class MainActivity : AppCompatActivity() {
     private var dialogueTargetsKnown = false
     private var dialogueTargetsSeq = -1L
     private var dialogueIsOptions = false
+
+    // ... and it is a message-layer prompt (GE item search), whose rows are the engine's own results: pressed
+    // through the row's op at its canvas point, never through a chat-option digit.
+    private var dialogueIsPrompt = false
     private var dialogueOptionRects: List<IntArray> = emptyList()
     private var dialogueOptionDigits: List<Int> = emptyList()
     private var lastTargetsJson = ""
@@ -3639,8 +3643,16 @@ class MainActivity : AppCompatActivity() {
         gy: Int,
     ) {
         val row = dialogueOptionRects.indices.firstOrNull { inCanvasRect(dialogueOptionRects[it], gx, gy) }
-        val digit = row?.let { dialogueOptionDigits.getOrNull(it) }
+        val digit = if (dialogueIsPrompt) null else row?.let { dialogueOptionDigits.getOrNull(it) }
         when {
+            // A search result answers to its own op at the point the bridge published for it. A digit here
+            // would be the row INDEX fired at a widget the prompt does not even use.
+            dialogueIsPrompt && row != null -> {
+                JvmLauncher.keepAlive()
+                JvmLauncher.tapDialogue(gx, gy)
+                Log.i(TAG, "dlg: prompt row $row tap ($gx,$gy) -> op, consumed")
+            }
+
             // A precise click was an input event the engine's idle timer saw; these handlers are direct
             // menuActions it never sees, so bump the keepalive or a conversation that is the user's only
             // activity can AFK-log them out mid-dialogue.
@@ -3682,6 +3694,7 @@ class MainActivity : AppCompatActivity() {
         dialogueTargetsKnown = false
         dialogueTargetsSeq = -1L
         dialogueIsOptions = false
+        dialogueIsPrompt = false
         dialogueOptionRects = emptyList()
         dialogueOptionDigits = emptyList()
     }
@@ -3715,6 +3728,7 @@ class MainActivity : AppCompatActivity() {
                 // Rows can be published without bounds (hidden children). Keep isOptions set anyway: a miss must
                 // be consumed, never answered with a continue.
                 dialogueIsOptions = true
+                dialogueIsPrompt = d.optBoolean("prompt", false)
                 buildDialogueOptionTargets(d)
             }
         }

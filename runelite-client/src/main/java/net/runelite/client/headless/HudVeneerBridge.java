@@ -214,6 +214,9 @@ public final class HudVeneerBridge
 	// Separate from dialogueOpen because it is the opposite kind of thing: a dialogue REPLACES the chat area,
 	// a prompt lives INSIDE it. Published so the native shell routes a tap there as a precise click.
 	private static volatile boolean chatPromptOpen;
+	// The forefront window stood down so the engine's search grid is visible, or -1. Latched for the life of the
+	// prompt, so clearing the search box (which empties the result list) does not flap the window back on.
+	private static int promptHiddenWindow = -1;
 	// The open dialogue's content + head bounds (escaped JSON) for the native opaque dialogue. Built in tick when a
 	// dialogue is open; "{}" otherwise. The native shell draws an opaque parchment over the chatbox region (so the
 	// engine's transparent dialogue + the chat tabs/messages behind it are occluded), with a CUTOUT at the head
@@ -733,6 +736,31 @@ public final class HudVeneerBridge
 			// that may also drive the message layer, and they keep their existing (parchment) handling.
 			final boolean promptOpen = !dlgOpen && isChatPromptOpen(c);
 			chatPromptOpen = promptOpen;
+			// The engine draws the search itself -- item icons, three columns, the matched prefix underlined,
+			// its own scrollbar -- and draws it into the chat area UNDER the forefront window. That rendering is
+			// the one worth having (it is the desktop one), so the WINDOW steps aside for as long as the search
+			// owns the chat, rather than the search being redrawn natively without the icons. There is no room
+			// for both: the keyboard takes the bottom of the screen and the window the middle.
+			// Only for a prompt that lists its answers there. A bank search puts no list in the chat because its
+			// results ARE the bank items, and an "Enter amount" needs the window it is a number for.
+			if (!promptOpen)
+			{
+				if (promptHiddenWindow >= 0)
+				{
+					setHidden(c, promptHiddenWindow << 16, false);
+					promptHiddenWindow = -1;
+				}
+			}
+			else if (promptHiddenWindow < 0 && promptListsResults(c))
+			{
+				final int g = openForefrontWindowGroup(c);
+				if (g >= 0)
+				{
+					setHidden(c, g << 16, true);
+					promptHiddenWindow = g;
+					log.info("[veneer] search owns the chat — window group={} stood down", g);
+				}
+			}
 			// Keep the engine chatbox TRANSPARENT from the FIRST logged-in frame so the message lines render in the
 			// over-scene colour set (white names + glyph shadow = the official mobile look) instead of the dark
 			// opaque-box colours. Pinned here before the chat/map gates (guarded, no script churn). The engine's own
@@ -744,7 +772,11 @@ public final class HudVeneerBridge
 				// Path B (engine-rendered dialogue): while a dialogue is open switch the chatbox to OPAQUE (0) so the
 				// engine paints its own dialogue parchment + full 3D head (desktop look); otherwise keep it
 				// TRANSPARENT (1) for the over-scene message veneer. Edge-guarded inside setChatboxTransparency.
-				if (dlgOpen)
+				// A prompt counts as open here, and MUST: this is the same flip the pre-raster pin makes, and
+				// when the two disagree they write opposite values every frame -- each change running
+				// BUILD_CHATBOX, so the chatbox was being rebuilt twice a frame under a search, which is why it
+				// came back transparent however many times the other end set it opaque.
+				if (dlgOpen || promptOpen)
 				{
 					setChatboxTransparency(c, 0);
 				}
@@ -2114,12 +2146,13 @@ public final class HudVeneerBridge
 			}
 			sb.append(",\"view\":").append(view)
 				.append(",\"topLevelId\":").append(topLevel)
-				// A prompt is ACTIVE like a dialogue -- taps over the chat region belong to the engine, and the
-				// chat-line veneer gets out of the way -- but it is NOT an engine-drawn one. engineDialogue means
-				// "the engine paints this itself, so suppress the native parchment", which is exactly backwards
-				// here: the engine paints the prompt UNDER the window, which is the whole reason the panel exists.
+				// A prompt is BOTH, now that the window steps aside for it: active, so taps over the chat region
+				// route to the engine and the chat-line veneer gets out of the way; and engine-drawn, so the
+				// native parchment stays hidden instead of covering the result grid with a text copy of it. The
+				// rows published below stay live either way -- both shells keep their tap targets current while
+				// the engine owns the drawing, which is exactly this case.
 				.append(",\"dialogueActive\":").append(dialogueOpen || chatPromptOpen)
-				.append(",\"engineDialogue\":").append(dialogueOpen)
+				.append(",\"engineDialogue\":").append(dialogueOpen || chatPromptOpen)
 				// Native-side this means one thing: hide the chat TAB ROW. A prompt wants that too — the row sits
 				// in the chat region and the player is answering the game, not picking a chat channel.
 				.append(",\"windowOpen\":").append(chatWindowOccluded || chatPromptOpen);
@@ -2937,6 +2970,29 @@ public final class HudVeneerBridge
 	 * below otherwise hides — and a hidden container neither draws nor hit-tests. Typing the normal chat line
 	 * does not set it (that is {@code CHATINPUT}), and neither does the world-map search.
 	 */
+	/**
+	 * True when the open prompt draws its ANSWER as a list in the message layer — the GE item search, whose
+	 * results upstream reads straight out of this widget (3 children per row). A bank search is the opposite:
+	 * it filters the bank items themselves and puts no list here, which is what keeps the bank on screen.
+	 */
+	private static boolean promptListsResults(Client c)
+	{
+		try
+		{
+			final Widget w = c.getWidget(InterfaceID.Chatbox.MES_LAYER_SCROLLCONTENTS);
+			if (w == null || w.isHidden())
+			{
+				return false;
+			}
+			final Widget[] rows = w.getDynamicChildren();
+			return rows != null && rows.length > 0;
+		}
+		catch (RuntimeException ignore)
+		{
+			BridgeFaults.note("HudVeneerBridge.promptListsResults", ignore);
+			return false;
+		}
+	}
 	private static boolean isChatPromptOpen(Client c)
 	{
 		try
@@ -3151,13 +3207,11 @@ public final class HudVeneerBridge
 
 	/** "Select an Option" — the title (child 0) + the option rows (children 1..n), each tagged with its digit key. */
 	/**
-	 * How many search results to hand the native panel. The panel is the chatbox's own size on both ports (the
-	 * tab row plus 142 canvas px) and does not scroll, and the keyboard owns everything below it, so this is
-	 * what FITS: five results, the two header lines above them, and the close row. Publishing more would draw
-	 * rows past the panel's edge, and neither port delivers a touch outside it — an unreachable row reads as
-	 * the same dead button this whole fix is about. Deeper results are reached by typing more, as on desktop.
+	 * How many search results to publish. These are TAP TARGETS, not drawn rows — the engine draws the list
+	 * itself — so the limit is the engine's own visible grid (three columns) plus room for a scroll, not what
+	 * a panel could hold. Each row's bounds are republished every tick, so they follow the list as it scrolls.
 	 */
-	private static final int MAX_PROMPT_ROWS = 5;
+	private static final int MAX_PROMPT_ROWS = 24;
 
 	/**
 	 * A message-layer prompt, published as an options box — which is what a search IS: a title, what has been
