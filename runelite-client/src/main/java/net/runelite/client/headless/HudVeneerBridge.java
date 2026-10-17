@@ -214,6 +214,9 @@ public final class HudVeneerBridge
 	// Separate from dialogueOpen because it is the opposite kind of thing: a dialogue REPLACES the chat area,
 	// a prompt lives INSIDE it. Published so the native shell routes a tap there as a precise click.
 	private static volatile boolean chatPromptOpen;
+	// The forefront window we hid so a search could use the chat region, or -1. Latched: held for the life of
+	// the prompt, so clearing the search box (which empties the result list) does not flap the window back on.
+	private static int promptHiddenWindow = -1;
 	// The open dialogue's content + head bounds (escaped JSON) for the native opaque dialogue. Built in tick when a
 	// dialogue is open; "{}" otherwise. The native shell draws an opaque parchment over the chatbox region (so the
 	// engine's transparent dialogue + the chat tabs/messages behind it are occluded), with a CUTOUT at the head
@@ -730,6 +733,31 @@ public final class HudVeneerBridge
 			// that may also drive the message layer, and they keep their existing (parchment) handling.
 			final boolean promptOpen = !dlgOpen && isChatPromptOpen(c);
 			chatPromptOpen = promptOpen;
+			// The engine draws the forefront window OVER the chat, so un-hiding the chat is not enough on its
+			// own: a search's result list comes up behind the window. With the keyboard covering the bottom of
+			// the screen and the window the middle, there is nowhere to move the chat to — so the window gives
+			// way instead, for as long as the search owns the chat. Deliberately NOT done for a prompt with no
+			// list (bank search, "Enter amount"): there the window is the answer, or the context for it.
+			// Outside the relocation block below on purpose, or a window hidden here could be stranded hidden
+			// by a world map opening over it.
+			if (!promptOpen)
+			{
+				if (promptHiddenWindow >= 0)
+				{
+					setHidden(c, promptHiddenWindow << 16, false);
+					promptHiddenWindow = -1;
+				}
+			}
+			else if (promptHiddenWindow < 0 && promptListsResults(c))
+			{
+				final int g = openForefrontWindowGroup(c);
+				if (g >= 0)
+				{
+					setHidden(c, g << 16, true);
+					promptHiddenWindow = g;
+					log.info("[veneer] search owns the chat — window group={} stood down", g);
+				}
+			}
 
 			// Keep the engine chatbox TRANSPARENT from the FIRST logged-in frame so the message lines render in the
 			// over-scene colour set (white names + glyph shadow = the official mobile look) instead of the dark
@@ -1074,6 +1102,11 @@ public final class HudVeneerBridge
 	/** True if a forefront window (bank / GE / shop / …) is open, so the chat should hide and sit behind it. */
 	private static boolean isForefrontWindowOpen(Client c)
 	{
+		return openForefrontWindowGroup(c) >= 0;
+	}
+	/** The forefront window group currently drawn over the chat, or -1 — the id, so it can be restored later. */
+	private static int openForefrontWindowGroup(Client c)
+	{
 		for (final int g : FOREFRONT_WINDOW_GROUPS)
 		{
 			final Widget w;
@@ -1093,11 +1126,11 @@ public final class HudVeneerBridge
 					log.info("[veneer] chat occluded — forefront window group={} open", g);
 					lastWindowOccludedLogged = true;
 				}
-				return true;
+				return g;
 			}
 		}
 		lastWindowOccludedLogged = false;
-		return false;
+		return -1;
 	}
 
 	// DIAGNOSTIC (remove once occlusion is tuned): rate-limited dump of the open interface roots + candidate-window
@@ -2107,7 +2140,9 @@ public final class HudVeneerBridge
 				// of the way". What they must NOT share is the hiding above, which is why they are separate flags.
 				.append(",\"dialogueActive\":").append(dialogueOpen || chatPromptOpen)
 				.append(",\"engineDialogue\":").append(dialogueOpen || chatPromptOpen)
-				.append(",\"windowOpen\":").append(chatWindowOccluded);
+				// Native-side this means one thing: hide the chat TAB ROW. A prompt wants that too — the row sits
+				// in the chat region and the player is answering the game, not picking a chat channel.
+				.append(",\"windowOpen\":").append(chatWindowOccluded || chatPromptOpen);
 			if (dialogueOpen || chatPromptOpen)
 			{
 				// Canvas-px bounds of the open dialogue so the native shell can route a tap there through a PRECISE
@@ -2922,6 +2957,29 @@ public final class HudVeneerBridge
 	 * below otherwise hides — and a hidden container neither draws nor hit-tests. Typing the normal chat line
 	 * does not set it (that is {@code CHATINPUT}), and neither does the world-map search.
 	 */
+	/**
+	 * True when the open prompt draws its ANSWER as a list in the message layer — the GE item search, whose
+	 * results upstream reads straight out of this widget (3 children per row). A bank search is the opposite:
+	 * it filters the bank items themselves and puts no list here, which is what keeps the bank on screen.
+	 */
+	private static boolean promptListsResults(Client c)
+	{
+		try
+		{
+			final Widget w = c.getWidget(InterfaceID.Chatbox.MES_LAYER_SCROLLCONTENTS);
+			if (w == null || w.isHidden())
+			{
+				return false;
+			}
+			final Widget[] rows = w.getDynamicChildren();
+			return rows != null && rows.length > 0;
+		}
+		catch (RuntimeException ignore)
+		{
+			BridgeFaults.note("HudVeneerBridge.promptListsResults", ignore);
+			return false;
+		}
+	}
 	private static boolean isChatPromptOpen(Client c)
 	{
 		try
