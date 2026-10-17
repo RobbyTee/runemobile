@@ -6684,7 +6684,8 @@ static CGRect mapRectFromArr(NSArray *a) {
 }
 
 // A confirmed tap at a point on the game canvas: route it (native dialogue, world map, orb, chat, engine
-// dialogue) or click the world. Called for a real finger lift, and by the dev/replay paths.
+// dialogue) or click the world. The one entry point for a confirmed tap: onSceneTouchUp: is its only caller
+// today, and anything that wants to synthesise a tap should come through here rather than past the routing.
 - (void)worldTapAtScreenPoint:(CGPoint)sp {
     if (![JVMLauncher bridgeReady]) return;
     // The native dialogue parchment owns its own taps (continue / option rows). Re-gate here too (belt-and-
