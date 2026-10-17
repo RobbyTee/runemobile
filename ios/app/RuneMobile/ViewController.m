@@ -60,6 +60,38 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 }
 @end
 
+// The official click-marker colours, in one place: yellow = a plain walk, red = the tap grabbed an
+// interactable. Three sites draw or repaint the ring (contact, the interact answer, the walk fallback) and
+// they have to agree.
+static UIColor *RMWalkRingColor(void) {
+    return [UIColor colorWithRed:1.0 green:0.84 blue:0.0 alpha:1.0];
+}
+static UIColor *RMInteractRingColor(void) {
+    return [UIColor colorWithRed:1.0 green:0.2 blue:0.15 alpha:1.0];
+}
+
+// The game canvas. A UIImageView subclass for one reason: -touchesBegan: runs the instant the finger lands,
+// and a UITapGestureRecognizer cannot fire before the finger LIFTS. The click marker and the cursor pre-arm
+// both belong at touch-down, and a zero-duration recognizer added to carry them would re-arbitrate the
+// tap/long-press/pan/pinch set that IS the control scheme (a recognizer that succeeds on contact prevents the
+// others unless every pair is taught to run simultaneously). A view's own touch callbacks run alongside the
+// recognizers and change none of that. Controls layered above the canvas hit-test first, so a touch on one
+// never arrives here.
+@interface RMSceneView : UIImageView
+/// The landing point (in this view) of the first finger of a touch sequence.
+@property (nonatomic, copy) void (^touchDown)(CGPoint point);
+@end
+
+@implementation RMSceneView
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesBegan:touches withEvent:event];
+    // allTouches counts the whole sequence, so a second finger (pinch) doesn't re-fire the marker.
+    if (self.touchDown && event.allTouches.count == 1) {
+        self.touchDown([touches.anyObject locationInView:self]);
+    }
+}
+@end
+
 @interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate, UNUserNotificationCenterDelegate, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate, UISearchBarDelegate, OverlayEditChatHost>
 {
     // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
@@ -196,11 +228,16 @@ static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND 
 // interactTapSeq), and a yellow fading click-ring drawn at every tap point (the Jagex-Mobile click marker).
 @property (nonatomic, assign) int lastInteractTapSeq;
 @property (nonatomic, strong) UIImpactFeedbackGenerator *tapHaptic;
-// The click ring is deferred one beat so it can pick the official colour: RED if the tap resolved to an
-// interactable (the engine bumped interactTapSeq), YELLOW for a plain walk (no bump within the grace window).
+// The ring is drawn when the finger LANDS (onSceneTouchDown:) in the walk colour; the tap's resolved colour
+// only arrives a beat after the click, so this state is what lets that late answer reach a ring already on
+// screen: RED if it resolved to an interactable (the engine bumped interactTapSeq), left as drawn for a plain
+// walk (no bump within the grace window).
 @property (nonatomic, assign) BOOL pendingClick;
 @property (nonatomic, assign) CGPoint pendingClickPoint;
 @property (nonatomic, assign) NSTimeInterval pendingClickAt;
+// The contact ring still waiting for that answer, or nil when none is (it expired, the touch turned into a
+// drag, or the point didn't read as a world tap) — then the pending-click path draws one itself, as before.
+@property (nonatomic, strong) CAShapeLayer *liveRing;
 @property (nonatomic, assign) int emX;                    // live engine-menu geometry (for click-through)
 @property (nonatomic, assign) int emY;
 @property (nonatomic, assign) int emW;
@@ -1152,7 +1189,12 @@ static NSString *const kLayoutNoticeBody =
 
 - (void)buildUI {
     // (0) Game screen — the BOTTOM layer, filling the entire screen edge-to-edge (full-screen landscape).
-    self.screen = [[UIImageView alloc] init];
+    RMSceneView *sceneView = [[RMSceneView alloc] init];
+    __weak ViewController *weakSelfForScene = self;
+    sceneView.touchDown = ^(CGPoint point) {
+        [weakSelfForScene onSceneTouchDown:point];
+    };
+    self.screen = sceneView;
     self.screen.translatesAutoresizingMaskIntoConstraints = NO;
     self.screen.backgroundColor = [UIColor colorWithWhite:0.06 alpha:1.0];
     self.screen.contentMode = UIViewContentModeScaleAspectFit;   // render aspect == screen aspect -> fills
@@ -6122,14 +6164,22 @@ static CGRect mapRectFromArr(NSArray *a) {
             // icon, equipment slot, tab-stone) draws no red ring - the engine draws its own cyan outline there,
             // so the ring is redundant (parity with Android's TAP_KIND_WIDGET branch). SCENE taps still ring; an
             // older jar returns 0 (TAP_KIND_NONE != kTapKindWidget), preserving ring-on-every-interaction.
-            if ([JVMLauncher lastTapKind] != kTapKindWidget) {
-                [self flashClickRingAt:self.pendingClickPoint color:[UIColor colorWithRed:1.0 green:0.2 blue:0.15 alpha:1.0]];
+            if ([JVMLauncher lastTapKind] == kTapKindWidget) {
+                [self retireLiveRing]; // the engine cuffs the slot itself — take the contact marker back
+            } else if (![self promoteLiveRingToInteract]) {
+                [self flashClickRingAt:self.pendingClickPoint color:RMInteractRingColor()];
             }
             self.pendingClick = NO; // a widget tap still resolves the pending state, it just draws no ring
         }
     }
     if (self.pendingClick && CACurrentMediaTime() - self.pendingClickAt > 0.25) {
-        [self flashClickRingAt:self.pendingClickPoint color:[UIColor colorWithRed:1.0 green:0.84 blue:0.0 alpha:1.0]];
+        // Nothing bumped: a plain walk, which is the colour the contact marker already has. So this only draws
+        // for a tap that made no contact marker (the point read as UI, or the ring outlived the grace) — and it
+        // ends the pending state either way, which also stops a late interact answer repainting a walk ring.
+        if (!self.liveRing) {
+            [self flashClickRingAt:self.pendingClickPoint color:RMWalkRingColor()];
+        }
+        self.liveRing = nil;
         self.pendingClick = NO;
     }
 }
@@ -6652,8 +6702,10 @@ static CGRect mapRectFromArr(NSArray *a) {
             return;
         }
     }
-    // Defer the ring one beat: onDisplayTick draws it red (interactable) or yellow (walk) once the engine has
-    // resolved the tap. Pump the haptic generator so the buzz is low-latency if it turns out to be an interact.
+    // The marker is already on screen in the walk colour (drawn when the finger landed). Hold the pending state
+    // so onDisplayTick can carry the resolved kind to it: red if the engine says the tap hit an interactable,
+    // retired if it says WIDGET, left exactly as drawn when nothing bumps within the grace window.
+    // Pump the haptic generator so the buzz is low-latency if it turns out to be an interact.
     self.pendingClick = YES;
     self.pendingClickPoint = vp;
     self.pendingClickAt = CACurrentMediaTime();
@@ -6663,9 +6715,103 @@ static CGRect mapRectFromArr(NSArray *a) {
     [self appendLine:[NSString stringWithFormat:@"[shell] tap -> click(L) game %d,%d", gx, gy]];
 }
 
+// Finger down on the game canvas. The click marker is drawn HERE, not when the tap completes, and this is the
+// whole of "clicks feel delayed": a tap recognizer cannot fire before the finger lifts, and the engine click
+// is a few frames behind THAT (the settle gate moves the synthetic cursor to the point, waits for the engine
+// to demonstrably resolve it, only then presses), and the ring then waited for the resolved kind on top —
+// 150-250 ms of nothing after a finger that had already landed. Drawing on contact costs nothing and tells no
+// lie: the only thing not yet known is the COLOUR, and the kind still reaches the ring that is already there.
+// Also pre-arms the engine cursor at the point so the settle gate's position match is satisfied before the
+// click even starts. A move with no button held is the hover primitive — it performs no action, so a touch
+// that turns out to be a camera drag or a hold has still done nothing to the world.
+- (void)onSceneTouchDown:(CGPoint)p {
+    if (![JVMLauncher bridgeReady])
+        return;
+    int gx = 0, gy = 0;
+    if (![self mapPoint:p toGameX:&gx toGameY:&gy])
+        return; // letterbox
+    if (![self isPlainWorldTapAtGameX:gx gameY:gy screenPoint:p])
+        return;
+    self.liveRing = [self flashClickRingAt:[self.screen convertPoint:p toView:self.view]
+                                     color:RMWalkRingColor()];
+    if (!self.tapHaptic) {
+        self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    }
+    [self.tapHaptic prepare];
+    [JVMLauncher postMoveX:gx y:gy];
+}
+
+// Would a tap at this point take the plain world-click path — the only path that draws a click marker? Mirrors
+// onTap:'s early returns (the native dialogue parchment, the open world map, the minimap orbs, the relocated
+// chat tab row, the chat message area, an open dialogue's box), all of which route through the precise click
+// and ring nothing. KEEP IN LOCKSTEP with those returns: a mismatch is cosmetic either way — a marker retired
+// a frame later, or one drawn by the pending-click fallback instead of on contact — never a wrong click.
+- (BOOL)isPlainWorldTapAtGameX:(int)gx gameY:(int)gy screenPoint:(CGPoint)p {
+    if (self.dialogueView && !self.dialogueView.hidden && CGRectContainsPoint(self.dialogueView.frame, p))
+        return NO;
+    CGPoint cp = CGPointMake(gx, gy);
+    if (self.mapOpen && (self.mapWindowCanvas.size.width <= 0 || CGRectContainsPoint(self.mapWindowCanvas, cp)))
+        return NO;
+    int ocx = 0, ocy = 0;
+    NSString *orbKey = nil;
+    if ([self nearestOrbAtGameX:gx gameY:gy outX:&ocx outY:&ocy outKey:&orbKey])
+        return NO;
+    CGRect ch = self.chatHitCanvas;
+    if (!self.chatDialogueActive && ch.size.width > 0 && gx >= ch.origin.x && gx <= ch.origin.x + ch.size.width && gy >= ch.origin.y && gy <= ch.origin.y + ch.size.height)
+        return NO;
+    if (self.chatScrollCanvas.size.width > 0 && CGRectContainsPoint(self.chatScrollCanvas, cp) && (self.chatScrollable || self.chatDialogueActive))
+        return NO;
+    if (self.chatDialogueActive && self.dialogueChatCanvas.size.width > 0 && CGRectContainsPoint(self.dialogueChatCanvas, cp))
+        return NO;
+    return YES;
+}
+
+// The touch turned into a drag, a hold or a pinch, or the engine answered WIDGET — no walk ring belongs to it,
+// so take the contact marker back. Freeze the size it had reached and fade what is left of it out quickly: the
+// ring is mid-animation, and dropping the layer outright reads as a flicker.
+- (void)retireLiveRing {
+    CAShapeLayer *ring = self.liveRing;
+    if (!ring)
+        return;
+    self.liveRing = nil;
+    CALayer *shown = (CALayer *)ring.presentationLayer;
+    float opacity = shown ? shown.opacity : 1.0f;
+    CATransform3D size = shown ? shown.transform : CATransform3DIdentity;
+    [ring removeAllAnimations]; // the group also owned the scale, so restate both model values
+    ring.transform = size;
+    ring.opacity = opacity;
+    CABasicAnimation *out = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    out.fromValue = @(opacity);
+    out.toValue = @0.0;
+    out.duration = 0.12;
+    [CATransaction begin];
+    [CATransaction setCompletionBlock:^{
+        [ring removeFromSuperlayer];
+    }];
+    ring.opacity = 0.0; // end state (the animation drives the visible fade)
+    [ring addAnimation:out forKey:@"clickRingOut"];
+    [CATransaction commit];
+}
+
+// The engine resolved the tap as a real interaction: the marker drawn on contact is the right ring in the
+// wrong colour, so repaint it in place — actions off, because an implicit cross-fade would smear the red over
+// what is left of the ring's life. NO when no contact marker is alive, i.e. the caller should draw one.
+- (BOOL)promoteLiveRingToInteract {
+    CAShapeLayer *ring = self.liveRing;
+    if (!ring)
+        return NO;
+    self.liveRing = nil;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    ring.strokeColor = RMInteractRingColor().CGColor;
+    [CATransaction commit];
+    return YES;
+}
+
 // Draw the official-style click marker: a ring (red = interactable, yellow = walk) that expands and fades out
 // over ~0.45s at the tap point, then removes itself. Pure native (CAShapeLayer) — no game involvement.
-- (void)flashClickRingAt:(CGPoint)p color:(UIColor *)color {
+// Returns the layer, so a ring drawn on contact can still be repainted or retired while it is alive.
+- (CAShapeLayer *)flashClickRingAt:(CGPoint)p color:(UIColor *)color {
     const CGFloat r0 = 9.0;   // starting radius
     CAShapeLayer *ring = [CAShapeLayer layer];
     ring.frame = CGRectMake(p.x - r0, p.y - r0, r0 * 2, r0 * 2);
@@ -6685,10 +6831,16 @@ static CGRect mapRectFromArr(NSArray *a) {
     grp.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
     grp.removedOnCompletion = YES;
     [CATransaction begin];
-    [CATransaction setCompletionBlock:^{ [ring removeFromSuperlayer]; }];
+    __weak ViewController *weakSelf = self;
+    [CATransaction setCompletionBlock:^{
+        [ring removeFromSuperlayer];
+        if (weakSelf.liveRing == ring)
+            weakSelf.liveRing = nil; // never offer a dead layer the late answer
+    }];
     [ring addAnimation:grp forKey:@"clickRing"];
     ring.opacity = 0.0;   // end state (the animation drives the visible fade)
     [CATransaction commit];
+    return ring;
 }
 
 // long-press -> hold-drag-release native menu (the OSRS-mobile feel). One continuous gesture:
@@ -7135,6 +7287,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         case UIGestureRecognizerStateBegan: {
             int gx = 0, gy = 0;
             if (![self mapPoint:loc toGameX:&gx toGameY:&gy]) return; // letterbox
+            [self retireLiveRing];                                    // a hold opens the menu, it never walks
             [self openEngineMenuAtGameX:gx gameY:gy anchor:loc];
             [self appendLine:[NSString stringWithFormat:@"[shell] long-press -> engine menu @game %d,%d", gx, gy]];
             break;
@@ -7320,6 +7473,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (void)onCameraPan:(UIPanGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady] || self.menuOpen) return;
     if (g.state == UIGestureRecognizerStateBegan) {
+        [self retireLiveRing]; // this touch is a drag, not a tap: no click is coming for its marker
         // DRAG-1: read the pre-reset translation so we can recover the TRUE touch start (the pan only fires after
         // ~10px of slop, so locationInView is already that far from where the finger landed on the item).
         CGPoint t0 = [g translationInView:self.screen];
@@ -7561,6 +7715,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (void)onPinch:(UIPinchGestureRecognizer *)g {
     if (![JVMLauncher bridgeReady]) return;
     if (g.state == UIGestureRecognizerStateBegan) {
+        [self retireLiveRing]; // two fingers zoom, they never tap
         self.pinchPrevScale = g.scale;
         self.wheelAccum = 0;
         [JVMLauncher postClearHover];   // zoom moves the world too; don't leave a stale hover behind
