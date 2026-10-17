@@ -151,6 +151,50 @@ In this order:
 With `-Drunelite.touch.diag` the log prints `L settle: N frames` then `L commit: armed N frames before the
 lift` for an armed tap; a tap that fell back prints the old settle line alone.
 
+## The Android port (2026-10-17)
+
+Commits `06fa34c149` (the port) and `4ad6b39564` (one answer per ring). **Not device-verified** — the Pixel
+was unreachable, so this is compile/census green only, and a tap classifier is the last thing to trust
+without a finger on it.
+
+Android had none of this. `armTap`/`cancelArmedTap` were bound only in `JVMLauncher.m`, so the shared gate
+sat inert, and the classifier was Objective-C with no counterpart. Four pieces, mapped:
+
+| iOS | Android |
+| --- | --- |
+| `RMSceneView` tracks landing / furthest stray / multi | the `setOnTouchListener` does, same three facts |
+| `RMCameraPanRecognizer` withholds `touchesMoved:` from `super` | withhold `ACTION_MOVE` from `GestureDetector` |
+| `kSceneDragSlop = 18pt` | `sceneDragSlopPx = 18dp` |
+| `armTap` on `touchesBegan` | `armTap` on `ACTION_DOWN`, via new JNI `IN_ARMTAP` / `IN_CANCELARM` |
+| ring on lift, `promote`/`retire` | `tapRing.spawn()` returns an id; `recolor` / `retire` |
+
+`GestureDetector`'s default is `ViewConfiguration.scaledTouchSlop` = **8dp**, *tighter* than the UIKit 10pt
+that was dropping taps, and crossing it cancels the pending LONG_PRESS as well as the tap — so Android had
+the same two symptoms for the same reason. Withholding the moves keeps `mAlwaysInTapRegion` true, so
+`onSingleTapUp` still fires at the lift and the long-press timer still runs.
+
+Three things the port needed that the iOS diff does not show:
+
+- **The withheld travel arrives as the first `onScroll`'s distance.** `GestureDetector` measures from the
+  event it last saw, which is the DOWN, so the first reading is the whole 18dp and every drag would have
+  snapped on its first frame. iOS zeroes the pan's translation at `Began`; classifying and returning
+  without applying the deltas is the same thing, and it covers all six drag branches at once.
+- **The long-press needs its own drop.** Once `menuActive` is set the listener short-circuits into
+  menu-peek and never reaches its own `ACTION_UP`, so the arm would be stranded. Dropped in
+  `beginMenuPeek` — the Android stand-in for iOS getting it from `touchesCancelled`.
+- **One engine answer per ring.** The pending-ring state was a single slot, which was survivable while the
+  ring was drawn only after the answer (worst case: no ring) and is not once the ring is drawn on the lift
+  (worst case: a marker the user is watching gets withdrawn by the PREVIOUS tap's result). `publishTapKind`
+  bumps `tapKindSeq` once per resolved tap and only while one of our gated left taps is in flight, so bumps
+  and ringed taps are one-to-one in click order: a FIFO hands each bump to the ring that earned it. Two
+  answers inside one frame can't both be read (`lastTapKind` holds one value), so the overtaken ring keeps
+  its walk colour; and the ringless AP-0 minimap tap queues a placeholder, because the mapping only holds
+  if every tap that produces an answer is in the queue to consume it.
+
+What to check on the Pixel: items 3, 4 and 6 of the list above (sloppy tap, sloppy hold, inventory
+tap/drag), plus two Android-specific ones — a drag must not jump at its start, and spam-tapping two spots
+alternately must leave each ring its own colour (item 7, which is what the FIFO is for).
+
 ## Open risks
 
 - **The arm is a change to the tap state machine**, which is the thing that fixed wrong-target taps. One
