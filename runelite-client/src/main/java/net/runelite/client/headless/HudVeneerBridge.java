@@ -766,7 +766,14 @@ public final class HudVeneerBridge
 				final int rowW = chatAreaW > 0 ? chatAreaW : CHAT_DEFAULT_W;
 				// A forefront window (bank / GE / shop / …) open: hide the chat so it sits BEHIND the window (the
 				// native shell also hides its tab row from the published windowOpen flag).
-				chatWindowOccluded = isForefrontWindowOpen(c);
+				//
+				// EXCEPT while the engine is asking for input. The Grand Exchange item search, the bank search
+				// and every "Enter amount" prompt are drawn into the chatbox container, so hiding it hides the
+				// prompt and stops it hit-testing: the player taps "Choose an item", the engine opens the
+				// search exactly as it should, and nothing appears — there is no way to see it, scroll it, or
+				// pick a result. Nothing about the tap is wrong, which is why it reads as a dead button.
+				final boolean promptOpen = isChatPromptOpen(c);
+				chatWindowOccluded = isForefrontWindowOpen(c) && !promptOpen;
 				dumpOpenInterfaces(c);   // DIAGNOSTIC — see the [ifaces] log to tune the FOREFRONT_WINDOW_GROUPS list
 				final Widget w = c.getWidget(chatId);
 				if (w != null)
@@ -786,7 +793,14 @@ public final class HudVeneerBridge
 						if (w.isHidden())
 						{
 							w.setHidden(false);
-							try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) { BridgeFaults.note("HudVeneerBridge.buildChatbox", ignore); }
+							// Rebuild the message lines on the un-hide edge — but NOT when a prompt is what we are
+							// un-hiding for. That edge is the moment the search opens, and BUILD_CHATBOX redraws
+							// the chat area the prompt is living in; stale message lines for the life of a search
+							// are a cheap price next to rebuilding over the thing the player just asked for.
+							if (!promptOpen)
+							{
+								try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) { BridgeFaults.note("HudVeneerBridge.buildChatbox", ignore); }
+							}
 						}
 						w.setForcedPosition(chatX, chatY);
 						// Widen the chat CONTAINER to the native row width so its children (the message area) can fill it.
@@ -2882,6 +2896,29 @@ public final class HudVeneerBridge
 	 *  message, a level-up, a make-X/quantity selector, an item-reward box, or a box only the content that opened
 	 *  it has a name for? The named kinds are read off their content widget (loaded + shown), mirroring the
 	 *  in-tree dialogue plugins' detection; {@link #chatboxSubInterface} answers for the rest. */
+	/**
+	 * Whether the engine is driving the chatbox MESSAGE LAYER — the Grand Exchange item search, the bank
+	 * search, and every "Enter amount" / "Enter name" prompt. {@code MESLAYERMODE} is the engine's own flag
+	 * for it (the varc the legacy API calls {@code VarClientInt.INPUT_TYPE}), so this is engine truth rather
+	 * than a widget guess: it is set for the whole life of the prompt and cleared when it commits or cancels.
+	 *
+	 * <p>It matters because the prompt is drawn INTO the chatbox container, which the forefront-window rule
+	 * below otherwise hides — and a hidden container neither draws nor hit-tests. Typing the normal chat line
+	 * does not set it (that is {@code CHATINPUT}), and neither does the world-map search.
+	 */
+	private static boolean isChatPromptOpen(Client c)
+	{
+		try
+		{
+			return c.getVarcIntValue(VarClientID.MESLAYERMODE) != 0;
+		}
+		catch (RuntimeException ignore)
+		{
+			BridgeFaults.note("HudVeneerBridge.isChatPromptOpen", ignore);
+			return false;
+		}
+	}
+
 	private static boolean isDialogueOpen(Client c)
 	{
 		final boolean named = widgetShown(c, InterfaceID.ChatLeft.TEXT)   // NPC dialogue
@@ -2900,7 +2937,16 @@ public final class HudVeneerBridge
 		}
 		final int sub = chatboxSubInterface(c);
 		noteUnnamedDialogue(sub);
-		return sub >= 0;
+		if (sub >= 0)
+		{
+			return true;
+		}
+		// A message-layer prompt opens no interface of its own — it is drawn into the chatbox's own MES_LAYER,
+		// so neither the named list nor the sub-interface probe sees it. It is still a dialogue for everything
+		// the native shell does with this flag: route a tap there through a PRECISE click (which is how a
+		// search result gets picked) instead of the chat veneer's own gestures, and hide the native chat-line
+		// veneer so it does not sit on top of the prompt.
+		return isChatPromptOpen(c);
 	}
 
 	/** The group of an interface the engine has opened ONTO THE CHATBOX, or -1 when there is none. That
@@ -2989,7 +3035,12 @@ public final class HudVeneerBridge
 		}
 		// An unnamed kind: its root component (child 0) is the dialogue's rect, same as the UNIVERSE entries above.
 		final int sub = chatboxSubInterface(c);
-		return sub >= 0 && widgetShown(c, sub << 16) ? canvasBounds(c.getWidget(sub << 16)) : null;
+		if (sub >= 0 && widgetShown(c, sub << 16))
+		{
+			return canvasBounds(c.getWidget(sub << 16));
+		}
+		// A message-layer prompt (GE/bank search, "Enter amount") has no root of its own: MES_LAYER is its rect.
+		return isChatPromptOpen(c) ? canvasBounds(c.getWidget(InterfaceID.Chatbox.MES_LAYER)) : null;
 	}
 
 	/** Build {@link #dialogueJson} from the open dialogue's engine widgets, for the native opaque-parchment
