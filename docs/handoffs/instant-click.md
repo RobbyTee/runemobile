@@ -1,8 +1,11 @@
 # Instant click — the tap delay, and who decides what a tap is
 
-Branch `master`. Commits `97cbf49a22` (marker), `7116329bb6` (bridge arm), `9c5e7d03a4` (review fixes) and
-the one this handoff ships with (the tap classifier). All pushed to `origin`. Not on the phone yet — see
-**Next step**.
+Branch `master`. Commits `97cbf49a22` (marker), `7116329bb6` (bridge arm), `9c5e7d03a4` (review fixes),
+`55001a3b8d` (the tap classifier) and `8319badf4f` (one owner for the arm). All pushed to `origin`.
+
+**Device-verified 2026-10-17** — installed to the iPhone with `xcrun devicectl device install app` straight
+from `build/dd-serveipa/.../RuneMobile.app`, launched under StikDebug, and the user confirms the clicks are
+fixed. This step is closed; what follows is kept as the record of why it is the way it is.
 
 ## What the delay actually was
 
@@ -100,12 +103,38 @@ client-thread hop.
   (additive: two methods, two flags). While using it: the census picked its jar with a glob whose first
   match is the lexicographically smallest version, so it had been reporting GREEN for a July jar. It now
   reads `project.build.version` from `gradle.properties` like the staging scripts do.
-- **Device: unverified.** Nothing here has been tapped on a phone yet.
+- **Device: verified** (2026-10-17, iPhone 17 Pro Max / iOS 27.2, Debug build under StikDebug).
 
-## Next step
+## Deploying it again
 
-`ios/dev-tools/serve-ipa.sh` (the jars are already staged, so no `--jars` needed), then SideStore on the
-phone. On device, check in this order:
+Two routes, and the direct one is the better one when the phone is on this Mac's own network or USB:
+
+- **Direct:** `xcrun devicectl device install app --device <id> build/dd-serveipa/Build/Products/Debug-iphoneos/RuneMobile.app`
+  after any `serve-ipa.sh` run has built it. No SideStore, no resign, JIT unchanged (the attach is still
+  per-launch). The installed app reports version `0.1`/`1`, though: the real version is stamped by PlistBuddy
+  onto the IPA *copy*, so a direct `.app` install carries Info.plist's hardcoded one, and re-stamping would
+  invalidate the signature. Don't identify a direct install by its version number — check the dylib instead
+  (next bullet).
+- **Verify what actually landed:** the app's code is in `RuneMobile.app/RuneMobile.debug.dylib`, not the 87KB
+  main-binary stub, and `grep` on a Mach-O can report nothing where `strings` finds it. So:
+  `strings -a .../RuneMobile.debug.dylib | grep -x RMCameraPanRecognizer`. "Installed successfully" says
+  nothing about *what* was installed.
+- **SideStore:** `ios/dev-tools/serve-ipa.sh` (jars already staged, so no `--jars`). Two traps fixed on the
+  way through, both of which used to report something other than what happened: the standalone Tailscale app
+  does not put its CLI on PATH, so the script died with "is Tailscale up?" while the tunnel was up (it now
+  looks inside the app bundle); and the build counter lives in the gitignored `.serve-ipa`, so a cleaned work
+  dir restarts it at 1 — a version *lower* than the phone's is not an update, SideStore shows nothing to do,
+  and the publish still looks like it succeeded. It now warns when it had no counter to read.
+- Remember the one-VPN rule: Tailscale ON to install from SideStore, OFF before StikDebug attaches, or the
+  tunnel to 10.7.0.1 resets.
+
+Direct-to-phone *over the tailnet* remains impossible — iOS interface-gates lockdownd to the phone's own
+LAN/loopback, proven at packet level in `ios/dev-tools/DEPLOY-REMOTE.md`. The install above works because the
+phone is local to this Mac, not because the gate moved.
+
+## What to check on device
+
+In this order:
 
 1. A tap on open ground rings **instantly on the lift** and the ring is yellow.
 2. A tap on an NPC/object rings instantly and turns **red** when the interaction resolves.
@@ -124,14 +153,15 @@ lift` for an armed tap; a tap that fell back prints the old settle line alone.
 
 ## Open risks
 
-- **The arm is a change to the tap state machine**, which is the thing that fixed wrong-target taps. The fast
-  path is guarded by re-proving the gate's own observables, but only a device session proves it: watch for a
-  tap acting on the PREVIOUS tap's target, which would be the signature.
+- **The arm is a change to the tap state machine**, which is the thing that fixed wrong-target taps. One
+  device session says the feel is right; it does not prove the guard. The signature to watch for over a
+  longer play session is a tap acting on the PREVIOUS tap's target.
 - **`RMCameraPanRecognizer` withholds touches from `super`.** It is the standard way to give a pan a
   threshold and the handler reads nothing but translation deltas (no velocity), but it is UIKit internals: if
   a drag ever begins and then behaves oddly on the first frame, this is the first place to look.
-- **18pt is a guess that feels right, not a measured number.** If taps still drop, raise it; if the camera
-  feels sticky to start, lower it. One constant, both effects — that is the point of it being one constant.
+- **18pt was a guess; it now has one session's confirmation, which is not the same as calibration.** If a tap
+  ever drops, raise it; if the camera feels sticky to start, lower it. One constant, both effects — that is
+  the point of it being one constant (`kSceneDragSlop`, `ViewController.m`).
 - A WIDGET tap shows the walk ring for the ~100-150ms before the kind comes back, then withdraws it. If that
   reads as a flicker, the honest fix is publishing the widget bounds natively so the lift can skip the ring
   there, not re-deferring the ring.
