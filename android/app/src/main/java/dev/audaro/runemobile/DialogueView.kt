@@ -288,6 +288,10 @@ class DialogueView(
             val rowH = optPaint.textSize + 10f * dp
             for ((text, _) in options) {
                 val rowTop = y
+                // Stop at the panel's edge rather than drawing past it: a tap outside the box is refused up in
+                // onTouchEvent, so a row drawn below it would look pickable and do nothing. The bridge caps the
+                // list to what fits; this is the guard that keeps that cap honest if the panel ever shrinks.
+                if (rowTop + rowH > r.bottom) break
                 val baseline = y + optPaint.textSize + 3f * dp
                 canvas.drawText(text, cx, baseline, optPaint)
                 optionRects.add(RectF(r.left, rowTop, r.right, rowTop + rowH))

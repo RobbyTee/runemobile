@@ -3150,9 +3150,14 @@ public final class HudVeneerBridge
 	}
 
 	/** "Select an Option" — the title (child 0) + the option rows (children 1..n), each tagged with its digit key. */
-	/** How many search results to hand the native panel. The engine's own list scrolls; the panel does not, so
-	 *  this is the cut-off rather than a scrollbar. Deeper results are reached by typing more, as on desktop. */
-	private static final int MAX_PROMPT_ROWS = 12;
+	/**
+	 * How many search results to hand the native panel. The panel is the chatbox's own size on both ports (the
+	 * tab row plus 142 canvas px) and does not scroll, and the keyboard owns everything below it, so this is
+	 * what FITS: five results, the two header lines above them, and the close row. Publishing more would draw
+	 * rows past the panel's edge, and neither port delivers a touch outside it — an unreachable row reads as
+	 * the same dead button this whole fix is about. Deeper results are reached by typing more, as on desktop.
+	 */
+	private static final int MAX_PROMPT_ROWS = 5;
 
 	/**
 	 * A message-layer prompt, published as an options box — which is what a search IS: a title, what has been
