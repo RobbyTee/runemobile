@@ -40,17 +40,29 @@ log()  { printf '\n\033[1;35m>> %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31m!! %s\033[0m\n' "$*" >&2; exit 1; }
 mkdir -p "$WORK"
 
+# The tailscale CLI. The standalone Mac app does not put it on PATH, and a symlink into /usr/local/bin does
+# not survive a reinstall, so look inside the app bundle before giving up — the old `command -v` failure
+# surfaced as "is Tailscale up?" while the tunnel was up, connected, and serving the phone.
+TS="$(command -v tailscale || true)"
+if [ -z "$TS" ]; then
+  for c in /Applications/Tailscale.app/Contents/MacOS/Tailscale \
+           "$HOME/Applications/Tailscale.app/Contents/MacOS/Tailscale"; do
+    if [ -x "$c" ]; then TS="$c"; break; fi
+  done
+fi
+[ -n "$TS" ] || die "no tailscale CLI on PATH or in /Applications/Tailscale.app — is Tailscale installed?"
+
 # --- teardown -------------------------------------------------------------------------------------
 if [ "$STOP" = 1 ]; then
   [ -f "$HTTPD_PID" ] && kill "$(cat "$HTTPD_PID")" 2>/dev/null && rm -f "$HTTPD_PID" && echo "static server stopped"
-  tailscale serve reset 2>/dev/null && echo "tailscale serve reset" || true
+  "$TS" serve reset 2>/dev/null && echo "tailscale serve reset" || true
   exit 0
 fi
 
 cd "$REPO"
 # Local signing config (gitignored): exports DEVELOPMENT_TEAM for xcodegen's ${DEVELOPMENT_TEAM} expansion.
 [ -f ios/dev-tools/signing.env ] && . ios/dev-tools/signing.env
-FQDN="$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')" \
+FQDN="$("$TS" status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')" \
   || die "couldn't read this Mac's tailnet name (is Tailscale up?)"
 [ -n "$FQDN" ] || die "empty tailnet FQDN"
 # QA-P1-15: read the real version key (full version, e.g. 1.12.29-SNAPSHOT). The old grep for the non-existent
@@ -59,6 +71,12 @@ JARVER="$(sed -n 's/^project\.build\.version=//p' gradle.properties)"; [ -n "$JA
 MARKETING="$(grep -E 'MARKETING_VERSION:' "$APPDIR/project.yml" 2>/dev/null | head -1 | sed -E 's/.*: *"?([0-9.]+)"?.*/\1/' || true)"; MARKETING="${MARKETING:-0.1}"
 BUILD="$(( $(cat "$STATE" 2>/dev/null || echo 0) + 1 ))"
 VERSTR="${MARKETING}.${BUILD}"
+# The counter is gitignored, so a fresh clone / cleaned .serve-ipa silently restarts at 1 — and a version
+# LOWER than the one already on the phone is not an update, so SideStore just shows nothing to do and the
+# build looks installed when it isn't. Say so rather than let it look like a successful publish.
+if [ ! -f "$STATE" ]; then
+  printf '\033[1;33m!! no build counter at %s — starting at %s. If the phone has a HIGHER build already (an\n   earlier worktree, or the hosted release channel), SideStore will not offer this as an update.\n   Bump it first:  echo <n> > %s\033[0m\n' "$STATE" "$BUILD" "$STATE" >&2
+fi
 
 # 1) jars (default: reuse what's staged; --jars rebuilds the same set deploy-remote.sh does) ---------
 if [ "$BUILD_JARS" = 1 ]; then
@@ -148,7 +166,7 @@ if [ "$SERVE" = 1 ]; then
   nohup python3 "$HERE/serve-static.py" "$DIST" "$PORT" >"$WORK/httpd.log" 2>&1 &
   echo $! > "$HTTPD_PID"; disown 2>/dev/null || true
   sleep 1
-  tailscale serve --bg "$PORT" >/dev/null
+  "$TS" serve --bg "$PORT" >/dev/null
 fi
 
 printf '\n\033[1;32m=== built RuneLite %s (%d MB) ===\033[0m\n' "$VERSTR" "$(( SIZE / 1048576 ))"
