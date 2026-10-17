@@ -335,6 +335,7 @@ PAYLOAD HudDataBridge stamina
 PAYLOAD HudDataBridge ts
 PAYLOAD HudDataBridge type
 PAYLOAD HudDataBridge value
+PAYLOAD HudVeneerBridge Close
 PAYLOAD HudVeneerBridge b
 PAYLOAD HudVeneerBridge c
 PAYLOAD HudVeneerBridge chatX
@@ -373,6 +374,7 @@ PAYLOAD HudVeneerBridge o
 PAYLOAD HudVeneerBridge open
 PAYLOAD HudVeneerBridge options
 PAYLOAD HudVeneerBridge prayer
+PAYLOAD HudVeneerBridge prompt
 PAYLOAD HudVeneerBridge px
 PAYLOAD HudVeneerBridge rowH
 PAYLOAD HudVeneerBridge run

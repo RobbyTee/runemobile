@@ -46,6 +46,9 @@ class DialogueView(
     /** An option row tapped: its published digit, with the seq of the publish the row was drawn from. */
     var onOption: ((digit: Int, seq: Long) -> Unit)? = null
 
+    /** A prompt row was picked: press the engine's own row at this canvas point (see [isPrompt]). */
+    var onPromptRow: ((canvasX: Int, canvasY: Int) -> Unit)? = null
+
     private var active = false
     private var boxX = 0f
     private var boxY = 0f
@@ -55,6 +58,12 @@ class DialogueView(
     private var body: String = ""
     private var hasContinue = false
     private var options: List<Pair<String, Int>> = emptyList() // (text, digit)
+
+    // A message-layer prompt (GE item search): the rows are the engine's own result list, not numbered chat
+    // options, so a pick is the ROW's op fired at its canvas point -- which is also the only thing that reaches
+    // a list the engine draws underneath the Grand Exchange window. Parallel to [options], same indices.
+    private var isPrompt = false
+    private var promptPoints: List<Pair<Int, Int>> = emptyList() // (canvasX, canvasY) centre per row
     private val optionRects = ArrayList<RectF>()
     private var contCx = -1
     private var contCy = -1
@@ -200,16 +209,29 @@ class DialogueView(
         name = d.optString("name", "").takeIf { it.isNotBlank() }
         body = d.optString("text", "")
         hasContinue = d.optBoolean("continue", false)
+        isPrompt = d.optBoolean("prompt", false)
         val optArr = d.optJSONArray("options")
-        options =
+        val kept =
             if (optArr != null) {
                 (0 until optArr.length()).mapNotNull { i ->
                     val o = optArr.optJSONObject(i) ?: return@mapNotNull null
                     val t = o.optString("text", "")
-                    if (t.isBlank()) null else t to o.optInt("digit", i + 1)
+                    if (t.isBlank()) null else o to (t to o.optInt("digit", i + 1))
                 }
             } else {
                 emptyList()
+            }
+        options = kept.map { it.second }
+        // Kept in step with [options] by being built from the same surviving rows: a blank row dropped above
+        // would otherwise shift every point below it onto the wrong result.
+        promptPoints =
+            kept.map { (o, _) ->
+                val b = o.optJSONObject("b")
+                if (b == null) {
+                    -1 to -1
+                } else {
+                    (b.optInt("x") + b.optInt("w") / 2) to (b.optInt("y") + b.optInt("h") / 2)
+                }
             }
         bodyLayout = null // re-laid out in onDraw against the live box width
         requestLayout()
@@ -311,9 +333,17 @@ class DialogueView(
             if (options.isNotEmpty()) {
                 val idx = optionRects.indexOfFirst { it.contains(event.x, event.y) }
                 if (idx >= 0) {
-                    val digit = options[idx].second
-                    onOption?.invoke(digit, viewSeq)
-                    Log.i("DialogueView", "ui4: option $idx -> digit $digit")
+                    if (isPrompt) {
+                        val (px, py) = promptPoints.getOrElse(idx) { -1 to -1 }
+                        if (px >= 0) {
+                            onPromptRow?.invoke(px, py)
+                            Log.i("DialogueView", "ui4: prompt row $idx -> op at $px,$py")
+                        }
+                    } else {
+                        val digit = options[idx].second
+                        onOption?.invoke(digit, viewSeq)
+                        Log.i("DialogueView", "ui4: option $idx -> digit $digit")
+                    }
                 }
             } else {
                 onContinue?.invoke()

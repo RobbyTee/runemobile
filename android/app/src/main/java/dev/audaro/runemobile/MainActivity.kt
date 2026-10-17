@@ -775,6 +775,9 @@ class MainActivity : AppCompatActivity() {
         //     with the conversation unmoved. "Consumed" is not "acted on".
         dialogueOverlay = DialogueView(this)
         dialogueOverlay.onContinue = { JvmLauncher.onBridgeTouch { JvmLauncher.continueDialogue() } }
+        // A search result carries no digit: it is pressed through its own op, at the canvas point the bridge
+        // published for it, which is what reaches a list drawn under the Grand Exchange window.
+        dialogueOverlay.onPromptRow = { x, y -> JvmLauncher.onBridgeTouch { JvmLauncher.tapDialogue(x, y) } }
         dialogueOverlay.onOption = { digit, seq ->
             // The seq is the publish the row was drawn from: the engine re-sends options as a quest branches,
             // and the same row index can mean a different answer a frame later.

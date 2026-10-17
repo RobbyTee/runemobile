@@ -469,6 +469,7 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 @property (nonatomic, copy)   NSString *lastDialogueJson;    // rebuild the stack only when the content changes
 @property (nonatomic, assign) CGPoint dialogueContinuePoint; // engine CONTINUE widget centre (canvas px), or (-1,-1)
 @property (nonatomic, assign) BOOL dialogueIsOptions;        // the open dialogue is a "Select an Option" menu
+@property (nonatomic, assign) BOOL dialogueIsPrompt;         // ... and it is a message-layer prompt (GE search)
 @property (nonatomic, assign) BOOL dialogueTargetsKnown;     // the bridge models this dialogue's clickables
 @property (nonatomic, assign) long long dialogueTargetsSeq;  // the dialogue publish those clickables came from
 @property (nonatomic, assign) long long dialogueViewSeq;     // the publish the PARCHMENT's rows were built from
@@ -4336,6 +4337,7 @@ static int chatRowCanvasH(void) {
 - (void)clearDialogueTapTargets {
     self.dialogueContinuePoint = CGPointMake(-1, -1);
     self.dialogueIsOptions = NO;
+    self.dialogueIsPrompt = NO;
     self.dialogueTargetsKnown = NO;
     self.dialogueOptionRects = nil;
     self.dialogueOptionDigits = nil;
@@ -4392,6 +4394,7 @@ static int chatRowCanvasH(void) {
     if (![type isEqualToString:@"options"])
         return;
     self.dialogueIsOptions = YES;
+    self.dialogueIsPrompt = [d[@"prompt"] boolValue];
     NSArray *opts = [d[@"options"] isKindOfClass:[NSArray class]] ? d[@"options"] : @[];
     NSMutableArray *rects = [NSMutableArray arrayWithCapacity:opts.count];
     NSMutableArray *digits = [NSMutableArray arrayWithCapacity:opts.count];
@@ -4424,6 +4427,19 @@ static int chatRowCanvasH(void) {
 }
 
 - (void)onDialogueOption:(UIButton *)b {
+    if (self.dialogueIsPrompt) {
+        // A prompt's rows are the engine's own search results, not numbered chat options, so there is no digit
+        // to send: press the ROW, at the canvas bounds the bridge published for it. The engine never hit-tests
+        // that point -- the bridge fires the row's own op -- which is the only thing that reaches a list drawn
+        // underneath the Grand Exchange window.
+        NSInteger idx = b.tag;
+        if (idx < 0 || (NSUInteger)idx >= self.dialogueOptionRects.count)
+            return;
+        CGRect r = [self.dialogueOptionRects[idx] CGRectValue];
+        [JVMLauncher tapEngineDialogueAtX:(int)CGRectGetMidX(r) y:(int)CGRectGetMidY(r)];
+        [self appendLine:[NSString stringWithFormat:@"[shell] prompt row %ld (op)", (long)idx]];
+        return;
+    }
     NSInteger digit = b.tag; // the published child index, straight from the option's "digit"
     if (digit < 1 || digit > 9) return;
     [JVMLauncher selectEngineDialogueOption:(int)digit seq:self.dialogueViewSeq];
@@ -6817,6 +6833,14 @@ static CGRect mapRectFromArr(NSArray *a) {
             for (NSUInteger i = 0; i < self.dialogueOptionRects.count; i++) {
                 if (!CGRectContainsPoint([self.dialogueOptionRects[i] CGRectValue], cp))
                     continue;
+                if (self.dialogueIsPrompt) {
+                    // Same reason as the panel's buttons: a search row answers to its own op, not to a digit.
+                    CGRect rr = [self.dialogueOptionRects[i] CGRectValue];
+                    [JVMLauncher tapEngineDialogueAtX:(int)CGRectGetMidX(rr) y:(int)CGRectGetMidY(rr)];
+                    [self appendLine:[NSString stringWithFormat:@"[shell] prompt row %lu tap %d,%d (op)",
+                                                                (unsigned long)i, gx, gy]];
+                    return;
+                }
                 NSNumber *digit = self.dialogueOptionDigits[i];
                 [JVMLauncher selectEngineDialogueOption:digit.intValue seq:self.dialogueTargetsSeq];
                 [self appendLine:[NSString stringWithFormat:@"[shell] dialogue option %@ tap %d,%d (op)",
