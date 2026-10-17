@@ -64,8 +64,16 @@ roll, well short of a deliberate drag), read by all three gestures so they canno
   `commitArmedTap` posts the click at the lift. It re-proves both observables first (cursor still on the arm
   point, tail still the one that stabilised) and falls back to the full gate otherwise, so the fast path can
   never click against another point's menu. An arm that only failed open returns to rest, so arming can only
-  help. `cancelArmedTap` drops it on a hold, a drag, a pinch, or a lift we rejected as a tap; `ARMED_TIMEOUT`
-  (120 frames) is the fail-safe. Nothing is drawn and nothing is pressed at contact — a touch is not yet a
+  help. `ARMED_TIMEOUT` (120 frames) is the fail-safe.
+- **One owner for the arm's lifetime**, because a leaked arm is not harmless: a live arm refuses to arm the
+  *next* touch, so one leak costs the fast path on the following taps. `onSceneTouchUp:` cancels
+  unconditionally after the routing — a no-op when the click consumed the arm (both calls hop through
+  `ClientThread.invoke`, so the cancel runs after the commit and sees `CLICKED`), and the drop on every other
+  exit: a routed precise click, a dialogue that appeared mid-touch, a lost bridge, a stray it rejected. The
+  router has thirteen exits and tracking them one by one was the bug review found. `RMSceneView` also reports
+  `touchGone` for a sequence that ends with no lift — a recognizer claimed it, or the system took it — which
+  is the backstop that does not depend on which gesture won or on whether its handler got as far as its own
+  cancel (`onCameraPan:` returns before its cancel when a menu is open). Nothing is drawn and nothing is pressed at contact — a touch is not yet a
   tap, and that is exactly why the arm exists: it spends the engine's frames, not the user's.
 - The click goes to where the finger **landed**, not where it lifted: it is the point the user aimed at, it
   is the point the engine has been resolving since contact, and committing to it is what makes the fast path

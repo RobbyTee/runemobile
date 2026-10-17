@@ -101,6 +101,10 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 /// A one-finger sequence that no recognizer took: where it landed, the furthest it ever strayed from there,
 /// and how long it lasted. The handler decides whether that is a click.
 @property (nonatomic, copy) void (^touchUp)(CGPoint origin, CGFloat strayed, NSTimeInterval held);
+/// The sequence ended without a lift of its own — a recognizer claimed it (the camera, the hold, the zoom) or
+/// the system took it (a call arrives, the app leaves the foreground). Never a click, and the one callback
+/// that cannot be reached by reasoning about which gesture won.
+@property (nonatomic, copy) void (^touchGone)(void);
 @end
 
 @implementation RMSceneView {
@@ -145,8 +149,13 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
     }
     self.touchUp(_origin, _strayed, CACurrentMediaTime() - _landed);
 }
-// No -touchesCancelled: a cancelled sequence is one a recognizer claimed, which is precisely when there is
-// no tap to report.
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesCancelled:touches withEvent:event];
+    // Not gated on _multi: the first finger of a sequence that grew into a pinch may well have armed a point.
+    if (self.touchGone) {
+        self.touchGone();
+    }
+}
 @end
 
 // The camera drag, held back to kSceneDragSlop. UIPanGestureRecognizer has no threshold to set, and its own
@@ -1295,6 +1304,13 @@ static NSString *const kLayoutNoticeBody =
     };
     sceneView.touchUp = ^(CGPoint origin, CGFloat strayed, NSTimeInterval held) {
         [weakSelfForScene onSceneTouchUp:origin strayed:strayed held:held];
+    };
+    // No self needed, and nothing to decide: a sequence that ends this way never clicks. The gesture handlers
+    // drop the arm themselves when they begin (promptly, rather than at the lift of a long drag), but each of
+    // them can also return early — onCameraPan: does, with a menu open — so this is the backstop that does not
+    // depend on which recognizer won or on whether its handler got that far.
+    sceneView.touchGone = ^{
+        [JVMLauncher postCancelArmedTap];
     };
     self.screen = sceneView;
     self.screen.translatesAutoresizingMaskIntoConstraints = NO;
@@ -6676,11 +6692,18 @@ static CGRect mapRectFromArr(NSArray *a) {
 // point the engine has been resolving since contact (armTap), and committing to it is what makes the click
 // land on the lift instead of a few frames after it.
 - (void)onSceneTouchUp:(CGPoint)origin strayed:(CGFloat)strayed held:(NSTimeInterval)held {
-    if (strayed > kSceneDragSlop || held > kSceneTapMaxHold) {
-        [JVMLauncher postCancelArmedTap]; // a drag or a hold that nobody else claimed: no click, drop the arm
-        return;
+    if (strayed <= kSceneDragSlop && held <= kSceneTapMaxHold) {
+        [self worldTapAtScreenPoint:origin];
     }
-    [self worldTapAtScreenPoint:origin];
+    // Whatever that did, this touch is finished with its arm — and only the plain world click consumes one.
+    // Cancelling here rather than at each of the router's dozen exits is both shorter and safer: it cannot be
+    // missed when a branch is added. It reads as a no-op when the click DID happen, because both calls hop
+    // through ClientThread.invoke and so run in this order: the commit has already moved the state to CLICKED,
+    // or the lift has already handed the still-running gate its pending click, and cancelArmedTap touches
+    // neither. Every other exit — a routed precise click (orb, map, chat, dialogue), a dialogue that appeared
+    // mid-touch, a bridge that went away, a stray this method rejected — would otherwise leave an arm nobody
+    // commits, and a live arm refuses to arm the NEXT touch, which is the one thing it exists to do.
+    [JVMLauncher postCancelArmedTap];
 }
 
 // A confirmed tap at a point on the game canvas: route it (native dialogue, world map, orb, chat, engine
