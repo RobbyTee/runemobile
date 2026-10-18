@@ -74,14 +74,32 @@ fi
 # Prove the feed users actually fetch now serves THIS version. Publishing "succeeded" while /latest/ still
 # returns the old manifest is the silent failure this whole script exists to make impossible.
 echo ">> verifying the live feed"
-LIVE=$(curl -fsSL "https://github.com/$REPO/releases/latest/download/altstore.json") \
-	|| die "published, but /releases/latest/download/altstore.json does not resolve"
-printf '%s' "$LIVE" | python3 -c "
+# /releases/latest/download/ is CDN-fronted and can serve the PREVIOUS release's manifest for a few seconds
+# after the new one is marked Latest, so a single read right after publishing reports a stale feed that is
+# not stale. That is a false alarm with real cost: this script dies before announcing, leaving a release
+# that is published, correct, and unannounced, and reading as a failed publish to whoever ran it. Re-read
+# with a cache-buster for up to a minute, and only call it stale if it never catches up — the check itself
+# is not negotiable, just the one-shot timing of it.
+FEED_URL="https://github.com/$REPO/releases/latest/download/altstore.json"
+LIVE_VER=""
+for i in 1 2 3 4 5 6 7 8 9 10; do
+	LIVE=$(curl -fsSL -H 'Cache-Control: no-cache' "$FEED_URL?cb=$(date +%s)-$i" 2>/dev/null) || LIVE=""
+	if [ -n "$LIVE" ]; then
+		LIVE_VER=$(printf '%s' "$LIVE" | python3 -c "
 import json, sys
-v = json.load(sys.stdin)['apps'][0]['version']
-want = sys.argv[1]
-sys.exit(0) if v == want else sys.exit(f'live feed serves {v}, expected {want}')
-" "$VERSION" || die "the live feed is stale — users would be told they are up to date on an older build"
+try:
+	print(json.load(sys.stdin)['apps'][0]['version'])
+except Exception:
+	pass
+" 2>/dev/null || true)
+	fi
+	[ "$LIVE_VER" = "$VERSION" ] && break
+	echo ">> feed still serves '${LIVE_VER:-<unreadable>}' — re-reading ($i/10)"
+	sleep 6
+done
+[ -n "$LIVE_VER" ] || die "published, but $FEED_URL does not resolve"
+[ "$LIVE_VER" = "$VERSION" ] \
+	|| die "the live feed is stale (serves $LIVE_VER) — users would be told they are up to date on an older build"
 echo ">> OK — $TAG is Latest and the feed serves $VERSION"
 
 # Announce it in Discord, here rather than by hand afterwards: at this point the release is Latest and the
