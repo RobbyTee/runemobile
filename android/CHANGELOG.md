@@ -9,6 +9,36 @@ accepts update-in-place.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-18
+### Fixed
+- Some dialogue boxes still could not be answered, even after 0.2.3 taught the client to recognise
+  them. The tap stopped falling through to the world — which is what made it look fixed — but nothing
+  was pressed either. The client decides which boxes it can answer itself and which the game must
+  answer, and the two lists had drifted apart: quantity boxes ("how many do you wish to make?") and
+  the item-reward boxes were on the first list without ever being answerable from it, so a tap on them
+  was refused by both paths. Having a name for a box no longer implies the client can drive it, so
+  those are now answered by pressing the button under your finger, like every other box the game draws
+  for itself. The space bar and the number keys could not answer them either, for the same reason.
+- Searching for an item in the Grand Exchange or a bank was unusable. The search box and its results
+  are drawn in the chat area, which the mobile layout moves and covers: the prompt was hidden outright
+  while the Grand Exchange window was open, and once shown, the results were drawn over bare scenery
+  with no backing, leaving item names floating over the world. The search now owns the chat area while
+  it is open, is drawn on its own opaque background, and a result is picked by the row you tap rather
+  than by a click the window swallows.
+- Taps on the game world felt sluggish and sometimes did not register. A tap was only resolved once
+  the finger left the glass, and a few pixels of ordinary finger roll was enough for the client to
+  decide a tap had been a drag and discard it. The tap is now resolved while the finger is still down
+  and committed to where it landed rather than where it lifted, so it survives a roll; the marker ring
+  is drawn the moment the finger lifts rather than when the game answers, and takes its colour once
+  the answer arrives. On Android the same roll also cancelled the press-and-hold, so a sloppy hold
+  never opened the menu; it does now.
+
+### Changed
+- The marker ring is drawn for every world tap as it lifts, in the walk colour, and recoloured or
+  withdrawn when the game says what the tap hit. Previously no ring appeared until the game answered,
+  which for a plain walk — the commonest tap there is — meant a marker arriving a quarter-second after
+  the finger had gone, or not at all.
+
 ## [0.2.3] - 2026-10-16
 ### Fixed
 - Dialogue boxes the game opens for itself could not be answered at all. Quest confirmations, "are you
