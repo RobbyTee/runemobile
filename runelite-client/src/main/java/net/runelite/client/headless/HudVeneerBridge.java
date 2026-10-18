@@ -420,11 +420,13 @@ public final class HudVeneerBridge
 	public static void tapDialogue(int canvasX, int canvasY)
 	{
 		// Stamped with the box that was open as of the last tick -- the one that was on screen under the finger.
-		// A tap taken while a NAMED kind is open stamps -1, which no live group matches, so it is dropped: the
-		// shells only route here for the unmodelled kinds, and a lagging shell must not answer a chat dialogue.
+		// A tap taken while a MODELLED kind is open stamps -1, which no live group matches, so it is dropped:
+		// the shells only route here for the kinds the bridge publishes no targets for, and a lagging shell must
+		// not answer a chat dialogue. Modelled, not merely named -- a named box whose buttons are its own is
+		// routed here on purpose, and stamping it -1 dropped the only taps that could ever have pressed it.
 		// A prompt stamps the chatbox group itself: its widgets are the chatbox's own, so no sub-interface names
 		// it. No sub-interface can collide with that id — they are the groups attached TO the chatbox.
-		final int stamp = chatPromptOpen ? InterfaceID.CHATBOX : lastUnnamedDialogueGroup;
+		final int stamp = chatPromptOpen ? InterfaceID.CHATBOX : lastEngineOwnedDialogueGroup;
 		pendingDialogueTap.set(packTap(tickGen, stamp, canvasX, canvasY));
 	}
 
@@ -3012,27 +3014,45 @@ public final class HudVeneerBridge
 
 	private static boolean isDialogueOpen(Client c)
 	{
-		final boolean named = widgetShown(c, InterfaceID.ChatLeft.TEXT)   // NPC dialogue
+		// MODELLED: the kinds computeDialogueJson publishes a type for, so the shell drives them through
+		// continueDialogue / selectDialogueOption. -1 keeps tapDialogue off them -- a point fired at a chat
+		// dialogue would press whatever its CONTINUE happens to sit under.
+		final boolean modelled = widgetShown(c, InterfaceID.ChatLeft.TEXT) // NPC dialogue
 			|| widgetShown(c, InterfaceID.ChatRight.TEXT)       // player dialogue
 			|| widgetShown(c, InterfaceID.ChatBoth.TEXT)        // combined NPC+player dialogue
 			|| widgetShown(c, InterfaceID.Chatmenu.OPTIONS)     // "Select an Option"
 			|| widgetShown(c, InterfaceID.Messagebox.TEXT)      // "click here to continue"
-			|| widgetShown(c, InterfaceID.LevelupDisplay.CONTINUE) // level-up
-			|| widgetShown(c, InterfaceID.Skillmulti.TITLE)     // make-X / quantity
-			|| widgetShown(c, InterfaceID.Objectbox.TEXT)       // single-item reward box
-			|| widgetShown(c, InterfaceID.ObjectboxDouble.TEXT); // double-item reward box
-		if (named)
+			|| widgetShown(c, InterfaceID.LevelupDisplay.CONTINUE); // level-up
+		if (modelled)
 		{
-			noteUnnamedDialogue(-1);
+			noteEngineOwnedDialogue(-1);
 			return true;
 		}
+		// Everything else that has taken over the chatbox is ENGINE-OWNED, whether or not we have a name for
+		// it. make-X / quantity and the two reward boxes USED to be named here, and being named was taken to
+		// mean the shell could drive them -- it cannot: computeDialogueJson models none of the three, so it
+		// publishes "{}", the shell reads "no modelled targets" and routes the tap to tapDialogue, and
+		// tapDialogue then dropped it against the -1 this branch had stamped. Tappable by neither path: the
+		// tap was consumed (no click-through -- the half that looked fixed) and nothing was pressed. Their
+		// buttons are their own components, the same shape as a quest's confirm box and exactly what
+		// tapDialogue exists to press, so they stamp their group like any box we cannot name. Having a name
+		// for a box was never a reason to refuse to press it.
 		final int sub = chatboxSubInterface(c);
-		noteUnnamedDialogue(sub);
+		noteEngineOwnedDialogue(sub);
 		// NOTE: a message-layer prompt (GE/bank search, "Enter amount") is deliberately NOT a dialogue here.
 		// This flag means "a separate interface has replaced the chat lines", and the hiding it drives — of
 		// CHATAREA, the parent of MES_LAYER — would hide the prompt itself, which lives INSIDE the chat area.
 		// The prompt is tracked separately as chatPromptOpen; see the tick.
-		return sub >= 0;
+		if (sub >= 0)
+		{
+			return true;
+		}
+		// A named engine-owned box the component table does not show as attached to the chatbox is still a
+		// dialogue: it keeps the opacity and the chat hiding it has always driven. No tap can be routed to
+		// one (there is no group to stamp), which is the state all three were already in -- not a new dead end.
+		return widgetShown(c, InterfaceID.Skillmulti.TITLE)     // make-X / quantity
+			|| widgetShown(c, InterfaceID.Objectbox.TEXT)       // single-item reward box
+			|| widgetShown(c, InterfaceID.ObjectboxDouble.TEXT); // double-item reward box
 	}
 
 	/** The group of an interface the engine has opened ONTO THE CHATBOX, or -1 when there is none. That
@@ -3069,24 +3089,26 @@ public final class HudVeneerBridge
 		return -1;
 	}
 
-	// The group noteUnnamedDialogue last reported, so one open writes one line. -1 = none open (or a named one).
-	// Volatile: written here on the client thread, read by tapDialogue on the native one to stamp a tap with
-	// the box the finger was actually on.
-	private static volatile int lastUnnamedDialogueGroup = -1;
+	// The group of the ENGINE-OWNED box on the chatbox right now, or -1 while a modelled kind is open (or
+	// nothing is). Not "unnamed": whether we have a name for a box says nothing about who owns its buttons,
+	// and reading it as the same thing is what made make-X and the reward boxes untappable. One open writes
+	// one line. Volatile: written here on the client thread, read by tapDialogue on the native one to stamp a
+	// tap with the box the finger was actually on.
+	private static volatile int lastEngineOwnedDialogueGroup = -1;
 
-	/** Name an open chatbox dialogue that none of the named kinds matched, once per open. These are handled
-	 *  generically — the engine draws the box and owns the taps on it — so nothing depends on this line; it is
-	 *  here so the NEXT such report arrives with its interface group already identified rather than described. */
-	private static void noteUnnamedDialogue(int group)
+	/** Note the chatbox box whose own components are its buttons, once per open — the ones tapDialogue
+	 *  resolves a point against. The line carries the interface group so the NEXT report about a box of this
+	 *  shape arrives already identified rather than described. */
+	private static void noteEngineOwnedDialogue(int group)
 	{
-		if (group == lastUnnamedDialogueGroup)
+		if (group == lastEngineOwnedDialogueGroup)
 		{
 			return;
 		}
-		lastUnnamedDialogueGroup = group;
+		lastEngineOwnedDialogueGroup = group;
 		if (group >= 0)
 		{
-			log.info("[veneer] chatbox dialogue group={} — unnamed kind, engine-drawn + engine-owned taps", group);
+			log.info("[veneer] chatbox dialogue group={} — engine-drawn, engine-owned taps (resolved by point)", group);
 		}
 	}
 
