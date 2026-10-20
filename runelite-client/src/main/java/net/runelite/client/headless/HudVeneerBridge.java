@@ -613,6 +613,11 @@ public final class HudVeneerBridge
 				hideRowOf(c, ids[0]);
 				hideRowOf(c, ids[7]);
 			}
+			// The fullscreen world map owns the screen: the HUD layers over it are hidden here too, as the
+			// final word before raster. tick() runs in the POST-render callback, so a layer the engine
+			// re-showed during the client tick would otherwise get one fully painted frame on top of the map
+			// — the same one-frame flash this seam exists to close for the stone rows and the chat tabs.
+			setMapHudHidden(c, preEoc, isWorldMapOpen(c));
 			// Same gates as the chat block in tick(): only while the chat veneer is active and the world map
 			// doesn't own the screen. (A dialogue uses the normal relocate path and stays at the top, so this
 			// re-assert applies during dialogues too.)
@@ -1236,6 +1241,10 @@ public final class HudVeneerBridge
 					BridgeFaults.note("HudVeneerBridge.tickWorldMap", ignore);
 				}
 			}
+			// Not edge-gated: setMapHudHidden restores only what IT hid, so this also recovers a HUD left
+			// hidden by a tick that threw on its way here (the catch in tick() swallows it and the map-open
+			// frame would otherwise be the last one that ever ran this).
+			setMapHudHidden(c, preEoc, false);
 			mapPanDx.set(0);
 			mapPanDy.set(0);
 			mapScrollDelta.set(0);
@@ -1243,7 +1252,23 @@ public final class HudVeneerBridge
 			publishMapSnapshot("{\"open\":false}");
 			return;
 		}
+		if (!mapWasOpen)
+		{
+			mapHudLogFrames = 3;   // open edge — report what the first frames of the open actually did
+		}
 		mapWasOpen = true;
+		// tick() runs in the POST-render callback, so this reads the layers as the frame just rasterised
+		// them, AFTER preRender asserted the hide. All `hidden` means the hide stuck and anything still drawn
+		// over the map comes from somewhere else; a `SHOWN` means the engine re-showed that layer within the
+		// frame and the hide is not the whole fix. Three frames per open, so one device session answers it.
+		if (mapHudLogFrames > 0)
+		{
+			mapHudLogFrames--;
+			log.info("[veneer] map open — HUD shown after raster? cluster={} side={} hover={}",
+				shownNow(c, preEoc ? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER),
+				shownNow(c, preEoc ? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER),
+				shownNow(c, preEoc ? InterfaceID.ToplevelPreEoc.MOUSEOVER : InterfaceID.ToplevelOsrsStretch.MOUSEOVER));
+		}
 
 		// HIDE the chat while the map is open — the relocated chat-at-top would draw over the fullscreen
 		// map's top edge. Restored + rebuilt on the close edge (hiding tears the chat content down).
@@ -1253,10 +1278,13 @@ public final class HudVeneerBridge
 			chat.setHidden(true);
 		}
 
-		// The relocated minimap cluster + side panel would draw OVER the map window (their apply blocks are
-		// gated off while the map is open) — shove them off-screen (the collapse trick: forced far below the
-		// canvas, NOT hidden, so nothing tears down); the blocks re-force them home after close. The official
-		// mobile app shows NO HUD over the map — the native shell scales the window to fill the screen.
+		// The official mobile app shows NO HUD over the map, and the engine draws the map window UNDER the
+		// toplevel HUD layers, so they have to stop painting — see setMapHudHidden. Unconditional: it is the
+		// engine's own HUD that covers the map, whether or not the native shell happens to be relocating it.
+		setMapHudHidden(c, preEoc, true);
+		// Shove the relocated containers off-screen as well, so anything that reads their BOUNDS (overlay
+		// positioning, the native snapshots) sees them out of the way too. Gated on an active relocate
+		// because that is what the post-close apply blocks re-force home; the hide is what the render obeys.
 		if (minimapX >= 0)
 		{
 			shoveOffscreen(c, preEoc ? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER, minimapX);
@@ -1313,6 +1341,58 @@ public final class HudVeneerBridge
 		appendRect(c, sb, "maplist", InterfaceID.Worldmap.MAPLIST_CONTAINER, -1);  // surface dropdown (when open)
 		sb.append('}');
 		publishMapSnapshot(sb.toString());
+	}
+
+	// True while WE hold the toplevel HUD layers hidden for an open world map (client thread only). The
+	// restore is driven off this flag, never off "the map just closed", so the HUD cannot be left hidden by a
+	// frame that missed the close edge — and a layer the ENGINE closed is never forced back on.
+	private static boolean mapHudHidden;
+	private static boolean mapHudHiddenPreEoc;   // the layout the hide went to, so the restore can't miss it
+	private static int mapHudLogFrames;   // frames left to report the post-raster HUD state for this open
+
+	/** {@code "shown"} / {@code "hidden"} / {@code "absent"} — the layer as it stands right now. */
+	private static String shownNow(Client c, int id)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			return w == null ? "absent" : w.isHidden() ? "hidden" : "SHOWN";
+		}
+		catch (RuntimeException ignore)
+		{
+			BridgeFaults.note("HudVeneerBridge.shownNow", ignore);
+			return "?";
+		}
+	}
+
+	/**
+	 * Hide (or restore) the toplevel HUD layers that would otherwise paint over the fullscreen world map: the
+	 * minimap+orbs cluster, the side panel, and the engine's hover-option text ("Walk here", which lingers
+	 * because the cursor stays where the finger left it).
+	 * <p>
+	 * HIDING, not moving, is what the render obeys. Moving {@code MAP_CONTAINER} takes the globe with it — the
+	 * engine rasterises that at the draw widget's live bounds — but not the orbs: they are hard-pinned each
+	 * frame (the same readback-confirmed pinning documented on {@link #applyMinimapScale}), and the Orbs
+	 * interface we open into the ORBS layer ourselves carries its own laid-out position. A hidden container
+	 * ends the draw recursion, so nothing under it can paint itself anywhere, at any position, stale or not.
+	 * <p>
+	 * Idempotent, and re-asserted every frame from {@link #preRender} while the map is open, so a layer the
+	 * engine re-shows gets at most zero painted frames.
+	 */
+	private static void setMapHudHidden(Client c, boolean preEoc, boolean hidden)
+	{
+		if (!hidden && !mapHudHidden)
+		{
+			return;   // nothing of ours to restore
+		}
+		// Restore the layout we HID, not the one that happens to be live now: a stone-arrangement flip between
+		// the two would otherwise un-hide the other toplevel's layers and leave these three hidden for good.
+		final boolean layout = hidden ? preEoc : mapHudHiddenPreEoc;
+		mapHudHidden = hidden;
+		mapHudHiddenPreEoc = layout;
+		setHidden(c, layout ? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER, hidden);
+		setHidden(c, layout ? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER, hidden);
+		setHidden(c, layout ? InterfaceID.ToplevelPreEoc.MOUSEOVER : InterfaceID.ToplevelOsrsStretch.MOUSEOVER, hidden);
 	}
 
 	/** Park a relocated toplevel container far below the canvas (kept alive, not hidden — no teardown). */

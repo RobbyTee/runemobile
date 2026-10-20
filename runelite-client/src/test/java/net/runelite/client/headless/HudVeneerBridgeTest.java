@@ -32,13 +32,16 @@ import net.runelite.api.HashTable;
 import net.runelite.api.MenuAction;
 import net.runelite.api.WidgetNode;
 import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import org.junit.Before;
 import org.junit.Test;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -88,6 +91,9 @@ public class HudVeneerBridgeTest
 		HudVeneerBridge.setChatTabRowHeight(0);         // 0 = fall back to CONTROLS_H
 		HudVeneerBridge.setChatAreaWidth(0);            // 0 = fall back to CHAT_DEFAULT_W
 		HudVeneerBridge.setChatCollapsed(false);
+		// Shared static: drop any world-map HUD hide a previous test left standing (every widget read comes
+		// back null, so the map reads closed and the restore runs against nothing).
+		HudVeneerBridge.preRender(loggedInClientWith(null));
 	}
 
 	@Test
@@ -429,5 +435,101 @@ public class HudVeneerBridgeTest
 		HudVeneerBridge.tick(c);
 
 		verify(c).menuAction(-1, (584 << 16) | 7, MenuAction.CC_OP, 1, -1, "Continue", "");
+	}
+
+	// --- the fullscreen world map owns the screen ----------------------------------------------------------
+	// The engine draws the world-map window UNDER the toplevel HUD layers, so with the map open the minimap
+	// cluster, the side panel and the hover-option text paint on top of it. Moving the cluster is not enough:
+	// the globe follows its draw widget, but the orbs are hard-pinned and the Orbs interface opened into the
+	// ORBS layer carries its own position, so they stay over the map. Hiding ends the draw recursion at the
+	// container, which nothing under it can get out from under. preRender is the seam that matters -- it is
+	// the last word before the frame rasters, where tick() runs after it.
+
+	/** A widget mock whose hidden flag really tracks {@code setHidden}, so a hide and its restore are both
+	 *  observable (the bridge skips a write that would not change the flag). */
+	private static Widget hidableLayer()
+	{
+		final Widget w = mock(Widget.class);
+		final boolean[] hidden = {false};
+		when(w.isHidden()).thenAnswer(inv -> hidden[0]);
+		when(w.setHidden(anyBoolean())).thenAnswer(inv ->
+		{
+			hidden[0] = inv.getArgument(0);
+			return w;
+		});
+		return w;
+	}
+
+	/** A logged-in client in the Classic resizable layout, with the three HUD layers wired up and the world
+	 *  map open or closed. Index 0 = minimap cluster, 1 = side panel, 2 = hover-option text. */
+	private static Client clientWithHudLayers(boolean worldMapOpen, Widget[] layers)
+	{
+		final Client c = loggedInClientWith(null);
+		when(c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT)).thenReturn(1);   // PreEoc (Classic)
+		when(c.getWidget(InterfaceID.ToplevelPreEoc.MAP_CONTAINER)).thenReturn(layers[0]);
+		when(c.getWidget(InterfaceID.ToplevelPreEoc.SIDE_CONTAINER)).thenReturn(layers[1]);
+		when(c.getWidget(InterfaceID.ToplevelPreEoc.MOUSEOVER)).thenReturn(layers[2]);
+		if (worldMapOpen)
+		{
+			final Widget map = mock(Widget.class);
+			when(map.isHidden()).thenReturn(false);
+			when(c.getWidget(InterfaceID.Worldmap.MAP_CONTAINER)).thenReturn(map);
+		}
+		return c;
+	}
+
+	@Test
+	public void anOpenWorldMapHidesEveryHudLayerThatWouldPaintOverIt()
+	{
+		final Widget[] layers = {hidableLayer(), hidableLayer(), hidableLayer()};
+
+		HudVeneerBridge.preRender(clientWithHudLayers(true, layers));
+
+		assertTrue("the minimap+orbs cluster must stop painting over the map", layers[0].isHidden());
+		assertTrue("the side panel must stop painting over the map", layers[1].isHidden());
+		assertTrue("the hover-option text must stop painting over the map", layers[2].isHidden());
+	}
+
+	@Test
+	public void closingTheWorldMapGivesTheHudBack()
+	{
+		final Widget[] layers = {hidableLayer(), hidableLayer(), hidableLayer()};
+
+		HudVeneerBridge.preRender(clientWithHudLayers(true, layers));
+		HudVeneerBridge.preRender(clientWithHudLayers(false, layers));
+
+		assertFalse("the minimap+orbs cluster comes back with the map closed", layers[0].isHidden());
+		assertFalse("the side panel comes back with the map closed", layers[1].isHidden());
+		assertFalse("the hover-option text comes back with the map closed", layers[2].isHidden());
+	}
+
+	@Test
+	public void withNoMapOpenTheHudIsNeverTouched()
+	{
+		// The restore is driven off what WE hid, not off "the map is closed": a side panel the engine itself
+		// closed (no tab open) must not be forced back on every frame for the life of the session.
+		final Widget[] layers = {hidableLayer(), hidableLayer(), hidableLayer()};
+
+		HudVeneerBridge.preRender(clientWithHudLayers(false, layers));
+
+		for (final Widget layer : layers)
+		{
+			verify(layer, never()).setHidden(anyBoolean());
+		}
+	}
+
+	@Test
+	public void theHideIsReassertedEveryFrameTheMapStaysOpen()
+	{
+		// The engine rebuilds the toplevel (a TOPLEVEL_REDRAW, a tab switch) and the layer comes back shown.
+		// preRender runs before the raster, so re-asserting here costs the map zero painted-over frames.
+		final Widget[] layers = {hidableLayer(), hidableLayer(), hidableLayer()};
+		final Client c = clientWithHudLayers(true, layers);
+
+		HudVeneerBridge.preRender(c);
+		layers[0].setHidden(false);   // the engine re-shows the cluster mid-tick
+		HudVeneerBridge.preRender(c);
+
+		assertTrue("a re-shown layer is hidden again before the next frame rasters", layers[0].isHidden());
 	}
 }
