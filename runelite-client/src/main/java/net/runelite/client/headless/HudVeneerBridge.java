@@ -607,6 +607,13 @@ public final class HudVeneerBridge
 				return;
 			}
 			final boolean preEoc = c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
+			if (!HOVER_TEXT)
+			{
+				// Asserted every frame, not once at boot: the flag is the engine's and a relog or a world hop
+				// can hand it back. The write is skipped when it already reads false, so the steady state is
+				// one field read per frame.
+				setMouseoverText(c, false);
+			}
 			if (hideStones)
 			{
 				final int[] ids = stoneIds(preEoc);
@@ -1345,6 +1352,20 @@ public final class HudVeneerBridge
 		sb.append('}');
 		publishMapSnapshot(sb.toString());
 	}
+
+	/**
+	 * Whether the engine's hover-option text ("Walk here", top-left) is drawn at all. Off, because this client
+	 * has no cursor: that label names whatever the engine's tracked point resolves to, and on touch nothing
+	 * the user did put the point there on purpose. It lingers after a tap and re-names itself as the world
+	 * turns under it when the camera rotates, since camera rotation writes yaw/pitch directly and never moves
+	 * the point. The official mobile app shows no hover text for the same reason — there is no hover.
+	 * <p>
+	 * This is the remedy {@code JavaBridge.parkPointer} prescribed in advance when it dropped the fabricated
+	 * (−1,−1) cursor park: <em>stop drawing the label, do not move the cursor somewhere the finger never was.</em>
+	 * Restore the desktop behaviour with {@code -Drunelite.hover.text=true}; the world map suppresses the
+	 * label on its own either way, so the kill switch cannot put it back on top of the map.
+	 */
+	private static final boolean HOVER_TEXT = Boolean.parseBoolean(System.getProperty("runelite.hover.text", "false"));
 
 	// True while WE hold the toplevel HUD layers hidden for an open world map (client thread only). The
 	// restore is driven off this flag, never off "the map just closed", so the HUD cannot be left hidden by a

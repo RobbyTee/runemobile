@@ -104,6 +104,24 @@ All four checks walked through on the real client and reported good:
 3. **Typing (item 4)** — paced keys read as instant; nothing dropped or reordered.
 4. **Idle logout** — behaves like desktop RuneLite now the keepalive is gone.
 
+## The predicted cost came due — and was paid as prescribed (2026-10-20)
+
+Item 3 accepted a lingering hover label, and both docs said in advance: *if it ever reads badly, stop
+drawing the label, don't move the cursor somewhere the finger never was.* It read badly, in the way
+`parkPointer`'s javadoc had already named — **"a model that can light up again when a zoom re-projects it
+under the last point."** Camera rotation is that case: it writes yaw/pitch targets directly and posts no
+mouse events at all, so the tracked point stays exactly where the finger left it and the *world turns
+underneath it*. The engine re-resolves that point every tick, so the label re-names itself while nothing is
+touching the glass.
+
+Paid as prescribed, not reverted: the engine's hover-option text is now off client-wide via
+`Client.setMouseoverTextEnabled(false)`, asserted every frame from `HudVeneerBridge.preRender` (the flag is
+the engine's — a relog or world hop can hand it back). The official mobile app shows no hover text either,
+for the same reason: there is no hover on a touchscreen. Kill switch `-Drunelite.hover.text=true`.
+
+**The fabricated `(−1,−1)` park stays gone.** That is the whole point: the label was the cost, and the cost
+had a remedy that doesn't require lying about where the finger was.
+
 ## Next step
 
 The series is complete. Everything is verified **on iOS**; Android verification was deliberately deferred

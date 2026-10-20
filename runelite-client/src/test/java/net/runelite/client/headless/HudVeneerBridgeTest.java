@@ -525,7 +525,10 @@ public class HudVeneerBridgeTest
 
 		assertFalse("the minimap+orbs cluster comes back with the map closed", layers[0].isHidden());
 		assertFalse("the side panel comes back with the map closed", layers[1].isHidden());
-		assertTrue("the hover-option text comes back with the map closed", text[0]);
+		// NOT assertTrue: the label is off client-wide (HOVER_TEXT), so closing the map does not bring it
+		// back. The map-scoped restore only has anything to restore under -Drunelite.hover.text=true, which
+		// is the one configuration where the label exists to be put back.
+		assertFalse("the hover-option text stays off — it is off client-wide, not just over the map", text[0]);
 	}
 
 	@Test
@@ -542,7 +545,19 @@ public class HudVeneerBridgeTest
 		{
 			verify(layer, never()).setHidden(anyBoolean());
 		}
-		verify(c, never()).setMouseoverTextEnabled(anyBoolean());
+	}
+
+	@Test
+	public void theHoverLabelIsOffWithOrWithoutAMapOpen()
+	{
+		// The label is suppressed client-wide, not just over the map: this client has no cursor, so the point
+		// it names is never one the user put there. Camera rotation is the case that made it obvious — the
+		// point stays put and the world turns under it, so the label re-names itself with nothing touching it.
+		final boolean[] text = {true};
+
+		HudVeneerBridge.preRender(clientWithHudLayers(false, new Widget[]{hidableLayer(), hidableLayer()}, text));
+
+		assertFalse("no map open, and still no hover label", text[0]);
 	}
 
 	@Test

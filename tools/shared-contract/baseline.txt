@@ -20,6 +20,7 @@ FLAG runelite.headless.autologin.world
 FLAG runelite.headless.autologin.worldAddress
 FLAG runelite.headless.capture.dir
 FLAG runelite.headless.resize
+FLAG runelite.hover.text
 FLAG runelite.hub
 FLAG runelite.huddata
 FLAG runelite.huddata.dumpSnapshot

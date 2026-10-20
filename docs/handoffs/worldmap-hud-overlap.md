@@ -41,7 +41,7 @@ toplevel layers that would paint over it:
 |---|---|
 | `MAP_CONTAINER` | the minimap + orbs + compass cluster |
 | `SIDE_CONTAINER` | the inventory / equipment / spellbook panel |
-| `MOUSEOVER` | the engine's hover-option text ("Walk here") |
+| `MOUSEOVER` | ~~the engine's hover-option text~~ — **wrong lever, removed**; see below |
 
 Hiding, not moving, is the point: the draw recursion stops at a hidden container, so nothing under it can
 paint itself at any position, hard-pinned or stale. This is the same ancestor-container hide that already
@@ -83,17 +83,24 @@ That is the shape an upstream merge would leave if it started re-pinning these l
   RuneLite side: `WidgetOverlay` (`RESIZABLE_MINIMAP_WIDGET`, `CANVAS_TOP_RIGHT`) force-positions this
   container whenever its snap corner `isRepositioned()` or the overlay has a preferred location.
 
-The tripwire cannot speak for `MOUSEOVER` either way: it reports that layer's hidden flag, not whether the
-engine draws "Walk here" into it. Only the top-left of the screen answers that.
+## "Walk here" — the `MOUSEOVER` hide was a no-op (resolved 2026-10-20)
+
+It was a guess off the component's **name**, and the device said no: the label still painted over the open
+map. That text is drawn by the client, not by a widget whose hidden flag could end it. The corroborating
+tell was in RuneLite's own code all along — `SnapCorners` shifts every `TOP_LEFT` overlay down a hardcoded
+`MOUSEOVERTEXT_OFFSET = 15` to clear this text, which is not what you do for a widget you can measure.
+
+`Client.setMouseoverTextEnabled(boolean)` is the hook built for it (`runelite-api`, javadoc names the
+top-left corner; implemented in the `injected-client` that ships inside our `client-shaded.jar`; no other
+caller in the tree). `MOUSEOVER` is gone from the layer array and the tripwire now reports the flag, so it
+can speak for the label it names.
+
+**The label is now off client-wide, not just over the map** (`HOVER_TEXT`, revert with
+`-Drunelite.hover.text=true`) — see the input-fidelity handoff for why; the map suppresses it on its own
+regardless, so the kill switch cannot put it back on top of the map.
 
 ## Still open
 
-- **Did "Walk here" go with it?** The user confirmed the HUD is off the map; the label was not reported on
-  either way. The `MOUSEOVER` hide is the remedy the input-fidelity handoff prescribed for the lingering
-  label (*"the fix is to stop drawing the label, not to move the cursor somewhere the finger never was"*),
-  but the id's NAME is still the whole basis for believing that is the layer it is drawn into. If the label
-  is still at the top-left with the map open, that third id is a no-op — drop it and suppress the label
-  another way.
 - **Android** inherits the Java fix and is unchanged on the native side; not checked there.
 - **No off-device repro exists** for this. `ios/dev-tools/tokens.json` is from 2026-06-17 and
   `WorldMapProbe.java` is gone, so reproducing it headless would need fresh tokens (interactive,
