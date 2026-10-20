@@ -1,6 +1,7 @@
 # Input fidelity — the synthetic stream stops inventing things
 
-**Status:** all four items landed, desktop-verified, **device-unverified**.
+**Status:** all four items landed and **verified on device** (iPhone 17 Pro Max, iOS 27.2, Debug build,
+2026-10-20): the four checks below were walked through on the real client and all read correctly.
 **Commits:** `d54da5f6f9`, `7b2ef910ed` (item 1) · `455a634bf0` (keepalive) · `e32bae44c2` (item 3) ·
 `04193e7d01` (item 2) · `a48430708d` (item 4) · `f5908f7fc5` (coalescing) · `c4aade89ab` (review).
 
@@ -82,23 +83,36 @@ fixed; each has a test that fails with its fix reverted.
 - Android `:app:compileDebugKotlin` + `:app:externalNativeBuildDebug` — green.
 - iOS `JVMLauncher.m` / `ViewController.m` — `clang -fsyntax-only` clean (17 warnings, all pre-existing).
 
+## Device verification (2026-10-20)
+
+Deployed with `DEV=<uuid> ios/dev-tools/remote-build.sh --with-jars` (this Mac is tethered directly; there
+is no `deploy-remote.conf`, so the remote path does not apply). Build artifacts were checked to carry the
+new code rather than a stale jar — `client-shaded.jar` holds `onTapMove` / `pumpKeys` / `afterDelivery` /
+`streamMinX` and no `keepAlive`; `RuneMobile.debug.dylib` holds the `postTapMoveX:` selector and the
+`onTapMove` JNI literal and no `postKeepAlive`. **In a Debug build the ObjC code lives in
+`RuneMobile.debug.dylib`, not in the 89KB `RuneMobile` binary** — grep the dylib when verifying a deploy.
+
+All four checks walked through on the real client and reported good:
+
+1. **The persistent hover (item 3)** — the judgement call. Dropping the fabricated `(−1,−1)` move leaves a
+   tapped entity lit until the next contact moves it. **This reads correctly on device.** The park was
+   originally added for the "stuck on the stairs" hover bug, so the risk was that removing it would bring
+   that back as a visible defect; it did not. Do not reinstate the fabricated move. If a lingering label
+   ever does read badly, stop drawing the label.
+2. **Taps land where the finger landed (item 2)**, inventory included — no item dragged itself to a
+   neighbouring slot.
+3. **Typing (item 4)** — paced keys read as instant; nothing dropped or reordered.
+4. **Idle logout** — behaves like desktop RuneLite now the keepalive is gone.
+
 ## Next step
 
-**Deploy and verify on device** — none of this is device-verified. In order of what would actually bite:
-
-1. **The persistent hover (item 3).** Tap an NPC, then pan. Does a stale action label or a lit model read
-   as broken, or as a desktop client? This is the one judgement call that needs eyes on the real thing.
-2. **Taps still land where the finger landed (item 2).** Especially in the inventory, where the stream is
-   guarded off — confirm no item ever drags itself to a neighbouring slot.
-3. **Typing feels right (item 4).** A long paste into the bank search, and a password on the login screen.
-   ~25 chars/sec should look instant; confirm nothing drops or reorders.
-4. **The idle logout now happens.** Leave the app idle past the engine's timeout and confirm it logs out
-   like desktop RuneLite, which is the whole point of deleting the keepalive.
+The series is complete and verified. Nothing is outstanding on it.
 
 ## Open risks
 
 - Every number in item 4 is a guess at human typing, not a measurement. If the engine or a plugin ever
-  cares about the specific cadence, these are the knobs to revisit.
+  cares about the specific cadence, these are the knobs to revisit. The device pass confirms they *feel*
+  right; it does not make them measurements.
 - Keys overlap (holds outlast gaps), so 1–2 keys are down at once. Normal for a typist and fine for the
   gamepack's pressed-key array, but it is new behaviour for this client.
 - Android quantises samples to the render-thread drain (coalesced to the latest per frame); iOS passes
