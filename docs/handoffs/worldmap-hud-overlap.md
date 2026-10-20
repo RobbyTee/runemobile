@@ -1,8 +1,12 @@
 # World map — the HUD stops painting over it
 
-**Status:** **DONE — device-verified 2026-10-20** (iPhone 17 Pro Max, iOS 27.2, Debug). User opened the
-map on the installed build: "that fixed it". Gates green (`:client` 727 tests, 0 failures).
-**Commits:** `33aa7c3065` (the hide) · `e9700f1586` (restore only our own hides) · the tripwire below.
+**Status:** **DONE — device-verified 2026-10-20** (iPhone 17 Pro Max, iOS 27.2, Debug). Both halves
+confirmed on the real client, user reporting "that fixed it" on each: the HUD cluster off the map, then the
+"Walk here" label gone. Gates green (`:client` 729 tests, 0 failures).
+
+**Commits:** `33aa7c3065` the container hide · `e9700f1586` restore only our own hides · `9728b6ee04` the
+tripwire · `b2c109b251` the label is not a widget · `9973ffd6ef` label off client-wide · plus the
+one-owner reconciliation below.
 
 ## The report
 
@@ -96,8 +100,16 @@ caller in the tree). `MOUSEOVER` is gone from the layer array and the tripwire n
 can speak for the label it names.
 
 **The label is now off client-wide, not just over the map** (`HOVER_TEXT`, revert with
-`-Drunelite.hover.text=true`) — see the input-fidelity handoff for why; the map suppresses it on its own
-regardless, so the kill switch cannot put it back on top of the map.
+`-Drunelite.hover.text=true`) — see the input-fidelity handoff for why.
+
+**One owner, deliberately.** The map does *not* suppress the label separately, and nothing ever switches it
+back on. A review flagged the first cut, which did both: the per-frame assert owned the flag AND the map
+latched its own "we turned it off" to restore on close. In the default config that latch could never fire
+(the assert leaves the flag already false, so the map's write is a no-op), but under the kill switch it
+could overwrite a plugin's own `false` with `true` on close — the same confusion between *observed* and
+*owned* state that the earlier widget-hide bug was. There is no fix for that while two owners share one
+boolean, so the second owner is gone. Asking for the desktop label now asks for it over the map too, which
+is what the switch means.
 
 ## Still open
 

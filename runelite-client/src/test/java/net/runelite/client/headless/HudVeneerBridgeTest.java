@@ -525,9 +525,8 @@ public class HudVeneerBridgeTest
 
 		assertFalse("the minimap+orbs cluster comes back with the map closed", layers[0].isHidden());
 		assertFalse("the side panel comes back with the map closed", layers[1].isHidden());
-		// NOT assertTrue: the label is off client-wide (HOVER_TEXT), so closing the map does not bring it
-		// back. The map-scoped restore only has anything to restore under -Drunelite.hover.text=true, which
-		// is the one configuration where the label exists to be put back.
+		// NOT assertTrue: the label is off client-wide (HOVER_TEXT), and nothing switches it back on — see
+		// theHoverLabelIsNeverSwitchedOn for why that is deliberate rather than an oversight.
 		assertFalse("the hover-option text stays off — it is off client-wide, not just over the map", text[0]);
 	}
 
@@ -577,10 +576,12 @@ public class HudVeneerBridgeTest
 	}
 
 	@Test
-	public void hoverTextAlreadyOffIsNotTurnedBackOnByClosingTheMap()
+	public void theHoverLabelIsNeverSwitchedOn()
 	{
-		// Same rule for the one piece of HUD that is not a widget: if the text was already off when the map
-		// opened, closing it is not an excuse to switch it on.
+		// The flag is client-global and a plugin may own it too. We can turn it off, but we can never tell our
+		// own `false` from somebody else's, so we never write `true` — a restore would be a guess wearing
+		// bookkeeping's clothes. Open the map, close it, no map at all: the setter is only ever called with
+		// false, so a plugin that wants the label off keeps it off.
 		final Widget[] layers = {hidableLayer(), hidableLayer()};
 		final boolean[] text = {false};
 		final Client open = clientWithHudLayers(true, layers, text);
@@ -590,8 +591,8 @@ public class HudVeneerBridgeTest
 		HudVeneerBridge.preRender(closed);
 
 		assertFalse("the hover text stays off — it was not ours to turn on", text[0]);
-		verify(open, never()).setMouseoverTextEnabled(anyBoolean());
-		verify(closed, never()).setMouseoverTextEnabled(anyBoolean());
+		verify(open, never()).setMouseoverTextEnabled(true);
+		verify(closed, never()).setMouseoverTextEnabled(true);
 	}
 
 	@Test

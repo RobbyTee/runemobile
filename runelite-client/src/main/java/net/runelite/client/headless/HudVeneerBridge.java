@@ -612,7 +612,7 @@ public final class HudVeneerBridge
 				// Asserted every frame, not once at boot: the flag is the engine's and a relog or a world hop
 				// can hand it back. The write is skipped when it already reads false, so the steady state is
 				// one field read per frame.
-				setMouseoverText(c, false);
+				disableMouseoverText(c);
 			}
 			if (hideStones)
 			{
@@ -1272,10 +1272,12 @@ public final class HudVeneerBridge
 		if (!mapHudLeakLogged)
 		{
 			final int[] live = mapHudLayerIds(preEoc);
-			if (isShown(c, live[0]) || isShown(c, live[1]) || c.isMouseoverTextEnabled())
+			// Only the containers trip it. The hover label is reported for context but is not a leak: with
+			// -Drunelite.hover.text=true it is over the map because that is what the switch asks for.
+			if (isShown(c, live[0]) || isShown(c, live[1]))
 			{
 				mapHudLeakLogged = true;
-				log.warn("[veneer] world map: HUD painted over it — cluster={} side={} hoverText={}",
+				log.warn("[veneer] world map: HUD painted over it — cluster={} side={} (hoverText={})",
 					shownNow(c, live[0]), shownNow(c, live[1]), c.isMouseoverTextEnabled());
 			}
 		}
@@ -1362,8 +1364,10 @@ public final class HudVeneerBridge
 	 * <p>
 	 * This is the remedy {@code JavaBridge.parkPointer} prescribed in advance when it dropped the fabricated
 	 * (−1,−1) cursor park: <em>stop drawing the label, do not move the cursor somewhere the finger never was.</em>
-	 * Restore the desktop behaviour with {@code -Drunelite.hover.text=true}; the world map suppresses the
-	 * label on its own either way, so the kill switch cannot put it back on top of the map.
+	 * Restore the desktop behaviour with {@code -Drunelite.hover.text=true}. That switch is the whole story:
+	 * the world map does NOT suppress the label separately. One global flag, one owner — a second owner that
+	 * turned it off for the map would have to turn it back on afterwards, and it cannot tell its own
+	 * {@code false} from a plugin's. Asking for the desktop label is asking for it over the map too.
 	 */
 	private static final boolean HOVER_TEXT = Boolean.parseBoolean(System.getProperty("runelite.hover.text", "false"));
 
@@ -1373,7 +1377,6 @@ public final class HudVeneerBridge
 	private static boolean mapHudHidden;
 	private static boolean mapHudHiddenPreEoc;   // the layout the hide went to, so the restore can't miss it
 	private static final boolean[] mapHudWeHid = new boolean[2];   // per layer: this hide is OURS to undo
-	private static boolean mapHudTextOff;   // WE turned the hover-option text off, so we are the ones to put it back
 	private static boolean mapHudLeakLogged;   // this open has already reported a layer painting over the map
 
 	/** The toplevel layers that must not paint over the fullscreen world map, in {@link #mapHudWeHid} order:
@@ -1395,22 +1398,24 @@ public final class HudVeneerBridge
 	 * {@code SnapCorners} is the corroborating tell — it shifts every {@code TOP_LEFT} overlay down by a
 	 * hardcoded 15px to clear this text, which is not something you do for a widget you could measure.
 	 * {@link Client#setMouseoverTextEnabled} is the hook built for it.
+	 * <p>
+	 * One-way on purpose. The flag is client-global and a plugin may have its own opinion about it, so this
+	 * never switches it back ON: there is no way to tell our own {@code false} from somebody else's, which
+	 * makes a restore a guess dressed up as bookkeeping. Nothing here needs one — {@link #HOVER_TEXT} is a
+	 * boot setting, not a state that toggles.
 	 */
-	private static boolean setMouseoverText(Client c, boolean enabled)
+	private static void disableMouseoverText(Client c)
 	{
 		try
 		{
-			if (c.isMouseoverTextEnabled() == enabled)
+			if (c.isMouseoverTextEnabled())
 			{
-				return false;
+				c.setMouseoverTextEnabled(false);
 			}
-			c.setMouseoverTextEnabled(enabled);
-			return true;
 		}
 		catch (RuntimeException ignore)
 		{
-			BridgeFaults.note("HudVeneerBridge.setMouseoverText", ignore);
-			return false;
+			BridgeFaults.note("HudVeneerBridge.disableMouseoverText", ignore);
 		}
 	}
 
@@ -1467,9 +1472,8 @@ public final class HudVeneerBridge
 
 	/**
 	 * Hide (or restore) the HUD that would otherwise paint over the fullscreen world map: the minimap+orbs
-	 * cluster, the side panel, and the engine's hover-option text ("Walk here", which lingers because the
-	 * cursor stays where the finger left it). The two containers are widgets and get hidden; the label is
-	 * not a widget at all and gets {@link #setMouseoverText}.
+	 * cluster and the side panel. The engine's hover-option text ("Walk here") is NOT handled here: it is not
+	 * a widget, and it is already off client-wide — see {@link #HOVER_TEXT} and {@link #disableMouseoverText}.
 	 * <p>
 	 * HIDING, not moving, is what the render obeys. Moving {@code MAP_CONTAINER} takes the globe with it — the
 	 * engine rasterises that at the draw widget's live bounds — but not the orbs: they are hard-pinned each
@@ -1483,8 +1487,7 @@ public final class HudVeneerBridge
 	 * Reads and writes each layer's OWN hidden flag, and restores only the flags this method actually set.
 	 * The shared {@link #setHidden} helper guards on {@link Widget#isHidden()}, which counts a hidden PARENT
 	 * too: a layer the engine had already hidden would be skipped on the way in (its flag already reads
-	 * hidden) and then force-SHOWN on the way out. A hidden toplevel would do that to both at once. The same
-	 * discipline covers the hover text: it goes back on only if this is what turned it off.
+	 * hidden) and then force-SHOWN on the way out. A hidden toplevel would do that to both at once.
 	 */
 	private static void setMapHudHidden(Client c, boolean preEoc, boolean hidden)
 	{
@@ -1515,15 +1518,6 @@ public final class HudVeneerBridge
 				mapHudWeHid[i] = false;
 				setSelfHidden(c, ids[i], false);
 			}
-		}
-		if (hidden)
-		{
-			mapHudTextOff |= setMouseoverText(c, false);
-		}
-		else if (mapHudTextOff)
-		{
-			mapHudTextOff = false;
-			setMouseoverText(c, true);
 		}
 	}
 
