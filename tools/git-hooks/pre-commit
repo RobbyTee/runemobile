@@ -24,7 +24,7 @@ if [ -n "$staged_am" ]; then
 		# Critical, config-independent: credentials/keys and the generated artifact must never land,
 		# even if someone deletes the .gitignore entry for them.
 		case "$f" in
-			*tokens.json|*legacy_login.json|*.jks|*.keystore|*keystore.properties)
+			*tokens.json*|*legacy_login.json*|*.jks|*.keystore|*keystore.properties)
 				hflag "secret/key file staged: $f"; matched=1 ;;
 			*jvm-resources/probes.jar)
 				hflag "generated artifact staged (never commit): $f"; matched=1 ;;
