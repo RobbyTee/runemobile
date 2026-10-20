@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# commit-msg gate: the message must not match the local attribution denylist (see attribution-scan.sh).
+#
+# Install once per clone:  tools/git-hooks/install.sh   (sets core.hooksPath = tools/git-hooks)
+# Emergency bypass:        git commit --no-verify
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+# The message only: drop comment lines and everything under a `commit -v` scissors line.
+body="$(sed -e '/^# -\{24\} >8 -\{24\}$/,$d' -e '/^#/d' "$1")"
+
+set +e
+out="$(printf '%s\n' "$body" | "$ROOT/tools/git-hooks/attribution-scan.sh")"
+rc=$?
+set -e
+[ "$rc" -eq 0 ] && exit 0
+
+if [ "$rc" -eq 1 ]; then
+	echo "commit message matches the local attribution denylist:"
+	printf '%s\n' "$out" | sed 's/^/      /'
+fi
+echo
+echo "✋ commit-msg BLOCKED (attribution). Edit the message, or override with 'git commit --no-verify'."
+exit 1

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Pre-commit gate. Two responsibilities:
 #   1) Hygiene/security — no secrets, signing keys, generated artifacts, or local-only development
-#      scaffolding may enter the tree (a fast local gate that runs before the hosted CI does).
+#      scaffolding may enter the tree (a fast local gate that runs before the hosted CI does), and no
+#      added line may match the local attribution denylist (see attribution-scan.sh).
 #   2) Cross-port contract — flag staged changes to the shared iOS/Android jar surface and block when the
 #      host-facing bridge/boot API + -D gate flags drift without a refreshed baseline.
 #
@@ -43,6 +44,20 @@ if [ -n "$staged_am" ]; then
 	if [ -n "$added" ]; then
 		pk="$(printf '%s\n' "$added" | grep -nE 'BEGIN (RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY' || true)"
 		[ -n "$pk" ] && hflag "private-key material in staged content"
+
+		# Attribution: patterns come from a local list outside the repo, so this published hook holds no
+		# pattern text. Skipped while concluding a merge, whose staged lines are mostly upstream's.
+		if [ ! -e "$(git rev-parse --git-path MERGE_HEAD)" ]; then
+			set +e
+			at_out="$(printf '%s\n' "$added" | "$ROOT/tools/git-hooks/attribution-scan.sh")"; at_rc=$?
+			set -e
+			if [ "$at_rc" -eq 1 ]; then
+				hflag "staged lines match the local attribution denylist:"
+				printf '%s\n' "$at_out" | sed 's/^/      /'
+			elif [ "$at_rc" -ne 0 ]; then
+				hflag "attribution guard could not run (see above)"
+			fi
+		fi
 	fi
 
 	# gitleaks if installed (optional, stronger staged-secret scan).
