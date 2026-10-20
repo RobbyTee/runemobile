@@ -386,6 +386,40 @@ public final class JavaBridge
 	// the live varc array off-thread (which the engine can reallocate under the reader).
 	private static volatile boolean textInputOpen;
 
+	// Key timing. iOS hands us committed TEXT -- a UITextField change callback -- and never a key down or up,
+	// so there is no dwell and no cadence of the user's to report. What we CAN stop doing is reporting one
+	// that never happened: every synthesized key used to go out as KEY_PRESSED at t, KEY_TYPED at t+1 and
+	// KEY_RELEASED at t+2, three numbers written into the when field of three events dispatched in the same
+	// EDT drain. The engine was told "this key was held for two milliseconds" about a key that was held for
+	// none, and a whole committed string arrived inside one game tick.
+	//
+	// So the key is now really held: the press goes out, and the release goes out later, on a timer. The
+	// interval is a stand-in for a measurement we do not have -- that is stated here rather than hidden in a
+	// constant -- but it is a real interval, the same way the tap's hold became a real interval by being one.
+	// Drawn from a range rather than fixed, because a constant dwell is its own kind of fabrication.
+	//
+	// The gap is press-to-press within one commit, so keys overlap slightly, as a real hand's do. A pasted
+	// password is ~30 characters a second: fast for a typist, instant to the eye, and not a whole string
+	// delivered inside a single tick.
+	private static final boolean KEY_PACING = Boolean.parseBoolean(System.getProperty("runelite.key.pacing", "true"));
+	private static final int KEY_HOLD_MIN_MS = 45;
+	private static final int KEY_HOLD_MAX_MS = 85;
+	private static final int KEY_GAP_MIN_MS = 25;
+	private static final int KEY_GAP_MAX_MS = 55;
+	// One thread owns the whole key stream, so keys cannot reorder however their callers interleave. Created
+	// on the first synthesized key, never at class-init: the bridge adds nothing to a stock desktop client
+	// that never calls in.
+	private static volatile java.util.concurrent.ScheduledExecutorService keyPacer;
+	// Keys waiting to go out, and whether the pump is already walking them. A key's gap is scheduled when the
+	// PREVIOUS one actually went out, not booked in advance against the clock: a cold scheduler that runs
+	// three overdue tasks back to back would collapse pre-booked slots into one instant, which is the thing
+	// this is here to stop. Measuring from what happened cannot collapse -- it can only run late, and late is
+	// a slower typist, not a fabricated one.
+	private static final java.util.concurrent.ConcurrentLinkedQueue<Runnable> keyQueue =
+		new java.util.concurrent.ConcurrentLinkedQueue<>();
+	private static final java.util.concurrent.atomic.AtomicBoolean keyPumping =
+		new java.util.concurrent.atomic.AtomicBoolean();
+
 	private JavaBridge()
 	{
 	}
@@ -2388,11 +2422,142 @@ public final class JavaBridge
 	}
 
 	/**
+	 * The scheduler that owns the key stream, created on first use. Single-threaded on purpose: it is what
+	 * guarantees that keys reach the EDT in the order they were made, however their callers interleave.
+	 */
+	private static java.util.concurrent.ScheduledExecutorService keyPacer()
+	{
+		java.util.concurrent.ScheduledExecutorService p = keyPacer;
+		if (p != null)
+		{
+			return p;
+		}
+		synchronized (JavaBridge.class)
+		{
+			if (keyPacer == null)
+			{
+				keyPacer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r ->
+				{
+					final Thread th = new Thread(r, "rm-key-pacer");
+					th.setDaemon(true);   // never holds the VM open
+					return th;
+				});
+			}
+			return keyPacer;
+		}
+	}
+
+	private static int jitter(int minMs, int maxMs)
+	{
+		return java.util.concurrent.ThreadLocalRandom.current().nextInt(minMs, maxMs + 1);
+	}
+
+	private static long gapNanos()
+	{
+		return java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(jitter(KEY_GAP_MIN_MS, KEY_GAP_MAX_MS));
+	}
+
+	/**
+	 * Hand a key to the pump. The first key of a burst goes out at once; the rest follow one at a time, each
+	 * a gap after the one before it really went out. Callable from any thread.
+	 */
+	private static void submitKey(Runnable key)
+	{
+		keyQueue.add(key);
+		if (keyPumping.compareAndSet(false, true))
+		{
+			keyPacer().execute(JavaBridge::pumpKeys);
+		}
+	}
+
+	/** Send one key, then book the next. Runs only on the pacer thread, so the order of the queue is the order. */
+	private static void pumpKeys()
+	{
+		final Runnable key = keyQueue.poll();
+		if (key != null)
+		{
+			try
+			{
+				key.run();
+			}
+			catch (RuntimeException e)
+			{
+				BridgeFaults.note("JavaBridge.pumpKeys", e);
+			}
+		}
+		if (!keyQueue.isEmpty())
+		{
+			keyPacer().schedule(JavaBridge::pumpKeys, gapNanos(), java.util.concurrent.TimeUnit.NANOSECONDS);
+			return;
+		}
+		keyPumping.set(false);
+		// A key enqueued between the isEmpty() above and the clear would otherwise sit there until the next
+		// one woke the pump. Re-check, and only restart if we are the one who re-claimed the pump.
+		if (!keyQueue.isEmpty() && keyPumping.compareAndSet(false, true))
+		{
+			keyPacer().schedule(JavaBridge::pumpKeys, gapNanos(), java.util.concurrent.TimeUnit.NANOSECONDS);
+		}
+	}
+
+	/**
+	 * Synthesize one key the way a key actually happens: {@code KEY_PRESSED} (plus {@code KEY_TYPED} when it
+	 * carries a character) at a moment of its own, and {@code KEY_RELEASED} after a hold that is a real
+	 * elapsed interval. Every key the bridge produces goes through here.
+	 *
+	 * <p>The old shape posted all three in one EDT drain and wrote {@code t}, {@code t+1}, {@code t+2} into
+	 * their timestamps: a 2ms hold reported for a key that was never held, and a whole committed string
+	 * delivered inside a single game tick. The hold and the gap here are drawn from a range because we have
+	 * no measurement to report -- iOS gives us committed text, not key downs -- but they are real intervals,
+	 * which is the part that was false before.
+	 *
+	 * <p>The canvas is captured for the whole key: if the engine swaps canvases mid-key the release follows
+	 * the press to the canvas that saw it, rather than landing on a new one that never pressed anything.
+	 *
+	 * @param typed whether this key also produces a {@code KEY_TYPED} (printable keys do; a bare chord or a
+	 *              navigation key does not)
+	 */
+	private static void pacedKey(Canvas canvas, int modifiers, int vk, char ch, boolean typed)
+	{
+		if (!KEY_PACING)
+		{
+			// Escape hatch: the old back-to-back shape, with honest timestamps at least.
+			final long t = System.currentTimeMillis();
+			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, modifiers, vk, ch));
+			if (typed)
+			{
+				dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_TYPED, t, modifiers, KeyEvent.VK_UNDEFINED, ch));
+			}
+			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_RELEASED, System.currentTimeMillis(), modifiers, vk, ch));
+			return;
+		}
+		submitKey(() ->
+		{
+			final long t = System.currentTimeMillis();
+			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, modifiers, vk, ch));
+			if (typed)
+			{
+				dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_TYPED, t, modifiers, KeyEvent.VK_UNDEFINED, ch));
+			}
+			// The release is its own task, so the hold runs alongside the next key rather than blocking it.
+			// Keys therefore overlap a little, which is what a hand typing at speed does. A late release only
+			// lengthens a hold, and a longer hold is still an honest one.
+			keyPacer().schedule(() -> dispatchKey(canvas,
+				new KeyEvent(canvas, KeyEvent.KEY_RELEASED, System.currentTimeMillis(), modifiers, vk, ch)),
+				java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(jitter(KEY_HOLD_MIN_MS, KEY_HOLD_MAX_MS)),
+				java.util.concurrent.TimeUnit.NANOSECONDS);
+		});
+	}
+
+	/**
 	 * Type committed text — for each character post {@code KEY_PRESSED} + {@code KEY_TYPED} +
 	 * {@code KEY_RELEASED}. The gamepack's text fields (chat, search, username/password) consume the
 	 * {@code KEY_TYPED} char, which carries the exact character (and case) the iOS keyboard committed.
 	 * Called from the hidden {@code UITextField}'s change callback, so autocorrect/paste arrive as one
 	 * coherent string.
+	 *
+	 * <p>Returns as soon as the keys are scheduled: the string is typed OUT over the following moments
+	 * ({@link #pacedKey}) rather than delivered whole inside one game tick. ~30 characters a second, so a
+	 * pasted password still looks instant, and the caller is never blocked.
 	 */
 	public static void onText(String s)
 	{
@@ -2402,16 +2567,13 @@ public final class JavaBridge
 			return;
 		}
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
-		long t = System.currentTimeMillis();
 		ensureFocus(q, canvas);
+		// Each character is a key of its own, spaced and held like one (pacedKey). The focus prime above is
+		// invokeLater'd now and the keys are scheduled after it, so it still reaches the canvas first.
 		for (int i = 0; i < s.length(); i++)
 		{
 			final char c = s.charAt(i);
-			final int vk = KeyEvent.getExtendedKeyCodeForChar(c);
-			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, vk, c));
-			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, c));
-			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, vk, c));
-			t += 3;
+			pacedKey(canvas, 0, KeyEvent.getExtendedKeyCodeForChar(c), c, true);
 		}
 	}
 
@@ -2770,7 +2932,6 @@ public final class JavaBridge
 			return;
 		}
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
-		final long t = System.currentTimeMillis();
 		ensureFocus(q, canvas);
 		char kc = KeyEvent.CHAR_UNDEFINED;
 		if (vk == KeyEvent.VK_BACK_SPACE)
@@ -2801,12 +2962,7 @@ public final class JavaBridge
 			// VK_A..VK_Z share their codes with ASCII uppercase; unshifted typing is lowercase.
 			kc = Character.toLowerCase((char) vk);
 		}
-		dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, 0, vk, kc));
-		if (kc != KeyEvent.CHAR_UNDEFINED)
-		{
-			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_TYPED, t + 1, 0, KeyEvent.VK_UNDEFINED, kc));
-		}
-		dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, 0, vk, kc));
+		pacedKey(canvas, 0, vk, kc, kc != KeyEvent.CHAR_UNDEFINED);
 	}
 
 	/**
@@ -2833,10 +2989,10 @@ public final class JavaBridge
 			return;
 		}
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
-		final long t = System.currentTimeMillis();
 		ensureFocus(q, canvas);
-		dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, modifiers, keyCode, KeyEvent.CHAR_UNDEFINED));
-		dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t + 2, modifiers, keyCode, KeyEvent.CHAR_UNDEFINED));
+		// Held like a real chord (pacedKey), not pressed and released in the same breath. The listener's
+		// pressed latch still clears, just at the end of a hold the user could plausibly have made.
+		pacedKey(canvas, modifiers, keyCode, KeyEvent.CHAR_UNDEFINED, false);
 	}
 
 	/**

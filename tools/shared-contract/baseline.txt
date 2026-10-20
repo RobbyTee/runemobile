@@ -31,6 +31,7 @@ FLAG runelite.hudveneer.test.chatY
 FLAG runelite.hudveneer.test.minimapScalePct
 FLAG runelite.hudveneer.test.rowH
 FLAG runelite.hudveneer.test.transparent
+FLAG runelite.key.pacing
 FLAG runelite.menupeek
 FLAG runelite.menupeek.maxEntries
 FLAG runelite.mobilechrome
