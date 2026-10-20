@@ -9,13 +9,18 @@
 # Used by pre-commit (staged added lines) and commit-msg (the message).
 # Exit: 0 = clean, or no list (one notice on stderr -- a clone without the list still commits)
 #       1 = match (matching lines on stdout, cut to 160 chars)
-#       2 = the list is unusable (bad regex) -- fail loudly rather than pass silently
+#       2 = the list exists but is unusable (unreadable, not a file, bad regex) -- fail loudly
 set -euo pipefail
 
 list="${RUNEMOBILE_ATTRIBUTION_DENYLIST:-${XDG_CONFIG_HOME:-$HOME/.config}/rune-mobile/attribution-denylist}"
-if [ ! -r "$list" ]; then
+# Only a list that is absent passes; one that is there but cannot be read must not switch the guard off.
+if [ ! -e "$list" ] && [ ! -L "$list" ]; then
 	echo "attribution guard: no denylist at $list -- skipped" >&2
 	exit 0
+fi
+if [ ! -f "$list" ] || [ ! -r "$list" ]; then
+	echo "attribution guard: $list exists but is not a readable file -- fix it or remove it" >&2
+	exit 2
 fi
 patterns="$(grep -vE '^[[:space:]]*(#|$)' "$list" || true)"
 if [ -z "$patterns" ]; then
