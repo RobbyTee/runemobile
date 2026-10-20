@@ -20,7 +20,10 @@ REPO="../../.."
 
 export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 JAVA="$JAVA_HOME/bin/java"; JAVAC="$JAVA_HOME/bin/javac"
-SHADED="$REPO/runelite-client/build/libs/client-1.12.28-SNAPSHOT-shaded.jar"
+# QA-P1-15: derive the version from gradle.properties instead of a hardcoded literal (broken on the next bump).
+VERSION="$(sed -n 's/^project\.build\.version=//p' "$REPO/gradle.properties")"
+[ -n "$VERSION" ] || { echo "!! could not read project.build.version from $REPO/gradle.properties" >&2; exit 1; }
+SHADED="$REPO/runelite-client/build/libs/client-${VERSION}-shaded.jar"
 CACIOLIB="../cacio-smoke/lib"
 CACIO="$CACIOLIB/cacio-tta-1.18.jar:$CACIOLIB/cacio-shared-1.18.jar"   # NO byte-buddy — UnsafePoke needs none
 AWTSMOKE="../awtsmoke"

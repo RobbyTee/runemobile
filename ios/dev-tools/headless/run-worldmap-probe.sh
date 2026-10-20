@@ -12,7 +12,10 @@ REPO="../../.."
 
 export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 JAVA="$JAVA_HOME/bin/java"; JAVAC="$JAVA_HOME/bin/javac"
-SHADED="$(ls "$REPO"/runelite-client/build/libs/client-*-shaded.jar 2>/dev/null | head -1)"
+# QA-P1-15: derive the version from gradle.properties instead of a hardcoded literal (broken on the next bump).
+VERSION="$(sed -n 's/^project\.build\.version=//p' "$REPO/gradle.properties")"
+[ -n "$VERSION" ] || { echo "!! could not read project.build.version from $REPO/gradle.properties" >&2; exit 1; }
+SHADED="$REPO/runelite-client/build/libs/client-${VERSION}-shaded.jar"
 CACIOLIB="../cacio-smoke/lib"
 CACIO="$CACIOLIB/cacio-tta-1.18.jar:$CACIOLIB/cacio-shared-1.18.jar"
 AWTSMOKE="../awtsmoke"
@@ -20,7 +23,7 @@ OUT="out-worldmap"
 TOKENS="${TOKENS:-../tokens.json}"
 RUN_SECONDS="${RUN_SECONDS:-220}"
 
-if [ -z "$SHADED" ] || [ ! -f "$SHADED" ]; then (cd "$REPO" && ./gradlew :client:shadowJar --console=plain); SHADED="$(ls "$REPO"/runelite-client/build/libs/client-*-shaded.jar | head -1)"; fi
+if [ ! -f "$SHADED" ]; then (cd "$REPO" && ./gradlew :client:shadowJar --console=plain); fi
 [ -f "$TOKENS" ] || { echo "!! $TOKENS missing — mint via ../fetch-shield-tokens.sh" >&2; exit 1; }
 command -v jq >/dev/null || { echo "!! jq required" >&2; exit 1; }
 

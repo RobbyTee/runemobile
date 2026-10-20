@@ -10,7 +10,10 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."   # repo root
 
 export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
-JAR="runelite-client/build/libs/client-1.12.28-SNAPSHOT-shaded.jar"
+# QA-P1-15: derive the version from gradle.properties instead of a hardcoded literal (broken on the next bump).
+VERSION="$(sed -n 's/^project\.build\.version=//p' "gradle.properties")"
+[ -n "$VERSION" ] || { echo "!! could not read project.build.version from gradle.properties" >&2; exit 1; }
+JAR="runelite-client/build/libs/client-${VERSION}-shaded.jar"
 
 if [ ! -f "$JAR" ]; then
   echo "== building shaded client on JDK 21 =="
