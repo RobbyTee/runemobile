@@ -15,9 +15,9 @@ accepts update-in-place.
 - The client could not log in after the 20 October game update. Jagex changes the game's content and its
   revision most weeks, and a client built against the previous one is turned away at the door with
   `js5connect_outofdate` — in practice a black screen with no useful explanation. This build is rebuilt
-  against RuneLite 1.13.3 and the 20 October game data, so login works again. This will happen again after
-  future weekly updates until a new build is published; it is the commonest reason to check the releases
-  page.
+  against RuneLite 1.13.4-SNAPSHOT — the line following Release 1.13.3 — and the 20 October game data,
+  so login works again. This will happen again after future weekly updates until a new build is
+  published; it is the commonest reason to check the releases page.
 - Opening the world map left the minimap orbs, the compass and the "Walk here" text painted on top of it.
   A map that takes the whole screen now owns all of it: the layers that would paint over it are held down
   while it is open and handed back exactly as they were found, so a panel the game itself had closed is
@@ -28,7 +28,9 @@ accepts update-in-place.
 - A tap was reported to the game as a one-millisecond hold no matter how long you actually held it, and
   the few pixels of roll a finger makes between landing and lifting were discarded. The press now goes out
   while your finger is still down and closes where it actually left the glass, so the hold the game sees
-  is the hold you made.
+  is the hold you made. The hold itself is shared code both ports run from the same jar; the
+  finger-travel half is separate Android-only plumbing that has not yet been exercised on an Android
+  phone, where it falls back to a single position at contact if it does not take.
 - A tap that failed mid-flight could leave the left button down, and a held button walks your character.
   The press is now retired first, so it cannot outlive the tap that opened it.
 - A press-and-hold that rolled a few pixels was discarded instead of opening the menu.
