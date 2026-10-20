@@ -254,6 +254,24 @@ public final class JavaBridge
 	private static final int MAX_SETTLE = Integer.getInteger("runelite.touch.settleMax", 12);
 	private static final int STABLE_NEEDED = Integer.getInteger("runelite.touch.settleStable", 2);
 	private static final int CLICKED_TIMEOUT = Integer.getInteger("runelite.touch.clickTimeout", 10);
+	// Truthful press duration. The press for an armed tap is posted when the settle gate ACCEPTS — while the
+	// finger is still on the glass — and released at the real lift, so the hold the engine sees is the hold the
+	// user performed. (Before this the lift posted press+release 1ms apart, which reported every tap as a 1ms
+	// hold regardless of how long the finger was actually down.) A press is outstanding ONLY in ARMED; every
+	// exit from ARMED that is not a real lift retires it via retireOutstandingPress.
+	private static boolean pressOutstanding;
+	private static long pressPostedMs;    // when MOUSE_PRESSED went out (the hold is measured from here)
+	private static int pressX;            // the pressed point — the release must land on it, not on the lift
+	private static int pressY;
+	// A retired press still reaches the engine as a press/release pair, which IS a click to it — so a contact
+	// that became a drag or a long-press would leak a phantom walk-here. Swallow one MenuOptionClicked after a
+	// retire, but ONLY while no tap of ours is in flight: a genuine click is always delivered with tapState ==
+	// CLICKED (commitArmedTap sets it before releasing) and a phantom never is, so that test — not the frame
+	// counter alone — is what keeps a replacement tap's real click from being eaten. The counter is just a
+	// backstop for a retire whose click never materialises; the engine resolves a retired press on the very
+	// next tick, so two frames is ample.
+	private static int suppressClickFrames;
+	private static final int SUPPRESS_CLICK_FRAMES = Integer.getInteger("runelite.touch.suppressClickFrames", 2);
 	private static boolean truthSubscribed;  // EventBus registration is one-shot (client thread)
 
 	// Published complete frames for the live blit. The native side reads at the display refresh (up to
@@ -873,6 +891,10 @@ public final class JavaBridge
 		{
 			if (tapState == TapState.ARMED || (tapState == TapState.AWAIT_ENGINE && tapUncommitted))
 			{
+				// A drag/pinch/long-press claimed the contact. Retire any press the gate had already put down —
+				// for a drag the stream re-presses through onTouch, so releasing ours first keeps the two from
+				// overlapping, and the suppression stops this release reading as a click either way.
+				retireOutstandingPress(liveCanvas(), "gesture cancel");
 				tapUncommitted = false;
 				tapState = TapState.IDLE;
 			}
@@ -957,6 +979,8 @@ public final class JavaBridge
 	 */
 	private static void beginAwait(Canvas canvas, int x, int y, boolean uncommitted)
 	{
+		// A tap landing on top of an ARMED one replaces it, so its press has no lift coming.
+		retireOutstandingPress(canvas, "replaced by a later tap");
 		tapUncommitted = uncommitted;
 		armedFrames = 0;
 		tapX = x;
@@ -991,16 +1015,23 @@ public final class JavaBridge
 		{
 			return false;
 		}
-		if (TOUCH_DIAG)
-		{
-			log.info("[touchdiag] L commit: armed {} frames before the lift, click {},{} tail={}",
-				armedFrames, tapX, tapY, fp);
-		}
 		tapUncommitted = false;
 		clickFp = fp;
 		clickedFrames = 0;
 		tapState = TapState.CLICKED;
-		postClickButtons(canvas, tapX, tapY, MouseEvent.BUTTON1);
+		// The press has been down since the gate accepted; closing it here makes the press->release delta the
+		// finger's real hold. A commit with no press outstanding is not expected (a press is posted on every
+		// ARMED transition) but stays correct: fall back to the atomic click rather than losing the tap.
+		final long heldMs = releaseHeldPress(canvas);
+		if (heldMs < 0)
+		{
+			postClickButtons(canvas, tapX, tapY, MouseEvent.BUTTON1);
+		}
+		if (TOUCH_DIAG)
+		{
+			log.info("[touchdiag] L commit: armed {} frames before the lift, click {},{} held={}ms tail={}",
+				armedFrames, tapX, tapY, heldMs, fp);
+		}
 		return true;
 	}
 
@@ -1053,6 +1084,11 @@ public final class JavaBridge
 		// BeforeMenuRender suppression below must be in place before the FIRST menu ever opens, not
 		// lazily on the first tap.
 		ensureTruthSubscribed();
+		if (suppressClickFrames > 0)
+		{
+			// Decay, so a retire whose click never arrives cannot leave the suppression armed for a real one.
+			suppressClickFrames--;
+		}
 		if (parkVerifyFrames > 0 && tapState == TapState.IDLE)
 		{
 			if (--parkVerifyFrames == 0)
@@ -1070,6 +1106,7 @@ public final class JavaBridge
 		final Canvas canvas = liveCanvas();
 		if (c.getGameState() != GameState.LOGGED_IN || canvas == null)
 		{
+			retireOutstandingPress(canvas, "world gone");  // canvas may be null here — clears the press, posts nothing
 			tapState = TapState.IDLE;   // world went away mid-tap: drop it (nothing sensible to click)
 			tapUncommitted = false;     // ... including any finger-down arm (the invariant: set only in AWAIT_ENGINE/ARMED)
 			queuedTap = false;
@@ -1116,11 +1153,16 @@ public final class JavaBridge
 				{
 					if (stableFrames >= STABLE_NEEDED)
 					{
-						// Armed by a finger still on the glass, and the point is now resolved: hold the click
-						// for the lift. tapUncommitted STAYS set — it is what the lift reads to know the arm
-						// is still waiting for it (and what keeps the pointer park off the armed point).
+						// Armed by a finger still on the glass, and the point is now resolved: press NOW and
+						// hold it for the lift, so the engine is handed the real hold instead of an atomic click
+						// at the lift. This is also the earliest safe moment to press — the gate has just proved
+						// the engine folded our move, and a press before that resolves against the PREVIOUS
+						// point's menu (the mis-targeting this gate exists to prevent). tapUncommitted STAYS set
+						// — it is what the lift reads to know the arm is still waiting for it (and what keeps the
+						// pointer park off the armed point).
 						armedFrames = 0;
 						tapState = TapState.ARMED;
+						postPressOnly(canvas, tapX, tapY);
 					}
 					else
 					{
@@ -1143,13 +1185,17 @@ public final class JavaBridge
 			if (c.isMenuOpen())
 			{
 				// A long-press opened the menu over this contact — the menu flow owns input now, same as it
-				// does for a tap still settling.
+				// does for a tap still settling. Our press is still down on the point under the menu, and no
+				// lift will commit it, so retire it here: this is the one path where leaving it would hand the
+				// engine a walk-here the user never asked for.
+				retireOutstandingPress(canvas, "long-press menu");
 				tapUncommitted = false;
 				tapState = TapState.IDLE;
 				return;
 			}
 			if (++armedFrames >= ARMED_TIMEOUT)
 			{
+				retireOutstandingPress(canvas, "armed timeout");
 				tapUncommitted = false;
 				tapState = TapState.IDLE;
 			}
@@ -1207,6 +1253,20 @@ public final class JavaBridge
 	 */
 	private static void onMenuOptionClicked(MenuOptionClicked ev)
 	{
+		if (suppressClickFrames > 0 && tapState != TapState.CLICKED)
+		{
+			// The click the engine built from a RETIRED press (see retireOutstandingPress) — the contact became
+			// a drag or a long-press and the user never asked for this action. Consume it so the gamepack does
+			// not perform or send it, exactly as a plugin suppresses an unwanted entry.
+			suppressClickFrames = 0;
+			ev.consume();
+			if (TOUCH_DIAG)
+			{
+				log.info("[touchdiag] L phantom click consumed (type={})",
+					ev.getMenuEntry() == null ? null : ev.getMenuEntry().getType());
+			}
+			return;
+		}
 		if (tapState != TapState.CLICKED)
 		{
 			return;
@@ -1986,6 +2046,73 @@ public final class JavaBridge
 			0, x, y, 1, false, awtButton));
 		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, t + 2,
 			0, x, y, 1, false, awtButton));
+	}
+
+	/**
+	 * Post the left {@code MOUSE_PRESSED} for an armed tap whose point the gate has just resolved, and start the
+	 * hold clock. The finger is still down at this moment, so the press is real rather than a stand-in for one;
+	 * {@link #releaseHeldPress} closes it at the lift and the delta between them is the user's actual hold.
+	 */
+	private static void postPressOnly(Canvas canvas, int x, int y)
+	{
+		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+		final long t = System.currentTimeMillis();
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, t,
+			InputEvent.BUTTON1_DOWN_MASK, x, y, 1, false, MouseEvent.BUTTON1));
+		pressOutstanding = true;
+		pressPostedMs = t;
+		pressX = x;
+		pressY = y;
+	}
+
+	/**
+	 * Close an outstanding press at the real lift: {@code MOUSE_RELEASED} + {@code MOUSE_CLICKED} on the PRESSED
+	 * point (the point the engine resolved, which is also where the press landed). Returns the held duration in
+	 * ms — the genuine finger-down-to-finger-up time — or {@code -1} when no press was outstanding.
+	 */
+	private static long releaseHeldPress(Canvas canvas)
+	{
+		if (!pressOutstanding)
+		{
+			return -1L;
+		}
+		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+		final long t = System.currentTimeMillis();
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t,
+			0, pressX, pressY, 1, false, MouseEvent.BUTTON1));
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, t,
+			0, pressX, pressY, 1, false, MouseEvent.BUTTON1));
+		pressOutstanding = false;
+		return t - pressPostedMs;
+	}
+
+	/**
+	 * Retire a press no lift will ever commit — the contact became a drag or a long-press, the arm timed out, a
+	 * later tap replaced it, or the world went away. Releases WITHOUT a {@code MOUSE_CLICKED} and arms the
+	 * one-shot click suppression, because the engine derives a click from the press/release pair itself and would
+	 * otherwise act on it (a walk-here under the finger). Pass {@code canvas == null} when there is nothing live
+	 * to post to: the state is cleared without a release, which is correct — a dead canvas has no press to close.
+	 */
+	private static void retireOutstandingPress(Canvas canvas, String reason)
+	{
+		if (!pressOutstanding)
+		{
+			return;
+		}
+		final long held = System.currentTimeMillis() - pressPostedMs;
+		pressOutstanding = false;
+		if (canvas == null)
+		{
+			return;
+		}
+		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, System.currentTimeMillis(),
+			0, pressX, pressY, 1, false, MouseEvent.BUTTON1));
+		suppressClickFrames = SUPPRESS_CLICK_FRAMES;
+		if (TOUCH_DIAG)
+		{
+			log.info("[touchdiag] L press retired ({}) after {}ms held -> click suppressed", reason, held);
+		}
 	}
 
 	/**
