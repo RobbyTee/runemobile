@@ -22,9 +22,12 @@ Tools
   android_set_hd_config  live 117HD preset flip (SET_HD_CONFIG broadcast) — the FIX-13 A/B knob
   android_fps            run the fps-measure harness for N seconds, return mean/median/min/max
   run_verdict            run any *-verdict.sh against a log, return GREEN/RED
+  ios_pull_logs          devicectl copy of Documents/jvm-stdio.log (+ client.log) off the iPhone
 
 Nothing here is destructive: every tool reads, renders, measures, or flips a
 runtime debug knob.
+
+The output parsers are pure functions (parse_*), covered by test_harness_server.py.
 """
 
 import sys
@@ -37,13 +40,30 @@ import glob
 import base64
 import shutil
 import subprocess
+import tempfile
 import traceback
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SERVER_NAME = "runelite-ios-harness"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.2.0"
 DEFAULT_PROTOCOL = "2024-11-05"
+
+# The JREs each port embeds. Both are gitignored staging output, so either may be missing on a fresh clone;
+# jvm_bench falls back to PINNED_JAVA_MAJOR and says so.
+EMBEDDED_JRE_RELEASES = ("ios/dev-tools/jre/release", "android/app/src/main/assets/jvm/jre/release")
+PINNED_JAVA_MAJOR = 21
+
+# Verdict scripts that take a second log (mobileui: cross-launch persistence). The others ignore $2, so a
+# second log passed to them would be dropped without a word; run_verdict refuses that instead.
+TWO_LOG_VERDICTS = ("mobileui-verdict.sh",)
+
+IOS_BUNDLE_ID = "dev.audaro.runemobile"
+# Debug builds keep .runelite in Documents; Release moves it to Application Support (JVMLauncher.m rlHome).
+IOS_CLIENT_LOG_SOURCES = (
+    "Documents/.runelite/logs/client.log",
+    "Library/Application Support/.runelite/logs/client.log",
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -80,14 +100,43 @@ def run(cmd, cwd=None, timeout=120, env=None, stdin=None):
 
 
 def find_jdk():
+    # openjdk@11 is also installed here, but only for deliberate cross-version runs (pass jdk= explicitly).
     for cand in (
-        "/opt/homebrew/opt/openjdk@11",
         "/opt/homebrew/opt/openjdk@21",
         os.environ.get("JAVA_HOME", ""),
     ):
         if cand and Path(cand, "bin", "java").exists():
             return cand
     return None
+
+
+def java_major(version):
+    """'21.0.8' -> 21, '1.8.0_402' -> 8, '26' -> 26. None if unparseable."""
+    m = re.match(r"(\d+)(?:\.(\d+))?", version or "")
+    if not m:
+        return None
+    major = int(m.group(1))
+    if major == 1 and m.group(2):
+        return int(m.group(2))
+    return major
+
+
+def jdk_version(jdk):
+    rc, o, e = run([f"{jdk}/bin/java", "-version"], timeout=30)
+    m = re.search(r'version "([^"]+)"', e + "\n" + o)
+    return m.group(1) if m else None
+
+
+def embedded_java_versions():
+    """JAVA_VERSION of each staged port JRE that exists, keyed by repo-relative release path."""
+    found = {}
+    for rel in EMBEDDED_JRE_RELEASES:
+        p = REPO_ROOT / rel
+        if p.exists():
+            m = re.search(r'^JAVA_VERSION="([^"]+)"', p.read_text(errors="replace"), re.M)
+            if m:
+                found[rel] = m.group(1)
+    return found
 
 
 def find_adb():
@@ -118,6 +167,120 @@ def ok_result(blocks):
 
 
 # --------------------------------------------------------------------------- #
+# output parsers (pure, so test_harness_server.py can feed them real log shapes)
+# --------------------------------------------------------------------------- #
+def frame_draw_number(path):
+    """HeadlessCapture names frames frame-<STATE>-<n>-draw<NNNNN>.png; the draw counter is the timeline."""
+    m = re.search(r"-draw(\d+)\.png$", str(path))
+    return int(m.group(1)) if m else -1
+
+
+def frame_state(path):
+    m = re.match(r"frame-(.+)-\d+-draw\d+\.png$", Path(path).name)
+    return m.group(1) if m else None
+
+
+def order_frames(paths):
+    """Chronological by draw counter. A name sort is wrong: LOGIN_SCREEN sorts after LOGGED_IN."""
+    return sorted(paths, key=lambda p: (frame_draw_number(p), str(p)))
+
+
+def pick_last_frame(paths):
+    """The newest LOGGED_IN frame if the run reached the game, else the newest frame of any state."""
+    ordered = order_frames(paths)
+    logged_in = [p for p in ordered if frame_state(p) == "LOGGED_IN"]
+    if logged_in:
+        return logged_in[-1]
+    return ordered[-1] if ordered else None
+
+
+def parse_capture_markers(text):
+    """Markers from a HeadlessCapture log. The game state is never logged as 'gameState='; it rides on
+         [headless-capture] draw#200 nullGraphics=0 capturedFrames=3 state=LOGIN_SCREEN
+         [headless-capture] gameState LOGGING_IN -> LOADING (draw#253 loginIndex=10 launcher=true)
+    plus the loginIndex transition line, which also carries state=. The last one in log order is current."""
+    markers = {}
+    m = re.findall(r"\[headless-capture\] draw#\d+ nullGraphics=(\d+)", text)
+    if m:
+        markers["nullGraphics"] = m[-1]
+    m = re.findall(r"\[headless-capture\] .*?(?:\bstate=|gameState \w+ -> )(\w+)", text)
+    if m:
+        markers["gameState"] = m[-1]
+    transitions = re.findall(r"\[headless-capture\] gameState (\w+) -> (\w+)", text)
+    if transitions:
+        markers["gameStateProgression"] = [transitions[0][0]] + [b for _a, b in transitions]
+    lines = text.splitlines()
+    markers["exceptionLines"] = sum(1 for ln in lines if "Exception" in ln)
+    # logback's level column; a login 401 is an ERROR line with no Exception in it.
+    markers["errorLines"] = sum(1 for ln in lines if " ERROR " in ln)
+    return markers
+
+
+_VERDICT_WORDS = ("GREEN", "RED", "INCONCLUSIVE")
+
+
+def parse_verdict(text):
+    """(verdict, token) from a *-verdict.sh's output; verdict is GREEN, RED, INCONCLUSIVE, NO_VERDICT,
+    LOG_MISSING or UNKNOWN.
+
+    A script that reaches a verdict ends on 'VERDICT: <TOKEN>', where TOKEN is the bare word (mobileui,
+    menupeek) or wraps it (EDGE2EDGE_GREEN_AS_EXPECTED, HUD_ISO_RED). Earlier lines print PASS/FAIL per
+    predicate and echo the JVM's own '[hud-iso] VERDICT ...' line, so only the last anchored line counts.
+    The early exits (2 = probe never emitted, 3 = inconclusive) print no VERDICT: line."""
+    tokens = re.findall(r"^\s*VERDICT:\s*([A-Z0-9_]+)", text, re.M)
+    if tokens:
+        tok = tokens[-1]
+        parts = tok.split("_")
+        for word in _VERDICT_WORDS:
+            if word in parts:
+                return word, tok
+        return "UNKNOWN", tok
+    m = re.search(r"\b[A-Z0-9_]+_NO_VERDICT\b", text)
+    if m:
+        return "NO_VERDICT", m.group(0)
+    if "INSTRUMENT_INVALID" in text:
+        return "INCONCLUSIVE", "INSTRUMENT_INVALID"
+    if re.search(r"^>>> INCONCLUSIVE\b", text, re.M):
+        return "INCONCLUSIVE", "INCONCLUSIVE"
+    if "!! log not found" in text:
+        return "LOG_MISSING", None
+    return "UNKNOWN", None
+
+
+def parse_glsl_es(text):
+    """(rows, summary) from glsl_es_repro.py. Each mode prints a header, then its error lines:
+         === uiScalingMode=MITCHELL (ord 2) -> FAIL ===
+            [frag] ERROR: 0:207: '=' :  cannot convert from ...
+    and the run ends on 'ALL MODES PASS (vert+frag)' or 'SOME MODES FAIL' (summary PASS / FAIL / None)."""
+    rows = []
+    for ln in text.splitlines():
+        m = re.match(r"=== uiScalingMode=(\w+) \(ord (\d+)\) -> (PASS|FAIL) ===$", ln.strip())
+        if m:
+            rows.append({"mode": m.group(1), "ord": int(m.group(2)), "status": m.group(3), "errors": []})
+            continue
+        m = re.match(r"\s+\[(vert|frag)\] (.+)", ln)
+        if m and rows:
+            rows[-1]["errors"].append({"stage": m.group(1), "line": m.group(2).strip()})
+    summary = None
+    if "ALL MODES PASS" in text:
+        summary = "PASS"
+    elif "SOME MODES FAIL" in text:
+        summary = "FAIL"
+    return rows, summary
+
+
+def parse_bench_results(text):
+    """Bench.java prints 'RESULT floatbits.A ops=268435456 ns=1429923791 opsPerSec=187727106 chk=-6971'
+    once per timed run (A and B per component). Names carry a dot, so a word-only pattern finds nothing."""
+    results = {}
+    for name, ops, ns, ops_s in re.findall(
+        r"^RESULT ([\w.]+) ops=(\d+) ns=(\d+) opsPerSec=([\d.eE+]+) chk=-?\d+", text, re.M
+    ):
+        results[name] = {"ops": int(ops), "ns": int(ns), "opsPerSec": float(ops_s)}
+    return results
+
+
+# --------------------------------------------------------------------------- #
 # tools
 # --------------------------------------------------------------------------- #
 def tool_headless_render(a):
@@ -129,6 +292,7 @@ def tool_headless_render(a):
     if mode == "in_game":
         script = REPO_ROOT / "ios/dev-tools/headless/run-headless-login.sh"
         out_dir = REPO_ROOT / "ios/dev-tools/headless/out-login"
+        jvm_log = out_dir / "run-native-login.log"
         tokens = REPO_ROOT / "ios/dev-tools/tokens.json"
         if not tokens.exists():
             return err_result(
@@ -138,6 +302,7 @@ def tool_headless_render(a):
     else:
         script = REPO_ROOT / "ios/dev-tools/headless/run-headless.sh"
         out_dir = REPO_ROOT / "ios/dev-tools/headless/out"
+        jvm_log = out_dir / "run-native.log"
 
     if not script.exists():
         return err_result(f"missing script: {script}")
@@ -145,18 +310,25 @@ def tool_headless_render(a):
     env = {"RUN_SECONDS": str(run_seconds), "CAPTURE_INTERVAL": str(interval)}
     # boot + (optional) login takes a while; give the script room over its own RUN_SECONDS.
     timeout = max(180, run_seconds + 150)
+    started = time.time()
     rc, out, err = run(["bash", str(script)], cwd=REPO_ROOT, timeout=timeout, env=env)
 
-    frames = sorted(glob.glob(str(out_dir / "frame-*.png")))
+    # A script that exits before launching Java (missing tokens/jq) skips its rm of old frames and leaves the
+    # previous run's log behind, so only files this run wrote count.
+    on_disk = glob.glob(str(out_dir / "frame-*.png"))
+    frames = order_frames([f for f in on_disk if os.stat(f).st_mtime >= started])
     combined = out + "\n" + err
-    markers = {}
-    m = re.findall(r"nullGraphics=(\d+)", combined)
-    if m:
-        markers["nullGraphics"] = m[-1]
-    m = re.findall(r"gameState=(\w+)", combined)
-    if m:
-        markers["gameState"] = m[-1]
+    # The script prints only a grep tail of the JVM log, so read the log itself.
+    log_fresh = jvm_log.exists() and jvm_log.stat().st_mtime >= started
+    markers = parse_capture_markers(jvm_log.read_text(errors="replace") if log_fresh else "")
     markers["frameCount"] = len(frames)
+    if len(on_disk) > len(frames):
+        markers["staleFramesIgnored"] = len(on_disk) - len(frames)
+    by_state = {}
+    for f in frames:
+        st = frame_state(f) or "?"
+        by_state[st] = by_state.get(st, 0) + 1
+    markers["framesByState"] = by_state
 
     return ok_result(
         {
@@ -164,11 +336,13 @@ def tool_headless_render(a):
             "mode": mode,
             "exitCode": rc,
             "outputDir": str(out_dir),
+            "jvmLog": str(jvm_log) if log_fresh else None,
             "frames": frames[-8:],
-            "lastFrame": frames[-1] if frames else None,
+            "lastFrame": pick_last_frame(frames),
             "markers": markers,
             "logTail": "\n".join(combined.strip().splitlines()[-25:]),
-            "hint": "Open lastFrame with the Read tool to view it, or pass two frames to image_diff.",
+            "hint": "frames are in draw order; lastFrame is the newest LOGGED_IN frame when there is one. "
+            "Open it with the Read tool, or pass two frames to image_diff. jvmLog null = Java never ran.",
         }
     )
 
@@ -259,9 +433,31 @@ def tool_image_diff(a):
 
 def tool_jvm_bench(a):
     """Compile + run the jvmbench throughput proxy on desktop OpenJDK."""
-    jdk = a.get("jdk") or find_jdk()
+    explicit = a.get("jdk")
+    jdk = explicit or find_jdk()
     if not jdk:
-        return err_result("no JDK found (looked at openjdk@11, openjdk@21, JAVA_HOME).")
+        return err_result("no JDK found (looked at openjdk@21, JAVA_HOME).")
+    if not Path(jdk, "bin", "java").exists():
+        return err_result(f"not a JDK home (no bin/java): {jdk}")
+    version = jdk_version(jdk)
+    major = java_major(version)
+    if major is None:
+        return err_result(f"could not read the version of {jdk}/bin/java (got {version!r}).")
+    embedded = embedded_java_versions()
+    expected = sorted({java_major(v) for v in embedded.values()} - {None}) or [PINNED_JAVA_MAJOR]
+    runtime_match = major in expected
+    # A number from the wrong VM reads exactly like a real one, so the default path refuses it; an explicit
+    # jdk= is a deliberate cross-version comparison and runs, flagged.
+    if not runtime_match and not explicit:
+        return err_result(
+            {
+                "ok": False,
+                "reason": f"resolved JDK {version} (major {major}) is not the embedded runtime (major {expected})",
+                "jdk": jdk,
+                "embeddedRuntime": embedded or {"pinned": PINNED_JAVA_MAJOR},
+                "hint": "install openjdk@21, or pass jdk=<home> to benchmark another VM on purpose.",
+            }
+        )
     bench_dir = REPO_ROOT / "ios/dev-tools/jvmbench"
     src = bench_dir / "Bench.java"
     if not src.exists():
@@ -278,20 +474,23 @@ def tool_jvm_bench(a):
         return err_result({"stage": "compile", "exitCode": rc, "stderr": e[-2000:]})
 
     rc, o, e = run([f"{jdk}/bin/java", "-cp", str(out), "Bench"], cwd=bench_dir, timeout=180)
-    results = {}
-    for name, ops, ns, ops_s, chk in re.findall(
-        r"RESULT (\w+) ops=(\d+) ns=(\d+) opsPerSec=([\d.eE+]+) chk=(-?\d+)", o
-    ):
-        results[name] = {"ops": int(ops), "ns": int(ns), "opsPerSec": float(ops_s)}
-    return ok_result(
-        {
-            "ok": rc == 0 and bool(results),
-            "jdk": jdk,
-            "exitCode": rc,
-            "results": results,
-            "raw": o.strip().splitlines()[-10:],
-        }
-    )
+    results = parse_bench_results(o)
+    result_lines = len(re.findall(r"^RESULT ", o, re.M))
+    summary = {
+        # every RESULT line must parse: a partial table would read as a complete one.
+        "ok": rc == 0 and bool(results) and len(results) == result_lines,
+        "jdk": jdk,
+        "jdkVersion": version,
+        "embeddedRuntime": embedded or {"pinned": PINNED_JAVA_MAJOR},
+        "runtimeMatch": runtime_match,
+        "exitCode": rc,
+        "results": results,
+        "resultLines": result_lines,
+        "raw": o.strip().splitlines()[-10:],
+    }
+    if not runtime_match:
+        summary["warning"] = f"JDK major {major} is not the embedded runtime (major {expected}): cross-version numbers."
+    return ok_result(summary)
 
 
 def tool_glsl_es_validate(a):
@@ -303,23 +502,27 @@ def tool_glsl_es_validate(a):
         return err_result(
             "glslangValidator not on PATH — install it (brew install glslang) to validate shaders."
         )
-    rc, o, e = run(["python3", str(script)], cwd=REPO_ROOT, timeout=120)
+    cmd = ["python3", str(script)]
+    for cast in a.get("extra_casts") or []:
+        if "==" not in cast:
+            return err_result(f"extra_casts entries are 'from==to'; got {cast!r}")
+        cmd += ["--extra-cast", cast]
+    rc, o, e = run(cmd, cwd=REPO_ROOT, timeout=120)
     combined = o + "\n" + e
-    rows = []
-    for mode, stage, status in re.findall(
-        r"uiScalingMode=(\w+),\s*(vertex|fragment):\s*(\w+)", combined
-    ):
-        rows.append({"mode": mode, "stage": stage, "status": status})
-    failures = [r for r in rows if r["status"].upper() != "OK"]
-    return ok_result(
-        {
-            "ok": rc == 0 and not failures,
-            "exitCode": rc,
-            "results": rows,
-            "failures": failures,
-            "logTail": combined.strip().splitlines()[-20:],
-        }
-    )
+    rows, summary = parse_glsl_es(combined)
+    failures = [r["mode"] for r in rows if r["status"] != "PASS"]
+    result = {
+        "ok": rc == 0 and bool(rows) and not failures and summary == "PASS",
+        "exitCode": rc,
+        "summary": summary,
+        "results": rows,
+        "failures": failures,
+        "logTail": combined.strip().splitlines()[-20:],
+    }
+    if not rows:
+        # An exit 0 with nothing parsed means the output format moved, not that every shader passed.
+        result["reason"] = "no '=== uiScalingMode=... ===' lines parsed; check glsl_es_repro.py's output format."
+    return ok_result(result)
 
 
 def tool_list_evidence(a):
@@ -461,6 +664,7 @@ def tool_android_fps(a):
 def tool_run_verdict(a):
     script = a.get("script")
     log_path = a.get("log")
+    log2_path = a.get("log2")
     if not script:
         return err_result("pass script=<path to a *-verdict.sh>.")
     sp = (REPO_ROOT / script).resolve() if not os.path.isabs(script) else Path(script).resolve()
@@ -471,16 +675,137 @@ def tool_run_verdict(a):
         return err_result("script must live inside the repo.")
     if not sp.name.endswith("-verdict.sh") or not sp.exists():
         return err_result(f"not a verdict script or missing: {sp}")
+    if log2_path and sp.name not in TWO_LOG_VERDICTS:
+        return err_result(f"{sp.name} takes one log; log2 is only for {', '.join(TWO_LOG_VERDICTS)}.")
+    if log2_path and not log_path:
+        return err_result("log2 needs log (the first launch's log).")
     cmd = ["bash", str(sp)]
-    if log_path:
-        cmd.append(str((REPO_ROOT / log_path) if not os.path.isabs(log_path) else log_path))
+    for p in (log_path, log2_path):
+        if not p:
+            continue
+        full = (REPO_ROOT / p) if not os.path.isabs(p) else Path(p)
+        # mobileui-verdict.sh reads a missing log as empty and says RED; name the real problem instead.
+        if not full.is_file():
+            return err_result(f"log not found: {full}")
+        cmd.append(str(full))
     rc, o, er = run(cmd, cwd=REPO_ROOT, timeout=60)
     combined = o + "\n" + er
-    verdict = "UNKNOWN"
-    m = re.search(r"\b(GREEN|RED|PASS|FAIL|INCONCLUSIVE)\b", combined)
-    if m:
-        verdict = m.group(1)
-    return ok_result({"ok": rc == 0, "verdict": verdict, "exitCode": rc, "output": combined.strip().splitlines()[-25:]})
+    verdict, token = parse_verdict(combined)
+    # Every script exits 0 exactly when it says GREEN. Anything else means the parse or the script is off.
+    consistent = (verdict == "GREEN") == (rc == 0)
+    result = {
+        "ok": verdict == "GREEN" and rc == 0,
+        "verdict": verdict,
+        "verdictToken": token,
+        "exitCode": rc,
+        "consistent": consistent,
+        "logs": len(cmd) - 2,
+        "output": combined.strip().splitlines()[-25:],
+    }
+    if not consistent:
+        result["warning"] = f"verdict {verdict} disagrees with exit code {rc}; read output before trusting either."
+    return ok_result(result)
+
+
+def _ios_device(a):
+    """(udid, None) for the explicit device, else for the one paired iOS device devicectl lists."""
+    if a.get("device"):
+        return a["device"], None
+    tmp = Path(tempfile.mkdtemp(prefix="harness-devicectl-"))
+    try:
+        out = tmp / "devices.json"
+        rc, _o, e = run(["xcrun", "devicectl", "list", "devices", "--json-output", str(out)], timeout=60)
+        if rc != 0 or not out.exists():
+            return None, err_result({"stage": "list devices", "exitCode": rc, "stderr": e[-800:]})
+        devices = json.loads(out.read_text()).get("result", {}).get("devices", [])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    phones = [
+        d
+        for d in devices
+        if d.get("hardwareProperties", {}).get("platform") == "iOS"
+        and d.get("connectionProperties", {}).get("pairingState") == "paired"
+    ]
+    if len(phones) != 1:
+        names = [f"{d.get('deviceProperties', {}).get('name')} {d.get('identifier')}" for d in phones]
+        return None, err_result(f"need exactly one paired iOS device, found {len(phones)}: {names}; pass device=<UDID>.")
+    return phones[0]["identifier"], None
+
+
+def _devicectl_copy(udid, bundle_id, source, dest):
+    return run(
+        [
+            "xcrun", "devicectl", "device", "copy", "from",
+            "--device", udid,
+            "--domain-type", "appDataContainer",
+            "--domain-identifier", bundle_id,
+            "--source", source,
+            "--destination", str(dest),
+        ],
+        timeout=120,
+    )
+
+
+def tool_ios_pull_logs(a):
+    """Copy jvm-stdio.log (and optionally RuneLite's client.log) out of the app container."""
+    if not shutil.which("xcrun"):
+        return err_result("xcrun not found (install the Xcode command-line tools).")
+    udid, e = _ios_device(a)
+    if e:
+        return e
+    bundle_id = a.get("bundle_id") or IOS_BUNDLE_ID
+    # ios/app/evidence/ is gitignored, and list_evidence already indexes it.
+    # A fresh dir per pull: a failed pull deletes its dir, which must never hold an earlier pull's files.
+    base = REPO_ROOT / "ios/app/evidence/device-pull"
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest_dir, n = base / stamp, 1
+    while dest_dir.exists():
+        dest_dir, n = base / f"{stamp}-{n}", n + 1
+    dest_dir.mkdir(parents=True)
+
+    wanted = [("jvm-stdio.log", ("Documents/jvm-stdio.log",), True)]
+    if a.get("client_log"):
+        wanted.append(("client.log", IOS_CLIENT_LOG_SOURCES, False))
+    files, attempts = {}, []
+    for name, sources, required in wanted:
+        dest = dest_dir / name
+        for src in sources:
+            rc, o, er = _devicectl_copy(udid, bundle_id, src, dest)
+            attempts.append({"source": src, "exitCode": rc, "stderr": er.strip()[-400:]})
+            if rc == 0 and dest.is_file():
+                text = dest.read_text(errors="replace")
+                files[name] = {
+                    "path": str(dest.relative_to(REPO_ROOT)),
+                    "source": src,
+                    "bytes": dest.stat().st_size,
+                    "lines": text.count("\n"),
+                    "tail": text.strip().splitlines()[-15:],
+                }
+                break
+        if required and name not in files:
+            for f in files.values():
+                (REPO_ROOT / f["path"]).unlink(missing_ok=True)
+            shutil.rmtree(dest_dir, ignore_errors=True)
+            return err_result(
+                {
+                    "ok": False,
+                    "reason": f"could not copy {name} from {bundle_id} on {udid}",
+                    "attempts": attempts,
+                    "hint": "is the phone unlocked and paired, and was the app launched at least once? "
+                    "The SideStore release build has a different bundle id (pass bundle_id).",
+                }
+            )
+    return ok_result(
+        {
+            "ok": True,
+            "device": udid,
+            "bundleId": bundle_id,
+            "dir": str(dest_dir.relative_to(REPO_ROOT)),
+            "files": files,
+            "attempts": attempts,
+            "hint": "client.log can name the account; it stays in gitignored ios/app/evidence/, delete it when done.",
+        }
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -489,8 +814,10 @@ def tool_run_verdict(a):
 TOOLS = {
     "headless_render": (
         "Run the desktop headless RuneLite capture (real engine, no device) and return the PNG "
-        "frames + key log markers (nullGraphics, gameState). mode=login_screen needs no auth; "
-        "mode=in_game requires ios/dev-tools/tokens.json. Slow (~1-3 min).",
+        "frames in draw order + markers read from the JVM log (nullGraphics, gameState, "
+        "gameStateProgression, exceptionLines, framesByState). lastFrame is the newest LOGGED_IN "
+        "frame when the run reached the game. mode=login_screen needs no auth; mode=in_game "
+        "requires ios/dev-tools/tokens.json (the script's own default run is 120 s). Slow (~1-3 min).",
         {
             "type": "object",
             "properties": {
@@ -520,15 +847,35 @@ TOOLS = {
         tool_image_diff,
     ),
     "jvm_bench": (
-        "Compile (--release 8) and run the jvmbench throughput proxy on desktop OpenJDK; "
-        "returns parsed ops/s for floatbits, raster, mixed.",
-        {"type": "object", "properties": {"jdk": {"type": "string", "description": "JDK home (optional)"}}},
+        "Compile (--release 8) and run the jvmbench throughput proxy on desktop OpenJDK 21 (the "
+        "ports' runtime); returns parsed ops/s for floatbits, raster, mixed. Refuses a default JDK "
+        "whose major differs from the staged JREs'.",
+        {
+            "type": "object",
+            "properties": {
+                "jdk": {
+                    "type": "string",
+                    "description": "JDK home (optional; default openjdk@21, then JAVA_HOME). A JDK passed "
+                    "here runs even on a major mismatch, flagged runtimeMatch=false.",
+                }
+            },
+        },
         tool_jvm_bench,
     ),
     "glsl_es_validate": (
         "Run the GLES 3.00 shader-downport validator (glsl_es_repro.py) across uiScalingMode "
-        "variants; returns per-mode OK/FAIL. Catches the implicit-cast regressions GLES forbids.",
-        {"type": "object", "properties": {}},
+        "variants; returns per-mode PASS/FAIL with each mode's glslang errors. Catches the "
+        "implicit-cast regressions GLES forbids.",
+        {
+            "type": "object",
+            "properties": {
+                "extra_casts": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "extra 'from==to' downport casts to try (--extra-cast), optional",
+                }
+            },
+        },
         tool_glsl_es_validate,
     ),
     "list_evidence": (
@@ -582,16 +929,36 @@ TOOLS = {
         tool_android_fps,
     ),
     "run_verdict": (
-        "Run any *-verdict.sh inside the repo against a log file and return its GREEN/RED/PASS/FAIL.",
+        "Run any *-verdict.sh inside the repo against a log file and return its verdict: GREEN, RED, "
+        "INCONCLUSIVE, NO_VERDICT, LOG_MISSING or UNKNOWN, read from the script's final VERDICT: line "
+        "and cross-checked against its exit code (consistent=false flags a disagreement).",
         {
             "type": "object",
             "properties": {
                 "script": {"type": "string", "description": "repo-relative path to a *-verdict.sh"},
                 "log": {"type": "string", "description": "log file to adjudicate (optional)"},
+                "log2": {
+                    "type": "string",
+                    "description": "second launch's log; mobileui-verdict.sh only (gates cross-launch persistence)",
+                },
             },
             "required": ["script"],
         },
         tool_run_verdict,
+    ),
+    "ios_pull_logs": (
+        "Copy Documents/jvm-stdio.log (the frame probe, memwatch and fault sink) off the paired iPhone "
+        "with devicectl into ios/app/evidence/device-pull/<stamp>/, plus RuneLite's client.log when "
+        "client_log=true. The phone must be unlocked; no JIT attach needed.",
+        {
+            "type": "object",
+            "properties": {
+                "device": {"type": "string", "description": "UDID (optional; default the one paired iPhone)"},
+                "bundle_id": {"type": "string", "default": IOS_BUNDLE_ID},
+                "client_log": {"type": "boolean", "default": False, "description": "also pull client.log (can name the account)"},
+            },
+        },
+        tool_ios_pull_logs,
     ),
 }
 

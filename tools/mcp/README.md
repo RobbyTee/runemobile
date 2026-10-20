@@ -37,15 +37,16 @@ the tools to appear.
 
 | tool | needs a device? | what it does |
 |------|-----------------|--------------|
-| `headless_render` | no (desktop JVM) | run the headless capture (`run-headless*.sh`); returns PNG paths + `nullGraphics`/`gameState` markers. `mode=in_game` needs `tokens.json`. Slow (~1-3 min). |
+| `headless_render` | no (desktop JVM) | run the headless capture (`run-headless*.sh`); returns PNG paths in draw order + markers read from the JVM log (`nullGraphics`, `gameState`, `gameStateProgression`, `exceptionLines`, `errorLines`, `framesByState`). `lastFrame` is the newest `LOGGED_IN` frame when the run got in-game. Files an early-exiting script left from an older run are ignored. `mode=in_game` needs `tokens.json`. Slow (~1-3 min). |
 | `image_diff` | no | per-channel PNG diff: `maxChannelDelta`, `meanChannelDelta`, RMSE, `pctPixelsDiffering`, + an inlined red heatmap. The previously-unimplemented T12.1 golden compare. |
-| `jvm_bench` | no | compile (`--release 8`) + run `jvmbench/Bench.java`; parsed ops/s for floatbits/raster/mixed. |
-| `glsl_es_validate` | no (needs `glslangValidator`) | run `glsl_es_repro.py`; per-mode GLES 3.00 OK/FAIL. |
+| `jvm_bench` | no | compile (`--release 8`) + run `jvmbench/Bench.java` on OpenJDK 21; parsed ops/s per run (`floatbits.A`, `raster.B`, ...). The default JDK must match the major version of the staged port JREs or the tool refuses; pass `jdk=` for a deliberate cross-version run (flagged `runtimeMatch: false`). |
+| `glsl_es_validate` | no (needs `glslangValidator`) | run `glsl_es_repro.py`; per-mode GLES 3.00 PASS/FAIL with each mode's glslang errors. `extra_casts` passes `--extra-cast from==to`. |
 | `list_evidence` | no | index `evidence/` + headless `out*/` PNG catalogs into JSON, newest-first. |
 | `android_screenshot` | yes | `adb exec-out screencap` → PNG. |
 | `android_set_hd_config` | yes | live 117HD preset flip (`SET_HD_CONFIG` broadcast) — the FIX-13 A/B knob. |
 | `android_fps` | yes | run `fps-measure.sh` for N seconds; mean/median/min/max fps. |
-| `run_verdict` | no | run any in-repo `*-verdict.sh` against a log; returns GREEN/RED/PASS/FAIL. |
+| `run_verdict` | no | run any in-repo `*-verdict.sh` against a log; returns GREEN/RED/INCONCLUSIVE/NO_VERDICT/LOG_MISSING/UNKNOWN from the script's final `VERDICT:` line, cross-checked against its exit code (`consistent`). `log2` is the second launch for `mobileui-verdict.sh`. |
+| `ios_pull_logs` | yes (iPhone, unlocked) | `devicectl` copy of `Documents/jvm-stdio.log` into `ios/app/evidence/device-pull/<stamp>/` (gitignored); `client_log=true` adds RuneLite's `client.log`, which can name the account. |
 
 ### Typical loops
 
@@ -67,3 +68,14 @@ printf '%s\n' \
 
 Adding a tool is a single entry in the `TOOLS` registry (description, JSON Schema,
 handler) at the bottom of `harness_server.py`.
+
+## Parser tests
+
+The log parsers are pure `parse_*` functions. Their tests feed them the line shapes the
+real scripts print:
+
+```bash
+/usr/bin/python3 -m unittest discover -s tools/mcp -p 'test_*.py'
+```
+
+A changed log format should break a test here before it turns into a silently empty field.
