@@ -328,6 +328,12 @@ public final class JavaBridge
 	                                      // parkPointer runs from the client thread after a consumed tap)
 	private static boolean pressed;
 	private static int pressButton = MouseEvent.BUTTON1;
+	// Where we last put the synthetic pointer. Only read by parkPointer, so an exit can report the point the
+	// pointer left from the way a real toolkit's does, instead of a coordinate we made up. Written from both
+	// the client thread and the native UI thread; the pair is not written atomically, and a torn read costs an
+	// exit the x of one event and the y of the next -- both real points a finger was at a frame apart.
+	private static volatile int lastPointerX = -1;
+	private static volatile int lastPointerY = -1;
 	private static boolean shiftHeld;     // sticky-Shift: a held VK_SHIFT KEY_PRESSED with no release (see setShiftHeld)
 	private static boolean ctrlHeld;      // sticky-Ctrl: same latch for VK_CONTROL (see setCtrlHeld)
 	private static boolean altHeld;       // sticky-Alt:  same latch for VK_ALT (Ground-Items Alt-highlight; see setAltHeld)
@@ -710,22 +716,22 @@ public final class JavaBridge
 
 	/**
 	 * Assert focus + pointer <em>presence</em> for an interaction: focus once, then a {@code MOUSE_ENTERED}
-	 * if the pointer is currently "absent" (we park it after taps / on camera drags so nothing stays
-	 * highlighted — see {@link #parkPointer()}). Mirrors what {@code HeadlessLogin} primes before a click.
+	 * if the pointer is currently "absent" (a lift and a camera/pinch gesture both end its presence — see
+	 * {@link #parkPointer()}). Mirrors what {@code HeadlessLogin} primes before a click.
 	 */
 	private static void primeFocus(EventQueue q, Canvas canvas, long t, int x, int y)
 	{
 		ensureFocus(q, canvas);
 		if (!entered)
 		{
-			q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_ENTERED, t, 0, x, y, 0, false));
+			postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_ENTERED, t, 0, x, y, 0, false));
 			entered = true;
 		}
 	}
 
 	/**
 	 * Native-facing alias for {@link #parkPointer()} (the JNI side resolves this name; keep it stable).
-	 * Called when a camera/pinch gesture begins so nothing stays hovered/highlighted under a frozen cursor.
+	 * Called when a camera/pinch gesture begins, which is one of the moments the finger stops being a pointer.
 	 */
 	public static void clearHover()
 	{
@@ -733,13 +739,21 @@ public final class JavaBridge
 	}
 
 	/**
-	 * Park the synthetic cursor at a neutral point: {@code MOUSE_MOVED} to (−1,−1), then {@code MOUSE_EXITED}.
-	 * The engine does NOT clear its tracked mouse position on EXITED (bug 3: park-by-exit left the cursor at
-	 * the last tap, the engine kept picking there each tick, and a zoom re-projected a model under it — the
-	 * stuck hover label). Hover ends only by MOVING to a point that picks nothing; the EXITED is just AWT
-	 * hygiene. On a touch device there is no persistent cursor — a finger is only "on" the screen during a
-	 * tap — so this runs after every consumed tap / menu select and when a camera/pinch gesture begins.
-	 * (Fallback if the engine ever clamps negative coords: park off-canvas at canvas+50 — device-verify #1.)
+	 * The finger is off the glass: post {@code MOUSE_EXITED} so the engine knows there is no pointer, and
+	 * leave the recorded position where the finger actually left it.
+	 *
+	 * <p>This used to lead with a {@code MOUSE_MOVED} to (−1,−1) — a coordinate no pointer can occupy and no
+	 * toolkit ever reports — because the engine does NOT clear its tracked mouse position on EXITED, and a
+	 * move to a point that picks nothing was the only way to end the hover (bug 3: park-by-exit left the
+	 * cursor on the last tap, the engine kept picking there each tick, and a zoom re-projected a model under
+	 * it — the stuck hover label). That fabricated move is gone: it put the pointer somewhere it had never
+	 * been, every single tap, which is the clearest tell in the whole input stream.
+	 *
+	 * <p><b>The hover therefore persists.</b> After a tap the engine keeps the tapped entity lit and keeps
+	 * resolving against that point until the next contact moves it. That is precisely what a desktop client
+	 * does — a mouse stays where you let go of it — so the behaviour is not a regression against the client
+	 * we are imitating, only against the fabricated version of ourselves. What it costs is cosmetic: an action
+	 * label that lingers, and a model that can light up again when a zoom re-projects it under the last point.
 	 */
 	public static void parkPointer()
 	{
@@ -750,22 +764,22 @@ public final class JavaBridge
 		}
 		if (tapState == TapState.ARMED || (tapState == TapState.AWAIT_ENGINE && tapUncommitted))
 		{
-			// A finger is on the glass and the engine is resolving the point under it (armTap). Parking would
-			// move the cursor off that point, so the gate could never accept and the lift would pay for the
-			// whole settle after all — and a hover under a finger that is really there is not a stale hover.
-			// Only ever skips the park queued by the PREVIOUS tap's finishTap, which the next one re-queues.
+			// A finger is on the glass and the engine is resolving the point under it (armTap). Telling the
+			// engine the pointer is gone while it is demonstrably there is both false and harmful — the gate
+			// reads that same pointer. Only ever skips the park queued by the PREVIOUS tap's finishTap.
 			return;
 		}
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
-		final long t = System.currentTimeMillis();
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t, 0, -1, -1, 0, false));
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_EXITED, t + 1, 0, -1, -1, 0, false));
+		// The exit carries the point the pointer left from, as a real toolkit's does; (-1,-1) before anything
+		// has moved it is the "no pointer yet" state, not a coordinate we invented for the engine to read.
+		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_EXITED, System.currentTimeMillis(),
+			0, lastPointerX, lastPointerY, 0, false));
 		entered = false;
 		if (TOUCH_DIAG)
 		{
-			parkVerifyFrames = 3;   // few frames out: the EDT folds the move, then a tick rebuilds the menu
+			parkVerifyFrames = 3;   // few frames out: the EDT folds the exit, then a tick rebuilds the menu
 		}
-		log.debug("[touch] parkPointer -> MOVED(-1,-1) + EXITED");
+		log.debug("[touch] parkPointer -> EXITED at {},{}", lastPointerX, lastPointerY);
 	}
 
 	/**
@@ -1072,7 +1086,8 @@ public final class JavaBridge
 			if (--parkVerifyFrames == 0)
 			{
 				final net.runelite.api.Point mp = c.getMouseCanvasPosition();
-				log.info("[touchdiag] park-verify: mouse={},{} tail={} (expect off-canvas + Cancel-only)",
+				log.info("[touchdiag] park-verify: mouse={},{} tail={} (expect the last touch point; the exit "
+						+ "does not move it)",
 					mp == null ? "?" : mp.getX(), mp == null ? "?" : mp.getY(), tailFingerprint(c));
 			}
 			return;
@@ -1994,6 +2009,19 @@ public final class JavaBridge
 		});
 	}
 
+	/**
+	 * Post a pointer event and remember where it leaves the pointer. Every synthesized {@link MouseEvent} that
+	 * carries a position goes out through here, which is what lets {@link #parkPointer} report a real exit
+	 * point and what makes "we never name a coordinate the finger was not at" a property of one method rather
+	 * than of seventeen call sites.
+	 */
+	private static void postPointer(EventQueue q, MouseEvent e)
+	{
+		lastPointerX = e.getX();
+		lastPointerY = e.getY();
+		q.postEvent(e);
+	}
+
 	/** Post the focus-prime + move + press + release + click sequence at {@code (x,y)} in one batch. */
 	private static void synthesizeClick(Canvas canvas, int x, int y, int awtButton)
 	{
@@ -2007,7 +2035,7 @@ public final class JavaBridge
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
 		primeFocus(q, canvas, t, x, y);
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t + 1, 0, x, y, 0, false));
+		postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t + 1, 0, x, y, 0, false));
 	}
 
 	/** Post press + release + click at {@code (x,y)} for {@code awtButton} (no preceding move). */
@@ -2018,11 +2046,11 @@ public final class JavaBridge
 		final int downMask = awtButton == MouseEvent.BUTTON3 ? InputEvent.BUTTON3_DOWN_MASK
 			: awtButton == MouseEvent.BUTTON2 ? InputEvent.BUTTON2_DOWN_MASK
 			: InputEvent.BUTTON1_DOWN_MASK;
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, t,
+		postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, t,
 			downMask, x, y, 1, false, awtButton));
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t + 1,
+		postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t + 1,
 			0, x, y, 1, false, awtButton));
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, t + 2,
+		postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, t + 2,
 			0, x, y, 1, false, awtButton));
 	}
 
@@ -2035,7 +2063,7 @@ public final class JavaBridge
 	{
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, t,
+		postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, t,
 			InputEvent.BUTTON1_DOWN_MASK, x, y, 1, false, MouseEvent.BUTTON1));
 		pressOutstanding = true;
 		pressPostedMs = t;
@@ -2056,9 +2084,9 @@ public final class JavaBridge
 		}
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t,
+		postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t,
 			0, pressX, pressY, 1, false, MouseEvent.BUTTON1));
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, t,
+		postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, t,
 			0, pressX, pressY, 1, false, MouseEvent.BUTTON1));
 		pressOutstanding = false;
 		return t - pressPostedMs;
@@ -2084,7 +2112,7 @@ public final class JavaBridge
 			return;
 		}
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, System.currentTimeMillis(),
+		postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, System.currentTimeMillis(),
 			0, pressX, pressY, 1, false, MouseEvent.BUTTON1));
 		suppressClickFrames = SUPPRESS_CLICK_FRAMES;
 		if (TOUCH_DIAG)
@@ -2141,7 +2169,7 @@ public final class JavaBridge
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
 		primeFocus(q, canvas, t, x, y);
-		q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t + 1, 0, x, y, 0, false));
+		postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t + 1, 0, x, y, 0, false));
 	}
 
 	/**
@@ -2160,7 +2188,7 @@ public final class JavaBridge
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
 		primeFocus(q, canvas, t, x, y);
-		q.postEvent(new MouseWheelEvent(canvas, MouseEvent.MOUSE_WHEEL, t + 1, 0, x, y, 0, false,
+		postPointer(q, new MouseWheelEvent(canvas, MouseEvent.MOUSE_WHEEL, t + 1, 0, x, y, 0, false,
 			MouseWheelEvent.WHEEL_UNIT_SCROLL, Math.abs(rotation), rotation));
 	}
 
@@ -2832,8 +2860,8 @@ public final class JavaBridge
 		{
 			case TOUCH_DOWN:
 				primeFocus(q, canvas, t, x, y);
-				q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t, 0, x, y, 0, false));
-				q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, t + 1,
+				postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t, 0, x, y, 0, false));
+				postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, t + 1,
 					downMask, x, y, 1, false, awtButton));
 				pressed = true;
 				pressButton = awtButton;
@@ -2842,20 +2870,20 @@ public final class JavaBridge
 			case TOUCH_MOVE:
 				if (pressed)
 				{
-					q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_DRAGGED, t,
+					postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_DRAGGED, t,
 						pressButton == MouseEvent.BUTTON3 ? InputEvent.BUTTON3_DOWN_MASK : InputEvent.BUTTON1_DOWN_MASK,
 						x, y, 0, false, MouseEvent.NOBUTTON));
 				}
 				else
 				{
-					q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t, 0, x, y, 0, false));
+					postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_MOVED, t, 0, x, y, 0, false));
 				}
 				break;
 
 			case TOUCH_UP:
 				// Release only — a drag is NOT a click. (The pre-Phase-5 auto-MOUSE_CLICKED here was the
 				// phantom-click bug: every camera/scroll drag ended with a stray walk-here click.)
-				q.postEvent(new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t,
+				postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t,
 					0, x, y, 1, false, pressed ? pressButton : awtButton));
 				pressed = false;
 				break;
