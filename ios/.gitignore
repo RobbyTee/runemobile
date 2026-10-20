@@ -10,6 +10,9 @@ dev-tools/jvmbench/out/
 # Headless probe output dirs (regen by re-running the headless harness)
 dev-tools/headless/out-*/
 
+# IPA server working dir (dev-tools/serve-ipa.sh: staged IPA, build counter, httpd log + pid)
+dev-tools/.serve-ipa/
+
 # Built fake-xawt AWT shim (regen per-machine)
 dev-tools/fake-xawt/*.dylib
 
@@ -17,6 +20,9 @@ dev-tools/fake-xawt/*.dylib
 jre*-ios-aarch64*
 dev-tools/jre/
 **/Frameworks/*.dylib
+# Locally built StikJIT.framework + its .stikjit-commit stamp (generated product, never committed)
+app/Frameworks/StikJIT.framework/
+app/Frameworks/.stikjit-commit
 
 # Java build artifacts
 *.class

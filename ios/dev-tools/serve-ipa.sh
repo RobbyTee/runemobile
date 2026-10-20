@@ -18,7 +18,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 APPDIR="$REPO/ios/app"
-WORK="$HERE/.serve-ipa"           # local-only (see .git/info/exclude)
+WORK="$HERE/.serve-ipa"           # local-only (ignored in ios/.gitignore)
 DIST="$WORK/dist"
 STATE="$WORK/build.txt"
 HTTPD_PID="$WORK/httpd.pid"
