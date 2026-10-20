@@ -1254,20 +1254,23 @@ public final class HudVeneerBridge
 		}
 		if (!mapWasOpen)
 		{
-			mapHudLogFrames = 3;   // open edge — report what the first frames of the open actually did
+			mapHudLeakLogged = false;   // open edge — arm the tripwire for this open
 		}
 		mapWasOpen = true;
-		// tick() runs in the POST-render callback, so this reads the layers as the frame just rasterised
-		// them, AFTER preRender asserted the hide. All `hidden` means the hide stuck and anything still drawn
-		// over the map comes from somewhere else; a `SHOWN` means the engine re-showed that layer within the
-		// frame and the hide is not the whole fix. Three frames per open, so one device session answers it.
-		if (mapHudLogFrames > 0)
+		// tick() runs in the POST-render callback, so this reads the layers as the frame just RASTERISED
+		// them, after preRender asserted the hide — the one place that can tell a hide which did not take
+		// from a hide which took while something else painted. Device-confirmed holding 2026-10-20, so it is
+		// silent now and stays silent; a line here means a layer came back on top of the map, which is what
+		// an upstream merge re-pinning these layers would look like. Once per open, so it cannot spam.
+		if (!mapHudLeakLogged)
 		{
-			mapHudLogFrames--;
-			log.info("[veneer] map open — HUD shown after raster? cluster={} side={} hover={}",
-				shownNow(c, preEoc ? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER),
-				shownNow(c, preEoc ? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER),
-				shownNow(c, preEoc ? InterfaceID.ToplevelPreEoc.MOUSEOVER : InterfaceID.ToplevelOsrsStretch.MOUSEOVER));
+			final int[] live = mapHudLayerIds(preEoc);
+			if (isShown(c, live[0]) || isShown(c, live[1]) || isShown(c, live[2]))
+			{
+				mapHudLeakLogged = true;
+				log.warn("[veneer] world map: a HUD layer painted over it — cluster={} side={} hover={}",
+					shownNow(c, live[0]), shownNow(c, live[1]), shownNow(c, live[2]));
+			}
 		}
 
 		// HIDE the chat while the map is open — the relocated chat-at-top would draw over the fullscreen
@@ -1349,7 +1352,7 @@ public final class HudVeneerBridge
 	private static boolean mapHudHidden;
 	private static boolean mapHudHiddenPreEoc;   // the layout the hide went to, so the restore can't miss it
 	private static final boolean[] mapHudWeHid = new boolean[3];   // per layer: this hide is OURS to undo
-	private static int mapHudLogFrames;   // frames left to report the post-raster HUD state for this open
+	private static boolean mapHudLeakLogged;   // this open has already reported a layer painting over the map
 
 	/** The toplevel layers that must not paint over the fullscreen world map, in {@link #mapHudWeHid} order:
 	 *  the minimap+orbs cluster, the side panel, and the engine's hover-option text. */
@@ -1383,7 +1386,22 @@ public final class HudVeneerBridge
 		}
 	}
 
-	/** {@code "shown"} / {@code "hidden"} / {@code "absent"} — the layer as it stands right now. */
+	/** True when the layer exists and is not hidden — i.e. it painted. */
+	private static boolean isShown(Client c, int id)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			return w != null && !w.isHidden();
+		}
+		catch (RuntimeException ignore)
+		{
+			BridgeFaults.note("HudVeneerBridge.isShown", ignore);
+			return false;
+		}
+	}
+
+	/** {@code "SHOWN"} / {@code "hidden"} / {@code "absent"} — the layer as it stands right now. */
 	private static String shownNow(Client c, int id)
 	{
 		try

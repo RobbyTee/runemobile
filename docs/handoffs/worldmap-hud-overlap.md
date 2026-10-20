@@ -1,7 +1,8 @@
 # World map — the HUD stops painting over it
 
-**Status:** implemented, gates green (`:client` 726 tests, 0 failures), **NOT yet verified on device.**
-The device check is one map open; the build logs the answer either way (see *Reading the verdict*).
+**Status:** **DONE — device-verified 2026-10-20** (iPhone 17 Pro Max, iOS 27.2, Debug). User opened the
+map on the installed build: "that fixed it". Gates green (`:client` 727 tests, 0 failures).
+**Commits:** `33aa7c3065` (the hide) · `e9700f1586` (restore only our own hides) · the tripwire below.
 
 ## The report
 
@@ -64,41 +65,37 @@ Tests: five new cases in `HudVeneerBridgeTest` pin the hide, the restore, that a
 the HUD, that a layer the engine had already hidden is never handed back shown, and that the hide is
 re-asserted after the engine re-shows a layer.
 
-## Reading the verdict (what to do on device)
+## If it ever comes back
 
-Open the map once and read the log for:
+The hide holds today, so the build is silent. It is not silent if a layer ever paints over the map again —
+`tickWorldMap` reads the three layers **post-raster** (tick runs in the post-render callback, after
+`preRender` asserted the hide) and logs once per open:
 
 ```
-[veneer] map open — HUD shown after raster? cluster=… side=… hover=…
+[veneer] world map: a HUD layer painted over it — cluster=… side=… hover=…
 ```
 
-Three lines per open, read **after** the frame rasterised:
+That is the shape an upstream merge would leave if it started re-pinning these layers. Reading it:
 
-- **all `hidden` and the map is clean** → done.
-- **all `hidden` but HUD still visible** → the hide stuck and something else is drawing it. Look at the
+- **any `SHOWN`** → the engine re-shows that layer inside the frame, the way it re-pins the tab stones.
+  Next step is one level down: hide the `ORBS` layer and `COMPASSCLICK` directly, same seam.
+- **all `hidden` but HUD visible anyway** → the hide stuck and something else is drawing it. Look at the
   RuneLite side: `WidgetOverlay` (`RESIZABLE_MINIMAP_WIDGET`, `CANVAS_TOP_RIGHT`) force-positions this
   container whenever its snap corner `isRepositioned()` or the overlay has a preferred location.
-- **any `SHOWN`** → the engine re-shows that layer inside the frame, like it re-pins the stones. Next step
-  is one level down: hide the `ORBS` layer and `COMPASSCLICK` directly, same seam.
 
-The log cannot speak for `MOUSEOVER`: it reports that layer's hidden flag, not whether that layer is where
-the engine draws "Walk here". **Only the screen answers that** — and this build already runs the experiment,
-because `MOUSEOVER` is the one layer hidden here that has nothing else on it. Open the map and look at the
-top-left: label gone, the component is right; label still there (`hover=hidden` or not), it is the wrong
-lever — drop that third id and suppress the label another way. `hover=absent` means the component does not
-even exist in this layout, same conclusion.
+The tripwire cannot speak for `MOUSEOVER` either way: it reports that layer's hidden flag, not whether the
+engine draws "Walk here" into it. Only the top-left of the screen answers that.
 
-## Unverified
+## Still open
 
-- Everything above the log line is **inspection, not measurement**. Headless in-game verification is
-  blocked: `ios/dev-tools/tokens.json` is from 2026-06-17 and `WorldMapProbe.java` no longer exists, so
-  reproducing this off-device needs fresh tokens (interactive, user-only) and a probe to open the map.
-- The `MOUSEOVER` hide is the remedy the input-fidelity handoff prescribed for the lingering label
-  (*"the fix is to stop drawing the label, not to move the cursor somewhere the finger never was"*), but
-  the component has not been confirmed as the one the engine draws it into — the id's NAME is the whole
-  basis. Settled by looking at the top-left with the map open, not by the log.
-- Android is unchanged on the native side and inherits the Java fix; not checked there either.
-
-## Next step
-
-Build + deploy (`/deploy ios`), open the map, read the line above.
+- **Did "Walk here" go with it?** The user confirmed the HUD is off the map; the label was not reported on
+  either way. The `MOUSEOVER` hide is the remedy the input-fidelity handoff prescribed for the lingering
+  label (*"the fix is to stop drawing the label, not to move the cursor somewhere the finger never was"*),
+  but the id's NAME is still the whole basis for believing that is the layer it is drawn into. If the label
+  is still at the top-left with the map open, that third id is a no-op — drop it and suppress the label
+  another way.
+- **Android** inherits the Java fix and is unchanged on the native side; not checked there.
+- **No off-device repro exists** for this. `ios/dev-tools/tokens.json` is from 2026-06-17 and
+  `WorldMapProbe.java` is gone, so reproducing it headless would need fresh tokens (interactive,
+  user-only) and a probe to open the map. The five unit tests pin what the bridge writes; the tripwire
+  above is what watches the half the tests cannot reach.
