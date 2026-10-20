@@ -280,6 +280,62 @@ def parse_bench_results(text):
     return results
 
 
+def _num(v):
+    for cast in (int, float):
+        try:
+            return cast(v)
+        except ValueError:
+            pass
+    return v
+
+
+def parse_fps_measure(text):
+    """Summary of android/dev-tools/gpu/fps-measure.sh. It prints one line per probe family that has data:
+         LABEL  fps    n=4    mean=49.8  median=49.0  min=46  max=55
+         LABEL  frame  windows=4   frames=199   min=17.00  avg=20.09  p95~=22.50  max=140.00  (ms)
+         LABEL  gpu    windows=3   frames=149   min=11.00  avg=14.51  max=120.00  (ms GPU)  disjoint=94  hitch=1  empty=1  (excluded: 1 untagged, 1 other-state)
+         LABEL  thermal samples=6    hottest=42.5..47.5C  status=1->2 (max 2)
+         LABEL  govern changes=1  scale=85  minScale=85  baseline=100
+    a 'fps:   no LOGGED_IN ...' line instead when a family saw only other states (kept under 'missing'), the
+    '>> thermal[start]: hottest=84.0C status=1' samples, and '!! ...' warnings. frame p95 is reported as 'p95'
+    but is the script's p95~: the mean of the per-second p95s, not a percentile of the whole capture."""
+    out = {"fps": {}, "frameMs": {}, "gpuMs": {}, "thermalRows": {}, "governor": {}, "thermal": {},
+           "warnings": [], "missing": []}
+    keys = {"fps": "fps", "frame": "frameMs", "gpu": "gpuMs", "thermal": "thermalRows", "govern": "governor"}
+    for ln in text.splitlines():
+        m = re.match(r"^\S+\s+(fps|frame|gpu|thermal|govern)\s+(.*)$", ln)
+        if m:
+            kind, rest = m.groups()
+            d = out[keys[kind]]
+            for k, v in re.findall(r"([\w~]+)=([^\s()]+)", rest):
+                d[k.rstrip("~")] = _num(v)
+            ex = re.search(r"excluded: (\d+) untagged, (\d+) other-state", rest)
+            if ex:
+                d["excludedUntagged"], d["excludedOtherState"] = int(ex.group(1)), int(ex.group(2))
+            if kind == "thermal":
+                hot = re.match(r"(.+)\.\.(.+)C$", str(d.pop("hottest", "")))
+                if hot:
+                    d["hottestMinC"], d["hottestMaxC"] = _num(hot.group(1)), _num(hot.group(2))
+                st = str(d.pop("status", "")).split("->")
+                if len(st) == 2:
+                    d["statusStart"], d["statusEnd"] = _num(st[0]), _num(st[1])
+                mx = re.search(r"\(max (\S+)\)", rest)
+                if mx:
+                    d["statusMax"] = _num(mx.group(1))
+            continue
+        m = re.match(r"^(fps|frame|gpu):\s+(no .*)$", ln)
+        if m:
+            out["missing"].append(ln.strip())
+            continue
+        m = re.search(r"thermal\[(\w+)\]: hottest=([\w./]+?)C status=([\w/]+)", ln)
+        if m:
+            out["thermal"][m.group(1)] = {"hottestC": _num(m.group(2)), "status": _num(m.group(3))}
+            continue
+        if ln.startswith("!! "):
+            out["warnings"].append(ln[3:].strip())
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # tools
 # --------------------------------------------------------------------------- #
@@ -626,37 +682,35 @@ def tool_android_fps(a):
     label = a.get("label", "mcp")
     csv = a.get("out_csv") or str(REPO_ROOT / "android/dev-tools/gpu" / f"fps-{label}.csv")
     cmd = ["bash", str(script), "-d", str(seconds), "-o", csv]
+    if a.get("thermal_every") is not None:
+        cmd += ["-t", str(int(a["thermal_every"]))]
     if a.get("serial"):
         cmd += ["-s", a["serial"]]
     cmd += [label]
     rc, o, er = run(cmd, cwd=REPO_ROOT, timeout=seconds + 60)
     combined = o + "\n" + er
-    # fps stats come off the "... fps ... mean=.. median=.. min=.. max=.." line.
-    stats = {}
-    fps_line = next((ln for ln in combined.splitlines() if re.search(r"\bfps\b.*mean=", ln)), "")
-    for key in ("mean", "median", "min", "max"):
-        m = re.search(rf"{key}[^0-9]*([\d.]+)", fps_line, re.IGNORECASE)
-        if m:
-            stats[key] = float(m.group(1))
-    # frame-time stats (ms) come off the "... frame ... min=.. avg=.. p95~=.. max=.." line — the trustworthy A/B signal.
-    frame = {}
-    frame_line = next((ln for ln in combined.splitlines() if "frame" in ln and "avg=" in ln), "")
-    for key, pat in (("min", r"min=([\d.]+)"), ("avg", r"avg=([\d.]+)"), ("p95", r"p95~?=([\d.]+)"), ("max", r"max=([\d.]+)")):
-        m = re.search(pat, frame_line)
-        if m:
-            frame[key] = float(m.group(1))
-    thermal = re.findall(r"thermal\[(\w+)\]: hottest=([\w.]+)C status=(\w+)", combined)
+    parsed = parse_fps_measure(combined)
+    governor_moved = bool(parsed["governor"].get("changes"))
     return ok_result(
         {
             "ok": rc == 0,
             "label": label,
             "exitCode": rc,
             "csv": csv,
-            "fps": stats,
-            "frameMs": frame,
-            "thermal": {w: {"hottestC": h, "status": s} for (w, h, s) in thermal},
+            "fps": parsed["fps"],
+            "frameMs": parsed["frameMs"],
+            "gpuMs": parsed["gpuMs"],
+            "thermal": parsed["thermal"],
+            "thermalRows": parsed["thermalRows"],
+            "governor": parsed["governor"],
+            # a ThermalGovernor scale change splits the capture into two workloads
+            "abClean": not governor_moved,
+            "warnings": parsed["warnings"],
+            "missing": parsed["missing"],
             "logTail": combined.strip().splitlines()[-15:],
-            "hint": "Flip a preset with android_set_hd_config between two android_fps runs; compare frameMs.avg/p95 (not fps) for a trustworthy A/B.",
+            "hint": "Flip a preset with android_set_hd_config between two android_fps runs; compare frameMs.avg/p95 "
+            "(not fps) for a trustworthy A/B, and only between runs with abClean true. frameMs.p95 is the mean of "
+            "per-second p95s.",
         }
     )
 
@@ -915,12 +969,17 @@ TOOLS = {
         tool_android_set_hd_config,
     ),
     "android_fps": (
-        "Run the fps-measure harness for N seconds against a connected device; returns "
-        "mean/median/min/max fps. Pair two runs around android_set_hd_config for an A/B.",
+        "Run the fps-measure harness for N seconds against a connected device; returns LOGGED_IN fps, "
+        "frame-time and (with debug.routec.gputime=1) GPU-time stats, per-second thermal, and any "
+        "ThermalGovernor scale change (abClean=false). Pair two runs around android_set_hd_config for an A/B.",
         {
             "type": "object",
             "properties": {
                 "seconds": {"type": "integer", "default": 20},
+                "thermal_every": {
+                    "type": "integer",
+                    "description": "seconds between thermal samples (default 1; 0 = start/end only)",
+                },
                 "label": {"type": "string", "default": "mcp"},
                 "out_csv": {"type": "string"},
                 "serial": {"type": "string"},

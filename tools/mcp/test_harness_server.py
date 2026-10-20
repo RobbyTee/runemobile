@@ -4,7 +4,9 @@
 Run: /usr/bin/python3 -m unittest discover -s tools/mcp -p 'test_*.py'
 """
 
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -230,6 +232,97 @@ class JavaMajor(unittest.TestCase):
         self.assertEqual(hs.java_major("26"), 26)
         self.assertIsNone(hs.java_major(None))
         self.assertIsNone(hs.java_major("abc"))
+
+
+# logcat -v time, in the shapes Hooks.frame, librlawt and ThermalGovernor print.
+_HOOKS = "I/jvm-stdout(28833): 2026-10-20 17:00:00 GMT [Client] INFO  net.runelite.client.callback.Hooks -"
+_RLAWT = "I/librlawt(28833):"
+_GOV = "I/MainActivity(28833):"
+FPS_LOGCAT = "\n".join(
+    [
+        f"10-20 17:00:00.050 {_RLAWT} [gpuprobe] timer queries armed",
+        f"10-20 17:00:00.900 {_RLAWT} [gpuprobe] frames=40 avg=9.10 min=8.00 max=11.00 ms disjoint=40 hitch=0",
+        f"10-20 17:00:01.000 {_HOOKS} [fpsprobe] fps=50 gs=LOGIN_SCREEN",
+        f"10-20 17:00:01.000 {_HOOKS} [frameprobe] n=50 min=19.00 avg=20.00 p95=21.00 max=22.00 gs=LOGIN_SCREEN",
+        f"10-20 17:00:01.900 {_RLAWT} [gpuprobe] frames=50 avg=9.20 min=8.10 max=10.50 ms disjoint=50 hitch=0",
+        f"10-20 17:00:02.010 {_GOV} thermal status=0 -> sceneResolutionScale -1->100 (baseline=100)",
+        f"10-20 17:00:02.000 {_HOOKS} [fpsprobe] fps=48 gs=LOGGED_IN",
+        f"10-20 17:00:02.000 {_HOOKS} [frameprobe] n=48 min=18.00 avg=20.80 p95=24.00 max=30.00 gs=LOGGED_IN",
+        f"10-20 17:00:02.900 {_RLAWT} [gpuprobe] frames=48 avg=15.00 min=13.00 max=17.00 ms disjoint=48 hitch=0",
+        f"10-20 17:00:03.000 {_HOOKS} [fpsprobe] fps=46 gs=LOGGED_IN",
+        f"10-20 17:00:03.000 {_HOOKS} [frameprobe] n=46 min=18.50 avg=21.70 p95=26.00 max=140.00 gs=LOGGED_IN",
+        f"10-20 17:00:03.900 {_RLAWT} [gpuprobe] frames=46 avg=17.00 min=13.50 max=120.00 ms disjoint=46 hitch=1",
+        f"10-20 17:00:04.000 {_HOOKS} [fpsprobe] fps=50 gs=LOGGED_IN",
+        f"10-20 17:00:04.000 {_HOOKS} [frameprobe] n=50 min=19.00 avg=20.00 p95=21.00 max=22.00 gs=LOGGED_IN",
+        f"10-20 17:00:04.500 {_GOV} thermal status=2 -> sceneResolutionScale 100->85 (baseline=100)",
+        f"10-20 17:00:04.900 {_RLAWT} [gpuprobe] no usable GPU-time this window (availSeen=0 disjoint=50)",
+        f"10-20 17:00:05.000 {_HOOKS} [fpsprobe] fps=55 gs=LOGGED_IN",
+        f"10-20 17:00:05.000 {_HOOKS} [frameprobe] n=55 min=17.00 avg=18.20 p95=19.00 max=20.00 gs=LOGGED_IN",
+        f"10-20 17:00:05.900 {_RLAWT} [gpuprobe] frames=55 avg=12.00 min=11.00 max=13.00 ms disjoint=0 hitch=0",
+    ]
+) + "\n"
+
+FPS_LIVE_OUT = """\
+>> capturing 20s of fps/frame probe (label=base) ...
+>> thermal[start]: hottest=41.5C status=1
+>> thermal[end]: hottest=n/aC status=n/a
+>> wrote 23 rows to /tmp/x.csv
+base        fps    n=4    mean=49.8  median=49.0  min=46  max=55
+frame: no LOGGED_IN windows captured
+base        gpu    windows=2   frames=94    min=13.00  avg=15.98  max=120.00  (ms GPU)  disjoint=n/a  hitch=1  empty=0  (excluded: 1 untagged, 1 other-state)
+base        thermal samples=4    hottest=42.5..45.5C  status=1->2 (max 2)
+"""
+
+
+class FpsMeasure(unittest.TestCase):
+    def test_summary_lines(self):
+        r = hs.parse_fps_measure(FPS_LIVE_OUT)
+        self.assertEqual(r["fps"], {"n": 4, "mean": 49.8, "median": 49.0, "min": 46, "max": 55})
+        self.assertEqual(r["frameMs"], {})
+        self.assertEqual(r["missing"], ["frame: no LOGGED_IN windows captured"])
+        self.assertEqual(r["gpuMs"]["disjoint"], "n/a")
+        self.assertEqual((r["gpuMs"]["excludedUntagged"], r["gpuMs"]["excludedOtherState"]), (1, 1))
+        self.assertEqual(
+            r["thermalRows"],
+            {"samples": 4, "hottestMinC": 42.5, "hottestMaxC": 45.5, "statusStart": 1, "statusEnd": 2, "statusMax": 2},
+        )
+        self.assertEqual(r["thermal"], {"start": {"hottestC": 41.5, "status": 1}, "end": {"hottestC": "n/a", "status": "n/a"}})
+        self.assertEqual(r["governor"], {})
+        self.assertEqual(r["warnings"], [])
+
+    def test_script_and_parser_agree(self):
+        """Runs the real fps-measure.sh on FPS_LOGCAT, so a format change on either side fails here."""
+        script = hs.REPO_ROOT / "android/dev-tools/gpu/fps-measure.sh"
+        with tempfile.TemporaryDirectory() as td:
+            log, csv = Path(td, "logcat.txt"), Path(td, "out.csv")
+            log.write_text(FPS_LOGCAT)
+            p = subprocess.run(
+                ["bash", str(script), "--from-file", str(log), "-o", str(csv), "fixture"],
+                capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(p.returncode, 0, p.stderr)
+            rows = csv.read_text().splitlines()
+        r = hs.parse_fps_measure(p.stdout + "\n" + p.stderr)
+        self.assertEqual(r["fps"], {"n": 4, "mean": 49.8, "median": 49.0, "min": 46, "max": 55})
+        # frame-weighted over the 4 LOGGED_IN windows: 3997.6 / 199
+        self.assertEqual(r["frameMs"], {"windows": 4, "frames": 199, "min": 17.0, "avg": 20.09, "p95": 22.5, "max": 140.0})
+        # the first window is before any Hooks line (untagged), the second is LOGIN_SCREEN; 2162 / 149
+        self.assertEqual(
+            r["gpuMs"],
+            {"windows": 3, "frames": 149, "min": 11.0, "avg": 14.51, "max": 120.0, "disjoint": 94, "hitch": 1,
+             "empty": 1, "excludedUntagged": 1, "excludedOtherState": 1},
+        )
+        # the arm-time apply (-1->100) is not a change; 100->85 is
+        self.assertEqual(r["governor"], {"changes": 1, "scale": 85, "minScale": 85, "baseline": 100})
+        self.assertEqual(len(r["warnings"]), 1)
+        self.assertIn("100->85@17:00:04.500", r["warnings"][0])
+        self.assertEqual(rows[0], "label,kind,idx,a,b,c,d,e,gs,f,g")
+        self.assertTrue(all(len(row.split(",")) == 11 for row in rows))
+        kinds = [row.split(",")[1] for row in rows[1:]]
+        self.assertEqual(
+            {k: kinds.count(k) for k in set(kinds)}, {"fps": 5, "frame": 5, "gpu": 5, "gpuempty": 1, "govern": 2}
+        )
+        self.assertIn("fixture,gpu,3,46,13.50,17.00,,120.00,LOGGED_IN,46,1", rows)
 
 
 if __name__ == "__main__":
