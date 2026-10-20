@@ -44,6 +44,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -471,11 +472,26 @@ public class HudVeneerBridgeTest
 	 *  map open or closed. Index 0 = minimap cluster, 1 = side panel, 2 = hover-option text. */
 	private static Client clientWithHudLayers(boolean worldMapOpen, Widget[] layers)
 	{
+		return clientWithHudLayers(worldMapOpen, layers, new boolean[]{true});
+	}
+
+	/**
+	 * A client whose two toplevel HUD containers are {@code layers} and whose hover-option text is backed by
+	 * {@code textEnabled}. The holder is passed in rather than owned here so one open/close pair can be driven
+	 * through two mocks and still share the one piece of client state the engine really keeps.
+	 */
+	private static Client clientWithHudLayers(boolean worldMapOpen, Widget[] layers, boolean[] textEnabled)
+	{
 		final Client c = loggedInClientWith(null);
 		when(c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT)).thenReturn(1);   // PreEoc (Classic)
 		when(c.getWidget(InterfaceID.ToplevelPreEoc.MAP_CONTAINER)).thenReturn(layers[0]);
 		when(c.getWidget(InterfaceID.ToplevelPreEoc.SIDE_CONTAINER)).thenReturn(layers[1]);
-		when(c.getWidget(InterfaceID.ToplevelPreEoc.MOUSEOVER)).thenReturn(layers[2]);
+		when(c.isMouseoverTextEnabled()).thenAnswer(inv -> textEnabled[0]);
+		doAnswer(inv ->
+		{
+			textEnabled[0] = inv.getArgument(0);
+			return null;
+		}).when(c).setMouseoverTextEnabled(anyBoolean());
 		if (worldMapOpen)
 		{
 			final Widget map = mock(Widget.class);
@@ -488,26 +504,28 @@ public class HudVeneerBridgeTest
 	@Test
 	public void anOpenWorldMapHidesEveryHudLayerThatWouldPaintOverIt()
 	{
-		final Widget[] layers = {hidableLayer(), hidableLayer(), hidableLayer()};
+		final Widget[] layers = {hidableLayer(), hidableLayer()};
+		final boolean[] text = {true};
 
-		HudVeneerBridge.preRender(clientWithHudLayers(true, layers));
+		HudVeneerBridge.preRender(clientWithHudLayers(true, layers, text));
 
 		assertTrue("the minimap+orbs cluster must stop painting over the map", layers[0].isHidden());
 		assertTrue("the side panel must stop painting over the map", layers[1].isHidden());
-		assertTrue("the hover-option text must stop painting over the map", layers[2].isHidden());
+		assertFalse("the hover-option text must stop painting over the map", text[0]);
 	}
 
 	@Test
 	public void closingTheWorldMapGivesTheHudBack()
 	{
-		final Widget[] layers = {hidableLayer(), hidableLayer(), hidableLayer()};
+		final Widget[] layers = {hidableLayer(), hidableLayer()};
+		final boolean[] text = {true};
 
-		HudVeneerBridge.preRender(clientWithHudLayers(true, layers));
-		HudVeneerBridge.preRender(clientWithHudLayers(false, layers));
+		HudVeneerBridge.preRender(clientWithHudLayers(true, layers, text));
+		HudVeneerBridge.preRender(clientWithHudLayers(false, layers, text));
 
 		assertFalse("the minimap+orbs cluster comes back with the map closed", layers[0].isHidden());
 		assertFalse("the side panel comes back with the map closed", layers[1].isHidden());
-		assertFalse("the hover-option text comes back with the map closed", layers[2].isHidden());
+		assertTrue("the hover-option text comes back with the map closed", text[0]);
 	}
 
 	@Test
@@ -515,30 +533,50 @@ public class HudVeneerBridgeTest
 	{
 		// The restore is driven off what WE hid, not off "the map is closed": a side panel the engine itself
 		// closed (no tab open) must not be forced back on every frame for the life of the session.
-		final Widget[] layers = {hidableLayer(), hidableLayer(), hidableLayer()};
+		final Widget[] layers = {hidableLayer(), hidableLayer()};
+		final Client c = clientWithHudLayers(false, layers);
 
-		HudVeneerBridge.preRender(clientWithHudLayers(false, layers));
+		HudVeneerBridge.preRender(c);
 
 		for (final Widget layer : layers)
 		{
 			verify(layer, never()).setHidden(anyBoolean());
 		}
+		verify(c, never()).setMouseoverTextEnabled(anyBoolean());
 	}
 
 	@Test
 	public void aLayerTheEngineHadAlreadyHiddenIsNotHandedBackShown()
 	{
-		// The restore has to undo OUR hides and nothing else. The engine owns the hover-text layer's flag
-		// frame to frame, so a map opened while it is hidden would otherwise come back with it forced SHOWN
-		// — and a hidden toplevel would do that to all three at once.
-		final Widget[] layers = {hidableLayer(), hidableLayer(), hidableLayer(true)};
+		// The restore has to undo OUR hides and nothing else. The engine closes the side panel whenever no tab
+		// is open, so a map opened in that state would otherwise come back with the panel forced SHOWN — and a
+		// hidden toplevel would do that to both containers at once.
+		final Widget[] layers = {hidableLayer(), hidableLayer(true)};
 
 		HudVeneerBridge.preRender(clientWithHudLayers(true, layers));
 		HudVeneerBridge.preRender(clientWithHudLayers(false, layers));
 
 		assertFalse("the cluster was ours to hide, so it comes back", layers[0].isHidden());
-		assertTrue("the layer the engine had hidden stays hidden", layers[2].isHidden());
-		verify(layers[2], never()).setHidden(anyBoolean());
+		assertTrue("the layer the engine had hidden stays hidden", layers[1].isHidden());
+		verify(layers[1], never()).setHidden(anyBoolean());
+	}
+
+	@Test
+	public void hoverTextAlreadyOffIsNotTurnedBackOnByClosingTheMap()
+	{
+		// Same rule for the one piece of HUD that is not a widget: if the text was already off when the map
+		// opened, closing it is not an excuse to switch it on.
+		final Widget[] layers = {hidableLayer(), hidableLayer()};
+		final boolean[] text = {false};
+		final Client open = clientWithHudLayers(true, layers, text);
+		final Client closed = clientWithHudLayers(false, layers, text);
+
+		HudVeneerBridge.preRender(open);
+		HudVeneerBridge.preRender(closed);
+
+		assertFalse("the hover text stays off — it was not ours to turn on", text[0]);
+		verify(open, never()).setMouseoverTextEnabled(anyBoolean());
+		verify(closed, never()).setMouseoverTextEnabled(anyBoolean());
 	}
 
 	@Test
@@ -546,13 +584,16 @@ public class HudVeneerBridgeTest
 	{
 		// The engine rebuilds the toplevel (a TOPLEVEL_REDRAW, a tab switch) and the layer comes back shown.
 		// preRender runs before the raster, so re-asserting here costs the map zero painted-over frames.
-		final Widget[] layers = {hidableLayer(), hidableLayer(), hidableLayer()};
-		final Client c = clientWithHudLayers(true, layers);
+		final Widget[] layers = {hidableLayer(), hidableLayer()};
+		final boolean[] text = {true};
+		final Client c = clientWithHudLayers(true, layers, text);
 
 		HudVeneerBridge.preRender(c);
 		layers[0].setHidden(false);   // the engine re-shows the cluster mid-tick
+		text[0] = true;               // ... and the hover text with it
 		HudVeneerBridge.preRender(c);
 
 		assertTrue("a re-shown layer is hidden again before the next frame rasters", layers[0].isHidden());
+		assertFalse("a re-enabled hover text is off again before the next frame rasters", text[0]);
 	}
 }

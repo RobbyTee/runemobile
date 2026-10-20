@@ -1265,11 +1265,11 @@ public final class HudVeneerBridge
 		if (!mapHudLeakLogged)
 		{
 			final int[] live = mapHudLayerIds(preEoc);
-			if (isShown(c, live[0]) || isShown(c, live[1]) || isShown(c, live[2]))
+			if (isShown(c, live[0]) || isShown(c, live[1]) || c.isMouseoverTextEnabled())
 			{
 				mapHudLeakLogged = true;
-				log.warn("[veneer] world map: a HUD layer painted over it — cluster={} side={} hover={}",
-					shownNow(c, live[0]), shownNow(c, live[1]), shownNow(c, live[2]));
+				log.warn("[veneer] world map: HUD painted over it — cluster={} side={} hoverText={}",
+					shownNow(c, live[0]), shownNow(c, live[1]), c.isMouseoverTextEnabled());
 			}
 		}
 
@@ -1351,18 +1351,46 @@ public final class HudVeneerBridge
 	// frame that missed the close edge — and a layer the ENGINE closed is never forced back on.
 	private static boolean mapHudHidden;
 	private static boolean mapHudHiddenPreEoc;   // the layout the hide went to, so the restore can't miss it
-	private static final boolean[] mapHudWeHid = new boolean[3];   // per layer: this hide is OURS to undo
+	private static final boolean[] mapHudWeHid = new boolean[2];   // per layer: this hide is OURS to undo
+	private static boolean mapHudTextOff;   // WE turned the hover-option text off, so we are the ones to put it back
 	private static boolean mapHudLeakLogged;   // this open has already reported a layer painting over the map
 
 	/** The toplevel layers that must not paint over the fullscreen world map, in {@link #mapHudWeHid} order:
-	 *  the minimap+orbs cluster, the side panel, and the engine's hover-option text. */
+	 *  the minimap+orbs cluster and the side panel. The hover-option text is NOT here — it is not a widget
+	 *  at all; see {@link #setMapHudHidden}. */
 	private static int[] mapHudLayerIds(boolean preEoc)
 	{
 		return preEoc
-			? new int[]{InterfaceID.ToplevelPreEoc.MAP_CONTAINER, InterfaceID.ToplevelPreEoc.SIDE_CONTAINER,
-				InterfaceID.ToplevelPreEoc.MOUSEOVER}
-			: new int[]{InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER, InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER,
-				InterfaceID.ToplevelOsrsStretch.MOUSEOVER};
+			? new int[]{InterfaceID.ToplevelPreEoc.MAP_CONTAINER, InterfaceID.ToplevelPreEoc.SIDE_CONTAINER}
+			: new int[]{InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER, InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER};
+	}
+
+	/**
+	 * Turn the engine's hover-option text ("Walk here", top-left) off or back on, and report whether this call
+	 * is what changed it — the only thing that earns the right to change it back.
+	 * <p>
+	 * Hiding {@code TopLevel*.MOUSEOVER} was the first attempt and is a confirmed no-op (device, 2026-10-20):
+	 * that label is drawn by the client, not by a widget whose hidden flag could end it. RuneLite's own
+	 * {@code SnapCorners} is the corroborating tell — it shifts every {@code TOP_LEFT} overlay down by a
+	 * hardcoded 15px to clear this text, which is not something you do for a widget you could measure.
+	 * {@link Client#setMouseoverTextEnabled} is the hook built for it.
+	 */
+	private static boolean setMouseoverText(Client c, boolean enabled)
+	{
+		try
+		{
+			if (c.isMouseoverTextEnabled() == enabled)
+			{
+				return false;
+			}
+			c.setMouseoverTextEnabled(enabled);
+			return true;
+		}
+		catch (RuntimeException ignore)
+		{
+			BridgeFaults.note("HudVeneerBridge.setMouseoverText", ignore);
+			return false;
+		}
 	}
 
 	/** Set the widget's OWN hidden flag, ignoring its parents'. Returns true when this call is what changed
@@ -1417,9 +1445,10 @@ public final class HudVeneerBridge
 	}
 
 	/**
-	 * Hide (or restore) the toplevel HUD layers that would otherwise paint over the fullscreen world map: the
-	 * minimap+orbs cluster, the side panel, and the engine's hover-option text ("Walk here", which lingers
-	 * because the cursor stays where the finger left it).
+	 * Hide (or restore) the HUD that would otherwise paint over the fullscreen world map: the minimap+orbs
+	 * cluster, the side panel, and the engine's hover-option text ("Walk here", which lingers because the
+	 * cursor stays where the finger left it). The two containers are widgets and get hidden; the label is
+	 * not a widget at all and gets {@link #setMouseoverText}.
 	 * <p>
 	 * HIDING, not moving, is what the render obeys. Moving {@code MAP_CONTAINER} takes the globe with it — the
 	 * engine rasterises that at the draw widget's live bounds — but not the orbs: they are hard-pinned each
@@ -1433,8 +1462,8 @@ public final class HudVeneerBridge
 	 * Reads and writes each layer's OWN hidden flag, and restores only the flags this method actually set.
 	 * The shared {@link #setHidden} helper guards on {@link Widget#isHidden()}, which counts a hidden PARENT
 	 * too: a layer the engine had already hidden would be skipped on the way in (its flag already reads
-	 * hidden) and then force-SHOWN on the way out. MOUSEOVER is the live case — the engine owns that flag
-	 * frame to frame — and a hidden toplevel would do it to all three at once.
+	 * hidden) and then force-SHOWN on the way out. A hidden toplevel would do that to both at once. The same
+	 * discipline covers the hover text: it goes back on only if this is what turned it off.
 	 */
 	private static void setMapHudHidden(Client c, boolean preEoc, boolean hidden)
 	{
@@ -1465,6 +1494,15 @@ public final class HudVeneerBridge
 				mapHudWeHid[i] = false;
 				setSelfHidden(c, ids[i], false);
 			}
+		}
+		if (hidden)
+		{
+			mapHudTextOff |= setMouseoverText(c, false);
+		}
+		else if (mapHudTextOff)
+		{
+			mapHudTextOff = false;
+			setMouseoverText(c, true);
 		}
 	}
 
