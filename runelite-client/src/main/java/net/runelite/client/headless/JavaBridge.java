@@ -283,6 +283,14 @@ public final class JavaBridge
 	private static final Object DRAG_STREAM_LOCK = new Object();
 	private static volatile boolean dragStreamOpen;
 	private static volatile long streamPoint;   // packed (x << 32 | y) of the last point the press is at
+	// The viewport as it was when the press landed, snapshotted on the client thread so onTapMove can bound
+	// each sample without reading engine geometry off-thread (the pattern textInputOpen uses, and for the
+	// same reason). Guarding only the press point would make "the stream stays in the scene" true of its
+	// first sample and nothing else.
+	private static volatile int streamMinX;
+	private static volatile int streamMinY;
+	private static volatile int streamMaxX;   // exclusive
+	private static volatile int streamMaxY;   // exclusive
 	// A retired press still reaches the engine as a press/release pair, which IS a click to it — so a contact
 	// that became a drag or a long-press would leak a phantom walk-here. Swallow one MenuOptionClicked after a
 	// retire, but ONLY while no tap of ours is in flight: a genuine click is always delivered with tapState ==
@@ -963,6 +971,14 @@ public final class JavaBridge
 		{
 			return;
 		}
+		if (x < streamMinX || x >= streamMaxX || y < streamMinY || y >= streamMaxY)
+		{
+			// The finger has rolled out of the scene the press was resolved in. Stop there rather than
+			// follow it: out there a held left button is the engine's drag-to-rearrange. The release will
+			// close on the last point inside -- a point the finger really was at, a few pixels back, which
+			// is a smaller thing to get wrong than a drag nobody performed.
+			return;
+		}
 		synchronized (DRAG_STREAM_LOCK)
 		{
 			if (!dragStreamOpen)
@@ -1248,7 +1264,7 @@ public final class JavaBridge
 						// pointer park off the armed point).
 						armedFrames = 0;
 						tapState = TapState.ARMED;
-						postPressOnly(canvas, tapX, tapY, inWorldViewport(c, tapX, tapY));
+						postPressOnly(c, canvas, tapX, tapY);
 					}
 					else
 					{
@@ -2152,12 +2168,15 @@ public final class JavaBridge
 	 * hold clock. The finger is still down at this moment, so the press is real rather than a stand-in for one;
 	 * {@link #releaseHeldPress} closes it at the lift and the delta between them is the user's actual hold.
 	 *
-	 * @param streamable whether the finger's further travel may be replayed as drags ({@link #onTapMove}) —
-	 *                   true in the 3D scene, false over an interface, where a held left button is the
-	 *                   engine's drag-to-rearrange rather than idle motion
+	 * <p>The viewport is read here, on the client thread, and snapshotted: the finger's travel may be
+	 * replayed as drags only inside the 3D scene, where a held left button means nothing to the engine. Over
+	 * an interface it is drag-to-rearrange, and replaying a tap's roll there would invent an item drag the
+	 * user never made. The snapshot bounds every later sample too ({@link #onTapMove}), so a finger that
+	 * rolls out of the scene stops being followed rather than crossing into a slot.
 	 */
-	private static void postPressOnly(Canvas canvas, int x, int y, boolean streamable)
+	private static void postPressOnly(Client c, Canvas canvas, int x, int y)
 	{
+		final boolean streamable = inWorldViewport(c, x, y);
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
 		postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, t,
@@ -2170,6 +2189,23 @@ public final class JavaBridge
 		{
 			// Opened AFTER the press is posted, so no sample can ever precede it.
 			streamPoint = (((long) x) << 32) | (y & 0xffffffffL);
+			if (streamable)
+			{
+				try
+				{
+					streamMinX = c.getViewportXOffset();
+					streamMinY = c.getViewportYOffset();
+					streamMaxX = streamMinX + c.getViewportWidth();
+					streamMaxY = streamMinY + c.getViewportHeight();
+				}
+				catch (RuntimeException ex)
+				{
+					// inWorldViewport already read these without throwing; if the second read does, fail
+					// closed the same way it does -- an empty bound streams nothing.
+					BridgeFaults.note("JavaBridge.postPressOnly", ex);
+					streamMinX = streamMinY = streamMaxX = streamMaxY = 0;
+				}
+			}
 			dragStreamOpen = streamable;
 		}
 	}
@@ -2254,6 +2290,7 @@ public final class JavaBridge
 	 * client thread (the caller already is). Used by {@link #diagGeometry} and, load-bearing, by
 	 * {@link #postPressOnly} to decide whether the finger's travel may be replayed as drags; it fails CLOSED
 	 * (a read that throws answers "not in the viewport"), which costs fidelity and never invents a drag.
+	 * Off-thread callers must use the snapshot {@code postPressOnly} takes, not call this.
 	 */
 	private static boolean inWorldViewport(Client c, int x, int y)
 	{
@@ -2476,21 +2513,47 @@ public final class JavaBridge
 		}
 	}
 
-	/** Send one key, then book the next. Runs only on the pacer thread, so the order of the queue is the order. */
+	/** Send one key. Runs only on the pacer thread, so the order of the queue is the order of the stream. */
 	private static void pumpKeys()
 	{
 		final Runnable key = keyQueue.poll();
-		if (key != null)
+		if (key == null)
+		{
+			bookNextKey();   // only reachable through the restart race below; never leave the pump claimed
+			return;
+		}
+		key.run();   // ends by posting its own delivery marker, which is what books the next key
+	}
+
+	/**
+	 * Run {@code onDelivered} on the EDT once everything already handed to it has been dispatched — i.e.
+	 * once the engine has really seen this key — and then book the next one.
+	 *
+	 * <p>This is the difference between a key that reports a hold and a key that has one. Timing the release
+	 * from the moment we QUEUED the press measures our own scheduler, not the engine's experience: an EDT
+	 * that is behind by more than the hold would receive the press and the release in the same drain, and
+	 * the key would never be observably down however honest its timestamps looked. Timing from delivery
+	 * cannot do that. The cost is that a stalled EDT stalls typing, which is the correct direction — a
+	 * backlog should slow the typist down, not collapse a burst into one instant once it clears.
+	 */
+	private static void afterDelivery(Runnable onDelivered)
+	{
+		EventQueue.invokeLater(() ->
 		{
 			try
 			{
-				key.run();
+				onDelivered.run();
 			}
-			catch (RuntimeException e)
+			finally
 			{
-				BridgeFaults.note("JavaBridge.pumpKeys", e);
+				bookNextKey();
 			}
-		}
+		});
+	}
+
+	/** Book the next key a gap after this one reached the engine. */
+	private static void bookNextKey()
+	{
 		if (!keyQueue.isEmpty())
 		{
 			keyPacer().schedule(JavaBridge::pumpKeys, gapNanos(), java.util.concurrent.TimeUnit.NANOSECONDS);
@@ -2538,19 +2601,28 @@ public final class JavaBridge
 		}
 		submitKey(() ->
 		{
-			final long t = System.currentTimeMillis();
-			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, modifiers, vk, ch));
-			if (typed)
+			try
 			{
-				dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_TYPED, t, modifiers, KeyEvent.VK_UNDEFINED, ch));
+				final long t = System.currentTimeMillis();
+				dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, modifiers, vk, ch));
+				if (typed)
+				{
+					dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_TYPED, t, modifiers, KeyEvent.VK_UNDEFINED, ch));
+				}
 			}
-			// The release is its own task, so the hold runs alongside the next key rather than blocking it.
-			// Keys therefore overlap a little, which is what a hand typing at speed does. A late release only
-			// lengthens a hold, and a longer hold is still an honest one.
-			keyPacer().schedule(() -> dispatchKey(canvas,
-				new KeyEvent(canvas, KeyEvent.KEY_RELEASED, System.currentTimeMillis(), modifiers, vk, ch)),
-				java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(jitter(KEY_HOLD_MIN_MS, KEY_HOLD_MAX_MS)),
-				java.util.concurrent.TimeUnit.NANOSECONDS);
+			finally
+			{
+				// In a finally so the marker is posted exactly once however the dispatch went: it is what
+				// books the next key, and a key that never posts one wedges the whole stream.
+				afterDelivery(() ->
+					// The release is its own task, so the hold runs alongside the next key rather than
+					// blocking it. Keys therefore overlap a little, which is what a hand typing at speed
+					// does. A late release only lengthens a hold, and a longer hold is still an honest one.
+					keyPacer().schedule(() -> dispatchKey(canvas,
+						new KeyEvent(canvas, KeyEvent.KEY_RELEASED, System.currentTimeMillis(), modifiers, vk, ch)),
+						java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(jitter(KEY_HOLD_MIN_MS, KEY_HOLD_MAX_MS)),
+						java.util.concurrent.TimeUnit.NANOSECONDS));
+			}
 		});
 	}
 
@@ -3055,18 +3127,40 @@ public final class JavaBridge
 			return current;
 		}
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
-		final long t = System.currentTimeMillis();
 		if (held)
 		{
 			ensureFocus(q, canvas);
-			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_PRESSED, t, downMask,
-				vk, KeyEvent.CHAR_UNDEFINED, KeyEvent.KEY_LOCATION_LEFT));
 		}
-		else
+		final KeyEvent ev = held
+			? new KeyEvent(canvas, KeyEvent.KEY_PRESSED, System.currentTimeMillis(), downMask, vk,
+				KeyEvent.CHAR_UNDEFINED, KeyEvent.KEY_LOCATION_LEFT)
+			: new KeyEvent(canvas, KeyEvent.KEY_RELEASED, System.currentTimeMillis(), 0, vk,
+				KeyEvent.CHAR_UNDEFINED, KeyEvent.KEY_LOCATION_LEFT);
+		if (!KEY_PACING)
 		{
-			dispatchKey(canvas, new KeyEvent(canvas, KeyEvent.KEY_RELEASED, t, 0,
-				vk, KeyEvent.CHAR_UNDEFINED, KeyEvent.KEY_LOCATION_LEFT));
+			// Keys bypass the queue when pacing is off, so the latch must too -- queueing only this one
+			// would put it BEHIND keys it should precede, which is the bug upside down.
+			dispatchKey(canvas, ev);
+			return held;
 		}
+		// Through the same queue as the keys, so the two streams keep their order: a latch released while a
+		// burst is still going out must not overtake keys committed before it and clear the modifier out
+		// from under them. NOT paced -- the transition carries no dwell to invent and books no release of
+		// its own; it simply takes its place in line. With nothing in flight, which is the normal case for a
+		// toggle, the pump runs it at once and the latch is as immediate as it ever was.
+		submitKey(() ->
+		{
+			try
+			{
+				dispatchKey(canvas, ev);
+			}
+			finally
+			{
+				afterDelivery(() ->
+				{
+				});
+			}
+		});
 		return held;
 	}
 

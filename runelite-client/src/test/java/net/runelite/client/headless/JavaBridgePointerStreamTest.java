@@ -69,6 +69,8 @@ public class JavaBridgePointerStreamTest
 		System.setProperty("runelite.bridge", "true");
 	}
 
+	/** The scene's width in the mock. Past it lies the interface, where a held left button is a drag. */
+	private static final int VIEWPORT_W = 800;
 	private static final int TAP_X = 300;
 	private static final int TAP_Y = 220;
 
@@ -177,6 +179,34 @@ public class JavaBridgePointerStreamTest
 		assertEquals("the drag must carry the real sample point", TAP_Y + 3, drags.get(1).getY());
 		assertTrue("a drag must say which button is down",
 			(drags.get(0).getModifiersEx() & java.awt.event.InputEvent.BUTTON1_DOWN_MASK) != 0);
+	}
+
+	/**
+	 * The viewport guard covers the whole stream, not just its first point. A finger that lands in the
+	 * scene and rolls out of it stops being followed: out there a held left button is the engine's
+	 * drag-to-rearrange, and a tap's allowed roll is wider than an inventory slot.
+	 */
+	@Test
+	public void aSampleThatLeavesTheSceneIsNotFollowed() throws Exception
+	{
+		JavaBridge.armTap(TAP_X, TAP_Y);
+		pump();
+		settleUntilPressed();
+
+		JavaBridge.onTapMove(TAP_X + 3, TAP_Y + 2);        // still in the scene
+		pump();
+		JavaBridge.onTapMove(VIEWPORT_W + 4, TAP_Y + 2);   // over the interface beside it
+		pump();
+
+		final List<MouseEvent> drags = cap.allOf(MouseEvent.MOUSE_DRAGGED);
+		assertEquals("only the sample inside the scene may be replayed", 1, drags.size());
+		assertEquals(TAP_X + 3, drags.get(0).getX());
+
+		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
+		pump();
+		assertEquals("the release closes on the last point inside -- a point the finger really was at, "
+				+ "which is a smaller thing to get wrong than a drag nobody performed",
+			TAP_X + 3, cap.first(MouseEvent.MOUSE_RELEASED).getX());
 	}
 
 	/**
@@ -333,7 +363,7 @@ public class JavaBridgePointerStreamTest
 		// nothing to the engine). The interface case overrides these.
 		when(cl.getViewportXOffset()).thenReturn(0);
 		when(cl.getViewportYOffset()).thenReturn(0);
-		when(cl.getViewportWidth()).thenReturn(800);
+		when(cl.getViewportWidth()).thenReturn(VIEWPORT_W);
 		when(cl.getViewportHeight()).thenReturn(600);
 		return cl;
 	}

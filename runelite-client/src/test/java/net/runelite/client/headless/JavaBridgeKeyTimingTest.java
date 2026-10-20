@@ -137,6 +137,7 @@ public class JavaBridgeKeyTimingTest
 	@After
 	public void tearDown() throws Exception
 	{
+		JavaBridge.setShiftHeld(false);   // a latch left down would carry into the next test
 		JavaBridge.register(null);
 		resetKeyPacer();
 	}
@@ -254,6 +255,82 @@ public class JavaBridgeKeyTimingTest
 			java.awt.event.InputEvent.SHIFT_DOWN_MASK, pressed.modifiers);
 		assertTrue("a chord must be held like one", released.arrivedMs - pressed.arrivedMs >= HOLD_MIN_MS - SLACK_MS);
 		assertEquals("a chord carries no character, so it produces no KEY_TYPED", 0, allOf(KeyEvent.KEY_TYPED).size());
+	}
+
+	/**
+	 * The hold must be the engine's experience of it, not our scheduler's. Timed from the moment the press
+	 * was QUEUED, an EDT that is behind by more than the hold receives press and release in the same drain
+	 * and the key is never observably down -- however honest the two timestamps look. So: stall the EDT
+	 * past a whole hold BEFORE the key is committed, and the release must still arrive a hold after the
+	 * press was actually delivered.
+	 */
+	@Test
+	public void theHoldIsMeasuredFromDeliveryNotFromWhenItWasQueued() throws Exception
+	{
+		final long stallMs = 3 * HOLD_MIN_MS;
+		EventQueue.invokeLater(() ->
+		{
+			try
+			{
+				Thread.sleep(stallMs);
+			}
+			catch (InterruptedException ie)
+			{
+				Thread.currentThread().interrupt();
+			}
+		});
+
+		JavaBridge.onKeyStroke(KeyEvent.VK_ENTER);
+		awaitCount(3);
+
+		final Seen pressed = firstOf(KeyEvent.KEY_PRESSED);
+		final long heldForMs = releaseOf(pressed).arrivedMs - pressed.arrivedMs;
+		assertTrue("the press and the release must not arrive in the same drain just because the EDT was "
+				+ "behind -- the key has to be observably down (delivered " + heldForMs + "ms apart)",
+			heldForMs >= HOLD_MIN_MS - SLACK_MS);
+	}
+
+	/**
+	 * The sticky modifier latch is not paced, but it does share the stream's order. A latch released while
+	 * a burst is still going out must not overtake keys committed before it and clear the modifier out from
+	 * under them.
+	 */
+	@Test
+	public void aModifierLatchCannotOvertakeKeysCommittedBeforeIt() throws Exception
+	{
+		JavaBridge.setShiftHeld(true);
+		JavaBridge.onText("ab");
+		JavaBridge.setShiftHeld(false);
+		awaitCount(8);   // shift down, a x3, b x3, shift up
+
+		final List<Seen> order = new ArrayList<>();
+		synchronized (seen)
+		{
+			for (final Seen x : seen)
+			{
+				if (x.id != KeyEvent.KEY_TYPED)
+				{
+					order.add(x);
+				}
+			}
+		}
+		final int shiftDown = indexOf(order, KeyEvent.KEY_PRESSED, KeyEvent.VK_SHIFT);
+		final int shiftUp = indexOf(order, KeyEvent.KEY_RELEASED, KeyEvent.VK_SHIFT);
+		final int pressB = indexOf(order, KeyEvent.KEY_PRESSED, KeyEvent.getExtendedKeyCodeForChar('b'));
+		assertTrue("the latch must go down before the keys it was toggled for", shiftDown < pressB);
+		assertTrue("...and must not come up before them", shiftUp > pressB);
+	}
+
+	private static int indexOf(List<Seen> order, int id, int vk)
+	{
+		for (int i = 0; i < order.size(); i++)
+		{
+			if (order.get(i).id == id && order.get(i).vk == vk)
+			{
+				return i;
+			}
+		}
+		throw new AssertionError("no event id=" + id + " vk=" + vk + " in " + order.size() + " events");
 	}
 
 	// ---- plumbing ---------------------------------------------------------------------------------
