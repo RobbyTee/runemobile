@@ -6,7 +6,7 @@
 #
 # A directory is removed only if every one of these holds:
 #   - it matches a category below (nothing else is ever considered);
-#   - it is a real directory (not a symlink), git ignores it, and it contains no tracked file;
+#   - it is a real directory reached through no symlink, git ignores it, and it contains no tracked file;
 #   - it is not on the KEEP list (incremental caches that tracked scripts reuse);
 #   - nothing inside it changed in the last --days N days (default 7), so a build in progress survives.
 #
@@ -25,6 +25,7 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
+ROOT_P="$(pwd -P)"
 
 # Incremental caches: "<dir> <script that points -derivedDataPath at it>". Removing one only costs a full
 # rebuild on that script's next run, but they are kept even when stale so that cost is never a surprise.
@@ -83,6 +84,9 @@ hold_reason() {
 	[ -L "$p" ] && { echo "symlink"; return; }
 	[ -e "$p" ] || { echo "absent"; return; }
 	[ -d "$p" ] || { echo "not a directory"; return; }
+	# A symlinked parent (build/ -> elsewhere) would pass every git check below, since git matches path
+	# strings, and rm -rf would then delete outside the repo. Require the resolved path to be the literal one.
+	[ "$(cd -P -- "$p" 2>/dev/null && pwd -P)" = "$ROOT_P/$p" ] || { echo "path runs through a symlink"; return; }
 	while read -r dir script; do
 		[ "$p" = "$dir" ] && { echo "cache for $script"; return; }
 	done <<< "$KEEP_LIST"
