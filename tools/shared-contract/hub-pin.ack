@@ -30,9 +30,10 @@
 #   api.runelite.net/runelite-<v>/pluginhub (POST)   1.13.1 200 | 1.13.3 200 | 1.13.4 404 | 1.13.4-SNAPSHOT 200
 # api.base stays on ${project.version}: the bare 1.13.4 path 404s, but the -SNAPSHOT path the client actually
 # requests answers 200, so the pin is correct as-is. The hub pin is RETAINED at 1.13.1 for this merge.
-# NOTE for the next step: by the rule used in the 2026-10-15 entry the hub pin could now move to 1.13.3 --
-# it is a released manifest (200) AND a release this tree has now merged, so its API is certainly present in
-# this 1.13.4-SNAPSHOT client. That changes which plugin builds load on device, so it is deliberately left to
-# a separate, device-verified step rather than folded into the merge.
+# Hub pin bumped 1.13.1 -> 1.13.3 later the same day, as its own step rather than folded into the merge.
+# By the rule in the 2026-10-15 entry it is the newest release this tree has MERGED, so its API is certainly
+# present in this 1.13.4-SNAPSHOT client; re-probed at the bump: 1.13.3 200 | 1.13.4 404 | 1.13.4-SNAPSHOT 404.
+# This changes which plugin builds load on device and was NOT device-verified at the time of the bump --
+# confirm the hub still lists and installs plugins before shipping it to users.
 reviewed_project_version=1.13.4
-pinned_hub_version=1.13.1
+pinned_hub_version=1.13.3

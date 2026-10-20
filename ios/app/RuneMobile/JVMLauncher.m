@@ -1395,12 +1395,13 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
         // with our staged rs117.hd.HdPlugin) — is blocked in MobileUiBridge (HUB_BLOCKED hides it from the
         // catalog + refuses install), so OUR staged GpuPlugin/HdPlugin stay the canonical panel entries.
         @"-Drunelite.nosafemode=true",
-        // The hub serves manifests for RELEASED versions only; our jar is a -SNAPSHOT (1.13.2-SNAPSHOT_full.js
-        // 404s, verified), so this cannot simply follow the client version. Pin it to the release our tree is
-        // BASED on -- plugins built against 1.13.1 call API a 1.13.2-SNAPSHOT client certainly has, while a
-        // newer manifest can call API added after our merge base and fail at load. check-hub-pin.sh holds this
-        // equal to runelite.properties; change both, and verify the manifest answers 200 first.
-        @"-Drunelite.pluginhub.version=1.13.1",
+        // The hub serves manifests for RELEASED versions only; our jar is a -SNAPSHOT (1.13.4-SNAPSHOT_full.js
+        // 404s, and so does the bare 1.13.4 -- unreleased), so this cannot simply follow the client version.
+        // Pin it to the newest release our tree has MERGED -- plugins built against 1.13.3 call API a
+        // 1.13.4-SNAPSHOT client certainly has, while a newer manifest can call API added after our merge base
+        // and fail at load. check-hub-pin.sh holds this equal to runelite.properties; change both, and verify
+        // the manifest answers 200 first.
+        @"-Drunelite.pluginhub.version=1.13.3",
         @"-Drunelite.rendererpanel=true", // arm RendererPanelStarter: load GPU + 117HD (no-start) into
                                           // the panel so both are selectable + configurable.
         @"-Drunelite.nosplash=true",      // no desktop Swing splash (its JFrame creation under CACIO
