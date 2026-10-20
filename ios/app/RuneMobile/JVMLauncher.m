@@ -62,7 +62,6 @@ static jmethodID gMidKeybind = NULL;     // onKeybind(II)V — fire a plugin act
 static jmethodID gMidInvBounds = NULL;   // getInventoryBounds()[I — inventory grid bounds for item-drag (DRAG-1, optional)
 static jmethodID gMidEngineScroll = NULL; // isEngineScrollableAt(II)Z — SCROLL-SPIKE pan-begin gate (optional)
 static jmethodID gMidReorderBounds = NULL; // getReorderPaneBounds()[I — DRAG-1b reorder-pane bounds (optional)
-static jmethodID gMidKeepAlive = NULL;   // keepAlive()V — idle-logout reset from native-UI touches (optional; tolerate older jar)
 
 // W3 hybrid-chrome read surface — a SEPARATE facade (MobileChromeBridge) resolved lazily on the main thread.
 static jclass    gChromeClass = NULL;   // global ref to net.runelite.client.headless.MobileChromeBridge
@@ -323,8 +322,6 @@ static BOOL ensureBridge(void) {
         (*env)->ExceptionClear(env);
         gMidReorderBounds = NULL;
     }
-    gMidKeepAlive = (*env)->GetStaticMethodID(env, global, "keepAlive", "()V");
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidKeepAlive = NULL; }
     gMidArmTap = (*env)->GetStaticMethodID(env, global, "armTap", "(II)V");
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
@@ -2053,7 +2050,6 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 + (void)setCameraHoldDxPerSec:(int)dxPerSec dyPerSec:(int)dyPerSec {
     if (!ensureBridge() || !gMidCameraHold)
         return;
-    [JVMLauncher postKeepAlive]; // idle keepalive: a held button posts no canvas event of its own
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidCameraHold, (jint)dxPerSec, (jint)dyPerSec);
     if ((*env)->ExceptionCheck(env)) {
@@ -2081,13 +2077,6 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidClearHover);
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postClearHover"); }
-}
-
-+ (void)postKeepAlive {
-    if (!ensureBridge() || !gMidKeepAlive) return;
-    JNIEnv *env = gMainEnv;
-    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidKeepAlive);
-    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postKeepAlive"); }
 }
 
 + (void)postText:(NSString *)text {
@@ -2234,8 +2223,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (void)openEngineTab:(int)tabIndex {
-    if (!ensureVeneer()) return;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native 2-col grid tab open posts no canvas event
+    if (!ensureVeneer())
+        return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidOpenTab, (jint)tabIndex);
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.openEngineTab"); }
@@ -2244,7 +2233,6 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 + (void)continueEngineDialogue {
     if (!ensureVeneer() || !gMidContinueDlg)
         return;
-    [JVMLauncher postKeepAlive]; // idle keepalive: a native dialogue tap posts no canvas event of its own
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidContinueDlg);
     if ((*env)->ExceptionCheck(env)) {
@@ -2267,7 +2255,6 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 + (void)selectEngineDialogueOption:(int)digit seq:(long long)seq {
     if (!ensureVeneer() || !gMidSelectOpt)
         return;
-    [JVMLauncher postKeepAlive]; // idle keepalive: a native dialogue tap posts no canvas event of its own
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSelectOpt, (jint)digit, (jlong)seq);
     if ((*env)->ExceptionCheck(env)) {
@@ -2278,7 +2265,6 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 + (void)tapEngineDialogueAtX:(int)x y:(int)y {
     if (!ensureVeneer() || !gMidTapDlg)
         return;
-    [JVMLauncher postKeepAlive]; // idle keepalive: a native dialogue tap posts no canvas event of its own
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidTapDlg, (jint)x, (jint)y);
     if ((*env)->ExceptionCheck(env)) {
@@ -2296,7 +2282,6 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 + (void)openEngineWorldMap {
     if (!ensureVeneer() || !gMidOpenWorldMap)
         return;
-    [JVMLauncher postKeepAlive]; // idle keepalive: a discoverable map-open posts no canvas event on its own
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidOpenWorldMap);
     if ((*env)->ExceptionCheck(env)) {
@@ -2343,16 +2328,16 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (void)switchEngineChatTab:(int)index {
-    if (!ensureVeneer() || !gMidSwitchChatTab) return;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native chat-tab switch posts no canvas event
+    if (!ensureVeneer() || !gMidSwitchChatTab)
+        return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSwitchChatTab, (jint)index);
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.switchEngineChatTab"); }
 }
 
 + (void)setEngineChatCollapsed:(BOOL)collapsed {
-    if (!ensureVeneer() || !gMidSetChatCollapsed) return;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native chat collapse/expand posts no canvas event
+    if (!ensureVeneer() || !gMidSetChatCollapsed)
+        return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetChatCollapsed, (jboolean)(collapsed ? JNI_TRUE : JNI_FALSE));
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.setEngineChatCollapsed"); }
@@ -2468,8 +2453,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (NSString *)mobileSetPluginEnabled:(NSString *)className enabled:(BOOL)enabled {
-    if (!ensureMui() || className == nil) return nil;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native plugin toggle posts no canvas event
+    if (!ensureMui() || className == nil)
+        return nil;
     JNIEnv *env = gMainEnv;
     jstring jc = (*env)->NewStringUTF(env, className.UTF8String);
     NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiSetEnabled,
@@ -2479,8 +2464,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (NSString *)mobileSetConfigGroup:(NSString *)group key:(NSString *)key value:(NSString *)value {
-    if (!ensureMui() || group == nil || key == nil || value == nil) return nil;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native config write posts no canvas event
+    if (!ensureMui() || group == nil || key == nil || value == nil)
+        return nil;
     JNIEnv *env = gMainEnv;
     jstring jg = (*env)->NewStringUTF(env, group.UTF8String);
     jstring jk = (*env)->NewStringUTF(env, key.UTF8String);
@@ -2491,8 +2476,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (NSString *)mobileResetConfigGroup:(NSString *)group key:(NSString *)key {
-    if (!ensureMui() || group == nil || key == nil) return nil;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native config reset posts no canvas event
+    if (!ensureMui() || group == nil || key == nil)
+        return nil;
     JNIEnv *env = gMainEnv;
     jstring jg = (*env)->NewStringUTF(env, group.UTF8String);
     jstring jk = (*env)->NewStringUTF(env, key.UTF8String);
@@ -2503,8 +2488,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 
 // Whole-plugin reset (CFG-10): reapply group defaults + plugin.resetConfiguration().
 + (NSString *)mobileResetPluginConfig:(NSString *)group {
-    if (!ensureMui() || !gMuiResetPlugin || group == nil) return nil;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native whole-plugin config reset posts no canvas event
+    if (!ensureMui() || !gMuiResetPlugin || group == nil)
+        return nil;
     JNIEnv *env = gMainEnv;
     jstring jg = (*env)->NewStringUTF(env, group.UTF8String);
     NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiResetPlugin, jg));
@@ -2596,8 +2581,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (NSString *)mobileSetPinned:(NSString *)pluginName pinned:(BOOL)pinned {
-    if (!ensureMui() || !gMuiSetPinned || pluginName == nil) return nil;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native plugin pin/unpin posts no canvas event
+    if (!ensureMui() || !gMuiSetPinned || pluginName == nil)
+        return nil;
     JNIEnv *env = gMainEnv;
     jstring jn = (*env)->NewStringUTF(env, pluginName.UTF8String);
     NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiSetPinned,
@@ -2632,8 +2617,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 // KEY-1: fire a plugin action-hotkey by (config group, key) — the bridge reads the live Keybind and synthesizes
 // its chord. No-op on an older jar without the method.
 + (void)mobileFireHotkeyGroup:(NSString *)group key:(NSString *)key {
-    if (!ensureMui() || !gMuiFireHotkey || group == nil || key == nil) return;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native hotkey fire posts no canvas event
+    if (!ensureMui() || !gMuiFireHotkey || group == nil || key == nil)
+        return;
     JNIEnv *env = gMainEnv;
     jstring jg = (*env)->NewStringUTF(env, group.UTF8String);
     jstring jk = (*env)->NewStringUTF(env, key.UTF8String);
@@ -2692,8 +2677,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (NSString *)mobileHubInstall:(NSString *)internalName uninstall:(BOOL)uninstall {
-    if (!ensureMui() || internalName == nil) return nil;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native hub install/uninstall posts no canvas event
+    if (!ensureMui() || internalName == nil)
+        return nil;
     JNIEnv *env = gMainEnv;
     jstring jn = (*env)->NewStringUTF(env, internalName.UTF8String);
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass,
@@ -2742,8 +2727,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (void)notesSet:(NSString *)text {
-    if (!ensureMui() || !gMuiNotesSet || text == nil) return;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native notes write posts no canvas event
+    if (!ensureMui() || !gMuiNotesSet || text == nil)
+        return;
     JNIEnv *env = gMainEnv;
     jstring js = (*env)->NewStringUTF(env, text.UTF8String ?: "");
     (void)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiNotesSet, js);
@@ -2762,8 +2747,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (void)geSetUiOpen:(BOOL)open {
-    if (!ensureMui() || !gMuiGeSetUi) return;
-    [JVMLauncher postKeepAlive];   // idle keepalive: opening the native GE screen posts no canvas event
+    if (!ensureMui() || !gMuiGeSetUi)
+        return;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiGeSetUi, (jboolean)(open ? JNI_TRUE : JNI_FALSE));
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.geSetUiOpen"); return; }
@@ -2787,8 +2772,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (void)mobileOpenPanel:(int)index {
-    if (!ensureMui()) return;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native side-panel open posts no canvas event
+    if (!ensureMui())
+        return;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiOpenPanel, (jint)index);
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mobileOpenPanel"); return; }
@@ -2812,8 +2797,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (void)mobilePanelClickX:(int)x y:(int)y {
-    if (!ensureMui()) return;
-    [JVMLauncher postKeepAlive];   // idle keepalive: Swing-panel dispatch posts no canvas event
+    if (!ensureMui())
+        return;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiPanelClick, (jint)x, (jint)y);
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mobilePanelClick"); return; }
@@ -2878,8 +2863,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (void)questStart:(NSString *)name {
-    if (!ensureQuest() || name == nil) return;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native quest-helper start posts no canvas event
+    if (!ensureQuest() || name == nil)
+        return;
     JNIEnv *env = gMainEnv;
     jstring js = (*env)->NewStringUTF(env, name.UTF8String);
     (*env)->CallStaticVoidMethod(env, gQhClass, gQhStart, js);
@@ -2888,8 +2873,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (void)questStop {
-    if (!ensureQuest()) return;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native quest-helper stop posts no canvas event
+    if (!ensureQuest())
+        return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gQhClass, gQhStop);
     if ((*env)->ExceptionCheck(env)) bridgeNoteClear(env, "JVMLauncher.questStop");
@@ -2926,8 +2911,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (NSString *)overlaySetLocation:(NSString *)name x:(int)x y:(int)y {
-    if (!ensureOvl() || name == nil) return nil;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native overlay move posts no canvas event
+    if (!ensureOvl() || name == nil)
+        return nil;
     JNIEnv *env = gMainEnv;
     jstring jn = (*env)->NewStringUTF(env, name.UTF8String);
     NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gOvlClass, gOvlSetLoc, jn, (jint)x, (jint)y));
@@ -2936,8 +2921,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (NSString *)overlaySetPosition:(NSString *)name position:(NSString *)position {
-    if (!ensureOvl() || name == nil || position == nil) return nil;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native overlay snap posts no canvas event
+    if (!ensureOvl() || name == nil || position == nil)
+        return nil;
     JNIEnv *env = gMainEnv;
     jstring jn = (*env)->NewStringUTF(env, name.UTF8String);
     jstring jp = (*env)->NewStringUTF(env, position.UTF8String);
@@ -2948,8 +2933,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 }
 
 + (NSString *)overlayReset:(NSString *)name {
-    if (!ensureOvl() || name == nil) return nil;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native overlay reset posts no canvas event
+    if (!ensureOvl() || name == nil)
+        return nil;
     JNIEnv *env = gMainEnv;
     jstring jn = (*env)->NewStringUTF(env, name.UTF8String);
     NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gOvlClass, gOvlReset, jn));
@@ -3019,8 +3004,8 @@ static void accountInvokeVoid(const char *method) {
 }
 
 + (void)worldHop:(int)worldId {
-    if (!ensureWorld()) return;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native world hop posts no canvas event
+    if (!ensureWorld())
+        return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gWsClass, gWsHop, (jint)worldId);
     if ((*env)->ExceptionCheck(env)) bridgeNoteClear(env, "JVMLauncher.worldHop");
@@ -3035,8 +3020,8 @@ static void accountInvokeVoid(const char *method) {
 
 // WH-1: mark/unmark a world as a favourite (shared worldhopper config). No-op on an older jar.
 + (void)worldSetFavourite:(int)worldId favourite:(BOOL)favourite {
-    if (!ensureWorld() || !gWsSetFav) return;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native world favourite toggle posts no canvas event
+    if (!ensureWorld() || !gWsSetFav)
+        return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gWsClass, gWsSetFav, (jint)worldId, (jboolean)(favourite ? 1 : 0));
     if ((*env)->ExceptionCheck(env)) bridgeNoteClear(env, "JVMLauncher.worldSetFavourite");
@@ -3044,8 +3029,8 @@ static void accountInvokeVoid(const char *method) {
 
 // WH-3: quick-hop to the next/previous world (reflects WorldHopperPlugin.hop(boolean)). No-op on an older jar.
 + (void)worldHopDirection:(BOOL)previous {
-    if (!ensureWorld() || !gWsHopDir) return;
-    [JVMLauncher postKeepAlive];   // idle keepalive: native quick-hop posts no canvas event
+    if (!ensureWorld() || !gWsHopDir)
+        return;
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gWsClass, gWsHopDir, (jboolean)(previous ? 1 : 0));
     if ((*env)->ExceptionCheck(env)) bridgeNoteClear(env, "JVMLauncher.worldHopDirection");
@@ -3084,7 +3069,6 @@ static void accountInvokeVoid(const char *method) {
 + (NSString *)lootResetAll {
     if (!ensureLoot() || !gLootReset)
         return nil;
-    [JVMLauncher postKeepAlive]; // idle keepalive: the native reset posts no canvas event
     JNIEnv *env = gMainEnv;
     return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gLootClass, gLootReset));
 }
@@ -3143,7 +3127,6 @@ static void accountInvokeVoid(const char *method) {
 + (NSString *)switchProfile:(long long)profileId {
     if (!ensureProfiles())
         return nil;
-    [JVMLauncher postKeepAlive]; // idle keepalive: the native profile switch posts no canvas event
     JNIEnv *env = gMainEnv;
     return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gProfClass, gProfSwitch, (jlong)profileId));
 }
@@ -3181,7 +3164,6 @@ static void accountInvokeVoid(const char *method) {
 + (NSString *)invokeInfoBoxMenu:(int)index option:(NSString *)option {
     if (!ensureInfoBox() || option == nil)
         return nil;
-    [JVMLauncher postKeepAlive]; // idle keepalive: the native infobox invoke posts no canvas event
     JNIEnv *env = gMainEnv;
     jstring jo = (*env)->NewStringUTF(env, option.UTF8String);
     NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gIbClass, gIbInvoke, (jint)index, jo));

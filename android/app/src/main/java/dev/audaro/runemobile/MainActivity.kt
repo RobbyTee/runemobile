@@ -3828,16 +3828,11 @@ class MainActivity : AppCompatActivity() {
             // A search result answers to its own op at the point the bridge published for it. A digit here
             // would be the row INDEX fired at a widget the prompt does not even use.
             dialogueIsPrompt && row != null -> {
-                JvmLauncher.keepAlive()
                 JvmLauncher.tapDialogue(gx, gy)
                 Log.i(TAG, "dlg: prompt row $row tap ($gx,$gy) -> op, consumed")
             }
 
-            // A precise click was an input event the engine's idle timer saw; these handlers are direct
-            // menuActions it never sees, so bump the keepalive or a conversation that is the user's only
-            // activity can AFK-log them out mid-dialogue.
             digit != null -> {
-                JvmLauncher.keepAlive()
                 JvmLauncher.selectDialogueOption(digit, dialogueTargetsSeq)
                 Log.i(TAG, "dlg: dialogue option $digit tap ($gx,$gy) -> op, consumed")
             }
@@ -3852,7 +3847,6 @@ class MainActivity : AppCompatActivity() {
             // Modelled dialogue (chat / message / level-up): continue it whether or not a CONTINUE widget was
             // published -- the bridge resolves the live target itself and does nothing when none is open.
             dialogueTargetsKnown -> {
-                JvmLauncher.keepAlive()
                 JvmLauncher.continueDialogue()
                 Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> continue, consumed")
             }
@@ -3863,7 +3857,6 @@ class MainActivity : AppCompatActivity() {
             // past the box instead of pressing anything. Hand the POINT to the bridge, which matches the box's
             // live widgets on the client thread and fires the op of the one under the finger.
             else -> {
-                JvmLauncher.keepAlive()
                 JvmLauncher.tapDialogue(gx, gy)
                 Log.i(TAG, "dlg: dialogue tap ($gx,$gy) -> engine-owned, op, consumed")
             }

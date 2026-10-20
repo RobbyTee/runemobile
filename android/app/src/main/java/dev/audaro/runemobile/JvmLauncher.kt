@@ -88,9 +88,6 @@ object JvmLauncher {
     /** Make the engine pointer "absent" (call when a camera/pan gesture begins). */
     external fun nativeClearHover()
 
-    /** FIX-3 idle keepalive: bump the engine idle-logout timer on a native-UI touch (queued; UI-thread-safe). */
-    external fun nativeKeepAlive()
-
     // AP-2a sticky-Shift (Finding 12): hold/release a synthetic VK_SHIFT via JavaBridge.setShiftHeld. Queued
     // through the input path so it's ORDERED ahead of the menu-open right-click (engine must read shift held
     // before it builds the menu, or Mark/Configure entries aren't injected). UI-thread-safe (enqueue only).
@@ -588,8 +585,6 @@ object JvmLauncher {
 
     fun clearHover() = nativeClearHover()
 
-    fun keepAlive() = nativeKeepAlive()
-
     fun setShiftHeld(held: Boolean) = nativeSetShiftHeld(held)
 
     fun setCtrlHeld(held: Boolean) = nativeSetCtrlHeld(held)
@@ -725,16 +720,13 @@ object JvmLauncher {
     fun <T> onBridge(block: () -> T): Future<T> = bridgeExec.submit(block)
 
     /**
-     * FIX-3: like [onBridge], but ALSO bumps the engine idle-logout timer ([keepAlive]) because this call is a
-     * genuine native-UI *touch* (a write the user initiated), not a passive data refresh. Use this ONLY at real
-     * touch handlers — NOT on the per-second json-refresh polls (those run while a screen is merely open; poking
-     * keepAlive there would suppress real AFK-logout when the user walks away). keepAlive only enqueues (it's
-     * UI-thread-safe and never attaches to HotSpot), so calling it before submitting the work is fine.
+     * [onBridge] for a call that is a genuine native-UI *touch* (a write the user initiated) rather than a
+     * passive data refresh. It used to also bump the engine's idle-logout timer, which is gone: the engine AFK-
+     * logs us out on real inactivity now, exactly as it does a desktop client whose user is only clicking around
+     * RuneLite's own panels. Kept as its own name because the distinction it marks at ~50 call sites is real and
+     * is what anything keyed on user activity would need again.
      */
-    fun <T> onBridgeTouch(block: () -> T): Future<T> {
-        nativeKeepAlive()
-        return bridgeExec.submit(block)
-    }
+    fun <T> onBridgeTouch(block: () -> T): Future<T> = bridgeExec.submit(block)
 
     fun listPlugins() = nativeListPlugins()
 

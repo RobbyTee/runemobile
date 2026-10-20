@@ -204,12 +204,6 @@ typedef void (^JVMLogSink)(NSString *line);
 /// cursor would otherwise light up (and let you mis-click) whatever scenery rotates under it. Main thread.
 + (void)postClearHover;
 
-/// Reset the engine's idle-logout timer from a native-UI touch that posts NO canvas MouseEvent (chat-tab /
-/// 2-col grid op-replay, config / notes / world / overlay writes, Swing-panel dispatch, plugin enable/pin/hub).
-/// Bumps JavaBridge.keepAlive() (lock-free); the client thread drains it to one MOUSE_MOVED(-1,-1). No-op on a
-/// jar without the method (older bundle) or when -Drunelite.idleKeepalive=false. Call on the main thread.
-+ (void)postKeepAlive;
-
 /// Type committed text via JavaBridge.onText (KEY_PRESSED+KEY_TYPED+KEY_RELEASED per char). From the
 /// hidden UITextField's change callback. Call on the main thread.
 + (void)postText:(NSString *)text;
