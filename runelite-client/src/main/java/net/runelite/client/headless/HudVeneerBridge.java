@@ -1348,7 +1348,40 @@ public final class HudVeneerBridge
 	// frame that missed the close edge — and a layer the ENGINE closed is never forced back on.
 	private static boolean mapHudHidden;
 	private static boolean mapHudHiddenPreEoc;   // the layout the hide went to, so the restore can't miss it
+	private static final boolean[] mapHudWeHid = new boolean[3];   // per layer: this hide is OURS to undo
 	private static int mapHudLogFrames;   // frames left to report the post-raster HUD state for this open
+
+	/** The toplevel layers that must not paint over the fullscreen world map, in {@link #mapHudWeHid} order:
+	 *  the minimap+orbs cluster, the side panel, and the engine's hover-option text. */
+	private static int[] mapHudLayerIds(boolean preEoc)
+	{
+		return preEoc
+			? new int[]{InterfaceID.ToplevelPreEoc.MAP_CONTAINER, InterfaceID.ToplevelPreEoc.SIDE_CONTAINER,
+				InterfaceID.ToplevelPreEoc.MOUSEOVER}
+			: new int[]{InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER, InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER,
+				InterfaceID.ToplevelOsrsStretch.MOUSEOVER};
+	}
+
+	/** Set the widget's OWN hidden flag, ignoring its parents'. Returns true when this call is what changed
+	 *  it — which is the only thing that earns the right to change it back. */
+	private static boolean setSelfHidden(Client c, int id, boolean hidden)
+	{
+		try
+		{
+			final Widget w = c.getWidget(id);
+			if (w == null || w.isSelfHidden() == hidden)
+			{
+				return false;
+			}
+			w.setHidden(hidden);
+			return true;
+		}
+		catch (RuntimeException ignore)
+		{
+			BridgeFaults.note("HudVeneerBridge.setSelfHidden", ignore);
+			return false;
+		}
+	}
 
 	/** {@code "shown"} / {@code "hidden"} / {@code "absent"} — the layer as it stands right now. */
 	private static String shownNow(Client c, int id)
@@ -1378,6 +1411,12 @@ public final class HudVeneerBridge
 	 * <p>
 	 * Idempotent, and re-asserted every frame from {@link #preRender} while the map is open, so a layer the
 	 * engine re-shows gets at most zero painted frames.
+	 * <p>
+	 * Reads and writes each layer's OWN hidden flag, and restores only the flags this method actually set.
+	 * The shared {@link #setHidden} helper guards on {@link Widget#isHidden()}, which counts a hidden PARENT
+	 * too: a layer the engine had already hidden would be skipped on the way in (its flag already reads
+	 * hidden) and then force-SHOWN on the way out. MOUSEOVER is the live case — the engine owns that flag
+	 * frame to frame — and a hidden toplevel would do it to all three at once.
 	 */
 	private static void setMapHudHidden(Client c, boolean preEoc, boolean hidden)
 	{
@@ -1388,11 +1427,27 @@ public final class HudVeneerBridge
 		// Restore the layout we HID, not the one that happens to be live now: a stone-arrangement flip between
 		// the two would otherwise un-hide the other toplevel's layers and leave these three hidden for good.
 		final boolean layout = hidden ? preEoc : mapHudHiddenPreEoc;
+		if (hidden && layout != mapHudHiddenPreEoc)
+		{
+			java.util.Arrays.fill(mapHudWeHid, false);   // different toplevel, different widgets — nothing of ours
+		}
 		mapHudHidden = hidden;
 		mapHudHiddenPreEoc = layout;
-		setHidden(c, layout ? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER, hidden);
-		setHidden(c, layout ? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER, hidden);
-		setHidden(c, layout ? InterfaceID.ToplevelPreEoc.MOUSEOVER : InterfaceID.ToplevelOsrsStretch.MOUSEOVER, hidden);
+		final int[] ids = mapHudLayerIds(layout);
+		for (int i = 0; i < ids.length; i++)
+		{
+			if (hidden)
+			{
+				// |= and not =: the re-assert has to keep the claim from the frame that first hid this layer,
+				// or an engine re-show mid-open would hand the restore back a layer we are still holding down.
+				mapHudWeHid[i] |= setSelfHidden(c, ids[i], true);
+			}
+			else if (mapHudWeHid[i])
+			{
+				mapHudWeHid[i] = false;
+				setSelfHidden(c, ids[i], false);
+			}
+		}
 	}
 
 	/** Park a relocated toplevel container far below the canvas (kept alive, not hidden — no teardown). */

@@ -449,9 +449,16 @@ public class HudVeneerBridgeTest
 	 *  observable (the bridge skips a write that would not change the flag). */
 	private static Widget hidableLayer()
 	{
+		return hidableLayer(false);
+	}
+
+	/** As above, starting from a given hidden state — {@code true} stands for a layer the ENGINE has hidden. */
+	private static Widget hidableLayer(boolean initiallyHidden)
+	{
 		final Widget w = mock(Widget.class);
-		final boolean[] hidden = {false};
+		final boolean[] hidden = {initiallyHidden};
 		when(w.isHidden()).thenAnswer(inv -> hidden[0]);
+		when(w.isSelfHidden()).thenAnswer(inv -> hidden[0]);
 		when(w.setHidden(anyBoolean())).thenAnswer(inv ->
 		{
 			hidden[0] = inv.getArgument(0);
@@ -516,6 +523,22 @@ public class HudVeneerBridgeTest
 		{
 			verify(layer, never()).setHidden(anyBoolean());
 		}
+	}
+
+	@Test
+	public void aLayerTheEngineHadAlreadyHiddenIsNotHandedBackShown()
+	{
+		// The restore has to undo OUR hides and nothing else. The engine owns the hover-text layer's flag
+		// frame to frame, so a map opened while it is hidden would otherwise come back with it forced SHOWN
+		// — and a hidden toplevel would do that to all three at once.
+		final Widget[] layers = {hidableLayer(), hidableLayer(), hidableLayer(true)};
+
+		HudVeneerBridge.preRender(clientWithHudLayers(true, layers));
+		HudVeneerBridge.preRender(clientWithHudLayers(false, layers));
+
+		assertFalse("the cluster was ours to hide, so it comes back", layers[0].isHidden());
+		assertTrue("the layer the engine had hidden stays hidden", layers[2].isHidden());
+		verify(layers[2], never()).setHidden(anyBoolean());
 	}
 
 	@Test
