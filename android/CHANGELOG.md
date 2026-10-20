@@ -9,6 +9,43 @@ accepts update-in-place.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-20
+
+### Fixed
+- The client could not log in after the 20 October game update. Jagex changes the game's content and its
+  revision most weeks, and a client built against the previous one is turned away at the door with
+  `js5connect_outofdate` — in practice a black screen with no useful explanation. This build is rebuilt
+  against RuneLite 1.13.3 and the 20 October game data, so login works again. This will happen again after
+  future weekly updates until a new build is published; it is the commonest reason to check the releases
+  page.
+- Opening the world map left the minimap orbs, the compass and the "Walk here" text painted on top of it.
+  A map that takes the whole screen now owns all of it: the layers that would paint over it are held down
+  while it is open and handed back exactly as they were found, so a panel the game itself had closed is
+  not forced back on.
+- The "Walk here" label appeared with nothing touching the screen — while rotating the camera, and after
+  a tap had already finished. The client was still tracking a pointer where your finger used to be, and
+  the game re-read that point every tick as the world turned underneath it.
+- A tap was reported to the game as a one-millisecond hold no matter how long you actually held it, and
+  the few pixels of roll a finger makes between landing and lifting were discarded. The press now goes out
+  while your finger is still down and closes where it actually left the glass, so the hold the game sees
+  is the hold you made.
+- A tap that failed mid-flight could leave the left button down, and a held button walks your character.
+  The press is now retired first, so it cannot outlive the tap that opened it.
+- A press-and-hold that rolled a few pixels was discarded instead of opening the menu.
+
+### Changed
+- Hover text is off. A touchscreen has no hover: nothing rests over anything, so a label naming what is
+  underneath describes a cursor that does not exist. The official mobile app shows none either. Launch
+  with `-Drunelite.hover.text=true` for the desktop behaviour.
+- Typed text takes real time to arrive. A thirty-character paste used to land complete inside a single
+  game tick, which no keyboard has ever done; it now types out over about a second.
+
+### Removed
+- **The idle keepalive — this changes when you are logged out.** The app used to post a synthetic mouse
+  event every couple of seconds while you were in its own menus, so the game's idle timer never climbed
+  and you were never logged out while sitting in them. That event came from nobody. It is gone end to
+  end, and you will now be logged out after the usual idle period exactly as desktop RuneLite does.
+
 ## [0.2.4] - 2026-10-18
 ### Fixed
 - Some dialogue boxes still could not be answered, even after 0.2.3 taught the client to recognise
