@@ -98,6 +98,10 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 @interface RMSceneView : UIImageView
 /// The landing point (in this view) of the first finger of a touch sequence.
 @property (nonatomic, copy) void (^touchDown)(CGPoint point);
+/// Every move sample of a one-finger sequence, as it happens. The bridge replays these as the real travel of
+/// a tap's press (JavaBridge.onTapMove); it ignores them unless a press of its own is actually down, so this
+/// fires for the whole sequence and does not need to know what the gesture turned out to be.
+@property (nonatomic, copy) void (^touchMoved)(CGPoint point);
 /// A one-finger sequence that no recognizer took: where it landed, the furthest it ever strayed from there,
 /// and how long it lasted. The handler decides whether that is a click.
 @property (nonatomic, copy) void (^touchUp)(CGPoint origin, CGFloat strayed, NSTimeInterval held);
@@ -139,6 +143,9 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
     CGFloat d = hypot(p.x - _origin.x, p.y - _origin.y);
     if (d > _strayed) {
         _strayed = d;
+    }
+    if (self.touchMoved) {
+        self.touchMoved(p);
     }
 }
 
@@ -1302,6 +1309,9 @@ static NSString *const kLayoutNoticeBody =
     __weak ViewController *weakSelfForScene = self;
     sceneView.touchDown = ^(CGPoint point) {
         [weakSelfForScene onSceneTouchDown:point];
+    };
+    sceneView.touchMoved = ^(CGPoint point) {
+        [weakSelfForScene onSceneTouchMoved:point];
     };
     sceneView.touchUp = ^(CGPoint origin, CGFloat strayed, NSTimeInterval held) {
         [weakSelfForScene onSceneTouchUp:origin strayed:strayed held:held];
@@ -6912,6 +6922,20 @@ static CGRect mapRectFromArr(NSArray *a) {
     }
     [self.tapHaptic prepare];
     [JVMLauncher postArmTapX:gx y:gy];
+}
+
+// The finger moved while still on the canvas. A tap is not one point -- it lands, rolls a few pixels and
+// lifts -- and every one of those samples used to be dropped, so the engine saw a single move at contact and
+// nothing more until the release. Hand them over; the bridge replays them as drags of the press it is holding
+// and ignores them entirely when there is no such press (a camera drag, a hold, a touch over an interface),
+// so there is nothing to classify here. No mapPoint: failure log: this runs at touch-sample rate.
+- (void)onSceneTouchMoved:(CGPoint)p {
+    if (![JVMLauncher bridgeReady])
+        return;
+    int gx = 0, gy = 0;
+    if (![self mapPoint:p toGameX:&gx toGameY:&gy])
+        return; // letterbox
+    [JVMLauncher postTapMoveX:gx y:gy];
 }
 
 // Would a tap at this point take the plain world-click path — the only path that draws a click marker? Mirrors

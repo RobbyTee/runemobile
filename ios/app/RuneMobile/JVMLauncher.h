@@ -178,6 +178,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// `x`,`y` are gamepack-canvas (765x503) pixels. Call on the main thread.
 + (void)postMoveX:(int)x y:(int)y;
 
+/// Stream one real move sample of the finger that armed a tap (JavaBridge.onTapMove). Called for every
+/// sample of a one-finger scene touch; the bridge replays it as a drag of the press it is holding and drops
+/// it when there is no such press, so the shell does not have to know what the gesture became. Main thread.
++ (void)postTapMoveX:(int)x y:(int)y;
+
 /// Tell the bridge a finger has LANDED at the game-canvas point it will click if it lifts as a tap, so the
 /// engine-resolved gate a left tap must pass (cursor move + wait for the engine to resolve the point) runs
 /// during the finger-down time instead of after the lift. Clicks nothing by itself; a touch that turns into

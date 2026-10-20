@@ -261,8 +261,28 @@ public final class JavaBridge
 	// exit from ARMED that is not a real lift retires it via retireOutstandingPress.
 	private static boolean pressOutstanding;
 	private static long pressPostedMs;    // when MOUSE_PRESSED went out (the hold is measured from here)
-	private static int pressX;            // the pressed point — the release must land on it, not on the lift
+	private static int pressX;            // the point the gate resolved and the press landed on
 	private static int pressY;
+	// The finger's real travel while that press is down. A tap is not one point: the finger lands, rolls a
+	// few pixels and lifts, and all of that used to be discarded -- the engine saw ONE move at contact and
+	// then nothing until the release, which is not a shape a hand makes. onTapMove streams the samples the
+	// native side already has as MOUSE_DRAGGED (the button IS down), and the release closes on the last one
+	// instead of teleporting back to the press point.
+	//
+	// Only while the press is down, never before it: a move during the settle would push the engine's cursor
+	// off the point the gate is resolving, the gate could never accept, and the arm would fail open -- the
+	// latency it exists to remove. The contact before the press is a still finger, which is also what a hand
+	// does before a deliberate click.
+	//
+	// Only inside the 3D viewport, too. Out there a held left button means drag-to-rearrange to the engine
+	// (an inventory slot, a prayer icon), so replaying a tap's roll would invent an item drag the user never
+	// made; in the scene it means nothing, which is why the scene is where the truth is free to tell.
+	//
+	// DRAG_STREAM_LOCK serialises the samples (native UI thread) against the press/release/retire (client
+	// thread), so no drag can be posted after the release that ended it.
+	private static final Object DRAG_STREAM_LOCK = new Object();
+	private static volatile boolean dragStreamOpen;
+	private static volatile long streamPoint;   // packed (x << 32 | y) of the last point the press is at
 	// A retired press still reaches the engine as a press/release pair, which IS a click to it — so a contact
 	// that became a drag or a long-press would leak a phantom walk-here. Swallow one MenuOptionClicked after a
 	// retire, but ONLY while no tap of ours is in flight: a genuine click is always delivered with tapState ==
@@ -884,6 +904,39 @@ public final class JavaBridge
 	}
 
 	/**
+	 * The finger MOVED while its press is down, at {@code (x,y)} (gamepack-canvas pixels) — one real sample
+	 * from the native touch sequence. Posted as a {@code MOUSE_DRAGGED}, because that is what it is: the
+	 * button is held and the pointer moved.
+	 *
+	 * <p>Inert unless a tap's press is actually outstanding and streamable (see {@code dragStreamOpen}), so
+	 * the native side can call it for every sample of every contact without having to know which ones became
+	 * taps. Safe from any thread; the lock it takes is held only across the post.
+	 */
+	public static void onTapMove(int x, int y)
+	{
+		if (!ENABLED || !dragStreamOpen)
+		{
+			return;
+		}
+		final Canvas canvas = liveCanvas();
+		if (canvas == null)
+		{
+			return;
+		}
+		synchronized (DRAG_STREAM_LOCK)
+		{
+			if (!dragStreamOpen)
+			{
+				return;   // the lift closed it while we were waiting for the lock
+			}
+			final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
+			postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_DRAGGED, System.currentTimeMillis(),
+				InputEvent.BUTTON1_DOWN_MASK, x, y, 0, false, MouseEvent.NOBUTTON));
+			streamPoint = (((long) x) << 32) | (y & 0xffffffffL);
+		}
+	}
+
+	/**
 	 * In-game right-tap (client thread): open the engine menu at the literal press point — move a cycle
 	 * before the right-press so the engine builds the menu FOR that point (a same-batch move+press would use
 	 * the previous cursor position). No aim assist, same as the official mobile client; the open menu already
@@ -1155,7 +1208,7 @@ public final class JavaBridge
 						// pointer park off the armed point).
 						armedFrames = 0;
 						tapState = TapState.ARMED;
-						postPressOnly(canvas, tapX, tapY);
+						postPressOnly(canvas, tapX, tapY, inWorldViewport(c, tapX, tapY));
 					}
 					else
 					{
@@ -2058,8 +2111,12 @@ public final class JavaBridge
 	 * Post the left {@code MOUSE_PRESSED} for an armed tap whose point the gate has just resolved, and start the
 	 * hold clock. The finger is still down at this moment, so the press is real rather than a stand-in for one;
 	 * {@link #releaseHeldPress} closes it at the lift and the delta between them is the user's actual hold.
+	 *
+	 * @param streamable whether the finger's further travel may be replayed as drags ({@link #onTapMove}) —
+	 *                   true in the 3D scene, false over an interface, where a held left button is the
+	 *                   engine's drag-to-rearrange rather than idle motion
 	 */
-	private static void postPressOnly(Canvas canvas, int x, int y)
+	private static void postPressOnly(Canvas canvas, int x, int y, boolean streamable)
 	{
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
@@ -2069,12 +2126,37 @@ public final class JavaBridge
 		pressPostedMs = t;
 		pressX = x;
 		pressY = y;
+		synchronized (DRAG_STREAM_LOCK)
+		{
+			// Opened AFTER the press is posted, so no sample can ever precede it.
+			streamPoint = (((long) x) << 32) | (y & 0xffffffffL);
+			dragStreamOpen = streamable;
+		}
 	}
 
 	/**
-	 * Close an outstanding press at the real lift: {@code MOUSE_RELEASED} + {@code MOUSE_CLICKED} on the PRESSED
-	 * point (the point the engine resolved, which is also where the press landed). Returns the held duration in
-	 * ms — the genuine finger-down-to-finger-up time — or {@code -1} when no press was outstanding.
+	 * Close the sample stream and answer the point the press has reached — the last place the finger really
+	 * was, or the press point when nothing streamed. Client thread; holding the lock is what guarantees no
+	 * drag is posted after the release that follows.
+	 */
+	private static long closeDragStream()
+	{
+		synchronized (DRAG_STREAM_LOCK)
+		{
+			dragStreamOpen = false;
+			return streamPoint;
+		}
+	}
+
+	/**
+	 * Close an outstanding press at the real lift: {@code MOUSE_RELEASED} + {@code MOUSE_CLICKED} where the
+	 * finger left the glass — the last streamed sample, or the pressed point when nothing streamed. Returns
+	 * the held duration in ms — the genuine finger-down-to-finger-up time — or {@code -1} when no press was
+	 * outstanding.
+	 *
+	 * <p>The release follows the finger rather than snapping back to the press, which is what a toolkit does
+	 * and the only thing consistent with the drags that preceded it. The ACTION is unaffected: the engine
+	 * resolved this click against the menu it had built for the press point, in the tick the press landed.
 	 */
 	private static long releaseHeldPress(Canvas canvas)
 	{
@@ -2082,12 +2164,15 @@ public final class JavaBridge
 		{
 			return -1L;
 		}
+		final long sp = closeDragStream();
+		final int rx = (int) (sp >> 32);
+		final int ry = (int) sp;
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		final long t = System.currentTimeMillis();
 		postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, t,
-			0, pressX, pressY, 1, false, MouseEvent.BUTTON1));
+			0, rx, ry, 1, false, MouseEvent.BUTTON1));
 		postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, t,
-			0, pressX, pressY, 1, false, MouseEvent.BUTTON1));
+			0, rx, ry, 1, false, MouseEvent.BUTTON1));
 		pressOutstanding = false;
 		return t - pressPostedMs;
 	}
@@ -2106,6 +2191,7 @@ public final class JavaBridge
 			return;
 		}
 		final long held = System.currentTimeMillis() - pressPostedMs;
+		final long sp = closeDragStream();
 		pressOutstanding = false;
 		if (canvas == null)
 		{
@@ -2113,7 +2199,7 @@ public final class JavaBridge
 		}
 		final EventQueue q = Toolkit.getDefaultToolkit().getSystemEventQueue();
 		postPointer(q, new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, System.currentTimeMillis(),
-			0, pressX, pressY, 1, false, MouseEvent.BUTTON1));
+			0, (int) (sp >> 32), (int) sp, 1, false, MouseEvent.BUTTON1));
 		suppressClickFrames = SUPPRESS_CLICK_FRAMES;
 		if (TOUCH_DIAG)
 		{
@@ -2125,7 +2211,9 @@ public final class JavaBridge
 	 * Is {@code (x,y)} (gamepack-canvas pixels) inside the live 3D-scene viewport? The engine reports the
 	 * viewport rect via {@code getViewportXOffset/YOffset/Width/Height}; a negative offset or non-positive
 	 * extent means the viewport is not currently drawn (e.g. a full-screen interface is up). Read on the
-	 * client thread (the caller already is). Diagnostic only ({@link #diagGeometry}).
+	 * client thread (the caller already is). Used by {@link #diagGeometry} and, load-bearing, by
+	 * {@link #postPressOnly} to decide whether the finger's travel may be replayed as drags; it fails CLOSED
+	 * (a read that throws answers "not in the viewport"), which costs fidelity and never invents a drag.
 	 */
 	private static boolean inWorldViewport(Client c, int x, int y)
 	{

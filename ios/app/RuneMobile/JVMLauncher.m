@@ -51,6 +51,7 @@ static jmethodID gMidCameraHold = NULL; // setCameraHold(II)V — a held arrow t
 static jmethodID gMidInputOpen = NULL, gMidClearHover = NULL;
 static jmethodID gMidWarmed = NULL;   // JavaBridge.presentReady()Z — world geometry uploaded (direct-present reveal)
 static jmethodID gMidMenuSelect = NULL;  // selectMenuPoint(II)V — menu row select + hover-clear (optional)
+static jmethodID gMidTapMove = NULL;     // onTapMove(II)V — the real travel of a tap's press (optional)
 static jmethodID gMidArmTap = NULL;      // armTap(II)V — resolve the tap point while the finger is down (optional)
 static jmethodID gMidCancelArm = NULL;   // cancelArmedTap()V — the touch became a drag/hold (optional)
 static jmethodID gMidShiftHeld = NULL;   // setShiftHeld(Z)V — sticky-Shift modifier (optional; tolerate older jar)
@@ -321,6 +322,11 @@ static BOOL ensureBridge(void) {
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         gMidReorderBounds = NULL;
+    }
+    gMidTapMove = (*env)->GetStaticMethodID(env, global, "onTapMove", "(II)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidTapMove = NULL;
     }
     gMidArmTap = (*env)->GetStaticMethodID(env, global, "armTap", "(II)V");
     if ((*env)->ExceptionCheck(env)) {
@@ -2007,6 +2013,18 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidMove, (jint)x, (jint)y);
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.postMove"); }
+}
+
++ (void)postTapMoveX:(int)x y:(int)y {
+    // Called at touch-sample rate, so the cheap guards come first and a jar without the method costs one
+    // null check per sample. The bridge itself drops a sample that belongs to no held press.
+    if (!gMidTapMove || !ensureBridge())
+        return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidTapMove, (jint)x, (jint)y);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.postTapMove");
+    }
 }
 
 + (void)postArmTapX:(int)x y:(int)y {

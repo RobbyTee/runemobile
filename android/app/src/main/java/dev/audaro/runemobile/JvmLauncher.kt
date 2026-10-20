@@ -129,6 +129,16 @@ object JvmLauncher {
     )
 
     /**
+     * Stream one real move sample of the finger that armed a tap (JavaBridge.onTapMove). Queued and
+     * coalesced to the latest position per drain, like the other position streams: the render thread makes
+     * the call, so one sample per frame with a real timestamp beats a frame's worth posted back to back.
+     */
+    external fun nativeTapMove(
+        x: Int,
+        y: Int,
+    )
+
+    /**
      * The finger LANDED at game-canvas (x,y): start resolving that point now, click nothing. A left tap is
      * never re-hit-tested, so the bridge has to move the synthetic cursor there and wait until the engine has
      * demonstrably resolved it before it can press — frames that used to be spent AFTER the lift, which is
@@ -582,6 +592,11 @@ object JvmLauncher {
         dx: Int,
         dy: Int,
     ) = nativeCamera(dx, dy)
+
+    fun tapMove(
+        x: Int,
+        y: Int,
+    ) = nativeTapMove(x, y)
 
     fun clearHover() = nativeClearHover()
 

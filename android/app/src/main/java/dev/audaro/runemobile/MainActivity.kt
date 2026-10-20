@@ -1337,6 +1337,12 @@ class MainActivity : AppCompatActivity() {
                             touchPastSlop = true
                             dropTapArm() // this touch is a drag now (iOS does this at the pan's Began)
                         }
+                        // A tap is not one point: the finger lands, rolls a few pixels and lifts, and all of
+                        // that used to be dropped, so the engine saw one move at contact and nothing more
+                        // until the release. Hand every sample over; the bridge replays them as drags of the
+                        // press it is holding and ignores them when there is no such press, so nothing here
+                        // has to know what the gesture became.
+                        JvmLauncher.tapMove(toGameX(event.x), toGameY(event.y))
                     }
                 }
             }

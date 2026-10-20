@@ -69,6 +69,7 @@ static jmethodID g_midSetMenuRenderSuppressed = nullptr;
 static jmethodID g_midKeybind = nullptr;
 // Sticky Ctrl/Alt latch (mirror of setShiftHeld) + a discrete middle-button click. Optional resolve.
 static jmethodID g_midSetCtrlHeld = nullptr, g_midSetAltHeld = nullptr, g_midMiddleClick = nullptr;
+static jmethodID g_midTapMove = nullptr;
 static jmethodID g_midArmTap = nullptr, g_midCancelArmedTap = nullptr;
 // FIX-10b: JavaBridge.invokeMenuEntry(int parentDisplayIndex, int childIndex) — commit a native tap-menu row /
 // submenu child directly (child<0 = the parent entry itself). Optional resolve (older jars lack it).
@@ -344,7 +345,12 @@ enum InputKind {
     // call and the arm stays ORDERED with the click the lift posts -- the click must reach onClick first (it
     // commits the arm) and the cancel after it (a no-op by then). Both are terminal: never coalesced, never
     // dropped, since a lost cancel strands an arm and a stranded arm refuses to arm the NEXT touch.
-    IN_ARMTAP = 18, IN_CANCELARM = 19
+    IN_ARMTAP = 18, IN_CANCELARM = 19,
+    // The real travel of an armed tap's press: JavaBridge.onTapMove(x=a, y=b), one sample of the finger
+    // while it is still on the glass. Coalescible (see isCoalescible): the render thread drains once a
+    // frame, so keeping the LATEST position gives one sample per frame with a real timestamp, where
+    // flushing a frame's worth back to back would give several that all claim the same instant.
+    IN_TAPMOVE = 20
     // clang-format on
 };
 // s carries the IN_TEXT payload; empty for the int-only kinds (aggregate-inits to "").
@@ -603,6 +609,7 @@ static bool publishBridge(JNIEnv *env) {
     g_midInvokeMenuEntry = midOpt(env, global, "invokeMenuEntry", "(II)V");   // FIX-10b submenu commit (optional)
     // Finger-down tap arm: best-effort, like every other late addition. A jar without them only costs the fast
     // path (the lift falls back to the full settle gate, which is where this started) -- never the render path.
+    g_midTapMove = midOpt(env, global, "onTapMove", "(II)V");
     g_midArmTap = midOpt(env, global, "armTap", "(II)V");
     g_midCancelArmedTap = midOpt(env, global, "cancelArmedTap", "()V");
     g_midHeapStats = midOpt(env, global, "heapStats", "()Ljava/lang/String;"); // P2-1 dev panel (optional)
@@ -1024,6 +1031,10 @@ static void drainInput(JNIEnv *env) {
             case IN_ALT:          if (g_midSetAltHeld) env->CallStaticVoidMethod(g_bridgeCls, g_midSetAltHeld, (jboolean)(ev.a != 0)); break;
             case IN_MIDDLECLICK:  if (g_midMiddleClick) env->CallStaticVoidMethod(g_bridgeCls, g_midMiddleClick, ev.a, ev.b); break;
             case IN_INVOKEMENUENTRY: if (g_midInvokeMenuEntry) env->CallStaticVoidMethod(g_bridgeCls, g_midInvokeMenuEntry, ev.a, ev.b); break;
+            case IN_TAPMOVE:
+                if (g_midTapMove)
+                    env->CallStaticVoidMethod(g_bridgeCls, g_midTapMove, ev.a, ev.b);
+                break;
             case IN_ARMTAP:
                 if (g_midArmTap)
                     env->CallStaticVoidMethod(g_bridgeCls, g_midArmTap, ev.a, ev.b);
@@ -1584,7 +1595,7 @@ Java_dev_audaro_runemobile_JvmLauncher_nativeSetPaused(JNIEnv *, jobject, jboole
 // (drag phase 1). Terminal/important events — taps, precise clicks, touch DOWN/UP, wheel, keys, text, menu
 // commits, clear-hover — are NEVER coalesced or dropped (dropping a touch-UP would wedge the engine's drag).
 static bool isCoalescible(const InputEvent &ev) {
-    return ev.kind == IN_CAMERA || ev.kind == IN_MOVE || (ev.kind == IN_TOUCH && ev.a == 1);
+    return ev.kind == IN_CAMERA || ev.kind == IN_MOVE || ev.kind == IN_TAPMOVE || (ev.kind == IN_TOUCH && ev.a == 1);
 }
 
 static void enqueue(InputEvent ev) {
@@ -1595,7 +1606,12 @@ static void enqueue(InputEvent ev) {
     if (!g_inQueue.empty()) {
         InputEvent &tail = g_inQueue.back();
         if (ev.kind == IN_CAMERA && tail.kind == IN_CAMERA) { tail.a += ev.a; tail.b += ev.b; return; }
-        if (ev.kind == IN_MOVE && tail.kind == IN_MOVE) { tail.a = ev.a; tail.b = ev.b; return; }
+        // A hover move and a tap-move sample are both "latest position wins", against their own kind only.
+        if ((ev.kind == IN_MOVE || ev.kind == IN_TAPMOVE) && tail.kind == ev.kind) {
+            tail.a = ev.a;
+            tail.b = ev.b;
+            return;
+        }
         if (ev.kind == IN_TOUCH && ev.a == 1 && tail.kind == IN_TOUCH && tail.a == 1 && tail.d == ev.d) {
             tail.b = ev.b; tail.c = ev.c; return;   // latest drag-move position (same button)
         }
@@ -1663,6 +1679,13 @@ Java_dev_audaro_runemobile_JvmLauncher_nativeClickPrecise(JNIEnv *, jobject, jin
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeMove(JNIEnv *, jobject, jint x, jint y) {
     enqueue({IN_MOVE, x, y, 0, 0});
+}
+// One real move sample of the finger that armed a tap. Queued like the rest, and coalesced to the latest
+// position per drain so a 120Hz touch stream cannot flood the queue or hand the engine a frame's worth of
+// samples that all claim the same millisecond.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeTapMove(JNIEnv *, jobject, jint x, jint y) {
+    enqueue({IN_TAPMOVE, x, y, 0, 0});
 }
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeArmTap(JNIEnv *, jobject, jint x, jint y) {

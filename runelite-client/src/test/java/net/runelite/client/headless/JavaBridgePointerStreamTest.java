@@ -54,9 +54,10 @@ import static org.mockito.Mockito.when;
  * Where the bridge says the pointer is — the other half of the press-timing contract that
  * {@link JavaBridgePressTimingTest} pins.
  *
- * <p>Every coordinate we hand the engine should be one a finger was really at. The pointer park used to
- * break that outright: it led with a {@code MOUSE_MOVED} to (−1,−1), a point no pointer can occupy, after
- * every single tap in the session.
+ * <p>Every coordinate we hand the engine should be one a finger was really at. Two things used to break that:
+ * the pointer park led with a {@code MOUSE_MOVED} to (−1,−1), a point no pointer can occupy, after every
+ * single tap; and a tap's whole contact produced exactly ONE move event, so the finger's real travel between
+ * landing and lifting was thrown away. These tests hold both lines.
  *
  * <p>Pure: the {@link Client} is mocked and no engine boots. Events are captured by pushing an
  * {@link EventQueue} that records what the bridge POSTS.
@@ -135,6 +136,8 @@ public class JavaBridgePointerStreamTest
 		JavaBridge.armTap(TAP_X, TAP_Y);
 		pump();
 		settleUntilPressed();
+		JavaBridge.onTapMove(TAP_X + 3, TAP_Y - 2);
+		pump();
 		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
 		pump();
 		JavaBridge.parkPointer();
@@ -146,6 +149,115 @@ public class JavaBridgePointerStreamTest
 		assertTrue("these events name a point no finger was at: "
 			+ bad.stream().map(e -> e.getID() + "@" + e.getX() + "," + e.getY()).collect(Collectors.toList()),
 			bad.isEmpty());
+	}
+
+	/**
+	 * The headline for the move stream: the samples the finger really produced while the press was down reach
+	 * the engine as drags, instead of being dropped so that one tap only ever showed up as a single move.
+	 */
+	@Test
+	public void theFingersRealTravelReachesTheEngineAsDrags() throws Exception
+	{
+		JavaBridge.armTap(TAP_X, TAP_Y);
+		pump();
+		settleUntilPressed();
+
+		JavaBridge.onTapMove(TAP_X + 2, TAP_Y + 1);
+		JavaBridge.onTapMove(TAP_X + 5, TAP_Y + 3);
+		JavaBridge.onTapMove(TAP_X + 6, TAP_Y + 4);
+		pump();
+
+		assertEquals("every sample the finger made must go out", 3, cap.count(MouseEvent.MOUSE_DRAGGED));
+		final List<MouseEvent> drags = cap.allOf(MouseEvent.MOUSE_DRAGGED);
+		assertEquals("the drag must carry the real sample point", TAP_X + 5, drags.get(1).getX());
+		assertEquals("the drag must carry the real sample point", TAP_Y + 3, drags.get(1).getY());
+		assertTrue("a drag must say which button is down",
+			(drags.get(0).getModifiersEx() & java.awt.event.InputEvent.BUTTON1_DOWN_MASK) != 0);
+	}
+
+	/** The release closes where the finger actually left the glass, not back at the point it pressed on. */
+	@Test
+	public void theReleaseClosesOnTheRealLiftPoint() throws Exception
+	{
+		JavaBridge.armTap(TAP_X, TAP_Y);
+		pump();
+		settleUntilPressed();
+		JavaBridge.onTapMove(TAP_X + 7, TAP_Y + 4);
+		pump();
+		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
+		pump();
+
+		final MouseEvent press = cap.first(MouseEvent.MOUSE_PRESSED);
+		final MouseEvent release = cap.first(MouseEvent.MOUSE_RELEASED);
+		assertEquals("the press still lands on the point the gate resolved", TAP_X, press.getX());
+		assertEquals("the release follows the finger", TAP_X + 7, release.getX());
+		assertEquals("the release follows the finger", TAP_Y + 4, release.getY());
+	}
+
+	/**
+	 * Nothing streams before the gate has pressed. A move posted while the gate is still settling would push
+	 * the engine's cursor off the point it is resolving, and the gate would never accept — the arm would fail
+	 * open and the lift would pay for a whole second settle, which is the latency the arm exists to remove.
+	 */
+	@Test
+	public void noSampleStreamsBeforeTheGateAccepts() throws Exception
+	{
+		JavaBridge.armTap(TAP_X, TAP_Y);
+		pump();
+
+		JavaBridge.onTapMove(TAP_X + 4, TAP_Y + 2);
+		pump();
+		assertEquals("a sample before the press must not move the engine's cursor",
+			0, cap.count(MouseEvent.MOUSE_DRAGGED));
+
+		settleUntilPressed();
+		assertEquals("the gate must still press on the point it resolved", TAP_X,
+			cap.first(MouseEvent.MOUSE_PRESSED).getX());
+	}
+
+	/** A sample after the contact is over belongs to nothing, and must not reach the engine. */
+	@Test
+	public void noSampleStreamsAfterTheLift() throws Exception
+	{
+		JavaBridge.armTap(TAP_X, TAP_Y);
+		pump();
+		settleUntilPressed();
+		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
+		pump();
+		cap.clear();
+
+		JavaBridge.onTapMove(TAP_X + 9, TAP_Y + 9);
+		pump();
+		assertEquals("the contact is over; there is no finger to report", 0, cap.count(MouseEvent.MOUSE_DRAGGED));
+	}
+
+	/**
+	 * Outside the 3D viewport a held left button is not idle motion — it is the engine's drag-to-rearrange
+	 * (an inventory slot, a prayer icon). Replaying a tap's roll there would invent an item drag the user
+	 * never made, so the stream stops at the viewport edge and those taps keep their single-point shape.
+	 */
+	@Test
+	public void aRollOverAnInterfaceIsNotReplayedAsADrag() throws Exception
+	{
+		// The tap point is inside the canvas but outside the scene viewport the mock reports.
+		when(client.getViewportXOffset()).thenReturn(0);
+		when(client.getViewportYOffset()).thenReturn(0);
+		when(client.getViewportWidth()).thenReturn(100);
+		when(client.getViewportHeight()).thenReturn(100);
+
+		JavaBridge.armTap(TAP_X, TAP_Y);
+		pump();
+		settleUntilPressed();
+		JavaBridge.onTapMove(TAP_X + 6, TAP_Y + 6);
+		pump();
+
+		assertEquals("a roll over an interface must not become an engine item drag",
+			0, cap.count(MouseEvent.MOUSE_DRAGGED));
+
+		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
+		pump();
+		assertEquals("and its release stays on the pressed slot", TAP_X,
+			cap.first(MouseEvent.MOUSE_RELEASED).getX());
 	}
 
 	// ---- harness ---------------------------------------------------------------------------------------
@@ -226,6 +338,7 @@ public class JavaBridgePointerStreamTest
 	{
 		set("tapState", enumValue("TapState", "IDLE"));
 		set("pressOutstanding", false);
+		set("dragStreamOpen", false);
 		set("suppressClickFrames", 0);
 		set("tapUncommitted", false);
 		set("queuedTap", false);
