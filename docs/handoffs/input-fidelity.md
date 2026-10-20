@@ -106,7 +106,8 @@ All four checks walked through on the real client and reported good:
 
 ## Next step
 
-The series is complete and verified. Nothing is outstanding on it.
+The series is complete. Everything is verified **on iOS**; Android verification was deliberately deferred
+(2026-10-20) and is the only thing outstanding — see the first open risk below. Nothing depends on it.
 
 ## Open risks
 
@@ -115,5 +116,22 @@ The series is complete and verified. Nothing is outstanding on it.
   right; it does not make them measurements.
 - Keys overlap (holds outlast gaps), so 1–2 keys are down at once. Normal for a typist and fine for the
   gamepack's pressed-key array, but it is new behaviour for this client.
-- Android quantises samples to the render-thread drain (coalesced to the latest per frame); iOS passes
-  every sample on the main thread. The two ports therefore feed slightly different sample densities.
+- **Item 2's Android path has never executed — deferred by choice, not an oversight.** Items 1, 3, 4 and
+  the keepalive deletion are pure shared Java, so the iOS pass covers them; Android runs the same jar. But
+  item 2's plumbing is Android-specific and structurally different: samples are queued as `IN_TAPMOVE` and
+  drained on the **render thread**, coalesced to the latest per frame, where iOS passes every sample
+  straight through on the main thread. So the two ports feed different sample densities, and only one of
+  them has been seen working.
+
+  Statically verified in lieu of a device (2026-10-20): the jar exports
+  `public static void onTapMove(int, int)` and the C++ binds `"onTapMove", "(II)V"` — worth re-checking if
+  either side is ever renamed, because `midOpt` returns null **silently** on a mismatch, so a typo would
+  mean the Android stream simply never happens with nothing logged anywhere. `IN_TAPMOVE = 20` is distinct
+  (the keepalive's old slot 11 stays vacant), coalescing folds only against its own kind, and both
+  `:app:compileDebugKotlin` and `:app:externalNativeBuildDebug` are green.
+
+  Degradation if something is still wrong: Android falls back to the pre-item-2 behaviour — one move at
+  contact, no drag stream. A silent no-op, not a crash, and not a regression against what Android did
+  before this work. When the Pixel is next out, the 5-minute pass is: tap in the inventory (the viewport
+  guard is what stops a roll inventing an item drag), and tap-and-roll in the 3D scene. Disable dozing
+  first (`adb shell dumpsys deviceidle disable`, `svc power stayon true`) or the adb socket drops.
