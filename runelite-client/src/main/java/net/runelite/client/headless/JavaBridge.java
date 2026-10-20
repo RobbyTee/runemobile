@@ -945,6 +945,12 @@ public final class JavaBridge
 	 * <p>Inert unless a tap's press is actually outstanding and streamable (see {@code dragStreamOpen}), so
 	 * the native side can call it for every sample of every contact without having to know which ones became
 	 * taps. Safe from any thread; the lock it takes is held only across the post.
+	 *
+	 * <p>Samples arriving faster than the EDT drains are folded into one by {@link EventQueue}'s own
+	 * mouse-motion coalescing, which is what a desktop toolkit does with a real mouse: the engine is handed
+	 * where the pointer IS, not a backlog of where it was. {@code streamPoint} is written here rather than
+	 * read back out of the queue, so the release still closes on the last real sample even when the drags
+	 * before it were folded.
 	 */
 	public static void onTapMove(int x, int y)
 	{

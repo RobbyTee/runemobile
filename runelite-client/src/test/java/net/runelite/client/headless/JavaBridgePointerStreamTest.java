@@ -162,8 +162,12 @@ public class JavaBridgePointerStreamTest
 		pump();
 		settleUntilPressed();
 
+		// Pumped between samples so each is dispatched before the next is posted. A burst posted faster than
+		// the EDT drains is coalesced by AWT itself -- see samplesPostedFasterThanTheQueueDrainsCoalesce.
 		JavaBridge.onTapMove(TAP_X + 2, TAP_Y + 1);
+		pump();
 		JavaBridge.onTapMove(TAP_X + 5, TAP_Y + 3);
+		pump();
 		JavaBridge.onTapMove(TAP_X + 6, TAP_Y + 4);
 		pump();
 
@@ -173,6 +177,36 @@ public class JavaBridgePointerStreamTest
 		assertEquals("the drag must carry the real sample point", TAP_Y + 3, drags.get(1).getY());
 		assertTrue("a drag must say which button is down",
 			(drags.get(0).getModifiersEx() & java.awt.event.InputEvent.BUTTON1_DOWN_MASK) != 0);
+	}
+
+	/**
+	 * Samples arriving faster than the EDT drains are folded into one, because {@link EventQueue} coalesces
+	 * pending mouse-motion events -- and that is the behaviour we want, not a leak. A desktop toolkit does
+	 * exactly this with a real mouse: the engine is handed where the pointer IS, not a backlog of where it
+	 * was. What must survive is the latest point, which is also the one the release closes on.
+	 */
+	@Test
+	public void samplesPostedFasterThanTheQueueDrainsCoalesce() throws Exception
+	{
+		JavaBridge.armTap(TAP_X, TAP_Y);
+		pump();
+		settleUntilPressed();
+
+		JavaBridge.onTapMove(TAP_X + 2, TAP_Y + 1);
+		JavaBridge.onTapMove(TAP_X + 5, TAP_Y + 3);
+		JavaBridge.onTapMove(TAP_X + 6, TAP_Y + 4);
+		pump();
+
+		final List<MouseEvent> drags = cap.allOf(MouseEvent.MOUSE_DRAGGED);
+		assertTrue("the travel must still reach the engine", !drags.isEmpty());
+		final MouseEvent last = drags.get(drags.size() - 1);
+		assertEquals("whatever was folded, the newest point must be the one that lands", TAP_X + 6, last.getX());
+		assertEquals("whatever was folded, the newest point must be the one that lands", TAP_Y + 4, last.getY());
+
+		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
+		pump();
+		assertEquals("and the release still closes on the real lift point, which is tracked per sample "
+			+ "rather than read back out of the queue", TAP_X + 6, cap.first(MouseEvent.MOUSE_RELEASED).getX());
 	}
 
 	/** The release closes where the finger actually left the glass, not back at the point it pressed on. */
