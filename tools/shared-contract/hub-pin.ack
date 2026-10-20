@@ -39,7 +39,8 @@
 # The hub's 404 for -SNAPSHOT is EXPECTED -- it is the whole reason the hub needs a RELEASE pin -- and says
 # nothing about api.base, which the client requests at the -SNAPSHOT path and which answers 200. So the hub
 # gets a pin and api.base stays on ${project.version}; one 404 does not implicate the other service.
-# This changes which plugin builds load on device and was NOT device-verified at the time of the bump --
-# confirm the hub still lists and installs plugins before shipping it to users.
+# This changes which plugin builds load on device, so it was held for a device check: VERIFIED 2026-10-20
+# on iPhone 17 Pro Max / iOS 27.2, debug build of 74b8444e66 -- hub catalog lists, a plugin installs and
+# enables, GPU renderer still boots (owner-confirmed on the handset, not an automated check). Clear to ship.
 reviewed_project_version=1.13.4
 pinned_hub_version=1.13.3
