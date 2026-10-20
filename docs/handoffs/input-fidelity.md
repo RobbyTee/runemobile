@@ -2,7 +2,7 @@
 
 **Status:** all four items landed, desktop-verified, **device-unverified**.
 **Commits:** `d54da5f6f9`, `7b2ef910ed` (item 1) · `455a634bf0` (keepalive) · `e32bae44c2` (item 3) ·
-`04193e7d01` (item 2) · `a48430708d` (item 4) · `f5908f7fc5` (coalescing).
+`04193e7d01` (item 2) · `a48430708d` (item 4) · `f5908f7fc5` (coalescing) · `c4aade89ab` (review).
 
 ## The problem this series fixed
 
@@ -41,20 +41,42 @@ never did — not approximations of real input, but fabrications with no referen
   "we never name a coordinate the finger was not at" property quietly stops being true.
 - **`DRAG_STREAM_LOCK`** serialises samples (native UI thread) against press/release/retire (client
   thread). It is what guarantees no drag is posted after the release that ended it.
+- **The viewport bound is a snapshot, not a live read.** `postPressOnly` reads the viewport rect on the
+  client thread when the press lands; `onTapMove` bounds every sample against that snapshot. Do not call
+  `inWorldViewport` from `onTapMove` — it runs on the native UI thread and must not read engine geometry
+  off-thread (same reason `textInputOpen` is a snapshot).
 - **`EventQueue` coalesces pending mouse-motion events.** A burst of samples posted faster than the EDT
   drains folds into one. This is intended — a desktop toolkit does the same — and nothing is lost, because
   `streamPoint` is written as each sample arrives rather than read back out of the queue.
-- **Key pacing chains, it does not pre-book.** `pumpKeys` schedules the next key's gap when the previous
-  one *actually went out*. The first cut pre-booked absolute slots and a cold scheduler ran three overdue
-  tasks back to back, collapsing them into one instant — the exact thing being fixed. Measuring from what
-  happened can only run late, and late is a slower typist.
-- **Modifier latches are not paced.** Sticky Shift/Ctrl/Alt are a held state a native toggle owns, not
-  keystrokes; there is no dwell to invent.
+- **Key pacing chains off EDT *delivery*, not off queueing.** `afterDelivery` books both the release and
+  the next key's gap from the moment the engine actually has the press. The first cut pre-booked absolute
+  slots (a cold scheduler ran three overdue tasks back to back, collapsing them into one instant); the
+  second timed from queueing (an EDT behind by more than the hold delivers press and release in one drain,
+  so the key is never observably down). A stalled EDT now stalls typing, which is the right direction.
+- **Modifier latches are not paced, but they do share the queue.** Sticky Shift/Ctrl/Alt are a held state a
+  native toggle owns — no dwell to invent, no release booked — but they go through `submitKey` so a latch
+  cannot overtake keys committed before it. Cost: a toggle flipped *during* a burst waits for it to drain;
+  with nothing in flight (the normal case) the pump runs it at once. With `pacing=false` the latch
+  dispatches immediately too, since queueing only the latch is the same bug upside down.
 - Kill switch: `-Drunelite.key.pacing=false` reverts to the back-to-back key shape.
+
+## Review reconciliation (`c4aade89ab`)
+
+An independent review found three gaps after the series landed. All three were real and all three are
+fixed; each has a test that fails with its fix reverted.
+
+1. **Viewport guard covered only the press point.** The *stated* harm (an invented item drag) is not
+   reachable — the engine binds a drag to the widget under the press, and the press is guarded — but the
+   invariant as documented was only true of the stream's first sample. Now bounded per sample.
+2. **The hold was timed from queueing, not delivery.** Cosmetic in exactly the conditions it was for.
+   Fixed; see the mechanics note above.
+3. **Latches bypassed the key queue.** Narrow in practice (`onText` passes no modifiers, `onKeybind` bakes
+   its mask into the event) but the ordering shouldn't be unspecified. Fixed.
 
 ## Gate status
 
-- `./gradlew :client:test` — **green** (full suite; `JavaBridge*` run 3× for flakes, clean).
+- `./gradlew :client:test` — **green** (full suite; `JavaBridge*` run 3× for flakes, clean, re-run
+  after the review fixes).
 - `./gradlew :client:compileJava` — green. Shared contract **576 entries, unchanged** (two additive
   entries baselined: `JavaBridge#onTapMove(int,int)`, `FLAG runelite.key.pacing`).
 - Android `:app:compileDebugKotlin` + `:app:externalNativeBuildDebug` — green.
