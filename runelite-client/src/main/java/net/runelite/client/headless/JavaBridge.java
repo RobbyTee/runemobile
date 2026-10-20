@@ -925,6 +925,12 @@ public final class JavaBridge
 	 */
 	private static void startLeftTap(Canvas canvas, ClientThread ct, Client c, int x, int y)
 	{
+		// Any tap the user actually made disarms a stale phantom suppression. Without this a retire could eat the
+		// NEXT real click: a menu-row tap takes the isMenuOpen() branch below, which posts its click directly and
+		// never reaches CLICKED, so the tapState test in onMenuOptionClicked does not cover it. Ordering is safe —
+		// the retired press was released before this ingress, so its own click has already resolved and been
+		// consumed by the time we get here; and a retire raised BELOW (beginAwait replacing an arm) re-arms after.
+		suppressClickFrames = 0;
 		diagGeometry(c, "L", x, y);
 		hideClickCross(c);
 		ensureTruthSubscribed();
@@ -1061,7 +1067,12 @@ public final class JavaBridge
 			// rate-limited rather than silently. tapTickImpl's leaf reads self-guard; this is the top-level
 			// backstop (the HeadlessSeams seam guard would also catch it, but resetting the state machine here
 			// is the cleaner recovery).
+			// A throw while ARMED would otherwise leave our press down indefinitely — the state says no tap is in
+			// flight, so nothing would close it until some later tap happened to retire it, and a held left button
+			// walks. Retire it first, then reset.
+			retireOutstandingPress(liveCanvas(), "tapTick threw");
 			tapState = TapState.IDLE;
+			tapUncommitted = false;
 			queuedTap = false;
 			BridgeFaults.note("JavaBridge.tapTick", t);
 		}

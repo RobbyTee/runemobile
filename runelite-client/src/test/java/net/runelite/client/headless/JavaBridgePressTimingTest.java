@@ -87,6 +87,10 @@ public class JavaBridgePressTimingTest
 	/** How long the simulated finger stays down. Comfortably above the gate's own settle cost. */
 	private static final long HOLD_MS = 80L;
 
+	private final java.util.concurrent.atomic.AtomicBoolean menuOpen =
+		new java.util.concurrent.atomic.AtomicBoolean();
+	private final java.util.concurrent.atomic.AtomicBoolean menuOpenThrows =
+		new java.util.concurrent.atomic.AtomicBoolean();
 	private Capture cap;
 	private Canvas canvas;
 	private Client client;
@@ -95,6 +99,8 @@ public class JavaBridgePressTimingTest
 	public void setUp() throws Exception
 	{
 		resetTapState();
+		menuOpen.set(false);
+		menuOpenThrows.set(false);
 		cap = new Capture();
 		Toolkit.getDefaultToolkit().getSystemEventQueue().push(cap);
 		canvas = new Canvas();
@@ -245,6 +251,55 @@ public class JavaBridgePressTimingTest
 		}
 	}
 
+	/**
+	 * A throw out of {@code tapTickImpl} while ARMED must not leave our press down. The handler resets the
+	 * state machine, which says no tap is in flight — so nothing else would ever close the press, and a held
+	 * left button walks the character. Retiring it in the catch is the only thing standing between an engine
+	 * read blowing up and a stuck button.
+	 */
+	@Test
+	public void aThrowWhileArmedRetiresTheOutstandingPress() throws Exception
+	{
+		JavaBridge.armTap(TAP_X, TAP_Y);
+		pump();
+		settleUntilPressed();
+		assertEquals("precondition: a press is down", 1, cap.count(MouseEvent.MOUSE_PRESSED));
+
+		menuOpenThrows.set(true);
+		JavaBridge.tapTick(client);
+		pump();
+
+		assertEquals("the throw must still release the press", 1, cap.count(MouseEvent.MOUSE_RELEASED));
+		assertEquals("and must not turn it into a click", 0, cap.count(MouseEvent.MOUSE_CLICKED));
+		assertFalse("no press may remain outstanding", pressOutstanding());
+	}
+
+	/**
+	 * The suppression must not eat a click the USER made. A menu-row tap takes the {@code isMenuOpen()} branch,
+	 * which posts its click directly and never reaches {@code CLICKED}, so the {@code tapState} test in
+	 * {@code onMenuOptionClicked} does not cover it — a tap ingress disarms a stale suppression instead. Worst
+	 * case on purpose: the retire's own phantom never materialised, so the suppression is still armed.
+	 */
+	@Test
+	public void aMenuRowClickAfterARetireIsNotConsumed() throws Exception
+	{
+		JavaBridge.armTap(TAP_X, TAP_Y);
+		pump();
+		settleUntilPressed();
+		JavaBridge.cancelArmedTap();
+		pump();
+		assertTrue("precondition: the retire armed the suppression", suppressFrames() > 0);
+
+		// The long-press menu is up and the user taps a row.
+		menuOpen.set(true);
+		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
+		pump();
+
+		final MenuOptionClicked rowSelect = new MenuOptionClicked(walkEntry());
+		invokeMenuOptionClicked(rowSelect);
+		assertFalse("a menu-row click the user made must survive", rowSelect.isConsumed());
+	}
+
 	// ---- harness ---------------------------------------------------------------------------------------
 
 	/** Drive the settle gate a frame at a time until it accepts and presses. Returns the ticks it took. */
@@ -281,7 +336,14 @@ public class JavaBridgePressTimingTest
 		final Client cl = mock(Client.class);
 		when(cl.getCanvas()).thenReturn(c);
 		when(cl.getGameState()).thenReturn(GameState.LOGGED_IN);
-		when(cl.isMenuOpen()).thenReturn(false);
+		when(cl.isMenuOpen()).thenAnswer(inv ->
+		{
+			if (menuOpenThrows.get())
+			{
+				throw new RuntimeException("engine read blew up");
+			}
+			return menuOpen.get();
+		});
 		when(cl.getMenu()).thenReturn(menu);
 		// The gate's other observable: the engine's own cursor, which it compares to the tap point. Reporting
 		// the tap point stands in for the EDT having folded our move.
@@ -355,6 +417,20 @@ public class JavaBridgePressTimingTest
 			}
 		}
 		throw new AssertionError("no " + type + "." + name);
+	}
+
+	private static boolean pressOutstanding() throws Exception
+	{
+		final Field f = JavaBridge.class.getDeclaredField("pressOutstanding");
+		f.setAccessible(true);
+		return (Boolean) f.get(null);
+	}
+
+	private static int suppressFrames() throws Exception
+	{
+		final Field f = JavaBridge.class.getDeclaredField("suppressClickFrames");
+		f.setAccessible(true);
+		return (Integer) f.get(null);
 	}
 
 	private static void set(String field, Object value) throws Exception
