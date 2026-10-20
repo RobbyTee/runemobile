@@ -498,6 +498,11 @@ public final class WorldSwitcherBridge
 			for (World w : worlds)
 			{
 				final EnumSet<WorldType> types = EnumSet.copyOf(w.getTypes());
+				// http-api 1.2.26 dropped World.getLocation() for a WorldRegion enum. getId() round-trips to the same
+				// int the host filters on (US 0 / UK 1 / AUS 3 / GER 7), so the wire format is unchanged. getRegion()
+				// is null for a world the enum does not know; -1 is already the host's "no region filter" sentinel
+				// (QuestWorldScreens.kt), so such a world lists under All and matches no specific region.
+				final int location = w.getRegion() == null ? -1 : w.getRegion().getId();
 				if (!first)
 				{
 					sb.append(',');
@@ -506,7 +511,7 @@ public final class WorldSwitcherBridge
 				sb.append('{')
 					.append("\"id\":").append(w.getId()).append(',')
 					.append("\"players\":").append(w.getPlayers()).append(',')
-					.append("\"location\":").append(w.getLocation()).append(',')
+					.append("\"location\":").append(location).append(',')
 					.append("\"favourite\":").append(isFavourite(w.getId(), fav1, fav2)).append(',')
 					.append("\"members\":").append(types.contains(WorldType.MEMBERS)).append(',')
 					.append("\"pvp\":").append(types.contains(WorldType.PVP)).append(',')
