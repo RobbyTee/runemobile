@@ -32,7 +32,13 @@
 # requests answers 200, so the pin is correct as-is. The hub pin is RETAINED at 1.13.1 for this merge.
 # Hub pin bumped 1.13.1 -> 1.13.3 later the same day, as its own step rather than folded into the merge.
 # By the rule in the 2026-10-15 entry it is the newest release this tree has MERGED, so its API is certainly
-# present in this 1.13.4-SNAPSHOT client; re-probed at the bump: 1.13.3 200 | 1.13.4 404 | 1.13.4-SNAPSHOT 404.
+# present in this 1.13.4-SNAPSHOT client. Re-probed at the bump -- these are TWO different services, so do
+# not read one service's codes against the other's:
+#   repo.runelite.net/plugins/manifest/<v>_full.js   1.13.3 200 | 1.13.4 404 | 1.13.4-SNAPSHOT 404
+#   api.runelite.net/runelite-<v>/pluginhub (POST)   1.13.3 200 | 1.13.4-SNAPSHOT 200
+# The hub's 404 for -SNAPSHOT is EXPECTED -- it is the whole reason the hub needs a RELEASE pin -- and says
+# nothing about api.base, which the client requests at the -SNAPSHOT path and which answers 200. So the hub
+# gets a pin and api.base stays on ${project.version}; one 404 does not implicate the other service.
 # This changes which plugin builds load on device and was NOT device-verified at the time of the bump --
 # confirm the hub still lists and installs plugins before shipping it to users.
 reviewed_project_version=1.13.4
