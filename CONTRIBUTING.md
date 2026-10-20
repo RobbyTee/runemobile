@@ -49,8 +49,14 @@ This sets `core.hooksPath` (per-clone, so run it once after cloning) and activat
   development scaffolding (evidence, audits, handoffs, …), and anything `gitleaks` flags. It also
   lints the staged files of each kind — `shellcheck` (shell), `ktlint` (Kotlin), `clang-format`
   (native, changed lines only) — each run only if that tool is installed.
+- **`commit-msg`** — with `pre-commit`, checks the message and the staged added lines against a
+  pattern list kept outside the repo (`~/.config/rune-mobile/attribution-denylist`, or
+  `$RUNEMOBILE_ATTRIBUTION_DENYLIST`). Without that file the check prints a notice and passes.
 
 Override a single commit with `git commit --no-verify` only when a flag is a known false positive.
+
+To reclaim disk, use `tools/clean-local.sh` (dry run by default) rather than `git clean -X`: the ignore
+rules also cover local-only files that cannot be regenerated, and `-X` deletes them too.
 
 ## Linting
 
