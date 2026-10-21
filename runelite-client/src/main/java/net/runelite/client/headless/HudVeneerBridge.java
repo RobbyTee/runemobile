@@ -45,6 +45,7 @@ import net.runelite.api.SpritePixels;
 import net.runelite.api.VarClientStr;
 import net.runelite.api.WidgetNode;
 import net.runelite.api.events.BeforeRender;
+import net.runelite.api.events.ScriptPostFired;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.gameval.VarbitID;
@@ -302,7 +303,7 @@ public final class HudVeneerBridge
 	// Collapse = shove the live chatbox this far below its anchor (off-canvas) instead of hiding it, so its
 	// history + selected channel survive and reopening is instant. Far enough to clear any stretched canvas.
 	private static final int CHAT_COLLAPSE_OFFSCREEN_DY = 3000;
-	private static final int ORIG_CHAT_CONTENT_H = 142;  // the natural message-area height (container 165 − CONTROLS 23)
+	static final int ORIG_CHAT_CONTENT_H = 142;  // the natural message-area height (container 165 − CONTROLS 23)
 
 	// Desktop off-device test harness: when -Drunelite.hudveneer.test=true, auto-apply the same chat veneer the
 	// native shell drives (relocate + enlarged-tab geometry) once logged in, so the headless capture renders the
@@ -686,7 +687,8 @@ public final class HudVeneerBridge
 	 * "chrome flash on item click" fix. The priority is well below {@code TabInterface}'s {@code -1} (which
 	 * rebuilds the tab stones on {@code BeforeRender}), so this re-hides them immediately after. Registered —
 	 * only when {@link #isEnabled()} — from {@link net.runelite.client.ui.HeadlessClientUI}; this replaces the
-	 * former direct call from {@code Hooks.frame()}, so that callback stays pure upstream.
+	 * former direct call from {@code Hooks.frame()}, so that callback stays pure upstream. It also notes each run of
+	 * the chatbox build script for {@link #sizeChatArea}.
 	 */
 	public static final class BeforeRenderListener
 	{
@@ -701,6 +703,15 @@ public final class HudVeneerBridge
 		public void onBeforeRender(BeforeRender event)
 		{
 			preRender(client);
+		}
+
+		@Subscribe
+		public void onScriptPostFired(ScriptPostFired event)
+		{
+			if (event.getScriptId() == ScriptID.BUILD_CHATBOX)
+			{
+				chatRebuilt = true;
+			}
 		}
 	}
 
@@ -3172,6 +3183,9 @@ public final class HudVeneerBridge
 	private static final Pin CHAT_PIN = new Pin("chat");
 	private static final Pin CONTROLS_PIN = new Pin("chat tabs");
 	private static final Pin CHATAREA_PIN = new Pin("chat area");
+	// The chatbox build script ran (a new message, a tab switch) since the chat area was last sized. It may have
+	// rebuilt the area's children, which the pin alone wouldn't re-lay, so the next sizing does. Client thread.
+	private static boolean chatRebuilt;
 	private static final Pin MAP_PIN = new Pin("minimap");
 	private static final Pin SIDE_PIN = new Pin("side panel");
 
@@ -3684,7 +3698,7 @@ public final class HudVeneerBridge
 	 *  height and keep CHATAREA at its full natural content height ({@code ORIG_CHAT_CONTENT_H}) below the tab row.
 	 *  The display/input/line children then keep their natural sizes and fit. Width is the native row width (the
 	 *  display children only need explicit widening when widened beyond the engine's default 519). */
-	private static void sizeChatArea(Client c, int containerId, int rowW, int rowH)
+	static void sizeChatArea(Client c, int containerId, int rowW, int rowH)
 	{
 		try
 		{
@@ -3729,11 +3743,14 @@ public final class HudVeneerBridge
 				area.setHeightMode(WidgetSizeMode.ABSOLUTE);
 				area.setOriginalHeight(ORIG_CHAT_CONTENT_H);
 			}
-			CHATAREA_PIN.apply(area, 0, CONTROLS_H, resized);
+			final boolean rebuilt = chatRebuilt;
+			chatRebuilt = false;
+			CHATAREA_PIN.apply(area, 0, CONTROLS_H, resized || rebuilt);
 			// Only when the row is WIDER than the engine default do the display/scroll children need explicit
 			// widening (they don't cascade); at the default 519 width they keep their natural, already-aligned
 			// size + position, and their natural height fits the full-height area — so leave them untouched.
-			if (resized && rowW > CHAT_DEFAULT_W)
+			// After a rebuild too: forceWidth writes only a width the rebuild reset.
+			if ((resized || rebuilt) && rowW > CHAT_DEFAULT_W)
 			{
 				forceWidth(c, InterfaceID.Chatbox.CHATDISPLAY, rowW - 14, 7);
 				forceWidth(c, InterfaceID.Chatbox.MES_LAYER, rowW - 14, 7);

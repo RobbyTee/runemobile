@@ -30,10 +30,13 @@ import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.HashTable;
 import net.runelite.api.MenuAction;
+import net.runelite.api.ScriptID;
 import net.runelite.api.WidgetNode;
+import net.runelite.api.events.ScriptPostFired;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
+import net.runelite.api.widgets.WidgetSizeMode;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
@@ -683,5 +686,26 @@ public class HudVeneerBridgeTest
 		assertTrue("home again when it closes", pin.apply(w, 93, 8, false));
 		assertTrue("a size change re-lays it in place", pin.apply(w, 93, 8, true));
 		verify(w, times(4)).revalidate();
+	}
+
+	@Test
+	public void aChatRebuildReLaysTheChatAreaOnce()
+	{
+		final Client c = mock(Client.class);
+		final Widget area = pinnable(new int[]{0, 0});
+		when(area.getWidthMode()).thenReturn(WidgetSizeMode.ABSOLUTE);
+		when(area.getOriginalWidth()).thenReturn(519);
+		when(area.getHeightMode()).thenReturn(WidgetSizeMode.ABSOLUTE);
+		when(area.getOriginalHeight()).thenReturn(HudVeneerBridge.ORIG_CHAT_CONTENT_H);
+		when(c.getWidget(InterfaceID.Chatbox.CHATAREA)).thenReturn(area);
+		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, 519, 40);
+		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, 519, 40);
+		verify(area, times(1)).revalidate();
+
+		// A new message or a tab switch runs the build script, which can rebuild the area's children in place.
+		new HudVeneerBridge.BeforeRenderListener(c).onScriptPostFired(new ScriptPostFired(ScriptID.BUILD_CHATBOX));
+		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, 519, 40);
+		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, 519, 40);
+		verify(area, times(2)).revalidate();
 	}
 }
