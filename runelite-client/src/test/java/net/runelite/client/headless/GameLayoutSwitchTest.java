@@ -191,6 +191,23 @@ public class GameLayoutSwitchTest
 	}
 
 	@Test
+	public void aRequestWhileAPressIsOutstandingWaitsForItInsteadOfPressingAgain()
+	{
+		final Client c = client(true, 0, GameLayoutSwitch.LAYOUT_SETTING_NAME, builtOptions());
+
+		GameLayoutSwitch.request(GameLayoutSwitch.MODERN);
+		GameLayoutSwitch.tick(c);
+		GameLayoutSwitch.request(GameLayoutSwitch.MODERN);   // a retry before the server has answered
+		GameLayoutSwitch.tick(c);
+		// The server answers the first press; the waiting retry then finds the layout already switched.
+		when(c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT)).thenReturn(1);
+		GameLayoutSwitch.tick(c);
+		GameLayoutSwitch.tick(c);
+
+		verify(c).menuAction(3, BUTTONS, MenuAction.CC_OP, 1, -1, "Select", "Resizable - Modern layout");
+	}
+
+	@Test
 	public void fixedIsNeitherResizableLayout()
 	{
 		// Fixed - Classic reads arrangement 0 like Resizable - Classic, but a switch away from it must still run.

@@ -105,7 +105,9 @@ final class GameLayoutSwitch
 	static void tick(Client c)
 	{
 		final String label = requested;
-		if (label != null)
+		// One press in flight at a time: a request made while one is outstanding (a retry right at the shell's own
+		// timeout) waits for it to land or time out, then finds the layout already switched or presses again.
+		if (label != null && awaiting == null)
 		{
 			requested = null;
 			if (isShowing(c, label))
