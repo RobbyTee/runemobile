@@ -4,6 +4,7 @@
 Run: /usr/bin/python3 -m unittest discover -s tools/mcp -p 'test_*.py'
 """
 
+import re
 import subprocess
 import sys
 import tempfile
@@ -323,6 +324,95 @@ class FpsMeasure(unittest.TestCase):
             {k: kinds.count(k) for k in set(kinds)}, {"fps": 5, "frame": 5, "gpu": 5, "gpuempty": 1, "govern": 2}
         )
         self.assertIn("fixture,gpu,3,46,13.50,17.00,,120.00,LOGGED_IN,46,1", rows)
+
+
+# The frame-pacing lines FrameStats, -Xlog:gc,safepoint and the native present probe print, as logcat shows them.
+_JVM = "I/jvm-stdout(28833):"
+PACING_LOGCAT = "\n".join(
+    [
+        f"10-20 17:00:00.500 {_RLAWT} [presentprobe] presents=30 gapMaxMs=40.00 swapAvgMs=2.00 swapMaxMs=9.00",
+        f"10-20 17:00:01.000 {_HOOKS} [fpsprobe] fps=58 gs=LOGGED_IN",
+        f"10-20 17:00:01.000 {_HOOKS} [framebins] dt=44:50,60:1 jit=20:49,55:1 max=105.00 jitMax=88.00 gcN=1 gcMs=12 heapMB=180/256 gs=LOGGED_IN",
+        f"10-20 17:00:01.100 {_JVM} [2026-10-20T17:00:01.100-0700][12.345s][gc] GC(7) Pause Young (Normal) (G1 Evacuation Pause) 120M->60M(256M) 11.500ms",
+        f"10-20 17:00:01.100 {_JVM} [2026-10-20T17:00:01.100-0700][12.346s][safepoint] Safepoint \"G1CollectForAllocation\", Time since last: 900000000 ns, Reaching safepoint: 2000 ns, Cleanup: 3000 ns, At safepoint: 11795000 ns, Leaving safepoint: 2000 ns, Total: 11800000 ns",
+        f"10-20 17:00:01.200 {_JVM} [2026-10-20T17:00:01.200-0700][12.400s][gc       ] GC(8) Concurrent Mark Cycle 30.000ms",
+        f"10-20 17:00:01.500 {_RLAWT} [presentprobe] presents=57 gapMaxMs=105.00 swapAvgMs=1.50 swapMaxMs=6.00",
+        f"10-20 17:00:02.000 {_HOOKS} [framebins] dt=44:58 jit=20:57 max=17.70 jitMax=1.10 gcN=0 gcMs=0 heapMB=190/256 gs=LOGGED_IN",
+        f"10-20 17:00:02.300 {_JVM} [2026-10-20T17:00:02.300-0700][13.500s][safepoint ] Safepoint \"Cleanup\", Time since last: 1000000000 ns, Reaching safepoint: 1000 ns, Cleanup: 1000 ns, At safepoint: 197000 ns, Leaving safepoint: 1000 ns, Total: 200000 ns",
+        f"10-20 17:00:02.500 {_RLAWT} [presentprobe] presents=58 gapMaxMs=18.00 swapAvgMs=1.20 swapMaxMs=3.00",
+        f"10-20 17:00:03.000 {_HOOKS} [framehist] n=2950 p50=17.78 p95=19.95 p99=35.48 p999=112.20 max=140.00 jit50=1.00 jit95=2.82 jit99=17.78 pauses=1 gcN=12 gcMs=95 up=60s scope=LOGGED_IN",
+    ]
+) + "\n"
+
+TESTDATA = Path(__file__).resolve().parent / "testdata"
+
+
+def run_fps_measure(text, label="fixture"):
+    script = hs.REPO_ROOT / "android/dev-tools/gpu/fps-measure.sh"
+    with tempfile.TemporaryDirectory() as td:
+        log, csv = Path(td, "logcat.txt"), Path(td, "out.csv")
+        log.write_text(text)
+        p = subprocess.run(
+            ["bash", str(script), "--from-file", str(log), "-o", str(csv), label],
+            capture_output=True, text=True, timeout=60,
+        )
+        rows = csv.read_text().splitlines() if csv.exists() else []
+    return p, rows
+
+
+class Pacing(unittest.TestCase):
+    def test_capture_percentiles_match_the_java_session(self):
+        """testdata/framestats.log is real FrameStats output (12 s of synthetic frames, the first 2 s LOGIN_SCREEN,
+        LCG jitter, every 97th frame doubled, one 120 ms hitch). Cut at the [framehist] line, the capture holds
+        exactly the seconds that line summarises, so the script's bucket decode must reproduce the Java one."""
+        lines = (TESTDATA / "framestats.log").read_text().splitlines()
+        cut = next(i for i, ln in enumerate(lines) if "[framehist]" in ln)
+        hist_line = lines[cut]
+        head = "\n".join(lines[:cut]) + "\n"
+        p, _ = run_fps_measure(head)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        pacing = hs.parse_fps_measure(p.stdout)["pacingMs"]
+        java = dict((k, hs._num(v)) for k, v in re.findall(r"(\w+)=([\d.]+)", hist_line))
+        self.assertEqual(pacing["frames"], java["n"])
+        for k in ("p50", "p95", "p99", "p999", "max", "jit50", "jit95", "jit99"):
+            self.assertEqual(pacing[k], java[k], k)
+        # LOGIN_SCREEN seconds are in the log but in neither summary
+        self.assertIn("gs=LOGIN_SCREEN", head)
+
+    def test_gc_present_and_session(self):
+        p, rows = run_fps_measure(PACING_LOGCAT)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        r = hs.parse_fps_measure(p.stdout + "\n" + p.stderr)
+        # 44:108 + 60:1 -> the 109th frame is the slow one; its 112.2 edge is capped at the 105 max
+        self.assertEqual(
+            r["pacingMs"],
+            {"windows": 2, "frames": 109, "p50": 17.78, "p95": 17.78, "p99": 17.78, "p999": 105.0, "max": 105.0,
+             "jit50": 1.12, "jit95": 1.12, "jit99": 1.12},
+        )
+        # a concurrent cycle is not a pause; both safepoint tag paddings count
+        self.assertEqual(
+            r["gc"],
+            {"gcN": 1, "gcMs": 12, "heapMaxMB": 190, "pauses": 1, "pauseMs": 11.5, "pauseMax": 11.5,
+             "safepoints": 2, "safepointMs": 12.0, "safepointMax": 11.8},
+        )
+        # the first present window predates any Hooks line; swapAvg is present-weighted: 155.1 / 115
+        self.assertEqual(
+            r["present"],
+            {"windows": 2, "presents": 115, "perSec": 57.5, "gapMax": 105.0, "swapAvg": 1.35, "swapMax": 6.0,
+             "excludedUntagged": 1, "excludedOtherState": 0},
+        )
+        self.assertEqual(r["session"]["n"], 2950)
+        self.assertEqual(r["session"]["upSeconds"], 60)
+        self.assertEqual(r["session"]["p999"], 112.2)
+        self.assertTrue(all(len(row.split(",")) == 11 for row in rows))
+        self.assertIn("fixture,framebins,0,1,12,180,105.00,88.00,LOGGED_IN,44:50;60:1,20:49;55:1", rows)
+        self.assertIn("fixture,present,0,30,40.00,2.00,,9.00,,,", rows)
+        self.assertIn("fixture,gcpause,0,11.500,,,,,LOGGED_IN,,", rows)
+        self.assertIn("fixture,safepoint,1,200000,,,,,LOGGED_IN,,", rows)
+
+    def test_old_builds_without_framebins_still_parse(self):
+        r = hs.parse_fps_measure(FPS_LIVE_OUT)
+        self.assertEqual((r["pacingMs"], r["gc"], r["present"], r["session"]), ({}, {}, {}, {}))
 
 
 if __name__ == "__main__":

@@ -296,14 +296,20 @@ def parse_fps_measure(text):
          LABEL  gpu    windows=3   frames=149   min=11.00  avg=14.51  max=120.00  (ms GPU)  disjoint=94  hitch=1  empty=1  (excluded: 1 untagged, 1 other-state)
          LABEL  thermal samples=6    hottest=42.5..47.5C  status=1->2 (max 2)
          LABEL  govern changes=1  scale=85  minScale=85  baseline=100
+         LABEL  pacing windows=8   frames=472    p50=17.78  p95=19.95  p99=35.48  p999=120.00  max=120.00  jit50=1.00 ...
+         LABEL  gc     gcN=3  gcMs=41  heapMaxMB=212  pauses=3  pauseMs=40.50  pauseMax=30.00  safepoints=4 ...
+         LABEL  present windows=3   presents=170    perSec=56.7  gapMax=48.00  swapAvg=1.60  swapMax=9.00  (ms)
+         LABEL  session n=2950  p50=17.78  ...  pauses=0  gcN=12  gcMs=95  up=60s  (ms, since first frame)
     a 'fps:   no LOGGED_IN ...' line instead when a family saw only other states (kept under 'missing'), the
     '>> thermal[start]: hottest=84.0C status=1' samples, and '!! ...' warnings. frame p95 is reported as 'p95'
-    but is the script's p95~: the mean of the per-second p95s, not a percentile of the whole capture."""
+    but is the script's p95~: the mean of the per-second p95s, not a percentile of the whole capture. pacing
+    is the real one: percentiles of the summed [framebins] buckets over the capture's LOGGED_IN seconds."""
     out = {"fps": {}, "frameMs": {}, "gpuMs": {}, "thermalRows": {}, "governor": {}, "thermal": {},
-           "warnings": [], "missing": []}
-    keys = {"fps": "fps", "frame": "frameMs", "gpu": "gpuMs", "thermal": "thermalRows", "govern": "governor"}
+           "pacingMs": {}, "gc": {}, "present": {}, "session": {}, "warnings": [], "missing": []}
+    keys = {"fps": "fps", "frame": "frameMs", "gpu": "gpuMs", "thermal": "thermalRows", "govern": "governor",
+            "pacing": "pacingMs", "gc": "gc", "present": "present", "session": "session"}
     for ln in text.splitlines():
-        m = re.match(r"^\S+\s+(fps|frame|gpu|thermal|govern)\s+(.*)$", ln)
+        m = re.match(r"^\S+\s+(fps|frame|gpu|thermal|govern|pacing|gc|present|session)\s+(.*)$", ln)
         if m:
             kind, rest = m.groups()
             d = out[keys[kind]]
@@ -322,8 +328,10 @@ def parse_fps_measure(text):
                 mx = re.search(r"\(max (\S+)\)", rest)
                 if mx:
                     d["statusMax"] = _num(mx.group(1))
+            if kind == "session" and isinstance(d.get("up"), str) and d["up"].endswith("s"):
+                d["upSeconds"] = _num(d.pop("up")[:-1])
             continue
-        m = re.match(r"^(fps|frame|gpu):\s+(no .*)$", ln)
+        m = re.match(r"^(fps|frame|gpu|pacing|present):\s+(no .*)$", ln)
         if m:
             out["missing"].append(ln.strip())
             continue
@@ -703,14 +711,18 @@ def tool_android_fps(a):
             "thermal": parsed["thermal"],
             "thermalRows": parsed["thermalRows"],
             "governor": parsed["governor"],
+            "pacingMs": parsed["pacingMs"],
+            "gc": parsed["gc"],
+            "present": parsed["present"],
+            "session": parsed["session"],
             # a ThermalGovernor scale change splits the capture into two workloads
             "abClean": not governor_moved,
             "warnings": parsed["warnings"],
             "missing": parsed["missing"],
             "logTail": combined.strip().splitlines()[-15:],
-            "hint": "Flip a preset with android_set_hd_config between two android_fps runs; compare frameMs.avg/p95 "
-            "(not fps) for a trustworthy A/B, and only between runs with abClean true. frameMs.p95 is the mean of "
-            "per-second p95s.",
+            "hint": "Flip a preset with android_set_hd_config between two android_fps runs; compare pacingMs "
+            "p95/p99 and jit95 (real capture percentiles, from [framebins]) and frameMs.avg, not fps, and only "
+            "between runs with abClean true. frameMs.p95 is the mean of per-second p95s; session is since the first frame.",
         }
     )
 
@@ -970,7 +982,8 @@ TOOLS = {
     ),
     "android_fps": (
         "Run the fps-measure harness for N seconds against a connected device; returns LOGGED_IN fps, "
-        "frame-time and (with debug.routec.gputime=1) GPU-time stats, per-second thermal, and any "
+        "frame-time, capture pacing percentiles + jitter (pacingMs), GC, present cadence, the since-boot "
+        "session line, (with debug.routec.gputime=1) GPU-time stats, per-second thermal, and any "
         "ThermalGovernor scale change (abClean=false). Pair two runs around android_set_hd_config for an A/B.",
         {
             "type": "object",

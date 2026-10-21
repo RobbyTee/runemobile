@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # FIX-13 / Phase-0 fps + frame-time measurement harness.
 #
-# Reads two once/sec engine probes that Hooks.frame emits in 117HD test mode
-# (enabled by -Drunelite.fpsprobe=true):
+# Reads the once/sec engine probes Hooks.frame emits while the perf probe is armed
+# (-Drunelite.fpsprobe=true: a debug build, or the perfprobe marker on either port):
 #   [fpsprobe]   fps=N gs=STATE                              -- smoothed engine fps
 #   [frameprobe] n=N min=.. avg=.. p95=.. max=.. gs=STATE    -- per-frame interval (ms), windowed/sec
-# the native GPU-time probe (librlawt, only with debug.routec.gputime=1):
+#   [framebins]  dt=I:C,.. jit=I:C,.. max=.. jitMax=.. gcN=N gcMs=N heapMB=U/C gs=STATE
+#   [framehist]  n=N p50=.. p95=.. p99=.. p999=.. ... scope=LOGGED_IN   -- every 10 s, since the first frame
+# (headless.FrameStats), the native present probe (same switch; both ports, GPU/117HD direct present):
+#   [presentprobe] presents=N gapMaxMs=.. swapAvgMs=.. swapMaxMs=..
+# the JVM's own -Xlog:gc,safepoint lines (same switch), the native GPU-time probe (librlawt, only with
+# debug.routec.gputime=1):
 #   [gpuprobe]   frames=N avg=.. min=.. max=.. ms disjoint=N hitch=N
 # and ThermalGovernor's 117HD load changes (MainActivity tag):
 #   thermal status=S -> sceneResolutionScale PREV->NEW (baseline=B)
@@ -28,9 +33,14 @@
 #
 # Notes:
 #   - macOS has no `timeout`; live capture backgrounds `adb logcat` and kills it after -d seconds.
-#   - Only LOGGED_IN samples are counted toward the stats (login-screen frames are excluded). [gpuprobe] and
-#     the governor carry no game state, so each takes the gs of the last Hooks probe line before it; a window
-#     logged before the first Hooks line is untagged and excluded (the summary says how many).
+#   - Only LOGGED_IN samples are counted toward the stats (login-screen frames are excluded). [gpuprobe],
+#     [presentprobe], -Xlog and the governor carry no game state, so each takes the gs of the last Hooks probe
+#     line before it; a window logged before the first Hooks line is untagged and excluded.
+#   - `pacing` percentiles come from summing the [framebins] buckets of every LOGGED_IN second in the capture:
+#     bucket i is [0.1 ms * 10^(i/20), 0.1 ms * 10^((i+1)/20)), and a percentile reads its bucket's upper edge
+#     capped at the exact max (FrameStats.java). Unlike the frame line's p95~ it is a real capture percentile.
+#     `session` is the last [framehist] seen: since the client's first frame, not this capture.
+#   - The device log can be a pulled iOS jvm-stdio.log (ios_pull_logs): the Java and -Xlog lines are the same.
 #   - gpu disjoint = frames whose timer-query drain saw GL_GPU_DISJOINT (Mali DVFS raises it under load): the
 #     absolute GPU ms then carry a caveat, a relative A/B still holds. hitch = kept results over 100 ms.
 #   - Thermal (dumpsys thermalservice) is sampled at the start and end of the adb window, and every -t seconds
@@ -44,6 +54,10 @@
 #       gpuempty  (a window with no usable GPU-time)          gs
 #       thermal   a=elapsed s b=hottest C c=status
 #       govern    a=status b=prev scale c=new scale d=baseline e=log time   gs
+#       framebins a=gcN b=gcMs c=heap used MB d=max e=jitMax       gs  f=dt bins g=jit bins (I:C;I:C)
+#       present   a=presents b=gapMaxMs c=swapAvgMs e=swapMaxMs     gs
+#       gcpause   a=pause ms (-Xlog GC Pause)                      gs
+#       safepoint a=total ns (-Xlog Safepoint)                     gs
 set -euo pipefail
 
 SERIAL=""
@@ -156,6 +170,20 @@ records="$(printf '%s\n' "$raw" | awk '
     print "gpu", kv(s, "frames"), kv(s, "avg"), kv(s, "min"), kv(s, "max"), kv(s, "disjoint"), kv(s, "hitch"), tag(); next
   }
   /\[gpuprobe\] no usable GPU-time this window/ { print "gpuempty", tag(); next }
+  match($0, /\[framebins\] dt=[-0-9:,]+ jit=[-0-9:,]+ max=[0-9.]+ jitMax=[0-9.]+ gcN=-?[0-9]+ gcMs=-?[0-9]+ heapMB=[0-9]+\/[0-9]+ gs=[A-Z_]+/) {
+    s = substr($0, RSTART, RLENGTH); gs = kv(s, "gs"); h = kv(s, "heapMB"); sub(/\/.*/, "", h)
+    print "bins", kv(s, "dt"), kv(s, "jit"), kv(s, "max"), kv(s, "jitMax"), kv(s, "gcN"), kv(s, "gcMs"), h, gs; next
+  }
+  match($0, /\[framehist\] n=[0-9]+ p50=.* up=[0-9]+s scope=[A-Z_]+/) {
+    s = substr($0, RSTART, RLENGTH)
+    print "hist", kv(s, "n"), kv(s, "p50"), kv(s, "p95"), kv(s, "p99"), kv(s, "p999"), kv(s, "max"), kv(s, "jit50"), kv(s, "jit95"), kv(s, "jit99"), kv(s, "pauses"), kv(s, "gcN"), kv(s, "gcMs"), kv(s, "up"); next
+  }
+  match($0, /\[presentprobe\] presents=[0-9]+ gapMaxMs=[0-9.]+ swapAvgMs=[0-9.]+ swapMaxMs=[0-9.]+/) {
+    s = substr($0, RSTART, RLENGTH)
+    print "present", kv(s, "presents"), kv(s, "gapMaxMs"), kv(s, "swapAvgMs"), kv(s, "swapMaxMs"), tag(); next
+  }
+  /\[gc *\] GC\([0-9]+\) Pause / && $NF ~ /^[0-9.]+ms$/ { v = $NF; sub(/ms$/, "", v); print "gcpause", v, tag(); next }
+  /\[safepoint *\] Safepoint "/ && match($0, /Total: [0-9]+ ns/) { print "safepoint", substr($0, RSTART + 7, RLENGTH - 10), tag(); next }
   match($0, /thermal status=-?[0-9]+ -> sceneResolutionScale -?[0-9]+->[0-9]+ \(baseline=[0-9]+\)/) {
     s = substr($0, RSTART, RLENGTH); split(s, w, " "); split(w[5], sc, "->")
     b = s; sub(/.*baseline=/, "", b); sub(/\).*/, "", b)
@@ -173,9 +201,13 @@ gpu="$(printf '%s\n' "$records" | awk '$1=="gpu" { print $2, $3, $4, $5, $6, $7,
 gpuempty="$(printf '%s\n' "$records" | awk '$1=="gpuempty" { print $2 }')"
 govern="$(printf '%s\n' "$records" | awk '$1=="govern" { print $2, $3, $4, $5, $6, $7 }')"
 govleak="$(printf '%s\n' "$records" | awk '$1=="govleak" { print $2, $3 }')"
+bins="$(printf '%s\n' "$records" | awk '$1=="bins" { print $2, $3, $4, $5, $6, $7, $8, $9 }')"
+hist="$(printf '%s\n' "$records" | awk '$1=="hist"' | tail -1)"
+present="$(printf '%s\n' "$records" | awk '$1=="present" { print $2, $3, $4, $5, $6 }')"
+xlog="$(printf '%s\n' "$records" | awk '$1=="gcpause" || $1=="safepoint"')"
 
-if [[ -z "$samples" && -z "$frames" && -z "$gpu" && -z "$gpuempty" ]]; then
-  echo "no [fpsprobe]/[frameprobe]/[gpuprobe] samples found. Is fpsprobe on (-Drunelite.fpsprobe / 117HD test mode) and the scene rendering?" >&2
+if [[ -z "$samples" && -z "$frames" && -z "$gpu" && -z "$gpuempty" && -z "$bins" ]]; then
+  echo "no [fpsprobe]/[frameprobe]/[framebins]/[gpuprobe] samples found. Is the perf probe armed (-Drunelite.fpsprobe: debug build or perfprobe marker) and the scene rendering?" >&2
   exit 2
 fi
 
@@ -189,7 +221,12 @@ if [[ -n "$OUT" ]]; then
       $1=="frame"    { print L ",frame," nr++ "," $2 "," $3 "," $4 "," $5 "," $6 "," $7 ",," }
       $1=="gpu"      { print L ",gpu," ng++ "," $2 "," $4 "," $3 ",," $5 "," v($8) "," v($6) "," v($7) }
       $1=="gpuempty" { print L ",gpuempty," ne++ ",,,,,," v($2) ",," }
-      $1=="govern"   { print L ",govern," nv++ "," $2 "," $3 "," $4 "," $5 "," v($6) "," v($7) ",," }'
+      $1=="govern"   { print L ",govern," nv++ "," $2 "," $3 "," $4 "," $5 "," v($6) "," v($7) ",," }
+      $1=="bins"     { d = $2; j = $3; gsub(/,/, ";", d); gsub(/,/, ";", j)
+                       print L ",framebins," nb++ "," $6 "," $7 "," $8 "," $4 "," $5 "," $9 "," v(d) "," v(j) }
+      $1=="present"  { print L ",present," np++ "," $2 "," $3 "," $4 ",," $5 "," v($6) ",," }
+      $1=="gcpause"  { print L ",gcpause," nc++ "," $2 ",,,,," v($3) ",," }
+      $1=="safepoint" { print L ",safepoint," ns++ "," $2 ",,,,," v($3) ",," }'
     printf '%s\n' "$thermal_rows" | awk -v L="$LABEL" '
       function v(x) { return x == "n/a" ? "" : x }
       NF==3 { print L ",thermal," n++ "," $1 "," v($2) "," v($3) ",,,,," }'
@@ -222,6 +259,73 @@ if [[ -n "$frames" ]]; then
       printf "%-10s  frame  windows=%-3d frames=%-4d  min=%.2f  avg=%.2f  p95~=%.2f  max=%.2f  (ms)\n", \
         label, w, frames, mn, wavg/frames, p95sum/w, mx
     }'
+fi
+
+# Capture-window pacing over LOGGED_IN seconds: sum the [framebins] buckets, then read percentiles off them.
+if [[ -n "$bins" ]]; then
+  pacing="$(printf '%s\n' "$bins" | awk -v label="$LABEL" '
+    function up(x) { return (x == int(x)) ? x : int(x) + 1 }
+    function edge(i) { return 0.1 * exp(log(10) * (i + 1) / 20) }
+    function pct(h, n, p, mx,   r, c, i) {
+      if (n == 0) return 0
+      r = up(p * n); if (r < 1) r = 1
+      for (i = 0; i <= 80; i++) { c += h[i]; if (c >= r) return (i == 80 || edge(i) > mx) ? mx : edge(i) }
+      return mx
+    }
+    function add(str, h,   k, a, b, j, t) {
+      k = split(str, a, ","); t = 0
+      for (j = 1; j <= k; j++) { split(a[j], b, ":"); if (b[2] != "") { h[b[1] + 0] += b[2]; t += b[2] } }
+      return t
+    }
+    $8=="LOGGED_IN" {
+      w++; ndt += add($1, dt); njit += add($2, jit)
+      if ($3 + 0 > mx) mx = $3 + 0; if ($4 + 0 > jmx) jmx = $4 + 0
+      if ($5 >= 0) { gcn += $5; gcms += $6; gcw++ }
+      if ($7 + 0 > heap) heap = $7 + 0
+    }
+    END {
+      if (w == 0) { print "pacing: no LOGGED_IN [framebins] windows"; exit }
+      printf "%-10s  pacing windows=%-3d frames=%-5d  p50=%.2f  p95=%.2f  p99=%.2f  p999=%.2f  max=%.2f  jit50=%.2f  jit95=%.2f  jit99=%.2f  (ms, bucket upper edges)\n", \
+        label, w, ndt, pct(dt, ndt, 0.50, mx), pct(dt, ndt, 0.95, mx), pct(dt, ndt, 0.99, mx), pct(dt, ndt, 0.999, mx), mx, \
+        pct(jit, njit, 0.50, jmx), pct(jit, njit, 0.95, jmx), pct(jit, njit, 0.99, jmx)
+      printf "gcwin %d %d %d %d\n", gcw, gcn, gcms, heap
+    }')"
+  printf '%s\n' "$pacing" | grep -v '^gcwin ' || true
+  gcwin="$(printf '%s\n' "$pacing" | grep '^gcwin ' || true)"
+  # GC over the same LOGGED_IN seconds (MXBean deltas from [framebins]) + per-pause detail when -Xlog is armed.
+  if [[ -n "$gcwin" ]]; then
+    { echo "$gcwin"; printf '%s\n' "$xlog"; } | awk -v label="$LABEL" '
+      $1=="gcwin" { gcw = $2; gcn = $3; gcms = $4; heap = $5; next }
+      $1=="gcpause" { xl = 1; if ($3=="LOGGED_IN") { pn++; ps += $2; if ($2 + 0 > pm) pm = $2 + 0 } next }
+      $1=="safepoint" { xl = 1; if ($3=="LOGGED_IN") { sn++; ss += $2 / 1e6; if ($2 / 1e6 > sm) sm = $2 / 1e6 } next }
+      END {
+        if (gcw == 0) mx = "gcN=n/a  gcMs=n/a"; else mx = sprintf("gcN=%d  gcMs=%d", gcn, gcms)
+        if (xl) xs = sprintf("pauses=%d  pauseMs=%.2f  pauseMax=%.2f  safepoints=%d  safepointMs=%.2f  safepointMax=%.2f", pn, ps, pm, sn, ss, sm)
+        else xs = "pauses=n/a  (no -Xlog:gc lines)"
+        printf "%-10s  gc     %s  heapMaxMB=%d  %s\n", label, mx, heap, xs
+      }'
+  fi
+fi
+
+# Present cadence over LOGGED_IN windows ([presentprobe], the GPU/117HD direct present on either port).
+if [[ -n "$present" ]]; then
+  printf '%s\n' "$present" | awk -v label="$LABEL" '
+    $5=="LOGGED_IN" { w++; n += $1; sw += $1 * $3; if ($2 + 0 > gap) gap = $2 + 0; if ($4 + 0 > smx) smx = $4 + 0; next }
+    $5=="-" { untagged++; next }
+    { other++ }
+    END {
+      skipped = (untagged || other) ? sprintf("  (excluded: %d untagged, %d other-state)", untagged, other) : ""
+      if (w == 0) { printf "present: no LOGGED_IN windows%s\n", skipped; exit }
+      printf "%-10s  present windows=%-3d presents=%-5d  perSec=%.1f  gapMax=%.2f  swapAvg=%.2f  swapMax=%.2f  (ms)%s\n", \
+        label, w, n, n / w, gap, n ? sw / n : 0, smx, skipped
+    }'
+fi
+
+# The last session summary in the log (since the first frame, LOGGED_IN seconds; not limited to this capture).
+if [[ -n "$hist" ]]; then
+  printf '%s\n' "$hist" | awk -v label="$LABEL" '{
+    printf "%-10s  session n=%d  p50=%s  p95=%s  p99=%s  p999=%s  max=%s  jit50=%s  jit95=%s  jit99=%s  pauses=%s  gcN=%s  gcMs=%s  up=%s  (ms, since first frame)\n", \
+      label, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14 }'
 fi
 
 # GPU-time stats over LOGGED_IN windows (frame-weighted avg, min-of-min, max-of-max, summed disjoint/hitch). Only
