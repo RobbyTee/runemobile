@@ -25,6 +25,7 @@
 package net.runelite.client.headless;
 
 import java.awt.Rectangle;
+import java.util.Arrays;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
@@ -112,6 +113,20 @@ public final class MobileChromeBridge
 		}
 	}
 
+	// The build reads ~20 widget bounds and rebuilds the whole JSON every frame, and on almost every frame nothing in
+	// it moved. The state a tap or a tab switch changes (root, top level, active tab, resized, and the three rect
+	// arrays JavaBridge snapshots) is cheap to read, so a change there rebuilds at once. The widget bounds themselves
+	// move only with a layout change, so they refresh at most every BOUNDS_REFRESH_MS. lastBuild = 0 forces a build.
+	private static final long BOUNDS_REFRESH_MS = 100;
+	private static long lastBuild;
+	private static Root builtRoot;
+	private static int builtTopLevel;
+	private static int builtTab;
+	private static boolean builtResized;
+	private static int[] builtInv;
+	private static int[] builtPanes;
+	private static int[] builtScrollRects;
+
 	// FATAL-1: the engine-fatal code (js5connect / js5io / crash / other) noted from RSAppletStub.onError.
 	// onError runs on the Swing EDT, off the client thread, so this is a plain volatile handoff — the next
 	// tick() folds it into the snapshot; never publish directly from the noting thread. A fatal stop is
@@ -192,6 +207,7 @@ public final class MobileChromeBridge
 		final boolean loggedIn = state == GameState.LOGGED_IN;
 		if (!loggedIn)
 		{
+			lastBuild = 0; // build on the first logged-in frame
 			// FIX-9: while the auto-reconnect machine is recovering an in-session drop, flag it so the native shell
 			// can show a "Reconnecting…" overlay over the engine's brief transient login screens. The reconnect
 			// string is byte-for-byte unchanged.
@@ -217,8 +233,30 @@ public final class MobileChromeBridge
 		final Root root = resolveRoot(c, resized);
 		final int topLevel = safeTopLevel(c);
 		final int activeTab = safeVarc(c, VarClientID.TOPLEVEL_PANEL);
-
 		final int[] stones = stonesFor(root);
+		// FIX-4 / DRAG-1b / DRAG-2: the inventory, reorder-pane and scrollable rects JavaBridge snapshots each tapTick.
+		final int[] inv = JavaBridge.getInventoryBounds();
+		final int[] panes = JavaBridge.getReorderPaneBounds();
+		final int[] scrollRects = JavaBridge.getScrollableRects();
+		loggedInFrames++;
+
+		final long now = System.currentTimeMillis();
+		if (root == builtRoot && topLevel == builtTopLevel && activeTab == builtTab && resized == builtResized
+			&& Arrays.equals(inv, builtInv) && Arrays.equals(panes, builtPanes)
+			&& Arrays.equals(scrollRects, builtScrollRects) && now - lastBuild <= BOUNDS_REFRESH_MS)
+		{
+			noteVerdict(c, root, topLevel, resized, activeTab, stones);
+			return;
+		}
+		lastBuild = now;
+		builtRoot = root;
+		builtTopLevel = topLevel;
+		builtTab = activeTab;
+		builtResized = resized;
+		builtInv = inv;
+		builtPanes = panes;
+		builtScrollRects = scrollRects;
+
 		final int minimapId = idMinimap(root);
 		final int mapContainerId = idMapContainer(root);
 		final int orbsId = idOrbs(root);
@@ -273,13 +311,11 @@ public final class MobileChromeBridge
 		// FIX-4: the inventory item-grid bounds (canvas px) so the native shell can hit-test a drag's start
 		// point on the UI thread (where it can't call into the JVM) and route it as an item-drag. Snapshotted
 		// each tapTick by JavaBridge.snapshotInventoryBounds; null when the inventory tab isn't showing.
-		final int[] inv = JavaBridge.getInventoryBounds();
 		sb.append(",\"inv\":");
 		appendBounds(sb, (inv != null && inv.length == 4 && inv[2] > 0 && inv[3] > 0) ? inv : null);
 		// DRAG-1b: the engine drag-to-reorder pane bounds (Prayer/Spellbook/Bank), packed [x,y,w,h] per pane, so
 		// the native shell can route a one-finger drag starting inside one as a reorder (onTouch) not a camera pan.
 		// Snapshotted each tapTick by JavaBridge.snapshotReorderPaneBounds; empty array when none is on-screen.
-		final int[] panes = JavaBridge.getReorderPaneBounds();
 		sb.append(",\"reorderPanes\":[");
 		if (panes != null)
 		{
@@ -298,7 +334,6 @@ public final class MobileChromeBridge
 		// [x,y,w,h] per rect, so Android can route a one-finger drag starting inside one as an interface scroll
 		// (wheel notches) not a camera pan. Snapshotted each tapTick by JavaBridge.snapshotScrollableRects; empty
 		// array when none is on-screen. Android-only consumer (iOS keeps its on-demand isEngineScrollableAt path).
-		final int[] scrollRects = JavaBridge.getScrollableRects();
 		sb.append(",\"scrollRects\":[");
 		if (scrollRects != null)
 		{
@@ -317,13 +352,18 @@ public final class MobileChromeBridge
 		publishSnapshot(sb.toString());
 
 		// ---- readability accumulator + one-shot verdict ----
-		loggedInFrames++;
 		sawSidePanel |= sidePanel != null;
 		// minimap may be reported via either the minimap widget or its map container (fixed lacks both).
 		sawMinimap |= minimap != null || mapContainer != null;
 		sawOrbs |= orbs != null;
 		sawChat |= chat != null;
 		sawViewport |= vpOk;
+		noteVerdict(c, root, topLevel, resized, activeTab, stones);
+	}
+
+	/** The activeTab debug line and the one-shot CHROME_READ verdict; runs every logged-in frame, built or not. */
+	private static void noteVerdict(Client c, Root root, int topLevel, boolean resized, int activeTab, int[] stones)
+	{
 		if (activeTab != lastActiveTab)
 		{
 			log.debug("[chrome] activeTab {} -> {} (root={})", lastActiveTab, activeTab, root);

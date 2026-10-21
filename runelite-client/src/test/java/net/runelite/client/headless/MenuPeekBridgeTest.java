@@ -85,13 +85,11 @@ public class MenuPeekBridgeTest
 	{
 		final Client client = mock(Client.class);
 		when(client.getGameState()).thenReturn(GameState.LOGIN_SCREEN);
-		final long seqBefore = MenuPeekBridge.getPublishSeq();
 
 		MenuPeekBridge.tick(client);
 
 		assertEquals("{\"active\":true,\"loggedIn\":false}", MenuPeekBridge.getSnapshot());
 		assertEquals("EMPTY", MenuPeekBridge.getTopFingerprint());
-		assertTrue("logged-out tick still publishes (bumps seq)", MenuPeekBridge.getPublishSeq() > seqBefore);
 	}
 
 	@Test
@@ -189,17 +187,29 @@ public class MenuPeekBridgeTest
 	}
 
 	@Test
-	public void publishSeqIsMonotonicAcrossTicks()
+	public void publishSeqAdvancesOnlyWhenTheSnapshotChanges()
 	{
-		final Client client = loggedInClient(new MenuEntry[]{entry("X", "", MenuAction.WALK, 0, 0, 0, -1)}, new Point(0, 0));
+		// Android copies the snapshot across JNI only when this seq moves, so an unchanged frame must leave it
+		// alone and every real change must move it. The seq stays out of the payload: embedding it made every
+		// frame's JSON differ, so the copy never skipped.
+		final MenuEntry[] menu = {entry("X", "", MenuAction.WALK, 0, 0, 0, -1)};
+		final Client loggedOut = mock(Client.class);
+		when(loggedOut.getGameState()).thenReturn(GameState.LOGIN_SCREEN);
 
+		MenuPeekBridge.tick(loggedOut);
 		final long a = MenuPeekBridge.getPublishSeq();
-		MenuPeekBridge.tick(client);
-		final long b = MenuPeekBridge.getPublishSeq();
-		MenuPeekBridge.tick(client);
-		final long c = MenuPeekBridge.getPublishSeq();
+		MenuPeekBridge.tick(loggedOut);
+		assertEquals("an unchanged logged-out frame does not publish", a, MenuPeekBridge.getPublishSeq());
 
-		assertTrue("seq strictly increases each publish", b > a && c > b);
+		MenuPeekBridge.tick(loggedInClient(menu, new Point(0, 0)));
+		final long b = MenuPeekBridge.getPublishSeq();
+		assertEquals("logging in publishes once", a + 1, b);
+		MenuPeekBridge.tick(loggedInClient(menu, new Point(0, 0)));
+		assertEquals("an unchanged logged-in frame does not publish", b, MenuPeekBridge.getPublishSeq());
+
+		MenuPeekBridge.tick(loggedInClient(menu, new Point(5, 0)));
+		assertEquals("a moved pointer publishes", b + 1, MenuPeekBridge.getPublishSeq());
+		assertFalse("the seq stays out of the payload", MenuPeekBridge.getSnapshot().contains("\"seq\""));
 	}
 
 	@Test

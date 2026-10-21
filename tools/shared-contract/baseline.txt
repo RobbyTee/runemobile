@@ -452,7 +452,6 @@ PAYLOAD MenuPeekBridge mouseY
 PAYLOAD MenuPeekBridge opt
 PAYLOAD MenuPeekBridge p0
 PAYLOAD MenuPeekBridge p1
-PAYLOAD MenuPeekBridge seq
 PAYLOAD MenuPeekBridge sub
 PAYLOAD MenuPeekBridge tgt
 PAYLOAD MenuPeekBridge type

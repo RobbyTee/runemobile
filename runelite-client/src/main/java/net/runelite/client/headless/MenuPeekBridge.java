@@ -50,9 +50,9 @@ import net.runelite.api.Point;
  * or the existing engine right-click menu for disambiguation) so RuneLite custom {@code onClick} callbacks and
  * {@code worldViewId} are honoured — {@code client.menuAction} alone would drop both. The snapshot carries the
  * full entry fields (option/target/type/id/param0/param1/itemId/worldViewId/deprioritized/forceLeftClick) so a
- * native chooser can be built later, plus the pointer position + a publish sequence so the native side can
- * confirm a release-time read is fresh and corresponds to the lift point (release-revalidation — the case the
- * probe showed matters for moving targets).
+ * native chooser can be built later, plus the pointer position so the native side can confirm a release-time
+ * read corresponds to the lift point (release-revalidation — the case the probe showed matters for moving
+ * targets). Freshness comes from {@link #getPublishSeq()}, which advances only when the snapshot changes.
  *
  * <p>Entries are emitted in <b>display order</b> (index 0 = top = the array tail), so {@code entries[0]} is the
  * left-click action.
@@ -74,7 +74,21 @@ public final class MenuPeekBridge
 	// Published lock-free: the native JNI thread reads these; the client thread writes them in tick().
 	private static volatile String snapshotJson = "{\"active\":false}";
 	private static volatile String topFingerprint = "EMPTY";
+
+	// Content-derived like MobileChromeBridge's: bumped only when the snapshot JSON changes, so Android's render
+	// loop, which copies the string only when this advances, skips the copy on an idle frame. The seq stays out
+	// of the payload, since embedding it would make every frame's JSON differ. ALWAYS publish through
+	// {@link #publish}.
 	private static volatile long publishSeq;
+
+	private static void publish(String json)
+	{
+		if (!json.equals(snapshotJson))
+		{
+			snapshotJson = json;   // store the JSON BEFORE the seq so a native reader that sees the new seq sees it
+			publishSeq++;
+		}
+	}
 
 	private MenuPeekBridge()
 	{
@@ -102,8 +116,7 @@ public final class MenuPeekBridge
 			if (client.getGameState() != GameState.LOGGED_IN)
 			{
 				topFingerprint = "EMPTY";
-				snapshotJson = "{\"active\":true,\"loggedIn\":false}";
-				publishSeq++;
+				publish("{\"active\":true,\"loggedIn\":false}");
 				return;
 			}
 
@@ -114,11 +127,9 @@ public final class MenuPeekBridge
 
 			final Point m = safeMouse(client);
 			final boolean menuOpen = safeBool(client::isMenuOpen);
-			final long seq = publishSeq + 1;
 
 			final StringBuilder sb = new StringBuilder(512);
 			sb.append("{\"active\":true,\"loggedIn\":true")
-				.append(",\"seq\":").append(seq)
 				.append(",\"mouseX\":").append(m == null ? -1 : m.getX())
 				.append(",\"mouseY\":").append(m == null ? -1 : m.getY())
 				.append(",\"menuOpen\":").append(menuOpen)
@@ -143,8 +154,7 @@ public final class MenuPeekBridge
 			}
 			sb.append("]}");
 
-			snapshotJson = sb.toString();
-			publishSeq = seq;   // publish the seq LAST so a native reader that sees it also sees this JSON
+			publish(sb.toString());
 		}
 		catch (RuntimeException ex)
 		{
@@ -169,7 +179,7 @@ public final class MenuPeekBridge
 		return topFingerprint;
 	}
 
-	/** Monotonic counter bumped once per published snapshot (native freshness check). */
+	/** Monotonic counter bumped once per CHANGED snapshot — native skips the per-frame copy when it is unchanged. */
 	public static long getPublishSeq()
 	{
 		return publishSeq;

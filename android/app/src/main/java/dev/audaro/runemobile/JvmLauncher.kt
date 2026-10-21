@@ -471,6 +471,9 @@ object JvmLauncher {
     // frame from the Choreographer tick (UI thread). Drives the native 2-col tab-grid overlay.
     external fun nativeChromeSnapshotPub(): String
 
+    // Advances whenever the published chrome, chat or dialogue string changes: updateChrome's per-vsync skip test.
+    external fun nativeChromeInputsGen(): Long
+
     // A6 chrome write surface (HudVeneerBridge; gated -Drunelite.hudveneer): hide the 14 engine tab stones (the
     // native 2-col grid replaces them), open a tab by replaying its stone op-script (works while hidden), and
     // relocate the engine side panel flush-left of the grid. Off the UI thread ONLY (via [onBridge]) — they
@@ -958,6 +961,8 @@ object JvmLauncher {
     fun chromeSnapshot() = nativeChromeSnapshot()
 
     fun chromeSnapshotPub() = nativeChromeSnapshotPub()
+
+    fun chromeInputsGen() = nativeChromeInputsGen()
 
     fun setStonesHidden(hidden: Boolean) = nativeSetStonesHidden(hidden)
 

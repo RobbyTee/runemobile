@@ -318,6 +318,11 @@ static std::atomic<long long> g_dlgSnapSeq{-1};
 // option row would then answer the dialogue that replaced the one it was drawn from. Written under g_dlgLock
 // with the string, and read back under it, so the pair is always consistent.
 static std::atomic<long long> g_dlgPubSeq{-1};
+// Bumped after every republish of the chrome, chat or dialogue string above, inside that string's lock, so the UI
+// thread's updateChrome can skip an unchanged frame by comparing one long instead of fetching all three strings.
+// Each republish is already seq-gated on a content change, so this advances only when one of them changed. Release
+// here pairs with the acquire in nativeChromeInputsGen: a reader that sees the new value then reads the new text.
+static std::atomic<long long> g_chromeInputsGen{0};
 
 // ---- Input queue (UI thread enqueues; render thread drains and dispatches into the bridge) -----------
 enum InputKind {
@@ -1225,6 +1230,7 @@ static void *renderLoop(void *) {
                     if (c) {
                         std::lock_guard<std::mutex> lk(g_chromeLock);
                         g_chromeSnapshotPub.assign(c);
+                        g_chromeInputsGen.fetch_add(1, std::memory_order_release);
                         env->ReleaseStringUTFChars(js, c);
                     } else if (env->ExceptionCheck()) {
                         env->ExceptionClear();   // OOM: don't leave it pending for the next bridge call
@@ -1245,6 +1251,7 @@ static void *renderLoop(void *) {
                     if (c) {
                         std::lock_guard<std::mutex> lk(g_chatLock);
                         g_chatSnapshotPub.assign(c);
+                        g_chromeInputsGen.fetch_add(1, std::memory_order_release);
                         env->ReleaseStringUTFChars(js, c);
                     } else if (env->ExceptionCheck()) {
                         env->ExceptionClear();
@@ -1307,6 +1314,7 @@ static void *renderLoop(void *) {
                         std::lock_guard<std::mutex> lk(g_dlgLock);
                         g_dialogueJsonPub.assign(c);
                         g_dlgPubSeq.store(g_dlgSnapSeq.load(std::memory_order_relaxed), std::memory_order_relaxed);
+                        g_chromeInputsGen.fetch_add(1, std::memory_order_release);
                         env->ReleaseStringUTFChars(js, c);
                     } else if (env->ExceptionCheck()) {
                         env->ExceptionClear();
@@ -2713,6 +2721,11 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeChromeSnapshotPub(JNIEnv *env, jobject) {
     std::lock_guard<std::mutex> lk(g_chromeLock);
     return env->NewStringUTF(g_chromeSnapshotPub.c_str());
+}
+// The change counter over the three strings updateChrome reads (chrome, chat, dialogue); see g_chromeInputsGen.
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeChromeInputsGen(JNIEnv *, jobject) {
+    return (jlong)g_chromeInputsGen.load(std::memory_order_acquire);
 }
 
 // A6 chrome write surface (HudVeneerBridge) — hide the engine tab stones, open a tab by op-script replay, and
