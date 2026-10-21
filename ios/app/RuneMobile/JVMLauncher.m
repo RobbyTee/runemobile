@@ -1439,6 +1439,10 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 
     // Ensure the account boots in the resizable-Classic layout (PRE_EOC), which our native HUD requires.
     RMEnsureResizableDisplayMode(rlHome, log);
+    // JNA's extraction dir under user.home. Before -Djna.nounpack (below), every launch left an unloadable 172 KB
+    // lib here; nothing else writes to it.
+    [[NSFileManager defaultManager] removeItemAtPath:[rlHome stringByAppendingPathComponent:@"Library/Caches/JNA"]
+                                               error:nil];
 
     setenv("JAVA_HOME", javaHome.UTF8String, 1);
 
@@ -1565,6 +1569,10 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     // untraceable jetsam kill — a clean exit lands in the normal relaunch flow and leaves an hs_err
     // trail. (Kept out of the literal above: any edit inside it makes clang-format reflow the block.)
     [opts addObject:@"-XX:+ExitOnOutOfMemoryError"];
+    // WorldHopper's ping loads JNA, which always fails here: the jar's native lib for this platform is the macOS
+    // build. JNA first extracts it to user.home/Library/Caches/JNA/temp and, the load failing, never deletes it.
+    // nounpack fails the same load without the extraction.
+    [opts addObject:@"-Djna.nounpack=true"];
 
 #if DEBUG
     // Debug-only tap forensics: log every in-world left/right tap's geometry (tap X,Y vs the engine's live
