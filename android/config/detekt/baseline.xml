@@ -10,13 +10,14 @@
     <ID>ComplexCondition:DialogueView.kt$DialogueView$cd == null || !cd.optBoolean("loggedIn") || cd.optInt("topLevelId") != 164 || !cd.optBoolean("dialogueActive")</ID>
     <ID>ComplexCondition:MainActivity.kt$MainActivity$!censusMode &amp;&amp; !rlhdTestBoot &amp;&amp; !JagexTokens.hasTokens(applicationContext) &amp;&amp; !LegacyCreds.hasCreds(applicationContext)</ID>
     <ID>ComplexCondition:MainActivity.kt$MainActivity$cw &lt;= 0 || ch &lt;= 0 || vw &lt;= 0 || vh &lt;= 0 || win[2] &lt;= 0 || win[3] &lt;= 0</ID>
+    <ID>ComplexCondition:MainActivity.kt$MainActivity$d == null || !d.optBoolean("menuOpen", false) || d.optInt("menuW", 0) &lt;= 0 || d.optInt("menuH", 0) &lt;= 0</ID>
     <ID>ComplexCondition:MainActivity.kt$MainActivity$fw &lt;= 0 || fh &lt;= 0 || vw &lt;= 0 || vh &lt;= 0</ID>
     <ID>ComplexCondition:MainActivity.kt$MainActivity$gx &lt; x - ORB_TAP_PAD || gx &gt; x + w + ORB_TAP_PAD || gy &lt; y - ORB_TAP_PAD || gy &gt; y + h + ORB_TAP_PAD</ID>
     <ID>ComplexCondition:MainActivity.kt$MainActivity$px == null || w &lt;= 0 || px.isEmpty() || px.size % w != 0</ID>
     <ID>ComplexCondition:MainActivity.kt$MainActivity$surfaceView.scaleX == 1f &amp;&amp; surfaceView.scaleY == 1f &amp;&amp; surfaceView.translationX == 0f &amp;&amp; surfaceView.translationY == 0f</ID>
     <ID>ComplexCondition:MainActivity.kt$MainActivity$win != null &amp;&amp; win[2] &gt; 0 &amp;&amp; win[3] &gt; 0 &amp;&amp; !win.contentEquals(lastMapWindowApplied)</ID>
     <ID>ComplexCondition:MainActivity.kt$MainActivity.&lt;no name provided&gt;$imeWasShown &amp;&amp; !imeShown &amp;&amp; (manualKeyboard || mapSearchKeyboard)</ID>
-    <ID>ComplexCondition:MainActivity.kt$MainActivity.GestureListener$!cameraGestureActive &amp;&amp; !chatScrolling &amp;&amp; !mapPanning &amp;&amp; !mapScrolling &amp;&amp; !itemDragging</ID>
+    <ID>ComplexCondition:MainActivity.kt$MainActivity.GestureListener$!cameraGestureActive &amp;&amp; !chatScrolling &amp;&amp; !mapPanning &amp;&amp; !mapScrolling &amp;&amp; !itemDragging &amp;&amp; !ifaceScrolling</ID>
     <ID>ComplexCondition:MainActivity.kt$MainActivity.GestureListener$gx &gt;= r[0] &amp;&amp; gx &lt; r[0] + r[2] &amp;&amp; gy &gt;= r[1] &amp;&amp; gy &lt; r[1] + r[3]</ID>
     <ID>ComplexCondition:MenuOverlayView.kt$MenuOverlayView$x &lt; boxX || x &gt; boxX + boxW || y &lt; boxY || y &gt; boxY + totalH</ID>
     <ID>ComplexCondition:OverlayEditView.kt$OverlayEditView$x &gt;= l &amp;&amp; x &lt;= r &amp;&amp; y &gt;= t &amp;&amp; y &lt;= bot</ID>
@@ -25,10 +26,11 @@
     <ID>CyclomaticComplexMethod:ChatPillView.kt$ChatPillView$fun update( json: String, sx: Float, sy: Float, on: Boolean, ): Int</ID>
     <ID>CyclomaticComplexMethod:ChatPillView.kt$ChatPillView$override fun onTouchEvent(event: MotionEvent): Boolean</ID>
     <ID>CyclomaticComplexMethod:ConfigScreen.kt$@Composable fun ConfigScreen( group: String, pluginName: String, onBack: () -&gt; Unit, onTextActive: (Boolean) -&gt; Unit = {}, )</ID>
-    <ID>CyclomaticComplexMethod:ConfigScreen.kt$@Composable private fun ConfigItemControl( item: ConfigItem, onChange: (String) -&gt; Unit, )</ID>
+    <ID>CyclomaticComplexMethod:ConfigScreen.kt$@Composable private fun ConfigItemControl( item: ConfigItem, onReset: () -&gt; Unit, onChange: (String) -&gt; Unit, )</ID>
     <ID>CyclomaticComplexMethod:ConfigScreen.kt$@Composable private fun NumericConfigControl( item: ConfigItem, isInt: Boolean, onChange: (String) -&gt; Unit, )</ID>
     <ID>CyclomaticComplexMethod:ConfigScreen.kt$private fun keyText(code: Int): String?</ID>
     <ID>CyclomaticComplexMethod:DialogueView.kt$DialogueView$fun update( chatSnap: String, dlg: DialoguePublish, sx: Float, sy: Float, show: Boolean, )</ID>
+    <ID>CyclomaticComplexMethod:DialogueView.kt$DialogueView$override fun onDraw(canvas: Canvas)</ID>
     <ID>CyclomaticComplexMethod:LoginActivity.kt$LoginActivity$override fun onCreate(savedInstanceState: Bundle?)</ID>
     <ID>CyclomaticComplexMethod:MainActivity.kt$MainActivity$override fun onCreate(savedInstanceState: Bundle?)</ID>
     <ID>CyclomaticComplexMethod:MainActivity.kt$MainActivity$private fun applyChatTabs(on: Boolean)</ID>
@@ -41,37 +43,45 @@
     <ID>CyclomaticComplexMethod:MainActivity.kt$MainActivity$private fun updateChrome()</ID>
     <ID>CyclomaticComplexMethod:MainActivity.kt$MainActivity$private fun updateWorldMap()</ID>
     <ID>CyclomaticComplexMethod:MainActivity.kt$MainActivity.GestureListener$override fun onScroll( e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float, ): Boolean</ID>
+    <ID>CyclomaticComplexMethod:OverlayEditView.kt$OverlayEditView$override fun onTouchEvent(event: MotionEvent): Boolean</ID>
+    <ID>CyclomaticComplexMethod:PanelReflowScreens.kt$@Composable fun ConfigProfilesScreen(onBack: () -&gt; Unit)</ID>
+    <ID>CyclomaticComplexMethod:PanelReflowScreens.kt$@Composable fun GrandExchangeScreen(onBack: () -&gt; Unit)</ID>
     <ID>CyclomaticComplexMethod:PanelView.kt$@Composable fun PanelView( index: Int, tooltip: String, onBack: () -&gt; Unit, onPanelTextActive: (Boolean) -&gt; Unit = {}, )</ID>
     <ID>CyclomaticComplexMethod:PluginHubScreen.kt$@Composable fun PluginHubScreen( onBack: () -&gt; Unit, onPanelTextActive: (Boolean) -&gt; Unit = {}, )</ID>
-    <ID>CyclomaticComplexMethod:PluginPanel.kt$@Composable fun PluginPanel( onClose: () -&gt; Unit, rendererPref: String = "cpu", onRendererSelect: (String) -&gt; Unit = {}, // §4 cutover: the scattered devBar toolbar actions now have a home as fixed launcher tiles (audit #9). onScreenshot: () -&gt; Unit = {}, onAccount: () -&gt; Unit = {}, onLogout: () -&gt; Unit = {}, onDiscord: () -&gt; Unit = {}, onPanelTextActive: (Boolean) -&gt; Unit = {}, // FIX-11: forwarded to PanelView so the host can free the IME onEnterOverlayEdit: () -&gt; Unit = {}, // overlay layout is now edited ON the live game (host drag mode) )</ID>
-    <ID>CyclomaticComplexMethod:PluginPanel.kt$@Composable private fun LauncherGrid( rows: List&lt;PluginRow&gt;, renderer: String, panels: List&lt;PanelEntry&gt;, avail: BooleanArray, pending: Set&lt;String&gt;, onRendererSelect: (String) -&gt; Unit, onOpenConfig: (PluginRow) -&gt; Unit, onOpenList: () -&gt; Unit, onOpenPanel: (Int, String) -&gt; Unit, onOpenQuest: () -&gt; Unit, onOpenWorld: () -&gt; Unit, onOpenXp: () -&gt; Unit, onOpenLoot: () -&gt; Unit, onOpenGe: () -&gt; Unit, timeAvail: Boolean, onOpenTime: () -&gt; Unit, onOpenOverlay: () -&gt; Unit, onOpenInfoBox: () -&gt; Unit, onOpenHub: () -&gt; Unit, profilesAvail: Boolean, onOpenProfiles: () -&gt; Unit, notesAvail: Boolean, onOpenNotes: () -&gt; Unit, onOpenHotkeys: () -&gt; Unit, onOpenAbout: () -&gt; Unit, onOpenWorldMap: () -&gt; Unit, onScreenshot: () -&gt; Unit, onAccount: () -&gt; Unit, onLogout: () -&gt; Unit, onDiscord: () -&gt; Unit, )</ID>
+    <ID>CyclomaticComplexMethod:PluginPanel.kt$@Composable fun PluginPanel( onClose: () -&gt; Unit, rendererPref: String = "cpu", onRendererSelect: (String) -&gt; Unit = {}, // §4 cutover: the scattered devBar toolbar actions now have a home as fixed launcher tiles (audit #9). onScreenshot: () -&gt; Unit = {}, // PARITY-ANDROID-SHOT: long-press the Screenshot tile toggles auto-saving the engine's event screenshots // (level-ups, drops, clues, kills) to the gallery — mirrors iOS long-press on the 📷 button. onScreenshotLongPress: () -&gt; Unit = {}, onAccount: () -&gt; Unit = {}, onLogout: () -&gt; Unit = {}, onDiscord: () -&gt; Unit = {}, onPanelTextActive: (Boolean) -&gt; Unit = {}, // FIX-11: forwarded to PanelView so the host can free the IME onEnterOverlayEdit: () -&gt; Unit = {}, // overlay layout is now edited ON the live game (host drag mode) )</ID>
+    <ID>CyclomaticComplexMethod:PluginPanel.kt$@Composable private fun LauncherGrid( rows: List&lt;PluginRow&gt;, renderer: String, panels: List&lt;PanelEntry&gt;, avail: BooleanArray, pending: Set&lt;String&gt;, onRendererSelect: (String) -&gt; Unit, onOpenConfig: (PluginRow) -&gt; Unit, onOpenList: () -&gt; Unit, onOpenPanel: (Int, String) -&gt; Unit, onOpenQuest: () -&gt; Unit, onOpenWorld: () -&gt; Unit, onOpenXp: () -&gt; Unit, onOpenLoot: () -&gt; Unit, onOpenGe: () -&gt; Unit, timeAvail: Boolean, onOpenTime: () -&gt; Unit, onOpenOverlay: () -&gt; Unit, onOpenInfoBox: () -&gt; Unit, onOpenHub: () -&gt; Unit, profilesAvail: Boolean, onOpenProfiles: () -&gt; Unit, notesAvail: Boolean, onOpenNotes: () -&gt; Unit, onOpenHotkeys: () -&gt; Unit, onOpenAbout: () -&gt; Unit, onOpenWorldMap: () -&gt; Unit, onScreenshot: () -&gt; Unit, onScreenshotLongPress: () -&gt; Unit, onAccount: () -&gt; Unit, onLogout: () -&gt; Unit, onDiscord: () -&gt; Unit, )</ID>
+    <ID>CyclomaticComplexMethod:QuestWorldScreens.kt$@Composable fun WorldSwitcherScreen(onBack: () -&gt; Unit)</ID>
     <ID>CyclomaticComplexMethod:ReconActivity.kt$ReconActivity$private fun runRecon()</ID>
     <ID>CyclomaticComplexMethod:ReconActivity.kt$ReconActivity$private fun validateBaseGpuShaders(esTier: Int)</ID>
     <ID>DestructuringDeclarationWithTooManyEntries:MainActivity.kt$MainActivity$val (l, t, r, b) = if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.R) { val i = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()) listOf(i.left, i.top, i.right, i.bottom) } else { @Suppress("DEPRECATION") listOf(wi.stableInsetLeft, wi.stableInsetTop, wi.stableInsetRight, wi.stableInsetBottom) }</ID>
+    <ID>ImplicitDefaultLocale:MainActivity.kt$MainActivity$String.format("%.0f fps · %s · %s", fps, devHeapCache, thermal)</ID>
+    <ID>ImplicitDefaultLocale:MainActivity.kt$MainActivity$String.format("%.1f", fps)</ID>
     <ID>LargeClass:MainActivity.kt$MainActivity : AppCompatActivity</ID>
     <ID>LongMethod:ChatPillView.kt$ChatPillView$fun update( json: String, sx: Float, sy: Float, on: Boolean, ): Int</ID>
     <ID>LongMethod:ChatPillView.kt$ChatPillView$override fun onTouchEvent(event: MotionEvent): Boolean</ID>
     <ID>LongMethod:ConfigScreen.kt$@Composable fun ConfigScreen( group: String, pluginName: String, onBack: () -&gt; Unit, onTextActive: (Boolean) -&gt; Unit = {}, )</ID>
     <ID>LongMethod:ConfigScreen.kt$@Composable private fun ColorPickerDialog( initialArgb: Int, showAlpha: Boolean, onDismiss: () -&gt; Unit, onPick: (Int) -&gt; Unit, )</ID>
-    <ID>LongMethod:ConfigScreen.kt$@Composable private fun ConfigItemControl( item: ConfigItem, onChange: (String) -&gt; Unit, )</ID>
+    <ID>LongMethod:ConfigScreen.kt$@Composable private fun ConfigItemControl( item: ConfigItem, onReset: () -&gt; Unit, onChange: (String) -&gt; Unit, )</ID>
     <ID>LongMethod:ConfigScreen.kt$@Composable private fun NotificationEditorDialog( item: ConfigItem, onDismiss: () -&gt; Unit, onDone: (String) -&gt; Unit, )</ID>
     <ID>LongMethod:LoginActivity.kt$LoginActivity$override fun onCreate(savedInstanceState: Bundle?)</ID>
     <ID>LongMethod:MainActivity.kt$MainActivity$override fun onCreate(savedInstanceState: Bundle?)</ID>
     <ID>LongMethod:MainActivity.kt$MainActivity$private fun bootJvm( app: android.content.Context, census: Boolean = false, gpu: Boolean = false, rlhd: Boolean = false, )</ID>
     <ID>LongMethod:MainActivity.kt$MainActivity$private fun bootRlhdProbe(app: android.content.Context)</ID>
+    <ID>LongMethod:MainActivity.kt$MainActivity$private fun ensureDevViews()</ID>
     <ID>LongMethod:MainActivity.kt$MainActivity$private fun probeGpuCaps(): String</ID>
     <ID>LongMethod:MainActivity.kt$MainActivity$private fun refreshHotkeyStrip()</ID>
     <ID>LongMethod:MainActivity.kt$MainActivity$private fun runA4SeamSelfTest()</ID>
     <ID>LongMethod:MainActivity.kt$MainActivity$private fun updateChrome()</ID>
-    <ID>LongMethod:MainActivity.kt$MainActivity.&lt;no name provided&gt;$override fun doFrame(frameTimeNanos: Long)</ID>
     <ID>LongMethod:MainActivity.kt$MainActivity.GestureListener$override fun onScroll( e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float, ): Boolean</ID>
+    <ID>LongMethod:OverlayEditView.kt$OverlayEditView$override fun onTouchEvent(event: MotionEvent): Boolean</ID>
+    <ID>LongMethod:PanelReflowScreens.kt$@Composable fun ConfigProfilesScreen(onBack: () -&gt; Unit)</ID>
     <ID>LongMethod:PanelReflowScreens.kt$@Composable fun GrandExchangeScreen(onBack: () -&gt; Unit)</ID>
     <ID>LongMethod:PanelReflowScreens.kt$@Composable fun HotkeysScreen(onBack: () -&gt; Unit)</ID>
     <ID>LongMethod:PanelReflowScreens.kt$@Composable fun LootTrackerScreen(onBack: () -&gt; Unit)</ID>
     <ID>LongMethod:PanelView.kt$@Composable fun PanelView( index: Int, tooltip: String, onBack: () -&gt; Unit, onPanelTextActive: (Boolean) -&gt; Unit = {}, )</ID>
     <ID>LongMethod:PluginHubScreen.kt$@Composable fun PluginHubScreen( onBack: () -&gt; Unit, onPanelTextActive: (Boolean) -&gt; Unit = {}, )</ID>
-    <ID>LongMethod:PluginPanel.kt$@Composable fun PluginPanel( onClose: () -&gt; Unit, rendererPref: String = "cpu", onRendererSelect: (String) -&gt; Unit = {}, // §4 cutover: the scattered devBar toolbar actions now have a home as fixed launcher tiles (audit #9). onScreenshot: () -&gt; Unit = {}, onAccount: () -&gt; Unit = {}, onLogout: () -&gt; Unit = {}, onDiscord: () -&gt; Unit = {}, onPanelTextActive: (Boolean) -&gt; Unit = {}, // FIX-11: forwarded to PanelView so the host can free the IME onEnterOverlayEdit: () -&gt; Unit = {}, // overlay layout is now edited ON the live game (host drag mode) )</ID>
-    <ID>LongMethod:PluginPanel.kt$@Composable private fun LauncherGrid( rows: List&lt;PluginRow&gt;, renderer: String, panels: List&lt;PanelEntry&gt;, avail: BooleanArray, pending: Set&lt;String&gt;, onRendererSelect: (String) -&gt; Unit, onOpenConfig: (PluginRow) -&gt; Unit, onOpenList: () -&gt; Unit, onOpenPanel: (Int, String) -&gt; Unit, onOpenQuest: () -&gt; Unit, onOpenWorld: () -&gt; Unit, onOpenXp: () -&gt; Unit, onOpenLoot: () -&gt; Unit, onOpenGe: () -&gt; Unit, timeAvail: Boolean, onOpenTime: () -&gt; Unit, onOpenOverlay: () -&gt; Unit, onOpenInfoBox: () -&gt; Unit, onOpenHub: () -&gt; Unit, profilesAvail: Boolean, onOpenProfiles: () -&gt; Unit, notesAvail: Boolean, onOpenNotes: () -&gt; Unit, onOpenHotkeys: () -&gt; Unit, onOpenAbout: () -&gt; Unit, onOpenWorldMap: () -&gt; Unit, onScreenshot: () -&gt; Unit, onAccount: () -&gt; Unit, onLogout: () -&gt; Unit, onDiscord: () -&gt; Unit, )</ID>
+    <ID>LongMethod:PluginPanel.kt$@Composable fun PluginPanel( onClose: () -&gt; Unit, rendererPref: String = "cpu", onRendererSelect: (String) -&gt; Unit = {}, // §4 cutover: the scattered devBar toolbar actions now have a home as fixed launcher tiles (audit #9). onScreenshot: () -&gt; Unit = {}, // PARITY-ANDROID-SHOT: long-press the Screenshot tile toggles auto-saving the engine's event screenshots // (level-ups, drops, clues, kills) to the gallery — mirrors iOS long-press on the 📷 button. onScreenshotLongPress: () -&gt; Unit = {}, onAccount: () -&gt; Unit = {}, onLogout: () -&gt; Unit = {}, onDiscord: () -&gt; Unit = {}, onPanelTextActive: (Boolean) -&gt; Unit = {}, // FIX-11: forwarded to PanelView so the host can free the IME onEnterOverlayEdit: () -&gt; Unit = {}, // overlay layout is now edited ON the live game (host drag mode) )</ID>
+    <ID>LongMethod:PluginPanel.kt$@Composable private fun LauncherGrid( rows: List&lt;PluginRow&gt;, renderer: String, panels: List&lt;PanelEntry&gt;, avail: BooleanArray, pending: Set&lt;String&gt;, onRendererSelect: (String) -&gt; Unit, onOpenConfig: (PluginRow) -&gt; Unit, onOpenList: () -&gt; Unit, onOpenPanel: (Int, String) -&gt; Unit, onOpenQuest: () -&gt; Unit, onOpenWorld: () -&gt; Unit, onOpenXp: () -&gt; Unit, onOpenLoot: () -&gt; Unit, onOpenGe: () -&gt; Unit, timeAvail: Boolean, onOpenTime: () -&gt; Unit, onOpenOverlay: () -&gt; Unit, onOpenInfoBox: () -&gt; Unit, onOpenHub: () -&gt; Unit, profilesAvail: Boolean, onOpenProfiles: () -&gt; Unit, notesAvail: Boolean, onOpenNotes: () -&gt; Unit, onOpenHotkeys: () -&gt; Unit, onOpenAbout: () -&gt; Unit, onOpenWorldMap: () -&gt; Unit, onScreenshot: () -&gt; Unit, onScreenshotLongPress: () -&gt; Unit, onAccount: () -&gt; Unit, onLogout: () -&gt; Unit, onDiscord: () -&gt; Unit, )</ID>
     <ID>LongMethod:PluginPanel.kt$@Composable private fun SheetScaffold( atPeek: Boolean, onDismiss: () -&gt; Unit, content: @Composable () -&gt; Unit, )</ID>
     <ID>LongMethod:QuestWorldScreens.kt$@Composable fun QuestHelperScreen(onBack: () -&gt; Unit)</ID>
     <ID>LongMethod:QuestWorldScreens.kt$@Composable fun WorldSwitcherScreen(onBack: () -&gt; Unit)</ID>
@@ -80,14 +90,19 @@
     <ID>LongParameterList:ChatPillView.kt$ChatPillView.Tab$( val ex: Int, val ey: Int, val ew: Int, val eh: Int, val selected: Boolean, val hasNew: Boolean, val labelColor: Int, val filter: String, val filterColor: Int, )</ID>
     <ID>LongParameterList:JvmLauncher.kt$JvmLauncher$( javaHome: String, libjvmPath: String, libraryPath: String, classpath: String, mainClass: String, extraOpts: Array&lt;String&gt;, )</ID>
     <ID>LongParameterList:MenuOverlayView.kt$MenuOverlayView$( items: List&lt;Entry&gt;, anchorX: Float, anchorY: Float, handRight: Boolean, tap: Boolean = false, header: String = "Choose Option", )</ID>
-    <ID>LongParameterList:PluginPanel.kt$( onClose: () -&gt; Unit, rendererPref: String = "cpu", onRendererSelect: (String) -&gt; Unit = {}, // §4 cutover: the scattered devBar toolbar actions now have a home as fixed launcher tiles (audit #9). onScreenshot: () -&gt; Unit = {}, onAccount: () -&gt; Unit = {}, onLogout: () -&gt; Unit = {}, onDiscord: () -&gt; Unit = {}, onPanelTextActive: (Boolean) -&gt; Unit = {}, // FIX-11: forwarded to PanelView so the host can free the IME onEnterOverlayEdit: () -&gt; Unit = {}, // overlay layout is now edited ON the live game (host drag mode) )</ID>
+    <ID>LongParameterList:PanelView.kt$( off: Offset, pw: Int, viewW: Int, scrollY: Int, scale: Float, pan: Offset, img: Bitmap, )</ID>
+    <ID>LongParameterList:PluginPanel.kt$( onClose: () -&gt; Unit, rendererPref: String = "cpu", onRendererSelect: (String) -&gt; Unit = {}, // §4 cutover: the scattered devBar toolbar actions now have a home as fixed launcher tiles (audit #9). onScreenshot: () -&gt; Unit = {}, // PARITY-ANDROID-SHOT: long-press the Screenshot tile toggles auto-saving the engine's event screenshots // (level-ups, drops, clues, kills) to the gallery — mirrors iOS long-press on the 📷 button. onScreenshotLongPress: () -&gt; Unit = {}, onAccount: () -&gt; Unit = {}, onLogout: () -&gt; Unit = {}, onDiscord: () -&gt; Unit = {}, onPanelTextActive: (Boolean) -&gt; Unit = {}, // FIX-11: forwarded to PanelView so the host can free the IME onEnterOverlayEdit: () -&gt; Unit = {}, // overlay layout is now edited ON the live game (host drag mode) )</ID>
+    <ID>LongParameterList:PluginPanel.kt$( p: PluginRow, incompatible: Boolean, onToggle: (Boolean) -&gt; Unit, onTogglePin: () -&gt; Unit, onOpenConfig: (() -&gt; Unit)?, status: RowStatus? = null, )</ID>
     <ID>LongParameterList:PluginPanel.kt$( rows: List&lt;PluginRow&gt;, filter: String, pending: Set&lt;String&gt;, renderer: String, listState: androidx.compose.foundation.lazy.LazyListState, onToggleRow: (PluginRow, Boolean) -&gt; Unit, onTogglePin: (PluginRow) -&gt; Unit, onRendererSelect: (String, Boolean) -&gt; Unit, onOpenConfig: (PluginRow) -&gt; Unit, )</ID>
-    <ID>LongParameterList:PluginPanel.kt$( rows: List&lt;PluginRow&gt;, renderer: String, panels: List&lt;PanelEntry&gt;, avail: BooleanArray, pending: Set&lt;String&gt;, onRendererSelect: (String) -&gt; Unit, onOpenConfig: (PluginRow) -&gt; Unit, onOpenList: () -&gt; Unit, onOpenPanel: (Int, String) -&gt; Unit, onOpenQuest: () -&gt; Unit, onOpenWorld: () -&gt; Unit, onOpenXp: () -&gt; Unit, onOpenLoot: () -&gt; Unit, onOpenGe: () -&gt; Unit, timeAvail: Boolean, onOpenTime: () -&gt; Unit, onOpenOverlay: () -&gt; Unit, onOpenInfoBox: () -&gt; Unit, onOpenHub: () -&gt; Unit, profilesAvail: Boolean, onOpenProfiles: () -&gt; Unit, notesAvail: Boolean, onOpenNotes: () -&gt; Unit, onOpenHotkeys: () -&gt; Unit, onOpenAbout: () -&gt; Unit, onOpenWorldMap: () -&gt; Unit, onScreenshot: () -&gt; Unit, onAccount: () -&gt; Unit, onLogout: () -&gt; Unit, onDiscord: () -&gt; Unit, )</ID>
+    <ID>LongParameterList:PluginPanel.kt$( rows: List&lt;PluginRow&gt;, renderer: String, panels: List&lt;PanelEntry&gt;, avail: BooleanArray, pending: Set&lt;String&gt;, onRendererSelect: (String) -&gt; Unit, onOpenConfig: (PluginRow) -&gt; Unit, onOpenList: () -&gt; Unit, onOpenPanel: (Int, String) -&gt; Unit, onOpenQuest: () -&gt; Unit, onOpenWorld: () -&gt; Unit, onOpenXp: () -&gt; Unit, onOpenLoot: () -&gt; Unit, onOpenGe: () -&gt; Unit, timeAvail: Boolean, onOpenTime: () -&gt; Unit, onOpenOverlay: () -&gt; Unit, onOpenInfoBox: () -&gt; Unit, onOpenHub: () -&gt; Unit, profilesAvail: Boolean, onOpenProfiles: () -&gt; Unit, notesAvail: Boolean, onOpenNotes: () -&gt; Unit, onOpenHotkeys: () -&gt; Unit, onOpenAbout: () -&gt; Unit, onOpenWorldMap: () -&gt; Unit, onScreenshot: () -&gt; Unit, onScreenshotLongPress: () -&gt; Unit, onAccount: () -&gt; Unit, onLogout: () -&gt; Unit, onDiscord: () -&gt; Unit, )</ID>
     <ID>LongParameterList:TabSprites.kt$TabSprites.Set$( val stoneInactive: Bitmap?, val stoneActive: Bitmap?, val icons: Array&lt;Bitmap?&gt;, val chatbtn: Bitmap?, val chatbtnSelected: Bitmap?, val chatbtnNew: Bitmap?, /** The bridge captured the full grid set (not a deadline-partial) — only persist these to the boot cache. */ val complete: Boolean, )</ID>
     <ID>LoopWithTooManyJumpStatements:MainActivity.kt$MainActivity$for</ID>
     <ID>LoopWithTooManyJumpStatements:PluginHubScreen.kt$while</ID>
+    <ID>LoopWithTooManyJumpStatements:TapRingView.kt$TapRingView$while</ID>
     <ID>NestedBlockDepth:ChatPillView.kt$ChatPillView$override fun onTouchEvent(event: MotionEvent): Boolean</ID>
+    <ID>NestedBlockDepth:DialogueView.kt$DialogueView$override fun onTouchEvent(event: MotionEvent): Boolean</ID>
     <ID>NestedBlockDepth:JagexLogin.kt$JagexLogin$private fun request( urlStr: String, method: String, body: String?, bearer: String?, ): Pair&lt;Int, String&gt;</ID>
+    <ID>NestedBlockDepth:MainActivity.kt$MainActivity$private fun drainScreenshots()</ID>
     <ID>NestedBlockDepth:MainActivity.kt$MainActivity$private fun pollEnabled( className: String, want: Boolean, secs: Int, ): Boolean</ID>
     <ID>NestedBlockDepth:MainActivity.kt$MainActivity$private fun updateChrome()</ID>
     <ID>NestedBlockDepth:MainActivity.kt$MainActivity.GestureListener$override fun onScroll( e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float, ): Boolean</ID>
@@ -111,8 +126,10 @@
     <ID>ReturnCount:MainActivity.kt$MainActivity$private fun applyOverlayInsets()</ID>
     <ID>ReturnCount:MainActivity.kt$MainActivity$private fun applySidePanel(o: JSONObject?)</ID>
     <ID>ReturnCount:MainActivity.kt$MainActivity$private fun bootJvm( app: android.content.Context, census: Boolean = false, gpu: Boolean = false, rlhd: Boolean = false, )</ID>
+    <ID>ReturnCount:MainActivity.kt$MainActivity$private fun isPlainWorldTap( gx: Int, gy: Int, ): Boolean</ID>
     <ID>ReturnCount:MainActivity.kt$MainActivity$private fun nearestOrb( gx: Int, gy: Int, ): OrbHit?</ID>
     <ID>ReturnCount:MainActivity.kt$MainActivity$private fun probeGpuCaps(): String</ID>
+    <ID>ReturnCount:MainActivity.kt$MainActivity$private fun thermalStatusLabel(): String</ID>
     <ID>ReturnCount:MainActivity.kt$MainActivity.GestureListener$override fun onScroll( e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float, ): Boolean</ID>
     <ID>ReturnCount:MainActivity.kt$MainActivity.GestureListener$override fun onSingleTapUp(e: MotionEvent): Boolean</ID>
     <ID>ReturnCount:MenuOverlayView.kt$MenuOverlayView$fun hitTest( x: Float, y: Float, ): Int</ID>
@@ -144,6 +161,7 @@
     <ID>TooGenericExceptionCaught:InfoBoxScreen.kt$t: Throwable</ID>
     <ID>TooGenericExceptionCaught:JagexLogin.kt$JagexLogin$e: Exception</ID>
     <ID>TooGenericExceptionCaught:JagexTokens.kt$JagexTokens$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:KeepaliveService.kt$KeepaliveService$t: Throwable</ID>
     <ID>TooGenericExceptionCaught:LegacyCreds.kt$LegacyCreds$e: Exception</ID>
     <ID>TooGenericExceptionCaught:LoginActivity.kt$LoginActivity$e2: Exception</ID>
     <ID>TooGenericExceptionCaught:LoginActivity.kt$LoginActivity$e: Exception</ID>
@@ -170,8 +188,11 @@
     <ID>TooManyFunctions:JvmLauncher.kt$JvmLauncher</ID>
     <ID>TooManyFunctions:LoginActivity.kt$LoginActivity : AppCompatActivity</ID>
     <ID>TooManyFunctions:MainActivity.kt$MainActivity : AppCompatActivity</ID>
+    <ID>TooManyFunctions:OverlayEditView.kt$OverlayEditView : View</ID>
     <ID>TooManyFunctions:PanelReflowScreens.kt$dev.audaro.runemobile.PanelReflowScreens.kt</ID>
     <ID>TooManyFunctions:PluginPanel.kt$dev.audaro.runemobile.PluginPanel.kt</ID>
+    <ID>TooManyFunctions:QuestWorldScreens.kt$dev.audaro.runemobile.QuestWorldScreens.kt</ID>
     <ID>TooManyFunctions:ReconActivity.kt$ReconActivity : Activity</ID>
+    <ID>UnusedPrivateProperty:PanelView.kt$attempt</ID>
   </CurrentIssues>
 </SmellBaseline>
