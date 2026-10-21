@@ -93,7 +93,7 @@ if [ "$CHECK_ONLY" = 1 ]; then
   else
     echo "BAD     iOS $IOS_DEST/client-shaded.jar (see the error above)"; fail=1
   fi
-  [ "$fail" = 0 ] && echo "== all staged jars are current ==" || echo "== drift detected; re-stage in the order PORTS.md gives ==" >&2
+  [ "$fail" = 0 ] && echo "== probes.jar current on both ports; iOS client-shaded.jar is the GPU variant ==" || echo "== drift detected; re-stage in the order PORTS.md gives ==" >&2
   exit "$fail"
 fi
 

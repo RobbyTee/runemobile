@@ -2,9 +2,11 @@
 # Android release gate — the single, runnable "a real gate exists and passes" check (GATE.md row 6).
 #
 # This script IS the gate — fully reproducible on a developer machine. The hosted release pipeline
-# (.github/workflows/release-hosted.yml, see tools/ci/README.md) runs only its --contract-only pre-flight before
-# every release build; signing, lint and the device smoke run here, so this script, not CI, is the source of
-# truth. (This fork ships an unapproved live-OSRS client and is never published to a store.) Findings covered:
+# (.github/workflows/release-hosted.yml, see tools/ci/README.md) runs only its --contract-only pre-flight, then
+# builds, release-signs and verifies the signing cert itself (tools/ci/build-release-artifacts.sh). The lint,
+# the script lint and the opt-in device smoke run only here, so run the full gate before a release push; this
+# script, not CI, is the source of truth. (This fork ships an unapproved live-OSRS client and is never published
+# to a store.) Findings covered:
 #   PROD-QA-01          — build a signed :app:assembleRelease, lint it, run the shared-contract check (+ a
 #                         device-smoke stage that is opt-in: it needs a real device / Firebase Test Lab pool).
 #   PROD-RELEASE-ENG-07 — the cross-port contract check is no longer a bypassable local-only pre-commit hook;
