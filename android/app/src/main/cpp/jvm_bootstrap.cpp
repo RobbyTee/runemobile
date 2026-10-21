@@ -1192,14 +1192,18 @@ static void cpuPresentProbe(double blitStart, double now) {
 // 16 ms, which made its period 16 ms plus the loop body. That drifts against the panel's refresh, which moves where a
 // post lands relative to the next latch, and it polled a 90 Hz panel at under 60 Hz. A frame callback is one-shot,
 // so each wait posts one (unless the last is still pending) and pumps the looper until it runs. The timeout keeps
-// the loop turning if a vsync never arrives, and with no choreographer the flat sleep stands.
+// the loop turning if a vsync is late. A wait that times out posts again next time, which re-requests the vsync if
+// the request was lost; if it was only late, both callbacks run in the same dispatch. 2 s with no vsync at all means
+// the path is dead, not slow, and the loop drops to the flat sleep it also uses with no choreographer.
 // debug.runemobile.cpupace=sleep picks the flat sleep for an A/B run; it is read once, when the render thread starts.
 struct VsyncPacer {
     AChoreographer *choreo = nullptr;
     bool pending = false; // a frame callback is posted and has not run yet
     bool fired = false;
+    int misses = 0; // waits in a row that timed out
 };
 static const int kVsyncTimeoutMs = 50;
+static const int kVsyncGiveUpMisses = 40; // 2 s
 static void onPresentVsync(long /*frameTimeNanos*/, void *data) {
     VsyncPacer *p = (VsyncPacer *)data;
     p->pending = false;
@@ -1232,6 +1236,15 @@ static void waitForVsync(VsyncPacer &p) {
     const double deadline = monoMs() + kVsyncTimeoutMs;
     for (double left = kVsyncTimeoutMs; !p.fired && left > 0; left = deadline - monoMs())
         ALooper_pollOnce((int)left + 1, nullptr, nullptr, nullptr);
+    if (p.fired) {
+        p.misses = 0;
+        return;
+    }
+    p.pending = false;
+    if (++p.misses >= kVsyncGiveUpMisses) {
+        LOGE("render: no vsync for %d ms; paced by a flat 16 ms sleep", kVsyncGiveUpMisses * kVsyncTimeoutMs);
+        p.choreo = nullptr;
+    }
 }
 
 // Blit the latest complete JavaBridge frame (TYPE_INT_RGB, 0x00RRGGBB ints) to the SurfaceView window,
