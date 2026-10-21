@@ -29,7 +29,11 @@
 #include <poll.h>
 #include <string.h>
 #include <pthread.h>
+#include <time.h>
+#include <sys/system_properties.h>
+#include <android/choreographer.h>
 #include <android/log.h>
+#include <android/looper.h>
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 
@@ -264,6 +268,9 @@ static uint64_t (*g_routecFramesPresented)() = nullptr;
 // each unlockAndPost below). The GPU direct-present path stands the CPU thread down, so the unified frame count
 // exposed to Kotlin prefers the routec counter when armed and falls back to this for cpu/base-gpu boots.
 static std::atomic<uint64_t> g_cpuPresentCount{0};
+// Phase 4 present probe, CPU half (cpuPresentProbe below): armed by the same -Drunelite.fpsprobe switch as librlawt's
+// half, read from the VM opts in jvmThreadMain before the render thread exists.
+static bool g_cpuPresentProbe = false;
 // Present seam (cont.): in direct-present mode the CPU present thread no longer runs (it's where g_lastFrameW/H
 // were set), so librlawt publishes the live canvas dims here each frame — touch->game coordinate mapping
 // (JvmLauncher.frameWidth/Height) depends on them, else clicks map off-canvas.
@@ -1148,9 +1155,165 @@ static void drainInput(JNIEnv *env) {
     }
 }
 
+static double monoMs() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
+}
+
+// Phase 4 present probe, CPU half, in the [presentprobe] shape librlawt logs for the direct present, so
+// fps-measure.sh reads either path: once a second, how many frames this thread blitted, the longest gap between two
+// blits, and how long a blit took. A blit is the frame copy, ANativeWindow_lock (where BufferQueue back-pressure
+// shows), the swizzle and unlockAndPost; swapAvgMs/swapMaxMs time that whole span. A gap of 5 s or more is the app
+// backgrounded, not a stall, so it is left out. Render-thread state only.
+static int g_ppPresents = 0;
+static double g_ppWindowStart = 0, g_ppLast = 0, g_ppGapMax = 0, g_ppBlitSum = 0, g_ppBlitMax = 0;
+static void cpuPresentProbe(double blitStart, double now) {
+    double blit = now - blitStart;
+    if (g_ppWindowStart == 0)
+        g_ppWindowStart = now;
+    if (g_ppLast > 0 && now - g_ppLast < 5000.0 && now - g_ppLast > g_ppGapMax)
+        g_ppGapMax = now - g_ppLast;
+    g_ppLast = now;
+    g_ppPresents++;
+    g_ppBlitSum += blit;
+    if (blit > g_ppBlitMax)
+        g_ppBlitMax = blit;
+    if (now - g_ppWindowStart >= 1000.0) {
+        LOGI("[presentprobe] presents=%d gapMaxMs=%.2f swapAvgMs=%.2f swapMaxMs=%.2f",
+             g_ppPresents, g_ppGapMax, g_ppBlitSum / g_ppPresents, g_ppBlitMax);
+        g_ppPresents = 0;
+        g_ppGapMax = g_ppBlitSum = g_ppBlitMax = 0;
+        g_ppWindowStart = now;
+    }
+}
+
+// The render thread wakes on the display's vsync, from AChoreographer on its own looper. It used to sleep a flat
+// 16 ms, which made its period 16 ms plus the loop body. That drifts against the panel's refresh, which moves where a
+// post lands relative to the next latch, and it polled a 90 Hz panel at under 60 Hz. A frame callback is one-shot,
+// so each wait posts one (unless the last is still pending) and pumps the looper until it runs. The timeout keeps
+// the loop turning if a vsync never arrives, and with no choreographer the flat sleep stands.
+// debug.runemobile.cpupace=sleep picks the flat sleep for an A/B run; it is read once, when the render thread starts.
+struct VsyncPacer {
+    AChoreographer *choreo = nullptr;
+    bool pending = false; // a frame callback is posted and has not run yet
+    bool fired = false;
+};
+static const int kVsyncTimeoutMs = 50;
+static void onPresentVsync(long /*frameTimeNanos*/, void *data) {
+    VsyncPacer *p = (VsyncPacer *)data;
+    p->pending = false;
+    p->fired = true;
+}
+static void initVsyncPacer(VsyncPacer &p) {
+    char mode[PROP_VALUE_MAX] = {0};
+    __system_property_get("debug.runemobile.cpupace", mode);
+    if (strcmp(mode, "sleep") == 0) {
+        LOGI("render: paced by a flat 16 ms sleep (debug.runemobile.cpupace=sleep)");
+        return;
+    }
+    // AChoreographer_postFrameCallback64 is API 29 and minSdk is 28. The older call differs only in passing the frame
+    // time as a long, which the callback ignores (and which is 64-bit on arm64, the only ABI built).
+    if (ALooper_prepare(0) && (p.choreo = AChoreographer_getInstance()) != nullptr)
+        LOGI("render: paced by the display vsync (AChoreographer)");
+    else
+        LOGE("render: no AChoreographer on the render thread; paced by a flat 16 ms sleep");
+}
+static void waitForVsync(VsyncPacer &p) {
+    if (!p.choreo) {
+        usleep(16000);
+        return;
+    }
+    if (!p.pending) {
+        p.pending = true;
+        AChoreographer_postFrameCallback(p.choreo, onPresentVsync, &p);
+    }
+    p.fired = false;
+    const double deadline = monoMs() + kVsyncTimeoutMs;
+    for (double left = kVsyncTimeoutMs; !p.fired && left > 0; left = deadline - monoMs())
+        ALooper_pollOnce((int)left + 1, nullptr, nullptr, nullptr);
+}
+
 // Blit the latest complete JavaBridge frame (TYPE_INT_RGB, 0x00RRGGBB ints) to the SurfaceView window,
 // swapping R<->B into RGBA_8888 (the only widely-available ANativeWindow format). Skips the copy when the
 // engine hasn't composited a new frame since the last tick.
+static void blitLatestFrame(JNIEnv *env, int &lastSeq, int &geomW, int &geomH, std::vector<jint> &frameCopy) {
+    ANativeWindow *win = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(g_winLock);
+        win = g_window;
+        if (win)
+            ANativeWindow_acquire(win);
+    }
+    if (!win)
+        return;
+
+    int seq = env->CallStaticIntMethod(g_bridgeCls, g_midSeq);
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        seq = lastSeq;
+    }
+    if (seq != lastSeq) {
+        int w = env->CallStaticIntMethod(g_bridgeCls, g_midW);
+        int h = env->CallStaticIntMethod(g_bridgeCls, g_midH);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            w = h = 0;
+        }
+        if (w > 0 && h > 0 && w <= 16384 && h <= 16384) {
+            g_lastFrameW.store(w, std::memory_order_relaxed);
+            g_lastFrameH.store(h, std::memory_order_relaxed);
+            jintArray arr = (jintArray)env->CallStaticObjectMethod(g_bridgeCls, g_midPixels);
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+                arr = nullptr;
+            }
+            if (arr) {
+                jsize len = env->GetArrayLength(arr);
+                const int64_t needed = (int64_t)w * h; // w,h capped above, so this can't overflow
+                if ((int64_t)len >= needed) {
+                    if (w != geomW || h != geomH) {
+                        ANativeWindow_setBuffersGeometry(win, w, h, WINDOW_FORMAT_RGBA_8888);
+                        geomW = w;
+                        geomH = h;
+                    }
+                    // Copy the frame out, then swizzle from the copy. The swizzle used to read the Java array in
+                    // place under GetPrimitiveArrayCritical, which holds off GC for as long as it is held (a GC the
+                    // engine thread needs waits for it), and the 633K-pixel swizzle is the slow part. A GC now waits
+                    // at most for GetIntArrayRegion's plain copy into this buffer, which is reused across frames.
+                    const double blitStart = g_cpuPresentProbe ? monoMs() : 0;
+                    if ((int64_t)frameCopy.size() < needed)
+                        frameCopy.resize((size_t)needed);
+                    env->GetIntArrayRegion(arr, 0, (jsize)needed, frameCopy.data());
+                    ANativeWindow_Buffer wb;
+                    if (env->ExceptionCheck()) {
+                        env->ExceptionClear();
+                    } else if (ANativeWindow_lock(win, &wb, nullptr) == 0) {
+                        const int cw = std::min(w, wb.width);
+                        const int ch = std::min(h, wb.height);
+                        uint32_t *dst = (uint32_t *)wb.bits;
+                        for (int y = 0; y < ch; y++) {
+                            uint32_t *drow = dst + (size_t)y * wb.stride;
+                            const jint *srow = frameCopy.data() + (size_t)y * w;
+                            for (int x = 0; x < cw; x++) {
+                                uint32_t s = (uint32_t)srow[x]; // 0x00RRGGBB
+                                drow[x] = 0xFF000000u | ((s & 0xFFu) << 16) | (s & 0xFF00u) | ((s >> 16) & 0xFFu);
+                            }
+                        }
+                        ANativeWindow_unlockAndPost(win);
+                        g_cpuPresentCount.fetch_add(1, std::memory_order_relaxed); // P2-4 dev fps chip
+                        if (g_cpuPresentProbe)
+                            cpuPresentProbe(blitStart, monoMs());
+                    }
+                }
+                env->DeleteLocalRef(arr);
+            }
+        }
+        lastSeq = seq;
+    }
+    ANativeWindow_release(win);
+}
+
 static void *renderLoop(void *) {
     JavaVM *vm = g_vm.load(std::memory_order_acquire);
     JNIEnv *env = nullptr;
@@ -1159,6 +1322,9 @@ static void *renderLoop(void *) {
     }
     int lastSeq = -1, geomW = -1, geomH = -1;
     uint64_t lastGen = 0;
+    std::vector<jint> frameCopy; // blitLatestFrame's copy of the frame
+    VsyncPacer pacer;
+    initVsyncPacer(pacer);
     while (g_renderRun) {
         // PERF-BATTERY-NETWORK-01: app backgrounded — the UI thread isn't drawing the native overlays, so the
         // whole per-tick snapshot-republish batch + present below is wasted. Drop to ~4 Hz and only drainInput
@@ -1172,6 +1338,12 @@ static void *renderLoop(void *) {
         // A surface destroy/recreate invalidates the cached geometry — force re-apply on the next blit.
         uint64_t gen = g_surfaceGen.load(std::memory_order_acquire);
         if (gen != lastGen) { geomW = geomH = -1; lastGen = gen; }
+        // GPU direct-present mode: the draw thread owns the Surface via EGL (eglSwapBuffers), so don't also acquire
+        // and post to it here; the snapshot republish below still runs for the native overlays. Otherwise blit first,
+        // right after the vsync wake, so the post lands at the same point in every refresh whatever the input
+        // dispatch and republish below cost on this tick.
+        if (g_bridgeCls && !g_directPresent.load(std::memory_order_acquire))
+            blitLatestFrame(env, lastSeq, geomW, geomH, frameCopy);
         if (g_bridgeCls) {
             drainInput(env);
             // Poll the A1 read-surface and publish to atomics for the UI thread (keeps it off HotSpot). Cheap
@@ -1343,71 +1515,7 @@ static void *renderLoop(void *) {
                 }
             }
         }
-
-        // GPU direct-present mode: the draw thread owns the Surface via EGL (eglSwapBuffers). Don't also acquire
-        // and post to it here — the snapshot republish above still ran for the native overlays. Just idle-pace.
-        if (g_directPresent.load(std::memory_order_acquire)) { usleep(16000); continue; }
-
-        ANativeWindow *win = nullptr;
-        {
-            std::lock_guard<std::mutex> lk(g_winLock);
-            win = g_window;
-            if (win) ANativeWindow_acquire(win);
-        }
-        if (!win || !g_bridgeCls) { if (win) ANativeWindow_release(win); usleep(16000); continue; }
-
-        int seq = env->CallStaticIntMethod(g_bridgeCls, g_midSeq);
-        if (env->ExceptionCheck()) { env->ExceptionClear(); seq = lastSeq; }
-        if (seq != lastSeq) {
-            int w = env->CallStaticIntMethod(g_bridgeCls, g_midW);
-            int h = env->CallStaticIntMethod(g_bridgeCls, g_midH);
-            if (env->ExceptionCheck()) { env->ExceptionClear(); w = h = 0; }
-            if (w > 0 && h > 0 && w <= 16384 && h <= 16384) {
-                g_lastFrameW.store(w, std::memory_order_relaxed);
-                g_lastFrameH.store(h, std::memory_order_relaxed);
-                jintArray arr = (jintArray) env->CallStaticObjectMethod(g_bridgeCls, g_midPixels);
-                if (env->ExceptionCheck()) { env->ExceptionClear(); arr = nullptr; }
-                if (arr) {
-                    jsize len = env->GetArrayLength(arr);
-                    const int64_t needed = (int64_t) w * h;   // w,h capped above, so this can't overflow
-                    if ((int64_t) len >= needed) {
-                        if (w != geomW || h != geomH) {
-                            ANativeWindow_setBuffersGeometry(win, w, h, WINDOW_FORMAT_RGBA_8888);
-                            geomW = w; geomH = h;
-                        }
-                        ANativeWindow_Buffer wb;
-                        if (ANativeWindow_lock(win, &wb, nullptr) == 0) {
-                            // PERF-1: GetPrimitiveArrayCritical instead of GetIntArrayElements — the latter
-                            // malloc'd + copied the full frame every blit on ART. Critical gives a direct
-                            // (pinned) pointer; the window is kept tight (just the swizzle loop, no JNI/IO
-                            // inside) because it can block GC for its duration. librlawt's legacy path has
-                            // used the same pattern for years (librlawt.cpp GetPrimitiveArrayCritical).
-                            jint *px = (jint *)env->GetPrimitiveArrayCritical(arr, nullptr);
-                            if (px) {
-                                const int cw = std::min(w, wb.width);
-                                const int ch = std::min(h, wb.height);
-                                uint32_t *dst = (uint32_t *) wb.bits;
-                                for (int y = 0; y < ch; y++) {
-                                    uint32_t *drow = dst + (size_t) y * wb.stride;
-                                    const jint *srow = px + (size_t) y * w;
-                                    for (int x = 0; x < cw; x++) {
-                                        uint32_t s = (uint32_t) srow[x];   // 0x00RRGGBB
-                                        drow[x] = 0xFF000000u | ((s & 0xFFu) << 16) | (s & 0xFF00u) | ((s >> 16) & 0xFFu);
-                                    }
-                                }
-                                env->ReleasePrimitiveArrayCritical(arr, px, JNI_ABORT);
-                            }
-                            ANativeWindow_unlockAndPost(win);
-                            g_cpuPresentCount.fetch_add(1, std::memory_order_relaxed); // P2-4 dev fps chip
-                        }
-                    }
-                    env->DeleteLocalRef(arr);
-                }
-            }
-            lastSeq = seq;
-        }
-        ANativeWindow_release(win);
-        usleep(16000);   // ~60 Hz cap; the seq check makes an idle login screen nearly free
+        waitForVsync(pacer); // the seq check makes an idle login screen nearly free
     }
     return nullptr;
 }
@@ -1481,6 +1589,8 @@ static void *jvmThreadMain(void *argp) {
         if (o == "-Drunelite.routecgpu=true") routecGpu = true;
         if (o == "-Drunelite.rlhdprobe=true") rlhdProbe = true;
         if (o == "-Drunelite.routecrlhd=true") routecRlhdFull = true;   // AG3-b full 117HD boot
+        if (o == "-Drunelite.fpsprobe=true")
+            g_cpuPresentProbe = true;
     }
 
     if (rlhdProbe) {

@@ -7,7 +7,8 @@
 #   [frameprobe] n=N min=.. avg=.. p95=.. max=.. gs=STATE    -- per-frame interval (ms), windowed/sec
 #   [framebins]  dt=I:C,.. jit=I:C,.. max=.. jitMax=.. gcN=N gcMs=N heapMB=U/C gs=STATE
 #   [framehist]  n=N p50=.. p95=.. p99=.. p999=.. ... scope=LOGGED_IN   -- every 10 s, since the first frame
-# (headless.FrameStats), the native present probe (same switch; both ports, GPU/117HD direct present):
+# (headless.FrameStats), the native present probe (same switch; the GPU/117HD direct present on both ports, and
+# Android's CPU blit, where swap = the whole blit: frame copy, window lock, swizzle and post):
 #   [presentprobe] presents=N gapMaxMs=.. swapAvgMs=.. swapMaxMs=..
 # the JVM's own -Xlog:gc,safepoint lines (same switch), the native GPU-time probe (librlawt, only with
 # debug.routec.gputime=1):
@@ -331,7 +332,8 @@ if [[ -n "$bins" ]]; then
   fi
 fi
 
-# Present cadence over LOGGED_IN windows ([presentprobe], the GPU/117HD direct present on either port).
+# Present cadence over LOGGED_IN windows ([presentprobe]: the GPU/117HD direct present on either port, or Android's
+# CPU blit).
 if [[ -n "$present" ]]; then
   printf '%s\n' "$present" | awk -v label="$LABEL" '
     $5=="LOGGED_IN" { w++; n += $1; sw += $1 * $3; if ($2 + 0 > gap) gap = $2 + 0; if ($4 + 0 > smx) smx = $4 + 0; next }
