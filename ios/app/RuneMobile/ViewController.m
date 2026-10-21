@@ -24,6 +24,7 @@
 #import <objc/runtime.h>            // objc_setAssociatedObject — attach a control's spec to its button
 #import <unistd.h>
 #import <fcntl.h>
+#import <pthread.h>            // the Release perf-probe log's reader thread
 #import <os/lock.h>            // os_unfair_lock — guards the JSON-fault rate-limiter (QA-SYS-1 sibling)
 #import <time.h>               // clock_gettime_nsec_np — monotonic window for the rate-limiter
 #import <mach/mach.h>          // task_info — resident memory for the developer-mode diagnostics readout
@@ -216,6 +217,7 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
     int _lastFrameSeq;
     CFTimeInterval _fpsStamp;
     double _lastFps;
+    long _lastPresentCount; // RouteCBridge presents at the last sample: the 117HD direct-present path's frame count
 }
 @property (nonatomic, strong) UITextView *console;
 @property (nonatomic, strong) UIButton *launchButton; // dev-boot the JVM (the Tap-to-Play cover is the normal path)
@@ -3676,9 +3678,107 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
     [self appendLine:@"(JVM stdout/stderr -> Documents/jvm-stdio.log)"];
 #else
     // QA-P1-12: Release does not redirect the VM's stdout/stderr into a Documents sink (there is none); they
-    // go to the system default. Nothing to capture.
+    // go to the system default. Nothing to capture, unless the perf probe is armed: then its timing lines alone.
+    if ([JVMLauncher perfProbeArmed])
+        [self startPerfProbeCapture];
 #endif
 }
+
+#if !DEBUG
+// Phase 4, Release with the perf probe armed: keep the probe's own lines from the VM's stdout/stderr, and nothing else
+// (QA-P1-12: no engine output lands in Documents), in Documents/perf-probe.log, the previous launch's kept as .prev.
+// The lines carry milliseconds, counts and a game state. Unlike Debug's direct dup2 this is a pipe, so a hard crash
+// loses whatever is still in it: these lines measure a live session, they don't diagnose a crash.
+static int sPerfProbeReadFd = -1;
+static int sPerfProbeLogFd = -1;
+
+static BOOL perfProbeKeeps(const char *line) {
+    static const char *const kMarks[] = {"[fpsprobe]", "[frameprobe]", "[framebins]", "[framehist]",
+                                         "[presentprobe]", "][gc", "][safepoint", "[memwatch",
+                                         "[coldstart]", "[perfprobe]"};
+    for (size_t i = 0; i < sizeof kMarks / sizeof kMarks[0]; i++) {
+        if (strstr(line, kMarks[i]))
+            return YES;
+    }
+    return NO;
+}
+
+// Whole lines only: a read can end mid-line, and -Xlog writes a line's decorations and message separately. A line
+// longer than the buffer is dropped (no probe line comes close).
+static void *perfProbePump(void *unused) {
+    (void)unused;
+    pthread_setname_np("perf-probe-log");
+    static char buf[4096];
+    size_t len = 0;
+    BOOL overlong = NO;
+    for (;;) {
+        ssize_t n = read(sPerfProbeReadFd, buf + len, sizeof buf - 1 - len);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            break;
+        len += (size_t)n;
+        size_t start = 0;
+        for (size_t i = 0; i < len; i++) {
+            if (buf[i] != '\n')
+                continue;
+            buf[i] = '\0';
+            if (!overlong && perfProbeKeeps(buf + start)) {
+                buf[i] = '\n';
+                (void)write(sPerfProbeLogFd, buf + start, i - start + 1);
+            }
+            overlong = NO;
+            start = i + 1;
+        }
+        memmove(buf, buf + start, len - start);
+        len -= start;
+        if (len == sizeof buf - 1) {
+            overlong = YES;
+            len = 0;
+        }
+    }
+    close(sPerfProbeReadFd);
+    sPerfProbeReadFd = -1;
+    return NULL;
+}
+
+- (void)startPerfProbeCapture {
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSString *path = [docs stringByAppendingPathComponent:@"perf-probe.log"];
+    NSString *previous = [path stringByAppendingPathExtension:@"prev"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if ([fm fileExistsAtPath:path]) {
+        [fm removeItemAtPath:previous error:NULL];
+        [fm moveItemAtPath:path toPath:previous error:NULL];
+    }
+    // CompleteUnlessOpen, as for the Debug sinks: the session keeps writing while the screen is locked.
+    [fm createFileAtPath:path contents:nil attributes:@{NSFileProtectionKey : NSFileProtectionCompleteUnlessOpen}];
+    int logFd = open(path.UTF8String, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    int p[2];
+    if (logFd < 0 || pipe(p) != 0) {
+        if (logFd >= 0)
+            close(logFd);
+        return;
+    }
+    sPerfProbeLogFd = logFd;
+    sPerfProbeReadFd = p[0];
+    pthread_t t;
+    if (pthread_create(&t, NULL, perfProbePump, NULL) != 0) {
+        // No reader, so no redirect: writers to a reader-less pipe would block once it fills.
+        close(p[0]);
+        close(p[1]);
+        close(logFd);
+        sPerfProbeReadFd = sPerfProbeLogFd = -1;
+        return;
+    }
+    pthread_detach(t);
+    dup2(p[1], STDOUT_FILENO);
+    dup2(p[1], STDERR_FILENO);
+    close(p[1]);
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+}
+#endif
 
 #pragma mark - JIT gate (the W1-audit Claim E)
 
@@ -4745,6 +4845,15 @@ static int chatRowCanvasH(void) {
     ]];
 }
 
+// Phase 4 cold start: a first-frame milestone, stamped with the time since the process started. On the shell log
+// line, and as a [coldstart] line on stderr, which jvm-stdio.log (Debug) or perf-probe.log (Release, perf probe
+// armed) keeps beside the frame lines.
+- (void)stampColdStart:(NSString *)milestone line:(NSString *)line {
+    long ms = [JVMLauncher msSinceProcessStart];
+    [self appendLine:[NSString stringWithFormat:@"%@ sinceStartMs=%ld", line, ms]];
+    fprintf(stderr, "[coldstart] %s sinceStartMs=%ld\n", milestone.UTF8String, ms);
+}
+
 // Clear the boot overlay the moment real content is ready: the first painted frame (renderedFrameWidth > 0),
 // a fatal-error card taking over (fatalErrorShown - hands off to that card so the two never stack), or the 60s
 // failsafe (a boot that never produces a frame must not wedge the UI). One-way: once hidden it stays hidden.
@@ -4756,8 +4865,9 @@ static int chatRowCanvasH(void) {
     if (firstFrame || self.fatalErrorShown || timedOut) {
         self.bootStatusScrim.hidden = YES;
         [self.bootStatusSpinner stopAnimating];
-        [self appendLine:[NSString stringWithFormat:@"[shell] onboard: boot overlay dismissed (frame=%@ timeout=%@)",
-                                                    firstFrame ? @"YES" : @"NO", timedOut ? @"YES" : @"NO"]];
+        [self stampColdStart:firstFrame ? @"firstFrame" : (timedOut ? @"bootTimeout" : @"bootFatal")
+                        line:[NSString stringWithFormat:@"[shell] onboard: boot overlay dismissed (frame=%@ timeout=%@)",
+                                                        firstFrame ? @"YES" : @"NO", timedOut ? @"YES" : @"NO"]];
     }
 }
 
@@ -5509,9 +5619,9 @@ static int chatRowCanvasH(void) {
     // Active renderer. Once launched, the pending flags ARE the effective renderer (locked at boot); the saved
     // preference can differ (the user may have picked another for next launch), so only trust it pre-launch.
     NSString *renderer;
-    // Only the 117HD DIRECT-present path presents off-thread and never bumps getFrameSeq, so FPS is unmeasurable
-    // shell-side. Base GPU uses the readback present (gpuPublish bumps frameSeq like the CPU snapshot), so its FPS
-    // IS measurable — don't lump it in with 117HD.
+    // Only the 117HD DIRECT-present path presents off-thread and never bumps getFrameSeq, so its FPS comes from
+    // RouteCBridge's present count instead. Base GPU uses the readback present (gpuPublish bumps frameSeq like the
+    // CPU snapshot), so it is measured like CPU - don't lump it in with 117HD.
     BOOL directPresent = NO;
     if (self.launched) {
         if (self.pendingRouteCZone) {
@@ -5527,23 +5637,29 @@ static int chatRowCanvasH(void) {
         renderer = [pref stringByAppendingString:@" (next launch)"];
     }
 
-    // FPS — sampled from the engine's real rendered-frame counter (getFrameSeq) over a ~0.5s window, NOT
-    // display-link ticks. Frozen under GPU direct-present, so report those honestly rather than as a stall.
+    // FPS, sampled over a ~0.5s window from a real frame counter, NOT display-link ticks: the engine's rendered-frame
+    // counter (getFrameSeq), or on the 117HD direct-present path (which never bumps it) the frames RouteCBridge
+    // handed to the screen. The panel says which, since a present count is not the engine's own frame count.
     int seq = self.launched ? [JVMLauncher renderedFrameSeq] : -1;
+    long presents = [RouteCBridge presentedFrameCount];
     CFTimeInterval now = CACurrentMediaTime();
     if (_fpsStamp <= 0) {
         _fpsStamp = now;
         _lastFrameSeq = seq;
+        _lastPresentCount = presents;
     }
     CFTimeInterval dt = now - _fpsStamp;
     if (dt >= 0.5) {
-        _lastFps = (seq >= 0 && _lastFrameSeq >= 0 && seq >= _lastFrameSeq) ? (seq - _lastFrameSeq) / dt : 0;
+        if (directPresent)
+            _lastFps = presents >= _lastPresentCount ? (presents - _lastPresentCount) / dt : 0;
+        else
+            _lastFps = (seq >= 0 && _lastFrameSeq >= 0 && seq >= _lastFrameSeq) ? (seq - _lastFrameSeq) / dt : 0;
         _fpsStamp = now;
         _lastFrameSeq = seq;
+        _lastPresentCount = presents;
     }
-    NSString *fpsStr = !self.launched ? @"—"
-                                      : (directPresent ? @"n/a (GPU present)"
-                                                       : [NSString stringWithFormat:@"%.0f", _lastFps]);
+    NSString *fpsStr = !self.launched ? @"\u2014"
+                                      : [NSString stringWithFormat:directPresent ? @"%.0f (presents)" : @"%.0f", _lastFps];
 
     // Resident memory of this process (the increased-memory-limit entitlement is what keeps the JVM heap alive).
     double residentMB = 0;
@@ -5556,7 +5672,7 @@ static int chatRowCanvasH(void) {
 
     // Compact always-on perf overlay (if enabled): fps · resident MB · thermal. Cheap — no bridge JSON.
     if (overlayVisible) {
-        NSString *fpsShort = !self.launched ? @"—" : (directPresent ? @"gpu" : [NSString stringWithFormat:@"%.0f", _lastFps]);
+        NSString *fpsShort = !self.launched ? @"\u2014" : [NSString stringWithFormat:@"%.0f", _lastFps];
         self.perfOverlay.text = [NSString stringWithFormat:@" %@ fps · %.0f MB · %@ ", fpsShort, residentMB, thermal];
     }
 
@@ -6105,7 +6221,7 @@ static CGRect mapRectFromArr(NSArray *a) {
             [self hdBootCookieClear];
             self.hdBootCookieArmed = NO;
             self.hdBootCookieSettled = YES;
-            [self appendLine:@"[shell] 117HD first GL present — crash cookie cleared"];
+            [self stampColdStart:@"gpuFirstPresent" line:@"[shell] 117HD first GL present - crash cookie cleared"];
         } else if (!self.hdBootCookieArmed && !self.appBackgrounded && self.framesShown > 0) {
             [self hdBootCookieArm];
             self.hdBootCookieArmed = YES;
@@ -6120,7 +6236,7 @@ static CGRect mapRectFromArr(NSArray *a) {
             [self hdBootCookieClear];
             self.hdBootCookieArmed = NO;
             self.hdBootCookieSettled = YES;
-            [self appendLine:@"[shell] GPU first frame — crash cookie cleared"];
+            [self stampColdStart:@"gpuFirstFrame" line:@"[shell] GPU first frame - crash cookie cleared"];
         } else if (!self.hdBootCookieArmed && !self.appBackgrounded && self.framesShown > 0) {
             [self hdBootCookieArm];
             self.hdBootCookieArmed = YES;

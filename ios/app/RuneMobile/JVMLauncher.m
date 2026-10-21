@@ -10,6 +10,8 @@
 #import <stdatomic.h>
 #import <os/lock.h>            // os_unfair_lock — guards the bridge-fault rate-limiter (QA-SYS-1)
 #import <time.h>              // clock_gettime_nsec_np — monotonic window for the rate-limiter
+#import <sys/sysctl.h>        // KERN_PROC_PID — this process's start time, for the cold-start stamps
+#import <sys/time.h>
 #import "jni/jni.h"
 #import "routec_gl_jni.h"   // W3 GPU Route C: RouteC_registerGLNatives(env) — the JNI GL bridge registration
 #import "routec_zone_jni.h" // W3 GPU Zone B0.5: RouteC_registerZoneNatives(env) — the RLHD facade-delta natives
@@ -950,6 +952,28 @@ static NSString *jstringToNS(JNIEnv *env, jstring js) {
     return [[NSFileManager defaultManager] fileExistsAtPath:guess] ? guess : nil;
 }
 
++ (BOOL)perfProbeArmed {
+    static BOOL armed;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+        armed = [[NSFileManager defaultManager] fileExistsAtPath:[docs stringByAppendingPathComponent:@"perfprobe"]];
+    });
+    return armed;
+}
+
++ (long)msSinceProcessStart {
+    struct kinfo_proc kp;
+    size_t len = sizeof kp;
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
+    if (sysctl(mib, 4, &kp, &len, NULL, 0) != 0 || len == 0)
+        return -1;
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    const struct timeval start = kp.kp_proc.p_starttime;
+    return (long)(now.tv_sec - start.tv_sec) * 1000L + (long)(now.tv_usec - start.tv_usec) / 1000L;
+}
+
 // Library/Application Support — NOT surfaced by UIFileSharingEnabled / LSSupportsOpeningDocumentsInPlace
 // (those only expose Documents). Unlike Documents, the system does not create this for us, so ensure it exists.
 + (NSString *)appSupportDir {
@@ -1111,18 +1135,80 @@ static void dumpFaultState(const char *when) {
     fprintf(stderr, "[faultdiag:%s] mem avail=%.1fMB footprint=%.1fMB\n", when, avail / 1048576.0, fp / 1048576.0);
 }
 
-// Sample jetsam headroom every 500 ms across RuneLite init (the crash window), to the crash-safe fd. If a
-// post-login launch is OOM/jetsam-killed, the last line shows avail collapsing toward 0 right before death
-// — the signature that separates a memory kill from a SIGSEGV (exception-port/handler) kill.
+// Jetsam headroom, footprint, Java heap and thermal state for the whole session, to stderr: the crash-safe
+// jvm-stdio.log fd in Debug, perf-probe.log in a Release build with the perf probe armed (nothing keeps stderr
+// otherwise, so it does not run then). Every 500 ms for the first 30 s, across RuneLite init (the crash window): if
+// a post-login launch is OOM/jetsam-killed, the last line shows avail collapsing toward 0 right before death, the
+// signature that separates a memory kill from a SIGSEGV (exception-port/handler) kill. Every 5 s after that, so a
+// long session's leak or thermal ramp shows as a trend beside the frame-pacing lines.
+// heapMB is Java used/committed, the same pair as [framebins], once the VM is published. The thread attaches as a
+// daemon; that is safe because a published VM is never destroyed (jvm-main parks for the life of the process).
+static const char *memwatchThermal(void) {
+    switch ([NSProcessInfo processInfo].thermalState) {
+        case NSProcessInfoThermalStateNominal:
+            return "nominal";
+        case NSProcessInfoThermalStateFair:
+            return "fair";
+        case NSProcessInfoThermalStateSerious:
+            return "serious";
+        case NSProcessInfoThermalStateCritical:
+            return "critical";
+    }
+    return "unknown";
+}
 static void *memWatchdog(void *unused) {
     (void)unused;
     pthread_setname_np("mem-watchdog");
-    for (int i = 0; i < 60; i++) {
-        size_t avail = os_proc_available_memory();
-        task_vm_info_data_t vmi; mach_msg_type_number_t c = TASK_VM_INFO_COUNT; uint64_t fp = 0;
-        if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vmi, &c) == KERN_SUCCESS) fp = vmi.phys_footprint;
-        fprintf(stderr, "[memwatch t=%4.1fs] avail=%.1fMB footprint=%.1fMB\n", i * 0.5, avail / 1048576.0, fp / 1048576.0);
-        usleep(500000);
+    const uint64_t t0 = clock_gettime_nsec_np(CLOCK_MONOTONIC);
+    JNIEnv *env = NULL;
+    jclass runtimeClass = NULL;
+    jmethodID getRuntime = NULL, totalMemory = NULL, freeMemory = NULL;
+    for (int i = 0;; i++) {
+        @autoreleasepool {
+            size_t avail = os_proc_available_memory();
+            task_vm_info_data_t vmi;
+            mach_msg_type_number_t c = TASK_VM_INFO_COUNT;
+            uint64_t fp = 0;
+            if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vmi, &c) == KERN_SUCCESS)
+                fp = vmi.phys_footprint;
+            JavaVM *vm = atomic_load(&gVM);
+            if (!env && vm) {
+                if ((*vm)->AttachCurrentThreadAsDaemon(vm, (void **)&env, NULL) != JNI_OK) {
+                    env = NULL;
+                } else {
+                    jclass local = (*env)->FindClass(env, "java/lang/Runtime");
+                    if (local) {
+                        runtimeClass = (jclass)(*env)->NewGlobalRef(env, local);
+                        (*env)->DeleteLocalRef(env, local);
+                        getRuntime = (*env)->GetStaticMethodID(env, runtimeClass, "getRuntime", "()Ljava/lang/Runtime;");
+                        if (getRuntime)
+                            totalMemory = (*env)->GetMethodID(env, runtimeClass, "totalMemory", "()J");
+                        if (totalMemory)
+                            freeMemory = (*env)->GetMethodID(env, runtimeClass, "freeMemory", "()J");
+                    }
+                    if ((*env)->ExceptionCheck(env)) {
+                        (*env)->ExceptionClear(env);
+                        getRuntime = NULL;
+                    }
+                }
+            }
+            char heap[32] = "-";
+            if (getRuntime && totalMemory && freeMemory) {
+                jobject rt = (*env)->CallStaticObjectMethod(env, runtimeClass, getRuntime);
+                if (rt) {
+                    jlong total = (*env)->CallLongMethod(env, rt, totalMemory);
+                    jlong freeBytes = (*env)->CallLongMethod(env, rt, freeMemory);
+                    snprintf(heap, sizeof heap, "%lld/%lld", (long long)((total - freeBytes) >> 20), (long long)(total >> 20));
+                    (*env)->DeleteLocalRef(env, rt);
+                }
+                if ((*env)->ExceptionCheck(env))
+                    (*env)->ExceptionClear(env);
+            }
+            double t = (clock_gettime_nsec_np(CLOCK_MONOTONIC) - t0) / 1e9;
+            fprintf(stderr, "[memwatch t=%4.1fs] avail=%.1fMB footprint=%.1fMB heapMB=%s thermal=%s\n", t,
+                    avail / 1048576.0, fp / 1048576.0, heap, memwatchThermal());
+        }
+        usleep(i < 60 ? 500000 : 5000000);
     }
     return NULL;
 }
@@ -1509,6 +1595,16 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
         log(@"[jvm] GPU Zone (117HD) ARMED (routecrlhd=true)");
     }
 
+    // Phase 4 perf probe (see +perfProbeArmed), on every renderer: headless.FrameStats' fps and frame-pacing lines,
+    // and GC + safepoint logging. -Xlog goes to stdout so it shares the frame lines' timeline in jvm-stdio.log
+    // (Debug) or perf-probe.log (Release).
+    if ([JVMLauncher perfProbeArmed]) {
+        [opts addObject:@"-Drunelite.fpsprobe=true"];
+        [opts addObject:@"-Xlog:gc,safepoint:stdout:time,uptime,tags"];
+        log(@"[jvm] perf probe ARMED (fpsprobe + -Xlog:gc,safepoint + presentprobe)");
+        fputs("[perfprobe] ARMED: fpsprobe + -Xlog:gc,safepoint + presentprobe\n", stderr);
+    }
+
     // Phase 4 sub-goal A — interactive login, purely in-process (no native touch bridge). Map the JX_*
     // launcher handoff from tokens.json (Application Support), then arm HeadlessLogin's two-stage click
     // machine (EULA Accept -> Play Now). Only arms when a usable token set is present, so a build with no
@@ -1582,7 +1678,12 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     log([NSString stringWithFormat:@"[jvm] cleared thread EXC_MASK_BAD_ACCESS port krt=%d", krt]);
 
     dumpFaultState("post-clear");   // STRIP AFTER DIAGNOSIS — did the clears stick?
-    startMemWatchdog();             // STRIP AFTER DIAGNOSIS — sample jetsam headroom across RuneLite init
+#if DEBUG
+    startMemWatchdog(); // session-long memory/heap/thermal sampler (see memWatchdog)
+#else
+    if ([JVMLauncher perfProbeArmed])
+        startMemWatchdog(); // Release keeps stderr only with the perf probe armed
+#endif
 
     log(@"[jvm] JNI_CreateJavaVM (HotSpot generates its template interpreter now)…");
 

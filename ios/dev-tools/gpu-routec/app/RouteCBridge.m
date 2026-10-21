@@ -12,6 +12,7 @@
 // OpenGLES module; the ANGLE branch must never see these (CoreVideo/AVFoundation pull OpenGLES, clashing with
 // the Khronos GLES3 headers).
 #import <AVFoundation/AVFoundation.h>
+#import <stdatomic.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CVOpenGLESTextureCache.h>
 #endif
@@ -92,7 +93,7 @@ static void *sPresentLayer = NULL;
 // Count of frames actually presented to the screen (eglSwapBuffers / presentRenderbuffer). Lets the UI switch from
 // the CPU-frame blit to direct-present LAZILY — only once the GPU plugin has presented a real frame — so a parked/
 // slow startup (or the boot/login phase before the plugin runs) still shows the CPU frames instead of black.
-static long sPresentedFrames = 0;
+static _Atomic long sPresentedFrames = 0; // GL thread bumps it; the main thread reads it (reveal gate, perf chip)
 
 #if defined(RC_BACKEND_ANGLE)
 // ================================================================================================================
@@ -550,6 +551,12 @@ static BOOL rcBuildFbo(int w, int h)
 // YES once the GPU plugin has presented at least one frame to the screen. The UI uses this to switch from the
 // CPU-frame blit to direct present LAZILY, so boot/login (and a parked startup) show CPU frames, not black.
 + (BOOL)hasPresentedFrame { return sPresentedFrames > 0; }
+
+// Frames handed to the screen since the GPU context came up (reset by awtDestroy). The perf readout's fps on the
+// direct-present path, which never bumps the engine's frame sequence.
++ (long)presentedFrameCount {
+    return sPresentedFrames;
+}
 
 // ---- readback (offscreen present path; backend-agnostic — glReadPixels is core) ----
 + (void)readbackInto:(uint32_t *)dst width:(int)w height:(int)h

@@ -36,6 +36,7 @@
 + (void)setPresentLayer:(id)caEaglLayer;
 + (BOOL)isPresenting;     // YES once a present layer is set (swapBuffers should present, not read back)
 + (BOOL)hasPresentedFrame;// YES once >=1 frame has been presented — UI switches CPU-blit -> direct present lazily
++ (long)presentedFrameCount; // frames presented since the context came up; the perf readout's direct-present fps
 + (void)present;          // EAGL: presentRenderbuffer; ANGLE: eglSwapBuffers
 
 // ---- PiP present (EAGL only): the 117HD Picture-in-Picture path ----

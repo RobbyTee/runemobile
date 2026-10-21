@@ -926,6 +926,53 @@ static JNIEXPORT jint JNICALL rc_AWT_setSwapInterval_0(JNIEnv *env, jobject self
     return a0;
 }
 
+// Phase 4 present probe, armed by -Drunelite.fpsprobe (the engine frame probe's switch); the same line as Android's
+// librlawt. Once a second on the direct-present path: how many frames reached the screen, the longest gap between
+// two presents, and how long [RouteCBridge present] took. To stderr, which jvm-stdio.log (Debug) or perf-probe.log
+// (Release) keeps beside the engine's [framebins]. A gap of 5 s or more is the app in the background, not a stall,
+// so it is left out.
+static int rc_pp_armed = -1; // -1 until read from the VM on the first present
+static int rc_pp_presents = 0;
+static double rc_pp_window = 0, rc_pp_last = 0, rc_pp_gap_max = 0, rc_pp_swap_sum = 0, rc_pp_swap_max = 0;
+static int rc_fpsprobe_armed(JNIEnv *env) {
+    jclass b = (*env)->FindClass(env, "java/lang/Boolean");
+    if (!b) {
+        (*env)->ExceptionClear(env);
+        return 0;
+    }
+    jmethodID m = (*env)->GetStaticMethodID(env, b, "getBoolean", "(Ljava/lang/String;)Z");
+    jstring key = m ? (*env)->NewStringUTF(env, "runelite.fpsprobe") : NULL;
+    int on = key && (*env)->CallStaticBooleanMethod(env, b, m, key) == JNI_TRUE;
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        on = 0;
+    }
+    if (key)
+        (*env)->DeleteLocalRef(env, key);
+    (*env)->DeleteLocalRef(env, b);
+    return on;
+}
+static void rc_present_probe(double start, double end) // seconds (rc_now_seconds)
+{
+    double swap = (end - start) * 1000.0, now = end * 1000.0;
+    if (rc_pp_window == 0)
+        rc_pp_window = now;
+    if (rc_pp_last > 0 && now - rc_pp_last < 5000.0 && now - rc_pp_last > rc_pp_gap_max)
+        rc_pp_gap_max = now - rc_pp_last;
+    rc_pp_last = now;
+    rc_pp_presents++;
+    rc_pp_swap_sum += swap;
+    if (swap > rc_pp_swap_max)
+        rc_pp_swap_max = swap;
+    if (now - rc_pp_window >= 1000.0) {
+        fprintf(stderr, "[presentprobe] presents=%d gapMaxMs=%.2f swapAvgMs=%.2f swapMaxMs=%.2f\n", rc_pp_presents,
+                rc_pp_gap_max, rc_pp_swap_sum / rc_pp_presents, rc_pp_swap_max);
+        rc_pp_presents = 0;
+        rc_pp_gap_max = rc_pp_swap_sum = rc_pp_swap_max = 0;
+        rc_pp_window = now;
+    }
+}
+
 static JNIEXPORT void JNICALL rc_AWT_swapBuffers_0(JNIEnv *env, jobject self)
 {
     static int once = 0; if (!once) { once = 1;
@@ -937,6 +984,12 @@ static JNIEXPORT void JNICALL rc_AWT_swapBuffers_0(JNIEnv *env, jobject self)
         double p0 = rc_now_seconds();
         [RouteCBridge present];
         double tPresent = rc_now_seconds() - p0;
+        if (rc_pp_armed < 0) {
+            rc_pp_armed = rc_fpsprobe_armed(env);
+            fprintf(stderr, "[presentprobe] %s (-Drunelite.fpsprobe)\n", rc_pp_armed ? "armed" : "off");
+        }
+        if (rc_pp_armed)
+            rc_present_probe(p0, p0 + tPresent);
         static int frames = 0; static double accPresent = 0, lastLog = 0;
         double now = rc_now_seconds();
         frames++; accPresent += tPresent;

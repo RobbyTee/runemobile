@@ -60,6 +60,16 @@ typedef void (^JVMLogSink)(NSString *line);
 /// any legacy Documents/tokens.json into Application Support (and purges the exposed copy). Any thread.
 + (NSString *)tokensPath;
 
+/// Phase 4 perf probe: YES when a `perfprobe` file is in Documents (tools/perfprobe.sh ios on), in either build
+/// configuration. Armed, the VM gets -Drunelite.fpsprobe (headless.FrameStats' frame-pacing lines) plus GC and
+/// safepoint logging, the direct-present path logs [presentprobe], and a Release build keeps those timing lines,
+/// and only those, in Documents/perf-probe.log (Debug already has them in jvm-stdio.log). A marker rather than
+/// DEBUG because Debug is the daily driver and jvm-stdio.log grows for the whole session. Read once; any thread.
++ (BOOL)perfProbeArmed;
+
+/// Milliseconds since this process started, for the cold-start stamps; -1 if the kernel won't say. Any thread.
++ (long)msSinceProcessStart;
+
 /// dlopen(libjvm) -> JNI_CreateJavaVM -> run JitProbe, Bench, GlyphSmoke in one VM,
 /// then DestroyJavaVM. Blocks until done. MUST be called on a dedicated thread with
 /// JIT already live (CS_DEBUGGED + the StikDebug brk #0x69 script). Returns 0 on a
