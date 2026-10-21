@@ -29,6 +29,7 @@ import java.awt.Rectangle;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.client.RuneLite;
@@ -72,6 +73,20 @@ public final class OverlayBridge
 	private static volatile String overlaysJson = "{\"available\":false}";
 	private static volatile boolean uiOpen;
 	private static long lastRefresh;
+
+	/**
+	 * Upstream's WidgetOverlays for the HUD containers {@link HudVeneerBridge} lays out itself: the chat, minimap and
+	 * side panel it pins, and the tab-stone rows it hides, in both resizable layouts. A position saved for one in the
+	 * editor makes WidgetOverlay.render force the container every frame against the veneer's pin (seen on device: the
+	 * minimap re-pinned every frame), so the editor neither lists nor moves them. These names are also their config
+	 * keys, so upstream can't rename one without dropping every user's saved position; OverlayBridgeTest holds them
+	 * to WidgetOverlays.createOverlays.
+	 */
+	static final Set<String> HUD_OWNED = Set.of(
+		"RESIZABLE_VIEWPORT_CHATBOX_PARENT", "RESIZABLE_VIEWPORT_INVENTORY_PARENT", "RESIZABLE_MINIMAP_STONES_WIDGET",
+		"RESIZABLE_VIEWPORT_BOTTOM_LINE_CHATBOX_PARENT", "RESIZABLE_MINIMAP_WIDGET",
+		"RESIZABLE_VIEWPORT_BOTTOM_LINE_TABS1", "RESIZABLE_VIEWPORT_BOTTOM_LINE_TABS2",
+		"RESIZABLE_VIEWPORT_BOTTOM_LINE_INVENTORY_PARENT");
 
 	private OverlayBridge()
 	{
@@ -129,6 +144,10 @@ public final class OverlayBridge
 		{
 			return ack(name, false, "unavailable");
 		}
+		if (HUD_OWNED.contains(name))
+		{
+			return ack(name, false, "hud-owned");
+		}
 		ct.invokeLater(() ->
 		{
 			final Overlay overlay = findOverlay(name);
@@ -162,6 +181,10 @@ public final class OverlayBridge
 		if (name == null || positionName == null || ct == null || !ensureResolved())
 		{
 			return ack(name, false, "unavailable");
+		}
+		if (HUD_OWNED.contains(name))
+		{
+			return ack(name, false, "hud-owned");
 		}
 		final OverlayPosition position = parsePosition(positionName);
 		if (position == null)
@@ -298,7 +321,7 @@ public final class OverlayBridge
 						continue;
 					}
 					final String name = overlay.getName();
-					if (name == null || name.isEmpty())
+					if (name == null || name.isEmpty() || HUD_OWNED.contains(name))
 					{
 						continue;
 					}
@@ -339,6 +362,40 @@ public final class OverlayBridge
 			BridgeFaults.note("OverlayBridge.rebuild", ex);
 			overlaysJson = "{\"available\":false}";
 		}
+	}
+
+	/**
+	 * Drop any position saved for a {@link #HUD_OWNED} overlay (one saved before the editor stopped listing them), so
+	 * its WidgetOverlay stops forcing the container. Client thread, from {@link HudVeneerBridge#tick}. Returns how
+	 * many it cleared, or -1 while the overlay manager is unresolved, so the caller tries again next frame.
+	 */
+	static int releaseHudOwned()
+	{
+		if (!ensureResolved())
+		{
+			return -1;
+		}
+		int cleared = 0;
+		for (Overlay overlay : currentOverlays())
+		{
+			try
+			{
+				final String name = overlay == null ? null : overlay.getName();
+				// Set.of rejects a null lookup, and a plugin's overlay may name itself null.
+				if (name != null && HUD_OWNED.contains(name)
+					&& (overlay.getPreferredLocation() != null || overlay.getPreferredPosition() != null))
+				{
+					overlayManager.resetOverlay(overlay);
+					cleared++;
+					log.info("[overlay] cleared the saved position of {}: the HUD veneer places it", name);
+				}
+			}
+			catch (Throwable ex)
+			{
+				BridgeFaults.note("OverlayBridge.releaseHudOwned", ex);
+			}
+		}
+		return cleared;
 	}
 
 	private static Overlay findOverlay(String name)

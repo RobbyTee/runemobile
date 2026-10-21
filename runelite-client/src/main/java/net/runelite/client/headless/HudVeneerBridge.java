@@ -133,6 +133,8 @@ public final class HudVeneerBridge
 	// notch. Best-effort (only shows when a tab is open); independently toggleable so a misbehave can be isolated.
 	private static volatile int sideX = -1;
 	private static volatile int sideY = -1;
+	// One-shot: any overlay-editor position saved for a relocated container is gone (OverlayBridge.releaseHudOwned).
+	private static boolean hudOverlaysReleased;   // client-thread guard
 
 	// Minimap ENLARGE (make the top-right globe bigger). 0 = natural size. Resizing the draw-area widget (MINIMAP)
 	// makes the engine render a bigger globe (terrain + dots scale, click-to-walk follows for free since
@@ -736,6 +738,11 @@ public final class HudVeneerBridge
 				return;   // native veneers + transparent chat are resizable-mode only
 			}
 			captureTabSprites(c);   // one-shot: hand the real cache tab/stone/chat sprites to the native shell
+			// A saved WidgetOverlay position would force a container every frame against the pins below.
+			if (!hudOverlaysReleased && (chatX >= 0 || minimapX >= 0 || sideX >= 0))
+			{
+				hudOverlaysReleased = OverlayBridge.releaseHudOwned() >= 0;
+			}
 			if (TEST_APPLY && !testApplied)
 			{
 				// Off-device capture: drive the chat veneer ourselves (the native shell would on device). The

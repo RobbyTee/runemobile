@@ -24,6 +24,14 @@
  */
 package net.runelite.client.headless;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayPosition;
 import static org.junit.Assert.assertEquals;
 import org.junit.Test;
@@ -34,7 +42,7 @@ import org.junit.Test;
  * touches no engine state, so it is tested directly. The grid is: top/bottom by the vertical midpoint, and
  * left/centre/right by canvas thirds — except the bottom row, which has only two real snap corners (a
  * dropped centre-bottom overlay snaps left). Getting this wrong silently mis-docks every overlay a user
- * repositions, identically on both ports.
+ * repositions, identically on both ports. Also pins {@link OverlayBridge#HUD_OWNED} to upstream's overlay names.
  */
 public class OverlayBridgeTest
 {
@@ -82,6 +90,39 @@ public class OverlayBridgeTest
 		assertEquals(OverlayPosition.TOP_CENTER.name(), snap(100, 50));  // x == third -> first centre pixel
 		assertEquals(OverlayPosition.TOP_CENTER.name(), snap(199, 50));  // last centre pixel
 		assertEquals(OverlayPosition.TOP_RIGHT.name(), snap(200, 50));   // x == third*2 -> first right pixel
+	}
+
+	@Test
+	public void hudOwnedIsExactlyTheUpstreamOverlaysOverTheVeneerHud() throws Exception
+	{
+		// The containers HudVeneerBridge pins or hides, in both resizable layouts.
+		final Set<Integer> hud = Set.of(
+			InterfaceID.ToplevelPreEoc.CHAT_CONTAINER, InterfaceID.ToplevelPreEoc.MAP_CONTAINER,
+			InterfaceID.ToplevelPreEoc.SIDE_CONTAINER, InterfaceID.ToplevelPreEoc.SIDE_STATIC_LAYER,
+			InterfaceID.ToplevelPreEoc.SIDE_MOVABLE_LAYER, InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER,
+			InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER, InterfaceID.ToplevelOsrsStretch.SIDE_MENU);
+		// WidgetOverlays and its inner WidgetOverlay are package-private to ui.overlay, so build upstream's real list
+		// reflectively; their constructors only store their arguments. A rename upstream fails here instead of
+		// quietly putting the container back in the editor.
+		final Class<?> outer = Class.forName("net.runelite.client.ui.overlay.WidgetOverlays");
+		final Constructor<?> ctor = outer.getDeclaredConstructors()[0];
+		ctor.setAccessible(true);
+		final Object widgetOverlays = ctor.newInstance(null, null, null);
+		final Method create = outer.getDeclaredMethod("createOverlays");
+		create.setAccessible(true);
+		final Field componentId = Class.forName("net.runelite.client.ui.overlay.WidgetOverlays$WidgetOverlay")
+			.getDeclaredField("componentId");
+		componentId.setAccessible(true);
+
+		final Set<String> names = new HashSet<>();
+		for (Object o : (Collection<?>) create.invoke(widgetOverlays))
+		{
+			if (hud.contains(componentId.getInt(o)))
+			{
+				names.add(((Overlay) o).getName());
+			}
+		}
+		assertEquals(OverlayBridge.HUD_OWNED, names);
 	}
 
 	@Test
