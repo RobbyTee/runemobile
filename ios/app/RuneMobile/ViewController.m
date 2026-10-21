@@ -3085,7 +3085,7 @@ static const int kCamPitchPxPerSec = 200;
                                        @"[pip] bg snapshot: possible=%d active=%d layerStatus=%ld fedSeq=%d audioRunning=%d",
                                        (int)self.pipController.isPictureInPicturePossible,
                                        (int)self.pipController.isPictureInPictureActive,
-                                       (long)self.pipLayer.status, [JVMLauncher pipFeedSeq],
+                                       (long)self.pipLayer.sampleBufferRenderer.status, [JVMLauncher pipFeedSeq],
                                        (int)self.keepaliveEngine.isRunning]];
     }
     [self appendLine:@"[shell] backgrounded -> flushed config, keepalive armed"];
@@ -6303,12 +6303,18 @@ static CGRect mapRectFromArr(NSArray *a) {
             [self teardownPictureInPicture];
             [self appendLine:@"[shell] GPU direct present LIVE (world warmed up — layer revealed)"];
         } else {
-            // 117HD pip-present: the bridge takes over the PiP layer. The shell's feed lets go of it first, so a CPU
-            // frame still in flight on the feed thread is dropped rather than enqueued alongside the bridge's; the
-            // gpuPresent gates stop the kicks. First enqueued frame is the warmed-up world, matching the old reveal UX.
-            [JVMLauncher pipFeedSetLayer:nil];
-            [RouteCBridge setPipPresentEnabled:YES];
-            [self appendLine:@"[shell] GPU pip-present LIVE (world warmed up — bridge feeds the PiP layer)"];
+            // 117HD pip-present: the bridge takes over the PiP layer. The shell's feed lets go of it first and the
+            // bridge starts only once the feed's pass in flight has ended, so no late CPU frame can follow the
+            // bridge's first; the gpuPresent gates stop the kicks. First enqueued frame is the warmed-up world,
+            // matching the old reveal UX. PiP torn down before then: stay off.
+            __weak typeof(self) ws = self;
+            [JVMLauncher pipFeedSetLayer:nil
+                                 drained:^{
+                                     if (!ws.pipLayer)
+                                         return;
+                                     [RouteCBridge setPipPresentEnabled:YES];
+                                     [ws appendLine:@"[shell] GPU pip-present LIVE (world warmed up - bridge feeds the PiP layer)"];
+                                 }];
         }
     }
     if (self.gpuPresent) {
@@ -6321,8 +6327,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         // work, and latestFrame costs a full-canvas copy + a CGImage per frame. Feed the UIImageView only
         // as a FALLBACK: when the PiP layer isn't presenting (not-yet / failed / torn down), plus a ~1 Hz refresh
         // so the occluded fallback stays current if the PiP layer ever drops out mid-session.
-        BOOL pipPresenting = (self.pipLayer != nil
-            && self.pipLayer.status == AVQueuedSampleBufferRenderingStatusRendering);
+        BOOL pipPresenting = (self.pipLayer != nil && self.pipLayer.sampleBufferRenderer.status == AVQueuedSampleBufferRenderingStatusRendering);
         UIImage *img = (!pipPresenting || self.framesShown % 60 == 0) ? [JVMLauncher latestFrame] : nil;
         if (!pipPresenting && img == nil) return;   // no composited frame yet — skip the rest of the tick (as before)
         if (img != nil) self.screen.image = img;
@@ -6659,7 +6664,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     } else {
         [self appendLine:[NSString stringWithFormat:@"[pip] manual start (possible=%d layerStatus=%ld fedSeq=%d)",
                                                     (int)self.pipController.isPictureInPicturePossible,
-                                                    (long)self.pipLayer.status, [JVMLauncher pipFeedSeq]]];
+                                                    (long)self.pipLayer.sampleBufferRenderer.status, [JVMLauncher pipFeedSeq]]];
         [self.pipController startPictureInPicture];
     }
 }

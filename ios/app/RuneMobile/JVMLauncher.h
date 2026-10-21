@@ -132,10 +132,15 @@ typedef void (^JVMLogSink)(NSString *line);
 + (nullable UIImage *)latestFrame;
 
 /// The Picture-in-Picture frame feed's target layer (nil turns the feed off). Each new engine frame is copied into a
-/// 32BGRA CVPixelBuffer and enqueued on it, display-immediately. Never waits on the feed thread: a frame in flight
-/// re-checks the layer just before its enqueue and is dropped if the layer changed, so a caller can hand the layer to
-/// another producer (or remove it) right after; only a frame already past that check can still land. Main thread.
+/// 32BGRA CVPixelBuffer and enqueued on its sampleBufferRenderer, display-immediately. Never waits on the feed
+/// thread: a frame in flight re-checks the layer just before its enqueue and is dropped if the layer changed, so only
+/// a frame already past that check can still land. Main thread.
 + (void)pipFeedSetLayer:(nullable AVSampleBufferDisplayLayer *)layer;
+
+/// As +pipFeedSetLayer:, then runs `drained` on the main thread once no feed pass can still enqueue onto the old
+/// layer: at once if none is in flight, otherwise when that pass ends (a few ms). Hand the layer to another producer
+/// from `drained`, so its first frame can't be followed by a late one from this feed. Main thread.
++ (void)pipFeedSetLayer:(nullable AVSampleBufferDisplayLayer *)layer drained:(nullable dispatch_block_t)drained;
 
 /// Ask the feed for the newest frame: a no-op unless the engine composited one since the last frame fed. Cheap; the
 /// copy and enqueue run on the feed's own JVM-attached thread (or inline, if Documents/pipfeed says "main"). Main thread.

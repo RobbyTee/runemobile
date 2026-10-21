@@ -1998,7 +1998,8 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 // little-endian arm64, so the rows copy straight in and only the alpha byte needs stamping opaque.
 // The copy runs on its own JVM-attached thread, woken by the shell's tick (+pipFeedKick), so the main thread neither
 // copies the full canvas nor holds a JNI critical region that a GC on the client thread would have to wait out.
-// AVSampleBufferDisplayLayer takes enqueues from any thread (the 117HD pip-present already enqueues from the GL thread).
+// Enqueues go through the layer's sampleBufferRenderer (iOS 17+), which Apple documents as safe to feed from a
+// background thread; the layer's own queue calls are not, and must not be mixed with it (RouteCBridge does the same).
 // A Documents/pipfeed marker that says "main" keeps the copy on the main thread instead, so one install can A/B both:
 //   echo main > /tmp/pipfeed && xcrun devicectl device copy to --device <UDID> --domain-type appDataContainer \
 //     --domain-identifier dev.audaro.runemobile --source /tmp/pipfeed --destination Documents/pipfeed
@@ -2019,6 +2020,8 @@ static BOOL gFeedThreadStarted = NO;
 static os_unfair_lock gFeedLayerLock = OS_UNFAIR_LOCK_INIT;
 static AVSampleBufferDisplayLayer *gFeedLayer = nil; // nil = feed off
 static unsigned gFeedGen = 0;                        // bumped by every +pipFeedSetLayer:
+static BOOL gFeedBusy = NO;                          // the feed thread's pass holds a layer it may still enqueue on
+static dispatch_block_t gFeedDrained = nil;          // posted to main when that pass ends
 // One pass at a time; guards the pool, format and probe statics. Only the pass's own thread takes it.
 static pthread_mutex_t gFeedPassLock = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic int gFeedSeq = -1;     // last engine frame seq enqueued, -1 = none yet
@@ -2154,8 +2157,9 @@ static void pipFeedOnce(const PipFeedJni *j, AVSampleBufferDisplayLayer *layer, 
         CVPixelBufferRelease(pb);
         return;
     }
-    if (layer.status == AVQueuedSampleBufferRenderingStatusFailed) {
-        [layer flush]; // e.g. after a background round-trip; recovers on the next enqueue
+    AVSampleBufferVideoRenderer *renderer = layer.sampleBufferRenderer;
+    if (renderer.status == AVQueuedSampleBufferRenderingStatusFailed) {
+        [renderer flush]; // e.g. after a background round-trip; recovers on the next enqueue
     }
     // Stamped display-immediately, so no timebase juggling is needed for a live feed.
     CMSampleTimingInfo timing = {.duration = kCMTimeInvalid,
@@ -2168,7 +2172,7 @@ static void pipFeedOnce(const PipFeedJni *j, AVSampleBufferDisplayLayer *layer, 
             CFMutableDictionaryRef att = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(atts, 0);
             CFDictionarySetValue(att, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
         }
-        [layer enqueueSampleBuffer:sb];
+        [renderer enqueueSampleBuffer:sb];
         CFRelease(sb);
     }
     CVPixelBufferRelease(pb);
@@ -2227,14 +2231,23 @@ static void *pipFeedThread(void *unused) {
             os_unfair_lock_lock(&gFeedLayerLock);
             AVSampleBufferDisplayLayer *layer = gFeedLayer;
             unsigned gen = gFeedGen;
+            gFeedBusy = layer != nil;
             os_unfair_lock_unlock(&gFeedLayerLock);
             if (layer && pipFeedJniReady(&j))
                 pipFeedOnce(&j, layer, gen);
+            os_unfair_lock_lock(&gFeedLayerLock);
+            gFeedBusy = NO;
+            dispatch_block_t drained = gFeedDrained;
+            gFeedDrained = nil;
+            BOOL detached = gen != gFeedGen;
+            os_unfair_lock_unlock(&gFeedLayerLock);
             // Detached meanwhile: this may be the last reference to a layer the shell removed, and a layer belongs
-            // to the main thread, so release it there.
-            if (layer && !pipFeedLayerCurrent(gen))
+            // to the main thread, so release it there, along with any hand-off that waited for this pass.
+            if ((layer && detached) || drained)
                 dispatch_async(dispatch_get_main_queue(), ^{
                     (void)layer;
+                    if (drained)
+                        drained();
                 });
         }
         pthread_mutex_unlock(&gFeedPassLock);
@@ -2252,11 +2265,30 @@ static BOOL pipFeedMarkerSaysMain(void) {
 }
 
 + (void)pipFeedSetLayer:(AVSampleBufferDisplayLayer *)layer {
+    [self pipFeedSetLayer:layer drained:nil];
+}
+
++ (void)pipFeedSetLayer:(AVSampleBufferDisplayLayer *)layer drained:(dispatch_block_t)drained {
     os_unfair_lock_lock(&gFeedLayerLock);
     gFeedLayer = layer;
     gFeedGen++;
+    if (drained && gFeedBusy) {
+        // The pass in flight posts it when it ends, after any hand-off already waiting on that pass.
+        dispatch_block_t prev = gFeedDrained, next = drained;
+        if (prev) {
+            gFeedDrained = ^{
+                prev();
+                next();
+            };
+        } else {
+            gFeedDrained = next;
+        }
+        drained = nil;
+    }
     os_unfair_lock_unlock(&gFeedLayerLock);
     atomic_store(&gFeedSeq, -1);
+    if (drained)
+        drained(); // no pass in flight: a main-thread pass can't be, since the caller is the main thread
 }
 
 + (void)pipFeedKick {

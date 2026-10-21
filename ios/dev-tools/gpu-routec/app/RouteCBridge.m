@@ -321,9 +321,11 @@ static CMVideoFormatDescriptionRef sPipFmt = NULL;
 
 // GPU-blit the offscreen FBO (sFbo — where the plugin composited the frame) into a fresh IOSurface-backed
 // CVPixelBuffer texture, Y-flipped (GL's bottom-left origin -> video's top-left), then enqueue it on the PiP
-// layer stamped display-immediately. All GPU-side (no glReadPixels stall); runs on the render (JVM) thread,
-// which AVSampleBufferDisplayLayer's enqueue supports. State-transparent to the plugin: framebuffer bindings
-// and the scissor switch (which clips glBlitFramebuffer!) are saved + restored.
+// layer stamped display-immediately. All GPU-side (no glReadPixels stall); runs on the render (JVM) thread, so it
+// goes through the layer's sampleBufferRenderer, the queue Apple documents as safe off the main thread (never the
+// layer's own queue calls). State-transparent to the plugin: framebuffer bindings and the scissor switch (which
+// clips glBlitFramebuffer!) are saved + restored. Fenced so the formatter keeps this file's tab style.
+// clang-format off
 static void rcPipPresent(void)
 {
 	if (!sPipEnqueueOn || !sCtx || !sFbo || sFboW <= 0 || sFboH <= 0)
@@ -406,9 +408,10 @@ static void rcPipPresent(void)
 	}
 	if (sPipFmt)
 	{
-		if (sPipLayer.status == AVQueuedSampleBufferRenderingStatusFailed)
+		AVSampleBufferVideoRenderer *renderer = sPipLayer.sampleBufferRenderer;
+		if (renderer.status == AVQueuedSampleBufferRenderingStatusFailed)
 		{
-			[sPipLayer flush];
+			[renderer flush];
 		}
 		CMSampleTimingInfo timing = { .duration = kCMTimeInvalid,
 			.presentationTimeStamp = CMClockGetTime(CMClockGetHostTimeClock()),
@@ -422,7 +425,7 @@ static void rcPipPresent(void)
 				CFDictionarySetValue((CFMutableDictionaryRef) CFArrayGetValueAtIndex(atts, 0),
 					kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
 			}
-			[sPipLayer enqueueSampleBuffer:sb];
+			[renderer enqueueSampleBuffer:sb];
 			CFRelease(sb);
 		}
 	}
@@ -430,6 +433,7 @@ static void rcPipPresent(void)
 	CVPixelBufferRelease(pb);
 	CVOpenGLESTextureCacheFlush(sPipTexCache, 0);
 }
+// clang-format on
 
 // Build (or rebuild) the offscreen FBO at w*h on the current context. COLOR (RGBA8) + DEPTH24. With a present layer
 // the color RBO IS the CAEAGLLayer drawable (presentRenderbuffer scans it out -> no readback).
