@@ -4809,6 +4809,7 @@ class MainActivity : AppCompatActivity() {
                 "-Drunelite.menupeek.maxEntries=14",
                 "-Drunelite.mobileui=true", // A4: plugin control plane (list/toggle/config from the host)
                 "-Drunelite.mobilechrome=true", // A6: publish the read-only chrome snapshot (tab-stone bounds)
+                "-Drunelite.bridge.scrollrects=true", // DRAG-2: the chrome snapshot's scrollRects (iOS hit-tests per touch)
                 "-Drunelite.hudveneer=true", // A6: the chrome write surface (hide stones / openTab / relocate)
                 // Phase-2 renderer-as-plugins (the iOS d2b46053c model): drop safe-mode on every boot (so the
                 // renderer plugins CAN load) and let RendererPanelStarter put GPU + 117HD into the panel without

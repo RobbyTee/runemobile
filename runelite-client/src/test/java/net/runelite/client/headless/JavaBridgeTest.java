@@ -196,7 +196,7 @@ public class JavaBridgeTest
 
 	private static void invokeSnapshot(Client c) throws Exception
 	{
-		final Method m = JavaBridge.class.getDeclaredMethod("snapshotScrollableRects", Client.class);
+		final Method m = JavaBridge.class.getDeclaredMethod("collectScrollableRects", Client.class);
 		m.setAccessible(true);
 		m.invoke(null, c);
 	}

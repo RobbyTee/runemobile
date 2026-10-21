@@ -1180,7 +1180,7 @@ public final class JavaBridge
 		snapshotTextInputOpen(c);  // publish INPUT_TYPE for isTextInputOpen() to read off the client thread
 		snapshotInventoryBounds(c); // DRAG-1: publish the inventory item-grid bounds for the native item-drag branch
 		snapshotReorderPaneBounds(c); // DRAG-1b: publish Prayer/Spellbook/Bank pane bounds for native reorder-drag routing
-		snapshotScrollableRects(c); // DRAG-2: publish generic scrollable-widget rects for Android's native drag-to-scroll routing
+		snapshotScrollableRects(c); // DRAG-2: scrollable-widget rects for Android's drag-to-scroll routing (Android-armed, 100 ms)
 		// Deterministic early registration (boolean-gated, retries until the injector is live): the
 		// BeforeMenuRender suppression below must be in place before the FIRST menu ever opens, not
 		// lazily on the first tap.
@@ -2833,10 +2833,31 @@ public final class JavaBridge
 	// hit-test iOS calls synchronously per touch); Android's UI thread cannot make that per-touch JNI call into
 	// HotSpot (jvm_bootstrap's UI-thread natives own no HotSpot env), so it consumes this pre-snapshotted rect
 	// array exactly as DRAG-1b does reorderPaneBounds. Packed [x,y,w,h] per rect, capped at MAX_SCROLLABLE_RECTS.
+	// iOS never reads it, so only Android arms the walk (-Drunelite.bridge.scrollrects=true); elsewhere the array
+	// stays empty. A drag-start hit-test doesn't need 50 Hz freshness, so the walk runs at most every
+	// SCROLL_RECTS_MS.
 	private static final int MAX_SCROLLABLE_RECTS = 16;
+	private static final boolean SCROLL_RECTS = Boolean.getBoolean("runelite.bridge.scrollrects");
+	private static final long SCROLL_RECTS_MS = 100;
 	private static volatile int[] scrollableRects = EMPTY_BOUNDS;
+	private static long lastScrollRects;
 
 	private static void snapshotScrollableRects(Client c)
+	{
+		if (!SCROLL_RECTS)
+		{
+			return;
+		}
+		final long now = System.currentTimeMillis();
+		if (now - lastScrollRects <= SCROLL_RECTS_MS)
+		{
+			return;
+		}
+		lastScrollRects = now;
+		collectScrollableRects(c);
+	}
+
+	private static void collectScrollableRects(Client c)
 	{
 		try
 		{
@@ -2911,7 +2932,8 @@ public final class JavaBridge
 	 * {@link #isEngineScrollableAt} (an off-thread point hit-test iOS calls synchronously per touch): Android's
 	 * UI thread cannot make that per-touch JNI call into HotSpot, so it hit-tests this pre-snapshotted array
 	 * lock-free (published in the getSnapshot payload as {@code scrollRects}), mirroring how DRAG-1b's
-	 * {@link #getReorderPaneBounds} is consumed. Empty = no scrollable interface visible.
+	 * {@link #getReorderPaneBounds} is consumed. Empty = no scrollable interface visible, or the snapshot is not
+	 * armed ({@code -Drunelite.bridge.scrollrects}, Android only). Refreshed at most every 100 ms.
 	 */
 	public static int[] getScrollableRects()
 	{

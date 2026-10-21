@@ -39,11 +39,11 @@ import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.gameval.VarbitID;
 
 /**
- * W3 Feature-A phase A2: the <b>read-only</b> HUD <em>data</em> snapshot the native HUD veneers consume each
- * display tick. Whereas {@link MobileChromeBridge} publishes desktop HUD <em>geometry</em> (where the engine
- * minimap/orbs/chat live, for cover-and-proxy), this publishes the <em>content</em> the native chat / minimap /
- * orbs reproduce: chat lines (type/name/value/timestamp), orb values (HP/prayer/run/spec + poison/stamina), and
- * minimap state (local player world position, compass angle, and nearby actor dots as tile offsets).
+ * W3 Feature-A phase A2: the <b>read-only</b> HUD <em>data</em> snapshot the native HUD veneers consume. Whereas
+ * {@link MobileChromeBridge} publishes desktop HUD <em>geometry</em> (where the engine minimap/orbs/chat live, for
+ * cover-and-proxy), this publishes the <em>content</em> the native chat / minimap / orbs reproduce: chat lines
+ * (type/name/value/timestamp), orb values (HP/prayer/run/spec + poison/stamina), and minimap state (local player
+ * world position, compass angle, and nearby actor dots as tile offsets).
  *
  * <p>A0 settled that a clean edge-to-edge scene needs the engine HUD {@code setHidden} (the only clean remover),
  * so the native side must redraw the HUD from data — which this bridge supplies. The data is entirely
@@ -52,8 +52,9 @@ import net.runelite.api.gameval.VarbitID;
  *
  * <p>Thread model mirrors {@link MobileChromeBridge} / {@link MobileUiBridge}: {@link #tick(Client)} runs on the
  * client thread (from {@code Hooks.draw}), where messages, varps and actor positions are safe to read, and
- * publishes an escaped-JSON snapshot into a volatile; {@link #getSnapshot()} / {@link #getSeq()} are read
- * lock-free from the native JNI thread. <b>Never mutates anything.</b> Inert unless {@code -Drunelite.huddata=true}.
+ * publishes an escaped-JSON snapshot into a volatile at most every {@value #REFRESH_MS} ms; {@link #getSnapshot()} /
+ * {@link #getSeq()} are read lock-free from the native JNI thread. <b>Never mutates anything.</b> Inert unless
+ * {@code -Drunelite.huddata=true}.
  *
  * <p>For the desktop de-risk it also emits, once, a single bash-parseable line ({@code [huddata] HUDDATA_READ …})
  * so a harness can md5-gate that the snapshot is faithful (the login "Welcome to Old School RuneScape" message is
@@ -71,11 +72,16 @@ public final class HudDataBridge
 	private static final int DOT_MAX = 24;      // minimap dots (nearby actors) published
 	private static final int DOT_RANGE = 32;    // only actors within +/- this many tiles become dots
 	private static final int VERDICT_FRAME = 120;   // ~2.4s of LOGGED_IN frames — long enough to observe liveness
+	// The full build walks every player and NPC and copies the whole message list. Its one native reader (iOS
+	// updateHudLayout) reads loggedIn once per session, so per-frame freshness buys nothing. loggedIn itself stays
+	// exact: logging out publishes at once, and the first logged-in frame builds without waiting.
+	private static final long REFRESH_MS = 200;
 
 	private static final String WELCOME = "Welcome to Old School RuneScape";
 
 	private static volatile String snapshotJson = "{\"enabled\":false}";
 	private static volatile int seq;
+	private static long lastRefresh;
 
 	// Desktop de-risk accumulators.
 	private static int loggedInFrames;
@@ -99,7 +105,7 @@ public final class HudDataBridge
 		return snapshotJson;
 	}
 
-	/** Monotonic counter bumped each publish; native skips re-parsing when unchanged. */
+	/** Monotonic counter bumped each logged-in publish (at most every {@value #REFRESH_MS} ms). */
 	public static int getSeq()
 	{
 		return seq;
@@ -127,8 +133,17 @@ public final class HudDataBridge
 		if (c.getGameState() != GameState.LOGGED_IN)
 		{
 			snapshotJson = "{\"enabled\":true,\"loggedIn\":false}";
+			lastRefresh = 0; // build on the first logged-in frame
 			return;
 		}
+
+		loggedInFrames++;
+		final long now = System.currentTimeMillis();
+		if (now - lastRefresh <= REFRESH_MS)
+		{
+			return;
+		}
+		lastRefresh = now;
 
 		// ---- orbs ----
 		final int hp = safeBoosted(c, Skill.HITPOINTS);
@@ -267,7 +282,6 @@ public final class HudDataBridge
 		seq++;
 
 		// ---- desktop de-risk: liveness + one-shot faithful/structural verdict ----
-		loggedInFrames++;
 		sawWelcome |= welcomeThisFrame;
 		// Fingerprint folds in actor DOT positions + chat size, not just counts — so a wandering NPC, an arriving
 		// chat line, or the player moving all register as "live" (count-only would miss NPCs moving in place).

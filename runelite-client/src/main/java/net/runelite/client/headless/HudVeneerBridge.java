@@ -222,10 +222,12 @@ public final class HudVeneerBridge
 	// engine's transparent dialogue + the chat tabs/messages behind it are occluded), with a CUTOUT at the head
 	// bounds so the engine's real 3D head model still shows through.
 	private static volatile String dialogueJson = "{}";
-	// The engine refuses to RASTER its chatbox once the host container is relocated (proven), so chat-at-top draws
-	// the MESSAGE lines natively in UIKit instead. The engine chat stays alive + populated (off-screen); this snapshot
-	// is the live message model — read from client.getChatLineMap() (not the broken widgets), filtered to the active
-	// tab, with <col=> colour runs pre-parsed — that the native veneer renders. Published per-frame in tick().
+	// The native chat MESSAGE lines: the live message model, read from client.getChatLineMap(), filtered to the
+	// active tab, with <col=> colour runs pre-parsed. It was built for a UIKit chat renderer, back when a relocated
+	// chatbox looked unrasterable. That turned out to be the hidden tab row, not the relocate: the engine rasters the
+	// relocated chat itself, and neither port renders these lines any more. So the per-frame build is off unless
+	// -Drunelite.hudveneer.chatlines=true, and getChatLines() stays logged-out.
+	private static final boolean CHAT_LINES = Boolean.getBoolean("runelite.hudveneer.chatlines");
 	private static volatile String chatLinesJson = "{\"loggedIn\":false}";
 	// Native minimap-orb touch veneer: per-frame canvas bounds of the live orbs (HP/prayer/run/spec/store/
 	// world-map/wiki). The engine hard-pins the orbs and they render at ~25px — too small/dense for a finger —
@@ -495,7 +497,8 @@ public final class HudVeneerBridge
 	}
 
 	/** Native: the live chat MESSAGE lines (escaped JSON) for the active tab, with pre-parsed colour runs, for the
-	 *  native top-rendered chatbox. Read lock-free on the JNI thread; published on the client thread in {@link #tick}.
+	 *  native top-rendered chatbox. Read lock-free on the JNI thread; published on the client thread in {@link #tick},
+	 *  only under {@code -Drunelite.hudveneer.chatlines=true} ({@code {"loggedIn":false}} otherwise).
 	 *  Shape: {@code {"loggedIn":true,"view":N,"seq":K,"lines":[{"name":"..","type":N,"ts":N,"text":"..",
 	 *  "runs":[{"o":N,"l":N,"c":RGB,"u":1}]}],"input":{"name":"..","text":".."}}} — lines OLDEST-first. */
 	public static String getChatLines()
@@ -940,7 +943,10 @@ public final class HudVeneerBridge
 				setHidden(c, InterfaceID.Chatbox.INPUT_CLICKAREA, hideMsgArea);
 				setHidden(c, InterfaceID.Chatbox.CHATSCROLLBAR, hideMsgArea);
 				buildChatSnapshot(c);
-				buildChatLines(c);
+				if (CHAT_LINES)
+				{
+					buildChatLines(c);
+				}
 				// While a dialogue is open, publish its content + head bounds so the native shell draws an opaque
 				// parchment over the chatbox region (occluding the engine's transparent dialogue + the chat
 				// tabs/messages) with a cutout where the engine's real 3D head renders. Cleared when none is open.
@@ -1157,15 +1163,24 @@ public final class HudVeneerBridge
 		return -1;
 	}
 
-	// DIAGNOSTIC (remove once occlusion is tuned): rate-limited dump of the open interface roots + candidate-window
-	// probes, so the [ifaces] log reveals exactly which group/bounds the bank/GE use when the user opens one.
-	private static int ifaceDumpTick;
+	// DIAGNOSTIC: rate-limited dump of the open interface roots + candidate-window probes, so the [ifaces] log
+	// reveals exactly which group/bounds the bank/GE use when the user opens one. It walks every root and logs a
+	// line per root on the client thread, so it is off unless -Drunelite.hudveneer.ifacedump=true.
+	private static final boolean IFACE_DUMP = Boolean.getBoolean("runelite.hudveneer.ifacedump");
+	private static final long IFACE_DUMP_MS = 3000;
+	private static long lastIfaceDump;
 	private static void dumpOpenInterfaces(Client c)
 	{
-		if (chatX < 0 || (++ifaceDumpTick % 150) != 0)
+		if (!IFACE_DUMP || chatX < 0)
 		{
 			return;
 		}
+		final long now = System.currentTimeMillis();
+		if (now - lastIfaceDump <= IFACE_DUMP_MS)
+		{
+			return;
+		}
+		lastIfaceDump = now;
 		int top = -1;
 		try { top = c.getTopLevelInterfaceId(); } catch (RuntimeException ignore) { }
 		log.info("[ifaces] top={} chat=({},{})", top, chatX, chatY);

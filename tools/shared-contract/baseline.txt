@@ -2,6 +2,7 @@ FLAG headless.captureTargetFrames
 FLAG headless.runSeconds
 FLAG java.io.tmpdir
 FLAG runelite.bridge
+FLAG runelite.bridge.scrollrects
 FLAG runelite.gatecensus
 FLAG runelite.gfxIos
 FLAG runelite.gpuframedump
@@ -25,6 +26,8 @@ FLAG runelite.hub
 FLAG runelite.huddata
 FLAG runelite.huddata.dumpSnapshot
 FLAG runelite.hudveneer
+FLAG runelite.hudveneer.chatlines
+FLAG runelite.hudveneer.ifacedump
 FLAG runelite.hudveneer.test
 FLAG runelite.hudveneer.test.areaW
 FLAG runelite.hudveneer.test.chatX
