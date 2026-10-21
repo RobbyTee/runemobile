@@ -267,6 +267,8 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 @property (nonatomic, strong) NSFileHandle *logFile;
 @property (nonatomic, assign) int jvmFd;   // raw fd for crash-proof libjvm stdout/stderr
 @property (nonatomic, assign) BOOL launched;
+@property (nonatomic, assign) long jitAttachedMs;     // Phase 4 cold start: first poll that saw CS_DEBUGGED (0 = not yet)
+@property (nonatomic, assign) BOOL inWorldStamped;    // Phase 4 cold start: the first LOGGED_IN tick has been stamped
 @property (nonatomic, assign) BOOL pendingRouteCL1;   // GPU Route C: long-press Start -> boot the L1 kill-test
 @property (nonatomic, assign) BOOL pendingRouteCGpu;  // GPU Route C: two-finger long-press -> full RuneLite on GPU
 @property (nonatomic, assign) BOOL pendingRouteCZone; // GPU Zone: three-finger long-press -> full RuneLite on 117HD
@@ -3812,6 +3814,8 @@ static void *perfProbePump(void *unused) {
 - (void)startJitPolling {
     self.jitTimer = [NSTimer scheduledTimerWithTimeInterval:0.2 repeats:YES block:^(NSTimer *t) {
         BOOL attached = [JVMLauncher isDebuggerAttached];
+        if (attached && self.jitAttachedMs == 0)
+            self.jitAttachedMs = [JVMLauncher msSinceProcessStart];
         self.statusLabel.text = attached ? @"JIT: CS_DEBUGGED ✓ (ready)" : @"JIT: waiting…";
         self.statusLabel.textColor = attached ? [UIColor systemGreenColor] : [UIColor systemYellowColor];
         // #1: drive the Tap-to-Play cover. Enable the big play button on attach; reflect the gate in its status.
@@ -4881,6 +4885,18 @@ static int chatRowCanvasH(void) {
     fprintf(stderr, "[coldstart] %s sinceStartMs=%ld\n", milestone.UTF8String, ms);
 }
 
+// Phase 4 cold start: the first tick that finds the client LOGGED_IN (the baseline's "first in-world frame"). Reads
+// the chrome snapshot ~10 Hz until then, and never again after.
+- (void)stampFirstInWorld {
+    if (self.inWorldStamped)
+        return;
+    NSDictionary *d = parseBridgeJSON([JVMLauncher chromeSnapshot], "ViewController.stampFirstInWorld");
+    if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue])
+        return;
+    self.inWorldStamped = YES;
+    [self stampColdStart:@"inWorld" line:@"[shell] onboard: first logged-in tick"];
+}
+
 // Clear the boot overlay the moment real content is ready: the first painted frame (renderedFrameWidth > 0),
 // a fatal-error card taking over (fatalErrorShown - hands off to that card so the two never stack), or the 60s
 // failsafe (a boot that never produces a frame must not wedge the UI). One-way: once hidden it stays hidden.
@@ -5782,6 +5798,11 @@ static int chatRowCanvasH(void) {
     self.launchButton.enabled = NO;
     [self.jitTimer invalidate];
     [self captureStdio];
+    // Phase 4 cold start: the human part of a launch (the StikDebug attach, then the Play tap) is stamped too, so a
+    // baseline can take it out. stderr reaches the log only from captureStdio on, so the attach time waited for it.
+    if (self.jitAttachedMs != 0)
+        fprintf(stderr, "[coldstart] jitAttached sinceStartMs=%ld\n", self.jitAttachedMs);
+    [self stampColdStart:@"launch" line:@"[shell] launch: booting the JVM"];
 
     // Full-screen landscape: collapse the debug panel so the game owns the whole screen. The ≡ toggle
     // re-opens it (logs/canary), and logs still go to Documents/hello-shell.log; the ⌨ control stays.
@@ -6339,6 +6360,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         [self updateSessionExpiredOverlay]; // UX-LOGIN-01: same cadence/ungating as the reconnect scrim
         [self updateFatalErrorOverlay];     // FATAL-1: latch-once fatal card, same cadence
         [self updateHoppingOverlay];        // PARITY-P0-3: world-hop scrim, same cadence/ungating
+        [self stampFirstInWorld];           // Phase 4 cold start: once, then a no-op
     }
 
     // W3 Feature-A (A2.5): refresh the crude native chat-at-top + HUD-status overlay from the HudDataBridge

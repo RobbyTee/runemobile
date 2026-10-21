@@ -1701,6 +1701,7 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     // Publish the VM so the main thread's live-blit + touch bridge can attach into it (atomic store —
     // the main thread loads it with atomic_load in ensureBridge).
     atomic_store(&gVM, vm);
+    fprintf(stderr, "[coldstart] jvmCreated sinceStartMs=%ld\n", [JVMLauncher msSinceProcessStart]);
     log(@"[jvm] JavaVM created — HotSpot is up. Running probes…");
     dumpFaultState("post-createvm");   // STRIP AFTER DIAGNOSIS — HotSpot's own SIGSEGV handler is installed now
 
