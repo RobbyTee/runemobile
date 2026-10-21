@@ -3692,15 +3692,42 @@ static NSString * const kRendererHdClass  = @"rs117.hd.HdPlugin";
 static int sPerfProbeReadFd = -1;
 static int sPerfProbeLogFd = -1;
 
-static BOOL perfProbeKeeps(const char *line) {
-    static const char *const kMarks[] = {"[fpsprobe]", "[frameprobe]", "[framebins]", "[framehist]",
-                                         "[presentprobe]", "][gc", "][safepoint", "[memwatch",
-                                         "[coldstart]", "[perfprobe]"};
-    for (size_t i = 0; i < sizeof kMarks / sizeof kMarks[0]; i++) {
-        if (strstr(line, kMarks[i]))
+// Matched by the whole line's shape rather than by a tag anywhere in it, so a message that only quotes a tag stays
+// out (the same rules as Android's jvm_bootstrap.cpp isProbeLine):
+//   - the native probe lines, which open the line: memwatch, [coldstart], [perfprobe], [presentprobe];
+//   - headless.FrameStats via logback ("%d [%thread] %-5level %logger{36} - %msg"): the line's first " - " must
+//     close a logger named *.FrameStats, and the message must open with a probe tag. Text in another logger's
+//     message sits after that logger's own " - ", so it can't pose as one;
+//   - -Xlog:gc,safepoint with time,uptime,tags decorations: "[<time>][<uptime>][gc] ..." or "...[safepoint] ...".
+static BOOL perfProbeIsFrameStats(const char *line) {
+    static const char kLogger[] = ".FrameStats";
+    static const char *const kTags[] = {"[fpsprobe] ", "[frameprobe] ", "[framebins] ", "[framehist] "};
+    const size_t n = sizeof kLogger - 1;
+    const char *sep = strstr(line, " - ");
+    if (line[0] < '0' || line[0] > '9' || !sep || (size_t)(sep - line) < n || memcmp(sep - n, kLogger, n) != 0)
+        return NO;
+    for (size_t i = 0; i < sizeof kTags / sizeof kTags[0]; i++) {
+        if (strncmp(sep + 3, kTags[i], strlen(kTags[i])) == 0)
             return YES;
     }
     return NO;
+}
+static BOOL perfProbeIsXlog(const char *line) {
+    const char *p = line;
+    for (int group = 0; group < 2; group++) { // [time][uptime]
+        if (*p != '[' || !(p = strchr(p, ']')))
+            return NO;
+        p++;
+    }
+    return strncmp(p, "[gc] ", 5) == 0 || strncmp(p, "[safepoint] ", 12) == 0;
+}
+static BOOL perfProbeKeeps(const char *line) {
+    static const char *const kNative[] = {"[memwatch t=", "[coldstart] ", "[perfprobe] ", "[presentprobe] "};
+    for (size_t i = 0; i < sizeof kNative / sizeof kNative[0]; i++) {
+        if (strncmp(line, kNative[i], strlen(kNative[i])) == 0)
+            return YES;
+    }
+    return perfProbeIsFrameStats(line) || perfProbeIsXlog(line);
 }
 
 // Whole lines only: a read can end mid-line, and -Xlog writes a line's decorations and message separately. A line

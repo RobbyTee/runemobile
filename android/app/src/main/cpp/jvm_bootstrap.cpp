@@ -386,16 +386,36 @@ static std::atomic<bool> g_stdioProbeLines{false};
 static bool g_stdioProbeOnly = false; // fixed in startJvm before the pump thread exists
 static int g_stdioReadFd = -1;
 
-// The line families the perf harness reads: headless.FrameStats, -Xlog:gc,safepoint (its decorations put "][gc"
-// and "][safepoint" in every line) and the present probe.
-static bool isProbeLine(const char *s) {
-    static const char *const kMarks[] = {"[fpsprobe]", "[frameprobe]", "[framebins]", "[framehist]",
-                                         "[presentprobe]", "][gc", "][safepoint"};
-    for (const char *m : kMarks) {
-        if (strstr(s, m))
+// The lines the perf harness reads, matched by their whole shape rather than by a tag anywhere in the line, so a
+// message that only quotes a tag stays out. (librlawt logs [presentprobe] to logcat itself, not through this pipe.)
+//   - headless.FrameStats via logback ("%d [%thread] %-5level %logger{36} - %msg"): the line's first " - " must
+//     close a logger named *.FrameStats, and the message must open with a probe tag. Text in another logger's
+//     message sits after that logger's own " - ", so it can't pose as one.
+//   - -Xlog:gc,safepoint with time,uptime,tags decorations: "[<time>][<uptime>][gc] ..." or "...[safepoint] ...".
+static bool isFrameStatsLine(const char *s) {
+    static const char kLogger[] = ".FrameStats";
+    static const char *const kTags[] = {"[fpsprobe] ", "[frameprobe] ", "[framebins] ", "[framehist] "};
+    const size_t n = sizeof kLogger - 1;
+    const char *sep = strstr(s, " - ");
+    if (s[0] < '0' || s[0] > '9' || !sep || (size_t)(sep - s) < n || memcmp(sep - n, kLogger, n) != 0)
+        return false;
+    for (const char *t : kTags) {
+        if (strncmp(sep + 3, t, strlen(t)) == 0)
             return true;
     }
     return false;
+}
+static bool isXlogLine(const char *s) {
+    const char *p = s;
+    for (int group = 0; group < 2; group++) { // [time][uptime]
+        if (*p != '[' || !(p = strchr(p, ']')))
+            return false;
+        p++;
+    }
+    return strncmp(p, "[gc] ", 5) == 0 || strncmp(p, "[safepoint] ", 12) == 0;
+}
+static bool isProbeLine(const char *s) {
+    return isFrameStatsLine(s) || isXlogLine(s);
 }
 
 // One logcat entry per line. A raw read() can end mid-line: the pipe can hold more than one read's worth under
