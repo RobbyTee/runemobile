@@ -854,7 +854,8 @@ public final class HudVeneerBridge
 					}
 					else
 					{
-						if (w.isHidden())
+						final boolean unhidden = w.isHidden();
+						if (unhidden)
 						{
 							w.setHidden(false);
 							// Rebuild the message lines on the un-hide edge — but NOT when a prompt is what we are
@@ -866,13 +867,15 @@ public final class HudVeneerBridge
 								try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) { BridgeFaults.note("HudVeneerBridge.buildChatbox", ignore); }
 							}
 						}
-						w.setForcedPosition(chatX, chatY);
 						// Widen the chat CONTAINER to the native row width so its children (the message area) can fill it.
-						if (w.getOriginalWidth() != rowW)
+						final boolean widened = w.getOriginalWidth() != rowW;
+						if (widened)
 						{
 							w.setOriginalWidth(rowW);
 						}
-						w.revalidate();
+						// Re-laid on the un-hide edge as well: the chat comes back from a window or the world map
+						// laid out the way the old every-frame revalidate left it.
+						CHAT_PIN.apply(w, chatX, chatY, widened || unhidden);
 					}
 				}
 				// OSRS-Mobile tabs-on-top: the desktop chat stacks the tab row (CONTROLS, 23px) UNDER the message
@@ -884,7 +887,7 @@ public final class HudVeneerBridge
 				// setForcedPosition is RELATIVE TO THE PARENT, and the chat container is already at (chatX,chatY),
 				// so position the children at (0, …) — using (chatX,chatY) double-offsets them right+down (the
 				// misalignment + bottom clip). CONTROLS at the container's top-left.
-				forcePos(c, InterfaceID.Chatbox.CONTROLS, 0, 0);
+				forcePos(c, CONTROLS_PIN, InterfaceID.Chatbox.CONTROLS, 0, 0);
 				// Engine tabs drive the WHOLE chat raster: hiding ANY tab widget suppresses it (the engine draws
 				// nothing — proven off-device). When OPEN we WANT that raster (tabs + messages + scrollbar = the
 				// desktop look) with the native row laid ON TOP (same sprite, no peeking) and a native tap proxying
@@ -975,8 +978,8 @@ public final class HudVeneerBridge
 				}
 			}
 
-			// Minimap+orbs cluster relocate (independent of chat). Force MAP_CONTAINER each frame so it survives
-			// TOPLEVEL_REDRAW; revalidate cascades to the globe + orb children.
+			// Minimap+orbs cluster relocate (independent of chat). Pinned each frame so it survives TOPLEVEL_REDRAW,
+			// which costs a compare unless it moved (see Pin); a re-pin's revalidate cascades to the globe + orb children.
 			if (minimapX >= 0 && !mapOpenNow)
 			{
 				final int containerId = preEoc
@@ -984,8 +987,7 @@ public final class HudVeneerBridge
 				final Widget w = c.getWidget(containerId);
 				if (w != null)
 				{
-					w.setForcedPosition(minimapX, minimapY);
-					w.revalidate();
+					MAP_PIN.apply(w, minimapX, minimapY, false);
 				}
 			}
 
@@ -1012,8 +1014,7 @@ public final class HudVeneerBridge
 				final Widget w = c.getWidget(sideId);
 				if (w != null)
 				{
-					w.setForcedPosition(sideX, sideY);
-					w.revalidate();
+					SIDE_PIN.apply(w, sideX, sideY, false);
 				}
 			}
 
@@ -1314,11 +1315,11 @@ public final class HudVeneerBridge
 		// because that is what the post-close apply blocks re-force home; the hide is what the render obeys.
 		if (minimapX >= 0)
 		{
-			shoveOffscreen(c, preEoc ? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER, minimapX);
+			shoveOffscreen(c, MAP_PIN, preEoc ? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER, minimapX);
 		}
 		if (sideX >= 0)
 		{
-			shoveOffscreen(c, preEoc ? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER, sideX);
+			shoveOffscreen(c, SIDE_PIN, preEoc ? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER, sideX);
 		}
 
 		final int sdy = mapScrollDelta.getAndSet(0);
@@ -1536,14 +1537,14 @@ public final class HudVeneerBridge
 		}
 	}
 
-	/** Park a relocated toplevel container far below the canvas (kept alive, not hidden — no teardown). */
-	private static void shoveOffscreen(Client c, int id, int x)
+	/** Park a relocated toplevel container far below the canvas (kept alive, not hidden — no teardown). Through
+	 *  the container's own pin, so the close edge's re-pin home sees the move and the frames in between cost nothing. */
+	private static void shoveOffscreen(Client c, Pin pin, int id, int x)
 	{
 		final Widget w = c.getWidget(id);
 		if (w != null)
 		{
-			w.setForcedPosition(x, CHAT_COLLAPSE_OFFSCREEN_DY);
-			w.revalidate();
+			pin.apply(w, x, CHAT_COLLAPSE_OFFSCREEN_DY, false);
 		}
 	}
 
@@ -3120,15 +3121,68 @@ public final class HudVeneerBridge
 		}
 	}
 
-	private static void forcePos(Client c, int id, int x, int y)
+	/**
+	 * Where one relocated widget was last forced to, so pinning it on the next frame costs a compare instead of a
+	 * re-layout. {@code revalidate()} re-lays the widget's whole subtree, and the chat, minimap and side containers
+	 * each took one every frame to survive an interface rebuild that happens a few times a minute.
+	 *
+	 * <p>The forced position lives on the widget object and survives the engine's own re-layouts. It is lost when
+	 * the engine rebuilds the interface, which hands back a new object, or when something clears it (WidgetOverlay's
+	 * overlay reset forces (-1, -1) and revalidates); a cleared one shows as a live position that is no longer the
+	 * pinned one. Either way the next frame re-pins, which is the same one frame the old per-frame force took to
+	 * catch a rebuild, since tick() runs after the frame has rastered. Client thread.
+	 */
+	static final class Pin
+	{
+		private final String name;
+		private Widget widget;
+		private int x;
+		private int y;
+		private int count;
+
+		Pin(String name)
+		{
+			this.name = name;
+		}
+
+		/** Force {@code w} to ({@code x}, {@code y}) and revalidate it, unless it is already pinned there and sits
+		 *  there; {@code relayout} revalidates regardless, for a caller that has just changed the widget's size. */
+		boolean apply(Widget w, int x, int y, boolean relayout)
+		{
+			final String why = w != widget ? "new widget" : x != this.x || y != this.y ? "new target"
+				: w.getRelativeX() != x || w.getRelativeY() != y ? "moved" : relayout ? "relayout" : null;
+			if (why == null)
+			{
+				return false;
+			}
+			w.setForcedPosition(x, y);
+			w.revalidate();
+			widget = w;
+			this.x = x;
+			this.y = y;
+			// A pin that fires every frame would show here as a line every ~10 s; a healthy one goes quiet.
+			if (++count <= 5 || count % 500 == 0)
+			{
+				log.info("[veneer] pin {} at ({},{}): {} (pin #{})", name, x, y, why, count);
+			}
+			return true;
+		}
+	}
+
+	private static final Pin CHAT_PIN = new Pin("chat");
+	private static final Pin CONTROLS_PIN = new Pin("chat tabs");
+	private static final Pin CHATAREA_PIN = new Pin("chat area");
+	private static final Pin MAP_PIN = new Pin("minimap");
+	private static final Pin SIDE_PIN = new Pin("side panel");
+
+	private static void forcePos(Client c, Pin pin, int id, int x, int y)
 	{
 		try
 		{
 			final Widget w = c.getWidget(id);
 			if (w != null)
 			{
-				w.setForcedPosition(x, y);
-				w.revalidate();
+				pin.apply(w, x, y, false);
 			}
 		}
 		catch (RuntimeException ignore)
@@ -3666,28 +3720,24 @@ public final class HudVeneerBridge
 			// its bottom (and the input line) past the viewport and clipped it. Offsetting by CONTROLS_H keeps the
 			// 142px area inside the viewport; the taller native tab row simply OVERLAYS the message area's top strip
 			// (those top rows sit behind the opaque native row, like the engine CONTROLS did).
-			area.setForcedPosition(0, CONTROLS_H);
-			if (area.getWidthMode() != WidgetSizeMode.ABSOLUTE || area.getOriginalWidth() != rowW
-				|| area.getHeightMode() != WidgetSizeMode.ABSOLUTE || area.getOriginalHeight() != ORIG_CHAT_CONTENT_H)
+			final boolean resized = area.getWidthMode() != WidgetSizeMode.ABSOLUTE || area.getOriginalWidth() != rowW
+				|| area.getHeightMode() != WidgetSizeMode.ABSOLUTE || area.getOriginalHeight() != ORIG_CHAT_CONTENT_H;
+			if (resized)
 			{
 				area.setWidthMode(WidgetSizeMode.ABSOLUTE);
 				area.setOriginalWidth(rowW);
 				area.setHeightMode(WidgetSizeMode.ABSOLUTE);
 				area.setOriginalHeight(ORIG_CHAT_CONTENT_H);
-				area.revalidate();
-				// Only when the row is WIDER than the engine default do the display/scroll children need explicit
-				// widening (they don't cascade); at the default 519 width they keep their natural, already-aligned
-				// size + position, and their natural height fits the full-height area — so leave them untouched.
-				if (rowW > CHAT_DEFAULT_W)
-				{
-					forceWidth(c, InterfaceID.Chatbox.CHATDISPLAY, rowW - 14, 7);
-					forceWidth(c, InterfaceID.Chatbox.MES_LAYER, rowW - 14, 7);
-					forceWidth(c, InterfaceID.Chatbox.SCROLLAREA, rowW - 30, 0);
-				}
 			}
-			else
+			CHATAREA_PIN.apply(area, 0, CONTROLS_H, resized);
+			// Only when the row is WIDER than the engine default do the display/scroll children need explicit
+			// widening (they don't cascade); at the default 519 width they keep their natural, already-aligned
+			// size + position, and their natural height fits the full-height area — so leave them untouched.
+			if (resized && rowW > CHAT_DEFAULT_W)
 			{
-				area.revalidate();
+				forceWidth(c, InterfaceID.Chatbox.CHATDISPLAY, rowW - 14, 7);
+				forceWidth(c, InterfaceID.Chatbox.MES_LAYER, rowW - 14, 7);
+				forceWidth(c, InterfaceID.Chatbox.SCROLLAREA, rowW - 30, 0);
 			}
 		}
 		catch (RuntimeException ignore)

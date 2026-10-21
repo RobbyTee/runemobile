@@ -47,6 +47,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -611,5 +612,76 @@ public class HudVeneerBridgeTest
 
 		assertTrue("a re-shown layer is hidden again before the next frame rasters", layers[0].isHidden());
 		assertFalse("a re-enabled hover text is off again before the next frame rasters", text[0]);
+	}
+	/** A widget whose live position follows its forced one, the way the engine's re-layout leaves it. */
+	private static Widget pinnable(int[] pos)
+	{
+		final Widget w = mock(Widget.class);
+		doAnswer(inv ->
+		{
+			pos[0] = inv.getArgument(0);
+			pos[1] = inv.getArgument(1);
+			return null;
+		}).when(w).setForcedPosition(anyInt(), anyInt());
+		when(w.getRelativeX()).thenAnswer(inv -> pos[0]);
+		when(w.getRelativeY()).thenAnswer(inv -> pos[1]);
+		return w;
+	}
+
+	@Test
+	public void aPinnedWidgetIsNotReLaidOnAnUnchangedFrame()
+	{
+		final HudVeneerBridge.Pin pin = new HudVeneerBridge.Pin("test");
+		final Widget w = pinnable(new int[]{0, 400});
+
+		assertTrue("the first frame pins it", pin.apply(w, 93, 8, false));
+		assertFalse("a frame that changes nothing costs no re-layout", pin.apply(w, 93, 8, false));
+		assertFalse(pin.apply(w, 93, 8, false));
+		verify(w, times(1)).setForcedPosition(93, 8);
+		verify(w, times(1)).revalidate();
+	}
+
+	@Test
+	public void aClearedPinIsRestoredOnTheNextFrame()
+	{
+		final HudVeneerBridge.Pin pin = new HudVeneerBridge.Pin("test");
+		final int[] pos = {0, 400};
+		final Widget w = pinnable(pos);
+		pin.apply(w, 93, 8, false);
+
+		// WidgetOverlay's overlay reset forces (-1, -1) and revalidates: the widget is back where the engine puts it.
+		pos[0] = 0;
+		pos[1] = 400;
+		assertTrue(pin.apply(w, 93, 8, false));
+		verify(w, times(2)).setForcedPosition(93, 8);
+		verify(w, times(2)).revalidate();
+	}
+
+	@Test
+	public void aRebuiltInterfaceIsPinnedAgainWhereverItSits()
+	{
+		final HudVeneerBridge.Pin pin = new HudVeneerBridge.Pin("test");
+		pin.apply(pinnable(new int[]{0, 400}), 93, 8, false);
+
+		// A rebuild hands back a new object with no forced position, even one that happens to sit on the target:
+		// the next re-layout would move it.
+		final Widget rebuilt = pinnable(new int[]{93, 8});
+		assertTrue(pin.apply(rebuilt, 93, 8, false));
+		verify(rebuilt).setForcedPosition(93, 8);
+		verify(rebuilt).revalidate();
+	}
+
+	@Test
+	public void aNewTargetOrAResizeReLaysThePin()
+	{
+		final HudVeneerBridge.Pin pin = new HudVeneerBridge.Pin("test");
+		final Widget w = pinnable(new int[]{0, 400});
+		pin.apply(w, 93, 8, false);
+
+		assertTrue("shoved off-screen while the world map is open", pin.apply(w, 93, 3000, false));
+		assertFalse(pin.apply(w, 93, 3000, false));
+		assertTrue("home again when it closes", pin.apply(w, 93, 8, false));
+		assertTrue("a size change re-lays it in place", pin.apply(w, 93, 8, true));
+		verify(w, times(4)).revalidate();
 	}
 }
