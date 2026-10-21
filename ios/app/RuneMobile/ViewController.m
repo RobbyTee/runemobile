@@ -4118,7 +4118,7 @@ static int chatRowCanvasH(void) {
 
 // Lay out + state the static 7-tab channel row from the chat snapshot each tick. Mirrors updateChrome: hides
 // everything (revealing the engine's own chat) when the native chrome is toggled off or the layout is unsupported
-// (not Classic/164). The row spans the chat width (kChatW) at the chat origin; content (sprite + label) is
+// (not Resizable - Modern/164). The row spans the chat width (kChatW) at the chat origin; content (sprite + label) is
 // refreshed every tick and the just-tapped tab is held selected until the engine sprite catches up.
 - (void)updateChatTabs {
     if (!self.chatTabsBuilt) return;
@@ -4130,7 +4130,7 @@ static int chatRowCanvasH(void) {
     if (snap.length == 0) { [self hideChatTabs]; return; }
     NSDictionary *d = parseBridgeJSON(snap, "ViewController.updateChatTabs");
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue]) { [self hideChatTabs]; return; }
-    // LAYOUT GUARD (same as updateChrome): the native HUD only works in the Classic resizable layout (164).
+    // LAYOUT GUARD (same as updateChrome): the native HUD only works in Resizable - Modern (164).
     if ([d[@"topLevelId"] intValue] != 164) { [self hideChatTabs]; return; }
     // Dialogue open: the engine renders its own dialogue (NPC/player/options/level-up/message/make-X) — an
     // OPAQUE parchment + head — into the relocated chatbox region at the top, exactly like desktop. Hide the
@@ -5429,22 +5429,23 @@ static int chatRowCanvasH(void) {
         for (UIView *cv in self.stoneCovers) cv.hidden = YES;
         return;
     }
-    // LAYOUT GUARD: the native HUD overlay only works in the Classic resizable layout (PRE_EOC = toplevel 164). If
-    // the in-game OSRS "resizable layout" setting is switched to Modern (OSRS_STRETCH = 165) or anything else, our
-    // tab grid targets widgets that don't exist, so the tab buttons open nothing. Rather than soft-lock the user,
-    // hide the native overlay and un-hide the engine's OWN tab stones so the real game HUD renders + is tappable
-    // (the user can then switch the layout back). Re-engages automatically once back in toplevel 164.
+    // LAYOUT GUARD: the native HUD overlay only works in Resizable - Modern (PRE_EOC = toplevel 164). In
+    // Resizable - Classic (OSRS_STRETCH = 161) or Fixed (548) the grid can't stand in for the stones: in 161 they
+    // share a container with the side panel, so HudVeneerBridge never hides them there. Rather than soft-lock the
+    // user, hide the native overlay and un-hide the engine's OWN tab stones (the bridge gives back the rows it hid)
+    // so the real game HUD renders + is tappable, and the user can open Settings > Display and switch to
+    // Resizable - Modern. Re-engages automatically once back in toplevel 164.
     int topLevelId = [d[@"topLevelId"] intValue];
     if (topLevelId != 164) {
         for (UIButton *btn in self.tabButtons) btn.hidden = YES;
         for (UIView *cv in self.stoneCovers) cv.hidden = YES;
         [JVMLauncher setEngineStonesHidden:NO];
         if (self.framesShown % 120 == 0) {
-            [self appendLine:[NSString stringWithFormat:@"[chrome] unsupported layout topLevel=%d (not 164/Classic) -> native HUD off, engine HUD shown", topLevelId]];
+            [self appendLine:[NSString stringWithFormat:@"[chrome] unsupported layout topLevel=%d (not 164/Resizable-Modern) -> native HUD off, engine HUD shown", topLevelId]];
         }
         return;
     }
-    [JVMLauncher setEngineStonesHidden:YES];   // supported Classic layout: the native grid replaces the engine stones
+    [JVMLauncher setEngineStonesHidden:YES]; // supported Modern layout: the native grid replaces the engine stones
     int active = [d[@"activeTab"] intValue];
 
     // All 14 tabs in ONE 2-column grid at the BOTTOM-RIGHT — the official OSRS-mobile arrangement. The engine

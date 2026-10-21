@@ -96,8 +96,10 @@ public class HudVeneerBridgeTest
 		HudVeneerBridge.setChatTabRowHeight(0);         // 0 = fall back to CONTROLS_H
 		HudVeneerBridge.setChatAreaWidth(0);            // 0 = fall back to CHAT_DEFAULT_W
 		HudVeneerBridge.setChatCollapsed(false);
-		// Shared static: drop any world-map HUD hide a previous test left standing (every widget read comes
-		// back null, so the map reads closed and the restore runs against nothing).
+		HudVeneerBridge.relocateSidePanel(-1, -1);
+		HudVeneerBridge.setStonesHidden(false);
+		// Shared static: drop any world-map HUD hide or stone-row hide a previous test left standing (every
+		// widget read comes back null, so the map reads closed and the restores run against nothing).
 		HudVeneerBridge.preRender(loggedInClientWith(null));
 	}
 
@@ -472,7 +474,7 @@ public class HudVeneerBridgeTest
 		return w;
 	}
 
-	/** A logged-in client in the Classic resizable layout, with the three HUD layers wired up and the world
+	/** A logged-in client in the Resizable - Modern layout, with the three HUD layers wired up and the world
 	 *  map open or closed. Index 0 = minimap cluster, 1 = side panel, 2 = hover-option text. */
 	private static Client clientWithHudLayers(boolean worldMapOpen, Widget[] layers)
 	{
@@ -487,7 +489,7 @@ public class HudVeneerBridgeTest
 	private static Client clientWithHudLayers(boolean worldMapOpen, Widget[] layers, boolean[] textEnabled)
 	{
 		final Client c = loggedInClientWith(null);
-		when(c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT)).thenReturn(1);   // PreEoc (Classic)
+		when(c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT)).thenReturn(1);   // PreEoc (Resizable - Modern)
 		when(c.getWidget(InterfaceID.ToplevelPreEoc.MAP_CONTAINER)).thenReturn(layers[0]);
 		when(c.getWidget(InterfaceID.ToplevelPreEoc.SIDE_CONTAINER)).thenReturn(layers[1]);
 		when(c.isMouseoverTextEnabled()).thenAnswer(inv -> textEnabled[0]);
@@ -707,5 +709,190 @@ public class HudVeneerBridgeTest
 		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, 519, 40);
 		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, 519, 40);
 		verify(area, times(2)).revalidate();
+	}
+
+	// --- the engine stone rows ------------------------------------------------------------------------------
+	// The native tab grid stands in for the stones, so their rows are hidden -- by hiding each stone's
+	// GRANDPARENT, the container the engine does not re-pin. In Resizable - Modern (164) that is the row alone.
+	// In Resizable - Classic (161) it is SIDE_MENU, which holds the side panel too: hiding it there left a player
+	// who logged in on Classic with no tabs and no panel, so no way into the Display settings to leave it. And
+	// the hide sticks, so a row nothing gives back stays gone for the session.
+
+	/** A hidable widget with an id, which is how the restore finds it again. */
+	private static Widget hidableRow(int id, boolean initiallyHidden)
+	{
+		final Widget w = hidableLayer(initiallyHidden);
+		when(w.getId()).thenReturn(id);
+		return w;
+	}
+
+	/** A stone whose grandparent is {@code row}. */
+	private static Widget stoneIn(Widget row)
+	{
+		final Widget parent = mock(Widget.class);
+		when(parent.getParent()).thenReturn(row);
+		final Widget stone = mock(Widget.class);
+		when(stone.getParent()).thenReturn(parent);
+		return stone;
+	}
+
+	/** A logged-in Resizable - Modern client: STONE0's row is {@code rows[0]}, STONE7's is {@code rows[1]}. */
+	private static Client modernClientWithStoneRows(Widget[] rows)
+	{
+		final Client c = loggedInClientWith(null);
+		// Built before the stubbing that returns them: a mock stubbed inside an unfinished when() fails it.
+		final Widget left = stoneIn(rows[0]);
+		final Widget right = stoneIn(rows[1]);
+		when(c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT)).thenReturn(1);
+		when(c.getWidget(InterfaceID.ToplevelPreEoc.STONE0)).thenReturn(left);
+		when(c.getWidget(InterfaceID.ToplevelPreEoc.STONE7)).thenReturn(right);
+		for (final Widget row : rows)
+		{
+			final int id = row.getId();   // read before the stubbing, so getWidget is the call being stubbed
+			when(c.getWidget(id)).thenReturn(row);
+		}
+		return c;
+	}
+
+	/** A logged-in Resizable - Classic client, where both stone rows' grandparent is {@code sideMenu}. */
+	private static Client classicClientWithSideMenu(Widget sideMenu)
+	{
+		final Client c = loggedInClientWith(null);
+		final Widget left = stoneIn(sideMenu);
+		final Widget right = stoneIn(sideMenu);
+		when(c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT)).thenReturn(0);
+		when(c.getWidget(InterfaceID.ToplevelOsrsStretch.STONE0)).thenReturn(left);
+		when(c.getWidget(InterfaceID.ToplevelOsrsStretch.STONE7)).thenReturn(right);
+		when(c.getWidget(InterfaceID.ToplevelOsrsStretch.SIDE_MENU)).thenReturn(sideMenu);
+		return c;
+	}
+
+	private static Widget[] modernRows()
+	{
+		return new Widget[]{
+			hidableRow(InterfaceID.ToplevelPreEoc.SIDE_MOVABLE_LAYER, false),
+			hidableRow(InterfaceID.ToplevelPreEoc.SIDE_STATIC_LAYER, false),
+		};
+	}
+
+	@Test
+	public void inResizableModernBothStoneRowsAreHidden()
+	{
+		final Widget[] rows = modernRows();
+		HudVeneerBridge.setStonesHidden(true);
+
+		HudVeneerBridge.preRender(modernClientWithStoneRows(rows));
+
+		assertTrue("the left stone row is hidden", rows[0].isHidden());
+		assertTrue("the right stone row is hidden", rows[1].isHidden());
+	}
+
+	@Test
+	public void inResizableClassicTheSideMenuIsNeverHidden()
+	{
+		// Both seams: preRender is the last word before the raster, tick the post-render pass that also hid.
+		final Widget sideMenu = hidableRow(InterfaceID.ToplevelOsrsStretch.SIDE_MENU, false);
+		final Client c = classicClientWithSideMenu(sideMenu);
+		HudVeneerBridge.setStonesHidden(true);
+
+		HudVeneerBridge.preRender(c);
+		HudVeneerBridge.tick(c);
+
+		assertFalse("the side menu, and the panel in it, stay on screen", sideMenu.isHidden());
+		verify(sideMenu, never()).setHidden(anyBoolean());
+	}
+
+	@Test
+	public void turningTheHideOffGivesTheRowsBack()
+	{
+		// The native shells turn it off when their grid stands down (an unsupported layout, the chrome toggled
+		// off) and rely on the engine's own stones coming back.
+		final Widget[] rows = modernRows();
+		final Client c = modernClientWithStoneRows(rows);
+		HudVeneerBridge.setStonesHidden(true);
+		HudVeneerBridge.preRender(c);
+
+		HudVeneerBridge.setStonesHidden(false);
+		HudVeneerBridge.preRender(c);
+
+		assertFalse(rows[0].isHidden());
+		assertFalse(rows[1].isHidden());
+	}
+
+	@Test
+	public void aSwitchToClassicGivesTheModernRowsBack()
+	{
+		// The hide follows the layout even with the native shell still asking for it, and the restore goes to
+		// the rows it hid, not to whatever the live layout's stones sit in.
+		final Widget[] rows = modernRows();
+		HudVeneerBridge.setStonesHidden(true);
+		HudVeneerBridge.preRender(modernClientWithStoneRows(rows));
+
+		final Widget sideMenu = hidableRow(InterfaceID.ToplevelOsrsStretch.SIDE_MENU, false);
+		final Client classic = classicClientWithSideMenu(sideMenu);
+		when(classic.getWidget(InterfaceID.ToplevelPreEoc.SIDE_MOVABLE_LAYER)).thenReturn(rows[0]);
+		when(classic.getWidget(InterfaceID.ToplevelPreEoc.SIDE_STATIC_LAYER)).thenReturn(rows[1]);
+		HudVeneerBridge.preRender(classic);
+
+		assertFalse(rows[0].isHidden());
+		assertFalse(rows[1].isHidden());
+		verify(sideMenu, never()).setHidden(anyBoolean());
+	}
+
+	@Test
+	public void aStoneRowTheEngineHidIsNotHandedBackShown()
+	{
+		final Widget[] rows = {
+			hidableRow(InterfaceID.ToplevelPreEoc.SIDE_MOVABLE_LAYER, true),
+			hidableRow(InterfaceID.ToplevelPreEoc.SIDE_STATIC_LAYER, false),
+		};
+		final Client c = modernClientWithStoneRows(rows);
+		HudVeneerBridge.setStonesHidden(true);
+		HudVeneerBridge.preRender(c);
+		HudVeneerBridge.setStonesHidden(false);
+		HudVeneerBridge.preRender(c);
+
+		assertTrue("the row the engine had hidden stays hidden", rows[0].isHidden());
+		verify(rows[0], never()).setHidden(anyBoolean());
+		assertFalse("the row that was ours comes back", rows[1].isHidden());
+	}
+
+	@Test
+	public void aStoneRowTheEngineReShowsIsStillOursToGiveBack()
+	{
+		// The re-assert keeps the claim from the frame that first hid the row: a TOPLEVEL_REDRAW re-showing it
+		// mid-session must not turn the row into one the restore leaves alone.
+		final Widget[] rows = modernRows();
+		final Client c = modernClientWithStoneRows(rows);
+		HudVeneerBridge.setStonesHidden(true);
+		HudVeneerBridge.preRender(c);
+		rows[0].setHidden(false);   // the engine re-shows the row
+		HudVeneerBridge.preRender(c);
+		assertTrue("hidden again before the next raster", rows[0].isHidden());
+
+		HudVeneerBridge.setStonesHidden(false);
+		HudVeneerBridge.preRender(c);
+
+		assertFalse(rows[0].isHidden());
+	}
+
+	@Test
+	public void theSidePanelIsOnlyRelocatedInResizableModern()
+	{
+		// In Classic the side container sits inside SIDE_MENU, so a canvas position forced on it lands far
+		// outside its parent: the panel is gone, and with it the way into the Display settings.
+		HudVeneerBridge.relocateSidePanel(900, 300);
+
+		final Widget classicSide = pinnable(new int[]{26, 37});
+		final Client classic = classicClientWithSideMenu(hidableRow(InterfaceID.ToplevelOsrsStretch.SIDE_MENU, false));
+		when(classic.getWidget(InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER)).thenReturn(classicSide);
+		HudVeneerBridge.tick(classic);
+		verify(classicSide, never()).setForcedPosition(anyInt(), anyInt());
+
+		final Widget modernSide = pinnable(new int[]{0, 36});
+		final Client modern = modernClientWithStoneRows(modernRows());
+		when(modern.getWidget(InterfaceID.ToplevelPreEoc.SIDE_CONTAINER)).thenReturn(modernSide);
+		HudVeneerBridge.tick(modern);
+		verify(modernSide).setForcedPosition(900, 300);
 	}
 }

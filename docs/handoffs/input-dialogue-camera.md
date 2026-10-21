@@ -54,9 +54,12 @@ the drag convention and were not verified against the buttons in play. Then merg
 
 ## Open risks, untouched
 
-- **Classic layout (161) soft-locks the HUD:** `updateHudLayout` hides engine stones with no layout
-  guard; the only escape is Settings → "Show tab rails" OFF. The code also mislabels 164 as "Classic"
-  (164 is `RESIZABLE_VIEWPORT_BOTTOM_LINE`/Modern, 161 is `RESIZABLE_VIEWPORT_OLD_SCHOOL_BOX`/Classic).
+- ~~Classic layout (161) soft-locks the HUD~~ — **fixed.** In 161 a stone's grandparent is `SIDE_MENU`,
+  which also holds the side panel, so the stone hide took the panel with it and nothing ever un-hid it.
+  `HudVeneerBridge.applyStoneRows` now hides the rows only in 164 and gives back the ones it hid when the
+  native grid stands down; the side-panel relocate is 164-only too. Android no longer engages its grid
+  in 161, so both ports fall back to the engine's own HUD there and Settings → Display is reachable. The
+  "Classic" labels on 164 in the code that changed are corrected.
 - **`chatDialogueActive` is sticky:** `updateChatTabs` returns early in an unsupported layout without
   clearing it.
 - **Release builds emit no diagnostics:** `appendLine` has no log file in Release and the console is

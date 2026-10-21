@@ -3236,11 +3236,12 @@ class MainActivity : AppCompatActivity() {
 
     /*
      * A6: drive the native 2-col tab grid each frame from the render-thread-published MobileChromeBridge snapshot
-     * (lock-free, no HotSpot attach). The grid engages in the supported resizable layouts (logged in + PRE_EOC
-     * Classic or OSRS_STRETCH modern); there it hides the engine stones (HudVeneerBridge.setStonesHidden) so the
-     * native cells ARE the tabs, highlights the open tab, and relocates the engine side panel flush-left of the
-     * grid. In any other layout (FIXED) it disengages — un-hides the engine stones + releases the side panel — so
-     * the real HUD renders (the iOS LAYOUT GUARD). All bridge writes go through onBridge (off the UI thread).
+     * (lock-free, no HotSpot attach). The grid engages only in Resizable - Modern (logged in + PRE_EOC, toplevel
+     * 164); there it hides the engine stones (HudVeneerBridge.setStonesHidden) so the native cells ARE the tabs,
+     * highlights the open tab, and relocates the engine side panel flush-left of the grid. In any other layout
+     * (Resizable - Classic, FIXED) it disengages — un-hides the engine stones + releases the side panel — so the
+     * real HUD renders and the player can reach the Display settings to switch (the iOS LAYOUT GUARD). All bridge
+     * writes go through onBridge (off the UI thread).
      */
 
     /**
@@ -3420,13 +3421,14 @@ class MainActivity : AppCompatActivity() {
         val topLevel = o?.optInt("topLevelId", -1) ?: -1
         val rootKind = o?.optString("rootKind", "") ?: ""
         val active = o?.optInt("activeTab", -1) ?: -1
-        // The native grid's cells map to real engine stones via openTab op-replay. Engage in BOTH resizable roots:
-        // PRE_EOC (Classic, 164) and OSRS_STRETCH (modern, 161) — the shared layer hides/replays the right stones for
-        // each (stoneIds/openTabNow branch on the root, STONE0..13 in identical order). FIXED is excluded (the shared
-        // tick hard-returns on !isResized + stoneIds has no FIXED branch), so it keeps the raw engine HUD.
+        // The native grid's cells map to real engine stones via openTab op-replay. Engage only in PRE_EOC
+        // (Resizable - Modern, 164). OSRS_STRETCH (Resizable - Classic, 161) is excluded: there the stones share one
+        // container with the side panel, so the shared layer can't hide them without hiding the panel (it never
+        // does), and the side-panel relocate is Modern-only too. That root, and FIXED, keep the raw engine HUD, so
+        // the player can still open Settings > Display and switch to Resizable - Modern.
         // Bug 8: `inLoginTransition` holds chrome off for the bounded post-login window (then engages regardless),
         // so the grid/chat-tabs don't flash over the half-built welcome frame. Raw engine HUD shows during the window.
-        val supported = loggedIn && (rootKind == "PRE_EOC" || rootKind == "OSRS_STRETCH") && !inLoginTransition
+        val supported = loggedIn && rootKind == "PRE_EOC" && !inLoginTransition
         chromeOverlay.setGridEnabled(supported)
         chromeOverlay.setActiveTab(active)
 

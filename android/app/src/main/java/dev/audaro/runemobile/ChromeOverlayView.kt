@@ -33,7 +33,7 @@ class ChromeOverlayView(
     var onTabTap: ((engineIndex: Int) -> Unit)? = null
 
     private var active = -1 // engine tab index of the open tab (red stone), -1 = none
-    private var gridEnabled = false // true only in the supported Classic/PRE_EOC layout (toplevel 164), logged in
+    private var gridEnabled = false // true only in Resizable - Modern (PRE_EOC, toplevel 164), logged in
     private var shown = true // A/B debug toggle (▦ native grid vs ▤ raw engine stones)
 
     // Composited tab images: stone background + centred glyph, built once. [0] inactive (grey), [1] active (red).
@@ -124,7 +124,7 @@ class ChromeOverlayView(
         }
     }
 
-    /** Host: enable the native grid only in the supported layout (logged in + Classic/PRE_EOC toplevel 164).
+    /** Host: enable the native grid only in the supported layout (logged in + Resizable - Modern, PRE_EOC 164).
      *  When disabled the grid draws nothing and consumes no touches (the engine stones are shown instead). */
     fun setGridEnabled(on: Boolean) {
         if (gridEnabled != on) {

@@ -152,6 +152,9 @@ public final class HudVeneerBridge
 	// even with the stone hidden (TabScriptProbe: replay + worksHidden GREEN). pendingOpenTab is a one-shot action
 	// applied on the client thread (where runScript is legal).
 	private static volatile boolean hideStones;
+	// The stone-row containers this bridge hid, by widget id; -1 = none of ours (client thread only). The rows'
+	// hidden flag sticks, so without this record nothing would ever show them again — see applyStoneRows.
+	private static final int[] stoneRowsWeHid = {-1, -1};
 	private static volatile int pendingOpenTab = -1;
 	// FIX-5: one-shot native "open the world map" — replays the ORB_WORLDMAP orb's op script so a native control
 	// can open the map without hitting the ~25px engine orb (and fixes the legacy-account orb block). Applied on
@@ -371,7 +374,8 @@ public final class HudVeneerBridge
 
 	/** Native: hide (or show) all 14 engine tab stones. With the native 2-col tab grid driving tabs via
 	 *  {@link #openTab}, the real stones are hidden so there is no leftover stone row / cover patch. Re-applied
-	 *  each frame (the engine rebuilds the toplevel on TOPLEVEL_REDRAW). */
+	 *  each frame (the engine rebuilds the toplevel on TOPLEVEL_REDRAW). {@code false} gives back the rows this
+	 *  hid. Only the Resizable - Modern layout is ever hidden; see {@link #applyStoneRows}. */
 	public static void setStonesHidden(boolean hidden)
 	{
 		hideStones = hidden;
@@ -622,12 +626,7 @@ public final class HudVeneerBridge
 				// one field read per frame.
 				disableMouseoverText(c);
 			}
-			if (hideStones)
-			{
-				final int[] ids = stoneIds(preEoc);
-				hideRowOf(c, ids[0]);
-				hideRowOf(c, ids[7]);
-			}
+			applyStoneRows(c, preEoc);
 			// The fullscreen world map owns the screen: the HUD layers over it are hidden here too, as the
 			// final word before raster. tick() runs in the POST-render callback, so a layer the engine
 			// re-showed during the client tick would otherwise get one fully painted frame on top of the map
@@ -1028,11 +1027,12 @@ public final class HudVeneerBridge
 			}
 
 			// Side panel relocate (independent). No-op until a tab is open (SIDE_CONTAINER then becomes non-null).
-			if (sideX >= 0 && !mapOpenNow)
+			// Resizable - Modern only. In Classic the container sits inside SIDE_MENU, so a canvas x forced on it
+			// lands far outside its parent and the panel is gone; and a switch to Classic made in-game reaches
+			// here for a few frames before the native shell has stood its grid down and released this.
+			if (sideX >= 0 && preEoc && !mapOpenNow)
 			{
-				final int sideId = preEoc
-					? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER;
-				final Widget w = c.getWidget(sideId);
+				final Widget w = c.getWidget(InterfaceID.ToplevelPreEoc.SIDE_CONTAINER);
 				if (w != null)
 				{
 					SIDE_PIN.apply(w, sideX, sideY, false);
@@ -1046,12 +1046,8 @@ public final class HudVeneerBridge
 			// GRANDPARENT holds the whole row (icons + backgrounds), so hiding it clears the row completely
 			// (StoneSuppressProbe steady-state PNG + device). Stones still resolve under the hidden ancestor, so
 			// openTab (replaying a stone's op script) still switches tabs. STONE0 = left half, STONE7 = right half.
-			if (hideStones)
-			{
-				final int[] ids = stoneIds(preEoc);
-				hideRowOf(c, ids[0]);
-				hideRowOf(c, ids[7]);
-			}
+			// Resizable - Modern only, and undone when the native grid stands down: see applyStoneRows.
+			applyStoneRows(c, preEoc);
 
 			// One-shot: open a tab by replaying its stone's op script (works even with the stone hidden).
 			final int openIdx = pendingOpenTab;
@@ -1338,9 +1334,9 @@ public final class HudVeneerBridge
 		{
 			shoveOffscreen(c, MAP_PIN, preEoc ? InterfaceID.ToplevelPreEoc.MAP_CONTAINER : InterfaceID.ToplevelOsrsStretch.MAP_CONTAINER, minimapX);
 		}
-		if (sideX >= 0)
+		if (sideX >= 0 && preEoc)   // the relocate it pairs with is Modern-only (see tick)
 		{
-			shoveOffscreen(c, SIDE_PIN, preEoc ? InterfaceID.ToplevelPreEoc.SIDE_CONTAINER : InterfaceID.ToplevelOsrsStretch.SIDE_CONTAINER, sideX);
+			shoveOffscreen(c, SIDE_PIN, InterfaceID.ToplevelPreEoc.SIDE_CONTAINER, sideX);
 		}
 
 		final int sdy = mapScrollDelta.getAndSet(0);
@@ -1589,29 +1585,59 @@ public final class HudVeneerBridge
 			.append(b.x).append(',').append(b.y).append(',').append(b.width).append(',').append(b.height).append(']');
 	}
 
-	/** Hide the GRANDPARENT container of a stone (the whole stone-row half — icons + backgrounds). The engine
-	 *  re-pins the stones but not their ancestor containers, so the grandparent's hidden state sticks and the row
-	 *  disappears; the stones still resolve underneath for {@link #openTabNow}. */
-	private static void hideRowOf(Client c, int stoneId)
+	/**
+	 * Hide the two engine stone rows while the native tab grid stands in for them, and give back the ones this
+	 * hid once it doesn't. Client thread; asserted from both {@link #preRender} and {@link #tick}.
+	 *
+	 * <p>A row is a stone's GRANDPARENT container (icons + backgrounds). The engine re-pins the stones but not
+	 * their ancestors, so the hide sticks and the stones still resolve underneath for {@link #openTabNow}. That
+	 * container is the row alone only in Resizable - Modern (164). In Resizable - Classic (161) both rows share
+	 * one grandparent, SIDE_MENU, which also holds the side panel: hiding it there took the panel too, so every
+	 * tab opened into nothing and a player who logged in on Classic could not reach the Display settings to
+	 * leave it. Classic is therefore never hidden.
+	 *
+	 * <p>Because the hide sticks, the restore is the other half of the fix. It undoes only a hide this made
+	 * ({@code isSelfHidden}, recorded per row), never one the engine made, and it targets the widget it hid, so a
+	 * layout switch cannot point it at the other toplevel's rows.
+	 */
+	private static void applyStoneRows(Client c, boolean preEoc)
 	{
-		try
+		final boolean hide = hideStones && preEoc;
+		final int[] stones = hide ? stoneIds(true) : null;
+		for (int i = 0; i < stoneRowsWeHid.length; i++)
 		{
-			final Widget s = c.getWidget(stoneId);
-			if (s == null)
+			if (hide)
 			{
-				return;
+				try
+				{
+					final Widget row = rowOf(c, stones[i * 7]);   // STONE0 = left half, STONE7 = right half
+					// A row already hidden keeps whatever claim it had: ours from an earlier frame, or none at all
+					// if the engine hid it, which leaves it the engine's to show again.
+					if (row != null && !row.isSelfHidden())
+					{
+						row.setHidden(true);
+						stoneRowsWeHid[i] = row.getId();
+					}
+				}
+				catch (RuntimeException ignore)
+				{
+					BridgeFaults.note("HudVeneerBridge.applyStoneRows", ignore);
+				}
 			}
-			final Widget p = s.getParent();
-			final Widget gp = p == null ? null : p.getParent();
-			if (gp != null && !gp.isHidden())
+			else if (stoneRowsWeHid[i] != -1)
 			{
-				gp.setHidden(true);
+				setSelfHidden(c, stoneRowsWeHid[i], false);
+				stoneRowsWeHid[i] = -1;
 			}
 		}
-		catch (RuntimeException ignore)
-		{
-			BridgeFaults.note("HudVeneerBridge.hideRowOf", ignore);
-		}
+	}
+
+	/** The stone row a stone sits in: its grandparent container, or null if the stone isn't loaded. */
+	private static Widget rowOf(Client c, int stoneId)
+	{
+		final Widget s = c.getWidget(stoneId);
+		final Widget p = s == null ? null : s.getParent();
+		return p == null ? null : p.getParent();
 	}
 
 	private static int[] stoneIds(boolean preEoc)
