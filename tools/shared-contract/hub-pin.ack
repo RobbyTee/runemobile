@@ -1,14 +1,22 @@
-# GAP-B-2 — RuneLite api/hub version-pin review ledger.
+# GAP-B-2 — RuneLite plugin-hub version-pin review ledger.
 #
-# runelite.properties intentionally pins runelite.pluginhub.version + runelite.api.base to a version that
-# LAGS gradle.properties' project.build.version. The pin exists because a newer minor's api path 404s
-# (commit a310e583c8: "1.12.29 never released -> 404"). `git merge upstream/master` never rewrites our pin,
-# so without this ledger the stale pin rides every future merge forward invisibly.
+# runelite.properties pins runelite.pluginhub.version to a RELEASED version: the hub serves manifests for releases
+# only, and our client is a -SNAPSHOT (manifest/<v>-SNAPSHOT_full.js 404s). runelite.api.base is a different
+# service and follows ${project.version}; check-hub-pin.sh fails if it is pinned to a literal. The two were once
+# pinned together on the theory that a newer minor's api path 404s (commit a310e583c8); the 2026-10-15 entry
+# records how that inverted. `git merge upstream/master` never rewrites the hub pin, so without this ledger a
+# stale pin rides every future merge forward invisibly.
 #
-# check-hub-pin.sh fails the release gate when project.build.version advances past reviewed_project_version.
-# When that happens: verify whether https://api.runelite.net/runelite-<newver> and
-# repo.runelite.net/plugins/<newver> now resolve. If they do, lift the pin back to ${project.version} in
-# runelite.properties; if they still 404, keep the pin. Either way, bump reviewed_project_version to re-arm.
+# check-hub-pin.sh fails the release gate when project.build.version (minus -SNAPSHOT) advances past
+# reviewed_project_version. When that happens, probe with the client's exact URL shapes, as the entries below do:
+# repo.runelite.net/plugins/manifest/<v>_full.js, and a POST to api.runelite.net/runelite-<v>/pluginhub. Pin the
+# hub to the newest RELEASE this tree has merged: never a -SNAPSHOT, and never a release we have not merged (a
+# plugin built against it can call API this client lacks). Moving the pin changes three values together:
+# runelite.pluginhub.version in runelite.properties, -Drunelite.pluginhub.version= in
+# ios/app/RuneMobile/JVMLauncher.m, and pinned_hub_version below. Either way, add a dated entry and set
+# reviewed_project_version to re-arm.
+#
+# The entries below are dated history: read each as what was true on its date.
 #
 # 2026-07-01 review at project 1.12.31: probed the newer api/hub paths; could not confirm they resolve
 # (inconclusive from outside the client's exact request shape), so the known-good pin is RETAINED.

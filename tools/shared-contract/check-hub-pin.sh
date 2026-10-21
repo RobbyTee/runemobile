@@ -74,12 +74,11 @@ if [ "$hub_pin" != "$acked_pin" ]; then
 fi
 
 if [ "$proj" != "$reviewed" ]; then
-	echo "✋ hub-pin: project.build.version is now $proj but the api/hub pin was last reviewed at $reviewed." >&2
-	echo "   RuneLite's api/hub is pinned to $hub_pin (a newer minor historically 404'd — commit a310e583c8)." >&2
-	echo "   Verify whether https://api.runelite.net/runelite-$proj and https://repo.runelite.net/plugins/$proj" >&2
-	echo "   now resolve for the client's requests. If they do, lift the pin to \${project.version} in" >&2
-	echo "   runelite.properties; if they still 404, keep it. Either way, set reviewed_project_version=$proj" >&2
-	echo "   in tools/shared-contract/hub-pin.ack to re-arm this tripwire." >&2
+	echo "✋ hub-pin: project.build.version is now $proj but the hub pin was last reviewed at $reviewed." >&2
+	echo "   The plugin hub is pinned to release $hub_pin (the hub serves releases only; this client is a -SNAPSHOT)." >&2
+	echo "   Re-probe both services with the client's URL shapes (hub-pin.ack's header lists them) and move the pin" >&2
+	echo "   to the newest release this tree has merged, if that changed. Either way, add a dated entry and set" >&2
+	echo "   reviewed_project_version=$proj in tools/shared-contract/hub-pin.ack to re-arm this tripwire." >&2
 	fail=1
 fi
 

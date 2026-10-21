@@ -133,9 +133,10 @@ public final class RLHDStarter
 			// or the plugin breaks. asyncModelProcessing=false (our EGL/GL bridge has ONE thread-affine context; RLHD's
 			// multithreaded path has worker threads touch GL buffers concurrently -> races corrupt animated models);
 			// uiScalingMode=LINEAR (HYBRID/xBR pull in scale/*.glsl not yet validated on Android GLES; also the
-			// client-thread-readiness probe); tiledLighting=false (the tiled-lighting GLSL is not ported to the Android
-			// overlay yet -> feature-gated off until Phase 5; the scene renders correctly without it). uiScalingMode is
-			// forced FIRST and used as the readiness probe — if the client thread isn't up yet, retry next tick.
+			// client-thread-readiness probe); tiledLighting=false (the tiled-lighting shaders ARE ES-ported in the Android
+			// overlay, 6d7c9442fa, but the feature has never been enabled and validated on Android hardware, so it stays
+			// off; the scene renders correctly without it). uiScalingMode is forced FIRST and used as the readiness
+			// probe — if the client thread isn't up yet, retry next tick.
 			final String probe = MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");
 			if (!probe.contains("\"ok\":true"))
 				return;   // client thread not ready yet — retry next tick before seeding/committing
