@@ -113,25 +113,16 @@ class TapRingView(
         val it = rings.iterator()
         while (it.hasNext()) {
             val r = it.next()
-            val scale: Float
-            val alpha: Float
-            if (r.retiredMs != 0L) {
-                val rt = (now - r.retiredMs).toFloat() / RETIRE_MS
-                if (rt >= 1f) {
-                    it.remove()
-                    continue
-                }
-                scale = r.retiredScale // frozen at the size it had reached
-                alpha = r.retiredAlpha * (1f - rt)
-            } else {
-                val t = (now - r.startMs).toFloat() / LIFE_MS
-                if (t >= 1f) {
-                    it.remove()
-                    continue
-                }
-                scale = SCALE_FROM + (SCALE_TO - SCALE_FROM) * t
-                alpha = 1f - t
+            val retired = r.retiredMs != 0L
+            // A retired ring fades out over RETIRE_MS, frozen at the size it had reached; a live one runs its
+            // full LIFE_MS.
+            val t = if (retired) (now - r.retiredMs).toFloat() / RETIRE_MS else (now - r.startMs).toFloat() / LIFE_MS
+            if (t >= 1f) {
+                it.remove()
+                continue
             }
+            val scale = if (retired) r.retiredScale else SCALE_FROM + (SCALE_TO - SCALE_FROM) * t
+            val alpha = if (retired) r.retiredAlpha * (1f - t) else 1f - t
             paint.color = r.color
             paint.alpha = (alpha * 255f).toInt()
             canvas.drawCircle(r.x, r.y, baseRadius * scale, paint)

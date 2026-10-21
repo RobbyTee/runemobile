@@ -59,6 +59,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import org.json.JSONObject
 import java.io.File
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import kotlin.math.hypot
@@ -2132,12 +2133,12 @@ class MainActivity : AppCompatActivity() {
             if (h.isNotEmpty() && devTicking) devHeapCache = h
         }
         val thermal = thermalStatusLabel()
-        perfChip?.text = String.format("%.0f fps · %s · %s", fps, devHeapCache, thermal)
+        perfChip?.text = String.format(Locale.US, "%.0f fps · %s · %s", fps, devHeapCache, thermal)
         devDiag?.let { d ->
             if (devPanel?.visibility == View.VISIBLE) {
                 d.text =
                     buildString {
-                        append("fps    ").append(String.format("%.1f", fps)).append('\n')
+                        append("fps    ").append(String.format(Locale.US, "%.1f", fps)).append('\n')
                         append("heap   ").append(devHeapCache).append(" MB\n")
                         append("thermal ").append(thermal).append('\n')
                         append("renderer ").append(rendererPref())

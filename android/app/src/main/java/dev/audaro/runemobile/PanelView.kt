@@ -225,13 +225,14 @@ fun PanelView(
                                                 // can miss the focus event when the Swing EDT is momentarily busy,
                                                 // forcing a second tap. Poll up to 5x at 80ms (~400ms worst case).
                                                 var active = false
-                                                for (attempt in 0 until 5) {
+                                                var polls = 0
+                                                while (!active && polls < 5) {
                                                     delay(80)
                                                     active =
                                                         withContext(Dispatchers.IO) {
                                                             JvmLauncher.onBridge { JvmLauncher.isPanelTextActive() }.get()
                                                         }
-                                                    if (active) break
+                                                    polls++
                                                 }
                                                 if (active) {
                                                     fieldValue =

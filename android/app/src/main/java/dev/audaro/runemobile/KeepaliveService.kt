@@ -44,15 +44,24 @@ class KeepaliveService : Service() {
                 startForeground(NOTIF_ID, n)
             }
             Log.i(TAG, "keepalive: foreground service started")
-        } catch (t: Throwable) {
-            // An OEM battery manager or an FGS-start restriction can refuse the promotion — treat it
-            // as a soft failure (the reconnect overlay self-heals on return) rather than a crash.
-            Log.w(TAG, "keepalive: startForeground refused: ${t.message}")
-            stopSelf()
+        } catch (e: IllegalStateException) {
+            // An FGS-start restriction can refuse the promotion — treat it as a soft failure (the
+            // reconnect overlay self-heals on return) rather than a crash. Every refusal startForeground
+            // documents is an IllegalStateException (ForegroundServiceStartNotAllowedException, and from
+            // API 34 Invalid/MissingForegroundServiceTypeException) or a SecurityException (no permission
+            // for the service type).
+            refused(e)
+        } catch (e: SecurityException) {
+            refused(e)
         }
         // START_NOT_STICKY: if the OS kills us under memory pressure the process is already gone, so
         // don't resurrect a keepalive for it — the reconnect overlay is the fallback on return.
         return START_NOT_STICKY
+    }
+
+    private fun refused(e: RuntimeException) {
+        Log.w(TAG, "keepalive: startForeground refused: ${e.message}")
+        stopSelf()
     }
 
     override fun onDestroy() {

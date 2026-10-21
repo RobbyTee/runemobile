@@ -54,8 +54,6 @@
     <ID>CyclomaticComplexMethod:ReconActivity.kt$ReconActivity$private fun runRecon()</ID>
     <ID>CyclomaticComplexMethod:ReconActivity.kt$ReconActivity$private fun validateBaseGpuShaders(esTier: Int)</ID>
     <ID>DestructuringDeclarationWithTooManyEntries:MainActivity.kt$MainActivity$val (l, t, r, b) = if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.R) { val i = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()) listOf(i.left, i.top, i.right, i.bottom) } else { @Suppress("DEPRECATION") listOf(wi.stableInsetLeft, wi.stableInsetTop, wi.stableInsetRight, wi.stableInsetBottom) }</ID>
-    <ID>ImplicitDefaultLocale:MainActivity.kt$MainActivity$String.format("%.0f fps · %s · %s", fps, devHeapCache, thermal)</ID>
-    <ID>ImplicitDefaultLocale:MainActivity.kt$MainActivity$String.format("%.1f", fps)</ID>
     <ID>LargeClass:MainActivity.kt$MainActivity : AppCompatActivity</ID>
     <ID>LongMethod:ChatPillView.kt$ChatPillView$fun update( json: String, sx: Float, sy: Float, on: Boolean, ): Int</ID>
     <ID>LongMethod:ChatPillView.kt$ChatPillView$override fun onTouchEvent(event: MotionEvent): Boolean</ID>
@@ -98,7 +96,6 @@
     <ID>LongParameterList:TabSprites.kt$TabSprites.Set$( val stoneInactive: Bitmap?, val stoneActive: Bitmap?, val icons: Array&lt;Bitmap?&gt;, val chatbtn: Bitmap?, val chatbtnSelected: Bitmap?, val chatbtnNew: Bitmap?, /** The bridge captured the full grid set (not a deadline-partial) — only persist these to the boot cache. */ val complete: Boolean, )</ID>
     <ID>LoopWithTooManyJumpStatements:MainActivity.kt$MainActivity$for</ID>
     <ID>LoopWithTooManyJumpStatements:PluginHubScreen.kt$while</ID>
-    <ID>LoopWithTooManyJumpStatements:TapRingView.kt$TapRingView$while</ID>
     <ID>NestedBlockDepth:ChatPillView.kt$ChatPillView$override fun onTouchEvent(event: MotionEvent): Boolean</ID>
     <ID>NestedBlockDepth:DialogueView.kt$DialogueView$override fun onTouchEvent(event: MotionEvent): Boolean</ID>
     <ID>NestedBlockDepth:JagexLogin.kt$JagexLogin$private fun request( urlStr: String, method: String, body: String?, bearer: String?, ): Pair&lt;Int, String&gt;</ID>
@@ -161,7 +158,6 @@
     <ID>TooGenericExceptionCaught:InfoBoxScreen.kt$t: Throwable</ID>
     <ID>TooGenericExceptionCaught:JagexLogin.kt$JagexLogin$e: Exception</ID>
     <ID>TooGenericExceptionCaught:JagexTokens.kt$JagexTokens$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:KeepaliveService.kt$KeepaliveService$t: Throwable</ID>
     <ID>TooGenericExceptionCaught:LegacyCreds.kt$LegacyCreds$e: Exception</ID>
     <ID>TooGenericExceptionCaught:LoginActivity.kt$LoginActivity$e2: Exception</ID>
     <ID>TooGenericExceptionCaught:LoginActivity.kt$LoginActivity$e: Exception</ID>
@@ -193,6 +189,5 @@
     <ID>TooManyFunctions:PluginPanel.kt$dev.audaro.runemobile.PluginPanel.kt</ID>
     <ID>TooManyFunctions:QuestWorldScreens.kt$dev.audaro.runemobile.QuestWorldScreens.kt</ID>
     <ID>TooManyFunctions:ReconActivity.kt$ReconActivity : Activity</ID>
-    <ID>UnusedPrivateProperty:PanelView.kt$attempt</ID>
   </CurrentIssues>
 </SmellBaseline>
