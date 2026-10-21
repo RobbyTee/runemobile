@@ -133,8 +133,10 @@ public final class HudVeneerBridge
 	// notch. Best-effort (only shows when a tab is open); independently toggleable so a misbehave can be isolated.
 	private static volatile int sideX = -1;
 	private static volatile int sideY = -1;
-	// One-shot: any overlay-editor position saved for a relocated container is gone (OverlayBridge.releaseHudOwned).
-	private static boolean hudOverlaysReleased;   // client-thread guard
+	// Ticks until the next OverlayBridge.releaseHudOwned pass. It repeats, not once: a profile switch reloads saved
+	// overlay positions, and a pass that failed is retried. Each pass only scans the list unless a position is set.
+	private static final int HUD_RELEASE_EVERY = 300;
+	private static int hudReleaseIn;   // client-thread only
 
 	// Minimap ENLARGE (make the top-right globe bigger). 0 = natural size. Resizing the draw-area widget (MINIMAP)
 	// makes the engine render a bigger globe (terrain + dots scale, click-to-walk follows for free since
@@ -739,9 +741,10 @@ public final class HudVeneerBridge
 			}
 			captureTabSprites(c);   // one-shot: hand the real cache tab/stone/chat sprites to the native shell
 			// A saved WidgetOverlay position would force a container every frame against the pins below.
-			if (!hudOverlaysReleased && (chatX >= 0 || minimapX >= 0 || sideX >= 0))
+			if ((chatX >= 0 || minimapX >= 0 || sideX >= 0) && --hudReleaseIn <= 0)
 			{
-				hudOverlaysReleased = OverlayBridge.releaseHudOwned() >= 0;
+				// -1 = the overlay manager isn't up yet: try again next frame.
+				hudReleaseIn = OverlayBridge.releaseHudOwned() < 0 ? 1 : HUD_RELEASE_EVERY;
 			}
 			if (TEST_APPLY && !testApplied)
 			{

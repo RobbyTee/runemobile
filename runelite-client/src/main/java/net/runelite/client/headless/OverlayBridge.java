@@ -365,9 +365,10 @@ public final class OverlayBridge
 	}
 
 	/**
-	 * Drop any position saved for a {@link #HUD_OWNED} overlay (one saved before the editor stopped listing them), so
-	 * its WidgetOverlay stops forcing the container. Client thread, from {@link HudVeneerBridge#tick}. Returns how
-	 * many it cleared, or -1 while the overlay manager is unresolved, so the caller tries again next frame.
+	 * Drop any position saved for a {@link #HUD_OWNED} overlay (one saved before the editor stopped listing them, or
+	 * one a profile switch loads back), so its WidgetOverlay stops forcing the container. Client thread, periodically
+	 * from {@link HudVeneerBridge#tick}. Returns how many it cleared, or -1 while the overlay manager is unresolved,
+	 * so the caller tries again next frame.
 	 */
 	static int releaseHudOwned()
 	{
