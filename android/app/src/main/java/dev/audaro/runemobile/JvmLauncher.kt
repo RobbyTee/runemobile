@@ -58,6 +58,10 @@ object JvmLauncher {
      *  BuildConfig.DEBUG so a release build never leaks the engine's output (incl. account/network chatter). */
     external fun nativeSetStdioRedirect(enabled: Boolean)
 
+    /** A8 + Phase 4: with the redirect off, still forward the perf-probe lines (frame/GC/present timing) and
+     *  nothing else, so a release build can be measured. Call BEFORE [startJvm]. */
+    external fun nativeSetStdioProbeLines(enabled: Boolean)
+
     /** Hand the SurfaceView's surface (or null to clear) to the native render thread for blitting. */
     external fun nativeSetSurface(surface: Surface?)
 
@@ -570,6 +574,8 @@ object JvmLauncher {
     ) = nativeSetEnv(key, value)
 
     fun setStdioRedirect(enabled: Boolean) = nativeSetStdioRedirect(enabled)
+
+    fun setStdioProbeLines(enabled: Boolean) = nativeSetStdioProbeLines(enabled)
 
     fun setSurface(surface: Surface?) = nativeSetSurface(surface)
 

@@ -3383,7 +3383,9 @@ class MainActivity : AppCompatActivity() {
             val timedOut = SystemClock.uptimeMillis() >= splashDeadlineMs
             if (firstFrame || timedOut) {
                 splashOverlay.dismiss()
-                Log.i(TAG, "onboard: splash dismissed (frame=$firstFrame state=$realState timeout=$timedOut)")
+                // Phase 4: cold start, process fork to the splash leaving (the first painted frame unless timedOut).
+                val sinceStartMs = SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime()
+                Log.i(TAG, "onboard: splash dismissed (frame=$firstFrame state=$realState timeout=$timedOut sinceStartMs=$sinceStartMs)")
             } else {
                 // Past unpack, before the first painted frame: reflect the boot phase rather than a stale
                 // "Unpacking…". Once the engine reports a real login state the first blit is imminent, so say so.
@@ -4937,29 +4939,46 @@ class MainActivity : AppCompatActivity() {
                 opts.add("-Drunelite.rlhdOverlaySelfTest=true")
                 Log.i(TAG, "AG3-c: rlhd_overlay_selftest marker -> overlay shader self-test armed")
             }
-            // Frame-dump + the once/sec engine-fps logcat probe are dev/CI diagnostics — DEBUG-only so release
-            // 117HD boots don't pay the per-frame PNG IO or the fps branch (SLM-DFLAG-02/03 / PERF-FRAME-PACING-03/04).
+            // Frame-dump is a dev/CI diagnostic — DEBUG-only so release 117HD boots don't pay the per-frame PNG IO
+            // (SLM-DFLAG-02 / PERF-FRAME-PACING-03). The fps probe is the perf switch below, on every renderer.
             if (BuildConfig.DEBUG) {
                 val dumpDir = (app.getExternalFilesDir(null) ?: app.filesDir).absolutePath
                 opts.addAll(
                     listOf(
                         "-Drunelite.gpuframedump=true",
                         "-Drunelite.gpuframedump.dir=$dumpDir",
-                        // FIX-13: arm the once/sec engine-fps logcat probe ([fpsprobe] fps=N gs=...) so a preset A/B can be
-                        // measured in-world on real Mali (Hooks.frame, gated by this prop). Only active in 117HD test mode.
-                        "-Drunelite.fpsprobe=true",
                     ),
                 )
             }
             Log.i(
                 TAG,
-                "AG3-b 117HD mode: gpu jar $clientJar + rlhd jar $rlhdJar, routecrlhd armed (frame-dump+fpsprobe=${BuildConfig.DEBUG})",
+                "AG3-b 117HD mode: gpu jar $clientJar + rlhd jar $rlhdJar, routecrlhd armed (frame-dump=${BuildConfig.DEBUG})",
             )
         }
 
+        // Phase 4 perf probe: one runtime switch, on every renderer, for headless.FrameStats ([fpsprobe] /
+        // [frameprobe] / [framebins] / [framehist]), GC + safepoint logging (-Xlog, to stdout so it lands in
+        // logcat beside the frames) and librlawt's [presentprobe]. On in DEBUG builds. A release build arms it with
+        // a `perfprobe` marker in the app's external files dir (tools/perfprobe.sh android on). Unlike devMarker this
+        // is honoured in release on purpose: it adds timing lines only, and in release the stdio pump forwards those
+        // lines and drops everything else (A8 below), so no engine output beyond them reaches logcat.
+        val perfProbe =
+            BuildConfig.DEBUG ||
+                File(app.getExternalFilesDir(null), "perfprobe").exists() ||
+                File(app.filesDir, "perfprobe").exists()
+        if (perfProbe) {
+            opts.addAll(listOf("-Drunelite.fpsprobe=true", "-Xlog:gc,safepoint:stdout:time,uptime,tags"))
+        }
+        Log.i(
+            TAG,
+            "perfprobe: ${if (perfProbe) "ARMED" else "off"} (debug=${BuildConfig.DEBUG}): fpsprobe + -Xlog:gc,safepoint + presentprobe",
+        )
+
         // A8: only pipe the embedded VM's stdout/err to logcat in DEBUG builds — a release build must not leak
         // the engine's output (account/network chatter). Must be set before startJvm (it redirects fd 1/2 there).
+        // A release build with the perf probe armed forwards the probe's own lines and nothing else.
         JvmLauncher.setStdioRedirect(BuildConfig.DEBUG)
+        JvmLauncher.setStdioProbeLines(perfProbe)
 
         Log.i(TAG, "starting HotSpot: DeviceHeadlessBoot, cp=$classpath")
         val rc =

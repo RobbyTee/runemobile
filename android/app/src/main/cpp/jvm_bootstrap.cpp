@@ -26,6 +26,8 @@
 #include <atomic>
 #include <algorithm>
 #include <unistd.h>
+#include <poll.h>
+#include <string.h>
 #include <pthread.h>
 #include <android/log.h>
 #include <android/native_window.h>
@@ -373,24 +375,82 @@ struct BootArgs {
 // The embedded VM writes System.out/err to fd 1/2, which Android drops. Pipe both into logcat so RuneLite
 // (and the Milestone-A Hello) output is visible. Robust against partial setup: closes the spare write fd
 // after dup2 and bails cleanly (no reader-less pipe that could block writers) if anything fails.
-// A8: gated to DEBUG builds (set from Kotlin before startJvm) — a release build must NOT leak the engine's
-// stdout/err (incl. any account/network chatter) to logcat. Defaults true so a missed set keeps dev visibility.
+// A8: what reaches logcat is set from Kotlin before startJvm — a release build must NOT leak the engine's
+// stdout/err (incl. any account/network chatter) to logcat:
+//   - g_stdioRedirect (DEBUG builds): everything. Defaults true so a missed set keeps dev visibility.
+//   - g_stdioProbeLines alone (a release build with the perfprobe marker): only the perf-probe lines, which carry
+//     milliseconds and a game state and nothing else; every other line is dropped here, inside the process.
+//   - neither (release): no pipe at all.
 static std::atomic<bool> g_stdioRedirect{true};
+static std::atomic<bool> g_stdioProbeLines{false};
+static bool g_stdioProbeOnly = false; // fixed in startJvm before the pump thread exists
 static int g_stdioReadFd = -1;
+
+// The line families the perf harness reads: headless.FrameStats, -Xlog:gc,safepoint (its decorations put "][gc"
+// and "][safepoint" in every line) and the present probe.
+static bool isProbeLine(const char *s) {
+    static const char *const kMarks[] = {"[fpsprobe]", "[frameprobe]", "[framebins]", "[framehist]",
+                                         "[presentprobe]", "][gc", "][safepoint"};
+    for (const char *m : kMarks) {
+        if (strstr(s, m))
+            return true;
+    }
+    return false;
+}
+
+// One logcat entry per line. A raw read() can end mid-line: the pipe can hold more than one read's worth under
+// load, and HotSpot's -Xlog writes a line's decorations and message as separate writes. A line split across two
+// entries no longer matches the harness's patterns. Probe mode only ever forwards whole lines; full mode also
+// flushes a partial line once it has waited 250 ms (a print with no newline), so nothing is held back for long.
+static void emitStdioLine(char *s, size_t len) {
+    s[len] = '\0';
+    if (g_stdioProbeOnly && !isProbeLine(s))
+        return;
+    __android_log_print(ANDROID_LOG_INFO, "jvm-stdout", "%s", s);
+}
 static void *pumpStdio(void *) {
-    char buf[1024];
-    ssize_t n;
+    static char buf[4096]; // one line; logcat truncates an entry near 4 KB anyway
+    size_t len = 0;
+    bool overlong = false; // probe mode: dropping the rest of a line that outgrew the buffer
     while (true) {
-        n = read(g_stdioReadFd, buf, sizeof(buf) - 1);
-        if (n > 0) {
-            buf[n] = '\0';
-            __android_log_print(ANDROID_LOG_INFO, "jvm-stdout", "%s", buf);
-        } else if (n < 0 && errno == EINTR) {
+        if (len > 0 && !g_stdioProbeOnly) {
+            struct pollfd p = {g_stdioReadFd, POLLIN, 0};
+            int pr = poll(&p, 1, 250);
+            if (pr == 0) {
+                emitStdioLine(buf, len);
+                len = 0;
+                continue;
+            }
+            if (pr < 0 && errno == EINTR)
+                continue;
+        }
+        ssize_t n = read(g_stdioReadFd, buf + len, sizeof(buf) - 1 - len);
+        if (n < 0 && errno == EINTR)
             continue;
-        } else {
+        if (n <= 0)
             break;
+        len += (size_t)n;
+        size_t start = 0;
+        for (size_t i = 0; i < len; i++) {
+            if (buf[i] != '\n')
+                continue;
+            if (!overlong)
+                emitStdioLine(buf + start, i - start);
+            overlong = false;
+            start = i + 1;
+        }
+        memmove(buf, buf + start, len - start);
+        len -= start;
+        if (len == sizeof(buf) - 1) { // no newline in a full buffer
+            if (g_stdioProbeOnly)
+                overlong = true;
+            else
+                emitStdioLine(buf, len);
+            len = 0;
         }
     }
+    if (len > 0 && !overlong)
+        emitStdioLine(buf, len);
     close(g_stdioReadFd);
     g_stdioReadFd = -1;
     return nullptr;
@@ -1511,7 +1571,14 @@ Java_dev_audaro_runemobile_JvmLauncher_startJvm(
         jstring jClasspath, jstring jMainClass, jobjectArray jExtraOpts) {
 
     if (g_vm.load(std::memory_order_acquire)) { LOGI("startJvm: VM already up (ignoring re-entry)"); return JNI_OK; }
-    if (g_stdioRedirect.load(std::memory_order_acquire)) redirectStdioToLogcat();   // A8: DEBUG builds only
+    // A8: everything in DEBUG builds, the perf-probe lines alone in a release build with the perfprobe marker.
+    const bool stdioAll = g_stdioRedirect.load(std::memory_order_acquire);
+    const bool stdioProbes = g_stdioProbeLines.load(std::memory_order_acquire);
+    if (stdioAll || stdioProbes) {
+        g_stdioProbeOnly = !stdioAll;
+        redirectStdioToLogcat();
+        LOGI("stdio: %s", stdioAll ? "all VM output -> logcat (jvm-stdout)" : "perf-probe lines only -> logcat (jvm-stdout)");
+    }
 
     auto *a = new BootArgs();
     a->javaHome    = jstr(artEnv, jJavaHome);
@@ -1554,6 +1621,12 @@ Java_dev_audaro_runemobile_JvmLauncher_startJvm(
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeSetStdioRedirect(JNIEnv *, jobject, jboolean enabled) {
     g_stdioRedirect.store(enabled == JNI_TRUE, std::memory_order_release);
+}
+
+// A8 + Phase 4: with the redirect off, still forward the perf-probe lines (nothing else). Set BEFORE startJvm.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetStdioProbeLines(JNIEnv *, jobject, jboolean enabled) {
+    g_stdioProbeLines.store(enabled == JNI_TRUE, std::memory_order_release);
 }
 
 extern "C" JNIEXPORT void JNICALL

@@ -114,6 +114,52 @@ static double rc_now_ms() {
     return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
 }
 
+// ---- Phase 4 present probe (armed by -Drunelite.fpsprobe, the engine frame probe's switch) -------------------
+// The present-side half of a hitch: once a second on the direct-present path, how many frames reached the window,
+// the longest gap between two presents, and how long eglSwapBuffers blocked (vsync back-pressure or a driver
+// stall). Logged next to the engine's [frameprobe]/[framebins] intervals, a spike that shows here but not there is
+// a present-path stall. A gap of 5 s or more is the app backgrounded (no surface), not a stall, so it is left out.
+static int sPresentProbe = -1; // -1 until read from the VM on the first present
+static int sPpPresents = 0;
+static double sPpWindowStart = 0, sPpLast = 0, sPpGapMax = 0, sPpSwapSum = 0, sPpSwapMax = 0;
+static bool rc_fpsprobe_armed(JNIEnv *env) {
+    jclass b = env->FindClass("java/lang/Boolean");
+    if (!b) {
+        env->ExceptionClear();
+        return false;
+    }
+    jmethodID m = env->GetStaticMethodID(b, "getBoolean", "(Ljava/lang/String;)Z");
+    jstring key = m ? env->NewStringUTF("runelite.fpsprobe") : nullptr;
+    bool on = key && env->CallStaticBooleanMethod(b, m, key) == JNI_TRUE;
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        on = false;
+    }
+    if (key)
+        env->DeleteLocalRef(key);
+    env->DeleteLocalRef(b);
+    return on;
+}
+static void rcPresentProbe(double swapStart, double now) {
+    double swap = now - swapStart;
+    if (sPpWindowStart == 0)
+        sPpWindowStart = now;
+    if (sPpLast > 0 && now - sPpLast < 5000.0 && now - sPpLast > sPpGapMax)
+        sPpGapMax = now - sPpLast;
+    sPpLast = now;
+    sPpPresents++;
+    sPpSwapSum += swap;
+    if (swap > sPpSwapMax)
+        sPpSwapMax = swap;
+    if (now - sPpWindowStart >= 1000.0) {
+        LOGI("[presentprobe] presents=%d gapMaxMs=%.2f swapAvgMs=%.2f swapMaxMs=%.2f",
+             sPpPresents, sPpGapMax, sPpSwapSum / sPpPresents, sPpSwapMax);
+        sPpPresents = 0;
+        sPpGapMax = sPpSwapSum = sPpSwapMax = 0;
+        sPpWindowStart = now;
+    }
+}
+
 // ---- Phase 4 draw-call probe (debug.routec.drawcount=1) ------------------------------------------------------
 // Counts the GL draw calls the 117HD Zone path issues so we can PREDICT the multi-draw-indirect win before building
 // it: every glMultiDrawArrays the renderer emits currently expands to N glDrawArrays HERE (GLES has no real
@@ -1024,8 +1070,15 @@ static void JNICALL rc_AWT_swapBuffers(JNIEnv* env, jobject){
             // Both src (FBO) and dst (window default fb) are GL bottom-left origin, so a 1:1 blit presents upright
             // (eglSwapBuffers maps GL bottom-left -> screen). If it shows inverted on device, swap the dst Y extents.
             glBlitFramebuffer(0, 0, w, h,  0, 0, sw, sh,  GL_COLOR_BUFFER_BIT, GL_LINEAR);
+            if (sPresentProbe < 0) {
+                sPresentProbe = rc_fpsprobe_armed(env) ? 1 : 0;
+                LOGI("[presentprobe] %s (-Drunelite.fpsprobe)", sPresentProbe ? "armed" : "off");
+            }
+            const double swapStart = sPresentProbe ? rc_now_ms() : 0;
             eglSwapBuffers(sDpy, sWinSurf);
             sFramesPresented.fetch_add(1, std::memory_order_relaxed);   // Phase 3: success signal for the auto-GPU watchdog
+            if (sPresentProbe)
+                rcPresentProbe(swapStart, rc_now_ms());
         } else {
             // PERF-BATTERY-NETWORK-01: no window surface => the Surface was destroyed (app backgrounded). Without
             // a vsync-paced eglSwapBuffers this draw thread would spin unbounded, redrawing the whole scene into
