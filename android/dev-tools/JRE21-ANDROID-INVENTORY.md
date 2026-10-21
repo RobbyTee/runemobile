@@ -29,7 +29,8 @@ the `jniLibs`/`libawt` trap below **identically**, so it is not a workaround for
 ## How it's staged (one command)
 ```sh
 tools/stage-android-jre.sh        # download (cached) + verify SHA + bionic check + stage + build fake-xawt
-tools/stage-mobile-runtime.sh     # then stage the shared client/probes jars (see ../../PORTS.md)
+# then stage the jars in the order ../README.md gives; tools/stage-mobile-runtime.sh --no-build
+# --android-only comes last (see ../../PORTS.md)
 ```
 `stage-android-jre.sh` unpacks the **whole** tree into `app/src/main/assets/jvm/jre/`, builds the missing
 `libawt_xawt.so` into `dev-tools/fake-xawt/`, and removes any stray JRE `.so` from `jniLibs` (the trap below).

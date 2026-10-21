@@ -35,25 +35,27 @@ and an arm64 iPhone on **iOS 17.4+**.
    OpenJDK 21 (iOS needs the `MirrorMappedCodeCache` JIT patch; Android's bionic
    JRE will not work). It is gitignored; put it at `ios/dev-tools/jre/` and check
    it against [`dev-tools/JRE21-INVENTORY.md`](dev-tools/JRE21-INVENTORY.md).
-2. **Build + stage the Java runtime** (shaded client jar + `probes.jar`, staged
-   into `app/jvm-resources/`) from the repository root:
+2. **Build + stage the four jars** into `app/jvm-resources/`, from the repository
+   root and in this order (the release build uses the same one):
    ```sh
-   tools/stage-mobile-runtime.sh --ios-only
+   ./gradlew :client:shadowJar                                  # the shaded client jar
+   ( cd ios/dev-tools/gpu-routec && ./stage-ios-gpu-jar.sh )    # → client-shaded.jar (GL-facade variant)
+   ( cd ios/dev-tools/gpu-zone && ./stage-ios-zone-jar.sh )     # → client-rlhd.jar (117HD)
+   ( cd ios/app && ./build-probes.sh )                          # → probes.jar
+   ( cd ios/dev-tools/gpu-routec/l1 && ./build-l1-probe.sh )    # → routec-l1.jar
    ```
-   (This runs `./gradlew :client:shadowJar` and `app/build-probes.sh` for you.
-   `build-probes.sh` fails loudly if the shaded jar is missing — build it first.)
-3. **Stage the 117HD renderer jar** (required for the 117HD renderer option):
-   ```sh
-   ios/dev-tools/gpu-zone/stage-ios-zone-jar.sh      # → app/jvm-resources/client-rlhd.jar
-   ```
-4. **Generate the Xcode project and build:**
+   Don't use `tools/stage-mobile-runtime.sh` for iOS: it stages the pristine
+   shaded jar, and `app/scripts/check-staged-jar.sh` fails the Xcode build until
+   `stage-ios-gpu-jar.sh` replaces it. [`PORTS.md`](../PORTS.md) explains why the
+   two ports' jars differ.
+3. **Generate the Xcode project and build:**
    ```sh
    cd ios/app && xcodegen generate                   # project.yml is the source of truth
    ```
    Open `RuneMobile.xcodeproj`, set your own signing team, and build to the
    device — or build an installable `RuneLite.ipa` with
    `ios/dev-tools/serve-ipa.sh` and install it through SideStore/AltStore.
-5. **Enable JIT each launch.** Attach **StikDebug** with
+4. **Enable JIT each launch.** Attach **StikDebug** with
    `app/stikdebug/runelite-jit.js` assigned (root README → *Install — iOS* →
    *Each time you play*). Launching without the attach just waits — that is the
    expected iOS constraint, not a bug.

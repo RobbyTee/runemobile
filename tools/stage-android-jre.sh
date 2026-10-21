@@ -14,7 +14,8 @@
 # in java.awt.Toolkit.<clinit>. The native bootstrap dlopens libjvm.so from filesDir by absolute path,
 # which works. jniLibs holds ONLY the CMake-built librunemobile.so. See android/README.md.
 #
-# After this, run tools/stage-mobile-runtime.sh to stage the shared client/probes jars.
+# After this, stage the jars in the order android/README.md gives (shadowJar, probes, the gpu/rlhd stages,
+# then tools/stage-mobile-runtime.sh --no-build --android-only).
 #
 # Usage:
 #   tools/stage-android-jre.sh                 # download (cached) + verify + stage + build fake-xawt
@@ -156,5 +157,6 @@ if [ -d "$JNI" ]; then
 fi
 
 echo
-echo "== Android JRE staged. Next: tools/stage-mobile-runtime.sh  (stages the client/probes jars),"
+echo "== Android JRE staged. Next: stage the jars in the order android/README.md gives (ending with"
+echo "   tools/stage-mobile-runtime.sh --no-build --android-only),"
 echo "   then build/run: android/gradlew :app:assembleDebug"

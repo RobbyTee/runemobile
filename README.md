@@ -441,8 +441,9 @@ The GPU and 117HD jars are required — omitting them produces an un-bootable AP
 
 See [`ios/README.md`](ios/README.md) for the full pipeline. In short: the iOS JRE is
 Mach-O (separate from Android's bionic JRE), the Xcode project is produced by
-`xcodegen` from `ios/app/project.yml`, and the jars come from the same staging scripts
-as Android.
+`xcodegen` from `ios/app/project.yml`, and the jars come from the same two build outputs
+as Android's (`:client:shadowJar` and `build-probes.sh`) but go through iOS's own GPU and
+117HD stages. [`PORTS.md`](PORTS.md) lists what each port bundles.
 
 **Signing:** set your Apple Developer Team ID in `ios/dev-tools/signing.env`
 (gitignored — `export DEVELOPMENT_TEAM=XXXXXXXXXX`); the build scripts source it and
@@ -461,8 +462,12 @@ as Android.
                        └─ headless/* bridge ──► shared verbatim across both ports
 ```
 
-The native UI thread is **never** attached to the embedded JVM. R8 / minification is
-intentionally off. The mobile project lives under `ios/`, `android/`, and the shared
+The native UI thread is attached to the embedded JVM (as a daemon, like every thread that
+calls into it) but **never** touches engine state: input goes in as queued intents that the
+client thread drains, and the UI reads immutable snapshots the client thread publishes. The
+rule is spelled out in `headless/package-info.java`. R8 / minification is intentionally off.
+[`PORTS.md`](PORTS.md) is the repo map: what the ports share, what each bundles, and how the
+shared edge is kept. The mobile project lives under `ios/`, `android/`, and the shared
 `runelite-client/.../headless/` bridge package; the rest of the tree
 (`runelite-client/`, `runelite-api/`, …) is upstream RuneLite, updated by merging
 `runelite/runelite` and carried with a deliberately small set of additive fork seams

@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
 #
-# Single front door for the SHARED Java runtime that both mobile ports embed.
+# Stages the jar both mobile ports share (probes.jar) and writes Android's runtime.tag.
 #
-# The runtime is two jars, identical on iOS and Android:
+# Both ports start from the same two build outputs:
 #   - client-<version>-shaded.jar  : real RuneLite + all deps  (gradle :client:shadowJar)
 #   - probes.jar                   : headless boot + CACIO (folded in) + W1 probes
 #                                    (ios/app/build-probes.sh; needs the shaded jar present)
 #
-# Without this, each port copies those jars by hand (ios/SETUP-NEW-MAC.md step 4 for iOS,
-# unscripted for Android) and the two drift silently. Run this and both ports build from the
-# same freshly-staged bytes, with a SHA/version manifest proving they match.
+# Each port then rebuilds the shaded jar for its own GL stack, so only probes.jar is the same bytes on both:
+#   - iOS bundles client-shaded.jar (the GL-facade variant from ios/dev-tools/gpu-routec/stage-ios-gpu-jar.sh),
+#     client-rlhd.jar, probes.jar and routec-l1.jar.
+#   - Android bundles client-<version>-gpu.jar and client-<version>-rlhd.jar (android/dev-tools/gpu/stage-*.sh),
+#     probes.jar and runtime.tag, and not the shaded jar (SLM-JAR-01).
+# runtime.tag folds every one of those SHAs, so on Android this runs AFTER the gpu/rlhd stages. On iOS it copies
+# the PRISTINE shaded jar, which stage-ios-gpu-jar.sh must then replace (ios/app/scripts/check-staged-jar.sh
+# fails the Xcode build until it does). PORTS.md gives the full order for each port.
 #
 # Usage:
-#   tools/stage-mobile-runtime.sh                 # build everything, stage both ports
+#   tools/stage-mobile-runtime.sh                 # build shaded + probes, stage both ports
 #   tools/stage-mobile-runtime.sh --no-build      # re-stage already-built jars (skip gradle/probes)
-#   tools/stage-mobile-runtime.sh --check         # verify staged jars match across ports, no build
+#   tools/stage-mobile-runtime.sh --check         # no build: probes.jar current on both, iOS shaded is the GPU variant
 #   tools/stage-mobile-runtime.sh --ios-only      # stage only iOS
 #   tools/stage-mobile-runtime.sh --android-only  # stage only Android
 #
@@ -34,7 +39,7 @@ for arg in "$@"; do
     --check)         DO_BUILD=0 ; CHECK_ONLY=1 ;;
     --ios-only)      STAGE_ANDROID=0 ;;
     --android-only)  STAGE_IOS=0 ;;
-    -h|--help)       sed -n '2,25p' "$0" ; exit 0 ;;
+    -h|--help)       sed -n '2,26p' "$0" ; exit 0 ;;
     *) echo "unknown arg: $arg (try --help)" >&2 ; exit 2 ;;
   esac
 done
@@ -75,19 +80,20 @@ PROBES_SHA="$(sha "$PROBES_SRC")"
 # --- check-only: verify what's already staged in each port matches the source -
 if [ "$CHECK_ONLY" = 1 ]; then
   fail=0
+  # Only probes.jar is the same bytes on both ports. Android omits the shaded jar (SLM-JAR-01), and iOS replaces
+  # it with the GL-facade variant, whose SHA never matches build/libs -- so iOS checks that variant's contents.
   for pair in "iOS:$IOS_DEST" "Android:$ANDROID_DEST"; do
-    port="${pair%%:*}" ; dir="${pair#*:}"
-    # Android intentionally omits shaded.jar (SLM-JAR-01 — not on its boot classpath); check probes only there.
-    if [ "$port" = "Android" ]; then jars="probes.jar:$PROBES_SHA"
-    else jars="client-shaded.jar:$SHADED_SHA probes.jar:$PROBES_SHA"; fi
-    for jar in $jars; do
-      name="${jar%%:*}" ; want="${jar#*:}" ; path="$dir/$name"
-      if [ ! -f "$path" ]; then echo "MISSING $port $path"; fail=1
-      elif [ "$(sha "$path")" != "$want" ]; then echo "STALE   $port $path"; fail=1
-      else echo "ok      $port $path"; fi
-    done
+    port="${pair%%:*}" ; dir="${pair#*:}" ; path="$dir/probes.jar"
+    if [ ! -f "$path" ]; then echo "MISSING $port $path"; fail=1
+    elif [ "$(sha "$path")" != "$PROBES_SHA" ]; then echo "STALE   $port $path"; fail=1
+    else echo "ok      $port $path"; fi
   done
-  [ "$fail" = 0 ] && echo "== all staged jars match the freshly-built source ==" || echo "== drift detected; re-run without --check to re-stage ==" >&2
+  if SRCROOT="$ROOT/ios/app" ios/app/scripts/check-staged-jar.sh; then
+    echo "ok      iOS $IOS_DEST/client-shaded.jar (the GPU variant)"
+  else
+    echo "BAD     iOS $IOS_DEST/client-shaded.jar (see the error above)"; fail=1
+  fi
+  [ "$fail" = 0 ] && echo "== all staged jars are current ==" || echo "== drift detected; re-stage in the order PORTS.md gives ==" >&2
   exit "$fail"
 fi
 
@@ -159,6 +165,9 @@ fi
 echo
 cat "$MANIFEST"
 echo
-echo "== done. Both ports now embed identical runtime jars (content-tag $STAMP_TAG)."
+echo "== done (content-tag $STAMP_TAG). Each port's own jar stages are listed in PORTS.md."
+if [ "$STAGE_IOS" = 1 ]; then
+  echo "   iOS: client-shaded.jar is now the PRISTINE jar -- run ios/dev-tools/gpu-routec/stage-ios-gpu-jar.sh next."
+fi
 echo "   Android re-unpacks automatically via jvm/runtime.tag; bump BASE in AssetInstaller.kt"
 echo "   only when the embedded JRE / native libs change (jars are tracked by the tag)."
