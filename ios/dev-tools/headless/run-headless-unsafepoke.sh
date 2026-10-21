@@ -32,7 +32,7 @@ fi
 rm -rf "$OUT"; mkdir -p "$OUT/cap"
 echo "== compile DeviceHeadlessBoot + activation (against shaded+cacio) =="
 "$JAVAC" -cp "$SHADED:$CACIO" -d "$OUT" \
-  "$AWTSMOKE/AwtActivation.java" "$AWTSMOKE/UnsafePokeActivation.java" "$AWTSMOKE/DeviceHeadlessBoot.java"
+  "$AWTSMOKE/AwtActivation.java" "$AWTSMOKE/UnsafePokeActivation.java" "$AWTSMOKE/GateCensus.java" "$AWTSMOKE/DeviceHeadlessBoot.java"
 
 LOG="$OUT/run.log"
 echo "== launching real RuneLite under UnsafePoke CTC (no OS window, safe-mode, ${RUN_SECONDS}s) =="

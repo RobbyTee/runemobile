@@ -42,7 +42,7 @@ echo "== JX handoff: displayName='${JX_DISPLAY_NAME}' resize=${RESIZE} =="
 rm -rf "$OUT"; mkdir -p "$OUT/cap" "$OUT/scene"
 echo "== compile DeviceHeadlessBoot + activation =="
 "$JAVAC" -cp "$SHADED:$CACIO" -d "$OUT" \
-  "$AWTSMOKE/AwtActivation.java" "$AWTSMOKE/UnsafePokeActivation.java" "$AWTSMOKE/DeviceHeadlessBoot.java"
+  "$AWTSMOKE/AwtActivation.java" "$AWTSMOKE/UnsafePokeActivation.java" "$AWTSMOKE/GateCensus.java" "$AWTSMOKE/DeviceHeadlessBoot.java"
 
 LOG="$OUT/run.log"
 echo "== launching real RuneLite under UnsafePoke CTC + autologin + edge2edge probe @${RESIZE} (${RUN_SECONDS}s) =="
