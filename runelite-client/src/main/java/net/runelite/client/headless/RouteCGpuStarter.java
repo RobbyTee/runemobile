@@ -54,6 +54,9 @@ public final class RouteCGpuStarter
 	private static final boolean ENABLED = Boolean.getBoolean("runelite.routecgpu");
 	private static final String GPU_PLUGIN = "net.runelite.client.plugins.gpu.GpuPlugin";
 	private static final int MAX_ATTEMPTS = 30;     // ~ a minute of retries, then give up (avoid spinning forever)
+	// Sentinel (custom key in the "gpu" group, never shown in the panel) marking that the vsync default was seeded
+	// once. Like RLHDStarter's graphics defaults, vsync is the user's to change afterwards, so it is not re-forced.
+	private static final String VSYNC_SEEDED_KEY = "mobileVsyncSeeded";
 
 	private static boolean done;
 	private static int attempts;
@@ -96,6 +99,7 @@ public final class RouteCGpuStarter
 			{
 				uiModeForced = true;
 				log.info("[routecgpu] forced gpu.uiScalingMode=LINEAR (scale-shader-free) -> {}", cr);
+				seedVsync();
 			}
 			return;   // let the write commit before enabling / before the auto-start reads it
 		}
@@ -163,5 +167,24 @@ public final class RouteCGpuStarter
 			done = true;
 			log.warn("[routecgpu] giving up after {} attempts — GPU plugin did not become active", attempts);
 		}
+	}
+
+	/**
+	 * Seed {@code gpu.vsyncMode=ON} once. The plugin's default, OFF, requests swap interval 0 and paces the engine
+	 * with a 60 fps sleep limiter that drifts against the display. ON requests interval 1; when the port reports
+	 * that interval applied, the plugin drops its limiter and the vsync-paced present sets the frame rate. A port
+	 * that can't apply one (iOS EAGL) reports 0, and the plugin keeps its limiter as before. The write lands before
+	 * or after the plugin's startUp: its onConfigChanged re-runs the sync setup either way.
+	 */
+	private static void seedVsync()
+	{
+		if ("1".equals(MobileUiBridge.getConfig("gpu", VSYNC_SEEDED_KEY)))
+		{
+			return;
+		}
+		MobileUiBridge.setConfig("gpu", "vsyncMode", "ON");
+		MobileUiBridge.setConfig("gpu", VSYNC_SEEDED_KEY, "1");
+		MobileUiBridge.flushConfigQueued();   // persist the seed + sentinel (queued AFTER the writes above)
+		log.info("[routecgpu] seeded gpu.vsyncMode=ON (first launch)");
 	}
 }

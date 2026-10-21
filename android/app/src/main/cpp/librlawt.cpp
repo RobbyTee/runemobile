@@ -919,7 +919,21 @@ static jint JNICALL rc_AWT_getFramebuffer(JNIEnv* env, jobject, jboolean){
 }
 static void JNICALL rc_AWT_loadNatives(JNIEnv*, jobject){ /* no-op (the .so is already loaded + registered) */ }
 // Store the plugin's requested swap interval and re-apply it on the next present (the boot prop can still override).
-static jint JNICALL rc_AWT_setSwapInterval(JNIEnv*, jobject, jint a0){ sReqSwapInterval = a0; sSwapDirty = true; return a0; }
+// Returns the interval the present will really run at, because the plugin drops its own fps limiter on any non-zero
+// return. EGL silently clamps to the config's [EGL_MIN_SWAP_INTERVAL, EGL_MAX_SWAP_INTERVAL], so ADAPTIVE's -1 comes
+// back as 0 (echoing -1 used to free-run the engine). The legacy readback path swaps a pbuffer, which no interval
+// paces, so it reports 0. The debug.routec.swapinterval prop is left out on purpose: it overrides the EGL side only,
+// and folding it in here would put the limiter back on the uncapped (0) bench.
+static jint JNICALL rc_AWT_setSwapInterval(JNIEnv *, jobject, jint a0) {
+    sReqSwapInterval = a0;
+    sSwapDirty = true;
+    if (!sCbAcquireWindow)
+        return 0;
+    EGLint lo = 0, hi = 1;
+    eglGetConfigAttrib(sDpy, sCfg, EGL_MIN_SWAP_INTERVAL, &lo);
+    eglGetConfigAttrib(sDpy, sCfg, EGL_MAX_SWAP_INTERVAL, &hi);
+    return a0 < lo ? lo : (a0 > hi ? hi : a0);
+}
 
 // ---- GPU timer-query probe (debug-gated, see globals above) ---------------------------------------------------
 // End the query bracketing the frame just rendered (called before the present blit, so present is excluded).

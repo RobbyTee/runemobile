@@ -921,9 +921,12 @@ static JNIEXPORT void JNICALL rc_AWT_loadNatives_0(JNIEnv *env, jobject self)
     /* no-op (re-signed dylibs already loaded) */
 }
 
+// The plugin drops its own fps limiter on any non-zero return, so this reports what the present will really do.
+// Neither EAGL's presentRenderbuffer nor the PiP enqueue (DisplayImmediately) takes a swap interval, so nothing here
+// can promise a vsync-paced present: 0 keeps the plugin's limiter (echoing the request used to drop it).
 static JNIEXPORT jint JNICALL rc_AWT_setSwapInterval_0(JNIEnv *env, jobject self, jint a0)
 {
-    return a0;
+    return 0;
 }
 
 // Phase 4 present probe, armed by -Drunelite.fpsprobe (the engine frame probe's switch); the same line as Android's

@@ -223,7 +223,7 @@ def body_awt(name, params, ret):
         'createGLContext': "rc_awt_create_context(env); /* EAGL ES3 context + FBO, current on THIS (client) thread */",
         'getFramebuffer': "rc_per_frame(env); /* re-bind context + resize-if-changed, early each draw */\n    return (jint)[RouteCBridge awtGetFramebuffer];",
         'getBufferMode': "return (jint)GL_COLOR_ATTACHMENT0;",
-        'setSwapInterval': "return a0;",
+        'setSwapInterval': "return 0; /* no swap interval on EAGL: 0 keeps the plugin's fps limiter */",
         'swapBuffers': "rc_swap_publish(env); /* glReadPixels the FBO -> JavaBridge back buffer -> publish (sole frameSeq publisher) */",
         'destroy': "[RouteCBridge awtDestroy];",
     }
