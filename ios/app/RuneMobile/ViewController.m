@@ -541,6 +541,11 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 @property (nonatomic, strong) UILabel *fatalErrorBody;
 @property (nonatomic, assign) BOOL fatalErrorShown;
 @property (nonatomic, assign) BOOL layoutNoticeShown; // UX-ONBOARD-02: launch layout hint, once per process
+// One-tap layout switch (updateLayoutSwitch): the pill, the start of the current run of unsupported-layout frames
+// (0 = supported or logged out) and the outstanding switch (0 = none), both CACurrentMediaTime.
+@property (nonatomic, strong) UIButton *layoutSwitchButton;
+@property (nonatomic, assign) CFTimeInterval layoutUnsupportedSince;
+@property (nonatomic, assign) CFTimeInterval layoutSwitchSentAt;
 // PERF-MEMORY-THERMAL-01 (iOS parity with Android's ThermalGovernor): protect sustained 117HD play from
 // silent thermal throttling by stepping the 117HD sceneResolutionScale DOWN under NSProcessInfo thermal
 // pressure (serious -> 65, critical -> 50, never above the user's own baseline) and restoring the captured
@@ -1000,6 +1005,13 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [self setNeedsUpdateOfHomeIndicatorAutoHidden];
 }
 
+// One-tap layout switch: the pill's label, and how long it waits into a run of unsupported-layout frames before it
+// shows (a varbit that syncs late after login, or a one-frame blip, must not flash it over a Modern account), and
+// how long the server gets to apply a switch before the pill gives up and says how to do it by hand.
+static NSString *const kLayoutSwitchLabel = @"Switch to Resizable - Modern";
+static const CFTimeInterval kLayoutSwitchSettle = 3.0;
+static const CFTimeInterval kLayoutSwitchTimeout = 15.0;
+
 // UX-ONBOARD-02: the whole native chrome -- the chat veneer, the tab row, the dialogue tap routing -- is laid out
 // against the resizable-MODERN top level (interface 164; see updateChatTabs, which stands down for any other id),
 // so in Fixed or Resizable-Classic the HUD simply doesn't line up with the game under it. Say so once per launch,
@@ -1008,7 +1020,8 @@ static NSString *const kLayoutNoticeOffKey = @"layoutNoticeSuppressed";
 static NSString *const kLayoutNoticeTitle = @"Use Resizable - Modern layout";
 static NSString *const kLayoutNoticeBody =
     @"RuneMobile's touch controls and overlays are built for the Resizable - Modern layout. "
-    @"You can switch layouts in the game's Display settings.";
+    @"If your account uses another layout, tap \"Switch to Resizable - Modern\" at the top of the screen once "
+    @"you're in the game.";
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
@@ -1490,6 +1503,28 @@ static NSString *const kLayoutNoticeBody =
                   forControlEvents:UIControlEventTouchUpInside];
     [self.screen addSubview:self.closeMapButton];
 
+    // One-tap layout switch (updateLayoutSwitch), top-centre under the keyboard toggle, where neither Classic's
+    // nor Fixed's engine HUD sits. Hidden until the player has been in one of those layouts for a moment.
+    self.layoutSwitchButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.layoutSwitchButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.layoutSwitchButton setTitle:kLayoutSwitchLabel forState:UIControlStateNormal];
+    self.layoutSwitchButton.accessibilityLabel = kLayoutSwitchLabel;
+    self.layoutSwitchButton.accessibilityHint = @"Changes the game's layout setting for your account";
+    self.layoutSwitchButton.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+    self.layoutSwitchButton.tintColor = [UIColor whiteColor];
+    [self.layoutSwitchButton setTitleColor:[UIColor colorWithWhite:1.0 alpha:0.6]
+                                  forState:UIControlStateDisabled];
+    self.layoutSwitchButton.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.9];
+    self.layoutSwitchButton.layer.cornerRadius = 20;
+    self.layoutSwitchButton.layer.borderWidth = 1;
+    self.layoutSwitchButton.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.5].CGColor;
+    self.layoutSwitchButton.contentEdgeInsets = UIEdgeInsetsMake(0, 18, 0, 18);
+    self.layoutSwitchButton.hidden = YES;
+    [self.layoutSwitchButton addTarget:self
+                                action:@selector(onLayoutSwitch)
+                      forControlEvents:UIControlEventTouchUpInside];
+    [self.screen addSubview:self.layoutSwitchButton];
+
     // Manual Picture-in-Picture: pops the game into the floating window without leaving the app, and doubles
     // as the auto-start diagnostic (manual-works/auto-doesn't isolates the system's auto-engage gate). Hidden
     // until setupPictureInPicture arms the controller.
@@ -1827,6 +1862,12 @@ static NSString *const kLayoutNoticeBody =
                                                            constant:-8],
         [self.closeMapButton.widthAnchor constraintEqualToConstant:44],
         [self.closeMapButton.heightAnchor constraintEqualToConstant:36],
+
+        // Layout switch: centred under the keyboard toggle (which sits 8 + 36 below the safe top).
+        [self.layoutSwitchButton.topAnchor constraintEqualToAnchor:g.topAnchor
+                                                          constant:52],
+        [self.layoutSwitchButton.centerXAnchor constraintEqualToAnchor:g.centerXAnchor],
+        [self.layoutSwitchButton.heightAnchor constraintEqualToConstant:40],
 
         // (Legacy cluster constraints below stay valid but the buttons are hidden — see hideLegacyCluster.)
         // In-game keyboard control — first row of the legacy cluster.
@@ -5515,6 +5556,71 @@ static int chatRowCanvasH(void) {
     }
 }
 
+// Show, label or hide the one-tap layout-switch pill (~10 Hz). It is up while the player is logged in to a layout the
+// native HUD can't drive (Resizable - Classic or Fixed) and presses Resizable - Modern in the game's own Settings >
+// Display dropdown (HudVeneerBridge.switchToModernLayout). The setting is server-side, so the pill goes once the
+// snapshot's rootKind (resizable + the layout varbit, unlike the toplevel id it never reads a transient 165) is
+// PRE_EOC.
+- (void)updateLayoutSwitch {
+    NSString *snap = [JVMLauncher chromeSnapshot];
+    NSDictionary *d = snap.length ? parseBridgeJSON(snap, "ViewController.updateLayoutSwitch") : nil;
+    NSString *rootKind = [d isKindOfClass:[NSDictionary class]] && [d[@"rootKind"] isKindOfClass:[NSString class]]
+                             ? d[@"rootKind"]
+                             : @"";
+    CFTimeInterval now = CACurrentMediaTime();
+    if ([rootKind isEqualToString:@"PRE_EOC"] && self.layoutSwitchSentAt > 0) {
+        [self appendLine:[NSString stringWithFormat:@"[shell] layout: now Resizable - Modern, %.1f s after the switch",
+                                                    now - self.layoutSwitchSentAt]];
+        self.layoutSwitchSentAt = 0;
+    }
+    BOOL unsupported = [d isKindOfClass:[NSDictionary class]] && [d[@"loggedIn"] boolValue] && !self.mapOpen &&
+                       ([rootKind isEqualToString:@"OSRS_STRETCH"] || [rootKind isEqualToString:@"FIXED"]) &&
+                       [JVMLauncher canSwitchEngineLayout];
+    if (!unsupported) {
+        self.layoutUnsupportedSince = 0;
+        self.layoutSwitchButton.hidden = YES;
+        return;
+    }
+    if (self.layoutUnsupportedSince == 0)
+        self.layoutUnsupportedSince = now;
+    if (self.layoutSwitchSentAt > 0 && now - self.layoutSwitchSentAt > kLayoutSwitchTimeout) {
+        self.layoutSwitchSentAt = 0;
+        [self appendLine:[NSString stringWithFormat:@"[shell] layout: the switch did not take within %.0f s (rootKind=%@)",
+                                                    kLayoutSwitchTimeout, rootKind]];
+        [self showLayoutSwitchFailed];
+    }
+    BOOL sending = self.layoutSwitchSentAt > 0;
+    NSString *label = sending ? @"Switching…" : kLayoutSwitchLabel;
+    if (![[self.layoutSwitchButton titleForState:UIControlStateNormal] isEqualToString:label])
+        [self.layoutSwitchButton setTitle:label forState:UIControlStateNormal];
+    self.layoutSwitchButton.enabled = !sending;
+    self.layoutSwitchButton.hidden = now - self.layoutUnsupportedSince < kLayoutSwitchSettle;
+}
+
+- (void)onLayoutSwitch {
+    if (self.layoutSwitchSentAt > 0)
+        return;
+    self.layoutSwitchSentAt = CACurrentMediaTime();
+    [self.layoutSwitchButton setTitle:@"Switching…" forState:UIControlStateNormal];
+    self.layoutSwitchButton.enabled = NO;
+    [JVMLauncher switchEngineToModernLayout];
+    [self appendLine:@"[shell] layout: switch to Resizable - Modern sent"];
+}
+
+- (void)showLayoutSwitchFailed {
+    // Never stack over another presented VC (UIKit refuses it); the pill is back, so the player can just retry.
+    if (self.presentedViewController != nil)
+        return;
+    UIAlertController *ac = [UIAlertController
+        alertControllerWithTitle:@"The layout didn't change"
+                         message:@"The game didn't switch to Resizable - Modern. You can switch it yourself: open the "
+                                 @"Settings tab, then Display, and choose \"Resizable - Modern layout\" under Game "
+                                 @"client layout."
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:ac animated:YES completion:nil];
+}
+
 // A native tab tap -> proxy a left click on the live desktop stone centre (the device-proven switch primitive,
 // JavaBridge.onClick). The button consumed the tap, so it never leaks to the game gestures beneath.
 - (void)onTabButton:(UIButton *)b {
@@ -6363,6 +6469,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     // FIX-9: drive the "Reconnecting…" scrim ~10 Hz, UNGATED by chrome/login — the reconnect happens while NOT
     // logged in, so it can't sit behind updateChrome's chromeVisible gate or the other updaters' loggedIn returns.
     if (self.framesShown % 6 == 0) {
+        [self updateLayoutSwitch]; // ungated by chromeVisible: the wrong layout strands the player either way
         [self updateReconnectOverlay];
         [self updateSessionExpiredOverlay]; // UX-LOGIN-01: same cadence/ungating as the reconnect scrim
         [self updateFatalErrorOverlay];     // FATAL-1: latch-once fatal card, same cadence

@@ -329,6 +329,14 @@ typedef void (^JVMLogSink)(NSString *line);
 /// the tiny in-scene orb. No-op on an older jar without openWorldMap. Main thread.
 + (void)openEngineWorldMap;
 
+/// Whether the bundled jar has HudVeneerBridge.switchToModernLayout (an older jar does not). Main thread.
++ (BOOL)canSwitchEngineLayout;
+
+/// Switch the account's game client layout to Resizable - Modern via HudVeneerBridge.switchToModernLayout,
+/// which presses it in the game's own Settings > Display dropdown. The setting is server-side and account-wide.
+/// One-shot; the outcome shows up as the toplevel changing to 164. No-op on an older jar. Main thread.
++ (void)switchEngineToModernLayout;
+
 /// W3 A4: hide (YES) or show (NO) all 14 engine tab stones, so the native 2-col grid replaces them with no gray
 /// cover patch. Re-applied each frame by HudVeneerBridge. Main thread.
 + (void)setEngineStonesHidden:(BOOL)hidden;

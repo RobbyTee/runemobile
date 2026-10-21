@@ -440,6 +440,7 @@ static jmethodID gMidGetDlgSeq = NULL;       // getDialogueSeq()J — bumped onl
 static jmethodID gMidSetOverlayInsets = NULL; // setOverlaySafeInsets(IIII)V (snap-corner safe frame)
 static jmethodID gMidPanMap = NULL;          // panWorldMap(II)V  (world map: finger pan -> map centre)
 static jmethodID gMidOpenWorldMap = NULL;    // openWorldMap()V  (world map: discoverable one-shot open)
+static jmethodID gMidSwitchLayout = NULL;    // switchToModernLayout()V  (one-tap game layout switch)
 static jmethodID gMidGetMapSnap = NULL;      // getMapSnapshot()Ljava/lang/String;  (world map open + rects)
 static jmethodID gMidGetOrbSnap = NULL;      // getOrbSnapshot()Ljava/lang/String;  (orb touch-target veneer)
 static jmethodID gMidTabSprites = NULL;      // tabSprites()Ljava/lang/String;  (cache-rendered chrome sprites)
@@ -493,6 +494,11 @@ static BOOL ensureVeneer(void) {
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         gMidOpenWorldMap = NULL;
+    }
+    gMidSwitchLayout = (*env)->GetStaticMethodID(env, global, "switchToModernLayout", "()V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidSwitchLayout = NULL;
     }
     gMidSetChatHidden = m;
     gMidRelocateChat = r;
@@ -2745,6 +2751,20 @@ static BOOL pipFeedMarkerSaysMain(void) {
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidOpenWorldMap);
     if ((*env)->ExceptionCheck(env)) {
         bridgeNoteClear(env, "JVMLauncher.openEngineWorldMap");
+    }
+}
+
++ (BOOL)canSwitchEngineLayout {
+    return ensureVeneer() && gMidSwitchLayout != NULL;
+}
+
++ (void)switchEngineToModernLayout {
+    if (!ensureVeneer() || !gMidSwitchLayout)
+        return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSwitchLayout);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.switchEngineToModernLayout");
     }
 }
 

@@ -388,6 +388,15 @@ public final class HudVeneerBridge
 		pendingOpenTab = tabIndex;
 	}
 
+	/** Native: switch the account's game client layout to Resizable - Modern, the one layout the native HUD
+	 *  supports, by pressing it in the game's own Settings &gt; Display dropdown. The setting is the server's and
+	 *  account-wide, so it sticks on every client. One-shot; applied on the client thread in {@link #tick}, and
+	 *  the outcome is logged as {@code [layout]}. See {@code GameLayoutSwitch}. */
+	public static void switchToModernLayout()
+	{
+		GameLayoutSwitch.request(GameLayoutSwitch.MODERN);
+	}
+
 	/** Native: open the world map (FIX-5) by replaying the {@code ORB_WORLDMAP} orb's op script — a discoverable
 	 *  open path decoupled from the ~25px engine orb. One-shot; applied on the client thread in {@link #tick}. */
 	public static void openWorldMap()
@@ -734,6 +743,8 @@ public final class HudVeneerBridge
 		}
 		try
 		{
+			// Before the resizable gate: Fixed is one of the layouts a switch leaves.
+			GameLayoutSwitch.tick(c);
 			if (!c.isResized())
 			{
 				return;   // native veneers + transparent chat are resizable-mode only

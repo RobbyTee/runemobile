@@ -340,6 +340,15 @@ class MainActivity : AppCompatActivity() {
     // onCreate doesn't re-run on rotation), suppressed for good by the dialog's "Don't show again".
     private var layoutNoticeShown = false
 
+    // One-tap layout switch: a top-centre pill shown while logged in to a layout the native HUD can't drive
+    // (Resizable - Classic or Fixed). It presses Resizable - Modern in the game's own Settings > Display dropdown
+    // (HudVeneerBridge.switchToModernLayout); the setting is server-side, so the pill goes once rootKind reads
+    // PRE_EOC. `layoutUnsupportedSinceMs` is the start of the current unsupported run (0 = supported or logged
+    // out), `layoutSwitchSentMs` the outstanding switch (0 = none).
+    private lateinit var layoutSwitchButton: Button
+    private var layoutUnsupportedSinceMs = 0L
+    private var layoutSwitchSentMs = 0L
+
     // UX-DISCRETE-01 / ENH-B06: a native "Hopping…" scrim over the relog-based world hop (logout→relogin). Driven
     // purely Android-side: armed from the hop trigger sites, hidden on the next loggedIn edge after the hop or a
     // bounded timeout. `hopWasLoggedIn` tracks the pre-hop loggedIn state so we hide on the rising edge BACK to
@@ -447,6 +456,14 @@ class MainActivity : AppCompatActivity() {
         // resizable layout (the welcome-frame flash window). ~1.2s of LOGGED_IN frames is when the engine's chrome
         // widgets are reliably built (cf. MobileChromeBridge.VERDICT_FRAME=60); 1500ms gives a little headroom.
         private const val LOGIN_TRANSITION_MS = 1500L
+
+        // The layout-switch pill waits this far into a run of unsupported-layout frames before it shows, so a
+        // varbit that syncs late after login, or a one-frame blip, never flashes it over a Modern account.
+        private const val LAYOUT_SWITCH_SETTLE_MS = 3_000L
+
+        // How long the server gets to apply a layout switch before the pill gives up and says how to do it by hand.
+        private const val LAYOUT_SWITCH_TIMEOUT_MS = 15_000L
+        private const val LAYOUT_SWITCH_LABEL = "Switch to Resizable - Modern"
 
         // updateChrome's signature slots: the native change counter, five toggles, two view/frame sizes, four insets.
         private const val CHROME_SIG_LEN = 14
@@ -971,6 +988,30 @@ class MainActivity : AppCompatActivity() {
                 alpha = 0.85f
                 setOnClickListener { openLauncher() }
             }
+        // One-tap layout switch (see layoutSwitchButton): same pill look as the launcher handle, top-centre, where
+        // neither Classic's nor Fixed's engine HUD sits. updateLayoutSwitch shows it, labels it and hides it.
+        layoutSwitchButton =
+            Button(this).apply {
+                text = LAYOUT_SWITCH_LABEL
+                contentDescription = "Switch the game to the Resizable - Modern layout"
+                textSize = 13f
+                isAllCaps = false
+                minWidth = 0
+                minimumWidth = 0
+                val d = resources.displayMetrics.density
+                minHeight = 0
+                minimumHeight = (44 * d).toInt()
+                setPadding((18 * d).toInt(), (8 * d).toInt(), (18 * d).toInt(), (8 * d).toInt())
+                setTextColor(0xFFFFFFFF.toInt())
+                background =
+                    android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = 100f
+                        setColor(0xE6202020.toInt())
+                        setStroke((1 * d).toInt(), 0x88FFFFFF.toInt())
+                    }
+                visibility = View.GONE
+                setOnClickListener { onLayoutSwitchTap() }
+            }
         // A6 A/B: toggle the native grid on/off (▦ = native tab grid + hidden stones; ▤ = raw engine stones).
         // updateChrome re-applies setStonesHidden to match, so flipping this reveals/hides the real stone row.
         val chromeButton = devButton("▦")
@@ -1081,6 +1122,15 @@ class MainActivity : AppCompatActivity() {
                 addView(keyboardView, FrameLayout.LayoutParams(1, 1))
                 addView(menuOverlay, FrameLayout.LayoutParams(mp, mp)) // drawn on top of the live frame + chrome
                 addView(overlayEditView, FrameLayout.LayoutParams(mp, mp)) // on-screen overlay-layout editor (GONE unless editing)
+                addView(
+                    layoutSwitchButton,
+                    FrameLayout
+                        .LayoutParams(
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            Gravity.TOP or Gravity.CENTER_HORIZONTAL,
+                        ).apply { topMargin = (12 * resources.displayMetrics.density).toInt() },
+                ) // one-tap layout switch (GONE unless the layout is Classic or Fixed)
                 addView(reconnectOverlay, FrameLayout.LayoutParams(mp, mp)) // FIX-9: "Reconnecting…" scrim (non-interactive)
                 addView(hoppingOverlay, FrameLayout.LayoutParams(mp, mp)) // ENH-B06: "Hopping…" scrim (non-interactive)
                 addView(sessionExpiredOverlay, FrameLayout.LayoutParams(mp, mp)) // UX-LOGIN-01: "Session expired" card (interactive, top)
@@ -2856,7 +2906,8 @@ class MainActivity : AppCompatActivity() {
             .setTitle("Use Resizable - Modern layout")
             .setMessage(
                 "RuneMobile's touch controls and overlays are built for the Resizable - Modern layout. " +
-                    "You can switch layouts in the game's Display settings.",
+                    "If your account uses another layout, tap \"$LAYOUT_SWITCH_LABEL\" at the top of the " +
+                    "screen once you're in the game.",
             ).setPositiveButton("Got it", null)
             .setNegativeButton("Don't show again") { _, _ ->
                 getSharedPreferences(PREFS_NOTICES, MODE_PRIVATE)
@@ -2867,6 +2918,59 @@ class MainActivity : AppCompatActivity() {
             }
             // A dialog takes window focus, which drops sticky immersive; onWindowFocusChanged re-asserts it on the
             // way in, so do the same on the way out instead of leaving the system bars up over the game.
+            .setOnDismissListener { enterImmersive() }
+            .show()
+    }
+
+    /** Show, label or hide the one-tap layout-switch pill for this frame. [unsupported] is a logged-in frame in a
+     *  layout the native HUD can't drive. */
+    private fun updateLayoutSwitch(
+        unsupported: Boolean,
+        rootKind: String,
+    ) {
+        if (!::layoutSwitchButton.isInitialized) return
+        val now = SystemClock.uptimeMillis()
+        if (rootKind == "PRE_EOC" && layoutSwitchSentMs != 0L) {
+            Log.i(TAG, "layout: now Resizable - Modern, ${now - layoutSwitchSentMs} ms after the switch")
+            layoutSwitchSentMs = 0L
+        }
+        if (!unsupported) {
+            layoutUnsupportedSinceMs = 0L
+            layoutSwitchButton.visibility = View.GONE
+            return
+        }
+        if (layoutUnsupportedSinceMs == 0L) layoutUnsupportedSinceMs = now
+        if (layoutSwitchSentMs != 0L && now - layoutSwitchSentMs > LAYOUT_SWITCH_TIMEOUT_MS) {
+            layoutSwitchSentMs = 0L
+            Log.w(TAG, "layout: the switch did not take within $LAYOUT_SWITCH_TIMEOUT_MS ms (rootKind=$rootKind)")
+            showLayoutSwitchFailed()
+        }
+        val sending = layoutSwitchSentMs != 0L
+        val label = if (sending) "Switching…" else LAYOUT_SWITCH_LABEL
+        if (layoutSwitchButton.text.toString() != label) layoutSwitchButton.text = label
+        layoutSwitchButton.isEnabled = !sending
+        layoutSwitchButton.visibility =
+            if (now - layoutUnsupportedSinceMs >= LAYOUT_SWITCH_SETTLE_MS) View.VISIBLE else View.GONE
+    }
+
+    private fun onLayoutSwitchTap() {
+        if (layoutSwitchSentMs != 0L) return
+        layoutSwitchSentMs = SystemClock.uptimeMillis()
+        layoutSwitchButton.text = "Switching…"
+        layoutSwitchButton.isEnabled = false
+        JvmLauncher.onBridge { JvmLauncher.switchToModernLayout() }
+        Log.i(TAG, "layout: switch to Resizable - Modern sent")
+    }
+
+    private fun showLayoutSwitchFailed() {
+        if (isFinishing || isDestroyed) return
+        AlertDialog
+            .Builder(this)
+            .setTitle("The layout didn't change")
+            .setMessage(
+                "The game didn't switch to Resizable - Modern. You can switch it yourself: open the Settings " +
+                    "tab, then Display, and choose \"Resizable - Modern layout\" under Game client layout.",
+            ).setPositiveButton("OK", null)
             .setOnDismissListener { enterImmersive() }
             .show()
     }
@@ -3329,7 +3433,12 @@ class MainActivity : AppCompatActivity() {
         // Splash + hop are NOT in the signature: each is a state flag the body itself clears (on first frame /
         // loggedIn edge / its own timeout), so while either is up we must run the body every frame to do that
         // clearing — a stable signature must not be allowed to freeze them.
-        val timedPending = (::splashOverlay.isInitialized && splashOverlay.isActive) || hopArmed
+        // The layout-switch pill's settle delay and switch timeout are wall-clock deadlines of the same kind.
+        val layoutTimed =
+            ::layoutSwitchButton.isInitialized &&
+                layoutUnsupportedSinceMs != 0L &&
+                (layoutSwitchSentMs != 0L || layoutSwitchButton.visibility != View.VISIBLE)
+        val timedPending = (::splashOverlay.isInitialized && splashOverlay.isActive) || hopArmed || layoutTimed
         if (!timedPending && sig.contentEquals(lastChromeSig)) return
         chromeSig = lastChromeSig
         lastChromeSig = sig
@@ -3430,6 +3539,10 @@ class MainActivity : AppCompatActivity() {
         // so the grid/chat-tabs don't flash over the half-built welcome frame. Raw engine HUD shows during the window.
         val supported = loggedIn && rootKind == "PRE_EOC" && !inLoginTransition
         chromeOverlay.setGridEnabled(supported)
+        updateLayoutSwitch(
+            unsupported = loggedIn && !mapOpen && !inLoginTransition && (rootKind == "OSRS_STRETCH" || rootKind == "FIXED"),
+            rootKind = rootKind,
+        )
         chromeOverlay.setActiveTab(active)
 
         // AP-0 chat scroll-by-drag: cache the live chatbox bounds (canvas px) for the gesture-start hit test.

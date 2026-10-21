@@ -98,6 +98,7 @@ public class HudVeneerBridgeTest
 		HudVeneerBridge.setChatCollapsed(false);
 		HudVeneerBridge.relocateSidePanel(-1, -1);
 		HudVeneerBridge.setStonesHidden(false);
+		GameLayoutSwitch.resetForTest();               // tick() runs the layout switch too
 		// Shared static: drop any world-map HUD hide or stone-row hide a previous test left standing (every
 		// widget read comes back null, so the map reads closed and the restores run against nothing).
 		HudVeneerBridge.preRender(loggedInClientWith(null));

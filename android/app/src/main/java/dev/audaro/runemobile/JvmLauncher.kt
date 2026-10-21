@@ -484,6 +484,8 @@ object JvmLauncher {
 
     external fun nativeOpenWorldMap() // FIX-5: open the world map via ORB_WORLDMAP op-replay
 
+    external fun nativeSwitchToModernLayout() // press Resizable - Modern in the game's own layout dropdown
+
     external fun nativeRelocateSidePanel(
         x: Int,
         y: Int,
@@ -969,6 +971,10 @@ object JvmLauncher {
     fun openTab(tabIndex: Int) = nativeOpenTab(tabIndex)
 
     fun openWorldMap() = nativeOpenWorldMap()
+
+    /** Switch the account's game client layout to Resizable - Modern (server-side, account-wide). One-shot; the
+     *  chrome snapshot's rootKind turns PRE_EOC once the server has applied it. */
+    fun switchToModernLayout() = nativeSwitchToModernLayout()
 
     fun relocateSidePanel(
         x: Int,
