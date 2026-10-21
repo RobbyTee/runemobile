@@ -8,7 +8,7 @@
 #
 # Armed, the VM runs with -Drunelite.fpsprobe (headless.FrameStats: [fpsprobe] [frameprobe] [framebins] [framehist])
 # and -Xlog:gc,safepoint to stdout, and the present path logs [presentprobe] (the GPU direct present on both ports,
-# and Android's CPU blit).
+# Android's CPU blit and the iOS PiP frame feed of the CPU and base-GPU renderers).
 #   android  A `perfprobe` file in the app's external files dir. A debug build is armed without it. A release build
 #            forwards the probe's lines to logcat and drops all other VM output (A8). Measure with
 #            android/dev-tools/gpu/fps-measure.sh.

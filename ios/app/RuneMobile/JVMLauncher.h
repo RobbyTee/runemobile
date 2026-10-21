@@ -2,6 +2,8 @@
 #import <UIKit/UIKit.h>
 #import <CoreVideo/CoreVideo.h>
 
+@class AVSampleBufferDisplayLayer;
+
 NS_ASSUME_NONNULL_BEGIN
 
 /// Result/diagnostic callback. `line` is one log line (already newline-free);
@@ -62,7 +64,7 @@ typedef void (^JVMLogSink)(NSString *line);
 
 /// Phase 4 perf probe: YES when a `perfprobe` file is in Documents (tools/perfprobe.sh ios on) and does not say
 /// "off" (devicectl can't delete it, so `off` overwrites it), in either build configuration. Armed, the VM gets -Drunelite.fpsprobe (headless.FrameStats' frame-pacing lines) plus GC and
-/// safepoint logging, the direct-present path logs [presentprobe], and a Release build keeps those timing lines,
+/// safepoint logging, the present paths log [presentprobe] (the GL direct present and the PiP frame feed), and a Release build keeps those timing lines,
 /// and only those, in Documents/perf-probe.log (Debug already has them in jvm-stdio.log). A marker rather than
 /// DEBUG because Debug is the daily driver and jvm-stdio.log grows for the whole session. Read once; any thread.
 + (BOOL)perfProbeArmed;
@@ -129,12 +131,18 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Returns nil before the first draw / if the VM isn't up yet. Call on the main thread.
 + (nullable UIImage *)latestFrame;
 
-/// Pull the engine's latest composited frame as a +1-retained 32BGRA CVPixelBuffer (the Picture-in-Picture
-/// feed: AVSampleBufferDisplayLayer wants CVPixelBuffers, not CGImages). `ioSeq` carries the caller's last
-/// seen JavaBridge frame sequence: NULL is returned when the engine hasn't composited a new frame since
-/// (pass -1 to force a fetch), otherwise `*ioSeq` is updated and the caller owns the returned buffer
-/// (CVPixelBufferRelease). Call on the main thread (shares the main thread's attached JNI env).
-+ (nullable CVPixelBufferRef)copyFramePixelBufferSinceSeq:(int32_t *)ioSeq CF_RETURNS_RETAINED;
+/// The Picture-in-Picture frame feed's target layer (nil turns the feed off). Each new engine frame is copied into a
+/// 32BGRA CVPixelBuffer and enqueued on it, display-immediately. Never waits on the feed thread: a frame in flight
+/// re-checks the layer just before its enqueue and is dropped if the layer changed, so a caller can hand the layer to
+/// another producer (or remove it) right after; only a frame already past that check can still land. Main thread.
++ (void)pipFeedSetLayer:(nullable AVSampleBufferDisplayLayer *)layer;
+
+/// Ask the feed for the newest frame: a no-op unless the engine composited one since the last frame fed. Cheap; the
+/// copy and enqueue run on the feed's own JVM-attached thread (or inline, if Documents/pipfeed says "main"). Main thread.
++ (void)pipFeedKick;
+
+/// The JavaBridge frame seq last enqueued by the feed, -1 before the first. For logs. Any thread.
++ (int)pipFeedSeq;
 
 /// Gate the engine's right-click-menu RASTER (its logic/geometry stay live for click-through). Suppressed
 /// by default on device — the native big-row overlay is the only menu UI; the engine's tiny box only ever

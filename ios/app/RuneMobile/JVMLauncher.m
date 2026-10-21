@@ -12,6 +12,8 @@
 #import <time.h>              // clock_gettime_nsec_np — monotonic window for the rate-limiter
 #import <sys/sysctl.h>        // KERN_PROC_PID — this process's start time, for the cold-start stamps
 #import <sys/time.h>
+#import <AVFoundation/AVFoundation.h> // AVSampleBufferDisplayLayer: the PiP frame feed enqueues from its own thread
+#import <CoreMedia/CoreMedia.h>
 #import "jni/jni.h"
 #import "routec_gl_jni.h"   // W3 GPU Route C: RouteC_registerGLNatives(env) — the JNI GL bridge registration
 #import "routec_zone_jni.h" // W3 GPU Zone B0.5: RouteC_registerZoneNatives(env) — the RLHD facade-delta natives
@@ -1940,28 +1942,103 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     return img;
 }
 
-// Picture-in-Picture frame feed: the same JavaBridge frame as latestFrame, but delivered as a 32BGRA
-// CVPixelBuffer (what AVSampleBufferDisplayLayer consumes). The engine's TYPE_INT_RGB ints (0x00RRGGBB)
-// already lay out as B,G,R,[junk] on little-endian arm64, so the rows copy straight in and only the alpha
-// byte needs stamping opaque. Seq-gated per CALLER (ioSeq), independent of latestFrame's own gate.
-+ (CVPixelBufferRef)copyFramePixelBufferSinceSeq:(int32_t *)ioSeq {
-    if (!ioSeq || !ensureBridge()) return NULL;
-    JNIEnv *env = gMainEnv;
+// ---- Picture-in-Picture frame feed (the int[] renderers: CPU and base GPU) ------------------------------------
+// The PiP AVSampleBufferDisplayLayer is the visible presenter, so each new engine frame is copied into a 32BGRA
+// CVPixelBuffer and enqueued on it. The engine's TYPE_INT_RGB ints (0x00RRGGBB) already lay out as B,G,R,[junk] on
+// little-endian arm64, so the rows copy straight in and only the alpha byte needs stamping opaque.
+// The copy runs on its own JVM-attached thread, woken by the shell's tick (+pipFeedKick), so the main thread neither
+// copies the full canvas nor holds a JNI critical region that a GC on the client thread would have to wait out.
+// AVSampleBufferDisplayLayer takes enqueues from any thread (the 117HD pip-present already enqueues from the GL thread).
+// A Documents/pipfeed marker that says "main" keeps the copy on the main thread instead, so one install can A/B both:
+//   echo main > /tmp/pipfeed && xcrun devicectl device copy to --device <UDID> --domain-type appDataContainer \
+//     --domain-identifier dev.audaro.runemobile --source /tmp/pipfeed --destination Documents/pipfeed
+// ("thread" switches it back; devicectl can't delete the file). Read once, at the first kick.
 
-    jint seq = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidSeq);
-    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.copyFramePixelBuffer"); return NULL; }
-    if (seq == *ioSeq) return NULL;   // nothing composited since the caller's last fetch
+typedef struct {
+    JNIEnv *env;
+    jclass cls;
+    jmethodID seq, w, h, pixels;
+} PipFeedJni;
 
-    jint w = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidW);
-    jint h = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidH);
-    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.copyFramePixelBuffer"); return NULL; }
-    if (w <= 0 || h <= 0) return NULL;
+static pthread_mutex_t gFeedKickLock = PTHREAD_MUTEX_INITIALIZER; // guards gFeedKicked and the thread start
+static pthread_cond_t gFeedKickCond = PTHREAD_COND_INITIALIZER;
+static BOOL gFeedKicked = NO;
+static BOOL gFeedThreadStarted = NO;
+// The target layer and its generation. Held only to read or swap them, never across a JNI or AVFoundation call, so
+// the main thread never waits on a pass: the main thread must not block on a thread that is inside AVFoundation.
+static os_unfair_lock gFeedLayerLock = OS_UNFAIR_LOCK_INIT;
+static AVSampleBufferDisplayLayer *gFeedLayer = nil; // nil = feed off
+static unsigned gFeedGen = 0;                        // bumped by every +pipFeedSetLayer:
+// One pass at a time; guards the pool, format and probe statics. Only the pass's own thread takes it.
+static pthread_mutex_t gFeedPassLock = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic int gFeedSeq = -1;     // last engine frame seq enqueued, -1 = none yet
+static _Atomic BOOL gFeedOnMain = NO; // the marker says "main", or the feed thread failed to start
 
-    jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, gBridgeClass, gMidPixels);
-    if (!arr || (*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.copyFramePixelBuffer"); return NULL; }
+// [presentprobe] for this feed, armed with the perf probe: one line a second, in the shape fps-measure.sh parses,
+// where swap = one whole fetch + copy + enqueue. `feed=` names the thread it ran on. Under gFeedPassLock.
+static void pipFeedProbe(uint64_t startNs, uint64_t endNs) {
+    static uint64_t windowNs, lastNs;
+    static int presents;
+    static double gapMax, swapSum, swapMax;
+    double swap = (double)(endNs - startNs) / 1e6;
+    if (windowNs == 0)
+        windowNs = endNs;
+    if (lastNs > 0 && endNs - lastNs < 5 * NSEC_PER_SEC && (double)(endNs - lastNs) / 1e6 > gapMax)
+        gapMax = (double)(endNs - lastNs) / 1e6;
+    lastNs = endNs;
+    presents++;
+    swapSum += swap;
+    if (swap > swapMax)
+        swapMax = swap;
+    if (endNs - windowNs >= NSEC_PER_SEC) {
+        fprintf(stderr, "[presentprobe] presents=%d gapMaxMs=%.2f swapAvgMs=%.2f swapMaxMs=%.2f feed=%s\n", presents,
+                gapMax, swapSum / presents, swapMax, atomic_load(&gFeedOnMain) ? "main" : "thread");
+        presents = 0;
+        gapMax = swapSum = swapMax = 0;
+        windowNs = endNs;
+    }
+}
+
+static BOOL pipFeedLayerCurrent(unsigned gen) {
+    os_unfair_lock_lock(&gFeedLayerLock);
+    BOOL current = gen == gFeedGen;
+    os_unfair_lock_unlock(&gFeedLayerLock);
+    return current;
+}
+
+// One fetch + enqueue onto `layer` (generation `gen`), under gFeedPassLock. A no-op unless the engine composited a
+// frame since the last one fed.
+static void pipFeedOnce(const PipFeedJni *j, AVSampleBufferDisplayLayer *layer, unsigned gen) {
+    JNIEnv *env = j->env;
+    jint seq = (*env)->CallStaticIntMethod(env, j->cls, j->seq);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.pipFeed");
+        return;
+    }
+    if (seq == atomic_load(&gFeedSeq))
+        return; // nothing composited since the last frame fed
+    const uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+
+    jint w = (*env)->CallStaticIntMethod(env, j->cls, j->w);
+    jint h = (*env)->CallStaticIntMethod(env, j->cls, j->h);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.pipFeed");
+        return;
+    }
+    if (w <= 0 || h <= 0)
+        return;
+
+    jintArray arr = (jintArray)(*env)->CallStaticObjectMethod(env, j->cls, j->pixels);
+    if (!arr || (*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.pipFeed");
+        return;
+    }
     jsize len = (*env)->GetArrayLength(env, arr);
     NSUInteger need = (NSUInteger)w * (NSUInteger)h;
-    if ((NSUInteger)len < need) { (*env)->DeleteLocalRef(env, arr); return NULL; }
+    if ((NSUInteger)len < need) {
+        (*env)->DeleteLocalRef(env, arr);
+        return;
+    }
 
     // Recycling pool (IOSurface-backed, what the video pipeline wants); rebuilt if the canvas resizes.
     static CVPixelBufferPoolRef pool = NULL;
@@ -1981,7 +2058,10 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     }
     CVPixelBufferRef pb = NULL;
     if (pool) CVPixelBufferPoolCreatePixelBuffer(NULL, pool, &pb);
-    if (!pb) { (*env)->DeleteLocalRef(env, arr); return NULL; }
+    if (!pb) {
+        (*env)->DeleteLocalRef(env, arr);
+        return;
+    }
 
     CVPixelBufferLockBaseAddress(pb, 0);
     uint8_t *base = (uint8_t *)CVPixelBufferGetBaseAddress(pb);
@@ -1991,11 +2071,11 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     // (copy 2's cost). The critical window holds only this loop — no JNI or blocking calls inside.
     jint *src = (jint *)(*env)->GetPrimitiveArrayCritical(env, arr, NULL);
     if (!src) {
-        bridgeNoteClear(env, "JVMLauncher.copyFramePixelBuffer");
+        bridgeNoteClear(env, "JVMLauncher.pipFeed");
         CVPixelBufferUnlockBaseAddress(pb, 0);
         CVPixelBufferRelease(pb);
         (*env)->DeleteLocalRef(env, arr);
-        return NULL;
+        return;
     }
     for (jint row = 0; row < h; row++) {
         const jint *srow = src + (size_t)row * w;
@@ -2007,8 +2087,169 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     CVPixelBufferUnlockBaseAddress(pb, 0);
     (*env)->DeleteLocalRef(env, arr);
 
-    *ioSeq = seq;
-    return pb;   // +1 — caller releases
+    // Format description cached across frames; rebuilt when the canvas dimensions change (resizable render).
+    static CMVideoFormatDescriptionRef fmt = NULL;
+    if (fmt && !CMVideoFormatDescriptionMatchesImageBuffer(fmt, pb)) {
+        CFRelease(fmt);
+        fmt = NULL;
+    }
+    if (!fmt && CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, pb, &fmt) != noErr) {
+        fmt = NULL;
+        CVPixelBufferRelease(pb);
+        return;
+    }
+    // The shell let go of the layer during the copy (the 117HD bridge takes it over at the warmup reveal, or PiP
+    // was torn down): drop this frame rather than enqueue it alongside the new producer.
+    if (!pipFeedLayerCurrent(gen)) {
+        CVPixelBufferRelease(pb);
+        return;
+    }
+    if (layer.status == AVQueuedSampleBufferRenderingStatusFailed) {
+        [layer flush]; // e.g. after a background round-trip; recovers on the next enqueue
+    }
+    // Stamped display-immediately, so no timebase juggling is needed for a live feed.
+    CMSampleTimingInfo timing = {.duration = kCMTimeInvalid,
+                                 .presentationTimeStamp = CMClockGetTime(CMClockGetHostTimeClock()),
+                                 .decodeTimeStamp = kCMTimeInvalid};
+    CMSampleBufferRef sb = NULL;
+    if (CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, pb, fmt, &timing, &sb) == noErr && sb) {
+        CFArrayRef atts = CMSampleBufferGetSampleAttachmentsArray(sb, true);
+        if (atts && CFArrayGetCount(atts) > 0) {
+            CFMutableDictionaryRef att = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(atts, 0);
+            CFDictionarySetValue(att, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
+        }
+        [layer enqueueSampleBuffer:sb];
+        CFRelease(sb);
+    }
+    CVPixelBufferRelease(pb);
+    atomic_store(&gFeedSeq, seq);
+    if ([JVMLauncher perfProbeArmed])
+        pipFeedProbe(t0, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
+}
+
+// The feed thread's own attach + JavaBridge lookups (the main thread's cache is main-only). NO = retry next kick.
+static BOOL pipFeedJniReady(PipFeedJni *j) {
+    if (j->cls)
+        return YES;
+    JavaVM *vm = atomic_load(&gVM);
+    if (!vm)
+        return NO;
+    if (!j->env && (*vm)->AttachCurrentThreadAsDaemon(vm, (void **)&j->env, NULL) != JNI_OK) {
+        j->env = NULL;
+        return NO;
+    }
+    JNIEnv *env = j->env;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/JavaBridge");
+    if (!local || (*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return NO;
+    }
+    jclass global = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    if (!global)
+        return NO;
+    j->seq = (*env)->GetStaticMethodID(env, global, "getFrameSeq", "()I");
+    j->w = (*env)->GetStaticMethodID(env, global, "getFrameWidth", "()I");
+    j->h = (*env)->GetStaticMethodID(env, global, "getFrameHeight", "()I");
+    j->pixels = (*env)->GetStaticMethodID(env, global, "getFramePixels", "()[I");
+    if (!j->seq || !j->w || !j->h || !j->pixels) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteGlobalRef(env, global);
+        return NO;
+    }
+    j->cls = global;
+    return YES;
+}
+
+static void *pipFeedThread(void *unused) {
+    (void)unused;
+    pthread_setname_np("rl-pip-feed");
+    PipFeedJni j = {0};
+    for (;;) {
+        pthread_mutex_lock(&gFeedKickLock);
+        while (!gFeedKicked)
+            pthread_cond_wait(&gFeedKickCond, &gFeedKickLock);
+        gFeedKicked = NO;
+        pthread_mutex_unlock(&gFeedKickLock);
+
+        pthread_mutex_lock(&gFeedPassLock);
+        @autoreleasepool {
+            os_unfair_lock_lock(&gFeedLayerLock);
+            AVSampleBufferDisplayLayer *layer = gFeedLayer;
+            unsigned gen = gFeedGen;
+            os_unfair_lock_unlock(&gFeedLayerLock);
+            if (layer && pipFeedJniReady(&j))
+                pipFeedOnce(&j, layer, gen);
+            // Detached meanwhile: this may be the last reference to a layer the shell removed, and a layer belongs
+            // to the main thread, so release it there.
+            if (layer && !pipFeedLayerCurrent(gen))
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    (void)layer;
+                });
+        }
+        pthread_mutex_unlock(&gFeedPassLock);
+    }
+    return NULL;
+}
+
+static BOOL pipFeedMarkerSaysMain(void) {
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSString *body = [NSString stringWithContentsOfFile:[docs stringByAppendingPathComponent:@"pipfeed"]
+                                               encoding:NSUTF8StringEncoding
+                                                  error:NULL];
+    return [[body stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]
+        isEqualToString:@"main"];
+}
+
++ (void)pipFeedSetLayer:(AVSampleBufferDisplayLayer *)layer {
+    os_unfair_lock_lock(&gFeedLayerLock);
+    gFeedLayer = layer;
+    gFeedGen++;
+    os_unfair_lock_unlock(&gFeedLayerLock);
+    atomic_store(&gFeedSeq, -1);
+}
+
++ (void)pipFeedKick {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        BOOL onMain = pipFeedMarkerSaysMain();
+        atomic_store(&gFeedOnMain, onMain);
+        fprintf(stderr, "[presentprobe] pip feed on %s\n", onMain ? "the main thread (Documents/pipfeed)" : "its own thread");
+    });
+    if (!atomic_load(&gFeedOnMain)) {
+        pthread_mutex_lock(&gFeedKickLock);
+        if (!gFeedThreadStarted && atomic_load(&gVM)) {
+            pthread_attr_t attr;
+            pthread_attr_init(&attr);
+            pthread_attr_set_qos_class_np(&attr, QOS_CLASS_USER_INTERACTIVE, 0); // it feeds the visible presenter
+            pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+            pthread_t t;
+            if (pthread_create(&t, &attr, pipFeedThread, NULL) == 0) {
+                gFeedThreadStarted = YES;
+            } else {
+                atomic_store(&gFeedOnMain, YES);
+                fputs("[presentprobe] pip feed thread did not start; feeding on the main thread\n", stderr);
+            }
+            pthread_attr_destroy(&attr);
+        }
+        gFeedKicked = YES;
+        pthread_cond_signal(&gFeedKickCond);
+        pthread_mutex_unlock(&gFeedKickLock);
+        if (!atomic_load(&gFeedOnMain))
+            return;
+    }
+    if (!ensureBridge())
+        return;
+    PipFeedJni j = {gMainEnv, gBridgeClass, gMidSeq, gMidW, gMidH, gMidPixels};
+    pthread_mutex_lock(&gFeedPassLock);
+    AVSampleBufferDisplayLayer *layer = gFeedLayer; // main swaps it, so main needs no lock to read it
+    if (layer)
+        pipFeedOnce(&j, layer, gFeedGen);
+    pthread_mutex_unlock(&gFeedPassLock);
+}
+
++ (int)pipFeedSeq {
+    return atomic_load(&gFeedSeq);
 }
 
 + (void)postTouchType:(int)type x:(int)x y:(int)y button:(int)button {

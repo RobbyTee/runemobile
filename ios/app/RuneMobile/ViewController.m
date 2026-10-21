@@ -576,8 +576,8 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 // "couldn't start" after a grace period instead of spinning forever.
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *pluginEnabledSince;
 // Picture-in-Picture + background keepalive: the game keeps playing after a swipe-home. pipLayer is an
-// AVSampleBufferDisplayLayer fed the SAME engine frames as the on-screen blit, parked BEHIND the (opaque)
-// game view so it never shows in-app; the system lifts it into the PiP window when the app backgrounds
+// AVSampleBufferDisplayLayer fed the SAME engine frames as the on-screen blit, and the visible presenter above it
+// (see setupPictureInPicture); the system lifts it into the PiP window when the app backgrounds
 // (canStartPictureInPictureAutomaticallyFromInline). A silent, mixable AVAudioEngine holds the `audio`
 // background mode so the process — JVM, render loop, game socket — keeps running even with PiP dismissed;
 // the in-game logout timer (RuneLite, up to 30 min) then decides how long the character stays in.
@@ -585,7 +585,6 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 @property (nonatomic, strong) AVPictureInPictureController *pipController;
 @property (nonatomic, strong) dispatch_source_t pipBgPump;   // 15 Hz frame pump while backgrounded (the
                                                              // CADisplayLink stops firing there)
-@property (nonatomic, assign) int32_t pipFrameSeq;           // last engine frame seq fed to the PiP layer
 @property (nonatomic, strong) UIButton *pipButton;           // 📺 manual PiP start/stop (also the diagnostic
                                                              // for the auto-start gate)
 @property (nonatomic, strong) AVAudioEngine *keepaliveEngine;   // renders silence; holds the audio session
@@ -3083,11 +3082,11 @@ static const int kCamPitchPxPerSec = 200;
     if (self.pipController) {
         // The auto-engage state at the exact moment it matters, for the device log.
         [self appendLine:[NSString stringWithFormat:
-            @"[pip] bg snapshot: possible=%d active=%d layerStatus=%ld fedSeq=%d audioRunning=%d",
-            (int)self.pipController.isPictureInPicturePossible,
-            (int)self.pipController.isPictureInPictureActive,
-            (long)self.pipLayer.status, self.pipFrameSeq,
-            (int)self.keepaliveEngine.isRunning]];
+                                       @"[pip] bg snapshot: possible=%d active=%d layerStatus=%ld fedSeq=%d audioRunning=%d",
+                                       (int)self.pipController.isPictureInPicturePossible,
+                                       (int)self.pipController.isPictureInPictureActive,
+                                       (long)self.pipLayer.status, [JVMLauncher pipFeedSeq],
+                                       (int)self.keepaliveEngine.isRunning]];
     }
     [self appendLine:@"[shell] backgrounded -> flushed config, keepalive armed"];
 }
@@ -6304,8 +6303,10 @@ static CGRect mapRectFromArr(NSArray *a) {
             [self teardownPictureInPicture];
             [self appendLine:@"[shell] GPU direct present LIVE (world warmed up — layer revealed)"];
         } else {
-            // 117HD pip-present: the bridge takes over the PiP layer (the shell's CPU pump stops via the
-            // gpuPresent gates); first enqueued frame is the warmed-up world, matching the old reveal UX.
+            // 117HD pip-present: the bridge takes over the PiP layer. The shell's feed lets go of it first, so a CPU
+            // frame still in flight on the feed thread is dropped rather than enqueued alongside the bridge's; the
+            // gpuPresent gates stop the kicks. First enqueued frame is the warmed-up world, matching the old reveal UX.
+            [JVMLauncher pipFeedSetLayer:nil];
             [RouteCBridge setPipPresentEnabled:YES];
             [self appendLine:@"[shell] GPU pip-present LIVE (world warmed up — bridge feeds the PiP layer)"];
         }
@@ -6317,7 +6318,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     } else {
         // The PiP AVSampleBufferDisplayLayer (a sublayer of `screen` at index 0) is the visible presenter, fed
         // below by pipPumpFrame — so while it's actively rendering, blitting screen.image here is fully-occluded
-        // work, and latestFrame costs 2 full-canvas copies + a CGImage alloc per frame. Feed the UIImageView only
+        // work, and latestFrame costs a full-canvas copy + a CGImage per frame. Feed the UIImageView only
         // as a FALLBACK: when the PiP layer isn't presenting (not-yet / failed / torn down), plus a ~1 Hz refresh
         // so the occluded fallback stays current if the PiP layer ever drops out mid-session.
         BOOL pipPresenting = (self.pipLayer != nil
@@ -6333,10 +6334,10 @@ static CGRect mapRectFromArr(NSArray *a) {
         }
     }
 
-    // Feed the Picture-in-Picture layer every tick (the copy is skipped inside unless the engine composited
-    // a NEW frame, so this is engine-rate ~50 fps, not display-rate). The layer IS the visible presenter —
-    // it draws over the UIImageView's identical blit — because the system only auto-lifts video it considers
-    // visibly playing inline; an occluded feed layer never engaged on device.
+    // Feed the Picture-in-Picture layer every tick (the copy is skipped unless the engine composited a NEW
+    // frame, so this is engine-rate ~50 fps, not display-rate, and it runs on the feed thread, not here). The
+    // layer IS the visible presenter — it draws over the UIImageView's identical blit — because the system only
+    // auto-lifts video it considers visibly playing inline; an occluded feed layer never engaged on device.
     if (self.pipController && !self.gpuPresent) {
         [self pipPumpFrame];
     }
@@ -6603,7 +6604,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     }
     [self.screen.layer insertSublayer:layer atIndex:0];
     self.pipLayer = layer;
-    self.pipFrameSeq = -1;
+    [JVMLauncher pipFeedSetLayer:layer];
 
     AVPictureInPictureControllerContentSource *src = [[AVPictureInPictureControllerContentSource alloc]
         initWithSampleBufferDisplayLayer:layer playbackDelegate:self];
@@ -6634,6 +6635,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         } @catch (NSException *ex) { /* never registered — fine */ }
     }
     self.pipController = nil;
+    [JVMLauncher pipFeedSetLayer:nil]; // a frame in flight on the feed thread is dropped, not enqueued
     [self.pipLayer removeFromSuperlayer];
     self.pipLayer = nil;
     self.pipButton.hidden = YES;
@@ -6656,14 +6658,14 @@ static CGRect mapRectFromArr(NSArray *a) {
         [self.pipController stopPictureInPicture];
     } else {
         [self appendLine:[NSString stringWithFormat:@"[pip] manual start (possible=%d layerStatus=%ld fedSeq=%d)",
-                          (int)self.pipController.isPictureInPicturePossible,
-                          (long)self.pipLayer.status, self.pipFrameSeq]];
+                                                    (int)self.pipController.isPictureInPicturePossible,
+                                                    (long)self.pipLayer.status, [JVMLauncher pipFeedSeq]]];
         [self.pipController startPictureInPicture];
     }
 }
 
-// Pull the newest engine frame (no-op when nothing new composited) and enqueue it on the PiP layer,
-// stamped display-immediately so no timebase juggling is needed for a live feed.
+// Ask the PiP feed for the newest engine frame (no-op when nothing new composited); JVMLauncher enqueues it on the
+// layer from its own thread. Also the background tick: the idle gate and the drains below ride it.
 - (void)pipPumpFrame {
     // KEEPALIVE-1 idle gate (runs for EVERY renderer, before the frame-feed early-returns): sample the
     // session ~every 5 s; once the game has been continuously logged OUT for the threshold — an AFK-logout
@@ -6702,41 +6704,13 @@ static CGRect mapRectFromArr(NSArray *a) {
     }
     if (!self.pipLayer) return;
     if (self.gpuPresent) return;   // 117HD pip-present: the GL bridge feeds the layer from the render thread
-    if (self.pipLayer.status == AVQueuedSampleBufferRenderingStatusFailed) {
-        [self.pipLayer flush];   // e.g. after a background round-trip; recovers on the next enqueue
-    }
-    int32_t seq = self.pipFrameSeq;
-    CVPixelBufferRef pb = [JVMLauncher copyFramePixelBufferSinceSeq:&seq];
-    if (!pb) return;
-    self.pipFrameSeq = seq;
-
-    // Format description cached across frames; rebuilt when the canvas dimensions change (resizable render).
-    static CMVideoFormatDescriptionRef fmt = NULL;
-    if (fmt && !CMVideoFormatDescriptionMatchesImageBuffer(fmt, pb)) { CFRelease(fmt); fmt = NULL; }
-    if (!fmt && CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, pb, &fmt) != noErr) {
-        fmt = NULL;
-        CVPixelBufferRelease(pb);
-        return;
-    }
-    CMSampleTimingInfo timing = { .duration = kCMTimeInvalid,
-                                  .presentationTimeStamp = CMClockGetTime(CMClockGetHostTimeClock()),
-                                  .decodeTimeStamp = kCMTimeInvalid };
-    CMSampleBufferRef sb = NULL;
-    if (CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, pb, fmt, &timing, &sb) == noErr && sb) {
-        CFArrayRef atts = CMSampleBufferGetSampleAttachmentsArray(sb, true);
-        if (atts && CFArrayGetCount(atts) > 0) {
-            CFMutableDictionaryRef att = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(atts, 0);
-            CFDictionarySetValue(att, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
-        }
-        [self.pipLayer enqueueSampleBuffer:sb];
-        CFRelease(sb);
-    }
-    CVPixelBufferRelease(pb);
+    [JVMLauncher pipFeedKick];     // the fetch, copy and enqueue run on the feed thread (JVMLauncher)
 }
 
 // Background frame pump: the CADisplayLink stops firing once backgrounded, so a plain 15 Hz main-queue
-// timer feeds PiP instead (main queue = the thread the reverse-JNI bridge env is bound to; the run loop
-// keeps servicing it because the keepalive audio blocks suspension).
+// timer kicks the PiP feed instead (main queue = the thread the reverse-JNI bridge env is bound to, which the
+// idle gate and drains in pipPumpFrame still use; the run loop keeps servicing it because the keepalive audio
+// blocks suspension).
 - (void)startPipBgPump {
     if (self.pipBgPump || !self.pipController) return;
     dispatch_source_t t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
