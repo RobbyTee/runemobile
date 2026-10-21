@@ -7,9 +7,12 @@ Run: /usr/bin/python3 -m unittest discover -s tools/mcp -p 'test_*.py'
 import re
 import subprocess
 import sys
+import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness_server as hs  # noqa: E402
@@ -413,6 +416,100 @@ class Pacing(unittest.TestCase):
     def test_old_builds_without_framebins_still_parse(self):
         r = hs.parse_fps_measure(FPS_LIVE_OUT)
         self.assertEqual((r["pacingMs"], r["gc"], r["present"], r["session"]), ({}, {}, {}, {}))
+
+
+
+# A Release perf-probe.log as ViewController.m's filter writes it: the probe's own lines and nothing else.
+IOS_PERF_LOG = "\n".join(
+    [
+        "[memwatch t= 0.0s] avail=2210.4MB footprint=96.2MB heapMB=- thermal=nominal",
+        "[perfprobe] ARMED: fpsprobe + -Xlog:gc,safepoint + presentprobe",
+        "[memwatch t= 0.5s] avail=2190.0MB footprint=180.5MB heapMB=12/64 thermal=nominal",
+        "2026-10-20 17:00:01 [Client] INFO  n.r.c.callback.Hooks - [fpsprobe] fps=58 gs=LOGGED_IN",
+        "2026-10-20 17:00:01 [Client] INFO  n.r.c.h.FrameStats - [framebins] dt=44:58 jit=20:57 max=17.70 jitMax=1.10 gcN=0 gcMs=0 heapMB=190/256 gs=LOGGED_IN",
+        "[coldstart] firstFrame sinceStartMs=8123",
+        "[presentprobe] presents=59 gapMaxMs=19.00 swapAvgMs=0.80 swapMaxMs=2.50",
+        "[memwatch t=35.1s] avail=1650.2MB footprint=640.0MB heapMB=201/300 thermal=fair",
+        "[coldstart] gpuFirstPresent sinceStartMs=15011",
+        "[memwatch t=1205.3s] avail=1601.9MB footprint=655.5MB heapMB=190/300 thermal=nominal",
+    ]
+) + "\n"
+
+
+class MemAndColdStart(unittest.TestCase):
+    def test_ios_memwatch_and_coldstart(self):
+        p, rows = run_fps_measure(IOS_PERF_LOG)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        r = hs.parse_fps_measure(p.stdout)
+        # every sample counts, whatever the game state; the worst thermal state wins over the last one
+        self.assertEqual(
+            r["mem"],
+            {"samples": 4, "tFirst": 0.0, "tLast": 1205.3, "availMinMB": 1601.9, "footprintFirstMB": 96.2,
+             "footprintLastMB": 655.5, "footprintMaxMB": 655.5, "heapUsedMB": 190, "heapCommittedMB": 300,
+             "heapUsedMaxMB": 201, "thermalFirst": "nominal", "thermalLast": "nominal", "thermalWorst": "fair"},
+        )
+        self.assertEqual(r["coldstartMs"], {"firstFrame": 8123, "gpuFirstPresent": 15011})
+        self.assertEqual(r["present"]["presents"], 59)
+        self.assertIn("fixture,mem,0,0.0,2210.4,96.2,,,,nominal,", rows)
+        self.assertIn("fixture,mem,2,35.1,1650.2,640.0,201,300,LOGGED_IN,fair,", rows)
+        self.assertIn("fixture,coldstart,0,8123,,,,,,firstFrame,", rows)
+        self.assertEqual({len(row.split(",")) for row in rows}, {11})
+
+    def test_android_splash_stamp(self):
+        text = PACING_LOGCAT + (
+            "10-20 17:00:04.000 I/MainActivity( 4321): onboard: splash dismissed "
+            "(frame=false state=LOGIN_SCREEN timeout=true sinceStartMs=60412)\n"
+        )
+        p, _ = run_fps_measure(text)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(hs.parse_fps_measure(p.stdout)["coldstartMs"], {"splashTimeout": 60412})
+
+    def test_memwatch_alone_reports_but_a_stamp_alone_does_not(self):
+        p, _ = run_fps_measure("[memwatch t= 0.0s] avail=2210.4MB footprint=96.2MB\n")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(hs.parse_fps_measure(p.stdout)["mem"]["thermalWorst"], "n/a")  # a build before heap/thermal
+        p, _ = run_fps_measure("[coldstart] firstFrame sinceStartMs=8123\n")
+        self.assertEqual(p.returncode, 2)
+
+
+class IosPullLogs(unittest.TestCase):
+    """devicectl is mocked: each test says which Documents files the phone has."""
+
+    def pull(self, on_phone):
+        root = Path(tempfile.mkdtemp(prefix="harness-pull-"))
+        self.addCleanup(shutil.rmtree, root, True)
+
+        def copy(_udid, _bundle, source, dest):
+            if source not in on_phone:
+                return 1, "", f"ERROR: {source} not found"
+            Path(dest).write_text(on_phone[source])
+            return 0, "", ""
+
+        with mock.patch.object(hs, "REPO_ROOT", root), mock.patch.object(hs.shutil, "which", return_value="/usr/bin/xcrun"), \
+                mock.patch.object(hs, "_devicectl_copy", side_effect=copy):
+            res = hs.tool_ios_pull_logs({"device": "UDID"})
+        return res["isError"], json.loads(res["content"][0]["text"]), root
+
+    def test_release_build_has_only_the_perf_probe_log(self):
+        is_err, body, _ = self.pull({"Documents/perf-probe.log": IOS_PERF_LOG})
+        self.assertFalse(is_err, body)
+        self.assertEqual(sorted(body["files"]), ["perf-probe.log"])
+        perf = body["files"]["perf-probe.log"]["perf"]
+        self.assertEqual(perf["coldstartMs"], {"firstFrame": 8123, "gpuFirstPresent": 15011})
+        self.assertEqual(perf["mem"]["samples"], 4)
+
+    def test_debug_build_has_only_jvm_stdio(self):
+        is_err, body, _ = self.pull({"Documents/jvm-stdio.log": "[jvm] booting\n"})
+        self.assertFalse(is_err, body)
+        self.assertEqual(sorted(body["files"]), ["jvm-stdio.log"])
+        self.assertNotIn("perf", body["files"]["jvm-stdio.log"])  # no probe lines -> no summary
+
+    def test_neither_log_is_an_error_and_leaves_no_dir(self):
+        is_err, body, root = self.pull({})
+        self.assertTrue(is_err)
+        self.assertIn("perfprobe marker", body["hint"])
+        pulls = root / "ios/app/evidence/device-pull"
+        self.assertEqual(list(pulls.iterdir()) if pulls.exists() else [], [])
 
 
 if __name__ == "__main__":

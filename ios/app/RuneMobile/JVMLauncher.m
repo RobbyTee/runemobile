@@ -956,8 +956,15 @@ static NSString *jstringToNS(JNIEnv *env, jstring js) {
     static BOOL armed;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
+        // devicectl can copy a file into the container but not delete one, so `tools/perfprobe.sh ios off` overwrites
+        // the marker with "off": present and not "off" is armed (an empty `touch` file included).
         NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-        armed = [[NSFileManager defaultManager] fileExistsAtPath:[docs stringByAppendingPathComponent:@"perfprobe"]];
+        NSString *marker = [docs stringByAppendingPathComponent:@"perfprobe"];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:marker]) {
+            NSString *body = [NSString stringWithContentsOfFile:marker encoding:NSUTF8StringEncoding error:NULL];
+            NSString *word = [body stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            armed = ![word isEqualToString:@"off"];
+        }
     });
     return armed;
 }

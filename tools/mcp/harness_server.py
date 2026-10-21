@@ -59,6 +59,10 @@ PINNED_JAVA_MAJOR = 21
 TWO_LOG_VERDICTS = ("mobileui-verdict.sh",)
 
 IOS_BUNDLE_ID = "dev.audaro.runemobile"
+FPS_MEASURE = REPO_ROOT / "android/dev-tools/gpu/fps-measure.sh"
+# The perf probe's logs in the app's Documents: Debug keeps all VM output in jvm-stdio.log; Release writes none,
+# except perf-probe.log (the probe's own lines) when the perfprobe marker arms it (ViewController.m captureStdio).
+IOS_PERF_LOGS = ("jvm-stdio.log", "perf-probe.log")
 # Debug builds keep .runelite in Documents; Release moves it to Application Support (JVMLauncher.m rlHome).
 IOS_CLIENT_LOG_SOURCES = (
     "Documents/.runelite/logs/client.log",
@@ -300,16 +304,20 @@ def parse_fps_measure(text):
          LABEL  gc     gcN=3  gcMs=41  heapMaxMB=212  pauses=3  pauseMs=40.50  pauseMax=30.00  safepoints=4 ...
          LABEL  present windows=3   presents=170    perSec=56.7  gapMax=48.00  swapAvg=1.60  swapMax=9.00  (ms)
          LABEL  session n=2950  p50=17.78  ...  pauses=0  gcN=12  gcMs=95  up=60s  (ms, since first frame)
+         LABEL  mem    samples=14   tFirst=0.0  tLast=95.5  availMinMB=1601.9  ...  thermalWorst=fair   (iOS memwatch)
+         LABEL  coldstart  firstFrame=8123  gpuFirstPresent=15011  (ms since process start)
     a 'fps:   no LOGGED_IN ...' line instead when a family saw only other states (kept under 'missing'), the
     '>> thermal[start]: hottest=84.0C status=1' samples, and '!! ...' warnings. frame p95 is reported as 'p95'
     but is the script's p95~: the mean of the per-second p95s, not a percentile of the whole capture. pacing
     is the real one: percentiles of the summed [framebins] buckets over the capture's LOGGED_IN seconds."""
     out = {"fps": {}, "frameMs": {}, "gpuMs": {}, "thermalRows": {}, "governor": {}, "thermal": {},
-           "pacingMs": {}, "gc": {}, "present": {}, "session": {}, "warnings": [], "missing": []}
+           "pacingMs": {}, "gc": {}, "present": {}, "session": {}, "mem": {}, "coldstartMs": {},
+           "warnings": [], "missing": []}
     keys = {"fps": "fps", "frame": "frameMs", "gpu": "gpuMs", "thermal": "thermalRows", "govern": "governor",
-            "pacing": "pacingMs", "gc": "gc", "present": "present", "session": "session"}
+            "pacing": "pacingMs", "gc": "gc", "present": "present", "session": "session", "mem": "mem",
+            "coldstart": "coldstartMs"}
     for ln in text.splitlines():
-        m = re.match(r"^\S+\s+(fps|frame|gpu|thermal|govern|pacing|gc|present|session)\s+(.*)$", ln)
+        m = re.match(r"^\S+\s+(fps|frame|gpu|thermal|govern|pacing|gc|present|session|mem|coldstart)\s+(.*)$", ln)
         if m:
             kind, rest = m.groups()
             d = out[keys[kind]]
@@ -683,7 +691,7 @@ def tool_android_set_hd_config(a):
 
 
 def tool_android_fps(a):
-    script = REPO_ROOT / "android/dev-tools/gpu/fps-measure.sh"
+    script = FPS_MEASURE
     if not script.exists():
         return err_result(f"missing {script}")
     seconds = int(a.get("seconds", 20))
@@ -715,6 +723,7 @@ def tool_android_fps(a):
             "gc": parsed["gc"],
             "present": parsed["present"],
             "session": parsed["session"],
+            "coldstartMs": parsed["coldstartMs"],
             # a ThermalGovernor scale change splits the capture into two workloads
             "abClean": not governor_moved,
             "warnings": parsed["warnings"],
@@ -812,8 +821,19 @@ def _devicectl_copy(udid, bundle_id, source, dest):
     )
 
 
+def _perf_summary(log):
+    """fps-measure.sh over a pulled iOS log: the same summary android_fps returns, or None if it has no probe lines."""
+    if not FPS_MEASURE.exists():
+        return None
+    rc, o, er = run(["bash", str(FPS_MEASURE), "--from-file", str(log), "ios"], cwd=REPO_ROOT, timeout=60)
+    if rc != 0:
+        return None
+    parsed = parse_fps_measure(o + "\n" + er)
+    return {k: v for k, v in parsed.items() if v}
+
+
 def tool_ios_pull_logs(a):
-    """Copy jvm-stdio.log (and optionally RuneLite's client.log) out of the app container."""
+    """Copy the perf/diagnostic logs (and optionally RuneLite's client.log) out of the app container."""
     if not shutil.which("xcrun"):
         return err_result("xcrun not found (install the Xcode command-line tools).")
     udid, e = _ios_device(a)
@@ -829,11 +849,12 @@ def tool_ios_pull_logs(a):
         dest_dir, n = base / f"{stamp}-{n}", n + 1
     dest_dir.mkdir(parents=True)
 
-    wanted = [("jvm-stdio.log", ("Documents/jvm-stdio.log",), True)]
+    # Neither perf log is required on its own (a build writes one or the other), but one of them must arrive.
+    wanted = [(name, (f"Documents/{name}",)) for name in IOS_PERF_LOGS]
     if a.get("client_log"):
-        wanted.append(("client.log", IOS_CLIENT_LOG_SOURCES, False))
+        wanted.append(("client.log", IOS_CLIENT_LOG_SOURCES))
     files, attempts = {}, []
-    for name, sources, required in wanted:
+    for name, sources in wanted:
         dest = dest_dir / name
         for src in sources:
             rc, o, er = _devicectl_copy(udid, bundle_id, src, dest)
@@ -847,20 +868,23 @@ def tool_ios_pull_logs(a):
                     "lines": text.count("\n"),
                     "tail": text.strip().splitlines()[-15:],
                 }
+                if name in IOS_PERF_LOGS:
+                    perf = _perf_summary(dest)
+                    if perf:
+                        files[name]["perf"] = perf
                 break
-        if required and name not in files:
-            for f in files.values():
-                (REPO_ROOT / f["path"]).unlink(missing_ok=True)
-            shutil.rmtree(dest_dir, ignore_errors=True)
-            return err_result(
-                {
-                    "ok": False,
-                    "reason": f"could not copy {name} from {bundle_id} on {udid}",
-                    "attempts": attempts,
-                    "hint": "is the phone unlocked and paired, and was the app launched at least once? "
-                    "The SideStore release build has a different bundle id (pass bundle_id).",
-                }
-            )
+    if not any(name in files for name in IOS_PERF_LOGS):
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        return err_result(
+            {
+                "ok": False,
+                "reason": f"could not copy {' or '.join(IOS_PERF_LOGS)} from {bundle_id} on {udid}",
+                "attempts": attempts,
+                "hint": "is the phone unlocked and paired, and was the app launched at least once? A Release build "
+                "writes perf-probe.log only with the perfprobe marker (tools/perfprobe.sh ios on) and no "
+                "jvm-stdio.log at all. The SideStore release build has a different bundle id (pass bundle_id).",
+            }
+        )
     return ok_result(
         {
             "ok": True,
@@ -869,7 +893,8 @@ def tool_ios_pull_logs(a):
             "dir": str(dest_dir.relative_to(REPO_ROOT)),
             "files": files,
             "attempts": attempts,
-            "hint": "client.log can name the account; it stays in gitignored ios/app/evidence/, delete it when done.",
+            "hint": "files.<log>.perf is fps-measure.sh's summary of that log (pacingMs, gc, present, mem, coldstartMs). "
+            "client.log can name the account; it stays in gitignored ios/app/evidence/, delete it when done.",
         }
     )
 
@@ -982,8 +1007,9 @@ TOOLS = {
     ),
     "android_fps": (
         "Run the fps-measure harness for N seconds against a connected device; returns LOGGED_IN fps, "
-        "frame-time, capture pacing percentiles + jitter (pacingMs), GC, present cadence, the since-boot "
-        "session line, (with debug.routec.gputime=1) GPU-time stats, per-second thermal, and any "
+        "frame-time, capture pacing percentiles + jitter (pacingMs), GC, present cadence, the session line "
+        "(since the first frame), cold start (coldstartMs, when the capture spans a launch), (with "
+        "debug.routec.gputime=1) GPU-time stats, per-second thermal, and any "
         "ThermalGovernor scale change (abClean=false). Pair two runs around android_set_hd_config for an A/B.",
         {
             "type": "object",
@@ -1019,9 +1045,11 @@ TOOLS = {
         tool_run_verdict,
     ),
     "ios_pull_logs": (
-        "Copy Documents/jvm-stdio.log (the frame probe, memwatch and fault sink) off the paired iPhone "
-        "with devicectl into ios/app/evidence/device-pull/<stamp>/, plus RuneLite's client.log when "
-        "client_log=true. The phone must be unlocked; no JIT attach needed.",
+        "Copy the perf logs off the paired iPhone with devicectl into ios/app/evidence/device-pull/<stamp>/: "
+        "Documents/jvm-stdio.log (Debug: all VM output, memwatch, the fault sink) and/or Documents/perf-probe.log "
+        "(Release with the perfprobe marker: the probe's lines only), each with fps-measure.sh's summary under "
+        "perf (pacing, GC, present cadence, memwatch, cold start). client_log=true adds RuneLite's client.log. "
+        "The phone must be unlocked; no JIT attach needed.",
         {
             "type": "object",
             "properties": {

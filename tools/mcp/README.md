@@ -44,9 +44,9 @@ the tools to appear.
 | `list_evidence` | no | index `evidence/` + headless `out*/` PNG catalogs into JSON, newest-first. |
 | `android_screenshot` | yes | `adb exec-out screencap` → PNG. |
 | `android_set_hd_config` | yes | live 117HD preset flip (`SET_HD_CONFIG` broadcast) — the FIX-13 A/B knob. |
-| `android_fps` | yes | run `fps-measure.sh` for N seconds; LOGGED_IN fps, frame-time, capture pacing percentiles and jitter (`pacingMs`, from `[framebins]`), GC, present cadence, the since-boot `session` line, GPU-time stats, per-second thermal (`thermal_every`), and `abClean: false` when ThermalGovernor moved the 117HD scale mid-capture. |
+| `android_fps` | yes | run `fps-measure.sh` for N seconds; LOGGED_IN fps, frame-time, capture pacing percentiles and jitter (`pacingMs`, from `[framebins]`), GC, present cadence, the `session` line (since the first frame), cold start (`coldstartMs`), GPU-time stats, per-second thermal (`thermal_every`), and `abClean: false` when ThermalGovernor moved the 117HD scale mid-capture. |
 | `run_verdict` | no | run any in-repo `*-verdict.sh` against a log; returns GREEN/RED/INCONCLUSIVE/NO_VERDICT/LOG_MISSING/UNKNOWN from the script's final `VERDICT:` line, cross-checked against its exit code (`consistent`). `log2` is the second launch for `mobileui-verdict.sh`. |
-| `ios_pull_logs` | yes (iPhone, unlocked) | `devicectl` copy of `Documents/jvm-stdio.log` into `ios/app/evidence/device-pull/<stamp>/` (gitignored); `client_log=true` adds RuneLite's `client.log`, which can name the account. |
+| `ios_pull_logs` | yes (iPhone, unlocked) | `devicectl` copy of `Documents/jvm-stdio.log` (Debug) and/or `Documents/perf-probe.log` (Release with the `perfprobe` marker) into `ios/app/evidence/device-pull/<stamp>/` (gitignored), each with `fps-measure.sh`'s summary under `perf` (pacing, GC, present cadence, memwatch `mem`, `coldstartMs`); `client_log=true` adds RuneLite's `client.log`, which can name the account. |
 
 ### Typical loops
 

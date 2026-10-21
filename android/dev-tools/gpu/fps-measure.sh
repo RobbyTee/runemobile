@@ -2,7 +2,7 @@
 # FIX-13 / Phase-0 fps + frame-time measurement harness.
 #
 # Reads the once/sec engine probes Hooks.frame emits while the perf probe is armed
-# (-Drunelite.fpsprobe=true: a debug build, or the perfprobe marker on either port):
+# (-Drunelite.fpsprobe=true: an Android debug build, or the perfprobe marker on either port, tools/perfprobe.sh):
 #   [fpsprobe]   fps=N gs=STATE                              -- smoothed engine fps
 #   [frameprobe] n=N min=.. avg=.. p95=.. max=.. gs=STATE    -- per-frame interval (ms), windowed/sec
 #   [framebins]  dt=I:C,.. jit=I:C,.. max=.. jitMax=.. gcN=N gcMs=N heapMB=U/C gs=STATE
@@ -12,8 +12,12 @@
 # the JVM's own -Xlog:gc,safepoint lines (same switch), the native GPU-time probe (librlawt, only with
 # debug.routec.gputime=1):
 #   [gpuprobe]   frames=N avg=.. min=.. max=.. ms disjoint=N hitch=N
-# and ThermalGovernor's 117HD load changes (MainActivity tag):
+# ThermalGovernor's 117HD load changes (MainActivity tag):
 #   thermal status=S -> sceneResolutionScale PREV->NEW (baseline=B)
+# and, from a pulled iOS log, memwatch (jetsam headroom, footprint, Java heap, thermal; every 5 s after the first 30 s)
+# plus the cold-start stamps of either port:
+#   [memwatch t=T.Ts] avail=..MB footprint=..MB heapMB=U/C thermal=STATE
+#   [coldstart] MILESTONE sinceStartMs=N        (iOS)   onboard: splash dismissed (... sinceStartMs=N)   (Android)
 # captures a window, and prints fps mean/median/min/max AND frame-time
 # min/avg/p95/max (ms) + device thermal. Use it to A/B a 117HD preset in-world
 # on real Mali: hold a fixed spot + camera, capture a "baseline" window, change
@@ -58,6 +62,8 @@
 #       present   a=presents b=gapMaxMs c=swapAvgMs e=swapMaxMs     gs
 #       gcpause   a=pause ms (-Xlog GC Pause)                      gs
 #       safepoint a=total ns (-Xlog Safepoint)                     gs
+#       mem       a=t s b=avail MB c=footprint MB d=heap used MB e=heap committed MB   gs  f=thermal
+#       coldstart a=ms since process start                         f=milestone
 set -euo pipefail
 
 SERIAL=""
@@ -184,6 +190,19 @@ records="$(printf '%s\n' "$raw" | awk '
   }
   /\[gc *\] GC\([0-9]+\) Pause / && $NF ~ /^[0-9.]+ms$/ { v = $NF; sub(/ms$/, "", v); print "gcpause", v, tag(); next }
   /\[safepoint *\] Safepoint "/ && match($0, /Total: [0-9]+ ns/) { print "safepoint", substr($0, RSTART + 7, RLENGTH - 10), tag(); next }
+  match($0, /\[memwatch t= *[0-9.]+s\] avail=[0-9.]+MB footprint=[0-9.]+MB/) {
+    t = substr($0, RSTART + 12); sub(/s\].*/, "", t); gsub(/ /, "", t)
+    a = kv($0, "avail"); sub(/MB$/, "", a); f = kv($0, "footprint"); sub(/MB$/, "", f)
+    hu = kv($0, "heapMB"); hc = hu; sub(/\/.*/, "", hu); sub(/.*\//, "", hc)
+    print "mem", t, a, f, hu, hc, kv($0, "thermal"), tag(); next
+  }
+  match($0, /\[coldstart\] [A-Za-z]+ sinceStartMs=-?[0-9]+/) {
+    s = substr($0, RSTART, RLENGTH); split(s, w, " "); print "coldstart", w[2], kv(s, "sinceStartMs"); next
+  }
+  match($0, /onboard: splash dismissed \(frame=[a-z]+ .*sinceStartMs=-?[0-9]+\)/) {
+    s = substr($0, RSTART, RLENGTH); v = s; sub(/.*sinceStartMs=/, "", v); sub(/\).*/, "", v)
+    print "coldstart", (s ~ /frame=true/) ? "firstFrame" : "splashTimeout", v; next
+  }
   match($0, /thermal status=-?[0-9]+ -> sceneResolutionScale -?[0-9]+->[0-9]+ \(baseline=[0-9]+\)/) {
     s = substr($0, RSTART, RLENGTH); split(s, w, " "); split(w[5], sc, "->")
     b = s; sub(/.*baseline=/, "", b); sub(/\).*/, "", b)
@@ -205,9 +224,12 @@ bins="$(printf '%s\n' "$records" | awk '$1=="bins" { print $2, $3, $4, $5, $6, $
 hist="$(printf '%s\n' "$records" | awk '$1=="hist"' | tail -1)"
 present="$(printf '%s\n' "$records" | awk '$1=="present" { print $2, $3, $4, $5, $6 }')"
 xlog="$(printf '%s\n' "$records" | awk '$1=="gcpause" || $1=="safepoint"')"
+mem="$(printf '%s\n' "$records" | awk '$1=="mem" { print $2, $3, $4, $5, $6, $7, $8 }')"
+coldstart="$(printf '%s\n' "$records" | awk '$1=="coldstart" { print $2, $3 }')"
 
-if [[ -z "$samples" && -z "$frames" && -z "$gpu" && -z "$gpuempty" && -z "$bins" ]]; then
-  echo "no [fpsprobe]/[frameprobe]/[framebins]/[gpuprobe] samples found. Is the perf probe armed (-Drunelite.fpsprobe: debug build or perfprobe marker) and the scene rendering?" >&2
+# memwatch alone is enough to report (an iOS log from a launch without the perf probe); a cold-start stamp alone is not.
+if [[ -z "$samples" && -z "$frames" && -z "$gpu" && -z "$gpuempty" && -z "$bins" && -z "$mem" ]]; then
+  echo "no [fpsprobe]/[frameprobe]/[framebins]/[gpuprobe] samples found. Is the perf probe armed (-Drunelite.fpsprobe: Android debug build, or the perfprobe marker: tools/perfprobe.sh) and the scene rendering?" >&2
   exit 2
 fi
 
@@ -226,7 +248,9 @@ if [[ -n "$OUT" ]]; then
                        print L ",framebins," nb++ "," $6 "," $7 "," $8 "," $4 "," $5 "," $9 "," v(d) "," v(j) }
       $1=="present"  { print L ",present," np++ "," $2 "," $3 "," $4 ",," $5 "," v($6) ",," }
       $1=="gcpause"  { print L ",gcpause," nc++ "," $2 ",,,,," v($3) ",," }
-      $1=="safepoint" { print L ",safepoint," ns++ "," $2 ",,,,," v($3) ",," }'
+      $1=="safepoint" { print L ",safepoint," ns++ "," $2 ",,,,," v($3) ",," }
+      $1=="mem"      { print L ",mem," nm++ "," $2 "," $3 "," $4 "," v($5) "," v($6) "," v($8) "," v($7) "," }
+      $1=="coldstart" { print L ",coldstart," nk++ "," $3 ",,,,,," $2 "," }'
     printf '%s\n' "$thermal_rows" | awk -v L="$LABEL" '
       function v(x) { return x == "n/a" ? "" : x }
       NF==3 { print L ",thermal," n++ "," $1 "," v($2) "," v($3) ",,,,," }'
@@ -326,6 +350,39 @@ if [[ -n "$hist" ]]; then
   printf '%s\n' "$hist" | awk -v label="$LABEL" '{
     printf "%-10s  session n=%d  p50=%s  p95=%s  p99=%s  p999=%s  max=%s  jit50=%s  jit95=%s  jit99=%s  pauses=%s  gcN=%s  gcMs=%s  up=%s  (ms, since first frame)\n", \
       label, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14 }'
+fi
+
+# Memory over every memwatch sample in the log (all states: a leak or a jetsam squeeze is not a LOGGED_IN-only thing).
+if [[ -n "$mem" ]]; then
+  printf '%s\n' "$mem" | awk -v label="$LABEL" '
+    function rank(t) { return t=="nominal" ? 0 : t=="fair" ? 1 : t=="serious" ? 2 : t=="critical" ? 3 : -1 }
+    function na(t) { return t == "-" ? "n/a" : t }
+    BEGIN { wr = -1; worst = "-" }
+    NF >= 6 {
+      n++; if (n == 1) { t0 = $1; f0 = $3; th0 = $6 }
+      t1 = $1; f1 = $3; th1 = $6
+      if (n == 1 || $2 + 0 < amn) amn = $2 + 0
+      if ($3 + 0 > fmx) fmx = $3 + 0
+      if ($4 != "-") { hn++; hu = $4; hc = $5; if ($4 + 0 > hmx) hmx = $4 + 0 }
+      if (rank($6) > wr) { wr = rank($6); worst = $6 }
+    }
+    END {
+      if (n == 0) exit
+      heap = hn ? sprintf("heapUsedMB=%d  heapCommittedMB=%d  heapUsedMaxMB=%d", hu, hc, hmx) : "heapUsedMB=n/a"
+      printf "%-10s  mem    samples=%-3d  tFirst=%s  tLast=%s  availMinMB=%.1f  footprintFirstMB=%.1f  footprintLastMB=%.1f  footprintMaxMB=%.1f  %s  thermalFirst=%s  thermalLast=%s  thermalWorst=%s\n", \
+        label, n, t0, t1, amn, f0, f1, fmx, heap, na(th0), na(th1), na(worst)
+    }'
+fi
+
+# Cold start: each milestone's last stamp in the log (a log can span more than one launch only on Android).
+if [[ -n "$coldstart" ]]; then
+  printf '%s\n' "$coldstart" | awk -v label="$LABEL" '
+    NF == 2 { if (!($1 in ms)) order[++k] = $1; ms[$1] = $2 }
+    END {
+      if (k == 0) exit
+      for (i = 1; i <= k; i++) s = s sprintf("  %s=%s", order[i], ms[order[i]])
+      printf "%-10s  coldstart%s  (ms since process start)\n", label, s
+    }'
 fi
 
 # GPU-time stats over LOGGED_IN windows (frame-weighted avg, min-of-min, max-of-max, summed disjoint/hitch). Only
