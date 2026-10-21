@@ -423,6 +423,10 @@ class MainActivity : AppCompatActivity() {
         // map is magnified to fullscreen); >1 covers more ground per swipe. Tune to taste.
         private const val MAP_PAN_SPEED = 2.5f
 
+        // The VM's maximum heap; an xms marker above it would stop the VM starting.
+        private const val MAX_HEAP_MB = 512L
+        private const val MB_PER_GB = 1024L
+
         // Engine canvas dimensions (set once at the boot HeadlessResize below; stable in-world). The overlay
         // free-drag UI reads these to map a drag-pad fraction → canvas pixels for OverlayBridge.setOverlayPreferredLocation.
         @Volatile var canvasW = 0
@@ -1615,6 +1619,23 @@ class MainActivity : AppCompatActivity() {
      *  rlhdTestBoot, which SKIPS the login-first divert (PROD-SECURITY-01) -- a gate no stray file should move.
      *  The Game Loop / datacenter proof is unaffected: its gameLoop intent action satisfies that set on its own. */
     private fun devMarker(name: String): Boolean = BuildConfig.DEBUG && File(getExternalFilesDir(null), name).exists()
+
+    /** A dev marker's trimmed contents, or null when it is absent, empty or "off". Debug builds only, as [devMarker]. */
+    private fun devMarkerValue(name: String): String? =
+        if (!BuildConfig.DEBUG) {
+            null
+        } else {
+            runCatching { File(getExternalFilesDir(null), name).readText().trim() }
+                .getOrNull()
+                ?.takeIf { it.isNotEmpty() && it != "off" }
+        }
+
+    /** An xms marker ("256m", "1g") in megabytes, or 0 if it is malformed or above the maximum heap. */
+    private fun xmsMarkerMb(value: String): Long {
+        val m = Regex("([0-9]{1,5})([mMgG])").matchEntire(value) ?: return 0
+        val mb = m.groupValues[1].toLong() * if (m.groupValues[2].equals("g", ignoreCase = true)) MB_PER_GB else 1L
+        return if (mb in 1..MAX_HEAP_MB) mb else 0
+    }
 
     private fun setRendererPref(mode: String) {
         // A user pick is EXPLICIT: clear the auto-decision flag + any prior auto-fail latch + a stale crash-cookie so
@@ -4782,7 +4803,7 @@ class MainActivity : AppCompatActivity() {
                 "--add-opens=java.desktop/java.awt=ALL-UNNAMED",
                 "--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
                 "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
-                "-Xmx512m",
+                "-Xmx${MAX_HEAP_MB}m",
                 // Fail fast at heap exhaustion instead of limping (seams no-op, GC thrash): a clean exit
                 // routes into the existing crash-fallback/relaunch UX and leaves a diagnosable hs_err trail.
                 "-XX:+ExitOnOutOfMemoryError",
@@ -4961,6 +4982,25 @@ class MainActivity : AppCompatActivity() {
             TAG,
             "perfprobe: ${if (perfProbe) "ARMED" else "off"} (debug=${BuildConfig.DEBUG}): fpsprobe + -Xlog:gc,safepoint + presentprobe",
         )
+        // Experiments, off by default and debug builds only: dev markers written with
+        // `tools/perfprobe.sh android marker NAME VALUE` and read here at JVM start, like the perf probe they are
+        // measured with.
+        //   cpufps N   the CPU renderer asks the engine for N fps instead of its own ~50 (headless.CpuFpsStarter). CPU
+        //              mode only: the GPU renderers set their own.
+        //   xms SIZE   an initial heap (e.g. 256m) instead of the ergonomic one, to A/B against the heap growth the
+        //              perf probe's GC lines show during boot.
+        devMarkerValue("cpufps")?.let { v ->
+            val fps = v.toIntOrNull()?.takeIf { it > 0 && chosenKey == null }
+            if (fps != null) opts.add("-Drunelite.cpu.unlockfps=$fps")
+            val outcome = fps?.let { "the CPU renderer asks for $it fps" } ?: "ignored (needs a number, and the CPU renderer)"
+            Log.i(TAG, "cpufps marker \"$v\": $outcome")
+        }
+        devMarkerValue("xms")?.let { v ->
+            val mb = xmsMarkerMb(v)
+            if (mb > 0) opts.add("-Xms${mb}m")
+            val outcome = if (mb > 0) "initial heap ${mb}m" else "ignored (needs a size up to ${MAX_HEAP_MB}m, e.g. 256m)"
+            Log.i(TAG, "xms marker \"$v\": $outcome")
+        }
 
         // A8: only pipe the embedded VM's stdout/err to logcat in DEBUG builds — a release build must not leak
         // the engine's output (account/network chatter). Must be set before startJvm (it redirects fd 1/2 there).

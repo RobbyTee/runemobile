@@ -5,6 +5,12 @@
 # Usage:
 #   tools/perfprobe.sh android on|off|status [-s SERIAL]
 #   tools/perfprobe.sh ios     on|off|status [-d UDID] [-b BUNDLE_ID]
+#   tools/perfprobe.sh android|ios marker NAME VALUE [...]   write an A/B marker; VALUE "off" turns it back off
+#
+# The A/B markers sit beside the probe and are read at the same point (Android: debug builds only):
+#   cpufps N     the CPU renderer asks the engine for N fps instead of its own ~50 (headless.CpuFpsStarter)
+#   xms SIZE     an initial heap, e.g. 384m, up to -Xmx (iOS 1024m, Android 512m)
+#   pipfeed main iOS only: copy the PiP frame on the main thread, as before the feed thread ("thread" = default)
 #
 # Armed, the VM runs with -Drunelite.fpsprobe (headless.FrameStats: [fpsprobe] [frameprobe] [framebins] [framehist])
 # and -Xlog:gc,safepoint to stdout, and the present path logs [presentprobe] (the GPU direct present on both ports,
@@ -19,11 +25,18 @@
 #            disarmed. The phone must be unlocked; no JIT attach needed.
 set -euo pipefail
 
-usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 [[ $# -ge 2 ]] || usage 1
 PORT="$1" ACTION="$2"
 shift 2
+NAME="" VALUE=""
+if [[ "$ACTION" == marker ]]; then
+  [[ $# -ge 2 ]] || usage 1
+  NAME="$1" VALUE="$2"
+  shift 2
+  [[ "$NAME" =~ ^[a-z][a-z0-9]*$ && "$VALUE" =~ ^[A-Za-z0-9]+$ ]] || { echo "marker NAME and VALUE must be alphanumeric" >&2; exit 1; }
+fi
 SERIAL="" UDID="" BUNDLE="dev.audaro.runemobile"
 while getopts "s:d:b:h" opt; do
   case "$opt" in
@@ -34,7 +47,7 @@ while getopts "s:d:b:h" opt; do
     *) usage 1 ;;
   esac
 done
-case "$ACTION" in on|off|status) ;; *) usage 1 ;; esac
+case "$ACTION" in on|off|status|marker) ;; *) usage 1 ;; esac
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/perfprobe.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
@@ -49,6 +62,11 @@ android() {
   case "$ACTION" in
     on) adb ${SERIAL:+-s "$SERIAL"} shell "mkdir -p '$dir' && touch '$marker'" ;;
     off) adb ${SERIAL:+-s "$SERIAL"} shell "rm -f '$marker'" ;;
+    marker)
+      adb ${SERIAL:+-s "$SERIAL"} shell "mkdir -p '$dir' && echo '$VALUE' > '$dir/$NAME'"
+      echo "android $BUNDLE: $NAME = $(adb ${SERIAL:+-s "$SERIAL"} shell "cat '$dir/$NAME'" | tr -d '\r')"
+      echo "  takes effect at the next launch (debug builds only): adb shell am force-stop $BUNDLE, then start it"
+      return ;;
   esac
   local state="off"
   if adb ${SERIAL:+-s "$SERIAL"} shell "test -f '$marker'" 2>/dev/null; then state="ARMED (marker)"; fi
@@ -88,6 +106,16 @@ ios() {
   case "$ACTION" in
     on) : >"$TMP/perfprobe" ;;
     off) echo off >"$TMP/perfprobe" ;;
+    marker)
+      echo "$VALUE" >"$TMP/marker"
+      if ! ios_copy to "$TMP/marker" "Documents/$NAME"; then
+        cat "$TMP/devicectl.log" >&2
+        echo "could not write Documents/$NAME in $BUNDLE on $UDID (is the phone unlocked, the app installed?)" >&2
+        exit 1
+      fi
+      ios_copy from "Documents/$NAME" "$TMP/readback" && echo "ios $BUNDLE on $UDID: $NAME = $(tr -d '[:space:]' <"$TMP/readback")"
+      echo "  takes effect at the next launch (swipe the app away, start it, attach StikDebug)"
+      return ;;
   esac
   if [[ "$ACTION" != status ]] && ! ios_copy to "$TMP/perfprobe" Documents/perfprobe; then
     cat "$TMP/devicectl.log" >&2

@@ -226,6 +226,13 @@ public final class HeadlessSeams
 			guard("seam.RLHDStarter.tick.post", () -> RLHDStarter.tick(client));
 		}
 
+		// Experiment, off by default: ask the engine for more than its own ~50 fps on the CPU renderer. Inert unless
+		// -Drunelite.cpu.unlockfps=N, which the ports pass only in CPU mode.
+		if (CpuFpsStarter.isEnabled())
+		{
+			guard("seam.CpuFpsStarter.tick", () -> CpuFpsStarter.tick(client));
+		}
+
 		// iOS "renderers as plugins": surface the GPU + 117HD plugins in the native panel (loaded, not started)
 		// so they're selectable + configurable regardless of the active renderer. Inert unless
 		// -Drunelite.rendererpanel=true; the active renderer is still started by the starters above.

@@ -971,6 +971,35 @@ static NSString *jstringToNS(JNIEnv *env, jstring js) {
     return armed;
 }
 
+// The trimmed contents of a Documents marker file, or nil when it is absent, empty or says "off" (devicectl can copy a
+// file into the container but not delete one, so "off" is how a marker is turned back off).
+static NSString *docsMarker(NSString *name) {
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSString *body = [NSString stringWithContentsOfFile:[docs stringByAppendingPathComponent:name]
+                                               encoding:NSUTF8StringEncoding
+                                                  error:NULL];
+    NSString *word = [body stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return word.length && ![word isEqualToString:@"off"] ? word : nil;
+}
+
+static const long kMaxHeapMb = 1024;
+
+// An xms marker ("384m", "1g") as megabytes, or 0 if it is malformed or above -Xmx, which would stop the VM starting.
+static long xmsMarkerMb(NSString *v) {
+    if (v.length < 2 || v.length > 6)
+        return 0;
+    NSString *digits = [v substringToIndex:v.length - 1];
+    if ([digits rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location != NSNotFound)
+        return 0;
+    unichar unit = [v.lowercaseString characterAtIndex:v.length - 1];
+    long mb = digits.integerValue;
+    if (unit == 'g')
+        mb *= 1024;
+    else if (unit != 'm')
+        return 0;
+    return mb > 0 && mb <= kMaxHeapMb ? mb : 0;
+}
+
 + (long)msSinceProcessStart {
     struct kinfo_proc kp;
     size_t len = sizeof kp;
@@ -1457,7 +1486,7 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
         @"--add-opens=java.desktop/sun.java2d=ALL-UNNAMED",
         @"--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
         // §6.2: heap for the full client + a writable RuneLite home (gamepack cache) + capture dir.
-        @"-Xmx1024m",                                          // 256m is ample for the CPU login screen, but 117HD's
+        [NSString stringWithFormat:@"-Xmx%ldm", kMaxHeapMb],   // 256m is ample for the CPU login screen, but 117HD's
                                                                // ZoneRenderer (scene/model staging on-heap + per-frame
                                                                // BufferedImage capture) OOMs in 256m on the first real draw
                                                                // (device round 3). 1024m fits well under the jetsam ceiling on
@@ -1612,6 +1641,27 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
         [opts addObject:@"-Xlog:gc,safepoint:stdout:time,uptime,tags"];
         log(@"[jvm] perf probe ARMED (fpsprobe + -Xlog:gc,safepoint + presentprobe)");
         fputs("[perfprobe] ARMED: fpsprobe + -Xlog:gc,safepoint + presentprobe\n", stderr);
+    }
+
+    // Experiments, off by default: Documents marker files, written with `tools/perfprobe.sh ios marker NAME VALUE`
+    // and read here at JVM start, like the perf probe they are measured with.
+    //   cpufps N   the CPU renderer asks the engine for N fps instead of its own ~50 (headless.CpuFpsStarter). CPU
+    //              mode only: the GPU renderers set their own.
+    //   xms SIZE   an initial heap (e.g. 384m) instead of the ergonomic one, to A/B against the heap growth the perf
+    //              probe's GC lines show during boot.
+    NSString *cpuFps = docsMarker(@"cpufps");
+    if (cpuFps.intValue > 0 && !self.routecGpuMode && !self.routecZoneMode) {
+        [opts addObject:[NSString stringWithFormat:@"-Drunelite.cpu.unlockfps=%d", cpuFps.intValue]];
+        log([NSString stringWithFormat:@"[jvm] cpufps marker: the CPU renderer asks for %d fps", cpuFps.intValue]);
+    } else if (cpuFps) {
+        log([NSString stringWithFormat:@"[jvm] cpufps marker \"%@\" ignored (needs a number, and the CPU renderer)", cpuFps]);
+    }
+    NSString *xms = docsMarker(@"xms");
+    if (xms && xmsMarkerMb(xms) > 0) {
+        [opts addObject:[NSString stringWithFormat:@"-Xms%ldm", xmsMarkerMb(xms)]];
+        log([NSString stringWithFormat:@"[jvm] xms marker: initial heap %ldm", xmsMarkerMb(xms)]);
+    } else if (xms) {
+        log([NSString stringWithFormat:@"[jvm] xms marker \"%@\" ignored (needs a size up to %ldm, e.g. 384m)", xms, kMaxHeapMb]);
     }
 
     // Phase 4 sub-goal A — interactive login, purely in-process (no native touch bridge). Map the JX_*
