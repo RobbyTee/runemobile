@@ -571,6 +571,42 @@ static void rcProbePhase4Caps() {
 // are shimmed; the BGRA UI-texture upload is swizzled to RGBA (silently corrupts colour on GLES otherwise).
 // =============================================================================================================
 #define GLF static void JNICALL
+
+// LWJGL takes an NIO buffer argument as remaining() elements from position(), not capacity() from the base address.
+// Zone.drawOff/drawEnd are reused 512-entry IntBuffers flip()ed to the k ranges of one draw, so sizing by capacity
+// replayed 512-k stale ranges per zone against the current VAO every frame: translucent screen-wide wedges, wall
+// pieces dropping out for a frame, and 512 driver draws per glMultiDrawArrays. iOS fixed the same bridge in daabcddfc1.
+static jint rc_buf_int(JNIEnv *e, jobject buf, jmethodID *mid, const char *name) {
+    if (!*mid) {
+        jclass c = e->FindClass("java/nio/Buffer");
+        *mid = e->GetMethodID(c, name, "()I");
+        e->DeleteLocalRef(c);
+    }
+    return e->CallIntMethod(buf, *mid);
+}
+static jint rc_buf_position(JNIEnv *e, jobject buf) {
+    static jmethodID mid = nullptr;
+    return rc_buf_int(e, buf, &mid, "position");
+}
+static jint rc_buf_remaining(JNIEnv *e, jobject buf) {
+    static jmethodID mid = nullptr;
+    return rc_buf_int(e, buf, &mid, "remaining");
+}
+// glBufferData / glBufferSubData from a typed buffer: pointer = base + position*elem, size = remaining*elem.
+static void rc_buffer_data(JNIEnv *e, jint target, jobject buf, int elem, jint usage) {
+    const char *p = (const char *)e->GetDirectBufferAddress(buf);
+    if (!p)
+        return;
+    glBufferData((GLenum)target, (GLsizeiptr)rc_buf_remaining(e, buf) * elem, p + (size_t)rc_buf_position(e, buf) * elem,
+                 (GLenum)usage);
+}
+static void rc_buffer_sub_data(JNIEnv *e, jint target, jlong off, jobject buf, int elem) {
+    const char *p = (const char *)e->GetDirectBufferAddress(buf);
+    const jint rem = p ? rc_buf_remaining(e, buf) : 0;
+    if (rem > 0)
+        glBufferSubData((GLenum)target, (GLintptr)off, (GLsizeiptr)rem * elem, p + (size_t)rc_buf_position(e, buf) * elem);
+}
+
 GLF rc_glActiveTexture(JNIEnv*, jclass, jint a0){ glActiveTexture(a0); }
 GLF rc_glAttachShader(JNIEnv*, jclass, jint a0, jint a1){ glAttachShader(a0,a1); }
 GLF rc_glBindBuffer(JNIEnv*, jclass, jint a0, jint a1){ glBindBuffer(a0,a1); }
@@ -583,8 +619,12 @@ GLF rc_glBlendFunc(JNIEnv*, jclass, jint a0, jint a1){ glBlendFunc(a0,a1); }
 GLF rc_glBlendFuncSeparate(JNIEnv*, jclass, jint a0, jint a1, jint a2, jint a3){ glBlendFuncSeparate(a0,a1,a2,a3); }
 GLF rc_glBlitFramebuffer(JNIEnv*, jclass, jint a0, jint a1, jint a2, jint a3, jint a4, jint a5, jint a6, jint a7, jint a8, jint a9){ glBlitFramebuffer(a0,a1,a2,a3,a4,a5,a6,a7,a8,a9); }
 GLF rc_glBufferData_J(JNIEnv*, jclass, jint a0, jlong a1, jint a2){ glBufferData((GLenum)a0,(GLsizeiptr)a1,nullptr,(GLenum)a2); }
-GLF rc_glBufferData_F(JNIEnv* e, jclass, jint a0, jobject a1, jint a2){ void*d=e->GetDirectBufferAddress(a1); jlong cap=e->GetDirectBufferCapacity(a1); glBufferData((GLenum)a0,(GLsizeiptr)(cap*4),d,(GLenum)a2); }
-GLF rc_glBufferData_I(JNIEnv* e, jclass, jint a0, jobject a1, jint a2){ void*d=e->GetDirectBufferAddress(a1); jlong cap=e->GetDirectBufferCapacity(a1); glBufferData((GLenum)a0,(GLsizeiptr)(cap*4),d,(GLenum)a2); }
+GLF rc_glBufferData_F(JNIEnv *e, jclass, jint a0, jobject a1, jint a2) {
+    rc_buffer_data(e, a0, a1, 4, a2);
+}
+GLF rc_glBufferData_I(JNIEnv *e, jclass, jint a0, jobject a1, jint a2) {
+    rc_buffer_data(e, a0, a1, 4, a2);
+}
 static jint JNICALL rc_glCheckFramebufferStatus(JNIEnv*, jclass, jint a0){ return (jint)glCheckFramebufferStatus(a0); }
 GLF rc_glClear(JNIEnv*, jclass, jint a0){ glClear(a0); }
 GLF rc_glClearColor(JNIEnv*, jclass, jfloat a0, jfloat a1, jfloat a2, jfloat a3){ glClearColor(a0,a1,a2,a3); }
@@ -672,12 +712,20 @@ static jobject JNICALL rc_glMapBufferRange(JNIEnv* e, jclass, jint a0, jlong a1,
     void* p = glMapBufferRange((GLenum)a0,(GLintptr)a1,(GLsizeiptr)a2,(GLbitfield)a3);
     return p ? rc_native_order(e, e->NewDirectByteBuffer(p, a2)) : nullptr;
 }
-GLF rc_glMultiDrawArrays(JNIEnv* e, jclass, jint a0, jobject a1, jobject a2){
-    const GLint* first=(const GLint*)e->GetDirectBufferAddress(a1);
-    const GLsizei* count=(const GLsizei*)e->GetDirectBufferAddress(a2);
-    GLsizei n=(GLsizei)e->GetDirectBufferCapacity(a1);
-    if (sDrawCountOn && first && count) { sDcMultiCalls++; sDcMultiRanges += n; }   // 1 emit = n driver draw calls here
-    for (GLsizei i=0;i<n && first && count;i++) glDrawArrays((GLenum)a0, first[i], count[i]);   // GLES has no glMultiDrawArrays
+GLF rc_glMultiDrawArrays(JNIEnv *e, jclass, jint a0, jobject a1, jobject a2) {
+    const GLint *first = (const GLint *)e->GetDirectBufferAddress(a1);
+    const GLsizei *count = (const GLsizei *)e->GetDirectBufferAddress(a2);
+    if (!first || !count)
+        return;
+    first += rc_buf_position(e, a1);
+    count += rc_buf_position(e, a2);
+    const GLsizei n = (GLsizei)rc_buf_remaining(e, a1); // the flip()ed ranges of this draw, never the stale tail
+    if (sDrawCountOn) {
+        sDcMultiCalls++;
+        sDcMultiRanges += n; // 1 emit = n driver draw calls here
+    }
+    for (GLsizei i = 0; i < n; i++)
+        glDrawArrays((GLenum)a0, first[i], count[i]); // GLES has no glMultiDrawArrays
 }
 GLF rc_glReadBuffer(JNIEnv*, jclass, jint a0){ glReadBuffer(a0); }
 GLF rc_glReadPixels(JNIEnv* e, jclass, jint a0, jint a1, jint a2, jint a3, jint a4, jint a5, jobject a6){ glReadPixels(a0,a1,a2,a3,(GLenum)a4,(GLenum)a5,e->GetDirectBufferAddress(a6)); }
@@ -849,9 +897,15 @@ GLF rc_glDrawElementsIndirect(JNIEnv*, jclass, jint a0, jint a1, jlong a2){ if (
 GLF rc_glMultiDrawArraysIndirect(JNIEnv*, jclass, jint, jlong, jint, jint){ /* EXT_multi_draw_indirect; gated off -> no-op */ }
 GLF rc_glBufferStorage_J(JNIEnv*, jclass, jint, jlong, jint){ /* EXT_buffer_storage; GL_ARB_buffer_storage reported false -> never called */ }
 GLF rc_glBufferStorage_BB(JNIEnv*, jclass, jint, jobject, jint){ /* ditto */ }
-GLF rc_glBufferSubData_BB(JNIEnv* e, jclass, jint a0, jlong a1, jobject a2){ glBufferSubData((GLenum)a0,(GLintptr)a1,(GLsizeiptr)e->GetDirectBufferCapacity(a2),e->GetDirectBufferAddress(a2)); }
-GLF rc_glBufferSubData_IB(JNIEnv* e, jclass, jint a0, jlong a1, jobject a2){ glBufferSubData((GLenum)a0,(GLintptr)a1,(GLsizeiptr)(e->GetDirectBufferCapacity(a2)*4),e->GetDirectBufferAddress(a2)); }
-GLF rc_glBufferSubData_FB(JNIEnv* e, jclass, jint a0, jlong a1, jobject a2){ glBufferSubData((GLenum)a0,(GLintptr)a1,(GLsizeiptr)(e->GetDirectBufferCapacity(a2)*4),e->GetDirectBufferAddress(a2)); }
+GLF rc_glBufferSubData_BB(JNIEnv *e, jclass, jint a0, jlong a1, jobject a2) {
+    rc_buffer_sub_data(e, a0, a1, a2, 1);
+}
+GLF rc_glBufferSubData_IB(JNIEnv *e, jclass, jint a0, jlong a1, jobject a2) {
+    rc_buffer_sub_data(e, a0, a1, a2, 4);
+}
+GLF rc_glBufferSubData_FB(JNIEnv *e, jclass, jint a0, jlong a1, jobject a2) {
+    rc_buffer_sub_data(e, a0, a1, a2, 4);
+}
 // glTexSubImage3D from a direct Buffer (RLHD's TextureManager uploads the texture-array layers from an IntBuffer
 // as GL_BGRA / GL_UNSIGNED_INT_8_8_8_8_REV — GLES has neither, so rewrite to RGBA/UNSIGNED_BYTE + set the per-array
 // swizzle R<->B, the same recipe the base-gpu UI texture uses).
