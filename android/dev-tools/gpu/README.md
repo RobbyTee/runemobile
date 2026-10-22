@@ -76,3 +76,19 @@ MEGAVERDICT = ANDROID_RLHD_PROBE_GREEN
 class-load (no NoClassDefFound) and the loader data ships + parses on-device. The full `HdPlugin.startUp` (typed
 loader data-load + GL/VAO/UBO/shader init against a live EGL context) is AG3 — it exercises the librlawt GL-delta
 forwarders, which this class-load probe does not.
+
+## The `fps-phase*.csv` captures (June 2026)
+
+The Pixel benchmark captures committed here record each sample's game state in the `gs` column. Most are clean:
+their `fps` and `frame` rows are all `LOGGED_IN` (the `gpu` rows carry no state). Three are not, and their
+figures describe the login screen, not the game:
+
+| file | `fps` rows in game | what it actually measured |
+| --- | --- | --- |
+| `fps-phase2-shippreset-soak-uncapped.csv` | 0 of 598 | the login screen only; **not a soak result** |
+| `fps-phase2-shippreset-soak2.csv` | 285 of 596 | in game for the first 285 samples, then logged out to the login screen for the rest; only rows up to `idx` 284 are in-world |
+| `fps-phase2-recompile-steady-noflip.csv` | 0 of 15 | the login screen only |
+
+Don't average any of these three over all rows. `fps-measure.sh`'s printed summary counts only `LOGGED_IN` samples
+and says how many it excluded, so for these runs it reported nothing or only the in-game part; the `-o` CSV keeps
+every sample on purpose, so anyone reading the file directly has to filter on `gs` themselves.
