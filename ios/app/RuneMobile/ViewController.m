@@ -8,6 +8,7 @@
 #import "JagexLoginViewController.h"
 #import "GLRecon.h"
 #import "RMKeyboardDismiss.h"
+#import "RMResidency.h"
 #import "RouteCBridge.h"            // GPU Route C bridge (backend selected by RC_BACKEND_ANGLE in the build)
 #import <QuartzCore/QuartzCore.h>
 #if !defined(RC_BACKEND_ANGLE)
@@ -598,6 +599,11 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
                                                              // for the auto-start gate)
 @property (nonatomic, strong) AVAudioEngine *keepaliveEngine;   // renders silence; holds the audio session
 @property (nonatomic, strong) AVAudioSourceNode *keepaliveSource;
+// Set when the KEEPALIVE-1 idle gate stops the keepalive ON PURPOSE. Every recovery path below
+// checks it first: re-arming here would fight a deliberate battery decision and keep the JVM
+// running at full rate for a logged-out game nobody is looking at.
+@property (nonatomic, assign) BOOL keepaliveIdleReleased;
+@property (nonatomic, strong) NSTimer *keepaliveWatchdog;
 @property (nonatomic, assign) UIBackgroundTaskIdentifier bgKeepTask; // per-background grace assertion
 // KEEPALIVE-1: the background idle gate. The keepalive otherwise runs the JVM at full rate forever — including
 // after an AFK-logout renders the login screen to nobody. Track how long the game has been continuously
@@ -965,6 +971,10 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.minimapUserDY = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"minimapUserDY"];
     [self buildUI];
     [self openLogFile];
+    // First in the log because it describes the run BEFORE this one. Nil on a first run.
+    NSString *residency = [RMResidency noteLaunchAndVerdict];
+    if (residency)
+        [self appendLine:residency];
     self.bgKeepTask = UIBackgroundTaskInvalid;
     // Flush RuneLite config to disk when the app backgrounds (iOS skips RuneLite's own shutdown flush).
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onEnterBackground)
@@ -973,6 +983,11 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     // audio in case the session was interrupted while away.
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onWillEnterForeground)
                                                  name:UIApplicationWillEnterForegroundNotification object:nil];
+    // The one ending iOS tells us about, for the residency record.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(onWillTerminate)
+                                                 name:UIApplicationWillTerminateNotification
+                                               object:nil];
     // PARITY-P0-3: the modally-presented World Switcher posts this when a hop starts so we can arm the hop scrim
     // over the game view (it has no direct reference back to this root VC). No removeObserver — like the
     // background/foreground observers above, this VC is the app's single long-lived root.
@@ -3088,6 +3103,7 @@ static const int kCamPitchPxPerSec = 200;
 // audio engine (audio background mode) blocks suspension so the JVM + game socket keep running, and a
 // 15 Hz pump keeps feeding live frames to the (auto-started) Picture-in-Picture window.
 - (void)onEnterBackground {
+    [RMResidency noteBackground];
     [JVMLauncher mobileFlushConfig];
     // Reaching the background IS survival, so stop treating the next launch as a crash.
     //
@@ -3127,6 +3143,11 @@ static const int kCamPitchPxPerSec = 200;
         [self startKeepaliveEngine];   // defensive re-arm (a route change can stop a running engine)
         self.bgPumpTicks = 0;          // KEEPALIVE-1: fresh idle-gate window per background trip
         self.bgLoggedOutSince = 0;
+        self.keepaliveIdleReleased = NO; // a fresh window means the release is no longer in force
+        // Cleared in the record too, or a release from an EARLIER window keeps excusing deaths it
+        // had nothing to do with: the flag would still be set hours and several foreground trips
+        // later, and an unrelated background kill would be reported as the gate working.
+        [RMResidency noteKeepaliveWindowBegan];
         [self startPipBgPump];
     }
     if (self.pipController) {
@@ -3141,7 +3162,21 @@ static const int kCamPitchPxPerSec = 200;
     [self appendLine:@"[shell] backgrounded -> flushed config, keepalive armed"];
 }
 
+- (void)onWillTerminate {
+    // The one ending we get told about. Everything else is a kill with no notice, which is what
+    // the residency record exists to distinguish.
+    [RMResidency noteCleanExit];
+}
+
+- (void)didReceiveMemoryWarning {
+    [super didReceiveMemoryWarning];
+    // Counted, not acted on: a warning before a silent death is the strongest signal available
+    // that the death was jetsam rather than a crash or a lost audio session.
+    [RMResidency noteMemoryWarning];
+}
+
 - (void)onWillEnterForeground {
+    [RMResidency noteForeground];
     self.appBackgrounded = NO; // back in the foreground: an unproven GPU boot may arm its cookie again
     [self stopPipBgPump];
     if (self.bgKeepTask != UIBackgroundTaskInvalid) {
@@ -3863,8 +3898,11 @@ static void *perfProbePump(void *unused) {
 - (void)startJitPolling {
     self.jitTimer = [NSTimer scheduledTimerWithTimeInterval:0.2 repeats:YES block:^(NSTimer *t) {
         BOOL attached = [JVMLauncher isDebuggerAttached];
-        if (attached && self.jitAttachedMs == 0)
+        if (attached && self.jitAttachedMs == 0) {
             self.jitAttachedMs = [JVMLauncher msSinceProcessStart];
+            // From here on, losing this process costs the user the whole attach again.
+            [RMResidency noteJitAttached];
+        }
         self.statusLabel.text = attached ? @"JIT: CS_DEBUGGED ✓ (ready)" : @"JIT: waiting…";
         self.statusLabel.textColor = attached ? [UIColor systemGreenColor] : [UIColor systemYellowColor];
         // #1: drive the Tap-to-Play cover. Enable the big play button on attach; reflect the gate in its status.
@@ -6119,6 +6157,9 @@ static int chatRowCanvasH(void) {
             [self.displayLink invalidate];
             self.displayLink = nil;
             [self teardownPictureInPicture];
+            // The watchdog would otherwise restart the keepalive every 15 s for a session that is gone.
+            [self.keepaliveWatchdog invalidate];
+            self.keepaliveWatchdog = nil;
             [self.keepaliveEngine stop];
             [JVMLauncher bridgeInvalidate];
             [self endBgTask];
@@ -6746,8 +6787,111 @@ static CGRect mapRectFromArr(NSArray *a) {
     // next background would suspend the JVM mid-session.
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAudioInterruption:)
                                                  name:AVAudioSessionInterruptionNotification object:session];
+    // A ROUTE CHANGE also stops a running engine - the re-arm on backgrounding already said so in
+    // its own comment, but that re-arm can only help on the NEXT background trip, and a route
+    // change while already backgrounded (AirPods disconnecting, a car stereo dropping, headphones
+    // unplugged) never gets one. Nothing restarted the engine in that window, and a stopped engine
+    // means the `audio` background mode is justifying nothing and iOS suspends the process.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(onAudioRouteChange:)
+                                                 name:AVAudioSessionRouteChangeNotification
+                                               object:session];
+    // mediaserverd restarting leaves the session AND the engine as dead objects, so no amount of
+    // starting recovers them: Apple documents a full teardown and rebuild. Unhandled, the keepalive
+    // is gone for the remaining life of the process and residency goes with it.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(onMediaServicesReset:)
+                                                 name:AVAudioSessionMediaServicesWereResetNotification
+                                               object:session];
     [self startKeepaliveEngine];
+    // The backstop for causes not enumerated above. Every specific handler exists because a known
+    // event stops the engine; this catches the ones nobody has thought of yet, which matters
+    // because the symptom of all of them is identical and invisible -- a process that quietly
+    // stops being resident. Cheap: one BOOL check per tick.
+    [self.keepaliveWatchdog invalidate];
+    __weak typeof(self) wsKeep = self; // self retains the timer, so the block must not retain self
+    self.keepaliveWatchdog = [NSTimer scheduledTimerWithTimeInterval:15.0
+                                                             repeats:YES
+                                                               block:^(NSTimer *t) {
+                                                                   [wsKeep keepaliveWatchdogTick];
+                                                               }];
     [self appendLine:@"[pip] keepalive audio armed (silent, mixable — blocks background suspension)"];
+}
+
+// Shared by the route-change handler and the watchdog: restart the engine unless the idle gate
+// stopped it deliberately, and count it so the next launch can say the session was flaky.
+// `reason` is the prose for the log line; `tag` is the short, stable word the residency record
+// counts by. Two arguments rather than one derived from the other, because the log sentence is
+// free to be reworded and the tag is data.
+- (void)rearmKeepaliveBecause:(NSString *)reason tagged:(NSString *)tag {
+    if (self.keepaliveIdleReleased)
+        return; // stopped on purpose - leave it stopped
+    if (!self.keepaliveEngine) {
+        // REBUILD, don't just start. A media services reset nils the engine and removes all three
+        // observers, and when the idle gate was in force at that moment it skipped the rebuild --
+        // so without this the keepalive is dead for the rest of the process: startKeepaliveEngine
+        // no-ops on a nil engine, the notifications that would have recovered it are unsubscribed,
+        // and nothing else ever calls setupBackgroundKeepalive again. The watchdog is the only
+        // thing still ticking, which makes this the one place the rebuild can come from.
+        //
+        // Cannot double-add the observers: setupBackgroundKeepalive only adds them on the path
+        // where it successfully assigns the engine, so a nil engine means they are not subscribed.
+        [self setupBackgroundKeepalive];
+        if (self.keepaliveEngine.isRunning) {
+            [RMResidency noteKeepaliveRearmed:tag];
+            [self appendLine:[NSString
+                                 stringWithFormat:@"[pip] keepalive had been torn down (%@) - rebuilt",
+                                                  reason]];
+        }
+        return;
+    }
+    if (self.keepaliveEngine.isRunning)
+        return;
+    [self startKeepaliveEngine];
+    if (self.keepaliveEngine.isRunning) {
+        [RMResidency noteKeepaliveRearmed:tag];
+        [self appendLine:[NSString stringWithFormat:@"[pip] keepalive was stopped by %@ - restarted",
+                                                    reason]];
+    }
+}
+
+- (void)keepaliveWatchdogTick {
+    [self rearmKeepaliveBecause:@"something other than the idle gate" tagged:@"watchdog"];
+}
+
+// AVAudioSession posts its notifications on its own queue, not the main one, and the re-arm path
+// ends in appendLine touching a UITextView. Hopping is not optional.
+- (void)onAudioRouteChange:(NSNotification *)note {
+    __weak typeof(self) ws = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [ws rearmKeepaliveBecause:@"a route change" tagged:@"route-change"];
+    });
+}
+
+- (void)onMediaServicesReset:(NSNotification *)note {
+    if (![NSThread isMainThread]) { // see onAudioRouteChange: - same queue, same reason
+        __weak typeof(self) ws = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [ws onMediaServicesReset:note];
+        });
+        return;
+    }
+    [self appendLine:@"[pip] media services were reset - rebuilding the keepalive from scratch"];
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    // Removed before the rebuild, because setupBackgroundKeepalive adds all three again and a
+    // duplicate observer would make every later interruption fire the handler twice.
+    for (NSString *n in @[
+             AVAudioSessionInterruptionNotification, AVAudioSessionRouteChangeNotification,
+             AVAudioSessionMediaServicesWereResetNotification
+         ])
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:n object:session];
+    self.keepaliveEngine = nil;
+    self.keepaliveSource = nil;
+    if (self.keepaliveIdleReleased)
+        return; // the gate wants us suspendable; rebuilding would undo that
+    [self setupBackgroundKeepalive];
+    if (self.keepaliveEngine.isRunning)
+        [RMResidency noteKeepaliveRearmed:@"media-reset"];
 }
 
 - (void)startKeepaliveEngine {
@@ -6761,10 +6905,16 @@ static CGRect mapRectFromArr(NSArray *a) {
 
 - (void)onAudioInterruption:(NSNotification *)note {
     NSUInteger type = [note.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue];
-    if (type == AVAudioSessionInterruptionTypeEnded) {
-        [self startKeepaliveEngine];
-        [self appendLine:@"[pip] audio interruption ended -> keepalive restarted"];
-    }
+    if (type != AVAudioSessionInterruptionTypeEnded)
+        return;
+    // Through the shared path rather than starting the engine directly, which fixes three things
+    // this handler got wrong: it restarted the engine even when the idle gate had stopped it on
+    // purpose, it touched the log off the main thread (AVAudioSession's queue), and it announced
+    // "restarted" whether or not the start actually worked.
+    __weak typeof(self) ws = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [ws rearmKeepaliveBecause:@"an audio interruption" tagged:@"interruption"];
+    });
 }
 
 // PiP scaffolding. The sample-buffer layer is the VISIBLE presenter: a sublayer of the game view at index 0,
@@ -6878,6 +7028,10 @@ static CGRect mapRectFromArr(NSArray *a) {
                                            now - self.bgLoggedOutSince]];
             [self stopPipBgPump];
             [self.keepaliveEngine stop];
+            // Mark it deliberate, for the recovery paths and for the next launch's verdict: a kill
+            // after this point is the gate working, not residency failing.
+            self.keepaliveIdleReleased = YES;
+            [RMResidency noteIdleGateReleased];
             return;
         }
     }
