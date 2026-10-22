@@ -287,12 +287,7 @@ class OverlayEditView(
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                val name = dragName
-                if (name != null && event.actionMasked == MotionEvent.ACTION_UP) {
-                    val moved = hypot(event.x - downX, event.y - downY)
-                    val quick = event.eventTime - event.downTime <= TAP_MAX_MS
-                    release(name, tap = moved <= touchSlop && quick)
-                }
+                dragName?.let { release(it, event) }
                 dragName = null
                 invalidate()
                 return true
@@ -301,11 +296,16 @@ class OverlayEditView(
         return false
     }
 
-    /** A grabbed [name] was let go: commit where it was dragged, or for a [tap] open its menu. */
+    /** A grabbed [name] was let go (or the gesture cancelled): commit where it was dragged, or for a tap open its
+     *  menu. The chat and minimap already moved live, so a cancelled drag of either still commits, as on iOS; an
+     *  overlay box moved nothing live, so its cancelled drag is just dropped. */
     private fun release(
         name: String,
-        tap: Boolean,
+        event: MotionEvent,
     ) {
+        val cancelled = event.actionMasked == MotionEvent.ACTION_CANCEL
+        val moved = hypot(event.x - downX, event.y - downY)
+        val tap = !cancelled && moved <= touchSlop && event.eventTime - event.downTime <= TAP_MAX_MS
         when {
             name == CHAT_HANDLE -> {
                 // The chat already tracked the finger via onChatMove; just persist the final spot. A pure
@@ -323,6 +323,10 @@ class OverlayEditView(
             name == MINIMAP_HANDLE -> {
                 onMinimapMove?.invoke(canvasXOf(dragLeft), canvasYOf(dragTop))
                 onMinimapCommit?.invoke()
+            }
+
+            cancelled -> {
+                // Nothing to undo: an overlay box only moves on release.
             }
 
             tap -> {
