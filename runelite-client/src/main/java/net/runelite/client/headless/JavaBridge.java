@@ -299,6 +299,23 @@ public final class JavaBridge
 	public static void noteSceneDraw() { sceneDrawCount++; }
 	/** Hooks.draw on a non-world game state &rarr; re-arm the load-in hold. */
 	public static void armSceneHold() { sceneDrawCount = 0; }
+
+	// The login screens draw no scene, so there is no sky to hide, and they are where the game says what it is
+	// doing: connecting, a refused login, Try Again. Held, they froze the screen on the boot frame, and a refused
+	// login sat for minutes behind a Play Now button that was no longer there. They publish live; the hold
+	// still covers loading into the world, hopping and a lost connection. Read on the client thread, which is
+	// where gpuPublish runs.
+	private static boolean onLoginScreens()
+	{
+		final Client c = client;
+		if (c == null)
+		{
+			return false;
+		}
+		final GameState gs = c.getGameState();
+		return gs == GameState.LOGIN_SCREEN || gs == GameState.LOGIN_SCREEN_AUTHENTICATOR
+			|| gs == GameState.LOGGING_IN;
+	}
 	/** Direct-present (no gpuPublish gate): the native shell polls this to know when the world is warmed up
 	 * (geometry uploaded), so it can reveal the GPU layer over the CPU loading-screen blit without a sky flash. */
 	public static boolean presentReady() { return sceneDrawCount >= SCENE_WARMUP; }
@@ -495,7 +512,7 @@ public final class JavaBridge
 		// Hold the last good frame through the load-in warmup (the sky-flash guard, above). Not bumping frameSeq
 		// keeps the native reader on the previous frame; useA doesn't flip, so the back buffer the shim just
 		// filled is simply overwritten next frame and the double buffering stays consistent.
-		if (sceneDrawCount < SCENE_WARMUP)
+		if (sceneDrawCount < SCENE_WARMUP && !onLoginScreens())
 			return;
 		frameW = w;
 		frameH = h;

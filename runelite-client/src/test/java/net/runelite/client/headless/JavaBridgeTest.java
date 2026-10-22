@@ -28,6 +28,7 @@ import java.awt.Rectangle;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import net.runelite.api.Client;
+import net.runelite.api.GameState;
 import net.runelite.api.MainBufferProvider;
 import net.runelite.api.widgets.Widget;
 import static org.junit.Assert.assertArrayEquals;
@@ -158,6 +159,43 @@ public class JavaBridgeTest
 		JavaBridge.gpuFrameBackBuffer(4, 2);
 		JavaBridge.gpuPublish(4, 2);
 		assertEquals("once warmed up the GPU frame publishes", seqBefore + 1, JavaBridge.getFrameSeq());
+	}
+
+	@Test
+	public void gpuPublishShowsTheLoginScreensDuringTheHold()
+	{
+		final Client c = mock(Client.class);
+		JavaBridge.register(c);
+		try
+		{
+			for (GameState gs : new GameState[]{GameState.LOGIN_SCREEN, GameState.LOGIN_SCREEN_AUTHENTICATOR,
+				GameState.LOGGING_IN})
+			{
+				when(c.getGameState()).thenReturn(gs);
+				JavaBridge.armSceneHold();
+				final int seqBefore = JavaBridge.getFrameSeq();
+				JavaBridge.gpuFrameBackBuffer(4, 2);
+				JavaBridge.gpuPublish(4, 2);
+				assertEquals(gs + " is drawn live, so a refused login can be read", seqBefore + 1,
+					JavaBridge.getFrameSeq());
+			}
+
+			// Loading into the world, hopping and a lost connection keep the hold.
+			for (GameState gs : new GameState[]{GameState.LOADING, GameState.LOGGED_IN, GameState.HOPPING,
+				GameState.CONNECTION_LOST})
+			{
+				when(c.getGameState()).thenReturn(gs);
+				JavaBridge.armSceneHold();
+				final int seqBefore = JavaBridge.getFrameSeq();
+				JavaBridge.gpuFrameBackBuffer(4, 2);
+				JavaBridge.gpuPublish(4, 2);
+				assertEquals(gs + " is held until the world has warmed up", seqBefore, JavaBridge.getFrameSeq());
+			}
+		}
+		finally
+		{
+			JavaBridge.register(null);
+		}
 	}
 
 	// ---- DRAG-2: getScrollableRects snapshot -----------------------------------------------------------
