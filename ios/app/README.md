@@ -4,7 +4,7 @@ The Phase-1 **Prong B** shell: prove *our own* free-cert iOS app can load the em
 `JLI_Launch` a trivial `Hello` on-device under StikDebug JIT, and read the verdict on-screen. Once green,
 swap the main class to `JitProbe`/`Bench`/`GlyphSmoke` (`../dev-tools/jvmbench/`) for the definitive numbers.
 
-This is a **deliberate experiment** built per the W1 audit verdict (`../AUDIT-BRIEF-w1-jvm-shell.md`): the
+This is a **deliberate experiment** built per the W1 audit verdict (`../archive/AUDIT-BRIEF-w1-jvm-shell.md`): the
 first run is expected to *teach us what breaks first*, not necessarily to reach `Hello.main`.
 
 ## Layout

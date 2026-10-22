@@ -2,7 +2,7 @@
 //
 // Asserts (loudly) that the CACIO CTC toolkit + graphicsenv are installed and the
 // JVM is NON-headless — WITHOUT drawing a single pixel. This is the gate the brief
-// (ios/AUDIT-BRIEF-w1-phase3-awt.md, Claim A) calls out: the dangerous part of
+// (ios/archive/AUDIT-BRIEF-w1-phase3-awt.md, Claim A) calls out: the dangerous part of
 // Phase 3 is activation/classloading before AWT init, not Java2D.
 //
 // The desktop CACIO path (CacioExtension) installs CTC via a ByteBuddy

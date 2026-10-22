@@ -2,7 +2,7 @@
 
 > Branch `gpu`. Route C (chosen after the B1-part-2 review killed Route A) = bring the base `gpu` plugin to iOS
 > via a **thin JNI GL bridge** behind **local `org.lwjgl.opengl` / `net.runelite.rlawt` facade classes**, so the
-> plugin's *source* stays unmodified. See `ios/AUDIT-BRIEF-w3-gpu-b1-lwjgl-ios.md` (verdict) and
+> plugin's *source* stays unmodified. See `ios/archive/AUDIT-BRIEF-w3-gpu-b1-lwjgl-ios.md` (verdict) and
 > `ios/dev-tools/gpu-b1/` (B1 shader gate).
 >
 > - **Step 1 — facade-compile smoke: GREEN** (`routec-facade-verdict.sh`). Plugin compiles unmodified against the
@@ -173,7 +173,7 @@ ROUTEC_L1 VERDICT=PASS
 So on real hardware: the facade classes load, `RegisterNatives` binds (createProgram=1 ⇒ the natives resolved),
 the EAGL ES3 offscreen FBO stands up (fbo=1, COLOR_ATTACHMENT0), and **`GL.createCapabilities().OpenGL33==true`** —
 the exact claim that killed Route A is satisfiable through the bridge. The 5 shims don't fault (glErr=0). Wired via
-`JVMLauncher.routecL1Mode` (long-press the launch button); see `ios/AUDIT-BRIEF-w3-gpu-routec-3b-device-wiring.md`
+`JVMLauncher.routecL1Mode` (long-press the launch button); see `ios/archive/AUDIT-BRIEF-w3-gpu-routec-3b-device-wiring.md`
 for the reviewed full-wiring design (the next step: classpath swap + the corrected B2 publish seam).
 
 **Route C is de-risked to the limit of what's verifiable without the device:** plugin compiles unmodified against
@@ -184,7 +184,7 @@ for iOS arm64 (3b). What's left is JVM-coupled — the on-device wiring above.
 ### Full wiring — IMPLEMENTED + host-verified, device run pending (2026-06-05)
 
 All of the "Wiring it on the device" steps above + the reviewed brief
-(`ios/AUDIT-BRIEF-w3-gpu-routec-3b-device-wiring.md`) are now built and verified host-side:
+(`ios/archive/AUDIT-BRIEF-w3-gpu-routec-3b-device-wiring.md`) are now built and verified host-side:
 
 - **2A classpath swap:** `stage-ios-gpu-jar.sh` (md5-gated) post-processes the pristine desktop shaded jar into
   the iOS variant in the bundle (`client-shaded.jar`) — org/lwjgl + rlawt + the gpu package

@@ -43,7 +43,7 @@ committed (lands in the gitignored `jre/`); regenerate with `build-libawt_xawt.s
 
 ## Round 4 — diagnosed: do NOT stub X11 natives (2026-05-30 audit)
 Round 3 failed at `X11GraphicsEnvironment.initDisplay` — but the audit
-(`ios/AUDIT-RESULT-w1-phase3-device.md`, primary-source-verified against jdk21u) showed that is an
+(`ios/archive/AUDIT-RESULT-w1-phase3-device.md`, primary-source-verified against jdk21u) showed that is an
 **ordering bug in the probe, not a native gap**. `X11GraphicsEnvironment.initStatic()` calls
 `initDisplay` only inside `if (!isHeadless())`; the probe was setting `headless=FALSE` before forcing
 `LocalGE.<clinit>`. Fix (applied in `UnsafePokeActivation`): force the holder while `headless=TRUE`

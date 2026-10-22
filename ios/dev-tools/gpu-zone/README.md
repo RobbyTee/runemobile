@@ -1,6 +1,6 @@
 # gpu-zone — iOS Zone Z0 conformance harness (RLHD zone shaders → ES 3.00 on EAGL)
 
-> Branch `gpu`. Phase **Z0** of `ios/HD-ZONE-B0-SCOPE.md` / `ios/HD-PORT-BLUEPRINT.md` §5: a fail-closed gate that
+> Branch `gpu`. Phase **Z0** of `ios/archive/HD-ZONE-B0-SCOPE.md` / `ios/HD-PORT-BLUEPRINT.md` §5: a fail-closed gate that
 > proves the **entire RLHD zone-path shader surface compiles on native EAGL GLES 3.0** before any renderer work.
 > Clones the proven `gpu-b1` pattern (xcodegen + EAGL offscreen compile + md5-sealed verdict). Backend = **EAGL**
 > (the 2026-06-09 device A/B locked EAGL + `gl_FragDepth`; ANGLE is not used).
@@ -75,7 +75,7 @@ MAT_*-constants, the shadows-off `sampleShadowMap` int-`0` stub macro, the full 
 `utils/color_utils.glsl`, `utils/water.glsl`, `utils/fog.glsl`; everything else via targeted CAST rules. Also fixed a
 real downport bug (the `f`-suffix strip corrupting `material1.flowMap`→`lowMap`).
 
-## Phase B0 — renderer bring-up (`ios/HD-ZONE-B0-SCOPE.md`)
+## Phase B0 — renderer bring-up (`ios/archive/HD-ZONE-B0-SCOPE.md`)
 
 **B0.1 GREEN (host, no device).** `stage-ios-zone-jar.sh` stages the iOS-variant RLHD jar: it compiles the
 RLHD source — pristine (`rlhd-src/src/`, full tree @ `7dded59`, gitignored — see `rlhd-src/PROVENANCE.md`)
