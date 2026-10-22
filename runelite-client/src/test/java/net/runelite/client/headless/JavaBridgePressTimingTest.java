@@ -53,21 +53,19 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * The press-timing contract for an armed tap — the shape of the input the engine (and therefore anything
- * downstream of it) is handed for one finger tap.
+ * The press-timing contract for an armed tap: no button goes down until the finger lifts.
  *
- * <p>The tap path used to post {@code MOUSE_PRESSED} and {@code MOUSE_RELEASED} one millisecond apart at the
- * LIFT, which reported every tap as a 1ms hold no matter how long the finger was really down. The press now
- * goes out when the settle gate ACCEPTS — while the finger is still on the glass — and is closed at the real
- * lift, so the press/release delta is the hold the user performed. These tests pin that, plus the two things
- * that pressing early makes possible and which must not regress:
+ * <p>OSRS acts on the PRESS. Its release handler only clears the button state, so whatever a press resolves to
+ * — a walk, an attack, a pick-up — has happened by the time any release arrives. An earlier version posted the
+ * press when the settle gate accepted, while the finger was still on the glass, so the engine would see the
+ * real hold. A contact that rested for a couple of frames and then became a camera drag or a long-press had
+ * already walked to where it landed, and releasing the press afterwards could not take that back. These tests
+ * pin the fix and the two things around it that must not regress:
  * <ul>
- *   <li><b>No press before the gate accepts.</b> A press that lands before the engine has folded our move
- *       resolves against the PREVIOUS point's menu — the mis-targeting the settle gate exists to prevent.</li>
- *   <li><b>No phantom click from a contact that was not a tap.</b> A press is outstanding for the whole
- *       hold, so a contact that turns into a drag or a long-press has one open with no lift coming. Retiring
- *       it releases without a {@code MOUSE_CLICKED} and consumes the {@code MenuOptionClicked} the engine
- *       builds from the press/release pair, so no walk-here the user never asked for reaches the game.</li>
+ *   <li><b>The arm still pays the settle up front.</b> The gate resolves the point while the finger is down,
+ *       and the lift clicks there at once instead of starting a second settle.</li>
+ *   <li><b>The engine's answer is still read.</b> The tap is in {@code CLICKED} before its press goes out, so the
+ *       {@code MenuOptionClicked} the engine raises for it is taken as this tap's result.</li>
  * </ul>
  *
  * <p>Pure: the {@link Client} is mocked and no engine boots. Events are captured by pushing an
@@ -84,8 +82,6 @@ public class JavaBridgePressTimingTest
 	/** The point every tap in here lands on. */
 	private static final int TAP_X = 300;
 	private static final int TAP_Y = 220;
-	/** How long the simulated finger stays down. Comfortably above the gate's own settle cost. */
-	private static final long HOLD_MS = 80L;
 
 	private final java.util.concurrent.atomic.AtomicBoolean menuOpen =
 		new java.util.concurrent.atomic.AtomicBoolean();
@@ -118,200 +114,136 @@ public class JavaBridgePressTimingTest
 	}
 
 	/**
-	 * The headline: one tap, and the engine is handed a press that stays down for the finger's real hold.
+	 * The headline, and the bug it fixes: the gate has accepted, the finger is still down, and the contact turns
+	 * into a camera drag. Nothing may have been pressed — a press would already have walked the character to the
+	 * point the finger landed on.
 	 */
 	@Test
-	public void pressIsHeldAcrossTheSettleAndClosedAtTheRealLift() throws Exception
+	public void aContactThatBecomesADragPressesNothing() throws Exception
 	{
 		JavaBridge.armTap(TAP_X, TAP_Y);
 		pump();
-
-		assertEquals("the finger landing must not press — the gate has not resolved the point yet",
+		settleUntilArmed();
+		assertEquals("the gate accepting must not press while the finger is still down",
 			0, cap.count(MouseEvent.MOUSE_PRESSED));
 
-		final int ticks = settleUntilPressed();
-		assertEquals("the gate accepting must post exactly one press", 1, cap.count(MouseEvent.MOUSE_PRESSED));
-		assertEquals("and no release while the finger is still down", 0, cap.count(MouseEvent.MOUSE_RELEASED));
-		assertTrue("the press must wait for the gate, not go out on the first tick", ticks >= 2);
-
-		Thread.sleep(HOLD_MS);
-
-		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
+		JavaBridge.cancelArmedTap();
 		pump();
 
-		assertEquals("the lift must close the press", 1, cap.count(MouseEvent.MOUSE_RELEASED));
-		final long reported = cap.pressReleaseDeltaMs();
-		assertTrue("reported hold was " + reported + "ms; it must track the real " + HOLD_MS
-			+ "ms rather than collapse to the old ~1ms atomic click", reported >= HOLD_MS - 20);
-		assertTrue("reported hold " + reported + "ms must not exceed the real hold by more than scheduling slop",
-			reported <= HOLD_MS + 500);
+		assertEquals("a drag must never press", 0, cap.count(MouseEvent.MOUSE_PRESSED));
+		assertEquals("so there is nothing to release", 0, cap.count(MouseEvent.MOUSE_RELEASED));
+		assertEquals("and nothing to click", 0, cap.count(MouseEvent.MOUSE_CLICKED));
+		assertEquals("the arm is dropped", "IDLE", tapState());
 	}
 
-	/** The press lands on the point the GATE resolved, which is the only point the engine is holding a menu for. */
+	/** A long-press that opens the menu over an armed contact must not have acted first either. */
 	@Test
-	public void pressAndReleaseLandOnTheResolvedPoint() throws Exception
+	public void aLongPressMenuOverAnArmPressesNothing() throws Exception
 	{
 		JavaBridge.armTap(TAP_X, TAP_Y);
 		pump();
-		settleUntilPressed();
-		Thread.sleep(5L);
+		settleUntilArmed();
+
+		menuOpen.set(true);
+		JavaBridge.tapTick(client);
+		pump();
+
+		assertEquals("the menu owns input now; the arm never pressed", 0, cap.count(MouseEvent.MOUSE_PRESSED));
+		assertEquals("the arm is dropped", "IDLE", tapState());
+	}
+
+	/**
+	 * The lift of an armed tap clicks at once, on the point the gate resolved: press, release and click, in that
+	 * order, with no further frames spent settling.
+	 */
+	@Test
+	public void theLiftClicksAtOnceOnTheResolvedPoint() throws Exception
+	{
+		JavaBridge.armTap(TAP_X, TAP_Y);
+		pump();
+		final int ticks = settleUntilArmed();
+		assertTrue("the gate must prove the point before it parks, not on the first tick", ticks >= 2);
+
 		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
 		pump();
 
+		assertEquals("the lift must click without waiting on another settle",
+			List.of("PRESSED", "RELEASED", "CLICKED"), cap.buttonSequence());
 		final MouseEvent press = cap.first(MouseEvent.MOUSE_PRESSED);
 		final MouseEvent release = cap.first(MouseEvent.MOUSE_RELEASED);
 		assertEquals("press x", TAP_X, press.getX());
 		assertEquals("press y", TAP_Y, press.getY());
-		assertEquals("release must close on the pressed point", press.getX(), release.getX());
-		assertEquals("release must close on the pressed point", press.getY(), release.getY());
+		assertEquals("release x", TAP_X, release.getX());
+		assertEquals("release y", TAP_Y, release.getY());
 	}
 
 	/**
-	 * A contact that turns out to be a gesture: the outstanding press is retired with a release and NO
-	 * {@code MOUSE_CLICKED}, so nothing about it reads as a deliberate click.
+	 * The engine acts on the press within a tick and raises {@code MenuOptionClicked} for it. That must find the
+	 * tap in {@code CLICKED}: with the press out early it arrived while the tap was still armed, was ignored, and
+	 * the tap later timed out with no result (the "CLICKED timeout ... (unexpected)" log).
 	 */
 	@Test
-	public void aGestureRetiresTheOutstandingPressWithoutAClick() throws Exception
+	public void theEnginesAnswerFindsTheTapWaitingForIt() throws Exception
 	{
 		JavaBridge.armTap(TAP_X, TAP_Y);
 		pump();
-		settleUntilPressed();
-
-		JavaBridge.cancelArmedTap();
-		pump();
-
-		assertEquals("the retired press must be released", 1, cap.count(MouseEvent.MOUSE_RELEASED));
-		assertEquals("a retire must never post a click", 0, cap.count(MouseEvent.MOUSE_CLICKED));
-	}
-
-	/**
-	 * The engine builds a click from the press/release pair itself, so a retire still raises a
-	 * {@code MenuOptionClicked}. That one must be consumed — and a GENUINE tap's must not be.
-	 */
-	@Test
-	public void thePhantomClickIsConsumedButAGenuineOneIsNot() throws Exception
-	{
-		JavaBridge.armTap(TAP_X, TAP_Y);
-		pump();
-		settleUntilPressed();
-		JavaBridge.cancelArmedTap();
-		pump();
-
-		final MenuOptionClicked phantom = new MenuOptionClicked(walkEntry());
-		invokeMenuOptionClicked(phantom);
-		assertTrue("the click built from a retired press must be consumed", phantom.isConsumed());
-
-		// A real tap: committed, so tapState == CLICKED when its truth arrives. That is the test the consume
-		// is gated on, and it is what stops a replacement tap's legitimate click from being eaten.
-		final MenuOptionClicked genuine = new MenuOptionClicked(walkEntry());
-		JavaBridge.armTap(TAP_X, TAP_Y);
-		pump();
-		settleUntilPressed();
+		settleUntilArmed();
 		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
 		pump();
-		invokeMenuOptionClicked(genuine);
-		assertFalse("a committed tap's own click must survive", genuine.isConsumed());
+		assertEquals("the press goes out with the tap waiting for its answer", "CLICKED", tapState());
+
+		final MenuOptionClicked answer = new MenuOptionClicked(walkEntry());
+		invokeMenuOptionClicked(answer);
+
+		assertFalse("the tap's own click must reach the game", answer.isConsumed());
+		assertFalse("and it must close the tap", "CLICKED".equals(tapState()));
 	}
 
-	/**
-	 * A sweep across the range a finger spends on the glass. The assertion is against the hold that REALLY
-	 * elapsed rather than the one requested: {@code Thread.sleep} overshoots freely on a loaded CI/dev box, and
-	 * the point of the change is that the reported duration is a measurement of actual elapsed time — so an
-	 * overshooting sleep is a longer real hold, and the report must follow it. Prints the table it asserts on,
-	 * in the style of the other headless verdict harnesses.
-	 */
+	/** A throw out of the tick while armed resets the state machine and leaves no button down. */
 	@Test
-	public void reportedHoldTracksTheRealHoldAcrossTheHumanRange() throws Exception
-	{
-		final long[] holds = {35L, 60L, 95L, 140L, 220L};
-		System.out.println("[presstiming] asked(ms)  realHold(ms)  reported(ms)  error(ms)");
-		for (final long hold : holds)
-		{
-			resetTapState();
-			cap.clear();
-			JavaBridge.armTap(TAP_X, TAP_Y);
-			pump();
-			settleUntilPressed();
-
-			final long pressedAt = cap.first(MouseEvent.MOUSE_PRESSED).getWhen();
-			Thread.sleep(hold);
-			JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
-			final long liftedAt = System.currentTimeMillis();
-			pump();
-
-			final long realHold = liftedAt - pressedAt;
-			final long reported = cap.pressReleaseDeltaMs();
-			System.out.printf("[presstiming] %9d  %12d  %12d  %+9d%n",
-				hold, realHold, reported, reported - realHold);
-
-			assertTrue("the press must be held at least as long as the finger was down: asked " + hold
-				+ "ms, reported " + reported + "ms", reported >= hold);
-			assertTrue("reported " + reported + "ms must equal the real hold " + realHold
-				+ "ms, not a constant", Math.abs(reported - realHold) <= 25L);
-		}
-	}
-
-	/**
-	 * A throw out of {@code tapTickImpl} while ARMED must not leave our press down. The handler resets the
-	 * state machine, which says no tap is in flight — so nothing else would ever close the press, and a held
-	 * left button walks the character. Retiring it in the catch is the only thing standing between an engine
-	 * read blowing up and a stuck button.
-	 */
-	@Test
-	public void aThrowWhileArmedRetiresTheOutstandingPress() throws Exception
+	public void aThrowWhileArmedLeavesNoButtonDown() throws Exception
 	{
 		JavaBridge.armTap(TAP_X, TAP_Y);
 		pump();
-		settleUntilPressed();
-		assertEquals("precondition: a press is down", 1, cap.count(MouseEvent.MOUSE_PRESSED));
+		settleUntilArmed();
 
 		menuOpenThrows.set(true);
 		JavaBridge.tapTick(client);
 		pump();
 
-		assertEquals("the throw must still release the press", 1, cap.count(MouseEvent.MOUSE_RELEASED));
-		assertEquals("and must not turn it into a click", 0, cap.count(MouseEvent.MOUSE_CLICKED));
-		assertFalse("no press may remain outstanding", pressOutstanding());
+		assertEquals("the tick must reset", "IDLE", tapState());
+		assertEquals("and must not have pressed", 0, cap.count(MouseEvent.MOUSE_PRESSED));
 	}
 
-	/**
-	 * The suppression must not eat a click the USER made. A menu-row tap takes the {@code isMenuOpen()} branch,
-	 * which posts its click directly and never reaches {@code CLICKED}, so the {@code tapState} test in
-	 * {@code onMenuOptionClicked} does not cover it — a tap ingress disarms a stale suppression instead. Worst
-	 * case on purpose: the retire's own phantom never materialised, so the suppression is still armed.
-	 */
+	/** An arm nobody commits times out without ever pressing. */
 	@Test
-	public void aMenuRowClickAfterARetireIsNotConsumed() throws Exception
+	public void anArmNobodyCommitsTimesOutWithoutPressing() throws Exception
 	{
 		JavaBridge.armTap(TAP_X, TAP_Y);
 		pump();
-		settleUntilPressed();
-		JavaBridge.cancelArmedTap();
-		pump();
-		assertTrue("precondition: the retire armed the suppression", suppressFrames() > 0);
+		settleUntilArmed();
 
-		// The long-press menu is up and the user taps a row.
-		menuOpen.set(true);
-		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
+		for (int i = 0; i < 200 && "ARMED".equals(tapState()); i++)
+		{
+			JavaBridge.tapTick(client);
+		}
 		pump();
 
-		final MenuOptionClicked rowSelect = new MenuOptionClicked(walkEntry());
-		invokeMenuOptionClicked(rowSelect);
-		assertFalse("a menu-row click the user made must survive", rowSelect.isConsumed());
+		assertEquals("the arm must time out", "IDLE", tapState());
+		assertEquals("without pressing", 0, cap.count(MouseEvent.MOUSE_PRESSED));
 	}
 
 	/**
-	 * An item drag takes the button over from the tap's press. Both shells start one by dropping the tap's arm
-	 * ({@code cancelArmedTap}, whose retire runs on the client thread's next frame) and then posting the drag's
-	 * own press ({@code onTouch}) from the UI thread in the same breath. The retire's release must reach the
-	 * engine BEFORE that press: arriving after it, it let go of the item one frame into every inventory drag.
+	 * An item drag owns the button from its own press to its lift. Both shells start one by dropping the tap's arm
+	 * ({@code cancelArmedTap}) and then posting the drag's press ({@code onTouch}) in the same breath; with no tap
+	 * press ever down, nothing may release the item before the finger lifts.
 	 */
 	@Test
 	public void anItemDragKeepsHoldingTheItemUntilTheFingerLifts() throws Exception
 	{
 		JavaBridge.armTap(TAP_X, TAP_Y);
 		pump();
-		settleUntilPressed();
+		settleUntilArmed();
 		cap.clear();
 
 		// The real client thread runs work handed to it from another thread on its next frame, not inline.
@@ -324,14 +256,14 @@ public class JavaBridgePressTimingTest
 		JavaBridge.onTouch(1, TAP_X + 80, TAP_Y, 1);
 		runFrame(nextFrame);
 
-		assertEquals("the tap's press must be released before the drag presses, and the drag must then stay held",
-			List.of("RELEASED", "PRESSED", "DRAGGED", "DRAGGED"), cap.buttonSequence());
+		assertEquals("the drag presses once and stays held",
+			List.of("PRESSED", "DRAGGED", "DRAGGED"), cap.buttonSequence());
 
 		JavaBridge.onTouch(2, TAP_X + 80, TAP_Y, 1);    // the lift
 		runFrame(nextFrame);
 
 		assertEquals("only the lift may release the drag",
-			List.of("RELEASED", "PRESSED", "DRAGGED", "DRAGGED", "RELEASED"), cap.buttonSequence());
+			List.of("PRESSED", "DRAGGED", "DRAGGED", "RELEASED"), cap.buttonSequence());
 		assertEquals("the item is let go where the finger lifted", TAP_X + 80, cap.last(MouseEvent.MOUSE_RELEASED).getX());
 		assertEquals("and a drag is never a click", 0, cap.count(MouseEvent.MOUSE_CLICKED));
 	}
@@ -364,14 +296,14 @@ public class JavaBridgePressTimingTest
 		pump();
 	}
 
-	/** Drive the settle gate a frame at a time until it accepts and presses. Returns the ticks it took. */
-	private int settleUntilPressed() throws Exception
+	/** Drive the settle gate a frame at a time until it accepts and parks the arm. Returns the ticks it took. */
+	private int settleUntilArmed() throws Exception
 	{
 		for (int i = 1; i <= 40; i++)
 		{
 			JavaBridge.tapTick(client);
 			pump();
-			if (cap.count(MouseEvent.MOUSE_PRESSED) > 0)
+			if ("ARMED".equals(tapState()))
 			{
 				return i;
 			}
@@ -455,8 +387,6 @@ public class JavaBridgePressTimingTest
 	private static void resetTapState() throws Exception
 	{
 		set("tapState", enumValue("TapState", "IDLE"));
-		set("pressOutstanding", false);
-		set("suppressClickFrames", 0);
 		set("tapUncommitted", false);
 		set("queuedTap", false);
 		set("entered", false);
@@ -482,18 +412,11 @@ public class JavaBridgePressTimingTest
 		throw new AssertionError("no " + type + "." + name);
 	}
 
-	private static boolean pressOutstanding() throws Exception
+	private static String tapState() throws Exception
 	{
-		final Field f = JavaBridge.class.getDeclaredField("pressOutstanding");
+		final Field f = JavaBridge.class.getDeclaredField("tapState");
 		f.setAccessible(true);
-		return (Boolean) f.get(null);
-	}
-
-	private static int suppressFrames() throws Exception
-	{
-		final Field f = JavaBridge.class.getDeclaredField("suppressClickFrames");
-		f.setAccessible(true);
-		return (Integer) f.get(null);
+		return String.valueOf(f.get(null));
 	}
 
 	private static void set(String field, Object value) throws Exception
@@ -561,7 +484,7 @@ public class JavaBridgePressTimingTest
 			}
 		}
 
-		/** The button-state events in the order they were posted: what decides whether something is held. */
+		/** The button events in the order they were posted: what decides whether something is held or clicked. */
 		List<String> buttonSequence()
 		{
 			synchronized (seen)
@@ -580,18 +503,15 @@ public class JavaBridgePressTimingTest
 						case MouseEvent.MOUSE_DRAGGED:
 							out.add("DRAGGED");
 							break;
+						case MouseEvent.MOUSE_CLICKED:
+							out.add("CLICKED");
+							break;
 						default:
 							break;
 					}
 				}
 				return out;
 			}
-		}
-
-		/** The reported hold: the press/release {@code when} delta, which is what the engine is handed. */
-		long pressReleaseDeltaMs()
-		{
-			return first(MouseEvent.MOUSE_RELEASED).getWhen() - first(MouseEvent.MOUSE_PRESSED).getWhen();
 		}
 
 		void popQueue()

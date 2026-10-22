@@ -54,10 +54,10 @@ import static org.mockito.Mockito.when;
  * Where the bridge says the pointer is — the other half of the press-timing contract that
  * {@link JavaBridgePressTimingTest} pins.
  *
- * <p>Every coordinate we hand the engine should be one a finger was really at. Two things used to break that:
- * the pointer park led with a {@code MOUSE_MOVED} to (−1,−1), a point no pointer can occupy, after every
- * single tap; and a tap's whole contact produced exactly ONE move event, so the finger's real travel between
- * landing and lifting was thrown away. These tests hold both lines.
+ * <p>Every coordinate we hand the engine should be one a finger was really at. The pointer park used to lead
+ * with a {@code MOUSE_MOVED} to (−1,−1), a point no pointer can occupy, after every single tap. A tap's roll is
+ * not replayed as drags: no button is down before the lift, so there is no press for it to drag, and a move
+ * during the settle would push the engine's cursor off the point the gate is resolving.
  *
  * <p>Pure: the {@link Client} is mocked and no engine boots. Events are captured by pushing an
  * {@link EventQueue} that records what the bridge POSTS.
@@ -69,8 +69,6 @@ public class JavaBridgePointerStreamTest
 		System.setProperty("runelite.bridge", "true");
 	}
 
-	/** The scene's width in the mock. Past it lies the interface, where a held left button is a drag. */
-	private static final int VIEWPORT_W = 800;
 	private static final int TAP_X = 300;
 	private static final int TAP_Y = 220;
 
@@ -137,7 +135,7 @@ public class JavaBridgePointerStreamTest
 	{
 		JavaBridge.armTap(TAP_X, TAP_Y);
 		pump();
-		settleUntilPressed();
+		settleUntilArmed();
 		JavaBridge.onTapMove(TAP_X + 3, TAP_Y - 2);
 		pump();
 		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
@@ -154,187 +152,46 @@ public class JavaBridgePointerStreamTest
 	}
 
 	/**
-	 * The headline for the move stream: the samples the finger really produced while the press was down reach
-	 * the engine as drags, instead of being dropped so that one tap only ever showed up as a single move.
+	 * A tap's roll never reaches the engine — not while the gate is settling, not once it has accepted, not after
+	 * the lift — and the click stays on the point the gate resolved.
 	 */
 	@Test
-	public void theFingersRealTravelReachesTheEngineAsDrags() throws Exception
+	public void aTapsRollIsNeverReplayed() throws Exception
 	{
 		JavaBridge.armTap(TAP_X, TAP_Y);
-		pump();
-		settleUntilPressed();
-
-		// Pumped between samples so each is dispatched before the next is posted. A burst posted faster than
-		// the EDT drains is coalesced by AWT itself -- see samplesPostedFasterThanTheQueueDrainsCoalesce.
-		JavaBridge.onTapMove(TAP_X + 2, TAP_Y + 1);
-		pump();
-		JavaBridge.onTapMove(TAP_X + 5, TAP_Y + 3);
-		pump();
-		JavaBridge.onTapMove(TAP_X + 6, TAP_Y + 4);
-		pump();
-
-		assertEquals("every sample the finger made must go out", 3, cap.count(MouseEvent.MOUSE_DRAGGED));
-		final List<MouseEvent> drags = cap.allOf(MouseEvent.MOUSE_DRAGGED);
-		assertEquals("the drag must carry the real sample point", TAP_X + 5, drags.get(1).getX());
-		assertEquals("the drag must carry the real sample point", TAP_Y + 3, drags.get(1).getY());
-		assertTrue("a drag must say which button is down",
-			(drags.get(0).getModifiersEx() & java.awt.event.InputEvent.BUTTON1_DOWN_MASK) != 0);
-	}
-
-	/**
-	 * The viewport guard covers the whole stream, not just its first point. A finger that lands in the
-	 * scene and rolls out of it stops being followed: out there a held left button is the engine's
-	 * drag-to-rearrange, and a tap's allowed roll is wider than an inventory slot.
-	 */
-	@Test
-	public void aSampleThatLeavesTheSceneIsNotFollowed() throws Exception
-	{
-		JavaBridge.armTap(TAP_X, TAP_Y);
-		pump();
-		settleUntilPressed();
-
-		JavaBridge.onTapMove(TAP_X + 3, TAP_Y + 2);        // still in the scene
-		pump();
-		JavaBridge.onTapMove(VIEWPORT_W + 4, TAP_Y + 2);   // over the interface beside it
-		pump();
-
-		final List<MouseEvent> drags = cap.allOf(MouseEvent.MOUSE_DRAGGED);
-		assertEquals("only the sample inside the scene may be replayed", 1, drags.size());
-		assertEquals(TAP_X + 3, drags.get(0).getX());
-
-		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
-		pump();
-		assertEquals("the release closes on the last point inside -- a point the finger really was at, "
-				+ "which is a smaller thing to get wrong than a drag nobody performed",
-			TAP_X + 3, cap.first(MouseEvent.MOUSE_RELEASED).getX());
-	}
-
-	/**
-	 * Samples arriving faster than the EDT drains are folded into one, because {@link EventQueue} coalesces
-	 * pending mouse-motion events -- and that is the behaviour we want, not a leak. A desktop toolkit does
-	 * exactly this with a real mouse: the engine is handed where the pointer IS, not a backlog of where it
-	 * was. What must survive is the latest point, which is also the one the release closes on.
-	 */
-	@Test
-	public void samplesPostedFasterThanTheQueueDrainsCoalesce() throws Exception
-	{
-		JavaBridge.armTap(TAP_X, TAP_Y);
-		pump();
-		settleUntilPressed();
-
-		JavaBridge.onTapMove(TAP_X + 2, TAP_Y + 1);
-		JavaBridge.onTapMove(TAP_X + 5, TAP_Y + 3);
-		JavaBridge.onTapMove(TAP_X + 6, TAP_Y + 4);
-		pump();
-
-		final List<MouseEvent> drags = cap.allOf(MouseEvent.MOUSE_DRAGGED);
-		assertTrue("the travel must still reach the engine", !drags.isEmpty());
-		final MouseEvent last = drags.get(drags.size() - 1);
-		assertEquals("whatever was folded, the newest point must be the one that lands", TAP_X + 6, last.getX());
-		assertEquals("whatever was folded, the newest point must be the one that lands", TAP_Y + 4, last.getY());
-
-		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
-		pump();
-		assertEquals("and the release still closes on the real lift point, which is tracked per sample "
-			+ "rather than read back out of the queue", TAP_X + 6, cap.first(MouseEvent.MOUSE_RELEASED).getX());
-	}
-
-	/** The release closes where the finger actually left the glass, not back at the point it pressed on. */
-	@Test
-	public void theReleaseClosesOnTheRealLiftPoint() throws Exception
-	{
-		JavaBridge.armTap(TAP_X, TAP_Y);
-		pump();
-		settleUntilPressed();
-		JavaBridge.onTapMove(TAP_X + 7, TAP_Y + 4);
-		pump();
-		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
-		pump();
-
-		final MouseEvent press = cap.first(MouseEvent.MOUSE_PRESSED);
-		final MouseEvent release = cap.first(MouseEvent.MOUSE_RELEASED);
-		assertEquals("the press still lands on the point the gate resolved", TAP_X, press.getX());
-		assertEquals("the release follows the finger", TAP_X + 7, release.getX());
-		assertEquals("the release follows the finger", TAP_Y + 4, release.getY());
-	}
-
-	/**
-	 * Nothing streams before the gate has pressed. A move posted while the gate is still settling would push
-	 * the engine's cursor off the point it is resolving, and the gate would never accept — the arm would fail
-	 * open and the lift would pay for a whole second settle, which is the latency the arm exists to remove.
-	 */
-	@Test
-	public void noSampleStreamsBeforeTheGateAccepts() throws Exception
-	{
-		JavaBridge.armTap(TAP_X, TAP_Y);
-		pump();
-
-		JavaBridge.onTapMove(TAP_X + 4, TAP_Y + 2);
-		pump();
-		assertEquals("a sample before the press must not move the engine's cursor",
-			0, cap.count(MouseEvent.MOUSE_DRAGGED));
-
-		settleUntilPressed();
-		assertEquals("the gate must still press on the point it resolved", TAP_X,
-			cap.first(MouseEvent.MOUSE_PRESSED).getX());
-	}
-
-	/** A sample after the contact is over belongs to nothing, and must not reach the engine. */
-	@Test
-	public void noSampleStreamsAfterTheLift() throws Exception
-	{
-		JavaBridge.armTap(TAP_X, TAP_Y);
-		pump();
-		settleUntilPressed();
-		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
 		pump();
 		cap.clear();
 
-		JavaBridge.onTapMove(TAP_X + 9, TAP_Y + 9);
+		JavaBridge.onTapMove(TAP_X + 4, TAP_Y + 2);   // during the settle
 		pump();
-		assertEquals("the contact is over; there is no finger to report", 0, cap.count(MouseEvent.MOUSE_DRAGGED));
-	}
+		assertEquals("a sample during the settle must not move the engine's cursor", 0, cap.all().size());
 
-	/**
-	 * Outside the 3D viewport a held left button is not idle motion — it is the engine's drag-to-rearrange
-	 * (an inventory slot, a prayer icon). Replaying a tap's roll there would invent an item drag the user
-	 * never made, so the stream stops at the viewport edge and those taps keep their single-point shape.
-	 */
-	@Test
-	public void aRollOverAnInterfaceIsNotReplayedAsADrag() throws Exception
-	{
-		// The tap point is inside the canvas but outside the scene viewport the mock reports.
-		when(client.getViewportXOffset()).thenReturn(0);
-		when(client.getViewportYOffset()).thenReturn(0);
-		when(client.getViewportWidth()).thenReturn(100);
-		when(client.getViewportHeight()).thenReturn(100);
-
-		JavaBridge.armTap(TAP_X, TAP_Y);
+		settleUntilArmed();
+		JavaBridge.onTapMove(TAP_X + 6, TAP_Y + 3);   // after the gate accepted, finger still down
 		pump();
-		settleUntilPressed();
-		JavaBridge.onTapMove(TAP_X + 6, TAP_Y + 6);
-		pump();
-
-		assertEquals("a roll over an interface must not become an engine item drag",
-			0, cap.count(MouseEvent.MOUSE_DRAGGED));
-
 		JavaBridge.onClick(TAP_X, TAP_Y, MouseEvent.BUTTON1);
 		pump();
-		assertEquals("and its release stays on the pressed slot", TAP_X,
-			cap.first(MouseEvent.MOUSE_RELEASED).getX());
+		JavaBridge.onTapMove(TAP_X + 9, TAP_Y + 9);   // after the lift
+		pump();
+
+		assertEquals("no sample may become a drag", 0, cap.count(MouseEvent.MOUSE_DRAGGED));
+		assertEquals("the press lands on the resolved point", TAP_X, cap.first(MouseEvent.MOUSE_PRESSED).getX());
+		assertEquals("and the release with it", TAP_X, cap.first(MouseEvent.MOUSE_RELEASED).getX());
 	}
 
 	// ---- harness ---------------------------------------------------------------------------------------
 
-	private int settleUntilPressed() throws Exception
+	private void settleUntilArmed() throws Exception
 	{
+		final Field f = JavaBridge.class.getDeclaredField("tapState");
+		f.setAccessible(true);
 		for (int i = 1; i <= 40; i++)
 		{
 			JavaBridge.tapTick(client);
 			pump();
-			if (cap.count(MouseEvent.MOUSE_PRESSED) > 0)
+			if ("ARMED".equals(String.valueOf(f.get(null))))
 			{
-				return i;
+				return;
 			}
 		}
 		throw new AssertionError("the settle gate never accepted in 40 ticks");
@@ -359,12 +216,6 @@ public class JavaBridgePointerStreamTest
 		when(cl.isMenuOpen()).thenReturn(false);
 		when(cl.getMenu()).thenReturn(menu);
 		when(cl.getMouseCanvasPosition()).thenReturn(new Point(TAP_X, TAP_Y));
-		// A viewport the tap point sits inside, so the default is the scene (where a held left button means
-		// nothing to the engine). The interface case overrides these.
-		when(cl.getViewportXOffset()).thenReturn(0);
-		when(cl.getViewportYOffset()).thenReturn(0);
-		when(cl.getViewportWidth()).thenReturn(VIEWPORT_W);
-		when(cl.getViewportHeight()).thenReturn(600);
 		return cl;
 	}
 
@@ -401,9 +252,6 @@ public class JavaBridgePointerStreamTest
 	private static void resetTapState() throws Exception
 	{
 		set("tapState", enumValue("TapState", "IDLE"));
-		set("pressOutstanding", false);
-		set("dragStreamOpen", false);
-		set("suppressClickFrames", 0);
 		set("tapUncommitted", false);
 		set("queuedTap", false);
 		set("entered", false);

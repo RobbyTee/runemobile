@@ -52,7 +52,6 @@ FLAG runelite.touch.hideClickCross
 FLAG runelite.touch.selFlashMs
 FLAG runelite.touch.settleMax
 FLAG runelite.touch.settleStable
-FLAG runelite.touch.suppressClickFrames
 METHOD ConfigProfileBridge#getProfilesJson()
 METHOD ConfigProfileBridge#init(ConfigManager,ProfileManager,ClientThread)
 METHOD ConfigProfileBridge#isAvailable()
