@@ -28,6 +28,7 @@
 #include <string>
 #include <regex>
 #include <atomic>
+#include <algorithm>
 
 #define LOG_TAG "librlawt"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -592,6 +593,11 @@ static jint rc_buf_remaining(JNIEnv *e, jobject buf) {
     static jmethodID mid = nullptr;
     return rc_buf_int(e, buf, &mid, "remaining");
 }
+// The data pointer of a typed buffer: base + position*elem (nullptr for a non-direct or null buffer).
+static void *rc_buf_ptr(JNIEnv *e, jobject buf, int elem) {
+    char *p = (char *)e->GetDirectBufferAddress(buf);
+    return p ? p + (size_t)rc_buf_position(e, buf) * elem : nullptr;
+}
 // glBufferData / glBufferSubData from a typed buffer: pointer = base + position*elem, size = remaining*elem.
 static void rc_buffer_data(JNIEnv *e, jint target, jobject buf, int elem, jint usage) {
     const char *p = (const char *)e->GetDirectBufferAddress(buf);
@@ -719,7 +725,9 @@ GLF rc_glMultiDrawArrays(JNIEnv *e, jclass, jint a0, jobject a1, jobject a2) {
         return;
     first += rc_buf_position(e, a1);
     count += rc_buf_position(e, a2);
-    const GLsizei n = (GLsizei)rc_buf_remaining(e, a1); // the flip()ed ranges of this draw, never the stale tail
+    // The flip()ed ranges of this draw, never the stale tail. LWJGL checks count against first in Java; these
+    // natives are bound directly, so bound the loop by both.
+    const GLsizei n = (GLsizei)std::min(rc_buf_remaining(e, a1), rc_buf_remaining(e, a2));
     if (sDrawCountOn) {
         sDcMultiCalls++;
         sDcMultiRanges += n; // 1 emit = n driver draw calls here
@@ -843,23 +851,39 @@ GLF rc_glInvalidateBufferData(JNIEnv*, jclass, jint){ /* desktop GL hint; GLES h
 static jlong JNICALL rc_glGetBufferParameteri64(JNIEnv*, jclass, jint a0, jint a1){ GLint64 v=0; glGetBufferParameteri64v((GLenum)a0,(GLenum)a1,&v); return (jlong)v; }
 static jint JNICALL rc_glGetFramebufferAttachmentParameteri(JNIEnv*, jclass, jint a0, jint a1, jint a2){ GLint v=0; glGetFramebufferAttachmentParameteriv((GLenum)a0,(GLenum)a1,(GLenum)a2,&v); return (jint)v; }
 GLF rc_glGetIntegerv_A(JNIEnv* e, jclass, jint a0, jintArray a1){ jint* p=e->GetIntArrayElements(a1,nullptr); glGetIntegerv((GLenum)a0,(GLint*)p); e->ReleaseIntArrayElements(a1,p,0); }
-GLF rc_glGetIntegerv_B(JNIEnv* e, jclass, jint a0, jobject a1){ glGetIntegerv((GLenum)a0,(GLint*)e->GetDirectBufferAddress(a1)); }
+GLF rc_glGetIntegerv_B(JNIEnv *e, jclass, jint a0, jobject a1) {
+    glGetIntegerv((GLenum)a0, (GLint *)rc_buf_ptr(e, a1, 4));
+}
 GLF rc_glGetProgramiv_A(JNIEnv* e, jclass, jint a0, jint a1, jintArray a2){ jint* p=e->GetIntArrayElements(a2,nullptr); glGetProgramiv((GLuint)a0,(GLenum)a1,(GLint*)p); e->ReleaseIntArrayElements(a2,p,0); }
-GLF rc_glGetProgramiv_B(JNIEnv* e, jclass, jint a0, jint a1, jobject a2){ glGetProgramiv((GLuint)a0,(GLenum)a1,(GLint*)e->GetDirectBufferAddress(a2)); }
+GLF rc_glGetProgramiv_B(JNIEnv *e, jclass, jint a0, jint a1, jobject a2) {
+    glGetProgramiv((GLuint)a0, (GLenum)a1, (GLint *)rc_buf_ptr(e, a2, 4));
+}
 GLF rc_glTexParameterfv_A(JNIEnv* e, jclass, jint a0, jint a1, jfloatArray a2){ jfloat* p=e->GetFloatArrayElements(a2,nullptr); glTexParameterfv((GLenum)a0,(GLenum)a1,p); e->ReleaseFloatArrayElements(a2,p,JNI_ABORT); }
-GLF rc_glTexParameterfv_B(JNIEnv* e, jclass, jint a0, jint a1, jobject a2){ glTexParameterfv((GLenum)a0,(GLenum)a1,(const GLfloat*)e->GetDirectBufferAddress(a2)); }
+GLF rc_glTexParameterfv_B(JNIEnv *e, jclass, jint a0, jint a1, jobject a2) {
+    glTexParameterfv((GLenum)a0, (GLenum)a1, (const GLfloat *)rc_buf_ptr(e, a2, 4));
+}
 GLF rc_glUniform2f(JNIEnv*, jclass, jint a0, jfloat a1, jfloat a2){ glUniform2f(a0,a1,a2); }
 GLF rc_glUniform3f(JNIEnv*, jclass, jint a0, jfloat a1, jfloat a2, jfloat a3){ glUniform3f(a0,a1,a2,a3); }
 GLF rc_glUniform2iv_A(JNIEnv* e, jclass, jint a0, jintArray a1){ jint* p=e->GetIntArrayElements(a1,nullptr); jsize n=e->GetArrayLength(a1); glUniform2iv(a0,n/2,(const GLint*)p); e->ReleaseIntArrayElements(a1,p,JNI_ABORT); }
-GLF rc_glUniform2iv_B(JNIEnv* e, jclass, jint a0, jobject a1){ glUniform2iv(a0,(GLsizei)(e->GetDirectBufferCapacity(a1)/2),(const GLint*)e->GetDirectBufferAddress(a1)); }
+GLF rc_glUniform2iv_B(JNIEnv *e, jclass, jint a0, jobject a1) {
+    glUniform2iv(a0, (GLsizei)(rc_buf_remaining(e, a1) / 2), (const GLint *)rc_buf_ptr(e, a1, 4));
+}
 GLF rc_glUniform3iv_A(JNIEnv* e, jclass, jint a0, jintArray a1){ jint* p=e->GetIntArrayElements(a1,nullptr); jsize n=e->GetArrayLength(a1); glUniform3iv(a0,n/3,(const GLint*)p); e->ReleaseIntArrayElements(a1,p,JNI_ABORT); }
-GLF rc_glUniform3iv_B(JNIEnv* e, jclass, jint a0, jobject a1){ glUniform3iv(a0,(GLsizei)(e->GetDirectBufferCapacity(a1)/3),(const GLint*)e->GetDirectBufferAddress(a1)); }
+GLF rc_glUniform3iv_B(JNIEnv *e, jclass, jint a0, jobject a1) {
+    glUniform3iv(a0, (GLsizei)(rc_buf_remaining(e, a1) / 3), (const GLint *)rc_buf_ptr(e, a1, 4));
+}
 GLF rc_glUniform4iv_A(JNIEnv* e, jclass, jint a0, jintArray a1){ jint* p=e->GetIntArrayElements(a1,nullptr); jsize n=e->GetArrayLength(a1); glUniform4iv(a0,n/4,(const GLint*)p); e->ReleaseIntArrayElements(a1,p,JNI_ABORT); }
-GLF rc_glUniform4iv_B(JNIEnv* e, jclass, jint a0, jobject a1){ glUniform4iv(a0,(GLsizei)(e->GetDirectBufferCapacity(a1)/4),(const GLint*)e->GetDirectBufferAddress(a1)); }
+GLF rc_glUniform4iv_B(JNIEnv *e, jclass, jint a0, jobject a1) {
+    glUniform4iv(a0, (GLsizei)(rc_buf_remaining(e, a1) / 4), (const GLint *)rc_buf_ptr(e, a1, 4));
+}
 GLF rc_glUniform3fv_A(JNIEnv* e, jclass, jint a0, jfloatArray a1){ jfloat* p=e->GetFloatArrayElements(a1,nullptr); jsize n=e->GetArrayLength(a1); glUniform3fv(a0,n/3,p); e->ReleaseFloatArrayElements(a1,p,JNI_ABORT); }
-GLF rc_glUniform3fv_B(JNIEnv* e, jclass, jint a0, jobject a1){ glUniform3fv(a0,(GLsizei)(e->GetDirectBufferCapacity(a1)/3),(const GLfloat*)e->GetDirectBufferAddress(a1)); }
+GLF rc_glUniform3fv_B(JNIEnv *e, jclass, jint a0, jobject a1) {
+    glUniform3fv(a0, (GLsizei)(rc_buf_remaining(e, a1) / 3), (const GLfloat *)rc_buf_ptr(e, a1, 4));
+}
 GLF rc_glUniform4fv_A(JNIEnv* e, jclass, jint a0, jfloatArray a1){ jfloat* p=e->GetFloatArrayElements(a1,nullptr); jsize n=e->GetArrayLength(a1); glUniform4fv(a0,n/4,p); e->ReleaseFloatArrayElements(a1,p,JNI_ABORT); }
-GLF rc_glUniform4fv_B(JNIEnv* e, jclass, jint a0, jobject a1){ glUniform4fv(a0,(GLsizei)(e->GetDirectBufferCapacity(a1)/4),(const GLfloat*)e->GetDirectBufferAddress(a1)); }
+GLF rc_glUniform4fv_B(JNIEnv *e, jclass, jint a0, jobject a1) {
+    glUniform4fv(a0, (GLsizei)(rc_buf_remaining(e, a1) / 4), (const GLfloat *)rc_buf_ptr(e, a1, 4));
+}
 // fence/sync (GLES 3.0 core) — GLsync is a pointer; carry it as a jlong handle.
 static jlong JNICALL rc_glFenceSync(JNIEnv*, jclass, jint a0, jint a1){ return (jlong)(intptr_t)glFenceSync((GLenum)a0,(GLbitfield)a1); }
 static jint JNICALL rc_glClientWaitSync(JNIEnv*, jclass, jlong a0, jint a1, jlong a2){ return (jint)glClientWaitSync((GLsync)(intptr_t)a0,(GLbitfield)a1,(GLuint64)a2); }
