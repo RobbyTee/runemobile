@@ -681,6 +681,37 @@ GLF rc_glMultiDrawArrays(JNIEnv* e, jclass, jint a0, jobject a1, jobject a2){
 }
 GLF rc_glReadBuffer(JNIEnv*, jclass, jint a0){ glReadBuffer(a0); }
 GLF rc_glReadPixels(JNIEnv* e, jclass, jint a0, jint a1, jint a2, jint a3, jint a4, jint a5, jobject a6){ glReadPixels(a0,a1,a2,a3,(GLenum)a4,(GLenum)a5,e->GetDirectBufferAddress(a6)); }
+// GpuPlugin.screenshot() (the Screenshot plugin: level-ups, drops, deaths, ...) reads the finished frame into a
+// BufferedImage's int[] as GL_BGRA / GL_UNSIGNED_INT_8_8_8_8_REV, one 0xAARRGGBB word per pixel. GLES reads only
+// GL_RGBA / GL_UNSIGNED_BYTE (0xAABBGGRR on little-endian), so read that into the scratch buffer and swap R and B on
+// the way out; the plugin flips the rows itself. Unbound, this overload threw UnsatisfiedLinkError on the client
+// thread at the first screenshot and stopped the game.
+GLF rc_glReadPixels_I(JNIEnv *e, jclass, jint a0, jint a1, jint a2, jint a3, jint a4, jint a5, jintArray a6) {
+    if (!a6 || a2 <= 0 || a3 <= 0)
+        return;
+    const size_t n = (size_t)a2 * (size_t)a3;
+    if ((size_t)e->GetArrayLength(a6) < n)
+        return;
+    const bool bgra = (GLenum)a4 == GL_BGRA && (GLenum)a5 == GL_UNSIGNED_INT_8_8_8_8_REV;
+    if (!bgra && !((GLenum)a4 == GL_RGBA && (GLenum)a5 == GL_UNSIGNED_BYTE)) {
+        LOGE("glReadPixels(int[]): format 0x%x type 0x%x has no GLES read here; array left as is", a4, a5);
+        return;
+    }
+    if (!sReadback || sReadbackN < n) {
+        free(sReadback);
+        sReadback = (uint32_t *)malloc(n * sizeof(uint32_t));
+        sReadbackN = sReadback ? n : 0;
+    }
+    if (!sReadback)
+        return;
+    glReadPixels(a0, a1, a2, a3, GL_RGBA, GL_UNSIGNED_BYTE, sReadback);
+    if (bgra)
+        for (size_t i = 0; i < n; i++) {
+            uint32_t p = sReadback[i];                                                    // 0xAABBGGRR
+            sReadback[i] = (p & 0xFF00FF00u) | ((p & 0xFFu) << 16) | ((p >> 16) & 0xFFu); // -> 0xAARRGGBB
+        }
+    e->SetIntArrayRegion(a6, 0, (jsize)n, (const jint *)sReadback);
+}
 GLF rc_glRenderbufferStorageMultisample(JNIEnv*, jclass, jint a0, jint a1, jint a2, jint a3, jint a4){
     GLenum ifmt=(GLenum)a2; if (ifmt==GL_RGBA) ifmt=GL_RGBA8;   // ES needs a SIZED internalformat
     glRenderbufferStorageMultisample(a0,a1,ifmt,a3,a4);
@@ -1177,6 +1208,7 @@ static jobject JNICALL rc_GL_createCapabilities(JNIEnv* env, jclass){ return rc_
 static jobject JNICALL rc_GL_getCapabilities(JNIEnv* env, jclass){ return rc_make_caps(env); }
 
 // ---- RegisterNatives tables (signatures match GLALL.java / AWTContext.java / GL.java exactly) ----------------
+// clang-format off
 static const JNINativeMethod kGLALL[] = {
     {"glActiveTexture","(I)V",(void*)rc_glActiveTexture},
     {"glAttachShader","(II)V",(void*)rc_glAttachShader},
@@ -1241,6 +1273,7 @@ static const JNINativeMethod kGLALL[] = {
     {"glMultiDrawArrays","(ILjava/nio/IntBuffer;Ljava/nio/IntBuffer;)V",(void*)rc_glMultiDrawArrays},
     {"glReadBuffer","(I)V",(void*)rc_glReadBuffer},
     {"glReadPixels","(IIIIIILjava/nio/ByteBuffer;)V",(void*)rc_glReadPixels},
+    {"glReadPixels","(IIIIII[I)V",(void*)rc_glReadPixels_I},
     {"glRenderbufferStorageMultisample","(IIIII)V",(void*)rc_glRenderbufferStorageMultisample},
     {"glShaderSource","(ILjava/lang/CharSequence;)V",(void*)rc_glShaderSource},
     {"glTexImage2D","(IIIIIIIIJ)V",(void*)rc_glTexImage2D},
@@ -1327,6 +1360,7 @@ static const JNINativeMethod kGLALL[] = {
     {"glBufferSubData","(IJLjava/nio/FloatBuffer;)V",(void*)rc_glBufferSubData_FB},
     {"glTexSubImage3D","(IIIIIIIIIILjava/nio/IntBuffer;)V",(void*)rc_glTexSubImage3D_buf},
 };
+// clang-format on
 static const JNINativeMethod kMEM[] = {
     {"nmemAllocChecked","(J)J",(void*)rc_mem_nmemAllocChecked},
     {"nmemFree","(J)V",(void*)rc_mem_nmemFree},
