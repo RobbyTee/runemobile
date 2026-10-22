@@ -207,8 +207,7 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 }
 @end
 
-@interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate, UNUserNotificationCenterDelegate, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate, UISearchBarDelegate, OverlayEditChatHost>
-{
+@interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate, UNUserNotificationCenterDelegate, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate, UISearchBarDelegate, OverlayEditHudHost> {
     // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
     // desktop stone. A C array, so it lives as an ivar rather than a property.
     CGPoint _tabCentres[14];
@@ -492,6 +491,11 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 @property (nonatomic, assign) int chatBaseY;
 @property (nonatomic, assign) int chatUserDX;               // persisted chat position offset from the base anchor (canvas px)
 @property (nonatomic, assign) int chatUserDY;
+@property (nonatomic, assign) int minimapBaseX; // safe-area-anchored minimap cluster origin (canvas px), before the user offset
+@property (nonatomic, assign) int minimapBaseY;
+@property (nonatomic, assign) int minimapUserDX; // persisted minimap offset from the base anchor (canvas px)
+@property (nonatomic, assign) int minimapUserDY;
+@property (nonatomic, assign) CGSize minimapCanvasSize; // the cluster's size from the chrome snapshot; zero until reported
 // Phase-6 native plugin panel: a ⚙ button opens a full-screen modal sheet (scrim eats all touches so nothing
 // falls through to the game) listing the plugins (MobileUiBridge.listPlugins) with an enable/disable switch
 // and a running/stopped indicator. Refreshed when the bridge's event sequence advances (toggles, conflicts).
@@ -634,6 +638,8 @@ static NSString * const kKbSentinel = @"​";
 // engine-px dimensions used to treat tab-row taps as UI (precise click, no walk ring).
 static const int kChatW = 519;
 static const int kChatTabRowH = 23;
+// The minimap+orbs cluster width (fixed engine px, from the de-risk), until the chrome snapshot reports its size.
+static const int kMinimapClusterW = 211;
 
 // W3 A3 (native chat tabs, matching the official OSRS-mobile app): 7 tabs (NO Report — the official app doesn't
 // show it in the tab row), each a stone button with the channel name on top and, for the filterable channels, the
@@ -954,6 +960,9 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor blackColor];
     self.bgTask = UIBackgroundTaskInvalid;
+    // Persisted minimap position offset (set in overlay edit-mode; applied in updateHudLayout).
+    self.minimapUserDX = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"minimapUserDX"];
+    self.minimapUserDY = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"minimapUserDY"];
     [self buildUI];
     [self openLogFile];
     self.bgKeepTask = UIBackgroundTaskInvalid;
@@ -3037,7 +3046,7 @@ static const int kCamPitchPxPerSec = 200;
     OverlayEditView *ov = [[OverlayEditView alloc] initWithFrame:self.view.bounds
                                                          canvasW:self.renderW canvasH:self.renderH presenter:self];
     ov.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    ov.chatHost = self;                            // show the chatbox as a draggable "Chat" handle
+    ov.hudHost = self; // show the chatbox and minimap as draggable handles
     __weak typeof(self) ws = self;
     ov.onClose = ^{ ws.overlayEdit = nil; };   // clear the strong ref on teardown (no dangling removed view)
     [self.view addSubview:ov];
@@ -5487,6 +5496,16 @@ static int chatRowCanvasH(void) {
         return;
     }
     [JVMLauncher setEngineStonesHidden:YES]; // supported Modern layout: the native grid replaces the engine stones
+    // The minimap cluster's real size, for the overlay editor's "Minimap" handle and its on-screen clamp. Re-clamp
+    // when it changes: a saved offset was applied against the fallback size.
+    NSArray *mc = d[@"mapContainer"];
+    if ([mc isKindOfClass:[NSArray class]] && mc.count >= 4 && [mc[2] intValue] > 0 && [mc[3] intValue] > 0) {
+        CGSize size = CGSizeMake([mc[2] intValue], [mc[3] intValue]);
+        if (!CGSizeEqualToSize(size, self.minimapCanvasSize)) {
+            self.minimapCanvasSize = size;
+            [self applyMinimapRelocate];
+        }
+    }
     int active = [d[@"activeTab"] intValue];
 
     // All 14 tabs in ONE 2-column grid at the BOTTOM-RIGHT — the official OSRS-mobile arrangement. The engine
@@ -6140,8 +6159,7 @@ static int chatRowCanvasH(void) {
     int topC   = (int)lround(ins.top * k);
     int leftC  = (int)lround(ins.left * k);
     int rightC = (int)lround(ins.right * k);
-    const int m = 8;                          // canvas-px margin from the safe edge
-    const int MM_W = 211;                     // minimap+orbs cluster width (fixed engine px, from the de-risk)
+    const int m = 8; // canvas-px margin from the safe edge
     // Make the minimap BIGGER: enlarge the engine globe + reposition its chrome (HudVeneerBridge.setMinimapScale).
     // The globe is right-anchored, so it grows left+down within the cluster — the right edge stays at MM_W, so the
     // cluster still aligns to the right safe edge; only the orbs/compass spread further left/down (into the gap
@@ -6150,14 +6168,14 @@ static int chatRowCanvasH(void) {
 
     self.chatBaseX = leftC + m;
     self.chatBaseY = topC + m;
-    int mmX = self.renderW - MM_W - rightC - m;
-    int mmY = topC + m;
+    self.minimapBaseX = self.renderW - kMinimapClusterW - rightC - m;
+    self.minimapBaseY = topC + m;
 
     // transparent:YES = OSRS-mobile translucent chat (text over the scene, no opaque box) — the official look.
     // Apply the persisted user drag offset to the base anchor (relocates the engine chat + sets the hit/scroll rects).
     [self applyChatRelocate];
     // W3 A3: the native veneer recreates the tab row BIGGER (engine push-down applied per-tick in updateChatTabs).
-    [JVMLauncher relocateEngineMinimapX:mmX y:mmY];
+    [self applyMinimapRelocate];                            // base anchor + the persisted user offset, like the chat
     [JVMLauncher setEngineMinimapScale:kMinimapScalePct];   // enlarge the globe + reposition its chrome to hug it
     [JVMLauncher setEngineStonesHidden:YES];   // the native 2-col grid replaces them (no cover patch / gray box)
     // Overlay snap-corner safe frame: plugin overlays snapped to a corner (Quest Helper's top-left guidance
@@ -6166,8 +6184,34 @@ static int chatRowCanvasH(void) {
     [JVMLauncher setEngineOverlaySafeInsetsL:leftC t:topC r:rightC b:botC];
     // The whole enlarged tab row is UI: a stray tap in it (between native buttons) should be a precise click, not
     // a walk. The native buttons own their taps; this rect just keeps any leak from drawing a walk ring.
-    [self appendLine:[NSString stringWithFormat:@"[hud] relocate chat->%d,%d(+%d,%d) minimap->%d,%d (insets L%d T%d R%d k%.2f)",
-                      self.chatBaseX, self.chatBaseY, self.chatUserDX, self.chatUserDY, mmX, mmY, leftC, topC, rightC, k]];
+    [self appendLine:[NSString stringWithFormat:@"[hud] relocate chat->%d,%d(+%d,%d) minimap->%d,%d(+%d,%d) (insets L%d T%d R%d k%.2f)",
+                                                self.chatBaseX, self.chatBaseY, self.chatUserDX, self.chatUserDY, self.minimapBaseX,
+                                                self.minimapBaseY, self.minimapUserDX, self.minimapUserDY, leftC, topC, rightC, k]];
+}
+
+// Relocate the minimap+orbs cluster to (base anchor + persisted user offset), clamped on-screen. Called from
+// updateHudLayout, when the chrome snapshot first reports the cluster's size, and live while it's moved in overlay
+// edit-mode. Minimap clicks and the orb taps follow it: both use the engine's live widget bounds.
+- (void)applyMinimapRelocate {
+    if (self.renderW <= 0 || self.minimapBaseX <= 0)
+        return; // not placed yet
+    [JVMLauncher relocateEngineMinimapX:[self clampMinimapX:self.minimapBaseX + self.minimapUserDX]
+                                      y:[self clampMinimapY:self.minimapBaseY + self.minimapUserDY]];
+}
+
+- (int)clampMinimapX:(int)x {
+    int w = self.minimapCanvasSize.width > 0 ? (int)self.minimapCanvasSize.width : kMinimapClusterW;
+    int maxX = self.renderW - w;
+    if (maxX < 0)
+        maxX = 0;
+    return x < 0 ? 0 : (x > maxX ? maxX : x);
+}
+
+- (int)clampMinimapY:(int)y {
+    int maxY = self.renderH - (int)self.minimapCanvasSize.height; // height unknown (0): keep the top on-screen
+    if (maxY < 0)
+        maxY = 0;
+    return y < 0 ? 0 : (y > maxY ? maxY : y);
 }
 
 // Relocate the chat to (base anchor + persisted user offset), clamped on-screen, and sync the hit/scroll rects.
@@ -6205,7 +6249,7 @@ static int chatRowCanvasH(void) {
     return y < 0 ? 0 : (y > maxY ? maxY : y);
 }
 
-// ---- OverlayEditChatHost: the chatbox is repositioned in overlay edit-mode (a draggable "Chat" handle) ----
+// ---- OverlayEditHudHost: the chatbox and minimap are repositioned in overlay edit-mode (draggable handles) ----
 
 - (CGRect)overlayEditChatCanvasRect {
     if (!kChatVeneerEnabled) return CGRectNull;   // veneer removed: no native chat to drag in overlay edit-mode
@@ -6225,6 +6269,37 @@ static int chatRowCanvasH(void) {
     [[NSUserDefaults standardUserDefaults] setInteger:self.chatUserDX forKey:@"chatUserDX"];
     [[NSUserDefaults standardUserDefaults] setInteger:self.chatUserDY forKey:@"chatUserDY"];
     [self appendLine:[NSString stringWithFormat:@"[chat] moved -> offset %d,%d", self.chatUserDX, self.chatUserDY]];
+}
+
+- (CGRect)overlayEditMinimapCanvasRect {
+    // Not placed yet, or its size not reported yet (the handle must cover the real cluster).
+    if (self.renderW <= 0 || self.minimapBaseX <= 0 || self.minimapCanvasSize.height <= 0)
+        return CGRectNull;
+    return CGRectMake([self clampMinimapX:self.minimapBaseX + self.minimapUserDX],
+                      [self clampMinimapY:self.minimapBaseY + self.minimapUserDY], self.minimapCanvasSize.width,
+                      self.minimapCanvasSize.height);
+}
+
+- (void)overlayEditMoveMinimapToCanvasX:(int)x y:(int)y {
+    self.minimapUserDX = [self clampMinimapX:x] - self.minimapBaseX;
+    self.minimapUserDY = [self clampMinimapY:y] - self.minimapBaseY;
+    [self applyMinimapRelocate];
+}
+
+- (void)overlayEditCommitMinimapMove {
+    [[NSUserDefaults standardUserDefaults] setInteger:self.minimapUserDX forKey:@"minimapUserDX"];
+    [[NSUserDefaults standardUserDefaults] setInteger:self.minimapUserDY forKey:@"minimapUserDY"];
+    [self appendLine:[NSString stringWithFormat:@"[minimap] moved -> offset %d,%d", self.minimapUserDX,
+                                                self.minimapUserDY]];
+}
+
+- (void)overlayEditResetMinimap {
+    self.minimapUserDX = 0;
+    self.minimapUserDY = 0;
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"minimapUserDX"];
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"minimapUserDY"];
+    [self applyMinimapRelocate];
+    [self appendLine:@"[minimap] reset -> automatic top-right"];
 }
 
 // World map (touch): poll the bridge map snapshot (~10 Hz). Edge-triggered chrome hide/restore: the engine

@@ -310,6 +310,13 @@ class MainActivity : AppCompatActivity() {
     private var chatUserDX = 0
     private var chatUserDY = 0
 
+    // The same override for the minimap+orbs cluster (its "Minimap" edit handle): an offset from the top-right
+    // auto placement, persisted beside the chat's and cleared by Reset-all or the handle's own reset.
+    private var minimapBaseX = 0
+    private var minimapBaseY = 0
+    private var minimapUserDX = 0
+    private var minimapUserDY = 0
+
     // A3 enlarged native chat-tab veneer (bigger touch targets over the relocated engine chat row).
     private lateinit var chatTabOverlay: ChatPillView
 
@@ -481,9 +488,11 @@ class MainActivity : AppCompatActivity() {
         // stops itself so a forgotten backgrounded app doesn't hold the process (and drain battery) indefinitely.
         private const val PREFS_KEEPALIVE = "keepalive"
         private const val KEY_KEEPALIVE_ENABLED = "enabled"
-        private const val PREFS_CHAT = "chat" // chat-at-top user override
+        private const val PREFS_CHAT = "chat" // chat-at-top and minimap user overrides
         private const val KEY_CHAT_DX = "chatOverrideX"
         private const val KEY_CHAT_DY = "chatOverrideY"
+        private const val KEY_MINIMAP_DX = "minimapOverrideX"
+        private const val KEY_MINIMAP_DY = "minimapOverrideY"
         private const val KEEPALIVE_IDLE_STOP_MS = 600_000L
 
         // AWT virtual-key codes (java.awt.event.KeyEvent) the engine's onKeyStroke expects.
@@ -728,6 +737,7 @@ class MainActivity : AppCompatActivity() {
                         .apply()
                     lastChatX = Int.MIN_VALUE
                     lastChatY = Int.MIN_VALUE
+                    resetMinimapOverride()
                     JvmLauncher.onBridgeTouch {
                         for (b in overlayEditView.currentNames()) JvmLauncher.overlayReset(b)
                         JvmLauncher.flushConfig()
@@ -750,12 +760,31 @@ class MainActivity : AppCompatActivity() {
                         .apply()
                     Log.i(TAG, "chat-edit: moved -> offset ($chatUserDX,$chatUserDY)")
                 }
+                onMinimapMove = { cx, cy ->
+                    // Same as the chat: absolute canvas coords -> offset from the auto base; relocate live.
+                    minimapUserDX = cx - minimapBaseX
+                    minimapUserDY = cy - minimapBaseY
+                    lastMmX = cx
+                    lastMmY = cy
+                    minimapRectCanvas?.let { r -> minimapRectCanvas = intArrayOf(cx, cy, r[2], r[3]) }
+                    JvmLauncher.onBridgeTouch { JvmLauncher.relocateMinimap(cx, cy) }
+                }
+                onMinimapCommit = {
+                    getSharedPreferences(PREFS_CHAT, MODE_PRIVATE)
+                        .edit()
+                        .putInt(KEY_MINIMAP_DX, minimapUserDX)
+                        .putInt(KEY_MINIMAP_DY, minimapUserDY)
+                        .apply()
+                    Log.i(TAG, "minimap-edit: moved -> offset ($minimapUserDX,$minimapUserDY)")
+                }
                 onDone = { exitOverlayEditMode() }
             }
-        // Restore any persisted chat-at-top override so applyChatAtTop honours it from the first frame.
+        // Restore any persisted chat-at-top and minimap overrides so the first frame honours them.
         getSharedPreferences(PREFS_CHAT, MODE_PRIVATE).let {
             chatUserDX = it.getInt(KEY_CHAT_DX, 0)
             chatUserDY = it.getInt(KEY_CHAT_DY, 0)
+            minimapUserDX = it.getInt(KEY_MINIMAP_DX, 0)
+            minimapUserDY = it.getInt(KEY_MINIMAP_DY, 0)
         }
         chromeOverlay = ChromeOverlayView(this)
         chromeOverlay.onTabTap = { idx ->
@@ -3020,6 +3049,16 @@ class MainActivity : AppCompatActivity() {
     // strings are the OverlayPosition enum names the shared OverlayBridge.snap parses; "Reset to default" reuses
     // the same per-name reset onResetAll loops over, but for just this overlay. Both persist via flushConfig.
     private fun showOverlayHandleMenu(name: String) {
+        if (name == OverlayEditView.MINIMAP_HANDLE) {
+            // Not an overlay: no snap corners, just back to the automatic top-right spot.
+            AlertDialog
+                .Builder(this)
+                .setTitle("Minimap")
+                .setItems(arrayOf("Reset to default")) { _, _ -> resetMinimapOverride() }
+                .setNegativeButton("Cancel", null)
+                .show()
+            return
+        }
         val labels =
             arrayOf(
                 "Snap top-left",
@@ -3070,6 +3109,15 @@ class MainActivity : AppCompatActivity() {
                                     overlayEditView.setChatBox(
                                         if (lastChatX >= 0 && cr != null) {
                                             OverlayEditView.Box(OverlayEditView.CHAT_HANDLE, cr[0], cr[1], cr[2], cr[3])
+                                        } else {
+                                            null
+                                        },
+                                    )
+                                    // Likewise the "Minimap" handle, while the cluster is relocated.
+                                    val mr = minimapRectCanvas
+                                    overlayEditView.setMinimapBox(
+                                        if (lastMmX >= 0 && mr != null) {
+                                            OverlayEditView.Box(OverlayEditView.MINIMAP_HANDLE, mr[0], mr[1], mr[2], mr[3])
                                         } else {
                                             null
                                         },
@@ -4104,8 +4152,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** A7 edge-to-edge: pull the engine minimap+orbs cluster (MAP_CONTAINER) into the top-right safe area — flush
-     *  to the right edge, top-aligned, clear of a notch. It stays the live HUD (minimap click-to-walk + orb clicks
-     *  keep working — the iOS relocateEngineMinimap move). The cluster width comes from the snapshot. On change. */
+     *  to the right edge, top-aligned, clear of a notch — plus the user's edit-mode offset, clamped on-frame. It
+     *  stays the live HUD (minimap click-to-walk + orb clicks keep working — the iOS relocateEngineMinimap move).
+     *  The cluster size comes from the snapshot. On change. */
     private fun applyMinimap(o: JSONObject?) {
         val fw = JvmLauncher.frameWidth()
         val fh = JvmLauncher.frameHeight()
@@ -4123,14 +4172,30 @@ class MainActivity : AppCompatActivity() {
             mapW = mc.getInt(2)
             if (mc.optInt(3) > 0) mapH = mc.getInt(3)
         }
-        val mmX = maxOf(0, fw - mapW - Math.round(ins[2] * kx) - margin)
-        val mmY = Math.round(ins[1] * ky) + margin
+        minimapBaseX = maxOf(0, fw - mapW - Math.round(ins[2] * kx) - margin)
+        minimapBaseY = Math.round(ins[1] * ky) + margin
+        val mmX = (minimapBaseX + minimapUserDX).coerceIn(0, (fw - mapW).coerceAtLeast(0))
+        val mmY = (minimapBaseY + minimapUserDY).coerceIn(0, (fh - mapH).coerceAtLeast(0))
         // AP-0: cache the relocated cluster's canvas rect so a tap on the minimap/orbs suppresses the walk-ring.
         minimapRectCanvas = intArrayOf(mmX, mmY, mapW, mapH)
         if (mmX == lastMmX && mmY == lastMmY) return
         lastMmX = mmX
         lastMmY = mmY
         JvmLauncher.onBridge { JvmLauncher.relocateMinimap(mmX, mmY) }
+    }
+
+    /** Drop the minimap's edit-mode offset; the next chrome tick re-applies the automatic top-right placement. */
+    private fun resetMinimapOverride() {
+        minimapUserDX = 0
+        minimapUserDY = 0
+        getSharedPreferences(PREFS_CHAT, MODE_PRIVATE)
+            .edit()
+            .remove(KEY_MINIMAP_DX)
+            .remove(KEY_MINIMAP_DY)
+            .apply()
+        lastMmX = Int.MIN_VALUE
+        lastMmY = Int.MIN_VALUE
+        Log.i(TAG, "minimap-edit: reset -> automatic top-right")
     }
 
     /** Stop relocating the minimap (let it return to its native position) when the chrome disengages. */

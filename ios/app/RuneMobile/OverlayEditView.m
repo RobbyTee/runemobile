@@ -1,15 +1,17 @@
 #import "OverlayEditView.h"
 #import "JVMLauncher.h"
 
-// The native chatbox handle's reserved key (it's not a RuneLite overlay, so it never appears in overlaysJson).
+// Reserved keys for the shell-placed HUD handles (not RuneLite overlays, so they never appear in overlaysJson).
 static NSString * const kChatHandleKey = @"__chat__";
+static NSString *const kMinimapHandleKey = @"__minimap__";
 
 // One draggable overlay handle: a translucent labelled box pinned over the overlay's on-screen rect. Drag it to
 // reposition (free location); tap it for the snap-corner / reset menu.
 @interface OverlayHandle : UIView
 @property (nonatomic, copy) NSString *overlayName;
 @property (nonatomic, assign) BOOL snappable;
-@property (nonatomic, assign) BOOL isChat;     // the native chatbox handle (moves via the chat host, not OverlayBridge)
+@property (nonatomic, assign) BOOL isChat;    // the native chatbox handle (moves via the HUD host, not OverlayBridge)
+@property (nonatomic, assign) BOOL isMinimap; // the minimap cluster handle (likewise)
 @property (nonatomic, strong) UILabel *label;
 @end
 
@@ -82,10 +84,10 @@ static NSString * const kChatHandleKey = @"__chat__";
             __strong typeof(weakSelf) s = weakSelf;
             if (!s) { [t invalidate]; return; }
             [s rebuildHandles];
-            [s ensureChatHandle];
+            [s ensureHudHandles];
         }];
         [self rebuildHandles];
-        [self ensureChatHandle];
+        [self ensureHudHandles];
     }
     return self;
 }
@@ -173,8 +175,9 @@ static NSString * const kChatHandleKey = @"__chat__";
         NSArray *b = o[@"bounds"];
         if (name.length == 0 || ![b isKindOfClass:[NSArray class]] || b.count < 4) continue;
         // Skip the engine's CHATBOX widget overlay (RESIZABLE/FIXED_VIEWPORT_*_CHATBOX_PARENT): the chat is
-        // native-rendered here, so use the "Chat" handle instead of this duplicate/non-functional box. Other widget
-        // overlays (the minimap) + plugin overlays (XP tracker etc.) keep their handles.
+        // native-rendered here, so use the "Chat" handle instead of this duplicate/non-functional box. The bridge
+        // already drops the relocated minimap and side panel (OverlayBridge.HUD_OWNED); the minimap gets the
+        // "Minimap" handle below. Plugin overlays (XP tracker etc.) keep their handles.
         if ([name containsString:@"CHATBOX"]) continue;
         CGRect r = CGRectMake([b[0] doubleValue] * s, [b[1] doubleValue] * s,
                               [b[2] doubleValue] * s, [b[3] doubleValue] * s);
@@ -201,9 +204,10 @@ static NSString * const kChatHandleKey = @"__chat__";
         }
         h.snappable = [o[@"snappable"] boolValue];
     }
-    // Drop handles for overlays that vanished (never the chat handle — it isn't in overlaysJson).
+    // Drop handles for overlays that vanished (never the HUD handles: they aren't in overlaysJson).
     for (NSString *name in self.handles.allKeys) {
-        if ([name isEqualToString:kChatHandleKey]) continue;
+        if ([name isEqualToString:kChatHandleKey] || [name isEqualToString:kMinimapHandleKey])
+            continue;
         if (![seen containsObject:name]) {
             [self.handles[name] removeFromSuperview];
             [self.handles removeObjectForKey:name];
@@ -211,34 +215,66 @@ static NSString * const kChatHandleKey = @"__chat__";
     }
 }
 
-// Pin a "Chat" handle over the native chatbox so it's repositioned the same way as the overlays. The chat isn't a
-// RuneLite overlay, so its rect + moves come from the chat host (the ViewController), not OverlayBridge.
-- (void)ensureChatHandle {
+// Pin "Chat" and "Minimap" handles over the native chatbox and the minimap cluster so they're repositioned the
+// same way as the overlays. Neither is a RuneLite overlay, so their rects + moves come from the HUD host (the
+// ViewController), not OverlayBridge.
+- (void)ensureHudHandles {
     if (self.dragging) return;
-    CGRect cr = self.chatHost ? [self.chatHost overlayEditChatCanvasRect] : CGRectNull;
-    OverlayHandle *h = self.handles[kChatHandleKey];
+    id<OverlayEditHudHost> host = self.hudHost;
+    [self ensureHudHandle:kChatHandleKey
+                    label:@"Chat"
+               canvasRect:host ? [host overlayEditChatCanvasRect] : CGRectNull];
+    [self ensureHudHandle:kMinimapHandleKey
+                    label:@"Minimap"
+               canvasRect:host ? [host overlayEditMinimapCanvasRect] : CGRectNull];
+}
+
+- (void)ensureHudHandle:(NSString *)key label:(NSString *)label canvasRect:(CGRect)cr {
+    OverlayHandle *h = self.handles[key];
     if (CGRectIsNull(cr) || cr.size.width <= 0 || cr.size.height <= 0) {
-        if (h) { [h removeFromSuperview]; [self.handles removeObjectForKey:kChatHandleKey]; }
+        if (h) {
+            [h removeFromSuperview];
+            [self.handles removeObjectForKey:key];
+        }
         return;
     }
     CGFloat s = [self scale];
     CGRect r = CGRectMake(cr.origin.x * s, cr.origin.y * s, cr.size.width * s, cr.size.height * s);
     if (!h) {
         h = [[OverlayHandle alloc] initWithFrame:r];
-        h.overlayName = kChatHandleKey;
-        h.isChat = YES;
-        h.label.text = @"Chat";
+        h.overlayName = key;
+        h.isChat = [key isEqualToString:kChatHandleKey];
+        h.isMinimap = [key isEqualToString:kMinimapHandleKey];
+        h.label.text = label;
         UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(onPan:)];
-        [h addGestureRecognizer:pan];   // no snap/reset menu for chat
+        [h addGestureRecognizer:pan];
+        if (h.isMinimap) {
+            // Reset only (no snap corners): it's not an overlay. Chat has no menu.
+            UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTap:)];
+            [h addGestureRecognizer:tap];
+        }
         [self.handleLayer addSubview:h];
-        self.handles[kChatHandleKey] = h;
+        self.handles[key] = h;
     } else {
-        NSNumber *until = self.suppressRepinUntil[kChatHandleKey];
+        NSNumber *until = self.suppressRepinUntil[key];
         if (!until || CFAbsoluteTimeGetCurrent() >= until.doubleValue) {
             h.frame = r;
-            if (until) [self.suppressRepinUntil removeObjectForKey:kChatHandleKey];
+            if (until)
+                [self.suppressRepinUntil removeObjectForKey:key];
         }
     }
+}
+
+// Move the live HUD piece under the scrim (chat or minimap) to canvas (x,y); YES if h is one of those handles.
+- (BOOL)moveHudPiece:(OverlayHandle *)h x:(int)x y:(int)y {
+    if (h.isChat) {
+        [self.hudHost overlayEditMoveChatToCanvasX:x y:y];
+    } else if (h.isMinimap) {
+        [self.hudHost overlayEditMoveMinimapToCanvasX:x y:y];
+    } else {
+        return NO;
+    }
+    return YES;
 }
 
 // "XpInfoBoxOverlay" -> "Xp Info Box Overlay" (space only at a lower->upper boundary so acronym runs like
@@ -266,12 +302,9 @@ static NSString * const kChatHandleKey = @"__chat__";
         CGPoint t = [g translationInView:self.handleLayer];
         h.center = CGPointMake(h.center.x + t.x, h.center.y + t.y);
         [g setTranslation:CGPointZero inView:self.handleLayer];
-        if (h.isChat) {
-            // Move the live (under-scrim) chat with the handle so it tracks the finger.
-            CGFloat s = [self scale];
-            [self.chatHost overlayEditMoveChatToCanvasX:(int)lround(h.frame.origin.x / s)
-                                                      y:(int)lround(h.frame.origin.y / s)];
-        }
+        // Move the live (under-scrim) chat or minimap with the handle so it tracks the finger.
+        CGFloat s = [self scale];
+        [self moveHudPiece:h x:(int)lround(h.frame.origin.x / s) y:(int)lround(h.frame.origin.y / s)];
     } else if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
         CGFloat s = [self scale];
         int wpx = (int)lround(h.frame.size.width / s);
@@ -282,9 +315,12 @@ static NSString * const kChatHandleKey = @"__chat__";
         cy = MAX(0, MIN(cy, self.canvasH - hpx));
         // Reflect the clamp on screen, then hold it against the lagging snapshot.
         h.frame = CGRectMake(cx * s, cy * s, h.frame.size.width, h.frame.size.height);
-        if (h.isChat) {
-            [self.chatHost overlayEditMoveChatToCanvasX:cx y:cy];
-            [self.chatHost overlayEditCommitChatMove];
+        if ([self moveHudPiece:h x:cx y:cy]) {
+            if (h.isChat) {
+                [self.hudHost overlayEditCommitChatMove];
+            } else {
+                [self.hudHost overlayEditCommitMinimapMove];
+            }
         } else {
             // Persist the overlay's free location (top-left, canvas px) through the bridge.
             [JVMLauncher overlaySetLocation:h.overlayName x:cx y:cy];
@@ -304,6 +340,22 @@ static NSString * const kChatHandleKey = @"__chat__";
     OverlayHandle *h = (OverlayHandle *)g.view;
     UIViewController *pres = self.presenter;
     if (!pres) return;
+    if (h.isMinimap) {
+        UIAlertController *mm = [UIAlertController alertControllerWithTitle:@"Minimap"
+                                                                    message:nil
+                                                             preferredStyle:UIAlertControllerStyleActionSheet];
+        [mm addAction:[UIAlertAction actionWithTitle:@"Reset to default"
+                                               style:UIAlertActionStyleDestructive
+                                             handler:^(UIAlertAction *a) {
+                                                 // No hold: the next poll moves the handle back.
+                                                 [self.hudHost overlayEditResetMinimap];
+                                             }]];
+        [mm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        mm.popoverPresentationController.sourceView = h;
+        mm.popoverPresentationController.sourceRect = h.bounds;
+        [pres presentViewController:mm animated:YES completion:nil];
+        return;
+    }
     UIAlertController *ac = [UIAlertController alertControllerWithTitle:[self prettyName:h.overlayName]
                                                                message:nil
                                                         preferredStyle:UIAlertControllerStyleActionSheet];

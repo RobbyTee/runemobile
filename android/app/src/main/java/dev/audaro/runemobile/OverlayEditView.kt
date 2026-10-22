@@ -54,11 +54,21 @@ class OverlayEditView(
     /** Chat handle released → host persists the override. */
     var onChatCommit: (() -> Unit)? = null
 
+    /** Live drag of the synthetic "Minimap" handle -> new cluster top-left in CANVAS px (host relocates it). */
+    var onMinimapMove: ((canvasX: Int, canvasY: Int) -> Unit)? = null
+
+    /** Minimap handle released after a drag -> host persists the override. A tap goes to [onHandleMenu]. */
+    var onMinimapCommit: (() -> Unit)? = null
+
     private var boxes: List<Box> = emptyList()
 
     // Synthetic draggable chatbox handle, present only while chat-at-top relocation is active (host feeds it). It
     // is dragged like the overlay boxes but moves the live engine chat instead of an overlay-preferred-location.
     private var chatBox: Box? = null
+
+    // Synthetic minimap+orbs cluster handle, present only while the cluster is relocated (host feeds it). Moves
+    // the live cluster the same way the chat handle moves the chat.
+    private var minimapBox: Box? = null
 
     // Drag state. dragW/dragH (view px) drive the on-screen box; dragCw/dragCh are the box's ORIGINAL canvas-px
     // size, cached on grab so the commit clamp uses the exact integer footprint (no view-px round-trip drift).
@@ -67,6 +77,8 @@ class OverlayEditView(
     private var dragH = 0f
     private var dragCw = 0
     private var dragCh = 0
+    private var dragOrigCx = 0 // the grabbed box's canvas top-left, to undo a tap's sub-slop live move
+    private var dragOrigCy = 0
     private var grabDX = 0f
     private var grabDY = 0f
     private var dragLeft = 0f
@@ -133,8 +145,16 @@ class OverlayEditView(
         invalidate()
     }
 
-    /** boxes + the synthetic chat handle (when present) — the full set drawn and hit-tested. */
-    private fun allBoxes(): List<Box> = chatBox?.let { boxes + it } ?: boxes
+    /** Feed the live minimap cluster bounds (canvas px) while it's relocated, or null to remove the handle. The box
+     *  being dragged is preserved so the live relocate isn't fought by the poll. */
+    fun setMinimapBox(box: Box?) {
+        if (dragName == MINIMAP_HANDLE) return
+        minimapBox = box
+        invalidate()
+    }
+
+    /** boxes + the synthetic minimap and chat handles (when present) — the full set drawn and hit-tested. */
+    private fun allBoxes(): List<Box> = boxes + listOfNotNull(minimapBox, chatBox)
 
     /** Names of the overlays currently shown (for Reset-all). */
     fun currentNames(): List<String> = boxes.map { it.name }
@@ -173,7 +193,12 @@ class OverlayEditView(
             rrf.set(l, t, r, bot)
             canvas.drawRect(rrf, if (dragging) fillActive else fill)
             canvas.drawRect(rrf, border)
-            val name = if (b.name == CHAT_HANDLE) "Chat" else prettyOverlayName(b.name)
+            val name =
+                when (b.name) {
+                    CHAT_HANDLE -> "Chat"
+                    MINIMAP_HANDLE -> "Minimap"
+                    else -> prettyOverlayName(b.name)
+                }
             val tw = label.measureText(name)
             val lx = l + 3f * dp
             val ly = t + 13f * dp
@@ -233,6 +258,8 @@ class OverlayEditView(
                 dragName = b.name
                 dragCw = b.cw
                 dragCh = b.ch
+                dragOrigCx = b.cx
+                dragOrigCy = b.cy
                 dragW = b.cw * sx
                 dragH = b.ch * sy
                 dragLeft = b.cx * sx
@@ -252,6 +279,8 @@ class OverlayEditView(
                 if (dragName == CHAT_HANDLE) {
                     // Relocate the live engine chat as the finger moves (iOS overlayEditMoveChatToCanvasX parity).
                     onChatMove?.invoke(canvasXOf(dragLeft), canvasYOf(dragTop))
+                } else if (dragName == MINIMAP_HANDLE) {
+                    onMinimapMove?.invoke(canvasXOf(dragLeft), canvasYOf(dragTop))
                 }
                 invalidate()
                 return true
@@ -262,17 +291,7 @@ class OverlayEditView(
                 if (name != null && event.actionMasked == MotionEvent.ACTION_UP) {
                     val moved = hypot(event.x - downX, event.y - downY)
                     val quick = event.eventTime - event.downTime <= TAP_MAX_MS
-                    if (name == CHAT_HANDLE) {
-                        // The chat already tracked the finger via onChatMove; just persist the final spot. A pure
-                        // tap leaves the offset unchanged, so committing is harmless (no snap/reset menu here).
-                        onChatMove?.invoke(canvasXOf(dragLeft), canvasYOf(dragTop))
-                        onChatCommit?.invoke()
-                    } else if (moved <= touchSlop && quick) {
-                        // A tap, not a drag: open the snap/reset menu (parity with iOS's per-handle action sheet).
-                        onHandleMenu?.invoke(name)
-                    } else {
-                        onDrop?.invoke(name, canvasXOf(dragLeft), canvasYOf(dragTop))
-                    }
+                    release(name, tap = moved <= touchSlop && quick)
                 }
                 dragName = null
                 invalidate()
@@ -280,6 +299,41 @@ class OverlayEditView(
             }
         }
         return false
+    }
+
+    /** A grabbed [name] was let go: commit where it was dragged, or for a [tap] open its menu. */
+    private fun release(
+        name: String,
+        tap: Boolean,
+    ) {
+        when {
+            name == CHAT_HANDLE -> {
+                // The chat already tracked the finger via onChatMove; just persist the final spot. A pure
+                // tap leaves the offset unchanged, so committing is harmless (no snap/reset menu here).
+                onChatMove?.invoke(canvasXOf(dragLeft), canvasYOf(dragTop))
+                onChatCommit?.invoke()
+            }
+
+            name == MINIMAP_HANDLE && tap -> {
+                // Undo any sub-slop jitter the live move applied, then offer the reset.
+                onMinimapMove?.invoke(dragOrigCx, dragOrigCy)
+                onHandleMenu?.invoke(name)
+            }
+
+            name == MINIMAP_HANDLE -> {
+                onMinimapMove?.invoke(canvasXOf(dragLeft), canvasYOf(dragTop))
+                onMinimapCommit?.invoke()
+            }
+
+            tap -> {
+                // A tap, not a drag: open the snap/reset menu (parity with iOS's per-handle action sheet).
+                onHandleMenu?.invoke(name)
+            }
+
+            else -> {
+                onDrop?.invoke(name, canvasXOf(dragLeft), canvasYOf(dragTop))
+            }
+        }
     }
 
     // View-px drag top-left → clamped canvas-px top-left, using the box's original canvas footprint.
@@ -290,5 +344,8 @@ class OverlayEditView(
     companion object {
         // Sentinel overlay name for the synthetic chat handle (mirrors iOS's kChatHandleKey).
         const val CHAT_HANDLE = "__chat__"
+
+        // Sentinel overlay name for the synthetic minimap handle (mirrors iOS's kMinimapHandleKey).
+        const val MINIMAP_HANDLE = "__minimap__"
     }
 }
