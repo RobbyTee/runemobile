@@ -143,8 +143,9 @@ had a remedy that doesn't require lying about where the finger was.
 ## Next step
 
 Items 3 and 4 and the keepalive deletion stand, verified on iOS. Items 1 and 2 were withdrawn after the
-first Android pass (2026-10-22). Re-check on both phones that a camera drag which rests before it moves no
-longer walks, and that a long-press opens its menu without acting first.
+first Android pass (2026-10-22). **Re-checked on the iPhone the same day** (Debug, `561221ae8e`): a camera
+drag that rests before it moves no longer walks, a long-press opens its menu without acting first, and plain
+taps still act. The same re-check on the Pixel 7a is still owed.
 
 ## Open risks
 
