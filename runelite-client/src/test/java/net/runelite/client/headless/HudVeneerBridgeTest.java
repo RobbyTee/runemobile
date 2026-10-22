@@ -712,6 +712,25 @@ public class HudVeneerBridgeTest
 		verify(area, times(2)).revalidate();
 	}
 
+	@Test
+	public void theChatAreaLeavesAClosedPromptHidden()
+	{
+		final Client c = mock(Client.class);
+		final Widget area = pinnable(new int[]{0, 0});
+		when(c.getWidget(InterfaceID.Chatbox.CHATAREA)).thenReturn(area);
+		// The game hid the bank search's layer when the search closed; its text is still in it.
+		final Widget prompt = hidableLayer(true);
+		when(c.getWidget(InterfaceID.Chatbox.MES_LAYER)).thenReturn(prompt);
+		final Widget lines = hidableLayer(true);
+		when(c.getWidget(InterfaceID.Chatbox.CHATDISPLAY)).thenReturn(lines);
+
+		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, 519, 40);
+
+		assertFalse("the chat lines a rebuild hid are shown again", lines.isHidden());
+		assertTrue("a closed prompt stays hidden, or its text sits over the chat", prompt.isHidden());
+		verify(prompt, never()).setHidden(false);
+	}
+
 	// --- the engine stone rows ------------------------------------------------------------------------------
 	// The native tab grid stands in for the stones, so their rows are hidden -- by hiding each stone's
 	// GRANDPARENT, the container the engine does not re-pin. In Resizable - Modern (164) that is the row alone.

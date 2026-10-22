@@ -945,7 +945,7 @@ public final class HudVeneerBridge
 				// FITS below it without clipping the newest line. Deterministic: read the chat container's real
 				// height, then pin CHATAREA to ABSOLUTE width=rowW and height=(containerH - rowH - margin) at
 				// container-relative (0, rowH). The display/scroll children are revalidated so they widen too.
-				// Skip during a dialogue: sizeChatArea force-SHOWS the message widgets (CHATAREA/CHATDISPLAY/MES_LAYER/
+				// Skip during a dialogue: sizeChatArea force-SHOWS the message widgets (CHATAREA/CHATDISPLAY/
 				// SCROLLAREA/INPUT) every frame, which re-shows the chat lines over the opaque dialogue box. The
 				// dialogue replaces the messages, so leave the area alone while one is open.
 				if (!dlgOpen) sizeChatArea(c, chatId, rowW, rowH);
@@ -3756,10 +3756,11 @@ public final class HudVeneerBridge
 			}
 			// A chatbox rebuild (e.g. triggered by switching the chat tab via op-replay) can leave the message
 			// widgets HIDDEN, so the chat goes blank. Force them shown each frame — for the always-visible chat-at-top
-			// they should never be hidden.
+			// they should never be hidden. Not MES_LAYER: it holds a prompt (bank or GE search, "Enter amount"), the
+			// game shows it for one and hides it again on close without clearing the text, so forcing it shown left
+			// the last prompt painted over the chat for the rest of the session.
 			setHidden(c, InterfaceID.Chatbox.CHATAREA, false);
 			setHidden(c, InterfaceID.Chatbox.CHATDISPLAY, false);
-			setHidden(c, InterfaceID.Chatbox.MES_LAYER, false);
 			setHidden(c, InterfaceID.Chatbox.SCROLLAREA, false);
 			// Keep the bottom input line ("<player>: <typed>*") shown — a chat rebuild can leave it hidden, which is
 			// why it was missing from the relocated chat. The official mobile chat shows this prompt at the bottom.
