@@ -26,14 +26,15 @@ settings:
     # RC_BACKEND_ANGLE=1 selects the Phase A1 MetalANGLE/EGL backend in Route C (clip_control depth fix + MSAA);
     # the EAGL fallback is the #else path. Apple's OpenGLES.framework and ANGLE's libGLESv2 BOTH export glXxx and
     # cannot be linked together, so the active backend = this macro + the linked frameworks below MUST agree:
-    #   ANGLE (default): RC_BACKEND_ANGLE=1   + link libEGL/libGLESv2 (NOT OpenGLES.framework)
-    #   EAGL  (A/B base): drop RC_BACKEND_ANGLE + link OpenGLES.framework (NOT the ANGLE frameworks)
+    #   ANGLE:          RC_BACKEND_ANGLE=1   + link libEGL/libGLESv2 (NOT OpenGLES.framework)
+    #   EAGL (active):  drop RC_BACKEND_ANGLE + link OpenGLES.framework (NOT the ANGLE frameworks)
     GCC_PREPROCESSOR_DEFINITIONS:
       - "$(inherited)"
       - "GLES_SILENCE_DEPRECATION=1"
       # BACKEND TOGGLE — EAGL is ACTIVE (the device-kit gl_FragDepth A/B path; also needs no vendored ANGLE
       # frameworks, so it builds on a fresh Mac). For the MetalANGLE backend: uncomment RC_BACKEND_ANGLE=1 here
-      # AND the libEGL/libGLESv2 frameworks below, AND re-comment OpenGLES.framework (macro + frameworks MUST agree).
+      # AND the libEGL/libGLESv2 frameworks below, AND the two gpu-angle search paths in the target settings, AND
+      # re-comment OpenGLES.framework (macro + frameworks MUST agree).
       # - "RC_BACKEND_ANGLE=1"
     # Let the resign-jre build phase write into the .app.
     ENABLE_USER_SCRIPT_SANDBOXING: NO
@@ -133,12 +134,14 @@ targets:
           - "$(SRCROOT)/../dev-tools/gpu-routec/jni"
           - "$(SRCROOT)/../dev-tools/gpu-zone/jni"
           - "$(SRCROOT)/RuneMobile/jni"
-          # Khronos EGL/GLES3 headers for the MetalANGLE backend (gitignored; regenerate via gpu-angle/README).
-          - "$(SRCROOT)/../dev-tools/gpu-angle/include"
-        # ANGLE frameworks (libEGL/libGLESv2) live here for the linker + embed step.
+          # MetalANGLE backend only (see BACKEND TOGGLE): the Khronos EGL/GLES3 headers, vendored and gitignored
+          # (regenerate via dev-tools/gpu-angle/README). Off while EAGL is active, so the build carries no
+          # search path into a directory that isn't there.
+          # - "$(SRCROOT)/../dev-tools/gpu-angle/include"
+        # MetalANGLE backend only, likewise: the libEGL/libGLESv2 frameworks for the linker + embed step.
         FRAMEWORK_SEARCH_PATHS:
           - "$(inherited)"
-          - "$(SRCROOT)/../dev-tools/gpu-angle/angle"
+          # - "$(SRCROOT)/../dev-tools/gpu-angle/angle"
     preBuildScripts:
       # The GPU renderer is dead -- silently -- if jvm-resources/client-shaded.jar is the pristine desktop
       # jar instead of the staged iOS variant, and the two are interchangeable by name. Gate the build on it.
