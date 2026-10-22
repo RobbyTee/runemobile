@@ -60,7 +60,7 @@ backed up (a lost key means future updates require users to uninstall + reinstal
 ## Versioning
 
 - `versionName` is semver (e.g. `0.1.0`); `versionCode` is derived monotonically
-  (`major*10000 + minor*100 + patch`). See `android/CHANGELOG.md`.
+  (`major*10000 + minor*100 + patch`). See `CHANGELOG.md`.
 - Every published release keeps its artifact downloadable on the releases page (do **not** delete old
   releases) so users can **roll back** — see recovery below.
 
@@ -150,7 +150,7 @@ next launch as usual.
       mismatch — `REQUIRE_RELEASE_KEY=1` — but verify independently by hand regardless.)
 - [ ] Disclosure block (above) pasted into the release notes.
 - [ ] Known-issues list trimmed to what's true for this build.
-- [ ] `versionName` / `versionCode` bumped; `android/CHANGELOG.md` updated.
+- [ ] `versionName` / `versionCode` bumped; `CHANGELOG.md` updated.
 - [ ] `PRIVACY.md` still accurate (re-check if any data flow changed).
 - [ ] Built against the current OSRS revision (no `js5connect_outofdate`).
 - [ ] **Published with `tools/ci/publish-stable-release.sh <tag>`**, not a hand-written

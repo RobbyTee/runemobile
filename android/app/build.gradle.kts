@@ -48,7 +48,7 @@ android {
         // PROD-VERSIONING-UPDATE-04: semver versionName + a versionCode DERIVED from it, so a release bump is a
         // single edit and versionCode stays monotonic (Android verifies updates by a strictly-increasing
         // versionCode). Scheme: major*10000 + minor*100 + patch (room for 99 minors/patches). Record every bump
-        // in CHANGELOG.md.
+        // in the root CHANGELOG.md.
         val verMajor = 0
         val verMinor = 2
         val verPatch = 5

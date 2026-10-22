@@ -125,6 +125,6 @@ repository root:
    recompile, and the stager then exits non-zero.
 6. **Gate.** `./android/dev-tools/ci/release-gate.sh --skip-build`, and the full gate before a release.
 7. **Device check.** Boot both ports and confirm the client logs in rather than stopping at `js5connect_outofdate`.
-8. **Release notes.** Add an `android/CHANGELOG.md` entry naming the RuneLite version the build reports, and bump
+8. **Release notes.** Add a `CHANGELOG.md` entry naming the RuneLite version the build reports, and bump
    `verPatch` in `android/app/build.gradle.kts`.
 9. **Push** `master` to this repository. That push is the release.

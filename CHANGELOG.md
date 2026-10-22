@@ -1,11 +1,16 @@
 # Changelog
 
-All notable changes to the Android app are recorded here. Format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
-[Semantic Versioning](https://semver.org/). The `versionName` in
-`app/build.gradle.kts` is the semver below; `versionCode` is derived from it
-(`major*10000 + minor*100 + patch`) and is strictly increasing so Android
-accepts update-in-place.
+All notable changes to Rune Mobile are recorded here, for both apps: one release
+tag ships the Android APK and the iOS IPA together, and most fixes land in the
+shared Java bridge both of them run. An entry that applies to one port says so.
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
+follow [Semantic Versioning](https://semver.org/).
+
+The version is set once, in `android/app/build.gradle.kts`. Android's
+`versionCode` is derived from it (`major*10000 + minor*100 + patch`) and is
+strictly increasing so Android accepts update-in-place; the iOS build stamps the
+same version into the IPA, and the AltStore feed shows this file's section for it
+as "What's new".
 
 ## [Unreleased]
 

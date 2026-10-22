@@ -36,7 +36,7 @@ NOTES=$(awk -v v="## [$VERSION]" '
   index($0, v) == 1 {grab=1; next}
   grab && /^## \[/ {exit}
   grab {print}
-' "$ROOT/android/CHANGELOG.md" | sed -e 's/^### //' -e '/^$/d' | head -20)
+' "$ROOT/CHANGELOG.md" | sed -e 's/^### //' -e '/^$/d' | head -20)
 [ -n "$NOTES" ] || NOTES="See the release notes for $VERSION."
 
 VERSIONS_DESC="$NOTES" VER="$VERSION" TAG="$TAG" REPO="$REPO" SIZE="$SIZE" DATE="$DATE" \

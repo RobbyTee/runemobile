@@ -82,6 +82,25 @@ short **content-tag** over the shaded, probes, gpu and rlhd jars.
 Both staged trees are gitignored (large, generated): `ios/app/jvm-resources/*.jar` and
 `android/app/src/main/assets/jvm/{client-*.jar,probes.jar}`.
 
+## Port directory layout
+
+Below the Java seam the two port directories are organised independently. Where both hold the same kind of
+thing, they use the same name for it, so a third port (or anyone returning to one of these) has a pattern to
+follow instead of inventing another:
+
+| What | Where, in both ports | Tracked |
+| --- | --- | --- |
+| Native host app | `<port>/app/` | yes |
+| Build, stage, deploy and probe tooling | `<port>/dev-tools/`, one directory per tool or spike | yes |
+| Release notes for both apps | `CHANGELOG.md` at the repo root (one release tag ships both; port-specific entries say which port) | yes |
+| Device logs, screenshots and run evidence | `evidence/` beside the thing it proves (`ios/app/evidence/`, `<tool>/evidence/`) | no: logs can carry account details |
+| Superseded plans, audits and handoffs | `<port>/archive/` | no |
+| Per-feature handoffs meant for readers | `docs/handoffs/` | yes |
+
+The `dev-tools/` subdirectory names differ by history and are left alone: iOS's are named by topic (`gpu-routec`,
+`headless`), Android's partly by the phase that built them (`a0-login`, `ap2b-mobile-ux`). Go by a tool's README
+or script header, not its name.
+
 ## Boundary convention (in lieu of a shared module)
 
 There is intentionally **no `shared/` Gradle module and no umbrella build** — that would drag AGP/SDK
