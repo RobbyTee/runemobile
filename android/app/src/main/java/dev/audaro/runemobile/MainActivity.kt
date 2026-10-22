@@ -443,6 +443,9 @@ class MainActivity : AppCompatActivity() {
         private const val MAX_HEAP_MB = 512L
         private const val MB_PER_GB = 1024L
 
+        // The longest jfr marker recording; a flight recording at the "profile" settings grows by a few MB a minute.
+        private const val MAX_JFR_SECONDS = 600
+
         // Engine canvas dimensions (set once at the boot HeadlessResize below; stable in-world). The overlay
         // free-drag UI reads these to map a drag-pad fraction → canvas pixels for OverlayBridge.setOverlayPreferredLocation.
         @Volatile var canvasW = 0
@@ -5169,6 +5172,9 @@ class MainActivity : AppCompatActivity() {
         //              mode only: the GPU renderers set their own.
         //   xms SIZE   an initial heap (e.g. 256m) instead of the ergonomic one, to A/B against the heap growth the
         //              perf probe's GC lines show during boot.
+        //   jfr SECS   a Java Flight Recording (the "profile" settings) of SECS seconds, starting a minute after the
+        //              JVM, so the client is in game with the JIT warm. Written to files/jfr/rec.jfr; pull it with
+        //              run-as. JFR's own repository goes there too, since the default one under /tmp doesn't exist.
         devMarkerValue("cpufps")?.let { v ->
             val fps = v.toIntOrNull()?.takeIf { it > 0 && chosenKey == null }
             if (fps != null) opts.add("-Drunelite.cpu.unlockfps=$fps")
@@ -5180,6 +5186,16 @@ class MainActivity : AppCompatActivity() {
             if (mb > 0) opts.add("-Xms${mb}m")
             val outcome = if (mb > 0) "initial heap ${mb}m" else "ignored (needs a size up to ${MAX_HEAP_MB}m, e.g. 256m)"
             Log.i(TAG, "xms marker \"$v\": $outcome")
+        }
+        devMarkerValue("jfr")?.let { v ->
+            val secs = v.toIntOrNull()?.takeIf { it in 1..MAX_JFR_SECONDS }
+            if (secs != null) {
+                val dir = File(app.filesDir, "jfr").apply { mkdirs() }.absolutePath
+                opts.add("-XX:FlightRecorderOptions=repository=$dir")
+                opts.add("-XX:StartFlightRecording=delay=60s,duration=${secs}s,settings=profile,filename=$dir/rec.jfr")
+            }
+            val outcome = secs?.let { "records ${it}s from a minute after launch" } ?: "ignored (needs 1-$MAX_JFR_SECONDS seconds)"
+            Log.i(TAG, "jfr marker \"$v\": $outcome")
         }
 
         // A8: only pipe the embedded VM's stdout/err to logcat in DEBUG builds — a release build must not leak

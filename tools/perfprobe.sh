@@ -10,6 +10,7 @@
 # The A/B markers sit beside the probe and are read at the same point (Android: debug builds only):
 #   cpufps N     the CPU renderer asks the engine for N fps instead of its own ~50 (headless.CpuFpsStarter)
 #   xms SIZE     an initial heap, e.g. 384m, up to -Xmx (iOS 1024m, Android 512m)
+#   jfr SECS     Android only: a Java Flight Recording of SECS seconds, from a minute after launch, to files/jfr/rec.jfr
 #   pipfeed main iOS only: copy the PiP frame on the main thread, as before the feed thread ("thread" = default)
 #
 # Armed, the VM runs with -Drunelite.fpsprobe (headless.FrameStats: [fpsprobe] [frameprobe] [framebins] [framehist])
