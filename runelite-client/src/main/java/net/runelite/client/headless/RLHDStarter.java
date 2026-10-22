@@ -125,6 +125,13 @@ public final class RLHDStarter
 		// mobile-sane) — both armed by -Drunelite.routecrlhd — but they need different 117HD config. The iOS shell
 		// sets -Drunelite.gfxIos=true; without it (Android) we apply Android's mobile config. Config writes queue on
 		// the client thread; returning lets them commit before the load on the next tick. (Group "hd" per HdPluginConfig.)
+		//
+		// Frame pacing is deliberately left at 117HD's defaults on both ports. With Unlock FPS off, the plugin requests
+		// swap interval 0 and leaves pacing to the engine's 20 ms timer (about 50 fps) whatever the port's rlawt reports
+		// back, so nothing drifts. Turning Unlock FPS on in the plugin config hands pacing to the plugin's own sleep
+		// limiter (fpsTarget, 60) on both ports: iOS EAGL can't apply a swap interval, and Android's EGL clamps
+		// ADAPTIVE's -1 to 0. Only vsyncMode=ON on Android gets a vsync-paced present. RouteCGpuStarter seeds that
+		// for the base GPU plugin; 117HD has no need while Unlock FPS stays off.
 		if (!configForced)
 		{
 			if (!Boolean.getBoolean("runelite.gfxIos"))
