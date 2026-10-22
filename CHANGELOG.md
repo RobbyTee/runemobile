@@ -14,6 +14,52 @@ as "What's new".
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-10-22
+
+### Fixed
+- 0.2.5's tap change is withdrawn. A camera drag that paused before it moved walked your character, and a
+  press-and-hold did the left-click action before its menu opened. The game acts on the press itself, and
+  0.2.5 sent the press while your finger was still down, before anything could tell a tap from a drag. A tap
+  now presses and releases together when you lift, as it did in 0.2.4. The same change had made an
+  inventory drag let go of the item about a frame after picking it up.
+- After a bank or Grand Exchange search, or an "Enter amount" prompt, the prompt's text stayed in the
+  chatbox for the rest of the session.
+- Android, GPU renderer: a translucent triangle could sit across part of the screen for seconds, and wall
+  pieces dropped out for a frame while the camera turned.
+- Android, GPU renderer: taking a screenshot (the Screenshot plugin takes one on a level-up) stopped the
+  game, and reopening the app showed a black game area.
+- iOS, GPU renderer: the login screens froze on their first frame, so a refused login and the game's
+  "Try Again" were invisible behind a Play Now button that no longer did anything.
+- An account saved in Resizable - Classic logged in with no usable side panel: on Android every tab opened
+  into an invisible panel, and on iOS neither the tab stones nor the panel showed. Classic and Fixed now
+  get the game's own HUD.
+- A position saved in the overlay editor for the chat, the minimap or the side panel fought the app's own
+  placement of them every frame. The editor no longer offers those, and clears positions already saved.
+- iOS: an audio route change (AirPods connecting, a car stereo) stopped the background keepalive until the
+  app next went to the background, so iOS could end a session that should have stayed alive. It now
+  restarts at once.
+- iOS: every launch left a 172 KB file behind in the app's caches. The ones already there are removed.
+
+### Added
+- A "Switch to Resizable - Modern" button at the top of the screen when your account is in Resizable -
+  Classic or Fixed. One tap changes the setting the way the game's own Settings > Display does; the
+  layout is saved to your account by the game, not by the app.
+- The minimap can be moved in the overlay editor, with a "Minimap" handle like the "Chat" one. It keeps
+  its place relative to the top-right corner, so a notch or a rotation still places it, and "Reset to
+  default" puts it back. On Android, a chat or minimap drag the system cancelled now saves where it was
+  left instead of jumping back on the next launch.
+- iOS keeps a small record of how each session ended (durations, counters and a memory figure) to tell
+  apart what ends a session in the background. It stays on the phone; see [PRIVACY.md](PRIVACY.md).
+
+### Changed
+- The GPU renderer's vsync starts on. On Android, frames follow the display instead of a 60 fps sleep
+  that drifted against it; iOS keeps its frame limiter, because its presents take no swap interval. A
+  change in the plugin panel survives relaunch.
+- Android, CPU renderer: frames are presented on the display's refresh instead of after a fixed 16 ms
+  sleep, which ran under 60 Hz on a 90 Hz screen.
+- Less work per frame: the relocated HUD is re-laid only when it moves, snapshots are republished only
+  when they change, and on iOS the frame copy for the screen runs off the main thread.
+
 ## [0.2.5] - 2026-10-20
 
 ### Fixed

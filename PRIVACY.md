@@ -88,6 +88,7 @@ All paths are in the app's **private** storage unless marked *external* (adb-rea
 | Client + plugin settings | `.runelite/settings.properties`, profile files | Synced to RuneLite **only** if you sign in |
 | Renderer choice, hotkeys | app preferences (`renderer`, `hotkeys`) | On-device only |
 | Diagnostics (GPU-fallback cookie, thermal marker) | `gpu-fail.txt`, `thermal-throttle.marker` (app-private) | **On-device only — never transmitted** |
+| Session-end record (iOS) | `residency.plist`, `residency-history.log` (app-private) | **On-device only — never transmitted.** How long each session lasted, how it ended, restart counters and a memory figure; the last 200 sessions |
 | Embedded JVM + client jars (~500 MB) | `jvm/` | Unpacked from the app on first run |
 
 ### Debug-only (stripped from release builds)

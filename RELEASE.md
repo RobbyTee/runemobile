@@ -41,6 +41,9 @@ These are accepted, documented behaviors — list the ones true for the build be
   its scene-resolution scale down and restores it on cooldown (by design — keeps the frame rate up).
 - **JIT attach (iOS only).** iOS requires re-attaching the debugger (StikDebug) per launch to enable
   JIT; this is an OS constraint, not a bug.
+- **The CPU renderer slows as the phone heats up.** It draws the whole game in software, so its frame
+  rate is set by how hot the phone is: on a Pixel 7a the same build ran at about 37 fps cool and about
+  12 fps hot and charging. Use the GPU renderer where your phone supports it.
 
 ---
 
