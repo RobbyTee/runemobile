@@ -86,9 +86,10 @@ import net.runelite.client.ui.overlay.outline.ModelOutlineRenderer;
  * Entirely inert unless {@code -Drunelite.bridge=true}, so it adds nothing to the stock desktop client.
  *
  * <p>Thread model: {@code register} runs on the engine/AWT thread; the native side calls the getters,
- * {@link #onTouch} and {@link #onClick} from the UI thread (JNI-attached). {@code EventQueue.postEvent}
- * is thread-safe, and the pixel array is the buffer's live backing store — reading it off-thread can
- * momentarily tear, which is acceptable for a display.
+ * {@link #onTouch} and {@link #onClick} from the UI thread (JNI-attached). {@code onTouch} hands its posts
+ * to the client thread so a drag's press can't overtake the tap retire queued just before it.
+ * {@code EventQueue.postEvent} is thread-safe, and the pixel array is the buffer's live backing store —
+ * reading it off-thread can momentarily tear, which is acceptable for a display.
  *
  * <p><b>Input contract (Phase 5).</b> The native side owns gesture <em>recognition</em> (UIKit gesture
  * recognizers: tap, long-press, pan, pinch) and this facade exposes only the raw AWT primitives:
@@ -349,7 +350,7 @@ public final class JavaBridge
 	private static int frameDumpCount;
 	private static int lastFrameDumpSeq;
 
-	// Input bookkeeping (only ever touched from the single native UI thread that drives onTouch/onClick).
+	// Input bookkeeping. pressed/pressButton belong to onTouch's stream, which posts from the client thread.
 	private static boolean focused;       // FocusEvent gained — keyboard/mouse accepted
 	private static Canvas focusedCanvas;  // WHICH canvas we focused (the engine can swap it under us)
 	private static volatile boolean entered;  // MOUSE_ENTERED posted — pointer currently "present" (volatile:
@@ -3205,10 +3206,31 @@ public final class JavaBridge
 	/**
 	 * One phase of a drag stream — {@link #TOUCH_DOWN}/{@link #TOUCH_MOVE}/{@link #TOUCH_UP} at
 	 * {@code (x,y)}, {@code button} 1 or 3. DOWN presses, MOVE drags (or hovers when not pressed), UP
-	 * releases — with NO synthesized click (unlike a tap, which goes through {@link #onClick}). Used by the
-	 * camera / scroll gestures, where a release must not register as a walk-here click.
+	 * releases — with NO synthesized click (unlike a tap, which goes through {@link #onClick}). Both shells
+	 * drive it for an item drag (the inventory and the reorder panes), where a release must not register as
+	 * a click.
+	 *
+	 * <p>Posted from the client thread, in the order the calls arrived. A drag starts on a contact whose tap
+	 * press the settle gate may already have put down, so the shells drop that arm ({@link #cancelArmedTap})
+	 * right before this DOWN, and the retire's release is posted from the client thread. Posted straight from
+	 * the UI thread, this press got there first and the release followed a frame later: the engine let go
+	 * of the item one frame into every inventory drag. Queued behind the cancel, the release always comes
+	 * first and only the lift ends the drag. The cost is at most one frame on the drag samples, which the
+	 * engine reads once per frame anyway.
 	 */
 	public static void onTouch(int type, int x, int y, int button)
+	{
+		final ClientThread ct = clientThread;
+		if (ct == null)
+		{
+			postTouch(type, x, y, button);   // no client thread wired yet, so no tap press to order behind
+			return;
+		}
+		ct.invoke(() -> postTouch(type, x, y, button));
+	}
+
+	/** Client thread (or before one is wired): {@link #onTouch}'s events, posted in arrival order. */
+	private static void postTouch(int type, int x, int y, int button)
 	{
 		final Canvas canvas = liveCanvas();
 		if (canvas == null)

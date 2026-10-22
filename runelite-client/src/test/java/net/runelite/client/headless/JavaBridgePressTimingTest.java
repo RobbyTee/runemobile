@@ -300,7 +300,69 @@ public class JavaBridgePressTimingTest
 		assertFalse("a menu-row click the user made must survive", rowSelect.isConsumed());
 	}
 
+	/**
+	 * An item drag takes the button over from the tap's press. Both shells start one by dropping the tap's arm
+	 * ({@code cancelArmedTap}, whose retire runs on the client thread's next frame) and then posting the drag's
+	 * own press ({@code onTouch}) from the UI thread in the same breath. The retire's release must reach the
+	 * engine BEFORE that press: arriving after it, it let go of the item one frame into every inventory drag.
+	 */
+	@Test
+	public void anItemDragKeepsHoldingTheItemUntilTheFingerLifts() throws Exception
+	{
+		JavaBridge.armTap(TAP_X, TAP_Y);
+		pump();
+		settleUntilPressed();
+		cap.clear();
+
+		// The real client thread runs work handed to it from another thread on its next frame, not inline.
+		final List<Runnable> nextFrame = new ArrayList<>();
+		JavaBridge.setClientThread(deferredClientThread(nextFrame));
+		JavaBridge.cancelArmedTap();
+		JavaBridge.onTouch(0, TAP_X, TAP_Y, 1);         // press on the source slot
+		JavaBridge.onTouch(1, TAP_X + 40, TAP_Y, 1);    // the finger moves before the client thread runs
+		runFrame(nextFrame);
+		JavaBridge.onTouch(1, TAP_X + 80, TAP_Y, 1);
+		runFrame(nextFrame);
+
+		assertEquals("the tap's press must be released before the drag presses, and the drag must then stay held",
+			List.of("RELEASED", "PRESSED", "DRAGGED", "DRAGGED"), cap.buttonSequence());
+
+		JavaBridge.onTouch(2, TAP_X + 80, TAP_Y, 1);    // the lift
+		runFrame(nextFrame);
+
+		assertEquals("only the lift may release the drag",
+			List.of("RELEASED", "PRESSED", "DRAGGED", "DRAGGED", "RELEASED"), cap.buttonSequence());
+		assertEquals("the item is let go where the finger lifted", TAP_X + 80, cap.last(MouseEvent.MOUSE_RELEASED).getX());
+		assertEquals("and a drag is never a click", 0, cap.count(MouseEvent.MOUSE_CLICKED));
+	}
+
 	// ---- harness ---------------------------------------------------------------------------------------
+
+	/** A {@link ClientThread} like the real one seen from another thread: work waits for the next frame. */
+	private static ClientThread deferredClientThread(List<Runnable> nextFrame)
+	{
+		final ClientThread ct = mock(ClientThread.class);
+		doAnswer(inv ->
+		{
+			nextFrame.add(inv.getArgument(0));
+			return null;
+		}).when(ct).invoke(any(Runnable.class));
+		doAnswer(inv ->
+		{
+			nextFrame.add(inv.getArgument(0));
+			return null;
+		}).when(ct).invokeLater(any(Runnable.class));
+		return ct;
+	}
+
+	/** One client frame: run what was handed over, in order, then flush what it posted. */
+	private static void runFrame(List<Runnable> nextFrame) throws Exception
+	{
+		final List<Runnable> work = new ArrayList<>(nextFrame);
+		nextFrame.clear();
+		work.forEach(Runnable::run);
+		pump();
+	}
 
 	/** Drive the settle gate a frame at a time until it accepts and presses. Returns the ticks it took. */
 	private int settleUntilPressed() throws Exception
@@ -399,6 +461,7 @@ public class JavaBridgePressTimingTest
 		set("queuedTap", false);
 		set("entered", false);
 		set("focused", false);
+		set("pressed", false);
 	}
 
 	private static Object enumValue(String type, String name) throws Exception
@@ -486,6 +549,42 @@ public class JavaBridgePressTimingTest
 			{
 				return seen.stream().filter(e -> e.getID() == id).findFirst()
 					.orElseThrow(() -> new AssertionError("no event with id " + id));
+			}
+		}
+
+		MouseEvent last(int id)
+		{
+			synchronized (seen)
+			{
+				return seen.stream().filter(e -> e.getID() == id).reduce((a, b) -> b)
+					.orElseThrow(() -> new AssertionError("no event with id " + id));
+			}
+		}
+
+		/** The button-state events in the order they were posted: what decides whether something is held. */
+		List<String> buttonSequence()
+		{
+			synchronized (seen)
+			{
+				final List<String> out = new ArrayList<>();
+				for (final MouseEvent e : seen)
+				{
+					switch (e.getID())
+					{
+						case MouseEvent.MOUSE_PRESSED:
+							out.add("PRESSED");
+							break;
+						case MouseEvent.MOUSE_RELEASED:
+							out.add("RELEASED");
+							break;
+						case MouseEvent.MOUSE_DRAGGED:
+							out.add("DRAGGED");
+							break;
+						default:
+							break;
+					}
+				}
+				return out;
 			}
 		}
 
