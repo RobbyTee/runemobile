@@ -243,12 +243,13 @@ def main():
             restore(drv, before)
             red(f"not in the app's inventory: {', '.join(unknown)}")
         todo = [t for t in todo if t[1] in args.screens]
-    # A settings screen is opened by its config group, so two plugins that report the same group open the same
-    # screen, and one of them shows the other's settings (117 HD showed Entity Hider's).
+    # A settings screen is opened by its config group, so two plugins with settings that report the same group open
+    # the same screen, and one of them shows the other's settings (117 HD showed Entity Hider's). A plugin with no
+    # settings screen opens nothing; if its group were looked up first, the other screen would fail as blank.
     group_of = {p["name"]: p.get("configGroup") for p in plugins}
     owners = {}
     for p in plugins:
-        if p.get("configGroup"):
+        if p.get("configGroup") and p.get("hasConfig"):
             owners.setdefault(p["configGroup"], []).append(p["name"])
     no_settings = [p["name"] for p in plugins if not p.get("hasConfig")]
     print(f"   {len(plugins)} plugins ({len(plugins) - len(no_settings)} with settings), "
