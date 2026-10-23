@@ -1,0 +1,17 @@
+{
+  "_doc": "Screens sim-screens.py checks, in order. name is what -RMScreenDriver opens (ViewController.m, simOpenScreen; panel:<rail tooltip> opens a plugin side panel). settle: seconds to wait after the app reports the screen ready. A screen passes when at most maxPctDiffering % of its pixels differ from the golden by more than threshold in any channel (2 absorbs the compositor's off-by-one antialiasing on rounded corners; a changed label differs by ~200). network: the screen shows live Plugin Hub data, which changes whenever the hub publishes, so it runs only when named.",
+  "defaults": { "settle": 1.0, "threshold": 2, "maxPctDiffering": 0.0 },
+  "screens": [
+    { "name": "settings" },
+    { "name": "about" },
+    { "name": "plugins" },
+    { "name": "edit-controls" },
+    { "name": "overlays" },
+    { "name": "profiles" },
+    { "name": "infoboxes" },
+    { "name": "panel:Notes" },
+    { "name": "panel:Hiscore" },
+    { "name": "panel:Grand Exchange" },
+    { "name": "hub", "settle": 4.0, "network": true }
+  ]
+}

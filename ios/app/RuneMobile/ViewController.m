@@ -6479,6 +6479,9 @@ static CGRect mapRectFromArr(NSArray *a) {
 // no disk, no capture budget, so it's smooth and runs for the whole session. Also keeps the app
 // foreground-active+rendering (the jetsam-protection that the §6.2 work established).
 - (void)onDisplayTick {
+#if TARGET_OS_SIMULATOR
+    [self simScreenTick];
+#endif
     // Boot-progress overlay: MUST run before the `if (!pipPresenting && img == nil) return;` early-out below,
     // which skips the rest of this method for the entire pre-first-frame window - exactly the window this overlay
     // covers. Downstream update* calls (reconnect/fatal) run after that return, so they can't clear this one.
@@ -8921,5 +8924,136 @@ static CGRect mapRectFromArr(NSArray *a) {
         self.bgTask = UIBackgroundTaskInvalid;
     }
 }
+
+#if TARGET_OS_SIMULATOR
+#pragma mark - Simulator screen driver (ios/dev-tools/sim-screens/)
+
+// Golden screenshots of the native screens, driven by a script. With -RMScreenDriver YES the display tick reads
+// Documents/screen-cmd ("<seq> <screen>"). When seq changes it closes the screen it opened last, opens <screen> the
+// way its button does, and logs "[screen] ready <seq> <screen>" once the screen has settled, or
+// "[screen] failed <seq> <screen>: <why>". The script screenshots after "ready", then writes the next command;
+// "<seq> -" only closes. -RMBlankGame YES covers the game picture (not the native chrome on it), so a golden
+// compares native UI only.
+
+static NSString *simScreenSeq;    // the last command's seq
+static NSString *simScreenOpened; // "<seq> <screen>" opened and not yet reported ready
+static CFTimeInterval simScreenOpenedAt;
+static CFTimeInterval simScreenNextPoll;
+static UIView *simBlankView;
+
+- (void)simScreenTick {
+    static BOOL driver, blank;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+        driver = [ud boolForKey:@"RMScreenDriver"];
+        blank = [ud boolForKey:@"RMBlankGame"];
+    });
+    if (blank)
+        [self simBlankGame];
+    if (!driver)
+        return;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (simScreenOpened) {
+        // Settled: past the open animations and nothing presenting or dismissing.
+        UIViewController *p = self.presentedViewController;
+        if (now - simScreenOpenedAt < 0.6 || self.transitionCoordinator || p.isBeingPresented || p.isBeingDismissed)
+            return;
+        [self appendLine:[NSString stringWithFormat:@"[screen] ready %@", simScreenOpened]];
+        simScreenOpened = nil;
+        return;
+    }
+    if (now < simScreenNextPoll)
+        return;
+    simScreenNextPoll = now + 0.1;
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSString *cmd = [NSString stringWithContentsOfFile:[docs stringByAppendingPathComponent:@"screen-cmd"]
+                                              encoding:NSUTF8StringEncoding
+                                                 error:NULL];
+    cmd = [cmd stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSRange sp = [cmd rangeOfString:@" "];
+    if (sp.location == NSNotFound)
+        return;
+    NSString *seq = [cmd substringToIndex:sp.location];
+    if ([seq isEqualToString:simScreenSeq])
+        return;
+    simScreenSeq = seq;
+    NSString *name = [cmd substringFromIndex:sp.location + 1];
+    __weak typeof(self) ws = self;
+    [self simCloseScreenThen:^{
+        NSString *why = [name isEqualToString:@"-"] ? nil : [ws simOpenScreen:name];
+        if (why) {
+            [ws appendLine:[NSString stringWithFormat:@"[screen] failed %@ %@: %@", seq, name, why]];
+            return;
+        }
+        simScreenOpened = [NSString stringWithFormat:@"%@ %@", seq, name];
+        simScreenOpenedAt = CACurrentMediaTime();
+    }];
+}
+
+// Opens a screen through the same entry point as its button. Returns why it didn't open, or nil.
+- (NSString *)simOpenScreen:(NSString *)name {
+    if ([name isEqualToString:@"settings"])
+        [self onOpenSettings];
+    else if ([name isEqualToString:@"about"])
+        [self onOpenAbout];
+    else if ([name isEqualToString:@"hub"])
+        [self onOpenHub];
+    else if ([name isEqualToString:@"plugins"])
+        [self onOpenPluginPanel];
+    else if ([name isEqualToString:@"edit-controls"])
+        [self onEditControls];
+    else if ([name isEqualToString:@"overlays"])
+        [self onOpenOverlayEdit];
+    else if ([name isEqualToString:@"profiles"])
+        [self.panelDock presentConfigProfiles];
+    else if ([name isEqualToString:@"infoboxes"])
+        [self.panelDock presentInfoboxes];
+    else if ([name hasPrefix:@"panel:"]) {
+        if (![self.panelDock simOpenPanelNamed:[name substringFromIndex:6]])
+            return @"no panel with that name on the rail";
+    } else
+        return @"unknown screen";
+    BOOL open = self.presentedViewController || self.panelDock.presentedViewController || self.pluginPanelOpen ||
+                self.editOverlay || self.overlayEdit || [self.panelDock simPanelOpen];
+    return open ? nil : @"nothing opened (not available in this state?)";
+}
+
+- (void)simCloseScreenThen:(void (^)(void))next {
+    if (self.pluginPanelOpen)
+        [self onClosePluginPanel];
+    if (self.editOverlay)
+        [self onEditControlsDone];
+    if (self.overlayEdit) {
+        [self.overlayEdit dismiss];
+        self.overlayEdit = nil;
+    }
+    [self.panelDock simClosePanel];
+    UIViewController *p = self.presentedViewController ?: self.panelDock.presentedViewController;
+    if (p)
+        [p.presentingViewController dismissViewControllerAnimated:NO completion:next];
+    else
+        next();
+}
+
+// The game's own layers (the PiP presenter, the GL layers) go in at index 0 of the screen's layer, under its
+// subviews, and can arrive after this cover does, so keep the cover above the topmost of them on every tick.
+- (void)simBlankGame {
+    if (!simBlankView) {
+        simBlankView = [[UIView alloc] initWithFrame:self.screen.bounds];
+        simBlankView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        simBlankView.backgroundColor = self.screen.backgroundColor;
+        simBlankView.userInteractionEnabled = NO;
+        [self.screen insertSubview:simBlankView atIndex:0];
+    }
+    NSArray<CALayer *> *layers = self.screen.layer.sublayers;
+    CALayer *game = nil;
+    for (CALayer *l in layers)
+        if (![l.delegate isKindOfClass:[UIView class]])
+            game = l;
+    if (game && [layers indexOfObject:game] > [layers indexOfObject:simBlankView.layer])
+        [self.screen.layer insertSublayer:simBlankView.layer above:game];
+}
+#endif
 
 @end

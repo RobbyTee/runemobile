@@ -3,8 +3,8 @@
 A small stdio [MCP](https://modelcontextprotocol.io) server that exposes the
 project's dev-tools harnesses as callable tools, so the desktop render / QA loop
 can be driven directly instead of by hand. Zero third-party dependencies — pure
-Python stdlib for the protocol, plus PIL + numpy (only for `image_diff` and
-`ios_sim_screenshot`).
+Python stdlib for the protocol, plus PIL + numpy (only for `image_diff`,
+`ios_sim_screenshot` and `ios_sim_screens`).
 
 ## Why `/usr/bin/python3`
 
@@ -52,6 +52,7 @@ the tools to appear.
 | `ios_sim_wait` | no (iOS Simulator) | waits on the running launch's `jvm-stdio.log` for a frame or a game state; fails at once when the app has exited or logged a `FATAL`. `since` rejects a log from an earlier launch. |
 | `ios_sim_screenshot` | no (iOS Simulator) | `simctl io screenshot` turned upright from Simulator.app's recorded orientation, the Dynamic Island painted out with what the app draws beside it (phone screenshots don't have the island), optionally resized to a phone screenshot's size (`size_like`) for `image_diff`. Saves to `ios/app/evidence/sim/` (gitignored); inlines a preview. |
 | `ios_sim_census` | no (iOS Simulator) | the iOS bridge census (`ios/dev-tools/bridge-census/run-census-sim.sh`): every class, method and field the app's native code looks up through JNI, resolved in the app's own VM. Returns the verdict (`IOS_BRIDGE_CENSUS_GREEN`/`_RED`), the counts and each missing lookup with the JVM's error. ~20 s when the build is current, ~10 s with `build=false`. |
+| `ios_sim_screens` | no (iOS Simulator) | golden screenshots of the native screens (`ios/dev-tools/sim-screens/sim-screens.py`): launches the app logged out with the game picture covered, opens each screen in `screens.json` through its button's own method, and compares it with its golden in `ios/app/evidence/sim-golden/<model>/`. Returns the verdict (`SIM_SCREENS_GREEN`/`_RED`) and, per screen, the share of pixels that differ, the shot and a diff heatmap on a FAIL. `screens` picks a subset, `update=true` writes the goldens. ~40 s with an incremental build. |
 
 ### Typical loops
 
@@ -65,6 +66,8 @@ the tools to appear.
   `ios_sim_screenshot` with `size_like` set to a phone screenshot → `image_diff`
   against it.
 - **Shared-bridge change** — `ios_sim_census` (`jars=true`) next to the Android census.
+- **iOS native-UI change** — `ios_sim_screens`; on a FAIL, look at the shot and its `.diff.png`, and when the
+  change is intended, re-run with `update=true` for those screens.
 
 ## Smoke test
 

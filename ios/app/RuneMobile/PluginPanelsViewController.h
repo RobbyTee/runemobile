@@ -32,6 +32,13 @@ NS_ASSUME_NONNULL_BEGIN
 /// YES while the panel's own soft keyboard (a focused Swing text box) is up — the host gates its game-keyboard
 /// auto-poll on this so a game textInputOpen flip doesn't yank the keyboard out from under panel typing (PANEL-1).
 - (BOOL)panelKeyboardActive;
+
+#if TARGET_OS_SIMULATOR
+/// The simulator screen driver: open the rail panel with this tooltip (NO if there is none), and close it again.
+- (BOOL)simOpenPanelNamed:(NSString *)tooltip;
+- (BOOL)simPanelOpen;
+- (void)simClosePanel;
+#endif
 @end
 
 NS_ASSUME_NONNULL_END

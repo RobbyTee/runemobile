@@ -27,6 +27,7 @@ Tools
   ios_sim_wait           wait for the simulator app's current launch to reach a frame or game state
   ios_sim_screenshot     simulator screenshot, upright, Dynamic Island painted out, optionally sized like a phone shot
   ios_sim_census         the iOS bridge census: every JNI lookup the app makes, resolved in the simulator's VM
+  ios_sim_screens        golden screenshots of the native screens in the simulator, each compared with its golden
 
 Nothing here is destructive: every tool reads, renders, measures, or flips a
 runtime debug knob.
@@ -50,7 +51,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SERVER_NAME = "runelite-ios-harness"
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = "0.4.0"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 # The JREs each port embeds. Both are gitignored staging output, so either may be missing on a fresh clone;
@@ -66,6 +67,7 @@ IOS_BUNDLE_ID = "dev.audaro.runemobile"
 FPS_MEASURE = REPO_ROOT / "android/dev-tools/gpu/fps-measure.sh"
 RUN_SIM = REPO_ROOT / "ios/dev-tools/run-sim.sh"
 RUN_CENSUS_SIM = REPO_ROOT / "ios/dev-tools/bridge-census/run-census-sim.sh"
+RUN_SIM_SCREENS = REPO_ROOT / "ios/dev-tools/sim-screens/sim-screens.py"
 SIM_RENDERERS = ("cpu", "gpu", "117hd")
 # The Dynamic Island in a raw (portrait) simctl screenshot at 3x: width, height, offset from the top, in pixels,
 # centred. simctl draws it into its screenshots over the app; phone screenshots don't have it.
@@ -539,6 +541,34 @@ def tool_headless_render(a):
     )
 
 
+def image_delta(ia, ib, threshold=0):
+    """Per-channel delta of two same-size RGB PIL images -> (summary, heatmap array). The heatmap's red channel is
+    the worst channel's delta x4 (so small deltas show) and its blue marks pixels over threshold."""
+    import numpy as np
+
+    na = np.asarray(ia, dtype=np.int16)
+    nb = np.asarray(ib, dtype=np.int16)
+    diff = np.abs(na - nb)
+    per_pixel = diff.max(axis=2)  # worst channel per pixel
+    max_delta = int(diff.max())
+    h, w = per_pixel.shape
+    heat = np.zeros((h, w, 3), dtype=np.uint8)
+    heat[..., 0] = np.clip(per_pixel.astype(np.int32) * 4, 0, 255).astype(np.uint8)
+    heat[..., 2] = (per_pixel > threshold).astype(np.uint8) * 40
+    summary = {
+        "ok": max_delta <= threshold,
+        "width": w,
+        "height": h,
+        "maxChannelDelta": max_delta,
+        "meanChannelDelta": round(float(diff.mean()), 4),
+        "rmse": round(float(np.sqrt((diff.astype(np.float64) ** 2).mean())), 4),
+        "pctPixelsDiffering": round(float((per_pixel > threshold).mean() * 100.0), 4),
+        "threshold": threshold,
+        "identical": max_delta == 0,
+    }
+    return summary, heat
+
+
 def tool_image_diff(a):
     """Per-channel pixel diff of two PNGs. The long-planned T12.1 golden compare."""
     try:
@@ -577,36 +607,10 @@ def tool_image_diff(a):
             }
         )
 
-    na = np.asarray(ia, dtype=np.int16)
-    nb = np.asarray(ib, dtype=np.int16)
-    diff = np.abs(na - nb)
-    per_pixel = diff.max(axis=2)  # worst channel per pixel
-    max_delta = int(diff.max())
-    mean_delta = round(float(diff.mean()), 4)
-    rmse = round(float(np.sqrt((diff.astype(np.float64) ** 2).mean())), 4)
-    pct_diff = round(float((per_pixel > threshold).mean() * 100.0), 4)
-
-    # heatmap: red channel scaled so even small deltas are visible.
-    h, w = per_pixel.shape
-    amp = np.clip(per_pixel.astype(np.int32) * 4, 0, 255).astype(np.uint8)
-    heat = np.zeros((h, w, 3), dtype=np.uint8)
-    heat[..., 0] = amp
-    heat[..., 2] = (per_pixel > threshold).astype(np.uint8) * 40
+    summary, heat = image_delta(ia, ib, threshold)
     out_path = a.get("out") or str(Path(pa).with_suffix("").as_posix() + ".diff.png")
     Image.fromarray(heat).save(out_path)
-
-    summary = {
-        "ok": max_delta <= threshold,
-        "width": w,
-        "height": h,
-        "maxChannelDelta": max_delta,
-        "meanChannelDelta": mean_delta,
-        "rmse": rmse,
-        "pctPixelsDiffering": pct_diff,
-        "threshold": threshold,
-        "diffImage": out_path,
-        "identical": max_delta == 0,
-    }
+    summary["diffImage"] = out_path
 
     blocks = [text_block(summary)]
     # inline the heatmap so it is visible without a second round-trip.
@@ -1170,6 +1174,41 @@ def _sim_rotation(udid):
         return None, prefs.get("SimulatorWindowOrientation")
 
 
+def sim_capture(udid, mask_island=True, rotate="auto"):
+    """simctl screenshot -> (upright RGB PIL image, info). Paints the Dynamic Island out first (in the raw
+    portrait image, where its place is fixed), then turns the image by Simulator.app's recorded orientation, or by
+    `rotate` degrees counter-clockwise. Raises RuntimeError with a result-ready dict when the capture fails."""
+    from PIL import Image
+    import numpy as np
+
+    tmp = Path(tempfile.mkdtemp(prefix="harness-simshot-"))
+    try:
+        raw = tmp / "raw.png"
+        rc, _o, er = run(["xcrun", "simctl", "io", udid, "screenshot", str(raw)], timeout=60)
+        if rc != 0 or not raw.exists():
+            raise RuntimeError({"stage": "simctl screenshot", "exitCode": rc, "stderr": er.strip()[-600:],
+                                "hint": "is the simulator booted?"})
+        im = Image.open(raw).convert("RGB")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    info = {"rawSize": list(im.size), "warnings": []}
+    if mask_island:
+        arr, info["island"] = mask_sim_island(np.asarray(im))
+        im = Image.fromarray(arr)
+    if rotate == "auto":
+        angle, orientation = _sim_rotation(udid)
+        info["orientation"] = orientation
+        if angle is None:
+            angle = 0
+            info["warnings"].append("Simulator.app has no recorded orientation for this device; left as captured.")
+    else:
+        angle = float(rotate)
+    info["rotatedDeg"] = angle
+    if angle % 360:
+        im = im.rotate(angle, expand=True)
+    return im, info
+
+
 def tool_ios_sim_screenshot(a):
     """simctl screenshot, Dynamic Island painted out, turned upright, optionally resized to a phone screenshot's size."""
     try:
@@ -1180,33 +1219,11 @@ def tool_ios_sim_screenshot(a):
     udid, e = _sim_udid(a)
     if e:
         return e
-    tmp = Path(tempfile.mkdtemp(prefix="harness-simshot-"))
     try:
-        raw = tmp / "raw.png"
-        rc, _o, er = run(["xcrun", "simctl", "io", udid, "screenshot", str(raw)], timeout=60)
-        if rc != 0 or not raw.exists():
-            return err_result({"stage": "simctl screenshot", "exitCode": rc, "stderr": er.strip()[-600:],
-                               "hint": "is the simulator booted?"})
-        im = Image.open(raw).convert("RGB")
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-    result = {"ok": True, "simUdid": udid, "rawSize": list(im.size), "warnings": []}
-
-    if a.get("mask_island", True):
-        arr, result["island"] = mask_sim_island(np.asarray(im))
-        im = Image.fromarray(arr)
-    rotate = a.get("rotate", "auto")
-    if rotate == "auto":
-        angle, orientation = _sim_rotation(udid)
-        result["orientation"] = orientation
-        if angle is None:
-            angle = 0
-            result["warnings"].append("Simulator.app has no recorded orientation for this device; left as captured.")
-    else:
-        angle = float(rotate)
-    result["rotatedDeg"] = angle
-    if angle % 360:
-        im = im.rotate(angle, expand=True)
+        im, info = sim_capture(udid, a.get("mask_island", True), a.get("rotate", "auto"))
+    except RuntimeError as ex:
+        return err_result(ex.args[0])
+    result = {"ok": True, "simUdid": udid, **info}
     like = a.get("size_like")
     if like:
         like_path = Path(like) if os.path.isabs(like) else REPO_ROOT / like
@@ -1260,6 +1277,44 @@ def tool_ios_sim_census(a):
         "resultFile": "build/bridge-census/result.txt",
         "outputTail": [ln for ln in out.splitlines() if ln.strip()][-20:],
     }
+    return ok_result(result) if result["ok"] else err_result(result)
+
+
+def tool_ios_sim_screens(a):
+    """sim-screens.py: open each native screen in the simulator, screenshot it, compare it with its golden."""
+    if not shutil.which("xcrun"):
+        return err_result("xcrun not found (install Xcode).")
+    screens = a.get("screens") or []
+    if not isinstance(screens, list) or not all(isinstance(n, str) and n and not n.startswith("-") for n in screens):
+        return err_result("screens must be a list of screen names from ios/dev-tools/sim-screens/screens.json")
+    flags = list(screens)
+    if a.get("update"):
+        flags.append("--update")
+    if not a.get("build", True):
+        flags.append("--no-build")
+    if a.get("jars"):
+        flags.append("--jars")
+    env = {"SIM_UDID": a["sim_udid"]} if a.get("sim_udid") else None
+    # The script imports this module for PIL work, so it runs under the same interpreter.
+    rc, o, er = run([sys.executable, str(RUN_SIM_SCREENS)] + flags, cwd=REPO_ROOT, timeout=1800, env=env)
+    out = strip_ansi(o + "\n" + er)
+    verdict, token = parse_verdict(out)
+    result = {
+        "ok": verdict == "GREEN" and rc == 0,
+        "verdict": verdict,
+        "verdictToken": token,
+        "exitCode": rc,
+        "consistent": (verdict == "GREEN") == (rc == 0),
+        "outputTail": [ln for ln in out.splitlines() if ln.strip()][-15:],
+    }
+    m = re.search(r"^summary=(.+)$", out, re.M)
+    if m:
+        try:
+            summary = json.loads(Path(m.group(1).strip()).read_text())
+            result.update(results=summary["results"], shots=summary["shots"], goldens=summary["goldens"],
+                          model=summary["model"])
+        except (OSError, ValueError, KeyError) as e:
+            result["summaryError"] = f"{m.group(1).strip()}: {e}"
     return ok_result(result) if result["ok"] else err_result(result)
 
 
@@ -1493,6 +1548,27 @@ TOOLS = {
             },
         },
         tool_ios_sim_census,
+    ),
+    "ios_sim_screens": (
+        "Golden screenshots of the native screens (ios/dev-tools/sim-screens/sim-screens.py): builds and launches "
+        "the app in the simulator logged out, CPU renderer, game picture covered; opens each screen in screens.json "
+        "(settings, about, plugins, edit-controls, overlays, profiles, infoboxes, panel:<rail tooltip>; hub, which "
+        "shows live Plugin Hub data, only when named) through its own button's entry point, screenshots it and "
+        "compares it with its golden in "
+        "ios/app/evidence/sim-golden/<model>/. Returns SIM_SCREENS_GREEN or _RED with each screen's result, the shot "
+        "and, on a FAIL, a diff heatmap. update=true writes the goldens from this run instead. ~40 s for the default "
+        "set with an incremental build.",
+        {
+            "type": "object",
+            "properties": {
+                "screens": {"type": "array", "items": {"type": "string"}, "description": "default: all of screens.json"},
+                "update": {"type": "boolean", "default": False, "description": "write this run's shots as the goldens"},
+                "build": {"type": "boolean", "default": True},
+                "jars": {"type": "boolean", "default": False},
+                "sim_udid": {"type": "string"},
+            },
+        },
+        tool_ios_sim_screens,
     ),
 }
 

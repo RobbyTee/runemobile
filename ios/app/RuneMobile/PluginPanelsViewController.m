@@ -817,6 +817,29 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
+#if TARGET_OS_SIMULATOR
+// The simulator screen driver (ViewController.m, simScreenTick) opens panels by their rail tooltip, the way a
+// tap on that rail icon does.
+- (BOOL)simOpenPanelNamed:(NSString *)tooltip {
+    for (NSUInteger i = 0; i < self.panels.count; i++) {
+        if ([[self.panels[i][@"tooltip"] description] isEqualToString:tooltip]) {
+            [self openPanelAtIndex:(NSInteger)i];
+            return YES;
+        }
+    }
+    return NO;
+}
+
+- (BOOL)simPanelOpen {
+    return self.currentIndex >= 0 && !self.panelContainer.hidden;
+}
+
+- (void)simClosePanel {
+    if ([self simPanelOpen])
+        [self collapsePanel];
+}
+#endif
+
 @end
 
 #pragma mark - Native Quest Helper (reflowed)

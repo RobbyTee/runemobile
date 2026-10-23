@@ -650,5 +650,83 @@ class SimIsland(unittest.TestCase):
         self.assertEqual(info, {"masked": False, "reason": "not a portrait screenshot"})
 
 
+
+def _load_sim_screens():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("sim_screens", hs.REPO_ROOT / "ios/dev-tools/sim-screens/sim-screens.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class SimScreens(unittest.TestCase):
+    """sim-screens.py's reading of the app's [screen] lines and of screens.json, and the image_delta it gates on."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ss = _load_sim_screens()
+
+    def log(self, text):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        p = Path(d) / "hello-shell.log"
+        p.write_text(text)
+        return p
+
+    def test_ready_answers_only_its_own_command(self):
+        p = self.log("[screen] ready 1 settings\n[screen] ready 2 panel:Grand Exchange\n")
+        self.assertEqual(self.ss.screen_event(p, 2, "panel:Grand Exchange"), ("ready", ""))
+        self.assertEqual(self.ss.screen_event(p, 1, "settings"), ("ready", ""))
+        self.assertIsNone(self.ss.screen_event(p, 3, "about"))
+
+    def test_failed_carries_the_apps_reason(self):
+        p = self.log("[screen] failed 12 panel:World Hopper: no panel with that name on the rail\n")
+        self.assertEqual(self.ss.screen_event(p, 12, "panel:World Hopper"),
+                         ("failed", "no panel with that name on the rail"))
+
+    def test_ready_for_another_screen_is_a_failure(self):
+        p = self.log("[screen] ready 5 about\n")
+        ev = self.ss.screen_event(p, 5, "settings")
+        self.assertEqual(ev[0], "failed")
+        self.assertIn("about", ev[1])
+
+    def test_seq_is_matched_whole(self):
+        self.assertIsNone(self.ss.screen_event(self.log("[screen] ready 11 settings\n"), 1, "settings"))
+
+    def test_manifest_loads_with_unique_files(self):
+        screens = self.ss.load_manifest()
+        names = [s["name"] for s in screens]
+        self.assertIn("settings", names)
+        self.assertEqual(len({self.ss.slug(n) for n in names}), len(names))
+        for s in screens:
+            self.assertIn("settle", s)
+            self.assertIsInstance(s["network"], bool)
+        self.assertTrue(next(s for s in screens if s["name"] == "hub")["network"])
+
+    def test_slug(self):
+        self.assertEqual(self.ss.slug("panel:Grand Exchange"), "panel-grand-exchange")
+        self.assertEqual(self.ss.slug("edit-controls"), "edit-controls")
+
+    def test_image_delta_counts_pixels_over_the_threshold(self):
+        from PIL import Image
+
+        a = Image.new("RGB", (10, 10), (20, 20, 20))
+        b = a.copy()
+        b.putpixel((3, 4), (20, 30, 20))
+        b.putpixel((5, 5), (21, 20, 20))
+        same, _ = hs.image_delta(a, a.copy())
+        self.assertTrue(same["identical"])
+        d, heat = hs.image_delta(a, b)
+        self.assertEqual((d["maxChannelDelta"], d["pctPixelsDiffering"]), (10, 2.0))
+        self.assertEqual(hs.image_delta(a, b, 5)[0]["pctPixelsDiffering"], 1.0)
+        self.assertEqual(heat.shape[:2], (10, 10))
+
+    def test_tool_refuses_flags_as_screen_names(self):
+        with mock.patch.object(hs.shutil, "which", return_value="/usr/bin/xcrun"):
+            r = hs.tool_ios_sim_screens({"screens": ["--update"]})
+        self.assertTrue(r.get("isError"), r)
+
+
 if __name__ == "__main__":
     unittest.main()

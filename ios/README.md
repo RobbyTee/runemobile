@@ -70,19 +70,34 @@ ios/dev-tools/run-sim.sh                  # build, install, launch and press Pla
 RENDERER=gpu ios/dev-tools/run-sim.sh     # cpu | gpu | 117hd
 ios/dev-tools/run-sim.sh --jars           # restage the jars first, after a Java change
 ios/dev-tools/run-sim.sh --from-phone     # start from a paired phone's settings
+ios/dev-tools/run-sim.sh --desktop-login  # log in with the desktop harness's Jagex session (--logout undoes it)
 ios/dev-tools/bridge-census/run-census-sim.sh --jars   # check every JNI lookup against the jars
+ios/dev-tools/sim-screens/sim-screens.py  # compare the native screens with their golden screenshots
 ```
 
 `--from-phone` copies the app's settings from a paired iPhone (cable or the
 same network) before launch: the native UI settings, the active RuneLite
 profile and the game's preferences, so the simulator starts the way the phone
-does. It never copies the login; the simulator stays logged out. The renderer
-follows the phone's unless `RENDERER` is set.
+does. It never copies the login. The renderer follows the phone's unless
+`RENDERER` is set.
+
+`--desktop-login` logs the simulator in with the session that
+`dev-tools/fetch-shield-tokens.sh` saved for the desktop harness. It copies the
+session ID and the chosen character, not the launcher tokens. The simulator
+stays logged in across reinstalls until `--logout`. Use a throwaway account, and
+don't run the desktop harness on it at the same time: one session kicks the
+other.
 
 `run-census-sim.sh` is the iOS bridge census: it lists every class, method and
 field the native code looks up through JNI and resolves each one in the app's
 own VM ([`dev-tools/bridge-census/`](dev-tools/bridge-census/README.md)). Run it
 after a change to the shared bridge; a lookup that no longer resolves fails it.
+
+`sim-screens.py` opens each native screen (Settings, the plugin list, the
+control editor, the plugin side panels and so on) and compares a screenshot of
+it with a golden copy ([`dev-tools/sim-screens/`](dev-tools/sim-screens/README.md)).
+Run it after a UI change; a screen that changed fails it with a diff heatmap.
+The goldens are kept per Mac, outside git.
 
 The simulator build retags the bundled JRE as a simulator binary
 (`app/scripts/resign-jre.sh`), and the app services HotSpot's code-cache
