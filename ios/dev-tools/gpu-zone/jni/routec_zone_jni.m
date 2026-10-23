@@ -306,6 +306,33 @@ static void JNICALL z_glBindTexture(JNIEnv *e, jclass c, jint target, jint tex) 
     glBindTexture((GLenum)target == GL_TEXTURE_BUFFER ? GL_TEXTURE_2D : (GLenum)target, (GLuint)tex);
 }
 
+// ============================================================================================================
+//  RLHD v1.6.0.1 additions
+// ============================================================================================================
+
+// The shadow pass's depth bias (RenderState.polygonOffset) and the star field's instanced-quad fallback.
+static void JNICALL z_glPolygonOffset(JNIEnv *e, jclass c, jfloat factor, jfloat units) {
+    glPolygonOffset(factor, units);
+}
+static void JNICALL z_glDrawArraysInstanced(JNIEnv *e, jclass c, jint mode, jint first, jint count, jint instances) {
+    glDrawArraysInstanced((GLenum)mode, first, count, instances);
+}
+
+// OVERRIDE the base glEnable/glDisable (later-wins, like glBindTexture below). SkyRenderer toggles the desktop-only
+// GL_PROGRAM_POINT_SIZE around its point-sprite stars; GLES always takes gl_PointSize from the vertex shader and
+// rejects the enum with GL_INVALID_ENUM, so drop it. Every other cap passes straight through.
+#ifndef GL_PROGRAM_POINT_SIZE
+#define GL_PROGRAM_POINT_SIZE 0x8642
+#endif
+static void JNICALL z_glEnable(JNIEnv *e, jclass c, jint cap) {
+    if (cap != GL_PROGRAM_POINT_SIZE)
+        glEnable((GLenum)cap);
+}
+static void JNICALL z_glDisable(JNIEnv *e, jclass c, jint cap) {
+    if (cap != GL_PROGRAM_POINT_SIZE)
+        glDisable((GLenum)cap);
+}
+
 // #1 — glTexBuffer(GL_TEXTURE_BUFFER, internalformat, buffer) has no ES3 equivalent. Repack the buffer object's
 // bytes as a 2D texture (proven byte-exact in gpu-tbo2d) so the shader's `isampler2D textureFaces` +
 // texelFetch(ivec2(idx%W, idx/W)) (already emitted by the Z0 downport) reads identical data. RGB32I = 12 B/texel.
@@ -389,6 +416,7 @@ static jlong JNICALL z_memAddress0(JNIEnv *e, jclass c, jobject buf) {
 //  RegisterNatives tables + entry point
 // ============================================================================================================
 
+// clang-format off
 static const JNINativeMethod kGLALLZone[] = {
     // bucket A
     {"glCullFace",                         "(I)V",                                    (void *)z_glCullFace},
@@ -431,6 +459,11 @@ static const JNINativeMethod kGLALLZone[] = {
     {"glTexBuffer",                        "(III)V",                                  (void *)z_glTexBuffer},
     // #1 companion — OVERRIDE base glBindTexture to remap GL_TEXTURE_BUFFER -> GL_TEXTURE_2D (later-wins).
     {"glBindTexture",                      "(II)V",                                   (void *)z_glBindTexture},
+    // RLHD v1.6.0.1 - glEnable/glDisable OVERRIDE the base pair to drop GL_PROGRAM_POINT_SIZE (later-wins).
+    {"glPolygonOffset",                    "(FF)V",                                   (void *)z_glPolygonOffset},
+    {"glDrawArraysInstanced",              "(IIII)V",                                 (void *)z_glDrawArraysInstanced},
+    {"glEnable",                           "(I)V",                                    (void *)z_glEnable},
+    {"glDisable",                          "(I)V",                                    (void *)z_glDisable},
     // bucket B — no-op stubs (caps-gated off)
     {"glDispatchCompute",                  "(III)V",                                  (void *)z_noop_III},
     {"glMemoryBarrier",                    "(I)V",                                    (void *)z_noop_I},
@@ -447,6 +480,7 @@ static const JNINativeMethod kGLALLZone[] = {
     {"glGetQueryObjectiv",                 "(II[I)V",                                 (void *)z_glGetQueryObjectiv},
     {"glGetQueryObjectui64",               "(II)J",                                   (void *)z_glGetQueryObjectui64},
 };
+// clang-format on
 
 static const JNINativeMethod kMemUtilZone[] = {
     {"nmemAllocChecked", "(J)J",                  (void *)z_nmemAllocChecked},

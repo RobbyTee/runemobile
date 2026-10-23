@@ -72,6 +72,7 @@ public final class RendererPanelStarter
 		}
 		done = true;
 		final String g = MobileUiBridge.loadPluginNoStart(GPU_PLUGIN);
+		RLHDStarter.migrateRlhd16Config();   // before the load applies 117HD's defaults over the stale values
 		final String h = MobileUiBridge.loadPluginNoStart(HD_PLUGIN);
 		log.info("[rendererpanel] loaded for the panel: GPU -> {} | 117HD -> {}", g, h);
 	}

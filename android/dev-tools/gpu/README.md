@@ -55,7 +55,7 @@ Run that on a real device (BrowserStack). See `android/GPU-TRACK-PLAN.md` §AG1 
 
 ## AG2.5-b — 117HD (RLHD) class-load + loader probe (GREEN, emulator, 2026-06-08)
 
-`stage-rlhd-zone-jar.sh` compiles the unmodified RLHD source (vendored at `rlhd-src/`, rev 7dded59) against
+`stage-rlhd-zone-jar.sh` compiles the unmodified RLHD source (vendored at `rlhd-src/`, pinned by `RLHD_REV`: v1.6.0.1 since 2026-10-23) against
 [`facade-src/` : a **lwjgl-stripped** client jar] — the facade is the sole LWJGL provider, so any missing GL/CL/
 system symbol is a `javac` error, not a runtime crash. Output: `client-<ver>-rlhd.jar` (rs117/** + shaders/JSON/
 textures; the facade ships in `client-<ver>-gpu.jar`, so **re-stage the gpu jar from the same facade-src**).

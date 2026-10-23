@@ -92,13 +92,13 @@ org/lwjgl/opengl/GL33C.glDepthMask:(Z)V
 org/lwjgl/opengl/GL33C.glDetachShader:(II)V
 org/lwjgl/opengl/GL33C.glDisable:(I)V
 org/lwjgl/opengl/GL33C.glDrawArrays:(III)V
+org/lwjgl/opengl/GL33C.glDrawArraysInstanced:(IIII)V
 org/lwjgl/opengl/GL33C.glDrawBuffer:(I)V
 org/lwjgl/opengl/GL33C.glDrawElements:(IIIJ)V
 org/lwjgl/opengl/GL33C.glEnable:(I)V
 org/lwjgl/opengl/GL33C.glEnableVertexAttribArray:(I)V
 org/lwjgl/opengl/GL33C.glFenceSync:(II)J
 org/lwjgl/opengl/GL33C.glFinish:()V
-org/lwjgl/opengl/GL33C.glFlush:()V
 org/lwjgl/opengl/GL33C.glFlushMappedBufferRange:(IJJ)V
 org/lwjgl/opengl/GL33C.glFramebufferRenderbuffer:(IIII)V
 org/lwjgl/opengl/GL33C.glFramebufferTexture2D:(IIIII)V
@@ -132,6 +132,7 @@ org/lwjgl/opengl/GL33C.glMapBuffer:(IILjava/nio/ByteBuffer;)Ljava/nio/ByteBuffer
 org/lwjgl/opengl/GL33C.glMapBufferRange:(IJJI)Ljava/nio/ByteBuffer;
 org/lwjgl/opengl/GL33C.glMapBufferRange:(IJJILjava/nio/ByteBuffer;)Ljava/nio/ByteBuffer;
 org/lwjgl/opengl/GL33C.glMultiDrawArrays:(ILjava/nio/IntBuffer;Ljava/nio/IntBuffer;)V
+org/lwjgl/opengl/GL33C.glPolygonOffset:(FF)V
 org/lwjgl/opengl/GL33C.glQueryCounter:(II)V
 org/lwjgl/opengl/GL33C.glReadBuffer:(I)V
 org/lwjgl/opengl/GL33C.glReadPixels:(IIIIIILjava/nio/ByteBuffer;)V

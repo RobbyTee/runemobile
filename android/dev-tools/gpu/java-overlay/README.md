@@ -6,7 +6,13 @@ same-path file under `rlhd-src/src/main/java/` for the Zone-jar build, so our fi
 reproducible while `rlhd-src` stays untouched and re-fetchable.
 
 Contents:
-- `rs117/hd/renderer/zone/StaticAlphaSortingJob.java` — convert the camera yaw/pitch from JAU14
-  (`getCameraYaw()/getCameraPitch()`, post rev239) to JAU11 (`>> 3 & 2047`) before indexing the 2048-entry
-  `SINE`/`COSINE` tables. Without it a camera drag past angle 2047 throws `ArrayIndexOutOfBoundsException` in
-  `preSceneDraw` (and below 2047 it silently sorted alpha with an 8x-too-large angle).
+- `rs117/hd/HdPlugin.java` — four `awtContext == null` guards (`updateTiledLightingFbo`, `updateSceneFbo`,
+  `initializeShadowMapFbo`, `processPendingConfigChanges`). A config storm from a profile switch can tear the GL
+  context down before a deferred config change runs; without the guards the GL re-init NPEs into the catch-all
+  `stopPlugin()` while holding `loadingLock`, which can deadlock the map loader (a black scene until restart).
+  iOS carries the same file (`ios/dev-tools/gpu-zone/java-overrides/`).
+
+Removed with the move to RLHD v1.6.0.1, which fixed the same bugs upstream: `StaticAlphaSortingJob` (the
+camera-angle table index; upstream now reads `getFixedYaw()`/`getFixedPitch()` into `SINE14`/`COSINE14`), `AsyncCachedModel`
+(transparency is now cached), `SceneManager` (`discardPendingScene()` replaces the "Double zone load!" throw) and
+`EnvironmentManager` (`shutDown` now leaves an empty array, never null).

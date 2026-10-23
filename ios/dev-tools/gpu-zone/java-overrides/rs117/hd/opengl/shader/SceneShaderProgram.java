@@ -1,6 +1,6 @@
 /*
  * ===========================================================================================================
- * iOS OVERRIDE (gpu-zone B0.5, materials subsystem). Verbatim copy of SceneShaderProgram.java @ RLHD 7dded59
+ * iOS OVERRIDE (gpu-zone B0.5, materials subsystem). Verbatim copy of SceneShaderProgram.java @ RLHD v1.6.0.1
  * EXCEPT the materialStore sampler wiring: on iOS the shaders read material data from an RGBA32I texture
  * instead of the UBOMaterials uniform block (Apple's 16 KB uniform-block cap). See java-overrides
  * MaterialManager + ios-overrides/uniforms/materials.glsl. RE-MERGE on RLHD rev bumps.
@@ -8,9 +8,13 @@
  */
 package rs117.hd.opengl.shader;
 
+import java.io.IOException;
+
 import static org.lwjgl.opengl.GL33C.*;
 import static rs117.hd.HdPlugin.TEXTURE_UNIT_GAME;
+import static rs117.hd.HdPlugin.TEXTURE_UNIT_NEBULA_MAP;
 import static rs117.hd.HdPlugin.TEXTURE_UNIT_SHADOW_MAP;
+import static rs117.hd.HdPlugin.TEXTURE_UNIT_TERRAIN_SHADOW_MAP;
 import static rs117.hd.HdPlugin.TEXTURE_UNIT_TILED_LIGHTING_MAP;
 import static rs117.hd.renderer.zone.ZoneRenderer.TEXTURE_UNIT_TEXTURED_FACES;
 import static rs117.hd.scene.MaterialManager.TEXTURE_UNIT_MATERIAL_STORE;
@@ -18,8 +22,10 @@ import static rs117.hd.scene.MaterialManager.TEXTURE_UNIT_MATERIAL_STORE;
 public class SceneShaderProgram extends ShaderProgram {
 	protected final UniformTexture uniTextureArray = addUniformTexture("textureArray");
 	protected final UniformTexture uniShadowMap = addUniformTexture("shadowMap");
+	protected final UniformTexture uniTerrainShadowMap = addUniformTexture("terrainShadowMap");
 	protected final UniformTexture uniTiledLightingTextureArray = addUniformTexture("tiledLightingArray");
 	protected final UniformTexture uniTextureFaces = addUniformTexture("textureFaces");
+	protected final UniformTexture uniNebulaMap = addUniformTexture("nebulaMap");
 	protected final UniformTexture uniMaterialStore = addUniformTexture("materialStore");
 
 	public SceneShaderProgram() {
@@ -27,15 +33,36 @@ public class SceneShaderProgram extends ShaderProgram {
 			.add(GL_VERTEX_SHADER, "scene_vert.glsl")
 			.add(GL_FRAGMENT_SHADER, "scene_frag.glsl"));
 		uniTiledLightingTextureArray.ignoreMissing = true;
+		uniTerrainShadowMap.ignoreMissing = true;
+		uniNebulaMap.ignoreMissing = true;
+	}
+
+	@Override
+	public void compile(ShaderIncludes includes) throws ShaderException, IOException {
+		super.compile(includes.copy().define("WATER_PASS", this instanceof Water));
 	}
 
 	@Override
 	protected void initialize() {
 		uniTextureArray.set(TEXTURE_UNIT_GAME);
 		uniShadowMap.set(TEXTURE_UNIT_SHADOW_MAP);
+		uniTerrainShadowMap.set(TEXTURE_UNIT_TERRAIN_SHADOW_MAP);
 		uniTiledLightingTextureArray.set(TEXTURE_UNIT_TILED_LIGHTING_MAP);
 		uniTextureFaces.set(TEXTURE_UNIT_TEXTURED_FACES);
+		uniNebulaMap.set(TEXTURE_UNIT_NEBULA_MAP);
 		uniMaterialStore.set(TEXTURE_UNIT_MATERIAL_STORE);
+	}
+
+	public static class Water extends SceneShaderProgram {}
+
+	public static class GapFiller extends SceneShaderProgram {
+		GapFiller() {
+			shaderTemplate.add(GL_FRAGMENT_SHADER, "gap_filler_frag.glsl");
+			uniTextureFaces.ignoreMissing = true;
+			uniTextureArray.ignoreMissing = true;
+			uniShadowMap.ignoreMissing = true;
+			uniMaterialStore.ignoreMissing = true;
+		}
 	}
 
 	public static class Legacy extends SceneShaderProgram {

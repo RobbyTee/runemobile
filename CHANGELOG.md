@@ -14,6 +14,33 @@ as "What's new".
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-23
+
+### Changed
+- 117 HD is updated on both phones from a June build to 1.6.0.1, the version the Plugin Hub serves. It brings
+  four months of 117 HD's own work: see-through and double-sided models drawn properly, a seasonal foliage
+  option, a ground-blending mode that blends only textures, reworked brick walls, new textures and lighting
+  across many areas and quests, and lights on sailing boats. 1.6's day & night cycle stays off on both phones
+  for now.
+- 117 HD settings that 1.6 renamed keep your choice. 1.6 itself reads the old values as unset and goes back to
+  its defaults, which on iOS turned tiled lighting back on for anyone who had switched it off.
+- The app has a logo. On iOS it is the app icon (there was none before) and the launch screen, and it heads
+  the tap-to-play cover and the About screen. On Android it is the launcher icon, the themed icon on Android 13
+  and later, the notification icon and the TV banner, and it heads the splash and About screens.
+
+### Fixed
+- After a dropped connection the app logged back in but left you on the "Click here to play" screen until the
+  game's idle logout. It now presses the button itself after a reconnect or a world hop. On Android it now
+  does this on the first login too; before, you had to tap it.
+- A dropped connection that lasted more than about 12 seconds ended on "Session expired" though your login
+  was still good: the app's five quick tries to log back in all failed before the network was back. It now
+  keeps trying for about two and a half minutes, at growing intervals, behind the "Reconnecting" screen.
+
+### Internal
+- `tools/shader-matrix/` checks every 117 HD shader the app builds, in 11 combinations of settings, against
+  each phone's shading language with glslang, so a 117 HD update or a shader change is checked without a
+  phone. See [its README](tools/shader-matrix/README.md).
+
 ## [0.2.7] - 2026-10-23
 
 ### Fixed

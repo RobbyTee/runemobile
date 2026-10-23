@@ -18,4 +18,9 @@ public class GLCapabilities {
 	public boolean GL_ARB_copy_buffer;
 	public boolean GL_ARB_map_buffer_range;
 	public boolean GL_ARB_shader_image_load_store;
+	// RLHD v1.6.0.1: indirect draws stay off (as above). forwardCompatible = true keeps SkyRenderer off the
+	// desktop-only GL_POINT_SPRITE enable; the bridges build this object with its constructor, so the default holds.
+	public boolean GL_ARB_draw_indirect;
+	public boolean GL_ARB_multi_draw_indirect;
+	public boolean forwardCompatible = true;
 }

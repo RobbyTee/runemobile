@@ -1,9 +1,13 @@
 # Vendored RLHD source — provenance
 
 - **Upstream:** https://github.com/117HD/RLHD
-- **Pinned rev:** `7dded591a21d4c17c2d8c077c8ac0ecfbbd7313f` (`master`, 2026-06-03, "Update gamevals to 2026-06-02 (#1107)")
-  — the same rev the HD port blueprint (`ios/HD-PORT-BLUEPRINT.md` §5) and the `gpu-tbo2d` harness audited, so the
-  blocker line numbers in those docs line up with this tree. Bump deliberately (re-run the Z0 gate after any bump).
+- **Pinned rev:** `f5be256078b5e398089aa73e48116c7f95dc329f` (tag `v1.6.0.1`, 2026-10-19, "Strip out day & night from
+  shaders when disabled"), the release Plugin Hub serves. Both stage scripts fetch this rev.
+- **Previous rev:** `7dded591a21d4c17c2d8c077c8ac0ecfbbd7313f` (`master`, 2026-06-03, "Update gamevals to 2026-06-02
+  (#1107)"), the rev the HD port blueprint (`ios/HD-PORT-BLUEPRINT.md` §5) and the `gpu-tbo2d` harness audited, so the
+  blocker line numbers in those docs line up with that tree. The tracked Z0 subset below (`shaders/hd/**`, `java/`)
+  stays at this rev as the record of the B0 bring-up; it is not refreshed on a bump. Bump deliberately: after any
+  bump re-run `tools/shader-matrix/run-matrix.sh ios` (the shader gate since v1.6.0.1) and `../check-std140.sh`.
 - **License:** BSD 2-Clause (`./LICENSE`, Copyright (c) 2021, 117) — same family as RuneLite; vendoring with the
   notice retained is compliant. This is a **personal/technical build** (see project risk note); not redistributed.
 
@@ -25,7 +29,7 @@
 
 To re-fetch the full tree (for B0.1 staging):
 ```
-git clone https://github.com/117HD/RLHD && git -C RLHD checkout 7dded59
+git clone https://github.com/117HD/RLHD && git -C RLHD checkout f5be256
 cp -R RLHD/src/main  ios/dev-tools/gpu-zone/rlhd-src/src/
 cp    RLHD/lombok.config  ios/dev-tools/gpu-zone/rlhd-src/src/lombok.config   # bubbles to the main/java sources
 ```

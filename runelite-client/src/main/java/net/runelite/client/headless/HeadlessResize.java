@@ -60,6 +60,8 @@ public final class HeadlessResize
 	private static int targetW;
 	private static int targetH;
 	private static boolean applied;
+	// Set on the EDT once the resize has run (or failed); read on the client thread.
+	private static volatile boolean resized;
 	private static int logFrames;
 
 	static
@@ -91,6 +93,16 @@ public final class HeadlessResize
 	public static boolean isEnabled()
 	{
 		return ENABLED;
+	}
+
+	/**
+	 * True until the one-time resize on reaching LOGGED_IN has run: not requested yet, or still queued on the EDT.
+	 * Until then the engine lays widgets out for the old canvas, so a click aimed by widget bounds lands on
+	 * whatever sits there after the resize. HeadlessLogin's welcome-screen dismiss waits on it.
+	 */
+	static boolean isPending()
+	{
+		return ENABLED && targetW > 0 && targetH > 0 && !resized;
 	}
 
 	/** Called once per {@code Hooks.draw} (only when enabled). Resizes once on reaching LOGGED_IN. */
@@ -143,6 +155,10 @@ public final class HeadlessResize
 				catch (RuntimeException ex)
 				{
 					log.warn("[headless-resize] resize failed", ex);
+				}
+				finally
+				{
+					resized = true;
 				}
 			});
 		}

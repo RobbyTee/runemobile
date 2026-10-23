@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Track G AG2.5-b — stage the Android-variant 117HD (RLHD) Zone jar. Sibling of stage-android-gpu-jar.sh.
 #
-# RLHD is an EXTERNAL hub plugin (vendored, gitignored, at rlhd-src/, rev 7dded59, targets RuneLite 1.12.+), so
+# RLHD is an EXTERNAL hub plugin (vendored, gitignored, at rlhd-src/, rev f5be256 = v1.6.0.1, targets RuneLite 1.13.+), so
 # unlike the base gpu plugin it is NOT inside the client jar. This script compiles the UNMODIFIED RLHD source
 # against [facade-src + a lwjgl-STRIPPED client jar] — i.e. our pure-Java org.lwjgl.{opengl,opencl,system} +
 # net.runelite.rlawt.AWTContext facade is the SOLE provider of every LWJGL symbol RLHD references. Stripping
@@ -46,7 +46,7 @@ EXPECT_MD5="${1:-}"
 # the tree is ABSENT or its checked-out HEAD != the pin (RLHD_REV bumped, or a persistent runner/dev workspace
 # still holds old sources, or a hand-vendored tree with no .git) so a rev bump can't silently compile against
 # stale sources. It's a full git checkout here, so `git rev-parse HEAD` is the actual-vs-pinned check.
-RLHD_REV=7dded591a21d4c17c2d8c077c8ac0ecfbbd7313f
+RLHD_REV=f5be256078b5e398089aa73e48116c7f95dc329f
 if [ ! -d "$RLHD/src/main/java" ] || [ "$(git -C "$RLHD" rev-parse HEAD 2>/dev/null)" != "$RLHD_REV" ]; then
   echo "== rlhd-src absent or != pinned rev — (re)fetching 117HD/RLHD @ $RLHD_REV =="
   rm -rf "$RLHD"; mkdir -p "$RLHD"
@@ -113,6 +113,7 @@ cp -R "$WORK/rlhd_out/." "$WORK/jar/"
 # float contexts that strict GLSL ES rejects). The overlay holds full fixed copies that replace the pristine
 # rlhd-src ones — committed + reproducible, keeping rlhd-src untouched. (rc_downport still handles version/
 # precision/noperspective at load; the overlay handles the int->float typing the downport can't do safely.)
+# Gate the overlay with `tools/shader-matrix/run-matrix.sh android` after any change to it, to rc_downport or to RLHD_REV.
 OVERLAY="$(pwd)/shader-overlay"
 if [ -d "$OVERLAY" ]; then
 	cp -R "$OVERLAY/." "$WORK/jar/"

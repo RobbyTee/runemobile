@@ -1,0 +1,98 @@
+#pragma once
+
+// GLSL ES port (Android shader-overlay) of RLHD v1.6.0.1's utils/constants.glsl: TAU's int 2 is a float (PI is a
+// float literal), the one int<->float site behind most sky, starfield and PCSS errors. GLSL ES has no implicit
+// int<->float conversion. iOS applies the same fix at load time (RouteCBridge rlhdCasts). RE-MERGE on RLHD rev bumps.
+// RLHD is BSD 2-Clause, Copyright (c) 2021, 117: the full text is in android/dev-tools/gpu/rlhd-src/LICENSE.
+
+#define EPS 1.0e-10
+#define PI 3.14159265f // max 32-bit float precision
+#define HALF_PI (.5*PI)
+#define TAU (2.0*PI)
+
+#define SHORT_MAX 32767 // 2^15 - 1
+
+#define TILE_SIZE 128
+
+#include SHADER_TYPE
+#include LEGACY_RENDERER
+#include ZONE_RENDERER
+
+// Any changes here may need to be reflected in OpenCL's constants.cl
+// They are kept separate to avoid accidentally breaking OpenCL compatibility
+#define MATERIAL_INDEX_SHIFT 21
+#define MATERIAL_INDEX_MASK ((1 << (32 - MATERIAL_INDEX_SHIFT)) - 1)
+#define MATERIAL_SHADOW_OPACITY_THRESHOLD_SHIFT 15
+#define MATERIAL_FLAG_WIND_MODIFIER 12
+#define MATERIAL_FLAG_WIND_SWAYING 9
+#define MATERIAL_FLAG_INVERT_DISPLACEMENT_STRENGTH 8
+#define MATERIAL_FLAG_SHADOW_NORMAL_BIAS 7
+#define MATERIAL_FLAG_TERRAIN_VERTEX_SNAPPING 6
+#define MATERIAL_FLAG_DISABLE_SHADOW_RECEIVING 5
+#define MATERIAL_FLAG_UPWARDS_NORMALS 4
+#define MATERIAL_FLAG_FLAT_NORMALS 3
+#define MATERIAL_FLAG_WORLD_UVS 2
+#define MATERIAL_FLAG_VANILLA_UVS 1
+#define MATERIAL_FLAG_IS_OVERLAY 0
+
+#include SHADOW_MODE
+#define SHADOW_MODE_OFF 0
+#define SHADOW_MODE_FAST 1
+#define SHADOW_MODE_DETAILED 2
+
+#define SHADOW_TRANSPARENCY_BIAS 0.006
+#define SHADOW_DEPTH_BITS 16
+#define SHADOW_ALPHA_BITS 8
+#define SHADOW_COMBINED_BITS (SHADOW_DEPTH_BITS + SHADOW_ALPHA_BITS)
+#define SHADOW_DEPTH_MAX ((1 << SHADOW_DEPTH_BITS) - 1)
+#define SHADOW_ALPHA_MAX ((1 << SHADOW_ALPHA_BITS) - 1)
+#define SHADOW_COMBINED_MAX ((1 << SHADOW_COMBINED_BITS) - 1)
+
+#include SHADOW_FILTERING_KERNEL
+#include TERRAIN_SHADOWS
+#include TERRAIN_ONLY_PASS
+
+#include SHADOW_FILTERING
+#define SHADOW_FILTERING_PCF 0
+#define SHADOW_FILTERING_DITHER 1
+#define SHADOW_FILTERING_AVERAGE 2
+#define SHADOW_FILTERING_PCSS 3
+
+#include SHADOW_TRANSPARENCY
+#if SHADOW_TRANSPARENCY
+    #define SHADOW_DEFAULT_OPACITY_THRESHOLD 0.01 // Remove shadows from clickboxes
+#else
+    #define SHADOW_DEFAULT_OPACITY_THRESHOLD 0.71 // Lowest while keeping Prifddinas glass walkways transparent
+#endif
+
+#include STAR_MODE
+#define STAR_MODE_OFF 0
+#define STAR_MODE_REALISTIC 1
+#define STAR_MODE_ARTISTIC 2
+#define STAR_MODE_STATIC 3
+
+#include NEBULAE
+
+#include VANILLA_COLOR_BANDING
+#include UNDO_VANILLA_SHADING
+#include LEGACY_GREY_COLORS
+#include DISABLE_DIRECTIONAL_SHADING
+#include FLAT_SHADING
+#include APPLY_COLOR_FILTER
+#include WIREFRAME
+#include WIND_DISPLACEMENT
+#include WIND_DISPLACEMENT_NOISE_RESOLUTION
+#include CHARACTER_DISPLACEMENT
+#include DYNAMIC_LIGHTS
+#include MAX_LIGHT_COUNT
+#include TILED_LIGHTING
+#include TILED_LIGHTING_LAYER_COUNT
+#include TILED_LIGHTING_TILE_SIZE
+#define TILED_LIGHTING_MAX_TILE_LIGHT_COUNT (TILED_LIGHTING_LAYER_COUNT * 4 * 2)
+#include WINDOWS_HDR_CORRECTION
+#include POINT_SPRITES
+#include LEGACY_BOAT_SILHOUETTES
+#include WATER_SPECULAR_REFLECTIONS
+#include REDUCE_GLARE_INTENSITY
+#include CENTROID_QUALIFIER
+#include DAYLIGHT_CYCLE

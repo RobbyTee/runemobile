@@ -3,144 +3,154 @@
  * Copyright (c) 2024, Hooder <ahooder@protonmail.com>
  * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without modification, are permitted provided that
- * the conditions of the BSD 2-clause license are met.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ *    list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  * ===========================================================================================================
- * iOS ES-3.0 OVERRIDE (gpu-zone B1, shadows). Verbatim copy of rs117/hd/utils/shadows.glsl @ RLHD 7dded59
+ * iOS ES-3.0 OVERRIDE (gpu-zone B1, shadows). Verbatim copy of rs117/hd/utils/shadows.glsl @ RLHD v1.6.0.1
  * EXCEPT every int-in-float-context is made explicit (blueprint #13) so the SCENE program compiles on GLES 3.00
- * when SHADOW_MODE != OFF — this whole file is #if'd out (stub macro) at SHADOW_MODE_OFF, so Z0 never compiled it.
- * Changes are purely numeric-type explicitness; logic identical:
- *   - int literals in float context -> float literals (0->0.0, 1->1.0, 2->2.0)
- *   - SHADOW_* / POISSON_DISK_LENGTH (#define ints) cast to float at each float use
- *   - shadowPos.xy *= vec2(shadowRes)  (shadowRes is ivec2 from textureSize; vec2 *= ivec2 is illegal in ES)
- *   - clamp/max int args -> float; kernelSize/2 int wrapped float() before the vec2 subtraction
- * RE-MERGE on RLHD rev bumps.
+ * when SHADOW_MODE != OFF (this whole file is #if'd out to a stub macro at SHADOW_MODE_OFF). Changes are purely
+ * numeric-type explicitness (int literals in float context -> float literals, #define ints cast to float at
+ * float uses); logic identical. RE-MERGE on RLHD rev bumps.
  * ===========================================================================================================
  */
+#pragma once
+
 #include <uniforms/global.glsl>
 
 #include <utils/constants.glsl>
 #include <utils/misc.glsl>
+#include <utils/shadow_filtering.glsl>
 
-#if SHADOW_RESOLUTION == 0
-    #define MIN_SHADOW_BIAS -0.00125
-#elif SHADOW_RESOLUTION == 1
-    #define MIN_SHADOW_BIAS -0.0007
-#elif SHADOW_RESOLUTION == 2
-    #define MIN_SHADOW_BIAS -0.00035
-#elif SHADOW_RESOLUTION == 3
-    #define MIN_SHADOW_BIAS -0.0003
-#elif SHADOW_RESOLUTION >= 4
-    #define MIN_SHADOW_BIAS -0.00025
-#endif
-
-#ifndef TILE_SIZE
-    #define TILE_SIZE 128
+#if SHADOW_FILTERING == SHADOW_FILTERING_PCSS
+    #include <utils/shadow_pcss.glsl>
+    #define sampleShadow sampleShadowPCSS
+#elif SHADOW_FILTERING_KERNEL == 3
+    #define sampleShadow sampleShadowPCF3x3
+    #define sampleHardwareShadow sampleHardwareShadow3x3
+#elif SHADOW_FILTERING_KERNEL == 2
+    #define sampleShadow sampleShadowPCF2x2
+    #define sampleHardwareShadow sampleHardwareShadow2x2
+#else
+    #define sampleShadow sampleShadowPCF1x1
+    #define sampleHardwareShadow sampleHardwareShadow1x1
 #endif
 
 #if SHADOW_MODE != SHADOW_MODE_OFF
-float fetchShadowTexel(ivec2 pixelCoord, float fragDepth, vec3 fragPos, int i) {
-    #if SHADOW_FILTERING == SHADOW_FILTERING_DITHER
-        int index = int(hash(vec4(floor(fragPos.xyz), i)) * float(POISSON_DISK_LENGTH)) % POISSON_DISK_LENGTH;
-        pixelCoord += ivec2(getPoissonDisk(index) * 1.25);
-    #endif
-
-    #if SHADOW_TRANSPARENCY
-        int alphaDepth = int(texelFetch(shadowMap, pixelCoord, 0).r * float(SHADOW_COMBINED_MAX));
-        float depth = float(alphaDepth & SHADOW_DEPTH_MAX) / float(SHADOW_DEPTH_MAX);
-        float alpha = 1.0 - float(alphaDepth >> SHADOW_DEPTH_BITS) / float(SHADOW_ALPHA_MAX);
-        return depth < fragDepth ? alpha : 0.0;
+float shadowDistanceFade(vec3 fragPos) {
+    // Fade out shadows near the shadow map edges
+    #if ZONE_RENDERER
+        float fadeEnd = max(uboGlobal.shadowDrawDistance, 1.0);
+        float fadeStart = max(fadeEnd * .5, fadeEnd - 10.0 * float(TILE_SIZE));
+        return smoothstep(fadeStart, fadeEnd, length(fragPos - uboGlobal.cameraPos));
     #else
-        return texelFetch(shadowMap, pixelCoord, 0).r < fragDepth ? 1.0 : 0.0;
+        vec4 shadowPos = uboGlobal.lightProjectionMatrix * vec4(fragPos, 1);
+        vec2 ndc = shadowPos.xy / shadowPos.w;
+        return smoothstep(.75, 1., dot(ndc, ndc));
     #endif
 }
 
-float sampleShadowMap(vec3 fragPos, vec2 distortion, float lightDotNormals) {
-    if (lightStrength <= 0.0)
-        return 0.0;
+float sampleShadowMap(
+    vec3 fragPos,
+    vec3 surfaceNormal,
+    bool preventSelfShadowing,
+    bool applyNormalBias,
+    bool applyDistanceFade
+) {
+    if (!uboGlobal.castsShadows)
+        return 0.f;
 
-    vec4 shadowPos = lightProjectionMatrix * vec4(fragPos, 1.0);
+    float fadeOut = applyDistanceFade ? shadowDistanceFade(fragPos) : 0.0;
+    if (fadeOut >= 1.0)
+        return 0.f;
+
+    vec4 shadowPos = uboGlobal.lightProjectionMatrix * vec4(fragPos, 1);
     shadowPos.xyz /= shadowPos.w;
 
-    // Fade out shadows near the shadow map edges
-    #if ZONE_RENDERER
-        // TODO: Make this configurable if we make the Shadow Distance Variable
-        const float fadeStart = 55.0 * float(TILE_SIZE);
-        const float fadeEnd   = 65.0 * float(TILE_SIZE);
-        float fadeOut = smoothstep(fadeStart, fadeEnd, length(fragPos - cameraPos));
-    #else
-        float fadeOut = smoothstep(.75, 1., dot(shadowPos.xy, shadowPos.xy));
-    #endif
-    if (fadeOut >= 1.0)
-        return 0.0;
-
     // NDC to texture space
-    ivec2 shadowRes = textureSize(shadowMap, 0);
     shadowPos.xyz += 1.0;
     shadowPos.xyz /= 2.0;
-    shadowPos.xy += distortion;
-    shadowPos.xy = clamp(shadowPos.xy, 0.0, 1.0);
-    shadowPos.xy *= vec2(shadowRes);
-    shadowPos.xy += .5; // Shift to texel center
+    vec2 shadowMapSize = vec2(textureSize(shadowMap, 0));
+    float bias = 0.0;
+    float depthPrecisionBias = 0.0;
+    vec3 receiverNormal = surfaceNormal * mat3(uboGlobal.invLightProjectionMatrix);
+    // A parallel receiver has unbounded slope. Keep it finite before
+    // the per-tap correction is bounded, including zero-offset taps.
+    receiverNormal.z = (receiverNormal.z < 0.0 ? -1.0 : 1.0) * max(abs(receiverNormal.z), 1e-7);
+    // Filtering follows the geometric receiver plane
+    vec2 receiverDepthPerTexel = -receiverNormal.xy / receiverNormal.z / shadowMapSize;
 
-    float shadowBias = MIN_SHADOW_BIAS * max(1.0, 1.0 - lightDotNormals);
-    float fragDepth = shadowPos.z + shadowBias;
+    if (preventSelfShadowing) {
+        // Move the receiver plane toward the light along its normal.
+        // Shift XY as well as depth so every filter tap evaluates the displaced plane.
+        if (applyNormalBias) {
+            const float worldSpaceBias = 3.f;
+            vec3 lightAxis = uboGlobal.invLightProjectionMatrix[2].xyz;
+            vec3 normalOffset = -normalize(surfaceNormal) * sign(dot(surfaceNormal, lightAxis));
+            shadowPos.xyz += (mat3(uboGlobal.lightProjectionMatrix) * normalOffset * worldSpaceBias) * 0.5;
+        }
 
-    const int kernelSize = 3;
-    ivec2 kernelOffset = ivec2(shadowPos.xy - float(kernelSize / 2));
-    #if SHADOW_FILTERING == SHADOW_FILTERING_AVERAGE
-        const float kernelAreaReciprocal = 1.0 / float(kernelSize * kernelSize);
-    #else
-        const float kernelAreaReciprocal = .25; // This is effectively a 2x2 kernel
-        vec2 lerp = fract(shadowPos.xy);
-        vec3 lerpX = vec3(1.0 - lerp.x, 1.0, lerp.x);
-        vec3 lerpY = vec3(1.0 - lerp.y, 1.0, lerp.y);
-    #endif
-
-    // Sample 4 corners first
-    float c00 = fetchShadowTexel(kernelOffset + ivec2(0, 0), fragDepth, fragPos, 0);
-    float c02 = fetchShadowTexel(kernelOffset + ivec2(0, kernelSize - 1), fragDepth, fragPos, 1);
-    float c20 = fetchShadowTexel(kernelOffset + ivec2(kernelSize - 1, 0), fragDepth, fragPos, 2);
-    float c22 = fetchShadowTexel(kernelOffset + ivec2(kernelSize - 1, kernelSize - 1), fragDepth, fragPos, 3);
-
-    // Early exit if all corners are the same (fully shadowed or fully lit)
-    bool allShadowed = (c00 == 0.0 && c02 == 0.0 && c20 == 0.0 && c22 == 0.0);
-    bool allLit      = (c00 == 1.0 && c02 == 1.0 && c20 == 1.0 && c22 == 1.0);
-
-    float shadow = 0.0;
-    if (allShadowed || allLit) {
-        shadow = (c00 + c02 + c20 + c22) * 0.25;
-    } else {
-        // Finish sampling the reset of the kernal
-        float s01 = fetchShadowTexel(kernelOffset + ivec2(0, 1), fragDepth, fragPos, 4);
-        float s10 = fetchShadowTexel(kernelOffset + ivec2(1, 0), fragDepth, fragPos, 5);
-        float s11 = fetchShadowTexel(kernelOffset + ivec2(1, 1), fragDepth, fragPos, 6);
-        float s12 = fetchShadowTexel(kernelOffset + ivec2(1, 2), fragDepth, fragPos, 7);
-        float s21 = fetchShadowTexel(kernelOffset + ivec2(2, 1), fragDepth, fragPos, 8);
-
-        #if SHADOW_FILTERING == SHADOW_FILTERING_AVERAGE
-            shadow =
-                c00 + s01 + c02 +
-                s10 + s11 + s12 +
-                c20 + s21 + c22;
-        #else
-            shadow =
-                c00 * lerpX[0] * lerpY[0] +
-                s01 * lerpX[0] * lerpY[1] +
-                c02 * lerpX[0] * lerpY[2] +
-                s10 * lerpX[1] * lerpY[0] +
-                s11 * lerpX[1] * lerpY[1] +
-                s12 * lerpX[1] * lerpY[2] +
-                c20 * lerpX[2] * lerpY[0] +
-                s21 * lerpX[2] * lerpY[1] +
-                c22 * lerpX[2] * lerpY[2];
-        #endif
-        shadow *= kernelAreaReciprocal;
+        // Bound only the extra safety margin to limit detached shadows at grazing angles.
+        bias = clamp(length(receiverDepthPerTexel), uboGlobal.shadowBiasScale, uboGlobal.shadowBiasScale * 16.0);
+        // Both the depth texture and packed transparent shadows retain 16 depth bits
+        // Cover one truncated depth step plus a step of rounding margin, independently of resolution
+        depthPrecisionBias = 2.0 / float(SHADOW_DEPTH_MAX);
     }
+    shadowPos.xy = clamp(shadowPos.xy, 0.0, 1.0);
+    // The inverse projection's Z column spans half the camera's depth range.
+    float depthRange = 2.0 * length(uboGlobal.invLightProjectionMatrix[2].xyz);
+    ShadowReceiver receiver = ShadowReceiver(
+        shadowPos.xy * shadowMapSize,
+        receiverDepthPerTexel,
+        shadowPos.z,
+        bias + depthPrecisionBias,
+        MODEL_SHADOW_BIAS_LIMIT / depthRange
+    );
+
+    float shadow = sampleShadow(shadowMap, SHADOW_TRANSPARENCY == 1, receiver, fragPos, shadowPos);
+
+    #if TERRAIN_SHADOWS
+        if (shadow < 1.0) {
+            vec2 terrainMapSize = vec2(textureSize(terrainShadowMap, 0));
+            vec2 texelScale = shadowMapSize / terrainMapSize;
+            ShadowReceiver terrainReceiver = ShadowReceiver(
+                shadowPos.xy * terrainMapSize,
+                receiverDepthPerTexel * texelScale,
+                shadowPos.z,
+                bias * texelScale.x + depthPrecisionBias,
+                TERRAIN_SHADOW_BIAS_LIMIT / depthRange
+            );
+            #if SHADOW_FILTERING == SHADOW_FILTERING_PCSS
+                float terrainShadow = sampleShadowPCSS(terrainShadowMap, false, terrainReceiver, fragPos, shadowPos);
+            #else
+                // Hardware PCF shares one reference depth across its bilinear footprint
+                if (preventSelfShadowing)
+                    terrainReceiver.bias += dot(abs(terrainReceiver.depthPerTexel), vec2(1.0));
+                float terrainShadow = sampleHardwareShadow(terrainShadowMap, terrainReceiver, shadowPos);
+            #endif
+            shadow = max(shadow, terrainShadow);
+        }
+    #endif
 
     return shadow * (1.0 - fadeOut);
 }
 #else
-#define sampleShadowMap(fragPos, distortion, lightDotNormals) 0
+#define sampleShadowMap(fragPos, surfaceNormal, preventSelfShadowing, applyNormalBias, applyDistanceFade) 0.0
 #endif

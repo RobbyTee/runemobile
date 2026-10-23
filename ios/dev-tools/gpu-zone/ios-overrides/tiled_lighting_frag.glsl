@@ -1,13 +1,10 @@
 /*
- * Copyright (c) 2021, 117 <https://twitter.com/117scape>
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without modification, are permitted provided that
- * the conditions of the BSD 2-clause license are met.
+ * From RLHD (https://github.com/117HD/RLHD), BSD 2-Clause License, Copyright (c) 2021, 117: the full text is in
+ * ios/dev-tools/gpu-zone/rlhd-src/LICENSE. The upstream file has no header of its own.
  *
  * ===========================================================================================================
  * iOS ES-3.0 OVERRIDE (gpu-zone B1, tiled lighting). Verbatim copy of rs117/hd/tiled_lighting_frag.glsl @ RLHD
- * 7dded59 EXCEPT every int-in-float-context is made explicit (blueprint #13) so the per-layer tiled-lighting
+ * v1.6.0.1 EXCEPT every int-in-float-context is made explicit (blueprint #13) so the per-layer tiled-lighting
  * culling program compiles on GLES 3.00. This whole pass is gated off at Z0, so it was never compiled before.
  * The TILED_IMAGE_STORE branch (image load/store) stays #if'd OUT on iOS (GLES 3.0 has no image load/store; the
  * caps gate picks the !TILED_IMAGE_STORE per-layer path that writes `out uvec4 TiledData`). Changes:
@@ -80,10 +77,10 @@ uint packLightIndices(in SortedLight bin[SORTING_BIN_SIZE], in int binSize, inou
 }
 
 void main() {
-    ivec2 pixelCoord = ivec2(fUv * vec2(tiledLightingResolution));
+    ivec2 pixelCoord = ivec2(fUv * vec2(uboGlobal.tiledLightingResolution));
 
 #if USE_LIGHTS_MASK
-    int LightMaskSize = int(ceil(float(pointLightsCount) / 32.0));
+    int LightMaskSize = int(ceil(float(uboGlobal.pointLightsCount) / 32.0));
     uint LightsMask[32]; // 32 Words = 1024 Lights
     for (int i = 0; i < LightMaskSize; i++)
         LightsMask[i] = 0u;
@@ -112,7 +109,7 @@ void main() {
 #endif
 
     const vec2 tileSize = vec2(TILED_LIGHTING_TILE_SIZE);
-    vec2 screenUV = fUv * vec2(sceneResolution);
+    vec2 screenUV = fUv * vec2(uboGlobal.sceneResolution);
     vec2 tileOrigin = floor(screenUV / tileSize) * tileSize;
 
     vec2 tl = tileOrigin + vec2(0.0, tileSize.y); // top-left
@@ -120,32 +117,41 @@ void main() {
     vec2 bl = tileOrigin;                         // bottom-left
     vec2 br = tileOrigin + vec2(tileSize.x, 0.0); // bottom-right
 
-    vec2 ndcTL = (tl / vec2(sceneResolution)) * 2.0 - 1.0;
-    vec2 ndcTR = (tr / vec2(sceneResolution)) * 2.0 - 1.0;
-    vec2 ndcBL = (bl / vec2(sceneResolution)) * 2.0 - 1.0;
-    vec2 ndcBR = (br / vec2(sceneResolution)) * 2.0 - 1.0;
+    vec2 ndcTL = (tl / vec2(uboGlobal.sceneResolution)) * 2.0 - 1.0;
+    vec2 ndcTR = (tr / vec2(uboGlobal.sceneResolution)) * 2.0 - 1.0;
+    vec2 ndcBL = (bl / vec2(uboGlobal.sceneResolution)) * 2.0 - 1.0;
+    vec2 ndcBR = (br / vec2(uboGlobal.sceneResolution)) * 2.0 - 1.0;
 
     const float eps = 1e-10;
 
-    vec4 pTL = invProjectionMatrix * vec4(ndcTL, eps, 1.0);
-    vec4 pTR = invProjectionMatrix * vec4(ndcTR, eps, 1.0);
-    vec4 pBL = invProjectionMatrix * vec4(ndcBL, eps, 1.0);
-    vec4 pBR = invProjectionMatrix * vec4(ndcBR, eps, 1.0);
+    vec4 pTL = uboGlobal.invProjectionMatrix * vec4(ndcTL, eps, 1.0);
+    vec4 pTR = uboGlobal.invProjectionMatrix * vec4(ndcTR, eps, 1.0);
+    vec4 pBL = uboGlobal.invProjectionMatrix * vec4(ndcBL, eps, 1.0);
+    vec4 pBR = uboGlobal.invProjectionMatrix * vec4(ndcBR, eps, 1.0);
 
-    vec3 rTL = normalize((viewMatrix * vec4((pTL.xyz / pTL.w) - cameraPos, 1.0)).xyz);
-    vec3 rTR = normalize((viewMatrix * vec4((pTR.xyz / pTR.w) - cameraPos, 1.0)).xyz);
-    vec3 rBL = normalize((viewMatrix * vec4((pBL.xyz / pBL.w) - cameraPos, 1.0)).xyz);
-    vec3 rBR = normalize((viewMatrix * vec4((pBR.xyz / pBR.w) - cameraPos, 1.0)).xyz);
+    vec3 rTL = normalize((uboGlobal.viewMatrix * vec4((pTL.xyz / pTL.w) - uboGlobal.cameraPos, 1.0)).xyz);
+    vec3 rTR = normalize((uboGlobal.viewMatrix * vec4((pTR.xyz / pTR.w) - uboGlobal.cameraPos, 1.0)).xyz);
+    vec3 rBL = normalize((uboGlobal.viewMatrix * vec4((pBL.xyz / pBL.w) - uboGlobal.cameraPos, 1.0)).xyz);
+    vec3 rBR = normalize((uboGlobal.viewMatrix * vec4((pBR.xyz / pBR.w) - uboGlobal.cameraPos, 1.0)).xyz);
 
     vec3 tileCenterVec = normalize(rTL + rTR + rBL + rBR);
     float tileCos = min(min(dot(tileCenterVec, rTL), dot(tileCenterVec, rTR)), min(dot(tileCenterVec, rBL), dot(tileCenterVec, rBR)));
     float tileSin = sqrt(max(0.0, 1.0 - tileCos * tileCos));
 
+    mat4 viewToClip;
+    vec2 tileNDCMin;
+    vec2 tileNDCMax;
+    if (uboGlobal.orthographicProjection) {
+        viewToClip = uboGlobal.projectionMatrix * inverse(uboGlobal.viewMatrix);
+        tileNDCMin = min(min(ndcTL, ndcTR), min(ndcBL, ndcBR));
+        tileNDCMax = max(max(ndcTL, ndcTR), max(ndcBL, ndcBR));
+    }
+
     SortedLight sortingBin[SORTING_BIN_SIZE];
     int sortingBinSize = 0;
 
-    for (int lightIdx = 0; lightIdx < pointLightsCount; lightIdx++) {
-        vec4 lightData = PointLightPositionsArray[lightIdx];
+    for (int lightIdx = 0; lightIdx < uboGlobal.pointLightsCount; lightIdx++) {
+        vec4 lightData = uboLightsCulling.PointLightPositionsArray[lightIdx];
         vec3 lightViewPos = lightData.xyz;
         float lightRadiusSqr = lightData.w;
 
@@ -154,11 +160,47 @@ void main() {
         vec3 lightCenterVec = (lightDistSqr > 0.0) ? lightViewPos / sqrt(lightDistSqr) : vec3(0.0);
 
         float lightSinSqr = clamp(lightRadiusSqr / max(lightDistSqr, 1e-6), 0.0, 1.0);
-        float lightCos = sqrt(0.999 - lightSinSqr);
+        // Guard the sqrt: lightSinSqr reaches 1 as the camera approaches the light's radius, and
+        // sqrt of a negative yields NaN, which then propagates through sumCos below.
+        float lightCos = sqrt(max(0.0, 0.999 - lightSinSqr));
         float lightTileCos = dot(lightCenterVec, tileCenterVec);
 
-        float sumCos = (lightRadiusSqr > lightDistSqr) ? -1.0 : (tileCos * lightCos - tileSin * sqrt(lightSinSqr));
-        if (lightTileCos < sumCos)
+        bool lightAffectsTile;
+        float combinedScore;
+        const float PROXIMITY_WEIGHT = 0.75;
+        float distanceScore = clamp(1.0 - sqrt(lightDistSqr) / (sqrt(lightRadiusSqr) + 1e-6), 0.0, 1.0);
+
+        if (uboGlobal.orthographicProjection) {
+            vec4 lightClip = viewToClip * vec4(lightViewPos, 1.0);
+            vec2 lightNDC = lightClip.xy / max(abs(lightClip.w), 1e-5);
+
+            vec4 radiusClip = viewToClip * vec4(lightViewPos + vec3(sqrt(lightRadiusSqr), 0.0, 0.0), 1.0);
+            vec2 radiusNDC = radiusClip.xy / max(abs(radiusClip.w), 1e-5);
+            float lightNDCRadius = length(radiusNDC - lightNDC);
+
+            vec2 closest = clamp(lightNDC, tileNDCMin, tileNDCMax);
+            lightAffectsTile = length(lightNDC - closest) <= lightNDCRadius;
+            combinedScore = distanceScore;
+        } else {
+            // Once lightSinSqr passes 0.999 the camera is effectively inside the light's sphere of
+            // influence, so the light can reach any tile - the same conclusion the old
+            // lightRadiusSqr > lightDistSqr test drew, widened to cover the whole range where the
+            // angular math degenerates. Testing lightSinSqr subsumes that case, since a ratio of 1
+            // or more clamps to exactly 1.
+            //
+            // This matters because a PULSE light's radius sweeps +/-10% every cycle: at a camera
+            // distance inside that sweep, the light crossed this window for a single frame twice
+            // per cycle. sumCos was NaN there, every comparison against NaN is false, so
+            // 'lightTileCos >= sumCos' rejected the light from EVERY tile at once - the light
+            // vanished entirely for a frame, on the pulse's period. (master used the inverted form
+            // 'if (lightTileCos < sumCos) continue', which fails open on NaN and keeps the light,
+            // which is why master never showed this.)
+            float sumCos = (lightSinSqr > 0.999) ? -1.0 : (tileCos * lightCos - tileSin * sqrt(lightSinSqr));
+            lightAffectsTile = lightTileCos >= sumCos;
+            combinedScore = (lightTileCos * PROXIMITY_WEIGHT) + distanceScore * (1.0 - PROXIMITY_WEIGHT);
+        }
+
+        if (!lightAffectsTile)
             continue;
 
         #if USE_LIGHTS_MASK
@@ -167,10 +209,6 @@ void main() {
             if ((LightsMask[word] & mask) != 0u)
                 continue;
         #endif
-
-        const float PROXIMITY_WEIGHT = 0.75;
-        float distanceScore = clamp(1.0 - sqrt(lightDistSqr) / (sqrt(lightRadiusSqr) + 1e-6), 0.0, 1.0);
-        float combinedScore = (lightTileCos * PROXIMITY_WEIGHT) + distanceScore * (1.0 - PROXIMITY_WEIGHT);
 
         int idx = 0;
         for (; idx < sortingBinSize; idx++) {

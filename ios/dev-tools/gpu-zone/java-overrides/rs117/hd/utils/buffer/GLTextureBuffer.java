@@ -7,7 +7,7 @@ import static org.lwjgl.opengl.GL33C.*;
 /*
  * ===========================================================================================================
  * iOS OVERRIDE (gpu-zone B0.5, textureFaces TBO). Verbatim copy of rs117/hd/utils/buffer/GLTextureBuffer.java
- * @ RLHD 7dded59 with iOS-GLES-3.0 deltas:
+ * @ RLHD 7dded59 (unchanged in v1.6.0.1) with iOS-GLES-3.0 deltas:
  *
  *  1) The BUFFER OBJECT can't live on GL_TEXTURE_BUFFER. That target is OpenGL ES 3.2 (texture buffers); on
  *     iOS GLES 3.0 every buffer-object call against it (glBufferData / glBindBuffer / glGetBufferParameteriv /

@@ -55,28 +55,33 @@ layout (location = 0) in vec3 vPosition;
     flat out ivec3 fMaterialData;
     flat out ivec3 fTerrainData;
 
-    #if FLAT_SHADING
-        flat out vec3 fFlatNormal;
+    #if CENTROID_QUALIFIER
+        centroid out vec3 fTexBlend;
+    #else
+        out vec3 fTexBlend;
     #endif
 
     out FragmentData {
         vec3 position;
         vec2 uv;
         vec3 normal;
-        vec3 texBlend;
     } OUT;
 
     void main() {
         int vertex = gl_VertexID % 3;
         bool isProvoking = vertex == 2;
+
+        int faceIdx = vTextureFaceIdx & 0x7FFFFFFF;
+        bool windingReversed = vTextureFaceIdx < 0;
+        if (windingReversed)
+            vertex = 2 - vertex;
+
         int materialData = 0;
         int alphaBiasHsl = 0;
-
         if (isProvoking) {
             // Only the Provoking vertex needs to fetch the face data
-            fAlphaBiasHsl = texelFetch(textureFaces, vTextureFaceIdx).xyz;
-            fMaterialData = texelFetch(textureFaces, vTextureFaceIdx + 1).xyz;
-            fTerrainData = texelFetch(textureFaces, vTextureFaceIdx + 2).xyz;
+            fAlphaBiasHsl = texelFetch(textureFaces, faceIdx).xyz;
+            fMaterialData = texelFetch(textureFaces, faceIdx + 1).xyz;
             fWorldViewId = vWorldViewId;
             alphaBiasHsl = fAlphaBiasHsl[vertex];
             materialData = fMaterialData[vertex];
@@ -84,11 +89,11 @@ layout (location = 0) in vec3 vPosition;
             // All outputs must be written to for macOS compatibility
             fAlphaBiasHsl = ivec3(0);
             fMaterialData = ivec3(0);
-            fTerrainData  = ivec3(0);
             fWorldViewId  = 0;
-            alphaBiasHsl = texelFetch(textureFaces, vTextureFaceIdx)[vertex];
-            materialData = texelFetch(textureFaces, vTextureFaceIdx + 1)[vertex];
+            alphaBiasHsl = texelFetch(textureFaces, faceIdx)[vertex];
+            materialData = texelFetch(textureFaces, faceIdx + 1)[vertex];
         }
+        fTerrainData = texelFetch(textureFaces, faceIdx + 2).xyz;
 
         vec3 sceneOffset = vec3(vSceneBase.x, 0, vSceneBase.y);
         vec3 worldNormal = vNormal.xyz;
@@ -99,19 +104,27 @@ layout (location = 0) in vec3 vPosition;
             worldNormal = mat3(worldViewProjection) * worldNormal;
         }
 
+        // Clamp underwater vertices to the water surface along the draw distance border, excluding
+        // waterDepth == 1, which is used when the geometry already sits flush with the surface
+        int waterDepth = fTerrainData[vertex] >> 11 & 0xFFF;
+        if (waterDepth > 1) {
+            const int CHUNK_SIZE = TILE_SIZE * 8;
+            ivec2 cam = ivec2(uboGlobal.cameraPos.xz / float(CHUNK_SIZE)) * CHUNK_SIZE + CHUNK_SIZE / 2;
+            ivec2 d = ivec2(abs(worldPosition.xz - vec2(cam)) / float(TILE_SIZE));
+            if (max(d.x, d.y) > int(uboGlobal.drawDistance / 8.0) * 8 + 3)
+                worldPosition.y -= float(waterDepth);
+        }
+
+        fTexBlend = vec3(0);
+        fTexBlend[vertex] = 1.0;
+
         OUT.position = worldPosition;
         OUT.uv = computeVertexUvs(materialData, worldPosition, vUv.xyz);
         OUT.normal = worldNormal;
-        OUT.texBlend = vec3(0);
-        OUT.texBlend[vertex] = 1.0;
 
-        #if FLAT_SHADING
-            fFlatNormal = worldNormal;
-        #endif
-
-        vec4 clipPosition = projectionMatrix * vec4(worldPosition, 1.0);
+        vec4 clipPosition = uboGlobal.projectionMatrix * vec4(worldPosition, 1.0);
         int depthBias = (alphaBiasHsl >> 16) & 0xff;
-        if (projectionMatrix[2][3] != 0.0) // Disable depth bias for orthographic projection
+        if (!uboGlobal.orthographicProjection)
             clipPosition.z += float(depthBias) / 128.0;
 
         gl_Position = clipPosition;

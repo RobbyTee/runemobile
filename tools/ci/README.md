@@ -121,7 +121,7 @@ repository root:
    the endpoints and add a dated entry to `tools/shared-contract/hub-pin.ack`; its header says how.
 5. **Re-stage both ports** in the order [`PORTS.md`](../../PORTS.md) gives. Android's Gradle self-staging skips when a
    jar of the current version already exists, so a merge that keeps the version ships stale jars without this.
-   117HD (RLHD) is pinned to `7dded591` and a merge never moves it; a new client API can break the overlay
+   117HD (RLHD) is pinned to `f5be2560` (v1.6.0.1) and a merge never moves it; a new client API can break the overlay
    recompile, and the stager then exits non-zero.
 6. **Gate.** `./android/dev-tools/ci/release-gate.sh --skip-build`, and the full gate before a release.
 7. **Device check.** Boot both ports and confirm the client logs in rather than stopping at `js5connect_outofdate`.

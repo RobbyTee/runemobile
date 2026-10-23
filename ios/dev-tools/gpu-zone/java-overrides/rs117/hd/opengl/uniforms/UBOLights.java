@@ -7,7 +7,7 @@ import static org.lwjgl.opengl.GL33C.*;
 /*
  * ===========================================================================================================
  * iOS OVERRIDE (gpu-zone B1, tiled lighting). Verbatim copy of rs117/hd/opengl/uniforms/UBOLights.java @ RLHD
- * 7dded59 with ONE change: MAX_LIGHTS 1000 -> 480.
+ * 7dded59 (unchanged in v1.6.0.1) with ONE change: MAX_LIGHTS 1000 -> 480.
  *
  * WHY: with tiled lighting the scene shader's UBOLights block is sized at MAX_LIGHT_COUNT = UBOLights.MAX_LIGHTS
  * (HdPlugin.getShaderIncludes: `configTiledLighting ? UBOLights.MAX_LIGHTS : getMaxSceneLights()`). The struct is

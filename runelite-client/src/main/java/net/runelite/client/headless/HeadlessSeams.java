@@ -138,11 +138,13 @@ public final class HeadlessSeams
 			guard("seam.HeadlessLogin.tick",
 				() -> HeadlessLogin.tick(client, client.getGameState(), client.getLoginIndex()));
 		}
-		if (WelcomePlayProbe.isEnabled())
+		if (WelcomePlayProbe.isEnabled() && !HeadlessLogin.isEnabled())
 		{
 			// GPU Route C: dismiss the post-login "Welcome to Gielinor / Click here to play" screen so the engine
 			// actually enters the world render (without this, headless parks on the welcome screen and no scene
-			// renders — in CPU or GPU mode). Gated -Drunelite.headless.welcomeplay=true.
+			// renders — in CPU or GPU mode). Gated -Drunelite.headless.welcomeplay=true. With autologin on,
+			// HeadlessLogin dismisses it after every login, reconnects and hops included, so the probe stands down
+			// rather than click the button a second time.
 			guard("seam.WelcomePlayProbe.tick", () -> WelcomePlayProbe.tick(client, client.getGameState()));
 		}
 		if (HeadlessResize.isEnabled())
@@ -277,6 +279,11 @@ public final class HeadlessSeams
 		if (JavaBridge.isEnabled())
 		{
 			guard("seam.JavaBridge.noteSceneDraw", JavaBridge::noteSceneDraw);
+		}
+		// The autologin's in-world test: no scene draws while the post-login welcome screen is up.
+		if (HeadlessLogin.isEnabled())
+		{
+			guard("seam.HeadlessLogin.noteSceneDraw", HeadlessLogin::noteSceneDraw);
 		}
 	}
 }

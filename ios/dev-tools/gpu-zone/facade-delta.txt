@@ -51,10 +51,10 @@ org/lwjgl/opengl/GL33C.glCopyBufferSubData:(IIJJJ)V
 org/lwjgl/opengl/GL33C.glCullFace:(I)V
 org/lwjgl/opengl/GL33C.glDeleteQueries:([I)V
 org/lwjgl/opengl/GL33C.glDeleteSync:(J)V
+org/lwjgl/opengl/GL33C.glDrawArraysInstanced:(IIII)V
 org/lwjgl/opengl/GL33C.glDrawBuffer:(I)V
 org/lwjgl/opengl/GL33C.glFenceSync:(II)J
 org/lwjgl/opengl/GL33C.glFinish:()V
-org/lwjgl/opengl/GL33C.glFlush:()V
 org/lwjgl/opengl/GL33C.glFramebufferTexture2D:(IIIII)V
 org/lwjgl/opengl/GL33C.glFramebufferTexture:(IIII)V
 org/lwjgl/opengl/GL33C.glFramebufferTextureLayer:(IIIII)V
@@ -67,6 +67,7 @@ org/lwjgl/opengl/GL33C.glGetQueryObjectiv:(II[I)V
 org/lwjgl/opengl/GL33C.glGetQueryObjectui64:(II)J
 org/lwjgl/opengl/GL33C.glMapBuffer:(IILjava/nio/ByteBuffer;)Ljava/nio/ByteBuffer;
 org/lwjgl/opengl/GL33C.glMapBufferRange:(IJJI)Ljava/nio/ByteBuffer;
+org/lwjgl/opengl/GL33C.glPolygonOffset:(FF)V
 org/lwjgl/opengl/GL33C.glQueryCounter:(II)V
 org/lwjgl/opengl/GL33C.glTexBuffer:(III)V
 org/lwjgl/opengl/GL33C.glTexImage3D:(IIIIIIIIILjava/nio/ShortBuffer;)V

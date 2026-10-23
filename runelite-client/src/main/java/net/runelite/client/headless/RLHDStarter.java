@@ -60,6 +60,10 @@ public final class RLHDStarter
 	// Separate one-shot sentinel for the shadow-map-resolution fps default, so applying it doesn't re-seed (reset)
 	// the user's other tunable picks.
 	private static final String GFX_SHADOWRES_KEY = "iosGfxShadowRes1k";
+	// DAY_NIGHT_NOTE: RLHD v1.6's day & night cycle (a sky pass with atmospheric scattering, the starfield, the
+	// baked nebula cube map, aurora) has not run on either phone yet, so both ports force it OFF every launch. With
+	// it off RLHD compiles the scene with DAYLIGHT_CYCLE 0 and skips the starfield and the nebula bake, the
+	// pre-v1.6 look. It is planned for a later release.
 
 	private static boolean done;
 	private static boolean configForced;
@@ -147,8 +151,10 @@ public final class RLHDStarter
 			final String probe = MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");
 			if (!probe.contains("\"ok\":true"))
 				return;   // client thread not ready yet — retry next tick before seeding/committing
+			migrateRlhd16Config();
 			MobileUiBridge.setConfig("hd", "asyncModelProcessing", "false");
-			MobileUiBridge.setConfig("hd", "tiledLighting", "false");
+			MobileUiBridge.setConfig("hd", "tiledLighting", "OFF");
+			MobileUiBridge.setConfig("hd", "daylightCycle", "OFF");   // see DAY_NIGHT_NOTE
 
 			// USER-TUNABLE mobile defaults — seeded ONCE (first launch, gated on the GFX_SEEDED_KEY sentinel) then
 			// PERSISTED, so the user's 117HD plugin-config edits survive relaunch. THIS FIXES THE SEED-GAP: the old
@@ -172,29 +178,32 @@ public final class RLHDStarter
 				MobileUiBridge.setConfig("hd", "normalMapping", "true");                   // surface relief; "barely impacts performance" (RLHD)
 				MobileUiBridge.setConfig("hd", "dynamicLights", "SOME");                   // 50 dynamic lights (RLHD default)
 				MobileUiBridge.setConfig("hd", "shadowMode", "DETAILED");                  // dappled shadows
-				MobileUiBridge.setConfig("hd", "shadowFiltering", "SMOOTH");               // smooth shadow edges
+				MobileUiBridge.setConfig("hd", "shadowFiltering", "SMOOTH_HIGH");          // smooth shadow edges (3x3 PCF)
 				MobileUiBridge.setConfig("hd", "sceneScalingMode", "LINEAR");              // smooth downsample of the 85% scene FBO
 				MobileUiBridge.setConfig("hd", GFX_SEEDED_KEY, "1");
 				MobileUiBridge.flushConfigQueued();   // persist the seed + sentinel (queued AFTER the writes above)
 			}
 			configForced = true;
-			log.info("[routecrlhd] Android config applied — safety forced (uiScaling LINEAR, async OFF, tiledLighting OFF); "
+			log.info("[routecrlhd] Android config applied — safety forced (uiScaling LINEAR, async OFF, tiledLighting OFF, day & night OFF); "
 				+ "tunables {}", seed
 				? "SEEDED (first launch: MSAA_4, scale 85, aniso 16, draw 30, shadows 1K, POM/wind/char OFF, normal/lights SOME/shadows kept)"
 				: "from persisted 117HD plugin config");
 			return;
 			}
-			// SAFETY-CRITICAL (forced EVERY launch, NOT user-tunable): each MUST stay or RLHD recompiles an unported
-			// shader / hits an iOS bridge limit and stops the plugin. uiScalingMode=LINEAR (HYBRID/xBR pull in unported
-			// scale/*.glsl); shadowFiltering=SMOOTH (DITHERED/PIXELATED unported); wind/characterDisplacement off
-			// (compute-only no-ops); asyncModelProcessing off (single thread-affine EAGL ctx can't do RLHD multithreaded
-			// GL -> player flashing); sceneScalingMode=LINEAR (smooth downsample). These are kept OUT of the native
+			// SAFETY-CRITICAL (forced EVERY launch, NOT user-tunable): each MUST stay or RLHD recompiles a shader
+			// not yet run on the phone / hits an iOS bridge limit and stops the plugin. uiScalingMode=LINEAR and
+			// shadowFiltering=SMOOTH_HIGH (since RLHD v1.6 the other modes pass the tools/shader-matrix compile
+			// check, but only these two have run on the device); wind/characterDisplacement off (compute-only
+			// no-ops); asyncModelProcessing off (single thread-affine EAGL ctx can't do RLHD multithreaded GL ->
+			// player flashing); sceneScalingMode=LINEAR (smooth downsample). These are kept OUT of the native
 			// graphics panel. (POM is now ported -> it's a user-tunable, seeded off below.) uiScalingMode is also the
 			// client-thread-readiness probe.
 			final String probe = MobileUiBridge.setConfig("hd", "uiScalingMode", "LINEAR");
 			if (!probe.contains("\"ok\":true"))
 				return;   // client thread not ready yet — retry next tick before seeding/committing
-			MobileUiBridge.setConfig("hd", "shadowFiltering", "SMOOTH");
+			migrateRlhd16Config();
+			MobileUiBridge.setConfig("hd", "shadowFiltering", "SMOOTH_HIGH");
+			MobileUiBridge.setConfig("hd", "daylightCycle", "OFF");   // see DAY_NIGHT_NOTE
 			MobileUiBridge.setConfig("hd", "windDisplacement", "false");
 			MobileUiBridge.setConfig("hd", "characterDisplacement", "false");
 			MobileUiBridge.setConfig("hd", "asyncModelProcessing", "false");
@@ -210,7 +219,7 @@ public final class RLHDStarter
 			final boolean seed = !"1".equals(MobileUiBridge.getConfig("hd", GFX_SEEDED_KEY));
 			if (seed)
 			{
-				MobileUiBridge.setConfig("hd", "tiledLighting", "true");
+				MobileUiBridge.setConfig("hd", "tiledLighting", "ON");
 				MobileUiBridge.setConfig("hd", "dynamicLights", "SOME");
 				MobileUiBridge.setConfig("hd", "normalMapping", "true");
 				MobileUiBridge.setConfig("hd", "shadowMode", "DETAILED");
@@ -232,8 +241,8 @@ public final class RLHDStarter
 				MobileUiBridge.flushConfigQueued();
 			}
 			configForced = true;
-			log.info("[routecrlhd] iOS config applied — safety forced (uiScaling/shadowFiltering/scaling LINEAR/SMOOTH; "
-				+ "POM/wind/char-disp/async OFF); tunables {}", seed ? "SEEDED (first launch)" : "from persisted 117HD plugin config");
+			log.info("[routecrlhd] iOS config applied — safety forced (uiScaling/shadowFiltering/scaling LINEAR/SMOOTH_HIGH/LINEAR; "
+				+ "wind/char-disp/async/day & night OFF); tunables {}", seed ? "SEEDED (first launch)" : "from persisted 117HD plugin config");
 			return;
 		}
 
@@ -277,5 +286,42 @@ public final class RLHDStarter
 			done = true;
 			log.warn("[routecrlhd] giving up after {} attempts — 117HD did not become active", attempts);
 		}
+	}
+
+	// RLHD v1.6 changed three "hd" keys without migrating the stored values: tiledLighting and
+	// experimentalTiledLightingImageStore went from a boolean to DefaultBoolean (DEFAULT/ON/OFF), and
+	// shadowFiltering's SMOOTH/DITHERED became *_LOW/*_HIGH pairs. A stale value fails to parse on every read and
+	// RLHD falls back to its default, which turns tiled lighting on for a user who had switched it off. Rewrite
+	// the old values once, the way the old modes map: SMOOTH and DITHERED were both 3x3 kernels, which are
+	// SMOOTH_HIGH (identical PCF) and the larger new dithered kernel.
+	// It must run before anything loads HdPlugin: the load applies the config defaults, which replace a value
+	// that does not parse. So the writes are synchronous, and RendererPanelStarter calls this before its
+	// no-start load as well as here. Client thread only; a second call finds nothing left to rewrite.
+	static void migrateRlhd16Config()
+	{
+		boolean changed = migrateValue("tiledLighting", "true", "ON");
+		changed |= migrateValue("tiledLighting", "false", "OFF");
+		changed |= migrateValue("experimentalTiledLightingImageStore", "true", "ON");
+		changed |= migrateValue("experimentalTiledLightingImageStore", "false", "OFF");
+		changed |= migrateValue("shadowFiltering", "SMOOTH", "SMOOTH_HIGH");
+		changed |= migrateValue("shadowFiltering", "DITHERED", "DITHERED_HIGH");
+		if (changed)
+		{
+			MobileUiBridge.flushConfigQueued();
+		}
+	}
+
+	private static boolean migrateValue(String key, String from, String to)
+	{
+		if (!from.equals(MobileUiBridge.getConfig("hd", key)))
+		{
+			return false;
+		}
+		if (!MobileUiBridge.setConfigNow("hd", key, to))
+		{
+			return false;
+		}
+		log.info("[routecrlhd] migrated hd.{} {} -> {} (RLHD v1.6)", key, from, to);
+		return true;
 	}
 }

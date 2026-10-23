@@ -161,6 +161,9 @@ next launch as usual.
       to the login screen, and a log scan with no unexpected lines and no shader errors
       (`ios/dev-tools/sim-gate/README.md`). It needs a Mac with Xcode; the goldens are local to that Mac,
       so a new Mac writes them first with `sim-screens.py --update`.
+- [ ] **Shader matrix green** when the release moves the 117 HD pin or changes a shader override or a port's
+      shader rewrite: `tools/shader-matrix/run-matrix.sh ios` and `run-matrix.sh android` both end
+      `SHADER_MATRIX_GREEN` ([`tools/shader-matrix/`](tools/shader-matrix/README.md)).
 - [ ] **Published with `tools/ci/publish-stable-release.sh <tag>`**, not a hand-written
       `gh release create`. The AltStore feed is served from whichever release is Latest, so a stable
       release published without `altstore.json` attached leaves every user pinned to the previous

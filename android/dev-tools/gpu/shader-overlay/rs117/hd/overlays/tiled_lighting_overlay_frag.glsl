@@ -23,16 +23,16 @@ in vec2 fUv;
 out vec4 FragColor;
 
 void main() {
-    vec2 texelCenter = (floor(fUv * vec2(tiledLightingResolution)) + .5) / vec2(tiledLightingResolution);
+    vec2 texelCenter = (floor(fUv * vec2(uboGlobal.tiledLightingResolution)) + .5) / vec2(uboGlobal.tiledLightingResolution);
 
     const float eps = 1e-10;
     vec2 ndcUv = fUv * 2.0 - 1.0;
-    vec4 farPos = invProjectionMatrix * vec4(ndcUv, eps, 1.0);
+    vec4 farPos = uboGlobal.invProjectionMatrix * vec4(ndcUv, eps, 1.0);
     vec3 viewDir = normalize(farPos.xyz / farPos.w);
 
     vec4 c = vec4(0.0);
 
-    ivec2 tileXY = ivec2(floor(fUv * vec2(tiledLightingResolution)));
+    ivec2 tileXY = ivec2(floor(fUv * vec2(uboGlobal.tiledLightingResolution)));
     int tiledLightCount = 0;
     for (int tileLayer = 0; tileLayer < TILED_LIGHTING_LAYER_COUNT; tileLayer++) {
         uvec4 tileLayerData = texelFetch(tiledLightingArray, ivec3(tileXY, tileLayer), 0);
@@ -62,16 +62,16 @@ void main() {
         // When both tests fail to include the light, the unincluded portion is colored white
 
         // Draw texel centers
-        if (all(equal(floor(fUv * vec2(sceneResolution)), floor(texelCenter * vec2(sceneResolution))))) {
+        if (all(equal(floor(fUv * vec2(uboGlobal.sceneResolution)), floor(texelCenter * vec2(uboGlobal.sceneResolution))))) {
             FragColor = vec4(1.0);
             return;
         }
 
-        for (uint lightIdx = 0u; lightIdx < uint(pointLightsCount); lightIdx++) {
-            PointLight light = PointLightArray[lightIdx];
+        for (uint lightIdx = 0u; lightIdx < uint(uboGlobal.pointLightsCount); lightIdx++) {
+            PointLight light = uboLights.PointLightArray[lightIdx];
             vec3 lightWorldPos = light.position.xyz;
             float lightRadiusSq = light.position.w;
-            vec3 cameraToLight = lightWorldPos - cameraPos;
+            vec3 cameraToLight = lightWorldPos - uboGlobal.cameraPos;
 
             // Calculate the distance from the camera to the point closest to the light along the view ray
             float t = dot(cameraToLight, viewDir);
