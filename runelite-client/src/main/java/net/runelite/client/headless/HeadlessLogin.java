@@ -146,6 +146,13 @@ public final class HeadlessLogin
 	// failing back to 9 until this cap, then gives up. In the real case (app suspended, Wi-Fi still up) it wins
 	// on attempt 1. ~30 attempts × COOLDOWN_DRAWS comfortably covers a re-associate.
 	private static final int MAX_TRYAGAIN_ATTEMPTS = 30;
+	// A reconnect's Play Now has its own budget, and its retries back off. Every failed Play Now lands back on
+	// "Try again", so with the one-shot MAX_ATTEMPTS budget the cap above never came into play: five clicks one
+	// cooldown apart (~12 s at the login screen's 50 fps) all failed while the network was still down, or within the
+	// JVM's 10 s cache of a failed host lookup, and a still-valid session was parked on "Session expired". The gap now
+	// doubles from COOLDOWN_DRAWS to 16x, so the last of the 8 clicks comes ~2.5 min after the first.
+	private static final int MAX_RECONNECT_PLAY_ATTEMPTS = 8;
+	private static final int MAX_RECONNECT_BACKOFF_SHIFT = 4;
 	private static boolean sawConnectionLost;
 	private static int reconnectAttempts;
 	private static int tryAgainAttempts;
@@ -586,12 +593,14 @@ public final class HeadlessLogin
 			return;
 		}
 
-		if (playAttempts >= MAX_ATTEMPTS)
+		final int maxPlayAttempts = reconnectAttempts > 0 ? MAX_RECONNECT_PLAY_ATTEMPTS : MAX_ATTEMPTS;
+		if (playAttempts >= maxPlayAttempts)
 		{
 			if (!done)
 			{
 				log.warn("[headless-login] still LOGIN_SCREEN after {} Play Now attempt(s) at {},{} — giving up "
-					+ "(wrong coords, or the engine rejects synthesized input headless)", playAttempts, CLICK_X, CLICK_Y);
+					+ "(wrong coords, the engine rejects synthesized input headless, or on a reconnect the network "
+					+ "stayed down or the session lapsed)", playAttempts, CLICK_X, CLICK_Y);
 				done = true;
 				gaveUp = true;   // UX-LOGIN-01: autologin exhausted — surface "session expired"
 				// Bug 4: a hop relogin that can't get past Play Now is over — drop the pending target so it can't
@@ -602,7 +611,10 @@ public final class HeadlessLogin
 		}
 
 		// Cooldown only gates re-arms — the first click fires as soon as we're warmed up on the welcome screen.
-		if (playAttempts > 0 && draws - lastPlayDraw < COOLDOWN_DRAWS)
+		final int playCooldown = reconnectAttempts > 0
+			? COOLDOWN_DRAWS << Math.min(Math.max(playAttempts - 1, 0), MAX_RECONNECT_BACKOFF_SHIFT)
+			: COOLDOWN_DRAWS;
+		if (playAttempts > 0 && draws - lastPlayDraw < playCooldown)
 		{
 			return;
 		}
@@ -624,7 +636,7 @@ public final class HeadlessLogin
 		playAttempts++;
 		lastPlayDraw = draws;
 		log.info("[headless-login] Play Now attempt {}/{}: synthesizing click at {},{} (canvas {}x{} displayable={} reconnect={})",
-			playAttempts, MAX_ATTEMPTS, CLICK_X, CLICK_Y, canvas.getWidth(), canvas.getHeight(), canvas.isDisplayable(), reconnectAttempts);
+			playAttempts, maxPlayAttempts, CLICK_X, CLICK_Y, canvas.getWidth(), canvas.getHeight(), canvas.isDisplayable(), reconnectAttempts);
 		// FIX-9: on a reconnect the canvas is the resized in-world size (not 765x503), so scale the click to it.
 		// Bug 4: a hop relog logs out from in-world, so its login canvas is the resized size too — scale there as
 		// well. Initial login (no reconnect, no hop) keeps the exact proven fixed coord — no regression there.

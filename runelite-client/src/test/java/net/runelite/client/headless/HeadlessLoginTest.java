@@ -219,6 +219,27 @@ public class HeadlessLoginTest
 		assertFalse("an exhausted reconnect must drop the reconnecting overlay", HeadlessLogin.isReconnecting());
 	}
 
+	/**
+	 * Reconnect regression: each failed Play Now drew from the one-shot login budget, so five clicks one cooldown
+	 * apart ended a reconnect within ~12 s, while the network was still down, and a valid session showed "Session
+	 * expired". A reconnect's clicks now back off (gaps of 3, 6, 12, 24, then 48 ticks here) for 8 attempts.
+	 */
+	@Test
+	public void reconnectPlayNowBacksOffPastTheLoginBudget()
+	{
+		driveToLoggedIn();
+		tickN(GameState.CONNECTION_LOST, -1, 1);
+		tickN(GameState.LOGIN_SCREEN, RECONNECT_LOGIN_INDEX, 1);
+		tickN(GameState.LOGIN_SCREEN, WELCOME_LOGIN_INDEX, PLAY_EXHAUST_TICKS);
+		assertFalse("five quick failures must not end a reconnect", HeadlessLogin.hasGivenUp());
+		assertTrue(HeadlessLogin.isReconnecting());
+
+		// The 8th click lands 189 ticks after the first.
+		tickN(GameState.LOGIN_SCREEN, WELCOME_LOGIN_INDEX, 200 - PLAY_EXHAUST_TICKS);
+		assertTrue("the backed-off budget still ends in a give-up", HeadlessLogin.hasGivenUp());
+		assertFalse(HeadlessLogin.isReconnecting());
+	}
+
 	@Test
 	public void reconnectBudgetIsCappedPerDropAndRefreshedBySuccess()
 	{
