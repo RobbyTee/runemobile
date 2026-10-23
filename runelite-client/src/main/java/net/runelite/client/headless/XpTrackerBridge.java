@@ -26,10 +26,13 @@ package net.runelite.client.headless;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.Skill;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginManager;
 
@@ -46,8 +49,8 @@ import net.runelite.client.plugins.PluginManager;
  * <p>Reads run on the {@link ClientThread} via {@link #tick(Client)} (called from {@code MobileUiBridge.tick},
  * already on the client thread) and are cached into a {@code volatile} JSON string the native thread reads
  * lock-free — the same snapshot pattern the rest of the mobile-UI facade uses. Refresh only runs while the
- * native XP Tracker screen is open ({@link #setUiOpen(boolean)}). This bridge is read-only; XP Tracker resets
- * are driven by the user in-game, not from the native shell.
+ * native XP Tracker screen is open ({@link #setUiOpen(boolean)}). Both ports' XP screens read this snapshot.
+ * This bridge is read-only; XP Tracker resets are driven by the user in-game, not from the native shell.
  */
 @Slf4j
 public final class XpTrackerBridge
@@ -71,6 +74,11 @@ public final class XpTrackerBridge
 	private static volatile String xpJson = "{\"available\":false}";
 	private static volatile boolean uiOpen;
 	private static long lastRefresh;
+
+	// Skill icons are static art loaded from the client's resources, not client state, so the native thread may
+	// fetch them directly. Cached per skill as a base64 PNG; "" = no icon.
+	private static final SkillIconManager SKILL_ICONS = new SkillIconManager();
+	private static final Map<Skill, String> SKILL_ICON_PNG = new ConcurrentHashMap<>();
 
 	private XpTrackerBridge()
 	{
@@ -102,6 +110,30 @@ public final class XpTrackerBridge
 	public static String getXpJson()
 	{
 		return xpJson;
+	}
+
+	/**
+	 * A skill's small icon as a base64 PNG, or null for an unknown skill name or a missing icon. The snapshot
+	 * carries no icons, so it stays small on its once-a-second refresh; a native screen that draws them fetches
+	 * each skill's once.
+	 */
+	public static String getSkillIcon(String skill)
+	{
+		final Skill s;
+		try
+		{
+			s = Skill.valueOf(skill);
+		}
+		catch (IllegalArgumentException | NullPointerException ex)
+		{
+			return null;
+		}
+		final String png = SKILL_ICON_PNG.computeIfAbsent(s, k ->
+		{
+			final String b64 = MobileUiBridge.iconPngBase64(SKILL_ICONS.getSkillImage(k, true));
+			return b64 == null ? "" : b64;
+		});
+		return png.isEmpty() ? null : png;
 	}
 
 	/**
@@ -328,14 +360,9 @@ public final class XpTrackerBridge
 	}
 
 	/**
-	 * The snapshot only carries the time-till-goal as a preformatted string ("h:mm:ss" / "mm:ss", or the
+	 * The snapshot only carries the time-till-goal as a preformatted string ("H:MM:SS" / "MM:SS", or the
 	 * infinity glyph when no rate is known). The native contract wants whole seconds, so parse it back; an
-	 * unparseable / infinite value becomes {@code -1} (the native side renders that as "&infin;").
-	 */
-	/**
-	 * Parse a colon-separated {@code timeTillGoalShort} ("H:MM:SS" / "MM:SS") into whole seconds, or {@code -1}
-	 * for an empty / infinity ("∞") value. Package-private so {@link MobileUiBridge#xpTrackerJson()} reuses the
-	 * exact same conversion — the two facades emit {@code timeToLevelSec} from one source of truth (P1-9).
+	 * empty, unparseable or infinite value becomes {@code -1}. Package-private for the unit test.
 	 */
 	static int parseDuration(String s)
 	{

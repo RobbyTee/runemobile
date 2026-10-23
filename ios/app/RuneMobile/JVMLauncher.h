@@ -521,10 +521,16 @@ typedef void (^JVMLogSink)(NSString *line);
 /// falls back to the generic rendered-image panel.
 + (BOOL)questAvailable;
 
-/// Native XP Tracker panel (§3.4): whether the XP Tracker plugin is loaded, and its live per-skill session JSON
-/// ({available,totalGained,totalHr,skills:[{skill,gained,hr,left,actions,startLevel,endLevel,progress,icon}]}).
+/// Native XP Tracker panel (§3.4, XpTrackerBridge): whether the XP Tracker plugin is loaded + reflectable.
 + (BOOL)xpTrackerAvailable;
+/// Tell the bridge the native XP Tracker screen is open/closed (gates the client-thread snapshot refresh).
++ (void)xpTrackerSetUiOpen:(BOOL)open;
+/// The per-skill session JSON, snapshotted on the client thread about once a second while open:
+/// {available, skills:[{skill,xpGained,xpHr,xpLeft,actions,actionsLeft,actionsHr,timeToLevelSec,startLevel,
+/// endLevel,progress (0..1)}], overall:{the same fields}}. Only skills with XP gained this session are listed.
 + (nullable NSString *)xpTrackerJson;
+/// A skill's small icon (skill = the JSON's enum name, e.g. "ATTACK") as a base64 PNG; nil if none.
++ (nullable NSString *)xpTrackerSkillIcon:(NSString *)skill;
 
 /// Native Notes panel (§3.4): whether the Notes plugin is loaded, plus read/write of the single note string
 /// (config group "notes"/"notesData"). notesSet persists on the client-thread config lane.

@@ -242,8 +242,6 @@ METHOD MobileUiBridge#setPinned(String,boolean)
 METHOD MobileUiBridge#setPluginEnabled(String,boolean)
 METHOD MobileUiBridge#tick(Client)
 METHOD MobileUiBridge#unregisterNav(NavigationButton)
-METHOD MobileUiBridge#xpTrackerAvailable()
-METHOD MobileUiBridge#xpTrackerJson()
 METHOD OverlayBridge#getOverlaysJson()
 METHOD OverlayBridge#init(PluginManager,ClientThread)
 METHOD OverlayBridge#isAvailable()
@@ -283,6 +281,7 @@ METHOD WorldSwitcherBridge#isAvailable()
 METHOD WorldSwitcherBridge#setFavourite(int,boolean)
 METHOD WorldSwitcherBridge#setUiOpen(boolean)
 METHOD WorldSwitcherBridge#tick(Client)
+METHOD XpTrackerBridge#getSkillIcon(String)
 METHOD XpTrackerBridge#getXpJson()
 METHOD XpTrackerBridge#init(PluginManager,ClientThread)
 METHOD XpTrackerBridge#isAvailable()
@@ -478,35 +477,20 @@ PAYLOAD MobileChromeBridge sidePanel
 PAYLOAD MobileChromeBridge tabs
 PAYLOAD MobileChromeBridge topLevelId
 PAYLOAD MobileChromeBridge viewport
-PAYLOAD MobileUiBridge actions
-PAYLOAD MobileUiBridge actionsHr
-PAYLOAD MobileUiBridge actionsLeft
 PAYLOAD MobileUiBridge available
 PAYLOAD MobileUiBridge bind
-PAYLOAD MobileUiBridge endLevel
-PAYLOAD MobileUiBridge gained
 PAYLOAD MobileUiBridge group
-PAYLOAD MobileUiBridge hr
-PAYLOAD MobileUiBridge icon
 PAYLOAD MobileUiBridge key
 PAYLOAD MobileUiBridge keyCode
 PAYLOAD MobileUiBridge label
-PAYLOAD MobileUiBridge left
 PAYLOAD MobileUiBridge mods
 PAYLOAD MobileUiBridge ok
-PAYLOAD MobileUiBridge progress
 PAYLOAD MobileUiBridge queued
 PAYLOAD MobileUiBridge reason
 PAYLOAD MobileUiBridge refreshing
 PAYLOAD MobileUiBridge results
 PAYLOAD MobileUiBridge seq
-PAYLOAD MobileUiBridge skill
-PAYLOAD MobileUiBridge skills
-PAYLOAD MobileUiBridge startLevel
 PAYLOAD MobileUiBridge status
-PAYLOAD MobileUiBridge timeToLevelSec
-PAYLOAD MobileUiBridge totalGained
-PAYLOAD MobileUiBridge totalHr
 PAYLOAD MobileUiBridge writeId
 PAYLOAD OverlayBridge available
 PAYLOAD OverlayBridge bounds

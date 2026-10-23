@@ -494,8 +494,8 @@ public final class MobileUiBridge
 		return out.end().toString();
 	}
 
-	/** A nav button's icon as a base64 PNG (or null). ImageIO PNG encode works headless under CACIO. */
-	private static String iconPngBase64(BufferedImage icon)
+	/** An icon as a base64 PNG (or null). ImageIO PNG encode works headless under CACIO. Also XpTrackerBridge's. */
+	static String iconPngBase64(BufferedImage icon)
 	{
 		if (icon == null)
 		{
@@ -513,15 +513,6 @@ public final class MobileUiBridge
 			return null;
 		}
 	}
-
-	// ---- Native XP Tracker panel (§3.4 Tier-1) ---------------------------------------------------------
-	// Instead of the supersampled Swing screenshot, the native shell draws the XP Tracker in RuneLite's own
-	// charcoal style. We REUSE the plugin's own per-skill session computation (XpState.getSkillSnapshot) via
-	// reflection — no reimplementation — and only enumerate the ALREADY-tracked skills (the xpSkills map keys),
-	// never probing untracked ones (getSkillSnapshot computeIfAbsent's, which would pollute the plugin state).
-	private static volatile String lastXpJson = "{}";
-	private static volatile Object skillIconMgr;
-	private static final java.util.Map<net.runelite.api.Skill, String> SKILL_ICON_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
 
 	private static Object findLoadedPlugin(String simpleName)
 	{
@@ -544,97 +535,6 @@ public final class MobileUiBridge
 			BridgeFaults.note("MobileUiBridge.findLoadedPlugin", ignore);
 		}
 		return null;
-	}
-
-	/** True if the XP Tracker plugin is loaded — the native shell forks to its RuneLite-styled panel. */
-	public static boolean xpTrackerAvailable()
-	{
-		return findLoadedPlugin("XpTrackerPlugin") != null;
-	}
-
-	/**
-	 * The XP Tracker's live per-skill session data for the native panel: {@code {available, totalGained, totalHr,
-	 * skills:[{skill,gained,hr,left,actions,startLevel,endLevel,progress,icon}]}} (icon = base64 PNG). Only skills
-	 * with session XP &gt; 0 are emitted (matching the desktop panel). Safe to call off the client thread (the
-	 * snapshot is immutable by design); on a transient reflection/concurrency hiccup the last-good JSON is returned.
-	 */
-	public static String xpTrackerJson()
-	{
-		try
-		{
-			final Object plugin = findLoadedPlugin("XpTrackerPlugin");
-			if (plugin == null)
-			{
-				return "{}";
-			}
-			final Object xpState = readField(plugin, "xpState");
-			if (xpState == null)
-			{
-				return "{}";
-			}
-			final java.util.Map<?, ?> xpSkills = (java.util.Map<?, ?>) readField(xpState, "xpSkills");
-			if (xpSkills == null)
-			{
-				return "{}";
-			}
-			final java.lang.reflect.Method snap = xpState.getClass().getDeclaredMethod("getSkillSnapshot", net.runelite.api.Skill.class);
-			snap.setAccessible(true);
-			final java.lang.reflect.Method total = xpState.getClass().getDeclaredMethod("getTotalSnapshot");
-			total.setAccessible(true);
-			final Object tot = total.invoke(xpState);
-			final StringBuilder sb = new StringBuilder(768);
-			sb.append("{\"available\":true")
-				.append(",\"totalGained\":").append(snapInt(tot, "xpGainedInSession"))
-				.append(",\"totalHr\":").append(snapInt(tot, "xpPerHour"))
-				.append(",\"skills\":[");
-			boolean first = true;
-			for (Object key : new java.util.ArrayList<>(xpSkills.keySet()))
-			{
-				if (!(key instanceof net.runelite.api.Skill))
-				{
-					continue;
-				}
-				final net.runelite.api.Skill skill = (net.runelite.api.Skill) key;
-				final Object s = snap.invoke(xpState, skill);
-				final int gained = snapInt(s, "xpGainedInSession");
-				if (gained <= 0)
-				{
-					continue;
-				}
-				if (!first)
-				{
-					sb.append(',');
-				}
-				first = false;
-				sb.append("{\"skill\":\"").append(skill.name()).append('"')
-					.append(",\"gained\":").append(gained)
-					.append(",\"hr\":").append(snapInt(s, "xpPerHour"))
-					.append(",\"left\":").append(snapInt(s, "xpRemainingToGoal"))
-					.append(",\"actions\":").append(snapInt(s, "actionsInSession"))
-					// P1-9: actions-left / actions-hr / time-to-level so iOS matches Android's XP panel. timeToLevelSec
-					// reuses XpTrackerBridge.parseDuration (same source of truth) so the two facades can't diverge.
-					.append(",\"actionsLeft\":").append(snapInt(s, "actionsRemainingToGoal"))
-					.append(",\"actionsHr\":").append(snapInt(s, "actionsPerHour"))
-					.append(",\"timeToLevelSec\":").append(XpTrackerBridge.parseDuration(snapString(s, "timeTillGoalShort")))
-					.append(",\"startLevel\":").append(snapInt(s, "startLevel"))
-					.append(",\"endLevel\":").append(snapInt(s, "endLevel"))
-					.append(",\"progress\":").append((int) Math.round(snapDouble(s, "skillProgressToGoal")));
-				final String icon = skillIconBase64(skill);
-				if (icon != null)
-				{
-					sb.append(",\"icon\":\"").append(icon).append('"');
-				}
-				sb.append('}');
-			}
-			sb.append("]}");
-			lastXpJson = sb.toString();
-			return lastXpJson;
-		}
-		catch (Throwable e)
-		{
-			BridgeFaults.note("MobileUiBridge.xpTrackerJson", e);
-			return lastXpJson;
-		}
 	}
 
 	// ---- Native Grand Exchange panel (§3.4 Tier-1) -----------------------------------------------------
@@ -696,90 +596,6 @@ public final class MobileUiBridge
 		{
 			BridgeFaults.note("MobileUiBridge.geSearch", e);
 			return "{\"results\":[]}";
-		}
-	}
-
-	private static Object readField(Object obj, String name) throws Exception
-	{
-		final java.lang.reflect.Field f = obj.getClass().getDeclaredField(name);
-		f.setAccessible(true);
-		return f.get(obj);
-	}
-
-	private static int snapInt(Object snap, String field)
-	{
-		try
-		{
-			final java.lang.reflect.Field f = snap.getClass().getDeclaredField(field);
-			f.setAccessible(true);
-			return f.getInt(snap);
-		}
-		catch (Exception e)
-		{
-			return 0;
-		}
-	}
-
-	private static double snapDouble(Object snap, String field)
-	{
-		try
-		{
-			final java.lang.reflect.Field f = snap.getClass().getDeclaredField(field);
-			f.setAccessible(true);
-			return f.getDouble(snap);
-		}
-		catch (Exception e)
-		{
-			return 0;
-		}
-	}
-
-	private static String snapString(Object snap, String field)
-	{
-		try
-		{
-			final java.lang.reflect.Field f = snap.getClass().getDeclaredField(field);
-			f.setAccessible(true);
-			final Object v = f.get(snap);
-			return v == null ? null : v.toString();
-		}
-		catch (Exception e)
-		{
-			return null;
-		}
-	}
-
-	/** A skill's icon as a base64 PNG (cached; empty string cached = known-absent). Via SkillIconManager. */
-	private static String skillIconBase64(net.runelite.api.Skill skill)
-	{
-		final String cached = SKILL_ICON_CACHE.get(skill);
-		if (cached != null)
-		{
-			return cached.isEmpty() ? null : cached;
-		}
-		try
-		{
-			if (skillIconMgr == null)
-			{
-				final com.google.inject.Injector inj = net.runelite.client.RuneLite.getInjector();
-				if (inj != null)
-				{
-					skillIconMgr = inj.getInstance(net.runelite.client.game.SkillIconManager.class);
-				}
-			}
-			if (skillIconMgr == null)
-			{
-				return null;
-			}
-			final BufferedImage img = ((net.runelite.client.game.SkillIconManager) skillIconMgr).getSkillImage(skill, true);
-			final String b64 = iconPngBase64(img);
-			SKILL_ICON_CACHE.put(skill, b64 == null ? "" : b64);
-			return b64;
-		}
-		catch (Throwable e)
-		{
-			SKILL_ICON_CACHE.put(skill, "");
-			return null;
 		}
 	}
 

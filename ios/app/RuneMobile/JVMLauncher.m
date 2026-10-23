@@ -92,8 +92,6 @@ static jmethodID gMuiHubManifest = NULL;  // hubManifest()Ljava/lang/String;
 static jmethodID gMuiHubInstall = NULL;   // hubInstall(Ljava/lang/String;)Ljava/lang/String;
 static jmethodID gMuiHubUninstall = NULL; // hubUninstall(Ljava/lang/String;)Ljava/lang/String;
 static jmethodID gMuiListPanels = NULL;   // listPanels()Ljava/lang/String;
-static jmethodID gMuiXpAvail = NULL;      // xpTrackerAvailable()Z  (native XP Tracker panel)
-static jmethodID gMuiXpJson = NULL;       // xpTrackerJson()Ljava/lang/String;
 static jmethodID gMuiNotesAvail = NULL;   // notesAvailable()Z  (native Notes panel)
 static jmethodID gMuiNotesGet = NULL;     // notesGet()Ljava/lang/String;
 static jmethodID gMuiNotesSet = NULL;     // notesSet(Ljava/lang/String;)Ljava/lang/String;
@@ -168,6 +166,13 @@ static jmethodID gLootAvail = NULL;   // isAvailable()Z
 static jmethodID gLootSetOpen = NULL; // setUiOpen(Z)V
 static jmethodID gLootJson = NULL;    // getLootJson()Ljava/lang/String;
 static jmethodID gLootReset = NULL;   // resetAll()Ljava/lang/String; (optional — older jars lack it)
+
+// Native XP Tracker reflow: the XpTrackerBridge facade (per-skill session snapshot, the one Android reads too).
+static jclass gXpClass = NULL;      // global ref to net.runelite.client.headless.XpTrackerBridge
+static jmethodID gXpAvail = NULL;   // isAvailable()Z
+static jmethodID gXpSetOpen = NULL; // setUiOpen(Z)V
+static jmethodID gXpJson = NULL;    // getXpJson()Ljava/lang/String;
+static jmethodID gXpIcon = NULL;    // getSkillIcon(Ljava/lang/String;)Ljava/lang/String; (optional, older jars lack it)
 
 // Native Time Tracking reflow — the TimeTrackingBridge facade (read-only farming/bird-house/timer snapshot).
 static jclass gTtClass = NULL;      // global ref to net.runelite.client.headless.TimeTrackingBridge
@@ -581,11 +586,10 @@ static BOOL ensureMui(void) {
     gMuiResetPlugin = (*env)->GetStaticMethodID(env, global, "resetPluginConfig", "(Ljava/lang/String;)Ljava/lang/String;");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiResetPlugin = NULL; }
     gMuiNotifDefaults = (*env)->GetStaticMethodID(env, global, "notificationDefaults", "()Ljava/lang/String;");
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiNotifDefaults = NULL; }
-    gMuiXpAvail = (*env)->GetStaticMethodID(env, global, "xpTrackerAvailable", "()Z");
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiXpAvail = NULL; }
-    gMuiXpJson = (*env)->GetStaticMethodID(env, global, "xpTrackerJson", "()Ljava/lang/String;");
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiXpJson = NULL; }
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMuiNotifDefaults = NULL;
+    }
     gMuiNotesAvail = (*env)->GetStaticMethodID(env, global, "notesAvailable", "()Z");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiNotesAvail = NULL; }
     gMuiNotesGet = (*env)->GetStaticMethodID(env, global, "notesGet", "()Ljava/lang/String;");
@@ -763,6 +767,39 @@ static BOOL ensureLoot(void) {
         gLootReset = NULL;
     }
     gLootClass = global;
+    return YES;
+}
+
+static BOOL ensureXp(void) {
+    if (gXpClass)
+        return atomic_load(&gVM) != NULL;
+    if (!ensureBridge() || !gMainEnv)
+        return NO;
+    JNIEnv *env = gMainEnv;
+    jclass local = (*env)->FindClass(env, "net/runelite/client/headless/XpTrackerBridge");
+    if (!local || (*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return NO;
+    }
+    jclass global = (*env)->NewGlobalRef(env, local);
+    (*env)->DeleteLocalRef(env, local);
+    if (!global)
+        return NO;
+    gXpAvail = (*env)->GetStaticMethodID(env, global, "isAvailable", "()Z");
+    gXpSetOpen = (*env)->GetStaticMethodID(env, global, "setUiOpen", "(Z)V");
+    gXpJson = (*env)->GetStaticMethodID(env, global, "getXpJson", "()Ljava/lang/String;");
+    if (!gXpAvail || !gXpSetOpen || !gXpJson) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteGlobalRef(env, global);
+        return NO;
+    }
+    // Optional: the rows' skill icons; an older staged jar without it still serves the panel, iconless.
+    gXpIcon = (*env)->GetStaticMethodID(env, global, "getSkillIcon", "(Ljava/lang/String;)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gXpIcon = NULL;
+    }
+    gXpClass = global;
     return YES;
 }
 
@@ -3439,19 +3476,49 @@ static BOOL pipFeedMarkerSaysMain(void) {
     return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiListPanels));
 }
 
-// Native XP Tracker panel (§3.4): availability gate + the live per-skill session JSON. nil/NO on an older jar.
+// Native XP Tracker panel (§3.4, XpTrackerBridge): availability gate, the open/closed bracket that gates the
+// client-thread snapshot refresh, the snapshot itself, and each skill's icon. nil/NO on an older jar.
 + (BOOL)xpTrackerAvailable {
-    if (!ensureMui() || !gMuiXpAvail) return NO;
+    if (!ensureXp())
+        return NO;
     JNIEnv *env = gMainEnv;
-    jboolean v = (*env)->CallStaticBooleanMethod(env, gMuiClass, gMuiXpAvail);
-    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.xpTrackerAvailable"); return NO; }
+    jboolean v = (*env)->CallStaticBooleanMethod(env, gXpClass, gXpAvail);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.xpTrackerAvailable");
+        return NO;
+    }
     return v ? YES : NO;
 }
 
-+ (NSString *)xpTrackerJson {
-    if (!ensureMui() || !gMuiXpJson) return nil;
++ (void)xpTrackerSetUiOpen:(BOOL)open {
+    if (!ensureXp())
+        return;
     JNIEnv *env = gMainEnv;
-    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiXpJson));
+    (*env)->CallStaticVoidMethod(env, gXpClass, gXpSetOpen, (jboolean)(open ? 1 : 0));
+    if ((*env)->ExceptionCheck(env))
+        bridgeNoteClear(env, "JVMLauncher.xpTrackerSetUiOpen");
+}
+
++ (NSString *)xpTrackerJson {
+    if (!ensureXp())
+        return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gXpClass, gXpJson));
+}
+
++ (NSString *)xpTrackerSkillIcon:(NSString *)skill {
+    if (!ensureXp() || !gXpIcon || skill == nil)
+        return nil;
+    JNIEnv *env = gMainEnv;
+    jstring js = (*env)->NewStringUTF(env, skill.UTF8String ?: "");
+    NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gXpClass, gXpIcon, js));
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.xpTrackerSkillIcon");
+        out = nil;
+    }
+    if (js)
+        (*env)->DeleteLocalRef(env, js);
+    return out;
 }
 
 // Native Notes panel (§3.4): availability + read/write the single note string. nil/NO on an older jar.

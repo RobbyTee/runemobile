@@ -13,6 +13,7 @@
     { "name": "panel:Notes" },
     { "name": "panel:Hiscore" },
     { "name": "panel:Grand Exchange" },
+    { "name": "panel:XP Tracker" },
     { "name": "hub", "settle": 4.0, "network": true }
   ]
 }

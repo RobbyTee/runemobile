@@ -25,14 +25,19 @@
 package net.runelite.client.headless;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.util.Base64;
+import javax.imageio.ImageIO;
 import org.junit.Test;
 
 /**
- * Unit tests for {@link XpTrackerBridge#parseDuration(String)} — the colon-separated {@code timeTillGoalShort}
- * to whole-seconds conversion. This helper became package-private in P1-9 precisely so BOTH XP facades reuse it:
- * {@code XpTrackerBridge.appendSnapshotFields} (Android's panel) and {@code MobileUiBridge.xpTrackerJson} (iOS's
- * panel) now emit {@code timeToLevelSec} from this single source of truth, so their time-to-level can never
- * drift apart. These cases pin the parse (incl. the "&lt;2 parts" and infinity/empty guards) that both rely on.
+ * Unit tests for {@link XpTrackerBridge#parseDuration(String)}, the colon-separated {@code timeTillGoalShort} to
+ * whole-seconds conversion behind the snapshot's {@code timeToLevelSec} (incl. the "&lt;2 parts" and
+ * infinity/empty guards), and for {@link XpTrackerBridge#getSkillIcon(String)}.
  */
 public class XpTrackerBridgeTest
 {
@@ -57,5 +62,23 @@ public class XpTrackerBridgeTest
 	{
 		// XpTracker renders an unreachable goal as "∞"; a non-numeric part must fall back to -1, not throw.
 		assertEquals(-1, XpTrackerBridge.parseDuration("∞"));
+	}
+
+	@Test
+	public void skillIconIsTheSmallIconAsAPng() throws Exception
+	{
+		final String b64 = XpTrackerBridge.getSkillIcon("ATTACK");
+		assertNotNull(b64);
+		final BufferedImage img = ImageIO.read(new ByteArrayInputStream(Base64.getDecoder().decode(b64)));
+		assertNotNull(img);
+		assertEquals(16, img.getWidth()); // skill_icons_small/attack.png
+		assertSame(b64, XpTrackerBridge.getSkillIcon("ATTACK")); // encoded once, then cached
+	}
+
+	@Test
+	public void skillIconForAnUnknownNameIsNull()
+	{
+		assertNull(XpTrackerBridge.getSkillIcon("NOT_A_SKILL"));
+		assertNull(XpTrackerBridge.getSkillIcon(null));
 	}
 }

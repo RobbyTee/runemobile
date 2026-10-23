@@ -1529,6 +1529,23 @@ static NSString *XpFmt(long n) {
     return [NSString stringWithFormat:@"%.1fM", n / 1000000.0];
 }
 
+// A skill's row icon, fetched from the bridge once per skill and kept for the session (main thread only).
+static UIImage *XpSkillIcon(NSString *skill) {
+    static NSMutableDictionary<NSString *, id> *cache;
+    if (!cache)
+        cache = [NSMutableDictionary dictionary];
+    if (![skill isKindOfClass:[NSString class]] || skill.length == 0)
+        return nil;
+    id hit = cache[skill];
+    if (hit)
+        return hit == [NSNull null] ? nil : hit;
+    NSString *b64 = [JVMLauncher xpTrackerSkillIcon:skill];
+    NSData *data = b64.length ? [[NSData alloc] initWithBase64EncodedString:b64 options:0] : nil;
+    UIImage *img = data ? [UIImage imageWithData:data] : nil;
+    cache[skill] = img ?: (id)[NSNull null];
+    return img;
+}
+
 // Collapse seconds to a compact duration, matching Android XpTrackerScreen.fmtTime ("1h 20m" / "5m 3s" / "9s").
 static NSString *XpTimeFmt(long sec) {
     long h = sec / 3600, m = (sec % 3600) / 60, s = sec % 60;
@@ -1642,28 +1659,42 @@ static NSString *XpTimeFmt(long sec) {
         [self.emptyLabel.trailingAnchor constraintEqualToAnchor:self.drawer.trailingAnchor constant:-20],
     ]];
 
+    [JVMLauncher xpTrackerSetUiOpen:YES]; // gate the client-thread snapshot refresh to while-shown
     [self refresh];
+    // The bridge rebuilds on the next client frame after opening; read again then rather than at the first tick.
+    __weak typeof(self) ws = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [ws refresh];
+    });
     self.timer = [NSTimer scheduledTimerWithTimeInterval:2.0 target:self selector:@selector(refresh) userInfo:nil repeats:YES];
 }
 
 - (void)onDone {
+    [JVMLauncher xpTrackerSetUiOpen:NO];
     [self.timer invalidate]; self.timer = nil;
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
     [super viewDidDisappear:animated];
+    [JVMLauncher xpTrackerSetUiOpen:NO];
     [self.timer invalidate]; self.timer = nil;
 }
 
 - (void)refresh {
     NSString *json = [JVMLauncher xpTrackerJson] ?: @"{}";
-    if (self.lastJson && [json isEqualToString:self.lastJson]) return;   // unchanged -> keep the built boxes
-    self.lastJson = json;
+    if (self.lastJson && [json isEqualToString:self.lastJson])
+        return; // unchanged -> keep the built boxes
     NSDictionary *d = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
     if (![d isKindOfClass:[NSDictionary class]]) d = @{};
-    long tg = [d[@"totalGained"] longLongValue];
-    long th = [d[@"totalHr"] longLongValue];
+    // Not built yet (the bridge's placeholder before its first rebuild): keep the plain header, don't claim
+    // there is nothing to track.
+    if (![d[@"available"] boolValue])
+        return;
+    self.lastJson = json;
+    NSDictionary *overall = [d[@"overall"] isKindOfClass:[NSDictionary class]] ? d[@"overall"] : @{};
+    long tg = [overall[@"xpGained"] longLongValue];
+    long th = [overall[@"xpHr"] longLongValue];
     self.headerLabel.text = [NSString stringWithFormat:@"Gained: %@   ·   Per hour: %@", XpFmt(tg), XpFmt(th)];
 
     NSArray *skills = [d[@"skills"] isKindOfClass:[NSArray class]] ? d[@"skills"] : @[];
@@ -1685,9 +1716,9 @@ static NSString *XpTimeFmt(long sec) {
 }
 
 - (UIView *)skillBox:(NSDictionary *)s {
-    long gained = [s[@"gained"] longLongValue], hr = [s[@"hr"] longLongValue];
-    long left = [s[@"left"] longLongValue], actions = [s[@"actions"] longLongValue];
-    // P1-9: parity with Android's XP panel — time-to-level + actions-left (from MobileUiBridge.xpTrackerJson).
+    long gained = [s[@"xpGained"] longLongValue], hr = [s[@"xpHr"] longLongValue];
+    long left = [s[@"xpLeft"] longLongValue], actions = [s[@"actions"] longLongValue];
+    // P1-9, parity with Android's XP panel: time-to-level + actions-left.
     long timeToLevelSec = [s[@"timeToLevelSec"] longLongValue], actionsLeft = [s[@"actionsLeft"] longLongValue];
 
     UIStackView *box = [[UIStackView alloc] init];
@@ -1707,11 +1738,7 @@ static NSString *XpTimeFmt(long sec) {
     icon.translatesAutoresizingMaskIntoConstraints = NO;
     [icon.widthAnchor constraintEqualToConstant:24].active = YES;
     [icon.heightAnchor constraintEqualToConstant:24].active = YES;
-    NSString *b64 = [s[@"icon"] isKindOfClass:[NSString class]] ? s[@"icon"] : nil;
-    if (b64.length) {
-        NSData *data = [[NSData alloc] initWithBase64EncodedString:b64 options:0];
-        if (data) icon.image = [UIImage imageWithData:data];
-    }
+    icon.image = XpSkillIcon(s[@"skill"]);
     [topRow addArrangedSubview:icon];
 
     UIStackView *leftCol = [[UIStackView alloc] init];
@@ -1736,7 +1763,9 @@ static NSString *XpTimeFmt(long sec) {
     [topRow addArrangedSubview:cols];
 
     [box addArrangedSubview:topRow];
-    [box addArrangedSubview:[self barStart:[s[@"startLevel"] intValue] end:[s[@"endLevel"] intValue] progress:[s[@"progress"] intValue]]];
+    // progress is a 0..1 fraction toward the goal; the bar takes whole percent.
+    int pct = (int)lround([s[@"progress"] doubleValue] * 100.0);
+    [box addArrangedSubview:[self barStart:[s[@"startLevel"] intValue] end:[s[@"endLevel"] intValue] progress:pct]];
     return box;
 }
 
