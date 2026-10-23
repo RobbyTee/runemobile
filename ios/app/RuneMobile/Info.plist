@@ -26,8 +26,14 @@
 	     Without this the CAEAGLLayer present is capped at 60Hz even on a 120Hz display. -->
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<!-- The system launch screen: the RuneMobile logo on the tap-to-play cover's colour (both in Assets.xcassets). -->
 	<key>UILaunchScreen</key>
-	<dict/>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+		<key>UIImageName</key>
+		<string>Logo</string>
+	</dict>
 	<key>UIApplicationSupportsMultipleScenes</key>
 	<false/>
 	<key>UIRequiredDeviceCapabilities</key>

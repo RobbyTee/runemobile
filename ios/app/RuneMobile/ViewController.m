@@ -1102,6 +1102,16 @@ static NSString *const kLayoutNoticeBody =
     cover.userInteractionEnabled = YES;   // swallow every touch so nothing reaches the game/HUD beneath
     self.launchScreen = cover;
 
+    // The RuneMobile logo above the title. On a short screen it shrinks rather than run under the top edge.
+    UIImageView *logo = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"Logo"]];
+    logo.translatesAutoresizingMaskIntoConstraints = NO;
+    logo.contentMode = UIViewContentModeScaleAspectFit;
+    [logo setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisVertical];
+    [logo setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+    [cover addSubview:logo];
+    NSLayoutConstraint *logoHeight = [logo.heightAnchor constraintEqualToConstant:96];
+    logoHeight.priority = UILayoutPriorityDefaultHigh;
+
     // Title — the app identity, top-centred like the Jagex Mobile splash.
     UILabel *title = [[UILabel alloc] init];
     title.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1185,6 +1195,16 @@ static NSString *const kLayoutNoticeBody =
 
         [login.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor],
         [login.bottomAnchor constraintEqualToAnchor:cover.safeAreaLayoutGuide.bottomAnchor constant:-24],
+    ]];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [logo.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor],
+        [logo.bottomAnchor constraintEqualToAnchor:title.topAnchor
+                                          constant:-10],
+        [logo.topAnchor constraintGreaterThanOrEqualToAnchor:cover.safeAreaLayoutGuide.topAnchor
+                                                    constant:12],
+        [logo.widthAnchor constraintEqualToAnchor:logo.heightAnchor],
+        logoHeight,
     ]];
 
     [self refreshLaunchLogin];

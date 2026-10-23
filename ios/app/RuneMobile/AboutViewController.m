@@ -35,16 +35,29 @@
     stack.spacing = 4;
     [scroll addSubview:stack];
 
-    // App name + version header (version read the same way as ViewController's CFBundleShortVersionString use).
+    // Logo + app name + version header (version read the same way as ViewController's CFBundleShortVersionString use).
     NSString *version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"?";
-    [stack addArrangedSubview:[self headerLabelWithText:@"RuneMobile"
-                                                   font:[UIFont boldSystemFontOfSize:22]
-                                                  color:[UIColor whiteColor]
-                                                 topPad:2]];
-    [stack addArrangedSubview:[self headerLabelWithText:[NSString stringWithFormat:@"Version %@", version]
-                                                   font:[UIFont systemFontOfSize:12]
-                                                  color:[UIColor colorWithWhite:0.62 alpha:1.0]
-                                                 topPad:0]];
+    UIImageView *logo = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"Logo"]];
+    logo.contentMode = UIViewContentModeScaleAspectFit;
+    [logo.widthAnchor constraintEqualToConstant:56].active = YES;
+    [logo.heightAnchor constraintEqualToConstant:56].active = YES;
+    UIStackView *names = [[UIStackView alloc] initWithArrangedSubviews:@[
+        [self headerLabelWithText:@"RuneMobile"
+                             font:[UIFont boldSystemFontOfSize:22]
+                            color:[UIColor whiteColor]
+                           topPad:2],
+        [self headerLabelWithText:[NSString stringWithFormat:@"Version %@", version]
+                             font:[UIFont systemFontOfSize:12]
+                            color:[UIColor colorWithWhite:0.62 alpha:1.0]
+                           topPad:0],
+    ]];
+    names.axis = UILayoutConstraintAxisVertical;
+    names.spacing = 4;
+    UIStackView *header = [[UIStackView alloc] initWithArrangedSubviews:@[ logo, names ]];
+    header.axis = UILayoutConstraintAxisHorizontal;
+    header.alignment = UIStackViewAlignmentCenter;
+    header.spacing = 12;
+    [stack addArrangedSubview:header];
 
     [self addSection:stack
                title:@"Unofficial fan client"

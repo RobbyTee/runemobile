@@ -129,17 +129,10 @@ SIZE="$(stat -f%z "$DIST/RuneLite.ipa")"
 echo "$BUILD" > "$STATE"   # only burn the build number on success
 
 # 4) icon + AltStore/SideStore source manifest ----------------------------------------------------
-python3 - "$DIST" "$FQDN" "$VERSTR" "$SIZE" "$BUILD" <<'PY'
-import sys, struct, zlib, json, datetime, os
-dist, fqdn, ver, size, build = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5]
-def solid_png(path, w=256, h=256, rgb=(139,0,0)):
-    row = b"\x00" + bytes(rgb + (255,)) * w
-    raw = row * h
-    def ck(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
-    png = b"\x89PNG\r\n\x1a\n" + ck(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)) \
-          + ck(b"IDAT", zlib.compress(raw, 9)) + ck(b"IEND", b"")
-    open(path, "wb").write(png)
-solid_png(os.path.join(dist, "icon.png"))
+python3 - "$DIST" "$FQDN" "$VERSTR" "$SIZE" "$BUILD" "$REPO/docs/brand/runemobile-icon.png" <<'PY'
+import sys, json, datetime, os, shutil
+dist, fqdn, ver, size, build, icon = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5], sys.argv[6]
+shutil.copyfile(icon, os.path.join(dist, "icon.png"))
 base = "https://" + fqdn
 manifest = {
   "name": "RuneLite iOS (dev)",
@@ -156,7 +149,7 @@ manifest = {
     "downloadURL": base + "/RuneLite.ipa",
     "localizedDescription": "RuneLite on iOS via an on-device JVM. Personal dev build #" + build + ".",
     "iconURL": base + "/icon.png",
-    "tintColor": "8b0000",
+    "tintColor": "E8620C",
     "size": size,
     "permissions": []
   }]

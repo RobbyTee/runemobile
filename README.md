@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/brand/runemobile-logo.png" width="160" height="160" alt="RuneMobile logo">
+</p>
+
 # RuneLite on Mobile — iOS & Android (unofficial)
 
 [![CI](https://github.com/audaro/runemobile/actions/workflows/CI.yml/badge.svg)](https://github.com/audaro/runemobile/actions/workflows/CI.yml)

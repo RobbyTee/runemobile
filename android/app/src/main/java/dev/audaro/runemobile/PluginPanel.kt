@@ -65,6 +65,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -642,19 +643,30 @@ private fun AboutScreen(onBack: () -> Unit) {
                 TextButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "Back" }) { Text("‹ Back") }
                 Text("About", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
             }
-            Text(
-                "RuneMobile",
-                color = Color.White,
-                fontSize = 22.sp,
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-            Text(
-                "Version ${BuildConfig.VERSION_NAME}",
-                color = Color(0xFF9E9E9E),
-                fontSize = 12.sp,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+            ) {
+                // Decorative: the name beside it already says what it is.
+                Image(
+                    painter = painterResource(R.drawable.runemobile_logo),
+                    contentDescription = null,
+                    modifier = Modifier.size(56.dp),
+                )
+                Column(Modifier.padding(start = 12.dp)) {
+                    Text(
+                        "RuneMobile",
+                        color = Color.White,
+                        fontSize = 22.sp,
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    Text(
+                        "Version ${BuildConfig.VERSION_NAME}",
+                        color = Color(0xFF9E9E9E),
+                        fontSize = 12.sp,
+                    )
+                }
+            }
 
             AboutSection(
                 "Unofficial fan client",
