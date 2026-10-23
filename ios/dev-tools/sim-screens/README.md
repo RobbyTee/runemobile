@@ -55,6 +55,11 @@ simulator runtime, and on the simulator's own RuneLite config: which plugins are
 and what the Notes panel holds. Change any of those (or update Xcode) and re-run with `--update`, after checking
 the shots show what they should.
 
+The device's window in Simulator.app has to be in landscape. `simctl` captures in the device's own portrait frame,
+and the shots are turned by the rotation Simulator.app records for each window, so a device still in portrait
+stops the run before the first shot. Turn it once (Device > Rotate Left) and leave it: the goldens also depend on
+which way it faces.
+
 Check them by eye the first time. A golden is only as good as the shot it was taken from.
 
 ## What it does not check

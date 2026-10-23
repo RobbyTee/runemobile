@@ -152,6 +152,15 @@ def main():
     if not ok:
         red(f"the app didn't reach the login screen: {details.get('reason')}")
     time.sleep(BOOT_SETTLE)
+    # simctl captures in the device's portrait frame and sim_capture turns it by the window rotation Simulator.app
+    # records per device. The app is landscape-only, so a window still in portrait gives sideways shots.
+    try:
+        probe, _info = hs.sim_capture(udid, mask_island=False)
+    except RuntimeError as e:
+        red(f"screenshot failed: {e.args[0]}")
+    if probe.width < probe.height:
+        red(f"the {model} window in Simulator.app is in portrait, so every shot would come out sideways. Turn it "
+            "to landscape once (Device > Rotate Left); Simulator remembers it for this device.")
 
     results = []
     seq = 0
