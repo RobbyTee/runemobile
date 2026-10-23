@@ -8,6 +8,8 @@
 #   ios/dev-tools/run-sim.sh --no-build      # reinstall + relaunch the last simulator build
 #   ios/dev-tools/run-sim.sh --manual        # launch to the Play cover and wait for a click
 #   ios/dev-tools/run-sim.sh --from-phone    # start from the paired phone's settings (below)
+#   ios/dev-tools/run-sim.sh --no-launch     # build + install only (callers that launch with their own arguments)
+#   ios/dev-tools/run-sim.sh --print-udid    # print the simulator this script would use, and stop
 #   RENDERER=gpu ios/dev-tools/run-sim.sh    # cpu (default) | gpu | 117hd, for this launch only
 #   SIM_NAME="iPhone 17 Pro Max" (default) or SIM_UDID=<udid> picks the simulator.
 #
@@ -44,12 +46,16 @@ BUILD=yes
 JARS=no
 AUTOPLAY=YES
 FROM_PHONE=no
+LAUNCH=yes
+PRINT_UDID=no
 for a in "$@"; do
   case "$a" in
     --jars)       JARS=yes ;;
     --no-build)   BUILD=no ;;
     --manual)     AUTOPLAY=NO ;;
     --from-phone) FROM_PHONE=yes ;;
+    --no-launch)  LAUNCH=no ;;
+    --print-udid) PRINT_UDID=yes ;;
     *) echo "unknown argument: $a" >&2; exit 1 ;;
   esac
 done
@@ -71,6 +77,7 @@ for devs in json.load(sys.stdin)["devices"].values():
 ' "$SIM_NAME")" || true
 fi
 [ -n "${SIM_UDID:-}" ] || { echo "!! no available simulator named '$SIM_NAME' (set SIM_NAME or SIM_UDID)" >&2; exit 1; }
+[ "$PRINT_UDID" = no ] || { echo "$SIM_UDID"; exit 0; }
 log "Simulator $SIM_NAME ($SIM_UDID)"
 xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null
 open -a Simulator --args -CurrentDeviceUDID "$SIM_UDID"
@@ -161,7 +168,7 @@ fi
 
 # 5) Install + launch. Launch arguments land in NSUserDefaults' argument domain, which wins over the app's own
 #    saved values for this launch only: rendererPref picks the renderer, RMAutoPlay presses Play.
-log "Install + launch (renderer $RENDERER, autoplay $AUTOPLAY)"
+if [ "$LAUNCH" = yes ]; then log "Install + launch (renderer $RENDERER, autoplay $AUTOPLAY)"; else log "Install"; fi
 xcrun simctl install "$SIM_UDID" "$APP"
 # RuneLite's audio startup enumerates input devices, which raises the first-run microphone prompt over the game.
 # Answer it the way a phone that has been through first run already has, so an unattended run's screenshots show
@@ -184,6 +191,10 @@ if [ "$FROM_PHONE" = yes ]; then
   # 3 = not running, so nothing is cached either.
   [ "$rc" = 0 ] || [ "$rc" = 3 ] || die "could not restart the simulator's cfprefsd (launchctl $rc): the app would read its old settings"
   echo "   Settings now match the phone's (the simulator's previous ones: $STATE/sim-before)."
+fi
+if [ "$LAUNCH" = no ]; then
+  echo "   Installed on $SIM_UDID; not launched (--no-launch)."
+  exit 0
 fi
 xcrun simctl launch --terminate-running-process "$SIM_UDID" "$BUNDLE_ID" \
   -rendererPref "$RENDERER" -RMAutoPlay "$AUTOPLAY"

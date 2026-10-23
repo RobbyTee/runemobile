@@ -28,7 +28,7 @@ The contract changed. Decide if it's safe for the other port, then:
 ```
 # 1. verify the OTHER port still satisfies the new contract
 ./android/dev-tools/bridge-census/run-census-desktop.sh     # Android: expect GREEN
-#   iOS: rebuild the client jar + run the iOS bridge checks
+./ios/dev-tools/bridge-census/run-census-sim.sh --jars      # iOS: expect GREEN (iOS Simulator, needs the iOS JRE)
 
 # 2. acknowledge by refreshing + staging the baseline, then re-commit
 ./tools/shared-contract/check-contract.sh --update
@@ -47,8 +47,8 @@ hook stays as the fast local pre-flight. See `android/GATE.md` row 6.
 
 ## What it does and doesn't guarantee
 It catches contract **drift** at commit/gate time and forces a conscious cross-port check — it does not itself
-build both apps. The actual "doesn't break the other port" proof is the Android bridge census (and the iOS bridge
-checks) it tells you to run; this guard makes sure you never forget to.
+build both apps. The actual "doesn't break the other port" proof is the two bridge censuses it tells you to run;
+this guard makes sure you never forget to.
 
 ## Sibling guard: the Jagex OAuth wire contract (OAUTH-1)
 The login path is **not** part of the jar contract above — it runs entirely in native code (iOS `NSURLSession`,

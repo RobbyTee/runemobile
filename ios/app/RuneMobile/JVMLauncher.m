@@ -1396,6 +1396,146 @@ static void simJitDisarm(SimBreakpointPorts *saved, JVMLogSink log) {
     log([NSString stringWithFormat:@"[jvm] sim JIT: brk#0x69 size=0x%lx -> RX 0x%lx kr=%d; handler disarmed",
                                    (unsigned long)sSimJitSize, (unsigned long)sSimJitAddr, sSimJitKr]);
 }
+
+// Bridge census (dev-tools/bridge-census/run-census-sim.sh). `-RMBridgeCensus <name>` names a list in Documents of
+// every class, method and field the native code looks up through JNI (bridge-census/extract-lookups.py). A thread
+// of its own waits for the client's first frame, resolves each entry against the running VM and writes
+// Documents/bridge-census-result.txt: an OK or MISSING line per entry, then a DONE line. A renamed or
+// re-signatured bridge method then fails here, not as a silent NULL on the phone. Every lookup clears its own
+// exception: HotSpot returns NULL for any lookup made while one is pending, so one miss would hide the next.
+static NSString *simCensusTakeException(JNIEnv *env) {
+    jthrowable exc = (*env)->ExceptionOccurred(env);
+    (*env)->ExceptionClear(env);
+    if (!exc)
+        return @"lookup returned NULL with no exception";
+    NSString *text = @"(exception without a readable toString)";
+    jclass oc = (*env)->FindClass(env, "java/lang/Object");
+    jmethodID ts = oc ? (*env)->GetMethodID(env, oc, "toString", "()Ljava/lang/String;") : NULL;
+    jstring js = ts ? (jstring)(*env)->CallObjectMethod(env, exc, ts) : NULL;
+    if (js && !(*env)->ExceptionCheck(env)) {
+        const char *c = (*env)->GetStringUTFChars(env, js, NULL);
+        NSString *s = c ? [NSString stringWithUTF8String:c] : nil;
+        if (c)
+            (*env)->ReleaseStringUTFChars(env, js, c);
+        if (s)
+            text = s;
+    }
+    (*env)->ExceptionClear(env);
+    if (js)
+        (*env)->DeleteLocalRef(env, js);
+    if (oc)
+        (*env)->DeleteLocalRef(env, oc);
+    (*env)->DeleteLocalRef(env, exc);
+    NSCharacterSet *breaks = [NSCharacterSet characterSetWithCharactersInString:@"\t\r\n"];
+    return [[text componentsSeparatedByCharactersInSet:breaks] componentsJoinedByString:@" "];
+}
+
+static void simBridgeCensusRun(NSString *listPath, NSString *resultPath, JVMLogSink log) {
+    NSString *list = [NSString stringWithContentsOfFile:listPath encoding:NSUTF8StringEncoding error:NULL];
+    JavaVM *vm = atomic_load(&gVM);
+    JNIEnv *env = NULL;
+    if (!list || !vm || (*vm)->AttachCurrentThreadAsDaemon(vm, (void **)&env, NULL) != JNI_OK || !env) {
+        NSString *why = list ? @"could not attach to the VM" : [@"could not read " stringByAppendingString:listPath];
+        [[NSString stringWithFormat:@"ERROR\t%@\n", why] writeToFile:resultPath
+                                                          atomically:YES
+                                                            encoding:NSUTF8StringEncoding
+                                                               error:NULL];
+        log([@"[census] ERROR " stringByAppendingString:why]);
+        return;
+    }
+
+    // Lookups initialize classes, so start once the client has drawn a frame: by then the bridge classes have
+    // initialized the way they do in a normal session. JavaBridge itself is touched from the first UI tick.
+    NSDate *start = [NSDate date];
+    int seq = 0;
+    jclass jb = (*env)->FindClass(env, "net/runelite/client/headless/JavaBridge");
+    jmethodID getSeq = jb ? (*env)->GetStaticMethodID(env, jb, "getFrameSeq", "()I") : NULL;
+    (*env)->ExceptionClear(env);
+    while (getSeq && seq <= 0 && -[start timeIntervalSinceNow] < 300.0) {
+        [NSThread sleepForTimeInterval:0.25];
+        seq = (*env)->CallStaticIntMethod(env, jb, getSeq);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            seq = 0;
+        }
+    }
+    if (jb)
+        (*env)->DeleteLocalRef(env, jb);
+    int waitedMs = (int)(-[start timeIntervalSinceNow] * 1000.0);
+
+    NSMutableString *out = [NSMutableString string];
+    int checked = 0, missing = 0;
+    for (NSString *line in [list componentsSeparatedByString:@"\n"]) {
+        @autoreleasepool {
+            if (line.length == 0)
+                continue;
+            checked++;
+            NSArray<NSString *> *f = [line componentsSeparatedByString:@"\t"];
+            NSString *entry = line, *problem = nil;
+            if (f.count < 4) {
+                problem = @"malformed list line";
+            } else {
+                entry = [[f subarrayWithRange:NSMakeRange(0, 4)] componentsJoinedByString:@"\t"];
+                NSString *kind = f[0];
+                const char *name = f[2].UTF8String, *sig = f[3].UTF8String;
+                jclass c = (*env)->FindClass(env, f[1].UTF8String);
+                if (!c || (*env)->ExceptionCheck(env)) {
+                    problem = simCensusTakeException(env);
+                } else {
+                    BOOL found = YES;
+                    if ([kind isEqualToString:@"smethod"])
+                        found = (*env)->GetStaticMethodID(env, c, name, sig) != NULL;
+                    else if ([kind isEqualToString:@"method"])
+                        found = (*env)->GetMethodID(env, c, name, sig) != NULL;
+                    else if ([kind isEqualToString:@"sfield"])
+                        found = (*env)->GetStaticFieldID(env, c, name, sig) != NULL;
+                    else if ([kind isEqualToString:@"field"])
+                        found = (*env)->GetFieldID(env, c, name, sig) != NULL;
+                    else if (![kind isEqualToString:@"class"])
+                        problem = [@"unknown kind " stringByAppendingString:kind];
+                    if (!problem && (!found || (*env)->ExceptionCheck(env)))
+                        problem = simCensusTakeException(env);
+                    (*env)->DeleteLocalRef(env, c);
+                }
+            }
+            if (problem) {
+                missing++;
+                [out appendFormat:@"MISSING\t%@\t%@\n", entry, problem];
+                log([NSString stringWithFormat:@"[census] MISSING %@ (%@)",
+                                               [entry stringByReplacingOccurrencesOfString:@"\t"
+                                                                                withString:@" "],
+                                               problem]);
+            } else {
+                [out appendFormat:@"OK\t%@\n", entry];
+            }
+        }
+    }
+    [out appendFormat:@"DONE\tchecked=%d\tmissing=%d\tframeSeq=%d\twaitedMs=%d\n", checked, missing, seq, waitedMs];
+    NSError *err = nil;
+    if (![out writeToFile:resultPath atomically:YES encoding:NSUTF8StringEncoding error:&err])
+        log([NSString stringWithFormat:@"[census] ERROR writing %@: %@", resultPath, err.localizedDescription]);
+    log([NSString stringWithFormat:@"[census] checked=%d missing=%d (first frame after %d ms, seq %d)", checked,
+                                   missing, waitedMs, seq]);
+    (*vm)->DetachCurrentThread(vm);
+}
+
+static void simBridgeCensusStart(JVMLogSink log) {
+    NSString *name = [[NSUserDefaults standardUserDefaults] stringForKey:@"RMBridgeCensus"].lastPathComponent;
+    if (name.length == 0)
+        return;
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSString *list = [docs stringByAppendingPathComponent:name];
+    NSString *result = [docs stringByAppendingPathComponent:@"bridge-census-result.txt"];
+    [[NSFileManager defaultManager] removeItemAtPath:result error:NULL];
+    log([NSString stringWithFormat:@"[census] will check the lookups in %@ after the first frame", name]);
+    // Class initialization can run deep; give the thread a VM-sized stack rather than NSThread's 512 KB.
+    NSThread *t = [[NSThread alloc] initWithBlock:^{
+        simBridgeCensusRun(list, result, log);
+    }];
+    t.name = @"bridge-census";
+    t.stackSize = 4 << 20;
+    [t start];
+}
 #endif
 
 // Public wrapper (JVMLauncher.h): lets the shell re-run the repair after a MID-SESSION WebKit load (the
@@ -1915,6 +2055,10 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
         }
     }
 
+#if TARGET_OS_SIMULATOR
+    if (!self.routecL1Mode)
+        simBridgeCensusStart(log);
+#endif
     if (self.routecL1Mode) {
         callMain(env, "RouteCL1Probe", @[], log);   // GPU Route C L1 kill-test (verdict -> jvm-stdio.log)
     } else {

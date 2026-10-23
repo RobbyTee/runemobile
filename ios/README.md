@@ -70,6 +70,7 @@ ios/dev-tools/run-sim.sh                  # build, install, launch and press Pla
 RENDERER=gpu ios/dev-tools/run-sim.sh     # cpu | gpu | 117hd
 ios/dev-tools/run-sim.sh --jars           # restage the jars first, after a Java change
 ios/dev-tools/run-sim.sh --from-phone     # start from a paired phone's settings
+ios/dev-tools/bridge-census/run-census-sim.sh --jars   # check every JNI lookup against the jars
 ```
 
 `--from-phone` copies the app's settings from a paired iPhone (cable or the
@@ -77,6 +78,11 @@ same network) before launch: the native UI settings, the active RuneLite
 profile and the game's preferences, so the simulator starts the way the phone
 does. It never copies the login; the simulator stays logged out. The renderer
 follows the phone's unless `RENDERER` is set.
+
+`run-census-sim.sh` is the iOS bridge census: it lists every class, method and
+field the native code looks up through JNI and resolves each one in the app's
+own VM ([`dev-tools/bridge-census/`](dev-tools/bridge-census/README.md)). Run it
+after a change to the shared bridge; a lookup that no longer resolves fails it.
 
 The simulator build retags the bundled JRE as a simulator binary
 (`app/scripts/resign-jre.sh`), and the app services HotSpot's code-cache
