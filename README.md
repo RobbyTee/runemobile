@@ -122,7 +122,7 @@ the other as parity is closed.
 - **Precise engine-resolved touch targeting.** A literal-point tap routes to the
   exact pixel you touch; the engine's own model clickbox resolves the hit and a
   settle gate confirms the real outcome (red ring = interact, yellow = walk, item
-  border = inventory). Long-press opens the authentic left-click menu.
+  border = inventory). Long-press opens the game's own right-click menu.
 - **Full RuneLite plugin ecosystem + native config panel.** The unmodified plugin
   set, with a searchable, touch-friendly bottom sheet: per-plugin toggles, pins,
   config screens, and an on-device **Plugin Hub** browser to install community plugins.
@@ -136,6 +136,9 @@ the other as parity is closed.
 - **Native HUD veneers.** Minimap, and HP / Prayer / Run / Spec orbs as enlarged
   one-tap touch targets; a top-relocated chat with channel pills
   (All / Game / Public / Private / Channel / Clan / Trade) and a real soft keyboard.
+- **Overlay editor.** Drag RuneLite's overlays, the chat and the minimap where you
+  want them, or snap an overlay to a screen corner. The minimap keeps its place
+  through a rotation or a notch.
 - **Native tab grid.** Open any interface tab (Inventory / Prayer / Combat /
   Spellbook / Clan / …) through the genuine menu action.
 - **Native info screens.** XP tracker, infoboxes, Grand Exchange, Loot Tracker, time
@@ -150,10 +153,11 @@ the other as parity is closed.
 
 ## Platform status & supported devices
 
-This is an early **`0.1.0` pre-release**, tracking upstream RuneLite
-**`1.13.2-SNAPSHOT`** (latest release tag `runelite-parent-1.13.1`) with **`rev241`**
-(2026-10-07) game data. It is playable, but it is a single-maintainer, best-effort
-build and may break after an OSRS weekly update until a new build is published.
+This is a **pre-release** (`0.x`). The [latest release](../../releases/latest) has the
+current version, and [`CHANGELOG.md`](CHANGELOG.md) says what each one changed. Every
+build tracks upstream RuneLite's development line and the game data current when it was
+built. It is playable, but it is a single-maintainer, best-effort build and may break
+after an OSRS weekly update until a new build is published.
 
 ### Android
 
@@ -171,7 +175,7 @@ build and may break after an OSRS weekly update until a new build is published.
 | **OS** | **iOS 17.4 or newer**, arm64 device, **passcode required** |
 | **JIT** | Per-launch debugger attach via **StikDebug** |
 | **Signing** | Free Apple ID = app expires every **7 days**, one-tap refresh (no charge, no jailbreak) |
-| **Verified on** | iPhone 17 Pro Max (iOS 26.5) |
+| **Verified on** | iPhone 17 Pro Max (iOS 27.2) |
 
 > On iOS the installed app icon is labelled **RuneMobile** — that is the name to look
 > for on your Home Screen and in StikDebug's app list.
@@ -193,6 +197,10 @@ A few things this build does deliberately that you might otherwise mistake for b
 - **117HD may reduce resolution when the phone runs hot (iOS).** Under sustained
   thermal pressure the HD renderer temporarily lowers its internal resolution scale
   and restores it once the device cools. This is intentional.
+- **The native HUD needs Resizable - Modern.** An account saved in Resizable - Classic
+  or Fixed gets the game's own HUD instead, with a **Switch to Resizable - Modern**
+  button at the top of the screen. One tap changes the game's own display setting,
+  and the game saves it to your account.
 
 ---
 
@@ -449,6 +457,10 @@ as Android's (`:client:shadowJar` and `build-probes.sh`) but go through iOS's ow
 (gitignored — `export DEVELOPMENT_TEAM=XXXXXXXXXX`); the build scripts source it and
 `xcodegen` expands `${DEVELOPMENT_TEAM}` into the project.
 
+**Without a phone:** on an Apple silicon Mac the iOS app also runs in the iOS Simulator,
+with the full JIT and no StikDebug, and a single command checks a build there. See
+[Testing in the iOS Simulator](CONTRIBUTING.md#testing-in-the-ios-simulator).
+
 ---
 
 ## Architecture
@@ -471,7 +483,7 @@ shared edge is kept. The mobile project lives under `ios/`, `android/`, and the 
 `runelite-client/.../headless/` bridge package; the rest of the tree
 (`runelite-client/`, `runelite-api/`, …) is upstream RuneLite, updated by merging
 `runelite/runelite` and carried with a deliberately small set of additive fork seams
-(the headless boot/UI override, bridge hooks in about a dozen upstream files, and the
+(the headless boot/UI override, bridge hooks in about fifteen upstream files, and the
 mobile privacy gates described in [`PRIVACY.md`](PRIVACY.md)).
 
 ---

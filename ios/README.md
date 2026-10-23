@@ -73,6 +73,8 @@ ios/dev-tools/run-sim.sh --from-phone     # start from a paired phone's settings
 ios/dev-tools/run-sim.sh --desktop-login  # log in with the desktop harness's Jagex session (--logout undoes it)
 ios/dev-tools/bridge-census/run-census-sim.sh --jars   # check every JNI lookup against the jars
 ios/dev-tools/sim-screens/sim-screens.py  # compare the native screens with their golden screenshots
+ios/dev-tools/sim-screens/plugin-sweep.py # open every plugin's settings screen and side panel
+ios/dev-tools/sim-gate.sh                 # all of the above, plus a boot on each renderer: one verdict
 ```
 
 `--from-phone` copies the app's settings from a paired iPhone (cable or the
@@ -98,6 +100,19 @@ control editor, the plugin side panels and so on) and compares a screenshot of
 it with a golden copy ([`dev-tools/sim-screens/`](dev-tools/sim-screens/README.md)).
 Run it after a UI change; a screen that changed fails it with a diff heatmap.
 The goldens are kept per Mac, outside git.
+
+`plugin-sweep.py` has no goldens. It opens every plugin's settings screen and
+every side panel on the rail, and fails one that doesn't open, shows nothing,
+or logs a bridge fault. It switches on what it needs to reach the panels the
+profile hides, and puts the profile back at the end.
+
+`sim-gate.sh` runs the census, the screens and the sweep, boots the app to the
+login screen on each renderer, and scans every launch's logs against a
+known-noise list. It ends with one verdict, `SIM_GATE_GREEN` or `_RED`, in
+about ten minutes ([`dev-tools/sim-gate/`](dev-tools/sim-gate/README.md)).
+Run it before a release, after an upstream merge, and after a shader or
+renderer change. The Python checks run under `/usr/bin/python3` and need
+Pillow and numpy.
 
 The simulator build retags the bundled JRE as a simulator binary
 (`app/scripts/resign-jre.sh`), and the app services HotSpot's code-cache

@@ -14,6 +14,29 @@ as "What's new".
 
 ## [Unreleased]
 
+### Fixed
+- The Notes plugin had a settings screen with nothing on it but "Reset all settings", and one tap of that
+  erased your notes. A plugin whose settings are all hidden no longer gets a settings screen; Notes keeps
+  its switch and its side panel.
+- The plugin side panels were drawn in Swing's default look instead of RuneLite's: a white border round
+  every scroll pane, and text that ignored its font and colour (the Info panel's "Sign in" line came out in
+  black serif). They now look as they do on desktop.
+- iOS, 117HD: the calibration overlay that shows while you adjust brightness never appeared, because its
+  shaders didn't compile on iOS. They are now ported to the phone's shading language, as Android's already
+  were. On both phones, its dots no longer depend on behaviour the shading language leaves undefined.
+
+### Changed
+- iOS: the XP Tracker screen reads the same once-a-second snapshot as Android's, built on the game's own
+  thread, instead of reading the plugin's state from the screen's thread.
+
+### Internal
+- The iOS app runs in the iOS Simulator on a Mac, with the full JIT and no phone, and
+  `ios/dev-tools/sim-gate.sh` checks each build there: every JNI lookup, the native screens against saved
+  screenshots, every plugin's settings screen and side panel, a boot on each renderer, and the logs. The
+  plugin sweep is what found the Notes screen above. See
+  [CONTRIBUTING.md](CONTRIBUTING.md#testing-in-the-ios-simulator).
+- `tools/port-drift/` reports where the iOS and Android apps have drifted apart.
+
 ## [0.2.6] - 2026-10-22
 
 ### Fixed

@@ -87,8 +87,8 @@ The `headless/` bridge has behavioural unit tests under
 `runelite-client/src/test/java/net/runelite/client/headless/` (JUnit 4 + Mockito, no engine boot). They lock
 down the parts of the contract the signature diff can't see — the bytes the bridge actually emits and the
 geometry it computes: MenuPeek's snapshot JSON + entry fingerprint, JavaBridge's frame double-buffering and
-the GPU load-in warmup hold, OverlayBridge's snap-corner math, HudVeneer's chat-avoidance rect, and the
-GrandExchange JSON reader. If you change what the bridge emits or computes, update these so the other port
+the GPU load-in warmup hold, OverlayBridge's snap-corner math, HudVeneer's chat-avoidance rect, the
+GrandExchange JSON reader, and which plugins MobileUiBridge gives a settings screen. If you change what the bridge emits or computes, update these so the other port
 doesn't break silently. (GrandExchangeBridge's parser helpers are `private`; that one suite reaches them by
 reflection — if you rename a helper, update the reflection target in the same change.)
 
@@ -97,6 +97,49 @@ reflection — if you rename a helper, update the reflection target in the same 
 ```
 
 The release gate runs them too (a scoped stage, so an unrelated upstream plugin-test breakage can't block it).
+
+## Testing in the iOS Simulator
+
+On an Apple silicon Mac the iOS app runs in the iOS Simulator: the same JRE, jars and native code as on the phone,
+with the full JIT and no StikDebug. It is the quickest way to try an iOS change, and the only way to test one
+without an iPhone. Set it up with steps 1 and 2 of [`ios/README.md`](ios/README.md#build-from-source-macos), then:
+
+```sh
+ios/dev-tools/run-sim.sh            # build, install, launch and press Play
+ios/dev-tools/run-sim.sh --jars     # restage the jars first, after a Java change
+ios/dev-tools/sim-gate.sh           # every simulator check, one verdict
+```
+
+`sim-gate.sh` ends with `VERDICT: SIM_GATE_GREEN` or `_RED` after about ten minutes. It checks that:
+
+- every class, method and field the iOS code looks up through JNI resolves in the app's own VM (the bridge
+  census), so a `headless/` change the native code still calls by its old name fails here, not on a phone;
+- the native screens (Settings, the plugin list, the control editor, the side panels, …) still match their
+  golden screenshots;
+- every plugin's settings screen and every side panel opens, shows something, and logs no bridge fault;
+- the app reaches the login screen on the CPU, GPU and 117HD renderers;
+- no launch logged a shader error, or a line that isn't on the known-noise list (`tools/log-scan/`).
+
+Each check also runs on its own: [`ios/README.md`](ios/README.md#run-in-the-ios-simulator-no-phone) lists them,
+and [`ios/dev-tools/sim-gate/`](ios/dev-tools/sim-gate/README.md) explains each one and what to do when it fails.
+Run the census after a change to `headless/` or to a JNI lookup, the screens after a native UI change, and the
+whole gate before a release, after an upstream merge, and after a shader or renderer change.
+
+Beyond the checks, the simulator is a place to work on the iOS app without a device round-trip:
+`run-sim.sh --from-phone` starts it with a paired iPhone's settings and plugin profile, to reproduce a bug that
+depends on them, and `run-sim.sh --desktop-login` logs it in with a throwaway account's session (see
+`ios/README.md`), to try a change in game. `RENDERER=gpu` or `RENDERER=117hd` picks the renderer for a launch.
+
+Good to know:
+
+- The goldens are kept per Mac, outside git, so the first run on a new Mac fails the screens check with
+  `NO_GOLDEN`. Check the shots by eye, then write them with `ios/dev-tools/sim-screens/sim-screens.py --update`.
+  The simulator window has to be in landscape (Device > Rotate Left).
+- The Python checks run under `/usr/bin/python3` and need Pillow and numpy.
+- Every gate launch is logged out, so the gate never logs into the game, even when the simulator holds a session.
+
+It is not a phone. It can't show performance, the StikDebug JIT path, the phone's GPU driver (the simulator draws
+the GPU modes with Apple's software renderer), multi-touch, or backgrounding. Check those on a device.
 
 ## Conventions
 
@@ -111,6 +154,7 @@ The release gate runs them too (a scoped stage, so an unrelated upstream plugin-
 
 - Keep commits to plain prose under your own name; squash WIP before opening.
 - Confirm `:app:assembleRelease` builds and you've tested on a device or emulator.
+- If you changed the iOS app or `headless/` and have an Apple silicon Mac, run `ios/dev-tools/sim-gate.sh`.
 - If you touched `headless/`, confirm the shared contract is unchanged, or that
   `check-contract.sh` passes and you updated the baseline.
 
