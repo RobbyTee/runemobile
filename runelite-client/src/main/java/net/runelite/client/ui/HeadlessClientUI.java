@@ -24,6 +24,8 @@
  */
 package net.runelite.client.ui;
 
+import com.formdev.flatlaf.FlatLaf;
+import com.formdev.flatlaf.util.SystemInfo;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Cursor;
@@ -35,6 +37,7 @@ import java.awt.GraphicsEnvironment;
 import java.awt.Insets;
 import java.awt.Point;
 import java.awt.image.BufferedImage;
+import java.lang.reflect.Field;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Provider;
@@ -54,13 +57,15 @@ import net.runelite.client.headless.JavaBridge;
 import net.runelite.client.headless.MobileUiBridge;
 import net.runelite.client.input.MouseManager;
 import net.runelite.client.plugins.PluginManager;
+import net.runelite.client.ui.laf.RuneLiteLAF;
 
 /**
  * Gate 1c: a window-less replacement for {@link ClientUI}.
  *
  * <p>The stock {@code ClientUI} builds the full RuneLite desktop chrome — {@code ContainableFrame},
  * sidebar, toolbar, tray icon, custom L&amp;F, OSX adapters. None of that exists on iOS. This subclass
- * keeps exactly one thing the engine needs to actually render: a minimal AWT {@link Frame} that hosts
+ * keeps the L&amp;F (the plugin side panels are real Swing, rendered off-screen) and exactly one thing the
+ * engine needs to actually render: a minimal AWT {@link Frame} that hosts
  * the gamepack {@code Component} and is realized so its {@code Canvas} acquires a peer. Without a
  * realized canvas the engine's render loop passes {@code null} to {@code Hooks.draw} and nothing
  * composites — that is the precise kill risk this gate settles.
@@ -152,6 +157,12 @@ public class HeadlessClientUI extends ClientUI
 
 		SwingUtilities.invokeAndWait(() ->
 		{
+			// The desktop client's look and feel (ClientUI.init does the same), installed before any plugin
+			// builds its side panel. Without it Swing's default L&F draws the panels: a white border round
+			// every scroll pane, and HTML text panes that ignore the font and colour set on them (the Info
+			// panel's "Sign in" line came out black serif).
+			setupLookAndFeel();
+
 			frame = new Frame("RuneLite (headless)");
 			frame.setLayout(new BorderLayout());
 
@@ -305,5 +316,42 @@ public class HeadlessClientUI extends ClientUI
 	@Override
 	void openPanel(NavigationButton navBtn, boolean showSidebar)
 	{
+	}
+
+	private static void setupLookAndFeel()
+	{
+		// FlatLaf on macOS first loads Apple's Aqua L&F (for the screen menu bar). The iOS JRE reports macOS but
+		// has no Aqua, so that step throws and setup() gives up. Marking the step done makes FlatLaf skip it.
+		if (SystemInfo.isMacOS && !hasClass("com.apple.laf.AquaLookAndFeel"))
+		{
+			try
+			{
+				Field aquaLoaded = FlatLaf.class.getDeclaredField("aquaLoaded");
+				aquaLoaded.setAccessible(true);
+				aquaLoaded.setBoolean(null, true);
+			}
+			catch (ReflectiveOperationException | RuntimeException e)
+			{
+				log.warn("[headless] can't skip FlatLaf's Aqua step", e);
+			}
+		}
+
+		if (!RuneLiteLAF.setup())
+		{
+			log.warn("[headless] RuneLite look and feel not installed; side panels use Swing's default");
+		}
+	}
+
+	private static boolean hasClass(String name)
+	{
+		try
+		{
+			Class.forName(name, false, HeadlessClientUI.class.getClassLoader());
+			return true;
+		}
+		catch (ClassNotFoundException | LinkageError e)
+		{
+			return false;
+		}
 	}
 }

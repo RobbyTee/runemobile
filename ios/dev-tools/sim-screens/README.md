@@ -41,15 +41,12 @@ All of the driver code is compiled only into simulator builds (`TARGET_OS_SIMULA
 ## Screens
 
 `screens.json` lists them in order: `settings`, `about`, `plugins`, `edit-controls`, `overlays`, `profiles`,
-`infoboxes`, and the plugin side panels `panel:Notes`, `panel:Hiscore` and `panel:Grand Exchange`
+`infoboxes`, and the plugin side panels `panel:Info`, `panel:Notes`, `panel:Hiscore` and `panel:Grand Exchange`
 (`panel:<rail tooltip>` opens any panel on the rail). `hub` shows the live Plugin Hub list, which changes whenever
 the hub publishes, so it is marked `network` and runs only when named.
 
-Left out:
-
-- `panel:Info`. Its layout is fixed for one launch but differs between launches (whether the "Sign in to sync
-  settings" line wraps decides how the rows are spaced), so its golden matches only some runs.
-- Panels that only exist in game (`World Hopper`, `Loot Tracker` and the like). The run is logged out.
+Panels that only exist in game (`World Hopper`, `Loot Tracker` and the like) are left out, because the run is
+logged out.
 
 ## Goldens are local
 

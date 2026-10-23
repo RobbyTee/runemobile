@@ -9,6 +9,7 @@
     { "name": "overlays" },
     { "name": "profiles" },
     { "name": "infoboxes" },
+    { "name": "panel:Info" },
     { "name": "panel:Notes" },
     { "name": "panel:Hiscore" },
     { "name": "panel:Grand Exchange" },
