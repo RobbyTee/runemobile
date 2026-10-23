@@ -60,6 +60,27 @@ and an arm64 iPhone on **iOS 17.4+**.
    *Each time you play*). Launching without the attach just waits — that is the
    expected iOS constraint, not a bug.
 
+## Run in the iOS Simulator (no phone)
+
+For UI and feature work, the same app runs in the iOS Simulator on an Apple
+silicon Mac with the full JIT and no StikDebug. After steps 1–2 above:
+
+```sh
+ios/dev-tools/run-sim.sh                  # build, install, launch and press Play (CPU renderer)
+RENDERER=gpu ios/dev-tools/run-sim.sh     # cpu | gpu | 117hd
+ios/dev-tools/run-sim.sh --jars           # restage the jars first, after a Java change
+```
+
+The simulator build retags the bundled JRE as a simulator binary
+(`app/scripts/resign-jre.sh`), and the app services HotSpot's code-cache
+breakpoint in-process instead of waiting for the debugger (`JVMLauncher.m`,
+`TARGET_OS_SIMULATOR` only). Device builds are unchanged.
+
+It is a UI and logic check, not a phone. It does not show performance, the
+StikDebug JIT path, the phone's GPU driver (the simulator draws GPU modes with
+Apple's software renderer), real multi-touch, or background/PiP behaviour.
+Check those on the device.
+
 ## Keeping current with upstream RuneLite
 
 ```sh

@@ -916,6 +916,11 @@ static NSString *jstringToNS(JNIEnv *env, jstring js) {
 @implementation JVMLauncher
 
 + (BOOL)isDebuggerAttached {
+#if TARGET_OS_SIMULATOR
+    // What this gates is "the JVM can JIT", and in the simulator that always holds: it runs under macOS rules
+    // and services HotSpot's brk #0x69 in-process (simJitArm), so there is no attach to wait for.
+    return YES;
+#endif
     int flags = 0;
     if (csops(getpid(), CS_OPS_STATUS, &flags, sizeof(flags)) != 0) {
         return NO; // EPERM etc. -> treat as not-yet-debugged
@@ -1296,6 +1301,92 @@ static void restoreBreakpointPortToDebugger(JVMLogSink log) {
     for (mach_msg_type_number_t i = 0; i < n;  i++) if (p[i])  mach_port_deallocate(mach_task_self(), p[i]);
     for (mach_msg_type_number_t i = 0; i < nb; i++) if (bp[i]) mach_port_deallocate(mach_task_self(), bp[i]);
 }
+
+#if TARGET_OS_SIMULATOR
+// Simulator stand-in for StikDebug's runelite-jit.js. CodeCache::initialize reserves the code cache with ONE
+// `brk #0x69` (BreakGetJITMapping: size in x0, RX address back in x0), and on a device the debugger answers it.
+// The simulator runs under macOS rules, where a process may map its own RX memory, so a SIGTRAP handler does
+// the debugger's part: vm_allocate + vm_protect(RX), what debugserver's `_M<size>,rx` does. HotSpot then makes
+// its own RW mirror. MAP_JIT does NOT work here: HotSpot can't remap a JIT region and dies at its first stub.
+// The handler and an empty task BREAKPOINT port (so no Mach handler can take the brk first) are in place only
+// for JNI_CreateJavaVM; a debugger that owned that port (Xcode's lldb) gets it back afterwards.
+#define SIM_BRK_JIT_MAPPING 0xD4200D20u // brk #0x69
+
+typedef struct {
+    exception_mask_t masks[EXC_TYPES_COUNT];
+    mach_port_t ports[EXC_TYPES_COUNT];
+    exception_behavior_t behs[EXC_TYPES_COUNT];
+    thread_state_flavor_t flavs[EXC_TYPES_COUNT];
+    mach_msg_type_number_t n;
+} SimBreakpointPorts;
+
+static struct sigaction sSimPrevTrap;
+// Written by the handler and logged after VM creation (no logging inside a signal handler).
+static volatile vm_size_t sSimJitSize;
+static volatile vm_address_t sSimJitAddr;
+static volatile kern_return_t sSimJitKr = KERN_FAILURE;
+
+static void simJitTrap(int sig, siginfo_t *info, void *ucv) {
+    (void)sig;
+    (void)info;
+    ucontext_t *uc = (ucontext_t *)ucv;
+    uint64_t pc = uc->uc_mcontext->__ss.__pc;
+    if (*(const uint32_t *)pc != SIM_BRK_JIT_MAPPING) {
+        sigaction(SIGTRAP, &sSimPrevTrap, NULL); // not ours: the trap re-runs under the previous disposition
+        return;
+    }
+    vm_size_t size = (vm_size_t)uc->uc_mcontext->__ss.__x[0];
+    vm_address_t addr = 0;
+    kern_return_t kr = vm_allocate(mach_task_self(), &addr, size, VM_FLAGS_ANYWHERE);
+    if (kr == KERN_SUCCESS) {
+        kr = vm_protect(mach_task_self(), addr, size, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
+        if (kr != KERN_SUCCESS) {
+            vm_deallocate(mach_task_self(), addr, size);
+            addr = 0;
+        }
+    }
+    sSimJitSize = size;
+    sSimJitAddr = addr;
+    sSimJitKr = kr;
+    uc->uc_mcontext->__ss.__x[0] = addr; // 0 = failed; HotSpot reports the failed reservation itself
+    uc->uc_mcontext->__ss.__pc = pc + 4;
+}
+
+static void simJitArm(SimBreakpointPorts *saved, JVMLogSink log) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = simJitTrap;
+    sa.sa_flags = SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGTRAP, &sa, &sSimPrevTrap);
+
+    saved->n = EXC_TYPES_COUNT;
+    if (task_get_exception_ports(mach_task_self(), EXC_MASK_BREAKPOINT, saved->masks, &saved->n, saved->ports,
+                                 saved->behs, saved->flavs) != KERN_SUCCESS)
+        saved->n = 0;
+    kern_return_t kr = task_set_exception_ports(mach_task_self(), EXC_MASK_BREAKPOINT, MACH_PORT_NULL,
+                                                EXCEPTION_DEFAULT, MACHINE_THREAD_STATE);
+    log([NSString stringWithFormat:@"[jvm] sim JIT: SIGTRAP handler armed, task BREAKPOINT port cleared kr=%d "
+                                   @"(%u saved)",
+                                   kr, saved->n]);
+}
+
+static void simJitDisarm(SimBreakpointPorts *saved, JVMLogSink log) {
+    // Only while SIGTRAP is still ours: a handler the VM installed for itself during creation stays.
+    struct sigaction cur;
+    if (sigaction(SIGTRAP, NULL, &cur) == 0 && cur.sa_sigaction == simJitTrap)
+        sigaction(SIGTRAP, &sSimPrevTrap, NULL);
+    for (mach_msg_type_number_t i = 0; i < saved->n; i++) {
+        if (saved->ports[i] == MACH_PORT_NULL)
+            continue;
+        task_set_exception_ports(mach_task_self(), saved->masks[i], saved->ports[i], saved->behs[i],
+                                 saved->flavs[i]);
+        mach_port_deallocate(mach_task_self(), saved->ports[i]);
+    }
+    log([NSString stringWithFormat:@"[jvm] sim JIT: brk#0x69 size=0x%lx -> RX 0x%lx kr=%d; handler disarmed",
+                                   (unsigned long)sSimJitSize, (unsigned long)sSimJitAddr, sSimJitKr]);
+}
+#endif
 
 // Public wrapper (JVMLauncher.h): lets the shell re-run the repair after a MID-SESSION WebKit load (the
 // session-expired re-login) — the boot-time call above only protects VM creation.
@@ -1762,7 +1853,14 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
 
     JavaVM *vm = NULL;
     JNIEnv *env = NULL;
+#if TARGET_OS_SIMULATOR
+    SimBreakpointPorts simPorts;
+    simJitArm(&simPorts, log);
+#endif
     jint rc = JNI_CreateJavaVM(&vm, (void **)&env, &vmArgs);
+#if TARGET_OS_SIMULATOR
+    simJitDisarm(&simPorts, log);
+#endif
     if (rc != JNI_OK || !vm || !env) { log([NSString stringWithFormat:@"[jvm] FATAL JNI_CreateJavaVM rc=%d", rc]); return -14; }
     // Publish the VM so the main thread's live-blit + touch bridge can attach into it (atomic store —
     // the main thread loads it with atomic_load in ensureBridge).

@@ -3920,6 +3920,12 @@ static void *perfProbePump(void *unused) {
         if (attached && !self.launchButton.enabled && !self.launched) {
             self.launchButton.enabled = YES;
             [self appendLine:@"StikDebug attached — CS_DEBUGGED set. Tap Start game."];
+#if TARGET_OS_SIMULATOR
+            // ios/dev-tools/run-sim.sh launches with `-RMAutoPlay YES` (the argument domain of NSUserDefaults) so
+            // an unattended run boots the game without a click on the Play cover.
+            if ([[NSUserDefaults standardUserDefaults] boolForKey:@"RMAutoPlay"])
+                [self onPlayTapped];
+#endif
         }
         [self refreshDevDiagnostics]; // keep the readout live pre-launch (no-op while the panel is hidden)
     }];
