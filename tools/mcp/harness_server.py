@@ -23,6 +23,10 @@ Tools
   android_fps            run the fps-measure harness for N seconds, return mean/median/min/max
   run_verdict            run any *-verdict.sh against a log, return GREEN/RED
   ios_pull_logs          devicectl copy of Documents/jvm-stdio.log (+ client.log) off the iPhone
+  ios_sim_run            build, install and launch the app in the iOS Simulator, wait for a frame or game state
+  ios_sim_wait           wait for the simulator app's current launch to reach a frame or game state
+  ios_sim_screenshot     simulator screenshot, upright, Dynamic Island painted out, optionally sized like a phone shot
+  ios_sim_census         the iOS bridge census: every JNI lookup the app makes, resolved in the simulator's VM
 
 Nothing here is destructive: every tool reads, renders, measures, or flips a
 runtime debug knob.
@@ -46,7 +50,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SERVER_NAME = "runelite-ios-harness"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 # The JREs each port embeds. Both are gitignored staging output, so either may be missing on a fresh clone;
@@ -60,6 +64,12 @@ TWO_LOG_VERDICTS = ("mobileui-verdict.sh",)
 
 IOS_BUNDLE_ID = "dev.audaro.runemobile"
 FPS_MEASURE = REPO_ROOT / "android/dev-tools/gpu/fps-measure.sh"
+RUN_SIM = REPO_ROOT / "ios/dev-tools/run-sim.sh"
+RUN_CENSUS_SIM = REPO_ROOT / "ios/dev-tools/bridge-census/run-census-sim.sh"
+SIM_RENDERERS = ("cpu", "gpu", "117hd")
+# The Dynamic Island in a raw (portrait) simctl screenshot at 3x: width, height, offset from the top, in pixels,
+# centred. simctl draws it into its screenshots over the app; phone screenshots don't have it.
+SIM_ISLAND_PX = (376, 110, 42)
 # The perf probe's logs in the app's Documents: Debug keeps all VM output in jvm-stdio.log; Release writes none,
 # except perf-probe.log (the probe's own lines) when the perfprobe marker arms it (ViewController.m captureStdio).
 IOS_PERF_LOGS = ("jvm-stdio.log", "perf-probe.log")
@@ -350,6 +360,116 @@ def parse_fps_measure(text):
         if ln.startswith("!! "):
             out["warnings"].append(ln[3:].strip())
     return out
+
+
+# The simulator app's jvm-stdio.log: the boot poll (every 250 ms for the first 240 s) and HeadlessCapture's periodic
+# draw lines carry the draw count and game state, the gameState lines each transition. FATAL lines (no JRE, no VM)
+# go through the shell's log sink, so they land in hello-shell.log: callers pass both logs' text.
+_SIM_DRAWS = re.compile(r"\[boot\] poll \d+ms\s+draws=(\d+) nullGraphics=(\d+) frames=\d+ state=(\w+)")
+_SIM_CAPTURE = re.compile(r"\[headless-capture\] draw#(\d+) nullGraphics=(\d+) capturedFrames=\d+ state=(\w+)")
+_SIM_TRANSITION = re.compile(r"\[headless-capture\] gameState \w+ -> (\w+)")
+_SIM_FATAL = re.compile(r"\bFATAL\b|A fatal error has been detected|hs_err_pid")
+
+
+def parse_sim_progress(text):
+    """Draw count, latest game state, every state reached and fatal lines from the simulator app's logs."""
+    out = {"draws": 0, "nullGraphics": None, "state": None, "states": [], "fatal": []}
+    for ln in text.splitlines():
+        m = _SIM_DRAWS.search(ln) or _SIM_CAPTURE.search(ln)
+        if m:
+            out["draws"] = max(out["draws"], int(m.group(1)))
+            out["nullGraphics"] = int(m.group(2))
+            state = m.group(3)
+        else:
+            m = _SIM_TRANSITION.search(ln)
+            if not m:
+                if _SIM_FATAL.search(ln) and len(out["fatal"]) < 5:
+                    out["fatal"].append(ln.strip()[-300:])
+                continue
+            state = m.group(1)
+        if state != "null":
+            out["state"] = state
+            if state not in out["states"]:
+                out["states"].append(state)
+    return out
+
+
+def sim_reached(progress, until):
+    """until is 'frame' (anything drawn) or a game state the launch has reached at some point."""
+    if until == "frame":
+        return progress["draws"] > 0
+    return until in progress["states"]
+
+
+def parse_simctl_launch_pid(text, bundle_id):
+    """`simctl launch` prints '<bundle id>: <pid>'."""
+    m = re.search(re.escape(bundle_id) + r":\s*(\d+)\s*$", text, re.M)
+    return int(m.group(1)) if m else None
+
+
+def parse_launchctl_app_pid(text, bundle_id):
+    """The app's pid from `launchctl list` inside the simulator; None when it isn't listed or its pid is '-'."""
+    for ln in text.splitlines():
+        parts = ln.split()
+        if len(parts) >= 3 and parts[2].startswith(f"UIKitApplication:{bundle_id}["):
+            return int(parts[0]) if parts[0].isdigit() else None
+    return None
+
+
+def parse_census_output(text):
+    """The counts, md5 and misses bridge-census-verdict.sh prints (run_verdict-style VERDICT parsing is separate)."""
+    out = {"checked": None, "missing": None, "listed": None, "md5": None, "missingLookups": [], "problems": []}
+    m = re.search(r"^checked=(\d+) missing=(\d+) \(list (\d+)\)", text, re.M)
+    if m:
+        out["checked"], out["missing"], out["listed"] = (int(g) for g in m.groups())
+    m = re.search(r"^census_md5=(\w+)", text, re.M)
+    if m:
+        out["md5"] = m.group(1)
+    for ln in text.splitlines():
+        ln = ln.strip()
+        if ln.startswith("missing: "):
+            out["missingLookups"].append(ln[len("missing: "):])
+        elif ln.startswith("!! "):
+            out["problems"].append(ln[3:])
+    return out
+
+
+def sim_island_rect(width, height):
+    """(x0, y0, x1, y1), inclusive, of the Dynamic Island in a raw portrait screenshot."""
+    w, h, top = SIM_ISLAND_PX
+    x0 = (width - w) // 2
+    return x0, top, x0 + w - 1, top + h - 1
+
+
+def mask_sim_island(arr, pad=3, sample=10, max_spread=6):
+    """Paint the Dynamic Island out of a raw portrait screenshot (HxWx3 uint8 array), row by row, with the median
+    of what the app draws just beside it on that row: under the island the app's background runs along the island's
+    long axis (the native rail, the letterbox). Returns (array, info); the array is untouched when the island isn't
+    where it should be, or when the pixels beside it vary along a row (an icon there: nothing safe to fill with)."""
+    import numpy as np
+
+    H, W = arr.shape[:2]
+    if W >= H:
+        return arr, {"masked": False, "reason": "not a portrait screenshot"}
+    x0, y0, x1, y1 = sim_island_rect(W, H)
+    xa, ya, xb, yb = x0 - pad, y0 - pad, x1 + pad, y1 + pad
+    if xa - sample < 0 or ya < 0 or xb + sample >= W:
+        return arr, {"masked": False, "reason": "screenshot too small for the island"}
+    inner = arr[y0 + 6 : y1 - 5, x0 + 6 : x1 - 5].max(axis=2)
+    dark = float((inner <= 4).mean())
+    if dark < 0.9:
+        return arr, {"masked": False, "reason": f"no island at the expected place ({dark:.0%} of it dark)"}
+    out = arr.copy()
+    for y in range(ya, yb + 1):
+        side = np.concatenate([arr[y, xa - sample : xa], arr[y, xb + 1 : xb + 1 + sample]]).astype(np.int16)
+        if int((side.max(axis=0) - side.min(axis=0)).max()) > max_spread:
+            return arr, {"masked": False, "reason": f"the pixels beside the island vary along row {y}"}
+        out[y, xa : xb + 1] = np.median(side, axis=0).astype(arr.dtype)
+    return out, {"masked": True, "rect": [int(xa), int(ya), int(xb - xa + 1), int(yb - ya + 1)]}
+
+
+def strip_ansi(text):
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
 # --------------------------------------------------------------------------- #
@@ -899,6 +1019,250 @@ def tool_ios_pull_logs(a):
     )
 
 
+def _sim_udid(a):
+    """(udid, None): the explicit simulator, else the one run-sim.sh would pick (SIM_NAME, iPhone 17 Pro Max)."""
+    if a.get("sim_udid"):
+        return a["sim_udid"], None
+    rc, o, e = run(["bash", str(RUN_SIM), "--print-udid"], cwd=REPO_ROOT, timeout=60)
+    lines = o.strip().splitlines()
+    if rc != 0 or not lines:
+        return None, err_result({"stage": "pick simulator", "exitCode": rc, "stderr": e.strip()[-600:]})
+    return lines[-1].strip(), None
+
+
+def _sim_docs(udid):
+    """(Documents dir of the app's data container, None) or (None, why). The path changes on every install."""
+    rc, o, e = run(["xcrun", "simctl", "get_app_container", udid, IOS_BUNDLE_ID, "data"], timeout=30)
+    if rc != 0 or not o.strip():
+        return None, f"the app isn't installed on simulator {udid}: {(e.strip() or o.strip())[-300:]}"
+    return Path(o.strip()) / "Documents", None
+
+
+def _sim_app_pid(udid):
+    rc, o, _e = run(["xcrun", "simctl", "spawn", udid, "launchctl", "list"], timeout=30)
+    return parse_launchctl_app_pid(o, IOS_BUNDLE_ID) if rc == 0 else None
+
+
+def _read_tail(path, n):
+    try:
+        return path.read_text(errors="replace").strip().splitlines()[-n:]
+    except OSError:
+        return []
+
+
+def _sim_wait(udid, until, timeout, since=None):
+    """Poll the app's logs until `until` ('frame' or a game state) shows up. since (epoch seconds) rejects a log
+    from an earlier launch: the app rotates jvm-stdio.log to .prev at start, so the live log's birth time is the
+    launch time. Returns (ok, details)."""
+    docs, why = _sim_docs(udid)
+    if not docs:
+        return False, {"reason": why}
+    jvm_log, shell_log = docs / "jvm-stdio.log", docs / "hello-shell.log"
+    start = time.time()
+    seen_running = False
+    while True:
+        try:
+            born = jvm_log.stat().st_birthtime
+        except OSError:
+            born = None
+        fresh = born is not None and (since is None or born >= since - 1)
+        progress = None
+        if fresh:
+            text = jvm_log.read_text(errors="replace") + "\n" + "\n".join(_read_tail(shell_log, 400))
+            progress = parse_sim_progress(text)
+        details = {
+            "until": until,
+            "progress": progress,
+            "launchedAt": time.strftime("%H:%M:%S", time.localtime(born)) if fresh else None,
+            "logs": {"jvm": str(jvm_log), "shell": str(shell_log)},
+        }
+        if progress and sim_reached(progress, until):
+            details["reachedAfterLaunchSec"] = round(time.time() - born, 1)
+            details["alreadyReached"] = time.time() - start < 1.5
+            return True, details
+        if progress and progress["fatal"]:
+            return False, dict(details, reason="the app logged a fatal error", tail=_read_tail(shell_log, 25))
+        pid = _sim_app_pid(udid)
+        seen_running = seen_running or pid is not None
+        # Gone with this launch's log in place (or after being seen) means it exited. Before its log appears, a
+        # launch gets a moment to show up.
+        if pid is None and (seen_running or fresh or time.time() - start > 15):
+            return False, dict(details, reason="the app is not running", tail=_read_tail(jvm_log, 25))
+        if time.time() - start >= timeout:
+            return False, dict(details, reason=f"no {until} within {timeout}s", tail=_read_tail(jvm_log, 25))
+        time.sleep(1)
+
+
+def tool_ios_sim_run(a):
+    """run-sim.sh (build, install, launch and press Play), then wait for a frame or a game state."""
+    if not shutil.which("xcrun"):
+        return err_result("xcrun not found (install Xcode).")
+    renderer = a.get("renderer") or ""
+    if renderer and renderer not in SIM_RENDERERS:
+        return err_result(f"renderer must be one of {', '.join(SIM_RENDERERS)}.")
+    udid, e = _sim_udid(a)
+    if e:
+        return e
+    autoplay = a.get("autoplay", True)
+    # Without autoplay the app waits on its Play cover and the VM never starts, so there is nothing to wait for.
+    until = a.get("until") or ("frame" if autoplay else "none")
+    flags = []
+    if a.get("jars"):
+        flags.append("--jars")
+    if not a.get("build", True):
+        flags.append("--no-build")
+    if a.get("from_phone"):
+        flags.append("--from-phone")
+    if not autoplay:
+        flags.append("--manual")
+    env = {"SIM_UDID": udid}
+    if renderer:
+        env["RENDERER"] = renderer
+    since = time.time()
+    rc, o, er = run(["bash", str(RUN_SIM)] + flags, cwd=REPO_ROOT, timeout=1800, env=env)
+    out = strip_ansi(o + "\n" + er)
+    pid = parse_simctl_launch_pid(out, IOS_BUNDLE_ID)
+    m = re.search(r"Install \+ launch \(renderer (\w+), autoplay (\w+)\)", out)
+    result = {
+        "ok": rc == 0 and pid is not None,
+        "simUdid": udid,
+        "pid": pid,
+        "renderer": m.group(1) if m else renderer or None,
+        "flags": flags,
+        "scriptSec": round(time.time() - since, 1),
+    }
+    if not result["ok"]:
+        lines = [ln for ln in out.splitlines() if ln.strip()]
+        return err_result(dict(result, stage="run-sim.sh", exitCode=rc, outputTail=lines[-30:]))
+    if until != "none":
+        ok, result["wait"] = _sim_wait(udid, until, int(a.get("timeout", 180)), since)
+        result["ok"] = ok
+    return ok_result(result) if result["ok"] else err_result(result)
+
+
+def tool_ios_sim_wait(a):
+    if not shutil.which("xcrun"):
+        return err_result("xcrun not found (install Xcode).")
+    udid, e = _sim_udid(a)
+    if e:
+        return e
+    since = a.get("since")
+    ok, details = _sim_wait(udid, a.get("until") or "frame", int(a.get("timeout", 120)), float(since) if since else None)
+    details = dict(details, ok=ok, simUdid=udid)
+    return ok_result(details) if ok else err_result(details)
+
+
+def _sim_rotation(udid):
+    """(angle, orientation) of this device's window from Simulator.app's preferences; angle in PIL's sense
+    (counter-clockwise degrees) and None when it isn't recorded."""
+    import plistlib
+
+    rc, o, _e = run(["defaults", "export", "com.apple.iphonesimulator", "-"], timeout=15)
+    if rc != 0:
+        return None, None
+    try:
+        prefs = plistlib.loads(o.encode()).get("DevicePreferences", {}).get(udid, {})
+    except Exception:
+        return None, None
+    try:
+        return float(prefs.get("SimulatorWindowRotationAngle")), prefs.get("SimulatorWindowOrientation")
+    except (TypeError, ValueError):
+        return None, prefs.get("SimulatorWindowOrientation")
+
+
+def tool_ios_sim_screenshot(a):
+    """simctl screenshot, Dynamic Island painted out, turned upright, optionally resized to a phone screenshot's size."""
+    try:
+        from PIL import Image
+        import numpy as np
+    except Exception as e:  # pragma: no cover
+        return err_result(f"ios_sim_screenshot needs PIL + numpy (run the server with /usr/bin/python3): {e}")
+    udid, e = _sim_udid(a)
+    if e:
+        return e
+    tmp = Path(tempfile.mkdtemp(prefix="harness-simshot-"))
+    try:
+        raw = tmp / "raw.png"
+        rc, _o, er = run(["xcrun", "simctl", "io", udid, "screenshot", str(raw)], timeout=60)
+        if rc != 0 or not raw.exists():
+            return err_result({"stage": "simctl screenshot", "exitCode": rc, "stderr": er.strip()[-600:],
+                               "hint": "is the simulator booted?"})
+        im = Image.open(raw).convert("RGB")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    result = {"ok": True, "simUdid": udid, "rawSize": list(im.size), "warnings": []}
+
+    if a.get("mask_island", True):
+        arr, result["island"] = mask_sim_island(np.asarray(im))
+        im = Image.fromarray(arr)
+    rotate = a.get("rotate", "auto")
+    if rotate == "auto":
+        angle, orientation = _sim_rotation(udid)
+        result["orientation"] = orientation
+        if angle is None:
+            angle = 0
+            result["warnings"].append("Simulator.app has no recorded orientation for this device; left as captured.")
+    else:
+        angle = float(rotate)
+    result["rotatedDeg"] = angle
+    if angle % 360:
+        im = im.rotate(angle, expand=True)
+    like = a.get("size_like")
+    if like:
+        like_path = Path(like) if os.path.isabs(like) else REPO_ROOT / like
+        if not like_path.is_file():
+            return err_result(f"size_like not found: {like_path}")
+        ref = Image.open(like_path).size
+        ratio = (im.size[0] / im.size[1]) / (ref[0] / ref[1])
+        if abs(ratio - 1) > 0.01:
+            result["warnings"].append(f"aspect ratios differ by {abs(ratio - 1):.1%}; the resize distorts.")
+        im = im.resize(ref, Image.LANCZOS)
+    out = a.get("out")
+    if out:
+        out = Path(out) if os.path.isabs(out) else REPO_ROOT / out
+    else:
+        # ios/app/evidence/ is gitignored and list_evidence indexes it.
+        out = REPO_ROOT / "ios/app/evidence/sim" / f"{time.strftime('%Y%m%d-%H%M%S')}.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    im.save(out)
+    result.update(path=str(out), size=list(im.size))
+    blocks = [text_block(result)]
+    if a.get("inline", True):
+        preview = im.copy()
+        preview.thumbnail((1000, 1000))
+        buf = io.BytesIO()
+        preview.save(buf, format="JPEG", quality=80)
+        blocks.append({"type": "image", "data": base64.b64encode(buf.getvalue()).decode("ascii"), "mimeType": "image/jpeg"})
+    return ok_result(blocks)
+
+
+def tool_ios_sim_census(a):
+    """run-census-sim.sh: build, install, run the census in the simulator, adjudicate."""
+    if not shutil.which("xcrun"):
+        return err_result("xcrun not found (install Xcode).")
+    flags = []
+    if a.get("jars"):
+        flags.append("--jars")
+    if not a.get("build", True):
+        flags.append("--no-build")
+    env = {"SIM_UDID": a["sim_udid"]} if a.get("sim_udid") else None
+    rc, o, er = run(["bash", str(RUN_CENSUS_SIM)] + flags, cwd=REPO_ROOT, timeout=2400, env=env)
+    out = strip_ansi(o + "\n" + er)
+    verdict, token = parse_verdict(out)
+    result = {
+        "ok": verdict == "GREEN" and rc == 0,
+        "verdict": verdict,
+        "verdictToken": token,
+        "exitCode": rc,
+        # Every verdict script exits 0 exactly when it says GREEN.
+        "consistent": (verdict == "GREEN") == (rc == 0),
+        **parse_census_output(out),
+        "resultFile": "build/bridge-census/result.txt",
+        "outputTail": [ln for ln in out.splitlines() if ln.strip()][-20:],
+    }
+    return ok_result(result) if result["ok"] else err_result(result)
+
+
 # --------------------------------------------------------------------------- #
 # tool registry (name -> description, inputSchema, handler)
 # --------------------------------------------------------------------------- #
@@ -1059,6 +1423,76 @@ TOOLS = {
             },
         },
         tool_ios_pull_logs,
+    ),
+    "ios_sim_run": (
+        "Build, install and launch RuneMobile in the iOS Simulator (ios/dev-tools/run-sim.sh: full JIT, no phone, "
+        "no StikDebug), press Play, then wait until the launch draws a frame (until='frame', ~8 s warm; a fresh "
+        "install first downloads the game cache, ~30 s) or reaches a game state (until='LOGIN_SCREEN', ...). "
+        "jars=true restages the jars first (after a Java change); build=false reuses the last build; "
+        "from_phone=true starts from the paired phone's settings (never its login). Not a perf, GPU-driver, "
+        "touch or backgrounding check: those need the phone.",
+        {
+            "type": "object",
+            "properties": {
+                "renderer": {"type": "string", "enum": list(SIM_RENDERERS), "description": "default cpu (or the phone's with from_phone)"},
+                "build": {"type": "boolean", "default": True},
+                "jars": {"type": "boolean", "default": False},
+                "from_phone": {"type": "boolean", "default": False},
+                "autoplay": {"type": "boolean", "default": True, "description": "false stops at the Play cover (then nothing to wait for)"},
+                "until": {"type": "string", "description": "'frame' (default), a game state such as LOGIN_SCREEN, or 'none'"},
+                "timeout": {"type": "integer", "default": 180, "description": "seconds to wait after launch"},
+                "sim_udid": {"type": "string", "description": "simulator UDID (default: the one run-sim.sh picks)"},
+            },
+        },
+        tool_ios_sim_run,
+    ),
+    "ios_sim_wait": (
+        "Wait for the simulator app's current launch to draw a frame (until='frame') or reach a game state, read "
+        "from its jvm-stdio.log. Returns draws, the states reached and the log paths; fails fast if the app exits "
+        "or logs a fatal error. since=<epoch seconds> ignores a log from an earlier launch.",
+        {
+            "type": "object",
+            "properties": {
+                "until": {"type": "string", "default": "frame"},
+                "timeout": {"type": "integer", "default": 120},
+                "since": {"type": "number", "description": "epoch seconds; the launch must be no older"},
+                "sim_udid": {"type": "string"},
+            },
+        },
+        tool_ios_sim_wait,
+    ),
+    "ios_sim_screenshot": (
+        "Screenshot the iOS Simulator into ios/app/evidence/sim/<stamp>.png, turned upright from Simulator.app's "
+        "recorded orientation, with the Dynamic Island painted out (simctl draws it; phone screenshots don't). "
+        "size_like=<phone screenshot> resizes to that image's size, so image_diff can compare the two directly. "
+        "Inlines a preview.",
+        {
+            "type": "object",
+            "properties": {
+                "out": {"type": "string", "description": "output PNG path (optional)"},
+                "size_like": {"type": "string", "description": "resize to this image's size (a phone screenshot)"},
+                "mask_island": {"type": "boolean", "default": True},
+                "rotate": {"description": "'auto' (default) or degrees counter-clockwise (e.g. 90, -90)"},
+                "inline": {"type": "boolean", "default": True},
+                "sim_udid": {"type": "string"},
+            },
+        },
+        tool_ios_sim_screenshot,
+    ),
+    "ios_sim_census": (
+        "The iOS bridge census (ios/dev-tools/bridge-census/run-census-sim.sh): extracts every class, method and "
+        "field the app's native code looks up through JNI, builds and launches the app in the simulator, resolves "
+        "each one in the app's own VM once a frame is drawn, and adjudicates: IOS_BRIDGE_CENSUS_GREEN or _RED, "
+        "with each missing lookup and the JVM's error for it. ~20 s when the build is current; jars=true restages the jars first.",
+        {
+            "type": "object",
+            "properties": {
+                "build": {"type": "boolean", "default": True},
+                "jars": {"type": "boolean", "default": False},
+                "sim_udid": {"type": "string"},
+            },
+        },
+        tool_ios_sim_census,
     ),
 }
 

@@ -3,13 +3,14 @@
 A small stdio [MCP](https://modelcontextprotocol.io) server that exposes the
 project's dev-tools harnesses as callable tools, so the desktop render / QA loop
 can be driven directly instead of by hand. Zero third-party dependencies — pure
-Python stdlib for the protocol, plus PIL + numpy (only for `image_diff`).
+Python stdlib for the protocol, plus PIL + numpy (only for `image_diff` and
+`ios_sim_screenshot`).
 
 ## Why `/usr/bin/python3`
 
 The server is pinned to the macOS system Python because that is the interpreter
 that ships PIL (11.x) + numpy on this machine — Homebrew's `python3` does not have
-them. `image_diff` needs both; everything else is stdlib. If you move machines,
+them. `image_diff` and `ios_sim_screenshot` need both; everything else is stdlib. If you move machines,
 point `.mcp.json` at whatever `python3` has `PIL` + `numpy`
 (`python3 -c "import PIL, numpy"` must succeed) and fix the absolute script path.
 
@@ -47,6 +48,10 @@ the tools to appear.
 | `android_fps` | yes | run `fps-measure.sh` for N seconds; LOGGED_IN fps, frame-time, capture pacing percentiles and jitter (`pacingMs`, from `[framebins]`), GC, present cadence, the `session` line (since the first frame), cold start (`coldstartMs`), GPU-time stats, per-second thermal (`thermal_every`), and `abClean: false` when ThermalGovernor moved the 117HD scale mid-capture. |
 | `run_verdict` | no | run any in-repo `*-verdict.sh` against a log; returns GREEN/RED/INCONCLUSIVE/NO_VERDICT/LOG_MISSING/UNKNOWN from the script's final `VERDICT:` line, cross-checked against its exit code (`consistent`). `log2` is the second launch for `mobileui-verdict.sh`. |
 | `ios_pull_logs` | yes (iPhone, unlocked) | `devicectl` copy of `Documents/jvm-stdio.log` (Debug) and/or `Documents/perf-probe.log` (Release with the `perfprobe` marker) into `ios/app/evidence/device-pull/<stamp>/` (gitignored), each with `fps-measure.sh`'s summary under `perf` (pacing, GC, present cadence, memwatch `mem`, `coldstartMs`); `client_log=true` adds RuneLite's `client.log`, which can name the account. |
+| `ios_sim_run` | no (iOS Simulator) | `ios/dev-tools/run-sim.sh` (build, install, launch, press Play) then waits until the launch draws a frame or reaches a game state (`until=LOGIN_SCREEN`); returns the pid, the renderer, the time to `until` and the log paths. `jars`, `build=false`, `from_phone`, `renderer` map to the script's options. ~10 s without a build. |
+| `ios_sim_wait` | no (iOS Simulator) | waits on the running launch's `jvm-stdio.log` for a frame or a game state; fails at once when the app has exited or logged a `FATAL`. `since` rejects a log from an earlier launch. |
+| `ios_sim_screenshot` | no (iOS Simulator) | `simctl io screenshot` turned upright from Simulator.app's recorded orientation, the Dynamic Island painted out with what the app draws beside it (phone screenshots don't have the island), optionally resized to a phone screenshot's size (`size_like`) for `image_diff`. Saves to `ios/app/evidence/sim/` (gitignored); inlines a preview. |
+| `ios_sim_census` | no (iOS Simulator) | the iOS bridge census (`ios/dev-tools/bridge-census/run-census-sim.sh`): every class, method and field the app's native code looks up through JNI, resolved in the app's own VM. Returns the verdict (`IOS_BRIDGE_CENSUS_GREEN`/`_RED`), the counts and each missing lookup with the JVM's error. ~20 s when the build is current, ~10 s with `build=false`. |
 
 ### Typical loops
 
@@ -56,6 +61,10 @@ the tools to appear.
   (e.g. scale 85, aniso 8) → `android_fps` again → compare.
 - **Render-regression gate** — keep a golden PNG, `image_diff` new captures against
   it with a `threshold`, fail on `maxChannelDelta` over budget.
+- **iOS UI change without the phone** — `ios_sim_run` (`until=LOGIN_SCREEN`) →
+  `ios_sim_screenshot` with `size_like` set to a phone screenshot → `image_diff`
+  against it.
+- **Shared-bridge change** — `ios_sim_census` (`jars=true`) next to the Android census.
 
 ## Smoke test
 

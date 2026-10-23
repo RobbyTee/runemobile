@@ -512,5 +512,143 @@ class IosPullLogs(unittest.TestCase):
         self.assertEqual(list(pulls.iterdir()) if pulls.exists() else [], [])
 
 
+SIM_LOG = """\
+[boot] poll 0ms  draws=0 nullGraphics=0 frames=0 state=null
+2026-10-22 19:38:05 PDT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#1 nullGraphics=0 capturedFrames=0 state=null
+2026-10-22 19:38:05 PDT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] gameState null -> LOGIN_SCREEN (draw#1 loginIndex=0 launcher=false)
+[boot] poll 250ms  draws=2 nullGraphics=0 frames=0 state=LOGIN_SCREEN
+2026-10-22 19:38:05 PDT [Client] INFO  n.r.client.headless.HeadlessCapture - [headless-capture] draw#10 nullGraphics=0 capturedFrames=0 state=LOGIN_SCREEN
+[boot] poll 500ms  draws=12 nullGraphics=1 frames=1 state=LOGIN_SCREEN
+[census] checked=196 missing=0 (first frame after 4795 ms, seq 1)
+"""
+
+CENSUS_GREEN = """\
+>> Census: 196 lookups, CPU renderer
+dev.audaro.runemobile: 70940
+   result after 9 s (the app keeps running)
+result=/repo/build/bridge-census/result.txt
+checked=196 missing=0 (list 196) first frame after 4795 ms, seq 1
+census_md5=43a95ea6f128bc3eb574fe2d8db2be20
+IOS_BRIDGE_CENSUS_GREEN md5=43a95ea6f128bc3eb574fe2d8db2be20
+VERDICT: IOS_BRIDGE_CENSUS_GREEN
+"""
+
+CENSUS_RED = """\
+   missing: smethod net/runelite/client/headless/JavaBridge noSuchMethod ()V java.lang.NoSuchMethodError: static Lnet/runelite/client/headless/JavaBridge;.noSuchMethod()V
+   missing: field org/lwjgl/opengl/GLCapabilities OpenGL99 Z java.lang.NoSuchFieldError: org.lwjgl.opengl.GLCapabilities.OpenGL99 Z
+!! 2 of 198 lookups did not resolve
+IOS_BRIDGE_CENSUS_RED
+VERDICT: IOS_BRIDGE_CENSUS_RED
+"""
+
+
+class SimProgress(unittest.TestCase):
+    def test_draws_state_and_transitions(self):
+        p = hs.parse_sim_progress(SIM_LOG)
+        self.assertEqual(p["draws"], 12)  # the highest count either line kind reports
+        self.assertEqual(p["nullGraphics"], 1)
+        self.assertEqual(p["state"], "LOGIN_SCREEN")
+        self.assertEqual(p["states"], ["LOGIN_SCREEN"])  # state=null is not a state
+        self.assertEqual(p["fatal"], [])
+        self.assertTrue(hs.sim_reached(p, "frame"))
+        self.assertTrue(hs.sim_reached(p, "LOGIN_SCREEN"))
+        self.assertFalse(hs.sim_reached(p, "LOGGED_IN"))
+
+    def test_states_reached_stay_reached(self):
+        p = hs.parse_sim_progress(INGAME_LOG)
+        self.assertEqual(p["states"], ["LOGIN_SCREEN", "LOGGING_IN", "LOADING", "LOGGED_IN"])
+        self.assertEqual(p["state"], "LOGGED_IN")
+        self.assertTrue(hs.sim_reached(p, "LOGGING_IN"))
+
+    def test_nothing_drawn_yet(self):
+        p = hs.parse_sim_progress("[boot] poll 0ms  draws=0 nullGraphics=0 frames=0 state=null\n")
+        self.assertFalse(hs.sim_reached(p, "frame"))
+        self.assertIsNone(p["state"])
+
+    def test_fatal_lines_from_the_shell_log(self):
+        p = hs.parse_sim_progress("[jvm] FATAL: embedded jre not found in bundle\n[jvm] boot ok\n")
+        self.assertEqual(p["fatal"], ["[jvm] FATAL: embedded jre not found in bundle"])
+
+
+class SimProcessOutput(unittest.TestCase):
+    def test_simctl_launch_pid(self):
+        self.assertEqual(hs.parse_simctl_launch_pid("dev.audaro.runemobile: 70940\n", hs.IOS_BUNDLE_ID), 70940)
+        self.assertIsNone(hs.parse_simctl_launch_pid("An error was encountered processing the command\n", hs.IOS_BUNDLE_ID))
+
+    def test_launchctl_pid(self):
+        listing = (
+            "PID\tStatus\tLabel\n"
+            "52185\t0\tUIKitApplication:com.apple.Spotlight[5b25][rb-legacy]\n"
+            "-\t0\tUIKitApplication:dev.audaro.runemobileX[1111][rb-legacy]\n"
+            "73260\t0\tUIKitApplication:dev.audaro.runemobile[ee3e][rb-legacy]\n"
+        )
+        self.assertEqual(hs.parse_launchctl_app_pid(listing, hs.IOS_BUNDLE_ID), 73260)
+        self.assertIsNone(hs.parse_launchctl_app_pid(listing.replace("73260", "-"), hs.IOS_BUNDLE_ID))
+        self.assertIsNone(hs.parse_launchctl_app_pid(listing.splitlines()[1], hs.IOS_BUNDLE_ID))
+
+    def test_census_green(self):
+        c = hs.parse_census_output(CENSUS_GREEN)
+        self.assertEqual((c["checked"], c["missing"], c["listed"]), (196, 0, 196))
+        self.assertEqual(c["md5"], "43a95ea6f128bc3eb574fe2d8db2be20")
+        self.assertEqual((c["missingLookups"], c["problems"]), ([], []))
+        self.assertEqual(hs.parse_verdict(CENSUS_GREEN), ("GREEN", "IOS_BRIDGE_CENSUS_GREEN"))
+
+    def test_census_red(self):
+        c = hs.parse_census_output(CENSUS_RED)
+        self.assertIsNone(c["checked"])
+        self.assertEqual(len(c["missingLookups"]), 2)
+        self.assertTrue(c["missingLookups"][0].startswith("smethod net/runelite/client/headless/JavaBridge noSuchMethod"))
+        self.assertEqual(c["problems"], ["2 of 198 lookups did not resolve"])
+        self.assertEqual(hs.parse_verdict(CENSUS_RED), ("RED", "IOS_BRIDGE_CENSUS_RED"))
+
+
+class SimIsland(unittest.TestCase):
+    """A raw portrait screenshot the size of an iPhone 17 Pro Max: the native rail (gray 39) runs along rows 18-140,
+    the letterbox (15) everywhere else, and the island sits over both."""
+
+    W, H = 1320, 2868
+
+    def shot(self, island=True):
+        import numpy as np
+
+        a = np.full((self.H, self.W, 3), 15, np.uint8)
+        a[18:141] = 39
+        self.background = a.copy()
+        if island:
+            x0, y0, x1, y1 = hs.sim_island_rect(self.W, self.H)
+            a[y0 : y1 + 1, x0 : x1 + 1] = 0
+        return a
+
+    def test_island_is_painted_with_what_lies_beside_it(self):
+        import numpy as np
+
+        out, info = hs.mask_sim_island(self.shot())
+        self.assertTrue(info["masked"], info)
+        self.assertTrue(np.array_equal(out, self.background))
+        self.assertEqual(info["rect"], [469, 39, 382, 116])
+
+    def test_no_island_no_change(self):
+        a = self.shot(island=False)
+        out, info = hs.mask_sim_island(a)
+        self.assertFalse(info["masked"])
+        self.assertIn("no island", info["reason"])
+        self.assertIs(out, a)
+
+    def test_an_icon_beside_the_island_stops_the_fill(self):
+        a = self.shot()
+        x0, y0, _x1, _y1 = hs.sim_island_rect(self.W, self.H)
+        a[y0 + 20, x0 - 8] = 200  # one bright pixel in the sample band
+        out, info = hs.mask_sim_island(a)
+        self.assertFalse(info["masked"])
+        self.assertIn(f"row {y0 + 20}", info["reason"])
+        self.assertIs(out, a)
+
+    def test_landscape_input_is_refused(self):
+        import numpy as np
+
+        _out, info = hs.mask_sim_island(np.zeros((1320, 2868, 3), np.uint8))
+        self.assertEqual(info, {"masked": False, "reason": "not a portrait screenshot"})
+
+
 if __name__ == "__main__":
     unittest.main()
