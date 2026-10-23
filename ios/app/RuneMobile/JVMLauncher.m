@@ -1032,6 +1032,18 @@ static long xmsMarkerMb(NSString *v) {
 }
 
 + (NSString *)tokensPath {
+#if TARGET_OS_SIMULATOR
+    // -RMSkipLogin YES (the screen goldens, the bridge census): this launch reads and writes a tokens file of its
+    // own, emptied once per launch, so it starts logged out and leaves the simulator's real login alone.
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"RMSkipLogin"]) {
+        NSString *skip = [[self appSupportDir] stringByAppendingPathComponent:@"tokens-skiplogin.json"];
+        static dispatch_once_t skipOnce;
+        dispatch_once(&skipOnce, ^{
+            [[NSFileManager defaultManager] removeItemAtPath:skip error:NULL];
+        });
+        return skip;
+    }
+#endif
     NSString *path = [[self appSupportDir] stringByAppendingPathComponent:@"tokens.json"];
     // One-time migration: older builds wrote the session bearer into the Files/USB-exposed Documents dir.
     // Relocate any legacy copy into Application Support and purge the exposed one, so the bearer stops being

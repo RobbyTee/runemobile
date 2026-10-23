@@ -8,6 +8,8 @@
 #   ios/dev-tools/run-sim.sh --no-build      # reinstall + relaunch the last simulator build
 #   ios/dev-tools/run-sim.sh --manual        # launch to the Play cover and wait for a click
 #   ios/dev-tools/run-sim.sh --from-phone    # start from the paired phone's settings (below)
+#   ios/dev-tools/run-sim.sh --desktop-login # log the simulator in with the desktop harness's Jagex session (below)
+#   ios/dev-tools/run-sim.sh --logout        # remove the simulator's Jagex session
 #   ios/dev-tools/run-sim.sh --no-launch     # build + install only (callers that launch with their own arguments)
 #   ios/dev-tools/run-sim.sh --print-udid    # print the simulator this script would use, and stop
 #   RENDERER=gpu ios/dev-tools/run-sim.sh    # cpu (default) | gpu | 117hd, for this launch only
@@ -21,6 +23,13 @@
 # phone's unless RENDERER is set. PHONE_UDID=<id> picks the phone, PHONE_BUNDLE_ID the app on it (a SideStore
 # install has its own bundle ID). The copy is kept in build/sim-phone-state/phone, and the simulator settings it
 # replaced in build/sim-phone-state/sim-before.
+#
+# --desktop-login copies the session from the desktop harness's tokens file (TOKENS, default
+# ios/dev-tools/tokens.json, minted by fetch-shield-tokens.sh) into the app, where the in-app login would write it:
+# session_id, chosen_account_id and chosen_display_name only. The launcher access/refresh tokens are left out,
+# because with them set the game server refuses the login. The simulator stays logged in across reinstalls until
+# --logout. Use a throwaway account, and don't run the desktop harness on the same account at the same time: one
+# session kicks the other.
 #
 # What the simulator does NOT tell you: performance (Mac CPU, no memory cap, no thermals), the device JIT path
 # (StikDebug), GPU driver quirks of the phone (GPU modes draw with Apple's software renderer), real multi-touch,
@@ -48,6 +57,7 @@ AUTOPLAY=YES
 FROM_PHONE=no
 LAUNCH=yes
 PRINT_UDID=no
+LOGIN=keep
 for a in "$@"; do
   case "$a" in
     --jars)       JARS=yes ;;
@@ -56,6 +66,8 @@ for a in "$@"; do
     --from-phone) FROM_PHONE=yes ;;
     --no-launch)  LAUNCH=no ;;
     --print-udid) PRINT_UDID=yes ;;
+    --desktop-login) LOGIN=desktop ;;
+    --logout)     LOGIN=out ;;
     *) echo "unknown argument: $a" >&2; exit 1 ;;
   esac
 done
@@ -191,6 +203,32 @@ if [ "$FROM_PHONE" = yes ]; then
   # 3 = not running, so nothing is cached either.
   [ "$rc" = 0 ] || [ "$rc" = 3 ] || die "could not restart the simulator's cfprefsd (launchctl $rc): the app would read its old settings"
   echo "   Settings now match the phone's (the simulator's previous ones: $STATE/sim-before)."
+fi
+if [ "$LOGIN" != keep ]; then
+  # Where JVMLauncher's +tokensPath reads and the in-app login writes.
+  TOKENS_DST="$(xcrun simctl get_app_container "$SIM_UDID" "$BUNDLE_ID" data)/Library/Application Support/tokens.json"
+  xcrun simctl terminate "$SIM_UDID" "$BUNDLE_ID" 2>/dev/null || true
+  if [ "$LOGIN" = out ]; then
+    rm -f "$TOKENS_DST"
+    echo "   Logged out: the simulator has no Jagex session."
+  else
+    TOKENS="${TOKENS:-$HERE/tokens.json}"
+    [ -f "$TOKENS" ] || die "no desktop session at $TOKENS (mint one with ios/dev-tools/fetch-shield-tokens.sh)"
+    mkdir -p "$(dirname "$TOKENS_DST")"
+    /usr/bin/python3 - "$TOKENS" "$TOKENS_DST" <<'PY' || die "could not copy the desktop session"
+import json, os, sys
+src, dst = sys.argv[1], sys.argv[2]
+t = json.load(open(src))
+keep = {k: t[k] for k in ("session_id", "chosen_account_id", "chosen_display_name") if isinstance(t.get(k), str) and t[k]}
+if "session_id" not in keep or "chosen_account_id" not in keep:
+    sys.exit(f"{src} has no session_id/chosen_account_id")
+fd = os.open(dst + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump(keep, f)
+os.replace(dst + ".tmp", dst)
+PY
+    echo "   Logged in with the desktop session from $TOKENS (fetched $(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("fetched_at", "?"))' "$TOKENS"))."
+  fi
 fi
 if [ "$LAUNCH" = no ]; then
   echo "   Installed on $SIM_UDID; not launched (--no-launch)."

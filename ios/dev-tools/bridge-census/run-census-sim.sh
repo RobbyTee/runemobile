@@ -48,8 +48,9 @@ mkdir -p "$DOCS"
 cp "$OUT/lookups.tsv" "$DOCS/$LIST_NAME"
 rm -f "$DOCS/$RESULT_NAME"
 printf '\n\033[1;35m>> Census: %s lookups, CPU renderer\033[0m\n' "$(wc -l < "$OUT/lookups.tsv" | tr -d ' ')"
+# -RMSkipLogin: the lookups need a booted client, not a logged-in one, so a simulator with a session doesn't log in.
 xcrun simctl launch --terminate-running-process "$SIM_UDID" "$BUNDLE_ID" \
-  -rendererPref cpu -RMAutoPlay YES -RMBridgeCensus "$LIST_NAME"
+  -rendererPref cpu -RMAutoPlay YES -RMSkipLogin YES -RMBridgeCensus "$LIST_NAME"
 
 start=$SECONDS
 while [ ! -f "$DOCS/$RESULT_NAME" ]; do
