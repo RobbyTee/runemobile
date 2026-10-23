@@ -296,9 +296,32 @@ public final class JavaBridge
 	private static final int SCENE_WARMUP = 6;
 
 	/** Hooks.drawScene &rarr; count a rendered 3D frame. */
-	public static void noteSceneDraw() { sceneDrawCount++; }
+	public static void noteSceneDraw()
+	{
+		final int n = ++sceneDrawCount;
+		if (n == 1)
+		{
+			log.info("[gpuhold] first scene draw");
+		}
+		else if (n == SCENE_WARMUP)
+		{
+			log.info("[gpuhold] world warmed up after {} scene draws: present ready", SCENE_WARMUP);
+		}
+	}
 	/** Hooks.draw on a non-world game state &rarr; re-arm the load-in hold. */
-	public static void armSceneHold() { sceneDrawCount = 0; }
+	public static void armSceneHold()
+	{
+		final int n = sceneDrawCount;
+		if (n >= SCENE_WARMUP)
+		{
+			log.info("[gpuhold] re-armed: left the world");
+		}
+		else if (n > 0)
+		{
+			log.info("[gpuhold] re-armed after {} of {} scene draws: left the world before it warmed up", n, SCENE_WARMUP);
+		}
+		sceneDrawCount = 0;
+	}
 
 	// The login screens draw no scene, so there is no sky to hide, and they are where the game says what it is
 	// doing: connecting, a refused login, Try Again. Held, they froze the screen on the boot frame, and a refused

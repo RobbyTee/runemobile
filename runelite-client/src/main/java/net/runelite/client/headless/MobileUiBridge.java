@@ -1903,6 +1903,22 @@ public final class MobileUiBridge
 		return "{\"ok\":true,\"writeId\":" + id + "}";
 	}
 
+	/**
+	 * Write one config value synchronously, on the calling thread. Client thread only. {@link #setConfig} queues
+	 * its write, so a plugin load queued on the EDT in the meantime can read the old value first; this is for the
+	 * one-time migrations that must land before that read ({@link RLHDStarter#migrateRlhd16Config}).
+	 */
+	static boolean setConfigNow(String group, String key, String value)
+	{
+		final ConfigManager cm = configManager;
+		if (!ENABLED || cm == null)
+		{
+			return false;
+		}
+		cm.setConfiguration(group, key, value);
+		return true;
+	}
+
 	/** Raw read of a stored config value (null if unset). Used by RLHDStarter's first-launch defaults sentinel. */
 	public static String getConfig(String group, String key)
 	{
