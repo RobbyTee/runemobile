@@ -1335,6 +1335,8 @@ static void simJitTrap(int sig, siginfo_t *info, void *ucv) {
         sigaction(SIGTRAP, &sSimPrevTrap, NULL); // not ours: the trap re-runs under the previous disposition
         return;
     }
+    // Safe in a handler here: this trap is synchronous (one known HotSpot instruction, no lock held), and for our
+    // own task vm_allocate/vm_protect are direct Mach traps (_kernelrpc_mach_vm_*_trap), not MIG messages.
     vm_size_t size = (vm_size_t)uc->uc_mcontext->__ss.__x[0];
     vm_address_t addr = 0;
     kern_return_t kr = vm_allocate(mach_task_self(), &addr, size, VM_FLAGS_ANYWHERE);
@@ -1358,14 +1360,22 @@ static void simJitArm(SimBreakpointPorts *saved, JVMLogSink log) {
     sa.sa_sigaction = simJitTrap;
     sa.sa_flags = SA_SIGINFO;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGTRAP, &sa, &sSimPrevTrap);
+    if (sigaction(SIGTRAP, &sa, &sSimPrevTrap) != 0)
+        log([NSString stringWithFormat:@"[jvm] sim JIT: SIGTRAP handler NOT armed (errno %d); the VM's brk#0x69 "
+                                       @"will kill the app",
+                                       errno]);
 
     saved->n = EXC_TYPES_COUNT;
-    if (task_get_exception_ports(mach_task_self(), EXC_MASK_BREAKPOINT, saved->masks, &saved->n, saved->ports,
-                                 saved->behs, saved->flavs) != KERN_SUCCESS)
+    kern_return_t kr = task_get_exception_ports(mach_task_self(), EXC_MASK_BREAKPOINT, saved->masks, &saved->n,
+                                                saved->ports, saved->behs, saved->flavs);
+    if (kr != KERN_SUCCESS) {
+        // Without the old ports there would be nothing to put back, so leave them in place.
         saved->n = 0;
-    kern_return_t kr = task_set_exception_ports(mach_task_self(), EXC_MASK_BREAKPOINT, MACH_PORT_NULL,
-                                                EXCEPTION_DEFAULT, MACHINE_THREAD_STATE);
+        log([NSString stringWithFormat:@"[jvm] sim JIT: task BREAKPOINT ports unreadable kr=%d; left as they are", kr]);
+        return;
+    }
+    kr = task_set_exception_ports(mach_task_self(), EXC_MASK_BREAKPOINT, MACH_PORT_NULL, EXCEPTION_DEFAULT,
+                                  MACHINE_THREAD_STATE);
     log([NSString stringWithFormat:@"[jvm] sim JIT: SIGTRAP handler armed, task BREAKPOINT port cleared kr=%d "
                                    @"(%u saved)",
                                    kr, saved->n]);
