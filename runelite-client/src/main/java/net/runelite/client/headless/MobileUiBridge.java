@@ -410,7 +410,8 @@ public final class MobileUiBridge
 	 * write has completed — callers that must persist before the process goes away (e.g. the Android logout path,
 	 * which calls this then {@code exit(0)}) depend on that guarantee, so do NOT make this asynchronous (QA-P1-03).
 	 * Because it does a synchronous EventBus post + a blocking fsync, callers on a UI/main thread should instead
-	 * use {@link #flushConfigQueued()} (fire-and-forget; enqueues {@code sendConfig} on the client thread).
+	 * use {@link #flushConfigQueued()} (enqueues {@code sendConfig} on the client thread; poll its write id if the
+	 * caller needs to know the file is written).
 	 */
 	public static String flushConfig()
 	{
@@ -1914,7 +1915,8 @@ public final class MobileUiBridge
 	}
 
 	/** Persist the dirty config, but QUEUED on the client thread so it runs AFTER any setConfig writes enqueued
-	 * just before it (sendConfig itself is immediate; ordering matters when seeding defaults then flushing). */
+	 * just before it (sendConfig itself is immediate; ordering matters when seeding defaults then flushing).
+	 * Returns a write id: once {@link #getProcessedWriteId()} reaches it, the file is written. */
 	public static String flushConfigQueued()
 	{
 		final ConfigManager cm = configManager;
@@ -1923,8 +1925,8 @@ public final class MobileUiBridge
 		{
 			return "{\"ok\":false,\"reason\":\"not-ready\"}";
 		}
-		enqueueClientWrite(ct, cm::sendConfig);
-		return "{\"ok\":true}";
+		final long id = enqueueClientWrite(ct, cm::sendConfig);
+		return "{\"ok\":true,\"writeId\":" + id + "}";
 	}
 
 	/**

@@ -82,8 +82,10 @@ ios/dev-tools/sim-screens/plugin-sweep.py --no-build "config:Agility" "panel:Not
    hides: plugins that are switched off (Loot Tracker, Party) and settings that hide a panel's button (Kourend
    Library shows its button only inside the library). The app first saves what it changes to
    `Documents/screen-restore.json`; `restore` at the end puts it back, and the script checks that the plugin list and
-   the rail match what they were. If a sweep dies in between, the app's next simulator launch restores the file.
-   `--only config` skips both.
+   the rail match what they were. Both answer only once the plugins read back as started or stopped, the settings
+   writes have run and a config flush behind them has written the profile. `restore` deletes the file only then, so if
+   a sweep dies in between, the app's next simulator launch restores it. `prepare` refuses a setting that has no
+   stored value, since a restore could only write one back. `--only config` skips both.
 3. For every plugin with settings it sends `config:<plugin>`: the app opens the plugin list and then that row's
    settings screen the way the gear button does (a tap on the row for the config-only RuneLite and Chat Color
    rows). For every panel on the rail it sends `panel:<tooltip>`. It closes each screen (`-`) before the next.

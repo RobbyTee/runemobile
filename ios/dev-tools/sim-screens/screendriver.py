@@ -127,10 +127,20 @@ class Driver:
             ev = self._event(seq, name)
             if ev:
                 return ev[0] == "ready", ev[1], seq
-            if hs._sim_app_pid(self.udid) is None:
+            if self._exited():
                 return False, "the app exited", seq
             time.sleep(0.2)
         return False, f"no answer from the app within {SCREEN_TIMEOUT}s", seq
+
+    def _exited(self):
+        """True when the app is missing from the simulator's launchctl list three times, a second apart. A single
+        `simctl spawn` that fails or comes back without it, under load, isn't an exit."""
+        for attempt in range(3):
+            if hs._sim_app_pid(self.udid) is not None:
+                return False
+            if attempt < 2:
+                time.sleep(1.0)
+        return True
 
     def capture(self):
         """An upright RGB PIL image of the simulator screen. Raises DriverError."""

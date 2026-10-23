@@ -3441,13 +3441,20 @@ static BOOL pipFeedMarkerSaysMain(void) {
 
 // Fire-and-forget config flush for the iOS UI paths (panel/overlay/config close, app background). gMuiFlush is
 // bound to Java flushConfigQueued (QA-P1-03), so this enqueues the fsync on the client thread and returns at once
-// without stalling the main thread.
-+ (void)mobileFlushConfig {
-    if (!ensureMui()) return;
+// without stalling the main thread. Callers that must know the file is written poll the returned write id.
++ (long long)mobileFlushConfig {
+    if (!ensureMui())
+        return 0;
     JNIEnv *env = gMainEnv;
     jstring js = (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiFlush);
-    if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.mobileFlushConfig"); return; }
-    if (js) (*env)->DeleteLocalRef(env, js);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.mobileFlushConfig");
+        return 0;
+    }
+    NSString *out = js ? jstringToNS(env, js) : nil;
+    NSData *d = [out dataUsingEncoding:NSUTF8StringEncoding];
+    NSDictionary *r = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:NULL] : nil;
+    return [r isKindOfClass:[NSDictionary class]] && [r[@"ok"] boolValue] ? [r[@"writeId"] longLongValue] : 0;
 }
 
 + (NSString *)mobileHubManifest {

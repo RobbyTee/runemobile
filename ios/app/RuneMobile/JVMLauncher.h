@@ -484,10 +484,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Highest processed write id (MobileUiBridge.getProcessedWriteId) — the fire-and-forget write ack.
 + (long long)mobileProcessedWriteId;
 
-/// Flush pending config to disk now (MobileUiBridge.flushConfig). iOS closes the app without running
-/// RuneLite's shutdown/periodic flush, so the shell calls this on config/panel close + app background so
-/// plugin toggles and config edits survive a relaunch.
-+ (void)mobileFlushConfig;
+/// Flush pending config to disk (MobileUiBridge.flushConfigQueued, behind the writes already queued). iOS closes
+/// the app without running RuneLite's shutdown/periodic flush, so the shell calls this on config/panel close + app
+/// background so plugin toggles and config edits survive a relaunch. Returns the flush's write id (0 when it
+/// couldn't be queued): once +mobileProcessedWriteId reaches it, the file is written.
++ (long long)mobileFlushConfig;
 
 /// Plugin-hub catalog JSON (MobileUiBridge.hubManifest). First call returns {"status":"loading"} while the
 /// signed manifest downloads on a background thread; poll until status is "ok" (plugins[]) or "error:*".

@@ -8953,10 +8953,10 @@ static UIView *simBlankView;
 // A rendered side panel draws its first frame some time after it opens. Wait this long for it before reporting
 // ready anyway, so a panel that never draws shows up as blank instead of as a hang.
 static const CFTimeInterval kSimPanelFrameWait = 10.0;
-// prepare and restore answer this long after their writes, once the plugins have started or stopped (on the EDT)
-// and the settings have landed (on the client thread). They flush the config just before answering, so the change
-// is on disk before the sweep goes on.
-static const NSTimeInterval kSimConfigSettle = 1.0;
+// prepare and restore answer once the plugins they switched read back as started or stopped (on the EDT), their
+// settings writes have run (on the client thread) and a config flush queued behind those has written the profile.
+// They give up after this long and report what is still pending.
+static const CFTimeInterval kSimConfirmTimeout = 15.0;
 
 - (void)simScreenTick {
     static BOOL driver, blank;
@@ -9013,23 +9013,16 @@ static const NSTimeInterval kSimConfigSettle = 1.0;
     __weak typeof(self) ws = self;
     if ([name isEqualToString:@"inventory"] || [name isEqualToString:@"prepare"] ||
         [name isEqualToString:@"restore"]) {
-        NSString *why;
+        void (^answer)(NSString *) = ^(NSString *why) {
+            [ws appendLine:why ? [NSString stringWithFormat:@"[screen] failed %@ %@: %@", seq, name, why]
+                               : [NSString stringWithFormat:@"[screen] ready %@ %@", seq, name]];
+        };
         if ([name isEqualToString:@"inventory"])
-            why = [self simWriteInventory:[docs stringByAppendingPathComponent:@"screen-inventory.json"]];
+            answer([self simWriteInventory:[docs stringByAppendingPathComponent:@"screen-inventory.json"]]);
         else if ([name isEqualToString:@"prepare"])
-            why = [self simPrepare:docs];
+            [self simPrepare:docs then:answer];
         else
-            why = [self simRestore:[docs stringByAppendingPathComponent:@"screen-restore.json"]];
-        if (why || [name isEqualToString:@"inventory"]) {
-            [self appendLine:why ? [NSString stringWithFormat:@"[screen] failed %@ %@: %@", seq, name, why]
-                                 : [NSString stringWithFormat:@"[screen] ready %@ %@", seq, name]];
-            return;
-        }
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kSimConfigSettle * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-                           [JVMLauncher mobileFlushConfig];
-                           [ws appendLine:[NSString stringWithFormat:@"[screen] ready %@ %@", seq, name]];
-                       });
+            [self simRestore:[docs stringByAppendingPathComponent:@"screen-restore.json"] then:answer];
         return;
     }
     [self simCloseScreenThen:^{
@@ -9100,9 +9093,111 @@ static const NSTimeInterval kSimConfigSettle = 1.0;
         next();
 }
 
+static BOOL simIsSetting(id c) {
+    return [c isKindOfClass:[NSArray class]] && [c count] == 3 && [c[0] isKindOfClass:[NSString class]] &&
+           [c[1] isKindOfClass:[NSString class]] && [c[2] isKindOfClass:[NSString class]];
+}
+
+// Why a plugin in `expect` (class name -> on) doesn't read back switched that way and started or stopped, or nil.
+static NSString *simPluginsPending(NSDictionary<NSString *, NSNumber *> *expect) {
+    if (!expect.count)
+        return nil;
+    NSString *json = [JVMLauncher mobilePlugins];
+    id plugins = json.length ? parseBridgeJSON(json, "ViewController.simPluginsPending") : nil;
+    if (![plugins isKindOfClass:[NSArray class]])
+        return @"listPlugins returned no list";
+    for (NSString *cls in expect) {
+        BOOL on = [expect[cls] boolValue];
+        NSDictionary *row = nil;
+        for (NSDictionary *p in plugins)
+            if ([[p[@"className"] description] isEqualToString:cls])
+                row = p;
+        if (!row)
+            return [NSString stringWithFormat:@"%@ isn't in the plugin list", cls];
+        if ([row[@"enabled"] boolValue] != on || [row[@"active"] boolValue] != on)
+            return [NSString stringWithFormat:@"%@ hasn't %@", row[@"name"], on ? @"started" : @"stopped"];
+    }
+    return nil;
+}
+
+// Asks pending() every 0.2 s until it returns nil, then calls done(nil); after kSimConfirmTimeout, done(what it
+// last said is still pending).
+- (void)simWaitFor:(NSString * (^)(void))pending since:(CFTimeInterval)start then:(void (^)(NSString *why))done {
+    NSString *what = pending();
+    if (!what || CACurrentMediaTime() - start > kSimConfirmTimeout) {
+        done(what ? [NSString stringWithFormat:@"%@ after %.0f s", what, kSimConfirmTimeout] : nil);
+        return;
+    }
+    __weak typeof(self) ws = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [ws simWaitFor:pending since:start then:done];
+    });
+}
+
+// Switches each plugin in `enable` (class name -> on) and writes each [group, key, value] in `config`. Notes in
+// `expect` how each plugin should read back and in *writeId the last settings write to wait for.
+- (NSString *)simApplyPlugins:(NSDictionary *)enable
+                       config:(NSArray *)config
+                       expect:(NSMutableDictionary *)expect
+                      writeId:(long long *)writeId {
+    for (NSString *cls in enable) {
+        NSString *json = [JVMLauncher mobileSetPluginEnabled:cls enabled:[enable[cls] boolValue]];
+        NSDictionary *r = json.length ? parseBridgeJSON(json, "ViewController.simApplyPlugins") : nil;
+        if (![r isKindOfClass:[NSDictionary class]] || ![r[@"ok"] boolValue])
+            return [NSString stringWithFormat:@"couldn't switch %@: %@", cls, json ?: @"no answer"];
+        expect[cls] = enable[cls];
+    }
+    for (NSArray *c in config) {
+        NSString *json = [JVMLauncher mobileSetConfigGroup:c[0] key:c[1] value:c[2]];
+        NSDictionary *r = json.length ? parseBridgeJSON(json, "ViewController.simApplyPlugins") : nil;
+        if (![r isKindOfClass:[NSDictionary class]] || ![r[@"ok"] boolValue])
+            return [NSString stringWithFormat:@"couldn't set %@.%@: %@", c[0], c[1], json ?: @"no answer"];
+        *writeId = MAX(*writeId, [r[@"writeId"] longLongValue]);
+    }
+    return nil;
+}
+
+// Waits until the plugins in `expect` read back the way they were switched and the settings writes up to `writeId`
+// have run, then queues a config flush behind them and waits for that too, so the change is in the profile on disk
+// when done(nil) runs. Both waits share one kSimConfirmTimeout, well inside the sweep's own wait for an answer.
+- (void)simConfirm:(NSDictionary *)expect writeId:(long long)writeId then:(void (^)(NSString *why))done {
+    __weak typeof(self) ws = self;
+    CFTimeInterval start = CACurrentMediaTime();
+    NSString * (^applied)(void) = ^NSString * {
+        if ([JVMLauncher mobileProcessedWriteId] < writeId)
+            return @"the settings writes haven't run";
+        return simPluginsPending(expect);
+    };
+    void (^flush)(NSString *) = ^(NSString *why) {
+        long long flushId = why ? 0 : [JVMLauncher mobileFlushConfig];
+        if (!flushId) {
+            done(why ?: @"couldn't queue the config flush");
+            return;
+        }
+        NSString * (^flushed)(void) = ^NSString * {
+            return [JVMLauncher mobileProcessedWriteId] < flushId ? @"the config flush hasn't run" : nil;
+        };
+        [ws simWaitFor:flushed since:start then:done];
+    };
+    [self simWaitFor:applied since:start then:flush];
+}
+
 // "prepare": switch on the plugins and change the settings screen-prepare.json names, after saving what each was to
-// screen-restore.json. Only what actually changes is saved, so a restore touches nothing else.
-- (NSString *)simPrepare:(NSString *)docs {
+// screen-restore.json. Only what actually changes is saved, so a restore touches nothing else. A setting with no
+// stored value is refused: the bridge can only write a value, so a restore couldn't make it unset again. RuneLite
+// stores every plugin's defaults when it starts, so only an item without a default has none.
+- (void)simPrepare:(NSString *)docs then:(void (^)(NSString *why))done {
+    NSMutableDictionary *expect = [NSMutableDictionary dictionary];
+    long long writeId = 0;
+    NSString *why = [self simPrepareApply:docs expect:expect writeId:&writeId];
+    if (why) {
+        done(why);
+        return;
+    }
+    [self simConfirm:expect writeId:writeId then:done];
+}
+
+- (NSString *)simPrepareApply:(NSString *)docs expect:(NSMutableDictionary *)expect writeId:(long long *)writeId {
     NSString *restorePath = [docs stringByAppendingPathComponent:@"screen-restore.json"];
     if ([[NSFileManager defaultManager] fileExistsAtPath:restorePath])
         return @"screen-restore.json from an earlier sweep is still there; send restore first";
@@ -9123,8 +9218,7 @@ static const NSTimeInterval kSimConfigSettle = 1.0;
     }
     NSMutableArray *wasConfig = [NSMutableArray array];
     for (NSArray *c in want[@"config"]) {
-        if (![c isKindOfClass:[NSArray class]] || c.count != 3 || ![c[0] isKindOfClass:[NSString class]] ||
-            ![c[1] isKindOfClass:[NSString class]] || ![c[2] isKindOfClass:[NSString class]])
+        if (!simIsSetting(c))
             return @"a config entry isn't [group, key, value], all strings";
         NSString *cfg = [JVMLauncher mobilePluginConfig:c[0]];
         NSDictionary *desc = cfg.length ? parseBridgeJSON(cfg, "ViewController.simPrepare") : nil;
@@ -9134,44 +9228,67 @@ static const NSTimeInterval kSimConfigSettle = 1.0;
                 item = it;
         if (!item)
             return [NSString stringWithFormat:@"no setting %@.%@", c[0], c[1]];
+        if (![item[@"value"] isKindOfClass:[NSString class]])
+            return [NSString stringWithFormat:@"%@.%@ has no stored value, so a restore couldn't put it back", c[0], c[1]];
         if (![item[@"value"] isEqual:c[2]])
-            [wasConfig addObject:@[ c[0], c[1], item[@"value"] ?: [NSNull null] ]];
+            [wasConfig addObject:@[ c[0], c[1], item[@"value"] ]];
     }
     NSData *out = [NSJSONSerialization dataWithJSONObject:@{@"enable" : wasEnabled, @"config" : wasConfig}
                                                   options:NSJSONWritingPrettyPrinted
                                                     error:NULL];
     if (![out writeToFile:restorePath atomically:YES])
         return @"couldn't write screen-restore.json";
+    NSMutableDictionary *enable = [NSMutableDictionary dictionary];
     for (NSString *cls in wasEnabled)
-        [JVMLauncher mobileSetPluginEnabled:cls enabled:YES];
-    for (NSArray *c in want[@"config"])
-        [JVMLauncher mobileSetConfigGroup:c[0] key:c[1] value:c[2]];
+        enable[cls] = @YES;
+    // Whatever this gets through before a failure is in screen-restore.json, so a restore puts it back.
+    NSString *why = [self simApplyPlugins:enable config:want[@"config"] expect:expect writeId:writeId];
+    if (why)
+        return why;
     [self appendLine:[NSString stringWithFormat:@"[screen] prepare: switched on %lu plugin(s), changed %lu setting(s)",
                                                 (unsigned long)wasEnabled.count, (unsigned long)wasConfig.count]];
     return nil;
 }
 
-// "restore": put back what prepare saved in screen-restore.json, then delete it.
-- (NSString *)simRestore:(NSString *)path {
-    if (![[NSFileManager defaultManager] fileExistsAtPath:path])
-        return nil;
+// "restore": put back what prepare saved in screen-restore.json. The file is deleted only once the old values are in
+// the profile on disk, so a restore that fails or is cut short leaves it for the next one.
+- (void)simRestore:(NSString *)path then:(void (^)(NSString *why))done {
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        done(nil);
+        return;
+    }
     NSData *d = [NSData dataWithContentsOfFile:path];
     NSDictionary *was = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:NULL] : nil;
-    if (![was isKindOfClass:[NSDictionary class]])
-        return @"screen-restore.json is unreadable; it is left in place";
-    NSDictionary *enable = was[@"enable"];
-    for (NSString *cls in enable)
-        [JVMLauncher mobileSetPluginEnabled:cls enabled:[enable[cls] boolValue]];
-    for (NSArray *c in was[@"config"]) {
-        if ([c[2] isKindOfClass:[NSString class]])
-            [JVMLauncher mobileSetConfigGroup:c[0] key:c[1] value:c[2]];
-        else
-            [JVMLauncher mobileResetConfigGroup:c[0] key:c[1]]; // it was unset
+    NSDictionary *enable = [was isKindOfClass:[NSDictionary class]] ? was[@"enable"] : nil;
+    NSArray *config = [was isKindOfClass:[NSDictionary class]] ? was[@"config"] : nil;
+    BOOL ok = [enable isKindOfClass:[NSDictionary class]] && [config isKindOfClass:[NSArray class]];
+    for (id cls in ok ? enable : nil)
+        ok = ok && [cls isKindOfClass:[NSString class]] && [enable[cls] isKindOfClass:[NSNumber class]];
+    for (id c in ok ? config : nil)
+        ok = ok && simIsSetting(c);
+    if (!ok) {
+        done(@"screen-restore.json isn't what prepare writes; it is left in place");
+        return;
     }
-    [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
-    [self appendLine:[NSString stringWithFormat:@"[screen] restore: %lu plugin(s), %lu setting(s)",
-                                                (unsigned long)enable.count, (unsigned long)[was[@"config"] count]]];
-    return nil;
+    NSMutableDictionary *expect = [NSMutableDictionary dictionary];
+    long long writeId = 0;
+    NSString *why = [self simApplyPlugins:enable config:config expect:expect writeId:&writeId];
+    if (why) {
+        done(why);
+        return;
+    }
+    __weak typeof(self) ws = self;
+    [self simConfirm:expect
+             writeId:writeId
+                then:^(NSString *problem) {
+                    if (!problem) {
+                        [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+                        [ws appendLine:[NSString stringWithFormat:@"[screen] restore: %lu plugin(s), %lu setting(s)",
+                                                                  (unsigned long)enable.count,
+                                                                  (unsigned long)config.count]];
+                    }
+                    done(problem);
+                }];
 }
 
 // A sweep that died between prepare and restore leaves screen-restore.json behind. Every simulator launch, driven or
@@ -9193,11 +9310,12 @@ static const NSTimeInterval kSimConfigSettle = 1.0;
         return;
     done = YES;
     [self appendLine:@"[screen] an earlier sweep didn't restore its changes; restoring them now"];
-    [self simRestore:path];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kSimConfigSettle * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-                       [JVMLauncher mobileFlushConfig];
-                   });
+    __weak typeof(self) ws = self;
+    [self simRestore:path
+                then:^(NSString *why) {
+                    if (why)
+                        [ws appendLine:[NSString stringWithFormat:@"[screen] the restore at launch failed: %@", why]];
+                }];
 }
 
 // "config:<plugin>": open the plugin list, then that row's settings the way a tap on its gear does (or, for the
