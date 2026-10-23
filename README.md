@@ -20,6 +20,10 @@
 > you can afford to lose, never your main.** Provided **as-is, without warranty, at
 > your own risk.** See [Legal notice](#legal-notice) and [Risk & disclaimer](#risk--disclaimer).
 
+<p align="center">
+  <img src="docs/screenshots/hero.jpg" alt="RuneMobile running 117 HD on an iPhone and an Android phone">
+</p>
+
 ## Get it
 
 **iOS — one tap:** add the release feed to your sideloader, then hit Install inside it. The feed always
@@ -63,11 +67,28 @@ the official Jagex OSRS Mobile app.
 This is **not** a re-implementation, emulator, or skin. It is the authentic RuneLite
 engine and its plugins, with a native mobile UI layered on top.
 
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/overlays.jpg" alt="In game on Android with RuneLite overlays: ground item prices, hit splats, timers and the FPS counter"></td>
+    <td width="50%"><img src="docs/screenshots/plugins.jpg" alt="The native plugin list on iPhone, with each plugin's switch and settings"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/renderers.jpg" alt="The renderer picker on Android: CPU, GPU or 117 HD"></td>
+    <td width="50%"><img src="docs/screenshots/panels.jpg" alt="The World Switcher side panel open beside the game on iPhone"></td>
+  </tr>
+</table>
+
+Captured on a Pixel 7a, an iPhone 17 Pro Max and the iOS Simulator. To rebuild them from new captures, see
+[`tools/brand/make-showcase.py`](tools/brand/make-showcase.py).
+
 ---
 
 ## Contents
 
 - [Get it](#get-it)
+- [Screenshots](#screenshots)
 - [How it works](#how-it-works)
 - [Feature overview](#feature-overview)
 - [Platform status & supported devices](#platform-status--supported-devices)

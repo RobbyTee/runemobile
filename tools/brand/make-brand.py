@@ -28,7 +28,6 @@ import tempfile
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
-from scipy import ndimage as ndi
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 MASTER = os.path.join(ROOT, "docs/brand/runemobile-icon.png")
@@ -144,6 +143,7 @@ def feathered(master, side, feather):
 
 def silhouette(master):
     """The sword-R and flame-M as one clean mask (the stone's highlights, the sparks and the old rim dropped)."""
+    from scipy import ndimage as ndi  # only this step needs SciPy; make-showcase.py imports the rest without it
     a = np.asarray(master).astype(float)
     lum = 0.299 * a[..., 0] + 0.587 * a[..., 1] + 0.114 * a[..., 2]
     m = (lum > 100) & (sd_roundrect(SIZE, SIZE, 0.2 * SIZE) < -0.03 * SIZE)
