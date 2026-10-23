@@ -2,11 +2,8 @@
 // ^ must stay the FIRST line: on repeat inclusion the expanders (assembler + runtime ShaderIncludes) emit
 //   everything BEFORE the pragma, so a banner above it would be duplicated per include site.
 /*
- * Copyright (c) 2021, 117 <https://twitter.com/117scape>
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without modification, are permitted provided that
- * the conditions of the BSD 2-clause license are met.
+ * From RLHD (https://github.com/117HD/RLHD), BSD 2-Clause License, Copyright (c) 2021, 117: the full text is in
+ * ios/dev-tools/gpu-zone/rlhd-src/LICENSE. The upstream file has no header of its own.
  *
  * ===========================================================================================================
  * iOS ES-3.0 OVERRIDE (gpu-zone B0.5, materials subsystem). Apple's GLES-on-Metal caps a uniform block at
@@ -17,14 +14,17 @@
  *     texel x = scalar slot group (0..5), texel y = material index.
  * The Java side uploads the UBO ByteBuffer verbatim into the texture (java-overrides MaterialManager
  * .uploadMaterialStore(), texture unit TEXTURE_UNIT_MATERIAL_STORE) — so the decode below MUST match the
- * UniformBuffer.PropertyType std140 packing: 8 ints @0..28, 5 floats @32..48, pad @52, vec2 @56, vec2 @64,
+ * UniformBuffer.PropertyType std140 packing: 8 ints @0..28, 6 floats @32..52, vec2 @56, vec2 @64,
  * pad @72, vec3 @80, struct pad to 96. The struct, field order and the flags helpers are verbatim RLHD
- * @7dded59. getMaterial(i) becomes a real function (replaces the generated MATERIAL_GETTER include — the
+ * v1.6.0.1. getMaterial(i) becomes a real function (replaces the generated MATERIAL_GETTER include — the
  * MAT_* constants from MATERIAL_CONSTANTS expand to getMaterial(N) and keep working unchanged). The UBO
  * block is gone entirely, so the 16 KB cap no longer applies; the Java-side glBindBufferBase of the dead
  * block is harmless (ShaderProgram skips absent blocks). RE-MERGE on RLHD rev bumps.
  * ===========================================================================================================
  */
+
+#include <utils/misc.glsl>
+
 #include MATERIAL_COUNT
 
 struct Material {
@@ -36,6 +36,7 @@ struct Material {
     int flowMap;
     int shadowAlphaMap;
     int flags; // overrideBaseColor << 2 | unlit << 1 | hasTransparency
+    float subsurface;
     float brightness;
     float displacementScale;
     float specularStrength;
@@ -64,12 +65,12 @@ Material getMaterial(int i) {
     m.flowMap = t1.y;
     m.shadowAlphaMap = t1.z;
     m.flags = t1.w;
-    m.brightness = intBitsToFloat(t2.x);
-    m.displacementScale = intBitsToFloat(t2.y);
-    m.specularStrength = intBitsToFloat(t2.z);
-    m.specularGloss = intBitsToFloat(t2.w);
-    m.flowMapStrength = intBitsToFloat(t3.x);
-    // t3.y = std140 pad (vec2 aligns to 8 bytes)
+    m.subsurface = intBitsToFloat(t2.x);
+    m.brightness = intBitsToFloat(t2.y);
+    m.displacementScale = intBitsToFloat(t2.z);
+    m.specularStrength = intBitsToFloat(t2.w);
+    m.specularGloss = intBitsToFloat(t3.x);
+    m.flowMapStrength = intBitsToFloat(t3.y);
     m.flowMapDuration = vec2(intBitsToFloat(t3.z), intBitsToFloat(t3.w));
     m.scrollDuration = vec2(intBitsToFloat(t4.x), intBitsToFloat(t4.y));
     // t4.zw = std140 pad (vec3 aligns to 16 bytes)

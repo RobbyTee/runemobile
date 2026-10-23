@@ -1,5 +1,5 @@
 /*
- * iOS ES-3.0 OVERRIDE (gpu-zone B1, tiled lighting). Copy of rs117/hd/tiled_lighting_vert.glsl @ RLHD 7dded59
+ * iOS ES-3.0 OVERRIDE (gpu-zone B1, tiled lighting). Copy of rs117/hd/tiled_lighting_vert.glsl @ RLHD v1.6.0.1
  * with the int literals in the gl_Position vec4 made explicit float (ES is strict in constructors that mix types
  * across the conversion). Fullscreen-triangle passthrough; logic identical. RE-MERGE on RLHD rev bumps.
  */

@@ -5,6 +5,15 @@
 > Clones the proven `gpu-b1` pattern (xcodegen + EAGL offscreen compile + md5-sealed verdict). Backend = **EAGL**
 > (the 2026-06-09 device A/B locked EAGL + `gl_FragDepth`; ANGLE is not used).
 
+> **Current shader gate (RLHD v1.6.0.1 on):** `tools/shader-matrix/run-matrix.sh ios` (verdict `SHADER_MATRIX_GREEN`;
+> `android` runs the same matrix against Android's overlay and `librlawt.cpp` downport). It
+> assembles every program the zone renderer builds through the real `HdPlugin.getShaderIncludes()`, in 11 config
+> variants. Then it applies the `RouteCBridge` downport (the tables are parsed out of the bridge) and validates every stage
+> with glslang. It also flags ES 3.1+ built-ins and samplers left at the default precision. Run it after any change
+> to `ios-overrides/`, the bridge's downport tables or the RLHD pin; the simulator (`../sim-gate.sh`) and the phone
+> remain the authority. The Z0 harness below is the B0 bring-up record: its assembler, its fixed define map and
+> the tracked `rlhd-src/shaders/` subset stay at `7dded59` and are not maintained.
+
 ## Layout
 
 - `rlhd-src/` — vendored RLHD @ `7dded59` (BSD-2): `shaders/hd/**/*.glsl` (47 zone shaders, `#include`/`#define`

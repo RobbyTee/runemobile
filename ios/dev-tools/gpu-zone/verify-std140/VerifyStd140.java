@@ -34,11 +34,12 @@ public class VerifyStd140 {
 		{ "flowMap", "20" },              // t1.y
 		{ "shadowAlphaMap", "24" },       // t1.z
 		{ "flags", "28" },                // t1.w
-		{ "brightness", "32" },           // t2.x
-		{ "displacementScale", "36" },    // t2.y
-		{ "specularStrength", "40" },     // t2.z
-		{ "specularGloss", "44" },        // t2.w
-		{ "flowMapStrength", "48" },      // t3.x (t3.y = pad)
+		{ "subsurface", "32" },           // t2.x
+		{ "brightness", "36" },           // t2.y
+		{ "displacementScale", "40" },    // t2.z
+		{ "specularStrength", "44" },     // t2.w
+		{ "specularGloss", "48" },        // t3.x
+		{ "flowMapStrength", "52" },      // t3.y
 		{ "flowMapDuration", "56" },      // t3.zw
 		{ "scrollDuration", "64" },       // t4.xy (t4.zw = pad)
 		{ "textureScale", "80" },         // t5.xyz (t5.w = pad)

@@ -651,6 +651,8 @@ static BOOL rcBuildFbo(int w, int h)
 
 // ---- shader downport (Route C 2E) — desktop GLSL 330 -> GLSL ES 3.00 (the 5 B1 edits, proven to compile+link
 // +render on GLES 3.00). Applied at glShaderSource time on the unmodified base `gpu` plugin's shaders. ----
+// Fenced so the formatter keeps this file's tab style and the rlhdCasts table shape tools/shader-matrix parses.
+// clang-format off
 + (NSString *)downportShaderSource:(NSString *)src fragment:(BOOL)fragment
 {
 	if (!src)
@@ -670,12 +672,12 @@ static BOOL rcBuildFbo(int w, int h)
 	NSRegularExpression *ver = [NSRegularExpression regularExpressionWithPattern:@"(?m)^[ \\t]*#version[^\\n]*\\n?"
 		options:0 error:&err];
 	[ver replaceMatchesInString:s options:0 range:NSMakeRange(0, s.length) withTemplate:@""];
-	// Precision: the full sampler set RLHD declares (usampler/isampler 2D + 2DArray + sampler2DShadow). ES 3.0
-	// requires a precision qualifier for EVERY sampler type used; declaring unused ones is harmless for the base
-	// plugin's shaders. (Z0 gate: dev-tools/gpu-zone/assemble/ZoneShaderAssemble.java.)
+	// Precision: the full sampler set RLHD declares (usampler/isampler 2D + 2DArray + sampler2DShadow, and v1.6's
+	// samplerCube for the sky). ES 3.0 requires a precision qualifier for EVERY sampler type used except sampler2D
+	// and samplerCube, which default to lowp; declaring unused ones is harmless for the base plugin's shaders. (Z0 gate: dev-tools/gpu-zone/assemble/ZoneShaderAssemble.java.)
 	NSString *header = fragment
-		? @"#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp sampler2DArray;\nprecision highp isampler2D;\nprecision highp isampler2DArray;\nprecision highp usampler2D;\nprecision highp usampler2DArray;\nprecision highp sampler2DShadow;\n"
-		: @"#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp sampler2DArray;\nprecision highp isampler2D;\nprecision highp isampler2DArray;\nprecision highp usampler2D;\nprecision highp usampler2DArray;\n";
+		? @"#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp sampler2DArray;\nprecision highp isampler2D;\nprecision highp isampler2DArray;\nprecision highp usampler2D;\nprecision highp usampler2DArray;\nprecision highp sampler2DShadow;\nprecision highp samplerCube;\n"
+		: @"#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp sampler2DArray;\nprecision highp isampler2D;\nprecision highp isampler2DArray;\nprecision highp usampler2D;\nprecision highp usampler2DArray;\nprecision highp samplerCube;\n";
 	[s insertString:header atIndex:0];
 
 	// 3) drop `noperspective` (not in ES).
@@ -727,13 +729,15 @@ static BOOL rcBuildFbo(int w, int h)
 	if ([s containsString:@"textureFaces"])
 	{
 		NSRegularExpression *tfDecl = [NSRegularExpression regularExpressionWithPattern:@"uniform\\s+isamplerBuffer\\s+textureFaces\\s*;" options:0 error:&err];
-		[tfDecl replaceMatchesInString:s options:0 range:NSMakeRange(0, s.length) withTemplate:@"uniform highp isampler2D textureFaces;"];
+		// RC_TEXTURE_FACES marks the declaration, so the width local below exists only where the uniform does
+		// (RLHD v1.6's terrain-shadow pass compiles shadow_vert with the declaration under #if !TERRAIN_ONLY_PASS).
+		[tfDecl replaceMatchesInString:s options:0 range:NSMakeRange(0, s.length) withTemplate:@"uniform highp isampler2D textureFaces;\n#define RC_TEXTURE_FACES 1"];
 		NSRange mainR = [s rangeOfString:@"void main()"];
 		if (mainR.location != NSNotFound)
 		{
 			NSRange brace = [s rangeOfString:@"{" options:0 range:NSMakeRange(mainR.location, s.length - mainR.location)];
 			if (brace.location != NSNotFound)
-				[s insertString:@"\n  int tfW = textureSize(textureFaces, 0).x;" atIndex:brace.location + 1];
+				[s insertString:@"\n#ifdef RC_TEXTURE_FACES\n  int tfW = textureSize(textureFaces, 0).x;\n#endif" atIndex:brace.location + 1];
 		}
 		NSRegularExpression *tfFetch = [NSRegularExpression regularExpressionWithPattern:@"texelFetch\\(\\s*textureFaces\\s*,\\s*([^(),]+?)\\s*\\)" options:0 error:&err];
 		[tfFetch replaceMatchesInString:s options:0 range:NSMakeRange(0, s.length) withTemplate:@"texelFetch(textureFaces, ivec2(($1)%tfW,($1)/tfW), 0)"];
@@ -819,6 +823,30 @@ static BOOL rcBuildFbo(int w, int h)
 			@[@"float lighten = max(0, lightness - IGNORE_LOW_LIGHTNESS);", @"float lighten = float(max(0, lightness - IGNORE_LOW_LIGHTNESS));"],
 			@[@"int(127 - 72 * pow(saturation / 7., .05))", @"int(127.0 - 72.0 * pow(float(saturation) / 7., .05))"],
 			@[@"(lighten * LIGHTNESS_MULTIPLIER + BASE_LIGHTEN - lightness) * vanillaLightDotNormals", @"(lighten * float(LIGHTNESS_MULTIPLIER) + float(BASE_LIGHTEN) - float(lightness)) * vanillaLightDotNormals"],
+			// RLHD v1.6.0.1: scattered sites in the un-overridden programs (scene, shadow, ui, sky, star, nebula
+			// bake). The cast-heavy includes are ios-overrides instead. PI is a float `f` literal, so TAU's int 2
+			// is the one int<->float site behind most starfield / sky / PCSS errors.
+			@[@"#define TAU (2*PI)", @"#define TAU (2.0*PI)"],
+			@[@"vec2 pos = vec2((gl_VertexID & 1) * 4.0 - 1.0, (gl_VertexID & 2) * 2.0 - 1.0);", @"vec2 pos = vec2(float(gl_VertexID & 1) * 4.0 - 1.0, float(gl_VertexID & 2) * 2.0 - 1.0);"],  // sky_vert, sky_nebula_bake_vert
+			@[@"ivec2 cam = ivec2(uboGlobal.cameraPos.xz / CHUNK_SIZE)", @"ivec2 cam = ivec2(uboGlobal.cameraPos.xz / float(CHUNK_SIZE))"],  // scene_vert water clamp
+			@[@"ivec2 d = ivec2(abs(worldPosition.xz - cam) / TILE_SIZE);", @"ivec2 d = ivec2(abs(worldPosition.xz - vec2(cam)) / float(TILE_SIZE));"],
+			@[@"int(uboGlobal.drawDistance / 8) * 8 + 3", @"int(uboGlobal.drawDistance / 8.0) * 8 + 3"],
+			@[@"worldPosition.y -= waterDepth;", @"worldPosition.y -= float(waterDepth);"],
+			@[@"worldPosition += vNormal.xyz * 0.0002 * (windingReversed ? 1 : -1);", @"worldPosition += vNormal.xyz * 0.0002 * (windingReversed ? 1.0 : -1.0);"],  // shadow_vert
+			@[@"return -(uboGlobal.sceneBase + IN.position.xz) / (128 * scale);", @"return -(vec2(uboGlobal.sceneBase) + IN.position.xz) / (128.0 * scale);"],  // scene_frag worldUvs
+			@[@"waterDepth1 * fTexBlend.x", @"float(waterDepth1) * fTexBlend.x"],
+			@[@"waterDepth2 * fTexBlend.y", @"float(waterDepth2) * fTexBlend.y"],
+			@[@"waterDepth3 * fTexBlend.z", @"float(waterDepth3) * fTexBlend.z"],
+			@[@"vec3 underlayBlend = fTexBlend * isUnderlay;", @"vec3 underlayBlend = fTexBlend * vec3(isUnderlay);"],
+			@[@"vec3 overlayBlend = fTexBlend * isOverlay;", @"vec3 overlayBlend = fTexBlend * vec3(isOverlay);"],
+			@[@"float result = dot(fTexBlend, isPrimary);", @"float result = dot(fTexBlend, vec3(isPrimary));"],
+			@[@"outputColor.b = floor(outputColor.b * 127) / 127;", @"outputColor.b = floor(outputColor.b * 127.0) / 127.0;"],
+			@[@"ceil(1.0 * uboUi.targetDimensions.x / uboUi.sourceDimensions.x)", @"ceil(1.0 * float(uboUi.targetDimensions.x) / float(uboUi.sourceDimensions.x))"],  // ui_frag xBR
+			@[@"float dx = (1.0/sourceDimensions.x);", @"float dx = (1.0/float(sourceDimensions.x));"],  // RLHD scaling/xbr_lv2_vert
+			@[@"float dy = (1.0/sourceDimensions.y);", @"float dy = (1.0/float(sourceDimensions.y));"],
+			@[@"uv *= uboUi.sourceDimensions;", @"uv *= vec2(uboUi.sourceDimensions);"],  // scaling/hybrid
+			@[@"interpolationAmount) / uboUi.sourceDimensions);", @"interpolationAmount) / vec2(uboUi.sourceDimensions));"],
+			@[@"0.65 * tuning.b * 2 * altitudeScale", @"0.65 * tuning.b * 2.0 * altitudeScale"],  // star_vert
 	];
 	for (NSArray<NSString *> *c in rlhdCasts)
 		[s replaceOccurrencesOfString:c[0] withString:c[1] options:0 range:NSMakeRange(0, s.length)];
@@ -929,5 +957,6 @@ static BOOL rcBuildFbo(int w, int h)
 
 	return [s copy];
 }
+// clang-format on
 
 @end
