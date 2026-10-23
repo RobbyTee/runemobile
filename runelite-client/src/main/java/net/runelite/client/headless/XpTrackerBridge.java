@@ -163,6 +163,8 @@ public final class XpTrackerBridge
 			final StringBuilder sb = new StringBuilder(4096);
 			sb.append("{\"available\":true,\"skills\":[");
 			boolean first = true;
+			// getSkillSnapshot creates an untracked skill's entry (start XP -1). That is harmless: XpState treats it
+			// the same as no entry, and the plugin's own game tick and rebuildSkills() do the same for every skill.
 			for (Skill skill : Skill.values())
 			{
 				try
