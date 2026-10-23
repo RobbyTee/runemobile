@@ -51,7 +51,7 @@ void main() {
     float dotIndex = floor(mod(uv.x + float(numDots) / 2. + 1.0, float(numDots + 1)));
     vec2 dotUv = uv;
     dotUv.x = fract(dotUv.x + .5) - .5;
-    float dot = smoothstep(dotRadius, dotRadius - lineFeather, length(dotUv));
+    float dot = 1.0 - smoothstep(dotRadius - lineFeather, dotRadius, length(dotUv)); // edge0 < edge1: reversed edges are undefined in GLSL ES
     dot *= mix(minBrightness, 1.0, (dotIndex - 1.0) / float(numDots - 1));
     dot = pow(dot, gammaCorrection);
     src.rgb += vec3(dot);
