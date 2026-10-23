@@ -1349,7 +1349,7 @@ public final class MobileUiBridge
 				{
 					final ConfigDescriptor cd = configManager.getConfigDescriptor(proxy);
 					group = cd.getGroup().value();
-					hasConfig = !cd.getItems().isEmpty();
+					hasConfig = hasShownItems(cd);
 				}
 			}
 			catch (RuntimeException ex)
@@ -1473,6 +1473,28 @@ public final class MobileUiBridge
 		return RuneLiteConfig.GROUP_NAME.equals(group) && RUNELITE_HIDDEN_KEYS.contains(key);
 	}
 
+	/**
+	 * True for an item the native config editor shows. Desktop ConfigPanel skips hidden() items, and the window-chrome
+	 * / hardware-input items in the RuneLite core group are N/A on a fullscreen touch app (opacity, tray,
+	 * always-on-top, window resize, sidebar/panel keybinds, extra mouse buttons). listPlugins' hasConfig uses the same
+	 * test, so a plugin gets a settings screen only when there is something on it.
+	 */
+	private static boolean isShownItem(String group, ConfigItemDescriptor item)
+	{
+		return !item.getItem().hidden() && !isMobileHiddenItem(group, item.key());
+	}
+
+	/**
+	 * listPlugins' hasConfig: the config editor would show at least one item. Counting every item gave Notes, whose
+	 * one item (the notes text) is hidden, a settings screen holding nothing but "Reset all settings", which wipes
+	 * the notes.
+	 */
+	static boolean hasShownItems(ConfigDescriptor cd)
+	{
+		final String group = cd.getGroup().value();
+		return cd.getItems().stream().anyMatch(item -> isShownItem(group, item));
+	}
+
 	/** The set of pinned (favourite) plugin display names, comma-stripped — the shared desktop {@code pinnedPlugins} CSV. */
 	private static Set<String> pinnedNames()
 	{
@@ -1547,19 +1569,12 @@ public final class MobileUiBridge
 		final Json out = new Json().obj().kv("group", group).key("items").arr();
 		for (ConfigItemDescriptor item : cd.getItems())
 		{
+			if (!isShownItem(group, item))
+			{
+				continue;
+			}
 			final ConfigItem ci = item.getItem();
-			if (ci.hidden())
-			{
-				// Desktop ConfigPanel skips hidden() items; match that so the native panel never shows them.
-				continue;
-			}
 			final String key = item.key();
-			if (isMobileHiddenItem(group, key))
-			{
-				// Window-chrome / hardware-input items in the RuneLite core group are N/A on a fullscreen touch
-				// app (opacity, tray, always-on-top, window resize, sidebar/panel keybinds, extra mouse buttons).
-				continue;
-			}
 			final Type type = item.getType();
 			final boolean secret = ci.secret();
 			out.obj()
