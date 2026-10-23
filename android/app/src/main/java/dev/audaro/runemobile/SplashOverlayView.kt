@@ -1,6 +1,8 @@
 package dev.audaro.runemobile
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -82,6 +84,11 @@ class SplashOverlayView(
 
     private val spinnerRect = RectF()
 
+    // The RuneMobile logo, drawn above the card when the screen has room (a nodpi bitmap, scaled into a dp square).
+    private val logo: Bitmap? = BitmapFactory.decodeResource(resources, R.drawable.runemobile_logo)
+    private val logoPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val logoRect = RectF()
+
     init {
         isClickable = false
         isFocusable = false
@@ -145,9 +152,18 @@ class SplashOverlayView(
         val cardW = minOf(if (errorMode) dp(340f) else dp(280f), vw - dp(48f))
         val cardH = if (errorMode) dp(96f) + errorLines.size * lineH else dp(180f)
         val cx = vw / 2f
-        val top = (vh - cardH) / 2f
+        // Logo + gap + card are centred as one group; a screen too short for the logo centres the card alone.
+        val logoSize = dp(72f)
+        val logoGap = dp(16f)
+        val shownLogo = logo?.takeIf { cardH + logoGap + logoSize <= vh - dp(16f) }
+        val top = (vh - cardH + if (shownLogo != null) logoGap + logoSize else 0f) / 2f
         val left = cx - cardW / 2f
         val r = dp(10f)
+        if (shownLogo != null) {
+            val logoTop = top - logoGap - logoSize
+            logoRect.set(cx - logoSize / 2f, logoTop, cx + logoSize / 2f, logoTop + logoSize)
+            canvas.drawBitmap(shownLogo, null, logoRect, logoPaint)
+        }
         canvas.drawRoundRect(left, top, left + cardW, top + cardH, r, r, cardPaint)
         canvas.drawRoundRect(left, top, left + cardW, top + cardH, r, r, borderPaint)
 
