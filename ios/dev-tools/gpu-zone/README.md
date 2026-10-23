@@ -45,7 +45,9 @@ minimal-config define map AND applies the **GLSL 330→ES 3.00 downport** (the s
 as-is). The `MAX_SIMULTANEOUS_WORLD_VIEWS`/`WORLD_VIEW_GETTER` overrides `ZoneRenderer.addShaderIncludes()` does and
 the `MATERIAL_CONSTANTS` named-material defines are replicated in the config. **`ios-overrides/`** shadow-dir
 (resolved before `rlhd-src/`) holds hand-maintained ES3 copies of pervasively cast-heavy files
-(`utils/color_utils.glsl`). **`glslang-check.sh`** = an offline fast-filter (glslang at `#version 310 es` to suppress
+(`utils/color_utils.glsl`), and since 2026-10-22 the five `overlays/` shaders, copied from Android's
+`android/dev-tools/gpu/shader-overlay/` ports. Without them the gamma-calibration overlay, the one 117HD compiles at
+startup, failed every launch (`smoothstep(int, float, float)`). **`glslang-check.sh`** = an offline fast-filter (glslang at `#version 310 es` to suppress
 its interface-block false-positives) that reports many #13 sites per pass — works for shadow/ui, but **not scene**
 (glslang bails at scene's in/out interface blocks, which Apple's EAGL accepts).
 

@@ -131,6 +131,8 @@ cp -R "$WORK/rlhd_out/." "$WORK/jar/"
 #     scene/shadow shaders match the Z0 assembled ES300 (which compiled+linked on device). The targeted per-site
 #     casts + textureFaces TBO repack are applied at glShaderSource time by RouteCBridge downportShaderSource.
 #     ios-overrides/utils/foo.glsl -> rs117/hd/utils/foo.glsl. Keeps rlhd-src untouched (committed + reproducible).
+#     ios-overrides/overlays/ holds the ShaderOverlay shaders (gamma calibration + the debug overlays), copied from
+#     Android's shader-overlay ports.
 OVERLAY="$(pwd)/ios-overrides"
 if [ -d "$OVERLAY" ]; then
 	mkdir -p "$WORK/jar/rs117/hd"
