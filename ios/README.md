@@ -114,6 +114,14 @@ Run it before a release, after an upstream merge, and after a shader or
 renderer change. The Python checks run under `/usr/bin/python3` and need
 Pillow and numpy.
 
+On 117 HD, the first entry into the world freezes the game for a minute or
+more, because Apple's software renderer compiles each shader the first time
+something is drawn with it. The freeze outlasts the server's timeout, so the
+connection drops once and the app logs back in. That is the simulator, not a
+bug; the gate only boots 117 HD to the login screen. To check the 117 HD
+shaders themselves without a phone, use
+[`tools/shader-matrix/`](../tools/shader-matrix/README.md).
+
 The simulator build retags the bundled JRE as a simulator binary
 (`app/scripts/resign-jre.sh`), and the app services HotSpot's code-cache
 breakpoint in-process instead of waiting for the debugger (`JVMLauncher.m`,

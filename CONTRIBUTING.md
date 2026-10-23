@@ -137,9 +137,22 @@ Good to know:
   The simulator window has to be in landscape (Device > Rotate Left).
 - The Python checks run under `/usr/bin/python3` and need Pillow and numpy.
 - Every gate launch is logged out, so the gate never logs into the game, even when the simulator holds a session.
+- On 117 HD, the first entry into the world freezes the game for a minute or more: Apple's software renderer
+  compiles each shader the first time something is drawn with it. The freeze outlasts the server's timeout, so
+  the connection drops once and the app logs back in. That is the simulator, not a bug. The gate only boots
+  117 HD to the login screen, so it never waits on this.
 
 It is not a phone. It can't show performance, the StikDebug JIT path, the phone's GPU driver (the simulator draws
 the GPU modes with Apple's software renderer), multi-touch, or backgrounding. Check those on a device.
+
+## Checking the 117 HD shaders
+
+117 HD builds its shaders at run time, and each phone rewrites them for its own GL in native code, so a desktop
+build never compiles them as a phone does. `tools/shader-matrix/run-matrix.sh ios` and `run-matrix.sh android`
+repeat both steps on the Mac and validate every stage with glslang, across 11 combinations of 117 HD settings,
+in a minute or two per port and with no phone. Run them after changing a shader override or a port's shader rewrite, and on
+both ports after moving the 117 HD pin. [`tools/shader-matrix/`](tools/shader-matrix/README.md) explains what
+they check and what they don't.
 
 ## Conventions
 
