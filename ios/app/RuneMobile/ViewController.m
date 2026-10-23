@@ -8971,6 +8971,9 @@ static UIView *simBlankView;
                                               encoding:NSUTF8StringEncoding
                                                  error:NULL];
     cmd = [cmd stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    // No file yet: check before rangeOfString:, which on a nil string returns {0, 0}, not NSNotFound.
+    if (!cmd.length)
+        return;
     NSRange sp = [cmd rangeOfString:@" "];
     if (sp.location == NSNotFound)
         return;
