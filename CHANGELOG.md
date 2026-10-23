@@ -14,6 +14,8 @@ as "What's new".
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-10-23
+
 ### Fixed
 - Since 0.2.0, the 117 HD settings screen showed Entity Hider's settings (Hide others, Hide NPCs, …) instead
   of its own, and its "Reset all settings" reset Entity Hider. 117HD needs Entity Hider to load, and the app
@@ -251,6 +253,7 @@ OAuth + RuneLite-account sync, native HUD/chat/tab-grid veneers, plugin panel.
 - Release signing: a dedicated key via `keystore.properties` when present, else
   the debug key (see `keystore.properties.example`).
 
-[Unreleased]: https://github.com/audaro/runemobile/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/audaro/runemobile/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/audaro/runemobile/compare/v0.2.6...v0.2.7
 [0.2.0]: https://github.com/audaro/runemobile/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/audaro/runemobile/releases/tag/v0.1.0
