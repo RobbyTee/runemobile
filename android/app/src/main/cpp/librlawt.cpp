@@ -294,9 +294,12 @@ static std::string rc_downport(const std::string &src) {
     //     `\d+\.\d*[fF]` wrongly eats the `f` in `material1.flowMap` (matches "1.f") -> "material1.lowMap".
     body = std::regex_replace(body, std::regex("(\\d*\\.\\d+|\\d+\\.\\d*)[fF](?![a-zA-Z0-9_])"), "$1");
     for (auto &c : kSceneVertexCasts) rc_replace_all(body, c[0], c[1]);                // (5) explicit casts
+    // sampler2DShadow (RLHD v1.6 hardware shadow filtering) and samplerCube (the v1.6 nebula sky) are core ES 3.0
+    // types: sampler2DShadow has no default precision at all, and samplerCube's default is lowp.
     std::string precision =
         "precision highp float;\nprecision highp int;\n"
-        "precision highp sampler2DArray;\nprecision highp usampler2DArray;\nprecision highp sampler2D;\n";
+        "precision highp sampler2DArray;\nprecision highp usampler2DArray;\nprecision highp sampler2D;\n"
+        "precision highp sampler2DShadow;\nprecision highp samplerCube;\n";
     // GLSL ES needs a default precision for EVERY sampler type used. RLHD's Zone vertex/shadow shaders use a
     // texture-buffer sampler (isamplerBuffer textureFaces) — add its precision, but only when the shader actually
     // uses one (the buffer-sampler types are unknown on a driver without texture_buffer, so don't emit it otherwise).

@@ -113,6 +113,7 @@ cp -R "$WORK/rlhd_out/." "$WORK/jar/"
 # float contexts that strict GLSL ES rejects). The overlay holds full fixed copies that replace the pristine
 # rlhd-src ones — committed + reproducible, keeping rlhd-src untouched. (rc_downport still handles version/
 # precision/noperspective at load; the overlay handles the int->float typing the downport can't do safely.)
+# Gate the overlay with `tools/shader-matrix/run-matrix.sh android` after any change to it, to rc_downport or to RLHD_REV.
 OVERLAY="$(pwd)/shader-overlay"
 if [ -d "$OVERLAY" ]; then
 	cp -R "$OVERLAY/." "$WORK/jar/"
