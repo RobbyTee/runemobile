@@ -63,7 +63,7 @@ app = {
         "JIT must be attached with StikDebug at each launch."
     ),
     "iconURL": f"https://raw.githubusercontent.com/{repo}/master/docs/brand/runemobile-icon.png",
-    "tintColor": "E6B14C",
+    "tintColor": "E8620C",
     "screenshotURLs": [],
     "versions": [entry],
     # Legacy top-level fields: older AltStore builds read these instead of versions[].
@@ -79,7 +79,7 @@ src = {
     "subtitle": "Old School RuneScape with RuneLite plugins, on iOS.",
     "sourceURL": f"https://github.com/{repo}/releases/latest/download/altstore.json",
     "iconURL": app["iconURL"],
-    "tintColor": "E6B14C",
+    "tintColor": "E8620C",
     "apps": [app],
     "news": [],
 }
