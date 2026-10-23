@@ -3,9 +3,9 @@
 #
 #   bridge-census-verdict.sh <result.txt> [lookups.tsv]
 #
-# GREEN when the result checked exactly the lookups the native source makes and every one resolved. Without a list
-# it extracts one from the tree as it is now, so a result from an older build (it checked a different set) is RED:
-# rerun the census. Exits 0 exactly when GREEN; the last line is VERDICT: IOS_BRIDGE_CENSUS_GREEN or _RED.
+# GREEN when the result checked exactly the lookups the native source makes, every one resolved, and the client had
+# drawn a frame first. Without a list it extracts one from the tree as it is now, so a result from an older build (it
+# checked a different set) is RED: rerun the census. Exits 0 exactly when GREEN; the last line is VERDICT: IOS_BRIDGE_CENSUS_GREEN or _RED.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -46,6 +46,8 @@ awk -F'\t' 'NF { print $1 "\t" $2 "\t" $3 "\t" $4 }' "$LIST" | LC_ALL=C sort > "
 WANT="$(wc -l < "$TMP/want" | tr -d ' ')"
 GOT="$(wc -l < "$TMP/got" | tr -d ' ')"
 [ "$GOT" = "$CHECKED" ] || red "DONE says checked=$CHECKED but the result has $GOT entries"
+MISSING_ROWS="$(grep -c '^MISSING	' "$RESULT")"
+[ "$MISSING_ROWS" = "$MISSING" ] || red "DONE says missing=$MISSING but the result has $MISSING_ROWS MISSING entries"
 grep '^MISSING' "$RESULT" | cut -f2- | tr '\t' ' ' | sed 's/^/   missing: /'
 if ! cmp -s "$TMP/got" "$TMP/want"; then
   ONLY_SRC="$(LC_ALL=C comm -13 "$TMP/got" "$TMP/want" | wc -l | tr -d ' ')"
@@ -54,12 +56,16 @@ if ! cmp -s "$TMP/got" "$TMP/want"; then
   red "the result is for a different build ($ONLY_SRC source lookups not checked, $ONLY_RES checked lookups not in the source). Rerun the census."
 fi
 [ "$MISSING" = 0 ] || red "$MISSING of $CHECKED lookups did not resolve"
+# The app runs the lookups once the client has drawn a frame, so they initialize classes the way a normal session
+# does. With no frame they ran early (or the client never booted): not a result to pass.
+case "$SEQ" in
+  '' | *[!0-9]* | 0) red "the client drew no frame within ${WAITED} ms (frameSeq=${SEQ:-?}), so the lookups did not run in a booted client" ;;
+esac
 
 BODY="$(grep -E '^(OK|MISSING)	' "$RESULT" | cut -f1-5 | LC_ALL=C sort)"
 MD5="$(printf '%s' "$BODY" | md5)"
 echo "result=$RESULT"
 echo "checked=$CHECKED missing=$MISSING (list $WANT) first frame after ${WAITED} ms, seq $SEQ"
 echo "census_md5=$MD5"
-[ "${SEQ:-0}" -gt 0 ] || echo "   note: no frame was drawn within the wait, so the lookups ran before the client finished booting."
 echo "IOS_BRIDGE_CENSUS_GREEN md5=$MD5"
 echo "VERDICT: IOS_BRIDGE_CENSUS_GREEN"

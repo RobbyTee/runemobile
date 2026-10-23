@@ -24,9 +24,9 @@ It ends with `VERDICT: IOS_BRIDGE_CENSUS_GREEN` (exit 0) or `_RED` (exit 1). Out
 3. In the app (`JVMLauncher.m`, `simBridgeCensusRun`, simulator builds only), a thread waits for the client's first
    frame, then resolves every entry in the running VM, the same way the app's own lookups do, and writes
    `Documents/bridge-census-result.txt`: `OK` or `MISSING` (with the JVM's error) per entry, then a `DONE` line.
-4. `bridge-census-verdict.sh <result> [list]` adjudicates. GREEN needs every entry resolved and the result to cover
-   exactly the lookups the source makes now; a result from an older build is RED. Without a list it extracts one from
-   the current tree.
+4. `bridge-census-verdict.sh <result> [list]` adjudicates. GREEN needs every entry resolved, the result to cover
+   exactly the lookups the source makes now (a result from an older build is RED), and the client to have drawn a
+   frame before the lookups ran. Without a list it extracts one from the current tree.
 
 One run covers every renderer: CPU, GPU and 117HD share one classpath. The L1 test probe's own classpath is left
 out.
