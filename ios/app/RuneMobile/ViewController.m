@@ -8933,13 +8933,30 @@ static CGRect mapRectFromArr(NSArray *a) {
 // way its button does, and logs "[screen] ready <seq> <screen>" once the screen has settled, or
 // "[screen] failed <seq> <screen>: <why>". The script screenshots after "ready", then writes the next command;
 // "<seq> -" only closes. -RMBlankGame YES covers the game picture (not the native chrome on it), so a golden
-// compares native UI only.
+// compares native UI only. Screens: see simOpenScreen (settings, plugins, plugins:<search>, panel:<tooltip>,
+// config:<plugin>, ...).
+//
+// Just before "ready" it also logs "[screen] info <seq> <json>": what the screen shows (simScreenInfo), which the
+// plugin sweep (sim-screens/plugin-sweep.py) uses to tell a blank screen from a full one without a golden per
+// plugin. Three commands open nothing:
+//   inventory  writes Documents/screen-inventory.json, the plugin list and the rail's panels, for the sweep to walk;
+//   prepare    applies Documents/screen-prepare.json, {"enable": [plugin class names], "config": [[group, key,
+//              value]]}, so panels this config hides (a plugin switched off, a button only shown in one place) get
+//              swept too. It first saves what it changes to screen-restore.json;
+//   restore    puts that back. The next simulator launch does too, if a sweep died before it got there.
 
 static NSString *simScreenSeq;    // the last command's seq
 static NSString *simScreenOpened; // "<seq> <screen>" opened and not yet reported ready
 static CFTimeInterval simScreenOpenedAt;
 static CFTimeInterval simScreenNextPoll;
 static UIView *simBlankView;
+// A rendered side panel draws its first frame some time after it opens. Wait this long for it before reporting
+// ready anyway, so a panel that never draws shows up as blank instead of as a hang.
+static const CFTimeInterval kSimPanelFrameWait = 10.0;
+// prepare and restore answer this long after their writes, once the plugins have started or stopped (on the EDT)
+// and the settings have landed (on the client thread). They flush the config just before answering, so the change
+// is on disk before the sweep goes on.
+static const NSTimeInterval kSimConfigSettle = 1.0;
 
 - (void)simScreenTick {
     static BOOL driver, blank;
@@ -8951,14 +8968,25 @@ static UIView *simBlankView;
     });
     if (blank)
         [self simBlankGame];
+    CFTimeInterval now = CACurrentMediaTime();
+    [self simRestoreAtLaunch:now];
     if (!driver)
         return;
-    CFTimeInterval now = CACurrentMediaTime();
     if (simScreenOpened) {
-        // Settled: past the open animations and nothing presenting or dismissing.
+        // Settled: past the open animations and nothing presenting or dismissing. A close ("-") animates nothing.
         UIViewController *p = self.presentedViewController;
-        if (now - simScreenOpenedAt < 0.6 || self.transitionCoordinator || p.isBeingPresented || p.isBeingDismissed)
+        CFTimeInterval minSettle = [simScreenOpened hasSuffix:@" -"] ? 0.1 : 0.6;
+        if (now - simScreenOpenedAt < minSettle || self.transitionCoordinator || p.isBeingPresented ||
+            p.isBeingDismissed)
             return;
+        if ([self.panelDock simPanelLoading] && now - simScreenOpenedAt < kSimPanelFrameWait)
+            return;
+        NSString *seq = [simScreenOpened componentsSeparatedByString:@" "].firstObject;
+        NSData *info = [NSJSONSerialization dataWithJSONObject:[self simScreenInfo] options:0 error:NULL];
+        if (info)
+            [self appendLine:[NSString stringWithFormat:@"[screen] info %@ %@", seq,
+                                                        [[NSString alloc] initWithData:info
+                                                                              encoding:NSUTF8StringEncoding]]];
         [self appendLine:[NSString stringWithFormat:@"[screen] ready %@", simScreenOpened]];
         simScreenOpened = nil;
         return;
@@ -8983,6 +9011,27 @@ static UIView *simBlankView;
     simScreenSeq = seq;
     NSString *name = [cmd substringFromIndex:sp.location + 1];
     __weak typeof(self) ws = self;
+    if ([name isEqualToString:@"inventory"] || [name isEqualToString:@"prepare"] ||
+        [name isEqualToString:@"restore"]) {
+        NSString *why;
+        if ([name isEqualToString:@"inventory"])
+            why = [self simWriteInventory:[docs stringByAppendingPathComponent:@"screen-inventory.json"]];
+        else if ([name isEqualToString:@"prepare"])
+            why = [self simPrepare:docs];
+        else
+            why = [self simRestore:[docs stringByAppendingPathComponent:@"screen-restore.json"]];
+        if (why || [name isEqualToString:@"inventory"]) {
+            [self appendLine:why ? [NSString stringWithFormat:@"[screen] failed %@ %@: %@", seq, name, why]
+                                 : [NSString stringWithFormat:@"[screen] ready %@ %@", seq, name]];
+            return;
+        }
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kSimConfigSettle * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+                           [JVMLauncher mobileFlushConfig];
+                           [ws appendLine:[NSString stringWithFormat:@"[screen] ready %@ %@", seq, name]];
+                       });
+        return;
+    }
     [self simCloseScreenThen:^{
         NSString *why = [name isEqualToString:@"-"] ? nil : [ws simOpenScreen:name];
         if (why) {
@@ -9002,9 +9051,17 @@ static UIView *simBlankView;
         [self onOpenAbout];
     else if ([name isEqualToString:@"hub"])
         [self onOpenHub];
-    else if ([name isEqualToString:@"plugins"])
+    else if ([name isEqualToString:@"plugins"] || [name hasPrefix:@"plugins:"]) {
+        // "plugins:<text>" types <text> into the list's search. The search outlives the panel, so plain "plugins"
+        // clears what is left in it and always opens the whole list. With nothing to clear it opens the list
+        // exactly as the button does.
         [self onOpenPluginPanel];
-    else if ([name isEqualToString:@"edit-controls"])
+        NSString *q = [name hasPrefix:@"plugins:"] ? [name substringFromIndex:8] : @"";
+        if (q.length || self.pluginSearch.text.length) {
+            self.pluginSearch.text = q;
+            [self searchBar:self.pluginSearch textDidChange:q];
+        }
+    } else if ([name isEqualToString:@"edit-controls"])
         [self onEditControls];
     else if ([name isEqualToString:@"overlays"])
         [self onOpenOverlayEdit];
@@ -9015,6 +9072,10 @@ static UIView *simBlankView;
     else if ([name hasPrefix:@"panel:"]) {
         if (![self.panelDock simOpenPanelNamed:[name substringFromIndex:6]])
             return @"no panel with that name on the rail";
+    } else if ([name hasPrefix:@"config:"]) {
+        NSString *why = [self simOpenConfigFor:[name substringFromIndex:7]];
+        if (why)
+            return why;
     } else
         return @"unknown screen";
     BOOL open = self.presentedViewController || self.panelDock.presentedViewController || self.pluginPanelOpen ||
@@ -9037,6 +9098,215 @@ static UIView *simBlankView;
         [p.presentingViewController dismissViewControllerAnimated:NO completion:next];
     else
         next();
+}
+
+// "prepare": switch on the plugins and change the settings screen-prepare.json names, after saving what each was to
+// screen-restore.json. Only what actually changes is saved, so a restore touches nothing else.
+- (NSString *)simPrepare:(NSString *)docs {
+    NSString *restorePath = [docs stringByAppendingPathComponent:@"screen-restore.json"];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:restorePath])
+        return @"screen-restore.json from an earlier sweep is still there; send restore first";
+    NSData *d = [NSData dataWithContentsOfFile:[docs stringByAppendingPathComponent:@"screen-prepare.json"]];
+    NSDictionary *want = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:NULL] : nil;
+    if (![want isKindOfClass:[NSDictionary class]])
+        return @"no readable screen-prepare.json";
+    NSString *json = [JVMLauncher mobilePlugins];
+    id plugins = json.length ? parseBridgeJSON(json, "ViewController.simPrepare") : nil;
+    if (![plugins isKindOfClass:[NSArray class]])
+        return @"listPlugins returned no list";
+    NSMutableDictionary *wasEnabled = [NSMutableDictionary dictionary];
+    for (NSString *cls in want[@"enable"]) {
+        for (NSDictionary *p in plugins) {
+            if ([[p[@"className"] description] isEqualToString:cls] && ![p[@"enabled"] boolValue])
+                wasEnabled[cls] = @NO;
+        }
+    }
+    NSMutableArray *wasConfig = [NSMutableArray array];
+    for (NSArray *c in want[@"config"]) {
+        if (![c isKindOfClass:[NSArray class]] || c.count != 3 || ![c[0] isKindOfClass:[NSString class]] ||
+            ![c[1] isKindOfClass:[NSString class]] || ![c[2] isKindOfClass:[NSString class]])
+            return @"a config entry isn't [group, key, value], all strings";
+        NSString *cfg = [JVMLauncher mobilePluginConfig:c[0]];
+        NSDictionary *desc = cfg.length ? parseBridgeJSON(cfg, "ViewController.simPrepare") : nil;
+        NSDictionary *item = nil;
+        for (NSDictionary *it in ([desc isKindOfClass:[NSDictionary class]] ? desc[@"items"] : nil))
+            if ([it[@"key"] isEqual:c[1]])
+                item = it;
+        if (!item)
+            return [NSString stringWithFormat:@"no setting %@.%@", c[0], c[1]];
+        if (![item[@"value"] isEqual:c[2]])
+            [wasConfig addObject:@[ c[0], c[1], item[@"value"] ?: [NSNull null] ]];
+    }
+    NSData *out = [NSJSONSerialization dataWithJSONObject:@{@"enable" : wasEnabled, @"config" : wasConfig}
+                                                  options:NSJSONWritingPrettyPrinted
+                                                    error:NULL];
+    if (![out writeToFile:restorePath atomically:YES])
+        return @"couldn't write screen-restore.json";
+    for (NSString *cls in wasEnabled)
+        [JVMLauncher mobileSetPluginEnabled:cls enabled:YES];
+    for (NSArray *c in want[@"config"])
+        [JVMLauncher mobileSetConfigGroup:c[0] key:c[1] value:c[2]];
+    [self appendLine:[NSString stringWithFormat:@"[screen] prepare: switched on %lu plugin(s), changed %lu setting(s)",
+                                                (unsigned long)wasEnabled.count, (unsigned long)wasConfig.count]];
+    return nil;
+}
+
+// "restore": put back what prepare saved in screen-restore.json, then delete it.
+- (NSString *)simRestore:(NSString *)path {
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path])
+        return nil;
+    NSData *d = [NSData dataWithContentsOfFile:path];
+    NSDictionary *was = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:NULL] : nil;
+    if (![was isKindOfClass:[NSDictionary class]])
+        return @"screen-restore.json is unreadable; it is left in place";
+    NSDictionary *enable = was[@"enable"];
+    for (NSString *cls in enable)
+        [JVMLauncher mobileSetPluginEnabled:cls enabled:[enable[cls] boolValue]];
+    for (NSArray *c in was[@"config"]) {
+        if ([c[2] isKindOfClass:[NSString class]])
+            [JVMLauncher mobileSetConfigGroup:c[0] key:c[1] value:c[2]];
+        else
+            [JVMLauncher mobileResetConfigGroup:c[0] key:c[1]]; // it was unset
+    }
+    [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+    [self appendLine:[NSString stringWithFormat:@"[screen] restore: %lu plugin(s), %lu setting(s)",
+                                                (unsigned long)enable.count, (unsigned long)[was[@"config"] count]]];
+    return nil;
+}
+
+// A sweep that died between prepare and restore leaves screen-restore.json behind. Every simulator launch, driven or
+// not, restores it once the plugins have started (the rail has filled in), so the config never stays the way a
+// sweep left it.
+- (void)simRestoreAtLaunch:(CFTimeInterval)now {
+    static BOOL done;
+    static CFTimeInterval nextCheck;
+    if (done || now < nextCheck)
+        return;
+    nextCheck = now + 1.0;
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSString *path = [docs stringByAppendingPathComponent:@"screen-restore.json"];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        done = YES;
+        return;
+    }
+    if (![self.panelDock simPanelNames].count)
+        return;
+    done = YES;
+    [self appendLine:@"[screen] an earlier sweep didn't restore its changes; restoring them now"];
+    [self simRestore:path];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kSimConfigSettle * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+                       [JVMLauncher mobileFlushConfig];
+                   });
+}
+
+// "config:<plugin>": open the plugin list, then that row's settings the way a tap on its gear does (or, for the
+// config-only RuneLite and Chat Color rows, a tap on the row).
+- (NSString *)simOpenConfigFor:(NSString *)pluginName {
+    [self onOpenPluginPanel];
+    NSDictionary *row = nil;
+    for (NSDictionary *p in self.pluginAll) {
+        if (![[p[@"name"] description] isEqualToString:pluginName])
+            continue;
+        if (row)
+            return @"two plugins have that name";
+        row = p;
+    }
+    if (!row)
+        return @"no plugin with that name in the list";
+    if (![row[@"hasConfig"] boolValue])
+        return @"the plugin has no settings";
+    if ([row[@"configOnly"] boolValue])
+        [self openPluginConfigForRow:row];
+    else
+        [self presentConfigEditorForPlugin:row];
+    return [self.presentedViewController isKindOfClass:[PluginConfigViewController class]]
+               ? nil
+               : @"the settings screen didn't open";
+}
+
+// The plugin list (listPlugins, as the plugin panel reads it) and the rail's panels, in the order they show.
+- (NSString *)simWriteInventory:(NSString *)path {
+    NSString *json = [JVMLauncher mobilePlugins];
+    id plugins = json.length ? parseBridgeJSON(json, "ViewController.simWriteInventory") : nil;
+    if (![plugins isKindOfClass:[NSArray class]])
+        return @"listPlugins returned no list";
+    NSDictionary *inv = @{@"plugins" : plugins, @"panels" : [self.panelDock simPanelNames]};
+    NSData *out = [NSJSONSerialization dataWithJSONObject:inv options:NSJSONWritingPrettyPrinted error:NULL];
+    return [out writeToFile:path atomically:YES] ? nil : @"couldn't write screen-inventory.json";
+}
+
+// Counts what a screen shows, for the sweep's blank check: views with text, table and collection cells, and image
+// views holding an image. Only what is on screen counts: hidden and transparent views and anything scrolled out of
+// the window are skipped.
+static void simCensus(UIView *v, CGRect win, NSUInteger *texts, NSUInteger *cells, NSUInteger *images) {
+    if (v.hidden || v.alpha < 0.01)
+        return;
+    if (CGRectIsEmpty(CGRectIntersection([v convertRect:v.bounds toView:nil], win)))
+        return;
+    if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length)
+        (*texts)++;
+    else if ([v isKindOfClass:[UITextView class]] && ((UITextView *)v).text.length)
+        (*texts)++;
+    else if ([v isKindOfClass:[UITextField class]] &&
+             (((UITextField *)v).text.length || ((UITextField *)v).placeholder.length))
+        (*texts)++;
+    else if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image)
+        (*images)++;
+    if ([v isKindOfClass:[UITableViewCell class]] || [v isKindOfClass:[UICollectionViewCell class]])
+        (*cells)++;
+    for (UIView *s in v.subviews)
+        simCensus(s, win, texts, cells, images);
+}
+
+static NSArray<NSNumber *> *simRectArray(CGRect r) {
+    return @[ @(round(r.origin.x)), @(round(r.origin.y)), @(round(r.size.width)), @(round(r.size.height)) ];
+}
+
+// What the open screen shows: which screen it is ("screen"), the census of its views, the window size in points
+// and the rect ("rect", window points) where its content goes, plus what the screen itself knows (a settings
+// screen's item count, a rendered panel's frame).
+- (NSDictionary *)simScreenInfo {
+    NSMutableDictionary *info = [NSMutableDictionary dictionary];
+    UIViewController *top = nil;
+    for (UIViewController *p = self.presentedViewController ?: self.panelDock.presentedViewController; p;
+         p = p.presentedViewController)
+        top = p;
+    UIView *root = nil;
+    if (top) {
+        info[@"screen"] = NSStringFromClass([top class]);
+        root = top.view;
+        if ([top isKindOfClass:[PluginConfigViewController class]])
+            [info addEntriesFromDictionary:[(PluginConfigViewController *)top simSummary]];
+    } else if ([self.panelDock simPanelOpen]) {
+        info[@"screen"] = @"rendered-panel";
+        [info addEntriesFromDictionary:[self.panelDock simPanelInfo]];
+        root = self.panelDock.view;
+    } else if (self.pluginPanelOpen) {
+        info[@"screen"] = @"plugin-list";
+        root = self.pluginPanel;
+    } else if (self.overlayEdit || self.editOverlay) {
+        info[@"screen"] = self.overlayEdit ? @"overlay-edit" : @"edit-controls";
+        root = self.overlayEdit ?: self.editOverlay;
+    } else {
+        info[@"screen"] = @"none";
+    }
+    // A full-screen modal takes this controller's view out of the window while it is up, so ask the screen's own.
+    UIWindow *window = self.view.window;
+    if (!window)
+        window = top.view.window ?: root.window;
+    CGRect win = window.bounds;
+    info[@"window"] = @[ @(win.size.width), @(win.size.height) ];
+    if (root) {
+        if (!info[@"rect"])
+            info[@"rect"] = simRectArray([root convertRect:root.bounds toView:nil]);
+        NSUInteger texts = 0, cells = 0, images = 0;
+        simCensus(root, win, &texts, &cells, &images);
+        info[@"texts"] = @(texts);
+        info[@"cells"] = @(cells);
+        info[@"images"] = @(images);
+    }
+    return info;
 }
 
 // The game's own layers (the PiP presenter, the GL layers) go in at index 0 of the screen's layer, under its

@@ -62,6 +62,44 @@ which way it faces.
 
 Check them by eye the first time. A golden is only as good as the shot it was taken from.
 
+## Plugin sweep
+
+`plugin-sweep.py` drives the same app the same way, but has no goldens: it opens every plugin's settings screen and
+every side panel on the rail, and checks each one for what is wrong with it rather than for what changed.
+
+```sh
+ios/dev-tools/sim-screens/plugin-sweep.py                                  # build, install, sweep everything
+ios/dev-tools/sim-screens/plugin-sweep.py --no-build --only panels         # only the side panels (or: config)
+ios/dev-tools/sim-screens/plugin-sweep.py --no-build "config:Agility" "panel:Notes"   # only these
+```
+
+1. `inventory` (a driver command that opens nothing) has the app write `Documents/screen-inventory.json`: the
+   plugin list exactly as the plugin panel reads it, and the rail's panels. The script reads it until two reads in
+   a row agree, since the rail fills in after boot.
+2. `prepare` has the app turn on what `sweep.json` names, so the sweep also reaches panels the simulator's config
+   hides: plugins that are switched off (Loot Tracker, Party) and settings that hide a panel's button (Kourend
+   Library shows its button only inside the library). The app first saves what it changes to
+   `Documents/screen-restore.json`; `restore` at the end puts it back, and the script checks that the plugin list and
+   the rail match what they were. If a sweep dies in between, the app's next simulator launch restores the file.
+   `--only config` skips both.
+3. For every plugin with settings it sends `config:<plugin>`: the app opens the plugin list and then that row's
+   settings screen the way the gear button does (a tap on the row for the config-only RuneLite and Chat Color
+   rows). For every panel on the rail it sends `panel:<tooltip>`. It closes each screen (`-`) before the next.
+4. Before each `ready` the app logs `[screen] info <seq> <json>`: which screen is up, how many texts, cells and
+   images it shows, the area its content takes, and what the screen itself knows (a settings screen's item count,
+   a rendered panel's frame size and how much of it isn't background).
+
+A screen passes when the app reports it ready; when no `[bridge-fault]` or `[json-fault]` line reaches
+`jvm-stdio.log` or `hello-shell.log` between opening and closing it; and when it isn't blank: a settings screen lists
+at least one setting, a rendered panel has drawn a frame that isn't one flat colour, and the content area in the
+screenshot shows more than its background. Other log lines that aren't known noise are listed with the screen but
+don't fail it; `sim-gate.sh`'s log scan judges those.
+
+A panel that `sweep.json` turned on is marked so in the results. A new plugin with a panel that is off by default needs
+a line there, or the sweep won't see it. Shots (full size for a screen that failed, half size otherwise), `inventory.json`,
+`summary.json` and a `results.md` table land in `ios/app/evidence/plugin-sweep/<stamp>/`. The last line is
+`VERDICT: PLUGIN_SWEEP_GREEN` (exit 0) or `_RED`. `sim-gate.sh` runs it after the goldens.
+
 ## What it does not check
 
 - The game picture itself. Use `ios_sim_screenshot` and `image_diff` (`tools/mcp`) for that, against a phone

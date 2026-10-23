@@ -1319,4 +1319,31 @@ typedef NS_ENUM(NSInteger, MUINotifRow) {
     return [NSString stringWithFormat:@"%d", (int32_t)argb];  // signed decimal — what ColorUtil.fromString expects
 }
 
+#if TARGET_OS_SIMULATOR
+- (NSDictionary *)simSummary {
+    NSUInteger items = 0, unknown = 0;
+    for (NSDictionary *sec in self.sections) {
+        for (NSDictionary *it in sec[@"items"]) {
+            NSString *type = it[@"type"];
+            if ([type isEqualToString:@"resetPlugin"])
+                continue;
+            items++;
+            // The row cellForRowAtIndexPath: shows read-only, as "(not editable yet)" or a bare value.
+            if (![@[ @"boolean", @"int", @"double", @"string", @"enum", @"color", @"font", @"dimension", @"set",
+                     @"notification", @"keybind" ] containsObject:type ?: @""])
+                unknown++;
+        }
+    }
+    CGRect r = [self.table convertRect:self.table.bounds toView:nil];
+    // loadItems leaves no sections at all, not even the reset row, when the bridge gave it no descriptor.
+    return @{
+        @"items" : @(items),
+        @"unknown" : @(unknown),
+        @"sections" : @(self.sections.count),
+        @"load" : self.sections.count ? @"ok" : @"no-descriptor",
+        @"rect" : @[ @(round(r.origin.x)), @(round(r.origin.y)), @(round(r.size.width)), @(round(r.size.height)) ],
+    };
+}
+#endif
+
 @end

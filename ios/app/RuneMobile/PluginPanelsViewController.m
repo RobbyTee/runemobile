@@ -838,6 +838,55 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     if ([self simPanelOpen])
         [self collapsePanel];
 }
+
+- (NSArray<NSString *> *)simPanelNames {
+    NSMutableArray *names = [NSMutableArray array];
+    for (NSDictionary *p in self.panels)
+        [names addObject:[p[@"tooltip"] description] ?: @""];
+    return names;
+}
+
+- (BOOL)simPanelLoading {
+    return [self simPanelOpen] && self.panelSpinner.isAnimating;
+}
+
+// The share of an image's pixels that differ from its top-left pixel by more than 24 in any channel, read from a
+// copy at most 128 pixels wide.
+static double simInk(UIImage *img) {
+    CGImageRef cg = img.CGImage;
+    if (!cg || CGImageGetWidth(cg) == 0)
+        return 0;
+    size_t w = MIN((size_t)128, CGImageGetWidth(cg));
+    size_t h = MAX((size_t)1, (size_t)llround((double)CGImageGetHeight(cg) * w / CGImageGetWidth(cg)));
+    NSMutableData *buf = [NSMutableData dataWithLength:w * h * 4];
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(buf.mutableBytes, w, h, 8, w * 4, cs,
+                                             (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(cs);
+    if (!ctx)
+        return 0;
+    CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), cg);
+    CGContextRelease(ctx);
+    const uint8_t *px = buf.bytes;
+    size_t differ = 0;
+    for (size_t i = 0; i < w * h; i++) {
+        const uint8_t *q = px + i * 4;
+        if (abs(q[0] - px[0]) > 24 || abs(q[1] - px[1]) > 24 || abs(q[2] - px[2]) > 24)
+            differ++;
+    }
+    return (double)differ / (double)(w * h);
+}
+
+- (NSDictionary *)simPanelInfo {
+    UIImage *img = self.panelView.image;
+    CGRect r = [self.panelScroll convertRect:self.panelScroll.bounds toView:nil];
+    return @{
+        @"title" : self.titleLabel.text ?: @"",
+        @"image" : img ? @[ @(img.size.width), @(img.size.height) ] : [NSNull null],
+        @"ink" : @(round(simInk(img) * 10000) / 10000),
+        @"rect" : @[ @(round(r.origin.x)), @(round(r.origin.y)), @(round(r.size.width)), @(round(r.size.height)) ],
+    };
+}
 #endif
 
 @end

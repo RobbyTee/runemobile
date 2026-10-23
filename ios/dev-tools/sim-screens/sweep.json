@@ -1,0 +1,9 @@
+{
+  "_doc": "What plugin-sweep.py turns on for its own run, so that panels the simulator's RuneLite config hides get swept too. A plugin that is switched off has no panel on the rail; plugins are named as in the plugin list. config entries are [group, key, value] as RuneLite stores them. The app saves what each was before changing it and puts it back after the sweep (ViewController.m, simPrepare/simRestore), or at its next launch if the sweep dies first. To find what provides a panel: grep -rl 'NavigationButton.builder' runelite-client/src/main/java/net/runelite/client/plugins (Configuration, Developer Tools and title-bar buttons without a panel don't count).",
+  "turnOn": {
+    "plugins": ["Loot Tracker", "Party"],
+    "config": [
+      ["kourendLibrary", "hideButton", "false"]
+    ]
+  }
+}

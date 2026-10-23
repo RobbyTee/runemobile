@@ -17,6 +17,12 @@ NS_ASSUME_NONNULL_BEGIN
 - (instancetype)initWithGroup:(NSString *)group pluginName:(NSString *)name
                     whitelist:(nullable NSArray<NSString *> *)whitelist;
 
+#if TARGET_OS_SIMULATOR
+/// For the simulator plugin sweep: what the screen loaded ("items", "unknown" for the read-only rows, "sections",
+/// "load" = ok | no-descriptor) and where its list sits ("rect", window points).
+- (NSDictionary *)simSummary;
+#endif
+
 @end
 
 NS_ASSUME_NONNULL_END

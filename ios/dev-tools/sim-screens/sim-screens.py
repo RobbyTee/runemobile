@@ -9,7 +9,8 @@
 The app runs logged out (-RMSkipLogin) on the CPU renderer with the game picture covered (-RMBlankGame), so a
 screen looks the same from run to run whatever the game behind it is doing. -RMScreenDriver lets this script open
 each screen through the same entry point as its button (ViewController.m, simScreenTick): it writes
-"<seq> <screen>" to the app's Documents/screen-cmd and waits for "[screen] ready <seq> <screen>" in hello-shell.log.
+"<seq> <screen>" to the app's Documents/screen-cmd and waits for "[screen] ready <seq> <screen>" in hello-shell.log
+(screendriver.py, shared with plugin-sweep.py).
 
 Goldens are kept per simulator model in ios/app/evidence/sim-golden/<model>/, which is gitignored: they show the
 plugin list, and they change with Xcode's simulator runtime, so each Mac keeps its own. Each run's shots and diff
@@ -20,27 +21,17 @@ the last line is VERDICT: SIM_SCREENS_GREEN or _RED. Run it with /usr/bin/python
 import argparse
 import json
 import os
-import re
 import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-REPO = HERE.parents[2]
-sys.path.insert(0, str(REPO / "tools/mcp"))
-import harness_server as hs  # noqa: E402  (simulator, capture and diff helpers)
+from screendriver import REPO, Driver, DriverError, device_name, hs, install, slug
 
+HERE = Path(__file__).resolve().parent
 MANIFEST = HERE / "screens.json"
 GOLDEN_ROOT = REPO / "ios/app/evidence/sim-golden"
 RUNS_ROOT = REPO / "ios/app/evidence/sim-screens"
-LAUNCH_ARGS = ["-rendererPref", "cpu", "-RMAutoPlay", "YES", "-RMSkipLogin", "YES", "-RMBlankGame", "YES",
-               "-RMScreenDriver", "YES"]
-# After the login screen first shows, the plugin rail and the account rows are still filling in.
-BOOT_SETTLE = 3.0
-SCREEN_TIMEOUT = 30
-_SCREEN_LINE = re.compile(r"\[screen\] (ready|failed) (\S+) (.+)$")
 
 
 def red(msg):
@@ -48,10 +39,6 @@ def red(msg):
     print("SIM_SCREENS_RED")
     print("VERDICT: SIM_SCREENS_RED")
     sys.exit(1)
-
-
-def slug(name):
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
 def load_manifest():
@@ -62,45 +49,6 @@ def load_manifest():
     if len(set(slugs)) != len(slugs):
         raise ValueError("two screens share a file name")
     return screens
-
-
-def device_name(udid):
-    rc, o, _e = hs.run(["xcrun", "simctl", "list", "devices", "-j"], timeout=60)
-    if rc == 0:
-        for devs in json.loads(o)["devices"].values():
-            for d in devs:
-                if d["udid"] == udid:
-                    return d["name"]
-    return udid
-
-
-def screen_event(shell_log, seq, name):
-    """('ready'|'failed', detail) once the app has answered command `seq`, else None."""
-    for line in reversed(hs._read_tail(shell_log, 300)):
-        m = _SCREEN_LINE.search(line)
-        if not m or m.group(2) != str(seq):
-            continue
-        if m.group(1) == "ready":
-            return ("ready", "") if m.group(3) == name else ("failed", f"the app answered for {m.group(3)!r}")
-        rest = m.group(3)
-        return "failed", rest[len(name) + 2:] if rest.startswith(name + ": ") else rest
-    return None
-
-
-def send(cmd_file, udid, shell_log, seq, name):
-    """Have the app open `name` ('-' closes); (True, '') once it says ready, else (False, why)."""
-    tmp = cmd_file.with_name(cmd_file.name + ".tmp")
-    tmp.write_text(f"{seq} {name}\n")
-    os.replace(tmp, cmd_file)
-    start = time.time()
-    while time.time() - start < SCREEN_TIMEOUT:
-        ev = screen_event(shell_log, seq, name)
-        if ev:
-            return ev[0] == "ready", ev[1]
-        if hs._sim_app_pid(udid) is None:
-            return False, "the app exited"
-        time.sleep(0.2)
-    return False, f"no answer from the app within {SCREEN_TIMEOUT}s"
 
 
 def main():
@@ -132,43 +80,19 @@ def main():
     run_dir = RUNS_ROOT / time.strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    flags = ["--no-launch"] + (["--no-build"] if args.no_build else []) + (["--jars"] if args.jars else [])
-    env = dict(os.environ, SIM_UDID=udid, RENDERER="cpu")
-    if subprocess.run(["bash", str(hs.RUN_SIM)] + flags, cwd=REPO, env=env).returncode != 0:
-        red("run-sim.sh failed to build or install the app")
-    docs, why = hs._sim_docs(udid)
-    if not docs:
-        red(why)
-    cmd_file, shell_log = docs / "screen-cmd", docs / "hello-shell.log"
-    cmd_file.unlink(missing_ok=True)
-
-    print(f"\n>> Screens: {len(screens)} on {model}, CPU renderer, logged out, game covered")
-    launched = time.time()
-    rc = subprocess.run(["xcrun", "simctl", "launch", "--terminate-running-process", udid, hs.IOS_BUNDLE_ID]
-                        + LAUNCH_ARGS, stdout=subprocess.DEVNULL).returncode
-    if rc != 0:
-        red(f"simctl launch failed ({rc})")
-    ok, details = hs._sim_wait(udid, "LOGIN_SCREEN", 300, since=launched)
-    if not ok:
-        red(f"the app didn't reach the login screen: {details.get('reason')}")
-    time.sleep(BOOT_SETTLE)
-    # simctl captures in the device's portrait frame and sim_capture turns it by the window rotation Simulator.app
-    # records per device. The app is landscape-only, so a window still in portrait gives sideways shots.
     try:
-        probe, _info = hs.sim_capture(udid, mask_island=False)
-    except RuntimeError as e:
-        red(f"screenshot failed: {e.args[0]}")
-    if probe.width < probe.height:
-        red(f"the {model} window in Simulator.app is in portrait, so every shot would come out sideways. Turn it "
-            "to landscape once (Device > Rotate Left); Simulator remembers it for this device.")
+        install(udid, no_build=args.no_build, jars=args.jars)
+        drv = Driver(udid)
+        print(f"\n>> Screens: {len(screens)} on {model}, CPU renderer, logged out, game covered")
+        drv.launch(model)
+    except DriverError as e:
+        red(str(e))
 
     results = []
-    seq = 0
     for s in screens:
-        seq += 1
         name, file = s["name"], slug(s["name"]) + ".png"
         r = {"screen": name, "file": file}
-        opened, why = send(cmd_file, udid, shell_log, seq, name)
+        opened, why, _seq = drv.open(name)
         if not opened:
             results.append(dict(r, status="ERROR", why=why))
             print(f"   {name:<22} ERROR  {why}")
@@ -177,9 +101,9 @@ def main():
             continue
         time.sleep(s["settle"])
         try:
-            im, _info = hs.sim_capture(udid, mask_island=False)
-        except RuntimeError as e:
-            results.append(dict(r, status="ERROR", why=f"screenshot failed: {e.args[0]}"))
+            im = drv.capture()
+        except DriverError as e:
+            results.append(dict(r, status="ERROR", why=str(e)))
             print(f"   {name:<22} ERROR  screenshot failed")
             continue
         shot = run_dir / file
@@ -214,7 +138,7 @@ def main():
         results.append(r)
         print(f"   {name:<22} {r['status']:<5} {delta['pctPixelsDiffering']:.4f}% over {s['threshold']} "
               f"(budget {s['maxPctDiffering']}%), max delta {delta['maxChannelDelta']}")
-    send(cmd_file, udid, shell_log, seq + 1, "-")
+    drv.open("-")
 
     summary = {"model": model, "simUdid": udid, "update": args.update, "goldens": str(golden_dir),
                "shots": str(run_dir), "results": results}

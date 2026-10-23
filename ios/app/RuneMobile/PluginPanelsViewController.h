@@ -38,6 +38,13 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)simOpenPanelNamed:(NSString *)tooltip;
 - (BOOL)simPanelOpen;
 - (void)simClosePanel;
+/// The rail's panels by tooltip, in rail order.
+- (NSArray<NSString *> *)simPanelNames;
+/// YES while a rendered (Swing) panel is open and its first frame hasn't arrived.
+- (BOOL)simPanelLoading;
+/// The open rendered panel: "title", "image" ([w, h] of its frame, or null before one arrives), "ink" (the share
+/// of the frame's pixels that differ from its corner colour; 0 = one flat colour) and "rect" (window points).
+- (NSDictionary *)simPanelInfo;
 #endif
 @end
 
