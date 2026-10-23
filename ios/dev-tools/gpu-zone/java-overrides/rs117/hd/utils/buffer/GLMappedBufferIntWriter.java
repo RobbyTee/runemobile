@@ -17,7 +17,7 @@ import static rs117.hd.utils.buffer.GLBuffer.MAP_WRITE;
 /*
  * ===========================================================================================================
  * iOS OVERRIDE (gpu-zone B0.5, dynamic-model TBO). Verbatim copy of
- * rs117/hd/utils/buffer/GLMappedBufferIntWriter.java @ RLHD 7dded59 with ONE iOS-GLES-3.0 delta in flush():
+ * rs117/hd/utils/buffer/GLMappedBufferIntWriter.java @ RLHD v1.6.0.1 with ONE iOS-GLES-3.0 delta in flush():
  * the two unmap calls go through buffer.unmap() (the polymorphic GLBuffer) instead of mappedBuffer.unmap()
  * (the GLMappedBuffer directly).
  *
@@ -49,11 +49,11 @@ public class GLMappedBufferIntWriter implements Destructible {
 	private final ArrayList<ReservedView> usedMappedViews = new ArrayList<>();
 
 	private GLMappedBuffer mappedBuffer;
-	private int writtenMappedInts;
-	private int writtenStagingInts;
+	private int writeHead;
+	private int stagingWriteHead;
 
 	public int getWrittenInts() {
-		return writtenMappedInts + writtenStagingInts;
+		return writeHead + stagingWriteHead;
 	}
 
 	public void map(boolean sync) {
@@ -64,13 +64,13 @@ public class GLMappedBufferIntWriter implements Destructible {
 		assert mappedBuffer.isMapped();
 
 		// Need staging if we've already staged or mapped buffer has no space
-		if (writtenStagingInts > 0 || mappedBuffer.intView().remaining() < sizeInts || DEBUG_STAGING) {
-			ReservedView view = new ReservedView();
-			view.buffer = BufferUtils.createIntBuffer(sizeInts);
-			view.bufferOffsetInts = writtenMappedInts + writtenStagingInts;
-			writtenStagingInts += sizeInts;
-			usedStagingViews.add(view);
-			return view;
+		if (stagingWriteHead > 0 || mappedBuffer.intView().remaining() < sizeInts || DEBUG_STAGING) {
+			ReservedView staging = new ReservedView();
+			staging.buffer = BufferUtils.createIntBuffer(sizeInts);
+			staging.offsetInts = writeHead + stagingWriteHead;
+			stagingWriteHead += sizeInts;
+			usedStagingViews.add(staging);
+			return staging;
 		}
 
 		ReservedView view = freeViews.poll();
@@ -83,12 +83,12 @@ public class GLMappedBufferIntWriter implements Destructible {
 		}
 
 		view.buffer.clear();
-		view.buffer.position(writtenMappedInts);
-		view.buffer.limit(writtenMappedInts + sizeInts);
-		view.bufferOffsetInts = writtenMappedInts;
+		view.buffer.position(writeHead);
+		view.buffer.limit(writeHead + sizeInts);
+		view.offsetInts = writeHead;
 
-		writtenMappedInts += sizeInts;
-		mappedBuffer.intView().position(writtenMappedInts);
+		writeHead += sizeInts;
+		mappedBuffer.intView().position(writeHead);
 
 		usedMappedViews.add(view);
 		return view;
@@ -131,38 +131,41 @@ public class GLMappedBufferIntWriter implements Destructible {
 	}
 
 	public synchronized long flush() {
-		mappedBuffer.setPositionBytes(writtenMappedInts * Integer.BYTES);
+		mappedBuffer.setPositionBytes(writeHead * Integer.BYTES);
 		// iOS: unmap through the owning GLBuffer (not the GLMappedBuffer) so GLTextureBuffer.unmap() re-runs the
 		// TBO->2D repack now that the per-face data is written. See the class header.
 		buffer.unmap();
 
 		if (!usedStagingViews.isEmpty()) {
 			final GLBuffer owner = mappedBuffer.getOwner();
-			final long mappedSize = (long) writtenMappedInts * Integer.BYTES;
-			final long stagingCapacity = (long) writtenStagingInts * Integer.BYTES;
+			final long mappedSize = (long) writeHead * Integer.BYTES;
+			final long stagingCapacity = (long) stagingWriteHead * Integer.BYTES;
 
 			owner.ensureCapacity(mappedSize, stagingCapacity);
 			mappedBuffer = owner.map(MAP_WRITE, mappedSize, stagingCapacity);
 
-			final IntBuffer intView = owner.mapped().intView().clear();
-			ReservedView view;
-			while ((view = usedStagingViews.poll()) != null) {
-				view.buffer.flip();
-				intView.put(view.buffer);
-				view.buffer = null;
+			final IntBuffer overflow = owner.mapped().intView().clear();
+			ReservedView staging;
+			while ((staging = usedStagingViews.poll()) != null) {
+				staging.buffer.flip();
+				// Ensure we write to the reserved offset, just in case
+				// a previous staging view did not fill its reservation
+				overflow.position(staging.offsetInts - writeHead);
+				overflow.put(staging.buffer);
+				staging.buffer = null;
 			}
 
 			mappedBuffer.syncViews();
-			// iOS: same as above — re-attach the full buffer (mapped + staging) to the 2D texture.
+			// iOS: same as above - re-attach the full buffer (mapped + staging) to the 2D texture.
 			owner.unmap();
 		}
 
 		freeViews.addAll(usedMappedViews);
 		usedMappedViews.clear();
 
-		long writtenBytes = (long) (writtenMappedInts + writtenStagingInts) * Integer.BYTES;
-		writtenMappedInts = 0;
-		writtenStagingInts = 0;
+		long writtenBytes = (long) (writeHead + stagingWriteHead) * Integer.BYTES;
+		writeHead = 0;
+		stagingWriteHead = 0;
 		return writtenBytes;
 	}
 
@@ -171,10 +174,14 @@ public class GLMappedBufferIntWriter implements Destructible {
 		@Getter
 		private IntBuffer buffer;
 		@Getter
-		private int bufferOffsetInts;
+		private int offsetInts;
 
 		public int getEndOffsetInts() {
-			return (backing == null ? bufferOffsetInts : 0) + buffer.position();
+			return getPositionOffsetInts() + buffer.position();
+		}
+
+		public int getPositionOffsetInts() {
+			return backing == null ? offsetInts : 0;
 		}
 	}
 }

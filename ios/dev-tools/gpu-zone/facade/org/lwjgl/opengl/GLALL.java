@@ -401,4 +401,24 @@ public class GLALL {
 	public static native void glBufferSubData(int a0, long a1, java.nio.ByteBuffer a2);
 	public static native void glBufferSubData(int a0, long a1, java.nio.IntBuffer a2);
 	public static native void glBufferSubData(int a0, long a1, java.nio.FloatBuffer a2);
+	// --- RLHD v1.6.0.1 additions (sky, stars, shadow PCSS, depth-bias render state, fence waits) ---
+	public static final int GL_POINTS = 0;
+	public static final int GL_LESS = 513;
+	public static final int GL_FRONT = 1028;
+	public static final int GL_POLYGON_OFFSET_FILL = 32823;
+	public static final int GL_TEXTURE_WRAP_R = 32882;
+	public static final int GL_DEPTH_COMPONENT16 = 33189;
+	public static final int GL_TEXTURE_CUBE_MAP = 34067;
+	public static final int GL_TEXTURE_CUBE_MAP_POSITIVE_X = 34069;
+	public static final int GL_PROGRAM_POINT_SIZE = 34370;      // desktop-only cap; the bridges drop glEnable/glDisable of it
+	public static final int GL_RGBA16F = 34842;
+	public static final int GL_TEXTURE_COMPARE_MODE = 34892;
+	public static final int GL_TEXTURE_COMPARE_FUNC = 34893;
+	public static final int GL_COMPARE_REF_TO_TEXTURE = 34894;
+	public static final int GL_SYNC_GPU_COMMANDS_COMPLETE = 37143;
+	public static final int GL_ALREADY_SIGNALED = 37146;
+	public static final int GL_CONDITION_SATISFIED = 37148;
+	public static final int GL_WAIT_FAILED = 37149;
+	public static native void glPolygonOffset(float a0, float a1);
+	public static native void glDrawArraysInstanced(int a0, int a1, int a2, int a3);
 }

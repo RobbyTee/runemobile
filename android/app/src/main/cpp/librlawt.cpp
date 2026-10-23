@@ -572,6 +572,11 @@ static void rcProbePhase4Caps() {
 // are shimmed; the BGRA UI-texture upload is swizzled to RGBA (silently corrupts colour on GLES otherwise).
 // =============================================================================================================
 #define GLF static void JNICALL
+// RLHD v1.6.0.1's SkyRenderer toggles the desktop-only GL_PROGRAM_POINT_SIZE around its point-sprite stars. GLES
+// always takes gl_PointSize from the vertex shader and rejects the enum, so rc_glEnable/rc_glDisable drop it.
+#ifndef GL_PROGRAM_POINT_SIZE
+#define GL_PROGRAM_POINT_SIZE 0x8642
+#endif
 
 // LWJGL takes an NIO buffer argument as remaining() elements from position(), not capacity() from the base address.
 // Zone.drawOff/drawEnd are reused 512-entry IntBuffers flip()ed to the k ranges of one draw, so sizing by capacity
@@ -649,10 +654,16 @@ GLF rc_glDeleteVertexArrays(JNIEnv*, jclass, jint a0){ GLuint x=(GLuint)a0; glDe
 GLF rc_glDepthFunc(JNIEnv*, jclass, jint a0){ glDepthFunc(a0); }
 GLF rc_glDepthMask(JNIEnv*, jclass, jboolean a0){ glDepthMask(a0); }
 GLF rc_glDetachShader(JNIEnv*, jclass, jint a0, jint a1){ glDetachShader(a0,a1); }
-GLF rc_glDisable(JNIEnv*, jclass, jint a0){ glDisable(a0); }
+GLF rc_glDisable(JNIEnv *, jclass, jint a0) {
+    if (a0 != GL_PROGRAM_POINT_SIZE)
+        glDisable(a0);
+}
 GLF rc_glDrawArrays(JNIEnv*, jclass, jint a0, jint a1, jint a2){ if (sDrawCountOn) sDcDrawArrays++; glDrawArrays(a0,a1,a2); }
 GLF rc_glDrawElements(JNIEnv*, jclass, jint a0, jint a1, jint a2, jlong a3){ if (sDrawCountOn) sDcDrawElements++; glDrawElements(a0,a1,a2,(const void*)(intptr_t)a3); }
-GLF rc_glEnable(JNIEnv*, jclass, jint a0){ glEnable(a0); }
+GLF rc_glEnable(JNIEnv *, jclass, jint a0) {
+    if (a0 != GL_PROGRAM_POINT_SIZE)
+        glEnable(a0);
+}
 GLF rc_glEnableVertexAttribArray(JNIEnv*, jclass, jint a0){ glEnableVertexAttribArray(a0); }
 GLF rc_glFlushMappedBufferRange(JNIEnv*, jclass, jint a0, jlong a1, jlong a2){ glFlushMappedBufferRange(a0,(GLintptr)a1,(GLsizeiptr)a2); }
 GLF rc_glFramebufferRenderbuffer(JNIEnv*, jclass, jint a0, jint a1, jint a2, jint a3){ glFramebufferRenderbuffer(a0,a1,a2,a3); }
@@ -837,6 +848,15 @@ GLF rc_glClipControl(JNIEnv*, jclass, jint a0, jint a1){
 // gated OFF on Zone — present so the class graph is fully bound.
 // =============================================================================================================
 GLF rc_glCullFace(JNIEnv*, jclass, jint a0){ glCullFace((GLenum)a0); }
+// RLHD v1.6.0.1: the shadow pass's depth bias (RenderState.polygonOffset) and the star field's instanced quads.
+GLF rc_glPolygonOffset(JNIEnv *, jclass, jfloat a0, jfloat a1) {
+    glPolygonOffset(a0, a1);
+}
+GLF rc_glDrawArraysInstanced(JNIEnv *, jclass, jint a0, jint a1, jint a2, jint a3) {
+    if (sDrawCountOn)
+        sDcDrawArrays++;
+    glDrawArraysInstanced((GLenum)a0, a1, a2, a3);
+}
 GLF rc_glFinish(JNIEnv*, jclass){ glFinish(); }
 GLF rc_glFlush(JNIEnv*, jclass){ glFlush(); }
 GLF rc_glDrawBuffer(JNIEnv*, jclass, jint a0){ GLenum b=(GLenum)a0; glDrawBuffers(1,&b); }   // GLES has glDrawBuffers only
@@ -1380,6 +1400,8 @@ static const JNINativeMethod kGLALL[] = {
     {"glClipControl","(II)V",(void*)rc_glClipControl},
     // --- AG3 117HD (RLHD) Zone GL-delta (signatures match GLALL.java exactly) ---
     {"glCullFace","(I)V",(void*)rc_glCullFace},
+    {"glPolygonOffset","(FF)V",(void*)rc_glPolygonOffset},
+    {"glDrawArraysInstanced","(IIII)V",(void*)rc_glDrawArraysInstanced},
     {"glFinish","()V",(void*)rc_glFinish},
     {"glFlush","()V",(void*)rc_glFlush},
     {"glDrawBuffer","(I)V",(void*)rc_glDrawBuffer},

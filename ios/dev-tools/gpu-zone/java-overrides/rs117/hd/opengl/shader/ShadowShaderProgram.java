@@ -1,6 +1,6 @@
 /*
  * ===========================================================================================================
- * iOS OVERRIDE (gpu-zone B0.5, materials subsystem). Verbatim copy of ShadowShaderProgram.java @ RLHD 7dded59
+ * iOS OVERRIDE (gpu-zone B0.5, materials subsystem). Verbatim copy of ShadowShaderProgram.java @ RLHD 7dded59 (unchanged in v1.6.0.1)
  * EXCEPT the materialStore sampler wiring: shadow_vert calls getMaterial() unconditionally in the zone path,
  * so both zone shadow programs need the RGBA32I material-store texture that replaces the UBOMaterials block
  * on iOS (Apple's 16 KB uniform-block cap). See java-overrides MaterialManager + ios-overrides/uniforms/

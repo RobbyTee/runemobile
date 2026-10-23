@@ -25,7 +25,7 @@
 /*
  * ===========================================================================================================
  * iOS OVERRIDE (gpu-zone B0.5, materials subsystem). Verbatim copy of rs117/hd/scene/MaterialManager.java
- * @ RLHD 7dded59 EXCEPT the material-store texture: Apple's GLES-on-Metal caps uniform blocks at 16384 B,
+ * @ RLHD v1.6.0.1 EXCEPT the material-store texture: Apple's GLES-on-Metal caps uniform blocks at 16384 B,
  * far below the ~57 KB the full material set needs, so the shader-side UBOMaterials block is replaced by an
  * RGBA32I texture holding the same std140 bytes (6 texels per 96-byte material; see
  * ios-overrides/uniforms/materials.glsl). Delta: TEXTURE_UNIT_MATERIAL_STORE + uploadMaterialStore() called
@@ -35,7 +35,6 @@
 package rs117.hd.scene;
 
 import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -65,6 +64,7 @@ import rs117.hd.renderer.zone.ZoneRenderer;
 import rs117.hd.scene.materials.Material;
 import rs117.hd.utils.ExpressionParser;
 import rs117.hd.utils.FileWatcher;
+import rs117.hd.utils.GsonUtils;
 import rs117.hd.utils.HDVariables;
 import rs117.hd.utils.Props;
 import rs117.hd.utils.ResourcePath;
@@ -125,7 +125,7 @@ public class MaterialManager {
 	public static Material[] VANILLA_TEXTURE_MAPPING;
 
 	// iOS delta: the textureFaces-style 2D store the shaders read material data from instead of the
-	// UBOMaterials uniform block (Apple GLES-on-Metal caps uniform blocks at 16 KB). Unit 6, directly after
+	// UBOMaterials uniform block (Apple GLES-on-Metal caps uniform blocks at 16 KB). Unit 8, directly after
 	// ZoneRenderer's TEXTURE_UNIT_TEXTURED_FACES; sampled from both the vertex (shadow_vert) and fragment
 	// (scene_frag) stages, comfortably within the ES 3.0 minimum of 16 units per stage.
 	public static final int TEXTURE_UNIT_MATERIAL_STORE = ZoneRenderer.TEXTURE_UNIT_TEXTURED_FACES + 1;
@@ -211,8 +211,6 @@ public class MaterialManager {
 			throw new IOException("Empty or invalid: " + path);
 
 		var rawMaterialMap = new HashMap<String, JsonObject>();
-		var materialToParentMap = new HashMap<String, String>();
-
 		var validMaterials = new ArrayList<JsonObject>();
 		for (var element : rawMaterials) {
 			if (!element.isJsonObject()) {
@@ -243,60 +241,14 @@ public class MaterialManager {
 			}
 
 			validMaterials.add(mat);
-			if (parent != null)
-				materialToParentMap.put(name.getAsString(), parent.getAsString());
 		}
 
-		// Check for parent loops
-		var iter = materialToParentMap.entrySet().iterator();
-		while (iter.hasNext()) {
-			var entry = iter.next();
-			var original = entry.getKey();
-			var current = entry.getValue();
-			while ((current = materialToParentMap.get(current)) != null) {
-				if (current.equals(original)) {
-					log.error("Material '{}' contains a parent loop. Removing its parent...", original);
-					rawMaterialMap.get(original).remove("parent"); // Remove parent in-place
-					iter.remove(); // No longer has a parent
-				}
-			}
-		}
-
-		// Recursively resolve parents and apply default values from them
-		for (var mat : rawMaterialMap.values()) {
-			var parent = mat;
-			JsonElement parentField;
-			while ((parentField = parent.get("parent")) != null) {
-				if (!parentField.isJsonPrimitive() || !parentField.getAsJsonPrimitive().isString()) {
-					log.error("Error in material '{}': Invalid parent name '{}'", parent.get("name").getAsString(), parentField);
-					break;
-				}
-				String parentName = parentField.getAsString();
-				// Don't allow inheriting from NONE. Those defaults will be inherited anyway
-				if (parentName.equals(Material.NONE.name))
-					break;
-
-				var nextParent = rawMaterialMap.get(parentName);
-				if (nextParent == null) {
-					log.error(
-						"Error in material '{}': Unknown parent name '{}'",
-						parent.get("name").getAsString(),
-						parentField.getAsString()
-					);
-					break;
-				}
-
-				for (var entry : nextParent.entrySet())
-					if (!mat.has(entry.getKey()))
-						mat.add(entry.getKey(), entry.getValue());
-
-				parent = nextParent;
-			}
-		}
+		var resolvedMaterials = GsonUtils.resolveParentDefinitions(
+			rawMaterialMap, "material", Material.NONE.name, GsonUtils::shallowInheritFrom);
 
 		var materialsToParse = new JsonArray();
 		for (var mat : validMaterials)
-			materialsToParse.add(mat);
+			materialsToParse.add(resolvedMaterials.get(mat.get("name").getAsString()));
 
 		var materials = Stream.concat(
 			Arrays.stream(Material.REQUIRED_MATERIALS),
@@ -539,10 +491,15 @@ public class MaterialManager {
 
 	private void invalidateMaterials(Material[] materials) {
 		// Invalidate old materials to highlight issues with keeping them around accidentally
-		if (materials != null)
-			for (var mat : materials)
-				if (mat != Material.NONE)
-					mat.isValid = false;
+		if (materials != null) {
+			outer:
+			for (var mat : materials) {
+				for (var req : Material.REQUIRED_MATERIALS)
+					if (mat == req)
+						continue outer;
+				mat.isValid = false;
+			}
+		}
 	}
 
 	public void uploadTextures() {
