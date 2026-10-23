@@ -22,6 +22,12 @@
       "reason": "JNA's native library doesn't load in the mobile JREs, so World Hopper's ICMP ping throws NoClassDefFoundError. Ping.java only falls back to a TCP ping on IOException, so World Hopper gets no ping at all. The first ping logs the JNA init failure, later ones the RLLibC init failure."
     },
     {
+      "id": "external-plugins-startup-race",
+      "header": "^ERROR n\\.r\\.c\\.util\\.RunnableExceptionLogger - Uncaught exception in runnable net\\.runelite\\.client\\.externalplugins\\.ExternalPluginManager\\$\\$Lambda",
+      "cause": "NullPointerException: Cannot invoke \"net\\.runelite\\.client\\.config\\.ConfigData\\.getProperty\\(String\\)\" because \"configData\" is null$",
+      "reason": "Upstream RuneLite: ExternalPluginManager's constructor schedules its plugin-list upload with a random 0-59 minute first delay. When the draw is 0 (about one launch in 60) the task runs before ConfigManager.load() and reads a null profile. It throws once and runs again 180 minutes later. The desktop client has the same race."
+    },
+    {
       "id": "117hd-image-units",
       "header": "^WARN rs117\\.hd\\.HdPlugin - The GPU only supports 0 image units$",
       "sources": ["sim", "phone", "android"],
