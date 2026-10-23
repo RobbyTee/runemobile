@@ -26,6 +26,7 @@ package net.runelite.client.headless;
 
 import java.awt.Canvas;
 import java.awt.EventQueue;
+import java.awt.Rectangle;
 import java.awt.Toolkit;
 import java.awt.event.FocusEvent;
 import java.awt.event.InputEvent;
@@ -38,6 +39,8 @@ import net.runelite.api.Constants;
 import net.runelite.api.GameState;
 import net.runelite.api.World;
 import net.runelite.api.WorldType;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.widgets.Widget;
 
 /**
  * Gate 1c-ii / Phase-4 spike: the minimal slice of input injection needed to cross the
@@ -307,6 +310,8 @@ public final class HeadlessLogin
 		lastWelcomeDraw = 0;
 		welcomeDone = false;
 		welcomeGaveUp = false;
+		loggedInDraws = 0;
+		sceneDraws = 0;
 		legacyEnabled = Boolean.getBoolean("runelite.headless.autologin.legacy");
 	}
 
@@ -384,6 +389,16 @@ public final class HeadlessLogin
 		{
 			return;
 		}
+		// The welcome-screen dismiss counts frames and scene draws per login; leaving LOGGED_IN starts a new one.
+		if (state == GameState.LOGGED_IN)
+		{
+			loggedInDraws++;
+		}
+		else
+		{
+			loggedInDraws = 0;
+			sceneDraws = 0;
+		}
 		// FIX-9 reconnect: re-arm on a real disconnect (CONNECTION_LOST), distinct from a deliberate logout.
 		if (state == GameState.CONNECTION_LOST)
 		{
@@ -434,18 +449,17 @@ public final class HeadlessLogin
 				{
 					return;   // welcome overlay shown -> clicked it this tick, keep going until it's gone
 				}
-				// tryDismissWelcome returned false: either the player spawned (viewport allocated) or the
+				// tryDismissWelcome returned false: either the scene is drawing (in-world) or the
 				// auto-dismiss gave up pre-spawn. UX §4.7: don't conflate the two — a give-up that reported a
 				// clean login stranded the user on the "Click here to play" news screen with autologin
 				// "successful". Latch it honestly instead; the engine still renders the news screen and touches
 				// map through, so a manual tap on the play button recovers the world.
-				if (welcomeGaveUp && client.getViewportWidth() <= 0)
+				if (welcomeGaveUp)
 				{
 					if (!done)
 					{
 						log.warn("[headless-login] gave up auto-dismissing the post-login 'Click here to play' news "
-							+ "screen after {} click(s) at {},{} — tap the play button to enter the world",
-							welcomeAttempts, WELCOME_X, WELCOME_Y);
+							+ "screen after {} click(s) — tap the play button to enter the world", welcomeAttempts);
 						done = true;
 						gaveUp = true;   // hasGivenUp() now honest; cleared by the next re-arm / clean login
 					}
@@ -708,16 +722,29 @@ public final class HeadlessLogin
 	// in-world spawn — both leave welcomeDone true and return false). Lets tick() log an honest give-up + latch
 	// gaveUp instead of reporting a successful login while the player is stranded on the news screen.
 	private static boolean welcomeGaveUp;
-	// The "CLICK HERE TO PLAY" news welcome screen renders at the fixed 765x503 login canvas anchored top-left; the
-	// red play button sits near (390,95) there. Configurable in case it moves.
-	private static final int WELCOME_X = Integer.getInteger("runelite.headless.autologin.welcomeX", 390);
-	private static final int WELCOME_Y = Integer.getInteger("runelite.headless.autologin.welcomeY", 95);
+	// Frames since this login reached LOGGED_IN, and 3D scene draws in them. Both reset on any other game state.
+	private static int loggedInDraws;
+	private static int sceneDraws;
+	// Fallback point for the "CLICK HERE TO PLAY" button in the 765x503 fixed layout, scaled to the live canvas.
+	// Clicked only if the WelcomeScreen.PLAY widget never shows up; the widget's own bounds are the normal target.
+	private static final int WELCOME_X = Integer.getInteger("runelite.headless.autologin.welcomeX", 382);
+	private static final int WELCOME_Y = Integer.getInteger("runelite.headless.autologin.welcomeY", 337);
+
+	/**
+	 * Per 3D scene draw ({@link HeadlessSeams#drawScene}). The engine draws no scene while the post-login welcome
+	 * screen is up, so a draw since this login means the player is in the world. Client thread.
+	 */
+	static void noteSceneDraw()
+	{
+		sceneDraws++;
+	}
 
 	/**
 	 * Dismiss the post-login "CLICK HERE TO PLAY" news welcome screen so the harness reaches the live scene instead
-	 * of stalling on the lobby. Detected by {@code getLocalPlayer() == null} while LOGGED_IN (not spawned yet);
-	 * synthesizes a click at the play button. Returns {@code true} while still pre-spawn (caller keeps waiting),
-	 * {@code false} once the player has spawned (in-world) or we gave up.
+	 * of stalling on the lobby. Clicks the {@link InterfaceID.WelcomeScreen#PLAY} widget's real bounds, since the
+	 * screen is laid out for the live canvas (the resized in-world size on a reconnect or hop relog). Returns
+	 * {@code true} while still pre-spawn (caller keeps waiting), {@code false} once the scene is drawing (in-world)
+	 * or we gave up.
 	 */
 	private static boolean tryDismissWelcome(Client client)
 	{
@@ -727,8 +754,9 @@ public final class HeadlessLogin
 		}
 		try
 		{
-			// In-world once the 3D viewport is allocated (it's 0x0 while the post-login news screen is up).
-			if (client.getViewportWidth() > 0)
+			// In-world once the scene draws. Not the viewport size: that stays allocated on the resized canvas
+			// across a reconnect or hop relog, so it read as in-world with the welcome screen still up.
+			if (sceneDraws > 0)
 			{
 				welcomeDone = true;
 				return false;
@@ -748,17 +776,46 @@ public final class HeadlessLogin
 			{
 				return true;
 			}
+			final Rectangle play = playButtonBounds(client);
+			if (play == null && loggedInDraws < COOLDOWN_DRAWS)
+			{
+				return true;   // the welcome screen opens a few frames after LOGGED_IN
+			}
 			welcomeAttempts++;
 			lastWelcomeDraw = draws;
-			log.info("[headless-login] welcome 'Click here to play': synthesizing click at {},{} (attempt {}/{})",
-				WELCOME_X, WELCOME_Y, welcomeAttempts, MAX_ATTEMPTS);
-			synthesizeClick(canvas, WELCOME_X, WELCOME_Y);
+			if (play != null)
+			{
+				final int x = play.x + play.width / 2;
+				final int y = play.y + play.height / 2;
+				log.info("[headless-login] welcome 'Click here to play': click at {},{} (widget {},{} {}x{}, canvas {}x{}) "
+					+ "(attempt {}/{})", x, y, play.x, play.y, play.width, play.height, canvas.getWidth(),
+					canvas.getHeight(), welcomeAttempts, MAX_ATTEMPTS);
+				synthesizeClick(canvas, x, y);
+			}
+			else
+			{
+				log.info("[headless-login] welcome 'Click here to play': no play widget after {} frames, clicking "
+					+ "{},{} scaled to canvas {}x{} (attempt {}/{})", loggedInDraws, WELCOME_X, WELCOME_Y,
+					canvas.getWidth(), canvas.getHeight(), welcomeAttempts, MAX_ATTEMPTS);
+				synthesizeClickScaled(canvas, WELCOME_X, WELCOME_Y);
+			}
 			return true;
 		}
 		catch (RuntimeException ex)
 		{
 			return false;
 		}
+	}
+
+	private static Rectangle playButtonBounds(Client client)
+	{
+		final Widget play = client.getWidget(InterfaceID.WelcomeScreen.PLAY);
+		if (play == null || play.isHidden())
+		{
+			return null;
+		}
+		final Rectangle b = play.getBounds();
+		return b != null && b.width > 0 && b.height > 0 ? b : null;
 	}
 
 	private static void selectWorld(Client client)

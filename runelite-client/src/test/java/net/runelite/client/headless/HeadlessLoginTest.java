@@ -25,14 +25,18 @@
 package net.runelite.client.headless;
 
 import java.awt.Canvas;
+import java.awt.Rectangle;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.World;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.widgets.Widget;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import org.junit.Before;
 import org.junit.Test;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -90,7 +94,6 @@ public class HeadlessLoginTest
 		HeadlessLogin.resetForTest();
 		client = mock(Client.class);
 		when(client.getCanvas()).thenReturn(canvas);
-		when(client.getViewportWidth()).thenReturn(100);   // LOGGED_IN == in-world (no news overlay)
 	}
 
 	private void tickN(GameState state, int loginIndex, int n)
@@ -101,10 +104,11 @@ public class HeadlessLoginTest
 		}
 	}
 
-	/** Drive a clean login to the {@code done} latch: Play Now once, then LOGGED_IN in-world. */
+	/** Drive a clean login to the {@code done} latch: Play Now once, then LOGGED_IN in-world (the scene draws). */
 	private void driveToLoggedIn()
 	{
 		tickN(GameState.LOGIN_SCREEN, WELCOME_LOGIN_INDEX, 5);
+		HeadlessLogin.noteSceneDraw();
 		tickN(GameState.LOGGED_IN, -1, 1);
 		assertFalse("a successful login must not read as given-up", HeadlessLogin.hasGivenUp());
 		assertFalse("a successful login must not read as reconnecting", HeadlessLogin.isReconnecting());
@@ -139,19 +143,45 @@ public class HeadlessLoginTest
 	}
 
 	/**
-	 * UX §4.7 regression: the post-login "Click here to play" news screen stays up (the 3D viewport is never
-	 * allocated) and the fixed-coordinate auto-dismiss can't clear it. Before the fix this reported a clean
+	 * UX §4.7 regression: the post-login "Click here to play" news screen stays up (the scene never draws) and
+	 * the auto-dismiss can't clear it. Before the fix this reported a clean
 	 * login ({@code hasGivenUp() == false}) while stranding the user on the news screen; now the give-up is
 	 * latched honestly so it isn't silently mistaken for success.
 	 */
 	@Test
 	public void welcomeStrandLatchesGiveUpInsteadOfFalseSuccess()
 	{
-		when(client.getViewportWidth()).thenReturn(0);        // pre-spawn: the news overlay is still up
-		tickN(GameState.LOGIN_SCREEN, WELCOME_LOGIN_INDEX, 5); // Play Now
+		tickN(GameState.LOGIN_SCREEN, WELCOME_LOGIN_INDEX, 5); // Play Now; no scene draw: the news screen stays up
 		tickN(GameState.LOGGED_IN, -1, PLAY_EXHAUST_TICKS);    // welcome-dismiss exhausts its clicks pre-spawn
 		assertTrue("a stranded post-login news screen must latch gaveUp", HeadlessLogin.hasGivenUp());
 		assertFalse("a strand is not a transient reconnect", HeadlessLogin.isReconnecting());
+	}
+
+	/**
+	 * Reconnect regression: the resized viewport stays allocated across a reconnect, so the old viewport-based
+	 * in-world test passed at once and the client sat on the welcome screen until the idle logout. The dismiss
+	 * clicks the PLAY widget and only finishes once the scene draws.
+	 */
+	@Test
+	public void reconnectDismissesTheWelcomeScreenDespiteAnAllocatedViewport()
+	{
+		driveToLoggedIn();
+		tickN(GameState.CONNECTION_LOST, -1, 1);
+		tickN(GameState.LOGIN_SCREEN, RECONNECT_LOGIN_INDEX, 3);
+		tickN(GameState.LOGIN_SCREEN, WELCOME_LOGIN_INDEX, 5);   // Play Now
+
+		final Widget play = mock(Widget.class);
+		when(play.getBounds()).thenReturn(new Rectangle(472, 292, 229, 90));
+		when(client.getWidget(InterfaceID.WelcomeScreen.PLAY)).thenReturn(play);
+		when(client.getViewportWidth()).thenReturn(1173);   // still allocated from before the drop
+		tickN(GameState.LOGGED_IN, -1, 5);
+		verify(play, atLeastOnce()).getBounds();
+		assertTrue("no scene draw yet: still on the welcome screen, still recovering", HeadlessLogin.isReconnecting());
+
+		HeadlessLogin.noteSceneDraw();
+		tickN(GameState.LOGGED_IN, -1, 1);
+		assertFalse("the scene drawing ends the recovery", HeadlessLogin.isReconnecting());
+		assertFalse(HeadlessLogin.hasGivenUp());
 	}
 
 	@Test
@@ -186,7 +216,6 @@ public class HeadlessLoginTest
 		HeadlessLogin.resetForTest();
 		client = mock(Client.class);
 		when(client.getCanvas()).thenReturn(canvas);
-		when(client.getViewportWidth()).thenReturn(100);
 		driveToLoggedIn();
 		tickN(GameState.CONNECTION_LOST, -1, 1);
 		tickN(GameState.LOGIN_SCREEN, RECONNECT_LOGIN_INDEX, 1);
