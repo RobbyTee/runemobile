@@ -69,7 +69,14 @@ silicon Mac with the full JIT and no StikDebug. After steps 1–2 above:
 ios/dev-tools/run-sim.sh                  # build, install, launch and press Play (CPU renderer)
 RENDERER=gpu ios/dev-tools/run-sim.sh     # cpu | gpu | 117hd
 ios/dev-tools/run-sim.sh --jars           # restage the jars first, after a Java change
+ios/dev-tools/run-sim.sh --from-phone     # start from a paired phone's settings
 ```
+
+`--from-phone` copies the app's settings from a paired iPhone (cable or the
+same network) before launch: the native UI settings, the active RuneLite
+profile and the game's preferences, so the simulator starts the way the phone
+does. It never copies the login; the simulator stays logged out. The renderer
+follows the phone's unless `RENDERER` is set.
 
 The simulator build retags the bundled JRE as a simulator binary
 (`app/scripts/resign-jre.sh`), and the app services HotSpot's code-cache

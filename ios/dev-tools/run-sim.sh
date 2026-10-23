@@ -7,8 +7,18 @@
 #   ios/dev-tools/run-sim.sh --jars          # rebuild + stage the jars first (after a Java change)
 #   ios/dev-tools/run-sim.sh --no-build      # reinstall + relaunch the last simulator build
 #   ios/dev-tools/run-sim.sh --manual        # launch to the Play cover and wait for a click
+#   ios/dev-tools/run-sim.sh --from-phone    # start from the paired phone's settings (below)
 #   RENDERER=gpu ios/dev-tools/run-sim.sh    # cpu (default) | gpu | 117hd, for this launch only
 #   SIM_NAME="iPhone 17 Pro Max" (default) or SIM_UDID=<udid> picks the simulator.
+#
+# --from-phone copies the phone app's settings over the simulator's before launch, so the simulator starts the way
+# the phone does: the native UI settings (pinned keys, renderer, layout notice), the active RuneLite profile
+# (plugins, their config, the Plugin Hub list) and the game's own preferences (login music and the like). It copies
+# those files and nothing else; the login (tokens, RuneLite session) stays on the phone, so the simulator is logged
+# out. The phone must be paired with this Mac and reachable (cable or the same network). The renderer follows the
+# phone's unless RENDERER is set. PHONE_UDID=<id> picks the phone, PHONE_BUNDLE_ID the app on it (a SideStore
+# install has its own bundle ID). The copy is kept in build/sim-phone-state/phone, and the simulator settings it
+# replaced in build/sim-phone-state/sim-before.
 #
 # What the simulator does NOT tell you: performance (Mac CPU, no memory cap, no thermals), the device JIT path
 # (StikDebug), GPU driver quirks of the phone (GPU modes draw with Apple's software renderer), real multi-touch,
@@ -20,25 +30,32 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 SIM_NAME="${SIM_NAME:-iPhone 17 Pro Max}"
-RENDERER="${RENDERER:-cpu}"
-case "$RENDERER" in cpu|gpu|117hd) ;; *) echo "RENDERER must be cpu, gpu or 117hd (got '$RENDERER')" >&2; exit 1 ;; esac
+RENDERER="${RENDERER:-}"
+case "$RENDERER" in ''|cpu|gpu|117hd) ;; *) echo "RENDERER must be cpu, gpu or 117hd (got '$RENDERER')" >&2; exit 1 ;; esac
 BUNDLE_ID=dev.audaro.runemobile
 DERIVED="$REPO/build/dd-sim"
 APP="$DERIVED/Build/Products/Debug-iphonesimulator/RuneMobile.app"
+STATE="$REPO/build/sim-phone-state"
+# Paths inside the app's data container that --from-phone copies (with the settings plist).
+PROFILES=Documents/.runelite/profiles2
+LIVE=Documents/.runelite/jagexcache/oldschool/LIVE
 
 BUILD=yes
 JARS=no
 AUTOPLAY=YES
+FROM_PHONE=no
 for a in "$@"; do
   case "$a" in
-    --jars)     JARS=yes ;;
-    --no-build) BUILD=no ;;
-    --manual)   AUTOPLAY=NO ;;
+    --jars)       JARS=yes ;;
+    --no-build)   BUILD=no ;;
+    --manual)     AUTOPLAY=NO ;;
+    --from-phone) FROM_PHONE=yes ;;
     *) echo "unknown argument: $a" >&2; exit 1 ;;
   esac
 done
 
 log() { printf '\n\033[1;35m>> %s\033[0m\n' "$*"; }
+die() { echo "!! $*" >&2; exit 1; }
 cd "$REPO"
 
 # 1) Pick the simulator: an explicit UDID, else the first available device with this exact name.
@@ -58,7 +75,69 @@ log "Simulator $SIM_NAME ($SIM_UDID)"
 xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null
 open -a Simulator --args -CurrentDeviceUDID "$SIM_UDID"
 
-# 2) Jars (only on request: the staged ones are reused otherwise). Same steps as deploy-remote.sh's local build.
+# 2) --from-phone: copy the phone's settings now, so a phone that can't be reached fails before the build.
+if [ "$FROM_PHONE" = yes ]; then
+  PHONE_BUNDLE_ID="${PHONE_BUNDLE_ID:-$BUNDLE_ID}"
+  rm -rf "$STATE/phone"
+  mkdir -p "$STATE/phone"
+  if [ -z "${PHONE_UDID:-}" ]; then
+    xcrun devicectl list devices -t 60 -q --json-output "$STATE/devices.json" >/dev/null || die "devicectl can't list devices"
+    PHONE_UDID="$(/usr/bin/python3 -c '
+import json, sys
+for d in json.load(open(sys.argv[1]))["result"]["devices"]:
+    if d["hardwareProperties"].get("deviceType") == "iPhone" and d["connectionProperties"].get("pairingState") == "paired":
+        print(d["identifier"])
+        break
+' "$STATE/devices.json")"
+  fi
+  [ -n "$PHONE_UDID" ] || die "no paired iPhone (pair it in Xcode's Devices and Simulators window, or set PHONE_UDID)"
+  log "Copy settings from the phone ($PHONE_UDID, app $PHONE_BUNDLE_ID)"
+  phone_get() { # <path in the phone's container> <path under $STATE/phone>
+    xcrun devicectl device copy from --device "$PHONE_UDID" --domain-type appDataContainer \
+      --domain-identifier "$PHONE_BUNDLE_ID" --source "$1" --destination "$STATE/phone/$2" -t 60 -q >/dev/null ||
+      die "could not copy $1 from the phone (unlocked and reachable? has the app there reached the login screen?)"
+  }
+  # The plist is named after the bundle ID on each side.
+  phone_get "Library/Preferences/$PHONE_BUNDLE_ID.plist" "Library/Preferences/$BUNDLE_ID.plist"
+  phone_get "$LIVE/preferences.dat" "$LIVE/preferences.dat"
+  phone_get "$LIVE/preferences2.dat" "$LIVE/preferences2.dat"
+  # From profiles2, only profiles.json and the profile files: the directory also holds RuneLite's temp files.
+  xcrun devicectl device info files --device "$PHONE_UDID" --domain-type appDataContainer \
+    --domain-identifier "$PHONE_BUNDLE_ID" --subdirectory "$PROFILES" -t 60 -q \
+    --json-output "$STATE/profiles2.json" >/dev/null || die "could not list $PROFILES on the phone"
+  names="$(/usr/bin/python3 -c '
+import json, sys
+for f in json.load(open(sys.argv[1]))["result"]["files"]:
+    n = f["relativePath"]
+    if not f["resources"]["isDirectory"] and "/" not in n and (n == "profiles.json" or n.endswith(".properties")):
+        print(n)
+' "$STATE/profiles2.json")"
+  while IFS= read -r n; do
+    [ -z "$n" ] || phone_get "$PROFILES/$n" "$PROFILES/$n"
+  done <<<"$names"
+
+  plutil -lint -s "$STATE/phone/Library/Preferences/$BUNDLE_ID.plist" || die "the phone's settings plist doesn't parse"
+  [ -f "$STATE/phone/$PROFILES/profiles.json" ] || die "the phone has no $PROFILES/profiles.json"
+  # RuneLite loads the active profile from <name>-<id>.properties (ProfileManager). Profiles synced from a RuneLite
+  # account have no local file, so only the active one has to be there.
+  /usr/bin/python3 -c '
+import json, os, sys
+active = [p for p in json.load(open(os.path.join(sys.argv[1], "profiles.json")))["profiles"] if p.get("active")]
+if len(active) != 1:
+    sys.exit("profiles.json has %d active profiles, expected 1" % len(active))
+f = "%s-%s.properties" % (active[0]["name"], active[0]["id"])
+if not os.path.isfile(os.path.join(sys.argv[1], f)):
+    sys.exit("the active profile %s is not among the copied files" % f)
+' "$STATE/phone/$PROFILES" || die "the phone's RuneLite profiles can't be used as they are"
+
+  if [ -z "$RENDERER" ]; then
+    RENDERER="$(plutil -extract rendererPref raw "$STATE/phone/Library/Preferences/$BUNDLE_ID.plist" 2>/dev/null || true)"
+    case "$RENDERER" in cpu|gpu|117hd) ;; *) die "the phone's rendererPref is '$RENDERER'; set RENDERER=cpu|gpu|117hd" ;; esac
+  fi
+fi
+RENDERER="${RENDERER:-cpu}"
+
+# 3) Jars (only on request: the staged ones are reused otherwise). Same steps as deploy-remote.sh's local build.
 if [ "$JARS" = yes ]; then
   log "Jar build + staging"
   JAVA_HOME="$JAVA_HOME" ./gradlew :client:shadowJar
@@ -67,7 +146,7 @@ if [ "$JARS" = yes ]; then
   ( cd ios/app && JAVA_HOME="$JAVA_HOME" ./build-probes.sh )
 fi
 
-# 3) Build for the simulator. No provisioning: simulator builds sign ad-hoc.
+# 4) Build for the simulator. No provisioning: simulator builds sign ad-hoc.
 if [ "$BUILD" = yes ]; then
   # Local signing config (gitignored): exports DEVELOPMENT_TEAM for xcodegen's ${DEVELOPMENT_TEAM} expansion.
   # shellcheck disable=SC1091
@@ -80,7 +159,7 @@ if [ "$BUILD" = yes ]; then
 fi
 [ -d "$APP" ] || { echo "!! no simulator build at $APP (run without --no-build)" >&2; exit 1; }
 
-# 4) Install + launch. Launch arguments land in NSUserDefaults' argument domain, which wins over the app's own
+# 5) Install + launch. Launch arguments land in NSUserDefaults' argument domain, which wins over the app's own
 #    saved values for this launch only: rendererPref picks the renderer, RMAutoPlay presses Play.
 log "Install + launch (renderer $RENDERER, autoplay $AUTOPLAY)"
 xcrun simctl install "$SIM_UDID" "$APP"
@@ -88,6 +167,24 @@ xcrun simctl install "$SIM_UDID" "$APP"
 # Answer it the way a phone that has been through first run already has, so an unattended run's screenshots show
 # the game. To see the prompt again: xcrun simctl privacy <udid> reset microphone dev.audaro.runemobile
 xcrun simctl privacy "$SIM_UDID" grant microphone "$BUNDLE_ID"
+if [ "$FROM_PHONE" = yes ]; then
+  # The app must not be running (it would save its own settings back over the copy), and the simulator's cfprefsd
+  # serves the old plist from its cache until it restarts.
+  DATA="$(xcrun simctl get_app_container "$SIM_UDID" "$BUNDLE_ID" data)"
+  xcrun simctl terminate "$SIM_UDID" "$BUNDLE_ID" 2>/dev/null || true
+  rm -rf "$STATE/sim-before"
+  for p in "Library/Preferences/$BUNDLE_ID.plist" "$PROFILES" "$LIVE/preferences.dat" "$LIVE/preferences2.dat"; do
+    [ ! -e "$DATA/$p" ] || ditto "$DATA/$p" "$STATE/sim-before/$p"
+  done
+  # Replace profiles2 whole, so the simulator's own profile files don't linger next to the phone's.
+  rm -rf "${DATA:?}/$PROFILES"
+  ditto "$STATE/phone" "$DATA"
+  rc=0
+  xcrun simctl spawn "$SIM_UDID" launchctl kill SIGKILL user/foreground/com.apple.cfprefsd.xpc.daemon 2>/dev/null || rc=$?
+  # 3 = not running, so nothing is cached either.
+  [ "$rc" = 0 ] || [ "$rc" = 3 ] || die "could not restart the simulator's cfprefsd (launchctl $rc): the app would read its old settings"
+  echo "   Settings now match the phone's (the simulator's previous ones: $STATE/sim-before)."
+fi
 xcrun simctl launch --terminate-running-process "$SIM_UDID" "$BUNDLE_ID" \
   -rendererPref "$RENDERER" -RMAutoPlay "$AUTOPLAY"
 
