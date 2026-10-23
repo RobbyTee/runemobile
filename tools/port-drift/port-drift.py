@@ -582,7 +582,13 @@ def android_lookups(path):
                 sites += [(kind, v["class"], v["name"], sig, where(pos)) for v in got]
             seen.add(pos)
 
-    # Every FindClass and lookup call in the file must have been met by the per-function scan above.
+    # Every FindClass and lookup call in the file must have been met by the per-function scan above, and must be
+    # in the env->Name(...) form it reads: a C-style (*env)->Name(env, ...) call would otherwise go unseen.
+    read = {m.start(2) for m in pat.finditer(nostr) if m.group(2)}
+    unread = [m.start(1) for m in re.finditer(r"\b(" + calls + r")\s*\(", nostr) if m.start(1) not in read]
+    if unread:
+        raise InputError(f"{', '.join(where(p) for p in unread)}: a JNI call not in the env->Name(...) form the "
+                         "Android extractor reads; extend android_lookups in port-drift.py")
     every = [m for m in pat.finditer(nostr) if m.group(2) != "NewGlobalRef"
              and not (m.group(3) and E.is_declaration(nostr, m.start(3)))]
     if len(every) != total or total != len(seen):

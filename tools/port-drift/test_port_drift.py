@@ -144,6 +144,12 @@ class AndroidLookups(unittest.TestCase):
         with self.assertRaises(pd.InputError):
             self.extract("static void f(JNIEnv *env) {\n  jmethodID m = env->GetStaticMethodID(mystery, \"x\", \"()V\");\n}\n")
 
+    def test_c_style_lookup_stops(self):
+        src = ('static void f(JNIEnv *env) {\n  jclass c = env->FindClass("A");\n'
+               '  jmethodID m = (*env)->GetMethodID(env, c, "x", "()V");\n}\n')
+        with self.assertRaisesRegex(pd.InputError, r"jvm_bootstrap\.cpp:3: a JNI call not in the env->Name"):
+            self.extract(src)
+
     def test_non_literal_name_outside_a_helper_stops(self):
         src = 'static void f(JNIEnv *env) {\n  jclass c = env->FindClass("A");\n  env->GetStaticMethodID(c, nm, "()V");\n}\n'
         with self.assertRaises(pd.InputError):

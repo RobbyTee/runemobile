@@ -71,7 +71,8 @@ methods (`METHOD` lines in `baseline.txt`):
 - iOS: `ios/dev-tools/bridge-census/extract-lookups.py`, the same list the iOS census resolves in the simulator;
 - Android: `android/app/src/main/cpp`, the files `CMakeLists.txt` builds. The extractor follows class variables
   through `NewGlobalRef`, globals, the `midOpt` wrapper and helpers that take the class name or return it through an
-  output parameter (`registerDataPanel`), and resolves each helper call at its call site.
+  output parameter (`registerDataPanel`), and resolves each helper call at its call site. It reads the C++
+  `env->Name(...)` form; a lookup written any other way (C's `(*env)->Name(env, ...)`) stops the run.
 
 The report counts each bridge class's methods bound by both, one or neither port, lists the one-port ones, and the
 lookups outside the contract. A method bound by neither is usually one the Java side calls itself (`init`, `tick`).
