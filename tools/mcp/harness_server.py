@@ -776,11 +776,14 @@ def tool_android_screenshot(a):
     if e:
         return e
     out = a.get("out") or str(REPO_ROOT / "android/dev-tools" / f"screen-{int(time.time())}.png")
-    rc, o, er = run(base + ["exec-out", "screencap", "-p"], timeout=30)
-    if rc != 0:
-        return err_result({"exitCode": rc, "stderr": er[-800:], "hint": "is a device/emulator connected? (adb devices)"})
-    # exec-out returns binary on stdout; capture_output text mode would corrupt it, so re-run binary-safe.
-    p = subprocess.run(base + ["exec-out", "screencap", "-p"], capture_output=True, timeout=30)
+    # exec-out puts the PNG on stdout. Capture bytes: run() decodes text, which fails on a PNG.
+    try:
+        p = subprocess.run(base + ["exec-out", "screencap", "-p"], capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return err_result({"error": "screencap timed out after 30 s", "hint": "is the device awake? (adb devices)"})
+    if p.returncode != 0 or not p.stdout.startswith(b"\x89PNG"):
+        return err_result({"exitCode": p.returncode, "stderr": p.stderr.decode(errors="replace")[-800:],
+                           "hint": "is a device/emulator connected? (adb devices)"})
     Path(out).write_bytes(p.stdout)
     return ok_result(
         {"ok": True, "path": out, "bytes": len(p.stdout), "hint": "Read this path to view, or feed it to image_diff."}

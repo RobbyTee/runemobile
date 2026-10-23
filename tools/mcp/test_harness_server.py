@@ -728,5 +728,29 @@ class SimScreens(unittest.TestCase):
         self.assertTrue(r.get("isError"), r)
 
 
+class AndroidScreenshot(unittest.TestCase):
+    def shoot(self, proc):
+        def fake_run(cmd, **kw):
+            if kw.get("text"):  # like subprocess: decoding a PNG as text raises
+                return subprocess.CompletedProcess(cmd, proc.returncode, proc.stdout.decode(), proc.stderr.decode())
+            return proc
+
+        out = Path(tempfile.mkdtemp()) / "shot.png"
+        with mock.patch.object(hs, "find_adb", return_value="/usr/bin/adb"), \
+                mock.patch.object(hs.subprocess, "run", side_effect=fake_run):
+            return hs.tool_android_screenshot({"out": str(out)}), out
+
+    def test_png_bytes_are_written_as_is(self):
+        png = b"\x89PNG\r\n\x1a\n" + bytes(range(256))
+        r, out = self.shoot(subprocess.CompletedProcess([], 0, png, b""))
+        self.assertFalse(r["isError"], r)
+        self.assertEqual(out.read_bytes(), png)
+
+    def test_no_device_is_an_error(self):
+        r, out = self.shoot(subprocess.CompletedProcess([], 1, b"", b"error: no devices/emulators found"))
+        self.assertTrue(r["isError"], r)
+        self.assertFalse(out.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
