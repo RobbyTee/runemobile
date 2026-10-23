@@ -312,6 +312,9 @@ public final class HeadlessLogin
 		welcomeGaveUp = false;
 		loggedInDraws = 0;
 		sceneDraws = 0;
+		layoutWidth = -1;
+		layoutHeight = -1;
+		layoutDraws = 0;
 		legacyEnabled = Boolean.getBoolean("runelite.headless.autologin.legacy");
 	}
 
@@ -729,6 +732,14 @@ public final class HeadlessLogin
 	// Clicked only if the WelcomeScreen.PLAY widget never shows up; the widget's own bounds are the normal target.
 	private static final int WELCOME_X = Integer.getInteger("runelite.headless.autologin.welcomeX", 382);
 	private static final int WELCOME_Y = Integer.getInteger("runelite.headless.autologin.welcomeY", 337);
+	// The canvas size the welcome dismiss last saw, and the draws it has held. The engine records a widget's
+	// position as it draws it, so after a resize the PLAY widget reports where it sat in the old layout until the
+	// engine has drawn at the new size. On first login HeadlessResize widens the 765x503 canvas just as the welcome
+	// screen opens, and a click at the old button centre hit the message-centre link beside it: the browser opened.
+	private static final int LAYOUT_SETTLE_DRAWS = 3;
+	private static int layoutWidth = -1;
+	private static int layoutHeight = -1;
+	private static int layoutDraws;
 
 	/**
 	 * Per 3D scene draw ({@link HeadlessSeams#drawScene}). The engine draws no scene while the post-login welcome
@@ -772,7 +783,7 @@ public final class HeadlessLogin
 				return true;   // waiting out the cooldown between clicks
 			}
 			final Canvas canvas = client.getCanvas();
-			if (canvas == null)
+			if (canvas == null || !layoutSettled(canvas))
 			{
 				return true;
 			}
@@ -805,6 +816,27 @@ public final class HeadlessLogin
 		{
 			return false;
 		}
+	}
+
+	/**
+	 * Whether the widgets are laid out for the live canvas: HeadlessResize has no resize still to come, and the
+	 * canvas has kept its size for {@link #LAYOUT_SETTLE_DRAWS} draws. Called once per draw while dismissing.
+	 */
+	private static boolean layoutSettled(Canvas canvas)
+	{
+		if (canvas.getWidth() != layoutWidth || canvas.getHeight() != layoutHeight)
+		{
+			layoutWidth = canvas.getWidth();
+			layoutHeight = canvas.getHeight();
+			layoutDraws = 0;
+			log.info("[headless-login] welcome: canvas {}x{}, waiting for the layout before clicking", layoutWidth,
+				layoutHeight);
+		}
+		else
+		{
+			layoutDraws++;
+		}
+		return !HeadlessResize.isPending() && layoutDraws >= LAYOUT_SETTLE_DRAWS;
 	}
 
 	private static Rectangle playButtonBounds(Client client)

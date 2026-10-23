@@ -184,6 +184,30 @@ public class HeadlessLoginTest
 		assertFalse(HeadlessLogin.hasGivenUp());
 	}
 
+	/**
+	 * First-login regression: HeadlessResize widened the canvas as the welcome screen opened, and the dismiss
+	 * clicked the PLAY widget's bounds from the old 765x503 layout. On the wide canvas that point is the
+	 * message-centre link, which opened the browser. The click now waits until the size has held for a few draws.
+	 */
+	@Test
+	public void welcomeClickWaitsForTheLayoutAfterAResize()
+	{
+		canvas.setSize(765, 503);
+		tickN(GameState.LOGIN_SCREEN, WELCOME_LOGIN_INDEX, 5);   // Play Now
+
+		final Widget play = mock(Widget.class);
+		when(play.getBounds()).thenReturn(new Rectangle(268, 292, 229, 90));
+		when(client.getWidget(InterfaceID.WelcomeScreen.PLAY)).thenReturn(play);
+		tickN(GameState.LOGGED_IN, -1, 2);
+		canvas.setSize(1200, 540);   // the resize lands; the widget still reports its old position
+		tickN(GameState.LOGGED_IN, -1, 2);
+		verify(play, never()).getBounds();
+
+		when(play.getBounds()).thenReturn(new Rectangle(485, 292, 229, 90));
+		tickN(GameState.LOGGED_IN, -1, 2);
+		verify(play, atLeastOnce()).getBounds();
+	}
+
 	@Test
 	public void tryAgainExhaustionLatchesGiveUp()
 	{
