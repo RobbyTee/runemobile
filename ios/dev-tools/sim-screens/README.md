@@ -96,7 +96,8 @@ ios/dev-tools/sim-screens/plugin-sweep.py --no-build "config:Agility" "panel:Not
 A screen passes when the app reports it ready; when no `[bridge-fault]` or `[json-fault]` line reaches
 `jvm-stdio.log` or `hello-shell.log` between opening and closing it; and when it isn't blank: a settings screen lists
 at least one setting, a rendered panel has drawn a frame that isn't one flat colour, and the content area in the
-screenshot shows more than its background. Other log lines that aren't known noise are listed with the screen but
+screenshot shows more than its background. A settings screen also fails when another plugin in the list reports the
+same config group: the screen is opened by group, so one of the two shows the other's settings. Other log lines that aren't known noise are listed with the screen but
 don't fail it; `sim-gate.sh`'s log scan judges those.
 
 A panel that `sweep.json` turned on is marked so in the results. A new plugin with a panel that is off by default needs

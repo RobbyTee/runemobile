@@ -32,9 +32,12 @@ import com.google.common.graph.Graphs;
 import com.google.common.graph.MutableGraph;
 import com.google.common.reflect.ClassPath;
 import com.google.common.reflect.ClassPath.ClassInfo;
+import com.google.inject.Binding;
 import com.google.inject.Injector;
 import com.google.inject.Key;
 import com.google.inject.Module;
+import com.google.inject.spi.Element;
+import com.google.inject.spi.Elements;
 import java.io.File;
 import java.io.IOException;
 import java.lang.invoke.CallSite;
@@ -156,11 +159,12 @@ public class PluginManager
 		try
 		{
 			final Injector injector = plugin.getInjector();
+			final Set<Key<?>> shared = dependencyKeys(plugin);
 
 			for (Key<?> key : injector.getBindings().keySet())
 			{
 				Class<?> type = key.getTypeLiteral().getRawType();
-				if (Config.class.isAssignableFrom(type))
+				if (Config.class.isAssignableFrom(type) && !shared.contains(key))
 				{
 					return (Config) injector.getInstance(key);
 				}
@@ -175,6 +179,35 @@ public class PluginManager
 			log.error("Unable to get plugin config", e);
 		}
 		return null;
+	}
+
+	/**
+	 * The keys a plugin's dependencies bind into its injector through their public modules. Those are
+	 * installed ahead of the plugin's own module, so a dependency that shares its config (EntityHiderPlugin
+	 * does, for 117HD) would otherwise be taken for the dependent's config.
+	 */
+	private Set<Key<?>> dependencyKeys(Plugin plugin)
+	{
+		final Set<Key<?>> keys = new HashSet<>();
+		for (PluginDependency dependency : plugin.getClass().getAnnotationsByType(PluginDependency.class))
+		{
+			for (Plugin p : plugins)
+			{
+				final Module module = p.getClass() == dependency.value() ? p.getPublicModule() : null;
+				if (module == null)
+				{
+					continue;
+				}
+				for (Element element : Elements.getElements(module))
+				{
+					if (element instanceof Binding)
+					{
+						keys.add(((Binding<?>) element).getKey());
+					}
+				}
+			}
+		}
+		return keys;
 	}
 
 	public List<Config> getPluginConfigProxies(Collection<Plugin> plugins)
