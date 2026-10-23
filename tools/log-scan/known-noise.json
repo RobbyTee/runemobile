@@ -1,0 +1,54 @@
+{
+  "about": "Lines log-scan.py expects and does not fail on. Each entry: id, header (regex, searched in the event's first line with the timestamp and thread removed and spaces squashed), optional cause (regex, searched in the throwable and each Caused by line), optional sources (sim, phone, android, desktop; default all), and the reason it is expected. Keep the regexes narrow: a broad one hides the next real problem. Remove an entry once its cause is fixed.",
+  "noise": [
+    {
+      "id": "discord-library",
+      "header": "^WARN n\\.r\\.client\\.discord\\.DiscordService - Failed to load Discord library, Discord support will be disabled\\.$",
+      "sources": ["sim", "phone", "android"],
+      "reason": "RuneLite's Discord integration loads the Discord SDK's native library, which neither port ships (there is no Discord desktop app to talk to). RuneLite turns Discord support off and carries on."
+    },
+    {
+      "id": "sound-engine",
+      "header": "^ERROR injected-client - Error initializing sound engine\\. Audio will be unavailable\\.$",
+      "cause": "IllegalArgumentException: No line matching interface SourceDataLine supporting format PCM_SIGNED",
+      "sources": ["phone", "android"],
+      "reason": "Java Sound has no output line in the phone JREs, so the game runs without audio. The simulator plays through the Mac's audio and does not log this, so it is not excused there."
+    },
+    {
+      "id": "worldhopper-jna-ping",
+      "header": "^ERROR n\\.r\\.c\\.util\\.RunnableExceptionLogger - Uncaught exception in runnable net\\.runelite\\.client\\.plugins\\.worldhopper\\.WorldHopperPlugin\\$\\$Lambda",
+      "cause": "NoClassDefFoundError: Could not initialize class (net\\.runelite\\.client\\.plugins\\.worldhopper\\.ping\\.RLLibC|com\\.sun\\.jna\\.Native)$",
+      "sources": ["sim", "phone", "android"],
+      "reason": "JNA's native library doesn't load in the mobile JREs, so World Hopper's ICMP ping throws NoClassDefFoundError. Ping.java only falls back to a TCP ping on IOException, so World Hopper gets no ping at all. The first ping logs the JNA init failure, later ones the RLLibC init failure."
+    },
+    {
+      "id": "117hd-image-units",
+      "header": "^WARN rs117\\.hd\\.HdPlugin - The GPU only supports 0 image units$",
+      "sources": ["sim", "phone", "android"],
+      "reason": "The GLES drivers 117HD runs on here expose no image load/store units (the iPhone's and the simulator's GLES 3.0; also seen on Android in the June Firebase 117HD runs). 117HD logs it and runs without the features that need them."
+    },
+    {
+      "id": "session-ping-sink",
+      "header": "^WARN n\\.r\\.client\\.ClientSessionManager - Unable to ping session service$",
+      "cause": "ConnectException: (Failed to connect to /127\\.0\\.0\\.1:1|Connection refused)",
+      "reason": "Deliberate: RuneLiteHeadless.java points RuneLite's session ping at http://127.0.0.1:1 so the app sends nothing to api.runelite.net (PRIVACY.md), and every ping is refused. The first one comes at a random time in the first 5 minutes."
+    },
+    {
+      "id": "cacio-setzorder",
+      "header": "^CacioComponentPeer::setZOrder: NOT YET IMPLEMENTED$",
+      "reason": "Caciocavallo's component peer doesn't implement setZOrder and says so when RuneLite's frame is shown. The frame is drawn off-screen and composited by the native shell, so window z-order has no effect."
+    },
+    {
+      "id": "desktop-dynamic-agent",
+      "header": "^WARNING: (A Java agent has been loaded dynamically \\(.*byte-buddy-agent-[\\d.]+\\.jar\\)|If a serviceability tool is (not )?in use, please run with .*|Dynamic loading of agents will be disallowed by default in a future release)$",
+      "sources": ["desktop"],
+      "reason": "The desktop CACIO harness loads Byte Buddy's agent at run time, and JDK 21 warns about dynamic agent loading. Desktop harness only."
+    },
+    {
+      "id": "desktop-junit-execute",
+      "header": "^WARNING: Delegated to the 'execute' command\\.$",
+      "sources": ["desktop"],
+      "reason": "The JUnit console launcher the desktop harness runs is called without its 'execute' subcommand and warns that this is deprecated. Desktop harness only."
+    }
+  ]
+}

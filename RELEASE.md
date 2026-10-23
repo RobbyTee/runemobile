@@ -156,6 +156,11 @@ next launch as usual.
 - [ ] `versionName` / `versionCode` bumped; `CHANGELOG.md` updated.
 - [ ] `PRIVACY.md` still accurate (re-check if any data flow changed).
 - [ ] Built against the current OSRS revision (no `js5connect_outofdate`).
+- [ ] **iOS Simulator gate green** — `ios/dev-tools/sim-gate.sh` ends `VERDICT: SIM_GATE_GREEN`: the
+      simulator build, the iOS bridge census, the screen goldens, each renderer (CPU, GPU, 117HD) booted
+      to the login screen, and a log scan with no unexpected lines and no shader errors
+      (`ios/dev-tools/sim-gate/README.md`). It needs a Mac with Xcode; the goldens are local to that Mac,
+      so a new Mac writes them first with `sim-screens.py --update`.
 - [ ] **Published with `tools/ci/publish-stable-release.sh <tag>`**, not a hand-written
       `gh release create`. The AltStore feed is served from whichever release is Latest, so a stable
       release published without `altstore.json` attached leaves every user pinned to the previous
