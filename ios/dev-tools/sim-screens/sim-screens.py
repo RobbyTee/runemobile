@@ -12,8 +12,10 @@ each screen through the same entry point as its button (ViewController.m, simScr
 "<seq> <screen>" to the app's Documents/screen-cmd and waits for "[screen] ready <seq> <screen>" in hello-shell.log
 (screendriver.py, shared with plugin-sweep.py).
 
-Goldens are kept per simulator model in ios/app/evidence/sim-golden/<model>/, which is gitignored: they show the
-plugin list, and they change with Xcode's simulator runtime, so each Mac keeps its own. Each run's shots and diff
+Goldens are kept per simulator model and per way its window faces, in
+ios/app/evidence/sim-golden/<model>/<LandscapeLeft|LandscapeRight>/ (the Dynamic Island is on the side the top of
+the device points to). The folder is gitignored: the goldens show the plugin list, and they change with Xcode's
+simulator runtime, so each Mac keeps its own. Each run's shots and diff
 heatmaps land in ios/app/evidence/sim-screens/<stamp>/. A screen passes when at most maxPctDiffering % of its
 pixels differ from the golden by more than threshold in any channel (screens.json). Exits 0 exactly when GREEN;
 the last line is VERDICT: SIM_SCREENS_GREEN or _RED. Run it with /usr/bin/python3 (it needs PIL + numpy).
@@ -76,7 +78,9 @@ def main():
     if err:
         red(f"no simulator: {err}")
     model = device_name(udid)
-    golden_dir = GOLDEN_ROOT / model
+    # Simulator.app keeps whichever way the window was last turned, and the island moves with it.
+    _angle, facing = hs._sim_rotation(udid)
+    golden_dir = GOLDEN_ROOT / model / (facing or "unknown-facing")
     run_dir = RUNS_ROOT / time.strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -116,8 +120,11 @@ def main():
             print(f"   {name:<22} UPDATED  {golden}")
             continue
         if not golden.exists():
-            results.append(dict(r, status="NO_GOLDEN", why=f"no golden at {golden}; run with --update"))
-            print(f"   {name:<22} NO_GOLDEN  (run with --update)")
+            why = f"no golden at {golden}; run with --update"
+            if any(d != golden_dir and (d / file).exists() for d in golden_dir.parent.iterdir()):
+                why += f" (there is one for the window facing the other way; it faces {facing} now)"
+            results.append(dict(r, status="NO_GOLDEN", why=why))
+            print(f"   {name:<22} NO_GOLDEN  {why}")
             continue
         from PIL import Image
 
@@ -140,7 +147,7 @@ def main():
               f"(budget {s['maxPctDiffering']}%), max delta {delta['maxChannelDelta']}")
     drv.open("-")
 
-    summary = {"model": model, "simUdid": udid, "update": args.update, "goldens": str(golden_dir),
+    summary = {"model": model, "facing": facing, "simUdid": udid, "update": args.update, "goldens": str(golden_dir),
                "shots": str(run_dir), "results": results}
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(f"shots={run_dir}")

@@ -29,7 +29,8 @@ build. A new screen, or a new Mac, has no golden yet; the run says `NO_GOLDEN` u
    the screen through the same method its button calls (`ViewController.m`, `simOpenScreen:`), waits for the
    presentation to finish, and logs `[screen] ready <seq> <screen>` (or `failed`, with the reason) to
    `hello-shell.log`. The script then waits the screen's `settle` time and takes the screenshot.
-4. Each shot is compared with `ios/app/evidence/sim-golden/<simulator model>/<screen>.png`. A screen passes when
+4. Each shot is compared with `ios/app/evidence/sim-golden/<simulator model>/<facing>/<screen>.png`, where
+   `<facing>` is `LandscapeLeft` or `LandscapeRight`, the way Simulator.app has the window turned. A screen passes when
    at most `maxPctDiffering` % of its pixels differ by more than `threshold` in any channel. The defaults are 2
    and 0: the compositor's antialiasing on rounded corners can come out one level off between launches, while a
    changed word differs by about 200. A failing screen gets a `.diff.png` heatmap next to its shot.
@@ -57,8 +58,9 @@ the shots show what they should.
 
 The device's window in Simulator.app has to be in landscape. `simctl` captures in the device's own portrait frame,
 and the shots are turned by the rotation Simulator.app records for each window, so a device still in portrait
-stops the run before the first shot. Turn it once (Device > Rotate Left) and leave it: the goldens also depend on
-which way it faces.
+stops the run before the first shot. Turn it once (Device > Rotate Left). The Dynamic Island shows on the side the
+top of the device points to, so the goldens are kept per way the window faces: turn it the other way and every
+screen reports `NO_GOLDEN` until you turn it back or take a set for that side with `--update`.
 
 Check them by eye the first time. A golden is only as good as the shot it was taken from.
 

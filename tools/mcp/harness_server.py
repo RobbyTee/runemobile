@@ -1558,7 +1558,8 @@ TOOLS = {
         "(settings, about, plugins, edit-controls, overlays, profiles, infoboxes, panel:<rail tooltip>; hub, which "
         "shows live Plugin Hub data, only when named) through its own button's entry point, screenshots it and "
         "compares it with its golden in "
-        "ios/app/evidence/sim-golden/<model>/. Returns SIM_SCREENS_GREEN or _RED with each screen's result, the shot "
+        "ios/app/evidence/sim-golden/<model>/<facing>/ (LandscapeLeft or LandscapeRight, the way the Simulator "
+        "window is turned). Returns SIM_SCREENS_GREEN or _RED with each screen's result, the shot "
         "and, on a FAIL, a diff heatmap. update=true writes the goldens from this run instead. ~40 s for the default "
         "set with an incremental build.",
         {
