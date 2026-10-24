@@ -807,6 +807,17 @@ GLF rc_glShaderSource(JNIEnv* e, jclass, jint a0, jstring a1){
 GLF rc_glTexImage2D(JNIEnv*, jclass, jint a0, jint a1, jint a2, jint a3, jint a4, jint a5, jint a6, jint a7, jlong a8){
     if ((GLenum)a6==GL_BGRA){ a6=GL_RGBA; glTexImage2D((GLenum)a0,a1,a2,a3,a4,a5,(GLenum)a6,(GLenum)a7,(const void*)(intptr_t)a8);
         glTexParameteri((GLenum)a0, GL_TEXTURE_SWIZZLE_R, GL_BLUE); glTexParameteri((GLenum)a0, GL_TEXTURE_SWIZZLE_B, GL_RED); return; }
+    // RLHD allocates its shadow maps as DEPTH_COMPONENT24 (DEPTH_COMPONENT16 for the terrain map, or with shadow
+    // transparency off) with type GL_FLOAT. Desktop GL allows that; GLES 3 pairs DEPTH_COMPONENT16 with UNSIGNED_SHORT
+    // or UNSIGNED_INT, DEPTH_COMPONENT24 with UNSIGNED_INT, and only DEPTH_COMPONENT32F with FLOAT. Mali refuses the
+    // call (GL_INVALID_OPERATION), the shadow FBO stays incomplete, every shadow lookup reads depth 0 and the whole
+    // scene counts as shadowed: darker, with no sun shadows. No data is uploaded (null pointer), so only the type
+    // changes. iOS does the same in routec_gl_jni.m.
+    if ((GLenum)a6 == GL_DEPTH_COMPONENT && (GLenum)a7 == GL_FLOAT && a8 == 0 &&
+        ((GLenum)a2 == GL_DEPTH_COMPONENT16 || (GLenum)a2 == GL_DEPTH_COMPONENT24)) {
+        a7 = (GLenum)a2 == GL_DEPTH_COMPONENT16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;
+        LOGI("[shadowmap] depth texture 0x%x %dx%d: type GL_FLOAT -> 0x%x (GLES depth format/type pairing)", a2, a3, a4, a7);
+    }
     glTexImage2D((GLenum)a0,a1,a2,a3,a4,a5,(GLenum)a6,(GLenum)a7,(const void*)(intptr_t)a8);
 }
 GLF rc_glTexImage3D(JNIEnv*, jclass, jint a0, jint a1, jint a2, jint a3, jint a4, jint a5, jint a6, jint a7, jint a8, jlong a9){ glTexImage3D((GLenum)a0,a1,a2,a3,a4,a5,a6,(GLenum)a7,(GLenum)a8,(const void*)(intptr_t)a9); }

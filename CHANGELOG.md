@@ -14,6 +14,14 @@ as "What's new".
 
 ## [Unreleased]
 
+### Fixed
+- **Android 117 HD had no sun shadows** and looked flat and dark next to the iPhone at the same settings. 117 HD
+  asks for its shadow map in a format the Android graphics driver refuses, so the map was never made and the
+  whole scene was drawn as if in shadow. The app now asks for a format the driver accepts. Shadows cost frames:
+  on a Pixel 7a, about 38 fps with Detailed shadows against 47 with them off. Shadows are in the 117 HD settings.
+- **iOS: 117 HD's terrain shadows were missing** for the same reason. The fix for the main shadow map did not
+  cover the terrain map, which uses a different format.
+
 ## [0.3.0] - 2026-10-23
 
 ### Changed
