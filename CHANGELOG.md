@@ -14,6 +14,8 @@ as "What's new".
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-23
+
 ### Fixed
 - **Android 117 HD had no sun shadows** and looked flat and dark next to the iPhone at the same settings. 117 HD
   asks for its shadow map in a format the Android graphics driver refuses, so the map was never made and the
@@ -288,7 +290,9 @@ OAuth + RuneLite-account sync, native HUD/chat/tab-grid veneers, plugin panel.
 - Release signing: a dedicated key via `keystore.properties` when present, else
   the debug key (see `keystore.properties.example`).
 
-[Unreleased]: https://github.com/audaro/runemobile/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/audaro/runemobile/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/audaro/runemobile/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/audaro/runemobile/compare/v0.2.7...v0.3.0
 [0.2.7]: https://github.com/audaro/runemobile/compare/v0.2.6...v0.2.7
 [0.2.0]: https://github.com/audaro/runemobile/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/audaro/runemobile/releases/tag/v0.1.0

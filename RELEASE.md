@@ -44,10 +44,6 @@ These are accepted, documented behaviors — list the ones true for the build be
 - **The CPU renderer slows as the phone heats up.** It draws the whole game in software, so its frame
   rate is set by how hot the phone is: on a Pixel 7a the same build ran at about 37 fps cool and about
   12 fps hot and charging. Use the GPU renderer where your phone supports it.
-- **Android 117HD has no sun shadows.** With the same 117HD settings, the iPhone draws the shadows the sun
-  casts and Android draws none, so Android's scenes look flatter and darker. The settings are not the cause;
-  the difference is in the Android renderer and is being worked on. It was first found in July, so it is not
-  a regression in this build.
 
 ---
 
