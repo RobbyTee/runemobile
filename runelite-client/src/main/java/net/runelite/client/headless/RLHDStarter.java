@@ -177,7 +177,9 @@ public final class RLHDStarter
 				// HD look kept (low / no perf cost):
 				MobileUiBridge.setConfig("hd", "normalMapping", "true");                   // surface relief; "barely impacts performance" (RLHD)
 				MobileUiBridge.setConfig("hd", "dynamicLights", "SOME");                   // 50 dynamic lights (RLHD default)
-				MobileUiBridge.setConfig("hd", "shadowMode", "DETAILED");                  // dappled shadows
+				MobileUiBridge.setConfig("hd", "shadowMode", "DETAILED");                  // dappled shadows; ~5.5 ms/frame on Mali-G710 (47 -> 38 fps), kept on to match iOS
+				// The fps figures in these comments were measured before librlawt's shadow-map fix, when Android had no
+				// working shadow map and the shadow pass drew nothing. Re-measure before tuning against them.
 				MobileUiBridge.setConfig("hd", "shadowFiltering", "SMOOTH_HIGH");          // smooth shadow edges (3x3 PCF)
 				MobileUiBridge.setConfig("hd", "sceneScalingMode", "LINEAR");              // smooth downsample of the 85% scene FBO
 				MobileUiBridge.setConfig("hd", GFX_SEEDED_KEY, "1");
