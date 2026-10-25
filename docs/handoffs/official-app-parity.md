@@ -2,10 +2,11 @@
 
 **Branch:** `parity/official-app` (not merged to master).
 **Commits:** `643b92cbbd` (screen awake) · `46592c3a0a` (number pad + Paste) · `fcc5719b8f` (haptics) ·
-`3b09ced2e5` (Game settings) · `b7b32f7657` (drag hold) · `2e95b1d5a8` (submenu haptic follow-up).
+`3b09ced2e5` (Game settings) · `b7b32f7657` (drag hold) · `2e95b1d5a8` (submenu haptic follow-up) ·
+`e592671216` (an ignored quick pane swipe is logged) · `25ea7f7c09` (swipe to scroll the item search results).
 **Gates:** release gate, Android bridge census and iOS bridge census green before every commit; headless bridge
-tests green for the two commits that touch the shared bridge.
-**Device check:** see [Device check](#device-check) — pending on both phones at the time of writing.
+tests green for the three commits that touch the shared bridge.
+**Device check:** iPhone mostly done (results under [Device check](#device-check)); Pixel 7a not yet.
 
 ## What shipped
 
@@ -49,6 +50,18 @@ tests green for the two commits that touch the shared bridge.
   117HD).
 - **The number pad has no k/m suffix keys.** Paste covers typing "10k"-style amounts.
 
+## Item search: swipe to scroll the results
+
+The GE item search draws its results in the chatbox's message layer with its own scrollbar. A drag that starts
+on them now scrolls that list: the bridge's chat-scroll request drives the message layer's scroll layer while a
+prompt lists results, and the chat lines otherwise. Android already sent every drag that starts in the chat box
+to the chat scroll, so it needed no shell change. On iOS the chat scroll is off while a prompt is open, so the
+bridge publishes the list's window (`list`) while it holds more than fits, and a drag that starts inside it scrolls.
+
+The result rows the bridge publishes as tap targets used to be the first 24, wherever they had scrolled to.
+Now only the rows inside the list's window are published, cut to the part on screen. Before, a result that had
+scrolled up out of view could be picked by tapping the title, and results further down had no target at all.
+
 ## Device check
 
 Walk this on the iPhone 17 Pro Max and the Pixel 7a:
@@ -65,6 +78,19 @@ Walk this on the iPhone 17 Pro Max and the Pixel 7a:
    plugin pages show the same values.
 5. Inventory: a quick flick across an item does nothing (no move, no camera); rest a beat then drag and the item
    moves. In the bank, a quick swipe scrolls it.
+6. GE item search for something broad: a swipe on the results scrolls them; after a scroll, a tap picks the
+   result under the finger.
+
+**iPhone 17 Pro Max, 2026-10-25:**
+
+- 1, 2: pass. The number pad opened on "Enter amount:" and Paste filled it.
+- 3: pass. All four haptic triggers felt right.
+- 4: the values save to the profile and turn on both plugins. The cap's effect wasn't measured: the scene drew
+  at about 30 fps, under any cap tried.
+- 5: held drags moved items, and a quick swipe on the bank picked nothing up and left the camera alone. The bank
+  on the test account fits on one screen, so bank scrolling itself is untested.
+- 6: pass. Swipes scrolled the results, and a tap after scrolling picked the result under the finger: result 26,
+  past the 24 that used to have a target at all.
 
 ## Open risks
 
@@ -76,4 +102,5 @@ Walk this on the iPhone 17 Pro Max and the Pixel 7a:
 
 ## Next step
 
-Finish the device check above on both phones, then merge `parity/official-app` to master.
+Run the whole check on the Pixel 7a, from an APK rebuilt at the branch head (the last one built predates
+`25ea7f7c09`). Then merge `parity/official-app` to master.
