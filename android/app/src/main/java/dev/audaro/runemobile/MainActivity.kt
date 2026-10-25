@@ -1341,8 +1341,13 @@ class MainActivity : AppCompatActivity() {
             // Once a long-press has opened the menu, this gesture belongs to menu-peek: track the finger for the
             // row highlight and commit on release — do NOT feed the tap/camera/pinch detectors.
             if (menuActive) {
-                menuCurX = event.x
-                menuCurY = event.y
+                // The native menu is hit-tested in the overlay's space; the degraded engine menu is driven in
+                // this view's, since toGameX/Y take surface-local points.
+                surfaceToOverlay(event.x, event.y)
+                val mx = overlayPt[0]
+                val my = overlayPt[1]
+                menuCurX = mx
+                menuCurY = my
                 // Degraded mode (native overlay build timed out): drive the engine's own raw menu directly. Preempts
                 // the native-overlay tap/drag handling below (which would no-op — menuOverlay.isActive is false here).
                 if (menuDegraded) {
@@ -1369,7 +1374,7 @@ class MainActivity : AppCompatActivity() {
                 if (menuTapMode) {
                     when (event.actionMasked) {
                         MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                            if (menuTapArmed) updateMenuHighlight(event.x, event.y)
+                            if (menuTapArmed) updateMenuHighlight(mx, my)
                         }
 
                         MotionEvent.ACTION_UP -> {
@@ -1378,7 +1383,7 @@ class MainActivity : AppCompatActivity() {
                                 menuTapArmed = true
                                 menuOverlay.setHighlight(-1)
                             } else {
-                                onMenuTap(event.x, event.y)
+                                onMenuTap(mx, my)
                             }
                         }
                     }
@@ -1386,7 +1391,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 when (event.actionMasked) {
                     MotionEvent.ACTION_MOVE -> {
-                        updateMenuHighlight(event.x, event.y)
+                        updateMenuHighlight(mx, my)
                     }
 
                     MotionEvent.ACTION_UP -> {
@@ -2559,8 +2564,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onLongPress(e: MotionEvent) {
-            // The map owns the whole screen while open — no right-click menu peek into the scene behind it.
-            if (mapOpen) return
+            // The map owns the whole screen while open. A hold inside its window opens the engine menu there, the
+            // desktop's right-click on the map, which is where plugins put their map entries (Shortest Path's Set
+            // Target / Set Start / Clear Path; Find closest on a key row). Outside the window, or before its rect
+            // is published, a hold opens nothing: that point is the scene behind the map.
+            if (mapOpen && !inCanvasRect(mapWindowCanvas, toGameX(e.x), toGameY(e.y))) return
             beginMenuPeek(e.x, e.y)
         }
 
@@ -4225,6 +4233,26 @@ class MainActivity : AppCompatActivity() {
 
     // ---- A2 press-and-peek menu state machine -------------------------------------------------------
 
+    // surfaceToOverlay's result, reused because it runs per touch event.
+    private val overlayPt = FloatArray(2)
+
+    /**
+     * A surface-local point (what the surface's touch listener and toGameX/Y use) in the space of the views
+     * stacked over it, written to overlayPt. The two only differ while the open world map stretches the surface
+     * (applyMapFullscreen); unmapped, a menu held open on the map would draw away from the finger and its rows
+     * would hit-test against the wrong place.
+     */
+    private fun surfaceToOverlay(
+        x: Float,
+        y: Float,
+    ) {
+        overlayPt[0] = x
+        overlayPt[1] = y
+        surfaceView.matrix.mapPoints(overlayPt)
+        overlayPt[0] += surfaceView.left - menuOverlay.left
+        overlayPt[1] += surfaceView.top - menuOverlay.top
+    }
+
     /** Long-press: open the engine right-click menu at the finger and start polling for it to land. */
     private fun beginMenuPeek(
         viewX: Float,
@@ -4237,11 +4265,12 @@ class MainActivity : AppCompatActivity() {
         dropTapArm()
         val gx = toGameX(viewX)
         val gy = toGameY(viewY)
-        menuAnchorX = viewX
-        menuAnchorY = viewY
-        menuCurX = viewX
-        menuCurY = viewY
-        menuHandRight = viewX > surfaceView.width * 0.5f
+        surfaceToOverlay(viewX, viewY)
+        menuAnchorX = overlayPt[0]
+        menuAnchorY = overlayPt[1]
+        menuCurX = menuAnchorX
+        menuCurY = menuAnchorY
+        menuHandRight = menuAnchorX > menuOverlay.width * 0.5f
         menuActive = true
         menuBuilding = true
         menuTouchActive = true
