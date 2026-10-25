@@ -1,6 +1,6 @@
 name: RuneMobile
 options:
-  bundleIdPrefix: dev.audaro
+  bundleIdPrefix: com.robbytee
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
@@ -113,7 +113,7 @@ targets:
             - "$(inherited)"
             - "GLES_SILENCE_DEPRECATION=1"
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.audaro.runemobile
+        PRODUCT_BUNDLE_IDENTIFIER: com.robbytee.runemobile   # fork: must be unique to your Apple team (upstream: dev.audaro.runemobile)
         # Default/Release plist: the hardened one (no file-sharing). Debug overrides to Info-Debug.plist above.
         INFOPLIST_FILE: RuneMobile/Info.plist
         CODE_SIGN_ENTITLEMENTS: RuneMobile/RuneMobile.entitlements
