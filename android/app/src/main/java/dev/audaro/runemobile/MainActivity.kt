@@ -214,6 +214,10 @@ class MainActivity : AppCompatActivity() {
     private var imeWasShown = false // last frame's ACTUAL ime visibility — to spot a user-driven dismiss
     private var manualKeyboard = false // ⌨ toggle: hold the soft keyboard up with no engine text field open
     private var keyboardToggleBtn: Button? = null // the ⌨ button, so a dismiss can reset its on/off alpha
+    private var imeNumeric = false // the open game field takes a number: GameInputView offers the number pad
+    private var imeConnNumeric = false // what the live input connection was created with (restart on mismatch)
+    private var pasteButton: Button? = null // "Paste" pill, held just above the soft keyboard while it's up for the game
+    private var pasteShownBottom = -1 // the pill's applied bottom margin (-1 = hidden), so layout changes only on change
 
     // FIX-11: a rendered Swing panel's text field is focused and its OWN Compose mirror field owns the soft
     // keyboard — the per-frame poll must NOT raise GameInputView (steals focus) or dismiss the IME (kills it).
@@ -473,6 +477,9 @@ class MainActivity : AppCompatActivity() {
         // resizable layout (the welcome-frame flash window). ~1.2s of LOGGED_IN frames is when the engine's chrome
         // widgets are reliably built (cf. MobileChromeBridge.VERDICT_FRAME=60); 1500ms gives a little headroom.
         private const val LOGIN_TRANSITION_MS = 1500L
+
+        // A paste types at most one chat line.
+        private const val PASTE_MAX_CHARS = 80
 
         // How long the screen stays awake after leaving the game (covers region-load blips and the logout screen).
         private const val KEEP_AWAKE_GRACE_MS = 10_000L
@@ -1130,6 +1137,31 @@ class MainActivity : AppCompatActivity() {
         val hdButton = devButton("HD")
         hdButton.contentDescription = "Switch to 117HD renderer"
         hdButton.setOnClickListener { restartIntoRlhd() }
+        // Paste: types the clipboard's first line into the open game field. The soft keyboard covers the HUD, so the
+        // pill rides just above it (updatePasteButton) and only while the keyboard is up for the game.
+        val paste =
+            Button(this).apply {
+                text = "Paste"
+                contentDescription = "Paste into the game"
+                textSize = 13f
+                isAllCaps = false
+                minWidth = 0
+                minimumWidth = 0
+                val d = resources.displayMetrics.density
+                minHeight = 0
+                minimumHeight = (40 * d).toInt()
+                setPadding((16 * d).toInt(), (6 * d).toInt(), (16 * d).toInt(), (6 * d).toInt())
+                setTextColor(0xFFFFFFFF.toInt())
+                background =
+                    android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = 100f
+                        setColor(0xE6202020.toInt())
+                        setStroke((1 * d).toInt(), 0x88FFFFFF.toInt())
+                    }
+                visibility = View.GONE
+                setOnClickListener { pasteClipboard() }
+            }
+        pasteButton = paste
         // Group the dev affordances into one discreet cluster pinned to the BOTTOM-LEFT — clear of the relocated
         // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
         val devBar =
@@ -1224,6 +1256,15 @@ class MainActivity : AppCompatActivity() {
                             leftMargin = devBarBaseLeft
                             bottomMargin = devBarBaseBottom
                         },
+                )
+                addView(
+                    paste,
+                    FrameLayout
+                        .LayoutParams(
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            Gravity.BOTTOM or Gravity.END,
+                        ).apply { rightMargin = (12 * resources.displayMetrics.density).toInt() },
                 )
                 // User-defined hotkey buttons: bottom-left, stacked above the devBar; below the launcher sheet.
                 hotkeyBaseLeft = (8 * resources.displayMetrics.density).toInt()
@@ -2785,7 +2826,13 @@ class MainActivity : AppCompatActivity() {
         override fun onCheckIsTextEditor(): Boolean = true
 
         override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-            outAttrs.inputType = EditorInfo.TYPE_CLASS_TEXT or EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            imeConnNumeric = imeNumeric
+            outAttrs.inputType =
+                if (imeNumeric) {
+                    EditorInfo.TYPE_CLASS_NUMBER
+                } else {
+                    EditorInfo.TYPE_CLASS_TEXT or EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                }
             outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or
                 EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_DONE
             return object : BaseInputConnection(this, false) {
@@ -2806,6 +2853,14 @@ class MainActivity : AppCompatActivity() {
                 ): Boolean {
                     repeat(beforeLength.coerceAtLeast(0)) { JvmLauncher.keyStroke(VK_BACK_SPACE) }
                     return true
+                }
+
+                override fun performContextMenuAction(id: Int): Boolean {
+                    if (id == android.R.id.paste || id == android.R.id.pasteAsPlainText) {
+                        pasteClipboard()
+                        return true
+                    }
+                    return super.performContextMenuAction(id)
                 }
 
                 override fun sendKeyEvent(event: KeyEvent): Boolean {
@@ -3208,6 +3263,14 @@ class MainActivity : AppCompatActivity() {
                         }
                         imeWasShown = imeShown
                         val want = manualKeyboard || mapSearchKeyboard || JvmLauncher.isTextInputOpen()
+                        // Amount prompts get the number pad. The IME re-reads the input type only on a restart; do
+                        // it only while a field wants the keyboard, so a closing prompt drops it without a flash.
+                        imeNumeric = JvmLauncher.textInputKind() == 2
+                        if (want && imeNumeric != imeConnNumeric) {
+                            imeConnNumeric = imeNumeric
+                            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(keyboardView)
+                            Log.i(TAG, "a1: keyboard -> ${if (imeNumeric) "number pad" else "text"}")
+                        }
                         if (want != imeShown) {
                             if (want != keyboardShown) {
                                 keyboardShown = want
@@ -3224,6 +3287,7 @@ class MainActivity : AppCompatActivity() {
                             keyboardShown = want // converged without a request (e.g. user-raised IME matches want)
                         }
                     }
+                    updatePasteButton(imeShown && !textActivePanel && keyboardShown)
                     val seq = JvmLauncher.interactTapSeq()
                     if (seq != lastTapSeq) {
                         lastTapSeq = seq
@@ -3250,6 +3314,47 @@ class MainActivity : AppCompatActivity() {
             }
         frameCallback = cb
         Choreographer.getInstance().postFrameCallback(cb)
+    }
+
+    /** Shows the Paste pill just above the soft keyboard while it is up for the game; touches layout only on change. */
+    private fun updatePasteButton(show: Boolean) {
+        val btn = pasteButton ?: return
+        val imeBottom =
+            if (show && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                surfaceView.rootWindowInsets?.getInsets(WindowInsets.Type.ime())?.bottom ?: 0
+            } else {
+                0
+            }
+        val bottom = if (imeBottom > 0) imeBottom + (8 * resources.displayMetrics.density).toInt() else -1
+        if (bottom == pasteShownBottom) return
+        pasteShownBottom = bottom
+        if (bottom >= 0) {
+            (btn.layoutParams as? FrameLayout.LayoutParams)?.let {
+                it.bottomMargin = bottom
+                btn.layoutParams = it
+            }
+        }
+        btn.visibility = if (bottom >= 0) View.VISIBLE else View.GONE
+    }
+
+    /** Types the clipboard's first line (trimmed, at most a chat line's 80 characters) into the open game field. */
+    private fun pasteClipboard() {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val raw =
+            cm.primaryClip
+                ?.takeIf { it.itemCount > 0 }
+                ?.getItemAt(0)
+                ?.coerceToText(this)
+                ?.toString()
+                .orEmpty()
+        val firstLine = raw.lineSequence().firstOrNull() ?: ""
+        var line = firstLine.trim()
+        if (line.codePointCount(0, line.length) > PASTE_MAX_CHARS) {
+            line = line.substring(0, line.offsetByCodePoints(0, PASTE_MAX_CHARS))
+        }
+        if (line.isEmpty()) return
+        JvmLauncher.text(line)
+        Log.i(TAG, "a1: paste len=${line.length}") // length only, never the content
     }
 
     /** Holds FLAG_KEEP_SCREEN_ON while in game (plus a short grace after leaving it); touches the window only on change. */

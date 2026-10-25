@@ -208,6 +208,51 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 }
 @end
 
+// The keyboard bar's Paste button target. A UIPasteControl pastes without the system's paste prompt and hands its
+// target the clipboard's item providers; this one forwards the text to a handler, which types it into the game.
+@interface RMPasteTarget : UIResponder
+@property (nonatomic, copy) void (^onText)(NSString *text);
+@end
+
+@implementation RMPasteTarget
+- (instancetype)init {
+    if ((self = [super init])) {
+        self.pasteConfiguration = [[UIPasteConfiguration alloc]
+            initWithAcceptableTypeIdentifiers:@[ @"public.utf8-plain-text", @"public.plain-text", @"public.text" ]];
+    }
+    return self;
+}
+
+- (void)pasteItemProviders:(NSArray<NSItemProvider *> *)itemProviders {
+    for (NSItemProvider *p in itemProviders) {
+        if (![p canLoadObjectOfClass:[NSString class]])
+            continue;
+        __weak typeof(self) ws = self;
+        [p loadObjectOfClass:[NSString class]
+            completionHandler:^(id<NSItemProviderReading> obj, NSError *err) {
+                if (![(NSObject *)obj isKindOfClass:[NSString class]])
+                    return;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (ws.onText)
+                        ws.onText((NSString *)obj);
+                });
+            }];
+        return; // the first text item only
+    }
+}
+@end
+
+// What a paste types into the game: the first line, trimmed, at most a chat line's 80 characters.
+static NSString *RMPasteLine(NSString *s) {
+    NSRange nl = [s rangeOfCharacterFromSet:[NSCharacterSet newlineCharacterSet]];
+    if (nl.location != NSNotFound)
+        s = [s substringToIndex:nl.location];
+    s = [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if (s.length > 80)
+        s = [s substringToIndex:[s rangeOfComposedCharacterSequenceAtIndex:80].location];
+    return s;
+}
+
 @interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate, UNUserNotificationCenterDelegate, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate, UISearchBarDelegate, OverlayEditHudHost> {
     // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
     // desktop stone. A C array, so it lives as an ivar rather than a property.
@@ -271,6 +316,7 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 @property (nonatomic, assign) BOOL inWorldStamped;    // Phase 4 cold start: the first LOGGED_IN tick has been stamped
 @property (nonatomic, assign) BOOL awakeInGame;       // keep-awake: the last snapshot was logged in
 @property (nonatomic, assign) CFTimeInterval awakeLeftGameAt; // keep-awake: when loggedIn last fell (CACurrentMediaTime)
+@property (nonatomic, strong) RMPasteTarget *pasteTarget;     // the keyboard bar's Paste button target
 @property (nonatomic, assign) BOOL pendingRouteCL1;   // GPU Route C: long-press Start -> boot the L1 kill-test
 @property (nonatomic, assign) BOOL pendingRouteCGpu;  // GPU Route C: two-finger long-press -> full RuneLite on GPU
 @property (nonatomic, assign) BOOL pendingRouteCZone; // GPU Zone: three-finger long-press -> full RuneLite on 117HD
@@ -1678,7 +1724,31 @@ static NSString *const kLayoutNoticeBody =
         initWithTitle:@"Send ⏎" style:UIBarButtonItemStylePlain target:self action:@selector(onKbSend)];
     UIBarButtonItem *hide = [[UIBarButtonItem alloc]
         initWithTitle:@"Hide ⌨︎" style:UIBarButtonItemStyleDone target:self action:@selector(onKbHide)];
-    bar.items = @[flex, send, hide];
+    // Paste: types the clipboard's first line into the open field. A UIPasteControl, so no paste prompt.
+    self.pasteTarget = [RMPasteTarget new];
+    __weak typeof(self) wsPaste = self;
+    self.pasteTarget.onText = ^(NSString *text) {
+        NSString *line = RMPasteLine(text);
+        if (line.length == 0)
+            return;
+        [JVMLauncher postText:line];
+        // Length only - never the pasted content.
+        [wsPaste appendLine:[NSString stringWithFormat:@"[shell] paste len=%lu", (unsigned long)line.length]];
+    };
+    UIPasteControlConfiguration *pasteCfg = [UIPasteControlConfiguration new];
+    pasteCfg.displayMode = UIPasteControlDisplayModeIconAndLabel;
+    pasteCfg.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+    pasteCfg.baseForegroundColor = [UIColor whiteColor];
+    pasteCfg.baseBackgroundColor = [UIColor colorWithWhite:0.28 alpha:1.0];
+    UIPasteControl *paste = [[UIPasteControl alloc] initWithConfiguration:pasteCfg];
+    paste.target = self.pasteTarget;
+    paste.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [paste.widthAnchor constraintEqualToConstant:104],
+        [paste.heightAnchor constraintEqualToConstant:34],
+    ]];
+    UIBarButtonItem *pasteItem = [[UIBarButtonItem alloc] initWithCustomView:paste];
+    bar.items = @[ pasteItem, flex, send, hide ];
     [bar sizeToFit];
     self.kbField.inputAccessoryView = bar;
     [self.view addSubview:self.kbField];
@@ -6694,7 +6764,18 @@ static CGRect mapRectFromArr(NSArray *a) {
     // it never fights a keyboard the user opened manually for chat. Polled ~10 Hz to keep it cheap. Gated off
     // while a plugin-panel text field owns the keyboard, so a game textInputOpen flip can't steal it (PANEL-1).
     if (self.framesShown % 6 == 0 && ![self.panelDock panelKeyboardActive]) {
-        BOOL wants = [JVMLauncher textInputOpen];
+        int kind = [JVMLauncher textInputKind];
+        BOOL wants = kind != 0;
+        // Amount prompts get the number pad; everything else (and the manual chat keyboard) the text keyboard.
+        // Set before the raise below so a new prompt opens on the right keyboard; a closing prompt drops the
+        // keyboard below, so only swap a live one while a field is still open.
+        UIKeyboardType type = kind == 2 ? UIKeyboardTypeNumberPad : UIKeyboardTypeASCIICapable;
+        if (self.kbField.keyboardType != type) {
+            self.kbField.keyboardType = type;
+            if (wants && [self.kbField isFirstResponder])
+                [self.kbField reloadInputViews];
+            [self appendLine:[NSString stringWithFormat:@"[shell] keyboard -> %@", kind == 2 ? @"number pad" : @"text"]];
+        }
         if (wants != self.prevInputOpen) {
             self.prevInputOpen = wants;
             if (wants && ![self.kbField isFirstResponder]) {

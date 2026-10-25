@@ -46,6 +46,7 @@ static jclass    gBridgeClass = NULL; // global ref to net.runelite.client.headl
 static jmethodID gMidW = NULL, gMidH = NULL, gMidSeq = NULL, gMidPixels = NULL;
 static jmethodID gMidGpuSeq = NULL;       // getGpuFrameSeq()I - base-GPU present proof (optional; older jars lack it)
 static jmethodID gMidInteractSeq = NULL;  // getInteractTapSeq()I — native haptic cue (optional; tolerate older jar)
+static jmethodID gMidInputKind = NULL;    // getTextInputKind()I — number pad vs text keyboard (optional)
 static jmethodID gMidLastTapKind = NULL;  // getLastTapKind()I — TAP_KIND_NONE/WALK/SCENE/WIDGET (optional)
 static jmethodID gMidHeapStats = NULL;    // heapStats()Ljava/lang/String; — dev diagnostics (optional)
 static jmethodID gMidSimReconnect = NULL; // devSimulateReconnect(I)V — dev "test reconnect" hook (optional)
@@ -282,6 +283,11 @@ static BOOL ensureBridge(void) {
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         gMidInteractSeq = NULL;
+    }
+    gMidInputKind = (*env)->GetStaticMethodID(env, global, "getTextInputKind", "()I");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidInputKind = NULL;
     }
     gMidLastTapKind = (*env)->GetStaticMethodID(env, global, "getLastTapKind", "()I");
     if ((*env)->ExceptionCheck(env)) {
@@ -2896,6 +2902,20 @@ static BOOL pipFeedMarkerSaysMain(void) {
     jboolean r = (*env)->CallStaticBooleanMethod(env, gBridgeClass, gMidInputOpen);
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.textInputOpen"); return NO; }
     return r == JNI_TRUE;
+}
+
++ (int)textInputKind {
+    if (!ensureBridge())
+        return 0;
+    if (!gMidInputKind)
+        return [self textInputOpen] ? 1 : 0; // older jar: open means text
+    JNIEnv *env = gMainEnv;
+    jint r = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidInputKind);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.textInputKind");
+        return 0;
+    }
+    return (int)r;
 }
 
 // Direct-present reveal gate: YES once the world geometry is uploaded (JavaBridge.presentReady). Returns YES if

@@ -393,6 +393,14 @@ public final class JavaBridge
 	// INPUT_TYPE snapshot taken on the client thread in tapTick; isTextInputOpen() reads this volatile instead of
 	// the live varc array off-thread (which the engine can reallocate under the reader).
 	private static volatile boolean textInputOpen;
+	// What the open field takes (TEXT_INPUT_*), snapshotted alongside textInputOpen so the shells can pick a keyboard.
+	private static volatile int textInputKind;
+	static final int TEXT_INPUT_NONE = 0;
+	static final int TEXT_INPUT_TEXT = 1;
+	static final int TEXT_INPUT_NUMBER = 2;
+	// INPUT_TYPE values whose chatbox prompt takes a number (the "Enter amount" prompts). Every other non-zero
+	// INPUT_TYPE is free text.
+	private static final int[] NUMERIC_INPUT_TYPES = {7, 16, 19, 30};
 
 	// Key timing. iOS hands us committed TEXT -- a UITextField change callback -- and never a key down or up,
 	// so there is no dwell and no cadence of the user's to report. What we CAN stop doing is reporting one
@@ -2459,12 +2467,49 @@ public final class JavaBridge
 		return ENABLED && textInputOpen;   // snapshotted on the client thread (snapshotTextInputOpen), read here off-thread
 	}
 
+	/**
+	 * What kind of keyboard the open game field wants: {@code 0} none, {@code 1} text, {@code 2} a number (an
+	 * "Enter amount" prompt or the Grand Exchange quantity/price entry). Non-zero exactly when
+	 * {@link #isTextInputOpen()} is true. The shells show a number pad for {@code 2}.
+	 */
+	public static int getTextInputKind()
+	{
+		return ENABLED ? textInputKind : TEXT_INPUT_NONE;
+	}
+
+	/**
+	 * The keyboard kind for one snapshot. {@code focusedGroup} is the interface group of the focused input-field
+	 * widget, or -1 when none is focused; {@code loginField} is true on the login screen's credential forms.
+	 */
+	static int classifyTextInput(int inputType, int focusedGroup, boolean loginField)
+	{
+		if (inputType != 0)
+		{
+			for (int t : NUMERIC_INPUT_TYPES)
+			{
+				if (t == inputType)
+				{
+					return TEXT_INPUT_NUMBER;
+				}
+			}
+			return TEXT_INPUT_TEXT;
+		}
+		if (focusedGroup >= 0)
+		{
+			return focusedGroup == InterfaceID.GE_OFFERS ? TEXT_INPUT_NUMBER : TEXT_INPUT_TEXT;
+		}
+		return loginField ? TEXT_INPUT_TEXT : TEXT_INPUT_NONE;
+	}
+
 	/** Snapshot INPUT_TYPE on the client thread (from tapTick) so isTextInputOpen() never reads the live varc off-thread. */
 	private static void snapshotTextInputOpen(Client c)
 	{
 		try
 		{
-			boolean want = c.getVarcIntValue(VarClientInt.INPUT_TYPE) != 0;
+			final int inputType = c.getVarcIntValue(VarClientInt.INPUT_TYPE);
+			int focusedGroup = -1;
+			boolean loginField = false;
+			boolean want = inputType != 0;
 			if (!want)
 			{
 				// Some engine inputs focus an input-field WIDGET without flipping INPUT_TYPE — notably the Grand
@@ -2472,7 +2517,12 @@ public final class JavaBridge
 				// type a GE amount the same way they type a bank "Enter amount".
 				try
 				{
-					want = c.getFocusedInputFieldWidget() != null;
+					final Widget focused = c.getFocusedInputFieldWidget();
+					if (focused != null)
+					{
+						want = true;
+						focusedGroup = focused.getId() >>> 16;
+					}
 				}
 				catch (RuntimeException ignore)
 				{
@@ -2493,7 +2543,8 @@ public final class JavaBridge
 					if (gs == GameState.LOGIN_SCREEN || gs == GameState.LOGIN_SCREEN_AUTHENTICATOR)
 					{
 						int li = c.getLoginIndex();
-						want = li == 2 || li == 4;
+						loginField = li == 2 || li == 4;
+						want = loginField;
 					}
 				}
 				catch (RuntimeException ignore)
@@ -2501,6 +2552,7 @@ public final class JavaBridge
 					BridgeFaults.note("JavaBridge.snapshotTextInputOpen", ignore);
 				}
 			}
+			textInputKind = classifyTextInput(inputType, focusedGroup, loginField);
 			textInputOpen = want;
 		}
 		catch (RuntimeException ex)

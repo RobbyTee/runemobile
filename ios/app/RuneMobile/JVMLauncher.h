@@ -254,6 +254,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Polled by the shell to auto-raise/dismiss the soft keyboard. Call on the main thread.
 + (BOOL)textInputOpen;
 
+/// What the open game field takes: 0 none, 1 text, 2 a number (amount prompts, Grand Exchange quantity/price).
+/// Non-zero exactly when textInputOpen is YES. Call on the main thread.
++ (int)textInputKind;
+
 /// Direct-present reveal gate: YES once the world geometry is uploaded (the GPU layer can be revealed over the
 /// CPU loading-screen blit without a sky flash). YES if the bridge isn't available.
 + (BOOL)sceneWarmedUp;

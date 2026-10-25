@@ -63,6 +63,8 @@ static jmethodID g_midWheel = nullptr, g_midClickPrecise = nullptr, g_midMove = 
 static jmethodID g_midText = nullptr, g_midKeyStroke = nullptr;
 // A1 polled read-surface: keyboard auto-raise, interact-tap haptic seq, finger snap radius.
 static jmethodID g_midTextInputOpen = nullptr, g_midInteractTapSeq = nullptr;
+// Keyboard kind for the open field (optional; an older jar omits it -> an open field means text).
+static jmethodID g_midTextInputKind = nullptr;
 // Tap-KIND truth (optional jar surface; older jars omit it -> the shell keeps the legacy ring).
 static jmethodID g_midTapKindSeq = nullptr, g_midLastTapKind = nullptr;
 // A2 press-and-peek: JavaBridge.selectMenuPoint commit + the separate MenuPeekBridge read-surface.
@@ -283,6 +285,7 @@ static void rcPresentSetFrameDims(int w, int h) {
 // A1 read-surface published by the render thread (the only HotSpot-attached caller) for the UI thread to read
 // without ever attaching to HotSpot — same pattern as the frame dims above.
 static std::atomic<int> g_textInputOpen{0};   // isTextInputOpen() -> raise/dismiss the soft keyboard
+static std::atomic<int> g_textInputKind{0};   // getTextInputKind() -> 0 none, 1 text, 2 number pad
 static std::atomic<int> g_interactTapSeq{0};  // getInteractTapSeq() -> fire a haptic when it advances
 // Tap-KIND truth (optional jar surface): the resolved left tap's kind, so the UI thread rings only for a real
 // scene tap. Published by the render thread each tick.
@@ -682,6 +685,7 @@ static bool publishBridge(JNIEnv *env) {
     g_midTextInputOpen  = midOpt(env, global, "isTextInputOpen", "()Z");
     g_midInteractTapSeq = midOpt(env, global, "getInteractTapSeq", "()I");
     g_midTapKindSeq     = midOpt(env, global, "getTapKindSeq", "()I");          // optional (older jar omits)
+    g_midTextInputKind = midOpt(env, global, "getTextInputKind", "()I");        // optional (older jar omits)
     g_midLastTapKind = midOpt(env, global, "getLastTapKind", "()I");
     g_midSelectMenuPoint = midOpt(env, global, "selectMenuPoint", "(II)V");   // A2 commit
     if (!g_midSeq || !g_midW || !g_midH || !g_midPixels || !g_midTouch || !g_midClick
@@ -1367,6 +1371,16 @@ static void *renderLoop(void *) {
             jboolean tio = env->CallStaticBooleanMethod(g_bridgeCls, g_midTextInputOpen);
             if (env->ExceptionCheck()) { env->ExceptionClear(); }
             else { g_textInputOpen.store(tio ? 1 : 0, std::memory_order_relaxed); }
+            if (g_midTextInputKind) {
+                int tik = env->CallStaticIntMethod(g_bridgeCls, g_midTextInputKind);
+                if (env->ExceptionCheck()) {
+                    env->ExceptionClear();
+                } else {
+                    g_textInputKind.store(tik, std::memory_order_relaxed);
+                }
+            } else {
+                g_textInputKind.store(tio ? 1 : 0, std::memory_order_relaxed);
+            }
             int its = env->CallStaticIntMethod(g_bridgeCls, g_midInteractTapSeq);
             if (env->ExceptionCheck()) { env->ExceptionClear(); }
             else { g_interactTapSeq.store(its, std::memory_order_relaxed); }
@@ -1969,6 +1983,10 @@ Java_dev_audaro_runemobile_JvmLauncher_nativeTabSprites(JNIEnv *env, jobject) {
 extern "C" JNIEXPORT jboolean JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeIsTextInputOpen(JNIEnv *, jobject) {
     return g_textInputOpen.load(std::memory_order_relaxed) ? JNI_TRUE : JNI_FALSE;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeTextInputKind(JNIEnv *, jobject) {
+    return g_textInputKind.load(std::memory_order_relaxed);
 }
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeInteractTapSeq(JNIEnv *, jobject) {

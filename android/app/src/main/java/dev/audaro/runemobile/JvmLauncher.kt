@@ -181,6 +181,9 @@ object JvmLauncher {
     /** Does the engine currently have a text field focused? Poll to auto-raise/dismiss the soft keyboard. */
     external fun nativeIsTextInputOpen(): Boolean
 
+    /** What the focused field takes: 0 none, 1 text, 2 a number (amount prompts, Grand Exchange quantity/price). */
+    external fun nativeTextInputKind(): Int
+
     /** Monotonic counter the engine bumps on each committed interact-tap — advance => fire a haptic. */
     external fun nativeInteractTapSeq(): Int
 
@@ -663,6 +666,8 @@ object JvmLauncher {
     ) = nativeFireHotkey(group, key)
 
     fun isTextInputOpen() = nativeIsTextInputOpen()
+
+    fun textInputKind() = nativeTextInputKind()
 
     fun interactTapSeq() = nativeInteractTapSeq()
 
