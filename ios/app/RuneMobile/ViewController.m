@@ -9,6 +9,7 @@
 #import "GLRecon.h"
 #import "RMKeyboardDismiss.h"
 #import "RMResidency.h"
+#import "RMGameSettings.h"
 #import "RouteCBridge.h"            // GPU Route C bridge (backend selected by RC_BACKEND_ANGLE in the build)
 #import <QuartzCore/QuartzCore.h>
 #if !defined(RC_BACKEND_ANGLE)
@@ -367,8 +368,7 @@ static NSString *RMPasteLine(NSString *s) {
 @property (nonatomic, assign) CGRect menuGeomGame;        // live engine menu bounds, gamepack (765x503) coords
 @property (nonatomic, assign) int    menuSelX;            // where commit clicks on release (game coords)
 @property (nonatomic, assign) int    menuSelY;
-@property (nonatomic, assign) BOOL   menuFingerOnMenu;    // finger over the menu (with grace) -> select; else cancel
-@property (nonatomic, strong) UISelectionFeedbackGenerator *menuHaptic; // light tick when the highlight moves
+@property (nonatomic, assign) BOOL menuFingerOnMenu; // finger over the menu (with grace) -> select; else cancel
 // MENU-1/2/3 tap-mode: when the right-click menu has a submenu (▸), overflows the safe area, or shift is
 // latched, it becomes a PERSISTENT, tappable, scrollable list (drill into submenus, ⚙ Customize) instead of the
 // drag-select box. Flat short menus keep the unchanged drag-select path, so the core tap/menu flow is untouched.
@@ -393,7 +393,8 @@ static NSString *RMPasteLine(NSString *s) {
 // Interactable-tap feedback: a light haptic when a tap grabs a real interactable (polled via JavaBridge
 // interactTapSeq), and a yellow fading click-ring drawn at every tap point (the Jagex-Mobile click marker).
 @property (nonatomic, assign) int lastInteractTapSeq;
-@property (nonatomic, strong) UIImpactFeedbackGenerator *tapHaptic;
+@property (nonatomic, strong) UIImpactFeedbackGenerator *tapHaptic; // shared by every trigger; see -hapticGenerator
+@property (nonatomic, assign) NSInteger tapHapticStrength;          // the strength tapHaptic was built for
 // The ring is drawn when the finger LANDS (onSceneTouchDown:) in the walk colour; the tap's resolved colour
 // only arrives a beat after the click, so this state is what lets that late answer reach a ring already on
 // screen: RED if it resolved to an interactable (the engine bumped interactTapSeq), left as drawn for a plain
@@ -866,7 +867,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         case 0:
             return 1; // Edit controls
         case 1:
-            return 1; // Show tab rails
+            return 2; // Game settings + Show tab rails
         case 2:
             return 2 + (NSInteger)[self pluginExtraRows].count; // Plugin panels + Show plugin rail (+ profiles/infoboxes)
         case 3:
@@ -920,6 +921,10 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         cell.textLabel.text = @"Edit on-screen controls";
         cell.detailTextLabel.text = @"Add or remove keys and buttons";
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    } else if (ip.section == 1 && ip.row == 0) {
+        cell.textLabel.text = @"Game settings";
+        cell.detailTextLabel.text = @"Haptic feedback";
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     } else if (ip.section == 1) {
         cell.textLabel.text = @"Show tab rails";
         cell.detailTextLabel.text = @"The row of game interface tabs";
@@ -971,6 +976,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     };
     if (ip.section == 0)
         then(self.onEditControls);
+    else if (ip.section == 1 && ip.row == 0)
+        [self.navigationController pushViewController:[[RMGameSettingsViewController alloc] init] animated:YES];
     else if (ip.section == 2 && ip.row == 0)
         then(self.onOpenPlugins);
     else if (ip.section == 2 && ip.row >= 2) {
@@ -4933,6 +4940,7 @@ static int chatRowCanvasH(void) {
             int cx = 0, cy = 0;
             if (![self engineChatButtonCenterForTag:b.tag x:&cx y:&cy]) return;
             [self openEngineMenuAtGameX:cx gameY:cy anchor:loc];
+            [self haptic:RMHapticMenuOpen];
             [self appendLine:[NSString stringWithFormat:@"[chat] tab %ld (%@) long-press -> filter menu @%d,%d",
                               (long)b.tag, kChatTabNames[b.tag], cx, cy]];
             break;
@@ -6832,9 +6840,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     int its = [JVMLauncher interactTapSeq];
     if (its != self.lastInteractTapSeq) {
         self.lastInteractTapSeq = its;
-        if (!self.tapHaptic) { self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight]; }
-        [self.tapHaptic impactOccurred]; // haptic fires on EVERY real interaction, widget or scene (unchanged)
-        [self.tapHaptic prepare];
+        [self haptic:RMHapticOp]; // fires on EVERY real interaction, widget or scene
         if (self.pendingClick) {
             // Read the resolved tap KIND now: interactTapSeq bumps LAST (after the kind is published), so seeing
             // the new seq guarantees lastTapKind is the matching kind. A WIDGET tap (inventory item, prayer/spell
@@ -7394,11 +7400,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         NSString *orbKey = nil;
         if ([self nearestOrbAtGameX:gx gameY:gy outX:&ocx outY:&ocy outKey:&orbKey]) {
             [JVMLauncher postClickPreciseX:ocx y:ocy button:1];
-            if (!self.tapHaptic) {
-                self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-            }
-            [self.tapHaptic prepare];
-            [self.tapHaptic impactOccurred];
+            [self haptic:RMHapticOp];
             [self appendLine:[NSString stringWithFormat:@"[shell] orb-veneer tap %d,%d -> %@ @(%d,%d)", gx, gy, orbKey, ocx, ocy]];
             return;
         }
@@ -7512,8 +7514,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     // A second tap inside that window takes the slot; the ring it replaces finishes its fade in the walk
     // colour, which is what it already shows.
     self.pendingRing = [self flashClickRingAt:vp color:RMWalkRingColor()];
-    if (!self.tapHaptic) { self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight]; }
-    [self.tapHaptic prepare];
+    [[self hapticGenerator] prepare];
     [JVMLauncher postClickX:gx y:gy button:1];
     [self appendLine:[NSString stringWithFormat:@"[shell] tap -> click(L) game %d,%d", gx, gy]];
 }
@@ -7533,10 +7534,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         return; // letterbox
     if (![self isPlainWorldTapAtGameX:gx gameY:gy screenPoint:p])
         return;
-    if (!self.tapHaptic) {
-        self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    }
-    [self.tapHaptic prepare];
+    [[self hapticGenerator] prepare];
     [JVMLauncher postArmTapX:gx y:gy];
 }
 
@@ -7662,6 +7660,27 @@ static CGRect mapRectFromArr(NSArray *a) {
     return ring;
 }
 
+// The one impact generator every haptic trigger shares, rebuilt when the strength setting changes.
+- (UIImpactFeedbackGenerator *)hapticGenerator {
+    NSInteger s = [RMGameSettings hapticStrength];
+    if (!self.tapHaptic || self.tapHapticStrength != s) {
+        static const UIImpactFeedbackStyle styles[3] = {UIImpactFeedbackStyleLight, UIImpactFeedbackStyleMedium,
+                                                        UIImpactFeedbackStyleHeavy};
+        self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:styles[s]];
+        self.tapHapticStrength = s;
+    }
+    return self.tapHaptic;
+}
+
+// One buzz for a trigger, if the player has it on (Settings > Game settings), at the chosen strength.
+- (void)haptic:(RMHaptic)h {
+    if (![RMGameSettings hapticOn:h])
+        return;
+    UIImpactFeedbackGenerator *g = [self hapticGenerator];
+    [g impactOccurred];
+    [g prepare];
+}
+
 // long-press -> hold-drag-release native menu (the OSRS-mobile feel). One continuous gesture:
 //   .began   -> right-click at the press point to open the engine menu; record the press point + which hand
 //               (left/right half of the screen) so the native overlay opens to the side away from the hand.
@@ -7691,8 +7710,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     self.customizeReopenPending = NO;                 // any fresh menu cancels a pending ⚙ Customize reopen
     self.menuHandRight = (loc.x > self.screen.bounds.size.width * 0.5); // pressed on the right -> open leftward
     self.menuHapticY = loc.y;
-    self.menuHaptic = [UISelectionFeedbackGenerator new];
-    [self.menuHaptic prepare];
+    [[self hapticGenerator] prepare];
 }
 
 #pragma mark - #8 Native big-row menu (over the engine menu; commits via the engine row)
@@ -7972,7 +7990,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (void)onTapMenuRow:(UIButton *)b {
     NSInteger k = b.tag;
     if (self.menuDrillParent >= 0) {
-        [self.menuHaptic selectionChanged];
+        [self haptic:RMHapticOp];
         [JVMLauncher invokeMenuEntryParent:self.menuDrillParent child:(int)k];
         [self appendLine:[NSString stringWithFormat:@"[shell] menu submenu select parent=%d child=%ld",
                           self.menuDrillParent, (long)k]];
@@ -7983,7 +8001,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         ? self.menuRowEntries[k] : nil;
     NSArray *sub = [e[@"sub"] isKindOfClass:[NSArray class]] ? e[@"sub"] : nil;
     if (sub.count > 0) {
-        [self.menuHaptic selectionChanged]; [self.menuHaptic prepare];
+        [self haptic:RMHapticMenuHover];
         [self buildTapMenuWithEntries:sub drilledParent:(int)k];   // drill in
         return;
     }
@@ -7992,7 +8010,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     // fixed per-row geometry is unreliable (off-screen rows clamp to the wrong place), so commit the entry
     // directly by index instead (childIndex<0 = the top-level entry itself).
     if (self.menuScrollable) {
-        [self.menuHaptic selectionChanged];
+        [self haptic:RMHapticOp];
         [JVMLauncher invokeMenuEntryParent:(int)k child:-1];
         [self appendLine:[NSString stringWithFormat:@"[shell] menu tap select row=%ld (invoke, scrollable)", (long)k]];
         [self closeTapMenuAfterInvoke];
@@ -8002,7 +8020,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     int ex = (int)lround(CGRectGetMidX(r));
     int ey = (int)CGRectGetMinY(r) + kMenuHeaderPx + (int)k * kMenuRowPx + kMenuRowPx / 2;
     ey = (int)fmin(fmax((CGFloat)ey, CGRectGetMinY(r) + 1), CGRectGetMaxY(r) - 2);
-    [self.menuHaptic selectionChanged];
+    [self haptic:RMHapticOp];
     [JVMLauncher postMenuSelectX:ex y:ey];
     [self appendLine:[NSString stringWithFormat:@"[shell] menu tap select row=%ld @game %d,%d", (long)k, ex, ey]];
     self.menuOpen = NO;
@@ -8078,7 +8096,8 @@ static CGRect mapRectFromArr(NSArray *a) {
                 ? [UIColor colorWithRed:1.0 green:1.0 blue:1.0 alpha:0.22]   // hovered row highlight
                 : [UIColor clearColor];
         }
-        if (hit >= 0) { [self.menuHaptic selectionChanged]; [self.menuHaptic prepare]; }
+        if (hit >= 0)
+            [self haptic:RMHapticMenuHover];
         self.menuHighlight = (int)hit;
     }
 
@@ -8108,6 +8127,7 @@ static CGRect mapRectFromArr(NSArray *a) {
             if (![self mapPoint:loc toGameX:&gx toGameY:&gy]) return; // letterbox
             [JVMLauncher postCancelArmedTap];                         // a hold opens the menu, it never walks
             [self openEngineMenuAtGameX:gx gameY:gy anchor:loc];
+            [self haptic:RMHapticMenuOpen];
             [self appendLine:[NSString stringWithFormat:@"[shell] long-press -> engine menu @game %d,%d", gx, gy]];
             break;
         }
@@ -8190,8 +8210,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     if (self.menuGeomValid) [JVMLauncher postMoveX:sx y:sy];   // engine highlights the row under its (clamped) pointer
     if (fabs(p.y - self.menuHapticY) >= 14.0) {
         self.menuHapticY = p.y;
-        [self.menuHaptic selectionChanged];
-        [self.menuHaptic prepare];
+        [self haptic:RMHapticMenuHover];
     }
 }
 
@@ -8364,6 +8383,7 @@ static CGRect mapRectFromArr(NSArray *a) {
                     self.itemDragLastX = sx;
                     self.itemDragLastY = sy;                          // seed the release-fallback point
                     [JVMLauncher postTouchType:0 x:sx y:sy button:1]; // MOUSE_PRESSED on the source slot
+                    [self haptic:RMHapticDrag];                       // once per drag, as it lifts off the slot
                     [self appendLine:[NSString stringWithFormat:@"[shell] item drag begin @canvas %d,%d", sx, sy]];
                     return;
                 }
@@ -8685,7 +8705,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (void)onHotkeyTap:(UIButton *)b {
     NSArray<NSString *> *parts = [b.accessibilityIdentifier componentsSeparatedByString:@"|"];
     if (parts.count != 2) return;
-    [[UIImpactFeedbackGenerator new] impactOccurred];
+    [self haptic:RMHapticOp];
     // Quick-hop prev/next is a ~8s relog under the hood, not a keypress: route it through the
     // world-hop bridge (same path the World Switcher's prev/next buttons use) instead of firing
     // the raw keybind, which does nothing when the hopper plugin isn't focused. Mirrors Android.

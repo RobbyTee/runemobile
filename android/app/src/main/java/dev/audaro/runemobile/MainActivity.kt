@@ -19,7 +19,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.os.SystemClock
-import android.os.VibrationEffect
 import android.os.Vibrator
 import android.provider.MediaStore
 import android.util.Log
@@ -872,7 +871,7 @@ class MainActivity : AppCompatActivity() {
                 commitMenuSelection()
             }
         }
-        chatTabOverlay.onHaptic = { vibrateTick() }
+        chatTabOverlay.onHaptic = { haptic(GameSettings.Haptic.MENU_OPEN) } // fires as the filter menu opens
         // UI-4: the opaque dialogue parchment. Both taps go through the engine's own WIDGET_CONTINUE handler.
         // The two routes this used to take were each wrong on device, and neither says so:
         //   * a precise click on the CONTINUE widget WALKS THE PLAYER. The component carries no op listener and
@@ -2560,7 +2559,7 @@ class MainActivity : AppCompatActivity() {
                 val orb = nearestOrb(gx, gy)
                 if (orb != null) {
                     JvmLauncher.clickPrecise(orb.cx, orb.cy, 1)
-                    vibrateTick()
+                    haptic(GameSettings.Haptic.OP)
                     Log.i(TAG, "orb-veneer: tap ($gx,$gy) -> ${orb.name} @(${orb.cx},${orb.cy})")
                     return true
                 }
@@ -2673,6 +2672,7 @@ class MainActivity : AppCompatActivity() {
                             // onTouch(0) primes focus + MOVED + PRESSED on the slot — no clearHover (that would
                             // park the cursor off-canvas; iOS doesn't either).
                             JvmLauncher.touch(0, sx, sy, 1) // MOUSE_PRESSED on the source widget
+                            haptic(GameSettings.Haptic.DRAG) // once per drag, as it lifts off the slot
                             Log.i(TAG, "drag-1: widget drag begin game=($sx,$sy)")
                         } else if (e1 != null && !mapOpen && scrollRectsCanvas.any { inCanvasRect(it, sx, sy) }) {
                             // DRAG-2: a drag that STARTS over an open scrollable interface (bank/GE/quest-list/
@@ -2969,7 +2969,7 @@ class MainActivity : AppCompatActivity() {
                                 JvmLauncher.fireHotkey(group, key)
                             }
                         }
-                        vibrateTick()
+                        haptic(GameSettings.Haptic.OP)
                         Log.i(
                             TAG,
                             if (quickHop) {
@@ -3292,7 +3292,7 @@ class MainActivity : AppCompatActivity() {
                     if (seq != lastTapSeq) {
                         lastTapSeq = seq
                         Log.i(TAG, "a1: interactTapSeq -> $seq (haptic)")
-                        vibrateTick()
+                        haptic(GameSettings.Haptic.OP)
                     }
                     // Phase-1 tap feedback, resolved from ENGINE TRUTH (tap-kind seq advanced past the tap-time
                     // baseline). Ring ONLY for a real scene tap — SCENE → red, WALK → yellow; a WIDGET op draws a
@@ -4341,17 +4341,9 @@ class MainActivity : AppCompatActivity() {
         JvmLauncher.onBridge { JvmLauncher.relocateMinimap(-1, -1) }
     }
 
-    private fun vibrateTick() {
-        val v = vibrator ?: return
-        // Guard the vibrate: it needs the VIBRATE permission and some devices restrict the vibrator outright — a
-        // SecurityException here must never take down the UI thread (it once did, on the menu-highlight haptic).
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                v.vibrate(VibrationEffect.createOneShot(18, VibrationEffect.DEFAULT_AMPLITUDE))
-            }
-        } catch (e: Exception) {
-            // haptics are best-effort; ignore
-        }
+    /** One haptic buzz for [trigger], if the player has that trigger on (Game settings), at the chosen strength. */
+    private fun haptic(trigger: GameSettings.Haptic) {
+        if (GameSettings.hapticOn(this, trigger)) GameSettings.buzz(this, vibrator)
     }
 
     // ---- A2 press-and-peek menu state machine -------------------------------------------------------
@@ -4383,6 +4375,7 @@ class MainActivity : AppCompatActivity() {
         menuDegraded = false // a new long-press always starts un-degraded
         menuOpenAtNanos = System.nanoTime()
         JvmLauncher.click(gx, gy, 3) // open the engine right-click menu at the finger
+        haptic(GameSettings.Haptic.MENU_OPEN)
         Log.i(TAG, "a2: long-press -> menu open game=($gx,$gy) hand=${if (menuHandRight) "R" else "L"}")
     }
 
@@ -4645,7 +4638,7 @@ class MainActivity : AppCompatActivity() {
             MenuOverlayView.Role.PARENT -> {
                 menuDrillParent = e.engineIndex
                 menuOverlay.setHighlight(-1)
-                vibrateTick()
+                haptic(GameSettings.Haptic.MENU_HOVER)
                 buildTapMenu(e.sub ?: emptyList(), drilled = true)
             }
 
@@ -4677,7 +4670,7 @@ class MainActivity : AppCompatActivity() {
         val row = menuOverlay.rowAt(x, y)
         if (menuOverlay.setHighlight(row)) {
             menuHighlight = row
-            vibrateTick()
+            if (row >= 0) haptic(GameSettings.Haptic.MENU_HOVER)
         }
     }
 
