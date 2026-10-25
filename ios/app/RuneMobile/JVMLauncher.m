@@ -94,6 +94,9 @@ static jmethodID gMuiHubInstall = NULL;   // hubInstall(Ljava/lang/String;)Ljava
 static jmethodID gMuiHubUninstall = NULL; // hubUninstall(Ljava/lang/String;)Ljava/lang/String;
 static jmethodID gMuiListPanels = NULL;   // listPanels()Ljava/lang/String;
 static jmethodID gMuiNotesAvail = NULL;   // notesAvailable()Z  (native Notes panel)
+static jmethodID gMuiGameSettings = NULL; // gameSettings()Ljava/lang/String;  (native Game settings)
+static jmethodID gMuiSetFpsCap = NULL;    // setFpsCap(I)Ljava/lang/String;
+static jmethodID gMuiSetIdleLogout = NULL; // setIdleLogoutMinutes(I)Ljava/lang/String;
 static jmethodID gMuiNotesGet = NULL;     // notesGet()Ljava/lang/String;
 static jmethodID gMuiNotesSet = NULL;     // notesSet(Ljava/lang/String;)Ljava/lang/String;
 static jmethodID gMuiGeAvail = NULL;      // geAvailable()Z  (native Grand Exchange panel)
@@ -633,6 +636,21 @@ static BOOL ensureMui(void) {
     }
     gMuiFireHotkey = (*env)->GetStaticMethodID(env, global, "fireHotkey", "(Ljava/lang/String;Ljava/lang/String;)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMuiFireHotkey = NULL; }
+    gMuiGameSettings = (*env)->GetStaticMethodID(env, global, "gameSettings", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMuiGameSettings = NULL;
+    }
+    gMuiSetFpsCap = (*env)->GetStaticMethodID(env, global, "setFpsCap", "(I)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMuiSetFpsCap = NULL;
+    }
+    gMuiSetIdleLogout = (*env)->GetStaticMethodID(env, global, "setIdleLogoutMinutes", "(I)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMuiSetIdleLogout = NULL;
+    }
     gMuiPublishNotif = (*env)->GetStaticMethodID(env, global, "publishNotification", "(Ljava/lang/String;Ljava/lang/String;)V");
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
@@ -3295,6 +3313,29 @@ static BOOL pipFeedMarkerSaysMain(void) {
     NSString *out = jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiResetPlugin, jg));
     (*env)->DeleteLocalRef(env, jg);
     return out;
+}
+
+// Native Game settings: the frame-rate cap and idle logout time, which ride on the FPS Control and Logout Timer
+// plugins (MobileUiBridge.gameSettings / setFpsCap / setIdleLogoutMinutes).
++ (NSString *)gameSettings {
+    if (!ensureMui() || !gMuiGameSettings)
+        return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiGameSettings));
+}
+
++ (NSString *)setFpsCap:(int)fps {
+    if (!ensureMui() || !gMuiSetFpsCap)
+        return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiSetFpsCap, (jint)fps));
+}
+
++ (NSString *)setIdleLogoutMinutes:(int)minutes {
+    if (!ensureMui() || !gMuiSetIdleLogout)
+        return nil;
+    JNIEnv *env = gMainEnv;
+    return jstringToNS(env, (jstring)(*env)->CallStaticObjectMethod(env, gMuiClass, gMuiSetIdleLogout, (jint)minutes));
 }
 
 // Fully-seeded default Notification JSON (NOTIF-2): the base for a per-notification sub-editor.

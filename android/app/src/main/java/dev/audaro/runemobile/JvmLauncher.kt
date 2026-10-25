@@ -285,6 +285,15 @@ object JvmLauncher {
     // SC-1/NOTIF-2: the serialized default Notification seed for the per-item editor. Off the UI thread.
     external fun nativeNotificationDefaults(): String
 
+    // Game settings: {"fpsCap":N,"idleLogoutMinutes":M} (fpsCap 0 = no cap), or "" if unavailable. Off the UI thread.
+    external fun nativeGameSettings(): String
+
+    // Cap the frame rate through the FPS Control plugin; 0 removes the cap. Off the UI thread.
+    external fun nativeSetFpsCap(fps: Int): String
+
+    // Set the idle logout time through the Logout Timer plugin, in minutes. Off the UI thread.
+    external fun nativeSetIdleLogoutMinutes(minutes: Int): String
+
     // AP-2a bridge-amortized drain surfaces (off the UI thread via [onBridge]); "" = nothing pending / unresolved.
     external fun nativeNextNotification(): String // Finding 9:  "titlebody" or ""
 
@@ -795,6 +804,12 @@ object JvmLauncher {
     ) = nativeResetConfig(group, key)
 
     fun notificationDefaults() = nativeNotificationDefaults()
+
+    fun gameSettings() = nativeGameSettings()
+
+    fun setFpsCap(fps: Int) = nativeSetFpsCap(fps)
+
+    fun setIdleLogoutMinutes(minutes: Int) = nativeSetIdleLogoutMinutes(minutes)
 
     fun nextNotification() = nativeNextNotification()
 

@@ -99,6 +99,8 @@ static jmethodID g_midGetPluginConfig = nullptr, g_midSetConfig = nullptr, g_mid
 // User-defined hotkey buttons: boundKeybindsJson() lists every bound plugin keybind; fireHotkey(group,key) fires
 // one by reading its live binding. Optional (older jars lack them) — the native Hotkeys screen no-ops without.
 static jmethodID g_midBoundKeybinds = nullptr, g_midFireHotkey = nullptr;
+// Native Game settings: frame-rate cap + idle logout, riding on the FPS Control / Logout Timer plugins (optional).
+static jmethodID g_midGameSettings = nullptr, g_midSetFpsCap = nullptr, g_midSetIdleLogout = nullptr;
 static jmethodID g_midFlushConfig = nullptr;   // A8: persist pending config writes when the app backgrounds
 static jmethodID g_midResetPluginConfig = nullptr;     // SC-2/CFG-10: whole-group reset to defaults
 static jmethodID g_midResetConfig = nullptr;           // P2-4: single-key reset to default
@@ -764,6 +766,9 @@ static bool publishBridge(JNIEnv *env) {
             g_midNotificationDefaults = midOpt(env, mug, "notificationDefaults", "()Ljava/lang/String;");                  // SC-1 defaults
             g_midBoundKeybinds        = midOpt(env, mug, "boundKeybindsJson", "()Ljava/lang/String;");                    // user-defined hotkeys (optional)
             g_midFireHotkey           = midOpt(env, mug, "fireHotkey", "(Ljava/lang/String;Ljava/lang/String;)V");        // fire one (optional)
+            g_midGameSettings = midOpt(env, mug, "gameSettings", "()Ljava/lang/String;");                                 // Game settings (optional)
+            g_midSetFpsCap = midOpt(env, mug, "setFpsCap", "(I)Ljava/lang/String;");
+            g_midSetIdleLogout = midOpt(env, mug, "setIdleLogoutMinutes", "(I)Ljava/lang/String;");
             if (!g_midGetPluginConfig || !g_midSetConfig || !g_midProcessedWriteId)
                 LOGE("bridge: MobileUiBridge config methods partial (plugin config read/write disabled)");
             // AP-2a: drain surfaces for native notification / link-out / hub-progress (each best-effort).
@@ -2205,6 +2210,38 @@ Java_dev_audaro_runemobile_JvmLauncher_nativeResetConfig(JNIEnv *artEnv, jobject
     if (r)
         hs->DeleteLocalRef(r);
     return artEnv->NewStringUTF(out.c_str());
+}
+// Native Game settings: {"fpsCap":N,"idleLogoutMinutes":M} (fpsCap 0 = no cap), or "" if unresolved.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeGameSettings(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midGameSettings)
+        return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midGameSettings);
+}
+// Call a (I)String bridge method on g_mobileUiCls and return an ART string ("" on any failure).
+static jstring mobileUiStrInt(JNIEnv *artEnv, jmethodID m, jint v) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !m)
+        return artEnv->NewStringUTF("");
+    jstring r = (jstring)hs->CallStaticObjectMethod(g_mobileUiCls, m, v);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (r)
+        hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+// Cap the frame rate (0 = no cap). Returns the bridge JSON ack.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetFpsCap(JNIEnv *artEnv, jobject, jint fps) {
+    if (!mobileUiReady() || !g_midSetFpsCap)
+        return artEnv->NewStringUTF("");
+    return mobileUiStrInt(artEnv, g_midSetFpsCap, fps);
+}
+// Set the idle logout time in minutes. Returns the bridge JSON ack.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetIdleLogoutMinutes(JNIEnv *artEnv, jobject, jint minutes) {
+    if (!mobileUiReady() || !g_midSetIdleLogout)
+        return artEnv->NewStringUTF("");
+    return mobileUiStrInt(artEnv, g_midSetIdleLogout, minutes);
 }
 // SC-1/NOTIF-2: the serialized default Notification seed JSON for the per-item editor (or "" if unresolved).
 extern "C" JNIEXPORT jstring JNICALL

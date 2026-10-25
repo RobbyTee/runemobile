@@ -38,8 +38,6 @@ class ChatPillView(
         private const val FILTER_DEFAULT = 0xFF00E000.toInt() // green ("On")
         private const val OPAQUE_BG = 0xFF423C33.toInt() // iOS stone-brown (66,60,51); fills the FULL tab rect
 
-        private const val LONG_PRESS_MS = 350L
-
         // UI-3 tighten: ASYMMETRIC tappable band. Generous ABOVE the row (toward the screen top edge, where
         // nothing else lives, so a slightly-high tab tap still lands), but small BELOW — the chat-at-top message
         // area + the scene sit directly under the tabs, and a big below-band was eating those taps.
@@ -334,7 +332,7 @@ class ChatPillView(
                 downX = event.x
                 downY = event.y
                 downTab = k
-                if (FILTERABLE[k]) postDelayed(longPressRunnable, LONG_PRESS_MS)
+                if (FILTERABLE[k]) postDelayed(longPressRunnable, GameSettings.longPressMs(context))
                 return true
             }
 

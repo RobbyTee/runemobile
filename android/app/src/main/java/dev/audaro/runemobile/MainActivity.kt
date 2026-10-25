@@ -208,6 +208,13 @@ class MainActivity : AppCompatActivity() {
     private var touchStrayed = 0f // the FURTHEST it ever got from there, not where it ended up
     private var touchMulti = false // a second finger joined: this sequence belongs to the pinch, never a tap
     private var touchPastSlop = false // it left the radius: a drag now, and no click is coming for it
+
+    // The long-press is timed here rather than by the GestureDetector, whose hold is the system-wide one: the
+    // player sets it in Game settings. Armed at the landing, dropped by a lift, a second finger or a drag.
+    private val holdRunnable = Runnable { onHoldElapsed() }
+    private var cameraAccX = 0f // sub-px remainders of the camera drag, so a low sensitivity still turns it
+    private var cameraAccY = 0f
+    private var cameraGain = 1f // GameSettings.cameraGain, read when the camera drag starts
     private var tapArmed = false // armTap was posted for this sequence and nothing has dropped it yet
     private var keyboardShown = false
     private var imeWasShown = false // last frame's ACTUAL ime visibility — to spot a user-driven dismiss
@@ -1383,6 +1390,7 @@ class MainActivity : AppCompatActivity() {
         )
 
         gestures = GestureDetector(this, GestureListener())
+        gestures.setIsLongpressEnabled(false) // timed by holdRunnable instead (see its comment)
         scaleGestures = ScaleGestureDetector(this, ScaleListener())
         // Drive gestures from the SurfaceView itself so event coords are view-local: the screen->game
         // mapping is then correct wherever the view sits in the window (status-bar inset, display cutout,
@@ -1461,11 +1469,18 @@ class MainActivity : AppCompatActivity() {
                     touchStrayed = 0f
                     touchMulti = false
                     touchPastSlop = false
+                    surfaceView.removeCallbacks(holdRunnable)
+                    surfaceView.postDelayed(holdRunnable, GameSettings.longPressMs(this))
                 }
 
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     touchMulti = true
+                    surfaceView.removeCallbacks(holdRunnable)
                     dropTapArm() // a pinch, not a tap: the first finger's arm goes with it
+                }
+
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    surfaceView.removeCallbacks(holdRunnable)
                 }
 
                 MotionEvent.ACTION_MOVE -> {
@@ -1476,6 +1491,7 @@ class MainActivity : AppCompatActivity() {
                         if (d > touchStrayed) touchStrayed = d
                         if (!touchPastSlop && touchStrayed > sceneDragSlopPx) {
                             touchPastSlop = true
+                            surfaceView.removeCallbacks(holdRunnable)
                             dropTapArm() // this touch is a drag now (iOS does this at the pan's Began)
                         }
                         // A tap is not one point: the finger lands, rolls a few pixels and lifts, and all of
@@ -2369,16 +2385,30 @@ class MainActivity : AppCompatActivity() {
         return (viewY * fh / vh).toInt().coerceIn(0, fh - 1)
     }
 
-    private fun scaleX(px: Float): Int {
+    private fun scaleXf(px: Float): Float {
         val fw = JvmLauncher.frameWidth()
         val vw = surfaceView.width
-        return if (fw <= 0 || vw <= 0) px.toInt() else (px * fw / vw).toInt()
+        return if (fw <= 0 || vw <= 0) px else px * fw / vw
     }
 
-    private fun scaleY(px: Float): Int {
+    private fun scaleYf(px: Float): Float {
         val fh = JvmLauncher.frameHeight()
         val vh = surfaceView.height
-        return if (fh <= 0 || vh <= 0) px.toInt() else (px * fh / vh).toInt()
+        return if (fh <= 0 || vh <= 0) px else px * fh / vh
+    }
+
+    /** The finger stayed put for the long-press time: open the menu at the landing point. */
+    private fun onHoldElapsed() {
+        if (touchMulti || touchPastSlop || menuActive) return
+        // A hold is never a tap. The detector's own long-press guaranteed that; with it off, cancel the tap it is
+        // still holding so the lift can't click — even when no menu opens below, or the menu is dropped mid-touch.
+        val now = SystemClock.uptimeMillis()
+        val cancel = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, touchOriginX, touchOriginY, 0)
+        gestures.onTouchEvent(cancel)
+        cancel.recycle()
+        // The map owns the whole screen while open — no right-click menu peek into the scene behind it.
+        if (mapOpen) return
+        beginMenuPeek(touchOriginX, touchOriginY)
     }
 
     private class OrbHit(
@@ -2608,12 +2638,6 @@ class MainActivity : AppCompatActivity() {
             return true
         }
 
-        override fun onLongPress(e: MotionEvent) {
-            // The map owns the whole screen while open — no right-click menu peek into the scene behind it.
-            if (mapOpen) return
-            beginMenuPeek(e.x, e.y)
-        }
-
         override fun onScroll(
             e1: MotionEvent?,
             e2: MotionEvent,
@@ -2685,6 +2709,9 @@ class MainActivity : AppCompatActivity() {
                             Log.i(TAG, "drag-2: iface scroll begin game=($sx,$sy)")
                         } else {
                             cameraGestureActive = true
+                            cameraAccX = 0f
+                            cameraAccY = 0f
+                            cameraGain = GameSettings.cameraGain(this@MainActivity)
                             JvmLauncher.clearHover()
                         }
                     }
@@ -2772,7 +2799,17 @@ class MainActivity : AppCompatActivity() {
             // GestureDetector.onScroll distanceX/Y = old - new, which already equals what iOS sends the bridge
             // (postCameraDx passes -translation, i.e. old - new). Pass it through un-negated so the camera
             // yaws/pitches the same direction as iOS (grab-the-scene feel); negating double-inverts -> reversed.
-            JvmLauncher.camera(scaleX(distanceX).toInt(), scaleY(distanceY).toInt())
+            // Camera sensitivity (Game settings) scales the canvas-px delta; the remainder carries to the next move,
+            // the way iOS accumulates, so small moves at a low setting add up instead of each rounding to zero.
+            cameraAccX += scaleXf(distanceX) * cameraGain
+            cameraAccY += scaleYf(distanceY) * cameraGain
+            val cdx = cameraAccX.toInt()
+            val cdy = cameraAccY.toInt()
+            if (cdx != 0 || cdy != 0) {
+                cameraAccX -= cdx
+                cameraAccY -= cdy
+                JvmLauncher.camera(cdx, cdy)
+            }
             return true
         }
     }

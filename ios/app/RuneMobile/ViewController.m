@@ -471,6 +471,7 @@ static NSString *RMPasteLine(NSString *s) {
 // engine pushes its message area down past the taller row (setEngineChatTabRowHeight). State + click targets
 // come from JVMLauncher.chatSnapshot each tick; re-applied so the engine's TOPLEVEL_REDRAW can't undo it.
 @property (nonatomic, strong) NSMutableArray<UIButton *> *chatTabButtons;
+@property (nonatomic, strong) UILongPressGestureRecognizer *sceneLongPress; // the game view's hold -> menu
 @property (nonatomic, strong) UIImage *chatBtnImg;      // 3051 — idle tab background
 @property (nonatomic, strong) UIImage *chatBtnSelImg;   // 3053 — selected (active) tab
 @property (nonatomic, strong) UIImage *chatBtnNewImg;   // 3055 — tab with unread messages
@@ -923,7 +924,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     } else if (ip.section == 1 && ip.row == 0) {
         cell.textLabel.text = @"Game settings";
-        cell.detailTextLabel.text = @"Haptic feedback";
+        cell.detailTextLabel.text = @"Touch, camera, idle logout, frame rate, haptics";
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     } else if (ip.section == 1) {
         cell.textLabel.text = @"Show tab rails";
@@ -1049,6 +1050,11 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(onHopScrimArmed:)
                                                  name:@"RMWorldHopArmed"
+                                               object:nil];
+    // Settings > Game settings: the long-press time applies to the recognizers live.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(applyLongPressTime)
+                                                 name:RMGameSettingsDidChangeNotification
                                                object:nil];
     [self appendLine:@"RuneMobile — W1 minimal JVM shell"];
     [self appendLine:[NSString stringWithFormat:@"jre: %@",
@@ -1453,7 +1459,8 @@ static NSString *const kLayoutNoticeBody =
     // a tap with a little roll in it did nothing at all.
     UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc]
         initWithTarget:self action:@selector(onLongPress:)];
-    longPress.minimumPressDuration = 0.4;
+    longPress.minimumPressDuration = [RMGameSettings longPressMs] / 1000.0; // Settings > Game settings
+    self.sceneLongPress = longPress;
     // Same slop as the tap and the camera, so the three partition every one-finger touch with ONE number: a
     // hold that rolled 15pt is still a hold (UIKit's default 10pt failed it, and then nothing opened the menu
     // and nothing clicked either — the touch fell between all three gestures).
@@ -4219,7 +4226,7 @@ static UIImage *imageFromSpriteDict(id obj) {
         if (kChatTabFilterable[i]) {
             UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc]
                 initWithTarget:self action:@selector(onChatTabLongPress:)];
-            lp.minimumPressDuration = 0.4;
+            lp.minimumPressDuration = [RMGameSettings longPressMs] / 1000.0; // Settings > Game settings
             [b addGestureRecognizer:lp];
         }
         [self.screen addSubview:b];
@@ -7660,6 +7667,18 @@ static CGRect mapRectFromArr(NSArray *a) {
     return ring;
 }
 
+// The long-press time from Settings > Game settings, on the game view's hold and the chat tabs' holds.
+- (void)applyLongPressTime {
+    CFTimeInterval t = [RMGameSettings longPressMs] / 1000.0;
+    self.sceneLongPress.minimumPressDuration = t;
+    for (UIButton *b in self.chatTabButtons) {
+        for (UIGestureRecognizer *g in b.gestureRecognizers) {
+            if ([g isKindOfClass:[UILongPressGestureRecognizer class]])
+                ((UILongPressGestureRecognizer *)g).minimumPressDuration = t;
+        }
+    }
+}
+
 // The one impact generator every haptic trigger shares, rebuilt when the strength setting changes.
 - (UIImpactFeedbackGenerator *)hapticGenerator {
     NSInteger s = [RMGameSettings hapticStrength];
@@ -8506,6 +8525,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     // PITCH_UNITS_PER_PX) and Android's canvas-scaled deltas — same conversion mapPanning / scrollChatByDragDeltaY use.
     CGFloat W = self.view.bounds.size.width;
     CGFloat k = (self.renderW > 0 && W > 0) ? (CGFloat)self.renderW / W : 1.0;
+    k *= [RMGameSettings cameraGain]; // Settings > Game settings: camera sensitivity
     self.cameraDragAccX += -d.x * k;
     self.cameraDragAccY += -d.y * k;
     int cdx = (int)(self.cameraDragAccX < 0 ? ceil(self.cameraDragAccX) : floor(self.cameraDragAccX));

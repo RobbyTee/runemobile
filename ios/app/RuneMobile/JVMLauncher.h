@@ -433,6 +433,14 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Reset an ENTIRE plugin's config to defaults + plugin.resetConfiguration (MobileUiBridge.resetPluginConfig). Ack JSON.
 + (nullable NSString *)mobileResetPluginConfig:(NSString *)group;
 
+/// The frame-rate cap and idle logout time for the native Game settings screen (MobileUiBridge.gameSettings):
+/// {"fpsCap":N,"idleLogoutMinutes":M}, fpsCap 0 = no cap. nil before the facade is up or on an older jar.
++ (nullable NSString *)gameSettings;
+/// Cap the frame rate through the FPS Control plugin (0 removes the cap). Ack JSON, nil if unavailable.
++ (nullable NSString *)setFpsCap:(int)fps;
+/// Set the idle logout time through the Logout Timer plugin, in minutes. Ack JSON, nil if unavailable.
++ (nullable NSString *)setIdleLogoutMinutes:(int)minutes;
+
 /// Fully-seeded default Notification JSON (MobileUiBridge.notificationDefaults) — base for the notification sub-editor.
 + (nullable NSString *)mobileNotificationDefaults;
 
