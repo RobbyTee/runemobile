@@ -8025,7 +8025,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         ? self.menuRowEntries[k] : nil;
     NSArray *sub = [e[@"sub"] isKindOfClass:[NSArray class]] ? e[@"sub"] : nil;
     if (sub.count > 0) {
-        [self haptic:RMHapticMenuHover];
+        [self haptic:RMHapticMenuOpen];                            // a submenu opening
         [self buildTapMenuWithEntries:sub drilledParent:(int)k];   // drill in
         return;
     }

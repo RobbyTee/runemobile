@@ -4684,7 +4684,7 @@ class MainActivity : AppCompatActivity() {
             MenuOverlayView.Role.PARENT -> {
                 menuDrillParent = e.engineIndex
                 menuOverlay.setHighlight(-1)
-                haptic(GameSettings.Haptic.MENU_HOVER)
+                haptic(GameSettings.Haptic.MENU_OPEN) // a submenu opening
                 buildTapMenu(e.sub ?: emptyList(), drilled = true)
             }
 
