@@ -731,6 +731,87 @@ public class HudVeneerBridgeTest
 		verify(prompt, never()).setHidden(false);
 	}
 
+	// --- the item search's results list ------------------------------------------------------------------------
+	// The GE item search draws its results in the chatbox's message layer, with its own scrollbar. A finger drag
+	// on it has to move THAT list -- the chat lines are not what is on screen -- and only the rows inside its
+	// window may stay tap targets, or a row scrolled out of sight is still pickable over the title.
+
+	/** A scroll layer: its window is {@code h} px tall and its content {@code contentH}, at scroll {@code y}. */
+	private static Widget scrollLayer(int h, int contentH, int y, Widget... kids)
+	{
+		final Widget w = mock(Widget.class);
+		when(w.getHeight()).thenReturn(h);
+		when(w.getScrollHeight()).thenReturn(contentH);
+		when(w.getScrollY()).thenReturn(y);
+		when(w.getDynamicChildren()).thenReturn(kids);
+		return w;
+	}
+
+	@Test
+	public void aDragOnTheSearchResultsScrollsTheResults()
+	{
+		final Client c = mock(Client.class);
+		final Widget results = scrollLayer(100, 300, 0, mock(Widget.class));
+		final Widget chat = scrollLayer(100, 500, 400);
+		when(c.getWidget(InterfaceID.Chatbox.MES_LAYER_SCROLLCONTENTS)).thenReturn(results);
+		when(c.getWidget(InterfaceID.Chatbox.SCROLLAREA)).thenReturn(chat);
+
+		HudVeneerBridge.applyChatScroll(c, 20, true);
+
+		verify(c).runScript(ScriptID.UPDATE_SCROLLBAR, InterfaceID.Chatbox.MES_LAYER_SCROLLBAR,
+			InterfaceID.Chatbox.MES_LAYER_SCROLLCONTENTS, 20);
+		verify(c, never()).runScript(ScriptID.UPDATE_SCROLLBAR, InterfaceID.Chatbox.CHATSCROLLBAR,
+			InterfaceID.Chatbox.SCROLLAREA, 380);
+	}
+
+	@Test
+	public void theResultsStopAtTheirLastRow()
+	{
+		final Client c = mock(Client.class);
+		final Widget results = scrollLayer(100, 300, 190, mock(Widget.class));
+		when(c.getWidget(InterfaceID.Chatbox.MES_LAYER_SCROLLCONTENTS)).thenReturn(results);
+
+		HudVeneerBridge.applyChatScroll(c, 50, true);
+
+		verify(c).runScript(ScriptID.UPDATE_SCROLLBAR, InterfaceID.Chatbox.MES_LAYER_SCROLLBAR,
+			InterfaceID.Chatbox.MES_LAYER_SCROLLCONTENTS, 200);
+	}
+
+	@Test
+	public void withNoResultsListedTheChatScrollsAsBefore()
+	{
+		final Client c = mock(Client.class);
+		// "Enter amount" is a prompt too, but it lists nothing: the drag stays with the chat.
+		final Widget empty = scrollLayer(100, 0, 0);
+		final Widget chat = scrollLayer(100, 500, 400);
+		when(c.getWidget(InterfaceID.Chatbox.MES_LAYER_SCROLLCONTENTS)).thenReturn(empty);
+		when(c.getWidget(InterfaceID.Chatbox.SCROLLAREA)).thenReturn(chat);
+
+		HudVeneerBridge.applyChatScroll(c, -20, true);
+		HudVeneerBridge.applyChatScroll(c, -30, false);
+
+		verify(c).runScript(ScriptID.UPDATE_SCROLLBAR, InterfaceID.Chatbox.CHATSCROLLBAR,
+			InterfaceID.Chatbox.SCROLLAREA, 380);
+		verify(c).runScript(ScriptID.UPDATE_SCROLLBAR, InterfaceID.Chatbox.CHATSCROLLBAR,
+			InterfaceID.Chatbox.SCROLLAREA, 370);
+	}
+
+	@Test
+	public void aResultRowIsCutToTheListsWindow()
+	{
+		final int[] window = {10, 50, 400, 100};
+		assertArrayEquals("inside the window: as drawn",
+			new int[]{20, 60, 100, 20}, HudVeneerBridge.visiblePart(new int[]{20, 60, 100, 20}, window));
+		assertArrayEquals("half above the window: the half on screen",
+			new int[]{20, 50, 100, 10}, HudVeneerBridge.visiblePart(new int[]{20, 40, 100, 20}, window));
+		assertNull("scrolled out above: no target",
+			HudVeneerBridge.visiblePart(new int[]{20, 25, 100, 20}, window));
+		assertNull("scrolled out below: no target",
+			HudVeneerBridge.visiblePart(new int[]{20, 150, 100, 20}, window));
+		assertArrayEquals("no window known: as drawn",
+			new int[]{20, 25, 100, 20}, HudVeneerBridge.visiblePart(new int[]{20, 25, 100, 20}, null));
+	}
+
 	// --- the engine stone rows ------------------------------------------------------------------------------
 	// The native tab grid stands in for the stones, so their rows are hidden -- by hiding each stone's
 	// GRANDPARENT, the container the engine does not re-pin. In Resizable - Modern (164) that is the row alone.

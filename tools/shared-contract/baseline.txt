@@ -373,6 +373,7 @@ PAYLOAD HudVeneerBridge key
 PAYLOAD HudVeneerBridge l
 PAYLOAD HudVeneerBridge labelColor
 PAYLOAD HudVeneerBridge lines
+PAYLOAD HudVeneerBridge list
 PAYLOAD HudVeneerBridge loggedIn
 PAYLOAD HudVeneerBridge map
 PAYLOAD HudVeneerBridge maplist

@@ -536,6 +536,7 @@ static NSString *RMPasteLine(NSString *s) {
 @property (nonatomic, assign) CGPoint dialogueContinuePoint; // engine CONTINUE widget centre (canvas px), or (-1,-1)
 @property (nonatomic, assign) BOOL dialogueIsOptions;        // the open dialogue is a "Select an Option" menu
 @property (nonatomic, assign) BOOL dialogueIsPrompt;         // ... and it is a message-layer prompt (GE search)
+@property (nonatomic, assign) CGRect dialoguePromptList;     // its results window, canvas px, while it scrolls
 @property (nonatomic, assign) BOOL dialogueTargetsKnown;     // the bridge models this dialogue's clickables
 @property (nonatomic, assign) long long dialogueTargetsSeq;  // the dialogue publish those clickables came from
 @property (nonatomic, assign) long long dialogueViewSeq;     // the publish the PARCHMENT's rows were built from
@@ -4683,6 +4684,7 @@ static int chatRowCanvasH(void) {
     self.dialogueContinuePoint = CGPointMake(-1, -1);
     self.dialogueIsOptions = NO;
     self.dialogueIsPrompt = NO;
+    self.dialoguePromptList = CGRectZero;
     self.dialogueTargetsKnown = NO;
     self.dialogueOptionRects = nil;
     self.dialogueOptionDigits = nil;
@@ -4740,6 +4742,11 @@ static int chatRowCanvasH(void) {
         return;
     self.dialogueIsOptions = YES;
     self.dialogueIsPrompt = [d[@"prompt"] boolValue];
+    NSDictionary *list = [d[@"list"] isKindOfClass:[NSDictionary class]] ? d[@"list"] : nil;
+    if (list) {
+        self.dialoguePromptList = CGRectMake([list[@"x"] intValue], [list[@"y"] intValue], [list[@"w"] intValue],
+                                             [list[@"h"] intValue]);
+    }
     NSArray *opts = [d[@"options"] isKindOfClass:[NSArray class]] ? d[@"options"] : @[];
     NSMutableArray *rects = [NSMutableArray arrayWithCapacity:opts.count];
     NSMutableArray *digits = [NSMutableArray arrayWithCapacity:opts.count];
@@ -8378,6 +8385,15 @@ static CGRect mapRectFromArr(NSArray *a) {
         }
         self.mapPanning = NO;
         self.mapListScrolling = NO;
+        // A drag that starts on the item search's results scrolls that list; the bridge sends the chat scroll to
+        // it while it is open. The list's window is only published while it holds more than fits.
+        int lx = 0, ly = 0;
+        if (self.chatDialogueActive && self.dialogueIsPrompt && self.dialoguePromptList.size.width > 0 && [self mapPoint:landing toGameX:&lx toGameY:&ly] && CGRectContainsPoint(self.dialoguePromptList, CGPointMake(lx, ly))) {
+            self.chatScrolling = YES;
+            self.chatScrollAccum = 0;
+            [self appendLine:@"[shell] search results scroll begin"];
+            return;
+        }
         // A drag that STARTS inside the open chat box scrolls the chat (finger-scroll) instead of rotating the
         // camera. Only when the chat is open (chatScrollable); otherwise it's a normal camera drag.
         int gx = 0, gy = 0;
