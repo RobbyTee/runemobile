@@ -78,6 +78,7 @@ object GameSettings {
     const val LONG_PRESS_MAX_MS = 1000
     const val LONG_PRESS_STEP_MS = 50
     const val LONG_PRESS_DEFAULT_MS = 400 // the hold the app has always used
+    const val DRAG_HOLD_MAX_MS = 150L
 
     const val CAMERA_SENS_MIN = 0.1f
     const val CAMERA_SENS_MAX = 4.0f
@@ -139,6 +140,12 @@ object GameSettings {
     /** The camera drag multiplier: 1 at the default sensitivity. */
     fun cameraGain(ctx: Context): Float = cameraSensitivity(ctx) / CAMERA_SENS_DEFAULT
 }
+
+/**
+ * How long a finger has to rest on an item before dragging it moves the item: two thirds of the long-press time,
+ * at most 150 ms. A quicker swipe never picks the item up.
+ */
+fun GameSettings.dragHoldMs(ctx: Context): Long = minOf(longPressMs(ctx) * 2 / 3, GameSettings.DRAG_HOLD_MAX_MS)
 
 private val GS_DIM = Color(0xFF9E9E9E)
 private val GS_ACCENT = Color(0xFFF29E1C)

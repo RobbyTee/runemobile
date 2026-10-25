@@ -9,6 +9,7 @@ static NSString *const kLongPressKey = @"touch.longPressMs";
 static NSString *const kCameraSensitivityKey = @"camera.sensitivity";
 
 static const NSInteger kLongPressMinMs = 200, kLongPressMaxMs = 1000, kLongPressStepMs = 50, kLongPressDefaultMs = 400;
+static const NSInteger kDragHoldMaxMs = 150;
 static const double kCameraSensMin = 0.1, kCameraSensMax = 4.0, kCameraSensDefault = 2.0;
 
 @implementation RMGameSettings
@@ -75,6 +76,10 @@ static const double kCameraSensMin = 0.1, kCameraSensMax = 4.0, kCameraSensDefau
 
 + (double)cameraGain {
     return [self cameraSensitivity] / kCameraSensDefault;
+}
+
++ (NSInteger)dragHoldMs {
+    return MIN([self longPressMs] * 2 / 3, kDragHoldMaxMs);
 }
 
 @end

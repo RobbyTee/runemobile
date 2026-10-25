@@ -146,6 +146,7 @@ class MainActivity : AppCompatActivity() {
     // closes the engine WidgetDrag (no stuck held item).
     private var invRectCanvas: IntArray? = null
     private var itemDragging = false
+    private var paneSwiping = false // a quick swipe from the inventory or a reorder pane: ignored until the lift
     private var itemDragLastX = 0
     private var itemDragLastY = 0
 
@@ -1545,6 +1546,7 @@ class MainActivity : AppCompatActivity() {
                 mapPanning = false
                 mapScrolling = false
                 ifaceScrolling = false // DRAG-2: end the interface drag-to-scroll gesture
+                paneSwiping = false
                 // Whatever this touch did, it is finished with its arm. Cancelling here rather than at each of
                 // the router's exits is both shorter and safer: it cannot be missed when a branch is added. It
                 // reads as a no-op when the click DID happen, because the two reach the bridge in the order
@@ -2648,6 +2650,7 @@ class MainActivity : AppCompatActivity() {
             if (pinchActive || scaleGestures.isInProgress || e2.pointerCount > 1) {
                 return false
             }
+            if (paneSwiping) return true
             // Context routing, decided once at gesture start from the DOWN point (same rule as iOS):
             // inside the open world-map window = pan the MAP; inside the live chat box = scroll the chat;
             // anywhere else = rotate the camera.
@@ -2689,7 +2692,11 @@ class MainActivity : AppCompatActivity() {
                         val inDraggablePane =
                             !mapOpen && e1 != null &&
                                 (inCanvasRect(invRectCanvas, sx, sy) || reorderRectsCanvas.any { inCanvasRect(it, sx, sy) })
-                        if (inDraggablePane) {
+                        // The drag only picks the item up once the finger has rested on it for the drag hold (Game
+                        // settings); a quicker swipe from the pane scrolls it if it scrolls and otherwise does
+                        // nothing, so a flick across the inventory can't move an item or swing the camera.
+                        val heldForDrag = e2.eventTime - e2.downTime >= GameSettings.dragHoldMs(this@MainActivity)
+                        if (inDraggablePane && heldForDrag) {
                             itemDragging = true
                             itemDragLastX = sx
                             itemDragLastY = sy
@@ -2707,6 +2714,8 @@ class MainActivity : AppCompatActivity() {
                             ifaceWheelY = sy
                             ifaceScrollAccum = 0f
                             Log.i(TAG, "drag-2: iface scroll begin game=($sx,$sy)")
+                        } else if (inDraggablePane) {
+                            paneSwiping = true
                         } else {
                             cameraGestureActive = true
                             cameraAccX = 0f

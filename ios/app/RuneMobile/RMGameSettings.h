@@ -29,6 +29,9 @@ extern NSNotificationName const RMGameSettingsDidChangeNotification;
 + (void)setCameraSensitivity:(double)v;
 /// The camera drag multiplier: 1 at the default sensitivity.
 + (double)cameraGain;
+/// How long a finger has to rest on an item before dragging it moves the item, in ms: two thirds of the
+/// long-press time, at most 150. A quicker swipe never picks the item up.
++ (NSInteger)dragHoldMs;
 @end
 
 /// The native Game settings screen, pushed from Settings.

@@ -88,8 +88,9 @@ static UIColor *RMInteractRingColor(void) {
 // has an 18pt dead zone instead of 10pt before the camera starts moving.
 static const CGFloat kSceneDragSlop = 18.0;
 // A touch that stays inside that radius but sits there is a hold, not a tap. The long-press recognizer fires
-// at 0.4s and takes the sequence (opening the menu), so this only decides touches it did not claim.
-static const NSTimeInterval kSceneTapMaxHold = 0.45;
+// at the long-press time (Settings > Game settings) and takes the sequence, opening the menu, so this margin
+// past it only decides touches it did not claim.
+static const NSTimeInterval kSceneTapHoldMargin = 0.05;
 
 // The game canvas, and the tap classifier. A UIImageView subclass because the decision above has to be made
 // from the raw touch sequence: -touchesBegan: runs the instant the finger lands (a tap recognizer cannot fire
@@ -179,6 +180,8 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 /// translation at the moment the pan begins: whether that translation spans the whole withheld slop or only
 /// the move that crossed it is UIKit's business, and the difference is a whole inventory slot.
 @property (nonatomic, readonly) CGPoint landing;
+/// When the finger landed (CACurrentMediaTime), so the handler can tell a held drag from a quick swipe.
+@property (nonatomic, readonly) CFTimeInterval landedAt;
 @end
 
 @implementation RMCameraPanRecognizer {
@@ -194,6 +197,7 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
     [super touchesBegan:touches withEvent:event];
     if (!_tracking) {
         _landing = [touches.anyObject locationInView:self.view];
+        _landedAt = CACurrentMediaTime();
         _tracking = YES;
     }
 }
@@ -383,6 +387,7 @@ static NSString *RMPasteLine(NSString *s) {
 // DRAG-1: a one-finger drag that BEGAN over the inventory grid rearranges items (synthesized engine mouse-drag)
 // instead of rotating the camera. Only set when the drag starts inside the published inventory rect.
 @property (nonatomic, assign) BOOL itemDragging;
+@property (nonatomic, assign) BOOL paneSwiping; // a quick swipe from the inventory or a reorder pane: ignored
 // Tracks the engine "dialogue open" state so the native chat veneer hides while a dialogue shows (logged once per transition).
 @property (nonatomic, assign) BOOL chatDialogueActive;
 // Canvas-px bounds of the open dialogue (from the snapshot); a tap inside it routes through the precise click so
@@ -7347,7 +7352,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 // point the engine has been resolving since contact (armTap), and committing to it is what makes the click
 // land on the lift instead of a few frames after it.
 - (void)onSceneTouchUp:(CGPoint)origin strayed:(CGFloat)strayed held:(NSTimeInterval)held {
-    if (strayed <= kSceneDragSlop && held <= kSceneTapMaxHold) {
+    if (strayed <= kSceneDragSlop && held <= [RMGameSettings longPressMs] / 1000.0 + kSceneTapHoldMargin) {
         [self worldTapAtScreenPoint:origin];
     }
     // Whatever that did, this touch is finished with its arm — and only the plain world click consumes one.
@@ -8337,6 +8342,11 @@ static CGRect mapRectFromArr(NSArray *a) {
         CGPoint landing = [g isKindOfClass:[RMCameraPanRecognizer class]]
                               ? ((RMCameraPanRecognizer *)g).landing
                               : [g locationInView:self.screen];
+        // How long the finger rested before it moved off: an item lifts only after the drag hold.
+        NSTimeInterval held = [g isKindOfClass:[RMCameraPanRecognizer class]]
+                                  ? CACurrentMediaTime() - ((RMCameraPanRecognizer *)g).landedAt
+                                  : 0;
+        self.paneSwiping = NO;
         [g setTranslation:CGPointZero inView:self.screen];
         // World map open: a 1-finger drag that BEGINS inside the Key list or the open surface dropdown
         // SCROLLS that list (wheel events parked over it); inside the map window it pans the MAP (bridge ->
@@ -8384,9 +8394,13 @@ static CGRect mapRectFromArr(NSArray *a) {
         // rearranges items (engine WidgetDrag) rather than rotating the camera. The press must land on the SOURCE
         // slot, so map the true touch start (loc - slop), not the already-moved current point. Only diverts
         // inventory-/reorder-origin drags — scene drags still rotate. Mirrors Android's combined-branch classification.
+        // The drag only picks the item up once the finger has rested on it for the drag hold (Settings > Game
+        // settings); a quicker swipe from the pane scrolls it if it scrolls and otherwise does nothing, so a
+        // flick across the inventory can't move an item or swing the camera.
         CGRect inv = [JVMLauncher inventoryCanvasBounds];
         NSArray<NSValue *> *reorderPanes = [JVMLauncher reorderPaneCanvasBounds];
         BOOL haveInv = !CGRectIsNull(inv) && CGRectGetWidth(inv) > 0 && CGRectGetHeight(inv) > 0;
+        BOOL quickPaneSwipe = NO;
         if (haveInv || reorderPanes.count > 0) {
             int sx = 0, sy = 0;
             if ([self mapPoint:landing toGameX:&sx toGameY:&sy]) {
@@ -8397,7 +8411,9 @@ static CGRect mapRectFromArr(NSArray *a) {
                     if (CGRectContainsPoint(v.CGRectValue, CGPointMake(sx, sy)))
                         hit = YES;
                 }
-                if (hit) {
+                if (hit && held < [RMGameSettings dragHoldMs] / 1000.0) {
+                    quickPaneSwipe = YES;
+                } else if (hit) {
                     self.itemDragging = YES;
                     self.itemDragLastX = sx;
                     self.itemDragLastY = sy;                          // seed the release-fallback point
@@ -8422,6 +8438,10 @@ static CGRect mapRectFromArr(NSArray *a) {
             return;
         }
         self.ifaceScrolling = NO;
+        if (quickPaneSwipe) {
+            self.paneSwiping = YES; // swallowed until the lift
+            return;
+        }
         // A camera drag moves the world, not the pointer — so clear any frozen hover first, otherwise
         // scenery rotating under the stale cursor lights up and the next walk-tap mis-clicks it.
         [JVMLauncher postClearHover];
@@ -8430,6 +8450,10 @@ static CGRect mapRectFromArr(NSArray *a) {
         return;
     }
     if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
+        if (self.paneSwiping) {
+            self.paneSwiping = NO;
+            return;
+        }
         if (self.itemDragging) {
             // ALWAYS release so the engine's WidgetDrag state machine closes — even if the finger lifted in the
             // letterbox (mapPoint fails); fall back to the last valid drag point. A stranded press would otherwise
@@ -8460,6 +8484,10 @@ static CGRect mapRectFromArr(NSArray *a) {
         return;
     }
     if (g.state != UIGestureRecognizerStateChanged) return;
+    if (self.paneSwiping) {
+        [g setTranslation:CGPointZero inView:self.screen];
+        return;
+    }
     // DRAG-1: stream the drag to the engine as MOUSE_DRAGGED at the finger's canvas point (one per frame is fine).
     // A frame whose point maps off-canvas is just skipped — the drag stays live and the cached last-valid point
     // (updated here) guarantees a clean release.
