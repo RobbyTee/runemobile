@@ -2716,6 +2716,7 @@ class MainActivity : AppCompatActivity() {
                             Log.i(TAG, "drag-2: iface scroll begin game=($sx,$sy)")
                         } else if (inDraggablePane) {
                             paneSwiping = true
+                            Log.i(TAG, "drag-1: quick pane swipe ignored (nothing to scroll) game=($sx,$sy)")
                         } else {
                             cameraGestureActive = true
                             cameraAccX = 0f

@@ -8440,6 +8440,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         self.ifaceScrolling = NO;
         if (quickPaneSwipe) {
             self.paneSwiping = YES; // swallowed until the lift
+            [self appendLine:@"[shell] quick pane swipe ignored (nothing to scroll)"];
             return;
         }
         // A camera drag moves the world, not the pointer — so clear any frozen hover first, otherwise
