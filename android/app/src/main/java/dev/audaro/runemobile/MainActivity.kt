@@ -291,6 +291,13 @@ class MainActivity : AppCompatActivity() {
     private var sawLoginScreen = false
     private var loginTransitionUntilMs = 0L
 
+    // Keep the display awake while in game. updateChrome records the loggedIn edge; the frame callback applies
+    // FLAG_KEEP_SCREEN_ON. A loading/teleport blip reports loggedIn=false for a moment, so the flag is only
+    // dropped after KEEP_AWAKE_GRACE_MS out of game.
+    private var awakeInGame = false
+    private var awakeLeftGameAtMs = 0L
+    private var awakeFlagOn = false
+
     // PERF-FRAME-PACING-01: signature of every dynamic input updateChrome() reads; an identical signature (with no
     // timed transition pending) lets the whole per-frame parse + native-veneer cascade short-circuit. The two buffers
     // swap on each run, so the per-vsync check allocates nothing; the MIN_VALUE fill forces the first frame through.
@@ -466,6 +473,9 @@ class MainActivity : AppCompatActivity() {
         // resizable layout (the welcome-frame flash window). ~1.2s of LOGGED_IN frames is when the engine's chrome
         // widgets are reliably built (cf. MobileChromeBridge.VERDICT_FRAME=60); 1500ms gives a little headroom.
         private const val LOGIN_TRANSITION_MS = 1500L
+
+        // How long the screen stays awake after leaving the game (covers region-load blips and the logout screen).
+        private const val KEEP_AWAKE_GRACE_MS = 10_000L
 
         // The layout-switch pill waits this far into a run of unsupported-layout frames before it shows, so a
         // varbit that syncs late after login, or a one-frame blip, never flashes it over a Modern account.
@@ -3232,6 +3242,7 @@ class MainActivity : AppCompatActivity() {
                         tryBuildNativeMenu()
                     }
                     updateChrome()
+                    updateKeepAwake()
                     applyOverlayInsets()
                     updateWorldMap()
                     Choreographer.getInstance().postFrameCallback(this)
@@ -3239,6 +3250,19 @@ class MainActivity : AppCompatActivity() {
             }
         frameCallback = cb
         Choreographer.getInstance().postFrameCallback(cb)
+    }
+
+    /** Holds FLAG_KEEP_SCREEN_ON while in game (plus a short grace after leaving it); touches the window only on change. */
+    private fun updateKeepAwake() {
+        val want = awakeInGame || SystemClock.uptimeMillis() - awakeLeftGameAtMs < KEEP_AWAKE_GRACE_MS
+        if (want == awakeFlagOn) return
+        awakeFlagOn = want
+        if (want) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        Log.i(TAG, "keep-awake -> $want")
     }
 
     /** AP-2a Finding 9: create the notification channel + request POST_NOTIFICATIONS (API 33+). */
@@ -3501,6 +3525,8 @@ class MainActivity : AppCompatActivity() {
                 null
             }
         val loggedIn = o?.optBoolean("loggedIn") == true
+        if (awakeInGame && !loggedIn) awakeLeftGameAtMs = SystemClock.uptimeMillis()
+        awakeInGame = loggedIn
         // Bug 8: arm the login-transition latch off a genuine LOGIN_SCREEN→LOGGED_IN edge. While logged out we note
         // that we saw the login screen (the snapshot's loginScreen flag); on the next logged-in frame that consumes
         // the flag and opens a bounded suppression window. An in-game LOADING/teleport blip reports loggedIn=false

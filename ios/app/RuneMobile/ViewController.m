@@ -269,6 +269,8 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 @property (nonatomic, assign) BOOL launched;
 @property (nonatomic, assign) long jitAttachedMs;     // Phase 4 cold start: first poll that saw CS_DEBUGGED (0 = not yet)
 @property (nonatomic, assign) BOOL inWorldStamped;    // Phase 4 cold start: the first LOGGED_IN tick has been stamped
+@property (nonatomic, assign) BOOL awakeInGame;       // keep-awake: the last snapshot was logged in
+@property (nonatomic, assign) CFTimeInterval awakeLeftGameAt; // keep-awake: when loggedIn last fell (CACurrentMediaTime)
 @property (nonatomic, assign) BOOL pendingRouteCL1;   // GPU Route C: long-press Start -> boot the L1 kill-test
 @property (nonatomic, assign) BOOL pendingRouteCGpu;  // GPU Route C: two-finger long-press -> full RuneLite on GPU
 @property (nonatomic, assign) BOOL pendingRouteCZone; // GPU Zone: three-finger long-press -> full RuneLite on 117HD
@@ -5010,6 +5012,24 @@ static int chatRowCanvasH(void) {
     [self stampColdStart:@"inWorld" line:@"[shell] onboard: first logged-in tick"];
 }
 
+// Disable the idle timer while in game so the phone does not auto-lock mid-session. A loading/teleport blip reports
+// loggedIn=false for a moment, so the timer is only re-enabled after kKeepAwakeGrace seconds out of game.
+static const CFTimeInterval kKeepAwakeGrace = 10.0;
+- (void)updateKeepAwake {
+    NSDictionary *d = parseBridgeJSON([JVMLauncher chromeSnapshot], "ViewController.updateKeepAwake");
+    BOOL loggedIn = [d isKindOfClass:[NSDictionary class]] && [d[@"loggedIn"] boolValue];
+    CFTimeInterval now = CACurrentMediaTime();
+    if (self.awakeInGame && !loggedIn)
+        self.awakeLeftGameAt = now;
+    self.awakeInGame = loggedIn;
+    BOOL want = loggedIn || (self.awakeLeftGameAt > 0 && now - self.awakeLeftGameAt < kKeepAwakeGrace);
+    UIApplication *app = [UIApplication sharedApplication];
+    if (app.idleTimerDisabled != want) {
+        app.idleTimerDisabled = want;
+        [self appendLine:[NSString stringWithFormat:@"[shell] keep-awake -> %@", want ? @"YES" : @"NO"]];
+    }
+}
+
 // Clear the boot overlay the moment real content is ready: the first painted frame (renderedFrameWidth > 0),
 // a fatal-error card taking over (fatalErrorShown - hands off to that card so the two never stack), or the 60s
 // failsafe (a boot that never produces a frame must not wedge the UI). One-way: once hidden it stays hidden.
@@ -6620,6 +6640,11 @@ static CGRect mapRectFromArr(NSArray *a) {
         [self updateFatalErrorOverlay];     // FATAL-1: latch-once fatal card, same cadence
         [self updateHoppingOverlay];        // PARITY-P0-3: world-hop scrim, same cadence/ungating
         [self stampFirstInWorld];           // Phase 4 cold start: once, then a no-op
+    }
+
+    // Keep the screen awake in game (~2 Hz is plenty; the idle timer runs in tens of seconds).
+    if (self.framesShown % 30 == 0) {
+        [self updateKeepAwake];
     }
 
     // W3 Feature-A (A2.5): refresh the crude native chat-at-top + HUD-status overlay from the HudDataBridge
