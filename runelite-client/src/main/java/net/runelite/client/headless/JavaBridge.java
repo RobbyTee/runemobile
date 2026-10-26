@@ -667,6 +667,16 @@ public final class JavaBridge
 	}
 
 	/**
+	 * Resize the game canvas to {@code w x h} mid-session, for a host window that changed shape (a foldable opened
+	 * or closed), so the game shows more or less of the world instead of being stretched. Any thread; the client
+	 * thread applies it on its next draw. See {@link HeadlessResize#requestResize}.
+	 */
+	public static void requestResize(int w, int h)
+	{
+		HeadlessResize.requestResize(w, h);
+	}
+
+	/**
 	 * The latest <em>complete</em> composited frame as packed {@code 0xAARRGGBB} ints (a stable snapshot,
 	 * not the live back buffer). Returns {@code null} before the first frame.
 	 */

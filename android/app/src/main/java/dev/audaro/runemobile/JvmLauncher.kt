@@ -238,6 +238,13 @@ object JvmLauncher {
      *  without a real network drop. No-op on an older jar. Call OFF the UI thread (via [onBridge]). */
     external fun nativeSimulateReconnect(seconds: Int)
 
+    /** FOLD-3: resize the game canvas to [w]x[h] mid-session (the window changed shape). False on an older jar or
+     *  before the bridge is up. Call OFF the UI thread (via [onBridge]). */
+    external fun nativeRequestResize(
+        w: Int,
+        h: Int,
+    ): Boolean
+
     // AP-2b Finding 5 (screenshot): the latest composited CPU frame as 0x00RRGGBB ints (alpha unset; the consumer
     // ORs 0xFF for an opaque PNG). null before the first frame / bridge off. Pull OFF the UI thread (via [onBridge])
     // — it attaches the caller to HotSpot. Size against [nativeFrameWidth]; guard len % width == 0.
@@ -748,6 +755,11 @@ object JvmLauncher {
     fun heapStats() = nativeHeapStats()
 
     fun simulateReconnect(seconds: Int) = nativeSimulateReconnect(seconds)
+
+    fun requestResize(
+        w: Int,
+        h: Int,
+    ) = nativeRequestResize(w, h)
 
     // ---- A3.5 bridge request/response thread --------------------------------------------------------
     // A single dedicated background thread the UI posts plugin-plane requests to, so the ART UI thread NEVER

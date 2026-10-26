@@ -87,6 +87,8 @@ static jmethodID g_midInvokeMenuEntry = nullptr;
 // P2-1 dev panel: JavaBridge.heapStats()->String and devSimulateReconnect(int) — both optional (older jars lack
 // them; the native calls degrade to a no-op / empty string).
 static jmethodID g_midHeapStats = nullptr, g_midSimReconnect = nullptr;
+// FOLD-3 live canvas resize (JavaBridge.requestResize); optional, an older jar just keeps its boot size.
+static jmethodID g_midRequestResize = nullptr;
 static jclass    g_menuPeekCls = nullptr;
 static jmethodID g_midMenuSnapshot = nullptr, g_midMenuPublishSeq = nullptr;
 
@@ -714,6 +716,7 @@ static bool publishBridge(JNIEnv *env) {
     g_midCancelArmedTap = midOpt(env, global, "cancelArmedTap", "()V");
     g_midHeapStats = midOpt(env, global, "heapStats", "()Ljava/lang/String;"); // P2-1 dev panel (optional)
     g_midSimReconnect = midOpt(env, global, "devSimulateReconnect", "(I)V");   // P2-1 dev panel (optional)
+    g_midRequestResize = midOpt(env, global, "requestResize", "(II)V");        // FOLD-3 (optional)
     g_bridgeCls = global;   // publish only once fully resolved
     LOGI("bridge: JavaBridge facade published (shiftHeld=%s)", g_midSetShiftHeld ? "on" : "off");
 
@@ -2050,6 +2053,21 @@ Java_dev_audaro_runemobile_JvmLauncher_nativeSimulateReconnect(JNIEnv *, jobject
     hs->CallStaticVoidMethod(g_bridgeCls, g_midSimReconnect, seconds);
     if (hs->ExceptionCheck())
         hs->ExceptionClear();
+}
+
+// FOLD-3: resize the game canvas mid-session when the window changes shape. Returns false when the bridge or the
+// jar's requestResize is missing, so the host keeps letterboxing the old canvas.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeRequestResize(JNIEnv *, jobject, jint w, jint h) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_bridgeCls || !g_midRequestResize)
+        return JNI_FALSE;
+    hs->CallStaticVoidMethod(g_bridgeCls, g_midRequestResize, w, h);
+    if (hs->ExceptionCheck()) {
+        hs->ExceptionClear();
+        return JNI_FALSE;
+    }
+    return JNI_TRUE;
 }
 
 // ---- A4 plugin control plane (MobileUiBridge) --------------------------------------------------------

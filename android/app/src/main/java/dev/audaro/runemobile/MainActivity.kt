@@ -257,6 +257,9 @@ class MainActivity : AppCompatActivity() {
 
     // FOLD-2: the frame holding the SurfaceView and every view that maps canvas px through its size; see fitGameStage.
     private var gameStage: FrameLayout? = null
+
+    // FOLD-3: the canvas size the bridge last accepted, until a frame of that size is drawn and the host adopts it.
+    private var pendingCanvas: Pair<Int, Int>? = null
     private var perfChip: TextView? = null
     private var devPanel: LinearLayout? = null
     private var devDiag: TextView? = null
@@ -466,7 +469,28 @@ class MainActivity : AppCompatActivity() {
 
         // FOLD-2: how far the window's shape may drift from the canvas's before the stage letterboxes instead of
         // stretching. A phone's canvas matches its screen exactly; a book foldable changing panels drifts ~2x.
+        // FOLD-3 uses the same slack for when a window change is worth a canvas resize.
         private const val STAGE_ASPECT_SLACK = 0.10f
+
+        // UI-2: a phone's canvas is this tall in landscape (its short side).
+        private const val PHONE_CANVAS_SHORT = 540
+
+        // FOLD-3: a screen at least this wide on its short side (in dp) is a tablet or an unfolded book foldable,
+        // Android's own large-screen line. There the canvas grows with the screen's physical size instead.
+        private const val LARGE_SCREEN_DP = 600
+
+        // FOLD-3: the short side (dp) of the phones the 540 canvas was tuned on (Pixel 7a, a Fold's cover screen).
+        // A large screen keeps their canvas pixels per dp, so the HUD stays phone-sized and more of the world shows.
+        private const val PHONE_SHORT_DP = 411f
+
+        // FOLD-3: wait this long after the window's last size change before resizing the canvas, so a dragged
+        // split-screen divider resizes once at the end rather than on every frame.
+        private const val RESIZE_SETTLE_MS = 300L
+
+        // FOLD-3: how often to look for the first frame at a requested canvas size, and how long to wait for it. A
+        // request made at the login screen applies only at login, so the wait gives up and adopts the size anyway.
+        private const val CANVAS_POLL_MS = 16L
+        private const val CANVAS_WAIT_MS = 2000L
 
         // The VM's maximum heap; an xms marker above it would stop the VM starting.
         private const val MAX_HEAP_MB = 512L
@@ -1320,8 +1344,13 @@ class MainActivity : AppCompatActivity() {
         gameStage = stage
         // FOLD-2: refit on every window size change (a fold/unfold, a split-screen resize). Posted: changing the
         // stage's layout params inside this layout pass would be dropped until the next one.
+        // FOLD-3: then, once the size settles, resize the canvas itself to suit the new window.
         root.addOnLayoutChangeListener { _, l, t, r, b, oldL, oldT, oldR, oldB ->
-            if (r - l != oldR - oldL || b - t != oldB - oldT) root.post { fitGameStage() }
+            if (r - l != oldR - oldL || b - t != oldB - oldT) {
+                root.post { fitGameStage() }
+                root.removeCallbacks(resizeCanvasToWindow)
+                root.postDelayed(resizeCanvasToWindow, RESIZE_SETTLE_MS)
+            }
         }
         // UX-XCUT-01: keep the only release HUD controls (⌨/⇧ devBar, hotkey strip, ≡ Plugins handle) out of the
         // landscape display cutout + the bottom gesture inset. SHORT_EDGES draws the notch UNDER the frame, so
@@ -4154,12 +4183,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** FOLD-2: fit the game stage to the canvas's shape. The canvas is sized once at boot from the screen, so it
+    /** FOLD-2: fit the game stage to the canvas's shape. The canvas is sized at boot from the screen, so it
      *  matches the window until the window changes shape under it (a foldable folded or unfolded mid-session, a
      *  split-screen resize); stretched, a book foldable's frame would distort ~2x, so the stage letterboxes (centred,
-     *  black bars) instead. Within STAGE_ASPECT_SLACK it fills the window as before. Touch, chrome and overlay
-     *  mapping all read the surface's own size, so they follow the stage; safeInsetsIn trims the window's safe
-     *  insets by the bars, so a cutout the bars already clear stops shoving the HUD inward. UI-thread only. */
+     *  black bars) instead, until FOLD-3 resizes the canvas to match. Within STAGE_ASPECT_SLACK it fills the window
+     *  as before. Touch, chrome and overlay mapping all read the surface's own size, so they follow the stage;
+     *  safeInsetsIn trims the window's safe insets by the bars, so a cutout the bars already clear stops shoving
+     *  the HUD inward. UI-thread only. */
     private fun fitGameStage() {
         val root = rootContainer
         val stage = gameStage
@@ -4173,6 +4203,91 @@ class MainActivity : AppCompatActivity() {
             val fit = if (w == FrameLayout.LayoutParams.MATCH_PARENT) "fills the window" else "letterboxed to ${w}x$h"
             Log.i(TAG, "fold: game stage $fit (window ${root.width}x${root.height}, canvas ${canvasW}x$canvasH)")
         }
+    }
+
+    /** FOLD-3: resize the canvas to suit the window once its size has settled, so a foldable opened mid-session
+     *  shows more of the world instead of a letterboxed copy of the cover screen's view. Only a change past
+     *  STAGE_ASPECT_SLACK resizes, so a phone, whose window matches the boot canvas, never does. Until the engine
+     *  draws at the new size, or for good if the bridge refuses it (an older jar, a VM still booting), the stage
+     *  keeps letterboxing the old canvas. UI-thread only. */
+    private val resizeCanvasToWindow =
+        Runnable {
+            val root = rootContainer
+            val (w, h) = if (root == null) 0 to 0 else canvasFor(root.width, root.height, resources.displayMetrics.density)
+            val oldW = canvasW
+            val oldH = canvasH
+            val worth = abs(w.toFloat() / oldW - 1f) > STAGE_ASPECT_SLACK || abs(h.toFloat() / oldH - 1f) > STAGE_ASPECT_SLACK
+            if (minOf(w, h, oldW, oldH) > 0 && worth) {
+                JvmLauncher.onBridge {
+                    val ok = JvmLauncher.requestResize(w, h)
+                    Log.i(TAG, "fold: canvas resize ${oldW}x$oldH -> ${w}x$h ${if (ok) "requested" else "refused (bridge not ready)"}")
+                    if (ok) {
+                        runOnUiThread {
+                            pendingCanvas = w to h
+                            adoptCanvasWhenDrawn(w, h, SystemClock.uptimeMillis() + CANVAS_WAIT_MS)
+                        }
+                    }
+                }
+            }
+        }
+
+    /** FOLD-3: the engine applies an accepted resize on its next draw or two. Until a frame of the new size is
+     *  presented the stage keeps letterboxing the old one, so neither size is ever shown stretched to the other's
+     *  shape; then the host adopts the new size (stage fit, world-map scaling). A newer request supersedes this
+     *  one. Touch mapping reads the live frame size, so it is right throughout. UI-thread only. */
+    private fun adoptCanvasWhenDrawn(
+        w: Int,
+        h: Int,
+        deadline: Long,
+    ) {
+        if (pendingCanvas == w to h) {
+            val drawn = JvmLauncher.frameWidth() == w && JvmLauncher.frameHeight() == h
+            if (drawn || SystemClock.uptimeMillis() >= deadline) {
+                pendingCanvas = null
+                canvasW = w
+                canvasH = h
+                fitGameStage()
+            } else {
+                rootContainer?.postDelayed({ adoptCanvasWhenDrawn(w, h, deadline) }, CANVAS_POLL_MS)
+            }
+        }
+    }
+
+    /** The canvas size for a [w]x[h] px window (or screen) at [density], in the window's orientation.
+     *  UI-2: a phone's canvas is 540 tall. A lower engine canvas blits up to a physically BIGGER HUD (minimap, orbs,
+     *  chat, side panel, tab grid all scale together) — the only working way to enlarge the minimap (the per-widget
+     *  MINIMAP-scale path overlaps the orbs / blanks terrain). 540 is iOS-proven safe; below ~480 the minimap column
+     *  collides with the tab grid.
+     *  FOLD-3: a large screen (a book foldable's inner panel, a tablet) keeps the phone's canvas pixels per dp
+     *  instead, so the HUD stays phone-sized and the extra screen shows more of the world (1093x985 on a Fold 7's
+     *  2184x1968 inner panel), capped at the screen's own pixels.
+     *  FOLD-1: the canvas is never narrower than MIN_CANVAS_W, the narrowest layout the game is built for (a split-
+     *  screen half, a near-square screen).
+     *  Phones keep the exact integer maths of the original fixed-540 sizing, so their canvas doesn't move. */
+    private fun canvasFor(
+        w: Int,
+        h: Int,
+        density: Float,
+    ): Pair<Int, Int> {
+        if (minOf(w, h) <= 0) return 0 to 0
+        val longEdge = maxOf(w, h)
+        val shortEdge = minOf(w, h)
+        val shortDp = shortEdge / density
+        var renderShort =
+            if (shortDp >= LARGE_SCREEN_DP) {
+                maxOf(PHONE_CANVAS_SHORT, minOf(shortEdge, Math.round(shortDp * PHONE_CANVAS_SHORT / PHONE_SHORT_DP)))
+            } else {
+                PHONE_CANVAS_SHORT
+            }
+        // FOLD-1 on the canvas's width: the long side in landscape, the short side in portrait.
+        renderShort =
+            if (w >= h) {
+                maxOf(renderShort, ((MIN_CANVAS_W.toLong() * shortEdge + longEdge - 1) / longEdge).toInt())
+            } else {
+                maxOf(renderShort, MIN_CANVAS_W)
+            }
+        val renderLong = (renderShort.toLong() * longEdge / shortEdge).toInt()
+        return if (w >= h) renderLong to renderShort else renderShort to renderLong
     }
 
     /** FOLD-2: the stage's layout size in a [rw]x[rh] window for a [cw]x[ch] canvas: MATCH_PARENT both ways while
@@ -5301,15 +5416,9 @@ class MainActivity : AppCompatActivity() {
             val dm = app.resources.displayMetrics
             val longEdge = maxOf(dm.widthPixels, dm.heightPixels)
             val shortEdge = maxOf(1, minOf(dm.widthPixels, dm.heightPixels))
-            // UI-2: match iOS's render height (540). A lower engine canvas blits up to a physically BIGGER HUD
-            // (minimap, orbs, chat, side panel, tab grid all scale together) — the only working way to enlarge the
-            // minimap (the per-widget MINIMAP-scale path overlaps the orbs / blanks terrain). 540 is iOS-proven
-            // safe; below ~480 the minimap column collides with the tab grid.
-            // FOLD-1: but never narrower than MIN_CANVAS_W. A near-square screen (a book foldable's inner panel,
-            // 2184x1968 on a Fold 7) at 540 tall gets a ~600px canvas the game's layout crowds, drawn huge on an 8"
-            // panel; growing the height instead (765x690 there) fits the layout and keeps the HUD a sane size.
-            val renderH = maxOf(540, ((MIN_CANVAS_W.toLong() * shortEdge + longEdge - 1) / longEdge).toInt())
-            val renderW = (renderH.toLong() * longEdge / shortEdge).toInt()
+            // UI-2 / FOLD-1 / FOLD-3: see canvasFor. The boot canvas is landscape whatever the screen reads mid-rotation
+            // (the activity is landscape-locked); a window that later changes shape gets a FOLD-3 resize.
+            val (renderW, renderH) = canvasFor(longEdge, shortEdge, dm.density)
             canvasW = renderW
             canvasH = renderH // for the overlay free-drag pad → canvas-pixel mapping
             runOnUiThread { fitGameStage() } // FOLD-2: a window already off this shape (split screen) letterboxes now
