@@ -32,6 +32,8 @@ import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.config.RuneLiteConfig;
 import net.runelite.client.plugins.notes.NotesConfig;
+import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import org.junit.Test;
@@ -90,6 +92,61 @@ public class MobileUiBridgeTest
 	{
 		// The editor drops the core group's window-chrome items on mobile, but not all of the group.
 		assertTrue(MobileUiBridge.hasShownItems(descriptor(RuneLiteConfig.class)));
+	}
+
+	@Test
+	public void fpsCapIsZeroUnlessThePluginIsOnAndLimiting()
+	{
+		assertEquals(0, MobileUiBridge.fpsCapFrom(false, "true", "30"));
+		assertEquals(0, MobileUiBridge.fpsCapFrom(true, "false", "30"));
+		assertEquals(0, MobileUiBridge.fpsCapFrom(true, null, "30"));
+		assertEquals(30, MobileUiBridge.fpsCapFrom(true, "true", "30"));
+	}
+
+	@Test
+	public void fpsCapFallsBackToThePluginDefaultAndRange()
+	{
+		assertEquals(MobileUiBridge.FPS_CAP_DEFAULT, MobileUiBridge.fpsCapFrom(true, "true", null));
+		assertEquals(MobileUiBridge.FPS_CAP_DEFAULT, MobileUiBridge.fpsCapFrom(true, "true", "fast"));
+		assertEquals(MobileUiBridge.FPS_CAP_MAX, MobileUiBridge.fpsCapFrom(true, "true", "9999"));
+		assertEquals(1, MobileUiBridge.fpsCapFrom(true, "true", "0"));
+	}
+
+	@Test
+	public void idleLogoutIsTheGameDefaultWhileThePluginIsOff()
+	{
+		assertEquals(5, MobileUiBridge.idleMinutesFrom(false, "20"));
+		assertEquals(20, MobileUiBridge.idleMinutesFrom(true, "20"));
+		assertEquals(5, MobileUiBridge.idleMinutesFrom(true, null));
+		assertEquals(30, MobileUiBridge.idleMinutesFrom(true, "90"));
+		assertEquals(5, MobileUiBridge.idleMinutesFrom(true, "1"));
+	}
+
+	@Test
+	public void removingTheCapOnlyStopsLimiting()
+	{
+		assertArrayEquals(new String[][]{{"fpscontrol", "limitFps", "false"}}, MobileUiBridge.fpsCapWrites(0, true));
+		assertArrayEquals(new String[][]{{"fpscontrol", "limitFps", "false"}}, MobileUiBridge.fpsCapWrites(-1, false));
+	}
+
+	@Test
+	public void aCapThatTurnsThePluginOnAlsoHidesItsCounter()
+	{
+		assertArrayEquals(new String[][]{
+			{"fpscontrol", "limitFps", "true"}, {"fpscontrol", "maxFps", "30"}, {"fpscontrol", "drawFps", "false"}},
+			MobileUiBridge.fpsCapWrites(30, false));
+		// Already on: the player's counter choice stands.
+		assertArrayEquals(new String[][]{{"fpscontrol", "limitFps", "true"}, {"fpscontrol", "maxFps", "30"}},
+			MobileUiBridge.fpsCapWrites(30, true));
+		assertEquals("360", MobileUiBridge.fpsCapWrites(1000, true)[1][2]);
+	}
+
+	@Test
+	public void idleWritesStayInThePluginRange()
+	{
+		assertArrayEquals(new String[][]{{"logouttimer", "idleTimeout", "12"}}, MobileUiBridge.idleWrites(12));
+		assertEquals("5", MobileUiBridge.idleWrites(1)[0][2]);
+		assertEquals("30", MobileUiBridge.idleWrites(45)[0][2]);
 	}
 
 	private static ConfigDescriptor descriptor(Class<? extends Config> iface)

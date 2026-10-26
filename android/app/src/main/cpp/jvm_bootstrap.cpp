@@ -63,6 +63,8 @@ static jmethodID g_midWheel = nullptr, g_midClickPrecise = nullptr, g_midMove = 
 static jmethodID g_midText = nullptr, g_midKeyStroke = nullptr;
 // A1 polled read-surface: keyboard auto-raise, interact-tap haptic seq, finger snap radius.
 static jmethodID g_midTextInputOpen = nullptr, g_midInteractTapSeq = nullptr;
+// Keyboard kind for the open field (optional; an older jar omits it -> an open field means text).
+static jmethodID g_midTextInputKind = nullptr;
 // Tap-KIND truth (optional jar surface; older jars omit it -> the shell keeps the legacy ring).
 static jmethodID g_midTapKindSeq = nullptr, g_midLastTapKind = nullptr;
 // A2 press-and-peek: JavaBridge.selectMenuPoint commit + the separate MenuPeekBridge read-surface.
@@ -97,6 +99,8 @@ static jmethodID g_midGetPluginConfig = nullptr, g_midSetConfig = nullptr, g_mid
 // User-defined hotkey buttons: boundKeybindsJson() lists every bound plugin keybind; fireHotkey(group,key) fires
 // one by reading its live binding. Optional (older jars lack them) — the native Hotkeys screen no-ops without.
 static jmethodID g_midBoundKeybinds = nullptr, g_midFireHotkey = nullptr;
+// Native Game settings: frame-rate cap + idle logout, riding on the FPS Control / Logout Timer plugins (optional).
+static jmethodID g_midGameSettings = nullptr, g_midSetFpsCap = nullptr, g_midSetIdleLogout = nullptr;
 static jmethodID g_midFlushConfig = nullptr;   // A8: persist pending config writes when the app backgrounds
 static jmethodID g_midResetPluginConfig = nullptr;     // SC-2/CFG-10: whole-group reset to defaults
 static jmethodID g_midResetConfig = nullptr;           // P2-4: single-key reset to default
@@ -283,6 +287,7 @@ static void rcPresentSetFrameDims(int w, int h) {
 // A1 read-surface published by the render thread (the only HotSpot-attached caller) for the UI thread to read
 // without ever attaching to HotSpot — same pattern as the frame dims above.
 static std::atomic<int> g_textInputOpen{0};   // isTextInputOpen() -> raise/dismiss the soft keyboard
+static std::atomic<int> g_textInputKind{0};   // getTextInputKind() -> 0 none, 1 text, 2 number pad
 static std::atomic<int> g_interactTapSeq{0};  // getInteractTapSeq() -> fire a haptic when it advances
 // Tap-KIND truth (optional jar surface): the resolved left tap's kind, so the UI thread rings only for a real
 // scene tap. Published by the render thread each tick.
@@ -682,6 +687,7 @@ static bool publishBridge(JNIEnv *env) {
     g_midTextInputOpen  = midOpt(env, global, "isTextInputOpen", "()Z");
     g_midInteractTapSeq = midOpt(env, global, "getInteractTapSeq", "()I");
     g_midTapKindSeq     = midOpt(env, global, "getTapKindSeq", "()I");          // optional (older jar omits)
+    g_midTextInputKind = midOpt(env, global, "getTextInputKind", "()I");        // optional (older jar omits)
     g_midLastTapKind = midOpt(env, global, "getLastTapKind", "()I");
     g_midSelectMenuPoint = midOpt(env, global, "selectMenuPoint", "(II)V");   // A2 commit
     if (!g_midSeq || !g_midW || !g_midH || !g_midPixels || !g_midTouch || !g_midClick
@@ -760,6 +766,9 @@ static bool publishBridge(JNIEnv *env) {
             g_midNotificationDefaults = midOpt(env, mug, "notificationDefaults", "()Ljava/lang/String;");                  // SC-1 defaults
             g_midBoundKeybinds        = midOpt(env, mug, "boundKeybindsJson", "()Ljava/lang/String;");                    // user-defined hotkeys (optional)
             g_midFireHotkey           = midOpt(env, mug, "fireHotkey", "(Ljava/lang/String;Ljava/lang/String;)V");        // fire one (optional)
+            g_midGameSettings = midOpt(env, mug, "gameSettings", "()Ljava/lang/String;");                                 // Game settings (optional)
+            g_midSetFpsCap = midOpt(env, mug, "setFpsCap", "(I)Ljava/lang/String;");
+            g_midSetIdleLogout = midOpt(env, mug, "setIdleLogoutMinutes", "(I)Ljava/lang/String;");
             if (!g_midGetPluginConfig || !g_midSetConfig || !g_midProcessedWriteId)
                 LOGE("bridge: MobileUiBridge config methods partial (plugin config read/write disabled)");
             // AP-2a: drain surfaces for native notification / link-out / hub-progress (each best-effort).
@@ -1367,6 +1376,16 @@ static void *renderLoop(void *) {
             jboolean tio = env->CallStaticBooleanMethod(g_bridgeCls, g_midTextInputOpen);
             if (env->ExceptionCheck()) { env->ExceptionClear(); }
             else { g_textInputOpen.store(tio ? 1 : 0, std::memory_order_relaxed); }
+            if (g_midTextInputKind) {
+                int tik = env->CallStaticIntMethod(g_bridgeCls, g_midTextInputKind);
+                if (env->ExceptionCheck()) {
+                    env->ExceptionClear();
+                } else {
+                    g_textInputKind.store(tik, std::memory_order_relaxed);
+                }
+            } else {
+                g_textInputKind.store(tio ? 1 : 0, std::memory_order_relaxed);
+            }
             int its = env->CallStaticIntMethod(g_bridgeCls, g_midInteractTapSeq);
             if (env->ExceptionCheck()) { env->ExceptionClear(); }
             else { g_interactTapSeq.store(its, std::memory_order_relaxed); }
@@ -1971,6 +1990,10 @@ Java_dev_audaro_runemobile_JvmLauncher_nativeIsTextInputOpen(JNIEnv *, jobject) 
     return g_textInputOpen.load(std::memory_order_relaxed) ? JNI_TRUE : JNI_FALSE;
 }
 extern "C" JNIEXPORT jint JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeTextInputKind(JNIEnv *, jobject) {
+    return g_textInputKind.load(std::memory_order_relaxed);
+}
+extern "C" JNIEXPORT jint JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeInteractTapSeq(JNIEnv *, jobject) {
     return g_interactTapSeq.load(std::memory_order_relaxed);
 }
@@ -2187,6 +2210,38 @@ Java_dev_audaro_runemobile_JvmLauncher_nativeResetConfig(JNIEnv *artEnv, jobject
     if (r)
         hs->DeleteLocalRef(r);
     return artEnv->NewStringUTF(out.c_str());
+}
+// Native Game settings: {"fpsCap":N,"idleLogoutMinutes":M} (fpsCap 0 = no cap), or "" if unresolved.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeGameSettings(JNIEnv *artEnv, jobject) {
+    if (!mobileUiReady() || !g_midGameSettings)
+        return artEnv->NewStringUTF("");
+    return mobileUiStr(artEnv, g_midGameSettings);
+}
+// Call a (I)String bridge method on g_mobileUiCls and return an ART string ("" on any failure).
+static jstring mobileUiStrInt(JNIEnv *artEnv, jmethodID m, jint v) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_mobileUiCls || !m)
+        return artEnv->NewStringUTF("");
+    jstring r = (jstring)hs->CallStaticObjectMethod(g_mobileUiCls, m, v);
+    std::string out = (hs->ExceptionCheck()) ? (hs->ExceptionClear(), std::string()) : jstr(hs, r);
+    if (r)
+        hs->DeleteLocalRef(r);
+    return artEnv->NewStringUTF(out.c_str());
+}
+// Cap the frame rate (0 = no cap). Returns the bridge JSON ack.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetFpsCap(JNIEnv *artEnv, jobject, jint fps) {
+    if (!mobileUiReady() || !g_midSetFpsCap)
+        return artEnv->NewStringUTF("");
+    return mobileUiStrInt(artEnv, g_midSetFpsCap, fps);
+}
+// Set the idle logout time in minutes. Returns the bridge JSON ack.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetIdleLogoutMinutes(JNIEnv *artEnv, jobject, jint minutes) {
+    if (!mobileUiReady() || !g_midSetIdleLogout)
+        return artEnv->NewStringUTF("");
+    return mobileUiStrInt(artEnv, g_midSetIdleLogout, minutes);
 }
 // SC-1/NOTIF-2: the serialized default Notification seed JSON for the per-item editor (or "" if unresolved).
 extern "C" JNIEXPORT jstring JNICALL

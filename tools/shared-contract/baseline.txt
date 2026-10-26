@@ -135,6 +135,7 @@ METHOD JavaBridge#getLastWidgetBounds()
 METHOD JavaBridge#getReorderPaneBounds()
 METHOD JavaBridge#getScrollableRects()
 METHOD JavaBridge#getTapKindSeq()
+METHOD JavaBridge#getTextInputKind()
 METHOD JavaBridge#gpuFrameBackBuffer(int,int)
 METHOD JavaBridge#gpuPublish(int,int)
 METHOD JavaBridge#heapStats()
@@ -187,6 +188,7 @@ METHOD MobileUiBridge#closePanel()
 METHOD MobileUiBridge#fireHotkey(String,String)
 METHOD MobileUiBridge#flushConfig()
 METHOD MobileUiBridge#flushConfigQueued()
+METHOD MobileUiBridge#gameSettings()
 METHOD MobileUiBridge#geAvailable()
 METHOD MobileUiBridge#geJson()
 METHOD MobileUiBridge#geSearch(String)
@@ -238,6 +240,8 @@ METHOD MobileUiBridge#resetConfig(String,String)
 METHOD MobileUiBridge#resetPluginConfig(String)
 METHOD MobileUiBridge#rlhdOverlaySelfTest()
 METHOD MobileUiBridge#setConfig(String,String,String)
+METHOD MobileUiBridge#setFpsCap(int)
+METHOD MobileUiBridge#setIdleLogoutMinutes(int)
 METHOD MobileUiBridge#setPinned(String,boolean)
 METHOD MobileUiBridge#setPluginEnabled(String,boolean)
 METHOD MobileUiBridge#tick(Client)
@@ -369,6 +373,7 @@ PAYLOAD HudVeneerBridge key
 PAYLOAD HudVeneerBridge l
 PAYLOAD HudVeneerBridge labelColor
 PAYLOAD HudVeneerBridge lines
+PAYLOAD HudVeneerBridge list
 PAYLOAD HudVeneerBridge loggedIn
 PAYLOAD HudVeneerBridge map
 PAYLOAD HudVeneerBridge maplist

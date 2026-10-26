@@ -54,6 +54,7 @@ public final class BridgeCensus
 		"JavaBridge#onCameraDrag(int,int)",
 		"JavaBridge#onText(String)",
 		"JavaBridge#isTextInputOpen()",
+		"JavaBridge#getTextInputKind()",
 		"JavaBridge#onKeyStroke(int)",
 		"JavaBridge#onTouch(int,int,int,int)",
 		// Finger-down tap arm: the engine-resolved gate runs while the finger is on the glass so the lift can
@@ -85,6 +86,9 @@ public final class BridgeCensus
 		"MobileUiBridge#setPluginEnabled(String,boolean)",
 		"MobileUiBridge#setConfig(String,String,String)",
 		"MobileUiBridge#resetConfig(String,String)",
+		"MobileUiBridge#gameSettings()",
+		"MobileUiBridge#setFpsCap(int)",
+		"MobileUiBridge#setIdleLogoutMinutes(int)",
 		"MobileUiBridge#tick(Client)",
 		"MobileUiBridge#isChatInputVisible()",
 		"MobileUiBridge#getChatInputBounds()",

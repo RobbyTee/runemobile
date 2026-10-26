@@ -19,7 +19,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.os.SystemClock
-import android.os.VibrationEffect
 import android.os.Vibrator
 import android.provider.MediaStore
 import android.util.Log
@@ -147,6 +146,7 @@ class MainActivity : AppCompatActivity() {
     // closes the engine WidgetDrag (no stuck held item).
     private var invRectCanvas: IntArray? = null
     private var itemDragging = false
+    private var paneSwiping = false // a quick swipe from the inventory or a reorder pane: ignored until the lift
     private var itemDragLastX = 0
     private var itemDragLastY = 0
 
@@ -209,11 +209,22 @@ class MainActivity : AppCompatActivity() {
     private var touchStrayed = 0f // the FURTHEST it ever got from there, not where it ended up
     private var touchMulti = false // a second finger joined: this sequence belongs to the pinch, never a tap
     private var touchPastSlop = false // it left the radius: a drag now, and no click is coming for it
+
+    // The long-press is timed here rather than by the GestureDetector, whose hold is the system-wide one: the
+    // player sets it in Game settings. Armed at the landing, dropped by a lift, a second finger or a drag.
+    private val holdRunnable = Runnable { onHoldElapsed() }
+    private var cameraAccX = 0f // sub-px remainders of the camera drag, so a low sensitivity still turns it
+    private var cameraAccY = 0f
+    private var cameraGain = 1f // GameSettings.cameraGain, read when the camera drag starts
     private var tapArmed = false // armTap was posted for this sequence and nothing has dropped it yet
     private var keyboardShown = false
     private var imeWasShown = false // last frame's ACTUAL ime visibility — to spot a user-driven dismiss
     private var manualKeyboard = false // ⌨ toggle: hold the soft keyboard up with no engine text field open
     private var keyboardToggleBtn: Button? = null // the ⌨ button, so a dismiss can reset its on/off alpha
+    private var imeNumeric = false // the open game field takes a number: GameInputView offers the number pad
+    private var imeConnNumeric = false // what the live input connection was created with (restart on mismatch)
+    private var pasteButton: Button? = null // "Paste" pill, held just above the soft keyboard while it's up for the game
+    private var pasteShownBottom = -1 // the pill's applied bottom margin (-1 = hidden), so layout changes only on change
 
     // FIX-11: a rendered Swing panel's text field is focused and its OWN Compose mirror field owns the soft
     // keyboard — the per-frame poll must NOT raise GameInputView (steals focus) or dismiss the IME (kills it).
@@ -290,6 +301,13 @@ class MainActivity : AppCompatActivity() {
     // chrome for longer than the window. Fail-open by construction.
     private var sawLoginScreen = false
     private var loginTransitionUntilMs = 0L
+
+    // Keep the display awake while in game. updateChrome records the loggedIn edge; the frame callback applies
+    // FLAG_KEEP_SCREEN_ON. A loading/teleport blip reports loggedIn=false for a moment, so the flag is only
+    // dropped after KEEP_AWAKE_GRACE_MS out of game.
+    private var awakeInGame = false
+    private var awakeLeftGameAtMs = 0L
+    private var awakeFlagOn = false
 
     // PERF-FRAME-PACING-01: signature of every dynamic input updateChrome() reads; an identical signature (with no
     // timed transition pending) lets the whole per-frame parse + native-veneer cascade short-circuit. The two buffers
@@ -466,6 +484,12 @@ class MainActivity : AppCompatActivity() {
         // resizable layout (the welcome-frame flash window). ~1.2s of LOGGED_IN frames is when the engine's chrome
         // widgets are reliably built (cf. MobileChromeBridge.VERDICT_FRAME=60); 1500ms gives a little headroom.
         private const val LOGIN_TRANSITION_MS = 1500L
+
+        // A paste types at most one chat line.
+        private const val PASTE_MAX_CHARS = 80
+
+        // How long the screen stays awake after leaving the game (covers region-load blips and the logout screen).
+        private const val KEEP_AWAKE_GRACE_MS = 10_000L
 
         // The layout-switch pill waits this far into a run of unsupported-layout frames before it shows, so a
         // varbit that syncs late after login, or a one-frame blip, never flashes it over a Modern account.
@@ -855,7 +879,7 @@ class MainActivity : AppCompatActivity() {
                 commitMenuSelection()
             }
         }
-        chatTabOverlay.onHaptic = { vibrateTick() }
+        chatTabOverlay.onHaptic = { haptic(GameSettings.Haptic.MENU_OPEN) } // fires as the filter menu opens
         // UI-4: the opaque dialogue parchment. Both taps go through the engine's own WIDGET_CONTINUE handler.
         // The two routes this used to take were each wrong on device, and neither says so:
         //   * a precise click on the CONTINUE widget WALKS THE PLAYER. The component carries no op listener and
@@ -1120,6 +1144,31 @@ class MainActivity : AppCompatActivity() {
         val hdButton = devButton("HD")
         hdButton.contentDescription = "Switch to 117HD renderer"
         hdButton.setOnClickListener { restartIntoRlhd() }
+        // Paste: types the clipboard's first line into the open game field. The soft keyboard covers the HUD, so the
+        // pill rides just above it (updatePasteButton) and only while the keyboard is up for the game.
+        val paste =
+            Button(this).apply {
+                text = "Paste"
+                contentDescription = "Paste into the game"
+                textSize = 13f
+                isAllCaps = false
+                minWidth = 0
+                minimumWidth = 0
+                val d = resources.displayMetrics.density
+                minHeight = 0
+                minimumHeight = (40 * d).toInt()
+                setPadding((16 * d).toInt(), (6 * d).toInt(), (16 * d).toInt(), (6 * d).toInt())
+                setTextColor(0xFFFFFFFF.toInt())
+                background =
+                    android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = 100f
+                        setColor(0xE6202020.toInt())
+                        setStroke((1 * d).toInt(), 0x88FFFFFF.toInt())
+                    }
+                visibility = View.GONE
+                setOnClickListener { pasteClipboard() }
+            }
+        pasteButton = paste
         // Group the dev affordances into one discreet cluster pinned to the BOTTOM-LEFT — clear of the relocated
         // HUD (chat top-left, minimap top-right, tab grid + side panel bottom-right) so they don't obscure the UI.
         val devBar =
@@ -1214,6 +1263,15 @@ class MainActivity : AppCompatActivity() {
                             leftMargin = devBarBaseLeft
                             bottomMargin = devBarBaseBottom
                         },
+                )
+                addView(
+                    paste,
+                    FrameLayout
+                        .LayoutParams(
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            Gravity.BOTTOM or Gravity.END,
+                        ).apply { rightMargin = (12 * resources.displayMetrics.density).toInt() },
                 )
                 // User-defined hotkey buttons: bottom-left, stacked above the devBar; below the launcher sheet.
                 hotkeyBaseLeft = (8 * resources.displayMetrics.density).toInt()
@@ -1333,6 +1391,7 @@ class MainActivity : AppCompatActivity() {
         )
 
         gestures = GestureDetector(this, GestureListener())
+        gestures.setIsLongpressEnabled(false) // timed by holdRunnable instead (see its comment)
         scaleGestures = ScaleGestureDetector(this, ScaleListener())
         // Drive gestures from the SurfaceView itself so event coords are view-local: the screen->game
         // mapping is then correct wherever the view sits in the window (status-bar inset, display cutout,
@@ -1416,11 +1475,18 @@ class MainActivity : AppCompatActivity() {
                     touchStrayed = 0f
                     touchMulti = false
                     touchPastSlop = false
+                    surfaceView.removeCallbacks(holdRunnable)
+                    surfaceView.postDelayed(holdRunnable, GameSettings.longPressMs(this))
                 }
 
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     touchMulti = true
+                    surfaceView.removeCallbacks(holdRunnable)
                     dropTapArm() // a pinch, not a tap: the first finger's arm goes with it
+                }
+
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    surfaceView.removeCallbacks(holdRunnable)
                 }
 
                 MotionEvent.ACTION_MOVE -> {
@@ -1431,6 +1497,7 @@ class MainActivity : AppCompatActivity() {
                         if (d > touchStrayed) touchStrayed = d
                         if (!touchPastSlop && touchStrayed > sceneDragSlopPx) {
                             touchPastSlop = true
+                            surfaceView.removeCallbacks(holdRunnable)
                             dropTapArm() // this touch is a drag now (iOS does this at the pan's Began)
                         }
                         // A tap is not one point: the finger lands, rolls a few pixels and lifts, and all of
@@ -1484,6 +1551,7 @@ class MainActivity : AppCompatActivity() {
                 mapPanning = false
                 mapScrolling = false
                 ifaceScrolling = false // DRAG-2: end the interface drag-to-scroll gesture
+                paneSwiping = false
                 // Whatever this touch did, it is finished with its arm. Cancelling here rather than at each of
                 // the router's exits is both shorter and safer: it cannot be missed when a branch is added. It
                 // reads as a no-op when the click DID happen, because the two reach the bridge in the order
@@ -2324,16 +2392,33 @@ class MainActivity : AppCompatActivity() {
         return (viewY * fh / vh).toInt().coerceIn(0, fh - 1)
     }
 
-    private fun scaleX(px: Float): Int {
+    private fun scaleXf(px: Float): Float {
         val fw = JvmLauncher.frameWidth()
         val vw = surfaceView.width
-        return if (fw <= 0 || vw <= 0) px.toInt() else (px * fw / vw).toInt()
+        return if (fw <= 0 || vw <= 0) px else px * fw / vw
     }
 
-    private fun scaleY(px: Float): Int {
+    private fun scaleYf(px: Float): Float {
         val fh = JvmLauncher.frameHeight()
         val vh = surfaceView.height
-        return if (fh <= 0 || vh <= 0) px.toInt() else (px * fh / vh).toInt()
+        return if (fh <= 0 || vh <= 0) px else px * fh / vh
+    }
+
+    /** The finger stayed put for the long-press time: open the menu at the landing point. */
+    private fun onHoldElapsed() {
+        if (touchMulti || touchPastSlop || menuActive) return
+        // A hold is never a tap. The detector's own long-press guaranteed that; with it off, cancel the tap it is
+        // still holding so the lift can't click — even when no menu opens below, or the menu is dropped mid-touch.
+        val now = SystemClock.uptimeMillis()
+        val cancel = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, touchOriginX, touchOriginY, 0)
+        gestures.onTouchEvent(cancel)
+        cancel.recycle()
+        // The map owns the whole screen while open. A hold inside its window opens the engine menu there, the
+        // desktop's right-click on the map, which is where plugins put their map entries (Shortest Path's Set
+        // Target / Set Start / Clear Path; Find closest on a key row). Outside the window, or before its rect
+        // is published, a hold opens nothing: that point is the scene behind the map.
+        if (mapOpen && !inCanvasRect(mapWindowCanvas, toGameX(touchOriginX), toGameY(touchOriginY))) return
+        beginMenuPeek(touchOriginX, touchOriginY)
     }
 
     private class OrbHit(
@@ -2514,7 +2599,7 @@ class MainActivity : AppCompatActivity() {
                 val orb = nearestOrb(gx, gy)
                 if (orb != null) {
                     JvmLauncher.clickPrecise(orb.cx, orb.cy, 1)
-                    vibrateTick()
+                    haptic(GameSettings.Haptic.OP)
                     Log.i(TAG, "orb-veneer: tap ($gx,$gy) -> ${orb.name} @(${orb.cx},${orb.cy})")
                     return true
                 }
@@ -2563,15 +2648,6 @@ class MainActivity : AppCompatActivity() {
             return true
         }
 
-        override fun onLongPress(e: MotionEvent) {
-            // The map owns the whole screen while open. A hold inside its window opens the engine menu there, the
-            // desktop's right-click on the map, which is where plugins put their map entries (Shortest Path's Set
-            // Target / Set Start / Clear Path; Find closest on a key row). Outside the window, or before its rect
-            // is published, a hold opens nothing: that point is the scene behind the map.
-            if (mapOpen && !inCanvasRect(mapWindowCanvas, toGameX(e.x), toGameY(e.y))) return
-            beginMenuPeek(e.x, e.y)
-        }
-
         override fun onScroll(
             e1: MotionEvent?,
             e2: MotionEvent,
@@ -2582,6 +2658,7 @@ class MainActivity : AppCompatActivity() {
             if (pinchActive || scaleGestures.isInProgress || e2.pointerCount > 1) {
                 return false
             }
+            if (paneSwiping) return true
             // Context routing, decided once at gesture start from the DOWN point (same rule as iOS):
             // inside the open world-map window = pan the MAP; inside the live chat box = scroll the chat;
             // anywhere else = rotate the camera.
@@ -2623,13 +2700,18 @@ class MainActivity : AppCompatActivity() {
                         val inDraggablePane =
                             !mapOpen && e1 != null &&
                                 (inCanvasRect(invRectCanvas, sx, sy) || reorderRectsCanvas.any { inCanvasRect(it, sx, sy) })
-                        if (inDraggablePane) {
+                        // The drag only picks the item up once the finger has rested on it for the drag hold (Game
+                        // settings); a quicker swipe from the pane scrolls it if it scrolls and otherwise does
+                        // nothing, so a flick across the inventory can't move an item or swing the camera.
+                        val heldForDrag = e2.eventTime - e2.downTime >= GameSettings.dragHoldMs(this@MainActivity)
+                        if (inDraggablePane && heldForDrag) {
                             itemDragging = true
                             itemDragLastX = sx
                             itemDragLastY = sy
                             // onTouch(0) primes focus + MOVED + PRESSED on the slot — no clearHover (that would
                             // park the cursor off-canvas; iOS doesn't either).
                             JvmLauncher.touch(0, sx, sy, 1) // MOUSE_PRESSED on the source widget
+                            haptic(GameSettings.Haptic.DRAG) // once per drag, as it lifts off the slot
                             Log.i(TAG, "drag-1: widget drag begin game=($sx,$sy)")
                         } else if (e1 != null && !mapOpen && scrollRectsCanvas.any { inCanvasRect(it, sx, sy) }) {
                             // DRAG-2: a drag that STARTS over an open scrollable interface (bank/GE/quest-list/
@@ -2640,8 +2722,14 @@ class MainActivity : AppCompatActivity() {
                             ifaceWheelY = sy
                             ifaceScrollAccum = 0f
                             Log.i(TAG, "drag-2: iface scroll begin game=($sx,$sy)")
+                        } else if (inDraggablePane) {
+                            paneSwiping = true
+                            Log.i(TAG, "drag-1: quick pane swipe ignored (nothing to scroll) game=($sx,$sy)")
                         } else {
                             cameraGestureActive = true
+                            cameraAccX = 0f
+                            cameraAccY = 0f
+                            cameraGain = GameSettings.cameraGain(this@MainActivity)
                             JvmLauncher.clearHover()
                         }
                     }
@@ -2729,7 +2817,17 @@ class MainActivity : AppCompatActivity() {
             // GestureDetector.onScroll distanceX/Y = old - new, which already equals what iOS sends the bridge
             // (postCameraDx passes -translation, i.e. old - new). Pass it through un-negated so the camera
             // yaws/pitches the same direction as iOS (grab-the-scene feel); negating double-inverts -> reversed.
-            JvmLauncher.camera(scaleX(distanceX).toInt(), scaleY(distanceY).toInt())
+            // Camera sensitivity (Game settings) scales the canvas-px delta; the remainder carries to the next move,
+            // the way iOS accumulates, so small moves at a low setting add up instead of each rounding to zero.
+            cameraAccX += scaleXf(distanceX) * cameraGain
+            cameraAccY += scaleYf(distanceY) * cameraGain
+            val cdx = cameraAccX.toInt()
+            val cdy = cameraAccY.toInt()
+            if (cdx != 0 || cdy != 0) {
+                cameraAccX -= cdx
+                cameraAccY -= cdy
+                JvmLauncher.camera(cdx, cdy)
+            }
             return true
         }
     }
@@ -2783,7 +2881,13 @@ class MainActivity : AppCompatActivity() {
         override fun onCheckIsTextEditor(): Boolean = true
 
         override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-            outAttrs.inputType = EditorInfo.TYPE_CLASS_TEXT or EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            imeConnNumeric = imeNumeric
+            outAttrs.inputType =
+                if (imeNumeric) {
+                    EditorInfo.TYPE_CLASS_NUMBER
+                } else {
+                    EditorInfo.TYPE_CLASS_TEXT or EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                }
             outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or
                 EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_DONE
             return object : BaseInputConnection(this, false) {
@@ -2804,6 +2908,14 @@ class MainActivity : AppCompatActivity() {
                 ): Boolean {
                     repeat(beforeLength.coerceAtLeast(0)) { JvmLauncher.keyStroke(VK_BACK_SPACE) }
                     return true
+                }
+
+                override fun performContextMenuAction(id: Int): Boolean {
+                    if (id == android.R.id.paste || id == android.R.id.pasteAsPlainText) {
+                        pasteClipboard()
+                        return true
+                    }
+                    return super.performContextMenuAction(id)
                 }
 
                 override fun sendKeyEvent(event: KeyEvent): Boolean {
@@ -2912,7 +3024,7 @@ class MainActivity : AppCompatActivity() {
                                 JvmLauncher.fireHotkey(group, key)
                             }
                         }
-                        vibrateTick()
+                        haptic(GameSettings.Haptic.OP)
                         Log.i(
                             TAG,
                             if (quickHop) {
@@ -3206,6 +3318,14 @@ class MainActivity : AppCompatActivity() {
                         }
                         imeWasShown = imeShown
                         val want = manualKeyboard || mapSearchKeyboard || JvmLauncher.isTextInputOpen()
+                        // Amount prompts get the number pad. The IME re-reads the input type only on a restart; do
+                        // it only while a field wants the keyboard, so a closing prompt drops it without a flash.
+                        imeNumeric = JvmLauncher.textInputKind() == 2
+                        if (want && imeNumeric != imeConnNumeric) {
+                            imeConnNumeric = imeNumeric
+                            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(keyboardView)
+                            Log.i(TAG, "a1: keyboard -> ${if (imeNumeric) "number pad" else "text"}")
+                        }
                         if (want != imeShown) {
                             if (want != keyboardShown) {
                                 keyboardShown = want
@@ -3222,11 +3342,12 @@ class MainActivity : AppCompatActivity() {
                             keyboardShown = want // converged without a request (e.g. user-raised IME matches want)
                         }
                     }
+                    updatePasteButton(imeShown && !textActivePanel && keyboardShown)
                     val seq = JvmLauncher.interactTapSeq()
                     if (seq != lastTapSeq) {
                         lastTapSeq = seq
                         Log.i(TAG, "a1: interactTapSeq -> $seq (haptic)")
-                        vibrateTick()
+                        haptic(GameSettings.Haptic.OP)
                     }
                     // Phase-1 tap feedback, resolved from ENGINE TRUTH (tap-kind seq advanced past the tap-time
                     // baseline). Ring ONLY for a real scene tap — SCENE → red, WALK → yellow; a WIDGET op draws a
@@ -3240,6 +3361,7 @@ class MainActivity : AppCompatActivity() {
                         tryBuildNativeMenu()
                     }
                     updateChrome()
+                    updateKeepAwake()
                     applyOverlayInsets()
                     updateWorldMap()
                     Choreographer.getInstance().postFrameCallback(this)
@@ -3247,6 +3369,60 @@ class MainActivity : AppCompatActivity() {
             }
         frameCallback = cb
         Choreographer.getInstance().postFrameCallback(cb)
+    }
+
+    /** Shows the Paste pill just above the soft keyboard while it is up for the game; touches layout only on change. */
+    private fun updatePasteButton(show: Boolean) {
+        val btn = pasteButton ?: return
+        val imeBottom =
+            if (show && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                surfaceView.rootWindowInsets?.getInsets(WindowInsets.Type.ime())?.bottom ?: 0
+            } else {
+                0
+            }
+        val bottom = if (imeBottom > 0) imeBottom + (8 * resources.displayMetrics.density).toInt() else -1
+        if (bottom == pasteShownBottom) return
+        pasteShownBottom = bottom
+        if (bottom >= 0) {
+            (btn.layoutParams as? FrameLayout.LayoutParams)?.let {
+                it.bottomMargin = bottom
+                btn.layoutParams = it
+            }
+        }
+        btn.visibility = if (bottom >= 0) View.VISIBLE else View.GONE
+    }
+
+    /** Types the clipboard's first line (trimmed, at most a chat line's 80 characters) into the open game field. */
+    private fun pasteClipboard() {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val raw =
+            cm.primaryClip
+                ?.takeIf { it.itemCount > 0 }
+                ?.getItemAt(0)
+                ?.coerceToText(this)
+                ?.toString()
+                .orEmpty()
+        val firstLine = raw.lineSequence().firstOrNull() ?: ""
+        var line = firstLine.trim()
+        if (line.codePointCount(0, line.length) > PASTE_MAX_CHARS) {
+            line = line.substring(0, line.offsetByCodePoints(0, PASTE_MAX_CHARS))
+        }
+        if (line.isEmpty()) return
+        JvmLauncher.text(line)
+        Log.i(TAG, "a1: paste len=${line.length}") // length only, never the content
+    }
+
+    /** Holds FLAG_KEEP_SCREEN_ON while in game (plus a short grace after leaving it); touches the window only on change. */
+    private fun updateKeepAwake() {
+        val want = awakeInGame || SystemClock.uptimeMillis() - awakeLeftGameAtMs < KEEP_AWAKE_GRACE_MS
+        if (want == awakeFlagOn) return
+        awakeFlagOn = want
+        if (want) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        Log.i(TAG, "keep-awake -> $want")
     }
 
     /** AP-2a Finding 9: create the notification channel + request POST_NOTIFICATIONS (API 33+). */
@@ -3509,6 +3685,8 @@ class MainActivity : AppCompatActivity() {
                 null
             }
         val loggedIn = o?.optBoolean("loggedIn") == true
+        if (awakeInGame && !loggedIn) awakeLeftGameAtMs = SystemClock.uptimeMillis()
+        awakeInGame = loggedIn
         // Bug 8: arm the login-transition latch off a genuine LOGIN_SCREEN→LOGGED_IN edge. While logged out we note
         // that we saw the login screen (the snapshot's loginScreen flag); on the next logged-in frame that consumes
         // the flag and opens a bounded suppression window. An in-game LOADING/teleport blip reports loggedIn=false
@@ -4218,17 +4396,9 @@ class MainActivity : AppCompatActivity() {
         JvmLauncher.onBridge { JvmLauncher.relocateMinimap(-1, -1) }
     }
 
-    private fun vibrateTick() {
-        val v = vibrator ?: return
-        // Guard the vibrate: it needs the VIBRATE permission and some devices restrict the vibrator outright — a
-        // SecurityException here must never take down the UI thread (it once did, on the menu-highlight haptic).
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                v.vibrate(VibrationEffect.createOneShot(18, VibrationEffect.DEFAULT_AMPLITUDE))
-            }
-        } catch (e: Exception) {
-            // haptics are best-effort; ignore
-        }
+    /** One haptic buzz for [trigger], if the player has that trigger on (Game settings), at the chosen strength. */
+    private fun haptic(trigger: GameSettings.Haptic) {
+        if (GameSettings.hapticOn(this, trigger)) GameSettings.buzz(this, vibrator)
     }
 
     // ---- A2 press-and-peek menu state machine -------------------------------------------------------
@@ -4281,6 +4451,7 @@ class MainActivity : AppCompatActivity() {
         menuDegraded = false // a new long-press always starts un-degraded
         menuOpenAtNanos = System.nanoTime()
         JvmLauncher.click(gx, gy, 3) // open the engine right-click menu at the finger
+        haptic(GameSettings.Haptic.MENU_OPEN)
         Log.i(TAG, "a2: long-press -> menu open game=($gx,$gy) hand=${if (menuHandRight) "R" else "L"}")
     }
 
@@ -4543,7 +4714,7 @@ class MainActivity : AppCompatActivity() {
             MenuOverlayView.Role.PARENT -> {
                 menuDrillParent = e.engineIndex
                 menuOverlay.setHighlight(-1)
-                vibrateTick()
+                haptic(GameSettings.Haptic.MENU_OPEN) // a submenu opening
                 buildTapMenu(e.sub ?: emptyList(), drilled = true)
             }
 
@@ -4575,7 +4746,7 @@ class MainActivity : AppCompatActivity() {
         val row = menuOverlay.rowAt(x, y)
         if (menuOverlay.setHighlight(row)) {
             menuHighlight = row
-            vibrateTick()
+            if (row >= 0) haptic(GameSettings.Haptic.MENU_HOVER)
         }
     }
 

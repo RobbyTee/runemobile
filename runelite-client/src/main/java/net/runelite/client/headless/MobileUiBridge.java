@@ -1974,6 +1974,144 @@ public final class MobileUiBridge
 		return "{\"ok\":true,\"writeId\":" + id + "}";
 	}
 
+	// ---- Game settings: the phone settings that ride on stock plugins -----------------------------------------
+
+	static final String FPS_PLUGIN = "net.runelite.client.plugins.fps.FpsPlugin";
+	static final String FPS_GROUP = "fpscontrol";
+	static final String IDLE_PLUGIN = "net.runelite.client.plugins.logouttimer.LogoutTimerPlugin";
+	static final String IDLE_GROUP = "logouttimer";
+	static final int FPS_CAP_MAX = 360;      // the FPS Control plugin's own range
+	static final int FPS_CAP_DEFAULT = 50;   // its default target
+	static final int IDLE_MIN_MINUTES = 5;   // the Logout Timer plugin's own range; 5 is also the game's default
+	static final int IDLE_MAX_MINUTES = 30;
+
+	/**
+	 * The frame-rate cap and idle logout time the native Game settings screen shows, read from the FPS Control and
+	 * Logout Timer plugins: {@code {"fpsCap":N,"idleLogoutMinutes":M}}, where fpsCap 0 means no cap. "" when the
+	 * facade is off.
+	 */
+	public static String gameSettings()
+	{
+		final ConfigManager cm = configManager;
+		if (!ENABLED || pluginManager == null || cm == null)
+		{
+			return "";
+		}
+		final int fps = fpsCapFrom(pluginOn(FPS_PLUGIN), cm.getConfiguration(FPS_GROUP, "limitFps"),
+			cm.getConfiguration(FPS_GROUP, "maxFps"));
+		final int idle = idleMinutesFrom(pluginOn(IDLE_PLUGIN), cm.getConfiguration(IDLE_GROUP, "idleTimeout"));
+		return new Json().obj().ki("fpsCap", fps).ki("idleLogoutMinutes", idle).end().toString();
+	}
+
+	/** Cap the frame rate through the FPS Control plugin, turning the plugin on if it is off. 0 removes the cap. */
+	public static String setFpsCap(int fps)
+	{
+		if (!ENABLED || pluginManager == null || configManager == null)
+		{
+			return "{\"ok\":false,\"reason\":\"facade-off\"}";
+		}
+		return applyGameSetting(FPS_PLUGIN, fpsCapWrites(fps, pluginOn(FPS_PLUGIN)), fps > 0);
+	}
+
+	/** Set the idle logout time through the Logout Timer plugin, turning the plugin on if it is off. In minutes. */
+	public static String setIdleLogoutMinutes(int minutes)
+	{
+		if (!ENABLED || pluginManager == null || configManager == null)
+		{
+			return "{\"ok\":false,\"reason\":\"facade-off\"}";
+		}
+		return applyGameSetting(IDLE_PLUGIN, idleWrites(minutes), true);
+	}
+
+	/** The cap FPS Control is applying: its target while the plugin is on and limiting, else 0 (no cap). */
+	static int fpsCapFrom(boolean pluginOn, String limitFps, String maxFps)
+	{
+		if (!pluginOn || !Boolean.parseBoolean(limitFps))
+		{
+			return 0;
+		}
+		return clampInt(parseIntOr(maxFps, FPS_CAP_DEFAULT), 1, FPS_CAP_MAX);
+	}
+
+	/** The idle logout time in force: Logout Timer's setting while the plugin is on, else the game's 5 minutes. */
+	static int idleMinutesFrom(boolean pluginOn, String idleTimeout)
+	{
+		if (!pluginOn)
+		{
+			return IDLE_MIN_MINUTES;
+		}
+		return clampInt(parseIntOr(idleTimeout, IDLE_MIN_MINUTES), IDLE_MIN_MINUTES, IDLE_MAX_MINUTES);
+	}
+
+	/**
+	 * The config writes for a frame-rate cap, as {group, key, value}. FPS Control shows an FPS counter by default,
+	 * so when the cap is what turns the plugin on, the counter is switched off with it.
+	 */
+	static String[][] fpsCapWrites(int fps, boolean pluginOn)
+	{
+		if (fps <= 0)
+		{
+			return new String[][]{{FPS_GROUP, "limitFps", "false"}};
+		}
+		final String target = Integer.toString(clampInt(fps, 1, FPS_CAP_MAX));
+		if (pluginOn)
+		{
+			return new String[][]{{FPS_GROUP, "limitFps", "true"}, {FPS_GROUP, "maxFps", target}};
+		}
+		return new String[][]{{FPS_GROUP, "limitFps", "true"}, {FPS_GROUP, "maxFps", target}, {FPS_GROUP, "drawFps", "false"}};
+	}
+
+	/** The config write for an idle logout time, as {group, key, value}, clamped to the plugin's range. */
+	static String[][] idleWrites(int minutes)
+	{
+		return new String[][]{{IDLE_GROUP, "idleTimeout", Integer.toString(clampInt(minutes, IDLE_MIN_MINUTES, IDLE_MAX_MINUTES))}};
+	}
+
+	private static String applyGameSetting(String pluginClass, String[][] writes, boolean needsPlugin)
+	{
+		for (String[] w : writes)
+		{
+			final String ack = setConfig(w[0], w[1], w[2]);
+			if (!ack.startsWith("{\"ok\":true"))
+			{
+				return ack;
+			}
+		}
+		if (needsPlugin && !pluginOn(pluginClass))
+		{
+			setPluginEnabled(pluginClass, true);
+		}
+		return flushConfigQueued();
+	}
+
+	private static boolean pluginOn(String className)
+	{
+		final PluginManager pm = pluginManager;
+		final Plugin p = pluginByClassName(className);
+		return pm != null && p != null && pm.isPluginEnabled(p);
+	}
+
+	private static int parseIntOr(String s, int fallback)
+	{
+		if (s == null)
+		{
+			return fallback;
+		}
+		try
+		{
+			return Integer.parseInt(s.trim());
+		}
+		catch (NumberFormatException ex)
+		{
+			return fallback;
+		}
+	}
+
+	private static int clampInt(int v, int lo, int hi)
+	{
+		return Math.max(lo, Math.min(hi, v));
+	}
+
 	/**
 	 * Reset an ENTIRE plugin's config to defaults, matching the desktop ConfigPanel "Reset" — reapply group
 	 * defaults with override=true AND call {@code plugin.resetConfiguration()} so non-config plugin state

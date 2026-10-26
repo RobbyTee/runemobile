@@ -996,7 +996,7 @@ public final class HudVeneerBridge
 				final int scrollDelta = pendingChatScroll.getAndSet(0);
 				if (scrollDelta != 0)
 				{
-					applyChatScroll(c, scrollDelta);
+					applyChatScroll(c, scrollDelta, promptOpen);
 				}
 				dumpChatLayoutOnce(c, chatId);
 			}
@@ -2346,27 +2346,40 @@ public final class HudVeneerBridge
 	/** Scroll the chat message layer by {@code delta} canvas px (clamped), driving the chatbox's own scroll layer
 	 *  ({@code SCROLLAREA}, the parent of the message lines) + scrollbar ({@code CHATSCROLLBAR}) via the engine's
 	 *  {@code UPDATE_SCROLLBAR} script — the same path the scrollbar arrows use. No mouse-wheel event, so the camera
-	 *  doesn't also zoom. Client thread. */
-	private static void applyChatScroll(Client c, int delta)
+	 *  doesn't also zoom. While a prompt lists its results (the GE item search) the finger is on that list, so it
+	 *  is the list that scrolls, through its own scrollbar the same way. Client thread. */
+	static void applyChatScroll(Client c, int delta, boolean promptOpen)
 	{
 		try
 		{
-			final Widget area = c.getWidget(InterfaceID.Chatbox.SCROLLAREA);
-			if (area == null)
+			if (promptOpen && promptListsResults(c))
 			{
+				scrollLayerBy(c, InterfaceID.Chatbox.MES_LAYER_SCROLLBAR, InterfaceID.Chatbox.MES_LAYER_SCROLLCONTENTS,
+					delta);
 				return;
 			}
-			final int max = Math.max(0, area.getScrollHeight() - area.getHeight());
-			final int cur = area.getScrollY();
-			final int next = Math.max(0, Math.min(max, cur + delta));
-			if (next != cur)
-			{
-				c.runScript(ScriptID.UPDATE_SCROLLBAR, InterfaceID.Chatbox.CHATSCROLLBAR, InterfaceID.Chatbox.SCROLLAREA, next);
-			}
+			scrollLayerBy(c, InterfaceID.Chatbox.CHATSCROLLBAR, InterfaceID.Chatbox.SCROLLAREA, delta);
 		}
 		catch (RuntimeException ignore)
 		{
 			BridgeFaults.note("HudVeneerBridge.applyChatScroll", ignore);
+		}
+	}
+
+	/** Move one scroll layer by {@code delta} canvas px, clamped to its content, through its scrollbar. */
+	private static void scrollLayerBy(Client c, int barId, int areaId, int delta)
+	{
+		final Widget area = c.getWidget(areaId);
+		if (area == null)
+		{
+			return;
+		}
+		final int max = Math.max(0, area.getScrollHeight() - area.getHeight());
+		final int cur = area.getScrollY();
+		final int next = Math.max(0, Math.min(max, cur + delta));
+		if (next != cur)
+		{
+			c.runScript(ScriptID.UPDATE_SCROLLBAR, barId, areaId, next);
 		}
 	}
 
@@ -3570,8 +3583,9 @@ public final class HudVeneerBridge
 	/** "Select an Option" — the title (child 0) + the option rows (children 1..n), each tagged with its digit key. */
 	/**
 	 * How many search results to publish. These are TAP TARGETS, not drawn rows — the engine draws the list
-	 * itself — so the limit is the engine's own visible grid (three columns) plus room for a scroll, not what
-	 * a panel could hold. Each row's bounds are republished every tick, so they follow the list as it scrolls.
+	 * itself — and only the rows inside the list's window are published, so the limit is the engine's own
+	 * visible grid (three columns) with room to spare, not what a panel could hold. Each row's bounds are
+	 * republished every tick, so they follow the list as it scrolls.
 	 */
 	private static final int MAX_PROMPT_ROWS = 24;
 
@@ -3611,29 +3625,39 @@ public final class HudVeneerBridge
 		{
 			sb.append(",\"title\":\"").append(BridgeJson.escapedDropControls(second)).append('"');
 		}
-		sb.append(",\"options\":[");
 		int rows = 0;
 		Widget[] kids = null;
+		int[] window = null;
 		try
 		{
 			final Widget sc = c.getWidget(InterfaceID.Chatbox.MES_LAYER_SCROLLCONTENTS);
 			kids = sc == null ? null : sc.getDynamicChildren();
+			// The list's window: the rows the engine draws are the ones inside it. Published as "list" only while
+			// the list holds more than fits, which is when a drag on it should scroll it.
+			window = canvasBounds(sc);
+			if (window != null && sc.getScrollHeight() > sc.getHeight())
+			{
+				appendBounds(sb, "list", window);
+			}
 		}
 		catch (RuntimeException ignore)
 		{
 			BridgeFaults.note("HudVeneerBridge.dlgPrompt.rows", ignore);
 		}
+		sb.append(",\"options\":[");
 		if (kids != null)
 		{
 			// Three children a row (upstream's GE search reads this same widget the same way); the middle one
 			// carries the name. Its raw text keeps the fuzzy-match underline tags, which the runs render.
 			// Complete triplets only, as upstream does with length/3: a trailing partial row has no name child
-			// to read, and whatever sits at that index is not one.
+			// to read, and whatever sits at that index is not one. A row scrolled out of the window is skipped
+			// and one half out is cut to the part on screen: the engine clips them there, so a target left
+			// standing outside it would sit over the title and pick a result nobody can see.
 			for (int i = 0; i + 2 < kids.length && rows < MAX_PROMPT_ROWS; i += 3)
 			{
 				final Widget nameW = kids[i + 1];
 				final String txt = wText(nameW);
-				final int[] b = canvasBounds(nameW);
+				final int[] b = visiblePart(canvasBounds(nameW), window);
 				if (txt.isEmpty() || b == null)
 				{
 					continue;
@@ -3713,6 +3737,20 @@ public final class HudVeneerBridge
 	}
 
 	/** Append {@code ,"key":{"x":,"y":,"w":,"h":}} for a canvas-px rect, or nothing when {@code b} is null. */
+	/** The part of {@code b} inside {@code window}, or null when none of it is; {@code b} as-is with no window. */
+	static int[] visiblePart(int[] b, int[] window)
+	{
+		if (b == null || window == null)
+		{
+			return b;
+		}
+		final int x0 = Math.max(b[0], window[0]);
+		final int y0 = Math.max(b[1], window[1]);
+		final int x1 = Math.min(b[0] + b[2], window[0] + window[2]);
+		final int y1 = Math.min(b[1] + b[3], window[1] + window[3]);
+		return x1 > x0 && y1 > y0 ? new int[]{x0, y0, x1 - x0, y1 - y0} : null;
+	}
+
 	private static void appendBounds(StringBuilder sb, String key, int[] b)
 	{
 		if (b == null)

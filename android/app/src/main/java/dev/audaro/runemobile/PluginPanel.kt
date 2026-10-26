@@ -151,6 +151,7 @@ fun PluginPanel(
     var notesAvail by remember { mutableStateOf(false) }
     var hubOpen by remember { mutableStateOf(false) } // Finding 17 hub browse/install
     var aboutOpen by remember { mutableStateOf(false) } // PROD-QA-07 identity/disclosure
+    var gameSettingsOpen by remember { mutableStateOf(false) } // native Game settings (touch, haptics, ...)
     // Finding 8: a plugin just toggled ON is starting — suppress the "couldn't start" badge during a grace
     // window, then re-fetch the true active state. A row is incompatible = enabled && !active && not pending.
     var pending by remember { mutableStateOf(setOf<String>()) }
@@ -259,6 +260,10 @@ fun PluginPanel(
                 aboutOpen = false
             }
 
+            gameSettingsOpen -> {
+                gameSettingsOpen = false
+            }
+
             panelOpen != null -> {
                 panelOpen = null
             }
@@ -333,6 +338,10 @@ fun PluginPanel(
 
                 aboutOpen -> {
                     AboutScreen(onBack = { aboutOpen = false })
+                }
+
+                gameSettingsOpen -> {
+                    GameSettingsScreen(onBack = { gameSettingsOpen = false })
                 }
 
                 panelOpen != null -> {
@@ -473,6 +482,7 @@ fun PluginPanel(
                                 onOpenNotes = { notesOpen = true },
                                 onOpenHotkeys = { hotkeysOpen = true },
                                 onOpenAbout = { aboutOpen = true },
+                                onOpenGameSettings = { gameSettingsOpen = true },
                                 // FIX-5: open the world map via op-replay, then dismiss the launcher so the fullscreen map shows.
                                 onOpenWorldMap = {
                                     JvmLauncher.onBridgeTouch { JvmLauncher.openWorldMap() }
@@ -853,6 +863,7 @@ private fun LauncherGrid(
     onOpenNotes: () -> Unit,
     onOpenHotkeys: () -> Unit,
     onOpenAbout: () -> Unit,
+    onOpenGameSettings: () -> Unit,
     onOpenWorldMap: () -> Unit,
     onScreenshot: () -> Unit,
     onScreenshotLongPress: () -> Unit,
@@ -948,6 +959,8 @@ private fun LauncherGrid(
         SectionLabel("More")
         TileGrid(
             buildList {
+                // The phone-side settings: touch timing, camera feel, haptics.
+                add(TileSpec("Game settings", glyph = "⚙", onClick = onOpenGameSettings))
                 add(TileSpec("All plugins", glyph = "≡", onClick = onOpenList))
                 add(TileSpec("Plugin Hub", glyph = "⬇", onClick = onOpenHub))
                 // Track B #6: native config-profiles list/switch (gated on the bridge being wired).

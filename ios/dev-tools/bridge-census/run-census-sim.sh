@@ -55,7 +55,9 @@ xcrun simctl launch --terminate-running-process "$SIM_UDID" "$BUNDLE_ID" \
 start=$SECONDS
 while [ ! -f "$DOCS/$RESULT_NAME" ]; do
   [ $((SECONDS - start)) -lt "$TIMEOUT" ] || red "no census result after ${TIMEOUT}s; see $DOCS/jvm-stdio.log"
-  if ! xcrun simctl spawn "$SIM_UDID" launchctl list | grep -qE "^[0-9]+[[:space:]].*UIKitApplication:$BUNDLE_ID\\["; then
+  # grep reads the whole list (no -q): quitting at the first match can kill launchctl with SIGPIPE, and pipefail
+  # then reports a running app as gone.
+  if ! xcrun simctl spawn "$SIM_UDID" launchctl list | grep -E "^[0-9]+[[:space:]].*UIKitApplication:$BUNDLE_ID\\[" >/dev/null; then
     tail -20 "$DOCS/jvm-stdio.log" 2>/dev/null >&2 || true
     red "the app exited before the census finished; log: $DOCS/jvm-stdio.log"
   fi

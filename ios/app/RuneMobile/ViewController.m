@@ -9,6 +9,7 @@
 #import "GLRecon.h"
 #import "RMKeyboardDismiss.h"
 #import "RMResidency.h"
+#import "RMGameSettings.h"
 #import "RouteCBridge.h"            // GPU Route C bridge (backend selected by RC_BACKEND_ANGLE in the build)
 #import <QuartzCore/QuartzCore.h>
 #if !defined(RC_BACKEND_ANGLE)
@@ -87,8 +88,9 @@ static UIColor *RMInteractRingColor(void) {
 // has an 18pt dead zone instead of 10pt before the camera starts moving.
 static const CGFloat kSceneDragSlop = 18.0;
 // A touch that stays inside that radius but sits there is a hold, not a tap. The long-press recognizer fires
-// at 0.4s and takes the sequence (opening the menu), so this only decides touches it did not claim.
-static const NSTimeInterval kSceneTapMaxHold = 0.45;
+// at the long-press time (Settings > Game settings) and takes the sequence, opening the menu, so this margin
+// past it only decides touches it did not claim.
+static const NSTimeInterval kSceneTapHoldMargin = 0.05;
 
 // The game canvas, and the tap classifier. A UIImageView subclass because the decision above has to be made
 // from the raw touch sequence: -touchesBegan: runs the instant the finger lands (a tap recognizer cannot fire
@@ -178,6 +180,8 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 /// translation at the moment the pan begins: whether that translation spans the whole withheld slop or only
 /// the move that crossed it is UIKit's business, and the difference is a whole inventory slot.
 @property (nonatomic, readonly) CGPoint landing;
+/// When the finger landed (CACurrentMediaTime), so the handler can tell a held drag from a quick swipe.
+@property (nonatomic, readonly) CFTimeInterval landedAt;
 @end
 
 @implementation RMCameraPanRecognizer {
@@ -193,6 +197,7 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
     [super touchesBegan:touches withEvent:event];
     if (!_tracking) {
         _landing = [touches.anyObject locationInView:self.view];
+        _landedAt = CACurrentMediaTime();
         _tracking = YES;
     }
 }
@@ -207,6 +212,51 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
     [super touchesMoved:touches withEvent:event];
 }
 @end
+
+// The keyboard bar's Paste button target. A UIPasteControl pastes without the system's paste prompt and hands its
+// target the clipboard's item providers; this one forwards the text to a handler, which types it into the game.
+@interface RMPasteTarget : UIResponder
+@property (nonatomic, copy) void (^onText)(NSString *text);
+@end
+
+@implementation RMPasteTarget
+- (instancetype)init {
+    if ((self = [super init])) {
+        self.pasteConfiguration = [[UIPasteConfiguration alloc]
+            initWithAcceptableTypeIdentifiers:@[ @"public.utf8-plain-text", @"public.plain-text", @"public.text" ]];
+    }
+    return self;
+}
+
+- (void)pasteItemProviders:(NSArray<NSItemProvider *> *)itemProviders {
+    for (NSItemProvider *p in itemProviders) {
+        if (![p canLoadObjectOfClass:[NSString class]])
+            continue;
+        __weak typeof(self) ws = self;
+        [p loadObjectOfClass:[NSString class]
+            completionHandler:^(id<NSItemProviderReading> obj, NSError *err) {
+                if (![(NSObject *)obj isKindOfClass:[NSString class]])
+                    return;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (ws.onText)
+                        ws.onText((NSString *)obj);
+                });
+            }];
+        return; // the first text item only
+    }
+}
+@end
+
+// What a paste types into the game: the first line, trimmed, at most a chat line's 80 characters.
+static NSString *RMPasteLine(NSString *s) {
+    NSRange nl = [s rangeOfCharacterFromSet:[NSCharacterSet newlineCharacterSet]];
+    if (nl.location != NSNotFound)
+        s = [s substringToIndex:nl.location];
+    s = [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if (s.length > 80)
+        s = [s substringToIndex:[s rangeOfComposedCharacterSequenceAtIndex:80].location];
+    return s;
+}
 
 @interface ViewController () <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate, UIGestureRecognizerDelegate, SFSafariViewControllerDelegate, UNUserNotificationCenterDelegate, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate, UISearchBarDelegate, OverlayEditHudHost> {
     // Game-canvas centres of each tab stone (updated each chrome refresh), used to proxy a tap onto the live
@@ -269,6 +319,9 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 @property (nonatomic, assign) BOOL launched;
 @property (nonatomic, assign) long jitAttachedMs;     // Phase 4 cold start: first poll that saw CS_DEBUGGED (0 = not yet)
 @property (nonatomic, assign) BOOL inWorldStamped;    // Phase 4 cold start: the first LOGGED_IN tick has been stamped
+@property (nonatomic, assign) BOOL awakeInGame;       // keep-awake: the last snapshot was logged in
+@property (nonatomic, assign) CFTimeInterval awakeLeftGameAt; // keep-awake: when loggedIn last fell (CACurrentMediaTime)
+@property (nonatomic, strong) RMPasteTarget *pasteTarget;     // the keyboard bar's Paste button target
 @property (nonatomic, assign) BOOL pendingRouteCL1;   // GPU Route C: long-press Start -> boot the L1 kill-test
 @property (nonatomic, assign) BOOL pendingRouteCGpu;  // GPU Route C: two-finger long-press -> full RuneLite on GPU
 @property (nonatomic, assign) BOOL pendingRouteCZone; // GPU Zone: three-finger long-press -> full RuneLite on 117HD
@@ -319,8 +372,7 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 @property (nonatomic, assign) CGRect menuGeomGame;        // live engine menu bounds, gamepack (765x503) coords
 @property (nonatomic, assign) int    menuSelX;            // where commit clicks on release (game coords)
 @property (nonatomic, assign) int    menuSelY;
-@property (nonatomic, assign) BOOL   menuFingerOnMenu;    // finger over the menu (with grace) -> select; else cancel
-@property (nonatomic, strong) UISelectionFeedbackGenerator *menuHaptic; // light tick when the highlight moves
+@property (nonatomic, assign) BOOL menuFingerOnMenu; // finger over the menu (with grace) -> select; else cancel
 // MENU-1/2/3 tap-mode: when the right-click menu has a submenu (▸), overflows the safe area, or shift is
 // latched, it becomes a PERSISTENT, tappable, scrollable list (drill into submenus, ⚙ Customize) instead of the
 // drag-select box. Flat short menus keep the unchanged drag-select path, so the core tap/menu flow is untouched.
@@ -335,6 +387,7 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 // DRAG-1: a one-finger drag that BEGAN over the inventory grid rearranges items (synthesized engine mouse-drag)
 // instead of rotating the camera. Only set when the drag starts inside the published inventory rect.
 @property (nonatomic, assign) BOOL itemDragging;
+@property (nonatomic, assign) BOOL paneSwiping; // a quick swipe from the inventory or a reorder pane: ignored
 // Tracks the engine "dialogue open" state so the native chat veneer hides while a dialogue shows (logged once per transition).
 @property (nonatomic, assign) BOOL chatDialogueActive;
 // Canvas-px bounds of the open dialogue (from the snapshot); a tap inside it routes through the precise click so
@@ -345,7 +398,8 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 // Interactable-tap feedback: a light haptic when a tap grabs a real interactable (polled via JavaBridge
 // interactTapSeq), and a yellow fading click-ring drawn at every tap point (the Jagex-Mobile click marker).
 @property (nonatomic, assign) int lastInteractTapSeq;
-@property (nonatomic, strong) UIImpactFeedbackGenerator *tapHaptic;
+@property (nonatomic, strong) UIImpactFeedbackGenerator *tapHaptic; // shared by every trigger; see -hapticGenerator
+@property (nonatomic, assign) NSInteger tapHapticStrength;          // the strength tapHaptic was built for
 // The ring is drawn when the finger LANDS (onSceneTouchDown:) in the walk colour; the tap's resolved colour
 // only arrives a beat after the click, so this state is what lets that late answer reach a ring already on
 // screen: RED if it resolved to an interactable (the engine bumped interactTapSeq), left as drawn for a plain
@@ -422,6 +476,7 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 // engine pushes its message area down past the taller row (setEngineChatTabRowHeight). State + click targets
 // come from JVMLauncher.chatSnapshot each tick; re-applied so the engine's TOPLEVEL_REDRAW can't undo it.
 @property (nonatomic, strong) NSMutableArray<UIButton *> *chatTabButtons;
+@property (nonatomic, strong) UILongPressGestureRecognizer *sceneLongPress; // the game view's hold -> menu
 @property (nonatomic, strong) UIImage *chatBtnImg;      // 3051 — idle tab background
 @property (nonatomic, strong) UIImage *chatBtnSelImg;   // 3053 — selected (active) tab
 @property (nonatomic, strong) UIImage *chatBtnNewImg;   // 3055 — tab with unread messages
@@ -481,6 +536,7 @@ static const NSTimeInterval kSceneTapMaxHold = 0.45;
 @property (nonatomic, assign) CGPoint dialogueContinuePoint; // engine CONTINUE widget centre (canvas px), or (-1,-1)
 @property (nonatomic, assign) BOOL dialogueIsOptions;        // the open dialogue is a "Select an Option" menu
 @property (nonatomic, assign) BOOL dialogueIsPrompt;         // ... and it is a message-layer prompt (GE search)
+@property (nonatomic, assign) CGRect dialoguePromptList;     // its results window, canvas px, while it scrolls
 @property (nonatomic, assign) BOOL dialogueTargetsKnown;     // the bridge models this dialogue's clickables
 @property (nonatomic, assign) long long dialogueTargetsSeq;  // the dialogue publish those clickables came from
 @property (nonatomic, assign) long long dialogueViewSeq;     // the publish the PARCHMENT's rows were built from
@@ -818,7 +874,7 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         case 0:
             return 1; // Edit controls
         case 1:
-            return 1; // Show tab rails
+            return 2; // Game settings + Show tab rails
         case 2:
             return 2 + (NSInteger)[self pluginExtraRows].count; // Plugin panels + Show plugin rail (+ profiles/infoboxes)
         case 3:
@@ -872,6 +928,10 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
         cell.textLabel.text = @"Edit on-screen controls";
         cell.detailTextLabel.text = @"Add or remove keys and buttons";
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    } else if (ip.section == 1 && ip.row == 0) {
+        cell.textLabel.text = @"Game settings";
+        cell.detailTextLabel.text = @"Touch, camera, idle logout, frame rate, haptics";
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     } else if (ip.section == 1) {
         cell.textLabel.text = @"Show tab rails";
         cell.detailTextLabel.text = @"The row of game interface tabs";
@@ -923,6 +983,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     };
     if (ip.section == 0)
         then(self.onEditControls);
+    else if (ip.section == 1 && ip.row == 0)
+        [self.navigationController pushViewController:[[RMGameSettingsViewController alloc] init] animated:YES];
     else if (ip.section == 2 && ip.row == 0)
         then(self.onOpenPlugins);
     else if (ip.section == 2 && ip.row >= 2) {
@@ -994,6 +1056,11 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(onHopScrimArmed:)
                                                  name:@"RMWorldHopArmed"
+                                               object:nil];
+    // Settings > Game settings: the long-press time applies to the recognizers live.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(applyLongPressTime)
+                                                 name:RMGameSettingsDidChangeNotification
                                                object:nil];
     [self appendLine:@"RuneMobile — W1 minimal JVM shell"];
     [self appendLine:[NSString stringWithFormat:@"jre: %@",
@@ -1398,7 +1465,8 @@ static NSString *const kLayoutNoticeBody =
     // a tap with a little roll in it did nothing at all.
     UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc]
         initWithTarget:self action:@selector(onLongPress:)];
-    longPress.minimumPressDuration = 0.4;
+    longPress.minimumPressDuration = [RMGameSettings longPressMs] / 1000.0; // Settings > Game settings
+    self.sceneLongPress = longPress;
     // Same slop as the tap and the camera, so the three partition every one-finger touch with ONE number: a
     // hold that rolled 15pt is still a hold (UIKit's default 10pt failed it, and then nothing opened the menu
     // and nothing clicked either — the touch fell between all three gestures).
@@ -1676,7 +1744,31 @@ static NSString *const kLayoutNoticeBody =
         initWithTitle:@"Send ⏎" style:UIBarButtonItemStylePlain target:self action:@selector(onKbSend)];
     UIBarButtonItem *hide = [[UIBarButtonItem alloc]
         initWithTitle:@"Hide ⌨︎" style:UIBarButtonItemStyleDone target:self action:@selector(onKbHide)];
-    bar.items = @[flex, send, hide];
+    // Paste: types the clipboard's first line into the open field. A UIPasteControl, so no paste prompt.
+    self.pasteTarget = [RMPasteTarget new];
+    __weak typeof(self) wsPaste = self;
+    self.pasteTarget.onText = ^(NSString *text) {
+        NSString *line = RMPasteLine(text);
+        if (line.length == 0)
+            return;
+        [JVMLauncher postText:line];
+        // Length only - never the pasted content.
+        [wsPaste appendLine:[NSString stringWithFormat:@"[shell] paste len=%lu", (unsigned long)line.length]];
+    };
+    UIPasteControlConfiguration *pasteCfg = [UIPasteControlConfiguration new];
+    pasteCfg.displayMode = UIPasteControlDisplayModeIconAndLabel;
+    pasteCfg.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+    pasteCfg.baseForegroundColor = [UIColor whiteColor];
+    pasteCfg.baseBackgroundColor = [UIColor colorWithWhite:0.28 alpha:1.0];
+    UIPasteControl *paste = [[UIPasteControl alloc] initWithConfiguration:pasteCfg];
+    paste.target = self.pasteTarget;
+    paste.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [paste.widthAnchor constraintEqualToConstant:104],
+        [paste.heightAnchor constraintEqualToConstant:34],
+    ]];
+    UIBarButtonItem *pasteItem = [[UIBarButtonItem alloc] initWithCustomView:paste];
+    bar.items = @[ pasteItem, flex, send, hide ];
     [bar sizeToFit];
     self.kbField.inputAccessoryView = bar;
     [self.view addSubview:self.kbField];
@@ -4140,7 +4232,7 @@ static UIImage *imageFromSpriteDict(id obj) {
         if (kChatTabFilterable[i]) {
             UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc]
                 initWithTarget:self action:@selector(onChatTabLongPress:)];
-            lp.minimumPressDuration = 0.4;
+            lp.minimumPressDuration = [RMGameSettings longPressMs] / 1000.0; // Settings > Game settings
             [b addGestureRecognizer:lp];
         }
         [self.screen addSubview:b];
@@ -4592,6 +4684,7 @@ static int chatRowCanvasH(void) {
     self.dialogueContinuePoint = CGPointMake(-1, -1);
     self.dialogueIsOptions = NO;
     self.dialogueIsPrompt = NO;
+    self.dialoguePromptList = CGRectZero;
     self.dialogueTargetsKnown = NO;
     self.dialogueOptionRects = nil;
     self.dialogueOptionDigits = nil;
@@ -4649,6 +4742,11 @@ static int chatRowCanvasH(void) {
         return;
     self.dialogueIsOptions = YES;
     self.dialogueIsPrompt = [d[@"prompt"] boolValue];
+    NSDictionary *list = [d[@"list"] isKindOfClass:[NSDictionary class]] ? d[@"list"] : nil;
+    if (list) {
+        self.dialoguePromptList = CGRectMake([list[@"x"] intValue], [list[@"y"] intValue], [list[@"w"] intValue],
+                                             [list[@"h"] intValue]);
+    }
     NSArray *opts = [d[@"options"] isKindOfClass:[NSArray class]] ? d[@"options"] : @[];
     NSMutableArray *rects = [NSMutableArray arrayWithCapacity:opts.count];
     NSMutableArray *digits = [NSMutableArray arrayWithCapacity:opts.count];
@@ -4861,6 +4959,7 @@ static int chatRowCanvasH(void) {
             int cx = 0, cy = 0;
             if (![self engineChatButtonCenterForTag:b.tag x:&cx y:&cy]) return;
             [self openEngineMenuAtGameX:cx gameY:cy anchor:loc];
+            [self haptic:RMHapticMenuOpen];
             [self appendLine:[NSString stringWithFormat:@"[chat] tab %ld (%@) long-press -> filter menu @%d,%d",
                               (long)b.tag, kChatTabNames[b.tag], cx, cy]];
             break;
@@ -5008,6 +5107,24 @@ static int chatRowCanvasH(void) {
         return;
     self.inWorldStamped = YES;
     [self stampColdStart:@"inWorld" line:@"[shell] onboard: first logged-in tick"];
+}
+
+// Disable the idle timer while in game so the phone does not auto-lock mid-session. A loading/teleport blip reports
+// loggedIn=false for a moment, so the timer is only re-enabled after kKeepAwakeGrace seconds out of game.
+static const CFTimeInterval kKeepAwakeGrace = 10.0;
+- (void)updateKeepAwake {
+    NSDictionary *d = parseBridgeJSON([JVMLauncher chromeSnapshot], "ViewController.updateKeepAwake");
+    BOOL loggedIn = [d isKindOfClass:[NSDictionary class]] && [d[@"loggedIn"] boolValue];
+    CFTimeInterval now = CACurrentMediaTime();
+    if (self.awakeInGame && !loggedIn)
+        self.awakeLeftGameAt = now;
+    self.awakeInGame = loggedIn;
+    BOOL want = loggedIn || (self.awakeLeftGameAt > 0 && now - self.awakeLeftGameAt < kKeepAwakeGrace);
+    UIApplication *app = [UIApplication sharedApplication];
+    if (app.idleTimerDisabled != want) {
+        app.idleTimerDisabled = want;
+        [self appendLine:[NSString stringWithFormat:@"[shell] keep-awake -> %@", want ? @"YES" : @"NO"]];
+    }
 }
 
 // Clear the boot overlay the moment real content is ready: the first painted frame (renderedFrameWidth > 0),
@@ -6622,6 +6739,11 @@ static CGRect mapRectFromArr(NSArray *a) {
         [self stampFirstInWorld];           // Phase 4 cold start: once, then a no-op
     }
 
+    // Keep the screen awake in game (~2 Hz is plenty; the idle timer runs in tens of seconds).
+    if (self.framesShown % 30 == 0) {
+        [self updateKeepAwake];
+    }
+
     // W3 Feature-A (A2.5): refresh the crude native chat-at-top + HUD-status overlay from the HudDataBridge
     // snapshot (~10 Hz). Verifies the device data-flow before the full native chat veneer.
     if (self.framesShown % 6 == 0) {
@@ -6669,7 +6791,18 @@ static CGRect mapRectFromArr(NSArray *a) {
     // it never fights a keyboard the user opened manually for chat. Polled ~10 Hz to keep it cheap. Gated off
     // while a plugin-panel text field owns the keyboard, so a game textInputOpen flip can't steal it (PANEL-1).
     if (self.framesShown % 6 == 0 && ![self.panelDock panelKeyboardActive]) {
-        BOOL wants = [JVMLauncher textInputOpen];
+        int kind = [JVMLauncher textInputKind];
+        BOOL wants = kind != 0;
+        // Amount prompts get the number pad; everything else (and the manual chat keyboard) the text keyboard.
+        // Set before the raise below so a new prompt opens on the right keyboard; a closing prompt drops the
+        // keyboard below, so only swap a live one while a field is still open.
+        UIKeyboardType type = kind == 2 ? UIKeyboardTypeNumberPad : UIKeyboardTypeASCIICapable;
+        if (self.kbField.keyboardType != type) {
+            self.kbField.keyboardType = type;
+            if (wants && [self.kbField isFirstResponder])
+                [self.kbField reloadInputViews];
+            [self appendLine:[NSString stringWithFormat:@"[shell] keyboard -> %@", kind == 2 ? @"number pad" : @"text"]];
+        }
         if (wants != self.prevInputOpen) {
             self.prevInputOpen = wants;
             if (wants && ![self.kbField isFirstResponder]) {
@@ -6726,9 +6859,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     int its = [JVMLauncher interactTapSeq];
     if (its != self.lastInteractTapSeq) {
         self.lastInteractTapSeq = its;
-        if (!self.tapHaptic) { self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight]; }
-        [self.tapHaptic impactOccurred]; // haptic fires on EVERY real interaction, widget or scene (unchanged)
-        [self.tapHaptic prepare];
+        [self haptic:RMHapticOp]; // fires on EVERY real interaction, widget or scene
         if (self.pendingClick) {
             // Read the resolved tap KIND now: interactTapSeq bumps LAST (after the kind is published), so seeing
             // the new seq guarantees lastTapKind is the matching kind. A WIDGET tap (inventory item, prayer/spell
@@ -7228,7 +7359,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 // point the engine has been resolving since contact (armTap), and committing to it is what makes the click
 // land on the lift instead of a few frames after it.
 - (void)onSceneTouchUp:(CGPoint)origin strayed:(CGFloat)strayed held:(NSTimeInterval)held {
-    if (strayed <= kSceneDragSlop && held <= kSceneTapMaxHold) {
+    if (strayed <= kSceneDragSlop && held <= [RMGameSettings longPressMs] / 1000.0 + kSceneTapHoldMargin) {
         [self worldTapAtScreenPoint:origin];
     }
     // Whatever that did, this touch is finished with its arm — and only the plain world click consumes one.
@@ -7288,11 +7419,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         NSString *orbKey = nil;
         if ([self nearestOrbAtGameX:gx gameY:gy outX:&ocx outY:&ocy outKey:&orbKey]) {
             [JVMLauncher postClickPreciseX:ocx y:ocy button:1];
-            if (!self.tapHaptic) {
-                self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-            }
-            [self.tapHaptic prepare];
-            [self.tapHaptic impactOccurred];
+            [self haptic:RMHapticOp];
             [self appendLine:[NSString stringWithFormat:@"[shell] orb-veneer tap %d,%d -> %@ @(%d,%d)", gx, gy, orbKey, ocx, ocy]];
             return;
         }
@@ -7406,8 +7533,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     // A second tap inside that window takes the slot; the ring it replaces finishes its fade in the walk
     // colour, which is what it already shows.
     self.pendingRing = [self flashClickRingAt:vp color:RMWalkRingColor()];
-    if (!self.tapHaptic) { self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight]; }
-    [self.tapHaptic prepare];
+    [[self hapticGenerator] prepare];
     [JVMLauncher postClickX:gx y:gy button:1];
     [self appendLine:[NSString stringWithFormat:@"[shell] tap -> click(L) game %d,%d", gx, gy]];
 }
@@ -7427,10 +7553,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         return; // letterbox
     if (![self isPlainWorldTapAtGameX:gx gameY:gy screenPoint:p])
         return;
-    if (!self.tapHaptic) {
-        self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    }
-    [self.tapHaptic prepare];
+    [[self hapticGenerator] prepare];
     [JVMLauncher postArmTapX:gx y:gy];
 }
 
@@ -7556,6 +7679,39 @@ static CGRect mapRectFromArr(NSArray *a) {
     return ring;
 }
 
+// The long-press time from Settings > Game settings, on the game view's hold and the chat tabs' holds.
+- (void)applyLongPressTime {
+    CFTimeInterval t = [RMGameSettings longPressMs] / 1000.0;
+    self.sceneLongPress.minimumPressDuration = t;
+    for (UIButton *b in self.chatTabButtons) {
+        for (UIGestureRecognizer *g in b.gestureRecognizers) {
+            if ([g isKindOfClass:[UILongPressGestureRecognizer class]])
+                ((UILongPressGestureRecognizer *)g).minimumPressDuration = t;
+        }
+    }
+}
+
+// The one impact generator every haptic trigger shares, rebuilt when the strength setting changes.
+- (UIImpactFeedbackGenerator *)hapticGenerator {
+    NSInteger s = [RMGameSettings hapticStrength];
+    if (!self.tapHaptic || self.tapHapticStrength != s) {
+        static const UIImpactFeedbackStyle styles[3] = {UIImpactFeedbackStyleLight, UIImpactFeedbackStyleMedium,
+                                                        UIImpactFeedbackStyleHeavy};
+        self.tapHaptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:styles[s]];
+        self.tapHapticStrength = s;
+    }
+    return self.tapHaptic;
+}
+
+// One buzz for a trigger, if the player has it on (Settings > Game settings), at the chosen strength.
+- (void)haptic:(RMHaptic)h {
+    if (![RMGameSettings hapticOn:h])
+        return;
+    UIImpactFeedbackGenerator *g = [self hapticGenerator];
+    [g impactOccurred];
+    [g prepare];
+}
+
 // long-press -> hold-drag-release native menu (the OSRS-mobile feel). One continuous gesture:
 //   .began   -> right-click at the press point to open the engine menu; record the press point + which hand
 //               (left/right half of the screen) so the native overlay opens to the side away from the hand.
@@ -7586,8 +7742,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     CGPoint locInView = [self.screen convertPoint:loc toView:self.view];    // differs only over the stretched map
     self.menuHandRight = (locInView.x > self.view.bounds.size.width * 0.5); // pressed on the right -> open leftward
     self.menuHapticY = loc.y;
-    self.menuHaptic = [UISelectionFeedbackGenerator new];
-    [self.menuHaptic prepare];
+    [[self hapticGenerator] prepare];
 }
 
 #pragma mark - #8 Native big-row menu (over the engine menu; commits via the engine row)
@@ -7874,7 +8029,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (void)onTapMenuRow:(UIButton *)b {
     NSInteger k = b.tag;
     if (self.menuDrillParent >= 0) {
-        [self.menuHaptic selectionChanged];
+        [self haptic:RMHapticOp];
         [JVMLauncher invokeMenuEntryParent:self.menuDrillParent child:(int)k];
         [self appendLine:[NSString stringWithFormat:@"[shell] menu submenu select parent=%d child=%ld",
                           self.menuDrillParent, (long)k]];
@@ -7885,7 +8040,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         ? self.menuRowEntries[k] : nil;
     NSArray *sub = [e[@"sub"] isKindOfClass:[NSArray class]] ? e[@"sub"] : nil;
     if (sub.count > 0) {
-        [self.menuHaptic selectionChanged]; [self.menuHaptic prepare];
+        [self haptic:RMHapticMenuOpen];                            // a submenu opening
         [self buildTapMenuWithEntries:sub drilledParent:(int)k];   // drill in
         return;
     }
@@ -7894,7 +8049,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     // fixed per-row geometry is unreliable (off-screen rows clamp to the wrong place), so commit the entry
     // directly by index instead (childIndex<0 = the top-level entry itself).
     if (self.menuScrollable) {
-        [self.menuHaptic selectionChanged];
+        [self haptic:RMHapticOp];
         [JVMLauncher invokeMenuEntryParent:(int)k child:-1];
         [self appendLine:[NSString stringWithFormat:@"[shell] menu tap select row=%ld (invoke, scrollable)", (long)k]];
         [self closeTapMenuAfterInvoke];
@@ -7904,7 +8059,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     int ex = (int)lround(CGRectGetMidX(r));
     int ey = (int)CGRectGetMinY(r) + kMenuHeaderPx + (int)k * kMenuRowPx + kMenuRowPx / 2;
     ey = (int)fmin(fmax((CGFloat)ey, CGRectGetMinY(r) + 1), CGRectGetMaxY(r) - 2);
-    [self.menuHaptic selectionChanged];
+    [self haptic:RMHapticOp];
     [JVMLauncher postMenuSelectX:ex y:ey];
     [self appendLine:[NSString stringWithFormat:@"[shell] menu tap select row=%ld @game %d,%d", (long)k, ex, ey]];
     self.menuOpen = NO;
@@ -7980,7 +8135,8 @@ static CGRect mapRectFromArr(NSArray *a) {
                 ? [UIColor colorWithRed:1.0 green:1.0 blue:1.0 alpha:0.22]   // hovered row highlight
                 : [UIColor clearColor];
         }
-        if (hit >= 0) { [self.menuHaptic selectionChanged]; [self.menuHaptic prepare]; }
+        if (hit >= 0)
+            [self haptic:RMHapticMenuHover];
         self.menuHighlight = (int)hit;
     }
 
@@ -8010,6 +8166,7 @@ static CGRect mapRectFromArr(NSArray *a) {
             if (![self mapPoint:loc toGameX:&gx toGameY:&gy]) return; // letterbox
             [JVMLauncher postCancelArmedTap];                         // a hold opens the menu, it never walks
             [self openEngineMenuAtGameX:gx gameY:gy anchor:loc];
+            [self haptic:RMHapticMenuOpen];
             [self appendLine:[NSString stringWithFormat:@"[shell] long-press -> engine menu @game %d,%d", gx, gy]];
             break;
         }
@@ -8092,8 +8249,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     if (self.menuGeomValid) [JVMLauncher postMoveX:sx y:sy];   // engine highlights the row under its (clamped) pointer
     if (fabs(p.y - self.menuHapticY) >= 14.0) {
         self.menuHapticY = p.y;
-        [self.menuHaptic selectionChanged];
-        [self.menuHaptic prepare];
+        [self haptic:RMHapticMenuHover];
     }
 }
 
@@ -8201,6 +8357,11 @@ static CGRect mapRectFromArr(NSArray *a) {
         CGPoint landing = [g isKindOfClass:[RMCameraPanRecognizer class]]
                               ? ((RMCameraPanRecognizer *)g).landing
                               : [g locationInView:self.screen];
+        // How long the finger rested before it moved off: an item lifts only after the drag hold.
+        NSTimeInterval held = [g isKindOfClass:[RMCameraPanRecognizer class]]
+                                  ? CACurrentMediaTime() - ((RMCameraPanRecognizer *)g).landedAt
+                                  : 0;
+        self.paneSwiping = NO;
         [g setTranslation:CGPointZero inView:self.screen];
         // World map open: a 1-finger drag that BEGINS inside the Key list or the open surface dropdown
         // SCROLLS that list (wheel events parked over it); inside the map window it pans the MAP (bridge ->
@@ -8232,6 +8393,15 @@ static CGRect mapRectFromArr(NSArray *a) {
         }
         self.mapPanning = NO;
         self.mapListScrolling = NO;
+        // A drag that starts on the item search's results scrolls that list; the bridge sends the chat scroll to
+        // it while it is open. The list's window is only published while it holds more than fits.
+        int lx = 0, ly = 0;
+        if (self.chatDialogueActive && self.dialogueIsPrompt && self.dialoguePromptList.size.width > 0 && [self mapPoint:landing toGameX:&lx toGameY:&ly] && CGRectContainsPoint(self.dialoguePromptList, CGPointMake(lx, ly))) {
+            self.chatScrolling = YES;
+            self.chatScrollAccum = 0;
+            [self appendLine:@"[shell] search results scroll begin"];
+            return;
+        }
         // A drag that STARTS inside the open chat box scrolls the chat (finger-scroll) instead of rotating the
         // camera. Only when the chat is open (chatScrollable); otherwise it's a normal camera drag.
         int gx = 0, gy = 0;
@@ -8248,9 +8418,13 @@ static CGRect mapRectFromArr(NSArray *a) {
         // rearranges items (engine WidgetDrag) rather than rotating the camera. The press must land on the SOURCE
         // slot, so map the true touch start (loc - slop), not the already-moved current point. Only diverts
         // inventory-/reorder-origin drags — scene drags still rotate. Mirrors Android's combined-branch classification.
+        // The drag only picks the item up once the finger has rested on it for the drag hold (Settings > Game
+        // settings); a quicker swipe from the pane scrolls it if it scrolls and otherwise does nothing, so a
+        // flick across the inventory can't move an item or swing the camera.
         CGRect inv = [JVMLauncher inventoryCanvasBounds];
         NSArray<NSValue *> *reorderPanes = [JVMLauncher reorderPaneCanvasBounds];
         BOOL haveInv = !CGRectIsNull(inv) && CGRectGetWidth(inv) > 0 && CGRectGetHeight(inv) > 0;
+        BOOL quickPaneSwipe = NO;
         if (haveInv || reorderPanes.count > 0) {
             int sx = 0, sy = 0;
             if ([self mapPoint:landing toGameX:&sx toGameY:&sy]) {
@@ -8261,11 +8435,14 @@ static CGRect mapRectFromArr(NSArray *a) {
                     if (CGRectContainsPoint(v.CGRectValue, CGPointMake(sx, sy)))
                         hit = YES;
                 }
-                if (hit) {
+                if (hit && held < [RMGameSettings dragHoldMs] / 1000.0) {
+                    quickPaneSwipe = YES;
+                } else if (hit) {
                     self.itemDragging = YES;
                     self.itemDragLastX = sx;
                     self.itemDragLastY = sy;                          // seed the release-fallback point
                     [JVMLauncher postTouchType:0 x:sx y:sy button:1]; // MOUSE_PRESSED on the source slot
+                    [self haptic:RMHapticDrag];                       // once per drag, as it lifts off the slot
                     [self appendLine:[NSString stringWithFormat:@"[shell] item drag begin @canvas %d,%d", sx, sy]];
                     return;
                 }
@@ -8285,6 +8462,11 @@ static CGRect mapRectFromArr(NSArray *a) {
             return;
         }
         self.ifaceScrolling = NO;
+        if (quickPaneSwipe) {
+            self.paneSwiping = YES; // swallowed until the lift
+            [self appendLine:@"[shell] quick pane swipe ignored (nothing to scroll)"];
+            return;
+        }
         // A camera drag moves the world, not the pointer — so clear any frozen hover first, otherwise
         // scenery rotating under the stale cursor lights up and the next walk-tap mis-clicks it.
         [JVMLauncher postClearHover];
@@ -8293,6 +8475,10 @@ static CGRect mapRectFromArr(NSArray *a) {
         return;
     }
     if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
+        if (self.paneSwiping) {
+            self.paneSwiping = NO;
+            return;
+        }
         if (self.itemDragging) {
             // ALWAYS release so the engine's WidgetDrag state machine closes — even if the finger lifted in the
             // letterbox (mapPoint fails); fall back to the last valid drag point. A stranded press would otherwise
@@ -8323,6 +8509,10 @@ static CGRect mapRectFromArr(NSArray *a) {
         return;
     }
     if (g.state != UIGestureRecognizerStateChanged) return;
+    if (self.paneSwiping) {
+        [g setTranslation:CGPointZero inView:self.screen];
+        return;
+    }
     // DRAG-1: stream the drag to the engine as MOUSE_DRAGGED at the finger's canvas point (one per frame is fine).
     // A frame whose point maps off-canvas is just skipped — the drag stays live and the cached last-valid point
     // (updated here) guarantees a clean release.
@@ -8388,6 +8578,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     // PITCH_UNITS_PER_PX) and Android's canvas-scaled deltas — same conversion mapPanning / scrollChatByDragDeltaY use.
     CGFloat W = self.view.bounds.size.width;
     CGFloat k = (self.renderW > 0 && W > 0) ? (CGFloat)self.renderW / W : 1.0;
+    k *= [RMGameSettings cameraGain]; // Settings > Game settings: camera sensitivity
     self.cameraDragAccX += -d.x * k;
     self.cameraDragAccY += -d.y * k;
     int cdx = (int)(self.cameraDragAccX < 0 ? ceil(self.cameraDragAccX) : floor(self.cameraDragAccX));
@@ -8587,7 +8778,7 @@ static CGRect mapRectFromArr(NSArray *a) {
 - (void)onHotkeyTap:(UIButton *)b {
     NSArray<NSString *> *parts = [b.accessibilityIdentifier componentsSeparatedByString:@"|"];
     if (parts.count != 2) return;
-    [[UIImpactFeedbackGenerator new] impactOccurred];
+    [self haptic:RMHapticOp];
     // Quick-hop prev/next is a ~8s relog under the hood, not a keypress: route it through the
     // world-hop bridge (same path the World Switcher's prev/next buttons use) instead of firing
     // the raw keybind, which does nothing when the hopper plugin isn't focused. Mirrors Android.
