@@ -99,6 +99,10 @@ Walk this on the iPhone 17 Pro Max and the Pixel 7a:
 - A quick drag in the inventory used to move the item at once. It now needs the short hold, which is the point,
   but players used to flicking items will notice.
 - Picking a cap or idle time turns a stock plugin on. That's visible in the plugin list and is intended.
+- **Merged with `fix/map-long-press`** (hold on the world map to open its menu). That branch put its Android map
+  check in the gesture detector's long-press callback, which this branch removes, so on the merge the check moved
+  into `onHoldElapsed`: a hold inside the map window opens the menu, a hold outside it opens nothing. The map hold
+  on Android has not been run on a Pixel through the self-timed hold.
 
 ## Next step
 

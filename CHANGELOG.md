@@ -20,6 +20,23 @@ as "What's new".
   and choose Set Target, Set Start or Clear Path; hold a row of the map key for Find closest. Before, Android
   ignored a hold on the map, and on iOS the menu opened away from the finger. Dragging, pinching and searching the
   map work as before.
+- **Game settings.** One screen in Settings for long-press time, camera sensitivity, idle logout, frame-rate cap and
+  haptics. Idle logout and the frame-rate cap use RuneLite's Logout Timer and FPS Control plugins and turn them on
+  when set. A cap above about 50 fps only takes effect with Unlock FPS on in the GPU or 117 HD settings.
+- **A number pad for amounts.** Withdraw-X, Grand Exchange prices and quantities, and every other "Enter amount"
+  open the phone's number pad, with a Paste button for a copied number.
+- **Haptics for opening the menu and picking up an item,** next to the existing ones for menu rows and actions.
+  Each of the four can be switched off on its own, and a strength setting makes them lighter or stronger.
+- **Swipe to scroll the Grand Exchange item search.** A drag on the results scrolls them, and every result in view
+  can be picked. Before, only the first 24 had a tap target, wherever they had scrolled to.
+- **The screen stays awake in game.** The phone no longer dims and locks while you are logged in; on the login
+  screen it locks as normal.
+
+### Changed
+- **Items need a short hold before they drag.** Rest a finger on an item for a moment, then drag. A quick flick
+  across the inventory no longer moves an item or turns the camera, and in the bank, prayer book or spellbook a
+  quick swipe scrolls the list when it has more than fits. The hold is two-thirds of the long-press time, at most
+  150 ms.
 
 ## [0.3.1] - 2026-10-23
 
