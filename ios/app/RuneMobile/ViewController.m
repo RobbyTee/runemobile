@@ -7583,7 +7583,8 @@ static CGRect mapRectFromArr(NSArray *a) {
     self.menuTapMode = NO;                            // re-decided (drag vs tap) when the snapshot builds the rows
     self.menuDrillParent = -1;
     self.customizeReopenPending = NO;                 // any fresh menu cancels a pending ⚙ Customize reopen
-    self.menuHandRight = (loc.x > self.screen.bounds.size.width * 0.5); // pressed on the right -> open leftward
+    CGPoint locInView = [self.screen convertPoint:loc toView:self.view];    // differs only over the stretched map
+    self.menuHandRight = (locInView.x > self.view.bounds.size.width * 0.5); // pressed on the right -> open leftward
     self.menuHapticY = loc.y;
     self.menuHaptic = [UISelectionFeedbackGenerator new];
     [self.menuHaptic prepare];
@@ -7639,6 +7640,19 @@ static CGRect mapRectFromArr(NSArray *a) {
     }
 }
 
+// The live engine menu rect in self.view coords, where the native box is placed. viewRectForGameX answers in the
+// game view's own untransformed space, which differs from self.view only while the open world map stretches the
+// game view (applyMapZoom); unconverted, a menu held open on the map would open away from the finger.
+- (CGRect)engineMenuRectInView {
+    CGRect er = [self viewRectForGameX:(int)CGRectGetMinX(self.menuGeomGame)
+                                     y:(int)CGRectGetMinY(self.menuGeomGame)
+                                     w:(int)CGRectGetWidth(self.menuGeomGame)
+                                     h:(int)CGRectGetHeight(self.menuGeomGame)];
+    if (CGRectIsEmpty(er))
+        return er;
+    return [self.screen convertRect:er toView:self.view];
+}
+
 // Build the opaque OSRS-styled native menu: a "Choose Option" header + one 32pt row per entry (display order,
 // index 0 = top = left-click default). The box is sized + positioned to fully COVER the engine's own tiny
 // rendered menu so there's no double-menu. Selection is driven by the long-press drag (rows are inert).
@@ -7648,10 +7662,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     NSInteger count = entries.count;
 
     // The engine menu rect in view coords — what we must cover.
-    CGRect er = [self viewRectForGameX:(int)CGRectGetMinX(self.menuGeomGame)
-                                     y:(int)CGRectGetMinY(self.menuGeomGame)
-                                     w:(int)CGRectGetWidth(self.menuGeomGame)
-                                     h:(int)CGRectGetHeight(self.menuGeomGame)];
+    CGRect er = [self engineMenuRectInView];
 
     CGFloat boxW = MAX(kMenuWidth, CGRectGetWidth(er) + 16.0);
     CGFloat boxH = kMenuHeaderViewH + count * kMenuRowViewH;
@@ -7743,10 +7754,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     self.menuDismissLayer = dismiss;
 
     // The engine menu rect in view coords (what the drag box covered); used to anchor the tap box near the press.
-    CGRect er = [self viewRectForGameX:(int)CGRectGetMinX(self.menuGeomGame)
-                                     y:(int)CGRectGetMinY(self.menuGeomGame)
-                                     w:(int)CGRectGetWidth(self.menuGeomGame)
-                                     h:(int)CGRectGetHeight(self.menuGeomGame)];
+    CGRect er = [self engineMenuRectInView];
 
     NSInteger nRows = entries.count + (drilled ? 1 : 0);   // +1 for the back row
     CGFloat boxW = MAX(kMenuWidth, CGRectGetWidth(er) + 16.0);

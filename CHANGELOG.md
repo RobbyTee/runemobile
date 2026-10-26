@@ -14,6 +14,13 @@ as "What's new".
 
 ## [Unreleased]
 
+### Added
+- **Hold on the world map to open its menu.** A long press inside the open world map opens the same right-click
+  menu the desktop map has, so plugins that add map options now work on the phone. With Shortest Path, hold a spot
+  and choose Set Target, Set Start or Clear Path; hold a row of the map key for Find closest. Before, Android
+  ignored a hold on the map, and on iOS the menu opened away from the finger. Dragging, pinching and searching the
+  map work as before.
+
 ## [0.3.1] - 2026-10-23
 
 ### Fixed
