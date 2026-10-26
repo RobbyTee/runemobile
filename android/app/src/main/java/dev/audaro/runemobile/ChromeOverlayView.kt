@@ -7,11 +7,9 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
-import android.os.Build
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
-import android.view.WindowInsets
 
 /**
  * A6 native Jagex-Mobile chrome — the OSRS-mobile tab dock. A full-screen overlay over the live SurfaceView that
@@ -159,16 +157,7 @@ class ChromeOverlayView(
 
     /** [top, right, bottom] safe-area insets (display cutout + system bars), so the grid clears a landscape
      *  notch / nav bar. Defaults to 0 (the full-bleed emulator case). */
-    private fun safeInsets(): IntArray {
-        val wi = rootWindowInsets ?: return intArrayOf(0, 0, 0)
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val i = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-            intArrayOf(i.top, i.right, i.bottom)
-        } else {
-            @Suppress("DEPRECATION")
-            intArrayOf(wi.stableInsetTop, wi.stableInsetRight, wi.stableInsetBottom)
-        }
-    }
+    private fun safeInsets(): IntArray = safeInsetsIn(this).let { intArrayOf(it[1], it[2], it[3]) }
 
     /** Recompute + cache the grid geometry from the current view size + insets (matches iOS updateChrome). */
     private fun computeLayout(): Layout {

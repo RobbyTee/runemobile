@@ -36,10 +36,12 @@
         android:extractNativeLibs="true"
         android:theme="@style/Theme.AppCompat.NoActionBar">
 
+        <!-- configChanges: the activity rides out display changes instead of being recreated over the running VM.
+             screenLayout matters on foldables: switching panels flips the size class, which would recreate it. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|keyboardHidden|uiMode|locale|density|smallestScreenSize"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|locale|density|smallestScreenSize"
             android:screenOrientation="sensorLandscape">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -59,7 +61,7 @@
         <activity
             android:name=".LoginActivity"
             android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden|uiMode|locale|density|smallestScreenSize"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|locale|density|smallestScreenSize"
             android:screenOrientation="sensorLandscape" />
 
         <!-- PARITY-P0-1: background-session keepalive foreground service (started/stopped by MainActivity's

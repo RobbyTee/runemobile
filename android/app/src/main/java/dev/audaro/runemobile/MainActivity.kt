@@ -61,6 +61,7 @@ import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
+import kotlin.math.abs
 import kotlin.math.hypot
 
 /**
@@ -253,6 +254,9 @@ class MainActivity : AppCompatActivity() {
     // pref is off, so a non-dev build/session pays nothing (no views, no timer). rootContainer is the frame the
     // chip/panel attach to; the ticker samples fps (native present-count delta), heap (bridge), and thermal ~1 Hz.
     private var rootContainer: FrameLayout? = null
+
+    // FOLD-2: the frame holding the SurfaceView and every view that maps canvas px through its size; see fitGameStage.
+    private var gameStage: FrameLayout? = null
     private var perfChip: TextView? = null
     private var devPanel: LinearLayout? = null
     private var devDiag: TextView? = null
@@ -456,6 +460,13 @@ class MainActivity : AppCompatActivity() {
         // World-map pan speed: multiplier on the grab-the-map finger delta. 1.0 = strict 1:1 (feels slow once the
         // map is magnified to fullscreen); >1 covers more ground per swipe. Tune to taste.
         private const val MAP_PAN_SPEED = 2.5f
+
+        // FOLD-1: the game's fixed-mode width, the narrowest canvas its resizable layout is built for.
+        private const val MIN_CANVAS_W = 765
+
+        // FOLD-2: how far the window's shape may drift from the canvas's before the stage letterboxes instead of
+        // stretching. A phone's canvas matches its screen exactly; a book foldable changing panels drifts ~2x.
+        private const val STAGE_ASPECT_SLACK = 0.10f
 
         // The VM's maximum heap; an xms marker above it would stop the VM starting.
         private const val MAX_HEAP_MB = 512L
@@ -1192,7 +1203,9 @@ class MainActivity : AppCompatActivity() {
         // User-defined hotkey buttons: a HUD strip the user fills from the Hotkeys screen; GONE until populated.
         val hotkeyStripView = buildHotkeyStrip()
         hotkeyStrip = hotkeyStripView
-        val root =
+        // FOLD-2: everything that maps canvas px through the surface's size shares this stage, so a letterboxed stage
+        // (fitGameStage) moves them together and their view-local math holds. Window-anchored controls stay in root.
+        val stage =
             FrameLayout(this).apply {
                 val mp = FrameLayout.LayoutParams.MATCH_PARENT
                 addView(surfaceView, FrameLayout.LayoutParams(mp, mp))
@@ -1203,6 +1216,12 @@ class MainActivity : AppCompatActivity() {
                 addView(keyboardView, FrameLayout.LayoutParams(1, 1))
                 addView(menuOverlay, FrameLayout.LayoutParams(mp, mp)) // drawn on top of the live frame + chrome
                 addView(overlayEditView, FrameLayout.LayoutParams(mp, mp)) // on-screen overlay-layout editor (GONE unless editing)
+            }
+        val root =
+            FrameLayout(this).apply {
+                val mp = FrameLayout.LayoutParams.MATCH_PARENT
+                setBackgroundColor(Color.BLACK) // the letterbox bars (the SurfaceView punches through it in the stage)
+                addView(stage, FrameLayout.LayoutParams(mp, mp, Gravity.CENTER))
                 addView(
                     layoutSwitchButton,
                     FrameLayout
@@ -1298,6 +1317,12 @@ class MainActivity : AppCompatActivity() {
             }
         setContentView(root)
         rootContainer = root // P2-1: the frame the developer-mode chip/panel attach to when enabled
+        gameStage = stage
+        // FOLD-2: refit on every window size change (a fold/unfold, a split-screen resize). Posted: changing the
+        // stage's layout params inside this layout pass would be dropped until the next one.
+        root.addOnLayoutChangeListener { _, l, t, r, b, oldL, oldT, oldR, oldB ->
+            if (r - l != oldR - oldL || b - t != oldB - oldT) root.post { fitGameStage() }
+        }
         // UX-XCUT-01: keep the only release HUD controls (⌨/⇧ devBar, hotkey strip, ≡ Plugins handle) out of the
         // landscape display cutout + the bottom gesture inset. SHORT_EDGES draws the notch UNDER the frame, so
         // these fixed bottom-START / bottom-CENTER views would otherwise sit beneath it in landscape-right. A root
@@ -4051,16 +4076,9 @@ class MainActivity : AppCompatActivity() {
         val vw = surfaceView.width
         val vh = surfaceView.height
         if (fw <= 0 || fh <= 0 || vw <= 0 || vh <= 0) return
-        val wi = surfaceView.rootWindowInsets ?: return
-        val (l, t, r, b) =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                val i = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-                listOf(i.left, i.top, i.right, i.bottom)
-            } else {
-                @Suppress("DEPRECATION")
-                listOf(wi.stableInsetLeft, wi.stableInsetTop, wi.stableInsetRight, wi.stableInsetBottom)
-            }
-        val canvas = intArrayOf(l * fw / vw, t * fh / vh, r * fw / vw, b * fh / vh)
+        if (surfaceView.rootWindowInsets == null) return
+        val ins = safeInsetsLTR()
+        val canvas = intArrayOf(ins[0] * fw / vw, ins[1] * fh / vh, ins[2] * fw / vw, ins[3] * fh / vh)
         if (lastOverlayInsets?.contentEquals(canvas) == true) return
         lastOverlayInsets = canvas
         Log.i(TAG, "p3: overlay safe-insets -> canvas(${canvas[0]},${canvas[1]},${canvas[2]},${canvas[3]})")
@@ -4133,6 +4151,46 @@ class MainActivity : AppCompatActivity() {
             if (win != null && win[2] > 0 && win[3] > 0 && !win.contentEquals(lastMapWindowApplied)) {
                 applyMapFullscreen(win)
             }
+        }
+    }
+
+    /** FOLD-2: fit the game stage to the canvas's shape. The canvas is sized once at boot from the screen, so it
+     *  matches the window until the window changes shape under it (a foldable folded or unfolded mid-session, a
+     *  split-screen resize); stretched, a book foldable's frame would distort ~2x, so the stage letterboxes (centred,
+     *  black bars) instead. Within STAGE_ASPECT_SLACK it fills the window as before. Touch, chrome and overlay
+     *  mapping all read the surface's own size, so they follow the stage; safeInsetsIn trims the window's safe
+     *  insets by the bars, so a cutout the bars already clear stops shoving the HUD inward. UI-thread only. */
+    private fun fitGameStage() {
+        val root = rootContainer
+        val stage = gameStage
+        if (root == null || stage == null) return
+        val (w, h) = stageSize(root.width, root.height, canvasW, canvasH)
+        val lp = stage.layoutParams as FrameLayout.LayoutParams
+        if (lp.width != w || lp.height != h) {
+            lp.width = w
+            lp.height = h
+            stage.layoutParams = lp
+            val fit = if (w == FrameLayout.LayoutParams.MATCH_PARENT) "fills the window" else "letterboxed to ${w}x$h"
+            Log.i(TAG, "fold: game stage $fit (window ${root.width}x${root.height}, canvas ${canvasW}x$canvasH)")
+        }
+    }
+
+    /** FOLD-2: the stage's layout size in a [rw]x[rh] window for a [cw]x[ch] canvas: MATCH_PARENT both ways while
+     *  the shapes agree (or either size is unknown yet), else the largest centred box of the canvas's shape. */
+    private fun stageSize(
+        rw: Int,
+        rh: Int,
+        cw: Int,
+        ch: Int,
+    ): Pair<Int, Int> {
+        val mp = FrameLayout.LayoutParams.MATCH_PARENT
+        if (minOf(minOf(rw, rh), minOf(cw, ch)) <= 0) return mp to mp
+        val canvasAspect = cw.toFloat() / ch
+        val windowAspect = rw.toFloat() / rh
+        return when {
+            abs(canvasAspect / windowAspect - 1f) <= STAGE_ASPECT_SLACK -> mp to mp
+            canvasAspect > windowAspect -> rw to Math.round(rw / canvasAspect)
+            else -> Math.round(rh * canvasAspect) to rh
         }
     }
 
@@ -4300,16 +4358,7 @@ class MainActivity : AppCompatActivity() {
     /** [left, top, right, bottom] safe-area insets in VIEW px (display cutout + system bars), so the relocated HUD
      *  clears a landscape notch / nav bar. 0 on the full-bleed emulator. (Existing callers index 0..2 = L/T/R; the
      *  bottom element was added for UX-XCUT-01's HUD-control inset.) */
-    private fun safeInsetsLTR(): IntArray {
-        val wi = surfaceView.rootWindowInsets ?: return intArrayOf(0, 0, 0, 0)
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val i = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-            intArrayOf(i.left, i.top, i.right, i.bottom)
-        } else {
-            @Suppress("DEPRECATION")
-            intArrayOf(wi.stableInsetLeft, wi.stableInsetTop, wi.stableInsetRight, wi.stableInsetBottom)
-        }
-    }
+    private fun safeInsetsLTR(): IntArray = safeInsetsIn(gameStage ?: surfaceView) // the stage: the surface may be map-transformed
 
     /** UX-XCUT-01: bump the release HUD controls' margins by the safe-area insets so none sit under the landscape
      *  cutout or the bottom gesture bar. The bottom-START devBar + hotkey strip take the LEFT inset (a landscape
@@ -5256,10 +5305,14 @@ class MainActivity : AppCompatActivity() {
             // (minimap, orbs, chat, side panel, tab grid all scale together) — the only working way to enlarge the
             // minimap (the per-widget MINIMAP-scale path overlaps the orbs / blanks terrain). 540 is iOS-proven
             // safe; below ~480 the minimap column collides with the tab grid.
-            val renderH = 540
+            // FOLD-1: but never narrower than MIN_CANVAS_W. A near-square screen (a book foldable's inner panel,
+            // 2184x1968 on a Fold 7) at 540 tall gets a ~600px canvas the game's layout crowds, drawn huge on an 8"
+            // panel; growing the height instead (765x690 there) fits the layout and keeps the HUD a sane size.
+            val renderH = maxOf(540, ((MIN_CANVAS_W.toLong() * shortEdge + longEdge - 1) / longEdge).toInt())
             val renderW = (renderH.toLong() * longEdge / shortEdge).toInt()
             canvasW = renderW
             canvasH = renderH // for the overlay free-drag pad → canvas-pixel mapping
+            runOnUiThread { fitGameStage() } // FOLD-2: a window already off this shape (split screen) letterboxes now
             opts.add("-Drunelite.headless.resize=${renderW}x$renderH")
             Log.i(
                 TAG,

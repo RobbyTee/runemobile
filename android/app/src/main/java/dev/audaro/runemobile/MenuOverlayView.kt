@@ -4,9 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.os.Build
 import android.view.View
-import android.view.WindowInsets
 
 /**
  * The A2 press-and-peek native menu: a full-screen, non-interactive overlay drawn over the live SurfaceView
@@ -108,16 +106,7 @@ class MenuOverlayView(
     /** UX-XCUT-02: [left, top, right, bottom] safe-area insets (display cutout + system bars) so the "Choose
      *  Option" box clamps to the safe rect — never under a landscape cutout / rounded corner. Mirrors the helper
      *  ChromeOverlayView already uses. Defaults to 0 (the full-bleed emulator case). */
-    private fun safeInsets(): IntArray {
-        val wi = rootWindowInsets ?: return intArrayOf(0, 0, 0, 0)
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val i = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-            intArrayOf(i.left, i.top, i.right, i.bottom)
-        } else {
-            @Suppress("DEPRECATION")
-            intArrayOf(wi.stableInsetLeft, wi.stableInsetTop, wi.stableInsetRight, wi.stableInsetBottom)
-        }
-    }
+    private fun safeInsets(): IntArray = safeInsetsIn(this)
 
     /** Show the menu (display-order entries) anchored at the finger; body biased away from the holding hand.
      *  FIX-10b: [tap] = persistent tap-to-select (submenu drill-in / shift-customize); [header] overrides the
