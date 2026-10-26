@@ -37,6 +37,9 @@ as "What's new".
   across the inventory no longer moves an item or turns the camera, and in the bank, prayer book or spellbook a
   quick swipe scrolls the list when it has more than fits. The hold is two-thirds of the long-press time, at most
   150 ms.
+- **Rebuilt on RuneLite 1.13.5-SNAPSHOT,** the line following Release 1.13.4. It brings RuneLite's reworked
+  Party plugin and a fix for the Wiki DPS button. The Plugin Hub list moves up to the 1.13.4 release, so plugins
+  updated for it install.
 
 ## [0.3.1] - 2026-10-23
 
