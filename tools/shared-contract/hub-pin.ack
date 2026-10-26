@@ -50,5 +50,12 @@
 # This changes which plugin builds load on device, so it was held for a device check: VERIFIED 2026-10-20
 # on iPhone 17 Pro Max / iOS 27.2, debug build of 74b8444e66 -- hub catalog lists, a plugin installs and
 # enables, GPU renderer still boots (owner-confirmed on the handset, not an automated check). Clear to ship.
-reviewed_project_version=1.13.4
-pinned_hub_version=1.13.3
+#
+# 2026-10-26 review at project 1.13.5-SNAPSHOT (after merging upstream through d955988815, which carries
+# Release 1.13.4), probed with the client's exact URL shapes:
+#   repo.runelite.net/plugins/manifest/<v>_full.js   1.13.3 200 | 1.13.4 200 | 1.13.5 404 | 1.13.5-SNAPSHOT 404
+#   api.runelite.net/runelite-<v>/pluginhub (POST)   1.13.3 200 | 1.13.4 200 | 1.13.5-SNAPSHOT 200
+# Hub pin bumped 1.13.3 -> 1.13.4: the newest release this tree has merged, and it now answers on both services.
+# api.base stays on ${project.version}; the -SNAPSHOT path the client requests answers 200.
+reviewed_project_version=1.13.5
+pinned_hub_version=1.13.4
