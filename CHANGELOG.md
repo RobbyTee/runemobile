@@ -14,6 +14,8 @@ as "What's new".
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-26
+
 ### Added
 - **Hold on the world map to open its menu.** A long press inside the open world map opens the same right-click
   menu the desktop map has, so plugins that add map options now work on the phone. With Shortest Path, hold a spot
@@ -317,7 +319,8 @@ OAuth + RuneLite-account sync, native HUD/chat/tab-grid veneers, plugin panel.
 - Release signing: a dedicated key via `keystore.properties` when present, else
   the debug key (see `keystore.properties.example`).
 
-[Unreleased]: https://github.com/audaro/runemobile/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/audaro/runemobile/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/audaro/runemobile/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/audaro/runemobile/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/audaro/runemobile/compare/v0.2.7...v0.3.0
 [0.2.7]: https://github.com/audaro/runemobile/compare/v0.2.6...v0.2.7
