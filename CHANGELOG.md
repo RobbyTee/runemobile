@@ -14,6 +14,22 @@ as "What's new".
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-26
+
+### Added
+- **iPad.** The iOS app runs on iPad, full screen and in landscape. The game's picture grows with the screen, so
+  the chat, minimap and buttons keep the size they have on a phone and cover less of the view: the game draws at
+  1390×913 on an iPad mini and 1689×1267 on a 13-inch iPad Pro. The plugin rail on the right edge keeps clear of
+  the minimap and the tab buttons, and they move up to the edge when the rail is turned off. Checked in the iPad
+  simulators only; speed on a real iPad isn't measured yet.
+- **Foldables and Android tablets.** On a foldable's inner screen or a tablet, the game's picture grows with the
+  screen and the chat, minimap and buttons stay at phone size, instead of a phone-sized picture being stretched to
+  fill it. Folding or unfolding mid-game resizes the game to the new screen, and each screen keeps its own camera
+  zoom. The game is never drawn narrower than its 765-pixel minimum layout, and a window of another shape gets
+  black bars instead of a stretched picture. Tested on a Pixel 7a set to the screen sizes of a Galaxy Z Fold 7 and
+  a 10-inch tablet, not yet on a real foldable. A bigger screen has more to draw, so the CPU renderer runs slower
+  there than on a phone screen.
+
 ## [0.4.0] - 2026-10-26
 
 ### Added
@@ -319,7 +335,8 @@ OAuth + RuneLite-account sync, native HUD/chat/tab-grid veneers, plugin panel.
 - Release signing: a dedicated key via `keystore.properties` when present, else
   the debug key (see `keystore.properties.example`).
 
-[Unreleased]: https://github.com/audaro/runemobile/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/audaro/runemobile/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/audaro/runemobile/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/audaro/runemobile/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/audaro/runemobile/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/audaro/runemobile/compare/v0.2.7...v0.3.0
