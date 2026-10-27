@@ -16,16 +16,40 @@ import java.io.File
 object TabSprites {
     private const val CACHE_NAME = "tabsprites.json"
 
+    /** HudVeneerBridge.TAB_SPRITES_VERSION this build draws. A set cached by an older build (the pre-2018 glyphs,
+     *  no door or arrow) is older than this and is not applied. */
+    const val VERSION = 2
+
+    /** One decoded payload ([o] is its JSON object). */
     class Set(
-        val stoneInactive: Bitmap?,
-        val stoneActive: Bitmap?,
-        val icons: Array<Bitmap?>,
-        val chatbtn: Bitmap?,
-        val chatbtnSelected: Bitmap?,
-        val chatbtnNew: Bitmap?,
-        /** The bridge captured the full grid set (not a deadline-partial) — only persist these to the boot cache. */
-        val complete: Boolean,
+        o: JSONObject,
     ) {
+        val stoneInactive = bmp(o.optJSONObject("stoneInactive"))
+        val stoneActive = bmp(o.optJSONObject("stoneActive"))
+        val icons =
+            arrayOfNulls<Bitmap>(14).also { icons ->
+                o.optJSONArray("icons")?.let { arr ->
+                    for (i in 0 until minOf(14, arr.length())) icons[i] = bmp(arr.optJSONObject(i))
+                }
+            }
+        val chatbtn = bmp(o.optJSONObject("chatbtn"))
+        val chatbtnSelected = bmp(o.optJSONObject("chatbtnSelected"))
+        val chatbtnNew = bmp(o.optJSONObject("chatbtnNew"))
+
+        /** The logout door's stones (601's 58x40 STONE10_BACKGROUND / STONE10); the door glyph is icons[10]. */
+        val doorStone = bmp(o.optJSONObject("doorStone"))
+        val doorStoneActive = bmp(o.optJSONObject("doorStoneActive"))
+
+        /** The expand stone's arrow while both columns show / while collapsed. */
+        val showLess = bmp(o.optJSONObject("showLess"))
+        val showMore = bmp(o.optJSONObject("showMore"))
+
+        /** The bridge captured the full grid set (not a deadline-partial) — only persist these to the boot cache. */
+        val complete = o.optBoolean("complete", false)
+
+        /** The payload's art version (see [VERSION]). */
+        val version = o.optInt("v", 1)
+
         /** Enough to drive the grid: both stones + at least one glyph. */
         fun usableForGrid() = stoneInactive != null && stoneActive != null && icons.any { it != null }
 
@@ -35,21 +59,7 @@ object TabSprites {
     fun parse(json: String?): Set? {
         if (json.isNullOrBlank()) return null
         return try {
-            val o = JSONObject(json)
-            val icons = arrayOfNulls<Bitmap>(14)
-            o.optJSONArray("icons")?.let { arr ->
-                for (i in 0 until minOf(14, arr.length())) icons[i] = bmp(arr.optJSONObject(i))
-            }
-            val set =
-                Set(
-                    bmp(o.optJSONObject("stoneInactive")),
-                    bmp(o.optJSONObject("stoneActive")),
-                    icons,
-                    bmp(o.optJSONObject("chatbtn")),
-                    bmp(o.optJSONObject("chatbtnSelected")),
-                    bmp(o.optJSONObject("chatbtnNew")),
-                    o.optBoolean("complete", false),
-                )
+            val set = Set(JSONObject(json))
             if (!set.usableForGrid() && !set.usableForChat()) {
                 // non-empty payload that decoded to nothing usable — flag it (corrupt cache / decode mismatch)
                 Log.w("TabSprites", "payload parsed but no usable bitmaps (${json.length} bytes) — check ARGB/Base64 decode")

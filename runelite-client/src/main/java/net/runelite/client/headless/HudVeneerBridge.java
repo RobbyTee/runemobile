@@ -94,21 +94,36 @@ public final class HudVeneerBridge
 	// Native-chrome tab sprite set, loaded ONCE from the live cache after login and handed to the native shell so
 	// the 2-col grid + chat-tab veneer composite the real OSRS art with NOTHING committed to the repo (the same
 	// sprites the engine already draws — see captureTabSprites). stone 1180/1181 = RESIZEABLE_MODE_TAB_STONE_MIDDLE
-	// [_SELECTED]; 774+tabIndex = the 14 tab glyphs; 3051/3053/3055 = the chat-tab backgrounds.
+	// [_SELECTED]; SPR_TAB_ICONS = the 14 tab glyphs; 3051/3053/3055 = the chat-tab backgrounds.
 	private static final int SPR_STONE_INACTIVE = 1180;
 	private static final int SPR_STONE_ACTIVE = 1181;
-	private static final int SPR_TAB_ICON_BASE = 774;       // 774 + tabIndex, 14 glyphs (combat..music)
+	// The glyph for each engine tab index: what 164's own ICON0..ICON13 widgets draw, and 601 (the official mobile
+	// layout) draws the same ones. The old 774+index set is the pre-2018 one, whose 8 and 9 are the friends smiley
+	// and the ignore-list face, so account management showed the smiley and friends showed the red face. 164 draws a
+	// close X for 10 (logout); the shells show logout as a door by the chat instead, so 10 is 601's door (ICON10).
+	static final int[] SPR_TAB_ICONS = {168, 898, 899, 900, 901, 902, 903, 904, 1709, 905, 3560, 908, 909, 910};
+	// 601's controls the shells copy: the logout door's stone (STONE10_BACKGROUND, 58x40) and its selected stone
+	// (STONE10), and the arrow on the 7th inner stone, which script 7615 sets to 4795 ("Show Less") while both
+	// columns show and to 4796 ("Show More") once collapsed to one.
+	private static final int SPR_DOOR_STONE = 5773;
+	private static final int SPR_DOOR_STONE_ACTIVE = 5775;
+	private static final int SPR_SHOW_LESS = 4795;
+	private static final int SPR_SHOW_MORE = 4796;
+	// Bumped whenever the payload's art changes, so a shell drops a set it cached from an older jar instead of
+	// showing it until the next capture lands (v1 = the 774+index glyphs, no door or arrow).
+	static final int TAB_SPRITES_VERSION = 2;
 	private static volatile String tabSpritesJson = "";     // one-shot ARGB payload (see captureTabSprites); "" until ready
 	private static boolean tabSpritesCaptured = false;      // client-thread guard
 	// Sprites load lazily — an archive the engine hasn't rendered (our tab stones are HIDDEN) isn't in the cache yet,
 	// so a single tick returns a partial set. We accumulate across ticks (nudging missing archives via loadData) and
 	// only latch when the grid set is complete, or at a deadline. Index: 0=stoneInactive,1=stoneActive,2..15=icons,
-	// 16=chatbtn,17=chatbtnSelected,18=chatbtnNew.
-	private static final int TAB_SPRITE_COUNT = 19;
+	// 16=chatbtn,17=chatbtnSelected,18=chatbtnNew,19=doorStone,20=doorStoneActive,21=showLess,22=showMore.
+	private static final int TAB_SPRITE_COUNT = 23;
 	private static final String[] TAB_SPRITE_KEYS = {
 		"stoneInactive", "stoneActive",
 		"i0", "i1", "i2", "i3", "i4", "i5", "i6", "i7", "i8", "i9", "i10", "i11", "i12", "i13",
 		"chatbtn", "chatbtnSelected", "chatbtnNew",
+		"doorStone", "doorStoneActive", "showLess", "showMore",
 	};
 	private static final String[] tabSpriteB64 = new String[TAB_SPRITE_COUNT];
 	private static final int[][] tabSpriteDim = new int[TAB_SPRITE_COUNT][2];
@@ -2494,14 +2509,24 @@ public final class HudVeneerBridge
 	 * and read by the native side via {@link #tabSprites()}. Pixels are sent as raw big-endian ARGB bytes (Base64) — no
 	 * ImageIO/PNG dependency, which may be absent in the embedded JRE.
 	 */
-	private static int tabSpriteId(int slot)
+	static int tabSpriteId(int slot)
 	{
 		if (slot == 0) return SPR_STONE_INACTIVE;
 		if (slot == 1) return SPR_STONE_ACTIVE;
-		if (slot >= 2 && slot <= 15) return SPR_TAB_ICON_BASE + (slot - 2);
+		if (slot >= 2 && slot <= 15) return SPR_TAB_ICONS[slot - 2];
 		if (slot == 16) return SPR_CHATBTN_IDLE;
 		if (slot == 17) return SPR_CHATBTN_SELECTED;
-		return SPR_CHATBTN_NEW;   // slot 18
+		if (slot == 18) return SPR_CHATBTN_NEW;
+		if (slot == 19) return SPR_DOOR_STONE;
+		if (slot == 20) return SPR_DOOR_STONE_ACTIVE;
+		if (slot == 21) return SPR_SHOW_LESS;
+		return SPR_SHOW_MORE;   // slot 22
+	}
+
+	/** The sprites the grid can't draw without: both stones, all 14 glyphs, the door's stones and both arrows. */
+	private static boolean gridSlot(int slot)
+	{
+		return slot <= 15 || slot >= 19;
 	}
 
 	private static void captureTabSprites(Client c)
@@ -2529,12 +2554,12 @@ public final class HudVeneerBridge
 				}
 			}
 			tabCaptureTicks++;
-			// Grid needs both stones + all 14 glyphs; chat (16/17) is secondary. Ship at the deadline regardless so a
-			// sprite that genuinely never resolves can't stall the chrome forever.
+			// Grid needs every gridSlot; chat (16..18) is secondary. Ship at the deadline regardless so a sprite that
+			// genuinely never resolves can't stall the chrome forever.
 			boolean gridComplete = true;
-			for (int slot = 0; slot <= 15; slot++)
+			for (int slot = 0; slot < TAB_SPRITE_COUNT; slot++)
 			{
-				if (tabSpriteB64[slot] == null)
+				if (gridSlot(slot) && tabSpriteB64[slot] == null)
 				{
 					gridComplete = false;
 					break;
@@ -2548,6 +2573,7 @@ public final class HudVeneerBridge
 			sb.append('{');
 			// gridComplete=false means we hit the deadline with a missing slot — the consumer must NOT persist a
 			// partial set to its boot cache (a fresh process re-captures and usually completes in a few ticks).
+			sb.append("\"v\":").append(TAB_SPRITES_VERSION).append(',');
 			sb.append("\"complete\":").append(gridComplete).append(',');
 			appendSpriteSlot(sb, "stoneInactive", 0);
 			sb.append(',');
@@ -2568,6 +2594,11 @@ public final class HudVeneerBridge
 			appendSpriteSlot(sb, "chatbtnSelected", 17);
 			sb.append(',');
 			appendSpriteSlot(sb, "chatbtnNew", 18);
+			for (int slot = 19; slot < TAB_SPRITE_COUNT; slot++)
+			{
+				sb.append(',');
+				appendSpriteSlot(sb, TAB_SPRITE_KEYS[slot], slot);
+			}
 			sb.append('}');
 			tabSpritesJson = sb.toString();
 			tabSpritesCaptured = true;

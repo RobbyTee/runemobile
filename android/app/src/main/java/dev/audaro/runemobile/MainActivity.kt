@@ -13,6 +13,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
@@ -325,6 +326,8 @@ class MainActivity : AppCompatActivity() {
     private var chromeSig = LongArray(CHROME_SIG_LEN)
     private var lastChromeSig = LongArray(CHROME_SIG_LEN) { Long.MIN_VALUE }
     private var lastStonesHidden: Boolean? = null // desired HudVeneer hide-stones state (send only on change)
+    private var tabGridCollapsed = false // the expand stone's choice, kept in PREFS_CHAT
+    private val doorRectView = RectF() // the logout door beside the chat, view px (applyChatAtTop)
     private var lastSideX = Int.MIN_VALUE // last side-panel relocation sent (send only on change)
     private var lastSideY = Int.MIN_VALUE
     private var lastChatX = Int.MIN_VALUE // last chat-at-top relocation sent (send only on change)
@@ -542,7 +545,7 @@ class MainActivity : AppCompatActivity() {
         private const val LAYOUT_SWITCH_LABEL = "Switch to Resizable - Modern"
 
         // updateChrome's signature slots: the native change counter, five toggles, two view/frame sizes, four insets.
-        private const val CHROME_SIG_LEN = 14
+        private const val CHROME_SIG_LEN = 15
 
         // UX-ONBOARD-01: hard cap on the cold-start splash. Generous — first-install unpack (~30 s) + JVM boot +
         // first frame; the splash normally dismisses on the first frame well before this. Failsafe only.
@@ -562,6 +565,12 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_CHAT_DY = "chatOverrideY"
         private const val KEY_MINIMAP_DX = "minimapOverrideX"
         private const val KEY_MINIMAP_DY = "minimapOverrideY"
+        private const val KEY_TAB_GRID_COLLAPSED = "tabGridCollapsed" // the expand stone's choice (ChromeOverlayView)
+
+        // Logout is a door left of the chat tab row: 601's LOGOUT_CONTAINER, 58x40 canvas px, the native row's height.
+        // The chat's base anchor steps right by its width, as the official chat sits right of it (iOS kDoorCanvasW).
+        private const val DOOR_W_CANVAS = 58
+        private const val DOOR_H_CANVAS = ChatPillView.ROW_H_CANVAS
         private const val KEEPALIVE_IDLE_STOP_MS = 600_000L
 
         // AWT virtual-key codes (java.awt.event.KeyEvent) the engine's onKeyStroke expects.
@@ -864,6 +873,14 @@ class MainActivity : AppCompatActivity() {
             Log.i(TAG, "a6: native tab $idx tap -> openTab")
             JvmLauncher.onBridgeTouch { JvmLauncher.openTab(idx) } // off the UI thread (daemon-attaches to HotSpot)
         }
+        tabGridCollapsed = getSharedPreferences(PREFS_CHAT, MODE_PRIVATE).getBoolean(KEY_TAB_GRID_COLLAPSED, false)
+        chromeOverlay.setCollapsed(tabGridCollapsed)
+        chromeOverlay.onCollapseToggle = { collapsed ->
+            // In the chrome signature, so the next frame moves the side panel after the column.
+            tabGridCollapsed = collapsed
+            getSharedPreferences(PREFS_CHAT, MODE_PRIVATE).edit().putBoolean(KEY_TAB_GRID_COLLAPSED, collapsed).apply()
+            Log.i(TAG, "a6: tab grid ${if (collapsed) "collapsed" else "expanded"}")
+        }
         // Phase-4 chat channel PILL (replaces the A3 enlarged tab row as the chat control; iOS parity).
         // Quick tap = collapse/expand (shared shove-off-canvas); hold 0.15s = chips fan out; drag + lift =
         // switch channel (op-script replay, works collapsed); pull DOWN past a filterable chip = its engine
@@ -871,7 +888,7 @@ class MainActivity : AppCompatActivity() {
         chatTabOverlay = ChatPillView(this)
         // Apply a cached runtime sprite set immediately (later boots) so the grid/chat show real art before the
         // post-login capture lands; the live capture in updateChrome refreshes + re-caches it.
-        TabSprites.parse(TabSprites.cached(filesDir))?.let {
+        TabSprites.parse(TabSprites.cached(filesDir))?.takeIf { it.version >= TabSprites.VERSION }?.let {
             chromeOverlay.setSprites(it)
             chatTabOverlay.setSprites(it)
         }
@@ -3730,6 +3747,7 @@ class MainActivity : AppCompatActivity() {
         sig[8] = JvmLauncher.frameWidth().toLong()
         sig[9] = JvmLauncher.frameHeight().toLong()
         for (i in 0..3) sig[10 + i] = ins[i].toLong()
+        sig[14] = sigFlag(tabGridCollapsed)
         // Splash + hop are NOT in the signature: each is a state flag the body itself clears (on first frame /
         // loggedIn edge / its own timeout), so while either is up we must run the body every frame to do that
         // clearing — a stable signature must not be allowed to freeze them.
@@ -4026,14 +4044,19 @@ class MainActivity : AppCompatActivity() {
         JvmLauncher.onBridge { JvmLauncher.setStonesHidden(hide) }
     }
 
-    /** Relocate the engine side panel flush-left of the native grid (the iOS arrangement). The grid's left/top
-     *  edge is in view px; convert to game-canvas px (k = frameW/viewW) and subtract the panel width. Sent only
-     *  when it changes. No-op until the grid has laid out (gridLeftPx>0) and a frame size is known. */
+    /** Relocate the engine side panel flush-left of the native grid's visible column and centred on it (601 puts
+     *  both on the one anchor). The grid's edges are in view px; convert to game-canvas px (k = frameW/viewW,
+     *  ky = frameH/viewH) and subtract the panel width. Sent only when it changes. No-op until the grid has laid
+     *  out (gridLeftPx>0) and a frame size is known. */
     private fun applySidePanel(o: JSONObject?) {
         val fw = JvmLauncher.frameWidth()
+        val fh = JvmLauncher.frameHeight()
         val vw = surfaceView.width
+        val vh = surfaceView.height
         if (fw <= 0 || vw <= 0) return
+        if (fh <= 0 || vh <= 0) return
         val k = fw.toFloat() / vw.toFloat()
+        val ky = fh.toFloat() / vh.toFloat()
         var sideW = 204 // fallback until the panel is open + reports its width
         var sideHc = 275 // the SIDE_CONTAINER is a fixed 204x275 canvas raster
         val sc = o?.optJSONArray("sideContainer")
@@ -4044,12 +4067,13 @@ class MainActivity : AppCompatActivity() {
         // UI-1: the panel is a fixed engine raster we can't grow, so shrink the native grid to the panel height
         // (constant 275 canvas px) — they then share both the top and bottom edge. Do this BEFORE reading the
         // grid edges below so the relocate uses the post-shrink geometry (setTargetGridHeight recomputes it).
-        chromeOverlay.setTargetGridHeight(sideHc / k)
+        chromeOverlay.setCanvasScale(ky)
+        chromeOverlay.setTargetGridHeight(sideHc / ky)
         val gx0 = chromeOverlay.gridLeftPx
         val gy0 = chromeOverlay.gridTopPx
         if (gx0 <= 0f) return
         val sideX = maxOf(0, Math.round(gx0 * k) - sideW) // right edge flush against the grid's left edge
-        val sideY = maxOf(0, Math.round(gy0 * k)) // stones hidden, so top-align with the grid
+        val sideY = maxOf(0, Math.round((gy0 + chromeOverlay.gridHeightPx / 2f) * ky) - sideHc / 2)
         if (sideX == lastSideX && sideY == lastSideY) return
         lastSideX = sideX
         lastSideY = sideY
@@ -4078,15 +4102,19 @@ class MainActivity : AppCompatActivity() {
         val ky = fh.toFloat() / vh
         val ins = safeInsetsLTR()
         val margin = 8 // canvas-px breathing room from the safe edge
-        chatBaseX = Math.round(ins[0] * kx) + margin
+        chatBaseX = Math.round(ins[0] * kx) + margin + DOOR_W_CANVAS // the logout door takes the corner
         chatBaseY = Math.round(ins[1] * ky) + margin
         // Honour the user's edit-mode override (P2-3); clamp the WHOLE chatbox on-frame (against frame − chat size,
         // from the last reported bounds) so a stale offset from a since-changed dimension can't push it off-screen.
         val cr = chatRectCanvas
         val chatW = cr?.getOrNull(2) ?: 0
         val chatH = cr?.getOrNull(3) ?: 0
-        val chatX = (chatBaseX + chatUserDX).coerceIn(0, (fw - chatW).coerceAtLeast(0))
+        // Never so far left that the door would leave the canvas.
+        val chatX = (chatBaseX + chatUserDX).coerceIn(DOOR_W_CANVAS, (fw - chatW).coerceAtLeast(DOOR_W_CANVAS))
         val chatY = (chatBaseY + chatUserDY).coerceIn(0, (fh - chatH).coerceAtLeast(0))
+        // The door moves with the chat (overlay edit included), so it is placed even when the chat hasn't moved.
+        doorRectView.set((chatX - DOOR_W_CANVAS) / kx, chatY / ky, chatX / kx, (chatY + DOOR_H_CANVAS) / ky)
+        chromeOverlay.setDoorRect(doorRectView)
         if (chatX == lastChatX && chatY == lastChatY) return
         lastChatX = chatX
         lastChatY = chatY
@@ -4096,6 +4124,7 @@ class MainActivity : AppCompatActivity() {
     /** Stop relocating the chat (let it return to its native bottom position) when the chrome disengages.
      *  Also un-collapse: with the pill gone there'd be no way to expand a shoved-off-canvas chat. */
     private fun releaseChat() {
+        chromeOverlay.setDoorRect(null)
         if (lastChatX == -1 && lastChatY == -1) return
         lastChatX = -1
         lastChatY = -1

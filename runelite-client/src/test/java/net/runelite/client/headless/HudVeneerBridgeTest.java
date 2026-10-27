@@ -38,6 +38,7 @@ import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.widgets.WidgetSizeMode;
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -995,5 +996,24 @@ public class HudVeneerBridgeTest
 		when(modern.getWidget(InterfaceID.ToplevelPreEoc.SIDE_CONTAINER)).thenReturn(modernSide);
 		HudVeneerBridge.tick(modern);
 		verify(modernSide).setForcedPosition(900, 300);
+	}
+
+	@Test
+	public void theTabGlyphsAreTheOnes164Draws()
+	{
+		// 164's ICON0..ICON13 sprites, read from the game cache (interface 601 draws the same ones). The old
+		// 774+index set put the friends smiley on account management (8) and the ignore face on friends (9).
+		final int[] icon164 = {168, 898, 899, 900, 901, 902, 903, 904, 1709, 905, -1, 908, 909, 910};
+		for (int tab = 0; tab < 14; tab++)
+		{
+			final int id = HudVeneerBridge.tabSpriteId(2 + tab);
+			if (icon164[tab] >= 0)
+			{
+				assertEquals("tab " + tab, icon164[tab], id);
+			}
+			assertFalse("tab " + tab + " still uses the pre-2018 glyphs", id >= 774 && id <= 787);
+		}
+		// 164 draws a close X for logout; the shells show it as 601's door.
+		assertEquals(3560, HudVeneerBridge.tabSpriteId(2 + 10));
 	}
 }

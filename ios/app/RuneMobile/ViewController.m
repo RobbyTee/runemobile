@@ -425,6 +425,11 @@ static NSString *RMPasteLine(NSString *s) {
 // onClick onto the stone centre. A ▦ toggle shows/hides them for instant A/B fallback.
 @property (nonatomic, strong) NSMutableArray<UIButton *> *tabButtons;
 @property (nonatomic, strong) UIView *tabRailBg;   // opaque rail behind the edge-split icon grid
+// The 7th inner stone, which collapses the grid to its inner column and back (601's expand stone, script 7615).
+// The choice is kept across launches.
+@property (nonatomic, strong) TabGridButton *tabExpandButton;
+@property (nonatomic, assign) BOOL tabGridCollapsed;
+@property (nonatomic, assign) CGFloat loggedTabGridTop; // last grid top logged by tabGridTopForHeight (log on change)
 
 // W3 Feature-A (A3): chat-at-top = the engine's OWN chatbox relocated to the top + flipped transparent
 // (ChatRelocateProbe proved it renders there, not occluded). Tabs/scrollback/colors/input stay live since it IS
@@ -458,6 +463,10 @@ static NSString *RMPasteLine(NSString *s) {
 // crop fragility.
 @property (nonatomic, strong) NSMutableArray<UIImage *> *tabImgInactive;
 @property (nonatomic, strong) NSMutableArray<UIImage *> *tabImgActive;
+@property (nonatomic, strong) UIImage *tabImgShowLess; // the expand stone while both columns show
+@property (nonatomic, strong) UIImage *tabImgShowMore; // and while the grid is collapsed
+@property (nonatomic, strong) UIImage *doorImg;        // the logout door by the chat
+@property (nonatomic, strong) UIImage *doorImgActive;  // the door while the logout tab is open
 // The native chrome sprites (stones/icons/chat buttons) are rendered from the LIVE OSRS cache at runtime — like
 // desktop RuneLite, which never ships interface art — NOT from bundled PNGs. The engine publishes them a few ticks
 // post-login (JVMLauncher.tabSprites); we recomposite the grid + chat row, persist for instant boot, then stop
@@ -726,6 +735,14 @@ static const int kChatTabRowCanvasH = 40;   // 2-line tab height (name + state).
                                             // ~6pt effective — illegible at arm's length. Label fonts scale off
                                             // this height (0.40/0.34 below), as does the dialogue parchment box.
 static const int kChatContentCanvasH = 142; // the chat message-area height (engine-canvas px) below the tab row
+// Logout is a door left of the chat tab row, not a grid stone: 601's LOGOUT_CONTAINER, 58x40 engine px, the same
+// height as the native tab row. The chat's base anchor steps right by its width, as the official chat sits right of
+// it, and the chat is never moved so far left that the door would leave the canvas.
+static const int kDoorCanvasW = 58;
+static const int kDoorCanvasH = kChatTabRowCanvasH;
+static const int kTabLogout = 10;        // the engine tab index the door opens
+static const int kTabSlotExpand = -1;    // TAB_GRID_ORDER's entry for the expand stone (not an engine tab)
+static const int kTabSpritesVersion = 2; // HudVeneerBridge.TAB_SPRITES_VERSION this build draws
 // Finger-scroll direction: -1 = drag-down scrolls toward OLDER messages (content follows the finger). The drag is
 // converted to canvas px and applied to the chat's own scroll layer (no mouse wheel -> no camera zoom). Flip to +1
 // if the direction feels inverted.
@@ -1714,6 +1731,18 @@ static NSString *const kLayoutNoticeBody =
         [self.view addSubview:tb];   // in the side strips, outside the (inset) game view
         [self.tabButtons addObject:tb];
     }
+    // Logout's button is the door by the chat (updateChrome places it); it opens the tab like any other.
+    self.tabButtons[kTabLogout].accessibilityLabel = @"Logout";
+    TabGridButton *xb = [TabGridButton buttonWithType:UIButtonTypeCustom];
+    xb.hidden = YES;
+    xb.imageView.contentMode = UIViewContentModeScaleAspectFit;
+    xb.imageView.layer.magnificationFilter = kCAFilterNearest;
+    xb.contentEdgeInsets = UIEdgeInsetsZero;
+    xb.clipsToBounds = NO;
+    [xb addTarget:self action:@selector(onTabExpand) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:xb];
+    self.tabExpandButton = xb;
+    self.tabGridCollapsed = [[NSUserDefaults standardUserDefaults] boolForKey:@"tabGridCollapsed"];
     // Opaque covers over the desktop stones (subviews of the game view, above the blit; non-interactive so the
     // Java proxy click still reaches the real stone beneath).
     self.stoneCovers = [NSMutableArray arrayWithCapacity:14];
@@ -4140,6 +4169,9 @@ static UIImage *imageFromSpriteDict(id obj) {
     if (json.length == 0) return NO;
     NSDictionary *d = parseBridgeJSON(json, "ViewController.applyTabSpriteJSON");
     if (![d isKindOfClass:[NSDictionary class]]) return NO;
+    // A set cached by an older build has the wrong glyphs and no door or arrow (HudVeneerBridge.TAB_SPRITES_VERSION).
+    if ([d[@"v"] intValue] < kTabSpritesVersion)
+        return NO;
     UIImage *stoneI = imageFromSpriteDict(d[@"stoneInactive"]);
     UIImage *stoneA = imageFromSpriteDict(d[@"stoneActive"]);
     id iconsObj = d[@"icons"];
@@ -4156,13 +4188,25 @@ static UIImage *imageFromSpriteDict(id obj) {
         self.tabImgInactive = inact;
         self.tabImgActive = act;
     }
+    UIImage *showLess = imageFromSpriteDict(d[@"showLess"]);
+    UIImage *showMore = imageFromSpriteDict(d[@"showMore"]);
+    UIImage *doorStone = imageFromSpriteDict(d[@"doorStone"]);
+    UIImage *doorStoneA = imageFromSpriteDict(d[@"doorStoneActive"]);
+    UIImage *doorIcon = gridOK ? imageFromSpriteDict(icons[kTabLogout]) : nil;
+    BOOL controlsOK = (showLess && showMore && doorStone && doorStoneA && doorIcon);
+    if (gridOK && controlsOK) {
+        self.tabImgShowLess = [self compositeStone:stoneI icon:showLess];
+        self.tabImgShowMore = [self compositeStone:stoneI icon:showMore];
+        self.doorImg = [self compositeStone:doorStone icon:doorIcon];
+        self.doorImgActive = [self compositeStone:doorStoneA icon:doorIcon];
+    }
     UIImage *cb  = imageFromSpriteDict(d[@"chatbtn"]);
     UIImage *cbs = imageFromSpriteDict(d[@"chatbtnSelected"]);
     UIImage *cbn = imageFromSpriteDict(d[@"chatbtnNew"]);
     if (cb)  self.chatBtnImg    = cb;
     if (cbs) self.chatBtnSelImg = cbs;
     if (cbn) self.chatBtnNewImg = cbn;
-    return [d[@"complete"] boolValue] && gridOK && cb && cbs && cbn;
+    return [d[@"complete"] boolValue] && gridOK && controlsOK && cb && cbs && cbn;
 }
 
 // Pull the real OSRS sprites from the live cache once the engine has them (a few ticks post-login), then persist
@@ -5665,8 +5709,7 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     self.tabRailBg.hidden = YES;   // mobile cells are individually styled; no solid rail strip behind them
     if (![d isKindOfClass:[NSDictionary class]] || ![d[@"loggedIn"] boolValue] || self.mapOpen) {
         // (mapOpen: the fullscreen world map owns the screen — the native grid would cover it + steal taps)
-        for (UIButton *btn in self.tabButtons) btn.hidden = YES;
-        for (UIView *cv in self.stoneCovers) cv.hidden = YES;
+        [self hideTabGrid];
         return;
     }
     // LAYOUT GUARD: the native HUD overlay only works in Resizable - Modern (PRE_EOC = toplevel 164). In
@@ -5677,8 +5720,7 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     // Resizable - Modern. Re-engages automatically once back in toplevel 164.
     int topLevelId = [d[@"topLevelId"] intValue];
     if (topLevelId != 164) {
-        for (UIButton *btn in self.tabButtons) btn.hidden = YES;
-        for (UIView *cv in self.stoneCovers) cv.hidden = YES;
+        [self hideTabGrid];
         [JVMLauncher setEngineStonesHidden:NO];
         if (self.framesShown % 120 == 0) {
             [self appendLine:[NSString stringWithFormat:@"[chrome] unsupported layout topLevel=%d (not 164/Resizable-Modern) -> native HUD off, engine HUD shown", topLevelId]];
@@ -5698,73 +5740,162 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     }
     int active = [d[@"activeTab"] intValue];
 
-    // All 14 tabs in ONE 2-column grid at the BOTTOM-RIGHT — the official OSRS-mobile arrangement. The engine
-    // stones are HIDDEN (setEngineStonesHidden), so these native buttons ARE the tabs; a tap replays the stone's
-    // op script to open the tab (onTabButton) — no cover patch / gray box. TAB_GRID_ORDER maps grid slot ->
-    // engine tab index, row-major (slot 0 = top-left, 1 = top-right, …). Tweak it to match the official order.
-    // Cells auto-fit the bottom ~56% of the safe height so the grid never collides with the minimap (top-right).
-    static const int TAB_GRID_ORDER[14] = { 3, 1,  4, 2,  5, 13,  6, 7,  0, 12,  8, 9,  10, 11 };
+    // The tabs in ONE 2-column grid at the right — the official OSRS-mobile arrangement. The engine stones are
+    // HIDDEN (setEngineStonesHidden), so these native buttons ARE the tabs; a tap replays the stone's op script to
+    // open the tab (onTabButton) — no cover patch / gray box. TAB_GRID_ORDER maps grid slot -> engine tab index,
+    // row-major (slot 0 = top-left, 1 = top-right, …), in the official app's order (interface 601): the inner column,
+    // next to the panel, is inventory, equipment, prayer, magic, combat, quests and the expand stone; the outer one
+    // is skills, emotes, music, clan, friends, account and settings. Logout is the door by the chat, not a stone.
+    // The Android twin is ChromeOverlayView.order.
+    static const int TAB_GRID_ORDER[14] = {3, 1, 4, 12, 5, 13, 6, 7, 0, 9, 2, 8, kTabSlotExpand, 11};
     UIEdgeInsets ins = self.view.safeAreaInsets;
     CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height;
     // TAB-1: step left of the plugin rail (updateHudLayout moves the minimap when the rail comes or goes).
     CGFloat right = [self hudRightInset];
-    const CGFloat gap = 0.0, margin = 6.0;   // NO gap — the stones tile flush, like the official app
+    const CGFloat margin = 6.0; // the stones tile flush, like the official app
     // TOUCH-1: 44pt cells are geometrically impossible here (7 rows must fit under the top-right minimap —
     // the 0.56 band IS that clearance), so the cells stay official-mobile-sized and the tappability gap is
     // closed with outward-only hit slop per grid edge (TabGridButton) — edge taps land, interiors stay exact.
     CGFloat availH = (H - ins.top - ins.bottom) * 0.56;
     CGFloat cell = MIN(48.0, availH / 7.0);
-    CGFloat gridW = 2 * cell + gap, gridH = 7 * cell + 6 * gap;
+    // Collapsed (the expand stone), only the inner column shows, at the right edge where the outer one was.
+    BOOL collapsed = self.tabGridCollapsed;
+    CGFloat gridW = (collapsed ? 1 : 2) * cell, gridH = 7 * cell;
     CGFloat gx0 = W - right - margin - gridW;
-    CGFloat gy0 = H - ins.bottom - margin - gridH;
+    NSArray *mmGlobe = [d[@"minimap"] isKindOfClass:[NSArray class]] ? d[@"minimap"] : nil;
+    CGFloat gy0 = [self tabGridTopForHeight:gridH left:gx0 width:gridW margin:margin globe:mmGlobe];
     for (int slot = 0; slot < 14; slot++) {
         int i = TAB_GRID_ORDER[slot];
-        UIButton *btn = self.tabButtons[i];
         int col = slot % 2, row = slot / 2;
-        btn.frame = CGRectMake(gx0 + col * (cell + gap), gy0 + row * (cell + gap), cell, cell);
+        UIButton *btn = (i == kTabSlotExpand) ? self.tabExpandButton : self.tabButtons[i];
+        if (collapsed && col == 1) {
+            btn.hidden = YES;
+            continue;
+        }
+        BOOL leftEdge = (col == 0), rightEdge = (col == 1 || collapsed);
+        btn.frame = CGRectMake(gx0 + (collapsed ? 0 : col * cell), gy0 + row * cell, cell, cell);
         if ([btn isKindOfClass:[TabGridButton class]]) {
             ((TabGridButton *)btn).hitOutset = UIEdgeInsetsMake(
                 row == 0 ? 4.0 : 0.0,                 // top row: into the gap below the minimap
-                col == 0 ? 10.0 : 0.0,                // left column: into the open scene
+                leftEdge ? 10.0 : 0.0,                // left column: into the open scene
                 row == 6 ? margin + ins.bottom : 0.0, // bottom row: through the margin to the screen edge
-                col == 1 ? margin + right : 0.0);     // right column: through the margin to the screen edge
+                rightEdge ? margin + right : 0.0);    // right column: through the margin to the screen edge
+        }
+        if (i == kTabSlotExpand) {
+            UIImage *img = collapsed ? self.tabImgShowMore : self.tabImgShowLess;
+            [self paintTabButton:btn image:img active:NO];
+            btn.accessibilityLabel = collapsed ? @"Show more tabs" : @"Show fewer tabs";
+            continue;
         }
         BOOL isActive = (i == active);
         // Authentic composited tab image (live-cache OSRS stone + icon). Active = red stone, inactive = grey.
         NSArray<UIImage *> *imgs = isActive ? self.tabImgActive : self.tabImgInactive;
         UIImage *img = (i < (int)imgs.count && [imgs[i] isKindOfClass:[UIImage class]]) ? imgs[i] : nil;
-        [btn setImage:img forState:UIControlStateNormal];
-        // Until the sprites are captured from the cache (first-ever login, pre-capture), show an opaque stone-brown
-        // tile so the grid reads as buttons rather than vanishing; the real stone replaces it within a tick.
-        if (img) {
-            btn.backgroundColor = [UIColor clearColor];
-            btn.layer.cornerRadius = 0.0;
-        } else {
-            btn.backgroundColor = isActive ? [UIColor colorWithRed:96.0/255.0 green:32.0/255.0 blue:24.0/255.0 alpha:1.0]
-                                           : [UIColor colorWithRed:66.0/255.0 green:60.0/255.0 blue:51.0/255.0 alpha:1.0];
-            btn.layer.cornerRadius = 3.0;
-            btn.clipsToBounds = YES;
-        }
-        btn.layer.borderWidth = 0.0;
-        btn.alpha = 1.0;   // active vs inactive carried by the red/grey stone itself
-        btn.hidden = NO;
+        [self paintTabButton:btn image:img active:isActive];
     }
 
-    // Relocate the engine side panel (the open inventory/skills/etc. "menu") to sit flush LEFT of the tab grid,
-    // top-aligned — the official OSRS-mobile arrangement. Convert the grid's screen-point edge to canvas px
-    // (canvasPx = pt * renderW/W); the side panel width comes from the chrome snapshot (fixed engine px).
+    // The logout door, left of the chat tab row and moving with the chat (601 keeps it in the top-left corner,
+    // with the chat to its right). Placed from the same chat origin applyChatRelocate sends the engine.
+    UIButton *door = self.tabButtons[kTabLogout];
+    if (self.chatBaseX > 0 && self.renderW > 0 && W > 0) {
+        CGFloat s = W / (CGFloat)self.renderW;
+        int chatX = [self clampChatX:self.chatBaseX + self.chatUserDX];
+        int chatY = [self clampChatY:self.chatBaseY + self.chatUserDY];
+        door.frame = CGRectMake((chatX - kDoorCanvasW) * s, chatY * s, kDoorCanvasW * s, kDoorCanvasH * s);
+        if ([door isKindOfClass:[TabGridButton class]])
+            ((TabGridButton *)door).hitOutset = UIEdgeInsetsMake(chatY * s, 0.0, 0.0, 0.0); // up to the screen edge
+        [self paintTabButton:door
+                       image:(active == kTabLogout ? self.doorImgActive : self.doorImg)
+                      active:(active == kTabLogout)];
+    } else {
+        door.hidden = YES; // the chat isn't placed yet
+    }
+
+    // Relocate the engine side panel (the open inventory/skills/etc. "menu") flush LEFT of the grid's visible
+    // column and centred on it — 601 puts both on the one anchor (tabGridTopForHeight). Convert the grid's
+    // screen-point edges to canvas px (canvasPx = pt * renderW/W); the side panel's size comes from the chrome
+    // snapshot (fixed engine px).
     if (self.renderW > 0 && W > 0) {
         CGFloat k = (CGFloat)self.renderW / W;
-        int sideW = 204;   // fallback until the panel is open and reports its real width
+        int sideW = 204, sideH = 275; // fallback until the panel is open and reports its real size
         NSArray *sc = [d[@"sideContainer"] isKindOfClass:[NSArray class]] ? d[@"sideContainer"] : nil;
         if (sc.count >= 4 && [sc[2] intValue] > 0) sideW = [sc[2] intValue];
+        if (sc.count >= 4 && [sc[3] intValue] > 0)
+            sideH = [sc[3] intValue];
         int sideX = (int)lround(gx0 * k) - sideW;   // right edge flush against the grid's left edge
-        // The stones are hidden, so there is no bottom row to avoid — align the panel's top with the grid top.
-        int sideY = (int)lround(gy0 * k);
+        int sideY = (int)lround((gy0 + gridH / 2.0) * k) - sideH / 2;
         if (sideX < 0) sideX = 0;
         if (sideY < 0) sideY = 0;
         [JVMLauncher relocateEngineSidePanelX:sideX y:sideY];
     }
+}
+
+// The grid's top edge, in points, on the official app's anchor (interface 601, script 919): once the game area is
+// at least 503 game px tall, the tab group and the side panel are both centred 87 px below its middle; below that
+// they sit 4 px off its bottom. The official game area is the safe area, so that is what is measured here. It never
+// goes past the bottom margin, nor up into the minimap globe ([x,y,w,h] canvas px, live, so a dragged minimap
+// counts) when that sits above the grid. The globe, not the whole cluster: the cluster's box runs ~30 pt below
+// anything it draws over the grid's columns, which would hold the grid at the bottom on every iPhone.
+- (CGFloat)tabGridTopForHeight:(CGFloat)gridH left:(CGFloat)gx width:(CGFloat)gw margin:(CGFloat)margin
+                         globe:(NSArray *)globe {
+    UIEdgeInsets ins = self.view.safeAreaInsets;
+    CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height;
+    CGFloat safeTop = ins.top, safeBottom = H - ins.bottom;
+    CGFloat lowest = safeBottom - margin - gridH;
+    if (self.renderW <= 0 || W <= 0)
+        return lowest;
+    CGFloat k = (CGFloat)self.renderW / W; // canvas px per point
+    CGFloat top = ((safeBottom - safeTop) * k >= 503.0) ? (safeTop + safeBottom) / 2.0 + 87.0 / k - gridH / 2.0
+                                                        : safeBottom - 4.0 / k - gridH;
+    CGFloat highest = safeTop + margin;
+    if (globe.count >= 4 && [globe[2] intValue] > 0 && [globe[3] intValue] > 0) {
+        // The globe widget's box already reaches past the wiki banner and world-map orb under the ring.
+        CGFloat mapLeft = [globe[0] intValue] / k, mapRight = ([globe[0] intValue] + [globe[2] intValue]) / k;
+        if (mapRight > gx && mapLeft < gx + gw)
+            highest = MAX(highest, ([globe[1] intValue] + [globe[3] intValue]) / k + 4.0);
+    }
+    CGFloat gridTop = MIN(MAX(top, highest), lowest);
+    if (fabs(gridTop - self.loggedTabGridTop) >= 1.0) {
+        self.loggedTabGridTop = gridTop;
+        [self appendLine:[NSString stringWithFormat:@"[chrome] tab grid top %.0fpt (anchor %.0f, globe floor %.0f, bottom %.0f, k%.2f)",
+                                                    gridTop, top, highest, lowest, k]];
+    }
+    return gridTop;
+}
+
+// Paint one grid stone (or the door): the composited cache sprite, or an opaque stone-brown tile until the sprites
+// are captured from the cache (first-ever login, pre-capture), so the grid reads as buttons rather than vanishing.
+- (void)paintTabButton:(UIButton *)btn image:(UIImage *)img active:(BOOL)isActive {
+    [btn setImage:img forState:UIControlStateNormal];
+    if (img) {
+        btn.backgroundColor = [UIColor clearColor];
+        btn.layer.cornerRadius = 0.0;
+    } else {
+        btn.backgroundColor = isActive ? [UIColor colorWithRed:96.0 / 255.0 green:32.0 / 255.0 blue:24.0 / 255.0 alpha:1.0]
+                                       : [UIColor colorWithRed:66.0 / 255.0 green:60.0 / 255.0 blue:51.0 / 255.0 alpha:1.0];
+        btn.layer.cornerRadius = 3.0;
+        btn.clipsToBounds = YES;
+    }
+    btn.layer.borderWidth = 0.0;
+    btn.alpha = 1.0; // active vs inactive carried by the red/grey stone itself
+    btn.hidden = NO;
+}
+
+- (void)hideTabGrid {
+    for (UIButton *btn in self.tabButtons)
+        btn.hidden = YES;
+    self.tabExpandButton.hidden = YES;
+    for (UIView *cv in self.stoneCovers)
+        cv.hidden = YES;
+}
+
+// The expand stone: collapse the grid to its inner column, or bring the outer column back. The panel follows the
+// column on the next updateChrome.
+- (void)onTabExpand {
+    self.tabGridCollapsed = !self.tabGridCollapsed;
+    [[NSUserDefaults standardUserDefaults] setBool:self.tabGridCollapsed forKey:@"tabGridCollapsed"];
+    [self appendLine:[NSString stringWithFormat:@"[chrome] tab grid %@", self.tabGridCollapsed ? @"collapsed" : @"expanded"]];
+    [self updateChrome];
 }
 
 // Show, label or hide the one-tap layout-switch pill (~10 Hz). It is up while the player is logged in to a layout the
@@ -5847,8 +5978,7 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
 - (void)onToggleChrome {
     self.chromeVisible = !self.chromeVisible;
     if (!self.chromeVisible) {
-        for (UIButton *btn in self.tabButtons) btn.hidden = YES;
-        for (UIView *cv in self.stoneCovers) cv.hidden = YES;   // reveal the real stones in the fallback view
+        [self hideTabGrid];                       // and the stone covers, revealing the real stones in the fallback view
         [JVMLauncher setEngineStonesHidden:NO];   // flip HudVeneerBridge.hideStones OFF so the engine's own tab
                                                   // stones reappear; without this the per-frame re-hide leaves
                                                   // NO tab access at all (native grid hidden + stones still hidden)
@@ -6384,7 +6514,7 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     // between the top-left chat and the top-right minimap). 0/100 = natural size.
     const int kMinimapScalePct = 100;   // 100 = natural (the engine pins the orbs, so a bigger globe can't be wrapped cleanly)
 
-    self.chatBaseX = leftC + m;
+    self.chatBaseX = leftC + m + kDoorCanvasW; // the logout door takes the corner (updateChrome)
     self.chatBaseY = topC + m;
     self.minimapBaseX = self.renderW - kMinimapClusterW - rightC - m;
     self.minimapBaseY = topC + m;
@@ -6456,8 +6586,9 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
 
 - (int)clampChatX:(int)x {
     int maxX = self.renderW - kChatW;
-    if (maxX < 0) maxX = 0;
-    return x < 0 ? 0 : (x > maxX ? maxX : x);
+    if (maxX < kDoorCanvasW)
+        maxX = kDoorCanvasW;
+    return x < kDoorCanvasW ? kDoorCanvasW : (x > maxX ? maxX : x); // room for the door on its left
 }
 
 - (int)clampChatY:(int)y {
@@ -9322,6 +9453,18 @@ static const CFTimeInterval kSimConfirmTimeout = 15.0;
         NSString *why = [self simOpenConfigFor:[name substringFromIndex:7]];
         if (why)
             return why;
+    } else if ([name hasPrefix:@"tab:"]) {
+        // "tab:<engine tab index>" taps that stone of the grid (10 = the logout door), "tab:expand" the expand stone.
+        NSString *t = [name substringFromIndex:4];
+        if ([t isEqualToString:@"expand"]) {
+            [self onTabExpand];
+            return nil;
+        }
+        int i = t.intValue;
+        if (i < 0 || i >= (int)self.tabButtons.count || self.tabButtons[i].hidden)
+            return @"that tab isn't shown";
+        [self onTabButton:self.tabButtons[i]];
+        return nil;
     } else
         return @"unknown screen";
     BOOL open = self.presentedViewController || self.panelDock.presentedViewController || self.pluginPanelOpen ||
