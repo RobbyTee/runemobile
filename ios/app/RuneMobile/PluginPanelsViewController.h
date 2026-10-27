@@ -23,6 +23,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// immediately. Toggled from Settings ("Show plugin rail"), persisted in NSUserDefaults `rightBarRailHidden`.
 @property (nonatomic, assign) BOOL railHidden;
 
+/// The width of the right-edge strip the shown rail takes, from the screen edge to the rail's leading edge; 0 while
+/// it's hidden. The host keeps its right-edge HUD out of it where the safe area doesn't (an iPad has no side insets).
+- (CGFloat)railStripWidth;
+
 /// Present the native Config Profiles / Infoboxes screens (Settings entry points; the availability of each is
 /// pre-checked so these no-op if the bridge isn't wired). These are NOT plugin nav-buttons, so they don't sit on
 /// the icon rail — Settings reaches them directly.

@@ -17,7 +17,7 @@ configs:
 
 settings:
   base:
-    TARGETED_DEVICE_FAMILY: "1"          # iPhone
+    TARGETED_DEVICE_FAMILY: "1,2"        # iPhone + iPad
     ENABLE_BITCODE: NO
     SWIFT_VERSION: "5.0"
     CLANG_ENABLE_OBJC_ARC: YES

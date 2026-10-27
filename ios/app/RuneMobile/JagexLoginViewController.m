@@ -255,7 +255,11 @@ static NSString *const kLauncherUA =
         }]];
     }
     [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    // iPhone-only target → action sheet presents without a popover anchor.
+    // On iPad an action sheet is a popover and must have an anchor or presenting it throws: centre it, no arrow.
+    sheet.popoverPresentationController.sourceView = self.view;
+    sheet.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(self.view.bounds),
+                                                                CGRectGetMidY(self.view.bounds), 1, 1);
+    sheet.popoverPresentationController.permittedArrowDirections = 0;
     [self presentViewController:sheet animated:YES completion:nil];
 }
 

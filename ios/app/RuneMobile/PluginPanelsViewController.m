@@ -6,6 +6,7 @@
 // rendered panel content opening to its left. The panel's natural 1:1 width is ~PluginPanel.PANEL_WIDTH
 // supersampled then shown at device scale (≈322pt on a 3x screen); size the content column to fit it snug.
 static const CGFloat kRailWidth = 42.0;       // touch-friendly icon column in the outer screen-edge strip
+static const CGFloat kRailEdgeInset = 5.0;    // the rail's gap to the screen edge (its trailing constraint)
 static const CGFloat kDrawerWidth = 392.0;   // modal drawer: content(322) + rail + insets/gap
 static const CGFloat kDrawerHInset = 10.0;
 static const CGFloat kTitleBarHeight = 44.0;
@@ -227,6 +228,10 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
     self.rail.hidden = !railVisible;
     self.panelTrailRail.active = railVisible;
     self.panelTrailEdge.active = !railVisible;
+}
+
+- (CGFloat)railStripWidth {
+    return (self.docked && self.rail && !self.rail.hidden) ? kRailEdgeInset + kRailWidth : 0.0;
 }
 
 - (void)setRailHidden:(BOOL)railHidden {

@@ -430,6 +430,7 @@ static NSString *RMPasteLine(NSString *s) {
 // (ChatRelocateProbe proved it renders there, not occluded). Tabs/scrollback/colors/input stay live since it IS
 // the real chat — no native reproduction needed.
 @property (nonatomic, assign) BOOL engineChatRelocated;   // one-shot: asked the engine to relocate the HUD (A4)
+@property (nonatomic, assign) CGFloat hudRightLaid;       // the hudRightInset that relocate used (TAB-1)
 // Edge-to-edge (A1+A4): the scene fills the whole screen; the engine HUD (chat/minimap/orbs) is relocated INTO
 // the safe area so nothing clips under the island/corners/home-indicator. renderW/H = the canvas the engine
 // draws (set at launch); chatHitCanvas = the relocated chat tab-row rect in canvas px (onTap treats it as UI).
@@ -702,6 +703,14 @@ static const int kChatW = 519;
 static const int kChatTabRowH = 23;
 // The minimap+orbs cluster width (fixed engine px, from the de-risk), until the chrome snapshot reports its size.
 static const int kMinimapClusterW = 211;
+
+// TAB-1: canvas sizing past a phone (applied where the launch picks renderW x renderH). A screen at least
+// kLargeScreenPt on its short side (an iPad) keeps the canvas pixels per point of the phone the HUD was tuned on, the
+// iPhone 17 Pro Max at kPhoneShortPt tall in landscape. No canvas is narrower than kMinCanvasW, the narrowest layout
+// the game is built for. The Android twins are LARGE_SCREEN_DP, PHONE_SHORT_DP and MIN_CANVAS_W in MainActivity.
+static const CGFloat kLargeScreenPt = 600.0;
+static const CGFloat kPhoneShortPt = 440.0;
+static const int kMinCanvasW = 765;
 
 // W3 A3 (native chat tabs, matching the official OSRS-mobile app): 7 tabs (NO Report — the official app doesn't
 // show it in the tab row), each a stone button with the channel name on top and, for the filterable channels, the
@@ -5697,6 +5706,11 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     static const int TAB_GRID_ORDER[14] = { 3, 1,  4, 2,  5, 13,  6, 7,  0, 12,  8, 9,  10, 11 };
     UIEdgeInsets ins = self.view.safeAreaInsets;
     CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height;
+    // TAB-1: step left of the plugin rail. The rail comes and goes (the setting, the first panels arriving after
+    // boot), so when its strip changes the minimap re-anchors on the next updateHudLayout as well.
+    CGFloat right = [self hudRightInset];
+    if (self.engineChatRelocated && right != self.hudRightLaid)
+        self.engineChatRelocated = NO;
     const CGFloat gap = 0.0, margin = 6.0;   // NO gap — the stones tile flush, like the official app
     // TOUCH-1: 44pt cells are geometrically impossible here (7 rows must fit under the top-right minimap —
     // the 0.56 band IS that clearance), so the cells stay official-mobile-sized and the tappability gap is
@@ -5704,7 +5718,7 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     CGFloat availH = (H - ins.top - ins.bottom) * 0.56;
     CGFloat cell = MIN(48.0, availH / 7.0);
     CGFloat gridW = 2 * cell + gap, gridH = 7 * cell + 6 * gap;
-    CGFloat gx0 = W - ins.right - margin - gridW;
+    CGFloat gx0 = W - right - margin - gridW;
     CGFloat gy0 = H - ins.bottom - margin - gridH;
     for (int slot = 0; slot < 14; slot++) {
         int i = TAB_GRID_ORDER[slot];
@@ -5716,7 +5730,7 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
                 row == 0 ? 4.0 : 0.0,                 // top row: into the gap below the minimap
                 col == 0 ? 10.0 : 0.0,                // left column: into the open scene
                 row == 6 ? margin + ins.bottom : 0.0, // bottom row: through the margin to the screen edge
-                col == 1 ? margin + ins.right : 0.0); // right column: through the margin to the screen edge
+                col == 1 ? margin + right : 0.0);     // right column: through the margin to the screen edge
         }
         BOOL isActive = (i == active);
         // Authentic composited tab image (live-cache OSRS stone + icon). Active = red stone, inactive = grey.
@@ -6176,6 +6190,17 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     // (long-press the ⚙ button to change). Default + clamp to the safe 480..600 band proven not to overlap.
     int renderH = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"interfaceRenderH"];
     if (renderH < 480 || renderH > 600) renderH = 540;
+    // TAB-1: on a large screen (an iPad) the canvas grows with the screen's height in points instead, so the HUD stays
+    // the size it is on a phone and the extra screen shows more of the world (1267 tall on a 13" iPad at the default
+    // size), capped at the screen's own pixels. The interface size setting scales it the same way. Phones keep the
+    // setting as it is.
+    if (MIN(sw, sh) >= kLargeScreenPt) {
+        int screenPx = (int)lround(sh * self.traitCollection.displayScale);
+        renderH = MAX(renderH, MIN(screenPx, (int)lround(sh * renderH / kPhoneShortPt)));
+    }
+    // Never narrower than the game's narrowest layout: a 4:3 screen at a phone's 540 would be 720 wide.
+    if (sw > 0 && sh > 0)
+        renderH = MAX(renderH, (int)ceil(kMinCanvasW * sh / sw));
     int renderW = (int)lround(renderH * aspect);
     self.renderW = renderW;
     self.renderH = renderH;
@@ -6326,6 +6351,13 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     self.engineChatRelocated = NO;
 }
 
+// TAB-1: the right-edge width the HUD keeps clear: the safe area, or the plugin rail's strip where that is wider. An
+// iPhone's landscape safe area already holds the rail beside the tab grid and the minimap; an iPad (or an iPhone
+// with a home button) has no side insets, so without this the rail covers the grid's right column.
+- (CGFloat)hudRightInset {
+    return MAX(self.view.safeAreaInsets.right, [self.panelDock railStripWidth]);
+}
+
 - (void)updateHudLayout {
     if (self.engineChatRelocated) return;
     NSString *snap = [JVMLauncher hudSnapshot];
@@ -6340,9 +6372,10 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     UIEdgeInsets ins = self.view.safeAreaInsets;
     CGFloat sw = self.view.bounds.size.width;
     CGFloat k = (sw > 0) ? (CGFloat)self.renderW / sw : 1.0;
+    self.hudRightLaid = [self hudRightInset];
     int topC   = (int)lround(ins.top * k);
     int leftC  = (int)lround(ins.left * k);
-    int rightC = (int)lround(ins.right * k);
+    int rightC = (int)lround(self.hudRightLaid * k);
     const int m = 8; // canvas-px margin from the safe edge
     // Make the minimap BIGGER: enlarge the engine globe + reposition its chrome (HudVeneerBridge.setMinimapScale).
     // The globe is right-anchored, so it grows left+down within the cluster — the right edge stays at MM_W, so the
