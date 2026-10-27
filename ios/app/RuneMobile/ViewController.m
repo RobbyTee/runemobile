@@ -5706,11 +5706,8 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     static const int TAB_GRID_ORDER[14] = { 3, 1,  4, 2,  5, 13,  6, 7,  0, 12,  8, 9,  10, 11 };
     UIEdgeInsets ins = self.view.safeAreaInsets;
     CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height;
-    // TAB-1: step left of the plugin rail. The rail comes and goes (the setting, the first panels arriving after
-    // boot), so when its strip changes the minimap re-anchors on the next updateHudLayout as well.
+    // TAB-1: step left of the plugin rail (updateHudLayout moves the minimap when the rail comes or goes).
     CGFloat right = [self hudRightInset];
-    if (self.engineChatRelocated && right != self.hudRightLaid)
-        self.engineChatRelocated = NO;
     const CGFloat gap = 0.0, margin = 6.0;   // NO gap — the stones tile flush, like the official app
     // TOUCH-1: 44pt cells are geometrically impossible here (7 rows must fit under the top-right minimap —
     // the 0.56 band IS that clearance), so the cells stay official-mobile-sized and the tappability gap is
@@ -6359,6 +6356,10 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
 }
 
 - (void)updateHudLayout {
+    // TAB-1: re-anchor when the rail's strip changes; it comes and goes with the setting and the first panels
+    // arriving after boot. Checked here, not in updateChrome, which the chrome toggle and the map can skip.
+    if (self.engineChatRelocated && [self hudRightInset] != self.hudRightLaid)
+        self.engineChatRelocated = NO;
     if (self.engineChatRelocated) return;
     NSString *snap = [JVMLauncher hudSnapshot];
     if (snap.length == 0) return;   // bridge / VM not up yet — retry next tick
