@@ -30,10 +30,13 @@ import java.awt.Dimension;
 import java.awt.EventQueue;
 import java.awt.Frame;
 import java.awt.Insets;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.ScriptID;
+import net.runelite.api.gameval.VarClientID;
 
 /**
  * Phase-5 (W3) resizable de-risk: drive the headless gamepack {@code Component} to an arbitrary
@@ -53,7 +56,9 @@ import net.runelite.api.GameState;
  * proves. Entirely inert unless the property is set.
  *
  * <p>The host can ask for another size later with {@link #requestResize}, when its window changes shape mid-session
- * (a foldable opened or closed), so the game shows more or less of the world instead of being stretched.
+ * (a foldable opened or closed), so the game shows more or less of the world instead of being stretched. It can
+ * also read and set the camera zoom ({@link #cameraZoom}, {@link #requestZoom}), so a host can keep one zoom per
+ * screen of a foldable.
  */
 @Slf4j
 public final class HeadlessResize
@@ -69,6 +74,10 @@ public final class HeadlessResize
 	// The newest size the host asked for (requestResize), packed w << 32 | h; 0 = none. Taken on the client thread.
 	private static final AtomicLong requested = new AtomicLong();
 	private static int logFrames;
+	// The zoom the game is drawing with, published on the client thread each draw; -1 while logged out.
+	private static volatile int zoom = -1;
+	// The newest zoom the host asked for (requestZoom); -1 = none. Taken on the client thread once logged in.
+	private static final AtomicInteger requestedZoom = new AtomicInteger(-1);
 
 	static
 	{
@@ -125,6 +134,32 @@ public final class HeadlessResize
 		}
 	}
 
+	/**
+	 * The camera zoom the game is drawing with, or -1 while logged out; callable from any thread. This is the
+	 * big-viewport zoom (varc 74), which the game uses on any canvas over 434 px tall, so on every phone canvas. A load
+	 * or a world hop keeps it. A zoom asked for but not applied yet (it waits out a load) counts as the one in use, so
+	 * a host reading it back in between gets the zoom the game is about to draw with.
+	 */
+	public static int cameraZoom()
+	{
+		final int z = zoom;
+		final int r = requestedZoom.get();
+		return z < 0 || r < 0 ? z : r;
+	}
+
+	/**
+	 * Ask for the camera zoom to be set to {@code z}; callable from any thread. The client thread applies it the way
+	 * the game's own scroll zoom does, clamped to the zoom limits, once logged in. Only the newest request counts.
+	 * Ignored unless the boot resize is enabled.
+	 */
+	public static void requestZoom(int z)
+	{
+		if (ENABLED && z >= 0)
+		{
+			requestedZoom.set(z);
+		}
+	}
+
 	/** Called once per {@code Hooks.draw} (only when enabled). Resizes on reaching LOGGED_IN, then on each request. */
 	public static void tick(Client client, GameState state)
 	{
@@ -132,6 +167,7 @@ public final class HeadlessResize
 		{
 			return;
 		}
+		tickZoom(client, state);
 		if (!applied)
 		{
 			if (state != GameState.LOGGED_IN)
@@ -158,6 +194,27 @@ public final class HeadlessResize
 				logFrames, client.getCanvas() != null ? client.getCanvas().getWidth() : -1,
 				client.getCanvas() != null ? client.getCanvas().getHeight() : -1,
 				client.getViewportWidth(), client.getViewportHeight());
+		}
+	}
+
+	/** Apply a requested zoom and publish the zoom in use. Logging out clears it; a load or hop in between does not. */
+	private static void tickZoom(Client client, GameState state)
+	{
+		if (state == GameState.LOGGED_IN)
+		{
+			final int z = requestedZoom.getAndSet(-1);
+			if (z >= 0)
+			{
+				// The script the game's scroll zoom calls. It takes the small- and big-viewport zooms; like the Camera
+				// plugin, set both.
+				client.runScript(ScriptID.CAMERA_DO_ZOOM, z, z);
+				log.info("[headless-resize] camera zoom {} -> {}", zoom, client.getVarcIntValue(VarClientID.CAMERA_ZOOM_BIG));
+			}
+			zoom = client.getVarcIntValue(VarClientID.CAMERA_ZOOM_BIG);
+		}
+		else if (state.getState() < GameState.LOGGING_IN.getState())
+		{
+			zoom = -1;
 		}
 	}
 

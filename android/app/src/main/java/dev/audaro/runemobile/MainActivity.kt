@@ -260,6 +260,9 @@ class MainActivity : AppCompatActivity() {
 
     // FOLD-3: the canvas size the bridge last accepted, until a frame of that size is drawn and the host adopts it.
     private var pendingCanvas: Pair<Int, Int>? = null
+
+    // FOLD-4: whether the laid-out window is a large screen (see isLargeScreen); null until the first layout.
+    private var largeWindow: Boolean? = null
     private var perfChip: TextView? = null
     private var devPanel: LinearLayout? = null
     private var devDiag: TextView? = null
@@ -492,6 +495,10 @@ class MainActivity : AppCompatActivity() {
         private const val CANVAS_POLL_MS = 16L
         private const val CANVAS_WAIT_MS = 2000L
 
+        // FOLD-4: on reaching the game the zoom is published from a following draw: look for it this often, this many times.
+        private const val ZOOM_POLL_MS = 250L
+        private const val ZOOM_POLL_TRIES = 20
+
         // The VM's maximum heap; an xms marker above it would stop the VM starting.
         private const val MAX_HEAP_MB = 512L
         private const val MB_PER_GB = 1024L
@@ -578,6 +585,10 @@ class MainActivity : AppCompatActivity() {
         // UX-ONBOARD-02: one-time launch notices (currently just the layout hint).
         private const val PREFS_NOTICES = "notices"
         private const val KEY_LAYOUT_NOTICE_OFF = "layoutNoticeSuppressed"
+
+        // FOLD-4: the camera zoom kept per screen class ("phone" / "large"), and the class the game's saved zoom is for.
+        private const val PREFS_ZOOM = "zoom"
+        private const val KEY_ZOOM_OWNER = "owner"
         const val PREF_HOTKEYS_ACTIVE = "active"
 
         // Bug 4: the WorldHopper quick-hop keybinds. These mirror RuneLite's WorldHopperConfig @ConfigGroup
@@ -3740,6 +3751,9 @@ class MainActivity : AppCompatActivity() {
             }
         val loggedIn = o?.optBoolean("loggedIn") == true
         if (awakeInGame && !loggedIn) awakeLeftGameAtMs = SystemClock.uptimeMillis()
+        // FOLD-4: on reaching the game, and after each load, match the zoom to the window: the app may have last run on
+        // the foldable's other screen, or been folded at the login screen.
+        if (loggedIn && !awakeInGame) syncZoom(ZOOM_POLL_TRIES)
         awakeInGame = loggedIn
         // Bug 8: arm the login-transition latch off a genuine LOGIN_SCREEN→LOGGED_IN edge. While logged out we note
         // that we saw the login screen (the snapshot's loginScreen flag); on the next logged-in frame that consumes
@@ -4213,6 +4227,13 @@ class MainActivity : AppCompatActivity() {
     private val resizeCanvasToWindow =
         Runnable {
             val root = rootContainer
+            if (root != null && minOf(root.width, root.height) > 0) {
+                val large = isLargeScreen(root.width, root.height, resources.displayMetrics.density)
+                if (large != largeWindow) {
+                    largeWindow = large
+                    syncZoom(0) // logged out, it waits for the login check
+                }
+            }
             val (w, h) = if (root == null) 0 to 0 else canvasFor(root.width, root.height, resources.displayMetrics.density)
             val oldW = canvasW
             val oldH = canvasH
@@ -4253,6 +4274,55 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** FOLD-4: on the rl-bridge thread, give the game the zoom kept for the window's screen class (see [swapZoom]).
+     *  While the zoom is still unknown, the first draws after login, it tries again up to [tries] more times.
+     *  UI-thread only. */
+    private fun syncZoom(tries: Int) {
+        val large = largeWindow ?: return
+        JvmLauncher.onBridge {
+            if (!swapZoom(large) && tries > 0) {
+                runOnUiThread { rootContainer?.postDelayed({ syncZoom(tries - 1) }, ZOOM_POLL_MS) }
+            }
+        }
+    }
+
+    /** FOLD-4: keep a camera zoom per screen class, so a foldable has one zoom folded and another unfolded, as two
+     *  desktop windows of those shapes would want, instead of the player re-pinching at every fold. Nothing is chosen
+     *  for the player: a class keeps the game's zoom as it is until the player has left it once, and from then on
+     *  gets back the zoom it had then.
+     *  The game saves a single zoom, so the owner pref records which class that zoom is for. When the window's class
+     *  is not the owner, the game's zoom is stored for the owner and the window's stored zoom, if any, is set. A
+     *  device that never changes class (a phone, a tablet) only ever writes the owner once. Returns false while the
+     *  zoom is unknown (logged out, or an older jar). rl-bridge thread only, so the prefs have one writer. */
+    private fun swapZoom(large: Boolean): Boolean {
+        val prefs = getSharedPreferences(PREFS_ZOOM, MODE_PRIVATE)
+        val screen = if (large) "large" else "phone"
+        val owner = prefs.getString(KEY_ZOOM_OWNER, null)
+        if (owner == null) prefs.edit().putString(KEY_ZOOM_OWNER, screen).apply()
+        if (owner == null || owner == screen) return true
+        val zoom = JvmLauncher.cameraZoom()
+        if (zoom >= 0) {
+            val saved = prefs.getInt(screen, -1)
+            prefs
+                .edit()
+                .putInt(owner, zoom)
+                .putString(KEY_ZOOM_OWNER, screen)
+                .apply()
+            if (saved >= 0 && saved != zoom) JvmLauncher.setCameraZoom(saved)
+            val given = if (saved >= 0) "gets $saved back" else "keeps it"
+            Log.i(TAG, "fold: zoom $zoom kept for the $owner screen; the $screen screen $given")
+        }
+        return zoom >= 0
+    }
+
+    /** FOLD-3: whether a [w]x[h] px window at [density] is a large screen: at least LARGE_SCREEN_DP on its short side,
+     *  a tablet or an unfolded book foldable. */
+    private fun isLargeScreen(
+        w: Int,
+        h: Int,
+        density: Float,
+    ) = minOf(w, h) / density >= LARGE_SCREEN_DP
+
     /** The canvas size for a [w]x[h] px window (or screen) at [density], in the window's orientation.
      *  UI-2: a phone's canvas is 540 tall. A lower engine canvas blits up to a physically BIGGER HUD (minimap, orbs,
      *  chat, side panel, tab grid all scale together) — the only working way to enlarge the minimap (the per-widget
@@ -4274,7 +4344,7 @@ class MainActivity : AppCompatActivity() {
         val shortEdge = minOf(w, h)
         val shortDp = shortEdge / density
         var renderShort =
-            if (shortDp >= LARGE_SCREEN_DP) {
+            if (isLargeScreen(w, h, density)) {
                 maxOf(PHONE_CANVAS_SHORT, minOf(shortEdge, Math.round(shortDp * PHONE_CANVAS_SHORT / PHONE_SHORT_DP)))
             } else {
                 PHONE_CANVAS_SHORT

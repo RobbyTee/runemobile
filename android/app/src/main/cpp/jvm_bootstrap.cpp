@@ -89,6 +89,8 @@ static jmethodID g_midInvokeMenuEntry = nullptr;
 static jmethodID g_midHeapStats = nullptr, g_midSimReconnect = nullptr;
 // FOLD-3 live canvas resize (JavaBridge.requestResize); optional, an older jar just keeps its boot size.
 static jmethodID g_midRequestResize = nullptr;
+// FOLD-4 per-screen zoom (JavaBridge.cameraZoom / setCameraZoom); optional, an older jar keeps one zoom.
+static jmethodID g_midCameraZoom = nullptr, g_midSetCameraZoom = nullptr;
 static jclass    g_menuPeekCls = nullptr;
 static jmethodID g_midMenuSnapshot = nullptr, g_midMenuPublishSeq = nullptr;
 
@@ -717,6 +719,8 @@ static bool publishBridge(JNIEnv *env) {
     g_midHeapStats = midOpt(env, global, "heapStats", "()Ljava/lang/String;"); // P2-1 dev panel (optional)
     g_midSimReconnect = midOpt(env, global, "devSimulateReconnect", "(I)V");   // P2-1 dev panel (optional)
     g_midRequestResize = midOpt(env, global, "requestResize", "(II)V");        // FOLD-3 (optional)
+    g_midCameraZoom = midOpt(env, global, "cameraZoom", "()I");                // FOLD-4 (optional)
+    g_midSetCameraZoom = midOpt(env, global, "setCameraZoom", "(I)V");         // FOLD-4 (optional)
     g_bridgeCls = global;   // publish only once fully resolved
     LOGI("bridge: JavaBridge facade published (shiftHeld=%s)", g_midSetShiftHeld ? "on" : "off");
 
@@ -2068,6 +2072,31 @@ Java_dev_audaro_runemobile_JvmLauncher_nativeRequestResize(JNIEnv *, jobject, ji
         return JNI_FALSE;
     }
     return JNI_TRUE;
+}
+
+// FOLD-4: the camera zoom the game is drawing with; -1 while logged out, before the bridge is up, or on an older jar.
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeCameraZoom(JNIEnv *, jobject) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_bridgeCls || !g_midCameraZoom)
+        return -1;
+    jint zoom = hs->CallStaticIntMethod(g_bridgeCls, g_midCameraZoom);
+    if (hs->ExceptionCheck()) {
+        hs->ExceptionClear();
+        return -1;
+    }
+    return zoom;
+}
+
+// FOLD-4: set the camera zoom (applied on the client thread once logged in). No-op on an older jar.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetCameraZoom(JNIEnv *, jobject, jint zoom) {
+    JNIEnv *hs = bridgeEnvAttach();
+    if (!hs || !g_bridgeCls || !g_midSetCameraZoom)
+        return;
+    hs->CallStaticVoidMethod(g_bridgeCls, g_midSetCameraZoom, zoom);
+    if (hs->ExceptionCheck())
+        hs->ExceptionClear();
 }
 
 // ---- A4 plugin control plane (MobileUiBridge) --------------------------------------------------------

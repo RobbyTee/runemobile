@@ -245,6 +245,14 @@ object JvmLauncher {
         h: Int,
     ): Boolean
 
+    /** FOLD-4: the camera zoom the game is drawing with; -1 while logged out, before the bridge is up, or on an older
+     *  jar. Call OFF the UI thread (via [onBridge]). */
+    external fun nativeCameraZoom(): Int
+
+    /** FOLD-4: set the camera zoom (clamped to the game's limits, applied once logged in). No-op on an older jar.
+     *  Call OFF the UI thread (via [onBridge]). */
+    external fun nativeSetCameraZoom(zoom: Int)
+
     // AP-2b Finding 5 (screenshot): the latest composited CPU frame as 0x00RRGGBB ints (alpha unset; the consumer
     // ORs 0xFF for an opaque PNG). null before the first frame / bridge off. Pull OFF the UI thread (via [onBridge])
     // — it attaches the caller to HotSpot. Size against [nativeFrameWidth]; guard len % width == 0.
@@ -760,6 +768,10 @@ object JvmLauncher {
         w: Int,
         h: Int,
     ) = nativeRequestResize(w, h)
+
+    fun cameraZoom() = nativeCameraZoom()
+
+    fun setCameraZoom(zoom: Int) = nativeSetCameraZoom(zoom)
 
     // ---- A3.5 bridge request/response thread --------------------------------------------------------
     // A single dedicated background thread the UI posts plugin-plane requests to, so the ART UI thread NEVER

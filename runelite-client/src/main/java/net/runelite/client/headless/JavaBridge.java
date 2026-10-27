@@ -677,6 +677,24 @@ public final class JavaBridge
 	}
 
 	/**
+	 * The camera zoom the game is drawing with, or -1 while logged out (or with the canvas resize off). A host
+	 * reads it to remember a zoom per screen of a foldable. Any thread. See {@link HeadlessResize#cameraZoom}.
+	 */
+	public static int cameraZoom()
+	{
+		return HeadlessResize.cameraZoom();
+	}
+
+	/**
+	 * Set the camera zoom, clamped to the game's zoom limits, as the scroll wheel would. Any thread; the client thread
+	 * applies it once logged in. See {@link HeadlessResize#requestZoom}.
+	 */
+	public static void setCameraZoom(int zoom)
+	{
+		HeadlessResize.requestZoom(zoom);
+	}
+
+	/**
 	 * The latest <em>complete</em> composited frame as packed {@code 0xAARRGGBB} ints (a stable snapshot,
 	 * not the live back buffer). Returns {@code null} before the first frame.
 	 */
