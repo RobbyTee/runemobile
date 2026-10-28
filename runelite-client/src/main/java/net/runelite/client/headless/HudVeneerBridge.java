@@ -331,6 +331,11 @@ public final class HudVeneerBridge
 	// Last collapsed-or-hidden state APPLIED on the client thread, so the tick can detect the closed->open edge and
 	// rebuild.
 	private static boolean chatCollapsedApplied;
+	// The canvas size and large-portrait state the chat's lines were last built for (0 = not yet). The build script
+	// wraps and stacks the lines for the chat it finds, and re-laying the chat afterwards moves them as they are, so
+	// after the phone turned they kept the old layout's wrapping, ran past the chat's edge and lost the last line.
+	// Client thread.
+	private static long chatLinesLayout;
 
 	// True while a forefront window (bank / GE / shop / …) is open OVER the relocated chat region — the chat is
 	// hidden so it sits BEHIND the window. Computed each tick; published as windowOpen in buildChatSnapshot so the
@@ -1056,6 +1061,18 @@ public final class HudVeneerBridge
 				// SCROLLAREA/INPUT) every frame, which re-shows the chat lines over the opaque dialogue box. The
 				// dialogue replaces the messages, so leave the area alone while one is open.
 				if (!dlgOpen) sizeChatArea(c, chatId, rowW, promptOpen);
+				// Rebuild the lines once the layout under them changes (a turn, a fold, the strip going on or off; the
+				// strip settles a frame after the canvas, which can take a second rebuild). Not while the chat is
+				// closed, where the reopen edge rebuilds, or under a dialogue, which the lines would bleed over.
+				final long layout = (long) c.getCanvasWidth() << 32 | c.getCanvasHeight() << 1 | (HudStrip.isOn() ? 1 : 0);
+				if (layout != chatLinesLayout && !chatClosed && !dlgOpen)
+				{
+					if (chatLinesLayout != 0)
+					{
+						try { c.runScript(ScriptID.BUILD_CHATBOX); } catch (RuntimeException ignore) { BridgeFaults.note("HudVeneerBridge.buildChatbox", ignore); }
+					}
+					chatLinesLayout = layout;
+				}
 				// Path B: in classic OSRS the dialogue draws its head + text ONTO the chatbox brown box. So while a
 				// dialogue is open SHOW CHAT_BACKGROUND (opaque dialogue box); otherwise HIDE it so chat messages draw
 				// transparent over the scene. CONTROLS backgrounds stay hidden (the native tab row covers that strip).
