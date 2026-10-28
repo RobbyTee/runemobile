@@ -140,6 +140,8 @@ cp -R "$APP" "$DIST/Payload/"
 PAPP="$DIST/Payload/RuneMobile.app"
 GOTVER="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PAPP/Info.plist")"
 [ "$GOTVER" = "$VERSTR" ] || die "the app says version '$GOTVER', not $VERSTR — does Info.plist still read \$(MARKETING_VERSION)?"
+GOTBUILD="$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PAPP/Info.plist")"
+[ "$GOTBUILD" = "$BUILD" ] || die "the app says build '$GOTBUILD', not $BUILD — does Info.plist still read \$(CURRENT_PROJECT_VERSION)?"
 BUNDLE_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$PAPP/Info.plist")"
 codesign --verify --deep --strict "$PAPP" || die "the app's signature does not verify, so iOS would refuse the install"
 security cms -D -i "$PAPP/embedded.mobileprovision" -o "$WORK/profile.plist" 2>/dev/null \
@@ -190,7 +192,8 @@ with open(os.path.join(dist, "manifest.plist"), "wb") as f:
             {"kind": "display-image", "url": base + "/icon-57.png"},
             {"kind": "full-size-image", "url": base + "/icon-512.png"},
         ],
-        "metadata": {"bundle-identifier": bundle_id, "bundle-version": ver, "kind": "software", "title": "RuneMobile"},
+        # bundle-version is the app's CFBundleVersion, the build number, not the marketing version.
+        "metadata": {"bundle-identifier": bundle_id, "bundle-version": build, "kind": "software", "title": "RuneMobile"},
     }]}, f)
 install = html.escape("itms-services://?action=download-manifest&url="
                       + urllib.parse.quote(base + "/manifest.plist", safe=""), quote=True)
