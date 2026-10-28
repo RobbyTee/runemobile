@@ -259,6 +259,9 @@ static BOOL rcBuildFbo(int w, int h)
 	}
 }
 
++ (void)presentLayerResized {
+}
+
 + (void)setPresentLayer:(id)layer
 {
 	sPresentLayer = (__bridge void *) layer;   // a CAMetalLayer (passed before createGLContext)
@@ -499,14 +502,28 @@ static BOOL rcBuildFbo(int w, int h)
 + (int)fbWidth  { return sFboW; }
 + (int)fbHeight { return sFboH; }
 
+// Set on main by presentLayerResized, taken on the GL thread by ensureSize.
+static volatile BOOL sPresentLayerResized = NO;
+
 + (void)ensureSizeWidth:(int)w height:(int)h
 {
-	if (sPresentLayer) return;
-	if (w > 0 && h > 0 && (w != sFboW || h != sFboH) && sCtx)
-	{
-		[EAGLContext setCurrentContext:sCtx];
-		rcBuildFbo(w, h);
-	}
+    if (sPresentLayer) {
+        // The drawable follows the layer, which the shell resizes once the game draws at the new canvas.
+        if (sPresentLayerResized && sCtx) {
+            sPresentLayerResized = NO;
+            [EAGLContext setCurrentContext:sCtx];
+            rcBuildFbo(w, h);
+        }
+        return;
+    }
+    if (w > 0 && h > 0 && (w != sFboW || h != sFboH) && sCtx) {
+        [EAGLContext setCurrentContext:sCtx];
+        rcBuildFbo(w, h);
+    }
+}
+
++ (void)presentLayerResized {
+    sPresentLayerResized = YES;
 }
 
 + (void)setPresentLayer:(id)caEaglLayer { sPresentLayer = (__bridge void *) caEaglLayer; }

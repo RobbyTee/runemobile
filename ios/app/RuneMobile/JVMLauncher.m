@@ -52,6 +52,8 @@ static jmethodID gMidHeapStats = NULL;    // heapStats()Ljava/lang/String; — d
 static jmethodID gMidSimReconnect = NULL; // devSimulateReconnect(I)V — dev "test reconnect" hook (optional)
 static jmethodID gMidCameraZoom = NULL;   // cameraZoom()I: the zoom the game draws with, -1 logged out (optional)
 static jmethodID gMidSetCameraZoom = NULL; // setCameraZoom(I)V: set it as the scroll wheel would (optional)
+static jmethodID gMidRequestResize = NULL; // requestResize(II)V: resize the canvas mid-session (optional)
+static jmethodID gMidCanvasW = NULL, gMidCanvasH = NULL; // canvasWidth()I / canvasHeight()I (optional)
 static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidClickPrecise = NULL, gMidMove = NULL;
 static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
 static jmethodID gMidCameraHold = NULL; // setCameraHold(II)V — a held arrow turns at a pixel RATE per second
@@ -332,6 +334,21 @@ static BOOL ensureBridge(void) {
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         gMidSetCameraZoom = NULL;
+    }
+    gMidRequestResize = (*env)->GetStaticMethodID(env, global, "requestResize", "(II)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidRequestResize = NULL;
+    }
+    gMidCanvasW = (*env)->GetStaticMethodID(env, global, "canvasWidth", "()I");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidCanvasW = NULL;
+    }
+    gMidCanvasH = (*env)->GetStaticMethodID(env, global, "canvasHeight", "()I");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidCanvasH = NULL;
     }
     gMidMenuSelect = (*env)->GetStaticMethodID(env, global, "selectMenuPoint", "(II)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidMenuSelect = NULL; }
@@ -2382,6 +2399,41 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidSetCameraZoom, (jint)zoom);
     if ((*env)->ExceptionCheck(env))
         bridgeNoteClear(env, "JVMLauncher.setCameraZoom");
+}
+
+// Ask for a w x h canvas (JavaBridge.requestResize): the game resizes on its next draw, or, before login, takes it as
+// the size to resize to at login. NO before the bridge is up or on an older jar.
++ (BOOL)requestResizeWidth:(int)w height:(int)h {
+    if (!ensureBridge() || !gMidRequestResize || !gMainEnv)
+        return NO;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidRequestResize, (jint)w, (jint)h);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.requestResize");
+        return NO;
+    }
+    return YES;
+}
+
+// The canvas the game draws now, hidden strip included (JavaBridge.canvasWidth/canvasHeight); 0 before the client is up.
+static int canvasSide(jmethodID mid, const char *where) {
+    if (!ensureBridge() || !mid || !gMainEnv)
+        return 0;
+    JNIEnv *env = gMainEnv;
+    jint v = (*env)->CallStaticIntMethod(env, gBridgeClass, mid);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, where);
+        return 0;
+    }
+    return (int)v;
+}
+
++ (int)canvasWidth {
+    return canvasSide(gMidCanvasW, "JVMLauncher.canvasWidth");
+}
+
++ (int)canvasHeight {
+    return canvasSide(gMidCanvasH, "JVMLauncher.canvasHeight");
 }
 
 // The top rows of the canvas that reach the screen (+setShownRows:); 0 = all of them.

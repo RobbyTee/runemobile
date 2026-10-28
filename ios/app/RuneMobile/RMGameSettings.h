@@ -32,12 +32,16 @@ extern NSNotificationName const RMGameSettingsDidChangeNotification;
 /// How long a finger has to rest on an item before dragging it moves the item, in ms: two thirds of the
 /// long-press time, at most 150. A quicker swipe never picks the item up.
 + (NSInteger)dragHoldMs;
-/// Whether the game runs in portrait (default NO, landscape).
+/// Whether the game runs in portrait (default NO, landscape). Under Auto it is the choice Auto returns to.
 + (BOOL)portrait;
 + (void)setPortrait:(BOOL)on;
-/// The orientation this launch runs in: the setting as it read when first asked. The game's canvas is sized once,
-/// when it starts, so a change waits for the next launch.
-+ (BOOL)portraitThisLaunch;
+/// Auto: the game turns with the phone (default NO).
++ (BOOL)autoRotate;
++ (void)setAutoRotate:(BOOL)on;
+/// The orientations the window may take under the setting.
++ (UIInterfaceOrientationMask)orientationMask;
+/// Turn `window` to the setting now. The game resizes its canvas when the window turns.
++ (void)applyOrientationToWindow:(UIWindow *)window;
 @end
 
 /// The native Game settings screen, pushed from Settings.

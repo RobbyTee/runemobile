@@ -444,7 +444,7 @@ static NSString *RMPasteLine(NSString *s) {
 // the real chat — no native reproduction needed.
 @property (nonatomic, assign) BOOL engineChatRelocated;   // one-shot: asked the engine to relocate the HUD (A4)
 @property (nonatomic, assign) CGFloat hudRightLaid;       // the hudRightInset that relocate used (TAB-1)
-@property (nonatomic, assign) BOOL zoomSynced;            // syncOrientationZoom has run this launch
+@property (nonatomic, assign) BOOL zoomSynced;            // syncOrientationZoom has run for this orientation
 // Edge-to-edge (A1+A4): the scene fills the whole screen; the engine HUD (chat/minimap/orbs) is relocated INTO
 // the safe area so nothing clips under the island/corners/home-indicator. renderW/H = the canvas the engine
 // draws (set at launch); chatHitCanvas = the relocated chat tab-row rect in canvas px (onTap treats it as UI).
@@ -455,6 +455,12 @@ static NSString *RMPasteLine(NSString *s) {
 // The window band last sent with setEngineHudStrip, so it is sent again only when it moves.
 @property (nonatomic, assign) BOOL stripSent;
 @property (nonatomic, assign) int stripBandTop, stripBandBottom;
+// Auto-rotate: the window changed size, so resizeCanvasToScreen runs each tick until its request lands.
+@property (nonatomic, assign) BOOL canvasCheckDue;
+// The canvas asked for, adopted once the game draws at it (adoptCanvasIfDrawn), or at canvasDeadline.
+@property (nonatomic, assign) BOOL canvasPending;
+@property (nonatomic, assign) int pendingW, pendingH, pendingVisibleH;
+@property (nonatomic, assign) CFTimeInterval canvasDeadline;
 
 // GPU Route C direct present: a CAEAGLLayer (EAGL) / CAMetalLayer (ANGLE) the engine renders straight into (no
 // readback). nil in CPU/L1 mode. Kept strong so the layer outlives the EGL/EAGL surface that references it.
@@ -733,10 +739,13 @@ static NSString * const kKbSentinel = @"​";
 // dimensions used to treat filter-row taps as UI (precise click, no walk ring).
 static const int kChatW = 461;
 
+// Whether the canvas the game draws is portrait: set at launch, then by each resize the shell adopts (auto-rotate).
+static BOOL sCanvasPortrait = NO;
+
 // The chat's and the minimap's dragged offsets (overlay edit), kept apart for each orientation (Settings > Game
 // settings > Screen): an offset dragged on the wide landscape canvas can land the minimap on the chat in portrait.
 static NSString *hudOffsetKey(NSString *key) {
-    return [RMGameSettings portraitThisLaunch] ? [key stringByAppendingString:@".portrait"] : key;
+    return sCanvasPortrait ? [key stringByAppendingString:@".portrait"] : key;
 }
 // The minimap+orbs cluster width (fixed engine px, from the de-risk), until the chrome snapshot reports its size.
 static const int kMinimapClusterW = 211;
@@ -759,6 +768,11 @@ static CGFloat sHudScale = 1.0;
 static int hudPx(int enginePx) {
     return (int)lround(enginePx * sHudScale);
 }
+// A canvas the engine draws: w x h px, of which the top visibleH rows reach the screen (fewer than h only on a
+// large-portrait canvas, whose strip runs on below the screen).
+typedef struct {
+    int w, h, visibleH;
+} RMCanvas;
 
 // W3 A3 (the chat's filter row, matching the official OSRS-mobile app): the ENGINE draws the 7 filter stones (no
 // Report: the official app doesn't show it in the row), with each channel's name and live filter state, at the
@@ -1118,6 +1132,9 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor blackColor];
     self.bgTask = UIBackgroundTaskInvalid;
+    // The orientation the offsets below are kept for; onLaunch settles it from the canvas it picks.
+    sCanvasPortrait = [RMGameSettings autoRotate] ? self.view.bounds.size.height > self.view.bounds.size.width
+                                                  : [RMGameSettings portrait];
     // Persisted minimap position offset (set in overlay edit-mode; applied in updateHudLayout).
     self.minimapUserDX = (int)[[NSUserDefaults standardUserDefaults] integerForKey:hudOffsetKey(@"minimapUserDX")];
     self.minimapUserDY = (int)[[NSUserDefaults standardUserDefaults] integerForKey:hudOffsetKey(@"minimapUserDY")];
@@ -5956,6 +5973,9 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     }
     [self applyKbFabVisibility];
 
+    // The rest is in canvas px: wait for a pending canvas (auto-rotate) rather than place it on the old one.
+    if (self.canvasPending)
+        return;
     // Relocate the engine side panel (the open inventory/skills/etc. "menu") flush LEFT of the group's frame and
     // centred on it, as 601 puts both on the one anchor (tabGridTopForHeight). Convert the group's screen-point edges
     // to canvas px; the side panel's size comes from the chrome snapshot (fixed engine px).
@@ -5975,7 +5995,7 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
 
     // Large portrait: the game's windows keep to the band under the chat and the minimap and over the group and
     // the side panel, so neither covers a window's edge.
-    if (self.visibleH < self.renderH && self.chatBaseX > 0) {
+    if (self.visibleH < self.renderH && self.chatBaseX > 0 && self.engineChatRelocated) {
         int top = [self clampChatY:self.chatBaseY + self.chatUserDY] + chatRowCanvasH() + hudPx(kChatContentCanvasH);
         if (!CGRectIsNull(mmRect))
             top = MAX(top, (int)CGRectGetMaxY(mmRect));
@@ -6418,6 +6438,166 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
                                       env, self.diagLabel.text ?: @"", log];
 }
 
+// The canvas for a screen whose sides are `size` points, as the window stands.
+- (RMCanvas)canvasForScreen:(CGSize)size {
+    CGFloat sw = size.width, sh = size.height;
+    BOOL portrait = sh > sw;
+    CGFloat shortPt = MIN(sw, sh), longPt = MAX(sw, sh);
+    // Render height is the sharpness<->FPS<->UI-SIZE dial: the engine SOFTWARE-renders at renderW×renderH every
+    // frame (no GPU on iOS), so a LOWER renderH = bigger UI on screen. The minimap can't be enlarged on its own
+    // (the engine pins its orbs + breaks the terrain raster if the globe is repositioned — see HudVeneerBridge),
+    // so we scale the WHOLE HUD up via renderH to make the minimap bigger. 600 was the prior "official-sized"
+    // value; 540 enlarges the HUD ~11% (bigger minimap/chat/orbs). Watch the right column (minimap top + native
+    // tab grid bottom) for overlap as this drops (480 collided historically) — tune here.
+    // DISP-1: user-selectable "Interface size" — a smaller canvas = a larger HUD. Persisted; applied at launch
+    // (long-press the ⚙ button to change), so it is read once and a turn keeps this launch's size. Default + clamp
+    // to the safe 480..600 band proven not to overlap.
+    static int launchRenderH;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        launchRenderH = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"interfaceRenderH"];
+        if (launchRenderH < 480 || launchRenderH > 600)
+            launchRenderH = 540;
+    });
+    int renderH = launchRenderH;
+    // TAB-1: on a large screen (an iPad) the canvas grows with the screen's height in points instead, so the HUD stays
+    // the size it is on a phone and the extra screen shows more of the world (1267 tall on a 13" iPad at the default
+    // size), capped at the screen's own pixels. The interface size setting scales it the same way. Phones keep the
+    // setting as it is.
+    int renderShort = renderH;
+    if (shortPt >= kLargeScreenPt) {
+        int screenPx = (int)lround(shortPt * self.traitCollection.displayScale);
+        renderShort = MAX(renderShort, MIN(screenPx, (int)lround(shortPt * renderShort / kPhoneShortPt)));
+    }
+    // Never narrower than the game's narrowest layout: a 4:3 screen at a phone's 540 would be 720 wide. In portrait
+    // the width is the short side itself, so every phone gets the 765-wide canvas there.
+    if (shortPt > 0)
+        renderShort = portrait ? MAX(renderShort, kMinCanvasW)
+                               : MAX(renderShort, (int)ceil(kMinCanvasW * shortPt / longPt));
+    int renderLong = shortPt > 0 ? (int)lround(renderShort * (longPt / shortPt)) : (int)lround(renderShort * 2.0);
+    RMCanvas c = {portrait ? renderShort : renderLong, portrait ? renderLong : renderShort, 0};
+    c.visibleH = c.h;
+    // Large portrait on a phone: a kStripCanvasW-wide canvas whose screen ends visibleH rows down, with the strip
+    // for the chat and minimap under it. The frame feeds keep only the visible rows.
+    if (portrait && shortPt > 0 && shortPt < kLargeScreenPt && !self.pendingRouteCGpuNoResize) {
+        c.w = kStripCanvasW;
+        c.visibleH = (int)lround(kStripCanvasW * longPt / shortPt);
+        c.h = c.visibleH + kStripCanvasH;
+    }
+    return c;
+}
+
+// Take `c` as the canvas the game draws: both frame feeds keep its shown rows, and the chat's and minimap's scale on
+// screen follows its strip. YES when the canvas turned (portrait <-> landscape).
+- (BOOL)setCanvas:(RMCanvas)c {
+    self.renderW = c.w;
+    self.renderH = c.h;
+    self.visibleH = c.visibleH;
+    BOOL strip = c.visibleH < c.h;
+    sHudScale = strip ? (CGFloat)kStripCanvasW / kMinCanvasW : 1.0;
+    [JVMLauncher setShownRows:strip ? c.visibleH : 0];
+    [RouteCBridge setPipShownRows:strip ? c.visibleH : 0];
+    BOOL portrait = c.h > c.w;
+    BOOL turned = portrait != sCanvasPortrait;
+    sCanvasPortrait = portrait;
+    return turned;
+}
+
+// The chat's and the minimap's dragged offsets for the canvas's orientation (hudOffsetKey).
+- (void)reloadHudOffsets {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    self.chatUserDX = (int)[ud integerForKey:hudOffsetKey(@"chatUserDX")];
+    self.chatUserDY = (int)[ud integerForKey:hudOffsetKey(@"chatUserDY")];
+    self.minimapUserDX = (int)[ud integerForKey:hudOffsetKey(@"minimapUserDX")];
+    self.minimapUserDY = (int)[ud integerForKey:hudOffsetKey(@"minimapUserDY")];
+}
+
+// The window changed size. The PiP layer is a plain sublayer, so it is sized here; the canvas follows on the next
+// tick (resizeCanvasToScreen).
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    if (self.pipLayer && !CGRectEqualToRect(self.pipLayer.frame, self.screen.bounds)) {
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        self.pipLayer.frame = self.screen.bounds;
+        [CATransaction commit];
+    }
+    if (self.launched)
+        self.canvasCheckDue = YES;
+}
+
+// Auto-rotate (Settings > Game settings > Screen): the window turned, so ask the game for the canvas that suits it.
+// Until a frame of that size is drawn the old one keeps showing, fitted to the turned screen, and the shell keeps the
+// old canvas's mapping; adoptCanvasIfDrawn then switches over. A strip turning on crops from the first frame drawn at
+// the new size (an older, shorter frame shows whole either way); one turning off waits for adoption, so the old
+// frame's strip never shows. Before the bridge is up the request fails, and this runs again on the next tick.
+- (void)resizeCanvasToScreen {
+    CGSize size = self.view.bounds.size;
+    if (!self.launched || self.renderW <= 0 || self.pendingRouteCGpuNoResize || size.width <= 0 || size.height <= 0) {
+        self.canvasCheckDue = NO;
+        return;
+    }
+    RMCanvas c = [self canvasForScreen:size];
+    BOOL same = self.canvasPending ? (c.w == self.pendingW && c.h == self.pendingH && c.visibleH == self.pendingVisibleH)
+                                   : (c.w == self.renderW && c.h == self.renderH && c.visibleH == self.visibleH);
+    if (same) {
+        self.canvasCheckDue = NO;
+        return;
+    }
+    if (![JVMLauncher requestResizeWidth:c.w height:c.h])
+        return;
+    self.canvasCheckDue = NO;
+    self.canvasPending = YES;
+    self.pendingW = c.w;
+    self.pendingH = c.h;
+    self.pendingVisibleH = c.visibleH;
+    self.canvasDeadline = CACurrentMediaTime() + 2.0;
+    if (c.visibleH < c.h) {
+        [JVMLauncher setShownRows:c.visibleH];
+        [RouteCBridge setPipShownRows:c.visibleH];
+        [JVMLauncher setEngineHudStripRows:c.visibleH windowTop:0 bottom:0];
+    }
+    [self appendLine:[NSString stringWithFormat:@"[screen] window %.0fx%.0f: canvas %dx%d -> %dx%d (shown %d rows) requested",
+                                                size.width, size.height, self.renderW, self.renderH, c.w, c.h,
+                                                c.visibleH]];
+}
+
+// Switch to the requested canvas once the game draws at it, or after canvasDeadline (before login the canvas stays
+// at the login screen's size, and the resize at login goes straight to the newest request). The HUD is laid out
+// again for it, and on a turn the chat and minimap take that orientation's offsets and zoom.
+- (void)adoptCanvasIfDrawn {
+    RMCanvas c = {self.pendingW, self.pendingH, self.pendingVisibleH};
+    BOOL drawn = [JVMLauncher canvasWidth] == c.w && [JVMLauncher canvasHeight] == c.h;
+    if (!drawn && CACurrentMediaTime() < self.canvasDeadline)
+        return;
+    self.canvasPending = NO;
+    BOOL turned = [self setCanvas:c];
+    if (c.visibleH >= c.h)
+        [JVMLauncher setEngineHudStripRows:0 windowTop:0 bottom:0];
+    self.stripSent = NO;
+    self.engineChatRelocated = NO; // updateHudLayout places the chat and the minimap again, and resends the strip
+    if (turned) {
+        [self reloadHudOffsets];
+        self.zoomSynced = NO;
+    }
+    if (self.overlayEdit) { // laid out for the old canvas
+        [self.overlayEdit dismiss];
+        self.overlayEdit = nil;
+    }
+    if (self.glLayer && c.visibleH > 0) {
+        // The CAEAGLLayer's drawable is the canvas; the bridge rebuilds its framebuffer from the resized layer.
+        CGSize b = self.view.bounds.size;
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        self.glLayer.frame = CGRectMake(0, 0, b.width, b.height * c.h / c.visibleH);
+        self.glLayer.contentsScale = b.height > 0 ? (CGFloat)c.visibleH / b.height : 1.0;
+        [CATransaction commit];
+        [RouteCBridge presentLayerResized];
+    }
+    [self appendLine:[NSString stringWithFormat:@"[screen] canvas %dx%d adopted (shown %d rows)%@", c.w, c.h, c.visibleH,
+                                                drawn ? @"" : @", not drawn yet"]];
+}
+
 - (void)onLaunch {
     if (self.launched) return;
     // If the login web view ran this session, WebKit is resident and the JVM would crash at code-cache
@@ -6488,58 +6668,20 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     CGRect b = self.view.bounds;
     CGFloat sw = b.size.width;
     CGFloat sh = b.size.height;
-    // The sizes below are for the screen's short side, the canvas's height in landscape and its width in portrait
-    // (Settings > Game settings > Screen). The window can still be turning to this launch's orientation, since
-    // Info.plist's list, which the launch screen uses, is landscape only, so the setting says which side is which.
-    BOOL portrait = [RMGameSettings portraitThisLaunch];
+    // The canvas follows the screen's sides (canvasForScreen:). The window can still be turning to the setting's
+    // orientation, since Info.plist's list, which the launch screen uses, is landscape only, so a fixed setting says
+    // which side is which. Under Auto the bounds decide, and resizeCanvasToScreen follows the window if it turns.
+    BOOL portrait = [RMGameSettings autoRotate] ? sh > sw : [RMGameSettings portrait];
     if ((sh > sw) != portrait) {
         CGFloat t = sw;
         sw = sh;
         sh = t;
     }
     CGFloat aspect = (sh > 0 ? sw / sh : 2.0);
-    CGFloat shortPt = MIN(sw, sh), longPt = MAX(sw, sh);
-    // Render height is the sharpness<->FPS<->UI-SIZE dial: the engine SOFTWARE-renders at renderW×renderH every
-    // frame (no GPU on iOS), so a LOWER renderH = bigger UI on screen. The minimap can't be enlarged on its own
-    // (the engine pins its orbs + breaks the terrain raster if the globe is repositioned — see HudVeneerBridge),
-    // so we scale the WHOLE HUD up via renderH to make the minimap bigger. 600 was the prior "official-sized"
-    // value; 540 enlarges the HUD ~11% (bigger minimap/chat/orbs). Watch the right column (minimap top + native
-    // tab grid bottom) for overlap as this drops (480 collided historically) — tune here.
-    // DISP-1: user-selectable "Interface size" — a smaller canvas = a larger HUD. Persisted; applied at launch
-    // (long-press the ⚙ button to change). Default + clamp to the safe 480..600 band proven not to overlap.
-    int renderH = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"interfaceRenderH"];
-    if (renderH < 480 || renderH > 600) renderH = 540;
-    // TAB-1: on a large screen (an iPad) the canvas grows with the screen's height in points instead, so the HUD stays
-    // the size it is on a phone and the extra screen shows more of the world (1267 tall on a 13" iPad at the default
-    // size), capped at the screen's own pixels. The interface size setting scales it the same way. Phones keep the
-    // setting as it is.
-    int renderShort = renderH;
-    if (shortPt >= kLargeScreenPt) {
-        int screenPx = (int)lround(shortPt * self.traitCollection.displayScale);
-        renderShort = MAX(renderShort, MIN(screenPx, (int)lround(shortPt * renderShort / kPhoneShortPt)));
-    }
-    // Never narrower than the game's narrowest layout: a 4:3 screen at a phone's 540 would be 720 wide. In portrait
-    // the width is the short side itself, so every phone gets the 765-wide canvas there.
-    if (shortPt > 0)
-        renderShort = portrait ? MAX(renderShort, kMinCanvasW)
-                               : MAX(renderShort, (int)ceil(kMinCanvasW * shortPt / longPt));
-    int renderLong = shortPt > 0 ? (int)lround(renderShort * (longPt / shortPt)) : (int)lround(renderShort * 2.0);
-    renderH = portrait ? renderLong : renderShort;
-    int renderW = portrait ? renderShort : renderLong;
-    // Large portrait on a phone: a kStripCanvasW-wide canvas whose screen ends visibleH rows down, with the strip
-    // for the chat and minimap under it. The frame feeds keep only the visible rows.
-    int visibleH = renderH;
-    if (portrait && shortPt > 0 && shortPt < kLargeScreenPt && !self.pendingRouteCGpuNoResize) {
-        renderW = kStripCanvasW;
-        visibleH = (int)lround(kStripCanvasW * longPt / shortPt);
-        renderH = visibleH + kStripCanvasH;
-        sHudScale = (CGFloat)kStripCanvasW / kMinCanvasW;
-    }
-    self.renderW = renderW;
-    self.renderH = renderH;
-    self.visibleH = visibleH;
-    [JVMLauncher setShownRows:visibleH < renderH ? visibleH : 0];
-    [RouteCBridge setPipShownRows:visibleH < renderH ? visibleH : 0];
+    RMCanvas canvas = [self canvasForScreen:CGSizeMake(sw, sh)];
+    int renderW = canvas.w, renderH = canvas.h, visibleH = canvas.visibleH;
+    if ([self setCanvas:canvas])
+        [self reloadHudOffsets];
     if (self.pendingRouteCGpuNoResize) {
         // GPU Route C bisection: leave the canvas at the classic fixed 765x503 (no resizable switch) so we can
         // tell whether the scene render is suppressed by GPU mode itself or only by the resizable-layout path.
@@ -6705,7 +6847,9 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     // arriving after boot. Checked here, not in updateChrome, which the chrome toggle and the map can skip.
     if (self.engineChatRelocated && [self hudRightInset] != self.hudRightLaid)
         self.engineChatRelocated = NO;
-    if (self.engineChatRelocated) return;
+    // A new canvas is on its way (auto-rotate): lay out for it once it's adopted, not for the old one in the new window.
+    if (self.engineChatRelocated || self.canvasPending)
+        return;
     NSString *snap = [JVMLauncher hudSnapshot];
     if (snap.length == 0) return;   // bridge / VM not up yet — retry next tick
     NSDictionary *d = parseBridgeJSON(snap, "ViewController.updateHudLayout");
@@ -6759,8 +6903,8 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
 // A camera zoom for each orientation (Settings > Game settings > Screen). The 3D view scales with the canvas's height,
 // so the zoom that suits a landscape canvas looks nearly three times closer on a portrait one, and the other way
 // round. The game saves one zoom, so zoom.owner records which orientation that zoom is for: landscape until the first
-// switch, since every launch before the setting was landscape. Once per launch, when the
-// zoom is first known after login: if this launch's orientation isn't the owner, the game's zoom is kept for the
+// switch, since every launch before the setting was landscape. When the zoom is first known after login, and again
+// after each turn (adoptCanvasIfDrawn): if the canvas's orientation isn't the owner, the game's zoom is kept for the
 // owner and this orientation gets back the zoom it had when it was left, if it was ever left. Nothing is chosen for
 // the player: an orientation keeps the game's zoom as it is until it has been left once (the Android port's screen
 // classes do the same).
@@ -6772,7 +6916,7 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
         return; // logged out, or an older jar: try again on a later tick
     self.zoomSynced = YES;
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    NSString *mine = [RMGameSettings portraitThisLaunch] ? @"portrait" : @"landscape";
+    NSString *mine = sCanvasPortrait ? @"portrait" : @"landscape";
     NSString *owner = [ud stringForKey:@"zoom.owner"] ?: @"landscape";
     [ud setObject:mine forKey:@"zoom.owner"];
     if ([owner isEqualToString:mine])
@@ -7123,6 +7267,12 @@ static CGRect mapRectFromArr(NSArray *a) {
                               self.framesShown, img.size.width, img.size.height]];
         }
     }
+
+    // Auto-rotate: ask for the canvas that suits a turned window, then adopt it once the game draws at it.
+    if (self.canvasCheckDue)
+        [self resizeCanvasToScreen];
+    if (self.canvasPending)
+        [self adoptCanvasIfDrawn];
 
     // Feed the Picture-in-Picture layer every tick (the copy is skipped unless the engine composited a NEW
     // frame, so this is engine-rate ~50 fps, not display-rate, and it runs on the feed thread, not here). The
@@ -9650,6 +9800,20 @@ static const CFTimeInterval kSimConfirmTimeout = 15.0;
         return;
     simScreenSeq = seq;
     NSString *name = [cmd substringFromIndex:sp.location + 1];
+    // "orient landscape|portrait|auto": set Settings > Game settings > Screen as its control does, so a run can turn
+    // the window and watch the canvas follow. A script can't turn the simulated device itself.
+    if ([name hasPrefix:@"orient "]) {
+        NSString *to = [name substringFromIndex:7];
+        if ([to isEqualToString:@"auto"]) {
+            [RMGameSettings setAutoRotate:YES];
+        } else {
+            [RMGameSettings setPortrait:[to isEqualToString:@"portrait"]];
+            [RMGameSettings setAutoRotate:NO];
+        }
+        [RMGameSettings applyOrientationToWindow:self.view.window];
+        [self appendLine:[NSString stringWithFormat:@"[screen] ready %@ %@", seq, name]];
+        return;
+    }
     __weak typeof(self) ws = self;
     if ([name isEqualToString:@"inventory"] || [name isEqualToString:@"prepare"] ||
         [name isEqualToString:@"restore"]) {
@@ -9680,7 +9844,11 @@ static const CFTimeInterval kSimConfirmTimeout = 15.0;
 - (NSString *)simOpenScreen:(NSString *)name {
     if ([name isEqualToString:@"settings"])
         [self onOpenSettings];
-    else if ([name isEqualToString:@"about"])
+    else if ([name isEqualToString:@"game-settings"]) {
+        [self onOpenSettings];
+        UINavigationController *nav = (UINavigationController *)self.presentedViewController;
+        [nav pushViewController:[[RMGameSettingsViewController alloc] init] animated:NO];
+    } else if ([name isEqualToString:@"about"])
         [self onOpenAbout];
     else if ([name isEqualToString:@"hub"])
         [self onOpenHub];

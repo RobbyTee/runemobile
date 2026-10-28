@@ -60,11 +60,14 @@
 // ---- per-frame upkeep (Route C 2C: thread-affine EAGL context + canvas-resize) ----
 // makeCurrent: re-bind sCtx on the calling thread — cheap (no-op when already current) and removes the
 // "draw runs off the createGLContext thread" risk entirely. fbWidth/fbHeight: the live FBO size. ensureSize:
-// recreate the FBO when the engine canvas changes (rare on device — the canvas is fixed at the resizeSpec).
+// recreate the FBO when the engine canvas changes (the boot resize, and each turn of the phone under Auto).
 + (void)makeCurrent;
 + (int)fbWidth;
 + (int)fbHeight;
 + (void)ensureSizeWidth:(int)w height:(int)h;
+// The present layer was resized on main (the canvas changed with the phone's turn): the next ensureSize rebuilds the
+// drawable-backed FBO from it. EAGL only; the window-surface path keeps its drawable.
++ (void)presentLayerResized;
 
 // ---- the GPU publish readback (Route C 2D) ----
 // glReadPixels the color FBO (GL_RGBA — the only ES3-core readback format) into `dst` as packed 0x00RRGGBB,

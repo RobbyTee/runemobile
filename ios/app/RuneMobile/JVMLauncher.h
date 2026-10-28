@@ -136,6 +136,13 @@ typedef void (^JVMLogSink)(NSString *line);
 /// Returns nil before the first draw / if the VM isn't up yet. Call on the main thread.
 + (nullable UIImage *)latestFrame;
 
+/// Ask the game for a `w` x `h` canvas mid-session (the phone turned). It resizes on its next draw; before login it takes
+/// the size as the one to resize to at login. Only the newest request counts. NO before the bridge is up. Main thread only.
++ (BOOL)requestResizeWidth:(int)w height:(int)h;
+/// The canvas the game draws now, hidden strip included; 0 before the client is up. Main thread only.
++ (int)canvasWidth;
++ (int)canvasHeight;
+
 /// The canvas rows shown on screen: the frame and the Picture-in-Picture feed keep only the top `rows` rows, so the
 /// hidden strip below them (HudVeneerBridge.setHudStrip) never reaches the screen. 0 shows the whole canvas.
 + (void)setShownRows:(int)rows;

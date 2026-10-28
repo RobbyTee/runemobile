@@ -3,6 +3,7 @@
   "defaults": { "settle": 1.0, "threshold": 2, "maxPctDiffering": 0.0 },
   "screens": [
     { "name": "settings" },
+    { "name": "game-settings" },
     { "name": "about" },
     { "name": "plugins" },
     { "name": "edit-controls" },

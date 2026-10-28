@@ -8,6 +8,7 @@ static NSString *const kHapticStrengthKey = @"haptic.strength";
 static NSString *const kLongPressKey = @"touch.longPressMs";
 static NSString *const kCameraSensitivityKey = @"camera.sensitivity";
 static NSString *const kPortraitKey = @"screen.portrait";
+static NSString *const kAutoRotateKey = @"screen.auto";
 
 static const NSInteger kLongPressMinMs = 200, kLongPressMaxMs = 1000, kLongPressStepMs = 50, kLongPressDefaultMs = 400;
 static const NSInteger kDragHoldMaxMs = 150;
@@ -27,6 +28,7 @@ static const double kCameraSensMin = 0.1, kCameraSensMax = 4.0, kCameraSensDefau
             kLongPressKey : @(kLongPressDefaultMs),
             kCameraSensitivityKey : @(kCameraSensDefault),
             kPortraitKey : @NO,
+            kAutoRotateKey : @NO,
         }];
     });
     return [NSUserDefaults standardUserDefaults];
@@ -93,13 +95,50 @@ static const double kCameraSensMin = 0.1, kCameraSensMax = 4.0, kCameraSensDefau
     [self changed];
 }
 
-+ (BOOL)portraitThisLaunch {
-    static BOOL portrait;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        portrait = [self portrait];
-    });
-    return portrait;
++ (BOOL)autoRotate {
+    return [[self defaults] boolForKey:kAutoRotateKey];
+}
+
++ (void)setAutoRotate:(BOOL)on {
+    [[self defaults] setBool:on forKey:kAutoRotateKey];
+    [self changed];
+}
+
++ (UIInterfaceOrientationMask)orientationMask {
+    if ([self autoRotate])
+        return UIInterfaceOrientationMaskAllButUpsideDown;
+    return [self portrait] ? UIInterfaceOrientationMaskPortrait : UIInterfaceOrientationMaskLandscape;
+}
+
++ (void)applyOrientationToWindow:(UIWindow *)window {
+    [window.rootViewController setNeedsUpdateOfSupportedInterfaceOrientations];
+    UIWindowScene *scene = window.windowScene;
+    if (!scene)
+        return;
+    UIInterfaceOrientationMask mask = [self orientationMask];
+    // Auto allows either, so the window would stay as it stands until the phone next moves: turn it to the way the
+    // phone is held now. Flat or unknown leaves it be. A landscape-left phone is a landscape-right interface.
+    if ([self autoRotate]) {
+        switch ([UIDevice currentDevice].orientation) {
+            case UIDeviceOrientationPortrait:
+                mask = UIInterfaceOrientationMaskPortrait;
+                break;
+            case UIDeviceOrientationLandscapeLeft:
+                mask = UIInterfaceOrientationMaskLandscapeRight;
+                break;
+            case UIDeviceOrientationLandscapeRight:
+                mask = UIInterfaceOrientationMaskLandscapeLeft;
+                break;
+            default:
+                break;
+        }
+    }
+    UIWindowSceneGeometryPreferencesIOS *prefs =
+        [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:mask];
+    [scene requestGeometryUpdateWithPreferences:prefs
+                                   errorHandler:^(NSError *error) {
+                                       NSLog(@"[screen] orientation update refused: %@", error);
+                                   }];
 }
 
 @end
@@ -207,10 +246,8 @@ enum { kTagLongPress = 1,
 }
 
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
-    if (s == RMGsScreen)
-        return [RMGameSettings portrait] == [RMGameSettings portraitThisLaunch]
-                   ? @"Applies when the app next opens."
-                   : @"Close the app and open it again to switch.";
+    if (s == RMGsScreen && [RMGameSettings autoRotate])
+        return @"Turns with the phone. Portrait Orientation Lock in Control Centre holds it upright.";
     if (s == RMGsGame && !self.gameLoaded)
         return @"Available once the game is running.";
     return nil;
@@ -303,8 +340,9 @@ enum { kTagLongPress = 1,
     UITableViewCell *cell = [self baseCell];
     if (ip.section == RMGsScreen) {
         cell.textLabel.text = @"Orientation";
-        UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:@[ @"Landscape", @"Portrait" ]];
-        seg.selectedSegmentIndex = [RMGameSettings portrait] ? 1 : 0;
+        UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:@[ @"Landscape", @"Portrait", @"Auto" ]];
+        NSInteger fixed = [RMGameSettings portrait] ? 1 : 0;
+        seg.selectedSegmentIndex = [RMGameSettings autoRotate] ? 2 : fixed;
         seg.selectedSegmentTintColor = [self accent];
         seg.accessibilityLabel = @"Orientation";
         [seg addTarget:self action:@selector(onOrientation:) forControlEvents:UIControlEventValueChanged];
@@ -379,8 +417,16 @@ enum { kTagLongPress = 1,
 }
 
 - (void)onOrientation:(UISegmentedControl *)seg {
-    [RMGameSettings setPortrait:seg.selectedSegmentIndex == 1];
-    // The footer says whether a restart is needed.
+    // Auto keeps the last fixed choice underneath, so switching back to it lands where it was.
+    if (seg.selectedSegmentIndex == 2) {
+        [RMGameSettings setAutoRotate:YES];
+    } else {
+        [RMGameSettings setPortrait:seg.selectedSegmentIndex == 1];
+        [RMGameSettings setAutoRotate:NO];
+    }
+    // The window turns now, and the game resizes its canvas to suit it.
+    [RMGameSettings applyOrientationToWindow:self.view.window];
+    // The footer explains Auto.
     [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:RMGsScreen]
                   withRowAnimation:UITableViewRowAnimationNone];
 }
