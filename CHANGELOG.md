@@ -14,6 +14,41 @@ as "What's new".
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-28
+
+### Added
+- **Play with the phone held upright.** Settings > Game settings > Screen picks Landscape, Portrait or Auto, and
+  the change applies at once. Portrait is the official mobile app's upright layout: the chat top left, the
+  minimap top right, and the tab buttons bottom right with the side panel beside them. On a phone the world, the
+  inventory and every window draw about a quarter bigger than the game's 765-pixel minimum layout would, while
+  the chat and the minimap keep their usual size. A window opens in the space between the chat and the tab
+  buttons, and the world map takes the whole screen.
+- **Screen: Auto turns the game with the phone.** The game lays itself out again for the new shape mid-game and
+  keeps a camera zoom for each way up. On iPhone, Auto reads the motion sensor, so it turns even with Portrait
+  Orientation Lock on, and Landscape and Portrait act as the in-game lock. On Android it follows the phone's own
+  auto-rotate setting.
+- **The official mobile app's chat and tab buttons.** The tab buttons use the official app's icons, order and
+  frame, and the arrow folds them to one column (kept across launches). Logout moves to a door left of the chat's
+  filter row. Beside the chat sit the official speech bubbles, which put the chat away and flash while a message
+  waits, and a keyboard button. A dialogue brings a put-away chat back while it lasts.
+- **A developer guide** in [`docs/dev/`](docs/dev/README.md): setting up a machine, the architecture and threading
+  model, the bridge API with a reference generated from the shared contract, each port, the three renderers,
+  every test and gate, debugging by symptom, upstream merges and releases, and the traps that cost real time.
+
+### Changed
+- **Plugin boxes keep off the chat, the minimap and the buttons.** A plugin's box, such as Quest Helper's current
+  step, an info box or a minigame panel, moves the shortest way to a clear spot when it would cover the chat and
+  its buttons, the minimap, the tab buttons or the app's own on-screen controls. That includes a box moved in the
+  overlay editor, which used to keep its saved spot over them.
+
+### Fixed
+- **The chat's typing line shows again.** The "name: *" line under the chat was cut off once the chat took the
+  official app's smaller size.
+- **Plugin Hub descriptions written in HTML show as plain text,** instead of raw markup such as `<html>`.
+- **iOS: plugin settings section headers work with VoiceOver,** which reads each one as a button that is collapsed
+  or expanded.
+- **iOS: About shows the real version** in builds made outside the release pipeline, which used to say 0.1.
+
 ## [0.5.0] - 2026-10-26
 
 ### Added
