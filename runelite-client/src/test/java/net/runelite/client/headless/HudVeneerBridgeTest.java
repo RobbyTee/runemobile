@@ -36,6 +36,7 @@ import net.runelite.api.events.ScriptPostFired;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
+import net.runelite.api.widgets.WidgetPositionMode;
 import net.runelite.api.widgets.WidgetSizeMode;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -61,9 +62,9 @@ import static org.mockito.Mockito.when;
  * <p>The overlay snap-corner safe-frame geometry — the rect the native shells use to keep RuneLite overlays
  * clear of the relocated chat box. The math is pure (native pushes the chat position/size via setters; no
  * engine read), and a wrong rect silently lets overlays render under the chat on both ports. Covered: the
- * {@code chatX < 0} "not relocating" null guard, the default fallbacks (row height -> CONTROLS_H=23, width ->
- * CHAT_DEFAULT_W=519), and the collapsed-vs-open height (collapsed = the tab row only; open = the row + the
- * message area ORIG_CHAT_CONTENT_H=142 + 2).
+ * {@code chatX < 0} "not relocating" null guard, the width fallback (the official 461), and the height in each
+ * state: open = the official 145-px chat; collapsed = the shells' 118-px column (4 px down), which runs deeper than
+ * the filter row left showing; put away = the 79-px column without its keyboard stone.
  *
  * <p>And the snapshot's {@code dialogueActive} bit, which decides whether the chatbox region belongs to the
  * chat veneer or to the dialogue drawn over it — a miss there costs the user the dialogue's buttons.
@@ -80,10 +81,12 @@ public class HudVeneerBridgeTest
 		System.setProperty("runelite.hudveneer", "true");
 	}
 
-	// Mirrors of the layout-dump constants in HudVeneerBridge (the contract the rect math is built on).
-	private static final int CONTROLS_H = 23;
-	private static final int CHAT_DEFAULT_W = 519;
-	private static final int ORIG_CHAT_CONTENT_H = 142;
+	// Mirrors of the official mobile layout's numbers (scripts 113/2581, interface 601), which the rect math is built on.
+	private static final int OFFICIAL_CHAT_W = 461;
+	private static final int OFFICIAL_CHAT_H = 145;
+	private static final int OFFICIAL_ROW_BOTTOM = 30;
+	private static final int OFFICIAL_COLUMN_BOTTOM = 4 + 118;
+	private static final int OFFICIAL_COLUMN_BOTTOM_PUT_AWAY = 4 + 79;
 
 	/**
 	 * Full reset of the shared static chat geometry before each test, so the suite is order-independent
@@ -94,9 +97,9 @@ public class HudVeneerBridgeTest
 	public void resetState()
 	{
 		HudVeneerBridge.relocateChat(-1, -1, false);   // chatX < 0 = not relocating
-		HudVeneerBridge.setChatTabRowHeight(0);         // 0 = fall back to CONTROLS_H
-		HudVeneerBridge.setChatAreaWidth(0);            // 0 = fall back to CHAT_DEFAULT_W
+		HudVeneerBridge.setChatAreaWidth(0);            // 0 = fall back to the official width
 		HudVeneerBridge.setChatCollapsed(false);
+		HudVeneerBridge.setChatPutAway(false);
 		HudVeneerBridge.relocateSidePanel(-1, -1);
 		HudVeneerBridge.setStonesHidden(false);
 		GameLayoutSwitch.resetForTest();               // tick() runs the layout switch too
@@ -126,39 +129,43 @@ public class HudVeneerBridgeTest
 	}
 
 	@Test
-	public void chatAvoidZeroRowAndWidthFallBackToHardcodedDefaults()
+	public void chatAvoidOpenIsTheOfficialChat()
 	{
-		// Explicitly drive 0 in for both -> the rect must use the hardcoded fallbacks CONTROLS_H (23) and
-		// CHAT_DEFAULT_W (519), open height = rowH + ORIG_CHAT_CONTENT_H + 2.
-		HudVeneerBridge.setChatTabRowHeight(0);
 		HudVeneerBridge.setChatAreaWidth(0);
 		HudVeneerBridge.setChatCollapsed(false);
 		HudVeneerBridge.relocateChat(10, 20, false);
 
-		final int expectedH = CONTROLS_H + ORIG_CHAT_CONTENT_H + 2;
-		assertArrayEquals(new int[]{10, 20, CHAT_DEFAULT_W, expectedH}, HudVeneerBridge.getOverlayChatAvoid());
+		assertArrayEquals(new int[]{10, 20, OFFICIAL_CHAT_W, OFFICIAL_CHAT_H}, HudVeneerBridge.getOverlayChatAvoid());
 	}
 
 	@Test
-	public void chatAvoidCollapsedIsTheTabRowOnly()
+	public void chatAvoidCollapsedIsTheColumnBesideIt()
 	{
-		HudVeneerBridge.setChatCollapsed(true);        // row height/width left at the @Before defaults (0)
+		HudVeneerBridge.setChatCollapsed(true);        // width left at the @Before default (0)
 		HudVeneerBridge.relocateChat(10, 20, false);
 
-		// Collapsed: just the tab row (no message area added), width still the default fallback.
-		assertArrayEquals(new int[]{10, 20, CHAT_DEFAULT_W, CONTROLS_H}, HudVeneerBridge.getOverlayChatAvoid());
+		// Collapsed: only the filter row is left of the chat, and the column beside it runs deeper.
+		assertArrayEquals(new int[]{10, 20, OFFICIAL_CHAT_W, OFFICIAL_COLUMN_BOTTOM}, HudVeneerBridge.getOverlayChatAvoid());
 	}
 
 	@Test
-	public void chatAvoidHonoursProvidedRowHeightAndWidth()
+	public void chatAvoidPutAwayIsTheShortColumn()
 	{
-		HudVeneerBridge.setChatTabRowHeight(30);   // native enlarged tab row
+		HudVeneerBridge.setChatPutAway(true);
+		HudVeneerBridge.relocateChat(10, 20, false);
+
+		assertArrayEquals(new int[]{10, 20, OFFICIAL_CHAT_W, OFFICIAL_COLUMN_BOTTOM_PUT_AWAY},
+			HudVeneerBridge.getOverlayChatAvoid());
+	}
+
+	@Test
+	public void chatAvoidHonoursProvidedWidth()
+	{
 		HudVeneerBridge.setChatAreaWidth(600);
 		HudVeneerBridge.setChatCollapsed(false);
 		HudVeneerBridge.relocateChat(5, 6, false);
 
-		final int expectedH = 30 + ORIG_CHAT_CONTENT_H + 2;
-		assertArrayEquals(new int[]{5, 6, 600, expectedH}, HudVeneerBridge.getOverlayChatAvoid());
+		assertArrayEquals(new int[]{5, 6, 600, OFFICIAL_CHAT_H}, HudVeneerBridge.getOverlayChatAvoid());
 	}
 
 	// --- dialogue detection -------------------------------------------------------------------------------
@@ -698,19 +705,32 @@ public class HudVeneerBridgeTest
 		final Client c = mock(Client.class);
 		final Widget area = pinnable(new int[]{0, 0});
 		when(area.getWidthMode()).thenReturn(WidgetSizeMode.ABSOLUTE);
-		when(area.getOriginalWidth()).thenReturn(519);
+		when(area.getOriginalWidth()).thenReturn(OFFICIAL_CHAT_W);
 		when(area.getHeightMode()).thenReturn(WidgetSizeMode.ABSOLUTE);
-		when(area.getOriginalHeight()).thenReturn(HudVeneerBridge.ORIG_CHAT_CONTENT_H);
+		when(area.getOriginalHeight()).thenReturn(OFFICIAL_CHAT_H - OFFICIAL_ROW_BOTTOM);
 		when(c.getWidget(InterfaceID.Chatbox.CHATAREA)).thenReturn(area);
-		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, 519, 40);
-		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, 519, 40);
+		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, OFFICIAL_CHAT_W, false);
+		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, OFFICIAL_CHAT_W, false);
 		verify(area, times(1)).revalidate();
+		verify(area).setForcedPosition(0, OFFICIAL_ROW_BOTTOM);
 
 		// A new message or a tab switch runs the build script, which can rebuild the area's children in place.
 		new HudVeneerBridge.BeforeRenderListener(c).onScriptPostFired(new ScriptPostFired(ScriptID.BUILD_CHATBOX));
-		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, 519, 40);
-		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, 519, 40);
+		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, OFFICIAL_CHAT_W, false);
+		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, OFFICIAL_CHAT_W, false);
 		verify(area, times(2)).revalidate();
+	}
+
+	@Test
+	public void aPromptTakesTheWholeChat()
+	{
+		// Script 2581: with the message layer up, the area fills the chat from the top, over the filter row.
+		final Client c = mock(Client.class);
+		final Widget area = pinnable(new int[]{0, 0});
+		when(c.getWidget(InterfaceID.Chatbox.CHATAREA)).thenReturn(area);
+		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, OFFICIAL_CHAT_W, true);
+		verify(area).setOriginalHeight(OFFICIAL_CHAT_H);
+		verify(area).setForcedPosition(0, 0);
 	}
 
 	@Test
@@ -725,7 +745,7 @@ public class HudVeneerBridgeTest
 		final Widget lines = hidableLayer(true);
 		when(c.getWidget(InterfaceID.Chatbox.CHATDISPLAY)).thenReturn(lines);
 
-		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, 519, 40);
+		HudVeneerBridge.sizeChatArea(c, InterfaceID.Chatbox.UNIVERSE, OFFICIAL_CHAT_W, false);
 
 		assertFalse("the chat lines a rebuild hid are shown again", lines.isHidden());
 		assertTrue("a closed prompt stays hidden, or its text sits over the chat", prompt.isHidden());
@@ -1015,5 +1035,77 @@ public class HudVeneerBridgeTest
 		}
 		// 164 draws a close X for logout; the shells show it as 601's door.
 		assertEquals(3560, HudVeneerBridge.tabSpriteId(2 + 10));
+	}
+
+	@Test
+	public void theShellsGetTheMobileStonesAndFrame()
+	{
+		// 601's 40x40 stones, not 164's desktop ones, and the chat stones script 178 picks on mobile.
+		assertEquals(5767, HudVeneerBridge.tabSpriteId(0));
+		assertEquals(5769, HudVeneerBridge.tabSpriteId(1));
+		assertEquals(5779, HudVeneerBridge.tabSpriteId(16));
+		assertEquals(5780, HudVeneerBridge.tabSpriteId(17));
+		assertEquals(5781, HudVeneerBridge.tabSpriteId(18));
+		for (int i = 0; i < HudVeneerBridge.SPR_TAB_FRAME.length; i++)
+		{
+			assertEquals("frame piece " + i, 5814 + i, HudVeneerBridge.tabSpriteId(26 + i));
+		}
+	}
+
+	@Test
+	public void theEngineDrawsTheMobileChatStones()
+	{
+		assertEquals(5779, HudVeneerBridge.officialChatStone(3051));
+		assertEquals("no hover stone on a touch screen", 5779, HudVeneerBridge.officialChatStone(3052));
+		assertEquals(5780, HudVeneerBridge.officialChatStone(3053));
+		assertEquals(5780, HudVeneerBridge.officialChatStone(3054));
+		assertEquals(5781, HudVeneerBridge.officialChatStone(3055));
+		assertEquals("anything else is left alone", 1018, HudVeneerBridge.officialChatStone(1018));
+	}
+
+	@Test
+	public void theFilterStonesSitWhereTheOfficialAppPutsThem()
+	{
+		// Script 113's mobile branch right-aligns seven 58-px stones in the 461-px row, 65 px apart, 6 px from its
+		// right edge: in left-edge terms that is 7 + 65 * i, and the last one ends 6 px short of the row's end.
+		assertEquals(OFFICIAL_CHAT_W, HudVeneerBridge.OFFICIAL_ROW_W);
+		final int last = HudVeneerBridge.OFFICIAL_TAB_X + 6 * HudVeneerBridge.OFFICIAL_TAB_PITCH;
+		assertEquals(HudVeneerBridge.OFFICIAL_ROW_W - 6, last + HudVeneerBridge.OFFICIAL_TAB_W);
+		assertEquals(OFFICIAL_ROW_BOTTOM, HudVeneerBridge.OFFICIAL_ROW_BOTTOM);
+		assertEquals(OFFICIAL_CHAT_H, HudVeneerBridge.OFFICIAL_CHAT_H);
+	}
+
+	@Test
+	public void theChatScrollbarGoesLeftOnce()
+	{
+		// Script 923 with the scrollbar on the left puts it a pixel left of the display. A forced position of -1
+		// means "none", so the bar takes the spot as its own left-aligned x, and only when it hasn't got it.
+		final Client c = mock(Client.class);
+		final Widget row = pinnable(new int[]{0, 0});
+		when(c.getWidget(InterfaceID.Chatbox.CONTROLS)).thenReturn(row);
+		final Widget bar = mock(Widget.class);
+		final int[] x = {0};
+		final int[] mode = {WidgetPositionMode.ABSOLUTE_RIGHT};
+		when(bar.getOriginalX()).thenAnswer(inv -> x[0]);
+		when(bar.getXPositionMode()).thenAnswer(inv -> mode[0]);
+		doAnswer(inv ->
+		{
+			x[0] = inv.getArgument(0);
+			return bar;
+		}).when(bar).setOriginalX(anyInt());
+		doAnswer(inv ->
+		{
+			mode[0] = inv.getArgument(0);
+			return bar;
+		}).when(bar).setXPositionMode(anyInt());
+		when(c.getWidget(InterfaceID.Chatbox.CHATSCROLLBAR)).thenReturn(bar);
+
+		HudVeneerBridge.layOfficialChat(c);
+		HudVeneerBridge.layOfficialChat(c);
+
+		assertEquals(HudVeneerBridge.OFFICIAL_SCROLLBAR_X, x[0]);
+		assertEquals(WidgetPositionMode.ABSOLUTE_LEFT, mode[0]);
+		verify(bar, times(1)).revalidate();
+		verify(bar, never()).setForcedPosition(anyInt(), anyInt());
 	}
 }

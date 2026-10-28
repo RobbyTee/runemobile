@@ -33,7 +33,6 @@ FLAG runelite.hudveneer.test.areaW
 FLAG runelite.hudveneer.test.chatX
 FLAG runelite.hudveneer.test.chatY
 FLAG runelite.hudveneer.test.minimapScalePct
-FLAG runelite.hudveneer.test.rowH
 FLAG runelite.hudveneer.test.transparent
 FLAG runelite.key.pacing
 FLAG runelite.menupeek
@@ -103,6 +102,7 @@ METHOD HudVeneerBridge#selectDialogueOption(int,long)
 METHOD HudVeneerBridge#setChatAreaWidth(int)
 METHOD HudVeneerBridge#setChatCollapsed(boolean)
 METHOD HudVeneerBridge#setChatHidden(boolean)
+METHOD HudVeneerBridge#setChatPutAway(boolean)
 METHOD HudVeneerBridge#setChatTabRowHeight(int)
 METHOD HudVeneerBridge#setMinimapScale(int)
 METHOD HudVeneerBridge#setOverlaySafeInsets(int,int,int,int)
@@ -351,6 +351,8 @@ PAYLOAD HudDataBridge type
 PAYLOAD HudDataBridge value
 PAYLOAD HudVeneerBridge Close
 PAYLOAD HudVeneerBridge b
+PAYLOAD HudVeneerBridge bh
+PAYLOAD HudVeneerBridge bw
 PAYLOAD HudVeneerBridge c
 PAYLOAD HudVeneerBridge chatX
 PAYLOAD HudVeneerBridge chatY
@@ -370,6 +372,7 @@ PAYLOAD HudVeneerBridge dlgY
 PAYLOAD HudVeneerBridge engineDialogue
 PAYLOAD HudVeneerBridge filter
 PAYLOAD HudVeneerBridge filterColor
+PAYLOAD HudVeneerBridge frame
 PAYLOAD HudVeneerBridge h
 PAYLOAD HudVeneerBridge head
 PAYLOAD HudVeneerBridge hp
@@ -388,6 +391,8 @@ PAYLOAD HudVeneerBridge new
 PAYLOAD HudVeneerBridge o
 PAYLOAD HudVeneerBridge open
 PAYLOAD HudVeneerBridge options
+PAYLOAD HudVeneerBridge ox
+PAYLOAD HudVeneerBridge oy
 PAYLOAD HudVeneerBridge prayer
 PAYLOAD HudVeneerBridge prompt
 PAYLOAD HudVeneerBridge px

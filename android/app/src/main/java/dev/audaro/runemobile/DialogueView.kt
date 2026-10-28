@@ -30,7 +30,7 @@ class DialogueView(
 ) : View(context) {
     companion object {
         private const val CHAT_W = 519 // engine chatbox width (canvas px)
-        private const val BOX_H_CANVAS = 40 + 142 // native tab row (ChatPillView.ROW_H_CANVAS) + content height
+        private const val BOX_H_CANVAS = 182 // the parchment's box: a 40-px title band + the 142-px content
         private const val PARCH = 0xFFD6C79E.toInt() // OSRS parchment tan (opaque) — iOS RGB(0.84,0.78,0.62)
         private const val BORDER = 0xFF5C4521.toInt() // iOS RGB(0.36,0.27,0.13)
         private const val NAME_COLOR = 0xFF800000.toInt() // dark red NPC/player name

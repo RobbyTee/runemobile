@@ -9,7 +9,7 @@
 # (-Drunelite.hudveneer.test=true), and dumps composited frames via HeadlessCapture. Inspect out-chat-veneer/cap/
 # frame-LOGGED_IN-*.png + the [veneer] chat-layout dump in the log.
 #
-# Env overrides: RESIZE, TRANSPARENT (true/false — false = opaque box to read dimensions), ROWH, AREAW, RUN_SECONDS.
+# Env overrides: RESIZE, TRANSPARENT (true/false — false = opaque box to read dimensions), AREAW, RUN_SECONDS.
 set -euo pipefail
 cd "$(dirname "$0")"
 REPO="../../.."
@@ -31,7 +31,6 @@ TOKENS="${TOKENS:-../tokens.json}"
 RUN_SECONDS="${RUN_SECONDS:-170}"
 RESIZE="${RESIZE:-1269x720}"
 TRANSPARENT="${TRANSPARENT:-true}"
-ROWH="${ROWH:-32}"
 AREAW="${AREAW:-0}"
 
 if [ ! -f "$SHADED" ]; then
@@ -47,7 +46,7 @@ export JX_SESSION_ID="$(jq -r '.session_id // ""' "$TOKENS")"
 export JX_CHARACTER_ID="$(jq -r '.chosen_account_id // ""' "$TOKENS")"
 export JX_DISPLAY_NAME="$(jq -r '.chosen_display_name // ""' "$TOKENS")"
 if [ -z "$JX_SESSION_ID" ] || [ -z "$JX_CHARACTER_ID" ]; then echo "!! tokens.json missing session/account" >&2; exit 1; fi
-echo "== JX handoff: displayName='${JX_DISPLAY_NAME}' resize=${RESIZE} transparent=${TRANSPARENT} rowH=${ROWH} areaW=${AREAW} =="
+echo "== JX handoff: displayName='${JX_DISPLAY_NAME}' resize=${RESIZE} transparent=${TRANSPARENT} areaW=${AREAW} =="
 
 rm -rf "$OUT"; mkdir -p "$OUT/cap"
 echo "== compile DeviceHeadlessBoot + activation =="
@@ -76,7 +75,6 @@ set +e
   ${MUI:+-Drunelite.mobileui=true} \
   -Drunelite.hudveneer.test=true \
   -Drunelite.hudveneer.test.transparent="${TRANSPARENT}" \
-  -Drunelite.hudveneer.test.rowH="${ROWH}" \
   -Drunelite.hudveneer.test.areaW="${AREAW}" \
   ${EXTRA_JVM_ARGS:-} \
   --add-exports=java.desktop/java.awt=ALL-UNNAMED \

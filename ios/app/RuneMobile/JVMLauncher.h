@@ -387,6 +387,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// behaviour), tapping any tab reopens it. The native tab row stays visible either way. Main thread.
 + (void)setEngineChatCollapsed:(BOOL)collapsed;
 
+/// Put the whole engine chat away, filter stones included, or bring it back: the speech-bubble stone by the door
+/// (the official app's "Toggle Chatbox"). A collapse leaves the stones up. Main thread.
++ (void)setEngineChatPutAway:(BOOL)putAway;
+
 /// W3 A3 (bigger chat tabs): live per-tab chat geometry/state (escaped JSON) the native enlarged tab veneer reads
 /// each tick — per-tab canvas bounds, selected/new-message flags, and the filter sub-label text + colour. Returns
 /// nil until the chat is relocated + logged in. Main thread.

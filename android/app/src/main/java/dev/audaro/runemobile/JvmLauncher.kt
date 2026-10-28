@@ -538,6 +538,9 @@ object JvmLauncher {
     /** Phase-4 chat pill: collapse the chat (shared shove-off-canvas) / switch channel (op-script replay). */
     external fun nativeSetChatCollapsed(collapsed: Boolean)
 
+    /** The speech bubbles: put the whole chat away, filter stones included (HudVeneerBridge.setChatPutAway). */
+    external fun nativeSetChatPutAway(putAway: Boolean)
+
     external fun nativeSwitchChatTab(index: Int)
 
     /** Phase-5 world map: pan by finger deltas (canvas px; shared tick converts to tiles) + the published
@@ -1039,6 +1042,8 @@ object JvmLauncher {
     ) = nativeSetOverlayInsets(l, t, r, b)
 
     fun setChatCollapsed(collapsed: Boolean) = nativeSetChatCollapsed(collapsed)
+
+    fun setChatPutAway(putAway: Boolean) = nativeSetChatPutAway(putAway)
 
     fun switchChatTab(index: Int) = nativeSwitchChatTab(index)
 

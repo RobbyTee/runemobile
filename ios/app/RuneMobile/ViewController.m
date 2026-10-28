@@ -35,12 +35,16 @@
 // The chat tabs match the official mobile app's small size, which makes them fiddly to hit. This button expands its
 // touch area vertically (the 7 tabs are contiguous, so a horizontal miss already lands on a neighbour) so near-miss
 // taps above/below a tab still register on that column. Purely a hit-test grow — the visible sprite is unchanged.
-static const CGFloat kChatTabTouchExpand = 15.0;   // screen pt added above AND below each tab's touch rect
+static const CGFloat kChatTabTouchExpand = 15.0;     // screen pt added above each tab's touch rect
+static const CGFloat kChatTabTouchExpandBelow = 4.0; // and below it, short of the chat's top line
 @interface ChatTabButton : UIButton
 @end
 @implementation ChatTabButton
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    return CGRectContainsPoint(CGRectInset(self.bounds, 0, -kChatTabTouchExpand), point);
+    CGRect r = self.bounds;
+    r.origin.y -= kChatTabTouchExpand;
+    r.size.height += kChatTabTouchExpand + kChatTabTouchExpandBelow;
+    return CGRectContainsPoint(r, point);
 }
 @end
 
@@ -429,6 +433,10 @@ static NSString *RMPasteLine(NSString *s) {
 // The choice is kept across launches.
 @property (nonatomic, strong) TabGridButton *tabExpandButton;
 @property (nonatomic, assign) BOOL tabGridCollapsed;
+// The frame behind the grid (SIDE_RIGHT_TABS_BACKGROUND), and its art at each width, drawn at canvas px.
+@property (nonatomic, strong) UIImageView *tabFrameView;
+@property (nonatomic, strong) UIImage *tabFrameImg;
+@property (nonatomic, strong) UIImage *tabFrameImgCollapsed;
 @property (nonatomic, assign) CGFloat loggedTabGridTop; // last grid top logged by tabGridTopForHeight (log on change)
 
 // W3 Feature-A (A3): chat-at-top = the engine's OWN chatbox relocated to the top + flipped transparent
@@ -467,6 +475,14 @@ static NSString *RMPasteLine(NSString *s) {
 @property (nonatomic, strong) UIImage *tabImgShowMore; // and while the grid is collapsed
 @property (nonatomic, strong) UIImage *doorImg;        // the logout door by the chat
 @property (nonatomic, strong) UIImage *doorImgActive;  // the door while the logout tab is open
+// The rest of the column under the door: the speech bubbles (on the lighter stone while the chat shows, on the
+// door's stone while it is put away, flashing red while a message waits) and the keyboard.
+@property (nonatomic, strong) TabGridButton *chatToggleButton;
+@property (nonatomic, strong) TabGridButton *chatKeyboardButton;
+@property (nonatomic, strong) UIImage *chatToggleOpenImg;
+@property (nonatomic, strong) UIImage *chatToggleClosedImg;
+@property (nonatomic, strong) UIImage *chatToggleFlashImg;
+@property (nonatomic, strong) UIImage *chatKeyboardImg;
 // The native chrome sprites (stones/icons/chat buttons) are rendered from the LIVE OSRS cache at runtime — like
 // desktop RuneLite, which never ships interface art — NOT from bundled PNGs. The engine publishes them a few ticks
 // post-login (JVMLauncher.tabSprites); we recomposite the grid + chat row, persist for instant boot, then stop
@@ -478,18 +494,11 @@ static NSString *RMPasteLine(NSString *s) {
 @property (nonatomic, strong) UIButton *chromeToggle;
 @property (nonatomic, assign) BOOL chromeVisible;
 
-// W3 A3 (bigger chat tabs): native UIKit recreation of the engine's chat tab buttons (All/Game/Public/Private/
-// Channel/Clan/Trade + Report) drawn LARGER over the relocated engine chat. The engine has no per-widget scale
-// and the tab sprites are fixed-size, so we redraw them: each button is backed by the extracted gamepack sprite
-// (CHATBOX_BUTTON 3051 / SELECTED 3053 / NEW 3055 / REPORT 3057) with a RuneScape-font label, and a tap proxies
-// a precise click onto the live engine button (CONTROLS stays shown underneath, covered by the native row). The
-// engine pushes its message area down past the taller row (setEngineChatTabRowHeight). State + click targets
-// come from JVMLauncher.chatSnapshot each tick; re-applied so the engine's TOPLEVEL_REDRAW can't undo it.
+// W3 A3: bare tap targets over the engine's 7 filter stones (All/Game/Public/Private/Channel/Clan/Trade), which
+// the engine draws itself in the official layout. A tap switches the channel by replaying the stone's op-script;
+// a long-press on a filterable one opens its filter menu. State comes from JVMLauncher.chatSnapshot each tick.
 @property (nonatomic, strong) NSMutableArray<UIButton *> *chatTabButtons;
 @property (nonatomic, strong) UILongPressGestureRecognizer *sceneLongPress; // the game view's hold -> menu
-@property (nonatomic, strong) UIImage *chatBtnImg;      // 3051 — idle tab background
-@property (nonatomic, strong) UIImage *chatBtnSelImg;   // 3053 — selected (active) tab
-@property (nonatomic, strong) UIImage *chatBtnNewImg;   // 3055 — tab with unread messages
 @property (nonatomic, assign) BOOL chatTabsBuilt;
 // Finger-scroll the chat: a 1-finger drag that BEGINS inside the chat box scrolls the messages (via synthesized
 // mouse-wheel notches to the engine) instead of rotating the camera — only while the chat is open (logged in +
@@ -536,6 +545,13 @@ static NSString *RMPasteLine(NSString *s) {
 @property (nonatomic, assign) NSInteger chatActiveTab;
 @property (nonatomic, assign) BOOL chatCollapsed;
 @property (nonatomic, assign) BOOL savedCollapsedForDialogue;   // we forced chat open for a dialogue -> restore after
+// The speech bubbles put the whole chat away, filter row included (the official app's "Toggle Chatbox"); a dialogue
+// brings it back for its duration, like a collapse. chatHasUnread = a filter stone shows new messages (the bubbles
+// flash while the chat is away). chatColumnShown = the column is up, so its keyboard stands in for kbFab.
+@property (nonatomic, assign) BOOL chatPutAway;
+@property (nonatomic, assign) BOOL savedPutAwayForDialogue;
+@property (nonatomic, assign) BOOL chatHasUnread;
+@property (nonatomic, assign) BOOL chatColumnShown;
 @property (nonatomic, strong) UITextView *chatMessagesView;  // native-rendered chat MESSAGE lines (engine can't raster relocated chat)
 // Native dialogue: an OPAQUE parchment drawn over the whole chatbox region while a dialogue is open (occluding the
 // engine's transparent dialogue + the chat tabs/messages), with a CUTOUT where the engine's real 3D head renders.
@@ -705,11 +721,11 @@ static const int kTapKindWidget = 3; // JavaBridge.TAP_KIND_WIDGET — suppress 
 // Zero-width sentinel so a backspace on an "empty" field still fires shouldChangeCharactersInRange.
 static NSString * const kKbSentinel = @"​";
 
-// W3 A3/A4: the relocated engine chat's tab row is the top kChatTabRowH px of a kChatW-wide box. Its canvas
-// origin moves with the safe-area relocate (self.chatHitCanvas, set in updateHudLayout); these are the fixed
-// engine-px dimensions used to treat tab-row taps as UI (precise click, no walk ring).
-static const int kChatW = 519;
-static const int kChatTabRowH = 23;
+// W3 A3/A4: the relocated engine chat is laid out as the official mobile app lays it (HudVeneerBridge
+// .layOfficialChat): kChatW wide right of the column, its filter row the top kChatTabRowCanvasH px. Its canvas origin
+// moves with the safe-area relocate (self.chatHitCanvas, set in updateHudLayout); these are the fixed engine-px
+// dimensions used to treat filter-row taps as UI (precise click, no walk ring).
+static const int kChatW = 461;
 // The minimap+orbs cluster width (fixed engine px, from the de-risk), until the chrome snapshot reports its size.
 static const int kMinimapClusterW = 211;
 
@@ -721,28 +737,50 @@ static const CGFloat kLargeScreenPt = 600.0;
 static const CGFloat kPhoneShortPt = 440.0;
 static const int kMinCanvasW = 765;
 
-// W3 A3 (native chat tabs, matching the official OSRS-mobile app): 7 tabs (NO Report — the official app doesn't
-// show it in the tab row), each a stone button with the channel name on top and, for the filterable channels, the
-// live filter state ("On"/"Off"/"Filter"/"Hide") below it in the engine's state colour. The 7 tabs span the chat
-// width (kChatW), so each is kChatW/7 wide; the row is taller than the bare sprite to fit the two text lines.
+// W3 A3 (the chat's filter row, matching the official OSRS-mobile app): the ENGINE draws the 7 filter stones (no
+// Report: the official app doesn't show it in the row), with each channel's name and live filter state, at the
+// official app's geometry (HudVeneerBridge.OFFICIAL_*). The shell lays a bare tap target over each stone: kChatTabX
+// in, kChatTabPitch apart, kChatTabW x kChatTabH, kChatTabY down.
 // CHAT-3 (deliberate): the Report channel is intentionally omitted from this row to match the official mobile app
 // — it is NOT a lost capability: reporting a player is reached the way mobile does it, via the player's
 // right-click (long-press) menu "Report" entry, which surfaces through the native menu like any other entry.
 static const int kChatTabCount = 7;
-static const int kChatTabRowCanvasH = 40;   // 2-line tab height (name + state). 40 canvas px = the Android twin's
-                                            // ChatPillView.ROW_H_CANVAS, pushed into the engine row the same way
-                                            // (setEngineChatTabRowHeight). The old 24 rendered the labels at ~7pt/
-                                            // ~6pt effective — illegible at arm's length. Label fonts scale off
-                                            // this height (0.40/0.34 below), as does the dialogue parchment box.
-static const int kChatContentCanvasH = 142; // the chat message-area height (engine-canvas px) below the tab row
-// Logout is a door left of the chat tab row, not a grid stone: 601's LOGOUT_CONTAINER, 58x40 engine px, the same
-// height as the native tab row. The chat's base anchor steps right by its width, as the official chat sits right of
-// it, and the chat is never moved so far left that the door would leave the canvas.
+static const int kChatTabX = 7;
+static const int kChatTabPitch = 65;
+static const int kChatTabW = 58;
+static const int kChatTabY = 2;
+static const int kChatTabH = 28;
+static const int kChatTabRowCanvasH = 30;   // the filter row's bottom (HudVeneerBridge.OFFICIAL_ROW_BOTTOM)
+static const int kChatContentCanvasH = 115; // the message area below it: the chat is 145 px tall
+// The native dialogue parchment keeps the box it had beside the old 40-px native row: the engine lays its dialogue in
+// the 519-px chat container, and five options need the height.
+static const int kDialogueCanvasW = 519;
+static const int kDialogueCanvasH = 182;
+// The column left of the chat, 601's SIDE_LEFT_CHAT: the logout door, the speech bubbles that put the chat away and
+// bring it back, and the keyboard, 58x40 stones kColumnPitch apart from kColumnY down. The chat's base anchor steps
+// right by its width, as the official chat sits right of it, and the chat is never moved so far left that the column
+// would leave the canvas.
 static const int kDoorCanvasW = 58;
-static const int kDoorCanvasH = kChatTabRowCanvasH;
+static const int kColumnStoneH = 40;
+static const int kColumnY = 4;
+static const int kColumnPitch = 39;
 static const int kTabLogout = 10;        // the engine tab index the door opens
 static const int kTabSlotExpand = -1;    // TAB_GRID_ORDER's entry for the expand stone (not an engine tab)
-static const int kTabSpritesVersion = 2; // HudVeneerBridge.TAB_SPRITES_VERSION this build draws
+static const int kTabSpritesVersion = 3; // HudVeneerBridge.TAB_SPRITES_VERSION this build draws
+// The tab group (601's SIDE_RIGHT_TABS), in canvas px: a framed 2x7 grid of 40-px stones kTabPitch apart (they overlap
+// by a pixel), kTabFrameInset inside the frame. Collapsed, the group narrows to kTabGroupCollapsedW and the outer
+// column slides under the inner one, its edge showing at the right (TABS_GROUP_RIGHT stays right-aligned).
+static const int kTabStone = 40;
+static const int kTabPitch = 39;
+static const int kTabFrameInset = 3;
+static const int kTabGroupW = 85;
+static const int kTabGroupCollapsedW = 58;
+static const int kTabGroupH = 280;
+// The tabs in grid-slot order, row-major (slot 0 = top-left, 1 = top-right, …), mapped to engine tab indexes, in the
+// official app's order (interface 601): the inner column, next to the panel, is inventory, equipment, prayer, magic,
+// combat, quests and the expand stone; the outer one is skills, emotes, music, clan, friends, account and settings.
+// Logout is the door by the chat, not a stone. The Android twin is ChromeOverlayView.order.
+static const int TAB_GRID_ORDER[14] = {3, 1, 4, 12, 5, 13, 6, 7, 0, 9, 2, 8, kTabSlotExpand, 11};
 // Finger-scroll direction: -1 = drag-down scrolls toward OLDER messages (content follows the finger). The drag is
 // converted to canvas px and applied to the chat's own scroll layer (no mouse wheel -> no camera zoom). Flip to +1
 // if the direction feels inverted.
@@ -1718,6 +1756,13 @@ static NSString *const kLayoutNoticeBody =
     self.tabRailBg.userInteractionEnabled = NO;   // never eats taps; the buttons on top do
     [self.screen addSubview:self.tabRailBg];
 
+    // The grid's frame, under every stone.
+    self.tabFrameView = [[UIImageView alloc] init];
+    self.tabFrameView.hidden = YES;
+    self.tabFrameView.userInteractionEnabled = NO;
+    self.tabFrameView.layer.magnificationFilter = kCAFilterNearest;
+    [self.view addSubview:self.tabFrameView];
+
     self.tabButtons = [NSMutableArray arrayWithCapacity:14];
     for (int i = 0; i < 14; i++) {
         TabGridButton *tb = [TabGridButton buttonWithType:UIButtonTypeCustom];
@@ -1743,6 +1788,31 @@ static NSString *const kLayoutNoticeBody =
     [self.view addSubview:xb];
     self.tabExpandButton = xb;
     self.tabGridCollapsed = [[NSUserDefaults standardUserDefaults] boolForKey:@"tabGridCollapsed"];
+    // The outer column sits under the inner one: collapsed, it slides beneath it and only its edge shows.
+    for (int slot = 1; slot < 14; slot += 2) {
+        int i = TAB_GRID_ORDER[slot];
+        UIButton *outer = (i == kTabSlotExpand) ? self.tabExpandButton : self.tabButtons[i];
+        [self.view insertSubview:outer aboveSubview:self.tabFrameView];
+    }
+    // The column under the door, each stone over the one above it (they overlap by a pixel, as the door's does).
+    NSArray<NSString *> *columnLabels = @[ @"Chat", @"Keyboard" ];
+    for (int c = 0; c < 2; c++) {
+        TabGridButton *cb = [TabGridButton buttonWithType:UIButtonTypeCustom];
+        cb.hidden = YES;
+        cb.imageView.contentMode = UIViewContentModeScaleAspectFit;
+        cb.imageView.layer.magnificationFilter = kCAFilterNearest;
+        cb.contentEdgeInsets = UIEdgeInsetsZero;
+        cb.clipsToBounds = NO;
+        cb.accessibilityLabel = columnLabels[c];
+        [cb addTarget:self
+                      action:(c == 0 ? @selector(onChatToggle) : @selector(onToggleKeyboard))
+            forControlEvents:UIControlEventTouchUpInside];
+        [self.view addSubview:cb];
+        if (c == 0)
+            self.chatToggleButton = cb;
+        else
+            self.chatKeyboardButton = cb;
+    }
     // Opaque covers over the desktop stones (subviews of the game view, above the blit; non-interactive so the
     // Java proxy click still reaches the real stone beneath).
     self.stoneCovers = [NSMutableArray arrayWithCapacity:14];
@@ -4134,22 +4204,57 @@ static UIImage *imageFromSpriteDict(id obj) {
     return img;
 }
 
-// Composite an icon centred on a stone background into one tab image (nearest-neighbour, native px).
-- (UIImage *)compositeStone:(UIImage *)stone icon:(UIImage *)icon {
-    if (stone == nil) return icon;
-    CGSize sz = stone.size;
+// Composite stones and an icon into one image at native px (nearest-neighbour): each stone at the origin, then the
+// icon the way the engine draws a sprite in a widget, at its offset inside a box placed at `box` (the widget's spot on
+// the stone, from the official layout). A box of another size than the sprite's own scales it, as the engine does.
+- (UIImage *)compositeStones:(NSArray<UIImage *> *)stones icon:(id)iconObj box:(CGRect)box {
+    UIImage *base = stones.firstObject;
+    if (base == nil)
+        return nil;
+    UIImage *icon = imageFromSpriteDict(iconObj);
+    NSDictionary *d = [iconObj isKindOfClass:[NSDictionary class]] ? (NSDictionary *)iconObj : nil;
+    CGFloat bw = [d[@"bw"] intValue], bh = [d[@"bh"] intValue];
+    CGFloat sx = bw > 0 ? box.size.width / bw : 1.0, sy = bh > 0 ? box.size.height / bh : 1.0;
+    CGSize sz = base.size;
     UIGraphicsImageRendererFormat *fmt = [UIGraphicsImageRendererFormat preferredFormat];
     fmt.opaque = NO;
     fmt.scale = 1.0;
     UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:sz format:fmt];
     return [r imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
         CGContextSetInterpolationQuality(ctx.CGContext, kCGInterpolationNone);
-        [stone drawInRect:CGRectMake(0, 0, sz.width, sz.height)];
+        for (UIImage *stone in stones)
+            [stone drawInRect:CGRectMake(0, 0, stone.size.width, stone.size.height)];
         if (icon) {
-            CGFloat ix = floor((sz.width - icon.size.width) / 2.0);
-            CGFloat iy = floor((sz.height - icon.size.height) / 2.0);
-            [icon drawInRect:CGRectMake(ix, iy, icon.size.width, icon.size.height)];
+            [icon drawInRect:CGRectMake(box.origin.x + [d[@"ox"] intValue] * sx, box.origin.y + [d[@"oy"] intValue] * sy,
+                                        icon.size.width * sx, icon.size.height * sy)];
         }
+    }];
+}
+
+// The grid's frame at w x h canvas px from its nine pieces (corners, edges, middle, row by row): corners at their own
+// size, edges and middle stretched between them, as the engine lays SIDE_RIGHT_TABS_BACKGROUND.
+static UIImage *nineSliceImage(NSArray *pieces, CGFloat w, CGFloat h) {
+    if (pieces.count != 9)
+        return nil;
+    NSMutableArray<UIImage *> *p = [NSMutableArray arrayWithCapacity:9];
+    for (id obj in pieces) {
+        UIImage *img = imageFromSpriteDict(obj);
+        if (img == nil)
+            return nil;
+        [p addObject:img];
+    }
+    CGFloat l = p[0].size.width, t = p[0].size.height, rt = p[8].size.width, b = p[8].size.height;
+    UIGraphicsImageRendererFormat *fmt = [UIGraphicsImageRendererFormat preferredFormat];
+    fmt.opaque = NO;
+    fmt.scale = 1.0;
+    UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(w, h) format:fmt];
+    return [r imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+        CGContextSetInterpolationQuality(ctx.CGContext, kCGInterpolationNone);
+        const CGFloat xs[3] = {0, l, w - rt}, ws[3] = {l, w - l - rt, rt};
+        const CGFloat ys[3] = {0, t, h - b}, hs[3] = {t, h - t - b, b};
+        for (int row = 0; row < 3; row++)
+            for (int col = 0; col < 3; col++)
+                [p[row * 3 + col] drawInRect:CGRectMake(xs[col], ys[row], ws[col], hs[row])];
     }];
 }
 
@@ -4162,51 +4267,59 @@ static UIImage *imageFromSpriteDict(id obj) {
     return [dir stringByAppendingPathComponent:@"tabsprites.json"];
 }
 
-// Decode a JVMLauncher.tabSprites payload into the live chrome images (stones recomposited with each glyph into the
-// 14 active/inactive grid tiles; the 3 chat-tab backgrounds). updateChrome/updateChatTabs re-read these ivars every
-// tick, so the next frame picks up the new art automatically. Returns YES only for a COMPLETE engine-published set.
+// Decode a JVMLauncher.tabSprites payload into the live chrome images: the 14 grid stones (each glyph on the grey
+// stone, and on the red one over it for the open tab), the expand stone both ways, the grid frame at both widths and
+// the chat column (door, speech bubbles, keyboard). Each icon sits where the official layout puts it: the tab glyphs
+// and arrows in a 33x36 box 3 px in (the arrows a pixel higher), the door and keyboard in one 12 px in, the bubbles in
+// a 32x32 one at (13,4). updateChrome re-reads these every tick, so the next frame picks up the new art. Returns YES
+// only for a COMPLETE engine-published set.
 - (BOOL)applyTabSpriteJSON:(NSString *)json {
     if (json.length == 0) return NO;
     NSDictionary *d = parseBridgeJSON(json, "ViewController.applyTabSpriteJSON");
     if (![d isKindOfClass:[NSDictionary class]]) return NO;
-    // A set cached by an older build has the wrong glyphs and no door or arrow (HudVeneerBridge.TAB_SPRITES_VERSION).
+    // A set cached by an older build has the desktop stones and no column, frame or offsets
+    // (HudVeneerBridge.TAB_SPRITES_VERSION).
     if ([d[@"v"] intValue] < kTabSpritesVersion)
         return NO;
     UIImage *stoneI = imageFromSpriteDict(d[@"stoneInactive"]);
     UIImage *stoneA = imageFromSpriteDict(d[@"stoneActive"]);
     id iconsObj = d[@"icons"];
     NSArray *icons = [iconsObj isKindOfClass:[NSArray class]] ? (NSArray *)iconsObj : nil;
+    const CGRect tabBox = CGRectMake(3, 2, 33, 36), arrowBox = CGRectMake(3, 1, 33, 36);
     BOOL gridOK = (stoneI && stoneA && icons.count == 14);
     if (gridOK) {
         NSMutableArray<UIImage *> *inact = [NSMutableArray arrayWithCapacity:14];
         NSMutableArray<UIImage *> *act = [NSMutableArray arrayWithCapacity:14];
         for (int i = 0; i < 14; i++) {
-            UIImage *icon = imageFromSpriteDict(icons[i]);
-            inact[i] = [self compositeStone:stoneI icon:icon] ?: (UIImage *)[NSNull null];
-            act[i]   = [self compositeStone:stoneA icon:icon] ?: (UIImage *)[NSNull null];
+            inact[i] = [self compositeStones:@[ stoneI ] icon:icons[i] box:tabBox] ?: (UIImage *)[NSNull null];
+            act[i] = [self compositeStones:@[ stoneI, stoneA ] icon:icons[i] box:tabBox] ?: (UIImage *)[NSNull null];
         }
         self.tabImgInactive = inact;
         self.tabImgActive = act;
     }
-    UIImage *showLess = imageFromSpriteDict(d[@"showLess"]);
-    UIImage *showMore = imageFromSpriteDict(d[@"showMore"]);
     UIImage *doorStone = imageFromSpriteDict(d[@"doorStone"]);
     UIImage *doorStoneA = imageFromSpriteDict(d[@"doorStoneActive"]);
-    UIImage *doorIcon = gridOK ? imageFromSpriteDict(icons[kTabLogout]) : nil;
-    BOOL controlsOK = (showLess && showMore && doorStone && doorStoneA && doorIcon);
-    if (gridOK && controlsOK) {
-        self.tabImgShowLess = [self compositeStone:stoneI icon:showLess];
-        self.tabImgShowMore = [self compositeStone:stoneI icon:showMore];
-        self.doorImg = [self compositeStone:doorStone icon:doorIcon];
-        self.doorImgActive = [self compositeStone:doorStoneA icon:doorIcon];
+    UIImage *chatStone = imageFromSpriteDict(d[@"chatStoneOpen"]);
+    BOOL controlsOK = gridOK && doorStone && doorStoneA && chatStone && imageFromSpriteDict(d[@"showLess"]) && imageFromSpriteDict(d[@"showMore"]) && imageFromSpriteDict(icons[kTabLogout]) && imageFromSpriteDict(d[@"chatToggle"]) && imageFromSpriteDict(d[@"keyboard"]);
+    if (controlsOK) {
+        self.tabImgShowLess = [self compositeStones:@[ stoneI ] icon:d[@"showLess"] box:arrowBox];
+        self.tabImgShowMore = [self compositeStones:@[ stoneI ] icon:d[@"showMore"] box:arrowBox];
+        const CGRect doorBox = CGRectMake(12, 2, 33, 36), bubblesBox = CGRectMake(13, 4, 32, 32);
+        self.doorImg = [self compositeStones:@[ doorStone ] icon:icons[kTabLogout] box:doorBox];
+        self.doorImgActive = [self compositeStones:@[ doorStoneA ] icon:icons[kTabLogout] box:doorBox];
+        self.chatToggleOpenImg = [self compositeStones:@[ chatStone ] icon:d[@"chatToggle"] box:bubblesBox];
+        self.chatToggleClosedImg = [self compositeStones:@[ doorStone ] icon:d[@"chatToggle"] box:bubblesBox];
+        self.chatToggleFlashImg = [self compositeStones:@[ doorStoneA ] icon:d[@"chatToggle"] box:bubblesBox];
+        self.chatKeyboardImg = [self compositeStones:@[ chatStone ] icon:d[@"keyboard"] box:CGRectMake(12, 1, 33, 36)];
     }
-    UIImage *cb  = imageFromSpriteDict(d[@"chatbtn"]);
-    UIImage *cbs = imageFromSpriteDict(d[@"chatbtnSelected"]);
-    UIImage *cbn = imageFromSpriteDict(d[@"chatbtnNew"]);
-    if (cb)  self.chatBtnImg    = cb;
-    if (cbs) self.chatBtnSelImg = cbs;
-    if (cbn) self.chatBtnNewImg = cbn;
-    return [d[@"complete"] boolValue] && gridOK && controlsOK && cb && cbs && cbn;
+    NSArray *frame = [d[@"frame"] isKindOfClass:[NSArray class]] ? d[@"frame"] : nil;
+    UIImage *frameImg = nineSliceImage(frame, kTabGroupW, kTabGroupH);
+    UIImage *frameImgCollapsed = nineSliceImage(frame, kTabGroupCollapsedW, kTabGroupH);
+    if (frameImg && frameImgCollapsed) {
+        self.tabFrameImg = frameImg;
+        self.tabFrameImgCollapsed = frameImgCollapsed;
+    }
+    return [d[@"complete"] boolValue] && controlsOK && frameImg && frameImgCollapsed;
 }
 
 // Pull the real OSRS sprites from the live cache once the engine has them (a few ticks post-login), then persist
@@ -4258,26 +4371,17 @@ static UIImage *imageFromSpriteDict(id obj) {
     }
 }
 
-// Build the static 7-tab channel row once, as subviews of the game view (above the blit). Each tab is interactive:
-// a tap switches to that channel (tapping the active tab collapses the box); a long-press on a filterable channel
-// opens its filter menu (onChatTabLongPress). Sprite-backed two-line RuneScape-font labels (name + filter state)
-// like the official app; hidden until the chat is relocated + logged in. updateChatTabs lays them out + states them.
+// Build the 7 filter-stone tap targets once, as subviews of the game view (above the blit). They draw nothing: the
+// engine draws the stones under them. A tap switches to that channel (tapping the active one collapses the chat);
+// a long-press on a filterable channel opens its filter menu (onChatTabLongPress). Hidden until the chat is
+// relocated + logged in. updateChatTabs lays them out.
 - (void)buildChatTabs {
-    // chatBtnImg/SelImg/NewImg are rendered from the live OSRS cache (seeded from disk in buildTabAssets, refreshed
-    // by refreshTabSpritesFromCache post-login) — no bundled PNGs. nil until captured: paintChatButton falls back to
-    // its opaque stone-brown fill, which the real sprite replaces within a tick of capture.
     self.chatTabButtons = [NSMutableArray arrayWithCapacity:kChatTabCount];
     for (int i = 0; i < kChatTabCount; i++) {
         UIButton *b = [ChatTabButton buttonWithType:UIButtonTypeCustom];   // expanded touch area (kChatTabTouchExpand)
         b.tag = i;
         b.hidden = YES;
-        b.adjustsImageWhenHighlighted = NO;
-        b.titleLabel.textAlignment = NSTextAlignmentCenter;
-        b.titleLabel.numberOfLines = 2;   // channel name + filter state, like the official app
-        b.titleLabel.lineBreakMode = NSLineBreakByClipping;
-        // The background sprite is pixel-art with rounded ends + a vertical gradient; stretch it with bilinear so
-        // the enlarged button reads smooth (the official mobile chat scales these the same way).
-        b.layer.magnificationFilter = kCAFilterLinear;
+        b.accessibilityLabel = kChatTabNames[i];
         [b addTarget:self action:@selector(onChatTabButton:) forControlEvents:UIControlEventTouchUpInside];
         // Long-press a FILTERABLE channel's tab -> the engine's filter menu (On/Filter/Off/Hide …) via the native
         // big-row overlay (drag to a row, release to select). All/Game have no filter, so they get NO long-press
@@ -4319,9 +4423,7 @@ static UIImage *imageFromSpriteDict(id obj) {
     self.chatTabsBuilt = YES;
     self.optimisticChatTab = -1;
     self.chatActiveTab = -1;
-    [self appendLine:[NSString stringWithFormat:@"[chat] tab buttons built (sprites %@/%@/%@)",
-                      self.chatBtnImg ? @"ok" : @"X", self.chatBtnSelImg ? @"ok" : @"X",
-                      self.chatBtnNewImg ? @"ok" : @"X"]];
+    [self appendLine:@"[chat] filter-stone tap targets built"];
 }
 
 // Convert a packed 0xRRGGBB int (the engine widget text colour) to a UIColor; nil for < 0 (unknown).
@@ -4333,52 +4435,14 @@ static UIColor *rgbColor(int rgb) {
                            alpha:1.0];
 }
 
-// The native chat tab row height in ENGINE-CANVAS px (screen-scale independent), so it converts cleanly to the
-// engine's CHATAREA push-down. Tall enough for the two text lines (name + filter state).
+// The filter row's height in ENGINE-CANVAS px (screen-scale independent): what a tap there treats as UI.
 static int chatRowCanvasH(void) {
     return kChatTabRowCanvasH;
 }
 
-// Paint one channel tab button sprite-backed with a two-line RuneScape-font label (name on top,
-// filter state below in the engine's state colour). selected -> the gold SELECTED sprite; new -> the unread
-// sprite; else the idle sprite. tab = the snapshot entry for channel i (may be nil while collapsed).
-- (void)paintChatButton:(UIButton *)b channel:(int)i tab:(NSDictionary *)t selected:(BOOL)selected
-               nameFont:(UIFont *)nameFont stateFont:(UIFont *)stateFont {
-    BOOL hasNew = [t[@"new"] boolValue];
-    UIImage *bg = self.chatBtnImg;
-    if (selected) bg = self.chatBtnSelImg;
-    else if (hasNew) bg = self.chatBtnNewImg;
-    [b setBackgroundImage:bg forState:UIControlStateNormal];
-    // The tab sprite has fully-transparent rounded corners; the engine's own chat tab row stays SHOWN underneath
-    // (hiding it blanks the whole chat raster), so without an opaque backing the engine tabs peek through those
-    // corners. Fill each button with the sprite's stone-brown base so nothing shows through behind the native row.
-    b.backgroundColor = [UIColor colorWithRed:66.0/255.0 green:60.0/255.0 blue:51.0/255.0 alpha:1.0];
-    b.clipsToBounds = YES;
-
-    NSString *name = (i >= 0 && i < kChatTabCount) ? kChatTabNames[i] : @"";
-    NSString *filter = [t[@"filter"] isKindOfClass:[NSString class]] ? t[@"filter"] : @"";
-    UIColor *nameColor = rgbColor(t ? [t[@"labelColor"] intValue] : -1)
-        ?: [UIColor colorWithRed:1.0 green:0.97 blue:0.85 alpha:1.0];
-    NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new];
-    ps.alignment = NSTextAlignmentCenter;
-    ps.lineBreakMode = NSLineBreakByClipping;
-    NSMutableAttributedString *title = [[NSMutableAttributedString alloc] initWithString:name
-        attributes:@{NSFontAttributeName: nameFont, NSForegroundColorAttributeName: nameColor,
-                     NSParagraphStyleAttributeName: ps}];
-    if (filter.length) {
-        UIColor *fc = rgbColor([t[@"filterColor"] intValue]) ?: [UIColor colorWithRed:0.0 green:0.9 blue:0.0 alpha:1.0];
-        [title appendAttributedString:[[NSAttributedString alloc]
-            initWithString:[@"\n" stringByAppendingString:filter]
-            attributes:@{NSFontAttributeName: stateFont, NSForegroundColorAttributeName: fc,
-                         NSParagraphStyleAttributeName: ps}]];
-    }
-    [b setAttributedTitle:title forState:UIControlStateNormal];
-}
-
-// Lay out + state the static 7-tab channel row from the chat snapshot each tick. Mirrors updateChrome: hides
-// everything (revealing the engine's own chat) when the native chrome is toggled off or the layout is unsupported
-// (not Resizable - Modern/164). The row spans the chat width (kChatW) at the chat origin; content (sprite + label) is
-// refreshed every tick and the just-tapped tab is held selected until the engine sprite catches up.
+// Lay the 7 filter-stone tap targets over the engine's stones from the chat snapshot each tick. Mirrors updateChrome:
+// hides them when the native chrome is toggled off or the layout is unsupported (not Resizable - Modern/164). Tracks
+// the active channel (the just-tapped one is held until the engine catches up) so a tap on it collapses the chat.
 - (void)updateChatTabs {
     if (!self.chatTabsBuilt) return;
     if (!kChatVeneerEnabled) { [self hideChatTabs]; [self hideDialogue]; return; }   // veneer removed -> engine chatbox
@@ -4398,9 +4462,8 @@ static int chatRowCanvasH(void) {
     BOOL dlg = [d[@"dialogueActive"] boolValue];
     if (dlg != self.chatDialogueActive) {
         self.chatDialogueActive = dlg;
-        // Auto-open/close: a collapsed chat hides the engine tabs -> the engine dialogue raster is suppressed. So
-        // un-collapse for the dialogue's duration and restore the collapsed state when it closes (mirrors Android;
-        // official-mobile behaviour). Native is the single owner of chatCollapsed.
+        // Auto-open/close: open a collapsed or put-away chat for the dialogue's duration and restore it when the
+        // dialogue closes (mirrors Android; official-mobile behaviour). Native is the single owner of both states.
         if (dlg && self.chatCollapsed) {
             self.savedCollapsedForDialogue = YES;
             self.chatCollapsed = NO;
@@ -4409,6 +4472,13 @@ static int chatRowCanvasH(void) {
             self.savedCollapsedForDialogue = NO;
             self.chatCollapsed = YES;
             [JVMLauncher setEngineChatCollapsed:YES];
+        }
+        if (dlg && self.chatPutAway) {
+            self.savedPutAwayForDialogue = YES;
+            [self setChatPutAway:NO];
+        } else if (!dlg && self.savedPutAwayForDialogue) {
+            self.savedPutAwayForDialogue = NO;
+            [self setChatPutAway:YES];
         }
         [self appendLine:dlg ? @"[chat] dialogue open -> native chat hidden, engine dialogue (opaque) shown"
                              : @"[chat] dialogue closed -> native chat veneer restored"];
@@ -4431,33 +4501,29 @@ static int chatRowCanvasH(void) {
     self.dialogueChatCanvas = CGRectZero;
     NSArray *tabs = [d[@"tabs"] isKindOfClass:[NSArray class]] ? d[@"tabs"] : nil;
     if (tabs.count == 0) { [self hideChatTabs]; return; }
-    self.chatScrollable = !self.chatCollapsed;   // chat open + supported -> finger-scroll (off while collapsed)
+    BOOL unread = NO;
+    for (int j = 0; j < (int)tabs.count && j < kChatTabCount; j++)
+        if ([tabs[j] isKindOfClass:[NSDictionary class]] && [tabs[j][@"new"] boolValue])
+            unread = YES;
+    self.chatHasUnread = unread; // the bubbles flash on it while the chat is put away (updateChrome)
+    // Chat open + supported -> finger-scroll (off while collapsed or put away).
+    self.chatScrollable = !self.chatCollapsed && !self.chatPutAway;
 
     CGFloat W = self.view.bounds.size.width;
     CGFloat s = W / (CGFloat)self.renderW;           // canvas px -> screen pt (uniform: render aspect == screen)
-    CGFloat rowX = [d[@"chatX"] intValue] * s;
-    CGFloat rowY = [d[@"chatY"] intValue] * s;
-    CGFloat rowW = kChatW * s;
-    CGFloat rowH = kChatTabRowCanvasH * s;
-    CGFloat tabW = rowW / kChatTabCount;
-    [JVMLauncher setEngineChatTabRowHeight:kChatTabRowCanvasH];   // push messages below the (taller) tab row
-    [JVMLauncher setEngineChatAreaWidth:0];                        // chat keeps its natural 519 width
+    int chatX = [d[@"chatX"] intValue], chatY = [d[@"chatY"] intValue];
+    [JVMLauncher setEngineChatAreaWidth:0]; // the official 461
 
-    // The native tab row is ALWAYS shown (no collapsible bubble). "Collapse" (tap the active tab) only hides the
-    // engine MESSAGE area — the bridge hides the engine chat container while the tabs stay put. The tabs are also
-    // hidden when a forefront window (bank/GE/…) is open so the chat sits behind it (windowOpen in the snapshot).
-    if ([d[@"windowOpen"] boolValue]) { [self hideChatTabs]; return; }
+    // The filter stones stay up while the chat is collapsed (tap the active one: only the messages go), and go
+    // with the rest of it when it is put away. A forefront window (bank/GE/…) hides them too, so the chat sits
+    // behind it (windowOpen in the snapshot).
+    if (self.chatPutAway || [d[@"windowOpen"] boolValue]) {
+        [self hideChatTabs];
+        return;
+    }
 
-    // The ENGINE renders the chat MESSAGES itself now (its tabs stay shown so the raster isn't suppressed; the
-    // native tab row below just covers the engine's small tabs). So we no longer recreate the message lines —
-    // keep the native message view hidden and let the engine draw the real colored text + scrollbar underneath.
+    // The ENGINE draws the chat itself (stones, messages, scrollbar); the native message view stays hidden.
     self.chatMessagesView.hidden = YES;
-
-    // Two text lines: channel name (top) + filter state (bottom). Size both to the row height.
-    CGFloat nameSize = floor(rowH * 0.40);
-    CGFloat stateSize = floor(rowH * 0.34);
-    UIFont *nameFont = [UIFont fontWithName:@"RuneScape" size:nameSize] ?: [UIFont boldSystemFontOfSize:nameSize];
-    UIFont *stateFont = [UIFont fontWithName:@"RuneScape" size:stateSize] ?: [UIFont systemFontOfSize:stateSize];
 
     // Which tab is active. Prefer the live channel VIEW (VarClientID.CHAT_VIEW: 0=All..6=Trade) — it is always
     // correct, unlike the tab GRAPHIC sprite (which only flips on a redraw, so it often reads "none selected" and
@@ -4481,14 +4547,16 @@ static int chatRowCanvasH(void) {
     // snapshot momentarily reports none, so one tap on it collapses.
     if (effSel >= 0) self.chatActiveTab = effSel;
 
-    // Lay out + paint all 7 tabs as a STATIC row (no pill, no fan): each equal-width, spanning the chat width,
-    // always visible, tap-to-switch. Highlight the (sticky) active tab while open; none while collapsed.
+    // One bare target over each engine stone, with its channel and filter state for VoiceOver.
     for (int i = 0; i < kChatTabCount; i++) {
         UIButton *b = self.chatTabButtons[i];
-        b.frame = CGRectMake(floor(rowX + i * tabW), floor(rowY), ceil(tabW), ceil(rowH));
+        b.frame = CGRectMake((chatX + kChatTabX + i * kChatTabPitch) * s, (chatY + kChatTabY) * s, kChatTabW * s,
+                             kChatTabH * s);
         NSDictionary *t = (i < (int)tabs.count && [tabs[i] isKindOfClass:[NSDictionary class]]) ? tabs[i] : nil;
-        [self paintChatButton:b channel:i tab:t selected:(!self.chatCollapsed && i == self.chatActiveTab)
-                     nameFont:nameFont stateFont:stateFont];
+        NSString *filter = [t[@"filter"] isKindOfClass:[NSString class]] ? t[@"filter"] : @"";
+        b.accessibilityLabel = filter.length ? [NSString stringWithFormat:@"%@, %@", kChatTabNames[i], filter]
+                                             : kChatTabNames[i];
+        b.selected = (!self.chatCollapsed && i == self.chatActiveTab);
         b.hidden = NO;
     }
 }
@@ -4497,9 +4565,23 @@ static int chatRowCanvasH(void) {
     self.chatScrollable = NO;   // chat not open -> drags fall through to the camera
     self.chatMessagesView.hidden = YES;
     for (UIButton *b in self.chatTabButtons) b.hidden = YES;
-    // Restore the engine's own (small) chat tab row + native width whenever the native tabs aren't shown.
-    [JVMLauncher setEngineChatTabRowHeight:0];
-    [JVMLauncher setEngineChatAreaWidth:0];
+}
+
+// The speech bubbles by the door: put the whole chat away, filter stones and all, or bring it back (the official
+// app's "Toggle Chatbox"). Its collapse state is kept for when it comes back.
+- (void)onChatToggle {
+    if (![JVMLauncher bridgeReady])
+        return;
+    self.savedPutAwayForDialogue = NO; // the player's own choice from here on
+    [self setChatPutAway:!self.chatPutAway];
+    [self updateChatTabs];
+    [self updateChrome];
+    [self appendLine:self.chatPutAway ? @"[chat] put away" : @"[chat] brought back"];
+}
+
+- (void)setChatPutAway:(BOOL)putAway {
+    _chatPutAway = putAway;
+    [JVMLauncher setEngineChatPutAway:putAway];
 }
 
 #pragma mark - Native dialogue (opaque parchment over the chatbox; real engine head shows through a cutout)
@@ -4588,8 +4670,8 @@ static int chatRowCanvasH(void) {
     CGFloat s = self.view.bounds.size.width / (CGFloat)self.renderW;
     CGFloat boxX = floor([cd[@"chatX"] intValue] * s);
     CGFloat boxY = floor([cd[@"chatY"] intValue] * s);
-    CGFloat boxW = ceil(kChatW * s);
-    CGFloat boxH = ceil((kChatTabRowCanvasH + kChatContentCanvasH) * s);
+    CGFloat boxW = ceil(kDialogueCanvasW * s);
+    CGFloat boxH = ceil(kDialogueCanvasH * s);
     self.dialogueView.frame = CGRectMake(boxX, boxY, boxW, boxH);
     self.dialogueView.hidden = NO;
     if (self.chatMessagesView) self.chatMessagesView.hidden = YES;   // the dialogue replaces the chat lines
@@ -5000,15 +5082,7 @@ static int chatRowCanvasH(void) {
     CGPoint loc = [g locationInView:self.view];
     switch (g.state) {
         case UIGestureRecognizerStateBegan: {
-            // While collapsed the engine filter button is shoved off-canvas (y~3000), so a right-click there opens
-            // nothing. Reopen the box first; the engine restores the widget next snapshot, so a follow-up long-press
-            // then opens the filter (rather than this gesture posting a dead off-canvas click).
-            if (self.chatCollapsed) {
-                self.chatCollapsed = NO;
-                [JVMLauncher setEngineChatCollapsed:NO];
-                [self appendLine:@"[chat] long-press on collapsed chat -> expand first"];
-                break;
-            }
+            // A collapsed chat keeps its filter stones up, so the menu opens on the stone either way.
             int cx = 0, cy = 0;
             if (![self engineChatButtonCenterForTag:b.tag x:&cx y:&cy]) return;
             [self openEngineMenuAtGameX:cx gameY:cy anchor:loc];
@@ -5740,46 +5814,46 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     }
     int active = [d[@"activeTab"] intValue];
 
-    // The tabs in ONE 2-column grid at the right — the official OSRS-mobile arrangement. The engine stones are
-    // HIDDEN (setEngineStonesHidden), so these native buttons ARE the tabs; a tap replays the stone's op script to
-    // open the tab (onTabButton) — no cover patch / gray box. TAB_GRID_ORDER maps grid slot -> engine tab index,
-    // row-major (slot 0 = top-left, 1 = top-right, …), in the official app's order (interface 601): the inner column,
-    // next to the panel, is inventory, equipment, prayer, magic, combat, quests and the expand stone; the outer one
-    // is skills, emotes, music, clan, friends, account and settings. Logout is the door by the chat, not a stone.
-    // The Android twin is ChromeOverlayView.order.
-    static const int TAB_GRID_ORDER[14] = {3, 1, 4, 12, 5, 13, 6, 7, 0, 9, 2, 8, kTabSlotExpand, 11};
-    UIEdgeInsets ins = self.view.safeAreaInsets;
+    // The tabs in ONE framed 2-column group at the right, the official OSRS-mobile arrangement (601's
+    // SIDE_RIGHT_TABS). The engine stones are HIDDEN (setEngineStonesHidden), so these native buttons ARE the tabs; a
+    // tap replays the stone's op script to open the tab (onTabButton). TAB_GRID_ORDER maps grid slot -> engine tab.
+    // Every size is the official layout's, in canvas px, drawn at k canvas px per point.
     CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height;
+    if (self.renderW <= 0 || W <= 0) {
+        [self hideTabGrid];
+        return;
+    }
+    CGFloat k = (CGFloat)self.renderW / W;
     // TAB-1: step left of the plugin rail (updateHudLayout moves the minimap when the rail comes or goes).
     CGFloat right = [self hudRightInset];
-    const CGFloat margin = 6.0; // the stones tile flush, like the official app
-    // TOUCH-1: 44pt cells are geometrically impossible here (7 rows must fit under the top-right minimap —
-    // the 0.56 band IS that clearance), so the cells stay official-mobile-sized and the tappability gap is
-    // closed with outward-only hit slop per grid edge (TabGridButton) — edge taps land, interiors stay exact.
-    CGFloat availH = (H - ins.top - ins.bottom) * 0.56;
-    CGFloat cell = MIN(48.0, availH / 7.0);
-    // Collapsed (the expand stone), only the inner column shows, at the right edge where the outer one was.
+    // Collapsed (the expand stone), the group narrows to the inner column, and the outer one slides under it.
     BOOL collapsed = self.tabGridCollapsed;
-    CGFloat gridW = (collapsed ? 1 : 2) * cell, gridH = 7 * cell;
-    CGFloat gx0 = W - right - margin - gridW;
+    int groupWc = collapsed ? kTabGroupCollapsedW : kTabGroupW;
+    CGFloat groupW = groupWc / k, groupH = kTabGroupH / k;
+    CGFloat gx0 = W - right - groupW; // flush with the safe edge, as the official group is
     NSArray *mmGlobe = [d[@"minimap"] isKindOfClass:[NSArray class]] ? d[@"minimap"] : nil;
-    CGFloat gy0 = [self tabGridTopForHeight:gridH left:gx0 width:gridW margin:margin globe:mmGlobe];
+    CGFloat gy0 = [self tabGridTopForHeight:groupH left:gx0 width:groupW margin:4.0 / k globe:mmGlobe];
+    self.tabFrameView.image = collapsed ? self.tabFrameImgCollapsed : self.tabFrameImg;
+    self.tabFrameView.frame = CGRectMake(gx0, gy0, groupW, groupH);
+    self.tabFrameView.hidden = (self.tabFrameView.image == nil);
     for (int slot = 0; slot < 14; slot++) {
         int i = TAB_GRID_ORDER[slot];
         int col = slot % 2, row = slot / 2;
         UIButton *btn = (i == kTabSlotExpand) ? self.tabExpandButton : self.tabButtons[i];
-        if (collapsed && col == 1) {
-            btn.hidden = YES;
-            continue;
-        }
-        BOOL leftEdge = (col == 0), rightEdge = (col == 1 || collapsed);
-        btn.frame = CGRectMake(gx0 + (collapsed ? 0 : col * cell), gy0 + row * cell, cell, cell);
+        // Each column keeps its own edge of the group: the outer one stays right-aligned when it narrows.
+        int cx = (col == 0) ? kTabFrameInset : groupWc - kTabFrameInset - kTabStone;
+        btn.frame = CGRectMake(gx0 + cx / k, gy0 + (kTabFrameInset + row * kTabPitch) / k, kTabStone / k, kTabStone / k);
+        BOOL tucked = collapsed && col == 1;
+        btn.userInteractionEnabled = !tucked;
         if ([btn isKindOfClass:[TabGridButton class]]) {
+            // TOUCH-1: the stones are under 44 pt, so each outer edge of the group takes taps beyond it: the frame,
+            // then the scene to the left, the gap under the minimap above, and the screen edges right and below.
+            BOOL rightEdge = (col == 1 || collapsed);
             ((TabGridButton *)btn).hitOutset = UIEdgeInsetsMake(
-                row == 0 ? 4.0 : 0.0,                 // top row: into the gap below the minimap
-                leftEdge ? 10.0 : 0.0,                // left column: into the open scene
-                row == 6 ? margin + ins.bottom : 0.0, // bottom row: through the margin to the screen edge
-                rightEdge ? margin + right : 0.0);    // right column: through the margin to the screen edge
+                row == 0 ? CGRectGetMinY(btn.frame) - gy0 + 4.0 : 0.0,
+                col == 0 ? CGRectGetMinX(btn.frame) - gx0 + 10.0 : 0.0,
+                row == 6 ? H - CGRectGetMaxY(btn.frame) : 0.0,
+                rightEdge ? W - CGRectGetMaxX(btn.frame) : 0.0);
         }
         if (i == kTabSlotExpand) {
             UIImage *img = collapsed ? self.tabImgShowMore : self.tabImgShowLess;
@@ -5792,42 +5866,68 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
         NSArray<UIImage *> *imgs = isActive ? self.tabImgActive : self.tabImgInactive;
         UIImage *img = (i < (int)imgs.count && [imgs[i] isKindOfClass:[UIImage class]]) ? imgs[i] : nil;
         [self paintTabButton:btn image:img active:isActive];
+        btn.accessibilityElementsHidden = tucked;
     }
 
-    // The logout door, left of the chat tab row and moving with the chat (601 keeps it in the top-left corner,
-    // with the chat to its right). Placed from the same chat origin applyChatRelocate sends the engine.
+    // The column left of the chat (601's SIDE_LEFT_CHAT), moving with it: the logout door, the speech bubbles that put
+    // the chat away and bring it back, and the keyboard, which goes while the chat is away. Placed from the same chat
+    // origin applyChatRelocate sends the engine.
     UIButton *door = self.tabButtons[kTabLogout];
-    if (self.chatBaseX > 0 && self.renderW > 0 && W > 0) {
-        CGFloat s = W / (CGFloat)self.renderW;
+    NSArray<UIButton *> *column = @[ door, self.chatToggleButton, self.chatKeyboardButton ];
+    if (self.chatBaseX > 0) {
         int chatX = [self clampChatX:self.chatBaseX + self.chatUserDX];
         int chatY = [self clampChatY:self.chatBaseY + self.chatUserDY];
-        door.frame = CGRectMake((chatX - kDoorCanvasW) * s, chatY * s, kDoorCanvasW * s, kDoorCanvasH * s);
-        if ([door isKindOfClass:[TabGridButton class]])
-            ((TabGridButton *)door).hitOutset = UIEdgeInsetsMake(chatY * s, 0.0, 0.0, 0.0); // up to the screen edge
+        CGFloat colX = (chatX - kDoorCanvasW) / k;
+        for (int c = 0; c < 3; c++) {
+            UIButton *b = column[c];
+            b.frame = CGRectMake(colX, (chatY + kColumnY + c * kColumnPitch) / k, kDoorCanvasW / k, kColumnStoneH / k);
+            // Out to the screen's left edge, and the door up to its top.
+            if ([b isKindOfClass:[TabGridButton class]])
+                ((TabGridButton *)b).hitOutset = UIEdgeInsetsMake(c == 0 ? CGRectGetMinY(b.frame) : 0.0, colX, 0.0, 0.0);
+        }
         [self paintTabButton:door
                        image:(active == kTabLogout ? self.doorImgActive : self.doorImg)
                       active:(active == kTabLogout)];
+        // Put away, the bubbles sit on the door's stone, and flash to its red one twice a second while a message waits.
+        BOOL flash = self.chatHasUnread && ((long)(CACurrentMediaTime() * 2.0)) % 2 == 1;
+        UIImage *bubbles = !self.chatPutAway ? self.chatToggleOpenImg
+                                             : (flash ? self.chatToggleFlashImg : self.chatToggleClosedImg);
+        [self paintTabButton:self.chatToggleButton image:bubbles active:NO];
+        self.chatToggleButton.accessibilityValue = self.chatPutAway ? @"Hidden" : @"Shown";
+        if (self.chatPutAway)
+            self.chatKeyboardButton.hidden = YES;
+        else
+            [self paintTabButton:self.chatKeyboardButton image:self.chatKeyboardImg active:NO];
+        self.chatColumnShown = YES;
     } else {
-        door.hidden = YES; // the chat isn't placed yet
+        for (UIButton *b in column)
+            b.hidden = YES; // the chat isn't placed yet
+        self.chatColumnShown = NO;
     }
+    [self applyKbFabVisibility];
 
-    // Relocate the engine side panel (the open inventory/skills/etc. "menu") flush LEFT of the grid's visible
-    // column and centred on it — 601 puts both on the one anchor (tabGridTopForHeight). Convert the grid's
-    // screen-point edges to canvas px (canvasPx = pt * renderW/W); the side panel's size comes from the chrome
-    // snapshot (fixed engine px).
-    if (self.renderW > 0 && W > 0) {
-        CGFloat k = (CGFloat)self.renderW / W;
-        int sideW = 204, sideH = 275; // fallback until the panel is open and reports its real size
-        NSArray *sc = [d[@"sideContainer"] isKindOfClass:[NSArray class]] ? d[@"sideContainer"] : nil;
-        if (sc.count >= 4 && [sc[2] intValue] > 0) sideW = [sc[2] intValue];
-        if (sc.count >= 4 && [sc[3] intValue] > 0)
-            sideH = [sc[3] intValue];
-        int sideX = (int)lround(gx0 * k) - sideW;   // right edge flush against the grid's left edge
-        int sideY = (int)lround((gy0 + gridH / 2.0) * k) - sideH / 2;
-        if (sideX < 0) sideX = 0;
-        if (sideY < 0) sideY = 0;
-        [JVMLauncher relocateEngineSidePanelX:sideX y:sideY];
-    }
+    // Relocate the engine side panel (the open inventory/skills/etc. "menu") flush LEFT of the group's frame and
+    // centred on it, as 601 puts both on the one anchor (tabGridTopForHeight). Convert the group's screen-point edges
+    // to canvas px; the side panel's size comes from the chrome snapshot (fixed engine px).
+    int sideW = 204, sideH = 275; // fallback until the panel is open and reports its real size
+    NSArray *sc = [d[@"sideContainer"] isKindOfClass:[NSArray class]] ? d[@"sideContainer"] : nil;
+    if (sc.count >= 4 && [sc[2] intValue] > 0)
+        sideW = [sc[2] intValue];
+    if (sc.count >= 4 && [sc[3] intValue] > 0)
+        sideH = [sc[3] intValue];
+    int sideX = (int)lround(gx0 * k) - sideW; // right edge flush against the frame's left edge
+    int sideY = (int)lround((gy0 + groupH / 2.0) * k) - sideH / 2;
+    if (sideX < 0)
+        sideX = 0;
+    if (sideY < 0)
+        sideY = 0;
+    [JVMLauncher relocateEngineSidePanelX:sideX y:sideY];
+}
+
+// The ⌨︎ FAB stands down while the column's keyboard stone is up (the official app has only the stone), and while the
+// world map owns the screen.
+- (void)applyKbFabVisibility {
+    self.kbFab.hidden = self.mapOpen || self.chatColumnShown;
 }
 
 // The grid's top edge, in points, on the official app's anchor (interface 601, script 919): once the game area is
@@ -5885,8 +5985,13 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     for (UIButton *btn in self.tabButtons)
         btn.hidden = YES;
     self.tabExpandButton.hidden = YES;
+    self.tabFrameView.hidden = YES;
+    self.chatToggleButton.hidden = YES;
+    self.chatKeyboardButton.hidden = YES;
     for (UIView *cv in self.stoneCovers)
         cv.hidden = YES;
+    self.chatColumnShown = NO;
+    [self applyKbFabVisibility];
 }
 
 // The expand stone: collapse the grid to its inner column, or bring the outer column back. The panel follows the
@@ -5983,9 +6088,9 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
                                                   // stones reappear; without this the per-frame re-hide leaves
                                                   // NO tab access at all (native grid hidden + stones still hidden)
         self.tabRailBg.hidden = YES;
-        [self hideChatTabs];   // also restores the engine's own chat row (setEngineChatTabRowHeight:0)
+        [self hideChatTabs];
     }
-    // (When toggled back ON, updateChatTabs re-applies the enlarged row height each tick.)
+    // (When toggled back ON, updateChrome and updateChatTabs lay everything out again on the next tick.)
     [self appendLine:[NSString stringWithFormat:@"[chrome] rails %@", self.chromeVisible ? @"ON" : @"OFF"]];
 }
 
@@ -6514,8 +6619,10 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     // between the top-left chat and the top-right minimap). 0/100 = natural size.
     const int kMinimapScalePct = 100;   // 100 = natural (the engine pins the orbs, so a bigger globe can't be wrapped cleanly)
 
-    self.chatBaseX = leftC + m + kDoorCanvasW; // the logout door takes the corner (updateChrome)
-    self.chatBaseY = topC + m;
+    // The chat column takes the safe area's top-left corner, flush, as the official one does, and the chat sits right
+    // of it (updateChrome lays the column).
+    self.chatBaseX = leftC + kDoorCanvasW;
+    self.chatBaseY = topC;
     self.minimapBaseX = self.renderW - kMinimapClusterW - rightC - m;
     self.minimapBaseY = topC + m;
 
@@ -6704,7 +6811,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     // must NOT toggle it here — setting .hidden=NO on close would resurrect the retired buttons.)
     self.settingsButton.hidden = open;
     self.controlsBox.hidden = open;
-    self.kbFab.hidden = open;
+    self.kbFab.hidden = open || self.chatColumnShown;
     self.panelDock.view.hidden = open;
     self.closeMapButton.hidden = !open; // inverse of the rest: the ✕ shows only WHILE the map is open
     [self appendLine:open ? @"[map] world map OPEN -> map pan/taps, chrome hidden"
@@ -9464,6 +9571,12 @@ static const CFTimeInterval kSimConfirmTimeout = 15.0;
         if (i < 0 || i >= (int)self.tabButtons.count || self.tabButtons[i].hidden)
             return @"that tab isn't shown";
         [self onTabButton:self.tabButtons[i]];
+        return nil;
+    } else if ([name isEqualToString:@"chat:toggle"]) {
+        // The speech bubbles by the door: put the chat away, or bring it back.
+        if (self.chatToggleButton.hidden)
+            return @"the chat column isn't shown";
+        [self onChatToggle];
         return nil;
     } else
         return @"unknown screen";

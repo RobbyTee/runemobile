@@ -447,6 +447,7 @@ static jmethodID gMidScrollChat = NULL;      // scrollChat(I)V  (A3 — finger-s
 static jmethodID gMidScrollMapPanel = NULL;  // scrollMapPanel(I)V  (world map: finger-scroll the Key/maplist, no wheel/zoom)
 static jmethodID gMidSwitchChatTab = NULL;   // switchChatTab(I)V  (A3 — switch tab via op-replay, hidden tabs)
 static jmethodID gMidSetChatCollapsed = NULL; // setChatCollapsed(Z)V  (A3 — tap active tab hides the chat box)
+static jmethodID gMidSetChatPutAway = NULL;   // setChatPutAway(Z)V  (the speech-bubble stone puts the chat away)
 static jmethodID gMidGetChatSnap = NULL;     // getChatSnapshot()Ljava/lang/String;  (A3)
 static jmethodID gMidGetChatLines = NULL;    // getChatLines()Ljava/lang/String;  (native top-rendered chat)
 static jmethodID gMidGetDialogue = NULL;     // getDialogueJson()Ljava/lang/String;  (native-rendered dialogue)
@@ -503,6 +504,11 @@ static BOOL ensureVeneer(void) {
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         gMidScrollMapPanel = NULL;
+    }
+    gMidSetChatPutAway = (*env)->GetStaticMethodID(env, global, "setChatPutAway", "(Z)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidSetChatPutAway = NULL;
     }
     gMidOpenWorldMap = (*env)->GetStaticMethodID(env, global, "openWorldMap", "()V");
     if ((*env)->ExceptionCheck(env)) {
@@ -3159,6 +3165,16 @@ static BOOL pipFeedMarkerSaysMain(void) {
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetChatCollapsed, (jboolean)(collapsed ? JNI_TRUE : JNI_FALSE));
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.setEngineChatCollapsed"); }
+}
+
++ (void)setEngineChatPutAway:(BOOL)putAway {
+    if (!ensureVeneer() || !gMidSetChatPutAway)
+        return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetChatPutAway, (jboolean)(putAway ? JNI_TRUE : JNI_FALSE));
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.setEngineChatPutAway");
+    }
 }
 
 + (NSString *)chatSnapshot {

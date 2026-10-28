@@ -201,6 +201,8 @@ static jmethodID g_midRelocateChat = nullptr, g_midRelocateMinimap = nullptr;
 static jmethodID g_midSetOverlayInsets = nullptr;
 // Phase-4 chat pill (optional, same rule): collapse toggle + channel switch by op-script replay.
 static jmethodID g_midSetChatCollapsed = nullptr, g_midSwitchChatTab = nullptr;
+// The speech bubbles by the chat (optional): put the whole chat away, filter stones included.
+static jmethodID g_midSetChatPutAway = nullptr;
 // Phase-5 world map (optional): pan by finger deltas + the open-state/control-rect snapshot.
 static jmethodID g_midPanWorldMap = nullptr, g_midMapSnapshot = nullptr;
 // Phase 3 (Task B): content-diff publish seqs for the chat/orb/dialogue/map snapshots — gate the per-frame
@@ -1064,6 +1066,7 @@ static bool publishBridge(JNIEnv *env) {
             // world-map/insets surface simply loses overlay inset-avoidance, not the whole veneer.
             g_midSetOverlayInsets  = midOpt(env, hvg, "setOverlaySafeInsets", "(IIII)V");
             g_midSetChatCollapsed  = midOpt(env, hvg, "setChatCollapsed", "(Z)V");
+            g_midSetChatPutAway = midOpt(env, hvg, "setChatPutAway", "(Z)V");
             g_midSwitchChatTab     = midOpt(env, hvg, "switchChatTab", "(I)V");
             g_midPanWorldMap       = midOpt(env, hvg, "panWorldMap", "(II)V");
             g_midScrollMapPanel    = midOpt(env, hvg, "scrollMapPanel", "(I)V");   // optional (older jar omits it)
@@ -3008,6 +3011,12 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeSetChatCollapsed(JNIEnv *, jobject, jboolean collapsed) {
     if (!hudReady()) return;
     facadeVoidBool(g_hudCls, g_midSetChatCollapsed, collapsed);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_dev_audaro_runemobile_JvmLauncher_nativeSetChatPutAway(JNIEnv *, jobject, jboolean putAway) {
+    if (!hudReady())
+        return;
+    facadeVoidBool(g_hudCls, g_midSetChatPutAway, putAway);
 }
 extern "C" JNIEXPORT void JNICALL
 Java_dev_audaro_runemobile_JvmLauncher_nativeSwitchChatTab(JNIEnv *, jobject, jint index) {

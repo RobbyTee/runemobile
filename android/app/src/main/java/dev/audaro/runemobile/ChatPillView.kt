@@ -1,12 +1,6 @@
 package dev.audaro.runemobile
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.Rect
-import android.graphics.RectF
-import android.graphics.Typeface
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
@@ -14,14 +8,11 @@ import org.json.JSONObject
 import kotlin.math.hypot
 
 /**
- * UI-3: the native chat-tab ROW (iOS static-row parity; the old collapsible pill + fan was removed). It draws a
- * full-width row of 7 OPAQUE tabs (All..Trade) over the relocated chat. The engine keeps rendering its OWN chat
- * controls tab row underneath (hiding any tab widget blanks the whole chat raster — see HudVeneerBridge), so the
- * native row's opaque stone-brown backing COVERS it; that's what eliminates the "two tab rows". A tap on the
- * active tab collapses the message area; a tap on another switches the channel; a long-press on a filterable tab
- * opens its engine filter menu (the shared press-and-peek overlay). Taps snap to the nearest tab across the full
- * row, with a generous vertical band, so the buttons are easy to hit. Geometry comes from getChatSnapshot each
- * frame (it keeps reporting the configured chat origin while collapsed, so the row stays put).
+ * UI-3: tap targets over the engine's 7 filter stones (All..Trade), which the engine draws itself in the official
+ * mobile layout (HudVeneerBridge.layOfficialChat), so this view draws nothing. A tap on the active stone collapses
+ * the message area; a tap on another switches the channel; a long-press on a filterable one opens its engine filter
+ * menu (the shared press-and-peek overlay). Taps snap to the nearest stone across the row, with a generous band
+ * above it, so they are easy to hit. Geometry comes from getChatSnapshot each frame. Mirrors iOS updateChatTabs.
  *
  * The class name + the filter/haptic callbacks are kept so the host wiring + MenuOverlay path are unchanged.
  */
@@ -29,14 +20,17 @@ class ChatPillView(
     context: Context,
 ) : View(context) {
     companion object {
-        const val TAB_COUNT = 7 // native tabs drawn (All..Trade); the engine keeps the 8th Report tab
-        const val CHAT_W = 519 // engine chatbox width (canvas px) — the row spans this
-        const val ROW_H_CANVAS = 40 // taller native row (canvas px); pushed into the engine row height
+        const val TAB_COUNT = 7 // the filter stones (All..Trade); Report has none in the official layout
+
+        // The official row (HudVeneerBridge.OFFICIAL_*), canvas px from the chat origin: seven 58x28 stones 65 apart,
+        // 7 px in and 2 px down.
+        private const val TAB_X = 7
+        private const val TAB_PITCH = 65
+        private const val TAB_W = 58
+        private const val TAB_Y = 2
+        private const val TAB_H = 28
         private val NAMES = arrayOf("All", "Game", "Public", "Private", "Channel", "Clan", "Trade")
         private val FILTERABLE = booleanArrayOf(false, false, true, true, true, true, true)
-        private const val NAME_DEFAULT = 0xFFFFF7D9.toInt() // off-white
-        private const val FILTER_DEFAULT = 0xFF00E000.toInt() // green ("On")
-        private const val OPAQUE_BG = 0xFF423C33.toInt() // iOS stone-brown (66,60,51); fills the FULL tab rect
 
         // UI-3 tighten: ASYMMETRIC tappable band. Generous ABOVE the row (toward the screen top edge, where
         // nothing else lives, so a slightly-high tab tap still lands), but small BELOW — the chat-at-top message
@@ -64,18 +58,14 @@ class ChatPillView(
         val ey: Int,
         val ew: Int,
         val eh: Int,
-        val selected: Boolean,
-        val hasNew: Boolean,
-        val labelColor: Int,
-        val filter: String,
-        val filterColor: Int,
     )
 
     private var shown = true
     private var enabled = false
     private var tabs: List<Tab> = emptyList()
-    private var rowX = 0f
-    private var rowY = 0f
+    private var rowX = 0f // the first stone's left edge, view px
+    private var rowY = 0f // the stones' top edge
+    private var pitch = 0f // stone to stone
     private var tabW = 0f
     private var rowH = 0f
     private var effSel = -1
@@ -93,55 +83,6 @@ class ChatPillView(
     private val longPressRunnable = Runnable { onLongPress() }
 
     private val dp = resources.displayMetrics.density
-    private var btnNormal: Bitmap? = null
-    private var btnSelected: Bitmap? = null
-    private var btnNew: Bitmap? = null
-
-    private val bgPaint =
-        Paint().apply {
-            isAntiAlias = true
-            isFilterBitmap = true
-            isDither = true
-        }
-    private val fillPaint = Paint().apply { color = OPAQUE_BG }
-    private val namePaint =
-        Paint().apply {
-            isAntiAlias = true
-            textAlign = Paint.Align.CENTER
-        }
-    private val statePaint =
-        Paint().apply {
-            isAntiAlias = true
-            textAlign = Paint.Align.CENTER
-        }
-    private val srcRect = Rect()
-    private val dstRect = RectF()
-
-    init {
-        // The chat-tab button sprites come from the runtime cache (setSprites), not bundled assets. The RuneScape
-        // font is a separate bundled asset (not a cache sprite) and is loaded here as before.
-        val rsFont =
-            try {
-                Typeface.createFromAsset(context.assets, "tabassets/runescape.ttf")
-            } catch (e: Exception) {
-                null
-            }
-        rsFont?.let {
-            namePaint.typeface = it
-            statePaint.typeface = it
-        }
-        Log.i("ChatPill", "ui3: static chat-tab row built (font ${if (rsFont != null) "ok" else "sys"}; sprites pending cache)")
-    }
-
-    /** Supply the chat-tab button sprites loaded at runtime from the live cache (3051 / 3053 / 3055). */
-    fun setSprites(set: TabSprites.Set) {
-        if (!set.usableForChat()) return
-        btnNormal = set.chatbtn
-        btnSelected = set.chatbtnSelected ?: set.chatbtn
-        btnNew = set.chatbtnNew ?: set.chatbtn
-        Log.i("ChatPill", "ui3: chat-tab sprites set from runtime cache")
-        invalidate()
-    }
 
     fun setShown(on: Boolean) {
         if (shown != on) {
@@ -200,10 +141,11 @@ class ChatPillView(
                 enabled = true
                 return 0
             }
-        rowX = o.optInt("chatX", 0) * sx
-        rowY = o.optInt("chatY", 0) * sy
-        tabW = (CHAT_W * sx) / TAB_COUNT
-        rowH = ROW_H_CANVAS * sy
+        rowX = (o.optInt("chatX", 0) + TAB_X) * sx
+        rowY = (o.optInt("chatY", 0) + TAB_Y) * sy
+        pitch = TAB_PITCH * sx
+        tabW = TAB_W * sx
+        rowH = TAB_H * sy
         val list = ArrayList<Tab>(TAB_COUNT)
         var snapSel = -1
         val n = minOf(TAB_COUNT, arr.length())
@@ -217,11 +159,6 @@ class ChatPillView(
                     t.optInt("y", -1),
                     t.optInt("w", 0),
                     t.optInt("h", 0),
-                    sel,
-                    t.optBoolean("new"),
-                    t.optInt("labelColor", -1),
-                    t.optString("filter", ""),
-                    t.optInt("filterColor", -1),
                 ),
             )
         }
@@ -232,7 +169,6 @@ class ChatPillView(
         if (effSel >= 0) activeTab = effSel
         tabs = list
         enabled = true
-        invalidate()
         return list.size
     }
 
@@ -243,16 +179,16 @@ class ChatPillView(
         return (t.ex + t.ew / 2) to (t.ey + t.eh / 2)
     }
 
-    private fun chipRect(i: Int): RectF = RectF(rowX + i * tabW, rowY, rowX + (i + 1) * tabW, rowY + rowH)
-
-    /** Snap a touch to the nearest tab across the full row + an asymmetric vertical band; -1 if outside. */
+    /** Snap a touch to the nearest stone across the row (the gaps split between neighbours) + an asymmetric
+     *  vertical band; -1 if outside. */
     private fun tabAt(
         x: Float,
         y: Float,
     ): Int {
         if (y < rowY - EXPAND_UP_DP * dp || y > rowY + rowH + EXPAND_DOWN_DP * dp) return -1
-        if (x < rowX || x >= rowX + tabW * TAB_COUNT) return -1
-        return ((x - rowX) / tabW).toInt().coerceIn(0, TAB_COUNT - 1)
+        val gap = pitch - tabW
+        if (x < rowX - gap / 2f || x >= rowX + (TAB_COUNT - 1) * pitch + tabW + gap / 2f) return -1
+        return ((x - rowX + gap / 2f) / pitch).toInt().coerceIn(0, TAB_COUNT - 1)
     }
 
     private fun reset() {
@@ -262,59 +198,6 @@ class ChatPillView(
         downTab = -1
         filterArmed = false
         filterTab = -1
-    }
-
-    // --- drawing ----------------------------------------------------------------------------------------
-
-    private fun colorOf(
-        rgb: Int,
-        default: Int,
-    ) = if (rgb < 0) default else (0xFF000000.toInt() or (rgb and 0xFFFFFF))
-
-    private fun drawChip(
-        canvas: Canvas,
-        r: RectF,
-        i: Int,
-        selected: Boolean,
-    ) {
-        // Opaque fill FIRST so the engine controls row underneath is fully covered — including the sprite's
-        // transparent rounded corners (the iOS lesson; without it the engine tabs peek through).
-        canvas.drawRect(r, fillPaint)
-        val t = tabs.getOrNull(i)
-        val bg =
-            when {
-                selected -> btnSelected
-                t?.hasNew == true -> btnNew
-                else -> btnNormal
-            }
-        if (bg != null) {
-            srcRect.set(0, 0, bg.width, bg.height)
-            bgPaint.alpha = 255
-            dstRect.set(r)
-            canvas.drawBitmap(bg, srcRect, dstRect, bgPaint)
-        }
-        val cx = r.centerX()
-        namePaint.alpha = 255
-        statePaint.alpha = 255
-        namePaint.textSize = r.height() * 0.40f
-        namePaint.color = colorOf(t?.labelColor ?: -1, NAME_DEFAULT)
-        val filter = t?.filter ?: ""
-        if (filter.isNotEmpty()) {
-            canvas.drawText(NAMES[i], cx, r.top + r.height() * 0.44f, namePaint)
-            statePaint.textSize = r.height() * 0.34f
-            statePaint.color = colorOf(t?.filterColor ?: -1, FILTER_DEFAULT)
-            canvas.drawText(filter, cx, r.top + r.height() * 0.88f, statePaint)
-        } else {
-            canvas.drawText(NAMES[i], cx, r.top + r.height() * 0.64f, namePaint)
-        }
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        if (!enabled || !shown || tabs.isEmpty() || tabW <= 0f) return
-        val n = minOf(TAB_COUNT, tabs.size)
-        for (i in 0 until n) {
-            drawChip(canvas, chipRect(i), i, selected = i == effSel)
-        }
     }
 
     // --- gesture ----------------------------------------------------------------------------------------

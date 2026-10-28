@@ -327,7 +327,6 @@ class MainActivity : AppCompatActivity() {
     private var lastChromeSig = LongArray(CHROME_SIG_LEN) { Long.MIN_VALUE }
     private var lastStonesHidden: Boolean? = null // desired HudVeneer hide-stones state (send only on change)
     private var tabGridCollapsed = false // the expand stone's choice, kept in PREFS_CHAT
-    private val doorRectView = RectF() // the logout door beside the chat, view px (applyChatAtTop)
     private var lastSideX = Int.MIN_VALUE // last side-panel relocation sent (send only on change)
     private var lastSideY = Int.MIN_VALUE
     private var lastChatX = Int.MIN_VALUE // last chat-at-top relocation sent (send only on change)
@@ -408,12 +407,16 @@ class MainActivity : AppCompatActivity() {
     // mirrors what we last asked for — the engine never collapses on its own).
     private var chatCollapsed = false
 
-    // Auto-open: while an engine-rendered dialogue is up we un-collapse the chat (a collapsed chat hides the engine
-    // tabs, which suppresses the dialogue raster); these track the edge + whether WE forced it open so we can restore.
+    // The speech bubbles put the whole chat away, filter stones included (the official app's "Toggle Chatbox").
+    private var chatPutAway = false
+
+    // Auto-open: while an engine-rendered dialogue is up we open a collapsed or put-away chat (the dialogue draws
+    // in it); these track the edge + whether WE forced it open so we can restore.
     private var dialogueWasActive = false
     private var savedCollapsedForDialogue = false
+    private var savedPutAwayForDialogue = false
+    private var chatUnread = false // a filter stone shows new messages: the bubbles flash while the chat is put away
     private var chatTabsLogged = false
-    private var lastChatRowH = Int.MIN_VALUE // last setChatTabRowHeight sent (send only on change)
     private var lastMmX = Int.MIN_VALUE // last minimap relocation sent (send only on change)
     private var lastMmY = Int.MIN_VALUE
 
@@ -567,10 +570,10 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_MINIMAP_DY = "minimapOverrideY"
         private const val KEY_TAB_GRID_COLLAPSED = "tabGridCollapsed" // the expand stone's choice (ChromeOverlayView)
 
-        // Logout is a door left of the chat tab row: 601's LOGOUT_CONTAINER, 58x40 canvas px, the native row's height.
-        // The chat's base anchor steps right by its width, as the official chat sits right of it (iOS kDoorCanvasW).
+        // The column left of the chat (601's SIDE_LEFT_CHAT: the logout door, the speech bubbles, the keyboard) is 58
+        // canvas px wide. The chat's base anchor steps right by it, as the official chat sits right of it (iOS
+        // kDoorCanvasW).
         private const val DOOR_W_CANVAS = 58
-        private const val DOOR_H_CANVAS = ChatPillView.ROW_H_CANVAS
         private const val KEEPALIVE_IDLE_STOP_MS = 600_000L
 
         // AWT virtual-key codes (java.awt.event.KeyEvent) the engine's onKeyStroke expects.
@@ -881,6 +884,11 @@ class MainActivity : AppCompatActivity() {
             getSharedPreferences(PREFS_CHAT, MODE_PRIVATE).edit().putBoolean(KEY_TAB_GRID_COLLAPSED, collapsed).apply()
             Log.i(TAG, "a6: tab grid ${if (collapsed) "collapsed" else "expanded"}")
         }
+        chromeOverlay.onChatToggle = {
+            savedPutAwayForDialogue = false // the player's own choice from here on
+            setChatPutAway(!chatPutAway)
+            Log.i(TAG, "chat: ${if (chatPutAway) "put away" else "brought back"}")
+        }
         // Phase-4 chat channel PILL (replaces the A3 enlarged tab row as the chat control; iOS parity).
         // Quick tap = collapse/expand (shared shove-off-canvas); hold 0.15s = chips fan out; drag + lift =
         // switch channel (op-script replay, works collapsed); pull DOWN past a filterable chip = its engine
@@ -890,7 +898,6 @@ class MainActivity : AppCompatActivity() {
         // post-login capture lands; the live capture in updateChrome refreshes + re-caches it.
         TabSprites.parse(TabSprites.cached(filesDir))?.takeIf { it.version >= TabSprites.VERSION }?.let {
             chromeOverlay.setSprites(it)
-            chatTabOverlay.setSprites(it)
         }
         chatTabOverlay.onTabTap = { k ->
             // UI-3 (iOS onChatTabButton): tap the ACTIVE tab to collapse the message area; tap any other to
@@ -914,15 +921,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
         chatTabOverlay.onFilterOpen = { _, ecx, ecy, vx, vy ->
-            if (chatCollapsed) {
-                // The collapsed chat's filter button sits off-canvas (y≈3000) — a right-click there opens
-                // nothing. Expand first; the engine restores the widget next tick, the snapshot follows, and a
-                // later move (finger still below the chip) passes the on-canvas gate below. iOS 69ed4cf9e.
-                chatCollapsed = false
-                JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(false) }
-                Log.i(TAG, "p4: pull-down on collapsed chat -> expand first")
-                false
-            } else if (ecx >= 0 && ecy in 0 until JvmLauncher.frameHeight()) {
+            // A collapsed chat keeps its filter stones up, so the menu opens on the stone either way.
+            if (ecx >= 0 && ecy in 0 until JvmLauncher.frameHeight()) {
                 beginChatFilterMenu(ecx, ecy, vx, vy)
                 true
             } else {
@@ -1157,6 +1157,8 @@ class MainActivity : AppCompatActivity() {
             setModActive(kbButton, manualKeyboard)
             Log.i(TAG, "ap0: manual keyboard ${if (manualKeyboard) "ON" else "OFF"}")
         }
+        // The keyboard stone in the column by the chat is the same toggle; ⌨ stands down while the column shows.
+        chromeOverlay.onKeyboard = { kbButton.performClick() }
         // AP-2a (Finding 12): sticky-Shift latch. The engine's shift-gated surface — "Mark" on objects/NPCs/
         // tiles, Menu Entry Swapper shift-to-customize, overlay "Configure" — only injects while shift is held.
         // Touch has no hardware shift, so this latch posts a synthetic held VK_SHIFT (shared JavaBridge.
@@ -2763,7 +2765,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (!mapPanning && !mapScrolling) {
                     val r = chatRectCanvas
-                    if (r != null && e1 != null && !mapOpen) {
+                    if (r != null && e1 != null && chatScrollable) {
                         val gx = toGameX(e1.x)
                         val gy = toGameY(e1.y)
                         if (gx >= r[0] && gx < r[0] + r[2] && gy >= r[1] && gy < r[1] + r[3]) {
@@ -3701,7 +3703,6 @@ class MainActivity : AppCompatActivity() {
             if (sprJson.isNotEmpty()) {
                 TabSprites.parse(sprJson)?.let { set ->
                     chromeOverlay.setSprites(set)
-                    chatTabOverlay.setSprites(set)
                     // Only persist a COMPLETE set — a deadline-partial would otherwise show glyphless tiles on every
                     // later boot. A fresh process re-captures from the cache (usually complete within a few ticks).
                     if (set.complete) TabSprites.cache(filesDir, sprJson)
@@ -3987,9 +3988,16 @@ class MainActivity : AppCompatActivity() {
             } else {
                 null
             }
-        // The row's own enable gate from here on: the dialogue owns the chatbox region for as long as it is open.
+        // The row's own enable gate from here on: the dialogue owns the chatbox region for as long as it is open, and
+        // a chat put away has no filter stones.
         val tabsOn = on && !chatDialogueActive
-        val n = chatTabOverlay.update(chatSnap, sx, sy, tabsOn)
+        val n = chatTabOverlay.update(chatSnap, sx, sy, tabsOn && !chatPutAway)
+        // Read from the snapshot, not the stone targets: those are gone while the chat is put away, which is when the
+        // bubbles need it. The engine reports all seven stones either way.
+        chatUnread =
+            cs?.optJSONArray("tabs")?.let { arr ->
+                (0 until minOf(ChatPillView.TAB_COUNT, arr.length())).any { arr.optJSONObject(it)?.optBoolean("new") == true }
+            } == true
         // Path B: when the engine renders its own opaque dialogue (engineDialogue), SUPPRESS the native parchment so
         // the engine's dialogue + full 3D head shows through. Otherwise (make-X/reward boxes, or Path-B off) draw the
         // native parchment as before.
@@ -4004,37 +4012,47 @@ class MainActivity : AppCompatActivity() {
         val dlg = if (on) DialoguePublish.fromNative(JvmLauncher.dialoguePublishRaw()) else DialoguePublish(-1L, "{}")
         if (chatDialogueActive) updateDialogueTapTargets(dlg.json, dlg.seq) else clearDialogueTapTargets()
         dialogueOverlay.update(chatSnap, if (show) dlg else DialoguePublish(-1L, "{}"), sx, sy, show)
-        // Auto-open/close: a collapsed chat hides the engine tabs -> the dialogue raster is suppressed. So when an
-        // engine dialogue opens while collapsed, un-collapse for its duration and restore the collapsed state when it
-        // ends (official-mobile behaviour). Native is the single owner of chatCollapsed (no bridge writer / no race).
-        if (on) {
-            if (engineDlg && !dialogueWasActive && chatCollapsed) {
-                savedCollapsedForDialogue = true
-                chatCollapsed = false
-                JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(false) }
-                Log.i(TAG, "dlg: auto-opened chat for dialogue")
-            } else if (!engineDlg && dialogueWasActive && savedCollapsedForDialogue) {
-                savedCollapsedForDialogue = false
-                chatCollapsed = true
-                JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(true) }
-                Log.i(TAG, "dlg: restored collapsed chat after dialogue")
-            }
-            dialogueWasActive = engineDlg
-        }
+        if (on) followDialogue(engineDlg)
         if (tabsOn && n > 0 && !chatTabsLogged) {
             chatTabsLogged = true
-            Log.i(TAG, "ANDROID_A3_CHATTABS_GREEN enlarged native chat-tab row drawn ($n tabs) sx=$sx sy=$sy")
+            Log.i(TAG, "ANDROID_A3_CHATTABS_GREEN chat filter-stone targets laid ($n tabs) sx=$sx sy=$sy")
         }
-        // Follows the native row: with it hidden, give the engine its own 23px CONTROLS row back, exactly as
-        // iOS's hideChatTabs does (setEngineChatTabRowHeight:0).
-        val wantRowH = if (tabsOn) ChatPillView.ROW_H_CANVAS else 0
-        if (wantRowH != lastChatRowH) {
-            lastChatRowH = wantRowH
-            JvmLauncher.onBridge {
-                JvmLauncher.setChatTabRowHeight(wantRowH)
-                JvmLauncher.setChatAreaWidth(0)
-            }
+    }
+
+    /** Open a collapsed or put-away chat when an engine dialogue opens ([engineDlg] goes true), and restore it when
+     *  the dialogue ends (official-mobile behaviour). Native is the single owner of both states (no bridge writer /
+     *  no race). */
+    private fun followDialogue(engineDlg: Boolean) {
+        if (engineDlg && !dialogueWasActive && chatCollapsed) {
+            savedCollapsedForDialogue = true
+            chatCollapsed = false
+            JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(false) }
+            Log.i(TAG, "dlg: auto-opened chat for dialogue")
+        } else if (!engineDlg && dialogueWasActive && savedCollapsedForDialogue) {
+            savedCollapsedForDialogue = false
+            chatCollapsed = true
+            JvmLauncher.onBridgeTouch { JvmLauncher.setChatCollapsed(true) }
+            Log.i(TAG, "dlg: restored collapsed chat after dialogue")
         }
+        if (engineDlg && !dialogueWasActive && chatPutAway) {
+            savedPutAwayForDialogue = true
+            setChatPutAway(false)
+            Log.i(TAG, "dlg: brought the chat back for dialogue")
+        } else if (!engineDlg && dialogueWasActive && savedPutAwayForDialogue) {
+            savedPutAwayForDialogue = false
+            setChatPutAway(true)
+            Log.i(TAG, "dlg: put the chat away again after dialogue")
+        }
+        dialogueWasActive = engineDlg
+    }
+
+    /** Only an open chat scrolls: collapsed or put away, a drag over it turns the camera (iOS chatScrollable). */
+    private val chatScrollable: Boolean get() = !mapOpen && !chatCollapsed && !chatPutAway
+
+    /** Put the whole chat away (the speech bubbles), or bring it back; the engine hides or shows its filter row. */
+    private fun setChatPutAway(putAway: Boolean) {
+        chatPutAway = putAway
+        JvmLauncher.onBridgeTouch { JvmLauncher.setChatPutAway(putAway) }
     }
 
     /** Send the desired engine-stone hide state to HudVeneerBridge, only when it changes (off the UI thread). */
@@ -4064,11 +4082,9 @@ class MainActivity : AppCompatActivity() {
             if (sc.optInt(2) > 0) sideW = sc.getInt(2)
             if (sc.optInt(3) > 0) sideHc = sc.getInt(3)
         }
-        // UI-1: the panel is a fixed engine raster we can't grow, so shrink the native grid to the panel height
-        // (constant 275 canvas px) — they then share both the top and bottom edge. Do this BEFORE reading the
-        // grid edges below so the relocate uses the post-shrink geometry (setTargetGridHeight recomputes it).
-        chromeOverlay.setCanvasScale(ky)
-        chromeOverlay.setTargetGridHeight(sideHc / ky)
+        // The group is the official 85x280 canvas px whatever the panel's size; set the scale BEFORE reading its
+        // edges below so the relocate uses the current geometry (setCanvasScale recomputes it).
+        chromeOverlay.setCanvasScale(k, ky)
         val gx0 = chromeOverlay.gridLeftPx
         val gy0 = chromeOverlay.gridTopPx
         if (gx0 <= 0f) return
@@ -4082,7 +4098,6 @@ class MainActivity : AppCompatActivity() {
 
     /** Stop relocating the engine side panel (let it return to its native position) when the grid disengages. */
     private fun releaseSidePanel() {
-        chromeOverlay.setTargetGridHeight(0f) // UI-1: grid back to its natural size when the chrome disengages
         if (lastSideX == -1 && lastSideY == -1) return
         lastSideX = -1
         lastSideY = -1
@@ -4101,20 +4116,27 @@ class MainActivity : AppCompatActivity() {
         val kx = fw.toFloat() / vw
         val ky = fh.toFloat() / vh
         val ins = safeInsetsLTR()
-        val margin = 8 // canvas-px breathing room from the safe edge
-        chatBaseX = Math.round(ins[0] * kx) + margin + DOOR_W_CANVAS // the logout door takes the corner
-        chatBaseY = Math.round(ins[1] * ky) + margin
+        // The column takes the safe area's top-left corner, flush, as the official one does, and the chat sits right
+        // of it.
+        chatBaseX = Math.round(ins[0] * kx) + DOOR_W_CANVAS
+        chatBaseY = Math.round(ins[1] * ky)
         // Honour the user's edit-mode override (P2-3); clamp the WHOLE chatbox on-frame (against frame − chat size,
         // from the last reported bounds) so a stale offset from a since-changed dimension can't push it off-screen.
         val cr = chatRectCanvas
         val chatW = cr?.getOrNull(2) ?: 0
         val chatH = cr?.getOrNull(3) ?: 0
-        // Never so far left that the door would leave the canvas.
+        // Never so far left that the column would leave the canvas.
         val chatX = (chatBaseX + chatUserDX).coerceIn(DOOR_W_CANVAS, (fw - chatW).coerceAtLeast(DOOR_W_CANVAS))
         val chatY = (chatBaseY + chatUserDY).coerceIn(0, (fh - chatH).coerceAtLeast(0))
-        // The door moves with the chat (overlay edit included), so it is placed even when the chat hasn't moved.
-        doorRectView.set((chatX - DOOR_W_CANVAS) / kx, chatY / ky, chatX / kx, (chatY + DOOR_H_CANVAS) / ky)
-        chromeOverlay.setDoorRect(doorRectView)
+        // The column moves with the chat (overlay edit included), so it is placed even when the chat hasn't moved. Its
+        // keyboard stands in for the ⌨ button while it shows; the map hides the whole overlay, so ⌨ comes back there.
+        chromeOverlay.setChatColumn(
+            (chatX - DOOR_W_CANVAS) / kx,
+            chatY / ky,
+            chatPutAway,
+            chatPutAway && chatUnread,
+        )
+        keyboardToggleBtn?.visibility = if (mapOpen) View.VISIBLE else View.GONE
         if (chatX == lastChatX && chatY == lastChatY) return
         lastChatX = chatX
         lastChatY = chatY
@@ -4122,16 +4144,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Stop relocating the chat (let it return to its native bottom position) when the chrome disengages.
-     *  Also un-collapse: with the pill gone there'd be no way to expand a shoved-off-canvas chat. */
+     *  Also open it: with the stones and the column gone there'd be no way to bring back a collapsed or put-away
+     *  chat. */
     private fun releaseChat() {
-        chromeOverlay.setDoorRect(null)
+        chromeOverlay.setChatColumn(Float.NaN, Float.NaN, false, false)
+        keyboardToggleBtn?.visibility = View.VISIBLE
         if (lastChatX == -1 && lastChatY == -1) return
         lastChatX = -1
         lastChatY = -1
         chatCollapsed = false
+        chatPutAway = false
+        savedPutAwayForDialogue = false
         JvmLauncher.onBridge {
             JvmLauncher.relocateChat(-1, -1, false)
             JvmLauncher.setChatCollapsed(false)
+            JvmLauncher.setChatPutAway(false)
         }
     }
 
