@@ -7,10 +7,12 @@
 #
 # What it produces (into $DIST, default dist/ci):
 #   RuneMobile-<version>.apk   release-signed APK (real 45:E3 keystore when configured, else debug key)
-#   RuneMobile-<version>.ipa   Payload IPA. Self-hosted: real dev provisioning profile. Hosted (IOS_ADHOC=1):
-#                              built unsigned then ad-hoc-sealed with the codesign tool (--deep) + app
-#                              entitlements applied from source. Either way SideStore/AltStore re-sign the whole
-#                              bundle on install, so the CI signature is disposable.
+#   RuneMobile-<version>.ipa   Payload IPA. Default (IOS_ADHOC=1): built unsigned then ad-hoc-sealed with the
+#                              codesign tool + app entitlements applied from source. SideStore/AltStore re-sign
+#                              the whole bundle on install, so this signature is disposable. IOS_ADHOC=0
+#                              team-signs instead, which embeds the developer's provisioning profile (name,
+#                              Apple ID email, team, device UDIDs): never publish that one; both publish
+#                              scripts refuse it.
 #   runelite-jit.js            the StikDebug JIT launch template, copied verbatim
 #   manifest.env              version / sha / apk fingerprint, sourced by publish-rolling-release.sh
 #
@@ -30,6 +32,7 @@
 #   BUILD_NUMBER   monotonic build number (default: 0 for a local build; CI passes github.run_number)
 #   GIT_SHA        short commit sha for the version-name suffix (default: `git rev-parse --short HEAD`)
 #   REUSE_JARS     1 = reuse already-staged ios/app/jvm-resources jars instead of rebuilding them
+#   IOS_ADHOC      1 = ad-hoc-seal the IPA (default); 0 = team-sign it with DEVELOPMENT_TEAM (local use only)
 #   DIST           output directory (default: <repo>/dist/ci)
 #   CI_CONFIG_DIR  signing/config dir (default: ~/.runemobile-ci)
 set -euo pipefail
@@ -42,6 +45,7 @@ CI_CONFIG_DIR="${CI_CONFIG_DIR:-$HOME/.runemobile-ci}"
 BUILD_NUMBER="${BUILD_NUMBER:-0}"
 GIT_SHA="${GIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 REUSE_JARS="${REUSE_JARS:-0}"
+IOS_ADHOC="${IOS_ADHOC:-1}"
 
 # Default platform set: iOS needs Xcode, so only attempt it on macOS.
 if [ -z "${PLATFORMS:-}" ]; then
@@ -117,9 +121,10 @@ if wants ios; then
 	have xcodegen  || die "xcodegen not found (brew install xcodegen)"
 	have xcodebuild || die "xcodebuild not found (install Xcode)"
 	[ -f "$CI_CONFIG_DIR/signing.env" ] && . "$CI_CONFIG_DIR/signing.env" || { [ -f ios/dev-tools/signing.env ] && . ios/dev-tools/signing.env; }
-	# IOS_ADHOC=1 (the hosted pipeline) ad-hoc-signs instead of team-signing: the IPA is re-signed on-device by
-	# AltStore/SideStore at install, so CI needs no Apple account/cert/team — it only emits a valid bundle.
-	if [ "${IOS_ADHOC:-0}" != 1 ]; then
+	# IOS_ADHOC=1 (the default, and what every published build uses) ad-hoc-signs instead of team-signing: the IPA
+	# is re-signed on-device by AltStore/SideStore at install, so the build needs no Apple account/cert/team — it
+	# only emits a valid bundle.
+	if [ "$IOS_ADHOC" != 1 ]; then
 		[ -n "${DEVELOPMENT_TEAM:-}" ] || die "DEVELOPMENT_TEAM unset — add it to $CI_CONFIG_DIR/signing.env"
 	fi
 
@@ -177,7 +182,7 @@ if wants ios; then
 	# CFBundleVersion floors to 1: a semver build has BUILD_NUMBER=0, but 0 reads as a build-number regression
 	# vs any prior release (and `${BUILD_NUMBER:-1}` yields 0 since 0 is set, not empty). Rolling builds keep run #.
 	IOS_BUILD="$BUILD_NUMBER"; [ "$IOS_BUILD" -gt 0 ] 2>/dev/null || IOS_BUILD=1
-	if [ "${IOS_ADHOC:-0}" = 1 ]; then
+	if [ "$IOS_ADHOC" = 1 ]; then
 		# Build UNSIGNED: the iOS SDK rejects ad-hoc ("-") code signing at xcodebuild time
 		# ("Ad Hoc code signing is not allowed with SDK 'iOS NN'") — that guard is xcodebuild's, not the
 		# codesign tool's. So emit an unsigned bundle here (no Apple cert/keychain/team needed) and ad-hoc-seal
@@ -210,8 +215,8 @@ if wants ios; then
 	# wrapper WITH entitlements — the same nested-first contract the self-hosted path's resign-jre.sh follows.
 	# SideStore reads the app-executable entitlements to request increased-memory-limit when it re-signs
 	# on-device (its dev profile injects get-task-allow); this also replaces the seal the plist stamp broke.
-	# (Guarded to IOS_ADHOC so the live self-hosted signed path is untouched.)
-	if [ "${IOS_ADHOC:-0}" = 1 ]; then
+	# (Guarded to IOS_ADHOC so the team-signed IOS_ADHOC=0 path keeps Xcode's signature untouched.)
+	if [ "$IOS_ADHOC" = 1 ]; then
 		ENTS="$APPDIR/RuneMobile/RuneMobile.entitlements"
 		[ -f "$ENTS" ] || die "entitlements file missing: $ENTS"
 		APPB="$WORK/Payload/RuneMobile.app"

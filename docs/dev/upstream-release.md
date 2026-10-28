@@ -345,10 +345,12 @@ are ever offered to users as updates.
    ```
 
    The script reads its inputs from `CI_CONFIG_DIR` (default `~/.runemobile-ci/`): `keystore.properties`,
-   `signing.env`, and a seed copy of the iOS JRE in `ios-jre/` if `ios/dev-tools/jre/` is absent. Without
-   `IOS_ADHOC=1` it signs the IPA with your `DEVELOPMENT_TEAM`; with it, it ad-hoc-seals the IPA as the hosted build
-   does. It writes `dist/ci/RuneMobile-<version>.{apk,ipa}`, `runelite-jit.js`, `manifest.env` and, when an IPA was
-   built, `altstore.json` (via `tools/ci/make-altstore-source.sh`).
+   `signing.env`, and a seed copy of the iOS JRE in `ios-jre/` if `ios/dev-tools/jre/` is absent. It ad-hoc-seals
+   the IPA, as the hosted build does. `IOS_ADHOC=0` signs it with your `DEVELOPMENT_TEAM` instead, but that IPA
+   embeds your provisioning profile, which carries your name, Apple ID email, team ID and the UDID of every
+   provisioned device, so keep it for local use: both publish scripts refuse it. It writes
+   `dist/ci/RuneMobile-<version>.{apk,ipa}`, `runelite-jit.js`, `manifest.env` and, when an IPA was built,
+   `altstore.json` (via `tools/ci/make-altstore-source.sh`).
 6. **Write the release notes**: the disclosure block from [RELEASE.md](../../RELEASE.md#release-page-disclosure-paste-into-every-release),
    the known issues that apply to this build, and the changelog section.
 7. **Publish** with the script, never with a hand-written `gh release create`:

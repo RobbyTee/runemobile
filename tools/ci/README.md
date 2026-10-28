@@ -17,7 +17,7 @@ JRE). Locally the same scripts read those inputs from `~/.runemobile-ci` instead
 
 | File | Role |
 |------|------|
-| `tools/ci/build-release-artifacts.sh` | The build. Produces `dist/ci/RuneMobile-<ver>.{apk,ipa}` + `runelite-jit.js` + `manifest.env`. `IOS_ADHOC=1` builds the IPA unsigned then ad-hoc-seals it (SideStore re-signs on install). Runnable + testable locally. |
+| `tools/ci/build-release-artifacts.sh` | The build. Produces `dist/ci/RuneMobile-<ver>.{apk,ipa}` + `runelite-jit.js` + `manifest.env`. By default (`IOS_ADHOC=1`) it builds the IPA unsigned then ad-hoc-seals it (SideStore re-signs on install); `IOS_ADHOC=0` team-signs it, which embeds the developer's provisioning profile, so both publish scripts refuse that IPA. Runnable + testable locally. |
 | `tools/ci/publish-rolling-release.sh` | Publishes `dist/ci/` as a rolling prerelease on this repo. |
 | `.github/workflows/release-hosted.yml` | **The live pipeline.** `push:[master]` (+ dispatch) on the hosted `macos-15` runner: materialize inputs → contract pre-flight → build → publish. |
 | `.github/workflows/CI.yml` | Upstream RuneLite's full build/test (JDK 11) on every push + PR — the public green/red check that keeps this repo building like RuneLite. |

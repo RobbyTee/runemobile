@@ -14,6 +14,10 @@ as "What's new".
 
 ## [Unreleased]
 
+### Changed
+- **iOS:** the release IPA is built the same way as the rolling builds: ad-hoc sealed, with no developer
+  provisioning profile inside. SideStore and AltStore re-sign it at install, as before.
+
 ## [0.6.0] - 2026-10-28
 
 ### Added

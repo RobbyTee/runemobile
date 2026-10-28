@@ -51,6 +51,15 @@ for f in "RuneMobile-${VERSION}.apk" "RuneMobile-${VERSION}.ipa" "runelite-jit.j
 	[ -f "$DIST/$f" ] && ASSETS+=("$DIST/$f")
 done
 [ "${#ASSETS[@]}" -gt 0 ] || die "no assets found in $DIST for version $VERSION"
+# Same guard as publish-stable-release.sh: a team-signed IPA (IOS_ADHOC=0) embeds the developer's provisioning
+# profile (name, Apple ID email, team, device UDIDs), and a public release must never carry it.
+IPA="$DIST/RuneMobile-${VERSION}.ipa"
+if [ -f "$IPA" ]; then
+	IPA_FILES="$(unzip -Z1 "$IPA")" || die "cannot list $IPA"
+	if grep -q 'embedded\.mobileprovision$' <<<"$IPA_FILES"; then
+		die "$IPA embeds a provisioning profile — rebuild with IOS_ADHOC=1 (the default)"
+	fi
+fi
 
 FP_LINE=""
 # RuneLite base: present in manifests written by current build-release-artifacts.sh; older ones omit it,

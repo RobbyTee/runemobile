@@ -124,8 +124,8 @@ Signing is automatic. The team comes from `DEVELOPMENT_TEAM`, which the scripts 
 and fill in your own team. A free Apple ID can sign a development build, with a 7-day profile; a paid account gets
 1-year profiles. Neither changes JIT.
 
-The released IPA is built by `tools/ci/build-release-artifacts.sh`; on the hosted runner it is built unsigned and
-then ad-hoc sealed. SideStore or AltStore re-signs the whole bundle with the user's own development certificate
+The released IPA is built by `tools/ci/build-release-artifacts.sh`, unsigned and then ad-hoc sealed, so it carries
+no provisioning profile. SideStore or AltStore re-signs the whole bundle with the user's own development certificate
 at install, which is what puts `get-task-allow` back. See [Upstream merges and releases](upstream-release.md).
 
 `MARKETING_VERSION` in `project.yml` is the version a plain build shows (the Simulator, `/deploy`, an Xcode run).

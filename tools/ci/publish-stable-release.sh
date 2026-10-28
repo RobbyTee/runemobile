@@ -40,6 +40,13 @@ IPA="$DIST/RuneMobile-$VERSION.ipa"
 FEED="$DIST/altstore.json"
 [ -f "$APK" ] || die "missing $APK"
 [ -f "$IPA" ] || die "missing $IPA"
+# A team-signed IPA (IOS_ADHOC=0) embeds the developer's provisioning profile: their name, Apple ID email, team
+# and the UDID of every provisioned device. SideStore/AltStore re-sign on install and never need it, so a public
+# IPA must be the ad-hoc build.
+IPA_FILES="$(unzip -Z1 "$IPA")" || die "cannot list $IPA"
+if grep -q 'embedded\.mobileprovision$' <<<"$IPA_FILES"; then
+	die "$IPA embeds a provisioning profile — rebuild with IOS_ADHOC=1 (the default)"
+fi
 [ -f "$FEED" ] || RELEASE_TAG="$TAG" "$ROOT/tools/ci/make-altstore-source.sh" "$DIST"
 
 # The manifest must describe THIS release, not a leftover from the previous build sitting in dist/.
