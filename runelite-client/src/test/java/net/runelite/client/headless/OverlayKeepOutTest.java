@@ -102,6 +102,22 @@ public class OverlayKeepOutTest
 	}
 
 	@Test
+	public void theMinimapCornerKeepsItsOwnWidgetsButNotABoxSnappedThere()
+	{
+		final OverlayKeepOut keepOut = new OverlayKeepOut(List.of(MAP), SCREEN);
+		// The multi-combat icon, at its own spot by the minimap.
+		final Point icon = new Point(560, 200);
+		keepOut.place(box("MULTICOMBAT_RESIZABLE_MODERN", 30, 30), OverlayPosition.CANVAS_TOP_RIGHT, icon);
+		assertEquals(new Point(560, 200), icon);
+		// A plugin's box the user snapped into that corner.
+		final Overlay snapped = box("Snapped", 140, 95);
+		snapped.setPreferredPosition(OverlayPosition.CANVAS_TOP_RIGHT);
+		final Point at = new Point(460, 100);
+		keepOut.place(snapped, OverlayPosition.CANVAS_TOP_RIGHT, at);
+		assertEquals(new Point(460, MAP.y + MAP.height + GAP), at);
+	}
+
+	@Test
 	public void aMovedBoxKeepsOffOneAlreadyDrawnButNotOffItself()
 	{
 		final OverlayKeepOut keepOut = new OverlayKeepOut(List.of(CHAT), SCREEN);

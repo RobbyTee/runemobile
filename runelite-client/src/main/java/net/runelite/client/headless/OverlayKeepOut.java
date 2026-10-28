@@ -121,14 +121,20 @@ public final class OverlayKeepOut
 
 	/**
 	 * Move {@code location}, where {@code overlay} is about to draw at its last size, off the HUD. Only a box laid out
-	 * on the screen moves: not one drawn on the world, a tooltip, one its plugin places itself, or one of the HUD's
-	 * own containers. One drawn inside a parent (an interface) stays inside it. Client thread.
+	 * on the screen moves: not one drawn on the world, a tooltip, one its plugin places itself, one of the HUD's own
+	 * containers, or one left in the canvas corner by the minimap (the multi-combat icon). One drawn inside a parent
+	 * (an interface) stays inside it. Client thread.
 	 */
 	public void place(Overlay overlay, OverlayPosition position, Point location)
 	{
 		if (position == OverlayPosition.DYNAMIC || position == OverlayPosition.TOOLTIP
-			|| position == OverlayPosition.DETACHED || position == OverlayPosition.CANVAS_TOP_RIGHT
-			|| OverlayBridge.HUD_OWNED.contains(overlay.getName()))
+			|| position == OverlayPosition.DETACHED || OverlayBridge.HUD_OWNED.contains(overlay.getName()))
+		{
+			return;
+		}
+		// That corner's own widgets belong beside the minimap, but a box the user snapped or dragged there doesn't
+		if (position == OverlayPosition.CANVAS_TOP_RIGHT && overlay.getPreferredPosition() == null
+			&& overlay.getPreferredLocation() == null)
 		{
 			return;
 		}
