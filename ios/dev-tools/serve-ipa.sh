@@ -8,7 +8,6 @@
 #
 #   ios/dev-tools/serve-ipa.sh              # reuse staged jars, build IPA, (re)start the tailnet HTTPS source
 #   ios/dev-tools/serve-ipa.sh --jars       # rebuild the jars first (shaded + gpu jar-surgery + probes + l1)
-#   ios/dev-tools/serve-ipa.sh --cpu        # with --jars: plain shaded jar instead of the gpu jar-surgery
 #   ios/dev-tools/serve-ipa.sh --build-only # build IPA + manifest only; don't touch `tailscale serve`
 #   ios/dev-tools/serve-ipa.sh --stop       # tear down: stop the static server + remove this script's tailnet handler
 #
@@ -27,13 +26,13 @@ DD="$REPO/build/dd-serveipa"
 PORT="${PORT:-8787}"
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 
-MODE=gpu; BUILD_JARS=0; SERVE=1; STOP=0
+BUILD_JARS=0; SERVE=1; STOP=0
 for a in "$@"; do case "$a" in
   --jars)       BUILD_JARS=1 ;;
-  --cpu)        MODE=cpu ;;
+  --cpu)        echo "--cpu was removed: every renderer runs from the one staged jar set (picked in the plugins panel)" >&2; exit 2 ;;
   --build-only) SERVE=0 ;;
   --stop)       STOP=1 ;;
-  -h|--help)    sed -n '2,17p' "$0"; exit 0 ;;
+  -h|--help)    sed -n '2,15p' "$0"; exit 0 ;;
   *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
 
@@ -100,10 +99,9 @@ fi
 
 # 1) jars (default: reuse what's staged; --jars rebuilds the same set deploy-remote.sh does) ---------
 if [ "$BUILD_JARS" = 1 ]; then
-  log "Rebuild jars (MODE=$MODE, VERSION=$JARVER)"
+  log "Rebuild jars (VERSION=$JARVER)"
   JAVA_HOME="$JAVA_HOME" ./gradlew :client:shadowJar
-  if [ "$MODE" = gpu ]; then ( cd ios/dev-tools/gpu-routec && JAVA_HOME="$JAVA_HOME" ./stage-ios-gpu-jar.sh )
-  else cp "runelite-client/build/libs/client-${JARVER}-shaded.jar" ios/app/jvm-resources/client-shaded.jar; fi
+  ( cd ios/dev-tools/gpu-routec && JAVA_HOME="$JAVA_HOME" ./stage-ios-gpu-jar.sh )
   ( cd ios/dev-tools/gpu-zone && JAVA_HOME="$JAVA_HOME" ./stage-ios-zone-jar.sh )
   ( cd ios/app && JAVA_HOME="$JAVA_HOME" ./build-probes.sh )
   ( cd ios/dev-tools/gpu-routec/l1 && JAVA_HOME="$JAVA_HOME" ./build-l1-probe.sh )

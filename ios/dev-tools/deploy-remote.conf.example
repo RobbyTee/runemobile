@@ -15,5 +15,4 @@ REMOTE_REPO=/Users/youruser/runelite-ios
 DEV_UUID=PUT-IPHONE-UUID-HERE
 
 # Optional overrides:
-# MODE=gpu                                   # gpu (jar-surgery) | cpu (plain shaded-jar copy)
 # JAVA_HOME=/opt/homebrew/opt/openjdk@21     # JDK 21 on the dev Mac (and remote, for --remote-jars)

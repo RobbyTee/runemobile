@@ -319,9 +319,9 @@ SideStore/AltStore source. Each build gets the next build number in `.serve-ipa/
 above the release it replaces. `--build-only` skips serving and `--stop` removes only its own handler. The
 static server is not a background service, so after a reboot run it again.
 
-**Leave `MODE` at its default.** `remote-build.sh`, `deploy-remote.sh` and `serve-ipa.sh` take `MODE=cpu` /
-`--cpu`, which copies the pristine shaded jar into the bundle; `check-staged-jar.sh` rejects it. Every renderer
-runs from the default GPU bundle and is chosen at runtime, so a CPU-only bundle buys nothing.
+There is no CPU-only bundle: every renderer runs from the same staged jars and is chosen at runtime, so the
+scripts refuse the old `MODE=cpu` / `--cpu` (it copied the pristine shaded jar, which `check-staged-jar.sh`
+rejects).
 
 ### Check that the phone runs your build
 

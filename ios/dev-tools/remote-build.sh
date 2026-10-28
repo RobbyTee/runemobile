@@ -10,7 +10,6 @@
 #   DEV          devicectl device UUID of the iPhone as seen by THIS Mac (xcrun devicectl list devices)
 # Optional env:
 #   JAVA_HOME    default /opt/homebrew/opt/openjdk@21   (only used with --with-jars)
-#   MODE         gpu | cpu   (default gpu; selects jar-surgery vs plain copy, only with --with-jars)
 #   REPO         repo root   (default: two levels up from this script)
 set -euo pipefail
 
@@ -18,7 +17,9 @@ WITH_JARS=0
 [ "${1:-}" = "--with-jars" ] && WITH_JARS=1
 
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
-MODE="${MODE:-gpu}"
+# MODE=cpu (a plain copy of the desktop shaded jar) is gone: app/scripts/check-staged-jar.sh rejects that jar, and
+# every renderer runs from the staged GL-facade jar anyway (the renderer is picked at runtime, in the plugins panel).
+[ "${MODE:-gpu}" = gpu ] || { echo "MODE=$MODE is no longer supported: every renderer runs from the one staged jar set" >&2; exit 1; }
 # Build configuration. Default Debug (today's dev daily-driver). CONFIG=Release builds the hardened build
 # (QA-P1-12/13: Documents file-sharing off, log/capture sinks compiled out, .runelite in App Support). NOTE:
 # StikDebug attach / JIT under Release is device-unverified — get-task-allow comes from the dev profile so it
@@ -43,14 +44,10 @@ VERSION="$(sed -n 's/^project\.build\.version=//p' gradle.properties)"
 log() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 
 if [ "$WITH_JARS" = 1 ]; then
-  log "Building jars on remote (MODE=$MODE, VERSION=$VERSION)"
+  log "Building jars on remote (VERSION=$VERSION)"
   JAVA_HOME="$JAVA_HOME" ./gradlew :client:shadowJar
-  if [ "$MODE" = gpu ]; then
-    ( cd ios/dev-tools/gpu-routec && JAVA_HOME="$JAVA_HOME" ./stage-ios-gpu-jar.sh )
-  else
-    cp "runelite-client/build/libs/client-${VERSION}-shaded.jar" ios/app/jvm-resources/client-shaded.jar
-  fi
-  # client-rlhd.jar is a mandatory bundled resource (project.yml) in every mode — 117HD is a selectable plugin.
+  ( cd ios/dev-tools/gpu-routec && JAVA_HOME="$JAVA_HOME" ./stage-ios-gpu-jar.sh )
+  # client-rlhd.jar is a mandatory bundled resource (project.yml): 117HD is a selectable plugin.
   ( cd ios/dev-tools/gpu-zone && JAVA_HOME="$JAVA_HOME" ./stage-ios-zone-jar.sh )
   ( cd ios/app && JAVA_HOME="$JAVA_HOME" ./build-probes.sh )
   ( cd ios/dev-tools/gpu-routec/l1 && JAVA_HOME="$JAVA_HOME" ./build-l1-probe.sh )

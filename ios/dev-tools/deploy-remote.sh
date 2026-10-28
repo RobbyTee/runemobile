@@ -21,7 +21,9 @@ CONF="$HERE/deploy-remote.conf"
 : "${REMOTE_REPO:?set REMOTE_REPO in deploy-remote.conf (repo path on the remote Mac)}"
 : "${DEV_UUID:?set DEV_UUID in deploy-remote.conf (iPhone devicectl UUID as seen by the remote Mac)}"
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
-MODE="${MODE:-gpu}"
+# MODE=cpu (a plain copy of the desktop shaded jar) is gone: app/scripts/check-staged-jar.sh rejects that jar, and
+# every renderer runs from the staged GL-facade jar anyway (the renderer is picked at runtime, in the plugins panel).
+[ "${MODE:-gpu}" = gpu ] || { echo "MODE=$MODE is no longer supported: every renderer runs from the one staged jar set" >&2; exit 1; }
 # Build configuration, forwarded to remote-build.sh. Default Debug; CONFIG=Release builds the hardened
 # daily-driver (QA-P1-12/13). Validate up front — xcodebuild matches config names case-sensitively and would
 # otherwise silently fall back to Debug while the product path lookup misses.
@@ -48,14 +50,10 @@ VERSION="$(sed -n 's/^project\.build\.version=//p' gradle.properties)"
 
 # 1) Build the jars on the dev Mac (fast box, no Xcode needed).
 if [ "$BUILD_JARS" = local ]; then
-  log "Local jar build (MODE=$MODE, VERSION=$VERSION)"
+  log "Local jar build (VERSION=$VERSION)"
   JAVA_HOME="$JAVA_HOME" ./gradlew :client:shadowJar
-  if [ "$MODE" = gpu ]; then
-    ( cd ios/dev-tools/gpu-routec && JAVA_HOME="$JAVA_HOME" ./stage-ios-gpu-jar.sh )
-  else
-    cp "runelite-client/build/libs/client-${VERSION}-shaded.jar" ios/app/jvm-resources/client-shaded.jar
-  fi
-  # client-rlhd.jar is a mandatory bundled resource (project.yml) in every mode — 117HD is a selectable plugin.
+  ( cd ios/dev-tools/gpu-routec && JAVA_HOME="$JAVA_HOME" ./stage-ios-gpu-jar.sh )
+  # client-rlhd.jar is a mandatory bundled resource (project.yml): 117HD is a selectable plugin.
   ( cd ios/dev-tools/gpu-zone && JAVA_HOME="$JAVA_HOME" ./stage-ios-zone-jar.sh )
   ( cd ios/app && JAVA_HOME="$JAVA_HOME" ./build-probes.sh )
   ( cd ios/dev-tools/gpu-routec/l1 && JAVA_HOME="$JAVA_HOME" ./build-l1-probe.sh )
@@ -82,6 +80,6 @@ rsync -az --delete --info=progress2 \
 RB_ARGS=""; [ "$BUILD_JARS" = remote ] && RB_ARGS="--with-jars"
 log "Remote build + install on $REMOTE_HOST (device $DEV_UUID)"
 ssh -t "$REMOTE" \
-  "cd '$REMOTE_REPO' && DEV='$DEV_UUID' MODE='$MODE' CONFIG='$CONFIG' JAVA_HOME='$JAVA_HOME' REPO='$REMOTE_REPO' bash ios/dev-tools/remote-build.sh $RB_ARGS"
+  "cd '$REMOTE_REPO' && DEV='$DEV_UUID' CONFIG='$CONFIG' JAVA_HOME='$JAVA_HOME' REPO='$REMOTE_REPO' bash ios/dev-tools/remote-build.sh $RB_ARGS"
 
 log "Deployed. Phone: attach StikDebug, then launch RuneMobile for per-launch JIT."
