@@ -701,12 +701,12 @@ public final class HudVeneerBridge
 		{
 			if (!c.isResized())
 			{
-				HudStrip.pin(c, false);
+				HudStrip.pin(c, false, false);
 				return;
 			}
 			final boolean preEoc = c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
 			// Large portrait: hold the game view to the screen and the windows to their band, before raster.
-			HudStrip.pin(c, preEoc);
+			HudStrip.pin(c, preEoc, isWorldMapOpen(c));
 			if (!HOVER_TEXT)
 			{
 				// Asserted every frame, not once at boot: the flag is the engine's and a relog or a world hop

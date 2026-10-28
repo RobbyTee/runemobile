@@ -195,9 +195,10 @@ final class HudStrip
 
 	/**
 	 * Lay the strip out, or give the widgets back once it is no longer wanted. Run from {@code BeforeRender}, the last
-	 * word before the frame rasters, and a no-op per widget once it sits where it is pinned.
+	 * word before the frame rasters, and a no-op per widget once it sits where it is pinned. While the world map is
+	 * open the HUD is hidden, so its window takes the whole visible screen instead of the band.
 	 */
-	static void pin(Client c, boolean preEoc)
+	static void pin(Client c, boolean preEoc, boolean mapOpen)
 	{
 		final int vis = visibleH;
 		final int w = c.getCanvasWidth();
@@ -225,7 +226,7 @@ final class HudStrip
 		// No band from the shell (or an empty one) leaves the windows the whole visible screen.
 		int top = Math.max(0, Math.min(bandTop, vis));
 		int bottom = Math.min(bandBottom, vis);
-		if (bottom <= top)
+		if (bottom <= top || mapOpen)
 		{
 			top = 0;
 			bottom = vis;
