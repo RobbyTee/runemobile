@@ -82,6 +82,8 @@ targets:
       - sdk: AVFoundation.framework
       - sdk: CoreMedia.framework
       - sdk: CoreVideo.framework
+      # Screen: Auto reads the motion sensor (RMGameSettings), which Portrait Orientation Lock doesn't freeze.
+      - sdk: CoreMotion.framework
       # MetalANGLE GPU backend (INACTIVE — pair with RC_BACKEND_ANGLE=1 above to enable). Vendored libEGL/libGLESv2,
       # gitignored (regenerate via dev-tools/gpu-angle/README); embedded + codesigned so the app dlopens them on
       # device. Provides EXT_clip_control (depth fix) + GL_MAX_SAMPLES=8.

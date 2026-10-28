@@ -15,6 +15,8 @@
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     self.window.rootViewController = [[ViewController alloc] init];
     [self.window makeKeyAndVisible];
+    // Screen: Auto turns the window with the phone by the motion sensor, once the app is in front.
+    [RMGameSettings followPhone];
     return YES;
 }
 

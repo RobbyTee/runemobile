@@ -1144,6 +1144,10 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     NSString *residency = [RMResidency noteLaunchAndVerdict];
     if (residency)
         [self appendLine:residency];
+    __weak ViewController *weakLog = self;
+    RMGameSettings.screenLog = ^(NSString *line) {
+        [weakLog appendLine:line];
+    };
     self.bgKeepTask = UIBackgroundTaskInvalid;
     // Flush RuneLite config to disk when the app backgrounds (iOS skips RuneLite's own shutdown flush).
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onEnterBackground)

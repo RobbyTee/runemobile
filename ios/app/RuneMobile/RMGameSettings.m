@@ -1,5 +1,7 @@
 #import "RMGameSettings.h"
 #import "JVMLauncher.h"
+#import <CoreMotion/CoreMotion.h>
+#import <QuartzCore/QuartzCore.h>
 
 NSNotificationName const RMGameSettingsDidChangeNotification = @"RMGameSettingsDidChangeNotification";
 
@@ -13,6 +15,19 @@ static NSString *const kAutoRotateKey = @"screen.auto";
 static const NSInteger kLongPressMinMs = 200, kLongPressMaxMs = 1000, kLongPressStepMs = 50, kLongPressDefaultMs = 400;
 static const NSInteger kDragHoldMaxMs = 150;
 static const double kCameraSensMin = 0.1, kCameraSensMax = 4.0, kCameraSensDefault = 2.0;
+
+// Auto follows the motion sensor, not UIDevice orientation: Portrait Orientation Lock freezes that at upright, so
+// under the lock Auto turned the game upright and kept it there. Auto holds one orientation at a time (sAutoMask)
+// and moves it once the phone has stood a new way for kTurnDwell, so the lock can't pull it back; Landscape and
+// Portrait are the in-game lock. 0 = no reading since Auto came on.
+static UIInterfaceOrientationMask sAutoMask = 0;
+static CMAcceleration sGravity; // the sensor, smoothed (kGravitySmoothing per reading at kMotionHz)
+static BOOL sGravityValid = NO;
+static UIInterfaceOrientationMask sCandidate = 0; // a new way the phone stands, waiting out kTurnDwell
+static CFTimeInterval sCandidateSince = 0;
+static BOOL sAppInFront = NO;
+static void (^sScreenLog)(NSString *) = nil;
+static const double kMotionHz = 10.0, kGravitySmoothing = 0.3, kTurnDwell = 0.4;
 
 @implementation RMGameSettings
 
@@ -105,20 +120,33 @@ static const double kCameraSensMin = 0.1, kCameraSensMax = 4.0, kCameraSensDefau
 }
 
 + (UIInterfaceOrientationMask)orientationMask {
-    if ([self autoRotate])
-        return UIInterfaceOrientationMaskAllButUpsideDown;
+    if ([self autoRotate]) {
+        if (sAutoMask)
+            return sAutoMask;
+        // No sensor (the simulator): the system turns it, within the lock.
+        if (![self motion])
+            return UIInterfaceOrientationMaskAllButUpsideDown;
+        // Before the first reading: as the window stands, or the launch screen's landscape.
+        UIInterfaceOrientation o = [UIApplication sharedApplication].delegate.window.windowScene.interfaceOrientation;
+        if (o == UIInterfaceOrientationPortrait || o == UIInterfaceOrientationLandscapeLeft ||
+            o == UIInterfaceOrientationLandscapeRight)
+            return (UIInterfaceOrientationMask)(1 << o);
+        return UIInterfaceOrientationMaskLandscape;
+    }
     return [self portrait] ? UIInterfaceOrientationMaskPortrait : UIInterfaceOrientationMaskLandscape;
 }
 
 + (void)applyOrientationToWindow:(UIWindow *)window {
+    [self followPhone];
     [window.rootViewController setNeedsUpdateOfSupportedInterfaceOrientations];
     UIWindowScene *scene = window.windowScene;
     if (!scene)
         return;
     UIInterfaceOrientationMask mask = [self orientationMask];
-    // Auto allows either, so the window would stay as it stands until the phone next moves: turn it to the way the
-    // phone is held now. Flat or unknown leaves it be. A landscape-left phone is a landscape-right interface.
-    if ([self autoRotate]) {
+    // With no sensor, Auto allows either, so the window would stay as it stands until the phone next moves: turn it
+    // to the way UIDevice says the phone is held now. Flat or unknown leaves it be. A landscape-left phone is a
+    // landscape-right interface.
+    if ([self autoRotate] && ![self motion]) {
         switch ([UIDevice currentDevice].orientation) {
             case UIDeviceOrientationPortrait:
                 mask = UIInterfaceOrientationMaskPortrait;
@@ -138,7 +166,126 @@ static const double kCameraSensMin = 0.1, kCameraSensMax = 4.0, kCameraSensDefau
     [scene requestGeometryUpdateWithPreferences:prefs
                                    errorHandler:^(NSError *error) {
                                        NSLog(@"[screen] orientation update refused: %@", error);
+                                       if (sScreenLog)
+                                           sScreenLog([NSString stringWithFormat:@"[screen] orientation update refused: %@",
+                                                                                 error.localizedDescription]);
                                    }];
+}
+
++ (void (^)(NSString *))screenLog {
+    return sScreenLog;
+}
+
++ (void)setScreenLog:(void (^)(NSString *))log {
+    sScreenLog = [log copy];
+}
+
+// The accelerometer, or nil where there is none (the simulator).
++ (CMMotionManager *)motion {
+    static CMMotionManager *m;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        m = [[CMMotionManager alloc] init];
+        m.accelerometerUpdateInterval = 1.0 / kMotionHz;
+    });
+    return m.accelerometerAvailable ? m : nil;
+}
+
++ (void)followPhone {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        // Read only while the app is in front: away (or under Control Centre) the window can't turn anyway. The state
+        // is kept here because applicationState can still read active while the app resigns.
+        sAppInFront = [UIApplication sharedApplication].applicationState == UIApplicationStateActive;
+        NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+        [nc addObserver:self selector:@selector(appCameToFront) name:UIApplicationDidBecomeActiveNotification object:nil];
+        [nc addObserver:self selector:@selector(appLeftFront) name:UIApplicationWillResignActiveNotification object:nil];
+    });
+    CMMotionManager *m = [self motion];
+    if (!m)
+        return;
+    BOOL want = [self autoRotate] && sAppInFront;
+    if (want == m.accelerometerActive)
+        return;
+    if (!want) {
+        [m stopAccelerometerUpdates];
+        sGravityValid = NO;
+        sCandidate = 0;
+        // Leaving Auto: the next time it comes on it starts from where the window stands, not from here.
+        if (![self autoRotate])
+            sAutoMask = 0;
+        return;
+    }
+    [m startAccelerometerUpdatesToQueue:[NSOperationQueue mainQueue]
+                            withHandler:^(CMAccelerometerData *data, NSError *error) {
+                                if (data)
+                                    [self phoneMoved:data.acceleration];
+                            }];
+}
+
++ (void)appCameToFront {
+    sAppInFront = YES;
+    [self followPhone];
+}
+
++ (void)appLeftFront {
+    sAppInFront = NO;
+    [self followPhone];
+}
+
+// The interface orientation the phone stands in, from gravity in its own axes (upright portrait reads y = -1), or 0
+// when it lies flat or upside down. Within 60 degrees of `current` it stays `current`, so a phone held at 45 degrees
+// doesn't flip back and forth. A phone turned with its top to the left is a landscape-right interface.
+static UIInterfaceOrientationMask maskForGravity(CMAcceleration g, UIInterfaceOrientationMask current) {
+    if (hypot(g.x, g.y) < 0.45)
+        return 0;
+    double deg = atan2(g.x, -g.y) * 180.0 / M_PI; // 0 upright, -90 top to the left, +90 top to the right
+    if (fabs(deg) > 135.0)
+        return 0;
+    double home = current == UIInterfaceOrientationMaskPortrait         ? 0.0
+                  : current == UIInterfaceOrientationMaskLandscapeRight ? -90.0
+                  : current == UIInterfaceOrientationMaskLandscapeLeft  ? 90.0
+                                                                        : NAN;
+    if (!isnan(home) && fabs(deg - home) < 60.0)
+        return current;
+    return deg < -45.0  ? UIInterfaceOrientationMaskLandscapeRight
+           : deg > 45.0 ? UIInterfaceOrientationMaskLandscapeLeft
+                        : UIInterfaceOrientationMaskPortrait;
+}
+
++ (void)phoneMoved:(CMAcceleration)a {
+    if (!sGravityValid) {
+        sGravity = a;
+        sGravityValid = YES;
+    } else {
+        sGravity.x += kGravitySmoothing * (a.x - sGravity.x);
+        sGravity.y += kGravitySmoothing * (a.y - sGravity.y);
+        sGravity.z += kGravitySmoothing * (a.z - sGravity.z);
+    }
+    UIInterfaceOrientationMask held = sAutoMask ?: [self orientationMask];
+    UIInterfaceOrientationMask want = maskForGravity(sGravity, held);
+    if (!want || want == held) {
+        sCandidate = 0;
+        // The first reading agrees with the window: hold it there from now on.
+        if (want && !sAutoMask)
+            sAutoMask = want;
+        return;
+    }
+    CFTimeInterval now = CACurrentMediaTime();
+    if (want != sCandidate) {
+        sCandidate = want;
+        sCandidateSince = now;
+    }
+    if (now - sCandidateSince < kTurnDwell)
+        return;
+    sCandidate = 0;
+    sAutoMask = want;
+    if (sScreenLog)
+        sScreenLog([NSString stringWithFormat:@"[screen] phone turned -> %@",
+                                              want == UIInterfaceOrientationMaskPortrait        ? @"portrait"
+                                              : want == UIInterfaceOrientationMaskLandscapeLeft ? @"landscape-left"
+                                                                                                : @"landscape-right"]);
+    [self applyOrientationToWindow:[UIApplication sharedApplication].delegate.window];
 }
 
 @end
@@ -247,7 +394,7 @@ enum { kTagLongPress = 1,
 
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
     if (s == RMGsScreen && [RMGameSettings autoRotate])
-        return @"Turns with the phone. Portrait Orientation Lock in Control Centre holds it upright.";
+        return @"Turns with the phone, even with Portrait Orientation Lock on. Pick Landscape or Portrait to hold it.";
     if (s == RMGsGame && !self.gameLoaded)
         return @"Available once the game is running.";
     return nil;

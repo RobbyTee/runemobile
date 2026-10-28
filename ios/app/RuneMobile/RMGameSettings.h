@@ -42,6 +42,12 @@ extern NSNotificationName const RMGameSettingsDidChangeNotification;
 + (UIInterfaceOrientationMask)orientationMask;
 /// Turn `window` to the setting now. The game resizes its canvas when the window turns.
 + (void)applyOrientationToWindow:(UIWindow *)window;
+/// Under Auto, while the app is in front, read the motion sensor and turn the app delegate's window with the phone,
+/// Portrait Orientation Lock or not. The app delegate calls it once at launch; it then follows the setting and the
+/// app's coming and going by itself.
++ (void)followPhone;
+/// Where the screen lines go (the shell log). Set by the view controller.
+@property (class, nonatomic, copy, nullable) void (^screenLog)(NSString *line);
 @end
 
 /// The native Game settings screen, pushed from Settings.
