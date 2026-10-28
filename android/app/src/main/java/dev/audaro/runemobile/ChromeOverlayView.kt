@@ -80,6 +80,10 @@ class ChromeOverlayView(
     // Last computed group geometry (view px), so onTouchEvent + the host's side-panel relocation read the same one.
     private var lay = Layout(0f, 0f, 0f, 0f)
 
+    // The host's controls along the bottom (the button row, the hotkey strip, the Plugins button), view px, each
+    // already grown by its gap: the group, and the panel the host opens left of it, keep above any reaching under.
+    private var bottomControls: List<RectF> = emptyList()
+
     private class Layout(
         val gx0: Float,
         val gy0: Float,
@@ -242,6 +246,14 @@ class ChromeOverlayView(
         if (!columnX.isNaN()) out.add(RectF(columnStone(0)).apply { union(columnStone(if (chatPutAway) 1 else 2)) })
     }
 
+    /** Host: the bottom controls, in view px (see [bottomControls]). A no-op while they stay put. */
+    fun setBottomControls(rects: List<RectF>) {
+        if (rects == bottomControls) return
+        bottomControls = rects
+        computeLayout()
+        invalidate()
+    }
+
     /** Host: restore the persisted collapse state (the expand stone itself toggles it and reports [onCollapseToggle]). */
     fun setCollapsed(on: Boolean) {
         if (collapsed != on) {
@@ -296,8 +308,9 @@ class ChromeOverlayView(
      *  PORTRAIT_RIGHT_EDGE_DP off the screen's). Vertically it takes
      *  the official app's anchor (interface 601, script 919): once the safe area is at least 503 game px tall the
      *  group (and the panel, which the host centres on it) is centred 87 game px below its middle, and below that it
-     *  sits 4 px off its bottom; never past the bottom margin. In portrait the official app has no layout, so the group
-     *  keeps to the bottom corner, in thumb reach, and the screen's middle stays the world's. */
+     *  sits 4 px off its bottom; never past the bottom margin, nor down onto a bottom control under it or the panel. In
+     *  portrait the official app has no layout, so the group keeps to the bottom corner, in thumb reach, and the
+     *  screen's middle stays the world's. */
     private fun computeLayout(): Layout {
         if (kx <= 0f || ky <= 0f) {
             lay = Layout(0f, 0f, 0f, 0f)
@@ -311,7 +324,12 @@ class ChromeOverlayView(
         val gx0 = width - right - w
         val safeTop = ins[0].toFloat()
         val safeBottom = (height - ins[2]).toFloat()
-        val lowest = safeBottom - margin - h
+        var lowest = safeBottom - margin - h
+        // The panel opens flush left of the group, as wide as the engine's side container.
+        val panelLeft = gx0 - SIDE_W / kx
+        for (r in bottomControls) {
+            if (r.right > panelLeft && r.left < gx0 + w) lowest = minOf(lowest, r.top - h)
+        }
         val top =
             if (height <= width && (safeBottom - safeTop) * ky >= 503f) {
                 (safeTop + safeBottom) / 2f + 87f / ky - h / 2f
@@ -501,6 +519,7 @@ class ChromeOverlayView(
         const val GROUP_W_COLLAPSED = 58
         const val GROUP_H = 280
         const val PORTRAIT_RIGHT_EDGE_DP = 10f // the group's gap to the screen edge in portrait (iOS kPortraitRightEdge)
+        const val SIDE_W = 204 // the engine's side container (the open panel), canvas px
 
         // The column (SIDE_LEFT_CHAT): 58-px stones, 4 px below the chat's top, at the grid's pitch.
         const val COLUMN_W = 58

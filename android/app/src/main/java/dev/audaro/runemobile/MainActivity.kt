@@ -1427,6 +1427,9 @@ class MainActivity : AppCompatActivity() {
         devBar.addOnLayoutChangeListener(placeHandle)
         hotkeyStripView.addOnLayoutChangeListener(placeHandle)
         launcherHandle.addOnLayoutChangeListener(placeHandle)
+        // After every layout pass, so a control moving, showing or going GONE all reach the tab group. It only
+        // invalidates the group, which lays nothing out again.
+        root.viewTreeObserver.addOnGlobalLayoutListener { placeTabGroupFloor() }
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             applyHudControlInsets(insets)
             insets
@@ -4861,6 +4864,27 @@ class MainActivity : AppCompatActivity() {
             lp.bottomMargin = margin
             v.layoutParams = lp
         }
+    }
+
+    /** Hand the tab group the bottom controls (the button row, the hotkey strip, the ≡ Plugins handle) in its own px,
+     *  each grown by the controls' gap, so it and the side panel left of it keep above whichever reach under them (in
+     *  portrait the panel spans half the screen). The stage only letterboxes, so an offset maps root px to its own. */
+    private fun placeTabGroupFloor() {
+        val stage = gameStage ?: return
+        val gap = 8 * resources.displayMetrics.density
+        val rects = ArrayList<RectF>(3)
+        for (v in listOf<View?>(devBar, hotkeyStrip, launcherHandle)) {
+            if (v == null || v.visibility != View.VISIBLE || v.width == 0) continue
+            rects.add(
+                RectF(
+                    (v.left - stage.left).toFloat(),
+                    v.top - stage.top - gap,
+                    (v.right - stage.left).toFloat(),
+                    (v.bottom - stage.top).toFloat(),
+                ),
+            )
+        }
+        chromeOverlay.setBottomControls(rects)
     }
 
     /** A7 edge-to-edge: pull the engine minimap+orbs cluster (MAP_CONTAINER) into the top-right safe area — flush

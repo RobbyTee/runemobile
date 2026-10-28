@@ -814,6 +814,7 @@ static const int kTabFrameInset = 3;
 static const int kTabGroupW = 85;
 static const int kTabGroupCollapsedW = 58;
 static const int kTabGroupH = 280;
+static const int kSideContainerW = 204; // the engine's side container (the open panel), canvas px
 // Portrait has no side safe area, so the group and the plugin rail keep this far (pt) off the right edge, clear of the
 // screen's rounded corner.
 static const CGFloat kPortraitRightEdge = 10.0;
@@ -6033,9 +6034,10 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
 // The grid's top edge, in points, on the official app's anchor (interface 601, script 919): once the game area is
 // at least 503 game px tall, the tab group and the side panel are both centred 87 px below its middle; below that
 // they sit 4 px off its bottom. The official game area is the safe area, so that is what is measured here. It never
-// goes past the bottom margin, nor up into the minimap globe ([x,y,w,h] canvas px, live, so a dragged minimap
-// counts) when that sits above the grid. The globe, not the whole cluster: the cluster's box runs ~30 pt below
-// anything it draws over the grid's columns, which would hold the grid at the bottom on every iPhone.
+// goes past the bottom margin, nor down onto a bottom-left control under it or under the panel, nor up into the
+// minimap globe ([x,y,w,h] canvas px, live, so a dragged minimap counts) when that sits above the grid. The globe,
+// not the whole cluster: the cluster's box runs ~30 pt below anything it draws over the grid's columns, which would
+// hold the grid at the bottom on every iPhone.
 // In portrait the official app has no layout, so the group keeps to the bottom corner, in thumb reach, and the
 // screen's middle stays the world's.
 - (CGFloat)tabGridTopForHeight:(CGFloat)gridH left:(CGFloat)gx width:(CGFloat)gw margin:(CGFloat)margin
@@ -6047,6 +6049,16 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     if (self.renderW <= 0 || W <= 0)
         return lowest;
     CGFloat k = (CGFloat)self.renderW / W; // canvas px per point
+    // The side panel opens flush left of the group. Upright, a full row of pinned controls or the hotkey strip reaches
+    // under it, so the floor is 8 pt over the highest control that does.
+    CGFloat panelLeft = gx - kSideContainerW / k;
+    for (UIView *v in @[ self.settingsButton, self.controlsBox, self.hotkeyStrip ]) {
+        if (v.hidden || v.bounds.size.width <= 0)
+            continue;
+        CGRect r = [v convertRect:v.bounds toView:self.view];
+        if (CGRectGetMaxX(r) > panelLeft && CGRectGetMinX(r) < gx + gw)
+            lowest = MIN(lowest, CGRectGetMinY(r) - 8.0 - gridH);
+    }
     BOOL centred = H <= W && (safeBottom - safeTop) * k >= 503.0;
     CGFloat top = centred ? (safeTop + safeBottom) / 2.0 + 87.0 / k - gridH / 2.0 : safeBottom - 4.0 / k - gridH;
     CGFloat highest = safeTop + margin;
