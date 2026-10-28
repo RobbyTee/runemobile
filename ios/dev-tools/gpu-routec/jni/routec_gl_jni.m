@@ -187,7 +187,15 @@ static void rc_awt_create_context(JNIEnv *env)
     jclass jb = (*env)->FindClass(env, "net/runelite/client/headless/JavaBridge");
     if (jb) {
         jmethodID cw = (*env)->GetStaticMethodID(env, jb, "canvasWidth", "()I");
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            cw = NULL;
+        }
         jmethodID ch = (*env)->GetStaticMethodID(env, jb, "canvasHeight", "()I");
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            ch = NULL;
+        }
         if (cw && ch) {
             jint qw = (*env)->CallStaticIntMethod(env, jb, cw);
             jint qh = (*env)->CallStaticIntMethod(env, jb, ch);
@@ -210,11 +218,27 @@ static void rc_jb_cache(JNIEnv *env)
     jclass c = (*env)->FindClass(env, "net/runelite/client/headless/JavaBridge");
     if (!c) { (*env)->ExceptionClear(env); return; }
     s_jb  = (*env)->NewGlobalRef(env, c);
+    /* Clear after each lookup: HotSpot fails every lookup made while a NoSuchMethodError is pending. */
     s_bb  = (*env)->GetStaticMethodID(env, s_jb, "gpuFrameBackBuffer", "(II)[I");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        s_bb = NULL;
+    }
     s_pub = (*env)->GetStaticMethodID(env, s_jb, "gpuPublish", "(II)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        s_pub = NULL;
+    }
     s_cw  = (*env)->GetStaticMethodID(env, s_jb, "canvasWidth", "()I");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        s_cw = NULL;
+    }
     s_ch  = (*env)->GetStaticMethodID(env, s_jb, "canvasHeight", "()I");
-    (*env)->ExceptionClear(env);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        s_ch = NULL;
+    }
 }
 
 // Per-frame upkeep (called from getFramebuffer, early in each draw): re-bind the thread-affine EAGL context and

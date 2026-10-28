@@ -270,12 +270,9 @@ static BOOL ensureBridge(void) {
     gMidMove   = (*env)->GetStaticMethodID(env, global, "onMove", "(II)V");
     gMidWheel  = (*env)->GetStaticMethodID(env, global, "onWheel", "(III)V");
     gMidCamera = (*env)->GetStaticMethodID(env, global, "onCameraDrag", "(II)V");
-    gMidCameraHold = (*env)->GetStaticMethodID(env, global, "setCameraHold", "(II)V");
     gMidText   = (*env)->GetStaticMethodID(env, global, "onText", "(Ljava/lang/String;)V");
     gMidKey    = (*env)->GetStaticMethodID(env, global, "onKeyStroke", "(I)V");
     gMidInputOpen = (*env)->GetStaticMethodID(env, global, "isTextInputOpen", "()Z");
-    gMidWarmed = (*env)->GetStaticMethodID(env, global, "presentReady", "()Z");   // optional (not in the null-check below)
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
     gMidClearHover = (*env)->GetStaticMethodID(env, global, "clearHover", "()V");
     if (!gMidW || !gMidH || !gMidSeq || !gMidPixels || !gMidTouch || !gMidClick || !gMidClickPrecise || !gMidMove
         || !gMidWheel || !gMidCamera || !gMidText || !gMidKey || !gMidInputOpen || !gMidClearHover) {
@@ -283,7 +280,19 @@ static BOOL ensureBridge(void) {
         (*env)->DeleteGlobalRef(env, global);   // don't leak the class ref on the retry path
         return NO;                              // retry next tick (the class may load just after bringup)
     }
-    // Optional (not in the mandatory set above, so an older jar without it still boots the bridge).
+    // Optional (not in the mandatory set above, so an older jar without it still boots the bridge). Each one clears
+    // its own miss: a NoSuchMethodError left pending makes every later JNI call illegal, so one missing optional
+    // method would otherwise fail the lookups after it and keep the bridge from ever coming up.
+    gMidCameraHold = (*env)->GetStaticMethodID(env, global, "setCameraHold", "(II)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidCameraHold = NULL;
+    }
+    gMidWarmed = (*env)->GetStaticMethodID(env, global, "presentReady", "()Z");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidWarmed = NULL;
+    }
     gMidInteractSeq = (*env)->GetStaticMethodID(env, global, "getInteractTapSeq", "()I");
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
@@ -491,27 +500,84 @@ static BOOL ensureVeneer(void) {
         (*env)->DeleteGlobalRef(env, global);
         return NO;
     }
-    // A3 bigger-chat-tabs methods — OPTIONAL so an older bundled jar still loads the veneer (clear any pending
-    // NoSuchMethod and leave the ids NULL; the wrappers below no-op when absent).
+    // Optional methods, so an older bundled jar still loads the veneer (the wrappers below no-op on a NULL id).
+    // Each lookup clears its own miss: HotSpot fails every JNI lookup made while a NoSuchMethodError is pending,
+    // so one missing method would otherwise silently disable all the optional methods after it.
     gMidSetChatRowH = (*env)->GetStaticMethodID(env, global, "setChatTabRowHeight", "(I)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidSetChatRowH = NULL;
+    }
     gMidSetChatAreaW = (*env)->GetStaticMethodID(env, global, "setChatAreaWidth", "(I)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidSetChatAreaW = NULL;
+    }
     gMidScrollChat = (*env)->GetStaticMethodID(env, global, "scrollChat", "(I)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidScrollChat = NULL;
+    }
     gMidGetChatSnap = (*env)->GetStaticMethodID(env, global, "getChatSnapshot", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidGetChatSnap = NULL;
+    }
     gMidGetChatLines = (*env)->GetStaticMethodID(env, global, "getChatLines", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidGetChatLines = NULL;
+    }
     gMidGetDialogue = (*env)->GetStaticMethodID(env, global, "getDialogueJson", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidGetDialogue = NULL;
+    }
     gMidGetDlgSeq = (*env)->GetStaticMethodID(env, global, "getDialogueSeq", "()J");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidGetDlgSeq = NULL;
+    }
     gMidSetMinimapScale = (*env)->GetStaticMethodID(env, global, "setMinimapScale", "(I)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidSetMinimapScale = NULL;
+    }
     gMidSwitchChatTab = (*env)->GetStaticMethodID(env, global, "switchChatTab", "(I)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidSwitchChatTab = NULL;
+    }
     gMidSetChatCollapsed = (*env)->GetStaticMethodID(env, global, "setChatCollapsed", "(Z)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidSetChatCollapsed = NULL;
+    }
     gMidSetOverlayInsets = (*env)->GetStaticMethodID(env, global, "setOverlaySafeInsets", "(IIII)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidSetOverlayInsets = NULL;
+    }
     gMidPanMap = (*env)->GetStaticMethodID(env, global, "panWorldMap", "(II)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidPanMap = NULL;
+    }
     gMidGetMapSnap = (*env)->GetStaticMethodID(env, global, "getMapSnapshot", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidGetMapSnap = NULL;
+    }
     gMidGetOrbSnap = (*env)->GetStaticMethodID(env, global, "getOrbSnapshot", "()Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidGetOrbSnap = NULL;
+    }
     gMidTabSprites = (*env)->GetStaticMethodID(env, global, "tabSprites", "()Ljava/lang/String;");
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
-    // The two newest optional veneer methods resolve AFTER the batch's clear, each with its own check/clear -
-    // an older jar missing one leaves a pending NoSuchMethodError, and we must not carry that into the next
-    // GetStaticMethodID (it would poison the resolution above, notably the critical getMapSnapshot).
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidTabSprites = NULL;
+    }
     gMidScrollMapPanel = (*env)->GetStaticMethodID(env, global, "scrollMapPanel", "(I)V");
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
