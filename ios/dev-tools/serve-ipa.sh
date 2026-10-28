@@ -74,9 +74,16 @@ FQDN="$("$TS" status --json 2>/dev/null | python3 -c 'import json,sys; print(jso
 # QA-P1-15: read the real version key (full version, e.g. 1.12.29-SNAPSHOT). The old grep for the non-existent
 # `runeLiteVersion` key silently fell back to a hardcoded 1.12.29 — correct only by luck, broken on the next bump.
 JARVER="$(sed -n 's/^project\.build\.version=//p' gradle.properties)"; [ -n "$JARVER" ] || die "could not read project.build.version from gradle.properties"
-MARKETING="$(grep -E 'MARKETING_VERSION:' "$APPDIR/project.yml" 2>/dev/null | head -1 | sed -E 's/.*: *"?([0-9.]+)"?.*/\1/' || true)"; MARKETING="${MARKETING:-0.1}"
+# SideStore re-signs this build and the hosted release channel's under one bundle ID, so it only offers this one as
+# an update when its version is higher. Stamp <release>.<build>: the release's semver, read where
+# tools/ci/build-release-artifacts.sh reads it, then this counter. 0.5.0.49 sorts above 0.5.0 and its rolling
+# 0.5.0-master.N builds, and below the next release. (project.yml's MARKETING_VERSION is a stale 0.1.)
+SEMVER="$(sed -nE 's/^[[:space:]]*val verMajor = ([0-9]+).*/\1/p' android/app/build.gradle.kts | head -1)"
+SEMVER="$SEMVER.$(sed -nE 's/^[[:space:]]*val verMinor = ([0-9]+).*/\1/p' android/app/build.gradle.kts | head -1)"
+SEMVER="$SEMVER.$(sed -nE 's/^[[:space:]]*val verPatch = ([0-9]+).*/\1/p' android/app/build.gradle.kts | head -1)"
+[[ "$SEMVER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "could not read the release semver from android/app/build.gradle.kts (got '$SEMVER')"
 BUILD="$(( $(cat "$STATE" 2>/dev/null || echo 0) + 1 ))"
-VERSTR="${MARKETING}.${BUILD}"
+VERSTR="${SEMVER}.${BUILD}"
 # The counter is gitignored, so a fresh clone / cleaned .serve-ipa silently restarts at 1 — and a version
 # LOWER than the one already on the phone is not an update, so SideStore just shows nothing to do and the
 # build looks installed when it isn't. Say so rather than let it look like a successful publish.
