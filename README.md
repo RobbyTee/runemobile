@@ -21,7 +21,7 @@
 > your own risk.** See [Legal notice](#legal-notice) and [Risk & disclaimer](#risk--disclaimer).
 
 <p align="center">
-  <img src="docs/screenshots/hero.jpg" alt="RuneMobile running 117 HD on an iPhone and an Android phone">
+  <img src="docs/screenshots/hero.jpg" alt="RuneMobile on a Pixel 7a held sideways, in the 117 HD renderer, and on an iPhone held upright: the game by the Lumbridge river, with the chat, minimap and tab buttons laid out like the official mobile app">
 </p>
 
 ## Get it
@@ -71,17 +71,20 @@ engine and its plugins, with a native mobile UI layered on top.
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/overlays.jpg" alt="In game on Android with RuneLite overlays: ground item prices, hit splats, timers and the FPS counter"></td>
-    <td width="50%"><img src="docs/screenshots/plugins.jpg" alt="The native plugin list on iPhone, with each plugin's switch and settings"></td>
+    <td width="50%"><img src="docs/screenshots/quest-helper.jpg" alt="Quest Helper on iPhone, held sideways: the current step in a box under the chat, and the route to it drawn on the ground and the minimap"></td>
+    <td width="50%"><img src="docs/screenshots/shortest-path.jpg" alt="Shortest Path on iPhone, held upright: a red route drawn on the ground over the hill and on the minimap"></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/renderers.jpg" alt="The renderer picker on Android: CPU, GPU or 117 HD"></td>
-    <td width="50%"><img src="docs/screenshots/panels.jpg" alt="The World Switcher side panel open beside the game on iPhone"></td>
+    <td width="50%"><img src="docs/screenshots/plugin-hub.jpg" alt="The Plugin Hub on iPhone, held upright: thousands of community plugins, with the installed ones first"></td>
+    <td width="50%"><img src="docs/screenshots/117hd.jpg" alt="The 117 HD renderer on a Pixel 7a, held sideways: autumn trees and haze over the river gorge by the Lumbridge bridge, with the chat and tab buttons"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/menu.jpg" alt="Holding a quest in the quest list on iPhone: the full option menu, with Start Quest Helper added by the plugin"></td>
+    <td width="50%"><img src="docs/screenshots/menu-entry-swapper.jpg" alt="Menu Entry Swapper's native settings on iPhone, held upright, with the NPC swaps section open"></td>
   </tr>
 </table>
 
-Captured on a Pixel 7a, an iPhone 17 Pro Max and the iOS Simulator. To rebuild them from new captures, see
-[`tools/brand/make-showcase.py`](tools/brand/make-showcase.py).
+To rebuild them from new captures, see [`tools/brand/make-showcase.py`](tools/brand/make-showcase.py).
 
 ---
 
