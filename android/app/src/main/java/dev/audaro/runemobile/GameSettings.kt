@@ -147,7 +147,7 @@ object GameSettings {
  */
 fun GameSettings.dragHoldMs(ctx: Context): Long = minOf(longPressMs(ctx) * 2 / 3, GameSettings.DRAG_HOLD_MAX_MS)
 
-private val GS_DIM = Color(0xFF9E9E9E)
+internal val GS_DIM = Color(0xFF9E9E9E)
 private val GS_ACCENT = Color(0xFFF29E1C)
 
 /** The native Game settings screen, reached from the launcher's More tiles. */

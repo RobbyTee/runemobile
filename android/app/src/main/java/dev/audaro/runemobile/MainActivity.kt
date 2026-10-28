@@ -261,6 +261,7 @@ class MainActivity : AppCompatActivity() {
 
     // FOLD-3: the canvas size the bridge last accepted, until a frame of that size is drawn and the host adopts it.
     private var pendingCanvas: Pair<Int, Int>? = null
+    private var resizeRefusals = 0 // FOLD-3: refused requests in a row (RESIZE_RETRIES)
 
     // FOLD-4: the laid-out window's screen class for its zoom (see swapZoom); null until the first layout.
     private var zoomScreen: String? = null
@@ -283,6 +284,7 @@ class MainActivity : AppCompatActivity() {
     private var hotkeyBaseLeft = 0
     private var hotkeyBaseBottom = 0
     private var handleBaseBottom = 0
+    private var handleInsetBottom = 0 // the bottom inset applyHudControlInsets last gave the ≡ Plugins handle
 
     // AP-2a Findings 9/25: a low-frequency daemon that drains the shared notification + link queues (off the UI
     // thread — these calls daemon-attach to HotSpot). nextNotification → system shade; nextLink → browser.
@@ -512,6 +514,11 @@ class MainActivity : AppCompatActivity() {
         // split-screen divider resizes once at the end rather than on every frame.
         private const val RESIZE_SETTLE_MS = 300L
 
+        // FOLD-3: a resize the bridge refuses while the VM boots (under Auto the window turns at launch) is asked again
+        // this often, up to RESIZE_RETRIES times; an older jar without the call refuses every time.
+        private const val RESIZE_RETRY_MS = 500L
+        private const val RESIZE_RETRIES = 120
+
         // FOLD-3: how often to look for the first frame at a requested canvas size, and how long to wait for it. A
         // request made at the login screen applies only at login, so the wait gives up and adopts the size anyway.
         private const val CANVAS_POLL_MS = 16L
@@ -682,7 +689,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Game settings > Screen: the root's layout listener resizes the canvas to the turned window (FOLD-3).
-        hudPortrait = ScreenSetting.portrait(this)
+        hudPortrait = ScreenSetting.portraitNow(this)
         requestedOrientation = ScreenSetting.screenOrientation(this)
         portraitListener =
             ScreenSetting.onChanged(this) { runOnUiThread { requestedOrientation = ScreenSetting.screenOrientation(this) } }
@@ -1410,6 +1417,16 @@ class MainActivity : AppCompatActivity() {
         // the inset is added to the captured base margins, never replacing them, and 0 insets (emulator) are a no-op.
         this.devBar = devBar
         this.launcherHandle = launcherHandle
+        // Lift the ≡ Plugins handle off the devBar and the hotkey strip when they reach under it (placeLauncherHandle).
+        // Posted: it changes a layout param, which this pass would drop.
+        val placeHandle =
+            View.OnLayoutChangeListener { _, l, t, r, b, oldL, oldT, oldR, oldB ->
+                if (r - l != oldR - oldL || b - t != oldB - oldT) root.post { placeLauncherHandle() }
+            }
+        root.addOnLayoutChangeListener(placeHandle)
+        devBar.addOnLayoutChangeListener(placeHandle)
+        hotkeyStripView.addOnLayoutChangeListener(placeHandle)
+        launcherHandle.addOnLayoutChangeListener(placeHandle)
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             applyHudControlInsets(insets)
             insets
@@ -3149,6 +3166,7 @@ class MainActivity : AppCompatActivity() {
             )
         }
         strip.visibility = if (row.childCount > 0) View.VISIBLE else View.GONE
+        strip.post { placeLauncherHandle() } // a strip gone isn't laid out, so its layout listener misses it
     }
 
     /** UX-ONBOARD-02: the whole native chrome — the chat veneer, the tab row, the dialogue tap routing — is laid
@@ -4347,9 +4365,10 @@ class MainActivity : AppCompatActivity() {
     /** FOLD-3: resize the canvas to suit the window once its size has settled, so a foldable opened mid-session
      *  shows more of the world instead of a letterboxed copy of the cover screen's view. Only a change past
      *  STAGE_ASPECT_SLACK resizes, so a phone, whose window matches the boot canvas, never does. Until the engine
-     *  draws at the new size, or for good if the bridge refuses it (an older jar, a VM still booting), the stage
-     *  keeps letterboxing the old canvas. UI-thread only. */
-    private val resizeCanvasToWindow =
+     *  draws at the new size the stage keeps letterboxing the old canvas; a VM still booting refuses the request, so
+     *  it is asked again (RESIZE_RETRY_MS), and an older jar that always refuses keeps the old canvas for good.
+     *  UI-thread only. */
+    private val resizeCanvasToWindow: Runnable =
         Runnable {
             val root = rootContainer
             if (root != null && minOf(root.width, root.height) > 0) {
@@ -4372,24 +4391,34 @@ class MainActivity : AppCompatActivity() {
             val worth = abs(w.toFloat() / oldW - 1f) > STAGE_ASPECT_SLACK || abs(h.toFloat() / oldH - 1f) > STAGE_ASPECT_SLACK
             if (minOf(w, h, oldW, oldH) > 0 && worth) {
                 // A strip turning on crops from the first frame drawn at the new size (an older, shorter frame shows
-                // whole either way); one turning off waits for adoption, so the old frame's strip never shows.
+                // whole either way); one turning off waits for adoption, so the old frame's strip never shows. A retry
+                // runs while the VM boots, before login, when no resize applies yet, so its strip waits for acceptance.
                 val stripBefore = lastHudStrip
-                if (strip > 0) {
+                val retry = resizeRefusals > 0
+                if (strip > 0 && !retry) {
                     JvmLauncher.setShownRows(h)
                     sendHudStrip(h, 0, 0)
                 }
                 JvmLauncher.onBridge {
                     val ok = JvmLauncher.requestResize(w, h + strip)
-                    Log.i(
-                        TAG,
-                        "fold: canvas resize ${oldW}x$oldH -> ${w}x$h (+$strip hidden) ${if (ok) "requested" else "refused (bridge not ready)"}",
-                    )
+                    if (ok || resizeRefusals == 0) { // a retried refusal is logged once
+                        Log.i(
+                            TAG,
+                            "fold: canvas resize ${oldW}x$oldH -> ${w}x$h (+$strip hidden) ${if (ok) "requested" else "refused (bridge not ready)"}",
+                        )
+                    }
                     runOnUiThread {
                         if (ok) {
+                            resizeRefusals = 0
+                            if (strip > 0 && retry) {
+                                JvmLauncher.setShownRows(h)
+                                sendHudStrip(h, 0, 0)
+                            }
                             pendingCanvas = w to h
                             adoptCanvasWhenDrawn(w, h, strip, SystemClock.uptimeMillis() + CANVAS_WAIT_MS)
-                        } else if (strip > 0) {
-                            restoreHudStrip(stripBefore)
+                        } else {
+                            if (strip > 0 && !retry) restoreHudStrip(stripBefore)
+                            if (++resizeRefusals <= RESIZE_RETRIES) rootContainer?.postDelayed(resizeCanvasToWindow, RESIZE_RETRY_MS)
                         }
                     }
                 }
@@ -4737,11 +4766,28 @@ class MainActivity : AppCompatActivity() {
                 v.layoutParams = lp
             }
         }
-        launcherHandle?.let { v ->
-            (v.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
-                lp.bottomMargin = handleBaseBottom + i.bottom
-                v.layoutParams = lp
-            }
+        handleInsetBottom = i.bottom
+        placeLauncherHandle()
+    }
+
+    /** The ≡ Plugins handle's bottom margin: the base plus the bottom inset, and on a screen too narrow for it beside the
+     *  devBar and the hotkey strip (a phone in portrait), high enough to clear whichever reaches under it. */
+    private fun placeLauncherHandle() {
+        val v = launcherHandle
+        val lp = v?.layoutParams as? FrameLayout.LayoutParams
+        val host = v?.parent as? View
+        if (v == null || lp == null || host == null) return
+        var margin = handleBaseBottom + handleInsetBottom
+        val left = (host.width - v.width) / 2
+        val right = left + v.width
+        val gap = (8 * resources.displayMetrics.density).toInt()
+        for (w in listOf<View?>(devBar, hotkeyStrip)) {
+            if (w == null || w.visibility != View.VISIBLE || w.width == 0) continue
+            if (w.left < right + gap && w.right + gap > left) margin = maxOf(margin, host.height - w.top + gap)
+        }
+        if (lp.bottomMargin != margin) {
+            lp.bottomMargin = margin
+            v.layoutParams = lp
         }
     }
 
@@ -5677,9 +5723,9 @@ class MainActivity : AppCompatActivity() {
             val longEdge = maxOf(dm.widthPixels, dm.heightPixels)
             val shortEdge = maxOf(1, minOf(dm.widthPixels, dm.heightPixels))
             // UI-2 / FOLD-1 / FOLD-3: see canvasFor. The boot canvas takes the orientation Game settings > Screen holds
-            // the activity to, whatever the screen reads mid-rotation; a window that later changes shape gets a FOLD-3
-            // resize.
-            val portrait = ScreenSetting.portrait(app)
+            // the activity to, whatever the screen reads mid-rotation (under Auto, the way it stands); a window that
+            // later changes shape gets a FOLD-3 resize.
+            val portrait = ScreenSetting.portraitNow(app)
             val (renderW, renderH) =
                 if (portrait) {
                     canvasFor(shortEdge, longEdge, dm.density)
