@@ -430,18 +430,29 @@ class ChromeOverlayView(
         return false
     }
 
-    /** The column stone under view-px (x,y): 0 door, 1 bubbles, 2 keyboard, or [NONE]. Each reaches out to the
-     *  screen's left edge, and the door up to its top (nothing else lives there). */
+    /** The column stone under view-px (x,y): 0 door, 1 bubbles, 2 keyboard, or [NONE]. While the column sits by the
+     *  screen's left edge each stone reaches out to it, and the door up to the top edge; a chat dragged away from
+     *  them keeps only a small slop, so the column never takes the world's taps. */
     private fun columnAt(
         x: Float,
         y: Float,
     ): Int {
-        if (columnX.isNaN() || x > columnX + COLUMN_W / kx) return NONE
+        if (columnX.isNaN()) return NONE
+        val ins = safeInsetsIn(this)
+        val inColumn = x >= columnX - edgeReach(columnX, ins[0].toFloat()) && x <= columnX + COLUMN_W / kx
         return (0 until (if (chatPutAway) 2 else 3)).firstOrNull { c ->
             val r = columnStone(c)
-            y >= (if (c == 0) 0f else r.top) && y < r.bottom
+            val top = if (c == 0) r.top - edgeReach(r.top, ins[1] + COLUMN_Y / ky) else r.top
+            inColumn && y >= top && y < r.bottom
         } ?: NONE
     }
+
+    /** How far a stone [gap] view px from a screen edge takes taps beyond it: the whole gap while the stone sits at
+     *  its home by the edge ([home] px in, plus the slop), else the slop alone. */
+    private fun edgeReach(
+        gap: Float,
+        home: Float,
+    ): Float = if (gap <= home + dp(COLUMN_SLOP_DP)) gap else dp(COLUMN_SLOP_DP)
 
     /** Engine tab (stone) index under view-px (x,y), [EXPAND] for the expand stone, or [NONE] outside the group. */
     private fun slotAt(
@@ -478,6 +489,7 @@ class ChromeOverlayView(
         // The column (SIDE_LEFT_CHAT): 58-px stones, 4 px below the chat's top, at the grid's pitch.
         const val COLUMN_W = 58
         const val COLUMN_Y = 4
+        const val COLUMN_SLOP_DP = 10f // the column's touch slop away from the screen's edges (columnAt)
 
         // Each icon's widget box on its stone: x, y, w, h.
         val TAB_BOX = intArrayOf(3, 2, 33, 36)

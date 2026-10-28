@@ -5878,12 +5878,18 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
         int chatX = [self clampChatX:self.chatBaseX + self.chatUserDX];
         int chatY = [self clampChatY:self.chatBaseY + self.chatUserDY];
         CGFloat colX = (chatX - kDoorCanvasW) / k;
+        // While the column sits by the screen's left edge each stone reaches out to it, and the door up to the top
+        // edge; a chat dragged away from them keeps only a small slop, so the column never takes the world's taps.
+        UIEdgeInsets safe = self.view.safeAreaInsets;
+        const CGFloat slop = 10.0;
+        CGFloat reachLeft = colX <= safe.left + slop ? colX : slop;
         for (int c = 0; c < 3; c++) {
             UIButton *b = column[c];
             b.frame = CGRectMake(colX, (chatY + kColumnY + c * kColumnPitch) / k, kDoorCanvasW / k, kColumnStoneH / k);
-            // Out to the screen's left edge, and the door up to its top.
+            CGFloat top = CGRectGetMinY(b.frame);
+            CGFloat reachUp = c != 0 ? 0.0 : (top <= safe.top + kColumnY / k + slop ? top : slop);
             if ([b isKindOfClass:[TabGridButton class]])
-                ((TabGridButton *)b).hitOutset = UIEdgeInsetsMake(c == 0 ? CGRectGetMinY(b.frame) : 0.0, colX, 0.0, 0.0);
+                ((TabGridButton *)b).hitOutset = UIEdgeInsetsMake(reachUp, reachLeft, 0.0, 0.0);
         }
         [self paintTabButton:door
                        image:(active == kTabLogout ? self.doorImgActive : self.doorImg)

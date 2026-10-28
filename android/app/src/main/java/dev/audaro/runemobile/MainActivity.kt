@@ -548,7 +548,7 @@ class MainActivity : AppCompatActivity() {
         private const val LAYOUT_SWITCH_LABEL = "Switch to Resizable - Modern"
 
         // updateChrome's signature slots: the native change counter, five toggles, two view/frame sizes, four insets.
-        private const val CHROME_SIG_LEN = 15
+        private const val CHROME_SIG_LEN = 16
 
         // UX-ONBOARD-01: hard cap on the cold-start splash. Generous — first-install unpack (~30 s) + JVM boot +
         // first frame; the splash normally dismisses on the first frame well before this. Failsafe only.
@@ -3720,7 +3720,7 @@ class MainActivity : AppCompatActivity() {
         //    as the native change counter, which advances whenever one of those published strings changes, so an
         //    idle vsync fetches none of them. It is read BEFORE any of the strings: a publish that lands in between
         //    just makes the next frame run the body again, it can never be missed;
-        //  - the non-snapshot toggles railsShown / mapOpen / reconnectTestOverride;
+        //  - the non-snapshot toggles railsShown / mapOpen / reconnectTestOverride / tabGridCollapsed / chatPutAway;
         //  - the frame + view geometry and safe insets (every relocate scales/positions by these). A pre-layout /
         //    detached 0x0 view is just another captured value: its 0↔nonzero transitions flip the signature (so the
         //    body re-runs and relocates settle), every geometry helper already early-returns while a dimension is 0,
@@ -3749,6 +3749,8 @@ class MainActivity : AppCompatActivity() {
         sig[9] = JvmLauncher.frameHeight().toLong()
         for (i in 0..3) sig[10 + i] = ins[i].toLong()
         sig[14] = sigFlag(tabGridCollapsed)
+        // Put away changes no snapshot the engine publishes, but the column's art and the stone targets follow it.
+        sig[15] = sigFlag(chatPutAway)
         // Splash + hop are NOT in the signature: each is a state flag the body itself clears (on first frame /
         // loggedIn edge / its own timeout), so while either is up we must run the body every frame to do that
         // clearing — a stable signature must not be allowed to freeze them.
