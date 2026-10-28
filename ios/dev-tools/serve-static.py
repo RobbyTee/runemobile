@@ -11,8 +11,23 @@ BIND = sys.argv[3] if len(sys.argv) > 3 else "127.0.0.1"  # pass 0.0.0.0 to expo
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    # The install page's itms-services manifest is read as XML, and the IPA as a plain download; the system
+    # mime tables don't reliably know either extension.
+    extensions_map = {
+        **http.server.SimpleHTTPRequestHandler.extensions_map,
+        ".plist": "text/xml",
+        ".ipa": "application/octet-stream",
+        ".json": "application/json",
+    }
+
     def __init__(self, *a, **k):
         super().__init__(*a, directory=DIRECTORY, **k)
+
+    def end_headers(self):
+        # Every publish replaces these files under the same names, so a cached install page would offer the last
+        # build's version while the manifest behind it installs this one.
+        self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
 
     def send_head(self):
         path = self.translate_path(self.path)
