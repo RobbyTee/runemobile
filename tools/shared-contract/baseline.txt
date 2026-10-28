@@ -113,6 +113,7 @@ METHOD HudVeneerBridge#getOrbSnapshot() -> String
 METHOD HudVeneerBridge#getOrbSnapshotSeq() -> long
 METHOD HudVeneerBridge#getOverlayChatAvoid() -> int[]
 METHOD HudVeneerBridge#getOverlayInsets() -> int[]
+METHOD HudVeneerBridge#getOverlayMinimapAvoid() -> int[]
 METHOD HudVeneerBridge#isEnabled() -> boolean
 METHOD HudVeneerBridge#openTab(int) -> void
 METHOD HudVeneerBridge#openWorldMap() -> void
@@ -129,6 +130,7 @@ METHOD HudVeneerBridge#setChatCollapsed(boolean) -> void
 METHOD HudVeneerBridge#setChatHidden(boolean) -> void
 METHOD HudVeneerBridge#setChatPutAway(boolean) -> void
 METHOD HudVeneerBridge#setChatTabRowHeight(int) -> void
+METHOD HudVeneerBridge#setHudStrip(int,int,int) -> void
 METHOD HudVeneerBridge#setMinimapScale(int) -> void
 METHOD HudVeneerBridge#setOverlaySafeInsets(int,int,int,int) -> void
 METHOD HudVeneerBridge#setStonesHidden(boolean) -> void

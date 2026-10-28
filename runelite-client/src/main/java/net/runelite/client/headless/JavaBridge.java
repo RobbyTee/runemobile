@@ -901,8 +901,11 @@ public final class JavaBridge
 	 * is read back from {@code MenuOptionClicked} (the consumed entry) — feedback comes from that truth, not
 	 * from a pre-click geometric guess.
 	 */
-	public static void onClick(int x, int y, int button)
+	public static void onClick(int shownX, int shownY, int button)
 	{
+		// Large portrait: a point on the chat or minimap copy goes to the real one in the hidden strip.
+		final long at = HudStrip.toEngine(shownX, shownY);
+		final int x = HudStrip.x(at), y = HudStrip.y(at);
 		final Canvas canvas = liveCanvas();
 		if (canvas == null)
 		{
@@ -937,8 +940,11 @@ public final class JavaBridge
 	 * moves the pointer, which performs no action, and no button goes down before the lift, so an arm nobody
 	 * commits is simply dropped by {@link #cancelArmedTap()}, by the next tap, or by {@link #ARMED_TIMEOUT}.
 	 */
-	public static void armTap(int x, int y)
+	public static void armTap(int shownX, int shownY)
 	{
+		// Large portrait: a point on the chat or minimap copy goes to the real one in the hidden strip.
+		final long at = HudStrip.toEngine(shownX, shownY);
+		final int x = HudStrip.x(at), y = HudStrip.y(at);
 		final Canvas canvas = liveCanvas();
 		final ClientThread ct = clientThread;
 		final Client c = client;
@@ -1391,13 +1397,15 @@ public final class JavaBridge
 	{
 		if (kind == TAP_KIND_WIDGET)
 		{
-			final java.awt.Rectangle b = tightWidgetBounds(entry);
-			if (b != null && b.width > 0 && b.height > 0)
+			final java.awt.Rectangle r = tightWidgetBounds(entry);
+			if (r != null && r.width > 0 && r.height > 0)
 			{
-				wbX = b.x;
-				wbY = b.y;
-				wbW = b.width;
-				wbH = b.height;
+				// Where the shell draws the border: on the copy, for a widget on the chat or the minimap.
+				final int[] b = HudStrip.toShown(new int[]{r.x, r.y, r.width, r.height});
+				wbX = b[0];
+				wbY = b[1];
+				wbW = b[2];
+				wbH = b[3];
 			}
 			else
 			{
@@ -1942,8 +1950,11 @@ public final class JavaBridge
 	 * tab-stone click onto a nearby world entity. Keeps the two-cycle move→click (so the engine re-targets the
 	 * widget before the click) but feeds the literal point.
 	 */
-	public static void onClickPrecise(int x, int y, int button)
+	public static void onClickPrecise(int shownX, int shownY, int button)
 	{
+		// Large portrait: a point on the chat or minimap copy goes to the real one in the hidden strip.
+		final long at = HudStrip.toEngine(shownX, shownY);
+		final int x = HudStrip.x(at), y = HudStrip.y(at);
 		final Canvas canvas = liveCanvas();
 		if (canvas == null)
 		{
@@ -1972,8 +1983,11 @@ public final class JavaBridge
 	 * invoke→invokeLater chain guarantees the park lands after the press/release/click, never before (which
 	 * would cancel the selection). Used by the native menu's commit and cancel.
 	 */
-	public static void selectMenuPoint(int x, int y)
+	public static void selectMenuPoint(int shownX, int shownY)
 	{
+		// Large portrait: a menu opened on a copy shows shifted up out of the hidden strip; undo that shift.
+		final long at = HudStrip.menuToEngine(shownX, shownY);
+		final int x = HudStrip.x(at), y = HudStrip.y(at);
 		final Canvas canvas = liveCanvas();
 		final ClientThread ct = clientThread;
 		if (canvas == null || ct == null)
@@ -2157,8 +2171,11 @@ public final class JavaBridge
 	 * highlights the entry under the finger as it slides. Distinct from a drag (which holds a button and
 	 * posts {@code MOUSE_DRAGGED} via {@link #onTouch}) so the menu-track gesture can't be confused for one.
 	 */
-	public static void onMove(int x, int y)
+	public static void onMove(int shownX, int shownY)
 	{
+		// Large portrait: a point on the chat or minimap copy goes to the real one in the hidden strip.
+		final long at = HudStrip.toEngine(shownX, shownY);
+		final int x = HudStrip.x(at), y = HudStrip.y(at);
 		final Canvas canvas = liveCanvas();
 		if (canvas == null)
 		{
@@ -2176,8 +2193,11 @@ public final class JavaBridge
 	 * Pinch-zoom maps to this: negative {@code rotation} = wheel up = zoom in. {@code (x,y)} is the pinch
 	 * centroid so the gamepack zooms about it.
 	 */
-	public static void onWheel(int x, int y, int rotation)
+	public static void onWheel(int shownX, int shownY, int rotation)
 	{
+		// Large portrait: a point on the chat or minimap copy goes to the real one in the hidden strip.
+		final long at = HudStrip.toEngine(shownX, shownY);
+		final int x = HudStrip.x(at), y = HudStrip.y(at);
 		final Canvas canvas = liveCanvas();
 		if (canvas == null || rotation == 0)
 		{
@@ -2754,6 +2774,15 @@ public final class JavaBridge
 					}
 				}
 			}
+			if (out != null)
+			{
+				// The shells hit-test these against shown points, so a rect on a large-portrait copy moves to it.
+				for (int i = 0; i + 3 < n[0]; i += 4)
+				{
+					final int[] b = HudStrip.toShown(java.util.Arrays.copyOfRange(out, i, i + 4));
+					System.arraycopy(b, 0, out, i, 4);
+				}
+			}
 			scrollableRects = (out == null || n[0] == 0) ? EMPTY_BOUNDS
 				: (n[0] == out.length ? out : java.util.Arrays.copyOf(out, n[0]));
 		}
@@ -2832,8 +2861,11 @@ public final class JavaBridge
 	 * production path would snapshot the scrollable rects on the client thread each frame (cf.
 	 * {@link #snapshotInventoryBounds}) and hit-test them lock-free here.
 	 */
-	public static boolean isEngineScrollableAt(int x, int y)
+	public static boolean isEngineScrollableAt(int shownX, int shownY)
 	{
+		// Large portrait: a point on the chat or minimap copy goes to the real one in the hidden strip.
+		final long at = HudStrip.toEngine(shownX, shownY);
+		final int x = HudStrip.x(at), y = HudStrip.y(at);
 		final Client c = client;
 		if (c == null)
 		{
@@ -3069,8 +3101,11 @@ public final class JavaBridge
 	 * own "middle mouse button" setting (opens-menu / camera). No client-thread aim-assist (unlike a left/right
 	 * tap) — middle-click is a deliberate, literal-point action.
 	 */
-	public static void onMiddleClick(int x, int y)
+	public static void onMiddleClick(int shownX, int shownY)
 	{
+		// Large portrait: a point on the chat or minimap copy goes to the real one in the hidden strip.
+		final long at = HudStrip.toEngine(shownX, shownY);
+		final int x = HudStrip.x(at), y = HudStrip.y(at);
 		final Canvas canvas = liveCanvas();
 		if (canvas == null)
 		{
@@ -3090,8 +3125,13 @@ public final class JavaBridge
 	 * shells drop right before this DOWN ({@link #cancelArmedTap}) and only the lift ends it. The cost is at
 	 * most one frame on the drag samples, which the engine reads once per frame anyway.
 	 */
-	public static void onTouch(int type, int x, int y, int button)
+	public static void onTouch(int type, int shownX, int shownY, int button)
 	{
+		// Large portrait: a stream that starts on the chat or minimap copy runs on the real one in the hidden strip,
+		// all the way to the lift.
+		final long at = type == TOUCH_DOWN ? HudStrip.dragStart(shownX, shownY)
+			: HudStrip.dragTo(shownX, shownY, type == TOUCH_UP);
+		final int x = HudStrip.x(at), y = HudStrip.y(at);
 		final ClientThread ct = clientThread;
 		if (ct == null)
 		{

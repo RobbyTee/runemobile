@@ -2500,7 +2500,7 @@ public final class MobileUiBridge
 	public static int[] getChatInputBounds()
 	{
 		return chatInputVisible
-			? new int[]{chatInputX, chatInputY, chatInputW, chatInputH}
+			? HudStrip.toShown(new int[]{chatInputX, chatInputY, chatInputW, chatInputH})
 			: new int[]{0, 0, 0, 0};
 	}
 

@@ -13,7 +13,7 @@ how the bridge works, which thread each call runs on, and how to change it safel
 
 | Classes | Methods | JSON keys | System properties |
 |---:|---:|---:|---:|
-| 22 | 246 | 280 | 78 |
+| 22 | 248 | 280 | 78 |
 
 ## Classes
 
@@ -24,7 +24,7 @@ how the bridge works, which thread each call runs on, and how to change it safel
 - [`HeadlessResize`](#headlessresize): 5 methods, 1 property
 - [`HeadlessSeams`](#headlessseams): 3 methods
 - [`HudDataBridge`](#huddatabridge): 4 methods, 27 JSON keys, 2 properties
-- [`HudVeneerBridge`](#hudveneerbridge): 36 methods, 77 JSON keys, 10 properties
+- [`HudVeneerBridge`](#hudveneerbridge): 38 methods, 77 JSON keys, 10 properties
 - [`InfoBoxBridge`](#infoboxbridge): 6 methods, 9 JSON keys
 - [`JavaBridge`](#javabridge): 55 methods, 14 properties
 - [`LootTrackerBridge`](#loottrackerbridge): 6 methods, 14 JSON keys
@@ -192,6 +192,8 @@ W3 Feature-A (A3) — controls the engine chatbox so the chat-at-top look matche
   The relocated chat's occupied canvas rect {x,y,w,h} for snap-corner avoidance — the native tab row only while collapsed, the full chat box while open — or null when the veneer isn't relocating the chat.
 - `getOverlayInsets()` → `int[]`  
   Snap-corner safe-area insets {l,t,r,b} in canvas px (all 0 until native pushes them).
+- `getOverlayMinimapAvoid()` → `int[]`  
+  The minimap copy's canvas rect {x,y,w,h} while large portrait draws the windows' layer full width, so the top-right snap corner drops below it; null otherwise (the layer then ends left of the minimap by itself).
 - `isEnabled()` → `boolean`
 - `openTab(int tabIndex)` → `void`  
   Native: open the side-panel tab with the given index (0..13) by replaying that stone's op script — works even while the stones are hidden. One-shot; applied on the client thread in `tick`.
@@ -223,6 +225,8 @@ W3 Feature-A (A3) — controls the engine chatbox so the chat-at-top look matche
   Native: put the whole chat away, filter stones included, or bring it back (the speech-bubble stone by the door, 601's "Toggle Chatbox").
 - `setChatTabRowHeight(int canvasPx)` → `void`  
   Native, and no longer read: the engine now draws the filter row itself at the official app's fixed 30 px (OFFICIAL_ROW_BOTTOM), so there is no taller native row to clear. Kept because both shells bind it.
+- `setHudStrip(int visibleHeight, int windowTop, int windowBottom)` → `void`  
+  Native: large portrait. The canvas runs `400` px past the bottom of the screen and only its top `visibleHeight` rows show; the chat and the minimap draw full size in the hidden rows and are copied back, scaled by `canvasWidth/765`, to the shown corners `relocateChat` and `relocateMinimap` ask for. The game's windows (bank, Grand Exchange, Settings, ...) open full width between `windowTop` and `windowBottom`. Every canvas point a shell sends and every rect the bridge publishes stays in shown coordinates. `visibleHeight <= 0` turns it off. See `HudStrip`.
 - `setMinimapScale(int scalePct)` → `void`  
   Native: enlarge the engine minimap to `scalePct`% of its natural size (e.g. 130 = 30% bigger). `0` (or 100) = natural size. The globe + its chrome are re-laid each frame in `tick`; the cluster stays the live engine HUD, so click-to-walk + orb clicks keep working.
 - `setOverlaySafeInsets(int l, int t, int r, int b)` → `void`  
@@ -278,7 +282,7 @@ Phase-4 (W3) sub-goal B: the native&lt;->Java facade for a *real interactive* cl
 
 - `armSceneHold()` → `void`  
   Hooks.draw on a non-world game state → re-arm the load-in hold.
-- `armTap(int x, int y)` → `void`  
+- `armTap(int shownX, int shownY)` → `void`  
   The finger LANDED at `(x,y)` — start resolving that point now, click nothing. A left tap is only posted when the finger lifts, but the engine-resolved gate it then has to pass (`tapTick`: move the synthetic cursor, wait for the engine to demonstrably resolve the point) does not have to run after the lift. Running it here spends those frames while the finger is still down, so the lift can post the click immediately (`commitArmedTap`) instead of a few frames later — which is all the "taps feel delayed" latency that is ours to remove. Safe to call for a touch that never becomes a tap: the gate only moves the pointer, which performs no action, and no button goes down before the lift, so an arm nobody commits is simply dropped by `cancelArmedTap()`, by the next tap, or by `ARMED_TIMEOUT`.
 - `cameraZoom()` → `int`  
   The camera zoom the game is drawing with, or -1 while logged out (or with the canvas resize off). A host reads it to remember a zoom per screen of a foldable. Any thread. See `HeadlessResize#cameraZoom`.
@@ -327,7 +331,7 @@ Phase-4 (W3) sub-goal B: the native&lt;->Java facade for a *real interactive* cl
 - `invokeMenuEntry(int parentDisplayIndex, int childIndex)` → `void`  
   MENU-1: commit a right-click SUBMENU child the native menu drilled into. The engine renders submenu children in a flyout, not as rows of the main menu, so the `selectMenuPoint` click-through (which targets a main-menu row's canvas geometry) can't reach them. Instead we resolve the child in the live — and, while the right-click menu is open, *frozen* — menu tree by the same (parent display index, child index) the `MenuPeekBridge` snapshot published, then run its action directly: a RuneLite-registered `onClick` consumer (how Menu-Entry-Swapper / Ground-Items / NPC-tag submenu items are built) is invoked as the engine would, else fall back to `menuAction`. Runs on the client thread (menu reads + onClick are client-thread-only). The native side closes the now-stale engine menu separately (a title-strip click), exactly like a cancel.
 - `isEnabled()` → `boolean`
-- `isEngineScrollableAt(int x, int y)` → `boolean`  
+- `isEngineScrollableAt(int shownX, int shownY)` → `boolean`  
   SCROLL-SPIKE: true if a scrollable engine interface widget is under the canvas point (x,y) — a visible widget whose scroll layer overflows (`getScrollHeight() > getHeight()`) and whose bounds contain the point. The native shell calls this at pan-begin to decide whether a one-finger drag should scroll an open interface (bank / GE / quest list / settings / collection log …) — emitted as wheel notches the engine routes to the hovered scrollable, exactly like the desktop mouse wheel — instead of rotating the camera. Returning false leaves the drag a camera pan, so a drag over the bare viewport never scroll-leaks into a zoom.
 - `isTextInputOpen()` → `boolean`  
   Whether the gamepack currently has a text field open and awaiting input — a search box (bank/GE/world map), a private-message recipient, an "enter amount/name" dialog, etc. (`VarClientInt.INPUT_TYPE` is non-zero), or the legacy login screen's credential/authenticator entry. The native shell polls this to auto-raise the soft keyboard when the game asks for text and dismiss it when the field closes, so typing is summoned from inside the game, not a chrome button.
@@ -335,25 +339,25 @@ Phase-4 (W3) sub-goal B: the native&lt;->Java facade for a *real interactive* cl
   Hooks.drawScene → count a rendered 3D frame.
 - `onCameraDrag(int dxPixels, int dyPixels)` → `void`  
   Rotate the camera by a two-finger pan: apply the raw pixel delta `(dxPixels,dyPixels)` to the camera yaw/pitch *targets* directly via the client API (no synthesized middle-mouse, so it is independent of the "middle mouse moves camera" setting). Yaw wraps mod 16384 (JAU14); pitch clamps to the normal RS range. Only acts in-game. The native side sends raw pixel deltas; sensitivity + sub-pixel accumulation live here.
-- `onClick(int x, int y, int button)` → `void`  
+- `onClick(int shownX, int shownY, int button)` → `void`  
   A discrete tap at `(x,y)` (gamepack-canvas pixels): the full focus-prime + move + press + release + click sequence — the proven `HeadlessLogin.synthesizeClick` shape. `button` is 1 (left tap: walk / interact / select a menu entry) or 3 (long-press: open the right-click menu).
-- `onClickPrecise(int x, int y, int button)` → `void`  
+- `onClickPrecise(int shownX, int shownY, int button)` → `void`  
   A *precise* left/right click at exactly `(x,y)` — same proven move+click shape as `onClick`, but with **no snap-to-entity resolution**. This is for deliberate UI proxies (the native chrome tapping a tab stone / orb / widget), where the coordinate is already the exact target and touch-forgiveness must NOT redirect it: with a full-screen world viewport, snap would otherwise pull a tab-stone click onto a nearby world entity. Keeps the two-cycle move→click (so the engine re-targets the widget before the click) but feeds the literal point.
 - `onKeyStroke(int vk)` → `void`  
   Press + release one non-text key by its AWT virtual-keycode (`KeyEvent.VK_*`) — backspace, enter, escape, tab, arrows, etc. Backspace/enter/tab also emit the matching `KEY_TYPED` control char (a gamepack text field deletes/submits on those). Posted from the hidden field's delete/return callbacks and any on-screen key.
 - `onKeybind(int keyCode, int modifiers)` → `void`  
   KEY-1: fire a plugin's configured action-hotkey by synthesizing the exact key chord its `HotkeyListener` (or raw `KeyListener`, e.g. Bank search) listens for. `Keybind.matches` reads the event's extended key-code + extended modifiers, so a single matched `KEY_PRESSED` (with the modifier mask baked into the event — no separate modifier-key presses needed) triggers `hotkeyPressed`; the paired `KEY_RELEASED` clears the listener's pressed latch so it can fire again next time. Delivered like our other key synthesis: handed to the canvas's own `KeyListener`s on the EDT, because a posted `KeyEvent` is routed by the `KeyboardFocusManager` to the focus owner and headless there is none, so nothing posted arrives. That is NOT the same as a hardware key: it bypasses AWT's dispatch, so only listeners registered on this canvas are reached and anything AWT would do around them does not happen. It is enough for the listeners the engine and RuneLite register there. Modifier-only binds (no main key) are ignored — those are hold-to-modify, not fire-once.
-- `onMiddleClick(int x, int y)` → `void`  
+- `onMiddleClick(int shownX, int shownY)` → `void`  
   Middle-button (BUTTON2) click at `(x,y)` — a discrete press+release+click, the touch equivalent of a mouse middle-click. Posts through the same canvas path as `onClick`; the engine handles it per its own "middle mouse button" setting (opens-menu / camera). No client-thread aim-assist (unlike a left/right tap) — middle-click is a deliberate, literal-point action.
-- `onMove(int x, int y)` → `void`  
+- `onMove(int shownX, int shownY)` → `void`  
   Move the pointer to `(x,y)` with no button held — a plain `MOUSE_MOVED`. This is the "hover" primitive: it updates the gamepack's recorded mouse position so the open right-click menu highlights the entry under the finger as it slides. Distinct from a drag (which holds a button and posts `MOUSE_DRAGGED` via `onTouch`) so the menu-track gesture can't be confused for one.
 - `onTapMove(int x, int y)` → `void`  
   One sample of an armed contact's travel, at `(x,y)` (gamepack-canvas pixels). Both shells send every sample here and nothing is posted for any of them: no button is down before the lift, and a move during the settle would push the engine's cursor off the point the gate is resolving.
 - `onText(String s)` → `void`  
   Type committed text — for each character post `KEY_PRESSED` + `KEY_TYPED` + `KEY_RELEASED`. The gamepack's text fields (chat, search, username/password) consume the `KEY_TYPED` char, which carries the exact character (and case) the iOS keyboard committed. Called from the hidden `UITextField`'s change callback, so autocorrect/paste arrive as one coherent string.
-- `onTouch(int type, int x, int y, int button)` → `void`  
+- `onTouch(int type, int shownX, int shownY, int button)` → `void`  
   One phase of a drag stream — `TOUCH_DOWN`/`TOUCH_MOVE`/`TOUCH_UP` at `(x,y)`, `button` 1 or 3. DOWN presses, MOVE drags (or hovers when not pressed), UP releases — with NO synthesized click (unlike a tap, which goes through `onClick`). Both shells drive it for an item drag (the inventory and the reorder panes), where a release must not register as a click.
-- `onWheel(int x, int y, int rotation)` → `void`  
+- `onWheel(int shownX, int shownY, int rotation)` → `void`  
   Scroll the wheel by `rotation` notches at `(x,y)` — a `MouseWheelEvent`, which `Hooks.mouseWheelMoved` routes through `mouseManager` exactly like a `MouseEvent`. Pinch-zoom maps to this: negative `rotation` = wheel up = zoom in. `(x,y)` is the pinch centroid so the gamepack zooms about it.
 - `parkPointer()` → `void`  
   The finger is off the glass: post `MOUSE_EXITED` so the engine knows there is no pointer, and leave the recorded position where the finger actually left it.
@@ -363,7 +367,7 @@ Phase-4 (W3) sub-goal B: the native&lt;->Java facade for a *real interactive* cl
   Called at the top of `Hooks.draw` each frame to keep the bridge pointed at the live client.
 - `requestResize(int w, int h)` → `void`  
   Resize the game canvas to `w x h` mid-session, for a host window that changed shape (a foldable opened or closed), so the game shows more or less of the world instead of being stretched. Any thread; the client thread applies it on its next draw. See `HeadlessResize#requestResize`.
-- `selectMenuPoint(int x, int y)` → `void`  
+- `selectMenuPoint(int shownX, int shownY)` → `void`  
   Select an open right-click menu row by left-clicking its canvas point, then PARK the pointer one cycle AFTER the click so the engine doesn't leave the cursor sitting on that target. On a touchscreen there is no persistent cursor, so a stranded synthetic cursor would keep showing the selected object's action label and make the next tap re-resolve to it (the "stuck on the stairs" bug). The ordered invoke→invokeLater chain guarantees the park lands after the press/release/click, never before (which would cancel the selection). Used by the native menu's commit and cancel.
 - `setAltHeld(boolean held)` → `void`  
   Sticky-Alt — same mechanism as `setShiftHeld`. Notably drives Ground Items' "hold Alt to highlight" (the plugin shows item names / its highlight while Alt is held). A native modifier toggle calls this.

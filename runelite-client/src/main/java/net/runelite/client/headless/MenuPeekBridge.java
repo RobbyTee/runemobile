@@ -127,6 +127,11 @@ public final class MenuPeekBridge
 
 			final Point m = safeMouse(client);
 			final boolean menuOpen = safeBool(client::isMenuOpen);
+			// Large portrait: a menu opened on the chat or minimap copy opens in the hidden strip; the shells place
+			// theirs where it shows instead, and JavaBridge.selectMenuPoint takes the shift back off.
+			final int[] mr = HudStrip.shownMenu(menuOpen, safeInt(client::getMenuX), safeInt(client::getMenuY),
+				safeInt(client::getMenuWidth), safeInt(client::getMenuHeight),
+				m == null ? -1 : m.getX(), m == null ? -1 : m.getY(), client.getCanvasWidth());
 
 			final StringBuilder sb = new StringBuilder(512);
 			sb.append("{\"active\":true,\"loggedIn\":true")
@@ -134,10 +139,10 @@ public final class MenuPeekBridge
 				.append(",\"mouseY\":").append(m == null ? -1 : m.getY())
 				.append(",\"menuOpen\":").append(menuOpen)
 				.append(",\"menuScrollable\":").append(safeBool(client::isMenuScrollable))
-				.append(",\"menuX\":").append(safeInt(client::getMenuX))
-				.append(",\"menuY\":").append(safeInt(client::getMenuY))
-				.append(",\"menuW\":").append(safeInt(client::getMenuWidth))
-				.append(",\"menuH\":").append(safeInt(client::getMenuHeight))
+				.append(",\"menuX\":").append(mr[0])
+				.append(",\"menuY\":").append(mr[1])
+				.append(",\"menuW\":").append(mr[2])
+				.append(",\"menuH\":").append(mr[3])
 				.append(",\"count\":").append(count)
 				.append(",\"entries\":[");
 

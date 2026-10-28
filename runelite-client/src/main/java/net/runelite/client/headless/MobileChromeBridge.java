@@ -601,6 +601,8 @@ public final class MobileChromeBridge
 			sb.append("null");
 			return;
 		}
+		// Shown coordinates: a rect on large portrait's hidden chat or minimap moves to its copy.
+		b = HudStrip.toShown(b);
 		sb.append('[').append(b[0]).append(',').append(b[1]).append(',').append(b[2]).append(',').append(b[3]).append(']');
 	}
 

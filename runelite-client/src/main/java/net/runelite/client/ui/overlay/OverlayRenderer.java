@@ -831,6 +831,7 @@ public class OverlayRenderer extends MouseAdapter
 		// the same helpers), and drop the default top-left corner below the relocated chat, so snapped plugin
 		// overlays (e.g. Quest Helper's TOP_LEFT guidance panel) render unclipped and uncovered.
 		final int[] chatAvoid = HudVeneerBridge.getOverlayChatAvoid();
+		final int[] mapAvoid = HudVeneerBridge.getOverlayMinimapAvoid();
 
 		var location = new Point();
 		for (SnapCorner s : snapCorners.getSnapCorners())
@@ -842,6 +843,11 @@ public class OverlayRenderer extends MouseAdapter
 				&& location.x < chatAvoid[0] + chatAvoid[2] && location.y < chatAvoid[1] + chatAvoid[3])
 			{
 				location.y = chatAvoid[1] + chatAvoid[3] + PADDING;
+			}
+			if (s == snapCorners.topRight && mapAvoid != null && !s.isRepositioned()
+				&& location.x > mapAvoid[0] && location.y < mapAvoid[1] + mapAvoid[3])
+			{
+				location.y = mapAvoid[1] + mapAvoid[3] + PADDING;
 			}
 			int cx = location.x, cy = location.y; // absolute x,y of the align corner
 			s.translateOffsetForAlignment(location);

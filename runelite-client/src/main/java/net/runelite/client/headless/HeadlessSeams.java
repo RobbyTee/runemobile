@@ -250,6 +250,13 @@ public final class HeadlessSeams
 			guard("seam.JavaBridge.drawSelection", () -> JavaBridge.drawSelection(client));
 		}
 
+		// Large portrait: copy the chat and the minimap up out of the hidden strip. Before the capture and the snapshot
+		// below, and before GPU / 117HD upload this buffer as their interface layer, so every renderer shows it.
+		if (HudVeneerBridge.isEnabled())
+		{
+			guard("seam.HudVeneerBridge.postComposite", () -> HudVeneerBridge.postComposite(client, mainBufferProvider));
+		}
+
 		// Headless capture seam: composited game + overlays now live in mainBufferProvider.getImage().
 		// In GPU mode (Route C) mainBufferProvider is the UI-only layer (the game is on the GPU), so a CPU
 		// capture here is both useless AND a per-frame ~1.5 MB BufferedImage allocation that OOMs the heap once

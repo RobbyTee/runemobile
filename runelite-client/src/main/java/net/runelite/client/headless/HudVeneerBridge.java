@@ -38,6 +38,7 @@ import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.HashTable;
+import net.runelite.api.MainBufferProvider;
 import net.runelite.api.MessageNode;
 import net.runelite.api.Player;
 import net.runelite.api.ScriptID;
@@ -481,7 +482,8 @@ public final class HudVeneerBridge
 		// A prompt stamps the chatbox group itself: its widgets are the chatbox's own, so no sub-interface names
 		// it. No sub-interface can collide with that id — they are the groups attached TO the chatbox.
 		final int stamp = chatPromptOpen ? InterfaceID.CHATBOX : lastEngineOwnedDialogueGroup;
-		pendingDialogueTap.set(packTap(tickGen, stamp, canvasX, canvasY));
+		final long p = HudStrip.toEngine(canvasX, canvasY);
+		pendingDialogueTap.set(packTap(tickGen, stamp, HudStrip.x(p), HudStrip.y(p)));
 	}
 
 	private static long packTap(int gen, int group, int x, int y)
@@ -514,6 +516,19 @@ public final class HudVeneerBridge
 	public static void setChatAreaWidth(int canvasPx)
 	{
 		chatAreaW = canvasPx;
+	}
+
+	/**
+	 * Native: large portrait. The canvas runs {@code 400} px past the bottom of the screen and only its top
+	 * {@code visibleHeight} rows show; the chat and the minimap draw full size in the hidden rows and are copied back,
+	 * scaled by {@code canvasWidth/765}, to the shown corners {@link #relocateChat} and {@link #relocateMinimap} ask
+	 * for. The game's windows (bank, Grand Exchange, Settings, ...) open full width between {@code windowTop} and
+	 * {@code windowBottom}. Every canvas point a shell sends and every rect the bridge publishes stays in shown
+	 * coordinates. {@code visibleHeight <= 0} turns it off. See {@code HudStrip}.
+	 */
+	public static void setHudStrip(int visibleHeight, int windowTop, int windowBottom)
+	{
+		HudStrip.set(visibleHeight, windowTop, windowBottom);
 	}
 
 	/** Native: the live chat-tab geometry/state snapshot (escaped JSON) for the enlarged native tab veneer —
@@ -641,7 +656,19 @@ public final class HudVeneerBridge
 		// The column left of the chat runs deeper than a collapsed chat's row, so it sets the depth then.
 		final int h = chatPutAway ? OFFICIAL_COLUMN_Y + OFFICIAL_COLUMN_H_HIDDEN
 			: chatCollapsed ? OFFICIAL_COLUMN_Y + OFFICIAL_COLUMN_H : OFFICIAL_CHAT_H;
-		return new int[]{chatX, chatY, chatWidth(), h};
+		// In large portrait the chat shows smaller than the engine draws it.
+		final float k = HudStrip.shownScale();
+		return new int[]{chatX, chatY, Math.round(chatWidth() * k), Math.round(h * k)};
+	}
+
+	/**
+	 * The minimap copy's canvas rect {x,y,w,h} while large portrait draws the windows' layer full width, so the
+	 * top-right snap corner drops below it; null otherwise (the layer then ends left of the minimap by itself).
+	 */
+	public static int[] getOverlayMinimapAvoid()
+	{
+		final HudStrip.Layout l = HudStrip.layout();
+		return ENABLED && l != null && l.mapDst != null ? l.mapDst.clone() : null;
 	}
 
 	/** The chat's width right of the shells' column: what native set, or the official 461. */
@@ -664,15 +691,22 @@ public final class HudVeneerBridge
 	{
 		if (!ENABLED || c == null || c.getGameState() != GameState.LOGGED_IN)
 		{
+			if (ENABLED)
+			{
+				HudStrip.loggedOut();
+			}
 			return;
 		}
 		try
 		{
 			if (!c.isResized())
 			{
+				HudStrip.pin(c, false);
 				return;
 			}
 			final boolean preEoc = c.getVarbitValue(VarbitID.RESIZABLE_STONE_ARRANGEMENT) == 1;
+			// Large portrait: hold the game view to the screen and the windows to their band, before raster.
+			HudStrip.pin(c, preEoc);
 			if (!HOVER_TEXT)
 			{
 				// Asserted every frame, not once at boot: the flag is the engine's and a relog or a world hop
@@ -769,6 +803,25 @@ public final class HudVeneerBridge
 				chatRebuilt = true;
 			}
 		}
+	}
+
+	/**
+	 * Large portrait's copy of the chat and the minimap out of the hidden strip, from {@code postComposite}: after the
+	 * overlays, before the CPU frame snapshot and before GPU or 117HD uploads this buffer as its interface layer.
+	 */
+	static void postComposite(Client c, MainBufferProvider b)
+	{
+		if (!ENABLED || c == null || b == null)
+		{
+			return;
+		}
+		if (c.getGameState() != GameState.LOGGED_IN || !c.isResized())
+		{
+			HudStrip.composite(c, null, 0, 0, -1, -1, -1, -1, false);
+			return;
+		}
+		HudStrip.composite(c, b.getPixels(), b.getWidth(), b.getHeight(), chatX, chatY, minimapX, minimapY,
+			isWorldMapOpen(c));
 	}
 
 	/** Re-apply the requested chatbox state each frame. Client thread. */
@@ -948,7 +1001,15 @@ public final class HudVeneerBridge
 						}
 						// Re-laid on the un-hide edge as well: the chat comes back from a window or the world map
 						// laid out the way the old every-frame revalidate left it.
-						CHAT_PIN.apply(w, chatX, chatY, widened || unhidden);
+						// Large portrait draws it in the strip and HudStrip copies it to (chatX, chatY).
+						if (HudStrip.isOn())
+						{
+							CHAT_PIN.apply(w, HudStrip.slotX(), HudStrip.chatSlotY(), widened || unhidden);
+						}
+						else
+						{
+							CHAT_PIN.apply(w, chatX, chatY, widened || unhidden);
+						}
 					}
 				}
 				// OSRS-Mobile tabs-on-top: the desktop chat stacks the tab row (CONTROLS) UNDER the message area
@@ -1045,7 +1106,14 @@ public final class HudVeneerBridge
 				final Widget w = c.getWidget(containerId);
 				if (w != null)
 				{
-					MAP_PIN.apply(w, minimapX, minimapY, false);
+					if (HudStrip.isOn())
+					{
+						MAP_PIN.apply(w, HudStrip.slotX(), HudStrip.mapSlotY(), false);
+					}
+					else
+					{
+						MAP_PIN.apply(w, minimapX, minimapY, false);
+					}
 				}
 			}
 
@@ -2486,7 +2554,7 @@ public final class HudVeneerBridge
 			{
 				// Canvas-px bounds of the open dialogue so the native shell can route a tap there through a PRECISE
 				// click (resolving the dialogue's Continue/option) instead of walking the world behind it.
-				final int[] dr = dialogueBounds(c);
+				final int[] dr = HudStrip.toShown(dialogueBounds(c));
 				if (dr != null)
 				{
 					sb.append(",\"dlgX\":").append(dr[0]).append(",\"dlgY\":").append(dr[1])
@@ -2722,7 +2790,7 @@ public final class HudVeneerBridge
 		final Widget gfx = safeWidget(c, base + 1);
 		final Widget txt = safeWidget(c, base + 2);
 		final Widget flt = hasFilter ? safeWidget(c, base + 3) : null;
-		final int[] b = canvasBounds(btn);
+		final int[] b = HudStrip.toShown(canvasBounds(btn));
 		final int spr = gfx == null ? -1 : safeSpriteId(gfx);
 		sb.append("{\"name\":\"").append(name).append('"')
 			.append(",\"x\":").append(b == null ? -1 : b[0])
@@ -3962,6 +4030,8 @@ public final class HudVeneerBridge
 		{
 			return;
 		}
+		// Every rect published this way is one a shell draws or hit-tests in shown coordinates.
+		b = HudStrip.toShown(b);
 		sb.append(",\"").append(key).append("\":{\"x\":").append(b[0]).append(",\"y\":").append(b[1])
 			.append(",\"w\":").append(b[2]).append(",\"h\":").append(b[3]).append('}');
 	}
