@@ -4155,6 +4155,14 @@ class MainActivity : AppCompatActivity() {
         JvmLauncher.onBridge { JvmLauncher.setHudStrip(rows, top, bottom) }
     }
 
+    /** Large portrait UI: a refused resize leaves the old canvas, so it gets back its own shown rows and the strip state
+     *  sent before ([before]; null = never sent, i.e. off). UI-thread only. */
+    private fun restoreHudStrip(before: IntArray?) {
+        JvmLauncher.setShownRows(if (canvasStripH > 0) canvasH else 0)
+        val v = before ?: intArrayOf(0, 0, 0)
+        sendHudStrip(v[0], v[1], v[2])
+    }
+
     /** Stop relocating the engine side panel (let it return to its native position) when the grid disengages. */
     private fun releaseSidePanel() {
         if (lastSideX == -1 && lastSideY == -1) return
@@ -4365,6 +4373,7 @@ class MainActivity : AppCompatActivity() {
             if (minOf(w, h, oldW, oldH) > 0 && worth) {
                 // A strip turning on crops from the first frame drawn at the new size (an older, shorter frame shows
                 // whole either way); one turning off waits for adoption, so the old frame's strip never shows.
+                val stripBefore = lastHudStrip
                 if (strip > 0) {
                     JvmLauncher.setShownRows(h)
                     sendHudStrip(h, 0, 0)
@@ -4375,10 +4384,12 @@ class MainActivity : AppCompatActivity() {
                         TAG,
                         "fold: canvas resize ${oldW}x$oldH -> ${w}x$h (+$strip hidden) ${if (ok) "requested" else "refused (bridge not ready)"}",
                     )
-                    if (ok) {
-                        runOnUiThread {
+                    runOnUiThread {
+                        if (ok) {
                             pendingCanvas = w to h
                             adoptCanvasWhenDrawn(w, h, strip, SystemClock.uptimeMillis() + CANVAS_WAIT_MS)
+                        } else if (strip > 0) {
+                            restoreHudStrip(stripBefore)
                         }
                     }
                 }
