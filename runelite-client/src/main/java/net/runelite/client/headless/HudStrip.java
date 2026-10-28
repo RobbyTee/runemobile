@@ -148,6 +148,12 @@ final class HudStrip
 		return on;
 	}
 
+	/** The canvas rows that reach the screen: the visible ones while the strip is laid out, else all of them. */
+	static int shownRows(int canvasH)
+	{
+		return on ? Math.min(canvasH, visibleH) : canvasH;
+	}
+
 	/** The chat container's top-left in the strip. Client thread, while {@link #isOn}. */
 	static int chatSlotY()
 	{

@@ -13,7 +13,7 @@ how the bridge works, which thread each call runs on, and how to change it safel
 
 | Classes | Methods | JSON keys | System properties |
 |---:|---:|---:|---:|
-| 22 | 248 | 280 | 78 |
+| 22 | 249 | 280 | 78 |
 
 ## Classes
 
@@ -24,7 +24,7 @@ how the bridge works, which thread each call runs on, and how to change it safel
 - [`HeadlessResize`](#headlessresize): 5 methods, 1 property
 - [`HeadlessSeams`](#headlessseams): 3 methods
 - [`HudDataBridge`](#huddatabridge): 4 methods, 27 JSON keys, 2 properties
-- [`HudVeneerBridge`](#hudveneerbridge): 38 methods, 77 JSON keys, 10 properties
+- [`HudVeneerBridge`](#hudveneerbridge): 39 methods, 77 JSON keys, 10 properties
 - [`InfoBoxBridge`](#infoboxbridge): 6 methods, 9 JSON keys
 - [`JavaBridge`](#javabridge): 55 methods, 14 properties
 - [`LootTrackerBridge`](#loottrackerbridge): 6 methods, 14 JSON keys
@@ -229,6 +229,8 @@ W3 Feature-A (A3) — controls the engine chatbox so the chat-at-top look matche
   Native: large portrait. The canvas runs `400` px past the bottom of the screen and only its top `visibleHeight` rows show; the chat and the minimap draw full size in the hidden rows and are copied back, scaled by `canvasWidth/765`, to the shown corners `relocateChat` and `relocateMinimap` ask for. The game's windows (bank, Grand Exchange, Settings, ...) open full width between `windowTop` and `windowBottom`. Every canvas point a shell sends and every rect the bridge publishes stays in shown coordinates. `visibleHeight <= 0` turns it off. See `HudStrip`.
 - `setMinimapScale(int scalePct)` → `void`  
   Native: enlarge the engine minimap to `scalePct`% of its natural size (e.g. 130 = 30% bigger). `0` (or 100) = natural size. The globe + its chrome are re-laid each frame in `tick`; the cluster stays the live engine HUD, so click-to-walk + orb clicks keep working.
+- `setOverlayKeepOut(int[] rects)` → `void`  
+  Native: the shell's own controls over the game, as a flat `{x, y, w, h, ...}` list in shown canvas px. Replaces the last list; null or empty clears it. Any thread.
 - `setOverlaySafeInsets(int l, int t, int r, int b)` → `void`  
   Native: the screen safe-area insets in canvas px (left, top, right, bottom).
 - `setStonesHidden(boolean hidden)` → `void`  

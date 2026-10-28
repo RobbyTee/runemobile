@@ -132,6 +132,7 @@ METHOD HudVeneerBridge#setChatPutAway(boolean) -> void
 METHOD HudVeneerBridge#setChatTabRowHeight(int) -> void
 METHOD HudVeneerBridge#setHudStrip(int,int,int) -> void
 METHOD HudVeneerBridge#setMinimapScale(int) -> void
+METHOD HudVeneerBridge#setOverlayKeepOut(int[]) -> void
 METHOD HudVeneerBridge#setOverlaySafeInsets(int,int,int,int) -> void
 METHOD HudVeneerBridge#setStonesHidden(boolean) -> void
 METHOD HudVeneerBridge#switchChatTab(int) -> void

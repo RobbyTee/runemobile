@@ -64,6 +64,7 @@ import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.OverlayMenuClicked;
 import net.runelite.client.headless.HudVeneerBridge;
+import net.runelite.client.headless.OverlayKeepOut;
 import net.runelite.client.input.KeyManager;
 import net.runelite.client.input.MouseAdapter;
 import net.runelite.client.input.MouseManager;
@@ -95,6 +96,7 @@ public class OverlayRenderer extends MouseAdapter
 	private final SnapCorners snapCorners;
 
 	private Font font, tooltipFont, interfaceFont;
+	private OverlayKeepOut hudKeepOut; // mobile veneer only: this frame's HUD, which overlay boxes keep off
 
 	// Overlay movement variables
 	private final Point overlayOffset = new Point();
@@ -232,10 +234,12 @@ public class OverlayRenderer extends MouseAdapter
 	public void onBeforeRender(BeforeRender event)
 	{
 		curHoveredOverlay = null;
+		hudKeepOut = null;
 
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
 			positionSnapcorners();
+			hudKeepOut = OverlayKeepOut.current(client);
 		}
 	}
 
@@ -327,6 +331,13 @@ public class OverlayRenderer extends MouseAdapter
 			if (overlay.getPreferredSize() != null)
 			{
 				bounds.setSize(overlay.getPreferredSize());
+			}
+
+			// Mobile veneer (null on desktop): keep the box off the chat, the minimap, the side panel and the shell's
+			// own controls, wherever it was snapped or dragged to
+			if (hudKeepOut != null)
+			{
+				hudKeepOut.place(overlay, overlayPosition, location);
 			}
 
 			safeRender(overlay, graphics, location);

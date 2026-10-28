@@ -643,6 +643,25 @@ public final class HudVeneerBridge
 		return new int[]{overlayInsetL, overlayInsetT, overlayInsetR, overlayInsetB};
 	}
 
+	// The shell's own controls drawn over the game (its tab grid, the column by the chat, its buttons, the plugin
+	// rail), flat {x,y,w,h,...} in shown canvas px. OverlayKeepOut keeps plugin overlay boxes off them.
+	private static volatile int[] overlayKeepOut = new int[0];
+
+	/**
+	 * Native: the shell's own controls over the game, as a flat {@code {x, y, w, h, ...}} list in shown canvas px.
+	 * Replaces the last list; null or empty clears it. Any thread.
+	 */
+	public static void setOverlayKeepOut(int[] rects)
+	{
+		overlayKeepOut = rects == null ? new int[0] : rects.clone();
+	}
+
+	/** The controls native last sent, flat {@code {x, y, w, h, ...}}. Any thread. */
+	static int[] overlayKeepOut()
+	{
+		return overlayKeepOut;
+	}
+
 	/**
 	 * The relocated chat's occupied canvas rect {x,y,w,h} for snap-corner avoidance — the native tab row only
 	 * while collapsed, the full chat box while open — or null when the veneer isn't relocating the chat.
@@ -3311,6 +3330,7 @@ public final class HudVeneerBridge
 	// The shells' column left of the chat (601's SIDE_LEFT_CHAT): 4 px down, 118 px tall with the keyboard stone,
 	// 79 without it (the chat is hidden).
 	static final int OFFICIAL_COLUMN_Y = 4;
+	static final int OFFICIAL_COLUMN_W = 58;
 	static final int OFFICIAL_COLUMN_H = 118;
 	static final int OFFICIAL_COLUMN_H_HIDDEN = 79;
 	static final int OFFICIAL_TAB_X = 7;
