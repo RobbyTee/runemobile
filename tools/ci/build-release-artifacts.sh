@@ -267,8 +267,9 @@ if wants android; then
 	# A missing keystore.properties makes gradle silently fall back to the debug key. That is fine for a local
 	# keyless build, but a PUBLISHED build MUST carry the documented release cert (README apksigner fingerprint) —
 	# a debug-signed APK breaks user `apksigner verify` trust AND can't upgrade a release-signed install. So when
-	# REQUIRE_RELEASE_KEY=1 (the CI/publish path sets it), refuse to proceed unless the cert matches. Same
-	# constant as android/dev-tools/ci/release-gate.sh Stage 2b.
+	# REQUIRE_RELEASE_KEY=1 (a local stable build sets it), refuse to proceed unless the cert matches. The hosted
+	# pipeline builds with the debug key on purpose and re-signs in a separate job, which checks the same
+	# constant (.github/workflows/release-hosted.yml, also android/dev-tools/ci/release-gate.sh Stage 2b).
 	EXPECTED_RELEASE_FP="45e305844d53a6265dc86eb399be997ab3fa2776f90f18b16fd4ec90f43d3c9e"
 	if [ "${REQUIRE_RELEASE_KEY:-0}" = 1 ]; then
 		[ -n "$APKSIGNER" ] || die "REQUIRE_RELEASE_KEY=1 but apksigner not found — cannot verify the signing cert"

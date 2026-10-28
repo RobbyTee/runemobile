@@ -297,22 +297,25 @@ release path depends on it.
 
 ### Rolling prereleases
 
-`.github/workflows/release-hosted.yml` runs on every push to `master` of the public repository, on a GitHub-hosted
-macOS runner:
+`.github/workflows/release-hosted.yml` runs on every push to `master` of the public repository, as three
+GitHub-hosted jobs. Only `sign` sees the signing key and only `publish` can write to the repository, and neither runs
+the build's third-party code ([`tools/ci/README.md`](../../tools/ci/README.md) has the reasoning):
 
 1. **Skip rules.** A push that only changes Markdown files, `LICENSE`, `upstream-sync.yml` or `CI.yml` builds nothing
    (`paths-ignore`). A newer push cancels a build still running (`cancel-in-progress`).
-2. **Inputs.** It decodes the Android release keystore from repository secrets and downloads the iOS JRE from the
-   `ios-jre-dep` release asset ([Hosted build inputs](#hosted-build-inputs)).
-3. **Pre-flight.** `./android/dev-tools/ci/release-gate.sh --contract-only`: the shared contract, the auth contract
-   and the hub pin.
-4. **Build.** `tools/ci/build-release-artifacts.sh` with `REQUIRE_RELEASE_KEY=1`, which fails the build unless the
-   APK carries the release certificate, and `IOS_ADHOC=1`, which builds the IPA unsigned and then ad-hoc-seals it.
-   AltStore and SideStore re-sign the IPA on the phone at install, so no Apple certificate, profile or team is ever
-   uploaded.
-5. **Publish.** `tools/ci/publish-rolling-release.sh` creates a draft prerelease tagged `master-<N>`, uploads every
-   asset to it, then publishes it in one step, so nobody ever sees a half-uploaded release. Only the newest few
-   rolling prereleases are kept. Stable `v*` releases are never touched.
+2. **Pre-flight** (`build`, macOS). `./android/dev-tools/ci/release-gate.sh --contract-only`: the shared contract, the
+   auth contract and the hub pin.
+3. **Inputs** (`build`). It downloads the iOS JRE from the `ios-jre-dep` release asset and stops unless its sha256
+   matches `IOS_JRE_SHA256` in the workflow ([Hosted build inputs](#hosted-build-inputs)).
+4. **Build** (`build`). `tools/ci/build-release-artifacts.sh` with no secrets: the APK is signed with the debug key,
+   and the IPA is built unsigned and then ad-hoc sealed (`IOS_ADHOC=1`). AltStore and SideStore re-sign the IPA on the
+   phone at install, so no Apple certificate, profile or team is ever uploaded.
+5. **Sign** (`sign`, Linux). With no checkout, it re-signs the APK with the release key using the runner's
+   `apksigner` and fails unless the APK carries the release certificate.
+6. **Publish** (`publish`, Linux). `tools/ci/publish-rolling-release.sh` creates a draft prerelease tagged
+   `master-<N>` on the commit that was built, uploads every asset to it, then publishes it in one step, so nobody ever
+   sees a half-uploaded release. Only the newest few rolling prereleases are kept. Stable `v*` releases are never
+   touched.
 
 Rolling builds are versioned `<semver>-master.<N>+<sha>`, where `<N>` is the workflow run number plus 1000, and get
 an Android `versionCode` of `1_000_000 + <N>`. That keeps rolling builds monotonic, and it has a side effect: every
@@ -390,9 +393,11 @@ tools/ci/setup-hosted-secrets.sh
 
 It needs `gh` logged in with admin rights on the public repository. It reads the keystore and its properties from
 `CI_CONFIG_DIR`, sets them as the Actions secrets `ANDROID_KEYSTORE_B64` and `ANDROID_KEYSTORE_PROPERTIES` (the
-workflow writes `storeFile` itself), and uploads the patched iOS JRE as the `ios-jre-dep` release asset. That JRE is
-patched local state rather than something a URL reproduces, so the hosted build downloads it instead of building it.
-Re-run the script after you rotate the key or rebuild the JRE.
+`sign` job reads only the passwords and alias from the latter), and uploads the patched iOS JRE as the `ios-jre-dep`
+release asset. That JRE is patched local state rather than something a URL reproduces, so the hosted build downloads
+it instead of building it. Re-run the script after you rotate the key or rebuild the JRE. After a JRE upload it prints
+the new sha256: set `IOS_JRE_SHA256` in `.github/workflows/release-hosted.yml` to it, since every hosted build stops at
+the JRE fetch until the pin matches.
 
 Branch protection on `master` is what makes the key-bearing build run only on reviewed code; the workflow's
 repository check alone controls where it runs, not what. `tools/ci/README.md` describes the protection to configure

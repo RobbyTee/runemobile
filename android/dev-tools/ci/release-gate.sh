@@ -3,7 +3,7 @@
 #
 # This script IS the gate — fully reproducible on a developer machine. The hosted release pipeline
 # (.github/workflows/release-hosted.yml, see tools/ci/README.md) runs only its --contract-only pre-flight, then
-# builds, release-signs and verifies the signing cert itself (tools/ci/build-release-artifacts.sh). The linters,
+# builds (tools/ci/build-release-artifacts.sh), release-signs in a separate job and verifies the cert. The linters,
 # the bridge unit tests, lintRelease and the opt-in device smoke run only here, so run the full gate before a
 # release push; this script, not CI, is the source of truth. (This fork ships an unapproved live-OSRS client and
 # is never published to a store.) Findings covered:

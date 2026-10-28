@@ -72,6 +72,11 @@ else
     --notes "Build input fetched by release-hosted.yml. Not an app release. OpenJDK build (GPLv2+CE)." >/dev/null
 fi
 ok "uploaded as the ios-jre-dep release asset"
+# The hosted build refuses any jre.tar.gz but the one it pins, so a new upload stops every build until the pin
+# moves.
+JRE_SHA="$(shasum -a 256 "$TMP/jre.tar.gz" | cut -d' ' -f1)"
+echo "  NOW set IOS_JRE_SHA256 in .github/workflows/release-hosted.yml to:"
+echo "    $JRE_SHA"
 echo
 
 say "Done — GitHub now has everything it needs to build and sign on its own."

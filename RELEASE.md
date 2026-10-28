@@ -64,9 +64,10 @@ backed up (a lost key means future updates require users to uninstall + reinstal
 
 The build reads the key through `android/keystore.properties` (gitignored; copy the example and fill it in),
 whose `storeFile` resolves relative to `android/`; without that file a release build falls back to the debug
-key. In CI, `.github/workflows/release-hosted.yml` builds that file from its `ANDROID_KEYSTORE_PROPERTIES` and
-`ANDROID_KEYSTORE_B64` secrets, and `tools/ci/build-release-artifacts.sh` (with `REQUIRE_RELEASE_KEY=1`)
-refuses an APK that doesn't carry the certificate above.
+key. In CI, `.github/workflows/release-hosted.yml` builds the APK with the debug key, then a separate `sign`
+job that runs none of the build's code re-signs it from the `ANDROID_KEYSTORE_B64` and
+`ANDROID_KEYSTORE_PROPERTIES` secrets and refuses an APK that doesn't carry the certificate above. A local
+build does the same check with `REQUIRE_RELEASE_KEY=1` (`tools/ci/build-release-artifacts.sh`).
 
 ## Versioning
 

@@ -6,12 +6,25 @@ StikDebug `runelite-jit.js` launch template. The job is gated to this repo's id,
 a mirror, another remote of the same clone) builds and releases nothing. A push that only touches Markdown, the
 `LICENSE` or the two non-release workflows skips the build too (`paths-ignore` in `release-hosted.yml`).
 
-The pipeline is **fully hosted on GitHub** — a `macos-15` runner, no self-hosted machine. Only **Android** needs
-real signing material (the APK installs directly, so it must carry the 45:E3 release key, materialized from a
-repo secret). The **IPA is ad-hoc-signed only** — AltStore/SideStore re-sign the whole bundle on-device at
-install, the only supported way to run it, so **no Apple cert/profile/team is ever uploaded**. The build reuses
-`tools/ci/*.sh` verbatim; its inputs come from a GitHub secret (Android keystore) + a release asset (the iOS
-JRE). Locally the same scripts read those inputs from `~/.runemobile-ci` instead.
+The pipeline is **fully hosted on GitHub**, with no self-hosted machine. Only **Android** needs real signing
+material (the APK installs directly, so it must carry the 45:E3 release key, materialized from a repo secret). The
+**IPA is ad-hoc-signed only** — AltStore/SideStore re-sign the whole bundle on-device at install, the only
+supported way to run it, so **no Apple cert/profile/team is ever uploaded**. The build reuses `tools/ci/*.sh`
+verbatim; its inputs come from a GitHub secret (Android keystore) + a release asset (the iOS JRE). Locally the
+same scripts read those inputs from `~/.runemobile-ci` instead.
+
+It runs as **three jobs, so no secret sits next to third-party build code**:
+
+| Job | Runner | Holds | Runs |
+|-----|--------|-------|------|
+| `build` | `macos-15` | no secret, read-only token | everything that pulls in outside code: Gradle and its dependencies, Homebrew, the SDK setup actions, upstream RuneLite's build logic. The APK comes out debug-key signed. |
+| `sign` | `ubuntu-24.04` | the Android release key, a token with no rights | no checkout and no repo code: the runner image's `apksigner` re-signs the APK and the job checks the 45:E3 certificate |
+| `publish` | `ubuntu-24.04` | the `contents: write` token | `publish-rolling-release.sh` and `gh`, from a fresh checkout; the build's `manifest.env` is read as data, never sourced |
+
+A compromised build input can still make that build's own APK and IPA malicious, since `sign` signs whatever
+`build` produced. What it can no longer do is steal the signing key, which would let it ship updates over every
+install for good, or rewrite other releases: the stable `v*` releases, the AltStore feed they carry, or the
+`ios-jre-dep` asset every later build fetches.
 
 ## Pieces
 
@@ -19,7 +32,7 @@ JRE). Locally the same scripts read those inputs from `~/.runemobile-ci` instead
 |------|------|
 | `tools/ci/build-release-artifacts.sh` | The build. Produces `dist/ci/RuneMobile-<ver>.{apk,ipa}` + `runelite-jit.js` + `manifest.env`. By default (`IOS_ADHOC=1`) it builds the IPA unsigned then ad-hoc-seals it (SideStore re-signs on install); `IOS_ADHOC=0` team-signs it, which embeds the developer's provisioning profile, so both publish scripts refuse that IPA. Runnable + testable locally. |
 | `tools/ci/publish-rolling-release.sh` | Publishes `dist/ci/` as a rolling prerelease on this repo. |
-| `.github/workflows/release-hosted.yml` | **The live pipeline.** `push:[master]` (+ dispatch) on the hosted `macos-15` runner: materialize inputs → contract pre-flight → build → publish. |
+| `.github/workflows/release-hosted.yml` | **The live pipeline.** `push:[master]` (+ dispatch): `build` (contract pre-flight → fetch + verify the iOS JRE → build) → `sign` → `publish`. |
 | `.github/workflows/CI.yml` | Upstream RuneLite's full build/test (JDK 11) on every push + PR — the public green/red check that keeps this repo building like RuneLite. |
 | `.github/workflows/upstream-sync.yml` | Polls `runelite/runelite` every 6 h and **fails loudly** (emails the owner) when upstream is ahead — a notifier, never an auto-merge (see *Upstream watch*). |
 | `tools/ci/setup-hosted-secrets.sh` | One-shot helper: uploads the Android keystore secrets + the `ios-jre-dep` release asset to this repo. |
@@ -37,10 +50,14 @@ tools/ci/build-release-artifacts.sh                               # full clean b
   and `versionCode = 1_000_000 + <run>`
   (kept above the semver-derived range so it stays monotonic). A plain local/tagged build passes neither override
   and gets the clean semver code/name. Gradle reads `-PversionCodeOverride` / `-PversionNameSuffix`.
-- **Signing is enforced, not assumed.** The build hard-fails (`REQUIRE_RELEASE_KEY=1`, set by the workflow)
-  unless the APK carries the documented **45:E3** release cert, so a missing/misconfigured keystore can never
-  silently ship a debug-signed build (which would also break user `apksigner verify` and can't upgrade a
-  release-signed install).
+- **Signing is enforced, not assumed.** The `sign` job fails unless the re-signed APK carries the documented
+  **45:E3** release cert, and a local stable build does the same with `REQUIRE_RELEASE_KEY=1`, so a
+  missing/misconfigured keystore can never silently ship a debug-signed build (which would also break user
+  `apksigner verify` and can't upgrade a release-signed install). `sign` uses exactly the schemes Gradle signs a
+  release with (v2 only, at `minSdk 28`), so a CI APK and a locally built one differ only in the signature bytes.
+- **The iOS JRE is pinned.** Its files become native code in every IPA, and a release asset can be replaced in
+  place, so `build` checks the downloaded `jre.tar.gz` against `IOS_JRE_SHA256` in the workflow and stops on a
+  mismatch. `setup-hosted-secrets.sh` prints the new value after an upload.
 - **Atomic publish.** Each merge is published as its OWN immutable prerelease, tag `master-<run>`: created as a
   DRAFT, all assets uploaded to the draft, then flipped to published in a single `gh release edit --draft=false`.
   A failed/cancelled publish can only leave an invisible, incomplete draft (reaped by retention) — users never
@@ -53,8 +70,8 @@ tools/ci/build-release-artifacts.sh                               # full clean b
   one malicious upstream commit exfiltrate the key (a compile gate can't prevent that). So the merge is a
   **reviewed manual step**, done by the *Upstream merge playbook* below; `release-hosted` then rebuilds and
   republishes both apps.
-- **Secret-bearing runs are gated to master + this repo id.** `release-hosted` (which decodes the Android
-  signing key) runs only on `github.repository_id == '1296635776'` **and** `github.ref == 'refs/heads/master'`,
+- **Secret-bearing runs are gated to master + this repo id.** Every `release-hosted` job (`sign` decodes the
+  Android signing key) runs only on `github.repository_id == '1296635776'` **and** `github.ref == 'refs/heads/master'`,
   so a dispatch/push on any other branch — or in a fork, which never receives secrets — can't run with the
   production key. Third-party actions are **pinned to full commit SHAs** (not mutable tags). This guard controls
   *where* the key-bearing build runs; it does **not** by itself prove the master commit was reviewed. That

@@ -1,26 +1,41 @@
 # RuneMobile rolling release — FULLY HOSTED on GitHub (no self-hosted Mac, no private repo).
 #
-# Builds a release APK + an ad-hoc-signed IPA on a GitHub-hosted macOS runner and publishes them as a rolling
-# prerelease on THIS repo. The APK is release-signed with the 45:E3 key (it installs directly). The IPA is
-# ad-hoc-signed only — AltStore/SideStore re-sign it on-device at install, the only supported way to run it, so
-# CI needs no Apple cert/profile/team. It reuses the tested build/publish scripts (tools/ci/*.sh) verbatim; the
-# only new work is providing their two inputs (Android keystore + iOS JRE) from a GitHub secret + a release
-# asset instead of the developer Mac's ~/.runemobile-ci.
+# Builds a release APK + an ad-hoc-signed IPA on GitHub-hosted runners and publishes them as a rolling prerelease
+# on THIS repo. The APK is release-signed with the 45:E3 key (it installs directly). The IPA is ad-hoc-signed
+# only — AltStore/SideStore re-sign it on-device at install, the only supported way to run it, so CI needs no
+# Apple cert/profile/team. It reuses the tested build/publish scripts (tools/ci/*.sh) verbatim; the only new work
+# is providing their inputs (Android keystore + iOS JRE) from GitHub secrets + a release asset instead of the
+# developer Mac's ~/.runemobile-ci.
 #
-# ── STATUS: LIVE ─────────────────────────────────────────────────────────────────────────────────────────
+# ── THREE JOBS, SO NO SECRET SITS NEXT TO THIRD-PARTY BUILD CODE ─────────────────────────────────────────────
+#   build    macOS. Runs everything that pulls in outside code: Gradle with its plugins and dependencies,
+#            Homebrew, the SDK setup actions, upstream RuneLite's build logic. It gets NO secret and a read-only
+#            token. The APK comes out signed with the throwaway debug key.
+#   sign     Linux. Holds the Android release key and nothing else: no checkout, no repo code, only the runner
+#            image's apksigner. It re-signs the APK, proves the 45:E3 certificate, and its token has no rights.
+#   publish  Linux. Holds the contents:write token and runs only tools/ci/publish-rolling-release.sh and gh,
+#            from a fresh checkout. That script reads the build's manifest.env as data, never as shell.
+# A compromised build input can still make THIS build's APK/IPA malicious (sign signs whatever build produced),
+# but it can no longer steal the signing key, which would be permanent, or rewrite other releases: the stable
+# v* releases, the AltStore feed they carry, or the ios-jre-dep asset every later build fetches.
+#
+# ── STATUS: LIVE ─────────────────────────────────────────────────────────────────────────────────────────────
 # Proven green end-to-end (both apps built + published from the hosted macOS runner, master-1014/1015), so the
-# trigger is now `push: branches: [master]`: every merge to master rebuilds + releases both apps. A manual
-# workflow_dispatch is kept for on-demand rebuilds.
+# trigger is `push: branches: [master]`: every merge to master rebuilds + releases both apps. A manual
+# workflow_dispatch is kept for on-demand rebuilds. (The three-job split replaced the single build-and-publish
+# job on 2026-10-28.)
 #
-# ── REQUIRED SETUP (one-time, done by the repo owner — run tools/ci/setup-hosted-secrets.sh) ─────────────
+# ── REQUIRED SETUP (one-time, done by the repo owner — run tools/ci/setup-hosted-secrets.sh) ─────────────────
 # Only ANDROID needs real signing material — the APK installs directly, so it must carry the release key. The
 # IPA is ad-hoc-signed and re-signed on-device by AltStore/SideStore, so NO Apple cert/profile is uploaded.
-# Repository secrets (Settings → Secrets and variables → Actions):
+# Repository secrets (Settings → Secrets and variables → Actions), read only by the sign job:
 #   ANDROID_KEYSTORE_B64        base64 of the release .jks
-#   ANDROID_KEYSTORE_PROPERTIES keystore.properties minus storeFile (this workflow pins storeFile itself)
-# Release asset (the iOS JRE, ~166 MB, not URL-reproducible), uploaded by the same helper:
+#   ANDROID_KEYSTORE_PROPERTIES keystore.properties minus storeFile (only the passwords + alias are read)
+# Release asset (the iOS JRE, ~89 MB packed, not URL-reproducible), uploaded by the same helper:
 #   gh release create ios-jre-dep <jre.tar.gz> --repo <owner>/<repo> --prerelease
 #   (Publishing an OpenJDK build is fine — GPLv2+CE, and it already ships inside every IPA.)
+# The build pins that asset's sha256 (IOS_JRE_SHA256 below). The helper prints the new value after an upload;
+# until the pin is updated, every build stops at the JRE fetch.
 
 name: release-hosted
 
@@ -43,23 +58,31 @@ concurrency:
   group: release-hosted
   cancel-in-progress: true
 
+# Every job states its own token rights; anything not listed is none.
+permissions: {}
+
 jobs:
-  build-and-publish:
+  build:
     # Runs only on the canonical public repo (id 1296635776) AND only against master — so a workflow_dispatch
-    # (or later push) on any other branch can't run untrusted code with the production signing secrets. Inert
-    # in forks; fork PRs never receive secrets regardless — this is defense in depth. (Optional further
-    # hardening: bind this job to a `production` deployment environment whose deployment branch is master.)
+    # (or later push) on any other branch can't reach the signing secrets in the sign job. Inert in forks; fork
+    # PRs never receive secrets regardless — this is defense in depth. All three jobs carry the same guard.
+    # (Optional further hardening: move the two secrets into a `release` environment whose deployment branch is
+    # master, and bind the sign job to it.)
     if: github.repository_id == '1296635776' && github.ref == 'refs/heads/master'
     runs-on: macos-15   # macos-14 entered GitHub runner deprecation 2026-07-06; macos-15 is GA (Xcode 16.x)
     permissions:
-      contents: write   # publish the rolling release to THIS repo (no PUBLISH_TOKEN needed anymore)
+      contents: read    # checkout + download the ios-jre-dep asset; nothing here can write to the repo
     env:
       GIT_SHA: ${{ github.sha }}
-      REQUIRE_RELEASE_KEY: "1"           # refuse to publish an APK not signed by the real release key
-      IOS_ADHOC: "1"                     # ad-hoc-sign the IPA — AltStore/SideStore re-signs it on-device
+      IOS_ADHOC: "1"    # ad-hoc-sign the IPA — AltStore/SideStore re-signs it on-device (also the script default)
+      # sha256 of the ios-jre-dep asset (jre.tar.gz). Its contents become native code in every IPA, and a release
+      # asset can be replaced in place, so the build refuses any other file.
+      IOS_JRE_SHA256: 421ce7afad50355cc4a92ac89cd655bd7e384784429de3472b3150988a583706
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false   # the build never pushes, so keep the token out of .git/config
 
       - name: Compute build env
         # GitHub Actions expressions have no arithmetic and no `runner.*` at job-env scope, so BUILD_NUMBER and
@@ -94,39 +117,121 @@ jobs:
       - name: Contract pre-flight (fast, non-bypassable)
         run: ./android/dev-tools/ci/release-gate.sh --contract-only
 
-      - name: Materialize Android signing from secrets  (nothing here is echoed)
-        env:
-          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-          ANDROID_KEYSTORE_PROPERTIES: ${{ secrets.ANDROID_KEYSTORE_PROPERTIES }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$CI_CONFIG_DIR"
-          # Android is the only real signer: the APK installs directly (no re-signer), so it needs the release
-          # key. Write passwords/alias from the secret, decode the keystore, and pin storeFile to the runner's
-          # absolute path (appended last so it wins over any stale storeFile the secret may carry).
-          printf '%s\n' "$ANDROID_KEYSTORE_PROPERTIES" > "$CI_CONFIG_DIR/keystore.properties"
-          echo "$ANDROID_KEYSTORE_B64" | base64 --decode > "$GITHUB_WORKSPACE/android/app/release.jks"
-          printf 'storeFile=%s\n' "$GITHUB_WORKSPACE/android/app/release.jks" >> "$CI_CONFIG_DIR/keystore.properties"
-          # iOS needs NO signing material here — IOS_ADHOC=1 ad-hoc-signs, and AltStore/SideStore re-signs the
-          # IPA on-device at install (the only supported way to run it).
-
       - name: Fetch the iOS JRE build dependency
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p "$CI_CONFIG_DIR/ios-jre"
           gh release download ios-jre-dep --repo "$GITHUB_REPOSITORY" --pattern 'jre.tar.gz' --output "$RUNNER_TEMP/jre.tar.gz"
+          echo "$IOS_JRE_SHA256  $RUNNER_TEMP/jre.tar.gz" | shasum -a 256 -c - \
+            || { echo "::error::ios-jre-dep/jre.tar.gz does not match IOS_JRE_SHA256 in release-hosted.yml"; exit 1; }
           tar xzf "$RUNNER_TEMP/jre.tar.gz" -C "$CI_CONFIG_DIR/ios-jre" --strip-components=1
 
-      - name: Build release APK + ad-hoc IPA
+      - name: Build APK (debug key) + ad-hoc IPA
+        # No keystore.properties exists in this job, so Gradle signs the APK with the throwaway debug key; the
+        # sign job replaces that signature. REQUIRE_RELEASE_KEY stays unset here for the same reason.
         run: |
-          export GIT_SHA="$(git rev-parse --short "${GIT_SHA}")"
+          GIT_SHA="$(git rev-parse --short "${GIT_SHA}")"
+          export GIT_SHA
           tools/ci/build-release-artifacts.sh
+
+      - name: Hand the artifacts to the sign job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned
+          path: dist/ci/
+          if-no-files-found: error
+          retention-days: 1
+
+  sign:
+    needs: build
+    if: github.repository_id == '1296635776' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    # No token rights: this job only moves artifacts within the run (which needs none) and signs.
+    permissions: {}
+    steps:
+      # Deliberately NO checkout: nothing from the repo or the build runs here. The artifact is data that
+      # apksigner reads; manifest.env is edited as text and never sourced.
+      - name: Fetch the build's artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: unsigned
+          path: dist
+
+      - name: Re-sign the APK with the release key  (nothing here is echoed)
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PROPERTIES: ${{ secrets.ANDROID_KEYSTORE_PROPERTIES }}
+          # The 45:E3 release certificate. Same constant as tools/ci/build-release-artifacts.sh and
+          # android/dev-tools/ci/release-gate.sh Stage 2b.
+          EXPECTED_RELEASE_FP: 45e305844d53a6265dc86eb399be997ab3fa2776f90f18b16fd4ec90f43d3c9e
+        run: |
+          set -euo pipefail
+          umask 077
+          shopt -s nullglob
+          apks=(dist/RuneMobile-*.apk)
+          [ "${#apks[@]}" = 1 ] || { echo "::error::expected exactly one APK from the build, got ${#apks[@]}"; exit 1; }
+          APK="${apks[0]}"
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          [ -x "$BT/apksigner" ] || { echo "::error::no apksigner under $ANDROID_HOME/build-tools"; exit 1; }
+
+          # Read the passwords and alias the way Gradle does (key=value, both sides trimmed).
+          prop() {
+            printf '%s\n' "$ANDROID_KEYSTORE_PROPERTIES" | tr -d '\r' \
+              | sed -n "s/^[[:space:]]*$1[[:space:]]*=//p" | head -1 | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+          }
+          KS_PASS="$(prop storePassword)"; KEY_PASS="$(prop keyPassword)"; ALIAS="$(prop keyAlias)"
+          [ -n "$KS_PASS" ] && [ -n "$KEY_PASS" ] && [ -n "$ALIAS" ] \
+            || { echo "::error::ANDROID_KEYSTORE_PROPERTIES lacks storePassword, keyPassword or keyAlias"; exit 1; }
+          echo "::add-mask::$KS_PASS"; echo "::add-mask::$KEY_PASS"
+          export KS_PASS KEY_PASS
+          KS="$RUNNER_TEMP/release.jks"
+          trap 'rm -f "$KS"' EXIT
+          printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$KS"
+
+          # Exactly the schemes Gradle signs a release with today (v2 only, minSdk 28), so the re-signed APK
+          # differs from a locally built one in nothing but the bytes of the signature block. apksigner drops the
+          # debug signature it replaces, and the build already aligned the APK.
+          "$BT/apksigner" sign --v1-signing-enabled false --v2-signing-enabled true --v3-signing-enabled false \
+            --v4-signing-enabled false --ks "$KS" --ks-key-alias "$ALIAS" --ks-pass env:KS_PASS --key-pass env:KEY_PASS \
+            --out "$RUNNER_TEMP/signed.apk" "$APK"
+          FP="$("$BT/apksigner" verify --print-certs "$RUNNER_TEMP/signed.apk" | sed -nE 's/.*SHA-256 digest: ([0-9a-f]+).*/\1/p' | head -1)"
+          [ "$FP" = "$EXPECTED_RELEASE_FP" ] \
+            || { echo "::error::the re-signed APK carries '${FP:-none}', not the 45:E3 release certificate"; exit 1; }
+          mv "$RUNNER_TEMP/signed.apk" "$APK"
+          sed "s/^APK_FINGERPRINT=.*/APK_FINGERPRINT=$FP/" dist/manifest.env > "$RUNNER_TEMP/manifest.env"
+          mv "$RUNNER_TEMP/manifest.env" dist/manifest.env
+          echo "signing verified: release cert 45:E3… on $(basename "$APK")"
+
+      - name: Hand the signed artifacts to the publish job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: sign
+    if: github.repository_id == '1296635776' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # publish the rolling release to THIS repo (no PUBLISH_TOKEN needed)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false   # the token reaches gh through PUBLISH_TOKEN only
+
+      - name: Fetch the signed artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signed
+          path: dist/ci
 
       - name: Publish rolling prerelease to this repo
         env:
-          PUBLISH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # same-repo publish — the built-in token suffices
-        run: |
-          export GIT_SHA="$(git rev-parse --short HEAD)"
-          tools/ci/publish-rolling-release.sh
+          PUBLISH_TOKEN: ${{ github.token }}   # same-repo publish — the built-in token suffices
+          TARGET_COMMIT: ${{ github.sha }}     # tag the commit that was built, not wherever master is now
+        run: tools/ci/publish-rolling-release.sh dist/ci
