@@ -38,10 +38,13 @@ import java.lang.reflect.Type;
 import java.util.ArrayDeque;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.swing.JPanel;
 import javax.swing.JWindow;
 import javax.swing.SwingUtilities;
@@ -1189,10 +1192,33 @@ public final class MobileUiBridge
 		}
 		// A line or block break becomes a space so its words don't run together; inline tags just go.
 		final String text = desc.replaceAll("(?i)</?(br|p|div|li|ul|ol|tr|td|h[1-6])\\b[^>]*>", " ")
-			.replaceAll("<[^>]*>", "")
-			.replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
-			.replace("&#39;", "'").replace("&amp;", "&");
-		return text.replaceAll("\\s+", " ").trim();
+			.replaceAll("<[^>]*>", "");
+		return decodeEntities(text).replaceAll("[\\s\\u00A0]+", " ").trim();
+	}
+
+	private static final Pattern HTML_ENTITY = Pattern.compile("&(#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z]+);");
+	private static final Map<String, String> NAMED_ENTITIES = Map.of(
+		"nbsp", " ", "lt", "<", "gt", ">", "quot", "\"", "apos", "'", "amp", "&");
+
+	/** Numeric entities and the common named ones, in one pass so "&amp;lt;" stays "&lt;"; any other stays as written. */
+	private static String decodeEntities(String text)
+	{
+		final Matcher m = HTML_ENTITY.matcher(text);
+		final StringBuilder out = new StringBuilder();
+		while (m.find())
+		{
+			final String e = m.group(1);
+			String to = NAMED_ENTITIES.get(e);
+			if (e.charAt(0) == '#')
+			{
+				final boolean hex = e.length() > 1 && (e.charAt(1) == 'x' || e.charAt(1) == 'X');
+				final int cp = Integer.parseInt(e.substring(hex ? 2 : 1), hex ? 16 : 10);
+				to = Character.isValidCodePoint(cp) ? new String(Character.toChars(cp)) : null;
+			}
+			m.appendReplacement(out, Matcher.quoteReplacement(to != null ? to : m.group()));
+		}
+		m.appendTail(out);
+		return out.toString();
 	}
 
 	/** Install a hub plugin by internal name (config write + flush so it persists; load happens async). */

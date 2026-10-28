@@ -156,6 +156,8 @@ public class MobileUiBridgeTest
 			MobileUiBridge.hubDescription("<html>Talks to the <b>1Password</b> CLI.<br>Needs <i>op</i> &amp; a vault</html>"));
 		assertEquals("First. Second, in bold.",
 			MobileUiBridge.hubDescription("<html><p>First.</p><p>Second, in <b>bold</b>.</p></html>"));
+		assertEquals("It\u2019s Bob's \u2014 5 < 6, &lt; as typed, &bogus; kept",
+			MobileUiBridge.hubDescription("<html>It&#8217;s Bob&apos;s &#x2014; 5 &lt; 6, &amp;lt; as typed, &bogus; kept"));
 		// Desktop escapes a description without the prefix, so its text stands as written.
 		assertEquals("Shows <b> as typed", MobileUiBridge.hubDescription("Shows <b> as typed"));
 		assertEquals(null, MobileUiBridge.hubDescription(null));
