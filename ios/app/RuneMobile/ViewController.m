@@ -9782,9 +9782,10 @@ static CGRect mapRectFromArr(NSArray *a) {
 // plugin sweep (sim-screens/plugin-sweep.py) uses to tell a blank screen from a full one without a golden per
 // plugin. Three commands open nothing:
 //   inventory  writes Documents/screen-inventory.json, the plugin list and the rail's panels, for the sweep to walk;
-//   prepare    applies Documents/screen-prepare.json, {"enable": [plugin class names], "config": [[group, key,
-//              value]]}, so panels this config hides (a plugin switched off, a button only shown in one place) get
-//              swept too. It first saves what it changes to screen-restore.json;
+//   prepare    applies Documents/screen-prepare.json, {"enable": [plugin class names], "disable": [plugin class
+//              names], "config": [[group, key, value]]}, so panels this config hides (a plugin switched off, a
+//              button only shown in one place) get swept too, or a capture shows the game without a plugin. It
+//              first saves what it changes to screen-restore.json;
 //   restore    puts that back. The next simulator launch does too, if a sweep died before it got there.
 
 static NSString *simScreenSeq;    // the last command's seq
@@ -9866,6 +9867,20 @@ static const CFTimeInterval kSimConfirmTimeout = 15.0;
         [self appendLine:[NSString stringWithFormat:@"[screen] ready %@ %@", seq, name]];
         return;
     }
+    // "game <verb> ...": play through the same handlers a finger uses, so a script can set a scene up for a capture.
+    // Points are the game view's, in pt.
+    if ([name hasPrefix:@"game "]) {
+        NSString *input = [name substringFromIndex:5];
+        NSString *why = [self simGameInput:input];
+        if (!why && [input hasPrefix:@"hold "]) {
+            // The engine builds the menu on a later frame: answer once it is open, or a pick sent next finds none.
+            [self simAnswerOnceMenuOpens:seq name:name tries:30];
+            return;
+        }
+        [self appendLine:why ? [NSString stringWithFormat:@"[screen] failed %@ %@: %@", seq, name, why]
+                             : [NSString stringWithFormat:@"[screen] ready %@ %@", seq, name]];
+        return;
+    }
     __weak typeof(self) ws = self;
     if ([name isEqualToString:@"inventory"] || [name isEqualToString:@"prepare"] ||
         [name isEqualToString:@"restore"]) {
@@ -9890,6 +9905,156 @@ static const CFTimeInterval kSimConfirmTimeout = 15.0;
         simScreenOpened = [NSString stringWithFormat:@"%@ %@", seq, name];
         simScreenOpenedAt = CACurrentMediaTime();
     }];
+}
+
+// Logs ready for a "game hold" once its menu's rows are built, checking every 0.1 s, or failed after `tries`
+// checks. (menuOpen alone won't do: the press sets it before the engine has built the menu.)
+- (void)simAnswerOnceMenuOpens:(NSString *)seq name:(NSString *)name tries:(int)tries {
+    BOOL built = self.menuOpen && !self.menuBuilding && self.menuContainer;
+    if (!self.menuOpen || !self.menuBuilding || tries <= 0) { // built, closed, or the build gave up (0.6 s)
+        [self appendLine:built ? [NSString stringWithFormat:@"[screen] ready %@ %@", seq, name]
+                               : [NSString stringWithFormat:@"[screen] failed %@ %@: no menu opened", seq, name]];
+        return;
+    }
+    __weak typeof(self) ws = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [ws simAnswerOnceMenuOpens:seq name:name tries:tries - 1];
+    });
+}
+
+// The "game" driver verbs. Returns why one didn't run, or nil.
+//   tap X Y       a tap there, routed as a finger's is (worldTapAtScreenPoint:)
+//   hold X Y      a long press there: answers once the right-click menu is open, so a pick can follow
+//   pick TEXT     choose the open menu's first row whose option and target contain TEXT (any case); in a tap
+//                 list a submenu's parent row opens it, so pick again to choose inside
+//   camera DX DY  turn the camera as a two-finger drag of that many px does
+//   zoom N        N wheel notches at the middle of the game (negative zooms in)
+//   key CODE      one AWT key stroke (27 = Escape)
+//   text WORDS    type the words
+//   unhover       take the pointer off the game, so no hover tooltip is left showing
+//   button LABEL  press the shown native control with that accessibility label (or segment with that title)
+- (NSString *)simGameInput:(NSString *)input {
+    if (![JVMLauncher bridgeReady])
+        return @"the bridge isn't up";
+    NSArray<NSString *> *w = [input componentsSeparatedByString:@" "];
+    NSString *verb = w.firstObject;
+    NSString *rest = w.count > 1 ? [input substringFromIndex:verb.length + 1] : @"";
+    CGPoint p = w.count == 3 ? CGPointMake(w[1].doubleValue, w[2].doubleValue) : CGPointZero;
+    if ([verb isEqualToString:@"tap"] && w.count == 3) {
+        [self worldTapAtScreenPoint:p];
+        return nil;
+    }
+    if ([verb isEqualToString:@"hold"] && w.count == 3) {
+        int gx = 0, gy = 0;
+        if (![self mapPoint:p toGameX:&gx toGameY:&gy])
+            return @"that point is off the game";
+        [JVMLauncher postCancelArmedTap];
+        [self openEngineMenuAtGameX:gx gameY:gy anchor:p];
+        return nil;
+    }
+    if ([verb isEqualToString:@"pick"] && rest.length) {
+        if (!self.menuOpen || !self.menuContainer)
+            return @"no menu is open";
+        NSString *want = rest.lowercaseString;
+        if (self.menuTapMode) {
+            // The tap list (submenus, or too many rows to drag): press the shown row as a finger would. A parent
+            // row opens its submenu, so a second pick chooses inside it.
+            for (UIView *v in self.menuRows) {
+                if (![v isKindOfClass:[UIButton class]])
+                    continue;
+                NSString *row = ((UIButton *)v).currentAttributedTitle.string ?: @"";
+                row = [row stringByReplacingOccurrencesOfString:@"<[^>]*>"
+                                                     withString:@""
+                                                        options:NSRegularExpressionSearch
+                                                          range:NSMakeRange(0, row.length)];
+                if ([row.lowercaseString rangeOfString:want].location != NSNotFound) {
+                    [self onTapMenuRow:(UIButton *)v];
+                    return nil;
+                }
+            }
+            return @"no row has that text";
+        }
+        if (!self.menuGeomValid)
+            return @"no menu is open";
+        for (NSInteger k = 0; k < (NSInteger)self.menuRowEntries.count; k++) {
+            NSDictionary *e = [self.menuRowEntries[k] isKindOfClass:[NSDictionary class]] ? self.menuRowEntries[k] : @{};
+            NSString *row = [NSString stringWithFormat:@"%@ %@", e[@"opt"] ?: @"", e[@"tgt"] ?: @""];
+            row = [row stringByReplacingOccurrencesOfString:@"<[^>]*>"
+                                                 withString:@""
+                                                    options:NSRegularExpressionSearch
+                                                      range:NSMakeRange(0, row.length)];
+            if ([row.lowercaseString rangeOfString:want].location == NSNotFound)
+                continue;
+            // The engine row's centre, as a drag over the native row reports it (updateNativeMenuHighlight:).
+            CGRect r = self.menuGeomGame;
+            self.menuSelX = (int)lround(CGRectGetMidX(r));
+            self.menuSelY = (int)CGRectGetMinY(r) + kMenuHeaderPx + (int)k * kMenuRowPx + kMenuRowPx / 2;
+            self.menuFingerOnMenu = YES;
+            [self commitMenuSelection];
+            return nil;
+        }
+        return @"no row has that text";
+    }
+    if ([verb isEqualToString:@"camera"] && w.count == 3) {
+        [JVMLauncher postCameraDx:w[1].intValue dy:w[2].intValue];
+        return nil;
+    }
+    if ([verb isEqualToString:@"zoom"] && w.count == 2) {
+        int gx = 0, gy = 0;
+        CGRect b = self.screen.bounds;
+        if (![self mapPoint:CGPointMake(CGRectGetMidX(b), CGRectGetMidY(b)) toGameX:&gx toGameY:&gy])
+            return @"no game picture";
+        [JVMLauncher postWheelX:gx y:gy rotation:w[1].intValue];
+        return nil;
+    }
+    if ([verb isEqualToString:@"key"] && w.count == 2) {
+        [JVMLauncher postKeyStroke:w[1].intValue];
+        return nil;
+    }
+    if ([verb isEqualToString:@"unhover"]) {
+        [JVMLauncher postClearHover];
+        return nil;
+    }
+    if ([verb isEqualToString:@"button"] && rest.length) {
+        // A native control anywhere in the window (a presented panel too), frontmost first, by its accessibility
+        // label, or a segment of a segmented control by its title. A tap on one never reaches the game.
+        // (Not self.view.window: a full-screen presentation takes this view out of the window.)
+        UIView *root = [UIApplication sharedApplication].delegate.window ?: self.view;
+        NSMutableArray<UIView *> *todo = [NSMutableArray arrayWithObject:root];
+        while (todo.count) {
+            UIView *v = todo.lastObject;
+            [todo removeLastObject];
+            if (v.hidden || v.alpha < 0.01)
+                continue;
+            if ([v isKindOfClass:[UISegmentedControl class]] && v.userInteractionEnabled) {
+                UISegmentedControl *seg = (UISegmentedControl *)v;
+                for (NSUInteger i = 0; i < seg.numberOfSegments; i++) {
+                    NSString *title = [seg titleForSegmentAtIndex:i]; // nil for an image segment
+                    if (title && [title caseInsensitiveCompare:rest] == NSOrderedSame) {
+                        seg.selectedSegmentIndex = (NSInteger)i;
+                        [seg sendActionsForControlEvents:UIControlEventValueChanged];
+                        return nil;
+                    }
+                }
+            }
+            // (A nil label must not match: a compare sent to nil answers 0, which is NSOrderedSame.)
+            if ([v isKindOfClass:[UIControl class]] && v.userInteractionEnabled && v.accessibilityLabel &&
+                [v.accessibilityLabel caseInsensitiveCompare:rest] == NSOrderedSame) {
+                [self appendLine:[NSString stringWithFormat:@"[screen] pressing %@ at %@", NSStringFromClass(v.class),
+                                                            NSStringFromCGRect([v convertRect:v.bounds
+                                                                                       toView:self.view])]];
+                [(UIControl *)v sendActionsForControlEvents:UIControlEventTouchUpInside];
+                return nil;
+            }
+            [todo addObjectsFromArray:v.subviews];
+        }
+        return @"no shown control has that label";
+    }
+    if ([verb isEqualToString:@"text"] && rest.length) {
+        [JVMLauncher postText:rest];
+        return nil;
+    }
+    return @"unknown game verb";
 }
 
 // Opens a screen through the same entry point as its button. Returns why it didn't open, or nil.
@@ -10060,7 +10225,7 @@ static NSString *simPluginsPending(NSDictionary<NSString *, NSNumber *> *expect)
     [self simWaitFor:applied since:start then:flush];
 }
 
-// "prepare": switch on the plugins and change the settings screen-prepare.json names, after saving what each was to
+// "prepare": switch the plugins on or off and change the settings screen-prepare.json names, after saving what each was to
 // screen-restore.json. Only what actually changes is saved, so a restore touches nothing else. A setting with no
 // stored value is refused: the bridge can only write a value, so a restore couldn't make it unset again. RuneLite
 // stores every plugin's defaults when it starts, so only an item without a default has none.
@@ -10094,6 +10259,12 @@ static NSString *simPluginsPending(NSDictionary<NSString *, NSNumber *> *expect)
                 wasEnabled[cls] = @NO;
         }
     }
+    for (NSString *cls in want[@"disable"]) {
+        for (NSDictionary *p in plugins) {
+            if ([[p[@"className"] description] isEqualToString:cls] && [p[@"enabled"] boolValue])
+                wasEnabled[cls] = @YES;
+        }
+    }
     NSMutableArray *wasConfig = [NSMutableArray array];
     for (NSArray *c in want[@"config"]) {
         if (!simIsSetting(c))
@@ -10118,12 +10289,12 @@ static NSString *simPluginsPending(NSDictionary<NSString *, NSNumber *> *expect)
         return @"couldn't write screen-restore.json";
     NSMutableDictionary *enable = [NSMutableDictionary dictionary];
     for (NSString *cls in wasEnabled)
-        enable[cls] = @YES;
+        enable[cls] = @(![wasEnabled[cls] boolValue]);
     // Whatever this gets through before a failure is in screen-restore.json, so a restore puts it back.
     NSString *why = [self simApplyPlugins:enable config:want[@"config"] expect:expect writeId:writeId];
     if (why)
         return why;
-    [self appendLine:[NSString stringWithFormat:@"[screen] prepare: switched on %lu plugin(s), changed %lu setting(s)",
+    [self appendLine:[NSString stringWithFormat:@"[screen] prepare: switched %lu plugin(s), changed %lu setting(s)",
                                                 (unsigned long)wasEnabled.count, (unsigned long)wasConfig.count]];
     return nil;
 }
