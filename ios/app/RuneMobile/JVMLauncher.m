@@ -491,6 +491,7 @@ static jmethodID gMidGetChatLines = NULL;    // getChatLines()Ljava/lang/String;
 static jmethodID gMidGetDialogue = NULL;     // getDialogueJson()Ljava/lang/String;  (native-rendered dialogue)
 static jmethodID gMidGetDlgSeq = NULL;       // getDialogueSeq()J — bumped only when the dialogue CHANGES
 static jmethodID gMidSetOverlayInsets = NULL; // setOverlaySafeInsets(IIII)V (snap-corner safe frame)
+static jmethodID gMidSetOverlayKeepOut = NULL; // setOverlayKeepOut([I)V (the shell's controls, kept clear of overlays)
 static jmethodID gMidSetHudStrip = NULL;      // setHudStrip(III)V (large portrait: shown rows + window band)
 static jmethodID gMidPanMap = NULL;          // panWorldMap(II)V  (world map: finger pan -> map centre)
 static jmethodID gMidOpenWorldMap = NULL;    // openWorldMap()V  (world map: discoverable one-shot open)
@@ -575,6 +576,11 @@ static BOOL ensureVeneer(void) {
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         gMidSetOverlayInsets = NULL;
+    }
+    gMidSetOverlayKeepOut = (*env)->GetStaticMethodID(env, global, "setOverlayKeepOut", "([I)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidSetOverlayKeepOut = NULL;
     }
     gMidSetHudStrip = (*env)->GetStaticMethodID(env, global, "setHudStrip", "(III)V");
     if ((*env)->ExceptionCheck(env)) {
@@ -3307,6 +3313,24 @@ static BOOL pipFeedMarkerSaysMain(void) {
     JNIEnv *env = gMainEnv;
     (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetOverlayInsets, (jint)l, (jint)t, (jint)r, (jint)b);
     if ((*env)->ExceptionCheck(env)) { bridgeNoteClear(env, "JVMLauncher.setEngineOverlaySafeInsets"); }
+}
+
++ (void)setEngineOverlayKeepOut:(const int *)rects count:(int)count {
+    if (!ensureVeneer() || !gMidSetOverlayKeepOut)
+        return;
+    JNIEnv *env = gMainEnv;
+    jintArray a = (*env)->NewIntArray(env, count);
+    if (a == NULL) {
+        bridgeNoteClear(env, "JVMLauncher.setEngineOverlayKeepOut");
+        return;
+    }
+    if (count > 0)
+        (*env)->SetIntArrayRegion(env, a, 0, count, (const jint *)rects);
+    (*env)->CallStaticVoidMethod(env, gVeneerClass, gMidSetOverlayKeepOut, a);
+    (*env)->DeleteLocalRef(env, a);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.setEngineOverlayKeepOut");
+    }
 }
 
 + (void)setEngineHudStripRows:(int)visibleRows windowTop:(int)top bottom:(int)bottom {

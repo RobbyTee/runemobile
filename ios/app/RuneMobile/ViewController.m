@@ -597,6 +597,7 @@ static NSString *RMPasteLine(NSString *s) {
 @property (nonatomic, strong) UIButton *pluginButton;
 @property (nonatomic, strong) UIButton *overlaysCardButton;   // plugin card: enters overlay edit-mode
 @property (nonatomic, strong) OverlayEditView *overlayEdit;   // active overlay edit-mode view (OVL-2/3/5)
+@property (nonatomic, strong) NSData *sentKeepOut;            // the controls last sent to the engine (updateOverlayKeepOut)
 // FIX-9 (iOS parity with Android ReconnectingOverlayView): a native "Reconnecting…" scrim shown over the live
 // frame while the headless auto-reconnect recovers an in-session drop, driven off the chrome snapshot's
 // "reconnecting" flag (HeadlessLogin.isReconnecting -> MobileChromeBridge). reconnectShown = last-applied state.
@@ -6906,6 +6907,50 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
                                                 self.minimapBaseY, self.minimapUserDX, self.minimapUserDY, leftC, topC, rightC, k]];
 }
 
+// The shell's own controls over the game, sent to the engine so plugin overlay boxes keep off them
+// (HudVeneerBridge.setOverlayKeepOut): every enabled control a tap can reach and every view a tap gesture listens on,
+// in canvas px. The engine adds its own HUD (the chat, the minimap, the side panel). Sent only when the list changes.
+- (void)updateOverlayKeepOut {
+    CGFloat W = self.view.bounds.size.width, H = self.view.bounds.size.height;
+    if (self.renderW <= 0 || W <= 0 || H <= 0)
+        return;
+    NSMutableData *rects = [NSMutableData data];
+    [self collectKeepOut:self.view into:rects scale:(CGFloat)self.renderW / W screenArea:W * H];
+    if ([rects isEqualToData:self.sentKeepOut])
+        return;
+    self.sentKeepOut = rects;
+    int count = (int)(rects.length / sizeof(int));
+    [JVMLauncher setEngineOverlayKeepOut:rects.bytes count:count];
+    [self appendLine:[NSString stringWithFormat:@"[hud] overlay keep-out: %d control(s)", count / 4]];
+}
+
+// Walks `v`'s subviews for updateOverlayKeepOut. A control is taken whole. A view a quarter of the screen or bigger
+// isn't a control: one with a solid background is a panel or a scrim, and nothing under it shows, so it is passed
+// over; a clear one (the plugin dock, the game view) is looked inside. The hold menu and the overlay editor are passed
+// over too: a box moving off either would chase it.
+- (void)collectKeepOut:(UIView *)v into:(NSMutableData *)rects scale:(CGFloat)k screenArea:(CGFloat)area {
+    for (UIView *s in v.subviews) {
+        if (s.hidden || s.alpha < 0.01 || !s.userInteractionEnabled || s == self.menuContainer || s == self.overlayEdit)
+            continue;
+        CGRect f = [s convertRect:s.bounds toView:self.view];
+        BOOL big = f.size.width * f.size.height >= area / 4;
+        BOOL tappable = [s isKindOfClass:[UIControl class]] && ((UIControl *)s).enabled;
+        for (UIGestureRecognizer *g in s.gestureRecognizers)
+            tappable = tappable || g.enabled;
+        if (!big && tappable) {
+            if (f.size.width >= 4 && f.size.height >= 4) {
+                int r[4] = {(int)floor(f.origin.x * k), (int)floor(f.origin.y * k), (int)ceil(f.size.width * k),
+                            (int)ceil(f.size.height * k)};
+                [rects appendBytes:r length:sizeof(r)];
+            }
+            continue;
+        }
+        if (big && s != self.screen && CGColorGetAlpha(s.backgroundColor.CGColor) > 0.5)
+            continue;
+        [self collectKeepOut:s into:rects scale:k screenArea:area];
+    }
+}
+
 // A camera zoom for each orientation (Settings > Game settings > Screen). The 3D view scales with the canvas's height,
 // so the zoom that suits a landscape canvas looks nearly three times closer on a portrait one, and the other way
 // round. The game saves one zoom, so zoom.owner records which orientation that zoom is for: landscape until the first
@@ -7322,6 +7367,7 @@ static CGRect mapRectFromArr(NSArray *a) {
         [self updateHudLayout];
         [self updateWorldMap];
         [self syncOrientationZoom];
+        [self updateOverlayKeepOut];
     }
 
     // Drain the shared-core notification + outbound-link queues (~2 Hz). Both no-op until something is queued;

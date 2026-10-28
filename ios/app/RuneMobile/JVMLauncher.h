@@ -387,6 +387,10 @@ typedef void (^JVMLogSink)(NSString *line);
 /// corner (e.g. Quest Helper's top-left guidance panel) clear the curved bezel + the chat. Main thread.
 + (void)setEngineOverlaySafeInsetsL:(int)l t:(int)t r:(int)r b:(int)b;
 
+/// The shell's own controls over the game, as `count` ints {x, y, w, h, ...} in canvas px
+/// (HudVeneerBridge.setOverlayKeepOut): plugin overlay boxes keep off them. Replaces the last list. Main thread.
++ (void)setEngineOverlayKeepOut:(const int *)rects count:(int)count;
+
 /// Large portrait (HudVeneerBridge.setHudStrip): the canvas rows on screen, with the chat and minimap drawn full size in
 /// the hidden rows below and copied back scaled; the game's windows open between `top` and `bottom` (canvas px).
 /// visibleRows <= 0 turns it off. Main thread.
