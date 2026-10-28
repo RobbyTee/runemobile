@@ -254,6 +254,9 @@ static UIInterfaceOrientationMask maskForGravity(CMAcceleration g, UIInterfaceOr
 }
 
 + (void)phoneMoved:(CMAcceleration)a {
+    // A reading queued before the sensor stopped (Auto turned off, or the app left the front) is stale.
+    if (![self autoRotate] || !sAppInFront)
+        return;
     if (!sGravityValid) {
         sGravity = a;
         sGravityValid = YES;
