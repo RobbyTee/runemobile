@@ -12,8 +12,9 @@ may take a little while, but every issue and PR gets read.
   especially anything touching the shared `headless/` bridge (see below), the build/CI, or upstream RuneLite
   code, where a heads-up saves a round-trip.
 
-New to the codebase? [`PORTS.md`](PORTS.md) is the repo map, and the README's **Build from source** section
-gets you to a running app.
+New to the codebase? The [developer guide](docs/dev/README.md) is the full reference: setup, architecture, the
+bridge API, each port, testing, debugging and releases. [`PORTS.md`](PORTS.md) is the repo map, and the README's
+**Build from source** section is the short path to a running app.
 
 ## Build setup
 
@@ -35,6 +36,11 @@ tools/shared-contract/check-contract.sh
 #   exit 1 = additive change  -> update the baseline in the same commit
 #   exit 2 = breaking change   -> not allowed
 ```
+
+`check-contract.sh --update` also regenerates [`docs/dev/bridge-api-reference.md`](docs/dev/bridge-api-reference.md),
+the member-by-member reference built from the same scan plus each member's Javadoc; stage it with the baseline. A
+Javadoc-only edit on a bridge member changes that page too: regenerate it with
+`tools/shared-contract/gen-bridge-api.py`. The hook and the release gate both fail on a stale page.
 
 Install the git hooks so this runs automatically:
 

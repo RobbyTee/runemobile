@@ -18,7 +18,7 @@ android/
       java/dev/audaro/runemobile/   # MainActivity, JvmLauncher (JNI facade), AssetInstaller
       cpp/                          # CMake + jvm_bootstrap.cpp (JNI_CreateJavaVM)
       assets/jvm/                   # staged jars + the JRE's non-native tree (gitignored, except hello.jar)
-      jniLibs/arm64-v8a/            # the JRE's .so libs (gitignored) — see "Why jniLibs" below
+      jniLibs/arm64-v8a/            # only the CMake-built librunemobile.so, never the JRE's .so (see below)
 ```
 
 ## The JRE goes in assets ONLY — do NOT mirror the .so into jniLibs
@@ -39,10 +39,12 @@ native-initiated absolute-path dlopen of the app's own data here.
 > identically across two independent bionic jre21 builds; the cure is filesDir-only. `jniLibs/` should hold
 > only the CMake-built `librunemobile.so` (which Gradle places there automatically — not staged by hand).
 
-## Prerequisites already set up on this Mac
-- SDK at `~/Library/Android/sdk` (platform-35, build-tools 35, platform-tools, emulator, arm64 system image).
-- NDK `27.0.12077973`. AVD `rl_arm64` (Android 35, google_apis, arm64-v8a).
-- `JAVA_HOME=/opt/homebrew/opt/openjdk@21` for Gradle/AGP.
+## Prerequisites
+- Android SDK with platform 35 (`compileSdk`/`targetSdk` 35, `minSdk` 28), build-tools and platform-tools; add the
+  emulator and an arm64 system image (e.g. an Android 35 google_apis arm64-v8a AVD) for emulator runs.
+- NDK + CMake: `ndkVersion` is not pinned, so the build uses the Android Gradle Plugin's default; install the
+  version Gradle asks for.
+- A JDK 21 for Gradle/AGP, e.g. `JAVA_HOME=/opt/homebrew/opt/openjdk@21`.
 
 Create `android/local.properties` with `sdk.dir=/Users/<you>/Library/Android/sdk` (gitignored).
 
