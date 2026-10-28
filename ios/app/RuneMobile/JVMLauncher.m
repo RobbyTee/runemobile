@@ -50,6 +50,8 @@ static jmethodID gMidInputKind = NULL;    // getTextInputKind()I — number pad 
 static jmethodID gMidLastTapKind = NULL;  // getLastTapKind()I — TAP_KIND_NONE/WALK/SCENE/WIDGET (optional)
 static jmethodID gMidHeapStats = NULL;    // heapStats()Ljava/lang/String; — dev diagnostics (optional)
 static jmethodID gMidSimReconnect = NULL; // devSimulateReconnect(I)V — dev "test reconnect" hook (optional)
+static jmethodID gMidCameraZoom = NULL;   // cameraZoom()I: the zoom the game draws with, -1 logged out (optional)
+static jmethodID gMidSetCameraZoom = NULL; // setCameraZoom(I)V: set it as the scroll wheel would (optional)
 static jmethodID gMidTouch = NULL, gMidClick = NULL, gMidClickPrecise = NULL, gMidMove = NULL;
 static jmethodID gMidWheel = NULL, gMidCamera = NULL, gMidText = NULL, gMidKey = NULL;
 static jmethodID gMidCameraHold = NULL; // setCameraHold(II)V — a held arrow turns at a pixel RATE per second
@@ -311,6 +313,16 @@ static BOOL ensureBridge(void) {
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         gMidSimReconnect = NULL;
+    }
+    gMidCameraZoom = (*env)->GetStaticMethodID(env, global, "cameraZoom", "()I");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidCameraZoom = NULL;
+    }
+    gMidSetCameraZoom = (*env)->GetStaticMethodID(env, global, "setCameraZoom", "(I)V");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        gMidSetCameraZoom = NULL;
     }
     gMidMenuSelect = (*env)->GetStaticMethodID(env, global, "selectMenuPoint", "(II)V");
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gMidMenuSelect = NULL; }
@@ -2274,6 +2286,30 @@ static void RMEnsureResizableDisplayMode(NSString *rlHome, JVMLogSink log) {
     if ((*env)->ExceptionCheck(env)) {
         bridgeNoteClear(env, "JVMLauncher.devSimulateReconnect");
     }
+}
+
+// The camera zoom the game draws with (JavaBridge.cameraZoom), or -1 while logged out, before the bridge is up or on
+// an older jar.
++ (int)cameraZoom {
+    if (!ensureBridge() || !gMidCameraZoom || !gMainEnv)
+        return -1;
+    JNIEnv *env = gMainEnv;
+    jint z = (*env)->CallStaticIntMethod(env, gBridgeClass, gMidCameraZoom);
+    if ((*env)->ExceptionCheck(env)) {
+        bridgeNoteClear(env, "JVMLauncher.cameraZoom");
+        return -1;
+    }
+    return (int)z;
+}
+
+// Ask for a camera zoom (JavaBridge.setCameraZoom); the game applies it, clamped to its limits, once logged in.
++ (void)setCameraZoom:(int)zoom {
+    if (!ensureBridge() || !gMidSetCameraZoom || !gMainEnv)
+        return;
+    JNIEnv *env = gMainEnv;
+    (*env)->CallStaticVoidMethod(env, gBridgeClass, gMidSetCameraZoom, (jint)zoom);
+    if ((*env)->ExceptionCheck(env))
+        bridgeNoteClear(env, "JVMLauncher.setCameraZoom");
 }
 
 + (UIImage *)latestFrame {

@@ -444,6 +444,7 @@ static NSString *RMPasteLine(NSString *s) {
 // the real chat — no native reproduction needed.
 @property (nonatomic, assign) BOOL engineChatRelocated;   // one-shot: asked the engine to relocate the HUD (A4)
 @property (nonatomic, assign) CGFloat hudRightLaid;       // the hudRightInset that relocate used (TAB-1)
+@property (nonatomic, assign) BOOL zoomSynced;            // syncOrientationZoom has run this launch
 // Edge-to-edge (A1+A4): the scene fills the whole screen; the engine HUD (chat/minimap/orbs) is relocated INTO
 // the safe area so nothing clips under the island/corners/home-indicator. renderW/H = the canvas the engine
 // draws (set at launch); chatHitCanvas = the relocated chat tab-row rect in canvas px (onTap treats it as UI).
@@ -726,6 +727,12 @@ static NSString * const kKbSentinel = @"​";
 // moves with the safe-area relocate (self.chatHitCanvas, set in updateHudLayout); these are the fixed engine-px
 // dimensions used to treat filter-row taps as UI (precise click, no walk ring).
 static const int kChatW = 461;
+
+// The chat's and the minimap's dragged offsets (overlay edit), kept apart for each orientation (Settings > Game
+// settings > Screen): an offset dragged on the wide landscape canvas can land the minimap on the chat in portrait.
+static NSString *hudOffsetKey(NSString *key) {
+    return [RMGameSettings portraitThisLaunch] ? [key stringByAppendingString:@".portrait"] : key;
+}
 // The minimap+orbs cluster width (fixed engine px, from the de-risk), until the chrome snapshot reports its size.
 static const int kMinimapClusterW = 211;
 
@@ -1093,8 +1100,8 @@ static id parseBridgeJSON(NSString *snap, const char *site) {
     self.view.backgroundColor = [UIColor blackColor];
     self.bgTask = UIBackgroundTaskInvalid;
     // Persisted minimap position offset (set in overlay edit-mode; applied in updateHudLayout).
-    self.minimapUserDX = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"minimapUserDX"];
-    self.minimapUserDY = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"minimapUserDY"];
+    self.minimapUserDX = (int)[[NSUserDefaults standardUserDefaults] integerForKey:hudOffsetKey(@"minimapUserDX")];
+    self.minimapUserDY = (int)[[NSUserDefaults standardUserDefaults] integerForKey:hudOffsetKey(@"minimapUserDY")];
     [self buildUI];
     [self openLogFile];
     // First in the log because it describes the run BEFORE this one. Nil on a first run.
@@ -4417,8 +4424,8 @@ static UIImage *nineSliceImage(NSArray *pieces, CGFloat w, CGFloat h) {
     self.chatLinesSeq = -1;
 
     // Persisted chat position offset (set in overlay edit-mode; applied in updateHudLayout).
-    self.chatUserDX = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"chatUserDX"];
-    self.chatUserDY = (int)[[NSUserDefaults standardUserDefaults] integerForKey:@"chatUserDY"];
+    self.chatUserDX = (int)[[NSUserDefaults standardUserDefaults] integerForKey:hudOffsetKey(@"chatUserDX")];
+    self.chatUserDY = (int)[[NSUserDefaults standardUserDefaults] integerForKey:hudOffsetKey(@"chatUserDY")];
 
     self.chatTabsBuilt = YES;
     self.optimisticChatTab = -1;
@@ -5836,6 +5843,13 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     self.tabFrameView.image = collapsed ? self.tabFrameImgCollapsed : self.tabFrameImg;
     self.tabFrameView.frame = CGRectMake(gx0, gy0, groupW, groupH);
     self.tabFrameView.hidden = (self.tabFrameView.image == nil);
+    // In portrait the plugin rail shares the right edge with the minimap and the group, so it keeps to the gap
+    // between them (hudRightInset).
+    CGRect mmRect = [self overlayEditMinimapCanvasRect];
+    if (H > W && !CGRectIsNull(mmRect))
+        [self.panelDock setRailBandTop:CGRectGetMaxY(mmRect) / k + 6.0 bottom:gy0 - 6.0];
+    else
+        [self.panelDock setRailBandTop:0 bottom:0];
     for (int slot = 0; slot < 14; slot++) {
         int i = TAB_GRID_ORDER[slot];
         int col = slot % 2, row = slot / 2;
@@ -5942,6 +5956,8 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
 // goes past the bottom margin, nor up into the minimap globe ([x,y,w,h] canvas px, live, so a dragged minimap
 // counts) when that sits above the grid. The globe, not the whole cluster: the cluster's box runs ~30 pt below
 // anything it draws over the grid's columns, which would hold the grid at the bottom on every iPhone.
+// In portrait the official app has no layout, so the group keeps to the bottom corner, in thumb reach, and the
+// screen's middle stays the world's.
 - (CGFloat)tabGridTopForHeight:(CGFloat)gridH left:(CGFloat)gx width:(CGFloat)gw margin:(CGFloat)margin
                          globe:(NSArray *)globe {
     UIEdgeInsets ins = self.view.safeAreaInsets;
@@ -5951,8 +5967,8 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     if (self.renderW <= 0 || W <= 0)
         return lowest;
     CGFloat k = (CGFloat)self.renderW / W; // canvas px per point
-    CGFloat top = ((safeBottom - safeTop) * k >= 503.0) ? (safeTop + safeBottom) / 2.0 + 87.0 / k - gridH / 2.0
-                                                        : safeBottom - 4.0 / k - gridH;
+    BOOL centred = H <= W && (safeBottom - safeTop) * k >= 503.0;
+    CGFloat top = centred ? (safeTop + safeBottom) / 2.0 + 87.0 / k - gridH / 2.0 : safeBottom - 4.0 / k - gridH;
     CGFloat highest = safeTop + margin;
     if (globe.count >= 4 && [globe[2] intValue] > 0 && [globe[3] intValue] > 0) {
         // The globe widget's box already reaches past the wiki banner and world-map orb under the ring.
@@ -6417,7 +6433,17 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     CGRect b = self.view.bounds;
     CGFloat sw = b.size.width;
     CGFloat sh = b.size.height;
+    // The sizes below are for the screen's short side, the canvas's height in landscape and its width in portrait
+    // (Settings > Game settings > Screen). The window can still be turning to this launch's orientation, since
+    // Info.plist's list, which the launch screen uses, is landscape only, so the setting says which side is which.
+    BOOL portrait = [RMGameSettings portraitThisLaunch];
+    if ((sh > sw) != portrait) {
+        CGFloat t = sw;
+        sw = sh;
+        sh = t;
+    }
     CGFloat aspect = (sh > 0 ? sw / sh : 2.0);
+    CGFloat shortPt = MIN(sw, sh), longPt = MAX(sw, sh);
     // Render height is the sharpness<->FPS<->UI-SIZE dial: the engine SOFTWARE-renders at renderW×renderH every
     // frame (no GPU on iOS), so a LOWER renderH = bigger UI on screen. The minimap can't be enlarged on its own
     // (the engine pins its orbs + breaks the terrain raster if the globe is repositioned — see HudVeneerBridge),
@@ -6432,14 +6458,19 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     // the size it is on a phone and the extra screen shows more of the world (1267 tall on a 13" iPad at the default
     // size), capped at the screen's own pixels. The interface size setting scales it the same way. Phones keep the
     // setting as it is.
-    if (MIN(sw, sh) >= kLargeScreenPt) {
-        int screenPx = (int)lround(sh * self.traitCollection.displayScale);
-        renderH = MAX(renderH, MIN(screenPx, (int)lround(sh * renderH / kPhoneShortPt)));
+    int renderShort = renderH;
+    if (shortPt >= kLargeScreenPt) {
+        int screenPx = (int)lround(shortPt * self.traitCollection.displayScale);
+        renderShort = MAX(renderShort, MIN(screenPx, (int)lround(shortPt * renderShort / kPhoneShortPt)));
     }
-    // Never narrower than the game's narrowest layout: a 4:3 screen at a phone's 540 would be 720 wide.
-    if (sw > 0 && sh > 0)
-        renderH = MAX(renderH, (int)ceil(kMinCanvasW * sh / sw));
-    int renderW = (int)lround(renderH * aspect);
+    // Never narrower than the game's narrowest layout: a 4:3 screen at a phone's 540 would be 720 wide. In portrait
+    // the width is the short side itself, so every phone gets the 765-wide canvas there.
+    if (shortPt > 0)
+        renderShort = portrait ? MAX(renderShort, kMinCanvasW)
+                               : MAX(renderShort, (int)ceil(kMinCanvasW * shortPt / longPt));
+    int renderLong = shortPt > 0 ? (int)lround(renderShort * (longPt / shortPt)) : (int)lround(renderShort * 2.0);
+    renderH = portrait ? renderLong : renderShort;
+    int renderW = portrait ? renderShort : renderLong;
     self.renderW = renderW;
     self.renderH = renderH;
     if (self.pendingRouteCGpuNoResize) {
@@ -6593,6 +6624,10 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
 // iPhone's landscape safe area already holds the rail beside the tab grid and the minimap; an iPad (or an iPhone
 // with a home button) has no side insets, so without this the rail covers the grid's right column.
 - (CGFloat)hudRightInset {
+    // In portrait the rail keeps to the gap between the minimap and the tab group instead (updateChrome): its 47 pt
+    // strip, a ninth of the screen's width, would push the minimap over the chat.
+    if (self.view.bounds.size.height > self.view.bounds.size.width)
+        return self.view.safeAreaInsets.right;
     return MAX(self.view.safeAreaInsets.right, [self.panelDock railStripWidth]);
 }
 
@@ -6648,6 +6683,37 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
     [self appendLine:[NSString stringWithFormat:@"[hud] relocate chat->%d,%d(+%d,%d) minimap->%d,%d(+%d,%d) (insets L%d T%d R%d k%.2f)",
                                                 self.chatBaseX, self.chatBaseY, self.chatUserDX, self.chatUserDY, self.minimapBaseX,
                                                 self.minimapBaseY, self.minimapUserDX, self.minimapUserDY, leftC, topC, rightC, k]];
+}
+
+// A camera zoom for each orientation (Settings > Game settings > Screen). The 3D view scales with the canvas's height,
+// so the zoom that suits a landscape canvas looks nearly three times closer on a portrait one, and the other way
+// round. The game saves one zoom, so zoom.owner records which orientation that zoom is for: landscape until the first
+// switch, since every launch before the setting was landscape. Once per launch, when the
+// zoom is first known after login: if this launch's orientation isn't the owner, the game's zoom is kept for the
+// owner and this orientation gets back the zoom it had when it was left, if it was ever left. Nothing is chosen for
+// the player: an orientation keeps the game's zoom as it is until it has been left once (the Android port's screen
+// classes do the same).
+- (void)syncOrientationZoom {
+    if (self.zoomSynced)
+        return;
+    int zoom = [JVMLauncher cameraZoom];
+    if (zoom < 0)
+        return; // logged out, or an older jar: try again on a later tick
+    self.zoomSynced = YES;
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    NSString *mine = [RMGameSettings portraitThisLaunch] ? @"portrait" : @"landscape";
+    NSString *owner = [ud stringForKey:@"zoom.owner"] ?: @"landscape";
+    [ud setObject:mine forKey:@"zoom.owner"];
+    if ([owner isEqualToString:mine])
+        return;
+    NSString *savedKey = [@"zoom." stringByAppendingString:mine];
+    int saved = [ud objectForKey:savedKey] ? (int)[ud integerForKey:savedKey] : -1;
+    [ud setInteger:zoom forKey:[@"zoom." stringByAppendingString:owner]];
+    if (saved >= 0 && saved != zoom)
+        [JVMLauncher setCameraZoom:saved];
+    [self appendLine:[NSString stringWithFormat:@"[shell] zoom %d kept for %@; %@ %@", zoom, owner, mine,
+                                                saved >= 0 ? [NSString stringWithFormat:@"gets %d back", saved]
+                                                           : @"keeps it"]];
 }
 
 // Relocate the minimap+orbs cluster to (base anchor + persisted user offset), clamped on-screen. Called from
@@ -6728,8 +6794,8 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
 }
 
 - (void)overlayEditCommitChatMove {
-    [[NSUserDefaults standardUserDefaults] setInteger:self.chatUserDX forKey:@"chatUserDX"];
-    [[NSUserDefaults standardUserDefaults] setInteger:self.chatUserDY forKey:@"chatUserDY"];
+    [[NSUserDefaults standardUserDefaults] setInteger:self.chatUserDX forKey:hudOffsetKey(@"chatUserDX")];
+    [[NSUserDefaults standardUserDefaults] setInteger:self.chatUserDY forKey:hudOffsetKey(@"chatUserDY")];
     [self appendLine:[NSString stringWithFormat:@"[chat] moved -> offset %d,%d", self.chatUserDX, self.chatUserDY]];
 }
 
@@ -6749,8 +6815,8 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
 }
 
 - (void)overlayEditCommitMinimapMove {
-    [[NSUserDefaults standardUserDefaults] setInteger:self.minimapUserDX forKey:@"minimapUserDX"];
-    [[NSUserDefaults standardUserDefaults] setInteger:self.minimapUserDY forKey:@"minimapUserDY"];
+    [[NSUserDefaults standardUserDefaults] setInteger:self.minimapUserDX forKey:hudOffsetKey(@"minimapUserDX")];
+    [[NSUserDefaults standardUserDefaults] setInteger:self.minimapUserDY forKey:hudOffsetKey(@"minimapUserDY")];
     [self appendLine:[NSString stringWithFormat:@"[minimap] moved -> offset %d,%d", self.minimapUserDX,
                                                 self.minimapUserDY]];
 }
@@ -6758,8 +6824,8 @@ static const CFTimeInterval kKeepAwakeGrace = 10.0;
 - (void)overlayEditResetMinimap {
     self.minimapUserDX = 0;
     self.minimapUserDY = 0;
-    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"minimapUserDX"];
-    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"minimapUserDY"];
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:hudOffsetKey(@"minimapUserDX")];
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:hudOffsetKey(@"minimapUserDY")];
     [self applyMinimapRelocate];
     [self appendLine:@"[minimap] reset -> automatic top-right"];
 }
@@ -7027,6 +7093,7 @@ static CGRect mapRectFromArr(NSArray *a) {
     if (self.framesShown % 6 == 0) {
         [self updateHudLayout];
         [self updateWorldMap];
+        [self syncOrientationZoom];
     }
 
     // Drain the shared-core notification + outbound-link queues (~2 Hz). Both no-op until something is queued;

@@ -7,6 +7,7 @@ static NSString *const kHapticKeys[4] = {@"haptic.op", @"haptic.drag", @"haptic.
 static NSString *const kHapticStrengthKey = @"haptic.strength";
 static NSString *const kLongPressKey = @"touch.longPressMs";
 static NSString *const kCameraSensitivityKey = @"camera.sensitivity";
+static NSString *const kPortraitKey = @"screen.portrait";
 
 static const NSInteger kLongPressMinMs = 200, kLongPressMaxMs = 1000, kLongPressStepMs = 50, kLongPressDefaultMs = 400;
 static const NSInteger kDragHoldMaxMs = 150;
@@ -25,6 +26,7 @@ static const double kCameraSensMin = 0.1, kCameraSensMax = 4.0, kCameraSensDefau
             kHapticStrengthKey : @1,
             kLongPressKey : @(kLongPressDefaultMs),
             kCameraSensitivityKey : @(kCameraSensDefault),
+            kPortraitKey : @NO,
         }];
     });
     return [NSUserDefaults standardUserDefaults];
@@ -82,12 +84,31 @@ static const double kCameraSensMin = 0.1, kCameraSensMax = 4.0, kCameraSensDefau
     return MIN([self longPressMs] * 2 / 3, kDragHoldMaxMs);
 }
 
++ (BOOL)portrait {
+    return [[self defaults] boolForKey:kPortraitKey];
+}
+
++ (void)setPortrait:(BOOL)on {
+    [[self defaults] setBool:on forKey:kPortraitKey];
+    [self changed];
+}
+
++ (BOOL)portraitThisLaunch {
+    static BOOL portrait;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        portrait = [self portrait];
+    });
+    return portrait;
+}
+
 @end
 
 #pragma mark - Screen
 
 // Sections, in order. GAME is listed only when the game is running (it reads two RuneLite plugins).
-typedef NS_ENUM(NSInteger, RMGsSection) { RMGsTouch = 0,
+typedef NS_ENUM(NSInteger, RMGsSection) { RMGsScreen = 0,
+                                          RMGsTouch,
                                           RMGsGame,
                                           RMGsHaptics };
 
@@ -152,11 +173,13 @@ enum { kTagLongPress = 1,
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv {
-    return 3;
+    return 4;
 }
 
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
     switch (s) {
+        case RMGsScreen:
+            return 1; // orientation
         case RMGsTouch:
             return 2; // long-press time, camera sensitivity
         case RMGsGame:
@@ -170,6 +193,8 @@ enum { kTagLongPress = 1,
 
 - (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s {
     switch (s) {
+        case RMGsScreen:
+            return @"SCREEN";
         case RMGsTouch:
             return @"TOUCH";
         case RMGsGame:
@@ -182,6 +207,10 @@ enum { kTagLongPress = 1,
 }
 
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
+    if (s == RMGsScreen)
+        return [RMGameSettings portrait] == [RMGameSettings portraitThisLaunch]
+                   ? @"Applies when the app next opens."
+                   : @"Close the app and open it again to switch.";
     if (s == RMGsGame && !self.gameLoaded)
         return @"Available once the game is running.";
     return nil;
@@ -272,7 +301,16 @@ enum { kTagLongPress = 1,
                                  tag:kTagIdle];
     }
     UITableViewCell *cell = [self baseCell];
-    if (ip.section == RMGsGame) {
+    if (ip.section == RMGsScreen) {
+        cell.textLabel.text = @"Orientation";
+        UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:@[ @"Landscape", @"Portrait" ]];
+        seg.selectedSegmentIndex = [RMGameSettings portrait] ? 1 : 0;
+        seg.selectedSegmentTintColor = [self accent];
+        seg.accessibilityLabel = @"Orientation";
+        [seg addTarget:self action:@selector(onOrientation:) forControlEvents:UIControlEventValueChanged];
+        [seg sizeToFit];
+        cell.accessoryView = seg;
+    } else if (ip.section == RMGsGame) {
         // Too many choices to sit beside the title, so they get a line of their own.
         UILabel *name = [UILabel new];
         name.text = @"Frame-rate cap";
@@ -338,6 +376,13 @@ enum { kTagLongPress = 1,
         return;
     self.fpsCap = self.fpsChoices[seg.selectedSegmentIndex].intValue;
     [JVMLauncher setFpsCap:self.fpsCap];
+}
+
+- (void)onOrientation:(UISegmentedControl *)seg {
+    [RMGameSettings setPortrait:seg.selectedSegmentIndex == 1];
+    // The footer says whether a restart is needed.
+    [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:RMGsScreen]
+                  withRowAnimation:UITableViewRowAnimationNone];
 }
 
 - (void)onHapticSwitch:(UISwitch *)sw {

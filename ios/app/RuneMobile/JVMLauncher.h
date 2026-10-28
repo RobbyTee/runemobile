@@ -122,6 +122,11 @@ typedef void (^JVMLogSink)(NSString *line);
 /// real socket drop — exercises the overlay + snapshot path only. No-op before the bridge is up. Main thread.
 + (void)devSimulateReconnect:(int)seconds;
 
+/// The camera zoom the game draws with, or -1 while logged out (or on an older jar). Main thread only.
++ (int)cameraZoom;
+/// Ask for a camera zoom; the game applies it, clamped to its zoom limits, once logged in. Main thread only.
++ (void)setCameraZoom:(int)zoom;
+
 /// Developer test hook: publish a host-origin notification ("RuneLite" / "Notification delivery test") through
 /// the shared bridge, exercising the full delivery path (queue -> drain -> OS notification) without an in-game
 /// trigger. Mirrors Android's DEBUG Shift long-press. No-op before the bridge is up / on an older jar. Main thread.

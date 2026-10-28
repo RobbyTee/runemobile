@@ -32,6 +32,12 @@ extern NSNotificationName const RMGameSettingsDidChangeNotification;
 /// How long a finger has to rest on an item before dragging it moves the item, in ms: two thirds of the
 /// long-press time, at most 150. A quicker swipe never picks the item up.
 + (NSInteger)dragHoldMs;
+/// Whether the game runs in portrait (default NO, landscape).
++ (BOOL)portrait;
++ (void)setPortrait:(BOOL)on;
+/// The orientation this launch runs in: the setting as it read when first asked. The game's canvas is sized once,
+/// when it starts, so a change waits for the next launch.
++ (BOOL)portraitThisLaunch;
 @end
 
 /// The native Game settings screen, pushed from Settings.

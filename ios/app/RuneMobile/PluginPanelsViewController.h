@@ -27,6 +27,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// it's hidden. The host keeps its right-edge HUD out of it where the safe area doesn't (an iPad has no side insets).
 - (CGFloat)railStripWidth;
 
+/// Keep the shown rail between `top` and `bottom`, in points from the view's top: the host's gap between its
+/// right-edge HUD, in portrait. 0 and 0 lifts it, leaving only the corners' clearance.
+- (void)setRailBandTop:(CGFloat)top bottom:(CGFloat)bottom;
+
 /// Present the native Config Profiles / Infoboxes screens (Settings entry points; the availability of each is
 /// pre-checked so these no-op if the bridge isn't wired). These are NOT plugin nav-buttons, so they don't sit on
 /// the icon rail — Settings reaches them directly.

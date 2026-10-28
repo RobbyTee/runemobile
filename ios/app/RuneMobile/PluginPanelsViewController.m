@@ -55,6 +55,8 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 @property (nonatomic, strong) UIScrollView *toolbar;       // legacy: horizontal text-pill strip
 @property (nonatomic, strong) UIScrollView *rail;          // vertical plugin-icon rail (right edge)
 @property (nonatomic, strong) NSLayoutConstraint *railHeight; // sized to content, clamped to the clear band
+@property (nonatomic, strong) NSLayoutConstraint *railBandTop; // setRailBandTop:bottom: (inactive until set)
+@property (nonatomic, strong) NSLayoutConstraint *railBandBottom;
 @property (nonatomic, strong) UIView *panelContainer;      // docked: collapsible inline panel column
 @property (nonatomic, strong) NSLayoutConstraint *panelTrailRail;  // panel trailing -> rail leading (rail shown)
 @property (nonatomic, strong) NSLayoutConstraint *panelTrailEdge;  // panel trailing -> screen edge (rail hidden)
@@ -216,6 +218,8 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 
     // Swappable panel trailing: anchored to the rail's leading edge when the rail is shown, else to the screen
     // edge so the panel reclaims the rail strip when the rail is hidden (FAB-only mode). applyRailVisibility picks.
+    self.railBandTop = [self.rail.topAnchor constraintGreaterThanOrEqualToAnchor:self.view.topAnchor];
+    self.railBandBottom = [self.rail.bottomAnchor constraintLessThanOrEqualToAnchor:self.view.topAnchor];
     self.panelTrailRail = [self.panelContainer.trailingAnchor constraintEqualToAnchor:self.rail.leadingAnchor constant:-6];
     self.panelTrailEdge = [self.panelContainer.trailingAnchor constraintEqualToAnchor:sg.trailingAnchor constant:-6];
     [self applyRailVisibility];
@@ -232,6 +236,18 @@ static const CGFloat kDockPanelW = 334.0;     // inline panel column width (≈3
 
 - (CGFloat)railStripWidth {
     return (self.docked && self.rail && !self.rail.hidden) ? kRailEdgeInset + kRailWidth : 0.0;
+}
+
+- (void)setRailBandTop:(CGFloat)top bottom:(CGFloat)bottom {
+    if (!self.railBandTop)
+        return; // not docked
+    BOOL on = top > 0 && bottom > top;
+    if (on == self.railBandTop.active && (!on || (self.railBandTop.constant == top && self.railBandBottom.constant == bottom)))
+        return; // unchanged: called on every chrome tick
+    self.railBandTop.constant = top;
+    self.railBandBottom.constant = bottom;
+    self.railBandTop.active = on;
+    self.railBandBottom.active = on;
 }
 
 - (void)setRailHidden:(BOOL)railHidden {

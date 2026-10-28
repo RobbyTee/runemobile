@@ -1,4 +1,5 @@
 #import "AppDelegate.h"
+#import "RMGameSettings.h"
 #import "ViewController.h"
 
 @implementation AppDelegate
@@ -13,6 +14,14 @@
     self.window.rootViewController = [[ViewController alloc] init];
     [self.window makeKeyAndVisible];
     return YES;
+}
+
+// Settings > Game settings > Screen, for the whole launch: the game's canvas is sized once, when it starts. This
+// replaces Info.plist's landscape-only list, which still covers the launch screen.
+- (UIInterfaceOrientationMask)application:(UIApplication *)application
+    supportedInterfaceOrientationsForWindow:(UIWindow *)window {
+    return [RMGameSettings portraitThisLaunch] ? UIInterfaceOrientationMaskPortrait
+                                               : UIInterfaceOrientationMaskLandscape;
 }
 
 @end
